@@ -1,5 +1,5 @@
 # META
-source_lines=2080
+source_lines=1982
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -343,6 +343,17 @@ import frontend.ast.{
   identOriginFold,
   identOriginBuiltin,
   mkIdent,
+  -- RE-HOMED to `frontend/ast.mdk` (oracle-identity family leaf L1): the
+  -- constructor oracle in `frontend/exhaust.mdk` keys on `TabKey`, and
+  -- `frontend` may not import `types`.  The RENDERER (`tabKeyRender`, below)
+  -- stays here — it reaches `support/util.lenKey`, which imports
+  -- `support/ordmap`, and `frontend/ast.mdk` has zero imports.
+  TabKey(..),
+  tabKeyOf,
+  tabKeyName,
+  tabKeyEq,
+  lookupTab,
+  tabHasName,
 }
 import support.ordmap.{
   OrdMap,
@@ -806,115 +817,6 @@ sregMerge older newer = sregMergeGo (sregKeys newer) older
 sregMergeGo : List RegKey -> SetRegistry -> SetRegistry
 sregMergeGo [] acc = acc
 sregMergeGo (k::rest) acc = sregMergeGo rest (sregAddK k acc)
-
--- ── TabKey: the key for a table that KEEPS its assoc-list representation ──
--- The three registries above replace a table's REPRESENTATION as well as its
--- key. `TabKey` is for the conversions that must keep the assoc list and
--- change ONLY the key, and A-2.3 (`universeAliasTable`,
--- `universeDataParamKinds`, `types/typecheck.mdk`) is the first of them.
--- Two independent reasons, both measured or cited rather than asserted:
---
--- ⚠️ "THE CONVERSIONS THAT KEEP THE ASSOC LIST" IS WHY THIS TYPE EXISTS, NOT
--- THE SET OF THINGS THAT USE IT — and that set grows. `HeadKey` below embeds a
--- `TabKey` as its declaration half and is not an assoc-list conversion at all.
--- Derive the users rather than reading them off this paragraph:
---
---   grep -nw TabKey compiler/types/*.mdk | grep -vE ':[[:space:]]*--'
---
---   * ALLOCATION. `Registry` keys on `regKeyRender`, so every LOOKUP would
---     build a fresh `String` (four netstrings, concatenated), UNCONDITIONALLY
---     and on every call — REJECTED for that reason. Those two tables are read
---     from `fromAstTypeApp`/`fromAstTypeE`/`headRemainingKinds` — once or more
---     per type-application node of every signature the elaborator meets —
---     inside `medaka check`, which `compiler/AGENTS.md` measures as GC-BOUND
---     (libgc 62% of a real `check`, no `mdk_` symbol above 0.8%). That file's
---     "the exception that IS one" section is this exact shape: migrating a
---     `List` scan whose KEY PROJECTION ALLOCATES measured 9.33×–14.96× MORE
---     allocation at every n tested, with no crossover, and BOTH perf CI arms
---     structurally blind to it.
---     ⚠️ **`TabKey` COMPARISON allocates nothing — true, and beside the
---     point: comparison was never where allocation moved, the MINT is.**
---     `tabKeyOf` → `mkIdent` → `identOriginOf` allocates on the way (an
---     `Option (IdentModule mid)`, the `map` closure over it, the `Ident`
---     record, the `Some`/`None`, then the `TkIdent`/`TkBare` wrapper) every
---     time a caller mints a key — and the two hottest readers
---     (`fromAstTypeApp`, `headRemainingKinds`, `types/typecheck.mdk`) each
---     minted it TWICE per node, once per table lookup, until hoisted to a
---     single shared binding (#1111 A-2.3 follow-up). The design chosen here
---     is cheaper than `Registry`'s render-per-LOOKUP cost (paid every call,
---     uncached), not free — price the alternative that was rejected AND the
---     one that was picked, not only the former.
---   * ENUMERATION ORDER. See the "NO ordered/insertion-order enumeration"
---     bullet below: `rejectCyclicAliases` + `emitCyclicAliasErrors`
---     (`types/typecheck.mdk`) depend on the alias table's enumeration order,
---     and that bullet names A-2.3's PR as the place to answer it. Keeping the
---     list answers it by construction — the order is the one that was there.
---
--- ⚠️ `TkBare` is NOT a fallback the identity path may reach. It is the key an
--- identity-LESS site mints, and `tabKeyEq` never equates it with a `TkIdent`,
--- so a module-path lookup can neither hit nor be hit by a bare-name row. That
--- separation is the whole point: a `TkIdent`-keyed lookup that misses MISSES,
--- exactly as a bare-name lookup misses today for a builtin.
---
--- `TkBare` carries its `Ns` for the same reason `Ident` does — so that a
--- future table holding more than one namespace cannot collide a bare type
--- name with a bare method name of the same spelling.
-public export data TabKey =
-  | TkIdent Ident
-  | TkBare Ns String
-deriving (Eq, Ord, Debug)
-
--- The ONE total mint. `mkIdent` answers "does this origin carry identity?";
--- `None` is honest absence (an `OriginUnresolved` head on the flat/
--- single-file driver path, or the `OriginModule ""` §8 I6.3 refuses), and it
--- lands in the `TkBare` half rather than being smuggled into a shared key.
-export tabKeyOf : Ns -> TyConOrigin -> String -> TabKey
-tabKeyOf ns origin name = match mkIdent ns origin name
-  Some ident => TkIdent ident
-  None => TkBare ns name
-
--- The BARE name inside a key, for the residual consumers that genuinely ask a
--- name question rather than an identity question (`noImplHint`'s
--- "is any user-declared type called this?", `rejectCyclicAliases`' name-keyed
--- dependency graph). Marked at each such call site; never used to build a
--- lookup key.
-export tabKeyName : TabKey -> String
-tabKeyName (TkIdent (Ident _ _ name)) = name
-tabKeyName (TkBare _ name) = name
-
--- Monomorphic and short-circuiting on purpose (`compiler/AGENTS.md`): this
--- runs once per entry scanned, on every type-application node.
---
--- ⚠️ NAME FIRST, deliberately — the derived `Eq` would compare in FIELD order
--- (`Ns`, then `IdentOrigin`, then name), which is the least discriminating
--- order available here: within one of these tables every entry shares the
--- namespace and many share a module id, so a name-last comparison does the
--- two cheap-but-useless compares before the one that actually decides. The
--- derived instance is still kept for the doctests below.
-tabKeyEq : TabKey -> TabKey -> Bool
-tabKeyEq (TkIdent (Ident ns1 o1 n1)) (TkIdent (Ident ns2 o2 n2)) = n1 == n2
-  && ns1 == ns2
-  && o1 == o2
-tabKeyEq (TkBare ns1 n1) (TkBare ns2 n2) = n1 == n2 && ns1 == ns2
-tabKeyEq _ _ = False
-
--- `lookupAssoc`'s `TabKey`-keyed peer: FIRST match wins, so a prepend still
--- shadows (the ordering every reader of those two tables assumes — the
--- module's own decls are registered as a front overlay over the accumulated
--- universe).
-export lookupTab : TabKey -> List (TabKey, v) -> Option v
-lookupTab _ [] = None
-lookupTab k ((k2, v)::rest) = if tabKeyEq k k2 then Some v else lookupTab k rest
-
--- 🚨 A BARE-NAME MEMBERSHIP TEST, AND IT IS NOT A LOOKUP. It answers "does
--- SOME entry carry this name, under any identity?" and returns no value, so
--- it cannot select the wrong module's row — there is no row to select. Its
--- one consumer is a diagnostic HINT (`noImplHint`, `types/typecheck.mdk`),
--- which asks whether a name is user-declared at all in order to decide
--- whether "add `deriving`" is applicable advice.
-export tabHasName : String -> List (TabKey, v) -> Bool
-tabHasName _ [] = False
-tabHasName n ((k, _)::rest) = tabKeyName k == n || tabHasName n rest
 
 -- ── The COMPOSITE assoc-list half (A-2.4) ─────────────────────────────────
 -- `lookupTab`'s peer for a table whose key carries ORDINALS as well as
@@ -2083,7 +1985,7 @@ headU = HkDecl (TkBare NsType "Box")
 -- > headKeyIdent (HkRigid "a")
 -- None
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "Ident" true) (mem "IdentOrigin" false) (mem "TyConOrigin" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "identOriginBuiltin" false) (mem "mkIdent" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "Ident" true) (mem "IdentOrigin" false) (mem "TyConOrigin" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "identOriginBuiltin" false) (mem "mkIdent" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "tabKeyEq" false) (mem "lookupTab" false) (mem "tabHasName" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omSize" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "listLen" false) (mem "joinWith" false) (mem "filterList" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("list") ((mem "sort" false))))
@@ -2217,25 +2119,6 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig false "sregMergeGo" (TyFun (TyApp (TyCon "List") (TyCon "RegKey")) (TyFun (TyCon "SetRegistry") (TyCon "SetRegistry"))))
 (DFunDef false "sregMergeGo" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "sregMergeGo" ((PCons (PVar "k") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "sregMergeGo") (EVar "rest")) (EApp (EApp (EVar "sregAddK") (EVar "k")) (EVar "acc"))))
-(DData Public "TabKey" () ((variant "TkIdent" (ConPos (TyCon "Ident"))) (variant "TkBare" (ConPos (TyCon "Ns") (TyCon "String")))) ())
-(DImpl true "Eq" ((TyCon "TabKey")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "TkIdent" (PVar "__a0")) (PCon "TkIdent" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "TkBare" (PVar "__a0") (PVar "__a1")) (PCon "TkBare" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple PWild PWild) () (EVar "False"))))))
-(DImpl true "Ord" ((TyCon "TabKey")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "TkIdent" (PVar "__a0")) (PCon "TkIdent" (PVar "__b0"))) () (EApp (EApp (EVar "compare") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "TkIdent" (PVar "__a0")) (PCon "TkBare" (PVar "__b0") (PVar "__b1"))) () (EVar "Lt")) (arm (PTuple (PCon "TkBare" (PVar "__a0") (PVar "__a1")) (PCon "TkIdent" (PVar "__b0"))) () (EVar "Gt")) (arm (PTuple (PCon "TkBare" (PVar "__a0") (PVar "__a1")) (PCon "TkBare" (PVar "__b0") (PVar "__b1"))) () (EMatch (EApp (EApp (EVar "compare") (EVar "__a0")) (EVar "__b0")) (arm (PCon "Eq") () (EApp (EApp (EVar "compare") (EVar "__a1")) (EVar "__b1"))) (arm (PVar "__c") () (EVar "__c"))))))))
-(DImpl true "Debug" ((TyCon "TabKey")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "TkIdent" (PVar "__a0")) () (EBinOp "++" (ELit (LString "TkIdent ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0"))))) (arm (PCon "TkBare" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "TkBare ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1")))))))))
-(DTypeSig true "tabKeyOf" (TyFun (TyCon "Ns") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "TabKey")))))
-(DFunDef false "tabKeyOf" ((PVar "ns") (PVar "origin") (PVar "name")) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "ns")) (EVar "origin")) (EVar "name")) (arm (PCon "Some" (PVar "ident")) () (EApp (EVar "TkIdent") (EVar "ident"))) (arm (PCon "None") () (EApp (EApp (EVar "TkBare") (EVar "ns")) (EVar "name")))))
-(DTypeSig true "tabKeyName" (TyFun (TyCon "TabKey") (TyCon "String")))
-(DFunDef false "tabKeyName" ((PCon "TkIdent" (PCon "Ident" PWild PWild (PVar "name")))) (EVar "name"))
-(DFunDef false "tabKeyName" ((PCon "TkBare" PWild (PVar "name"))) (EVar "name"))
-(DTypeSig false "tabKeyEq" (TyFun (TyCon "TabKey") (TyFun (TyCon "TabKey") (TyCon "Bool"))))
-(DFunDef false "tabKeyEq" ((PCon "TkIdent" (PCon "Ident" (PVar "ns1") (PVar "o1") (PVar "n1"))) (PCon "TkIdent" (PCon "Ident" (PVar "ns2") (PVar "o2") (PVar "n2")))) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "n1") (EVar "n2")) (EBinOp "==" (EVar "ns1") (EVar "ns2"))) (EBinOp "==" (EVar "o1") (EVar "o2"))))
-(DFunDef false "tabKeyEq" ((PCon "TkBare" (PVar "ns1") (PVar "n1")) (PCon "TkBare" (PVar "ns2") (PVar "n2"))) (EBinOp "&&" (EBinOp "==" (EVar "n1") (EVar "n2")) (EBinOp "==" (EVar "ns1") (EVar "ns2"))))
-(DFunDef false "tabKeyEq" (PWild PWild) (EVar "False"))
-(DTypeSig true "lookupTab" (TyFun (TyCon "TabKey") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyVar "v"))) (TyApp (TyCon "Option") (TyVar "v")))))
-(DFunDef false "lookupTab" (PWild (PList)) (EVar "None"))
-(DFunDef false "lookupTab" ((PVar "k") (PCons (PTuple (PVar "k2") (PVar "v")) (PVar "rest"))) (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "k")) (EVar "k2")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupTab") (EVar "k")) (EVar "rest"))))
-(DTypeSig true "tabHasName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyVar "v"))) (TyCon "Bool"))))
-(DFunDef false "tabHasName" (PWild (PList)) (EVar "False"))
-(DFunDef false "tabHasName" ((PVar "n") (PCons (PTuple (PVar "k") PWild) (PVar "rest"))) (EBinOp "||" (EBinOp "==" (EApp (EVar "tabKeyName") (EVar "k")) (EVar "n")) (EApp (EApp (EVar "tabHasName") (EVar "n")) (EVar "rest"))))
 (DTypeSig false "regKeyEq" (TyFun (TyCon "RegKey") (TyFun (TyCon "RegKey") (TyCon "Bool"))))
 (DFunDef false "regKeyEq" ((PCon "RegKey" (PVar "k1") (PVar "o1")) (PCon "RegKey" (PVar "k2") (PVar "o2"))) (EBinOp "&&" (EApp (EApp (EVar "intsEq") (EVar "o1")) (EVar "o2")) (EApp (EApp (EVar "tabKeysEq") (EVar "k1")) (EVar "k2"))))
 (DTypeSig false "intsEq" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))
@@ -2373,7 +2256,7 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig false "headU" (TyCon "HeadKey"))
 (DFunDef false "headU" () (EApp (EVar "HkDecl") (EApp (EApp (EVar "TkBare") (EVar "NsType")) (ELit (LString "Box")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "Ident" true) (mem "IdentOrigin" false) (mem "TyConOrigin" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "identOriginBuiltin" false) (mem "mkIdent" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "Ident" true) (mem "IdentOrigin" false) (mem "TyConOrigin" true) (mem "identOriginOf" false) (mem "identOriginFold" false) (mem "identOriginBuiltin" false) (mem "mkIdent" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "tabKeyEq" false) (mem "lookupTab" false) (mem "tabHasName" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omSize" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false) (mem "listLen" false) (mem "joinWith" false) (mem "filterList" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("list") ((mem "sort" false))))
@@ -2507,25 +2390,6 @@ headU = HkDecl (TkBare NsType "Box")
 (DTypeSig false "sregMergeGo" (TyFun (TyApp (TyCon "List") (TyCon "RegKey")) (TyFun (TyCon "SetRegistry") (TyCon "SetRegistry"))))
 (DFunDef false "sregMergeGo" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "sregMergeGo" ((PCons (PVar "k") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "sregMergeGo") (EVar "rest")) (EApp (EApp (EVar "sregAddK") (EVar "k")) (EVar "acc"))))
-(DData Public "TabKey" () ((variant "TkIdent" (ConPos (TyCon "Ident"))) (variant "TkBare" (ConPos (TyCon "Ns") (TyCon "String")))) ())
-(DImpl true "Eq" ((TyCon "TabKey")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "TkIdent" (PVar "__a0")) (PCon "TkIdent" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "TkBare" (PVar "__a0") (PVar "__a1")) (PCon "TkBare" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1")))) (arm (PTuple PWild PWild) () (EVar "False"))))))
-(DImpl true "Ord" ((TyCon "TabKey")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "TkIdent" (PVar "__a0")) (PCon "TkIdent" (PVar "__b0"))) () (EApp (EApp (EMethodRef "compare") (EVar "__a0")) (EVar "__b0"))) (arm (PTuple (PCon "TkIdent" (PVar "__a0")) (PCon "TkBare" (PVar "__b0") (PVar "__b1"))) () (EVar "Lt")) (arm (PTuple (PCon "TkBare" (PVar "__a0") (PVar "__a1")) (PCon "TkIdent" (PVar "__b0"))) () (EVar "Gt")) (arm (PTuple (PCon "TkBare" (PVar "__a0") (PVar "__a1")) (PCon "TkBare" (PVar "__b0") (PVar "__b1"))) () (EMatch (EApp (EApp (EMethodRef "compare") (EVar "__a0")) (EVar "__b0")) (arm (PCon "Eq") () (EApp (EApp (EMethodRef "compare") (EVar "__a1")) (EVar "__b1"))) (arm (PVar "__c") () (EVar "__c"))))))))
-(DImpl true "Debug" ((TyCon "TabKey")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "TkIdent" (PVar "__a0")) () (EBinOp "++" (ELit (LString "TkIdent ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0"))))) (arm (PCon "TkBare" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "TkBare ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1")))))))))
-(DTypeSig true "tabKeyOf" (TyFun (TyCon "Ns") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "TabKey")))))
-(DFunDef false "tabKeyOf" ((PVar "ns") (PVar "origin") (PVar "name")) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "ns")) (EVar "origin")) (EVar "name")) (arm (PCon "Some" (PVar "ident")) () (EApp (EVar "TkIdent") (EVar "ident"))) (arm (PCon "None") () (EApp (EApp (EVar "TkBare") (EVar "ns")) (EVar "name")))))
-(DTypeSig true "tabKeyName" (TyFun (TyCon "TabKey") (TyCon "String")))
-(DFunDef false "tabKeyName" ((PCon "TkIdent" (PCon "Ident" PWild PWild (PVar "name")))) (EVar "name"))
-(DFunDef false "tabKeyName" ((PCon "TkBare" PWild (PVar "name"))) (EVar "name"))
-(DTypeSig false "tabKeyEq" (TyFun (TyCon "TabKey") (TyFun (TyCon "TabKey") (TyCon "Bool"))))
-(DFunDef false "tabKeyEq" ((PCon "TkIdent" (PCon "Ident" (PVar "ns1") (PVar "o1") (PVar "n1"))) (PCon "TkIdent" (PCon "Ident" (PVar "ns2") (PVar "o2") (PVar "n2")))) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "n1") (EVar "n2")) (EBinOp "==" (EVar "ns1") (EVar "ns2"))) (EBinOp "==" (EVar "o1") (EVar "o2"))))
-(DFunDef false "tabKeyEq" ((PCon "TkBare" (PVar "ns1") (PVar "n1")) (PCon "TkBare" (PVar "ns2") (PVar "n2"))) (EBinOp "&&" (EBinOp "==" (EVar "n1") (EVar "n2")) (EBinOp "==" (EVar "ns1") (EVar "ns2"))))
-(DFunDef false "tabKeyEq" (PWild PWild) (EVar "False"))
-(DTypeSig true "lookupTab" (TyFun (TyCon "TabKey") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyVar "v"))) (TyApp (TyCon "Option") (TyVar "v")))))
-(DFunDef false "lookupTab" (PWild (PList)) (EVar "None"))
-(DFunDef false "lookupTab" ((PVar "k") (PCons (PTuple (PVar "k2") (PVar "v")) (PVar "rest"))) (EIf (EApp (EApp (EVar "tabKeyEq") (EVar "k")) (EVar "k2")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupTab") (EVar "k")) (EVar "rest"))))
-(DTypeSig true "tabHasName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyVar "v"))) (TyCon "Bool"))))
-(DFunDef false "tabHasName" (PWild (PList)) (EVar "False"))
-(DFunDef false "tabHasName" ((PVar "n") (PCons (PTuple (PVar "k") PWild) (PVar "rest"))) (EBinOp "||" (EBinOp "==" (EApp (EVar "tabKeyName") (EVar "k")) (EVar "n")) (EApp (EApp (EVar "tabHasName") (EVar "n")) (EVar "rest"))))
 (DTypeSig false "regKeyEq" (TyFun (TyCon "RegKey") (TyFun (TyCon "RegKey") (TyCon "Bool"))))
 (DFunDef false "regKeyEq" ((PCon "RegKey" (PVar "k1") (PVar "o1")) (PCon "RegKey" (PVar "k2") (PVar "o2"))) (EBinOp "&&" (EApp (EApp (EVar "intsEq") (EVar "o1")) (EVar "o2")) (EApp (EApp (EVar "tabKeysEq") (EVar "k1")) (EVar "k2"))))
 (DTypeSig false "intsEq" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool"))))

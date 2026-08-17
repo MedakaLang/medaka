@@ -107,7 +107,7 @@ armDictSites : Arm -> List (Ref (List Route))
 armEVars : Arm -> List String
 armIsUnguarded : List Guard -> Bool
 armSites : Arm -> List (Ref Route)
-armUnreachable : Option String -> List (List Pat) -> Map String Unit -> Bool -> Pat -> Bool
+armUnreachable : Option TabKey -> List (List Pat) -> Map String Unit -> Bool -> Pat -> Bool
 arrowsWithLastEffect : List Mono -> EffRow -> Mono -> Mono
 assignName : Ref (List (Int, String)) -> Ref Int -> Int -> String
 astEffrowE : List (String, Ref Effvar) -> Ty -> EffRow
@@ -303,7 +303,7 @@ checkProgramSchemesWithRuntime : List Decl -> List Decl -> List Decl -> List (St
 checkProgramSeeded : List (String, Scheme) -> List Decl -> List (String, Scheme)
 checkProgramSeededSplit : List (String, Scheme) -> List Decl -> List Decl -> List (String, Scheme)
 checkRecBindNonFunction : String -> Expr -> Unit
-checkRedundantGo : Option String -> List (List Pat) -> Map String Unit -> Bool -> List Arm -> Unit
+checkRedundantGo : Option TabKey -> List (List Pat) -> Map String Unit -> Bool -> List Arm -> Unit
 checkReqObligations : ImplUniverse -> Option Loc -> List (IfaceRef, List Mono) -> Unit
 checkReqOne : ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> Unit
 checkSigConstraintCoverage : List (String, List (IfaceRef, Mono), List (List Mono)) -> List (String, Ty) -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> List (String, Scheme) -> Unit
@@ -1141,7 +1141,7 @@ mangledHeadCandidatesGo : String -> List String -> List (String, RecordInfo)
 mapLocalSchemes : List (String, Mono) -> List (String, Scheme)
 markModules : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 markNumlitOpTaint : Mono -> Unit
-matchCol0Type : Mono -> Option String
+matchCol0Type : Mono -> Option TabKey
 matchOneSided : (a -> b -> MStep c a b) -> (c -> c -> Bool) -> (b -> b -> Bool) -> List (a, b) -> List (c, b) -> Option (List (c, b))
 matchStep : Ty -> Mono -> MStep String Ty Mono
 matchTyMono : Ty -> Mono -> Option (List (String, Mono))
@@ -1728,7 +1728,7 @@ tyConNamesInTy : Ty -> List String
 tyHeadEqV : List Ty -> List Ty -> Bool
 tyIsConcrete : Ty -> Bool
 tyMatchesAst : Ty -> Ty -> Bool
-tyOfMsg : Option String -> String
+tyOfMsg : Option TabKey -> String
 tyStep : Ty -> Ty -> MStep String Ty Ty
 tyStrictlyMoreSpecificV : List Ty -> List Ty -> Bool
 tyStructEq : Ty -> Ty -> Bool

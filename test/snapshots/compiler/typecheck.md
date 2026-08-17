@@ -1,5 +1,5 @@
 # META
-source_lines=31135
+source_lines=31190
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -66,6 +66,16 @@ import frontend.ast.{
   useMemberLocal,
   useMemberAlias,
   qualifiedLocal,
+  -- RE-HOMED here from `types/registry.mdk` (oracle-identity family leaf L1):
+  -- `frontend/exhaust.mdk`'s constructor oracle keys on `TabKey`, and
+  -- `frontend` may not import `types`.  Same six symbols, same bodies; only
+  -- the module they are imported from changed.  The RENDERER stays in
+  -- `types/registry.mdk` and is still imported from there.
+  TabKey(..),
+  tabKeyOf,
+  tabKeyName,
+  lookupTab,
+  tabHasName,
 }
 -- #1111 Stage A-2 unit A-2.3: the TYPE-namespace re-key.  `aliasTableRef` /
 -- `dataParamKindsRef` (and their `universe*` cross-run halves) are keyed by
@@ -78,11 +88,6 @@ import frontend.ast.{
 -- through `ifaceTabKey` below.  `universeRegisteredIfacesRef` is deliberately
 -- NOT re-keyed — see `ifaceRegistered`.
 import types.registry.{
-  TabKey(..),
-  tabKeyOf,
-  tabKeyName,
-  lookupTab,
-  tabHasName,
   RegKey,
   Registry,
   regKeyOfTab,
@@ -13338,7 +13343,7 @@ checkMatchRedundant scrutTy arms =
 -- is `None`, i.e. when the scrutinee type has no concrete head, in which case no
 -- arm carries a constructor pattern and there is no head constructor to find in
 -- either order.
-checkRedundantGo : Option String -> List (List Pat) -> OrdMap Unit -> Bool -> List Arm -> Unit
+checkRedundantGo : Option TabKey -> List (List Pat) -> OrdMap Unit -> Bool -> List Arm -> Unit
 checkRedundantGo _ _ _ _ [] = ()
 checkRedundantGo col0 prec heads offCol ((Arm pat gs body)::rest) =
   let dp = desugarPat driverState.value.matchOracle.value pat
@@ -13368,7 +13373,7 @@ checkRedundantGo col0 prec heads offCol ((Arm pat gs body)::rest) =
 -- deliberate over-approximation of "has a wildcard head" (it also trips on a literal
 -- head, which `specializeCon` would in fact discard): erring towards `True` only ever
 -- costs us the fast path and falls back to the exact check, never an answer.
-armUnreachable : Option String -> List (List Pat) -> OrdMap Unit -> Bool -> Pat -> Bool
+armUnreachable : Option TabKey -> List (List Pat) -> OrdMap Unit -> Bool -> Pat -> Bool
 armUnreachable col0 prec heads offCol (PCon c args)
   | not offCol && not (omHasKey c heads) = False
   | otherwise =
@@ -13410,9 +13415,14 @@ nonExhaustiveMsg scrutTy rows = match usefulWitness driverState.value.matchOracl
 
 -- Name the scrutinee type (skip the synthetic tuple type names, which aren't
 -- user-facing — the witness pattern already reads as a tuple).
-tyOfMsg : Option String -> String
+-- ⚠️ Reads the bare NAME out of the key (`tabKeyName`) on purpose: this is
+-- witness PROSE, not a lookup, and its text must not change for any program
+-- whose diagnostic does not change.
+tyOfMsg : Option TabKey -> String
 tyOfMsg None = ""
-tyOfMsg (Some t) = if isTupleTyName t then "" else " of '\{t}'"
+tyOfMsg (Some k) =
+  let t = tabKeyName k
+  if isTupleTyName t then "" else " of '\{t}'"
 
 isTupleTyName : String -> Bool
 isTupleTyName t = stringLength t >= 7 && stringSlice 0 7 t == "__tuple"
@@ -13427,8 +13437,25 @@ nonGuardedRows ((Arm _ _ _)::rest) = nonGuardedRows rest
 -- the head type name of the scrutinee, for the matrix's column-0 oracle: a
 -- TCon/TApp head gives the type name; a tuple has no TCon head, so it maps to a
 -- synthetic per-arity tuple type (mirrors the reference's col0_type).
-matchCol0Type : Mono -> Option String
-matchCol0Type ty = map (n => n) (headTyconNameMono ty)
+--
+-- ⚠️ ANSWER-PRESERVING CLASSIFICATION, and it is a REQUIRED property rather
+-- than a style choice.  `headTyconNameMono` is the gate — it decides `Some` vs
+-- `None` on exactly the `Mono` head nodes it decided them on before, so `TFun`
+-- stays `None` (#1617, deliberate) and falls through to `inferCol0Type`, and a
+-- rigid head still produces a key that MISSES the table exactly as today's
+-- bare `Some n` missed it.  `headTyconMono` is consulted only to UPGRADE a key
+-- that is already going to be `Some`, never to change whether it is `Some`.
+--
+-- Composing the two existing projections is deliberate: they already owe each
+-- other an arm for every new `Mono` head node, and a third independent
+-- `match headMonoNode` arm set here is one more the next person would forget.
+matchCol0Type : Mono -> Option TabKey
+matchCol0Type ty = match headTyconNameMono ty
+  None => None
+  Some n => match headTyconMono ty
+    Some (HkDecl k) => Some k
+    Some (HkRigid _) => Some (TkBare NsType n)
+    None => Some (TkBare NsType n)
 
 inferArms : TcEnv -> Mono -> Mono -> List Arm -> Unit
 inferArms _ _ _ [] = ()
@@ -27224,7 +27251,35 @@ seedCheckRun oracleDecls =
 seedAndCheckSplit : List Decl -> List Decl -> List Decl -> List (String, Scheme)
 seedAndCheckSplit runtimeDecls coreProg userProg =
   let prog = coreProg ++ userProg
-  let _ = seedCheckRun prog
+  -- ⚠️ THE ORACLE'S PRELUDE HALF IS STAMPED HERE AND `prog`'s IS NOT, AND THE
+  -- ASYMMETRY IS THE POINT.  `matchOracle`'s `typeCtors` is the one table keyed
+  -- by DECLARATION IDENTITY (`frontend/exhaust.mdk`), so its rows have to be
+  -- minted from the SAME origin the READER's key is minted from.  The reader's
+  -- key comes from `matchCol0Type` → `headTyconMono` → the scrutinee `Mono`'s
+  -- `TCon` origin, and on THIS path that origin is written by the
+  -- `stampDeclOrigins "core" coreProgTy` call inside `checkProgramSeededSplit`
+  -- (`frontend/resolve.mdk`'s #1227 note) — on the very next line, over this
+  -- same `coreProg`.  Feeding `buildOracle` the UNstamped copy therefore made
+  -- the writer mint `TkBare NsType "Option"` for a type whose reader mints
+  -- `TkIdent (Ident NsType (IdentModule "core") "Option")`; `tabKeyEq` never
+  -- equates those, so under the ONE ABSENCE RULE every prelude-typed column-0
+  -- lookup MISSED — and a `bindCtors` miss is LOUD, not silent (`defaultMatrix`
+  -- keeps only wildcard-headed rows, so an all-ctor-headed matrix goes empty and
+  -- `useful _ _ [] _ = True`), which is why the unstamped form put a spurious
+  -- `non-exhaustive match of 'Ordering'` on `main = println 1`.
+  --
+  -- ⚠️ Same id, same decls, same call — NOT an invented module id, so the
+  -- "over-supplying is not correctable" bound in `stampDeclOrigins`' comment is
+  -- not being widened.  `fillDeclOrigin` fills only a still-`OriginUnresolved`
+  -- origin, so this is idempotent and cannot re-stamp an identity-bearing decl.
+  --
+  -- ⚠️ `prog` itself is deliberately left alone: its readers here
+  -- (`runFinalChecks`' cycle walk, `flatClassEnvOf`, `flatImplEnvOf`) are the
+  -- ones that work today, and widening the stamp to them is a separate question
+  -- with its own blast radius.  `buildOracle` reads `DData` only, and of its four
+  -- tables only `typeCtors` reads an origin — the other three stay name-keyed —
+  -- so the blast radius of this line is exactly that one table's keys.
+  let _ = seedCheckRun (stampDeclOrigins "core" coreProg ++ userProg)
   -- #1280: prelude boundary in hand — see `checkProgramSchemesWithRuntime`.
   let schemes = checkProgramSeededSplit (externSchemes (externTyOriginScope coreProg) runtimeDecls) coreProg userProg
   -- #1557 A-3.5c: TWO envs, because the two decl lists differ here and always have —
@@ -31138,8 +31193,8 @@ schemeLines : List (String, Scheme) -> List String
 schemeLines [] = []
 schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Attr" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Ns" true) (mem "Ident" true) (mem "mkIdent" false) (mem "sameTyConHead" false) (mem "tyConBuiltin" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FunClause" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "orElseLoc" false) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "PropParam" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false))))
-(DUse false (UseGroup ("types" "registry") ((mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false) (mem "tabHasName" false) (mem "RegKey" false) (mem "Registry" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Attr" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Ns" true) (mem "Ident" true) (mem "mkIdent" false) (mem "sameTyConHead" false) (mem "tyConBuiltin" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FunClause" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "orElseLoc" false) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "PropParam" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false) (mem "tabHasName" false))))
+(DUse false (UseGroup ("types" "registry") ((mem "RegKey" false) (mem "Registry" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "stampBindingIds" false) (mem "stampGraphTyOrigins" false) (mem "stampFlatTyOrigins" false) (mem "stampDeclOrigins" false) (mem "stampTyOrigins" false) (mem "externTyOriginScope" false) (mem "noteOriginTrace" false))))
@@ -33275,10 +33330,10 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "unreachableArmWarning" () (ELit (LString "Warning: unreachable match arm. This pattern is already covered by an earlier arm")))
 (DTypeSig false "checkMatchRedundant" (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Unit"))))
 (DFunDef false "checkMatchRedundant" ((PVar "scrutTy") (PVar "arms")) (EApp (EApp (EApp (EApp (EApp (EVar "checkRedundantGo") (EApp (EVar "matchCol0Type") (EVar "scrutTy"))) (EListLit)) (EVar "omEmpty")) (EVar "False")) (EVar "arms")))
-(DTypeSig false "checkRedundantGo" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Unit")))))))
+(DTypeSig false "checkRedundantGo" (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Unit")))))))
 (DFunDef false "checkRedundantGo" (PWild PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkRedundantGo" ((PVar "col0") (PVar "prec") (PVar "heads") (PVar "offCol") (PCons (PCon "Arm" (PVar "pat") (PVar "gs") (PVar "body")) (PVar "rest"))) (EBlock (DoLet false false (PVar "dp") (EApp (EApp (EVar "desugarPat") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EVar "pat"))) (DoLet false false PWild (EIf (EApp (EApp (EApp (EApp (EApp (EVar "armUnreachable") (EVar "col0")) (EVar "prec")) (EVar "heads")) (EVar "offCol")) (EVar "dp")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "W-UNREACHABLE-ARM"))) (ELit (LInt 2))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "exprLoc") (EVar "body"))) (EFieldAccess (EVar "currentLoc") "value"))) (EVar "unreachableArmWarning")) (EVar "None")) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))) (ELit LUnit))) (DoLet false false (PVar "contributes") (EBinOp "&&" (EApp (EVar "armIsUnguarded") (EVar "gs")) (EApp (EVar "not") (EApp (EVar "patHasRange") (EVar "pat"))))) (DoLet false false (PVar "prec2") (EIf (EVar "contributes") (EBinOp "::" (EListLit (EVar "dp")) (EVar "prec")) (EVar "prec"))) (DoLet false false (PVar "heads2") (EIf (EVar "contributes") (EApp (EApp (EVar "noteHeadCtor") (EVar "dp")) (EVar "heads")) (EVar "heads"))) (DoLet false false (PVar "offCol2") (EBinOp "||" (EVar "offCol") (EBinOp "&&" (EVar "contributes") (EApp (EVar "not") (EApp (EVar "isConPat") (EVar "dp")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkRedundantGo") (EVar "col0")) (EVar "prec2")) (EVar "heads2")) (EVar "offCol2")) (EVar "rest")))))
-(DTypeSig false "armUnreachable" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyCon "Bool")))))))
+(DTypeSig false "armUnreachable" (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyCon "Bool")))))))
 (DFunDef false "armUnreachable" ((PVar "col0") (PVar "prec") (PVar "heads") (PVar "offCol") (PCon "PCon" (PVar "c") (PVar "args"))) (EIf (EBinOp "&&" (EApp (EVar "not") (EVar "offCol")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "c")) (EVar "heads")))) (EVar "False") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "patUnreachable") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EVar "col0")) (EVar "prec")) (EApp (EApp (EVar "PCon") (EVar "c")) (EVar "args"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "armUnreachable" ((PVar "col0") (PVar "prec") PWild PWild (PVar "dp")) (EApp (EApp (EApp (EApp (EVar "patUnreachable") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EVar "col0")) (EVar "prec")) (EVar "dp")))
 (DTypeSig false "noteHeadCtor" (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
@@ -33292,17 +33347,17 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "armIsUnguarded" ((PCons PWild PWild)) (EVar "False"))
 (DTypeSig false "nonExhaustiveMsg" (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "nonExhaustiveMsg" ((PVar "scrutTy") (PVar "rows")) (EMatch (EApp (EApp (EApp (EApp (EVar "usefulWitness") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EApp (EVar "matchCol0Type") (EVar "scrutTy"))) (EVar "rows")) (ELit (LInt 1))) (arm (PCon "Some" (PCons (PVar "w") PWild)) () (EBlock (DoLet false false (PVar "witnessStr") (EApp (EVar "renderWitness") (EVar "w"))) (DoLet false false (PVar "hint") (EBinOp "++" (EBinOp "++" (ELit (LString "add a '")) (EApp (EVar "display") (EVar "witnessStr"))) (ELit (LString " => …' arm, or a '_' wildcard arm to catch the rest.")))) (DoLet false false (PVar "msg") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Warning: non-exhaustive match")) (EApp (EVar "display") (EApp (EVar "tyOfMsg") (EApp (EVar "matchCol0Type") (EVar "scrutTy"))))) (ELit (LString ". Missing case: '"))) (EApp (EVar "display") (EVar "witnessStr"))) (ELit (LString "'; "))) (EApp (EVar "display") (EVar "hint"))) (ELit (LString "")))) (DoExpr (ETuple (EVar "msg") (EApp (EVar "Some") (EVar "hint")))))) (arm PWild () (ETuple (EVar "nonExhaustiveMatchWarning") (EVar "None")))))
-(DTypeSig false "tyOfMsg" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))
+(DTypeSig false "tyOfMsg" (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyCon "String")))
 (DFunDef false "tyOfMsg" ((PCon "None")) (ELit (LString "")))
-(DFunDef false "tyOfMsg" ((PCon "Some" (PVar "t"))) (EIf (EApp (EVar "isTupleTyName") (EVar "t")) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString " of '")) (EApp (EVar "display") (EVar "t"))) (ELit (LString "'")))))
+(DFunDef false "tyOfMsg" ((PCon "Some" (PVar "k"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "tabKeyName") (EVar "k"))) (DoExpr (EIf (EApp (EVar "isTupleTyName") (EVar "t")) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString " of '")) (EApp (EVar "display") (EVar "t"))) (ELit (LString "'")))))))
 (DTypeSig false "isTupleTyName" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isTupleTyName" ((PVar "t")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "stringLength") (EVar "t")) (ELit (LInt 7))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 7))) (EVar "t")) (ELit (LString "__tuple")))))
 (DTypeSig false "nonGuardedRows" (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat")))))
 (DFunDef false "nonGuardedRows" ((PList)) (EListLit))
 (DFunDef false "nonGuardedRows" ((PCons (PCon "Arm" (PVar "pat") (PList) PWild) (PVar "rest"))) (EBinOp "::" (EListLit (EApp (EApp (EVar "desugarPat") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EVar "pat"))) (EApp (EVar "nonGuardedRows") (EVar "rest"))))
 (DFunDef false "nonGuardedRows" ((PCons (PCon "Arm" PWild PWild PWild) (PVar "rest"))) (EApp (EVar "nonGuardedRows") (EVar "rest")))
-(DTypeSig false "matchCol0Type" (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "matchCol0Type" ((PVar "ty")) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EVar "n"))) (EApp (EVar "headTyconNameMono") (EVar "ty"))))
+(DTypeSig false "matchCol0Type" (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "TabKey"))))
+(DFunDef false "matchCol0Type" ((PVar "ty")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "ty")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "n")) () (EMatch (EApp (EVar "headTyconMono") (EVar "ty")) (arm (PCon "Some" (PCon "HkDecl" (PVar "k"))) () (EApp (EVar "Some") (EVar "k"))) (arm (PCon "Some" (PCon "HkRigid" PWild)) () (EApp (EVar "Some") (EApp (EApp (EVar "TkBare") (EVar "NsType")) (EVar "n")))) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EApp (EVar "TkBare") (EVar "NsType")) (EVar "n"))))))))
 (DTypeSig false "inferArms" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Unit"))))))
 (DFunDef false "inferArms" (PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "inferArms" ((PVar "env") (PVar "scrutTy") (PVar "result") (PCons (PCon "Arm" (PVar "pat") (PVar "gs") (PVar "body")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferArm") (EVar "env")) (EVar "scrutTy")) (EVar "result")) (EVar "pat")) (EVar "gs")) (EVar "body"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "inferArms") (EVar "env")) (EVar "scrutTy")) (EVar "result")) (EVar "rest")))))
@@ -35730,7 +35785,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "seedCheckRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
 (DFunDef false "seedCheckRun" ((PVar "oracleDecls")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "implInferEnabled")) (EVar "False"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle")) (EApp (EVar "buildOracle") (EVar "oracleDecls"))))))
 (DTypeSig false "seedAndCheckSplit" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
-(DFunDef false "seedAndCheckSplit" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EBlock (DoLet false false (PVar "prog") (EBinOp "++" (EVar "coreProg") (EVar "userProg"))) (DoLet false false PWild (EApp (EVar "seedCheckRun") (EVar "prog"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EVar "checkProgramSeededSplit") (EApp (EApp (EVar "externSchemes") (EApp (EVar "externTyOriginScope") (EVar "coreProg"))) (EVar "runtimeDecls"))) (EVar "coreProg")) (EVar "userProg"))) (DoLet false false (PVar "userDecls") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "coherenceUserDecls") "value")) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "userDecls")) (EVar "prog")) (EApp (EVar "flatClassEnvOf") (EVar "userDecls"))) (EApp (EVar "flatClassEnvOf") (EVar "prog"))) (EApp (EVar "flatImplEnvOf") (EVar "userDecls"))) (EApp (EVar "flatImplEnvOf") (EVar "prog"))) (ELit (LInt 0))) (EVar "False"))) (DoExpr (EVar "schemes"))))
+(DFunDef false "seedAndCheckSplit" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EBlock (DoLet false false (PVar "prog") (EBinOp "++" (EVar "coreProg") (EVar "userProg"))) (DoLet false false PWild (EApp (EVar "seedCheckRun") (EBinOp "++" (EApp (EApp (EVar "stampDeclOrigins") (ELit (LString "core"))) (EVar "coreProg")) (EVar "userProg")))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EVar "checkProgramSeededSplit") (EApp (EApp (EVar "externSchemes") (EApp (EVar "externTyOriginScope") (EVar "coreProg"))) (EVar "runtimeDecls"))) (EVar "coreProg")) (EVar "userProg"))) (DoLet false false (PVar "userDecls") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "coherenceUserDecls") "value")) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "userDecls")) (EVar "prog")) (EApp (EVar "flatClassEnvOf") (EVar "userDecls"))) (EApp (EVar "flatClassEnvOf") (EVar "prog"))) (EApp (EVar "flatImplEnvOf") (EVar "userDecls"))) (EApp (EVar "flatImplEnvOf") (EVar "prog"))) (ELit (LInt 0))) (EVar "False"))) (DoExpr (EVar "schemes"))))
 (DTypeSig true "checkToLinesWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))))
 (DFunDef false "checkToLinesWithRuntime" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EBlock (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EVar "seedAndCheckSplit") (EVar "runtimeDecls")) (EVar "coreProg")) (EVar "userProg"))) (DoLet false false (PVar "errs") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value"))) (DoLet false false (PVar "warns") (EApp (EApp (EVar "map") (EVar "tcMsg")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EApp (EVar "joinNl") (EBinOp "++" (EApp (EVar "schemeLines") (EVar "schemes")) (EVar "warns")))) (arm PWild () (EApp (EVar "joinNl") (EApp (EVar "typeErrorLines") (EApp (EApp (EVar "map") (EVar "tcMsg")) (EVar "errs")))))))))
 (DTypeSig true "checkErrorsWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
@@ -36234,8 +36289,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "schemeLines" ((PList)) (EListLit))
 (DFunDef false "schemeLines" ((PCons (PTuple (PVar "n") (PVar "s")) (PVar "rest"))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "n"))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EApp (EVar "ppSchemeNamed") (EVar "n")) (EVar "s")))) (ELit (LString ""))) (EApp (EVar "schemeLines") (EVar "rest"))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Attr" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Ns" true) (mem "Ident" true) (mem "mkIdent" false) (mem "sameTyConHead" false) (mem "tyConBuiltin" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FunClause" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "orElseLoc" false) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "PropParam" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false))))
-(DUse false (UseGroup ("types" "registry") ((mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false) (mem "tabHasName" false) (mem "RegKey" false) (mem "Registry" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Attr" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "Ns" true) (mem "Ident" true) (mem "mkIdent" false) (mem "sameTyConHead" false) (mem "tyConBuiltin" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FunClause" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "Expr" true) (mem "Loc" true) (mem "orElseLoc" false) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "Require" true) (mem "Super" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Decl" true) (mem "PropParam" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false) (mem "tabHasName" false))))
+(DUse false (UseGroup ("types" "registry") ((mem "RegKey" false) (mem "Registry" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "stampBindingIds" false) (mem "stampGraphTyOrigins" false) (mem "stampFlatTyOrigins" false) (mem "stampDeclOrigins" false) (mem "stampTyOrigins" false) (mem "externTyOriginScope" false) (mem "noteOriginTrace" false))))
@@ -38371,10 +38426,10 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "unreachableArmWarning" () (ELit (LString "Warning: unreachable match arm. This pattern is already covered by an earlier arm")))
 (DTypeSig false "checkMatchRedundant" (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Unit"))))
 (DFunDef false "checkMatchRedundant" ((PVar "scrutTy") (PVar "arms")) (EApp (EApp (EApp (EApp (EApp (EVar "checkRedundantGo") (EApp (EVar "matchCol0Type") (EVar "scrutTy"))) (EListLit)) (EVar "omEmpty")) (EVar "False")) (EVar "arms")))
-(DTypeSig false "checkRedundantGo" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Unit")))))))
+(DTypeSig false "checkRedundantGo" (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Unit")))))))
 (DFunDef false "checkRedundantGo" (PWild PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkRedundantGo" ((PVar "col0") (PVar "prec") (PVar "heads") (PVar "offCol") (PCons (PCon "Arm" (PVar "pat") (PVar "gs") (PVar "body")) (PVar "rest"))) (EBlock (DoLet false false (PVar "dp") (EApp (EApp (EVar "desugarPat") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EVar "pat"))) (DoLet false false PWild (EIf (EApp (EApp (EApp (EApp (EApp (EVar "armUnreachable") (EVar "col0")) (EVar "prec")) (EVar "heads")) (EVar "offCol")) (EVar "dp")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "W-UNREACHABLE-ARM"))) (ELit (LInt 2))) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "exprLoc") (EVar "body"))) (EFieldAccess (EVar "currentLoc") "value"))) (EVar "unreachableArmWarning")) (EVar "None")) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))) (ELit LUnit))) (DoLet false false (PVar "contributes") (EBinOp "&&" (EApp (EVar "armIsUnguarded") (EVar "gs")) (EApp (EVar "not") (EApp (EVar "patHasRange") (EVar "pat"))))) (DoLet false false (PVar "prec2") (EIf (EVar "contributes") (EBinOp "::" (EListLit (EVar "dp")) (EVar "prec")) (EVar "prec"))) (DoLet false false (PVar "heads2") (EIf (EVar "contributes") (EApp (EApp (EVar "noteHeadCtor") (EVar "dp")) (EVar "heads")) (EVar "heads"))) (DoLet false false (PVar "offCol2") (EBinOp "||" (EVar "offCol") (EBinOp "&&" (EVar "contributes") (EApp (EVar "not") (EApp (EVar "isConPat") (EVar "dp")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkRedundantGo") (EVar "col0")) (EVar "prec2")) (EVar "heads2")) (EVar "offCol2")) (EVar "rest")))))
-(DTypeSig false "armUnreachable" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyCon "Bool")))))))
+(DTypeSig false "armUnreachable" (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyCon "Bool")))))))
 (DFunDef false "armUnreachable" ((PVar "col0") (PVar "prec") (PVar "heads") (PVar "offCol") (PCon "PCon" (PVar "c") (PVar "args"))) (EIf (EBinOp "&&" (EApp (EVar "not") (EVar "offCol")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "c")) (EVar "heads")))) (EVar "False") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "patUnreachable") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EVar "col0")) (EVar "prec")) (EApp (EApp (EVar "PCon") (EVar "c")) (EVar "args"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "armUnreachable" ((PVar "col0") (PVar "prec") PWild PWild (PVar "dp")) (EApp (EApp (EApp (EApp (EVar "patUnreachable") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EVar "col0")) (EVar "prec")) (EVar "dp")))
 (DTypeSig false "noteHeadCtor" (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
@@ -38388,17 +38443,17 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "armIsUnguarded" ((PCons PWild PWild)) (EVar "False"))
 (DTypeSig false "nonExhaustiveMsg" (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "nonExhaustiveMsg" ((PVar "scrutTy") (PVar "rows")) (EMatch (EApp (EApp (EApp (EApp (EVar "usefulWitness") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EApp (EVar "matchCol0Type") (EVar "scrutTy"))) (EVar "rows")) (ELit (LInt 1))) (arm (PCon "Some" (PCons (PVar "w") PWild)) () (EBlock (DoLet false false (PVar "witnessStr") (EApp (EVar "renderWitness") (EVar "w"))) (DoLet false false (PVar "hint") (EBinOp "++" (EBinOp "++" (ELit (LString "add a '")) (EApp (EMethodRef "display") (EVar "witnessStr"))) (ELit (LString " => …' arm, or a '_' wildcard arm to catch the rest.")))) (DoLet false false (PVar "msg") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Warning: non-exhaustive match")) (EApp (EMethodRef "display") (EApp (EVar "tyOfMsg") (EApp (EVar "matchCol0Type") (EVar "scrutTy"))))) (ELit (LString ". Missing case: '"))) (EApp (EMethodRef "display") (EVar "witnessStr"))) (ELit (LString "'; "))) (EApp (EMethodRef "display") (EVar "hint"))) (ELit (LString "")))) (DoExpr (ETuple (EVar "msg") (EApp (EVar "Some") (EVar "hint")))))) (arm PWild () (ETuple (EVar "nonExhaustiveMatchWarning") (EVar "None")))))
-(DTypeSig false "tyOfMsg" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))
+(DTypeSig false "tyOfMsg" (TyFun (TyApp (TyCon "Option") (TyCon "TabKey")) (TyCon "String")))
 (DFunDef false "tyOfMsg" ((PCon "None")) (ELit (LString "")))
-(DFunDef false "tyOfMsg" ((PCon "Some" (PVar "t"))) (EIf (EApp (EVar "isTupleTyName") (EVar "t")) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString " of '")) (EApp (EMethodRef "display") (EVar "t"))) (ELit (LString "'")))))
+(DFunDef false "tyOfMsg" ((PCon "Some" (PVar "k"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "tabKeyName") (EVar "k"))) (DoExpr (EIf (EApp (EVar "isTupleTyName") (EVar "t")) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString " of '")) (EApp (EMethodRef "display") (EVar "t"))) (ELit (LString "'")))))))
 (DTypeSig false "isTupleTyName" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isTupleTyName" ((PVar "t")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "stringLength") (EVar "t")) (ELit (LInt 7))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 7))) (EVar "t")) (ELit (LString "__tuple")))))
 (DTypeSig false "nonGuardedRows" (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat")))))
 (DFunDef false "nonGuardedRows" ((PList)) (EListLit))
 (DFunDef false "nonGuardedRows" ((PCons (PCon "Arm" (PVar "pat") (PList) PWild) (PVar "rest"))) (EBinOp "::" (EListLit (EApp (EApp (EVar "desugarPat") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EVar "pat"))) (EApp (EVar "nonGuardedRows") (EVar "rest"))))
 (DFunDef false "nonGuardedRows" ((PCons (PCon "Arm" PWild PWild PWild) (PVar "rest"))) (EApp (EVar "nonGuardedRows") (EVar "rest")))
-(DTypeSig false "matchCol0Type" (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "matchCol0Type" ((PVar "ty")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EVar "n"))) (EApp (EVar "headTyconNameMono") (EVar "ty"))))
+(DTypeSig false "matchCol0Type" (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "TabKey"))))
+(DFunDef false "matchCol0Type" ((PVar "ty")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "ty")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "n")) () (EMatch (EApp (EVar "headTyconMono") (EVar "ty")) (arm (PCon "Some" (PCon "HkDecl" (PVar "k"))) () (EApp (EVar "Some") (EVar "k"))) (arm (PCon "Some" (PCon "HkRigid" PWild)) () (EApp (EVar "Some") (EApp (EApp (EVar "TkBare") (EVar "NsType")) (EVar "n")))) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EApp (EVar "TkBare") (EVar "NsType")) (EVar "n"))))))))
 (DTypeSig false "inferArms" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyCon "Unit"))))))
 (DFunDef false "inferArms" (PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "inferArms" ((PVar "env") (PVar "scrutTy") (PVar "result") (PCons (PCon "Arm" (PVar "pat") (PVar "gs") (PVar "body")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferArm") (EVar "env")) (EVar "scrutTy")) (EVar "result")) (EVar "pat")) (EVar "gs")) (EVar "body"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "inferArms") (EVar "env")) (EVar "scrutTy")) (EVar "result")) (EVar "rest")))))
@@ -40826,7 +40881,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "seedCheckRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
 (DFunDef false "seedCheckRun" ((PVar "oracleDecls")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "implInferEnabled")) (EVar "False"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle")) (EApp (EVar "buildOracle") (EVar "oracleDecls"))))))
 (DTypeSig false "seedAndCheckSplit" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
-(DFunDef false "seedAndCheckSplit" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EBlock (DoLet false false (PVar "prog") (EBinOp "++" (EVar "coreProg") (EVar "userProg"))) (DoLet false false PWild (EApp (EVar "seedCheckRun") (EVar "prog"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EVar "checkProgramSeededSplit") (EApp (EApp (EVar "externSchemes") (EApp (EVar "externTyOriginScope") (EVar "coreProg"))) (EVar "runtimeDecls"))) (EVar "coreProg")) (EVar "userProg"))) (DoLet false false (PVar "userDecls") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "coherenceUserDecls") "value")) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "userDecls")) (EVar "prog")) (EApp (EVar "flatClassEnvOf") (EVar "userDecls"))) (EApp (EVar "flatClassEnvOf") (EVar "prog"))) (EApp (EVar "flatImplEnvOf") (EVar "userDecls"))) (EApp (EVar "flatImplEnvOf") (EVar "prog"))) (ELit (LInt 0))) (EVar "False"))) (DoExpr (EVar "schemes"))))
+(DFunDef false "seedAndCheckSplit" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EBlock (DoLet false false (PVar "prog") (EBinOp "++" (EVar "coreProg") (EVar "userProg"))) (DoLet false false PWild (EApp (EVar "seedCheckRun") (EBinOp "++" (EApp (EApp (EVar "stampDeclOrigins") (ELit (LString "core"))) (EVar "coreProg")) (EVar "userProg")))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EVar "checkProgramSeededSplit") (EApp (EApp (EVar "externSchemes") (EApp (EVar "externTyOriginScope") (EVar "coreProg"))) (EVar "runtimeDecls"))) (EVar "coreProg")) (EVar "userProg"))) (DoLet false false (PVar "userDecls") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "coherenceUserDecls") "value")) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "userDecls")) (EVar "prog")) (EApp (EVar "flatClassEnvOf") (EVar "userDecls"))) (EApp (EVar "flatClassEnvOf") (EVar "prog"))) (EApp (EVar "flatImplEnvOf") (EVar "userDecls"))) (EApp (EVar "flatImplEnvOf") (EVar "prog"))) (ELit (LInt 0))) (EVar "False"))) (DoExpr (EVar "schemes"))))
 (DTypeSig true "checkToLinesWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))))
 (DFunDef false "checkToLinesWithRuntime" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EBlock (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EVar "seedAndCheckSplit") (EVar "runtimeDecls")) (EVar "coreProg")) (EVar "userProg"))) (DoLet false false (PVar "errs") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value"))) (DoLet false false (PVar "warns") (EApp (EApp (EMethodRef "map") (EVar "tcMsg")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EApp (EVar "joinNl") (EBinOp "++" (EApp (EVar "schemeLines") (EVar "schemes")) (EVar "warns")))) (arm PWild () (EApp (EVar "joinNl") (EApp (EVar "typeErrorLines") (EApp (EApp (EMethodRef "map") (EVar "tcMsg")) (EVar "errs")))))))))
 (DTypeSig true "checkErrorsWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))

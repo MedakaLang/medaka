@@ -1,13 +1,13 @@
 allCovered : List String -> Map String (List (List Pat)) -> Bool
 anyWildHead : List (List Pat) -> Bool
-bindCtors : Oracle -> Option String -> Option (List String)
+bindCtors : Oracle -> Option TabKey -> Option (List String)
 boolAlwaysTrue : Expr -> Bool
 bucketClauses : List (String, (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
 bucketFor : String -> Map String (List (List Pat, Expr)) -> List (List Pat, Expr)
 buildOracle : List Decl -> Oracle
 builtinArity : List (String, Int)
-builtinCtorType : List (String, String)
-builtinTypeCtors : List (String, List String)
+builtinCtorType : List (String, TabKey)
+builtinTypeCtors : List (TabKey, List String)
 charsPrefixTuple : Array Char -> Bool
 charsSuffixUnder : Array Char -> Int -> Bool
 checkGroup : Oracle -> String -> List (List Pat, Expr) -> List (String, Option Loc)
@@ -26,8 +26,8 @@ collectLetBindInner : LetBind -> List LetBind
 collectLetBinds : Expr -> List LetBind
 dataArity : Decl -> List (String, Int)
 dataCtorFields : Decl -> List (String, List String)
-dataCtorType : Decl -> List (String, String)
-dataTypeCtors : Decl -> List (String, List String)
+dataCtorType : Decl -> List (String, TabKey)
+dataTypeCtors : Decl -> List (TabKey, List String)
 declBodyWarnings : Oracle -> Decl -> List (String, Option Loc)
 defRow : List Pat -> Option (List Pat)
 defaultMatrix : List (List Pat) -> List (List Pat)
@@ -62,7 +62,7 @@ headCtors : List (List Pat) -> List String
 ifaceMethodWarnings : Oracle -> IfaceMethod -> List (String, Option Loc)
 implClauses : List ImplMethod -> List (String, (List Pat, Expr))
 implMethodBodyWarnings : Oracle -> ImplMethod -> List (String, Option Loc)
-inferCol0Type : Oracle -> List (List Pat) -> Option String
+inferCol0Type : Oracle -> List (List Pat) -> Option TabKey
 interpBinds : InterpPart -> List LetBind
 isDigitC : Char -> Bool
 isEmptyArgs : List Pat -> Bool
@@ -74,14 +74,14 @@ missingCtorPat : Oracle -> List String -> List String -> Pat
 nonExhaustiveClausesMsg : Oracle -> String -> Int -> List (List Pat) -> String
 oGetArity : Oracle -> String -> Int
 oGetCtorFields : Oracle -> String -> Option (List String)
-oGetCtorType : Oracle -> String -> Option String
-oGetCtors : Oracle -> String -> Option (List String)
+oGetCtorType : Oracle -> String -> Option TabKey
+oGetCtors : Oracle -> TabKey -> Option (List String)
 oracleMap : List (String, a) -> Map String a
 parenWrapWit : Bool -> String -> String
 parseDigits : Array Char -> Int -> Int -> Option Int
 parseDigitsGo : Array Char -> Int -> Int -> Int -> Bool -> Option Int
 patHasRange : Pat -> Bool
-patUnreachable : Oracle -> Option String -> List (List Pat) -> Pat -> Bool
+patUnreachable : Oracle -> Option TabKey -> List (List Pat) -> Pat -> Bool
 recFieldHasRange : RecPatField -> Bool
 recFieldIrrefutable : RecPatField -> Bool
 renderClauseWitness : Int -> Pat -> String
@@ -95,22 +95,22 @@ specializeCon : String -> Int -> List (List Pat) -> List (List Pat)
 specializeLit : Lit -> List (List Pat) -> List (List Pat)
 topFunDefClauses : List Decl -> List (String, (List Pat, Expr))
 totalClauseRows : Oracle -> List (List Pat, Expr) -> List (List Pat)
-tryEachType : Oracle -> List String -> Option String
+tryEachType : Oracle -> List String -> Option TabKey
 tupleArityCheck : Array Char -> Int -> Option Int
 tupleArityOfName : String -> Option Int
 tupleCtorName : Int -> String
-useful : Oracle -> Option String -> List (List Pat) -> List Pat -> Bool
+useful : Oracle -> Option TabKey -> List (List Pat) -> List Pat -> Bool
 usefulBranch : Oracle -> List (List Pat) -> List Pat -> String -> Bool
 usefulBranchIn : Oracle -> Map String (List (List Pat)) -> List Pat -> String -> Bool
 usefulBuckets : Oracle -> List String -> List (List Pat) -> List Pat -> Map String (List (List Pat)) -> Bool
 usefulCovered : Oracle -> List String -> List (List Pat) -> List Pat -> Bool
-usefulHead : Oracle -> Option String -> List (List Pat) -> Pat -> List Pat -> Bool
-usefulWild : Oracle -> Option String -> List (List Pat) -> List Pat -> Bool
+usefulHead : Oracle -> Option TabKey -> List (List Pat) -> Pat -> List Pat -> Bool
+usefulWild : Oracle -> Option TabKey -> List (List Pat) -> List Pat -> Bool
 usefulWildCtors : Oracle -> Option (List String) -> List (List Pat) -> List Pat -> Bool
-usefulWitness : Oracle -> Option String -> List (List Pat) -> Int -> Option (List Pat)
+usefulWitness : Oracle -> Option TabKey -> List (List Pat) -> Int -> Option (List Pat)
 variantArity : Variant -> (String, Int)
 variantCtorFields : Variant -> List (String, List String)
-variantCtorType : String -> Variant -> (String, String)
+variantCtorType : TabKey -> Variant -> (String, TabKey)
 variantName : Variant -> String
 witnessBranch : Oracle -> String -> List (List Pat) -> Int -> Option (List Pat)
 witnessPrepend : Pat -> Option (List Pat) -> Option (List Pat)
