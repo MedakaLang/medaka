@@ -47,7 +47,12 @@ here is not wrong commands, it is a checker deciding what a surprising output
 
 Write to the report path you were given, incrementally (one table row per item as
 you finish it). Verdict: `ALL-MATCH` / `MISMATCHES: <n>` / `ESCALATIONS: <n>`.
-Body: one row per item — `check | command | expected | got | MATCH/MISMATCH/
-ESCALATE` — with raw output files saved beside the report and named in the row.
-`Decisions surfaced` should almost always be `NONE`; if you were tempted to
-interpret something, that temptation goes there as an ESCALATE instead.
+**All six §9 sections, always** — your per-item table (`check | command |
+expected | got | MATCH/MISMATCH/ESCALATE`, raw outputs saved beside the report
+and named in the row) is the body of `Evidence`, opening with the `time:` line;
+it is not a substitute for the other five, and a missing section bounces
+(`sh scripts/sprint-report-check.sh <your path>`). `NONE` is a valid body for
+`Decisions surfaced` / `Deviations from packet` (= from your checklist) /
+`Friction`, and will usually be right for the first — if you were tempted to
+interpret something, that temptation goes there as an ESCALATE instead. It is
+rarely right for `Friction`.

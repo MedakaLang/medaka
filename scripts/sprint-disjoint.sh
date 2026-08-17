@@ -13,9 +13,27 @@
 #       `git merge-tree` dry merge for content conflicts.
 #
 #   sprint-disjoint.sh lists <fileA> <fileB>
-#       Compare two INTENDED path lists (one repo-relative path per line) for
-#       slices not yet cut: direct intersection + predicted golden/snapshot
-#       artifacts + shared fixture-directory warning.
+#       Compare two INTENDED path lists for slices not yet cut: direct
+#       intersection + predicted golden/snapshot artifacts + shared
+#       fixture-directory warning. Arguments are FILES of repo-relative paths,
+#       one per line.
+#
+#   sprint-disjoint.sh paths "<a b c>" "<d e>"
+#       Same comparison from INLINE lists (whitespace/comma separated), so a
+#       short candidate set costs no scratch files — two planners lost round
+#       trips to "list file missing". Separate mode on purpose: a repo-relative
+#       path is itself an existing file, so auto-detecting would read a source
+#       file in as a path list and report a false collision.
+#
+# NEVER pipe this script (`| head`, `| tail`): its exit code and its usage
+# `die` do not survive a pipe. Redirect to a file and read $?.
+#
+# EVERY run stamps `head=<sha>` (the current checkout HEAD, or the rev given to
+# --head) as its FIRST output line. A disjointness result has an EXPIRY: the
+# grant rule is that a stamped head differing from the sprint head at LANE GRANT
+# time is INVALID and must be re-run — both stale results on record were
+# collisions against lanes that had already landed. Compare the stamp; do not
+# reason about whether the move mattered.
 #
 # Exit 0: no collision detected within this script's scope (stated below).
 # Exit 1: collisions found — printed.
@@ -121,15 +139,44 @@ report_pair() { # $1 $2 = path-list files (raw); prints findings, returns 1 if a
   return $rc
 }
 
+# --head <rev>: the ref the caller believes this result describes (default HEAD).
+# Accepted before or after the mode word.
+HEAD_REV=HEAD
+if [ "${1:-}" = "--head" ]; then
+  [ $# -ge 2 ] || die "--head needs a rev"
+  HEAD_REV=$2; shift 2
+fi
 mode=${1:-}; shift 2>/dev/null || true
+if [ "${1:-}" = "--head" ]; then
+  [ $# -ge 2 ] || die "--head needs a rev"
+  HEAD_REV=$2; shift 2
+fi
+STAMP=$(git rev-parse "$HEAD_REV" 2>/dev/null) || die "cannot resolve $HEAD_REV"
+echo "head=$STAMP"
+
 case "$mode" in
   lists)
-    [ $# -eq 2 ] || die "usage: sprint-disjoint.sh lists <fileA> <fileB>"
-    [ -f "$1" ] && [ -f "$2" ] || die "list file missing"
+    [ $# -eq 2 ] || die "usage: sprint-disjoint.sh [--head <rev>] lists <fileA> <fileB>"
+    [ -f "$1" ] && [ -f "$2" ] || die "list file missing (inline paths? use 'paths' mode)"
     report_pair "$1" "$2"; rc=$?
     ;;
+  paths)
+    # Inline form: each argument is a whitespace/comma-separated path list.
+    # Deliberately a SEPARATE mode rather than overloading `lists`: a
+    # repo-relative path is itself an existing file, so "file if it exists"
+    # would silently read a compiler source file in as a path list and report a
+    # false collision — the permissive direction.
+    [ $# -eq 2 ] || die "usage: sprint-disjoint.sh [--head <rev>] paths \"<a b>\" \"<c d>\""
+    TL=${TMPDIR:-/tmp}/sprint-disjoint-paths.$$
+    mkdir -p "$TL" || die "cannot create temp dir"
+    printf '%s\n' "$1" | tr ', \t' '\n\n\n' | grep -v '^$' > "$TL/a"
+    printf '%s\n' "$2" | tr ', \t' '\n\n\n' | grep -v '^$' > "$TL/b"
+    { [ -s "$TL/a" ] && [ -s "$TL/b" ]; } || { rm -rf "$TL"; die "empty path list"; }
+    report_pair "$TL/a" "$TL/b"; rc=$?
+    rm -rf "$TL"
+    ;;
   branches)
-    [ $# -eq 2 ] || die "usage: sprint-disjoint.sh branches <refA> <refB>"
+    [ $# -eq 2 ] || die "usage: sprint-disjoint.sh [--head <rev>] branches <refA> <refB>"
     A=$1; B=$2
     MB=$(git merge-base "$A" "$B") || die "no merge base for $A $B"
     T=${TMPDIR:-/tmp}/sprint-disjoint-br.$$
@@ -155,13 +202,14 @@ case "$mode" in
     rm -rf "$T"
     ;;
   *)
-    die "usage: sprint-disjoint.sh branches <refA> <refB> | lists <fileA> <fileB>"
+    die "usage: sprint-disjoint.sh [--head <rev>] branches <refA> <refB> | lists <A> <B>"
     ;;
 esac
 
 if [ "$rc" -eq 0 ]; then
-  echo "== VERDICT: no collision detected (within stated scope — see header) =="
+  echo "== VERDICT: no collision detected at head=$STAMP (within stated scope — see header) =="
 else
-  echo "== VERDICT: COLLISION EVIDENCE ABOVE — not disjoint =="
+  echo "== VERDICT: COLLISION EVIDENCE ABOVE at head=$STAMP — not disjoint =="
 fi
+echo "(this result EXPIRES: re-run if the sprint head has moved since $STAMP)"
 exit $rc

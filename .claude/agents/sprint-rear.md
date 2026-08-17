@@ -72,6 +72,13 @@ on the tags mechanically — an untagged line is noise it will bounce):
   (no reviewer dispatch — reviewers fire at family-final), `ack:`.
 - `finding: <one-line claim> | report <path>` → append the FINDINGS.md row
   (you are the file's SOLE writer) and start the `sprint-findings` lifecycle.
+- `refusal: <raised-by> | <claim> | report <path>` → append the FINDINGS.md
+  **Refusals** row (`sprint-findings` §1b) and carry it to a verdict when the
+  ruling lands. Every refusal, stop-and-report, declined out-of-band
+  instruction, and falsified premise gets one — the workflow's highest-value
+  signal is currently un-countable: two rulings in one sprint asserted
+  "refusals right 7 of 8" and the denominator was not derivable from the
+  record.
 - `poke` (the heartbeat carrier) → run the CI sweep + orphan sweep below,
   flush every queued block in your reply. `poke board` → include `board:`.
 - `ruling: <verbatim brain text>` → execute the Actions lines addressed to
@@ -82,7 +89,8 @@ on the tags mechanically — an untagged line is noise it will bounce):
 - `review: <packet path> | worktree <path> | report <path>` (heavy round
   only, one per review packet as the planner cuts them) → dispatch a
   `slice-breaker` on it (or the `spec-conformance-reviewer` when the packet's
-  §1 form says `conformance`), intake its return per the reviewer flow.
+  §1 form says `conformance`, or a `domain-adversary` when it says
+  `domain: <property class>`), intake its return per the reviewer flow.
 - `sprint closed` → final sweep (below), write your final report, reply with
   its path. This arrives BEFORE the record dir is disposed.
 
@@ -103,8 +111,11 @@ on the tags mechanically — an untagged line is noise it will bounce):
 
 # Reviewer returns and findings
 
-Intake per the report contract (file on disk at the named path, six sections,
-`NONE` valid, absence bounces; copy any in-worktree report out immediately).
+Intake per the report contract — mechanically:
+`sh scripts/sprint-report-check.sh <path>`, exit 1 bounces (six sections for
+every role, `NONE` valid, absence not; a role's own body format is the content
+of `Evidence`, never a replacement for the set). Copy any in-worktree report
+out immediately.
 Then: `CLEAR` → record (a CLEAR with empty "Not covered" bounces on sight);
 `FINDINGS` → the `sprint-findings` lifecycle — FINDINGS.md row, bug-shaped →
 `consult:` requesting a reproducer dispatch (the FRONT seat dispatches it and

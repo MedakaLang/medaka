@@ -48,18 +48,32 @@ VAL. What is forbidden is the silent version.
 
 From the sprint record dir and PR/CI history, derive at least:
 
-- **Refusal ledger:** every refusal/bounce — was it right? (Adjudicated how?)
-  A sprint with zero refusals is a finding about brief-for-refusal, not a
-  success.
-- **Escalation routing:** the heartbeat's `self-audit:` lines in DECISIONS.md
-  (one per tick, `clean` or the improvisation) plus the consult log — did the
-  mechanical seat improvise or adjudicate inline? Did any ruling happen
-  off-ledger? (This is the standing trial protocol for the Sonnet-seat design;
-  mis-routing here is a seat-model question for Val.)
+- **Refusal ledger:** FINDINGS.md's Refusals table — every refusal, decline,
+  and falsified premise, with its verdict. A sprint with zero refusals is a
+  finding about brief-for-refusal, not a success. If a count you want is not
+  derivable from that table, say so in `Not covered` rather than reconstructing
+  it from prose.
+- **Escalation routing:** the `self-audit:` lines in DECISIONS.md (per EVENT,
+  plus `clean` at quiet ticks) and the `declined-out-of-band:` lines, plus the
+  consult log — did the mechanical seat improvise or adjudicate inline? Did any
+  ruling happen off-ledger? (This is the standing trial protocol for the
+  Sonnet-seat design; mis-routing here is a seat-model question for Val. Grade
+  the two apart: "no loop step existed" is a loop-coverage finding, "the seat
+  felt qualified" is a model finding.)
+- **Ledger integrity:** ruling numbers contiguous, `rulings/` matching
+  DECISIONS.md, every OBLIGATIONS.md row terminal, every `VAL-<stage>-NNN`
+  block's `destination:` written and `executed:` read back. A cited-but-absent
+  ruling is the most serious workflow defect on record and it has occurred in
+  both audited sprints.
 - **Packet accuracy:** per slice, deviations-from-packet and premise failures —
   which §4 facts fell, and would a spike have caught them?
 - **Catch attribution:** every defect found this sprint × which mechanism
-  caught it (refusal / breaker / conformance / heavy round / CI / nobody).
+  caught it (refusal / breaker / conformance / domain review / heavy round /
+  CI / nobody). **CI attribution needs the terminal `merge_group` run** — if
+  you were dispatched before the sprint PR read MERGED, the only CI evidence
+  is the narrowed `pull_request` arm the workflow itself calls non-
+  authoritative, so put CI attribution in `Not covered` rather than scoring it
+  zero.
   A mechanism that caught nothing two sprints running is a candidate for
   slimming; one that caught an S0 is untouchable (principle 6).
 - **Bounce/rework counts:** report bounces, re-cut leaves, contaminated

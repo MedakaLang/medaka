@@ -53,7 +53,28 @@ ref, and never another agent's worktree.
    contradicts is a finding); any issue the slice claims to fix has its pin
    status stated (drained pins can lie — a pin drains on shape, not mechanism;
    flag any close resting solely on a drain).
-7. **Severity direction.** From the diff alone: does any path get QUIETER (a
+7. **Re-derive, don't read.** For every count, line number, SHA, perf figure,
+   file-set size, and every `was run` / `is not optional` / `already verified`
+   claim in the slice's packet, its DEBT row, and the rulings that govern it:
+   re-run the derivation and report `CONFIRMED` / `STALE (<what it actually
+   is>)`. A claim whose derivation is not stated at all is `UNDERIVED` — a
+   finding in itself, not a thing to spot-check. This is the class you already
+   catch best: 5 of 5 findings in `sprint/ctor-identity` were exactly it,
+   including a ruling's "NOT optional" perf gate that had never been executed
+   anywhere while two downstream artifacts asserted it had. Rulings are in
+   scope; nothing is exempt because of who wrote it.
+8. **Prose claims in the blast radius.** For every module header, docstring or
+   safety comment the diff touches or relies on: is each structural-invariant
+   claim still TRUE after this diff? Report each verified or falsified. Five
+   false prose claims in one module family in one sprint, none catchable by any
+   gate — two of them actively dangerous ("unreachable by construction",
+   falsified by direct construction, invites deleting a live guard as dead
+   code; "shared immutable constants", false, and it underwrote an
+   exponentiation-ladder seed later proven mutable). The standing rule such a
+   claim must satisfy: a warning or doc comment may overclaim SCOPE (the
+   conservative direction) but must never assert a specific checkable MECHANISM
+   it has not verified.
+9. **Severity direction.** From the diff alone: does any path get QUIETER (a
    raise/refusal/error removed, a diagnostic downgraded, an exit code softened)?
    Flag it for the slice-breaker's runtime confirmation — loud→silent is a
    severity increase even when the old behavior was also broken.
@@ -71,8 +92,18 @@ it yourself.
 
 # Report — §9 of the sprint-packet contract (`.claude/skills/sprint-packet/SKILL.md` — Read it directly; you have no Skill tool)
 
-Write to the report path you were given, incrementally. Verdict `FINDINGS` or
-`CLEAR`. Each finding:
+Write to the report path you were given, incrementally. **All six §9 sections
+are mandatory for you too** — `Verdict`, `Evidence` (opening with the `time:`
+line), `Decisions surfaced`, `Deviations from packet` (= from your dispatch
+brief), `Not covered`, `Friction`; `NONE` is a valid body, an absent section
+bounces (`sh scripts/sprint-report-check.sh <your path>`). Your findings blocks
+live INSIDE `Evidence`; they do not replace the other five. **Your `Friction`
+section is not a formality:** in `sprint/ctor-identity` no reviewer, verifier or
+reproducer friction reached FRICTION.md at all, so the friction ledger — and
+every workflow change derived from it — saw only writers, and you are the role
+most likely to notice that a CONTRACT is the thing causing friction.
+
+Verdict `FINDINGS` or `CLEAR`. Each finding:
 
 ```
 ### F<n>: <title> [S0|S1|S2|S3]

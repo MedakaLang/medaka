@@ -27,7 +27,7 @@ Two mechanical seats share ONE judgment seat. Val drives from the front seat
 |---|---|---|---|
 | **Front** (you) | main session | Sonnet 5 | Packet runway; the writer lane and EVERY writer dispatch (implementers, fixers, spikes) plus planner/scout/reproducer dispatches; ALL worktree creation; lane arbitration (disjointness); merges into the sprint branch; the terminal enqueue; comms with Val |
 | **Rear** (`sprint-rear`) | persistent daughter, continued via SendMessage | Sonnet 5 | Everything AFTER a slice's merge: pushing (by SHA), the sprint PR, CI intake, reviewer dispatch + intake, the findings lifecycle (FINDINGS.md is its file), all mid-sprint issue filing |
-| **Brain** (`sprint-brain`) | persistent daughter, continued via SendMessage | Opus 5 | All adjudication; reads primary material from disk; authors every DECISIONS.md ruling (YOU are its scribe: append each ruling's "Ledger entry" text verbatim) |
+| **Brain** (`sprint-brain`) | persistent daughter, continued via SendMessage | Opus 5 | All adjudication; reads primary material from disk; WRITES each ruling to `rulings/RUN-<stage>-NNN.md` (v5) — YOU are its scribe: `cat` that file into DECISIONS.md verbatim and confirm by number |
 
 **The handoff token is the merge into the sprint branch.** Before a slice's
 merge, the front seat owns it absolutely; after, the rear seat does. Writers
@@ -53,21 +53,55 @@ vocabulary; route each tag mechanically:
 | `ack:` | Record in the dispatch log; clears heartbeat item 3 |
 | `ci:` | Append to DECISIONS.md log section; surface to Val only per the surface list |
 | `finding-row:` | Bookkeeping only (the rear seat owns the row) |
-| `consult: [rear] …` | Relay the WHOLE block to the brain verbatim, unaltered, immediately; relay the brain's full ruling TEXT back in your next rear-seat message as `ruling: <verbatim text>` (rulings are reply text, not files — relay the text, never a summary) |
+| `consult: [rear] …` | Relay the WHOLE block to the brain verbatim, unaltered, immediately; relay the brain's ruling back in your next rear-seat message as `ruling: <verbatim text>` — `cat` the brain's ruling FILE (v5) and paste it; never a summary |
 | `filed:` | Record; desk-close bookkeeping |
 | `board:` | Fold into your status board |
 | `escalate:` | Brain consult (catch-all rule) or Val, per its content |
 
 An untagged rear-seat line bounces back for re-tagging, same as a missing
 report section. Messages TO the rear seat use ITS closed input vocabulary
-(`landed:` / `landed-fix:` / `landed-leaf:` / `finding:` / `poke` /
-`ruling:` / `phase: heavy-round` / `sprint closed` — formats in
-`.claude/agents/sprint-rear.md`).
+(`landed:` / `landed-fix:` / `landed-leaf:` / `finding:` / `refusal:` /
+`poke` / `ruling:` / `review:` / `phase: heavy-round` / `sprint closed` —
+formats in `.claude/agents/sprint-rear.md`).
 
 **Consult format (both seats, fixed):** `q=<question> rule=<triggering
-escalation rule> paths=<file paths to primary material>` — pointers, never
-paraphrases; the brain reads from disk and bounces path-less consults. Label
-relayed ones `[rear]` when you forward them.
+escalation rule> paths=<file paths to primary material> run=RUN-<stage>-NNN`
+— pointers, never paraphrases; the brain reads from disk and bounces path-less
+consults. Label relayed ones `[rear]` when you forward them. `run=` is the
+next free ruling number, allocated by YOU at consult time: a number allocated
+before the ruling exists is what makes a lost ruling detectable (v5 — see
+scribe protocol item 9).
+
+## Talking to an agent that is already running — two channels, one of them closed
+
+Once an agent is dispatched, its packet (or its REPAIR ruling) is the contract.
+Exactly two mid-flight messages are licensed, and neither changes what the
+agent is accountable for:
+
+| Channel | Content | Binding? |
+|---|---|---|
+| `fact:` | A §4-shaped DERIVED fact that makes the work easier or safer, with its derivation | NO — advisory; the agent may ignore it and owes nothing |
+| `stop:` | Abort this dispatch; the packet is void; report and stop | YES |
+
+**Anything that adds a site, an acceptance cell, a doc edit, or a check is an
+AMENDMENT, and an amendment cannot travel by chat.** Either the packet file is
+edited and the agent re-dispatched before it starts, or it becomes a follow-up
+packet after this one lands. Sending it inline is a process error even when the
+content is right — the receiving agent cannot adjudicate a mid-task instruction
+without leaving its own contract, so its scripted response is to DECLINE and
+log (packet §8).
+
+The same rule binds a message to a PLANNER mid-packet: a ruling landing on an
+unfinished packet is an amendment — batch amendments into ONE round after
+`PACKET-READY`, never a stream. (Measured, `sprint/pds-phase0-substrate`: the
+stream form put one packet through three revisions absorbing five rulings, and
+made a second planner rewrite §3–§6 entirely.)
+
+**Log every decline.** The agent records it under `Deviations from packet`; YOU
+append `declined-out-of-band: <what was sent> | <slice> | <ruling if any>` to
+DECISIONS.md. Correct declines are landed work — 3 for 3 in the sprint that
+produced this rule, in which the front seat sent the same wrong message twice
+because nothing anywhere said it was wrong.
 
 ## Daughter rotation — reset-respawn at phase boundaries (v4, H3)
 
@@ -161,9 +195,9 @@ through you):
 | Two reports conflicting | Needs a third probe, designed by the brain |
 | Any golden/snapshot adjudication or bless beyond the mechanical re-cut rule in `slice-landed` | A bless enshrines output as correct forever |
 | Any scope, sequencing, or slice-boundary change | Scope-splitting one decision made two S0s |
-| A lane request failing disjointness, a source merge conflict, or any lane conflict | Sequencing ruling |
+| A lane request failing disjointness **against a LIVE lane**, a source merge conflict, or any lane conflict | Sequencing ruling. (Exit 1 naming only lanes ABSENT from QUEUE.md's live table is STALE, not a conflict: re-run, record both runs, grant on exit 0 — that is a table lookup, and routing it here is how a mechanical seat ended up improvising twice) |
 | A brain ruling whose Escalate line reads VAL | Surface it to Val now; the finding's own fix HOLDS until she answers, the writer lane continues on independent work |
-| Anything that would write a new RULING to DECISIONS.md | Definitionally a decision. (Mechanical appends — the BASE pin, dispatch-log lines, lane grants with evidence, recorded idle reasons, heartbeat self-audits, and the brain's own Ledger-entry text you scribe — are yours and need no consult) |
+| Anything that would write a new RULING to DECISIONS.md | Definitionally a decision. (Mechanical appends — the BASE pin, dispatch-log lines, lane grants with evidence, recorded idle reasons, self-audit lines, `declined-out-of-band:` lines, OBLIGATIONS.md rows, `VAL-<stage>-NNN` blocks, and the concatenation of the brain's own ruling FILES into DECISIONS.md — are yours and need no consult) |
 | **Catch-all: either seat is about to do something not written in its loop** | Unrecognized judgment moments are how every recorded seat error happened |
 
 Escalating is free; improvising is not. When in doubt, there is no doubt —
@@ -178,8 +212,9 @@ Every subagent's definition mandates a fixed report format, written TO DISK in
 the sprint record dir, return message = pointer + verdict line. Enforcement is
 mechanical and applies at whichever seat takes the return (the rear seat
 enforces identically on its reviewers). The brain is the one exemption — its
-replies follow its own five-section ruling format (Ruling / Derivation /
-Ledger entry / Actions / Escalate), checked for THOSE sections instead. For
+replies follow its own ruling format (`entries:` line, then Ruling /
+Derivation / Ledger entry / Actions / Escalate), checked for THOSE instead,
+against the ruling FILES its Ledger entry points at (item 9). For
 agents dispatched on a checklist or question rather than a packet, "the path
 its packet named" means the report path in the dispatch brief, and
 `Deviations from packet` means deviations from that brief (packet contract
@@ -187,9 +222,15 @@ its packet named" means the report path in the dispatch brief, and
 
 1. **On every agent return, first verify the report file exists on disk** at
    the named path. Isolated-worktree agents: `cp` the report out IMMEDIATELY.
-2. **Check the required sections are present** — "Verdict", "Evidence",
-   "Decisions surfaced", "Deviations from packet", "Not covered", "Friction"
-   (`NONE` valid, absence not).
+2. **Check the required sections are present**, mechanically:
+   `sh scripts/sprint-report-check.sh <report path>` — exit 0, or bounce. Six
+   sections for every role, no role-local exemption: a role's own body format
+   (a verifier's per-item table, a reviewer's finding blocks, a reproducer's
+   matrix) is the CONTENT of Evidence, never a replacement for the set.
+   `NONE` valid, absence not. The rear seat runs the identical command.
+   (Measured, `sprint/ctor-identity`: 10 of 31 report files missing ≥1 section
+   and ZERO bounces issued — the role definitions, not the seats, had licensed
+   it, so no reviewer/verifier/reproducer friction ever reached FRICTION.md.)
 3. **A report missing any section BOUNCES.** Never fill a gap yourself.
 4. **Route by section, mechanically:** "Decisions surfaced" / "Deviations" ≠
    NONE → brain, with the file path. Any bug or gap anywhere → `finding:`
@@ -209,6 +250,32 @@ its packet named" means the report path in the dispatch brief, and
    back, compare.
 8. **Terse mode (packet §0b):** agent-facing text is telegraphic; content
    survives at full fidelity. The ONE exception is Val: normal prose.
+9. **Scribe protocol — a ruling number is never consumed without an entry
+   (v5).** Every consult you send carries `run=RUN-<stage>-NNN` (the next free
+   number). Every brain reply opens `entries: <N> — <numbers>` and its Ledger
+   entry section is a PATH. On return: confirm each named
+   `rulings/RUN-<stage>-NNN.md` exists, `cat` it into DECISIONS.md verbatim,
+   and confirm back to the brain `scribed: RUN-<stage>-NNN at
+   DECISIONS.md:<line>`; the brain treats an unconfirmed number as unscribed.
+   Count mismatch, missing file, or a number you did not allocate →
+   re-request BY NUMBER. **Append verbatim or bounce — never condense, never
+   fold two rulings into one, never skip an append because the text repeats an
+   earlier one**; deduplication is a judgment call and it is not yours. Then
+   append every Actions line to OBLIGATIONS.md (below). This is a mechanical
+   check: two integers and a file list. (Measured: `sprint/ctor-identity`
+   RUN-CTOR-034 cited three times as load-bearing with NO entry, RUN-CTOR-004
+   deliberately not appended "to avoid repeat"; `sprint/pds-phase0-substrate`
+   lost FOUR rulings in relay — two never recovered, one of them the authority
+   cited for an amendment to a public issue comment.)
+10. **An out-of-roster dispatch carries the contract in its brief.** If you
+    dispatch any agent whose definition does not already mandate §9 (a
+    one-off `general-purpose` review, a Val-requested pass), paste the six
+    section names and the report path into the brief verbatim, and intake it
+    with the same script. Ad-hoc dispatch is where the report contract
+    silently evaporates: 6 of 7 such dispatches in
+    `sprint/pds-phase0-substrate` returned bespoke formats, and the three
+    security reviews — whose `Not covered` was exactly what the next reader
+    needed — had no such section at all.
 
 ## Roster
 
@@ -222,6 +289,7 @@ definition — override per-dispatch only on a brain ruling.
 | `sprint-implementer` | Sonnet 5 (Opus 5 per packet §1) | Front | Slices, spikes, families, AND fixes (a fix executes from a REPAIR ruling + repro bundle — no packet) |
 | `slice-breaker` | Opus 5 | Rear | Adversarial breaks on the landed slice, in a front-created worktree |
 | `spec-conformance-reviewer` | Sonnet 5 | Rear | Read-only: slice vs specs, rulings, DEBT rows |
+| `domain-adversary` | Opus 5 | Rear (you create its worktree) | ONE property class the contract could not ask about — dispatched only when the contract's §8b budgeted a domain review |
 | `sprint-planner` | Sonnet 5 | Front | Next contract-depth packet (~250-line ceiling) — slice, family, or review; fixes bypass it |
 | `bug-reproducer` | Sonnet 5 | Front (on rear's consult-driven request; front creates its worktree) | Mechanical half of a finding; drafts, never files |
 | `sprint-verifier` | Haiku 4.5 | Either seat | Mechanical run-and-report: readbacks, ledger sweeps, the golden re-cut checklist |
@@ -245,6 +313,34 @@ narrate dispatches, intakes, bounces, appends, green shards, clean consults,
 or routine rear-seat replies. A quiet chat during smooth running is correct.
 (Chat with Val is normal prose — terse mode is for agents.)
 
+## Recording a Val decision — numbered, with a destination
+
+A decision from Val is not a ruling and not a consult answer: it is settled
+input. It gets its own numbered DECISIONS.md block, five fields, no blanks:
+
+```
+VAL-<stage>-NNN (<slug>)
+decision:    Val's words, verbatim, not paraphrased.
+scope:       what it binds — this slice / this sprint / the project.
+destination: the IN-REPO artifact that must carry it (issue #, design-doc
+             P-number, AGENTS.md section, spec clause, packet acceptance
+             cell). "None" is NOT a value — the record dir is tar'd and
+             deleted at sprint close, so a project-scoped decision with no
+             in-repo destination is forgotten by procedure.
+owner:       which seat executes the destination write.
+executed:    the readback that proves it landed (never blank at sprint exit;
+             an OBLIGATIONS.md row tracks it).
+```
+
+Then send the brain ONE consult, always the same question: `q=which landed or
+in-flight packet §4 premises does VAL-<stage>-NNN falsify, and which lanes
+must be re-cut? rule=Val scope change paths=<the block>`. Measured
+(`sprint/pds-phase0-substrate`): a mid-sprint environment change silently
+invalidated a landed slice's central premise and cost a re-cut, and a
+scope-widening voided two of the contract's standing verification premises —
+both caught only because the brain volunteered the scoping. Five Val
+interventions, three different formats, none citable.
+
 ## Start of sprint
 
 0. **The sprint contract must already exist** —
@@ -263,11 +359,27 @@ or routine rear-seat replies. A quiet chat during smooth running is correct.
    intended base, then `BASE=$(git rev-parse HEAD)` — DECISIONS.md line 1.
    Never name a moving ref.
 2. **Create the record dir** `/var/tmp/medaka-sprints/<stage>/`: DECISIONS.md,
-   DEBT.md, FINDINGS.md (rear's file), OPEN-QUESTIONS.md, FRICTION.md,
-   QUEUE.md (packet rows + lane rows; formats in `slice-landed`; you are its
-   sole writer), EXPECTED-RED.md (you write the initial block; post-start
-   appends are the rear seat's), reports/, packets/, scratch/. Ephemeral,
-   never committed.
+   DEBT.md, FINDINGS.md (rear's file; carries the Findings and Refusals
+   tables — `sprint-findings`), OBLIGATIONS.md (yours; one row per ruling
+   Action), OPEN-QUESTIONS.md, FRICTION.md, QUEUE.md (packet rows + lane
+   rows; formats in `slice-landed`; you are its sole writer), EXPECTED-RED.md
+   (you write the initial block; post-start appends are the rear seat's),
+   reports/, packets/, rulings/ (the brain writes one file per ruling),
+   scratch/. Ephemeral, never committed.
+
+   OBLIGATIONS.md header — one row per ruling Action, appended by you at
+   scribe time, verbatim; `id` is `<ruling>.<action-number>`:
+   ```
+   | id | ruling | owner-seat | action (verbatim) | status |
+   ```
+   `status` ∈ `OPEN` | `DONE (<evidence: SHA, readback, transcript>)` |
+   `VOIDED (RUN-<stage>-NNN)`. Closed by evidence or by a later ruling that
+   names it — never by assertion. **A ruling's Actions list is not
+   self-executing**: in `sprint/ctor-identity` the `#1216 (must-fail pin
+   re-point)` action was owed from RUN-CTOR-007 and executed 26 rulings later,
+   and the delay turned the sprint's only soundness signal dark for its whole
+   duration; in `sprint/pds-phase0-substrate` a ruling mandating exactly this
+   audit was itself never executed.
 3. **Create the sprint branch, landing worktree, and draft PR:**
    ```sh
    git branch sprint/<stage> "$BASE"
@@ -282,6 +394,30 @@ or routine rear-seat replies. A quiet chat during smooth running is correct.
    (The empty commit exists because `gh pr create` refuses a zero-commit
    branch; the landing worktree is where every merge happens — never build in
    it.) Record branch + PR number (with handle) in DECISIONS.md.
+
+   **Then build the base-arm depot, once, here.** Every differential this
+   sprint — breaker attribution, a fixer's before/after, a reproducer's base
+   arm — needs a binary built from `$BASE`; built ad hoc that is a second cold
+   `make medaka` per dispatch (build was **374 of 1215 writer-minutes = 30.8%**
+   in `sprint/ctor-identity`, the largest line in the only wall-clock
+   instrument, and three FRICTION entries name base-arm attribution
+   specifically):
+   ```sh
+   D=/var/tmp/medaka-sprints/<stage>
+   git worktree add "$D/base-arm-src" "$BASE"          # detached
+   make -C "$D/base-arm-src" medaka
+   mkdir -p "$D/base-arm"
+   cp "$D/base-arm-src"/medaka "$D/base-arm-src"/medaka_emitter "$D/base-arm/"
+   cp -R "$D/base-arm-src"/stdlib "$D/base-arm-src"/runtime "$D/base-arm/"
+   git worktree remove "$D/base-arm-src"
+   printf '%s\n' "$BASE" > "$D/base-arm/BASE.sha"
+   ```
+   **COPY, never symlink** — a symlinked `stdlib`/`runtime` points into a
+   worktree later agents are forbidden to read, which is how one sprint spent
+   two extra rebuilds on attribution; `runtime/` is required as well as
+   `stdlib/`, or the first `build` dies at the link step (AGENTS.md
+   [D-TWO-ARM-RUNTIME]). Record path + SHA in DECISIONS.md and name the depot
+   in every packet §2 and fix brief.
 4. **Spawn the brain** — first task: review the contract, confirm the slice
    plan, write the opening DECISIONS.md entries you scribe. If its review
    REJECTS the plan, that is a VAL escalation: the sprint does not start on a
@@ -293,6 +429,37 @@ or routine rear-seat replies. A quiet chat during smooth running is correct.
    tracking issue (your licensed issue write). Reds expected to OUTLIVE the
    sprint get a `known-red` labeled issue each (rear seat files them at its
    first poke).
+
+   **Every predicted red carries `masks:` and `unmask-by:` — DERIVED, not
+   guessed (v5).** A failing step SKIPS the steps behind it in its job, so
+   licensing a red is also a decision to run none of its successors. Row
+   format:
+   ```
+   - <gate/check> — <why red> — <which slice makes it red>
+     masks: <checks that do NOT run while this is red>  (derived: <command>)
+     unmask-by: <slice-id or fix-slug>, scheduled <position in sprint>
+   ```
+   Derive `masks:` from the job's own step list, never from memory:
+   `gh api repos/MedakaLang/medaka/actions/jobs/<job-id> --jq '[.steps[] |
+   "\(.conclusion) :: \(.name)"]'`. `masks: NONE (derived: <command>)` is a
+   valid and common value. **`unmask-by: wrap-up` is not a valid value** —
+   bounce it to the brain as a sequencing question; `unmask-by:` belongs in
+   the FIRST HALF of the sprint. (Measured, `sprint/ctor-identity`: one
+   licensed pin drain kept `soundness` red all sprint, so
+   `typecheck_compiler_source.sh` and the C3b fixpoint never ran ONCE — and
+   both surfaced real defects the moment they finally did, in a sprint that
+   had edited `typecheck.mdk`, `exhaust.mdk`, `ast.mdk`, `resolve.mdk`,
+   `core_ir_lower.mdk`.)
+5b. **Isolation smoke probe — before the first implementer.** Dispatch ONE
+   throwaway `isolation: "worktree"` agent (`general-purpose`, ~3 min) whose
+   whole task is to report: `git rev-parse --show-toplevel`, `git rev-parse
+   HEAD`, `git status --short`, a `/var/tmp` write canary, and a commit +
+   `git push origin HEAD:refs/heads/probe/<stage>` followed by deleting that
+   ref. Record the outcome in DECISIONS.md; every writer brief this sprint
+   inherits it. (Measured, `sprint/pds-phase0-substrate`: the harness's
+   isolation behaviour was NOT what the packet contract assumed, and a full
+   implementer dispatch was lost — BLOCKED, tree clean — before a throwaway
+   probe of exactly this shape converted the unknown into a one-agent answer.)
 6. **Dispatch `sprint-planner` for packet #1.** On `PACKET-READY`: run the
    completeness scan, **create the worktree at the sprint-branch head**
    (`slice-landed` step 3's recipe — that step's rules apply at first
@@ -322,13 +489,31 @@ routing is always per packet §1, never in-the-moment.
 ## Parallel writers and fixer lanes
 
 Default is one implementer lane. ANY additional writer — second implementer
-or fixer — requires ALL of: its own worktree (created by YOU); disjointness
-via `scripts/sprint-disjoint.sh` run PAIRWISE against each live lane row
-(ONLY exit 0 is disjoint; exit 1 = collision → brain; exit 2 = usage error →
-fix the invocation, it is never a grant; `lists` mode takes two FILES —
-write the candidate and lane file sets under `scratch/` first); a QUEUE.md
-lane row carrying the evidence. Landing stays serialized at the sprint-branch
-merge regardless of lane count.
+or fixer — requires ALL of: its own worktree (created by YOU); a disjointness
+result that is both CLEAN and CURRENT; a QUEUE.md lane row carrying the
+evidence. Landing stays serialized at the sprint-branch merge regardless of
+lane count.
+
+**The authoritative check runs at LANE GRANT, by you, immediately before
+dispatch — never at packet-writing time (v5).** A planner's check is advisory
+context, not a grant: `scripts/sprint-disjoint.sh` is run by the planner and
+consumed by you minutes to hours later, and at ~15 landings/day both stale
+results in `sprint/pds-phase0-substrate` were collisions against lanes that had
+already LANDED. Run it PAIRWISE against each live lane row, and apply these
+rules WITHOUT assessment (they exist to remove a judgment call from a
+mechanical seat, not to add one):
+
+- The script stamps `head=<sha>`. A result whose stamped head ≠ the current
+  sprint head is INVALID → re-run. Do not reason about whether the move
+  mattered.
+- **exit 1 whose colliding lanes are ALL absent from QUEUE.md's live lane
+  table → re-run.** Exit 0 on the re-run → grant, recording BOTH runs in the
+  lane row. This is a table lookup: a landed lane is not a lane.
+- exit 1 against a lane that IS live → brain. exit 2 = usage error → fix the
+  invocation; it is never a grant. `paths` mode takes two inline path lists;
+  `lists` mode takes two FILES — write the candidate and lane file sets under
+  `scratch/` when they are long. Never pipe the script: neither its exit code
+  nor its usage error survives a pipe.
 
 ## Heartbeat — every ~10 minutes
 
@@ -337,8 +522,13 @@ Each tick derives state from scratch — never carry state across ticks:
 0. **Interlock:** `SEQUENCE.lock` exists → append `tick: deferred (sequence
    live)` to DECISIONS.md and stop this tick.
 1. **Writer lane:** at least one implementer live? If not: read QUEUE.md for
-   the next queued packet and run `slice-landed` step 3 (refill) now; if the
-   queue is empty, record the idle reason and treat it as item 2's stall.
+   the next queued packet and run `slice-landed` step 3 (refill) now. If the
+   queue is empty, dispatch the CONTRACT's designated **independent-refill**
+   slice (`sprint-plan` §3) before recording anything; record an idle reason
+   only if that slice is already landed or genuinely blocked — then treat it
+   as item 2's stall. (A *discovered* decomposition is usually a chain, and a
+   chain cannot satisfy the one-packet-ahead runway invariant: the
+   `sprint/ctor-identity` lane idled twice with the reason honestly recorded.)
 2. **Runway:** is the next packet ready? A planner behind is the next stall —
    fix it NOW; "no packet staged" alarms as loudly as "lane empty".
 3. **Poke the rear seat** (`poke`, or `poke board` at a boundary): this
@@ -353,16 +543,53 @@ Each tick derives state from scratch — never carry state across ticks:
    verdict.
 5. **Orphans:** `xargs -P` pools / builds outliving YOUR dispatched agents'
    turns — `TaskStop` the agent first, reap by PID, never box-wide `pkill`.
-6. **Self-audit:** anything this interval not written in this loop, or
-   resolved without the brain? → report it to the brain retroactively AND
-   append a `self-audit:` line to DECISIONS.md either way (`clean` or the
-   improvisation).
+6. **Self-audit — per EVENT, not per tick (v5).** The MOMENT you do anything
+   not written in this loop, or resolve anything the escalation table assigns
+   elsewhere: append `self-audit: <the action> | <why> | <what it cost>` to
+   DECISIONS.md THEN, and report it to the brain retroactively. At tick time,
+   append `self-audit: clean` only if the interval genuinely had none.
+   (Measured: a busy front seat recorded 3 ticks against 48 front-seat entries
+   over 16 hours; every informative self-audit on record was event-triggered,
+   the tick-triggered ones were all `clean`, and the one improvisation that
+   went UNLOGGED — a stale-disjointness call the table assigns to the brain —
+   is exactly what a retrospective tick has to reconstruct and doesn't. In the
+   other audited sprint the per-tick form produced ZERO lines against ≥2
+   observable improvisations.) This line is the standing instrument for the
+   Sonnet-seat design; its absence is a retro finding.
+7. **Ledger sequence check (~5 s):** `grep -o 'RUN-<stage>-[0-9]\{3\}'
+   DECISIONS.md | sort -u` must be contiguous from 001 and must match
+   `ls rulings/`. A gap is a LOST RULING: re-request it from the brain by
+   number NOW and record the gap. Do not defer to wrap-up — a gap found late
+   has already governed landed work. Same tick, one line: any OBLIGATIONS.md
+   row `OPEN` past the phase it belonged to gets poked at its owner seat.
 
 **Post-enqueue mode:** after the terminal enqueue, keep the heartbeat running
 with ticks 3 (poke → CI state) and 6 only, until `scripts/pr.sh complete`
 (or `gh pr view --json state,mergeCommit`) reads MERGED. Arming lapses
 silently; a queue bounce is a finding → brain designs the fix, it lands
 fix-forward, you re-enqueue. The record dir is not disposed until MERGED.
+
+## Pausing a sprint — write the state down, don't hold it
+
+A sprint pauses when Val steps away mid-flight. The procedure below was
+improvised once and worked; it is written here so the next front seat does not
+improvise it worse. Append the whole block to DECISIONS.md as `pause: <utc>`:
+
+1. **No new dispatches from this point** — planner included.
+2. **In-flight agents FINISH; never interrupt one.** Record each: agentId,
+   worktree, branch, pinned SHA, and any landing-serialization constraint that
+   must hold when they return (which merges before which).
+3. **Both daughters are told to hold** dispatch and filing while continuing
+   intake, bookkeeping and readbacks — and are resumed by SendMessage, NEVER
+   respawned (the one-brain/one-ledger invariant survives a pause).
+4. **OPEN ITEMS block**, naming explicitly any in-flight REPAIR ruling for an
+   S0-class finding as "confirm its disposition FIRST THING on resume". This
+   flag is the reason a lost S0 repair ruling was recoverable at all in the
+   sprint that produced this procedure.
+5. **Deferred bookkeeping is named as deferred**, not silently skipped.
+
+On resume: read DECISIONS.md from the `pause:` line down before acting, clear
+the OPEN ITEMS block item by item, then re-arm the heartbeat.
 
 ## Measurement quiescence
 
@@ -387,17 +614,41 @@ runs disagreeing means the tree is moving, not the suite.
    <path> | report <path>` message per packet — it dispatches the
    `slice-breaker`s and a `spec-conformance-reviewer` over the ledgers vs the
    sprint PR (reviewers are its lane, heavy round included) and intakes their
-   returns. **Deferred golden captures recorded
+   returns. **If the contract's §8b budgeted a domain review, its
+   `domain-adversary` dispatches ride the same lane and the same message
+   form** — one property class each, in parallel. Reviewers you dispatch
+   yourself instead of through the rear seat lose the report contract unless
+   you paste it into the brief (item 10 above). **Deferred golden captures recorded
    in FINDINGS.md are executed now** — each via the `slice-landed` re-cut
    checklist (oracles rebuilt first), landing as fix-forward commits.
    Findings run the `sprint-findings` lifecycle; REPAIR rulings here block
    SPRINT exit; fixes land through the normal fixer machinery.
-3. **Findings sweep:** every FINDINGS.md row terminal (the `sprint-findings`
-   exit guarantee); dispatch the verifier with it as a checklist. An OPEN row
-   blocks the enqueue.
-4. **Report sweep:** `reports/` holds every dispatched agent's report — both
-   seats' dispatch logs are the checklist (the rear's ledger is
-   `reports/rear-seat-ledger.md`). A missing report is a finding.
+3. **Findings + obligations + ruling-sequence sweep — a `sprint-verifier`
+   dispatch, not front-seat work (v5).** Hand it ONE checklist: every
+   FINDINGS.md row terminal (the `sprint-findings` exit guarantee); every
+   FINDINGS Refusals row carrying a verdict; every OBLIGATIONS.md row terminal
+   (`DONE` with its evidence, or `VOIDED` naming the ruling); the ruling
+   sequence contiguous and matching `ls rulings/`; every `VAL-<stage>-NNN`
+   block's `executed:` non-blank. An OPEN row anywhere blocks the enqueue.
+   These sweeps are mechanical by construction, which is why they belong at
+   the cheapest seat — and the front seat is the sprint's serialization point:
+   every checklist minute it spends is a minute the writer lane is unattended.
+   (Measured: `sprint-verifier` and `bug-reproducer` were dispatched ZERO
+   times in `sprint/pds-phase0-substrate` while the front seat hand-ran the
+   findings sweep and four Opus agents ran the heavy round; the one Haiku
+   `sprint-scout` dispatch that did happen returned that sprint's largest
+   compiler finding.)
+4. **Report + DEBT sweep:** `reports/` holds every dispatched agent's report —
+   both seats' dispatch logs are the checklist (the rear's ledger is
+   `reports/rear-seat-ledger.md`); run `sh scripts/sprint-report-check.sh
+   reports/*.md`. A missing report, or a missing section, is a finding.
+   **DEBT.md holds exactly one row per landing** — one per `LANDED`,
+   `FIX-LANDED` and `family-final` verdict in the dispatch logs, no
+   duplicates, five non-blank fields each. A missing row is a finding; a
+   duplicate row is a finding (both occurred in `sprint/ctor-identity`, where
+   four fix landings — including the two S1 severity-increase repairs — left
+   ZERO rows, so the heavy round's attack list never contained the sprint's
+   highest-risk diffs).
 5. **Terminal enqueue:** only after sweeps 3–4 are clean and every S0
    adversarial-review obligation in DECISIONS.md is discharged: `gh pr ready
    <number>` (+ readback), then `scripts/pr.sh enqueue --timeout 60`. Enter
@@ -407,15 +658,21 @@ runs disagreeing means the tree is moving, not the suite.
    closed with a derivation-bearing comment — check the PIN (now on main),
    not the narrative; brain approves each close; the REAR seat executes with
    readback.
-7. **Continuous-improvement pair:** first generate the cost report —
-   `python3 scripts/sprint-cost-report.py --since <sprint start ISO> >
-   <record dir>/COSTS.md` (post-hoc transcript aggregation; no mid-sprint
-   logging exists or is needed). Then dispatch `friction-triage` on
-   FRICTION.md; the rear seat files its accepted drafts; then dispatch
-   `sprint-retro` with the full record dir (COSTS.md included), both seats'
-   self-audit logs, and friction-triage's report — its cost-per-role pass
-   grades `.claude/SPRINT-COST-HYPOTHESES.md` against COSTS.md. Relay
-   RETRO.md to Val UNFILTERED.
+7. **Continuous-improvement chain — STRICTLY SERIAL, and after MERGED.**
+   (a) Generate the cost report: `python3 scripts/sprint-cost-report.py
+   --since <sprint start ISO> > <record dir>/COSTS.md` (post-hoc transcript
+   aggregation; no mid-sprint logging exists or is needed). (b) Dispatch
+   `friction-triage` on FRICTION.md and WAIT for it; the rear seat files its
+   accepted drafts. (c) Only then dispatch `sprint-retro` with the full record
+   dir (COSTS.md included), both seats' self-audit logs, and friction-triage's
+   report. Running (b) and (c) in parallel costs the retro its named input and
+   happened once; generating COSTS.md after the retro dispatch costs it the
+   whole cost pass and also happened once. **Dispatch the retro only after the
+   PR reads MERGED** — a retro that runs before the terminal enqueue can never
+   answer the CI-attribution question (the mid-sprint narrowed `pull_request`
+   runs are precisely the arm this skill says is not authoritative); if Val
+   wants it earlier, say in the dispatch that CI attribution is out of scope.
+   Relay RETRO.md to Val UNFILTERED.
 8. **Export, release, then dispose — in that order.** Close-out summary +
    RETRO.md + every draft file → comments on the TRACKING ISSUE (your second
    licensed issue write; readback-verified), close it referencing the merged

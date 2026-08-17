@@ -89,7 +89,12 @@ and routing are the ruling's to add; your draft states what IS.
 
 Verdict: `REPRODUCED` / `NOT-REPRODUCED` / `REPRODUCED-DIFFERENTLY` (the defect
 is real but the report's characterization was off — state both versions, cells
-for each). Evidence: the full matrix and every command. `Not covered`: channels
+for each). **All six §9 sections are mandatory** (`Verdict`, `Evidence`,
+`Decisions surfaced`, `Deviations from packet` = from your dispatch brief, `Not
+covered`, `Friction`; `NONE` valid, absence bounces —
+`sh scripts/sprint-report-check.sh <your path>`). Evidence opens with the
+`time:` line, then the full matrix and every command; the minimization and pin
+transcripts are its body. `Not covered`: channels
 or shapes you did not run, and the nearest program you did NOT try — the brain
 reads that before ruling on scope. Your report plus the bundle files ARE the
 deliverable; the return message is one verdict line + paths.

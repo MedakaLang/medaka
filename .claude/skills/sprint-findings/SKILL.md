@@ -27,6 +27,31 @@ between its report and its ruling. A finding mentioned in conversation or a
 return message but absent from a report file gets BOUNCED to its reporter
 first (reports are the record; chat is not).
 
+## 1b. Refusals get their own table — the signal must be COUNTABLE
+
+FINDINGS.md carries a second section, opened by whichever seat takes the
+return, BEFORE the consult is relayed:
+
+```
+## Refusals
+| id | raised-by (role, slice) | the claim | adjudicated in | verdict | evidence |
+```
+
+`verdict` ∈ `UPHELD` / `OVERRULED (<the measurement that beat it>)` /
+`PARTIAL`. One row per refusal, stop-and-report, declined out-of-band
+instruction, or falsified premise — including a planner's or spike's, which
+never reach a `REFUSED` verdict line at all.
+
+Why a table and not prose: two rulings in `sprint/ctor-identity` state
+"refusals right 7 of 8" and **the denominator is not derivable from that
+sprint's record** — `reports/` yields two full `REFUSED` verdicts and the rest
+are events scattered through ledger prose. A workflow whose standing directive
+is *brief for refusal, then believe it* cannot grade itself on a number nobody
+can re-derive, and a sprint with ZERO refusals must be distinguishable from a
+well-briefed one. The three correct declines of out-of-band instructions in
+`sprint/pds-phase0-substrate` were visible only inside `Deviations from packet`
+sections.
+
 ## 2. Mechanical phase — dispatch `bug-reproducer`; judgment waits for its bundle
 
 The mechanical and architectural halves are deliberately SPLIT: repro, pin, and
@@ -187,7 +212,8 @@ drafters draft, the rear seat files, always with readback:
 ## 6. The exit guarantee
 
 At sprint close-out (before `orchestrator-wrapup`), the verifier sweeps
-FINDINGS.md: **every row is terminal** — REPAIR→fixed-and-reviewed,
+FINDINGS.md — both tables; a Refusals row without a verdict is non-terminal
+exactly as an OPEN finding is: **every row is terminal** — REPAIR→fixed-and-reviewed,
 ABSORB→landed, FILE→issue number + pin path + (planned: arc back-reference
 exists | gap: closure action landed), DEFER→trigger condition recorded,
 DISMISS→derivation recorded. An OPEN row blocks exit. This sweep is mechanical

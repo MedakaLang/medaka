@@ -17,10 +17,13 @@ Companion docs: `AGENTS.md` (agent-facing router) and the per-task **skills** in
 > **`.claude/skills/sprint-packet`** (the handoff contract: slice forms incl. discovery spikes +
 > families, the refusal license, the six-section report),
 > **`.claude/skills/sprint-findings`** (the bug/gap lifecycle), the role definitions in
-> **`.claude/agents/`** (`sprint-brain`, `sprint-implementer`, `slice-breaker`,
-> `spec-conformance-reviewer`, `sprint-planner`, `sprint-verifier`, `sprint-scout`,
-> `bug-reproducer`, `friction-triage`, `sprint-retro`), and
-> **`scripts/sprint-disjoint.sh`** (parallel-writer disjointness evidence). Where those artifacts
+> **`.claude/agents/`** (`sprint-brain`, `sprint-rear`, `sprint-implementer`, `slice-breaker`,
+> `spec-conformance-reviewer`, `domain-adversary`, `sprint-planner`, `sprint-verifier`,
+> `sprint-scout`, `bug-reproducer`, `friction-triage`, `sprint-retro`),
+> **`scripts/sprint-disjoint.sh`** (parallel-writer disjointness evidence) and
+> **`scripts/sprint-report-check.sh`** (report-section intake check). What each retro round
+> adopted or declined, and why, is ledgered in **`.claude/SPRINT-WORKFLOW-DECISIONS.md`**;
+> cost hypotheses in **`.claude/SPRINT-COST-HYPOTHESES.md`**. Where those artifacts
 > contradict older prose in this file — notably "Choosing the model" (pre-Claude-5 tiers) and the
 > Stage B role table (its own retro overturned its implementer row) — **the artifacts win**; the
 > prose is retained as history.
