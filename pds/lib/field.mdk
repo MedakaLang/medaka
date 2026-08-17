@@ -90,6 +90,8 @@
    grades correctness only; no side-channel property is claimed or checked
    (no constant-time requirement appears anywhere in the design). -}
 
+import array.{set, blit}
+
 -- ── Constants ────────────────────────────────────────────────────────
 
 -- 2^26 - 1: the mask for limbs 0..8.
@@ -158,13 +160,13 @@ carryPass n = carryPassGo n 0
 carryPassGo : Array Int -> Int -> Int
 carryPassGo n i =
   if i >= 9 then
-    let hi = arrayGetUnsafe 9 n
-    let () = arraySetUnsafe 9 (bitAnd hi topMask) n
+    let hi = n[9]
+    let () = set 9 (bitAnd hi topMask) n
     shiftRight hi 22
   else
-    let v = arrayGetUnsafe i n
-    let () = arraySetUnsafe i (bitAnd v limbMask) n
-    let () = arraySetUnsafe (i + 1) (arrayGetUnsafe (i + 1) n + shiftRight v 26) n
+    let v = n[i]
+    let () = set i (bitAnd v limbMask) n
+    let () = set (i + 1) (n[i + 1] + shiftRight v 26) n
     carryPassGo n (i + 1)
 
 -- Carry, then fold the 2^256 overflow back with 2^256 = 2^32 + 977, and
@@ -175,8 +177,8 @@ reduceCarry n =
   let x = carryPass n
   if x == 0 then ()
   else
-    let () = arraySetUnsafe 0 (arrayGetUnsafe 0 n + x * foldLow) n
-    let () = arraySetUnsafe 1 (arrayGetUnsafe 1 n + x * foldHi) n
+    let () = set 0 (n[0] + x * foldLow) n
+    let () = set 1 (n[1] + x * foldHi) n
     reduceCarry n
 
 -- Is the carried limb array >= p? Compared most-significant limb first.
@@ -187,8 +189,8 @@ gtePGo : Array Int -> Int -> Bool
 gtePGo n i =
   if i < 0 then True
   else
-    let a = arrayGetUnsafe i n
-    let b = arrayGetUnsafe i pLimbs
+    let a = n[i]
+    let b = pLimbs[i]
     if a > b then True else if a < b then False else gtePGo n (i - 1)
 
 -- n := n - p, IN PLACE. Precondition: n >= p (so the top limb never borrows).
@@ -199,12 +201,12 @@ subPGo : Array Int -> Int -> Int -> Unit
 subPGo n i borrow =
   if i >= 10 then ()
   else
-    let d = arrayGetUnsafe i n - arrayGetUnsafe i pLimbs - borrow
+    let d = n[i] - pLimbs[i] - borrow
     if d < 0 then
-      let () = arraySetUnsafe i (d + limbMask + 1) n
+      let () = set i (d + limbMask + 1) n
       subPGo n (i + 1) 1
     else
-      let () = arraySetUnsafe i d n
+      let () = set i d n
       subPGo n (i + 1) 0
 
 -- | Reduce any 10-limb array to the canonical representative of its value
@@ -239,12 +241,12 @@ limbsOfBytesGo bs n bpos acc accBits li =
   if li >= 10 then ()
   else
     if accBits >= 26 then
-      let () = arraySetUnsafe li (bitAnd acc limbMask) n
+      let () = set li (bitAnd acc limbMask) n
       limbsOfBytesGo bs n bpos (shiftRight acc 26) (accBits - 26) (li + 1)
     else
-      if bpos >= 0 then limbsOfBytesGo bs n (bpos - 1) (acc + shiftLeft (arrayGetUnsafe bpos bs) accBits) (accBits + 8) li
+      if bpos >= 0 then limbsOfBytesGo bs n (bpos - 1) (acc + shiftLeft bs[bpos] accBits) (accBits + 8) li
       else
-        let () = arraySetUnsafe li (bitAnd acc limbMask) n
+        let () = set li (bitAnd acc limbMask) n
         limbsOfBytesGo bs n bpos (shiftRight acc 26) 0 (li + 1)
 
 -- Is this a well-formed 32-byte array with every element in 0..255?
@@ -255,7 +257,7 @@ byteRangeGo : Array Int -> Int -> Bool
 byteRangeGo bs i =
   if i >= 32 then True
   else
-    let b = arrayGetUnsafe i bs
+    let b = bs[i]
     if b < 0 || b > 255 then False else byteRangeGo bs (i + 1)
 
 -- | Parse 32 big-endian bytes as a CANONICAL field element: a value >= p is
@@ -308,12 +310,12 @@ toBytesGo n out li acc accBits pos =
   if pos < 0 then ()
   else
     if accBits >= 8 then
-      let () = arraySetUnsafe pos (bitAnd acc 255) out
+      let () = set pos (bitAnd acc 255) out
       toBytesGo n out li (shiftRight acc 8) (accBits - 8) (pos - 1)
     else
-      if li < 10 then toBytesGo n out (li + 1) (acc + shiftLeft (arrayGetUnsafe li n) accBits) (accBits + 26) pos
+      if li < 10 then toBytesGo n out (li + 1) (acc + shiftLeft n[li] accBits) (accBits + 26) pos
       else
-        let () = arraySetUnsafe pos (bitAnd acc 255) out
+        let () = set pos (bitAnd acc 255) out
         toBytesGo n out li (shiftRight acc 8) 0 (pos - 1)
 
 -- ── Comparison ───────────────────────────────────────────────────────
@@ -327,7 +329,7 @@ equalGo : Fe -> Fe -> Int -> Bool
 equalGo a b i =
   if i >= 10 then
     True
-  else if arrayGetUnsafe i a != arrayGetUnsafe i b then
+  else if a[i] != b[i] then
     False
   else
     equalGo a b (i + 1)
@@ -338,7 +340,7 @@ feIsZero a = feEqual a feZero
 
 -- | Is the canonical representative odd? (The low bit of limb 0.)
 export feIsOdd : Fe -> Bool
-feIsOdd a = bitAnd (arrayGetUnsafe 0 a) 1 == 1
+feIsOdd a = bitAnd a[0] 1 == 1
 
 -- ── Arithmetic ───────────────────────────────────────────────────────
 
@@ -353,7 +355,7 @@ addGo : Fe -> Fe -> Array Int -> Int -> Unit
 addGo a b e i =
   if i >= 10 then ()
   else
-    let () = arraySetUnsafe i (arrayGetUnsafe i a + arrayGetUnsafe i b) e
+    let () = set i (a[i] + b[i]) e
     addGo a b e (i + 1)
 
 -- | Additive inverse mod p, computed as `p - a` with borrow. `a` is canonical
@@ -369,12 +371,12 @@ negateGo : Fe -> Array Int -> Int -> Int -> Unit
 negateGo a e i borrow =
   if i >= 10 then ()
   else
-    let d = arrayGetUnsafe i pLimbs - arrayGetUnsafe i a - borrow
+    let d = pLimbs[i] - a[i] - borrow
     if d < 0 then
-      let () = arraySetUnsafe i (d + limbMask + 1) e
+      let () = set i (d + limbMask + 1) e
       negateGo a e (i + 1) 1
     else
-      let () = arraySetUnsafe i d e
+      let () = set i d e
       negateGo a e (i + 1) 0
 
 -- | Subtraction mod p. NEGATE-THEN-ADD, exactly as the reference does it —
@@ -399,7 +401,7 @@ feMul a b =
   let e = arrayMake 11 0
   let () = foldHigh c e
   let res = arrayMake 10 0
-  let () = arrayBlit e 0 res 0 10
+  let () = blit e 0 res 0 10
   feCanonicalize res
 
 mulAccum : Fe -> Fe -> Array Int -> Int -> Unit
@@ -414,7 +416,7 @@ mulAccumRow a b c i j =
   if j >= 10 then ()
   else
     let k = i + j
-    let () = arraySetUnsafe k (arrayGetUnsafe k c + arrayGetUnsafe i a * arrayGetUnsafe j b) c
+    let () = set k (c[k] + a[i] * b[j]) c
     mulAccumRow a b c i (j + 1)
 
 -- Carry columns 0..18 down below 2^26, depositing the last carry in c[19].
@@ -422,9 +424,9 @@ carryChain : Array Int -> Int -> Unit
 carryChain c i =
   if i >= 19 then ()
   else
-    let v = arrayGetUnsafe i c
-    let () = arraySetUnsafe i (bitAnd v limbMask) c
-    let () = arraySetUnsafe (i + 1) (arrayGetUnsafe (i + 1) c + shiftRight v 26) c
+    let v = c[i]
+    let () = set i (bitAnd v limbMask) c
+    let () = set (i + 1) (c[i + 1] + shiftRight v 26) c
     carryChain c (i + 1)
 
 -- Fold columns 10..19 (weight >= 2^260) into columns 0..10, then fold the
@@ -441,25 +443,25 @@ foldHigh : Array Int -> Array Int -> Unit
 foldHigh c e =
   let () = foldCopy c e 0
   let () = foldGo c e 10
-  let hi = arrayGetUnsafe 10 e
-  let () = arraySetUnsafe 10 0 e
-  let () = arraySetUnsafe 0 (arrayGetUnsafe 0 e + hi * r0) e
-  arraySetUnsafe 1 (arrayGetUnsafe 1 e + hi * r1) e
+  let hi = e[10]
+  let () = set 10 0 e
+  let () = set 0 (e[0] + hi * r0) e
+  set 1 (e[1] + hi * r1) e
 
 foldCopy : Array Int -> Array Int -> Int -> Unit
 foldCopy c e m =
   if m >= 10 then ()
   else
-    let () = arraySetUnsafe m (arrayGetUnsafe m c) e
+    let () = set m c[m] e
     foldCopy c e (m + 1)
 
 foldGo : Array Int -> Array Int -> Int -> Unit
 foldGo c e q =
   if q >= 20 then ()
   else
-    let v = arrayGetUnsafe q c
-    let () = arraySetUnsafe (q - 10) (arrayGetUnsafe (q - 10) e + v * r0) e
-    let () = arraySetUnsafe (q - 9) (arrayGetUnsafe (q - 9) e + v * r1) e
+    let v = c[q]
+    let () = set (q - 10) (e[q - 10] + v * r0) e
+    let () = set (q - 9) (e[q - 9] + v * r1) e
     foldGo c e (q + 1)
 
 -- | Squaring mod p. Deliberately `feMul a a`: the reference splits squaring out
@@ -506,5 +508,5 @@ powGo base bitIdx acc =
 -- Bit `k` of p-2, read out of its 32 big-endian bytes.
 expBit : Int -> Bool
 expBit k =
-  let byte = arrayGetUnsafe (31 - shiftRight k 3) expPMinus2
+  let byte = expPMinus2[31 - shiftRight k 3]
   bitAnd (shiftRight byte (k - shiftLeft (shiftRight k 3) 3)) 1 == 1
