@@ -13,7 +13,8 @@
 --   (published nowhere in-family).
 
 import test.{expectEqual, expectTrue}
-import lib.base58.{base58btcEncode, base58btcDecode}
+import string.{repeat}
+import lib.base58.{base58btcEncode, base58btcDecode, base58btcMaxInputChars}
 import lib.multiformats.{
   uvarintEncode,
   uvarintDecodeAll,
@@ -136,3 +137,42 @@ test "multicodecPrefix secp256k1-pub == [0xe7, 0x01]" = expectEqual
 
 test "multicodecPrefix p256-pub == [0x80, 0x24]" =
   expectEqual (multicodecPrefix multicodecP256Pub) (arrayFromList [0x80, 0x24])
+
+-- ── trust-boundary guards [RUN-PDS0-036] ───────────────────────────────────
+--    Each guard gets BOTH directions: one cell proving it FIRES on the bad
+--    input, one proving it does NOT fire on legitimate, previously-valid
+--    input. The second is the one that catches an over-tight ceiling.
+--    The two PANIC guards (sha256's byte domain, uvarintEncode's negative
+--    argument) cannot be asserted here — Medaka has no catchable panics —
+--    and live in pds/test/guard_probes_main.mdk + trust_boundary_guards.sh.
+
+test "base58btcDecode rejects input over the DoS ceiling" =
+  expectTrue (isErr (base58btcDecode (repeat (base58btcMaxInputChars + 1) "1")))
+
+test "base58btcDecode accepts input AT the DoS ceiling (guard is not off by one)" = expectTrue (not (isErr (base58btcDecode (repeat base58btcMaxInputChars "1"))))
+
+-- Not an answer key: nothing about the DECODED bytes is asserted, only that
+-- a realistically-sized legitimate base58btc string still decodes. The
+-- string is the longest base58 artifact anywhere in pds/test/vectors/ (60
+-- characters, draft-msporny-base58-02 §5), used here purely as a length
+-- witness that the ceiling has ample headroom over real protocol values.
+test "base58btcDecode still accepts a realistic 60-character input" =
+  expectTrue (not (isErr (base58btcDecode
+    "USm3fpXnKG5EUBx2ndxBDMPVciP5hGey2Jh4NDv6gmeo1LkMeiKrLJUUBk6Z")))
+
+-- Discriminating, not merely failing: before the explicit range arm this
+-- input was ALSO rejected, but as "non-minimal encoding" — a wrong
+-- diagnosis of a perfectly minimal encoding. `isErr` alone could not tell
+-- the two apart, so the message is pinned.
+test "uvarint rejects a value above intMaxBound, naming the range" = expectEqual
+  (uvarintDecodeAll (arrayFromList
+    [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x40]))
+  (Err "uvarint: value exceeds the representable Int range (max 2^62-1)")
+
+test "uvarint accepts intMaxBound itself (range guard is not off by one)" = expectEqual
+  (uvarintDecodeAll (arrayFromList
+    [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x3f]))
+  (Ok 4611686018427387903)
+
+test "uvarintEncode does not reject intMaxBound" =
+  expectEqual (arrayLength (uvarintEncode 4611686018427387903)) 9

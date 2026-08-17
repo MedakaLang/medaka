@@ -6,7 +6,18 @@
    LEAST significant**, continuation flag in the high bit, **minimally
    encoded** (a non-minimal encoding MUST be rejected), practical maximum 9
    bytes / 63 bits (multiformats/unsigned-varint README.md, pinned commit
-   dd184f1ce89c81808503bb719b5fcb13844d08f3). **It is NOT `sqlite/lib/varint.mdk`.**
+   dd184f1ce89c81808503bb719b5fcb13844d08f3).
+
+   ⚠️ THIS IMPLEMENTATION'S CEILING IS LOWER THAN THE SPEC'S. The citation
+   above is faithful: upstream permits 63 payload bits, i.e. the whole range
+   `[0, 2^63-1]`. Medaka's `Int` is a 63-bit SIGNED fixnum whose maximum is
+   `intMaxBound = 2^62 - 1 = 4611686018427387903`, so the spec-legal values
+   in `[2^62, 2^63-1]` are NOT representable here and `uvarintDecode`
+   REJECTS them with `"uvarint: value exceeds the representable Int range
+   (max 2^62-1)"`. This is a restriction of ours, not a defect in the spec —
+   do not "fix" it by widening the citation.
+
+   **It is NOT `sqlite/lib/varint.mdk`.**
    That is SQLite's own scheme: the decoded value is the **BIG-endian**
    concatenation of the payload groups, byte 9 carries all 8 bits, and it
    imposes no minimality requirement. The two share a name and nothing else;
@@ -60,7 +71,22 @@ uvarintEncodeGo n =
    > uvarintEncode 16384
    [|128, 128, 1|] -}
 export uvarintEncode : Int -> Array Int
-uvarintEncode n = arrayFromList (uvarintEncodeGo n)
+uvarintEncode n =
+  if n < 0 then
+    -- unsigned-varint encodes non-negative values only, and
+    -- `uvarintEncodeGo`'s `n < 128` test is TRUE for every negative `n`, so
+    -- without this guard a negative argument silently produces a 1-element
+    -- array holding that negative value. Not `Result`-typed (the signature
+    -- is `Int -> Array Int` and `multicodecPrefix` is total on constants),
+    -- so this panics — same in-family precedent as
+    -- `pds/lib/field.mdk`'s `feFromBytesReduce`.
+    --
+    -- ⚠️ `uvarintDecode` must never REACH this panic: it is `Result`-typed,
+    -- and turning a correct `Err` into a process abort would break its own
+    -- type-level promise. That is what its explicit `value < 0` arm is for.
+    panic "uvarint: negative value \{intToString n} (unsigned-varint encodes non-negative values only)"
+  else
+    arrayFromList (uvarintEncodeGo n)
 
 -- Read one varint from `bytes` starting at `idx`, accumulating `acc` with
 -- `shift` bits already placed. `Err` on truncation (ran out of input while
@@ -94,7 +120,9 @@ prefixEquals a b i len =
 {- | Decode one unsigned-varint from the front of `bytes`. `Ok (value,
    bytesConsumed)`. `Err` on a non-minimal encoding (the published
    `{0x81, 0x00}` case — a longer-than-necessary encoding of `1`),
-   a truncated encoding, or an over-long (>9 byte) encoding.
+   a truncated encoding, an over-long (>9 byte) encoding, or a value outside
+   the representable `Int` range (see the module header: spec-legal values in
+   `[2^62, 2^63-1]` do not fit Medaka's 63-bit signed `Int`).
 
    > uvarintDecode (arrayFromList [172, 2])
    Ok (300, 2)
@@ -104,11 +132,32 @@ export uvarintDecode : Array Int -> Result String (Int, Int)
 uvarintDecode bytes = match uvarintDecodeGo bytes 0 (arrayLength bytes) 0 0
   Err e => Err e
   Ok (value, consumed) =>
-    let reencoded = uvarintEncode value
-    if arrayLength reencoded != consumed || !(prefixEquals reencoded bytes 0 consumed) then
-      Err "uvarint: non-minimal encoding"
+    -- RANGE, checked FIRST and EXPLICITLY. Only the 9th byte can shift a
+    -- payload past `intMaxBound` (shifts of 49 or less contribute < 2^56),
+    -- and the accumulator wraps into the negatives exactly when the true
+    -- value is >= 2^62 — so `value < 0` is a total, exact discriminator for
+    -- "out of representable range", not a heuristic.
+    --
+    -- This used to be an INCIDENTAL catch and no longer is. Previously the
+    -- wrapped negative fell through to `uvarintEncode`, whose `n < 128` test
+    -- is true for negatives, so the re-encode came back 1 byte long and the
+    -- minimality check below rejected it — a correct rejection reached by
+    -- accident, and reported with the wrong diagnosis ("non-minimal") for
+    -- what is in fact a perfectly minimal encoding of an unrepresentable
+    -- value. It is now stated where it happens.
+    if value < 0 then
+      Err "uvarint: value exceeds the representable Int range (max 2^62-1)"
     else
-      Ok (value, consumed)
+      -- MINIMALITY, and after the arm above it covers minimality ONLY. Do
+      -- not refactor it away as redundant with the range check: it is the
+      -- sole enforcement of the spec's MUST-reject-non-minimal-encoding
+      -- requirement (the published `{0x81, 0x00}` case), which the range
+      -- check does not touch.
+      let reencoded = uvarintEncode value
+      if arrayLength reencoded != consumed || !(prefixEquals reencoded bytes 0 consumed) then
+        Err "uvarint: non-minimal encoding"
+      else
+        Ok (value, consumed)
 
 {- | `uvarintDecode`, additionally requiring the WHOLE input be consumed.
 

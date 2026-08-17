@@ -32,7 +32,7 @@ export MEDAKA_ROOT
 # file:floor — floor = the assertion count committed today. Adding tests only
 # raises the real count (>= floor still passes); removing them, or a discovery
 # regression, drops below the floor and fails. Raise a floor when you add tests.
-SUITES="skeleton_test:4 encodings_test:23 field_test:26 scalar_test:34"
+SUITES="skeleton_test:4 encodings_test:29 field_test:26 scalar_test:34"
 
 rc=0
 total_ran=0

@@ -151,9 +151,18 @@ erratumReports (l :: rest) = match split "\t" l
   [hexInput, claimed, correctedExpected] =>
     let encoded = base58btcEncode (mustDecodeHex hexInput)
     let () = erratum "base58-spec-erratum:\{hexInput}" claimed encoded
-    -- Cross-check: our implementation's actual output matches the
-    -- vector file's disclosed "correct" column (documentation only, not
-    -- graded PASS/FAIL) — confirms the erratum note is self-consistent.
+    -- Cross-check, and it now CHECKS. This block used to print the two
+    -- values side by side and call that a "self-check" — a comparison a
+    -- reader performs, not one the program performs, so the row could
+    -- silently drift and the driver would report it as cheerfully as
+    -- agreement (F18). The disclosure only means anything while our output
+    -- still matches the corrected column it discloses, so disagreement
+    -- aborts. Still NOT a graded PASS/FAIL cell: the driver's header
+    -- contract that erratum rows are "not counted toward PASS or FAIL"
+    -- stays true, and encodings_vectors.sh's PASS_FLOOR is unchanged.
+    let () = if correctedExpected != encoded then
+      panic "encodings_vectors: erratum row's corrected column \{correctedExpected} disagrees with this implementation's output \{encoded} — the disclosure is stale"
+    else ()
     let () = erratum "base58-spec-erratum-selfcheck:\{hexInput}" correctedExpected encoded
     erratumReports rest
   _ => panic "encodings_vectors: malformed erratum row: \{l}"
