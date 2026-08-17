@@ -57,20 +57,53 @@ sprint = re.search(r"\bsprint\b", prompt, re.IGNORECASE) or (
 # authored. AGENTS.md keeps only the loop and the silent-failure traps; the
 # per-gate table and the authoring procedure moved into the `gates` skill
 # (2026-08-17), so nothing routes there unless this fires.
-gate_red = re.search(r"\b(gate|shard|preflight|fixpoint|CI)\b.{0,40}\b(red|fail\w*|break\w*|broke)\b",
-                     prompt, re.IGNORECASE) or re.search(
-                     r"\b(red|fail\w*|broke)\b.{0,40}\b(gate|shard|preflight)\b", prompt, re.IGNORECASE)
-gate_author = re.search(r"\b(add|write|author|capture|bless|re-?cut|update)\b.{0,30}\b(gate|fixture|golden|snapshot)s?\b",
+#
+# NOTE ON SHAPE (a review found the first cut missed every headline phrasing):
+# match a gate NOUN and a FAILURE word independently, in any order, rather than
+# an ordered proximity pair. And no leading \b on the gate nouns -- `_` is a word
+# character, so `\bfixpoint` can never match inside `selfcompile_fixpoint`, and
+# `\bgate\b` can never match `gates`.
+gate_noun = re.search(r"gates?\b|shards?\b|preflight|fixpoint|run_gates|diff_compiler_"
+                      r"|must-?fail|soundness|selfcompile|\boracles?\b|merge queue|\bCI\b"
+                      r"|fixtures?\b|goldens?\b",
+                      prompt, re.IGNORECASE)
+fail_word = re.search(r"\bred\b|fail\w*|brok\w*|broke|\bnot passing\b|\bregress\w*", prompt, re.IGNORECASE)
+gate_author = re.search(r"\b(add|write|author|capture|bless|re-?cut|pin)\w*\b.{0,40}"
+                        r"\b(gates?|fixtures?|goldens?|snapshots?|regression tests?|must-?fail)\b",
                         prompt, re.IGNORECASE) or re.search(r"diff_compiler_\w*", prompt)
-gates = gate_red or gate_author
+gates = (gate_noun and fail_word) or gate_author
 
 # Debug-shaped task: a .mdk program misbehaves, or a two-arm differential is
 # being set up. The probe/flag catalogue and the two-arm recipe moved out of
 # AGENTS.md into `debug-pipeline` (2026-08-17).
-debug = re.search(r"\b(why does\w*|why is|why won'?t|debug|diagnos\w+|repro\w*)\b.{0,60}"
-                  r"\b(parse|compile|typecheck|type-check|eval|fail|error|crash|wrong)\b",
-                  prompt, re.IGNORECASE) or re.search(
-                  r"\btwo-?arm\b|\bwrong (value|answer|output)\b|--keep-ir\b|\bCore IR\b",
+#
+# Every verb/noun takes \w* -- "failing"/"parser"/"compiles" are the phrasings
+# people actually type. The dispatch arm is deliberately narrow: bare "dispatch"
+# is sprint vocabulary ("dispatch an agent"), so it must co-occur with an
+# impl/instance/method/dict word.
+debug = (re.search(r"\b(why does\w*|why is|why won'?t|why do\w*|debug\w*|diagnos\w+|repro\w*)\b.{0,60}"
+                   r"\b(pars\w*|parser|compil\w*|typecheck\w*|type-check\w*|eval\w*|fail\w*"
+                   r"|error\w*|crash\w*|wrong|reject\w*)\b", prompt, re.IGNORECASE)
+         # ...but only about Medaka. "why does the README fail to render" is not
+         # a pipeline bug; require a Medaka noun somewhere in the prompt.
+         and re.search(r"\.mdk\b|\bmedaka\b|\bcompiler\b|\bstdlib\b|\btypecheck\w*|\bparser\b"
+                       r"|\beval\b|\bimpl\w*|\bfixture\b|\bmodule\b|\bprogram\b|\bdoctest\w*",
+                       prompt, re.IGNORECASE)
+         ) or re.search(
+                  r"\btwo-?arm\b|\bwrong (value|answer|output|result)\b|--keep-ir\b"
+                  # bare "Core IR" also matches "write a doc explaining Core IR";
+                  # anchor it to the things you do WITH the dump.
+                  r"|\bCore IR\b[^.]{0,40}\b(dump|dict|route|lower\w*|probe|emit\w*)\b"
+                  r"|\b(dump|inspect|look at|read)\b[^.]{0,20}\bCore IR\b"
+                  r"|\bdifferential\b|\b(old|previous|base|origin/main)\b[^.]{0,30}\bbinar\w+"
+                  r"|\bbinar\w+[^.]{0,30}\b(vs|versus|against)\b"
+                  r"|\bwrong\b[^.]{0,20}\bimpls?\b"
+                  # "implementer" is sprint vocabulary -- match `impl`/`impls`/
+                  # `implementation` exactly, never a bare `impl\w*`.
+                  r"|\bdispatch\w*\b[^.]{0,40}\b(impls?|implementation|instance|method|dict)\b"
+                  # engine divergence: eval vs native vs wasm disagreeing
+                  r"|\b(eval|interpreter|native|wasm|build)\b[^.]{0,40}\b(but|whereas|yet)\b[^.]{0,40}"
+                  r"\b(eval|interpreter|native|wasm|build)\b",
                   prompt, re.IGNORECASE)
 
 if not roadmap and not stdlib and not mcp and not sprint and not gates and not debug:

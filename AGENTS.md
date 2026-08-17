@@ -227,6 +227,10 @@ differs." ⇒ **Assert freshness ONCE, on the arm where it can be true**, or giv
 fingerprint is baked at STAGE A START. A `.mdk` edit after `make medaka` begins (a comment is
 enough) silently produces a binary lacking it. Finish the edit, then build.
 
+**[G-BUILD-RACE]** Concurrent `medaka build` is scratch-path safe (per-process `mktemp -d`).
+⚠️ NOT two `make medaka` runs in the SAME worktree (#1141) — outputs write to `*.new.$$` beside
+their final path, promoted via same-filesystem `mv`.
+
 🚨 **[B-NO-BORROW-ISOLATED] In a worktree, never `cp` an emitter from another tree — just
 `make -C <your-absolute-worktree-path> medaka`.** A fresh worktree has no `./medaka_emitter`
 and that is FINE; it cold-bootstraps for ~31s, and borrowing does not even save the rebuild
@@ -348,8 +352,14 @@ the per-gate `[G-LIST]` table (what each one proves), the must-fail pin lifecycl
 `[G-BUILD-RACE]`), fixture/golden authoring, and the dash-not-bash shell half.
 **Check `gh issue list --label known-red` first — it is usually not your break.**
 
-The two that must reach you *before* you think to load anything, because their failure mode
-is silent rather than red:
+These must reach you *before* you think to load anything, because their failure mode is
+silent rather than red:
+
+🚨 **[G-MUST-FAIL] `test/diff_compiler_must_fail.sh` has INVERTED polarity.** Each
+`test/must_fail_fixtures/*/` pins an OPEN issue, so **RED is the healthy state** and a fix
+flipping one green FAILS the gate. Never "repair" it by deleting or repointing a fixture —
+that silently un-pins a live soundness bug and pays you in green. Drain protocol
+(`[G-PIN-DRAIN]`): the `gates` skill. Runs in `soundness`.
 
 **[G-STALE-ORACLE]** `run_gates.sh` refuses on a stale oracle rather than false-pass, printing
 the rebuild command. Override only with `NO_STALE_CHECK=1`. Force-rebuild before trusting
@@ -357,9 +367,8 @@ the rebuild command. Override only with `NO_STALE_CHECK=1`. Force-rebuild before
 
 🚨 **[G-GOLDEN-CAPTURE-UNGUARDED]** Golden capture has NO staleness guard — a stale oracle can
 BLESS A WRONG GOLDEN, permanently. **After ANY merge/rebase, rebuild oracles BEFORE capturing**,
-then route through `run_gates.sh`. Same for `--bless`: **[WT-GOLDEN-ENSHRINES]** a golden
-records what the engine DID, not what's CORRECT — `eval` is a known-wrong oracle in several
-open S0s, so decide the right answer from semantics *before* you capture.
+then route through `run_gates.sh`. The same applies to `--bless` — see **[WT-GOLDEN-ENSHRINES]**
+under *Writing tests*.
 
 ### Pre-commit hook (ACTIVE) — fmt + lint + snapshot + lextok
 
@@ -400,8 +409,15 @@ Bypass: `git commit --no-verify`. Unbuilt `medaka`: hook warns and allows.
 `[D-KEEP-IR]`, `[D-EMITTER-CLI]`, `[D-RUN-VS-BUILD]`) and the full two-arm differential
 recipe (`[D-TWO-ARM]`, `[D-TWO-ARM-RUNTIME]`, `[D-GATE-OVERRIDE]`).
 
-Three that must reach you *before* you think to load anything, because each turns a wrong
-answer into a right-looking one:
+These must reach you *before* you think to load anything, because each turns a wrong answer
+into a right-looking one:
+
+**[D-RUN-VS-BUILD]** `run`/`build` share the typechecker; differ only in engine. **NOT** two
+independent observations of resolve/typecheck behavior — agreeing is not corroboration.
+
+⚠️ **[D-GATE-OVERRIDE] Not every gate takes a second binary**, so a two-arm differential
+pointed at one that hardcodes its own reports *identical* and manufactures a false negative.
+**Derive, don't trust a count** (recipe + the #1431 hardcoded case: `debug-pipeline`).
 
 🚨 **[D-JSON-HOLE] `check --json` SILENT-ACCEPTS ON MULTI-MODULE PROJECTS (#1362, OPEN S0);
 `medaka_check` (MCP) inherits it.** Internal-extern violation → exit 0, empty diagnostics.
@@ -518,8 +534,11 @@ the binary (`medaka test <file>`). Under-used: operator sections `(==)`, `(+ 1)`
 
 ⚠️ **[DG-REMOVED]** Eight constructs were REMOVED and are now hard parse errors
 (`function`, `let mut`, backtick infix, `record`, let-else, named impls, `default impl`, and
-the `@Name` impl-hint) — each with a located parser diagnostic naming its replacement, gated by
-`test/check_removed_constructs.sh`. **The table with the replacements is
+the `@Name` impl-hint), gated by `test/check_removed_constructs.sh`. Six have a dedicated
+located parser diagnostic naming the replacement; ⚠️ **`let-else` does NOT** — it fails with a
+generic *"unexpected `else`; expected a dedent"* that unrelated broken code also produces, so
+don't read that message as a parser bug. `@Name` has no replacement (named instances are gone).
+**The table is
 `docs/spec/SYNTAX.md` § "Removed — do not use"**, which is also the accepted-construct list.
 `test/parse_fixtures/rare_constructs.mdk` has examples. Check PLAN.md "Known parser gaps" first.
 

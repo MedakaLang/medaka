@@ -532,6 +532,8 @@ interventions, three different formats, none citable.
      later `make`**, including a clean cold-bootstrap in its own worktree.
      Don't gamble a writer's session to save ~31s. Every writer brief says
      `make -C <its-absolute-worktree-path> medaka` and nothing else.
+
+   Incident narrative for both: `.claude/dossier/build.md`.
 7. **Arm the heartbeat:** `/loop` (self-paced, ~600 s) with the tick list
    below. The writer lane is now occupied and must stay so.
 

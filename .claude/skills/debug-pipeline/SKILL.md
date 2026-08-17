@@ -1,6 +1,6 @@
 ---
 name: debug-pipeline
-description: Diagnose a Medaka parse, resolve, typecheck, or eval failure — isolate which pipeline stage is at fault using the entry probes, the diagnostics accumulator, and the Core IR / --keep-ir dumps. Use when a .mdk program errors unexpectedly or returns a wrong value, a test fails opaquely, you need to narrow down a compiler bug, or you are setting up a two-arm (old-binary vs new-binary) differential.
+description: Diagnose a Medaka parse, resolve, typecheck, or eval failure — isolate which pipeline stage is at fault using the entry probes, the diagnostics accumulator, and the Core IR / --keep-ir dumps. Use when a .mdk program errors unexpectedly or returns a wrong value, when dispatch picks the wrong impl or a dict routes wrongly, when the engines disagree (eval vs native vs wasm), when a test fails opaquely, or when you are setting up a two-arm (old-binary vs new-binary) differential.
 ---
 
 # Debug a pipeline failure
@@ -180,8 +180,13 @@ consumers. Capture the golden with `CAPTURE=1` on the specific gate.
 ## Probe and flag catalogue
 
 Moved here from `AGENTS.md` — none of it is reachable until you are already
-debugging. `AGENTS.md` keeps only the three whose failure mode is a right-looking
-wrong answer ([D-JSON-HOLE], [D-BUILD-PIPE], [D-TWO-ARM-STDLIB]).
+debugging. `AGENTS.md` keeps the ones whose failure mode is a right-looking wrong
+answer ([D-JSON-HOLE], [D-BUILD-PIPE], [D-TWO-ARM-STDLIB], [D-RUN-VS-BUILD],
+[D-GATE-OVERRIDE]).
+
+**Incident narrative for every `[D-*]` item below: `.claude/dossier/tooling.md`.**
+Come to it when you want to know why a rule is shaped the way it is — what went
+wrong, and which previously-confident sentence turned out to be false.
 
 **[D-CHECK-JSON]** `medaka check --json <file>` emits `Diag` JSON: `code`
 (`T-*`/`R-*`/`P-*`/`L-*`/`W-*`), `kind`, `range`, `severity`, `message`, `help`/`fix`. **Key off
@@ -238,9 +243,8 @@ ln -s "$PWD/runtime" /tmp/alt/runtime
 ⚠️ [D-BUILD-PIPE] applies here too — `medaka build`'s exit code does not survive a pipe, so
 don't shorten to `| tail`. Redirect to a file, read `$?`, then read the file.
 
-🚨 **[B-STRICT-TWO-ARM]** `MEDAKA_STRICT=1` on BOTH ARMS breaks the differential — a shared
-compiler tree means the older arm's fingerprint can never match, reporting "everything
-differs." Assert freshness ONCE, on the arm where it can be true.
+⚠️ Freshness across the two arms is **[B-STRICT-TWO-ARM]** in `AGENTS.md` (which stays
+resident) — do not set `MEDAKA_STRICT=1` on both arms.
 
 ⚠️ **[D-GATE-OVERRIDE] Not every gate takes a second binary.** **Derive, don't trust a count:**
 ```sh

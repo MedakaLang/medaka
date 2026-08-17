@@ -212,8 +212,8 @@ second build. Binding usage rules, because a two-arm differential fails in the
 direction that MANUFACTURES findings: run each binary against its OWN tree
 (`MEDAKA_ROOT` per arm, or the depot's copied `stdlib`/`runtime`); never point
 one arm at the other's stdlib; assert freshness with `MEDAKA_STRICT=1` on the
-BRANCH arm only (AGENTS.md [D-TWO-ARM], [D-TWO-ARM-STDLIB],
-[B-STRICT-TWO-ARM]). Derived, so nobody trusts strict mode where it does
+BRANCH arm only ([D-TWO-ARM] in the `debug-pipeline` skill; AGENTS.md
+[D-TWO-ARM-STDLIB], [B-STRICT-TWO-ARM]). Derived, so nobody trusts strict mode where it does
 nothing: the depot carries no `compiler/`, and `sourceStalenessVerdict`
 (`compiler/driver/medaka_cli.mdk`) returns `None` when `<root>/compiler` is
 absent — on the depot arm the staleness check is INERT, neither passing nor
