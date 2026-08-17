@@ -130,3 +130,48 @@ MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/vector_provenance.sh
 
 No `medaka` binary needed — the gate only enumerates files, hashes them, and
 parses text.
+
+## Encodings (S-encodings, #1701)
+
+`pds/lib/base58.mdk` (base58btc encode/decode) and `pds/lib/multiformats.mdk`
+(unsigned-varint / LEB128, multicodec prefix constants, multibase `z`
+prefixing) are graded against six published, in-family answer keys under
+`pds/test/vectors/`, each with a provenance row in
+`pds/test/VECTOR-PROVENANCE.txt`:
+
+- `multibase_basic.csv`, `multibase_leading_zero.csv`,
+  `multibase_two_leading_zeros.csv` — byte-verbatim from
+  `multiformats/multibase`'s own `tests/*.csv` (grades `multibaseBase58btc`
+  end-to-end, including 1- and 2-leading-zero-byte inputs).
+- `multicodec_table.csv` — byte-verbatim from `multiformats/multicodec`'s
+  `table.csv` (grades the five multicodec constants this project needs).
+- `base58_draft_msporny_02.txt` — hand-transcribed from IETF
+  `draft-msporny-base58-02` (the alphabet + its 3 published test vectors).
+  **This file discloses a known erratum** in the draft's own third vector
+  (a leading-zero-byte case): the draft's stated output is inconsistent with
+  its own algorithm — see the file's own comment and
+  `pds/lib/base58.mdk`'s `base58btcEncode` doc comment for the full
+  cross-check. The vector driver reports that one row as `ERRATUM`, not
+  `PASS`/`FAIL`.
+- `unsigned_varint_examples.txt` — hand-transcribed from
+  `multiformats/unsigned-varint`'s README (6 worked encodings + the one
+  published non-minimal-encoding rejection case).
+
+**Multiformats unsigned-varint is NOT `sqlite/lib/varint.mdk`.** They share a
+name and nothing else — LSB-first vs. BIG-endian payload concatenation,
+minimality-required vs. no minimality requirement. See
+`pds/lib/multiformats.mdk`'s module header for the full contrast; never
+substitute one for the other.
+
+**16383** has no reachable published in-family vector (only 16384 does); it
+is covered by a structural boundary-length + round-trip property in
+`pds/test/encodings_test.mdk` instead of a transcribed answer key. The
+**empty base58 input** (`base58btcEncode [||] == ""`) is likewise asserted
+structurally — no in-family source publishes it.
+
+**Run the gates locally:**
+
+```sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/encodings_vectors.sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/inlang_test_oracle.sh
+```
