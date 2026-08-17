@@ -43,7 +43,7 @@ bytesToIntBEGo bytes i acc =
   if i >= arrayLength bytes then
     acc
   else
-    bytesToIntBEGo bytes (i + 1) (acc * 256 + arrayGetUnsafe i bytes)
+    bytesToIntBEGo bytes (i + 1) (acc * 256 + bytes[i])
 
 mustDecodeHex : String -> Array Int
 mustDecodeHex s = match decode s

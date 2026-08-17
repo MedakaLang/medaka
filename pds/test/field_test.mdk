@@ -14,6 +14,7 @@
    boundaries (every 26 bits, and the 26/22 seam at limb 9) are hit exactly
    rather than by hand-typed hex. -}
 
+import array.{set}
 import test.{expectEqual, expectTrue, expectFalse}
 import lib.field.{
   Fe,
@@ -39,7 +40,7 @@ import lib.field.{
 bitBytes : Int -> Array Int
 bitBytes k =
   let out = arrayMake 32 0
-  let () = arraySetUnsafe (31 - shiftRight k 3) (shiftLeft 1 (k - shiftLeft (shiftRight k 3) 3)) out
+  let () = set (31 - shiftRight k 3) (shiftLeft 1 (k - shiftLeft (shiftRight k 3) 3)) out
   out
 
 -- 32 big-endian bytes, decremented by one (wraps at 0, which no input here
@@ -54,11 +55,11 @@ decGo : Array Int -> Int -> Unit
 decGo out i =
   if i < 0 then ()
   else
-    let v = arrayGetUnsafe i out
+    let v = out[i]
     if v == 0 then
-      let () = arraySetUnsafe i 255 out
+      let () = set i 255 out
       decGo out (i - 1)
-    else arraySetUnsafe i (v - 1) out
+    else set i (v - 1) out
 
 allOnes : Array Int
 allOnes = arrayMake 32 255

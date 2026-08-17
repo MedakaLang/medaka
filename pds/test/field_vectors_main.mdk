@@ -37,6 +37,7 @@ import lib.field.{
   feNegate,
   feInverse,
 }
+import array.{set}
 import hex.{decode, encode}
 import string.{split, startsWith, toInt, trim}
 import io.{readLines}
@@ -68,7 +69,7 @@ opIndex op =
     -1
 
 bump : Array Int -> Int -> Unit
-bump arr i = arraySetUnsafe i (arrayGetUnsafe i arr + 1) arr
+bump arr i = set i (arr[i] + 1) arr
 
 -- ── Row evaluation ───────────────────────────────────────────────────
 
@@ -172,7 +173,7 @@ printOpCounts : Array Int -> Int -> <IO> Unit
 printOpCounts counts i =
   if i >= 7 then ()
   else
-    let () = println "op \{arrayGetUnsafe i opNames}: \{intToString (arrayGetUnsafe i counts)} ok"
+    let () = println "op \{opNames[i]}: \{intToString counts[i]} ok"
     printOpCounts counts (i + 1)
 
 parseArgs : List String -> (Int, List String)
@@ -196,9 +197,9 @@ main =
     let totals = arrayMake 3 0
     let () = runAll counts totals stride files
     let () = printOpCounts counts 0
-    let checked = arrayGetUnsafe 0 totals
-    let failed = arrayGetUnsafe 1 totals
-    let skipped = arrayGetUnsafe 2 totals
+    let checked = totals[0]
+    let failed = totals[1]
+    let skipped = totals[2]
     let () = println "counted: \{intToString (checked - failed)}/\{intToString checked} rows ok, \{intToString skipped} skipped (stride \{intToString stride})"
     if failed > 0 || checked == 0 then
       let () = println "TOTAL: FAIL"
