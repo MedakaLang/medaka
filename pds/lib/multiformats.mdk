@@ -1,0 +1,224 @@
+{- multiformats.mdk — unsigned-varint (LEB128), multicodec prefix constants,
+   and multibase `z`-prefixed base58btc.
+
+   ⚠️ COLLISION WARNING [#1701's named trap]. This is the multiformats
+   unsigned-varint (unsigned LEB128): 7 bits per byte **starting with the
+   LEAST significant**, continuation flag in the high bit, **minimally
+   encoded** (a non-minimal encoding MUST be rejected), practical maximum 9
+   bytes / 63 bits (multiformats/unsigned-varint README.md, pinned commit
+   dd184f1ce89c81808503bb719b5fcb13844d08f3).
+
+   ⚠️ THIS IMPLEMENTATION'S CEILING IS LOWER THAN THE SPEC'S. The citation
+   above is faithful: upstream permits 63 payload bits, i.e. the whole range
+   `[0, 2^63-1]`. Medaka's `Int` is a 63-bit SIGNED fixnum whose maximum is
+   `intMaxBound = 2^62 - 1 = 4611686018427387903`, so the spec-legal values
+   in `[2^62, 2^63-1]` are NOT representable here and `uvarintDecode`
+   REJECTS them with `"uvarint: value exceeds the representable Int range
+   (max 2^62-1)"`. This is a restriction of ours, not a defect in the spec —
+   do not "fix" it by widening the citation.
+
+   **It is NOT `sqlite/lib/varint.mdk`.**
+   That is SQLite's own scheme: the decoded value is the **BIG-endian**
+   concatenation of the payload groups, byte 9 carries all 8 bits, and it
+   imposes no minimality requirement. The two share a name and nothing else;
+   they must never be shared, substituted, or "unified".
+
+   Multicodec codes: multiformats/multicodec table.csv, pinned commit
+   38e3bf3e38f613679d76ef2041d73a8060f8622a (pds/test/vectors/multicodec_table.csv).
+   `secp256k1-pub` (0xe7) and `p256-pub` (0x1200) carry table `status: draft`;
+   `sha2-256` (0x12), `raw` (0x55) and `dag-cbor` (0x71) are `permanent`.
+
+   The multibase `z` prefix for base58btc is fixed by the multiformats
+   authority with status `final` (multiformats/multibase README.md, pinned
+   commit d7406cdea189b82a0b3937f5737b440f5fa92f92, table row: "U+007a, z,
+   base58btc, Base58 Bitcoin, final"). -}
+
+import array.{get}
+import string.{stripPrefix}
+import lib.base58.{base58btcEncode, base58btcDecode}
+
+byteAt : Int -> Array Int -> Int
+byteAt i arr = match get i arr
+  Some b => b
+  None => panic "multiformats: byte index out of bounds"
+
+-- ── unsigned-varint (LEB128) ─────────────────────────────────────────────
+
+-- | Practical maximum byte length of an unsigned-varint (63 usable bits).
+export uvarintMaxBytes : Int
+uvarintMaxBytes = 9
+
+uvarintEncodeGo : Int -> List Int
+uvarintEncodeGo n =
+  if n < 128 then
+    [n]
+  else
+    bitOr (bitAnd n 0x7f) 0x80 :: uvarintEncodeGo (shiftRight n 7)
+
+{- | Non-negative `Int` -> minimal unsigned-varint bytes (LSB-first, 7 bits
+   per byte, continuation bit `0x80` set on every byte but the last).
+
+   > uvarintEncode 1
+   [|1|]
+   > uvarintEncode 127
+   [|127|]
+   > uvarintEncode 128
+   [|128, 1|]
+   > uvarintEncode 255
+   [|255, 1|]
+   > uvarintEncode 300
+   [|172, 2|]
+   > uvarintEncode 16384
+   [|128, 128, 1|] -}
+export uvarintEncode : Int -> Array Int
+uvarintEncode n =
+  if n < 0 then
+    -- unsigned-varint encodes non-negative values only, and
+    -- `uvarintEncodeGo`'s `n < 128` test is TRUE for every negative `n`, so
+    -- without this guard a negative argument silently produces a 1-element
+    -- array holding that negative value. Not `Result`-typed (the signature
+    -- is `Int -> Array Int` and `multicodecPrefix` is total on constants),
+    -- so this panics — same in-family precedent as
+    -- `pds/lib/field.mdk`'s `feFromBytesReduce`.
+    --
+    -- ⚠️ `uvarintDecode` must never REACH this panic: it is `Result`-typed,
+    -- and turning a correct `Err` into a process abort would break its own
+    -- type-level promise. That is what its explicit `value < 0` arm is for.
+    panic "uvarint: negative value \{intToString n} (unsigned-varint encodes non-negative values only)"
+  else
+    arrayFromList (uvarintEncodeGo n)
+
+-- Read one varint from `bytes` starting at `idx`, accumulating `acc` with
+-- `shift` bits already placed. `Err` on truncation (ran out of input while
+-- the continuation bit was still set) or over-length (more than
+-- `uvarintMaxBytes` bytes).
+uvarintDecodeGo : Array Int -> Int -> Int -> Int -> Int -> Result String (Int, Int)
+uvarintDecodeGo bytes idx n shift acc =
+  if idx >= uvarintMaxBytes then Err "uvarint: over-long (more than 9 bytes)"
+  else
+    if idx >= n then Err "uvarint: truncated (input ended with the continuation bit still set)"
+    else
+      let b = byteAt idx bytes
+      let acc2 = acc + shiftLeft (bitAnd b 0x7f) shift
+      if bitAnd b 0x80 == 0 then
+        Ok (acc2, idx + 1)
+      else
+        uvarintDecodeGo bytes (idx + 1) n (shift + 7) acc2
+
+-- Byte-for-byte comparison of `bytes[0 .. len)` against `expected`, used to
+-- confirm a decoded value's canonical (minimal) re-encoding matches what
+-- was actually consumed.
+prefixEquals : Array Int -> Array Int -> Int -> Int -> Bool
+prefixEquals a b i len =
+  if i >= len then
+    True
+  else if byteAt i a != byteAt i b then
+    False
+  else
+    prefixEquals a b (i + 1) len
+
+{- | Decode one unsigned-varint from the front of `bytes`. `Ok (value,
+   bytesConsumed)`. `Err` on a non-minimal encoding (the published
+   `{0x81, 0x00}` case — a longer-than-necessary encoding of `1`),
+   a truncated encoding, an over-long (>9 byte) encoding, or a value outside
+   the representable `Int` range (see the module header: spec-legal values in
+   `[2^62, 2^63-1]` do not fit Medaka's 63-bit signed `Int`).
+
+   > uvarintDecode (arrayFromList [172, 2])
+   Ok (300, 2)
+   > uvarintDecode (arrayFromList [0x81, 0x00])
+   Err "uvarint: non-minimal encoding" -}
+export uvarintDecode : Array Int -> Result String (Int, Int)
+uvarintDecode bytes = match uvarintDecodeGo bytes 0 (arrayLength bytes) 0 0
+  Err e => Err e
+  Ok (value, consumed) =>
+    -- RANGE, checked FIRST and EXPLICITLY. Only the 9th byte can shift a
+    -- payload past `intMaxBound` (shifts of 49 or less contribute < 2^56),
+    -- and the accumulator wraps into the negatives exactly when the true
+    -- value is >= 2^62 — so `value < 0` is a total, exact discriminator for
+    -- "out of representable range", not a heuristic.
+    --
+    -- This used to be an INCIDENTAL catch and no longer is. Previously the
+    -- wrapped negative fell through to `uvarintEncode`, whose `n < 128` test
+    -- is true for negatives, so the re-encode came back 1 byte long and the
+    -- minimality check below rejected it — a correct rejection reached by
+    -- accident, and reported with the wrong diagnosis ("non-minimal") for
+    -- what is in fact a perfectly minimal encoding of an unrepresentable
+    -- value. It is now stated where it happens.
+    if value < 0 then
+      Err "uvarint: value exceeds the representable Int range (max 2^62-1)"
+    else
+      -- MINIMALITY, and after the arm above it covers minimality ONLY. Do
+      -- not refactor it away as redundant with the range check: it is the
+      -- sole enforcement of the spec's MUST-reject-non-minimal-encoding
+      -- requirement (the published `{0x81, 0x00}` case), which the range
+      -- check does not touch.
+      let reencoded = uvarintEncode value
+      if arrayLength reencoded != consumed || !(prefixEquals reencoded bytes 0 consumed) then
+        Err "uvarint: non-minimal encoding"
+      else
+        Ok (value, consumed)
+
+{- | `uvarintDecode`, additionally requiring the WHOLE input be consumed.
+
+   > uvarintDecodeAll (arrayFromList [172, 2])
+   Ok 300 -}
+export uvarintDecodeAll : Array Int -> Result String Int
+uvarintDecodeAll bytes = match uvarintDecode bytes
+  Err e => Err e
+  Ok (value, consumed) =>
+    if consumed != arrayLength bytes then
+      Err "uvarint: trailing bytes after value"
+    else
+      Ok value
+
+-- ── multicodec constants (multicodec_table.csv, pinned commit above) ─────
+
+-- | `sha2-256`, tag `multihash`, `permanent`.
+export multicodecSha2_256 : Int
+multicodecSha2_256 = 0x12
+
+-- | `raw`, tag `ipld`, `permanent`.
+export multicodecRaw : Int
+multicodecRaw = 0x55
+
+-- | `dag-cbor`, tag `ipld`, `permanent`.
+export multicodecDagCbor : Int
+multicodecDagCbor = 0x71
+
+-- | `secp256k1-pub`, tag `key`, table status `draft`.
+export multicodecSecp256k1Pub : Int
+multicodecSecp256k1Pub = 0xe7
+
+-- | `p256-pub`, tag `key`, table status `draft`.
+export multicodecP256Pub : Int
+multicodecP256Pub = 0x1200
+
+{- | A multicodec code's unsigned-varint prefix bytes.
+
+   > multicodecPrefix multicodecSecp256k1Pub
+   [|231, 1|]
+   > multicodecPrefix multicodecP256Pub
+   [|128, 36|] -}
+export multicodecPrefix : Int -> Array Int
+multicodecPrefix code = uvarintEncode code
+
+-- ── multibase base58btc (`z` prefix, status final) ────────────────────────
+
+{- | Bytes -> multibase-prefixed base58btc string (`"z" ++ base58btcEncode`).
+
+   > multibaseBase58btc [||]
+   "z" -}
+export multibaseBase58btc : Array Int -> String
+multibaseBase58btc bytes = "z" ++ base58btcEncode bytes
+
+{- | The exact inverse of `multibaseBase58btc`. `Err` when the leading `z`
+   is missing, or when the remainder is not valid base58btc.
+
+   > multibaseBase58btcDecode "z"
+   Ok [||] -}
+export multibaseBase58btcDecode : String -> Result String (Array Int)
+multibaseBase58btcDecode s = match stripPrefix "z" s
+  Some rest => base58btcDecode rest
+  None =>
+    Err "multibaseBase58btcDecode: missing 'z' (base58btc) multibase prefix"

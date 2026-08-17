@@ -1,0 +1,337 @@
+# pds/test/VECTOR-PROVENANCE.txt — provenance for every vector file under pds/test/
+#
+# WHY THIS EXISTS  (docs/design/ATPROTO-PDS-DESIGN.md §5, G5)
+#   G5: "No golden is ever captured from our own implementation in Phases 0-1.
+#   Capturing a golden records what the engine did, not what is correct; on a
+#   protocol where correctness is defined by other people's implementations, a
+#   self-captured golden is not weak evidence but *anti*-evidence, since it
+#   converts a bug into the defended expected output."
+#   The design also states G5 has NO mechanical enforcement, and names this file
+#   as the remedy: "require every vector file to carry a committed provenance URL
+#   and digest, and add a gate that fails on any vector file lacking one … a
+#   ledger that self-drains, in the style of test/EXTERN-DOMAIN-LEDGER.txt".
+#   The gate is pds/test/vector_provenance.sh.
+#
+# WHAT THIS LEDGER PROVES, AND WHAT IT DOES NOT
+#
+#   PROVES — mechanically, offline, on every CI run:
+#     - every vector file under pds/test/ has exactly one [vector] stanza here;
+#     - that file's CURRENT bytes still hash to the local-sha256 in its stanza,
+#       i.e. nobody edited a vector after its row was written;
+#     - every reference-impl row names an [impl] stanza that pins one
+#       repo + version + commit, and no two [impl] stanzas pin the same id to
+#       different commits — ONE answer key for the sprint, not one per slice;
+#     - every key required for the row's kind is present and well-formed.
+#
+#   DOES NOT PROVE:
+#     - that source-url was ever fetched, or that the bytes at that URL hash to
+#       source-sha256. THIS GATE HAS NO NETWORK. source-sha256 is an audit anchor
+#       for a human reviewer, not a checked column.
+#     - that the recorded values actually came from the cited source. A row with a
+#       correct local-sha256 and a fabricated source-url PASSES. This ledger makes
+#       a self-captured golden into a written, attributed, falsifiable claim that a
+#       reviewer can check by hand; it does not detect one.
+#     - anything about expected values that are not in a vector file — inline
+#       literals in a pds/**/*_test.mdk, or a .mdk data module, are invisible here
+#       BY CONSTRUCTION. Put expected values in a vector file under pds/test/.
+#     - a vector file placed ANYWHERE ELSE in the project (e.g. under
+#       pds/lib/vectors/) — the gate PASSES, silently (MEASURED). This is
+#       DELIBERATELY NOT MECHANIZED: widening enumeration to all of pds/ would
+#       demand a row for pds/README.md, pds/medaka.toml, and every pds/lib/*.mdk,
+#       trading a documented hole for a false-positive generator
+#       (RUN-PDS0-009 F6). This is why the corpus-location rule below is an
+#       IMPERATIVE, not just a description of what gets checked.
+#     - a SYMLINKED corpus file's bytes: a symlink is enumerated and REJECTED
+#       outright (never resolved), so the ledger makes no claim whatsoever about
+#       bytes that live outside this repository.
+#     - a corpus file named *.sh: it is excluded from THIS gate's enumeration by
+#       name, same as any *.mdk. That is a compensating control in a DIFFERENT
+#       gate, not this gate's own coverage — committing e.g.
+#       pds/test/vectors/foo.sh reds test/diff_compiler_ci_shard_coverage.sh
+#       (it enumerates every tracked *.sh and no shard pattern selects that
+#       path), not this one.
+#     - that an [impl] stanza's commit: is actually a COMMIT. A well-formed
+#       40-lowercase-hex value that is a TAG OBJECT rather than a commit passes
+#       every well-formedness and pin-agreement check here. The pin is checked
+#       to be single-valued; it is NOT proven to be a commit. Derive it with
+#       `git rev-parse '<tag>^{commit}'` — never a bare `rev-parse` or an
+#       `ls-remote` on an annotated tag ref, both of which can hand back the
+#       tag object's sha (RUN-PDS0-016).
+#
+# VECTOR CORPORA MUST LIVE UNDER pds/test/. That is not merely descriptive —
+# it is the instruction to every consumer slice (S-sha256, S-encodings,
+# S-field, S-scalar, …): a file placed elsewhere is invisible to this gate
+# (see DOES NOT PROVE, above). The gate's actual enumeration (mechanism, not
+# policy): every regular file AND every symlink under pds/test/ at any depth,
+# EXCEPT *.sh, *.mdk, and this file. A .md under pds/test/ therefore needs a
+# row too: put prose in pds/README.md instead. A symlink is enumerated and
+# then REJECTED with a named failure — never silently dropped, never followed.
+#
+# FORMAT
+#   Stanzas. A stanza opens with [impl] or [vector] alone on a line and runs to
+#   the next stanza header or EOF. Inside: "key: value", one per line; the value
+#   is the rest of the line, surrounding whitespace stripped; values are
+#   single-line (no continuations). Blank lines, and lines whose first non-blank
+#   character is '#', are ignored anywhere. An UNKNOWN key is an ERROR, not a
+#   comment — that is the typo guard. A stanza header other than [impl] or
+#   [vector] is ALSO an error, naming the line — same typo guard, opposite
+#   failure direction: a mistyped header (e.g. [vecter]) must not be silently
+#   skipped, taking its vector file's row with it.
+#
+#   [impl] — one per reference implementation used anywhere in this sprint.
+#     id         short handle; [vector] rows reference it            REQUIRED
+#     repo       URL of the source repository                        REQUIRED
+#     version    release tag or version string                       REQUIRED
+#     commit     40 hex — the exact commit corpora were generated at REQUIRED
+#     retrieved  YYYY-MM-DD                                          REQUIRED
+#     notes      free text                                           optional
+#
+#   [vector] — exactly one per vector file.
+#     file           repo-relative path of the vector file           REQUIRED
+#     local-sha256   64 hex of THAT FILE's bytes; gate recomputes it REQUIRED
+#     kind           published-artifact | reference-impl             REQUIRED
+#     source-url     where a reviewer goes to check this             REQUIRED
+#     extraction     how the values got from the source into the file REQUIRED
+#     retrieved      YYYY-MM-DD                                      REQUIRED
+#     consumer       slice-id + issue with its handle                REQUIRED
+#     source         artifact title/identifier
+#                                      REQUIRED iff kind=published-artifact
+#     source-sha256  64 hex of the fetched artifact's bytes, or the literal
+#                    token UNAVAILABLE
+#                                      REQUIRED iff kind=published-artifact
+#     source-note    why the artifact is not byte-digestible, OR why a withdrawn
+#                    edition is still the right answer key
+#                                      REQUIRED iff source-sha256=UNAVAILABLE
+#                                      OR the row cites a withdrawn/superseded
+#                                      edition (RUN-PDS0-008 D1: disclosure is
+#                                      the price of the widened in-class set)
+#     impl           an [impl] stanza's id
+#                                      REQUIRED iff kind=reference-impl
+#     notes          free text                                       optional
+#
+#   THE TWO DIGEST COLUMNS HAVE DIFFERENT JOBS. local-sha256 is GATE-CHECKED and
+#   catches drift after the fact was recorded. source-sha256 is AUDIT-ONLY and is
+#   what lets a human re-fetch the artifact and confirm the bytes. Neither can
+#   detect a fabricated source-url; see DOES NOT PROVE, above.
+#
+# ── WORKED EXAMPLE — kind: published-artifact ────────────────────────────────
+#   (EXAMPLE ONLY. The digests below are all-zeros and are not real values.)
+#
+#   [vector]
+#   file:          pds/test/vectors/sha256_fips180_4.txt
+#   local-sha256:  0000000000000000000000000000000000000000000000000000000000000000
+#   kind:          published-artifact
+#   source:        FIPS PUB 180-4, Secure Hash Standard, Appendix B.1-B.3 worked examples
+#   source-url:    https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.180-4.pdf
+#   source-sha256: 0000000000000000000000000000000000000000000000000000000000000000
+#   extraction:    hand-transcribed from Appendix B.1/B.2/B.3; each digest read back twice against the PDF
+#   retrieved:     2026-08-17
+#   consumer:      S-sha256 (#1698 sha256 FIPS 180-4)
+#
+# ── WORKED EXAMPLE — kind: reference-impl ────────────────────────────────────
+#   (EXAMPLE ONLY. The commit and digest below are all-zeros and are not real.)
+#
+#   [impl]
+#   id:            libsecp256k1
+#   repo:          https://github.com/bitcoin-core/secp256k1
+#   version:       v0.0.0
+#   commit:        0000000000000000000000000000000000000000
+#   retrieved:     2026-08-17
+#   notes:         the 10x2^26 field layout this project mirrors (design P10, #1699)
+#
+#   [vector]
+#   file:          pds/test/vectors/field_mul_corpus.txt
+#   local-sha256:  0000000000000000000000000000000000000000000000000000000000000000
+#   kind:          reference-impl
+#   impl:          libsecp256k1
+#   source-url:    https://github.com/bitcoin-core/secp256k1/tree/v0.0.0/src/field_10x26_impl.h
+#   extraction:    pds/tools/gen_field_corpus.sh — builds libsecp256k1 at the pinned commit, drives secp256k1_fe_mul over a fixed input list, prints hex in/out pairs; re-running must reproduce this file byte-for-byte
+#   retrieved:     2026-08-17
+#   consumer:      S-field (#1699 field 10x2^26 limbs)
+#
+# ── POLICY: WHICH ANSWER KEY A SLICE MAY USE ─────────────────────────────────
+#   published-artifact — the answer key is a DOCUMENT.
+#
+#     ⚠️ THE WORDING BELOW WAS SUPERSEDED MID-SPRINT. [RUN-PDS0-005 E2] named
+#     DOCUMENT TITLES where it meant AUTHORITY; [RUN-PDS0-008 D1] restated it,
+#     and the RESTATEMENT is the policy in force:
+#
+#       An artifact is admissible when (i) it is issued by the STANDARD-SETTING
+#       AUTHORITY for the specification under test, AND (ii) it is a member of
+#       THAT SPECIFICATION'S OWN DOCUMENT FAMILY — including superseded and
+#       WITHDRAWN editions, PROVIDED THE ROW DISCLOSES THE STATUS in a
+#       source-note (see the source-note key above). WHICH document within the
+#       family is a leaf choice; outside the family is a refusal to the brain,
+#       not an in-slice decision.
+#
+#     THIS IS NOT BOOKKEEPING — LIVE ROWS IN THIS FILE DEPEND ON THE WIDENING.
+#     The sha256_worked_examples.txt row cites the WITHDRAWN FIPS PUB 180-2, and
+#     the base58_draft_msporny_02.txt row cites an EXPIRED Internet-Draft.
+#     Neither is admissible under the superseded wording below; both are
+#     admissible, with their source-notes, under the restatement above.
+#
+#     SUPERSEDED BY RUN-PDS0-008 D1 — retained so the change stays legible, NOT
+#     to be applied to any new row:
+#       [RUN-PDS0-005 E2] The artifact must fall WITHIN THE CLASS its consumer
+#       issue already names — FIPS PUB 180-4 or a NIST CAVS corpus for S-sha256
+#       (#1698); published base58btc vectors or the published multicodec table
+#       for S-encodings (#1701).
+#
+#     Under either wording the row still records source, source-url,
+#     source-sha256 (or UNAVAILABLE + source-note), and extraction.
+#   reference-impl — the answer key is a PROGRAM, and the choice is a judgment
+#     that is settled ONCE for the sprint, not per slice:
+#       * for pds/lib/field.mdk and pds/lib/scalar.mdk the reference
+#         implementation is libsecp256k1 (bitcoin-core/secp256k1). This is a
+#         RECORDING of design decision P10 — the 10x2^26 layout was chosen FOR
+#         cross-checkability against that implementation — not a new choice. A
+#         slice may not substitute another implementation; if it believes it must,
+#         that is a refusal to the brain, not an in-slice decision.
+#       * the VERSION is pinned by whichever slice extracts FIRST: it writes the
+#         [impl] stanza (version + 40-hex commit). Every later slice REUSES that
+#         id, and the gate REDS on a second [impl] stanza pinning the same id to a
+#         different commit. That is what makes the pin single-valued without this
+#         file having to guess a version in advance.
+#       * extraction must name a COMMITTED procedure (a script path, or a written
+#         procedure in pds/README.md) that regenerates the file byte-for-byte.
+#         "I ran something locally" is not an extraction procedure.
+#
+# ── LIVE ROWS ────────────────────────────────────────────────────────────────
+
+[vector]
+file:          pds/test/vectors/SHA256ShortMsg.rsp
+local-sha256:  75e1cb83994638481808e225b9eb0c1ebd0c232d952ac42b61abce6363be283c
+kind:          published-artifact
+source:        NIST CAVS SHS byte-oriented test vectors, SHA256ShortMsg.rsp (from shabytetestvectors.zip)
+source-url:    https://csrc.nist.gov/CSRC/media/Projects/Cryptographic-Algorithm-Validation-Program/documents/shs/shabytetestvectors.zip
+source-sha256: 929ef80b7b3418aca026643f6f248815913b60e01741a44bba9e118067f4c9b8
+extraction:    unzip shabytetestvectors.zip; copy SHA256ShortMsg.rsp verbatim (CRLF preserved, no edits)
+retrieved:     2026-08-17
+consumer:      S-sha256 (#1698 sha256 FIPS 180-4)
+
+[vector]
+file:          pds/test/vectors/SHA256LongMsg.rsp
+local-sha256:  6fac36f37360bcf74ffcf4465c18e30d6d5a04cc90885b901fc3130c16060974
+kind:          published-artifact
+source:        NIST CAVS SHS byte-oriented test vectors, SHA256LongMsg.rsp (from shabytetestvectors.zip)
+source-url:    https://csrc.nist.gov/CSRC/media/Projects/Cryptographic-Algorithm-Validation-Program/documents/shs/shabytetestvectors.zip
+source-sha256: 929ef80b7b3418aca026643f6f248815913b60e01741a44bba9e118067f4c9b8
+extraction:    unzip shabytetestvectors.zip; copy SHA256LongMsg.rsp verbatim (CRLF preserved, no edits)
+retrieved:     2026-08-17
+consumer:      S-sha256 (#1698 sha256 FIPS 180-4)
+notes:         #1698's acceptance list names a 65-byte cell; NO 65-byte vector exists anywhere in the NIST CAVS byte corpus, so RUN-PDS0-008 D3 substituted this file's Len = 9224 record (1153 bytes). The property that cell tests is the FINAL-BLOCK SHAPE — the last 512-bit block carries exactly one message byte plus 0x80, padding, and the 8-byte length field — NOT merely a length in the same residue class mod 64. 1153 mod 64 = 1 gives exactly that shape, as 65 would, so no distinguishable failure mode is lost. Neighbouring risks are covered separately: the SMALLEST two-block input by CAVS Len=448 (SHA256ShortMsg.rsp), and the length boundaries by Len=440/448/504/512. The substitution was also forced — constructing a 65-byte vector ourselves would be a self-captured golden, violating G5 in the slice G5 governs.
+
+[vector]
+file:          pds/test/vectors/sha256_worked_examples.txt
+local-sha256:  1b40ab001701331ce8df08ef07c7b6269f2b0b30acec14be9263532b710fa66d
+kind:          published-artifact
+source:        FIPS PUB 180-2, Secure Hash Standard (2002), Appendix B.1/B.2/B.3 worked examples
+source-url:    https://csrc.nist.gov/files/pubs/fips/180-2/final/docs/fips180-2.pdf
+source-sha256: 1ac8c64a78c0b1e2fdb4c346da117fdf6bea713220a3b6d932080f1834d517c1
+source-note:   FIPS PUB 180-2 is WITHDRAWN, superseded by FIPS PUB 180-4 — it remains the correct answer key here because (a) the SHA-256 algorithm is bit-identical between the two editions (180-4's Appendix C "Technical Changes from FIPS 180-3" lists no SHA-256 change), and (b) Appendix B of 180-2 is the ORIGIN of these three worked examples, which 180-4 dropped entirely (its extracted table of contents has no examples appendix). In-class under RUN-PDS0-008's restated RUN-PDS0-005 E2 (any NIST SHS publication, FIPS 180-x including the withdrawn 180-2, provided a withdrawn-edition row carries this note).
+extraction:    hand-transcribed from Appendix B.1 (Len=24, "abc"), B.2 (Len=448, the 56-char string), and B.3 (Len=8, Repeat=1000000, "a"*1000000); each digest and each message string read back twice against `pdftotext -layout` output of the PDF, and cross-checked against Python hashlib's sha256 of the same plaintext before being committed
+retrieved:     2026-08-17
+consumer:      S-sha256 (#1698 sha256 FIPS 180-4)
+
+[vector]
+file:          pds/test/vectors/multibase_basic.csv
+local-sha256:  5187b285a345c57bf3bf37df492d052d9a7ccf4c72c3084afa15599fedd9a32e
+kind:          published-artifact
+source:        multiformats/multibase tests/basic.csv
+source-url:    https://raw.githubusercontent.com/multiformats/multibase/d7406cdea189b82a0b3937f5737b440f5fa92f92/tests/basic.csv
+source-sha256: 5187b285a345c57bf3bf37df492d052d9a7ccf4c72c3084afa15599fedd9a32e
+extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
+retrieved:     2026-08-17
+consumer:      S-encodings (#1701 encodings base58btc + multiformats)
+notes:         pinned commit d7406cdea189b82a0b3937f5737b440f5fa92f92; base58btc row is line 19; grades multibaseBase58btc end-to-end (the expected string carries the multibase 'z' prefix)
+
+[vector]
+file:          pds/test/vectors/multibase_leading_zero.csv
+local-sha256:  c50e9f08313638337df1ab15303e9d1b9b749c83783dd42b9ce7ceb638f3d1a8
+kind:          published-artifact
+source:        multiformats/multibase tests/leading_zero.csv
+source-url:    https://raw.githubusercontent.com/multiformats/multibase/d7406cdea189b82a0b3937f5737b440f5fa92f92/tests/leading_zero.csv
+source-sha256: c50e9f08313638337df1ab15303e9d1b9b749c83783dd42b9ce7ceb638f3d1a8
+extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
+retrieved:     2026-08-17
+consumer:      S-encodings (#1701 encodings base58btc + multiformats)
+notes:         pinned commit d7406cdea189b82a0b3937f5737b440f5fa92f92; base58btc row is line 19; input is one 0x00 byte prepended to "yes mani !" (tests/README.md); 1 leading zero byte
+
+[vector]
+file:          pds/test/vectors/multibase_two_leading_zeros.csv
+local-sha256:  5575989d5d4b11893f15332cb887d3fb7083b7e3f7589f256b6e18f649363543
+kind:          published-artifact
+source:        multiformats/multibase tests/two_leading_zeros.csv
+source-url:    https://raw.githubusercontent.com/multiformats/multibase/d7406cdea189b82a0b3937f5737b440f5fa92f92/tests/two_leading_zeros.csv
+source-sha256: 5575989d5d4b11893f15332cb887d3fb7083b7e3f7589f256b6e18f649363543
+extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
+retrieved:     2026-08-17
+consumer:      S-encodings (#1701 encodings base58btc + multiformats)
+notes:         pinned commit d7406cdea189b82a0b3937f5737b440f5fa92f92; base58btc row is line 19; input is two 0x00 bytes prepended to "yes mani !" (tests/README.md); 2 leading zero bytes — #1701's named classic-bug cell
+
+[vector]
+file:          pds/test/vectors/multicodec_table.csv
+local-sha256:  a82260ff027287d4e4b794c800e0d7eb9f8222f17efefd0b679c55530a80e7d3
+kind:          published-artifact
+source:        multiformats/multicodec table.csv
+source-url:    https://raw.githubusercontent.com/multiformats/multicodec/38e3bf3e38f613679d76ef2041d73a8060f8622a/table.csv
+source-sha256: a82260ff027287d4e4b794c800e0d7eb9f8222f17efefd0b679c55530a80e7d3
+extraction:    committed byte-verbatim as fetched; curl -sS <url> | cmp - <file> reproduces it
+retrieved:     2026-08-17
+consumer:      S-encodings (#1701 encodings base58btc + multiformats)
+notes:         pinned commit 38e3bf3e38f613679d76ef2041d73a8060f8622a; secp256k1-pub (0xe7) and p256-pub (0x1200) carry table status:draft; sha2-256 (0x12), raw (0x55) and dag-cbor (0x71) are permanent; identity (0x00) appears twice in this file — name is not a unique key
+
+[vector]
+file:          pds/test/vectors/base58_draft_msporny_02.txt
+local-sha256:  a90cb7a282af8059ce84199bc07f4d201e819db48ab1610e671b2e38a9d0bc1f
+kind:          published-artifact
+source:        IETF draft-msporny-base58-02, "The Base58 Encoding Scheme"
+source-url:    https://www.ietf.org/archive/id/draft-msporny-base58-02.txt
+source-sha256: a37072640e1c4eea65fe8e1252ab9cb198f7c2903b804afe2cd65046461e6e06
+extraction:    hand-transcribed from §2 (alphabet) and §5 (3 test vectors); each row read back twice against the fetched .txt file
+retrieved:     2026-08-17
+consumer:      S-encodings (#1701 encodings base58btc + multiformats)
+source-note:   EXPIRED Internet-Draft (Expires: May 4, 2021, per every page footer). Admitted per RUN-PDS0-008 because multiformats/multibase's own README.md (pinned commit d7406cdea189b82a0b3937f5737b440f5fa92f92, line 104) normatively cites this exact document, verbatim: "`base58btc` https://datatracker.ietf.org/doc/html/draft-msporny-base58-02" — no successor document exists.
+notes:         KNOWN ERRATUM in this row 3 (leading-zero vector): the draft's own §5 states 0x0000287fb4cd -> "111233QC4", which is inconsistent with the draft's OWN §3-4 algorithm applied to that stated input (a correct implementation yields "11233QC4", cross-checked against the independent `base58` PyPI package). Disclosed in the vector file itself and in pds/lib/base58.mdk's base58btcEncode doc comment; not graded as pass/fail by the driver. Rows 1-2 (Hello World! / quick brown fox) verified correct against the same independent library.
+
+[vector]
+file:          pds/test/vectors/unsigned_varint_examples.txt
+local-sha256:  5d1b8fb04553e3ead4e1c3483173dbf6c9511f9c766de440b03d6c214f497c77
+kind:          published-artifact
+source:        multiformats/unsigned-varint README.md
+source-url:    https://raw.githubusercontent.com/multiformats/unsigned-varint/dd184f1ce89c81808503bb719b5fcb13844d08f3/README.md
+source-sha256: 23f6df40bcb6630c45d3f29343a913c61c035d2aaf210666173a6b54a075171b
+extraction:    hand-transcribed from the "Examples:" fenced block (6 rows) and the "What do we mean by minimally encoded?" paragraph's one published non-minimal counter-example; each row read back twice against the fetched README.md
+retrieved:     2026-08-17
+consumer:      S-encodings (#1701 encodings base58btc + multiformats)
+notes:         pinned commit dd184f1ce89c81808503bb719b5fcb13844d08f3; current spec, no status caveat; 16383 is not in this block (no reachable in-family source publishes it — covered structurally by pds/test/encodings_test.mdk instead, per packet §3 deviation 2)
+
+[impl]
+id:            libsecp256k1
+repo:          https://github.com/bitcoin-core/secp256k1
+version:       v0.8.0
+commit:        6e2c8bc4ecdc6e71dbe7a368f360d8d453ce435d
+retrieved:     2026-08-17
+notes:         the 10x2^26 field layout this project mirrors (design P10, #1699 field 10x2^26 limbs); corpora are generated with -DUSE_FORCE_WIDEMUL_INT64=1 so the oracle runs the SAME limb layout. The commit above is the PEELED commit of the ANNOTATED tag v0.8.0 (git rev-parse 'v0.8.0^{commit}'); the tag OBJECT is 18f07c42218765cd46148d74d9fe575795f56dce and is NOT what this key records.
+
+[vector]
+file:          pds/test/vectors/field_reference_corpus.txt
+local-sha256:  d181772ed58f7c8289c75f45061eaa7d34e0db72c008149f4c8d718fbb6fe560
+kind:          reference-impl
+impl:          libsecp256k1
+source-url:    https://github.com/bitcoin-core/secp256k1/tree/v0.8.0/src/field_10x26_impl.h
+extraction:    pds/tools/gen_field_corpus.sh — clones libsecp256k1 at the pinned tag, verifies the PEELED commit (git rev-parse 'v0.8.0^{commit}') against the pinned literal and exits nonzero on a mismatch, then compiles pds/tools/field_corpus_driver.c against the clone with cc -O2 -DUSE_FORCE_WIDEMUL_INT64=1 -I<clone> (no autotools/cmake — the field code is header-only), and runs it. The driver drives secp256k1_fe_{set_b32_mod,normalize,mul,sqr,add,negate,inv,get_b32} over a fixed input list EMBEDDED IN THE DRIVER (28 hand-specified edge values + 16 SplitMix64 draws from a literal seed; nothing is passed at run time except the output path) and prints hex rows. `sub` is negate-then-add: libsecp256k1 has no secp256k1_fe_sub. Re-running MUST reproduce this file byte-for-byte.
+retrieved:     2026-08-17
+consumer:      S-field (#1699 field 10x2^26 limbs)
+notes:         944 rows (955 lines incl. 11 header comments): red/sqr/neg/inv over all 44 inputs, and mul/add/sub over 256 pairs. Operands are RAW 32-byte big-endian values that may be >= p; results are canonical. `inv 0` is 0 in this reference and that convention is pinned here executably (RUN-PDS0-016 Q1).
+
+[vector]
+file:          pds/test/vectors/scalar_reference_corpus.txt
+local-sha256:  dc92d84355a96e4f432154cf123844b33d59711f0423578e8961bcaa846e5cb6
+kind:          reference-impl
+impl:          libsecp256k1
+source-url:    https://github.com/bitcoin-core/secp256k1/tree/v0.8.0/src/scalar_8x32_impl.h
+extraction:    pds/tools/gen_scalar_corpus.sh — clones libsecp256k1 at the pinned tag, verifies the PEELED commit (git rev-parse 'v0.8.0^{commit}') against the pinned literal and exits nonzero on a mismatch, then compiles pds/tools/scalar_corpus_driver.c against the clone with cc -O2 -DUSE_FORCE_WIDEMUL_INT64=1 -I<clone> (no autotools/cmake — the scalar code is header-only, reached through src/scalar_impl.h), and runs it. The driver drives secp256k1_scalar_{set_b32,get_b32,add,mul,negate,inverse,is_high} over a fixed input list EMBEDDED IN THE DRIVER (36 hand-specified edge values incl. n-2/n-1/n/n+1/n_h/n_h+1/2^255/2^256-1, plus 16 SplitMix64 draws from a literal seed; nothing is passed at run time except the output path) and prints hex rows. `sub` is negate-then-add: libsecp256k1 has no secp256k1_scalar_sub. Unlike the field corpus, -DUSE_FORCE_WIDEMUL_INT64=1 does NOT affect this answer key (a scalar's canonical 32 bytes are layout-independent); it is passed to keep the recipe identical to the field one. Re-running MUST reproduce this file byte-for-byte.
+retrieved:     2026-08-17
+consumer:      S-scalar (#1700 secp256k1 group ops + RFC 6979 + low-S)
+notes:         1028 rows (1042 lines incl. 14 header comments): red/neg/inv/high/ovf over all 52 inputs, and mul/add/sub over 256 pairs. Operands are RAW 32-byte big-endian values that may be >= n; results are canonical. `inv 0` is 0 in this reference and that convention is pinned here executably (RUN-PDS0-016 Q1). `ovf` rows record secp256k1_scalar_set_b32's overflow flag, i.e. the >= n boundary that scFromBytes rejects on. `high` rows are the STRICT low-S predicate s > floor(n/2), so high(n_h) is 0 and high(n_h+1) is 1.

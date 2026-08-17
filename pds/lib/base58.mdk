@@ -1,0 +1,264 @@
+{- base58.mdk — base58btc (Bitcoin alphabet) encoding/decoding of raw bytes.
+
+   Alphabet source: IETF `draft-msporny-base58-02` §2 "The Base58 Alphabet"
+   (pds/test/vectors/base58_draft_msporny_02.txt). That document is an
+   EXPIRED Internet-Draft (Expires: May 4, 2021) — it is used anyway because
+   the multiformats authority normatively cites it BY NAME as the definition
+   of `base58btc` (multiformats/multibase README.md, pinned commit
+   d7406cdea189b82a0b3937f5737b440f5fa92f92, line 104:
+   "`base58btc` https://datatracker.ietf.org/doc/html/draft-msporny-base58-02")
+   and no successor document exists. See pds/test/VECTOR-PROVENANCE.txt's
+   row for pds/test/vectors/base58_draft_msporny_02.txt for the full citation.
+
+   This is base58**btc** — the Bitcoin alphabet — NOT base58flickr and NOT the
+   Ripple alphabet; those are different orderings and MUST NOT be substituted
+   (draft-msporny-base58-02 §2, final paragraph).
+
+   **Leading-zero rule (the classic bug this module exists to get right).**
+   Base58 has no digit for zero, so a leading zero BYTE cannot be represented
+   as a base58 digit — it would simply vanish, because the encoding treats the
+   byte string as one big-endian integer and an integer has no leading zeros.
+   The fix is NOT numeric: each leading zero byte of the input is encoded as
+   one literal `'1'` character (the alphabet's zero-value digit), prepended to
+   the numeric encoding of the REMAINING bytes, as a wholly separate step from
+   the big-integer division. Conflating the two — e.g. trying to fold the
+   leading-zero count into the numeric conversion — is #1701's named bug
+   class; draft-msporny-base58-02 §5 publishes a two-leading-zero-byte vector
+   for exactly this reason (input `0x0000287fb4cd`) — though see
+   `base58btcEncode`'s doc comment below for a documented ERRATUM in that
+   specific vector's stated output. Leading-zero-byte handling is verified
+   independently via the multiformats/multibase vectors (site 3-5) as well. -}
+
+import array.{get, set, make}
+import string.{fromChars, toChars}
+
+export base58btcAlphabet : String
+base58btcAlphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+{- | Maximum input length, in CHARACTERS, that `base58btcDecode` will accept.
+
+   **This is a denial-of-service guard, NOT a protocol limit.** base58btc
+   itself imposes no length bound; this ceiling exists because
+   `base58btcDecode` is a trust boundary — it is the one function here that
+   consumes a remote-supplied string (RUN-PDS0-036 items #1 and #3). Without
+   it, two things happen on hostile input: the per-character validation walk
+   is not tail-recursive, so a long string of VALID characters ending in one
+   invalid character aborts the interpreter with a stack overflow instead of
+   returning `Err`; and the base58 -> base256 fold is O(n^2), so a long
+   ACCEPTED string is a cheap-to-send, expensive-to-process request.
+
+   Headroom, so the number is auditable rather than arbitrary: the longest
+   base58 string anywhere in `pds/test/vectors/` is 60 characters (the
+   draft-msporny-base58-02 §5 row-2 vector); a `did:key` for a compressed
+   secp256k1 public key is ~48 characters and a CIDv1 over a 32-byte digest
+   is ~49. 1024 is roughly 17x the largest artifact in this tree and 20x the
+   protocol values.
+
+   ⚠️ Deliberate asymmetry: `base58btcEncode` is NOT bounded (its input is an
+   `Array Int` built by first-party code, so it is not a trust boundary), so
+   encoding more than ~750 bytes produces a string this decoder will refuse.
+   That is intended — the guard is about hostile input, not round-trip
+   algebra. -}
+export base58btcMaxInputChars : Int
+base58btcMaxInputChars = 1024
+
+-- The alphabet as an array, for O(1) digit->char lookup during encode.
+alphabetChars : Array Char
+alphabetChars = toChars base58btcAlphabet
+
+-- ── shared small helpers ─────────────────────────────────────────────────
+
+byteAt : Int -> Array Int -> Int
+byteAt i arr = match get i arr
+  Some b => b
+  None => panic "base58: byte index out of bounds"
+
+charAtA : Int -> Array Char -> Char
+charAtA i arr = match get i arr
+  Some c => c
+  None => panic "base58: char index out of bounds"
+
+-- ── Encode ───────────────────────────────────────────────────────────────
+
+-- Number of leading zero BYTES in `bytes`, starting at index `i`.
+countLeadingZeroBytes : Array Int -> Int -> Int
+countLeadingZeroBytes bytes i
+  | i >= arrayLength bytes = i
+  | byteAt i bytes != 0 = i
+  | otherwise = countLeadingZeroBytes bytes (i + 1)
+
+-- One step of the classic byte-array-to-base58 long-division algorithm
+-- (the same shape as Bitcoin Core's own EncodeBase58, restated in
+-- draft-msporny-base58-02 §3): `buf` is a fixed-size scratch array holding
+-- base58 DIGITS (0..57), index `size - 1` is the least-significant digit
+-- slot and index `0` the most-significant. Folding one more input byte in
+-- means: starting from the least-significant slot, multiply the existing
+-- digit by 256, add the running carry, take the new digit as `carry % 58`,
+-- and propagate `carry / 58` toward the more-significant slots — until the
+-- carry is exhausted AND we have reached at least as far as any earlier
+-- byte reached (`length`). Returns the new `length`.
+carryByteIntoDigits : Array Int -> Int -> Int -> Int -> Int -> Int
+carryByteIntoDigits buf size i carry length =
+  let j = size - 1 - i
+  if carry == 0 && i >= length || j < 0 then i
+  else
+    let cur = carry + 256 * byteAt j buf
+    set j (cur % 58) buf
+    carryByteIntoDigits buf size (i + 1) (cur / 58) length
+
+-- Fold every input byte (index `idx .. n-1`) into the digit buffer in turn.
+-- Returns the final `length` (count of digit slots touched, from the end).
+foldBytesIntoDigits : Array Int -> Int -> Int -> Array Int -> Int -> Int -> Int
+foldBytesIntoDigits bytes idx n buf size length
+  | idx >= n = length
+  | otherwise =
+    let newLength = carryByteIntoDigits buf size 0 (byteAt idx bytes) length
+    foldBytesIntoDigits bytes (idx + 1) n buf size newLength
+
+-- First non-zero digit at or after `i`, bounded by `limit` (skips the
+-- digit buffer's unused leading zero slots, distinct from the input's
+-- leading zero BYTES handled separately by the '1'-prefix below).
+skipZeroDigits : Array Int -> Int -> Int -> Int
+skipZeroDigits buf i limit
+  | i >= limit = i
+  | byteAt i buf != 0 = i
+  | otherwise = skipZeroDigits buf (i + 1) limit
+
+-- Map digit-buffer slots `i .. size-1` through the alphabet, in order.
+digitsToChars : Array Int -> Int -> Int -> List Char
+digitsToChars buf i size
+  | i >= size = []
+  | otherwise =
+    charAtA (byteAt i buf) alphabetChars :: digitsToChars buf (i + 1) size
+
+{- | Bytes -> base58btc string. A leading zero byte becomes a leading `'1'`
+   character (see the module header); this is a separate step from the
+   big-integer division below it, by design.
+
+   NOTE (documented erratum): draft-msporny-base58-02 §5 states this same
+   6-byte input (`0x0000287fb4cd`) encodes to `"111233QC4"` (9 chars). That
+   is inconsistent with the draft's OWN algorithm in its OWN §3-4: `"11233QC4"`
+   below (8 chars, 2 leading `'1'`s for the 2 leading zero bytes) is what a
+   correct implementation of that algorithm produces, cross-checked against
+   the independent `base58` PyPI package (`base58.b58encode`) and against
+   `base58.b58decode("111233QC4").hex() == "000000287fb4cd"` (7 bytes, 3
+   leading zeros — NOT the stated 6-byte input). See
+   pds/test/vectors/base58_draft_msporny_02.txt and
+   pds/test/VECTOR-PROVENANCE.txt for the full disclosure.
+
+   > base58btcEncode [||]
+   ""
+   > base58btcEncode (arrayFromList [0, 0, 40, 127, 180, 205])
+   "11233QC4" -}
+export base58btcEncode : Array Int -> String
+base58btcEncode bytes =
+  let n = arrayLength bytes
+  let zeroes = countLeadingZeroBytes bytes 0
+  if zeroes == n then
+    -- all-zero (or empty) input: purely `zeroes` '1' characters, no digits.
+    fromChars (replicateChar '1' zeroes)
+  else
+    -- upper bound on base58 digit count for `n` bytes: n * log(256)/log(58) + 1,
+    -- approximated as the classic integer bound n*138/100 + 1.
+    let size = n * 138 / 100 + 1
+    let buf = make size 0
+    let length = foldBytesIntoDigits bytes zeroes n buf size 0
+    let start = skipZeroDigits buf (size - length) size
+    fromChars (replicateChar '1' zeroes ++ digitsToChars buf start size)
+
+replicateChar : Char -> Int -> List Char
+replicateChar c n
+  | n <= 0 = []
+  | otherwise = c :: replicateChar c (n - 1)
+
+-- ── Decode ───────────────────────────────────────────────────────────────
+
+-- Position of `c` in the alphabet, or `None` if `c` is not a base58btc digit.
+digitIndexOf : Char -> Int -> Option Int
+digitIndexOf c i
+  | i >= arrayLength alphabetChars = None
+  | charAtA i alphabetChars == c = Some i
+  | otherwise = digitIndexOf c (i + 1)
+
+-- Length of the leading run of `'1'` characters starting at `i`.
+countLeadingOneChars : Array Char -> Int -> Int -> Int
+countLeadingOneChars chars i n
+  | i >= n = i
+  | charAtA i chars != '1' = i
+  | otherwise = countLeadingOneChars chars (i + 1) n
+
+-- One character's digit value, or the `Err` this decode should fail with.
+digitValueOrErr : Char -> Result String Int
+digitValueOrErr c = match digitIndexOf c 0
+  Some d => Ok d
+  None => Err ("base58btcDecode: invalid character '" ++ fromChars [c] ++ "'")
+
+-- Validate + collect every character from `i .. n-1` as its base58 digit
+-- value, `Err` naming the first offending character.
+collectDigitValues : Array Char -> Int -> Int -> Result String (List Int)
+collectDigitValues chars i n =
+  if i >= n then Ok []
+  else match digitValueOrErr (charAtA i chars)
+    Err e => Err e
+    Ok d => map (d :: _) (collectDigitValues chars (i + 1) n)
+
+-- Mirror of `carryByteIntoDigits`, base 58 -> base 256.
+carryDigitIntoBytes : Array Int -> Int -> Int -> Int -> Int -> Int
+carryDigitIntoBytes buf size i carry length =
+  let j = size - 1 - i
+  if carry == 0 && i >= length || j < 0 then i
+  else
+    let cur = carry + 58 * byteAt j buf
+    set j (cur % 256) buf
+    carryDigitIntoBytes buf size (i + 1) (cur / 256) length
+
+foldDigitsIntoBytes : List Int -> Array Int -> Int -> Int -> Int
+foldDigitsIntoBytes [] buf size length = length
+foldDigitsIntoBytes (d::rest) buf size length =
+  let newLength = carryDigitIntoBytes buf size 0 d length
+  foldDigitsIntoBytes rest buf size newLength
+
+collectBytesFrom : Array Int -> Int -> Int -> List Int
+collectBytesFrom buf i limit
+  | i >= limit = []
+  | otherwise = byteAt i buf :: collectBytesFrom buf (i + 1) limit
+
+replicateInt : Int -> Int -> List Int
+replicateInt x n
+  | n <= 0 = []
+  | otherwise = x :: replicateInt x (n - 1)
+
+{- | base58btc string -> bytes, the exact inverse of `base58btcEncode`. `Err`
+   naming the offending character on any character outside `base58btcAlphabet`
+   (`'0'`, `'O'`, `'I'`, `'l'` are absent from the alphabet — see the alphabet
+   string itself, not this comment, for the authoritative set). Leading `'1'`
+   characters decode back to leading zero bytes.
+
+   Additionally `Err` when the input is longer than
+   `base58btcMaxInputChars` characters — a denial-of-service guard, not a
+   protocol limit; see that constant's own comment for the rationale and the
+   headroom.
+
+   > base58btcDecode "0"
+   Err "base58btcDecode: invalid character '0'" -}
+export base58btcDecode : String -> Result String (Array Int)
+base58btcDecode s =
+  let chars = toChars s
+  let n = arrayLength chars
+  -- The ceiling is checked HERE, before `countLeadingOneChars` — that walk is
+  -- itself O(n)-deep on the interpreter, so a check placed any later would be
+  -- reached only after the stack it exists to protect had already been spent.
+  if n > base58btcMaxInputChars then
+    Err "base58btcDecode: input longer than \{intToString base58btcMaxInputChars} characters (denial-of-service guard, not a protocol limit)"
+  else
+    let zeroes = countLeadingOneChars chars 0 n
+    match collectDigitValues chars zeroes n
+      Err e => Err e
+      Ok digits =>
+        let remaining = n - zeroes
+        let size = remaining * 733 / 1000 + 1
+        let buf = make size 0
+        let length = foldDigitsIntoBytes digits buf size 0
+        let start = size - length
+        Ok (arrayFromList
+          (replicateInt 0 zeroes ++ collectBytesFrom buf start size))

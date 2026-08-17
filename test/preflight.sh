@@ -716,6 +716,16 @@ for f in $changed; do
     gzip/test/*|gzip/lib/*|gzip/*.mdk|gzip/medaka.toml)
       add 'gzip/test/*oracle' ;;
 
+    # ── pds: same structural blind spot as sqlite/gzip (F-8), plus one more ───
+    # pds/ goldens/vector corpora sit loose under pds/test/, so the fixture-dir
+    # derivation cannot reach them; and an UNMAPPED non-prose path widens every
+    # PR run to the FULL suite (ci.yml `detect`). Note the arm is `pds/*)`,
+    # deliberately broader than sqlite's/gzip's four-alternative arms: later
+    # slices add pds/oracle/, vector corpora, and ledger files, and a narrow arm
+    # would leave each of those UNMAPPED.
+    pds/*)
+      add 'pds/test/*' ;;
+
     # ── fixture/golden corpus change: run its ACTUAL consumers, not everything.
     # See _gates_for_fixture_dir above. A directory with zero discoverable
     # consumers is a real finding (dead corpus, or a gap in this derivation) —
@@ -867,8 +877,22 @@ done
 # corpus), and the same as a gate matching no CI shard. "This didn't run" must never be
 # indistinguishable from "this passed."
 gates=""
+# `set -f` (noglob), NOT just for this outer split: $pats is an unquoted variable
+# expansion, so without it a pattern that happens to literally match a real
+# on-disk path (e.g. 'pds/test/*', which DOES match pds/test/*.sh files —
+# unlike 'sqlite/test/*oracle', which never matches a real filename because
+# real oracle files end '_oracle.sh' not literal 'oracle') gets pathname-
+# expanded HERE, before the intended two-arm resolution below ever runs —
+# corrupting the pattern into an already-extensioned filename that then fails
+# the '$pat.sh' suffix the inner loop appends. Found first-hand adding the pds
+# arm (S-pds-skeleton): 'sqlite/test/*oracle' and 'gzip/test/*oracle' never
+# tripped this because their patterns coincidentally never match a real path.
+# `set +f` for the INNER loop, which relies on genuine glob expansion to
+# resolve '$pat.sh' against real files.
+set -f
 for pat in $pats; do
   matched=0
+  set +f
   # Resolve against BOTH $ROOT/test/ and $ROOT/ — the same rule run_gates.sh,
   # build_oracles.sh --for and diff_compiler_ci_shard_coverage.sh use, so a pattern
   # naming a gate outside test/ ('sqlite/test/*oracle') resolves identically in all
@@ -879,13 +903,22 @@ for pat in $pats; do
     matched=1
     case " $gates " in *" $g "*) ;; *) gates="$gates $g" ;; esac
   done
+  set -f
   if [ "$matched" -eq 0 ]; then
+    set +f
     echo "preflight: FAIL — the change→gate map points at '$pat', which matches NO gate."
     echo "  A gate was probably renamed or deleted (the snapshot migration does this)."
     echo "  Your change would have been tested by NOTHING. Fix the map in $0."
     exit 1
   fi
 done
+# NOTE: noglob STAYS ON from here to end of script. Every consumer of $pats
+# below — the LOCAL_SKIP filter (which REWRITES $pats), the re-resolve, and the
+# unquoted `--for $pats` / `run_gates.sh $pats` argument splits — needs word
+# splitting but must NEVER pathname-expand a pattern like 'pds/test/*' that
+# literally matches real files. `set -f` gives exactly that; `case` patterns are
+# unaffected, and it is not inherited by child processes, so build_oracles.sh
+# and run_gates.sh still glob normally on their own. RUN-PDS0-006.
 
 # ── PREFLIGHT_DRY=1: print the derived gate set and stop ──────────────────────
 # The change→gate derivation is the part most likely to silently under-run, and it was
@@ -987,10 +1020,12 @@ if [ -n "$local_skipped" ]; then
   # still in $pats it matches the skipped gate again and it comes back, correctly.
   gates=""
   for pat in $pats; do
+    set +f          # the INNER loop needs real globbing (mirrors the resolver above)
     for g in "$ROOT"/test/$pat.sh "$ROOT"/$pat.sh; do
       [ -f "$g" ] || continue
       case " $gates " in *" $g "*) ;; *) gates="$gates $g" ;; esac
     done
+    set -f
   done
   [ -n "$pats" ] || {
     echo "preflight: every gate this diff derives is a local-only skip ($local_skipped) — nothing to run HERE."

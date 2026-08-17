@@ -1,0 +1,214 @@
+{- | In-language STRUCTURAL tests for `pds/lib/field.mdk` (S-field, #1699
+   field 10x2^26 limbs).
+
+   Only algebraic identities and rejection shapes live here — properties that
+   are true of the FIELD, not answers computed by anyone. Every expected VALUE
+   lives instead in the ledgered reference corpus
+   (`pds/test/vectors/field_reference_corpus.txt`, graded by
+   `pds/test/field_vectors_main.mdk`), because an expected value written inline
+   in a `*_test.mdk` is invisible to `pds/test/VECTOR-PROVENANCE.txt` by
+   construction — its own DOES-NOT-PROVE block says so.
+
+   The INPUTS below are this slice's own selection and need no provenance: an
+   input is not an answer key. They are built programmatically so the limb
+   boundaries (every 26 bits, and the 26/22 seam at limb 9) are hit exactly
+   rather than by hand-typed hex. -}
+
+import array.{set}
+import test.{expectEqual, expectTrue, expectFalse}
+import lib.field.{
+  Fe,
+  feZero,
+  feOne,
+  feAdd,
+  feSub,
+  feMul,
+  feSquare,
+  feNegate,
+  feInverse,
+  feEqual,
+  feIsZero,
+  feIsOdd,
+  feFromBytes,
+  feFromBytesReduce,
+  feToBytes,
+}
+
+-- ── Input construction (inputs, not answer keys) ──────────────────────
+
+-- 32 big-endian bytes with exactly bit `k` set.
+bitBytes : Int -> Array Int
+bitBytes k =
+  let out = arrayMake 32 0
+  let () = set (31 - shiftRight k 3) (shiftLeft 1 (k - shiftLeft (shiftRight k 3) 3)) out
+  out
+
+-- 32 big-endian bytes, decremented by one (wraps at 0, which no input here
+-- reaches).
+decBytes : Array Int -> Array Int
+decBytes bs =
+  let out = arrayCopy bs
+  let () = decGo out 31
+  out
+
+decGo : Array Int -> Int -> Unit
+decGo out i =
+  if i < 0 then ()
+  else
+    let v = out[i]
+    if v == 0 then
+      let () = set i 255 out
+      decGo out (i - 1)
+    else set i (v - 1) out
+
+allOnes : Array Int
+allOnes = arrayMake 32 255
+
+-- p, p+1 as raw bytes: p = 2^256 - 2^32 - 977.
+pBytes : Array Int
+pBytes = [|
+  0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+  0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+  0xff, 0xfe, 0xff, 0xff, 0xfc, 0x2f,
+|]
+
+pPlus1Bytes : Array Int
+pPlus1Bytes = [|
+  0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+  0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+  0xff, 0xfe, 0xff, 0xff, 0xfc, 0x30,
+|]
+
+-- The nine limb boundaries: 26, 52, ..., 234. 234 is the 26/22 seam.
+limbBits : List Int
+limbBits = [26, 52, 78, 104, 130, 156, 182, 208, 234]
+
+-- One representative element per limb boundary, plus a few small ones.
+sampleBytes : List (Array Int)
+sampleBytes = [bitBytes 0, bitBytes 1, bitBytes 255]
+  ++ map bitBytes limbBits
+  ++ map (k => decBytes (bitBytes k)) limbBits
+
+samples : List Fe
+samples = map feFromBytesReduce sampleBytes
+
+-- A second, offset list, so the binary identities are not all `a op a`.
+samples2 : List Fe
+samples2 =
+  map feFromBytesReduce (map (bs => decBytes (decBytes bs)) sampleBytes)
+
+allPairs : (Fe -> Fe -> Bool) -> Bool
+allPairs f = pairsGo f samples samples2
+
+pairsGo : (Fe -> Fe -> Bool) -> List Fe -> List Fe -> Bool
+pairsGo f (a::ax) (b::bx) = f a b && pairsGo f ax bx
+pairsGo _ _ _ = True
+
+-- The third operand is derived from the first, so every triple is distinct
+-- without needing a third input list.
+allTriples : (Fe -> Fe -> Fe -> Bool) -> Bool
+allTriples f = triplesGo f samples samples2
+
+triplesGo : (Fe -> Fe -> Fe -> Bool) -> List Fe -> List Fe -> Bool
+triplesGo f (a::ax) (b::bx) = f a b (feAdd a feOne) && triplesGo f ax bx
+triplesGo _ _ _ = True
+
+-- ── Additive structure ────────────────────────────────────────────────
+
+test "a + (-a) = 0, over every limb boundary" =
+  expectTrue (all (a => feIsZero (feAdd a (feNegate a))) samples)
+
+test "a + 0 = a" = expectTrue (all (a => feEqual (feAdd a feZero) a) samples)
+
+test "a - b = a + (-b)" =
+  expectTrue (allPairs (a b => feEqual (feSub a b) (feAdd a (feNegate b))))
+
+test "a - a = 0" = expectTrue (all (a => feIsZero (feSub a a)) samples)
+
+test "(a + b) + c = a + (b + c)" = expectTrue (allTriples (a b c =>
+  feEqual (feAdd (feAdd a b) c) (feAdd a (feAdd b c))))
+
+test "a + b = b + a" =
+  expectTrue (allPairs (a b => feEqual (feAdd a b) (feAdd b a)))
+
+test "-0 = 0" = expectTrue (feIsZero (feNegate feZero))
+
+-- ── Multiplicative structure ──────────────────────────────────────────
+
+test "a * 1 = a" = expectTrue (all (a => feEqual (feMul a feOne) a) samples)
+
+test "a * 0 = 0" = expectTrue (all (a => feIsZero (feMul a feZero)) samples)
+
+test "a * a = square a, over every limb boundary" =
+  expectTrue (all (a => feEqual (feMul a a) (feSquare a)) samples)
+
+test "(a * b) * c = a * (b * c)" = expectTrue (allTriples (a b c =>
+  feEqual (feMul (feMul a b) c) (feMul a (feMul b c))))
+
+test "a * b = b * a" =
+  expectTrue (allPairs (a b => feEqual (feMul a b) (feMul b a)))
+
+test "a * (b + c) = a*b + a*c" = expectTrue (allTriples (a b c =>
+  feEqual (feMul a (feAdd b c)) (feAdd (feMul a b) (feMul a c))))
+
+test "a * inverse a = 1 for every non-zero a" = expectTrue (all
+  (a => feIsZero a || feEqual (feMul a (feInverse a)) feOne)
+  samples)
+
+-- `inverse 0 = 0` is the settled convention (RUN-PDS0-016 Q1): a TOTAL
+-- function matching libsecp256k1, pinned executably by the corpus's `inv 0`
+-- row and by the doctest at the definition site. Pinned here too, because it
+-- is the one cell where "wrong" and "by design" look identical.
+test "inverse 0 = 0 (the settled convention, not an error)" =
+  expectTrue (feIsZero (feInverse feZero))
+
+-- ── Serialization ─────────────────────────────────────────────────────
+
+roundTrips : Array Int -> Bool
+roundTrips bs = match feFromBytes bs
+  Ok fe => feToBytes fe == bs
+  Err _ => False
+
+test "fromBytes >> toBytes round-trips at every limb boundary (incl. the 26/22 seam)" = expectTrue (all roundTrips sampleBytes)
+
+test "toBytes is 32 bytes" =
+  expectTrue (all (a => arrayLength (feToBytes a) == 32) samples)
+
+test "fromBytes REJECTS p" = expectTrue
+  (match feFromBytes pBytes
+    Err _ => True
+    Ok _ => False)
+
+test "fromBytes REJECTS p+1" = expectTrue
+  (match feFromBytes pPlus1Bytes
+    Err _ => True
+    Ok _ => False)
+
+test "fromBytes REJECTS 2^256-1" = expectTrue
+  (match feFromBytes allOnes
+    Err _ => True
+    Ok _ => False)
+
+test "fromBytes REJECTS a short input" = expectTrue
+  (match feFromBytes (arrayMake 31 0)
+    Err _ => True
+    Ok _ => False)
+
+test "fromBytes REJECTS an out-of-range element" = expectTrue
+  (match feFromBytes (arrayMake 32 256)
+    Err _ => True
+    Ok _ => False)
+
+test "fromBytesReduce ACCEPTS p and reduces it to 0" =
+  expectTrue (feIsZero (feFromBytesReduce pBytes))
+
+test "fromBytesReduce ACCEPTS p+1 and reduces it to 1" =
+  expectTrue (feEqual (feFromBytesReduce pPlus1Bytes) feOne)
+
+test "fromBytesReduce ACCEPTS 2^256-1" =
+  expectFalse (feIsZero (feFromBytesReduce allOnes))
+
+-- ── Parity ────────────────────────────────────────────────────────────
+
+test "isOdd 1 is True, isOdd 0 is False" =
+  expectTrue (feIsOdd feOne && not (feIsOdd feZero))

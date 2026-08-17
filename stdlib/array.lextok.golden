@@ -566,17 +566,133 @@ INT 0
 INT 0
 IDENT "outer"
 NEWLINE
-IDENT "arrayMakeWith"
+IF
+IDENT "total"
+LEQ
+INT 0
+THEN
+LARRAY
+RARRAY
+ELSE
+INDENT
+LET
+IDENT "out"
+EQUAL
+IDENT "arrayMake"
 IDENT "total"
 LPAREN
-IDENT "i"
-FAT_ARROW
 IDENT "concatLookup"
 IDENT "arrs"
-IDENT "i"
+INT 0
 INT 0
 IDENT "outer"
 RPAREN
+NEWLINE
+IDENT "concatBlitAll"
+IDENT "arrs"
+IDENT "out"
+INT 0
+INT 0
+IDENT "outer"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "concatBlitAll"
+COLON
+UPPER "Array"
+LPAREN
+UPPER "Array"
+IDENT "a"
+RPAREN
+ARROW
+UPPER "Array"
+IDENT "a"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Array"
+IDENT "a"
+NEWLINE
+IDENT "concatBlitAll"
+IDENT "arrs"
+IDENT "out"
+IDENT "k"
+IDENT "dstOff"
+IDENT "outer"
+EQUAL
+INDENT
+IF
+IDENT "k"
+GEQ
+IDENT "outer"
+THEN
+IDENT "out"
+ELSE
+INDENT
+LET
+IDENT "inner"
+EQUAL
+IDENT "arrayGetUnsafe"
+IDENT "k"
+IDENT "arrs"
+NEWLINE
+LET
+IDENT "len"
+EQUAL
+IDENT "arrayLength"
+IDENT "inner"
+NEWLINE
+IF
+IDENT "len"
+LEQ
+INT 0
+THEN
+IDENT "concatBlitAll"
+IDENT "arrs"
+IDENT "out"
+LPAREN
+IDENT "k"
+PLUS
+INT 1
+RPAREN
+IDENT "dstOff"
+IDENT "outer"
+ELSE
+INDENT
+LET
+UNDERSCORE
+EQUAL
+IDENT "arrayBlit"
+IDENT "inner"
+INT 0
+IDENT "out"
+IDENT "dstOff"
+IDENT "len"
+NEWLINE
+IDENT "concatBlitAll"
+IDENT "arrs"
+IDENT "out"
+LPAREN
+IDENT "k"
+PLUS
+INT 1
+RPAREN
+LPAREN
+IDENT "dstOff"
+PLUS
+IDENT "len"
+RPAREN
+IDENT "outer"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE

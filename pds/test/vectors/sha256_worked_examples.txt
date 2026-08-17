@@ -1,0 +1,46 @@
+# sha256_worked_examples.txt — hand-transcribed SHA-256 worked examples.
+#
+# SOURCE (single document for all three records, RUN-PDS0-008 D1/D3):
+#   FIPS PUB 180-2, Secure Hash Standard (2002; WITHDRAWN — superseded by
+#   FIPS PUB 180-4). Appendix B: "B.1 SHA-256 Example (One-Block Message)",
+#   "B.2 SHA-256 Example (Multi-Block Message)", "B.3 SHA-256 Example (Long
+#   Message)".
+#   https://csrc.nist.gov/files/pubs/fips/180-2/final/docs/fips180-2.pdf
+#
+# WITHDRAWN-DOCUMENT NOTE (source-note, required by RUN-PDS0-008 D1): FIPS
+# PUB 180-2 was withdrawn and superseded by FIPS PUB 180-4. It remains the
+# correct answer key here because (a) the SHA-256 algorithm is bit-identical
+# between the two editions (180-4's Appendix C "Technical Changes from FIPS
+# 180-3" lists no change to SHA-256 itself), and (b) Appendix B of 180-2 is
+# the ORIGIN of these three worked examples — FIPS PUB 180-4 dropped the
+# examples appendix entirely (measured: its extracted table of contents has
+# no examples section), so 180-2 is the only FIPS document that states them.
+#
+# GRAMMAR: the Len/Msg/MD triple is CAVS's own grammar (matches the .rsp
+# files in this directory). `Repeat` is THIS PROJECT's extension (not CAVS):
+# message = (Msg bytes) repeated `Repeat` times; `Len` is then the length of
+# ONE repetition, in bits. Default Repeat = 1.
+#
+# TRANSCRIPTION DISCIPLINE: every digest and every message string below was
+# read from the PDF text twice, independently (`pdftotext -layout`, grepped
+# and re-grepped against the appendix line numbers), and cross-checked
+# against a from-scratch SHA-256 computation of the same input using an
+# independent implementation (Python's hashlib) before being committed here
+# — never pasted from this project's own sha256.mdk output (G5).
+
+# ── B.1 — one-block message: the ASCII string "abc" ─────────────────────
+Len = 24
+Msg = 616263
+MD  = ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+
+# ── B.2 — multi-block message (448 bits, two blocks): the 56-character
+#    ASCII string "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
+Len = 448
+Msg = 6162636462636465636465666465666765666768666768696768696a68696a6b696a6b6c6a6b6c6d6b6c6d6e6c6d6e6f6d6e6f706e6f7071
+MD  = 248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1
+
+# ── B.3 — long message: 1,000,000 repetitions of the ASCII character "a"
+Len = 8
+Msg = 61
+Repeat = 1000000
+MD  = cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0

@@ -1,0 +1,44 @@
+# base58_draft_msporny_02.txt — hand-transcribed from the base58btc alphabet
+# and test vectors published in IETF `draft-msporny-base58-02`.
+#
+# STATUS: EXPIRED INTERNET-DRAFT (Expires: May 4, 2021, per every page
+# footer of the fetched document). Used anyway because the multiformats
+# authority (multiformats/multibase README.md, pinned commit
+# d7406cdea189b82a0b3937f5737b440f5fa92f92, line 104) normatively cites this
+# exact document BY NAME as the definition of `base58btc`, and no successor
+# document exists. See pds/test/VECTOR-PROVENANCE.txt for the full citation
+# and digest.
+#
+# source-url: https://www.ietf.org/archive/id/draft-msporny-base58-02.txt
+# fetched sha256: a37072640e1c4eea65fe8e1252ab9cb198f7c2903b804afe2cd65046461e6e06
+#
+# ── Alphabet (§2 "The Base58 Alphabet") ───────────────────────────────────
+alphabet	123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz
+#
+# ── Test vectors (§5 "Test Vectors") ──────────────────────────────────────
+# One row per vector, tab-separated: <input as lowercase hex bytes> <TAB> <expected base58btc string>
+# Row 1: "Hello World!"
+48656c6c6f20576f726c6421	2NEpo7TZRRrLZSi2U
+# Row 2: "The quick brown fox jumps over the lazy dog."
+54686520717569636b2062726f776e20666f78206a756d7073206f76657220746865206c617a7920646f672e	USm3fpXnKG5EUBx2ndxBDMPVciP5hGey2Jh4NDv6gmeo1LkMeiKrLJUUBk6Z
+#
+# ── KNOWN ERRATUM — row 3, disclosed, NOT auto-graded as pass/fail ────────
+# The draft's §5 states: "The Base58 encoded value for 0x0000287fb4cd is:
+# 111233QC4" (9 characters, 3 leading '1's). That is INCONSISTENT with the
+# draft's OWN algorithm (§3-4) applied to its OWN stated 6-byte input
+# (0x0000287fb4cd = 2 leading zero bytes + 0x287fb4cd): a correct
+# implementation of that algorithm produces "11233QC4" (8 characters, 2
+# leading '1's for the 2 leading zero bytes) — cross-checked independently
+# against the `base58` PyPI package (`base58.b58encode`) and by decoding the
+# draft's own claimed answer back: `base58.b58decode("111233QC4").hex() ==
+# "000000287fb4cd"` (7 bytes / 3 leading zeros), which does NOT match the
+# draft's own 6-byte stated input at all. This row is transcribed verbatim
+# from the document for the record, but it is NOT usable as an answer key —
+# pds/test/encodings_vectors_main.mdk decodes it, cross-checks the
+# INTERNAL byte-count discrepancy the erratum itself implies, and reports it
+# as ERRATUM (documented, not counted toward PASS/FAIL), not as a graded
+# cell. See pds/lib/base58.mdk's `base58btcEncode` doc comment for the same
+# disclosure next to the code it concerns.
+# Row 3 (erratum): input, draft's claimed (wrong) output, and the output a
+# correct implementation of the draft's own algorithm actually produces:
+0000287fb4cd	111233QC4	11233QC4

@@ -1,0 +1,250 @@
+-- Vector driver for S-encodings (#1701 encodings base58btc + multiformats).
+--
+-- medaka run pds/test/encodings_vectors_main.mdk <vectors-dir>
+--
+-- Reads the six corpora under <vectors-dir>, checks pds/lib/base58.mdk and
+-- pds/lib/multiformats.mdk against them, and prints one line per checked
+-- cell: "<PASS|FAIL>\t<arm>\t<expected>\t<actual>". The LAST stdout line is
+-- exactly "TOTAL: PASS" or "TOTAL: FAIL" — that is what the gate
+-- (pds/test/encodings_vectors.sh) reads. An "ERRATUM" line is printed for
+-- the one documented, non-graded cell (see the base58 spec vectors arm
+-- below) and is not counted toward PASS or FAIL.
+
+import string.{lines, split, trim, toUtf8, startsWith, stripPrefix, toInt}
+import hex.{encode, decode}
+import lib.base58.{base58btcAlphabet, base58btcEncode, base58btcDecode}
+import lib.multiformats.{
+  uvarintEncode,
+  uvarintDecodeAll,
+  multicodecSha2_256,
+  multicodecRaw,
+  multicodecDagCbor,
+  multicodecSecp256k1Pub,
+  multicodecP256Pub,
+  multibaseBase58btc,
+  multibaseBase58btcDecode,
+}
+
+-- ── small parsing helpers ─────────────────────────────────────────────────
+
+-- The quoted content of a line shaped `<label>, "<content>"` — the second
+-- element of splitting on `"`.
+quotedContent : String -> String
+quotedContent line = match split "\"" line
+  _::content::_ => content
+  _ => panic "encodings_vectors: expected a quoted field in: \{line}"
+
+-- Big-endian bytes -> Int (used to parse a multicodec table `code` field).
+bytesToIntBE : Array Int -> Int
+bytesToIntBE bytes = bytesToIntBEGo bytes 0 0
+
+bytesToIntBEGo : Array Int -> Int -> Int -> Int
+bytesToIntBEGo bytes i acc =
+  if i >= arrayLength bytes then
+    acc
+  else
+    bytesToIntBEGo bytes (i + 1) (acc * 256 + bytes[i])
+
+mustDecodeHex : String -> Array Int
+mustDecodeHex s = match decode s
+  Ok bytes => bytes
+  Err msg => panic "encodings_vectors: bad hex '\{s}': \{msg}"
+
+-- A `0x`-prefixed (or bare) hex field -> Int, e.g. "0x1200" -> 4608.
+hexFieldToInt : String -> Int
+hexFieldToInt raw =
+  let s = trim raw
+  let stripped = match stripPrefix "0x" s
+    Some rest => rest
+    None => s
+  bytesToIntBE (mustDecodeHex stripped)
+
+-- The trimmed field at CSV column `col` (0-based, comma-separated).
+csvField : Int -> String -> String
+csvField col line = csvFieldGo col (split "," line)
+
+csvFieldGo : Int -> List String -> String
+csvFieldGo col (f::rest) =
+  if col <= 0 then
+    trim f
+  else
+    csvFieldGo (col - 1) rest
+csvFieldGo _ [] = panic "encodings_vectors: CSV row has too few columns"
+
+fieldCount : String -> String -> Int
+fieldCount sep line = length (split sep line)
+
+mustParseInt : String -> Int
+mustParseInt s = match toInt s
+  Some n => n
+  None => panic "encodings_vectors: not an integer: \{s}"
+
+-- ── reporting ────────────────────────────────────────────────────────────
+
+check : String -> String -> String -> Bool -> <Stdout> Int
+check arm expected actual passed =
+  let tag = if passed then "PASS" else "FAIL"
+  putStrLn "\{tag}\t\{arm}\t\{expected}\t\{actual}"
+  if passed then 1 else 0
+
+erratum : String -> String -> String -> <Stdout> Unit
+erratum arm claimed actual = putStrLn "ERRATUM\t\{arm}\t\{claimed}\t\{actual}"
+
+-- ── Arm: multibase/base58 (multiformats/multibase test CSVs) ──────────────
+--
+-- Each file's INPUT is hardcoded here from tests/README.md ("yes mani !"
+-- with 0/1/2 leading 0x00 bytes) — an input is not an answer key, only the
+-- file's own base58btc ROW (the expected output) is graded from the file.
+
+multibaseArm : String -> Array Int -> <Stdout, FileRead "_"> List Int
+multibaseArm fname bytes = match readFile fname
+  Err msg => panic "encodings_vectors: cannot read \{fname}: \{msg}"
+  Ok content =>
+    let rowLine = match find (startsWith "base58btc") (lines content)
+      Some l => l
+      None => panic "encodings_vectors: no base58btc row in \{fname}"
+    let expected = quotedContent rowLine
+    let actualEncode = multibaseBase58btc bytes
+    let p1 = check "multibase-encode:\{fname}" expected actualEncode (expected == actualEncode)
+    let decoded = multibaseBase58btcDecode expected
+    let expectedDecode = Ok bytes : Result String (Array Int)
+    let p2 = check "multibase-decode:\{fname}" (debug expectedDecode) (debug decoded) (decoded == expectedDecode)
+    [p1, p2]
+
+-- ── Arm: base58 spec vectors (draft-msporny-base58-02) ─────────────────────
+
+base58SpecArm : String -> <Stdout, FileRead "_"> List Int
+base58SpecArm fname = match readFile fname
+  Err msg => panic "encodings_vectors: cannot read \{fname}: \{msg}"
+  Ok content =>
+    let ls = lines content
+    let dataLines = filter (l => l != "" && not (startsWith "#" l)) ls
+    -- dataLines: [alphabet row, row1, row2, erratum row (3 tab-fields)]
+    let alphaLine = match find (startsWith "alphabet\t") dataLines
+      Some l => l
+      None => panic "encodings_vectors: no alphabet row in base58 spec vectors"
+    let alphaValue = match stripPrefix "alphabet\t" alphaLine
+      Some v => v
+      None => panic "unreachable"
+    let pAlpha = check "base58-spec:alphabet" alphaValue base58btcAlphabet (alphaValue == base58btcAlphabet)
+    let vectorLines = filter (l => fieldCount "\t" l == 2 && not (startsWith "alphabet\t" l)) dataLines
+    let vectorChecks = flatMap specVectorChecks vectorLines
+    let errataLines = filter (l => fieldCount "\t" l == 3) dataLines
+    let () = erratumReports errataLines
+    pAlpha :: vectorChecks
+
+specVectorChecks : String -> <Stdout> List Int
+specVectorChecks line = match split "\t" line
+  [hexInput, expectedB58] =>
+    let inputBytes = mustDecodeHex hexInput
+    let actualEncode = base58btcEncode inputBytes
+    let p1 = check "base58-spec-encode:\{hexInput}" expectedB58 actualEncode (expectedB58 == actualEncode)
+    let decoded = base58btcDecode expectedB58
+    let expectedDecode = Ok inputBytes : Result String (Array Int)
+    let p2 = check "base58-spec-decode:\{expectedB58}" (debug expectedDecode) (debug decoded) (decoded == expectedDecode)
+    [p1, p2]
+  _ => panic "encodings_vectors: malformed base58 spec vector row: \{line}"
+
+erratumReports : List String -> <Stdout> Unit
+erratumReports [] = ()
+erratumReports (l :: rest) = match split "\t" l
+  [hexInput, claimed, correctedExpected] =>
+    let encoded = base58btcEncode (mustDecodeHex hexInput)
+    let () = erratum "base58-spec-erratum:\{hexInput}" claimed encoded
+    -- Cross-check, and it now CHECKS. This block used to print the two
+    -- values side by side and call that a "self-check" — a comparison a
+    -- reader performs, not one the program performs, so the row could
+    -- silently drift and the driver would report it as cheerfully as
+    -- agreement (F18). The disclosure only means anything while our output
+    -- still matches the corrected column it discloses, so disagreement
+    -- aborts. Still NOT a graded PASS/FAIL cell: the driver's header
+    -- contract that erratum rows are "not counted toward PASS or FAIL"
+    -- stays true, and encodings_vectors.sh's PASS_FLOOR is unchanged.
+    let () = if correctedExpected != encoded then
+      panic "encodings_vectors: erratum row's corrected column \{correctedExpected} disagrees with this implementation's output \{encoded} — the disclosure is stale"
+    else ()
+    let () = erratum "base58-spec-erratum-selfcheck:\{hexInput}" correctedExpected encoded
+    erratumReports rest
+  _ => panic "encodings_vectors: malformed erratum row: \{l}"
+
+-- ── Arm: multicodec table ───────────────────────────────────────────────
+
+multicodecArm : String -> <Stdout, FileRead "_"> List Int
+multicodecArm fname = match readFile fname
+  Err msg => panic "encodings_vectors: cannot read \{fname}: \{msg}"
+  Ok content =>
+    let ls = lines content
+    let want = [
+      ("sha2-256", multicodecSha2_256),
+      ("raw", multicodecRaw),
+      ("dag-cbor", multicodecDagCbor),
+      ("secp256k1-pub", multicodecSecp256k1Pub),
+      ("p256-pub", multicodecP256Pub),
+    ]
+    map (nameConstCheck ls) want
+
+nameConstCheck : List String -> (String, Int) -> <Stdout> Int
+nameConstCheck ls (name, constant) =
+  let row = match find (l => csvField 0 l == name) ls
+    Some l => l
+    None => panic "encodings_vectors: multicodec table row not found: \{name}"
+  let actual = hexFieldToInt (csvField 2 row)
+  check
+    "multicodec:\{name}"
+    (intToString constant)
+    (intToString actual)
+    (constant == actual)
+
+-- ── Arm: unsigned-varint examples ───────────────────────────────────────
+
+varintArm : String -> <Stdout, FileRead "_"> List Int
+varintArm fname = match readFile fname
+  Err msg => panic "encodings_vectors: cannot read \{fname}: \{msg}"
+  Ok content =>
+    let ls = lines content
+    let dataLines = filter (l => l != "" && not (startsWith "#" l)) ls
+    let normalLines = filter (l => not (startsWith "reject" l)) dataLines
+    let rejectLines = filter (startsWith "reject") dataLines
+    flatMap varintExampleChecks normalLines
+      ++ flatMap varintRejectChecks rejectLines
+
+varintExampleChecks : String -> <Stdout> List Int
+varintExampleChecks line = match split "\t" line
+  [decStr, hexBytes] =>
+    let value = mustParseInt decStr
+    let expectedBytes = mustDecodeHex hexBytes
+    let actualBytes = uvarintEncode value
+    let p1 = check "varint-encode:\{decStr}" hexBytes (encode actualBytes) (expectedBytes == actualBytes)
+    let decodedAll = uvarintDecodeAll expectedBytes
+    let expectedDecode = Ok value : Result String Int
+    let p2 = check "varint-decode:\{decStr}" (debug expectedDecode) (debug decodedAll) (decodedAll == expectedDecode)
+    [p1, p2]
+  _ => panic "encodings_vectors: malformed varint example row: \{line}"
+
+varintRejectChecks : String -> <Stdout> List Int
+varintRejectChecks line = match split "\t" line
+  [_, hexBytes] =>
+    let bytes = mustDecodeHex hexBytes
+    let result = uvarintDecodeAll bytes
+    let isErr = match result
+      Err _ => True
+      Ok _ => False
+    [check "varint-reject:\{hexBytes}" "Err _" (debug result) isErr]
+  _ => panic "encodings_vectors: malformed varint reject row: \{line}"
+
+-- ── main ─────────────────────────────────────────────────────────────────
+
+main = match args ()
+  [dir] =>
+    let basic = toUtf8 "yes mani !"
+    let oneZero = arrayFromList (0 :: toList basic)
+    let twoZero = arrayFromList (0 :: 0 :: toList basic)
+    let results = multibaseArm (dir ++ "/multibase_basic.csv") basic ++ multibaseArm (dir ++ "/multibase_leading_zero.csv") oneZero ++ multibaseArm (dir ++ "/multibase_two_leading_zeros.csv") twoZero ++ base58SpecArm (dir ++ "/base58_draft_msporny_02.txt") ++ multicodecArm (dir ++ "/multicodec_table.csv") ++ varintArm (dir ++ "/unsigned_varint_examples.txt")
+    let passCount = sum results
+    let total = length results
+    let () = putStrLn "counted: \{intToString passCount}/\{intToString total} PASS lines"
+    if passCount == total then
+      putStrLn "TOTAL: PASS"
+    else
+      putStrLn "TOTAL: FAIL"
+  _ => ePutStrLn "usage: medaka run pds/test/encodings_vectors_main.mdk <vectors-dir>"

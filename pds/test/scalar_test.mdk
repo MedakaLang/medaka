@@ -1,0 +1,328 @@
+{- | In-language STRUCTURAL tests for `pds/lib/scalar.mdk` (S-scalar, #1700
+   secp256k1 group ops + RFC 6979 + low-S).
+
+   Only algebraic identities of the ring `Z/nZ` and rejection shapes live
+   here — properties that are true of the RING, not answers computed by
+   anyone. Every expected VALUE lives instead in the ledgered reference
+   corpus (`pds/test/vectors/scalar_reference_corpus.txt`, graded by
+   `pds/test/scalar_vectors_main.mdk`), because an expected value written
+   inline in a `*_test.mdk` is invisible to `pds/test/VECTOR-PROVENANCE.txt`
+   by construction — its own DOES-NOT-PROVE block says so.
+
+   The INPUTS below are this slice's own selection and need no provenance: an
+   input is not an answer key. They are built programmatically so the limb
+   boundaries (every 16 bits) are hit exactly rather than by hand-typed hex.
+
+   The two 32-byte constants that ARE spelled out — `n` and `n+1` — are the
+   published curve order (SEC 2 v2 §2.4.1), used as REJECTION inputs, not as
+   expected answers. `n_h = floor(n/2)` is never typed out: it is derived
+   here as `(n-1)/2` by a byte-wise halving of `n-1`, and the graded answer
+   key for the low-S boundary is the corpus's `high` rows.
+
+   This file uses the BOUNDS-CHECKED public array API (`arr[i]`,
+   `Array.set`) — no restricted internal externs. -}
+
+import test.{expectEqual, expectTrue, expectFalse}
+import array as A
+import lib.scalar.{
+  Sc,
+  scZero,
+  scOne,
+  scAdd,
+  scSub,
+  scMul,
+  scNegate,
+  scInverse,
+  scEqual,
+  scIsZero,
+  scIsHigh,
+  scFromBytes,
+  scFromBytesReduce,
+  scToBytes,
+}
+
+-- ── Input construction (inputs, not answer keys) ──────────────────────
+
+-- 32 big-endian bytes with exactly bit `k` set.
+bitBytes : Int -> Array Int
+bitBytes k =
+  let out = arrayMake 32 0
+  let () = A.set (31 - shiftRight k 3) (shiftLeft 1 (k - shiftLeft (shiftRight k 3) 3)) out
+  out
+
+-- 32 big-endian bytes, decremented by one (wraps at 0, which no input here
+-- reaches).
+decBytes : Array Int -> Array Int
+decBytes bs =
+  let out = arrayCopy bs
+  let () = decGo out 31
+  out
+
+decGo : Array Int -> Int -> Unit
+decGo out i =
+  if i < 0 then ()
+  else
+    let v = out[i]
+    if v == 0 then
+      let () = A.set i 255 out
+      decGo out (i - 1)
+    else A.set i (v - 1) out
+
+-- 32 big-endian bytes, incremented by one.
+incBytes : Array Int -> Array Int
+incBytes bs =
+  let out = arrayCopy bs
+  let () = incGo out 31
+  out
+
+incGo : Array Int -> Int -> Unit
+incGo out i =
+  if i < 0 then ()
+  else
+    let v = out[i]
+    if v == 255 then
+      let () = A.set i 0 out
+      incGo out (i - 1)
+    else A.set i (v + 1) out
+
+-- 32 big-endian bytes, halved (v >> 1).
+halveBytes : Array Int -> Array Int
+halveBytes bs =
+  let out = arrayMake 32 0
+  let () = halveGo bs out 0 0
+  out
+
+halveGo : Array Int -> Array Int -> Int -> Int -> Unit
+halveGo bs out i carry =
+  if i >= 32 then ()
+  else
+    let cur = bs[i]
+    let () = A.set i (shiftRight cur 1 + shiftLeft carry 7) out
+    halveGo bs out (i + 1) (bitAnd cur 1)
+
+allOnes : Array Int
+allOnes = arrayMake 32 255
+
+-- n, the secp256k1 group order (SEC 2 v2 §2.4.1). Used here ONLY as a
+-- rejection input and as the base for the derived boundary values below —
+-- never as an expected answer.
+nBytes : Array Int
+nBytes = [|
+  0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+  0xff, 0xff, 0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2,
+  0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
+|]
+
+nPlus1Bytes : Array Int
+nPlus1Bytes = incBytes nBytes
+
+nMinus1Bytes : Array Int
+nMinus1Bytes = decBytes nBytes
+
+-- n_h = floor(n/2) = (n-1)/2, DERIVED rather than typed out. `n` is odd, so
+-- halving n-1 is exact.
+nHalfBytes : Array Int
+nHalfBytes = halveBytes nMinus1Bytes
+
+nHalf : Sc
+nHalf = scFromBytesReduce nHalfBytes
+
+nHalfPlus1 : Sc
+nHalfPlus1 = scFromBytesReduce (incBytes nHalfBytes)
+
+nMinus1 : Sc
+nMinus1 = scFromBytesReduce nMinus1Bytes
+
+-- The sixteen limb boundaries of the 16 x 2^16 layout.
+limbBits : List Int
+limbBits = [16, 32, 48, 64, 80, 96, 112, 128, 144, 160, 176, 192, 208, 224, 240]
+
+-- One representative element per limb boundary, plus a few small ones.
+sampleBytes : List (Array Int)
+sampleBytes = [bitBytes 0, bitBytes 1, bitBytes 255]
+  ++ map bitBytes limbBits
+  ++ map (k => decBytes (bitBytes k)) limbBits
+
+samples : List Sc
+samples = map scFromBytesReduce sampleBytes
+
+-- A second, offset list, so the binary identities are not all `a op a`.
+samples2 : List Sc
+samples2 =
+  map scFromBytesReduce (map (bs => decBytes (decBytes bs)) sampleBytes)
+
+allPairs : (Sc -> Sc -> Bool) -> Bool
+allPairs f = pairsGo f samples samples2
+
+pairsGo : (Sc -> Sc -> Bool) -> List Sc -> List Sc -> Bool
+pairsGo f (a::ax) (b::bx) = f a b && pairsGo f ax bx
+pairsGo _ _ _ = True
+
+-- The third operand is derived from the first, so every triple is distinct
+-- without needing a third input list.
+allTriples : (Sc -> Sc -> Sc -> Bool) -> Bool
+allTriples f = triplesGo f samples samples2
+
+triplesGo : (Sc -> Sc -> Sc -> Bool) -> List Sc -> List Sc -> Bool
+triplesGo f (a::ax) (b::bx) = f a b (scAdd a scOne) && triplesGo f ax bx
+triplesGo _ _ _ = True
+
+-- ── The sample list is NON-EMPTY ──────────────────────────────────────
+-- Every identity below is an `all`/`allPairs` over `samples`, and `all` over
+-- an EMPTY list is vacuously True. Without this assertion a refactor that
+-- emptied `sampleBytes` would turn the whole file green while testing
+-- nothing.
+
+test "the sample lists are non-empty (guards every `all` below from going vacuous)" = expectEqual (length samples) 33
+
+test "the offset sample list matches it in length" =
+  expectEqual (length samples2) 33
+
+-- ── Additive structure ────────────────────────────────────────────────
+
+test "a + (-a) = 0, over every limb boundary" =
+  expectTrue (all (a => scIsZero (scAdd a (scNegate a))) samples)
+
+test "a + 0 = a" = expectTrue (all (a => scEqual (scAdd a scZero) a) samples)
+
+test "a - b = a + (-b)" =
+  expectTrue (allPairs (a b => scEqual (scSub a b) (scAdd a (scNegate b))))
+
+test "a - a = 0" = expectTrue (all (a => scIsZero (scSub a a)) samples)
+
+test "(a + b) + c = a + (b + c)" = expectTrue (allTriples (a b c =>
+  scEqual (scAdd (scAdd a b) c) (scAdd a (scAdd b c))))
+
+test "a + b = b + a" =
+  expectTrue (allPairs (a b => scEqual (scAdd a b) (scAdd b a)))
+
+test "-0 = 0" = expectTrue (scIsZero (scNegate scZero))
+
+-- ── Multiplicative structure ──────────────────────────────────────────
+
+test "a * 1 = a" = expectTrue (all (a => scEqual (scMul a scOne) a) samples)
+
+test "a * 0 = 0" = expectTrue (all (a => scIsZero (scMul a scZero)) samples)
+
+test "(a * b) * c = a * (b * c)" = expectTrue (allTriples (a b c =>
+  scEqual (scMul (scMul a b) c) (scMul a (scMul b c))))
+
+test "a * b = b * a" =
+  expectTrue (allPairs (a b => scEqual (scMul a b) (scMul b a)))
+
+test "a * (b + c) = a*b + a*c" = expectTrue (allTriples (a b c =>
+  scEqual (scMul a (scAdd b c)) (scAdd (scMul a b) (scMul a c))))
+
+-- ⚠️ SUBSET, DELIBERATELY, AND MEASURED. `scInverse` is Fermat over `n-2`:
+-- ~451 scalar multiplies, ~11 s per call under the tree-walking interpreter
+-- this suite runs on. Over all 33 `samples` this ONE assertion measured
+-- 6m34s for the whole file; over the six representatives below it measures
+-- well under a minute, and this suite runs as a CI gate
+-- (pds/test/inlang_test_oracle.sh).
+--
+-- Nothing is lost: `inverse` is graded against the EXTERNAL answer key over
+-- 52 inputs — including 0, 1, n-1, n_h, n_h+1 and 16 pseudo-random values —
+-- by the corpus's `inv` rows, on the NATIVE engine, in well under a second
+-- (pds/test/scalar_vectors.sh phase B, full corpus). This assertion's job is
+-- the structural one: that `a * inverse a = 1` holds as an identity of the
+-- ring, at representative limb positions.
+--
+-- The six: the low bit, the top bit, a mid-limb boundary, the first limb
+-- boundary, an all-ones-below-a-boundary value at limb 0, and one at limb 15.
+invSamples : List Sc
+invSamples = map
+  scFromBytesReduce
+  [
+    bitBytes 0,
+    bitBytes 255,
+    bitBytes 128,
+    bitBytes 16,
+    decBytes (bitBytes 16),
+    decBytes (bitBytes 240),
+  ]
+
+test "the inverse-sample list is non-empty (this `all` cannot go vacuous)" =
+  expectEqual (length invSamples) 6
+
+test "a * inverse a = 1 for every non-zero a (representative limb positions)" = expectTrue (all (a => scIsZero a || scEqual (scMul a (scInverse a)) scOne) invSamples)
+
+-- `inverse 0 = 0` is the settled convention (RUN-PDS0-016 Q1): a TOTAL
+-- function matching libsecp256k1, pinned executably by the corpus's `inv 0`
+-- row and by the doctest at the definition site. Pinned here too, because it
+-- is the one cell where "wrong" and "by design" look identical.
+test "inverse 0 = 0 (the settled convention, not an error)" =
+  expectTrue (scIsZero (scInverse scZero))
+
+-- ── Serialization ─────────────────────────────────────────────────────
+
+roundTrips : Array Int -> Bool
+roundTrips bs = match scFromBytes bs
+  Ok s => scToBytes s == bs
+  Err _ => False
+
+test "fromBytes >> toBytes round-trips at every limb boundary" =
+  expectTrue (all roundTrips sampleBytes)
+
+test "toBytes is 32 bytes" =
+  expectTrue (all (a => arrayLength (scToBytes a) == 32) samples)
+
+test "fromBytes REJECTS n" = expectTrue
+  (match scFromBytes nBytes
+    Err _ => True
+    Ok _ => False)
+
+test "fromBytes REJECTS n+1" = expectTrue
+  (match scFromBytes nPlus1Bytes
+    Err _ => True
+    Ok _ => False)
+
+test "fromBytes REJECTS 2^256-1" = expectTrue
+  (match scFromBytes allOnes
+    Err _ => True
+    Ok _ => False)
+
+test "fromBytes ACCEPTS n-1 (the last canonical value)" = expectTrue
+  (match scFromBytes nMinus1Bytes
+    Ok _ => True
+    Err _ => False)
+
+test "fromBytes REJECTS a short input" = expectTrue
+  (match scFromBytes (arrayMake 31 0)
+    Err _ => True
+    Ok _ => False)
+
+test "fromBytes REJECTS an out-of-range element" = expectTrue
+  (match scFromBytes (arrayMake 32 256)
+    Err _ => True
+    Ok _ => False)
+
+test "fromBytesReduce ACCEPTS n and reduces it to 0" =
+  expectTrue (scIsZero (scFromBytesReduce nBytes))
+
+test "fromBytesReduce ACCEPTS n+1 and reduces it to 1" =
+  expectTrue (scEqual (scFromBytesReduce nPlus1Bytes) scOne)
+
+test "fromBytesReduce ACCEPTS 2^256-1" =
+  expectFalse (scIsZero (scFromBytesReduce allOnes))
+
+-- ── The low-S boundary (structural) ───────────────────────────────────
+-- `scIsHigh` is STRICT: s > floor(n/2). `n_h` here is derived as (n-1)/2,
+-- not typed out; the corpus's `high` rows are the graded answer key. These
+-- four cells pin the shape of the boundary, not its value.
+
+test "isHigh n_h is False (the predicate is STRICTLY greater)" =
+  expectFalse (scIsHigh nHalf)
+
+test "isHigh (n_h + 1) is True" = expectTrue (scIsHigh nHalfPlus1)
+
+test "isHigh 0 is False" = expectFalse (scIsHigh scZero)
+
+test "isHigh (n-1) is True" = expectTrue (scIsHigh nMinus1)
+
+-- 2 * n_h = n - 1, so n_h really is floor(n/2): a check on the DERIVATION
+-- above, independent of scIsHigh.
+test "2 * n_h = n - 1 (so the derived n_h is floor(n/2))" =
+  expectTrue (scEqual (scAdd nHalf nHalf) nMinus1)
+
+test "n_h + 1 = inverse 2 (equivalently 2 * (n_h + 1) = 1)" =
+  expectTrue (scEqual (scAdd nHalfPlus1 nHalfPlus1) scOne)

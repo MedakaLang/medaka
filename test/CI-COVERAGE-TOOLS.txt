@@ -97,6 +97,28 @@ scripts/sprint-disjoint        sprint-orchestration evidence tool: mechanical di
 test/fixtures/pr_mock_gh       mock `gh` used ONLY by test/pr_helper_test.sh (which is in the
                                `tools` shard); running it directly proves nothing.
 
+# ── pds corpus extraction (the GATES are pds/test/*.sh — those are in the `sqlite` shard) ──
+pds/tools/gen_field_corpus     regenerates pds/test/vectors/field_reference_corpus.txt from
+                               libsecp256k1 at the pinned commit (S-field, #1699 field
+                               10x2^26 limbs). Needs network + a C compiler; asserts nothing
+                               about the compiler. The corpus it produces IS graded — by
+                               pds/test/field_vectors.sh and pds/test/vector_provenance.sh.
+pds/tools/gen_scalar_corpus    regenerates pds/test/vectors/scalar_reference_corpus.txt from
+                               libsecp256k1 at the pinned commit (S-scalar, #1700 secp256k1
+                               group ops + RFC 6979 + low-S). Needs network + a C compiler;
+                               asserts nothing about the compiler. The corpus it produces IS
+                               graded — by pds/test/scalar_vectors.sh and
+                               pds/test/vector_provenance.sh.
+
+# ── pds oracle (S-oracle-standup, #1707; docker re-cut fix-oracle-standup-docker — a
+#    local manual procedure, not a gate) ──
+pds/oracle/run                runs the official ghcr.io/bluesky-social/pds container image,
+                               pinned by digest ($PDS_ORACLE_HOME, outside the repo), as the
+                               Phase 0/1 oracle; falls back to a host-Node install (node-*
+                               verbs) when Docker is unavailable. Needs network for the first
+                               pull/fetch; asserts nothing about the compiler. No CI job
+                               invokes it. See docs/ops/PDS-ORACLE.md.
+
 # ── sourced libraries (never executed; `sh <file>` is a no-op) ──
 test/lib_scratch               shell library, not a script: sourced by run_gates / build_oracles /
                                preflight to point TMPDIR off the RAM-backed /tmp tmpfs (and to warn
