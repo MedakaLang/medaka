@@ -1,7 +1,11 @@
 {- | Pure-Medaka SHA-256 (FIPS PUB 180-4 §6.2), byte-oriented.
 
    Public surface: `sha256 : Array Int -> Array Int` — bytes 0..255 in, 32
-   bytes out. Everything else in this module is private. No
+   bytes out. That input contract is ENFORCED at entry (RUN-PDS0-036 item
+   #2): an element outside `0..255` panics rather than aliasing mod 256,
+   which would otherwise be a silent collision in a content-addressing
+   primitive (`sha256 [|256|] == sha256 [|0|]`). Everything else in this
+   module is private. No
    incremental/streaming form (#1698 "Scope": nothing calls one yet, so none
    is built here).
 
@@ -222,15 +226,39 @@ processTail tail st =
 
 -- ── Public entry point ───────────────────────────────────────────────
 
+-- Every element of `msg[0 .. len)` inside the documented `0..255` byte
+-- domain? Mirrors `pds/lib/field.mdk`'s `byteRangeGo`: a tail-recursive
+-- index scan over safe indexing, allocating nothing.
+--
+-- ⚠️ It MUST stay a FULL-ARITY self tail call. Native lowers that shape to
+-- `musttail`; the tree-walking interpreter does not TCO at all, but the
+-- native corpus (pds/test/vectors/sha256_worked_examples.txt, `Repeat =
+-- 1000000`) hashes a one-megabyte message, so a non-tail rewrite here is a
+-- million-frame stack overflow, not a slowdown.
+byteDomainOk : Array Int -> Int -> Int -> Bool
+byteDomainOk msg len i =
+  if i >= len then True
+  else
+    let b = msg[i]
+    if b < 0 || b > 255 then False else byteDomainOk msg len (i + 1)
+
 export sha256 : Array Int -> Array Int
 sha256 msg =
   let len = arrayLength msg
-  let numFull = len / 64
-  let tailLen = len - numFull * 64
-  let afterFull = processFullBlocks msg numFull h0Init 0
-  let tail = buildTail msg len tailLen
-  let (h0, h1, h2, h3, h4, h5, h6, h7) = processTail tail afterFull
-  digestBytes (h0, h1, h2, h3, h4, h5, h6, h7)
+  if not (byteDomainOk msg len 0) then
+    -- Not `Result`-typed, so a violation PANICS rather than aliasing mod
+    -- 256. A loud abort is the point: an aliased element is a hash
+    -- collision, and this is a content-addressing primitive. Same
+    -- reasoning, and same in-family precedent, as
+    -- `pds/lib/field.mdk`'s `feFromBytesReduce`.
+    panic "sha256: every element must be a byte in 0..255"
+  else
+    let numFull = len / 64
+    let tailLen = len - numFull * 64
+    let afterFull = processFullBlocks msg numFull h0Init 0
+    let tail = buildTail msg len tailLen
+    let (h0, h1, h2, h3, h4, h5, h6, h7) = processTail tail afterFull
+    digestBytes (h0, h1, h2, h3, h4, h5, h6, h7)
 
 digestWord : Array Int -> Int -> Int -> Unit
 digestWord out i word =

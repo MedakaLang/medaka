@@ -35,6 +35,33 @@ import string.{fromChars, toChars}
 export base58btcAlphabet : String
 base58btcAlphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
+{- | Maximum input length, in CHARACTERS, that `base58btcDecode` will accept.
+
+   **This is a denial-of-service guard, NOT a protocol limit.** base58btc
+   itself imposes no length bound; this ceiling exists because
+   `base58btcDecode` is a trust boundary — it is the one function here that
+   consumes a remote-supplied string (RUN-PDS0-036 items #1 and #3). Without
+   it, two things happen on hostile input: the per-character validation walk
+   is not tail-recursive, so a long string of VALID characters ending in one
+   invalid character aborts the interpreter with a stack overflow instead of
+   returning `Err`; and the base58 -> base256 fold is O(n^2), so a long
+   ACCEPTED string is a cheap-to-send, expensive-to-process request.
+
+   Headroom, so the number is auditable rather than arbitrary: the longest
+   base58 string anywhere in `pds/test/vectors/` is 60 characters (the
+   draft-msporny-base58-02 §5 row-2 vector); a `did:key` for a compressed
+   secp256k1 public key is ~48 characters and a CIDv1 over a 32-byte digest
+   is ~49. 1024 is roughly 17x the largest artifact in this tree and 20x the
+   protocol values.
+
+   ⚠️ Deliberate asymmetry: `base58btcEncode` is NOT bounded (its input is an
+   `Array Int` built by first-party code, so it is not a trust boundary), so
+   encoding more than ~750 bytes produces a string this decoder will refuse.
+   That is intended — the guard is about hostile input, not round-trip
+   algebra. -}
+export base58btcMaxInputChars : Int
+base58btcMaxInputChars = 1024
+
 -- The alphabet as an array, for O(1) digit->char lookup during encode.
 alphabetChars : Array Char
 alphabetChars = toChars base58btcAlphabet
@@ -207,20 +234,31 @@ replicateInt x n
    string itself, not this comment, for the authoritative set). Leading `'1'`
    characters decode back to leading zero bytes.
 
+   Additionally `Err` when the input is longer than
+   `base58btcMaxInputChars` characters — a denial-of-service guard, not a
+   protocol limit; see that constant's own comment for the rationale and the
+   headroom.
+
    > base58btcDecode "0"
    Err "base58btcDecode: invalid character '0'" -}
 export base58btcDecode : String -> Result String (Array Int)
 base58btcDecode s =
   let chars = toChars s
   let n = arrayLength chars
-  let zeroes = countLeadingOneChars chars 0 n
-  match collectDigitValues chars zeroes n
-    Err e => Err e
-    Ok digits =>
-      let remaining = n - zeroes
-      let size = remaining * 733 / 1000 + 1
-      let buf = make size 0
-      let length = foldDigitsIntoBytes digits buf size 0
-      let start = size - length
-      Ok (arrayFromList
-        (replicateInt 0 zeroes ++ collectBytesFrom buf start size))
+  -- The ceiling is checked HERE, before `countLeadingOneChars` — that walk is
+  -- itself O(n)-deep on the interpreter, so a check placed any later would be
+  -- reached only after the stack it exists to protect had already been spent.
+  if n > base58btcMaxInputChars then
+    Err "base58btcDecode: input longer than \{intToString base58btcMaxInputChars} characters (denial-of-service guard, not a protocol limit)"
+  else
+    let zeroes = countLeadingOneChars chars 0 n
+    match collectDigitValues chars zeroes n
+      Err e => Err e
+      Ok digits =>
+        let remaining = n - zeroes
+        let size = remaining * 733 / 1000 + 1
+        let buf = make size 0
+        let length = foldDigitsIntoBytes digits buf size 0
+        let start = size - length
+        Ok (arrayFromList
+          (replicateInt 0 zeroes ++ collectBytesFrom buf start size))

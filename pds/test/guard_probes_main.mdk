@@ -1,0 +1,44 @@
+-- Committed hostile-input guard probes for RUN-PDS0-036. Each case is ONE
+-- process because a panic aborts the process; the shell gate
+-- pds/test/trust_boundary_guards.sh runs them one at a time and grades exit
+-- codes AND messages. NOT named *_test.mdk on purpose: Medaka has no
+-- catchable panics, so a panicking guard cannot be asserted from `medaka
+-- test` — the first abort would shadow every later assertion in the file.
+--
+-- Every guard gets both directions. The PANIC cases prove the guard fires;
+-- the CONTROL cases prove it does not fire on legitimate input, which is
+-- the half that catches an off-by-one in the bound.
+--
+--   medaka run pds/test/guard_probes_main.mdk <case>
+
+import lib.sha256.{sha256}
+import lib.multiformats.{uvarintEncode}
+
+main = match args ()
+  -- sha256's documented element domain is 0..255. Both cells below alias
+  -- into that domain if the guard is absent: 256 aliases to 0 (the measured
+  -- collision) and -1 aliases to 255.
+  ["sha256-over"] =>
+    let d = sha256 (arrayFromList [256])
+    println "REACHED sha256-over len=\{intToString (arrayLength d)}"
+  ["sha256-under"] =>
+    let d = sha256 (arrayFromList [0 - 1])
+    println "REACHED sha256-under len=\{intToString (arrayLength d)}"
+  -- CONTROL. 0 and 255 are the two INCLUSIVE endpoints of the domain,
+  -- chosen deliberately: this is the cell that catches a `>= 255` or `> 0`
+  -- off-by-one in the guard. It prints the digest LENGTH, never a digest
+  -- VALUE — an expected digest asserted here would be a self-captured
+  -- golden, and the real digests are graded against the ledgered corpus by
+  -- pds/test/sha256_vectors.sh.
+  ["sha256-edges"] =>
+    let d = sha256 (arrayFromList [0, 255])
+    println "OK sha256-edges len=\{intToString (arrayLength d)}"
+  -- unsigned-varint encodes non-negative values only.
+  ["uvarint-neg"] =>
+    let v = uvarintEncode (0 - 1)
+    println "REACHED uvarint-neg len=\{intToString (arrayLength v)}"
+  -- CONTROL. An ordinary two-byte value must still encode.
+  ["uvarint-ok"] =>
+    let v = uvarintEncode 300
+    println "OK uvarint-ok len=\{intToString (arrayLength v)}"
+  _ => panic "guard_probes: unknown case"
