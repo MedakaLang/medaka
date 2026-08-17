@@ -118,7 +118,9 @@ QUEUE.md (row format: `<slice handle> | packet <path> | depends-on <handles|
 NONE> | status: queued|dispatched|landed|refused`) and:
 - **Completeness scan** (mechanical presence check): every §1–§9 section
   present, §4 facts each carrying a command, §1 carrying pinned SHA + branch +
-  worktree path + form + classification. Missing anything → BOUNCE to the
+  form + classification (NOT a worktree path — the packet is forbidden to
+  carry one; in FRONT-SEAT mode the path lives in the brief you write).
+  Missing anything → BOUNCE to the
   planner, take the next independent packet instead.
 - **Provision the tree per the sprint's recorded MODE** (set by the sprint-start
   isolation probe; orchestrator step 5b). HARNESS mode: create nothing for a

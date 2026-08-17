@@ -455,8 +455,8 @@ interventions, three different formats, none citable.
    | Probe outcome | Mode | What you do for every writer dispatch |
    |---|---|---|
    | Own tree, own branch, push works (A) | **HARNESS** | Set `isolation: "worktree"`; create NO worktree yourself for writers. The derive-and-assert block (packet §1) is the whole check |
-   | Runs in YOUR tree / no isolation (B) | **FRONT-SEAT** | Do NOT set `isolation`; `git worktree add` per writer as `slice-landed` step 3 describes, and the brief names that path as the tree the writer must confirm it is in |
-   | Own tree but minted from `main`, or push blocked (C) | **HARNESS + rebase** | Mode A plus: the brief's first act adds `git fetch origin <sprint-branch> && git checkout -B <branch> FETCH_HEAD`, and the ancestry assertion is what proves it took |
+   | Runs in YOUR tree / no isolation (B) | **FRONT-SEAT** | Do NOT set `isolation`; `git worktree add` per writer as `slice-landed` step 3 describes. The brief names that path AND names the mode, so the writer's toplevel check compares against it instead of the front-seat repo (packet §1's mode-B arm). If the writer still lands in your repo, that is a dispatch defect you fix — it BLOCKS and does not `cd` |
+   | Own tree but minted from `main`, or push blocked (C) | **HARNESS + rebase** | Mode A plus one licensed re-base, written into the brief verbatim: `git fetch origin <sprint-head-sha> && git checkout -B <branch> <sprint-head-sha>` (the SHA, never `FETCH_HEAD` — it is repo-global and a sibling fetch clobbers it). The ancestry assertion is what proves it took. Say "licensed" in the brief: without that word a conforming writer correctly DECLINES it as an out-of-band amendment |
    | Anything else (D) | — | Brain consult before dispatch #1; do not guess, and do not spend an implementer to find out |
 
    Reviewer, reproducer and domain-adversary worktrees are ALWAYS front-seat
@@ -550,10 +550,12 @@ mechanical seat, not to add one):
   grant. **There is no fourth case** — in particular, do not talk yourself out
   of an exit 1 by deciding a named file "belongs to" a lane that has landed.
   Re-deriving the lane list is what makes staleness impossible; reasoning about
-  a collision after the fact is the improvisation this rule replaces. `paths` mode takes two inline path lists;
-  `lists` mode takes two FILES — write the candidate and lane file sets under
-  `scratch/` when they are long. Never pipe the script: neither its exit code
-  nor its usage error survives a pipe.
+  a collision after the fact is the improvisation this rule replaces.
+
+Invocation: `paths` mode takes two inline path lists, `lists` mode takes two
+FILES (write long candidate/lane sets under `scratch/` first; a tracked repo
+file is rejected — it is a source file, not a list). Never pipe the script:
+neither its exit code nor its usage error survives a pipe.
 
 ## Heartbeat — every ~10 minutes
 
@@ -693,8 +695,10 @@ runs disagreeing means the tree is moving, not the suite.
    FINDINGS.md row terminal (the `sprint-findings` exit guarantee); every
    FINDINGS Refusals row carrying a verdict; every OBLIGATIONS.md row terminal
    (`DONE` with its evidence, or `VOIDED` naming the ruling); the ruling
-   sequence contiguous and matching `ls rulings/`; every `VAL-<stage>-NNN`
-   block's `executed:` non-blank. An OPEN row anywhere blocks the enqueue.
+   sequence contiguous and matching `ls rulings/` — **hand it the exact command
+   from "Ledger sequence check" above; the obvious unanchored grep is BLIND
+   (see the 🚨 note there), and a Haiku seat given a checklist will render the
+   obvious one**; every `VAL-<stage>-NNN` block's `executed:` non-blank. An OPEN row anywhere blocks the enqueue.
    These five checks are mechanical by construction and belong at the cheapest
    tier: one Haiku dispatch instead of several output-heavy turns in a
    ~487k-token front-seat context. **This is a token-tier saving, not a

@@ -29,12 +29,15 @@ slice is landed work.
 2. **DERIVE your worktree; never trust a path (v5).** First command:
    `git rev-parse --show-toplevel` — that is your tree, and you report it in
    Evidence. Do NOT `EnterWorktree`, do NOT `cd` elsewhere, do not trust a
-   CLAUDE.md/AGENTS.md header path or any path in the packet. **If your
-   toplevel equals the front-seat repo path your brief names, STOP and report
-   BLOCKED** — the dispatch lost its isolation, and working there corrupts the
-   seat's own checkout (it has: a branch switched under the front seat and an
-   uncommitted edit vanished). Run every command with absolute paths into YOUR
-   tree; a relative path after a cwd reset silently edits the wrong checkout.
+   CLAUDE.md/AGENTS.md header path. What you compare it against is the MODE
+   your brief names (packet §1): **HARNESS** — your tree is whatever the
+   harness gave you, and equalling the front-seat repo path is BLOCKED;
+   **FRONT-SEAT** — your tree must already equal the worktree path in your
+   brief, and anything else is BLOCKED. Either way a wrong tree is a dispatch
+   defect the seat fixes, never one you `cd` your way out of: working in the
+   front seat's checkout has switched its branch under it and lost an observed
+   uncommitted edit. Run every command with absolute paths into YOUR tree; a
+   relative path after a cwd reset silently edits the wrong checkout.
 3. Verify your base, and report all of it. `git rev-parse HEAD`, then
    `git merge-base --is-ancestor <brief's sprint-head SHA> HEAD && echo
    BASE-OK` — a non-ancestor HEAD is a wrong-base dispatch (a harness worktree
@@ -76,8 +79,10 @@ slice is landed work.
 7. Commit staged BY PATH (never `git add -A` — a sibling's file in your commit is
    the recorded way an unreviewed change reached main), with the slice ID in the
    message. Push BY REF — `git push origin HEAD:refs/heads/<branch>`, never
-   `checkout` (a sibling worktree may hold that branch name) — and report the
-   SHA; the front seat merges by it. Do not open or merge PRs, do not poll
+   `checkout` a branch a sibling worktree may hold (the one exception is a
+   re-base your brief spells out and calls licensed; run it verbatim and log it
+   under `Deviations from packet`) — and report the SHA; the front seat merges
+   by it. Do not open or merge PRs, do not poll
    CI, and never touch `gh issue` (writes are seat-only; a bug you find is a
    report finding, a body you want filed is a draft in your report) — push and
    report; the seats own everything after the push.

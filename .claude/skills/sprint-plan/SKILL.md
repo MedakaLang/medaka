@@ -89,7 +89,7 @@ PR flow.
 
 ## Step 3 — specify each slice at BOUNDARY depth, deliberately no deeper
 
-Per slice, the contract records exactly five things:
+Per slice, the contract records exactly six things:
 
 1. **Mission** — what is true after it lands that wasn't before, one paragraph,
    citing the issues/rulings it serves.
