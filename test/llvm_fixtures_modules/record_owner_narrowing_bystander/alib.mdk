@@ -1,0 +1,11 @@
+-- A named-field VARIANT whose constructor `MkAlpha` collides with NOTHING
+-- anywhere in this graph.  It is here only to make the field name `tag` owned by
+-- more than one record, which is what puts a projection on the multi-owner arm
+-- `resolveFieldAmbiguous` answers.  The RECORD names, the CONSTRUCTOR names and
+-- the module names are all distinct: no part of this cell participates in a
+-- collision of any kind.
+public export data Alpha =
+  | MkAlpha { tag : Int, onlyA : Int }
+
+export mkA : Alpha
+mkA = MkAlpha { tag = 1, onlyA = 2 }

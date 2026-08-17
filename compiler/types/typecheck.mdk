@@ -10183,14 +10183,61 @@ resolveFieldByOwners te fname = match fieldOwnerNames fname
   r::rest => resolveFieldAmbiguous te fname (r::rest)
 
 -- multiple owners: receiver still an unbound var ⇒ genuinely ambiguous; a
--- concrete (non-record) receiver ⇒ pick the first owner so the later unify
--- surfaces the type mismatch (mirrors the oracle's two `_` sub-branches).
+-- concrete (non-record) receiver ⇒ narrow by the receiver's own declaration
+-- identity, and only if that does not land on exactly one owner fall back to
+-- picking the first owner so the later unify surfaces the type mismatch
+-- (mirrors the oracle's two `_` sub-branches).
 resolveFieldAmbiguous : Mono -> String -> List String -> Option (String, RecordInfo)
 resolveFieldAmbiguous te fname owners = match normalize te
   TVar _ =>
     let _ = pushTypeError "T-AMBIGUOUS-FIELD" (ambiguousFieldMsg fname owners)
     None
-  _ => pairRecordByName (headL owners)
+  _ => resolveFieldOwnersNarrowed te owners
+
+-- ── #1216 / #1382: the multi-owner arm stops answering by sort order ──────────
+-- `sortUniqS` makes `headL owners` a MODULE-NAME SORT, so before this the concrete
+-- arm decided which record a `.field` access means by the alphabetical order of the
+-- declaring modules — measured on the emit path as `CFieldAccess (CVar
+-- "zwrap__mkZ") "a" "awrap__Cfg"`: zwrap's value, awrap's record, applied
+-- faithfully by the backend.
+--
+-- The narrowing asks the one question the bare key cannot: which DECLARATION does
+-- the receiver's own head name?  It ADOPTS `recordCandIsReceiverDecl` — the same
+-- landed comparator `lookupRecordByMangledHead` filters with — so both sides go
+-- through `headTyconMono` and the comparison is on `HeadKey`, not on the string
+-- every candidate here spells identically by construction.
+--
+-- THREE PROPERTIES THIS DELIBERATELY HAS, each the reason a hazard does not apply:
+--   * ABSENCE DECIDES NOTHING.  `HeadKey` embeds `TabKey`, whose `TkIdent`/`TkBare`
+--     split means a key carrying identity can never equal one that does not.  A
+--     receiver never stamped (`HkRigid`, the flat/single-file driver where every
+--     decl is `TkBare`) matches ZERO candidates and falls through to exactly
+--     today's answer — never "the first one".
+--   * IT IS NOT A FALLBACK-ON-AMBIGUITY.  Anything other than exactly one surviving
+--     candidate returns today's answer unchanged, so this can only replace a coin
+--     flip with the receiver's own declaration; it can never widen an accept.
+--   * IT CANNOT TURN NOTHING INTO SOMETHING.  Every candidate is built by a
+--     SUCCESSFUL `lookupRecordByName`, and the fall-through is byte-for-byte the
+--     old expression, so no program that resolved to `None` here can now resolve to
+--     `Some`.
+--
+-- One mint of the receiver's key for the whole filter, not one per candidate — the
+-- same hoist `lookupRecordByMangledHead` documents, for the same reason
+-- (`tabKeyOf` → `mkIdent` → `identOriginOf` allocates on the way).
+resolveFieldOwnersNarrowed : Mono -> List String -> Option (String, RecordInfo)
+resolveFieldOwnersNarrowed te owners =
+  let rk = headTyconMono te
+  match filterList (recordCandIsReceiverDecl rk) (ownerCandidates owners)
+    [pair] => Some pair
+    _ => pairRecordByName (headL owners)
+
+-- Each owner key paired with its `RecordInfo`; a key with no entry is dropped
+-- rather than defaulted, so the filter above only ever sees real declarations.
+ownerCandidates : List String -> List (String, RecordInfo)
+ownerCandidates [] = []
+ownerCandidates (key::rest) = match lookupRecordByName key
+  Some ri => (key, ri) :: ownerCandidates rest
+  None => ownerCandidates rest
 
 pairRecordByName : String -> Option (String, RecordInfo)
 pairRecordByName r = map (ri => (r, ri)) (lookupRecordByName r)

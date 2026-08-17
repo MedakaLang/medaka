@@ -1,0 +1,9 @@
+-- The second owner of the field name `tag`.  Nothing here shares a spelling with
+-- `alib` or with `entry` except that one FIELD name — which is the point: the
+-- multi-owner arm is reached by ordinary unrelated code, not only by colliding
+-- code, so this cell stands over the arm this change edits.
+public export data Beta =
+  | MkBeta { tag : Int, onlyB : Int }
+
+export mkB : Beta
+mkB = MkBeta { tag = 3, onlyB = 4 }
