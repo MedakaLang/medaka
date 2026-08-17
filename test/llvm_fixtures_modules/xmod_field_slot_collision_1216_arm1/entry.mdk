@@ -1,0 +1,33 @@
+-- #1216, ARM 1 — cross-module FIELD-NAME collision at different indices.
+-- `beta` is index 1 in this module's `Rec`, index 0 in `other.mdk`'s `Other`.
+-- `medaka run` (interpreter) was always correct: it resolves fields by NAME
+-- at run time, so it is structurally immune to slot/index questions. The
+-- NATIVE EMITTER read the wrong slot for `.field` access once it had also
+-- seen another module's record sharing that field name at a different
+-- index — `getBeta` on a genuine `Rec` came back with Other's `alpha`
+-- (index 1, where `beta` sits in `Rec`) instead of `Rec`'s own `beta`.
+--
+-- Re-pointed from the drained must-fail pin
+-- `test/must_fail_fixtures/1216-xmod-record-field-name-collision/` (both arms
+-- of #1216 confirmed fixed 2026-08-17; see that commit's message). This is a
+-- BUILD+EXECUTE-graded regression, not a check/run one: `check` is clean and
+-- both `run` and `build` themselves exit 0 in every state of this bug — only
+-- the EXECUTED binary's printed value ever carried the defect, silently, at
+-- exit 0. That is exactly what `diff_compiler_llvm_modules.sh` grades: it
+-- emits via the native backend, links, EXECUTES the real binary, and diffs
+-- against a golden captured independently of the built binary.
+--
+-- Expected output, derived BY HAND from the language semantics (field access
+-- resolves by declaration, not layout) and cross-checked against the
+-- interpreter, which is unaffected by this bug class: `ob` then `BBB`.
+import other.{Other(..)}
+
+data Rec = Rec { alpha : String, beta : String }
+
+getBeta : Rec -> String
+getBeta r = r.beta
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (Other { beta = "ob", alpha = "oa" }.beta)
+  putStrLn (getBeta (Rec { alpha = "AAA", beta = "BBB" }))

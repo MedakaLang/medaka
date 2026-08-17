@@ -1,0 +1,14 @@
+-- #1216, ARM 2 — one of two UNRELATED modules whose records share a
+-- CONSTRUCTOR name (`Cfg`) while their OWNING TYPES differ (`WrapA` here,
+-- `WrapZ` in the sibling). Nothing here imports or mentions `zwrap` at all.
+public export data WrapA =
+  | Cfg { a : Int, b : Int }
+
+mkA : WrapA
+mkA = Cfg { a = 11, b = 22 }
+
+export arA : Int
+arA = mkA.a
+
+export arB : Int
+arB = mkA.b

@@ -1,0 +1,16 @@
+-- #1216, ARM 2 — the second module. `Cfg`'s two fields are declared in the
+-- OPPOSITE order from `awrap`'s `Cfg`, which is the trigger: `WrapA`/`WrapZ`
+-- differ, but the registry key both records mangle to shares the same
+-- constructor-name suffix (`__Cfg`), so a receiver-identity narrowing keyed
+-- on the constructor's mangled head cannot discriminate them.
+public export data WrapZ =
+  | Cfg { b : Int, a : Int }
+
+mkZ : WrapZ
+mkZ = Cfg { b = 33, a = 44 }
+
+export zrA : Int
+zrA = mkZ.a
+
+export zrB : Int
+zrB = mkZ.b
