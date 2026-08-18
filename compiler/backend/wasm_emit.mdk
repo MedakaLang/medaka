@@ -335,6 +335,7 @@ data WasmEmit =
       useFloatStr : Ref Bool,
       useFloatRng : Ref Bool,
       useArgs : Ref Bool,
+      useFileBytes : Ref Bool,
       useStrCodec : Ref Bool,
       useValueCmp : Ref Bool,
       useMath : Ref Bool,
@@ -369,6 +370,7 @@ freshWasmEmit mode = WasmEmit {
   useFloatStr = Ref False,
   useFloatRng = Ref False,
   useArgs = Ref False,
+  useFileBytes = Ref False,
   useStrCodec = Ref False,
   useValueCmp = Ref False,
   useMath = Ref False,
@@ -908,13 +910,6 @@ numPolyLocalsRef = Ref []
 useIORef : Ref Bool
 useIORef = Ref False
 
--- stage-D: the program uses readFileBytes / writeFileBytes (byte-clean file I/O).
--- Gates the write host imports (fileBytesHostImportLines) + the two runtime bodies
--- (fileBytesRuntimeLines).  Co-forces useIORef ($mdk_push_path / $mdk_io_result_to_str),
--- useArrayRef ($arr rep), and useStrRef (the Err $str + the path $str).
-useFileBytesRef : Ref Bool
-useFileBytesRef = Ref False
-
 -- W8b: the names KNOWN to hold a Float in the CURRENT function/impl body — set while
 -- emitting an `impl Num Float` (etc.) method, whose params are Float but appear as bare
 -- CVars the structural detector can't otherwise see.  `cexprIsFloat` consults this so
@@ -1047,7 +1042,6 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useValueArithRef False
   let _ = setRef numPolyLocalsRef []
   let _ = setRef useIORef False
-  let _ = setRef useFileBytesRef False
   let _ = setRef tupleAritiesRef []
   let _ = scanProgW7 emit groups
   let _ = scanImplsW7 emit impls
@@ -1095,7 +1089,6 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useValueArithRef False
   let _ = setRef numPolyLocalsRef []
   let _ = setRef useIORef False
-  let _ = setRef useFileBytesRef False
   let _ = setRef tupleAritiesRef []
   let _ = scanProgW7 emit groups
   let _ = scanImplsW7 emit impls
@@ -1656,9 +1649,9 @@ noteW8Extern emit name =
           then setRef useIORef True else ()
   -- stage-D: byte-clean file I/O.  Force the IO host channel ($mdk_push_path etc via
   -- useIORef), the $arr rep (useArrayRef), the $str rep (path/Err message), and the
-  -- fileBytes runtime + write host imports (useFileBytesRef).
+  -- fileBytes runtime + write host imports (WasmEmit.useFileBytes).
   let _ = if contains name ["readFileBytes", "writeFileBytes"]
-          then let _ = setRef useIORef True in let _ = setRef useArrayRef True in let _ = setRef useStrRef True in setRef useFileBytesRef True
+          then let _ = setRef useIORef True in let _ = setRef useArrayRef True in let _ = setRef useStrRef True in setRef emit.useFileBytes True
           else ()
   if contains name ["ePutStr", "ePutStrLn"] then setRef emit.useEPut True else ()
 -- `++` is runtime-dispatched ($mdk_append): needs the $str leaf concat ($mdk_str_append)
@@ -2359,7 +2352,7 @@ emitRefProgram prog groups =
     -- W12: the IO host surface (readFile/fileExists/args/getEnv/exit) host imports.
     ++ (if useIORef.value then ioHostImportLines else [])
     -- stage-D: writeFileBytes's write host imports (reset/push/commit).
-    ++ (if useFileBytesRef.value then fileBytesHostImportLines else [])
+    ++ (if (progEmit prog).useFileBytes.value then fileBytesHostImportLines else [])
   let valNames = progValNames prog
   -- #288: record the top-level nullary bindings whose RHS is statically Float, BEFORE
   -- any fn / init body emission, so `cexprIsFloat` recognizes a `global.get` of one as
@@ -2455,7 +2448,7 @@ emitRefProgram prog groups =
   let ioArgsRt = if (progEmit prog).useArgs.value then ioArgsRuntimeLines else []
   -- stage-D: the byte-clean file I/O bodies ($mdk_read_file_bytes_io / _write_).  Needs
   -- ioHostRt in scope ($mdk_push_path / $mdk_io_result_to_str) + the $arr rep.
-  let fileBytesRt = if useFileBytesRef.value then fileBytesRuntimeLines else []
+  let fileBytesRt = if (progEmit prog).useFileBytes.value then fileBytesRuntimeLines else []
   let dataSegs = emitDataSegs (progEmit prog)
   -- B5: the stderr byte-write import — for ePutStr (`WasmEmit.useEPut`) OR a coded runtime trap
   -- (trapImportNeeded, set during the body emit above). Emitted ONCE. This binding is

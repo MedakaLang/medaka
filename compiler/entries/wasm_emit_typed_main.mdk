@@ -548,6 +548,8 @@ reemitLeafRuntimeState _ =
   let _ = reemitLeafRuntimeRow "VALUECMP" leafValueCmpP leafValueCmpU "leafValueCmpIntentionalGap" "missingLeafValueCmpCensus"
   let _ = reemitLeafRuntimeRow "FLOATSTR" leafFloatStrP leafFloatStrU "leafFloatStrIntentionalGap" "missingLeafFloatStrCensus"
   let _ = reemitLeafRuntimeRow "ARGS" leafArgsP leafArgsU "leafArgsIntentionalGap" "missingLeafArgsCensus"
+  let _ = reemitLeafRuntimeRow "FILEBYTES_READ" leafFileBytesReadP leafFileBytesU "leafFileBytesReadIntentionalGap" "missingLeafFileBytesReadCensus"
+  let _ = reemitLeafRuntimeRow "FILEBYTES_WRITE" leafFileBytesWriteP leafFileBytesU "leafFileBytesWriteIntentionalGap" "missingLeafFileBytesWriteCensus"
   reemitLeafRuntimeRow
     "MATH"
     leafMathP
@@ -690,6 +692,34 @@ leafArgsU = leafRuntimeProgram
       CClause [leafRuntimeArg] (CApp (CVar "readFile" AGlobal) (CLit (LString "args-nearest")))
     ],
     CBind "leafArgsNearestList" [CClause [leafRuntimeArg] (CList [CLit (LString "args-nearest")])],
+  ]
+
+-- A4: separate P rows keep read/write producers independently observable. Shared U
+-- retains IO, Array, and String cofactors without FileBytes demand; census is
+-- ownership-only and all hand-built programs keep main inert.
+leafFileBytesReadP : CProgram
+leafFileBytesReadP = leafRuntimeProgram
+  [
+    CBind "leafFileBytesRead" [
+      CClause [leafRuntimeArg] (CApp (CVar "readFileBytes" AGlobal) (CLit (LString "filebytes-read-inert")))
+    ]
+  ]
+
+leafFileBytesWriteP : CProgram
+leafFileBytesWriteP = leafRuntimeProgram
+  [
+    CBind "leafFileBytesWrite" [
+      CClause [leafRuntimeArg] (CApp (CApp (CVar "writeFileBytes" AGlobal) (CLit (LString "filebytes-write-inert"))) (CArray [CLit (LInt 1)]))
+    ]
+  ]
+
+leafFileBytesU : CProgram
+leafFileBytesU = leafRuntimeProgram
+  [
+    CBind "leafFileBytesNearestIoString" [
+      CClause [leafRuntimeArg] (CApp (CVar "readFile" AGlobal) (CLit (LString "filebytes-nearest")))
+    ],
+    CBind "leafFileBytesNearestArray" [CClause [leafRuntimeArg] (CArray [CLit (LInt 1)])],
   ]
 
 leafMathP : CProgram
