@@ -1095,8 +1095,8 @@ mathHostImportLines = [
 -- NaN cannot double as the failure signal — the old single-f64 seam mapped every NaN to
 -- None and lost it.  The host parser (test/wasm/run.js + playground/worker.js, kept
 -- byte-identical per WH3) reproduces medaka_rt.c mdk_string_to_float: strtod + a full-
--- consumption endptr check + an empty-string reject.  Gated on useFloatStrRef (set by
--- noteW8Extern when "stringToFloat" is referenced).
+-- consumption endptr check + an empty-string reject. Gated on per-emission
+-- WasmEmit.useFloatStr demand (set by noteW8Extern when "stringToFloat" is referenced).
 export floatStrImportLines : List String
 floatStrImportLines = [
   "  ;; -- stringToFloat host seam (strtod acceptance set JS-side, see run.js) --",
