@@ -313,7 +313,6 @@ EXPECTED_MODULE_REFS="$(printf '%s\n' \
   floatLocalsRef \
   numPolyLocalsRef \
   tupleAritiesRef \
-  useArgsRef \
   useArrayRef \
   useFileBytesRef \
   useFloatRef \
@@ -341,6 +340,49 @@ if [ "$ACTUAL_MODULE_REF_SIGS" != "$EXPECTED_MODULE_REFS" ] ||
   echo "FAIL H2B-LR-AUTHORITY-SET: top-level Ref authority set changed"
   printf '  observed signatures:\n%s\n' "$ACTUAL_MODULE_REF_SIGS"
   printf '  observed definitions:\n%s\n' "$ACTUAL_MODULE_REF_DEFS"
+  exit 1
+fi
+if grep -E '^_?useArgsRef[[:space:]]*[:=]|setRef (_?useArgsRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL A3-ARGS-AUTHORITY: retired ambient authority remains"
+  exit 1
+fi
+for required in \
+  'useArgs : Ref Bool' \
+  'useArgs = Ref False' \
+  'setRef emit.useArgs True' \
+  '(progEmit prog).useArgs.value'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    echo "FAIL A3-ARGS-CARRIER: missing $required"
+    exit 1
+  }
+done
+grep -F 'if name == "args" then setRef emit.useArgs True else ()' "$WASM_SRC" >/dev/null &&
+  grep -F 'let ioArgsRt = if (progEmit prog).useArgs.value then ioArgsRuntimeLines else []' "$WASM_SRC" >/dev/null &&
+  ! grep -E 'setRef emit\.useArgs False|setRef useArgsRef False' "$WASM_SRC" >/dev/null || {
+    echo "FAIL A3-ARGS-ROUTES: writer, drain, or reset changed"
+    exit 1
+  }
+[ "$(grep -F 'setRef emit.useArgs True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F '(progEmit prog).useArgs.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
+  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+    echo "FAIL A3-ARGS-ROUTES: writer/read cardinality or fresh routes changed"
+    exit 1
+  }
+for required in \
+  'reemitLeafRuntimeRow "ARGS" leafArgsP leafArgsU "leafArgsIntentionalGap" "missingLeafArgsCensus"' \
+  'leafArgsP : CProgram' \
+  'leafArgsU : CProgram' \
+  'CVar "args" AGlobal' \
+  'CVar "readFile" AGlobal' \
+  'CList [CLit (LString "args-nearest")]'; do
+  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+    echo "FAIL A3-ARGS-HARNESS: missing $required"
+    exit 1
+  }
+done
+if grep -E 'reemitArgsState|argsState(Input|Program|ControlProgram|CensusProgram)|--reemit-args-state' "$TYPED_ENTRY" >/dev/null; then
+  echo "FAIL A3-ARGS-HARNESS: duplicate standalone lifecycle remains"
   exit 1
 fi
 if grep -E '^_?useFloatStrRef[[:space:]]*[:=]|setRef (_?useFloatStrRef)' "$WASM_SRC" >/dev/null; then
@@ -1112,12 +1154,12 @@ LEAF_STATUS=$?
   exit 1
 }
 LEAF_MARKERS="$(awk '/^LEAF_.*_(BEGIN|END)$/ { print }' "$LEAF_OUT")"
-LEAF_EXPECTED_MARKERS="$(printf 'LEAF_CHARCLASS_P1_BEGIN\nLEAF_CHARCLASS_P1_END\nLEAF_CHARCLASS_RECORD_U_BEGIN\nLEAF_CHARCLASS_RECORD_U_END\nLEAF_CHARCLASS_RECORD_U_EVENTS_BEGIN\nLEAF_CHARCLASS_RECORD_U_EVENTS_END\nLEAF_CHARCLASS_CENSUS_P_GAP_BEGIN\nLEAF_CHARCLASS_CENSUS_P_GAP_END\nLEAF_CHARCLASS_P2_BEGIN\nLEAF_CHARCLASS_P2_END\nLEAF_FLOATRNG_P1_BEGIN\nLEAF_FLOATRNG_P1_END\nLEAF_FLOATRNG_RECORD_U_BEGIN\nLEAF_FLOATRNG_RECORD_U_END\nLEAF_FLOATRNG_RECORD_U_EVENTS_BEGIN\nLEAF_FLOATRNG_RECORD_U_EVENTS_END\nLEAF_FLOATRNG_CENSUS_P_GAP_BEGIN\nLEAF_FLOATRNG_CENSUS_P_GAP_END\nLEAF_FLOATRNG_P2_BEGIN\nLEAF_FLOATRNG_P2_END\nLEAF_STRCODEC_P1_BEGIN\nLEAF_STRCODEC_P1_END\nLEAF_STRCODEC_RECORD_U_BEGIN\nLEAF_STRCODEC_RECORD_U_END\nLEAF_STRCODEC_RECORD_U_EVENTS_BEGIN\nLEAF_STRCODEC_RECORD_U_EVENTS_END\nLEAF_STRCODEC_CENSUS_P_GAP_BEGIN\nLEAF_STRCODEC_CENSUS_P_GAP_END\nLEAF_STRCODEC_P2_BEGIN\nLEAF_STRCODEC_P2_END\nLEAF_VALUECMP_P1_BEGIN\nLEAF_VALUECMP_P1_END\nLEAF_VALUECMP_RECORD_U_BEGIN\nLEAF_VALUECMP_RECORD_U_END\nLEAF_VALUECMP_RECORD_U_EVENTS_BEGIN\nLEAF_VALUECMP_RECORD_U_EVENTS_END\nLEAF_VALUECMP_CENSUS_P_GAP_BEGIN\nLEAF_VALUECMP_CENSUS_P_GAP_END\nLEAF_VALUECMP_P2_BEGIN\nLEAF_VALUECMP_P2_END\nLEAF_FLOATSTR_P1_BEGIN\nLEAF_FLOATSTR_P1_END\nLEAF_FLOATSTR_RECORD_U_BEGIN\nLEAF_FLOATSTR_RECORD_U_END\nLEAF_FLOATSTR_RECORD_U_EVENTS_BEGIN\nLEAF_FLOATSTR_RECORD_U_EVENTS_END\nLEAF_FLOATSTR_CENSUS_P_GAP_BEGIN\nLEAF_FLOATSTR_CENSUS_P_GAP_END\nLEAF_FLOATSTR_P2_BEGIN\nLEAF_FLOATSTR_P2_END\nLEAF_MATH_P1_BEGIN\nLEAF_MATH_P1_END\nLEAF_MATH_RECORD_U_BEGIN\nLEAF_MATH_RECORD_U_END\nLEAF_MATH_RECORD_U_EVENTS_BEGIN\nLEAF_MATH_RECORD_U_EVENTS_END\nLEAF_MATH_CENSUS_P_GAP_BEGIN\nLEAF_MATH_CENSUS_P_GAP_END\nLEAF_MATH_P2_BEGIN\nLEAF_MATH_P2_END')"
+LEAF_EXPECTED_MARKERS="$(printf 'LEAF_CHARCLASS_P1_BEGIN\nLEAF_CHARCLASS_P1_END\nLEAF_CHARCLASS_RECORD_U_BEGIN\nLEAF_CHARCLASS_RECORD_U_END\nLEAF_CHARCLASS_RECORD_U_EVENTS_BEGIN\nLEAF_CHARCLASS_RECORD_U_EVENTS_END\nLEAF_CHARCLASS_CENSUS_P_GAP_BEGIN\nLEAF_CHARCLASS_CENSUS_P_GAP_END\nLEAF_CHARCLASS_P2_BEGIN\nLEAF_CHARCLASS_P2_END\nLEAF_FLOATRNG_P1_BEGIN\nLEAF_FLOATRNG_P1_END\nLEAF_FLOATRNG_RECORD_U_BEGIN\nLEAF_FLOATRNG_RECORD_U_END\nLEAF_FLOATRNG_RECORD_U_EVENTS_BEGIN\nLEAF_FLOATRNG_RECORD_U_EVENTS_END\nLEAF_FLOATRNG_CENSUS_P_GAP_BEGIN\nLEAF_FLOATRNG_CENSUS_P_GAP_END\nLEAF_FLOATRNG_P2_BEGIN\nLEAF_FLOATRNG_P2_END\nLEAF_STRCODEC_P1_BEGIN\nLEAF_STRCODEC_P1_END\nLEAF_STRCODEC_RECORD_U_BEGIN\nLEAF_STRCODEC_RECORD_U_END\nLEAF_STRCODEC_RECORD_U_EVENTS_BEGIN\nLEAF_STRCODEC_RECORD_U_EVENTS_END\nLEAF_STRCODEC_CENSUS_P_GAP_BEGIN\nLEAF_STRCODEC_CENSUS_P_GAP_END\nLEAF_STRCODEC_P2_BEGIN\nLEAF_STRCODEC_P2_END\nLEAF_VALUECMP_P1_BEGIN\nLEAF_VALUECMP_P1_END\nLEAF_VALUECMP_RECORD_U_BEGIN\nLEAF_VALUECMP_RECORD_U_END\nLEAF_VALUECMP_RECORD_U_EVENTS_BEGIN\nLEAF_VALUECMP_RECORD_U_EVENTS_END\nLEAF_VALUECMP_CENSUS_P_GAP_BEGIN\nLEAF_VALUECMP_CENSUS_P_GAP_END\nLEAF_VALUECMP_P2_BEGIN\nLEAF_VALUECMP_P2_END\nLEAF_FLOATSTR_P1_BEGIN\nLEAF_FLOATSTR_P1_END\nLEAF_FLOATSTR_RECORD_U_BEGIN\nLEAF_FLOATSTR_RECORD_U_END\nLEAF_FLOATSTR_RECORD_U_EVENTS_BEGIN\nLEAF_FLOATSTR_RECORD_U_EVENTS_END\nLEAF_FLOATSTR_CENSUS_P_GAP_BEGIN\nLEAF_FLOATSTR_CENSUS_P_GAP_END\nLEAF_FLOATSTR_P2_BEGIN\nLEAF_FLOATSTR_P2_END\nLEAF_ARGS_P1_BEGIN\nLEAF_ARGS_P1_END\nLEAF_ARGS_RECORD_U_BEGIN\nLEAF_ARGS_RECORD_U_END\nLEAF_ARGS_RECORD_U_EVENTS_BEGIN\nLEAF_ARGS_RECORD_U_EVENTS_END\nLEAF_ARGS_CENSUS_P_GAP_BEGIN\nLEAF_ARGS_CENSUS_P_GAP_END\nLEAF_ARGS_P2_BEGIN\nLEAF_ARGS_P2_END\nLEAF_MATH_P1_BEGIN\nLEAF_MATH_P1_END\nLEAF_MATH_RECORD_U_BEGIN\nLEAF_MATH_RECORD_U_END\nLEAF_MATH_RECORD_U_EVENTS_BEGIN\nLEAF_MATH_RECORD_U_EVENTS_END\nLEAF_MATH_CENSUS_P_GAP_BEGIN\nLEAF_MATH_CENSUS_P_GAP_END\nLEAF_MATH_P2_BEGIN\nLEAF_MATH_P2_END')"
 [ "$LEAF_MARKERS" = "$LEAF_EXPECTED_MARKERS" ] || {
-  echo "FAIL LR-LEAF-MARKERS: exact 60 ordered markers"
+  echo "FAIL LR-LEAF-MARKERS: exact 70 ordered markers"
   exit 1
 }
-for leaf_field in CHARCLASS FLOATRNG STRCODEC VALUECMP FLOATSTR MATH; do
+for leaf_field in CHARCLASS FLOATRNG STRCODEC VALUECMP FLOATSTR ARGS MATH; do
   feature_exact_capture "LEAF_${leaf_field}_P1_BEGIN" "LEAF_${leaf_field}_P1_END" "$LEAF_OUT" >"$INPUT_WORK/leaf-${leaf_field}-p1.wat" &&
     feature_exact_capture "LEAF_${leaf_field}_RECORD_U_BEGIN" "LEAF_${leaf_field}_RECORD_U_END" "$LEAF_OUT" >"$INPUT_WORK/leaf-${leaf_field}-u.wat" &&
     feature_exact_capture "LEAF_${leaf_field}_RECORD_U_EVENTS_BEGIN" "LEAF_${leaf_field}_RECORD_U_EVENTS_END" "$LEAF_OUT" >"$INPUT_WORK/leaf-${leaf_field}-record.events" &&
@@ -1194,6 +1236,12 @@ for leaf_wat in p1 p2; do
       echo "FAIL LR-FLOATSTR-P-PRESENCE: import/runtime/direct call in $leaf_wat"
       exit 1
     }
+  [ "$(grep -F '(func $mdk_arg_to_str' "$INPUT_WORK/leaf-ARGS-${leaf_wat}.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+    [ "$(grep -F '(func $mdk_args_io' "$INPUT_WORK/leaf-ARGS-${leaf_wat}.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+    [ "$(grep -F 'call $mdk_args_io' "$INPUT_WORK/leaf-ARGS-${leaf_wat}.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+      echo "FAIL LR-ARGS-P-PRESENCE: runtime/direct call in $leaf_wat"
+      exit 1
+    }
 done
 if grep -F '$mdk_char_is_alpha' "$INPUT_WORK/leaf-CHARCLASS-u.wat" >/dev/null; then
   echo "FAIL LR-CHARCLASS-U-ABSENCE: nearest miss emitted char class"
@@ -1255,13 +1303,25 @@ grep -F '(import "env" "mdk_float_fmt"' "$INPUT_WORK/leaf-FLOATSTR-u.wat" >/dev/
     echo "FAIL LR-FLOATSTR-U-COFACTORS: nearest miss lost Float/String/IO"
     exit 1
   }
+if grep -F '$mdk_args_io' "$INPUT_WORK/leaf-ARGS-u.wat" >/dev/null ||
+   grep -F '$mdk_arg_to_str' "$INPUT_WORK/leaf-ARGS-u.wat" >/dev/null; then
+  echo "FAIL LR-ARGS-U-ABSENCE: nearest miss emitted args runtime"
+  exit 1
+fi
+grep -F '(type $str ' "$INPUT_WORK/leaf-ARGS-u.wat" >/dev/null &&
+  grep -F '(type $C_Cons ' "$INPUT_WORK/leaf-ARGS-u.wat" >/dev/null &&
+  grep -F '(func $mdk_read_file_io' "$INPUT_WORK/leaf-ARGS-u.wat" >/dev/null || {
+    echo "FAIL LR-ARGS-U-COFACTORS: nearest miss lost IO/String/List"
+    exit 1
+  }
 LEAF_CHARCLASS_EVENT=$'fn leafCharClassIntentionalGap\tunbound variable \'missingLeafCharClassCensus\' (not a local, global value, constructor, or known function) [in leafCharClassIntentionalGap]'
 LEAF_FLOATRNG_EVENT=$'fn leafFloatRngIntentionalGap\tunbound variable \'missingLeafFloatRngCensus\' (not a local, global value, constructor, or known function) [in leafFloatRngIntentionalGap]'
 LEAF_STRCODEC_EVENT=$'fn leafStrCodecIntentionalGap\tunbound variable \'missingLeafStrCodecCensus\' (not a local, global value, constructor, or known function) [in leafStrCodecIntentionalGap]'
 LEAF_VALUECMP_EVENT=$'fn leafValueCmpIntentionalGap\tunbound variable \'missingLeafValueCmpCensus\' (not a local, global value, constructor, or known function) [in leafValueCmpIntentionalGap]'
 LEAF_FLOATSTR_EVENT=$'fn leafFloatStrIntentionalGap\tunbound variable \'missingLeafFloatStrCensus\' (not a local, global value, constructor, or known function) [in leafFloatStrIntentionalGap]'
+LEAF_ARGS_EVENT=$'fn leafArgsIntentionalGap\tunbound variable \'missingLeafArgsCensus\' (not a local, global value, constructor, or known function) [in leafArgsIntentionalGap]'
 LEAF_MATH_EVENT=$'fn leafMathIntentionalGap\tunbound variable \'missingLeafMathCensus\' (not a local, global value, constructor, or known function) [in leafMathIntentionalGap]'
-for leaf_field in CHARCLASS FLOATRNG STRCODEC VALUECMP FLOATSTR MATH; do
+for leaf_field in CHARCLASS FLOATRNG STRCODEC VALUECMP FLOATSTR ARGS MATH; do
   leaf_event_var="LEAF_${leaf_field}_EVENT"
   [ "$(wc -l < "$INPUT_WORK/leaf-${leaf_field}-census.events")" -eq 1 ] &&
     [ "$(cat "$INPUT_WORK/leaf-${leaf_field}-census.events")" = "${!leaf_event_var}" ] || {
@@ -1400,7 +1460,7 @@ for feature_name in p1 hash-int-only float-div u p2; do
     }
 done
 # Leaf capture/marker/P-U/cofactor/event checks ran before legacy feature-state checks.
-for leaf_field in CHARCLASS FLOATRNG STRCODEC VALUECMP FLOATSTR MATH; do
+for leaf_field in CHARCLASS FLOATRNG STRCODEC VALUECMP FLOATSTR ARGS MATH; do
   for leaf_wat in p1 u p2; do
     leaf_path="$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wat"
     wasm-tools parse "$leaf_path" -o "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wasm" >"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.parse.out" 2>"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.parse.err"
@@ -1424,6 +1484,39 @@ for leaf_field in CHARCLASS FLOATRNG STRCODEC VALUECMP FLOATSTR MATH; do
       }
   done
 done
+
+# A3 source-derived control: real lowering reaches args through
+# test/llvm_fixtures/env_args_empty.mdk. Host limitation: only the empty argv case
+# is byte-gated; the nonempty mdk_cons path is exercised by real argv but not verified here.
+ARGS_SOURCE="$ROOT/test/llvm_fixtures/env_args_empty.mdk"
+"$EMITBIN" "$RUNTIME" "$ARGS_SOURCE" >"$INPUT_WORK/args-source.wat" 2>"$INPUT_WORK/args-source.emit.err"
+ARGS_SOURCE_EMIT_STATUS=$?
+[ "$ARGS_SOURCE_EMIT_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/args-source.emit.err" ] &&
+  [ -s "$INPUT_WORK/args-source.wat" ] &&
+  grep -F '(func $mdk_args_io' "$INPUT_WORK/args-source.wat" >/dev/null &&
+  grep -F 'call $mdk_args_io' "$INPUT_WORK/args-source.wat" >/dev/null || {
+    echo "FAIL A3-ARGS-SOURCE: typed source emission/runtime route"
+    exit 1
+  }
+wasm-tools parse "$INPUT_WORK/args-source.wat" -o "$INPUT_WORK/args-source.wasm" >"$INPUT_WORK/args-source.parse.out" 2>"$INPUT_WORK/args-source.parse.err"
+ARGS_SOURCE_PARSE_STATUS=$?
+[ "$ARGS_SOURCE_PARSE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/args-source.parse.out" ] && [ ! -s "$INPUT_WORK/args-source.parse.err" ] || {
+  echo "FAIL A3-ARGS-SOURCE: wasm-tools parse"
+  exit 1
+}
+wasm-tools validate --features=all "$INPUT_WORK/args-source.wasm" >"$INPUT_WORK/args-source.validate.out" 2>"$INPUT_WORK/args-source.validate.err"
+ARGS_SOURCE_VALIDATE_STATUS=$?
+[ "$ARGS_SOURCE_VALIDATE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/args-source.validate.out" ] && [ ! -s "$INPUT_WORK/args-source.validate.err" ] || {
+  echo "FAIL A3-ARGS-SOURCE: wasm-tools validate"
+  exit 1
+}
+MDK_ARGS= "$NODE" "$RUNJS" "$INPUT_WORK/args-source.wasm" >"$INPUT_WORK/args-source.run.out" 2>"$INPUT_WORK/args-source.run.err"
+ARGS_SOURCE_RUN_STATUS=$?
+[ "$ARGS_SOURCE_RUN_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/args-source.run.err" ] &&
+  printf '0\n' | cmp -s - "$INPUT_WORK/args-source.run.out" || {
+    echo "FAIL A3-ARGS-SOURCE: empty argv execution"
+    exit 1
+  }
 
 # H2b.10 capture-only apparatus. HashFloat P is strict and inert; record U keeps
 # Float + hashInt prerequisites while excluding hashFloat. Census proves its route

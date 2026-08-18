@@ -547,6 +547,7 @@ reemitLeafRuntimeState _ =
   let _ = reemitLeafRuntimeRow "STRCODEC" leafStrCodecP leafStrCodecU "leafStrCodecIntentionalGap" "missingLeafStrCodecCensus"
   let _ = reemitLeafRuntimeRow "VALUECMP" leafValueCmpP leafValueCmpU "leafValueCmpIntentionalGap" "missingLeafValueCmpCensus"
   let _ = reemitLeafRuntimeRow "FLOATSTR" leafFloatStrP leafFloatStrU "leafFloatStrIntentionalGap" "missingLeafFloatStrCensus"
+  let _ = reemitLeafRuntimeRow "ARGS" leafArgsP leafArgsU "leafArgsIntentionalGap" "missingLeafArgsCensus"
   reemitLeafRuntimeRow
     "MATH"
     leafMathP
@@ -672,6 +673,23 @@ leafFloatStrU = leafRuntimeProgram
     CBind "leafFloatStrNearestStringIo" [
       CClause [leafRuntimeArg] (CApp (CVar "readFile" AGlobal) (CLit (LString "floatstr-nearest")))
     ],
+  ]
+
+-- A3: P selects args. U retains IO, String, and List cofactors without selecting
+-- the args runtime; shared leaf census remains ownership-only.
+leafArgsP : CProgram
+leafArgsP = leafRuntimeProgram
+  [
+    CBind "leafArgs" [CClause [leafRuntimeArg] (CApp (CVar "args" AGlobal) (CLit LUnit))]
+  ]
+
+leafArgsU : CProgram
+leafArgsU = leafRuntimeProgram
+  [
+    CBind "leafArgsNearestIo" [
+      CClause [leafRuntimeArg] (CApp (CVar "readFile" AGlobal) (CLit (LString "args-nearest")))
+    ],
+    CBind "leafArgsNearestList" [CClause [leafRuntimeArg] (CList [CLit (LString "args-nearest")])],
   ]
 
 leafMathP : CProgram

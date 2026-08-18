@@ -1377,8 +1377,8 @@ ioHostRuntimeLines = [
 
 -- the `args` extern body — split out from ioHostRuntimeLines because it references
 -- the cons-list types ($C_Cons / Nil), which are only declared when the program uses
--- a list.  Gated on useArgsRef (set when `args` is referenced, which also forces
--- useListRef so $C_Cons is in scope).
+-- a list. Gated on the fresh emission's WasmEmit.useArgs demand (set when `args` is
+-- referenced, which also forces useListRef so $C_Cons is in scope).
 export ioArgsRuntimeLines : List String
 ioArgsRuntimeLines = [
   "  ;; build a $str from the i-th host arg (mdk_arg_len(i) + mdk_arg_byte(i,j)).",

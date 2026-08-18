@@ -334,6 +334,7 @@ data WasmEmit =
       useFloatHash : Ref Bool,
       useFloatStr : Ref Bool,
       useFloatRng : Ref Bool,
+      useArgs : Ref Bool,
       useStrCodec : Ref Bool,
       useValueCmp : Ref Bool,
       useMath : Ref Bool,
@@ -367,6 +368,7 @@ freshWasmEmit mode = WasmEmit {
   useFloatHash = Ref False,
   useFloatStr = Ref False,
   useFloatRng = Ref False,
+  useArgs = Ref False,
   useStrCodec = Ref False,
   useValueCmp = Ref False,
   useMath = Ref False,
@@ -906,11 +908,6 @@ numPolyLocalsRef = Ref []
 useIORef : Ref Bool
 useIORef = Ref False
 
--- W12: the program uses `args` specifically — gates ioArgsRuntimeLines, which builds a
--- Cons list ($C_Cons) and so needs the list types (useListRef is co-forced).
-useArgsRef : Ref Bool
-useArgsRef = Ref False
-
 -- stage-D: the program uses readFileBytes / writeFileBytes (byte-clean file I/O).
 -- Gates the write host imports (fileBytesHostImportLines) + the two runtime bodies
 -- (fileBytesRuntimeLines).  Co-forces useIORef ($mdk_push_path / $mdk_io_result_to_str),
@@ -1050,7 +1047,6 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useValueArithRef False
   let _ = setRef numPolyLocalsRef []
   let _ = setRef useIORef False
-  let _ = setRef useArgsRef False
   let _ = setRef useFileBytesRef False
   let _ = setRef tupleAritiesRef []
   let _ = scanProgW7 emit groups
@@ -1099,7 +1095,6 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useValueArithRef False
   let _ = setRef numPolyLocalsRef []
   let _ = setRef useIORef False
-  let _ = setRef useArgsRef False
   let _ = setRef useFileBytesRef False
   let _ = setRef tupleAritiesRef []
   let _ = scanProgW7 emit groups
@@ -1656,7 +1651,7 @@ noteW8Extern emit name =
   let _ = if contains name ["readFile", "fileExists", "getEnv", "args"]
           then setRef useStrRef True else ()
   let _ = if name == "args" then setRef useListRef True else ()
-  let _ = if name == "args" then setRef useArgsRef True else ()
+  let _ = if name == "args" then setRef emit.useArgs True else ()
   let _ = if contains name ["readFile", "fileExists", "args", "getEnv", "exit"]
           then setRef useIORef True else ()
   -- stage-D: byte-clean file I/O.  Force the IO host channel ($mdk_push_path etc via
@@ -2455,9 +2450,9 @@ emitRefProgram prog groups =
   let charClassRt = if (progEmit prog).useCharClass.value then charClassRuntimeLines else []
   -- W12: the IO host-surface marshaling runtime (byte-channel + the five extern bodies).
   -- The `args` body lives in a separate block (it builds a $C_Cons list, needing the
-  -- list types) gated on useArgsRef.
+  -- list types) gated on this emission's useArgs observation.
   let ioHostRt = if useIORef.value then ioHostRuntimeLines else []
-  let ioArgsRt = if useArgsRef.value then ioArgsRuntimeLines else []
+  let ioArgsRt = if (progEmit prog).useArgs.value then ioArgsRuntimeLines else []
   -- stage-D: the byte-clean file I/O bodies ($mdk_read_file_bytes_io / _write_).  Needs
   -- ioHostRt in scope ($mdk_push_path / $mdk_io_result_to_str) + the $arr rep.
   let fileBytesRt = if useFileBytesRef.value then fileBytesRuntimeLines else []
