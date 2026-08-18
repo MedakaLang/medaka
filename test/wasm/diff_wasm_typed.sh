@@ -1014,16 +1014,6 @@ LEAF_STATUS=$?
   echo "FAIL LR-LEAF-STATUS: harness status/stderr"
   exit 1
 }
-awk '
-  /^leafValueCmpCensus =$/ { census = 1; found = 1; next }
-  census && /^[[:alnum:]_]+ :/ { exit }
-  census && $0 == "    leafValueCmpP" { p++ }
-  census && $0 == "    leafValueCmpU" { u++ }
-  END { exit !(found == 1 && p == 1 && u == 0) }
-' "$TYPED_ENTRY" || {
-  echo "FAIL LR-VALUECMP-CENSUS-P-SOURCE: census must derive from P, never U"
-  exit 1
-}
 LEAF_MARKERS="$(awk '/^LEAF_.*_(BEGIN|END)$/ { print }' "$LEAF_OUT")"
 LEAF_EXPECTED_MARKERS="$(printf 'LEAF_CHARCLASS_P1_BEGIN\nLEAF_CHARCLASS_P1_END\nLEAF_CHARCLASS_RECORD_U_BEGIN\nLEAF_CHARCLASS_RECORD_U_END\nLEAF_CHARCLASS_RECORD_U_EVENTS_BEGIN\nLEAF_CHARCLASS_RECORD_U_EVENTS_END\nLEAF_CHARCLASS_CENSUS_P_GAP_BEGIN\nLEAF_CHARCLASS_CENSUS_P_GAP_END\nLEAF_CHARCLASS_P2_BEGIN\nLEAF_CHARCLASS_P2_END\nLEAF_FLOATRNG_P1_BEGIN\nLEAF_FLOATRNG_P1_END\nLEAF_FLOATRNG_RECORD_U_BEGIN\nLEAF_FLOATRNG_RECORD_U_END\nLEAF_FLOATRNG_RECORD_U_EVENTS_BEGIN\nLEAF_FLOATRNG_RECORD_U_EVENTS_END\nLEAF_FLOATRNG_CENSUS_P_GAP_BEGIN\nLEAF_FLOATRNG_CENSUS_P_GAP_END\nLEAF_FLOATRNG_P2_BEGIN\nLEAF_FLOATRNG_P2_END\nLEAF_STRCODEC_P1_BEGIN\nLEAF_STRCODEC_P1_END\nLEAF_STRCODEC_RECORD_U_BEGIN\nLEAF_STRCODEC_RECORD_U_END\nLEAF_STRCODEC_RECORD_U_EVENTS_BEGIN\nLEAF_STRCODEC_RECORD_U_EVENTS_END\nLEAF_STRCODEC_CENSUS_P_GAP_BEGIN\nLEAF_STRCODEC_CENSUS_P_GAP_END\nLEAF_STRCODEC_P2_BEGIN\nLEAF_STRCODEC_P2_END\nLEAF_VALUECMP_P1_BEGIN\nLEAF_VALUECMP_P1_END\nLEAF_VALUECMP_RECORD_U_BEGIN\nLEAF_VALUECMP_RECORD_U_END\nLEAF_VALUECMP_RECORD_U_EVENTS_BEGIN\nLEAF_VALUECMP_RECORD_U_EVENTS_END\nLEAF_VALUECMP_CENSUS_P_GAP_BEGIN\nLEAF_VALUECMP_CENSUS_P_GAP_END\nLEAF_VALUECMP_P2_BEGIN\nLEAF_VALUECMP_P2_END\nLEAF_MATH_P1_BEGIN\nLEAF_MATH_P1_END\nLEAF_MATH_RECORD_U_BEGIN\nLEAF_MATH_RECORD_U_END\nLEAF_MATH_RECORD_U_EVENTS_BEGIN\nLEAF_MATH_RECORD_U_EVENTS_END\nLEAF_MATH_CENSUS_P_GAP_BEGIN\nLEAF_MATH_CENSUS_P_GAP_END\nLEAF_MATH_P2_BEGIN\nLEAF_MATH_P2_END')"
 [ "$LEAF_MARKERS" = "$LEAF_EXPECTED_MARKERS" ] || {
@@ -1053,6 +1043,17 @@ for leaf_field in CHARCLASS FLOATRNG STRCODEC VALUECMP MATH; do
     echo "FAIL LR-${leaf_field}-CENSUS: empty events"
     exit 1
   }
+  if [ "$leaf_field" = VALUECMP ]; then
+    for leaf_wat in p1 p2; do
+      grep -F '(func $mdk_value_eq' "$INPUT_WORK/leaf-VALUECMP-${leaf_wat}.wat" >/dev/null &&
+        grep -F 'call $mdk_value_eq' "$INPUT_WORK/leaf-VALUECMP-${leaf_wat}.wat" >/dev/null &&
+        grep -F '(func $mdk_value_lt' "$INPUT_WORK/leaf-VALUECMP-${leaf_wat}.wat" >/dev/null &&
+        grep -F 'call $mdk_value_lt' "$INPUT_WORK/leaf-VALUECMP-${leaf_wat}.wat" >/dev/null || {
+          echo "FAIL LR-VALUECMP-P-PRESENCE: $leaf_wat"
+          exit 1
+        }
+    done
+  fi
   cmp -s "$INPUT_WORK/leaf-${leaf_field}-p1.wat" "$INPUT_WORK/leaf-${leaf_field}-p2.wat" || {
     echo "FAIL LR-${leaf_field}-P-IDENTITY: P changed after record U and census"
     exit 1
@@ -1087,13 +1088,6 @@ for leaf_wat in p1 p2; do
   grep -F '(import "env" "mdk_sin"' "$INPUT_WORK/leaf-MATH-${leaf_wat}.wat" >/dev/null &&
     grep -F 'call $mdk_sin' "$INPUT_WORK/leaf-MATH-${leaf_wat}.wat" >/dev/null || {
       echo "FAIL LR-MATH-P-PRESENCE: $leaf_wat"
-      exit 1
-    }
-  grep -F '(func $mdk_value_eq' "$INPUT_WORK/leaf-VALUECMP-${leaf_wat}.wat" >/dev/null &&
-    grep -F 'call $mdk_value_eq' "$INPUT_WORK/leaf-VALUECMP-${leaf_wat}.wat" >/dev/null &&
-    grep -F '(func $mdk_value_lt' "$INPUT_WORK/leaf-VALUECMP-${leaf_wat}.wat" >/dev/null &&
-    grep -F 'call $mdk_value_lt' "$INPUT_WORK/leaf-VALUECMP-${leaf_wat}.wat" >/dev/null || {
-      echo "FAIL LR-VALUECMP-P-PRESENCE: $leaf_wat"
       exit 1
     }
 done
