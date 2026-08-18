@@ -332,8 +332,12 @@ data WasmEmit =
       useRng : Ref Bool,
       useHash : Ref Bool,
       useFloatHash : Ref Bool,
+      useFloatStr : Ref Bool,
       useFloatRng : Ref Bool,
+      useArgs : Ref Bool,
+      useFileBytes : Ref Bool,
       useStrCodec : Ref Bool,
+      useValueCmp : Ref Bool,
       useMath : Ref Bool,
       useCharFromCode : Ref Bool,
       useCharClass : Ref Bool,
@@ -363,8 +367,12 @@ freshWasmEmit mode = WasmEmit {
   useRng = Ref False,
   useHash = Ref False,
   useFloatHash = Ref False,
+  useFloatStr = Ref False,
   useFloatRng = Ref False,
+  useArgs = Ref False,
+  useFileBytes = Ref False,
   useStrCodec = Ref False,
+  useValueCmp = Ref False,
   useMath = Ref False,
   useCharFromCode = Ref False,
   useCharClass = Ref False,
@@ -864,24 +872,21 @@ isLazyGlobalW prog x = omHasKey x (indexLazyGlobalsW (progIndex prog))
 useFloatRef : Ref Bool
 useFloatRef = Ref False
 
--- layer-6: stringToFloat is a host-seam extern (like floatToString).  It takes a $str,
--- pushes its bytes via the IO path channel (mdk_path_reset/mdk_path_push), and calls
--- the new mdk_str_to_float host import to parse the f64 JS-side.  Forces floatRef
--- (result is a boxed $float), strRef (input is a $str), and ioRef (uses path channel).
-useFloatStrRef : Ref Bool
-useFloatStrRef = Ref False
+-- WasmEmit.useFloatStr records per-emission stringToFloat host-seam demand. It takes
+-- a $str, pushes its bytes via the IO path channel (mdk_path_reset/mdk_path_push), and
+-- calls mdk_str_to_float to parse the f64 JS-side. Its scalar Float/String/IO
+-- prerequisites remain on their existing carriers.
 
 -- W8b: the program uses stringIndexOf / stringCompare (the strSearchRuntime).
 useStrSearchRef : Ref Bool
 useStrSearchRef = Ref False
 
--- layer-9: the program does a ref-mode `==`/`!=`/ordering binop in a string-using
--- program → route through the runtime-shape-dispatched $mdk_value_eq / $mdk_value_cmp
+-- WasmEmit.useValueCmp records layer-9 per-emission demand from a ref-mode
+-- `==`/`!=`/ordering binop in a string-using program for the runtime-shape-dispatched
+-- $mdk_value_eq / $mdk_value_cmp
 -- (Core IR is type-erased, so a String `==` cannot be told from an Int `==` statically;
--- the old i31-only lowering trapped `illegal cast` on a String operand).  When set we
--- also force useStrSearchRef so $mdk_str_compare (the byte comparator) is in scope.
-useValueCmpRef : Ref Bool
-useValueCmpRef = Ref False
+-- the old i31-only lowering trapped `illegal cast` on a String operand).  Its producer
+-- also forces useStrSearchRef so $mdk_str_compare (the byte comparator) is in scope.
 
 -- A0/A1 (poly-`Num`-on-Float): the program routes an arithmetic binop through the
 -- runtime value-tag-dispatched $mdk_value_add/sub/mul/div/mod helpers (a polymorphic
@@ -904,18 +909,6 @@ numPolyLocalsRef = Ref []
 -- All of these touch a $str (path/result), so they also force useStrRef.
 useIORef : Ref Bool
 useIORef = Ref False
-
--- W12: the program uses `args` specifically — gates ioArgsRuntimeLines, which builds a
--- Cons list ($C_Cons) and so needs the list types (useListRef is co-forced).
-useArgsRef : Ref Bool
-useArgsRef = Ref False
-
--- stage-D: the program uses readFileBytes / writeFileBytes (byte-clean file I/O).
--- Gates the write host imports (fileBytesHostImportLines) + the two runtime bodies
--- (fileBytesRuntimeLines).  Co-forces useIORef ($mdk_push_path / $mdk_io_result_to_str),
--- useArrayRef ($arr rep), and useStrRef (the Err $str + the path $str).
-useFileBytesRef : Ref Bool
-useFileBytesRef = Ref False
 
 -- W8b: the names KNOWN to hold a Float in the CURRENT function/impl body — set while
 -- emitting an `impl Num Float` (etc.) method, whose params are Float but appear as bare
@@ -1045,14 +1038,10 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useRefBoxRef False
   let _ = setRef useStrLeafRef False
   let _ = setRef useFloatRef False
-  let _ = setRef useFloatStrRef False
   let _ = setRef useStrSearchRef False
-  let _ = setRef useValueCmpRef False
   let _ = setRef useValueArithRef False
   let _ = setRef numPolyLocalsRef []
   let _ = setRef useIORef False
-  let _ = setRef useArgsRef False
-  let _ = setRef useFileBytesRef False
   let _ = setRef tupleAritiesRef []
   let _ = scanProgW7 emit groups
   let _ = scanImplsW7 emit impls
@@ -1096,14 +1085,10 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useRefBoxRef False
   let _ = setRef useStrLeafRef False
   let _ = setRef useFloatRef False
-  let _ = setRef useFloatStrRef False
   let _ = setRef useStrSearchRef False
-  let _ = setRef useValueCmpRef False
   let _ = setRef useValueArithRef False
   let _ = setRef numPolyLocalsRef []
   let _ = setRef useIORef False
-  let _ = setRef useArgsRef False
-  let _ = setRef useFileBytesRef False
   let _ = setRef tupleAritiesRef []
   let _ = scanProgW7 emit groups
   let _ = scanImplsW7 emit impls
@@ -1607,7 +1592,7 @@ noteW8Extern emit name =
   -- and IO (for mdk_path_reset/mdk_path_push).  The $C_Some ctor is in ref-type-section
   -- which is always present when useStrRef/useFloatRef forces ref-mode.
   let _ = if name == "stringToFloat"
-          then let _ = setRef useFloatStrRef True in let _ = setRef useFloatRef True in let _ = setRef useStrRef True in setRef useIORef True
+          then let _ = setRef emit.useFloatStr True in let _ = setRef useFloatRef True in let _ = setRef useStrRef True in setRef useIORef True
           else ()
   -- hashFloat needs the shared mix64 (hashRuntime); randomFloat needs next_u64 (rngRuntime).
   let _ = if name == "hashFloat" then let _ = setRef emit.useFloatHash True in setRef emit.useHash True else ()
@@ -1659,14 +1644,14 @@ noteW8Extern emit name =
   let _ = if contains name ["readFile", "fileExists", "getEnv", "args"]
           then setRef useStrRef True else ()
   let _ = if name == "args" then setRef useListRef True else ()
-  let _ = if name == "args" then setRef useArgsRef True else ()
+  let _ = if name == "args" then setRef emit.useArgs True else ()
   let _ = if contains name ["readFile", "fileExists", "args", "getEnv", "exit"]
           then setRef useIORef True else ()
   -- stage-D: byte-clean file I/O.  Force the IO host channel ($mdk_push_path etc via
   -- useIORef), the $arr rep (useArrayRef), the $str rep (path/Err message), and the
-  -- fileBytes runtime + write host imports (useFileBytesRef).
+  -- fileBytes runtime + write host imports (WasmEmit.useFileBytes).
   let _ = if contains name ["readFileBytes", "writeFileBytes"]
-          then let _ = setRef useIORef True in let _ = setRef useArrayRef True in let _ = setRef useStrRef True in setRef useFileBytesRef True
+          then let _ = setRef useIORef True in let _ = setRef useArrayRef True in let _ = setRef useStrRef True in setRef emit.useFileBytes True
           else ()
   if contains name ["ePutStr", "ePutStrLn"] then setRef emit.useEPut True else ()
 -- `++` is runtime-dispatched ($mdk_append): needs the $str leaf concat ($mdk_str_append)
@@ -2363,11 +2348,11 @@ emitRefProgram prog groups =
     -- #101: the libm transcendentals / pow / atan2 / hypot are JS Math.* host imports.
     ++ (if (progEmit prog).useMath.value then mathHostImportLines else [])
     -- layer-6: stringToFloat is a host import (mdk_str_to_float = the host strtod parser).
-    ++ (if useFloatStrRef.value then floatStrImportLines else [])
+    ++ (if (progEmit prog).useFloatStr.value then floatStrImportLines else [])
     -- W12: the IO host surface (readFile/fileExists/args/getEnv/exit) host imports.
     ++ (if useIORef.value then ioHostImportLines else [])
     -- stage-D: writeFileBytes's write host imports (reset/push/commit).
-    ++ (if useFileBytesRef.value then fileBytesHostImportLines else [])
+    ++ (if (progEmit prog).useFileBytes.value then fileBytesHostImportLines else [])
   let valNames = progValNames prog
   -- #288: record the top-level nullary bindings whose RHS is statically Float, BEFORE
   -- any fn / init body emission, so `cexprIsFloat` recognizes a `global.get` of one as
@@ -2424,7 +2409,7 @@ emitRefProgram prog groups =
   -- layer-9: $mdk_value_eq / $mdk_value_cmp (runtime-shape-dispatched comparison).
   -- Needs $str (forced via useStrRef when this is set) + $mdk_str_compare (forced via
   -- useStrSearchRef in emitValueCmpRef).
-  let valueCmpRt = if useValueCmpRef.value then valueEqRuntimeLines else []
+  let valueCmpRt = if (progEmit prog).useValueCmp.value then valueEqRuntimeLines else []
   -- A0: runtime value-tag-dispatched arithmetic helpers ($mdk_value_add/…), emitted only
   -- when a poly-`Num` operand is routed to them (A1).  Reference $float/$boxint (always
   -- declared) + $mdk_unbox_int/$mdk_box_int (always in ioRuntimeLines).
@@ -2446,7 +2431,7 @@ emitRefProgram prog groups =
   -- layer-6: stringToFloat runtime ($mdk_string_to_float).  Needs ioHostRt for the
   -- path channel ($mdk_path_reset/$mdk_path_push), but emitted AFTER ioHostRt since
   -- those functions are defined there (wasm forward refs are fine, but order is clear).
-  let floatStrRt = if useFloatStrRef.value then floatStrRuntimeLines else []
+  let floatStrRt = if (progEmit prog).useFloatStr.value then floatStrRuntimeLines else []
   let strSearchRt = if useStrSearchRef.value then strSearchRuntimeLines else []
   -- W11b: the UTF-8 codec ($mdk_str_to_chars / $mdk_chars_to_str) + charFromCode's
   -- range-check runtime ($mdk_char_from_code).  The codec needs the $str rep ($u8arr)
@@ -2458,12 +2443,12 @@ emitRefProgram prog groups =
   let charClassRt = if (progEmit prog).useCharClass.value then charClassRuntimeLines else []
   -- W12: the IO host-surface marshaling runtime (byte-channel + the five extern bodies).
   -- The `args` body lives in a separate block (it builds a $C_Cons list, needing the
-  -- list types) gated on useArgsRef.
+  -- list types) gated on this emission's useArgs observation.
   let ioHostRt = if useIORef.value then ioHostRuntimeLines else []
-  let ioArgsRt = if useArgsRef.value then ioArgsRuntimeLines else []
+  let ioArgsRt = if (progEmit prog).useArgs.value then ioArgsRuntimeLines else []
   -- stage-D: the byte-clean file I/O bodies ($mdk_read_file_bytes_io / _write_).  Needs
   -- ioHostRt in scope ($mdk_push_path / $mdk_io_result_to_str) + the $arr rep.
-  let fileBytesRt = if useFileBytesRef.value then fileBytesRuntimeLines else []
+  let fileBytesRt = if (progEmit prog).useFileBytes.value then fileBytesRuntimeLines else []
   let dataSegs = emitDataSegs (progEmit prog)
   -- B5: the stderr byte-write import — for ePutStr (`WasmEmit.useEPut`) OR a coded runtime trap
   -- (trapImportNeeded, set during the body emit above). Emitted ONCE. This binding is
@@ -5143,7 +5128,7 @@ emitBinRef prog env d op l r tag =
   --     which need only $float/$boxint (always declared) — no $str, so no type-section
   --     dependency on the pre-scan's useStrRef (which body emission cannot retroactively set).
   else if isCmpOp op && useStrRef.value then
-    let _ = setRef useValueCmpRef True
+    let _ = setRef (progEmit prog).useValueCmp True
     let _ = setRef useStrSearchRef True
     let _ = setRef useStrLeafRef True
     emitValueCmpRef prog env d op l r

@@ -313,11 +313,8 @@ EXPECTED_MODULE_REFS="$(printf '%s\n' \
   floatLocalsRef \
   numPolyLocalsRef \
   tupleAritiesRef \
-  useArgsRef \
   useArrayRef \
-  useFileBytesRef \
   useFloatRef \
-  useFloatStrRef \
   useIORef \
   useListRef \
   useRefBoxRef \
@@ -325,7 +322,6 @@ EXPECTED_MODULE_REFS="$(printf '%s\n' \
   useStrRef \
   useStrSearchRef \
   useValueArithRef \
-  useValueCmpRef \
   wDispCtxRef \
   wDispGroupsRef)"
 ACTUAL_MODULE_REF_SIGS="$(awk '
@@ -343,6 +339,156 @@ if [ "$ACTUAL_MODULE_REF_SIGS" != "$EXPECTED_MODULE_REFS" ] ||
   echo "FAIL H2B-LR-AUTHORITY-SET: top-level Ref authority set changed"
   printf '  observed signatures:\n%s\n' "$ACTUAL_MODULE_REF_SIGS"
   printf '  observed definitions:\n%s\n' "$ACTUAL_MODULE_REF_DEFS"
+  exit 1
+fi
+if grep -E '^_?useFileBytesRef[[:space:]]*[:=]|setRef (_?useFileBytesRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL A4-FILEBYTES-AUTHORITY: retired ambient authority remains"
+  exit 1
+fi
+for required in \
+  'useFileBytes : Ref Bool' \
+  'useFileBytes = Ref False' \
+  'setRef emit.useFileBytes True' \
+  '(progEmit prog).useFileBytes.value'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    echo "FAIL A4-FILEBYTES-CARRIER: missing $required"
+    exit 1
+  }
+done
+grep -F 'then let _ = setRef useIORef True in let _ = setRef useArrayRef True in let _ = setRef useStrRef True in setRef emit.useFileBytes True' "$WASM_SRC" >/dev/null &&
+  grep -F '++ (if (progEmit prog).useFileBytes.value then fileBytesHostImportLines else [])' "$WASM_SRC" >/dev/null &&
+  grep -F 'let fileBytesRt = if (progEmit prog).useFileBytes.value then fileBytesRuntimeLines else []' "$WASM_SRC" >/dev/null &&
+  ! grep -E 'setRef emit\.useFileBytes False|setRef useFileBytesRef False' "$WASM_SRC" >/dev/null || {
+    echo "FAIL A4-FILEBYTES-ROUTES: producer, cofactors, drains, or reset changed"
+    exit 1
+  }
+[ "$(grep -F 'setRef emit.useFileBytes True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F '(progEmit prog).useFileBytes.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
+  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+    echo "FAIL A4-FILEBYTES-ROUTES: writer/read cardinality or fresh routes changed"
+    exit 1
+  }
+A4_IO_IMPORT_LINE="$(grep -n -F 'if useIORef.value then ioHostImportLines else []' "$WASM_SRC" | cut -d: -f1)"
+A4_FILEBYTES_IMPORT_LINE="$(grep -n -F '(progEmit prog).useFileBytes.value then fileBytesHostImportLines' "$WASM_SRC" | cut -d: -f1)"
+[ -n "$A4_IO_IMPORT_LINE" ] && [ -n "$A4_FILEBYTES_IMPORT_LINE" ] &&
+  [ "$A4_IO_IMPORT_LINE" -lt "$A4_FILEBYTES_IMPORT_LINE" ] &&
+  grep -F '++ strCodecRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ fileBytesRt ++ floatStrRt' "$WASM_SRC" >/dev/null || {
+    echo "FAIL A4-FILEBYTES-ORDER: import/runtime order changed"
+    exit 1
+  }
+for required in \
+  'reemitLeafRuntimeRow "FILEBYTES_READ" leafFileBytesReadP leafFileBytesU "leafFileBytesReadIntentionalGap" "missingLeafFileBytesReadCensus"' \
+  'reemitLeafRuntimeRow "FILEBYTES_WRITE" leafFileBytesWriteP leafFileBytesU "leafFileBytesWriteIntentionalGap" "missingLeafFileBytesWriteCensus"' \
+  'leafFileBytesReadP : CProgram' \
+  'leafFileBytesWriteP : CProgram' \
+  'leafFileBytesU : CProgram' \
+  'CVar "readFileBytes" AGlobal' \
+  'CVar "writeFileBytes" AGlobal' \
+  'CVar "readFile" AGlobal' \
+  'CArray [CLit (LInt 1)]'; do
+  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+    echo "FAIL A4-FILEBYTES-HARNESS: missing $required"
+    exit 1
+  }
+done
+if grep -E 'reemitFileBytesState|fileBytesState(Input|Program|ControlProgram|CensusProgram)|--reemit-file-bytes-state' "$TYPED_ENTRY" >/dev/null; then
+  echo "FAIL A4-FILEBYTES-HARNESS: duplicate standalone lifecycle remains"
+  exit 1
+fi
+if grep -E '^_?useArgsRef[[:space:]]*[:=]|setRef (_?useArgsRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL A3-ARGS-AUTHORITY: retired ambient authority remains"
+  exit 1
+fi
+for required in \
+  'useArgs : Ref Bool' \
+  'useArgs = Ref False' \
+  'setRef emit.useArgs True' \
+  '(progEmit prog).useArgs.value'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    echo "FAIL A3-ARGS-CARRIER: missing $required"
+    exit 1
+  }
+done
+grep -F 'if name == "args" then setRef emit.useArgs True else ()' "$WASM_SRC" >/dev/null &&
+  grep -F 'let ioArgsRt = if (progEmit prog).useArgs.value then ioArgsRuntimeLines else []' "$WASM_SRC" >/dev/null &&
+  ! grep -E 'setRef emit\.useArgs False|setRef useArgsRef False' "$WASM_SRC" >/dev/null || {
+    echo "FAIL A3-ARGS-ROUTES: writer, drain, or reset changed"
+    exit 1
+  }
+[ "$(grep -F 'setRef emit.useArgs True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F '(progEmit prog).useArgs.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
+  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+    echo "FAIL A3-ARGS-ROUTES: writer/read cardinality or fresh routes changed"
+    exit 1
+  }
+for required in \
+  'reemitLeafRuntimeRow "ARGS" leafArgsP leafArgsU "leafArgsIntentionalGap" "missingLeafArgsCensus"' \
+  'leafArgsP : CProgram' \
+  'leafArgsU : CProgram' \
+  'CVar "args" AGlobal' \
+  'CVar "readFile" AGlobal' \
+  'CList [CLit (LString "args-nearest")]'; do
+  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+    echo "FAIL A3-ARGS-HARNESS: missing $required"
+    exit 1
+  }
+done
+if grep -E 'reemitArgsState|argsState(Input|Program|ControlProgram|CensusProgram)|--reemit-args-state' "$TYPED_ENTRY" >/dev/null; then
+  echo "FAIL A3-ARGS-HARNESS: duplicate standalone lifecycle remains"
+  exit 1
+fi
+if grep -E '^_?useFloatStrRef[[:space:]]*[:=]|setRef (_?useFloatStrRef)' "$WASM_SRC" >/dev/null; then
+  echo "FAIL A2-FLOATSTR-AUTHORITY: retired ambient authority remains"
+  exit 1
+fi
+for required in \
+  'useFloatStr : Ref Bool' \
+  'useFloatStr = Ref False' \
+  'setRef emit.useFloatStr True' \
+  '(progEmit prog).useFloatStr.value'; do
+  grep -F -- "$required" "$WASM_SRC" >/dev/null || {
+    echo "FAIL A2-FLOATSTR-CARRIER: missing $required"
+    exit 1
+  }
+done
+grep -F 'then let _ = setRef emit.useFloatStr True in let _ = setRef useFloatRef True in let _ = setRef useStrRef True in setRef useIORef True' "$WASM_SRC" >/dev/null &&
+  grep -F '++ (if (progEmit prog).useFloatStr.value then floatStrImportLines else [])' "$WASM_SRC" >/dev/null &&
+  grep -F 'let floatStrRt = if (progEmit prog).useFloatStr.value then floatStrRuntimeLines else []' "$WASM_SRC" >/dev/null &&
+  ! grep -E 'setRef emit\.useFloatStr False|setRef useFloatStrRef False' "$WASM_SRC" >/dev/null || {
+    echo "FAIL A2-FLOATSTR-ROUTES: writer, cofactors, drains, or reset changed"
+    exit 1
+  }
+[ "$(grep -F 'setRef emit.useFloatStr True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F '(progEmit prog).useFloatStr.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
+  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+    echo "FAIL A2-FLOATSTR-ROUTES: writer/read cardinality or fresh routes changed"
+    exit 1
+  }
+A2_FLOATSTR_IMPORT_LINE="$(grep -n -F '(progEmit prog).useFloatStr.value then floatStrImportLines' "$WASM_SRC" | cut -d: -f1)"
+A2_IO_IMPORT_LINE="$(grep -n -F 'if useIORef.value then ioHostImportLines else []' "$WASM_SRC" | cut -d: -f1)"
+[ -n "$A2_FLOATSTR_IMPORT_LINE" ] && [ -n "$A2_IO_IMPORT_LINE" ] &&
+  [ "$A2_FLOATSTR_IMPORT_LINE" -lt "$A2_IO_IMPORT_LINE" ] &&
+  grep -F '++ strCodecRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ fileBytesRt ++ floatStrRt' "$WASM_SRC" >/dev/null || {
+    echo "FAIL A2-FLOATSTR-ORDER: import/runtime order changed"
+    exit 1
+  }
+for required in \
+  'reemitLeafRuntimeRow "FLOATSTR" leafFloatStrP leafFloatStrU "leafFloatStrIntentionalGap" "missingLeafFloatStrCensus"' \
+  'leafFloatStrP : CProgram' \
+  'leafFloatStrU : CProgram' \
+  'CVar "stringToFloat" AGlobal' \
+  'CVar "intToFloat" AGlobal' \
+  'CVar "readFile" AGlobal'; do
+  grep -F -- "$required" "$TYPED_ENTRY" >/dev/null || {
+    echo "FAIL A2-FLOATSTR-HARNESS: missing $required"
+    exit 1
+  }
+done
+if grep -E 'reemitFloatStrState|floatStrState(Input|Program|ControlProgram|CensusProgram)|--reemit-float-str-state' "$TYPED_ENTRY" >/dev/null; then
+  echo "FAIL A2-FLOATSTR-HARNESS: duplicate standalone lifecycle remains"
   exit 1
 fi
 if grep -E '^_?useCharClassRef[[:space:]]*[:=]|setRef (_?useCharClassRef)' "$WASM_SRC" >/dev/null; then
@@ -421,6 +567,34 @@ grep -F 'let _ = if contains name ["stringToChars", "stringFromChars"]' "$WASM_S
   grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
   [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL H2B-LR-STRCODEC-ROUTES: writer/reader cardinality or fresh route changed"
+    exit 1
+  }
+if grep -F 'useValueCmpRef' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B-LR-AUTHORITY-SET: retired ValueCmp ambient authority remains"
+  exit 1
+fi
+for required in \
+  'useValueCmp : Ref Bool' \
+  'useValueCmp = Ref False'; do
+  [ "$(grep -F -- "$required" "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+    echo "FAIL H2B-LR-VALUECMP-CARRIER: missing or duplicate $required"
+    exit 1
+  }
+done
+VALUECMP_WRITER_LINE="$(grep -n -F 'let _ = setRef (progEmit prog).useValueCmp True' "$WASM_SRC" | head -1 | cut -d: -f1)"
+[ -n "$VALUECMP_WRITER_LINE" ] &&
+  [ "$(sed -n "$((VALUECMP_WRITER_LINE + 1))p" "$WASM_SRC")" = '    let _ = setRef useStrSearchRef True' ] &&
+  [ "$(sed -n "$((VALUECMP_WRITER_LINE + 2))p" "$WASM_SRC")" = '    let _ = setRef useStrLeafRef True' ] &&
+  grep -F 'let valueCmpRt = if (progEmit prog).useValueCmp.value then valueEqRuntimeLines else []' "$WASM_SRC" >/dev/null &&
+  ! grep -E 'setRef (emit|\(progEmit prog\))\.useValueCmp False|setRef useValueCmpRef False' "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B-LR-VALUECMP-ROUTES: writer, cofactors, reader, or reset changed"
+    exit 1
+  }
+[ "$(grep -F 'setRef (progEmit prog).useValueCmp True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F '(progEmit prog).useValueCmp.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
+  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+    echo "FAIL H2B-LR-VALUECMP-ROUTES: writer/reader cardinality or fresh route changed"
     exit 1
   }
 if grep -E '^_?useMathRef[[:space:]]*[:=]|setRef (_?useMathRef)' "$WASM_SRC" >/dev/null; then
@@ -1007,6 +1181,25 @@ feature_exact_capture() {
 # LR0 ownership evidence runs before legacy feature-state assertions. A reader
 # mutant must fail at its leaf field, even when its U shape also changes a
 # legacy feature-state artifact.
+LEAF_ROW_SOURCE="$(awk '
+  $0 == "reemitLeafRuntimeRow : String -> CProgram -> CProgram -> String -> String -> <IO> Unit" { capture = 1 }
+  capture && $0 == "leafRuntimeInput : WasmEmitInput" { exit }
+  capture { print }
+' "$TYPED_ENTRY")"
+LEAF_ROW_EXPECTED='reemitLeafRuntimeRow : String -> CProgram -> CProgram -> String -> String -> <IO> Unit
+reemitLeafRuntimeRow name p u gapBind gapMissing =
+  let p1 = emitProgram leafRuntimeInput p
+  let (recordU, recordEvents) = emitProgramRecord leafRuntimeInput u
+  let censusEvents = emitProgramGaps leafRuntimeInput (leafRuntimeCensus p gapBind gapMissing)
+  let _ = printCapture ("LEAF_" ++ name ++ "_P1") p1
+  let _ = printCapture ("LEAF_" ++ name ++ "_RECORD_U") recordU
+  let _ = printEvents ("LEAF_" ++ name ++ "_RECORD_U_EVENTS") recordEvents
+  let _ = printEvents ("LEAF_" ++ name ++ "_CENSUS_P_GAP") censusEvents
+  printCapture ("LEAF_" ++ name ++ "_P2") (emitProgram leafRuntimeInput p)'
+[ "$LEAF_ROW_SOURCE" = "$LEAF_ROW_EXPECTED" ] || {
+  echo "FAIL LR-LEAF-CENSUS-PROVENANCE: exact shared helper shape changed"
+  exit 1
+}
 LEAF_OUT="$INPUT_WORK/leaf-runtime.out"
 "$EMITBIN" --reemit-leaf-runtime-state >"$LEAF_OUT" 2>"$INPUT_WORK/leaf-runtime.err"
 LEAF_STATUS=$?
@@ -1014,13 +1207,13 @@ LEAF_STATUS=$?
   echo "FAIL LR-LEAF-STATUS: harness status/stderr"
   exit 1
 }
-LEAF_MARKERS="$(awk '/^LEAF_(CHARCLASS|FLOATRNG|STRCODEC|MATH)_(P1|RECORD_U|RECORD_U_EVENTS|CENSUS_P_GAP|P2)_(BEGIN|END)$/ { print }' "$LEAF_OUT")"
-LEAF_EXPECTED_MARKERS="$(printf 'LEAF_CHARCLASS_P1_BEGIN\nLEAF_CHARCLASS_P1_END\nLEAF_CHARCLASS_RECORD_U_BEGIN\nLEAF_CHARCLASS_RECORD_U_END\nLEAF_CHARCLASS_RECORD_U_EVENTS_BEGIN\nLEAF_CHARCLASS_RECORD_U_EVENTS_END\nLEAF_CHARCLASS_CENSUS_P_GAP_BEGIN\nLEAF_CHARCLASS_CENSUS_P_GAP_END\nLEAF_CHARCLASS_P2_BEGIN\nLEAF_CHARCLASS_P2_END\nLEAF_FLOATRNG_P1_BEGIN\nLEAF_FLOATRNG_P1_END\nLEAF_FLOATRNG_RECORD_U_BEGIN\nLEAF_FLOATRNG_RECORD_U_END\nLEAF_FLOATRNG_RECORD_U_EVENTS_BEGIN\nLEAF_FLOATRNG_RECORD_U_EVENTS_END\nLEAF_FLOATRNG_CENSUS_P_GAP_BEGIN\nLEAF_FLOATRNG_CENSUS_P_GAP_END\nLEAF_FLOATRNG_P2_BEGIN\nLEAF_FLOATRNG_P2_END\nLEAF_STRCODEC_P1_BEGIN\nLEAF_STRCODEC_P1_END\nLEAF_STRCODEC_RECORD_U_BEGIN\nLEAF_STRCODEC_RECORD_U_END\nLEAF_STRCODEC_RECORD_U_EVENTS_BEGIN\nLEAF_STRCODEC_RECORD_U_EVENTS_END\nLEAF_STRCODEC_CENSUS_P_GAP_BEGIN\nLEAF_STRCODEC_CENSUS_P_GAP_END\nLEAF_STRCODEC_P2_BEGIN\nLEAF_STRCODEC_P2_END\nLEAF_MATH_P1_BEGIN\nLEAF_MATH_P1_END\nLEAF_MATH_RECORD_U_BEGIN\nLEAF_MATH_RECORD_U_END\nLEAF_MATH_RECORD_U_EVENTS_BEGIN\nLEAF_MATH_RECORD_U_EVENTS_END\nLEAF_MATH_CENSUS_P_GAP_BEGIN\nLEAF_MATH_CENSUS_P_GAP_END\nLEAF_MATH_P2_BEGIN\nLEAF_MATH_P2_END')"
+LEAF_MARKERS="$(awk '/^LEAF_.*_(BEGIN|END)$/ { print }' "$LEAF_OUT")"
+LEAF_EXPECTED_MARKERS="$(printf 'LEAF_CHARCLASS_P1_BEGIN\nLEAF_CHARCLASS_P1_END\nLEAF_CHARCLASS_RECORD_U_BEGIN\nLEAF_CHARCLASS_RECORD_U_END\nLEAF_CHARCLASS_RECORD_U_EVENTS_BEGIN\nLEAF_CHARCLASS_RECORD_U_EVENTS_END\nLEAF_CHARCLASS_CENSUS_P_GAP_BEGIN\nLEAF_CHARCLASS_CENSUS_P_GAP_END\nLEAF_CHARCLASS_P2_BEGIN\nLEAF_CHARCLASS_P2_END\nLEAF_FLOATRNG_P1_BEGIN\nLEAF_FLOATRNG_P1_END\nLEAF_FLOATRNG_RECORD_U_BEGIN\nLEAF_FLOATRNG_RECORD_U_END\nLEAF_FLOATRNG_RECORD_U_EVENTS_BEGIN\nLEAF_FLOATRNG_RECORD_U_EVENTS_END\nLEAF_FLOATRNG_CENSUS_P_GAP_BEGIN\nLEAF_FLOATRNG_CENSUS_P_GAP_END\nLEAF_FLOATRNG_P2_BEGIN\nLEAF_FLOATRNG_P2_END\nLEAF_STRCODEC_P1_BEGIN\nLEAF_STRCODEC_P1_END\nLEAF_STRCODEC_RECORD_U_BEGIN\nLEAF_STRCODEC_RECORD_U_END\nLEAF_STRCODEC_RECORD_U_EVENTS_BEGIN\nLEAF_STRCODEC_RECORD_U_EVENTS_END\nLEAF_STRCODEC_CENSUS_P_GAP_BEGIN\nLEAF_STRCODEC_CENSUS_P_GAP_END\nLEAF_STRCODEC_P2_BEGIN\nLEAF_STRCODEC_P2_END\nLEAF_VALUECMP_P1_BEGIN\nLEAF_VALUECMP_P1_END\nLEAF_VALUECMP_RECORD_U_BEGIN\nLEAF_VALUECMP_RECORD_U_END\nLEAF_VALUECMP_RECORD_U_EVENTS_BEGIN\nLEAF_VALUECMP_RECORD_U_EVENTS_END\nLEAF_VALUECMP_CENSUS_P_GAP_BEGIN\nLEAF_VALUECMP_CENSUS_P_GAP_END\nLEAF_VALUECMP_P2_BEGIN\nLEAF_VALUECMP_P2_END\nLEAF_FLOATSTR_P1_BEGIN\nLEAF_FLOATSTR_P1_END\nLEAF_FLOATSTR_RECORD_U_BEGIN\nLEAF_FLOATSTR_RECORD_U_END\nLEAF_FLOATSTR_RECORD_U_EVENTS_BEGIN\nLEAF_FLOATSTR_RECORD_U_EVENTS_END\nLEAF_FLOATSTR_CENSUS_P_GAP_BEGIN\nLEAF_FLOATSTR_CENSUS_P_GAP_END\nLEAF_FLOATSTR_P2_BEGIN\nLEAF_FLOATSTR_P2_END\nLEAF_ARGS_P1_BEGIN\nLEAF_ARGS_P1_END\nLEAF_ARGS_RECORD_U_BEGIN\nLEAF_ARGS_RECORD_U_END\nLEAF_ARGS_RECORD_U_EVENTS_BEGIN\nLEAF_ARGS_RECORD_U_EVENTS_END\nLEAF_ARGS_CENSUS_P_GAP_BEGIN\nLEAF_ARGS_CENSUS_P_GAP_END\nLEAF_ARGS_P2_BEGIN\nLEAF_ARGS_P2_END\nLEAF_FILEBYTES_READ_P1_BEGIN\nLEAF_FILEBYTES_READ_P1_END\nLEAF_FILEBYTES_READ_RECORD_U_BEGIN\nLEAF_FILEBYTES_READ_RECORD_U_END\nLEAF_FILEBYTES_READ_RECORD_U_EVENTS_BEGIN\nLEAF_FILEBYTES_READ_RECORD_U_EVENTS_END\nLEAF_FILEBYTES_READ_CENSUS_P_GAP_BEGIN\nLEAF_FILEBYTES_READ_CENSUS_P_GAP_END\nLEAF_FILEBYTES_READ_P2_BEGIN\nLEAF_FILEBYTES_READ_P2_END\nLEAF_FILEBYTES_WRITE_P1_BEGIN\nLEAF_FILEBYTES_WRITE_P1_END\nLEAF_FILEBYTES_WRITE_RECORD_U_BEGIN\nLEAF_FILEBYTES_WRITE_RECORD_U_END\nLEAF_FILEBYTES_WRITE_RECORD_U_EVENTS_BEGIN\nLEAF_FILEBYTES_WRITE_RECORD_U_EVENTS_END\nLEAF_FILEBYTES_WRITE_CENSUS_P_GAP_BEGIN\nLEAF_FILEBYTES_WRITE_CENSUS_P_GAP_END\nLEAF_FILEBYTES_WRITE_P2_BEGIN\nLEAF_FILEBYTES_WRITE_P2_END\nLEAF_MATH_P1_BEGIN\nLEAF_MATH_P1_END\nLEAF_MATH_RECORD_U_BEGIN\nLEAF_MATH_RECORD_U_END\nLEAF_MATH_RECORD_U_EVENTS_BEGIN\nLEAF_MATH_RECORD_U_EVENTS_END\nLEAF_MATH_CENSUS_P_GAP_BEGIN\nLEAF_MATH_CENSUS_P_GAP_END\nLEAF_MATH_P2_BEGIN\nLEAF_MATH_P2_END')"
 [ "$LEAF_MARKERS" = "$LEAF_EXPECTED_MARKERS" ] || {
-  echo "FAIL LR-LEAF-MARKERS: exact 40 ordered markers"
+  echo "FAIL LR-LEAF-MARKERS: exact 90 ordered markers"
   exit 1
 }
-for leaf_field in CHARCLASS FLOATRNG STRCODEC MATH; do
+for leaf_field in CHARCLASS FLOATRNG STRCODEC VALUECMP FLOATSTR ARGS FILEBYTES_READ FILEBYTES_WRITE MATH; do
   feature_exact_capture "LEAF_${leaf_field}_P1_BEGIN" "LEAF_${leaf_field}_P1_END" "$LEAF_OUT" >"$INPUT_WORK/leaf-${leaf_field}-p1.wat" &&
     feature_exact_capture "LEAF_${leaf_field}_RECORD_U_BEGIN" "LEAF_${leaf_field}_RECORD_U_END" "$LEAF_OUT" >"$INPUT_WORK/leaf-${leaf_field}-u.wat" &&
     feature_exact_capture "LEAF_${leaf_field}_RECORD_U_EVENTS_BEGIN" "LEAF_${leaf_field}_RECORD_U_EVENTS_END" "$LEAF_OUT" >"$INPUT_WORK/leaf-${leaf_field}-record.events" &&
@@ -1043,6 +1236,17 @@ for leaf_field in CHARCLASS FLOATRNG STRCODEC MATH; do
     echo "FAIL LR-${leaf_field}-CENSUS: empty events"
     exit 1
   }
+  if [ "$leaf_field" = VALUECMP ]; then
+    for leaf_wat in p1 p2; do
+      grep -F '(func $mdk_value_eq' "$INPUT_WORK/leaf-VALUECMP-${leaf_wat}.wat" >/dev/null &&
+        grep -F 'call $mdk_value_eq' "$INPUT_WORK/leaf-VALUECMP-${leaf_wat}.wat" >/dev/null &&
+        grep -F '(func $mdk_value_lt' "$INPUT_WORK/leaf-VALUECMP-${leaf_wat}.wat" >/dev/null &&
+        grep -F 'call $mdk_value_lt' "$INPUT_WORK/leaf-VALUECMP-${leaf_wat}.wat" >/dev/null || {
+          echo "FAIL LR-VALUECMP-P-PRESENCE: $leaf_wat"
+          exit 1
+        }
+    done
+  fi
   cmp -s "$INPUT_WORK/leaf-${leaf_field}-p1.wat" "$INPUT_WORK/leaf-${leaf_field}-p2.wat" || {
     echo "FAIL LR-${leaf_field}-P-IDENTITY: P changed after record U and census"
     exit 1
@@ -1079,6 +1283,37 @@ for leaf_wat in p1 p2; do
       echo "FAIL LR-MATH-P-PRESENCE: $leaf_wat"
       exit 1
     }
+  [ "$(grep -F '(import "env" "mdk_str_to_float"' "$INPUT_WORK/leaf-FLOATSTR-${leaf_wat}.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+    [ "$(grep -F '(import "env" "mdk_str_to_float_ok"' "$INPUT_WORK/leaf-FLOATSTR-${leaf_wat}.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+    [ "$(grep -F '(func $mdk_string_to_float' "$INPUT_WORK/leaf-FLOATSTR-${leaf_wat}.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+    [ "$(grep -F 'call $mdk_string_to_float' "$INPUT_WORK/leaf-FLOATSTR-${leaf_wat}.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+      echo "FAIL LR-FLOATSTR-P-PRESENCE: import/runtime/direct call in $leaf_wat"
+      exit 1
+    }
+  [ "$(grep -F '(func $mdk_arg_to_str' "$INPUT_WORK/leaf-ARGS-${leaf_wat}.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+    [ "$(grep -F '(func $mdk_args_io' "$INPUT_WORK/leaf-ARGS-${leaf_wat}.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+    [ "$(grep -F 'call $mdk_args_io' "$INPUT_WORK/leaf-ARGS-${leaf_wat}.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+      echo "FAIL LR-ARGS-P-PRESENCE: runtime/direct call in $leaf_wat"
+      exit 1
+    }
+  for leaf_filebytes_field in FILEBYTES_READ FILEBYTES_WRITE; do
+    [ "$(grep -F '(import "env" "mdk_write_file_reset"' "$INPUT_WORK/leaf-${leaf_filebytes_field}-${leaf_wat}.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+      [ "$(grep -F '(import "env" "mdk_write_file_push"' "$INPUT_WORK/leaf-${leaf_filebytes_field}-${leaf_wat}.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+      [ "$(grep -F '(import "env" "mdk_write_file_commit"' "$INPUT_WORK/leaf-${leaf_filebytes_field}-${leaf_wat}.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+      [ "$(grep -F '(func $mdk_read_file_bytes_io' "$INPUT_WORK/leaf-${leaf_filebytes_field}-${leaf_wat}.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+      [ "$(grep -F '(func $mdk_write_file_bytes_io' "$INPUT_WORK/leaf-${leaf_filebytes_field}-${leaf_wat}.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+        echo "FAIL LR-${leaf_filebytes_field}-P-HELPERS: imports/runtime in $leaf_wat"
+        exit 1
+      }
+  done
+  [ "$(grep -F 'call $mdk_read_file_bytes_io' "$INPUT_WORK/leaf-FILEBYTES_READ-${leaf_wat}.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+    echo "FAIL LR-FILEBYTES_READ-P-DIRECT-CALL: $leaf_wat"
+    exit 1
+  }
+  [ "$(grep -F 'call $mdk_write_file_bytes_io' "$INPUT_WORK/leaf-FILEBYTES_WRITE-${leaf_wat}.wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+    echo "FAIL LR-FILEBYTES_WRITE-P-DIRECT-CALL: $leaf_wat"
+    exit 1
+  }
 done
 if grep -F '$mdk_char_is_alpha' "$INPUT_WORK/leaf-CHARCLASS-u.wat" >/dev/null; then
   echo "FAIL LR-CHARCLASS-U-ABSENCE: nearest miss emitted char class"
@@ -1116,11 +1351,65 @@ grep -F 'f64.sqrt' "$INPUT_WORK/leaf-MATH-u.wat" >/dev/null || {
   echo "FAIL LR-MATH-U-COFACTOR: missing sqrt"
   exit 1
 }
+grep -F '(func $mdk_str_compare' "$INPUT_WORK/leaf-VALUECMP-u.wat" >/dev/null &&
+  grep -F 'call $mdk_str_compare' "$INPUT_WORK/leaf-VALUECMP-u.wat" >/dev/null || {
+    echo "FAIL LR-VALUECMP-U-COFACTOR: missing direct stringCompare"
+    exit 1
+  }
+for leaf_value_helper in mdk_value_eq mdk_value_lt mdk_value_cmp; do
+  if grep -F "\$$leaf_value_helper" "$INPUT_WORK/leaf-VALUECMP-u.wat" >/dev/null; then
+    echo "FAIL LR-VALUECMP-U-ABSENCE: nearest miss emitted $leaf_value_helper"
+    exit 1
+  fi
+done
+if grep -F '$mdk_str_to_float' "$INPUT_WORK/leaf-FLOATSTR-u.wat" >/dev/null ||
+   grep -F '$mdk_string_to_float' "$INPUT_WORK/leaf-FLOATSTR-u.wat" >/dev/null; then
+  echo "FAIL LR-FLOATSTR-U-ABSENCE: nearest miss emitted stringToFloat import/runtime"
+  exit 1
+fi
+grep -F '(import "env" "mdk_float_fmt"' "$INPUT_WORK/leaf-FLOATSTR-u.wat" >/dev/null &&
+  grep -F '(func $mdk_int_to_float' "$INPUT_WORK/leaf-FLOATSTR-u.wat" >/dev/null &&
+  grep -F '(type $str ' "$INPUT_WORK/leaf-FLOATSTR-u.wat" >/dev/null &&
+  grep -F '(import "env" "mdk_path_reset"' "$INPUT_WORK/leaf-FLOATSTR-u.wat" >/dev/null &&
+  grep -F '(func $mdk_read_file_io' "$INPUT_WORK/leaf-FLOATSTR-u.wat" >/dev/null || {
+    echo "FAIL LR-FLOATSTR-U-COFACTORS: nearest miss lost Float/String/IO"
+    exit 1
+  }
+if grep -F '$mdk_args_io' "$INPUT_WORK/leaf-ARGS-u.wat" >/dev/null ||
+   grep -F '$mdk_arg_to_str' "$INPUT_WORK/leaf-ARGS-u.wat" >/dev/null; then
+  echo "FAIL LR-ARGS-U-ABSENCE: nearest miss emitted args runtime"
+  exit 1
+fi
+grep -F '(type $str ' "$INPUT_WORK/leaf-ARGS-u.wat" >/dev/null &&
+  grep -F '(type $C_Cons ' "$INPUT_WORK/leaf-ARGS-u.wat" >/dev/null &&
+  grep -F '(func $mdk_read_file_io' "$INPUT_WORK/leaf-ARGS-u.wat" >/dev/null || {
+    echo "FAIL LR-ARGS-U-COFACTORS: nearest miss lost IO/String/List"
+    exit 1
+  }
+for leaf_filebytes_field in FILEBYTES_READ FILEBYTES_WRITE; do
+  for leaf_filebytes_helper in mdk_read_file_bytes_io mdk_write_file_bytes_io mdk_write_file_reset mdk_write_file_push mdk_write_file_commit; do
+    if grep -F "\$$leaf_filebytes_helper" "$INPUT_WORK/leaf-${leaf_filebytes_field}-u.wat" >/dev/null; then
+      echo "FAIL LR-${leaf_filebytes_field}-U-ABSENCE: nearest miss emitted $leaf_filebytes_helper"
+      exit 1
+    fi
+  done
+  grep -F '(type $str ' "$INPUT_WORK/leaf-${leaf_filebytes_field}-u.wat" >/dev/null &&
+    grep -F '(type $arr (array (mut (ref eq)))' "$INPUT_WORK/leaf-${leaf_filebytes_field}-u.wat" >/dev/null &&
+    grep -F '(func $mdk_read_file_io' "$INPUT_WORK/leaf-${leaf_filebytes_field}-u.wat" >/dev/null || {
+      echo "FAIL LR-${leaf_filebytes_field}-U-COFACTORS: nearest miss lost IO/String/Array"
+      exit 1
+    }
+done
 LEAF_CHARCLASS_EVENT=$'fn leafCharClassIntentionalGap\tunbound variable \'missingLeafCharClassCensus\' (not a local, global value, constructor, or known function) [in leafCharClassIntentionalGap]'
 LEAF_FLOATRNG_EVENT=$'fn leafFloatRngIntentionalGap\tunbound variable \'missingLeafFloatRngCensus\' (not a local, global value, constructor, or known function) [in leafFloatRngIntentionalGap]'
 LEAF_STRCODEC_EVENT=$'fn leafStrCodecIntentionalGap\tunbound variable \'missingLeafStrCodecCensus\' (not a local, global value, constructor, or known function) [in leafStrCodecIntentionalGap]'
+LEAF_VALUECMP_EVENT=$'fn leafValueCmpIntentionalGap\tunbound variable \'missingLeafValueCmpCensus\' (not a local, global value, constructor, or known function) [in leafValueCmpIntentionalGap]'
+LEAF_FLOATSTR_EVENT=$'fn leafFloatStrIntentionalGap\tunbound variable \'missingLeafFloatStrCensus\' (not a local, global value, constructor, or known function) [in leafFloatStrIntentionalGap]'
+LEAF_ARGS_EVENT=$'fn leafArgsIntentionalGap\tunbound variable \'missingLeafArgsCensus\' (not a local, global value, constructor, or known function) [in leafArgsIntentionalGap]'
+LEAF_FILEBYTES_READ_EVENT=$'fn leafFileBytesReadIntentionalGap\tunbound variable \'missingLeafFileBytesReadCensus\' (not a local, global value, constructor, or known function) [in leafFileBytesReadIntentionalGap]'
+LEAF_FILEBYTES_WRITE_EVENT=$'fn leafFileBytesWriteIntentionalGap\tunbound variable \'missingLeafFileBytesWriteCensus\' (not a local, global value, constructor, or known function) [in leafFileBytesWriteIntentionalGap]'
 LEAF_MATH_EVENT=$'fn leafMathIntentionalGap\tunbound variable \'missingLeafMathCensus\' (not a local, global value, constructor, or known function) [in leafMathIntentionalGap]'
-for leaf_field in CHARCLASS FLOATRNG STRCODEC MATH; do
+for leaf_field in CHARCLASS FLOATRNG STRCODEC VALUECMP FLOATSTR ARGS FILEBYTES_READ FILEBYTES_WRITE MATH; do
   leaf_event_var="LEAF_${leaf_field}_EVENT"
   [ "$(wc -l < "$INPUT_WORK/leaf-${leaf_field}-census.events")" -eq 1 ] &&
     [ "$(cat "$INPUT_WORK/leaf-${leaf_field}-census.events")" = "${!leaf_event_var}" ] || {
@@ -1259,7 +1548,7 @@ for feature_name in p1 hash-int-only float-div u p2; do
     }
 done
 # Leaf capture/marker/P-U/cofactor/event checks ran before legacy feature-state checks.
-for leaf_field in CHARCLASS FLOATRNG STRCODEC MATH; do
+for leaf_field in CHARCLASS FLOATRNG STRCODEC VALUECMP FLOATSTR ARGS FILEBYTES_READ FILEBYTES_WRITE MATH; do
   for leaf_wat in p1 u p2; do
     leaf_path="$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wat"
     wasm-tools parse "$leaf_path" -o "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wasm" >"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.parse.out" 2>"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.parse.err"
@@ -1283,6 +1572,102 @@ for leaf_field in CHARCLASS FLOATRNG STRCODEC MATH; do
       }
   done
 done
+
+# A4 source-derived control: generated source and runtime target stay inside this
+# gate-owned directory. Separate hand-built rows prove each producer; this route
+# proves real lowering plus write/read host behavior with exact bytes.
+FILEBYTES_SAFE_SOURCE="$INPUT_WORK/filebytes-safe-roundtrip.mdk"
+FILEBYTES_SAFE_TARGET="$INPUT_WORK/filebytes-safe-roundtrip.bin"
+[ -d "$INPUT_WORK" ] && [ ! -L "$INPUT_WORK" ] &&
+  [ "$(dirname "$FILEBYTES_SAFE_TARGET")" = "$INPUT_WORK" ] &&
+  [[ "$FILEBYTES_SAFE_TARGET" =~ ^[A-Za-z0-9_./-]+$ ]] || {
+    echo "FAIL A4-FILEBYTES-SAFETY: ambiguous gate-owned path"
+    exit 1
+  }
+[ ! -e "$FILEBYTES_SAFE_TARGET" ] && [ ! -L "$FILEBYTES_SAFE_TARGET" ] || {
+  echo "FAIL A4-FILEBYTES-SAFETY: target exists before run"
+  exit 1
+}
+printf 'main = match writeFileBytes "%s" (arrayFromList [1, 2, 3])\n  Ok _ => match readFileBytes "%s"\n    Ok bytes => if arrayLength bytes == 3 && arrayGetUnsafe 0 bytes == 1 && arrayGetUnsafe 1 bytes == 2 && arrayGetUnsafe 2 bytes == 3 then putStrLn "FILEBYTES_SAFE_OK" else putStrLn "FILEBYTES_SAFE_BAD_BYTES"\n    Err _ => putStrLn "FILEBYTES_SAFE_READ_ERR"\n  Err _ => putStrLn "FILEBYTES_SAFE_WRITE_ERR"\n' \
+  "$FILEBYTES_SAFE_TARGET" "$FILEBYTES_SAFE_TARGET" >"$FILEBYTES_SAFE_SOURCE"
+"$EMITBIN" "$RUNTIME" "$FILEBYTES_SAFE_SOURCE" >"$INPUT_WORK/filebytes-safe.wat" 2>"$INPUT_WORK/filebytes-safe.emit.err"
+FILEBYTES_SAFE_EMIT_STATUS=$?
+[ "$FILEBYTES_SAFE_EMIT_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/filebytes-safe.emit.err" ] && [ -s "$INPUT_WORK/filebytes-safe.wat" ] || {
+    echo "FAIL A4-FILEBYTES-SOURCE-EMIT: status/stderr/nonempty WAT"
+    cat "$INPUT_WORK/filebytes-safe.emit.err"
+    exit 1
+  }
+grep -F 'call $mdk_write_file_bytes_io' "$INPUT_WORK/filebytes-safe.wat" >/dev/null &&
+  grep -F 'call $mdk_read_file_bytes_io' "$INPUT_WORK/filebytes-safe.wat" >/dev/null || {
+    echo "FAIL A4-FILEBYTES-SOURCE-SHAPE: read/write direct calls"
+    exit 1
+  }
+wasm-tools parse "$INPUT_WORK/filebytes-safe.wat" -o "$INPUT_WORK/filebytes-safe.wasm" >"$INPUT_WORK/filebytes-safe.parse.out" 2>"$INPUT_WORK/filebytes-safe.parse.err"
+FILEBYTES_SAFE_PARSE_STATUS=$?
+[ "$FILEBYTES_SAFE_PARSE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/filebytes-safe.parse.out" ] && [ ! -s "$INPUT_WORK/filebytes-safe.parse.err" ] || {
+  echo "FAIL A4-FILEBYTES-SOURCE: wasm-tools parse"
+  exit 1
+}
+wasm-tools validate --features=all "$INPUT_WORK/filebytes-safe.wasm" >"$INPUT_WORK/filebytes-safe.validate.out" 2>"$INPUT_WORK/filebytes-safe.validate.err"
+FILEBYTES_SAFE_VALIDATE_STATUS=$?
+[ "$FILEBYTES_SAFE_VALIDATE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/filebytes-safe.validate.out" ] && [ ! -s "$INPUT_WORK/filebytes-safe.validate.err" ] || {
+  echo "FAIL A4-FILEBYTES-SOURCE: wasm-tools validate"
+  exit 1
+}
+"$NODE" "$RUNJS" "$INPUT_WORK/filebytes-safe.wasm" >"$INPUT_WORK/filebytes-safe.run.out" 2>"$INPUT_WORK/filebytes-safe.run.err"
+FILEBYTES_SAFE_RUN_STATUS=$?
+[ "$FILEBYTES_SAFE_RUN_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/filebytes-safe.run.err" ] &&
+  printf 'FILEBYTES_SAFE_OK\n' | cmp -s - "$INPUT_WORK/filebytes-safe.run.out" || {
+    echo "FAIL A4-FILEBYTES-SOURCE: exact runtime status/stderr/stdout (status $FILEBYTES_SAFE_RUN_STATUS)"
+    printf '%s\n' "stdout:" && cat "$INPUT_WORK/filebytes-safe.run.out"
+    printf '%s\n' "stderr:" && cat "$INPUT_WORK/filebytes-safe.run.err"
+    exit 1
+  }
+[ -f "$FILEBYTES_SAFE_TARGET" ] && [ ! -L "$FILEBYTES_SAFE_TARGET" ] &&
+  [ "$(wc -c < "$FILEBYTES_SAFE_TARGET" | tr -d '[:space:]')" -eq 3 ] &&
+  [ "$(od -An -t u1 "$FILEBYTES_SAFE_TARGET" | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')" = '1 2 3' ] || {
+    echo "FAIL A4-FILEBYTES-SAFETY: host target bytes"
+    exit 1
+  }
+rm -f -- "$FILEBYTES_SAFE_TARGET"
+[ ! -e "$FILEBYTES_SAFE_TARGET" ] && [ ! -L "$FILEBYTES_SAFE_TARGET" ] || {
+  echo "FAIL A4-FILEBYTES-SAFETY: target remains after exact cleanup"
+  exit 1
+}
+echo "A4 FileBytes safety: gate-owned target absent -> 3 exact bytes -> absent"
+
+# A3 source-derived control: real lowering reaches args through
+# test/llvm_fixtures/env_args_empty.mdk. Host limitation: only the empty argv case
+# is byte-gated; the nonempty mdk_cons path is exercised by real argv but not verified here.
+ARGS_SOURCE="$ROOT/test/llvm_fixtures/env_args_empty.mdk"
+"$EMITBIN" "$RUNTIME" "$ARGS_SOURCE" >"$INPUT_WORK/args-source.wat" 2>"$INPUT_WORK/args-source.emit.err"
+ARGS_SOURCE_EMIT_STATUS=$?
+[ "$ARGS_SOURCE_EMIT_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/args-source.emit.err" ] &&
+  [ -s "$INPUT_WORK/args-source.wat" ] &&
+  grep -F '(func $mdk_args_io' "$INPUT_WORK/args-source.wat" >/dev/null &&
+  grep -F 'call $mdk_args_io' "$INPUT_WORK/args-source.wat" >/dev/null || {
+    echo "FAIL A3-ARGS-SOURCE: typed source emission/runtime route"
+    exit 1
+  }
+wasm-tools parse "$INPUT_WORK/args-source.wat" -o "$INPUT_WORK/args-source.wasm" >"$INPUT_WORK/args-source.parse.out" 2>"$INPUT_WORK/args-source.parse.err"
+ARGS_SOURCE_PARSE_STATUS=$?
+[ "$ARGS_SOURCE_PARSE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/args-source.parse.out" ] && [ ! -s "$INPUT_WORK/args-source.parse.err" ] || {
+  echo "FAIL A3-ARGS-SOURCE: wasm-tools parse"
+  exit 1
+}
+wasm-tools validate --features=all "$INPUT_WORK/args-source.wasm" >"$INPUT_WORK/args-source.validate.out" 2>"$INPUT_WORK/args-source.validate.err"
+ARGS_SOURCE_VALIDATE_STATUS=$?
+[ "$ARGS_SOURCE_VALIDATE_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/args-source.validate.out" ] && [ ! -s "$INPUT_WORK/args-source.validate.err" ] || {
+  echo "FAIL A3-ARGS-SOURCE: wasm-tools validate"
+  exit 1
+}
+MDK_ARGS= "$NODE" "$RUNJS" "$INPUT_WORK/args-source.wasm" >"$INPUT_WORK/args-source.run.out" 2>"$INPUT_WORK/args-source.run.err"
+ARGS_SOURCE_RUN_STATUS=$?
+[ "$ARGS_SOURCE_RUN_STATUS" -eq 0 ] && [ ! -s "$INPUT_WORK/args-source.run.err" ] &&
+  printf '0\n' | cmp -s - "$INPUT_WORK/args-source.run.out" || {
+    echo "FAIL A3-ARGS-SOURCE: empty argv execution"
+    exit 1
+  }
 
 # H2b.10 capture-only apparatus. HashFloat P is strict and inert; record U keeps
 # Float + hashInt prerequisites while excluding hashFloat. Census proves its route
