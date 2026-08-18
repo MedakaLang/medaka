@@ -1014,13 +1014,13 @@ LEAF_STATUS=$?
   echo "FAIL LR-LEAF-STATUS: harness status/stderr"
   exit 1
 }
-LEAF_MARKERS="$(awk '/^LEAF_(CHARCLASS|FLOATRNG|STRCODEC|MATH)_(P1|RECORD_U|RECORD_U_EVENTS|CENSUS_P_GAP|P2)_(BEGIN|END)$/ { print }' "$LEAF_OUT")"
-LEAF_EXPECTED_MARKERS="$(printf 'LEAF_CHARCLASS_P1_BEGIN\nLEAF_CHARCLASS_P1_END\nLEAF_CHARCLASS_RECORD_U_BEGIN\nLEAF_CHARCLASS_RECORD_U_END\nLEAF_CHARCLASS_RECORD_U_EVENTS_BEGIN\nLEAF_CHARCLASS_RECORD_U_EVENTS_END\nLEAF_CHARCLASS_CENSUS_P_GAP_BEGIN\nLEAF_CHARCLASS_CENSUS_P_GAP_END\nLEAF_CHARCLASS_P2_BEGIN\nLEAF_CHARCLASS_P2_END\nLEAF_FLOATRNG_P1_BEGIN\nLEAF_FLOATRNG_P1_END\nLEAF_FLOATRNG_RECORD_U_BEGIN\nLEAF_FLOATRNG_RECORD_U_END\nLEAF_FLOATRNG_RECORD_U_EVENTS_BEGIN\nLEAF_FLOATRNG_RECORD_U_EVENTS_END\nLEAF_FLOATRNG_CENSUS_P_GAP_BEGIN\nLEAF_FLOATRNG_CENSUS_P_GAP_END\nLEAF_FLOATRNG_P2_BEGIN\nLEAF_FLOATRNG_P2_END\nLEAF_STRCODEC_P1_BEGIN\nLEAF_STRCODEC_P1_END\nLEAF_STRCODEC_RECORD_U_BEGIN\nLEAF_STRCODEC_RECORD_U_END\nLEAF_STRCODEC_RECORD_U_EVENTS_BEGIN\nLEAF_STRCODEC_RECORD_U_EVENTS_END\nLEAF_STRCODEC_CENSUS_P_GAP_BEGIN\nLEAF_STRCODEC_CENSUS_P_GAP_END\nLEAF_STRCODEC_P2_BEGIN\nLEAF_STRCODEC_P2_END\nLEAF_MATH_P1_BEGIN\nLEAF_MATH_P1_END\nLEAF_MATH_RECORD_U_BEGIN\nLEAF_MATH_RECORD_U_END\nLEAF_MATH_RECORD_U_EVENTS_BEGIN\nLEAF_MATH_RECORD_U_EVENTS_END\nLEAF_MATH_CENSUS_P_GAP_BEGIN\nLEAF_MATH_CENSUS_P_GAP_END\nLEAF_MATH_P2_BEGIN\nLEAF_MATH_P2_END')"
+LEAF_MARKERS="$(awk '/^LEAF_(CHARCLASS|FLOATRNG|STRCODEC|VALUECMP|MATH)_(P1|RECORD_U|RECORD_U_EVENTS|CENSUS_P_GAP|P2)_(BEGIN|END)$/ { print }' "$LEAF_OUT")"
+LEAF_EXPECTED_MARKERS="$(printf 'LEAF_CHARCLASS_P1_BEGIN\nLEAF_CHARCLASS_P1_END\nLEAF_CHARCLASS_RECORD_U_BEGIN\nLEAF_CHARCLASS_RECORD_U_END\nLEAF_CHARCLASS_RECORD_U_EVENTS_BEGIN\nLEAF_CHARCLASS_RECORD_U_EVENTS_END\nLEAF_CHARCLASS_CENSUS_P_GAP_BEGIN\nLEAF_CHARCLASS_CENSUS_P_GAP_END\nLEAF_CHARCLASS_P2_BEGIN\nLEAF_CHARCLASS_P2_END\nLEAF_FLOATRNG_P1_BEGIN\nLEAF_FLOATRNG_P1_END\nLEAF_FLOATRNG_RECORD_U_BEGIN\nLEAF_FLOATRNG_RECORD_U_END\nLEAF_FLOATRNG_RECORD_U_EVENTS_BEGIN\nLEAF_FLOATRNG_RECORD_U_EVENTS_END\nLEAF_FLOATRNG_CENSUS_P_GAP_BEGIN\nLEAF_FLOATRNG_CENSUS_P_GAP_END\nLEAF_FLOATRNG_P2_BEGIN\nLEAF_FLOATRNG_P2_END\nLEAF_STRCODEC_P1_BEGIN\nLEAF_STRCODEC_P1_END\nLEAF_STRCODEC_RECORD_U_BEGIN\nLEAF_STRCODEC_RECORD_U_END\nLEAF_STRCODEC_RECORD_U_EVENTS_BEGIN\nLEAF_STRCODEC_RECORD_U_EVENTS_END\nLEAF_STRCODEC_CENSUS_P_GAP_BEGIN\nLEAF_STRCODEC_CENSUS_P_GAP_END\nLEAF_STRCODEC_P2_BEGIN\nLEAF_STRCODEC_P2_END\nLEAF_VALUECMP_P1_BEGIN\nLEAF_VALUECMP_P1_END\nLEAF_VALUECMP_RECORD_U_BEGIN\nLEAF_VALUECMP_RECORD_U_END\nLEAF_VALUECMP_RECORD_U_EVENTS_BEGIN\nLEAF_VALUECMP_RECORD_U_EVENTS_END\nLEAF_VALUECMP_CENSUS_P_GAP_BEGIN\nLEAF_VALUECMP_CENSUS_P_GAP_END\nLEAF_VALUECMP_P2_BEGIN\nLEAF_VALUECMP_P2_END\nLEAF_MATH_P1_BEGIN\nLEAF_MATH_P1_END\nLEAF_MATH_RECORD_U_BEGIN\nLEAF_MATH_RECORD_U_END\nLEAF_MATH_RECORD_U_EVENTS_BEGIN\nLEAF_MATH_RECORD_U_EVENTS_END\nLEAF_MATH_CENSUS_P_GAP_BEGIN\nLEAF_MATH_CENSUS_P_GAP_END\nLEAF_MATH_P2_BEGIN\nLEAF_MATH_P2_END')"
 [ "$LEAF_MARKERS" = "$LEAF_EXPECTED_MARKERS" ] || {
-  echo "FAIL LR-LEAF-MARKERS: exact 40 ordered markers"
+  echo "FAIL LR-LEAF-MARKERS: exact 50 ordered markers"
   exit 1
 }
-for leaf_field in CHARCLASS FLOATRNG STRCODEC MATH; do
+for leaf_field in CHARCLASS FLOATRNG STRCODEC VALUECMP MATH; do
   feature_exact_capture "LEAF_${leaf_field}_P1_BEGIN" "LEAF_${leaf_field}_P1_END" "$LEAF_OUT" >"$INPUT_WORK/leaf-${leaf_field}-p1.wat" &&
     feature_exact_capture "LEAF_${leaf_field}_RECORD_U_BEGIN" "LEAF_${leaf_field}_RECORD_U_END" "$LEAF_OUT" >"$INPUT_WORK/leaf-${leaf_field}-u.wat" &&
     feature_exact_capture "LEAF_${leaf_field}_RECORD_U_EVENTS_BEGIN" "LEAF_${leaf_field}_RECORD_U_EVENTS_END" "$LEAF_OUT" >"$INPUT_WORK/leaf-${leaf_field}-record.events" &&
@@ -1079,6 +1079,13 @@ for leaf_wat in p1 p2; do
       echo "FAIL LR-MATH-P-PRESENCE: $leaf_wat"
       exit 1
     }
+  grep -F '(func $mdk_value_eq' "$INPUT_WORK/leaf-VALUECMP-${leaf_wat}.wat" >/dev/null &&
+    grep -F 'call $mdk_value_eq' "$INPUT_WORK/leaf-VALUECMP-${leaf_wat}.wat" >/dev/null &&
+    grep -F '(func $mdk_value_lt' "$INPUT_WORK/leaf-VALUECMP-${leaf_wat}.wat" >/dev/null &&
+    grep -F 'call $mdk_value_lt' "$INPUT_WORK/leaf-VALUECMP-${leaf_wat}.wat" >/dev/null || {
+      echo "FAIL LR-VALUECMP-P-PRESENCE: $leaf_wat"
+      exit 1
+    }
 done
 if grep -F '$mdk_char_is_alpha' "$INPUT_WORK/leaf-CHARCLASS-u.wat" >/dev/null; then
   echo "FAIL LR-CHARCLASS-U-ABSENCE: nearest miss emitted char class"
@@ -1116,11 +1123,23 @@ grep -F 'f64.sqrt' "$INPUT_WORK/leaf-MATH-u.wat" >/dev/null || {
   echo "FAIL LR-MATH-U-COFACTOR: missing sqrt"
   exit 1
 }
+grep -F '(func $mdk_str_compare' "$INPUT_WORK/leaf-VALUECMP-u.wat" >/dev/null &&
+  grep -F 'call $mdk_str_compare' "$INPUT_WORK/leaf-VALUECMP-u.wat" >/dev/null || {
+    echo "FAIL LR-VALUECMP-U-COFACTOR: missing direct stringCompare"
+    exit 1
+  }
+for leaf_value_helper in mdk_value_eq mdk_value_lt mdk_value_cmp; do
+  if grep -F "\$$leaf_value_helper" "$INPUT_WORK/leaf-VALUECMP-u.wat" >/dev/null; then
+    echo "FAIL LR-VALUECMP-U-ABSENCE: nearest miss emitted $leaf_value_helper"
+    exit 1
+  fi
+done
 LEAF_CHARCLASS_EVENT=$'fn leafCharClassIntentionalGap\tunbound variable \'missingLeafCharClassCensus\' (not a local, global value, constructor, or known function) [in leafCharClassIntentionalGap]'
 LEAF_FLOATRNG_EVENT=$'fn leafFloatRngIntentionalGap\tunbound variable \'missingLeafFloatRngCensus\' (not a local, global value, constructor, or known function) [in leafFloatRngIntentionalGap]'
 LEAF_STRCODEC_EVENT=$'fn leafStrCodecIntentionalGap\tunbound variable \'missingLeafStrCodecCensus\' (not a local, global value, constructor, or known function) [in leafStrCodecIntentionalGap]'
+LEAF_VALUECMP_EVENT=$'fn leafValueCmpIntentionalGap\tunbound variable \'missingLeafValueCmpCensus\' (not a local, global value, constructor, or known function) [in leafValueCmpIntentionalGap]'
 LEAF_MATH_EVENT=$'fn leafMathIntentionalGap\tunbound variable \'missingLeafMathCensus\' (not a local, global value, constructor, or known function) [in leafMathIntentionalGap]'
-for leaf_field in CHARCLASS FLOATRNG STRCODEC MATH; do
+for leaf_field in CHARCLASS FLOATRNG STRCODEC VALUECMP MATH; do
   leaf_event_var="LEAF_${leaf_field}_EVENT"
   [ "$(wc -l < "$INPUT_WORK/leaf-${leaf_field}-census.events")" -eq 1 ] &&
     [ "$(cat "$INPUT_WORK/leaf-${leaf_field}-census.events")" = "${!leaf_event_var}" ] || {
@@ -1259,7 +1278,7 @@ for feature_name in p1 hash-int-only float-div u p2; do
     }
 done
 # Leaf capture/marker/P-U/cofactor/event checks ran before legacy feature-state checks.
-for leaf_field in CHARCLASS FLOATRNG STRCODEC MATH; do
+for leaf_field in CHARCLASS FLOATRNG STRCODEC VALUECMP MATH; do
   for leaf_wat in p1 u p2; do
     leaf_path="$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wat"
     wasm-tools parse "$leaf_path" -o "$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.wasm" >"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.parse.out" 2>"$INPUT_WORK/leaf-${leaf_field}-${leaf_wat}.parse.err"

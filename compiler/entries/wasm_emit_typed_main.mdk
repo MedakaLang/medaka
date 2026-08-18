@@ -545,6 +545,7 @@ reemitLeafRuntimeState _ =
   let _ = reemitLeafRuntimeRow "CHARCLASS" leafCharClassP leafCharClassU leafCharClassCensus
   let _ = reemitLeafRuntimeRow "FLOATRNG" leafFloatRngP leafFloatRngU leafFloatRngCensus
   let _ = reemitLeafRuntimeRow "STRCODEC" leafStrCodecP leafStrCodecU leafStrCodecCensus
+  let _ = reemitLeafRuntimeRow "VALUECMP" leafValueCmpP leafValueCmpU leafValueCmpCensus
   reemitLeafRuntimeRow "MATH" leafMathP leafMathU leafMathCensus
 
 reemitLeafRuntimeRow : String -> CProgram -> CProgram -> CProgram -> <IO> Unit
@@ -647,6 +648,32 @@ leafStrCodecCensus =
     leafStrCodecP
     "leafStrCodecIntentionalGap"
     "missingLeafStrCodecCensus"
+
+leafValueCmpP : CProgram
+leafValueCmpP = leafRuntimeProgram
+  [
+    CBind "leafValueCmpEq" [
+      CClause [leafRuntimeArg] (CBinPrim "==" (CLit (LString "value-cmp")) (CLit (LString "value-cmp")) "String")
+    ],
+    CBind "leafValueCmpLt" [
+      CClause [leafRuntimeArg] (CBinPrim "<" (CLit (LString "value-cmp-a")) (CLit (LString "value-cmp-b")) "String")
+    ],
+  ]
+
+leafValueCmpU : CProgram
+leafValueCmpU = leafRuntimeProgram
+  [
+    CBind "leafValueCmpNearestStringCompare" [
+      CClause [leafRuntimeArg] (CApp (CApp (CVar "stringCompare" AGlobal) (CLit (LString "medaka"))) (CLit (LString "medaka")))
+    ]
+  ]
+
+leafValueCmpCensus : CProgram
+leafValueCmpCensus =
+  leafRuntimeCensus
+    leafValueCmpP
+    "leafValueCmpIntentionalGap"
+    "missingLeafValueCmpCensus"
 
 leafMathP : CProgram
 leafMathP = leafRuntimeProgram
