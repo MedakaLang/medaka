@@ -1008,14 +1008,22 @@ feature_exact_capture() {
 # mutant must fail at its leaf field, even when its U shape also changes a
 # legacy feature-state artifact.
 LEAF_ROW_SOURCE="$(awk '
-  $0 == "reemitLeafRuntimeRow name p u gapBind gapMissing =" { capture = 1 }
+  $0 == "reemitLeafRuntimeRow : String -> CProgram -> CProgram -> String -> String -> <IO> Unit" { capture = 1 }
   capture && $0 == "leafRuntimeInput : WasmEmitInput" { exit }
   capture { print }
 ' "$TYPED_ENTRY")"
-LEAF_ROW_CENSUS_CALLS="$(printf '%s\n' "$LEAF_ROW_SOURCE" | awk '{ calls += gsub(/leafRuntimeCensus/, "") } END { print calls + 0 }')"
-LEAF_ROW_EXACT_CENSUS="$(printf '%s\n' "$LEAF_ROW_SOURCE" | grep -Fxc '  let censusEvents = emitProgramGaps leafRuntimeInput (leafRuntimeCensus p gapBind gapMissing)' || true)"
-[ "$LEAF_ROW_CENSUS_CALLS" -eq 1 ] && [ "$LEAF_ROW_EXACT_CENSUS" -eq 1 ] || {
-  echo "FAIL LR-LEAF-CENSUS-PROVENANCE: helper must derive one census directly from p"
+LEAF_ROW_EXPECTED='reemitLeafRuntimeRow : String -> CProgram -> CProgram -> String -> String -> <IO> Unit
+reemitLeafRuntimeRow name p u gapBind gapMissing =
+  let p1 = emitProgram leafRuntimeInput p
+  let (recordU, recordEvents) = emitProgramRecord leafRuntimeInput u
+  let censusEvents = emitProgramGaps leafRuntimeInput (leafRuntimeCensus p gapBind gapMissing)
+  let _ = printCapture ("LEAF_" ++ name ++ "_P1") p1
+  let _ = printCapture ("LEAF_" ++ name ++ "_RECORD_U") recordU
+  let _ = printEvents ("LEAF_" ++ name ++ "_RECORD_U_EVENTS") recordEvents
+  let _ = printEvents ("LEAF_" ++ name ++ "_CENSUS_P_GAP") censusEvents
+  printCapture ("LEAF_" ++ name ++ "_P2") (emitProgram leafRuntimeInput p)'
+[ "$LEAF_ROW_SOURCE" = "$LEAF_ROW_EXPECTED" ] || {
+  echo "FAIL LR-LEAF-CENSUS-PROVENANCE: exact shared helper shape changed"
   exit 1
 }
 LEAF_OUT="$INPUT_WORK/leaf-runtime.out"
