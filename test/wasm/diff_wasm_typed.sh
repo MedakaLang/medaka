@@ -1007,6 +1007,17 @@ feature_exact_capture() {
 # LR0 ownership evidence runs before legacy feature-state assertions. A reader
 # mutant must fail at its leaf field, even when its U shape also changes a
 # legacy feature-state artifact.
+LEAF_ROW_SOURCE="$(awk '
+  $0 == "reemitLeafRuntimeRow name p u gapBind gapMissing =" { capture = 1 }
+  capture && $0 == "leafRuntimeInput : WasmEmitInput" { exit }
+  capture { print }
+' "$TYPED_ENTRY")"
+LEAF_ROW_CENSUS_CALLS="$(printf '%s\n' "$LEAF_ROW_SOURCE" | awk '{ calls += gsub(/leafRuntimeCensus/, "") } END { print calls + 0 }')"
+LEAF_ROW_EXACT_CENSUS="$(printf '%s\n' "$LEAF_ROW_SOURCE" | grep -Fxc '  let censusEvents = emitProgramGaps leafRuntimeInput (leafRuntimeCensus p gapBind gapMissing)' || true)"
+[ "$LEAF_ROW_CENSUS_CALLS" -eq 1 ] && [ "$LEAF_ROW_EXACT_CENSUS" -eq 1 ] || {
+  echo "FAIL LR-LEAF-CENSUS-PROVENANCE: helper must derive one census directly from p"
+  exit 1
+}
 LEAF_OUT="$INPUT_WORK/leaf-runtime.out"
 "$EMITBIN" --reemit-leaf-runtime-state >"$LEAF_OUT" 2>"$INPUT_WORK/leaf-runtime.err"
 LEAF_STATUS=$?
