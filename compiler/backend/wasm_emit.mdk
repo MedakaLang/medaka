@@ -332,6 +332,7 @@ data WasmEmit =
       useRng : Ref Bool,
       useHash : Ref Bool,
       useFloatHash : Ref Bool,
+      useFloatStr : Ref Bool,
       useFloatRng : Ref Bool,
       useStrCodec : Ref Bool,
       useValueCmp : Ref Bool,
@@ -364,6 +365,7 @@ freshWasmEmit mode = WasmEmit {
   useRng = Ref False,
   useHash = Ref False,
   useFloatHash = Ref False,
+  useFloatStr = Ref False,
   useFloatRng = Ref False,
   useStrCodec = Ref False,
   useValueCmp = Ref False,
@@ -866,12 +868,10 @@ isLazyGlobalW prog x = omHasKey x (indexLazyGlobalsW (progIndex prog))
 useFloatRef : Ref Bool
 useFloatRef = Ref False
 
--- layer-6: stringToFloat is a host-seam extern (like floatToString).  It takes a $str,
--- pushes its bytes via the IO path channel (mdk_path_reset/mdk_path_push), and calls
--- the new mdk_str_to_float host import to parse the f64 JS-side.  Forces floatRef
--- (result is a boxed $float), strRef (input is a $str), and ioRef (uses path channel).
-useFloatStrRef : Ref Bool
-useFloatStrRef = Ref False
+-- WasmEmit.useFloatStr records per-emission stringToFloat host-seam demand. It takes
+-- a $str, pushes its bytes via the IO path channel (mdk_path_reset/mdk_path_push), and
+-- calls mdk_str_to_float to parse the f64 JS-side. Its scalar Float/String/IO
+-- prerequisites remain on their existing carriers.
 
 -- W8b: the program uses stringIndexOf / stringCompare (the strSearchRuntime).
 useStrSearchRef : Ref Bool
@@ -1046,7 +1046,6 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useRefBoxRef False
   let _ = setRef useStrLeafRef False
   let _ = setRef useFloatRef False
-  let _ = setRef useFloatStrRef False
   let _ = setRef useStrSearchRef False
   let _ = setRef useValueArithRef False
   let _ = setRef numPolyLocalsRef []
@@ -1096,7 +1095,6 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let _ = setRef useRefBoxRef False
   let _ = setRef useStrLeafRef False
   let _ = setRef useFloatRef False
-  let _ = setRef useFloatStrRef False
   let _ = setRef useStrSearchRef False
   let _ = setRef useValueArithRef False
   let _ = setRef numPolyLocalsRef []
@@ -1606,7 +1604,7 @@ noteW8Extern emit name =
   -- and IO (for mdk_path_reset/mdk_path_push).  The $C_Some ctor is in ref-type-section
   -- which is always present when useStrRef/useFloatRef forces ref-mode.
   let _ = if name == "stringToFloat"
-          then let _ = setRef useFloatStrRef True in let _ = setRef useFloatRef True in let _ = setRef useStrRef True in setRef useIORef True
+          then let _ = setRef emit.useFloatStr True in let _ = setRef useFloatRef True in let _ = setRef useStrRef True in setRef useIORef True
           else ()
   -- hashFloat needs the shared mix64 (hashRuntime); randomFloat needs next_u64 (rngRuntime).
   let _ = if name == "hashFloat" then let _ = setRef emit.useFloatHash True in setRef emit.useHash True else ()
@@ -2362,7 +2360,7 @@ emitRefProgram prog groups =
     -- #101: the libm transcendentals / pow / atan2 / hypot are JS Math.* host imports.
     ++ (if (progEmit prog).useMath.value then mathHostImportLines else [])
     -- layer-6: stringToFloat is a host import (mdk_str_to_float = the host strtod parser).
-    ++ (if useFloatStrRef.value then floatStrImportLines else [])
+    ++ (if (progEmit prog).useFloatStr.value then floatStrImportLines else [])
     -- W12: the IO host surface (readFile/fileExists/args/getEnv/exit) host imports.
     ++ (if useIORef.value then ioHostImportLines else [])
     -- stage-D: writeFileBytes's write host imports (reset/push/commit).
@@ -2445,7 +2443,7 @@ emitRefProgram prog groups =
   -- layer-6: stringToFloat runtime ($mdk_string_to_float).  Needs ioHostRt for the
   -- path channel ($mdk_path_reset/$mdk_path_push), but emitted AFTER ioHostRt since
   -- those functions are defined there (wasm forward refs are fine, but order is clear).
-  let floatStrRt = if useFloatStrRef.value then floatStrRuntimeLines else []
+  let floatStrRt = if (progEmit prog).useFloatStr.value then floatStrRuntimeLines else []
   let strSearchRt = if useStrSearchRef.value then strSearchRuntimeLines else []
   -- W11b: the UTF-8 codec ($mdk_str_to_chars / $mdk_chars_to_str) + charFromCode's
   -- range-check runtime ($mdk_char_from_code).  The codec needs the $str rep ($u8arr)

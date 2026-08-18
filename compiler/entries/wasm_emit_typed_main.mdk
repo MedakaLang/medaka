@@ -546,6 +546,7 @@ reemitLeafRuntimeState _ =
   let _ = reemitLeafRuntimeRow "FLOATRNG" leafFloatRngP leafFloatRngU "leafFloatRngIntentionalGap" "missingLeafFloatRngCensus"
   let _ = reemitLeafRuntimeRow "STRCODEC" leafStrCodecP leafStrCodecU "leafStrCodecIntentionalGap" "missingLeafStrCodecCensus"
   let _ = reemitLeafRuntimeRow "VALUECMP" leafValueCmpP leafValueCmpU "leafValueCmpIntentionalGap" "missingLeafValueCmpCensus"
+  let _ = reemitLeafRuntimeRow "FLOATSTR" leafFloatStrP leafFloatStrU "leafFloatStrIntentionalGap" "missingLeafFloatStrCensus"
   reemitLeafRuntimeRow
     "MATH"
     leafMathP
@@ -650,6 +651,27 @@ leafValueCmpU = leafRuntimeProgram
     CBind "leafValueCmpNearestStringCompare" [
       CClause [leafRuntimeArg] (CApp (CApp (CVar "stringCompare" AGlobal) (CLit (LString "medaka"))) (CLit (LString "medaka")))
     ]
+  ]
+
+-- A2: P selects stringToFloat. U retains Float, String, and IO cofactors without
+-- selecting its host import/runtime; shared leaf census remains ownership-only.
+leafFloatStrP : CProgram
+leafFloatStrP = leafRuntimeProgram
+  [
+    CBind "leafFloatStr" [
+      CClause [leafRuntimeArg] (CApp (CVar "stringToFloat" AGlobal) (CLit (LString "3.14")))
+    ]
+  ]
+
+leafFloatStrU : CProgram
+leafFloatStrU = leafRuntimeProgram
+  [
+    CBind "leafFloatStrNearestFloat" [
+      CClause [leafRuntimeArg] (CApp (CVar "intToFloat" AGlobal) (CVar "x" (ALocal 0 0)))
+    ],
+    CBind "leafFloatStrNearestStringIo" [
+      CClause [leafRuntimeArg] (CApp (CVar "readFile" AGlobal) (CLit (LString "floatstr-nearest")))
+    ],
   ]
 
 leafMathP : CProgram
