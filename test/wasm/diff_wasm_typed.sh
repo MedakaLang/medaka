@@ -325,7 +325,6 @@ EXPECTED_MODULE_REFS="$(printf '%s\n' \
   useStrRef \
   useStrSearchRef \
   useValueArithRef \
-  useValueCmpRef \
   wDispCtxRef \
   wDispGroupsRef)"
 ACTUAL_MODULE_REF_SIGS="$(awk '
@@ -421,6 +420,34 @@ grep -F 'let _ = if contains name ["stringToChars", "stringFromChars"]' "$WASM_S
   grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
   [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
     echo "FAIL H2B-LR-STRCODEC-ROUTES: writer/reader cardinality or fresh route changed"
+    exit 1
+  }
+if grep -F 'useValueCmpRef' "$WASM_SRC" >/dev/null; then
+  echo "FAIL H2B-LR-AUTHORITY-SET: retired ValueCmp ambient authority remains"
+  exit 1
+fi
+for required in \
+  'useValueCmp : Ref Bool' \
+  'useValueCmp = Ref False'; do
+  [ "$(grep -F -- "$required" "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
+    echo "FAIL H2B-LR-VALUECMP-CARRIER: missing or duplicate $required"
+    exit 1
+  }
+done
+VALUECMP_WRITER_LINE="$(grep -n -F 'let _ = setRef (progEmit prog).useValueCmp True' "$WASM_SRC" | head -1 | cut -d: -f1)"
+[ -n "$VALUECMP_WRITER_LINE" ] &&
+  [ "$(sed -n "$((VALUECMP_WRITER_LINE + 1))p" "$WASM_SRC")" = '    let _ = setRef useStrSearchRef True' ] &&
+  [ "$(sed -n "$((VALUECMP_WRITER_LINE + 2))p" "$WASM_SRC")" = '    let _ = setRef useStrLeafRef True' ] &&
+  grep -F 'let valueCmpRt = if (progEmit prog).useValueCmp.value then valueEqRuntimeLines else []' "$WASM_SRC" >/dev/null &&
+  ! grep -E 'setRef (emit|\(progEmit prog\))\.useValueCmp False|setRef useValueCmpRef False' "$WASM_SRC" >/dev/null || {
+    echo "FAIL H2B-LR-VALUECMP-ROUTES: writer, cofactors, reader, or reset changed"
+    exit 1
+  }
+[ "$(grep -F 'setRef (progEmit prog).useValueCmp True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F '(progEmit prog).useValueCmp.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
+  [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+    echo "FAIL H2B-LR-VALUECMP-ROUTES: writer/reader cardinality or fresh route changed"
     exit 1
   }
 if grep -E '^_?useMathRef[[:space:]]*[:=]|setRef (_?useMathRef)' "$WASM_SRC" >/dev/null; then
