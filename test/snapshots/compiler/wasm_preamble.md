@@ -1381,8 +1381,8 @@ ioHostRuntimeLines = [
 
 -- the `args` extern body — split out from ioHostRuntimeLines because it references
 -- the cons-list types ($C_Cons / Nil), which are only declared when the program uses
--- a list.  Gated on useArgsRef (set when `args` is referenced, which also forces
--- useListRef so $C_Cons is in scope).
+-- a list. Gated on the fresh emission's WasmEmit.useArgs demand (set when `args` is
+-- referenced, which also forces useListRef so $C_Cons is in scope).
 export ioArgsRuntimeLines : List String
 ioArgsRuntimeLines = [
   "  ;; build a $str from the i-th host arg (mdk_arg_len(i) + mdk_arg_byte(i,j)).",
@@ -1417,9 +1417,9 @@ ioArgsRuntimeLines = [
 -- direction: three new host imports stream the path (reuse $mdk_push_path) + the byte
 -- array OUT to a JS write buffer, then commit a Node `fs.writeFileSync`.  Both return
 -- a Result String (…) byte-identical to the native runtime (medaka_rt.c
--- mdk_read_file_bytes / mdk_write_file_bytes).  Gated on useFileBytesRef (which also
--- forces useIORef so $mdk_push_path / $mdk_io_result_to_str are in scope, useArrayRef
--- so $arr is declared, and useStrRef for the Err $str).
+-- mdk_read_file_bytes / mdk_write_file_bytes).  Gated on per-emission
+-- WasmEmit.useFileBytes demand; IO, Array, and String cofactors keep $mdk_push_path /
+-- $mdk_io_result_to_str in scope, declare $arr, and provide the Err/path $str.
 export fileBytesHostImportLines : List String
 fileBytesHostImportLines = [
   "  ;; -- stage-D writeFileBytes host imports (path via mdk_path_push; bytes streamed) --",

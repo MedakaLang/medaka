@@ -390,11 +390,13 @@ test, every candidate through native build AND wasm build AND `medaka run`). The
   record-update-local, RNG, hash, and ePut/panic stderr-runtime demand without widening trap-only
   runtime output. H2b.10 moves one fact, `hashFloat` runtime demand, into `WasmEmit`; census
   coverage is ownership-only. H2b.11 moves `charFromCode` runtime demand into `WasmEmit`; census
-  coverage is ownership-only. CharClass, FloatRng, StrCodec, and Math-import demand use the
-  same fresh carrier. The typed entry pins top-level,
+  coverage is ownership-only. CharClass, FloatRng, StrCodec, Math-import, value-comparison,
+  String-to-Float, process-argument, and byte-file demand use the same fresh carrier. The
+  byte-file controls separate read and write producers and use only a gate-owned temporary
+  path. The typed entry pins top-level,
   nested-lift, fresh no-writer, post-lift attribution, and trap-import isolation across
   strict, record, and census routes; `diff_wasm_typed.sh` ratchets the normalized ambient
-  top-level `Ref` set. H2b and #1407 stay open.
+  15-member top-level `Ref` set. H2b and #1407 stay open.
 - **`$boxint` equality/compare through a poly HOF is by VALUE** (no ref-identity bug).
 - **NaN `compare`/`min`/`max` are engine-UNIFORM today** (all three engines: `Eq`,
   `nan`, `nan`, `1.0`, `1.0`, probe-run) — the N6 interim bar holds there. The HOF-routed
