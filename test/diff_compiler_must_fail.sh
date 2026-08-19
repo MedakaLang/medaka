@@ -114,6 +114,22 @@
 # diff_compiler_ci_shard_coverage.sh (its `named` set); this basename matches no shard
 # pattern, so there is no duplicate either.
 #
+# ── RUNNING THIS YOURSELF (#1694) ───────────────────────────────────────────────
+#
+# This is the tracker's self-drain, so the fixture count only grows (101 and counting) —
+# it has now crossed most foreground-tool default timeouts (e.g. a 120s ceiling), and a
+# plain blocking `sh test/diff_compiler_must_fail.sh` will get auto-backgrounded partway
+# through. Background it yourself and poll, same remedy AGENTS.md's [L-FOREGROUND-CEILING]
+# gives for `test/selfcompile_fixpoint.sh` / `diff_compiler_perf_scaling.sh` /
+# `diff_compiler_engines.sh` — don't sit on a blocking foreground call waiting for it.
+#
+# Adding a SECOND fixture for an issue that already has one is not allowed — see
+# "ONE FIXTURE PER ISSUE" below; the dup-check keyed on claim.txt's `issue:` field is
+# real and unconditional, and it fails the whole gate (MALFORMED), not just your new
+# fixture. And file the governing issue FIRST, then name the fixture directory after its
+# number: a fixture authored with a TODO placeholder in place of a real issue number
+# trips the malformed-corpus check on its very first run, costing a full extra pass.
+#
 # Usage:  sh test/diff_compiler_must_fail.sh
 # Exit:   0 every pinned bug still reproduces; 1 a bug DRAINED (go close the issue),
 #         a control broke, or a claim is malformed.
