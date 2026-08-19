@@ -24,8 +24,8 @@ resolve/type facts** (a "type oracle") harvested by running the pipeline once.
 explicitly not slot-fillable). Its arc-side dependency is **#1752** (scope
 `currentLoc`), which is arc work on its own merits, is *not* owned by this doc,
 and **must not be prioritised on this tier's behalf** — the dependency is one-way.
-Tier 1 additionally waits on the Stage E driver collapse (#1116) for the reason
-in §10.1.
+Tier 1 additionally waits on the Stage E Flat-consumer migration (**#1115**; the
+`CheckMode` deletion in #1116 is downstream of it) for the reason in §10.1.
 
 ---
 
@@ -493,7 +493,7 @@ with one exception (§10.3) that is genuinely arc work and is filed as such.
 direction** (#1660). Treat component dispositions cited below as claims to
 re-derive at implementation time, not as settled facts.
 
-### 10.1 Tier 1's current recipe taxes Stage E — sequencing, not design
+### 10.1 Tier 1's current recipe taxes Stage E-1 (#1115) — sequencing, not design
 
 §4.2 says to build the single-file harvest by mirroring `docSchemes`
 (`lsp.mdk`). That is a **Flat-path** consumer. Component E's stated target is
@@ -502,13 +502,28 @@ explicitly *consumer-by-consumer*, naming "the repl, LSP hover/single-file env,
 playground, single-file doctests, `snapshot`/`check_policy`/`doc`" as consumers
 "whose golden families pin Flat behavior."
 
-Building Tier 1 as written therefore **adds a new consumer to the list E-4 has to
-migrate**, and pins another golden family to Flat behavior on the way.
+Building Tier 1 as written therefore **adds a new consumer to the set E-1 has to
+drain**, and pins another golden family to Flat behavior on the way.
 
-**Recommendation: hold Tier 1 until E collapses the drivers**, then write the
-harvest once against the single driver. If Tier 1 must land sooner, write it
-driver-agnostic (against whatever seam E-4 is migrating consumers *to*) and say
-so in the PR, rather than cloning `docSchemes`.
+**The owning unit is #1115 (E-1)** — *"migrate every Flat-path consumer to the
+1-module Module path … one PR per consumer, each with its own golden
+accounting."* #1116 (E-2) deletes `CheckMode` and is **downstream**: its own body
+depends on *"E-1 (no Flat consumers left except the promotion fallback)."*
+
+Census at `8b7b5517` — the live Flat consumers (callers of
+`checkProgramSeededSplit` / `checkProgramSeeded` / `checkProgramSchemes` /
+`checkProgramSchemesWithRuntime` outside `typecheck.mdk`) are `tools/repl.mdk`,
+`tools/lsp.mdk`, `tools/check_policy.mdk`, `tools/doc.mdk`,
+`entries/playground_main.mdk`, and `entries/origin_agreement_main.mdk`. **Tier 1
+as designed would be the seventh.** ⚠️ The last of those is not in E-1's written
+enumeration — it landed 2026-08-02, four days after the set was written (reported
+on #1115). Re-derive the set before relying on it; do not read the list above as
+durable either.
+
+**Recommendation: hold Tier 1 until #1115 drains**, then write the harvest once
+against the single driver. If it must land sooner, write it against whatever seam
+E-1 is migrating consumers *to*, and say so in the PR, rather than cloning
+`docSchemes`.
 
 ### 10.2 The harvest read-point is dictated by E — and getting it wrong is silent
 
@@ -517,8 +532,10 @@ generalized bindings only**: *"non-generalized (value-restricted) bindings keep
 live metavariables, so route resolution and defaulting stay whole-graph
 post-passes per S's commitment rule."*
 
-Combined with `Mono` being ref-backed union-find (§2.3), this fixes the read
-point: **a `(Loc, Mono)` harvest must be read after the whole-graph post-passes,
+**This constraint is arc-owned and already stated on #1117**, in those words —
+nothing is owed to the arc here; it needs *obeying* by whoever builds the
+harvest. Combined with `Mono` being ref-backed union-find (§2.3), it fixes the
+read point: **a `(Loc, Mono)` harvest must be read after the whole-graph post-passes,
 never per-SCC.** A per-SCC read returns *unsolved metavars* for value-restricted
 bindings — and because the consumer sees an unresolved `TVar`, it presents as a
 legitimate "no type here" `Option`-miss rather than as an error. The rule then
