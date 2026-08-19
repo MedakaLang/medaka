@@ -1,0 +1,5 @@
+-- #1739 half A: `!` is Ref-dereference, so the OLD boolean-not use must give a
+-- LOCATED error naming `not` (T-BANG-ON-BOOL) — not a bare `Ref a vs Bool`
+-- mismatch, which says nothing about what changed.
+notFlag : Bool -> Bool
+notFlag b = !b

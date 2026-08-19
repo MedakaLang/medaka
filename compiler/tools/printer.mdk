@@ -957,12 +957,30 @@ appArgDoc : Expr -> Expr -> Doc
 appArgDoc f x =
   if isTightNegLitArg x && not (headIsNumericHead (appSpineHead f)) then
     printExprRaw (stripLocE x)
+  else if isTightDerefArg x then
+    printExprRaw (stripLocE x)
   else
     printExpr precPostfix x
 
 stripLocE : Expr -> Expr
 stripLocE (ELoc _ e) = stripLocE e
 stripLocE e = e
+
+-- #1739 half A: `!r` (Ref-dereference) is an APPLICATION ARGUMENT in its own right
+-- — `f !r` parses as `f (!r)` via the parser's `derefArg` arm — so the printer must
+-- render it BARE.  Same reasoning as the tight-negative-literal case above, and the
+-- same failure if omitted: `!` sits at `precUnary`, below the `precPostfix` an
+-- argument is printed at, so the general path parenthesizes it to `f (!r)`.  That
+-- still round-trips, but it means `fmt` UNDOES the tight spelling on every write —
+-- and the tight spelling is the entire ergonomic point of repurposing `!`.  A
+-- formatter that silently re-parenthesizes what the user wrote is the same class of
+-- surprise the `f -1` comment above exists to prevent.
+isTightDerefArg : Expr -> Bool
+isTightDerefArg e = isTightDerefArgS (stripLocE e)
+
+isTightDerefArgS : Expr -> Bool
+isTightDerefArgS (EUnOp "!" _ _) = True
+isTightDerefArgS _ = False
 
 isTightNegLitArg : Expr -> Bool
 isTightNegLitArg e = isTightNegLitArgS (stripLocE e)
@@ -1342,6 +1360,8 @@ printAppSpine e =
 appArgDocH : Expr -> Expr -> Doc
 appArgDocH h arg =
   if isTightNegLitArg arg && not (headIsNumericHead (appSpineHead h)) then
+    printExprRaw (stripLocE arg)
+  else if isTightDerefArg arg then
     printExprRaw (stripLocE arg)
   else
     printExpr precPostfix arg

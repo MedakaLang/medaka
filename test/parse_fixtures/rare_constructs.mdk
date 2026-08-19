@@ -19,7 +19,7 @@ leftSection = (2 * _)
 
 cmpSection = (== 0)
 
-notFlag b = !b
+notFlag b = not b
 
 classify = x => match x
   0 => "zero"

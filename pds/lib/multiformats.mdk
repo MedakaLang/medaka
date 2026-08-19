@@ -154,7 +154,7 @@ uvarintDecode bytes = match uvarintDecodeGo bytes 0 (arrayLength bytes) 0 0
       -- requirement (the published `{0x81, 0x00}` case), which the range
       -- check does not touch.
       let reencoded = uvarintEncode value
-      if arrayLength reencoded /= consumed || !(prefixEquals reencoded bytes 0 consumed) then
+      if arrayLength reencoded /= consumed || not (prefixEquals reencoded bytes 0 consumed) then
         Err "uvarint: non-minimal encoding"
       else
         Ok (value, consumed)

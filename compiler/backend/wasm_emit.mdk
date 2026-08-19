@@ -16,7 +16,7 @@
 --
 -- ── W2 SCOPE (immediates + arithmetic) ─────────────────────────────
 -- Scalar / arithmetic subset on raw i32: CLit Int/Bool/Unit, CVar (fn/global/
--- local), CBinPrim int arith+cmp, CUnOp `-`/`!`, CIf, CLet/CSLet/CBlock via
+-- local), CBinPrim int arith+cmp, CUnOp `-`, CIf, CLet/CSLet/CBlock via
 -- locals, top-level fns (incl recursion), value-bindings→globals, value-main
 -- auto-print.
 --
@@ -2277,10 +2277,6 @@ emitUnI32 emit fnNames valNames env "-" x =
   let (xi, _) = emitScalarExpr emit fnNames valNames env x
   -- N1: negation overflows at exactly -2^62 (0 - (-2^62) = +2^62), so it wraps too.
   (["i64.const 0"] ++ xi ++ ["i64.sub"] ++ normInt64, WInt)
-emitUnI32 emit fnNames valNames env "!" x =
-  let (xi, _) = emitScalarExpr emit fnNames valNames env x
-  -- i64 Bool -> negate: i64.eqz yields i32, extend back to i64.
-  (xi ++ ["i64.eqz", "i64.extend_i32_u"], WBool)
 emitUnI32 emit _ _ _ op _ =
   gapLTy emit ("scalar-mode: unsupported unary op '" ++ op ++ "'")
 
@@ -2924,7 +2920,6 @@ refMainKind prog (CBinPrim op l r _) =
     WFloat
   else
     binOpTy op
-refMainKind prog (CUnOp "!" _) = WBool
 refMainKind prog (CUnOp "-" x) = if cexprIsFloat prog [] x then WFloat else WInt
 refMainKind prog (CUnOp _ _) = WInt
 -- a CIf main: prefer whichever branch is conclusively Bool (a comparison / Bool
@@ -5424,9 +5419,6 @@ emitUnRef prog env d "-" x =
     -- layer-17 §2.1: integer negate over the i64 box/unbox seam.
     let xi = emitRefExpr prog env d x ++ ["call $mdk_unbox_int"]
     ["i64.const 0"] ++ xi ++ ["i64.sub", "call $mdk_box_int"]
-emitUnRef prog env d "!" x =
-  let xi = emitRefExpr prog env d x ++ ["ref.cast (ref i31)", "i31.get_u"]
-  xi ++ ["i32.eqz", "ref.i31"]
 emitUnRef prog _ _ op _ =
   gapLP prog ("ref-mode: unsupported unary op '" ++ op ++ "'")
 

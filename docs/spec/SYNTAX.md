@@ -271,7 +271,7 @@ e11 = x <= y
 e12 = x >= y
 e13 = p && q               -- boolean
 e14 = p || q
-e15 = !True                 -- not
+e15 = not True              -- boolean negation (`not` is the ONLY spelling)
 e16 = 1 :: [2, 3]            -- cons
 e17 = [1,2] ++ [3,4]         -- append (Semigroup): works on lists...
 e18 = "ab" ++ "cd"           -- ...and strings too
@@ -738,19 +738,27 @@ baz x = x
 
 Mutable state lives in a `Ref` cell, not in the binding. Mutation is untracked
 (no effect label). Construct with `Ref v`, write with the `:=` operator, read
-the `.value` field:
+with the `!` operator — the OCaml spelling:
 
 ```medaka
 main =
   let count = Ref 0      -- immutable BINDING of a mutable CELL
   count := 42            -- `:=` writes the cell (sugar for `setRef count 42`)
-  count := count.value + 1  -- read with `.value`; `:=` is right-assoc, low prec
-  println count.value    -- .value reads it  => 43
+  count := !count + 1    -- `!` reads the cell; `:=` is right-assoc, low prec
+  println !count         -- => 43
 ```
 
 `x := e` is surface sugar that desugars to `setRef x e` (type
 `Ref a -> a -> Unit`), so `x` must be a `Ref`; a non-`Ref` left side is a
 type error. `setRef` may still be called directly.
+
+`!x` reads the cell. It binds TIGHTER than function application, so `f !x` is
+`f (!x)` — no parentheses needed in argument position. `.value` remains a valid
+spelling of the same read (`!x` and `x.value` are the same operation), but `!`
+is the canonical one.
+
+⚠️ `!` is NOT boolean negation — `not` is, and it is the only spelling. Applying
+`!` to a `Bool` is a located error (`T-BANG-ON-BOOL`) naming `not`.
 
 ## Map / Set literals
 

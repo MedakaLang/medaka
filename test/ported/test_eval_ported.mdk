@@ -502,9 +502,9 @@ test "interp derived Display" = expectEqual "color: GreenInterp" "color: \{cColo
 -- ── Unary operators ──────────────────────────────────────────────────────────
 -- Ported from: t_bang_true, t_bang_false, t_bang_chain
 
-test "bang true" = expectFalse (!True)
-test "bang false" = expectTrue (!False)
-test "bang chain" = expectTrue (!(!True))
+test "bang true" = expectFalse (not True)
+test "bang false" = expectTrue (not False)
+test "bang chain" = expectTrue (not (not True))
 
 -- ── String escape sequences ──────────────────────────────────────────────────
 -- Ported from: t_escape_newline, t_escape_tab, t_escape_quote, t_escape_null,

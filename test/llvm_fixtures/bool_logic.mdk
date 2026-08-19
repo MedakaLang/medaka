@@ -1,5 +1,9 @@
--- boolean operators: && / || lower to short-circuiting CIf, unary ! to xor,
--- comparisons yield Bool words.  Result is a Bool -> mdk_print_bool.
+-- boolean operators: && / || lower to short-circuiting CIf, comparisons yield
+-- Bool words.  Result is a Bool -> mdk_print_bool.
+-- Was `!(a == b)` until #1739 half A repurposed `!` to Ref-deref: there is no
+-- unary BOOLEAN operator any more (and so no xor lowering to pin), and `not` is
+-- a prelude FUNCTION this no-prelude emit driver cannot resolve.  `/=` keeps the
+-- negated-comparison operand without leaving the fixture's driver.
 a = 5
 b = 9
-main = (a < b) && !(a == b) || (a > b)
+main = (a < b) && (a /= b) || (a > b)

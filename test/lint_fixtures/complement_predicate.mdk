@@ -15,7 +15,9 @@ posNone x = not (isNone x)
 posOk x = not (isOk x)
 posErr x = not (isErr x)
 
--- POSITIVE: unary `!` form.
+-- NEGATIVE (#1739 half A): `!` is Ref-DEREFERENCE now, not boolean negation, so
+-- these must NOT fire. A rule that still read `!` as `not` would rewrite a cell
+-- read into boolean logic, and `--fix` would apply it unprompted.
 posBang xs = !(isEmptyL xs)
 
 -- POSITIVE: the argument is carried verbatim (a nested application).

@@ -509,7 +509,7 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli =
   -- that names neither the variable nor the fix.
   if wasmEmitter == "" then
     BuildErr "error: --target wasm needs a compiled wasm emitter — set MEDAKA_WASM_EMITTER to its path\n  build one with: sh test/wasm/build_wasm_oracle.sh (produces test/bin/wasm_emit_modules_main)"
-  else if !fileExists wasmEmitter then
+  else if not (fileExists wasmEmitter) then
     BuildErr "error: MEDAKA_WASM_EMITTER points to a missing binary: \{wasmEmitter}\n  build it with: sh test/wasm/build_wasm_oracle.sh (produces test/bin/wasm_emit_modules_main)"
   else match probeWasmTools ()
     None => BuildErr "error: wasm-tools not found on PATH — install wasm-tools (cargo install wasm-tools or brew install wasm-tools) for --target wasm"

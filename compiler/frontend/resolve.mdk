@@ -2226,7 +2226,7 @@ ppResError (InternalExternAccess n _) = "'"
 -- PRELUDE method is a different case, ruled a warning-not-error by
 -- docs/spec/SHADOW-SEMANTICS.md S1-PRELUDE (#1499), and is NOT what this fires on.
 ppResError (DuplicateInterfaceMethod m a b _) = "Method '\{m}' is declared by two interfaces in this module: '\{a}' and '\{b}'. Two interfaces declared together may not share a method name — an occurrence of '\{m}' could not be attributed to either. Rename the method in one of them, or merge the two interfaces. (A method name shared with a PRELUDE interface is a different case and stays legal.)"
-ppResError (ReassignImmutable n _) = "Cannot reassign '\{n}' — bindings are immutable. To bind a new value, shadow it with `let \{n} = ...`. For mutable state, use a `Ref`: `let \{n} = Ref 0`, then write `\{n} := \{n}.value + 1` (read the cell with `\{n}.value`)"
+ppResError (ReassignImmutable n _) = "Cannot reassign '\{n}' — bindings are immutable. To bind a new value, shadow it with `let \{n} = ...`. For mutable state, use a `Ref`: `let \{n} = Ref 0`, then write `\{n} := !\{n} + 1` (read the cell with `!\{n}`)"
 
 -- Stable diagnostic code (DIAGNOSTIC-CODES-DESIGN §2) for a resolve error — one
 -- `R-*` code per ResError constructor.  Authored here (a single chokepoint), so

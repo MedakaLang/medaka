@@ -784,7 +784,7 @@ test/construct_fixtures/
   str_unicode_escape.mdk    str_upper_lower.mdk      superclass.mdk
   toplevel_mutual_rec.mdk   triple_quoted.mdk        tuple_fst.mdk
   tuple_pat_lambda.mdk      type_alias.mdk           type_annot_expr.mdk
-  unary_minus.mdk           unary_not.mdk            where_multi_defs.mdk
+  ref_deref.mdk             unary_minus.mdk          where_multi_defs.mdk
 ```
 
 ### Dict-pass SIGSEGV cluster — ROOT-CAUSED 2026-06-10 (read-only investigation)

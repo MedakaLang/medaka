@@ -813,8 +813,8 @@ x = 6                                  -- ERROR (R-IMMUTABLE-ASSIGN): reassignme
 let x = 6                              -- OK: shadowing declares a NEW binding
 
 let count = Ref 0                      -- an immutable binding of a mutable CELL
-count := count.value + 1               -- `:=` writes the cell; read with `.value`
-println count.value                    -- => 1
+count := !count + 1                    -- `:=` writes the cell; `!` reads it
+println !count                         -- => 1
 
 let p = Person { name = "Alice", age = 30 }     -- immutable record
 p.age = 31                             -- field assignment (in-place record mutation)
@@ -823,7 +823,8 @@ p.age = 31                             -- field assignment (in-place record muta
 `Ref` is the single mutation primitive:
 - construct — `Ref v` (type `a -> Ref a`)
 - write — `x := e` (surface sugar for `setRef x e`, type `Ref a -> a -> Unit`)
-- read — `x.value`
+- read — `!x` (binds tighter than application, so `f !x` needs no parens;
+  `x.value` is the same operation and still valid)
 
 Mutation is untracked: a function that writes a `Ref` carries no additional
 effect in its inferred type signature — the effect system tracks host
@@ -978,7 +979,7 @@ For the specific case of shared mutable state across multiple call sites, Medaka
 ```
 let x : Ref Int = Ref 5
 increment x      -- x's contents are now 6
-x.value          -- 6
+!x               -- 6
 ```
 
 The key distinction:

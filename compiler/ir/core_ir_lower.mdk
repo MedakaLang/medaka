@@ -108,6 +108,13 @@ lower (EMatch scrut arms) = lowerMatch (lower scrut) arms
 lower (EIf c t e) = CIf (lower c) (lower t) (lower e)
 lower (EBinOp op l r route) = lowerBinop op l r (scalarTagOfRoute route.value)
 lower (EInfix op l r) = CApp (CApp (CVar op AGlobal) (lower l)) (lower r)
+-- #1739 half A: `!x` lowers to the SAME Core IR node `x.value` does, rather than a
+-- `CUnOp "!"` both backends would then need a new arm for.  `CFieldAccess _ "value"`
+-- already carries Ref-read end-to-end (core_ir_eval, llvm_emit, wasm_emit), so the
+-- repurpose costs zero emitter work — and cannot make the two spellings diverge.
+-- The empty record-name stamp matches what `EFieldAccess e "value"` lowers with:
+-- `inferValueField` never stamps the ref, because a Ref is not a record.
+lower (EUnOp "!" e _) = CFieldAccess (lower e) "value" ""
 lower (EUnOp op e _) = CUnOp op (lower e)
 lower (ETuple es) = CTuple (map lower es)
 lower (EListLit es) = CList (map lower es)
@@ -776,7 +783,7 @@ normalizeRecordOrder fo name fields = match lookupAssoc name fo
   None => CRecord name fields
   Some labels =>
     let written = map cFieldLabel fields
-    if written == labels || !(isPermutationOf written labels) then
+    if written == labels || not (isPermutationOf written labels) then
       CRecord name fields
     else
       bindFieldTemps fields (CRecord name (map recTempField labels))

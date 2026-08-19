@@ -11193,10 +11193,56 @@ composeOp gt ht True =
 
 inferUnop : String -> Mono -> Mono
 inferUnop "-" t = negateOp t
-inferUnop "!" t =
-  let _ = unify t (tconBuiltin "Bool")
-  tconBuiltin "Bool"
+inferUnop "!" t = derefOp t
 inferUnop op _ = panic ("typecheck: unsupported unary op " ++ op)
+
+-- #1739 half A: `!x` is Ref-DEREFERENCE, not boolean negation — `not` is the sole
+-- boolean negation (it is already a prelude fn).  The unify is the same one
+-- `inferValueField` does for `x.value`, and deliberately so: the two spellings must
+-- infer identically, since desugar-free lowering sends both to `CFieldAccess _
+-- "value"`.  Unification rather than a structural match, so it also works when the
+-- receiver is still an unsolved tyvar (a param not yet pinned to its signature).
+--
+-- The `Bool` arm is the REQUIRED diagnostic (user, 2026-07-10).  `!aBool` is the OLD
+-- boolean-not use, and left to unification it fails as a bare `Ref a vs Bool`
+-- mismatch that says nothing about what changed — so the Bool shape is INTERCEPTED
+-- here, before unify, and answered with a message naming `not`.
+--
+-- ⚠️ The "use `not x`" advice is IN THE MESSAGE, not only in `help`.  ERROR-QUALITY
+-- §4.5 puts actionable advice on a `help:` line, but `help` is a JSON-ONLY channel
+-- here — the CLI renderer never prints it — so advice that lives only there is
+-- invisible to the human this diagnostic exists for.  The did-you-mean precedent
+-- does the same ("Unbound variable: greetng. Did you mean 'greeting'"), and this is
+-- the wording the user specified for this bite (2026-07-10).  `help` still carries
+-- the longer WHY for the structured consumers.
+--
+-- It returns `Bool` on that path rather than a fresh var: the operand was a Bool and
+-- the author meant negation, so `Bool` is the type the surrounding expression was
+-- written to expect (`if !flag then …`), and handing it back keeps ONE located error
+-- instead of a cascade of downstream mismatches — the Chunk-D recovery shape the
+-- literal-provenance arms already use.
+derefOp : Mono -> Mono
+derefOp t =
+  if monoIsBool (normalize t) then
+    let _ = pushTypeErrorHelpFixAt "T-BANG-ON-BOOL" None bangOnBoolMsg bangOnBoolHelp None
+    tconBuiltin "Bool"
+  else
+    let inner = freshVar ()
+    let _ = unify t (TApp (tconBuiltin "Ref") inner)
+    inner
+
+-- `Bool` as a HEAD, ignoring origin: the prelude's Bool is builtin-origin, but a
+-- normalized operand can carry a module origin, and the question here is only which
+-- type constructor it is.
+monoIsBool : Mono -> Bool
+monoIsBool (TCon "Bool" _) = True
+monoIsBool _ = False
+
+bangOnBoolMsg : String
+bangOnBoolMsg = "`!` is dereference (Ref), not boolean negation — use `not x`"
+
+bangOnBoolHelp : String
+bangOnBoolHelp = "use `not x` — `!x` reads the cell of a `Ref`, so it needs a `Ref a`, not a `Bool`"
 
 -- Roadmap #18c: unary minus `-x` carries a `Num` obligation on its operand type —
 -- a verbatim mirror of `numArithOp`/`recordIfaceObligation` for binary `+`/`-`/…,

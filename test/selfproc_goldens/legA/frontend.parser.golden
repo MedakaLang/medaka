@@ -103,6 +103,8 @@ declThenNoise : Parser Decl
 declWithSpan : Parser (Decl, Int, Int)
 deepenLeftover : String -> Array Token -> Array Int -> Int -> Int -> ParseError
 defaultImplRemovedMsg : String
+derefArg : Parser Expr
+derefArgFor : Token -> Parser Expr
 derivedNameP : Parser DeriveRef
 derivingClause : Parser (List DeriveRef)
 derivingFor : Token -> Parser (List DeriveRef)

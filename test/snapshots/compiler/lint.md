@@ -1,5 +1,5 @@
 # META
-source_lines=4245
+source_lines=4250
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -2756,11 +2756,16 @@ noExcl _ = False
 
 -- ── shared node predicates ────────────────────────────────────────────────────
 
--- `e` is a logical negation `not X` (the `not` prelude fn) or `!X` (unary `!`);
--- return the negated operand `X`.  `not` parses to `EApp (EVar "not") X`.
+-- `e` is a logical negation `not X`; return the negated operand `X`.  `not` parses
+-- to `EApp (EVar "not") X`.
+--
+-- ⚠️ The `EUnOp "!"` arm is GONE (#1739 half A) and must not come back: `!x` is now
+-- Ref-DEREFERENCE, so reading it as a negation would make every rule below rewrite a
+-- cell read into boolean logic — `!r` would "simplify" to something that no longer
+-- reads the Ref at all.  That is a silent-wrongness rewrite, and `--fix` would apply
+-- it unprompted.  `not` is the sole boolean negation.
 notArgOf : Expr -> Option Expr
 notArgOf (EApp hd x) = if isEVarNamed "not" hd then Some x else None
-notArgOf (EUnOp "!" x _) = Some x
 notArgOf _ = None
 
 -- build `not e` in the canonical `not <e>` (prelude fn) form the printer renders.
@@ -2980,7 +2985,7 @@ notEqFix _ d = exprRuleFix noExcl (detApply notEqOf) d
 --   if c then True else False → c        if c then False else True → not c
 --   x == True → x        x == False → not x        (also True/False on the LEFT)
 --   x /= True → not x    x /= False → x
---   not (not x) → x      (`!(!x)` too)
+--   not (not x) → x
 -- Excluded (per spec): `if c then True else e` → `c || e` (short-circuit/effect
 -- risk).  A comparison with bool literals on BOTH sides is left alone.
 boolSimplifyOf : Expr -> Option Expr
@@ -3247,7 +3252,7 @@ whenUnlessFix _ d = exprRuleFix whenUnlessExcl (detApply whenUnlessOf) d
 --   isEmptyList ↔ isNonEmptyList  (wasm_emit's private List helper + its complement)
 --   isSome ↔ isNone          (prelude `core.mdk`)
 --   isOk ↔ isErr             (prelude `core.mdk`)
--- Also matches the unary-`!` form (`notArgOf` handles both).  Purely syntactic —
+-- Matches the `not` prelude-fn form only (see `notArgOf`).  Purely syntactic —
 -- only the exact registered names fire; anything else (`not (isEmptyL x && …)`,
 -- `not (someOtherPred x)`) is left alone.  Excludes the complement helpers' OWN
 -- definitions (`isNonEmptyL xs = not (isEmptyL xs)`) — their bodies ARE this idiom,
@@ -5266,7 +5271,6 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "noExcl" (PWild) (EVar "False"))
 (DTypeSig false "notArgOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "notArgOf" ((PCon "EApp" (PVar "hd") (PVar "x"))) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "not"))) (EVar "hd")) (EApp (EVar "Some") (EVar "x")) (EVar "None")))
-(DFunDef false "notArgOf" ((PCon "EUnOp" (PLit (LString "!")) (PVar "x") PWild)) (EApp (EVar "Some") (EVar "x")))
 (DFunDef false "notArgOf" (PWild) (EVar "None"))
 (DTypeSig false "mkNot" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "mkNot" ((PVar "e")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "not")))) (EVar "e")))
@@ -6723,7 +6727,6 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "noExcl" (PWild) (EVar "False"))
 (DTypeSig false "notArgOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "notArgOf" ((PCon "EApp" (PVar "hd") (PVar "x"))) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "not"))) (EVar "hd")) (EApp (EVar "Some") (EVar "x")) (EVar "None")))
-(DFunDef false "notArgOf" ((PCon "EUnOp" (PLit (LString "!")) (PVar "x") PWild)) (EApp (EVar "Some") (EVar "x")))
 (DFunDef false "notArgOf" (PWild) (EVar "None"))
 (DTypeSig false "mkNot" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "mkNot" ((PVar "e")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "not")))) (EVar "e")))

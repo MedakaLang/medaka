@@ -1,5 +1,5 @@
 # META
-source_lines=4027
+source_lines=4029
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, port of lib/eval.ml's tree-walking
@@ -1849,8 +1849,10 @@ export evalUnop : String -> Value e -> Value e
 evalUnop "-" (VInt n) = VInt (0 - n)
 evalUnop "-" (VFloat f) = VFloat (negFloatIEEE f)
 evalUnop "-" _ = panic "unary minus on non-number"
-evalUnop "!" (VBool b) = VBool (not b)
-evalUnop "!" _ = panic "'!' on non-Bool"
+-- #1739 half A: `!x` DEREFERENCES a Ref (it was boolean-not).  Routed to the very
+-- function `x.value` uses, because the two spellings are the same operation — a
+-- separate arm here would be a second answer to "what does reading a cell do".
+evalUnop "!" v = evalValueField v
 evalUnop "not" (VBool b) = VBool (not b)
 evalUnop "not" _ = panic "'!' on non-Bool"
 evalUnop op _ = panic ("unknown unary op: " ++ op)
@@ -4701,8 +4703,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "evalUnop" ((PLit (LString "-")) (PCon "VInt" (PVar "n"))) (EApp (EVar "VInt") (EBinOp "-" (ELit (LInt 0)) (EVar "n"))))
 (DFunDef false "evalUnop" ((PLit (LString "-")) (PCon "VFloat" (PVar "f"))) (EApp (EVar "VFloat") (EApp (EVar "negFloatIEEE") (EVar "f"))))
 (DFunDef false "evalUnop" ((PLit (LString "-")) PWild) (EApp (EVar "panic") (ELit (LString "unary minus on non-number"))))
-(DFunDef false "evalUnop" ((PLit (LString "!")) (PCon "VBool" (PVar "b"))) (EApp (EVar "VBool") (EApp (EVar "not") (EVar "b"))))
-(DFunDef false "evalUnop" ((PLit (LString "!")) PWild) (EApp (EVar "panic") (ELit (LString "'!' on non-Bool"))))
+(DFunDef false "evalUnop" ((PLit (LString "!")) (PVar "v")) (EApp (EVar "evalValueField") (EVar "v")))
 (DFunDef false "evalUnop" ((PLit (LString "not")) (PCon "VBool" (PVar "b"))) (EApp (EVar "VBool") (EApp (EVar "not") (EVar "b"))))
 (DFunDef false "evalUnop" ((PLit (LString "not")) PWild) (EApp (EVar "panic") (ELit (LString "'!' on non-Bool"))))
 (DFunDef false "evalUnop" ((PVar "op") PWild) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "unknown unary op: ")) (EVar "op"))))
@@ -6146,8 +6147,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "evalUnop" ((PLit (LString "-")) (PCon "VInt" (PVar "n"))) (EApp (EVar "VInt") (EBinOp "-" (ELit (LInt 0)) (EVar "n"))))
 (DFunDef false "evalUnop" ((PLit (LString "-")) (PCon "VFloat" (PVar "f"))) (EApp (EVar "VFloat") (EApp (EVar "negFloatIEEE") (EVar "f"))))
 (DFunDef false "evalUnop" ((PLit (LString "-")) PWild) (EApp (EVar "panic") (ELit (LString "unary minus on non-number"))))
-(DFunDef false "evalUnop" ((PLit (LString "!")) (PCon "VBool" (PVar "b"))) (EApp (EVar "VBool") (EApp (EVar "not") (EVar "b"))))
-(DFunDef false "evalUnop" ((PLit (LString "!")) PWild) (EApp (EVar "panic") (ELit (LString "'!' on non-Bool"))))
+(DFunDef false "evalUnop" ((PLit (LString "!")) (PVar "v")) (EApp (EVar "evalValueField") (EVar "v")))
 (DFunDef false "evalUnop" ((PLit (LString "not")) (PCon "VBool" (PVar "b"))) (EApp (EVar "VBool") (EApp (EVar "not") (EVar "b"))))
 (DFunDef false "evalUnop" ((PLit (LString "not")) PWild) (EApp (EVar "panic") (ELit (LString "'!' on non-Bool"))))
 (DFunDef false "evalUnop" ((PVar "op") PWild) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "unknown unary op: ")) (EVar "op"))))

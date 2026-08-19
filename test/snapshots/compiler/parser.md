@@ -1,5 +1,5 @@
 # META
-source_lines=5031
+source_lines=5058
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser — Stage 1 port of `lib/parser.mly`.  A monadic
@@ -698,7 +698,34 @@ parseApp = do
 -- head (`5 -1`) never grabs, so the TMinusTight falls through to parseAdd's
 -- binary minus and stays subtraction (Rule C, head-gated).
 appArg : Bool -> Parser Expr
-appArg headNum = orElse (negLitArg headNum) parseAspat
+appArg headNum = orElse (negLitArg headNum) (orElse derefArg parseAspat)
+
+-- #1739 half A: `!` (Ref-dereference) binds TIGHTER than application, so `f !r`
+-- is `f (!r)` — the OCaml-standard Ref ergonomics this bite exists to deliver.
+-- Without this arm `!` sits at `parseUnary`, BELOW application, and every
+-- argument-position read needs parens (`f (!r)`) where `.value` needed none
+-- (`f r.value`) — which would make the spelling this bite introduces clumsier
+-- than the one it replaces, at ~a third of the Ref reads in the tree.
+--
+-- Unambiguous, and only because half B already ran: `!=` is now its own `TBangEq`
+-- token, so a `TBang` in argument position can ONLY begin a unary deref. There is
+-- no binary `!`, so no `a ! b` reading competes for it.
+--
+-- The operand is an ASPAT, not a `parseUnary` — `!` takes exactly one atom, the
+-- same shape the tight-negative-literal arm above takes. `!!r` (deref of a deref)
+-- therefore needs parens; that is deliberate, since `!` chains are vanishingly
+-- rare and the alternative re-opens the greedy-operand ambiguity `-` had.
+derefArg : Parser Expr
+derefArg = do
+  t <- peekP
+  derefArgFor t
+
+derefArgFor : Token -> Parser Expr
+derefArgFor TBang = do
+  advance
+  e <- parseAspat
+  pure (EUnOp "!" e (Ref RNone))
+derefArgFor _ = failP "not a tight deref argument"
 
 negLitArg : Bool -> Parser Expr
 negLitArg True = failP "numeric head: tight minus stays subtraction"
@@ -5255,7 +5282,12 @@ parseResultWith src tokList offList =
 (DTypeSig false "parseApp" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseApp" () (EApp (EApp (EVar "andThen") (EVar "parseAspat")) (ELam ((PVar "head")) (EApp (EApp (EVar "andThen") (EApp (EVar "many") (EApp (EVar "appArg") (EApp (EVar "headIsNumeric") (EVar "head"))))) (ELam ((PVar "args")) (EApp (EVar "pure") (EApp (EApp (EVar "applyAll") (EVar "head")) (EVar "args"))))))))
 (DTypeSig false "appArg" (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Expr"))))
-(DFunDef false "appArg" ((PVar "headNum")) (EApp (EApp (EVar "orElse") (EApp (EVar "negLitArg") (EVar "headNum"))) (EVar "parseAspat")))
+(DFunDef false "appArg" ((PVar "headNum")) (EApp (EApp (EVar "orElse") (EApp (EVar "negLitArg") (EVar "headNum"))) (EApp (EApp (EVar "orElse") (EVar "derefArg")) (EVar "parseAspat"))))
+(DTypeSig false "derefArg" (TyApp (TyCon "Parser") (TyCon "Expr")))
+(DFunDef false "derefArg" () (EApp (EApp (EVar "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "derefArgFor") (EVar "t")))))
+(DTypeSig false "derefArgFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr"))))
+(DFunDef false "derefArgFor" ((PCon "TBang")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "parseAspat")) (ELam ((PVar "e")) (EApp (EVar "pure") (EApp (EApp (EApp (EVar "EUnOp") (ELit (LString "!"))) (EVar "e")) (EApp (EVar "Ref") (EVar "RNone")))))))))
+(DFunDef false "derefArgFor" (PWild) (EApp (EVar "failP") (ELit (LString "not a tight deref argument"))))
 (DTypeSig false "negLitArg" (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "negLitArg" ((PCon "True")) (EApp (EVar "failP") (ELit (LString "numeric head: tight minus stays subtraction"))))
 (DFunDef false "negLitArg" ((PCon "False")) (EApp (EApp (EVar "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "andThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EApp (EVar "negLitArgFor") (EVar "t")) (EVar "t2")))))))
@@ -6786,7 +6818,12 @@ parseResultWith src tokList offList =
 (DTypeSig false "parseApp" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseApp" () (EApp (EApp (EMethodRef "andThen") (EVar "parseAspat")) (ELam ((PVar "head")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "many") (EApp (EVar "appArg") (EApp (EVar "headIsNumeric") (EVar "head"))))) (ELam ((PVar "args")) (EApp (EMethodRef "pure") (EApp (EApp (EVar "applyAll") (EVar "head")) (EVar "args"))))))))
 (DTypeSig false "appArg" (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Expr"))))
-(DFunDef false "appArg" ((PVar "headNum")) (EApp (EApp (EVar "orElse#shadow") (EApp (EVar "negLitArg") (EVar "headNum"))) (EVar "parseAspat")))
+(DFunDef false "appArg" ((PVar "headNum")) (EApp (EApp (EVar "orElse#shadow") (EApp (EVar "negLitArg") (EVar "headNum"))) (EApp (EApp (EVar "orElse#shadow") (EVar "derefArg")) (EVar "parseAspat"))))
+(DTypeSig false "derefArg" (TyApp (TyCon "Parser") (TyCon "Expr")))
+(DFunDef false "derefArg" () (EApp (EApp (EMethodRef "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "derefArgFor") (EVar "t")))))
+(DTypeSig false "derefArgFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr"))))
+(DFunDef false "derefArgFor" ((PCon "TBang")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "parseAspat")) (ELam ((PVar "e")) (EApp (EMethodRef "pure") (EApp (EApp (EApp (EVar "EUnOp") (ELit (LString "!"))) (EVar "e")) (EApp (EVar "Ref") (EVar "RNone")))))))))
+(DFunDef false "derefArgFor" (PWild) (EApp (EVar "failP") (ELit (LString "not a tight deref argument"))))
 (DTypeSig false "negLitArg" (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "negLitArg" ((PCon "True")) (EApp (EVar "failP") (ELit (LString "numeric head: tight minus stays subtraction"))))
 (DFunDef false "negLitArg" ((PCon "False")) (EApp (EApp (EMethodRef "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EMethodRef "andThen") (EVar "peek2P")) (ELam ((PVar "t2")) (EApp (EApp (EVar "negLitArgFor") (EVar "t")) (EVar "t2")))))))

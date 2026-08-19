@@ -3619,12 +3619,6 @@ emitUn e env "-" x =
       let r = freshReg e
       let _ = emit e "  \{r} = sub i64 0, \{i}"
       (tagInt e r, LTInt)
-emitUn e env "!" x =
-  let (v, _) = emitExpr e env x
-  let i = untagInt e v
-  let r = freshReg e
-  let _ = emit e "  \{r} = xor i64 \{i}, 1"
-  (tagInt e r, LTBool)
 emitUn e _ op _ = gapE e ("unsupported unary op " ++ op)
 
 -- `if`: lower via an alloca slot (memory, not phi) so a branch's own internal
@@ -9465,7 +9459,6 @@ typeOf sigs env (CBinPrim op l r _)
   | isCmpOp op = LTBool
   | op == "::" = LTCon
   | otherwise = typeOf sigs env l
-typeOf _ _ (CUnOp "!" _) = LTBool
 typeOf sigs env (CUnOp "-" x) = typeOf sigs env x
 typeOf sigs env (CIf _ t _) = typeOf sigs env t
 typeOf sigs env (CLet False (PVar x _) e1 e2) =
@@ -9593,7 +9586,6 @@ paramUseTy sigs env p (CIf c t f) =
     Some LTBool
   else
     firstSome (paramUseTy sigs env p t) (paramUseTy sigs env p f)
-paramUseTy _ _ p (CUnOp "!" x) = if isVarNamed p x then Some LTBool else None
 paramUseTy sigs env p (CUnOp _ x) = paramUseTy sigs env p x
 -- `::` is NOT a symmetric binop: in `l :: r`, l is the ELEMENT and r is the
 -- `List element` — their LTys differ.  So a var on the LEFT of `::` cannot take
