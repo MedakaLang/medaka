@@ -1271,18 +1271,46 @@ jobs:
       # Guarded on docs_only like its neighbours — and unlike the doc gates at the top of
       # this job, that guard is CORRECT here: this needs the compiler, and a docs-only PR
       # cannot fix a compiler bug.
-      - name: Open bugs must still reproduce (must-fail suite — a RED here means someone FIXED something)
-        if: needs.detect.outputs.docs_only != 'true'
-        run: sh test/diff_compiler_must_fail.sh
-
-      - name: Compiler source must be well-typed
+      # These checks are independent and read-only after the shared oracle build above:
+      # the must-fail suite drives ./medaka over its own copied/scratch fixtures, while
+      # the typecheck gate only reads diagnostics_project_main and compiler source. They
+      # were the two longest consecutive checks in this job (~2.3m + ~2.7m on hosted
+      # runners), so serializing them put their SUM on the CI critical path. Run both,
+      # wait for both, print both complete logs, and preserve each gate's fail semantics.
+      # In particular, the typecheck PASS marker remains mandatory: exit 0 alone can be
+      # a skip, and "did not run" must never become green in the name of performance.
+      - name: Open bugs still reproduce and compiler source is well-typed
         if: needs.detect.outputs.docs_only != 'true'
         run: |
-          bash test/typecheck_compiler_source.sh 2>&1 | tee /tmp/tc.log
-          if ! grep -q 'PASS: compiler source is type-clean' /tmp/tc.log; then
-            echo "::error::The compiler source is ILL-TYPED (or the gate skipped). The build does not gate on this — that is why the gate exists."
-            exit 1
+          set +e
+          sh test/diff_compiler_must_fail.sh > /tmp/must-fail.log 2>&1 &
+          must_fail_pid=$!
+          bash test/typecheck_compiler_source.sh > /tmp/tc.log 2>&1 &
+          typecheck_pid=$!
+
+          wait "$must_fail_pid"
+          must_fail_rc=$?
+          echo "::group::Must-fail suite"
+          cat /tmp/must-fail.log
+          echo "::endgroup::"
+
+          wait "$typecheck_pid"
+          typecheck_rc=$?
+          echo "::group::Compiler source typecheck"
+          cat /tmp/tc.log
+          echo "::endgroup::"
+          set -e
+
+          failed=0
+          if [ "$must_fail_rc" -ne 0 ]; then
+            echo "::error::The must-fail suite returned $must_fail_rc. An open bug may have been fixed, or a fixture/control regressed."
+            failed=1
           fi
+          if [ "$typecheck_rc" -ne 0 ] || ! grep -q 'PASS: compiler source is type-clean' /tmp/tc.log; then
+            echo "::error::The compiler source is ILL-TYPED (or the gate skipped). The build does not gate on this — that is why the gate exists."
+            failed=1
+          fi
+          exit "$failed"
 
       # The script asserts C3a AND C3b (its exit status is `c3a && c3b`), which is the
       # right bar for a checkpoint re-mint but the WRONG bar for CI. They answer two
