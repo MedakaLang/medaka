@@ -13,7 +13,7 @@
 # emitting (it is here so a future generator that re-enables records, or a
 # hand-added corpus program, is correctly classified rather than mis-reported).
 #
-# NOTE on operator dispatch: Gap G (==/!=/</>/<=/>= dispatching to user/derived
+# NOTE on operator dispatch: Gap G (==//=/</>/<=/>= dispatching to user/derived
 # Eq/Ord) is CLOSED on synced main for the interpreter + compiler tree-walker
 # (PLAN.md Phase 151 / MEMORY project_phase151_gapg_operator_dispatch).  The
 # fuzzer's Tier-B target IS the tree-walker, so derived-ADT comparison is

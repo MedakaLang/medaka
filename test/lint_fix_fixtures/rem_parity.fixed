@@ -9,4 +9,4 @@ negOne n = n % 2 == 1
 
 -- NEGATIVE: the isEven/isOdd definitions must not self-rewrite.
 isEven n = n % 2 == 0
-isOdd n = n % 2 != 0
+isOdd n = n % 2 /= 0

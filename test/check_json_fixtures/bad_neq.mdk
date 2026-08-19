@@ -1,1 +1,1 @@
-main = println (1 /= 2)
+main = println (1 != 2)

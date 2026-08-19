@@ -66,7 +66,7 @@ test file imports from those modules and asserts on computed values (not stdout)
 | `test_eval_module_isolation` | `per-module isolation 2-arg singleton via wrap`, `1-arg singleton direct` | Phase 110 |
 | `test_eval_dict_arity_no_cross_module_collision` | `phase 134 dict-arity no collision render 99` | Phase 134 |
 | `test_eval_standalone_vs_method` | `standalone toList divergent pair type`, `standalone isEmpty box`, `method isEmpty list`, `method toList option` | Phase 112 |
-| `test_eval_operator_dispatch_cross_module` | `gap G operator < / == / !=` | Phase 151 / Gap G |
+| `test_eval_operator_dispatch_cross_module` | `gap G operator < / == / /=` | Phase 151 / Gap G |
 | `test_eval_poly_monad_cross_module` | `cross-module poly-monad pure dispatch some` | Phase 88 |
 | `test_eval_poly_monad_imported_module` | `imported poly-monad wrapper pure dispatch some` | Phase 95 |
 | `test_eval_foldable_derived_imported_instance` | `foldable-derived sum/maximum/product/length` | Phase 125 |

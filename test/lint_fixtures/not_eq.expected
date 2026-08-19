@@ -18,8 +18,8 @@ warning: [rule-missing-signature] top-level 'negPlain' has no type signature. Ad
 warning: [rule-missing-signature] top-level 'nested' has no type signature. Add a `nested : …` declaration
 warning: [rule-missing-signature] top-level 'notEq' has no type signature. Add a `notEq : …` declaration
 warning: [rule-missing-signature] top-level 'notNe' has no type signature. Add a `notNe : …` declaration
-warning: [rule-not-eq] negated equality. Rewrite as 'a != b'
-warning: [rule-not-eq] negated equality. Rewrite as 'a != b'
-warning: [rule-not-eq] negated equality. Rewrite as 'a != b'
+warning: [rule-not-eq] negated equality. Rewrite as 'a /= b'
+warning: [rule-not-eq] negated equality. Rewrite as 'a /= b'
+warning: [rule-not-eq] negated equality. Rewrite as 'a /= b'
 warning: [rule-not-eq] negated equality. Rewrite as 'a == b'
 warning: [rule-not-eq] negated equality. Rewrite as 'a == b'
