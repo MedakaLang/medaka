@@ -335,6 +335,19 @@ keepIrNote path contents = match writeFile path contents
   Ok _ => "\nkept IR: " ++ path
   Err e => "\nwarning: could not keep IR at \{path}: " ++ e
 
+-- #1693: on a FAILED emitter run, its stderr is already folded into the
+-- BuildErr message above (`\{emitErr}`). On SUCCESS it used to be dropped on
+-- the floor — the only way to see it was to bypass `medaka build` entirely
+-- and shell out to `./medaka_emitter` directly. Fold it into the success
+-- note instead, so a clean build still surfaces whatever the emitter wrote
+-- along the way (progress/diagnostic chatter is expected to be low-volume).
+emitStderrNote : String -> String
+emitStderrNote emitErr =
+  if stringLength emitErr == 0 then
+    ""
+  else
+    "\n" ++ emitErr
+
 -- ---- the build pipeline ----
 -- root  = repo root (assets live under it)
 -- medaka = path to the medaka exe (for the emit shell-out)
@@ -446,7 +459,7 @@ runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots 
           -- DISTINCT `-o` paths (the normal, sane usage) have NO such race at
           -- all.
           let res = clangLink cc rtC llPath outPath inputAbs tmpDir
-          let note = if effectiveKeepIr keepIrCli then keepIrNote (outPath ++ ".ll") ir else ""
+          let note = (if effectiveKeepIr keepIrCli then keepIrNote (outPath ++ ".ll") ir else "") ++ emitStderrNote emitErr
           appendNote note res
 
 -- ---- wasm (WasmGC + wasm-tools) target ----
@@ -526,7 +539,7 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli =
             -- .ll), including the AFTER-assemble ordering — see the comment
             -- on the native path's runBuildNativeIn for why.
             let res = wasmAssemble watPath outPath inputAbs
-            let note = if effectiveKeepIr keepIrCli then keepIrNote (outPath ++ ".wat") wat else ""
+            let note = (if effectiveKeepIr keepIrCli then keepIrNote (outPath ++ ".wat") wat else "") ++ emitStderrNote emitErr
             appendNote note res
 
 -- Probe `wasm-tools` up front (the wasm analogue of the implicit clang
@@ -702,8 +715,7 @@ emitPreludeObjIn cc root medaka outObjPath tmpDir = match detectGC cc tmpDir
                 let ccArgs = [optFlag, "-pthread"] ++ gcSectionsCflags ++ gcCflags ++ ["-c", llPath, "-o", outObjPath]
                 match runCommand cc ccArgs
                   Err e => BuildErr "error: could not run clang (\{cc}): \{e}"
-                  Ok (0, _, _) =>
-                    BuildOk "compiled prelude object -> \{outObjPath}"
+                  Ok (0, _, _) => BuildOk ("compiled prelude object -> \{outObjPath}" ++ emitStderrNote emitErr)
                   Ok (_, _, ccErr) => BuildErr "error: clang failed compiling the prelude object\n\{ccErr}"
 
 -- ---- precompile the C runtime object (`medaka build --emit-rt-obj <path>`) ----
