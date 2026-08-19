@@ -189,9 +189,9 @@ locLineStartsRef = Ref (arrayFromList [0])
 
 setLocState : String -> Array (Int, Int) -> Unit
 setLocState src offs =
-  let _ = setRef locSrcRef src
-  let _ = setRef locLineStartsRef (lineStartsOf src)
-  setRef locOffsRef offs
+  locSrcRef := src
+  locLineStartsRef := lineStartsOf src
+  locOffsRef := offs
 
 -- start char offset of token `i` (0 when out of range / unset).
 tokOffsetAt : Int -> Int
@@ -392,10 +392,28 @@ parseAssign = do
 assignTail : Expr -> Parser Expr
 assignTail lhs = located (assignTailRaw lhs)
 
+-- The RHS reads via `parseRhsExpr`, not a bare `parseAssign`: `:=` is a layout
+-- herald (LAYOUT-SEMANTICS.md §7.1) exactly as `=>` is — it is absent from the
+-- lexer's `canEndExpr`, so `r :=⏎  rhs` opens a bare-INDENT block that
+-- `parseAssign` has no TIndent case to read.  The same production the decl body
+-- (`parseBody`), a let/where RHS, and `lamTailRaw` already use.
+--
+-- Before this, an indented RHS died on the generic *"unexpected `:=`; expected a
+-- dedent"* — §12 item 5's "the lexer heralds it correctly but the parser cannot
+-- consume it" ⇒ a PARSER bug, not a lexer one.  It also made `medaka lint --fix`
+-- DESTROY SOURCE: a fix reprints the whole decl through `tools/printer.mdk`, whose
+-- `hangAtSep` legitimately drops a wide def-body below its separator, so any decl
+-- whose body was a `:=` with a wide RHS came back unparseable while `--fix`
+-- reported success and exited 0.
+--
+-- Right-associativity is preserved: `parseRhsExpr` falls back to `parseExpr`,
+-- which routes to `parseAssign`, so `a := b := c` still nests right.  (It also
+-- admits a trailing annotation on the RHS — `r := e : T` — which bare
+-- `parseAssign` did not; that matches every other RHS position.)
 assignTailRaw : Expr -> Parser Expr
 assignTailRaw lhs = do
   expectTok TColonEq
-  rhs <- parseAssign
+  rhs <- parseRhsExpr
   pure (EBinOp ":=" lhs rhs (Ref RNone))
 
 -- expression type annotation `e : ty` (loosest level)

@@ -1,0 +1,22 @@
+-- #1743: a `:=` write whose RHS sits on its own INDENTED line. `:=` is a layout
+-- herald (LAYOUT-SEMANTICS.md §7.1) — it is absent from the lexer's `canEndExpr`,
+-- so `r :=⏎  rhs` opens a bare-INDENT block. The parser read the RHS with a bare
+-- `parseAssign`, which has no TIndent case, so this died on the generic
+-- "unexpected `:=`; expected a dedent". Every other RHS position in the language
+-- (decl body, let/where RHS, `=>` lambda body) already allowed the continuation.
+--
+-- This also closed an S0: `medaka lint --fix` reprints a whole decl through
+-- tools/printer.mdk, whose `hangAtSep` drops a wide def-body below its separator —
+-- so ANY rule's autofix turned a decl whose body was a wide `:=` into unparseable
+-- source while reporting success and exiting 0.
+main =
+  let c = Ref 0
+  c :=
+    40 + 2
+  -- right-associativity survives the change: `parseRhsExpr` falls back to
+  -- `parseExpr`, which routes back through `parseAssign`.
+  let d = Ref 0
+  d :=
+    c.value + 1
+  println c.value
+  println d.value
