@@ -162,7 +162,7 @@ if [ -n "$fixtures" ]; then
   printf '%s\n' "$fixtures" \
     | EMITBIN="$EMITBIN" DICTPP="$DICTPP" RUNTIME="$RUNTIME" CC="$CC" GC_CFLAGS="$GC_CFLAGS" GC_LIBS="$GC_LIBS" \
       RTOBJ="$RTOBJ" WORKDIR="$WORK" RESULTDIR="$RESULTS" CAPTURE="${CAPTURE:-0}" \
-      xargs -P "$JOBS" -n 1 -I{} sh "$0" --one {}
+      xargs -P "$JOBS" -I{} sh "$0" --one {}
 fi
 
 pass=0; fail=0; seen=0

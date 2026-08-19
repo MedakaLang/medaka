@@ -120,7 +120,7 @@ if [ -n "$fixtures" ]; then
   n_fixtures="$(printf '%s\n' "$fixtures" | wc -l | tr -d ' ')"
   printf '%s\n' "$fixtures" \
     | EMITBIN="$EMITBIN" RUNTIME="$RUNTIME" WORKDIR="$WORK" RESULTDIR="$RESULTS" CAPTURE="${CAPTURE:-0}" \
-      xargs -P "$JOBS" -n 1 -I{} sh "$0" --one {}
+      xargs -P "$JOBS" -I{} sh "$0" --one {}
 fi
 
 # N == 0 MUST be a FAILURE, not a pass (issue #587 Q4): a gate that checked nothing

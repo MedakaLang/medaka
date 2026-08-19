@@ -142,7 +142,7 @@ fi
 
 printf '%s\n' "$entries" \
   | SELF="$SELF" RT="$RT" CORE="$CORE" ROOT="$ROOT" RESULTDIR="$RESULTS" \
-    xargs -P "$JOBS" -n 1 -I{} sh "$0" --one {}
+    xargs -P "$JOBS" -I{} sh "$0" --one {}
 
 fail_count=0
 seen_count=0
