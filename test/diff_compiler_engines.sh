@@ -603,7 +603,7 @@ printf '%s\n' "$CORPUS" \
     MEDAKA_RT_OBJ="${MEDAKA_RT_OBJ:-}" \
     MEDAKA_PRELUDE_OBJ="${MEDAKA_PRELUDE_OBJ:-}" \
     WORKDIR="$WORK" RESULTDIR="$RESULTS" \
-    xargs -P "$JOBS" -n 1 -I{} bash "$0" --one {}
+    xargs -P "$JOBS" -I{} bash "$0" --one {}
 
 cat "$RESULTS"/*.sig 2>/dev/null | sort > "$WORK/all.tsv"
 compared=$(wc -l < "$WORK/all.tsv" | tr -d ' ')

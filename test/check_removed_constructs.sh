@@ -161,7 +161,7 @@ fi
 
 total=$(wc -l < "$WORK/files.txt" | tr -d ' ')
 
-xargs -P "$JOBS" -n 1 -I{} sh "$0" --check-one {} < "$WORK/files.txt" > "$WORK/all.txt" 2>/dev/null
+xargs -P "$JOBS" -I{} sh "$0" --check-one {} < "$WORK/files.txt" > "$WORK/all.txt" 2>/dev/null
 
 tier1=$(grep -c '^TIER1	' "$WORK/all.txt" 2>/dev/null); tier1="${tier1:-0}"
 tier2=$(grep -c '^TIER2	' "$WORK/all.txt" 2>/dev/null); tier2="${tier2:-0}"
