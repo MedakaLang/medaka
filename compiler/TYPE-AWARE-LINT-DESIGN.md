@@ -1,6 +1,6 @@
 # Type-Aware Lint Tier — Design
 
-**Status: PARTLY SHIPPED, and RE-COSTED.** Re-derived 2026-08-19 against `main` at
+**Status:** PARTLY SHIPPED, and RE-COSTED. Re-derived 2026-08-19 against `main` at
 `8b7b5517` (worktree level with `origin/main`); every file:line below was checked at that
 commit. This supersedes the 2026-06-29 read-only pass, which was stale in **both**
 directions — it understated what had shipped and overstated what Tier 2 costs.
