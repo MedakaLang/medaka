@@ -45,13 +45,13 @@ opCountOn = Ref False
 -- Turn counting on/off.  Called ONCE by a profiler driver at entry with the value of
 -- `perfEnabled ()`; never per element (getEnv is <IO> and must stay out of the scan).
 export setOpCounting : Bool -> Unit
-setOpCounting b = setRef opCountOn b
+setOpCounting b = opCountOn := b
 
 -- Count one operation, but ONLY when counting is on (Option C gating).  Pure-typed:
 -- `setRef` carries no effect row, so callers keep their non-<IO> signatures.
 export opBump : Unit -> Unit
 opBump () = match opCountOn.value
-  True => setRef opCounter (opCounter.value + 1)
+  True => opCounter := opCounter.value + 1
   False => ()
 
 -- Read the cumulative counter.  Paired snapshots (before/after a stage) yield that

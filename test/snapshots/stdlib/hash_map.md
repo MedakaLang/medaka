@@ -142,7 +142,7 @@ insertAt key val arr idx buckets count
     arraySetUnsafe idx (bucketReplace key val (arrayGetUnsafe idx arr)) arr
   | otherwise =
     arraySetUnsafe idx ((key, val) :: arrayGetUnsafe idx arr) arr
-    setRef count (count.value + 1)
+    count := count.value + 1
     maybeResize buckets count
 
 maybeResize : (Eq k, Hashable k) => Ref (Array (List (k, v))) -> Ref Int -> Unit
@@ -154,8 +154,8 @@ resize : (Eq k, Hashable k) => Ref (Array (List (k, v))) -> Ref Int -> Unit
 resize buckets count =
   let oldArr = buckets.value
   let newArr = arrayMake (arrayLength oldArr * 2) []
-  setRef buckets newArr
-  setRef count 0
+  buckets := newArr
+  count := 0
   reinsertAll oldArr 0 (arrayLength oldArr) buckets count
 
 reinsertAll : (Eq k, Hashable k) => Array (List (k, v)) -> Int -> Int -> Ref (Array (List (k, v))) -> Ref Int -> Unit
@@ -177,7 +177,7 @@ putRaw key val buckets count =
   let arr = buckets.value
   let idx = slotOf key (arrayLength arr)
   arraySetUnsafe idx ((key, val) :: arrayGetUnsafe idx arr) arr
-  setRef count (count.value + 1)
+  count := count.value + 1
 
 {- | Build a table from an association list (later pairs win on duplicates).
 
@@ -208,7 +208,7 @@ deleteAt : (Eq k, Hashable k) => k -> Array (List (k, v)) -> Int -> Ref Int -> U
 deleteAt key arr idx count =
   if bucketHas key (arrayGetUnsafe idx arr) then
     arraySetUnsafe idx (bucketRemove key (arrayGetUnsafe idx arr)) arr
-    setRef count (count.value - 1)
+    count := count.value - 1
 
 -- ── Iteration (pure; order unspecified) ─────────────────────────────────
 

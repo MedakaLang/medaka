@@ -54,7 +54,7 @@ faithfulRoutesRef = Ref False
 -- Enable/disable the faithful nested-route projection.  Debug-only: NEVER call this
 -- on a golden-producing path (snapshot.mdk / round-trip) — it moves the corpus.
 export setFaithfulRoutes : Bool -> Unit
-setFaithfulRoutes b = setRef faithfulRoutesRef b
+setFaithfulRoutes b = faithfulRoutesRef := b
 
 export routeSexp : Route -> String
 routeSexp RNone = "RNone"

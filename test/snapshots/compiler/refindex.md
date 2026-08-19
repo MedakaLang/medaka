@@ -1,5 +1,5 @@
 # META
-source_lines=1645
+source_lines=1649
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/refindex.mdk — cross-file reference index (#254 Stage 0).
@@ -228,7 +228,7 @@ hmSetC ctx m k v =
 
 nextFresh : Ctx -> Int
 nextFresh ctx =
-  let _ = ctx.fresh := ctx.fresh.value + 1
+  ctx.fresh := ctx.fresh.value + 1
   ctx.fresh.value
 
 -- ── small helpers ────────────────────────────────────────────────────────────
@@ -1327,6 +1327,8 @@ emptyIndex _ =
 export buildRefIndex : (String -> Option String) -> String -> List String -> String -> String -> <IO> RefIndex
 buildRefIndex read entry roots runtimeSrc coreSrc =
   let parseCache = Ref []
+  -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
+  -- lint-disable-next-line rule-prefer-assign-op
   match loadProgramFilesLocatedCached parseCache read entry roots
     Err _ => emptyIndex ()
     Ok mods =>
@@ -1526,6 +1528,8 @@ topoOrderModules ctx read midPaths =
 -- from `buildRefIndex`). `read` is the same editor-buffer override callback
 -- (unsaved buffers win over disk).
 export buildRefIndexProject : (String -> Option String) -> String -> String -> String -> <IO> RefIndex
+-- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
+-- lint-disable-next-line rule-prefer-assign-op
 buildRefIndexProject read projectRoot runtimeSrc coreSrc =
   let ctx = newCtx ()
   let _ = seedPrelude ctx "runtime" runtimeSrc
@@ -1685,7 +1689,7 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DTypeSig false "hmSetC" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyVar "v")) (TyFun (TyCon "String") (TyFun (TyVar "v") (TyCon "Unit"))))))
 (DFunDef false "hmSetC" ((PVar "ctx") (PVar "m") (PVar "k") (PVar "v")) (EBlock (DoLet false false PWild (EApp (EVar "bump") (EVar "ctx"))) (DoExpr (EApp (EApp (EApp (EVar "hmSet") (EVar "k")) (EVar "v")) (EVar "m")))))
 (DTypeSig false "nextFresh" (TyFun (TyCon "Ctx") (TyCon "Int")))
-(DFunDef false "nextFresh" ((PVar "ctx")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "ctx") "fresh")) (EBinOp "+" (EFieldAccess (EFieldAccess (EVar "ctx") "fresh") "value") (ELit (LInt 1))))) (DoExpr (EFieldAccess (EFieldAccess (EVar "ctx") "fresh") "value"))))
+(DFunDef false "nextFresh" ((PVar "ctx")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "ctx") "fresh")) (EBinOp "+" (EFieldAccess (EFieldAccess (EVar "ctx") "fresh") "value") (ELit (LInt 1))))) (DoExpr (EFieldAccess (EFieldAccess (EVar "ctx") "fresh") "value"))))
 (DTypeSig false "withUri" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Loc"))))
 (DFunDef false "withUri" ((PVar "uri") (PCon "Loc" PWild (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "uri")) (EVar "a")) (EVar "b")) (EVar "c")) (EVar "d")))
 (DTypeSig false "dummyLoc" (TyFun (TyCon "String") (TyCon "Loc")))
@@ -2185,7 +2189,7 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DTypeSig false "hmSetC" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyVar "v")) (TyFun (TyCon "String") (TyFun (TyVar "v") (TyCon "Unit"))))))
 (DFunDef false "hmSetC" ((PVar "ctx") (PVar "m") (PVar "k") (PVar "v")) (EBlock (DoLet false false PWild (EApp (EVar "bump") (EVar "ctx"))) (DoExpr (EApp (EApp (EApp (EVar "hmSet") (EVar "k")) (EVar "v")) (EVar "m")))))
 (DTypeSig false "nextFresh" (TyFun (TyCon "Ctx") (TyCon "Int")))
-(DFunDef false "nextFresh" ((PVar "ctx")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "ctx") "fresh")) (EBinOp "+" (EFieldAccess (EFieldAccess (EVar "ctx") "fresh") "value") (ELit (LInt 1))))) (DoExpr (EFieldAccess (EFieldAccess (EVar "ctx") "fresh") "value"))))
+(DFunDef false "nextFresh" ((PVar "ctx")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "ctx") "fresh")) (EBinOp "+" (EFieldAccess (EFieldAccess (EVar "ctx") "fresh") "value") (ELit (LInt 1))))) (DoExpr (EFieldAccess (EFieldAccess (EVar "ctx") "fresh") "value"))))
 (DTypeSig false "withUri" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Loc"))))
 (DFunDef false "withUri" ((PVar "uri") (PCon "Loc" PWild (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "uri")) (EVar "a")) (EVar "b")) (EVar "c")) (EVar "d")))
 (DTypeSig false "dummyLoc" (TyFun (TyCon "String") (TyCon "Loc")))

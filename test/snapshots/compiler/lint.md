@@ -1,5 +1,5 @@
 # META
-source_lines=4119
+source_lines=4245
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -32,6 +32,11 @@ import frontend.ast.{
   Loc(..),
   Lit(..),
   Ty(..),
+  -- `rule-prefer-assign-op` MINTS an `EBinOp ":="` node, and every EBinOp carries
+  -- a `Ref Route` the parser seeds as `Ref RNone` — so unlike every other rule
+  -- here (which only ever rebuilds an EBinOp around a ref it already has) this
+  -- one needs the Route constructors in scope.
+  Route(..),
   Pat(..),
   RecPatField(..),
   Guard(..),
@@ -193,6 +198,9 @@ ruleNameConcatToInterp = "rule-concat-to-interp"
 
 ruleNameSelfShadowExtern : String
 ruleNameSelfShadowExtern = "rule-self-shadow-extern"
+
+ruleNamePreferAssignOp : String
+ruleNamePreferAssignOp = "rule-prefer-assign-op"
 
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- Each Rule is its own top-level binding (rather than an inline element of the
@@ -400,6 +408,16 @@ selfShadowExternRule = Rule {
   fix = None,
 }
 
+preferAssignOpRule : Rule
+preferAssignOpRule = Rule {
+  name = ruleNamePreferAssignOp,
+  descr = "`setRef r v` (predates the `:=` write operator), or a `:=` write bound to a wildcard `let _ =`. Prefer `r := v` as a statement",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleForPreferAssign,
+  fix = Some preferAssignFix,
+}
+
 export allRules : List Rule
 allRules = [
   matchParamRule,
@@ -422,6 +440,7 @@ allRules = [
   deadCodeRule,
   concatToInterpRule,
   selfShadowExternRule,
+  preferAssignOpRule,
   duplicateBodySameFileRule,
 ]
 
@@ -3074,6 +3093,113 @@ doubleReverseFinding loc rewritten = Finding {
 doubleReverseFix : Oracle -> Decl -> Option (List Decl)
 doubleReverseFix _ d = exprRuleFix noExcl (detApply doubleReverseOf) d
 
+-- ── rule: prefer the `:=` write operator ──────────────────────────────────────
+-- Two spellings of one smell, both left over from before the `:=` operator landed
+-- (P0-5, `31f4ea80` — the sugar arrived but its ~740 existing call sites were
+-- never migrated):
+--
+--   setRef r v        →  r := v
+--   let _ = r := v    →  r := v      (a write IS a statement; it needs no binding)
+--
+-- The two halves have DIFFERENT equivalence arguments — do not collapse them into
+-- one claim:
+--
+--   * `setRef r v` → `r := v` is IR-identical BY CONSTRUCTION.  `:=` is pure
+--     surface sugar that `rewriteSugar` (`frontend/desugar.mdk`) lowers straight
+--     back to `setRef r v` before typecheck runs, so the Core IR is unchanged —
+--     verified by diffing `core_ir_dump_main` across the rewrite.
+--
+--   * `let _ = w` → `w` genuinely CHANGES the Core IR: `CSLet false PWild w`
+--     becomes `CSExpr w`.  It is still semantics-preserving, but by argument
+--     rather than by identity:
+--       - NON-TAIL, the two `emitBlock` arms in `backend/llvm_emit.mdk` are
+--         literally the same two lines (`let _ = emitExpr …` then recurse), so
+--         emission is unchanged.
+--       - TAIL, a block yields its last statement's value, and a trailing `CSLet`
+--         yields Unit.  This is why the collapse is guarded to a `:=` RHS
+--         SPECIFICALLY: `setRef : Ref a -> a -> Unit`, so the write yields Unit
+--         either way.  The guard is load-bearing for tail position, NOT defensive
+--         narrowing — widening this rule to `let _ = <any expr>` would change a
+--         block's result type wherever that expr is not Unit.
+--
+-- (Tail position additionally sidesteps #1741 — a trailing `let` currently cannot
+-- be BUILT at all, `E-PANIC: empty block`. That is a bug this rule happens to route
+-- around, not a reason this rule is correct.)
+--
+-- ⚠️ Fires ONLY on a SATURATED two-argument `setRef`.  A bare `setRef` passed as a
+-- value, or a partially-applied `setRef r`, has NO `:=` spelling — the operator is
+-- grammar, not a function — and both shapes are real in this tree, so narrowing to
+-- the saturated form is load-bearing, not defensive.
+preferAssignOf : Expr -> Option Expr
+preferAssignOf (EApp fn v) = setRefWriteOf (unwrapLoc fn) v
+preferAssignOf (EBlock stmts) = collapsedBlockOf stmts
+preferAssignOf _ = None
+
+-- the saturated `setRef r v` spine (head already loc-unwrapped by the caller).
+setRefWriteOf : Expr -> Expr -> Option Expr
+setRefWriteOf (EApp hd r) v =
+  if isEVarNamed "setRef" hd then
+    Some (EBinOp ":=" r v (Ref RNone))
+  else
+    None
+setRefWriteOf _ _ = None
+
+-- `let _ = <write>` → a bare `<write>` statement, for every statement in a block.
+-- Returns `None` when nothing moved, so the generic drivers' change-detection and
+-- the fixer's "did this decl change" test both stay honest.
+--
+-- NOTE the interaction with the two drivers, which is deliberate: `rewriteExprBU`
+-- rebuilds children BEFORE applying this at the block, so by the time a block is
+-- visited its `let _ = setRef r v` has ALREADY become `let _ = r := v` and this
+-- collapses it — one pass does both halves.  `collectRewrites` (the findings side)
+-- instead matches the RAW node, so those sites report only the `setRef` finding and
+-- are not double-counted; a block reports a collapse finding only when the source
+-- ALREADY wrote `let _ = r := v` by hand.
+collapsedBlockOf : List DoStmt -> Option Expr
+collapsedBlockOf stmts =
+  let stmts2 = map collapseWildWrite stmts
+  if exprSexp (EBlock stmts2) == exprSexp (EBlock stmts) then
+    None
+  else
+    Some (EBlock stmts2)
+
+collapseWildWrite : DoStmt -> DoStmt
+collapseWildWrite (s@(DoLet _ _ PWild e)) =
+  if isAssignWrite (unwrapLoc e) then
+    DoExpr e
+  else
+    s
+collapseWildWrite s = s
+
+isAssignWrite : Expr -> Bool
+isAssignWrite (EBinOp ":=" _ _ _) = True
+isAssignWrite _ = False
+
+ruleForPreferAssign : String -> String -> Positions -> List Decl -> List Finding
+ruleForPreferAssign _ _ pos prog =
+  exprRuleFindings noExcl preferAssignOf preferAssignFinding pos prog
+
+-- The message is shape-directed: a `setRef` hit renders its `:=` replacement (the
+-- helpful "prefer …" form the sibling rules use), while a block-collapse hit does
+-- NOT render the rewritten node — that node is the WHOLE block, and printing it
+-- would bury the one-line point in a wall of unrelated statements.
+preferAssignFinding : Option Loc -> Expr -> Finding
+preferAssignFinding loc rewritten = Finding {
+  rule = ruleNamePreferAssignOp,
+  message = preferAssignMessage rewritten,
+  severity = SevWarning,
+  loc = loc,
+}
+
+preferAssignMessage : Expr -> String
+preferAssignMessage (EBlock _) = "`let _ = … := …` binds a write to a wildcard. A `:=` write is a statement — drop the `let _ =`"
+preferAssignMessage rewritten = "`setRef r v` predates the `:=` write operator. Rewrite as '"
+  ++ exprToString rewritten
+  ++ "'"
+
+preferAssignFix : Oracle -> Decl -> Option (List Decl)
+preferAssignFix _ d = exprRuleFix noExcl (detApply preferAssignOf) d
+
 -- ── rule: when-unless ─────────────────────────────────────────────────────────
 -- `if b then m else pure ()` → `when b m`; `if b then pure () else m` → `unless b
 -- m`.  Fires ONLY when the OTHER branch is EXACTLY `pure ()` (`EApp (EVar "pure")
@@ -4122,7 +4248,7 @@ duplicateBodySameFileRule = Rule {
   fix = None,
 }
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Route" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "lookupAssoc" false) (mem "dedupBy" false))))
@@ -4177,6 +4303,8 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "ruleNameConcatToInterp" () (ELit (LString "rule-concat-to-interp")))
 (DTypeSig false "ruleNameSelfShadowExtern" (TyCon "String"))
 (DFunDef false "ruleNameSelfShadowExtern" () (ELit (LString "rule-self-shadow-extern")))
+(DTypeSig false "ruleNamePreferAssignOp" (TyCon "String"))
+(DFunDef false "ruleNamePreferAssignOp" () (ELit (LString "rule-prefer-assign-op")))
 (DTypeSig false "matchParamRule" (TyCon "Rule"))
 (DFunDef false "matchParamRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameMatchParam")) (fa "descr" (ELit (LString "function body is a `match` on a bare parameter (prefer multi-clause; STYLE §8)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleMatchOnParam")) (fa "fix" (EApp (EVar "Some") (EVar "matchParamFix"))))))
 (DTypeSig false "derivableRule" (TyCon "Rule"))
@@ -4217,8 +4345,10 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "concatToInterpRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameConcatToInterp")) (fa "descr" (ELit (LString "`++` chain mixing string literals and expressions. Prefer string interpolation `\"…\\{e}…\"` (hlint 'use interpolation')"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleConcatToInterp")) (fa "fix" (EApp (EVar "Some") (EVar "concatToInterpFix"))))))
 (DTypeSig false "selfShadowExternRule" (TyCon "Rule"))
 (DFunDef false "selfShadowExternRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameSelfShadowExtern")) (fa "descr" (ELit (LString "top-level binding unconditionally forwards to itself (`f s = f s`, `x = x`) — an infinite self-recursion, not a forward to a same-named extern (#266)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleSelfShadowExtern")) (fa "fix" (EVar "None")))))
+(DTypeSig false "preferAssignOpRule" (TyCon "Rule"))
+(DFunDef false "preferAssignOpRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNamePreferAssignOp")) (fa "descr" (ELit (LString "`setRef r v` (predates the `:=` write operator), or a `:=` write bound to a wildcard `let _ =`. Prefer `r := v` as a statement"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleForPreferAssign")) (fa "fix" (EApp (EVar "Some") (EVar "preferAssignFix"))))))
 (DTypeSig true "allRules" (TyApp (TyCon "List") (TyCon "Rule")))
-(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule") (EVar "duplicateBodySameFileRule")))
+(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule") (EVar "preferAssignOpRule") (EVar "duplicateBodySameFileRule")))
 (DTypeSig false "duplicateBodyRule" (TyCon "CrossFileRule"))
 (DFunDef false "duplicateBodyRule" () (ERecordCreate "CrossFileRule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to one in another file (copy-paste; consolidate)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBody")))))
 (DTypeSig true "allCrossFileRules" (TyApp (TyCon "List") (TyCon "CrossFileRule")))
@@ -5248,6 +5378,30 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "doubleReverseFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDoubleReverse")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "`reverse (reverse …)` is a no-op. Rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
 (DTypeSig false "doubleReverseFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "doubleReverseFix" (PWild (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFix") (EVar "noExcl")) (EApp (EVar "detApply") (EVar "doubleReverseOf"))) (EVar "d")))
+(DTypeSig false "preferAssignOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
+(DFunDef false "preferAssignOf" ((PCon "EApp" (PVar "fn") (PVar "v"))) (EApp (EApp (EVar "setRefWriteOf") (EApp (EVar "unwrapLoc") (EVar "fn"))) (EVar "v")))
+(DFunDef false "preferAssignOf" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "collapsedBlockOf") (EVar "stmts")))
+(DFunDef false "preferAssignOf" (PWild) (EVar "None"))
+(DTypeSig false "setRefWriteOf" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
+(DFunDef false "setRefWriteOf" ((PCon "EApp" (PVar "hd") (PVar "r")) (PVar "v")) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "setRef"))) (EVar "hd")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "r")) (EVar "v")) (EApp (EVar "Ref") (EVar "RNone")))) (EVar "None")))
+(DFunDef false "setRefWriteOf" (PWild PWild) (EVar "None"))
+(DTypeSig false "collapsedBlockOf" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Option") (TyCon "Expr"))))
+(DFunDef false "collapsedBlockOf" ((PVar "stmts")) (EBlock (DoLet false false (PVar "stmts2") (EApp (EApp (EVar "map") (EVar "collapseWildWrite")) (EVar "stmts"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "exprSexp") (EApp (EVar "EBlock") (EVar "stmts2"))) (EApp (EVar "exprSexp") (EApp (EVar "EBlock") (EVar "stmts")))) (EVar "None") (EApp (EVar "Some") (EApp (EVar "EBlock") (EVar "stmts2")))))))
+(DTypeSig false "collapseWildWrite" (TyFun (TyCon "DoStmt") (TyCon "DoStmt")))
+(DFunDef false "collapseWildWrite" ((PAs "s" (PCon "DoLet" PWild PWild (PCon "PWild") (PVar "e")))) (EIf (EApp (EVar "isAssignWrite") (EApp (EVar "unwrapLoc") (EVar "e"))) (EApp (EVar "DoExpr") (EVar "e")) (EVar "s")))
+(DFunDef false "collapseWildWrite" ((PVar "s")) (EVar "s"))
+(DTypeSig false "isAssignWrite" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "isAssignWrite" ((PCon "EBinOp" (PLit (LString ":=")) PWild PWild PWild)) (EVar "True"))
+(DFunDef false "isAssignWrite" (PWild) (EVar "False"))
+(DTypeSig false "ruleForPreferAssign" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))
+(DFunDef false "ruleForPreferAssign" (PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "noExcl")) (EVar "preferAssignOf")) (EVar "preferAssignFinding")) (EVar "pos")) (EVar "prog")))
+(DTypeSig false "preferAssignFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
+(DFunDef false "preferAssignFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNamePreferAssignOp")) (fa "message" (EApp (EVar "preferAssignMessage") (EVar "rewritten"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
+(DTypeSig false "preferAssignMessage" (TyFun (TyCon "Expr") (TyCon "String")))
+(DFunDef false "preferAssignMessage" ((PCon "EBlock" PWild)) (ELit (LString "`let _ = … := …` binds a write to a wildcard. A `:=` write is a statement — drop the `let _ =`")))
+(DFunDef false "preferAssignMessage" ((PVar "rewritten")) (EBinOp "++" (EBinOp "++" (ELit (LString "`setRef r v` predates the `:=` write operator. Rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'"))))
+(DTypeSig false "preferAssignFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "preferAssignFix" (PWild (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFix") (EVar "noExcl")) (EApp (EVar "detApply") (EVar "preferAssignOf"))) (EVar "d")))
 (DTypeSig false "whenUnlessExcl" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "whenUnlessExcl" ((PVar "name")) (EBinOp "||" (EBinOp "==" (EVar "name") (ELit (LString "when"))) (EBinOp "==" (EVar "name") (ELit (LString "unless")))))
 (DTypeSig false "isPureUnit" (TyFun (TyCon "Expr") (TyCon "Bool")))
@@ -5551,7 +5705,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "duplicateBodySameFileRule" (TyCon "Rule"))
 (DFunDef false "duplicateBodySameFileRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBodySameFile")) (fa "fix" (EVar "None")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Route" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true) (mem "Diag" true) (mem "ppSeverity" false) (mem "readFileSafe" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "joinNl" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "lookupAssoc" false) (mem "dedupBy" false))))
@@ -5606,6 +5760,8 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "ruleNameConcatToInterp" () (ELit (LString "rule-concat-to-interp")))
 (DTypeSig false "ruleNameSelfShadowExtern" (TyCon "String"))
 (DFunDef false "ruleNameSelfShadowExtern" () (ELit (LString "rule-self-shadow-extern")))
+(DTypeSig false "ruleNamePreferAssignOp" (TyCon "String"))
+(DFunDef false "ruleNamePreferAssignOp" () (ELit (LString "rule-prefer-assign-op")))
 (DTypeSig false "matchParamRule" (TyCon "Rule"))
 (DFunDef false "matchParamRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameMatchParam")) (fa "descr" (ELit (LString "function body is a `match` on a bare parameter (prefer multi-clause; STYLE §8)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleMatchOnParam")) (fa "fix" (EApp (EVar "Some") (EVar "matchParamFix"))))))
 (DTypeSig false "derivableRule" (TyCon "Rule"))
@@ -5646,8 +5802,10 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "concatToInterpRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameConcatToInterp")) (fa "descr" (ELit (LString "`++` chain mixing string literals and expressions. Prefer string interpolation `\"…\\{e}…\"` (hlint 'use interpolation')"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleConcatToInterp")) (fa "fix" (EApp (EVar "Some") (EVar "concatToInterpFix"))))))
 (DTypeSig false "selfShadowExternRule" (TyCon "Rule"))
 (DFunDef false "selfShadowExternRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameSelfShadowExtern")) (fa "descr" (ELit (LString "top-level binding unconditionally forwards to itself (`f s = f s`, `x = x`) — an infinite self-recursion, not a forward to a same-named extern (#266)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleSelfShadowExtern")) (fa "fix" (EVar "None")))))
+(DTypeSig false "preferAssignOpRule" (TyCon "Rule"))
+(DFunDef false "preferAssignOpRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNamePreferAssignOp")) (fa "descr" (ELit (LString "`setRef r v` (predates the `:=` write operator), or a `:=` write bound to a wildcard `let _ =`. Prefer `r := v` as a statement"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleForPreferAssign")) (fa "fix" (EApp (EVar "Some") (EVar "preferAssignFix"))))))
 (DTypeSig true "allRules" (TyApp (TyCon "List") (TyCon "Rule")))
-(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule") (EVar "duplicateBodySameFileRule")))
+(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule") (EVar "preferAssignOpRule") (EVar "duplicateBodySameFileRule")))
 (DTypeSig false "duplicateBodyRule" (TyCon "CrossFileRule"))
 (DFunDef false "duplicateBodyRule" () (ERecordCreate "CrossFileRule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to one in another file (copy-paste; consolidate)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBody")))))
 (DTypeSig true "allCrossFileRules" (TyApp (TyCon "List") (TyCon "CrossFileRule")))
@@ -6677,6 +6835,30 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "doubleReverseFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDoubleReverse")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "`reverse (reverse …)` is a no-op. Rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
 (DTypeSig false "doubleReverseFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "doubleReverseFix" (PWild (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFix") (EVar "noExcl")) (EApp (EVar "detApply") (EVar "doubleReverseOf"))) (EVar "d")))
+(DTypeSig false "preferAssignOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
+(DFunDef false "preferAssignOf" ((PCon "EApp" (PVar "fn") (PVar "v"))) (EApp (EApp (EVar "setRefWriteOf") (EApp (EVar "unwrapLoc") (EVar "fn"))) (EVar "v")))
+(DFunDef false "preferAssignOf" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "collapsedBlockOf") (EVar "stmts")))
+(DFunDef false "preferAssignOf" (PWild) (EVar "None"))
+(DTypeSig false "setRefWriteOf" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
+(DFunDef false "setRefWriteOf" ((PCon "EApp" (PVar "hd") (PVar "r")) (PVar "v")) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "setRef"))) (EVar "hd")) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "r")) (EVar "v")) (EApp (EVar "Ref") (EVar "RNone")))) (EVar "None")))
+(DFunDef false "setRefWriteOf" (PWild PWild) (EVar "None"))
+(DTypeSig false "collapsedBlockOf" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Option") (TyCon "Expr"))))
+(DFunDef false "collapsedBlockOf" ((PVar "stmts")) (EBlock (DoLet false false (PVar "stmts2") (EApp (EApp (EMethodRef "map") (EVar "collapseWildWrite")) (EVar "stmts"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "exprSexp") (EApp (EVar "EBlock") (EVar "stmts2"))) (EApp (EVar "exprSexp") (EApp (EVar "EBlock") (EVar "stmts")))) (EVar "None") (EApp (EVar "Some") (EApp (EVar "EBlock") (EVar "stmts2")))))))
+(DTypeSig false "collapseWildWrite" (TyFun (TyCon "DoStmt") (TyCon "DoStmt")))
+(DFunDef false "collapseWildWrite" ((PAs "s" (PCon "DoLet" PWild PWild (PCon "PWild") (PVar "e")))) (EIf (EApp (EVar "isAssignWrite") (EApp (EVar "unwrapLoc") (EVar "e"))) (EApp (EVar "DoExpr") (EVar "e")) (EVar "s")))
+(DFunDef false "collapseWildWrite" ((PVar "s")) (EVar "s"))
+(DTypeSig false "isAssignWrite" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "isAssignWrite" ((PCon "EBinOp" (PLit (LString ":=")) PWild PWild PWild)) (EVar "True"))
+(DFunDef false "isAssignWrite" (PWild) (EVar "False"))
+(DTypeSig false "ruleForPreferAssign" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))
+(DFunDef false "ruleForPreferAssign" (PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "noExcl")) (EVar "preferAssignOf")) (EVar "preferAssignFinding")) (EVar "pos")) (EVar "prog")))
+(DTypeSig false "preferAssignFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
+(DFunDef false "preferAssignFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNamePreferAssignOp")) (fa "message" (EApp (EVar "preferAssignMessage") (EVar "rewritten"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
+(DTypeSig false "preferAssignMessage" (TyFun (TyCon "Expr") (TyCon "String")))
+(DFunDef false "preferAssignMessage" ((PCon "EBlock" PWild)) (ELit (LString "`let _ = … := …` binds a write to a wildcard. A `:=` write is a statement — drop the `let _ =`")))
+(DFunDef false "preferAssignMessage" ((PVar "rewritten")) (EBinOp "++" (EBinOp "++" (ELit (LString "`setRef r v` predates the `:=` write operator. Rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'"))))
+(DTypeSig false "preferAssignFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "preferAssignFix" (PWild (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFix") (EVar "noExcl")) (EApp (EVar "detApply") (EVar "preferAssignOf"))) (EVar "d")))
 (DTypeSig false "whenUnlessExcl" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "whenUnlessExcl" ((PVar "name")) (EBinOp "||" (EBinOp "==" (EVar "name") (ELit (LString "when"))) (EBinOp "==" (EVar "name") (ELit (LString "unless")))))
 (DTypeSig false "isPureUnit" (TyFun (TyCon "Expr") (TyCon "Bool")))

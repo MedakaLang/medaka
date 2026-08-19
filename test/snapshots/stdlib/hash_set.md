@@ -97,7 +97,7 @@ insertAt x arr idx buckets count
   | bucketHas x (arrayGetUnsafe idx arr) = ()
   | otherwise =
     arraySetUnsafe idx (x :: arrayGetUnsafe idx arr) arr
-    setRef count (count.value + 1)
+    count := count.value + 1
     maybeResize buckets count
 
 maybeResize : Hashable a => Ref (Array (List a)) -> Ref Int -> Unit
@@ -109,8 +109,8 @@ resize : Hashable a => Ref (Array (List a)) -> Ref Int -> Unit
 resize buckets count =
   let oldArr = buckets.value
   let newArr = arrayMake (arrayLength oldArr * 2) []
-  setRef buckets newArr
-  setRef count 0
+  buckets := newArr
+  count := 0
   reinsertAll oldArr 0 (arrayLength oldArr) buckets count
 
 reinsertAll : Hashable a => Array (List a) -> Int -> Int -> Ref (Array (List a)) -> Ref Int -> Unit
@@ -131,7 +131,7 @@ putRaw x buckets count =
   let arr = buckets.value
   let idx = slotOf x (arrayLength arr)
   arraySetUnsafe idx (x :: arrayGetUnsafe idx arr) arr
-  setRef count (count.value + 1)
+  count := count.value + 1
 
 {- | Build a set from a list, dropping duplicates.
 
@@ -160,7 +160,7 @@ deleteAt : (Eq a, Hashable a) => a -> Array (List a) -> Int -> Ref Int -> Unit
 deleteAt x arr idx count =
   if bucketHas x (arrayGetUnsafe idx arr) then
     arraySetUnsafe idx (bucketRemove x (arrayGetUnsafe idx arr)) arr
-    setRef count (count.value - 1)
+    count := count.value - 1
 
 -- ── Iteration / folds ───────────────────────────────────────────────────
 

@@ -4459,15 +4459,15 @@ originTraceLog = Ref []
 -- once per module can never attribute one module's rows to the next.
 export setOriginTrace : Bool -> Unit
 setOriginTrace b =
-  let _ = setRef originTraceLog []
-  setRef originTraceEnabled b
+  originTraceLog := []
+  originTraceEnabled := b
 
 -- A flat driver records the decls it is about to hand to typecheck, labelled with
 -- WHICH HALF they are.  A no-op unless a probe turned the trace on.
 export noteOriginTrace : String -> List Decl -> Unit
 noteOriginTrace label decls =
   if originTraceEnabled.value then
-    setRef originTraceLog (originTraceLog.value ++ [(label, decls)])
+    originTraceLog := originTraceLog.value ++ [(label, decls)]
   else
     ()
 
@@ -4475,7 +4475,7 @@ noteOriginTrace label decls =
 export takeOriginTrace : Unit -> List (String, List Decl)
 takeOriginTrace _ =
   let rows = originTraceLog.value
-  let _ = setRef originTraceLog []
+  originTraceLog := []
   rows
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
@@ -5687,11 +5687,11 @@ takeOriginTrace _ =
 (DTypeSig false "originTraceLog" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "originTraceLog" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig true "setOriginTrace" (TyFun (TyCon "Bool") (TyCon "Unit")))
-(DFunDef false "setOriginTrace" ((PVar "b")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "originTraceLog")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "originTraceEnabled")) (EVar "b")))))
+(DFunDef false "setOriginTrace" ((PVar "b")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "originTraceLog")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "originTraceEnabled")) (EVar "b")))))
 (DTypeSig true "noteOriginTrace" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "noteOriginTrace" ((PVar "label") (PVar "decls")) (EIf (EFieldAccess (EVar "originTraceEnabled") "value") (EApp (EApp (EVar "setRef") (EVar "originTraceLog")) (EBinOp "++" (EFieldAccess (EVar "originTraceLog") "value") (EListLit (ETuple (EVar "label") (EVar "decls"))))) (ELit LUnit)))
 (DTypeSig true "takeOriginTrace" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "takeOriginTrace" (PWild) (EBlock (DoLet false false (PVar "rows") (EFieldAccess (EVar "originTraceLog") "value")) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "originTraceLog")) (EListLit))) (DoExpr (EVar "rows"))))
+(DFunDef false "takeOriginTrace" (PWild) (EBlock (DoLet false false (PVar "rows") (EFieldAccess (EVar "originTraceLog") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "originTraceLog")) (EListLit))) (DoExpr (EVar "rows"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "orElseLoc" false) (mem "Lit" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "mapTyInDecl" false) (mem "firstTyLoc" false) (mem "firstTyLocList" false) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omLookup" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omKeys" false) (mem "omSize" false) (mem "omMapValues" false))))
@@ -6902,8 +6902,8 @@ takeOriginTrace _ =
 (DTypeSig false "originTraceLog" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "originTraceLog" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig true "setOriginTrace" (TyFun (TyCon "Bool") (TyCon "Unit")))
-(DFunDef false "setOriginTrace" ((PVar "b")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "originTraceLog")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "originTraceEnabled")) (EVar "b")))))
+(DFunDef false "setOriginTrace" ((PVar "b")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "originTraceLog")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "originTraceEnabled")) (EVar "b")))))
 (DTypeSig true "noteOriginTrace" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "noteOriginTrace" ((PVar "label") (PVar "decls")) (EIf (EFieldAccess (EVar "originTraceEnabled") "value") (EApp (EApp (EVar "setRef") (EVar "originTraceLog")) (EBinOp "++" (EFieldAccess (EVar "originTraceLog") "value") (EListLit (ETuple (EVar "label") (EVar "decls"))))) (ELit LUnit)))
 (DTypeSig true "takeOriginTrace" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "takeOriginTrace" (PWild) (EBlock (DoLet false false (PVar "rows") (EFieldAccess (EVar "originTraceLog") "value")) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "originTraceLog")) (EListLit))) (DoExpr (EVar "rows"))))
+(DFunDef false "takeOriginTrace" (PWild) (EBlock (DoLet false false (PVar "rows") (EFieldAccess (EVar "originTraceLog") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "originTraceLog")) (EListLit))) (DoExpr (EVar "rows"))))

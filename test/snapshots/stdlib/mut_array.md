@@ -130,15 +130,15 @@ export push : a -> MutArray a -> Unit
 push x (MutArray backing len)
   | len.value < arrayLength backing.value =
     arraySetUnsafe len.value x backing.value
-    setRef len (len.value + 1)
+    len := len.value + 1
   | otherwise =
     let oldArr = backing.value
     let oldLen = len.value
     let newCap = if oldLen == 0 then 1 else oldLen * 2
     let newArr = arrayMake newCap x
     arrayBlit oldArr 0 newArr 0 oldLen
-    setRef backing newArr
-    setRef len (oldLen + 1)
+    backing := newArr
+    len := oldLen + 1
 
 {- | Remove and return the last element, or `None` when empty.  Keeps capacity
    (no shrink). -}
@@ -148,7 +148,7 @@ pop (MutArray backing len)
   | otherwise =
     let i = len.value - 1
     let x = arrayGetUnsafe i backing.value
-    setRef len i
+    len := i
     Some x
 
 {- | Overwrite the element at an index.  Panics when out of the live range
@@ -179,7 +179,7 @@ swap i j (MutArray backing _) =
 
 {- | Drop all elements (length 0), retaining the allocated capacity. -}
 export clear : MutArray a -> Unit
-clear (MutArray _ len) = setRef len 0
+clear (MutArray _ len) = len := 0
 
 mapInPlaceGo : (a -> a) -> Array a -> Int -> Int -> Unit
 mapInPlaceGo f arr i n
