@@ -411,7 +411,23 @@ for cse in $cases; do
     k=$((k+1))
     work="$TMP/$cse/p$k"
     mkdir -p "$work"
-    for f in "$cdir"/*; do cp "$f" "$work/"; done
+    # cp -a (not a bare `for f in "$cdir"/*; do cp "$f" ...` loop) so a case
+    # directory holding a subdirectory (e.g. a nested-module layout) actually
+    # copies — plain `cp` without -r/-a silently refuses a directory entry
+    # (stderr-only, nonzero exit, never checked by a `for` loop) and every
+    # permutation would then lose that subdirectory's contents IDENTICALLY,
+    # which is invisible to the invariance check below (#1691).
+    cp -a "$cdir"/. "$work/" 2>"$TMP/$cse.cperr"
+    # Belt-and-suspenders: assert the copy actually landed everything, so a
+    # different silent-truncation mechanism can't slip through unnoticed
+    # either — mirrors this codebase's fixed-width-field convention of
+    # asserting a length invariant rather than trusting the copy step.
+    _srcn="$(find "$cdir" -type f | wc -l | tr -d ' ')"
+    _dstn="$(find "$work" -type f | wc -l | tr -d ' ')"
+    if [ "$_srcn" != "$_dstn" ]; then
+      printf 'COPY-MISMATCH %s src=%s dst=%s\n' "$ord" "$_srcn" "$_dstn" >>"$TMP/$cse.sigs"
+      continue
+    fi
     if ! perl "$PERMPL" "$cdir/$entry" WRITE "$ord" "$work/$entry" 2>"$TMP/$cse.werr"; then
       printf 'PERMUTER-WRITE-FAILED %s\n' "$ord" >>"$TMP/$cse.sigs"
       continue
@@ -431,6 +447,10 @@ for cse in $cases; do
   fi
   if grep -q '^PERMUTER-WRITE-FAILED' "$TMP/$cse.sigs"; then
     printf 'FAIL %-52s PERMUTER could not write an ordering: %s\n' "$cse" "$(head -1 "$TMP/$cse.werr")"
+    echo FAIL >>"$TMP/verdicts"; continue
+  fi
+  if grep -q '^COPY-MISMATCH' "$TMP/$cse.sigs"; then
+    printf 'FAIL %-52s case-directory copy truncated: %s\n' "$cse" "$(grep '^COPY-MISMATCH' "$TMP/$cse.sigs" | head -1)"
     echo FAIL >>"$TMP/verdicts"; continue
   fi
 
