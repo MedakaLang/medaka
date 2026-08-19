@@ -238,7 +238,7 @@ subPGo n i borrow =
 --   through the transparent alias.
 export feCanonicalize : Array Int -> Fe
 feCanonicalize raw =
-  if arrayLength raw != 10 then
+  if arrayLength raw /= 10 then
     panic "field.feCanonicalize: expected 10 limbs, got \{intToString (arrayLength raw)}"
   else
     let n = arrayCopy raw
@@ -293,7 +293,7 @@ byteRangeGo bs i =
 --   an out-of-range element is an `Err`, never silently taken mod 256.
 export feFromBytes : Array Int -> Result String Fe
 feFromBytes bs =
-  if arrayLength bs != 32 then Err "field.feFromBytes: expected 32 bytes, got \{intToString (arrayLength bs)}"
+  if arrayLength bs /= 32 then Err "field.feFromBytes: expected 32 bytes, got \{intToString (arrayLength bs)}"
   else
     if not (byteArrayOk bs) then Err "field.feFromBytes: every element must be a byte in 0..255"
     else
@@ -313,7 +313,7 @@ feFromBytes bs =
 --   compute a different value than the caller wrote.
 export feFromBytesReduce : Array Int -> Fe
 feFromBytesReduce bs =
-  if arrayLength bs != 32 then
+  if arrayLength bs /= 32 then
     panic "field.feFromBytesReduce: expected 32 bytes, got \{intToString (arrayLength bs)}"
   else if not (byteArrayOk bs) then
     panic "field.feFromBytesReduce: every element must be a byte in 0..255"
@@ -353,7 +353,7 @@ equalGo : Fe -> Fe -> Int -> Bool
 equalGo a b i =
   if i >= 10 then
     True
-  else if a[i] != b[i] then
+  else if a[i] /= b[i] then
     False
   else
     equalGo a b (i + 1)
@@ -372,7 +372,7 @@ isZeroGo : Fe -> Int -> Bool
 isZeroGo a i =
   if i >= 10 then
     True
-  else if a[i] != 0 then
+  else if a[i] /= 0 then
     False
   else
     isZeroGo a (i + 1)

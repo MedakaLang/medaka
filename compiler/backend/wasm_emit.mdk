@@ -674,7 +674,7 @@ progFnArity prog n = arityOfIndexW (indexFnAritiesW (progIndex prog)) n
 -- canonRef + the LLVM emitter's canonFnName.  `mangleUnits` renames prelude defs to
 -- `core__<name>` AND rewrites uses present at mangle time — but the desugar/elaborate
 -- passes SYNTHESIZE bare prelude references afterwards (notably string-interp `\{e}`
--- → `debug`/`debugStringLit`/`displayListItems`, and `!=` → `not`).  Such a bare ref
+-- → `debug`/`debugStringLit`/`displayListItems`, and `/=` → `not`).  Such a bare ref
 -- does not match its `core__`-mangled def by string equality, so resolve it: if the
 -- bare name isn't a defined fn but its `core__` form is, use the mangled name.
 canonFn : Prog -> String -> String
@@ -892,7 +892,7 @@ useStrSearchRef : Ref Bool
 useStrSearchRef = Ref False
 
 -- WasmEmit.useValueCmp records layer-9 per-emission demand from a ref-mode
--- `==`/`!=`/ordering binop in a string-using program for the runtime-shape-dispatched
+-- `==`/`/=`/ordering binop in a string-using program for the runtime-shape-dispatched
 -- $mdk_value_eq / $mdk_value_cmp
 -- (Core IR is type-erased, so a String `==` cannot be told from an Int `==` statically;
 -- the old i31-only lowering trapped `illegal cast` on a String operand).  Its producer
@@ -1866,7 +1866,7 @@ scanExprValueUses fnNames fnArs ctorArs (CApp f a) =
     -- emitMethodRef's RLocal arm, including the `sym == ""` bare-name fallback.
     CMethod mname (RLocal sym dicts) _ _ =>
       let target = if sym == "" then mname else sym
-      if isEmpty dicts && fnMemberIndexW fnNames target && arityOfIndexW fnArs target != listLen args then
+      if isEmpty dicts && fnMemberIndexW fnNames target && arityOfIndexW fnArs target /= listLen args then
         [target]
       else
         []
@@ -1993,7 +1993,7 @@ appUsesClosures fnNames fnArs ctorArs locals app =
     CVar f _ =>
       if contains f locals then True   -- a shadowing local/param head → indirect (closure) call
       else if fnMemberIndexW fnNames f then
-        arityOfIndexW fnArs f != listLen args || argsClos
+        arityOfIndexW fnArs f /= listLen args || argsClos
       else if isSome (lookupAssoc f ctorArs) || isReservedCtor f then argsClos
       else True   -- a local/param/let-bound head → an indirect (closure) call
     _ => True
@@ -2003,7 +2003,7 @@ appUsesClosures fnNames fnArs ctorArs locals app =
 -- Option/Result/Ordering ctors only enter the table when actually used, and a
 -- bare scalar program (the W2 corpus) has an empty ctor table + no CDecision.
 programUsesAdt : List CBind -> List (String, Int) -> Bool
-programUsesAdt groups ctorArs = listLen ctorArs != 0
+programUsesAdt groups ctorArs = listLen ctorArs /= 0
   || anyBindHasDecision groups
 
 anyBindHasDecision : List CBind -> Bool
@@ -3563,7 +3563,7 @@ emitMethodRef prog env d name RNone implRoutes methRoutes args =
 emitMethodRef prog env d name (RLocal sym dicts) implRoutes methRoutes args =
   let target = if sym == "" then name else sym
   if isEmpty dicts then
-    if progFnMemberW prog target && listLen args != progFnArity prog target then emitIndirectApp prog env d (CVar target AGlobal) args
+    if progFnMemberW prog target && listLen args /= progFnArity prog target then emitIndirectApp prog env d (CVar target AGlobal) args
     else
       let argInstrs = flatMap (a => emitRefExpr prog env d a) args
       argInstrs ++ ["call $" ++ gname target]
@@ -3591,7 +3591,7 @@ emitMethodDispatchRef prog env d name dpar args =
   -- guarded, then the general's body UNCONDITIONALLY at block level (the fallthrough
   -- point reached when no concrete arm matched), replacing the trailing `unreachable`.
   -- Byte-identical when no general instance is present (genTail = []).
-  let concretes = filterList (p => fst p != noneHeadTag) impls
+  let concretes = filterList (p => fst p /= noneHeadTag) impls
   let chain = emitDispatchChain prog name concretes blk tagRead dpar argInstrs (listLen args) 0
   let genTail = emitGeneralArm prog name (firstGeneralImplW impls) blk dpar argInstrs (listLen args)
   ["block " ++ blk ++ " (result (ref eq))"]
@@ -4647,10 +4647,10 @@ emitDefaultDefnGroup prog fname tag method arity clauses =
 -- default called the inner impl with no reqdict → "expected (ref eq) but nothing on stack").
 restampIfaceDictsW : List (String, (String, Int)) -> String -> String -> List Route -> CExpr -> CExpr
 restampIfaceDictsW tbl iface tag rr (CVar m ad)
-  | iface != "" && ifaceOfInW tbl m == iface = CMethod m (RKey tag []) rr []
+  | iface /= "" && ifaceOfInW tbl m == iface = CMethod m (RKey tag []) rr []
   | otherwise = CVar m ad
 restampIfaceDictsW tbl iface tag rr (CMethod m RNone irs mrs)
-  | iface != "" && ifaceOfInW tbl m == iface =
+  | iface /= "" && ifaceOfInW tbl m == iface =
     CMethod m (RKey tag []) (chooseReqRoutesW rr irs) mrs
   | otherwise = CMethod m RNone irs mrs
 restampIfaceDictsW tbl iface tag rr (CApp f a) =
@@ -5000,9 +5000,9 @@ emitVarRefPlain prog env d x =
     let _ = noteFuncRef (progEmit prog) ("$mdk_w_" ++ x)
     ["ref.func $mdk_w_" ++ x, "i32.const " ++ intToString (progFnArity prog x),
      "array.new_fixed $argarr 0", "struct.new $clos"]
-  -- W9: a bare prelude reference synthesized post-mangle (string-interp / `!=`) →
+  -- W9: a bare prelude reference synthesized post-mangle (string-interp / `/=`) →
   -- resolve to its `core__`-mangled def and emit the closure wrapper for it.
-  else if canonFn prog x != x then emitVarRef prog env d (canonFn prog x)
+  else if canonFn prog x /= x then emitVarRef prog env d (canonFn prog x)
   -- W9: a str/leaf extern referenced as a VALUE (point-free / passed as an arg) —
   -- build an eta closure wrapping a lifted `$mdk_ext_<name>` that calls the extern
   -- (peer of the LLVM emitExternEtaClosure).  env = [] (externs capture nothing).
@@ -5122,7 +5122,7 @@ emitBinRef prog env d "::" l r _ = ["i32.const 0"]
 emitBinRef prog env d op l r tag =
   if isArithOrCmp op && (tag == "Float" || cexprIsFloat prog env l || cexprIsFloat prog env r) then
     emitFloatBinRef prog env d op l r
-  -- layer-9: a ref-mode comparison (`==`/`!=`/`<`/`>`/`<=`/`>=`) in a string-using
+  -- layer-9: a ref-mode comparison (`==`/`/=`/`<`/`>`/`<=`/`>=`) in a string-using
   -- program could have String OR Int operands (Core IR is type-erased), so the old
   -- i31-only lowering trapped `illegal cast` on a String operand (e.g. parser
   -- `coalesceStep`'s `n == name`).  Route through the runtime-shape-dispatched
@@ -5231,7 +5231,7 @@ emitDivZeroGuard emit op dloc =
     ++ indent (wasmTrap emit code msg)
     ++ ["end", "local.get " ++ dloc]
 
--- layer-9: emit a runtime-shape-dispatched comparison.  `==`/`!=` go through
+-- layer-9: emit a runtime-shape-dispatched comparison.  `==`/`/=` go through
 -- $mdk_value_eq (-> i31 Bool); ordering ops call $mdk_value_cmp (-> plain i32 -1/0/1)
 -- then i32-compare the result against 0 for the requested op, re-boxing the Bool i31.
 emitValueCmpRef : Prog -> List String -> Int -> String -> CExpr -> CExpr -> List String
@@ -5239,7 +5239,7 @@ emitValueCmpRef prog env d op l r =
   let lv = emitRefExpr prog env d l
   let rv = emitRefExpr prog env d r
   if op == "==" then lv ++ rv ++ ["call $mdk_value_eq"]
-  else if op == "!=" then
+  else if op == "/=" then
     lv ++ rv ++ ["call $mdk_value_eq", "ref.cast (ref i31)", "i31.get_u", "i32.eqz", "ref.i31"]
   else
     -- #305: ordering calls the per-op IEEE predicate $mdk_value_lt/le/gt/ge,
@@ -5249,7 +5249,7 @@ emitValueCmpRef prog env d op l r =
     lv ++ rv ++ ["call $mdk_value_" ++ valueRelName op]
 
 -- A1 (poly-`Ord`-on-Float, string-free program): the num-only peer of emitValueCmpRef.
--- `==`/`!=` go through $mdk_value_eq_num (-> i31 Bool); ordering through $mdk_value_cmp_num
+-- `==`/`/=` go through $mdk_value_eq_num (-> i31 Bool); ordering through $mdk_value_cmp_num
 -- (-> i32 -1/0/1).  Both dispatch $float vs int (i31/$boxint) ONLY — no $str — so they
 -- need no pre-scan-set type; gated by useValueArithRef alongside the arith helpers.
 emitValueCmpNumRef : Prog -> List String -> Int -> String -> CExpr -> CExpr -> List String
@@ -5258,7 +5258,7 @@ emitValueCmpNumRef prog env d op l r =
   let rv = emitRefExpr prog env d r
   if op == "==" then
     lv ++ rv ++ ["call $mdk_value_eq_num"]
-  else if op == "!=" then
+  else if op == "/=" then
     lv ++ rv ++ [
       "call $mdk_value_eq_num",
       "ref.cast (ref i31)",
@@ -5272,7 +5272,7 @@ emitValueCmpNumRef prog env d op l r =
     lv ++ rv ++ ["call $mdk_value_" ++ valueRelName op ++ "_num"]
 
 -- #305: the $mdk_value_* suffix for an ordering op.  Only `<`/`>`/`<=`/`>=` reach
--- the ordering arms — `==`/`!=` are routed to $mdk_value_eq(_num) before them.
+-- the ordering arms — `==`/`/=` are routed to $mdk_value_eq(_num) before them.
 valueRelName : String -> String
 valueRelName "<" = "lt"
 valueRelName ">" = "gt"
@@ -5282,7 +5282,7 @@ valueRelName op = panic ("wasm: unsupported value ordering op " ++ op)
 
 -- W8b: emit a Float binop.  Arith (+,-,*,/) → unbox both, f64 op, rebox.  `%` has no
 -- f64 instruction, so it calls $mdk_float_rem (exact power-of-two-reduction fmod == LLVM frem).
--- Comparison (==,!=,<,>,<=,>=) → unbox both, f64 compare → i31 Bool.
+-- Comparison (==,/=,<,>,<=,>=) → unbox both, f64 compare → i31 Bool.
 emitFloatBinRef : Prog -> List String -> Int -> String -> CExpr -> CExpr -> List String
 emitFloatBinRef prog env d op l r =
   let lf = emitRefExpr prog env d l ++ ["ref.cast (ref $float)", "struct.get $float 0"]
@@ -5296,10 +5296,10 @@ emitFloatBinRef prog env d op l r =
 
 isArithOrCmp : String -> Bool
 isArithOrCmp op =
-  contains op ["+", "-", "*", "/", "%", "==", "!=", "<", ">", "<=", ">="]
+  contains op ["+", "-", "*", "/", "%", "==", "/=", "<", ">", "<=", ">="]
 
 isCmpOp : String -> Bool
-isCmpOp op = contains op ["==", "!=", "<", ">", "<=", ">="]
+isCmpOp op = contains op ["==", "/=", "<", ">", "<=", ">="]
 
 wasmFloatArith : String -> String
 wasmFloatArith "+" = "f64.add"
@@ -5310,7 +5310,7 @@ wasmFloatArith op = panic ("wasm W8b: not a Float arith op '" ++ op ++ "'")
 
 wasmFloatCmp : String -> String
 wasmFloatCmp "==" = "f64.eq"
-wasmFloatCmp "!=" = "f64.ne"
+wasmFloatCmp "/=" = "f64.ne"
 wasmFloatCmp "<" = "f64.lt"
 wasmFloatCmp ">" = "f64.gt"
 wasmFloatCmp "<=" = "f64.le"
@@ -8383,7 +8383,7 @@ bindConFieldsGo prog env c (p::rest) v i =
 
 -- top-level binding classification (W2 + W3, identical).
 isValBind : CBind -> Bool
-isValBind (CBind name [CClause [] _]) = name != "main"
+isValBind (CBind name [CClause [] _]) = name /= "main"
 isValBind _ = False
 
 isFnBind : CBind -> Bool
@@ -8552,7 +8552,7 @@ wasmBinOp64 _ "*" = "i64.mul"
 wasmBinOp64 _ "/" = "i64.div_s"
 wasmBinOp64 _ "%" = "i64.rem_s"
 wasmBinOp64 _ "==" = "i64.eq"
-wasmBinOp64 _ "!=" = "i64.ne"
+wasmBinOp64 _ "/=" = "i64.ne"
 wasmBinOp64 _ "<" = "i64.lt_s"
 wasmBinOp64 _ ">" = "i64.gt_s"
 wasmBinOp64 _ "<=" = "i64.le_s"
@@ -8564,7 +8564,7 @@ binOpTy : String -> WTy
 binOpTy op =
   if op == "++" then
     WStr
-  else if contains op ["==", "!=", "<", ">", "<=", ">="] then
+  else if contains op ["==", "/=", "<", ">", "<=", ">="] then
     WBool
   else
     WInt

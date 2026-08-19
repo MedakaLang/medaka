@@ -84,7 +84,7 @@ charAtA i arr = match get i arr
 countLeadingZeroBytes : Array Int -> Int -> Int
 countLeadingZeroBytes bytes i
   | i >= arrayLength bytes = i
-  | byteAt i bytes != 0 = i
+  | byteAt i bytes /= 0 = i
   | otherwise = countLeadingZeroBytes bytes (i + 1)
 
 -- One step of the classic byte-array-to-base58 long-division algorithm
@@ -121,7 +121,7 @@ foldBytesIntoDigits bytes idx n buf size length
 skipZeroDigits : Array Int -> Int -> Int -> Int
 skipZeroDigits buf i limit
   | i >= limit = i
-  | byteAt i buf != 0 = i
+  | byteAt i buf /= 0 = i
   | otherwise = skipZeroDigits buf (i + 1) limit
 
 -- Map digit-buffer slots `i .. size-1` through the alphabet, in order.
@@ -184,7 +184,7 @@ digitIndexOf c i
 countLeadingOneChars : Array Char -> Int -> Int -> Int
 countLeadingOneChars chars i n
   | i >= n = i
-  | charAtA i chars != '1' = i
+  | charAtA i chars /= '1' = i
   | otherwise = countLeadingOneChars chars (i + 1) n
 
 -- One character's digit value, or the `Err` this decode should fail with.

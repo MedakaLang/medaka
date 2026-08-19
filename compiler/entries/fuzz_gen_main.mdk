@@ -207,7 +207,7 @@ numArithOps = ["+", "-", "*"]
 intOnlyOps : List String
 intOnlyOps = ["/", "%"]
 eqOps : List String
-eqOps = ["==", "!="]
+eqOps = ["==", "/="]
 ordOps : List String
 ordOps = ["<", ">", "<=", ">="]
 

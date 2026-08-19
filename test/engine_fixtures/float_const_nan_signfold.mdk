@@ -1,4 +1,4 @@
--- #672 (S0, run != build): a COMPILE-TIME-CONSTANT NaN must sort/compare/hash
+-- #672 (S0, run /= build): a COMPILE-TIME-CONSTANT NaN must sort/compare/hash
 -- identically across all three engines on the SAME box.
 --
 -- `0.0 / 0.0` (and `x % 0.0`, NaN for any finite x) is a constant, so the native
@@ -9,7 +9,7 @@
 -- Under the sign-dependent totalOrder (N6, Rust total_cmp) a +NaN sorts/compares/
 -- hashes OPPOSITELY to a -NaN, so `compare (0.0/0.0) 1.0` (and the `%` twin) was
 -- `Gt` under `medaka build` but `Lt` under `medaka run` -- a silent same-box
--- run != build divergence.  The emitter now folds a constant NaN op on the host
+-- run /= build divergence.  The emitter now folds a constant NaN op on the host
 -- (`/` via hardware fdiv, `%` via the same libm fmod the runtime uses) and emits
 -- its exact bits, so native keeps the runtime's -NaN and all three engines agree.
 --

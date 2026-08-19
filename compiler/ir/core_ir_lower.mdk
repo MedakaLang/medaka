@@ -424,7 +424,7 @@ dedupLits (l::rest) seen =
 -- exactly the membership test the old `anyList (l == _)` performed, preserving
 -- dedup semantics.  Float note: -0.0 is normalised to +0.0 (they are `Eq`-equal
 -- and the old `==` deduped them); NaN cannot be written as a pattern literal so
--- its `NaN != NaN` edge is unreachable here.  LBool/LUnit are canonicalised to
+-- its `NaN /= NaN` edge is unreachable here.  LBool/LUnit are canonicalised to
 -- constructors before lowering (see `canonPat`), so those arms never reach this
 -- function but are kept total.
 litKey : Lit -> String
@@ -818,7 +818,7 @@ bindFieldTemps ((CField k ex)::rest) body =
 -- that type (eval.mdk implMethodValue/memoThunk, TYPECHECK-AUDIT C6).  Both emit
 -- backends, however, lowered each occurrence to a fresh `call
 -- @mdk_impl_<tag>_<method>()`, re-running the body — duplicating any side effect
--- (issue #719, silent run != build on the LLVM and WasmGC backends).
+-- (issue #719, silent run /= build on the LLVM and WasmGC backends).
 --
 -- Fix (emit-only, so BOTH backends inherit it via lowerProgramEmit — the eval arm
 -- already memoises): HOIST each such occurrence to a synthesized top-level value

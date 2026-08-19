@@ -36,7 +36,7 @@ export const KEYWORDS = new Set([
 // Multi-char operators, longest-first so a plain string match never truncates a
 // longer operator (lexer.mdk scanOp, 725-775).
 const OP3 = ['...'];
-const OP2 = ['==', '!=', '<=', '>=', '&&', '||', '::', '++', '|>', '>>', '<<',
+const OP2 = ['==', '/=', '<=', '>=', '&&', '||', '::', '++', '|>', '>>', '<<',
   '=>', '->', '<-', '[|', '|]', '{.', '.*', '..', '.=', '@|'];
 const OP1_SET = '+-*/%<>=:.|!?@~^&$';   // single-char operator chars
 const PUNCT_SET = '()[],;';             // delimiters (not braces — see below)

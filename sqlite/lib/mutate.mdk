@@ -178,7 +178,7 @@ charsMatchAt h nd hi ni nl =
 collectTableSpecs : Db -> List SchemaEntry -> List (String, String, Option Int, List (Int, List Cell)) -> Result String (List (String, String, Option Int, List (Int, List Cell)))
 collectTableSpecs _ [] acc = Ok (reverse acc)
 collectTableSpecs db (e::rest) acc =
-  if schemaType e != "table" then collectTableSpecs db rest acc
+  if schemaType e /= "table" then collectTableSpecs db rest acc
   else
     let name = schemaName e
     let sql = schemaSql e
@@ -528,7 +528,7 @@ positionalRow ct vals want got =
 
 namedRow : CreateTable -> List String -> List Cell -> Int -> Int -> Result String (List Cell)
 namedRow ct names vals want got =
-  if want != got then Err "\{intToString want} columns named but \{intToString got} values supplied"
+  if want /= got then Err "\{intToString want} columns named but \{intToString got} values supplied"
   else do
     idxs <- resolveColNames ct names []
     Ok (scatter (length (ctCols ct)) idxs vals)

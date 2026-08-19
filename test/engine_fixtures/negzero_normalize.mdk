@@ -8,14 +8,14 @@
 --   * `Ord Float.compare` normalises the zero sign away, so `compare (±0.0) = Eq`.
 --   * `hashFloat` hashes -0.0 as +0.0, and canonicalises every NaN to one bucket.
 --   * `Eq Float` stays IEEE: `-0.0 == 0.0` is True, `nan == nan` is False.
---   * NaN remains the SOLE compare != eq / container-key residual (not fixed here).
+--   * NaN remains the SOLE compare /= eq / container-key residual (not fixed here).
 -- And #761: a `-0.0` LITERAL keeps its IEEE sign in the tree-walker (it used to
 -- collapse to +0.0 because `evalUnop "-"` did `0.0 - f`; native/wasm emit `fneg`).
 import set as S
 import map as M
 
-neg = -0.0 -- the #761 literal — used to collapse to +0.0 under `medaka run`
-comp = -1.0 * 0.0 -- a computed -0.0 (already agreed across engines pre-fix)
+neg = -0.0  -- the #761 literal — used to collapse to +0.0 under `medaka run`
+comp = -1.0 * 0.0  -- a computed -0.0 (already agreed across engines pre-fix)
 ninf = -1.0 / 0.0
 nan = 0.0 / 0.0
 nan2 = 0.0 % 0.0

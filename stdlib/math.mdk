@@ -48,7 +48,7 @@ toDegrees rad = rad * 180.0 / pi
 -- > isNaN 1.0
 -- False
 export isNaN : Float -> Bool
-isNaN x = x != x
+isNaN x = x /= x
 
 -- | True iff the argument is positive or negative infinity.  A finite `x`
 --   has `x - x == 0.0`; an infinite `x` has `x - x == NaN`.
@@ -100,7 +100,7 @@ lerp a b t = a + (b - a) * t
 --   NaN: `|NaN - x|` is NaN, and every IEEE `<=` involving NaN is `False`
 --   (this repo's decided semantics — see EMITTER-SEMANTICS.md §4 N5: derived
 --   `< <= > >=` stay IEEE). So `approxEq NaN NaN eps` is `False` for every
---   `eps`, including `NaN` itself — consistent with `isNaN` (`x != x`) and
+--   `eps`, including `NaN` itself — consistent with `isNaN` (`x /= x`) and
 --   with plain `==` already treating NaN as equal to nothing, itself
 --   included.
 --
@@ -159,7 +159,7 @@ export floorDiv : Int -> Int -> Int
 floorDiv a b =
   let q = a / b
   let r = a - q * b
-  if r != 0 && r < 0 != (b < 0) then q - 1 else q
+  if r /= 0 && r < 0 /= (b < 0) then q - 1 else q
 
 -- | Floor modulo: the remainder that pairs with `floorDiv`, so
 --   `floorDiv a b * b + floorMod a b == a` always holds and the result

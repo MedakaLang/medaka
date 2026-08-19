@@ -252,7 +252,7 @@ detectGCBrew : String -> String -> <IO> Option (List String, List String)
 detectGCBrew cc tmpDir = match runCommand "brew" ["--prefix", "bdw-gc"]
   Ok (0, out, _) =>
     let prefix = stringTrim out
-    if prefix != "" && fileExists (joinPath prefix "include/gc.h") then
+    if prefix /= "" && fileExists (joinPath prefix "include/gc.h") then
       Some (
         ["-I" ++ joinPath prefix "include"],
         ["-L" ++ joinPath prefix "lib", "-lgc"],
@@ -326,7 +326,7 @@ gcSectionsLinkFlag _ = match runCommand "uname" ["-s"]
 -- outPath already has it) — the kept-IR file just shares that same, already-
 -- understood race, not a new one.
 effectiveKeepIr : Bool -> <IO> Bool
-effectiveKeepIr cliFlag = cliFlag || envOr "MEDAKA_KEEP_IR" "" != ""
+effectiveKeepIr cliFlag = cliFlag || envOr "MEDAKA_KEEP_IR" "" /= ""
 
 -- Best-effort: a kept-IR write failure must never fail an otherwise-good
 -- build, so its Result is folded into an informational note either way.
@@ -402,7 +402,7 @@ runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots 
   let llPath = joinPath tmpDir "program.ll"
   let emitArgsBase = [runtimeP, preludeP, inputAbs] ++ inputRoots ++ [compilerDir, stdlibDir]
   let emitter2 = envOr "MEDAKA_EMITTER" defaultMedakaEmitter
-  let useNative = emitter2 != ""
+  let useNative = emitter2 /= ""
   let emitProg0 = if useNative then emitter2 else medaka
   let emitArgs0 = if useNative then
     emitArgsBase
@@ -419,7 +419,7 @@ runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots 
   match runCommand emitProg emitArgs
     Err e =>
       BuildErr "error: could not run emitter (\{emitProg}): \{e}"
-    Ok (code, irRaw, emitErr) => if code != 0 then BuildErr "error: emitter failed compiling \{inputAbs}\n\{emitErr}"
+    Ok (code, irRaw, emitErr) => if code /= 0 then BuildErr "error: emitter failed compiling \{inputAbs}\n\{emitErr}"
     else
       let ir = stripTrailingUnit irRaw
       if stringLength ir == 0 then BuildErr "error: emitter produced empty IR for \{inputAbs}\n\{emitErr}"
@@ -515,7 +515,7 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli =
     None => BuildErr "error: wasm-tools not found on PATH — install wasm-tools (cargo install wasm-tools or brew install wasm-tools) for --target wasm"
     Some _ => match runCommand wasmEmitter emitArgsBase
       Err e => BuildErr "error: could not run wasm emitter (\{wasmEmitter}): \{e}"
-      Ok (code, watRaw, emitErr) => if code != 0 then BuildErr "error: wasm emitter failed compiling \{inputAbs}\n\{emitErr}"
+      Ok (code, watRaw, emitErr) => if code /= 0 then BuildErr "error: wasm emitter failed compiling \{inputAbs}\n\{emitErr}"
       else
         let wat = stripTrailingUnit watRaw
         if stringLength wat == 0 then BuildErr "error: wasm emitter produced empty WAT for \{inputAbs}\n\{emitErr}"
@@ -591,7 +591,7 @@ clangLink cc rtC llPath outPath inputAbs tmpDir = match detectGC cc tmpDir
     -- inline-vs-prebuilt binaries are proven byte-identical by
     -- test/diff_compiler_rt_obj.sh.
     let rtObjEnv = envOr "MEDAKA_RT_OBJ" ""
-    let rtInput = if rtObjEnv != "" && fileExists rtObjEnv then rtObjEnv else rtC
+    let rtInput = if rtObjEnv /= "" && fileExists rtObjEnv then rtObjEnv else rtC
     -- CI FAST PATH (MEDAKA_PRELUDE_OBJ, issue #118) — the LINK half.  Exactly the
     -- MEDAKA_RT_OBJ trick one level up: the prelude is 88% of a small program's IR,
     -- and clang -O2 re-optimises all of it on every build.  Precompile it ONCE
@@ -631,7 +631,7 @@ clangLink cc rtC llPath outPath inputAbs tmpDir = match detectGC cc tmpDir
 preludeObjOf : Unit -> <IO> String
 preludeObjOf _ =
   let p = envOr "MEDAKA_PRELUDE_OBJ" ""
-  if p != "" && fileExists p then p else ""
+  if p /= "" && fileExists p then p else ""
 
 -- Run a command with MEDAKA_EMIT_HALF set, via `env` — Medaka has no setEnv extern
 -- and runCommand takes no environment, and `env` is POSIX on both platforms.  argv[0]
@@ -682,7 +682,7 @@ emitPreludeObjIn cc root medaka outObjPath tmpDir = match detectGC cc tmpDir
           joinPath root "stdlib",
         ]
         let emitter2 = envOr "MEDAKA_EMITTER" defaultMedakaEmitter
-        let useNative = emitter2 != ""
+        let useNative = emitter2 /= ""
         let emitProg0 = if useNative then emitter2 else medaka
         let emitArgs0 = if useNative then
           emitArgsBase
@@ -691,7 +691,7 @@ emitPreludeObjIn cc root medaka outObjPath tmpDir = match detectGC cc tmpDir
         let (emitProg, emitArgs) = withEmitHalf "prelude" emitProg0 emitArgs0
         match runCommand emitProg emitArgs
           Err e => BuildErr "error: could not run emitter (\{emitProg}): \{e}"
-          Ok (code, irRaw, emitErr) => if code != 0 then BuildErr "error: emitter failed emitting the prelude object\n\{emitErr}"
+          Ok (code, irRaw, emitErr) => if code /= 0 then BuildErr "error: emitter failed emitting the prelude object\n\{emitErr}"
           else
             let ir = stripTrailingUnit irRaw
             if stringLength ir == 0 then BuildErr "error: emitter produced empty IR for the prelude object\n\{emitErr}"

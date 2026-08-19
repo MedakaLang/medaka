@@ -6,7 +6,7 @@
 -- (`[IB] [IB] ...`).  Keying memo on the same selector the route carries fixes it.
 -- BOTH colliding impls are exercised twice here: each fires its effect exactly once
 -- (`[IB]` then `[BI]`) and the two memoise INDEPENDENTLY — proof the C7 keys are not
--- collapsed into one CAF.  A run != build S1 — the engines gate is the pin.
+-- collapsed into one CAF.  A run /= build S1 — the engines gate is the pin.
 data MyPair a b = MyPair a b
 
 interface Foo a where

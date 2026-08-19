@@ -623,7 +623,7 @@ module.exports = grammar({
       prec.left(3,  seq(field('left', $._expr), '||',  field('right', $._expr))),
       prec.left(4,  seq(field('left', $._expr), '&&',  field('right', $._expr))),
       prec.left(5,  seq(field('left', $._expr), '==',  field('right', $._expr))),
-      prec.left(5,  seq(field('left', $._expr), '!=',  field('right', $._expr))),
+      prec.left(5,  seq(field('left', $._expr), '/=',  field('right', $._expr))),
       prec.left(5,  seq(field('left', $._expr), '<',   field('right', $._expr))),
       prec.left(5,  seq(field('left', $._expr), '>',   field('right', $._expr))),
       prec.left(5,  seq(field('left', $._expr), '<=',  field('right', $._expr))),
@@ -727,7 +727,7 @@ module.exports = grammar({
     ),
 
     section_op: $ => choice(
-      '+', '*', '/', '%', '==', '!=', '<', '>', '<=', '>=',
+      '+', '*', '/', '%', '==', '/=', '<', '>', '<=', '>=',
       '&&', '||', '::', '++', '<>', '|>', '>>', '<<',
     ),
 

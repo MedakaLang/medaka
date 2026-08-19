@@ -167,7 +167,7 @@ isCtorApp : Expr -> Bool
 isCtorApp (ELoc _ e)      = isCtorApp e
 isCtorApp (EDoOrigin _ e) = isCtorApp e
 isCtorApp (EApp f _)      = isCtorApp f          -- walk left spine
-isCtorApp (EVar name)     = name != "Ref" && headIsUpper name
+isCtorApp (EVar name)     = name /= "Ref" && headIsUpper name
 isCtorApp _               = False
 
 headIsUpper s = match (stringToChars s)   -- or charAt s 0; mirror existing idiom
@@ -318,7 +318,7 @@ spine is checked, not just the outermost) — call that out in the handoff.
   deferred.
 - **D2 — Relaxed VR (variance analysis): in or out?** Recommend **OUT / defer**
   (§5). Confirm.
-- **D3 — `Ref` exclusion mechanism.** Exclude by name (`name != "Ref"`) given
+- **D3 — `Ref` exclusion mechanism.** Exclude by name (`name /= "Ref"`) given
   `Ref` is the sole uppercase mutable-cell extern (§1), vs a small named
   exclusion *set* for future-proofing. Recommend by-name now + a code comment +
   the uppercase-extern grep as the audit. Confirm.

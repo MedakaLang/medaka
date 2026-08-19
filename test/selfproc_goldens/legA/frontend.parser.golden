@@ -152,6 +152,7 @@ finishBracketIndex : Expr -> Expr -> Parser Expr
 finishSingletonArray : Expr -> Parser Expr
 finishSingletonList : Expr -> Parser Expr
 firstBacktickIdx : Array Token -> Int -> Int
+firstBangEqIdx : Array Token -> Int -> Int
 firstBlockCommentIdx : Array Token -> Int -> Int
 firstBraceBlockIdx : Array Token -> Int -> Int
 firstContentAt : Array Token -> Int -> Int -> Int
@@ -165,7 +166,6 @@ firstInlineLetMissingIn : Array Token -> Int -> Int
 firstLexError : Array Token -> Int -> Option (Int, String)
 firstMutIdx : Array Token -> Int -> Int
 firstRecordDeclIdx : Array Token -> Int -> Int -> Bool -> Int
-firstSlashEqIdx : Array Token -> Int -> Int
 firstWithIdx : Array Token -> Int -> Int
 flattenFieldPath : Expr -> Option (String, List String)
 foreignKwMsg : Token -> String

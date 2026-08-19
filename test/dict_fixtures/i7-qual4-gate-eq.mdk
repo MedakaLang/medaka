@@ -2,7 +2,7 @@
 -- Sibling of i7-qual4-gate-num.mdk; read that file's header for the derivation, the
 -- shape rules, and the honest limit on what these four fixtures can discriminate.
 --
--- HAND-DERIVED: I7's table binds `==` / `!=` to `Eq τ`. The prelude is present, so the
+-- HAND-DERIVED: I7's table binds `==` / `/=` to `Eq τ`. The prelude is present, so the
 -- `Eq Blob` predicate IS synthesized; `Blob` derives nothing and has no `impl Eq`, so
 -- the program is REJECTED, `T-NO-IMPL`. `Blob` is deliberately NOT `deriving Eq` -- an
 -- impl would discharge the obligation and the row would pass whether or not the gate

@@ -660,7 +660,7 @@ deleteBy same x (y::rest)
   | otherwise = y :: deleteBy same x rest
 
 {- | Remove the *first* occurrence of `x` (by `Eq`); unchanged when absent.
-   Only the first — `filter (!= x) xs` removes every occurrence.
+   Only the first — `filter (/= x) xs` removes every occurrence.
 
    > delete 2 [1, 2, 3, 2]
    [1, 3, 2]

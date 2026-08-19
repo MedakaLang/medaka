@@ -118,7 +118,7 @@ base58SpecArm fname = match readFile fname
   Err msg => panic "encodings_vectors: cannot read \{fname}: \{msg}"
   Ok content =>
     let ls = lines content
-    let dataLines = filter (l => l != "" && not (startsWith "#" l)) ls
+    let dataLines = filter (l => l /= "" && not (startsWith "#" l)) ls
     -- dataLines: [alphabet row, row1, row2, erratum row (3 tab-fields)]
     let alphaLine = match find (startsWith "alphabet\t") dataLines
       Some l => l
@@ -160,7 +160,7 @@ erratumReports (l :: rest) = match split "\t" l
     -- aborts. Still NOT a graded PASS/FAIL cell: the driver's header
     -- contract that erratum rows are "not counted toward PASS or FAIL"
     -- stays true, and encodings_vectors.sh's PASS_FLOOR is unchanged.
-    let () = if correctedExpected != encoded then
+    let () = if correctedExpected /= encoded then
       panic "encodings_vectors: erratum row's corrected column \{correctedExpected} disagrees with this implementation's output \{encoded} — the disclosure is stale"
     else ()
     let () = erratum "base58-spec-erratum-selfcheck:\{hexInput}" correctedExpected encoded
@@ -202,7 +202,7 @@ varintArm fname = match readFile fname
   Err msg => panic "encodings_vectors: cannot read \{fname}: \{msg}"
   Ok content =>
     let ls = lines content
-    let dataLines = filter (l => l != "" && not (startsWith "#" l)) ls
+    let dataLines = filter (l => l /= "" && not (startsWith "#" l)) ls
     let normalLines = filter (l => not (startsWith "reject" l)) dataLines
     let rejectLines = filter (startsWith "reject") dataLines
     flatMap varintExampleChecks normalLines

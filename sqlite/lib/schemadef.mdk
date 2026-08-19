@@ -463,7 +463,7 @@ pkTypeCheck _ _ (Some c) =
 badPk : List ColDef -> Option String
 badPk [] = None
 badPk (c::rest) =
-  if cdIsPk c && cdType c != "INTEGER" then
+  if cdIsPk c && cdType c /= "INTEGER" then
     Some (cdName c)
   else
     badPk rest

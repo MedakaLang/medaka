@@ -623,7 +623,7 @@ binopPrec op
   | op == "||" = precOr
   | op == "&&" = precAnd
   | op == "==" = precCmp
-  | op == "!=" = precCmp
+  | op == "/=" = precCmp
   | op == "<" = precCmp
   | op == ">" = precCmp
   | op == "<=" = precCmp

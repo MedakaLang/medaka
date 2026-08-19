@@ -231,7 +231,7 @@ rewriteAtoms acts es =
   let anyChanged = anyList sndB stepped
   let kept = collectKept stepped
   let deduped = dedupeAtoms kept
-  let dedupChanged = listLen deduped != listLen kept
+  let dedupChanged = listLen deduped /= listLen kept
   (deduped, anyChanged || dedupChanged)
 
 applyAtom : List (String, EffAction) -> (String, Option String) -> (Option (String, Option String), Bool)

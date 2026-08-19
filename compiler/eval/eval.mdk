@@ -1540,7 +1540,7 @@ siblingShadows : EvalEnv (Value e) -> String -> String -> List Route -> <e> List
 siblingShadows env name tag implRoutes =
   flatMap
     (shadowBind env tag implRoutes)
-    (filter (!= name) (methodsOfIface (ifaceOfMethod name)))
+    (filter (/= name) (methodsOfIface (ifaceOfMethod name)))
 
 shadowBind : EvalEnv (Value e) -> String -> List Route -> String -> <e> List (String, Ref (Value e))
 shadowBind env tag implRoutes m = match lookupMethodReqCountOpt m tag
@@ -1907,12 +1907,12 @@ evalArith "*" (VFloat a) (VFloat b) = VFloat (a * b)
 evalArith "/" (VFloat a) (VFloat b) = VFloat (a / b)
 evalArith "%" (VFloat a) (VFloat b) = VFloat (floatRem a b)
 evalArith "==" a b = VBool (valueEq a b)
-evalArith "!=" a b = VBool (not (valueEq a b))
+evalArith "/=" a b = VBool (not (valueEq a b))
 -- Float comparisons use IEEE ordered semantics directly (these compile to native
 -- `fcmp o*`).  They MUST precede the generic `valueCompare` arms below: on a NaN
 -- operand `valueCompare` yields neither LT nor GT, so `not (ordGt …)` / `not (ordLt …)`
 -- would wrongly report `nan <= nan` etc. as True (#288).  IEEE: every ordered
--- relational compare against NaN is False; only `!=` is True (handled above).
+-- relational compare against NaN is False; only `/=` is True (handled above).
 evalArith "<" (VFloat a) (VFloat b) = VBool (a < b)
 evalArith ">" (VFloat a) (VFloat b) = VBool (a > b)
 evalArith "<=" (VFloat a) (VFloat b) = VBool (a <= b)
@@ -2897,16 +2897,16 @@ pHashBool _ = panic "hashBool: not a Bool"
 -- to (positive sign, quiet bit set).  Built from explicit big-endian bytes
 -- (0x7F 0xF8 …) rather than `intBitsToFloat (shiftLeft 32760 48)` — that shift
 -- spuriously set bit 63 (a -NaN, 0xFFF8…), which hashes differently from the
--- native/wasm `0x7FF8…` and reintroduced run != build.
+-- native/wasm `0x7FF8…` and reintroduced run /= build.
 canonNaN : Float
 canonNaN = bytesToFloat64 (arrayFromList [127, 248, 0, 0, 0, 0, 0, 0]) 0
 
 -- #758: hash `-0.0` as `+0.0` (they are `Eq`, so must share a hash), and
 -- canonicalise every NaN to one bit pattern (all NaNs hash equal).  Both
 -- normalisations run in lockstep with `mdk_hash_float` (native) and
--- `$mdk_hash_float` (wasm) — diverge and `run != build` returns.
+-- `$mdk_hash_float` (wasm) — diverge and `run /= build` returns.
 canonHashFloat : Float -> Float
-canonHashFloat f = if f == 0.0 then 0.0 else if f != f then canonNaN else f
+canonHashFloat f = if f == 0.0 then 0.0 else if f /= f then canonNaN else f
 
 pHashFloat : Value e -> <e> Value e
 pHashFloat (VFloat f) =

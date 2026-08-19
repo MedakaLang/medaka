@@ -1,8 +1,8 @@
--- Fixture for rule-rem-parity: `n % 2 == 0` → isEven, `n % 2 != 0` → isOdd.
+-- Fixture for rule-rem-parity: `n % 2 == 0` → isEven, `n % 2 /= 0` → isOdd.
 
 -- POSITIVE: the two parity comparisons (either operand order).
 evenTest n = n % 2 == 0
-oddTest n = n % 2 != 0
+oddTest n = n % 2 /= 0
 evenFlipped n = 0 == n % 2
 
 -- POSITIVE: nested in a body.
@@ -16,4 +16,4 @@ negThree n = n % 3 == 0
 
 -- NEGATIVE: the `isEven`/`isOdd` definitions THEMSELVES must not self-rewrite.
 isEven n = n % 2 == 0
-isOdd n = n % 2 != 0
+isOdd n = n % 2 /= 0

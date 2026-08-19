@@ -182,7 +182,7 @@ foldlElems f z (x::rest) = foldlElems f (f z x) rest
 {- | Folds over elements (unspecified order), so `toList`/`length`/`elem`/`any`/
    `sum`/… all work on a HashSet.
 
-   > toList (fromList [1, 1, 2]) != []
+   > toList (fromList [1, 1, 2]) /= []
    True
    > length (fromList [3, 1, 2, 1])
    3 -}
@@ -204,7 +204,7 @@ allIn (x::rest) s
    > eq (fromList [1, 2, 3]) (fromList [3, 2, 1, 2])
    True -}
 export impl Eq (HashSet a) requires Eq a, Hashable a where
-  eq a b = if size a != size b then False else allIn (elemList a) b
+  eq a b = if size a /= size b then False else allIn (elemList a) b
 
 {- | Rendered `fromList [a, …]` in hash order (layout-dependent; use `eq` for
    equality). -}

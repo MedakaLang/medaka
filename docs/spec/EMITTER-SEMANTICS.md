@@ -205,7 +205,7 @@ laws bind **all four engines** and every reflective helper (V6).
   (`fma`), reassociate, or constant-fold under rules other than IEEE.
 - **N5 — Comparison is IEEE-ordered, uniformly.** `< <= > >=` on Float are the
   IEEE ordered predicates: **every one is false when either operand is NaN**;
-  `==` is false and `!=` is true on NaN; `-0.0 == 0.0`. The load-bearing word
+  `==` is false and `/=` is true on NaN; `-0.0 == 0.0`. The load-bearing word
   is *uniformly*: the same answer must come from the inline `fcmp` path, the
   interpreter's `evalArith`, the generic/dict-routed `Ord`/`Eq` paths, and
   every V6 reflective helper. A path that funnels Float comparison through a
@@ -235,7 +235,7 @@ laws bind **all four engines** and every reflective helper (V6).
 
   so `compare` is a genuine total order, and `sort`/`min`/`max` are
   deterministic on NaN data and never crash. **Accepted cost:** `compare x y ==
-  Eq` no longer coincides with `x == y` at **NaN only** — `nan != nan` makes
+  Eq` no longer coincides with `x == y` at **NaN only** — `nan /= nan` makes
   IEEE `==` non-reflexive, so no total order can agree with it there; that one
   point is irreducible and matches every IEEE language. **`±0.0` is NOT a
   divergence point:** `compare`/`hashFloat` normalize `-0.0 → +0.0` so they
@@ -247,13 +247,13 @@ laws bind **all four engines** and every reflective helper (V6).
   so a zero sign left observable through `compare`/`hash` would silently corrupt
   container keys. NaN is the sole remaining exception, documented — an ordered
   container dedups a NaN key (`compare nan nan = Eq`) while a hashed one cannot
-  (`nan != nan`); a NaN key is pathological and unsupported, not a bug to chase.
+  (`nan /= nan`); a NaN key is pathological and unsupported, not a bug to chase.
   This retires the standing R2 (engine-uniformity) violation: the answer is now
   specified, not improvised per engine.
 
   What this replaced was not merely under-specified, it was **unlawful**:
   `compare nan x` returned `Eq` for *every* `x`, so `compare` violated
-  transitivity (`nan Eq 1.0` and `nan Eq 3.0`, yet `1.0 != 3.0`). A sorted
+  transitivity (`nan Eq 1.0` and `nan Eq 3.0`, yet `1.0 /= 3.0`). A sorted
   result was an accident of the algorithm — an inconsistent comparator licenses
   any permutation.
 
@@ -462,7 +462,7 @@ laws bind **all four engines** and every reflective helper (V6).
 | N1 wrap / N2 div-mod / N3 literals | ✅ CONFIRMED | bare `add/sub/mul` (no nsw/nuw, grep-clean), `sdiv/srem` guarded, trap codes match eval; literal tag-width guard at 2^61 handled via full-width shl for value CONSTRUCTION **and, as of #759/#768, the pattern-COMPARISON path** — the pattern emitter baked an overflowed Int literal head for heads ≥2^61 until fixed by reusing the same full-width `shl` lowering (LLVM `emitLitChain`/`emitRefutMatch`/`emitRangeTest`; wasm `patTestBind`/`rngCmpW`/`emitLitSwitchTail`/`emitLitSwitchRef` via `$mdk_unbox_int`) |
 | N4 IEEE ops | ✅ | inline paths ✅ (`fadd…frem`, no fast-math); the runtime-dispatch Float `%` arm is now fmod on every engine (#345 FIXED) |
 | N5 IEEE compare, uniformly | ✅ | inline `fcmp o*`/`une` ✅ both backends; `nan <= nan` on global Floats CONFIRMED correct (the `RScalar` stamp covers it — a suspected divergence DISPROVED by probe); the generic/HOF (type-lost) path **#305 FIXED** — per-op IEEE predicates `mdk_value_lt/le/gt/ge` + `$mdk_value_*` peers replace the 3-way derivation; eval==native==wasm pinned by `test/llvm_fixtures_typed/float_typelost_ord_nan.mdk` (engines gate + value pin) and `test/run_check_agreement_fixtures/accept_float_ne_nan.mdk` |
-| N6 total-order story | ✅ | **DECIDED + IMPLEMENTED 2026-07-16 (#360): IEEE-754 totalOrder** (−NaN < −inf … +inf < +NaN) for `compare`/`min`/`max`/`sort`. `impl Ord Float` (`stdlib/core.mdk`) reads the sign bit via `floatToBytes64` on the NaN cold path. Accepted cost: `compare x y == Eq` ≠ `x == y` at **NaN only** (`nan != nan` is inherent to IEEE). ✅ **±0.0 normalization SHIPPED 2026-07-20 (#758/#761, #769)** — `compare`+`hashFloat` normalize `-0.0→+0.0` so ordered/hash containers stay Eq-coherent at zero (and canonicalize NaN payloads to one bucket), in lockstep across eval/native/wasm; eval separately preserves the sign of a `-0.0` *literal* itself (#761). cf. Rust `total_cmp`, but Medaka keys BOTH ordered and hashed containers on the order, so the zero sign is not left observable. **N5 unaffected** — the impl explicitly overrides `lt`/`gt`/`lte`/`gte` back to the IEEE primitives, because Ord's DEFAULTS would otherwise derive them from `compare` and re-open #305; `min`/`max` keep the compare-derived defaults on purpose. Pinned by `test/eval_prelude_fixtures/float_totalorder_nan.mdk` (eval + Core IR), its `build_diff_fixtures` twin (native), and `run_check_agreement_fixtures/accept_float_totalorder` (run==build==`.out`). ⚠ A hardware NaN's sign is target-dependent (x86 −NaN, arm +NaN), so those fixtures pin totalOrder's LAWS, never a NaN's absolute position. ✅ **Same-box run≠build on that sign FIXED 2026-07-20 (#762/#774)** — clang could const-fold a runtime-reachable NaN-producing op to the wrong sign at `-O2`; fixed via `llvm.arithmetic.fence.f64` (`fenceFloatOperand`), skipped on already-constant operands, pinned by `accept_nan_sign_runtime_fold`. **#509 (cross-platform NaN sign) stays open** — a separate concern from same-box run≠build |
+| N6 total-order story | ✅ | **DECIDED + IMPLEMENTED 2026-07-16 (#360): IEEE-754 totalOrder** (−NaN < −inf … +inf < +NaN) for `compare`/`min`/`max`/`sort`. `impl Ord Float` (`stdlib/core.mdk`) reads the sign bit via `floatToBytes64` on the NaN cold path. Accepted cost: `compare x y == Eq` ≠ `x == y` at **NaN only** (`nan /= nan` is inherent to IEEE). ✅ **±0.0 normalization SHIPPED 2026-07-20 (#758/#761, #769)** — `compare`+`hashFloat` normalize `-0.0→+0.0` so ordered/hash containers stay Eq-coherent at zero (and canonicalize NaN payloads to one bucket), in lockstep across eval/native/wasm; eval separately preserves the sign of a `-0.0` *literal* itself (#761). cf. Rust `total_cmp`, but Medaka keys BOTH ordered and hashed containers on the order, so the zero sign is not left observable. **N5 unaffected** — the impl explicitly overrides `lt`/`gt`/`lte`/`gte` back to the IEEE primitives, because Ord's DEFAULTS would otherwise derive them from `compare` and re-open #305; `min`/`max` keep the compare-derived defaults on purpose. Pinned by `test/eval_prelude_fixtures/float_totalorder_nan.mdk` (eval + Core IR), its `build_diff_fixtures` twin (native), and `run_check_agreement_fixtures/accept_float_totalorder` (run==build==`.out`). ⚠ A hardware NaN's sign is target-dependent (x86 −NaN, arm +NaN), so those fixtures pin totalOrder's LAWS, never a NaN's absolute position. ✅ **Same-box run≠build on that sign FIXED 2026-07-20 (#762/#774)** — clang could const-fold a runtime-reachable NaN-producing op to the wrong sign at `-O2`; fixed via `llvm.arithmetic.fence.f64` (`fenceFloatOperand`), skipped on already-constant operands, pinned by `accept_nan_sign_runtime_fold`. **#509 (cross-platform NaN sign) stays open** — a separate concern from same-box run≠build |
 | N7 conversions | ✅ **FIXED (#346/#372)** | `floatToInt` saturates (NaN→0, ±inf/range→`intMaxBound`/`intMinBound`), clamped to the 63-bit domain on both backends; `floor/ceil/round/trunc` ✅ (C library, Float→Float) |
 | N8 know-don't-guess | ✗ STATIC (architectural) | five accreted recovery heuristics (`staticIsFloat`, two-pass `inferSigs` w/ mutated `sigs`, `bodyFloatRet`/`closureRetTyRef`, `RScalar`, `mainKind`) — umbrella **#353**; the `RScalar` stamp is the done-right model |
 | N9 format/parse round-trip | ✅ CONFIRMED | shortest-round-trip lexeme (revised #57), `-0.0`/nan/inf pinned, `1e+300` re-lexes (#51 CLOSED; stale AGENTS.md row — #361); IR-text literal serialization round-trips via same formatter + `ensureFloatDot`; wasm JS-host copies UNVERIFIED — #361 |

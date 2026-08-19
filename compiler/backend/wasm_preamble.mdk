@@ -632,7 +632,7 @@ appendRuntimeLines = [
   "    (local.get $result))",
 ]
 
--- ── layer-9 runtime-shape-dispatched value comparison (`==`/`!=`/`<`/`>`/…) ──────
+-- ── layer-9 runtime-shape-dispatched value comparison (`==`/`/=`/`<`/`>`/…) ──────
 -- Core IR is type-erased: a ref-mode `CBinPrim "=="` carries no operand type, so the
 -- emitter cannot statically tell a `String == String` (boxed `$str` struct) from an
 -- `Int == Int` (i31 immediate).  The old emitter unconditionally lowered `==` as an
@@ -650,7 +650,7 @@ appendRuntimeLines = [
 --     which answer $float directly and use this only for the $str/int shapes.
 export valueEqRuntimeLines : List String
 valueEqRuntimeLines = [
-  "  ;; -- layer-9 runtime-shape-dispatched `==`/`!=` (String byte-equal OR immediate identity) --",
+  "  ;; -- layer-9 runtime-shape-dispatched `==`/`/=` (String byte-equal OR immediate identity) --",
   "  (func $mdk_value_eq (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
   "    ;; both operands are $str structs -> byte equality.",
   "    (if (i32.and (ref.test (ref $str) (local.get $a)) (ref.test (ref $str) (local.get $b)))",
@@ -1249,7 +1249,7 @@ export hashFloatRuntimeLines : List String
 hashFloatRuntimeLines = [
   "  ;; hashFloat (#758): normalise -0.0 -> +0.0 and every NaN -> one qNaN bit",
   "  ;; pattern, then reinterpret bits as i64 -> mix64 -> mask [0,2^30).  Matches",
-  "  ;; mdk_hash_float (native) and pHashFloat (eval), or run != build reappears.",
+  "  ;; mdk_hash_float (native) and pHashFloat (eval), or run /= build reappears.",
   "  (func $mdk_hash_float (param $f (ref $float)) (result i32)",
   "    (local $d f64) (local $bits i64)",
   "    (local.set $d (struct.get $float 0 (local.get $f)))",

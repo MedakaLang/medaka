@@ -58,7 +58,7 @@ filterReachable reach (d::rest) = d :: filterReachable reach rest
 -- ── prelude-reference canonicalization (post-mangle synthesized refs) ────────
 -- The emit drivers run `mangleUnits` BEFORE `elaborateModules`, renaming every
 -- prelude definition to `core__<name>`.  But `elaborateModules` SYNTHESIZES bare
--- references that never passed through mangling — notably the `!=` rewrite
+-- references that never passed through mangling — notably the `/=` rewrite
 -- (typecheck.mdk binopMethodApp builds `EApp (EVar "not") …`).  Such a bare name
 -- (`not`) does NOT match its mangled definition (`core__not`) by string equality,
 -- so a naive reachability walk treats the def as unreached and DCE DROPS it →

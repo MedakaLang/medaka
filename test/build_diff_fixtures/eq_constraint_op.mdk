@@ -1,4 +1,4 @@
--- Comparison OPERATORS (`==`/`!=`/`<`/…) on a bare constraint-var operand inside a
+-- Comparison OPERATORS (`==`/`/=`/`<`/…) on a bare constraint-var operand inside a
 -- top-level CONSTRAINED fn (run≠build regression).  Before the fix, resolveBinopSite
 -- left the route RNone for a top-level operand (the [inImpl] gate excluded ALL
 -- top-level sites), so the operator lowered to the shallow structural builtin and

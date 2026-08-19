@@ -213,7 +213,8 @@ after P0-5 (shares lexer/parser/desugar/eval).
 > C3a/C3b YES. `let-else` seed re-mint is now OWED (batch it with the last trim item).
 > **DEFERRED (1 left):** **`let rec … with`** is surgical (drop only the `with` mutual-grouping, keep single
 > `let rec`; `ELetGroup`/`DLetGroup` shared). 0 real dogfood uses; NOT yet user-authorized to spawn.
-> **Also pending:** the `!`→deref + `!=`→`/=` "negation coherence" bite
+> **Also pending:** the `!`→deref half of the "negation coherence" bite (the `!=`→`/=` half ✅ LANDED,
+> #1739 half B, which also PAID the owed seed re-mint)
 > (below) + the OPTIONAL zero-re-mint follow-up to migrate the 8 compiler-internal records from `data X = X{…}`
 > to the short `data X = {…}` (byte-identical IR; the new seed parses it). **LESSON (backtick): census the
 > always-loaded PRELUDE (`stdlib/core.mdk`) for real uses before removing a construct — a missed `core.mdk`
@@ -228,7 +229,7 @@ after P0-5 (shares lexer/parser/desugar/eval).
 > files incl. sexp round-trip), STOP and surface it as a decision — do NOT silently leave an inert stub.
 > Each bite's gate: no dangling references, `medaka lint` clean, fixpoint C3a/C3b YES.
 > **⚠️ CORRECTED REMOVAL TARGET (learned on backtick 2026-07-10): the lexer TOKEN is KEPT as the
-> reserved-word HINT SENTINEL** (exactly as `TFunction`/`TMut`/`TSlashEq` are kept). Delete the
+> reserved-word HINT SENTINEL** (exactly as `TFunction`/`TMut`/`TBangEq` are kept). Delete the
 > **grammar production + AST node + downstream logic/desugar/emit**, and add a `firstXIdx` pre-grammar hint
 > scan on the token — do NOT chase `grep <TToken> = 0` (the token must survive for the hint). The success
 > signal is: the parser has no production for the construct + the construct yields the located hint.
@@ -279,15 +280,19 @@ The construct removals:
   NOT a bare type-mismatch. (`!x` now means `x.value`, so `!aBool` will fail to unify Bool with `Ref a`;
   intercept that shape and surface the `not`-function hint.) Net: Refs get OCaml-standard ergonomics — `Ref x` / `!x` / `x := v`.
   **Also update P0-5's `R-IMMUTABLE-ASSIGN` error copy** from `.value` to the nicer `!c` once this lands.
-- **SWAP not-equals `!=` → `/=` (user 2026-07-10; FOLD INTO the `!`→deref bite — same theme/files).** Coherence:
-  once `!` = deref, nothing in the negation family should use `!` — `!=` reads as "deref-equals". Make **`/=`
-  the canonical not-equals** and turn **`!=` into a beginner-hint** (`"did you mean '/='?"`). The machinery is
-  already HALF-BUILT and just needs FLIPPING: today the lexer tags `/=` as `TSlashEq` purely to emit
-  `"unexpected '/='. (Did you mean '!='?)"` (`parser.mdk:3850`, `firstSlashEqIdx` ~`:3583`) — reverse it so
-  `!=` (`TNeq`) becomes the hinted token and `/=` parses as the real operator (mirror the `TNeq` binop +
-  `sectionOpStr` wiring at `parser.mdk:484`/`:1020`). Migration: **54 `!=` sites** in stdlib+compiler →
-  mechanical rewrite to `/=`. No new ambiguity (`/` is only division; no compound-assign exists — mutation is
-  `:=`). Fits the ML/Haskell `Eq`-class idiom (`==`/`/=`).
+- **SWAP not-equals `!=` → `/=` ✅ LANDED (#1739 half B).** Coherence: once `!` = deref, nothing in the
+  negation family should use `!` — `!=` reads as "deref-equals". `/=` is now **the canonical not-equals** and
+  `!=` is a **located beginner-hint** (`"unexpected '!='. (Did you mean '/='?)"`, `P-BAD-NEQ`, with a
+  machine-applicable `--json` `fix`). The half-built machinery was FLIPPED, not written: `TSlashEq` is
+  DELETED, `TNeq` is now the `/=` token (so the `binOp`/`sectionOpStr` wiring is unchanged), and the new
+  `TBangEq` sentinel feeds `firstBangEqIdx` (`compiler/frontend/parser.mdk` — cite by SYMBOL; the line
+  numbers this bullet used to carry had drifted by ~900). The internal opcode string moved `"!="` → `"/="`
+  across all 23 sites, so the printer needs no spelling map. **Migration was 2.7× the estimate:** the "54
+  `!=` sites" premise was stale — the actual cut was **197 in compiler+stdlib** plus **138 more** across
+  `test/` fixtures and the `sqlite`/`gzip`/`parsec`/`pds` dogfood projects. `stdlib/core.mdk` carried 7 of
+  them, so this bullet was the one that ran the PRELUDE risk the backtick lesson names. No new ambiguity
+  (`/` is only division; no compound-assign exists — mutation is `:=`). Fits the ML/Haskell `Eq`-class idiom
+  (`==`/`/=`). Seed re-minted (below), so cold-bootstrap parses `/=`.
 - **KEEP-FOR-FUTURE:** compose `>>`/`<<` (foundational point-free FP, near-zero carry cost; pairs
   with the kept pipe `|>`). Everything else audited = KEEP (earned or high newcomer value).
 Removal surface is dominated by `test/construct_fixtures/*` goldens + reference docs, not compiler

@@ -492,7 +492,7 @@ compose, and the source now states the composition itself at
    (`compiler/frontend/desugar.mdk:1014`), `qualifiedLocal alias n = "\{alias}.\{n}"`
    (`compiler/frontend/ast.mdk:425`).
 3. The value restriction's head arms are a first-character test —
-   `isCtorAppSpine (EVar name) = name != "Ref" && ctorHeadIsUpper name` (`:3618`, and
+   `isCtorAppSpine (EVar name) = name /= "Ref" && ctorHeadIsUpper name` (`:3618`, and
    `EVarId` identically at `:3619`), over `ctorHeadIsUpper` (`:3624-3627`), which reads
    `arrayGetUnsafe 0 cs`.
 
@@ -2013,7 +2013,7 @@ reach) taken one step further than G-4/G-5: those key by something that is not a
 `String`; this **keys nothing at all**.
 
 ```
-compiler/types/typecheck.mdk:3618   isCtorAppSpine (EVar name) = name != "Ref" && ctorHeadIsUpper name
+compiler/types/typecheck.mdk:3618   isCtorAppSpine (EVar name) = name /= "Ref" && ctorHeadIsUpper name
 compiler/types/typecheck.mdk:3624   ctorHeadIsUpper name =
 compiler/types/typecheck.mdk:3626     let cs = stringToChars name
 compiler/types/typecheck.mdk:3627     arrayLength cs > 0 && isUpper (arrayGetUnsafe 0 cs)

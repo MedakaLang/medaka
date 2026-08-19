@@ -6,13 +6,12 @@
 --
 -- Shape: a `do` chain whose FINAL expression is a non-container (`Bool`) while `andThen`
 -- requires the chain's monad shape (`Option b`).  `typeMismatchInDo` sees
--- `monoIsApp (TApp Option b) != monoIsApp (TCon Bool)` and retargets the bare
+-- `monoIsApp (TApp Option b) /= monoIsApp (TCon Bool)` and retargets the bare
 -- `Type mismatch` to the tailored "do requires a monad" line, blaming the do-block.
 --
 -- Deliberately NOT `x <- <non-container>` (e.g. `x <- 5`): that shape is intercepted
 -- first by `andThen`'s container-arg hint (`'andThen' expects a container …`) and never
 -- reaches this path — verified.  Prelude-dependent (`Some`), so Driver B only.
-main =
-  do
-    x <- Some 1
-    True
+main = do
+  x <- Some 1
+  True

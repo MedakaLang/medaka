@@ -67,12 +67,12 @@ bad() {
   fi
 }
 
-# #2: located error at the `/=` column with the hint.
-out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" check "$FIX/slasheq_error.mdk" 2>&1)"
+# #2: located error at the `!=` column with the hint.
+out="$(perl -e 'alarm 30; exec @ARGV' -- "$M" check "$FIX/bangeq_error.mdk" 2>&1)"
 case "$out" in
-  *":7: unexpected '/='. (Did you mean '!='?)"*)
-    ok slasheq_error ;;
-  *) bad slasheq_error "got [$out]" ;;
+  *":7: unexpected '!='. (Did you mean '/='?)"*)
+    ok bangeq_error ;;
+  *) bad bangeq_error "got [$out]" ;;
 esac
 
 # #3: multiline let RHS + if/then/else checks cleanly (exit 0).

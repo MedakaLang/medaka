@@ -215,7 +215,7 @@ carryAll w = carryGo w 0 0
 
 carryGo : Array Int -> Int -> Int -> Unit
 carryGo w i carry =
-  if i >= nWide then if carry != 0 then panic "scalar.carryAll: carry out of the top limb — input was >= 2^512" else ()
+  if i >= nWide then if carry /= 0 then panic "scalar.carryAll: carry out of the top limb — input was >= 2^512" else ()
   else
     let v = w[i] + carry
     let () = A.set i (bitAnd v limbMask) w
@@ -229,7 +229,7 @@ highZeroGo : Array Int -> Int -> Bool
 highZeroGo w i =
   if i >= nWide then
     True
-  else if w[i] != 0 then
+  else if w[i] /= 0 then
     False
   else
     highZeroGo w (i + 1)
@@ -383,7 +383,7 @@ wideOf a =
 --   an out-of-range element is an `Err`, never silently taken mod 256.
 export scFromBytes : Array Int -> Result String Sc
 scFromBytes bs =
-  if arrayLength bs != 32 then Err "scalar.scFromBytes: expected 32 bytes, got \{intToString (arrayLength bs)}"
+  if arrayLength bs /= 32 then Err "scalar.scFromBytes: expected 32 bytes, got \{intToString (arrayLength bs)}"
   else
     if not (byteArrayOk bs) then Err "scalar.scFromBytes: every element must be a byte in 0..255"
     else
@@ -403,7 +403,7 @@ scFromBytes bs =
 --   compute a different value than the caller wrote.
 export scFromBytesReduce : Array Int -> Sc
 scFromBytesReduce bs =
-  if arrayLength bs != 32 then
+  if arrayLength bs /= 32 then
     panic "scalar.scFromBytesReduce: expected 32 bytes, got \{intToString (arrayLength bs)}"
   else if not (byteArrayOk bs) then
     panic "scalar.scFromBytesReduce: every element must be a byte in 0..255"
@@ -438,7 +438,7 @@ equalGo : Sc -> Sc -> Int -> Bool
 equalGo a b i =
   if i >= 16 then
     True
-  else if a[i] != b[i] then
+  else if a[i] /= b[i] then
     False
   else
     equalGo a b (i + 1)
@@ -457,7 +457,7 @@ isZeroGo : Sc -> Int -> Bool
 isZeroGo a i =
   if i >= 16 then
     True
-  else if a[i] != 0 then
+  else if a[i] /= 0 then
     False
   else
     isZeroGo a (i + 1)
@@ -490,7 +490,7 @@ export scIsHigh : Sc -> Bool
 scIsHigh s =
   let d = arrayMake 17 0
   let () = dblGo s d 0 0
-  if d[16] != 0 then True else gteNGo d 15
+  if d[16] /= 0 then True else gteNGo d 15
 
 dblGo : Sc -> Array Int -> Int -> Int -> Unit
 dblGo s d i carry =

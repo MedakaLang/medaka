@@ -122,9 +122,9 @@ roundTripBack src e1 =
 
 roundTripCompare : String -> SqlExpr -> SqlExpr -> String -> RT
 roundTripCompare src e1 e2 s2 =
-  if e1 != e2 then
+  if e1 /= e2 then
     RtFail "\{src}  ==> AST CHANGED\n      first : \{dumpExpr e1}\n      second: \{dumpExpr e2}"
-  else if renderSqlExpr e2 != s2 then
+  else if renderSqlExpr e2 /= s2 then
     RtFail "\{src}  ==> render is not a fixpoint: `\{s2}` vs `\{renderSqlExpr e2}`"
   else
     RtOk

@@ -620,7 +620,7 @@ walkDecls st srcLines (d::ds) (p::ps) (c::rest) =
 -- of lib/printer.ml's length guard.
 export formatProgram : List Decl -> List DeclPos -> List Int -> List (List Int) -> List Comment -> Int -> String -> String
 formatProgram decls declPositions variantLines chainLines comments _lastContentLine src =
-  if listLen declPositions != listLen decls then stringConcat (map (d => render (printDecl d) ++ "\n") decls)
+  if listLen declPositions /= listLen decls then stringConcat (map (d => render (printDecl d) ++ "\n") decls)
   else
     let st0 = FmtState [] comments variantLines 0 False
     match drainAll (walkDecls st0 (splitNl src) decls declPositions chainLines)

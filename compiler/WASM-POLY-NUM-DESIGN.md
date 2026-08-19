@@ -100,7 +100,7 @@ Crucially, **native's "Num dict" is not a dictionary of function pointers either
 **runtime low-bit value-tag discriminator** in the C runtime (`runtime/medaka_rt.c`):
 
 ```
-static inline int mdk_is_int(long long w){ return (w & 1) != 0; }
+static inline int mdk_is_int(long long w){ return (w & 1) /= 0; }
 long long mdk_num_add(long long l, long long r){
   if (mdk_is_int(l)) return (((l>>1)+(r>>1))<<1)|1;      // odd immediate = Int
   return mdk_box_float(((double*)l)[1] + ((double*)r)[1]); // even pointer = boxed Float

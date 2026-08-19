@@ -4,5 +4,6 @@ main =
   let b = 3 > 5
   let c = 3 <= 3
   let d = 3 >= 4
-  let e = 3 != 4
-  println (debug a ++ " " ++ debug b ++ " " ++ debug c ++ " " ++ debug d ++ " " ++ debug e)
+  let e = 3 /= 4
+  println
+    (debug a ++ " " ++ debug b ++ " " ++ debug c ++ " " ++ debug d ++ " " ++ debug e)

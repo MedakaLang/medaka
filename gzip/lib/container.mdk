@@ -101,7 +101,7 @@ public export data GzipHeader =
 deriving (Eq, Debug)
 
 hasFlag : Int -> Int -> Bool
-hasFlag flg mask = bitAnd flg mask != 0
+hasFlag flg mask = bitAnd flg mask /= 0
 
 -- ---------------------------------------------------------------------------
 -- Parse
@@ -126,7 +126,7 @@ checkReserved flg
 -- One NUL-terminated byte run (FNAME / FCOMMENT payload, NUL not included).
 nulTerminated : ByteParser (List Int)
 nulTerminated = do
-  bs <- many (satisfy (!= 0))
+  bs <- many (satisfy (/= 0))
   _ <- byte 0
   pure bs
 
@@ -313,26 +313,8 @@ test "parseGzipHeader: FNAME set from a real gzip file" = expectEqual
     ))
   (parseGzipHeader (arrayFromList
     [
-      31,
-      139,
-      8,
-      8,
-      80,
-      155,
-      114,
-      106,
-      0,
-      3,
-      103,
-      114,
-      101,
-      101,
-      116,
-      46,
-      116,
-      120,
-      116,
-      0,
+      31, 139, 8, 8, 80, 155, 114, 106, 0, 3, 103, 114, 101, 101, 116, 46, 116,
+      120, 116, 0,
     ]))
 
 -- Trailer of the same `hello.gz`, cross-checked against
@@ -349,31 +331,8 @@ test "parseGzipTrailer: reads the LAST 8 bytes of a full member" = expectEqual
   (Ok (907060870, 5))
   (parseGzipTrailer (arrayFromList
     [
-      31,
-      139,
-      8,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      3,
-      203,
-      72,
-      205,
-      201,
-      201,
-      7,
-      0,
-      134,
-      166,
-      16,
-      54,
-      5,
-      0,
-      0,
-      0,
+      31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 203, 72, 205, 201, 201, 7, 0, 134, 166,
+      16, 54, 5, 0, 0, 0,
     ]))
 
 -- Error path: bad magic (first two bytes wrong). The failure position is 2,
@@ -383,10 +342,10 @@ test "parseGzipHeader: bad magic is rejected" = match parseGzipHeader (arrayFrom
   Err msg => expectEqual "not a gzip stream (bad magic) at byte 2" msg
   Ok _ => fail "expected Err on bad magic"
 
--- Error path: CM != 8 (deflate is the only method gzip actually uses).
-test "parseGzipHeader: CM != 8 is rejected" = match parseGzipHeader (arrayFromList [31, 139, 9, 0, 0, 0, 0, 0, 0, 3])
+-- Error path: CM /= 8 (deflate is the only method gzip actually uses).
+test "parseGzipHeader: CM /= 8 is rejected" = match parseGzipHeader (arrayFromList [31, 139, 9, 0, 0, 0, 0, 0, 0, 3])
   Err msg => expectEqual "unsupported compression method (CM=9); only 8 (deflate) is supported at byte 3" msg
-  Ok _ => fail "expected Err on CM != 8"
+  Ok _ => fail "expected Err on CM /= 8"
 
 -- Error path: a reserved FLG bit (bit 5, value 32) is set.
 test "parseGzipHeader: a reserved FLG bit is rejected" = match parseGzipHeader (arrayFromList [31, 139, 8, 32, 0, 0, 0, 0, 0, 3])
@@ -431,7 +390,7 @@ prop "emitGzipHeader/parseGzipHeader round-trips (numeric fields)" (mtimeIn : In
    string containing a NUL would truncate at the first one, which is a fact
    about NUL-terminated encoding, not a bug in this module). -}
 prop "emitGzipHeader/parseGzipHeader round-trips FNAME" (nameIn : String) =
-  let clean = fromUtf8 (arrayFromList (filter (b => b != 0) (toList (toUtf8 nameIn))))
+  let clean = fromUtf8 (arrayFromList (filter (b => b /= 0) (toList (toUtf8 nameIn))))
   let h = GzipHeader {
     mtime = 0,
     name = Some clean,

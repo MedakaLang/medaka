@@ -877,7 +877,7 @@ compareCellsSqlite : Cell -> Cell -> Ordering
 compareCellsSqlite a b =
   let ra = cellClassRank a
   let rb = cellClassRank b
-  if ra != rb then compare ra rb else compareSameClass a b
+  if ra /= rb then compare ra rb else compareSameClass a b
 
 compareSameClass : Cell -> Cell -> Ordering
 compareSameClass CNull CNull = Eq
@@ -902,7 +902,7 @@ compareBytesGo a b i la lb =
     Lt
   else if i >= lb then
     Gt
-  else if a[i] != b[i] then
+  else if a[i] /= b[i] then
     compare a[i] b[i]
   else
     compareBytesGo a b (i + 1) la lb

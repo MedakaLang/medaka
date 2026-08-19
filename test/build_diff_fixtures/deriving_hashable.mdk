@@ -86,7 +86,7 @@ eqAgree = [
 
 -- the ordinal seed distinguishes same-payload constructors
 ordinalSeed : (Bool, Bool, Int)
-ordinalSeed = (hash (A 1) != hash (B 1), hash (A 1) + 33 == hash (B 1), hash C)
+ordinalSeed = (hash (A 1) /= hash (B 1), hash (A 1) + 33 == hash (B 1), hash C)
 
 -- a newtype's hash is exactly its wrapped value's
 newtypeTransparent : Bool

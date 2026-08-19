@@ -606,7 +606,7 @@ textLit = lexeme
 -- Order matters — `escapedQuote` must be tried first, or the closing quote would
 -- end the string early.
 strChar : Parser Char
-strChar = orElse escapedQuote (satisfy (!= '\''))
+strChar = orElse escapedQuote (satisfy (/= '\''))
 
 escapedQuote : Parser Char
 escapedQuote = attempt

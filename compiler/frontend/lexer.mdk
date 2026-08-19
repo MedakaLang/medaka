@@ -92,10 +92,10 @@ public export data Token =
   | TMinusTight
   | TStar
   | TSlash
-  | TSlashEq
   | TMod
   | TEqEq
   | TNeq
+  | TBangEq
   | TLt
   | TGt
   | TLeq
@@ -191,10 +191,10 @@ tokenToString TMinus = "MINUS"
 tokenToString TMinusTight = "MINUS_TIGHT"
 tokenToString TStar = "STAR"
 tokenToString TSlash = "SLASH"
-tokenToString TSlashEq = "SLASHEQ"
 tokenToString TMod = "MOD"
 tokenToString TEqEq = "EQ_EQ"
 tokenToString TNeq = "NEQ"
+tokenToString TBangEq = "BANGEQ"
 tokenToString TLt = "LT"
 tokenToString TGt = "GT"
 tokenToString TLeq = "LEQ"
@@ -293,10 +293,10 @@ describeToken TMinus = "`-`"
 describeToken TMinusTight = "`-`"
 describeToken TStar = "`*`"
 describeToken TSlash = "`/`"
-describeToken TSlashEq = "`/=`"
 describeToken TMod = "`%`"
 describeToken TEqEq = "`==`"
-describeToken TNeq = "`!=`"
+describeToken TNeq = "`/=`"
+describeToken TBangEq = "`!=`"
 describeToken TLt = "`<`"
 describeToken TGt = "`>`"
 describeToken TLeq = "`<=`"
@@ -675,7 +675,7 @@ radixMagOverflows [] _ _ = False
 radixMagOverflows (d::rest) maxLen maxLead =
   let n = 1 + listLen rest
   n > maxLen
-    || n == maxLen && (digitVal d > maxLead || digitVal d == maxLead && anyList (!= '0') rest)
+    || n == maxLen && (digitVal d > maxLead || digitVal d == maxLead && anyList (/= '0') rest)
 
 radixLitOverflows : Array Char -> Int -> Int -> Char -> Bool
 radixLitOverflows src start endp k =
@@ -1032,7 +1032,7 @@ stripIndent s =
 stripIndentCs : String -> Array Char -> Int -> String
 stripIndentCs s cs n
   | n == 0 = s
-  | at cs 0 != '\n' = s
+  | at cs 0 /= '\n' = s
   | otherwise =
     let lines = splitLines cs 1 n ""
     let minInd = normalizeMin (minIndentGo lines indentSentinel)
@@ -1544,8 +1544,12 @@ scanOp src len pos depth id c
   | is2 src len pos ':' '=' = emit src len pos depth id TColonEq 2 0
   | is2 src len pos '+' '+' = emit src len pos depth id TPlusPlus 2 0
   | is2 src len pos '=' '=' = emit src len pos depth id TEqEq 2 0
-  | is2 src len pos '!' '=' = emit src len pos depth id TNeq 2 0
-  | is2 src len pos '/' '=' = emit src len pos depth id TSlashEq 2 0
+  -- #1739 half B: `/=` is the canonical not-equals; `!=` is only a sentinel,
+  -- caught by the `firstBangEqIdx` pre-scan below and reported as a located
+  -- "did you mean `/=`?" hint.  Keeping it a DISTINCT token (rather than
+  -- letting `!` `=` split) is what lets the hint point at the operator itself.
+  | is2 src len pos '!' '=' = emit src len pos depth id TBangEq 2 0
+  | is2 src len pos '/' '=' = emit src len pos depth id TNeq 2 0
   | is2 src len pos '<' '=' = emit src len pos depth id TLeq 2 0
   | is2 src len pos '>' '=' = emit src len pos depth id TGeq 2 0
   | is2 src len pos '&' '&' = emit src len pos depth id TAnd 2 0

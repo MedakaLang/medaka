@@ -296,7 +296,7 @@ diagNamesOf secs = map secName (filterList secIsDiag secs)
 -- report a clean pass — the exact silent-green failure this harness exists to kill.
 export parseStages : String -> Result String (List String)
 parseStages spec =
-  let names = filterList (!= "") (map (s => toUpper (trim s)) (split "," spec))
+  let names = filterList (/= "") (map (s => toUpper (trim s)) (split "," spec))
   match filterList (n => not (anyList (== n) snapSections)) names
     [] => Ok names
     bad => Err "unknown stage(s): \{joinWith ", " bad} (known: \{joinWith ", " snapSections})"
@@ -834,7 +834,7 @@ takeRun root outDir forceIsolate cli sel n (f::rest) =
   if n <= 0 then ([], f::rest)
   else
     let meta = metaOf root outDir f
-    if forceIsolate || isIsolatedIn meta || stagesIn cli meta != sel then ([], f::rest)
+    if forceIsolate || isIsolatedIn meta || stagesIn cli meta /= sel then ([], f::rest)
     else
       let (grp, tail2) = takeRun root outDir forceIsolate cli sel (n - 1) rest
       (f::grp, tail2)
@@ -1023,7 +1023,7 @@ renderSnapshot : List String -> List (String, String) -> String
 renderSnapshot metaExtra secs =
   let src = sectionOf "SOURCE" secs
   let meta = blockOf (["source_lines=\{intToString (length (contentLines src))}"] ++ metaExtra)
-  let body = flatMap (n => renderOne n secs) (filterList (!= "META") snapSections)
+  let body = flatMap (n => renderOne n secs) (filterList (/= "META") snapSections)
   stringConcat (["# META\n", meta] ++ body)
 
 renderOne : String -> List (String, String) -> List String
@@ -1070,7 +1070,7 @@ metaDiagsIn : List String -> List String
 metaDiagsIn [] = []
 metaDiagsIn (l::rest) =
   if startsWith "diagnostics=" l then
-    filterList (!= "") (map (s => toUpper (trim s)) (split "," (drop 12 l)))
+    filterList (/= "") (map (s => toUpper (trim s)) (split "," (drop 12 l)))
   else
     metaDiagsIn rest
 
@@ -1214,8 +1214,8 @@ compareSnap prev secs = match diffSections (parseSnapshot prev) (secPairs secs)
 -- and the run does not (a stage that used to render and now does not is a regression).
 diffSections : List (String, String) -> List (String, String) -> List String
 diffSections want got =
-  let names = filterList (!= "META") snapSections
-  filterList (n => sectionOf n want != sectionOf n got) names
+  let names = filterList (/= "META") snapSections
+  filterList (n => sectionOf n want /= sectionOf n got) names
 
 readOpt : String -> <IO> Option String
 readOpt p = match readFile p

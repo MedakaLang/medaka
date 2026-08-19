@@ -1,13 +1,13 @@
--- Fixture for rule-not-eq: negated equality `not (a == b)` / `not (a != b)`
--- (and the unary-`!` forms) → `a != b` / `a == b`.
+-- Fixture for rule-not-eq: negated equality `not (a == b)` / `not (a /= b)`
+-- (and the unary-`!` forms) → `a /= b` / `a == b`.
 
--- POSITIVE: `not` applied to `==` / `!=`.
+-- POSITIVE: `not` applied to `==` / `/=`.
 notEq a b = not (a == b)
-notNe a b = not (a != b)
+notNe a b = not (a /= b)
 
 -- POSITIVE: unary `!` form.
 bangEq a b = !(a == b)
-bangNe a b = !(a != b)
+bangNe a b = !(a /= b)
 
 -- POSITIVE: nested anywhere in a body.
 nested a b c = if not (a == b) then c else a

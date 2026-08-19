@@ -584,7 +584,7 @@ revLookupRoot cr ((n, dr)::rest) =
 -- contains the file.  Enumerating that over the tree is a directory walk plus
 -- the two-line rule above, i.e. cheaper than reading this paragraph:
 --
---   for every `<entry>.mdk` whose dir != findProjectRoot(dir):
+--   for every `<entry>.mdk` whose dir /= findProjectRoot(dir):
 --     for every `import <mid>`: resolve <mid> against [entryDir, projRoot,
 --     stdlibDir] first-hit; if the LAST of those roots containing the resolved
 --     file is not the one that resolved it, the id changes.  (Mirror

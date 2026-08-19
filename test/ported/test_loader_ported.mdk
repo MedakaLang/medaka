@@ -28,7 +28,17 @@
 --
 -- Run with: medaka test test/ported/test_loader_ported.mdk
 
-import test.{expectEqual, expectTrue, expectFalse, expectAll, pass, fail, runTests, Pass, Fail}
+import test.{
+  expectEqual,
+  expectTrue,
+  expectFalse,
+  expectAll,
+  pass,
+  fail,
+  runTests,
+  Pass,
+  Fail,
+}
 
 -- ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -58,10 +68,9 @@ mk2 : D
 mk2 = C { x = 1, y = 2 }
 
 upd : D -> D
-upd d =
-  match d
-    C { x, ... } => C { d | x = x + 10 }
-    _ => d
+upd d = match d
+  C { x, ... } => C { d | x = x + 10 }
+  _ => d
 
 test "cross-module named-field variant construct and update" =
   expectEqual "C { x = 11, y = 2 }" (debug (upd mk2))
@@ -75,8 +84,7 @@ import tagmod.{Tag, tag, mk}
 test "cross-module constrained dispatch string" =
   expectEqual "S" (mk 5 : String)
 
-test "cross-module constrained dispatch bool" =
-  expectTrue (mk 5 : Bool)
+test "cross-module constrained dispatch bool" = expectTrue (mk 5 : Bool)
 
 -- ── Phase 69.x-c: cross-module super dict dispatch ───────────────────────────
 -- Ported from: test_eval_super_dict_cross_module
@@ -107,8 +115,7 @@ test "cross-module method-level dict foldMap" =
 import mapmod.{wrap}
 import arrmod.{singleton}
 
-test "per-module isolation 2-arg singleton via wrap" =
-  expectEqual 7 (wrap 3 4)
+test "per-module isolation 2-arg singleton via wrap" = expectEqual 7 (wrap 3 4)
 
 test "per-module isolation 1-arg singleton direct" =
   expectEqual 500 (singleton 5)
@@ -147,31 +154,24 @@ oeResult = isEmpty [1, 2, 3]
 olResult : List Int
 olResult = toList (Some 7)
 
-test "standalone toList divergent pair type" =
-  match pairsResult
-    [(k, v)] => expectAll
-      [ expectEqual 1 k
-      , expectEqual 2 v
-      ]
-    _ => fail "unexpected pairsResult shape"
+test "standalone toList divergent pair type" = match pairsResult
+  [(k, v)] => expectAll [expectEqual 1 k, expectEqual 2 v]
+  _ => fail "unexpected pairsResult shape"
 
-test "standalone isEmpty box returns False" =
-  expectFalse beResult
+test "standalone isEmpty box returns False" = expectFalse beResult
 
-test "method isEmpty list via Foldable" =
-  expectFalse oeResult
+test "method isEmpty list via Foldable" = expectFalse oeResult
 
-test "method toList option via Foldable" =
-  match olResult
-    [x] => expectEqual 7 x
-    _ => fail "unexpected olResult shape"
+test "method toList option via Foldable" = match olResult
+  [x] => expectEqual 7 x
+  _ => fail "unexpected olResult shape"
 
 -- ── Phase 151 / Gap G: operator dispatch to user Eq/Ord ─────────────────────
 -- Ported from: test_eval_operator_dispatch_cross_module
 -- level.mdk: Level = Apple | Zebra, ranked inversely (Apple=100, Zebra=1)
 -- Apple < Zebra = False (rank 100 < rank 1 = False)
 -- Apple == Zebra = False
--- Apple != Zebra = True
+-- Apple /= Zebra = True
 
 import level.{Level, Apple, Zebra}
 
@@ -181,8 +181,8 @@ test "gap G operator < dispatches to user Ord (apple < zebra = false)" =
 test "gap G operator == dispatches to user Eq (apple == zebra = false)" =
   expectFalse (Apple == Zebra)
 
-test "gap G operator != dispatches to user Eq (apple != zebra = true)" =
-  expectTrue (Apple != Zebra)
+test "gap G operator /= dispatches to user Eq (apple /= zebra = true)" =
+  expectTrue (Apple /= Zebra)
 
 -- ── Phase 88: two-pass elaboration, poly-monad cross-module ─────────────────
 -- Ported from: test_eval_poly_monad_cross_module
@@ -237,5 +237,4 @@ test "foldable-derived length over imported instance" =
 
 import applymod.{apply}
 
-test "import shadows prelude apply" =
-  expectEqual 7 (apply 3 4)
+test "import shadows prelude apply" = expectEqual 7 (apply 3 4)

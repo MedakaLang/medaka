@@ -849,9 +849,9 @@ export decodeSetParam : String -> List String
 decodeSetParam s =
   let n = stringLength s
   if n >= 2 && stringSlice 0 1 s == "{" && stringSlice (n - 1) n s == "}" then
-    sortUniqS (filterList (!= "") (splitOnComma (stringSlice 1 (n - 1) s)))
+    sortUniqS (filterList (/= "") (splitOnComma (stringSlice 1 (n - 1) s)))
   else
-    sortUniqS (filterList (!= "") (splitOnComma s))
+    sortUniqS (filterList (/= "") (splitOnComma s))
 
 -- WS-4: a PRODUCT written param is carried in the `Option String` carrier as a
 -- structured SENTINEL string the parser's `effParamFor` product clause builds:
@@ -3703,7 +3703,7 @@ addAliasDecl name o params rhs ord pub att env =
 --      it is eight leaf read paths, not three), and `ieSnapAt` is no longer a
 --      reader of this predicate at all, having moved to `ieCandidacyVisibleAt` at
 --      A-3.6.  DERIVE the set; do not carry a count.
---   2. `ad.adOrd != cur` — the OWN-ROW EXCLUSION.  ⚠️ THIS ONE IS STRUCTURAL, NOT
+--   2. `ad.adOrd /= cur` — the OWN-ROW EXCLUSION.  ⚠️ THIS ONE IS STRUCTURAL, NOT
 --      TRANSITIONAL.  This clause used to justify itself by "A-3.6 deletes
 --      `declEnvVisibleAt`'s body, at which point condition 1 reduces to the
 --      publicity conjunct alone and this line is the only thing still keeping the
@@ -3719,8 +3719,8 @@ addAliasDecl name o params rhs ord pub att env =
 --      arrive by a route this unit does not touch (`registerAllData … prog0`
 --      conses them onto the front of the working `aliasTableRef`).  Dropping
 --      this would double-register every public alias the reader declares.
---      Conditions 1 ∧ 2 are exactly the `<` the accumulator had (`<=` ∧ `!=`).
---      ⚠️ This used to add "under A-3.6 they reduce to `adPub && adOrd != cur`,
+--      Conditions 1 ∧ 2 are exactly the `<` the accumulator had (`<=` ∧ `/=`).
+--      ⚠️ This used to add "under A-3.6 they reduce to `adPub && adOrd /= cur`,
 --      which is the intended end state".  They do NOT: A-3.6 left the alias table
 --      — a NAME-scoping table — on `declEnvVisibleAt`, deliberately, because
 --      `DICT-SEMANTICS.md`'s I5 boundary clause says its price does not extend to
@@ -3774,7 +3774,7 @@ aliasUniverseAt cur ((key, ad)::rest)
 -- conditions 2 and 3 remain structural whatever happens to condition 1.
 aliasVisibleTo : Int -> AliasDecl -> Bool
 aliasVisibleTo cur ad = declEnvVisibleTo cur ad.adOrd ad.adPub
-  && ad.adOrd != cur
+  && ad.adOrd /= cur
   && not ad.adAttrib
 
 -- Fixture for the doctests below: a PUBLIC alias in the prelude row (ordinal 0),
@@ -3918,7 +3918,7 @@ deFieldOwnerSameNameEnv = buildDataEnv
 -- property a bare-name multimap cannot state, since two `String`s "Pt"/"Pt"
 -- carry no way to tell them apart.
 distinctIdentsIn2 : List (Ident, String) -> Bool
-distinctIdentsIn2 [(i1, _), (i2, _)] = i1 != i2
+distinctIdentsIn2 [(i1, _), (i2, _)] = i1 /= i2
 distinctIdentsIn2 _ = False
 
 -- ── doctests ─────────────────────────────────────────────────────────────
@@ -5919,7 +5919,7 @@ data Predicate = Predicate { iface : IfaceRef, args : List Mono }
 -- `OblProjection`).  `prov` is still documentary — no checker branches on it (§2.3(a));
 -- it is stamped so the I2 uniform-deferral work does not need a second migration.
 data Provenance =
-  -- +,-,*,/,%, ==,!=,<,>,<=,>=, ++, unary -  (recordIfaceObligation)
+  -- +,-,*,/,%, ==,/=,<,>,<=,>=, ++, unary -  (recordIfaceObligation)
   | POperator
   -- a numeric literal's Num obligation  (inferNumLitBare)
   | PNumLit
@@ -6787,7 +6787,7 @@ erredDuring : (Unit -> a) -> (Bool, a)
 erredDuring act =
   let before = perRun.value.errorsDetected.value
   let result = act ()
-  (perRun.value.errorsDetected.value != before, result)
+  (perRun.value.errorsDetected.value /= before, result)
 
 -- Push one type-error message, snapshotting the current ELoc span (B.10.2b).
 pushTypeError : String -> String -> Unit
@@ -7529,7 +7529,7 @@ typeMismatchReportRest a b = match currentDoOrigin.value
 -- yields `None` here and its message is untouched.  That residual is #1243.)
 sameSpellingHint : Mono -> Mono -> Option String
 sameSpellingHint a b
-  | ppMono a != ppMono b = None
+  | ppMono a /= ppMono b = None
   | otherwise = map idConflictHelp (firstIdConflict a b)
 
 idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
@@ -7566,7 +7566,7 @@ firstIdConflict a b = match (normalize a, normalize b)
 -- otherwise fall back to the plain mismatch (the loc stays the do-block's).
 typeMismatchInDo : Mono -> Mono -> Loc -> Unit
 typeMismatchInDo a b doLoc
-  | monoIsApp (normalize a) != monoIsApp (normalize b) =
+  | monoIsApp (normalize a) /= monoIsApp (normalize b) =
     recordDoMonadError doLoc
   | otherwise =
     pushTypeError "T-TYPE-MISMATCH" "Type mismatch: \{ppMono a} vs \{ppMono b}"
@@ -7733,8 +7733,8 @@ isCtorAppSpine : Expr -> Bool
 isCtorAppSpine (ELoc _ e) = isCtorAppSpine e
 isCtorAppSpine (EDoOrigin _ e) = isCtorAppSpine e
 isCtorAppSpine (EApp f x) = isCtorAppSpine f && isNonexpansive x
-isCtorAppSpine (EVar name) = name != "Ref" && ctorHeadIsUpper name
-isCtorAppSpine (EVarId name _) = name != "Ref" && ctorHeadIsUpper name
+isCtorAppSpine (EVar name) = name /= "Ref" && ctorHeadIsUpper name
+isCtorAppSpine (EVarId name _) = name /= "Ref" && ctorHeadIsUpper name
 isCtorAppSpine _ = False
 
 -- True iff the first character of a name is an ASCII uppercase letter,
@@ -8106,7 +8106,7 @@ aliasDfsVisit graph visitedRef onStackRef cyclicOut name =
     else
       onStackRef := name::onStackRef.value
       let _ = aliasDfsVisitNeighbors graph visitedRef onStackRef cyclicOut (fromOption [] (lookupAssoc name graph))
-      onStackRef := filterList (!= name) onStackRef.value
+      onStackRef := filterList (/= name) onStackRef.value
       visitedRef := name::visitedRef.value
 
 aliasDfsVisitNeighbors : List (String, List String) -> Ref (List String) -> Ref (List String) -> Ref (List String) -> List String -> Unit
@@ -10539,7 +10539,7 @@ recordArithSite op dref m
 -- see the recursion note there.
 binopMethod : String -> Option String
 binopMethod "==" = Some "eq"
-binopMethod "!=" = Some "eq"
+binopMethod "/=" = Some "eq"
 binopMethod "<" = Some "lt"
 binopMethod ">" = Some "gt"
 binopMethod "<=" = Some "lte"
@@ -10578,7 +10578,7 @@ inferBinop "/" lt rt = numArithOp lt rt
 inferBinop "%" lt rt = numArithOp lt rt
 inferBinop "++" lt rt = appendOp lt rt
 inferBinop "==" lt rt = eqCompareOp lt rt
-inferBinop "!=" lt rt = eqCompareOp lt rt
+inferBinop "/=" lt rt = eqCompareOp lt rt
 inferBinop "<" lt rt = ordCompareOp lt rt
 inferBinop ">" lt rt = ordCompareOp lt rt
 inferBinop "<=" lt rt = ordCompareOp lt rt
@@ -10613,7 +10613,7 @@ appendOp lt rt =
   lt
 
 -- #146: unified operator-obligation recorder.  The arithmetic (`+ - * / %`, unary
--- `-`), comparison (`== != < > <= >=`) and append (`++`) operators each carry an
+-- `-`), comparison (`== /= < > <= >=`) and append (`++`) operators each carry an
 -- interface obligation on their (unified) operand type via pushPendingObl — a
 -- synthetic obligation with a bare iface-param declared type (`TyVar "a"`, typaram
 -- ["a"]) so dispatchMonosOf recovers exactly the operand mono.  Gated on the PRELUDE's
@@ -11110,7 +11110,7 @@ tagLitLocsWithRoot id kind ((mv, l)::rest) =
     ()
   tagLitLocsWithRoot id kind rest
 
--- Stage-1 Eq dispatch (EQ-DISPATCH-DESIGN.md §2.1): `==`/`!=` carry an `Eq`
+-- Stage-1 Eq dispatch (EQ-DISPATCH-DESIGN.md §2.1): `==`/`/=` carry an `Eq`
 -- obligation on their (unified) operand type — a verbatim mirror of
 -- `recordIfaceObligation` for `+`.  We reuse the existing pendingImplObligations /
 -- checkImplObligations path: a synthetic Eq obligation with a bare iface-param
@@ -11119,7 +11119,7 @@ tagLitLocsWithRoot id kind ((mv, l)::rest) =
 -- un-derived ADT) with no `impl Eq`, the post-inference check rejects; while still
 -- a polymorphic var (an `Eq a =>` site) allConcreteHeads defers it to the caller
 -- — exactly the Num behaviour.  `<`/`>`/`<=`/`>=` carry the sibling `Ord`
--- obligation via `ordCompareOp` below.  `!=` shares this seam and lowers to
+-- obligation via `ordCompareOp` below.  `/=` shares this seam and lowers to
 -- `not (eq …)` at the dict layer (binopMethodApp), so it does not double-report.
 --
 -- Gated on the PRELUDE's `Eq` being present (`builtinClassPresent BEq`, #1539): the
@@ -11249,7 +11249,7 @@ inferVarPlainId env x id = match lookupVar env x
 -- to this call's fresh mono, recorded as a call obligation checked after inference.
 -- A binding with no recorded obligations takes the plain instantiate path (identical
 -- mono).  Mirrors lib/typecheck.ml re-checking inferred_constraints at every use.
--- #837: [id] is the occurrence's binding id (from EVarId).  When id != 0 the
+-- #837: [id] is the occurrence's binding id (from EVarId).  When id /= 0 the
 -- lookup keys EXACTLY (x, id) — so a top-level `g`'s use can never pick up a
 -- where-helper `g`'s obligations.  id == 0 (local/where/cross-module/global, or
 -- any non-EVarId caller) falls to the bare-name scan — byte-identical to today.
@@ -11382,7 +11382,7 @@ substMonos (id::rest) subst = match lookupAssocI id subst
   Some mono => map (mono :: _) (substMonos rest subst)
   None => None
 
--- #837: (name, id)-keyed lookup over schemeObligationsRef.  id != 0 keys the
+-- #837: (name, id)-keyed lookup over schemeObligationsRef.  id /= 0 keys the
 -- occurrence's binding EXACTLY; id == 0 falls to the bare-name scan (today's path).
 lookupSchemeObls : String -> Int -> List ((String, Int), List VecObl) -> Option (List VecObl)
 lookupSchemeObls x 0 table = lookupSchemeOblsByName x table
@@ -11890,7 +11890,7 @@ definerShadowArgHead (EMethodAt name tagRef implRef _)
 definerShadowArgHead _ = None
 
 -- L4 (xmod-identity #1351 spine, RUN-XMOD-022/026): the mark pass's own per-occurrence
--- verdict, named rather than left as an anonymous `routeLocalSym … != ""` idiom.
+-- verdict, named rather than left as an anonymous `routeLocalSym … /= ""` idiom.
 -- `rewriteArgScoped`'s `sm` arm is the SOLE origin of a non-empty RLocal symbol on an
 -- EMethodAt route (F8); every other RLocal stamp propagates that origin symbol
 -- unchanged.  This is NOT a graph-wide fact and is NOT interchangeable with one: "The
@@ -11898,7 +11898,7 @@ definerShadowArgHead _ = None
 -- standaloneValuesRef) is what keeps this from pinning the compiler's genuine
 -- method-values and breaking dispatch" (this file, historically beside this site).
 occurrenceCarriesMangledShadowSym : Ref Route -> Bool
-occurrenceCarriesMangledShadowSym tagRef = routeLocalSym tagRef.value != ""
+occurrenceCarriesMangledShadowSym tagRef = routeLocalSym tagRef.value /= ""
 
 -- #54: the SECOND disjunct of definerShadowArgHead — the IMPORTER-on-emit signal, kept
 -- separate because it carries a DIFFERENT gate from the definer one.  The mark pass seeds
@@ -11910,7 +11910,7 @@ occurrenceCarriesMangledShadowSym tagRef = routeLocalSym tagRef.value != ""
 -- path the route is RNone (sym ""), so this is inert there.
 --
 -- L4: this predicate now names its two conjuncts separately instead of conflating them in
--- one `routeLocalSym … != ""` test.  `driverState.value.mangledFunDefsPresentRef.value`
+-- one `routeLocalSym … /= ""` test.  `driverState.value.mangledFunDefsPresentRef.value`
 -- (L3) is the GRAPH-level fact "this compile's decls carry mangled funDefs at all";
 -- `occurrenceCarriesMangledShadowSym tagRef` is the mark pass's own PER-OCCURRENCE verdict
 -- for THIS route.  The new graph-level conjunct is ADDED, not substituted for the
@@ -11941,7 +11941,7 @@ occurrenceCarriesMangledShadowSym tagRef = routeLocalSym tagRef.value != ""
 -- documentation of an implicit invariant, not a live condition.  Do not migrate a
 -- reader onto it expecting it to select.  KEPT rather than reverted (owner ruling,
 -- RUN-XMOD-045): provably zero-risk, and "this graph was mangled" is more readable
--- than the anonymous `routeLocalSym … != ""` idiom it replaced, even though it cannot
+-- than the anonymous `routeLocalSym … /= ""` idiom it replaced, even though it cannot
 -- currently narrow anything a build-time `medaka check`/`run`/`build` differential
 -- could observe from outside the compiler.
 importerShadowOnEmitPath : String -> Ref Route -> Bool
@@ -11974,7 +11974,7 @@ inferDefinerShadowApp env name tagRef implRef f x =
   -- "imported" once the impl sat in a topologically later module.  Do not re-derive the
   -- retired claim from the old wording.
   -- the head against the METHOD scheme; else it is the STANDALONE.  Without this the
-  -- mangled emit path (sym != "") ALWAYS typed against the standalone scheme
+  -- mangled emit path (sym /= "") ALWAYS typed against the standalone scheme
   -- (`Int -> Int`), so a definer shadow whose impl is IMPORTED (`size (Box 3)`, d8)
   -- rejected `Int vs Box` at build/run instead of dispatching to the imported impl.
   let xt = infer env x
@@ -12063,7 +12063,7 @@ inferDefinerShadowApp env name tagRef implRef f x =
   -- or a wrapper generalized over the shadow receiver then called at a live-impl type)
   -- becomes a located reject instead of build-time garbage.  A grounded receiver WITH
   -- an impl still dispatches (no enforcement) — that arm is untouched.  On the mangled
-  -- emit path (sym != "") `ft` is already the standalone scheme (definerShadowHeadType),
+  -- emit path (sym /= "") `ft` is already the standalone scheme (definerShadowHeadType),
   -- which enforces the domain itself, so this stays inert there.
   let _ = if sym == "" then enforceStandaloneDomain env name xt dloc else ()
   inferApp (envAlphaLets env) (EApp f x) ft xt
@@ -12074,7 +12074,7 @@ inferDefinerShadowApp env name tagRef implRef f x =
 --
 -- ⚠️ It is NOT the same question as "did we reach inferDefinerShadowApp".  That entry point
 -- (definerShadowArgHead) ALSO fires for an IMPORTER shadow on the mangled emit path, where
--- the mark pass seeded the route with the provider's mangled symbol (`routeLocalSym != ""`)
+-- the mark pass seeded the route with the provider's mangled symbol (`routeLocalSym /= ""`)
 -- — see its header.  Inverting on that signal would invert importer shadows too, which
 -- Fork 1 forbids: it breaks the everyday `import map` pattern (`isEmpty [1,2]` must still
 -- reach `Foldable.isEmpty`).  definerShadowNamesRef holds bare names on EVERY path — the
@@ -12244,7 +12244,7 @@ groundShadowReceiver dom xt isDictVar dloc
 
 -- P0-20: the definer-shadow standalone's declared domain, resolved on EITHER path.
 -- Un-mangled run/check (sym == ""): the module's own sig table, keyed by the bare name.
--- Mangled emit (sym != ""): private_mangle renamed the standalone to `<mid>__name`, so
+-- Mangled emit (sym /= ""): private_mangle renamed the standalone to `<mid>__name`, so
 -- definerShadowSigsRef has no `name` entry — take the domain off the env binding for the
 -- mangled symbol, which is the very scheme definerShadowHeadType types this site against.
 shadowDomainFor : TcEnv -> String -> String -> Option Mono
@@ -12956,7 +12956,7 @@ tupleCallShapeHint f x ft = match tupleArgElems x
     let n = listLen es
     if n < 2 then
       None
-    else if funArity ft != n then
+    else if funArity ft /= n then
       None
     else if domainIsTupleOfArity ft n then
       None
@@ -14152,7 +14152,7 @@ schemeMono (Forall _ _ t) = t
 -- whose own type shares one of these is *method-constrained by the enclosing fn's
 -- dispatch* — its receiver var unifies (at the helper's call site) with the
 -- enclosing fn's constraint var that activeDictVars maps to a dict param.  We must
--- NOT generalize over such a var, or the helper instantiates a fresh (id != the
+-- NOT generalize over such a var, or the helper instantiates a fresh (id /= the
 -- enclosing constraint var) so resolveArgStamp can't see the in-scope dict → the
 -- in-body method route degrades to RNone → arg-tag → native panic on a primitive
 -- receiver.  Keeping it monomorphic links the ids (normalize collapses them) so the
@@ -16194,9 +16194,9 @@ cohImplOfRow r = match ieRowTriple r
 -- The prelude is ALWAYS ordinal 0 on the Module arm, structurally: `buildDeclEnvs`
 -- builds `declEnvModulesFrom 0 (("core", coreDecls)::modules)`, so nothing else can be.
 --
--- ⚠️ AND A HARDCODED `!= 0` WOULD BE WRONG — IT IS THE MOST DANGEROUS LINE IN THIS
+-- ⚠️ AND A HARDCODED `/= 0` WOULD BE WRONG — IT IS THE MOST DANGEROUS LINE IN THIS
 -- UNIT.  `flatImplEnvOf` builds its ONE user module at ordinal 0, so on the Flat arm
--- `!= 0` drops EVERY row and turns every flat coherence rejection into a silent
+-- `/= 0` drops EVERY row and turns every flat coherence rejection into a silent
 -- accept.  Flat's prelude/user boundary is carried by the decl list the driver hands
 -- in (`coherenceUserDecls`), not by an ordinal, so Flat passes `False` here and there
 -- is nothing to filter.  Module passes `True`.
@@ -16513,7 +16513,7 @@ cohScanDone _ = False
 --   * `sameTyConHead n1 o1 n2 o2 = n1 == n2 && not (tyConIdsConflict o1 o2)`
 --     (`frontend/ast.mdk`) — name equality, and an ABSENT origin makes NO CLAIM, so
 --     it matches anything.
---   * `ifaceIdMatches a b = a != "" && a == b` (`frontend/ast.mdk`) — absence NEVER
+--   * `ifaceIdMatches a b = a /= "" && a == b` (`frontend/ast.mdk`) — absence NEVER
 --     matches, not even itself.
 -- `recordCandIsType`'s header states which to use when, and the rule is about the
 -- QUESTION being asked, not about the table: `sameTyConHead` belongs where a false
@@ -16619,7 +16619,7 @@ cohClassify sweep e1 xs ys mid1 mid2 (CohScan hard soft)
 -- sweep?".  That proxy held only because the per-module sweep's input came from
 -- `cohImplsOf`, which had no module id to stamp and so stamped `""`.  Pointing that
 -- sweep at `IE` gives every row a REAL id (`instRefMid`), so an intra-module pair
--- arrives as `(m, m)` with `m != ""` — the first arm stops matching, `cohIsCrossModule
+-- arrives as `(m, m)` with `m /= ""` — the first arm stops matching, `cohIsCrossModule
 -- m m` is `False`, and EVERY intra-module `W-INCOMPARABLE-IMPLS` silently stops being
 -- reported.  Diagnostic-only, so no value golden in this tree could see it.
 --
@@ -16658,7 +16658,7 @@ cohHardMsg e1 xs ys mid1 mid2
   | otherwise = cohOverlapMsg (cohImplIfaceName e1) xs ys
 
 cohIsCrossModule : String -> String -> Bool
-cohIsCrossModule mid1 mid2 = mid1 != "" && mid2 != "" && mid1 != mid2
+cohIsCrossModule mid1 mid2 = mid1 /= "" && mid2 /= "" && mid1 /= mid2
 
 -- SOFT wording (`W-INCOMPARABLE-IMPLS`).  Carries the "Warning: " prefix the
 -- `matchWarnings` channel's text renderers expect and `stripWarnPrefix` removes for
@@ -17220,7 +17220,7 @@ anyUsePathBinds (_::rest) n c = anyUsePathBinds rest n c
 usePathWitnesses : UsePath -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
 usePathWitnesses path n (ident, _) =
   let dep = usePathModuleId path
-  dep != "core" && usePathBindsName path n && depExportsMethodIdent dep n ident
+  dep /= "core" && usePathBindsName path n && depExportsMethodIdent dep n ident
 
 -- `None` from importedBindings is the WILDCARD form (`import m.*`), which binds every
 -- name the dependency exports — and, unlike A-2.5's deleted `usePathNamesMember`, that
@@ -17488,7 +17488,7 @@ anyUsePathBindsCtor (_::rest) n owner ident =
 usePathWitnessesCtor : UsePath -> String -> String -> Ident -> Bool
 usePathWitnessesCtor path n owner ident =
   let dep = usePathModuleId path
-  dep != "core"
+  dep /= "core"
     && usePathBindsCtor path n owner
     && depExportsCtorIdent dep n ident
 
@@ -19179,7 +19179,7 @@ entryCovers (KeyEntry _ _ _ _ _ candTys _ _) (KeyEntry _ _ _ _ _ otherTys _ _) =
 -- unreachable between two impls of ONE interface, which share that interface's arity.
 tySubsumesV : List Ty -> List Ty -> Bool
 tySubsumesV generals specifics
-  | listLen generals != listLen specifics = False
+  | listLen generals /= listLen specifics = False
   | otherwise =
     isSome (matchOneSided tyStep eqStr tyStructEq (zipL generals specifics) [])
 
@@ -19360,7 +19360,7 @@ ieRowHeadMatches [] _ = False
 -- depend on the "no interface is builtin" invariant holding.
 --
 -- ⚠️ NOT `ifaceIdMatches`, and the choice is the whole point of the bite.  That is
--- the LOOKUP-direction rule (`a != "" && a == b`) — absence NEVER matches — which
+-- the LOOKUP-direction rule (`a /= "" && a == b`) — absence NEVER matches — which
 -- would make every flat-driver interface (single-file `check`, lsp, repl, doc: they
 -- deliberately stamp nothing) a non-match and silently empty this scan.  The two
 -- rules document each other at `frontend/ast.mdk`; neither may be copied to the
@@ -20091,7 +20091,7 @@ augmentWithParams headSub implTys paramMonos
 -- single-param interface ([resultMono] only) behaves exactly as the old matchTyMono.
 implHeadSubst : List Ty -> List Mono -> Option (List (String, Mono))
 implHeadSubst pats concretes
-  | listLen pats != listLen concretes = None
+  | listLen pats /= listLen concretes = None
   | otherwise = implHeadSubstGo pats concretes (Some [])
 
 implHeadSubstGo : List Ty -> List Mono -> Option (List (String, Mono)) -> Option (List (String, Mono))
@@ -20147,7 +20147,7 @@ matchTyMono headTy resultMono =
 -- matchTyMono term for term: `zipL [t] [m] == [(t, m)]`.
 matchTyMonos : List Ty -> List Mono -> Option (List (String, Mono))
 matchTyMonos pats goals
-  | listLen pats != listLen goals = None
+  | listLen pats /= listLen goals = None
   | otherwise = matchOneSided matchStep eqStr cohEqMono (zipL pats goals) []
 
 -- Does an impl whose head vector is [itys] (arg-0 pattern [hty]) match the goal
@@ -20763,7 +20763,7 @@ routesOfMonos implTable keyTable (m::rest) =
 --   • `iface == ""` ⇒ `goals == [m]`, so the iface-unknown arm is untouched however many
 --     callers supply a vector.  `topRouteV` additionally declines to build one at all
 --     when `iface == ""`, so the two pins agree from both ends.
---   • `iface != ""` ⇒ selection runs through `ieSelectRowByIface`, which matches
+--   • `iface /= ""` ⇒ selection runs through `ieSelectRowByIface`, which matches
 --     `ifn == iface` and (for `iface == ""`) returns nothing either way.  A longer
 --     [goals] can only make `entryHeadMatches` STRICTER — it is the arg-0 FALLBACK that
 --     the short vector was triggering — so a second supplier cannot widen any match.
@@ -21017,7 +21017,7 @@ dictPass names prog =
 -- the body reads; resolveBinopSite stamped them into the RKey route's reqs, which
 -- binopMethodApp now forwards as the EMethodAt impl-dict routes (the 3rd ref).  A
 -- non-parametric concrete impl stamps empty reqs → the plain direct call.
---   <→lt  >→gt  <=→lte  >=→gte  ==→eq  !=→not (eq a b)
+--   <→lt  >→gt  <=→lte  >=→gte  ==→eq  /=→not (eq a b)
 rewriteBinopExpr : Expr -> Expr
 rewriteBinopExpr (EBinOp op l r routeRef) = match routeRef.value
   RNone => EBinOp op l r routeRef
@@ -21086,9 +21086,9 @@ binopMethodApp op l r routeRef =
   let method = fromOption "eq" (binopMethod op)
   let split = binopRouteSplit routeRef.value
   let call = EApp (EApp (EMethodAt method (Ref (fst split)) (Ref (snd split)) (Ref [])) l) r
-  if op == "!=" then EApp (EVar "not") call else call
+  if op == "/=" then EApp (EVar "not") call else call
 
--- The EUnOp analogue of binopMethodApp: one operand, no `!=`-style postfix
+-- The EUnOp analogue of binopMethodApp: one operand, no `/=`-style postfix
 -- (unopMethod only ever routes `-`).  Reuses binopRouteSplit (a generic
 -- Route-ripping helper — nothing about it is binop-specific).
 unopMethodApp : String -> Expr -> Ref Route -> Expr
@@ -21588,7 +21588,7 @@ ppConName n = match tupleTagArity n
 -- message.  A TVar-headed other side returns False (it can still bind).
 tupleUnifyClash : Mono -> Mono -> Bool
 tupleUnifyClash a b = match (tupleSpine a, tupleSpine b)
-  (Some xs, Some ys) => listLen xs != listLen ys
+  (Some xs, Some ys) => listLen xs /= listLen ys
   (Some _, None) => monoSpineHeadIsCon b
   (None, Some _) => monoSpineHeadIsCon a
   (None, None) => False
@@ -22902,7 +22902,7 @@ insertUnivImpl univ (iface, tys, reqs) =
 -- misses); `declaredConstraintSlots` feeds `inferDictAtFound`, which calls
 -- `recordCallObligations`, which calls `recordObl (Predicate { iface = s.csIface, … })
 -- 0 PCallSlot …` — an `ImplUniverse` goal, unconditionally, for any slot whose
--- `csIface.irName != ""`. So the SAME value this fallback mints reaches BOTH a
+-- `csIface.irName /= ""`. So the SAME value this fallback mints reaches BOTH a
 -- routing site AND a goal-producing one, through two different readers of
 -- `funConstraintIfacesRef`. Bare BY CONSTRUCTION (this channel stores route words,
 -- §10.3's still-true half) — but that is a FOURTH reason the leg stays, not evidence
@@ -25066,7 +25066,7 @@ removeAllS drop (x::xs)
 -- exact O(program) scan (emit path, byte-identical to before).  The table stores
 -- `mname -> (iface, typarams, mty)` — the SAME (typarams, mty) ifaceMethodTy extracts.  It
 -- is method-NAME-keyed last-write-wins, so on a rare cross-interface method-name COLLISION a
--- lookup whose stored iface != [iface] returns None; that only makes the check-path
+-- lookup whose stored iface /= [iface] returns None; that only makes the check-path
 -- obligation pass SKIP that impl body (a missed reject, deferred to build — the pre-#760
 -- status quo), never a false reject, and never touches the emit path.
 -- #822: BOTH paths also return the interface's graded scope, so a caller cannot obtain
@@ -25638,7 +25638,7 @@ keepGroupNames : OrdMap Unit -> List String -> List String
 keepGroupNames nameSet refs = filterList (r => omHasKey r nameSet) refs
 
 filterNonSelf : String -> List String -> List String
-filterNonSelf name xs = filterList (!= name) xs
+filterNonSelf name xs = filterList (/= name) xs
 
 -- process each SCC as a letrec group in topological order
 processSCCs : TcEnv -> List (String, Ty) -> OrdMap (List (List Pat, Expr)) -> List (List String) -> List (String, Scheme)
@@ -27117,7 +27117,7 @@ registerInferredFor m ids =
 ifaceForInferredId : String -> Int -> IfaceRef
 ifaceForInferredId m id =
   let direct = ifaceForConstraintId id
-  if direct.irName != "" then direct
+  if direct.irName /= "" then direct
   else match lookupSchemeIface m id perRun.value.schemeObligationsRef.value
     Some ir => ir
     None => match ifaceFromDictApps id perRun.value.dictApps.items.value
@@ -27157,7 +27157,7 @@ ifaceAtMonoId _ [] _ = None
 ifaceAtMonoId _ _ [] = None
 ifaceAtMonoId id (m::ms) (i::is) = match normalize m
   TVar cell =>
-    if tyvarId cell == id && i != "" then
+    if tyvarId cell == id && i /= "" then
       Some i
     else
       ifaceAtMonoId id ms is
@@ -30859,14 +30859,14 @@ declTopFnNames decls = map fst (funDefs decls)
 -- importer is in scope when [mid] is dict-passed.
 transitiveImporterDecls : String -> List (String, List Decl) -> List Decl
 transitiveImporterDecls mid modules = flatMap
-  (p => if fst p != mid && transitivelyImports (fst p) mid modules then snd p else [])
+  (p => if fst p /= mid && transitivelyImports (fst p) mid modules then snd p else [])
   modules
 
 -- the module IDS that transitively import [mid] (excluding [mid]) — the id-level
 -- analog of transitiveImporterDecls, for the scopeArities owning-module set.
 transitiveImporterIds : String -> List (String, List Decl) -> List String
 transitiveImporterIds mid modules = flatMap
-  (p => if fst p != mid && transitivelyImports (fst p) mid modules then [fst p] else [])
+  (p => if fst p /= mid && transitivelyImports (fst p) mid modules then [fst p] else [])
   modules
 
 -- does module [a] transitively import module [target]?

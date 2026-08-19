@@ -217,7 +217,7 @@ message reaches the top).
 
 `parseResult` already runs a chain of **pre-grammar token scans** that produce
 located, beginner-grade messages for known foreign-syntax mistakes
-(`parser.mdk:3585-3599`): `/=`→`!=`, inline-`let`-missing-`in`, Haskell
+(`parser.mdk:3585-3599`): `!=`→`/=`, inline-`let`-missing-`in`, Haskell
 `case … of`, Haskell `::` type sig, plus `TLexError` (unterminated string/comment,
 `\`-lambda, `$`). Each is a pure scan returning `Err (mkLocated … msg idx)` with a
 **real token index** — so it *already* dodges the `1:0` collapse for its cases,

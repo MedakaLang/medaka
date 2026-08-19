@@ -441,7 +441,7 @@ export impl Foldable Set where
    > eq (fromList [1, 2, 3]) (fromList [3, 2, 1, 2])
    True -}
 export impl Eq (Set a) requires Eq a where
-  eq a b = if size a != size b then False else eq (toList a) (toList b)
+  eq a b = if size a /= size b then False else eq (toList a) (toList b)
 
 {- | Lexicographic ordering through the canonical ascending element list, so a
    proper prefix sorts first.  Enables nesting (`Set (Set a)`, `Map (Set a) v`).
@@ -759,7 +759,7 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
 (DFunDef false "subsetGo" ((PVar "a") (PCon "Tip")) (EVar "False"))
 (DFunDef false "subsetGo" ((PCon "Bin" PWild (PVar "x") (PVar "l") (PVar "r")) (PVar "b")) (EBlock (DoLet false false (PTuple (PVar "bl") (PVar "found") (PVar "br")) (EApp (EApp (EVar "splitMember") (EVar "x")) (EVar "b"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "found") (EApp (EApp (EVar "subsetGo") (EVar "l")) (EVar "bl"))) (EApp (EApp (EVar "subsetGo") (EVar "r")) (EVar "br"))))))
 (DImpl true "Foldable" ((TyCon "Set")) () ((im "fold" ((PVar "f") (PVar "z") (PVar "s")) (EApp (EApp (EApp (EVar "foldlSet") (EVar "f")) (EVar "z")) (EVar "s"))) (im "foldRight" ((PVar "f") (PVar "z") (PVar "s")) (EApp (EApp (EApp (EVar "foldrSet") (EVar "f")) (EVar "z")) (EVar "s"))) (im "toList" ((PVar "s")) (EApp (EApp (EApp (EVar "foldrSet") (ELam ((PVar "_a") (PVar "_b")) (EBinOp "::" (EVar "_a") (EVar "_b")))) (EListLit)) (EVar "s"))) (im "isEmpty" ((PCon "Tip")) (EVar "True")) (im "isEmpty" (PWild) (EVar "False")) (im "length" ((PVar "s")) (EApp (EVar "size") (EVar "s")))))
-(DImpl true "Eq" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "!=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "a"))) (EApp (EVar "toList") (EVar "b")))))))
+(DImpl true "Eq" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "a"))) (EApp (EVar "toList") (EVar "b")))))))
 (DImpl true "Ord" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "compare" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "compare") (EApp (EVar "toList") (EVar "a"))) (EApp (EVar "toList") (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "toList") (EVar "s"))))) (ELit (LString ""))))))
 (DTypeSig false "displaySetItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "String"))))
@@ -923,7 +923,7 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
 (DFunDef false "subsetGo" ((PVar "a") (PCon "Tip")) (EVar "False"))
 (DFunDef false "subsetGo" ((PCon "Bin" PWild (PVar "x") (PVar "l") (PVar "r")) (PVar "b")) (EBlock (DoLet false false (PTuple (PVar "bl") (PVar "found") (PVar "br")) (EApp (EApp (EDictApp "splitMember") (EVar "x")) (EVar "b"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "found") (EApp (EApp (EDictApp "subsetGo") (EVar "l")) (EVar "bl"))) (EApp (EApp (EDictApp "subsetGo") (EVar "r")) (EVar "br"))))))
 (DImpl true "Foldable" ((TyCon "Set")) () ((im "fold" ((PVar "f") (PVar "z") (PVar "s")) (EApp (EApp (EApp (EVar "foldlSet") (EVar "f")) (EVar "z")) (EVar "s"))) (im "foldRight" ((PVar "f") (PVar "z") (PVar "s")) (EApp (EApp (EApp (EVar "foldrSet") (EVar "f")) (EVar "z")) (EVar "s"))) (im "toList" ((PVar "s")) (EApp (EApp (EApp (EVar "foldrSet") (ELam ((PVar "_a") (PVar "_b")) (EBinOp "::" (EVar "_a") (EVar "_b")))) (EListLit)) (EVar "s"))) (im "isEmpty" ((PCon "Tip")) (EVar "True")) (im "isEmpty" (PWild) (EVar "False")) (im "length" ((PVar "s")) (EApp (EVar "size") (EVar "s")))))
-(DImpl true "Eq" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "!=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "a"))) (EApp (EMethodRef "toList") (EVar "b")))))))
+(DImpl true "Eq" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "a"))) (EApp (EMethodRef "toList") (EVar "b")))))))
 (DImpl true "Ord" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "compare" ((PVar "a") (PVar "b")) (EApp (EApp (EMethodRef "compare") (EApp (EMethodRef "toList") (EVar "a"))) (EApp (EMethodRef "toList") (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EMethodRef "toList") (EVar "s"))))) (ELit (LString ""))))))
 (DTypeSig false "displaySetItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "String"))))
