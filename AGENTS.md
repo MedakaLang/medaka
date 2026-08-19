@@ -280,7 +280,8 @@ sh test/build_oracles.sh --for --list '<pattern>'    # ✅ DERIVE ONLY — which
                                                       #    pattern resolves to, builds nothing
 FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one <name>   # ✅ exactly one
 sh test/build_oracles.sh --for '<pattern>' --list    # ❌ NOT derive-only — this BUILDS
-sh test/run_gates.sh                                 # ❌ all 83
+sh test/run_gates.sh                                 # ❌ ALL of them — count drifts, derive:
+                                                      #    `ls test/diff_compiler_*.sh | wc -l`
 FORCE=1 sh test/build_oracles.sh                     # ❌ all 54 oracles. Almost never right.
 ```
 
@@ -306,7 +307,8 @@ gh api repos/MedakaLang/medaka/actions/runs/<id>/jobs --paginate \
 ```
 
 ⚠️ **[L-BLAST-RADIUS]** On `stdlib/*`, `compiler/support/*`, `compiler/entries/*`: `make
-preflight` IS the full ~84-gate suite (#492). `PREFLIGHT_NO_FULL=1 sh test/preflight.sh` runs
+preflight` IS the full gate suite — don't trust a count in this file, derive it (#492):
+`ls test/diff_compiler_*.sh | wc -l`. `PREFLIGHT_NO_FULL=1 sh test/preflight.sh` runs
 **NOTHING** by design. Prefer: push, let CI run it.
 
 ⚠️ **[L-NO-FULL-NOT-FIXPOINT]** `PREFLIGHT_NO_FULL` does NOT skip L-FOREGROUND-CEILING's
@@ -339,7 +341,8 @@ grep '<newBinding>' test/selfproc_goldens/legA/<module>.golden || echo "STALE �
 ```sh
 make preflight                         # ⚡ the loop (above)
 make test                              # IN-LANGUAGE suite (doctests, props, `test "…"`). No oracles.
-make gates                             # the FULL 84-gate differential suite
+make gates                             # the FULL differential suite — don't trust a count in
+                                        # this file, derive it: `ls test/diff_compiler_*.sh | wc -l`
 sh test/run_gates.sh 'pat*' 'pat2*'    # multiple patterns (deduped). NOT brace expansion.
 make docs-links                        # doc-link rot: every cited path must exist. No compiler.
 make agent-doc-symbols                 # doc-symbol rot: every backticked symbol must resolve. No compiler.
