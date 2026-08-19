@@ -12904,6 +12904,29 @@ containerArgHint : String -> String
 containerArgHint "String" = ". Pass a List or Array; to work over a string's characters, convert it with `string.toChars` first."
 containerArgHint argTy =
   ". Pass a List or Array, or convert the \{argTy} to one first."
+
+-- #894: `containerArgMsg` above hard-codes "a container (like List or Array)",
+-- which is right for a genuine container-consuming HOF (`map`, `filter`, …) but
+-- actively WRONG for the SAME reframe firing on a `do`-lowered `andThen` call —
+-- `x <- b` / a bare statement line inside `do` lowers to `andThen b (...)`
+-- (`lowerDo`, `compiler/frontend/desugar.mdk`), so a non-monadic `b` (e.g. `Bool`
+-- in a `Result` do-block) hits this same container-vs-scalar detector.  "Pass a
+-- List or Array" tells the user to convert their `Bool` into a list, which is
+-- not the fix — the fix is `let` instead of `<-`, because the value was never
+-- meant to be a container at all.  The concrete monad (`Result`) is NOT yet known
+-- here (its tyvar is still free — nothing has pinned it), so this stays honest by
+-- naming the shape ("Thenable", `do`'s own vocabulary — see `doRequiresMonadMsg`)
+-- rather than guessing a specific type.  Fires ONLY when both hold: the callee is
+-- literally `andThen` (the ONLY name `lowerDo` ever calls) AND we are inside a
+-- `do`-lowered chain (`currentDoOrigin`) — an explicit user call to `andThen` on
+-- a scalar argument outside `do` keeps the original List/Array message, which is
+-- the right advice there.
+doBindArgMsg : String -> String
+doBindArgMsg argTy = "this `do` block needs a Thenable value here (like `Option` or `Result`), but got \{argTy}\{doBindArgHint argTy}"
+
+doBindArgHint : String -> String
+doBindArgHint argTy =
+  ". If \{argTy} isn't itself monadic, use 'let' instead of '<-' to bind it."
 -- P0-16 beginner call-syntax hint.  A newcomer writes `add(1, 2)` (C/Python/JS
 -- call syntax) meaning `add 1 2`; in Medaka `(1, 2)` is a TUPLE, so `add(1, 2)`
 -- applies `add` to ONE tuple argument → a partial application / no-impl error
@@ -13047,8 +13070,21 @@ inferApp lets appExpr ft xt =
         -- (callee name + arg loc in scope) instead of letting the generic sink
         -- leak `a b vs String`.  Skip the unify (it would push the leaked
         -- mismatch as a SECOND diagnostic) and poison `r` to suppress cascade.
-        let hint = containerArgHint scalarTy
-        let _ = pushTypeErrorHelpFixAt "T-TYPE-MISMATCH" !currentLoc (containerArgMsg (appSpineName appExpr) scalarTy) hint None
+        --
+        -- #894: the SAME shape also fires when this application is a `do`-lowered
+        -- `andThen` call (`x <- b` / a bare statement line — `lowerDo`,
+        -- `compiler/frontend/desugar.mdk`) whose bound value isn't monadic. That
+        -- is not "pass a List or Array" — it is "use `let`, not `<-`". Detect it
+        -- by name (`andThen` is the only callee `lowerDo` ever emits) plus
+        -- `currentDoOrigin` (set only while inferring inside a `do`-lowered
+        -- chain — `infer env (EDoOrigin l e)` above), so an explicit user call to
+        -- `andThen` outside `do` keeps the original List/Array wording.
+        let isDoBind = appSpineName appExpr == Some "andThen" && match !currentDoOrigin
+          Some _ => True
+          None => False
+        let msg = if isDoBind then doBindArgMsg scalarTy else containerArgMsg (appSpineName appExpr) scalarTy
+        let hint = if isDoBind then doBindArgHint scalarTy else containerArgHint scalarTy
+        let _ = pushTypeErrorHelpFixAt "T-TYPE-MISMATCH" !currentLoc msg hint None
         -- Poison the container tyvar + element vars (in ft) exactly as the generic
         -- unify sink would (`monoUnboundIds a ++ b`), so the dangling `Mappable f`
         -- obligation sees a poisoned var and suppresses its own cascade.

@@ -1,0 +1,13 @@
+-- #894: `x <- b` inside a `Result`-typed `do` block, where `b` is a `Bool` (not
+-- itself a Thenable). The `<-` lowers to `andThen b (...)` (`lowerDo`,
+-- compiler/frontend/desugar.mdk); before the fix this reported the generic
+-- container-HOF message ("expects a container (like List or Array) ... Pass a
+-- List or Array, or convert the Bool to one first"), which is wrong advice for a
+-- `do` block — the fix is `let`, not "convert to a List or Array".
+f : Bool -> Result String Int
+f b =
+  do
+    x <- b
+    Ok 1
+
+main = println (f True)

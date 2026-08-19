@@ -77,6 +77,7 @@ current; `GRADING.md`'s post-Batch-B score for it is retracted there.
 | `tuple_arity_mismatch` | pass 2-tuple to 3-tuple fn | `…:3:32: Type mismatch: (Int, Int, Int) vs (a, b)` | Clear-ish; shows the shapes |
 | `wrong_arg_type_in_map` | `map f "hello"` | `…:1:46: 'map' expects a container (like List or Array) here, but got String — pass a List or Array; to work over a string's characters, convert it with \`string.toChars\` first.` | **Fixed**: no more raw `a b` tyvar leak; names `map`'s actual expectation and offers two concrete directions |
 | `bool_where_int` | `5 + True` | `…:1:27: No impl of Num for Bool` | Reasonable; Num-instance framing |
+| `do_bind_scalar_result` | `x <- b` (`b : Bool`) inside a `Result` `do` block | `…:10:9: this \`do\` block needs a Thenable value here (like \`Option\` or \`Result\`), but got Bool. If Bool isn't itself monadic, use 'let' instead of '<-' to bind it.` | **Fixed (#894):** `x <- b` lowers to `andThen b (...)` and used to hit the `map`-flavored container reframe verbatim ("expects a container (like List or Array) ... Pass a List or Array, or convert the Bool to one first"), actively wrong advice inside a `do` block. Now names the actual shape (`Thenable`) and suggests `let` instead of `<-`; the plain container-HOF message (`map`/`filter`/…) is untouched — see `wrong_arg_type_in_map` above and an explicit non-`do` call to `andThen`, both still List/Array-flavored |
 
 ## exhaust/ (`medaka check`)
 
