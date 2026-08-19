@@ -20,6 +20,4 @@ warning: [rule-missing-signature] top-level 'notEq' has no type signature. Add a
 warning: [rule-missing-signature] top-level 'notNe' has no type signature. Add a `notNe : …` declaration
 warning: [rule-not-eq] negated equality. Rewrite as 'a /= b'
 warning: [rule-not-eq] negated equality. Rewrite as 'a /= b'
-warning: [rule-not-eq] negated equality. Rewrite as 'a /= b'
-warning: [rule-not-eq] negated equality. Rewrite as 'a == b'
 warning: [rule-not-eq] negated equality. Rewrite as 'a == b'

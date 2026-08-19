@@ -135,6 +135,8 @@ attributeSchemeOblsGo : String -> Map String Unit -> Map String Unit -> List ((S
 augmentWithParams : List (String, Mono) -> List Ty -> List Mono -> List (String, Mono)
 axisSub : List (String, Param) -> (String, Param) -> Bool
 axisUnion : List (String, Param) -> List (String, Param) -> List String
+bangOnBoolHelp : String
+bangOnBoolMsg : String
 bestAlignedEntry : List (Int, Mono) -> List (String, List Int) -> Int -> Option (List Int) -> Option (List Int)
 bestFieldCandidate : String -> Int -> List String -> Option (String, Int) -> Option (String, Int)
 bindOutsideDoMsg : String
@@ -531,6 +533,7 @@ depExportsMethodIdent : String -> String -> Ident -> Bool
 depGraphMap : List String -> Map String (List (List Pat, Expr)) -> Map String (List String)
 depReaches : List String -> String -> String -> List (String, List Decl) -> Bool
 depsOf : String -> Map String Unit -> Map String (List (List Pat, Expr)) -> List String
+derefOp : Mono -> Mono
 derivableIface : String -> Bool
 dictAppMonoIds : (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> List (Int, String)
 dictArityOf : String -> Int
@@ -1200,6 +1203,7 @@ monoArgUnboundIds : Mono -> List Int
 monoIdsWithIface : (Mono, String) -> List (Int, String)
 monoIsApp : Mono -> Bool
 monoIsBareTyvar : Mono -> Bool
+monoIsBool : Mono -> Bool
 monoIsFunction : Mono -> Bool
 monoIsTyvarId : Mono -> Int -> Bool
 monoSameGiven : Mono -> Mono -> Bool

@@ -1,4 +1,6 @@
 -- Fixture for rule-complement-predicate autofix.
+-- `posBang` is NEGATIVE since #1739 half A: `!` is Ref-dereference, not boolean
+-- negation, so `--fix` must leave it byte-identical.
 
 posEmpty xs = not (isEmptyL xs)
 posNonEmpty xs = not (isNonEmptyL xs)

@@ -213,8 +213,8 @@ after P0-5 (shares lexer/parser/desugar/eval).
 > C3a/C3b YES. `let-else` seed re-mint is now OWED (batch it with the last trim item).
 > **DEFERRED (1 left):** **`let rec … with`** is surgical (drop only the `with` mutual-grouping, keep single
 > `let rec`; `ELetGroup`/`DLetGroup` shared). 0 real dogfood uses; NOT yet user-authorized to spawn.
-> **Also pending:** the `!`→deref half of the "negation coherence" bite (the `!=`→`/=` half ✅ LANDED,
-> #1739 half B, which also PAID the owed seed re-mint)
+> **Also pending:** nothing from the "negation coherence" bite — BOTH halves ✅ LANDED (#1739;
+> half B also PAID the owed seed re-mint). The `.value`→`!` source migration remains owed
 > (below) + the OPTIONAL zero-re-mint follow-up to migrate the 8 compiler-internal records from `data X = X{…}`
 > to the short `data X = {…}` (byte-identical IR; the new seed parses it). **LESSON (backtick): census the
 > always-loaded PRELUDE (`stdlib/core.mdk`) for real uses before removing a construct — a missed `core.mdk`
@@ -272,14 +272,24 @@ The construct removals:
   > an Opus agent proved emitted IR is byte-identical live-vs-dead (SSA counters shift wholesale but every body
   > matches); the "run-vs-build split" was the prelude failing to load. So the remaining trim removals are NOT
   > blocked by a codegen bug — just grep the PRELUDE + whole tree for real (non-comment, non-string) uses first.
-- **REPURPOSE `!` (boolean-not → Ref-DEREF sugar).** `!x` desugars to `x.value` (the existing Ref
-  read — mirrors `:=`→`setRef`; no new eval/emit arm). `not` becomes the SOLE boolean negation
-  (already a prelude fn). 0 dogfood `!`-as-not uses → no compiler/stdlib migration. **REQUIRED (user
-  2026-07-10):** applying `!` to a `Bool` (the old boolean-not use) must give a **helpful located error
-  pointing at the `not` function** — e.g. `` `!` is dereference (Ref), not boolean negation — use `not x` `` —
-  NOT a bare type-mismatch. (`!x` now means `x.value`, so `!aBool` will fail to unify Bool with `Ref a`;
-  intercept that shape and surface the `not`-function hint.) Net: Refs get OCaml-standard ergonomics — `Ref x` / `!x` / `x := v`.
-  **Also update P0-5's `R-IMMUTABLE-ASSIGN` error copy** from `.value` to the nicer `!c` once this lands.
+- **REPURPOSE `!` (boolean-not → Ref-DEREF) ✅ LANDED (#1739 half A).** `!x` reads the cell and
+  `not` is the SOLE boolean negation. It is NOT desugar: `EUnOp "!"` survives to typecheck (so the
+  required diagnostic has a node to fire on) and `core_ir_lower` sends it to the SAME
+  `CFieldAccess _ "value"` node `x.value` lowers to — which is why the repurpose cost ZERO emitter
+  work, and why the two spellings cannot diverge. **REQUIRED diagnostic (user 2026-07-10) SHIPPED:**
+  `T-BANG-ON-BOOL`, `` `!` is dereference (Ref), not boolean negation — use `not x` ``, intercepted in
+  `derefOp` before the `Ref a` unify so it is not a bare mismatch. ⚠️ The advice had to go in the
+  MESSAGE, not the `help:` line ERROR-QUALITY §4.5 prescribes — `help` is a JSON-ONLY channel and the
+  CLI renderer never prints it.
+  **The "0 dogfood `!`-as-not uses" premise was FALSE** — 2 live compiler sites
+  (`core_ir_lower.mdk`, `build_cmd.mdk`) plus 12 test fixtures, all migrated to `not (…)`.
+  **`!` binds TIGHTER than application** (`f !r` == `f (!r)`, parser `derefArg` + printer
+  `isTightDerefArg`) — an addition to the plan, taken because without it the owed `.value`→`!`
+  migration would ADD parens at ~553 of 1660 read sites, i.e. ship a spelling clumsier than the one
+  it replaces. Unambiguous only because half B already moved `!=` off the `!` token.
+  P0-5's `R-IMMUTABLE-ASSIGN` copy now reads `!c` ✅.
+  **Still owed:** the `.value` → `!` source migration (~1660 sites, upper bound — records with a
+  field genuinely named `value` share the spelling, so it needs a type-aware lint rule, not a sed).
 - **SWAP not-equals `!=` → `/=` ✅ LANDED (#1739 half B).** Coherence: once `!` = deref, nothing in the
   negation family should use `!` — `!=` reads as "deref-equals". `/=` is now **the canonical not-equals** and
   `!=` is a **located beginner-hint** (`"unexpected '!='. (Did you mean '/='?)"`, `P-BAD-NEQ`, with a

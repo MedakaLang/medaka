@@ -11,7 +11,8 @@ neT x = x /= True
 neF x = x /= False
 tEq x = True == x
 
--- POSITIVE: double negation (`not`/`!`).
+-- POSITIVE: double negation (`not` only — `!` is Ref-deref since #1739 half A,
+-- so `!!x` below is a NEGATIVE case).
 notNot x = not (not x)
 bangBang x = !!x
 

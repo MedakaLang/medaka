@@ -23,7 +23,7 @@ leftSection = (2 * _)
 
 cmpSection = (== 0)
 
-notFlag b = !b
+notFlag b = not b
 
 classify = x => match x
   0 => "zero"
@@ -69,7 +69,7 @@ shape s = match s
 # PARSE
 (DFunDef false "leftSection" () (ESection (SecLeft (ELit (LInt 2)) "*")))
 (DFunDef false "cmpSection" () (ESection (SecRight "==" (ELit (LInt 0)))))
-(DFunDef false "notFlag" ((PVar "b")) (EUnOp "!" (EVar "b")))
+(DFunDef false "notFlag" ((PVar "b")) (EApp (EVar "not") (EVar "b")))
 (DFunDef false "classify" () (ELam ((PVar "x")) (EMatch (EVar "x") (arm (PLit (LInt 0)) () (ELit (LString "zero"))) (arm (PVar "n") ((GBool (EBinOp "<" (EVar "n") (ELit (LInt 0))))) (ELit (LString "neg"))) (arm (PVar "n") () (ELit (LString "pos"))))))
 (DFunDef false "arrRange" () (ERangeArray (ELit (LInt 1)) (ELit (LInt 5)) false))
 (DFunDef false "arrRangeIncl" () (ERangeArray (ELit (LInt 0)) (ELit (LInt 9)) true))
@@ -85,7 +85,7 @@ shape s = match s
 # PRINTER
 leftSection = (2 * _)
 cmpSection = (== 0)
-notFlag b = !b
+notFlag b = not b
 classify = x => match x
   0 => "zero"
   n if n < 0 => "neg"
@@ -119,7 +119,7 @@ shape s = match s
 # DESUGAR
 (DFunDef false "leftSection" () (ELam ((PVar "_s")) (EBinOp "*" (ELit (LInt 2)) (EVar "_s"))))
 (DFunDef false "cmpSection" () (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (ELit (LInt 0)))))
-(DFunDef false "notFlag" ((PVar "b")) (EUnOp "!" (EVar "b")))
+(DFunDef false "notFlag" ((PVar "b")) (EApp (EVar "not") (EVar "b")))
 (DFunDef false "classify" () (ELam ((PVar "x")) (EMatch (EVar "x") (arm (PLit (LInt 0)) () (ELit (LString "zero"))) (arm (PVar "n") ((GBool (EBinOp "<" (EVar "n") (ELit (LInt 0))))) (ELit (LString "neg"))) (arm (PVar "n") () (ELit (LString "pos"))))))
 (DFunDef false "arrRange" () (ERangeArray (ELit (LInt 1)) (ELit (LInt 5)) false))
 (DFunDef false "arrRangeIncl" () (ERangeArray (ELit (LInt 0)) (ELit (LInt 9)) true))
@@ -135,7 +135,7 @@ shape s = match s
 # MARK
 (DFunDef false "leftSection" () (ELam ((PVar "_s")) (EBinOp "*" (ELit (LInt 2)) (EVar "_s"))))
 (DFunDef false "cmpSection" () (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (ELit (LInt 0)))))
-(DFunDef false "notFlag" ((PVar "b")) (EUnOp "!" (EVar "b")))
+(DFunDef false "notFlag" ((PVar "b")) (EApp (EVar "not") (EVar "b")))
 (DFunDef false "classify" () (ELam ((PVar "x")) (EMatch (EVar "x") (arm (PLit (LInt 0)) () (ELit (LString "zero"))) (arm (PVar "n") ((GBool (EBinOp "<" (EVar "n") (ELit (LInt 0))))) (ELit (LString "neg"))) (arm (PVar "n") () (ELit (LString "pos"))))))
 (DFunDef false "arrRange" () (ERangeArray (ELit (LInt 1)) (ELit (LInt 5)) false))
 (DFunDef false "arrRangeIncl" () (ERangeArray (ELit (LInt 0)) (ELit (LInt 9)) true))

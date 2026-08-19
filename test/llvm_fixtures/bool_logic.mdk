@@ -2,4 +2,4 @@
 -- comparisons yield Bool words.  Result is a Bool -> mdk_print_bool.
 a = 5
 b = 9
-main = (a < b) && !(a == b) || (a > b)
+main = (a < b) && not (a == b) || (a > b)

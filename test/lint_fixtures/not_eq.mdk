@@ -1,11 +1,13 @@
 -- Fixture for rule-not-eq: negated equality `not (a == b)` / `not (a /= b)`
--- (and the unary-`!` forms) → `a /= b` / `a == b`.
+-- → `a /= b` / `a == b`.  The unary-`!` forms are NEGATIVE cases (see below).
 
 -- POSITIVE: `not` applied to `==` / `/=`.
 notEq a b = not (a == b)
 notNe a b = not (a /= b)
 
--- POSITIVE: unary `!` form.
+-- NEGATIVE (#1739 half A): `!` is Ref-DEREFERENCE now, not boolean negation, so
+-- these must NOT fire. A rule that still read `!` as `not` would rewrite a cell
+-- read into boolean logic, and `--fix` would apply it unprompted.
 bangEq a b = !(a == b)
 bangNe a b = !(a /= b)
 

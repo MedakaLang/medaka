@@ -530,7 +530,8 @@ Each of these was paid for in an incident — pointers, not post-mortems.
 
 **[DG-IDIOMS]** Prefer Medaka idioms only where they genuinely improve readability — verify on
 the binary (`medaka test <file>`). Under-used: operator sections `(==)`, `(+ 1)`, `(2 * _)`
-(left needs `_`); `|>`; `>> <<`; `[lo..=hi]`; `{ r | f = v }`; unary `!`.
+(left needs `_`); `|>`; `>> <<`; `[lo..=hi]`; `{ r | f = v }`; unary `!` (Ref-DEREF,
+not boolean-not — `not` is the only negation).
 
 ⚠️ **[DG-REMOVED]** Eight constructs were REMOVED and are now hard parse errors
 (`function`, `let mut`, backtick infix, `record`, let-else, named impls, `default impl`, and

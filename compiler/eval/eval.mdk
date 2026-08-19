@@ -1845,8 +1845,10 @@ export evalUnop : String -> Value e -> Value e
 evalUnop "-" (VInt n) = VInt (0 - n)
 evalUnop "-" (VFloat f) = VFloat (negFloatIEEE f)
 evalUnop "-" _ = panic "unary minus on non-number"
-evalUnop "!" (VBool b) = VBool (not b)
-evalUnop "!" _ = panic "'!' on non-Bool"
+-- #1739 half A: `!x` DEREFERENCES a Ref (it was boolean-not).  Routed to the very
+-- function `x.value` uses, because the two spellings are the same operation — a
+-- separate arm here would be a second answer to "what does reading a cell do".
+evalUnop "!" v = evalValueField v
 evalUnop "not" (VBool b) = VBool (not b)
 evalUnop "not" _ = panic "'!' on non-Bool"
 evalUnop op _ = panic ("unknown unary op: " ++ op)

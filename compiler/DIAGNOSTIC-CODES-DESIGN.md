@@ -153,6 +153,7 @@ kinds (enumerated from the message families):
 | Kind | Representative message | Code (§2) |
 |---|---|---|
 | type mismatch | `Type mismatch: <a> vs <b>` (`:2273`,`:2282`,`:2952`) | `T-TYPE-MISMATCH` |
+| `!` on a `Bool` | `` `!` is dereference (Ref), not boolean negation — use `not x` `` — #1739 half A repurposed `!` from boolean-not to Ref-DEREFERENCE, so the old use no longer unifies. Intercepted in `derefOp` BEFORE the `Ref a` unify, because the bare `Ref a vs Bool` mismatch it would otherwise produce says nothing about what changed. The advice is in the MESSAGE (not only `help`) because the CLI renderer prints no `help:` line — same shape as the did-you-mean precedent | `T-BANG-ON-BOOL` |
 | not a function | `This expression has type <T>, which is not a function …` / `'<f>' takes N argument(s) but is applied to M.` (`inferApp` guard) | `T-NOT-A-FUNCTION` |
 | method type mismatch | `Method 'm': expected type <a> but got <b>` (`:2270`) | `T-METHOD-MISMATCH` |
 | no impl (class) | `No impl of Num for String` (`:8338`) | `T-NO-IMPL` |

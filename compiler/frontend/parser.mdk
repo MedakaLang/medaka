@@ -694,7 +694,34 @@ parseApp = do
 -- head (`5 -1`) never grabs, so the TMinusTight falls through to parseAdd's
 -- binary minus and stays subtraction (Rule C, head-gated).
 appArg : Bool -> Parser Expr
-appArg headNum = orElse (negLitArg headNum) parseAspat
+appArg headNum = orElse (negLitArg headNum) (orElse derefArg parseAspat)
+
+-- #1739 half A: `!` (Ref-dereference) binds TIGHTER than application, so `f !r`
+-- is `f (!r)` — the OCaml-standard Ref ergonomics this bite exists to deliver.
+-- Without this arm `!` sits at `parseUnary`, BELOW application, and every
+-- argument-position read needs parens (`f (!r)`) where `.value` needed none
+-- (`f r.value`) — which would make the spelling this bite introduces clumsier
+-- than the one it replaces, at ~a third of the Ref reads in the tree.
+--
+-- Unambiguous, and only because half B already ran: `!=` is now its own `TBangEq`
+-- token, so a `TBang` in argument position can ONLY begin a unary deref. There is
+-- no binary `!`, so no `a ! b` reading competes for it.
+--
+-- The operand is an ASPAT, not a `parseUnary` — `!` takes exactly one atom, the
+-- same shape the tight-negative-literal arm above takes. `!!r` (deref of a deref)
+-- therefore needs parens; that is deliberate, since `!` chains are vanishingly
+-- rare and the alternative re-opens the greedy-operand ambiguity `-` had.
+derefArg : Parser Expr
+derefArg = do
+  t <- peekP
+  derefArgFor t
+
+derefArgFor : Token -> Parser Expr
+derefArgFor TBang = do
+  advance
+  e <- parseAspat
+  pure (EUnOp "!" e (Ref RNone))
+derefArgFor _ = failP "not a tight deref argument"
 
 negLitArg : Bool -> Parser Expr
 negLitArg True = failP "numeric head: tight minus stays subtraction"

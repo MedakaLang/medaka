@@ -1,0 +1,36 @@
+-- #1739 half A: `!` is Ref-DEREFERENCE (it was boolean-not).  The acceptance
+-- criterion is that it agrees on ALL THREE engines (eval == native == wasm),
+-- which is exactly what this corpus checks.
+--
+-- The load-bearing claim is that `!x` and `x.value` are the SAME operation, not
+-- two implementations of it: `core_ir_lower` sends `EUnOp "!"` to the very
+-- `CFieldAccess _ "value"` node `x.value` lowers to, so no backend grew an arm
+-- and the two spellings CANNOT diverge.  Each pair below asserts that equality
+-- directly rather than asserting each spelling's value separately — a fixture
+-- that only pinned `!r == 7` would still pass if the two paths drifted.
+--
+-- `!` also binds TIGHTER than application (`f !r` is `f (!r)`), so the reads
+-- below are written bare, in argument position, on purpose: that is the shape a
+-- precedence regression breaks first, and `fmt` is required to leave it alone.
+
+bump : Ref Int -> Int
+bump c =
+  c := !c + 1
+  !c
+
+main =
+  let r = Ref 7
+  let s = Ref "hi"
+  let n = Ref 3
+  -- same-operation checks: `!x` vs `x.value`
+  println (!r == r.value)
+  println (!s == s.value)
+  -- tight binding: bare `!` in argument position
+  println (max !n 5)
+  println (debug !s)
+  -- write-then-read through `:=`, the other half of the Ref triple
+  println (bump r)
+  println (!r == 8)
+  -- nested: a Ref holding a Ref
+  let rr = Ref (Ref 11)
+  println (!(!rr))

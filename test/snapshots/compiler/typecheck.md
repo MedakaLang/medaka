@@ -1,5 +1,5 @@
 # META
-source_lines=31189
+source_lines=31235
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -11197,10 +11197,56 @@ composeOp gt ht True =
 
 inferUnop : String -> Mono -> Mono
 inferUnop "-" t = negateOp t
-inferUnop "!" t =
-  let _ = unify t (tconBuiltin "Bool")
-  tconBuiltin "Bool"
+inferUnop "!" t = derefOp t
 inferUnop op _ = panic ("typecheck: unsupported unary op " ++ op)
+
+-- #1739 half A: `!x` is Ref-DEREFERENCE, not boolean negation — `not` is the sole
+-- boolean negation (it is already a prelude fn).  The unify is the same one
+-- `inferValueField` does for `x.value`, and deliberately so: the two spellings must
+-- infer identically, since desugar-free lowering sends both to `CFieldAccess _
+-- "value"`.  Unification rather than a structural match, so it also works when the
+-- receiver is still an unsolved tyvar (a param not yet pinned to its signature).
+--
+-- The `Bool` arm is the REQUIRED diagnostic (user, 2026-07-10).  `!aBool` is the OLD
+-- boolean-not use, and left to unification it fails as a bare `Ref a vs Bool`
+-- mismatch that says nothing about what changed — so the Bool shape is INTERCEPTED
+-- here, before unify, and answered with a message naming `not`.
+--
+-- ⚠️ The "use `not x`" advice is IN THE MESSAGE, not only in `help`.  ERROR-QUALITY
+-- §4.5 puts actionable advice on a `help:` line, but `help` is a JSON-ONLY channel
+-- here — the CLI renderer never prints it — so advice that lives only there is
+-- invisible to the human this diagnostic exists for.  The did-you-mean precedent
+-- does the same ("Unbound variable: greetng. Did you mean 'greeting'"), and this is
+-- the wording the user specified for this bite (2026-07-10).  `help` still carries
+-- the longer WHY for the structured consumers.
+--
+-- It returns `Bool` on that path rather than a fresh var: the operand was a Bool and
+-- the author meant negation, so `Bool` is the type the surrounding expression was
+-- written to expect (`if !flag then …`), and handing it back keeps ONE located error
+-- instead of a cascade of downstream mismatches — the Chunk-D recovery shape the
+-- literal-provenance arms already use.
+derefOp : Mono -> Mono
+derefOp t =
+  if monoIsBool (normalize t) then
+    let _ = pushTypeErrorHelpFixAt "T-BANG-ON-BOOL" None bangOnBoolMsg bangOnBoolHelp None
+    tconBuiltin "Bool"
+  else
+    let inner = freshVar ()
+    let _ = unify t (TApp (tconBuiltin "Ref") inner)
+    inner
+
+-- `Bool` as a HEAD, ignoring origin: the prelude's Bool is builtin-origin, but a
+-- normalized operand can carry a module origin, and the question here is only which
+-- type constructor it is.
+monoIsBool : Mono -> Bool
+monoIsBool (TCon "Bool" _) = True
+monoIsBool _ = False
+
+bangOnBoolMsg : String
+bangOnBoolMsg = "`!` is dereference (Ref), not boolean negation — use `not x`"
+
+bangOnBoolHelp : String
+bangOnBoolHelp = "use `not x` — `!x` reads the cell of a `Ref`, so it needs a `Ref a`, not a `Bool`"
 
 -- Roadmap #18c: unary minus `-x` carries a `Num` obligation on its operand type —
 -- a verbatim mirror of `numArithOp`/`recordIfaceObligation` for binary `+`/`-`/…,
@@ -33030,8 +33076,17 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "composeOp" ((PVar "gt") (PVar "ht") (PCon "True")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false (PVar "b") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false (PVar "c") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "gt")) (EApp (EApp (EApp (EVar "TFun") (EVar "a")) (EApp (EVar "openRow") (ELit LUnit))) (EVar "b")))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "ht")) (EApp (EApp (EApp (EVar "TFun") (EVar "c")) (EApp (EVar "openRow") (ELit LUnit))) (EVar "a")))) (DoExpr (EApp (EApp (EApp (EVar "TFun") (EVar "c")) (EApp (EVar "openRow") (ELit LUnit))) (EVar "b")))))
 (DTypeSig false "inferUnop" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Mono"))))
 (DFunDef false "inferUnop" ((PLit (LString "-")) (PVar "t")) (EApp (EVar "negateOp") (EVar "t")))
-(DFunDef false "inferUnop" ((PLit (LString "!")) (PVar "t")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "t")) (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (DoExpr (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))))
+(DFunDef false "inferUnop" ((PLit (LString "!")) (PVar "t")) (EApp (EVar "derefOp") (EVar "t")))
 (DFunDef false "inferUnop" ((PVar "op") PWild) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "typecheck: unsupported unary op ")) (EVar "op"))))
+(DTypeSig false "derefOp" (TyFun (TyCon "Mono") (TyCon "Mono")))
+(DFunDef false "derefOp" ((PVar "t")) (EIf (EApp (EVar "monoIsBool") (EApp (EVar "normalize") (EVar "t"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-BANG-ON-BOOL"))) (EVar "None")) (EVar "bangOnBoolMsg")) (EVar "bangOnBoolHelp")) (EVar "None"))) (DoExpr (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (EBlock (DoLet false false (PVar "inner") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "t")) (EApp (EApp (EVar "TApp") (EApp (EVar "tconBuiltin") (ELit (LString "Ref")))) (EVar "inner")))) (DoExpr (EVar "inner")))))
+(DTypeSig false "monoIsBool" (TyFun (TyCon "Mono") (TyCon "Bool")))
+(DFunDef false "monoIsBool" ((PCon "TCon" (PLit (LString "Bool")) PWild)) (EVar "True"))
+(DFunDef false "monoIsBool" (PWild) (EVar "False"))
+(DTypeSig false "bangOnBoolMsg" (TyCon "String"))
+(DFunDef false "bangOnBoolMsg" () (ELit (LString "`!` is dereference (Ref), not boolean negation — use `not x`")))
+(DTypeSig false "bangOnBoolHelp" (TyCon "String"))
+(DFunDef false "bangOnBoolHelp" () (ELit (LString "use `not x` — `!x` reads the cell of a `Ref`, so it needs a `Ref a`, not a `Bool`")))
 (DTypeSig false "negateOp" (TyFun (TyCon "Mono") (TyCon "Mono")))
 (DFunDef false "negateOp" ((PVar "t")) (EBlock (DoLet false false PWild (EApp (EVar "markNumlitOpTaint") (EVar "t"))) (DoLet false false PWild (EApp (EApp (EVar "recordIfaceObligation") (EVar "BNum")) (EVar "t"))) (DoExpr (EVar "t"))))
 (DTypeSig false "inferInfix" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Mono"))))))
@@ -38126,8 +38181,17 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "composeOp" ((PVar "gt") (PVar "ht") (PCon "True")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false (PVar "b") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false (PVar "c") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EMethodRef "gt")) (EApp (EApp (EApp (EVar "TFun") (EVar "a")) (EApp (EVar "openRow") (ELit LUnit))) (EVar "b")))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "ht")) (EApp (EApp (EApp (EVar "TFun") (EVar "c")) (EApp (EVar "openRow") (ELit LUnit))) (EVar "a")))) (DoExpr (EApp (EApp (EApp (EVar "TFun") (EVar "c")) (EApp (EVar "openRow") (ELit LUnit))) (EVar "b")))))
 (DTypeSig false "inferUnop" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Mono"))))
 (DFunDef false "inferUnop" ((PLit (LString "-")) (PVar "t")) (EApp (EVar "negateOp") (EVar "t")))
-(DFunDef false "inferUnop" ((PLit (LString "!")) (PVar "t")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "t")) (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (DoExpr (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))))
+(DFunDef false "inferUnop" ((PLit (LString "!")) (PVar "t")) (EApp (EVar "derefOp") (EVar "t")))
 (DFunDef false "inferUnop" ((PVar "op") PWild) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "typecheck: unsupported unary op ")) (EVar "op"))))
+(DTypeSig false "derefOp" (TyFun (TyCon "Mono") (TyCon "Mono")))
+(DFunDef false "derefOp" ((PVar "t")) (EIf (EApp (EVar "monoIsBool") (EApp (EVar "normalize") (EVar "t"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-BANG-ON-BOOL"))) (EVar "None")) (EVar "bangOnBoolMsg")) (EVar "bangOnBoolHelp")) (EVar "None"))) (DoExpr (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (EBlock (DoLet false false (PVar "inner") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "t")) (EApp (EApp (EVar "TApp") (EApp (EVar "tconBuiltin") (ELit (LString "Ref")))) (EVar "inner")))) (DoExpr (EVar "inner")))))
+(DTypeSig false "monoIsBool" (TyFun (TyCon "Mono") (TyCon "Bool")))
+(DFunDef false "monoIsBool" ((PCon "TCon" (PLit (LString "Bool")) PWild)) (EVar "True"))
+(DFunDef false "monoIsBool" (PWild) (EVar "False"))
+(DTypeSig false "bangOnBoolMsg" (TyCon "String"))
+(DFunDef false "bangOnBoolMsg" () (ELit (LString "`!` is dereference (Ref), not boolean negation — use `not x`")))
+(DTypeSig false "bangOnBoolHelp" (TyCon "String"))
+(DFunDef false "bangOnBoolHelp" () (ELit (LString "use `not x` — `!x` reads the cell of a `Ref`, so it needs a `Ref a`, not a `Bool`")))
 (DTypeSig false "negateOp" (TyFun (TyCon "Mono") (TyCon "Mono")))
 (DFunDef false "negateOp" ((PVar "t")) (EBlock (DoLet false false PWild (EApp (EVar "markNumlitOpTaint") (EVar "t"))) (DoLet false false PWild (EApp (EApp (EVar "recordIfaceObligation") (EVar "BNum")) (EVar "t"))) (DoExpr (EVar "t"))))
 (DTypeSig false "inferInfix" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Mono"))))))

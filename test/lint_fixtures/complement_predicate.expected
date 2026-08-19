@@ -3,7 +3,6 @@ warning: [rule-complement-predicate] negated predicate. Rewrite as 'isErr (looku
 warning: [rule-complement-predicate] negated predicate. Rewrite as 'isErr x'
 warning: [rule-complement-predicate] negated predicate. Rewrite as 'isNonEmptyL xs'
 warning: [rule-complement-predicate] negated predicate. Rewrite as 'isNonEmptyL xs'
-warning: [rule-complement-predicate] negated predicate. Rewrite as 'isNonEmptyL xs'
 warning: [rule-complement-predicate] negated predicate. Rewrite as 'isNone x'
 warning: [rule-complement-predicate] negated predicate. Rewrite as 'isOk x'
 warning: [rule-complement-predicate] negated predicate. Rewrite as 'isSome x'
