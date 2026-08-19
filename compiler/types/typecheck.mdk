@@ -1078,7 +1078,7 @@ openRow _ = EffRow [] (Some (freshEffvar ()))
 -- is an unbound effvar
 effrowNorm : EffRow -> EffRow
 effrowNorm (EffRow labels tail) = match tail
-  Some cell => match cell.value
+  Some cell => match !cell
     ELink r2 =>
       let nr = effrowNorm r2
       match nr
@@ -1139,7 +1139,7 @@ holeFillParam label lets (Some e) = match alpha lets e
 holeFillParam label _ None = dtopFor label
 
 effvarLevel : Ref Effvar -> Int
-effvarLevel cell = match cell.value
+effvarLevel cell = match !cell
   EUnbound _ l => l
   ELink _ => 0
 
@@ -1162,7 +1162,7 @@ exitLevel _ = perRun.value.currentLevel := perRun.value.currentLevel.value - 1
 -- the unbound-tail id of an effvar cell (-1 once linked); unique like tyvar ids,
 -- so id-equality stands in for the reference's physical `==` on effvars
 effvarId : Ref Effvar -> Int
-effvarId cell = match cell.value
+effvarId cell = match !cell
   EUnbound id _ => id
   ELink _ => 0 - 1
 
@@ -1171,7 +1171,7 @@ effvarId cell = match cell.value
 -- absorbed).  A closed ambient is a sink and discards.  An open [eff] is tied to
 -- the ambient through a shared fresh tail.
 performEffect : Ref EffRow -> EffRow -> Unit
-performEffect cur eff = match effrowNorm cur.value
+performEffect cur eff = match effrowNorm !cur
   EffRow _ None => ()
   EffRow curLabels (Some ct) => match effrowNorm eff
     EffRow effLabels effTail =>
@@ -2084,7 +2084,7 @@ checkOneAxis l name _ =
 -- call site of a polymorphic HOF gets its own effect variable
 substRow : List (Int, Ref Effvar) -> EffRow -> EffRow
 substRow esub r = match effrowNorm r
-  EffRow labels (Some v) => match v.value
+  EffRow labels (Some v) => match !v
     EUnbound id _ => match lookupAssocI id esub
       Some v2 => EffRow labels (Some v2)
       None => EffRow labels (Some v)
@@ -2094,7 +2094,7 @@ substRow esub r = match effrowNorm r
 -- lower a row's tail effvar level to <= [level] alongside the tyvar being bound
 lowerRowLevels : Int -> EffRow -> Unit
 lowerRowLevels level r = match effrowNorm r
-  EffRow _ (Some v) => match v.value
+  EffRow _ (Some v) => match !v
     EUnbound id lvl => if lvl > level then v := EUnbound id level else ()
     ELink _ => ()
   EffRow _ None => ()
@@ -2111,7 +2111,7 @@ arrowsWithLastEffect (pt::rest) eff ret =
 -- scope (deduped by the caller, mirroring freeGenVars)
 freeEffvars : Mono -> List Int
 freeEffvars t = match normalize t
-  TVar cell => match cell.value
+  TVar cell => match !cell
     Link t2 => freeEffvars t2
     Unbound _ _ => []
   TCon _ _ => []
@@ -2122,7 +2122,7 @@ freeEffvars t = match normalize t
 
 rowFreeEffvars : EffRow -> List Int
 rowFreeEffvars r = match effrowNorm r
-  EffRow _ (Some v) => match v.value
+  EffRow _ (Some v) => match !v
     EUnbound id lvl =>
       if lvl > perRun.value.currentLevel.value then
         [id]
@@ -5734,21 +5734,21 @@ wReset w =
 -- the ONLY extend.
 wPush : Windowed a -> a -> Unit
 wPush w x =
-  w.items := x::w.items.value
-  w.n := w.n.value + 1
+  w.items := x :: !w.items
+  w.n := !w.n + 1
 
 -- O(1) length snapshot, replacing a channel's `…N.value` read.
 wMark : Windowed a -> Int
-wMark w = w.n.value
+wMark w = !w.n
 
 -- recover exactly the items pushed since [mark] (consed on the front, so
 -- `takeFirst` recovers them in push order).
 wWindow : Windowed a -> Int -> List a
-wWindow w mark = takeFirst (w.n.value - mark) w.items.value
+wWindow w mark = takeFirst (!w.n - mark) !w.items
 
 -- for an error-rollback window (inferUserImplBodies): capture both refs together.
 wSnapshot : Windowed a -> (List a, Int)
-wSnapshot w = (w.items.value, w.n.value)
+wSnapshot w = (!w.items, !w.n)
 
 -- the ONLY rollback.
 wRestore : Windowed a -> (List a, Int) -> Unit
@@ -6005,7 +6005,7 @@ recordAbsorptions (a::rest) cell =
   let _ = wPush perRun.value.absorptions AbsorptionEvent {
     atom = a,
     cell = cell,
-    loc = currentLoc.value,
+    loc = !currentLoc,
   }
   recordAbsorptions rest cell
 
@@ -6562,7 +6562,7 @@ recordArgStamp : String -> Ref Route -> Ref (List Route) -> Int -> Mono -> Unit
 recordArgStamp name tagRef implRef idx mono
   | toggles.value.suppressArgStamp.value = ()
   | otherwise = match nthArgMono idx mono
-    Some am => perRun.value.pendingArgStamps := PendingEntry name tagRef am perRun.value.currentFn.value (SKArg implRef mono) currentLoc.value :: perRun.value.pendingArgStamps.value
+    Some am => perRun.value.pendingArgStamps := PendingEntry name tagRef am perRun.value.currentFn.value (SKArg implRef mono) !currentLoc :: perRun.value.pendingArgStamps.value
     None => ()
 
 -- Cause-A prerequisite: an ARG-position method occurrence's discriminating-arg
@@ -6724,7 +6724,7 @@ useFastIfaceMethodTy = Ref False
 
 -- True iff any type error was pushed since the last resetTypeErrorsSticky.
 export hadTypeErrors : Unit -> Bool
-hadTypeErrors _ = typeErrorsSticky.value
+hadTypeErrors _ = !typeErrorsSticky
 
 -- issue 1146 — THE SOLE WRITER of the `typeErrors` channel.  Every push, deduped
 -- or not, helper-mediated or not, funnels through here, so the three facts one push
@@ -6792,7 +6792,7 @@ erredDuring act =
 -- Push one type-error message, snapshotting the current ELoc span (B.10.2b).
 pushTypeError : String -> String -> Unit
 pushTypeError code msg =
-  recordTypeError (TcDiag code 1 currentLoc.value msg None None)
+  recordTypeError (TcDiag code 1 !currentLoc msg None None)
 
 -- Push one type-error message attributed to [loc] rather than the live
 -- `currentLoc` (#414).  Same non-deduping semantics as `pushTypeError` — the
@@ -6801,7 +6801,7 @@ pushTypeError code msg =
 -- back to `currentLoc`, i.e. the old behaviour.
 pushTypeErrorAt : String -> Option Loc -> String -> Unit
 pushTypeErrorAt code loc msg =
-  recordTypeError (TcDiag code 1 (orElseLoc loc currentLoc.value) msg None None)
+  recordTypeError (TcDiag code 1 (orElseLoc loc !currentLoc) msg None None)
 
 -- #11 soundness: REPORT an obligation error only if the SAME message isn't already
 -- accumulated.  A single missing impl can be detected by both checkImplObligations
@@ -6832,7 +6832,7 @@ pushTypeErrorOnceAt code loc msg =
   if anyList (e => tcMsg e == msg) perRun.value.typeErrors.items.value then
     noteTypeErrorDetected ()
   else
-    recordTypeError (TcDiag code 1 (orElseLoc loc currentLoc.value) msg None None)
+    recordTypeError (TcDiag code 1 (orElseLoc loc !currentLoc) msg None None)
 
 -- Push a deduped type error (same dedup rule as pushTypeErrorOnceAt) that also
 -- carries a human `help` string and an optional machine-applicable `fix`
@@ -6847,7 +6847,7 @@ pushTypeErrorHelpFixAt code loc msg help fix =
   if anyList (e => tcMsg e == msg) perRun.value.typeErrors.items.value then
     noteTypeErrorDetected ()
   else
-    recordTypeError (TcDiag code 1 (orElseLoc loc currentLoc.value) msg (Some help) fix)
+    recordTypeError (TcDiag code 1 (orElseLoc loc !currentLoc) msg (Some help) fix)
 
 -- Source-location attribution (Phase B.10.2): the innermost ELoc span the
 -- `infer` walk has entered.  Set by infer's transparent ELoc arm before
@@ -7303,7 +7303,7 @@ anyListM p (x::xs) = p x || anyListM p xs
 export normalize : Mono -> Mono
 -- lint-disable-next-line rule-match-on-param
 normalize m = match m
-  TVar cell => match cell.value
+  TVar cell => match !cell
     Link t => normalizeLink cell t
     Unbound _ _ => m
   _ => m
@@ -7315,7 +7315,7 @@ normalize m = match m
 normalizeLink : Ref Tyvar -> Mono -> Mono
 -- lint-disable-next-line rule-match-on-param
 normalizeLink cell t = match t
-  TVar c2 => match c2.value
+  TVar c2 => match !c2
     Unbound _ _ => t
     Link t2 =>
       let r = normalizeLink c2 t2
@@ -7324,12 +7324,12 @@ normalizeLink cell t = match t
   _ => t
 
 tyvarId : Ref Tyvar -> Int
-tyvarId cell = match cell.value
+tyvarId cell = match !cell
   Unbound id _ => id
   Link _ => 0 - 1
 
 tyvarLevel : Ref Tyvar -> Int
-tyvarLevel cell = match cell.value
+tyvarLevel cell = match !cell
   Unbound _ lvl => lvl
   Link _ => 0
 
@@ -7349,7 +7349,7 @@ occursAdjust id level t = match normalize t
   TEff r => lowerRowLevels level r
 
 occursAdjustVar : Int -> Int -> Ref Tyvar -> Unit
-occursAdjustVar id level cell = match cell.value
+occursAdjustVar id level cell = match !cell
   Unbound id2 lvl2 => occursAdjustUnbound id level cell id2 lvl2
   Link t => occursAdjust id level t
 
@@ -7455,7 +7455,7 @@ typeMismatch a b =
   typeMismatchReport a b
 
 typeMismatchReport : Mono -> Mono -> Unit
-typeMismatchReport a b = match currentMethodMismatch.value
+typeMismatchReport a b = match !currentMethodMismatch
   Some mname => pushTypeError "T-METHOD-MISMATCH" "Method '\{mname}': expected type \{ppMono a} but got \{ppMono b}"
   None => match pinnedLocalExplain a b
     -- #866: this mismatch IS the pin (see pinnedLocalExplain) — report the binding.
@@ -7496,13 +7496,13 @@ indefiniteArticle name
   | otherwise = "a"
 
 typeMismatchReportRest : Mono -> Mono -> Unit
-typeMismatchReportRest a b = match currentDoOrigin.value
+typeMismatchReportRest a b = match !currentDoOrigin
     Some doLoc => typeMismatchInDo a b doLoc
     None => match firstTupleCallHint [a, b]
       -- P0-16: one side is a tuple-call residual (e.g. `z : Int; z = add(1, 2)`
       -- → `Type mismatch: Int vs (a, b) -> (a, b)`) — append the call-syntax hint.
       Some (help, fix) =>
-        pushTypeErrorHelpFixAt "T-TYPE-MISMATCH" currentLoc.value "Type mismatch: \{ppMono a} vs \{ppMono b} — \{help}" help fix
+        pushTypeErrorHelpFixAt "T-TYPE-MISMATCH" !currentLoc "Type mismatch: \{ppMono a} vs \{ppMono b} — \{help}" help fix
       None => match sameSpellingHint a b
         -- #1111 A-2.10: the mismatch this unit MAKES REACHABLE renders with two
         -- identical sides (`Type mismatch: T vs T`) — true, and useless without
@@ -7510,7 +7510,7 @@ typeMismatchReportRest a b = match currentDoOrigin.value
         -- would trade an S0 for an S2, which the severity ladder counts as a
         -- fix only for the first half.
         Some help =>
-          pushTypeErrorHelpFixAt "T-TYPE-MISMATCH" currentLoc.value "Type mismatch: \{ppMono a} vs \{ppMono b} — \{help}" help None
+          pushTypeErrorHelpFixAt "T-TYPE-MISMATCH" !currentLoc "Type mismatch: \{ppMono a} vs \{ppMono b} — \{help}" help None
         None => pushTypeError "T-TYPE-MISMATCH" "Type mismatch: \{ppMono a} vs \{ppMono b}"
 
 -- ── same-spelling mismatch hint (#1111 A-2.10) ─────────────────────────────
@@ -7751,7 +7751,7 @@ ctorHeadIsUpper name =
 -- `lib/typecheck.ml:555-565`).
 lowerToCurrent : Mono -> Unit
 lowerToCurrent t = match normalize t
-  TVar cell => match cell.value
+  TVar cell => match !cell
     Unbound id lvl =>
       if lvl > perRun.value.currentLevel.value then
         cell := Unbound id perRun.value.currentLevel.value
@@ -7911,16 +7911,16 @@ letters : String
 letters = "abcdefghijklmnopqrstuvwxyz"
 
 nameOf : Ref (List (Int, String)) -> Ref Int -> Int -> String
-nameOf ctx cnt id = match lookupAssocI id ctx.value
+nameOf ctx cnt id = match lookupAssocI id !ctx
   Some s => s
   None => assignName ctx cnt id
 
 assignName : Ref (List (Int, String)) -> Ref Int -> Int -> String
 assignName ctx cnt id =
-  let n = cnt.value
+  let n = !cnt
   cnt := n + 1
   let s = if n < 26 then stringSlice n (n + 1) letters else "t" ++ intToString n
-  ctx := (id, s)::ctx.value
+  ctx := (id, s) :: !ctx
   s
 
 ppGo : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> String
@@ -7946,7 +7946,7 @@ ppEffArg ctx cnt r = match effrowNorm r
       [] => ""
       ls => renderAtoms ls
     let tailS = match tail
-      Some cell => match cell.value
+      Some cell => match !cell
         EUnbound id _ => nameOf ctx cnt (id + 1000000)
         ELink _ => ""
       None => ""
@@ -7960,7 +7960,7 @@ ppEffArgFmt l t
   | otherwise = "<\{l} | \{t}>"
 
 ppVar : Ref (List (Int, String)) -> Ref Int -> Ref Tyvar -> String
-ppVar ctx cnt cell = match cell.value
+ppVar ctx cnt cell = match !cell
   Unbound id _ => nameOf ctx cnt id
   Link _ => "_"
 
@@ -8100,14 +8100,14 @@ buildAliasGraphEntry aliasKeys (key, paramsRhs) =
 -- cyclic (they are all on the same cycle path).
 aliasDfsVisit : List (String, List String) -> Ref (List String) -> Ref (List String) -> Ref (List String) -> String -> Unit
 aliasDfsVisit graph visitedRef onStackRef cyclicOut name =
-  if contains name visitedRef.value then ()
+  if contains name !visitedRef then ()
   else
-    if contains name onStackRef.value then cyclicOut := dedup (takeUntilInclusiveS name onStackRef.value ++ cyclicOut.value)
+    if contains name !onStackRef then cyclicOut := dedup (takeUntilInclusiveS name !onStackRef ++ !cyclicOut)
     else
-      onStackRef := name::onStackRef.value
+      onStackRef := name :: !onStackRef
       let _ = aliasDfsVisitNeighbors graph visitedRef onStackRef cyclicOut (fromOption [] (lookupAssoc name graph))
-      onStackRef := filterList (/= name) onStackRef.value
-      visitedRef := name::visitedRef.value
+      onStackRef := filterList (/= name) !onStackRef
+      visitedRef := name :: !visitedRef
 
 aliasDfsVisitNeighbors : List (String, List String) -> Ref (List String) -> Ref (List String) -> Ref (List String) -> List String -> Unit
 aliasDfsVisitNeighbors _ _ _ _ [] = ()
@@ -8146,7 +8146,7 @@ rejectCyclicAliases _ =
   let onStackRef = Ref []
   let cyclicOut = Ref []
   let _ = aliasDfsVisitAll graph visitedRef onStackRef cyclicOut aliasKeys
-  let cyclic = cyclicOut.value
+  let cyclic = !cyclicOut
   let _ = emitCyclicAliasErrors cyclic
   setRef
     perRun.value.aliasTableRef
@@ -8924,9 +8924,9 @@ recordRLocalSite env name tagRef inst
     None => ()
     Some idx => match nthArgMono idx inst
       Some am =>
-        let sym = routeLocalSym tagRef.value
+        let sym = routeLocalSym !tagRef
         let dicts = shadowStandaloneDictSlotsAt (standaloneSchemeFor env name sym) (if sym == "" then name else sym) am
-        perRun.value.pendingRLocalSites := PendingEntry name tagRef am "" (SKRLocal sym (standaloneValuePinned name) (fst dicts) (snd dicts)) currentLoc.value :: perRun.value.pendingRLocalSites.value
+        perRun.value.pendingRLocalSites := PendingEntry name tagRef am "" (SKRLocal sym (standaloneValuePinned name) (fst dicts) (snd dicts)) !currentLoc :: perRun.value.pendingRLocalSites.value
       None => ()
 
 -- the SHADOWING STANDALONE's scheme.  An IMPORTER shadow's bare name is rebound by env1
@@ -9038,7 +9038,7 @@ countInSubst (id::rest) subst =
 recordSite : String -> Ref Route -> Ref (List Route) -> Mono -> Mono
 recordSite name tagRef implRef methodType =
   let stripped = stripArrows methodType
-  perRun.value.pendingSites := PendingEntry name tagRef stripped perRun.value.currentFn.value (SKReturn implRef methodType) currentLoc.value :: perRun.value.pendingSites.value
+  perRun.value.pendingSites := PendingEntry name tagRef stripped perRun.value.currentFn.value (SKReturn implRef methodType) !currentLoc :: perRun.value.pendingSites.value
   perRun.value.methodSiteFns := consSiteFn perRun.value.currentFn.value stripped perRun.value.methodSiteFns.value
   methodType
 
@@ -9275,7 +9275,7 @@ inferDictAtFound name routesRef inst =
     -- the ROUTING goal stays a spelling (`resolveDictApps` asks the SPELLING-keyed
     -- `KeyBuckets` a route-word question — see `dispHeadTab`); only the OBLIGATION goal
     -- below carries identity.
-    let _ = pushDictApp (routesRef, monos, map (s => s.csIface.irName) expanded, callArgVecs (declaredConstraintArgs name) ids (snd inst), currentLoc.value)
+    let _ = pushDictApp (routesRef, monos, map (s => s.csIface.irName) expanded, callArgVecs (declaredConstraintArgs name) ids (snd inst), !currentLoc)
     perRun.value.dictAppFns := (consSiteFn perRun.value.currentFn.value monos perRun.value.dictAppFns.value)
     -- #11 soundness: record this call's instantiated impl obligations (iface paired
     -- with the call's constraint mono), checked after inference by checkCallObligations.
@@ -9323,7 +9323,7 @@ recordCallObligations (s::ss) (mono::ms)
     -- P1 (#1446) / U1b (#1482): `funConstraintIfacesRef`'s payload is `List IfaceRef`,
     -- so this site records the interface OCCURRENCE's identity instead of
     -- `OriginUnresolved`.  It was one of the two `ifaceRefBare` producers.
-    let _ = recordObl (Predicate { iface = s.csIface, args = [mono] }) 0 PCallSlot currentLoc.value
+    let _ = recordObl (Predicate { iface = s.csIface, args = [mono] }) 0 PCallSlot !currentLoc
     recordCallObligations ss ms
 
 -- String-keyed assoc lookup over funConstraintIfacesRef (returns the iface name list).
@@ -10332,7 +10332,7 @@ unknownFieldFresh fname rname declared =
 pushUnknownFieldMaybeSuggest : String -> String -> List String -> Unit
 pushUnknownFieldMaybeSuggest fname rname declared = match suggestField fname declared
   None => pushTypeError "T-UNKNOWN-FIELD" (unknownFieldMsg fname rname)
-  Some sug => pushTypeErrorHelpFixAt "T-UNKNOWN-FIELD" currentLoc.value (unknownFieldMsg fname rname ++ ". Did you mean '\{sug}'?") "did you mean '\{sug}'?" (fieldFixFrom currentLoc.value sug)
+  Some sug => pushTypeErrorHelpFixAt "T-UNKNOWN-FIELD" !currentLoc (unknownFieldMsg fname rname ++ ". Did you mean '\{sug}'?") "did you mean '\{sug}'?" (fieldFixFrom !currentLoc sug)
 
 -- "did you mean" for a record field: nearest declared field name by
 -- Levenshtein distance, within a fixed distance of 2.  Skip names < 3 chars
@@ -10514,7 +10514,7 @@ binopSpanLoc l r = match (exprLoc l, exprLoc r)
 -- in-impl-body sites (a top-level operand may collide with stale activeDictVars ids).
 recordBinopSite : String -> Ref Route -> Mono -> Unit
 recordBinopSite op dref m = match binopMethod op
-  Some method => perRun.value.pendingBinopSites := PendingEntry method dref m perRun.value.currentFn.value (SKOp perRun.value.currentImplBody.value) currentLoc.value :: perRun.value.pendingBinopSites.value
+  Some method => perRun.value.pendingBinopSites := PendingEntry method dref m perRun.value.currentFn.value (SKOp perRun.value.currentImplBody.value) !currentLoc :: perRun.value.pendingBinopSites.value
   None => ()
 
 -- SHARED-FLOAT-RESIDUAL §3(C): stash an arithmetic binop's operand mono + route
@@ -10558,7 +10558,7 @@ unopMethod _ = None
 -- (nothing for `!`).  Same currentImplBody/currentFn snapshot, same reason.
 recordUnopSite : String -> Ref Route -> Mono -> Unit
 recordUnopSite op dref m = match unopMethod op
-  Some method => perRun.value.pendingUnopSites := PendingEntry method dref m perRun.value.currentFn.value (SKOp perRun.value.currentImplBody.value) currentLoc.value :: perRun.value.pendingUnopSites.value
+  Some method => perRun.value.pendingUnopSites := PendingEntry method dref m perRun.value.currentFn.value (SKOp perRun.value.currentImplBody.value) !currentLoc :: perRun.value.pendingUnopSites.value
   None => ()
 
 -- The EUnOp analogue of inferBinopE: infer the single operand, record its
@@ -10633,7 +10633,7 @@ appendOp lt rt =
 -- read that table (see `ifaceRegistered`'s ledger).
 recordIfaceObligation : BuiltinClass -> Mono -> Unit
 recordIfaceObligation c lt
-  | builtinClassPresent c = pushPendingObl (builtinIfaceRef c) ["a"] (TyVar "a") lt POperator currentLoc.value
+  | builtinClassPresent c = pushPendingObl (builtinIfaceRef c) ["a"] (TyVar "a") lt POperator !currentLoc
   | otherwise = ()
 
 -- ── §8 I7: THE BUILT-IN CLASSES, AND WHY THEY ARE A CLOSED ENUM ─────────────────
@@ -11004,7 +11004,7 @@ inferNumLit env n fref dref
 inferNumLitBare : Int -> Ref (Option Float) -> Mono
 inferNumLitBare n fref =
   let a = freshVar ()
-  let _ = pushPendingObl (builtinIfaceRef BNum) ["a"] (TyVar "a") a PNumLit currentLoc.value
+  let _ = pushPendingObl (builtinIfaceRef BNum) ["a"] (TyVar "a") a PNumLit !currentLoc
   perRun.value.numlitRefs := (a, fref, n, Ref RNone)::perRun.value.numlitRefs.value
   let _ = recordNumlitLoc a  -- Chunk D: literal provenance for Num mis-framing
   a
@@ -11013,7 +11013,7 @@ inferNumLitBare n fref =
 -- Record a literal's (var, loc) so a later Num-obligation reframe can tell a bare
 -- literal from an arithmetic-operator operand.  [currentLoc] is the ENumLit span.
 recordNumlitLoc : Mono -> Unit
-recordNumlitLoc a = match currentLoc.value
+recordNumlitLoc a = match !currentLoc
   Some l =>
     perRun.value.numlitVarLocs := (a, l)::perRun.value.numlitVarLocs.value
     perRun.value.numlitUntainted := (a, l)::perRun.value.numlitUntainted.value
@@ -11060,7 +11060,7 @@ taintAndDrop id ((v, l)::rest)
 -- Tyvar ids come from a counter that starts at 0 (`newTyvarId`), so -1 can never
 -- collide with a real id.
 rootIdOf : Mono -> Int
-rootIdOf (TVar cell) = match cell.value
+rootIdOf (TVar cell) = match !cell
   Unbound id _ => id
   Link t => rootVarId (normalizeLink cell t)
 rootIdOf _ = 0 - 1
@@ -11069,7 +11069,7 @@ rootIdOf _ = 0 - 1
 -- type variable at all.  (`normalizeLink` never returns a `Link`, so that arm is
 -- unreachable; it folds into the not-a-tyvar answer.)
 rootVarId : Mono -> Int
-rootVarId (TVar cell) = match cell.value
+rootVarId (TVar cell) = match !cell
   Unbound id _ => id
   Link _ => 0 - 1
 rootVarId _ = 0 - 1
@@ -11417,7 +11417,7 @@ recordSchemeCallObligations originId (o::rest) subst = match substMonos o.voIds 
     let _ = recordObl Predicate {
       iface = o.voIface,
       args = monos,
-    } originId PSchemeReinst currentLoc.value
+    } originId PSchemeReinst !currentLoc
     recordSchemeCallObligations originId rest subst
   None => recordSchemeCallObligations originId rest subst
 
@@ -11586,7 +11586,7 @@ recordImplObligation x mono
       -- bare method call (`p/pl`, `p/po` in the review corpus) is REJECTED, not
       -- silently accepted.  See `test/dict_fixtures/i4-xmod-method-occurrence-*` for
       -- the positive pair and `test/must_fail_fixtures/1507-…` (drained, removed).
-      let _ = pushPendingObl iface typarams mty mono PMethodOcc currentLoc.value
+      let _ = pushPendingObl iface typarams mty mono PMethodOcc !currentLoc
       -- #818 (#838 I3): also record each method-level `=>` constraint slot (e.g.
       -- `Ord b` on `peer : Ord b => a -> b -> b -> Bool`) as its OWN obligation, so an
       -- unsatisfiable slot (`Ord NoOrd`) is rejected by the unified checker at check
@@ -11650,7 +11650,7 @@ recordMethodLevelSlotObls ((vname, iface)::rest) subst =
     Some m => recordObl Predicate {
       iface = iface,
       args = [m],
-    } 0 PMethodLevel currentLoc.value
+    } 0 PMethodLevel !currentLoc
     None => ()
   recordMethodLevelSlotObls rest subst
 
@@ -11812,7 +11812,7 @@ inferShadowApp : TcEnv -> String -> List (Ref Route) -> Expr -> Expr -> Mono
 inferShadowApp env mname tagRefs f x =
   -- capture the application's loc BEFORE inferring the argument (which moves currentLoc),
   -- so a domain mismatch localizes to the call site, not the argument.
-  let dloc = currentLoc.value
+  let dloc = !currentLoc
   let tx = infer env x
   -- The dict-var carve-out (S5/Fork 2) applies to importer shadows too: a receiver that is
   -- the enclosing fn's `=>`-bound constraint var DISPATCHES through that dict, so it must
@@ -11894,10 +11894,10 @@ recordImporterShadowDicts env mname (r::rest) tx =
   let dicts = shadowStandaloneDictsWith
     (lookupAssoc mname perRun.value.shadowStandaloneSchemesRef.value)
     mname
-    (routeLocalSym r.value)
+    (routeLocalSym !r)
     tx
   let _ = setRef perRun.value.pendingRLocalSites
-    (PendingEntry mname r tx "" (SKRLocal (routeLocalSym r.value) True (fst dicts) (snd dicts)) currentLoc.value
+    (PendingEntry mname r tx "" (SKRLocal (routeLocalSym !r) True (fst dicts) (snd dicts)) !currentLoc
       ::perRun.value.pendingRLocalSites.value)
   recordImporterShadowDicts env mname rest tx
 
@@ -11944,7 +11944,7 @@ definerShadowArgHead _ = None
 -- standaloneValuesRef) is what keeps this from pinning the compiler's genuine
 -- method-values and breaking dispatch" (this file, historically beside this site).
 occurrenceCarriesMangledShadowSym : Ref Route -> Bool
-occurrenceCarriesMangledShadowSym tagRef = routeLocalSym tagRef.value /= ""
+occurrenceCarriesMangledShadowSym tagRef = routeLocalSym !tagRef /= ""
 
 -- #54: the SECOND disjunct of definerShadowArgHead — the IMPORTER-on-emit signal, kept
 -- separate because it carries a DIFFERENT gate from the definer one.  The mark pass seeds
@@ -12004,10 +12004,10 @@ importerShadowOnEmitPath name tagRef = singleTyparamIfaceMethod name
 -- ALSO pushing the standalone's declared domain (which would mis-route `Box`→`Int`).
 inferDefinerShadowApp : TcEnv -> String -> Ref Route -> Ref (List Route) -> Expr -> Expr -> Mono
 inferDefinerShadowApp env name tagRef implRef f x =
-  let sym = routeLocalSym tagRef.value
+  let sym = routeLocalSym !tagRef
   -- P0-19: capture the application's location BEFORE inferring the argument (which
   -- moves currentLoc), so a standalone-domain mismatch reports at the call site.
-  let dloc = currentLoc.value
+  let dloc = !currentLoc
   -- P0-19 d8 (S2/S6): infer the argument FIRST so the head scheme is chosen PER
   -- RECEIVER.  A receiver with a VISIBLE impl of the shadowed interface (impl universe
   -- is GRAPH-GLOBAL: ARCH B-2.1-g reads `bodyImplEnvRef` via `ieImplExistsForHead`)
@@ -12091,7 +12091,7 @@ inferDefinerShadowApp env name tagRef implRef f x =
   -- lint-disable-next-line rule-prefer-assign-op
   let _ = if isDictVar then ()
     else setRef perRun.value.pendingRLocalSites
-      (PendingEntry name tagRef xt "" (SKRLocal (routeLocalSym tagRef.value) (not dispatches) (fst dicts) (snd dicts)) currentLoc.value
+      (PendingEntry name tagRef xt "" (SKRLocal (routeLocalSym !tagRef) (not dispatches) (fst dicts) (snd dicts)) !currentLoc
         ::perRun.value.pendingRLocalSites.value)
   let _ = match argDispatchOf name
     -- #609: the SKArg full mono is the DISPATCH arm's method scheme (`ft`) — the
@@ -12099,7 +12099,7 @@ inferDefinerShadowApp env name tagRef implRef f x =
     -- standalone's own scheme, which is not an interface-method occurrence at all;
     -- pass the receiver mono `xt` so ifaceParamMonos fails its shape match and the
     -- selector falls back to the singleton goal, exactly as before #609.
-    Some _ => (perRun.value.pendingArgStamps := (PendingEntry name tagRef xt perRun.value.currentFn.value (SKArg implRef (if dispatches then ft else xt)) currentLoc.value::perRun.value.pendingArgStamps.value))
+    Some _ => (perRun.value.pendingArgStamps := (PendingEntry name tagRef xt perRun.value.currentFn.value (SKArg implRef (if dispatches then ft else xt)) !currentLoc::perRun.value.pendingArgStamps.value))
     None => ()
   -- P0-19: on the UN-MANGLED path (sym == "") `ft` is the permissive METHOD scheme
   -- (`a -> Int`), so `inferApp ft xt` would accept ANY receiver.  When this
@@ -12399,10 +12399,10 @@ maybeStandaloneValueMono name
 maybeStandaloneValueMonoEmit : TcEnv -> String -> Ref Route -> Option Mono
 maybeStandaloneValueMonoEmit env name tagRef
   | toggles.value.shadowHeadCtxRef.value = None
-  | routeLocalSym tagRef.value == "" = None
+  | routeLocalSym !tagRef == "" = None
   | not (emitValueShadowGate name) = None
   | otherwise =
-    map instantiate (standaloneSchemeFor env name (routeLocalSym tagRef.value))
+    map instantiate (standaloneSchemeFor env name (routeLocalSym !tagRef))
 
 -- #724: the per-shadow-kind gate for the emit-path value-position pin, mirroring the
 -- check-path maybeStandaloneValueMono's per-arm split (definer arm typaram-agnostic; importer
@@ -12501,7 +12501,7 @@ definerShadowVarHead _ = None
 -- dispatch that erases the user's function.
 inferDefinerShadowVarApp : TcEnv -> String -> Expr -> Expr -> Mono
 inferDefinerShadowVarApp env name f x =
-  let dloc = currentLoc.value
+  let dloc = !currentLoc
   let xt = infer env x
   let isDictVar = definerReceiverIsDictVar name xt
   -- P0-20: ground an ungrounded receiver to the standalone's declared domain BEFORE the
@@ -12585,7 +12585,7 @@ definerShadowHeadType env sym f = match lookupVar env sym
 stampRoutes : List (Ref Route) -> Unit
 stampRoutes [] = ()
 stampRoutes (r::rest) =
-  r := RLocal (routeLocalSym r.value) []
+  r := RLocal (routeLocalSym !r) []
   stampRoutes rest
 
 -- ── S-1: the shadowing standalone's OWN constraint dicts ──────────────────────
@@ -12756,7 +12756,7 @@ recordSigConstraintObls ((Constraint { constraintHead = iface, constraintArgs = 
     Some monos => recordObl Predicate {
       iface = IfaceRef { irName = iface, irOrigin = o },
       args = monos,
-    } 0 PCallSlot currentLoc.value
+    } 0 PCallSlot !currentLoc
     None => ()
   recordSigConstraintObls rest tvs subst
 
@@ -13048,7 +13048,7 @@ inferApp lets appExpr ft xt =
         -- leak `a b vs String`.  Skip the unify (it would push the leaked
         -- mismatch as a SECOND diagnostic) and poison `r` to suppress cascade.
         let hint = containerArgHint scalarTy
-        let _ = pushTypeErrorHelpFixAt "T-TYPE-MISMATCH" currentLoc.value (containerArgMsg (appSpineName appExpr) scalarTy) hint None
+        let _ = pushTypeErrorHelpFixAt "T-TYPE-MISMATCH" !currentLoc (containerArgMsg (appSpineName appExpr) scalarTy) hint None
         -- Poison the container tyvar + element vars (in ft) exactly as the generic
         -- unify sink would (`monoUnboundIds a ++ b`), so the dangling `Mappable f`
         -- obligation sees a poisoned var and suppresses its own cascade.
@@ -13343,7 +13343,7 @@ checkMatchExhaustive scrutTy arms =
   let rows = nonGuardedRows arms
   if useful driverState.value.matchOracle.value (matchCol0Type scrutTy) rows [PWild] then
     let (msg, help) = nonExhaustiveMsg scrutTy rows
-    driverState.value.matchWarnings := TcDiag "W-NONEXHAUSTIVE" 2 currentLoc.value msg help None :: driverState.value.matchWarnings.value
+    driverState.value.matchWarnings := TcDiag "W-NONEXHAUSTIVE" 2 !currentLoc msg help None :: driverState.value.matchWarnings.value
   else ()
 
 -- ── unreachable / redundant match-arm warning (W-UNREACHABLE-ARM) ──────────
@@ -13381,7 +13381,7 @@ checkRedundantGo _ _ _ _ [] = ()
 checkRedundantGo col0 prec heads offCol ((Arm pat gs body)::rest) =
   let dp = desugarPat driverState.value.matchOracle.value pat
   let _ = if armUnreachable col0 prec heads offCol dp then
-    driverState.value.matchWarnings := (TcDiag "W-UNREACHABLE-ARM" 2 (orElseLoc (exprLoc body) currentLoc.value) unreachableArmWarning None None :: driverState.value.matchWarnings.value)
+    driverState.value.matchWarnings := (TcDiag "W-UNREACHABLE-ARM" 2 (orElseLoc (exprLoc body) !currentLoc) unreachableArmWarning None None :: driverState.value.matchWarnings.value)
   else ()
   -- Only UNGUARDED, range-free arms contribute to the covered set: a guarded arm
   -- may not fire, and a range collapses to a wildcard that over-states coverage
@@ -14397,7 +14397,7 @@ pinnedEntryMatches (stored, _, _, loc) a b =
 -- the binding and the error are in the same file.  An absent loc on either side ⇒ we
 -- cannot establish the relation ⇒ False (fall through to the plain mismatch).
 locSameFileAsError : Option Loc -> Bool
-locSameFileAsError (Some (Loc bf _ _ _ _)) = match currentLoc.value
+locSameFileAsError (Some (Loc bf _ _ _ _)) = match !currentLoc
   Some (Loc ef _ _ _ _) => bf == ef
   None => False
 -- No binding loc (an unwrapped where-clause RHS) ⇒ we cannot run the same-file test,
@@ -14876,7 +14876,7 @@ discoverPromotedModules : List Decl -> List Decl -> List (String, List Decl) -> 
 discoverPromotedModules runtimeDecls coreDecls modules rpNames argNames =
   let joint = coreDecls ++ flatMap snd modules
   let dictSeed = moduleDictNames coreDecls joint modules
-  let savedSticky = typeErrorsSticky.value
+  let savedSticky = !typeErrorsSticky
   -- issue 1146: the hand-rolled save/restore of this channel is now the SAME
   -- wSnapshot/wRestore pair its obligation-channel siblings make in
   -- inferUserImplBodies.  The `resetState ()` below re-mints `perRun`, so both
@@ -15903,7 +15903,7 @@ resolveArithSites ((dref, m)::rest) =
   resolveArithSites rest
 
 resolveArithSite : Ref Route -> Mono -> Unit
-resolveArithSite dref m = match dref.value
+resolveArithSite dref m = match !dref
   RNone => match headTyconNameMono m
     Some "Float" => dref := RScalar "Float"
     _ => ()
@@ -16282,7 +16282,7 @@ cohOverlapGo subst ((a, b)::rest)
 -- resolve a mono through the wildcard subst (chasing bound vars)
 cohResolve : Ref (List (Int, Mono)) -> Mono -> Mono
 cohResolve subst m = match normalize m
-  TVar cell => match lookupAssocI (tyvarId cell) subst.value
+  TVar cell => match lookupAssocI (tyvarId cell) !subst
     Some m2 => cohResolve subst m2
     None => TVar cell
   other => other
@@ -16323,7 +16323,7 @@ cohGoR _ _ _ = False
 -- bind id := m in the wildcard subst and return True
 cohBind : Ref (List (Int, Mono)) -> Int -> Mono -> Bool
 cohBind subst id m =
-  subst := (id, m)::subst.value
+  subst := (id, m) :: !subst
   True
 
 -- ── shared one-sided matcher core (#156 S1) ────────────────────────────────
@@ -16765,7 +16765,7 @@ cohImplLoc (CohImpl _ _ _ l) = l
 -- channel, not just the number.
 pushCoherenceWarning : Option Loc -> String -> Unit
 pushCoherenceWarning loc msg =
-  let warning = TcDiag "W-INCOMPARABLE-IMPLS" 2 (orElseLoc loc currentLoc.value) msg (Some cohIncomparableHelp) None
+  let warning = TcDiag "W-INCOMPARABLE-IMPLS" 2 (orElseLoc loc !currentLoc) msg (Some cohIncomparableHelp) None
   driverState.value.matchWarnings := warning::driverState.value.matchWarnings.value
 
 -- run coherence over USER decls; push at most one HARD conflict into typeErrors and
@@ -18120,7 +18120,7 @@ flatImplEnvOf decls = buildImplEnv [declEnvModule 0 "" decls]
 
 checkOneIfaceCycle : ClassEnv -> Int -> Ref (OrdMap Unit) -> CeRow -> Unit
 checkOneIfaceCycle ce cur done row =
-  if not (omHasKey (ceRowDoneKey row) done.value) then
+  if not (omHasKey (ceRowDoneKey row) !done) then
     foreachUnit (pushTypeError "T-CYCLIC-SUPERINTERFACE") (ifaceDfsCycle ce cur done [row] row)
   else
     ()
@@ -18147,7 +18147,7 @@ ceRowDoneKey r = regKeyRender (ceRowKey r)
 ifaceDfsCycle : ClassEnv -> Int -> Ref (OrdMap Unit) -> List CeRow -> CeRow -> List String
 ifaceDfsCycle ce cur done path current =
   let msgs = ifaceDfsCycleSupers ce cur done path (ceRowSupers current)
-  done := omInsert (ceRowDoneKey current) () done.value
+  done := omInsert (ceRowDoneKey current) () !done
   msgs
 
 ifaceDfsCycleSupers : ClassEnv -> Int -> Ref (OrdMap Unit) -> List CeRow -> List Super -> List String
@@ -18165,7 +18165,7 @@ ifaceDfsCycleOneSuper ce cur done path so superName =
   let rendered = regKeyRender key
   if containsRowKey rendered path then [cyclicSuperIfaceMsg (map ceRowIfaceName path ++ [superName])]
   else
-    if omHasKey rendered done.value then []
+    if omHasKey rendered !done then []
     else match ceLookupAt key cur ce
       None => []
       Some r => ifaceDfsCycle ce cur done (path ++ [r]) r
@@ -19083,7 +19083,7 @@ reportAmbiguousOverlap goals cands
   | not (goalsClosed goals) = ()
   | otherwise = match candsOneIface cands
     None => ()
-    Some iface => pushTypeErrorOnceAt "T-AMBIGUOUS-INSTANCE" goalSiteLoc.value (ambiguousOverlapMsg iface goals cands)
+    Some iface => pushTypeErrorOnceAt "T-AMBIGUOUS-INSTANCE" !goalSiteLoc (ambiguousOverlapMsg iface goals cands)
 
 -- §6.2 T3's "closed": every variable of the goal is *"either quantified by the scheme
 -- just produced or already ground"* — the ground goals PLUS the rigid-variable ones.
@@ -21065,7 +21065,7 @@ dictPass names prog =
 -- non-parametric concrete impl stamps empty reqs → the plain direct call.
 --   <→lt  >→gt  <=→lte  >=→gte  ==→eq  /=→not (eq a b)
 rewriteBinopExpr : Expr -> Expr
-rewriteBinopExpr (EBinOp op l r routeRef) = match routeRef.value
+rewriteBinopExpr (EBinOp op l r routeRef) = match !routeRef
   RNone => EBinOp op l r routeRef
   -- SHARED-FLOAT-RESIDUAL §3(C): an RScalar route is NOT a typeclass dispatch — it
   -- is the scalar-type tag typecheck stamped on a monomorphic arithmetic binop
@@ -21102,9 +21102,9 @@ rewriteBinopExpr (EBinOp op l r routeRef) = match routeRef.value
 -- [dref]'s route on its tag ref; impl-dicts/method-dicts refs are empty (`Num` has no
 -- element `requires`).  Done in the same mapProg walk that rewrites binops, so
 -- eval/lower never see ENumLit and eval_arith / the emitter get matching tags.
-rewriteBinopExpr (ENumLit n fref dref _) = match fref.value
+rewriteBinopExpr (ENumLit n fref dref _) = match !fref
   Some f => ELit (LFloat f)
-  None => match dref.value
+  None => match !dref
     RNone => ELit (LInt n)
     route =>
       EApp (EMethodAt "fromInt" (Ref route) (Ref []) (Ref [])) (ELit (LInt n))
@@ -21114,7 +21114,7 @@ rewriteBinopExpr (ENumLit n fref dref _) = match fref.value
 -- non-RNone route; Int/Float stay the literal EUnOp the eval builtin handles
 -- structurally (no recursion — Int/Float's own `negate` bodies use the BINOP
 -- `0 - a`, never unary minus).  `!` never routes (stays RNone unconditionally).
-rewriteBinopExpr (EUnOp op e routeRef) = match routeRef.value
+rewriteBinopExpr (EUnOp op e routeRef) = match !routeRef
   RNone => EUnOp op e routeRef
   _ => unopMethodApp op e routeRef
 rewriteBinopExpr e = e
@@ -21130,7 +21130,7 @@ binopRouteSplit r = (r, [])
 binopMethodApp : String -> Expr -> Expr -> Ref Route -> Expr
 binopMethodApp op l r routeRef =
   let method = fromOption "eq" (binopMethod op)
-  let split = binopRouteSplit routeRef.value
+  let split = binopRouteSplit !routeRef
   let call = EApp (EApp (EMethodAt method (Ref (fst split)) (Ref (snd split)) (Ref [])) l) r
   if op == "/=" then EApp (EVar "not") call else call
 
@@ -21140,7 +21140,7 @@ binopMethodApp op l r routeRef =
 unopMethodApp : String -> Expr -> Ref Route -> Expr
 unopMethodApp op e routeRef =
   let method = fromOption "negate" (unopMethod op)
-  let split = binopRouteSplit routeRef.value
+  let split = binopRouteSplit !routeRef
   EApp (EMethodAt method (Ref (fst split)) (Ref (snd split)) (Ref [])) e
 
 dictPassDecl : List String -> List String -> Decl -> Decl
@@ -21274,13 +21274,13 @@ bodyRDictNames e = flatMap siteRDictName (collectMethodSites e)
   ++ flatMap siteRDictNamesL (collectDictSites e)
 
 siteRDictName : Ref Route -> List String
-siteRDictName r = match r.value
+siteRDictName r = match !r
   RDict d => [d]
   RDictFwd d => [d]
   _ => []
 
 siteRDictNamesL : Ref (List Route) -> List String
-siteRDictNamesL r = flatMap routeRDictName r.value
+siteRDictNamesL r = flatMap routeRDictName !r
 
 routeRDictName : Route -> List String
 routeRDictName (RDict d) = [d]
@@ -23980,7 +23980,7 @@ reqObligationsFor univ iface args = match findMatchingImplReqsU univ iface args
 unroutedGroundReqs : ImplUniverse -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 unroutedGroundReqs univ iface args
   | implMatchesWithReqsU univ iface args =
-    let _ = pushTypeErrorOnceAt "T-REQUIRES-UNROUTED" goalSiteLoc.value (requiresUnroutedMsg iface args)
+    let _ = pushTypeErrorOnceAt "T-REQUIRES-UNROUTED" !goalSiteLoc (requiresUnroutedMsg iface args)
     []
   | otherwise = []
 
@@ -25121,7 +25121,7 @@ removeAllS drop (x::xs)
 -- comes out of the same table entry as `(typarams, mty)`.
 ifaceMethodTyResolved : List Decl -> String -> String -> Option (List String, Ty, List (String, List Kind))
 ifaceMethodTyResolved allProg iface mname
-  | useFastIfaceMethodTy.value = match omLookup mname perRun.value.methodIfaceParamsRef.value
+  | !useFastIfaceMethodTy = match omLookup mname perRun.value.methodIfaceParamsRef.value
     Some (ifn, typarams, mty, scope) =>
       -- ⚠️ SPELLING comparison, deliberately: the caller supplies `iface` as a bare
       -- name (from an `impl` head / a default-body subject), so making this an identity
@@ -26662,7 +26662,7 @@ residualPredsOf : Int -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 residualPredsOf fuel iface args
   | not (anyConcreteHead args) = [(iface, args)]
   | fuel <= 0 =
-    let _ = pushTypeErrorOnceAt "T-REQUIRES-DEPTH" goalSiteLoc.value (requiresDepthMsg iface args)
+    let _ = pushTypeErrorOnceAt "T-REQUIRES-DEPTH" !goalSiteLoc (requiresDepthMsg iface args)
     []
   | otherwise = match findMatchingImplReqsU perRun.value.residualUnivRef.value iface args
     None => unroutedResidual iface args
@@ -26747,7 +26747,7 @@ residualPredsOf fuel iface args
 unroutedResidual : IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 unroutedResidual iface args
   | implMatchesWithReqsU perRun.value.residualUnivRef.value iface args =
-    let _ = pushTypeErrorOnceAt "T-REQUIRES-UNROUTED" goalSiteLoc.value (requiresUnroutedMsg iface args)
+    let _ = pushTypeErrorOnceAt "T-REQUIRES-UNROUTED" !goalSiteLoc (requiresUnroutedMsg iface args)
     []
   | otherwise = []
 

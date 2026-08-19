@@ -737,11 +737,11 @@ wrappedRead cacheRef staleRef read path = match read path
   None => None
   Some src => match parseResult src
     Ok _ =>
-      cacheRef := cachePut path src cacheRef.value
+      cacheRef := cachePut path src !cacheRef
       Some src
     Err e =>
-      staleRef := (path, parseErrDiag path e)::staleRef.value
-      match lookupAssoc path cacheRef.value
+      staleRef := (path, parseErrDiag path e) :: !staleRef
+      match lookupAssoc path !cacheRef
         Some good => Some good
         None => Some src  -- no cached version → use the broken one
 -- fall back to the last source that parsed
@@ -788,11 +788,11 @@ parseErrDiag path e =
 -- keyed by source in the shared parse cache (its keys never collide with a module's
 -- source).  A miss parses+desugars and inserts; a hit returns the cached decls.
 preludeDesugared : Ref (List (String, List Decl)) -> String -> List Decl
-preludeDesugared parseCacheRef src = match lookupAssoc src parseCacheRef.value
+preludeDesugared parseCacheRef src = match lookupAssoc src !parseCacheRef
   Some decls => decls
   None =>
     let decls = desugar (parse src)
-    parseCacheRef := (src, decls)::parseCacheRef.value
+    parseCacheRef := (src, decls) :: !parseCacheRef
     decls
 
 export analyzeProject : Ref (List (String, String)) -> Ref (List (String, List Decl)) -> (String -> Option String) -> String -> List String -> String -> String -> <IO> List (String, List Diag)
@@ -858,7 +858,7 @@ seedAll (f::fs) buckets = seedAll fs (seedBucket f buckets)
 -- Append the collected stale parse-error diagnostics into their files' buckets
 -- (seeding the bucket first so the file appears even if it produced nothing else).
 appendStale : Ref (List (String, Diag)) -> List (String, List Diag) -> List (String, List Diag)
-appendStale staleRef buckets = foldStale staleRef.value buckets
+appendStale staleRef buckets = foldStale !staleRef buckets
 
 foldStale : List (String, Diag) -> List (String, List Diag) -> List (String, List Diag)
 foldStale [] buckets = buckets

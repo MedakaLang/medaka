@@ -93,7 +93,7 @@ lower (ELit l) = CLit l
 -- PLAN.md #11: dictPass rewrites every ENumLit to ELit before lowering; this
 -- arm is defensive (a non-rewritten path) — a Float-stamped ref lowers to a
 -- float constant, else an int.
-lower (ENumLit n r _ _) = match r.value
+lower (ENumLit n r _ _) = match !r
   Some f => CLit (LFloat f)
   None => CLit (LInt n)
 lower (EVar x) = CVar x AGlobal
@@ -106,7 +106,7 @@ lower (ELet _ recFlag pat e1 e2) = CLet recFlag pat (lower e1) (lower e2)
 lower (ELetGroup binds body) = CLetGroup (map lowerBind binds) (lower body)
 lower (EMatch scrut arms) = lowerMatch (lower scrut) arms
 lower (EIf c t e) = CIf (lower c) (lower t) (lower e)
-lower (EBinOp op l r route) = lowerBinop op l r (scalarTagOfRoute route.value)
+lower (EBinOp op l r route) = lowerBinop op l r (scalarTagOfRoute !route)
 lower (EInfix op l r) = CApp (CApp (CVar op AGlobal) (lower l)) (lower r)
 -- #1739 half A: `!x` lowers to the SAME Core IR node `x.value` does, rather than a
 -- `CUnOp "!"` both backends would then need a new arm for.  `CFieldAccess _ "value"`
@@ -122,23 +122,23 @@ lower (EArrayLit es) = CArray (map lower es)
 lower (ERangeList lo hi incl) = CRangeList (lower lo) (lower hi) incl
 lower (ERangeArray lo hi incl) = CRangeArray (lower lo) (lower hi) incl
 lower (EIndex a i r) =
-  if r.value == "String" then
+  if !r == "String" then
     CStringIndex (lower a) (lower i)
-  else if r.value == "List" then
+  else if !r == "List" then
     CListIndex (lower a) (lower i)
   else
     CIndex (lower a) (lower i)
 lower (ESlice a lo hi incl r) =
-  if r.value == "String" then
+  if !r == "String" then
     CStringSlice (lower a) (lower lo) (lower hi) incl
-  else if r.value == "List" then
+  else if !r == "List" then
     CListSlice (lower a) (lower lo) (lower hi) incl
   else
     CSlice (lower a) (lower lo) (lower hi) incl
-lower (EFieldAccess e f r) = CFieldAccess (lower e) f r.value
+lower (EFieldAccess e f r) = CFieldAccess (lower e) f !r
 lower (ERecordCreate name fields) = CRecord name (map lowerField fields)
 lower (ERecordUpdate base fields r) =
-  CRecordUpdate r.value (lower base) (map lowerField fields)
+  CRecordUpdate !r (lower base) (map lowerField fields)
 lower (EVariantUpdate con base fields) =
   CVariantUpdate con (lower base) (map lowerField fields)
 lower (EBlock stmts) = CBlock (map lowerStmt stmts)
@@ -155,8 +155,8 @@ lower (EHeadAnnot e _) = lower e
 -- (instance-`requires` impl dicts — the second ref — are unsupported in the Core
 -- IR experiment; drop them, the core_ir fixtures carry no requires-impls)
 lower (EMethodAt name routeRef implRef methodRef) =
-  CMethod name routeRef.value implRef.value methodRef.value
-lower (EDictAt name routesRef) = CDict name routesRef.value
+  CMethod name !routeRef !implRef !methodRef
+lower (EDictAt name routesRef) = CDict name !routesRef
 -- ELoc is STRIPPED here: no source-location wrapper reaches the Core IR, so the
 -- emitted IR for any program is byte-identical to the un-wrapped tree.  This is
 -- the fixpoint guarantee (the transparent strip that keeps the C3 IR stable).
@@ -963,7 +963,7 @@ memoBindName : String -> String -> String
 memoBindName selector method = "$memo_\{sanitizeId selector}_\{method}"
 
 recordMemoRef : String -> String -> Unit
-recordMemoRef tag method = memoRefsRef := (tag, method)::memoRefsRef.value
+recordMemoRef tag method = memoRefsRef := (tag, method) :: !memoRefsRef
 
 -- #731 item 1 / #747: rewrite a runtime-dict-routed nullary occurrence.
 --   • single-impl (soleMemoKeysRef): the runtime dict can only ever resolve to the
@@ -977,7 +977,7 @@ recordMemoRef tag method = memoRefsRef := (tag, method)::memoRefsRef.value
 --     per-VTypedImpl memoThunk).  Distinct tags carry distinct CAFs → memoise
 --     independently.  A method with no nullary/return-position impl records nothing.
 hoistDictNullary : String -> Route -> CExpr
-hoistDictNullary name route = match lookupAssoc name soleMemoKeysRef.value
+hoistDictNullary name route = match lookupAssoc name !soleMemoKeysRef
   Some sel =>
     let _ = recordMemoRef sel name
     CVar (memoBindName sel name) AGlobal
@@ -992,7 +992,7 @@ hoistDictNullary name route = match lookupAssoc name soleMemoKeysRef.value
 -- program's memo keys — a nullary occurrence of a NON-memoisable method records
 -- nothing, leaving its per-call dispatch untouched.
 recordMultiImplMemo : String -> Unit
-recordMultiImplMemo name = recordMultiImplMemoGo name allMemoKeysRef.value
+recordMultiImplMemo name = recordMultiImplMemoGo name !allMemoKeysRef
 
 recordMultiImplMemoGo : String -> List (String, String) -> Unit
 recordMultiImplMemoGo _ [] = ()
@@ -1014,7 +1014,7 @@ hoistNullaryMemo (CProgram groups ctorArs ctorTypes implEntries) =
     allMemoKeysRef := keys
     let groups2 = map (hoistBind keys) groups
     let impls2 = map (hoistImpl keys) implEntries
-    let refs = dedupPairs (reverseL memoRefsRef.value)
+    let refs = dedupPairs (reverseL !memoRefsRef)
     CProgram (map memoCafBind refs ++ groups2) ctorArs ctorTypes impls2
 
 memoCafBind : (String, String) -> CBind
@@ -1331,7 +1331,7 @@ ifaceImplHeadEntries _ = []
 -- falls back to first-match.  Not fixable here: `mdk_default_<method>_<tag>` has no
 -- interface component, so the two default bodies have one symbol between them.
 export ifaceIdsAtTag : String -> List String
-ifaceIdsAtTag tag = ifaceIdsAtTagGo tag ifaceImplHeadsRef.value
+ifaceIdsAtTag tag = ifaceIdsAtTagGo tag !ifaceImplHeadsRef
 
 ifaceIdsAtTagGo : String -> List (String, String, String, String) -> List String
 ifaceIdsAtTagGo _ [] = []
@@ -1347,7 +1347,7 @@ ifaceIdsAtTagGo tag ((ifaceId, _, t, k)::rest)
 -- canonical full-type key — the same word `keyForSiteByIface` stamps into the
 -- caller's dict cell.
 export ifaceImplRouteKeys : String -> List String
-ifaceImplRouteKeys iface = ifaceRouteKeysGo iface ifaceImplHeadsRef.value
+ifaceImplRouteKeys iface = ifaceRouteKeysGo iface !ifaceImplHeadsRef
 
 ifaceRouteKeysGo : String -> List (String, String, String, String) -> List String
 ifaceRouteKeysGo _ [] = []
@@ -1372,7 +1372,7 @@ declRouteKey tag key unique = if unique then tag else key
 -- `lowerImpls` degrades to today's output rather than mis-keying.
 export ifaceDeclHeadUnique : String -> String -> Bool
 ifaceDeclHeadUnique iface tag =
-  listLen (declKeysAtHead ifaceImplHeadsRef.value iface tag []) <= 1
+  listLen (declKeysAtHead !ifaceImplHeadsRef iface tag []) <= 1
 
 declKeysAtHead : List (String, String, String, String) -> String -> String -> List String -> List String
 declKeysAtHead [] _ _ acc = acc

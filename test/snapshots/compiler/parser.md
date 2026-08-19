@@ -200,13 +200,13 @@ setLocState src offs =
 -- start char offset of token `i` (0 when out of range / unset).
 tokOffsetAt : Int -> Int
 tokOffsetAt i =
-  let offs = locOffsRef.value
+  let offs = !locOffsRef
   if i >= 0 && i < arrayLength offs then fst (arrayGetUnsafe i offs) else 0
 
 -- end char offset of token `i` — one past its last character (0 when out of range / unset).
 tokEndOffsetAt : Int -> Int
 tokEndOffsetAt i =
-  let offs = locOffsRef.value
+  let offs = !locOffsRef
   if i >= 0 && i < arrayLength offs then snd (arrayGetUnsafe i offs) else 0
 
 -- Build a `Loc` from a [start, end) token-index span.  start → the span's first
@@ -218,7 +218,7 @@ tokEndOffsetAt i =
 -- OCaml LSP's range exactly.  `file` is left "" for the caller to fill.
 locOfSpan : Int -> Int -> Loc
 locOfSpan startIdx endIdx =
-  let lineStarts = locLineStartsRef.value
+  let lineStarts = !locLineStartsRef
   let lastIdx = if endIdx > startIdx then endIdx - 1 else startIdx
   match offsetToLineColFast lineStarts (tokOffsetAt startIdx)
     (sl, sc) => match offsetToLineColFast lineStarts (tokEndOffsetAt lastIdx)
@@ -1368,7 +1368,7 @@ letExprKind _ = letPatExpr
 -- The single parser rejection message for `let mut` (used at both the
 -- expression-level and statement-level `let` productions). Points at `Ref`/`:=`.
 letMutRemovedMsg : String
-letMutRemovedMsg = "`let mut` has been removed — bindings are immutable. For mutable state use a `Ref` cell: `let x = Ref 0`, write `x := newValue`, and read it with `x.value`"
+letMutRemovedMsg = "`let mut` has been removed — bindings are immutable. For mutable state use a `Ref` cell: `let x = Ref 0`, write `x := newValue`, and read it with `!x`"
 
 -- `record` is no longer a keyword: a single-constructor named-field product is
 -- the degenerate case of `data`, so declare a record with the `data X = { … }`
@@ -5103,11 +5103,11 @@ parseResultWith src tokList offList =
 (DTypeSig false "setLocState" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "Unit"))))
 (DFunDef false "setLocState" ((PVar "src") (PVar "offs")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "locSrcRef")) (EVar "src"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "locLineStartsRef")) (EApp (EVar "lineStartsOf") (EVar "src")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "locOffsRef")) (EVar "offs")))))
 (DTypeSig false "tokOffsetAt" (TyFun (TyCon "Int") (TyCon "Int")))
-(DFunDef false "tokOffsetAt" ((PVar "i")) (EBlock (DoLet false false (PVar "offs") (EFieldAccess (EVar "locOffsRef") "value")) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "offs")))) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "offs"))) (ELit (LInt 0))))))
+(DFunDef false "tokOffsetAt" ((PVar "i")) (EBlock (DoLet false false (PVar "offs") (EUnOp "!" (EVar "locOffsRef"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "offs")))) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "offs"))) (ELit (LInt 0))))))
 (DTypeSig false "tokEndOffsetAt" (TyFun (TyCon "Int") (TyCon "Int")))
-(DFunDef false "tokEndOffsetAt" ((PVar "i")) (EBlock (DoLet false false (PVar "offs") (EFieldAccess (EVar "locOffsRef") "value")) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "offs")))) (EApp (EVar "snd") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "offs"))) (ELit (LInt 0))))))
+(DFunDef false "tokEndOffsetAt" ((PVar "i")) (EBlock (DoLet false false (PVar "offs") (EUnOp "!" (EVar "locOffsRef"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "offs")))) (EApp (EVar "snd") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "offs"))) (ELit (LInt 0))))))
 (DTypeSig false "locOfSpan" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Loc"))))
-(DFunDef false "locOfSpan" ((PVar "startIdx") (PVar "endIdx")) (EBlock (DoLet false false (PVar "lineStarts") (EFieldAccess (EVar "locLineStartsRef") "value")) (DoLet false false (PVar "lastIdx") (EIf (EBinOp ">" (EVar "endIdx") (EVar "startIdx")) (EBinOp "-" (EVar "endIdx") (ELit (LInt 1))) (EVar "startIdx"))) (DoExpr (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "lineStarts")) (EApp (EVar "tokOffsetAt") (EVar "startIdx"))) (arm (PTuple (PVar "sl") (PVar "sc")) () (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "lineStarts")) (EApp (EVar "tokEndOffsetAt") (EVar "lastIdx"))) (arm (PTuple (PVar "el") (PVar "ec")) () (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec")))))))))
+(DFunDef false "locOfSpan" ((PVar "startIdx") (PVar "endIdx")) (EBlock (DoLet false false (PVar "lineStarts") (EUnOp "!" (EVar "locLineStartsRef"))) (DoLet false false (PVar "lastIdx") (EIf (EBinOp ">" (EVar "endIdx") (EVar "startIdx")) (EBinOp "-" (EVar "endIdx") (ELit (LInt 1))) (EVar "startIdx"))) (DoExpr (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "lineStarts")) (EApp (EVar "tokOffsetAt") (EVar "startIdx"))) (arm (PTuple (PVar "sl") (PVar "sc")) () (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "lineStarts")) (EApp (EVar "tokEndOffsetAt") (EVar "lastIdx"))) (arm (PTuple (PVar "el") (PVar "ec")) () (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec")))))))))
 (DTypeSig false "located" (TyFun (TyApp (TyCon "Parser") (TyCon "Expr")) (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "located" ((PVar "p")) (EApp (EApp (EVar "andThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "andThen") (EVar "p")) (ELam ((PVar "e")) (EApp (EApp (EVar "andThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EVar "pure") (EApp (EApp (EVar "ELoc") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))) (EVar "e"))))))))))
 (DTypeSig false "advance" (TyApp (TyCon "Parser") (TyCon "Token")))
@@ -5537,7 +5537,7 @@ parseResultWith src tokList offList =
 (DFunDef false "letExprKind" ((PCon "TIdent" (PVar "name"))) (EApp (EVar "letIdentExpr") (EVar "name")))
 (DFunDef false "letExprKind" (PWild) (EVar "letPatExpr"))
 (DTypeSig false "letMutRemovedMsg" (TyCon "String"))
-(DFunDef false "letMutRemovedMsg" () (ELit (LString "`let mut` has been removed — bindings are immutable. For mutable state use a `Ref` cell: `let x = Ref 0`, write `x := newValue`, and read it with `x.value`")))
+(DFunDef false "letMutRemovedMsg" () (ELit (LString "`let mut` has been removed — bindings are immutable. For mutable state use a `Ref` cell: `let x = Ref 0`, write `x := newValue`, and read it with `!x`")))
 (DTypeSig false "recordRemovedMsg" (TyCon "String"))
 (DFunDef false "recordRemovedMsg" () (ELit (LString "`record` is not a keyword — declare a record as `data X = { field : T, … }`")))
 (DTypeSig false "functionRemovedMsg" (TyCon "String"))
@@ -6639,11 +6639,11 @@ parseResultWith src tokList offList =
 (DTypeSig false "setLocState" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "Unit"))))
 (DFunDef false "setLocState" ((PVar "src") (PVar "offs")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "locSrcRef")) (EVar "src"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "locLineStartsRef")) (EApp (EVar "lineStartsOf") (EVar "src")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "locOffsRef")) (EVar "offs")))))
 (DTypeSig false "tokOffsetAt" (TyFun (TyCon "Int") (TyCon "Int")))
-(DFunDef false "tokOffsetAt" ((PVar "i")) (EBlock (DoLet false false (PVar "offs") (EFieldAccess (EVar "locOffsRef") "value")) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "offs")))) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "offs"))) (ELit (LInt 0))))))
+(DFunDef false "tokOffsetAt" ((PVar "i")) (EBlock (DoLet false false (PVar "offs") (EUnOp "!" (EVar "locOffsRef"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "offs")))) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "offs"))) (ELit (LInt 0))))))
 (DTypeSig false "tokEndOffsetAt" (TyFun (TyCon "Int") (TyCon "Int")))
-(DFunDef false "tokEndOffsetAt" ((PVar "i")) (EBlock (DoLet false false (PVar "offs") (EFieldAccess (EVar "locOffsRef") "value")) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "offs")))) (EApp (EVar "snd") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "offs"))) (ELit (LInt 0))))))
+(DFunDef false "tokEndOffsetAt" ((PVar "i")) (EBlock (DoLet false false (PVar "offs") (EUnOp "!" (EVar "locOffsRef"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "offs")))) (EApp (EVar "snd") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "offs"))) (ELit (LInt 0))))))
 (DTypeSig false "locOfSpan" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Loc"))))
-(DFunDef false "locOfSpan" ((PVar "startIdx") (PVar "endIdx")) (EBlock (DoLet false false (PVar "lineStarts") (EFieldAccess (EVar "locLineStartsRef") "value")) (DoLet false false (PVar "lastIdx") (EIf (EBinOp ">" (EVar "endIdx") (EVar "startIdx")) (EBinOp "-" (EVar "endIdx") (ELit (LInt 1))) (EVar "startIdx"))) (DoExpr (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "lineStarts")) (EApp (EVar "tokOffsetAt") (EVar "startIdx"))) (arm (PTuple (PVar "sl") (PVar "sc")) () (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "lineStarts")) (EApp (EVar "tokEndOffsetAt") (EVar "lastIdx"))) (arm (PTuple (PVar "el") (PVar "ec")) () (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec")))))))))
+(DFunDef false "locOfSpan" ((PVar "startIdx") (PVar "endIdx")) (EBlock (DoLet false false (PVar "lineStarts") (EUnOp "!" (EVar "locLineStartsRef"))) (DoLet false false (PVar "lastIdx") (EIf (EBinOp ">" (EVar "endIdx") (EVar "startIdx")) (EBinOp "-" (EVar "endIdx") (ELit (LInt 1))) (EVar "startIdx"))) (DoExpr (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "lineStarts")) (EApp (EVar "tokOffsetAt") (EVar "startIdx"))) (arm (PTuple (PVar "sl") (PVar "sc")) () (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "lineStarts")) (EApp (EVar "tokEndOffsetAt") (EVar "lastIdx"))) (arm (PTuple (PVar "el") (PVar "ec")) () (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EVar "sl")) (EVar "sc")) (EVar "el")) (EVar "ec")))))))))
 (DTypeSig false "located" (TyFun (TyApp (TyCon "Parser") (TyCon "Expr")) (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "located" ((PVar "p")) (EApp (EApp (EMethodRef "andThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "andThen") (EVar "p")) (ELam ((PVar "e")) (EApp (EApp (EMethodRef "andThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EMethodRef "pure") (EApp (EApp (EVar "ELoc") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q"))) (EVar "e"))))))))))
 (DTypeSig false "advance" (TyApp (TyCon "Parser") (TyCon "Token")))
@@ -7073,7 +7073,7 @@ parseResultWith src tokList offList =
 (DFunDef false "letExprKind" ((PCon "TIdent" (PVar "name"))) (EApp (EVar "letIdentExpr") (EVar "name")))
 (DFunDef false "letExprKind" (PWild) (EVar "letPatExpr"))
 (DTypeSig false "letMutRemovedMsg" (TyCon "String"))
-(DFunDef false "letMutRemovedMsg" () (ELit (LString "`let mut` has been removed — bindings are immutable. For mutable state use a `Ref` cell: `let x = Ref 0`, write `x := newValue`, and read it with `x.value`")))
+(DFunDef false "letMutRemovedMsg" () (ELit (LString "`let mut` has been removed — bindings are immutable. For mutable state use a `Ref` cell: `let x = Ref 0`, write `x := newValue`, and read it with `!x`")))
 (DTypeSig false "recordRemovedMsg" (TyCon "String"))
 (DFunDef false "recordRemovedMsg" () (ELit (LString "`record` is not a keyword — declare a record as `data X = { field : T, … }`")))
 (DTypeSig false "functionRemovedMsg" (TyCon "String"))

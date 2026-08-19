@@ -159,7 +159,7 @@ for required in \
   'addLifted (progEmit prog) (emitLamDefine prog lamName pats captured body)' \
   'addLifted (progEmit prog) def' \
   'let lifted = if progUseClos prog then flatMap (x => x) (reverseL (progEmit prog).liftedDefinitions.value) else []' \
-  'let names = "$mdk_pap" :: reverseL emit.functionReferences.value' \
+  'let names = "$mdk_pap" :: reverseL !emit.functionReferences' \
   'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' \
   'let emit = freshWasmEmit WGapRecord'; do
   grep -F -- "$required" "$WASM_SRC" >/dev/null || {
@@ -190,7 +190,7 @@ for required in \
   'wasmTrapBytes : WasmEmit -> String -> List String' \
   'wasmTrap : WasmEmit -> String -> String -> List String' \
   'setRef emit.trapImportNeeded True' \
-  'let trapImport = if emit.trapImportNeeded.value then stderrByteImportLines else []' \
+  'let trapImport = if !emit.trapImportNeeded then stderrByteImportLines else []' \
   'let trapImport = if (progEmit prog).useEPut.value || (progEmit prog).trapImportNeeded.value then stderrByteImportLines else []' \
   'let _ = setRef (progEmit prog).trapImportNeeded True' \
   'emitDivZeroGuard : WasmEmit -> String -> String -> List String' \
@@ -273,8 +273,8 @@ for required in \
   'w7LocalsAtDepth : WasmEmit -> Int -> List String' \
   'noteW8Binop emit "/" = setRef emit.useDivGuard True' \
   'noteW8Binop emit "%" = setRef emit.useDivGuard True' \
-  'let dv = if emit.useDivGuard.value then ["    (local $__sdivr i64)"] else []' \
-  'let dv = if emit.useDivGuard.value then ["(local $__sdivr i64)"] else []'; do
+  'let dv = if !emit.useDivGuard then ["    (local $__sdivr i64)"] else []' \
+  'let dv = if !emit.useDivGuard then ["(local $__sdivr i64)"] else []'; do
   grep -F -- "$required" "$WASM_SRC" >/dev/null || {
     echo "FAIL H2B9-DIV-AUTHORITY: missing $required"
     exit 1
@@ -301,7 +301,7 @@ for required in \
   'noteW8Extern emit name =' \
   'setRef emit.useRng True' \
   'setRef emit.useHash True' \
-  '|| emit.useRng.value || emit.useHash.value || useFloatRef.value' \
+  '|| !emit.useRng || !emit.useHash || !useFloatRef' \
   'setRef emit.useFloatRng True in setRef emit.useRng True'; do
   grep -F -- "$required" "$WASM_SRC" >/dev/null || {
     echo "FAIL H2B9-RNG-HASH-AUTHORITY: missing $required"
@@ -369,7 +369,7 @@ grep -F 'then let _ = setRef useIORef True in let _ = setRef useArrayRef True in
     echo "FAIL A4-FILEBYTES-ROUTES: writer/read cardinality or fresh routes changed"
     exit 1
   }
-A4_IO_IMPORT_LINE="$(grep -n -F 'if useIORef.value then ioHostImportLines else []' "$WASM_SRC" | cut -d: -f1)"
+A4_IO_IMPORT_LINE="$(grep -n -F 'if !useIORef then ioHostImportLines else []' "$WASM_SRC" | cut -d: -f1)"
 A4_FILEBYTES_IMPORT_LINE="$(grep -n -F '(progEmit prog).useFileBytes.value then fileBytesHostImportLines' "$WASM_SRC" | cut -d: -f1)"
 [ -n "$A4_IO_IMPORT_LINE" ] && [ -n "$A4_FILEBYTES_IMPORT_LINE" ] &&
   [ "$A4_IO_IMPORT_LINE" -lt "$A4_FILEBYTES_IMPORT_LINE" ] &&
@@ -468,7 +468,7 @@ grep -F 'then let _ = setRef emit.useFloatStr True in let _ = setRef useFloatRef
     exit 1
   }
 A2_FLOATSTR_IMPORT_LINE="$(grep -n -F '(progEmit prog).useFloatStr.value then floatStrImportLines' "$WASM_SRC" | cut -d: -f1)"
-A2_IO_IMPORT_LINE="$(grep -n -F 'if useIORef.value then ioHostImportLines else []' "$WASM_SRC" | cut -d: -f1)"
+A2_IO_IMPORT_LINE="$(grep -n -F 'if !useIORef then ioHostImportLines else []' "$WASM_SRC" | cut -d: -f1)"
 [ -n "$A2_FLOATSTR_IMPORT_LINE" ] && [ -n "$A2_IO_IMPORT_LINE" ] &&
   [ "$A2_FLOATSTR_IMPORT_LINE" -lt "$A2_IO_IMPORT_LINE" ] &&
   grep -F '++ strCodecRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ fileBytesRt ++ floatStrRt' "$WASM_SRC" >/dev/null || {
@@ -504,14 +504,14 @@ for required in \
   }
 done
 grep -F 'then setRef emit.useCharClass True else ()' "$WASM_SRC" >/dev/null &&
-  grep -F '|| emit.useCharClass.value || useIORef.value' "$WASM_SRC" >/dev/null &&
+  grep -F '|| !emit.useCharClass || !useIORef' "$WASM_SRC" >/dev/null &&
   grep -F 'let charClassRt = if (progEmit prog).useCharClass.value then charClassRuntimeLines else []' "$WASM_SRC" >/dev/null &&
   ! grep -E 'setRef emit\.useCharClass False|setRef useCharClassRef False' "$WASM_SRC" >/dev/null || {
     echo "FAIL H2B-LR-CHARCLASS-ROUTES: writer, operational read, or reset changed"
     exit 1
   }
 [ "$(grep -F 'setRef emit.useCharClass True' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(grep -F 'emit.useCharClass.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F '!emit.useCharClass' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$(grep -F '(progEmit prog).useCharClass.value' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' "$WASM_SRC" >/dev/null &&
   [ "$(grep -F 'let emit = freshWasmEmit WGapRecord' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] || {
@@ -718,7 +718,7 @@ for required in \
   'currentBinding : Ref String' \
   'currentBinding = Ref "?"' \
   'currentBindingOfW : WasmEmit -> String' \
-  'currentBindingOfW emit = emit.currentBinding.value' \
+  'currentBindingOfW emit = !emit.currentBinding' \
   'setCurrentBindingOfW : WasmEmit -> String -> Unit' \
   'setCurrentBindingOfW emit name = setRef emit.currentBinding name'; do
   [ "$(grep -F -- "$required" "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
@@ -766,10 +766,10 @@ for required in \
   'let _ = setRef (progEmit prog).implSelfCtx (ImplSelfOn method headTag arity)' \
   'let _ = setRef (progEmit prog).implSelfCtx savedImplSelf' \
   'implSelfReturnCall prog env name route methRoutes implRoutes app args = match (progEmit prog).implSelfCtx.value' \
-  'let i = emit.nextStringSegmentId.value' \
+  'let i = !emit.nextStringSegmentId' \
   'setRef emit.nextStringSegmentId (i + 1)' \
-  'setRef emit.stringSegments ((i, bytes)::emit.stringSegments.value)' \
-  'reverseL emit.stringSegments.value' \
+  'setRef emit.stringSegments ((i, bytes) :: !emit.stringSegments)' \
+  'reverseL !emit.stringSegments' \
   'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' \
   'emitProgramRecord input cp =' \
   'emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =' \
@@ -1021,12 +1021,12 @@ for required in \
   'emittedDefaultNames = Ref omEmpty' \
   'defaultDefinitions = Ref []' \
   'defaultAlreadyEmittedW : WasmEmit -> String -> Bool' \
-  'defaultAlreadyEmittedW emit name = omHasKey name emit.emittedDefaultNames.value' \
+  'defaultAlreadyEmittedW emit name = omHasKey name !emit.emittedDefaultNames' \
   'markDefaultEmittedW : WasmEmit -> String -> Unit' \
   'emit.emittedDefaultNames' \
-  '(omInsert name () emit.emittedDefaultNames.value)' \
+  '(omInsert name () !emit.emittedDefaultNames)' \
   'addDefaultDefW : WasmEmit -> List String -> Unit' \
-  'setRef emit.defaultDefinitions (def::emit.defaultDefinitions.value)' \
+  'setRef emit.defaultDefinitions (def :: !emit.defaultDefinitions)' \
   'defaultAlreadyEmittedW (progEmit prog) fname' \
   'markDefaultEmittedW (progEmit prog) fname' \
   'addDefaultDefW' \
@@ -1041,7 +1041,7 @@ for required in \
     exit 1
   }
 done
-[ "$(grep -F 'flatMap (x => x) (reverseL ' "$WASM_SRC" | grep -F 'defaultDefinitions.value' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
+[ "$(grep -F 'flatMap (x => x) (reverseL ' "$WASM_SRC" | grep -F 'defaultDefinitions' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
   echo "FAIL H2B4-DEFAULT-DEFS: strict and census default drains must both preserve reverse/flatten order"
   exit 1
 }

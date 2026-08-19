@@ -444,13 +444,13 @@ export check : String -> Bool -> <IO> Unit
 check name ok =
   if ok then println (stringConcat ["PASS ", name])
   else
-    failCount := failCount.value + 1
+    failCount := !failCount + 1
     println (stringConcat ["FAIL ", name])
 
 -- Print the run summary; (passed, failed) counts derived from `total`.
 export summary : Int -> <IO> Unit
 summary total =
-  let failed = failCount.value
+  let failed = !failCount
   println (stringConcat
     [
       "HARNESS: ",

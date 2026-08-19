@@ -491,7 +491,7 @@ runPlugin fnName rtD coreD userD =
     Some fnVal =>
       let sample = "X-Forwarded-For: 192.168.1.1"
       let result = apply fnVal (VString sample)
-      let logged = outputRef.value
+      let logged = !outputRef
       "\{logged}   transform \{escStr sample} = \{ppValue result}\n"
 
 lookupValue : String -> List (String, Value e) -> Option (Value e)

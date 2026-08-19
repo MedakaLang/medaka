@@ -208,8 +208,8 @@ lookupScheme name ((n, s)::rest)
 
 runPipeline : List Decl -> <e> (List String, List (String, Scheme), List (String, Value e))
 runPipeline combined =
-  let runtimeDecls = runtimeDeclsRef.value
-  let preludeDecls = preludeDeclsRef.value
+  let runtimeDecls = !runtimeDeclsRef
+  let preludeDecls = !preludeDeclsRef
   let resErrs = resolveProgram runtimeDecls preludeDecls combined
   match resErrs
     e::_ => (map ppResError resErrs, [], [])
@@ -229,7 +229,7 @@ runPipeline combined =
 -- exposed (so the `__repl__` lookup + `:browse`/`:env` are unchanged).
 
 combinedDecls : List Decl -> List Decl
-combinedDecls newDecls = accumulatedRef.value ++ newDecls
+combinedDecls newDecls = !accumulatedRef ++ newDecls
 
 -- ── Output helpers ────────────────────────────────────────────────────────
 printErr : String -> <IO> Unit
@@ -260,16 +260,16 @@ processDeclInput src =
   match errs
     e::_ => mapIO_ printErr errs
     [] =>
-      let known = knownNamesRef.value
+      let known = !knownNamesRef
       let newSchemes = userSchemes allSchemes known
       let _ = mapIO printNewScheme newSchemes
       let typeAnns = declTypeAnnotations newDecls
       let _ = mapIO_ printTypeAnn typeAnns
       let newNames = map fst newSchemes ++ map snd typeAnns
-      accumulatedRef := accumulatedRef.value ++ newDecls
+      accumulatedRef := !accumulatedRef ++ newDecls
       knownNamesRef := known ++ newNames
       let newUserBindings = mapMut schemeToBinding newSchemes
-      userBindingsRef := userBindingsRef.value ++ newUserBindings
+      userBindingsRef := !userBindingsRef ++ newUserBindings
 
 printNewScheme : (String, Scheme) -> <IO> Unit
 printNewScheme (n, s) = putStrLn "val \{n} : \{ppScheme s}"
@@ -318,7 +318,7 @@ processTypeCmd exprSrc =
 -- ── Process :browse / :env command ───────────────────────────────────────
 processBrowse : Unit -> <IO> Unit
 processBrowse _ =
-  let bindings = userBindingsRef.value
+  let bindings = !userBindingsRef
   if listNull bindings then putStrLn "(no user-defined bindings)"
   else
     let sorted = sortByKey bindings
@@ -346,7 +346,7 @@ processReset : Unit -> <IO> Unit
 processReset _ =
   accumulatedRef := []
   userBindingsRef := []
-  knownNamesRef := preludeNamesRef.value
+  knownNamesRef := !preludeNamesRef
   putStrLn "Session reset"
 
 -- ── Meta-command dispatch ─────────────────────────────────────────────────

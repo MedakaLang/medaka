@@ -157,7 +157,7 @@ ppValue (VArray vs) = "[|" ++ joinComma (map ppValue (arrayToListG vs)) ++ "|]"
 ppValue (VCon name []) = name
 ppValue (VCon name vs) = "\{name} \{joinSp (map ppValueAtom vs)}"
 ppValue (VRecord name fields) = "\{name} { \{joinComma (map ppField fields)} }"
-ppValue (VRef cell) = "Ref(" ++ ppValue cell.value ++ ")"
+ppValue (VRef cell) = "Ref(" ++ ppValue !cell ++ ")"
 ppValue (VClosure _ _ _) = "<closure>"
 ppValue (VClosureF _ _ _) = "<closure>"
 ppValue (VPrim _) = "<prim>"
@@ -317,7 +317,7 @@ declImplIfaceIdRow _ = []
 -- key).  A type may implement several interfaces, so this is a LIST — the caller
 -- intersects it with the candidate defaults rather than taking the head.
 ifaceIdsAtTagE : String -> List String
-ifaceIdsAtTagE tag = ifaceIdsAtTagEGo tag declImplIfaceIdsRef.value
+ifaceIdsAtTagE tag = ifaceIdsAtTagEGo tag !declImplIfaceIdsRef
 
 ifaceIdsAtTagEGo : String -> List (String, String, String) -> List String
 ifaceIdsAtTagEGo _ [] = []
@@ -394,7 +394,7 @@ defaultCellName ifaceId method = "\{ifaceId}#\{method}"
 -- The identity component of the row is therefore ignored at both sites ON
 -- PURPOSE, not by omission; making them precise is a separate unit.
 ifaceOfMethod : String -> String
-ifaceOfMethod mname = ifaceOfMethodIn mname ifaceDispatchRef.value
+ifaceOfMethod mname = ifaceOfMethodIn mname !ifaceDispatchRef
 
 ifaceOfMethodIn : String -> List ((String, String, String), List Int) -> String
 ifaceOfMethodIn _ [] = ""
@@ -404,7 +404,7 @@ ifaceOfMethodIn mname (((_, i, m), _)::rest)
 
 -- every method name declared by [iface] (SPELLING — see `ifaceOfMethod` above).
 methodsOfIface : String -> List String
-methodsOfIface iface = methodsOfIfaceIn iface ifaceDispatchRef.value
+methodsOfIface iface = methodsOfIfaceIn iface !ifaceDispatchRef
 
 methodsOfIfaceIn : String -> List ((String, String, String), List Int) -> List String
 methodsOfIfaceIn _ [] = []
@@ -471,8 +471,7 @@ takeN n (x::rest) = x :: takeN (n - 1) rest
 -- This scans methodReqCountRef, so it is once-per-dispatch on the hot path: callers
 -- take the Option ONCE and derive every consumer from it (see applyMethodDicts).
 lookupMethodReqCountOpt : String -> String -> Option Int
-lookupMethodReqCountOpt mname tag =
-  lookupReqCount mname tag methodReqCountRef.value
+lookupMethodReqCountOpt mname tag = lookupReqCount mname tag !methodReqCountRef
 
 lookupReqCount : String -> String -> List ((String, String), Int) -> Option Int
 lookupReqCount _ _ [] = None
@@ -506,7 +505,7 @@ runtimeTypeTag VUnit = Some "Unit"
 runtimeTypeTag (VList _) = Some "List"
 runtimeTypeTag (VArray _) = Some "Array"
 runtimeTypeTag (VTuple vs) = Some (tupleHeadTag (listLen vs))
-runtimeTypeTag (VCon cname _) = lookupAssoc cname ctorToTypeRef.value
+runtimeTypeTag (VCon cname _) = lookupAssoc cname !ctorToTypeRef
 runtimeTypeTag (VRecord name _) = Some name
 runtimeTypeTag (VTypedImpl t _ _ _ _) = Some t
 runtimeTypeTag _ = None
@@ -726,7 +725,7 @@ anyTypedImpl (_::rest) = anyTypedImpl rest
 -- running the thunk we overwrite the cell with a black-hole thunk that panics
 -- if re-entered; on success we memoise the real value, clearing the mark.
 forceCell : Ref (Value e) -> String -> <e> Value e
-forceCell cell name = match cell.value
+forceCell cell name = match !cell
   VThunk f => forceMemo cell name f
   v => v
 
@@ -810,7 +809,7 @@ valueEq (VList a) (VList b) = valueListEq a b
 valueEq (VArray a) (VArray b) = valueListEq (arrayToListG a) (arrayToListG b)
 valueEq (VCon n1 a1) (VCon n2 a2) = n1 == n2 && valueListEq a1 a2
 valueEq (VRecord n1 f1) (VRecord n2 f2) = n1 == n2 && fieldListEq f1 f2
-valueEq (VRef a) (VRef b) = valueEq a.value b.value
+valueEq (VRef a) (VRef b) = valueEq !a !b
 valueEq _ _ = False
 
 valueListEq : List (Value e) -> List (Value e) -> Bool
@@ -908,7 +907,7 @@ matchPat (PAs x _ p) v = matchAs x p v
 matchPat (PRec _ fields _) (VRecord _ recFields) =
   matchRecFields fields recFields
 matchPat (PRec ctor fields _) (VCon ctor2 vals)
-  | ctor == ctor2 = match lookupAssoc ctor ctorFieldOrdersRef.value
+  | ctor == ctor2 = match lookupAssoc ctor !ctorFieldOrdersRef
     Some order => matchRecFields fields (zipFieldOrder order vals)
     None => None
   | otherwise = None
@@ -988,7 +987,7 @@ applyValue f x = apply f x
 -- tripped guard just exits — the counter never needs unwinding).
 export apply : Value e -> Value e -> <e> Value e
 apply f x =
-  let d = evalDepthRef.value + 1
+  let d = !evalDepthRef + 1
   evalDepthRef := d
   let _ = if d > evalDepthLimit then
     runtimePanic "E-STACK-OVERFLOW" "recursion too deep (evaluator call depth exceeded \{intToString evalDepthLimit}); the tree-walking interpreter has no tail-call optimisation"
@@ -1329,7 +1328,7 @@ eval _ (ELit (LInt n)) = VInt n
 -- PLAN.md #11: dictPass rewrites every ENumLit to ELit before eval; these arms
 -- are defensive for an untyped/non-elaborate eval path (a bare int → VInt; a
 -- Float-stamped ref → VFloat, matching eval_arith's value tags).
-eval _ (ENumLit n r _ _) = match r.value
+eval _ (ENumLit n r _ _) = match !r
   Some f => VFloat f
   None => VInt n
 eval _ (ELit (LFloat f)) = VFloat f
@@ -1356,10 +1355,10 @@ eval env (EVarAt x addr) =
   else
     lookupAtAddr env x addr
 eval env (EMethodAt name routeRef implRef methodRef) =
-  evalMethodAt env name routeRef.value implRef.value methodRef.value
+  evalMethodAt env name !routeRef !implRef !methodRef
 
 eval env (EDictAt name routesRef) =
-  applyDicts env (lookupEnv env name) routesRef.value
+  applyDicts env (lookupEnv env name) !routesRef
 eval env (EApp f x) = apply (eval env f) (eval env x)
 eval env (ELam pats body) = VClosure env pats body
 eval env (ELet _ True (PVar f _) e1 e2) = evalRecLet env f e1 e2
@@ -1376,7 +1375,7 @@ eval env (EListLit es) = VList (map (eval env) es)
 eval env (EArrayLit es) = VArray (arrayFromList (map (eval env) es))
 eval env (ERecordCreate name fields) =
   let assigns = map (evalFieldAssign env) fields
-  match lookupAssoc name ctorFieldOrdersRef.value
+  match lookupAssoc name !ctorFieldOrdersRef
     Some order => VCon name (recordCreateVals name order assigns)
     None => VRecord name assigns
 eval env (ERecordUpdate base fields _) =
@@ -1687,7 +1686,7 @@ evalVariantUpdate con v _ =
   panic "evalVariantUpdate: not a constructor: \{con} got \{ppValue v}"
 
 ctorFieldOrderFor : String -> List String
-ctorFieldOrderFor con = match lookupAssoc con ctorFieldOrdersRef.value
+ctorFieldOrderFor con = match lookupAssoc con !ctorFieldOrdersRef
   Some fs => fs
   None => panic ("evalVariantUpdate: unknown constructor " ++ con)
 
@@ -1703,7 +1702,7 @@ applyFieldUpdate updates field old = match lookupAssoc field updates
   None => old
 
 export evalValueField : Value e -> Value e
-evalValueField (VRef cell) = cell.value
+evalValueField (VRef cell) = !cell
 evalValueField (VRecord _ fields) = match lookupAssoc "value" fields
   Some v => v
   None => panic "record has no field 'value'"
@@ -2136,7 +2135,7 @@ memoThunkOf : Ref (Option (Value e)) -> EvalEnv (Value e) -> Expr -> Value e
 memoThunkOf cell env body = VThunk (_ => forceMemoCell cell env body)
 
 forceMemoCell : Ref (Option (Value e)) -> EvalEnv (Value e) -> Expr -> <e> Value e
-forceMemoCell cell env body = match cell.value
+forceMemoCell cell env body = match !cell
   Some v => v
   None => storeMemo cell (eval env body)
 
@@ -2269,7 +2268,7 @@ qualifiedDefaultName ifaceId n = [defaultCellName ifaceId n]
 -- installGroups, installConsts, coalesceImpls, …) are retained by evalModules.
 
 export cellResult : (String, Ref (Value e)) -> (String, Value e)
-cellResult (n, cell) = (n, cell.value)
+cellResult (n, cell) = (n, !cell)
 
 -- True/False plus `otherwise` (a trivial prelude binding ubiquitous in guards;
 -- the eval_probe oracle injects the same so prelude-free fixtures can use it)
@@ -2397,19 +2396,19 @@ updateEvalLoc (Loc f sl sc el ec)
 -- diagnostic. `cjRangeOfLoc` ignores its `src` argument (range comes purely
 -- from the Loc), so passing "" needs no source-text threading.
 export runtimePanic : String -> String -> a
-runtimePanic code msg = match currentEvalLoc.value
+runtimePanic code msg = match !currentEvalLoc
   Loc f sl sc el ec =>
-    let ff = if f == "" then currentEvalFile.value else f
+    let ff = if f == "" then !currentEvalFile else f
     -- The string is a COMPLETE, coded runtime diagnostic; mark it with a leading
     -- 0x01 sentinel so the `panic` abort primitive (mdk_panic) prints it verbatim
     -- rather than re-wrapping it in its native-user-panic `[E-PANIC]` banner.
-    if runJsonMode.value then
+    if !runJsonMode then
       let diag = Diag SevError code msg (Some (Loc ff sl sc el ec)) None None
       -- `pendingRunDiags` FIRST, so the driver's pre-eval warnings and this runtime
       -- error ride ONE envelope (see that Ref's note).  Empty on every path that did
       -- not stage anything, which makes this byte-identical to the old single-triple
       -- call for every fixture that has no warning.
-      panic "\{fmtSentinel}\{cjAllToJson (pendingRunDiags.value ++ [(ff, "", [diag])])}"
+      panic "\{fmtSentinel}\{cjAllToJson (!pendingRunDiags ++ [(ff, "", [diag])])}"
     else panic "\{fmtSentinel}\{ff}:\{intToString sl}:\{intToString sc}: runtime error [\{code}]: \{msg}"
 
 -- 0x01 marker (see runtimePanic / mdk_panic): a preformatted runtime diagnostic
@@ -2424,7 +2423,7 @@ fmtSentinel = "\u{01}"
 
 appendOutput : String -> <e> Value e
 appendOutput s =
-  outputRef := (outputRef.value ++ s)
+  outputRef := (!outputRef ++ s)
   -- Snapshot the buffer's raw bytes into the native runtime (O(1)
   -- pointer+length store; no allocation, no observable effect on its own —
   -- see stdlib/runtime.mdk's stashRunStdout doc comment) so a subsequent
@@ -2433,7 +2432,7 @@ appendOutput s =
   -- the stash is inert unless `enableRunStdoutFlush` was also called, and
   -- only `evalModulesOutputRun`/`evalModulesOutputAsync` (never the oracle
   -- probes) call that.
-  let _ = stashRunStdout outputRef.value
+  let _ = stashRunStdout !outputRef
   VUnit
 
 pPutStr : Value e -> <e> Value e
@@ -2586,7 +2585,7 @@ rngU64Ref = Ref (0, 0, 0, 0)
 -- One SplitMix64 step: advance the global state and return the finalized draw.
 rngDraw : Unit -> (Int, Int, Int, Int)
 rngDraw _ =
-  let s = add64 rngU64Ref.value u64Golden
+  let s = add64 !rngU64Ref u64Golden
   rngU64Ref := s
   u64Finalize s
 
@@ -3679,7 +3678,7 @@ evalModulesOutput preludeDecls modules =
   outputRef := ""
   let binds = evalModules preludeDecls modules
   let _ = runMainForEffect binds
-  outputRef.value
+  !outputRef
 
 -- ── run-path real-I/O externs (B2, RUN-EFFECTS) ────────────────────────────
 -- Real-I/O primitives installed ONLY by `medaka run`'s driver
@@ -3869,7 +3868,7 @@ export progArgsRef : Ref (List String)
 progArgsRef = Ref []
 
 pArgs : Value e -> <Env | e> Value e
-pArgs _ = vStringList progArgsRef.value
+pArgs _ = vStringList !progArgsRef
 
 pGetEnv : Value e -> <Env "_" | e> Value e
 pGetEnv (VString name) = vOptionString (getEnv name)
@@ -3963,7 +3962,7 @@ evalModulesOutputRun preludeDecls modules =
   let _ = enableRunStdoutFlush ()
   let binds = evalModulesWith (ioExternBindings ()) preludeDecls modules
   let _ = runMainForEffect binds
-  outputRef.value
+  !outputRef
 
 -- ASYNC-DESIGN Stage 2 (D5): the `main : Async _` analog of evalModulesOutput.
 -- A `main` whose inferred type heads in `Async` forces to an INERT Async value
@@ -3980,7 +3979,7 @@ evalModulesOutputAsync preludeDecls modules =
   let _ = enableRunStdoutFlush ()
   let binds = evalModulesRootEnv preludeDecls modules
   let _ = driveAsyncMain binds
-  outputRef.value
+  !outputRef
 
 driveAsyncMain : List (String, Value e) -> <e> Value e
 driveAsyncMain binds = match lookupBinding "main" binds

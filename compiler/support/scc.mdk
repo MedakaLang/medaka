@@ -27,9 +27,9 @@ tjOut : Ref (List (List String))
 tjOut = Ref []
 
 tjLowOf : String -> Int
-tjLowOf x = fromOption 0 (omLookup x tjLow.value)
+tjLowOf x = fromOption 0 (omLookup x !tjLow)
 tjOnStack : String -> Bool
-tjOnStack x = fromOption False (omLookup x tjOn.value)
+tjOnStack x = fromOption False (omLookup x !tjOn)
 
 export tarjanSCCs : List String -> OrdMap (List String) -> List (List String)
 tarjanSCCs names adj =
@@ -40,7 +40,7 @@ tarjanSCCs names adj =
   tjOn := omEmpty
   tjOut := []
   let _ = tarjanAll names adj
-  reverseL tjOut.value
+  reverseL !tjOut
 
 tarjanAll : List String -> OrdMap (List String) -> Unit
 tarjanAll [] _ = ()
@@ -49,18 +49,18 @@ tarjanAll (v::rest) adj =
   tarjanAll rest adj
 
 tjVisit : String -> OrdMap (List String) -> Unit
-tjVisit v adj = match omLookup v tjIndex.value
+tjVisit v adj = match omLookup v !tjIndex
   Some _ => ()
   None => strongconnect v adj
 
 strongconnect : String -> OrdMap (List String) -> Unit
 strongconnect v adj =
-  let idx = tjCounter.value
-  tjIndex := omInsert v idx tjIndex.value
-  tjLow := omInsert v idx tjLow.value
+  let idx = !tjCounter
+  tjIndex := omInsert v idx !tjIndex
+  tjLow := omInsert v idx !tjLow
   tjCounter := idx + 1
-  tjStack := v::tjStack.value
-  tjOn := omInsert v True tjOn.value
+  tjStack := v :: !tjStack
+  tjOn := omInsert v True !tjOn
   let _ = scEdges v (fromOption [] (omLookup v adj)) adj
   if tjLowOf v == idx then tjPop v [] else ()
 
@@ -71,20 +71,20 @@ scEdges v (w::ws) adj =
   scEdges v ws adj
 
 scEdge : String -> String -> OrdMap (List String) -> Unit
-scEdge v w adj = match omLookup w tjIndex.value
+scEdge v w adj = match omLookup w !tjIndex
   None =>
     let _ = strongconnect w adj
-    tjLow := omInsert v (minI (tjLowOf v) (tjLowOf w)) tjLow.value
+    tjLow := omInsert v (minI (tjLowOf v) (tjLowOf w)) !tjLow
   Some iw =>
     if tjOnStack w then
-      tjLow := omInsert v (minI (tjLowOf v) iw) tjLow.value
+      tjLow := omInsert v (minI (tjLowOf v) iw) !tjLow
     else
       ()
 
 tjPop : String -> List String -> Unit
-tjPop v acc = match tjStack.value
-  [] => tjOut := acc::tjOut.value
+tjPop v acc = match !tjStack
+  [] => tjOut := acc :: !tjOut
   w::rest =>
     tjStack := rest
-    tjOn := omInsert w False tjOn.value
-    if w == v then tjOut := (w::acc) :: tjOut.value else tjPop v (w::acc)
+    tjOn := omInsert w False !tjOn
+    if w == v then tjOut := (w::acc) :: !tjOut else tjPop v (w::acc)

@@ -439,7 +439,7 @@ headsOf : List Decl -> List (String, TyConOrigin)
 headsOf decls =
   let acc = Ref []
   let _ = walkDecls acc decls
-  declHeads decls ++ acc.value
+  declHeads decls ++ !acc
 
 -- ONE walk, BOTH occurrence layers, through resolve's own `mapOriginsInDecl` — the
 -- very function `stampDeclTyOrigins` drives.  Both recorders share one accumulator
@@ -453,7 +453,7 @@ walkDecls acc (d::rest) =
 
 noteHead : Ref (List (String, TyConOrigin)) -> Ty -> (Ty, Bool)
 noteHead acc (t@(TyCon { tyConName = n, tyConOrigin = o })) =
-  acc := (n, o)::acc.value
+  acc := (n, o) :: !acc
   (t, False)
 noteHead _ t = (t, False)
 
@@ -465,7 +465,7 @@ noteHead _ t = (t, False)
 -- each other.  The tag is what `carrierCounts` below asserts on.
 noteIfaceOcc : Ref (List (String, TyConOrigin)) -> String -> String -> TyConOrigin -> TyConOrigin
 noteIfaceOcc acc _ n o =
-  acc := (ifaceKey n, o)::acc.value
+  acc := (ifaceKey n, o) :: !acc
   o
 
 -- ── the PER-CARRIER anti-vacuity counts (#1110 PR C) ─────────────────────────
@@ -498,7 +498,7 @@ carrierCountOf : List Decl -> String -> (String, Int)
 carrierCountOf decls tag =
   let acc = Ref 0
   let _ = walkCarrier tag acc decls
-  (tag, acc.value)
+  (tag, !acc)
 
 walkCarrier : String -> Ref Int -> List Decl -> Unit
 walkCarrier _ _ [] = ()
@@ -509,7 +509,7 @@ walkCarrier tag acc (d::rest) =
 bumpCarrier : String -> Ref Int -> String -> String -> TyConOrigin -> TyConOrigin
 bumpCarrier tag acc carrier _ o =
   if carrier == tag then
-    acc := acc.value + 1
+    acc := !acc + 1
     o
   else o
 

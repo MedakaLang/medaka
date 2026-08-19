@@ -6,8 +6,8 @@
    doubles when full, like the hash tables in Module 6).  Reach for `Array` when
    the length is known up front; reach for `MutArray` when you accumulate.
 
-   Representation: `MutArray backing len` where `backing.value` is the backing
-   array (its `arrayLength` is the *capacity*) and `len.value` is the number of
+   Representation: `MutArray backing len` where `!backing` is the backing
+   array (its `arrayLength` is the *capacity*) and `!len` is the number of
    live elements (`0 <= len <= capacity`).  Both are `Ref`s, mutated in place.
    Slots `[len, capacity)` are scratch — never read; they hold
    whatever value last filled them (the most recent `push`'s element on a grow).
@@ -19,13 +19,13 @@
 
 import core.{Eq, Debug, Foldable, Option, Index, IndexMut}
 
-{- `MutArray backing len`: `backing.value` is the capacity-sized store,
-   `len.value` the live count; both mutated in place. -}
+{- `MutArray backing len`: `!backing` is the capacity-sized store,
+   `!len` the live count; both mutated in place. -}
 public export data MutArray a = MutArray (Ref (Array a)) (Ref Int)
 
 -- Live element count (internal; the public name is `Foldable.length`).
 count : MutArray a -> Int
-count (MutArray _ len) = len.value
+count (MutArray _ len) = !len
 
 -- ── Construction ────────────────────────────────────────────────────────
 
@@ -58,7 +58,7 @@ fromArray arr =
    > capacity (fromList [1, 2, 3])
    3 -}
 export capacity : MutArray a -> Int
-capacity (MutArray backing _) = arrayLength backing.value
+capacity (MutArray backing _) = arrayLength !backing
 
 {- | Element at an index, or `None` when out of the live range `[0, length)`.
 
@@ -68,7 +68,7 @@ capacity (MutArray backing _) = arrayLength backing.value
    None -}
 export get : Int -> MutArray a -> Option a
 get i (MutArray backing len)
-  | i >= 0 && i < len.value = Some (arrayGetUnsafe i backing.value)
+  | i >= 0 && i < !len = Some (arrayGetUnsafe i !backing)
   | otherwise = None
 
 {- | `index ma i` reads `ma`'s element at `i` (`ma[i]` sugar dispatches here),
@@ -77,8 +77,8 @@ get i (MutArray backing len)
    `Option`-returning read instead. -}
 export impl Index (MutArray a) Int a where
   index (MutArray backing len) i =
-    if i >= 0 && i < len.value then
-      arrayGetUnsafe i backing.value
+    if i >= 0 && i < !len then
+      arrayGetUnsafe i !backing
     else
       indexError "index \{intToString i} out of bounds"
 
@@ -105,7 +105,7 @@ elemsGo arr i acc
 
 -- The live elements as a list, in order (used by `Foldable.toList`).
 elems : MutArray a -> List a
-elems (MutArray backing len) = elemsGo backing.value (len.value - 1) []
+elems (MutArray backing len) = elemsGo !backing (!len - 1) []
 
 {- | Snapshot the live range into a fresh fixed-size `Array a`.  (Shown here via
    the `arrayLength` kernel primitive — `Array`'s own `Foldable`/`Debug` live in
@@ -115,8 +115,8 @@ elems (MutArray backing len) = elemsGo backing.value (len.value - 1) []
    3 -}
 export toArray : MutArray a -> Array a
 toArray (MutArray backing len) =
-  let arr = backing.value
-  arrayMakeWith len.value (i => arrayGetUnsafe i arr)
+  let arr = !backing
+  arrayMakeWith !len (i => arrayGetUnsafe i arr)
 
 -- ── Mutation (effectful — modify in place) ──────────────────────────────
 
@@ -124,12 +124,12 @@ toArray (MutArray backing len) =
    Amortized O(1). -}
 export push : a -> MutArray a -> Unit
 push x (MutArray backing len)
-  | len.value < arrayLength backing.value =
-    arraySetUnsafe len.value x backing.value
-    len := len.value + 1
+  | !len < arrayLength !backing =
+    arraySetUnsafe !len x !backing
+    len := !len + 1
   | otherwise =
-    let oldArr = backing.value
-    let oldLen = len.value
+    let oldArr = !backing
+    let oldLen = !len
     let newCap = if oldLen == 0 then 1 else oldLen * 2
     let newArr = arrayMake newCap x
     arrayBlit oldArr 0 newArr 0 oldLen
@@ -140,10 +140,10 @@ push x (MutArray backing len)
    (no shrink). -}
 export pop : MutArray a -> Option a
 pop (MutArray backing len)
-  | len.value == 0 = None
+  | !len == 0 = None
   | otherwise =
-    let i = len.value - 1
-    let x = arrayGetUnsafe i backing.value
+    let i = !len - 1
+    let x = arrayGetUnsafe i !backing
     len := i
     Some x
 
@@ -151,7 +151,7 @@ pop (MutArray backing len)
    `[0, length)` (use `push` to extend). -}
 export set : Int -> a -> MutArray a -> Unit
 set i x (MutArray backing len)
-  | i >= 0 && i < len.value = arraySetUnsafe i x backing.value
+  | i >= 0 && i < !len = arraySetUnsafe i x !backing
   | otherwise = panic "MutArray.set: index out of bounds"
 
 {- | `setIndex ma i v` writes `v` at `ma`'s index `i`, in place, over the live
@@ -159,15 +159,15 @@ set i x (MutArray backing len)
    `indexError` (E-INDEX-OOB) when `i` is out of range. -}
 export impl IndexMut (MutArray a) Int a where
   setIndex (MutArray backing len) i v =
-    if i >= 0 && i < len.value then
-      let _ = arraySetUnsafe i v backing.value
+    if i >= 0 && i < !len then
+      let _ = arraySetUnsafe i v !backing
       MutArray backing len
     else indexError "index \{intToString i} out of bounds"
 
 {- | Exchange the elements at two indices.  Caller ensures both are in range. -}
 export swap : Int -> Int -> MutArray a -> Unit
 swap i j (MutArray backing _) =
-  let arr = backing.value
+  let arr = !backing
   let xi = arrayGetUnsafe i arr
   let xj = arrayGetUnsafe j arr
   arraySetUnsafe i xj arr
@@ -186,7 +186,7 @@ mapInPlaceGo f arr i n
 
 {- | Apply `f` to every live element in place. -}
 export mapInPlace : (a -> a) -> MutArray a -> Unit
-mapInPlace f (MutArray backing len) = mapInPlaceGo f backing.value 0 len.value
+mapInPlace f (MutArray backing len) = mapInPlaceGo f !backing 0 !len
 
 -- ── Folds (index-based; never allocate a list) ──────────────────────────
 
@@ -210,12 +210,11 @@ foldRightGo f z arr i
    > length (fromList [9, 8, 7])
    3 -}
 export impl Foldable MutArray where
-  fold f z (MutArray backing len) = foldGo f z backing.value 0 len.value
-  foldRight f z (MutArray backing len) =
-    foldRightGo f z backing.value (len.value - 1)
+  fold f z (MutArray backing len) = foldGo f z !backing 0 !len
+  foldRight f z (MutArray backing len) = foldRightGo f z !backing (!len - 1)
   toList ma = elems ma
-  isEmpty (MutArray _ len) = len.value == 0
-  length (MutArray _ len) = len.value
+  isEmpty (MutArray _ len) = !len == 0
+  length (MutArray _ len) = !len
 
 {- | Element-wise equality over the live ranges (capacity is irrelevant).
 
