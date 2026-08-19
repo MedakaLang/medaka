@@ -89,7 +89,7 @@ catalog. `stdlib/runtime.mdk` itself is authoritative for the complete list.
 - (`print`/`println : Display a => a -> <IO> Unit` are Medaka prelude functions
   over `putStr`/`putStrLn`, not externs — they render via `Display`, Phase 111)
 - `Ref : a -> Ref a` — wrap a value in a mutable cell (read it back via `r.value`)
-- `setRef : Ref a -> a -> Unit` — overwrite the contents of a `Ref` (mutation is untracked, no effect row)
+- `setRef : Ref a -> a -> Unit` — overwrite the contents of a `Ref` (mutation is untracked, no effect row). **Write it as `r := v`** — the `:=` operator is surface sugar for exactly this call (`docs/spec/SYNTAX.md` § Refs) and is the idiomatic spelling; calling `setRef` directly stays legal
 - `hashInt`, `hashFloat`, `hashString`, `hashChar`, `hashBool : _ -> Int` — type-specific
   hash externs; the `Hashable` interface in `core.mdk` calls these (replaced the old
   generic `hash : a -> Int` extern)
@@ -1316,7 +1316,7 @@ structures needs no manifest entries at all.
 | Group | Externs |
 |-------|---------|
 | Constants | `pi`, `e`, `intMinBound`, `intMaxBound`, `charMinBound`, `charMaxBound` |
-| Allocation (pure) | `Ref` (wraps a value; mutation is `setRef`), `arrayMake`, `arrayMakeWith`, `arrayCopy`, `arrayFromList` |
+| Allocation (pure) | `Ref` (wraps a value; write it with `r := v`, sugar for `setRef`), `arrayMake`, `arrayMakeWith`, `arrayCopy`, `arrayFromList` |
 | Array read | `arrayLength`, `arrayGetUnsafe` |
 | Array pure wrappers | `arraySortBy` — allocates + locally mutates + returns a fresh array; the mutation never escapes |
 | Numeric / char conversions | `charToStr`, `intToFloat`, `floatToInt`, `intToString`, `floatToString`, `charCode`, `charFromCode` |
@@ -1331,7 +1331,7 @@ structures needs no manifest entries at all.
 
 | Extern | Notes |
 |--------|-------|
-| `setRef` | Overwrites a `Ref`; heap-local |
+| `setRef` | Overwrites a `Ref`; heap-local. Spelled `r := v` at call sites |
 | `arraySetUnsafe` | In-place write; bounds unchecked (stdlib-internal use) |
 | `arrayBlit` | Copy range between arrays in-place |
 | `arrayFill` | Fill array range in-place |
