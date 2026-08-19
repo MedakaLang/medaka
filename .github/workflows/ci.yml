@@ -1275,15 +1275,6 @@ jobs:
         if: needs.detect.outputs.docs_only != 'true'
         run: sh test/diff_compiler_must_fail.sh
 
-      - name: Compiler source must be well-typed
-        if: needs.detect.outputs.docs_only != 'true'
-        run: |
-          bash test/typecheck_compiler_source.sh 2>&1 | tee /tmp/tc.log
-          if ! grep -q 'PASS: compiler source is type-clean' /tmp/tc.log; then
-            echo "::error::The compiler source is ILL-TYPED (or the gate skipped). The build does not gate on this — that is why the gate exists."
-            exit 1
-          fi
-
       # The script asserts C3a AND C3b (its exit status is `c3a && c3b`), which is the
       # right bar for a checkpoint re-mint but the WRONG bar for CI. They answer two
       # different questions, and the SEED POLICY (test/bootstrap_from_seed.sh, and the
@@ -1300,23 +1291,54 @@ jobs:
       #
       # Do not "simplify" this to the script's exit status. (Also note `| tee` would mask
       # that status anyway — assert on the verdict lines, as seed-health does.)
-      - name: Emitter must reproduce itself (C3b fixpoint; C3a drift only warns)
+      # Typechecking and fixpoint emission are independent, read-only consumers of the
+      # compiler tree and use separate scratch paths. Recent hosted runs spent ~2.7m and
+      # ~0.8m on them serially. Overlap them, but cap typecheck's entry-worker pool at
+      # three so the fixpoint process retains one of the four hosted-runner cores.
+      #
+      # Do NOT extend this overlap to the must-fail suite above: its fixtures contain
+      # fail-capable 60-second alarms. The first experiment correctly went red when CPU
+      # contention changed a pinned stack-overflow exit 134 into timeout exit 142.
+      - name: Compiler source is well-typed and emitter reproduces itself
         if: needs.detect.outputs.docs_only != 'true'
         run: |
-          bash test/selfcompile_fixpoint.sh 2>&1 | tee /tmp/fp.log || true
+          set +e
+          JOBS=3 bash test/typecheck_compiler_source.sh > /tmp/tc.log 2>&1 &
+          typecheck_pid=$!
+          bash test/selfcompile_fixpoint.sh > /tmp/fp.log 2>&1 &
+          fixpoint_pid=$!
+
+          wait "$typecheck_pid"
+          typecheck_rc=$?
+          echo "::group::Compiler source typecheck"
+          cat /tmp/tc.log
+          echo "::endgroup::"
+
+          wait "$fixpoint_pid"
+          echo "::group::Self-compile fixpoint"
+          cat /tmp/fp.log
+          echo "::endgroup::"
+          set -e
+
+          failed=0
+          if [ "$typecheck_rc" -ne 0 ] || ! grep -q 'PASS: compiler source is type-clean' /tmp/tc.log; then
+            echo "::error::The compiler source is ILL-TYPED (or the gate skipped). The build does not gate on this — that is why the gate exists."
+            failed=1
+          fi
           # A skip is not a pass. We just installed clang+libgc, so a toolchain skip here
           # means something is wrong, not absent.
           if grep -q 'skipping spike' /tmp/fp.log; then
             echo "::error::The fixpoint gate SKIPPED on a runner with a full toolchain. A skip is not a pass."
-            exit 1
+            failed=1
           fi
           if ! grep -q 'C3b PASS' /tmp/fp.log; then
             echo "::error::NO FIXPOINT: the compiled compiler does not reproduce its own output (C3b). This is a miscompile in the emitter."
-            exit 1
+            failed=1
           fi
           if grep -q 'C3a FAIL' /tmp/fp.log; then
             echo "::warning::Seed has DRIFTED from current emission (it still works, and the compiler still reaches a fixpoint). Re-mint at the next checkpoint: sh test/refresh_seed.sh"
           fi
+          exit "$failed"
 
   seed-health:
     needs: detect
