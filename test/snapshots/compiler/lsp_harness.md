@@ -448,7 +448,7 @@ export check : String -> Bool -> <IO> Unit
 check name ok =
   if ok then println (stringConcat ["PASS ", name])
   else
-    let _ = setRef failCount (failCount.value + 1)
+    failCount := failCount.value + 1
     println (stringConcat ["FAIL ", name])
 
 -- Print the run summary; (passed, failed) counts derived from `total`.
@@ -576,7 +576,7 @@ summary total =
 (DTypeSig true "failCount" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "failCount" () (EApp (EVar "Ref") (ELit (LInt 0))))
 (DTypeSig true "check" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "check" ((PVar "name") (PVar "ok")) (EIf (EVar "ok") (EApp (EVar "println") (EApp (EVar "stringConcat") (EListLit (ELit (LString "PASS ")) (EVar "name")))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "failCount")) (EBinOp "+" (EFieldAccess (EVar "failCount") "value") (ELit (LInt 1))))) (DoExpr (EApp (EVar "println") (EApp (EVar "stringConcat") (EListLit (ELit (LString "FAIL ")) (EVar "name"))))))))
+(DFunDef false "check" ((PVar "name") (PVar "ok")) (EIf (EVar "ok") (EApp (EVar "println") (EApp (EVar "stringConcat") (EListLit (ELit (LString "PASS ")) (EVar "name")))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "failCount")) (EBinOp "+" (EFieldAccess (EVar "failCount") "value") (ELit (LInt 1))))) (DoExpr (EApp (EVar "println") (EApp (EVar "stringConcat") (EListLit (ELit (LString "FAIL ")) (EVar "name"))))))))
 (DTypeSig true "summary" (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "summary" ((PVar "total")) (EBlock (DoLet false false (PVar "failed") (EFieldAccess (EVar "failCount") "value")) (DoExpr (EApp (EVar "println") (EApp (EVar "stringConcat") (EListLit (ELit (LString "HARNESS: ")) (EApp (EVar "intToString") (EBinOp "-" (EVar "total") (EVar "failed"))) (ELit (LString " passed, ")) (EApp (EVar "intToString") (EVar "failed")) (ELit (LString " failed"))))))))
 # MARK
@@ -692,6 +692,6 @@ summary total =
 (DTypeSig true "failCount" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "failCount" () (EApp (EVar "Ref") (ELit (LInt 0))))
 (DTypeSig true "check" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "check" ((PVar "name") (PVar "ok")) (EIf (EVar "ok") (EApp (EDictApp "println") (EApp (EVar "stringConcat") (EListLit (ELit (LString "PASS ")) (EVar "name")))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "failCount")) (EBinOp "+" (EFieldAccess (EVar "failCount") "value") (ELit (LInt 1))))) (DoExpr (EApp (EDictApp "println") (EApp (EVar "stringConcat") (EListLit (ELit (LString "FAIL ")) (EVar "name"))))))))
+(DFunDef false "check" ((PVar "name") (PVar "ok")) (EIf (EVar "ok") (EApp (EDictApp "println") (EApp (EVar "stringConcat") (EListLit (ELit (LString "PASS ")) (EVar "name")))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "failCount")) (EBinOp "+" (EFieldAccess (EVar "failCount") "value") (ELit (LInt 1))))) (DoExpr (EApp (EDictApp "println") (EApp (EVar "stringConcat") (EListLit (ELit (LString "FAIL ")) (EVar "name"))))))))
 (DTypeSig true "summary" (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "summary" ((PVar "total")) (EBlock (DoLet false false (PVar "failed") (EFieldAccess (EVar "failCount") "value")) (DoExpr (EApp (EDictApp "println") (EApp (EVar "stringConcat") (EListLit (ELit (LString "HARNESS: ")) (EApp (EVar "intToString") (EBinOp "-" (EVar "total") (EVar "failed"))) (ELit (LString " passed, ")) (EApp (EVar "intToString") (EVar "failed")) (ELit (LString " failed"))))))))

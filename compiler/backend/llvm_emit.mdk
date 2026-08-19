@@ -415,11 +415,11 @@ gDispIsMember e n = match dispGroupOf e.gDispGroups.value n
 -- set the binding name attributed to subsequent gaps (the probe sets this per
 -- top-level binding / impl entry before emitting it).
 setGapBind : Emit -> String -> Unit
-setGapBind e name = setRef e.curGapBind name
+setGapBind e name = e.curGapBind := name
 
 noteGap : Emit -> String -> Unit
 noteGap e reason =
-  setRef e.gapLog ("\{e.curGapBind.value}\t\{reason}"::e.gapLog.value)
+  e.gapLog := "\{e.curGapBind.value}\t\{reason}"::e.gapLog.value
 
 -- ── method-call RESULT-type inference (native backend) ──────────────────────
 -- The (interface, method) -> returns-self table, computed by core_ir_lower's
@@ -566,11 +566,10 @@ nthName [] _ = None
 -- the set of default fn names already lifted (one define per (method, tag)),
 -- reset at the start of each emit run so the two censuses don't share state.
 resetEmittedDefaults : Emit -> Unit
-resetEmittedDefaults e = setRef e.emittedDefaults []
+resetEmittedDefaults e = e.emittedDefaults := []
 
 markDefaultEmitted : Emit -> String -> Unit
-markDefaultEmitted e name =
-  setRef e.emittedDefaults (name::e.emittedDefaults.value)
+markDefaultEmitted e name = e.emittedDefaults := name::e.emittedDefaults.value
 
 defaultAlreadyEmitted : Emit -> String -> Bool
 defaultAlreadyEmitted e name = contains name e.emittedDefaults.value
@@ -581,11 +580,10 @@ defaultAlreadyEmitted e name = contains name e.emittedDefaults.value
 -- the group body so a following top-level fn body isn't mis-typed.
 setCurImplSelfFns : Emit -> String -> List String -> Unit
 setCurImplSelfFns e tag names =
-  let _ = setRef e.curImplTag tag in setRef e.curSelfFnParams names
+  let _ = e.curImplTag := tag in e.curSelfFnParams := names
 
 clearCurImplSelfFns : Emit -> Unit
-clearCurImplSelfFns e =
-  let _ = setRef e.curImplTag "" in setRef e.curSelfFnParams []
+clearCurImplSelfFns e = let _ = e.curImplTag := "" in e.curSelfFnParams := []
 
 -- is `name` a self-returning function param of the impl currently being emitted?
 isCurSelfFnParam : Emit -> String -> Bool
@@ -827,13 +825,13 @@ freshId : Emit -> Int
 freshId e =
   let c = e.counter
   let n = c.value
-  let _ = setRef c (n + 1)
+  c := n + 1
   n
 
 freshLocal : Emit -> Int
 freshLocal e =
   let n = e.defineCounter.value
-  let _ = setRef e.defineCounter (n + 1)
+  e.defineCounter := n + 1
   n
 
 freshReg : Emit -> String
@@ -857,21 +855,21 @@ data DefScope = DefScope Int (List (String, Int)) (List (String, LTy))
 beginDefine : Emit -> DefScope
 beginDefine e =
   let saved = DefScope e.defineCounter.value e.closureArity.value e.closureRetTy.value
-  let _ = setRef e.defineCounter 0
-  let _ = setRef e.closureArity []
-  let _ = setRef e.closureRetTy []
+  e.defineCounter := 0
+  e.closureArity := []
+  e.closureRetTy := []
   saved
 
 -- restore the enclosing `define` scope (only needed where a define NESTS inside
 -- another's emission, i.e. at each bufRef save/restore swap).
 endDefine : Emit -> DefScope -> Unit
 endDefine e (DefScope n ar rt) =
-  let _ = setRef e.defineCounter n
-  let _ = setRef e.closureArity ar
-  setRef e.closureRetTy rt
+  e.defineCounter := n
+  e.closureArity := ar
+  e.closureRetTy := rt
 
 emit : Emit -> String -> Unit
-emit e line = let buf = e.buf in setRef buf (line::buf.value)
+emit e line = let buf = e.buf in buf := line::buf.value
 
 -- the main output buffer ref (needed for the save/restore swap that
 -- redirects emission of a lifted lambda's `define` into the side buffer).
@@ -901,7 +899,7 @@ fnNames e = e.fnNames.value
 -- duplicate key (matches lookupAssoc's first-match). For CONSTANT tables only.
 
 installKnownFnMap : Emit -> List String -> Unit
-installKnownFnMap e fns = setRef e.knownFnMap (Some (omFromNames fns omEmpty))
+installKnownFnMap e fns = e.knownFnMap := Some (omFromNames fns omEmpty)
 
 -- ── #561 PR-A: lazy value-global set (installed once per program) ────────────
 -- The value globals emit_support.lazyGlobalNames classifies as LAZY (reaching an
@@ -915,7 +913,7 @@ installLazyGlobalMap : Emit -> List String -> Unit
 -- Intentional cross-file duplicate of installLazyGlobalMapW in wasm_emit.mdk (#561 PR-B); not consolidating (tiny install helper over a backend-local Ref / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
 installLazyGlobalMap e names =
-  setRef e.lazyGlobalMap (Some (omFromNames names omEmpty))
+  e.lazyGlobalMap := Some (omFromNames names omEmpty)
 
 export isLazyGlobal : Emit -> String -> Bool
 -- Intentional cross-file duplicate of isLazyGlobalW in wasm_emit.mdk (#561 PR-B); not consolidating (tiny query over a backend-local Ref / divergent-by-design backend pair).
@@ -926,14 +924,14 @@ isLazyGlobal e x = match e.lazyGlobalMap.value
 
 -- ctor-arity table index (ct field is set once at Emit construction, constant).
 installCtorMap : Emit -> List (String, Int) -> Unit
-installCtorMap e t = setRef e.ctorMap (Some (omFromPairs (reverseL t) omEmpty))
+installCtorMap e t = e.ctorMap := Some (omFromPairs (reverseL t) omEmpty)
 
 -- sig table index — the GLOBAL-`sigs` users (fnRetTy/fnArity) read the Emit's
 -- `sigs` field. That field is set once at construction and never mutated
 -- (constant), so a memo built from `sigTable e` is byte-identical to the old
 -- `lookupAssoc name sigs.value`.
 installSigMap : Emit -> List (String, FnSig) -> Unit
-installSigMap e t = setRef e.sigMap (Some (omFromPairs (reverseL t) omEmpty))
+installSigMap e t = e.sigMap := Some (omFromPairs (reverseL t) omEmpty)
 
 -- Index an assoc sig table for the THREADED `sigs` parameter (the pure inference
 -- pass's own table, and the `sigTable e` handed to bindVarTy). `reverseL` makes
@@ -955,7 +953,7 @@ sigsToMap t = omFromPairs (reverseL t) omEmpty
 -- the two diverge and only the replayed arity tracks the real `@mdk_<fn>` define.
 installDefArityMap : Emit -> List CBind -> Unit
 installDefArityMap e binds =
-  setRef e.defArityMap (Some (omFromPairs (defArityPairs e binds) omEmpty))
+  e.defArityMap := Some (omFromPairs (defArityPairs e binds) omEmpty)
 
 defArityPairs : Emit -> List CBind -> List (String, Int)
 defArityPairs _ [] = []
@@ -1096,8 +1094,8 @@ recFieldTable e = e.recFields.value
 -- constructs an `Emit` without going through emitProgram is unaffected.
 installRecFieldIndex : Emit -> List (String, List String) -> Unit
 installRecFieldIndex e t =
-  let _ = setRef e.recByName (Some (omFromPairs (reverseL t) omEmpty))
-  setRef e.recByLabel (Some (recLabelIndex (reverseL t) omEmpty))
+  e.recByName := Some (omFromPairs (reverseL t) omEmpty)
+  e.recByLabel := Some (recLabelIndex (reverseL t) omEmpty)
 
 -- fold the (already reversed) table, mapping every label of a record to that record.
 -- Later inserts win, and "later" here is EARLIER in the original table.
@@ -1168,7 +1166,7 @@ foldImplsByMethod (e::rest) m =
 
 installImplIndex : Emit -> List CImplEntry -> Unit
 installImplIndex e entries =
-  setRef e.implsByMethod (Some (groupImplsByMethod entries))
+  e.implsByMethod := Some (groupImplsByMethod entries)
 
 -- [method]'s impl entries from the index (original order); [fallback] (the full entry
 -- list) is used only when the index is uninstalled — downstream filters by method, so
@@ -1426,9 +1424,7 @@ taggedMethodNames (_::rest) = taggedMethodNames rest
 -- Uninstalled (None) it FALLS BACK to the list scan, identical answer either way.
 installImplMethodSet : Emit -> List CImplEntry -> Unit
 installImplMethodSet e entries =
-  setRef
-    e.implMethodSet
-    (Some (omFromNames (taggedMethodNames entries) omEmpty))
+  e.implMethodSet := Some (omFromNames (taggedMethodNames entries) omEmpty)
 
 isImplMethod : Emit -> String -> Bool
 isImplMethod e name = match e.implMethodSet.value
@@ -1567,10 +1563,10 @@ installCtorTypeMap : Emit -> List (String, String) -> Unit
 installCtorTypeMap e t =
   let byType = groupCtorsByType t
   let tys = nubStr (typeNamesOf t)
-  let _ = setRef e.ctorsByType (Some byType)
-  let _ = setRef e.ctorOrdinalMap (Some (omFromPairs (reverseL (ctorOrdinalPairs byType tys)) omEmpty))
-  let _ = setRef e.typeIdMap (Some (omFromPairs (reverseL (numberFrom 0 tys)) omEmpty))
-  setRef e.ctorTypeMap (Some (omFromPairs (reverseL t) omEmpty))
+  e.ctorsByType := Some byType
+  e.ctorOrdinalMap := Some (omFromPairs (reverseL (ctorOrdinalPairs byType tys)) omEmpty)
+  e.typeIdMap := Some (omFromPairs (reverseL (numberFrom 0 tys)) omEmpty)
+  e.ctorTypeMap := Some (omFromPairs (reverseL t) omEmpty)
 
 -- one LEFT fold prepending each ctor to its type's bucket (O(1) per entry), then
 -- `omMapValues reverseL` restores TABLE order in each bucket — total O(entries).
@@ -1613,7 +1609,7 @@ globalsRegRef e = e.globalsReg
 markGlobalInit : Emit -> String -> LTy -> Unit
 markGlobalInit e name ty =
   let gr = globalsRegRef e
-  setRef gr ((name, (True, ty)) :: dropAssoc name gr.value)
+  gr := (name, (True, ty)) :: dropAssoc name gr.value
 
 -- drop the first entry keyed `k` from an assoc list (keeps the rest in order).
 dropAssoc : String -> List (String, (Bool, LTy)) -> List (String, (Bool, LTy))
@@ -1915,7 +1911,7 @@ emitLit e _ = gapE e "non-Int/Float/Bool/String/Char/Unit literal"
 -- `@.str.N = … constant …` appended after @main is sound (same discipline as the
 -- lifted `define`s).
 emitGlobal : Emit -> String -> Unit
-emitGlobal e line = setRef (lamsRef e) (line::(lamsRef e).value)
+emitGlobal e line = lamsRef e := line::(lamsRef e).value
 
 -- the raw UTF-8 bytes of a string literal, in order.  `stringToChars` yields the
 -- source codepoints; `utf8Bytes` re-encodes each to its UTF-8 byte sequence, so the
@@ -3108,7 +3104,7 @@ blockFloatRet env (_::rest) = blockFloatRet env rest
 recordFloatRet : Emit -> List (String, (String, LTy)) -> String -> CExpr -> Unit
 recordFloatRet e env w body =
   if bodyFloatRet env body then
-    setRef e.closureRetTy ((w, LTFloat)::e.closureRetTy.value)
+    e.closureRetTy := (w, LTFloat)::e.closureRetTy.value
   else
     ()
 
@@ -3814,7 +3810,7 @@ emitGroupBind e env (CBind name clauses) =
 emitGroupBindDefine : Emit -> List (String, (String, LTy)) -> String -> String -> Int -> List CClause -> List String -> Unit
 emitGroupBindDefine e env lamName name arity clauses captured =
   let saved = (bufRef e).value
-  let _ = setRef (bufRef e) []
+  bufRef e := []
   let scope = beginDefine e
   let _ = emit e "define i64 @\{lamName}(i64 %clos, \{implParamDecls arity 0}) {"
   let _ = emit e "entry:"
@@ -3823,9 +3819,9 @@ emitGroupBindDefine e env lamName name arity clauses captured =
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
-  let _ = setRef (lamsRef e) (lamLines ++ (lamsRef e).value)
+  lamsRef e := lamLines ++ (lamsRef e).value
   let _ = endDefine e scope
-  setRef (bufRef e) saved
+  bufRef e := saved
 -- A lifted define is a FRESH function: its clause chain's last-clause
 -- fallthrough must be @mdk_oob (non-exhaustive abort), NOT the enclosing
 -- function's leftover next-clause label.  Without this the lifted `go`'s final
@@ -4422,7 +4418,7 @@ capDictWords e env (d::rest) = dictOperand e env d :: capDictWords e env rest
 emitMethodValDefine : Emit -> List (String, (String, LTy)) -> String -> String -> Route -> List Route -> List Route -> Int -> List String -> Unit
 emitMethodValDefine e env lamName name route implRoutes methRoutes arity capNames =
   let saved = (bufRef e).value
-  let _ = setRef (bufRef e) []
+  bufRef e := []
   let scope = beginDefine e
   let _ = emit e "define i64 @\{lamName}(\{etaParamDecls arity}) {"
   let _ = emit e "entry:"
@@ -4433,9 +4429,9 @@ emitMethodValDefine e env lamName name route implRoutes methRoutes arity capName
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
-  let _ = setRef (lamsRef e) (lamLines ++ (lamsRef e).value)
+  lamsRef e := lamLines ++ (lamsRef e).value
   let _ = endDefine e scope
-  setRef (bufRef e) saved
+  bufRef e := saved
 
 -- CDict in VALUE position (EMITTER-GAPS #18, value facet): a `=>`-constrained
 -- NAMED function used as a FIRST-CLASS value — passed unapplied to a higher-order
@@ -4471,7 +4467,7 @@ emitDictValue e env name routes =
 emitDictValDefine : Emit -> String -> String -> Int -> Int -> Unit
 emitDictValDefine e lamName name nDicts valArity =
   let saved = (bufRef e).value
-  let _ = setRef (bufRef e) []
+  bufRef e := []
   let scope = beginDefine e
   let _ = emit e "define i64 @\{lamName}(\{etaParamDecls valArity}) {"
   let _ = emit e "entry:"
@@ -4483,9 +4479,9 @@ emitDictValDefine e lamName name nDicts valArity =
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
-  let _ = setRef (lamsRef e) (lamLines ++ (lamsRef e).value)
+  lamsRef e := lamLines ++ (lamsRef e).value
   let _ = endDefine e scope
-  setRef (bufRef e) saved
+  bufRef e := saved
 
 -- E22: a runtime-dict-routed (RDict/RDictFwd) method occurrence is UNDER-APPLIED —
 -- arity known, fewer real args than that, and the route reads a forwarded dict
@@ -4523,7 +4519,7 @@ emitMethodPap e env name route implRoutes methRoutes argOps arity =
 emitMethodPapDefine : Emit -> List (String, (String, LTy)) -> String -> String -> Route -> List Route -> List Route -> Int -> List String -> Int -> Unit
 emitMethodPapDefine e env lamName name route implRoutes methRoutes arity capNames supplied =
   let saved = (bufRef e).value
-  let _ = setRef (bufRef e) []
+  bufRef e := []
   let scope = beginDefine e
   let remaining = arity - supplied
   let _ = emit e "define i64 @\{lamName}(\{etaParamDecls remaining}) {"
@@ -4537,9 +4533,9 @@ emitMethodPapDefine e env lamName name route implRoutes methRoutes arity capName
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
-  let _ = setRef (lamsRef e) (lamLines ++ (lamsRef e).value)
+  lamsRef e := lamLines ++ (lamsRef e).value
   let _ = endDefine e scope
-  setRef (bufRef e) saved
+  bufRef e := saved
 
 -- E19: an RKey route into a method with NO tagged impl for `tag` AND no general
 -- instance — the type's `impl` did not override an interface DEFAULT.  Emit the
@@ -4756,7 +4752,7 @@ emitPapClosure e fname argOps arity =
 emitPapDefine : Emit -> String -> String -> Int -> Int -> Unit
 emitPapDefine e papName fname supplied remaining =
   let saved = (bufRef e).value
-  let _ = setRef (bufRef e) []
+  bufRef e := []
   let scope = beginDefine e
   let _ = emit e "define i64 @\{papName}(\{etaParamDecls remaining}) {"
   let _ = emit e "entry:"
@@ -4768,9 +4764,9 @@ emitPapDefine e papName fname supplied remaining =
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
-  let _ = setRef (lamsRef e) (lamLines ++ (lamsRef e).value)
+  lamsRef e := lamLines ++ (lamsRef e).value
   let _ = endDefine e scope
-  setRef (bufRef e) saved
+  bufRef e := saved
 
 -- load the `k` captured argument words from %clos fields 1..k (code_ptr is 0).
 loadPapCaptures : Emit -> Int -> Int -> List String
@@ -4800,7 +4796,7 @@ emitPapClosureIndirect e cw argOps arity =
 emitPapDefineIndirect : Emit -> String -> Int -> Int -> Unit
 emitPapDefineIndirect e papName supplied remaining =
   let saved = (bufRef e).value
-  let _ = setRef (bufRef e) []
+  bufRef e := []
   let scope = beginDefine e
   let _ = emit e "define i64 @\{papName}(\{etaParamDecls remaining}) {"
   let _ = emit e "entry:"
@@ -4816,9 +4812,9 @@ emitPapDefineIndirect e papName supplied remaining =
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
-  let _ = setRef (lamsRef e) (lamLines ++ (lamsRef e).value)
+  lamsRef e := lamLines ++ (lamsRef e).value
   let _ = endDefine e scope
-  setRef (bufRef e) saved
+  bufRef e := saved
 
 -- the interface name a resolved impl entry belongs to (for the returns-self
 -- lookup); "" for a default entry (it carries no tag/iface — never RKey-reached).
@@ -5004,10 +5000,10 @@ hasImplKey m t ((m2, t2)::rest) = m == m2 && t == t2 || hasImplKey m t rest
 emitAsDeclares : Emit -> (Unit -> Unit) -> Unit
 emitAsDeclares e act =
   let saved = (bufRef e).value
-  let _ = setRef (bufRef e) []
+  bufRef e := []
   let _ = act ()
   let produced = reverseL (bufRef e).value
-  let _ = setRef (bufRef e) saved
+  bufRef e := saved
   emitDeclaresFor e produced
 
 emitDeclaresFor : Emit -> List String -> Unit
@@ -5086,7 +5082,7 @@ ensureDispatcherEmitted e fname name nmw nargs =
     -- on demand (ensureDefaultEmitted), and that body can itself reach a dict-routed
     -- site for the SAME method — which would re-enter here and recurse forever if the
     -- symbol were only recorded after the body was emitted.
-    let _ = setRef e.dispCache (fname :: e.dispCache.value)
+    e.dispCache := (fname :: e.dispCache.value)
     -- PRELUDE HALF: the dispatcher body enumerates every impl of the method in THIS
     -- program, so it is inherently per-program and must NOT be baked into the shared
     -- `prelude.o` — declare it and let the program half define it.  The program half
@@ -5106,7 +5102,7 @@ ensureDispatcherEmitted e fname name nmw nargs =
 emitDispatcherDefine : Emit -> String -> String -> Int -> Int -> Unit
 emitDispatcherDefine e fname name nmw nargs =
   let saved = (bufRef e).value
-  let _ = setRef (bufRef e) []
+  bufRef e := []
   let scope = beginDefine e
   let _ = emit e "define i64 @\{fname}(\{dispParamDecls nmw nargs}) {"
   let _ = emit e "entry:"
@@ -5115,9 +5111,9 @@ emitDispatcherDefine e fname name nmw nargs =
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
-  let _ = setRef (lamsRef e) (lamLines ++ (lamsRef e).value)
+  lamsRef e := lamLines ++ (lamsRef e).value
   let _ = endDefine e scope
-  setRef (bufRef e) saved
+  bufRef e := saved
 
 -- The dispatcher's body.  Ordinarily (mode 0) this is only ever reached when the
 -- method has ≥2 impls — soleImplDirect already diverted the sole-impl case to a
@@ -5751,7 +5747,7 @@ emitConstDictCell e headTag reqWords =
     None =>
       let gname = "mdk_dc_" ++ intToString (freshId e)
       let _ = emitGlobal e "@\{gname} = internal constant \{initBody}"
-      let _ = setRef e.dictConstCache ((initBody, gname)::e.dictConstCache.value)
+      e.dictConstCache := (initBody, gname)::e.dictConstCache.value
       "ptrtoint (ptr @" ++ gname ++ " to i64)"
 
 -- the operand word a dict parameter name is bound to in the emit env.
@@ -5909,7 +5905,7 @@ emitDefaultDefine e fname tag method entry =
     let bodyS = restampIfaceDicts e.input.methodIfaces (methodIfaceOfInput e method) tag (reqDictRoutes nReq 0) body1
     let body = restampCrossIface e.input.methodIfaces method dictIfaces bodyS
     let saved = (bufRef e).value
-    let _ = setRef (bufRef e) []
+    (bufRef e) := []
     let scope = beginDefine e
     let _ = emit e "define i64 @\{fname}(\{implParamDecls arity 0}) {"
     let _ = emit e "entry:"
@@ -5917,9 +5913,9 @@ emitDefaultDefine e fname tag method entry =
     let _ = emit e "}"
     let _ = emit e ""
     let defLines = (bufRef e).value
-    let _ = setRef (lamsRef e) (defLines ++ (lamsRef e).value)
+    (lamsRef e) := (defLines ++ (lamsRef e).value)
     let _ = endDefine e scope
-    setRef (bufRef e) saved
+    (bufRef e) := saved
 -- G7: the dict-passing pass already PREPENDED one `$dict_<method>_<slot>` param per
 -- method-level constraint (foldMap's `Monoid m`) to this default's pats, so the full
 -- arity is nDicts + the method's interface arity.  `methodArityOf` counts only the
@@ -6609,7 +6605,7 @@ emitClosureCell e hdr fields =
 emitClosureAllocA : Emit -> String -> Int -> List String -> (String, LTy)
 emitClosureAllocA e lamName arity captureWords =
   let (w, lty) = emitClosureAlloc e lamName arity captureWords
-  let _ = setRef e.closureArity ((w, arity)::e.closureArity.value)
+  e.closureArity := (w, arity)::e.closureArity.value
   (w, lty)
 
 -- emit a CLam: compute its captured set, lift its body to a top-level define, and
@@ -6695,7 +6691,7 @@ emitRecLamPat e env f pats body =
 emitRecLamDefine : Emit -> List (String, (String, LTy)) -> String -> String -> List Pat -> List String -> CExpr -> Unit
 emitRecLamDefine e env lamName f pats captured body =
   let saved = (bufRef e).value
-  let _ = setRef (bufRef e) []
+  bufRef e := []
   let scope = beginDefine e
   let _ = emit e "define i64 @\{lamName}(\{closureParamDecls pats}) {"
   let _ = emit e "entry:"
@@ -6705,9 +6701,9 @@ emitRecLamDefine e env lamName f pats captured body =
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
-  let _ = setRef (lamsRef e) (lamLines ++ (lamsRef e).value)
+  lamsRef e := lamLines ++ (lamsRef e).value
   let _ = endDefine e scope
-  setRef (bufRef e) saved
+  bufRef e := saved
 
 -- E2b — emit a lifted lambda whose params are NON-variable patterns, into the side
 -- buffer (same swap discipline as emitLamDefine).  Captures load from `%clos`
@@ -6722,7 +6718,7 @@ emitRecLamDefine e env lamName f pats captured body =
 emitPatLamDefine : Emit -> List (String, (String, LTy)) -> String -> List (String, (String, LTy)) -> List Pat -> List String -> CExpr -> Unit
 emitPatLamDefine e env lamName extra pats captured body =
   let saved = (bufRef e).value
-  let _ = setRef (bufRef e) []
+  bufRef e := []
   let scope = beginDefine e
   let arity = listLen pats
   let _ = emit e "define i64 @\{lamName}(i64 %clos, \{implParamDecls arity 0}) {"
@@ -6732,9 +6728,9 @@ emitPatLamDefine e env lamName extra pats captured body =
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
-  let _ = setRef (lamsRef e) (lamLines ++ (lamsRef e).value)
+  lamsRef e := lamLines ++ (lamsRef e).value
   let _ = endDefine e scope
-  setRef (bufRef e) saved
+  bufRef e := saved
 
 -- drop every occurrence of a name from a list (the recursive-closure self name is
 -- removed from its own free-variable set before computing the capture set).
@@ -6817,7 +6813,7 @@ emitCtorPap e name argOps arity =
 emitCtorPapDefine : Emit -> String -> String -> Int -> Int -> Unit
 emitCtorPapDefine e lamName name arity supplied =
   let saved = (bufRef e).value
-  let _ = setRef (bufRef e) []
+  bufRef e := []
   let scope = beginDefine e
   let remaining = arity - supplied
   let _ = emit e "define i64 @\{lamName}(\{etaParamDecls remaining}) {"
@@ -6828,9 +6824,9 @@ emitCtorPapDefine e lamName name arity supplied =
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
-  let _ = setRef (lamsRef e) (lamLines ++ (lamsRef e).value)
+  lamsRef e := lamLines ++ (lamsRef e).value
   let _ = endDefine e scope
-  setRef (bufRef e) saved
+  bufRef e := saved
 
 -- a CONSTRUCTOR with arity>0 referenced as a FIRST-CLASS value (`map PVar vars`):
 -- emitApp only builds the cell when the ctor is SATURATED (via emitCtorAlloc — see
@@ -6853,7 +6849,7 @@ emitCtorEtaClosure e name =
 emitCtorEtaDefine : Emit -> String -> String -> Int -> Unit
 emitCtorEtaDefine e lamName name arity =
   let saved = (bufRef e).value
-  let _ = setRef (bufRef e) []
+  bufRef e := []
   let scope = beginDefine e
   let _ = emit e "define i64 @\{lamName}(\{etaParamDecls arity}) {"
   let _ = emit e "entry:"
@@ -6862,9 +6858,9 @@ emitCtorEtaDefine e lamName name arity =
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
-  let _ = setRef (lamsRef e) (lamLines ++ (lamsRef e).value)
+  lamsRef e := lamLines ++ (lamsRef e).value
   let _ = endDefine e scope
-  setRef (bufRef e) saved
+  bufRef e := saved
 
 -- emit a lifted lambda's top-level `define` into the SIDE buffer (LLVM forbids a
 -- nested define).  Swap the main buffer out, emit the define with `emit` (so it
@@ -6876,7 +6872,7 @@ emitCtorEtaDefine e lamName name arity =
 emitLamDefine : Emit -> List (String, (String, LTy)) -> String -> List Pat -> List String -> CExpr -> Unit
 emitLamDefine e env lamName pats captured body =
   let saved = (bufRef e).value
-  let _ = setRef (bufRef e) []
+  bufRef e := []
   let scope = beginDefine e
   let _ = emit e "define i64 @\{lamName}(\{closureParamDecls pats}) {"
   let _ = emit e "entry:"
@@ -6886,16 +6882,16 @@ emitLamDefine e env lamName pats captured body =
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
-  let _ = setRef (lamsRef e) (lamLines ++ (lamsRef e).value)
+  lamsRef e := lamLines ++ (lamsRef e).value
   let _ = endDefine e scope
-  setRef (bufRef e) saved
+  bufRef e := saved
 
 -- emit the captureless eta-forwarder `@mdk_etaN(i64 %clos, %arg…) { ret = call
 -- @mdk_fname(%arg…); ret }` into the side buffer (same swap discipline).
 emitEtaDefine : Emit -> String -> String -> Int -> Unit
 emitEtaDefine e lamName fname arity =
   let saved = (bufRef e).value
-  let _ = setRef (bufRef e) []
+  bufRef e := []
   let scope = beginDefine e
   let _ = emit e "define i64 @\{lamName}(\{etaParamDecls arity}) {"
   let _ = emit e "entry:"
@@ -6905,9 +6901,9 @@ emitEtaDefine e lamName fname arity =
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
-  let _ = setRef (lamsRef e) (lamLines ++ (lamsRef e).value)
+  lamsRef e := lamLines ++ (lamsRef e).value
   let _ = endDefine e scope
-  setRef (bufRef e) saved
+  bufRef e := saved
 
 -- gap-2 (GENERAL): a known extern of ANY family (str/num/io/char/file/hash/…)
 -- referenced as a FIRST-CLASS value (point-free alias `f = stringLength`, or
@@ -6946,7 +6942,7 @@ emitMethodEtaClosure e name =
 emitMethodEtaDefine : Emit -> String -> String -> Int -> Unit
 emitMethodEtaDefine e lamName name arity =
   let saved = (bufRef e).value
-  let _ = setRef (bufRef e) []
+  bufRef e := []
   let scope = beginDefine e
   let _ = emit e "define i64 @\{lamName}(\{etaParamDecls arity}) {"
   let _ = emit e "entry:"
@@ -6956,9 +6952,9 @@ emitMethodEtaDefine e lamName name arity =
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
-  let _ = setRef (lamsRef e) (lamLines ++ (lamsRef e).value)
+  lamsRef e := lamLines ++ (lamsRef e).value
   let _ = endDefine e scope
-  setRef (bufRef e) saved
+  bufRef e := saved
 
 -- the declared arity of extern `name` = the arrow count of its runtime signature
 -- (`declSigOf` is seeded from the runtime extern decls via declSigTypeNames).  An
@@ -6978,7 +6974,7 @@ externArity e name = match declSigOf e name
 emitExternEtaDefine : Emit -> String -> String -> Int -> Unit
 emitExternEtaDefine e lamName name arity =
   let saved = (bufRef e).value
-  let _ = setRef (bufRef e) []
+  bufRef e := []
   let scope = beginDefine e
   let _ = emit e "define i64 @\{lamName}(\{etaParamDecls arity}) {"
   let _ = emit e "entry:"
@@ -6989,9 +6985,9 @@ emitExternEtaDefine e lamName name arity =
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
-  let _ = setRef (lamsRef e) (lamLines ++ (lamsRef e).value)
+  lamsRef e := lamLines ++ (lamsRef e).value
   let _ = endDefine e scope
-  setRef (bufRef e) saved
+  bufRef e := saved
 
 -- env binding `__eta_argK__ -> (%argK, LTInt)` for K in [i, arity) — so the
 -- replayed applied-form emitter resolves each synthetic arg to its `%argK` reg.
@@ -7247,14 +7243,14 @@ ctorTypeId e name = match ctorTypeOf e name
 -- List String — no hash container, so it self-compiles cleanly) in the per-emission
 -- context, initialized to None so each emitProgram/emitProgramGaps recomputes.
 resetDistinctTypeNames : Emit -> Unit
-resetDistinctTypeNames e = setRef e.distinctTypeNamesCache None
+resetDistinctTypeNames e = e.distinctTypeNamesCache := None
 
 distinctTypeNames : Emit -> List String
 distinctTypeNames e = match e.distinctTypeNamesCache.value
   Some xs => xs
   None =>
     let xs = nubStr (typeNamesOf (ctorTypeTable e))
-    let _ = setRef e.distinctTypeNamesCache (Some xs)
+    e.distinctTypeNamesCache := Some xs
     xs
 
 typeNamesOf : List (String, String) -> List String
@@ -7390,16 +7386,16 @@ emitDecision e env scrut arms tree =
   let endL = "decend" ++ intToString (freshLocal e)
   let rty = Ref LTInt
   let savedTrmc = e.trmcCtx.value
-  let _ = setRef e.trmcCtx TrmcOff
+  e.trmcCtx := TrmcOff
   let savedGDisp = e.gDispCtx.value
-  let _ = setRef e.gDispCtx GDispOff
+  e.gDispCtx := GDispOff
   -- "" = a miss in an expression-position match is a genuine non-exhaustive abort,
   -- NOT the enclosing clause chain's fallthrough (the clause's pattern already
   -- matched to get here).  Passing it as an argument replaces the old
   -- save+null+restore of fallthroughLabelRef (issue #354).
   let _ = emitTree e env [sv] arms [sv] slot endL "" rty tree
-  let _ = setRef e.trmcCtx savedTrmc
-  let _ = setRef e.gDispCtx savedGDisp
+  e.trmcCtx := savedTrmc
+  e.gDispCtx := savedGDisp
   let _ = emit e (endL ++ ":")
   let r = freshReg e
   let _ = emit e "  \{r} = load i64, ptr \{slot}"
@@ -7483,7 +7479,7 @@ emitLeaf e env roots arms i slot endL rty = match nthArm arms i
         TrmcOn _ _ _ _ _ _ => emitTrmcBody e env2 body
         TrmcOff =>
           let (bv, bty) = emitExpr e env2 body
-          let _ = setRef rty bty
+          rty := bty
           let _ = emit e "  store i64 \{bv}, ptr \{slot}"
           emit e ("  br label %" ++ endL)
   None => gapU e "decision arm index out of range"
@@ -7519,7 +7515,7 @@ emitGuardedArm e env roots arms occs pat guards body fail slot endL ftL rty =
       TrmcOn _ _ _ _ _ _ => emitTrmcBody e env3 body
       TrmcOff =>
         let (bv, bty) = emitExpr e env3 body
-        let _ = setRef rty bty
+        rty := bty
         let _ = emit e "  store i64 \{bv}, ptr \{slot}"
         emit e ("  br label %" ++ endL)
   let _ = emit e (failL ++ ":")
@@ -8306,9 +8302,9 @@ emitTrmcLoopBody e self arity slotTys clauses single singlePats singleBody =
   let _ = emit e (loopL ++ ":")
   let reloaded = trmcReloadParams e pslots slotTys 0
   let saved = e.trmcCtx.value
-  let _ = setRef e.trmcCtx (TrmcOn self arity destSlot loopL exitL pslots)
+  e.trmcCtx := TrmcOn self arity destSlot loopL exitL pslots
   let _ = trmcEmitDispatch e reloaded arity clauses single singlePats reloaded singleBody
-  let _ = setRef e.trmcCtx saved
+  e.trmcCtx := saved
   let _ = emit e (exitL ++ ":")
   let r = freshReg e
   let _ = emit e "  \{r} = load i64, ptr \{hole}"
@@ -8592,9 +8588,9 @@ emitGDispGroup e grp =
   let exitL = "gdispexit" ++ intToString (freshLocal e)
   let _ = emit e ("  br label %" ++ gDispLabel root)
   let saved = e.gDispCtx.value
-  let _ = setRef e.gDispCtx (GDispOn root members uslots destSlot exitL)
+  e.gDispCtx := GDispOn root members uslots destSlot exitL
   let _ = emitGDispMembers e binds members
-  let _ = setRef e.gDispCtx saved
+  e.gDispCtx := saved
   let _ = emit e (exitL ++ ":")
   let r = freshReg e
   let _ = emit e "  \{r} = load i64, ptr \{hole}"
@@ -9027,7 +9023,7 @@ isFloatClosureBody e name pats _ = False
 recordFloatClosureResult : Emit -> String -> Int -> Int -> (String, LTy) -> Unit
 recordFloatClosureResult e fname argc arity (reg, _) =
   if argc == arity && contains fname e.floatClosureFns.value then
-    setRef e.closureRetTy ((reg, LTFloat)::e.closureRetTy.value)
+    e.closureRetTy := (reg, LTFloat)::e.closureRetTy.value
   else
     ()
 
@@ -10816,8 +10812,8 @@ emitProgramMode gapMode input (CProgram groups ctorArs ctorTypes implEntries) =
     floatClosureFns = Ref [],
   }
   let _ = resetDistinctTypeNames e
-  let _ = setRef e.dictConstCache []
-  let _ = setRef e.dispCache []
+  e.dictConstCache := []
+  e.dispCache := []
   let _ = installKnownFnMap e (collectFns groups)
   -- #561 PR-A: classify LAZY value globals (dispatch-reaching / cyclic) once per
   -- program.  Reads of these lower to `call @mdk_force_<x>()`; every other global
@@ -10847,11 +10843,11 @@ emitProgramMode gapMode input (CProgram groups ctorArs ctorTypes implEntries) =
   -- clause-arity body would diverge from the ordinary define's ABI); dropped
   -- groups fall back to ordinary codegen, no transform, no regression.
   let gDispArs = gDispFnArsOf (fnBinds groups)
-  let _ = setRef e.gDispArs gDispArs
+  e.gDispArs := gDispArs
   -- #990: index the fn-arity table so detectDispatchGroups' per-ref gDispIsFn/
   -- gDispFnArity is O(log fns) not O(fns) — reverseL ⇒ first-pair-wins = lookupAssoc.
-  let _ = setRef e.gDispArMap (Some (omFromPairs (reverseL gDispArs) omEmpty))
-  let _ = setRef e.gDispBinds (fnBinds groups)
+  e.gDispArMap := (Some (omFromPairs (reverseL gDispArs) omEmpty))
+  e.gDispBinds := (fnBinds groups)
   let dispGroups0 = detectDispatchGroups
     (n => canonFnName e n)
     (n => gDispIsFn e n)
@@ -10860,13 +10856,13 @@ emitProgramMode gapMode input (CProgram groups ctorArs ctorTypes implEntries) =
     (fnBinds groups)
     groups
     implEntries
-  let _ = setRef e.gDispGroups (gDispKeepEtaStable e (fnBinds groups) dispGroups0)
+  e.gDispGroups := (gDispKeepEtaStable e (fnBinds groups) dispGroups0)
   -- a group member must never be ADVERTISED as having a float `__fw` worker (the
   -- group path emits no standalone defines, so a float-context caller would call
   -- a nonexistent symbol; v3/v4 make external float callers impossible anyway —
   -- belt and braces).
-  let _ = setRef e.floatFwSet (gDispDropMembers e (collectFloatFw e (fnBinds groups)))
-  let _ = setRef e.floatClosureFns (collectFloatClosureFns e (fnBinds groups))
+  e.floatFwSet := (gDispDropMembers e (collectFloatFw e (fnBinds groups)))
+  e.floatClosureFns := (collectFloatClosureFns e (fnBinds groups))
   let _ = resetEmittedDefaults e
   let _ = emitPreamble e
   let _ = emitGlobalDecls e (valBinds groups)
@@ -11176,8 +11172,8 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes implEntries) =
     floatClosureFns = Ref [],
   }
   let _ = resetDistinctTypeNames e
-  let _ = setRef e.dictConstCache []
-  let _ = setRef e.dispCache []
+  e.dictConstCache := []
+  e.dispCache := []
   let _ = installKnownFnMap e (collectFns groups)
   -- #561 PR-A: the gap census emits every value bind ORDINARILY (eager load), so
   -- install an EMPTY lazy set — this also RESETS any prior emitProgram's set so it
@@ -11196,11 +11192,11 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes implEntries) =
   -- program's index so a same-process re-emit can never route through a stale bucket.
   let _ = installImplIndex e implEntries
   let _ = installImplMethodSet e implEntries
-  let _ = setRef e.floatFwSet (collectFloatFw e (fnBinds groups))
-  let _ = setRef e.floatClosureFns (collectFloatClosureFns e (fnBinds groups))
+  e.floatFwSet := (collectFloatFw e (fnBinds groups))
+  e.floatClosureFns := (collectFloatClosureFns e (fnBinds groups))
   -- the gap census emits every bind ORDINARILY — reset the (b′) groups so a prior
   -- emitProgram's routing state can never leak into this path.
-  let _ = setRef e.gDispGroups []
+  e.gDispGroups := []
   let _ = resetEmittedDefaults e
   let _ = emitPreamble e
   let _ = emitFnsGaps e (fnBinds groups)

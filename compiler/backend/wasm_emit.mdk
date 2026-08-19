@@ -1,3 +1,13 @@
+-- lint-disable-file rule-prefer-assign-op
+-- ⚠️ The `setRef r v` -> `r := v` migration DELIBERATELY SKIPS this file (#1746).
+-- `test/wasm/diff_wasm_typed.sh` pins ~60 of this file's `setRef` call sites as
+-- LITERAL SOURCE TEXT (the leaf-demand carrier ratchets), including NEGATIVE regex
+-- checks asserting a given writer does NOT exist — and a negative check that is not
+-- taught the `:=` spelling stops seeing a rogue writer, i.e. fails OPEN. Migrating
+-- the calls without rewriting that suite in lockstep would silently weaken a
+-- soundness ratchet for a purely stylistic gain, so the two move together or not at
+-- all. #1746 does both.
+--
 -- WasmGC backend emitter — WASMGC-DESIGN.md §7.  Peer of `backend.llvm_emit`:
 -- consumes the SAME backend-neutral Core IR (`ir.core_ir`) the LLVM emitter
 -- consumes (lowered by the SAME `core_ir_lower.lowerProgramEmit`) and produces a

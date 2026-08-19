@@ -1,5 +1,5 @@
 # META
-source_lines=5012
+source_lines=5030
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser — Stage 1 port of `lib/parser.mly`.  A monadic
@@ -193,9 +193,9 @@ locLineStartsRef = Ref (arrayFromList [0])
 
 setLocState : String -> Array (Int, Int) -> Unit
 setLocState src offs =
-  let _ = setRef locSrcRef src
-  let _ = setRef locLineStartsRef (lineStartsOf src)
-  setRef locOffsRef offs
+  locSrcRef := src
+  locLineStartsRef := lineStartsOf src
+  locOffsRef := offs
 
 -- start char offset of token `i` (0 when out of range / unset).
 tokOffsetAt : Int -> Int
@@ -396,10 +396,28 @@ parseAssign = do
 assignTail : Expr -> Parser Expr
 assignTail lhs = located (assignTailRaw lhs)
 
+-- The RHS reads via `parseRhsExpr`, not a bare `parseAssign`: `:=` is a layout
+-- herald (LAYOUT-SEMANTICS.md §7.1) exactly as `=>` is — it is absent from the
+-- lexer's `canEndExpr`, so `r :=⏎  rhs` opens a bare-INDENT block that
+-- `parseAssign` has no TIndent case to read.  The same production the decl body
+-- (`parseBody`), a let/where RHS, and `lamTailRaw` already use.
+--
+-- Before this, an indented RHS died on the generic *"unexpected `:=`; expected a
+-- dedent"* — §12 item 5's "the lexer heralds it correctly but the parser cannot
+-- consume it" ⇒ a PARSER bug, not a lexer one.  It also made `medaka lint --fix`
+-- DESTROY SOURCE: a fix reprints the whole decl through `tools/printer.mdk`, whose
+-- `hangAtSep` legitimately drops a wide def-body below its separator, so any decl
+-- whose body was a `:=` with a wide RHS came back unparseable while `--fix`
+-- reported success and exited 0.
+--
+-- Right-associativity is preserved: `parseRhsExpr` falls back to `parseExpr`,
+-- which routes to `parseAssign`, so `a := b := c` still nests right.  (It also
+-- admits a trailing annotation on the RHS — `r := e : T` — which bare
+-- `parseAssign` did not; that matches every other RHS position.)
 assignTailRaw : Expr -> Parser Expr
 assignTailRaw lhs = do
   expectTok TColonEq
-  rhs <- parseAssign
+  rhs <- parseRhsExpr
   pure (EBinOp ":=" lhs rhs (Ref RNone))
 
 -- expression type annotation `e : ty` (loosest level)
@@ -5055,7 +5073,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "locLineStartsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DFunDef false "locLineStartsRef" () (EApp (EVar "Ref") (EApp (EVar "arrayFromList") (EListLit (ELit (LInt 0))))))
 (DTypeSig false "setLocState" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "Unit"))))
-(DFunDef false "setLocState" ((PVar "src") (PVar "offs")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "locSrcRef")) (EVar "src"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "locLineStartsRef")) (EApp (EVar "lineStartsOf") (EVar "src")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "locOffsRef")) (EVar "offs")))))
+(DFunDef false "setLocState" ((PVar "src") (PVar "offs")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "locSrcRef")) (EVar "src"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "locLineStartsRef")) (EApp (EVar "lineStartsOf") (EVar "src")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "locOffsRef")) (EVar "offs")))))
 (DTypeSig false "tokOffsetAt" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "tokOffsetAt" ((PVar "i")) (EBlock (DoLet false false (PVar "offs") (EFieldAccess (EVar "locOffsRef") "value")) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "offs")))) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "offs"))) (ELit (LInt 0))))))
 (DTypeSig false "tokEndOffsetAt" (TyFun (TyCon "Int") (TyCon "Int")))
@@ -5127,7 +5145,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "assignTail" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "assignTail" ((PVar "lhs")) (EApp (EVar "located") (EApp (EVar "assignTailRaw") (EVar "lhs"))))
 (DTypeSig false "assignTailRaw" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
-(DFunDef false "assignTailRaw" ((PVar "lhs")) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TColonEq"))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "parseAssign")) (ELam ((PVar "rhs")) (EApp (EVar "pure") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "lhs")) (EVar "rhs")) (EApp (EVar "Ref") (EVar "RNone")))))))))
+(DFunDef false "assignTailRaw" ((PVar "lhs")) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TColonEq"))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "parseRhsExpr")) (ELam ((PVar "rhs")) (EApp (EVar "pure") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "lhs")) (EVar "rhs")) (EApp (EVar "Ref") (EVar "RNone")))))))))
 (DTypeSig false "annotTail" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "annotTail" ((PVar "e")) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TColon"))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "parseTy")) (ELam ((PVar "t")) (EApp (EVar "pure") (EApp (EApp (EVar "EAnnot") (EVar "e")) (EVar "t"))))))))
 (DTypeSig false "parseLam" (TyApp (TyCon "Parser") (TyCon "Expr")))
@@ -6586,7 +6604,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "locLineStartsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DFunDef false "locLineStartsRef" () (EApp (EVar "Ref") (EApp (EVar "arrayFromList") (EListLit (ELit (LInt 0))))))
 (DTypeSig false "setLocState" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "Unit"))))
-(DFunDef false "setLocState" ((PVar "src") (PVar "offs")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "locSrcRef")) (EVar "src"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EVar "locLineStartsRef")) (EApp (EVar "lineStartsOf") (EVar "src")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "locOffsRef")) (EVar "offs")))))
+(DFunDef false "setLocState" ((PVar "src") (PVar "offs")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "locSrcRef")) (EVar "src"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "locLineStartsRef")) (EApp (EVar "lineStartsOf") (EVar "src")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "locOffsRef")) (EVar "offs")))))
 (DTypeSig false "tokOffsetAt" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "tokOffsetAt" ((PVar "i")) (EBlock (DoLet false false (PVar "offs") (EFieldAccess (EVar "locOffsRef") "value")) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "offs")))) (EApp (EVar "fst") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "offs"))) (ELit (LInt 0))))))
 (DTypeSig false "tokEndOffsetAt" (TyFun (TyCon "Int") (TyCon "Int")))
@@ -6658,7 +6676,7 @@ parseResultWith src tokList offList =
 (DTypeSig false "assignTail" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "assignTail" ((PVar "lhs")) (EApp (EVar "located") (EApp (EVar "assignTailRaw") (EVar "lhs"))))
 (DTypeSig false "assignTailRaw" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
-(DFunDef false "assignTailRaw" ((PVar "lhs")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TColonEq"))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "parseAssign")) (ELam ((PVar "rhs")) (EApp (EMethodRef "pure") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "lhs")) (EVar "rhs")) (EApp (EVar "Ref") (EVar "RNone")))))))))
+(DFunDef false "assignTailRaw" ((PVar "lhs")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TColonEq"))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "parseRhsExpr")) (ELam ((PVar "rhs")) (EApp (EMethodRef "pure") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString ":="))) (EVar "lhs")) (EVar "rhs")) (EApp (EVar "Ref") (EVar "RNone")))))))))
 (DTypeSig false "annotTail" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "annotTail" ((PVar "e")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TColon"))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "parseTy")) (ELam ((PVar "t")) (EApp (EMethodRef "pure") (EApp (EApp (EVar "EAnnot") (EVar "e")) (EVar "t"))))))))
 (DTypeSig false "parseLam" (TyApp (TyCon "Parser") (TyCon "Expr")))

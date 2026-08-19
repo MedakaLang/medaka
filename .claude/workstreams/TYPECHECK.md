@@ -98,8 +98,11 @@ removing it:
   collision by full module-qualified identity) but the value it writes into a `Ref`/annotation
   for a later stage to read is still the old, coarser key (e.g. the bare unmangled name), the
   stamp is stale by construction and front end/back end now disagree on cases the old, coarser
-  decision made unreachable. Grep every `setRef`/annotation write the changed function makes and
-  check its key matches the one just used to decide.
+  decision made unreachable. Grep every `Ref`/annotation write the changed function makes and
+  check its key matches the one just used to decide. ⚠️ **A write has TWO spellings** — `r := v`
+  and `setRef r v` — so grepping only `setRef` MISSES most of them (typecheck.mdk is now
+  overwhelmingly `:=`; the `setRef` residue is the multi-line calls of #1744). Grep both, or grep
+  the target field name.
 - **Question 6's verification checklist, concretely:**
   - Take newly-accepted programs to `medaka build` and **execute the binary**. `medaka run` and
     `medaka build` typecheck with the same binary and share the whole front end (`AGENTS.md`), so

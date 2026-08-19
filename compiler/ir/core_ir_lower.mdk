@@ -525,7 +525,7 @@ lowerStmt _ = panic "core_ir lower: unsupported block statement"
 -- arity + ctor→type tables.  Interfaces/impls are slice-5 (no dispatch yet).
 export lowerProgram : List Decl -> CProgram
 lowerProgram prog =
-  let _ = setRef ctorFieldOrdersRef (buildCtorFieldOrders prog)
+  ctorFieldOrdersRef := buildCtorFieldOrders prog
   CProgram
     (lowerGroups prog)
     (ctorArities prog)
@@ -956,7 +956,7 @@ memoBindName : String -> String -> String
 memoBindName selector method = "$memo_\{sanitizeId selector}_\{method}"
 
 recordMemoRef : String -> String -> Unit
-recordMemoRef tag method = setRef memoRefsRef ((tag, method)::memoRefsRef.value)
+recordMemoRef tag method = memoRefsRef := (tag, method)::memoRefsRef.value
 
 -- #731 item 1 / #747: rewrite a runtime-dict-routed nullary occurrence.
 --   • single-impl (soleMemoKeysRef): the runtime dict can only ever resolve to the
@@ -1002,9 +1002,9 @@ hoistNullaryMemo (CProgram groups ctorArs ctorTypes implEntries) =
   let keys = memoKeys implEntries
   if isEmptyL keys then CProgram groups ctorArs ctorTypes implEntries
   else
-    let _ = setRef memoRefsRef []
-    let _ = setRef soleMemoKeysRef (soleMemoKeys implEntries keys)
-    let _ = setRef allMemoKeysRef keys
+    memoRefsRef := []
+    soleMemoKeysRef := soleMemoKeys implEntries keys
+    allMemoKeysRef := keys
     let groups2 = map (hoistBind keys) groups
     let impls2 = map (hoistImpl keys) implEntries
     let refs = dedupPairs (reverseL memoRefsRef.value)
@@ -1295,7 +1295,7 @@ ifaceImplHeadsRef : Ref (List (String, String, String, String))
 ifaceImplHeadsRef = Ref []
 
 export installIfaceImplHeads : List (String, String, String, String) -> Unit
-installIfaceImplHeads t = setRef ifaceImplHeadsRef t
+installIfaceImplHeads t = ifaceImplHeadsRef := t
 
 export ifaceImplHeadTable : List Decl -> List (String, String, String, String)
 ifaceImplHeadTable prog = flatMap ifaceImplHeadEntries prog

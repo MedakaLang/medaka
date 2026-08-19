@@ -33,12 +33,12 @@ tjOnStack x = fromOption False (omLookup x tjOn.value)
 
 export tarjanSCCs : List String -> OrdMap (List String) -> List (List String)
 tarjanSCCs names adj =
-  let _ = setRef tjCounter 0
-  let _ = setRef tjStack []
-  let _ = setRef tjIndex omEmpty
-  let _ = setRef tjLow omEmpty
-  let _ = setRef tjOn omEmpty
-  let _ = setRef tjOut []
+  tjCounter := 0
+  tjStack := []
+  tjIndex := omEmpty
+  tjLow := omEmpty
+  tjOn := omEmpty
+  tjOut := []
   let _ = tarjanAll names adj
   reverseL tjOut.value
 
@@ -56,11 +56,11 @@ tjVisit v adj = match omLookup v tjIndex.value
 strongconnect : String -> OrdMap (List String) -> Unit
 strongconnect v adj =
   let idx = tjCounter.value
-  let _ = setRef tjIndex (omInsert v idx tjIndex.value)
-  let _ = setRef tjLow (omInsert v idx tjLow.value)
-  let _ = setRef tjCounter (idx + 1)
-  let _ = setRef tjStack (v::tjStack.value)
-  let _ = setRef tjOn (omInsert v True tjOn.value)
+  tjIndex := omInsert v idx tjIndex.value
+  tjLow := omInsert v idx tjLow.value
+  tjCounter := idx + 1
+  tjStack := v::tjStack.value
+  tjOn := omInsert v True tjOn.value
   let _ = scEdges v (fromOption [] (omLookup v adj)) adj
   if tjLowOf v == idx then tjPop v [] else ()
 
@@ -74,17 +74,17 @@ scEdge : String -> String -> OrdMap (List String) -> Unit
 scEdge v w adj = match omLookup w tjIndex.value
   None =>
     let _ = strongconnect w adj
-    setRef tjLow (omInsert v (minI (tjLowOf v) (tjLowOf w)) tjLow.value)
+    tjLow := omInsert v (minI (tjLowOf v) (tjLowOf w)) tjLow.value
   Some iw =>
     if tjOnStack w then
-      setRef tjLow (omInsert v (minI (tjLowOf v) iw) tjLow.value)
+      tjLow := omInsert v (minI (tjLowOf v) iw) tjLow.value
     else
       ()
 
 tjPop : String -> List String -> Unit
 tjPop v acc = match tjStack.value
-  [] => setRef tjOut (acc::tjOut.value)
+  [] => tjOut := acc::tjOut.value
   w::rest =>
-    let _ = setRef tjStack rest
-    let _ = setRef tjOn (omInsert w False tjOn.value)
-    if w == v then setRef tjOut ((w::acc) :: tjOut.value) else tjPop v (w::acc)
+    tjStack := rest
+    tjOn := omInsert w False tjOn.value
+    if w == v then tjOut := (w::acc) :: tjOut.value else tjPop v (w::acc)
