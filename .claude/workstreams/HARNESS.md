@@ -81,3 +81,11 @@ substitution — a title containing `` `gh pr edit` `` executed it mid-flight th
 use single-quoted heredocs for bodies and plain text for titles. Re-check whether a gh
 upgrade fixed the GraphQL path before propagating this further; delete this block when it
 has.
+
+Read-path sibling (#1533): `gh pr view N --comments` trips the SAME Projects-classic
+GraphQL field, but LOUDLY — the whole request errors (`repository.pullRequest.projectCards`),
+zero comments returned, not a partial result. Use the JSON path instead:
+
+```sh
+gh pr view N --json comments -q '.comments[].body'
+```
