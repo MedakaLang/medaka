@@ -391,24 +391,24 @@ data GDispCtx =
 -- lookupAssoc), so the TMC grouping — and therefore the emitted IR — is byte-identical.
 -- Uninstalled (None) it FALLS BACK to the list scan, identical answer either way.
 gDispIsFn : Emit -> String -> Bool
-gDispIsFn e n = match e.gDispArMap.value
+gDispIsFn e n = match !e.gDispArMap
   Some m => omHasKey n m
-  None => match lookupAssoc n e.gDispArs.value
+  None => match lookupAssoc n !e.gDispArs
     Some _ => True
     None => False
 
 gDispFnArity : Emit -> String -> Int
-gDispFnArity e n = match e.gDispArMap.value
+gDispFnArity e n = match !e.gDispArMap
   Some m => match omLookup n m
     Some a => a
     None => 0 - 1
-  None => match lookupAssoc n e.gDispArs.value
+  None => match lookupAssoc n !e.gDispArs
     Some a => a
     None => 0 - 1
 
 -- is `n` a member (root included) of a detected group?
 gDispIsMember : Emit -> String -> Bool
-gDispIsMember e n = match dispGroupOf e.gDispGroups.value n
+gDispIsMember e n = match dispGroupOf !e.gDispGroups n
   Some _ => True
   None => False
 
@@ -418,8 +418,7 @@ setGapBind : Emit -> String -> Unit
 setGapBind e name = e.curGapBind := name
 
 noteGap : Emit -> String -> Unit
-noteGap e reason =
-  e.gapLog := "\{e.curGapBind.value}\t\{reason}"::e.gapLog.value
+noteGap e reason = e.gapLog := "\{!e.curGapBind}\t\{reason}" :: !e.gapLog
 
 -- ── method-call RESULT-type inference (native backend) ──────────────────────
 -- The (interface, method) -> returns-self table, computed by core_ir_lower's
@@ -569,10 +568,10 @@ resetEmittedDefaults : Emit -> Unit
 resetEmittedDefaults e = e.emittedDefaults := []
 
 markDefaultEmitted : Emit -> String -> Unit
-markDefaultEmitted e name = e.emittedDefaults := name::e.emittedDefaults.value
+markDefaultEmitted e name = e.emittedDefaults := name :: !e.emittedDefaults
 
 defaultAlreadyEmitted : Emit -> String -> Bool
-defaultAlreadyEmitted e name = contains name e.emittedDefaults.value
+defaultAlreadyEmitted e name = contains name !e.emittedDefaults
 
 -- the impl currently being emitted: its type-head tag, and the NAMES of its
 -- params that are self-returning function callbacks (set in emitGroupBody).
@@ -587,7 +586,7 @@ clearCurImplSelfFns e = let _ = e.curImplTag := "" in e.curSelfFnParams := []
 
 -- is `name` a self-returning function param of the impl currently being emitted?
 isCurSelfFnParam : Emit -> String -> Bool
-isCurSelfFnParam e name = contains name e.curSelfFnParams.value
+isCurSelfFnParam e name = contains name !e.curSelfFnParams
 
 -- gap helpers: when recording is on, log the reason + return a placeholder so
 -- emission continues; otherwise `panic` (the unchanged normal-path behaviour).
@@ -824,13 +823,13 @@ data FnSig = FnSig (List LTy) LTy
 freshId : Emit -> Int
 freshId e =
   let c = e.counter
-  let n = c.value
+  let n = !c
   c := n + 1
   n
 
 freshLocal : Emit -> Int
 freshLocal e =
-  let n = e.defineCounter.value
+  let n = !e.defineCounter
   e.defineCounter := n + 1
   n
 
@@ -854,7 +853,7 @@ data DefScope = DefScope Int (List (String, Int)) (List (String, LTy))
 -- start a fresh `define` scope, returning the enclosing one (for `endDefine`).
 beginDefine : Emit -> DefScope
 beginDefine e =
-  let saved = DefScope e.defineCounter.value e.closureArity.value e.closureRetTy.value
+  let saved = DefScope !e.defineCounter !e.closureArity !e.closureRetTy
   e.defineCounter := 0
   e.closureArity := []
   e.closureRetTy := []
@@ -869,7 +868,7 @@ endDefine e (DefScope n ar rt) =
   e.closureRetTy := rt
 
 emit : Emit -> String -> Unit
-emit e line = let buf = e.buf in buf := line::buf.value
+emit e line = let buf = e.buf in buf := line :: !buf
 
 -- the main output buffer ref (needed for the save/restore swap that
 -- redirects emission of a lifted lambda's `define` into the side buffer).
@@ -886,7 +885,7 @@ lamsRef e = e.lams
 -- the known-function table (set once in emitProgram); membership decides whether
 -- a `CApp` head names a callable top-level function.
 fnNames : Emit -> List String
-fnNames e = e.fnNames.value
+fnNames e = !e.fnNames
 
 -- ── known-function index (perf) ─────────────────────────────────────────────
 -- `fnNames` is set ONCE at Emit construction and never mutated (unlike `sigs`,
@@ -918,7 +917,7 @@ installLazyGlobalMap e names =
 export isLazyGlobal : Emit -> String -> Bool
 -- Intentional cross-file duplicate of isLazyGlobalW in wasm_emit.mdk (#561 PR-B); not consolidating (tiny query over a backend-local Ref / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
-isLazyGlobal e x = match e.lazyGlobalMap.value
+isLazyGlobal e x = match !e.lazyGlobalMap
   Some m => omHasKey x m
   None => False
 
@@ -969,12 +968,12 @@ defArityPair _ (CBind name []) = (name, 0)
 -- the recorded emitted define arity of `name` (None when the table is uninstalled
 -- or the name is absent — fall back to the unconditional direct call).
 defArityOf : Emit -> String -> Option Int
-defArityOf e name = match e.defArityMap.value
+defArityOf e name = match !e.defArityMap
   Some m => omLookup name m
   None => None
 
 isKnownFn : Emit -> String -> Bool
-isKnownFn e name = match e.knownFnMap.value
+isKnownFn e name = match !e.knownFnMap
   Some m => match omLookup name m
     Some _ => True
     None => False
@@ -1009,7 +1008,7 @@ canonFnName e name =
 -- "augmented" with Float-propagation types. It is not: `sigs` is never consed,
 -- appended or iterated anywhere — only threaded and looked up.)
 sigLookup : Emit -> String -> Option FnSig
-sigLookup e name = match e.sigMap.value
+sigLookup e name = match !e.sigMap
   Some m => omLookup name m
   None => lookupAssoc name (sigTable e)
 
@@ -1018,7 +1017,7 @@ sigLookup e name = match e.sigMap.value
 -- `e.sigMap` index; rebuilds from `sigTable e` only when uninstalled, which is
 -- the same fallback `sigLookup` takes and preserves first-match either way.
 sigMapOf : Emit -> OrdMap FnSig
-sigMapOf e = match e.sigMap.value
+sigMapOf e = match !e.sigMap
   Some m => m
   None => sigsToMap (sigTable e)
 
@@ -1033,10 +1032,10 @@ fnRetTy e name = match sigLookup e name
 -- the constructor arity table (set once in emitProgram); membership decides
 -- whether a `CVar`/`CApp` head names an ADT constructor (→ heap allocation).
 ctorTable : Emit -> List (String, Int)
-ctorTable e = e.ctors.value
+ctorTable e = !e.ctors
 
 isCtor : Emit -> String -> Bool
-isCtor e name = match e.ctorMap.value
+isCtor e name = match !e.ctorMap
   Some m => match omLookup name m
     Some _ => True
     None => False
@@ -1067,7 +1066,7 @@ isCtor e name = match e.ctorMap.value
 -- The scan is RETAINED as a fallback for records with no declaration in `prog`
 -- (anonymous/synthesized shapes, and probes that pass no declaration table).
 recFieldTable : Emit -> List (String, List String)
-recFieldTable e = e.recFields.value
+recFieldTable e = !e.recFields
 
 -- ── record field-order INDEX (#352) ──────────────────────────────
 -- The table above is CONSTANT for a program (`Ref (collectRecords groups)`, set once
@@ -1113,7 +1112,7 @@ insertLabels owner (l::rest) acc =
 
 -- the record type named `recName`, index-backed (fallback: the raw list scan).
 recFieldsOfName : Emit -> String -> Option (List String)
-recFieldsOfName e recName = match e.recByName.value
+recFieldsOfName e recName = match !e.recByName
   Some m => omLookup recName m
   None => lookupAssoc recName (recFieldTable e)
 
@@ -1123,7 +1122,7 @@ recFieldsOfName e recName = match e.recByName.value
 -- it names (a direct call to that impl's lifted fn); `implsOf` returns every
 -- tagged impl of a method (the runtime RDict/RDictFwd dispatch-switch arms).
 implEntriesOf : Emit -> List CImplEntry
-implEntriesOf e = e.implEntries.value
+implEntriesOf e = !e.implEntries
 
 -- ── impl INDEX by method name (perf #990 — the LLVM twin of #382/#985's wasm scan) ─
 -- Every per-site dispatch scan below reads the WHOLE flat `implEntries` list and FIRST
@@ -1172,7 +1171,7 @@ installImplIndex e entries =
 -- list) is used only when the index is uninstalled — downstream filters by method, so
 -- the answer is identical.  Every whole-`implEntries` per-method scan routes through this.
 methodEntries : Emit -> String -> List CImplEntry
-methodEntries e method = match e.implsByMethod.value
+methodEntries e method = match !e.implsByMethod
   Some m => orEmptyEntries (omLookup method m)
   None => filterMethod method (implEntriesOf e)
 
@@ -1427,7 +1426,7 @@ installImplMethodSet e entries =
   e.implMethodSet := Some (omFromNames (taggedMethodNames entries) omEmpty)
 
 isImplMethod : Emit -> String -> Bool
-isImplMethod e name = match e.implMethodSet.value
+isImplMethod e name = match !e.implMethodSet
   Some m => omHasKey name m
   None => contains name (implMethodNames e)
 
@@ -1520,7 +1519,7 @@ implEntryRouteWords _ _ = []
 -- test "is the loaded ctor tag one of type T's constructors?" by OR-ing the
 -- hashName of each.
 ctorTypeTable : Emit -> List (String, String)
-ctorTypeTable e = e.ctorTypes.value
+ctorTypeTable e = !e.ctorTypes
 
 -- #990: the ctor→type table indexed into an OrdMap, built once in emitProgram.  `cellTag`
 -- (the composite ctor tag, run on EVERY ctor alloc AND every ctor tag-test) computes
@@ -1592,7 +1591,7 @@ numberFrom i (x::rest) = (x, i) :: numberFrom (i + 1) rest
 
 -- the type name owning constructor [name], index-backed (fallback: the raw list scan).
 ctorTypeOf : Emit -> String -> Option String
-ctorTypeOf e name = match e.ctorTypeMap.value
+ctorTypeOf e name = match !e.ctorTypeMap
   Some m => omLookup name m
   None => lookupAssoc name (ctorTypeTable e)
 
@@ -1609,7 +1608,7 @@ globalsRegRef e = e.globalsReg
 markGlobalInit : Emit -> String -> LTy -> Unit
 markGlobalInit e name ty =
   let gr = globalsRegRef e
-  gr := (name, (True, ty)) :: dropAssoc name gr.value
+  gr := (name, (True, ty)) :: dropAssoc name !gr
 
 -- drop the first entry keyed `k` from an assoc list (keeps the rest in order).
 dropAssoc : String -> List (String, (Bool, LTy)) -> List (String, (Bool, LTy))
@@ -1627,7 +1626,7 @@ dropAssoc k ((n, v)::rest) = if n == k then rest else (n, v) :: dropAssoc k rest
 -- exactly the old empty-filter case → the reserved fallback). Falls back to the full
 -- table filter when uninstalled; identical list, identical order, either way.
 ctorsOfType : Emit -> String -> List String
-ctorsOfType e ty = match e.ctorsByType.value
+ctorsOfType e ty = match !e.ctorsByType
   Some m => match omLookup ty m
     Some cs => cs
     None => reservedCtorsOfType ty
@@ -3104,7 +3103,7 @@ blockFloatRet env (_::rest) = blockFloatRet env rest
 recordFloatRet : Emit -> List (String, (String, LTy)) -> String -> CExpr -> Unit
 recordFloatRet e env w body =
   if bodyFloatRet env body then
-    e.closureRetTy := (w, LTFloat)::e.closureRetTy.value
+    e.closureRetTy := (w, LTFloat) :: !e.closureRetTy
   else
     ()
 
@@ -3265,12 +3264,12 @@ emitFloatLeafVar e env ex = match floatVarReg env ex
 
 -- `e.floatFwSet` accessors: does `f` have a `$fw` of arity `n`, and its float positions.
 floatFwHas : Emit -> String -> Int -> Bool
-floatFwHas e f n = match lookupAssoc f e.floatFwSet.value
+floatFwHas e f n = match lookupAssoc f !e.floatFwSet
   Some (ar, _) => ar == n
   None => False
 
 floatFwFp : Emit -> String -> List Int
-floatFwFp e f = match lookupAssoc f e.floatFwSet.value
+floatFwFp e f = match lookupAssoc f !e.floatFwSet
   Some (_, fp) => fp
   None => []
 
@@ -4124,7 +4123,7 @@ emitIndirect : Emit -> List (String, (String, LTy)) -> CExpr -> List CExpr -> (S
 emitIndirect e env hd args =
   let (cw, _) = emitExpr e env hd
   let argOps = emitArgs e env args
-  match lookupAssoc cw e.closureArity.value
+  match lookupAssoc cw !e.closureArity
     Some n =>
       if n > 0 && lengthS argOps > n then
         -- OVER-APPLICATION of a let-bound closure (`(g 7) 9`): saturate with the
@@ -4159,7 +4158,7 @@ emitIndirectCallWords e cw argOps =
 indirectResultTy : Emit -> CExpr -> LTy
 indirectResultTy e (CVar f _) =
   if isCurSelfFnParam e f then
-    tagToLTy e.curImplTag.value
+    tagToLTy !e.curImplTag
   else
     LTInt
 indirectResultTy _ _ = LTInt
@@ -4168,7 +4167,7 @@ indirectResultTy _ _ = LTInt
 -- the closure word `cw`) types its result LTFloat; otherwise the historical
 -- indirectResultTy (self-fn-param container, else LTInt).
 indirectRetTy : Emit -> String -> CExpr -> LTy
-indirectRetTy e cw hd = match lookupAssoc cw e.closureRetTy.value
+indirectRetTy e cw hd = match lookupAssoc cw !e.closureRetTy
   Some t => t
   None => indirectResultTy e hd
 
@@ -4952,8 +4951,8 @@ programHalfIdBase = 1000000
 
 preludeIdSpaceGuard : Emit -> Unit
 preludeIdSpaceGuard e =
-  if e.input.emitHalf == emitHalfPrelude && e.counter.value >= programHalfIdBase then
-    panic "prelude-object emit exhausted its gensym id space (\{intToString e.counter.value} >= \{intToString programHalfIdBase}) — raise programHalfIdBase in llvm_emit.mdk"
+  if e.input.emitHalf == emitHalfPrelude && !e.counter >= programHalfIdBase then
+    panic "prelude-object emit exhausted its gensym id space (\{intToString !e.counter} >= \{intToString programHalfIdBase}) — raise programHalfIdBase in llvm_emit.mdk"
   else
     ()
 
@@ -5069,14 +5068,14 @@ dispFnName name nmw nargs =
 
 ensureDispatcherEmitted : Emit -> String -> String -> Int -> Int -> Unit
 ensureDispatcherEmitted e fname name nmw nargs =
-  if contains fname e.dispCache.value then
+  if contains fname !e.dispCache then
     ()
   else
     -- REGISTER BEFORE EMITTING.  A default-synthesis arm lifts `@mdk_default_<m>_<tag>`
     -- on demand (ensureDefaultEmitted), and that body can itself reach a dict-routed
     -- site for the SAME method — which would re-enter here and recurse forever if the
     -- symbol were only recorded after the body was emitted.
-    e.dispCache := (fname :: e.dispCache.value)
+    e.dispCache := (fname :: !e.dispCache)
     -- PRELUDE HALF: the dispatcher body enumerates every impl of the method in THIS
     -- program, so it is inherently per-program and must NOT be baked into the shared
     -- `prelude.o` — declare it and let the program half define it.  The program half
@@ -5736,12 +5735,12 @@ emitConstDictCell : Emit -> Int -> List String -> String
 emitConstDictCell e headTag reqWords =
   let n = lengthS reqWords
   let initBody = "[\{intToString (n + 1)} x i64] [i64 \{intToString headTag}\{constDictReqInits reqWords}]"
-  match lookupAssoc initBody e.dictConstCache.value
+  match lookupAssoc initBody !e.dictConstCache
     Some gname => "ptrtoint (ptr @" ++ gname ++ " to i64)"
     None =>
       let gname = "mdk_dc_" ++ intToString (freshId e)
       let _ = emitGlobal e "@\{gname} = internal constant \{initBody}"
-      e.dictConstCache := (initBody, gname)::e.dictConstCache.value
+      e.dictConstCache := (initBody, gname) :: !e.dictConstCache
       "ptrtoint (ptr @" ++ gname ++ " to i64)"
 
 -- the operand word a dict parameter name is bound to in the emit env.
@@ -6599,7 +6598,7 @@ emitClosureCell e hdr fields =
 emitClosureAllocA : Emit -> String -> Int -> List String -> (String, LTy)
 emitClosureAllocA e lamName arity captureWords =
   let (w, lty) = emitClosureAlloc e lamName arity captureWords
-  e.closureArity := (w, arity)::e.closureArity.value
+  e.closureArity := (w, arity) :: !e.closureArity
   (w, lty)
 
 -- emit a CLam: compute its captured set, lift its body to a top-level define, and
@@ -6744,7 +6743,7 @@ emitEtaClosure e fname =
 
 -- the inferred arity of a known top-level function (its signature's param count).
 fnArity : Emit -> String -> Int
-fnArity e fname = match e.sigMap.value
+fnArity e fname = match !e.sigMap
   Some m => match omLookup fname m
     Some (FnSig ptys _) => lengthS ptys
     None => 0
@@ -6754,7 +6753,7 @@ fnArity e fname = match e.sigMap.value
 
 -- the declared arity of constructor `name` (its field count, from the ctor table).
 ctorArity : Emit -> String -> Int
-ctorArity e name = match e.ctorMap.value
+ctorArity e name = match !e.ctorMap
   Some m => match omLookup name m
     Some n => n
     None => 0
@@ -7207,7 +7206,7 @@ ctorOrdinal e name = match ctorTypeOf e name
   -- #352: `ctorTypeOf name = Some ty` means `name` IS in the ctor→type table, so it
   -- is in `ty`'s bucket and therefore in the ordinal map — the map probe and the
   -- `indexOfStr` scan return the same Int. Fallback when uninstalled.
-  Some ty => match e.ctorOrdinalMap.value
+  Some ty => match !e.ctorOrdinalMap
     Some m => orZero (omLookup name m)
     None => orZero (indexOfStr name (ctorsOfType e ty))
   None => if name == "Nil" then 1 else 0
@@ -7221,10 +7220,10 @@ ctorTypeId e name = match ctorTypeOf e name
   -- #352: `e.typeIdMap` is built from the SAME `nubStr (typeNamesOf …)` list that
   -- `distinctTypeNames` memoizes, numbered from 0 — so the probe and the
   -- `indexOfStr` scan agree, and `omSize` is that list's length (nubStr ⇒ distinct).
-  Some ty => match e.typeIdMap.value
+  Some ty => match !e.typeIdMap
     Some m => orZero (omLookup ty m)
     None => orZero (indexOfStr ty (distinctTypeNames e))
-  None => match e.typeIdMap.value
+  None => match !e.typeIdMap
     Some m => omSize m
     None => lengthS (distinctTypeNames e)
 
@@ -7240,7 +7239,7 @@ resetDistinctTypeNames : Emit -> Unit
 resetDistinctTypeNames e = e.distinctTypeNamesCache := None
 
 distinctTypeNames : Emit -> List String
-distinctTypeNames e = match e.distinctTypeNamesCache.value
+distinctTypeNames e = match !e.distinctTypeNamesCache
   Some xs => xs
   None =>
     let xs = nubStr (typeNamesOf (ctorTypeTable e))
@@ -7379,9 +7378,9 @@ emitDecision e env scrut arms tree =
   let _ = emit e ("  " ++ slot ++ " = alloca i64")
   let endL = "decend" ++ intToString (freshLocal e)
   let rty = Ref LTInt
-  let savedTrmc = e.trmcCtx.value
+  let savedTrmc = !e.trmcCtx
   e.trmcCtx := TrmcOff
-  let savedGDisp = e.gDispCtx.value
+  let savedGDisp = !e.gDispCtx
   e.gDispCtx := GDispOff
   -- "" = a miss in an expression-position match is a genuine non-exhaustive abort,
   -- NOT the enclosing clause chain's fallthrough (the clause's pattern already
@@ -7393,7 +7392,7 @@ emitDecision e env scrut arms tree =
   let _ = emit e (endL ++ ":")
   let r = freshReg e
   let _ = emit e "  \{r} = load i64, ptr \{slot}"
-  (r, rty.value)
+  (r, !rty)
 -- A `match` in expression position is self-contained: its own non-exhaustive
 -- CTFail is a genuine abort, NOT the enclosing clause-chain's fallthrough.  Save
 -- + null the fallthrough label across the tree so a body-level match emitted
@@ -7467,9 +7466,9 @@ emitLeaf : Emit -> List (String, (String, LTy)) -> List String -> List CArm -> I
 emitLeaf e env roots arms i slot endL rty = match nthArm arms i
   Some (CArm pat _ body) =>
     let env2 = bindArm e env pat roots body
-    match e.gDispCtx.value
+    match !e.gDispCtx
       GDispOn _ _ _ _ _ => emitGDispBody e env2 body
-      GDispOff => match e.trmcCtx.value
+      GDispOff => match !e.trmcCtx
         TrmcOn _ _ _ _ _ _ => emitTrmcBody e env2 body
         TrmcOff =>
           let (bv, bty) = emitExpr e env2 body
@@ -7503,9 +7502,9 @@ emitGuardedArm e env roots arms occs pat guards body fail slot endL ftL rty =
   -- then `unreachable`) — runtime UB, a SILENT MISCOMPILE (native returned `[]`/0
   -- where the interpreter and WasmGC returned the right list; wasm's tail engine
   -- always handled guards).  Fixture: test/stack_fixtures/guard_arm_trmc.mdk.
-  let _ = match e.gDispCtx.value
+  let _ = match !e.gDispCtx
     GDispOn _ _ _ _ _ => emitGDispBody e env3 body
-    GDispOff => match e.trmcCtx.value
+    GDispOff => match !e.trmcCtx
       TrmcOn _ _ _ _ _ _ => emitTrmcBody e env3 body
       TrmcOff =>
         let (bv, bty) = emitExpr e env3 body
@@ -7982,7 +7981,7 @@ emitFns e (b::rest) =
 -- (v3/v4 prove nothing outside the group references it); the ROOT emits the whole
 -- group define at its own bind position (deterministic emission order).
 emitFn : Emit -> CBind -> Unit
-emitFn e (CBind name [CClause pats body]) = match dispGroupOf e.gDispGroups.value name
+emitFn e (CBind name [CClause pats body]) = match dispGroupOf !e.gDispGroups name
   Some grp => if dispRootOf grp == name then emitGDispGroup e grp else ()
   None =>
     let (pats2, body2) = etaSaturateMethodBody e name pats body
@@ -7992,7 +7991,7 @@ emitFn e (CBind name [CClause pats body]) = match dispGroupOf e.gDispGroups.valu
       emitFnClause e name pats2 body2
     else
       emitMultiClauseFn e name [(pats2, body2)]
-emitFn e (CBind name (c::rest)) = match dispGroupOf e.gDispGroups.value name
+emitFn e (CBind name (c::rest)) = match dispGroupOf !e.gDispGroups name
   Some grp => if dispRootOf grp == name then emitGDispGroup e grp else ()
   None =>
     let clauses = clausePairs (c::rest)
@@ -8295,7 +8294,7 @@ emitTrmcLoopBody e self arity slotTys clauses single singlePats singleBody =
   let _ = emit e ("  br label %" ++ loopL)
   let _ = emit e (loopL ++ ":")
   let reloaded = trmcReloadParams e pslots slotTys 0
-  let saved = e.trmcCtx.value
+  let saved = !e.trmcCtx
   e.trmcCtx := TrmcOn self arity destSlot loopL exitL pslots
   let _ = trmcEmitDispatch e reloaded arity clauses single singlePats reloaded singleBody
   e.trmcCtx := saved
@@ -8435,7 +8434,7 @@ trmcBindNullaryGroup _ env (_::rest) = env
 -- recomputes its args + loops with NO cell alloc + NO dest store (iterate on a
 -- shorter list); any other leaf stores its value into the destination + exits.
 emitTrmcLeaf : Emit -> List (String, (String, LTy)) -> CExpr -> Unit
-emitTrmcLeaf e env ex = match e.trmcCtx.value
+emitTrmcLeaf e env ex = match !e.trmcCtx
   TrmcOff => emitValueRet e env ex
   TrmcOn self arity destSlot loopL exitL pslots =>
     if isCtorTail (isCtor e) (ctorArity e) self arity ex then
@@ -8568,7 +8567,7 @@ emitGDispGroup : Emit -> DispGroup -> Unit
 emitGDispGroup e grp =
   let root = dispRootOf grp
   let members = dispMembersOf grp
-  let binds = e.gDispBinds.value
+  let binds = !e.gDispBinds
   let rootArity = gDispFnArity e root
   let u = gDispMaxArity e members 0
   let _ = tmcGroupMarkers e root members
@@ -8581,7 +8580,7 @@ emitGDispGroup e grp =
   let _ = emit e "  store ptr \{hole}, ptr \{destSlot}"
   let exitL = "gdispexit" ++ intToString (freshLocal e)
   let _ = emit e ("  br label %" ++ gDispLabel root)
-  let saved = e.gDispCtx.value
+  let saved = !e.gDispCtx
   e.gDispCtx := GDispOn root members uslots destSlot exitL
   let _ = emitGDispMembers e binds members
   e.gDispCtx := saved
@@ -8626,7 +8625,7 @@ emitGDispMembers e binds (m::rest) =
 -- gDispCtx-aware).  Each member's clause chain is emitted with "" as its outer
 -- fallthrough (each member manages its own fallthroughs).
 emitGDispMember : Emit -> CBind -> Unit
-emitGDispMember e (CBind name clauses) = match e.gDispCtx.value
+emitGDispMember e (CBind name clauses) = match !e.gDispCtx
   GDispOff => gapU e "(b') member emit with no active group context"
   GDispOn _ _ uslots _ _ =>
     let arity = clauseArityOf clauses
@@ -8732,7 +8731,7 @@ emitGDispBlock e env stmts = emitGDispLeaf e env (CBlock stmts)
 --     detection guarantees it references no member, so no member symbol — which
 --     does not exist — can be emitted).
 emitGDispLeaf : Emit -> List (String, (String, LTy)) -> CExpr -> Unit
-emitGDispLeaf e env ex = match e.gDispCtx.value
+emitGDispLeaf e env ex = match !e.gDispCtx
   GDispOff => emitValueRet e env ex
   GDispOn _ members uslots destSlot exitL => match gDispSpine e members ex
     Some (heads, f, args) =>
@@ -9016,8 +9015,8 @@ isFloatClosureBody e name pats _ = False
 -- indirect call of it types its result LTFloat.
 recordFloatClosureResult : Emit -> String -> Int -> Int -> (String, LTy) -> Unit
 recordFloatClosureResult e fname argc arity (reg, _) =
-  if argc == arity && contains fname e.floatClosureFns.value then
-    e.closureRetTy := (reg, LTFloat)::e.closureRetTy.value
+  if argc == arity && contains fname !e.floatClosureFns then
+    e.closureRetTy := (reg, LTFloat) :: !e.closureRetTy
   else
     ()
 
@@ -9197,7 +9196,7 @@ allPVar ((PVar _ _)::rest) = allPVar rest
 allPVar _ = False
 
 sigTable : Emit -> List (String, FnSig)
-sigTable e = e.sigs.value
+sigTable e = !e.sigs
 
 -- default param types when no signature was inferred (every param Int).
 allInt : List Pat -> List LTy
@@ -10115,7 +10114,7 @@ findFieldIdx e label = match findRecordByLabel e label
 -- table order that owns it, which is exactly what the scan below returns. Fallback to
 -- the scan when uninstalled.
 findRecordByLabel : Emit -> String -> Option (String, List String)
-findRecordByLabel e label = match e.recByLabel.value
+findRecordByLabel e label = match !e.recByLabel
   Some m => omLookup label m
   None => findRecordByLabelIn (recFieldTable e) label
 
@@ -10869,7 +10868,7 @@ emitProgramMode gapMode input (CProgram groups ctorArs ctorTypes implEntries) =
   let _ = emitFns e (fnBinds groups)
   let _ = emitImpls e implEntries
   let _ = preludeIdSpaceGuard e
-  (joinNl (reverseL e.buf.value ++ reverseL e.lams.value), reverseL e.gapLog.value)
+  (joinNl (reverseL !e.buf ++ reverseL !e.lams), reverseL !e.gapLog)
 
 -- `@mdk_program_main`: the init prologue (every top-level value binding's rhs, in
 -- source order) followed by `main`'s own body and the type-directed print.
@@ -11194,7 +11193,7 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes implEntries) =
   let _ = emitFnsGaps e (fnBinds groups)
   let _ = emitImplsGaps e implEntries
   let _ = emitTopBindsGaps e [] (valBinds groups)
-  reverseL e.gapLog.value
+  reverseL !e.gapLog
 
 emitFnsGaps : Emit -> List CBind -> Unit
 emitFnsGaps _ [] = ()

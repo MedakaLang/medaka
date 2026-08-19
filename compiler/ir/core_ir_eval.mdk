@@ -495,7 +495,7 @@ cevalOutput prog =
   outputRef := ""
   let binds = cevalProgram prog
   let _ = cRunMainForEffect binds
-  outputRef.value
+  !outputRef
 
 cRunMainForEffect : List (String, Value e) -> <e> Value e
 cRunMainForEffect binds = match lookupBinding "main" binds
@@ -612,4 +612,4 @@ cevalModulesOutput preludeDecls modules =
   outputRef := ""
   let binds = cevalModules preludeDecls modules
   let _ = cRunMainForEffect binds
-  outputRef.value
+  !outputRef

@@ -989,12 +989,12 @@ parseCacheLimit = 24
 -- LSP caller's `Ref (List (String, List Decl))` signature would have to follow for
 -- no gain.
 parseCachedLocated : Ref (List (String, List Decl)) -> String -> Result ParseError (List Decl)
-parseCachedLocated cacheRef src = match lookupAssoc src cacheRef.value
+parseCachedLocated cacheRef src = match lookupAssoc src !cacheRef
   Some decls => Ok decls
   None => match parseLocatedResult src
     Err e => Err e
     Ok decls =>
-      cacheRef := takeFirst parseCacheLimit ((src, decls) :: dropKey src cacheRef.value)
+      cacheRef := takeFirst parseCacheLimit ((src, decls) :: dropKey src !cacheRef)
       Ok decls
 
 -- drop any existing entry with this key (so a re-parse refreshes its position).
@@ -1202,7 +1202,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig false "parseCacheLimit" (TyCon "Int"))
 (DFunDef false "parseCacheLimit" () (ELit (LInt 24)))
 (DTypeSig false "parseCachedLocated" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "parseCachedLocated" ((PVar "cacheRef") (PVar "src")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EFieldAccess (EVar "cacheRef") "value")) (arm (PCon "Some" (PVar "decls")) () (EApp (EVar "Ok") (EVar "decls"))) (arm (PCon "None") () (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "decls")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "cacheRef")) (EApp (EApp (EVar "takeFirst") (EVar "parseCacheLimit")) (EBinOp "::" (ETuple (EVar "src") (EVar "decls")) (EApp (EApp (EVar "dropKey") (EVar "src")) (EFieldAccess (EVar "cacheRef") "value")))))) (DoExpr (EApp (EVar "Ok") (EVar "decls")))))))))
+(DFunDef false "parseCachedLocated" ((PVar "cacheRef") (PVar "src")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EUnOp "!" (EVar "cacheRef"))) (arm (PCon "Some" (PVar "decls")) () (EApp (EVar "Ok") (EVar "decls"))) (arm (PCon "None") () (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "decls")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "cacheRef")) (EApp (EApp (EVar "takeFirst") (EVar "parseCacheLimit")) (EBinOp "::" (ETuple (EVar "src") (EVar "decls")) (EApp (EApp (EVar "dropKey") (EVar "src")) (EUnOp "!" (EVar "cacheRef"))))))) (DoExpr (EApp (EVar "Ok") (EVar "decls")))))))))
 (DTypeSig false "dropKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "dropKey" (PWild (PList)) (EListLit))
 (DFunDef false "dropKey" ((PVar "k") (PCons (PTuple (PVar "k2") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "k2")) (EApp (EApp (EVar "dropKey") (EVar "k")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "k2") (EVar "v")) (EApp (EApp (EVar "dropKey") (EVar "k")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -1381,7 +1381,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig false "parseCacheLimit" (TyCon "Int"))
 (DFunDef false "parseCacheLimit" () (ELit (LInt 24)))
 (DTypeSig false "parseCachedLocated" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "parseCachedLocated" ((PVar "cacheRef") (PVar "src")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EFieldAccess (EVar "cacheRef") "value")) (arm (PCon "Some" (PVar "decls")) () (EApp (EVar "Ok") (EVar "decls"))) (arm (PCon "None") () (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "decls")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "cacheRef")) (EApp (EApp (EVar "takeFirst") (EVar "parseCacheLimit")) (EBinOp "::" (ETuple (EVar "src") (EVar "decls")) (EApp (EApp (EVar "dropKey") (EVar "src")) (EFieldAccess (EVar "cacheRef") "value")))))) (DoExpr (EApp (EVar "Ok") (EVar "decls")))))))))
+(DFunDef false "parseCachedLocated" ((PVar "cacheRef") (PVar "src")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "src")) (EUnOp "!" (EVar "cacheRef"))) (arm (PCon "Some" (PVar "decls")) () (EApp (EVar "Ok") (EVar "decls"))) (arm (PCon "None") () (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "decls")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "cacheRef")) (EApp (EApp (EVar "takeFirst") (EVar "parseCacheLimit")) (EBinOp "::" (ETuple (EVar "src") (EVar "decls")) (EApp (EApp (EVar "dropKey") (EVar "src")) (EUnOp "!" (EVar "cacheRef"))))))) (DoExpr (EApp (EVar "Ok") (EVar "decls")))))))))
 (DTypeSig false "dropKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "dropKey" (PWild (PList)) (EListLit))
 (DFunDef false "dropKey" ((PVar "k") (PCons (PTuple (PVar "k2") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "k2")) (EApp (EApp (EVar "dropKey") (EVar "k")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "k2") (EVar "v")) (EApp (EApp (EVar "dropKey") (EVar "k")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

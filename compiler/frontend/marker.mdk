@@ -305,7 +305,7 @@ collectVars (EVarAt x _) = [x]
 -- BOTH as references so DCE keeps the standalone define alive — else the `RLocal`
 -- emit calls an eliminated `@mdk_<mid>__x` (undefined-symbol link error).  Reading
 -- the route ref is pure (same as `lower`).  "" (un-mangled path) contributes nothing.
-collectVars (EMethodAt x routeRef _ _) = x :: routeExtraRefs routeRef.value
+collectVars (EMethodAt x routeRef _ _) = x :: routeExtraRefs !routeRef
 collectVars (EDictAt x _) = [x]
 -- Remaining reference-bearing forms (for soundness as a DCE reference walk; some
 -- are desugared away before the prelude reaches DCE, but the user program may

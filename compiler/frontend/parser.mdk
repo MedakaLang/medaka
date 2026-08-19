@@ -196,13 +196,13 @@ setLocState src offs =
 -- start char offset of token `i` (0 when out of range / unset).
 tokOffsetAt : Int -> Int
 tokOffsetAt i =
-  let offs = locOffsRef.value
+  let offs = !locOffsRef
   if i >= 0 && i < arrayLength offs then fst (arrayGetUnsafe i offs) else 0
 
 -- end char offset of token `i` — one past its last character (0 when out of range / unset).
 tokEndOffsetAt : Int -> Int
 tokEndOffsetAt i =
-  let offs = locOffsRef.value
+  let offs = !locOffsRef
   if i >= 0 && i < arrayLength offs then snd (arrayGetUnsafe i offs) else 0
 
 -- Build a `Loc` from a [start, end) token-index span.  start → the span's first
@@ -214,7 +214,7 @@ tokEndOffsetAt i =
 -- OCaml LSP's range exactly.  `file` is left "" for the caller to fill.
 locOfSpan : Int -> Int -> Loc
 locOfSpan startIdx endIdx =
-  let lineStarts = locLineStartsRef.value
+  let lineStarts = !locLineStartsRef
   let lastIdx = if endIdx > startIdx then endIdx - 1 else startIdx
   match offsetToLineColFast lineStarts (tokOffsetAt startIdx)
     (sl, sc) => match offsetToLineColFast lineStarts (tokEndOffsetAt lastIdx)
@@ -1364,7 +1364,7 @@ letExprKind _ = letPatExpr
 -- The single parser rejection message for `let mut` (used at both the
 -- expression-level and statement-level `let` productions). Points at `Ref`/`:=`.
 letMutRemovedMsg : String
-letMutRemovedMsg = "`let mut` has been removed — bindings are immutable. For mutable state use a `Ref` cell: `let x = Ref 0`, write `x := newValue`, and read it with `x.value`"
+letMutRemovedMsg = "`let mut` has been removed — bindings are immutable. For mutable state use a `Ref` cell: `let x = Ref 0`, write `x := newValue`, and read it with `!x`"
 
 -- `record` is no longer a keyword: a single-constructor named-field product is
 -- the degenerate case of `data`, so declare a record with the `data X = { … }`

@@ -24,8 +24,8 @@
 
 import core.{Eq, Debug, Foldable, Hashable}
 
-{- `HashSet buckets count`: chains in `buckets.value`, live count in
-   `count.value`; both mutated in place. -}
+{- `HashSet buckets count`: chains in `!buckets`, live count in
+   `!count`; both mutated in place. -}
 public export data HashSet a = HashSet (Ref (Array (List a))) (Ref Int)
 
 initialCapacity : Int
@@ -53,7 +53,7 @@ new _ = HashSet (Ref (arrayMake initialCapacity [])) (Ref 0)
    > size (fromList [1, 2, 3, 2, 1])
    3 -}
 export size : HashSet a -> Int
-size (HashSet _ count) = count.value
+size (HashSet _ count) = !count
 
 bucketHas : Eq a => a -> List a -> Bool
 bucketHas _ [] = False
@@ -69,7 +69,7 @@ bucketHas x (y::rest)
    False -}
 export has : (Eq a, Hashable a) => a -> HashSet a -> Bool
 has x (HashSet buckets _) =
-  let arr = buckets.value
+  let arr = !buckets
   bucketHas x (arrayGetUnsafe (slotOf x (arrayLength arr)) arr)
 
 -- ── Insertion / deletion (mutating) ─────────────────────────────────────
@@ -84,7 +84,7 @@ bucketRemove x (y::rest)
    past load factor 0.75. -}
 export insert : (Eq a, Hashable a) => a -> HashSet a -> Unit
 insert x (HashSet buckets count) =
-  let arr = buckets.value
+  let arr = !buckets
   let idx = slotOf x (arrayLength arr)
   insertAt x arr idx buckets count
 
@@ -93,17 +93,17 @@ insertAt x arr idx buckets count
   | bucketHas x (arrayGetUnsafe idx arr) = ()
   | otherwise =
     arraySetUnsafe idx (x :: arrayGetUnsafe idx arr) arr
-    count := count.value + 1
+    count := !count + 1
     maybeResize buckets count
 
 maybeResize : Hashable a => Ref (Array (List a)) -> Ref Int -> Unit
 maybeResize buckets count
-  | count.value * 4 > arrayLength buckets.value * 3 = resize buckets count
+  | !count * 4 > arrayLength !buckets * 3 = resize buckets count
   | otherwise = ()
 
 resize : Hashable a => Ref (Array (List a)) -> Ref Int -> Unit
 resize buckets count =
-  let oldArr = buckets.value
+  let oldArr = !buckets
   let newArr = arrayMake (arrayLength oldArr * 2) []
   buckets := newArr
   count := 0
@@ -124,10 +124,10 @@ reinsertBucket (x::rest) buckets count =
 
 putRaw : Hashable a => a -> Ref (Array (List a)) -> Ref Int -> Unit
 putRaw x buckets count =
-  let arr = buckets.value
+  let arr = !buckets
   let idx = slotOf x (arrayLength arr)
   arraySetUnsafe idx (x :: arrayGetUnsafe idx arr) arr
-  count := count.value + 1
+  count := !count + 1
 
 {- | Build a set from a list, dropping duplicates.
 
@@ -148,7 +148,7 @@ insertAll (x::rest) s =
 {- | Remove an element, in place. A no-op when absent. -}
 export delete : (Eq a, Hashable a) => a -> HashSet a -> Unit
 delete x (HashSet buckets count) =
-  let arr = buckets.value
+  let arr = !buckets
   let idx = slotOf x (arrayLength arr)
   deleteAt x arr idx count
 
@@ -156,7 +156,7 @@ deleteAt : (Eq a, Hashable a) => a -> Array (List a) -> Int -> Ref Int -> Unit
 deleteAt x arr idx count =
   if bucketHas x (arrayGetUnsafe idx arr) then
     arraySetUnsafe idx (bucketRemove x (arrayGetUnsafe idx arr)) arr
-    count := count.value - 1
+    count := !count - 1
 
 -- ── Iteration / folds ───────────────────────────────────────────────────
 
@@ -166,8 +166,7 @@ collectElems arr i n acc
   | otherwise = collectElems arr (i + 1) n (arrayGetUnsafe i arr ++ acc)
 
 elemList : HashSet a -> List a
-elemList (HashSet buckets _) =
-  collectElems buckets.value 0 (arrayLength buckets.value) []
+elemList (HashSet buckets _) = collectElems !buckets 0 (arrayLength !buckets) []
 
 foldrElems : (a -> b -> <e> b) -> b -> List a -> <e> b
 foldrElems _ z [] = z

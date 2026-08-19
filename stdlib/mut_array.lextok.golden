@@ -48,9 +48,8 @@ UNDERSCORE
 IDENT "len"
 RPAREN
 EQUAL
+BANG
 IDENT "len"
-DOT
-IDENT "value"
 NEWLINE
 EXPORT
 IDENT "new"
@@ -158,9 +157,8 @@ UNDERSCORE
 RPAREN
 EQUAL
 IDENT "arrayLength"
+BANG
 IDENT "backing"
-DOT
-IDENT "value"
 NEWLINE
 EXPORT
 IDENT "get"
@@ -188,17 +186,15 @@ INT 0
 AND
 IDENT "i"
 LT
+BANG
 IDENT "len"
-DOT
-IDENT "value"
 EQUAL
 UPPER "Some"
 LPAREN
 IDENT "arrayGetUnsafe"
 IDENT "i"
+BANG
 IDENT "backing"
-DOT
-IDENT "value"
 RPAREN
 NEWLINE
 PIPE
@@ -235,16 +231,14 @@ INT 0
 AND
 IDENT "i"
 LT
+BANG
 IDENT "len"
-DOT
-IDENT "value"
 THEN
 INDENT
 IDENT "arrayGetUnsafe"
 IDENT "i"
+BANG
 IDENT "backing"
-DOT
-IDENT "value"
 NEWLINE
 DEDENT
 ELSE
@@ -359,13 +353,11 @@ IDENT "len"
 RPAREN
 EQUAL
 IDENT "elemsGo"
+BANG
 IDENT "backing"
-DOT
-IDENT "value"
 LPAREN
+BANG
 IDENT "len"
-DOT
-IDENT "value"
 MINUS
 INT 1
 RPAREN
@@ -392,14 +384,12 @@ INDENT
 LET
 IDENT "arr"
 EQUAL
+BANG
 IDENT "backing"
-DOT
-IDENT "value"
 NEWLINE
 IDENT "arrayMakeWith"
+BANG
 IDENT "len"
-DOT
-IDENT "value"
 LPAREN
 IDENT "i"
 FAT_ARROW
@@ -429,30 +419,25 @@ IDENT "len"
 RPAREN
 INDENT
 PIPE
+BANG
 IDENT "len"
-DOT
-IDENT "value"
 LT
 IDENT "arrayLength"
+BANG
 IDENT "backing"
-DOT
-IDENT "value"
 EQUAL
 INDENT
 IDENT "arraySetUnsafe"
+BANG
 IDENT "len"
-DOT
-IDENT "value"
 IDENT "x"
+BANG
 IDENT "backing"
-DOT
-IDENT "value"
 NEWLINE
 IDENT "len"
 COLONEQ
+BANG
 IDENT "len"
-DOT
-IDENT "value"
 PLUS
 INT 1
 NEWLINE
@@ -465,16 +450,14 @@ INDENT
 LET
 IDENT "oldArr"
 EQUAL
+BANG
 IDENT "backing"
-DOT
-IDENT "value"
 NEWLINE
 LET
 IDENT "oldLen"
 EQUAL
+BANG
 IDENT "len"
-DOT
-IDENT "value"
 NEWLINE
 LET
 IDENT "newCap"
@@ -535,9 +518,8 @@ IDENT "len"
 RPAREN
 INDENT
 PIPE
+BANG
 IDENT "len"
-DOT
-IDENT "value"
 EQ_EQ
 INT 0
 EQUAL
@@ -550,9 +532,8 @@ INDENT
 LET
 IDENT "i"
 EQUAL
+BANG
 IDENT "len"
-DOT
-IDENT "value"
 MINUS
 INT 1
 NEWLINE
@@ -561,9 +542,8 @@ IDENT "x"
 EQUAL
 IDENT "arrayGetUnsafe"
 IDENT "i"
+BANG
 IDENT "backing"
-DOT
-IDENT "value"
 NEWLINE
 IDENT "len"
 COLONEQ
@@ -604,16 +584,14 @@ INT 0
 AND
 IDENT "i"
 LT
+BANG
 IDENT "len"
-DOT
-IDENT "value"
 EQUAL
 IDENT "arraySetUnsafe"
 IDENT "i"
 IDENT "x"
+BANG
 IDENT "backing"
-DOT
-IDENT "value"
 NEWLINE
 PIPE
 IDENT "otherwise"
@@ -651,9 +629,8 @@ INT 0
 AND
 IDENT "i"
 LT
+BANG
 IDENT "len"
-DOT
-IDENT "value"
 THEN
 INDENT
 LET
@@ -662,9 +639,8 @@ EQUAL
 IDENT "arraySetUnsafe"
 IDENT "i"
 IDENT "v"
+BANG
 IDENT "backing"
-DOT
-IDENT "value"
 NEWLINE
 UPPER "MutArray"
 IDENT "backing"
@@ -707,9 +683,8 @@ INDENT
 LET
 IDENT "arr"
 EQUAL
+BANG
 IDENT "backing"
-DOT
-IDENT "value"
 NEWLINE
 LET
 IDENT "xi"
@@ -841,13 +816,11 @@ RPAREN
 EQUAL
 IDENT "mapInPlaceGo"
 IDENT "f"
+BANG
 IDENT "backing"
-DOT
-IDENT "value"
 INT 0
+BANG
 IDENT "len"
-DOT
-IDENT "value"
 NEWLINE
 IDENT "foldGo"
 COLON
@@ -993,13 +966,11 @@ EQUAL
 IDENT "foldGo"
 IDENT "f"
 IDENT "z"
+BANG
 IDENT "backing"
-DOT
-IDENT "value"
 INT 0
+BANG
 IDENT "len"
-DOT
-IDENT "value"
 NEWLINE
 IDENT "foldRight"
 IDENT "f"
@@ -1010,22 +981,17 @@ IDENT "backing"
 IDENT "len"
 RPAREN
 EQUAL
-INDENT
 IDENT "foldRightGo"
 IDENT "f"
 IDENT "z"
+BANG
 IDENT "backing"
-DOT
-IDENT "value"
 LPAREN
+BANG
 IDENT "len"
-DOT
-IDENT "value"
 MINUS
 INT 1
 RPAREN
-NEWLINE
-DEDENT
 NEWLINE
 IDENT "toList"
 IDENT "ma"
@@ -1040,9 +1006,8 @@ UNDERSCORE
 IDENT "len"
 RPAREN
 EQUAL
+BANG
 IDENT "len"
-DOT
-IDENT "value"
 EQ_EQ
 INT 0
 NEWLINE
@@ -1053,9 +1018,8 @@ UNDERSCORE
 IDENT "len"
 RPAREN
 EQUAL
+BANG
 IDENT "len"
-DOT
-IDENT "value"
 NEWLINE
 DEDENT
 NEWLINE

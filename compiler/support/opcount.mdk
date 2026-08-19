@@ -46,11 +46,11 @@ setOpCounting b = opCountOn := b
 -- Count one operation, but ONLY when counting is on (Option C gating).  Pure-typed:
 -- `setRef` carries no effect row, so callers keep their non-<IO> signatures.
 export opBump : Unit -> Unit
-opBump () = match opCountOn.value
-  True => opCounter := opCounter.value + 1
+opBump () = match !opCountOn
+  True => opCounter := !opCounter + 1
   False => ()
 
 -- Read the cumulative counter.  Paired snapshots (before/after a stage) yield that
 -- stage's op delta, exactly as timer.mdk's `allocSnap` yields an alloc delta.
 export opSnap : Unit -> Int
-opSnap () = opCounter.value
+opSnap () = !opCounter

@@ -115,9 +115,8 @@ UNDERSCORE
 IDENT "count"
 RPAREN
 EQUAL
+BANG
 IDENT "count"
-DOT
-IDENT "value"
 NEWLINE
 EXPORT
 IDENT "isEmpty"
@@ -221,9 +220,8 @@ INDENT
 LET
 IDENT "arr"
 EQUAL
+BANG
 IDENT "buckets"
-DOT
-IDENT "value"
 NEWLINE
 IDENT "bucketLookup"
 IDENT "key"
@@ -528,9 +526,8 @@ INDENT
 LET
 IDENT "arr"
 EQUAL
+BANG
 IDENT "buckets"
-DOT
-IDENT "value"
 NEWLINE
 LET
 IDENT "idx"
@@ -651,9 +648,8 @@ IDENT "arr"
 NEWLINE
 IDENT "count"
 COLONEQ
+BANG
 IDENT "count"
-DOT
-IDENT "value"
 PLUS
 INT 1
 NEWLINE
@@ -698,16 +694,14 @@ IDENT "buckets"
 IDENT "count"
 INDENT
 PIPE
+BANG
 IDENT "count"
-DOT
-IDENT "value"
 STAR
 INT 4
 GT
 IDENT "arrayLength"
+BANG
 IDENT "buckets"
-DOT
-IDENT "value"
 STAR
 INT 3
 EQUAL
@@ -759,9 +753,8 @@ INDENT
 LET
 IDENT "oldArr"
 EQUAL
+BANG
 IDENT "buckets"
-DOT
-IDENT "value"
 NEWLINE
 LET
 IDENT "newArr"
@@ -989,9 +982,8 @@ INDENT
 LET
 IDENT "arr"
 EQUAL
+BANG
 IDENT "buckets"
-DOT
-IDENT "value"
 NEWLINE
 LET
 IDENT "idx"
@@ -1020,9 +1012,8 @@ IDENT "arr"
 NEWLINE
 IDENT "count"
 COLONEQ
+BANG
 IDENT "count"
-DOT
-IDENT "value"
 PLUS
 INT 1
 NEWLINE
@@ -1155,9 +1146,8 @@ INDENT
 LET
 IDENT "arr"
 EQUAL
+BANG
 IDENT "buckets"
-DOT
-IDENT "value"
 NEWLINE
 LET
 IDENT "idx"
@@ -1238,9 +1228,8 @@ IDENT "arr"
 NEWLINE
 IDENT "count"
 COLONEQ
+BANG
 IDENT "count"
-DOT
-IDENT "value"
 MINUS
 INT 1
 NEWLINE
@@ -1335,15 +1324,13 @@ RPAREN
 EQUAL
 INDENT
 IDENT "collectBuckets"
+BANG
 IDENT "buckets"
-DOT
-IDENT "value"
 INT 0
 LPAREN
 IDENT "arrayLength"
+BANG
 IDENT "buckets"
-DOT
-IDENT "value"
 RPAREN
 LBRACKET
 RBRACKET

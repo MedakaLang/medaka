@@ -309,7 +309,7 @@ collectVars (EVarAt x _) = [x]
 -- BOTH as references so DCE keeps the standalone define alive — else the `RLocal`
 -- emit calls an eliminated `@mdk_<mid>__x` (undefined-symbol link error).  Reading
 -- the route ref is pure (same as `lower`).  "" (un-mangled path) contributes nothing.
-collectVars (EMethodAt x routeRef _ _) = x :: routeExtraRefs routeRef.value
+collectVars (EMethodAt x routeRef _ _) = x :: routeExtraRefs !routeRef
 collectVars (EDictAt x _) = [x]
 -- Remaining reference-bearing forms (for soundness as a DCE reference walk; some
 -- are desugared away before the prelude reaches DCE, but the user program may
@@ -656,7 +656,7 @@ markerFor preludeProg =
 (DFunDef false "collectVars" ((PCon "ESection" (PCon "SecRight" PWild (PVar "e0")))) (EApp (EVar "collectVars") (EVar "e0")))
 (DFunDef false "collectVars" ((PCon "ESection" (PCon "SecLeft" (PVar "e0") PWild))) (EApp (EVar "collectVars") (EVar "e0")))
 (DFunDef false "collectVars" ((PCon "EVarAt" (PVar "x") PWild)) (EListLit (EVar "x")))
-(DFunDef false "collectVars" ((PCon "EMethodAt" (PVar "x") (PVar "routeRef") PWild PWild)) (EBinOp "::" (EVar "x") (EApp (EVar "routeExtraRefs") (EFieldAccess (EVar "routeRef") "value"))))
+(DFunDef false "collectVars" ((PCon "EMethodAt" (PVar "x") (PVar "routeRef") PWild PWild)) (EBinOp "::" (EVar "x") (EApp (EVar "routeExtraRefs") (EUnOp "!" (EVar "routeRef")))))
 (DFunDef false "collectVars" ((PCon "EDictAt" (PVar "x") PWild)) (EListLit (EVar "x")))
 (DFunDef false "collectVars" ((PCon "EHeadAnnot" (PVar "e0") PWild)) (EApp (EVar "collectVars") (EVar "e0")))
 (DFunDef false "collectVars" ((PCon "EAsPat" PWild (PVar "e0"))) (EApp (EVar "collectVars") (EVar "e0")))
@@ -913,7 +913,7 @@ markerFor preludeProg =
 (DFunDef false "collectVars" ((PCon "ESection" (PCon "SecRight" PWild (PVar "e0")))) (EApp (EVar "collectVars") (EVar "e0")))
 (DFunDef false "collectVars" ((PCon "ESection" (PCon "SecLeft" (PVar "e0") PWild))) (EApp (EVar "collectVars") (EVar "e0")))
 (DFunDef false "collectVars" ((PCon "EVarAt" (PVar "x") PWild)) (EListLit (EVar "x")))
-(DFunDef false "collectVars" ((PCon "EMethodAt" (PVar "x") (PVar "routeRef") PWild PWild)) (EBinOp "::" (EVar "x") (EApp (EVar "routeExtraRefs") (EFieldAccess (EVar "routeRef") "value"))))
+(DFunDef false "collectVars" ((PCon "EMethodAt" (PVar "x") (PVar "routeRef") PWild PWild)) (EBinOp "::" (EVar "x") (EApp (EVar "routeExtraRefs") (EUnOp "!" (EVar "routeRef")))))
 (DFunDef false "collectVars" ((PCon "EDictAt" (PVar "x") PWild)) (EListLit (EVar "x")))
 (DFunDef false "collectVars" ((PCon "EHeadAnnot" (PVar "e0") PWild)) (EApp (EVar "collectVars") (EVar "e0")))
 (DFunDef false "collectVars" ((PCon "EAsPat" PWild (PVar "e0"))) (EApp (EVar "collectVars") (EVar "e0")))

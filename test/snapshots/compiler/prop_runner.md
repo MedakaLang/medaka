@@ -49,7 +49,7 @@ rngNextLocal : Unit -> Int
 -- Intentional cross-file duplicate of the same helper in eval.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
 rngNextLocal _ =
-  let s = (rngStateRef.value * 1103515245 + 12345) % 2147483648
+  let s = (!rngStateRef * 1103515245 + 12345) % 2147483648
   rngStateRef := s
   s
 
@@ -466,7 +466,7 @@ anyDecl p (d::rest) = p d || anyDecl p rest
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "ppValue" false) (mem "rngStateRef" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "zipL" false))))
 (DTypeSig false "rngNextLocal" (TyFun (TyCon "Unit") (TyCon "Int")))
-(DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "%" (EBinOp "+" (EBinOp "*" (EFieldAccess (EVar "rngStateRef") "value") (ELit (LInt 1103515245))) (ELit (LInt 12345))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "rngStateRef")) (EVar "s"))) (DoExpr (EVar "s"))))
+(DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "%" (EBinOp "+" (EBinOp "*" (EUnOp "!" (EVar "rngStateRef")) (ELit (LInt 1103515245))) (ELit (LInt 12345))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "rngStateRef")) (EVar "s"))) (DoExpr (EVar "s"))))
 (DTypeSig false "randIntRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "randIntRange" ((PVar "lo") (PVar "hi")) (EBlock (DoLet false false (PVar "range") (EBinOp "+" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "<=" (EVar "range") (ELit (LInt 0))) (EVar "lo") (EBinOp "+" (EVar "lo") (EBinOp "%" (EApp (EVar "rngNextLocal") (ELit LUnit)) (EVar "range")))))))
 (DTypeSig false "randBoolL" (TyFun (TyCon "Unit") (TyCon "Bool")))
@@ -618,7 +618,7 @@ anyDecl p (d::rest) = p d || anyDecl p rest
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "ppValue" false) (mem "rngStateRef" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "zipL" false))))
 (DTypeSig false "rngNextLocal" (TyFun (TyCon "Unit") (TyCon "Int")))
-(DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "%" (EBinOp "+" (EBinOp "*" (EFieldAccess (EVar "rngStateRef") "value") (ELit (LInt 1103515245))) (ELit (LInt 12345))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "rngStateRef")) (EVar "s"))) (DoExpr (EVar "s"))))
+(DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "%" (EBinOp "+" (EBinOp "*" (EUnOp "!" (EVar "rngStateRef")) (ELit (LInt 1103515245))) (ELit (LInt 12345))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "rngStateRef")) (EVar "s"))) (DoExpr (EVar "s"))))
 (DTypeSig false "randIntRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "randIntRange" ((PVar "lo") (PVar "hi")) (EBlock (DoLet false false (PVar "range") (EBinOp "+" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "<=" (EVar "range") (ELit (LInt 0))) (EVar "lo") (EBinOp "+" (EVar "lo") (EBinOp "%" (EApp (EVar "rngNextLocal") (ELit LUnit)) (EVar "range")))))))
 (DTypeSig false "randBoolL" (TyFun (TyCon "Unit") (TyCon "Bool")))

@@ -45,7 +45,7 @@ rngNextLocal : Unit -> Int
 -- Intentional cross-file duplicate of the same helper in eval.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
 rngNextLocal _ =
-  let s = (rngStateRef.value * 1103515245 + 12345) % 2147483648
+  let s = (!rngStateRef * 1103515245 + 12345) % 2147483648
   rngStateRef := s
   s
 

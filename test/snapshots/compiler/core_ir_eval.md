@@ -499,7 +499,7 @@ cevalOutput prog =
   outputRef := ""
   let binds = cevalProgram prog
   let _ = cRunMainForEffect binds
-  outputRef.value
+  !outputRef
 
 cRunMainForEffect : List (String, Value e) -> <e> Value e
 cRunMainForEffect binds = match lookupBinding "main" binds
@@ -616,7 +616,7 @@ cevalModulesOutput preludeDecls modules =
   outputRef := ""
   let binds = cevalModules preludeDecls modules
   let _ = cRunMainForEffect binds
-  outputRef.value
+  !outputRef
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Decl" false) (mem "Loc" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true))))
@@ -786,7 +786,7 @@ cevalModulesOutput preludeDecls modules =
 (DTypeSig true "cevalMain" (TyFun (TyCon "CProgram") (TyCon "String")))
 (DFunDef false "cevalMain" ((PVar "prog")) (EMatch (EApp (EApp (EVar "lookupBinding") (ELit (LString "main"))) (EApp (EVar "cevalProgram") (EVar "prog"))) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "ppValue") (EApp (EVar "force") (EVar "v")))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "core_ir eval: no `main` binding"))))))
 (DTypeSig true "cevalOutput" (TyFun (TyCon "CProgram") (TyCon "String")))
-(DFunDef false "cevalOutput" ((PVar "prog")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false (PVar "binds") (EApp (EVar "cevalProgram") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "cRunMainForEffect") (EVar "binds"))) (DoExpr (EFieldAccess (EVar "outputRef") "value"))))
+(DFunDef false "cevalOutput" ((PVar "prog")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false (PVar "binds") (EApp (EVar "cevalProgram") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "cRunMainForEffect") (EVar "binds"))) (DoExpr (EUnOp "!" (EVar "outputRef")))))
 (DTypeSig false "cRunMainForEffect" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "cRunMainForEffect" ((PVar "binds")) (EMatch (EApp (EApp (EVar "lookupBinding") (ELit (LString "main"))) (EVar "binds")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "force") (EVar "v"))) (arm (PCon "None") () (EVar "VUnit"))))
 (DData Private "CModInfo" ("v") ((variant "CModInfo" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v")))) (TyApp (TyCon "EvalEnv") (TyVar "v"))))) ())
@@ -805,7 +805,7 @@ cevalModulesOutput preludeDecls modules =
 (DFunDef false "cRootLocals" ((PList (PCon "CModInfo" PWild PWild PWild PWild (PVar "cells") PWild))) (EApp (EApp (EVar "map") (EVar "cellResult")) (EVar "cells")))
 (DFunDef false "cRootLocals" ((PCons PWild (PVar "rest"))) (EApp (EVar "cRootLocals") (EVar "rest")))
 (DTypeSig true "cevalModulesOutput" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String"))))
-(DFunDef false "cevalModulesOutput" ((PVar "preludeDecls") (PVar "modules")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false (PVar "binds") (EApp (EApp (EVar "cevalModules") (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "cRunMainForEffect") (EVar "binds"))) (DoExpr (EFieldAccess (EVar "outputRef") "value"))))
+(DFunDef false "cevalModulesOutput" ((PVar "preludeDecls") (PVar "modules")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false (PVar "binds") (EApp (EApp (EVar "cevalModules") (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "cRunMainForEffect") (EVar "binds"))) (DoExpr (EUnOp "!" (EVar "outputRef")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Decl" false) (mem "Loc" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true))))
@@ -975,7 +975,7 @@ cevalModulesOutput preludeDecls modules =
 (DTypeSig true "cevalMain" (TyFun (TyCon "CProgram") (TyCon "String")))
 (DFunDef false "cevalMain" ((PVar "prog")) (EMatch (EApp (EApp (EVar "lookupBinding") (ELit (LString "main"))) (EApp (EVar "cevalProgram") (EVar "prog"))) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "ppValue") (EApp (EVar "force") (EVar "v")))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "core_ir eval: no `main` binding"))))))
 (DTypeSig true "cevalOutput" (TyFun (TyCon "CProgram") (TyCon "String")))
-(DFunDef false "cevalOutput" ((PVar "prog")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false (PVar "binds") (EApp (EVar "cevalProgram") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "cRunMainForEffect") (EVar "binds"))) (DoExpr (EFieldAccess (EVar "outputRef") "value"))))
+(DFunDef false "cevalOutput" ((PVar "prog")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false (PVar "binds") (EApp (EVar "cevalProgram") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "cRunMainForEffect") (EVar "binds"))) (DoExpr (EUnOp "!" (EVar "outputRef")))))
 (DTypeSig false "cRunMainForEffect" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "cRunMainForEffect" ((PVar "binds")) (EMatch (EApp (EApp (EVar "lookupBinding") (ELit (LString "main"))) (EVar "binds")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "force") (EVar "v"))) (arm (PCon "None") () (EVar "VUnit"))))
 (DData Private "CModInfo" ("v") ((variant "CModInfo" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v")))) (TyApp (TyCon "EvalEnv") (TyVar "v"))))) ())
@@ -994,4 +994,4 @@ cevalModulesOutput preludeDecls modules =
 (DFunDef false "cRootLocals" ((PList (PCon "CModInfo" PWild PWild PWild PWild (PVar "cells") PWild))) (EApp (EApp (EMethodRef "map") (EVar "cellResult")) (EVar "cells")))
 (DFunDef false "cRootLocals" ((PCons PWild (PVar "rest"))) (EApp (EVar "cRootLocals") (EVar "rest")))
 (DTypeSig true "cevalModulesOutput" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String"))))
-(DFunDef false "cevalModulesOutput" ((PVar "preludeDecls") (PVar "modules")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false (PVar "binds") (EApp (EApp (EVar "cevalModules") (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "cRunMainForEffect") (EVar "binds"))) (DoExpr (EFieldAccess (EVar "outputRef") "value"))))
+(DFunDef false "cevalModulesOutput" ((PVar "preludeDecls") (PVar "modules")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false (PVar "binds") (EApp (EApp (EVar "cevalModules") (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "cRunMainForEffect") (EVar "binds"))) (DoExpr (EUnOp "!" (EVar "outputRef")))))

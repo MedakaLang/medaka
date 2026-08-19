@@ -4462,14 +4462,14 @@ setOriginTrace b =
 -- WHICH HALF they are.  A no-op unless a probe turned the trace on.
 export noteOriginTrace : String -> List Decl -> Unit
 noteOriginTrace label decls =
-  if originTraceEnabled.value then
-    originTraceLog := originTraceLog.value ++ [(label, decls)]
+  if !originTraceEnabled then
+    originTraceLog := !originTraceLog ++ [(label, decls)]
   else
     ()
 
 -- Drain: the recorded (label, decls) pairs in call order, log emptied.
 export takeOriginTrace : Unit -> List (String, List Decl)
 takeOriginTrace _ =
-  let rows = originTraceLog.value
+  let rows = !originTraceLog
   originTraceLog := []
   rows

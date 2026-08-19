@@ -1816,7 +1816,7 @@ finishRunEval target jsonMode elaborated mods cohWarns =
 
 flushPendingRunDiags : Bool -> <IO> Unit
 flushPendingRunDiags False = ()
-flushPendingRunDiags True = match pendingRunDiags.value
+flushPendingRunDiags True = match !pendingRunDiags
   [] => ()
   ts => ePutStrLn (cjAllToJson ts)
 

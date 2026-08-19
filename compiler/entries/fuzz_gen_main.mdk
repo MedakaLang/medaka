@@ -137,9 +137,9 @@ ctxTier (Ctx t _ _ _ _) = t
 ctxNoTuple : Ctx -> Bool
 ctxNoTuple (Ctx _ nt _ _ _) = nt
 ctxAdts : Ctx -> List Gadt
-ctxAdts (Ctx _ _ a _ _) = a.value
+ctxAdts (Ctx _ _ a _ _) = !a
 ctxScope : Ctx -> List (String, Gty)
-ctxScope (Ctx _ _ _ s _) = s.value
+ctxScope (Ctx _ _ _ s _) = !s
 
 setAdts : Ctx -> List Gadt -> Unit
 setAdts (Ctx _ _ a _ _) v = a := v
@@ -148,7 +148,7 @@ setScope (Ctx _ _ _ s _) v = s := v
 
 freshName : Ctx -> String -> String
 freshName (Ctx _ _ _ _ fr) prefix =
-  let n = fr.value
+  let n = !fr
   fr := n + 1
   prefix ++ intToString n
 
@@ -547,7 +547,7 @@ genValDecl ctx i =
 hoistOut : Ctx -> Ref (List Out) -> Bool -> Expr -> Unit
 hoistOut ctx outsRef isInv e =
   let name = freshName ctx "o"
-  outsRef := outsRef.value ++ [Out name (DFunDef False name [] e) isInv]
+  outsRef := !outsRef ++ [Out name (DFunDef False name [] e) isInv]
 
 -- emit Eq + Ord invariants for one derived ADT (no-op for non-derived)
 hoistAdtInvs : Ctx -> Ref (List Out) -> Gadt -> <Rand> Unit
@@ -591,7 +591,7 @@ genBlock ctx =
     iterAdts (ctxAdts ctx) (hoistAdtInvs ctx outsRef)
   else
     ()
-  let outs = outsRef.value
+  let outs = !outsRef
   let body = map outToStmt outs
   let outDecls = map outDecl outs
   (adtDecls ++ fnDecls ++ valDecls ++ outDecls, body)
@@ -617,20 +617,20 @@ genBlock ctx =
 appendBlock : Ctx -> Ref (List Decl) -> Ref (List DoStmt) -> Int -> <Rand> Unit
 appendBlock ctx allDeclsRef allBodyRef i = match genBlock ctx
   (decls, body) =>
-    allDeclsRef := allDeclsRef.value ++ decls
+    allDeclsRef := !allDeclsRef ++ decls
     let sep = if i > 0 then
       [DoExpr (EApp (EVar "println") (ELit (LString "--BLOCK--")))]
     else
       []
-    allBodyRef := allBodyRef.value ++ sep ++ body
+    allBodyRef := !allBodyRef ++ sep ++ body
 
 genProgram : Ctx -> Int -> <Rand> List Decl
 genProgram ctx nblocks =
   let allDeclsRef = Ref []
   let allBodyRef = Ref []
   let _ = times nblocks (appendBlock ctx allDeclsRef allBodyRef)
-  let mainDecl = DFunDef False "main" [] (EBlock allBodyRef.value)
-  allDeclsRef.value ++ [mainDecl]
+  let mainDecl = DFunDef False "main" [] (EBlock !allBodyRef)
+  !allDeclsRef ++ [mainDecl]
 
 -- ── CLI ──────────────────────────────────────────────────────────────────────
 -- Flags: --seed N (req), --tier T (default 2), --batch K (default 1),

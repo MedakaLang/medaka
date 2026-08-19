@@ -210,7 +210,7 @@ data W = W Ctx String String (HashMap String String) (HashMap String String)
 
 -- ── op-counting hash/ref primitives (NEVER a List-as-map; every op is O(1)) ──
 bump : Ctx -> Unit
-bump ctx = ctx.opCnt := ctx.opCnt.value + 1
+bump ctx = ctx.opCnt := !ctx.opCnt + 1
 
 hmGetC : Ctx -> HashMap String v -> String -> Option v
 hmGetC ctx m k =
@@ -224,8 +224,8 @@ hmSetC ctx m k v =
 
 nextFresh : Ctx -> Int
 nextFresh ctx =
-  ctx.fresh := ctx.fresh.value + 1
-  ctx.fresh.value
+  ctx.fresh := !ctx.fresh + 1
+  !ctx.fresh
 
 -- ── small helpers ────────────────────────────────────────────────────────────
 withUri : String -> Loc -> Loc
@@ -336,7 +336,7 @@ pushDefFresh : Ctx -> String -> String -> Loc -> Unit
 pushDefFresh ctx key uri loc = match hmGetC ctx ctx.defs key
   Some r =>
     let _ = bump ctx
-    r := (uri, loc)::r.value
+    r := (uri, loc) :: !r
   None => hmSetC ctx ctx.defs key (Ref [(uri, loc)])
 
 -- The identity of a def SITE: its binder key plus its exact (uri, span).  Joined
@@ -353,14 +353,14 @@ pushRef : Ctx -> String -> String -> Loc -> Unit
 pushRef ctx key uri loc = match hmGetC ctx ctx.refs key
   Some r =>
     let _ = bump ctx
-    r := (uri, loc)::r.value
+    r := (uri, loc) :: !r
   None => hmSetC ctx ctx.refs key (Ref [(uri, loc)])
 
 pushOcc : Ctx -> String -> Loc -> String -> Unit
 pushOcc ctx uri loc key = match hmGetC ctx ctx.occ uri
   Some r =>
     let _ = bump ctx
-    r := (loc, key)::r.value
+    r := (loc, key) :: !r
   None => hmSetC ctx ctx.occ uri (Ref [(loc, key)])
 
 -- ── occurrence resolution (the shadow-correct core) ──────────────────────────
@@ -1341,7 +1341,7 @@ buildRefIndex read entry roots runtimeSrc coreSrc =
           defs = ctx.defs,
           refs = ctx.refs,
           occ = ctx.occ,
-          ops = ctx.opCnt.value,
+          ops = !ctx.opCnt,
         }
 
 -- Disk-only convenience (no editor-buffer overrides) — the CLI/probe entry.
@@ -1404,7 +1404,7 @@ enumerateMdkFiles : String -> <IO> List String
 enumerateMdkFiles root =
   let acc = Ref []
   let _ = enumerateDir acc root
-  sort acc.value
+  sort !acc
 
 enumerateDir : Ref (List String) -> String -> <IO> Unit
 enumerateDir acc dir = match listDir dir
@@ -1422,7 +1422,7 @@ enumerateOne acc dir name =
   let full = joinPath dir name
   match listDir full
     Ok _ => enumerateDir acc full
-    Err _ => if endsWith ".mdk" name then acc := full::acc.value else ()
+    Err _ => if endsWith ".mdk" name then acc := full :: !acc else ()
 
 dropDotEntries : List String -> List String
 dropDotEntries [] = []
@@ -1505,7 +1505,7 @@ topoVisit ctx read byMid visited acc mid = match hmGetC ctx visited mid
           None => ()
           Some (decls, _) =>
             let _ = topoVisitAll ctx read byMid visited acc (directImportIds decls)
-            acc := (mid, path, decls)::acc.value
+            acc := (mid, path, decls) :: !acc
 
 -- Order the whole-project file set dependency-first (see block comment
 -- above). O(N) — each enumerated file is visited (parsed once, hashed twice)
@@ -1517,7 +1517,7 @@ topoOrderModules ctx read midPaths =
   let visited = hmNew ()
   let acc = Ref []
   let _ = topoVisitAll ctx read byMid visited acc (midsOf midPaths)
-  reverseList acc.value
+  reverseList !acc
 
 -- Build the reference index over EVERY `.mdk` file under `projectRoot` — true
 -- whole-project scope (see the section header above for why this differs
@@ -1540,7 +1540,7 @@ buildRefIndexProject read projectRoot runtimeSrc coreSrc =
       defs = ctx.defs,
       refs = ctx.refs,
       occ = ctx.occ,
-      ops = ctx.opCnt.value,
+      ops = !ctx.opCnt,
     }
 
 -- Disk-only convenience (no editor-buffer overrides) — the CLI/probe entry.
@@ -1568,13 +1568,13 @@ buildRefIndexProjectDisk projectRoot runtimeSrc coreSrc =
 -- at the call site rather than reach for the name that looks like the default.
 export defsOf : RefIndex -> String -> List (String, Loc)
 defsOf idx key = match hmGet key idx.defs
-  Some r => reverseList r.value
+  Some r => reverseList !r
   None => []
 
 -- Every use site of a binder, in source order.  O(#uses).
 export usesOf : RefIndex -> String -> List (String, Loc)
 usesOf idx key = match hmGet key idx.refs
-  Some r => reverseList r.value
+  Some r => reverseList !r
   None => []
 
 -- The binder referenced/defined at (uri, line, col).  O(size of THAT file) — a
@@ -1582,7 +1582,7 @@ usesOf idx key = match hmGet key idx.refs
 -- 1-based, `col` 0-based (the `Loc` convention).
 export binderAt : RefIndex -> String -> Int -> Int -> Option String
 binderAt idx uri line col = match hmGet uri idx.occ
-  Some r => scanOcc line col r.value
+  Some r => scanOcc line col !r
   None => None
 
 scanOcc : Int -> Int -> List (Loc, String) -> Option String
@@ -1620,7 +1620,7 @@ usesCount idx key = listLength (usesOf idx key)
 -- file).  The scaling gate holds this FLAT as project size grows.
 export occCountFor : RefIndex -> String -> Int
 occCountFor idx uri = match hmGet uri idx.occ
-  Some r => listLength r.value
+  Some r => listLength !r
   None => 0
 
 -- ── tiny local list helpers (no stdlib list import needed) ───────────────────

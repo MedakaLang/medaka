@@ -502,7 +502,7 @@ foldWithIndexGo f arr i n acc =
    recursion over `get`/`arrayGetUnsafe` in effectful loops (e.g. streaming
    an array's bytes into a writer).
 
-   > let acc = Ref [] in let _ = forEachWithIndex (i x => acc := (i, x) :: acc.value) (fromList [7, 8, 9]) in acc.value
+   > let acc = Ref [] in let _ = forEachWithIndex (i x => acc := (i, x) :: !acc) (fromList [7, 8, 9]) in !acc
    [(2, 9), (1, 8), (0, 7)] -}
 export forEachWithIndex : (Int -> a -> <e> Unit) -> Array a -> <e> Unit
 forEachWithIndex f arr = forEachWithIndexGo f arr 0 (arrayLength arr)
@@ -593,6 +593,6 @@ prop "foldWithIndex matches fold over zip with range" (xs : List Int) =
 prop "forEachWithIndex visits every index once, in order, matching zip with range" (xs : List Int) =
   let arr = fromList xs
   let seen = Ref []
-  let _ = forEachWithIndex (i x => seen := (i, x)::seen.value) arr
+  let _ = forEachWithIndex (i x => seen := (i, x) :: !seen) arr
   let viaZip = fold (acc pair => pair::acc) [] (zip (range 0 (length arr)) arr)
-  eq seen.value viaZip
+  eq !seen viaZip

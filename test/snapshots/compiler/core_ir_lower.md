@@ -97,7 +97,7 @@ lower (ELit l) = CLit l
 -- PLAN.md #11: dictPass rewrites every ENumLit to ELit before lowering; this
 -- arm is defensive (a non-rewritten path) — a Float-stamped ref lowers to a
 -- float constant, else an int.
-lower (ENumLit n r _ _) = match r.value
+lower (ENumLit n r _ _) = match !r
   Some f => CLit (LFloat f)
   None => CLit (LInt n)
 lower (EVar x) = CVar x AGlobal
@@ -110,7 +110,7 @@ lower (ELet _ recFlag pat e1 e2) = CLet recFlag pat (lower e1) (lower e2)
 lower (ELetGroup binds body) = CLetGroup (map lowerBind binds) (lower body)
 lower (EMatch scrut arms) = lowerMatch (lower scrut) arms
 lower (EIf c t e) = CIf (lower c) (lower t) (lower e)
-lower (EBinOp op l r route) = lowerBinop op l r (scalarTagOfRoute route.value)
+lower (EBinOp op l r route) = lowerBinop op l r (scalarTagOfRoute !route)
 lower (EInfix op l r) = CApp (CApp (CVar op AGlobal) (lower l)) (lower r)
 -- #1739 half A: `!x` lowers to the SAME Core IR node `x.value` does, rather than a
 -- `CUnOp "!"` both backends would then need a new arm for.  `CFieldAccess _ "value"`
@@ -126,23 +126,23 @@ lower (EArrayLit es) = CArray (map lower es)
 lower (ERangeList lo hi incl) = CRangeList (lower lo) (lower hi) incl
 lower (ERangeArray lo hi incl) = CRangeArray (lower lo) (lower hi) incl
 lower (EIndex a i r) =
-  if r.value == "String" then
+  if !r == "String" then
     CStringIndex (lower a) (lower i)
-  else if r.value == "List" then
+  else if !r == "List" then
     CListIndex (lower a) (lower i)
   else
     CIndex (lower a) (lower i)
 lower (ESlice a lo hi incl r) =
-  if r.value == "String" then
+  if !r == "String" then
     CStringSlice (lower a) (lower lo) (lower hi) incl
-  else if r.value == "List" then
+  else if !r == "List" then
     CListSlice (lower a) (lower lo) (lower hi) incl
   else
     CSlice (lower a) (lower lo) (lower hi) incl
-lower (EFieldAccess e f r) = CFieldAccess (lower e) f r.value
+lower (EFieldAccess e f r) = CFieldAccess (lower e) f !r
 lower (ERecordCreate name fields) = CRecord name (map lowerField fields)
 lower (ERecordUpdate base fields r) =
-  CRecordUpdate r.value (lower base) (map lowerField fields)
+  CRecordUpdate !r (lower base) (map lowerField fields)
 lower (EVariantUpdate con base fields) =
   CVariantUpdate con (lower base) (map lowerField fields)
 lower (EBlock stmts) = CBlock (map lowerStmt stmts)
@@ -159,8 +159,8 @@ lower (EHeadAnnot e _) = lower e
 -- (instance-`requires` impl dicts — the second ref — are unsupported in the Core
 -- IR experiment; drop them, the core_ir fixtures carry no requires-impls)
 lower (EMethodAt name routeRef implRef methodRef) =
-  CMethod name routeRef.value implRef.value methodRef.value
-lower (EDictAt name routesRef) = CDict name routesRef.value
+  CMethod name !routeRef !implRef !methodRef
+lower (EDictAt name routesRef) = CDict name !routesRef
 -- ELoc is STRIPPED here: no source-location wrapper reaches the Core IR, so the
 -- emitted IR for any program is byte-identical to the un-wrapped tree.  This is
 -- the fixpoint guarantee (the transparent strip that keeps the C3 IR stable).
@@ -967,7 +967,7 @@ memoBindName : String -> String -> String
 memoBindName selector method = "$memo_\{sanitizeId selector}_\{method}"
 
 recordMemoRef : String -> String -> Unit
-recordMemoRef tag method = memoRefsRef := (tag, method)::memoRefsRef.value
+recordMemoRef tag method = memoRefsRef := (tag, method) :: !memoRefsRef
 
 -- #731 item 1 / #747: rewrite a runtime-dict-routed nullary occurrence.
 --   • single-impl (soleMemoKeysRef): the runtime dict can only ever resolve to the
@@ -981,7 +981,7 @@ recordMemoRef tag method = memoRefsRef := (tag, method)::memoRefsRef.value
 --     per-VTypedImpl memoThunk).  Distinct tags carry distinct CAFs → memoise
 --     independently.  A method with no nullary/return-position impl records nothing.
 hoistDictNullary : String -> Route -> CExpr
-hoistDictNullary name route = match lookupAssoc name soleMemoKeysRef.value
+hoistDictNullary name route = match lookupAssoc name !soleMemoKeysRef
   Some sel =>
     let _ = recordMemoRef sel name
     CVar (memoBindName sel name) AGlobal
@@ -996,7 +996,7 @@ hoistDictNullary name route = match lookupAssoc name soleMemoKeysRef.value
 -- program's memo keys — a nullary occurrence of a NON-memoisable method records
 -- nothing, leaving its per-call dispatch untouched.
 recordMultiImplMemo : String -> Unit
-recordMultiImplMemo name = recordMultiImplMemoGo name allMemoKeysRef.value
+recordMultiImplMemo name = recordMultiImplMemoGo name !allMemoKeysRef
 
 recordMultiImplMemoGo : String -> List (String, String) -> Unit
 recordMultiImplMemoGo _ [] = ()
@@ -1018,7 +1018,7 @@ hoistNullaryMemo (CProgram groups ctorArs ctorTypes implEntries) =
     allMemoKeysRef := keys
     let groups2 = map (hoistBind keys) groups
     let impls2 = map (hoistImpl keys) implEntries
-    let refs = dedupPairs (reverseL memoRefsRef.value)
+    let refs = dedupPairs (reverseL !memoRefsRef)
     CProgram (map memoCafBind refs ++ groups2) ctorArs ctorTypes impls2
 
 memoCafBind : (String, String) -> CBind
@@ -1335,7 +1335,7 @@ ifaceImplHeadEntries _ = []
 -- falls back to first-match.  Not fixable here: `mdk_default_<method>_<tag>` has no
 -- interface component, so the two default bodies have one symbol between them.
 export ifaceIdsAtTag : String -> List String
-ifaceIdsAtTag tag = ifaceIdsAtTagGo tag ifaceImplHeadsRef.value
+ifaceIdsAtTag tag = ifaceIdsAtTagGo tag !ifaceImplHeadsRef
 
 ifaceIdsAtTagGo : String -> List (String, String, String, String) -> List String
 ifaceIdsAtTagGo _ [] = []
@@ -1351,7 +1351,7 @@ ifaceIdsAtTagGo tag ((ifaceId, _, t, k)::rest)
 -- canonical full-type key — the same word `keyForSiteByIface` stamps into the
 -- caller's dict cell.
 export ifaceImplRouteKeys : String -> List String
-ifaceImplRouteKeys iface = ifaceRouteKeysGo iface ifaceImplHeadsRef.value
+ifaceImplRouteKeys iface = ifaceRouteKeysGo iface !ifaceImplHeadsRef
 
 ifaceRouteKeysGo : String -> List (String, String, String, String) -> List String
 ifaceRouteKeysGo _ [] = []
@@ -1376,7 +1376,7 @@ declRouteKey tag key unique = if unique then tag else key
 -- `lowerImpls` degrades to today's output rather than mis-keying.
 export ifaceDeclHeadUnique : String -> String -> Bool
 ifaceDeclHeadUnique iface tag =
-  listLen (declKeysAtHead ifaceImplHeadsRef.value iface tag []) <= 1
+  listLen (declKeysAtHead !ifaceImplHeadsRef iface tag []) <= 1
 
 declKeysAtHead : List (String, String, String, String) -> String -> String -> List String -> List String
 declKeysAtHead [] _ _ acc = acc
@@ -1773,7 +1773,7 @@ nodeTag _ = "?"
 (DFunDef false "composeVar" () (ELit (LString "$cf")))
 (DTypeSig true "lower" (TyFun (TyCon "Expr") (TyCon "CExpr")))
 (DFunDef false "lower" ((PCon "ELit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
-(DFunDef false "lower" ((PCon "ENumLit" (PVar "n") (PVar "r") PWild PWild)) (EMatch (EFieldAccess (EVar "r") "value") (arm (PCon "Some" (PVar "f")) () (EApp (EVar "CLit") (EApp (EVar "LFloat") (EVar "f")))) (arm (PCon "None") () (EApp (EVar "CLit") (EApp (EVar "LInt") (EVar "n"))))))
+(DFunDef false "lower" ((PCon "ENumLit" (PVar "n") (PVar "r") PWild PWild)) (EMatch (EUnOp "!" (EVar "r")) (arm (PCon "Some" (PVar "f")) () (EApp (EVar "CLit") (EApp (EVar "LFloat") (EVar "f")))) (arm (PCon "None") () (EApp (EVar "CLit") (EApp (EVar "LInt") (EVar "n"))))))
 (DFunDef false "lower" ((PCon "EVar" (PVar "x"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "AGlobal")))
 (DFunDef false "lower" ((PCon "EVarId" (PVar "x") PWild)) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "AGlobal")))
 (DFunDef false "lower" ((PCon "EVarAt" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
@@ -1783,7 +1783,7 @@ nodeTag _ = "?"
 (DFunDef false "lower" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "CLetGroup") (EApp (EApp (EVar "map") (EVar "lowerBind")) (EVar "binds"))) (EApp (EVar "lower") (EVar "body"))))
 (DFunDef false "lower" ((PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EVar "lowerMatch") (EApp (EVar "lower") (EVar "scrut"))) (EVar "arms")))
 (DFunDef false "lower" ((PCon "EIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EVar "CIf") (EApp (EVar "lower") (EVar "c"))) (EApp (EVar "lower") (EVar "t"))) (EApp (EVar "lower") (EVar "e"))))
-(DFunDef false "lower" ((PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "route"))) (EApp (EApp (EApp (EApp (EVar "lowerBinop") (EVar "op")) (EVar "l")) (EVar "r")) (EApp (EVar "scalarTagOfRoute") (EFieldAccess (EVar "route") "value"))))
+(DFunDef false "lower" ((PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "route"))) (EApp (EApp (EApp (EApp (EVar "lowerBinop") (EVar "op")) (EVar "l")) (EVar "r")) (EApp (EVar "scalarTagOfRoute") (EUnOp "!" (EVar "route")))))
 (DFunDef false "lower" ((PCon "EInfix" (PVar "op") (PVar "l") (PVar "r"))) (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "CVar") (EVar "op")) (EVar "AGlobal"))) (EApp (EVar "lower") (EVar "l")))) (EApp (EVar "lower") (EVar "r"))))
 (DFunDef false "lower" ((PCon "EUnOp" (PLit (LString "!")) (PVar "e") PWild)) (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EVar "lower") (EVar "e"))) (ELit (LString "value"))) (ELit (LString ""))))
 (DFunDef false "lower" ((PCon "EUnOp" (PVar "op") (PVar "e") PWild)) (EApp (EApp (EVar "CUnOp") (EVar "op")) (EApp (EVar "lower") (EVar "e"))))
@@ -1792,18 +1792,18 @@ nodeTag _ = "?"
 (DFunDef false "lower" ((PCon "EArrayLit" (PVar "es"))) (EApp (EVar "CArray") (EApp (EApp (EVar "map") (EVar "lower")) (EVar "es"))))
 (DFunDef false "lower" ((PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeList") (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")))
 (DFunDef false "lower" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeArray") (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")))
-(DFunDef false "lower" ((PCon "EIndex" (PVar "a") (PVar "i") (PVar "r"))) (EIf (EBinOp "==" (EFieldAccess (EVar "r") "value") (ELit (LString "String"))) (EApp (EApp (EVar "CStringIndex") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "i"))) (EIf (EBinOp "==" (EFieldAccess (EVar "r") "value") (ELit (LString "List"))) (EApp (EApp (EVar "CListIndex") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "i"))) (EApp (EApp (EVar "CIndex") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "i"))))))
-(DFunDef false "lower" ((PCon "ESlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EIf (EBinOp "==" (EFieldAccess (EVar "r") "value") (ELit (LString "String"))) (EApp (EApp (EApp (EApp (EVar "CStringSlice") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")) (EIf (EBinOp "==" (EFieldAccess (EVar "r") "value") (ELit (LString "List"))) (EApp (EApp (EApp (EApp (EVar "CListSlice") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")) (EApp (EApp (EApp (EApp (EVar "CSlice") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")))))
-(DFunDef false "lower" ((PCon "EFieldAccess" (PVar "e") (PVar "f") (PVar "r"))) (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EVar "lower") (EVar "e"))) (EVar "f")) (EFieldAccess (EVar "r") "value")))
+(DFunDef false "lower" ((PCon "EIndex" (PVar "a") (PVar "i") (PVar "r"))) (EIf (EBinOp "==" (EUnOp "!" (EVar "r")) (ELit (LString "String"))) (EApp (EApp (EVar "CStringIndex") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "i"))) (EIf (EBinOp "==" (EUnOp "!" (EVar "r")) (ELit (LString "List"))) (EApp (EApp (EVar "CListIndex") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "i"))) (EApp (EApp (EVar "CIndex") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "i"))))))
+(DFunDef false "lower" ((PCon "ESlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EIf (EBinOp "==" (EUnOp "!" (EVar "r")) (ELit (LString "String"))) (EApp (EApp (EApp (EApp (EVar "CStringSlice") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")) (EIf (EBinOp "==" (EUnOp "!" (EVar "r")) (ELit (LString "List"))) (EApp (EApp (EApp (EApp (EVar "CListSlice") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")) (EApp (EApp (EApp (EApp (EVar "CSlice") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")))))
+(DFunDef false "lower" ((PCon "EFieldAccess" (PVar "e") (PVar "f") (PVar "r"))) (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EVar "lower") (EVar "e"))) (EVar "f")) (EUnOp "!" (EVar "r"))))
 (DFunDef false "lower" ((PCon "ERecordCreate" (PVar "name") (PVar "fields"))) (EApp (EApp (EVar "CRecord") (EVar "name")) (EApp (EApp (EVar "map") (EVar "lowerField")) (EVar "fields"))))
-(DFunDef false "lower" ((PCon "ERecordUpdate" (PVar "base") (PVar "fields") (PVar "r"))) (EApp (EApp (EApp (EVar "CRecordUpdate") (EFieldAccess (EVar "r") "value")) (EApp (EVar "lower") (EVar "base"))) (EApp (EApp (EVar "map") (EVar "lowerField")) (EVar "fields"))))
+(DFunDef false "lower" ((PCon "ERecordUpdate" (PVar "base") (PVar "fields") (PVar "r"))) (EApp (EApp (EApp (EVar "CRecordUpdate") (EUnOp "!" (EVar "r"))) (EApp (EVar "lower") (EVar "base"))) (EApp (EApp (EVar "map") (EVar "lowerField")) (EVar "fields"))))
 (DFunDef false "lower" ((PCon "EVariantUpdate" (PVar "con") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CVariantUpdate") (EVar "con")) (EApp (EVar "lower") (EVar "base"))) (EApp (EApp (EVar "map") (EVar "lowerField")) (EVar "fields"))))
 (DFunDef false "lower" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EVar "map") (EVar "lowerStmt")) (EVar "stmts"))))
 (DFunDef false "lower" ((PCon "EAnnot" (PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") PWild) (PRec "TyCon" ((rf "tyConName" (PVar "tag"))) false))) (EApp (EApp (EApp (EApp (EVar "lowerBinop") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")))
 (DFunDef false "lower" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "lower") (EVar "e")))
-(DFunDef false "lower" ((PCon "EMethodAt" (PVar "name") (PVar "routeRef") (PVar "implRef") (PVar "methodRef"))) (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EFieldAccess (EVar "routeRef") "value")) (EFieldAccess (EVar "implRef") "value")) (EFieldAccess (EVar "methodRef") "value")))
-(DFunDef false "lower" ((PCon "EDictAt" (PVar "name") (PVar "routesRef"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EFieldAccess (EVar "routesRef") "value")))
+(DFunDef false "lower" ((PCon "EMethodAt" (PVar "name") (PVar "routeRef") (PVar "implRef") (PVar "methodRef"))) (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EUnOp "!" (EVar "routeRef"))) (EUnOp "!" (EVar "implRef"))) (EUnOp "!" (EVar "methodRef"))))
+(DFunDef false "lower" ((PCon "EDictAt" (PVar "name") (PVar "routesRef"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EUnOp "!" (EVar "routesRef"))))
 (DFunDef false "lower" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir lower: unsupported node ")) (EApp (EVar "nodeTag") (EVar "other")))))
@@ -2118,16 +2118,16 @@ nodeTag _ = "?"
 (DTypeSig false "memoBindName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "memoBindName" ((PVar "selector") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$memo_")) (EApp (EVar "display") (EApp (EVar "sanitizeId") (EVar "selector")))) (ELit (LString "_"))) (EApp (EVar "display") (EVar "method"))) (ELit (LString ""))))
 (DTypeSig false "recordMemoRef" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))
-(DFunDef false "recordMemoRef" ((PVar "tag") (PVar "method")) (EApp (EApp (EVar "setRef") (EVar "memoRefsRef")) (EBinOp "::" (ETuple (EVar "tag") (EVar "method")) (EFieldAccess (EVar "memoRefsRef") "value"))))
+(DFunDef false "recordMemoRef" ((PVar "tag") (PVar "method")) (EApp (EApp (EVar "setRef") (EVar "memoRefsRef")) (EBinOp "::" (ETuple (EVar "tag") (EVar "method")) (EUnOp "!" (EVar "memoRefsRef")))))
 (DTypeSig false "hoistDictNullary" (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyCon "CExpr"))))
-(DFunDef false "hoistDictNullary" ((PVar "name") (PVar "route")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EVar "soleMemoKeysRef") "value")) (arm (PCon "Some" (PVar "sel")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "recordMemoRef") (EVar "sel")) (EVar "name"))) (DoExpr (EApp (EApp (EVar "CVar") (EApp (EApp (EVar "memoBindName") (EVar "sel")) (EVar "name"))) (EVar "AGlobal"))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "recordMultiImplMemo") (EVar "name"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "route")) (EListLit)) (EListLit)))))))
+(DFunDef false "hoistDictNullary" ((PVar "name") (PVar "route")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EUnOp "!" (EVar "soleMemoKeysRef"))) (arm (PCon "Some" (PVar "sel")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "recordMemoRef") (EVar "sel")) (EVar "name"))) (DoExpr (EApp (EApp (EVar "CVar") (EApp (EApp (EVar "memoBindName") (EVar "sel")) (EVar "name"))) (EVar "AGlobal"))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "recordMultiImplMemo") (EVar "name"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "route")) (EListLit)) (EListLit)))))))
 (DTypeSig false "recordMultiImplMemo" (TyFun (TyCon "String") (TyCon "Unit")))
-(DFunDef false "recordMultiImplMemo" ((PVar "name")) (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "name")) (EFieldAccess (EVar "allMemoKeysRef") "value")))
+(DFunDef false "recordMultiImplMemo" ((PVar "name")) (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "name")) (EUnOp "!" (EVar "allMemoKeysRef"))))
 (DTypeSig false "recordMultiImplMemoGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Unit"))))
 (DFunDef false "recordMultiImplMemoGo" (PWild (PList)) (ELit LUnit))
 (DFunDef false "recordMultiImplMemoGo" ((PVar "name") (PCons (PTuple (PVar "m") (PVar "sel")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "name")) (ELet false PWild (EApp (EApp (EVar "recordMemoRef") (EVar "sel")) (EVar "name")) (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "name")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "hoistNullaryMemo" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
-(DFunDef false "hoistNullaryMemo" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries"))) (EBlock (DoLet false false (PVar "keys") (EApp (EVar "memoKeys") (EVar "implEntries"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "keys")) (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "memoRefsRef")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "soleMemoKeysRef")) (EApp (EApp (EVar "soleMemoKeys") (EVar "implEntries")) (EVar "keys")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "allMemoKeysRef")) (EVar "keys"))) (DoLet false false (PVar "groups2") (EApp (EApp (EVar "map") (EApp (EVar "hoistBind") (EVar "keys"))) (EVar "groups"))) (DoLet false false (PVar "impls2") (EApp (EApp (EVar "map") (EApp (EVar "hoistImpl") (EVar "keys"))) (EVar "implEntries"))) (DoLet false false (PVar "refs") (EApp (EVar "dedupPairs") (EApp (EVar "reverseL") (EFieldAccess (EVar "memoRefsRef") "value")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EBinOp "++" (EApp (EApp (EVar "map") (EVar "memoCafBind")) (EVar "refs")) (EVar "groups2"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls2"))))))))
+(DFunDef false "hoistNullaryMemo" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries"))) (EBlock (DoLet false false (PVar "keys") (EApp (EVar "memoKeys") (EVar "implEntries"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "keys")) (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "memoRefsRef")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "soleMemoKeysRef")) (EApp (EApp (EVar "soleMemoKeys") (EVar "implEntries")) (EVar "keys")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "allMemoKeysRef")) (EVar "keys"))) (DoLet false false (PVar "groups2") (EApp (EApp (EVar "map") (EApp (EVar "hoistBind") (EVar "keys"))) (EVar "groups"))) (DoLet false false (PVar "impls2") (EApp (EApp (EVar "map") (EApp (EVar "hoistImpl") (EVar "keys"))) (EVar "implEntries"))) (DoLet false false (PVar "refs") (EApp (EVar "dedupPairs") (EApp (EVar "reverseL") (EUnOp "!" (EVar "memoRefsRef"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EBinOp "++" (EApp (EApp (EVar "map") (EVar "memoCafBind")) (EVar "refs")) (EVar "groups2"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls2"))))))))
 (DTypeSig false "memoCafBind" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "CBind")))
 (DFunDef false "memoCafBind" ((PTuple (PVar "tag") (PVar "method"))) (EApp (EApp (EVar "CBind") (EApp (EApp (EVar "memoBindName") (EVar "tag")) (EVar "method"))) (EListLit (EApp (EApp (EVar "CClause") (EListLit)) (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "method")) (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit))) (EListLit)) (EListLit))))))
 (DTypeSig false "dedupPairs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
@@ -2240,19 +2240,19 @@ nodeTag _ = "?"
 (DFunDef false "ifaceImplHeadEntries" ((PRec "DImpl" ((rf "iface" (PVar "ifaceName")) (rf "implOrigin" (PVar "o")) (rf "tys" (PVar "typeArgs"))) true)) (EListLit (ETuple (EApp (EApp (EVar "ifaceIdentity") (EVar "o")) (EVar "ifaceName")) (EVar "ifaceName") (EApp (EApp (EVar "fromOption") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EVar "typeArgs"))) (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "ifaceName")) (EVar "typeArgs")) (EVar "None")))))
 (DFunDef false "ifaceImplHeadEntries" (PWild) (EListLit))
 (DTypeSig true "ifaceIdsAtTag" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "ifaceIdsAtTag" ((PVar "tag")) (EApp (EApp (EVar "ifaceIdsAtTagGo") (EVar "tag")) (EFieldAccess (EVar "ifaceImplHeadsRef") "value")))
+(DFunDef false "ifaceIdsAtTag" ((PVar "tag")) (EApp (EApp (EVar "ifaceIdsAtTagGo") (EVar "tag")) (EUnOp "!" (EVar "ifaceImplHeadsRef"))))
 (DTypeSig false "ifaceIdsAtTagGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ifaceIdsAtTagGo" (PWild (PList)) (EListLit))
 (DFunDef false "ifaceIdsAtTagGo" ((PVar "tag") (PCons (PTuple (PVar "ifaceId") PWild (PVar "t") (PVar "k")) (PVar "rest"))) (EIf (EBinOp "||" (EBinOp "==" (EVar "t") (EVar "tag")) (EBinOp "==" (EVar "k") (EVar "tag"))) (EBinOp "::" (EVar "ifaceId") (EApp (EApp (EVar "ifaceIdsAtTagGo") (EVar "tag")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceIdsAtTagGo") (EVar "tag")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "ifaceImplRouteKeys" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "ifaceImplRouteKeys" ((PVar "iface")) (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "iface")) (EFieldAccess (EVar "ifaceImplHeadsRef") "value")))
+(DFunDef false "ifaceImplRouteKeys" ((PVar "iface")) (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "iface")) (EUnOp "!" (EVar "ifaceImplHeadsRef"))))
 (DTypeSig false "ifaceRouteKeysGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ifaceRouteKeysGo" (PWild (PList)) (EListLit))
 (DFunDef false "ifaceRouteKeysGo" ((PVar "iface") (PCons (PTuple PWild (PVar "i") (PVar "tag") (PVar "key")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "::" (EApp (EApp (EApp (EVar "declRouteKey") (EVar "tag")) (EVar "key")) (EApp (EApp (EVar "ifaceDeclHeadUnique") (EVar "i")) (EVar "tag"))) (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "iface")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "declRouteKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyCon "String")))))
 (DFunDef false "declRouteKey" ((PVar "tag") (PVar "key") (PVar "unique")) (EIf (EVar "unique") (EVar "tag") (EVar "key")))
 (DTypeSig true "ifaceDeclHeadUnique" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "ifaceDeclHeadUnique" ((PVar "iface") (PVar "tag")) (EBinOp "<=" (EApp (EVar "listLen") (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EFieldAccess (EVar "ifaceImplHeadsRef") "value")) (EVar "iface")) (EVar "tag")) (EListLit))) (ELit (LInt 1))))
+(DFunDef false "ifaceDeclHeadUnique" ((PVar "iface") (PVar "tag")) (EBinOp "<=" (EApp (EVar "listLen") (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EUnOp "!" (EVar "ifaceImplHeadsRef"))) (EVar "iface")) (EVar "tag")) (EListLit))) (ELit (LInt 1))))
 (DTypeSig false "declKeysAtHead" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "declKeysAtHead" ((PList) PWild PWild (PVar "acc")) (EVar "acc"))
 (DFunDef false "declKeysAtHead" ((PCons (PTuple PWild (PVar "i") (PVar "t") (PVar "k")) (PVar "rest")) (PVar "iface") (PVar "tag") (PVar "acc")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "==" (EVar "t") (EVar "tag"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "k")) (EVar "acc")))) (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EVar "rest")) (EVar "iface")) (EVar "tag")) (EBinOp "::" (EVar "k") (EVar "acc"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EVar "rest")) (EVar "iface")) (EVar "tag")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -2423,7 +2423,7 @@ nodeTag _ = "?"
 (DFunDef false "composeVar" () (ELit (LString "$cf")))
 (DTypeSig true "lower" (TyFun (TyCon "Expr") (TyCon "CExpr")))
 (DFunDef false "lower" ((PCon "ELit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
-(DFunDef false "lower" ((PCon "ENumLit" (PVar "n") (PVar "r") PWild PWild)) (EMatch (EFieldAccess (EVar "r") "value") (arm (PCon "Some" (PVar "f")) () (EApp (EVar "CLit") (EApp (EVar "LFloat") (EVar "f")))) (arm (PCon "None") () (EApp (EVar "CLit") (EApp (EVar "LInt") (EVar "n"))))))
+(DFunDef false "lower" ((PCon "ENumLit" (PVar "n") (PVar "r") PWild PWild)) (EMatch (EUnOp "!" (EVar "r")) (arm (PCon "Some" (PVar "f")) () (EApp (EVar "CLit") (EApp (EVar "LFloat") (EVar "f")))) (arm (PCon "None") () (EApp (EVar "CLit") (EApp (EVar "LInt") (EVar "n"))))))
 (DFunDef false "lower" ((PCon "EVar" (PVar "x"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "AGlobal")))
 (DFunDef false "lower" ((PCon "EVarId" (PVar "x") PWild)) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "AGlobal")))
 (DFunDef false "lower" ((PCon "EVarAt" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
@@ -2433,7 +2433,7 @@ nodeTag _ = "?"
 (DFunDef false "lower" ((PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "CLetGroup") (EApp (EApp (EMethodRef "map") (EVar "lowerBind")) (EVar "binds"))) (EApp (EVar "lower") (EVar "body"))))
 (DFunDef false "lower" ((PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EVar "lowerMatch") (EApp (EVar "lower") (EVar "scrut"))) (EVar "arms")))
 (DFunDef false "lower" ((PCon "EIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EVar "CIf") (EApp (EVar "lower") (EVar "c"))) (EApp (EVar "lower") (EVar "t"))) (EApp (EVar "lower") (EVar "e"))))
-(DFunDef false "lower" ((PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "route"))) (EApp (EApp (EApp (EApp (EVar "lowerBinop") (EVar "op")) (EVar "l")) (EVar "r")) (EApp (EVar "scalarTagOfRoute") (EFieldAccess (EVar "route") "value"))))
+(DFunDef false "lower" ((PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "route"))) (EApp (EApp (EApp (EApp (EVar "lowerBinop") (EVar "op")) (EVar "l")) (EVar "r")) (EApp (EVar "scalarTagOfRoute") (EUnOp "!" (EVar "route")))))
 (DFunDef false "lower" ((PCon "EInfix" (PVar "op") (PVar "l") (PVar "r"))) (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "CVar") (EVar "op")) (EVar "AGlobal"))) (EApp (EVar "lower") (EVar "l")))) (EApp (EVar "lower") (EVar "r"))))
 (DFunDef false "lower" ((PCon "EUnOp" (PLit (LString "!")) (PVar "e") PWild)) (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EVar "lower") (EVar "e"))) (ELit (LString "value"))) (ELit (LString ""))))
 (DFunDef false "lower" ((PCon "EUnOp" (PVar "op") (PVar "e") PWild)) (EApp (EApp (EVar "CUnOp") (EVar "op")) (EApp (EVar "lower") (EVar "e"))))
@@ -2442,18 +2442,18 @@ nodeTag _ = "?"
 (DFunDef false "lower" ((PCon "EArrayLit" (PVar "es"))) (EApp (EVar "CArray") (EApp (EApp (EMethodRef "map") (EVar "lower")) (EVar "es"))))
 (DFunDef false "lower" ((PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeList") (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")))
 (DFunDef false "lower" ((PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeArray") (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")))
-(DFunDef false "lower" ((PCon "EIndex" (PVar "a") (PVar "i") (PVar "r"))) (EIf (EBinOp "==" (EFieldAccess (EVar "r") "value") (ELit (LString "String"))) (EApp (EApp (EVar "CStringIndex") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "i"))) (EIf (EBinOp "==" (EFieldAccess (EVar "r") "value") (ELit (LString "List"))) (EApp (EApp (EVar "CListIndex") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "i"))) (EApp (EApp (EVar "CIndex") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "i"))))))
-(DFunDef false "lower" ((PCon "ESlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EIf (EBinOp "==" (EFieldAccess (EVar "r") "value") (ELit (LString "String"))) (EApp (EApp (EApp (EApp (EVar "CStringSlice") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")) (EIf (EBinOp "==" (EFieldAccess (EVar "r") "value") (ELit (LString "List"))) (EApp (EApp (EApp (EApp (EVar "CListSlice") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")) (EApp (EApp (EApp (EApp (EVar "CSlice") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")))))
-(DFunDef false "lower" ((PCon "EFieldAccess" (PVar "e") (PVar "f") (PVar "r"))) (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EVar "lower") (EVar "e"))) (EVar "f")) (EFieldAccess (EVar "r") "value")))
+(DFunDef false "lower" ((PCon "EIndex" (PVar "a") (PVar "i") (PVar "r"))) (EIf (EBinOp "==" (EUnOp "!" (EVar "r")) (ELit (LString "String"))) (EApp (EApp (EVar "CStringIndex") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "i"))) (EIf (EBinOp "==" (EUnOp "!" (EVar "r")) (ELit (LString "List"))) (EApp (EApp (EVar "CListIndex") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "i"))) (EApp (EApp (EVar "CIndex") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "i"))))))
+(DFunDef false "lower" ((PCon "ESlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl") (PVar "r"))) (EIf (EBinOp "==" (EUnOp "!" (EVar "r")) (ELit (LString "String"))) (EApp (EApp (EApp (EApp (EVar "CStringSlice") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")) (EIf (EBinOp "==" (EUnOp "!" (EVar "r")) (ELit (LString "List"))) (EApp (EApp (EApp (EApp (EVar "CListSlice") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")) (EApp (EApp (EApp (EApp (EVar "CSlice") (EApp (EVar "lower") (EVar "a"))) (EApp (EVar "lower") (EVar "lo"))) (EApp (EVar "lower") (EVar "hi"))) (EVar "incl")))))
+(DFunDef false "lower" ((PCon "EFieldAccess" (PVar "e") (PVar "f") (PVar "r"))) (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EVar "lower") (EVar "e"))) (EVar "f")) (EUnOp "!" (EVar "r"))))
 (DFunDef false "lower" ((PCon "ERecordCreate" (PVar "name") (PVar "fields"))) (EApp (EApp (EVar "CRecord") (EVar "name")) (EApp (EApp (EMethodRef "map") (EVar "lowerField")) (EVar "fields"))))
-(DFunDef false "lower" ((PCon "ERecordUpdate" (PVar "base") (PVar "fields") (PVar "r"))) (EApp (EApp (EApp (EVar "CRecordUpdate") (EFieldAccess (EVar "r") "value")) (EApp (EVar "lower") (EVar "base"))) (EApp (EApp (EMethodRef "map") (EVar "lowerField")) (EVar "fields"))))
+(DFunDef false "lower" ((PCon "ERecordUpdate" (PVar "base") (PVar "fields") (PVar "r"))) (EApp (EApp (EApp (EVar "CRecordUpdate") (EUnOp "!" (EVar "r"))) (EApp (EVar "lower") (EVar "base"))) (EApp (EApp (EMethodRef "map") (EVar "lowerField")) (EVar "fields"))))
 (DFunDef false "lower" ((PCon "EVariantUpdate" (PVar "con") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CVariantUpdate") (EVar "con")) (EApp (EVar "lower") (EVar "base"))) (EApp (EApp (EMethodRef "map") (EVar "lowerField")) (EVar "fields"))))
 (DFunDef false "lower" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EMethodRef "map") (EVar "lowerStmt")) (EVar "stmts"))))
 (DFunDef false "lower" ((PCon "EAnnot" (PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") PWild) (PRec "TyCon" ((rf "tyConName" (PVar "tag"))) false))) (EApp (EApp (EApp (EApp (EVar "lowerBinop") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")))
 (DFunDef false "lower" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "lower") (EVar "e")))
-(DFunDef false "lower" ((PCon "EMethodAt" (PVar "name") (PVar "routeRef") (PVar "implRef") (PVar "methodRef"))) (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EFieldAccess (EVar "routeRef") "value")) (EFieldAccess (EVar "implRef") "value")) (EFieldAccess (EVar "methodRef") "value")))
-(DFunDef false "lower" ((PCon "EDictAt" (PVar "name") (PVar "routesRef"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EFieldAccess (EVar "routesRef") "value")))
+(DFunDef false "lower" ((PCon "EMethodAt" (PVar "name") (PVar "routeRef") (PVar "implRef") (PVar "methodRef"))) (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EUnOp "!" (EVar "routeRef"))) (EUnOp "!" (EVar "implRef"))) (EUnOp "!" (EVar "methodRef"))))
+(DFunDef false "lower" ((PCon "EDictAt" (PVar "name") (PVar "routesRef"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EUnOp "!" (EVar "routesRef"))))
 (DFunDef false "lower" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "lower") (EVar "e")))
 (DFunDef false "lower" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir lower: unsupported node ")) (EApp (EVar "nodeTag") (EVar "other")))))
@@ -2768,16 +2768,16 @@ nodeTag _ = "?"
 (DTypeSig false "memoBindName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "memoBindName" ((PVar "selector") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$memo_")) (EApp (EMethodRef "display") (EApp (EVar "sanitizeId") (EVar "selector")))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString ""))))
 (DTypeSig false "recordMemoRef" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))
-(DFunDef false "recordMemoRef" ((PVar "tag") (PVar "method")) (EApp (EApp (EVar "setRef") (EVar "memoRefsRef")) (EBinOp "::" (ETuple (EVar "tag") (EVar "method")) (EFieldAccess (EVar "memoRefsRef") "value"))))
+(DFunDef false "recordMemoRef" ((PVar "tag") (PVar "method")) (EApp (EApp (EVar "setRef") (EVar "memoRefsRef")) (EBinOp "::" (ETuple (EVar "tag") (EVar "method")) (EUnOp "!" (EVar "memoRefsRef")))))
 (DTypeSig false "hoistDictNullary" (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyCon "CExpr"))))
-(DFunDef false "hoistDictNullary" ((PVar "name") (PVar "route")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EVar "soleMemoKeysRef") "value")) (arm (PCon "Some" (PVar "sel")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "recordMemoRef") (EVar "sel")) (EVar "name"))) (DoExpr (EApp (EApp (EVar "CVar") (EApp (EApp (EVar "memoBindName") (EVar "sel")) (EVar "name"))) (EVar "AGlobal"))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "recordMultiImplMemo") (EVar "name"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "route")) (EListLit)) (EListLit)))))))
+(DFunDef false "hoistDictNullary" ((PVar "name") (PVar "route")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EUnOp "!" (EVar "soleMemoKeysRef"))) (arm (PCon "Some" (PVar "sel")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "recordMemoRef") (EVar "sel")) (EVar "name"))) (DoExpr (EApp (EApp (EVar "CVar") (EApp (EApp (EVar "memoBindName") (EVar "sel")) (EVar "name"))) (EVar "AGlobal"))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EVar "recordMultiImplMemo") (EVar "name"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "route")) (EListLit)) (EListLit)))))))
 (DTypeSig false "recordMultiImplMemo" (TyFun (TyCon "String") (TyCon "Unit")))
-(DFunDef false "recordMultiImplMemo" ((PVar "name")) (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "name")) (EFieldAccess (EVar "allMemoKeysRef") "value")))
+(DFunDef false "recordMultiImplMemo" ((PVar "name")) (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "name")) (EUnOp "!" (EVar "allMemoKeysRef"))))
 (DTypeSig false "recordMultiImplMemoGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Unit"))))
 (DFunDef false "recordMultiImplMemoGo" (PWild (PList)) (ELit LUnit))
 (DFunDef false "recordMultiImplMemoGo" ((PVar "name") (PCons (PTuple (PVar "m") (PVar "sel")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "m") (EVar "name")) (ELet false PWild (EApp (EApp (EVar "recordMemoRef") (EVar "sel")) (EVar "name")) (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "name")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "recordMultiImplMemoGo") (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "hoistNullaryMemo" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
-(DFunDef false "hoistNullaryMemo" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries"))) (EBlock (DoLet false false (PVar "keys") (EApp (EVar "memoKeys") (EVar "implEntries"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "keys")) (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "memoRefsRef")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "soleMemoKeysRef")) (EApp (EApp (EVar "soleMemoKeys") (EVar "implEntries")) (EVar "keys")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "allMemoKeysRef")) (EVar "keys"))) (DoLet false false (PVar "groups2") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistBind") (EVar "keys"))) (EVar "groups"))) (DoLet false false (PVar "impls2") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistImpl") (EVar "keys"))) (EVar "implEntries"))) (DoLet false false (PVar "refs") (EApp (EVar "dedupPairs") (EApp (EVar "reverseL") (EFieldAccess (EVar "memoRefsRef") "value")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "memoCafBind")) (EVar "refs")) (EVar "groups2"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls2"))))))))
+(DFunDef false "hoistNullaryMemo" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries"))) (EBlock (DoLet false false (PVar "keys") (EApp (EVar "memoKeys") (EVar "implEntries"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "keys")) (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "memoRefsRef")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "soleMemoKeysRef")) (EApp (EApp (EVar "soleMemoKeys") (EVar "implEntries")) (EVar "keys")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "allMemoKeysRef")) (EVar "keys"))) (DoLet false false (PVar "groups2") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistBind") (EVar "keys"))) (EVar "groups"))) (DoLet false false (PVar "impls2") (EApp (EApp (EMethodRef "map") (EApp (EVar "hoistImpl") (EVar "keys"))) (EVar "implEntries"))) (DoLet false false (PVar "refs") (EApp (EVar "dedupPairs") (EApp (EVar "reverseL") (EUnOp "!" (EVar "memoRefsRef"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "memoCafBind")) (EVar "refs")) (EVar "groups2"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls2"))))))))
 (DTypeSig false "memoCafBind" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "CBind")))
 (DFunDef false "memoCafBind" ((PTuple (PVar "tag") (PVar "method"))) (EApp (EApp (EVar "CBind") (EApp (EApp (EVar "memoBindName") (EVar "tag")) (EVar "method"))) (EListLit (EApp (EApp (EVar "CClause") (EListLit)) (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "method")) (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit))) (EListLit)) (EListLit))))))
 (DTypeSig false "dedupPairs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
@@ -2890,19 +2890,19 @@ nodeTag _ = "?"
 (DFunDef false "ifaceImplHeadEntries" ((PRec "DImpl" ((rf "iface" (PVar "ifaceName")) (rf "implOrigin" (PVar "o")) (rf "tys" (PVar "typeArgs"))) true)) (EListLit (ETuple (EApp (EApp (EVar "ifaceIdentity") (EVar "o")) (EVar "ifaceName")) (EVar "ifaceName") (EApp (EApp (EVar "fromOption") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EVar "typeArgs"))) (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "ifaceName")) (EVar "typeArgs")) (EVar "None")))))
 (DFunDef false "ifaceImplHeadEntries" (PWild) (EListLit))
 (DTypeSig true "ifaceIdsAtTag" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "ifaceIdsAtTag" ((PVar "tag")) (EApp (EApp (EVar "ifaceIdsAtTagGo") (EVar "tag")) (EFieldAccess (EVar "ifaceImplHeadsRef") "value")))
+(DFunDef false "ifaceIdsAtTag" ((PVar "tag")) (EApp (EApp (EVar "ifaceIdsAtTagGo") (EVar "tag")) (EUnOp "!" (EVar "ifaceImplHeadsRef"))))
 (DTypeSig false "ifaceIdsAtTagGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ifaceIdsAtTagGo" (PWild (PList)) (EListLit))
 (DFunDef false "ifaceIdsAtTagGo" ((PVar "tag") (PCons (PTuple (PVar "ifaceId") PWild (PVar "t") (PVar "k")) (PVar "rest"))) (EIf (EBinOp "||" (EBinOp "==" (EVar "t") (EVar "tag")) (EBinOp "==" (EVar "k") (EVar "tag"))) (EBinOp "::" (EVar "ifaceId") (EApp (EApp (EVar "ifaceIdsAtTagGo") (EVar "tag")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceIdsAtTagGo") (EVar "tag")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "ifaceImplRouteKeys" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "ifaceImplRouteKeys" ((PVar "iface")) (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "iface")) (EFieldAccess (EVar "ifaceImplHeadsRef") "value")))
+(DFunDef false "ifaceImplRouteKeys" ((PVar "iface")) (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "iface")) (EUnOp "!" (EVar "ifaceImplHeadsRef"))))
 (DTypeSig false "ifaceRouteKeysGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ifaceRouteKeysGo" (PWild (PList)) (EListLit))
 (DFunDef false "ifaceRouteKeysGo" ((PVar "iface") (PCons (PTuple PWild (PVar "i") (PVar "tag") (PVar "key")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "::" (EApp (EApp (EApp (EVar "declRouteKey") (EVar "tag")) (EVar "key")) (EApp (EApp (EVar "ifaceDeclHeadUnique") (EVar "i")) (EVar "tag"))) (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "iface")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceRouteKeysGo") (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "declRouteKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyCon "String")))))
 (DFunDef false "declRouteKey" ((PVar "tag") (PVar "key") (PVar "unique")) (EIf (EVar "unique") (EVar "tag") (EVar "key")))
 (DTypeSig true "ifaceDeclHeadUnique" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "ifaceDeclHeadUnique" ((PVar "iface") (PVar "tag")) (EBinOp "<=" (EApp (EVar "listLen") (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EFieldAccess (EVar "ifaceImplHeadsRef") "value")) (EVar "iface")) (EVar "tag")) (EListLit))) (ELit (LInt 1))))
+(DFunDef false "ifaceDeclHeadUnique" ((PVar "iface") (PVar "tag")) (EBinOp "<=" (EApp (EVar "listLen") (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EUnOp "!" (EVar "ifaceImplHeadsRef"))) (EVar "iface")) (EVar "tag")) (EListLit))) (ELit (LInt 1))))
 (DTypeSig false "declKeysAtHead" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "declKeysAtHead" ((PList) PWild PWild (PVar "acc")) (EVar "acc"))
 (DFunDef false "declKeysAtHead" ((PCons (PTuple PWild (PVar "i") (PVar "t") (PVar "k")) (PVar "rest")) (PVar "iface") (PVar "tag") (PVar "acc")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "i") (EVar "iface")) (EBinOp "==" (EVar "t") (EVar "tag"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "k")) (EVar "acc")))) (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EVar "rest")) (EVar "iface")) (EVar "tag")) (EBinOp "::" (EVar "k") (EVar "acc"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "declKeysAtHead") (EVar "rest")) (EVar "iface")) (EVar "tag")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

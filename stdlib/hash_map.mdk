@@ -32,8 +32,8 @@
 
 import core.{Eq, Debug, Option, Mappable, Hashable}
 
-{- `HashMap buckets count`: `buckets.value` is the bucket array (each slot a
-   chain), `count.value` is the live entry count. Both are mutated in place. -}
+{- `HashMap buckets count`: `!buckets` is the bucket array (each slot a
+   chain), `!count` is the live entry count. Both are mutated in place. -}
 public export data HashMap k v = HashMap (Ref (Array (List (k, v)))) (Ref Int)
 
 initialCapacity : Int
@@ -62,7 +62,7 @@ new _ = HashMap (Ref (arrayMake initialCapacity [])) (Ref 0)
    > size (fromList [(1, 10), (2, 20), (1, 30)])
    2 -}
 export size : HashMap k v -> Int
-size (HashMap _ count) = count.value
+size (HashMap _ count) = !count
 
 {- | `True` when there are no entries.
 
@@ -85,7 +85,7 @@ bucketLookup key ((k, v)::rest)
    None -}
 export get : (Eq k, Hashable k) => k -> HashMap k v -> Option v
 get key (HashMap buckets _) =
-  let arr = buckets.value
+  let arr = !buckets
   bucketLookup key (arrayGetUnsafe (slotOf key (arrayLength arr)) arr)
 
 {- | `True` when the key is present.
@@ -128,7 +128,7 @@ bucketRemove key ((k, v)::rest)
    when the load factor passes 0.75. -}
 export set : (Eq k, Hashable k) => k -> v -> HashMap k v -> Unit
 set key val (HashMap buckets count) =
-  let arr = buckets.value
+  let arr = !buckets
   let idx = slotOf key (arrayLength arr)
   insertAt key val arr idx buckets count
 
@@ -138,17 +138,17 @@ insertAt key val arr idx buckets count
     arraySetUnsafe idx (bucketReplace key val (arrayGetUnsafe idx arr)) arr
   | otherwise =
     arraySetUnsafe idx ((key, val) :: arrayGetUnsafe idx arr) arr
-    count := count.value + 1
+    count := !count + 1
     maybeResize buckets count
 
 maybeResize : (Eq k, Hashable k) => Ref (Array (List (k, v))) -> Ref Int -> Unit
 maybeResize buckets count
-  | count.value * 4 > arrayLength buckets.value * 3 = resize buckets count
+  | !count * 4 > arrayLength !buckets * 3 = resize buckets count
   | otherwise = ()
 
 resize : (Eq k, Hashable k) => Ref (Array (List (k, v))) -> Ref Int -> Unit
 resize buckets count =
-  let oldArr = buckets.value
+  let oldArr = !buckets
   let newArr = arrayMake (arrayLength oldArr * 2) []
   buckets := newArr
   count := 0
@@ -170,10 +170,10 @@ reinsertBucket ((k, v)::rest) buckets count =
 -- Insert into a freshly-resized table (key known absent, so just prepend).
 putRaw : Hashable k => k -> v -> Ref (Array (List (k, v))) -> Ref Int -> Unit
 putRaw key val buckets count =
-  let arr = buckets.value
+  let arr = !buckets
   let idx = slotOf key (arrayLength arr)
   arraySetUnsafe idx ((key, val) :: arrayGetUnsafe idx arr) arr
-  count := count.value + 1
+  count := !count + 1
 
 {- | Build a table from an association list (later pairs win on duplicates).
 
@@ -196,7 +196,7 @@ insertAll ((k, v)::rest) m =
 {- | Remove a key, in place. A no-op when absent. -}
 export delete : (Eq k, Hashable k) => k -> HashMap k v -> Unit
 delete key (HashMap buckets count) =
-  let arr = buckets.value
+  let arr = !buckets
   let idx = slotOf key (arrayLength arr)
   deleteAt key arr idx count
 
@@ -204,7 +204,7 @@ deleteAt : (Eq k, Hashable k) => k -> Array (List (k, v)) -> Int -> Ref Int -> U
 deleteAt key arr idx count =
   if bucketHas key (arrayGetUnsafe idx arr) then
     arraySetUnsafe idx (bucketRemove key (arrayGetUnsafe idx arr)) arr
-    count := count.value - 1
+    count := !count - 1
 
 -- ── Iteration (pure; order unspecified) ─────────────────────────────────
 
@@ -222,7 +222,7 @@ collectBuckets arr i n acc
    internally. -}
 export entries : HashMap k v -> List (k, v)
 entries (HashMap buckets _) =
-  collectBuckets buckets.value 0 (arrayLength buckets.value) []
+  collectBuckets !buckets 0 (arrayLength !buckets) []
 
 {- | Conventional alias for `entries` (all key/value pairs). -}
 export toList : HashMap k v -> List (k, v)

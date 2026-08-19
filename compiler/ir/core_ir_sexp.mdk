@@ -55,7 +55,7 @@ setFaithfulRoutes b = faithfulRoutesRef := b
 export routeSexp : Route -> String
 routeSexp RNone = "RNone"
 routeSexp (RKey k ds) =
-  if faithfulRoutesRef.value then
+  if !faithfulRoutesRef then
     node "RKey" [escStr k, slist (map routeSexp ds)]
   else
     node "RKey" [escStr k]
@@ -67,12 +67,12 @@ routeSexp (RDictFwd d) = node "RDictFwd" [escStr d]
 -- byte-identical across the S-1 route widening.  The faithful arm (above/below) is
 -- gated behind faithfulRoutesRef so ONLY the debug probe pays the widening.
 routeSexp (RLocal "" ds) =
-  if faithfulRoutesRef.value then
+  if !faithfulRoutesRef then
     node "RLocal" [escStr "", slist (map routeSexp ds)]
   else
     "RLocal"
 routeSexp (RLocal s ds) =
-  if faithfulRoutesRef.value then
+  if !faithfulRoutesRef then
     node "RLocal" [escStr s, slist (map routeSexp ds)]
   else
     node "RLocal" [escStr s]

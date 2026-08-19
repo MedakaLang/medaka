@@ -50,14 +50,14 @@ setOpCounting b = opCountOn := b
 -- Count one operation, but ONLY when counting is on (Option C gating).  Pure-typed:
 -- `setRef` carries no effect row, so callers keep their non-<IO> signatures.
 export opBump : Unit -> Unit
-opBump () = match opCountOn.value
-  True => opCounter := opCounter.value + 1
+opBump () = match !opCountOn
+  True => opCounter := !opCounter + 1
   False => ()
 
 -- Read the cumulative counter.  Paired snapshots (before/after a stage) yield that
 -- stage's op delta, exactly as timer.mdk's `allocSnap` yields an alloc delta.
 export opSnap : Unit -> Int
-opSnap () = opCounter.value
+opSnap () = !opCounter
 # DESUGAR
 (DTypeSig false "opCounter" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "opCounter" () (EApp (EVar "Ref") (ELit (LInt 0))))
@@ -66,9 +66,9 @@ opSnap () = opCounter.value
 (DTypeSig true "setOpCounting" (TyFun (TyCon "Bool") (TyCon "Unit")))
 (DFunDef false "setOpCounting" ((PVar "b")) (EApp (EApp (EVar "setRef") (EVar "opCountOn")) (EVar "b")))
 (DTypeSig true "opBump" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "opBump" ((PLit LUnit)) (EMatch (EFieldAccess (EVar "opCountOn") "value") (arm (PCon "True") () (EApp (EApp (EVar "setRef") (EVar "opCounter")) (EBinOp "+" (EFieldAccess (EVar "opCounter") "value") (ELit (LInt 1))))) (arm (PCon "False") () (ELit LUnit))))
+(DFunDef false "opBump" ((PLit LUnit)) (EMatch (EUnOp "!" (EVar "opCountOn")) (arm (PCon "True") () (EApp (EApp (EVar "setRef") (EVar "opCounter")) (EBinOp "+" (EUnOp "!" (EVar "opCounter")) (ELit (LInt 1))))) (arm (PCon "False") () (ELit LUnit))))
 (DTypeSig true "opSnap" (TyFun (TyCon "Unit") (TyCon "Int")))
-(DFunDef false "opSnap" ((PLit LUnit)) (EFieldAccess (EVar "opCounter") "value"))
+(DFunDef false "opSnap" ((PLit LUnit)) (EUnOp "!" (EVar "opCounter")))
 # MARK
 (DTypeSig false "opCounter" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "opCounter" () (EApp (EVar "Ref") (ELit (LInt 0))))
@@ -77,6 +77,6 @@ opSnap () = opCounter.value
 (DTypeSig true "setOpCounting" (TyFun (TyCon "Bool") (TyCon "Unit")))
 (DFunDef false "setOpCounting" ((PVar "b")) (EApp (EApp (EVar "setRef") (EVar "opCountOn")) (EVar "b")))
 (DTypeSig true "opBump" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "opBump" ((PLit LUnit)) (EMatch (EFieldAccess (EVar "opCountOn") "value") (arm (PCon "True") () (EApp (EApp (EVar "setRef") (EVar "opCounter")) (EBinOp "+" (EFieldAccess (EVar "opCounter") "value") (ELit (LInt 1))))) (arm (PCon "False") () (ELit LUnit))))
+(DFunDef false "opBump" ((PLit LUnit)) (EMatch (EUnOp "!" (EVar "opCountOn")) (arm (PCon "True") () (EApp (EApp (EVar "setRef") (EVar "opCounter")) (EBinOp "+" (EUnOp "!" (EVar "opCounter")) (ELit (LInt 1))))) (arm (PCon "False") () (ELit LUnit))))
 (DTypeSig true "opSnap" (TyFun (TyCon "Unit") (TyCon "Int")))
-(DFunDef false "opSnap" ((PLit LUnit)) (EFieldAccess (EVar "opCounter") "value"))
+(DFunDef false "opSnap" ((PLit LUnit)) (EUnOp "!" (EVar "opCounter")))
