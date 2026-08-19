@@ -1,2 +1,8 @@
--- W2 scalar: || (CIf) combined with unary ! (boolean not).
-main = not (3 == 3) || (4 > 2)
+-- W2 scalar: || (CIf) combined with a negated comparison.
+-- Was `!(3 == 3) || (4 > 2)` until #1739 half A repurposed `!` to Ref-deref.
+-- There is no unary BOOLEAN operator any more — `not` is a prelude FUNCTION, and
+-- the scalar path emits primitives only, so it cannot call one. The `||`-over-
+-- comparison coverage this fixture exists for is kept via `/=`, which IS a scalar
+-- primitive; a `not` spelling here would silently push the program off the scalar
+-- path this fixture is meant to pin.
+main = (3 /= 3) || (4 > 2)

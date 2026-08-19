@@ -12,7 +12,7 @@ ltp a b = a < b
 clampish a lo hi = if a < lo then lo else if a > hi then hi else a
 andb a b = a && b
 orb a b = a || b
-notb x = !x
+derefp r = !r
 appx x y = x ++ y
 consx x ys = x :: ys
 pipeIt x g = x |> g
@@ -33,7 +33,7 @@ ltp : a -> a -> Bool
 clampish : a -> a -> a -> a
 andb : Bool -> Bool -> Bool
 orb : Bool -> Bool -> Bool
-notb : Bool -> Bool
+derefp : Ref a -> a
 appx : a -> a -> a
 consx : a -> List a -> List a
 pipeIt : a -> (a -> b) -> b

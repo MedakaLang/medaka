@@ -7,7 +7,7 @@ ltp : a -> a -> Bool
 clampish : a -> a -> a -> a
 andb : Bool -> Bool -> Bool
 orb : Bool -> Bool -> Bool
-notb : Bool -> Bool
+derefp : Ref a -> a
 appx : a -> a -> a
 consx : a -> List a -> List a
 pipeIt : a -> (a -> b) -> b
