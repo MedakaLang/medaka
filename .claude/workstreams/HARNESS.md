@@ -83,8 +83,9 @@ upgrade fixed the GraphQL path before propagating this further; delete this bloc
 has.
 
 Read-path sibling (#1533): `gh pr view N --comments` trips the SAME Projects-classic
-GraphQL field, but LOUDLY — the whole request errors (`repository.pullRequest.projectCards`),
-zero comments returned, not a partial result. Use the JSON path instead:
+GraphQL field, but LOUDLY — the whole request errors (GraphQL path
+repository.pullRequest.projectCards), zero comments returned, not a partial result. Use
+the JSON path instead:
 
 ```sh
 gh pr view N --json comments -q '.comments[].body'
