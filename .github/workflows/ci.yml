@@ -1285,7 +1285,11 @@ jobs:
           set +e
           sh test/diff_compiler_must_fail.sh > /tmp/must-fail.log 2>&1 &
           must_fail_pid=$!
-          bash test/typecheck_compiler_source.sh > /tmp/tc.log 2>&1 &
+          # Leave half the four-core hosted runner to the must-fail process. At the
+          # typecheck gate's default JOBS=4, a recursion fixture hit its 60s alarm
+          # under contention (exit 142 instead of its pinned exit 134): faster CI may
+          # not change the observation a fail-capable control is measuring.
+          JOBS=2 bash test/typecheck_compiler_source.sh > /tmp/tc.log 2>&1 &
           typecheck_pid=$!
 
           wait "$must_fail_pid"
