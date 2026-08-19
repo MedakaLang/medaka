@@ -1227,6 +1227,15 @@ jobs:
       - name: Mutation transactions must restore on red and interruption
         run: sh test/check_mutation_transaction.sh
 
+      # Also unguarded, same reason (#1451). The lexer's reserved-word list
+      # (keywordOrIdent, compiler/frontend/lexer.mdk) is hand-duplicated into
+      # the vscode syntax grammar and the playground tokenizer, and nothing
+      # diffed those literals against it — a word added to or removed from
+      # the lexer left both copies silently wrong. Pure text analysis, no
+      # compiler.
+      - name: Editor keyword lists must stay in sync with the lexer
+        run: sh test/check_keyword_sync.sh
+
       # Also unguarded, and for the same reason. docs/README.md is GENERATED from the
       # docs' `**Status:**` banners — the whole point being that a hand-maintained index
       # rots (AGENTS.md's own doc-index table sat mislabelling a doc as "IN PROGRESS"

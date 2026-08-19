@@ -249,7 +249,7 @@
         },
         {
           "name": "keyword.declaration.medaka",
-          "match": "\\b(data|interface|impl|default|extern|type|newtype|prop|bench|function)\\b"
+          "match": "\\b(data|interface|impl|default|extern|type|newtype|prop|bench|function|effect|test)\\b"
         },
         {
           "name": "keyword.modifier.medaka",
