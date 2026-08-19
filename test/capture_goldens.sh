@@ -80,9 +80,30 @@
 #   sh test/capture_goldens.sh --check    DON'T write; re-derive to a temp and diff
 #                                         vs committed goldens (determinism / drift
 #                                         check).  Non-zero exit on any mismatch.
+#   sh test/capture_goldens.sh --frozen <tag> --only <fixture-or-glob>
+#                                         narrow a `--frozen` regen to ONE fixture
+#                                         (or a shell-glob-matching subset) inside
+#                                         that family, instead of rewriting the
+#                                         whole corpus (#1717). Matches against the
+#                                         fixture's basename (no `.mdk`/`.golden`
+#                                         suffix) — e.g. `--only foo_bar` or
+#                                         `--only 'foo_*'`. Every write, in EVERY
+#                                         mode, is echoed at the end under "Changed
+#                                         golden(s):" so "did this move only what I
+#                                         meant" is answerable from the tool's own
+#                                         output, no separate `git status` needed.
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+WRITTEN_LOG="$(mktemp)"   # every golden path this run wrote, one per line (#1717)
+record_golden() { printf '%s\n' "$1" >> "$WRITTEN_LOG"; }
+print_written() {  # print_written : summarize $WRITTEN_LOG, relative to $ROOT
+  if [ -s "$WRITTEN_LOG" ]; then
+    echo "Changed golden(s):"
+    LC_ALL=C sort -u "$WRITTEN_LOG" | sed "s#^$ROOT/##; s/^/  /"
+  fi
+  rm -f "$WRITTEN_LOG"
+}
 # NATIVE Stage-4 oracles (OCaml-free).
 MAIN="${MAIN:-$ROOT/medaka}"
 CORE="$ROOT/stdlib/core.mdk"; LIST="$ROOT/stdlib/list.mdk"; RUNTIME="$ROOT/stdlib/runtime.mdk"
@@ -110,25 +131,53 @@ capture_build_golden() {  # $1=fixture .mdk  $2=golden path
     if [ -f "$golden" ] && cmp -s "$out" "$golden"; then :
     else mism=$((mism+1)); [ -f "$golden" ] && { echo "DRIFT $golden"; diff "$golden" "$out" | head -6 | sed 's/^/    /'; } || echo "MISSING $golden"; fi
   else
-    cp "$out" "$golden"; wrote=$((wrote+1))
+    cp "$out" "$golden"; wrote=$((wrote+1)); record_golden "$golden"
   fi
 }
 
 CHECK=0
 FILTER=""
 FROZEN_TAG=""
+ONLY_FILTER=""
 case "${1:-}" in
   --check) CHECK=1 ;;
   --frozen)
     FROZEN_TAG="${2:-}"
     [ -n "$FROZEN_TAG" ] || {
-      echo "usage: sh test/capture_goldens.sh --frozen <fmt|printer|boot_typecheck|selfproc_legA|llvm_eval|build_construct|native_cli>"
+      echo "usage: sh test/capture_goldens.sh --frozen <fmt|printer|boot_typecheck|selfproc_legA|llvm_eval|build_construct|native_cli> [--only <fixture-or-glob>]"
       exit 2
     }
+    case "${3:-}" in
+      --only)
+        ONLY_FILTER="${4:-}"
+        [ -n "$ONLY_FILTER" ] || {
+          echo "usage: sh test/capture_goldens.sh --frozen <tag> --only <fixture-or-glob>"
+          exit 2
+        }
+        ;;
+      "") ;;
+      *)
+        echo "usage: sh test/capture_goldens.sh --frozen <tag> [--only <fixture-or-glob>]"
+        exit 2
+        ;;
+    esac
     ;;
   "") ;;
   *) FILTER="$1" ;;
 esac
+
+# only_match <name> : true if no --only filter was given, or <name> matches it
+# (shell-glob `case` match, same idiom as $FILTER's prefix match in want() below —
+# an exact name and a `foo_*` pattern both work). <name> is always a bare fixture
+# basename (no directory, no .mdk/.golden suffix) so a filter reads the same way
+# the fixture file itself is named on disk.
+only_match() {
+  [ -z "$ONLY_FILTER" ] && return 0
+  case "$1" in
+    $ONLY_FILTER) return 0 ;;
+  esac
+  return 1
+}
 
 # --frozen <tag> : EXPLICITLY regenerate ONE frozen family (see the FROZEN list
 # below) by re-running the EXACT `test/bin/<stage>_main` invocation + strip_unit
@@ -153,6 +202,7 @@ if [ -n "$FROZEN_TAG" ]; then
     for glob in "$@"; do
       for f in $glob; do
         [ -f "$f" ] || continue
+        only_match "$(basename "$f" .mdk)" || continue
         golden="${f%.mdk}.$suffix"
         if [ -n "$extra" ]; then
           "$RUN" "$extra" "$f" 2>/dev/null | strip_unit | sed "s#$ROOT/##g" > "$golden"
@@ -160,6 +210,7 @@ if [ -n "$FROZEN_TAG" ]; then
           "$RUN" "$f" 2>/dev/null | strip_unit | sed "s#$ROOT/##g" > "$golden"
         fi
         fwrote=$((fwrote+1))
+        record_golden "$golden"
       done
     done
   }
@@ -170,7 +221,10 @@ if [ -n "$FROZEN_TAG" ]; then
   case "$FROZEN_TAG" in
     fmt)
       regen_frozen fmt_main fmt.golden "" \
-        "$ROOT/test/fmt_fixtures/*.mdk" "$ROOT/test/parse_fixtures/*.mdk" ;;
+        "$ROOT/test/fmt_fixtures/*.mdk" "$ROOT/test/parse_fixtures/*.mdk"
+      if [ -n "$ONLY_FILTER" ] && [ "$fwrote" -eq 0 ]; then
+        echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no fixture under test/fmt_fixtures/ or test/parse_fixtures/"; exit 2
+      fi ;;
     selfproc_legA)
       # Mirrors LEG A of test/diff_compiler_selfproc.sh EXACTLY: one full-closure
       # check_all_main run over all_modules_entry.mdk, split by `## MODULE <mid>`,
@@ -189,13 +243,23 @@ if [ -n "$FROZEN_TAG" ]; then
       "$CHECK_ALL" "$RUNTIME" "$CORE" "$ENTRY" "$ROOT/compiler" "$ROOT/stdlib" 2>/dev/null > "$ALL"
       MODULES="frontend.ast frontend.lexer frontend.parser ir.sexp frontend.desugar frontend.marker types.annotate frontend.resolve frontend.exhaust driver.loader types.typecheck eval.eval tools.check"
       for m in $MODULES; do
+        only_match "$m" || continue
         awk -v M="$m" '/^## MODULE /{cur=($3==M)?1:0; next} cur{print}' "$ALL" | LC_ALL=C sort > "$LEGA_GOLD/$m.golden"
         fwrote=$((fwrote+1))
+        record_golden "$LEGA_GOLD/$m.golden"
       done
       rm -f "$ALL"; trap - EXIT
+      if [ "$fwrote" -eq 0 ]; then
+        if [ -n "$ONLY_FILTER" ]; then echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no module in: $MODULES"
+        else echo "wrote 0 goldens — MODULES list is empty (should never happen)"; fi
+        exit 2
+      fi
       ;;
     boot_typecheck)
-      regen_frozen typecheck_main boot_typecheck.golden "" "$ROOT/test/typecheck_fixtures/*.mdk" ;;
+      regen_frozen typecheck_main boot_typecheck.golden "" "$ROOT/test/typecheck_fixtures/*.mdk"
+      if [ -n "$ONLY_FILTER" ] && [ "$fwrote" -eq 0 ]; then
+        echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no fixture under test/typecheck_fixtures/"; exit 2
+      fi ;;
     llvm_eval)
       # test/llvm_fixtures/*.native.golden — the emitted program's RUNTIME STDOUT.
       #
@@ -236,6 +300,7 @@ if [ -n "$FROZEN_TAG" ]; then
       for f in "$ROOT"/test/llvm_fixtures/*.mdk; do
         [ -f "$f" ] || continue
         n="$(basename "$f" .mdk)"
+        only_match "$n" || continue
         if ! "$LEMIT" "$f" 2>/dev/null | perl -0pe 's/\(\)\s*\z//' > "$LW/$n.ll"; then
           echo "  FAIL $n (emit)"; lfail=$((lfail+1)); continue
         fi
@@ -246,10 +311,15 @@ if [ -n "$FROZEN_TAG" ]; then
         # fixtures exit non-zero AFTER printing); capture stdout regardless.
         "$LW/$n.bin" > "${f%.mdk}.native.golden" 2>/dev/null
         fwrote=$((fwrote+1))
+        record_golden "${f%.mdk}.native.golden"
       done
       rm -rf "$LW"; trap - EXIT
       # A regenerator that silently writes 0 goldens is how a stale golden ships.
-      [ "$fwrote" -gt 0 ] || { echo "wrote 0 goldens — no fixtures found under test/llvm_fixtures/"; exit 2; }
+      if [ "$fwrote" -eq 0 ]; then
+        if [ -n "$ONLY_FILTER" ]; then echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no fixture under test/llvm_fixtures/"
+        else echo "wrote 0 goldens — no fixtures found under test/llvm_fixtures/"; fi
+        exit 2
+      fi
       [ "$lfail" -eq 0 ] || { echo "$lfail fixture(s) failed to emit/compile — goldens NOT written for those"; exit 1; }
       ;;
     build_construct)
@@ -267,11 +337,16 @@ if [ -n "$FROZEN_TAG" ]; then
       trap 'rm -rf "$TMP"' EXIT
       for f in "$ROOT"/test/construct_fixtures/*.mdk; do
         [ -f "$f" ] || continue
+        only_match "$(basename "$f" .mdk)" || continue
         capture_build_golden "$f" "${f%.mdk}.build.golden"
       done
       rm -rf "$TMP"; trap - EXIT
       fwrote="$wrote"
-      [ "$fwrote" -gt 0 ] || { echo "wrote 0 goldens — no fixtures found under test/construct_fixtures/"; exit 2; }
+      if [ "$fwrote" -eq 0 ]; then
+        if [ -n "$ONLY_FILTER" ]; then echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no fixture under test/construct_fixtures/"
+        else echo "wrote 0 goldens — no fixtures found under test/construct_fixtures/"; fi
+        exit 2
+      fi
       ;;
     native_cli)
       # test/native_cli_goldens/{check,fmt,new,run,test,build,lsp} — mirrors
@@ -294,54 +369,60 @@ if [ -n "$FROZEN_TAG" ]; then
       for f in "$ROOT"/test/diff_fixtures/*.mdk; do
         [ -f "$f" ] || continue
         n="$(basename "$f" .mdk)"
+        only_match "$n" || continue
         MEDAKA_ROOT="$ROOT" ncbound "$MAIN" check --types "$f" 2>/dev/null \
           | nc_strip_unit | LC_ALL=C sort > "$NCGOLD/check/$n.golden"
-        fwrote=$((fwrote+1))
+        fwrote=$((fwrote+1)); record_golden "$NCGOLD/check/$n.golden"
       done
 
       # ── fmt/ ────────────────────────────────────────────────────────────
       for f in "$ROOT"/test/fmt_fixtures/*.mdk; do
         [ -f "$f" ] || continue
         n="$(basename "$f" .mdk)"
+        only_match "$n" || continue
         MEDAKA_ROOT="$ROOT" ncbound "$MAIN" fmt --stdout "$f" 2>/dev/null \
           | nc_strip_unit > "$NCGOLD/fmt/$n.golden"
-        fwrote=$((fwrote+1))
+        fwrote=$((fwrote+1)); record_golden "$NCGOLD/fmt/$n.golden"
       done
 
       # ── new/ ────────────────────────────────────────────────────────────
-      NCTMP="$(mktemp -d)"
-      ( cd "$NCTMP" && MEDAKA_ROOT="$ROOT" ncbound "$MAIN" new proj >/dev/null 2>&1 )
-      if [ -d "$NCTMP/proj" ]; then
-        rm -rf "$NCGOLD/new/proj"
-        mkdir -p "$NCGOLD/new"
-        cp -R "$NCTMP/proj" "$NCGOLD/new/proj"
-        fwrote=$((fwrote+1))
-      else
-        echo "  SKIP new/proj (native \`new\` produced no tree)"
+      if only_match new; then
+        NCTMP="$(mktemp -d)"
+        ( cd "$NCTMP" && MEDAKA_ROOT="$ROOT" ncbound "$MAIN" new proj >/dev/null 2>&1 )
+        if [ -d "$NCTMP/proj" ]; then
+          rm -rf "$NCGOLD/new/proj"
+          mkdir -p "$NCGOLD/new"
+          cp -R "$NCTMP/proj" "$NCGOLD/new/proj"
+          fwrote=$((fwrote+1)); record_golden "$NCGOLD/new/proj"
+        else
+          echo "  SKIP new/proj (native \`new\` produced no tree)"
+        fi
+        rm -rf "$NCTMP"
       fi
-      rm -rf "$NCTMP"
 
       # ── run/ ────────────────────────────────────────────────────────────
       for base in hello arith recur adt listsum strcat; do
         f="$NCFIX/run/$base.mdk"
         [ -f "$f" ] || continue
+        only_match "$base" || continue
         MEDAKA_ROOT="$ROOT" ncbound "$MAIN" run "$f" 2>/dev/null \
           | nc_strip_unit > "$NCGOLD/run/$base.golden"
-        fwrote=$((fwrote+1))
+        fwrote=$((fwrote+1)); record_golden "$NCGOLD/run/$base.golden"
       done
 
       # ── test/ ───────────────────────────────────────────────────────────
       for base in doc prop nodoc; do
         f="$NCFIX/test/$base.mdk"
         [ -f "$f" ] || continue
+        only_match "$base" || continue
         MEDAKA_ROOT="$ROOT" ncbound "$MAIN" test "$f" 2>/dev/null \
           | sed "s#$ROOT/##g" | nc_strip_unit > "$NCGOLD/test/$base.golden"
-        fwrote=$((fwrote+1))
+        fwrote=$((fwrote+1)); record_golden "$NCGOLD/test/$base.golden"
       done
-      if [ -d "$NCFIX/test_dir" ]; then
+      if [ -d "$NCFIX/test_dir" ] && only_match dir; then
         MEDAKA_ROOT="$ROOT" ncbound "$MAIN" test "$NCFIX/test_dir" 2>/dev/null \
           | sed "s#$ROOT/##g" | nc_strip_unit > "$NCGOLD/test/dir.golden"
-        fwrote=$((fwrote+1))
+        fwrote=$((fwrote+1)); record_golden "$NCGOLD/test/dir.golden"
       fi
 
       # ── build/ (native emit host; needs emitter + clang + libgc) ─────────
@@ -353,11 +434,12 @@ if [ -n "$FROZEN_TAG" ]; then
         for base in hello arith recur adt listsum strcat; do
           f="$NCFIX/run/$base.mdk"
           [ -f "$f" ] || continue
+          only_match "$base" || continue
           ( export MEDAKA_ROOT="$ROOT"; export MEDAKA_EMITTER="$NCEMITTER"
             ncbound "$MAIN" build "$f" -o "$NCBTMP/nat_$base" ) >/dev/null 2>&1
           if [ -x "$NCBTMP/nat_$base" ]; then
             "$NCBTMP/nat_$base" > "$NCGOLD/build/$base.golden" 2>/dev/null
-            fwrote=$((fwrote+1))
+            fwrote=$((fwrote+1)); record_golden "$NCGOLD/build/$base.golden"
           else
             echo "  SKIP build/$base (native build failed)"
           fi
@@ -369,7 +451,7 @@ if [ -n "$FROZEN_TAG" ]; then
 
       # ── lsp/session.ndjson — scripted stdin session (NOT a "live" session;
       # mirrors diff_native_cli.sh's own lframe/ldecode driver EXACTLY) ─────
-      if command -v python3 >/dev/null 2>&1; then
+      if command -v python3 >/dev/null 2>&1 && only_match lsp; then
         NCLTMP="$(mktemp -d)"
         nc_lframe() { python3 - "$1" <<'PY'
 import sys
@@ -404,12 +486,16 @@ PY
           '{"jsonrpc":"2.0","method":"exit","params":{}}'; do nc_lframe "$m" >> "$NCLTMP/lsp_in.bin"; done
         MEDAKA_ROOT="$ROOT" ncbound "$MAIN" lsp < "$NCLTMP/lsp_in.bin" > "$NCLTMP/lsp_out.bin" 2>/dev/null
         nc_ldecode "$NCLTMP/lsp_out.bin" > "$NCGOLD/lsp/session.ndjson"
-        fwrote=$((fwrote+1))
+        fwrote=$((fwrote+1)); record_golden "$NCGOLD/lsp/session.ndjson"
         rm -rf "$NCLTMP"
-      else
-        echo "  SKIP lsp/session.ndjson (no python3)"
+      elif ! command -v python3 >/dev/null 2>&1; then
+        only_match lsp && echo "  SKIP lsp/session.ndjson (no python3)"
       fi
-      [ "$fwrote" -gt 0 ] || { echo "wrote 0 goldens — check test/native_cli_fixtures/ and test/diff_fixtures/ exist"; exit 2; }
+      if [ "$fwrote" -eq 0 ]; then
+        if [ -n "$ONLY_FILTER" ]; then echo "wrote 0 goldens — --only '$ONLY_FILTER' matched nothing in native_cli"
+        else echo "wrote 0 goldens — check test/native_cli_fixtures/ and test/diff_fixtures/ exist"; fi
+        exit 2
+      fi
       ;;
     *)
       echo "unknown --frozen tag: $FROZEN_TAG (expected fmt|printer|boot_typecheck|selfproc_legA|llvm_eval|build_construct|native_cli)"
@@ -417,7 +503,12 @@ PY
   esac
   status=$?
   [ "$status" -eq 0 ] || exit "$status"
-  printf 'CAPTURED (frozen %s): %d goldens written\n' "$FROZEN_TAG" "$fwrote"
+  if [ -n "$ONLY_FILTER" ]; then
+    printf 'CAPTURED (frozen %s, --only %s): %d goldens written\n' "$FROZEN_TAG" "$ONLY_FILTER" "$fwrote"
+  else
+    printf 'CAPTURED (frozen %s): %d goldens written\n' "$FROZEN_TAG" "$fwrote"
+  fi
+  print_written
   exit 0
 fi
 
@@ -576,7 +667,7 @@ emit_golden() {
       else echo "DRIFT    $golden"; diff "$golden" "$out" | head -6 | sed 's/^/    /'; fi
     fi
   else
-    cp "$out" "$golden"; wrote=$((wrote+1))
+    cp "$out" "$golden"; wrote=$((wrote+1)); record_golden "$golden"
   fi
 }
 
@@ -592,7 +683,7 @@ emit_to() {
       else echo "DRIFT    $golden"; diff "$golden" "$src" | head -6 | sed 's/^/    /'; fi
     fi
   else
-    mkdir -p "$(dirname "$golden")"; cp "$src" "$golden"; wrote=$((wrote+1))
+    mkdir -p "$(dirname "$golden")"; cp "$src" "$golden"; wrote=$((wrote+1)); record_golden "$golden"
   fi
 }
 
@@ -756,7 +847,7 @@ if want repl; then
       if [ -f "$golden" ] && cmp -s "$out" "$golden"; then :
       else mism=$((mism+1)); [ -f "$golden" ] && { echo "DRIFT $golden"; diff "$golden" "$out" | head -6 | sed 's/^/    /'; } || echo "MISSING $golden"; fi
     else
-      cp "$out" "$golden"; wrote=$((wrote+1))
+      cp "$out" "$golden"; wrote=$((wrote+1)); record_golden "$golden"
     fi
   else
     mism=$((mism+1)); echo "SKIP repl golden — missing $REPL_BIN (run FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one $(basename "$REPL_BIN")) or $REPL_IN"
@@ -840,6 +931,7 @@ if [ "$CHECK" -eq 1 ]; then
     exit 2
   fi
   printf 'CHECK: %d rows, %d fixtures, %d mismatch(es)\n' "$total" "$fixtures" "$mism"
+  print_written
   [ "$mism" -eq 0 ]
 else
   if [ "$wrote" -eq 0 ]; then
@@ -852,5 +944,6 @@ else
     exit 2
   fi
   printf 'CAPTURED: %d rows, blessed %d goldens (%d oracle failures)\n' "$total" "$wrote" "$mism"
+  print_written
   [ "$mism" -eq 0 ]
 fi
