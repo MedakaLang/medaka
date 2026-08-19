@@ -20,9 +20,12 @@ analogous to `typescript-eslint`'s type-checked rules: rules keep matching the
 **raw (pre-desugar) surface AST** for shape, but may **query a side-table of
 resolve/type facts** (a "type oracle") harvested by running the pipeline once.
 
-**Tracker state:** the tier has **no issue** (`gh issue list --search "type-aware"` is
-empty as of 2026-08-19). Its one arc-side dependency is filed: **#1752** (scope
-`currentLoc`), which is arc work on its own merits and is *not* owned by this doc.
+**Tracker home: #1754** (Tier 1 + Tier 2; filed 2026-08-19, DEPENDENCY-BLOCKED —
+explicitly not slot-fillable). Its arc-side dependency is **#1752** (scope
+`currentLoc`), which is arc work on its own merits, is *not* owned by this doc,
+and **must not be prioritised on this tier's behalf** — the dependency is one-way.
+Tier 1 additionally waits on the Stage E driver collapse (#1116) for the reason
+in §10.1.
 
 ---
 
@@ -533,9 +536,9 @@ lint problem**. Three other workarounds already stand on the same defect:
 `pushTypeErrorOnceAt`'s `Option Loc` parameter. Scoping the ref is the shared
 repair for all of them, and it serves component D (Diagnostics) directly.
 
-Filed as **#1752** and routed to the arc on that basis. **Type-aware lint is not
-a reason to prioritise it**, and #1752 does not depend on this doc; the
-relationship is one-way. If #1752 lands, Tier 2's cost drops to §9's "small"
+Filed as **#1752** and routed to the arc on that basis; this tier's own tracker
+home (**#1754**) records it as a hard, one-way prerequisite. **Type-aware lint is
+not a reason to prioritise #1752**, and #1752 does not depend on this doc. If #1752 lands, Tier 2's cost drops to §9's "small"
 recorder plus §2.4's go/no-go. If it does not, Tier 2 should not be built at all
 — a harvest over the leaky ref is a wrong-line finding machine.
 
