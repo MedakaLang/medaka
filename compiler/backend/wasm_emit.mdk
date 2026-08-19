@@ -1,3 +1,13 @@
+-- lint-disable-file rule-prefer-assign-op
+-- ⚠️ The `setRef r v` -> `r := v` migration DELIBERATELY SKIPS this file (#1746).
+-- `test/wasm/diff_wasm_typed.sh` pins ~60 of this file's `setRef` call sites as
+-- LITERAL SOURCE TEXT (the leaf-demand carrier ratchets), including NEGATIVE regex
+-- checks asserting a given writer does NOT exist — and a negative check that is not
+-- taught the `:=` spelling stops seeing a rogue writer, i.e. fails OPEN. Migrating
+-- the calls without rewriting that suite in lockstep would silently weaken a
+-- soundness ratchet for a purely stylistic gain, so the two move together or not at
+-- all. #1746 does both.
+--
 -- WasmGC backend emitter — WASMGC-DESIGN.md §7.  Peer of `backend.llvm_emit`:
 -- consumes the SAME backend-neutral Core IR (`ir.core_ir`) the LLVM emitter
 -- consumes (lowered by the SAME `core_ir_lower.lowerProgramEmit`) and produces a
@@ -715,17 +725,17 @@ gapEventsOfW : WasmEmit -> List String
 gapEventsOfW emit = reverseL emit.gapLog.value
 
 setGapBindingOfW : WasmEmit -> String -> Unit
-setGapBindingOfW emit name = emit.curGapBind := name
+setGapBindingOfW emit name = setRef emit.curGapBind name
 
 currentBindingOfW : WasmEmit -> String
 currentBindingOfW emit = emit.currentBinding.value
 
 setCurrentBindingOfW : WasmEmit -> String -> Unit
-setCurrentBindingOfW emit name = emit.currentBinding := name
+setCurrentBindingOfW emit name = setRef emit.currentBinding name
 
 noteGapW : WasmEmit -> String -> Unit
 noteGapW emit reason =
-  emit.gapLog := "\{emit.curGapBind.value}\t\{reason}"::emit.gapLog.value
+  setRef emit.gapLog ("\{emit.curGapBind.value}\t\{reason}"::emit.gapLog.value)
 
 -- typed gap-tolerant variants, one per return shape the `gap` call sites need.
 -- Each records (census mode) or panics (default), returning a placeholder.
@@ -956,7 +966,7 @@ noteTupleArity n =
   if containsInt n tupleAritiesRef.value then
     ()
   else
-    tupleAritiesRef := n::tupleAritiesRef.value
+    setRef tupleAritiesRef (n::tupleAritiesRef.value)
 
 containsInt : Int -> List Int -> Bool
 containsInt _ [] = False
@@ -986,18 +996,19 @@ containsInt x (y::ys) = x == y || containsInt x ys
 freshStrSeg : WasmEmit -> List Int -> Int
 freshStrSeg emit bytes =
   let i = emit.nextStringSegmentId.value
-  emit.nextStringSegmentId := i + 1
-  emit.stringSegments := (i, bytes)::emit.stringSegments.value
+  let _ = setRef emit.nextStringSegmentId (i + 1)
+  let _ = setRef emit.stringSegments ((i, bytes)::emit.stringSegments.value)
   i
 
 freshLamId : WasmEmit -> Int
 freshLamId emit =
   let n = emit.nextLambdaId.value
-  emit.nextLambdaId := n + 1
+  let _ = setRef emit.nextLambdaId (n + 1)
   n
 
 addLifted : WasmEmit -> List String -> Unit
-addLifted emit def = emit.liftedDefinitions := def::emit.liftedDefinitions.value
+addLifted emit def =
+  setRef emit.liftedDefinitions (def::emit.liftedDefinitions.value)
 
 -- addLifted, but keyed by a unique define name: a second call
 -- with an already-seen name is a no-op, so a point-free ctor/extern used at N sites
@@ -1006,15 +1017,15 @@ addLiftedNamed : WasmEmit -> String -> List String -> Unit
 addLiftedNamed emit name def =
   if omHasKey name emit.liftedDefinitionNames.value then ()
   else
-    emit.liftedDefinitionNames := omInsert name () emit.liftedDefinitionNames.value
+    let _ = setRef emit.liftedDefinitionNames (omInsert name () emit.liftedDefinitionNames.value)
     addLifted emit def
 
 noteFuncRef : WasmEmit -> String -> Unit
 noteFuncRef emit nm =
   if omHasKey nm emit.functionReferenceNames.value then ()
   else
-    emit.functionReferenceNames := omInsert nm () emit.functionReferenceNames.value
-    emit.functionReferences := nm::emit.functionReferences.value
+    let _ = setRef emit.functionReferenceNames (omInsert nm () emit.functionReferenceNames.value)
+    setRef emit.functionReferences (nm::emit.functionReferences.value)
 
 export emitProgram : WasmEmitInput -> CProgram -> String
 emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp
@@ -1029,25 +1040,25 @@ emitProgramRecord input cp =
 
 emitProgramWith : WasmEmit -> WasmEmitInput -> CProgram -> String
 emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
-  useStrRef := (programUsesStr groups)
+  let _ = setRef useStrRef (programUsesStr groups)
   -- W7: scan the program for collection usage (gates type-section decls + forces
   -- ref-mode — every collection is a boxed (ref eq) value).
-  useListRef := False
-  useArrayRef := False
-  useRefBoxRef := False
-  useStrLeafRef := False
-  useFloatRef := False
-  useStrSearchRef := False
-  useValueArithRef := False
-  numPolyLocalsRef := []
-  useIORef := False
-  tupleAritiesRef := []
+  let _ = setRef useListRef False
+  let _ = setRef useArrayRef False
+  let _ = setRef useRefBoxRef False
+  let _ = setRef useStrLeafRef False
+  let _ = setRef useFloatRef False
+  let _ = setRef useStrSearchRef False
+  let _ = setRef useValueArithRef False
+  let _ = setRef numPolyLocalsRef []
+  let _ = setRef useIORef False
+  let _ = setRef tupleAritiesRef []
   let _ = scanProgW7 emit groups
   let _ = scanImplsW7 emit impls
   -- W8b: any Float program needs the $str rep — a Float value-main auto-prints through
   -- floatToString (a $str), and $mdk_float_to_str builds a $str.  Force useStrRef so the
   -- $str type + the $str print runtime emit.
-  let _ = if useFloatRef.value then (useStrRef := True) else ()
+  let _ = if useFloatRef.value then setRef useStrRef True else ()
   let fnNames = collectFnNames groups
   let valNames = collectValNames groups
   let fnArs = collectFnArities input groups
@@ -1078,20 +1089,20 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
 export emitProgramGaps : WasmEmitInput -> CProgram -> List String
 emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let emit = freshWasmEmit WGapRecord
-  useStrRef := (programUsesStr groups)
-  useListRef := False
-  useArrayRef := False
-  useRefBoxRef := False
-  useStrLeafRef := False
-  useFloatRef := False
-  useStrSearchRef := False
-  useValueArithRef := False
-  numPolyLocalsRef := []
-  useIORef := False
-  tupleAritiesRef := []
+  let _ = setRef useStrRef (programUsesStr groups)
+  let _ = setRef useListRef False
+  let _ = setRef useArrayRef False
+  let _ = setRef useRefBoxRef False
+  let _ = setRef useStrLeafRef False
+  let _ = setRef useFloatRef False
+  let _ = setRef useStrSearchRef False
+  let _ = setRef useValueArithRef False
+  let _ = setRef numPolyLocalsRef []
+  let _ = setRef useIORef False
+  let _ = setRef tupleAritiesRef []
   let _ = scanProgW7 emit groups
   let _ = scanImplsW7 emit impls
-  let _ = if useFloatRef.value then (useStrRef := True) else ()
+  let _ = if useFloatRef.value then setRef useStrRef True else ()
   let fnNames = collectFnNames groups
   let valNames = collectValNames groups
   let fnArs = collectFnArities input groups
@@ -1503,24 +1514,23 @@ scanClauseW7 emit (CClause pats body) =
 
 scanExprW7 : WasmEmit -> CExpr -> Unit
 scanExprW7 emit (CList es) =
-  let _ = useListRef := True in forEachU (e => scanExprW7 emit e) es
-scanExprW7 emit (CRangeList lo hi _) = let _ = useListRef := True in let _ = scanExprW7 emit lo in scanExprW7 emit hi
+  let _ = setRef useListRef True in forEachU (e => scanExprW7 emit e) es
+scanExprW7 emit (CRangeList lo hi _) = let _ = setRef useListRef True in let _ = scanExprW7 emit lo in scanExprW7 emit hi
 scanExprW7 emit (CTuple es) =
   let _ = noteTupleArity (listLen es) in forEachU (e => scanExprW7 emit e) es
 scanExprW7 emit (CArray es) =
-  let _ = useArrayRef := True in forEachU (e => scanExprW7 emit e) es
-scanExprW7 emit (CRangeArray lo hi _) = let _ = useArrayRef := True in let _ = scanExprW7 emit lo in scanExprW7 emit hi
-scanExprW7 emit (CIndex a i) =
-  let _ = useArrayRef := True in let _ = scanExprW7 emit a in scanExprW7 emit i
-scanExprW7 emit (CSlice a lo hi _) = let _ = useArrayRef := True in let _ = scanExprW7 emit a in let _ = scanExprW7 emit lo in scanExprW7 emit hi
+  let _ = setRef useArrayRef True in forEachU (e => scanExprW7 emit e) es
+scanExprW7 emit (CRangeArray lo hi _) = let _ = setRef useArrayRef True in let _ = scanExprW7 emit lo in scanExprW7 emit hi
+scanExprW7 emit (CIndex a i) = let _ = setRef useArrayRef True in let _ = scanExprW7 emit a in scanExprW7 emit i
+scanExprW7 emit (CSlice a lo hi _) = let _ = setRef useArrayRef True in let _ = scanExprW7 emit a in let _ = scanExprW7 emit lo in scanExprW7 emit hi
 scanExprW7 emit (CRecord _ fields) =
   forEachU (f => scanExprW7 emit (cFieldExpr f)) fields
 scanExprW7 emit (CFieldAccess ex _ _) = scanExprW7 emit ex
 scanExprW7 emit (CRecordUpdate _ base fields) =
-  emit.useRecUpdate := True
+  let _ = setRef emit.useRecUpdate True
   let _ = scanExprW7 emit base in forEachU (f => scanExprW7 emit (cFieldExpr f)) fields
 scanExprW7 emit (CVariantUpdate _ base fields) =
-  emit.useRecUpdate := True
+  let _ = setRef emit.useRecUpdate True
   let _ = scanExprW7 emit base in forEachU (f => scanExprW7 emit (cFieldExpr f)) fields
 scanExprW7 emit (CApp f a) =
   let (hd, args) = flattenApp (CApp f a) []
@@ -1528,14 +1538,14 @@ scanExprW7 emit (CApp f a) =
   forEachU (arg => scanExprW7 emit arg) args
 scanExprW7 emit (CVar x _) =
   if x == "Ref" then
-    useRefBoxRef := True
+    setRef useRefBoxRef True
   else
     noteW8Extern emit x
 -- W8b: a Float literal forces the Float rep + runtime.  (Bare `pi`/`e` are NOT keyed
 -- here — scanExprW7 doesn't track binders, so a LOCAL named `e`/`pi`, e.g. `Err e`,
 -- would false-positive; useFloatRef is instead forced by a Float literal, a Float
 -- extern, OR a Float-kinded main, post-scan in emitProgram.)
-scanExprW7 _ (CLit (LFloat _)) = useFloatRef := True
+scanExprW7 _ (CLit (LFloat _)) = setRef useFloatRef True
 scanExprW7 emit (CLam _ b) = scanExprW7 emit b
 scanExprW7 emit (CBinPrim op l r _) =
   let _ = noteW8Binop emit op in let _ = scanExprW7 emit l in scanExprW7 emit r
@@ -1556,8 +1566,8 @@ scanExprW7 emit (CLetGroup binds b) =
 scanExprW7 _ _ = ()
 
 scanW7Head : WasmEmit -> CExpr -> Unit
-scanW7Head _ (CVar "Ref" _) = useRefBoxRef := True
-scanW7Head _ (CVar "setRef" _) = useRefBoxRef := True
+scanW7Head _ (CVar "Ref" _) = setRef useRefBoxRef True
+scanW7Head _ (CVar "setRef" _) = setRef useRefBoxRef True
 scanW7Head emit (CVar f _) = noteW8Extern emit f
 scanW7Head emit h = scanExprW7 emit h
 
@@ -1567,63 +1577,63 @@ scanW7Head emit h = scanExprW7 emit h
 noteW8Extern : WasmEmit -> String -> Unit
 noteW8Extern emit name =
   let _ = if contains name ["charToStr", "stringConcat", "stringSlice", "stringToUpper", "stringToLower"]
-          then (useStrLeafRef := True) else ()
+          then setRef useStrLeafRef True else ()
   let _ = if isLeafExternW name && contains name ["randomInt", "randomBool", "randomChar", "setSeed"]
-          then (emit.useRng := True) else ()
+          then setRef emit.useRng True else ()
   -- a Char main from randomChar is auto-printed by encoding the codepoint to a $str
   -- ($mdk_char_to_str → $mdk_print_strln), so randomChar needs the $str rep + the
   -- char-encode strLeaf runtime.
-  let _ = if name == "randomChar" then let _ = (useStrRef := True) in (useStrLeafRef := True) else ()
+  let _ = if name == "randomChar" then let _ = setRef useStrRef True in setRef useStrLeafRef True else ()
   let _ = if contains name ["hashInt", "hashChar", "hashBool", "hashString"]
-          then (emit.useHash := True) else ()
+          then setRef emit.useHash True else ()
   -- W8b: Float externs force the Float runtime (+ ref-mode + $str for floatToString).
   let _ = if contains name ["floatToString", "intToFloat", "floatToInt", "hashFloat", "randomFloat"]
-          then (useFloatRef := True) else ()
+          then setRef useFloatRef True else ()
   -- #101: libm math externs that produce/consume a boxed $float force the Float runtime
   -- (ref-mode + floatRuntimeLines carries $mdk_round; $mdk_float_rem is floatRemRuntimeLines).
-  let _ = if isFloatMathExternW name then (useFloatRef := True) else ()
+  let _ = if isFloatMathExternW name then setRef useFloatRef True else ()
   -- #101: the transcendental / binary math externs lower to JS Math.* host imports —
   -- force emit.useMath so mathHostImportLines is declared.
-  let _ = if isMathHostExternW name then (emit.useMath := True) else ()
+  let _ = if isMathHostExternW name then setRef emit.useMath True else ()
   -- floatToString needs the $str rep to build its result string.
-  let _ = if name == "floatToString" then (useStrRef := True) else ()
+  let _ = if name == "floatToString" then setRef useStrRef True else ()
   -- layer-6: stringToFloat : String -> Option Float.  Pushes bytes via the IO path
   -- channel then calls mdk_str_to_float (host strtod acceptance set, #370).  Forces floatStr, float, str,
   -- and IO (for mdk_path_reset/mdk_path_push).  The $C_Some ctor is in ref-type-section
   -- which is always present when useStrRef/useFloatRef forces ref-mode.
   let _ = if name == "stringToFloat"
-          then let _ = (emit.useFloatStr := True) in let _ = (useFloatRef := True) in let _ = (useStrRef := True) in (useIORef := True)
+          then let _ = setRef emit.useFloatStr True in let _ = setRef useFloatRef True in let _ = setRef useStrRef True in setRef useIORef True
           else ()
   -- hashFloat needs the shared mix64 (hashRuntime); randomFloat needs next_u64 (rngRuntime).
-  let _ = if name == "hashFloat" then let _ = (emit.useFloatHash := True) in (emit.useHash := True) else ()
-  let _ = if name == "randomFloat" then let _ = (emit.useFloatRng := True) in (emit.useRng := True) else ()
+  let _ = if name == "hashFloat" then let _ = setRef emit.useFloatHash True in setRef emit.useHash True else ()
+  let _ = if name == "randomFloat" then let _ = setRef emit.useFloatRng True in setRef emit.useRng True else ()
   -- W8b: stringIndexOf/stringCompare use the strSearch runtime + cp_count (strLeaf) + $str.
   let _ = if contains name ["stringIndexOf", "stringCompare"]
-          then let _ = (useStrSearchRef := True) in let _ = (useStrRef := True) in (useStrLeafRef := True) else ()
+          then let _ = setRef useStrSearchRef True in let _ = setRef useStrRef True in setRef useStrLeafRef True else ()
   -- W11b: stringToChars/stringFromChars are the UTF-8 codec between a $str and an $arr
   -- of i31 Char codepoints.  Force the $str rep, the $arr rep, the strLeaf char encoder
   -- ($mdk_char_to_str, reused by stringFromChars), and the codec runtime itself.
   let _ = if contains name ["stringToChars", "stringFromChars"]
-          then let _ = (emit.useStrCodec := True) in let _ = (useStrRef := True) in let _ = (useArrayRef := True) in (useStrLeafRef := True) else ()
+          then let _ = setRef emit.useStrCodec True in let _ = setRef useStrRef True in let _ = setRef useArrayRef True in setRef useStrLeafRef True else ()
   -- W11b: the UTF-8 byte codec ($str <-> Array Int).  Force the codec runtime (carries
   -- $mdk_str_to_utf8_bytes / $mdk_utf8_bytes_to_str), the $str rep, and the $arr rep.
   let _ = if contains name ["stringToUtf8Bytes", "stringFromUtf8Bytes"]
-          then let _ = (emit.useStrCodec := True) in let _ = (useStrRef := True) in (useArrayRef := True) else ()
+          then let _ = setRef emit.useStrCodec True in let _ = setRef useStrRef True in setRef useArrayRef True else ()
   -- W9: debugStringLit/debugCharLit quote+escape into a fresh $str via $mdk_dbg_quote,
   -- which reuses $mdk_cp_count + $mdk_char_to_str (both in strLeafRuntimeLines).  Force
   -- the $str rep + the strLeaf runtime.  (No $arr needed.)
   let _ = if contains name ["debugStringLit", "debugCharLit"]
-          then let _ = (useStrRef := True) in (useStrLeafRef := True) else ()
+          then let _ = setRef useStrRef True in setRef useStrLeafRef True else ()
   -- W11b: charFromCode : Int -> Option Char — range-check runtime, no $str/$arr needed.
-  let _ = if name == "charFromCode" then (emit.useCharFromCode := True) else ()
+  let _ = if name == "charFromCode" then setRef emit.useCharFromCode True else ()
   -- W11b: char classification + case-mapping externs — pure WAT helpers, no $str/$arr.
   let _ = if contains name ["charIsAlpha", "charIsSpace", "charIsUpper", "charIsLower",
                              "charIsPunct", "charToUpper", "charToLower"]
-          then (emit.useCharClass := True) else ()
+          then setRef emit.useCharClass True else ()
   -- W10: panic's message arg is a $str → force the $str rep.  B5: the coded-trap
   -- lowering streams that message through $mdk_eprint_str (gated on this emission's
   -- `useEPut`) after a fixed "runtime error [E-PANIC]: " prefix.
-  let _ = if name == "panic" then let _ = (useStrRef := True) in (emit.useEPut := True) else ()
+  let _ = if name == "panic" then let _ = setRef useStrRef True in setRef emit.useEPut True else ()
   -- W10: the array intrinsic externs all build/read the $arr rep (and arrayFromList
   -- consumes a cons list).  Force useArrayRef; arrayFromList also forces useListRef.
   let _ = if contains name ["arrayLength", "arrayGetUnsafe", "arrayMake", "arrayMakeWith",
@@ -1631,41 +1641,41 @@ noteW8Extern emit name =
             -- stage-A: arrayBlit/arrayFill also operate on $arr.
             "arrayBlit", "arrayFill",
             -- stage-B: float-reinterpret externs build/read $arr.
-            "floatToBytes64", "bytesToFloat64"] then (useArrayRef := True) else ()
+            "floatToBytes64", "bytesToFloat64"] then setRef useArrayRef True else ()
   -- stage-B: float-reinterpret externs consume/produce a boxed $float — force the
   -- Float rep + runtime ($float is unconditionally declared, but useFloatRef gates the
   -- float runtime helpers a printed/used Float result may reach).
-  let _ = if contains name ["floatToBytes64", "bytesToFloat64"] then (useFloatRef := True) else ()
-  let _ = if name == "arrayFromList" then (useListRef := True) else ()
+  let _ = if contains name ["floatToBytes64", "bytesToFloat64"] then setRef useFloatRef True else ()
+  let _ = if name == "arrayFromList" then setRef useListRef True else ()
   -- W12: the IO host-surface externs.  readFile/fileExists/getEnv/args all build a $str
   -- (path/result), so force the $str rep; args additionally builds a Cons list (force
   -- useListRef).  `exit` needs no $str (it lowers to mdk_exit + unreachable) but still
   -- forces ref-mode via the useRef predicate (useIORef).
   let _ = if contains name ["readFile", "fileExists", "getEnv", "args"]
-          then (useStrRef := True) else ()
-  let _ = if name == "args" then (useListRef := True) else ()
-  let _ = if name == "args" then (emit.useArgs := True) else ()
+          then setRef useStrRef True else ()
+  let _ = if name == "args" then setRef useListRef True else ()
+  let _ = if name == "args" then setRef emit.useArgs True else ()
   let _ = if contains name ["readFile", "fileExists", "args", "getEnv", "exit"]
-          then (useIORef := True) else ()
+          then setRef useIORef True else ()
   -- stage-D: byte-clean file I/O.  Force the IO host channel ($mdk_push_path etc via
   -- useIORef), the $arr rep (useArrayRef), the $str rep (path/Err message), and the
   -- fileBytes runtime + write host imports (WasmEmit.useFileBytes).
   let _ = if contains name ["readFileBytes", "writeFileBytes"]
-          then let _ = (useIORef := True) in let _ = (useArrayRef := True) in let _ = (useStrRef := True) in (emit.useFileBytes := True)
+          then let _ = setRef useIORef True in let _ = setRef useArrayRef True in let _ = setRef useStrRef True in setRef emit.useFileBytes True
           else ()
-  if contains name ["ePutStr", "ePutStrLn"] then (emit.useEPut := True) else ()
+  if contains name ["ePutStr", "ePutStrLn"] then setRef emit.useEPut True else ()
 -- `++` is runtime-dispatched ($mdk_append): needs the $str leaf concat ($mdk_str_append)
 -- AND the W7 cons list types ($C_Cons/$T_List) for the list-append branch.
 noteW8Binop : WasmEmit -> String -> Unit
 noteW8Binop _ "++" =
-  useStrLeafRef := True
-  useStrRef := True
-  useListRef := True
-noteW8Binop _ "::" = useListRef := True
+  let _ = setRef useStrLeafRef True
+  let _ = setRef useStrRef True
+  setRef useListRef True
+noteW8Binop _ "::" = setRef useListRef True
 -- B5: a concrete-Int `/`/`%` needs the divisor-guard scratch local (declared per fn
 -- via w7LocalsAtDepth / the scalar fn+init decls).  Float `/` never traps on zero.
-noteW8Binop emit "/" = emit.useDivGuard := True
-noteW8Binop emit "%" = emit.useDivGuard := True
+noteW8Binop emit "/" = setRef emit.useDivGuard True
+noteW8Binop emit "%" = setRef emit.useDivGuard True
 noteW8Binop _ _ = ()
 
 scanArmW7 : WasmEmit -> CArm -> Unit
@@ -1686,10 +1696,9 @@ scanStmtW7 emit (CSAssign _ e) = scanExprW7 emit e
 
 -- a pattern's collection heads: a cons/nil/list pattern → list; a tuple pattern → its arity.
 scanPatW7 : WasmEmit -> Pat -> Unit
-scanPatW7 emit (PCons h t) =
-  let _ = useListRef := True in let _ = scanPatW7 emit h in scanPatW7 emit t
+scanPatW7 emit (PCons h t) = let _ = setRef useListRef True in let _ = scanPatW7 emit h in scanPatW7 emit t
 scanPatW7 emit (PList ps) =
-  let _ = useListRef := True in forEachU (p => scanPatW7 emit p) ps
+  let _ = setRef useListRef True in forEachU (p => scanPatW7 emit p) ps
 scanPatW7 emit (PTuple ps) =
   let _ = noteTupleArity (listLen ps) in forEachU (p => scanPatW7 emit p) ps
 scanPatW7 emit (PCon _ args) = forEachU (p => scanPatW7 emit p) args
@@ -1709,8 +1718,8 @@ scanBranchW7 emit (CTBranch h sub) =
   let _ = scanHeadW7 emit h in scanTreeW7 emit sub
 
 scanHeadW7 : WasmEmit -> CHead -> Unit
-scanHeadW7 _ HCons = useListRef := True
-scanHeadW7 _ HNil = useListRef := True
+scanHeadW7 _ HCons = setRef useListRef True
+scanHeadW7 _ HNil = setRef useListRef True
 scanHeadW7 _ (HTuple n) = noteTupleArity n
 scanHeadW7 _ _ = ()
 
@@ -2360,14 +2369,14 @@ emitRefProgram prog groups =
   -- Float and a `<=`/`>=` over it lowers to inline `f64.le`/`f64.ge` (IEEE NaN → False)
   -- rather than the poly runtime-dispatched path (which since #305 is IEEE-correct at
   -- NaN as well, via $mdk_value_lt/le/gt/ge — this is now a code-quality win).
-  floatGlobalsRef := (floatValGlobalNames prog (filterList isValBind groups))
+  let _ = setRef floatGlobalsRef (floatValGlobalNames prog (filterList isValBind groups))
   -- Stage-2/3 (b′) WASMGC-TRMC: detect dispatch-graph TMC groups (the lexer's `scan`
   -- token spine, the offside-rule `layout` family, `intersperse`) BEFORE emitting fns,
   -- so emitRefFnBind can route a group member to the dest-passing reset-wrapper +
   -- inner-loop emit.  ALL binds are passed (not just fn binds): the external-entry
   -- root-selection check must see references from value-bind bodies too.
   let dispGroups = wDetectDispatchGroups prog groups
-  wDispGroupsRef := dispGroups
+  let _ = setRef wDispGroupsRef dispGroups
   -- W8: the SplitMix64 seed lives in a mutable i64 global (emitted before the value globals).
   let rngGlobal = if (progEmit prog).useRng.value then rngStateGlobalLines else []
   let dispGlobals = flatMap wDispGlobalLines dispGroups
@@ -3066,11 +3075,11 @@ emitRefFnBind prog (CBind name clauses0) =
   -- W-SQLITE-4: seed (and reset) floatLocalsRef with this fn's declared Float
   -- params before emitting its body, so type-erased Float arith on a param lowers
   -- to f64 ops (mirrors emitImplGroup's `impl … Float` seeding, generalized).
-  floatLocalsRef := (floatParamNames prog name clauses)
+  let _ = setRef floatLocalsRef (floatParamNames prog name clauses)
   -- A1 (poly-`Num`-on-Float): seed the polymorphic-`Num`/`Ord` param names so this fn's
   -- bare-CVar arithmetic on a type-var param routes to the runtime value-dispatch helper
   -- (mirrors floatLocalsRef, and native's LTNum seed).  [] resets for monomorphic fns.
-  numPolyLocalsRef := (numPolyParamNames prog name clauses)
+  let _ = setRef numPolyLocalsRef (numPolyParamNames prog name clauses)
   let arity = clauseArityOf clauses
   let params = synthParams arity
   -- Stage-2/3 (b′): a member of a detected dispatch-TMC group emits via the dest-passing
@@ -3294,9 +3303,9 @@ patTestBind prog (PLit (LString s)) occ clLabel env =
     "i32.ne",
     "br_if " ++ clLabel,
   ]
-  useStrSearchRef := True
-  useStrLeafRef := True
-  useStrRef := True
+  let _ = setRef useStrSearchRef True
+  let _ = setRef useStrLeafRef True
+  let _ = setRef useStrRef True
   (
     occ ++ ["ref.cast (ref $str)"] ++ emitLitRef (progEmit prog) (LString s) ++ cmpSuffix,
     [],
@@ -4199,19 +4208,19 @@ emitImplGroup prog (ImplG method headTag key arity clauses) =
       -- W8b: an `impl … Float` method's params are Float — record their (pattern-var) names
       -- so the body's bare-CVar arithmetic lowers to f64.  `signum`/`abs`/`negate`/`add`/…
       -- all take Float args.  Reset for every other impl (Int/String/etc. stay i31).
-      floatLocalsRef := (if headTag == "Float" then flatMap clausePatVars clauses else [])
+      let _ = setRef floatLocalsRef (if headTag == "Float" then flatMap clausePatVars clauses else [])
       -- A1: impl-method params are concrete-typed (the impl tag), never poly-`Num`; reset.
-      numPolyLocalsRef := []
+      let _ = setRef numPolyLocalsRef []
       -- layer-18: arm the plain-tail impl-method return_call context for THIS impl, so a
       -- saturated tail-position self-call (`fold f (f z x) xs` → `CMethod "fold" (RKey
       -- "List")`) lowers to `return_call $mdk_impl_List_fold` (constant stack) rather than a
       -- recursive `call`.  Disarmed immediately after (default defines + everything else
       -- must NOT see it).
       let savedImplSelf = (progEmit prog).implSelfCtx.value
-      (progEmit prog).implSelfCtx := (ImplSelfOn method headTag arity)
+      let _ = setRef (progEmit prog).implSelfCtx (ImplSelfOn method headTag arity)
       let bodyLines = emitClausesImpl prog fnName params arity clauses
-      (progEmit prog).implSelfCtx := savedImplSelf
-      floatLocalsRef := []
+      let _ = setRef (progEmit prog).implSelfCtx savedImplSelf
+      let _ = setRef floatLocalsRef []
       let allLocals = clauseLocals clauses
       let extraLocals = filterList (notIn params) (dedupKeep allLocals)
       let scratch = scratchLocals (clausesMaxDepth clauses)
@@ -4501,11 +4510,13 @@ defaultAlreadyEmittedW emit name = omHasKey name emit.emittedDefaultNames.value
 
 markDefaultEmittedW : WasmEmit -> String -> Unit
 markDefaultEmittedW emit name =
-  emit.emittedDefaultNames := omInsert name () emit.emittedDefaultNames.value
+  setRef
+    emit.emittedDefaultNames
+    (omInsert name () emit.emittedDefaultNames.value)
 
 addDefaultDefW : WasmEmit -> List String -> Unit
 addDefaultDefW emit def =
-  emit.defaultDefinitions := def::emit.defaultDefinitions.value
+  setRef emit.defaultDefinitions (def::emit.defaultDefinitions.value)
 
 ensureDefaultEmittedW : Prog -> String -> String -> String -> CImplEntry -> Unit
 ensureDefaultEmittedW prog fname tag method entry =
@@ -5127,9 +5138,9 @@ emitBinRef prog env d op l r tag =
   --     which need only $float/$boxint (always declared) — no $str, so no type-section
   --     dependency on the pre-scan's useStrRef (which body emission cannot retroactively set).
   else if isCmpOp op && useStrRef.value then
-    (progEmit prog).useValueCmp := True
-    useStrSearchRef := True
-    useStrLeafRef := True
+    let _ = setRef (progEmit prog).useValueCmp True
+    let _ = setRef useStrSearchRef True
+    let _ = setRef useStrLeafRef True
     emitValueCmpRef prog env d op l r
   else if isCmpOp op && isPolyNumBinop l r then
     -- #371: valueArithRuntimeLines is spliced in WHOLE whenever useValueArithRef is
@@ -5140,8 +5151,8 @@ emitBinRef prog env d op l r tag =
     -- So trapImportNeeded must be forced here too, not just at arith branch below
     -- — else a poly-cmp-only program parses with "unknown func: $mdk_write_err_byte"
     -- (the import undeclared) because the unused div/mod bodies still reference it.
-    useValueArithRef := True
-    (progEmit prog).trapImportNeeded := True
+    let _ = setRef useValueArithRef True
+    let _ = setRef (progEmit prog).trapImportNeeded True
     emitValueCmpNumRef prog env d op l r
   -- A1 (poly-`Num`-on-Float): arithmetic whose operand is a polymorphic `Num` param
   -- routes through the runtime value-tag-dispatched $mdk_value_add/… helper (A0) instead
@@ -5150,8 +5161,8 @@ emitBinRef prog env d op l r tag =
   -- $mdk_value_mod's guard is baked into valueArithRuntimeLines UNCONDITIONALLY, so
   -- ANY poly-`Num` arith op (not just `/`/`%`) must force the host import.
   else if isArithOp op && isPolyNumBinop l r then
-    useValueArithRef := True
-    (progEmit prog).trapImportNeeded := True
+    let _ = setRef useValueArithRef True
+    let _ = setRef (progEmit prog).trapImportNeeded True
     emitRefExpr prog env d l ++ emitRefExpr prog env d r ++ ["call $mdk_value_" ++ valueArithName op]
   else
     -- layer-17 §2.1: Int arithmetic/comparison computes in i64 over the box/unbox
@@ -5199,7 +5210,7 @@ trapByteInstr b = ["i32.const " ++ intToString b, "call $mdk_write_err_byte"]
 
 wasmTrapBytes : WasmEmit -> String -> List String
 wasmTrapBytes emit text =
-  emit.trapImportNeeded := True
+  let _ = setRef emit.trapImportNeeded True
   flatMap trapByteInstr (strBytesW text)
 
 -- a full coded trap with a compile-time-fixed message (div/mod/OOB/non-exhaustive).
@@ -5710,7 +5721,7 @@ emitRefBoxSet prog env d [r, v] = emitRefExpr prog env d r
   ++ emitRefExpr prog env d v
   ++ ["struct.set $refbox 0", "i32.const 0", "ref.i31"]
 emitRefBoxSet prog env d _ =
-  gapLP prog "wasm Ref: (takes := exactly) two arguments"
+  gapLP prog "wasm Ref: setRef takes exactly two arguments"
 
 -- untag the i31 value to i32 (the runtime sign-extends to i64, matching the native
 -- signed `tagged>>1`); hashBool passes the 0/1 i31.  All hash results fit i31
@@ -6769,7 +6780,7 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
   let exitLbl = "$tmcexit"
   let isBuiltinList = wTrmcBuildsBuiltinList prog self arity clauses
   let saved = (progEmit prog).trmcCtx.value
-  (progEmit prog).trmcCtx := (WTrmcOn self arity pslots ctorSet isBuiltinList loopLbl exitLbl)
+  let _ = setRef (progEmit prog).trmcCtx (WTrmcOn self arity pslots ctorSet isBuiltinList loopLbl exitLbl)
   -- Single all-PVar clause (no fallthrough): the fast path — alias params to the
   -- synthetic positions and TMC-emit the body directly.  Otherwise (multi-clause OR
   -- a clause carries a list/ctor pattern, e.g. `stripComments`/the `map` impl): route
@@ -6781,7 +6792,7 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
         bindParamAliases prog ps params ++ emitRefTail prog (map (patName (progEmit prog)) ps) arity b
       else emitClauseChainGo prog [] lblRoot params arity clauses 0
     _ => emitClauseChainGo prog [] lblRoot params arity clauses 0
-  (progEmit prog).trmcCtx := saved
+  let _ = setRef (progEmit prog).trmcCtx saved
   let loopShell = ["i32.const 1", "local.set " ++ wTrmcFirstL]
       ++ ["block " ++ exitLbl, "loop " ++ loopLbl]
       ++ indent bodyLines
@@ -6985,9 +6996,9 @@ emitWDispMemberFn prog grp emitName origName arity clauses =
   -- cons leaves targeting a non-root member return_call that member directly.
   let rootArity = progFnArity prog root
   let saved = wDispCtxRef.value
-  wDispCtxRef := (WDispOn root loopName rootArity (dispMembersOf grp))
+  let _ = setRef wDispCtxRef (WDispOn root loopName rootArity (dispMembersOf grp))
   let bodyLines = emitClausesRef prog origName params arity clauses
-  wDispCtxRef := saved
+  let _ = setRef wDispCtxRef saved
   let allLocals = clauseLocals clauses
   let extraLocals = filterList (notIn params) (dedupKeep allLocals)
   let scratch = scratchLocals (clausesMaxDepth clauses)
@@ -7310,9 +7321,9 @@ emitLitSwitchTail prog env arity d root foc rest arms ((CTBranch (HLit (LChar c)
 -- W6: String-literal switch head — compare the focus $str against each literal via
 -- `$mdk_str_compare` (returns the i31 1 on equal), reusing the `PLit (LString)` logic.
 emitLitSwitchTail prog env arity d root foc rest arms ((CTBranch (HLit (LString s)) sub)::more) dft idt =
-  useStrSearchRef := True
-  useStrLeafRef := True
-  useStrRef := True
+  let _ = setRef useStrSearchRef True
+  let _ = setRef useStrLeafRef True
+  let _ = setRef useStrRef True
   indentBy idt (foc ++ ["ref.cast (ref $str)"] ++ emitLitRef (progEmit prog) (LString s) ++ ["call $mdk_str_compare", "ref.cast (ref i31)", "i31.get_u", "i32.const 1", "i32.eq"] ++ ["if"])
     ++ indentBy (idt + 1) (emitTreeTail prog env arity d root rest arms sub)
     ++ indentBy idt ["else"]
@@ -7375,18 +7386,18 @@ emitLamDefine prog lamName pats captured body =
   -- `$tmcloop` references that this lambda never declares as locals → invalid wasm.
   let savedTrmc = (progEmit prog).trmcCtx.value
   let savedDisp = wDispCtxRef.value
-  (progEmit prog).trmcCtx := WTrmcOff
-  wDispCtxRef := WDispOff
+  let _ = setRef (progEmit prog).trmcCtx WTrmcOff
+  let _ = setRef wDispCtxRef WDispOff
   -- A1 (poly-`Num`-on-Float, design row 6): a lambda's own params carry no declared
   -- sig, so its arith-used params are polymorphic `Num` (the arith-section accumulator
   -- `a x => a + x` in `fold`).  Seed them (unioned with the enclosing poly set, whose
   -- captured vars may also be poly) so the lambda body routes to the value helpers.
   let savedNumPoly = numPolyLocalsRef.value
-  numPolyLocalsRef := (dedupKeep (lamPolyParamNames pats body ++ savedNumPoly))
+  let _ = setRef numPolyLocalsRef (dedupKeep (lamPolyParamNames pats body ++ savedNumPoly))
   let bodyLines = emitRefTail prog bodyEnv arity body
-  numPolyLocalsRef := savedNumPoly
-  (progEmit prog).trmcCtx := savedTrmc
-  wDispCtxRef := savedDisp
+  let _ = setRef numPolyLocalsRef savedNumPoly
+  let _ = setRef (progEmit prog).trmcCtx savedTrmc
+  let _ = setRef wDispCtxRef savedDisp
   ["  (func " ++ lamName ++ " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))"]
     ++ map ("  " ++ _) localLines
     ++ indent (setup ++ capPrologue ++ argLoads ++ paramBinds ++ bodyLines)
@@ -7544,11 +7555,11 @@ emitLgLifted prog gid names groupCaps binds (CBind name clauses) =
   -- (see emitLamDefine — same hazard when lifted under a live trmc context).
   let savedTrmc = (progEmit prog).trmcCtx.value
   let savedDisp = wDispCtxRef.value
-  (progEmit prog).trmcCtx := WTrmcOff
-  wDispCtxRef := WDispOff
+  let _ = setRef (progEmit prog).trmcCtx WTrmcOff
+  let _ = setRef wDispCtxRef WDispOff
   let bodyLines = emitClausesRefEnv prog (names ++ groupCaps) name params arity clauses
-  (progEmit prog).trmcCtx := savedTrmc
-  wDispCtxRef := savedDisp
+  let _ = setRef (progEmit prog).trmcCtx savedTrmc
+  let _ = setRef wDispCtxRef savedDisp
   let memberLocals = names
   let bodyLocals = filterList (notIn (params ++ groupCaps ++ memberLocals)) (dedupKeep (clauseLocals clauses))
   let scratch = scratchLocals (clausesMaxDepth clauses)
@@ -8069,14 +8080,14 @@ seedArmNumEnv : Prog -> Pat -> CExpr -> (List String, List String)
 seedArmNumEnv prog pat body =
   let savedFloat = floatLocalsRef.value
   let savedNumPoly = numPolyLocalsRef.value
-  floatLocalsRef := ctorPatFloatBinders prog pat ++ savedFloat
-  numPolyLocalsRef := armNumPolyBinders prog pat body ++ savedNumPoly
+  let _ = setRef floatLocalsRef (ctorPatFloatBinders prog pat ++ savedFloat)
+  let _ = setRef numPolyLocalsRef (armNumPolyBinders prog pat body ++ savedNumPoly)
   (savedFloat, savedNumPoly)
 
 restoreArmNumEnv : (List String, List String) -> Unit
 restoreArmNumEnv (savedFloat, savedNumPoly) =
-  floatLocalsRef := savedFloat
-  numPolyLocalsRef := savedNumPoly
+  let _ = setRef floatLocalsRef savedFloat
+  setRef numPolyLocalsRef savedNumPoly
 
 -- a leaf: re-match arm i's pattern against `root` to bind its PVars (loading struct
 -- fields), then emit the body, then `br decLabel` with the value.
@@ -8285,9 +8296,9 @@ emitLitSwitchRef prog env d decLabel root foc rest arms ((CTBranch (HLit (LChar 
 -- W6: String-literal switch head — compare the focus $str against each literal via
 -- `$mdk_str_compare` (returns the i31 1 on equal), reusing the `PLit (LString)` logic.
 emitLitSwitchRef prog env d decLabel root foc rest arms ((CTBranch (HLit (LString s)) sub)::more) dft idt =
-  useStrSearchRef := True
-  useStrLeafRef := True
-  useStrRef := True
+  let _ = setRef useStrSearchRef True
+  let _ = setRef useStrLeafRef True
+  let _ = setRef useStrRef True
   indentBy idt (foc ++ ["ref.cast (ref $str)"] ++ emitLitRef (progEmit prog) (LString s) ++ ["call $mdk_str_compare", "ref.cast (ref i31)", "i31.get_u", "i32.const 1", "i32.eq"] ++ ["if"])
     ++ indentBy (idt + 1) (emitTreeRef prog env d decLabel root rest arms sub)
     ++ indentBy idt ["else"]

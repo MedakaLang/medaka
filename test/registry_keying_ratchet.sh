@@ -31,8 +31,9 @@
 #
 # THREE CHECKS:
 #   1. CrossRun + DriverState FIELD allowlist (compiler/types/typecheck.mdk)
-#   2. the cross-module WRITER ratchet: every `setRef crossRun.value.*` /
-#      `setRef driverState.value.*` site, pinned by TARGET FIELD (load-bearing)
+#   2. the cross-module WRITER ratchet: every `crossRun.value.*` /
+#      `driverState.value.*` WRITE site -- `setRef r v` or `r := v`, both live --
+#      pinned by TARGET FIELD (load-bearing)
 #   3. the THREE parallel engine module drivers' frame-seeding parity
 #      (evalModulesWith / evalModulesRootEnvWith / cevalModules)
 #
@@ -73,7 +74,7 @@
 # Implementation note on how D is made to fail correctly: every extraction
 # below uses `grep -oE` (extract ALL non-overlapping occurrences on a line),
 # never a line-level "does this line contain an allowed substring" test. A
-# line carrying two `setRef crossRun.value.*` targets yields TWO extracted
+# line carrying two `crossRun.value.*` write targets yields TWO extracted
 # tokens, each independently checked against the allowlist -- so an allowed
 # token sharing a line with a rogue one cannot hide the rogue one. This is the
 # occurrence-level discipline the #1110 Mono.TCon ratchet's own header
@@ -134,6 +135,36 @@ join_setref() {
 # strip a full-comment line outright; cut a trailing side comment in place.
 strip_comments() {
   grep -vE '^[[:space:]]*--' | sed -E 's/[[:space:]]--[[:space:]].*$//'
+}
+
+# write_targets BUNDLE: every `<BUNDLE>.value.<field>` WRITE target in $TC, under
+# EITHER spelling, one per line, deduped.
+#
+# There are two, and both are live. `setRef r v` was the only spelling until the
+# `setRef` -> `:=` codemod; that migration left 12 multi-line calls on `setRef`
+# (their RHS spans lines, which the cold-bootstrap seed's parser cannot take in
+# the `:=` form -- #1744), so a grep for either spelling ALONE now undercounts.
+# Undercounting here is exactly the A-1 hole this ratchet exists to prevent, and
+# it fails OPEN (a rogue write simply is not seen), so both arms are required.
+#
+# The `:=` arm needs no `join_setref`: the operator sits immediately after the
+# target, so a split `target :=⏎  (value)` still matches on its FIRST line. Only
+# the `setRef` arm can be broken by the split layout, which is why join_setref
+# wraps that arm and not this one.
+#
+# Both arms use `grep -oE` so EVERY occurrence on a line is extracted
+# independently -- a line carrying two writes yields two tokens, so an allowed
+# token cannot mask a rogue one beside it (control D).
+write_targets() {
+  {
+    join_setref "$TC" \
+      | strip_comments \
+      | grep -oE "setRef[ ]+$1\.value\.[A-Za-z_][A-Za-z0-9_]*" \
+      | sed -E 's/^setRef[ ]+//'
+    strip_comments < "$TC" \
+      | grep -oE "$1\.value\.[A-Za-z_][A-Za-z0-9_]*[ ]+:=" \
+      | sed -E 's/[ ]+:=$//'
+  } | LC_ALL=C sort -u
 }
 
 # body_of FILE START_REGEX: a function's own equation line (the line START_REGEX
@@ -352,8 +383,9 @@ echo "  ok: $cross_n CrossRun field(s), $driver_n DriverState field(s), $declenv
 # ═══════════════════════════════════════════════════════════════════════════
 # CHECK 2 — the cross-module WRITER ratchet (load-bearing)
 # ═══════════════════════════════════════════════════════════════════════════
-# Pins the exact SET of `setRef crossRun.value.<field>` / `setRef
-# driverState.value.<field>` write TARGETS anywhere in typecheck.mdk. A new
+# Pins the exact SET of `crossRun.value.<field>` / `driverState.value.<field>`
+# write TARGETS anywhere in typecheck.mdk, under BOTH spellings -- `setRef r v`
+# and `r := v` (see write_targets above; both are live post-codemod). A new
 # cross-module accumulator (or a new write path to an existing one) cannot be
 # added without a reviewer editing this allowlist -- which is the review
 # point #1111 exists to create. Every field from check 1 is expected to
@@ -361,7 +393,7 @@ echo "  ok: $cross_n CrossRun field(s), $driver_n DriverState field(s), $declenv
 # verified below) -- check 2 is a SEPARATE textual ratchet on the write SITES
 # themselves, not a restatement of check 1: it catches a NEW write occurrence
 # to a field regardless of whether that field is already declared.
-echo "checking #1111 crossRun / driverState setRef writer ratchet ..."
+echo "checking #1111 crossRun / driverState writer ratchet (setRef + :=) ..."
 
 cross_write_allowed=$(printf '%s\n' "$cross_expected" | sed 's/^/crossRun.value./')
 driver_write_allowed=$(printf '%s\n' "$driver_expected" | sed 's/^/driverState.value./')
@@ -373,21 +405,13 @@ driver_write_allowed=$(printf '%s\n' "$driver_expected" | sed 's/^/driverState.v
 # TWO such occurrences (control D) yields two tokens, not one, so an allowed
 # token cannot hide a rogue one on the same line (the A-1 hole this ratchet
 # must not repeat).
-cross_write_actual=$(join_setref "$TC" \
-  | strip_comments \
-  | grep -oE 'setRef[ ]+crossRun\.value\.[A-Za-z_][A-Za-z0-9_]*' \
-  | sed -E 's/^setRef[ ]+//' \
-  | LC_ALL=C sort -u)
-driver_write_actual=$(join_setref "$TC" \
-  | strip_comments \
-  | grep -oE 'setRef[ ]+driverState\.value\.[A-Za-z_][A-Za-z0-9_]*' \
-  | sed -E 's/^setRef[ ]+//' \
-  | LC_ALL=C sort -u)
+cross_write_actual=$(write_targets crossRun)
+driver_write_actual=$(write_targets driverState)
 
 cross_write_n=$(printf '%s\n' "$cross_write_actual" | grep -c .)
 driver_write_n=$(printf '%s\n' "$driver_write_actual" | grep -c .)
 if [ "$cross_write_n" -eq 0 ] || [ "$driver_write_n" -eq 0 ]; then
-  echo "FAIL: check 2 found ZERO setRef write targets for crossRun ($cross_write_n)"
+  echo "FAIL: check 2 found ZERO write targets for crossRun ($cross_write_n)"
   echo "  or driverState ($driver_write_n). Either the accessor pattern changed"
   echo "  (crossRun.value.* / driverState.value.*) or this check validated"
   echo "  nothing. Do not treat a zero extraction as a pass."
@@ -395,7 +419,7 @@ if [ "$cross_write_n" -eq 0 ] || [ "$driver_write_n" -eq 0 ]; then
 fi
 
 if [ "$cross_write_actual" != "$(printf '%s\n' "$cross_write_allowed" | LC_ALL=C sort)" ]; then
-  echo "FAIL: the set of \`setRef crossRun.value.*\` write targets changed."
+  echo "FAIL: the set of \`crossRun.value.*\` write targets changed."
   echo "  allowed:"
   printf '%s\n' "$cross_write_allowed" | LC_ALL=C sort | sed 's/^/    /'
   echo "  actual:"
@@ -407,7 +431,7 @@ if [ "$cross_write_actual" != "$(printf '%s\n' "$cross_write_allowed" | LC_ALL=C
   exit 1
 fi
 if [ "$driver_write_actual" != "$(printf '%s\n' "$driver_write_allowed" | LC_ALL=C sort)" ]; then
-  echo "FAIL: the set of \`setRef driverState.value.*\` write targets changed."
+  echo "FAIL: the set of \`driverState.value.*\` write targets changed."
   echo "  allowed:"
   printf '%s\n' "$driver_write_allowed" | LC_ALL=C sort | sed 's/^/    /'
   echo "  actual:"
@@ -445,7 +469,7 @@ frame_check() {
   body="$2"
   n=0
   for marker in \
-    'setRef ctorToTypeRef (buildCtorToType allDecls)' \
+    'ctorToTypeRef := buildCtorToType allDecls' \
     'installDispatchTables allDecls' \
     'collectCtors allDecls' \
     'let globalCells = map (n => (n, Ref VUnit)) globalNames'
@@ -476,7 +500,7 @@ frame_check "evalModulesRootEnvWith (eval.mdk)" "$withB_body"
 # / collectCtors, which also dodges the false collision with those two
 # functions' OWN one-line definitions elsewhere in eval.mdk (installDispatchTables
 # allDecls = ...) that a bare-substring whole-file count would hit.
-total_ctortotype=$(grep -F -c 'setRef ctorToTypeRef (buildCtorToType allDecls)' "$EV" "$CIE" | awk -F: '{s+=$2} END{print s+0}')
+total_ctortotype=$(grep -F -c 'ctorToTypeRef := buildCtorToType allDecls' "$EV" "$CIE" | awk -F: '{s+=$2} END{print s+0}')
 total_disp=$(grep -F -c 'let disp = installDispatchTables allDecls' "$EV" "$CIE" | awk -F: '{s+=$2} END{print s+0}')
 total_ctors=$(grep -F -c 'let ctors = collectCtors allDecls' "$EV" "$CIE" | awk -F: '{s+=$2} END{print s+0}')
 total_globalcells=$(grep -F -c 'let globalCells = map (n => (n, Ref VUnit)) globalNames' "$EV" "$CIE" | awk -F: '{s+=$2} END{print s+0}')
@@ -506,7 +530,7 @@ echo "  ok: all 4 frame operations appear in exactly 3 places total (no phantom 
 # is the one that always fires there; it never reaches the VCon arm that
 # needs the field-order table. Re-verified at this HEAD (not just cited):
 #   - eval.mdk:244 `ctorFieldOrdersRef = Ref []` (the only initializer)
-#   - `setRef ctorFieldOrdersRef` occurs EXACTLY ONCE in the whole compiler,
+#   - `ctorFieldOrdersRef :=` occurs EXACTLY ONCE in the whole compiler,
 #     at core_ir_eval.mdk:511, inside cevalModules
 #   - eval.mdk:1184-1188 (ERecordCreate) and eval.mdk:1479-1493
 #     (evalVariantUpdate) still branch on `lookupAssoc name
@@ -552,10 +576,10 @@ echo "  ok: all 4 frame operations appear in exactly 3 places total (no phantom 
 #     them. #1395's author probed three shapes against it and could not
 #     reproduce a defect. That is NOT FOUND, not SAFE, and nobody should cite
 #     it as a proof of absence.
-ceval_cfo=$(printf '%s\n' "$ceval_body" | grep -Fc 'setRef ctorFieldOrdersRef (buildCtorFieldOrders allDecls)')
-withA_cfo=$(printf '%s\n' "$withA_body" | grep -Fc 'setRef ctorFieldOrdersRef')
-withB_cfo=$(printf '%s\n' "$withB_body" | grep -Fc 'setRef ctorFieldOrdersRef')
-total_cfo=$(grep -F -c 'setRef ctorFieldOrdersRef' "$EV" "$CIE" | awk -F: '{s+=$2} END{print s+0}')
+ceval_cfo=$(printf '%s\n' "$ceval_body" | grep -Fc 'ctorFieldOrdersRef := buildCtorFieldOrders allDecls')
+withA_cfo=$(printf '%s\n' "$withA_body" | grep -Fc 'ctorFieldOrdersRef :=')
+withB_cfo=$(printf '%s\n' "$withB_body" | grep -Fc 'ctorFieldOrdersRef :=')
+total_cfo=$(grep -F -c 'ctorFieldOrdersRef :=' "$EV" "$CIE" | awk -F: '{s+=$2} END{print s+0}')
 if [ "$ceval_cfo" -ne 1 ] || [ "$withA_cfo" -ne 0 ] || [ "$withB_cfo" -ne 0 ] || [ "$total_cfo" -ne 1 ]; then
   echo "FAIL: the ctorFieldOrdersRef asymmetry changed shape (cevalModules=$ceval_cfo,"
   echo "  evalModulesWith=$withA_cfo, evalModulesRootEnvWith=$withB_cfo, total=$total_cfo;"
