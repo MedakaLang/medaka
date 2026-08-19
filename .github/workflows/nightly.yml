@@ -63,19 +63,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y clang libgc-dev
 
-      # Same cache as ci.yml's `gates`/`inlang` jobs — see that file's top-of-file
-      # "Caching" note for the completeness argument on the key.
-      - name: Restore cached medaka binary
-        id: medaka-cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            medaka
-            medaka_emitter
-          key: medaka-bin-v1-${{ hashFiles('compiler/**', 'stdlib/**', 'runtime/**', 'test/build_native_medaka.sh', 'test/bootstrap_from_seed.sh', 'test/build_oracles.sh', 'Makefile') }}
-
       - name: Build medaka (cold bootstrap from seed)
-        if: steps.medaka-cache.outputs.cache-hit != 'true'
         run: make medaka
 
       # check_removed_constructs.sh invokes ./medaka directly (no test/bin oracle
@@ -100,17 +88,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y clang libgc-dev
 
-      - name: Restore cached medaka binary
-        id: medaka-cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            medaka
-            medaka_emitter
-          key: medaka-bin-v1-${{ hashFiles('compiler/**', 'stdlib/**', 'runtime/**', 'test/build_native_medaka.sh', 'test/bootstrap_from_seed.sh', 'test/build_oracles.sh', 'Makefile') }}
-
       - name: Build medaka (cold bootstrap from seed)
-        if: steps.medaka-cache.outputs.cache-hit != 'true'
         run: make medaka
 
       - name: Build the oracles perf_scaling needs
@@ -147,17 +125,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y clang libgc-dev
 
-      - name: Restore cached medaka binary
-        id: medaka-cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            medaka
-            medaka_emitter
-          key: medaka-bin-v1-${{ hashFiles('compiler/**', 'stdlib/**', 'runtime/**', 'test/build_native_medaka.sh', 'test/bootstrap_from_seed.sh', 'test/build_oracles.sh', 'Makefile') }}
-
       - name: Build medaka (cold bootstrap from seed)
-        if: steps.medaka-cache.outputs.cache-hit != 'true'
         run: make medaka
 
       - name: Build the oracle eval_scaling needs
@@ -196,17 +164,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y clang libgc-dev
 
-      - name: Restore cached medaka binary
-        id: medaka-cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            medaka
-            medaka_emitter
-          key: medaka-bin-v1-${{ hashFiles('compiler/**', 'stdlib/**', 'runtime/**', 'test/build_native_medaka.sh', 'test/bootstrap_from_seed.sh', 'test/build_oracles.sh', 'Makefile') }}
-
       - name: Build medaka (cold bootstrap from seed)
-        if: steps.medaka-cache.outputs.cache-hit != 'true'
         run: make medaka
 
       # fuzz_diff.sh reads test/bin/fuzz_gen_main (the native program generator)
@@ -389,19 +347,7 @@ jobs:
             google-chrome-stable --version
           fi
 
-      # Same cache as this workflow's other two jobs and ci.yml's gates/wasm/inlang
-      # jobs (identical key -> shared cache hits across workflows). build_playground_wasm.sh
-      # calls `make medaka` itself (step "[1/2]"), so a warm cache just makes that a no-op.
-      - name: Restore cached medaka binary
-        id: medaka-cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            medaka
-            medaka_emitter
-          key: medaka-bin-v1-${{ hashFiles('compiler/**', 'stdlib/**', 'runtime/**', 'test/build_native_medaka.sh', 'test/bootstrap_from_seed.sh', 'test/build_oracles.sh', 'Makefile') }}
       - name: Build medaka (cold bootstrap from seed)
-        if: steps.medaka-cache.outputs.cache-hit != 'true'
         run: make medaka
 
       # The real, documented build command (playground/e2e/README.md "How to run":
