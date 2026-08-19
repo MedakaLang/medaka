@@ -4455,15 +4455,15 @@ originTraceLog = Ref []
 -- once per module can never attribute one module's rows to the next.
 export setOriginTrace : Bool -> Unit
 setOriginTrace b =
-  let _ = setRef originTraceLog []
-  setRef originTraceEnabled b
+  originTraceLog := []
+  originTraceEnabled := b
 
 -- A flat driver records the decls it is about to hand to typecheck, labelled with
 -- WHICH HALF they are.  A no-op unless a probe turned the trace on.
 export noteOriginTrace : String -> List Decl -> Unit
 noteOriginTrace label decls =
   if originTraceEnabled.value then
-    setRef originTraceLog (originTraceLog.value ++ [(label, decls)])
+    originTraceLog := originTraceLog.value ++ [(label, decls)]
   else
     ()
 
@@ -4471,5 +4471,5 @@ noteOriginTrace label decls =
 export takeOriginTrace : Unit -> List (String, List Decl)
 takeOriginTrace _ =
   let rows = originTraceLog.value
-  let _ = setRef originTraceLog []
+  originTraceLog := []
   rows

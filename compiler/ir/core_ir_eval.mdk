@@ -329,7 +329,7 @@ cevalRecLet env f e1 e2 =
   let cell = Ref VUnit
   let recEnv = pushFrame env [(f, cell)]
   let v = ceval recEnv e1
-  let _ = setRef cell v
+  cell := v
   ceval recEnv e2
 
 cevalLet : EvalEnv (Value e) -> Pat -> CExpr -> CExpr -> <e> Value e
@@ -379,7 +379,7 @@ cBindCell (CBind name _) = (name, Ref VUnit)
 cInstallGroup : EvalEnv (Value e) -> List (String, Ref (Value e)) -> List CBind -> <e> Unit
 cInstallGroup _ _ [] = ()
 cInstallGroup env cells ((CBind name clauses)::rest) =
-  let _ = setRef (findCell cells name) (cGroupValue env clauses)
+  findCell cells name := cGroupValue env clauses
   cInstallGroup env cells rest
 
 -- let-group binding value: a nullary single clause is eager (recursive let);
@@ -399,7 +399,7 @@ cClauseClosure env (CClause pats body) = VClosureF env pats (e => ceval e body)
 -- point-free defs can reference values installed later, in any order.
 export cevalProgram : CProgram -> <e> List (String, Value e)
 cevalProgram (CProgram groups ctorArs ctorToType implEntries) =
-  let _ = setRef ctorToTypeRef ctorToType
+  ctorToTypeRef := ctorToType
   let ctors = map ctorBinding ctorArs
   let allNames = map fst boolSeeds ++ map fst (externBindings ()) ++ map fst ctors ++ map cBindName groups ++ cImplMethodNames implEntries
   let cells = map (n => (n, Ref VUnit)) allNames
@@ -471,7 +471,7 @@ cBindName (CBind n _) = n
 cInstallTopGroups : EvalEnv (Value e) -> List (String, Ref (Value e)) -> List CBind -> <e> Unit
 cInstallTopGroups _ _ [] = ()
 cInstallTopGroups env cells ((CBind n clauses)::rest) =
-  let _ = setRef (findCell cells n) (cTopGroupValue env clauses)
+  findCell cells n := cTopGroupValue env clauses
   cInstallTopGroups env cells rest
 
 cTopGroupValue : EvalEnv (Value e) -> List CClause -> Value e
@@ -492,7 +492,7 @@ cevalMain prog = match lookupBinding "main" (cevalProgram prog)
 -- (=== EVAL === goldens) rather than pp_value of `main`.
 export cevalOutput : CProgram -> String
 cevalOutput prog =
-  let _ = setRef outputRef ""
+  outputRef := ""
   let binds = cevalProgram prog
   let _ = cRunMainForEffect binds
   outputRef.value
@@ -529,8 +529,8 @@ export cevalModules : List Decl -> List (String, List Decl) -> <e> List (String,
 cevalModules preludeDecls modules =
   let moduleDecls = flatMap snd modules
   let allDecls = preludeDecls ++ moduleDecls
-  let _ = setRef ctorToTypeRef (buildCtorToType allDecls)
-  let _ = setRef ctorFieldOrdersRef (buildCtorFieldOrders allDecls)
+  ctorToTypeRef := buildCtorToType allDecls
+  ctorFieldOrdersRef := buildCtorFieldOrders allDecls
   let disp = installDispatchTables allDecls
   let ctors = collectCtors allDecls
   let preludeGroups = lowerGroups preludeDecls
@@ -609,7 +609,7 @@ cRootLocals (_::rest) = cRootLocals rest
 -- `main` for its IO side-effects, return the captured stdout.
 export cevalModulesOutput : List Decl -> List (String, List Decl) -> String
 cevalModulesOutput preludeDecls modules =
-  let _ = setRef outputRef ""
+  outputRef := ""
   let binds = cevalModules preludeDecls modules
   let _ = cRunMainForEffect binds
   outputRef.value

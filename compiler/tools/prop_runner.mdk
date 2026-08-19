@@ -46,7 +46,7 @@ rngNextLocal : Unit -> Int
 -- lint-disable-next-line rule-duplicate-body
 rngNextLocal _ =
   let s = (rngStateRef.value * 1103515245 + 12345) % 2147483648
-  let _ = setRef rngStateRef s
+  rngStateRef := s
   s
 
 randIntRange : Int -> Int -> Int

@@ -737,10 +737,10 @@ wrappedRead cacheRef staleRef read path = match read path
   None => None
   Some src => match parseResult src
     Ok _ =>
-      let _ = setRef cacheRef (cachePut path src cacheRef.value)
+      cacheRef := cachePut path src cacheRef.value
       Some src
     Err e =>
-      let _ = setRef staleRef ((path, parseErrDiag path e)::staleRef.value)
+      staleRef := (path, parseErrDiag path e)::staleRef.value
       match lookupAssoc path cacheRef.value
         Some good => Some good
         None => Some src  -- no cached version → use the broken one
@@ -792,7 +792,7 @@ preludeDesugared parseCacheRef src = match lookupAssoc src parseCacheRef.value
   Some decls => decls
   None =>
     let decls = desugar (parse src)
-    let _ = setRef parseCacheRef ((src, decls)::parseCacheRef.value)
+    parseCacheRef := (src, decls)::parseCacheRef.value
     decls
 
 export analyzeProject : Ref (List (String, String)) -> Ref (List (String, List Decl)) -> (String -> Option String) -> String -> List String -> String -> String -> <IO> List (String, List Diag)

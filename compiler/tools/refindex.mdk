@@ -224,7 +224,7 @@ hmSetC ctx m k v =
 
 nextFresh : Ctx -> Int
 nextFresh ctx =
-  let _ = ctx.fresh := ctx.fresh.value + 1
+  ctx.fresh := ctx.fresh.value + 1
   ctx.fresh.value
 
 -- ── small helpers ────────────────────────────────────────────────────────────
@@ -1323,6 +1323,8 @@ emptyIndex _ =
 export buildRefIndex : (String -> Option String) -> String -> List String -> String -> String -> <IO> RefIndex
 buildRefIndex read entry roots runtimeSrc coreSrc =
   let parseCache = Ref []
+  -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
+  -- lint-disable-next-line rule-prefer-assign-op
   match loadProgramFilesLocatedCached parseCache read entry roots
     Err _ => emptyIndex ()
     Ok mods =>
@@ -1522,6 +1524,8 @@ topoOrderModules ctx read midPaths =
 -- from `buildRefIndex`). `read` is the same editor-buffer override callback
 -- (unsaved buffers win over disk).
 export buildRefIndexProject : (String -> Option String) -> String -> String -> String -> <IO> RefIndex
+-- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
+-- lint-disable-next-line rule-prefer-assign-op
 buildRefIndexProject read projectRoot runtimeSrc coreSrc =
   let ctx = newCtx ()
   let _ = seedPrelude ctx "runtime" runtimeSrc

@@ -69,14 +69,14 @@ preludeNamesRef = Ref []
 -- ── Initialise session ────────────────────────────────────────────────────
 export initSession : List Decl -> List Decl -> Unit
 initSession runtimeDecls preludeDecls =
-  let _ = setRef runtimeDeclsRef runtimeDecls
-  let _ = setRef preludeDeclsRef preludeDecls
+  runtimeDeclsRef := runtimeDecls
+  preludeDeclsRef := preludeDecls
   let prelSchemes = checkProgramSchemes [] preludeDecls
   let prelNames = map fst prelSchemes
-  let _ = setRef preludeNamesRef prelNames
-  let _ = setRef knownNamesRef prelNames
-  let _ = setRef accumulatedRef []
-  setRef userBindingsRef []
+  preludeNamesRef := prelNames
+  knownNamesRef := prelNames
+  accumulatedRef := []
+  userBindingsRef := []
 
 -- ── Input classification ──────────────────────────────────────────────────
 isDeclStartToken : Token -> Bool
@@ -266,10 +266,10 @@ processDeclInput src =
       let typeAnns = declTypeAnnotations newDecls
       let _ = mapIO_ printTypeAnn typeAnns
       let newNames = map fst newSchemes ++ map snd typeAnns
-      let _ = setRef accumulatedRef (accumulatedRef.value ++ newDecls)
-      let _ = setRef knownNamesRef (known ++ newNames)
+      accumulatedRef := accumulatedRef.value ++ newDecls
+      knownNamesRef := known ++ newNames
       let newUserBindings = mapMut schemeToBinding newSchemes
-      setRef userBindingsRef (userBindingsRef.value ++ newUserBindings)
+      userBindingsRef := userBindingsRef.value ++ newUserBindings
 
 printNewScheme : (String, Scheme) -> <IO> Unit
 printNewScheme (n, s) = putStrLn "val \{n} : \{ppScheme s}"
@@ -344,9 +344,9 @@ insertSorted (k, v) ((k2, v2)::rest)
 -- ── Process :reset command ────────────────────────────────────────────────
 processReset : Unit -> <IO> Unit
 processReset _ =
-  let _ = setRef accumulatedRef []
-  let _ = setRef userBindingsRef []
-  let _ = setRef knownNamesRef preludeNamesRef.value
+  accumulatedRef := []
+  userBindingsRef := []
+  knownNamesRef := preludeNamesRef.value
   putStrLn "Session reset"
 
 -- ── Meta-command dispatch ─────────────────────────────────────────────────

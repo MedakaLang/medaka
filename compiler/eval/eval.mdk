@@ -284,13 +284,13 @@ ifaceDispatchRef = Ref []
 export installDispatchTables : List Decl -> List ((String, String, String), List Int)
 installDispatchTables allDecls =
   let disp = buildIfaceDispatch allDecls
-  let _ = setRef methodReqCountRef (buildMethodReqCounts allDecls)
-  let _ = setRef ifaceDispatchRef disp
+  methodReqCountRef := (buildMethodReqCounts allDecls)
+  ifaceDispatchRef := disp
   -- #1047: installed HERE for the same reason `lowerImpls` installs
   -- `installIfaceImplHeads` — this is the ONE call every module driver (eval's
   -- two + core_ir_eval's `cevalModules`) already makes with the WHOLE program's
   -- decls, so a driver cannot acquire the dispatch tables and forget this one.
-  let _ = setRef declImplIfaceIdsRef (declImplIfaceIdTable allDecls)
+  declImplIfaceIdsRef := (declImplIfaceIdTable allDecls)
   disp
 
 -- ── #1047: declared impl → the INTERFACE IDENTITY it implements ─────────────
@@ -732,9 +732,9 @@ forceCell cell name = match cell.value
 
 forceMemo : Ref (Value e) -> String -> (Unit -> <e> Value e) -> <e> Value e
 forceMemo cell name f =
-  let _ = setRef cell (VThunk (blackholeCell name))
+  cell := VThunk (blackholeCell name)
   let v = f ()
-  let _ = setRef cell v
+  cell := v
   v
 
 -- The thunk a cell holds *while it is being forced*.  Re-entering the force of
@@ -989,13 +989,13 @@ applyValue f x = apply f x
 export apply : Value e -> Value e -> <e> Value e
 apply f x =
   let d = evalDepthRef.value + 1
-  let _ = setRef evalDepthRef d
+  evalDepthRef := d
   let _ = if d > evalDepthLimit then
     runtimePanic "E-STACK-OVERFLOW" "recursion too deep (evaluator call depth exceeded \{intToString evalDepthLimit}); the tree-walking interpreter has no tail-call optimisation"
   else
     ()
   let r = applyDispatch f x
-  let _ = setRef evalDepthRef (d - 1)
+  evalDepthRef := d - 1
   r
 
 applyDispatch : Value e -> Value e -> <e> Value e
@@ -1745,7 +1745,7 @@ blockRecLet env f e rest =
   let cell = Ref VUnit
   let recEnv = pushFrame env [(f, cell)]
   let v = eval recEnv e
-  let _ = setRef cell v
+  cell := v
   evalBlock recEnv rest
 
 blockLet : EvalEnv (Value e) -> Pat -> Expr -> List DoStmt -> <e> Value e
@@ -1758,7 +1758,7 @@ evalRecLet env f e1 e2 =
   let cell = Ref VUnit
   let recEnv = pushFrame env [(f, cell)]
   let v = eval recEnv e1
-  let _ = setRef cell v
+  cell := v
   eval recEnv e2
 
 evalLet : EvalEnv (Value e) -> Pat -> Expr -> Expr -> <e> Value e
@@ -1779,7 +1779,7 @@ letBindCell (LetBind name _) = (name, Ref VUnit)
 installGroup : EvalEnv (Value e) -> List (String, Ref (Value e)) -> List LetBind -> <e> Unit
 installGroup _ _ [] = ()
 installGroup env cells ((LetBind name clauses)::rest) =
-  let _ = setRef (findCell cells name) (groupValue env (map funClauseToClause clauses))
+  findCell cells name := groupValue env (map funClauseToClause clauses)
   installGroup env cells rest
 
 funClauseToClause : FunClause -> (List Pat, Expr)
@@ -2139,7 +2139,7 @@ forceMemoCell cell env body = match cell.value
   None => storeMemo cell (eval env body)
 
 storeMemo : Ref (Option (Value e)) -> Value e -> <e> Value e
-storeMemo cell v = seqV (setRef cell (Some v)) v
+storeMemo cell v = seqV (cell := Some v) v
 
 seqV : Unit -> Value e -> Value e
 seqV _ v = v
@@ -2382,7 +2382,7 @@ pendingRunDiags = Ref []
 updateEvalLoc : Loc -> Unit
 updateEvalLoc (Loc f sl sc el ec)
   | sl == 1 && sc == 0 && el == 1 && ec == 0 = ()
-  | otherwise = setRef currentEvalLoc (Loc f sl sc el ec)
+  | otherwise = currentEvalLoc := Loc f sl sc el ec
 
 -- Chokepoint for user-facing runtime errors.  `panic` is a noreturn C-abort
 -- that never returns to Medaka, so the located, coded diagnostic must be
@@ -2422,7 +2422,7 @@ fmtSentinel = "\u{01}"
 
 appendOutput : String -> <e> Value e
 appendOutput s =
-  let _ = setRef outputRef (outputRef.value ++ s)
+  outputRef := (outputRef.value ++ s)
   -- Snapshot the buffer's raw bytes into the native runtime (O(1)
   -- pointer+length store; no allocation, no observable effect on its own —
   -- see stdlib/runtime.mdk's stashRunStdout doc comment) so a subsequent
@@ -2471,7 +2471,7 @@ pSetRef _ _ = panic "setRef: not a Ref"
 
 doSetRef : Ref (Value e) -> Value e -> <e> Value e
 doSetRef cell v =
-  let _ = setRef cell v
+  cell := v
   VUnit
 
 unString : Value e -> String
@@ -2585,7 +2585,7 @@ rngU64Ref = Ref (0, 0, 0, 0)
 rngDraw : Unit -> (Int, Int, Int, Int)
 rngDraw _ =
   let s = add64 rngU64Ref.value u64Golden
-  let _ = setRef rngU64Ref s
+  rngU64Ref := s
   u64Finalize s
 
 -- randomInt lo hi (INCLUSIVE). Mirrors mdk_random_int (medaka_rt.c) EXACTLY,
@@ -2629,7 +2629,7 @@ charFromCodeUnsafe n = match charFromCode n
 
 pSetSeed : Value e -> <e> Value e
 pSetSeed (VInt seed) =
-  let _ = setRef rngU64Ref (ofInt seed)
+  rngU64Ref := ofInt seed
   VUnit
 pSetSeed _ = panic "setSeed: expected Int"
 
@@ -3157,13 +3157,13 @@ mkGroup defs name = (name, clausesForName name defs)
 export installConsts : List (String, Ref (Value e)) -> List (String, Value e) -> <e> Unit
 installConsts _ [] = ()
 installConsts cells ((n, v)::rest) =
-  let _ = setRef (findCell cells n) v
+  findCell cells n := v
   installConsts cells rest
 
 installGroups : EvalEnv (Value e) -> List (String, Ref (Value e)) -> List (String, List (List Pat, Expr)) -> <e> Unit
 installGroups _ _ [] = ()
 installGroups env cells ((n, clauses)::rest) =
-  let _ = setRef (findCell cells n) (topGroupValue env clauses)
+  findCell cells n := topGroupValue env clauses
   installGroups env cells rest
 
 export lookupBinding : String -> List (String, Value e) -> Option (Value e)
@@ -3256,7 +3256,7 @@ evalModulesWith extraExterns preludeDecls modules =
   let externs = externBindings () ++ extraExterns
   let moduleDecls = flatMap snd modules
   let allDecls = preludeDecls ++ moduleDecls
-  let _ = setRef ctorToTypeRef (buildCtorToType allDecls)
+  ctorToTypeRef := buildCtorToType allDecls
   let disp = installDispatchTables allDecls
   let ctors = collectCtors allDecls
   let preludeGroups = groupsOf preludeDecls
@@ -3374,7 +3374,7 @@ evalModulesRootEnvWith extraExterns preludeDecls modules =
   let externs = externBindings () ++ extraExterns
   let moduleDecls = flatMap snd modules
   let allDecls = preludeDecls ++ moduleDecls
-  let _ = setRef ctorToTypeRef (buildCtorToType allDecls)
+  ctorToTypeRef := buildCtorToType allDecls
   let disp = installDispatchTables allDecls
   let ctors = collectCtors allDecls
   let preludeGroups = groupsOf preludeDecls
@@ -3674,7 +3674,7 @@ firstOrEmpty (x::_) = x
 -- module's `main` for its IO side-effects, return the captured stdout.
 export evalModulesOutput : List Decl -> List (String, List Decl) -> String
 evalModulesOutput preludeDecls modules =
-  let _ = setRef outputRef ""
+  outputRef := ""
   let binds = evalModules preludeDecls modules
   let _ = runMainForEffect binds
   outputRef.value
@@ -3954,7 +3954,7 @@ testCapableExterns _ = [
 -- (typecheck.expandIoInBound), so writing them out one by one would buy nothing.
 export evalModulesOutputRun : List Decl -> List (String, List Decl) -> <IO> String
 evalModulesOutputRun preludeDecls modules =
-  let _ = setRef outputRef ""
+  outputRef := ""
   -- Only the real `medaka run` CLI driver reaches this function (never the
   -- pure differential-oracle probes — see appendOutput/stashRunStdout above),
   -- so this is the one place it is safe to arm the abort-time flush.
@@ -3972,7 +3972,7 @@ evalModulesOutputRun preludeDecls modules =
 -- stored row, appending to outputRef.  Mirrors bin/main.ml's Run-branch dispatch.
 export evalModulesOutputAsync : List Decl -> List (String, List Decl) -> <e> String
 evalModulesOutputAsync preludeDecls modules =
-  let _ = setRef outputRef ""
+  outputRef := ""
   -- Same reasoning as evalModulesOutputRun above: only the real `medaka run`
   -- CLI driver (an Async main) reaches this function.
   let _ = enableRunStdoutFlush ()

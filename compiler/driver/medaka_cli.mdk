@@ -1794,7 +1794,7 @@ finishRunEval : String -> Bool -> (List Decl, List (String, List Decl)) -> List 
 finishRunEval target jsonMode elaborated mods cohWarns =
   -- The demoted coherence warning first, matching `checkRoute`'s `warns ++ mainWarns`
   -- order.  On `--json` it is staged instead of printed (see above).
-  let _ = if jsonMode then setRef pendingRunDiags (nonEmptyTriples cohWarns)
+  let _ = if jsonMode then (pendingRunDiags := (nonEmptyTriples cohWarns))
     else emitWarningLines (flatMap renderTripleWarnings cohWarns)
   -- 0.1.0 main-shape warning: elaborateModules already ran over the WHOLE graph,
   -- so mainSchemeRef is already populated — no extra typecheck pass needed.
@@ -1806,8 +1806,8 @@ finishRunEval target jsonMode elaborated mods cohWarns =
         None => []
     None => []
   let _ = emitLocatedWarnings (readFileSafe target) target mainWarns
-  let _ = setRef currentEvalFile target
-  let _ = setRef runJsonMode jsonMode
+  currentEvalFile := target
+  runJsonMode := jsonMode
   let _ = putStr (runProgramOutput (fst elaborated) (snd elaborated))
   -- Reached only when the program did NOT panic (`panic` is a noreturn C abort), so
   -- this and `runtimePanic`'s merge are mutually exclusive — the envelope is emitted
@@ -1867,7 +1867,7 @@ runRunCmd argv =
       -- publish the args AFTER the target for the run-path `args` extern
       -- (eval.mdk's pArgs reads this Ref): `medaka run prog.mdk a b` ⇒ ["a","b"],
       -- matching what the same program's compiled binary sees.
-      let _ = setRef progArgsRef progArgs
+      progArgsRef := progArgs
       match readPreludeFile rtPath
         Err msg =>
           let _ = ePutStrLn msg

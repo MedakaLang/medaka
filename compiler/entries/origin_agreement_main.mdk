@@ -453,7 +453,7 @@ walkDecls acc (d::rest) =
 
 noteHead : Ref (List (String, TyConOrigin)) -> Ty -> (Ty, Bool)
 noteHead acc (t@(TyCon { tyConName = n, tyConOrigin = o })) =
-  let _ = setRef acc ((n, o)::acc.value)
+  acc := (n, o)::acc.value
   (t, False)
 noteHead _ t = (t, False)
 
@@ -465,7 +465,7 @@ noteHead _ t = (t, False)
 -- each other.  The tag is what `carrierCounts` below asserts on.
 noteIfaceOcc : Ref (List (String, TyConOrigin)) -> String -> String -> TyConOrigin -> TyConOrigin
 noteIfaceOcc acc _ n o =
-  let _ = setRef acc ((ifaceKey n, o)::acc.value)
+  acc := (ifaceKey n, o)::acc.value
   o
 
 -- ── the PER-CARRIER anti-vacuity counts (#1110 PR C) ─────────────────────────
@@ -509,7 +509,7 @@ walkCarrier tag acc (d::rest) =
 bumpCarrier : String -> Ref Int -> String -> String -> TyConOrigin -> TyConOrigin
 bumpCarrier tag acc carrier _ o =
   if carrier == tag then
-    let _ = setRef acc (acc.value + 1)
+    acc := acc.value + 1
     o
   else o
 
