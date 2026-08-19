@@ -174,7 +174,7 @@ helper**. Mirror: seed an Eq-poly-locals set the same way (params whose declared
 type is a type var used in an `==`/`!=`) and add an `isPolyEqOperand` arm in
 `emitBinRef` that routes to the dict `eq`; concrete operands keep
 `emitValueCmpRef`/`_num`/inline `i64.eq`. Gate the helper emission like
-`useValueCmpRef`.
+`WasmEmit.useValueCmp`.
 
 **Reused machinery, by name:** `pendingImplObligations`/`checkImplObligations`,
 `missingConstraintMsg`/`reportUncovered`, `binopMethod`/`binopMethodApp`/

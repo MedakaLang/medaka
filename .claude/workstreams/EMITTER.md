@@ -108,8 +108,10 @@ retain only the byte-writer import.
 mint the context and `Prog` routes these helpers without changing successful WAT order.
 X-W.H2b.10 moves one fact, `hashFloat` runtime demand, into `WasmEmit`; census coverage is
 ownership-only. X-W.H2b.11 moves `charFromCode` runtime demand into `WasmEmit`; census coverage is
-ownership-only. CharClass, FloatRng, StrCodec, and Math-import demand use the same fresh
-carrier; `diff_wasm_typed.sh` ratchets the normalized ambient top-level `Ref` set.
+ownership-only. CharClass, FloatRng, StrCodec, Math-import, value-comparison,
+String-to-Float, process-argument, and byte-file demand use the same fresh carrier;
+byte-file read and write producers have separate controls using a gate-owned temporary
+path. `diff_wasm_typed.sh` ratchets the 15-member normalized ambient top-level `Ref` set.
 H2b/#1407 stay open. Do not add new ambient semantic-input or
 gap-lifecycle siblings.
 

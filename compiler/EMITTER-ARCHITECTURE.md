@@ -161,8 +161,11 @@ entry and `test/wasm/diff_wasm_typed.sh` grade strict, record, census, and
 no-writer isolation. X-W.H2b.10 moves one fact, `hashFloat` runtime demand, into
 `WasmEmit`; census coverage is ownership-only. X-W.H2b.11 moves `charFromCode`
 runtime demand into `WasmEmit`; census coverage is ownership-only. CharClass, FloatRng,
-StrCodec, and Math-import demand follow the same per-emission ownership. The normalized
-ambient top-level `Ref` set remains ratcheted. H2b and #1407 remain open.
+StrCodec, and Math-import demand follow the same per-emission ownership. Value comparison,
+String-to-Float, process-argument, and byte-file runtime demand now use that carrier too;
+the byte-file controls separate read and write producers and execute only against a
+gate-owned temporary path. Fifteen normalized ambient top-level `Ref` authorities remain,
+so H2b and #1407 remain open.
 
 ### 3.3 Per-program derived indexes
 
