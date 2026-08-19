@@ -344,11 +344,15 @@ PERLEOF
 
 # ── signature escaping ───────────────────────────────────────────────────────
 # The ledger holds signatures as ONE LINE each, and both `|` (its field separator) and
-# `;` (the signature's own separator) can appear in a program's stdout. The escape is
+# `;` (the signature's own separator) can appear in a program's stdout — and so can a
+# literal TAB, which is the OUTER ledger record's own separator (the `printf
+# '%s\t%s\n'` below, split back apart with `cut -f2`). An unescaped TAB truncates the
+# signature there, before comparison, letting two genuinely different signatures
+# compare EQUAL and the gate silently miss a real divergence (#1634). The escape is
 # applied to the OBSERVED output only, and the ledger stores the ESCAPED form — so the
 # gate never unescapes anything, it compares escaped strings. That keeps the mapping
-# injective without a parser: \ -> \\ , | -> \p , ; -> \s , newline -> \n.
-esc() { perl -0777 -pe 's/\\/\\\\/g; s/\|/\\p/g; s/;/\\s/g; s/\n/\\n/g' "$1"; }
+# injective without a parser: \ -> \\ , | -> \p , ; -> \s , TAB -> \t , newline -> \n.
+esc() { perl -0777 -pe 's/\\/\\\\/g; s/\|/\\p/g; s/;/\\s/g; s/\t/\\t/g; s/\n/\\n/g' "$1"; }
 
 # ── enumerate the corpus. DERIVED from the directory listing; nothing is registered ──
 cases=''
