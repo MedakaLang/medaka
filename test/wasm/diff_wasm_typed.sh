@@ -22,6 +22,13 @@
 #
 # Reports N/M; non-zero exit on any divergence.  Opt-in skip (exit 2) when the
 # toolchain (wasm-tools / Node>=22 / clang) is unavailable.
+#
+# This gate uses bash-only syntax (here-strings). CI always invokes it as
+# `bash test/wasm/diff_wasm_typed.sh` (see .github/workflows/ci.yml); a direct `sh
+# test/wasm/diff_wasm_typed.sh` invocation would otherwise die on the first `<<<`
+# with an opaque parse error. Re-exec under bash when we were not started by it —
+# same convention as test/diff_compiler_engines.sh / diff_compiler_lint_multi.sh.
+[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
