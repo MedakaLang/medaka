@@ -8634,7 +8634,7 @@ inferPat env (PList pats) = inferPatList env pats
 inferPat env (PAs x _ p) = inferPatAs env x p
 inferPat env (PRec name fields _) = inferPatRec env name fields
 inferPat _ (PRng lo hi _) = inferPatRng lo hi
-inferPat _ _ = panic "typecheck: unsupported pattern (slice 1)"
+inferPat _ _ = panic "typecheck: unsupported pattern"
 
 -- range pattern `lo..hi` / `lo..=hi`: only Int and Char bounds are valid
 -- (mirrors lib/typecheck.ml PRng arm); binds no variables
@@ -8826,7 +8826,7 @@ infer env (EDoOrigin l e) =
   let t = infer env e
   currentDoOrigin := None
   t
-infer _ _ = panic "typecheck: unsupported expression (slice 1)"
+infer _ _ = panic "typecheck: unsupported expression"
 
 inferArrayLit : TcEnv -> List Expr -> Mono
 inferArrayLit env es =

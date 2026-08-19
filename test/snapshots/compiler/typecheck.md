@@ -8638,7 +8638,7 @@ inferPat env (PList pats) = inferPatList env pats
 inferPat env (PAs x _ p) = inferPatAs env x p
 inferPat env (PRec name fields _) = inferPatRec env name fields
 inferPat _ (PRng lo hi _) = inferPatRng lo hi
-inferPat _ _ = panic "typecheck: unsupported pattern (slice 1)"
+inferPat _ _ = panic "typecheck: unsupported pattern"
 
 -- range pattern `lo..hi` / `lo..=hi`: only Int and Char bounds are valid
 -- (mirrors lib/typecheck.ml PRng arm); binds no variables
@@ -8830,7 +8830,7 @@ infer env (EDoOrigin l e) =
   let t = infer env e
   currentDoOrigin := None
   t
-infer _ _ = panic "typecheck: unsupported expression (slice 1)"
+infer _ _ = panic "typecheck: unsupported expression"
 
 inferArrayLit : TcEnv -> List Expr -> Mono
 inferArrayLit env es =
@@ -32587,7 +32587,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "inferPat" ((PVar "env") (PCon "PAs" (PVar "x") PWild (PVar "p"))) (EApp (EApp (EApp (EVar "inferPatAs") (EVar "env")) (EVar "x")) (EVar "p")))
 (DFunDef false "inferPat" ((PVar "env") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EApp (EApp (EApp (EVar "inferPatRec") (EVar "env")) (EVar "name")) (EVar "fields")))
 (DFunDef false "inferPat" (PWild (PCon "PRng" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EVar "inferPatRng") (EVar "lo")) (EVar "hi")))
-(DFunDef false "inferPat" (PWild PWild) (EApp (EVar "panic") (ELit (LString "typecheck: unsupported pattern (slice 1)"))))
+(DFunDef false "inferPat" (PWild PWild) (EApp (EVar "panic") (ELit (LString "typecheck: unsupported pattern"))))
 (DTypeSig false "inferPatRng" (TyFun (TyCon "Lit") (TyFun (TyCon "Lit") (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
 (DFunDef false "inferPatRng" ((PCon "LInt" PWild) (PCon "LInt" PWild)) (ETuple (EApp (EVar "tconBuiltin") (ELit (LString "Int"))) (EListLit)))
 (DFunDef false "inferPatRng" ((PCon "LChar" PWild) (PCon "LChar" PWild)) (ETuple (EApp (EVar "tconBuiltin") (ELit (LString "Char"))) (EListLit)))
@@ -32665,7 +32665,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "infer" ((PVar "env") (PCon "EHeadAnnot" (PVar "e") (PVar "ty"))) (EApp (EApp (EApp (EVar "inferHeadAnnot") (EVar "env")) (EVar "e")) (EVar "ty")))
 (DFunDef false "infer" ((PVar "env") (PCon "ELoc" (PVar "l") (PVar "e"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EApp (EVar "Some") (EVar "l")))) (DoExpr (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))))
 (DFunDef false "infer" ((PVar "env") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EApp (EVar "Some") (EVar "l")))) (DoLet false false (PVar "t") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EVar "None"))) (DoExpr (EVar "t"))))
-(DFunDef false "infer" (PWild PWild) (EApp (EVar "panic") (ELit (LString "typecheck: unsupported expression (slice 1)"))))
+(DFunDef false "infer" (PWild PWild) (EApp (EVar "panic") (ELit (LString "typecheck: unsupported expression"))))
 (DTypeSig false "inferArrayLit" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Mono"))))
 (DFunDef false "inferArrayLit" ((PVar "env") (PVar "es")) (EBlock (DoLet false false (PVar "elem") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unifyAll") (EVar "elem")) (EApp (EApp (EVar "inferEach") (EVar "env")) (EVar "es")))) (DoExpr (EApp (EApp (EVar "TApp") (EApp (EVar "tconBuiltin") (ELit (LString "Array")))) (EVar "elem")))))
 (DTypeSig false "inferIntRange" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Mono") (TyCon "Mono"))))))
@@ -37692,7 +37692,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "inferPat" ((PVar "env") (PCon "PAs" (PVar "x") PWild (PVar "p"))) (EApp (EApp (EApp (EVar "inferPatAs") (EVar "env")) (EVar "x")) (EVar "p")))
 (DFunDef false "inferPat" ((PVar "env") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EApp (EApp (EApp (EVar "inferPatRec") (EVar "env")) (EVar "name")) (EVar "fields")))
 (DFunDef false "inferPat" (PWild (PCon "PRng" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EVar "inferPatRng") (EVar "lo")) (EVar "hi")))
-(DFunDef false "inferPat" (PWild PWild) (EApp (EVar "panic") (ELit (LString "typecheck: unsupported pattern (slice 1)"))))
+(DFunDef false "inferPat" (PWild PWild) (EApp (EVar "panic") (ELit (LString "typecheck: unsupported pattern"))))
 (DTypeSig false "inferPatRng" (TyFun (TyCon "Lit") (TyFun (TyCon "Lit") (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
 (DFunDef false "inferPatRng" ((PCon "LInt" PWild) (PCon "LInt" PWild)) (ETuple (EApp (EVar "tconBuiltin") (ELit (LString "Int"))) (EListLit)))
 (DFunDef false "inferPatRng" ((PCon "LChar" PWild) (PCon "LChar" PWild)) (ETuple (EApp (EVar "tconBuiltin") (ELit (LString "Char"))) (EListLit)))
@@ -37770,7 +37770,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "infer" ((PVar "env") (PCon "EHeadAnnot" (PVar "e") (PVar "ty"))) (EApp (EApp (EApp (EVar "inferHeadAnnot") (EVar "env")) (EVar "e")) (EVar "ty")))
 (DFunDef false "infer" ((PVar "env") (PCon "ELoc" (PVar "l") (PVar "e"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EApp (EVar "Some") (EVar "l")))) (DoExpr (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))))
 (DFunDef false "infer" ((PVar "env") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EApp (EVar "Some") (EVar "l")))) (DoLet false false (PVar "t") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EVar "None"))) (DoExpr (EVar "t"))))
-(DFunDef false "infer" (PWild PWild) (EApp (EVar "panic") (ELit (LString "typecheck: unsupported expression (slice 1)"))))
+(DFunDef false "infer" (PWild PWild) (EApp (EVar "panic") (ELit (LString "typecheck: unsupported expression"))))
 (DTypeSig false "inferArrayLit" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Mono"))))
 (DFunDef false "inferArrayLit" ((PVar "env") (PVar "es")) (EBlock (DoLet false false (PVar "elem") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unifyAll") (EDictApp "elem")) (EApp (EApp (EVar "inferEach") (EVar "env")) (EVar "es")))) (DoExpr (EApp (EApp (EVar "TApp") (EApp (EVar "tconBuiltin") (ELit (LString "Array")))) (EDictApp "elem")))))
 (DTypeSig false "inferIntRange" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Mono") (TyCon "Mono"))))))
