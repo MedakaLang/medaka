@@ -13,4 +13,8 @@ let rec isOdd n = if n == 0 then False else isEven (n - 1)
 
 main = (ping False, isEven 4, isOdd 3)
 # CORE_IR
-(CProgram ((CBind "ping" (CClause ((PVar "n")) (CIf (CVar "n" (ALocal 0 0)) (CLit (LString "ping")) (CApp (CVar "pong" AGlobal) (CVar "n" (ALocal 0 0)))))) (CBind "pong" (CClause ((PVar "n")) (CIf (CVar "n" (ALocal 0 0)) (CApp (CVar "pong" (ALocal 1 0)) (CVar "n" (ALocal 0 0))) (CLit (LString "pong"))))) (CBind "isEven" (CClause ((PVar "n")) (CIf (CBinPrim "==" (CVar "n" (ALocal 0 0)) (CLit (LInt 0))) (CVar "True" AGlobal) (CApp (CVar "isOdd" AGlobal) (CBinPrim "-" (CVar "n" (ALocal 0 0)) (CLit (LInt 1))))))) (CBind "isOdd" (CClause ((PVar "n")) (CIf (CBinPrim "==" (CVar "n" (ALocal 0 0)) (CLit (LInt 0))) (CVar "False" AGlobal) (CApp (CVar "isEven" AGlobal) (CBinPrim "-" (CVar "n" (ALocal 0 0)) (CLit (LInt 1))))))) (CBind "main" (CClause () (CTuple (CApp (CVar "ping" AGlobal) (CVar "False" AGlobal)) (CApp (CVar "isEven" AGlobal) (CLit (LInt 4))) (CApp (CVar "isOdd" AGlobal) (CLit (LInt 3))))))) () () ())
+(CProgram ((CBind "ping" (CClause ((PVar "n")) (CIf (CVar "n" (ALocal 0 0)) (CLit (LString "ping")) (CApp (CVar "pong" AGlobal) (CVar "n" (ALocal 0 0))))))
+(CBind "pong" (CClause ((PVar "n")) (CIf (CVar "n" (ALocal 0 0)) (CApp (CVar "pong" (ALocal 1 0)) (CVar "n" (ALocal 0 0))) (CLit (LString "pong")))))
+(CBind "isEven" (CClause ((PVar "n")) (CIf (CBinPrim "==" (CVar "n" (ALocal 0 0)) (CLit (LInt 0))) (CVar "True" AGlobal) (CApp (CVar "isOdd" AGlobal) (CBinPrim "-" (CVar "n" (ALocal 0 0)) (CLit (LInt 1)))))))
+(CBind "isOdd" (CClause ((PVar "n")) (CIf (CBinPrim "==" (CVar "n" (ALocal 0 0)) (CLit (LInt 0))) (CVar "False" AGlobal) (CApp (CVar "isEven" AGlobal) (CBinPrim "-" (CVar "n" (ALocal 0 0)) (CLit (LInt 1)))))))
+(CBind "main" (CClause () (CTuple (CApp (CVar "ping" AGlobal) (CVar "False" AGlobal)) (CApp (CVar "isEven" AGlobal) (CLit (LInt 4))) (CApp (CVar "isOdd" AGlobal) (CLit (LInt 3))))))) () () ())

@@ -221,11 +221,19 @@ ctorArityPairSexp (name, arity) = node "ca" [escStr name, intToString arity]
 ctorTypePairSexp : (String, String) -> String
 ctorTypePairSexp (ctor, ty) = node "ct" [escStr ctor, escStr ty]
 
+-- One top-level CBind per line (not `slist`'s single-space join) — the whole
+-- program is otherwise a single unbroken line (100+KB in real use), which
+-- makes it unusable as a grep/less-navigable dict-routing probe (#1721). The
+-- sexp tokenizer treats '\n' as ordinary whitespace (core_ir_sexp_parse.mdk),
+-- so this is lossless for the roundtrip parser.
+bindsSexp : List CBind -> String
+bindsSexp binds = "(" ++ joinNl (map cbindSexp binds) ++ ")"
+
 export cprogramToSexp : CProgram -> String
 cprogramToSexp (CProgram binds ctorArities ctorToType impls) = node
   "CProgram"
   [
-    slist (map cbindSexp binds),
+    bindsSexp binds,
     slist (map ctorArityPairSexp ctorArities),
     slist (map ctorTypePairSexp ctorToType),
     slist (map cimplEntrySexp impls),
