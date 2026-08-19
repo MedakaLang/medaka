@@ -271,8 +271,8 @@ parseUnicodeAt arr i acc (Some k)
 parseLowSurrogate : Array Char -> Int -> List Char -> Int -> Result String (String, Int)
 parseLowSurrogate arr i acc hi
   | i + 10 > arrayLength arr = Err "invalid \\u escape"
-  | arrayGetUnsafe (i + 4) arr != '\\' = Err "invalid \\u escape"
-  | arrayGetUnsafe (i + 5) arr != 'u' = Err "invalid \\u escape"
+  | arrayGetUnsafe (i + 4) arr /= '\\' = Err "invalid \\u escape"
+  | arrayGetUnsafe (i + 5) arr /= 'u' = Err "invalid \\u escape"
   | otherwise = parseLowSurrogateAt arr i acc hi (hex4 arr (i + 6))
 
 parseLowSurrogateAt : Array Char -> Int -> List Char -> Int -> Option Int -> Result String (String, Int)

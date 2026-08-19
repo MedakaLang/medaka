@@ -37,16 +37,16 @@ allNonNegative (n::ns) = n >= 0 && allNonNegative ns
 
 canonicalPathComponents : List String -> Bool
 canonicalPathComponents [] = False
-canonicalPathComponents (component::rest) = component != ""
-  && component != "."
-  && component != ".."
+canonicalPathComponents (component::rest) = component /= ""
+  && component /= "."
+  && component /= ".."
   && canonicalPathComponentsGo rest
 
 canonicalPathComponentsGo : List String -> Bool
 canonicalPathComponentsGo [] = True
-canonicalPathComponentsGo (component::rest) = component != ""
-  && component != "."
-  && component != ".."
+canonicalPathComponentsGo (component::rest) = component /= ""
+  && component /= "."
+  && component /= ".."
   && canonicalPathComponentsGo rest
 
 canonicalProjectPath : String -> Bool
@@ -58,7 +58,7 @@ validSpan startLine startCol endLine endCol = startLine >= 1
   && endLine >= 1
   && endLine >= startLine
   && endCol >= 0
-  && (endLine != startLine || endCol >= startCol)
+  && (endLine /= startLine || endCol >= startCol)
 
 export mintStableNodeId : StableNodeIdInput -> Result StableNodeIdError StableNodeId
 mintStableNodeId (StableNodeIdInput path startLine startCol endLine endCol childPath role)

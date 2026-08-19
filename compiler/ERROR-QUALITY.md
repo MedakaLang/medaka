@@ -104,7 +104,7 @@ A complete Medaka diagnostic has five parts. Current support is marked
    ("`add` takes 2 arguments but got 1 — did you mean `add 1 y`?"; "add a case
    for `False`"; for a misspelling, "did you mean `greeting`?"). **[missing]** —
    there is **no** general suggestion machinery. The *only* fix-hint in the
-   entire compiler is one hardcoded parser case: `/=` → "did you mean '!=' for
+   entire compiler is one hardcoded parser case: `!=` → "did you mean '/=' for
    not-equal?" (`compiler/frontend/parser.mdk`). No identifier
    nearest-name/edit-distance suggestions, no "add missing case" hints.
 
@@ -272,7 +272,7 @@ help: `+` expects a right-hand operand; the expression / `(` is unterminated.
 ```
 "Parse error" is the least informative diagnostic in the compiler. The target
 names *what* was expected next and *why*, matching the one good existing
-precedent (the `/=` → `!=` hint).
+precedent (the `!=` → `/=` hint).
 
 ---
 

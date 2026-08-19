@@ -141,7 +141,7 @@ head xs = match xs
   (h :: _) => Some h
   []       => None
 neq : Eq a => a -> a -> Bool        -- one constraint
-neq p q = p != q
+neq p q = p /= q
 f : (Eq a, Ord b) => a -> b -> Bool -- multiple constraints
 f p q = True
 p1 = (5 : Int)                       -- annotation in expression position
@@ -264,7 +264,7 @@ e4  = 10 / 2
 e5  = 5 % 2
 e6  = -(5)                 -- unary minus
 e7  = x == y
-e8  = x != y
+e8  = x /= y
 e9  = x < y
 e10 = x > y
 e11 = x <= y

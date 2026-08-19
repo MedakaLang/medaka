@@ -1,7 +1,7 @@
 -- Regression for #1307: a FAILING `prop` with an `Int` parameter used to
 -- hang forever during shrinking instead of reporting a counterexample.
 -- `shrinkInt 0` returned `[VInt 1]` (no base case at zero: the third
--- candidate `0 + 1` survives the `!= n` filter), so the greedy shrink loop
+-- candidate `0 + 1` survives the `/= n` filter), so the greedy shrink loop
 -- cycled 0 -> 1 -> 0 forever whenever a shrink chain reached zero -- which
 -- every Int shrink chain does, since 0 is always the first candidate tried.
 --

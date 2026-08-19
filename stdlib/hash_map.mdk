@@ -255,7 +255,7 @@ allEntriesIn ((k, v)::rest) m
    > eq (fromList [(1, 10), (2, 20)]) (fromList [(2, 20), (1, 10)])
    True -}
 export impl Eq (HashMap k v) requires Eq k, Eq v, Hashable k where
-  eq a b = if size a != size b then False else allEntriesIn (entries a) b
+  eq a b = if size a /= size b then False else allEntriesIn (entries a) b
 
 {- | Rendered as `fromList [(k, v), …]` in hash order (so the exact text is
    layout-dependent — don't rely on it for equality; use `eq`). -}

@@ -112,7 +112,7 @@ prefixEquals : Array Int -> Array Int -> Int -> Int -> Bool
 prefixEquals a b i len =
   if i >= len then
     True
-  else if byteAt i a != byteAt i b then
+  else if byteAt i a /= byteAt i b then
     False
   else
     prefixEquals a b (i + 1) len
@@ -154,7 +154,7 @@ uvarintDecode bytes = match uvarintDecodeGo bytes 0 (arrayLength bytes) 0 0
       -- requirement (the published `{0x81, 0x00}` case), which the range
       -- check does not touch.
       let reencoded = uvarintEncode value
-      if arrayLength reencoded != consumed || !(prefixEquals reencoded bytes 0 consumed) then
+      if arrayLength reencoded /= consumed || !(prefixEquals reencoded bytes 0 consumed) then
         Err "uvarint: non-minimal encoding"
       else
         Ok (value, consumed)
@@ -167,7 +167,7 @@ export uvarintDecodeAll : Array Int -> Result String Int
 uvarintDecodeAll bytes = match uvarintDecode bytes
   Err e => Err e
   Ok (value, consumed) =>
-    if consumed != arrayLength bytes then
+    if consumed /= arrayLength bytes then
       Err "uvarint: trailing bytes after value"
     else
       Ok value

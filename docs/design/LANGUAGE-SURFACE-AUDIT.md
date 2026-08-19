@@ -108,9 +108,9 @@ Each is 0-dogfood, but has a non-usage reason not to auto-cut. Surface both dire
    users expect it; it's a one-line reader for `` a `div` b ``. **Lean REMOVE** — lowest newcomer
    value of the sugar set and fully redundant, but confirm no editor/teaching material leans on it.
 
-2. **unary `!` (boolean not)** — 0 genuine uses; every `!` in source is `!=`, a char/string, or the
+2. **unary `!` (boolean not)** — 0 genuine uses; every `!` in source is `/=`, a char/string, or the
    `EUnOp "!"` machinery. *Cut:* `not` already exists and reads clearer for a functional audience;
-   `!` invites C-style habits and collides visually with `!=`. *Keep:* near-universal muscle memory;
+   `!` invites C-style habits and collides visually with `/=`. *Keep:* near-universal muscle memory;
    tiny (no dedicated AST node — shares `EUnOp`, string-keyed in parser/eval, so removal is a parser
    guard + eval arm, not a node deletion). **Genuinely borderline** — the cost to keep is almost
    nil, which weakens the case to cut.

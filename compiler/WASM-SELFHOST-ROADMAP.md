@@ -103,7 +103,7 @@ wrapper emitted → ref-to-undefined). Gate: `test/wasm/assemble_check_main.sh`.
   rebuilt host readFile `$str` with `cp_count = byte_len`, so multibyte content (an em-dash in a
   `runtime.mdk` comment) padded the decoded `Array Char` with trailing `\0` → stray codepoint-0 fell
   through every lexer clause into `singleOp`'s panic → `unreachable`. Fixed by counting true UTF-8 lead
-  bytes (`(b & 0xC0) != 0x80`), mirroring `$mdk_chars_to_str`. The self-hosted **lexer now lexes
+  bytes (`(b & 0xC0) /= 0x80`), mirroring `$mdk_chars_to_str`. The self-hosted **lexer now lexes
   `runtime.mdk` (749 tokens) byte-identical to native.** Emitter-only → no fixpoint/seed.
 - 🏁 **layer-5 CLOSED — the WasmGC TRMC arc (Stages 0–2, emitter-only)** — the self-hosted lexer now
   runs to COMPLETION under Node. Design `compiler/WASMGC-TRMC-DESIGN.md` diagnosed the overflow as

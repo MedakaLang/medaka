@@ -1692,7 +1692,7 @@ this is a gap that widens with each remaining A-3 unit rather than a one-off.
 **A-3.4 should
 extend check 1's extraction to `DeclEnvs` (and `DeclEnvModule`) with a third
 allowlist.** It is a small change — one more `sed` range, one more `*_expected`
-list, one more `!=` comparison, reusing the zero-extraction guard already there —
+list, one more `/=` comparison, reusing the zero-extraction guard already there —
 and it is the difference between "the ratchet covers the bundle `IE` lives in"
 and "the ratchet covers the bundle that merely *points at* the bundle `IE` lives
 in". Its own positive control follows check 1's control **B**: add a rogue field
@@ -1987,7 +1987,7 @@ stays accepted, and A-3.7 (not A-3.4) is where it is at risk. Do not tidy it.
    `declEnvsRef` row instead.** DERIVED at `da16471c`, and this reverses what an
    earlier draft of this item directed: check 1 compares **exact sets** — it
    `sed`-extracts `driver_actual` from the `  | DriverState {` record and tests
-   `[ "$driver_actual" != "$driver_expected" ]`, where `driver_expected` is the
+   `[ "$driver_actual" /= "$driver_expected" ]`, where `driver_expected` is the
    first word of every `driver_allowed` row
    (`test/registry_keying_ratchet.sh:229`, `:236-239`, `:266-274`). §9.4 puts the
    new field **inside `DeclEnvs`**, not on `DriverState`. So an `IE` allowlist row
@@ -2263,7 +2263,7 @@ CONSTRUCTION (§10.3's route-word discipline), but **it is not established that 
 goal-producer-free**: TRACED, the value it mints is written by `registerInferredFor`
 into `funConstraintIfacesRef`, which `declaredConstraintSlots`'s `None` arm reads,
 which `inferDictAtFound` turns into a `recordCallObligations` call, which pushes a
-`PCallSlot` `ImplUniverse` `Predicate` for any slot whose `csIface.irName != ""` — the
+`PCallSlot` `ImplUniverse` `Predicate` for any slot whose `csIface.irName /= ""` — the
 same channel this whole unit is about. Not independently verified whether a live call
 site can actually drive this exact path to a non-`""` bare iface (the two fallbacks tried
 before it may already cover every reachable case) — recorded as open, not resolved either

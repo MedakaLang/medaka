@@ -12,7 +12,7 @@ user shadow cannot leak into the prelude).
 touch this code again):
 
 1. **`inferDefinerShadowApp` also serves IMPORTER shadows** on the mangled emit path —
-   `definerShadowArgHead` fires on `routeLocalSym != ""` as well as on
+   `definerShadowArgHead` fires on `routeLocalSym /= ""` as well as on
    `definerShadowNamesRef`. So "we reached the definer-shadow app path" is **not** the same
    question as "this is a definer shadow". Inverting on the former broke `i1`/`i3`/`i4`
    (Fork 1). The decision points re-ask via `isDefinerShadow`.
@@ -441,7 +441,7 @@ errors from prelude bodies (§1.1). **Stage 0 closes this. It is not optional.**
 
 | Route | Works? | Evidence |
 |---|---|---|
-| **Operators** (`==`, `!=`, `<`, `+`, `++`, …) | **YES** | Verified: a module with `impl Eq Foo` *and* `eq : List Int -> List Int -> Bool` still evaluates `Foo 1 == Foo 2` → `False`, `Foo 1 == Foo 1` → `True`. Operators desugar to the method-call path and never touch the bare-`EVar` funDef intersection (matrix row 24 — "UNREACHABLE"). This covers `Eq`/`Ord`/`Num`/`Semigroup`. |
+| **Operators** (`==`, `/=`, `<`, `+`, `++`, …) | **YES** | Verified: a module with `impl Eq Foo` *and* `eq : List Int -> List Int -> Bool` still evaluates `Foo 1 == Foo 2` → `False`, `Foo 1 == Foo 1` → `True`. Operators desugar to the method-call path and never touch the bare-`EVar` funDef intersection (matrix row 24 — "UNREACHABLE"). This covers `Eq`/`Ord`/`Num`/`Semigroup`. |
 | **Module alias** — `import core as C` → `C.eq` | **NO** | `Unbound variable: C.eq` |
 | **Member alias** — `import core.{eq as eqM}` → `eqM` | **NO** | `Unbound variable: eqM. Did you mean 'eq'` |
 | **Interface-qualified** — `Eq.eq x y` | **NO** | no such syntax |

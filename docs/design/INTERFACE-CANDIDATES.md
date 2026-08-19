@@ -21,7 +21,7 @@ Operators are **not** desugared to method calls. They stay as `EBinOp op l r
 
 1. **Typecheck** (`inferBinopE`, typecheck.mdk:4264) calls two recorders per site:
    - `recordBinopSite` (4298) maps the operator to an interface method via
-     `binopMethod` (4318: `==`/`!=`→`eq`, `<`→`lt`, `>`→`gt`, `<=`→`lte`,
+     `binopMethod` (4318: `==`/`/=`→`eq`, `<`→`lt`, `>`→`gt`, `<=`→`lte`,
      `>=`→`gte`) and stashes a *pending binop site* carrying the route ref.
      After inference, `resolveBinopSites` stamps that route with the resolved
      `Eq`/`Ord` impl once the operand type grounds.
@@ -45,7 +45,7 @@ pattern-matches builtin `Value` constructors with *no* `binopMethod` entry and
 | Construct | Current backing | Class | Proposed iface (exists?) | Enables | Value | Cost/risk |
 |---|---|---|---|---|---|---|
 | `+` `-` `*` `/` `%` | `Num` obligation (numArithOp 4369; methods add/sub/mul/div) | **A** | `Num` (Y) | — | — | keep |
-| `==` `!=` | `eq` via binopMethod; `valueEq` default | **A** | `Eq` (Y) | — | — | keep |
+| `==` `/=` | `eq` via binopMethod; `valueEq` default | **A** | `Eq` (Y) | — | — | keep |
 | `<` `>` `<=` `>=` | `lt`/`gt`/`lte`/`gte`; `valueCompare` default | **A** | `Ord` (Y) | — | — | keep |
 | string interp `"a\{e}b"` | desugars to `++ display e ++` (desugar.mdk:227) | **A** | `Display` (Y) | — | — | keep |
 | numeric literal `1` | `ENumLit` → `Num`-poly, `fromInt` (ast.mdk:270) | **A** | `Num` (Y) | — | — | keep |

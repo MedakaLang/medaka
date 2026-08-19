@@ -61,7 +61,7 @@ emitIsolation runtimePath pPath pPlusUPath = match readFile runtimePath
         let p1 = runEmit runtimeDecls [] pDecls
         let pPlusU = runEmit runtimeDecls [] pPlusUDecls
         let p2 = runEmit runtimeDecls [] pDecls
-        if p1 != p2 then
+        if p1 /= p2 then
           failWith "LLVM emission isolation failure: P changed after same-process P+U emission"
         else if p1 == pPlusU then
           failWith "LLVM emission isolation failure: P+U did not produce distinct LLVM"

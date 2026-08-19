@@ -440,7 +440,7 @@ lazyGlobalNames binds =
   let adj = eagerCalleesMap nameSet binds
   let methodSet = methodTaintSet binds
   let tainted = foldTaintSCCs adj methodSet (tarjanSCCs allNames adj) omEmpty
-  filterList (n => n != "main" && omHasKey n tainted) (valGlobalNames binds)
+  filterList (n => n /= "main" && omHasKey n tainted) (valGlobalNames binds)
 
 -- ── dict-witness parameter names (shared by BOTH backends) ───────────────────
 -- `$dict_<fn>_<slot>` — a dict witness param that dict_pass/elaborateModules PREPENDS

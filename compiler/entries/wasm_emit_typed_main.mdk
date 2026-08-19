@@ -144,11 +144,11 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
         let mainWat = emitProgram (makeWasmEmitInput [] (declSigTypeNames runtimeDecls ++ declSigTypeNames mainDecls) (ctorFieldTypeNames mainDecls) True (declaredRecordFieldOrders mainDecls)) mainProgram
         let pLast = emitProgram pInput pProgram
         let _ = putStrLn (if p1 == pLast then "P_EQ_PLAST" else "P_NE_PLAST")
-        let _ = putStrLn (if p1 != methodWat then "P_NE_METHOD" else "P_EQ_METHOD")
-        let _ = putStrLn (if p1 != sigWat then "P_NE_SIG" else "P_EQ_SIG")
-        let _ = putStrLn (if p1 != ctorWat then "P_NE_CTOR" else "P_EQ_CTOR")
-        let _ = putStrLn (if mainBase != mainWat then "P_NE_MAIN" else "P_EQ_MAIN")
-        putStrLn (if p1 != recordWat then "P_NE_RECORD" else "P_EQ_RECORD")
+        let _ = putStrLn (if p1 /= methodWat then "P_NE_METHOD" else "P_EQ_METHOD")
+        let _ = putStrLn (if p1 /= sigWat then "P_NE_SIG" else "P_EQ_SIG")
+        let _ = putStrLn (if p1 /= ctorWat then "P_NE_CTOR" else "P_EQ_CTOR")
+        let _ = putStrLn (if mainBase /= mainWat then "P_NE_MAIN" else "P_EQ_MAIN")
+        putStrLn (if p1 /= recordWat then "P_NE_RECORD" else "P_EQ_RECORD")
 
 -- X-W.H2a: the selected Wasm physical indexes must belong to one private Prog, not
 -- module state. P and U deliberately reuse names while changing every selected index

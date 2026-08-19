@@ -186,7 +186,7 @@ foldlElems f z (x::rest) = foldlElems f (f z x) rest
 {- | Folds over elements (unspecified order), so `toList`/`length`/`elem`/`any`/
    `sum`/… all work on a HashSet.
 
-   > toList (fromList [1, 1, 2]) != []
+   > toList (fromList [1, 1, 2]) /= []
    True
    > length (fromList [3, 1, 2, 1])
    3 -}
@@ -208,7 +208,7 @@ allIn (x::rest) s
    > eq (fromList [1, 2, 3]) (fromList [3, 2, 1, 2])
    True -}
 export impl Eq (HashSet a) requires Eq a, Hashable a where
-  eq a b = if size a != size b then False else allIn (elemList a) b
+  eq a b = if size a /= size b then False else allIn (elemList a) b
 
 {- | Rendered `fromList [a, …]` in hash order (layout-dependent; use `eq` for
    equality). -}
@@ -271,7 +271,7 @@ export impl Debug (HashSet a) requires Debug a where
 (DTypeSig false "allIn" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyCon "Bool")))))
 (DFunDef false "allIn" ((PList) PWild) (EVar "True"))
 (DFunDef false "allIn" ((PCons (PVar "x") (PVar "rest")) (PVar "s")) (EIf (EApp (EApp (EVar "has") (EVar "x")) (EVar "s")) (EApp (EApp (EVar "allIn") (EVar "rest")) (EVar "s")) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DImpl true "Eq" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Eq" ((TyVar "a"))) (req "Hashable" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "!=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EVar "allIn") (EApp (EVar "elemList") (EVar "a"))) (EVar "b"))))))
+(DImpl true "Eq" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Eq" ((TyVar "a"))) (req "Hashable" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EVar "allIn") (EApp (EVar "elemList") (EVar "a"))) (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "elemList") (EVar "s"))))) (ELit (LString ""))))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Debug" false) (mem "Foldable" false) (mem "Hashable" false))))
@@ -330,5 +330,5 @@ export impl Debug (HashSet a) requires Debug a where
 (DTypeSig false "allIn" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyCon "Bool")))))
 (DFunDef false "allIn" ((PList) PWild) (EVar "True"))
 (DFunDef false "allIn" ((PCons (PVar "x") (PVar "rest")) (PVar "s")) (EIf (EApp (EApp (EDictApp "has") (EVar "x")) (EVar "s")) (EApp (EApp (EDictApp "allIn") (EVar "rest")) (EVar "s")) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DImpl true "Eq" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Eq" ((TyVar "a"))) (req "Hashable" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "!=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EDictApp "allIn") (EApp (EVar "elemList") (EVar "a"))) (EVar "b"))))))
+(DImpl true "Eq" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Eq" ((TyVar "a"))) (req "Hashable" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EDictApp "allIn") (EApp (EVar "elemList") (EVar "a"))) (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EVar "elemList") (EVar "s"))))) (ELit (LString ""))))))

@@ -120,7 +120,7 @@ clean** as a family. Flagged rows only:
 | `\{base} — this line's indentation doesn't line up with the block above (indented to column \{col}); check that it's indented to match the surrounding statements` | parser.mdk:3504 | tone (chatty; "check that…" filler) | `\{base} — indentation (column \{col}) doesn't match the enclosing block` |
 | `inline 'let' requires 'in' (e.g. 'else let x = e in body'); for a multi-statement body, put 'else' on its own line and indent the block` | parser.mdk:3557 | inconsistent (lowercase; parens-for-example vs em-dash used by peers) | `inline 'let' requires 'in' — e.g. 'else let x = e in body'; for a multi-statement body put 'else' on its own line and indent` |
 | `In Medaka '::' is cons (list prepend); a type signature uses a single colon: 'f : T'` | parser.mdk:3622 | inconsistent (`;`/`:` clause joins + "In Medaka" sentence-case vs the `—` "Medaka has no…" family) | `Medaka spells cons '::' — a type signature uses a single colon: 'f : T'` |
-| `unexpected '/=' (did you mean '!=' for not-equal?)` | parser.mdk:3769 | inconsistent (`?`-question + parens; every other foreign hint uses `— …` with no `?`) | `unexpected '/=' — not-equal is spelled '!='` |
+| `unexpected '!=' (did you mean '/=' for not-equal?)` | `firstBangEqIdx`, parser.mdk | inconsistent (`?`-question + parens; every other foreign hint uses `— …` with no `?`) | `unexpected '!=' — not-equal is spelled '/='` |
 
 Clean foreign-syntax hints (consistent `Medaka has no 'X' — …` form):
 `case … of` (:3591), `/* … */` (:3656), `{` brace blocks (:3692), `def`

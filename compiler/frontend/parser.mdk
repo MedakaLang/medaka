@@ -563,7 +563,7 @@ cmpOp : Parser (Expr -> Expr -> Expr)
 cmpOp = choice
   [
     binOp TEqEq "==",
-    binOp TNeq "!=",
+    binOp TNeq "/=",
     binOp TLt "<",
     binOp TGt ">",
     binOp TLeq "<=",
@@ -1153,7 +1153,7 @@ sectionOpStr TPlus = Some "+"
 sectionOpStr TStar = Some "*"
 sectionOpStr TSlash = Some "/"
 sectionOpStr TEqEq = Some "=="
-sectionOpStr TNeq = Some "!="
+sectionOpStr TNeq = Some "/="
 sectionOpStr TLt = Some "<"
 sectionOpStr TGt = Some ">"
 sectionOpStr TLeq = Some "<="
@@ -4497,15 +4497,16 @@ firstLexError toks i
     TLexError msg => Some (i, msg)
     _ => firstLexError toks (i + 1)
 
--- `/=` is not a Medaka operator (not-equal is spelled `!=`); the lexer tags it
--- as a distinct `TSlashEq` so we can locate it precisely and suggest the fix,
--- rather than letting it split into `/` `=` and mislocate to end-of-file.
--- Index of the first `TSlashEq` in the stream, or -1 if absent.
-firstSlashEqIdx : Array Token -> Int -> Int
-firstSlashEqIdx toks i
+-- `!=` is no longer Medaka's not-equal (`/=` is, #1739 half B: once `!` means
+-- Ref-dereference, nothing in the negation family should spell itself with `!`).
+-- The lexer tags it as a distinct `TBangEq` so we can locate it precisely and
+-- suggest the fix, rather than letting it split into `!` `=` and mislocate.
+-- Index of the first `TBangEq` in the stream, or -1 if absent.
+firstBangEqIdx : Array Token -> Int -> Int
+firstBangEqIdx toks i
   | i >= arrayLength toks = 0 - 1
-  | peekTok toks i == TSlashEq = i
-  | otherwise = firstSlashEqIdx toks (i + 1)
+  | peekTok toks i == TBangEq = i
+  | otherwise = firstBangEqIdx toks (i + 1)
 
 -- beta mutability model: `let mut` has been removed. `mut` (TMut) is a keyword
 -- with no remaining valid use, so its presence is always the removed `let mut`.
@@ -4665,7 +4666,7 @@ contextualKwName TElse = "else"
 contextualKwName _ = ""
 
 isContextualKw : Token -> Bool
-isContextualKw t = contextualKwName t != ""
+isContextualKw t = contextualKwName t /= ""
 
 isBinderTok : Token -> Bool
 isBinderTok TEqual = True
@@ -4979,7 +4980,7 @@ parseResultWith src tokList offList =
   let toks = arrayFromList tokList
   let offs = arrayFromList offList
   let srcLen = stringLength src
-  let seIdx = firstSlashEqIdx toks 0
+  let beIdx = firstBangEqIdx toks 0
   let lmIdx = firstMutIdx toks 0
   let recIdx = firstRecordDeclIdx toks 0 0 True
   let ckIdx = firstCtxKwDeclIdx toks 0 0 True
@@ -5000,8 +5001,8 @@ parseResultWith src tokList offList =
         leMsg
       Err (mkLocated src toks offs srcLen leMsg2 leIdx)
     None =>
-      if seIdx >= 0 then
-        Err (mkLocated src toks offs srcLen "unexpected '/='. (Did you mean '!='?)" seIdx)
+      if beIdx >= 0 then
+        Err (mkLocated src toks offs srcLen "unexpected '!='. (Did you mean '/='?)" beIdx)
       else if lmIdx >= 0 then
         Err (mkLocated src toks offs srcLen letMutRemovedMsg lmIdx)
       else if recIdx >= 0 then

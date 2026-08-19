@@ -3,7 +3,7 @@ running doctests in stdlib/hash_set.mdk
   ok   stdlib/hash_set.mdk:66: has 2 (fromList [1, 2, 3])
   ok   stdlib/hash_set.mdk:68: has 9 (fromList [1, 2, 3])
   ok   stdlib/hash_set.mdk:134: size (fromList [1, 2, 3, 4, 5, 6, 7, 8, 8, 1])
-  ok   stdlib/hash_set.mdk:185: toList (fromList [1, 1, 2]) != []
+  ok   stdlib/hash_set.mdk:185: toList (fromList [1, 1, 2]) /= []
   ok   stdlib/hash_set.mdk:187: length (fromList [3, 1, 2, 1])
   ok   stdlib/hash_set.mdk:204: eq (fromList [1, 2, 3]) (fromList [3, 2, 1, 2])
 

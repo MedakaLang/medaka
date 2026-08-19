@@ -532,7 +532,7 @@ export impl Mappable (Map k) where
    > eq (fromList [(1, 10), (2, 20)]) (fromList [(2, 20), (1, 10)])
    True -}
 export impl Eq (Map k v) requires Eq k, Eq v where
-  eq a b = if size a != size b then False else eq (toList a) (toList b)
+  eq a b = if size a /= size b then False else eq (toList a) (toList b)
 
 {- | Lexicographic ordering through the canonical ascending association list,
    so two maps order by their `(key, value)` pairs and a proper prefix sorts

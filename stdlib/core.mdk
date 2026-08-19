@@ -189,7 +189,7 @@ isEven n = n % 2 == 0
    > isOdd 8
    False -}
 export isOdd : Int -> Bool
-isOdd n = n % 2 != 0
+isOdd n = n % 2 /= 0
 
 export impl Ord Int where
   compare a b = if a < b then Lt else if a > b then Gt else Eq
@@ -214,14 +214,14 @@ compareBySign a b = match (floatSignBit a, floatSignBit b)
 
 -- | totalOrder for a pair where `< > ==` were ALL False — i.e. at least one
 -- operand is a NaN.  −NaN sits below every non-NaN, +NaN above every non-NaN;
--- two NaNs of the same sign are `Eq`.  `x != x` is the NaN test (IEEE's only
+-- two NaNs of the same sign are `Eq`.  `x /= x` is the NaN test (IEEE's only
 -- self-inequality); it is inlined rather than calling `isNaN`, which lives in
 -- `math.mdk` — the prelude cannot import it, and this is not a big enough
 -- reason to promote it into the prelude's public surface.
 compareNaN : Float -> Float -> Ordering
 compareNaN a b
-  | a != a && b != b = compareBySign a b
-  | a != a = if floatSignBit a then Lt else Gt
+  | a /= a && b /= b = compareBySign a b
+  | a /= a = if floatSignBit a then Lt else Gt
   | otherwise = if floatSignBit b then Gt else Lt
 
 {- | `Ord Float` is IEEE-754 **totalOrder** (issue #360):
@@ -231,7 +231,7 @@ compareNaN a b
    so `compare`, `min`/`max` and therefore `sort` are deterministic on NaN data
    and never crash.  The previous `if a < b … else Eq` shape returned `Eq` for
    `compare nan x` at EVERY `x`, which is not a total order at all: it broke
-   transitivity (`nan Eq 1.0` and `nan Eq 3.0`, yet `1.0 != 3.0`), so a sorted
+   transitivity (`nan Eq 1.0` and `nan Eq 3.0`, yet `1.0 /= 3.0`), so a sorted
    result was only an accident of the algorithm.
 
    Deliberate divergence: `compare x y == Eq` coincides with `x == y` for every
@@ -420,7 +420,7 @@ export impl Debug (Array a) requires Debug a where
 -- `deriving (Eq)` over a field of array type builds without an `import array`.
 export impl Eq (Array a) requires Eq a where
   eq a b =
-    if arrayLength a != arrayLength b then
+    if arrayLength a /= arrayLength b then
       False
     else
       eqGo a b 0 (arrayLength a)
@@ -1366,7 +1366,7 @@ or _ _ = True
 
 -- | Exclusive OR.
 export xor : Bool -> Bool -> Bool
-xor a b = a != b
+xor a b = a /= b
 
 -- ─── Option helpers ─────────────────────────────────────────────────────
 

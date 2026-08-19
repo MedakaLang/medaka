@@ -222,7 +222,7 @@ export impl Foldable MutArray where
    > eq (fromList [1, 2, 3]) (fromList [1, 2, 3])
    True -}
 export impl Eq (MutArray a) requires Eq a where
-  eq a b = if count a != count b then False else eq (elems a) (elems b)
+  eq a b = if count a /= count b then False else eq (elems a) (elems b)
 
 {- | Rendered as `fromList [a, …]` over the live range.
 

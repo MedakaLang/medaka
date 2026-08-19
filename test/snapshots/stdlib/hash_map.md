@@ -259,7 +259,7 @@ allEntriesIn ((k, v)::rest) m
    > eq (fromList [(1, 10), (2, 20)]) (fromList [(2, 20), (1, 10)])
    True -}
 export impl Eq (HashMap k v) requires Eq k, Eq v, Hashable k where
-  eq a b = if size a != size b then False else allEntriesIn (entries a) b
+  eq a b = if size a /= size b then False else allEntriesIn (entries a) b
 
 {- | Rendered as `fromList [(k, v), …]` in hash order (so the exact text is
    layout-dependent — don't rely on it for equality; use `eq`). -}
@@ -333,7 +333,7 @@ export impl Debug (HashMap k v) requires Debug k, Debug v where
 (DTypeSig false "allEntriesIn" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Eq" (TyVar "v")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Bool")))))
 (DFunDef false "allEntriesIn" ((PList) PWild) (EVar "True"))
 (DFunDef false "allEntriesIn" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "m")) (EIf (EBinOp "==" (EApp (EApp (EVar "get") (EVar "k")) (EVar "m")) (EApp (EVar "Some") (EVar "v"))) (EApp (EApp (EVar "allEntriesIn") (EVar "rest")) (EVar "m")) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DImpl true "Eq" ((TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v"))) ((req "Eq" ((TyVar "k"))) (req "Eq" ((TyVar "v"))) (req "Hashable" ((TyVar "k")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "!=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EVar "allEntriesIn") (EApp (EVar "entries") (EVar "a"))) (EVar "b"))))))
+(DImpl true "Eq" ((TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v"))) ((req "Eq" ((TyVar "k"))) (req "Eq" ((TyVar "v"))) (req "Hashable" ((TyVar "k")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EVar "allEntriesIn") (EApp (EVar "entries") (EVar "a"))) (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v"))) ((req "Debug" ((TyVar "k"))) (req "Debug" ((TyVar "v")))) ((im "debug" ((PVar "m")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "entries") (EVar "m"))))) (ELit (LString ""))))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Debug" false) (mem "Option" false) (mem "Mappable" false) (mem "Hashable" false))))
@@ -403,5 +403,5 @@ export impl Debug (HashMap k v) requires Debug k, Debug v where
 (DTypeSig false "allEntriesIn" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Eq" (TyVar "v")) (cstr "Hashable" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyCon "Bool")))))
 (DFunDef false "allEntriesIn" ((PList) PWild) (EVar "True"))
 (DFunDef false "allEntriesIn" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "m")) (EIf (EBinOp "==" (EApp (EApp (EDictApp "get") (EVar "k")) (EVar "m")) (EApp (EVar "Some") (EVar "v"))) (EApp (EApp (EDictApp "allEntriesIn") (EVar "rest")) (EVar "m")) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DImpl true "Eq" ((TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v"))) ((req "Eq" ((TyVar "k"))) (req "Eq" ((TyVar "v"))) (req "Hashable" ((TyVar "k")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "!=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EDictApp "allEntriesIn") (EApp (EVar "entries") (EVar "a"))) (EVar "b"))))))
+(DImpl true "Eq" ((TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v"))) ((req "Eq" ((TyVar "k"))) (req "Eq" ((TyVar "v"))) (req "Hashable" ((TyVar "k")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EDictApp "allEntriesIn") (EApp (EVar "entries") (EVar "a"))) (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v"))) ((req "Debug" ((TyVar "k"))) (req "Debug" ((TyVar "v")))) ((im "debug" ((PVar "m")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EVar "entries") (EVar "m"))))) (ELit (LString ""))))))

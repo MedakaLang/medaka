@@ -64,7 +64,7 @@ that. A result is PASS iff `native_output == oracle_output ++ "\n()"`.
 | Int arithmetic `+ - * / %` | PASS | (covered by build_cmd.sh `arith`) |
 | Unary minus `-(5)` | PASS | `unary_minus.mdk` |
 | Boolean `&& \|\| !x` (separate bindings) | PASS | `bool_ops.mdk` |
-| Comparison `< > <= >= == !=` | PASS | `comparison_ops.mdk` |
+| Comparison `< > <= >= == /=` | PASS | `comparison_ops.mdk` |
 | `debug` on tuple (direct) | PASS (Gap C closed 2026-06-18 audit) | see §Gap C |
 | Float arithmetic (let-binding, literal anchored) | PASS | `float_arith.mdk`, `float_compute.mdk` |
 | Float arithmetic (named fn, `+` via Num dispatch on Float params) | PASS (Gap C/E closed 2026-06-18 audit) | see §Gap C / §Gap E |
@@ -620,7 +620,7 @@ operand type.
    AND `Eval.eval_modules` — the loader path uses `run_decl` directly, not `run`) →
    `EMethodRef`-based app; `compiler/types/typecheck.mdk` `dictPass`→`rewriteBinopExpr` →
    `EMethodAt`-based app. `<`→`lt a b`, `>`→`gt`, `<=`→`lte`, `>=`→`gte`, `==`→`eq a b`,
-   `!=`→`not (eq a b)`. Backends need NO new comparison logic — the rewritten node is an
+   `/=`→`not (eq a b)`. Backends need NO new comparison logic — the rewritten node is an
    ordinary method app they already dispatch (arg-tag selects the impl).
 
 **Verified:** the `Apple < Zebra` rank repro now returns `False` (was `True`) on interpreter
@@ -667,7 +667,7 @@ Fixtures `test/diff_fixtures/record_deriving.{mdk,golden}` + `test/eval_dict_fix
 WRONG.** A deeper read-only investigation overturned it. The real bug is far more
 fundamental and affects **all three** backends.
 
-**Root cause:** the operators `==` `!=` `<` `>` `<=` `>=` are parsed to an `EBinOp`
+**Root cause:** the operators `==` `/=` `<` `>` `<=` `>=` are parsed to an `EBinOp`
 AST node that is **never rewritten into a method call** (desugar/marker/typecheck
 leave it). So they NEVER dispatch to a user/derived `Eq`/`Ord` impl — each backend
 hard-codes a structural built-in that ignores the impl:
@@ -678,7 +678,7 @@ hard-codes a structural built-in that ignores the impl:
 | `compiler/eval/eval.mdk:1143-1146` (`evalArith`→`valueCompare`, `:438`) | constructor **NAME** |
 | native: `core_ir_lower.mdk:68` `EBinOp`→`CBinPrim` → `llvm_emit.mdk:1508` `emitIntCmp` | constructor **TAG** (declaration order) |
 
-`==`/`!=` have the identical defect (`eval.ml:1265-1266`, `eval.mdk:1141-1142`).
+`==`/`/=` have the identical defect (`eval.ml:1265-1266`, `eval.mdk:1141-1142`).
 `typecheck` records the iface usage (`lib/typecheck.ml:2285-2291`) only to *verify an
 impl exists* — it never rewrites the node, so eval never calls the impl.
 
@@ -698,8 +698,8 @@ ADTs is broken. Masked wherever code uses `compare`/`eq` directly (map/set tree 
 semantic order/equality differs from the backend's structural built-in. This is a real
 correctness bug in *every* backend, not just an oracle quirk.
 
-**Fix plan (recommended; DEFERRED — needs oversight):** desugar `EBinOp {==,!=,<,>,<=,>=}`
-into the corresponding method application (`<`→`lt`, `==`→`eq`, `!=`→`not (eq …)`, …)
+**Fix plan (recommended; DEFERRED — needs oversight):** desugar `EBinOp {==,/=,<,>,<=,>=}`
+into the corresponding method application (`<`→`lt`, `==`→`eq`, `/=`→`not (eq …)`, …)
 in `lib/desugar.ml` + the `compiler/frontend/desugar.mdk` mirror, routing operators through the
 existing Phase-69.x dispatch so all three backends agree and call the user impl. The
 `eval_arith`/`emitIntCmp` arms for these ops become dead. **Must special-case

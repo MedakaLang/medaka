@@ -267,7 +267,7 @@ checkSourceStaleness _ = match sourceStalenessVerdict ()
   None => ()
   Some compilerDir =>
     let msg = "warning: this ./medaka was built from compiler source that differs from " ++ compilerDir ++ " — it may be stale; rebuild with 'make medaka'."
-    if envOr "MEDAKA_STRICT" "" != "" then
+    if envOr "MEDAKA_STRICT" "" /= "" then
       let _ = ePutStrLn msg
       exit 1
     else ePutStrLn msg
@@ -959,7 +959,7 @@ userSchemeLines decls report =
 -- the reader can see printed just above it.
 checkOkLine : String -> String -> String
 checkOkLine target filtered =
-  let n = length (filter (!= "") (splitNl filtered))
+  let n = length (filter (/= "") (splitNl filtered))
   "-- \{target}: ok (\{intToString n} declaration(s) checked, 0 errors)"
 
 namesUserBinding : OrdMap Unit -> String -> Bool
@@ -2081,7 +2081,7 @@ parseTestEngines argv = match (testFlagValue "--engines" argv, hasFlag "--native
 -- known set, not a silent drop.
 parseEngineList : String -> Result String (List Engine)
 parseEngineList spec =
-  let names = filterList (!= "") (map stringTrim (splitLintNames spec))
+  let names = filterList (/= "") (map stringTrim (splitLintNames spec))
   match names
     [] => Err "--engines requires at least one of: eval, native"
     _ => parseEngineNames names
@@ -2861,7 +2861,7 @@ assertSnapshotTargetsExist files =
 -- target expansion, so the refusal cannot be confused with "your glob matched no files".
 assertBlessIsScoped : List String -> List String -> <IO> Unit
 assertBlessIsScoped argv targets =
-  if not (hasFlag "--bless" argv) || targets != [] then ()
+  if not (hasFlag "--bless" argv) || targets /= [] then ()
   else
     let _ = ePutStrLn "medaka snapshot: --bless requires explicit targets — there is no whole-suite bless."
     let _ = ePutStrLn "  Name what you are approving, e.g.:"

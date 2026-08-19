@@ -1,9 +1,9 @@
 -- Fixture for rule-not-eq autofix.
 
 notEq a b = not (a == b)
-notNe a b = not (a != b)
+notNe a b = not (a /= b)
 bangEq a b = !(a == b)
-bangNe a b = !(a != b)
+bangNe a b = !(a /= b)
 nested a b c = if not (a == b) then c else a
 
 -- NEGATIVE: must stay untouched.

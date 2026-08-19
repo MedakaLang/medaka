@@ -149,7 +149,7 @@ bStep label (BOk a pos) k = k a pos
 export decodeLeafPage : Array Int -> Int -> Int -> Int -> Int -> Result String (List Row)
 decodeLeafPage bytes pageSize usable pageBase hdrOffset = do
   pt <- pageType bytes hdrOffset
-  if pt != pageTableLeaf then Err "decodeLeafPage: page type \{intToString pt} is not a table-leaf page (0x0D)"
+  if pt /= pageTableLeaf then Err "decodeLeafPage: page type \{intToString pt} is not a table-leaf page (0x0D)"
   else do
     nc <- pageCellCount bytes hdrOffset
     decodeCells

@@ -1,6 +1,6 @@
-# `==`/`!=` → `Eq` Dispatch (Option A) — Design + Blast-Radius Census
+# `==`/`/=` → `Eq` Dispatch (Option A) — Design + Blast-Radius Census
 
-**Status:** OPEN — `==`/`!=` are still a builtin structural compare that bypasses the
+**Status:** OPEN — `==`/`/=` are still a builtin structural compare that bypasses the
 `Eq` interface (`stdlib/core.mdk:48-49` unchanged: "`==` on primitives is a builtin and
 does *not* dispatch through this interface"), verified live. Staged implementation plan
 below is ready to pick up as-is.
@@ -13,11 +13,11 @@ Original doc text: **Status:** DESIGN + CENSUS (no fix shipped). 2026-07-03.
 
 ## The approved change (Option A — full dispatch)
 
-Today `==`/`!=` are a **builtin structural compare that bypasses the `Eq`
+Today `==`/`/=` are a **builtin structural compare that bypasses the `Eq`
 interface entirely** (`core.mdk:48`: "`==` on primitives is a builtin and does
 *not* dispatch through this interface"). Consequences: a custom/derived `Eq`
 impl is **silently ignored** by `==`, and `==` on functions is silently
-accepted. Option A makes `==`/`!=`:
+accepted. Option A makes `==`/`/=`:
 
 1. **constraint-generating** — `x == y` emits an `Eq a` obligation on the
    operand type (typecheck), exactly like `+` emits `Num a`; and
@@ -29,12 +29,12 @@ accepted. Option A makes `==`/`!=`:
 
 ---
 
-## 1. How `==`/`!=` flow TODAY
+## 1. How `==`/`/=` flow TODAY
 
 ### Token → AST
-`==`/`!=` are distinct tokens (`TEqEq`/`TNeq`, `parser.mdk:446-447`) that both
+`==`/`/=` are distinct tokens (`TEqEq`/`TNeq`, `parser.mdk:446-447`) that both
 parse to the **same generic** node `EBinOp String Expr Expr (Ref Route)`
-(`ast.mdk:143`) — `EBinOp "==" …` / `EBinOp "!=" …`, carrying a dict-route ref.
+(`ast.mdk:143`) — `EBinOp "==" …` / `EBinOp "/=" …`, carrying a dict-route ref.
 Not lowered at parse time.
 
 ### Typecheck — **NO constraint today**
@@ -43,7 +43,7 @@ Not lowered at parse time.
   `recordBinopSite`/`recordArithSite` (dict-route stashing), then
   `inferBinop op lt rt`.
 - `typecheck.mdk:4003-4004` — `inferBinop "==" lt rt = compareOp lt rt`
-  (and `"!="`).
+  (and `"/="`).
 - `typecheck.mdk:4097-4100` — the whole typing:
   ```
   compareOp lt rt = let _ = unify lt rt ; TCon "Bool"
@@ -59,18 +59,18 @@ only `+`→`Num` is (§2).
 (`pendingBinopSites`) via `binopMethod "==" = Some "eq"` (`3988`) — but that only
 drives later dict *rewriting*, it is not a constraint/obligation.
 
-### `!=` relationship — shares the `eq` seam
-`!=` is a separate token but maps to the same method: `binopMethod "!=" = Some
+### `/=` relationship — shares the `eq` seam
+`/=` is a separate token but maps to the same method: `binopMethod "/=" = Some
 "eq"` (`3989`). In the typecheck dict-rewrite it becomes `not (eq l r)`:
 `binopMethodApp` (`typecheck.mdk:7339-7344`) builds `EApp (EApp (EMethodAt "eq" …)
-l) r` and wraps it in `EVar "not"` when `op == "!="`. Eval has the native
-fallback `evalArith "!=" a b = VBool (not (valueEq a b))` (`eval.mdk:1367`).
-**So `!=` already desugars to `not (== )` at the dict layer** — it does not need
+l) r` and wraps it in `EVar "not"` when `op == "/="`. Eval has the native
+fallback `evalArith "/=" a b = VBool (not (valueEq a b))` (`eval.mdk:1367`).
+**So `/=` already desugars to `not (== )` at the dict layer** — it does not need
 an independent Eq seam.
 
 ### Eval — monolithic builtin structural walk (no dict)
 - `eval.mdk:1366-1367` — `evalArith "==" a b = VBool (valueEq a b)` /
-  `"!=" … not (valueEq a b)`.
+  `"/=" … not (valueEq a b)`.
 - `eval.mdk:499-512` — `valueEq` is a shape-by-shape structural compare:
   `VInt/VFloat/VString/VChar/VBool/VUnit/VTuple/VList/VArray/VCon/VRecord/VRef`,
   with `valueEq _ _ = False` catch-all. Constructors compare by **name string +
@@ -80,10 +80,10 @@ an independent Eq seam.
 
 ### LLVM emit — already a runtime helper `@mdk_value_eq`
 - `llvm_emit.mdk:2691-2702` — `emitValueEq`: `==` → `call i64 @mdk_value_eq`;
-  `!=` → same then `xor i64 r, 2` (flips the tagged Bool 3↔1).
+  `/=` → same then `xor i64 r, 2` (flips the tagged Bool 3↔1).
 - `llvm_emit.mdk:2614-2649` — `emitCmp`/`emitCmpW` route to `emitValueEq` when an
   operand LTy is `LTUnknown`, or `LTInt` + `isEqOp`. Strings → `@mdk_string_eq`
-  (`emitStrCmp`, `2727-2738`). `intPred "=="/"!="` (`7794-7795`) exist for the
+  (`emitStrCmp`, `2727-2738`). `intPred "=="/"/="` (`7794-7795`) exist for the
   residual raw-`icmp` path but concrete Int `==` still goes through
   `@mdk_value_eq` (note at `2666-2668`).
   **So `==` is *already* a runtime structural helper, not inline `icmp` — it just
@@ -91,7 +91,7 @@ an independent Eq seam.
 
 ### WASM emit — runtime helpers `$mdk_value_eq` / `$mdk_value_eq_num`
 - `wasm_emit.mdk:4163-4172` — `emitValueCmpRef`: `==` → `call $mdk_value_eq`;
-  `!=` → same then `i31.get_u; i32.eqz; ref.i31`.
+  `/=` → same then `i31.get_u; i32.eqz; ref.i31`.
 - `wasm_emit.mdk:4178-4193` — `emitValueCmpNumRef` (num-only, string-free
   programs) → `$mdk_value_eq_num`.
 - Pure-int fast path is inline `wasmBinOp64` `i64.eq`/`i64.ne` (`4138`,
@@ -101,13 +101,13 @@ an independent Eq seam.
 
 ## 2. The dispatch design — mirror the poly-Num precedent
 
-### 2.1 Typecheck: make `==`/`!=` generate `Eq a` (the census engine)
+### 2.1 Typecheck: make `==`/`/=` generate `Eq a` (the census engine)
 Mirror `numArithOp`/`recordNumObligation` exactly. Prototype (used verbatim for
 the census below):
 
 ```
 inferBinop "==" lt rt = eqCompareOp lt rt
-inferBinop "!=" lt rt = eqCompareOp lt rt
+inferBinop "/=" lt rt = eqCompareOp lt rt
 
 eqCompareOp lt rt =
   let _ = unify lt rt
@@ -136,11 +136,11 @@ This reuses the entire existing obligation pipeline:
   (tc_probe/typecheck_main) byte-identical (no `Eq` class without core loaded) —
   same rationale as `numIfaceRegistered`.
 
-**`!=` needs no separate obligation** — it shares `eqCompareOp` and already
+**`/=` needs no separate obligation** — it shares `eqCompareOp` and already
 lowers to `not (eq …)` at the dict layer (`7339-7344`).
 
 ### 2.2 Eval: dict-dispatch polymorphic `==`, keep structural for concrete
-The dict machinery **already exists and is already used by `!=`/`==`**:
+The dict machinery **already exists and is already used by `/=`/`==`**:
 `binopMethodApp` (`7339-7344`) rewrites the binop to `eq`/`not(eq …)` via
 `EMethodAt "eq"`, and `recordBinopSite` stamps the route ref. So the eval-side
 change is small: where the route ref resolved to a **dict** (polymorphic
@@ -171,7 +171,7 @@ poly signal is `numPolyLocalsRef` (`576-577`, seeded by `numPolyParamNames`
 `3406-3420`); `isPolyNumOperand (CVar x _) = contains x numPolyLocalsRef.value`
 (`4144-4149`) — **only a bare `CVar` bound to a poly param routes to the runtime
 helper**. Mirror: seed an Eq-poly-locals set the same way (params whose declared
-type is a type var used in an `==`/`!=`) and add an `isPolyEqOperand` arm in
+type is a type var used in an `==`/`/=`) and add an `isPolyEqOperand` arm in
 `emitBinRef` that routes to the dict `eq`; concrete operands keep
 `emitValueCmpRef`/`_num`/inline `i64.eq`. Gate the helper emission like
 `WasmEmit.useValueCmp`.
@@ -186,7 +186,7 @@ type is a type var used in an `==`/`!=`) and add an `isPolyEqOperand` arm in
 
 ## 3. THE CENSUS — **0 + 0 + 0 newly-failing sites**
 
-**Method.** PROTOTYPED §2.1 (`==`/`!=` push an `Eq` obligation), rebuilt
+**Method.** PROTOTYPED §2.1 (`==`/`/=` push an `Eq` obligation), rebuilt
 `./medaka`, then ran `MEDAKA_ROOT=$PWD ./medaka check <module>` over **every**
 `.mdk` in `compiler/ + stdlib/ + sqlite/` **as its own entry** (so each module's
 own signed members are re-inferred and censused). Collected the two diagnostics
@@ -271,7 +271,7 @@ error message is self-explanatory.**
 
 | # | Stage | Where | Gate | Re-mint? |
 |---|-------|-------|------|----------|
-| 1 | **Constraint-gen** — `==`/`!=` push `Eq` obligation (§2.1) | `typecheck.mdk` (`eqCompareOp`/`recordEqObligation`) | `diff_compiler_check*`, error-quality fixtures; census stays 0 | **No** (typecheck-only, IR unchanged) |
+| 1 | **Constraint-gen** — `==`/`/=` push `Eq` obligation (§2.1) | `typecheck.mdk` (`eqCompareOp`/`recordEqObligation`) | `diff_compiler_check*`, error-quality fixtures; census stays 0 | **No** (typecheck-only, IR unchanged) |
 | 2 | **Eval dispatch** — route poly `==` through the `Eq` dict; keep `valueEq` for concrete (§2.2) | `eval.mdk` + existing `binopMethodApp` seam | `diff_compiler_eval*`, `eval_modules` (custom-`Eq` fixture: derived impl now honored) | **No** (eval is not the emitter) |
 | 3 | **LLVM emit** — insert dict branch before `@mdk_value_eq` (§2.3) | `llvm_emit.mdk` (`emitCmpW`/`emitValueEq`, `LTEq`-style seed) | `diff_compiler_llvm*`, `selfcompile_fixpoint` C3a/C3b, run==build custom-Eq fixture | **YES — at this checkpoint** (emitted IR changes) |
 | 4 | **WASM emit** — `isPolyEqOperand` arm in `emitBinRef` (§2.4) | `wasm_emit.mdk` | `test/wasm/diff_wasm*`, wasm custom-Eq fixture | No new re-mint (wasm seed is separate; native seed already re-minted at 3) |
@@ -291,10 +291,10 @@ its own gate. This matches the poly-Num/Ord roll-in that already shipped.
 
 ## 7. Design forks (recommendations)
 
-1. **`!=` desugar vs independent dispatch.** *Recommend: keep desugar to
+1. **`/=` desugar vs independent dispatch.** *Recommend: keep desugar to
    `not (eq a b)`* — it already exists (`binopMethodApp`, `7339-7344`;
    `evalArith`, `1367`; `xor`/`i32.eqz` in both emitters). An independent `neq`
-   method would let an impl make `!=` disagree with `==` (unsound) and duplicate
+   method would let an impl make `/=` disagree with `==` (unsound) and duplicate
    the fast paths. `core.mdk`'s `neq` already documents "standalone so impls
    cannot make it disagree" (`54-55`).
 
@@ -344,14 +344,14 @@ both backends + fixpoint (stages 3–4).
 | What | File:line |
 |------|-----------|
 | `EBinOp String Expr Expr (Ref Route)` | `ast.mdk:143` |
-| `TEqEq`/`TNeq` parse to `EBinOp "=="/"!="` | `parser.mdk:446-447` |
-| `inferBinop "=="/"!=" = compareOp` | `typecheck.mdk:4003-4004` |
+| `TEqEq`/`TNeq` parse to `EBinOp "=="/"/="` | `parser.mdk:446-447` |
+| `inferBinop "=="/"/=" = compareOp` | `typecheck.mdk:4003-4004` |
 | `compareOp` (no constraint — the seam to change) | `typecheck.mdk:4097-4100` |
-| `binopMethod "=="/"!=" = Some "eq"` | `typecheck.mdk:3988-3989` |
+| `binopMethod "=="/"/=" = Some "eq"` | `typecheck.mdk:3988-3989` |
 | `numArithOp`/`recordNumObligation` (the precedent to mirror) | `typecheck.mdk:4038-4058` |
-| `binopMethodApp` (`!=` → `not(eq)`; `EMethodAt "eq"`) | `typecheck.mdk:7339-7344` |
+| `binopMethodApp` (`/=` → `not(eq)`; `EMethodAt "eq"`) | `typecheck.mdk:7339-7344` |
 | `missingConstraintMsg` / `reportUncovered` (census engine) | `typecheck.mdk:9494`, `9458-9466` |
-| `evalArith "=="/"!="` → `valueEq` | `eval.mdk:1366-1367` |
+| `evalArith "=="/"/="` → `valueEq` | `eval.mdk:1366-1367` |
 | `valueEq` structural walk (no dict) | `eval.mdk:499-512` |
 | `emitValueEq` (`@mdk_value_eq`) | `llvm_emit.mdk:2691-2702` |
 | `emitCmpW` routing | `llvm_emit.mdk:2614-2649` |

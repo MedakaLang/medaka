@@ -297,7 +297,7 @@ missingSignatureRule = Rule {
 notEqRule : Rule
 notEqRule = Rule {
   name = ruleNameNotEq,
-  descr = "negated equality `not (a == b)` / `not (a != b)`. Prefer `a != b` / `a == b`",
+  descr = "negated equality `not (a == b)` / `not (a /= b)`. Prefer `a /= b` / `a == b`",
   severity = SevWarning,
   enabled = True,
   check = ruleNotEq,
@@ -317,7 +317,7 @@ boolSimplifyRule = Rule {
 remParityRule : Rule
 remParityRule = Rule {
   name = ruleNameRemParity,
-  descr = "`n % 2 == 0` / `n % 2 != 0` parity test. Prefer `isEven n` / `isOdd n`",
+  descr = "`n % 2 == 0` / `n % 2 /= 0` parity test. Prefer `isEven n` / `isOdd n`",
   severity = SevWarning,
   enabled = True,
   check = ruleRemParity,
@@ -849,7 +849,7 @@ parseRuleNames s =
   filterList nonEmptyStr (flatMap (splitOnChar ' ') (splitOnChar ',' s))
 
 nonEmptyStr : String -> Bool
-nonEmptyStr n = n != ""
+nonEmptyStr n = n /= ""
 
 isSuppressed : List Directive -> Finding -> Bool
 isSuppressed dirs f = anyList (dirCoversFinding f) dirs
@@ -1418,7 +1418,7 @@ allClausesSelfCall clauses (name, _) =
   allList (clauseSelfCallOrOther name) clauses
 
 clauseSelfCallOrOther : String -> (String, List Pat, Expr, Option Loc) -> Bool
-clauseSelfCallOrOther name (cn, pats, body, _) = cn != name
+clauseSelfCallOrOther name (cn, pats, body, _) = cn /= name
   || unconditionalSelfCall name pats body
 
 -- nullary: body is exactly the bare self reference; n-ary: body is an application
@@ -1792,7 +1792,7 @@ rewriteBindKv orc (k, v) = (rewriteBindExpr orc k, rewriteBindExpr orc v)
 --     So `x => x OP x`, `x => f x OP e`, `x => (x + 1) OP e` all skip.
 --   * two-param: body is exactly `EVar x OP EVar y` (in order, distinct names).
 --   * only the SYMBOLIC operators the parser accepts as sections round-trip
---     (`sectionOpStr` in parser.mdk): + * / == != < > <= >= && || :: ++ |> >> <<,
+--     (`sectionOpStr` in parser.mdk): + * / == /= < > <= >= && || :: ++ |> >> <<,
 --     plus `-` for LEFT/BARE only (a `-` RIGHT section `(- e)` parses as unary
 --     negation — EXCLUDED).  Backtick infix (`EInfix`) is NOT handled: the printer
 --     emits a word-operator section without backticks, so it would not round-trip.
@@ -1809,7 +1809,7 @@ sectionSymOps = [
   "*",
   "/",
   "==",
-  "!=",
+  "/=",
   "<",
   ">",
   "<=",
@@ -1850,7 +1850,7 @@ mentionsVar x e = match unwrapLoc e
 lamSection : List Pat -> Expr -> Option Section
 lamSection [PVar x _] body = lamSection1 x (unwrapLoc body)
 lamSection [PVar x _, PVar y _] body
-  | x != y = lamSection2 x y (unwrapLoc body)
+  | x /= y = lamSection2 x y (unwrapLoc body)
   | otherwise = None
 lamSection _ _ = None
 
@@ -2944,16 +2944,16 @@ fixImplMethodConcat (ImplMethod nm ps body) =
   ImplMethod nm ps (rewriteConcatExpr body)
 
 -- ── rule: not-eq ──────────────────────────────────────────────────────────────
--- `not (a == b)` → `a != b`; `not (a != b)` → `a == b` (also the unary-`!` forms).
--- ONLY `==`/`!=` — they are TOTAL, so De Morgan applies unconditionally.  `<`/`>`
+-- `not (a == b)` → `a /= b`; `not (a /= b)` → `a == b` (also the unary-`!` forms).
+-- ONLY `==`/`/=` — they are TOTAL, so De Morgan applies unconditionally.  `<`/`>`
 -- &c. are deliberately excluded: their complement is unsound for `Float` (NaN
 -- makes `not (a < b)` ≠ `a >= b`).  The flipped `EBinOp` reuses the original's
 -- route ref (an unresolved parse-time placeholder; re-resolved downstream).
 notEqOf : Expr -> Option Expr
 notEqOf e = match notArgOf e
   Some inner => match unwrapLoc inner
-    EBinOp "==" a b r => Some (EBinOp "!=" a b r)
-    EBinOp "!=" a b r => Some (EBinOp "==" a b r)
+    EBinOp "==" a b r => Some (EBinOp "/=" a b r)
+    EBinOp "/=" a b r => Some (EBinOp "==" a b r)
     _ => None
   None => None
 
@@ -2975,14 +2975,14 @@ notEqFix _ d = exprRuleFix noExcl (detApply notEqOf) d
 -- Redundant boolean shapes, each rewritten to an EXACTLY equivalent one:
 --   if c then True else False → c        if c then False else True → not c
 --   x == True → x        x == False → not x        (also True/False on the LEFT)
---   x != True → not x    x != False → x
+--   x /= True → not x    x /= False → x
 --   not (not x) → x      (`!(!x)` too)
 -- Excluded (per spec): `if c then True else e` → `c || e` (short-circuit/effect
 -- risk).  A comparison with bool literals on BOTH sides is left alone.
 boolSimplifyOf : Expr -> Option Expr
 boolSimplifyOf (EIf c t el) = boolSimplifyIf c (unwrapLoc t) (unwrapLoc el)
 boolSimplifyOf (EBinOp op a b _)
-  | op == "==" || op == "!=" = boolSimplifyEq op a b
+  | op == "==" || op == "/=" = boolSimplifyEq op a b
 boolSimplifyOf e = match notArgOf e
   Some inner => map (y => y) (notArgOf (unwrapLoc inner))
   None => None
@@ -3002,7 +3002,7 @@ boolSimplifyEq op a b
   | isFalseLit a = Some (boolEqResult op b False)
   | otherwise = None
 
--- the value operand `v`, negated iff (`==` against `False`) or (`!=` against
+-- the value operand `v`, negated iff (`==` against `False`) or (`/=` against
 -- `True`): `keepPositive = (op == "==") == constIsTrue`.
 boolEqResult : String -> Expr -> Bool -> Expr
 boolEqResult op v constIsTrue = if op == "==" == constIsTrue then v else mkNot v
@@ -3023,8 +3023,8 @@ boolSimplifyFix : Oracle -> Decl -> Option (List Decl)
 boolSimplifyFix _ d = exprRuleFix noExcl (detApply boolSimplifyOf) d
 
 -- ── rule: rem-parity ──────────────────────────────────────────────────────────
--- `n % 2 == 0` → `isEven n`; `n % 2 != 0` → `isOdd n` (either operand order).
--- ONLY the `== 0` / `!= 0` comparisons: Medaka's `%` follows the DIVIDEND's sign
+-- `n % 2 == 0` → `isEven n`; `n % 2 /= 0` → `isOdd n` (either operand order).
+-- ONLY the `== 0` / `/= 0` comparisons: Medaka's `%` follows the DIVIDEND's sign
 -- (`-3 % 2 = -1`), so `n % 2 == 1` is FALSE for negative odd `n` — excluded.
 -- Excludes the `isEven`/`isOdd` definitions themselves (their bodies ARE this
 -- idiom; rewriting them would produce `isEven n = isEven n`).
@@ -3033,7 +3033,7 @@ remParityExcl name = name == "isEven" || name == "isOdd"
 
 remParityOf : Expr -> Option Expr
 remParityOf (EBinOp op a b _)
-  | op == "==" || op == "!=" =
+  | op == "==" || op == "/=" =
     if isIntLit 0 b then
       remParityFrom op (unwrapLoc a)
     else if isIntLit 0 a then
@@ -4115,7 +4115,7 @@ dupFinding : List String -> (String, Int, String, String) -> Finding
 dupFinding distinctFiles occ =
   let file = occFile occ
   let line = occLine occ
-  let others = filterList (!= file) distinctFiles
+  let others = filterList (/= file) distinctFiles
   Finding {
     rule = ruleNameDuplicateBody,
     message = "function '\{occName occ}' has a body structurally identical to a definition in \{joinWith ", " others} — consolidate into a shared module",
@@ -4216,7 +4216,7 @@ emitSameFileGroup grp =
 
 sameFileFinding : List (String, Int, String) -> (String, Int, String) -> Finding
 sameFileFinding grp occ =
-  let others = filterList (o => sameFileOccName o != sameFileOccName occ) grp
+  let others = filterList (o => sameFileOccName o /= sameFileOccName occ) grp
   Finding {
     rule = ruleNameDuplicateBody,
     message = "function '\{sameFileOccName occ}' has a body structurally identical to '\{joinWith "', '" (map sameFileOccName others)}' in this same file — consolidate into one function",

@@ -4,7 +4,7 @@
 -- (VTypedImpl memoThunk, shared regardless of route).  #730 hoisted only the RKey
 -- occurrence, so the RDict/RDictFwd route re-ran the body on build, duplicating the
 -- side effect (`[eval] [eval] XX`).  With the sole-impl static hoist all three
--- engines force it once: `[eval] XX`.  A run != build S1 — the engines gate is the pin.
+-- engines force it once: `[eval] XX`.  A run /= build S1 — the engines gate is the pin.
 interface HasUnit a where
   theUnit : a
 

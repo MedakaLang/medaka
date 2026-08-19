@@ -3,7 +3,7 @@
 -- is `strtod` + an endptr full-consumption check + an empty-string reject.  The wasm
 -- host shim used to be JS `Number()`, which agrees with strtod on plain decimals and
 -- diverges everywhere else — so the four cases the issue happened to name were only a
--- sample of the real bug.  Every line below is a class where Number() != strtod:
+-- sample of the real bug.  Every line below is a class where Number() /= strtod:
 -- empty/whitespace-only, leading- vs trailing-whitespace, trailing garbage, the
 -- inf/nan spellings, and C99 hex floats.  Derived from the C oracle, not hand-written.
 showOpt : Option Float -> String
@@ -19,7 +19,10 @@ s x = showOpt (stringToFloat x) ++ "\n"
 -- "-nan" is byte0 0xff (255), "nan" is 0x7f (127).  Big-endian, so byte 0 holds it.
 sgn : String -> String
 sgn x = match stringToFloat x
-  Some f => x ++ " sign-byte " ++ intToString (arrayGetUnsafe 0 (floatToBytes64 f)) ++ "\n"
+  Some f => x
+    ++ " sign-byte "
+    ++ intToString (arrayGetUnsafe 0 (floatToBytes64 f))
+    ++ "\n"
   None => x ++ " None\n"
 
 main =

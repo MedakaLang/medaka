@@ -135,7 +135,7 @@ ifaceIdentity OriginBuiltin _ = ""
 -- refuses a valid program).  Neither shape may be copied to the other site;
 -- the derivation is written at `sameTyConHead`.
 export ifaceIdMatches : String -> String -> Bool
-ifaceIdMatches a b = a != "" && a == b
+ifaceIdMatches a b = a /= "" && a == b
 
 -- ── Cross-cutting identity substrate (#1111 A-2.0) ─────────────────────────
 -- `Ns` + `Ident` generalize `TyConOrigin` from "which module declared this
@@ -620,7 +620,7 @@ sameTyConHead n1 o1 n2 o2 = n1 == n2 && not (tyConIdsConflict o1 o2)
 -- absent cases collapse into one answer on purpose.
 tyConIdsConflict : TyConOrigin -> TyConOrigin -> Bool
 tyConIdsConflict o1 o2 = match (identOriginOf o1, identOriginOf o2)
-  (Some i1, Some i2) => i1 != i2
+  (Some i1, Some i2) => i1 /= i2
   _ => False
 
 public export data Ty =
@@ -922,9 +922,9 @@ public export data Expr =
   | EMatch Expr (List Arm)
   | EIf Expr Expr Expr
   -- Phase 151 / Gap G: the trailing route ref is filled by the typed pipeline
-  -- (resolveBinopSites) for comparison/equality operators (== != < > <= >=) whose
+  -- (resolveBinopSites) for comparison/equality operators (== /= < > <= >=) whose
   -- operand grounds to a NON-primitive Eq/Ord type; dictPass then rewrites such a
-  -- stamped node into the method application (==→eq, !=→not(eq …), <→lt, …) so eval
+  -- stamped node into the method application (==→eq, /=→not(eq …), <→lt, …) so eval
   -- dispatches to the user/derived impl.  RNone for primitives / arithmetic / other
   -- operators → the structural-builtin EBinOp eval path (unchanged, no recursion).
   -- The parser always builds a fresh `Ref RNone`; sexp/astdump ignore the ref.

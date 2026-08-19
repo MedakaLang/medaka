@@ -4,8 +4,8 @@ ifTF c = if c then True else False
 ifFT c = if c then False else True
 eqT x = x == True
 eqF x = x == False
-neT x = x != True
-neF x = x != False
+neT x = x /= True
+neF x = x /= False
 notNot x = not (not x)
 
 -- NEGATIVE: must stay untouched.

@@ -212,7 +212,7 @@ shrinkInt : Int -> List (Value e)
 shrinkInt 0 = []
 shrinkInt n =
   let cands = [0, n / 2, n + (if n > 0 then -1 else 1)]
-  map VInt (filterList (!= n) cands)
+  map VInt (filterList (/= n) cands)
 
 -- ── prop evaluation ──────────────────────────────────────────────────────────
 -- evalEnv is the program's binding environment (List (String, Value)); each

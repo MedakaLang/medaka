@@ -112,7 +112,7 @@ showTable (TomlTable name pairs) =
 skipComment : Parser Unit
 skipComment = do
   _ <- char '#'
-  _ <- many (satisfy (c => c != '\n'))
+  _ <- many (satisfy (/= '\n'))
   pure ()
 
 -- Skip whitespace that is NOT a newline (inline spaces/tabs).
@@ -192,7 +192,7 @@ interpretEscape 'r' = pure '\r'
 interpretEscape _ = failWith "unknown escape sequence"
 
 regularStringChar : Parser Char
-regularStringChar = satisfy (c => c != '"' && c != '\\' && c != '\n')
+regularStringChar = satisfy (c => c /= '"' && c /= '\\' && c /= '\n')
 
 quotedString : Parser String
 quotedString = map fromChars (between (char '"') (char '"') (many stringChar))

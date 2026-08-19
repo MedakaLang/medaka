@@ -107,7 +107,7 @@ through `failP`/`PErr`. For coding purposes they collapse to:
 |---|---|---|
 | general parse error | every `failP "expected …"` (~34 messages) | parse |
 | unexpected EOF | `advanceR TEof` → `"unexpected end of input"` (`:178`) | unexpected-eof |
-| `/=` typo | `"unexpected '/=' (did you mean '!=' …)"` (`:3508`) | bad-neq-operator |
+| `!=` typo | `"unexpected '!=' (did you mean '/=' …)"` (`:3508`) | bad-neq-operator |
 | foreign-syntax pre-scans | `parseResult` chain: `/* */` block comment, `if … { }` brace block, `for`/`while` loop, `def`/`function` header, trailing `;` (each a pure token scan that fires only on never-valid Medaka shapes, located at the offending token) | brace-block / for-while / def-keyword / block-comment / semicolon |
 
 (The ~34 `expected …` messages stay distinct *prose* under one code — they are
@@ -234,7 +234,7 @@ kebab-case; never renumber (append only).
 |---|---|
 | `P-PARSE` | general "expected …" parse failure (umbrella) |
 | `P-UNEXPECTED-EOF` | unexpected end of input |
-| `P-BAD-NEQ` | `/=` used for not-equal (suggest `!=`) |
+| `P-BAD-NEQ` | `!=` used for not-equal (suggest `/=`) |
 | `P-HS-CASE` | Haskell `case … of` (suggest `match e` with `pattern => body` arms) |
 | `P-HS-SIG` | Haskell `f :: T` type-signature syntax (`::` is cons; suggest `f : T`) |
 | `P-BRACE-BLOCK` | C-style `{ … }` brace block on `if` (suggest `then`/`else` + indentation) |
@@ -433,7 +433,7 @@ code from the per-stage helper below — not 20 ad-hoc literals.
 
 - **Parse — ADT boundary.** Add a `Code` to `ParseError` (or derive at the single
   `ParseError → Diag` conversion by matching `"unexpected end of input"` /
-  `/=`-message → `P-UNEXPECTED-EOF` / `P-BAD-NEQ`, else `P-PARSE`). Deriving at
+  `!=`-message → `P-UNEXPECTED-EOF` / `P-BAD-NEQ`, else `P-PARSE`). Deriving at
   the boundary is 0 parser edits; adding the field is ~3 edits. Recommend
   **derive at the boundary** (parser messages stay untouched).
 
@@ -527,7 +527,7 @@ Already-computed suggestions that just need structured surfacing:
 | Category | Already computed? | Stage-2 surfacing |
 |---|---|---|
 | **did-you-mean** (misspelled name) | **Yes** — `UnboundVariable String (Option Loc) (Option String)` carries the suggestion (3rd field) and `ppResError` already appends it | `help` = "did you mean `x`?"; **machine `fix`** = the identifier's own range + replacement (the range is the unbound-var loc). *First `fix` to ship.* |
-| `/=` → `!=` | **Yes** — hardcoded parser hint | `help` + `fix` = replace `/=` span with `!=`. |
+| `!=` → `/=` | **Yes** — hardcoded parser hint | `help` + `fix` = replace `!=` span with `/=`. |
 | **missing constraint** | Partially — message already says "add `Eq a =>`" | `help` prose; a machine `fix` needs the signature's insertion point (deferred). |
 | **missing case** (non-exhaustive) | **Yes** — exhaustiveness computes the witness ctor(s) internally | `help` = "missing case: `None`"; machine `fix` deferred (insertion point non-trivial). |
 
@@ -537,7 +537,7 @@ data Fix = Fix Loc String            -- replace `Loc`'s span with the String
 -- JSON: "fix": { "range": {…}, "replacement": "…" }
 ```
 Add optional `help : Option String` and `fix : Option Fix` to `Diag` (or a
-side-table keyed by push). **v1 machine `fix`: did-you-mean + `/=`→`!=` only**
+side-table keyed by push). **v1 machine `fix`: did-you-mean + `!=`→`/=` only**
 (both are exact, single-span, agent-applicable). Everything else ships `help`
 prose in Stage 2 and earns a `fix` later. This also gates whether `medaka check
 --fix` becomes a thing (parallel to `medaka lint --fix`) — recommend deferring
@@ -565,7 +565,7 @@ that CLI surface until ≥2 `fix` categories exist.
 
 ### Stage 2 (help/fix)
 8. `help : Option String` + `fix : Option Fix` on `Diag`; render into JSON.
-9. Surface did-you-mean `fix` (from `UnboundVariable`'s 3rd field) + `/=`→`!=`.
+9. Surface did-you-mean `fix` (from `UnboundVariable`'s 3rd field) + `!=`→`/=`.
 10. `help` prose for missing-constraint / missing-case (witness already computed).
 11. (Optional) `medaka check --fix`.
 

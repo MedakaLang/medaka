@@ -92,13 +92,13 @@ isZero (a0, a1, a2, a3) = a0 == 0 && a1 == 0 && a2 == 0 && a3 == 0
    Gt -}
 export cmp64 : U64 -> U64 -> Ordering
 cmp64 (a0, a1, a2, a3) (b0, b1, b2, b3) =
-  if a3 != b3 then
+  if a3 /= b3 then
     if a3 > b3 then Gt else Lt
-  else if a2 != b2 then
+  else if a2 /= b2 then
     if a2 > b2 then Gt else Lt
-  else if a1 != b1 then
+  else if a1 /= b1 then
     if a1 > b1 then Gt else Lt
-  else if a0 != b0 then
+  else if a0 /= b0 then
     if a0 > b0 then Gt else Lt
   else
     Eq
@@ -316,7 +316,7 @@ mod64 dividend divisor =
 (DTypeSig true "isZero" (TyFun (TyCon "U64") (TyCon "Bool")))
 (DFunDef false "isZero" ((PTuple (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "a0") (ELit (LInt 0))) (EBinOp "==" (EVar "a1") (ELit (LInt 0)))) (EBinOp "==" (EVar "a2") (ELit (LInt 0)))) (EBinOp "==" (EVar "a3") (ELit (LInt 0)))))
 (DTypeSig true "cmp64" (TyFun (TyCon "U64") (TyFun (TyCon "U64") (TyCon "Ordering"))))
-(DFunDef false "cmp64" ((PTuple (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3")) (PTuple (PVar "b0") (PVar "b1") (PVar "b2") (PVar "b3"))) (EIf (EBinOp "!=" (EVar "a3") (EVar "b3")) (EIf (EBinOp ">" (EVar "a3") (EVar "b3")) (EVar "Gt") (EVar "Lt")) (EIf (EBinOp "!=" (EVar "a2") (EVar "b2")) (EIf (EBinOp ">" (EVar "a2") (EVar "b2")) (EVar "Gt") (EVar "Lt")) (EIf (EBinOp "!=" (EVar "a1") (EVar "b1")) (EIf (EBinOp ">" (EVar "a1") (EVar "b1")) (EVar "Gt") (EVar "Lt")) (EIf (EBinOp "!=" (EVar "a0") (EVar "b0")) (EIf (EBinOp ">" (EVar "a0") (EVar "b0")) (EVar "Gt") (EVar "Lt")) (EVar "Eq"))))))
+(DFunDef false "cmp64" ((PTuple (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3")) (PTuple (PVar "b0") (PVar "b1") (PVar "b2") (PVar "b3"))) (EIf (EBinOp "/=" (EVar "a3") (EVar "b3")) (EIf (EBinOp ">" (EVar "a3") (EVar "b3")) (EVar "Gt") (EVar "Lt")) (EIf (EBinOp "/=" (EVar "a2") (EVar "b2")) (EIf (EBinOp ">" (EVar "a2") (EVar "b2")) (EVar "Gt") (EVar "Lt")) (EIf (EBinOp "/=" (EVar "a1") (EVar "b1")) (EIf (EBinOp ">" (EVar "a1") (EVar "b1")) (EVar "Gt") (EVar "Lt")) (EIf (EBinOp "/=" (EVar "a0") (EVar "b0")) (EIf (EBinOp ">" (EVar "a0") (EVar "b0")) (EVar "Gt") (EVar "Lt")) (EVar "Eq"))))))
 (DTypeSig true "add64" (TyFun (TyCon "U64") (TyFun (TyCon "U64") (TyCon "U64"))))
 (DFunDef false "add64" ((PTuple (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3")) (PTuple (PVar "b0") (PVar "b1") (PVar "b2") (PVar "b3"))) (EBlock (DoLet false false (PVar "s0") (EBinOp "+" (EVar "a0") (EVar "b0"))) (DoLet false false (PVar "s1") (EBinOp "+" (EBinOp "+" (EVar "a1") (EVar "b1")) (EApp (EApp (EVar "shiftRight") (EVar "s0")) (ELit (LInt 16))))) (DoLet false false (PVar "s2") (EBinOp "+" (EBinOp "+" (EVar "a2") (EVar "b2")) (EApp (EApp (EVar "shiftRight") (EVar "s1")) (ELit (LInt 16))))) (DoLet false false (PVar "s3") (EBinOp "+" (EBinOp "+" (EVar "a3") (EVar "b3")) (EApp (EApp (EVar "shiftRight") (EVar "s2")) (ELit (LInt 16))))) (DoExpr (ETuple (EApp (EApp (EVar "bitAnd") (EVar "s0")) (ELit (LInt 65535))) (EApp (EApp (EVar "bitAnd") (EVar "s1")) (ELit (LInt 65535))) (EApp (EApp (EVar "bitAnd") (EVar "s2")) (ELit (LInt 65535))) (EApp (EApp (EVar "bitAnd") (EVar "s3")) (ELit (LInt 65535)))))))
 (DTypeSig true "sub64" (TyFun (TyCon "U64") (TyFun (TyCon "U64") (TyCon "U64"))))
@@ -359,7 +359,7 @@ mod64 dividend divisor =
 (DTypeSig true "isZero" (TyFun (TyCon "U64") (TyCon "Bool")))
 (DFunDef false "isZero" ((PTuple (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "a0") (ELit (LInt 0))) (EBinOp "==" (EVar "a1") (ELit (LInt 0)))) (EBinOp "==" (EVar "a2") (ELit (LInt 0)))) (EBinOp "==" (EVar "a3") (ELit (LInt 0)))))
 (DTypeSig true "cmp64" (TyFun (TyCon "U64") (TyFun (TyCon "U64") (TyCon "Ordering"))))
-(DFunDef false "cmp64" ((PTuple (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3")) (PTuple (PVar "b0") (PVar "b1") (PVar "b2") (PVar "b3"))) (EIf (EBinOp "!=" (EVar "a3") (EVar "b3")) (EIf (EBinOp ">" (EVar "a3") (EVar "b3")) (EVar "Gt") (EVar "Lt")) (EIf (EBinOp "!=" (EVar "a2") (EVar "b2")) (EIf (EBinOp ">" (EVar "a2") (EVar "b2")) (EVar "Gt") (EVar "Lt")) (EIf (EBinOp "!=" (EVar "a1") (EVar "b1")) (EIf (EBinOp ">" (EVar "a1") (EVar "b1")) (EVar "Gt") (EVar "Lt")) (EIf (EBinOp "!=" (EVar "a0") (EVar "b0")) (EIf (EBinOp ">" (EVar "a0") (EVar "b0")) (EVar "Gt") (EVar "Lt")) (EVar "Eq"))))))
+(DFunDef false "cmp64" ((PTuple (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3")) (PTuple (PVar "b0") (PVar "b1") (PVar "b2") (PVar "b3"))) (EIf (EBinOp "/=" (EVar "a3") (EVar "b3")) (EIf (EBinOp ">" (EVar "a3") (EVar "b3")) (EVar "Gt") (EVar "Lt")) (EIf (EBinOp "/=" (EVar "a2") (EVar "b2")) (EIf (EBinOp ">" (EVar "a2") (EVar "b2")) (EVar "Gt") (EVar "Lt")) (EIf (EBinOp "/=" (EVar "a1") (EVar "b1")) (EIf (EBinOp ">" (EVar "a1") (EVar "b1")) (EVar "Gt") (EVar "Lt")) (EIf (EBinOp "/=" (EVar "a0") (EVar "b0")) (EIf (EBinOp ">" (EVar "a0") (EVar "b0")) (EVar "Gt") (EVar "Lt")) (EVar "Eq"))))))
 (DTypeSig true "add64" (TyFun (TyCon "U64") (TyFun (TyCon "U64") (TyCon "U64"))))
 (DFunDef false "add64" ((PTuple (PVar "a0") (PVar "a1") (PVar "a2") (PVar "a3")) (PTuple (PVar "b0") (PVar "b1") (PVar "b2") (PVar "b3"))) (EBlock (DoLet false false (PVar "s0") (EBinOp "+" (EVar "a0") (EVar "b0"))) (DoLet false false (PVar "s1") (EBinOp "+" (EBinOp "+" (EVar "a1") (EVar "b1")) (EApp (EApp (EVar "shiftRight") (EVar "s0")) (ELit (LInt 16))))) (DoLet false false (PVar "s2") (EBinOp "+" (EBinOp "+" (EVar "a2") (EVar "b2")) (EApp (EApp (EVar "shiftRight") (EVar "s1")) (ELit (LInt 16))))) (DoLet false false (PVar "s3") (EBinOp "+" (EBinOp "+" (EVar "a3") (EVar "b3")) (EApp (EApp (EVar "shiftRight") (EVar "s2")) (ELit (LInt 16))))) (DoExpr (ETuple (EApp (EApp (EVar "bitAnd") (EVar "s0")) (ELit (LInt 65535))) (EApp (EApp (EVar "bitAnd") (EVar "s1")) (ELit (LInt 65535))) (EApp (EApp (EVar "bitAnd") (EVar "s2")) (ELit (LInt 65535))) (EApp (EApp (EVar "bitAnd") (EVar "s3")) (ELit (LInt 65535)))))))
 (DTypeSig true "sub64" (TyFun (TyCon "U64") (TyFun (TyCon "U64") (TyCon "U64"))))

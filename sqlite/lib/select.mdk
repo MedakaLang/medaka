@@ -1694,15 +1694,15 @@ cellIsNull _ = False
 -- true, NULL/zero/empty as false-ish.
 cellTruthy : Cell -> Bool
 cellTruthy CNull = False
-cellTruthy (CInt n) = n != 0
-cellTruthy (CFloat f) = f != 0.0
+cellTruthy (CInt n) = n /= 0
+cellTruthy (CFloat f) = f /= 0.0
 cellTruthy (CText s) = stringLength s > 0
 cellTruthy (CBlob _) = True
 
 litTruthy : Literal -> Bool
 litTruthy LNull = False
-litTruthy (LInt n) = n != 0
-litTruthy (LFloat f) = f != 0.0
+litTruthy (LInt n) = n /= 0
+litTruthy (LFloat f) = f /= 0.0
 litTruthy (LText s) = stringLength s > 0
 litTruthy (LBlob _) = True
 
@@ -1837,7 +1837,7 @@ foldSetOps : Db -> Int -> List (List Cell) -> List (SetOp, Select) -> Result Str
 foldSetOps _ _ acc [] = Ok acc
 foldSetOps db n acc ((op, sel)::rest) = do
   m <- selectColumnCount db sel
-  if m != n then Err "SELECTs to the left and right of \{setOpSql op} do not have the same number of result columns"
+  if m /= n then Err "SELECTs to the left and right of \{setOpSql op} do not have the same number of result columns"
   else do
     rhs <- runArmCells db sel
     foldSetOps db n (applySetOp op acc rhs) rest
@@ -2065,7 +2065,7 @@ materializeExpr db (EFn name args) = do
 runInSubquery : Db -> Compound -> Result String (List Literal)
 runInSubquery db q = do
   n <- selectColumnCount db (compoundFirstArm q)
-  if n != 1 then Err "sub-select returns \{n} columns - expected 1"
+  if n /= 1 then Err "sub-select returns \{n} columns - expected 1"
   else do
     rows <- runCompoundCells db q
     Ok (map (row => cellToLiteral (firstCellOf row)) rows)

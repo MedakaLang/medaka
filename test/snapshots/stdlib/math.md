@@ -52,7 +52,7 @@ toDegrees rad = rad * 180.0 / pi
 -- > isNaN 1.0
 -- False
 export isNaN : Float -> Bool
-isNaN x = x != x
+isNaN x = x /= x
 
 -- | True iff the argument is positive or negative infinity.  A finite `x`
 --   has `x - x == 0.0`; an infinite `x` has `x - x == NaN`.
@@ -104,7 +104,7 @@ lerp a b t = a + (b - a) * t
 --   NaN: `|NaN - x|` is NaN, and every IEEE `<=` involving NaN is `False`
 --   (this repo's decided semantics — see EMITTER-SEMANTICS.md §4 N5: derived
 --   `< <= > >=` stay IEEE). So `approxEq NaN NaN eps` is `False` for every
---   `eps`, including `NaN` itself — consistent with `isNaN` (`x != x`) and
+--   `eps`, including `NaN` itself — consistent with `isNaN` (`x /= x`) and
 --   with plain `==` already treating NaN as equal to nothing, itself
 --   included.
 --
@@ -163,7 +163,7 @@ export floorDiv : Int -> Int -> Int
 floorDiv a b =
   let q = a / b
   let r = a - q * b
-  if r != 0 && r < 0 != (b < 0) then q - 1 else q
+  if r /= 0 && r < 0 /= (b < 0) then q - 1 else q
 
 -- | Floor modulo: the remainder that pairs with `floorDiv`, so
 --   `floorDiv a b * b + floorMod a b == a` always holds and the result
@@ -305,7 +305,7 @@ prop "powInt b 0 equals 1" (b : Int) = eq (powInt b 0) 1
 (DTypeSig true "toDegrees" (TyFun (TyCon "Float") (TyCon "Float")))
 (DFunDef false "toDegrees" ((PVar "rad")) (EBinOp "/" (EBinOp "*" (EVar "rad") (ELit (LFloat 180.0))) (EVar "pi")))
 (DTypeSig true "isNaN" (TyFun (TyCon "Float") (TyCon "Bool")))
-(DFunDef false "isNaN" ((PVar "x")) (EBinOp "!=" (EVar "x") (EVar "x")))
+(DFunDef false "isNaN" ((PVar "x")) (EBinOp "/=" (EVar "x") (EVar "x")))
 (DTypeSig true "isInfinite" (TyFun (TyCon "Float") (TyCon "Bool")))
 (DFunDef false "isInfinite" ((PVar "x")) (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "isNaN") (EVar "x"))) (EApp (EVar "isNaN") (EBinOp "-" (EVar "x") (EVar "x")))))
 (DTypeSig true "isFinite" (TyFun (TyCon "Float") (TyCon "Bool")))
@@ -317,7 +317,7 @@ prop "powInt b 0 equals 1" (b : Int) = eq (powInt b 0) 1
 (DTypeSig true "logBase" (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyCon "Float"))))
 (DFunDef false "logBase" ((PVar "base") (PVar "x")) (EBinOp "/" (EApp (EVar "log") (EVar "x")) (EApp (EVar "log") (EVar "base"))))
 (DTypeSig true "floorDiv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "floorDiv" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "q") (EBinOp "/" (EVar "a") (EVar "b"))) (DoLet false false (PVar "r") (EBinOp "-" (EVar "a") (EBinOp "*" (EVar "q") (EVar "b")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "!=" (EVar "r") (ELit (LInt 0))) (EBinOp "!=" (EBinOp "<" (EVar "r") (ELit (LInt 0))) (EBinOp "<" (EVar "b") (ELit (LInt 0))))) (EBinOp "-" (EVar "q") (ELit (LInt 1))) (EVar "q")))))
+(DFunDef false "floorDiv" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "q") (EBinOp "/" (EVar "a") (EVar "b"))) (DoLet false false (PVar "r") (EBinOp "-" (EVar "a") (EBinOp "*" (EVar "q") (EVar "b")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "/=" (EVar "r") (ELit (LInt 0))) (EBinOp "/=" (EBinOp "<" (EVar "r") (ELit (LInt 0))) (EBinOp "<" (EVar "b") (ELit (LInt 0))))) (EBinOp "-" (EVar "q") (ELit (LInt 1))) (EVar "q")))))
 (DTypeSig true "floorMod" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "floorMod" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EBinOp "*" (EApp (EApp (EVar "floorDiv") (EVar "a")) (EVar "b")) (EVar "b"))))
 (DTypeSig true "gcdInt" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
@@ -349,7 +349,7 @@ prop "powInt b 0 equals 1" (b : Int) = eq (powInt b 0) 1
 (DTypeSig true "toDegrees" (TyFun (TyCon "Float") (TyCon "Float")))
 (DFunDef false "toDegrees" ((PVar "rad")) (EBinOp "/" (EBinOp "*" (EVar "rad") (ELit (LFloat 180.0))) (EVar "pi")))
 (DTypeSig true "isNaN" (TyFun (TyCon "Float") (TyCon "Bool")))
-(DFunDef false "isNaN" ((PVar "x")) (EBinOp "!=" (EVar "x") (EVar "x")))
+(DFunDef false "isNaN" ((PVar "x")) (EBinOp "/=" (EVar "x") (EVar "x")))
 (DTypeSig true "isInfinite" (TyFun (TyCon "Float") (TyCon "Bool")))
 (DFunDef false "isInfinite" ((PVar "x")) (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "isNaN") (EVar "x"))) (EApp (EVar "isNaN") (EBinOp "-" (EVar "x") (EVar "x")))))
 (DTypeSig true "isFinite" (TyFun (TyCon "Float") (TyCon "Bool")))
@@ -361,7 +361,7 @@ prop "powInt b 0 equals 1" (b : Int) = eq (powInt b 0) 1
 (DTypeSig true "logBase" (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyCon "Float"))))
 (DFunDef false "logBase" ((PVar "base") (PVar "x")) (EBinOp "/" (EApp (EVar "log") (EVar "x")) (EApp (EVar "log") (EVar "base"))))
 (DTypeSig true "floorDiv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "floorDiv" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "q") (EBinOp "/" (EVar "a") (EVar "b"))) (DoLet false false (PVar "r") (EBinOp "-" (EVar "a") (EBinOp "*" (EVar "q") (EVar "b")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "!=" (EVar "r") (ELit (LInt 0))) (EBinOp "!=" (EBinOp "<" (EVar "r") (ELit (LInt 0))) (EBinOp "<" (EVar "b") (ELit (LInt 0))))) (EBinOp "-" (EVar "q") (ELit (LInt 1))) (EVar "q")))))
+(DFunDef false "floorDiv" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "q") (EBinOp "/" (EVar "a") (EVar "b"))) (DoLet false false (PVar "r") (EBinOp "-" (EVar "a") (EBinOp "*" (EVar "q") (EVar "b")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "/=" (EVar "r") (ELit (LInt 0))) (EBinOp "/=" (EBinOp "<" (EVar "r") (ELit (LInt 0))) (EBinOp "<" (EVar "b") (ELit (LInt 0))))) (EBinOp "-" (EVar "q") (ELit (LInt 1))) (EVar "q")))))
 (DTypeSig true "floorMod" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "floorMod" ((PVar "a") (PVar "b")) (EBinOp "-" (EVar "a") (EBinOp "*" (EApp (EApp (EVar "floorDiv") (EVar "a")) (EVar "b")) (EVar "b"))))
 (DTypeSig true "gcdInt" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))

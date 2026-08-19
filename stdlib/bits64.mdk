@@ -88,13 +88,13 @@ isZero (a0, a1, a2, a3) = a0 == 0 && a1 == 0 && a2 == 0 && a3 == 0
    Gt -}
 export cmp64 : U64 -> U64 -> Ordering
 cmp64 (a0, a1, a2, a3) (b0, b1, b2, b3) =
-  if a3 != b3 then
+  if a3 /= b3 then
     if a3 > b3 then Gt else Lt
-  else if a2 != b2 then
+  else if a2 /= b2 then
     if a2 > b2 then Gt else Lt
-  else if a1 != b1 then
+  else if a1 /= b1 then
     if a1 > b1 then Gt else Lt
-  else if a0 != b0 then
+  else if a0 /= b0 then
     if a0 > b0 then Gt else Lt
   else
     Eq

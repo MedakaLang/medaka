@@ -301,7 +301,7 @@ missingSignatureRule = Rule {
 notEqRule : Rule
 notEqRule = Rule {
   name = ruleNameNotEq,
-  descr = "negated equality `not (a == b)` / `not (a != b)`. Prefer `a != b` / `a == b`",
+  descr = "negated equality `not (a == b)` / `not (a /= b)`. Prefer `a /= b` / `a == b`",
   severity = SevWarning,
   enabled = True,
   check = ruleNotEq,
@@ -321,7 +321,7 @@ boolSimplifyRule = Rule {
 remParityRule : Rule
 remParityRule = Rule {
   name = ruleNameRemParity,
-  descr = "`n % 2 == 0` / `n % 2 != 0` parity test. Prefer `isEven n` / `isOdd n`",
+  descr = "`n % 2 == 0` / `n % 2 /= 0` parity test. Prefer `isEven n` / `isOdd n`",
   severity = SevWarning,
   enabled = True,
   check = ruleRemParity,
@@ -853,7 +853,7 @@ parseRuleNames s =
   filterList nonEmptyStr (flatMap (splitOnChar ' ') (splitOnChar ',' s))
 
 nonEmptyStr : String -> Bool
-nonEmptyStr n = n != ""
+nonEmptyStr n = n /= ""
 
 isSuppressed : List Directive -> Finding -> Bool
 isSuppressed dirs f = anyList (dirCoversFinding f) dirs
@@ -1422,7 +1422,7 @@ allClausesSelfCall clauses (name, _) =
   allList (clauseSelfCallOrOther name) clauses
 
 clauseSelfCallOrOther : String -> (String, List Pat, Expr, Option Loc) -> Bool
-clauseSelfCallOrOther name (cn, pats, body, _) = cn != name
+clauseSelfCallOrOther name (cn, pats, body, _) = cn /= name
   || unconditionalSelfCall name pats body
 
 -- nullary: body is exactly the bare self reference; n-ary: body is an application
@@ -1796,7 +1796,7 @@ rewriteBindKv orc (k, v) = (rewriteBindExpr orc k, rewriteBindExpr orc v)
 --     So `x => x OP x`, `x => f x OP e`, `x => (x + 1) OP e` all skip.
 --   * two-param: body is exactly `EVar x OP EVar y` (in order, distinct names).
 --   * only the SYMBOLIC operators the parser accepts as sections round-trip
---     (`sectionOpStr` in parser.mdk): + * / == != < > <= >= && || :: ++ |> >> <<,
+--     (`sectionOpStr` in parser.mdk): + * / == /= < > <= >= && || :: ++ |> >> <<,
 --     plus `-` for LEFT/BARE only (a `-` RIGHT section `(- e)` parses as unary
 --     negation — EXCLUDED).  Backtick infix (`EInfix`) is NOT handled: the printer
 --     emits a word-operator section without backticks, so it would not round-trip.
@@ -1813,7 +1813,7 @@ sectionSymOps = [
   "*",
   "/",
   "==",
-  "!=",
+  "/=",
   "<",
   ">",
   "<=",
@@ -1854,7 +1854,7 @@ mentionsVar x e = match unwrapLoc e
 lamSection : List Pat -> Expr -> Option Section
 lamSection [PVar x _] body = lamSection1 x (unwrapLoc body)
 lamSection [PVar x _, PVar y _] body
-  | x != y = lamSection2 x y (unwrapLoc body)
+  | x /= y = lamSection2 x y (unwrapLoc body)
   | otherwise = None
 lamSection _ _ = None
 
@@ -2948,16 +2948,16 @@ fixImplMethodConcat (ImplMethod nm ps body) =
   ImplMethod nm ps (rewriteConcatExpr body)
 
 -- ── rule: not-eq ──────────────────────────────────────────────────────────────
--- `not (a == b)` → `a != b`; `not (a != b)` → `a == b` (also the unary-`!` forms).
--- ONLY `==`/`!=` — they are TOTAL, so De Morgan applies unconditionally.  `<`/`>`
+-- `not (a == b)` → `a /= b`; `not (a /= b)` → `a == b` (also the unary-`!` forms).
+-- ONLY `==`/`/=` — they are TOTAL, so De Morgan applies unconditionally.  `<`/`>`
 -- &c. are deliberately excluded: their complement is unsound for `Float` (NaN
 -- makes `not (a < b)` ≠ `a >= b`).  The flipped `EBinOp` reuses the original's
 -- route ref (an unresolved parse-time placeholder; re-resolved downstream).
 notEqOf : Expr -> Option Expr
 notEqOf e = match notArgOf e
   Some inner => match unwrapLoc inner
-    EBinOp "==" a b r => Some (EBinOp "!=" a b r)
-    EBinOp "!=" a b r => Some (EBinOp "==" a b r)
+    EBinOp "==" a b r => Some (EBinOp "/=" a b r)
+    EBinOp "/=" a b r => Some (EBinOp "==" a b r)
     _ => None
   None => None
 
@@ -2979,14 +2979,14 @@ notEqFix _ d = exprRuleFix noExcl (detApply notEqOf) d
 -- Redundant boolean shapes, each rewritten to an EXACTLY equivalent one:
 --   if c then True else False → c        if c then False else True → not c
 --   x == True → x        x == False → not x        (also True/False on the LEFT)
---   x != True → not x    x != False → x
+--   x /= True → not x    x /= False → x
 --   not (not x) → x      (`!(!x)` too)
 -- Excluded (per spec): `if c then True else e` → `c || e` (short-circuit/effect
 -- risk).  A comparison with bool literals on BOTH sides is left alone.
 boolSimplifyOf : Expr -> Option Expr
 boolSimplifyOf (EIf c t el) = boolSimplifyIf c (unwrapLoc t) (unwrapLoc el)
 boolSimplifyOf (EBinOp op a b _)
-  | op == "==" || op == "!=" = boolSimplifyEq op a b
+  | op == "==" || op == "/=" = boolSimplifyEq op a b
 boolSimplifyOf e = match notArgOf e
   Some inner => map (y => y) (notArgOf (unwrapLoc inner))
   None => None
@@ -3006,7 +3006,7 @@ boolSimplifyEq op a b
   | isFalseLit a = Some (boolEqResult op b False)
   | otherwise = None
 
--- the value operand `v`, negated iff (`==` against `False`) or (`!=` against
+-- the value operand `v`, negated iff (`==` against `False`) or (`/=` against
 -- `True`): `keepPositive = (op == "==") == constIsTrue`.
 boolEqResult : String -> Expr -> Bool -> Expr
 boolEqResult op v constIsTrue = if op == "==" == constIsTrue then v else mkNot v
@@ -3027,8 +3027,8 @@ boolSimplifyFix : Oracle -> Decl -> Option (List Decl)
 boolSimplifyFix _ d = exprRuleFix noExcl (detApply boolSimplifyOf) d
 
 -- ── rule: rem-parity ──────────────────────────────────────────────────────────
--- `n % 2 == 0` → `isEven n`; `n % 2 != 0` → `isOdd n` (either operand order).
--- ONLY the `== 0` / `!= 0` comparisons: Medaka's `%` follows the DIVIDEND's sign
+-- `n % 2 == 0` → `isEven n`; `n % 2 /= 0` → `isOdd n` (either operand order).
+-- ONLY the `== 0` / `/= 0` comparisons: Medaka's `%` follows the DIVIDEND's sign
 -- (`-3 % 2 = -1`), so `n % 2 == 1` is FALSE for negative odd `n` — excluded.
 -- Excludes the `isEven`/`isOdd` definitions themselves (their bodies ARE this
 -- idiom; rewriting them would produce `isEven n = isEven n`).
@@ -3037,7 +3037,7 @@ remParityExcl name = name == "isEven" || name == "isOdd"
 
 remParityOf : Expr -> Option Expr
 remParityOf (EBinOp op a b _)
-  | op == "==" || op == "!=" =
+  | op == "==" || op == "/=" =
     if isIntLit 0 b then
       remParityFrom op (unwrapLoc a)
     else if isIntLit 0 a then
@@ -4119,7 +4119,7 @@ dupFinding : List String -> (String, Int, String, String) -> Finding
 dupFinding distinctFiles occ =
   let file = occFile occ
   let line = occLine occ
-  let others = filterList (!= file) distinctFiles
+  let others = filterList (/= file) distinctFiles
   Finding {
     rule = ruleNameDuplicateBody,
     message = "function '\{occName occ}' has a body structurally identical to a definition in \{joinWith ", " others} — consolidate into a shared module",
@@ -4220,7 +4220,7 @@ emitSameFileGroup grp =
 
 sameFileFinding : List (String, Int, String) -> (String, Int, String) -> Finding
 sameFileFinding grp occ =
-  let others = filterList (o => sameFileOccName o != sameFileOccName occ) grp
+  let others = filterList (o => sameFileOccName o /= sameFileOccName occ) grp
   Finding {
     rule = ruleNameDuplicateBody,
     message = "function '\{sameFileOccName occ}' has a body structurally identical to '\{joinWith "', '" (map sameFileOccName others)}' in this same file — consolidate into one function",
@@ -4324,11 +4324,11 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "missingSignatureRule" (TyCon "Rule"))
 (DFunDef false "missingSignatureRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameMissingSignature")) (fa "descr" (ELit (LString "top-level value/function binding has no sibling type signature (name : Type). Add one (Haskell -Wmissing-signatures)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleMissingSignature")) (fa "fix" (EVar "None")))))
 (DTypeSig false "notEqRule" (TyCon "Rule"))
-(DFunDef false "notEqRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameNotEq")) (fa "descr" (ELit (LString "negated equality `not (a == b)` / `not (a != b)`. Prefer `a != b` / `a == b`"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleNotEq")) (fa "fix" (EApp (EVar "Some") (EVar "notEqFix"))))))
+(DFunDef false "notEqRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameNotEq")) (fa "descr" (ELit (LString "negated equality `not (a == b)` / `not (a /= b)`. Prefer `a /= b` / `a == b`"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleNotEq")) (fa "fix" (EApp (EVar "Some") (EVar "notEqFix"))))))
 (DTypeSig false "boolSimplifyRule" (TyCon "Rule"))
 (DFunDef false "boolSimplifyRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameBoolSimplify")) (fa "descr" (ELit (LString "redundant boolean shape (`if c then True else False`, `x == True`, `not (not x)`, …). Simplify"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleBoolSimplify")) (fa "fix" (EApp (EVar "Some") (EVar "boolSimplifyFix"))))))
 (DTypeSig false "remParityRule" (TyCon "Rule"))
-(DFunDef false "remParityRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameRemParity")) (fa "descr" (ELit (LString "`n % 2 == 0` / `n % 2 != 0` parity test. Prefer `isEven n` / `isOdd n`"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleRemParity")) (fa "fix" (EApp (EVar "Some") (EVar "remParityFix"))))))
+(DFunDef false "remParityRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameRemParity")) (fa "descr" (ELit (LString "`n % 2 == 0` / `n % 2 /= 0` parity test. Prefer `isEven n` / `isOdd n`"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleRemParity")) (fa "fix" (EApp (EVar "Some") (EVar "remParityFix"))))))
 (DTypeSig false "doubleReverseRule" (TyCon "Rule"))
 (DFunDef false "doubleReverseRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameDoubleReverse")) (fa "descr" (ELit (LString "`reverse (reverse x)` is `x`. Drop the double reversal"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDoubleReverse")) (fa "fix" (EApp (EVar "Some") (EVar "doubleReverseFix"))))))
 (DTypeSig false "whenUnlessRule" (TyCon "Rule"))
@@ -4468,7 +4468,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "parseRuleNames" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "parseRuleNames" ((PVar "s")) (EApp (EApp (EVar "filterList") (EVar "nonEmptyStr")) (EApp (EApp (EVar "flatMap") (EApp (EVar "splitOnChar") (ELit (LChar " ")))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar ","))) (EVar "s")))))
 (DTypeSig false "nonEmptyStr" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "nonEmptyStr" ((PVar "n")) (EBinOp "!=" (EVar "n") (ELit (LString ""))))
+(DFunDef false "nonEmptyStr" ((PVar "n")) (EBinOp "/=" (EVar "n") (ELit (LString ""))))
 (DTypeSig false "isSuppressed" (TyFun (TyApp (TyCon "List") (TyCon "Directive")) (TyFun (TyCon "Finding") (TyCon "Bool"))))
 (DFunDef false "isSuppressed" ((PVar "dirs") (PVar "f")) (EApp (EApp (EVar "anyList") (EApp (EVar "dirCoversFinding") (EVar "f"))) (EVar "dirs")))
 (DTypeSig false "dirCoversFinding" (TyFun (TyCon "Finding") (TyFun (TyCon "Directive") (TyCon "Bool"))))
@@ -4648,7 +4648,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "allClausesSelfCall" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Bool"))))
 (DFunDef false "allClausesSelfCall" ((PVar "clauses") (PTuple (PVar "name") PWild)) (EApp (EApp (EVar "allList") (EApp (EVar "clauseSelfCallOrOther") (EVar "name"))) (EVar "clauses")))
 (DTypeSig false "clauseSelfCallOrOther" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Bool"))))
-(DFunDef false "clauseSelfCallOrOther" ((PVar "name") (PTuple (PVar "cn") (PVar "pats") (PVar "body") PWild)) (EBinOp "||" (EBinOp "!=" (EVar "cn") (EVar "name")) (EApp (EApp (EApp (EVar "unconditionalSelfCall") (EVar "name")) (EVar "pats")) (EVar "body"))))
+(DFunDef false "clauseSelfCallOrOther" ((PVar "name") (PTuple (PVar "cn") (PVar "pats") (PVar "body") PWild)) (EBinOp "||" (EBinOp "/=" (EVar "cn") (EVar "name")) (EApp (EApp (EApp (EVar "unconditionalSelfCall") (EVar "name")) (EVar "pats")) (EVar "body"))))
 (DTypeSig false "unconditionalSelfCall" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyCon "Bool")))))
 (DFunDef false "unconditionalSelfCall" ((PVar "name") (PList) (PVar "body")) (EApp (EApp (EVar "isBareSelf") (EVar "name")) (EApp (EVar "stripWrap") (EVar "body"))))
 (DFunDef false "unconditionalSelfCall" ((PVar "name") PWild (PVar "body")) (EApp (EApp (EVar "isHeadSelfApp") (EVar "name")) (EApp (EVar "stripWrap") (EVar "body"))))
@@ -4841,7 +4841,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "rewriteBindKv" (TyFun (TyCon "Oracle") (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "rewriteBindKv" ((PVar "orc") (PTuple (PVar "k") (PVar "v"))) (ETuple (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "k")) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "v"))))
 (DTypeSig false "sectionSymOps" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "sectionSymOps" () (EListLit (ELit (LString "+")) (ELit (LString "*")) (ELit (LString "/")) (ELit (LString "==")) (ELit (LString "!=")) (ELit (LString "<")) (ELit (LString ">")) (ELit (LString "<=")) (ELit (LString ">=")) (ELit (LString "&&")) (ELit (LString "||")) (ELit (LString "::")) (ELit (LString "++")) (ELit (LString "|>")) (ELit (LString ">>")) (ELit (LString "<<"))))
+(DFunDef false "sectionSymOps" () (EListLit (ELit (LString "+")) (ELit (LString "*")) (ELit (LString "/")) (ELit (LString "==")) (ELit (LString "/=")) (ELit (LString "<")) (ELit (LString ">")) (ELit (LString "<=")) (ELit (LString ">=")) (ELit (LString "&&")) (ELit (LString "||")) (ELit (LString "::")) (ELit (LString "++")) (ELit (LString "|>")) (ELit (LString ">>")) (ELit (LString "<<"))))
 (DTypeSig false "rightSectionOp" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "rightSectionOp" ((PVar "op")) (EApp (EApp (EVar "contains") (EVar "op")) (EVar "sectionSymOps")))
 (DTypeSig false "leftSectionOp" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -4854,7 +4854,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "mentionsVar" ((PVar "x") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" (PVar "w")) () (EBinOp "==" (EVar "w") (EVar "x"))) (arm (PVar "e2") () (EApp (EApp (EVar "anyList") (EApp (EVar "mentionsVar") (EVar "x"))) (EApp (EVar "childExprs") (EVar "e2"))))))
 (DTypeSig false "lamSection" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Section")))))
 (DFunDef false "lamSection" ((PList (PCon "PVar" (PVar "x") PWild)) (PVar "body")) (EApp (EApp (EVar "lamSection1") (EVar "x")) (EApp (EVar "unwrapLoc") (EVar "body"))))
-(DFunDef false "lamSection" ((PList (PCon "PVar" (PVar "x") PWild) (PCon "PVar" (PVar "y") PWild)) (PVar "body")) (EIf (EBinOp "!=" (EVar "x") (EVar "y")) (EApp (EApp (EApp (EVar "lamSection2") (EVar "x")) (EVar "y")) (EApp (EVar "unwrapLoc") (EVar "body"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "lamSection" ((PList (PCon "PVar" (PVar "x") PWild) (PCon "PVar" (PVar "y") PWild)) (PVar "body")) (EIf (EBinOp "/=" (EVar "x") (EVar "y")) (EApp (EApp (EApp (EVar "lamSection2") (EVar "x")) (EVar "y")) (EApp (EVar "unwrapLoc") (EVar "body"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "lamSection" (PWild PWild) (EVar "None"))
 (DTypeSig false "lamSection1" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Section")))))
 (DFunDef false "lamSection1" ((PVar "x") (PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild)) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "isEVarNamed") (EVar "x")) (EVar "a")) (EApp (EVar "rightSectionOp") (EVar "op"))) (EApp (EVar "not") (EApp (EApp (EVar "mentionsVar") (EVar "x")) (EVar "b")))) (EApp (EVar "Some") (EApp (EApp (EVar "SecRight") (EVar "op")) (EVar "b"))) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "isEVarNamed") (EVar "x")) (EVar "b")) (EApp (EVar "leftSectionOp") (EVar "op"))) (EApp (EVar "not") (EApp (EApp (EVar "mentionsVar") (EVar "x")) (EVar "a")))) (EApp (EVar "Some") (EApp (EApp (EVar "SecLeft") (EVar "a")) (EVar "op"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
@@ -5330,7 +5330,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "fixImplMethodConcat" (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod")))
 (DFunDef false "fixImplMethodConcat" ((PCon "ImplMethod" (PVar "nm") (PVar "ps") (PVar "body"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "nm")) (EVar "ps")) (EApp (EVar "rewriteConcatExpr") (EVar "body"))))
 (DTypeSig false "notEqOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
-(DFunDef false "notEqOf" ((PVar "e")) (EMatch (EApp (EVar "notArgOf") (EVar "e")) (arm (PCon "Some" (PVar "inner")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "inner")) (arm (PCon "EBinOp" (PLit (LString "==")) (PVar "a") (PVar "b") (PVar "r")) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString "!="))) (EVar "a")) (EVar "b")) (EVar "r")))) (arm (PCon "EBinOp" (PLit (LString "!=")) (PVar "a") (PVar "b") (PVar "r")) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString "=="))) (EVar "a")) (EVar "b")) (EVar "r")))) (arm PWild () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "notEqOf" ((PVar "e")) (EMatch (EApp (EVar "notArgOf") (EVar "e")) (arm (PCon "Some" (PVar "inner")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "inner")) (arm (PCon "EBinOp" (PLit (LString "==")) (PVar "a") (PVar "b") (PVar "r")) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString "/="))) (EVar "a")) (EVar "b")) (EVar "r")))) (arm (PCon "EBinOp" (PLit (LString "/=")) (PVar "a") (PVar "b") (PVar "r")) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString "=="))) (EVar "a")) (EVar "b")) (EVar "r")))) (arm PWild () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "ruleNotEq" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "ruleNotEq" (PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "noExcl")) (EVar "notEqOf")) (EVar "notEqFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "notEqFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
@@ -5339,7 +5339,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "notEqFix" (PWild (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFix") (EVar "noExcl")) (EApp (EVar "detApply") (EVar "notEqOf"))) (EVar "d")))
 (DTypeSig false "boolSimplifyOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "boolSimplifyOf" ((PCon "EIf" (PVar "c") (PVar "t") (PVar "el"))) (EApp (EApp (EApp (EVar "boolSimplifyIf") (EVar "c")) (EApp (EVar "unwrapLoc") (EVar "t"))) (EApp (EVar "unwrapLoc") (EVar "el"))))
-(DFunDef false "boolSimplifyOf" ((PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild)) (EIf (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "=="))) (EBinOp "==" (EVar "op") (ELit (LString "!=")))) (EApp (EApp (EApp (EVar "boolSimplifyEq") (EVar "op")) (EVar "a")) (EVar "b")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "boolSimplifyOf" ((PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild)) (EIf (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "=="))) (EBinOp "==" (EVar "op") (ELit (LString "/=")))) (EApp (EApp (EApp (EVar "boolSimplifyEq") (EVar "op")) (EVar "a")) (EVar "b")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "boolSimplifyOf" ((PVar "e")) (EMatch (EApp (EVar "notArgOf") (EVar "e")) (arm (PCon "Some" (PVar "inner")) () (EApp (EApp (EVar "map") (ELam ((PVar "y")) (EVar "y"))) (EApp (EVar "notArgOf") (EApp (EVar "unwrapLoc") (EVar "inner"))))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "boolSimplifyIf" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))))
 (DFunDef false "boolSimplifyIf" ((PVar "c") (PVar "t") (PVar "el")) (EIf (EBinOp "&&" (EApp (EVar "isTrueLit") (EVar "t")) (EApp (EVar "isFalseLit") (EVar "el"))) (EApp (EVar "Some") (EVar "c")) (EIf (EBinOp "&&" (EApp (EVar "isFalseLit") (EVar "t")) (EApp (EVar "isTrueLit") (EVar "el"))) (EApp (EVar "Some") (EApp (EVar "mkNot") (EVar "c"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
@@ -5356,7 +5356,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "remParityExcl" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "remParityExcl" ((PVar "name")) (EBinOp "||" (EBinOp "==" (EVar "name") (ELit (LString "isEven"))) (EBinOp "==" (EVar "name") (ELit (LString "isOdd")))))
 (DTypeSig false "remParityOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
-(DFunDef false "remParityOf" ((PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild)) (EIf (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "=="))) (EBinOp "==" (EVar "op") (ELit (LString "!=")))) (EIf (EApp (EApp (EVar "isIntLit") (ELit (LInt 0))) (EVar "b")) (EApp (EApp (EVar "remParityFrom") (EVar "op")) (EApp (EVar "unwrapLoc") (EVar "a"))) (EIf (EApp (EApp (EVar "isIntLit") (ELit (LInt 0))) (EVar "a")) (EApp (EApp (EVar "remParityFrom") (EVar "op")) (EApp (EVar "unwrapLoc") (EVar "b"))) (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "remParityOf" ((PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild)) (EIf (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "=="))) (EBinOp "==" (EVar "op") (ELit (LString "/=")))) (EIf (EApp (EApp (EVar "isIntLit") (ELit (LInt 0))) (EVar "b")) (EApp (EApp (EVar "remParityFrom") (EVar "op")) (EApp (EVar "unwrapLoc") (EVar "a"))) (EIf (EApp (EApp (EVar "isIntLit") (ELit (LInt 0))) (EVar "a")) (EApp (EApp (EVar "remParityFrom") (EVar "op")) (EApp (EVar "unwrapLoc") (EVar "b"))) (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "remParityOf" (PWild) (EVar "None"))
 (DTypeSig false "remParityFrom" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
 (DFunDef false "remParityFrom" ((PVar "op") (PCon "EBinOp" (PLit (LString "%")) (PVar "n") (PVar "two") PWild)) (EIf (EApp (EApp (EVar "isIntLit") (ELit (LInt 2))) (EVar "two")) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EApp (EVar "parityFn") (EVar "op")))) (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
@@ -5663,7 +5663,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "emitDupGroup" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "emitDupGroup" ((PVar "grp")) (EBlock (DoLet false false (PVar "distinctFiles") (EApp (EVar "sortUniqS") (EApp (EApp (EVar "map") (EVar "occFile")) (EVar "grp")))) (DoExpr (EIf (EBinOp "<" (EApp (EVar "listLen") (EVar "distinctFiles")) (ELit (LInt 2))) (EListLit) (EApp (EApp (EVar "map") (EApp (EVar "dupFinding") (EVar "distinctFiles"))) (EApp (EVar "sortDupOccs") (EVar "grp")))))))
 (DTypeSig false "dupFinding" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")) (TyCon "Finding"))))
-(DFunDef false "dupFinding" ((PVar "distinctFiles") (PVar "occ")) (EBlock (DoLet false false (PVar "file") (EApp (EVar "occFile") (EVar "occ"))) (DoLet false false (PVar "line") (EApp (EVar "occLine") (EVar "occ"))) (DoLet false false (PVar "others") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "!=" (EVar "_s") (EVar "file")))) (EVar "distinctFiles"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDuplicateBody")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EVar "display") (EApp (EVar "occName") (EVar "occ")))) (ELit (LString "' has a body structurally identical to a definition in "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "others")))) (ELit (LString " — consolidate into a shared module")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "file")) (EVar "line")) (ELit (LInt 1))) (EVar "line")) (ELit (LInt 1))))))))))
+(DFunDef false "dupFinding" ((PVar "distinctFiles") (PVar "occ")) (EBlock (DoLet false false (PVar "file") (EApp (EVar "occFile") (EVar "occ"))) (DoLet false false (PVar "line") (EApp (EVar "occLine") (EVar "occ"))) (DoLet false false (PVar "others") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "file")))) (EVar "distinctFiles"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDuplicateBody")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EVar "display") (EApp (EVar "occName") (EVar "occ")))) (ELit (LString "' has a body structurally identical to a definition in "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "others")))) (ELit (LString " — consolidate into a shared module")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "file")) (EVar "line")) (ELit (LInt 1))) (EVar "line")) (ELit (LInt 1))))))))))
 (DTypeSig false "sortDupOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))))
 (DFunDef false "sortDupOccs" ((PList)) (EListLit))
 (DFunDef false "sortDupOccs" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "dupInsert") (EVar "x")) (EApp (EVar "sortDupOccs") (EVar "xs"))))
@@ -5695,7 +5695,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "emitSameFileGroup" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "emitSameFileGroup" ((PVar "grp")) (EIf (EBinOp "<" (EApp (EVar "listLen") (EVar "grp")) (ELit (LInt 2))) (EListLit) (EApp (EApp (EVar "map") (EApp (EVar "sameFileFinding") (EVar "grp"))) (EApp (EVar "sortSameFileOccs") (EVar "grp")))))
 (DTypeSig false "sameFileFinding" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")) (TyCon "Finding"))))
-(DFunDef false "sameFileFinding" ((PVar "grp") (PVar "occ")) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EBinOp "!=" (EApp (EVar "sameFileOccName") (EVar "o")) (EApp (EVar "sameFileOccName") (EVar "occ"))))) (EVar "grp"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDuplicateBody")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EVar "display") (EApp (EVar "sameFileOccName") (EVar "occ")))) (ELit (LString "' has a body structurally identical to '"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString "', '"))) (EApp (EApp (EVar "map") (EVar "sameFileOccName")) (EVar "others"))))) (ELit (LString "' in this same file — consolidate into one function")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EApp (EVar "sameFileOccLine") (EVar "occ"))) (ELit (LInt 1))) (EApp (EVar "sameFileOccLine") (EVar "occ"))) (ELit (LInt 1))))))))))
+(DFunDef false "sameFileFinding" ((PVar "grp") (PVar "occ")) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EBinOp "/=" (EApp (EVar "sameFileOccName") (EVar "o")) (EApp (EVar "sameFileOccName") (EVar "occ"))))) (EVar "grp"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDuplicateBody")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EVar "display") (EApp (EVar "sameFileOccName") (EVar "occ")))) (ELit (LString "' has a body structurally identical to '"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString "', '"))) (EApp (EApp (EVar "map") (EVar "sameFileOccName")) (EVar "others"))))) (ELit (LString "' in this same file — consolidate into one function")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EApp (EVar "sameFileOccLine") (EVar "occ"))) (ELit (LInt 1))) (EApp (EVar "sameFileOccLine") (EVar "occ"))) (ELit (LInt 1))))))))))
 (DTypeSig false "sortSameFileOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")))))
 (DFunDef false "sortSameFileOccs" ((PList)) (EListLit))
 (DFunDef false "sortSameFileOccs" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "sameFileInsert") (EVar "x")) (EApp (EVar "sortSameFileOccs") (EVar "xs"))))
@@ -5781,11 +5781,11 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "missingSignatureRule" (TyCon "Rule"))
 (DFunDef false "missingSignatureRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameMissingSignature")) (fa "descr" (ELit (LString "top-level value/function binding has no sibling type signature (name : Type). Add one (Haskell -Wmissing-signatures)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleMissingSignature")) (fa "fix" (EVar "None")))))
 (DTypeSig false "notEqRule" (TyCon "Rule"))
-(DFunDef false "notEqRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameNotEq")) (fa "descr" (ELit (LString "negated equality `not (a == b)` / `not (a != b)`. Prefer `a != b` / `a == b`"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleNotEq")) (fa "fix" (EApp (EVar "Some") (EVar "notEqFix"))))))
+(DFunDef false "notEqRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameNotEq")) (fa "descr" (ELit (LString "negated equality `not (a == b)` / `not (a /= b)`. Prefer `a /= b` / `a == b`"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleNotEq")) (fa "fix" (EApp (EVar "Some") (EVar "notEqFix"))))))
 (DTypeSig false "boolSimplifyRule" (TyCon "Rule"))
 (DFunDef false "boolSimplifyRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameBoolSimplify")) (fa "descr" (ELit (LString "redundant boolean shape (`if c then True else False`, `x == True`, `not (not x)`, …). Simplify"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleBoolSimplify")) (fa "fix" (EApp (EVar "Some") (EVar "boolSimplifyFix"))))))
 (DTypeSig false "remParityRule" (TyCon "Rule"))
-(DFunDef false "remParityRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameRemParity")) (fa "descr" (ELit (LString "`n % 2 == 0` / `n % 2 != 0` parity test. Prefer `isEven n` / `isOdd n`"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleRemParity")) (fa "fix" (EApp (EVar "Some") (EVar "remParityFix"))))))
+(DFunDef false "remParityRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameRemParity")) (fa "descr" (ELit (LString "`n % 2 == 0` / `n % 2 /= 0` parity test. Prefer `isEven n` / `isOdd n`"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleRemParity")) (fa "fix" (EApp (EVar "Some") (EVar "remParityFix"))))))
 (DTypeSig false "doubleReverseRule" (TyCon "Rule"))
 (DFunDef false "doubleReverseRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameDoubleReverse")) (fa "descr" (ELit (LString "`reverse (reverse x)` is `x`. Drop the double reversal"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDoubleReverse")) (fa "fix" (EApp (EVar "Some") (EVar "doubleReverseFix"))))))
 (DTypeSig false "whenUnlessRule" (TyCon "Rule"))
@@ -5925,7 +5925,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "parseRuleNames" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "parseRuleNames" ((PVar "s")) (EApp (EApp (EVar "filterList") (EVar "nonEmptyStr")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "splitOnChar") (ELit (LChar " ")))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar ","))) (EVar "s")))))
 (DTypeSig false "nonEmptyStr" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "nonEmptyStr" ((PVar "n")) (EBinOp "!=" (EVar "n") (ELit (LString ""))))
+(DFunDef false "nonEmptyStr" ((PVar "n")) (EBinOp "/=" (EVar "n") (ELit (LString ""))))
 (DTypeSig false "isSuppressed" (TyFun (TyApp (TyCon "List") (TyCon "Directive")) (TyFun (TyCon "Finding") (TyCon "Bool"))))
 (DFunDef false "isSuppressed" ((PVar "dirs") (PVar "f")) (EApp (EApp (EVar "anyList") (EApp (EVar "dirCoversFinding") (EVar "f"))) (EVar "dirs")))
 (DTypeSig false "dirCoversFinding" (TyFun (TyCon "Finding") (TyFun (TyCon "Directive") (TyCon "Bool"))))
@@ -6105,7 +6105,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "allClausesSelfCall" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Bool"))))
 (DFunDef false "allClausesSelfCall" ((PVar "clauses") (PTuple (PVar "name") PWild)) (EApp (EApp (EVar "allList") (EApp (EVar "clauseSelfCallOrOther") (EVar "name"))) (EVar "clauses")))
 (DTypeSig false "clauseSelfCallOrOther" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Bool"))))
-(DFunDef false "clauseSelfCallOrOther" ((PVar "name") (PTuple (PVar "cn") (PVar "pats") (PVar "body") PWild)) (EBinOp "||" (EBinOp "!=" (EVar "cn") (EVar "name")) (EApp (EApp (EApp (EVar "unconditionalSelfCall") (EVar "name")) (EVar "pats")) (EVar "body"))))
+(DFunDef false "clauseSelfCallOrOther" ((PVar "name") (PTuple (PVar "cn") (PVar "pats") (PVar "body") PWild)) (EBinOp "||" (EBinOp "/=" (EVar "cn") (EVar "name")) (EApp (EApp (EApp (EVar "unconditionalSelfCall") (EVar "name")) (EVar "pats")) (EVar "body"))))
 (DTypeSig false "unconditionalSelfCall" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyCon "Bool")))))
 (DFunDef false "unconditionalSelfCall" ((PVar "name") (PList) (PVar "body")) (EApp (EApp (EVar "isBareSelf") (EVar "name")) (EApp (EVar "stripWrap") (EVar "body"))))
 (DFunDef false "unconditionalSelfCall" ((PVar "name") PWild (PVar "body")) (EApp (EApp (EVar "isHeadSelfApp") (EVar "name")) (EApp (EVar "stripWrap") (EVar "body"))))
@@ -6298,7 +6298,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "rewriteBindKv" (TyFun (TyCon "Oracle") (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "rewriteBindKv" ((PVar "orc") (PTuple (PVar "k") (PVar "v"))) (ETuple (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "k")) (EApp (EApp (EVar "rewriteBindExpr") (EVar "orc")) (EVar "v"))))
 (DTypeSig false "sectionSymOps" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "sectionSymOps" () (EListLit (ELit (LString "+")) (ELit (LString "*")) (ELit (LString "/")) (ELit (LString "==")) (ELit (LString "!=")) (ELit (LString "<")) (ELit (LString ">")) (ELit (LString "<=")) (ELit (LString ">=")) (ELit (LString "&&")) (ELit (LString "||")) (ELit (LString "::")) (ELit (LString "++")) (ELit (LString "|>")) (ELit (LString ">>")) (ELit (LString "<<"))))
+(DFunDef false "sectionSymOps" () (EListLit (ELit (LString "+")) (ELit (LString "*")) (ELit (LString "/")) (ELit (LString "==")) (ELit (LString "/=")) (ELit (LString "<")) (ELit (LString ">")) (ELit (LString "<=")) (ELit (LString ">=")) (ELit (LString "&&")) (ELit (LString "||")) (ELit (LString "::")) (ELit (LString "++")) (ELit (LString "|>")) (ELit (LString ">>")) (ELit (LString "<<"))))
 (DTypeSig false "rightSectionOp" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "rightSectionOp" ((PVar "op")) (EApp (EApp (EVar "contains") (EVar "op")) (EVar "sectionSymOps")))
 (DTypeSig false "leftSectionOp" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -6311,7 +6311,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "mentionsVar" ((PVar "x") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" (PVar "w")) () (EBinOp "==" (EVar "w") (EVar "x"))) (arm (PVar "e2") () (EApp (EApp (EVar "anyList") (EApp (EVar "mentionsVar") (EVar "x"))) (EApp (EVar "childExprs") (EVar "e2"))))))
 (DTypeSig false "lamSection" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Section")))))
 (DFunDef false "lamSection" ((PList (PCon "PVar" (PVar "x") PWild)) (PVar "body")) (EApp (EApp (EVar "lamSection1") (EVar "x")) (EApp (EVar "unwrapLoc") (EVar "body"))))
-(DFunDef false "lamSection" ((PList (PCon "PVar" (PVar "x") PWild) (PCon "PVar" (PVar "y") PWild)) (PVar "body")) (EIf (EBinOp "!=" (EVar "x") (EVar "y")) (EApp (EApp (EApp (EVar "lamSection2") (EVar "x")) (EVar "y")) (EApp (EVar "unwrapLoc") (EVar "body"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "lamSection" ((PList (PCon "PVar" (PVar "x") PWild) (PCon "PVar" (PVar "y") PWild)) (PVar "body")) (EIf (EBinOp "/=" (EVar "x") (EVar "y")) (EApp (EApp (EApp (EVar "lamSection2") (EVar "x")) (EVar "y")) (EApp (EVar "unwrapLoc") (EVar "body"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "lamSection" (PWild PWild) (EVar "None"))
 (DTypeSig false "lamSection1" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Section")))))
 (DFunDef false "lamSection1" ((PVar "x") (PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild)) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "isEVarNamed") (EVar "x")) (EVar "a")) (EApp (EVar "rightSectionOp") (EVar "op"))) (EApp (EVar "not") (EApp (EApp (EVar "mentionsVar") (EVar "x")) (EVar "b")))) (EApp (EVar "Some") (EApp (EApp (EVar "SecRight") (EVar "op")) (EVar "b"))) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "isEVarNamed") (EVar "x")) (EVar "b")) (EApp (EVar "leftSectionOp") (EVar "op"))) (EApp (EVar "not") (EApp (EApp (EVar "mentionsVar") (EVar "x")) (EVar "a")))) (EApp (EVar "Some") (EApp (EApp (EVar "SecLeft") (EVar "a")) (EVar "op"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
@@ -6787,7 +6787,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "fixImplMethodConcat" (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod")))
 (DFunDef false "fixImplMethodConcat" ((PCon "ImplMethod" (PVar "nm") (PVar "ps") (PVar "body"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "nm")) (EVar "ps")) (EApp (EVar "rewriteConcatExpr") (EVar "body"))))
 (DTypeSig false "notEqOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
-(DFunDef false "notEqOf" ((PVar "e")) (EMatch (EApp (EVar "notArgOf") (EVar "e")) (arm (PCon "Some" (PVar "inner")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "inner")) (arm (PCon "EBinOp" (PLit (LString "==")) (PVar "a") (PVar "b") (PVar "r")) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString "!="))) (EVar "a")) (EVar "b")) (EVar "r")))) (arm (PCon "EBinOp" (PLit (LString "!=")) (PVar "a") (PVar "b") (PVar "r")) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString "=="))) (EVar "a")) (EVar "b")) (EVar "r")))) (arm PWild () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "notEqOf" ((PVar "e")) (EMatch (EApp (EVar "notArgOf") (EVar "e")) (arm (PCon "Some" (PVar "inner")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "inner")) (arm (PCon "EBinOp" (PLit (LString "==")) (PVar "a") (PVar "b") (PVar "r")) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString "/="))) (EVar "a")) (EVar "b")) (EVar "r")))) (arm (PCon "EBinOp" (PLit (LString "/=")) (PVar "a") (PVar "b") (PVar "r")) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString "=="))) (EVar "a")) (EVar "b")) (EVar "r")))) (arm PWild () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "ruleNotEq" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "ruleNotEq" (PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindings") (EVar "noExcl")) (EVar "notEqOf")) (EVar "notEqFinding")) (EVar "pos")) (EVar "prog")))
 (DTypeSig false "notEqFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
@@ -6796,7 +6796,7 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "notEqFix" (PWild (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFix") (EVar "noExcl")) (EApp (EVar "detApply") (EVar "notEqOf"))) (EVar "d")))
 (DTypeSig false "boolSimplifyOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "boolSimplifyOf" ((PCon "EIf" (PVar "c") (PVar "t") (PVar "el"))) (EApp (EApp (EApp (EVar "boolSimplifyIf") (EVar "c")) (EApp (EVar "unwrapLoc") (EVar "t"))) (EApp (EVar "unwrapLoc") (EVar "el"))))
-(DFunDef false "boolSimplifyOf" ((PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild)) (EIf (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "=="))) (EBinOp "==" (EVar "op") (ELit (LString "!=")))) (EApp (EApp (EApp (EVar "boolSimplifyEq") (EVar "op")) (EVar "a")) (EVar "b")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "boolSimplifyOf" ((PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild)) (EIf (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "=="))) (EBinOp "==" (EVar "op") (ELit (LString "/=")))) (EApp (EApp (EApp (EVar "boolSimplifyEq") (EVar "op")) (EVar "a")) (EVar "b")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "boolSimplifyOf" ((PVar "e")) (EMatch (EApp (EVar "notArgOf") (EVar "e")) (arm (PCon "Some" (PVar "inner")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "y")) (EVar "y"))) (EApp (EVar "notArgOf") (EApp (EVar "unwrapLoc") (EVar "inner"))))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "boolSimplifyIf" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))))
 (DFunDef false "boolSimplifyIf" ((PVar "c") (PVar "t") (PVar "el")) (EIf (EBinOp "&&" (EApp (EVar "isTrueLit") (EVar "t")) (EApp (EVar "isFalseLit") (EVar "el"))) (EApp (EVar "Some") (EVar "c")) (EIf (EBinOp "&&" (EApp (EVar "isFalseLit") (EVar "t")) (EApp (EVar "isTrueLit") (EVar "el"))) (EApp (EVar "Some") (EApp (EVar "mkNot") (EVar "c"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
@@ -6813,7 +6813,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "remParityExcl" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "remParityExcl" ((PVar "name")) (EBinOp "||" (EBinOp "==" (EVar "name") (ELit (LString "isEven"))) (EBinOp "==" (EVar "name") (ELit (LString "isOdd")))))
 (DTypeSig false "remParityOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
-(DFunDef false "remParityOf" ((PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild)) (EIf (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "=="))) (EBinOp "==" (EVar "op") (ELit (LString "!=")))) (EIf (EApp (EApp (EVar "isIntLit") (ELit (LInt 0))) (EVar "b")) (EApp (EApp (EVar "remParityFrom") (EVar "op")) (EApp (EVar "unwrapLoc") (EVar "a"))) (EIf (EApp (EApp (EVar "isIntLit") (ELit (LInt 0))) (EVar "a")) (EApp (EApp (EVar "remParityFrom") (EVar "op")) (EApp (EVar "unwrapLoc") (EVar "b"))) (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "remParityOf" ((PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild)) (EIf (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "=="))) (EBinOp "==" (EVar "op") (ELit (LString "/=")))) (EIf (EApp (EApp (EVar "isIntLit") (ELit (LInt 0))) (EVar "b")) (EApp (EApp (EVar "remParityFrom") (EVar "op")) (EApp (EVar "unwrapLoc") (EVar "a"))) (EIf (EApp (EApp (EVar "isIntLit") (ELit (LInt 0))) (EVar "a")) (EApp (EApp (EVar "remParityFrom") (EVar "op")) (EApp (EVar "unwrapLoc") (EVar "b"))) (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "remParityOf" (PWild) (EVar "None"))
 (DTypeSig false "remParityFrom" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
 (DFunDef false "remParityFrom" ((PVar "op") (PCon "EBinOp" (PLit (LString "%")) (PVar "n") (PVar "two") PWild)) (EIf (EApp (EApp (EVar "isIntLit") (ELit (LInt 2))) (EVar "two")) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EApp (EVar "parityFn") (EVar "op")))) (EVar "n"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
@@ -7120,7 +7120,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "emitDupGroup" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "emitDupGroup" ((PVar "grp")) (EBlock (DoLet false false (PVar "distinctFiles") (EApp (EVar "sortUniqS") (EApp (EApp (EMethodRef "map") (EVar "occFile")) (EVar "grp")))) (DoExpr (EIf (EBinOp "<" (EApp (EVar "listLen") (EVar "distinctFiles")) (ELit (LInt 2))) (EListLit) (EApp (EApp (EMethodRef "map") (EApp (EVar "dupFinding") (EVar "distinctFiles"))) (EApp (EVar "sortDupOccs") (EVar "grp")))))))
 (DTypeSig false "dupFinding" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")) (TyCon "Finding"))))
-(DFunDef false "dupFinding" ((PVar "distinctFiles") (PVar "occ")) (EBlock (DoLet false false (PVar "file") (EApp (EVar "occFile") (EVar "occ"))) (DoLet false false (PVar "line") (EApp (EVar "occLine") (EVar "occ"))) (DoLet false false (PVar "others") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "!=" (EVar "_s") (EVar "file")))) (EVar "distinctFiles"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDuplicateBody")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EMethodRef "display") (EApp (EVar "occName") (EVar "occ")))) (ELit (LString "' has a body structurally identical to a definition in "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "others")))) (ELit (LString " — consolidate into a shared module")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "file")) (EVar "line")) (ELit (LInt 1))) (EVar "line")) (ELit (LInt 1))))))))))
+(DFunDef false "dupFinding" ((PVar "distinctFiles") (PVar "occ")) (EBlock (DoLet false false (PVar "file") (EApp (EVar "occFile") (EVar "occ"))) (DoLet false false (PVar "line") (EApp (EVar "occLine") (EVar "occ"))) (DoLet false false (PVar "others") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "file")))) (EVar "distinctFiles"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDuplicateBody")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EMethodRef "display") (EApp (EVar "occName") (EVar "occ")))) (ELit (LString "' has a body structurally identical to a definition in "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "others")))) (ELit (LString " — consolidate into a shared module")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "file")) (EVar "line")) (ELit (LInt 1))) (EVar "line")) (ELit (LInt 1))))))))))
 (DTypeSig false "sortDupOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))))
 (DFunDef false "sortDupOccs" ((PList)) (EListLit))
 (DFunDef false "sortDupOccs" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "dupInsert") (EVar "x")) (EApp (EVar "sortDupOccs") (EVar "xs"))))
@@ -7152,7 +7152,7 @@ duplicateBodySameFileRule = Rule {
 (DTypeSig false "emitSameFileGroup" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "emitSameFileGroup" ((PVar "grp")) (EIf (EBinOp "<" (EApp (EVar "listLen") (EVar "grp")) (ELit (LInt 2))) (EListLit) (EApp (EApp (EMethodRef "map") (EApp (EVar "sameFileFinding") (EVar "grp"))) (EApp (EVar "sortSameFileOccs") (EVar "grp")))))
 (DTypeSig false "sameFileFinding" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")) (TyCon "Finding"))))
-(DFunDef false "sameFileFinding" ((PVar "grp") (PVar "occ")) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EBinOp "!=" (EApp (EVar "sameFileOccName") (EVar "o")) (EApp (EVar "sameFileOccName") (EVar "occ"))))) (EVar "grp"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDuplicateBody")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EMethodRef "display") (EApp (EVar "sameFileOccName") (EVar "occ")))) (ELit (LString "' has a body structurally identical to '"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString "', '"))) (EApp (EApp (EMethodRef "map") (EVar "sameFileOccName")) (EVar "others"))))) (ELit (LString "' in this same file — consolidate into one function")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EApp (EVar "sameFileOccLine") (EVar "occ"))) (ELit (LInt 1))) (EApp (EVar "sameFileOccLine") (EVar "occ"))) (ELit (LInt 1))))))))))
+(DFunDef false "sameFileFinding" ((PVar "grp") (PVar "occ")) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EBinOp "/=" (EApp (EVar "sameFileOccName") (EVar "o")) (EApp (EVar "sameFileOccName") (EVar "occ"))))) (EVar "grp"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDuplicateBody")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EMethodRef "display") (EApp (EVar "sameFileOccName") (EVar "occ")))) (ELit (LString "' has a body structurally identical to '"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString "', '"))) (EApp (EApp (EMethodRef "map") (EVar "sameFileOccName")) (EVar "others"))))) (ELit (LString "' in this same file — consolidate into one function")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EApp (EVar "sameFileOccLine") (EVar "occ"))) (ELit (LInt 1))) (EApp (EVar "sameFileOccLine") (EVar "occ"))) (ELit (LInt 1))))))))))
 (DTypeSig false "sortSameFileOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")))))
 (DFunDef false "sortSameFileOccs" ((PList)) (EListLit))
 (DFunDef false "sortSameFileOccs" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "sameFileInsert") (EVar "x")) (EApp (EVar "sortSameFileOccs") (EVar "xs"))))

@@ -1544,7 +1544,7 @@ siblingShadows : EvalEnv (Value e) -> String -> String -> List Route -> <e> List
 siblingShadows env name tag implRoutes =
   flatMap
     (shadowBind env tag implRoutes)
-    (filter (!= name) (methodsOfIface (ifaceOfMethod name)))
+    (filter (/= name) (methodsOfIface (ifaceOfMethod name)))
 
 shadowBind : EvalEnv (Value e) -> String -> List Route -> String -> <e> List (String, Ref (Value e))
 shadowBind env tag implRoutes m = match lookupMethodReqCountOpt m tag
@@ -1911,12 +1911,12 @@ evalArith "*" (VFloat a) (VFloat b) = VFloat (a * b)
 evalArith "/" (VFloat a) (VFloat b) = VFloat (a / b)
 evalArith "%" (VFloat a) (VFloat b) = VFloat (floatRem a b)
 evalArith "==" a b = VBool (valueEq a b)
-evalArith "!=" a b = VBool (not (valueEq a b))
+evalArith "/=" a b = VBool (not (valueEq a b))
 -- Float comparisons use IEEE ordered semantics directly (these compile to native
 -- `fcmp o*`).  They MUST precede the generic `valueCompare` arms below: on a NaN
 -- operand `valueCompare` yields neither LT nor GT, so `not (ordGt …)` / `not (ordLt …)`
 -- would wrongly report `nan <= nan` etc. as True (#288).  IEEE: every ordered
--- relational compare against NaN is False; only `!=` is True (handled above).
+-- relational compare against NaN is False; only `/=` is True (handled above).
 evalArith "<" (VFloat a) (VFloat b) = VBool (a < b)
 evalArith ">" (VFloat a) (VFloat b) = VBool (a > b)
 evalArith "<=" (VFloat a) (VFloat b) = VBool (a <= b)
@@ -2901,16 +2901,16 @@ pHashBool _ = panic "hashBool: not a Bool"
 -- to (positive sign, quiet bit set).  Built from explicit big-endian bytes
 -- (0x7F 0xF8 …) rather than `intBitsToFloat (shiftLeft 32760 48)` — that shift
 -- spuriously set bit 63 (a -NaN, 0xFFF8…), which hashes differently from the
--- native/wasm `0x7FF8…` and reintroduced run != build.
+-- native/wasm `0x7FF8…` and reintroduced run /= build.
 canonNaN : Float
 canonNaN = bytesToFloat64 (arrayFromList [127, 248, 0, 0, 0, 0, 0, 0]) 0
 
 -- #758: hash `-0.0` as `+0.0` (they are `Eq`, so must share a hash), and
 -- canonicalise every NaN to one bit pattern (all NaNs hash equal).  Both
 -- normalisations run in lockstep with `mdk_hash_float` (native) and
--- `$mdk_hash_float` (wasm) — diverge and `run != build` returns.
+-- `$mdk_hash_float` (wasm) — diverge and `run /= build` returns.
 canonHashFloat : Float -> Float
-canonHashFloat f = if f == 0.0 then 0.0 else if f != f then canonNaN else f
+canonHashFloat f = if f == 0.0 then 0.0 else if f /= f then canonNaN else f
 
 pHashFloat : Value e -> <e> Value e
 pHashFloat (VFloat f) =
@@ -4569,7 +4569,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "specializeDefault" (PWild PWild PWild (PCon "Some" PWild) PWild PWild) (EVar "None"))
 (DFunDef false "specializeDefault" ((PVar "env") (PVar "name") (PVar "tag") (PCon "None") (PVar "implRoutes") (PVar "narrowed")) (EIf (EBinOp "||" (EBinOp "==" (EVar "tag") (ELit (LString ""))) (EApp (EVar "isEmptyL") (EVar "implRoutes"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "withEnvFrame") (EApp (EApp (EApp (EApp (EVar "siblingShadows") (EVar "env")) (EVar "name")) (EVar "tag")) (EVar "implRoutes"))) (EVar "narrowed")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "siblingShadows" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))))))))
-(DFunDef false "siblingShadows" ((PVar "env") (PVar "name") (PVar "tag") (PVar "implRoutes")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "shadowBind") (EVar "env")) (EVar "tag")) (EVar "implRoutes"))) (EApp (EApp (EVar "filter") (ELam ((PVar "_s")) (EBinOp "!=" (EVar "_s") (EVar "name")))) (EApp (EVar "methodsOfIface") (EApp (EVar "ifaceOfMethod") (EVar "name"))))))
+(DFunDef false "siblingShadows" ((PVar "env") (PVar "name") (PVar "tag") (PVar "implRoutes")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "shadowBind") (EVar "env")) (EVar "tag")) (EVar "implRoutes"))) (EApp (EApp (EVar "filter") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "name")))) (EApp (EVar "methodsOfIface") (EApp (EVar "ifaceOfMethod") (EVar "name"))))))
 (DTypeSig false "shadowBind" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))))))))
 (DFunDef false "shadowBind" ((PVar "env") (PVar "tag") (PVar "implRoutes") (PVar "m")) (EMatch (EApp (EApp (EVar "lookupMethodReqCountOpt") (EVar "m")) (EVar "tag")) (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EApp (EApp (EApp (EVar "shadowBindAt") (EVar "env")) (EVar "tag")) (EVar "implRoutes")) (EVar "m")) (EVar "r"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "shadowBindAt" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))))))))))
@@ -4750,7 +4750,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "evalArith" ((PLit (LString "/")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VFloat") (EBinOp "/" (EVar "a") (EVar "b"))))
 (DFunDef false "evalArith" ((PLit (LString "%")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VFloat") (EApp (EApp (EVar "floatRem") (EVar "a")) (EVar "b"))))
 (DFunDef false "evalArith" ((PLit (LString "==")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EApp (EVar "valueEq") (EVar "a")) (EVar "b"))))
-(DFunDef false "evalArith" ((PLit (LString "!=")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EVar "not") (EApp (EApp (EVar "valueEq") (EVar "a")) (EVar "b")))))
+(DFunDef false "evalArith" ((PLit (LString "/=")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EVar "not") (EApp (EApp (EVar "valueEq") (EVar "a")) (EVar "b")))))
 (DFunDef false "evalArith" ((PLit (LString "<")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VBool") (EBinOp "<" (EVar "a") (EVar "b"))))
 (DFunDef false "evalArith" ((PLit (LString ">")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VBool") (EBinOp ">" (EVar "a") (EVar "b"))))
 (DFunDef false "evalArith" ((PLit (LString "<=")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VBool") (EBinOp "<=" (EVar "a") (EVar "b"))))
@@ -5069,7 +5069,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "canonNaN" (TyCon "Float"))
 (DFunDef false "canonNaN" () (EApp (EApp (EVar "bytesToFloat64") (EApp (EVar "arrayFromList") (EListLit (ELit (LInt 127)) (ELit (LInt 248)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0))))) (ELit (LInt 0))))
 (DTypeSig false "canonHashFloat" (TyFun (TyCon "Float") (TyCon "Float")))
-(DFunDef false "canonHashFloat" ((PVar "f")) (EIf (EBinOp "==" (EVar "f") (ELit (LFloat 0.0))) (ELit (LFloat 0.0)) (EIf (EBinOp "!=" (EVar "f") (EVar "f")) (EVar "canonNaN") (EVar "f"))))
+(DFunDef false "canonHashFloat" ((PVar "f")) (EIf (EBinOp "==" (EVar "f") (ELit (LFloat 0.0))) (ELit (LFloat 0.0)) (EIf (EBinOp "/=" (EVar "f") (EVar "f")) (EVar "canonNaN") (EVar "f"))))
 (DTypeSig false "pHashFloat" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pHashFloat" ((PCon "VFloat" (PVar "f"))) (EApp (EVar "VInt") (EApp (EVar "u64Low30") (EApp (EVar "u64Mix") (EApp (EVar "bytesBEToU64") (EApp (EVar "floatToBytes64") (EApp (EVar "canonHashFloat") (EVar "f"))))))))
 (DFunDef false "pHashFloat" (PWild) (EApp (EVar "panic") (ELit (LString "hashFloat: not a Float"))))
@@ -6014,7 +6014,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "specializeDefault" (PWild PWild PWild (PCon "Some" PWild) PWild PWild) (EVar "None"))
 (DFunDef false "specializeDefault" ((PVar "env") (PVar "name") (PVar "tag") (PCon "None") (PVar "implRoutes") (PVar "narrowed")) (EIf (EBinOp "||" (EBinOp "==" (EVar "tag") (ELit (LString ""))) (EApp (EVar "isEmptyL") (EVar "implRoutes"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "withEnvFrame") (EApp (EApp (EApp (EApp (EVar "siblingShadows") (EVar "env")) (EVar "name")) (EVar "tag")) (EVar "implRoutes"))) (EVar "narrowed")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "siblingShadows" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))))))))
-(DFunDef false "siblingShadows" ((PVar "env") (PVar "name") (PVar "tag") (PVar "implRoutes")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "shadowBind") (EVar "env")) (EVar "tag")) (EVar "implRoutes"))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "_s")) (EBinOp "!=" (EVar "_s") (EVar "name")))) (EApp (EVar "methodsOfIface") (EApp (EVar "ifaceOfMethod") (EVar "name"))))))
+(DFunDef false "siblingShadows" ((PVar "env") (PVar "name") (PVar "tag") (PVar "implRoutes")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "shadowBind") (EVar "env")) (EVar "tag")) (EVar "implRoutes"))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "name")))) (EApp (EVar "methodsOfIface") (EApp (EVar "ifaceOfMethod") (EVar "name"))))))
 (DTypeSig false "shadowBind" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))))))))
 (DFunDef false "shadowBind" ((PVar "env") (PVar "tag") (PVar "implRoutes") (PVar "m")) (EMatch (EApp (EApp (EVar "lookupMethodReqCountOpt") (EVar "m")) (EVar "tag")) (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EApp (EApp (EApp (EVar "shadowBindAt") (EVar "env")) (EVar "tag")) (EVar "implRoutes")) (EVar "m")) (EVar "r"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "shadowBindAt" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))))))))))
@@ -6195,7 +6195,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "evalArith" ((PLit (LString "/")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VFloat") (EBinOp "/" (EVar "a") (EVar "b"))))
 (DFunDef false "evalArith" ((PLit (LString "%")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VFloat") (EApp (EApp (EVar "floatRem") (EVar "a")) (EVar "b"))))
 (DFunDef false "evalArith" ((PLit (LString "==")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EApp (EVar "valueEq") (EVar "a")) (EVar "b"))))
-(DFunDef false "evalArith" ((PLit (LString "!=")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EVar "not") (EApp (EApp (EVar "valueEq") (EVar "a")) (EVar "b")))))
+(DFunDef false "evalArith" ((PLit (LString "/=")) (PVar "a") (PVar "b")) (EApp (EVar "VBool") (EApp (EVar "not") (EApp (EApp (EVar "valueEq") (EVar "a")) (EVar "b")))))
 (DFunDef false "evalArith" ((PLit (LString "<")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VBool") (EBinOp "<" (EVar "a") (EVar "b"))))
 (DFunDef false "evalArith" ((PLit (LString ">")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VBool") (EBinOp ">" (EVar "a") (EVar "b"))))
 (DFunDef false "evalArith" ((PLit (LString "<=")) (PCon "VFloat" (PVar "a")) (PCon "VFloat" (PVar "b"))) (EApp (EVar "VBool") (EBinOp "<=" (EVar "a") (EVar "b"))))
@@ -6514,7 +6514,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "canonNaN" (TyCon "Float"))
 (DFunDef false "canonNaN" () (EApp (EApp (EVar "bytesToFloat64") (EApp (EVar "arrayFromList") (EListLit (ELit (LInt 127)) (ELit (LInt 248)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0)) (ELit (LInt 0))))) (ELit (LInt 0))))
 (DTypeSig false "canonHashFloat" (TyFun (TyCon "Float") (TyCon "Float")))
-(DFunDef false "canonHashFloat" ((PVar "f")) (EIf (EBinOp "==" (EVar "f") (ELit (LFloat 0.0))) (ELit (LFloat 0.0)) (EIf (EBinOp "!=" (EVar "f") (EVar "f")) (EVar "canonNaN") (EVar "f"))))
+(DFunDef false "canonHashFloat" ((PVar "f")) (EIf (EBinOp "==" (EVar "f") (ELit (LFloat 0.0))) (ELit (LFloat 0.0)) (EIf (EBinOp "/=" (EVar "f") (EVar "f")) (EVar "canonNaN") (EVar "f"))))
 (DTypeSig false "pHashFloat" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "pHashFloat" ((PCon "VFloat" (PVar "f"))) (EApp (EVar "VInt") (EApp (EVar "u64Low30") (EApp (EVar "u64Mix") (EApp (EVar "bytesBEToU64") (EApp (EVar "floatToBytes64") (EApp (EVar "canonHashFloat") (EVar "f"))))))))
 (DFunDef false "pHashFloat" (PWild) (EApp (EVar "panic") (ELit (LString "hashFloat: not a Float"))))

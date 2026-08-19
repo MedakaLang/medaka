@@ -17,8 +17,8 @@
 idf : Float -> Float
 idf x = x
 
-nanRT = idf 0.0 / idf 0.0 -- runtime fdiv; clang inlines idf and could fold it
-nanLit = 0.0 / 0.0 -- literal; #672 emits the host NaN bits at emit time
+nanRT = idf 0.0 / idf 0.0  -- runtime fdiv; clang inlines idf and could fold it
+nanLit = 0.0 / 0.0  -- literal; #672 emits the host NaN bits at emit time
 
 main =
   -- compare agrees between the two NaNs at both operand positions ...
@@ -28,4 +28,4 @@ main =
   -- ... hashFloat hashes them identically (same host bit pattern => same hash) ...
   println (debug (hashFloat nanRT == hashFloat nanLit))
   -- ... and both are NaN by IEEE self-inequality regardless of sign.
-  println (debug (nanRT != nanRT))
+  println (debug (nanRT /= nanRT))

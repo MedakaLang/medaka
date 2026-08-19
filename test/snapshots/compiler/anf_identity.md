@@ -41,16 +41,16 @@ allNonNegative (n::ns) = n >= 0 && allNonNegative ns
 
 canonicalPathComponents : List String -> Bool
 canonicalPathComponents [] = False
-canonicalPathComponents (component::rest) = component != ""
-  && component != "."
-  && component != ".."
+canonicalPathComponents (component::rest) = component /= ""
+  && component /= "."
+  && component /= ".."
   && canonicalPathComponentsGo rest
 
 canonicalPathComponentsGo : List String -> Bool
 canonicalPathComponentsGo [] = True
-canonicalPathComponentsGo (component::rest) = component != ""
-  && component != "."
-  && component != ".."
+canonicalPathComponentsGo (component::rest) = component /= ""
+  && component /= "."
+  && component /= ".."
   && canonicalPathComponentsGo rest
 
 canonicalProjectPath : String -> Bool
@@ -62,7 +62,7 @@ validSpan startLine startCol endLine endCol = startLine >= 1
   && endLine >= 1
   && endLine >= startLine
   && endCol >= 0
-  && (endLine != startLine || endCol >= startCol)
+  && (endLine /= startLine || endCol >= startCol)
 
 export mintStableNodeId : StableNodeIdInput -> Result StableNodeIdError StableNodeId
 mintStableNodeId (StableNodeIdInput path startLine startCol endLine endCol childPath role)
@@ -98,14 +98,14 @@ foldStableNodeId f (StableNodeId path startLine startCol endLine endCol childPat
 (DFunDef false "allNonNegative" ((PCons (PVar "n") (PVar "ns"))) (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 0))) (EApp (EVar "allNonNegative") (EVar "ns"))))
 (DTypeSig false "canonicalPathComponents" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
 (DFunDef false "canonicalPathComponents" ((PList)) (EVar "False"))
-(DFunDef false "canonicalPathComponents" ((PCons (PVar "component") (PVar "rest"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "!=" (EVar "component") (ELit (LString ""))) (EBinOp "!=" (EVar "component") (ELit (LString ".")))) (EBinOp "!=" (EVar "component") (ELit (LString "..")))) (EApp (EVar "canonicalPathComponentsGo") (EVar "rest"))))
+(DFunDef false "canonicalPathComponents" ((PCons (PVar "component") (PVar "rest"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "component") (ELit (LString ""))) (EBinOp "/=" (EVar "component") (ELit (LString ".")))) (EBinOp "/=" (EVar "component") (ELit (LString "..")))) (EApp (EVar "canonicalPathComponentsGo") (EVar "rest"))))
 (DTypeSig false "canonicalPathComponentsGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
 (DFunDef false "canonicalPathComponentsGo" ((PList)) (EVar "True"))
-(DFunDef false "canonicalPathComponentsGo" ((PCons (PVar "component") (PVar "rest"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "!=" (EVar "component") (ELit (LString ""))) (EBinOp "!=" (EVar "component") (ELit (LString ".")))) (EBinOp "!=" (EVar "component") (ELit (LString "..")))) (EApp (EVar "canonicalPathComponentsGo") (EVar "rest"))))
+(DFunDef false "canonicalPathComponentsGo" ((PCons (PVar "component") (PVar "rest"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "component") (ELit (LString ""))) (EBinOp "/=" (EVar "component") (ELit (LString ".")))) (EBinOp "/=" (EVar "component") (ELit (LString "..")))) (EApp (EVar "canonicalPathComponentsGo") (EVar "rest"))))
 (DTypeSig false "canonicalProjectPath" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "canonicalProjectPath" ((PVar "path")) (EApp (EVar "canonicalPathComponents") (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "path"))))
 (DTypeSig false "validSpan" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "validSpan" ((PVar "startLine") (PVar "startCol") (PVar "endLine") (PVar "endCol")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "startLine") (ELit (LInt 1))) (EBinOp ">=" (EVar "startCol") (ELit (LInt 0)))) (EBinOp ">=" (EVar "endLine") (ELit (LInt 1)))) (EBinOp ">=" (EVar "endLine") (EVar "startLine"))) (EBinOp ">=" (EVar "endCol") (ELit (LInt 0)))) (EBinOp "||" (EBinOp "!=" (EVar "endLine") (EVar "startLine")) (EBinOp ">=" (EVar "endCol") (EVar "startCol")))))
+(DFunDef false "validSpan" ((PVar "startLine") (PVar "startCol") (PVar "endLine") (PVar "endCol")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "startLine") (ELit (LInt 1))) (EBinOp ">=" (EVar "startCol") (ELit (LInt 0)))) (EBinOp ">=" (EVar "endLine") (ELit (LInt 1)))) (EBinOp ">=" (EVar "endLine") (EVar "startLine"))) (EBinOp ">=" (EVar "endCol") (ELit (LInt 0)))) (EBinOp "||" (EBinOp "/=" (EVar "endLine") (EVar "startLine")) (EBinOp ">=" (EVar "endCol") (EVar "startCol")))))
 (DTypeSig true "mintStableNodeId" (TyFun (TyCon "StableNodeIdInput") (TyApp (TyApp (TyCon "Result") (TyCon "StableNodeIdError")) (TyCon "StableNodeId"))))
 (DFunDef false "mintStableNodeId" ((PCon "StableNodeIdInput" (PVar "path") (PVar "startLine") (PVar "startCol") (PVar "endLine") (PVar "endCol") (PVar "childPath") (PVar "role"))) (EIf (EBinOp "==" (EVar "path") (ELit (LString ""))) (EApp (EVar "Err") (EVar "EmptyProjectPath")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "path")) (EApp (EVar "Err") (EVar "AbsoluteProjectPath")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "../"))) (EVar "path")) (EApp (EVar "Err") (EVar "ParentProjectPath")) (EIf (EApp (EVar "not") (EApp (EVar "canonicalProjectPath") (EVar "path"))) (EApp (EVar "Err") (EVar "NonCanonicalProjectPath")) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "validSpan") (EVar "startLine")) (EVar "startCol")) (EVar "endLine")) (EVar "endCol"))) (EApp (EVar "Err") (EVar "InvalidSourceSpan")) (EIf (EApp (EVar "not") (EApp (EVar "allNonNegative") (EVar "childPath"))) (EApp (EVar "Err") (EVar "NegativeStructuralIndex")) (EIf (EVar "otherwise") (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "StableNodeId") (EVar "path")) (EVar "startLine")) (EVar "startCol")) (EVar "endLine")) (EVar "endCol")) (EVar "childPath")) (EVar "role"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig true "foldStableNodeId" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "StableGeneratedRole") (TyVar "a")))))))) (TyFun (TyCon "StableNodeId") (TyVar "a"))))
@@ -128,14 +128,14 @@ foldStableNodeId f (StableNodeId path startLine startCol endLine endCol childPat
 (DFunDef false "allNonNegative" ((PCons (PVar "n") (PVar "ns"))) (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 0))) (EApp (EVar "allNonNegative") (EVar "ns"))))
 (DTypeSig false "canonicalPathComponents" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
 (DFunDef false "canonicalPathComponents" ((PList)) (EVar "False"))
-(DFunDef false "canonicalPathComponents" ((PCons (PVar "component") (PVar "rest"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "!=" (EVar "component") (ELit (LString ""))) (EBinOp "!=" (EVar "component") (ELit (LString ".")))) (EBinOp "!=" (EVar "component") (ELit (LString "..")))) (EApp (EVar "canonicalPathComponentsGo") (EVar "rest"))))
+(DFunDef false "canonicalPathComponents" ((PCons (PVar "component") (PVar "rest"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "component") (ELit (LString ""))) (EBinOp "/=" (EVar "component") (ELit (LString ".")))) (EBinOp "/=" (EVar "component") (ELit (LString "..")))) (EApp (EVar "canonicalPathComponentsGo") (EVar "rest"))))
 (DTypeSig false "canonicalPathComponentsGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
 (DFunDef false "canonicalPathComponentsGo" ((PList)) (EVar "True"))
-(DFunDef false "canonicalPathComponentsGo" ((PCons (PVar "component") (PVar "rest"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "!=" (EVar "component") (ELit (LString ""))) (EBinOp "!=" (EVar "component") (ELit (LString ".")))) (EBinOp "!=" (EVar "component") (ELit (LString "..")))) (EApp (EVar "canonicalPathComponentsGo") (EVar "rest"))))
+(DFunDef false "canonicalPathComponentsGo" ((PCons (PVar "component") (PVar "rest"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "component") (ELit (LString ""))) (EBinOp "/=" (EVar "component") (ELit (LString ".")))) (EBinOp "/=" (EVar "component") (ELit (LString "..")))) (EApp (EVar "canonicalPathComponentsGo") (EVar "rest"))))
 (DTypeSig false "canonicalProjectPath" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "canonicalProjectPath" ((PVar "path")) (EApp (EVar "canonicalPathComponents") (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "path"))))
 (DTypeSig false "validSpan" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "validSpan" ((PVar "startLine") (PVar "startCol") (PVar "endLine") (PVar "endCol")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "startLine") (ELit (LInt 1))) (EBinOp ">=" (EVar "startCol") (ELit (LInt 0)))) (EBinOp ">=" (EVar "endLine") (ELit (LInt 1)))) (EBinOp ">=" (EVar "endLine") (EVar "startLine"))) (EBinOp ">=" (EVar "endCol") (ELit (LInt 0)))) (EBinOp "||" (EBinOp "!=" (EVar "endLine") (EVar "startLine")) (EBinOp ">=" (EVar "endCol") (EVar "startCol")))))
+(DFunDef false "validSpan" ((PVar "startLine") (PVar "startCol") (PVar "endLine") (PVar "endCol")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "startLine") (ELit (LInt 1))) (EBinOp ">=" (EVar "startCol") (ELit (LInt 0)))) (EBinOp ">=" (EVar "endLine") (ELit (LInt 1)))) (EBinOp ">=" (EVar "endLine") (EVar "startLine"))) (EBinOp ">=" (EVar "endCol") (ELit (LInt 0)))) (EBinOp "||" (EBinOp "/=" (EVar "endLine") (EVar "startLine")) (EBinOp ">=" (EVar "endCol") (EVar "startCol")))))
 (DTypeSig true "mintStableNodeId" (TyFun (TyCon "StableNodeIdInput") (TyApp (TyApp (TyCon "Result") (TyCon "StableNodeIdError")) (TyCon "StableNodeId"))))
 (DFunDef false "mintStableNodeId" ((PCon "StableNodeIdInput" (PVar "path") (PVar "startLine") (PVar "startCol") (PVar "endLine") (PVar "endCol") (PVar "childPath") (PVar "role"))) (EIf (EBinOp "==" (EVar "path") (ELit (LString ""))) (EApp (EVar "Err") (EVar "EmptyProjectPath")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "path")) (EApp (EVar "Err") (EVar "AbsoluteProjectPath")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "../"))) (EVar "path")) (EApp (EVar "Err") (EVar "ParentProjectPath")) (EIf (EApp (EVar "not") (EApp (EVar "canonicalProjectPath") (EVar "path"))) (EApp (EVar "Err") (EVar "NonCanonicalProjectPath")) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "validSpan") (EVar "startLine")) (EVar "startCol")) (EVar "endLine")) (EVar "endCol"))) (EApp (EVar "Err") (EVar "InvalidSourceSpan")) (EIf (EApp (EVar "not") (EApp (EVar "allNonNegative") (EVar "childPath"))) (EApp (EVar "Err") (EVar "NegativeStructuralIndex")) (EIf (EVar "otherwise") (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "StableNodeId") (EVar "path")) (EVar "startLine")) (EVar "startCol")) (EVar "endLine")) (EVar "endCol")) (EVar "childPath")) (EVar "role"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig true "foldStableNodeId" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "StableGeneratedRole") (TyVar "a")))))))) (TyFun (TyCon "StableNodeId") (TyVar "a"))))

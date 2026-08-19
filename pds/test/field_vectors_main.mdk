@@ -147,7 +147,7 @@ processAll counts totals stride path (l::rest) lineNo rowNo =
   let t = trim l
   if t == "" || isComment t then processAll counts totals stride path rest (lineNo + 1) rowNo
   else
-    if rowNo % stride != 0 then
+    if rowNo % stride /= 0 then
       let () = bump totals 2
       processAll counts totals stride path rest (lineNo + 1) (rowNo + 1)
     else

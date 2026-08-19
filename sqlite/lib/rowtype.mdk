@@ -119,7 +119,7 @@ tOption inner = mkRowType (rtWidth inner) (optionDecoder inner)
 
 optionDecoder : RowType a -> List Cell -> Result String (Option a)
 optionDecoder inner cells =
-  if cellCount cells != rtWidth inner then
+  if cellCount cells /= rtWidth inner then
     Err "tOption: expected \{intToString (rtWidth inner)} column(s), got \{intToString (cellCount cells)}"
   else if allNull cells then
     Ok None

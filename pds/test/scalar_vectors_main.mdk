@@ -150,7 +150,7 @@ gradeBit : Array Int -> Array Int -> String -> String -> Bool -> String -> <IO> 
 gradeBit counts totals label op actual expected =
   let got = if actual then "1" else "0"
   let () = bump totals 0
-  if expected != "0" && expected != "1" then
+  if expected /= "0" && expected /= "1" then
     let () = bump totals 1
     println "FAIL\t\{label}\texpected column must be 0 or 1, got '\{expected}'"
   else
@@ -199,7 +199,7 @@ processAll counts totals stride path (l::rest) lineNo rowNo =
   let t = trim l
   if t == "" || isComment t then processAll counts totals stride path rest (lineNo + 1) rowNo
   else
-    if rowNo % stride != 0 then
+    if rowNo % stride /= 0 then
       let () = bump totals 2
       processAll counts totals stride path rest (lineNo + 1) (rowNo + 1)
     else

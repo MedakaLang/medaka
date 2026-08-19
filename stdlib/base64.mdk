@@ -170,7 +170,7 @@ decodeWith : String -> Bool -> Result String (Array Int)
 decodeWith s urlSafe =
   let chars = toChars s
   let n = arrayLength chars
-  if n % 4 != 0 then
+  if n % 4 /= 0 then
     Err "base64.decode: length not a multiple of 4"
   else
     map arrayFromList (decodeGo chars 0 n urlSafe [])

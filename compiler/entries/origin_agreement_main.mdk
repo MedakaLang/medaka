@@ -779,7 +779,7 @@ graphKeyed (c::rest) =
     graphKeyed rest
 
 isGraphClaim : Claim -> Bool
-isGraphClaim c = claimArm c == "graph" && claimKey c != "-"
+isGraphClaim c = claimArm c == "graph" && claimKey c /= "-"
 
 cmpNameKey : Claim -> Claim -> Ordering
 cmpNameKey a b =

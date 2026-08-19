@@ -172,9 +172,9 @@ roundTripBack src s1 =
 
 roundTripCompare : String -> Select -> Select -> String -> RT
 roundTripCompare src s1 s2 txt =
-  if s1 != s2 then
+  if s1 /= s2 then
     RtFail "\{src}  ==> Select CHANGED\n      first : \{txt}\n      second: \{renderSelect s2}"
-  else if renderSelect s2 != txt then
+  else if renderSelect s2 /= txt then
     RtFail "\{src}  ==> render is not a fixpoint: `\{txt}` vs `\{renderSelect s2}`"
   else
     RtOk

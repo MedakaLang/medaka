@@ -20,7 +20,7 @@
 -- F-3a-ii the shattered goal made this program mis-select the DECOY, so eval printed
 -- 111 and agreed with native -- it dodged the panic by being wrong.  Now that the
 -- goal is the whole predicate and selection is correct, eval reaches the
--- `requires`-discharge path and dies there.  So this is a NEW run != build pair on a
+-- `requires`-discharge path and dies there.  So this is a NEW run /= build pair on a
 -- program that previously agreed, which is exactly the line diff_compiler_engines
 -- exists to hold, and it is owed a row rather than a silent pass.
 --   measured, both directions, on cold builds either side of F-3a-ii:

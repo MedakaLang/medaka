@@ -242,7 +242,7 @@ export decodeEntry : String -> String -> String -> String -> Option LintEntry
 decodeEntry stamp path hash text = match parse text
   Err _ => None
   Ok j =>
-    if decInt "version" j != Some cacheFormatVersion || decStr "stamp" j != Some stamp || decStr "path" j != Some path || decStr "hash" j != Some hash then
+    if decInt "version" j /= Some cacheFormatVersion || decStr "stamp" j /= Some stamp || decStr "path" j /= Some path || decStr "hash" j /= Some hash then
       None
     else
       map3 (fs ds dirs => LintEntry {
@@ -432,7 +432,7 @@ dropLastSeg (x::rest) = x :: dropLastSeg rest
 makeStagingDir : String -> <IO> Result String String
 makeStagingDir cacheDir = match runCommand "mktemp" ["-d", "\{cacheDir}/.staging_XXXXXX"]
   Err msg => Err (if msg == "" then "mktemp -d failed" else msg)
-  Ok (code, out, err) => if code != 0 then Err (if err == "" then "mktemp -d failed" else err)
+  Ok (code, out, err) => if code /= 0 then Err (if err == "" then "mktemp -d failed" else err)
   else
     let dir = stringTrim out
     if dir == "" then Err "mktemp -d printed no path" else Ok dir

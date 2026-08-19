@@ -339,7 +339,7 @@ parseErrCode msg
   | startsWith "malformed radix literal" msg = "L-MALFORMED-RADIX"
   | startsWith "malformed float literal" msg = "L-MALFORMED-FLOAT"
   | startsWith "unexpected end of input" msg = "P-UNEXPECTED-EOF"
-  | startsWith "unexpected '/='" msg = "P-BAD-NEQ"
+  | startsWith "unexpected '!='" msg = "P-BAD-NEQ"
   | startsWith "Medaka has no 'case" msg = "P-HS-CASE"
   | startsWith "Use '::' for List cons" msg = "P-HS-SIG"
   | startsWith "Medaka has no '/* " msg = "L-BLOCKCOMMENT"
@@ -358,9 +358,9 @@ parseErrCode msg
 
 -- Build the (help, fix) pair for the two parse-error hints with a clean,
 -- mechanical single-token fix (the Haskell `::`-signature carveout and the
--- `/=`-inequality hint).  Both hints' pre-scan already reports a `Loc` whose
+-- `!=`-inequality hint).  Both hints' pre-scan already reports a `Loc` whose
 -- start col points at the offending token's first character (verified against
--- `medaka check --json`: `::` and `/=` both start exactly at `sc`), so the fix
+-- `medaka check --json`: `::` and `!=` both start exactly at `sc`), so the fix
 -- span is `[sc, sc+2)` — the two-character token — regardless of the diag's
 -- own (single-char, display-only) range.  Every other parse hint (`\x->`, `$`,
 -- `case…of`) needs a multi-edit rewrite, so it stays help/message-only (no
@@ -371,9 +371,9 @@ parseErrHelpFix msg (Loc f sl sc el ec)
     Some "replace '::' with ':' for a type signature",
     Some (Fix (Loc f sl sc sl (sc + 2)) ":"),
   )
-  | startsWith "unexpected '/='" msg = (
-    Some "replace '/=' with '!=' for not-equal",
-    Some (Fix (Loc f sl sc sl (sc + 2)) "!="),
+  | startsWith "unexpected '!='" msg = (
+    Some "replace '!=' with '/=' for not-equal",
+    Some (Fix (Loc f sl sc sl (sc + 2)) "/="),
   )
   | startsWith "integer literal too large for Int (max 4611686018427387903)" msg = (Some "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the NEGATIVE -4611686018427387904, so write it with its `-`", None)
   -- Malformed radix/float literals (#677): the lexer already embeds BOTH the
@@ -938,7 +938,7 @@ locEq (Loc f1 sl1 sc1 el1 ec1) (Loc f2 sl2 sc2 el2 ec2) = f1 == f2
 -- already reported this exact occurrence).
 isRedundantUnbound : List Diag -> Diag -> Bool
 isRedundantUnbound existing d
-  | diagCode d != "T-UNBOUND" = False
+  | diagCode d /= "T-UNBOUND" = False
   | otherwise = match diagLoc d
     None => False
     Some dl => anyList (e => diagCode e == "R-UNBOUND" && (match diagLoc e

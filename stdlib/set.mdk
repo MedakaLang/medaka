@@ -437,7 +437,7 @@ export impl Foldable Set where
    > eq (fromList [1, 2, 3]) (fromList [3, 2, 1, 2])
    True -}
 export impl Eq (Set a) requires Eq a where
-  eq a b = if size a != size b then False else eq (toList a) (toList b)
+  eq a b = if size a /= size b then False else eq (toList a) (toList b)
 
 {- | Lexicographic ordering through the canonical ascending element list, so a
    proper prefix sorts first.  Enables nesting (`Set (Set a)`, `Map (Set a) v`).

@@ -254,7 +254,7 @@ There are four, applied at two different stages.
 
 ```
 TRAILING-continuation ops (≈20): prev token that absorbs the next deeper line
-    +  -  *  /  %  ++  ::  ==  !=  <  >  <=  >=  &&  ||  |>  >>  <<  `ident`
+    +  -  *  /  %  ++  ::  ==  /=  <  >  <=  >=  &&  ||  |>  >>  <<  `ident`
     (arrows -> => <- are EXCLUDED; trailing `-` is always binary here)
 
 LEADING-continuation ops (7): next-line-initial token that continues prev line
