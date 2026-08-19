@@ -1,19 +1,28 @@
 # Type-Aware Lint Tier — Design
 
-**Status:** OPEN — verified live: `grep -n "type oracle\|typeOracle\|TypeOracle"
-compiler/tools/lint.mdk` returns zero hits; no type-aware oracle machinery exists in the
-current linter, matching AGENTS.md's description of ~20 purely-syntactic rules. Genuinely
-still-open, unclaimed forward work with a fully worked-out design (oracle interface,
-registry shape, ≥4 candidate rules, effort estimate).
+**Status: PARTLY SHIPPED, and RE-COSTED.** Re-derived 2026-08-19 against `main` at
+`8b7b5517` (worktree level with `origin/main`); every file:line below was checked at that
+commit. This supersedes the 2026-06-29 read-only pass, which was stale in **both**
+directions — it understated what had shipped and overstated what Tier 2 costs.
 
-Status: **DESIGN ONLY (read-only pass, 2026-06-29).** Nothing built. This doc
-scopes a *type-aware* rule tier for `medaka lint` (`compiler/tools/lint.mdk`),
+| Tier | State |
+|------|-------|
+| **Tier 0** — constructor/datatype facts, no typecheck | **SHIPPED.** `lint.mdk` imports `frontend.exhaust.{Oracle, buildOracle, oGetCtors, oGetCtorType}`; `Rule`'s doc-comment describes the Oracle as *"used by the irrefutability logic to recognise single-constructor patterns"* — catalog rule (a), landed. |
+| **Tier 1** — name-keyed inferred schemes | **NOT BUILT.** No `types.typecheck` import in `lint.mdk`. Design below stands, but see §10.1 — the recipe as written taxes the rearchitecture arc. |
+| **Tier 2** — `typeOfLoc` over arbitrary sub-expressions | **NOT BUILT.** Re-costed from *large* to **medium**, plus one irreducible approximation. See §2.3 and §10. |
+
+⚠️ **Read §10 before scheduling any of this.** The remaining work couples to the
+typechecker rearchitecture arc (#1122) in three places, and one of the couplings
+(§10.2) is a silent-wrongness hazard for anyone who builds the harvest without knowing it.
+
+This doc scopes a *type-aware* rule tier for `medaka lint` (`compiler/tools/lint.mdk`),
 analogous to `typescript-eslint`'s type-checked rules: rules keep matching the
 **raw (pre-desugar) surface AST** for shape, but may **query a side-table of
 resolve/type facts** (a "type oracle") harvested by running the pipeline once.
 
-All file:line citations were against a since-discarded agent worktree (path removed,
-2026-07-13 doc pass — never a valid path for anyone else).
+**Tracker state:** the tier has **no issue** (`gh issue list --search "type-aware"` is
+empty as of 2026-08-19). Its one arc-side dependency is filed: **#1752** (scope
+`currentLoc`), which is arc work on its own merits and is *not* owned by this doc.
 
 ---
 
@@ -88,11 +97,21 @@ Consequences (documented limitations of reusing this machinery):
 `Loc = Loc String Int Int Int Int` (file, 1-based start line, 0-based start col,
 1-based end line, 0-based end col) — `compiler/frontend/ast.mdk:26`. It is **not**
 a field on every node; it is carried by a *transparent wrapper*
-`ELoc Loc Expr` (`ast.mdk:233`) that the parser puts on **atom/leaf and
-statement-form productions only** (`ast.mdk:224-232`). Specifically:
+`ELoc Loc Expr` (`ast.mdk:1052`) that the parser puts on **atom/leaf and
+statement-form productions only**. Specifically:
 
-- **interior application / binop nodes are NOT individually wrapped;**
-- **`Pat` nodes carry no `Loc` at all** (`ast.mdk:71`);
+- **interior application / binop nodes are NOT individually wrapped.** This is
+  deliberate and stated at the emission site: *"Binop/app/unary/postfix levels
+  stay [unwrapped]"* (`parser.mdk:843`), mirroring `parser.mly`. Widening it is a
+  parser change, not a typecheck one — and it moves `Positions`, the snapshot
+  goldens, and (per [T-LEGA-GOLDEN]) the LEG A selfproc goldens.
+- **`Pat`: CORRECTED 2026-08-19 — binders DO carry `Loc`.** The 2026-06-29 pass
+  said "`Pat` nodes carry no `Loc` at all"; that is false at HEAD and was
+  probably false when written. `PVar String Loc`, `PAs String Loc Pat`, and
+  `RecPatField String Loc (Option Pat)` all carry one (`ast.mdk:859-873`).
+  What genuinely carries none: `PCon`, `PTuple`, `PList`, `PLit`, `PCons`,
+  `PWild`, `PRng`. So pattern *binders* are addressable; pattern *structure* is
+  not.
 - `file` is left `""` by the parser, filled by the caller (`ast.mdk:23`);
 - every stage strips/recurses `ELoc` transparently, so it is *not* a stable
   unique node id — two nodes with the same span are indistinguishable.
@@ -106,25 +125,67 @@ statement-form productions only** (`ast.mdk:224-232`). Specifically:
   `currentLocalSchemes`/top-level schemes gives `typeOfName`, modulo the
   shadowing caveat. Good for signature-based rules where the rule already has the
   declaration name in hand.
-- **Messy** for a *true `typeOfLoc : Loc -> Option Mono`* over arbitrary
-  sub-expressions: it **does not exist and is net-new**. Inference discards
-  per-node types (it only stamps dispatch *routes* into a handful of `Ref`
-  fields — `EBinOp`/`EFieldAccess`/`EIndex`/`EMethodAt`, `ast.mdk:136,144,156,218`
-  — never the inferred `Mono`). Building it means a new pass that threads the
-  solved `Mono` onto `ELoc`-wrapped nodes and indexes by span-containment, and it
-  still cannot answer for pattern nodes or unwrapped interior nodes.
+- **Mixed — and CHEAPER than the 2026-06-29 pass claimed** for a *true
+  `typeOfLoc : Loc -> Option Mono`*. That pass scoped it as "a new pass that
+  threads the solved `Mono` onto `ELoc`-wrapped nodes," i.e. net-new
+  infrastructure. Two facts at HEAD remove most of that:
 
-**Recommendation: do NOT build a general `typeOfLoc` first.** Ship the two cheap
-tiers (constructor table + name-keyed schemes), which already cover the four
-catalog rules below, and gate `typeOfLoc` behind a design fork (§7) as a later
-stretch tier.
+  1. **The `Loc` plumbing is already built.** `currentLoc : Ref (Option Loc)`
+     (`typecheck.mdk:6858`) is set in `infer env (ELoc l e)` (`:8819`) and is
+     already snapshotted into six side-tables (`PendingEntry`'s 6th field,
+     `pushPendingObl`, `pushDictApp`, `recordObl`, the absorption event's `loc`,
+     `pendingBinopSites`/`pendingUnopSites`). 82 references in the file. A
+     harvest is *one more* consumer of an existing, exercised mechanism.
+  2. **No zonk pass is needed.** `Mono = TVar (Ref Tyvar) | …`
+     (`typecheck.mdk:210`) is ref-backed union-find, so a recorded `Mono`
+     resolves itself as unification proceeds. Record during inference, read
+     after the whole-graph post-passes, and the refs are already bound. There is
+     no substitution to apply and no typed tree to walk.
+
+  So the recorder itself is **small** — one `Ref (List (Loc, Mono))`, one push,
+  one accessor, the same shape as `recordLocalBind`/`localSchemesOut`.
+
+  ⚠️ **What is NOT small, and is the actual blocker: `currentLoc` is
+  set-on-enter and NEVER RESTORED** — a *last-`ELoc`-entered* marker, not a
+  scoped node identity. The tree documents the consequence itself at `:2269` and
+  `:6863`: *"it names whichever ELoc happened to be entered last (observed …:
+  the body of an unrelated impl three lines away)."* A naive harvest over
+  today's ref therefore mis-attributes every expression that follows a nested
+  subexpression, **silently** — a lint finding pointed at the wrong line, which
+  is [W-QUIETER]. Measured at `8b7b5517`: **8 write sites, 33 readers**; several
+  writes are deliberate re-targets compensating for the leak (notably the binop
+  last-operand override at `:10486-10492`). Filed as **#1752**, as arc work on
+  its own merits — see §10.3.
+
+**Recommendation: do NOT build a general `typeOfLoc` first** — but the reason has
+changed. It is no longer "the recorder is large"; it is (i) the span semantics
+must be repaired first (#1752, and that repair belongs to the arc, not to lint),
+and (ii) §2.4's join remains approximate no matter what, which caps the value of
+every rule built on it.
+
+### 2.4 The irreducible part: the raw↔core join
+
+None of the above touches the property that actually decides whether Tier 2 earns
+its keep. Types exist only on the **post-desugar** tree; lint reads the **raw**
+tree by design (§1). `Loc` is the only available join key, it is span-only and
+**not unique** (two nodes with the same span are indistinguishable), and desugar
+mints nodes with no raw counterpart. So lookups are "smallest enclosing `ELoc`
+span containing the query span" — approximate by construction, in a way no amount
+of typechecker work removes.
+
+This is not hypothetical. It is what made the #1739 `.value` → `!` rule
+unshippable: the rule could not distinguish a `Ref` read from a record field
+genuinely named `value`, the only sound formulation abstained into noise, and the
+migration shipped as a reviewed textual transform verified by the self-compile
+fixpoint instead. **Before building Tier 2, name a rule that survives an
+approximate join** — that, not the recorder's cost, is the go/no-go.
 
 ---
 
 ## 3. Oracle interface
 
 Define a `TypeOracle` record bundling the harvested facts. It is built once per
-lint invocation (per file or per project — §7 fork) and passed to every typed
+lint invocation (per file or per project — §8 fork) and passed to every typed
 rule. Minimal viable set, split by the tier that backs each query:
 
 ```
@@ -139,7 +200,7 @@ public export record TypeOracle
   schemeOfTop     : String -> Option Scheme     -- top-level name -> generalized scheme
   schemeOfLocal   : String -> Option Scheme     -- let/param/binder name (shadowing-lossy)
   typechecked     : Bool                        -- did typecheck run clean enough to trust Tier 1?
-  -- Tier 2 — STRETCH (net-new; behind --type-aware-exprs fork; see §7) -------
+  -- Tier 2 — STRETCH (net-new; behind --type-aware-exprs fork; see §8) -------
   typeOfLoc       : Loc -> Option Mono           -- arbitrary sub-expr type (NOT built initially)
 ```
 
@@ -210,7 +271,7 @@ LSP does:
   `checkProgramSchemesWithRuntime` returns **best-effort schemes even when the
   file has type errors** (it only fails to produce an env if the file doesn't
   *parse* — `docSchemes` returns `None` only on `parseResult == Err`,
-  `lsp.mdk:480`), so Tier 1 degrades gracefully: see §6.
+  `lsp.mdk:480`), so Tier 1 degrades gracefully: see §5.
 
 **`Loc` bridging in Tier 1: none needed.** Every Tier-1 query is keyed by the
 *name* the rule already extracted from the raw decl (the function name, the
@@ -224,15 +285,25 @@ exhaust→typecheck once, concatenate each stage's diagnostics, and never exit o
 error (AGENTS.md "Errors accumulate"). A broken file does not sink the batch
 (`wrappedRead` fallback, `diagnostics.mdk:292-305`).
 
-### 4.3 Tier 2 — `typeOfLoc` (STRETCH, net-new; see fork §7)
+### 4.3 Tier 2 — `typeOfLoc` (STRETCH; re-costed 2026-08-19; see fork §8.3)
 
-Not built initially. Would require a new harvest pass that, during/after
-inference, walks the typed tree collecting `(Loc, Mono)` from `ELoc`-wrapped
-nodes (`ast.mdk:233`) — the only column-precise span carrier — and indexes by
-span containment. Open problems: interior app/binop nodes and **all** patterns
-are unwrapped (no `Loc`), and `Loc` is not unique, so lookups must be
-"smallest enclosing `ELoc` span containing the query span" and will be
-approximate. This is the messy part of the crux and is deliberately deferred.
+Not built. The 2026-06-29 pass scoped this as a new pass walking the typed tree;
+§2.3 re-derives it as **three separable pieces**, only one of which is large:
+
+1. **The recorder — small.** `Ref (List (Loc, Mono))`, pushed in `infer`'s
+   existing `ELoc` arm, read after the whole-graph post-passes. No typed-tree
+   walk and **no zonk**: `Mono`'s `TVar (Ref Tyvar)` is union-find, so recorded
+   monos resolve themselves. ⚠️ Read-point constraint: see §10.2 — reading
+   per-SCC returns unsolved metavars for value-restricted bindings, and they
+   present as a legitimate `Option`-miss rather than an error.
+2. **Scoped spans — medium, and NOT this doc's work.** `currentLoc` must stop
+   being a last-entered marker before any harvest can trust it (#1752, 8 write
+   sites / 33 readers). This is arc work with three other consumers already
+   standing on the defect; lint is the *fourth*, not the motivation.
+3. **The approximate join — irreducible.** Interior app/binop nodes are
+   unwrapped by deliberate parser design (`parser.mdk:843`); pattern *structure*
+   carries no `Loc` (binders do — §2.2); `Loc` is not unique. Lookups stay
+   "smallest enclosing `ELoc` span." §2.4 is the go/no-go this implies.
 
 ---
 
@@ -276,11 +347,11 @@ This is a **third pass** in the lint run, after the per-file `Rule` pass and the
 - **Tier 1 typed rules** (`needsTypecheck = True`) are **skipped when
   `orc.typechecked == False`** (the file/project has type errors), avoiding
   findings derived from unreliable best-effort schemes. (Alternative, softer
-  policy in §7.)
+  policy in §8.)
 - **Default flag behavior:** gate the whole typed pass behind **`--type-aware`**
   (opt-in) for v1 — it adds a pipeline run per target (cost) and the project
   path needs the loader + runtime/core sources. The Tier-0-only subset is cheap
-  enough that turning it *on by default* is a viable fork (§7). When the flag is
+  enough that turning it *on by default* is a viable fork (§8). When the flag is
   off, the linter behaves exactly as today.
 
 ---
@@ -305,7 +376,11 @@ compiles.
 
 ## 7. Candidate rule catalog (≥4 typed rules)
 
-**(a) Upgrade `rule-bind-then-destructure` → irrefutable single-arm match.**
+**(a) Upgrade `rule-bind-then-destructure` → irrefutable single-arm match.
+✅ SHIPPED** (confirmed 2026-08-19: `lint.mdk` imports `frontend.exhaust.{Oracle,
+buildOracle, oGetCtors, oGetCtorType}` and its `Rule` doc-comment names the
+Oracle as the irrefutability logic's single-constructor recogniser). Retained
+here as the worked example of a Tier-0 rule; (b)-(d) below remain unbuilt.
 Surface shape (raw AST): a `let Pat = e` or a single-arm `EMatch scrut [Arm pat
 [] body]` where `pat` is a `PCtor`. **Oracle query:** `isIrrefutableArm orc pat`
 (Tier 0 — `ctorCountOfCtor c == Some 1`). Fires only when the constructor is the
@@ -383,20 +458,93 @@ name (e.g. `reverse : List a -> List a`). Fire only when the signatures unify.
 
 ## 9. Effort estimate
 
-- **Tier 0 framework + first typed rule (a, irrefutable single-arm match):**
-  **small.** `buildOracle` is reused as-is; `TypedRule`/`TypeOracle`/
-  `lintTypedProgram` mirror existing `Rule`/`lintProgram`; one CLI flag; the rule
-  is pure syntactic + ctor-count lookup. No pipeline harvest, no `Loc` bridging.
-- **Add Tier 1 (name-keyed schemes) + rules (b)(c):** **medium.** Adds the
-  single-file harvest (mirror `docSchemes` + `currentLocalSchemes`), the
-  `typechecked` gate, runtime/core source reading, and `Scheme` comparison
-  helpers. Risk: new `import`s into `lint.mdk` must pass `selfcompile_fixpoint`.
-- **Tier 2 (`typeOfLoc` over arbitrary sub-expressions):** **large** — net-new
-  typed-tree harvest pass threading `Mono` onto `ELoc` nodes, span-containment
-  index, plus handling unwrapped interior/pattern nodes. Deferred behind fork §7.3.
+Re-costed 2026-08-19. Changes from the 2026-06-29 pass are marked.
 
-**Bottom line:** the type-aware tier's highest-value rules (irrefutable match,
-sharpened deriving) are a **small** lift on the **already-exported, already-
-syntactic** `exhaust.Oracle`, with **no `Loc` bridging required**. The genuinely
-`Loc`-bridged, arbitrary-expression capability is the only large/messy piece and
-should be deferred.
+| Piece | Cost | Note |
+|---|---|---|
+| Tier 0 framework + rule (a) | **small** | ✅ **shipped** — was the estimate, is now the record |
+| Tier 1 (name-keyed schemes) + rules (b)(c) | **medium** | unchanged in size; **sequencing changed** — see §10.1 |
+| Tier 2 · the `(Loc, Mono)` recorder | **small** | ⬇️ **revised from "large"** — `currentLoc` exists, `Mono` is union-find, no zonk (§2.3) |
+| Tier 2 · scoped spans (#1752) | **medium** | ⬇️ **reattributed** — arc work, three other consumers, not lint's to schedule |
+| Tier 2 · approximate raw↔core join | **irreducible** | ⬆️ **promoted to the go/no-go** (§2.4) |
+| Perf + cache-closure work (any tier ≥1) | **medium** | typecheck per lint target; single-file `contentHash` cache must grow to the import closure or go silently stale |
+
+**Bottom line, revised.** The 2026-06-29 verdict ("Tier 2 is the only large
+piece, defer it") reached the right conclusion for a wrong reason. Tier 2's
+*machinery* is cheaper than believed — most of it already exists for diagnostics.
+What should defer it is not cost but **order and evidence**: the span semantics
+belong to the arc and are filed there (#1752, §10.3), Tier 1's current recipe
+taxes Stage E (§10.1), and no rule has yet been named that survives §2.4's
+approximate join. **Fix the order, then re-ask the question** — do not treat
+"Tier 2 is expensive" as the standing reason, because it is no longer true.
+
+---
+
+## 10. Interaction with the typechecker rearchitecture arc (#1122)
+
+Derived 2026-08-19 against `compiler/TYPECHECK-TARGET-ARCHITECTURE.md`. Three
+couplings. They are recorded here, on the consumer, rather than as arc units —
+with one exception (§10.3) that is genuinely arc work and is filed as such.
+
+⚠️ `TYPECHECK-TARGET-ARCHITECTURE.md` is itself open as **stale in the dangerous
+direction** (#1660). Treat component dispositions cited below as claims to
+re-derive at implementation time, not as settled facts.
+
+### 10.1 Tier 1's current recipe taxes Stage E — sequencing, not design
+
+§4.2 says to build the single-file harvest by mirroring `docSchemes`
+(`lsp.mdk`). That is a **Flat-path** consumer. Component E's stated target is
+"One driver … The target deletes `CheckMode` entirely," and its migration is
+explicitly *consumer-by-consumer*, naming "the repl, LSP hover/single-file env,
+playground, single-file doctests, `snapshot`/`check_policy`/`doc`" as consumers
+"whose golden families pin Flat behavior."
+
+Building Tier 1 as written therefore **adds a new consumer to the list E-4 has to
+migrate**, and pins another golden family to Flat behavior on the way.
+
+**Recommendation: hold Tier 1 until E collapses the drivers**, then write the
+harvest once against the single driver. If Tier 1 must land sooner, write it
+driver-agnostic (against whatever seam E-4 is migrating consumers *to*) and say
+so in the PR, rather than cloning `docSchemes`.
+
+### 10.2 The harvest read-point is dictated by E — and getting it wrong is silent
+
+Component E's red-team correction states that schemes are final per-SCC **for
+generalized bindings only**: *"non-generalized (value-restricted) bindings keep
+live metavariables, so route resolution and defaulting stay whole-graph
+post-passes per S's commitment rule."*
+
+Combined with `Mono` being ref-backed union-find (§2.3), this fixes the read
+point: **a `(Loc, Mono)` harvest must be read after the whole-graph post-passes,
+never per-SCC.** A per-SCC read returns *unsolved metavars* for value-restricted
+bindings — and because the consumer sees an unresolved `TVar`, it presents as a
+legitimate "no type here" `Option`-miss rather than as an error. The rule then
+abstains on exactly the bindings a reader would least expect, with no signal.
+
+This costs nothing if you know it and is a silent-wrongness bug if you do not,
+which is why it is written down here rather than left to be rediscovered.
+
+### 10.3 The expensive blocker is arc work, and is filed: #1752
+
+§2.3's blocker — `currentLoc` is set-on-enter and never restored — is **not a
+lint problem**. Three other workarounds already stand on the same defect:
+`goalSiteLoc` and its five drain-base-case clears (#1155/F-3c), the record-time
+`Option Loc` snapshot duplicated across six tables, and
+`pushTypeErrorOnceAt`'s `Option Loc` parameter. Scoping the ref is the shared
+repair for all of them, and it serves component D (Diagnostics) directly.
+
+Filed as **#1752** and routed to the arc on that basis. **Type-aware lint is not
+a reason to prioritise it**, and #1752 does not depend on this doc; the
+relationship is one-way. If #1752 lands, Tier 2's cost drops to §9's "small"
+recorder plus §2.4's go/no-go. If it does not, Tier 2 should not be built at all
+— a harvest over the leaky ref is a wrong-line finding machine.
+
+### 10.4 A hazard the arc should see coming
+
+A `(Loc, Mono)` harvest is a **new program-global table keyed by a bare span**,
+and `Loc` is explicitly not unique (§2.2). That runs straight into the substrate
+section's registry ratchet (*"A bare-`String` key fails the check"* — the #1070
+owed gate, which covers "any cross-module-populated map in the pipeline,
+regardless of bundle") and into [T-GLOBAL-TABLE]. Any implementation needs a
+scoped key and — per [T-GLOBAL-TABLE]'s required fixture shape — a test where
+the table is *populated* but the assertion is about code that never touches it.
