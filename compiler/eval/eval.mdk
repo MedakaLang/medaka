@@ -1404,7 +1404,7 @@ eval env (ELoc l e) =
   let _ = updateEvalLoc l
   eval env e
 eval env (EDoOrigin _ e) = eval env e
-eval _ _ = panic "eval: unsupported node (slice 2)"
+eval _ _ = panic "eval: unsupported node"
 
 -- C5: an RLocal route is NOT a method dispatch — the typechecker found no impl
 -- of this interface for the concrete receiver but the name has an explicitly-

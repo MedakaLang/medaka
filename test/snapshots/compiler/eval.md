@@ -1408,7 +1408,7 @@ eval env (ELoc l e) =
   let _ = updateEvalLoc l
   eval env e
 eval env (EDoOrigin _ e) = eval env e
-eval _ _ = panic "eval: unsupported node (slice 2)"
+eval _ _ = panic "eval: unsupported node"
 
 -- C5: an RLocal route is NOT a method dispatch — the typechecker found no impl
 -- of this interface for the concrete receiver but the name has an explicitly-
@@ -4560,7 +4560,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "eval" ((PVar "env") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "evalRange") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "lo"))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "hi"))) (EVar "incl")) (EVar "rangeArrayMk")))
 (DFunDef false "eval" ((PVar "env") (PCon "ELoc" (PVar "l") (PVar "e"))) (EBlock (DoLet false false PWild (EApp (EVar "updateEvalLoc") (EVar "l"))) (DoExpr (EApp (EApp (EVar "eval") (EVar "env")) (EVar "e")))))
 (DFunDef false "eval" ((PVar "env") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "e")))
-(DFunDef false "eval" (PWild PWild) (EApp (EVar "panic") (ELit (LString "eval: unsupported node (slice 2)"))))
+(DFunDef false "eval" (PWild PWild) (EApp (EVar "panic") (ELit (LString "eval: unsupported node"))))
 (DTypeSig false "evalMethodAt" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "evalMethodAt" ((PVar "env") (PVar "name") (PCon "RLocal" (PVar "sym") (PVar "dicts")) PWild PWild) (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "name") (EVar "sym")))) (EVar "dicts")))
 (DFunDef false "evalMethodAt" ((PVar "env") (PVar "name") (PVar "route") (PVar "implRoutes") (PVar "methodRoutes")) (EBlock (DoLet false false (PVar "lm") (EApp (EApp (EVar "lookupMethod") (EVar "env")) (EVar "name"))) (DoLet false false (PTuple (PVar "narrowed") (PVar "fwdReqs0")) (EApp (EApp (EApp (EApp (EVar "methodAtNarrow") (EVar "env")) (EVar "name")) (EVar "lm")) (EVar "route"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyMethodDicts") (EVar "env")) (EVar "name")) (EVar "route")) (EVar "narrowed")) (EVar "fwdReqs0")) (EVar "implRoutes")) (EVar "methodRoutes")))))
@@ -6004,7 +6004,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "eval" ((PVar "env") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "evalRange") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "lo"))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "hi"))) (EVar "incl")) (EVar "rangeArrayMk")))
 (DFunDef false "eval" ((PVar "env") (PCon "ELoc" (PVar "l") (PVar "e"))) (EBlock (DoLet false false PWild (EApp (EVar "updateEvalLoc") (EVar "l"))) (DoExpr (EApp (EApp (EVar "eval") (EVar "env")) (EVar "e")))))
 (DFunDef false "eval" ((PVar "env") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "e")))
-(DFunDef false "eval" (PWild PWild) (EApp (EVar "panic") (ELit (LString "eval: unsupported node (slice 2)"))))
+(DFunDef false "eval" (PWild PWild) (EApp (EVar "panic") (ELit (LString "eval: unsupported node"))))
 (DTypeSig false "evalMethodAt" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "evalMethodAt" ((PVar "env") (PVar "name") (PCon "RLocal" (PVar "sym") (PVar "dicts")) PWild PWild) (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "name") (EVar "sym")))) (EVar "dicts")))
 (DFunDef false "evalMethodAt" ((PVar "env") (PVar "name") (PVar "route") (PVar "implRoutes") (PVar "methodRoutes")) (EBlock (DoLet false false (PVar "lm") (EApp (EApp (EVar "lookupMethod") (EVar "env")) (EVar "name"))) (DoLet false false (PTuple (PVar "narrowed") (PVar "fwdReqs0")) (EApp (EApp (EApp (EApp (EVar "methodAtNarrow") (EVar "env")) (EVar "name")) (EVar "lm")) (EVar "route"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyMethodDicts") (EVar "env")) (EVar "name")) (EVar "route")) (EVar "narrowed")) (EVar "fwdReqs0")) (EVar "implRoutes")) (EVar "methodRoutes")))))
