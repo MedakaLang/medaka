@@ -111,6 +111,15 @@ intersperse sep (x::xs) = x :: sep :: intersperse sep xs
 export intercalate : List a -> List (List a) -> List a
 intercalate sep xss = flat (intersperse sep xss)
 
+{- | Map each element to a list, then concatenate the results — the
+   monomorphic, list-specific counterpart to `core`'s `Thenable`-constrained
+   `flatMap`, discoverable from `list` without the heavier constraint.
+
+   > concatMap (x => [x, x]) [1, 2, 3]
+   [1, 1, 2, 2, 3, 3] -}
+export concatMap : (a -> <e> List b) -> List a -> <e> List b
+concatMap f xs = flatMap f xs
+
 {- | Turn rows into columns.  Ragged rows are allowed: shorter rows simply
    contribute nothing to the later columns.
 

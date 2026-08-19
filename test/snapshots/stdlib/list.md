@@ -1,5 +1,5 @@
 # META
-source_lines=954
+source_lines=963
 stages=DESUGAR,MARK
 # SOURCE
 -- list.mdk — operations on List a
@@ -114,6 +114,15 @@ intersperse sep (x::xs) = x :: sep :: intersperse sep xs
    [1, 0, 2, 3, 0, 4] -}
 export intercalate : List a -> List (List a) -> List a
 intercalate sep xss = flat (intersperse sep xss)
+
+{- | Map each element to a list, then concatenate the results — the
+   monomorphic, list-specific counterpart to `core`'s `Thenable`-constrained
+   `flatMap`, discoverable from `list` without the heavier constraint.
+
+   > concatMap (x => [x, x]) [1, 2, 3]
+   [1, 1, 2, 2, 3, 3] -}
+export concatMap : (a -> <e> List b) -> List a -> <e> List b
+concatMap f xs = flatMap f xs
 
 {- | Turn rows into columns.  Ragged rows are allowed: shorter rows simply
    contribute nothing to the later columns.
@@ -979,6 +988,8 @@ prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
 (DFunDef false "intersperse" ((PVar "sep") (PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "sep") (EApp (EApp (EVar "intersperse") (EVar "sep")) (EVar "xs")))))
 (DTypeSig true "intercalate" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyVar "a"))) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "intercalate" ((PVar "sep") (PVar "xss")) (EApp (EVar "flat") (EApp (EApp (EVar "intersperse") (EVar "sep")) (EVar "xss"))))
+(DTypeSig true "concatMap" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "b")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "b"))))))
+(DFunDef false "concatMap" ((PVar "f") (PVar "xs")) (EApp (EApp (EVar "flatMap") (EVar "f")) (EVar "xs")))
 (DTypeSig true "transpose" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyVar "a"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "transpose" ((PList)) (EListLit))
 (DFunDef false "transpose" ((PCons (PList) (PVar "xss"))) (EApp (EVar "transpose") (EVar "xss")))
@@ -1219,6 +1230,8 @@ prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
 (DFunDef false "intersperse" ((PVar "sep") (PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "sep") (EApp (EApp (EVar "intersperse") (EVar "sep")) (EVar "xs")))))
 (DTypeSig true "intercalate" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyVar "a"))) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "intercalate" ((PVar "sep") (PVar "xss")) (EApp (EDictApp "flat") (EApp (EApp (EVar "intersperse") (EVar "sep")) (EVar "xss"))))
+(DTypeSig true "concatMap" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "b")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "b"))))))
+(DFunDef false "concatMap" ((PVar "f") (PVar "xs")) (EApp (EApp (EDictApp "flatMap") (EVar "f")) (EVar "xs")))
 (DTypeSig true "transpose" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyVar "a"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "transpose" ((PList)) (EListLit))
 (DFunDef false "transpose" ((PCons (PList) (PVar "xss"))) (EApp (EVar "transpose") (EVar "xss")))
