@@ -20,6 +20,9 @@ preambleLines = [
   "declare ptr @mdk_alloc_atomic(i64)",
   "declare i64 @__mdk_apply(i64, i64, ptr)",
   "declare void @mdk_oob() noreturn",
+  -- #1787: the same coded E-INDEX-OOB abort, carrying the offending index (raw
+  -- i64, as in @mdk_slice_oob) so the message matches what `run` prints.
+  "declare void @mdk_oob_at(i64) noreturn",
   "declare void @mdk_slice_oob(i64, i64) noreturn",
   "declare void @mdk_cyclic_value(ptr) noreturn",
   "declare void @mdk_div_zero() noreturn",

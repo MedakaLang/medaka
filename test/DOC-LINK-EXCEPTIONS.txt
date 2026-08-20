@@ -171,3 +171,9 @@ REF	test/argstamp_parity_probe.sh	deleted with #157 (single-mode elaboration) �
 REF	test/diff_compiler_lexer.sh	migrated into the snapshot # TOKENS section in #280; archive/design/BROWSER-STACK-DIAGNOSIS.md records the gate as it existed when the layout stack was diagnosed — legitimate history
 REF	test/diff_compiler_eval_dict.sh	migrated into the snapshot # EVAL section in #81 R6 (diff_compiler_snapshot_eval.sh); the eval_dict_main probe + eval_dict_fixtures/*.eval.golden survive for the batch gate — compiler/README.md's as-built port-slice log and archive/design/D2-REKEY-DESIGN.md record the gate as it existed
 REF	test/diff_compiler_eval_typed.sh	migrated into the snapshot # EVAL section in #81 R6 (diff_compiler_snapshot_eval.sh); the eval_typed_main probe + eval_typed_fixtures/*.eval.golden survive for the batch gate — compiler/README.md's as-built port-slice log records the gate as it existed
+
+# ── REF: pds/ — #1722 widened the bare-path matcher to include pds/… ────────
+REF	pds/lib/secp256k1.mdk	docs/design/ATPROTO-PDS-DESIGN.md names this as a planned-but-not-yet-built module (P4 secp256k1 plan); pds/lib/ only has base58/field/multiformats/scalar/sha256/skeleton so far
+REF	pds/lib/sign.mdk	docs/design/ATPROTO-PDS-DESIGN.md names this as a planned-but-not-yet-built module (the seam every consumer is meant to depend on instead of secp256k1.mdk directly); not yet built
+REF	pds/main.mdk	pds/README.md documents the intentional ABSENCE of pds/main.mdk — pds/medaka.toml has no `entry` key on purpose, so this citation is deliberately naming a file that must not exist
+REF	pds/test/vectors/helper.sh	pds/README.md cites this as an ILLUSTRATIVE example filename (a script in a subdirectory of pds/test/, to explain the CI-enrollment asymmetry) — not a real file

@@ -721,7 +721,19 @@ jobs:
             # this session's diff_compiler_llvm bug (201/201 green against goldens no
             # `medaka build` binary can produce — it was grading its own probe).
             # 14 ok / 0 failing. Reads no test/bin oracle; needs only ./medaka + the emitter.
-            pattern: "'diff_compiler_llvm*' 'diff_compiler_build' 'diff_compiler_rt_obj' 'diff_compiler_selfproc' 'diff_compiler_stack_overflow' 'diff_compiler_let_refute' 'diff_compiler_tmc_parity' 'selfcompile_lex' 'selfcompile_emit' 'selfcompile_build_fixpoint' 'diff_native_cli' 'diff_native_stack' 'build_cmd'"
+            #
+            # 'diff_compiler_index_oob' (#1787, 9.6s measured) lands HERE on cost, per
+            # [W-SHARD-COST]. Its nearest sibling by shape is diff_compiler_slice_oob —
+            # same run-vs-build+exec doctrine, same fixture layout — which sits in `eval`
+            # because when it was filed "backend has no room" (see that shard's comment).
+            # That has since INVERTED: derived from run 32336605670, backend 277s is the
+            # CHEAPEST of the seven (eval 326s, tools 323s, engines 408s, sqlite 436s,
+            # types 468s, frontend 530s). Re-derive before moving it; these numbers rot:
+            #   gh run view <id> --json jobs --jq '.jobs[]|select(.name|startswith("gates"))
+            #     |{name,s:((.completedAt|fromdate)-(.startedAt|fromdate))}'
+            # It needs ./medaka + the emitter (6 real `medaka build` + clang), which this
+            # shard already provides for diff_compiler_build and build_cmd.
+            pattern: "'diff_compiler_llvm*' 'diff_compiler_build' 'diff_compiler_rt_obj' 'diff_compiler_selfproc' 'diff_compiler_stack_overflow' 'diff_compiler_let_refute' 'diff_compiler_index_oob' 'diff_compiler_tmc_parity' 'selfcompile_lex' 'selfcompile_emit' 'selfcompile_build_fixpoint' 'diff_native_cli' 'diff_native_stack' 'build_cmd'"
           - name: tools
             # 'diff_compiler_mcp' (#253): golden JSON-RPC transcript gate for `medaka
             # mcp` — same shape as its nearest sibling here, diff_compiler_lsp* (a

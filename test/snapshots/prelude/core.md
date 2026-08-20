@@ -1,5 +1,5 @@
 # META
-source_lines=1645
+source_lines=1642
 stages=TYPES
 # SOURCE
 {- core.mdk — the foundation every other Medaka module rests on.
@@ -1069,7 +1069,7 @@ export interface IndexMut c k v requires Index c k v where
 export impl Index (Array a) Int a where
   index arr i =
     if i < 0 || i >= arrayLength arr then
-      indexError "index \{intToString i} out of bounds"
+      indexErrorAt i
     else
       arrayGetUnsafe i arr
 
@@ -1078,7 +1078,7 @@ export impl Index (Array a) Int a where
    `i` is out of range. -}
 export impl IndexMut (Array a) Int a where
   setIndex arr i v =
-    if i < 0 || i >= arrayLength arr then indexError "index \{intToString i} out of bounds"
+    if i < 0 || i >= arrayLength arr then indexErrorAt i
     else
       let _ = arraySetUnsafe i v arr
       arr
@@ -1099,10 +1099,7 @@ export impl Index (List a) Int a where
 export impl Index String Int Char where
   index s i =
     let cs = stringToChars s
-    if i < 0 || i >= arrayLength cs then
-      indexError "index \{intToString i} out of bounds"
-    else
-      arrayGetUnsafe i cs
+    if i < 0 || i >= arrayLength cs then indexErrorAt i else arrayGetUnsafe i cs
 
 {- | Read-only slicing of a container `c` by a half-open index range.  `slice c lo
    hi` yields the sub-container over indices `[lo, hi)`.  The surface sugar

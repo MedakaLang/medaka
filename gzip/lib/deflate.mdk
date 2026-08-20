@@ -91,7 +91,7 @@
 -- is the "must not grow" guarantee `gzip/test/deflate_oracle.sh` checks
 -- against `/dev/urandom` input.
 
-import array.{get, set, make, sliceClamped, concat, range, makeWith}
+import array.{get, make, sliceClamped, concat, range, makeWith}
 import lib.bitio.{
   BitWriter,
   newBitWriter,
@@ -364,8 +364,9 @@ insertOne : Matcher -> Int -> Unit
 insertOne m p =
   let h = hash3At m.input p
   let old = headGet m.head h
-  let _ = set p old m.prevArr
-  set h p m.head
+  m.prevArr[p] := old
+  m.head[h] := p
+  ()
 
 {- | Insert every not-yet-inserted position strictly before `target` into the
    chain, in increasing order, advancing `m.nextInsert` as it goes. This is

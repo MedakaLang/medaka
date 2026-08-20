@@ -1,0 +1,6 @@
+-- #1787: an out-of-range Array WRITE.  `a[i] := v` desugars to `setIndex`,
+-- whose guard raises the same coded abort as the read path.
+main =
+  let a = [|5, 6, 7|]
+  let _ = a[9] := 1
+  println "unreachable"

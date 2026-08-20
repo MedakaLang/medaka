@@ -23,7 +23,7 @@ for fix in "$FIXDIR"/*.mdk; do
   name="$(basename "$fix")"
   golden="${fix%.mdk}.boot_typecheck.golden"
   if [ ! -f "$golden" ]; then
-    fail=$((fail+1)); printf 'FAIL %s (no .boot_typecheck.golden — run sh test/capture_goldens.sh boot_typecheck)\n' "$name"; continue
+    fail=$((fail+1)); printf 'FAIL %s (no .boot_typecheck.golden — run sh test/capture_goldens.sh --frozen boot_typecheck)\n' "$name"; continue
   fi
   ref="$(cat "$golden")"
   self="$("$RUN" "$fix" 2>/dev/null | strip_unit)"

@@ -1,5 +1,5 @@
 # META
-source_lines=646
+source_lines=665
 stages=DESUGAR,MARK
 # SOURCE
 {- json.mdk — a JSON value type with a parser and serializer.
@@ -312,10 +312,19 @@ skipFrac arr i
     (skipDigits arr (i + 1), True)
   | otherwise = (i, False)
 
+-- Exponent sign only: RFC 8259 permits both '-' and '+' right after `e`/`E`
+-- (`exp = ("e"/"E") ["-"/"+"] 1*DIGIT`). Kept separate from `skipSign` so the
+-- leading sign at the START of a number stays '-'-only — a leading '+' there
+-- is correctly invalid and must keep failing.
+skipExpSign : Array Char -> Int -> Int
+skipExpSign arr i
+  | i < arrayLength arr && (arrayGetUnsafe i arr == '-' || arrayGetUnsafe i arr == '+') = i + 1
+  | otherwise = i
+
 skipExp : Array Char -> Int -> (Int, Bool)
 skipExp arr i
   | i < arrayLength arr && isExpChar (arrayGetUnsafe i arr) =
-    (skipDigits arr (skipSign arr (i + 1)), True)
+    (skipDigits arr (skipExpSign arr (i + 1)), True)
   | otherwise = (i, False)
 
 isExpChar : Char -> Bool
@@ -470,7 +479,17 @@ dispatchValue arr j c
    > parse "\"\\uD834\""
    Err "invalid \\u escape"
    > parse "\"\\uDC00\""
-   Err "invalid \\u escape" -}
+   Err "invalid \\u escape"
+   > parse "1e+5" == Ok (JFloat 100000.0)
+   True
+   > parse "6.022e+23" == Ok (JFloat 6.022e23)
+   True
+   > parse (stringify (JFloat 1000000000000.0)) == Ok (JFloat 1000000000000.0)
+   True
+   > parse "1e+"
+   Err "invalid number"
+   > parse "1e"
+   Err "invalid number" -}
 export parse : String -> Result String Json
 parse s = parseTop (stringToChars s)
 
@@ -735,8 +754,10 @@ prop "lookup finds an inserted key" (k : Int) (v : Int) =
 (DFunDef false "skipDigits" ((PVar "arr") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "isDigit") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (EApp (EApp (EVar "skipDigits") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "skipFrac" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "skipFrac" ((PVar "arr") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar ".")))) (ETuple (EApp (EApp (EVar "skipDigits") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "True")) (EIf (EVar "otherwise") (ETuple (EVar "i") (EVar "False")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "skipExpSign" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "skipExpSign" ((PVar "arr") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "-"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "+"))))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "skipExp" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "skipExp" ((PVar "arr") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "isExpChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (ETuple (EApp (EApp (EVar "skipDigits") (EVar "arr")) (EApp (EApp (EVar "skipSign") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EVar "True")) (EIf (EVar "otherwise") (ETuple (EVar "i") (EVar "False")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "skipExp" ((PVar "arr") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "isExpChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (ETuple (EApp (EApp (EVar "skipDigits") (EVar "arr")) (EApp (EApp (EVar "skipExpSign") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EVar "True")) (EIf (EVar "otherwise") (ETuple (EVar "i") (EVar "False")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isExpChar" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isExpChar" ((PVar "c")) (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar "e"))) (EBinOp "==" (EVar "c") (ELit (LChar "E")))))
 (DTypeSig false "subString" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
@@ -916,8 +937,10 @@ prop "lookup finds an inserted key" (k : Int) (v : Int) =
 (DFunDef false "skipDigits" ((PVar "arr") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "isDigit") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (EApp (EApp (EVar "skipDigits") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "skipFrac" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "skipFrac" ((PVar "arr") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar ".")))) (ETuple (EApp (EApp (EVar "skipDigits") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "True")) (EIf (EVar "otherwise") (ETuple (EVar "i") (EVar "False")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "skipExpSign" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "skipExpSign" ((PVar "arr") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "-"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "+"))))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "skipExp" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "skipExp" ((PVar "arr") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "isExpChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (ETuple (EApp (EApp (EVar "skipDigits") (EVar "arr")) (EApp (EApp (EVar "skipSign") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EVar "True")) (EIf (EVar "otherwise") (ETuple (EVar "i") (EVar "False")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "skipExp" ((PVar "arr") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "isExpChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))) (ETuple (EApp (EApp (EVar "skipDigits") (EVar "arr")) (EApp (EApp (EVar "skipExpSign") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EVar "True")) (EIf (EVar "otherwise") (ETuple (EVar "i") (EVar "False")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isExpChar" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isExpChar" ((PVar "c")) (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar "e"))) (EBinOp "==" (EVar "c") (ELit (LChar "E")))))
 (DTypeSig false "subString" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))

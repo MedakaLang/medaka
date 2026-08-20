@@ -1,5 +1,5 @@
 # META
-source_lines=271
+source_lines=281
 stages=DESUGAR,MARK
 # SOURCE
 -- Built-in extern declarations.
@@ -64,6 +64,16 @@ extern panic : String -> a
 -- backend already has for the built-in index paths (native @mdk_oob, wasm's
 -- E-INDEX-OOB trap) -- unlike `panic`, which is always coded E-PANIC.
 extern indexError : String -> a
+
+-- Coded-OOB abort carrying the offending index, for a container's own
+-- `Index`/`IndexMut` impl (#1787).  Prefer this over `indexError` with an
+-- interpolated message: `indexError`'s message is DROPPED by the native and wasm
+-- backends (they raise a fixed-text E-INDEX-OOB abort), so interpolating one made
+-- `run` and a built binary disagree, and the dead string-building cost enough LLVM
+-- inline budget to stop `index`/`setIndex` inlining into hot loops.  Here the index
+-- is formatted by the abort itself (native @mdk_oob_at), so every engine that can
+-- report it does.
+extern indexErrorAt : Int -> a
 
 -- Coded-OOB abort for a container's own `Slice` impl to raise on an
 -- out-of-bounds slice range (#670).  Args are `(lo, hiIncl)` -- the original low
@@ -300,6 +310,7 @@ extern stringToLower : String -> String
 (DExtern false "exit" (TyFun (TyCon "Int") (TyCon "Unit")))
 (DExtern false "panic" (TyFun (TyCon "String") (TyVar "a")))
 (DExtern false "indexError" (TyFun (TyCon "String") (TyVar "a")))
+(DExtern false "indexErrorAt" (TyFun (TyCon "Int") (TyVar "a")))
 (DExtern false "sliceError" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyVar "a"))))
 (DExtern false "stashRunStdout" (TyFun (TyCon "String") (TyCon "Unit")))
 (DExtern false "enableRunStdoutFlush" (TyFun (TyCon "Unit") (TyCon "Unit")))
@@ -437,6 +448,7 @@ extern stringToLower : String -> String
 (DExtern false "exit" (TyFun (TyCon "Int") (TyCon "Unit")))
 (DExtern false "panic" (TyFun (TyCon "String") (TyVar "a")))
 (DExtern false "indexError" (TyFun (TyCon "String") (TyVar "a")))
+(DExtern false "indexErrorAt" (TyFun (TyCon "Int") (TyVar "a")))
 (DExtern false "sliceError" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyVar "a"))))
 (DExtern false "stashRunStdout" (TyFun (TyCon "String") (TyCon "Unit")))
 (DExtern false "enableRunStdoutFlush" (TyFun (TyCon "Unit") (TyCon "Unit")))

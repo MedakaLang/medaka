@@ -1,5 +1,5 @@
 # META
-source_lines=1645
+source_lines=1642
 stages=DESUGAR,MARK
 # SOURCE
 {- core.mdk — the foundation every other Medaka module rests on.
@@ -1069,7 +1069,7 @@ export interface IndexMut c k v requires Index c k v where
 export impl Index (Array a) Int a where
   index arr i =
     if i < 0 || i >= arrayLength arr then
-      indexError "index \{intToString i} out of bounds"
+      indexErrorAt i
     else
       arrayGetUnsafe i arr
 
@@ -1078,7 +1078,7 @@ export impl Index (Array a) Int a where
    `i` is out of range. -}
 export impl IndexMut (Array a) Int a where
   setIndex arr i v =
-    if i < 0 || i >= arrayLength arr then indexError "index \{intToString i} out of bounds"
+    if i < 0 || i >= arrayLength arr then indexErrorAt i
     else
       let _ = arraySetUnsafe i v arr
       arr
@@ -1099,10 +1099,7 @@ export impl Index (List a) Int a where
 export impl Index String Int Char where
   index s i =
     let cs = stringToChars s
-    if i < 0 || i >= arrayLength cs then
-      indexError "index \{intToString i} out of bounds"
-    else
-      arrayGetUnsafe i cs
+    if i < 0 || i >= arrayLength cs then indexErrorAt i else arrayGetUnsafe i cs
 
 {- | Read-only slicing of a container `c` by a half-open index range.  `slice c lo
    hi` yields the sub-container over indices `[lo, hi)`.  The surface sugar
@@ -1841,10 +1838,10 @@ prop "foldThen with Some agrees with a pure fold" (xs : List Int) = eq
 (DInterface true false "FromEntries" ("c" "e") () ((imethod "fromEntries" (TyFun (TyApp (TyCon "List") (TyVar "e")) (TyVar "c")) None)))
 (DInterface true false "Index" ("c" "k" "v") () ((imethod "index" (TyFun (TyVar "c") (TyFun (TyVar "k") (TyVar "v"))) None)))
 (DInterface true false "IndexMut" ("c" "k" "v") ((super "Index" ("c" "k" "v"))) ((imethod "setIndex" (TyFun (TyVar "c") (TyFun (TyVar "k") (TyFun (TyVar "v") (TyVar "c")))) None)))
-(DImpl true "Index" ((TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int") (TyVar "a")) () ((im "index" ((PVar "arr") (PVar "i")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr")))) (EApp (EVar "indexError") (EBinOp "++" (EBinOp "++" (ELit (LString "index ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " out of bounds")))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))))
-(DImpl true "IndexMut" ((TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int") (TyVar "a")) () ((im "setIndex" ((PVar "arr") (PVar "i") (PVar "v")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr")))) (EApp (EVar "indexError") (EBinOp "++" (EBinOp "++" (ELit (LString "index ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " out of bounds")))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "v")) (EVar "arr"))) (DoExpr (EVar "arr")))))))
+(DImpl true "Index" ((TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int") (TyVar "a")) () ((im "index" ((PVar "arr") (PVar "i")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))))
+(DImpl true "IndexMut" ((TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int") (TyVar "a")) () ((im "setIndex" ((PVar "arr") (PVar "i") (PVar "v")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "v")) (EVar "arr"))) (DoExpr (EVar "arr")))))))
 (DImpl true "Index" ((TyApp (TyCon "List") (TyVar "a")) (TyCon "Int") (TyVar "a")) () ((im "index" ((PList) PWild) (EApp (EVar "indexError") (ELit (LString "index out of bounds")))) (im "index" ((PCons (PVar "h") (PVar "t")) (PVar "i")) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EVar "h") (EApp (EApp (EVar "index") (EVar "t")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))))
-(DImpl true "Index" ((TyCon "String") (TyCon "Int") (TyCon "Char")) () ((im "index" ((PVar "s") (PVar "i")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs")))) (EApp (EVar "indexError") (EBinOp "++" (EBinOp "++" (ELit (LString "index ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " out of bounds")))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))))))
+(DImpl true "Index" ((TyCon "String") (TyCon "Int") (TyCon "Char")) () ((im "index" ((PVar "s") (PVar "i")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))))))
 (DInterface true false "Slice" ("c") () ((imethod "slice" (TyFun (TyVar "c") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyVar "c")))) None)))
 (DImpl true "Slice" ((TyApp (TyCon "Array") (TyVar "a"))) () ((im "slice" ((PVar "arr") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "arrayLength") (EVar "arr")))) (EBinOp "<" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 0)))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (EVar "i"))) (EVar "arr"))))))))
 (DImpl true "Slice" ((TyCon "String")) () ((im "slice" ((PVar "s") (PVar "lo") (PVar "hi")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EVar "hi")) (EVar "s")))))
@@ -2172,10 +2169,10 @@ prop "foldThen with Some agrees with a pure fold" (xs : List Int) = eq
 (DInterface true false "FromEntries" ("c" "e") () ((imethod "fromEntries" (TyFun (TyApp (TyCon "List") (TyVar "e")) (TyVar "c")) None)))
 (DInterface true false "Index" ("c" "k" "v") () ((imethod "index" (TyFun (TyVar "c") (TyFun (TyVar "k") (TyVar "v"))) None)))
 (DInterface true false "IndexMut" ("c" "k" "v") ((super "Index" ("c" "k" "v"))) ((imethod "setIndex" (TyFun (TyVar "c") (TyFun (TyVar "k") (TyFun (TyVar "v") (TyVar "c")))) None)))
-(DImpl true "Index" ((TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int") (TyVar "a")) () ((im "index" ((PVar "arr") (PVar "i")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr")))) (EApp (EVar "indexError") (EBinOp "++" (EBinOp "++" (ELit (LString "index ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " out of bounds")))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))))
-(DImpl true "IndexMut" ((TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int") (TyVar "a")) () ((im "setIndex" ((PVar "arr") (PVar "i") (PVar "v")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr")))) (EApp (EVar "indexError") (EBinOp "++" (EBinOp "++" (ELit (LString "index ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " out of bounds")))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "v")) (EVar "arr"))) (DoExpr (EVar "arr")))))))
+(DImpl true "Index" ((TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int") (TyVar "a")) () ((im "index" ((PVar "arr") (PVar "i")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))))
+(DImpl true "IndexMut" ((TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int") (TyVar "a")) () ((im "setIndex" ((PVar "arr") (PVar "i") (PVar "v")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EVar "v")) (EVar "arr"))) (DoExpr (EVar "arr")))))))
 (DImpl true "Index" ((TyApp (TyCon "List") (TyVar "a")) (TyCon "Int") (TyVar "a")) () ((im "index" ((PList) PWild) (EApp (EVar "indexError") (ELit (LString "index out of bounds")))) (im "index" ((PCons (PVar "h") (PVar "t")) (PVar "i")) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EVar "h") (EApp (EApp (EMethodRef "index") (EVar "t")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))))
-(DImpl true "Index" ((TyCon "String") (TyCon "Int") (TyCon "Char")) () ((im "index" ((PVar "s") (PVar "i")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs")))) (EApp (EVar "indexError") (EBinOp "++" (EBinOp "++" (ELit (LString "index ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " out of bounds")))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))))))
+(DImpl true "Index" ((TyCon "String") (TyCon "Int") (TyCon "Char")) () ((im "index" ((PVar "s") (PVar "i")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))))))
 (DInterface true false "Slice" ("c") () ((imethod "slice" (TyFun (TyVar "c") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyVar "c")))) None)))
 (DImpl true "Slice" ((TyApp (TyCon "Array") (TyVar "a"))) () ((im "slice" ((PVar "arr") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "arrayLength") (EVar "arr")))) (EBinOp "<" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 0)))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (EVar "i"))) (EVar "arr"))))))))
 (DImpl true "Slice" ((TyCon "String")) () ((im "slice" ((PVar "s") (PVar "lo") (PVar "hi")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EVar "hi")) (EVar "s")))))

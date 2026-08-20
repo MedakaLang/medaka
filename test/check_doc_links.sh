@@ -20,9 +20,9 @@
 #      informal "see file.mdk:1175" convention, e.g. compiler/STAGE2-DESIGN.md)
 #      is stripped like a fragment before checking.
 #   2. Bare cited source paths in prose/backticks: compiler/… stdlib/… test/…
-#      runtime/… playground/… with a real extension (.mdk .sh .c .md .txt
-#      .toml .yml). These are cited ROOT-relative by convention throughout
-#      this repo (verified by inspection — e.g. AGENTS.md cites
+#      runtime/… playground/… pds/… with a real extension (.mdk .sh .c .md
+#      .txt .toml .yml). These are cited ROOT-relative by convention
+#      throughout this repo (verified by inspection — e.g. AGENTS.md cites
 #      "compiler/backend/llvm_emit.mdk" from the repo root regardless of
 #      which doc is doing the citing).
 #
@@ -187,12 +187,12 @@ function processLine(fname, lineno, line,    work, target, scrub, work2, mstart,
   # Require a non-path char (or start-of-string) immediately before the
   # match, or "sqlite/test/overflow_oracle.sh" mis-truncates into a false
   # match on "test/overflow_oracle.sh" (a DIFFERENT, real path) since
-  # "sqlite" is not one of our five tracked prefixes — reproduced against
+  # "sqlite" is not one of our six tracked prefixes — reproduced against
   # sqlite/findings/overflow-write.md. On a bad boundary, retry one
   # character later (work2 still strictly shrinks every iteration, so this
   # cannot loop forever).
   work2 = scrub
-  while (length(work2) > 0 && match(work2, /(compiler|stdlib|test|runtime|playground)\/[A-Za-z0-9_.\/-]+\.(mdk|sh|c|md|txt|toml|yml)/)) {
+  while (length(work2) > 0 && match(work2, /(compiler|stdlib|test|runtime|playground|pds)\/[A-Za-z0-9_.\/-]+\.(mdk|sh|c|md|txt|toml|yml)/)) {
     mstart = RSTART; mlen = RLENGTH
     if (mstart > 1 && substr(work2, mstart - 1, 1) ~ /[A-Za-z0-9_.\/-]/) {
       work2 = substr(work2, mstart + 1)

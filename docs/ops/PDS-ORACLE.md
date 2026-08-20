@@ -25,7 +25,8 @@ substitute — the exact bytes Bluesky ships.
 **Use this route when Docker is unavailable**: macOS without Docker Desktop, a CI runner, or
 a locked-down box. It installs and runs the image's own `service/` payload
 (`index.ts`/`package.json`/`pnpm-lock.yaml`) directly under the host's Node — no container,
-no isolation. The two routes serve byte-identical application code (see F-5 below); Route B
+no isolation. The two routes serve byte-identical application code (see "Why Route B is a
+faithful substitute" under the Route B provenance table below); Route B
 exists only because Route A needs Docker and this dual-platform tree cannot assume it.
 
 ---

@@ -56,7 +56,7 @@
 -- hand-typed duplicate would be wrong in exactly one cell and pass every
 -- test but one.
 
-import array.{get, set, make, makeWith}
+import array.{get, make, makeWith}
 import lib.bitio.{
   BitReader,
   BitWriter,
@@ -109,7 +109,7 @@ countLengthsGo lengths i n counts
     Some len => if len == 0 then countLengthsGo lengths (i + 1) n counts
     else match get len counts
       Some c =>
-        let _ = set len (c + 1) counts
+        counts[len] := c + 1
         countLengthsGo lengths (i + 1) n counts
       None => panic "countLengths: length \{len} out of table range (unreachable after validateLengths)"
     None => ()
@@ -174,7 +174,7 @@ buildOffsetsGo : Array Int -> Int -> Int -> Array Int -> Unit
 buildOffsetsGo counts len acc offs
   | len > maxCodeLen = ()
   | otherwise =
-    let _ = set len acc offs
+    offs[len] := acc
     match get len counts
       Some c => buildOffsetsGo counts (len + 1) (acc + c) offs
       None =>
@@ -196,8 +196,8 @@ placeSymbolsGo lengths i n offs symbols
     Some len => if len == 0 then placeSymbolsGo lengths (i + 1) n offs symbols
     else match get len offs
       Some pos =>
-        let _ = set pos i symbols
-        let _ = set len (pos + 1) offs
+        symbols[pos] := i
+        offs[len] := pos + 1
         placeSymbolsGo lengths (i + 1) n offs symbols
       None =>
         panic "placeSymbols: length \{len} out of table range (unreachable)"
@@ -575,7 +575,7 @@ testCountLengthsGo lengths i n counts
     Some len => if len == 0 then testCountLengthsGo lengths (i + 1) n counts
     else match get len counts
       Some c =>
-        let _ = set len (c + 1) counts
+        counts[len] := c + 1
         testCountLengthsGo lengths (i + 1) n counts
       None => testCountLengthsGo lengths (i + 1) n counts
     None => ()
@@ -592,7 +592,7 @@ nextCodeTableGo counts len code next
   | otherwise = match get (len - 1) counts
     Some prevCount =>
       let code2 = shiftLeft (code + prevCount) 1
-      let _ = set len code2 next
+      next[len] := code2
       nextCodeTableGo counts (len + 1) code2 next
     None => ()
 
@@ -611,8 +611,8 @@ symbolCodesGo lengths i n next codes
     Some len => if len == 0 then symbolCodesGo lengths (i + 1) n next codes
     else match get len next
       Some c =>
-        let _ = set i c codes
-        let _ = set len (c + 1) next
+        codes[i] := c
+        next[len] := c + 1
         symbolCodesGo lengths (i + 1) n next codes
       None => symbolCodesGo lengths (i + 1) n next codes
     None => ()
