@@ -149,14 +149,15 @@
    for the signing path, not an open question — it is simply not
    implemented here, and #1724 tracks it. -}
 
--- Writes here stay on `Array.set` rather than the `arr[i] := v` sugar, on
--- purpose. `setIndex` is an `IndexMut` method and its dispatch is not
--- devirtualized for a monomorphic receiver, which measured +14% on the
--- `feMul` loop in `pds/lib/field.mdk` (0.575s -> 0.658s, 200k muls, 2026-08-20)
--- when the sugar was swapped in. The rest of the tree (gzip, sqlite,
--- pds/lib/base58.mdk, the pds tests) uses the sugar; these three hot modules
--- are the deliberate exception. Revisit if monomorphic `index`/`setIndex`
--- ever specializes.
+-- Writes here stay on `Array.set` rather than the `arr[i] := v` sugar the rest
+-- of the tree uses (#1786). NOT a dispatch cost: `setIndex` on a monomorphic
+-- `Array` receiver emits a direct call, same as `Array.set`. It is an INLINING
+-- asymmetry -- `Array.set` inlines into the hot loops and `setIndex` does not,
+-- because its out-of-bounds branch interpolates its message. Measured on
+-- `feMul` here: 0.588s vs 0.677s over 200k muls (12 interleaved pairs,
+-- 2026-08-20); `objdump` shows a real `call mdk_impl_Array_setIndex` per write
+-- in the sugar arm. #1787 tracks the fix -- when it lands, re-measure and
+-- migrate these three modules.
 import array as A
 
 -- ── Constants ────────────────────────────────────────────────────────
