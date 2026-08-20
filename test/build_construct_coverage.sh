@@ -55,7 +55,7 @@ if [ "${1:-}" = "--one" ]; then
   out="$RD/$label.out"
 
   if [ ! -f "$golden" ]; then
-    printf 'FAIL %s (no .build.golden — run sh test/capture_goldens.sh build_construct)\n' "$label" > "$out"
+    printf 'FAIL %s (no .build.golden — run sh test/capture_goldens.sh --frozen build_construct)\n' "$label" > "$out"
     echo fail > "$RD/$label.st"; exit 0
   fi
   if ! MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER" \
