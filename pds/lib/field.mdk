@@ -105,15 +105,17 @@
    for the signing path, not an open question — it is simply not
    implemented here, and #1724 tracks it. -}
 
--- Writes here stay on `Array.set` rather than the `arr[i] := v` sugar the rest
--- of the tree uses (#1786). NOT a dispatch cost: `setIndex` on a monomorphic
--- `Array` receiver emits a direct call, same as `Array.set`. It is an INLINING
--- asymmetry -- `Array.set` inlines into the hot loops and `setIndex` does not,
--- because its out-of-bounds branch interpolates its message. Measured on
--- `feMul` here: 0.588s vs 0.677s over 200k muls (12 interleaved pairs,
--- 2026-08-20); `objdump` shows a real `call mdk_impl_Array_setIndex` per write
--- in the sugar arm. #1787 tracks the fix -- when it lands, re-measure and
--- migrate these three modules.
+-- Writes here are still on `Array.set` rather than the `arr[i] := v` sugar the
+-- rest of the tree uses (#1786) -- but the reason is now HISTORICAL, and this
+-- comment is a note to whoever migrates them, not a warning against it.
+--
+-- The cost was never dispatch (`setIndex` on a monomorphic `Array` receiver emits
+-- a direct call, same as `Array.set`). It was an INLINING asymmetry: `setIndex`'s
+-- out-of-bounds branch interpolated a message, which put it past LLVM's inline
+-- threshold, so it never inlined into the hot loops where `Array.set` did --
+-- 0.588s vs 0.677s over 200k feMuls. #1787 removed the interpolation, and both
+-- spellings now inline. Migrating these three modules is mechanical and wanted;
+-- re-measure when you do, and delete this comment.
 import array.{set, blit}
 
 -- ── Constants ────────────────────────────────────────────────────────
