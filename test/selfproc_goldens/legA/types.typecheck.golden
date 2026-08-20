@@ -1060,6 +1060,8 @@ isConPat : Pat -> Bool
 isConstrainedTy : Ty -> Bool
 isCtorAppSpine : Expr -> Bool
 isDefinerShadow : String -> Bool
+isDoLoweredAndThenCallee : Expr -> Bool
+isDoLoweredAndThenCalleeExpr : Expr -> Bool
 isHoleParam : Param -> Bool
 isHoleStr : String -> Bool
 isLetrecGroup : List String -> Bool

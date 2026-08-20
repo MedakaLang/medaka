@@ -1,0 +1,20 @@
+-- #894 review finding 2: an EARLIER statement in a `do`-chain can itself be an
+-- inline nested `do` block (`a <- (do ...)`). `infer env (EDoOrigin l e)`
+-- (compiler/types/typecheck.mdk) used to unconditionally clear
+-- `currentDoOrigin` to `None` on the way out of inferring that nested chain,
+-- instead of restoring whatever it was before — so by the time a LATER
+-- statement in the OUTER chain (`x <- badBool`) is inferred, the flag was
+-- already gone, silently reverting to the pre-#894 container/List/Array
+-- message. Fixed by save/restore instead of a hard reset. Expected: the NEW
+-- `do`-block ("use `let` instead of `<-`") message, located at line 8.
+badBool : Bool
+badBool = True
+
+f = do
+  a <- do
+    y <- Ok 5
+    Ok y
+  x <- badBool
+  Ok x
+
+main = println f

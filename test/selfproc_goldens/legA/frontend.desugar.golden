@@ -9,6 +9,7 @@ assignIndexLhs : Expr -> Expr -> Expr -> Ref Route -> Expr
 attribHead : List Attr -> List Decl -> List Decl
 binMethod : String -> String -> String -> Expr -> ImplMethod
 binOp : String -> Expr -> Expr -> Expr
+callAndThen : Expr -> Expr -> Expr
 callBin : String -> Expr -> Expr -> Expr
 cannotDeriveMsg : String -> List String -> String -> String
 checkDerives : List Decl -> List (String, Option Loc)
