@@ -82,8 +82,8 @@
 -- byteparser`), there is just one module identity for them and the shared
 -- import resolves cleanly.  Sequential byte encoders (`buildFileHeader`,
 -- `encodeLeafCell`) use the `bytebuilder` Builder for append-only emission;
--- random-access page layout stays on `Array` (set/blit) because Builder cannot
--- express positional writes.
+-- random-access page layout stays on `Array` (`page[i] := v`/blit) because
+-- Builder cannot express positional writes.
 
 import array.{blit, sliceClamped}
 import bytebuilder.{
