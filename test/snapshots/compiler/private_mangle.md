@@ -1,5 +1,5 @@
 # META
-source_lines=1069
+source_lines=1074
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -181,11 +181,16 @@ mangleUnits coreDecls modules =
 --     `localRenameEntry` excludes it) and local constructors (`unitLocalCtorNames`,
 --     reserved fixed-tag ctors already filtered out).  Ctors travel the identical
 --     `mangledName`/`sanitizeId` collapse, so leaving them out would leave half the
---     map unchecked while claiming the map is injective.
+--     map unchecked while claiming the map is injective for distinct module ids.
 --   * does NOT cover emitter-MINTED symbols (gensym'd lambdas/etas/impls, and
 --     `llvm_emit.ensureDefaultEmitted`'s `fname`-keyed dedup-on-mint, which silently
 --     suppresses a second definition of an already-minted name).  Those pre-images
 --     do not exist here.  This guard does not make that domain safe.
+--   * the `(module, name) -> symbol` map is made injective ONLY for DISTINCT module
+--     ids.  `checkSymbolsInjective`'s `prev == pre` skip (below) treats two entries
+--     with the SAME pre-image label as one pre-image seen twice, so two distinct
+--     source units that happen to share ONE canonical module id collapse invisibly
+--     — this guard cannot see them.  Uncovered, tracked: #1792.
 -- Functions and constructors are checked as SEPARATE domains: they are emitted into
 -- separate symbol namespaces (a ctor becomes `@mdk_ctorpap_<sym>_<n>`), so merging
 -- them could only manufacture a false positive, never catch a real collision.

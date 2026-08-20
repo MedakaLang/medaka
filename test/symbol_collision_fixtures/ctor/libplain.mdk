@@ -1,0 +1,5 @@
+data Ta = Kk Int
+
+export runA : Int -> Int
+runA x = match Kk (x + 100)
+  Kk n => n

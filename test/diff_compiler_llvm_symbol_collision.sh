@@ -52,7 +52,10 @@
 # MODULE-MANGLED symbol domain (`mangleUnits`' own domain — top-level functions and
 # local constructors). It says nothing about emitter-MINTED symbols (gensym'd
 # lambdas/etas/impls, `llvm_emit.ensureDefaultEmitted`'s dedup-on-mint), which
-# `mangleUnits` never sees.
+# `mangleUnits` never sees. Within the module-mangled domain, the guard makes the
+# `(module, name) -> symbol` map injective for DISTINCT MODULE IDS ONLY — two
+# distinct source units sharing ONE module id collapse invisibly (the
+# `prev == pre` skip in `checkSymbolsInjective`). Uncovered, tracked: #1792.
 #
 # ⚠️ `medaka build`'s exit code does NOT survive a pipe (AGENTS.md [D-BUILD-PIPE]).
 # Every invocation below redirects to a file and reads `$?` from the redirect.
@@ -155,6 +158,94 @@ else
     sed 's/^/        /' "$WORK/control.diff"
   else
     ok "control runs, prints 101 then 1000"
+  fi
+fi
+
+# ── 3. the CONSTRUCTOR domain — a SEPARATE pass, separate emitted namespace ──
+# `symbolInjectivityGuard` checks functions and constructors as two independent
+# passes (private_mangle.mdk `symbolInjectivityGuard`) because they emit into
+# separate symbol namespaces (a ctor becomes `@mdk_ctorpap_<sym>_<n>`). Sections 1
+# and 2 above exercise the FUNCTION pass only — `main.mdk`/`control.mdk` collide
+# (or don't) on an exported top-level FUNCTION `g`. This section is the ctor-pass
+# equivalent, so a future edit that disables or weakens the ctor arm of the guard
+# cannot stay green here the way it could before this section existed.
+#
+# `ctor/main.mdk` collides on a PRIVATE constructor `Kk`, declared in both
+# `ctor/lib_plain.mdk` (id `lib_plain`) and `ctor/lib/plain.mdk` (id `lib.plain`)
+# — same `sanitizeId` collapse as section 1, on the ctor pre-image instead of the
+# function one. Private, deliberately: the guard reads `unitLocalCtorNames`, which
+# is NOT `VisPublic`-gated, so a private-only collision must still refuse.
+# `ctor/control.mdk` swaps the flat module for `ctor/libplain.mdk` (id `libplain`,
+# no underscore) so the two module ids no longer collide — same shape as
+# section 2's control.
+
+checked=$((checked + 1))
+CTBIN="$WORK/ctor_collide.bin"
+CTLOG="$WORK/ctor_collide.log"
+"$MEDAKA" build "$FIX/ctor/main.mdk" -o "$CTBIN" > "$CTLOG" 2>&1
+ctst=$?
+
+if [ "$ctst" -eq 0 ]; then
+  fail "colliding ctor program built at exit 0 — the ctor-domain guard did NOT fire"
+  printf '      two distinct (module, name) pairs sharing one emitted constructor\n'
+  printf '      symbol, silently folded. Build output:\n'
+  sed 's/^/        /' "$CTLOG"
+else
+  ok "colliding ctor program refused (exit $ctst)"
+fi
+
+# The message must name BOTH pre-images and the symbol, and say "constructors" —
+# not merely "it failed", and not the function-pass diagnostic by accident.
+checked=$((checked + 1))
+ctmissing=""
+for want in 'emitted-symbol collision' 'constructors' 'lib_plain.Kk' 'lib.plain.Kk' 'lib_plain__Kk'; do
+  grep -q -- "$want" "$CTLOG" || ctmissing="$ctmissing '$want'"
+done
+if [ -n "$ctmissing" ]; then
+  fail "ctor refusal diagnostic does not name both colliding sources; missing:$ctmissing"
+  printf '      Got:\n'
+  sed 's/^/        /' "$CTLOG"
+else
+  ok "ctor refusal names both sources, the collided symbol, and the ctor domain"
+fi
+
+# It must refuse BEFORE producing anything.
+checked=$((checked + 1))
+if [ -e "$CTBIN" ]; then
+  fail "a binary was produced at $CTBIN despite the ctor refusal"
+  printf '      the property is "refuses before any binary is produced".\n'
+else
+  ok "no binary produced (ctor domain)"
+fi
+
+# ── the ctor CONTROL must stay green, build AND run ───────────────────────────
+checked=$((checked + 1))
+CTCBIN="$WORK/ctor_control.bin"
+CTCLOG="$WORK/ctor_control.log"
+"$MEDAKA" build "$FIX/ctor/control.mdk" -o "$CTCBIN" > "$CTCLOG" 2>&1
+ctcst=$?
+
+if [ "$ctcst" -ne 0 ]; then
+  fail "CTOR CONTROL FAILED TO BUILD (exit $ctcst) — this is NOT a guard success"
+  printf '      ctor/control.mdk has NO colliding module ids. If it refuses, the ctor\n'
+  printf '      arm of the guard is too broad. Build output:\n'
+  sed 's/^/        /' "$CTCLOG"
+else
+  ok "ctor control builds (exit 0)"
+  checked=$((checked + 1))
+  CTCOUT="$WORK/ctor_control.out"
+  "$CTCBIN" > "$CTCOUT" 2>&1
+  ctrst=$?
+  # Hand-derived: runA 1 = 1 + 100 = 101; runB 1 = 1 + 999 = 1000.
+  printf '101\n1000\n' > "$WORK/ctor_control.expected"
+  if [ "$ctrst" -ne 0 ]; then
+    fail "ctor control binary exited $ctrst"
+    sed 's/^/        /' "$CTCOUT"
+  elif ! diff -u "$WORK/ctor_control.expected" "$CTCOUT" > "$WORK/ctor_control.diff" 2>&1; then
+    fail "ctor control binary stdout differs from the hand-derived 101/1000"
+    sed 's/^/        /' "$WORK/ctor_control.diff"
+  else
+    ok "ctor control runs, prints 101 then 1000"
   fi
 fi
 
