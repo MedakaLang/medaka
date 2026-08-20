@@ -329,6 +329,37 @@ stderrByteImportLines = [
   "  (import \"env\" \"mdk_write_err_byte\" (func $mdk_write_err_byte (param i32)))"
 ]
 
+{- | The DECIMAL half of the coded-trap stderr seam (#1787): render an i64 in
+   decimal straight to stderr, no `$str` and no data segment, so a numbered trap
+   works in scalar AND ref mode exactly as the fixed-text one does.  Peer of
+   `$mdk_write_digits`/`$mdk_print_int` (the stdout pair in `ioRuntimeLines`),
+   minus their trailing newline -- a trap line supplies its own.
+
+   Gated on `trapIntNeeded`, which is set by emitting a numbered trap -- NOT by
+   reaching one at runtime.  In the TYPED corpus (no prelude) that means a module
+   without a numbered trap does not carry these two functions.  In the MODULES
+   corpus it is effectively always set, because the prelude's `Index`/`IndexMut`
+   impls are emitted whether or not the program indexes anything; ~15 lines of
+   WAT.  Measure before assuming otherwise. -}
+export trapIntRuntimeLines : List String
+trapIntRuntimeLines = [
+  "  ;; -- #1787 numbered-trap decimal runtime (stderr, no newline) --",
+  "  ;; write the decimal digits of a NON-NEGATIVE i64 (most-significant first).",
+  "  (func $mdk_write_err_digits (param $n i64)",
+  "    (if (i64.ge_s (local.get $n) (i64.const 10))",
+  "      (then (call $mdk_write_err_digits (i64.div_s (local.get $n) (i64.const 10)))))",
+  "    (call $mdk_write_err_byte",
+  "      (i32.add (i32.const 48)",
+  "        (i32.wrap_i64 (i64.rem_s (local.get $n) (i64.const 10))))))",
+  "  ;; render an i64 in decimal to stderr, sign included, NO trailing newline.",
+  "  (func $mdk_write_err_int (param $n i64)",
+  "    (if (i64.lt_s (local.get $n) (i64.const 0))",
+  "      (then",
+  "        (call $mdk_write_err_byte (i32.const 45))",
+  "        (call $mdk_write_err_digits (i64.sub (i64.const 0) (local.get $n))))",
+  "      (else (call $mdk_write_err_digits (local.get $n)))))",
+]
+
 -- the stderr byte-write runtime ($str-dependent).  Peer of $mdk_print_str/_strln but
 -- routing each byte through $mdk_write_err_byte (matches medaka_rt.c mdk_eputstr /
 -- mdk_eputstrln: payload bytes verbatim, optional trailing '\n').

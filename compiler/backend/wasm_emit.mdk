@@ -277,6 +277,7 @@ import backend.wasm_preamble.{
   ioStrRuntimeLines,
   stderrByteImportLines,
   stderrRuntimeLines,
+  trapIntRuntimeLines,
   strLeafRuntimeLines,
   strConcatRuntimeLines,
   appendRuntimeLines,
@@ -336,6 +337,7 @@ data WasmEmit =
       functionReferences : Ref (List String),
       functionReferenceNames : Ref (OrdMap Unit),
       trapImportNeeded : Ref Bool,
+      trapIntNeeded : Ref Bool,
       useEPut : Ref Bool,
       useDivGuard : Ref Bool,
       useRecUpdate : Ref Bool,
@@ -371,6 +373,7 @@ freshWasmEmit mode = WasmEmit {
   functionReferences = Ref [],
   functionReferenceNames = Ref omEmpty,
   trapImportNeeded = Ref False,
+  trapIntNeeded = Ref False,
   useEPut = Ref False,
   useDivGuard = Ref False,
   useRecUpdate = Ref False,
@@ -2073,7 +2076,10 @@ emitScalarProgram emit fnNames valNames groups =
   -- emit by wasmTrapBytes — is visible.  wasm-tools text assembles fields into
   -- sections regardless of order, so a late `(import …)` field is fine.
   let trapImport = if !emit.trapImportNeeded then stderrByteImportLines else []
-  joinNl (header ++ trapImport ++ globals ++ fns ++ ioRuntimeLines ++ initLines ++ [")"])
+  let trapIntRt = if !emit.trapIntNeeded then trapIntRuntimeLines else []
+  joinNl
+    (header ++ trapImport ++ globals ++ fns ++ ioRuntimeLines ++ trapIntRt ++ initLines
+      ++ [")"])
 
 oneGlobalI32 : String -> String
 oneGlobalI32 n = "  (global $" ++ gname n ++ " (mut i64) (i64.const 0))"
@@ -2466,12 +2472,17 @@ emitRefProgram prog groups =
   -- forced after all body-emit bindings (strict `let`), so trapImportNeeded is visible;
   -- `dataSegs` above already relies on that same after-body ordering.
   let trapImport = if (progEmit prog).useEPut.value || (progEmit prog).trapImportNeeded.value then stderrByteImportLines else []
+  -- #1787: the decimal-to-stderr runtime a NUMBERED trap needs, gated separately from
+  -- trapImport.  In the modules corpus the prelude's Index impls emit one, so this is
+  -- effectively always on there; the typed corpus (no prelude) only pays when a
+  -- numbered trap is actually emitted.
+  let trapIntRt = if (progEmit prog).trapIntNeeded.value then trapIntRuntimeLines else []
   joinNl (header ++ typeSection ++ imports ++ trapImport ++ elemDecl ++ globals
             ++ fns ++ implFns ++ defaultDefs ++ lifted ++ applyRt ++ ioRt ++ strLeafRt ++ strConcatRt ++ appendRt ++ valueCmpRt ++ valueArithRt
             ++ stderrRt ++ rngRt ++ hashRt ++ hashStrRt
             ++ floatRemRt ++ floatRt ++ hashFloatRt ++ randomFloatRt ++ strSearchRt
             ++ strCodecRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ fileBytesRt ++ floatStrRt
-            ++ dataSegs ++ forceFns ++ initLines ++ [")"])
+            ++ trapIntRt ++ dataSegs ++ forceFns ++ initLines ++ [")"])
 
 -- the passive data segments for string literals — one `(data $strseg_N "…")` per
 -- literal OCCURRENCE (#383: no content-dedup, see the `useStrRef` section above for
@@ -5216,6 +5227,21 @@ wasmTrap : WasmEmit -> String -> String -> List String
 wasmTrap emit code msg = wasmTrapBytes emit "runtime error [\{code}]: \{msg}\n"
   ++ ["unreachable"]
 
+-- #1787: a coded trap whose message carries a RUNTIME number -- the fixed bytes
+-- either side of it are still streamed unrolled, and the value itself goes through
+-- $mdk_write_err_int.  `valIns` must leave the number on the stack as a (ref eq)
+-- Medaka Int; it is unboxed here.  Sets trapIntNeeded so the decimal runtime is
+-- emitted (a fixed-text trap alone must not pull it in -- that would move every
+-- existing wasm golden).
+wasmTrapNum : WasmEmit -> String -> String -> List String -> String -> List String
+wasmTrapNum emit code before valIns after =
+  let _ = setRef emit.trapIntNeeded True
+  wasmTrapBytes emit "runtime error [\{code}]: \{before}"
+    ++ valIns
+    ++ ["call $mdk_unbox_int", "call $mdk_write_err_int"]
+    ++ wasmTrapBytes emit "\{after}\n"
+    ++ ["unreachable"]
+
 -- B5: guard a concrete-Int div/mod divisor.  Stack in `[dividend:i64, divisor:i64]`;
 -- stashes the divisor in `dloc`, traps with the coded [E-DIV-ZERO]/[E-MOD-ZERO] line if
 -- it is zero, then restores `[dividend, divisor]` for the following i64.div_s/rem_s.
@@ -5901,11 +5927,18 @@ emitLeafExternRef prog env d "indexError" [msg] =
   wasmTrap (progEmit prog) "E-INDEX-OOB" "index out of bounds"
 emitLeafExternRef prog env d "indexError" _ =
   gapLP prog "wasm Index-16a: indexError takes exactly one argument"
--- #1787: `indexErrorAt idx` raises the same fixed-text E-INDEX-OOB trap; the index
--- is dropped here exactly as sliceError's bounds are.  Native formats it into the
--- message (@mdk_oob_at), so wasm's text stays the coarser of the two.
+-- #1787: `indexErrorAt idx` raises E-INDEX-OOB naming the offending index, so all
+-- three engines print the SAME line.  Dropping it here instead (as sliceError's
+-- bounds still are) would redden test/wasm/diff_wasm_modules.sh, which since #531
+-- compares stderr and exit code as well as stdout -- w7_array_oob.mdk exists to
+-- assert exactly this parity.
 emitLeafExternRef prog env d "indexErrorAt" [idx] =
-  wasmTrap (progEmit prog) "E-INDEX-OOB" "index out of bounds"
+  wasmTrapNum
+    (progEmit prog)
+    "E-INDEX-OOB"
+    "index "
+    (emitRefExpr prog env d idx)
+    " out of bounds"
 emitLeafExternRef prog env d "indexErrorAt" _ =
   gapLP prog "wasm #1787: indexErrorAt takes exactly one argument"
 -- #670: `sliceError lo hiIncl` reuses the existing coded E-SLICE-OOB trap (the
@@ -7850,16 +7883,24 @@ emitIndexRef prog env d a i =
 -- leaning on array.new/array.copy's own traps also keeps the two backends' ABORT
 -- CONDITION identical instead of merely coincidentally-both-fatal.
 --
--- Message parity, and its one KNOWN LIMIT: the trap line is static bytes (wasmTrap
+-- Message parity, and its one REMAINING GAP: this trap line is static bytes (wasmTrap
 -- streams them through $mdk_write_err_byte at emit time, no $str value and no data
 -- segment), so wasm reports the CODE but not the `[lo..hi]` numbers that eval and
--- native's @mdk_slice_oob both print.  Printing them would need a decimal i64 formatter
--- on the trap path, which does not exist here.  This is the same shape the tree already
--- ships for E-INDEX-OOB (eval names the offending index; native's mdk_oob and wasm both
--- say a bare "index out of bounds") — NOT ledgered as an engine divergence, because
--- nothing compares stderr text across engines: diff_wasm*.sh diff stdout, and
--- diff_compiler_engines.sh classifies any interpreter `runtime error [E-` as n/a.  The
--- ABORT CONDITION — which is what soundness turns on — is identical on all three.
+-- native's @mdk_slice_oob both print.
+--
+-- E-INDEX-OOB used to have the same gap and no longer does: #1787's wasmTrapNum
+-- streams a runtime value through $mdk_write_err_int between two fixed byte runs, so
+-- all three engines name the offending index.  The same treatment would work here (two
+-- numbers instead of one); it is simply not done yet.
+--
+-- ⚠️ Do NOT read this gap as unobserved.  An earlier version of this comment claimed
+-- "nothing compares stderr text across engines: diff_wasm*.sh diff stdout" — that has
+-- been FALSE since #531, which made test/wasm/diff_wasm_modules.sh compare stdout,
+-- stderr AND exit code (see its `diverges` reporting).  E-SLICE-OOB survives only
+-- because no wasm module fixture trips an out-of-range slice; add one and this gate
+-- goes red until the numbers match.  (diff_compiler_engines.sh does still classify an
+-- interpreter `runtime error [E-` as n/a.)
+-- The ABORT CONDITION — which is what soundness turns on — is identical on all three.
 emitSliceRef : Prog -> List String -> Int -> CExpr -> CExpr -> CExpr -> Bool -> List String
 emitSliceRef prog env d a lo hi incl =
   let sfx = intToString d
