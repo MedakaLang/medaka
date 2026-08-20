@@ -268,24 +268,24 @@ gates the tight rendering on `isConstructorOp op && isConsAtomOperand l &&
 isConsAtomOperand r`. Medaka has no user-defined infix constructors, so `::` is
 the only case.
 
-## 10. `export` collapses onto a value's type signature
+## 10. `export` sits on its own line above a value's type signature
 
-A value/function declaration's `export` modifier goes on the **same line**
-as the type signature — `export name : T`, not split across two lines. The
-formatter enforces this: given `export` on its own line above a signature, it
-rewrites the pair onto one line. This matches `export data`/`export impl`,
-which also collapse onto one line.
+A value/function declaration's `export` modifier goes on its **own line**,
+above the type signature — never collapsed onto it. Collapsing reads as though
+you're exporting *a type* `name : T` rather than marking the binding exported
+(the same reasoning Idris uses for `export`/`public export` on their own line).
+The formatter applies this: `export` over a value signature stays split, while
+`export data`/`export impl` *do* collapse onto one line — those genuinely are
+type-level exports, so `export data Foo = …` reads correctly.
 
 ```
--- GOOD: export collapsed onto a value signature
-export runParser : Parser a -> String -> Result String a
+-- GOOD: export on its own line above a value signature
+export
+runParser : Parser a -> String -> Result String a
 
 -- GOOD: export collapsed for a type-level declaration
 export data Parser a = Parser (Array Char -> Int -> PResult a)
 ```
-
-(`public export`, which additionally re-exports constructors, is a separate
-modifier and is documented on its own.)
 
 ## 11. Sequencing vs transforming — `do` for monads, `map`/`filter`/`|>` for collections
 
