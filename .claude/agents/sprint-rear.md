@@ -132,12 +132,14 @@ on the tags mechanically — an untagged line is noise it will bounce):
    brain ruling and onto the enqueue gate ("an OPEN row anywhere blocks the
    enqueue"), which is the Opus attention this sweep exists to give back. This
    is ADDITIVE and is
-   never a reason to trim a reviewer: in `sprint/emit-inputs` five of eighteen
-   findings were exactly this class (an invalid abbreviated SHA, an awk-artifact
-   count, "six fixtures" that were four, `file:LINE` citations invalidated in
-   three ALREADY-POSTED public comments by the sprint's own +5-line insert, a
-   174-vs-245 mismatch) and every one consumed Opus adversarial attention that
-   should have gone at properties.
+   never a reason to trim a reviewer: in `sprint/emit-inputs` five items were
+   exactly this class (an invalid abbreviated SHA, an awk-artifact count, "six
+   fixtures" that were four, `file:LINE` citations invalidated in three
+   ALREADY-POSTED public comments by the sprint's own +5-line insert, a
+   174-vs-245 mismatch). They were found by an Opus breaker, the Sonnet
+   conformance reviewer and this seat, at 20–60× this sweep's price — and the
+   point is not who found them but that none of them needed a reviewer's
+   judgment to find.
 4. Reply `ack:` with any queued blocks. Append your dispatch-log line to
    `reports/rear-seat-ledger.md`.
 

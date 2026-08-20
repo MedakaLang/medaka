@@ -112,8 +112,9 @@ packet <path> | breaker-wt <path> | base-arm <depot path>` — where
 deadlocked the breaker dispatch in review). `base-arm` is the sprint's depot
 path (orchestrator step 6b) and is mandatory for the same reason: an optional
 field is a field the next seat omits, and in `sprint/emit-inputs` the depot had
-ZERO consumers while the one breaker that needed a base arm rebuilt it by hand,
-~35 of its 55 minutes. `NONE (docs-only landing)` is a value; blank is not. The rear seat pushes exactly the named SHA, dispatches
+ZERO consumers while the one breaker that needed a base arm built its own — two
+full rebuilds, inside the ~35 of its 55 minutes that went to builds.
+`NONE (docs-only landing)` is a value; blank is not. The rear seat pushes exactly the named SHA, dispatches
 both reviewers, and replies `ack:`. You do NOT wait for the reply; the
 heartbeat's poke tick collects it.
 
@@ -171,10 +172,11 @@ or ruling to plan, the just-landed report's path (it must read "Deviations"
 and "Decisions surfaced" before writing — feed-forward is its rule), the
 NEW merged head as the pin, and **the ruling PATHS this packet must honour**,
 derived mechanically rather than by asking it to read the ledger:
-`grep -l -e 'applies-to:.*<slice handle>' -e 'applies-to: ALL' rulings/`. The
-planner reads those FILES. (Measured, `sprint/emit-inputs`: DECISIONS.md
-reached 3,905 lines / 242 KB; three planner reports name reading it whole as
-their dominant cost, and the L1 planner spent 40 of its 55 minutes there.) On its return: `PACKET-READY` → append the
+`grep -rl -e 'applies-to:.*<slice handle>' -e 'applies-to: ALL' rulings/`. The
+planner reads those FILES. (Measured, `sprint/emit-inputs`: DECISIONS.md ended
+at 3,905 lines / 242 KB; three planner reports name ledger reading as their
+dominant cost, and the L1 planner spent 40 of its 55 minutes on the then-2,032-
+line file plus the spike report plus the contract.) On its return: `PACKET-READY` → append the
 QUEUE.md row; `SPIKE-NEEDED` → dispatch the spike per the orchestrator
 skill's slice-forms handling; `BLOCKED` → brain consult.
 

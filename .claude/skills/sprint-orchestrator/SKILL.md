@@ -649,16 +649,19 @@ Each tick derives state from scratch — never carry state across ticks:
    a moving branch head (`pgrep -af "<worktree>"` + head check) — YOUR
    dispatches only; the rear seat sweeps its own reviewers on the same poke.
    Stale row → discriminate stall vs phantom; resume with the check, not the
-   verdict. **A writer that ends its turn with no report gets exactly ONE
-   resume** (SendMessage: "report your actual state; run every build in the
-   FOREGROUND — never background, never end a turn with anything running"). A
-   second no-report turn = `TaskStop`, preserve whatever report exists,
-   redispatch FRESH from the same packet/ruling, and log the abandonment as a
-   `self-audit:` line with the agent id. Do not resume twice: two resumes cost
-   more than a redispatch and the second has never worked (`sprint/emit-inputs`:
-   one fixer stalled twice on a backgrounded build whose completion
-   notification never arrived; foregrounded, that build finished in under two
-   minutes).
+   verdict. **A writer that ends its turn with no report gets TWO resumes, and
+   the second one is CORRECTIVE, not a repeat.** Resume 1: "report your actual
+   state." Resume 2 names the mechanism and quotes the rule — "run every build
+   in the FOREGROUND; never background, never end a turn with anything running
+   (§8, verbatim in your packet)". A third no-report turn = `TaskStop`,
+   preserve whatever report exists, redispatch FRESH from the same
+   packet/ruling, and log the abandonment as a `self-audit:` line with the
+   agent id. **It is the CONTENT of resume 2 that works, not the count**
+   (`sprint/emit-inputs`, DECISIONS.md:3304-3306: a fixer stalled twice on a
+   backgrounded build whose completion notification never arrived; resume 1
+   repeated the stall, resume 2 explicitly forbade backgrounding and cited the
+   boilerplate, and the fix LANDED — `895c44c5`. A one-resume rule would have
+   killed the attempt that worked.)
 5. **Orphans:** `xargs -P` pools / builds outliving YOUR dispatched agents'
    turns — `TaskStop` the agent first, reap by PID, never box-wide `pkill`.
 6. **Self-audit — per EVENT, not per tick (v5).** The MOMENT you do anything
@@ -823,10 +826,13 @@ attribute to a session, and an open green PR looks identical from both sides.
    dispatch, not front-seat work (v5).** Hand it ONE checklist: every
    FINDINGS.md row terminal (the `sprint-findings` exit guarantee); every
    FINDINGS Refusals row carrying a verdict, **and the row SET complete against
-   its three mechanical sources** — hand it these three counts and require them
-   to match the table: BLOCKED/REFUSED verdicts in the dispatch logs,
-   `grep -c '^declined-out-of-band:' DECISIONS.md`, and `grep -rl 'falsif'
-   rulings/` (each hit read to confirm it names a premise). A source event with
+   its three mechanical sources** — hand it these three counts, each with its
+   command, and require them to match the table:
+   `grep -cE '^(dispatch|repair)[^|]*: .*\b(BLOCKED|REFUSED)\b' DECISIONS.md`,
+   `grep -c '^declined-out-of-band:' DECISIONS.md`, and
+   `grep -rc '^falsified-premise:' rulings/` (the brain writes that field per
+   premise — grepping prose for "falsif" counts FILES, not premises, and
+   returned 5 against 6 on the last record). A source event with
    no row is a MISMATCH, not a judgment call; every OBLIGATIONS.md row terminal
    (`DONE` with its evidence, or `VOIDED` naming the ruling); the ruling
    sequence contiguous and matching `ls rulings/` — **hand it the exact command
@@ -879,7 +885,8 @@ attribute to a session, and an open green PR looks identical from both sides.
    from DECISIONS.md's header> > <record dir>/COSTS.md` — then append the
    sprint's own instruments, which the cost hypotheses are graded on and which
    otherwise live only inside five planner reports: the planner `corrections:`
-   total (`grep -h '^\*\*corrections:' reports/plan-*.md` — H9 criterion 5), the
+   total (`grep -hoiE 'corrections: *[0-9]+' reports/plan-*.md` — anchoring on
+   `**` finds 2 of 5 reports and totals 1 where the truth is 2; H9 criterion 5), the
    Refusals-table row count (H9 criterion 4), and the landing count from
    DEBT.md (post-hoc transcript aggregation; no mid-sprint logging exists or is
    needed). (b) Dispatch

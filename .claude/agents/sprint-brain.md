@@ -170,11 +170,20 @@ The PATH of the ruling file you just wrote:
 (the file's SECOND line is `applies-to: <slice handle(s) | ALL | NONE>` — which
 slices' packets, lanes or acceptance this ruling binds. That is a judgment call
 and it is YOURS; it exists so a mechanical seat can select rulings for a planner
-brief with one `grep -l`, instead of a planner re-reading the whole ledger to
-discover a ruling was about another slice — 3,905 lines / 242 KB by the end of
-one sprint, with one planner spending 40 of its 55 minutes reading it. `ALL` is
+brief with one `grep -rl`, instead of a planner re-reading the whole ledger to
+discover a ruling was about another slice — the last sprint's ledger ended at
+3,905 lines / 242 KB, and its L1 planner spent 40 of its 55 minutes reading the
+then-2,032-line file plus the spike report plus the contract. `ALL` is
 a real answer for a standing ruling; over-claiming it costs the next planner a
 full read, so mean it. A file whose second line is not `applies-to:` bounces.
+**Every premise a ruling FALSIFIES also gets its own line, `falsified-premise:
+<the premise> | <slice or packet §>`, one per premise.** That field is the only
+countable record of the workflow's highest-value signal: the wrap-up sweep
+reconciles the Refusals table against `grep -rc '^falsified-premise:' rulings/`.
+Grepping your PROSE for "falsif" instead returns 5 files against 6 real premises
+on the last sprint's record — an instrument that cannot match a correct table,
+and one that needs a human to read each hit, which is a judgment clause in a
+mechanical seat's checklist.
 The file's FIRST line is its heading — `## RUN-<stage>-NNN (<slug>)` — because
 the front seat's lost-ruling check distinguishes an entry from a mention by that
 heading alone; a bare ID at column 0 is how a citation passes for an entry, and
