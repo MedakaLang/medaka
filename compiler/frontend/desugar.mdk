@@ -323,11 +323,30 @@ exprLoc _ = None
 lowerDo : List DoStmt -> Expr
 lowerDo [DoExpr e] = e
 lowerDo [DoBind pat e] =
-  callBin "andThen" e (doCont pat (EApp (EVar "pure") (ELit LUnit)))
-lowerDo ((DoExpr e)::rest) = callBin "andThen" e (ELam [PWild] (lowerDo rest))
-lowerDo ((DoBind pat e)::rest) = callBin "andThen" e (doCont pat (lowerDo rest))
+  callAndThen e (doCont pat (EApp (EVar "pure") (ELit LUnit)))
+lowerDo ((DoExpr e)::rest) = callAndThen e (ELam [PWild] (lowerDo rest))
+lowerDo ((DoBind pat e)::rest) = callAndThen e (doCont pat (lowerDo rest))
 lowerDo ((DoLet _ isFun pat e)::rest) = ELet False isFun pat e (lowerDo rest)
 lowerDo _ = fallthrough
+
+-- #894 review finding 1: `x <- b` / a bare statement line in `do` synthesizes
+-- an `andThen` call (below), and typecheck's `inferApp` needs to tell THIS
+-- SYNTHESIZED callee apart from a user's own explicit `andThen b f` call
+-- (even one textually nested inside a do-bind's own scrutinee, e.g.
+-- `x <- andThen b f` — a real false-positive shape, reproduced against #894's
+-- first fix) so it can pick the right no-impl message. Tag the synthesized
+-- callee — never the user's — with an `EDoOrigin` wrapper: it is already a
+-- transparent marker threaded through every existing pass (`mapKids`, `alpha`,
+-- `appSpineName`, …), so `inferApp` can recognize it by AST SHAPE alone, off
+-- the exact node it was called for — no ambient/dynamic state, so no risk of
+-- leaking into an unrelated nested application the way a global flag would.
+-- Falls back to a plain (untagged) `andThen` callee when the scrutinee carries
+-- no `Loc` (rare — `exprLoc` bottoms out); `inferApp` then falls back to the
+-- general container/List/Array message, which is safe, just less precise.
+callAndThen : Expr -> Expr -> Expr
+callAndThen e cont = match exprLoc e
+  Some l => EApp (EApp (EDoOrigin l (EVar "andThen")) e) cont
+  None => callBin "andThen" e cont
 
 -- bind continuation: a bare lambda for an irrefutable pattern, else a 1-arg
 -- lambda + 2-arm match whose wildcard arm fails (do_bind_fail = fallthrough)

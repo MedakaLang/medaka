@@ -562,6 +562,8 @@ dispatchTyparams : List String -> List String
 distinctIdentsIn2 : List (Ident, String) -> Bool
 djoin : Param -> Param -> Param
 djoinN : Param -> Param -> Param
+doBindArgHint : String -> String
+doBindArgMsg : String -> String
 doRequiresMonadMsg : String
 doStmtDictSites : DoStmt -> List (Ref (List Route))
 doStmtEVars : DoStmt -> List String
@@ -1058,6 +1060,8 @@ isConPat : Pat -> Bool
 isConstrainedTy : Ty -> Bool
 isCtorAppSpine : Expr -> Bool
 isDefinerShadow : String -> Bool
+isDoLoweredAndThenCallee : Expr -> Bool
+isDoLoweredAndThenCalleeExpr : Expr -> Bool
 isHoleParam : Param -> Bool
 isHoleStr : String -> Bool
 isLetrecGroup : List String -> Bool

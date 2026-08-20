@@ -1,0 +1,20 @@
+-- #894 review finding 2, isolated: the do-bind detector added for #894 turned
+-- out (after the finding-1 fix) to be AST-identity-based and no longer reads
+-- `currentDoOrigin` at all — so `do_bind_after_nested_do.mdk` alone no longer
+-- exercises the `currentDoOrigin` save/restore fix. This fixture does: the
+-- OUTER chain's trailing statement is a bare `True` (non-monadic final
+-- expression), which reaches `T-DO-NOT-MONAD` through the GENERIC unify path
+-- (`typeMismatchReportRest` / `typeMismatchInDo`), gated purely on
+-- `currentDoOrigin` being `Some` at the time of the mismatch. Before the fix,
+-- the EARLIER inline nested `do` (`a <- (do ...)`) unconditionally cleared
+-- `currentDoOrigin` to `None` on its way out, so this trailing mismatch would
+-- silently fall back to a bare, unhelpful `Type mismatch: ... vs ...` instead
+-- of the tailored "do requires a Thenable" message. Expected: the tailored
+-- `T-DO-NOT-MONAD` message, located at the outer bind (line 12).
+f = do
+  a <- do
+    y <- Ok 5
+    Ok y
+  True
+
+main = println f

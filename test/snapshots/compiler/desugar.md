@@ -1,5 +1,5 @@
 # META
-source_lines=1026
+source_lines=1045
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage — Stage 1 port of `lib/desugar.ml`.  Lowers surface
@@ -327,11 +327,30 @@ exprLoc _ = None
 lowerDo : List DoStmt -> Expr
 lowerDo [DoExpr e] = e
 lowerDo [DoBind pat e] =
-  callBin "andThen" e (doCont pat (EApp (EVar "pure") (ELit LUnit)))
-lowerDo ((DoExpr e)::rest) = callBin "andThen" e (ELam [PWild] (lowerDo rest))
-lowerDo ((DoBind pat e)::rest) = callBin "andThen" e (doCont pat (lowerDo rest))
+  callAndThen e (doCont pat (EApp (EVar "pure") (ELit LUnit)))
+lowerDo ((DoExpr e)::rest) = callAndThen e (ELam [PWild] (lowerDo rest))
+lowerDo ((DoBind pat e)::rest) = callAndThen e (doCont pat (lowerDo rest))
 lowerDo ((DoLet _ isFun pat e)::rest) = ELet False isFun pat e (lowerDo rest)
 lowerDo _ = fallthrough
+
+-- #894 review finding 1: `x <- b` / a bare statement line in `do` synthesizes
+-- an `andThen` call (below), and typecheck's `inferApp` needs to tell THIS
+-- SYNTHESIZED callee apart from a user's own explicit `andThen b f` call
+-- (even one textually nested inside a do-bind's own scrutinee, e.g.
+-- `x <- andThen b f` — a real false-positive shape, reproduced against #894's
+-- first fix) so it can pick the right no-impl message. Tag the synthesized
+-- callee — never the user's — with an `EDoOrigin` wrapper: it is already a
+-- transparent marker threaded through every existing pass (`mapKids`, `alpha`,
+-- `appSpineName`, …), so `inferApp` can recognize it by AST SHAPE alone, off
+-- the exact node it was called for — no ambient/dynamic state, so no risk of
+-- leaking into an unrelated nested application the way a global flag would.
+-- Falls back to a plain (untagged) `andThen` callee when the scrutinee carries
+-- no `Loc` (rare — `exprLoc` bottoms out); `inferApp` then falls back to the
+-- general container/List/Array message, which is safe, just less precise.
+callAndThen : Expr -> Expr -> Expr
+callAndThen e cont = match exprLoc e
+  Some l => EApp (EApp (EDoOrigin l (EVar "andThen")) e) cont
+  None => callBin "andThen" e cont
 
 -- bind continuation: a bare lambda for an irrefutable pattern, else a 1-arg
 -- lambda + 2-arm match whose wildcard arm fails (do_bind_fail = fallthrough)
@@ -1180,11 +1199,13 @@ desugar prog = qualifyAliasRefs prog
 (DFunDef false "exprLoc" (PWild) (EVar "None"))
 (DTypeSig false "lowerDo" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyCon "Expr")))
 (DFunDef false "lowerDo" ((PList (PCon "DoExpr" (PVar "e")))) (EVar "e"))
-(DFunDef false "lowerDo" ((PList (PCon "DoBind" (PVar "pat") (PVar "e")))) (EApp (EApp (EApp (EVar "callBin") (ELit (LString "andThen"))) (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "pure")))) (EApp (EVar "ELit") (EVar "LUnit"))))))
-(DFunDef false "lowerDo" ((PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "callBin") (ELit (LString "andThen"))) (EVar "e")) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EApp (EVar "lowerDo") (EVar "rest")))))
-(DFunDef false "lowerDo" ((PCons (PCon "DoBind" (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "callBin") (ELit (LString "andThen"))) (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EVar "lowerDo") (EVar "rest")))))
+(DFunDef false "lowerDo" ((PList (PCon "DoBind" (PVar "pat") (PVar "e")))) (EApp (EApp (EVar "callAndThen") (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "pure")))) (EApp (EVar "ELit") (EVar "LUnit"))))))
+(DFunDef false "lowerDo" ((PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EApp (EApp (EVar "callAndThen") (EVar "e")) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EApp (EVar "lowerDo") (EVar "rest")))))
+(DFunDef false "lowerDo" ((PCons (PCon "DoBind" (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EVar "callAndThen") (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EVar "lowerDo") (EVar "rest")))))
 (DFunDef false "lowerDo" ((PCons (PCon "DoLet" PWild (PVar "isFun") (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "False")) (EVar "isFun")) (EVar "pat")) (EVar "e")) (EApp (EVar "lowerDo") (EVar "rest"))))
 (DFunDef false "lowerDo" (PWild) (EVar "fallthrough"))
+(DTypeSig false "callAndThen" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr"))))
+(DFunDef false "callAndThen" ((PVar "e") (PVar "cont")) (EMatch (EApp (EVar "exprLoc") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "EVar") (ELit (LString "andThen"))))) (EVar "e"))) (EVar "cont"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "callBin") (ELit (LString "andThen"))) (EVar "e")) (EVar "cont")))))
 (DTypeSig false "doCont" (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "doCont" ((PVar "pat") (PVar "body")) (EIf (EApp (EVar "isRefutable") (EVar "pat")) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EVar "PVar") (ELit (LString "__do_x"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (EApp (EApp (EVar "EMatch") (EApp (EVar "EVar") (ELit (LString "__do_x")))) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "pat")) (EListLit)) (EVar "body")) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "fallthrough"))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ELam") (EListLit (EVar "pat"))) (EVar "body")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isRefutable" (TyFun (TyCon "Pat") (TyCon "Bool")))
@@ -1600,11 +1621,13 @@ desugar prog = qualifyAliasRefs prog
 (DFunDef false "exprLoc" (PWild) (EVar "None"))
 (DTypeSig false "lowerDo" (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyCon "Expr")))
 (DFunDef false "lowerDo" ((PList (PCon "DoExpr" (PVar "e")))) (EVar "e"))
-(DFunDef false "lowerDo" ((PList (PCon "DoBind" (PVar "pat") (PVar "e")))) (EApp (EApp (EApp (EVar "callBin") (ELit (LString "andThen"))) (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "pure")))) (EApp (EVar "ELit") (EVar "LUnit"))))))
-(DFunDef false "lowerDo" ((PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "callBin") (ELit (LString "andThen"))) (EVar "e")) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EApp (EVar "lowerDo") (EVar "rest")))))
-(DFunDef false "lowerDo" ((PCons (PCon "DoBind" (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EVar "callBin") (ELit (LString "andThen"))) (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EVar "lowerDo") (EVar "rest")))))
+(DFunDef false "lowerDo" ((PList (PCon "DoBind" (PVar "pat") (PVar "e")))) (EApp (EApp (EVar "callAndThen") (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "pure")))) (EApp (EVar "ELit") (EVar "LUnit"))))))
+(DFunDef false "lowerDo" ((PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EApp (EApp (EVar "callAndThen") (EVar "e")) (EApp (EApp (EVar "ELam") (EListLit (EVar "PWild"))) (EApp (EVar "lowerDo") (EVar "rest")))))
+(DFunDef false "lowerDo" ((PCons (PCon "DoBind" (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EVar "callAndThen") (EVar "e")) (EApp (EApp (EVar "doCont") (EVar "pat")) (EApp (EVar "lowerDo") (EVar "rest")))))
 (DFunDef false "lowerDo" ((PCons (PCon "DoLet" PWild (PVar "isFun") (PVar "pat") (PVar "e")) (PVar "rest"))) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "False")) (EVar "isFun")) (EVar "pat")) (EVar "e")) (EApp (EVar "lowerDo") (EVar "rest"))))
 (DFunDef false "lowerDo" (PWild) (EVar "fallthrough"))
+(DTypeSig false "callAndThen" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr"))))
+(DFunDef false "callAndThen" ((PVar "e") (PVar "cont")) (EMatch (EApp (EVar "exprLoc") (EVar "e")) (arm (PCon "Some" (PVar "l")) () (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EVar "EVar") (ELit (LString "andThen"))))) (EVar "e"))) (EVar "cont"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "callBin") (ELit (LString "andThen"))) (EVar "e")) (EVar "cont")))))
 (DTypeSig false "doCont" (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "doCont" ((PVar "pat") (PVar "body")) (EIf (EApp (EVar "isRefutable") (EVar "pat")) (EApp (EApp (EVar "ELam") (EListLit (EApp (EApp (EVar "PVar") (ELit (LString "__do_x"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (EApp (EApp (EVar "EMatch") (EApp (EVar "EVar") (ELit (LString "__do_x")))) (EListLit (EApp (EApp (EApp (EVar "Arm") (EVar "pat")) (EListLit)) (EVar "body")) (EApp (EApp (EApp (EVar "Arm") (EVar "PWild")) (EListLit)) (EVar "fallthrough"))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ELam") (EListLit (EVar "pat"))) (EVar "body")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isRefutable" (TyFun (TyCon "Pat") (TyCon "Bool")))

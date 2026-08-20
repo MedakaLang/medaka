@@ -8820,11 +8820,19 @@ infer env (ELoc l e) =
   infer env e
 -- Phase 150: a do-lowered chain.  Record the do-block loc so a monad-shape
 -- mismatch during inference is retargeted to the tailored "do requires a monad"
--- error (see typeMismatch); clear it afterwards so sibling code isn't mis-blamed.
+-- error (see typeMismatch); RESTORE the previous value afterwards, not a hard
+-- `None` (#894 review finding 2) — an EARLIER statement in the SAME do-chain
+-- can itself be an inline nested `do` block (`a <- (do ...)`), whose own
+-- `EDoOrigin` used to unconditionally clear the flag to `None` on the way out
+-- and so silently un-blame every LATER statement in the outer chain, reviving
+-- the pre-fix container/List/Array message for a later `x <- <scalar>` bind.
+-- Nesting is otherwise unremarkable (this node is already fully re-entrant
+-- everywhere else it is handled — `mapKids`, `alpha`, `appSpineName`, …).
 infer env (EDoOrigin l e) =
+  let prevDoOrigin = !currentDoOrigin
   currentDoOrigin := Some l
   let t = infer env e
-  currentDoOrigin := None
+  currentDoOrigin := prevDoOrigin
   t
 infer _ _ = panic "typecheck: unsupported expression"
 
@@ -12904,6 +12912,56 @@ containerArgHint : String -> String
 containerArgHint "String" = ". Pass a List or Array; to work over a string's characters, convert it with `string.toChars` first."
 containerArgHint argTy =
   ". Pass a List or Array, or convert the \{argTy} to one first."
+
+-- #894: `containerArgMsg` above hard-codes "a container (like List or Array)",
+-- which is right for a genuine container-consuming HOF (`map`, `filter`, …) but
+-- actively WRONG for the SAME reframe firing on a `do`-lowered `andThen` call —
+-- `x <- b` / a bare statement line inside `do` lowers to `andThen b (...)`
+-- (`lowerDo`, `compiler/frontend/desugar.mdk`), so a non-monadic `b` (e.g. `Bool`
+-- in a `Result` do-block) hits this same container-vs-scalar detector.  "Pass a
+-- List or Array" tells the user to convert their `Bool` into a list, which is
+-- not the fix — the fix is `let` instead of `<-`, because the value was never
+-- meant to be a container at all.  The concrete monad (`Result`) is NOT yet known
+-- here (its tyvar is still free — nothing has pinned it), so this stays honest by
+-- naming the shape ("Thenable", `do`'s own vocabulary — see `doRequiresMonadMsg`)
+-- rather than guessing a specific type.  Fires ONLY on the exact callee `lowerDo`
+-- synthesizes (`isDoLoweredAndThenCallee`, below) — an explicit user call to
+-- `andThen` on a scalar argument, even one textually nested inside a do-bind's
+-- own scrutinee, keeps the original List/Array message, which is the right
+-- advice there.
+doBindArgMsg : String -> String
+doBindArgMsg argTy = "this `do` block needs a Thenable value here (like `Option` or `Result`), but got \{argTy}\{doBindArgHint argTy}"
+
+doBindArgHint : String -> String
+doBindArgHint argTy =
+  ". If \{argTy} isn't itself monadic, use 'let' instead of '<-' to bind it."
+
+-- #894 review finding 1: is `appExpr`'s own callee EXACTLY the synthesized
+-- `andThen` `lowerDo` builds for a `do`-bind (`callAndThen`,
+-- `compiler/frontend/desugar.mdk`)?  A STRUCTURAL check off the one node
+-- `inferApp` was actually called for — no ambient/dynamic flag (the first cut
+-- of this fix used callee-name + `currentDoOrigin`, which also lit up on a
+-- user's own explicit `andThen` call textually nested inside a do-bind's
+-- scrutinee, e.g. `x <- andThen b f`; that call is neither `lowerDo`'s callee
+-- nor wants the `let`-instead-of-`<-` advice).  `callAndThen` tags ONLY the
+-- callee it itself constructs, so no user-authored `andThen` occurrence — no
+-- matter where it sits — can ever carry this wrapper.
+isDoLoweredAndThenCallee : Expr -> Bool
+isDoLoweredAndThenCallee (EApp callee _) = isDoLoweredAndThenCalleeExpr callee
+isDoLoweredAndThenCallee _ = False
+
+isDoLoweredAndThenCalleeExpr : Expr -> Bool
+isDoLoweredAndThenCalleeExpr (ELoc _ e) = isDoLoweredAndThenCalleeExpr e
+isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EVar "andThen")) = True
+-- `resolve` rewrites every surviving `EVar` to `EVarId name id` (a stable
+-- per-binding identity) — by the time `inferApp` runs, the callee `lowerDo`
+-- tagged is `EVarId "andThen" _`, not the raw `EVar` it started as. Debugged
+-- with `medaka check` + a one-off shape dump: the untagged-`EVar` arm above
+-- never actually fires post-resolve; keep it anyway as the honest pre-resolve
+-- shape (harmless — `EDoOrigin _ (EVar "andThen")` just never matches here).
+isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EVarId "andThen" _)) = True
+isDoLoweredAndThenCalleeExpr _ = False
+
 -- P0-16 beginner call-syntax hint.  A newcomer writes `add(1, 2)` (C/Python/JS
 -- call syntax) meaning `add 1 2`; in Medaka `(1, 2)` is a TUPLE, so `add(1, 2)`
 -- applies `add` to ONE tuple argument → a partial application / no-impl error
@@ -13047,8 +13105,23 @@ inferApp lets appExpr ft xt =
         -- (callee name + arg loc in scope) instead of letting the generic sink
         -- leak `a b vs String`.  Skip the unify (it would push the leaked
         -- mismatch as a SECOND diagnostic) and poison `r` to suppress cascade.
-        let hint = containerArgHint scalarTy
-        let _ = pushTypeErrorHelpFixAt "T-TYPE-MISMATCH" !currentLoc (containerArgMsg (appSpineName appExpr) scalarTy) hint None
+        --
+        -- #894: the SAME shape also fires when this application is a `do`-lowered
+        -- `andThen` call (`x <- b` / a bare statement line — `lowerDo`,
+        -- `compiler/frontend/desugar.mdk`) whose bound value isn't monadic. That
+        -- is not "pass a List or Array" — it is "use `let`, not `<-`". Detected
+        -- by AST SHAPE off `appExpr`'s own callee (`isDoLoweredAndThenCallee`,
+        -- `callAndThen` tags exactly its synthesized callee), NOT by name +
+        -- `currentDoOrigin` — review finding 1 on the first cut of this fix: a
+        -- name+ambient-state heuristic false-positives on a user's OWN explicit
+        -- `andThen` call textually nested inside a do-bind's scrutinee
+        -- (`x <- andThen b f`), which is neither `lowerDo`'s callee nor
+        -- expecting the `let`-instead-of-`<-` advice.  The shape check can't:
+        -- the wrapper is only ever placed on the exact node `lowerDo` builds.
+        let isDoBind = isDoLoweredAndThenCallee appExpr
+        let msg = if isDoBind then doBindArgMsg scalarTy else containerArgMsg (appSpineName appExpr) scalarTy
+        let hint = if isDoBind then doBindArgHint scalarTy else containerArgHint scalarTy
+        let _ = pushTypeErrorHelpFixAt "T-TYPE-MISMATCH" !currentLoc msg hint None
         -- Poison the container tyvar + element vars (in ft) exactly as the generic
         -- unify sink would (`monoUnboundIds a ++ b`), so the dangling `Mappable f`
         -- obligation sees a poisoned var and suppresses its own cascade.

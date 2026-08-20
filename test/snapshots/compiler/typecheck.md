@@ -1,5 +1,5 @@
 # META
-source_lines=31235
+source_lines=31308
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -8824,11 +8824,19 @@ infer env (ELoc l e) =
   infer env e
 -- Phase 150: a do-lowered chain.  Record the do-block loc so a monad-shape
 -- mismatch during inference is retargeted to the tailored "do requires a monad"
--- error (see typeMismatch); clear it afterwards so sibling code isn't mis-blamed.
+-- error (see typeMismatch); RESTORE the previous value afterwards, not a hard
+-- `None` (#894 review finding 2) — an EARLIER statement in the SAME do-chain
+-- can itself be an inline nested `do` block (`a <- (do ...)`), whose own
+-- `EDoOrigin` used to unconditionally clear the flag to `None` on the way out
+-- and so silently un-blame every LATER statement in the outer chain, reviving
+-- the pre-fix container/List/Array message for a later `x <- <scalar>` bind.
+-- Nesting is otherwise unremarkable (this node is already fully re-entrant
+-- everywhere else it is handled — `mapKids`, `alpha`, `appSpineName`, …).
 infer env (EDoOrigin l e) =
+  let prevDoOrigin = !currentDoOrigin
   currentDoOrigin := Some l
   let t = infer env e
-  currentDoOrigin := None
+  currentDoOrigin := prevDoOrigin
   t
 infer _ _ = panic "typecheck: unsupported expression"
 
@@ -12908,6 +12916,56 @@ containerArgHint : String -> String
 containerArgHint "String" = ". Pass a List or Array; to work over a string's characters, convert it with `string.toChars` first."
 containerArgHint argTy =
   ". Pass a List or Array, or convert the \{argTy} to one first."
+
+-- #894: `containerArgMsg` above hard-codes "a container (like List or Array)",
+-- which is right for a genuine container-consuming HOF (`map`, `filter`, …) but
+-- actively WRONG for the SAME reframe firing on a `do`-lowered `andThen` call —
+-- `x <- b` / a bare statement line inside `do` lowers to `andThen b (...)`
+-- (`lowerDo`, `compiler/frontend/desugar.mdk`), so a non-monadic `b` (e.g. `Bool`
+-- in a `Result` do-block) hits this same container-vs-scalar detector.  "Pass a
+-- List or Array" tells the user to convert their `Bool` into a list, which is
+-- not the fix — the fix is `let` instead of `<-`, because the value was never
+-- meant to be a container at all.  The concrete monad (`Result`) is NOT yet known
+-- here (its tyvar is still free — nothing has pinned it), so this stays honest by
+-- naming the shape ("Thenable", `do`'s own vocabulary — see `doRequiresMonadMsg`)
+-- rather than guessing a specific type.  Fires ONLY on the exact callee `lowerDo`
+-- synthesizes (`isDoLoweredAndThenCallee`, below) — an explicit user call to
+-- `andThen` on a scalar argument, even one textually nested inside a do-bind's
+-- own scrutinee, keeps the original List/Array message, which is the right
+-- advice there.
+doBindArgMsg : String -> String
+doBindArgMsg argTy = "this `do` block needs a Thenable value here (like `Option` or `Result`), but got \{argTy}\{doBindArgHint argTy}"
+
+doBindArgHint : String -> String
+doBindArgHint argTy =
+  ". If \{argTy} isn't itself monadic, use 'let' instead of '<-' to bind it."
+
+-- #894 review finding 1: is `appExpr`'s own callee EXACTLY the synthesized
+-- `andThen` `lowerDo` builds for a `do`-bind (`callAndThen`,
+-- `compiler/frontend/desugar.mdk`)?  A STRUCTURAL check off the one node
+-- `inferApp` was actually called for — no ambient/dynamic flag (the first cut
+-- of this fix used callee-name + `currentDoOrigin`, which also lit up on a
+-- user's own explicit `andThen` call textually nested inside a do-bind's
+-- scrutinee, e.g. `x <- andThen b f`; that call is neither `lowerDo`'s callee
+-- nor wants the `let`-instead-of-`<-` advice).  `callAndThen` tags ONLY the
+-- callee it itself constructs, so no user-authored `andThen` occurrence — no
+-- matter where it sits — can ever carry this wrapper.
+isDoLoweredAndThenCallee : Expr -> Bool
+isDoLoweredAndThenCallee (EApp callee _) = isDoLoweredAndThenCalleeExpr callee
+isDoLoweredAndThenCallee _ = False
+
+isDoLoweredAndThenCalleeExpr : Expr -> Bool
+isDoLoweredAndThenCalleeExpr (ELoc _ e) = isDoLoweredAndThenCalleeExpr e
+isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EVar "andThen")) = True
+-- `resolve` rewrites every surviving `EVar` to `EVarId name id` (a stable
+-- per-binding identity) — by the time `inferApp` runs, the callee `lowerDo`
+-- tagged is `EVarId "andThen" _`, not the raw `EVar` it started as. Debugged
+-- with `medaka check` + a one-off shape dump: the untagged-`EVar` arm above
+-- never actually fires post-resolve; keep it anyway as the honest pre-resolve
+-- shape (harmless — `EDoOrigin _ (EVar "andThen")` just never matches here).
+isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EVarId "andThen" _)) = True
+isDoLoweredAndThenCalleeExpr _ = False
+
 -- P0-16 beginner call-syntax hint.  A newcomer writes `add(1, 2)` (C/Python/JS
 -- call syntax) meaning `add 1 2`; in Medaka `(1, 2)` is a TUPLE, so `add(1, 2)`
 -- applies `add` to ONE tuple argument → a partial application / no-impl error
@@ -13051,8 +13109,23 @@ inferApp lets appExpr ft xt =
         -- (callee name + arg loc in scope) instead of letting the generic sink
         -- leak `a b vs String`.  Skip the unify (it would push the leaked
         -- mismatch as a SECOND diagnostic) and poison `r` to suppress cascade.
-        let hint = containerArgHint scalarTy
-        let _ = pushTypeErrorHelpFixAt "T-TYPE-MISMATCH" !currentLoc (containerArgMsg (appSpineName appExpr) scalarTy) hint None
+        --
+        -- #894: the SAME shape also fires when this application is a `do`-lowered
+        -- `andThen` call (`x <- b` / a bare statement line — `lowerDo`,
+        -- `compiler/frontend/desugar.mdk`) whose bound value isn't monadic. That
+        -- is not "pass a List or Array" — it is "use `let`, not `<-`". Detected
+        -- by AST SHAPE off `appExpr`'s own callee (`isDoLoweredAndThenCallee`,
+        -- `callAndThen` tags exactly its synthesized callee), NOT by name +
+        -- `currentDoOrigin` — review finding 1 on the first cut of this fix: a
+        -- name+ambient-state heuristic false-positives on a user's OWN explicit
+        -- `andThen` call textually nested inside a do-bind's scrutinee
+        -- (`x <- andThen b f`), which is neither `lowerDo`'s callee nor
+        -- expecting the `let`-instead-of-`<-` advice.  The shape check can't:
+        -- the wrapper is only ever placed on the exact node `lowerDo` builds.
+        let isDoBind = isDoLoweredAndThenCallee appExpr
+        let msg = if isDoBind then doBindArgMsg scalarTy else containerArgMsg (appSpineName appExpr) scalarTy
+        let hint = if isDoBind then doBindArgHint scalarTy else containerArgHint scalarTy
+        let _ = pushTypeErrorHelpFixAt "T-TYPE-MISMATCH" !currentLoc msg hint None
         -- Poison the container tyvar + element vars (in ft) exactly as the generic
         -- unify sink would (`monoUnboundIds a ++ b`), so the dangling `Mappable f`
         -- obligation sees a poisoned var and suppresses its own cascade.
@@ -32664,7 +32737,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "infer" ((PVar "env") (PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EApp (EVar "inferIntRange") (EVar "env")) (EVar "lo")) (EVar "hi")) (EApp (EVar "tconBuiltin") (ELit (LString "Array")))))
 (DFunDef false "infer" ((PVar "env") (PCon "EHeadAnnot" (PVar "e") (PVar "ty"))) (EApp (EApp (EApp (EVar "inferHeadAnnot") (EVar "env")) (EVar "e")) (EVar "ty")))
 (DFunDef false "infer" ((PVar "env") (PCon "ELoc" (PVar "l") (PVar "e"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EApp (EVar "Some") (EVar "l")))) (DoExpr (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))))
-(DFunDef false "infer" ((PVar "env") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EApp (EVar "Some") (EVar "l")))) (DoLet false false (PVar "t") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EVar "None"))) (DoExpr (EVar "t"))))
+(DFunDef false "infer" ((PVar "env") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EBlock (DoLet false false (PVar "prevDoOrigin") (EUnOp "!" (EVar "currentDoOrigin"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EApp (EVar "Some") (EVar "l")))) (DoLet false false (PVar "t") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EVar "prevDoOrigin"))) (DoExpr (EVar "t"))))
 (DFunDef false "infer" (PWild PWild) (EApp (EVar "panic") (ELit (LString "typecheck: unsupported expression"))))
 (DTypeSig false "inferArrayLit" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Mono"))))
 (DFunDef false "inferArrayLit" ((PVar "env") (PVar "es")) (EBlock (DoLet false false (PVar "elem") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unifyAll") (EVar "elem")) (EApp (EApp (EVar "inferEach") (EVar "env")) (EVar "es")))) (DoExpr (EApp (EApp (EVar "TApp") (EApp (EVar "tconBuiltin") (ELit (LString "Array")))) (EVar "elem")))))
@@ -33301,6 +33374,18 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "containerArgHint" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "containerArgHint" ((PLit (LString "String"))) (ELit (LString ". Pass a List or Array; to work over a string's characters, convert it with `string.toChars` first.")))
 (DFunDef false "containerArgHint" ((PVar "argTy")) (EBinOp "++" (EBinOp "++" (ELit (LString ". Pass a List or Array, or convert the ")) (EApp (EVar "display") (EVar "argTy"))) (ELit (LString " to one first."))))
+(DTypeSig false "doBindArgMsg" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "doBindArgMsg" ((PVar "argTy")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "this `do` block needs a Thenable value here (like `Option` or `Result`), but got ")) (EApp (EVar "display") (EVar "argTy"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "doBindArgHint") (EVar "argTy")))) (ELit (LString ""))))
+(DTypeSig false "doBindArgHint" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "doBindArgHint" ((PVar "argTy")) (EBinOp "++" (EBinOp "++" (ELit (LString ". If ")) (EApp (EVar "display") (EVar "argTy"))) (ELit (LString " isn't itself monadic, use 'let' instead of '<-' to bind it."))))
+(DTypeSig false "isDoLoweredAndThenCallee" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "isDoLoweredAndThenCallee" ((PCon "EApp" (PVar "callee") PWild)) (EApp (EVar "isDoLoweredAndThenCalleeExpr") (EVar "callee")))
+(DFunDef false "isDoLoweredAndThenCallee" (PWild) (EVar "False"))
+(DTypeSig false "isDoLoweredAndThenCalleeExpr" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "isDoLoweredAndThenCalleeExpr" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "isDoLoweredAndThenCalleeExpr") (EVar "e")))
+(DFunDef false "isDoLoweredAndThenCalleeExpr" ((PCon "EDoOrigin" PWild (PCon "EVar" (PLit (LString "andThen"))))) (EVar "True"))
+(DFunDef false "isDoLoweredAndThenCalleeExpr" ((PCon "EDoOrigin" PWild (PCon "EVarId" (PLit (LString "andThen")) PWild))) (EVar "True"))
+(DFunDef false "isDoLoweredAndThenCalleeExpr" (PWild) (EVar "False"))
 (DTypeSig false "funArity" (TyFun (TyCon "Mono") (TyCon "Int")))
 (DFunDef false "funArity" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" PWild PWild (PVar "r")) () (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "funArity") (EVar "r")))) (arm PWild () (ELit (LInt 0)))))
 (DTypeSig false "tupleArgElems" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Expr")))))
@@ -33340,7 +33425,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "firstTupleCallHint" ((PList)) (EVar "None"))
 (DFunDef false "firstTupleCallHint" ((PCons (PVar "m") (PVar "rest"))) (EMatch (EApp (EVar "tupleCallHintFor") (EVar "m")) (arm (PCon "Some" (PVar "hf")) () (EApp (EVar "Some") (EVar "hf"))) (arm (PCon "None") () (EApp (EVar "firstTupleCallHint") (EVar "rest")))))
 (DTypeSig false "inferApp" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Expr"))) (TyFun (TyCon "Expr") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Mono"))))))
-(DFunDef false "inferApp" ((PVar "lets") (PVar "appExpr") (PVar "ft") (PVar "xt")) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshVar") (ELit LUnit))) (DoExpr (EMatch (EApp (EVar "headTyconNameMono") (EVar "ft")) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EVar "inferAppNotFunction") (EVar "appExpr")) (EVar "ft")) (EVar "r"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "containerParamScalarArg") (EVar "ft")) (EVar "xt")) (arm (PCon "Some" (PVar "scalarTy")) () (EBlock (DoLet false false (PVar "hint") (EApp (EVar "containerArgHint") (EVar "scalarTy"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EApp (EVar "containerArgMsg") (EApp (EVar "appSpineName") (EVar "appExpr"))) (EVar "scalarTy"))) (EVar "hint")) (EVar "None"))) (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "ft")) (EVar "xt"))) (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "r")) (EVar "r"))) (DoExpr (EVar "r")))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "eff") (EApp (EVar "openRow") (ELit LUnit))) (DoLet false false PWild (EMatch (EApp (EVar "appArgLoc") (EVar "appExpr")) (arm (PCon "Some" (PVar "al")) () (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EApp (EVar "Some") (EVar "al")))) (arm (PCon "None") () (ELit LUnit)))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "ft")) (EApp (EApp (EApp (EVar "TFun") (EVar "xt")) (EVar "eff")) (EVar "r")))) (DoLet false false (PVar "eff2") (EApp (EApp (EApp (EVar "fillHolesInRow") (EVar "lets")) (EVar "eff")) (EApp (EVar "spineFirstArg") (EVar "appExpr")))) (DoLet false false PWild (EApp (EApp (EVar "performEffect") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "curEffect")) (EVar "eff2"))) (DoExpr (EVar "r"))))))))))
+(DFunDef false "inferApp" ((PVar "lets") (PVar "appExpr") (PVar "ft") (PVar "xt")) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshVar") (ELit LUnit))) (DoExpr (EMatch (EApp (EVar "headTyconNameMono") (EVar "ft")) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EVar "inferAppNotFunction") (EVar "appExpr")) (EVar "ft")) (EVar "r"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "containerParamScalarArg") (EVar "ft")) (EVar "xt")) (arm (PCon "Some" (PVar "scalarTy")) () (EBlock (DoLet false false (PVar "isDoBind") (EApp (EVar "isDoLoweredAndThenCallee") (EVar "appExpr"))) (DoLet false false (PVar "msg") (EIf (EVar "isDoBind") (EApp (EVar "doBindArgMsg") (EVar "scalarTy")) (EApp (EApp (EVar "containerArgMsg") (EApp (EVar "appSpineName") (EVar "appExpr"))) (EVar "scalarTy")))) (DoLet false false (PVar "hint") (EIf (EVar "isDoBind") (EApp (EVar "doBindArgHint") (EVar "scalarTy")) (EApp (EVar "containerArgHint") (EVar "scalarTy")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EUnOp "!" (EVar "currentLoc"))) (EVar "msg")) (EVar "hint")) (EVar "None"))) (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "ft")) (EVar "xt"))) (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "r")) (EVar "r"))) (DoExpr (EVar "r")))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "eff") (EApp (EVar "openRow") (ELit LUnit))) (DoLet false false PWild (EMatch (EApp (EVar "appArgLoc") (EVar "appExpr")) (arm (PCon "Some" (PVar "al")) () (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EApp (EVar "Some") (EVar "al")))) (arm (PCon "None") () (ELit LUnit)))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "ft")) (EApp (EApp (EApp (EVar "TFun") (EVar "xt")) (EVar "eff")) (EVar "r")))) (DoLet false false (PVar "eff2") (EApp (EApp (EApp (EVar "fillHolesInRow") (EVar "lets")) (EVar "eff")) (EApp (EVar "spineFirstArg") (EVar "appExpr")))) (DoLet false false PWild (EApp (EApp (EVar "performEffect") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "curEffect")) (EVar "eff2"))) (DoExpr (EVar "r"))))))))))
 (DTypeSig false "inferAppNotFunction" (TyFun (TyCon "Expr") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Mono")))))
 (DFunDef false "inferAppNotFunction" ((PVar "appExpr") (PVar "ft") (PVar "r")) (EBlock (DoLet false false (PVar "applied") (EApp (EVar "appSpineArgCount") (EVar "appExpr"))) (DoLet false false (PVar "takes") (EBinOp "-" (EVar "applied") (ELit (LInt 1)))) (DoLet false false PWild (EMatch (EApp (EVar "appSpineName") (EVar "appExpr")) (arm (PCon "Some" (PVar "name")) () (EIf (EBinOp ">=" (EVar "takes") (ELit (LInt 1))) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-NOT-A-FUNCTION"))) (EApp (EApp (EApp (EVar "overAppliedMsg") (EVar "name")) (EVar "takes")) (EVar "applied"))) (EBlock (DoLet false false (PVar "hint") (EApp (EVar "notAFunctionHint") (EApp (EVar "Some") (EVar "name")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-NOT-A-FUNCTION"))) (EFieldAccess (EVar "currentLoc") "value")) (EBinOp "++" (EApp (EVar "notAFunctionMsg") (EApp (EVar "ppMono") (EApp (EVar "normalize") (EVar "ft")))) (EVar "hint"))) (EVar "hint")) (EVar "None")))))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "hint") (EApp (EVar "notAFunctionHint") (EVar "None"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-NOT-A-FUNCTION"))) (EFieldAccess (EVar "currentLoc") "value")) (EBinOp "++" (EApp (EVar "notAFunctionMsg") (EApp (EVar "ppMono") (EApp (EVar "normalize") (EVar "ft")))) (EVar "hint"))) (EVar "hint")) (EVar "None"))))))) (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "r")) (EVar "r"))) (DoExpr (EVar "r"))))
 (DTypeSig false "inferLam" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyCon "Mono")))))
@@ -37769,7 +37854,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "infer" ((PVar "env") (PCon "ERangeArray" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EApp (EVar "inferIntRange") (EVar "env")) (EVar "lo")) (EVar "hi")) (EApp (EVar "tconBuiltin") (ELit (LString "Array")))))
 (DFunDef false "infer" ((PVar "env") (PCon "EHeadAnnot" (PVar "e") (PVar "ty"))) (EApp (EApp (EApp (EVar "inferHeadAnnot") (EVar "env")) (EVar "e")) (EVar "ty")))
 (DFunDef false "infer" ((PVar "env") (PCon "ELoc" (PVar "l") (PVar "e"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EApp (EVar "Some") (EVar "l")))) (DoExpr (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))))
-(DFunDef false "infer" ((PVar "env") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EApp (EVar "Some") (EVar "l")))) (DoLet false false (PVar "t") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EVar "None"))) (DoExpr (EVar "t"))))
+(DFunDef false "infer" ((PVar "env") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EBlock (DoLet false false (PVar "prevDoOrigin") (EUnOp "!" (EVar "currentDoOrigin"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EApp (EVar "Some") (EVar "l")))) (DoLet false false (PVar "t") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "currentDoOrigin")) (EVar "prevDoOrigin"))) (DoExpr (EVar "t"))))
 (DFunDef false "infer" (PWild PWild) (EApp (EVar "panic") (ELit (LString "typecheck: unsupported expression"))))
 (DTypeSig false "inferArrayLit" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Mono"))))
 (DFunDef false "inferArrayLit" ((PVar "env") (PVar "es")) (EBlock (DoLet false false (PVar "elem") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unifyAll") (EDictApp "elem")) (EApp (EApp (EVar "inferEach") (EVar "env")) (EVar "es")))) (DoExpr (EApp (EApp (EVar "TApp") (EApp (EVar "tconBuiltin") (ELit (LString "Array")))) (EDictApp "elem")))))
@@ -38406,6 +38491,18 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "containerArgHint" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "containerArgHint" ((PLit (LString "String"))) (ELit (LString ". Pass a List or Array; to work over a string's characters, convert it with `string.toChars` first.")))
 (DFunDef false "containerArgHint" ((PVar "argTy")) (EBinOp "++" (EBinOp "++" (ELit (LString ". Pass a List or Array, or convert the ")) (EApp (EMethodRef "display") (EVar "argTy"))) (ELit (LString " to one first."))))
+(DTypeSig false "doBindArgMsg" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "doBindArgMsg" ((PVar "argTy")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "this `do` block needs a Thenable value here (like `Option` or `Result`), but got ")) (EApp (EMethodRef "display") (EVar "argTy"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "doBindArgHint") (EVar "argTy")))) (ELit (LString ""))))
+(DTypeSig false "doBindArgHint" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "doBindArgHint" ((PVar "argTy")) (EBinOp "++" (EBinOp "++" (ELit (LString ". If ")) (EApp (EMethodRef "display") (EVar "argTy"))) (ELit (LString " isn't itself monadic, use 'let' instead of '<-' to bind it."))))
+(DTypeSig false "isDoLoweredAndThenCallee" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "isDoLoweredAndThenCallee" ((PCon "EApp" (PVar "callee") PWild)) (EApp (EVar "isDoLoweredAndThenCalleeExpr") (EVar "callee")))
+(DFunDef false "isDoLoweredAndThenCallee" (PWild) (EVar "False"))
+(DTypeSig false "isDoLoweredAndThenCalleeExpr" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "isDoLoweredAndThenCalleeExpr" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "isDoLoweredAndThenCalleeExpr") (EVar "e")))
+(DFunDef false "isDoLoweredAndThenCalleeExpr" ((PCon "EDoOrigin" PWild (PCon "EVar" (PLit (LString "andThen"))))) (EVar "True"))
+(DFunDef false "isDoLoweredAndThenCalleeExpr" ((PCon "EDoOrigin" PWild (PCon "EVarId" (PLit (LString "andThen")) PWild))) (EVar "True"))
+(DFunDef false "isDoLoweredAndThenCalleeExpr" (PWild) (EVar "False"))
 (DTypeSig false "funArity" (TyFun (TyCon "Mono") (TyCon "Int")))
 (DFunDef false "funArity" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" PWild PWild (PVar "r")) () (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "funArity") (EVar "r")))) (arm PWild () (ELit (LInt 0)))))
 (DTypeSig false "tupleArgElems" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Expr")))))
@@ -38445,7 +38542,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "firstTupleCallHint" ((PList)) (EVar "None"))
 (DFunDef false "firstTupleCallHint" ((PCons (PVar "m") (PVar "rest"))) (EMatch (EApp (EVar "tupleCallHintFor") (EVar "m")) (arm (PCon "Some" (PVar "hf")) () (EApp (EVar "Some") (EVar "hf"))) (arm (PCon "None") () (EApp (EVar "firstTupleCallHint") (EVar "rest")))))
 (DTypeSig false "inferApp" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Expr"))) (TyFun (TyCon "Expr") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Mono"))))))
-(DFunDef false "inferApp" ((PVar "lets") (PVar "appExpr") (PVar "ft") (PVar "xt")) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshVar") (ELit LUnit))) (DoExpr (EMatch (EApp (EVar "headTyconNameMono") (EVar "ft")) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EVar "inferAppNotFunction") (EVar "appExpr")) (EVar "ft")) (EVar "r"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "containerParamScalarArg") (EVar "ft")) (EVar "xt")) (arm (PCon "Some" (PVar "scalarTy")) () (EBlock (DoLet false false (PVar "hint") (EApp (EVar "containerArgHint") (EVar "scalarTy"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EUnOp "!" (EVar "currentLoc"))) (EApp (EApp (EVar "containerArgMsg") (EApp (EVar "appSpineName") (EVar "appExpr"))) (EVar "scalarTy"))) (EVar "hint")) (EVar "None"))) (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "ft")) (EVar "xt"))) (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "r")) (EVar "r"))) (DoExpr (EVar "r")))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "eff") (EApp (EVar "openRow") (ELit LUnit))) (DoLet false false PWild (EMatch (EApp (EVar "appArgLoc") (EVar "appExpr")) (arm (PCon "Some" (PVar "al")) () (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EApp (EVar "Some") (EVar "al")))) (arm (PCon "None") () (ELit LUnit)))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "ft")) (EApp (EApp (EApp (EVar "TFun") (EVar "xt")) (EVar "eff")) (EVar "r")))) (DoLet false false (PVar "eff2") (EApp (EApp (EApp (EVar "fillHolesInRow") (EVar "lets")) (EVar "eff")) (EApp (EVar "spineFirstArg") (EVar "appExpr")))) (DoLet false false PWild (EApp (EApp (EVar "performEffect") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "curEffect")) (EVar "eff2"))) (DoExpr (EVar "r"))))))))))
+(DFunDef false "inferApp" ((PVar "lets") (PVar "appExpr") (PVar "ft") (PVar "xt")) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshVar") (ELit LUnit))) (DoExpr (EMatch (EApp (EVar "headTyconNameMono") (EVar "ft")) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EVar "inferAppNotFunction") (EVar "appExpr")) (EVar "ft")) (EVar "r"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "containerParamScalarArg") (EVar "ft")) (EVar "xt")) (arm (PCon "Some" (PVar "scalarTy")) () (EBlock (DoLet false false (PVar "isDoBind") (EApp (EVar "isDoLoweredAndThenCallee") (EVar "appExpr"))) (DoLet false false (PVar "msg") (EIf (EVar "isDoBind") (EApp (EVar "doBindArgMsg") (EVar "scalarTy")) (EApp (EApp (EVar "containerArgMsg") (EApp (EVar "appSpineName") (EVar "appExpr"))) (EVar "scalarTy")))) (DoLet false false (PVar "hint") (EIf (EVar "isDoBind") (EApp (EVar "doBindArgHint") (EVar "scalarTy")) (EApp (EVar "containerArgHint") (EVar "scalarTy")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-TYPE-MISMATCH"))) (EUnOp "!" (EVar "currentLoc"))) (EVar "msg")) (EVar "hint")) (EVar "None"))) (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "ft")) (EVar "xt"))) (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "r")) (EVar "r"))) (DoExpr (EVar "r")))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "eff") (EApp (EVar "openRow") (ELit LUnit))) (DoLet false false PWild (EMatch (EApp (EVar "appArgLoc") (EVar "appExpr")) (arm (PCon "Some" (PVar "al")) () (EApp (EApp (EVar "setRef") (EVar "currentLoc")) (EApp (EVar "Some") (EVar "al")))) (arm (PCon "None") () (ELit LUnit)))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "ft")) (EApp (EApp (EApp (EVar "TFun") (EVar "xt")) (EVar "eff")) (EVar "r")))) (DoLet false false (PVar "eff2") (EApp (EApp (EApp (EVar "fillHolesInRow") (EVar "lets")) (EVar "eff")) (EApp (EVar "spineFirstArg") (EVar "appExpr")))) (DoLet false false PWild (EApp (EApp (EVar "performEffect") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "curEffect")) (EVar "eff2"))) (DoExpr (EVar "r"))))))))))
 (DTypeSig false "inferAppNotFunction" (TyFun (TyCon "Expr") (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Mono")))))
 (DFunDef false "inferAppNotFunction" ((PVar "appExpr") (PVar "ft") (PVar "r")) (EBlock (DoLet false false (PVar "applied") (EApp (EVar "appSpineArgCount") (EVar "appExpr"))) (DoLet false false (PVar "takes") (EBinOp "-" (EVar "applied") (ELit (LInt 1)))) (DoLet false false PWild (EMatch (EApp (EVar "appSpineName") (EVar "appExpr")) (arm (PCon "Some" (PVar "name")) () (EIf (EBinOp ">=" (EVar "takes") (ELit (LInt 1))) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-NOT-A-FUNCTION"))) (EApp (EApp (EApp (EVar "overAppliedMsg") (EVar "name")) (EVar "takes")) (EVar "applied"))) (EBlock (DoLet false false (PVar "hint") (EApp (EVar "notAFunctionHint") (EApp (EVar "Some") (EVar "name")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-NOT-A-FUNCTION"))) (EFieldAccess (EVar "currentLoc") "value")) (EBinOp "++" (EApp (EVar "notAFunctionMsg") (EApp (EVar "ppMono") (EApp (EVar "normalize") (EVar "ft")))) (EVar "hint"))) (EVar "hint")) (EVar "None")))))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "hint") (EApp (EVar "notAFunctionHint") (EVar "None"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-NOT-A-FUNCTION"))) (EFieldAccess (EVar "currentLoc") "value")) (EBinOp "++" (EApp (EVar "notAFunctionMsg") (EApp (EVar "ppMono") (EApp (EVar "normalize") (EVar "ft")))) (EVar "hint"))) (EVar "hint")) (EVar "None"))))))) (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "r")) (EVar "r"))) (DoExpr (EVar "r"))))
 (DTypeSig false "inferLam" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyCon "Mono")))))

@@ -1,0 +1,18 @@
+-- #894 review finding 1: a user's OWN explicit `andThen` call, textually
+-- nested inside a `do`-bind's scrutinee (`x <- andThen badBool (...)`), must
+-- NOT get the `do`-block ("use `let` instead of `<-`") message — that message
+-- is only right for the SYNTHESIZED `andThen` call `lowerDo` builds for the
+-- `<-` itself, and this one is neither: there is no `<-` binding `badBool`
+-- directly, `andThen` is applied explicitly by the user. A name+ambient-state
+-- detector (checking the callee's name plus "are we inside a `do`-lowered
+-- chain") false-positives here because it can't tell this call apart from the
+-- synthesized one; the fix must key off AST identity instead. Expected: the
+-- ORIGINAL container/List/Array message.
+badBool : Bool
+badBool = True
+
+f = do
+  x <- andThen badBool (y => Ok 1)
+  Ok x
+
+main = println f
