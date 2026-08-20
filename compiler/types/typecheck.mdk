@@ -26,6 +26,12 @@ import frontend.ast.{
   -- absent origin makes no claim here while `ifaceIdMatches`/`tabKeyEq` refuse
   -- absence outright — do not copy either shape to the other site.
   sameTyConHead,
+  -- #1647: the interface-identity KEY (origin+name → one comparable String)
+  -- and its ONE licensed comparison — `ifaceDeclMatches` below is the sole
+  -- caller, resolving an impl method's declared signature by the DECLARATION
+  -- the `impl` head denotes rather than by bare spelling.
+  ifaceIdentity,
+  ifaceIdMatches,
   tyConBuiltin,
   firstTyLoc,
   firstTyLocList,
@@ -24469,9 +24475,9 @@ inferImplBodies env allProg rpNames (d::rest) =
 inferOneImpl : TcEnv -> List Decl -> List String -> Decl -> Unit
 inferOneImpl env allProg rpNames (DAttrib _ d) =
   inferOneImpl env allProg rpNames d
-inferOneImpl env allProg rpNames (DImpl { iface, tys, reqs, methods, ... }) = match reqs
-  [] => inferPlainImpl env allProg iface tys methods
-  _ => inferRequiresImpl env allProg rpNames iface tys reqs methods
+inferOneImpl env allProg rpNames (DImpl { iface, tys, reqs, methods, implOrigin, ... }) = match reqs
+  [] => inferPlainImpl env allProg implOrigin iface tys methods
+  _ => inferRequiresImpl env allProg rpNames implOrigin iface tys reqs methods
 inferOneImpl _ _ _ _ = ()
 
 -- D3a: a NON-`requires` impl body, inferred on every path (single elaboration mode)
@@ -24479,32 +24485,32 @@ inferOneImpl _ _ _ _ = ()
 -- `Display`/`Debug` impl — the 19 `display@String` sites) reach inferMethodAt and
 -- get stamped.  Mirrors inferRequiresImpl's head-mono substitution but with no
 -- requires to register (an unconstrained impl threads no element dict).
-inferPlainImpl : TcEnv -> List Decl -> String -> List Ty -> List ImplMethod -> Unit
-inferPlainImpl env allProg iface tys methods =
+inferPlainImpl : TcEnv -> List Decl -> TyConOrigin -> String -> List Ty -> List ImplMethod -> Unit
+inferPlainImpl env allProg implOrigin iface tys methods =
   let implTvMap = freshTvMap (dedup (flatMap tyVarNames tys))
   let headMonos = map (fromAstType implTvMap) tys
-  inferImplMethods env allProg iface implTvMap headMonos methods
+  inferImplMethods env allProg implOrigin iface implTvMap headMonos methods
 
 -- one impl `impl Iface (List a) requires Iface a where …`: build ONE tyvar map
 -- shared between the head (`List a`) and the requires (`Iface a`) so the body's
 -- inner method ref unifies its discriminating var to the head's `a`; infer each
 -- method body against the method type instantiated at the head; THEN register the
 -- requires' post-unification ids in activeDictVars keyed to `$dict_<method>_<slot>`.
-inferRequiresImpl : TcEnv -> List Decl -> List String -> String -> List Ty -> List Require -> List ImplMethod -> Unit
-inferRequiresImpl env allProg rpNames iface tys reqs methods =
+inferRequiresImpl : TcEnv -> List Decl -> List String -> TyConOrigin -> String -> List Ty -> List Require -> List ImplMethod -> Unit
+inferRequiresImpl env allProg rpNames implOrigin iface tys reqs methods =
   let implTvMap = freshTvMap (dedup (flatMap tyVarNames tys))
   let headMonos = map (fromAstType implTvMap) tys
-  let _ = inferImplMethods env allProg iface implTvMap headMonos methods
+  let _ = inferImplMethods env allProg implOrigin iface implTvMap headMonos methods
   registerImplRequires implTvMap rpNames reqs methods
 
-inferImplMethods : TcEnv -> List Decl -> String -> List (String, Mono) -> List Mono -> List ImplMethod -> Unit
-inferImplMethods _ _ _ _ _ [] = ()
-inferImplMethods env allProg iface implTvMap headMonos (m::rest) =
-  let _ = inferImplMethod env allProg iface implTvMap headMonos m
-  inferImplMethods env allProg iface implTvMap headMonos rest
+inferImplMethods : TcEnv -> List Decl -> TyConOrigin -> String -> List (String, Mono) -> List Mono -> List ImplMethod -> Unit
+inferImplMethods _ _ _ _ _ _ [] = ()
+inferImplMethods env allProg implOrigin iface implTvMap headMonos (m::rest) =
+  let _ = inferImplMethod env allProg implOrigin iface implTvMap headMonos m
+  inferImplMethods env allProg implOrigin iface implTvMap headMonos rest
 
-inferImplMethod : TcEnv -> List Decl -> String -> List (String, Mono) -> List Mono -> ImplMethod -> Unit
-inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats body) = match ifaceMethodTyResolved allProg iface mname
+inferImplMethod : TcEnv -> List Decl -> TyConOrigin -> String -> List (String, Mono) -> List Mono -> ImplMethod -> Unit
+inferImplMethod env allProg implOrigin iface implTvMap headMonos (ImplMethod mname pats body) = match ifaceMethodTyResolved allProg implOrigin iface mname
   None => ()
   Some (ifaceParams, mty, gscope) =>
     -- currentFn = the method name (NOT "") so arg-/return-position sites in THIS
@@ -25227,34 +25233,57 @@ removeAllS drop (x::xs)
 -- the method type without the scope that elaborates it.  On the slow path it comes from
 -- the very declaration this scan selected (free — same traversal); on the fast path it
 -- comes out of the same table entry as `(typarams, mty)`.
-ifaceMethodTyResolved : List Decl -> String -> String -> Option (List String, Ty, List (String, List Kind))
-ifaceMethodTyResolved allProg iface mname
+--
+-- #1647: the caller now supplies `implOrigin` (the `impl` head's #1110 occurrence
+-- identity — `DImpl.implOrigin`) alongside the bare `iface` spelling, so a cross-
+-- interface same-spelled-method collision resolves to the declaration the `impl`
+-- head actually denotes rather than the first (fast path) / any (slow path)
+-- same-spelled one.  `ifaceDeclMatches` below is the ONE comparison either arm may
+-- use — see its own comment for why unstamped origins fall back to spelling instead
+-- of going through `ifaceIdMatches` directly (F4: absence must never match absence,
+-- but here absence-vs-absence is the FLAT/no-import driver's normal case, not a
+-- collision, and identity-matching it as a miss would over-tighten a program that
+-- builds today — the #1647 fix's own §6(d) hazard).
+ifaceMethodTyResolved : List Decl -> TyConOrigin -> String -> String -> Option (List String, Ty, List (String, List Kind))
+ifaceMethodTyResolved allProg implOrigin iface mname
   | !useFastIfaceMethodTy = match omLookup mname perRun.value.methodIfaceParamsRef.value
     Some (ifn, typarams, mty, scope) =>
-      -- ⚠️ SPELLING comparison, deliberately: the caller supplies `iface` as a bare
-      -- name (from an `impl` head / a default-body subject), so making this an identity
-      -- test would need the caller re-keyed first.  #1446 P1 stops at the OBLIGATION
-      -- channel; this guard is unchanged in behaviour.
-      if ifn.irName == iface then
+      if ifaceDeclMatches implOrigin iface ifn.irOrigin ifn.irName then
         Some (typarams, mty, scope)
       else
         None
     None => None
-  | otherwise = ifaceMethodTy allProg iface mname
+  | otherwise = ifaceMethodTy allProg implOrigin iface mname
+
+-- the ONE comparison `ifaceMethodTyResolved`/`ifaceMethodTy` may use between an
+-- impl head's (implOrigin, iface) and a candidate interface declaration's own
+-- (origin, name).  When BOTH sides are stamped (`OriginModule`), this is an
+-- identity test via `ifaceIdentity`/`ifaceIdMatches` (ast.mdk) — absence never
+-- matches, so two distinct interfaces sharing a spelling never collide.  When
+-- EITHER side is `OriginUnresolved` — the flat/no-import driver, which never
+-- stamps user interfaces at all (ast.mdk :1671-1676) — identity carries no
+-- information, so this falls back to the pre-#1647 SPELLING comparison; that is
+-- unchanged behaviour on that path, not a new miss.
+ifaceDeclMatches : TyConOrigin -> String -> TyConOrigin -> String -> Bool
+ifaceDeclMatches implOrigin iface declOrigin declName = match (implOrigin, declOrigin)
+  (OriginModule _, OriginModule _) => ifaceIdMatches (ifaceIdentity implOrigin iface) (ifaceIdentity declOrigin declName)
+  _ => declName == iface
 
 -- the (interface typarams, declared method type, graded scope) of method [mname] in
--- interface [iface], searched across [allProg]'s interface decls
-ifaceMethodTy : List Decl -> String -> String -> Option (List String, Ty, List (String, List Kind))
-ifaceMethodTy [] _ _ = None
-ifaceMethodTy ((DAttrib _ d)::rest) iface mname = match ifaceMethodTy [d] iface mname
+-- interface [iface] (denoted, by identity, by [implOrigin] — see `ifaceDeclMatches`),
+-- searched across [allProg]'s interface decls
+ifaceMethodTy : List Decl -> TyConOrigin -> String -> String -> Option (List String, Ty, List (String, List Kind))
+ifaceMethodTy [] _ _ _ = None
+ifaceMethodTy ((DAttrib _ d)::rest) implOrigin iface mname = match ifaceMethodTy [d] implOrigin iface mname
   Some r => Some r
-  None => ifaceMethodTy rest iface mname
-ifaceMethodTy ((DInterface { name, typarams, methods, ... })::rest) iface mname
-  | name == iface = match methodTyOf mname methods
+  None => ifaceMethodTy rest implOrigin iface mname
+ifaceMethodTy ((DInterface { name, typarams, methods, ifaceOrigin, ... })::rest) implOrigin iface mname
+  | ifaceDeclMatches implOrigin iface ifaceOrigin name = match methodTyOf mname methods
     Some ty => Some (typarams, ty, declGradedScope typarams methods)
-    None => ifaceMethodTy rest iface mname
-  | otherwise = ifaceMethodTy rest iface mname
-ifaceMethodTy (_::rest) iface mname = ifaceMethodTy rest iface mname
+    None => ifaceMethodTy rest implOrigin iface mname
+  | otherwise = ifaceMethodTy rest implOrigin iface mname
+ifaceMethodTy (_::rest) implOrigin iface mname =
+  ifaceMethodTy rest implOrigin iface mname
 
 methodTyOf : String -> List IfaceMethod -> Option Ty
 methodTyOf _ [] = None

@@ -33,7 +33,16 @@ already correct and already order-invariant on the pre-fix binary. It is the
 regression guard, and the "unrelated code still behaves" fixture the re-keying owes —
 two interfaces that collide by name must keep answering independently, in either order.
 
-── ⚠️ WHY THE `build` CELL IS 1 HERE, AND WHY THAT IS NOT THIS UNIT'S BUG ───────
+── ⚠️ UPDATE (S-emit-signature-by-declaration, #1647 FIXED) ────────────────────
+#1647 is now fixed (`ifaceMethodTyResolved`/`ifaceMethodTy` re-keyed by the impl
+head's identity, not bare spelling — `compiler/types/typecheck.mdk`). `build`
+now succeeds on BOTH orderings, printing `A(x)`/`B(y)`, same as `check`/`run`.
+The paragraph below is the PRE-FIX record (why `build` used to read 1 on both
+sides) — left as-is for the historical derivation; do not re-run it as a live
+claim. The `test/EMITTER-VERDICT-LEDGER.txt` row this case owned has been
+drained (the emitter-verdict arm converged along with `build`).
+
+── ⚠️ WHY THE `build` CELL WAS 1 HERE (PRE-#1647-FIX), AND WHY THAT WAS NOT THIS UNIT'S BUG ───────
 `build` fails on this program on BOTH sides of the fix, with
 
     "no impl of method 'display' for type 'DogB'"     (this ordering)
