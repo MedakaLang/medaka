@@ -1,0 +1,5 @@
+data Tb = Kk Int
+
+export runB : Int -> Int
+runB x = match Kk (x + 999)
+  Kk n => n

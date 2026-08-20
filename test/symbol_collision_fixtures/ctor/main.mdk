@@ -1,0 +1,6 @@
+import lib_plain.{runA}
+import lib.plain.{runB}
+
+main =
+  println (runA 1)
+  println (runB 1)
