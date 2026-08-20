@@ -1,5 +1,5 @@
 # META
-source_lines=4250
+source_lines=4260
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -3749,15 +3749,25 @@ mergeRefsGo acc ((n, rs)::rest) =
 identTokens : String -> List String
 identTokens s =
   let cs = stringToChars s
-  identTokGo s cs (arrayLength cs) 0
+  identTokGo cs (arrayLength cs) 0
 
-identTokGo : String -> Array Char -> Int -> Int -> List String
-identTokGo s cs n i
+identTokGo : Array Char -> Int -> Int -> List String
+identTokGo cs n i
   | i >= n = []
   | isIdentStart (arrayGetUnsafe i cs) =
     let j = identEnd cs n (i + 1)
-    stringSlice i j s :: identTokGo s cs n j
-  | otherwise = identTokGo s cs n (i + 1)
+    charsSlice cs i j :: identTokGo cs n j
+  | otherwise = identTokGo cs n (i + 1)
+
+-- `Array Char` slice re-encoded straight to `String`, O(j - i).  `stringSlice`
+-- takes a CODEPOINT index and rescans from the string's start to convert it to
+-- a byte offset (`mdk_utf8_byte_offset`), which made `identTokGo` O(decl-
+-- length^2) over a long declaration (#1032).  `cs` is already an `Array Char`
+-- here, so slicing it directly and re-encoding with `stringFromChars` costs
+-- only the token's own length, not the whole prefix.
+charsSlice : Array Char -> Int -> Int -> String
+charsSlice cs i j =
+  stringFromChars (arrayMakeWith (j - i) (k => arrayGetUnsafe (i + k) cs))
 
 isIdentStart : Char -> Bool
 isIdentStart c = isLower c || isUpper c || c == '_'
@@ -5576,9 +5586,11 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "mergeRefsGo" (PWild (PList)) (ELit LUnit))
 (DFunDef false "mergeRefsGo" ((PVar "acc") (PCons (PTuple (PVar "n") (PVar "rs")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EVar "n")) (EApp (EVar "sortUniqS") (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "acc")) (EVar "rs")))) (EVar "acc"))) (DoExpr (EApp (EApp (EVar "mergeRefsGo") (EVar "acc")) (EVar "rest")))))
 (DTypeSig false "identTokens" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "identTokens" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "identTokGo") (EVar "s")) (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
-(DTypeSig false "identTokGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "identTokGo" ((PVar "s") (PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EApp (EVar "isIdentStart") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EBlock (DoLet false false (PVar "j") (EApp (EApp (EApp (EVar "identEnd") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EVar "j")) (EVar "s")) (EApp (EApp (EApp (EApp (EVar "identTokGo") (EVar "s")) (EVar "cs")) (EVar "n")) (EVar "j"))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "identTokGo") (EVar "s")) (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "identTokens" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "identTokGo") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
+(DTypeSig false "identTokGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "identTokGo" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EApp (EVar "isIdentStart") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EBlock (DoLet false false (PVar "j") (EApp (EApp (EApp (EVar "identEnd") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EVar "charsSlice") (EVar "cs")) (EVar "i")) (EVar "j")) (EApp (EApp (EApp (EVar "identTokGo") (EVar "cs")) (EVar "n")) (EVar "j"))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "identTokGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "charsSlice" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "charsSlice" ((PVar "cs") (PVar "i") (PVar "j")) (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "j") (EVar "i"))) (ELam ((PVar "k")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (EVar "k"))) (EVar "cs"))))))
 (DTypeSig false "isIdentStart" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isIdentStart" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isLower") (EVar "c")) (EApp (EVar "isUpper") (EVar "c"))) (EBinOp "==" (EVar "c") (ELit (LChar "_")))))
 (DTypeSig false "identEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
@@ -7032,9 +7044,11 @@ duplicateBodySameFileRule = Rule {
 (DFunDef false "mergeRefsGo" (PWild (PList)) (ELit LUnit))
 (DFunDef false "mergeRefsGo" ((PVar "acc") (PCons (PTuple (PVar "n") (PVar "rs")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "set") (EVar "n")) (EApp (EVar "sortUniqS") (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "acc")) (EVar "rs")))) (EVar "acc"))) (DoExpr (EApp (EApp (EVar "mergeRefsGo") (EVar "acc")) (EVar "rest")))))
 (DTypeSig false "identTokens" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "identTokens" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "identTokGo") (EVar "s")) (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
-(DTypeSig false "identTokGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "identTokGo" ((PVar "s") (PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EApp (EVar "isIdentStart") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EBlock (DoLet false false (PVar "j") (EApp (EApp (EApp (EVar "identEnd") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EVar "j")) (EVar "s")) (EApp (EApp (EApp (EApp (EVar "identTokGo") (EVar "s")) (EVar "cs")) (EVar "n")) (EVar "j"))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "identTokGo") (EVar "s")) (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "identTokens" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "identTokGo") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
+(DTypeSig false "identTokGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "identTokGo" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EApp (EVar "isIdentStart") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EBlock (DoLet false false (PVar "j") (EApp (EApp (EApp (EVar "identEnd") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EVar "charsSlice") (EVar "cs")) (EVar "i")) (EVar "j")) (EApp (EApp (EApp (EVar "identTokGo") (EVar "cs")) (EVar "n")) (EVar "j"))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "identTokGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "charsSlice" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "charsSlice" ((PVar "cs") (PVar "i") (PVar "j")) (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "j") (EVar "i"))) (ELam ((PVar "k")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (EVar "k"))) (EVar "cs"))))))
 (DTypeSig false "isIdentStart" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isIdentStart" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isLower") (EVar "c")) (EApp (EVar "isUpper") (EVar "c"))) (EBinOp "==" (EVar "c") (ELit (LChar "_")))))
 (DTypeSig false "identEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))

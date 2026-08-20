@@ -3745,15 +3745,25 @@ mergeRefsGo acc ((n, rs)::rest) =
 identTokens : String -> List String
 identTokens s =
   let cs = stringToChars s
-  identTokGo s cs (arrayLength cs) 0
+  identTokGo cs (arrayLength cs) 0
 
-identTokGo : String -> Array Char -> Int -> Int -> List String
-identTokGo s cs n i
+identTokGo : Array Char -> Int -> Int -> List String
+identTokGo cs n i
   | i >= n = []
   | isIdentStart (arrayGetUnsafe i cs) =
     let j = identEnd cs n (i + 1)
-    stringSlice i j s :: identTokGo s cs n j
-  | otherwise = identTokGo s cs n (i + 1)
+    charsSlice cs i j :: identTokGo cs n j
+  | otherwise = identTokGo cs n (i + 1)
+
+-- `Array Char` slice re-encoded straight to `String`, O(j - i).  `stringSlice`
+-- takes a CODEPOINT index and rescans from the string's start to convert it to
+-- a byte offset (`mdk_utf8_byte_offset`), which made `identTokGo` O(decl-
+-- length^2) over a long declaration (#1032).  `cs` is already an `Array Char`
+-- here, so slicing it directly and re-encoding with `stringFromChars` costs
+-- only the token's own length, not the whole prefix.
+charsSlice : Array Char -> Int -> Int -> String
+charsSlice cs i j =
+  stringFromChars (arrayMakeWith (j - i) (k => arrayGetUnsafe (i + k) cs))
 
 isIdentStart : Char -> Bool
 isIdentStart c = isLower c || isUpper c || c == '_'
