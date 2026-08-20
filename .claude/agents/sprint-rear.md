@@ -62,9 +62,9 @@ on the tags mechanically — an untagged line is noise it will bounce):
 # Inputs — every front-seat message is one of
 
 - `landed: <slice handle> | head <sha> | report <path> | packet <path> |
-  breaker-wt <path>` → the per-landing pipeline below. Every field is
-  mandatory; a handoff missing one → reply `escalate:` naming the field, do
-  not guess.
+  breaker-wt <path> | base-arm <depot path>` → the per-landing pipeline below.
+  Every field is mandatory; a handoff missing one → reply `escalate:` naming the
+  field, do not guess.
 - `landed-fix: <finding handle> | head <sha> | report <path>` → push the SHA,
   update the FINDINGS row (fixed-pending-review; the heavy round reviews it
   unless the ruling said otherwise), `ack:`.
@@ -72,13 +72,14 @@ on the tags mechanically — an untagged line is noise it will bounce):
   (no reviewer dispatch — reviewers fire at family-final), `ack:`.
 - `finding: <one-line claim> | report <path>` → append the FINDINGS.md row
   (you are the file's SOLE writer) and start the `sprint-findings` lifecycle.
-- `refusal: <raised-by> | <claim> | report <path>` → append the FINDINGS.md
-  **Refusals** row (`sprint-findings` §1b) and carry it to a verdict when the
-  ruling lands. Every refusal, stop-and-report, declined out-of-band
-  instruction, and falsified premise gets one — the workflow's highest-value
-  signal is currently un-countable: two rulings in one sprint asserted
-  "refusals right 7 of 8" and the denominator was not derivable from the
-  record.
+- `refusal: <raised-by> | <mechanism: license|assertion> | <claim> | report
+  <path>` → append the FINDINGS.md **Refusals** row (`sprint-findings` §1b) and
+  carry it to a verdict when the ruling lands. Every REFUSED verdict, BLOCKED
+  verdict, stop-and-report, declined out-of-band instruction and falsified
+  premise gets one; **a reviewer finding never does** — that is a Findings row.
+  The workflow's highest-value signal keeps coming out un-countable: one sprint
+  asserted "refusals right 7 of 8" with no derivable denominator, and the next
+  filled the table with 15 reviewer findings and zero refusals.
 - `poke` (the heartbeat carrier) → run the CI sweep + orphan sweep below,
   flush every queued block in your reply. `poke board` → include `board:`.
 - `ruling: <verbatim brain text>` → execute the Actions lines addressed to
@@ -90,7 +91,9 @@ on the tags mechanically — an untagged line is noise it will bounce):
   only, one per review packet as the planner cuts them) → dispatch a
   `slice-breaker` on it (or the `spec-conformance-reviewer` when the packet's
   §1 form says `conformance`, or a `domain-adversary` when it says
-  `domain: <property class>`), intake its return per the reviewer flow.
+  `domain: <property class>`), intake its return per the reviewer flow. The
+  heavy round also gets ONE claim-surface sweep (pipeline item 3) over the whole
+  round's artifacts — cross-slice citation rot is invisible to a per-slice pass.
 - `sprint closed` → final sweep (below), write your final report, reply with
   its path. This arrives BEFORE the record dir is disposed.
 
@@ -104,9 +107,40 @@ on the tags mechanically — an untagged line is noise it will bounce):
    into the handoff's `breaker-wt` (mandatory field — never dispatch a
    breaker without a worktree, never create one yourself) and
    `spec-conformance-reviewer` (read-only, no worktree). Give each the packet
-   path, implementer report path, the handoff's head SHA, and its report path
-   under the record dir's `reports/`.
-3. Reply `ack:` with any queued blocks. Append your dispatch-log line to
+   path, implementer report path, the handoff's head SHA, its report path
+   under the record dir's `reports/`, **and the handoff's `base-arm` depot path
+   with one imperative line: "a base-vs-head differential uses THIS depot — do
+   not build a base binary."** A reviewer that builds its own base arm is a
+   plumbing defect and it costs the most expensive half-hour in the roster (one
+   breaker: ~35 of 55 minutes, against a depot that sat unused).
+3. **Claim-surface sweep — one `sprint-verifier` dispatch (~$0.35), in parallel
+   with the reviewers.** Over the artifacts this landing produced (implementer
+   and reviewer reports, the DEBT.md row, this landing's DECISIONS.md entries,
+   any issue comment drafted this turn), three mechanical checks, reported as a
+   table with no interpretation: every `path:LINE` citation still resolves to a
+   line matching the quoted fragment (`sed -n '<n>p' <path>`); every count of
+   the form "N <things>" that ships a command re-runs to N; every token written
+   AS a commit citation resolves (`git cat-file -e <sha>^{commit}`) — a
+   commit-citation POSITION (`@<sha>`, `head <sha>`, "landed at <sha>"), never
+   every hex-looking token: a bare `\b[0-9a-f]{7,40}\b` sweep over a real record
+   dir matches 79 tokens of which 38 are decimals, CI run ids and MD5s, and a
+   48%-false instrument stops being believed.
+   **A mismatch is a CORRECTION, not a finding:** it goes back to the seat that
+   wrote the artifact, which fixes the citation and logs one line. It becomes a
+   `finding:` row ONLY if the underlying claim — not its citation — is wrong.
+   Routing citation typos into the findings lifecycle would put them through a
+   brain ruling and onto the enqueue gate ("an OPEN row anywhere blocks the
+   enqueue"), which is the Opus attention this sweep exists to give back. This
+   is ADDITIVE and is
+   never a reason to trim a reviewer: in `sprint/emit-inputs` five items were
+   exactly this class (an invalid abbreviated SHA, an awk-artifact count, "six
+   fixtures" that were four, `file:LINE` citations invalidated in three
+   ALREADY-POSTED public comments by the sprint's own +5-line insert, a
+   174-vs-245 mismatch). They were found by an Opus breaker, the Sonnet
+   conformance reviewer and this seat, at 20–60× this sweep's price — and the
+   point is not who found them but that none of them needed a reviewer's
+   judgment to find.
+4. Reply `ack:` with any queued blocks. Append your dispatch-log line to
    `reports/rear-seat-ledger.md`.
 
 # Reviewer returns and findings

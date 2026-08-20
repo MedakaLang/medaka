@@ -106,10 +106,15 @@ immediately after fetching, or fetch into a pinned SHA first.) Then:
 
 **2. Hand off to the rear seat — one message, fixed format:**
 `landed: <slice handle> | head <merged sprint-branch SHA> | report <path> |
-packet <path> | breaker-wt <path>` — where `breaker-wt` is a worktree YOU
-create now at the merged head (`git worktree add <path> <sha>`); it is
-MANDATORY in the message (an optional field here deadlocked the breaker
-dispatch in review). The rear seat pushes exactly the named SHA, dispatches
+packet <path> | breaker-wt <path> | base-arm <depot path>` — where
+`breaker-wt` is a worktree YOU create now at the merged head (`git worktree add
+<path> <sha>`); it is MANDATORY in the message (an optional field here
+deadlocked the breaker dispatch in review). `base-arm` is the sprint's depot
+path (orchestrator step 6b) and is mandatory for the same reason: an optional
+field is a field the next seat omits, and in `sprint/emit-inputs` the depot had
+ZERO consumers while the one breaker that needed a base arm built its own — two
+full rebuilds, inside the ~35 of its 55 minutes that went to builds.
+`NONE (docs-only landing)` is a value; blank is not. The rear seat pushes exactly the named SHA, dispatches
 both reviewers, and replies `ack:`. You do NOT wait for the reply; the
 heartbeat's poke tick collects it.
 
@@ -143,6 +148,13 @@ NONE> | status: queued|dispatched|landed|refused`) and:
      `main` rather than the sprint branch, and `git rev-parse HEAD` looks
      perfectly healthy when it does (that is probe outcome C, and the mode
      table gives it a rebase branch rather than a lost dispatch).
+     **That SHA is re-derived NOW** (`git -C <landing> rev-parse HEAD`) — not
+     the packet's pinned SHA, not one copied from a previous brief. A packet
+     is FORBIDDEN to carry an ancestor SHA (packet §1): if one appears inside
+     an ancestor check there, BOUNCE the packet. Two Opus dispatches (~162k
+     tokens) were lost in `sprint/emit-inputs` to the two ways a pinned one
+     fails — vacuous against the plan base, unsatisfiable against a
+     sprint-only commit.
   3. Merges are `--ff-only` (step 1). Self-correcting a wrong base is licensed
      ONLY when all of: verified with `merge-base` (not assumed), flagged in
      the report, correct base reachable in the same tree. Missing any one is
@@ -157,8 +169,14 @@ step 4 a blocking priority.
 
 **4. Dispatch `sprint-planner`** for slice N+2's packet: the contract section
 or ruling to plan, the just-landed report's path (it must read "Deviations"
-and "Decisions surfaced" before writing — feed-forward is its rule), and the
-NEW merged head as the pin. On its return: `PACKET-READY` → append the
+and "Decisions surfaced" before writing — feed-forward is its rule), the
+NEW merged head as the pin, and **the ruling PATHS this packet must honour**,
+derived mechanically rather than by asking it to read the ledger:
+`grep -rl -e 'applies-to:.*<slice handle>' -e 'applies-to: ALL' rulings/`. The
+planner reads those FILES. (Measured, `sprint/emit-inputs`: DECISIONS.md ended
+at 3,905 lines / 242 KB; three planner reports name ledger reading as their
+dominant cost, and the L1 planner spent 40 of its 55 minutes on the then-2,032-
+line file plus the spike report plus the contract.) On its return: `PACKET-READY` → append the
 QUEUE.md row; `SPIKE-NEEDED` → dispatch the spike per the orchestrator
 skill's slice-forms handling; `BLOCKED` → brain consult.
 
@@ -240,11 +258,20 @@ waits on adjudication:
 3. Bookkeeping as above. Findings in the report still forward to the rear
    seat as `finding:` messages (the refusal path skips the merge handoff, not
    findings intake — refusals are the highest-yield finding source on
-   record). **Also send `refusal: <raised-by> | <claim> | report <path>`** —
-   one per refusal, stop-and-report, declined out-of-band instruction, or
-   falsified premise, whichever verdict the report carried, so the signal is
-   COUNTABLE. The rear seat carries the row to its verdict once the brain
-   rules.
+   record). **Also send `refusal: <raised-by> | <mechanism: license|assertion>
+   | <claim> | report <path>`** — one per REFUSED verdict, per BLOCKED verdict,
+   per stop-and-report, per declined out-of-band instruction, and per falsified
+   premise, whichever the report carried, so the signal is COUNTABLE. **A
+   BLOCKED dispatch is a refusal row and is the one most often missed** — send
+   it in the same breath as preserving the attempt-1 report. `mechanism:` is
+   `license` (the writer's judgment that the packet is wrong, backed by a
+   probe) or `assertion` (a step-0 mechanical check that stopped the dispatch
+   before judgment entered); the two have different failure modes, and grading
+   them as one thing is why the inherited "refusals were right 5 of 6" ratio has
+   never had a derivable denominator in the sprints that produced it — this
+   table is what makes the next one countable (`sprint/emit-inputs`: 3 BLOCKED
+   dispatches, 6 ruling-recorded falsified premises, ZERO rows). The rear seat carries the
+   row to its verdict once the brain rules.
 
 ## Reviewer returns
 

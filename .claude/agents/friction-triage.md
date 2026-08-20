@@ -26,6 +26,22 @@ reasons, not filing everything.
    the item becomes DRAFT-COMMENT (new evidence to append there), not a new
    issue. While searching, note tracker issues that duplicate EACH OTHER —
    flagging those pairs (with the evidence) is part of your charter.
+
+   ⚠️ **SATURATED issues take a COUNT, not a comment.** An issue is saturated
+   when its mechanism is fully characterised, a mitigation is already written
+   into the repo's docs, and the fix is not ours to make. For those, the item
+   is `SATURATED (#N, <k> occurrences)` in your table and NOTHING is drafted —
+   occurrence 33 teaches nobody anything, and the comment costs a triage slot,
+   a rear-seat filing, and a reader's attention every sprint. The ONE thing
+   that reopens drafting is a **new mechanism**: a trigger shape, a failure
+   mode, or an affected population the issue does not already describe. Count
+   it, name the new shape if there is one, move on.
+   Currently saturated: **#1148 (isolation classifier refuses in-worktree
+   compound bash / bare `make medaka`)** — ~32 occurrences across 5 sprints,
+   mitigated in `AGENTS.md` [B-ISOLATION-COMPOUND], packet §8 and
+   `.claude/ORCHESTRATING.md`; **#1716 (`isolation:"worktree"` can mint a tree
+   rooted at main)** — mitigated by the `merge-base --is-ancestor` assertion in
+   `slice-landed`'s pre-dispatch checklist.
 3. **File-worthiness criteria** — an item deserves an issue draft when ANY of:
    - it recurred (≥2 agents or ≥2 slices — it will recur next sprint too);
    - it cost measurable time or a rework cycle (cite the report);

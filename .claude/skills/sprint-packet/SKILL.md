@@ -15,8 +15,19 @@ discussed", no unstated context. Packets are files in
 this transformation to these N named sites," it is not a slice yet — it is design
 work, and it goes back to the planner or the brain.
 
-**Packets are contracts, not encyclopedias (v4, H9).** Target **≤ ~250 lines**;
-a packet past that is usually doing the implementer's discovery for it.
+**Packets are contracts, not encyclopedias (v4, H9).** Target **≤ 250 lines of
+PLANNER-AUTHORED prose**; a packet past that is usually doing the implementer's
+discovery for it. §7/§8's verbatim boilerplate and any text a ruling requires
+verbatim are OUTSIDE the count, and travel by pointer wherever the ruling did
+not say "verbatim" (`per RUN-<stage>-NNN Actions 2,5 — read
+rulings/RUN-<stage>-NNN.md`); the implementer already reads every ruling its
+packet cites, and v5 ruling files are self-contained by construction. An
+overshoot in authored prose is a `Decisions surfaced` line, never a silent cut.
+(Measured, `sprint/emit-inputs`, counted off the archived packets: every one of
+the four slice packets ran over — 285 / 325 / 511 / 613 lines — each overshoot
+the planner correctly refusing to drop ruling-mandated text, and one planner
+spending three trimming passes on the ceiling alone. A ceiling that
+puts the contract and the limit in direct conflict makes the planner choose.)
 Measured (2026-08-17 baseline): packets ran 53–89KB, packet prose is re-read at
 cache-read prices by EVERY consumer turn (implementer ~150 requests, breaker,
 conformance — $10–20/slice downstream), and site-level detail is what rots
@@ -70,8 +81,14 @@ instead of partial motion. Three slice forms result:
    before dispatch) — the repro-bundle path, branch `fix/<finding-slug>`, the
    two SHAs, the front-seat repo path (the tree the fixer must NOT be in), and
    the report path. §1's derive-your-tree block, §6's minimal set, §7's
-   refusal license, and §8/§9 bind verbatim; the fixer refuses against the
-   RULING exactly as an implementer refuses against a packet. Verdict stays
+   refusal license, and §8/§9 bind verbatim — and because a fix has no packet
+   to carry them, **the brief PASTES §7 and §8's first two bullets inline**
+   (foreground builds, never background; `MEDAKA_STRICT=1` on every probe). A
+   rule that binds "verbatim" from a document the agent must go and load is a
+   rule that has been skipped: same failure the out-of-roster-dispatch rule
+   (orchestrator item 10) already fixes for one-off agents, reopened by the
+   no-packet fix path. The fixer refuses against the RULING exactly as an
+   implementer refuses against a packet. Verdict stays
    `FIX-LANDED`. **The fixer also appends the five-field DEBT.md row** — with
    no packet, that row is the ONLY structured record of what the fix could
    have moved and what it took on trust, and it is what the heavy round reads
@@ -180,6 +197,16 @@ every word whose deletion changes anything.
   > may hold**, which is every branch but the fresh one your brief names.
   > Report the SHA; the front seat merges by SHA.
 
+  🚨 **`<sprint-head>` is a value the PACKET MAY NOT CONTAIN** — the dispatch
+  brief supplies it, re-derived by the front seat at lane grant. A hard-coded
+  ancestor SHA fails in one of exactly two ways and `sprint/emit-inputs`
+  produced both, one Opus dispatch each: pinned to the plan BASE it passes on a
+  tree holding ZERO sprint commits (vacuous); pinned to a sprint-branch-only
+  commit it can never pass in HARNESS mode until the sprint PR merges
+  (unsatisfiable). The `git diff <pinned>..HEAD -- <§5 files>` check above is
+  NOT a substitute — it passes trivially whenever the sprint has not touched
+  those files, which is exactly how the vacuous one passed.
+
   A `$WT` needed anywhere in §6 is derived (`WT="$(git rev-parse
   --show-toplevel)"`), never literal.
 - **Form:** `standard` | `spike` | `family` (see Slice forms).
@@ -220,6 +247,14 @@ absent — on the depot arm the staleness check is INERT, neither passing nor
 failing. Its freshness rests on the recorded `BASE.sha`, not on a flag. The
 depot is the BASE arm and never moves; a comparison against the SPRINT HEAD
 (any fix's before/after) is a different arm and a fresh build, and you say so.
+
+⚠️ **The depot line in §2 is addressed to the IMPLEMENTER only.** "No base-arm
+depot comparison needed" means *you, the writer*, do not need one; it says
+nothing about the reviewers who read this packet afterwards, and it has been
+read as if it did — in `sprint/emit-inputs` a breaker built its own base arm by
+hand (two full rebuilds, ~35 of its 55 minutes) against a packet carrying that
+sentence. The reviewers' depot path arrives in their own brief (`slice-landed`
+step 2's `base-arm` field), not from here.
 
 ## §3 Mission
 
@@ -360,14 +395,28 @@ carries them):**
   the row every checker checks; "nothing, and here is why" is valid in any
   field, silence is not.
 
+🚨 **Every acceptance clause names the input on which it FAILS** — one clause,
+`fails-on: <the input or state that makes this check red>`. A clause nobody can
+give one for in a sentence is VACUOUS and does not enter the packet: a check
+that passes under both hypotheses answers nothing, and a green vacuous clause is
+worse than no clause because it is spent evidence. Where the answer is hard,
+that difficulty IS the finding — surface it, don't fill it in. (Measured,
+`sprint/emit-inputs`: three cannot-fail instruments in three unrelated domains
+in ONE sprint — an acceptance clause comparing an empty gap census to an empty
+gap census, a tree-provenance check that passes on a tree with zero sprint
+commits, and a symbol census counting *emitted* defines, so a pre-emission
+suppression was invisible to it. Two of the three were authored or endorsed by
+the judgment seat, so this is not a planner-discipline rule.)
+
 ## §7 Refusal license — verbatim in every packet
 
 > Disagreements are deliverables. If contact with the source contradicts this
 > packet — a premise is false, a site is missing, the transform is wrong at a leaf
 > — STOP and report the finding. Do not resolve it silently, do not adapt around
 > it, and do not push a diff that implements what you believe over what is
-> written. A written refusal is worth more than a green gate: refusals were right
-> 5 of 6 times on record and caught two S0s.
+> written. A written refusal is worth more than a green gate: on the audited
+> record refusals caught two S0s and every orchestrator scoping error, and no
+> refusal has yet cost a sprint a landing.
 >
 > You have probe budget for this: spend up to ~15 minutes converting a
 > disagreement from an opinion into a measurement (a discriminating probe, a
@@ -381,6 +430,32 @@ carries them):**
 >   not the build's), never end your turn with anything still running.
 > - Verify the binary you probe is the one you built: `MEDAKA_STRICT=1` on every
 >   probe.
+> - **One plain command per Bash call; multi-step work goes into a script file
+>   first** (write it under your worktree's `scratch/` with the Write tool, then
+>   run the file). In an isolated worktree the auto-mode classifier refuses
+>   compound shells it cannot prove stay inside your tree, even when every path
+>   in them is yours. Refused shapes, observed: `cd X && …`, a `;`-chain ending
+>   in `echo $?`, a heredoc, a `for` loop over `cat`, `python3 - <<EOF`, a pipe
+>   feeding `git` its args, and a redirect combined with `-C` — 7 refusals
+>   across 6 agents in `sprint/emit-inputs`, one costing ~10 minutes and one
+>   "materially slowing the session". **A redirect that AGENTS.md makes
+>   mandatory ([D-BUILD-PIPE]: `medaka build`'s exit code does not survive a
+>   pipe) goes INSIDE the script** — the harness's own suggested remedy, "try it
+>   without the redirect", is not available to you, and one agent recorded that
+>   dead end verbatim.
+> - 🚨 **If `make` is denied INSIDE YOUR OWN WORKTREE, try `sh
+>   test/build_native_medaka.sh` FIRST — then report BLOCKED.** One plain
+>   command per call is mitigation, not immunity: a bare, foreground,
+>   correct-cwd `make medaka` has been refused, four forms in a row, in a
+>   session where that script then succeeded on the first try (it is the
+>   literal body of the `medaka:` target, `Makefile:21-22`). EnterWorktree
+>   is a dead end — your cwd already IS the worktree. If every form is denied
+>   you are BLOCKED: stop and report. Do NOT quietly continue source-only — a
+>   no-build agent's "no such site exists" is a hypothesis, not a finding, and
+>   reporting it as one is worse than the lost hour. The denial sometimes
+>   carries forward across a session and sometimes does not (#1148, OPEN, S2);
+>   a sibling agent doing the identical thing may be fine. It is neither your
+>   fault nor something you can test your way out of.
 > - Push and report. The rear seat watches CI, not you. Do not poll CI, do not
 >   send per-shard updates.
 > - **Never file, edit, comment on, or close a GitHub issue.** Issue writes are

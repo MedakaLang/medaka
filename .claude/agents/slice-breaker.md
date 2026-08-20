@@ -75,17 +75,28 @@ Work these in order; stop early only if you have found a blocker.
 - **Every probe must be able to fail, and you must know what failure looks like
   before you run it.** Run each probe on the BASE binary too when attribution
   matters — a finding that reproduces on base is pre-existing, not the slice's;
-  say which, with the cells. Two rebuilds spent on attribution is the right call.
+  say which, with the cells — attribution is worth the time, and the base arm
+  costs you none of it when the depot below is used.
 - Redirect build/run output to files and read `$?` directly — an exit code does
   not survive a pipe, and `2>/dev/null` hides the staleness warning.
 - Keep every repro program under `/var/tmp/medaka-sprints/<stage>/scratch/`
   (the exact path is in your brief) with a name in your report, so the
   seats can reproduce first-hand after your worktree is gone. A finding
   whose repro dies with your tree effectively does not exist.
-- Base-arm runs: rebuild in place (check out base, build, probe, return to
-  head) — and use `MEDAKA_STRICT=1` only while the tree's source matches the
-  binary; a saved-aside binary probed after the tree moved fails STRICT on
-  everything by construction. Record saved binaries' provenance instead.
+- **Base-arm runs use the DEPOT your brief names (`base-arm <path>`) — do not
+  build a base binary.** The depot is a `$BASE` build the sprint already paid
+  for, binaries plus copied `stdlib`/`runtime`; run each arm against its OWN
+  tree (`MEDAKA_ROOT` per arm), and assert freshness with `MEDAKA_STRICT=1` on
+  the BRANCH arm only — the depot carries no `compiler/`, so the staleness
+  check is INERT there and its freshness rests on the recorded `BASE.sha`
+  ([D-TWO-ARM], [D-TWO-ARM-STDLIB]). Only if your brief names NO depot do you
+  rebuild in place (check out base, build, probe, return to head), and then say
+  so in Evidence. A breaker that rebuilds a base arm the sprint already holds
+  spends the most expensive half-hour in the roster: the last one to do it ran
+  two full rebuilds inside the ~35 of its 55 minutes that went to builds, while
+  the depot sat unused with zero consumers all sprint.
+- A saved-aside binary probed after the tree moved fails STRICT on everything by
+  construction — record saved binaries' provenance instead.
 
 # Report — §9 of the sprint-packet contract (`.claude/skills/sprint-packet/SKILL.md` — Read it directly; you have no Skill tool)
 
