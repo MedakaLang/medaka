@@ -12,13 +12,29 @@ WASM_EMIT="$ROOT/compiler/backend/wasm_emit.mdk"
 EMIT_SUPPORT="$ROOT/compiler/backend/emit_support.mdk"
 # `export` a value/function signature now formats split — its own line above
 # the signature (#1804) — so a single-line `grep -F 'export <sig>'` is a false
-# negative against correctly-formatted source. Match the `export` keyword and
-# the signature as independent single-line greps instead of one combined
-# literal, tolerating either the split or (pre-fmt) collapsed spelling.
-grep -Eq '^export$|^export ' "$WASM_EMIT" \
-  && grep -Fq 'makeWasmEmitInput' "$WASM_EMIT" \
-  && grep -Fq 'emitProgram : WasmEmitInput -> CProgram -> String' "$WASM_EMIT" \
-  && grep -Fq 'emitProgramGaps : WasmEmitInput -> CProgram -> List String' "$WASM_EMIT" \
+# negative against correctly-formatted source. Check that a specific NAME's
+# declaration line is directly preceded by an `export` keyword, whether split
+# (a lone `export` line immediately above) or collapsed (`export <name> ...`
+# on one line) — never that `export` and the name merely occur SOMEWHERE in
+# the file (that would also pass on a private definition, or on the name
+# appearing only inside a comment).  $2, if non-empty, is additionally
+# required as a substring of that same declaration line (the signature).
+export_decl_present() {
+  name="$1" sig="$2"
+  awk -v n="$name" -v s="$sig" '
+    {
+      cand = ""
+      if (pending) { cand = $0; pending = 0 }
+      else if ($0 ~ /^export[ \t]*$/) { pending = 1; next }
+      else if ($0 ~ /^export /) { cand = substr($0, 8) }
+      if (cand != "" && cand ~ ("^" n "([ :(]|$)") && (s == "" || index(cand, s) > 0)) found = 1
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$WASM_EMIT"
+}
+export_decl_present makeWasmEmitInput '' \
+  && export_decl_present emitProgram 'emitProgram : WasmEmitInput -> CProgram -> String' \
+  && export_decl_present emitProgramGaps 'emitProgramGaps : WasmEmitInput -> CProgram -> List String' \
   || { echo "FAIL: WasmEmitInput API is incomplete"; exit 1; }
 for legacy in installMethodIface installDeclRetTypes installCtorFloatFields installMainIsFloatHint installRecFieldOrders methodIfaceTableRef methodIfaceIndexRef setMethodIfaceTable methodIfaceOf methodArityOf mainIsFloatHintRef declRetTypesRef declRetTypesMapW ctorFloatFieldsRef declRecFieldsRef recFieldTableW; do
   if grep -Eq "^(export )?$legacy([ :]|$)" "$WASM_EMIT" "$EMIT_SUPPORT"; then
