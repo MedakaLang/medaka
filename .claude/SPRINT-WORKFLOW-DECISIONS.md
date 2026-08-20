@@ -144,13 +144,12 @@ review pair for schedule.
 | P11 | `sprint-cost-report.py --session/--exclude-session`; `SESSION=` recorded beside `BASE=`; COSTS.md carries the sprint's own instruments | `scripts/sprint-cost-report.py`, orchestrator 1 + 7(a) | ~52% of a $513 report was three unrelated sessions, landing in the `main-session`/`general-purpose` rows H5/H10 are graded on; H9's `corrections:` never reached COSTS.md as its own criterion (5) requires |
 | P12 | A planner's negative claim about the tree carries the command that would have falsified it | `sprint-planner` | "No deterministic net-extern fixture pattern exists" when `test/net_fixtures/` + `test/diff_net.sh` existed and were CI-registered; propagated into a partial refusal and two packet revisions |
 | D1 | DELETE `effort: low` from `sprint-verifier.md` / `sprint-scout.md` | both agent defs | H11's own second probe: the harness silently drops `effort` on Haiku 4.5 (records `None`). A control that appears set and is not |
+| D2 | DELETE the tick-time `self-audit: clean` clause (the per-EVENT rule is untouched) | orchestrator heartbeat 6 | **Val, 2026-08-20.** Derived across all three sprint records (~9,000 ledger lines): the clause produced ONE line ever (`pds-phase0-substrate/DECISIONS.md:1000`), and it rode a tick already recording live lanes with agent ids, orphan state and a dispatch decision — the attestation added nothing the line did not already prove. Nor is it functioning as a prompt: the two sprints running the per-TICK form produced 0 and 5 self-audit lines, the sprint running the per-EVENT form produced 7. Stated trade (retro's): it was the only positive attestation that a quiet interval was quiet — answered by the data, since a seat that skips the event line skips this one too |
+| — | `friction-triage` gains a SATURATED class: a fully-characterised, already-mitigated, not-ours-to-fix issue takes an occurrence COUNT, never a drafted comment; only a NEW mechanism reopens drafting. #1148 and #1716 named as saturated | `friction-triage` | #1148 accumulated 7 comments / ~32 occurrences across 5 sprints, one per sprint, after its mechanism was fully characterised on 2026-07-31. Each cost a triage slot, a rear-seat filing and a reader's attention for zero marginal information |
 | E1 (partial) | packet §8 + `AGENTS.md` `[B-ISOLATION-COMPOUND]` + `ORCHESTRATING.md`: one plain command per Bash call, multi-step work into a script file, the mandatory build redirect INSIDE it; `make` denied in your OWN worktree is a BLOCKED verdict | packet §8, AGENTS.md, ORCHESTRATING.md | 7 refusals across 6 agents, 8 distinct shapes, all in-tree (#1148). The docs named only the `cp` trigger. The expensive failure is the agent that continues source-only and produces unsupportable existence claims |
 
 ### Declined, with the reason (do not re-propose without new evidence)
 
-- **D2 — delete the tick-time `self-audit: clean` clause.** The retro reserved
-  it for Val and stated the trade honestly: it is the only positive attestation
-  that a quiet interval was quiet. Two lines either way. **Val's call, still open.**
 - **P8's post-merge citation-graph check** (drafted, adopted, then REMOVED the
   same day on independent review). It cannot fail: a merge rewrites no SHAs, and
   a rebased-away commit still resolves to `git cat-file -e` as an unreachable
@@ -162,19 +161,22 @@ review pair for schedule.
 ### Deletion quota — honest accounting
 
 v5's own retro flagged that round as 23 additions to 0 deletions with the
-front-seat skill growing 62%. **v6 is no better on that axis:** one retirement
-(D1, two lines) and one removal (the citation check) against ~14 additions,
-measured by an independent review at +17.7 KB / ~4.4k tokens across the
-always-loaded files, ≈1% of a sprint-scoped run. P7 is the only change that
-reduces downstream weight. The next retro should carry a real deletion quota.
+front-seat skill growing 62%. **v6 does better, but not by much:** three
+removals — D1 (two lines), the drafted citation-graph check, and D2's tick
+clause — plus one net-negative rule (`friction-triage`'s SATURATED class, which
+removes a recurring per-sprint comment) against ~14 additions, measured by an
+independent review at +17.7 KB / ~4.4k tokens across the always-loaded files,
+≈1% of a sprint-scoped run. P7 is the only change that reduces downstream
+packet weight. The next retro should still carry a real deletion quota.
 
 ### Escalated to Val — open, not decided here
 
-- **E1 (emit-inputs): accept the isolation classifier as standing friction, or
-  change posture further?** The avoidance rule and the BLOCKED exit are adopted
-  above and evidence was added to #1148, but remedies 2 and 3 (clear the
-  stateful denial; recognise `make -C <own worktree>`) are the harness's, not
-  ours.
+- **E1 (emit-inputs): RESOLVED by Val, 2026-08-20** — mitigate in docs, stop
+  tallying, take it upstream. The avoidance rule, the `sh
+  test/build_native_medaka.sh` workaround and the BLOCKED exit are adopted
+  above; `friction-triage` now treats #1148 as saturated; an upstream report is
+  drafted. Remedies 2 and 3 (clear the carried-forward denial; recognise `make
+  -C <own worktree>`) remain the harness's, not ours.
 - **E2 (emit-inputs): should the Refusals ledger distinguish license from
   assertion?** ADOPTED as a `mechanism:` column rather than left open — the two
   instruments have different failure modes and an assertion can itself be

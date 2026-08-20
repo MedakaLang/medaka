@@ -667,8 +667,12 @@ Each tick derives state from scratch — never carry state across ticks:
 6. **Self-audit — per EVENT, not per tick (v5).** The MOMENT you do anything
    not written in this loop, or resolve anything the escalation table assigns
    elsewhere: append `self-audit: <the action> | <why> | <what it cost>` to
-   DECISIONS.md THEN, and report it to the brain retroactively. At tick time,
-   append `self-audit: clean` only if the interval genuinely had none.
+   DECISIONS.md THEN, and report it to the brain retroactively. **There is no
+   tick-time form** — the `self-audit: clean` clause was deleted in v6 after
+   producing ONE line across three sprints and ~9,000 ledger lines, and that
+   line rode a tick already recording live lanes, orphan state and a dispatch
+   decision, so the attestation added nothing to it. The per-EVENT rule is the
+   whole instrument.
    (Measured: a busy front seat recorded 3 ticks against 48 front-seat entries
    over 16 hours; every informative self-audit on record was event-triggered,
    the tick-triggered ones were all `clean`, and the one improvisation that
