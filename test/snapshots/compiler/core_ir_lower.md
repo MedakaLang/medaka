@@ -1,5 +1,5 @@
 # META
-source_lines=1777
+source_lines=1807
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -43,7 +43,7 @@ import frontend.ast.{
 -- B-2.2-e: the ONE route-word mint.  This module used to reach it as
 -- `eval.eval.implKeyOf`; that mirror is deleted and both sides of the dict-word
 -- seam now call `route_key.implRouteKeyWord` with the impl's own `implOrigin`.
-import types.route_key.{implRouteKeyWord}
+import types.route_key.{implRouteKeyWord, ifaceWordOf}
 import ir.core_ir.{
   CExpr(..),
   CArm(..),
@@ -84,6 +84,7 @@ import support.util.{
   startsWith,
   dedupBy,
   lenKey,
+  splitOnChar,
 }
 
 -- a synthetic binder for the lowered composition operators; constructed
@@ -1558,21 +1559,50 @@ methodArgTys _ = []
 -- in the default body and re-stamp them to the concrete dispatch tag (so the
 -- partially-applied inner `filterMap` lowers to a direct `@mdk_impl_<tag>_filterMap`
 -- call instead of an un-dispatchable arg-tag fallback).  Keyed by BARE method name
--- (interface method names are distinct across the prelude's interfaces).
+-- ROW SHAPE, #1450/#1668: each row is `(method, (ifaceName, ifaceWord, arity))`.
+-- The row COUNT and the `(ifaceName, arity)` pair are UNCHANGED -- `makeEmitInput`
+-- projects the pair straight back out for the existing bare-name index, so the
+-- INTERFACE leg above keeps its current bare spelling and its current answers.
+-- The third component is ADDITIVE: `ifaceWordOf implOrigin ifaceName`, the
+-- DECLARATION identity of the interface (`"zmod::IZ"`; the bare name when no origin
+-- is stamped, i.e. single-file, where a cross-module collision cannot exist).  It
+-- lets the emitter index the ARITY leg by interface DECLARATION instead of by bare
+-- method name -- which is the whole of #1450 / #1668: two modules declaring
+-- same-spelled methods on unrelated interfaces collapse to ONE bare-name row, and
+-- whichever declaration lands last silently supplies BOTH impls' emitted arity.
 export
-methodIfaceTable : List Decl -> List (String, (String, Int))
+methodIfaceTable : List Decl -> List (String, (String, String, Int))
 methodIfaceTable prog = flatMap ifaceMethodArityEntries prog
 
-ifaceMethodArityEntries : Decl -> List (String, (String, Int))
+ifaceMethodArityEntries : Decl -> List (String, (String, String, Int))
 -- #1037
 ifaceMethodArityEntries (DAttrib _ d) = ifaceMethodArityEntries d
-ifaceMethodArityEntries (DInterface { name = ifaceName, methods, ... }) =
-  map (m => ifaceMethodArityEntry ifaceName m) methods
+ifaceMethodArityEntries (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) = map (m => ifaceMethodArityEntry (ifaceWordOf o ifaceName) ifaceName m) methods
 ifaceMethodArityEntries _ = []
 
-ifaceMethodArityEntry : String -> IfaceMethod -> (String, (String, Int))
-ifaceMethodArityEntry ifaceName (IfaceMethod mname mty _) =
-  (mname, (ifaceName, listLen (methodArgTys mty)))
+ifaceMethodArityEntry : String -> String -> IfaceMethod -> (String, (String, String, Int))
+ifaceMethodArityEntry ifaceWord ifaceName (IfaceMethod mname mty _) =
+  (mname, (ifaceName, ifaceWord, listLen (methodArgTys mty)))
+
+-- The identity-keyed lookup word for the ARITY leg (#1450, #1668): the interface's
+-- DECLARATION word and the method name, spliced.  Minted here, beside the table it
+-- keys, and read by both backends -- `ifaceWordOf` never answers `""` (it falls back
+-- to the bare interface name), so this word is never the absence-matches-absence
+-- hazard `ifaceIdentity` carries.  `#` cannot occur in either half.
+export
+ifaceMethodArityKey : String -> String -> String
+ifaceMethodArityKey ifaceWord mname = "\{ifaceWord}#\{mname}"
+
+-- The interface DECLARATION word an impl route key carries in its first field
+-- (`route_key.implRouteKeyWord` = `<iface word>|<type args>|<method>`).  This is a
+-- READ of the key's existing, already-identity-bearing content -- NOT a re-keying
+-- of it, and not a read of `CImplTagged`'s bare `iface` field, which keeps its
+-- current spelling and its current route-word readers (#1277 / PR #1346 E4).
+export
+ifaceWordOfKey : String -> String
+ifaceWordOfKey key = match splitOnChar '|' key
+  w::_ => w
+  [] => key
 
 -- ── method → method-level constraint INTERFACE names (native backend, G7) ────
 -- Per interface method that carries a method-level `=>` constraint (foldMap's
@@ -1781,13 +1811,13 @@ nodeTag (EDictApp _) = "EDictApp"
 nodeTag _ = "?"
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false))))
-(DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true))))
 (DUse false (UseGroup ("eval" "eval") ((mem "buildCtorToType" false) (mem "buildCtorFieldOrders" false) (mem "ctorFieldOrdersRef" false) (mem "installDispatchTables" false) (mem "lookupPositions" false) (mem "tyvarsInArgs" false) (mem "headTyconHead" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "sanitizeId" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "allList" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "startsWith" false) (mem "dedupBy" false) (mem "lenKey" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "allList" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "startsWith" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "splitOnChar" false))))
 (DTypeSig false "composeVar" (TyCon "String"))
 (DFunDef false "composeVar" () (ELit (LString "$cf")))
 (DTypeSig true "lower" (TyFun (TyCon "Expr") (TyCon "CExpr")))
@@ -2325,14 +2355,18 @@ nodeTag _ = "?"
 (DFunDef false "methodArgTys" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "methodArgTys") (EVar "t")))
 (DFunDef false "methodArgTys" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "::" (EVar "a") (EApp (EVar "methodArgTys") (EVar "b"))))
 (DFunDef false "methodArgTys" (PWild) (EListLit))
-(DTypeSig true "methodIfaceTable" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int"))))))
+(DTypeSig true "methodIfaceTable" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "methodIfaceTable" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "ifaceMethodArityEntries")) (EVar "prog")))
-(DTypeSig false "ifaceMethodArityEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int"))))))
+(DTypeSig false "ifaceMethodArityEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "ifaceMethodArityEntries" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "ifaceMethodArityEntries") (EVar "d")))
-(DFunDef false "ifaceMethodArityEntries" ((PRec "DInterface" ((rf "name" (PVar "ifaceName")) (rf "methods" None)) true)) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EApp (EApp (EVar "ifaceMethodArityEntry") (EVar "ifaceName")) (EVar "m")))) (EVar "methods")))
+(DFunDef false "ifaceMethodArityEntries" ((PRec "DInterface" ((rf "name" (PVar "ifaceName")) (rf "ifaceOrigin" (PVar "o")) (rf "methods" None)) true)) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EApp (EApp (EApp (EVar "ifaceMethodArityEntry") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "ifaceName"))) (EVar "ifaceName")) (EVar "m")))) (EVar "methods")))
 (DFunDef false "ifaceMethodArityEntries" (PWild) (EListLit))
-(DTypeSig false "ifaceMethodArityEntry" (TyFun (TyCon "String") (TyFun (TyCon "IfaceMethod") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int"))))))
-(DFunDef false "ifaceMethodArityEntry" ((PVar "ifaceName") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild)) (ETuple (EVar "mname") (ETuple (EVar "ifaceName") (EApp (EVar "listLen") (EApp (EVar "methodArgTys") (EVar "mty"))))))
+(DTypeSig false "ifaceMethodArityEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "IfaceMethod") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))))))
+(DFunDef false "ifaceMethodArityEntry" ((PVar "ifaceWord") (PVar "ifaceName") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild)) (ETuple (EVar "mname") (ETuple (EVar "ifaceName") (EVar "ifaceWord") (EApp (EVar "listLen") (EApp (EVar "methodArgTys") (EVar "mty"))))))
+(DTypeSig true "ifaceMethodArityKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "ifaceMethodArityKey" ((PVar "ifaceWord") (PVar "mname")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "ifaceWord"))) (ELit (LString "#"))) (EApp (EVar "display") (EVar "mname"))) (ELit (LString ""))))
+(DTypeSig true "ifaceWordOfKey" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "ifaceWordOfKey" ((PVar "key")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "|"))) (EVar "key")) (arm (PCons (PVar "w") PWild) () (EVar "w")) (arm (PList) () (EVar "key"))))
 (DTypeSig true "methodConstraintIfaces" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "methodConstraintIfaces" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "methodConstraintIfaceEntries")) (EVar "prog")))
 (DTypeSig false "methodConstraintIfaceEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -2431,13 +2465,13 @@ nodeTag _ = "?"
 (DFunDef false "nodeTag" (PWild) (ELit (LString "?")))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false))))
-(DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false))))
+(DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true))))
 (DUse false (UseGroup ("eval" "eval") ((mem "buildCtorToType" false) (mem "buildCtorFieldOrders" false) (mem "ctorFieldOrdersRef" false) (mem "installDispatchTables" false) (mem "lookupPositions" false) (mem "tyvarsInArgs" false) (mem "headTyconHead" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "sanitizeId" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "allList" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "startsWith" false) (mem "dedupBy" false) (mem "lenKey" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "allList" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "startsWith" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "splitOnChar" false))))
 (DTypeSig false "composeVar" (TyCon "String"))
 (DFunDef false "composeVar" () (ELit (LString "$cf")))
 (DTypeSig true "lower" (TyFun (TyCon "Expr") (TyCon "CExpr")))
@@ -2975,14 +3009,18 @@ nodeTag _ = "?"
 (DFunDef false "methodArgTys" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "methodArgTys") (EVar "t")))
 (DFunDef false "methodArgTys" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "::" (EVar "a") (EApp (EVar "methodArgTys") (EVar "b"))))
 (DFunDef false "methodArgTys" (PWild) (EListLit))
-(DTypeSig true "methodIfaceTable" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int"))))))
+(DTypeSig true "methodIfaceTable" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "methodIfaceTable" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "ifaceMethodArityEntries")) (EVar "prog")))
-(DTypeSig false "ifaceMethodArityEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int"))))))
+(DTypeSig false "ifaceMethodArityEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "ifaceMethodArityEntries" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "ifaceMethodArityEntries") (EVar "d")))
-(DFunDef false "ifaceMethodArityEntries" ((PRec "DInterface" ((rf "name" (PVar "ifaceName")) (rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EApp (EApp (EVar "ifaceMethodArityEntry") (EVar "ifaceName")) (EVar "m")))) (EVar "methods")))
+(DFunDef false "ifaceMethodArityEntries" ((PRec "DInterface" ((rf "name" (PVar "ifaceName")) (rf "ifaceOrigin" (PVar "o")) (rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EApp (EApp (EApp (EVar "ifaceMethodArityEntry") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "ifaceName"))) (EVar "ifaceName")) (EVar "m")))) (EVar "methods")))
 (DFunDef false "ifaceMethodArityEntries" (PWild) (EListLit))
-(DTypeSig false "ifaceMethodArityEntry" (TyFun (TyCon "String") (TyFun (TyCon "IfaceMethod") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int"))))))
-(DFunDef false "ifaceMethodArityEntry" ((PVar "ifaceName") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild)) (ETuple (EVar "mname") (ETuple (EVar "ifaceName") (EApp (EVar "listLen") (EApp (EVar "methodArgTys") (EVar "mty"))))))
+(DTypeSig false "ifaceMethodArityEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "IfaceMethod") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))))))
+(DFunDef false "ifaceMethodArityEntry" ((PVar "ifaceWord") (PVar "ifaceName") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild)) (ETuple (EVar "mname") (ETuple (EVar "ifaceName") (EVar "ifaceWord") (EApp (EVar "listLen") (EApp (EVar "methodArgTys") (EVar "mty"))))))
+(DTypeSig true "ifaceMethodArityKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "ifaceMethodArityKey" ((PVar "ifaceWord") (PVar "mname")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "ifaceWord"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EVar "mname"))) (ELit (LString ""))))
+(DTypeSig true "ifaceWordOfKey" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "ifaceWordOfKey" ((PVar "key")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "|"))) (EVar "key")) (arm (PCons (PVar "w") PWild) () (EVar "w")) (arm (PList) () (EVar "key"))))
 (DTypeSig true "methodConstraintIfaces" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "methodConstraintIfaces" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "methodConstraintIfaceEntries")) (EVar "prog")))
 (DTypeSig false "methodConstraintIfaceEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))

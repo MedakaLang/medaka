@@ -231,7 +231,7 @@ import support.util.{
   noneHeadTag,
   dedupBy,
 }
-import ir.core_ir_lower.{ifaceIdsAtTag}
+import ir.core_ir_lower.{ifaceIdsAtTag, ifaceMethodArityKey, ifaceWordOfKey}
 import backend.trmc_analysis.{
   SelfRef(..),
   trmcEligible,
@@ -396,16 +396,30 @@ freshWasmEmit mode = WasmEmit {
 -- Declaration-derived semantic input. Raw lists retain table order where a full
 -- table is required; indexes preserve lookupAssoc's first-match result.
 data WasmEmitInputData =
-  | WasmEmitInputData (List (String, (String, Int))) (OrdMap (String, Int)) (List (String, (List String, String))) (OrdMap (List String, String)) (List (String, List String)) (OrdMap (List Int)) Bool (List (String, List String)) (OrdMap (List String)) (OrdMap (String, List String))
+  | WasmEmitInputData (List (String, (String, Int))) (OrdMap (String, Int)) (List (String, (List String, String))) (OrdMap (List String, String)) (List (String, List String)) (OrdMap (List Int)) Bool (List (String, List String)) (OrdMap (List String)) (OrdMap (String, List String)) (OrdMap Int)
 
 export type WasmEmitInput = WasmEmitInputData
 
 export
-makeWasmEmitInput : List (String, (String, Int)) -> List (String, (List String, String)) -> List (String, List String) -> Bool -> List (String, List String) -> WasmEmitInput
-makeWasmEmitInput methodIfaces declSigTypes ctorFieldTypes mainIsFloat recordFieldOrders = WasmEmitInputData methodIfaces (omFromPairs (reverseL methodIfaces) omEmpty) declSigTypes (omFromPairs (reverseL declSigTypes) omEmpty) ctorFieldTypes (omFromPairs (reverseL (map ctorToFloatIdxs ctorFieldTypes)) omEmpty) mainIsFloat recordFieldOrders (omFromPairs (reverseL recordFieldOrders) omEmpty) (recordLabelIndex recordFieldOrders omEmpty)
+makeWasmEmitInput : List (String, (String, String, Int)) -> List (String, (List String, String)) -> List (String, List String) -> Bool -> List (String, List String) -> WasmEmitInput
+makeWasmEmitInput methodIfaces declSigTypes ctorFieldTypes mainIsFloat recordFieldOrders = WasmEmitInputData (map bareIfaceArityRowW methodIfaces) (omFromPairs (reverseL (map bareIfaceArityRowW methodIfaces)) omEmpty) declSigTypes (omFromPairs (reverseL declSigTypes) omEmpty) ctorFieldTypes (omFromPairs (reverseL (map ctorToFloatIdxs ctorFieldTypes)) omEmpty) mainIsFloat recordFieldOrders (omFromPairs (reverseL recordFieldOrders) omEmpty) (recordLabelIndex recordFieldOrders omEmpty) (omFromPairs (reverseL (map ifaceIdArityRowW methodIfaces)) omEmpty)
+
+-- #1450/#1668 -- the two PROJECTIONS of a `methodIfaceTable` row (mirror of
+-- llvm_emit's `bareIfaceArityRow`/`ifaceIdArityRow`).  The bare projection
+-- reproduces the row this table has always carried, so `inputMethodIfaces`, the
+-- bare index and `methodIfaceOfW` (the ROUTE-WORD leg) answer exactly as before.
+-- The identity projection is ADDITIVE: same arity, keyed by the interface's
+-- DECLARATION word, so two same-spelled methods on unrelated interfaces occupy
+-- ONE slot in the bare index and TWO here.
+bareIfaceArityRowW : (String, (String, String, Int)) -> (String, (String, Int))
+bareIfaceArityRowW (m, (ifaceName, _, arity)) = (m, (ifaceName, arity))
+
+ifaceIdArityRowW : (String, (String, String, Int)) -> (String, Int)
+ifaceIdArityRowW (m, (_, ifaceWord, arity)) =
+  (ifaceMethodArityKey ifaceWord m, arity)
 
 inputMainIsFloat : WasmEmitInput -> Bool
-inputMainIsFloat (WasmEmitInputData _ _ _ _ _ _ isFloat _ _ _) = isFloat
+inputMainIsFloat (WasmEmitInputData _ _ _ _ _ _ isFloat _ _ _ _) = isFloat
 
 recordLabelIndex : List (String, List String) -> OrdMap (String, List String) -> OrdMap (String, List String)
 recordLabelIndex [] m = m
@@ -525,11 +539,11 @@ indexTypeCtorsW index = index.ctor.typeCtors
 -- arity, separate from forwarded dict params).  Every index is built once by
 -- makeWasmEmitInput, preserving first-match list semantics.
 inputMethodIfaces : WasmEmitInput -> List (String, (String, Int))
-inputMethodIfaces (WasmEmitInputData xs _ _ _ _ _ _ _ _ _) = xs
+inputMethodIfaces (WasmEmitInputData xs _ _ _ _ _ _ _ _ _ _) = xs
 
 methodIfaceOfW : Prog -> String -> String
 methodIfaceOfW prog name = match progInput prog
-  WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _ => match omLookup name methodIndex
+  WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _ _ => match omLookup name methodIndex
     Some (iface, _) => iface
     None => ""
 
@@ -538,14 +552,61 @@ methodArityOfW prog name = match progInput prog
   input => methodArityOfInput input name
 
 methodArityOfInput : WasmEmitInput -> String -> Int
-methodArityOfInput (WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _) name = match omLookup name methodIndex
+methodArityOfInput (WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _ _) name = match omLookup name methodIndex
   Some (_, arity) => arity
   None => 0
+
+-- ── ARITY BY DECLARATION (#1450, #1668) -- mirror of llvm_emit's block ──────
+-- THE ARITY LEG MOVED; THE `methodIfaceOfW` ROUTE LEG DID NOT.  The bare-name
+-- index above collapses two modules' same-spelled methods on unrelated interfaces
+-- into one row, so whichever declaration the module graph visits last supplies
+-- BOTH impls' emitted arity -- an under-applied define that segfaults (#1450), or
+-- a saturated source call lowered as a PAP whose closure POINTER is then compared
+-- as a value, at exit 0 (#1668).  The helpers below take the arity from the
+-- DECLARATION identity of the interface the asking impl entry's own `impl` head
+-- names, recovered from that entry's route key (already identity-bearing, minted
+-- by `route_key.implRouteKeyWord`).  `CImplTagged`'s bare `iface` field is NOT
+-- re-keyed: its readers consume it as a ROUTE WORD, and re-keying it in place is
+-- PR #1346's E4 result and re-opens CLOSED S0 #1277.  A miss on the identity key
+-- falls back to the bare table, so collision-free programs emit unchanged.
+inputMethodIfaceIdIndex : WasmEmitInput -> OrdMap Int
+inputMethodIfaceIdIndex (WasmEmitInputData _ _ _ _ _ _ _ _ _ _ idIndex) =
+  idIndex
+
+methodArityOfIfaceInput : WasmEmitInput -> String -> String -> Int
+methodArityOfIfaceInput input ifaceWord method = match omLookup (ifaceMethodArityKey ifaceWord method) (inputMethodIfaceIdIndex input)
+  Some arity => arity
+  None => methodArityOfInput input method
+
+methodArityOfIfaceW : Prog -> String -> String -> Int
+methodArityOfIfaceW prog ifaceWord method =
+  methodArityOfIfaceInput (progInput prog) ifaceWord method
+
+-- the DECLARATION word of the interface an impl entry implements (mirror of
+-- llvm_emit's `implEntryIfaceWord`): a tagged impl carries it as the first field
+-- of its route key, an interface DEFAULT directly as `CImplDefault`'s `ifaceId`
+-- (which is `""` in a single-file program -- the identity key then misses and the
+-- bare table answers, correctly, since a cross-MODULE collision cannot exist).
+implEntryIfaceWordW : CImplEntry -> String
+implEntryIfaceWordW (CImplEntry _ _ (CImplTagged _ key _ _ _ _)) =
+  ifaceWordOfKey key
+implEntryIfaceWordW (CImplEntry _ _ (CImplDefault ifaceId _ _)) = ifaceId
+
+methodArityOfEntryW : Prog -> CImplEntry -> String -> Int
+methodArityOfEntryW prog ent method =
+  methodArityOfIfaceW prog (implEntryIfaceWordW ent) method
+
+-- the declared arity of [method] at the impl registered under [tag], for the sites
+-- that hold a tag rather than the entry.  No impl at that tag ⇒ the bare table.
+methodArityOfTagW : Prog -> String -> String -> Int
+methodArityOfTagW prog method tag = match findByTagW method tag (methodEntriesW prog method)
+  Some ent => methodArityOfEntryW prog ent method
+  None => methodArityOfW prog method
 
 -- Declared parameter/return type heads drive Unit-main and Float recovery.
 declRetLookupW : Prog -> String -> Option (List String, String)
 declRetLookupW prog name = match progInput prog
-  WasmEmitInputData _ _ _ declIndex _ _ _ _ _ _ => omLookup name declIndex
+  WasmEmitInputData _ _ _ declIndex _ _ _ _ _ _ _ => omLookup name declIndex
 
 declRetTypeOf : Prog -> String -> String
 declRetTypeOf prog name = match declRetLookupW prog name
@@ -957,7 +1018,7 @@ floatFieldIndices (_::rest) i = floatFieldIndices rest (i + 1)
 -- true iff the ctor's field at the given 0-based index has declared type Float.
 isFloatCtorField : Prog -> String -> Int -> Bool
 isFloatCtorField prog ctor idx = match progInput prog
-  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ => match omLookup ctor ctorFloatIndex
+  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ => match omLookup ctor ctorFloatIndex
     Some idxs => containsInt idx idxs
     None => False
 
@@ -3711,7 +3772,7 @@ loadReqDict dpar i = ["local.get $" ++ gname dpar, "ref.test (ref i31)", "if (re
 implReqDictCount : Prog -> String -> String -> Int -> Int
 implReqDictCount prog method tag _userArgs =
   let raw = implArityFor prog method tag
-  let ua = methodArityOfW prog method
+  let ua = methodArityOfTagW prog method tag
   if raw > ua then raw - ua else 0
 
 implArityFor : Prog -> String -> String -> Int
@@ -4085,7 +4146,13 @@ gatherImplGroup prog entries (m, key) =
   -- validate fails at `$mdk_impl_List_foldMap` (expected (ref eq) but nothing on stack).
   -- nDicts = 0 for a dict-free impl (`length`/`toList`) ⇒ identical to the old maxI.
   let nDicts = wLeadingDictPats (firstImplClausePats clauses)
-  let arity = maxI (implGroupArity clauses) (methodArityOfW prog m + nDicts)
+  -- #1450 / #1668, THE DEFINE-ARITY SITE (peer of llvm_emit's gatherGroup): the
+  -- method's declared arity comes from the DECLARATION identity of the interface
+  -- this group's own `impl` head names (`key`'s first field), not from the
+  -- bare-method-name table two unrelated interfaces silently share.  ONLY THE
+  -- ARITY LEG MOVES -- `methodIfaceOfW`'s route word keeps its bare spelling
+  -- (#1346 E4 / CLOSED S0 #1277).  A miss falls back to the bare table.
+  let arity = maxI (implGroupArity clauses) (methodArityOfIfaceW prog (ifaceWordOfKey key) m + nDicts)
   let clauses2 = map (etaExpandClause arity) clauses
   ImplG m headTag key arity clauses2
 
@@ -4574,7 +4641,7 @@ emitDefaultDefineW prog fname tag method entry =
   -- cross-interface `empty` and the inner same-interface `fold` are already routed by the
   -- dict-pass / restampIfaceDictsW (an unconstrained default ⇒ nDicts = 0 ⇒ byte-identical).
   let nDicts = wLeadingDictPats pats0
-  let arity0 = maxI (listLen pats0) (methodArityOfW prog method + nDicts)
+  let arity0 = maxI (listLen pats0) (methodArityOfEntryW prog entry method + nDicts)
   let (pats1, body1) = etaExpandTo pats0 body0 arity0 (listLen pats0)
   -- #718 (peer of llvm_emit's emitDefaultDefine reqDict path): the element-`requires`
   -- dict count of the inner same-interface method this default reduces to (Ord's lt/gt/…
@@ -5398,7 +5465,7 @@ isArithOp op = contains op ["+", "-", "*", "/", "%"]
 -- PVar.  Used by emitLeafRef/emitGuardArmRef to seed floatLocalsRef for the arm body.
 ctorPatFloatBinders : Prog -> Pat -> List String
 ctorPatFloatBinders prog (PCon c args) = match progInput prog
-  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ => match omLookup c ctorFloatIndex
+  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ => match omLookup c ctorFloatIndex
     Some floatIdxs => ctorPatFloatBindersGo c floatIdxs args 0
     None => []
 ctorPatFloatBinders _ _ = []
@@ -8053,13 +8120,13 @@ findRecByField ((ctor, labels)::rest) label =
 
 recordFieldsOf : Prog -> String -> Option (List String)
 recordFieldsOf prog ctor = match progInput prog
-  WasmEmitInputData _ _ _ _ _ _ _ _ recordIndex _ => match omLookup ctor recordIndex
+  WasmEmitInputData _ _ _ _ _ _ _ _ recordIndex _ _ => match omLookup ctor recordIndex
     Some labels => Some labels
     None => lookupAssoc ctor (indexRecFieldsW (progIndex prog))
 
 recordByField : Prog -> String -> Option (String, List String)
 recordByField prog label = match progInput prog
-  WasmEmitInputData _ _ _ _ _ _ _ _ _ labelIndex => match omLookup label labelIndex
+  WasmEmitInputData _ _ _ _ _ _ _ _ _ labelIndex _ => match omLookup label labelIndex
     Some entry => Some entry
     None => findRecByField (indexRecFieldsW (progIndex prog)) label
 

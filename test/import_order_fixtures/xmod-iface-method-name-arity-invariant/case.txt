@@ -1,0 +1,35 @@
+entry: main.mdk
+what: REGRESSION GUARD for #1450 (xmod-iface-method-name-arity-collision-segfault),
+what: drained by slice S-emit-arity-by-declaration. Two modules declare UNRELATED
+what: interfaces whose methods share the bare name `szK` at DIFFERENT declared
+what: arities -- `amod.IA.szK : a -> Int` (1 user arg) and
+what: `zmod.IZ.szK : b -> Int -> Int` (2). `main.mdk` calls IZ's, partially applied
+what: (`applyIt (szK "hi")`, `applyIt : (Int -> Int) -> Int`).
+what:
+what: UNLEDGERED ON PURPOSE. An unledgered case in this corpus is graded INVARIANT
+what: across every permutation of its import clauses -- which is precisely the
+what: property #1450 violated, so no ground truth is needed and none is pinned here.
+what: This is the [G-PIN-DRAIN] re-point of the must-fail fixture
+what: `test/must_fail_fixtures/1450-xmod-iface-method-name-arity-collision-segfault/`,
+what: whose amod.mdk / zmod.mdk / main.mdk are copied here BYTE-FOR-BYTE (copied, not
+what: symlinked -- a genuinely separate corpus, per [T-SHARED-CORPUS]).
+
+## HOW THE EXPECTED VALUES WERE ESTABLISHED
+
+Nothing is pinned as a value: this case grades ORDER-INVARIANCE only. The correct
+answer is nevertheless hand-derived, independently of any tool, and it agrees with
+what both verbs now produce on both orderings: `szK "hi"` unambiguously denotes
+`zmod.IZ.szK` (IZ is the only interface `main.mdk` names), that method takes
+`b -> Int -> Int`, so `szK "hi"` is a genuine 1-of-2 partial application and
+`applyIt (szK "hi")` = `szK "hi" 5` = `5 + 7` = **12**.
+
+MEASURED on the fixed binary (slice S-emit-arity-by-declaration, cold `make medaka`,
+emitter regenerated twice per [T-EMITTER-BENCH], MEDAKA_STRICT=1): both orderings,
+`run` -> 12 exit 0 and `build` + EXECUTE -> 12 exit 0.
+
+BEFORE the fix, measured on the BASE arm (a cold-built binary at
+19b76b9f8490c56ff7a063ccf61434550de8107c): the amod-first ordering built a binary
+that SEGFAULTED (exit 139, nothing printed) while the zmod-first ordering printed
+12 at exit 0 -- an exact two-signature divergence, which is what this case would
+have caught. `check` and `run` were correct on BOTH orderings even then, which is
+why the guard has to reach `build`+EXECUTE and not stop at `check`.
