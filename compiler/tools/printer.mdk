@@ -1863,7 +1863,7 @@ printDecl (DTypeSig pub n t) = Cat
   (if pub then Cat (text "export") Hardline else Nil)
   (Cat (text n) (Cat (text " : ") (printType t)))
 printDecl (DExtern pub n t) = Cat
-  (if pub then text "export " else Nil)
+  (if pub then Cat (text "export") Hardline else Nil)
   (Cat (text "extern ") (Cat (text n) (Cat (text " : ") (printType t))))
 printDecl (DFunDef pub n pats body) =
   let header = Cat (if pub then text "export " else Nil) (Cat (text n) (concatD (map (p => Cat (text " ") (printPatAtom p)) pats)))
