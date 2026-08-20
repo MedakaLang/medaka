@@ -16,7 +16,7 @@ import support.util.{splitLast}
 import support.path.{dirOf}
 import types.typecheck.{elaborateOne, elaborateModules, tcMsg}
 import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp}
-import driver.loader.{loadProgram}
+import driver.loader.{loadProgram, unknownModuleIdOf}
 import backend.private_mangle.{mangleUnits}
 import driver.main_autoprint.{
   shouldAutoPrintMain,
@@ -132,8 +132,21 @@ driveModulesGo runEmit runtimeP coreP entry roots = match readFile runtimeP
   Ok rsrc => match readFile coreP
     Err e => failWith e
     Ok csrc => match loadProgram entry roots
-      Err e => failWith e
+      Err e => failWith (moduleLoadHint e)
       Ok mods => runEmit (desugar (parse rsrc)) (desugar (parse csrc)) (map desugarPair mods)
+
+-- #1796: `usageModules`' `[root ...]` bracket notation reads as "root args are
+-- optional" — they aren't, the moment the entry graph spans more than one root
+-- directory (e.g. both `compiler` and `stdlib`).  Omitting them degrades to a
+-- bare loader `unknown module: X` with no hint that ROOT arguments are the
+-- fix.  Same gate + suffix convention as `moduleLoadErrText`'s
+-- `availableModulesHint` (medaka_cli.mdk): `unknownModuleIdOf` recognizes the
+-- one loader message shape this applies to, and every other loader error
+-- (cycle / unreadable file) passes through unchanged.
+moduleLoadHint : String -> String
+moduleLoadHint e = match unknownModuleIdOf e
+  None => e
+  Some _ => stringConcat [e, " — did you forget to pass every root search directory? ", usageModules]
 
 -- ── shared composite-main emit glue (parameterized by the backend's emitTail) ──
 -- The LLVM and WasmGC multi-module emit drivers had byte-identical runEmit +
