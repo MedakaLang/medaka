@@ -175,6 +175,37 @@ if [ "$fail_count" -ne 0 ]; then
   exit 1
 fi
 
+# ── shared comment-filtered-mention helper (#1237) ──────────────────────────
+# The producer/carrier ratchets below (and the two carrier-classification loops
+# further down) all answer the same underlying question -- "does this name
+# appear in this file OUTSIDE a leading-comment line?" -- with the same filter:
+# `^[[:space:]]*--`, i.e. LEADING comments only (a trailing side comment or a
+# string literal merely naming the pattern would trip it spuriously). That
+# filter used to be copy-pasted five times; collapsing it to one home means
+# hardening it (a deliberately separate, NOT-urgent change -- see #1237) is a
+# one-place edit, and the next carrier family is a one-line call rather than a
+# sixth copy.
+#
+# ratchet_name_live_in PATTERN FILE
+#   Success (exit 0) iff FILE mentions the whole-word/alternation PATTERN
+#   outside a leading-comment line. PATTERN is a `grep -wE` pattern (a literal
+#   name or a `|`-alternation) -- `-E` is a no-op on a plain literal, so one
+#   form covers both.
+ratchet_name_live_in() {
+  grep -wE "$1" "$2" | grep -qvE '^[[:space:]]*--'
+}
+# ratchet_producer_files PATTERN
+#   Prints the sorted, newline-separated list of tracked `.mdk` files that
+#   mention PATTERN outside a leading-comment line (empty output => no hits).
+ratchet_producer_files() {
+  git -C "$ROOT" grep -lwE -- "$1" -- '*.mdk' 2>/dev/null \
+    | while IFS= read -r f; do
+        if ratchet_name_live_in "$1" "$ROOT/$f"; then
+          echo "$f"
+        fi
+      done | sort
+}
+
 # ── #1110 §8 I6.3 producer ratchet ─────────────────────────────────────────
 # `OriginUnresolved` (frontend/ast.mdk) is the "no identity was available"
 # inhabitant of `TyConOrigin`, and DICT-SEMANTICS.md §8 I6.3 forbids a sentinel
@@ -261,13 +292,7 @@ compiler/frontend/ast.mdk
 compiler/frontend/resolve.mdk
 compiler/types/route_key.mdk
 compiler/types/typecheck.mdk"
-tyconun_actual=$(git -C "$ROOT" grep -lw -- 'tyConUnresolved' -- '*.mdk' 2>/dev/null \
-  | while IFS= read -r f; do
-      # a file counts only if it mentions the producer OUTSIDE a comment line
-      if grep -w 'tyConUnresolved' "$ROOT/$f" | grep -qvE '^[[:space:]]*--'; then
-        echo "$f"
-      fi
-    done | sort)
+tyconun_actual=$(ratchet_producer_files 'tyConUnresolved')
 if [ "$tyconun_actual" != "$tyconun_allowed" ]; then
   echo "FAIL: the #1110 \`tyConUnresolved\` producer set changed."
   echo "  allowed (PRE-RESOLVE construction only):"
@@ -305,13 +330,7 @@ compiler/tools/printer.mdk"
 # calling one of these post-resolve passes this check. Character-for-character the
 # same construction as the two sibling ratchets, and fixed in the same place when
 # #1222 lands â not worked around here, so all three move together.
-declun_actual=$(git -C "$ROOT" grep -lwE -- 'dDataUnresolved|dTypeAliasUnresolved|dNewtypeUnresolved|dInterfaceUnresolved' -- '*.mdk' 2>/dev/null \
-  | while IFS= read -r f; do
-      if grep -wE 'dDataUnresolved|dTypeAliasUnresolved|dNewtypeUnresolved|dInterfaceUnresolved' "$ROOT/$f" \
-         | grep -qvE '^[[:space:]]*--'; then
-        echo "$f"
-      fi
-    done | sort)
+declun_actual=$(ratchet_producer_files 'dDataUnresolved|dTypeAliasUnresolved|dNewtypeUnresolved|dInterfaceUnresolved')
 if [ "$declun_actual" != "$declun_allowed" ]; then
   echo "FAIL: the #1110 decl-layer unresolved-producer set changed."
   echo "  allowed (PRE-RESOLVE construction, plus the identity-stripping printer):"
@@ -363,13 +382,7 @@ compiler/frontend/parser.mdk
 compiler/types/route_key.mdk"
 # ⚠️ Inherits #1222 exactly as the two ratchets above do: `git grep` sees only
 # TRACKED files. Same construction on purpose, so all three move together.
-occun_actual=$(git -C "$ROOT" grep -lwE -- 'constraintUnresolved|requireUnresolved|superUnresolved|dImplUnresolved' -- '*.mdk' 2>/dev/null \
-  | while IFS= read -r f; do
-      if grep -wE 'constraintUnresolved|requireUnresolved|superUnresolved|dImplUnresolved' "$ROOT/$f" \
-         | grep -qvE '^[[:space:]]*--'; then
-        echo "$f"
-      fi
-    done | sort)
+occun_actual=$(ratchet_producer_files 'constraintUnresolved|requireUnresolved|superUnresolved|dImplUnresolved')
 if [ "$occun_actual" != "$occun_allowed" ]; then
   echo "FAIL: the #1110 interface-occurrence unresolved-producer set changed."
   echo "  allowed (PRE-RESOLVE construction only):"
@@ -384,12 +397,7 @@ if [ "$occun_actual" != "$occun_allowed" ]; then
 fi
 echo "  ok: $(printf '%s\n' "$occun_actual" | grep -c .) occurrence-layer producer file(s)"
 
-originun_actual=$(git -C "$ROOT" grep -lw -- 'OriginUnresolved' -- '*.mdk' 2>/dev/null \
-  | while IFS= read -r f; do
-      if grep -w 'OriginUnresolved' "$ROOT/$f" | grep -qvE '^[[:space:]]*--'; then
-        echo "$f"
-      fi
-    done | sort)
+originun_actual=$(ratchet_producer_files 'OriginUnresolved')
 if [ "$originun_actual" != "$originun_allowed" ]; then
   echo "FAIL: the #1110 \`OriginUnresolved\` constructor site set changed."
   echo "  allowed (definition + resolve's own stamper):"
@@ -891,7 +899,7 @@ fi
 # GRADED: each name must be read, outside a comment, by the agreement probe.
 probe_src="$ROOT/compiler/entries/origin_agreement_main.mdk"
 for c in $carrier_graded_expected; do
-  if ! grep -w "$c" "$probe_src" | grep -qvE '^[[:space:]]*--'; then
+  if ! ratchet_name_live_in "$c" "$probe_src"; then
     echo "FAIL: carrier \`$c\` is listed as GRADED but compiler/entries/origin_agreement_main.mdk"
     echo "  no longer reads it outside a comment. Either restore the read, or move the"
     echo "  name to carrier_owed_expected and say in the PR which PR owes the grading."
@@ -921,13 +929,13 @@ done
 # either), and a looser filter would cost more than it buys.
 stamper_src="$ROOT/compiler/frontend/resolve.mdk"
 for c in $carrier_owed_expected; do
-  if grep -w "$c" "$probe_src" | grep -qvE '^[[:space:]]*--'; then
+  if ratchet_name_live_in "$c" "$probe_src"; then
     echo "FAIL: carrier \`$c\` is listed as OWED but compiler/entries/origin_agreement_main.mdk"
     echo "  now reads it -- the grading this list was waiting for has landed."
     echo "  Move \`$c\` from carrier_owed_expected to carrier_graded_expected."
     exit 1
   fi
-  if grep -w "$c" "$stamper_src" | grep -qvE '^[[:space:]]*--'; then
+  if ratchet_name_live_in "$c" "$stamper_src"; then
     echo "FAIL: carrier \`$c\` is listed as OWED but compiler/frontend/resolve.mdk now"
     echo "  WRITES it -- the carrier is live while nothing grades it, which is the"
     echo "  exact state this ratchet exists to refuse."
