@@ -1246,6 +1246,10 @@ isLeafExternW name = contains name [
   -- IndexMut impls call; lowers to the same fixed E-INDEX-OOB trap CIndex/CStringIndex
   -- already emit (message dropped, per the seam design).
   "indexError",
+  -- #1787: `indexErrorAt : Int -> a` -- the same coded-OOB abort carrying the
+  -- offending index.  wasm drops the index and traps with the fixed text, exactly
+  -- as it already drops sliceError's bounds; native formats it (@mdk_oob_at).
+  "indexErrorAt",
   -- #670: `sliceError : Int -> Int -> a` -- the coded-OOB abort the Slice impl
   -- raises; lowers to the same fixed E-SLICE-OOB trap the built-in slice path emits
   -- (bound args dropped, matching indexError's seam design).
@@ -1345,7 +1349,8 @@ externArityW name =
     -- W10: panic msg (1); arrayLength/arrayFromList/arrayCopy (1).
     "panic", "arrayLength", "arrayFromList", "arrayCopy",
     -- Index-16a: indexError msg (1) -- the coded-OOB abort extern.
-    "indexError",
+    -- #1787: indexErrorAt idx (1) -- the same abort, carrying the index.
+    "indexError", "indexErrorAt",
     -- stage-B: floatToBytes64 : Float -> Array Int (1-arg).
     "floatToBytes64",
     -- W11b: stringToChars/stringFromChars/charFromCode are each 1-arg.
@@ -5896,6 +5901,13 @@ emitLeafExternRef prog env d "indexError" [msg] =
   wasmTrap (progEmit prog) "E-INDEX-OOB" "index out of bounds"
 emitLeafExternRef prog env d "indexError" _ =
   gapLP prog "wasm Index-16a: indexError takes exactly one argument"
+-- #1787: `indexErrorAt idx` raises the same fixed-text E-INDEX-OOB trap; the index
+-- is dropped here exactly as sliceError's bounds are.  Native formats it into the
+-- message (@mdk_oob_at), so wasm's text stays the coarser of the two.
+emitLeafExternRef prog env d "indexErrorAt" [idx] =
+  wasmTrap (progEmit prog) "E-INDEX-OOB" "index out of bounds"
+emitLeafExternRef prog env d "indexErrorAt" _ =
+  gapLP prog "wasm #1787: indexErrorAt takes exactly one argument"
 -- #670: `sliceError lo hiIncl` reuses the existing coded E-SLICE-OOB trap (the
 -- same fixed text the built-in slice path emits) -- both bound arguments are
 -- dropped, matching indexError and the native @mdk_slice_oob abort.
