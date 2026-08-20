@@ -243,11 +243,8 @@ NEWLINE
 DEDENT
 ELSE
 INDENT
-IDENT "indexError"
-INTERP_OPEN "index "
-IDENT "intToString"
+IDENT "indexErrorAt"
 IDENT "i"
-INTERP_END " out of bounds"
 NEWLINE
 DEDENT
 NEWLINE
@@ -648,11 +645,8 @@ IDENT "len"
 NEWLINE
 DEDENT
 ELSE
-IDENT "indexError"
-INTERP_OPEN "index "
-IDENT "intToString"
+IDENT "indexErrorAt"
 IDENT "i"
-INTERP_END " out of bounds"
 NEWLINE
 DEDENT
 NEWLINE

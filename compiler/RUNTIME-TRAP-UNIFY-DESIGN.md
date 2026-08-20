@@ -18,7 +18,7 @@ All exit 1.
 | div-zero | `f:L:C: runtime error [E-DIV-ZERO]: division by zero` | same, **no loc** | `divide by zero` (**engine trap, no code/msg**) | `program panicked` |
 | mod-zero | `f:L:C: … [E-MOD-ZERO]…` | same, no loc | `remainder by zero` (engine) | `program panicked` |
 | non-exhaustive | `f:L:C: … [E-NONEXHAUSTIVE-MATCH]…` | same, no loc | `unreachable` | `program panicked` |
-| array/list OOB `.[i]` | `f:L:C: … [E-INDEX-OOB]: index N…` | no loc, **no index N** | array `unreachable`; **list `.[i]` = hard wasm emit gap** | `program panicked` |
+| array/list OOB `.[i]` | `f:L:C: … [E-INDEX-OOB]: index N…` | ~~no index N~~ → `index N` (no loc) since #1787 | array: `[E-INDEX-OOB]: index N` since #1787; **list `.[i]` = hard wasm emit gap** | `program panicked` |
 | `Array.set`/`MutArray.set` OOB | `stdlib/array.mdk:L: [E-PANIC]: Array.set…` (**wrong code, stdlib loc**) | **bare, no code/loc** | `unreachable` | `program panicked` |
 | user `panic "msg"` | `f:L:C: [E-PANIC]: msg` | **bare msg, no code/loc** | `unreachable` (**msg dropped, partial stdout LOST**) | `program panicked` |
 | no `main` | `program has no 'main' binding` (bare) | `emitter failed … no main` (bare) | build-time | build-time |
@@ -47,8 +47,12 @@ loc. Bad-main → the diagnostic channel as a coded driver diagnostic (`E-NO-MAI
   `runtimePanic`, only the `panic` extern → needs a new coded-OOB seam (fork 4).
 - **(3) runtime/medaka_rt.c** (NOT in seed graph, C): `mdk_oob:192`, `mdk_div_zero:345`,
   `mdk_mod_zero:349`, `mdk_nonexhaustive_match:360` already coded (loc blocked, §5;
-  `mdk_oob` could take the index arg → `index N`); `mdk_panic:339` prints raw → wrap
-  with `runtime error [E-PANIC]:`.
+  `mdk_oob` could take the index arg → `index N` -- **DONE, #1787**, though not the way
+  this line assumed: rather than change `mdk_oob`'s own signature (its remaining callers
+  are bounds checks with no index in hand), #1787 added a PARALLEL `mdk_oob_at(index)`
+  plus the `indexErrorAt` extern the prelude's Index/IndexMut impls raise, and gave wasm
+  the matching numbered trap.  `mdk_oob()` survives for the argument-less sites);
+  `mdk_panic:339` prints raw → wrap with `runtime error [E-PANIC]:`.
 - **(4) typecheck.mdk `:969-970`/`:997`** (IN seed graph): dedup the T-EFFECT-PARAM
   "must end in '*'…" message into one builder.
 - **(5) wasm_emit.mdk** (NOT in LLVM seed graph): `panic` lowering `:941-944/:1252` →
@@ -73,13 +77,13 @@ on threading `Loc` through Core IR — a large separate project). **Message+code
 consistency = ~90% of the beginner win and needs NONE of it.** Recommended scope
 EXCLUDES Core-IR locs; the residual gap is only "interp has file:L:C:, native/wasm
 don't" (precision degradation, not identity inconsistency). Partial loc win without the
-project: `mdk_oob` printing `index N`.
+project: `mdk_oob` printing `index N` -- **taken, #1787** (via `mdk_oob_at`; see (3)).
 
 ## 6. Staging (ascending risk)
 | Bite | Scope | Model | Re-mint |
 |---|---|---|---|
 | B1 | typecheck.mdk (4) dedup message builder | Sonnet | yes (in-graph, mechanical) |
-| B2 | medaka_rt.c (3): `mdk_panic` → `[E-PANIC]` prefix; `mdk_oob(index)` → `index N` | Sonnet | no |
+| B2 | medaka_rt.c (3): `mdk_panic` → `[E-PANIC]` prefix; ~~`mdk_oob(index)` → `index N`~~ **DONE #1787** (as `mdk_oob_at`, + wasm parity; the `mdk_panic` half is still open) | Sonnet | no |
 | B3 | eval.mdk (1): route `:693`/`:2462` via `runtimePanic`; no-main → `E-NO-MAIN` | Opus | **yes — make seed** |
 | B4 | stdlib array/mut_array (2): coded-OOB seam | Opus | no (stdlib) |
 | B5 | wasm_emit.mdk (5): divisor guard + coded trap text via `mdk_write_err_byte` + surface in worker.js/run.js | Opus | no (wasm from source) |

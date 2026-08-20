@@ -1,0 +1,5 @@
+-- #1787: a NEGATIVE index.  Pins the sign path of the abort's formatter —
+-- native's @mdk_oob_at and wasm's $mdk_write_err_int both have to emit `-`.
+main =
+  let a = [|5, 6, 7|]
+  println a[-3]
