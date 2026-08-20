@@ -1903,6 +1903,50 @@ RPAREN
 NEWLINE
 DEDENT
 NEWLINE
+IDENT "skipExpSign"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "skipExpSign"
+IDENT "arr"
+IDENT "i"
+INDENT
+PIPE
+IDENT "i"
+LT
+IDENT "arrayLength"
+IDENT "arr"
+AND
+LPAREN
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+EQ_EQ
+CHAR "-"
+OR
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "arr"
+EQ_EQ
+CHAR "+"
+RPAREN
+EQUAL
+IDENT "i"
+PLUS
+INT 1
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "i"
+NEWLINE
+DEDENT
+NEWLINE
 IDENT "skipExp"
 COLON
 UPPER "Array"
@@ -1938,7 +1982,7 @@ LPAREN
 IDENT "skipDigits"
 IDENT "arr"
 LPAREN
-IDENT "skipSign"
+IDENT "skipExpSign"
 IDENT "arr"
 LPAREN
 IDENT "i"
