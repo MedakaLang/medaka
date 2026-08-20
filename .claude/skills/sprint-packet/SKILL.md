@@ -443,13 +443,18 @@ the judgment seat, so this is not a planner-discipline rule.)
 >   pipe) goes INSIDE the script** — the harness's own suggested remedy, "try it
 >   without the redirect", is not available to you, and one agent recorded that
 >   dead end verbatim.
-> - 🚨 **If `make` is denied INSIDE YOUR OWN WORKTREE, you are BLOCKED — report
->   it and stop.** That denial is STATEFUL (#1148, OPEN, S2): it survives
->   abandoning the command shape that caused it, and it has cost a whole
->   session's ability to build. Do NOT quietly continue source-only: a no-build
->   agent's "no such site exists" is a hypothesis, not a finding, and reporting
->   it as one is worse than the lost hour. It is also non-deterministic — a
->   sibling agent doing the identical thing may be fine — so it is neither your
+> - 🚨 **If `make` is denied INSIDE YOUR OWN WORKTREE, try `sh
+>   test/build_native_medaka.sh` FIRST — then report BLOCKED.** One plain
+>   command per call is mitigation, not immunity: a bare, foreground,
+>   correct-cwd `make medaka` has been refused, four forms in a row, in a
+>   session where that script then succeeded on the first try (it is the
+>   literal body of the `medaka:` target, `Makefile:21-22`). EnterWorktree
+>   is a dead end — your cwd already IS the worktree. If every form is denied
+>   you are BLOCKED: stop and report. Do NOT quietly continue source-only — a
+>   no-build agent's "no such site exists" is a hypothesis, not a finding, and
+>   reporting it as one is worse than the lost hour. The denial sometimes
+>   carries forward across a session and sometimes does not (#1148, OPEN, S2);
+>   a sibling agent doing the identical thing may be fine. It is neither your
 >   fault nor something you can test your way out of.
 > - Push and report. The rear seat watches CI, not you. Do not poll CI, do not
 >   send per-shard updates.

@@ -1332,14 +1332,17 @@ to that issue **aimed at the wrong half**.
   `.medaka_emitter.srcstamp` provenance stamp, so stages A+B rebuild anyway (AGENTS.md
   [B-BORROW-EMITTER]; the ~4 s figure here was the pre-2026-07-16 understatement). Cost of
   borrowing: the agent.
-- **⚠️ `cp` is NOT the only trigger — ordinary compound Bash trips the same stateful denial**
-  (#1148, OPEN, S2), with no cross-tree read anywhere: `cd X && …`, `;`-chains, heredocs, `for`
-  loops, `python3 - <<EOF`, a pipe feeding `git` its args, a redirect combined with `-C`. Seven
-  refusals across six agents in one sprint, all confined to their own trees. **Put the remedy in
-  every isolated agent's prompt:** one plain command per Bash call, multi-step work into a script
-  file first, the mandatory build redirect ([D-BUILD-PIPE]) *inside* that script. And name the
-  exit: an agent whose `make` is denied inside its OWN worktree reports BLOCKED — a no-build
-  agent that keeps going produces existence claims it cannot support.
+- **⚠️ `cp` is NOT the only trigger — ordinary compound Bash trips the same denial** (#1148,
+  OPEN, S2; ~32 occurrences across 5 sprints), with no cross-tree read anywhere: `cd X && …`,
+  `;`-chains, heredocs, `for` loops, `python3 - <<EOF`, a pipe feeding `git` its args, a redirect
+  combined with `-C`. **Put the remedy in every isolated agent's prompt:** one plain command per
+  Bash call, multi-step work into a script file first, the mandatory build redirect
+  ([D-BUILD-PIPE]) *inside* that script. ⚠️ **That is mitigation, not immunity** — see the
+  `sh test/build_native_medaka.sh` bullet below, which is the build half of the same defect
+  and the only workaround that has never been denied. And name the exit: an agent whose build
+  is denied every way inside its OWN worktree reports BLOCKED — a no-build agent that keeps
+  going produces existence claims it cannot support. The denial carries forward in some
+  sessions and not others; do not model it as reliably stateful or reliably transient.
 - **A construct-removal census MUST scan the always-loaded prelude (`stdlib/core.mdk`) for REAL uses** (not
   just doc-comment/string matches). A missed prelude use makes the *compiled* binary fail to load the
   prelude → it errors on EVERY program, mimicking a codegen/DCE miscompile (an Opus agent spent a 12-build
