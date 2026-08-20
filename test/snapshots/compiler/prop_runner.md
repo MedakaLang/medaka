@@ -1,5 +1,5 @@
 # META
-source_lines=459
+source_lines=465
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted property-test runner — port of lib/prop_runner.ml.
@@ -377,7 +377,8 @@ filterDecls p (d::rest)
 -- Run every prop; print the trailing summary; return True iff all passed.
 -- Output exactly mirrors lib/prop_runner.ml's run_all (no leading line; one
 -- `Testing … OK/FAILED` per prop; a blank line then `N passed, M failed`).
-export runAllProps : List (String, Value e) -> List Decl -> <IO> Bool
+export
+runAllProps : List (String, Value e) -> List Decl -> <IO> Bool
 runAllProps evalEnv program =
   let props = filterProps program
   if isEmptyL props then True
@@ -410,17 +411,21 @@ countTrue (False::rest) = countTrue rest
 public export data PropResult = PropResult String Bool String
 --                                          name   ok   detail
 
-export propResultName : PropResult -> String
+export
+propResultName : PropResult -> String
 propResultName (PropResult n _ _) = n
 
-export propResultPassed : PropResult -> Bool
+export
+propResultPassed : PropResult -> Bool
 propResultPassed (PropResult _ p _) = p
 
-export propResultDetail : PropResult -> String
+export
+propResultDetail : PropResult -> String
 propResultDetail (PropResult _ _ d) = d
 
 -- Run every prop and return one PropResult each, in source order.  No output.
-export runAllPropsResults : List (String, Value e) -> List Decl -> <IO> List PropResult
+export
+runAllPropsResults : List (String, Value e) -> List Decl -> <IO> List PropResult
 runAllPropsResults evalEnv program =
   let props = filterProps program
   if isEmptyL props then []
@@ -455,7 +460,8 @@ renderCounterexample [(x, v)] = stringConcat [x, " = ", ppValue v]
 renderCounterexample ((x, v)::rest) =
   stringConcat [x, " = ", ppValue v, ", ", renderCounterexample rest]
 
-export hasProps : List Decl -> Bool
+export
+hasProps : List Decl -> Bool
 hasProps decls = anyDecl isProp decls
 
 anyDecl : (Decl -> Bool) -> List Decl -> Bool

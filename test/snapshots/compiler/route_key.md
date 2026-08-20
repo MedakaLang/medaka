@@ -1,5 +1,5 @@
 # META
-source_lines=462
+source_lines=466
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT — Stage B / Phase 3′ (ARCH B-2, #1113).
@@ -159,7 +159,8 @@ import support.util.{joinWith, escStr}
 -- cross-module the origins are stamped. A future change that lets a
 -- loader-less driver see two modules at once breaks that premise, and this is
 -- the line it breaks.
-export ifaceWordOf : TyConOrigin -> String -> String
+export
+ifaceWordOf : TyConOrigin -> String -> String
 ifaceWordOf o name = match ifaceIdentity o name
   "" => name
   ident => ident
@@ -187,7 +188,8 @@ ifaceWordOf o name = match ifaceIdentity o name
 -- precisely what makes `routeWordFor`/`keyForSite` upgrade the site to that
 -- canonical word.  This is the same mechanism `Pair Int Bool` vs `Pair Bool Int`
 -- already rides (`KeyEntry`'s C7 note, `types/typecheck.mdk`), not a new one.
-export funHeadTag : String
+export
+funHeadTag : String
 funHeadTag = "__fun__"
 
 -- ── the impl route word ───────────────────────────────────────────────────
@@ -206,7 +208,8 @@ funHeadTag = "__fun__"
 -- verbatim, because its consumers in `ir/`, `backend/` and `eval/` are plain
 -- `String` namespaces that already carry it. Changing the format is a
 -- different bite with a different blast radius.
-export implRouteKeyWord : TyConOrigin -> String -> List Ty -> Option String -> String
+export
+implRouteKeyWord : TyConOrigin -> String -> List Ty -> Option String -> String
 implRouteKeyWord o iface tys nm = "\{ifaceWordOf o iface}|\{joinWith " " (map rkTyAtom tys)}|\{fromOption "" nm}"
 
 -- ── the route word a SITE gets ───────────────────────────────────────────
@@ -223,7 +226,8 @@ implRouteKeyWord o iface tys nm = "\{ifaceWordOf o iface}|\{joinWith " " (map rk
 -- INVERTED relative to this parameter: it answers "collides", this answers
 -- "unique"). Unifying those two populations is not this bite's business; what
 -- is unified here is the WORD each produces once it has its verdict.
-export routeWordFor : Bool -> String -> TyConOrigin -> String -> List Ty -> String
+export
+routeWordFor : Bool -> String -> TyConOrigin -> String -> List Ty -> String
 routeWordFor headIsUnique tag o iface tys =
   if headIsUnique then
     tag

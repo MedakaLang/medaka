@@ -1,5 +1,5 @@
 # META
-source_lines=78
+source_lines=80
 stages=DESUGAR,MARK
 # SOURCE
 -- X-A preparatory identity substrate (#1400).
@@ -64,7 +64,8 @@ validSpan startLine startCol endLine endCol = startLine >= 1
   && endCol >= 0
   && (endLine /= startLine || endCol >= startCol)
 
-export mintStableNodeId : StableNodeIdInput -> Result StableNodeIdError StableNodeId
+export
+mintStableNodeId : StableNodeIdInput -> Result StableNodeIdError StableNodeId
 mintStableNodeId (StableNodeIdInput path startLine startCol endLine endCol childPath role)
   | path == "" = Err EmptyProjectPath
   | startsWith "/" path = Err AbsoluteProjectPath
@@ -78,7 +79,8 @@ mintStableNodeId (StableNodeIdInput path startLine startCol endLine endCol child
 -- A serializer may inspect an already-validated ID, but clients cannot forge
 -- one through this fold.  The structured value, not its rendered form, is the
 -- identity used by future planning maps.
-export foldStableNodeId : (String -> Int -> Int -> Int -> Int -> List Int -> StableGeneratedRole -> a) -> StableNodeId -> a
+export
+foldStableNodeId : (String -> Int -> Int -> Int -> Int -> List Int -> StableGeneratedRole -> a) -> StableNodeId -> a
 foldStableNodeId f (StableNodeId path startLine startCol endLine endCol childPath role) = f path startLine startCol endLine endCol childPath role
 # DESUGAR
 (DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false) (mem "startsWith" false))))

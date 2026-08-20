@@ -1,5 +1,5 @@
 # META
-source_lines=90
+source_lines=91
 stages=DESUGAR,MARK
 # SOURCE
 -- Tarjan's strongly-connected-components algorithm, extracted from
@@ -35,7 +35,8 @@ tjLowOf x = fromOption 0 (omLookup x !tjLow)
 tjOnStack : String -> Bool
 tjOnStack x = fromOption False (omLookup x !tjOn)
 
-export tarjanSCCs : List String -> OrdMap (List String) -> List (List String)
+export
+tarjanSCCs : List String -> OrdMap (List String) -> List (List String)
 tarjanSCCs names adj =
   tjCounter := 0
   tjStack := []

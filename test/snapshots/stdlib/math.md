@@ -1,5 +1,5 @@
 # META
-source_lines=297
+source_lines=310
 stages=DESUGAR,MARK
 # SOURCE
 {- math.mdk — floating-point math: roots, transcendentals, rounding, and a
@@ -35,14 +35,16 @@ stages=DESUGAR,MARK
 --
 -- > toRadians 0.0
 -- 0.0
-export toRadians : Float -> Float
+export
+toRadians : Float -> Float
 toRadians deg = deg * pi / 180.0
 
 -- | Convert radians to degrees.
 --
 -- > toDegrees 0.0
 -- 0.0
-export toDegrees : Float -> Float
+export
+toDegrees : Float -> Float
 toDegrees rad = rad * 180.0 / pi
 
 -- ── Float predicates ────────────────────────────────────────────────────
@@ -51,7 +53,8 @@ toDegrees rad = rad * 180.0 / pi
 --
 -- > isNaN 1.0
 -- False
-export isNaN : Float -> Bool
+export
+isNaN : Float -> Bool
 isNaN x = x /= x
 
 -- | True iff the argument is positive or negative infinity.  A finite `x`
@@ -59,7 +62,8 @@ isNaN x = x /= x
 --
 -- > isInfinite 1.0
 -- False
-export isInfinite : Float -> Bool
+export
+isInfinite : Float -> Bool
 isInfinite x = not (isNaN x) && isNaN (x - x)
 
 -- | True iff the argument is neither NaN nor infinite — i.e. an ordinary,
@@ -68,7 +72,8 @@ isInfinite x = not (isNaN x) && isNaN (x - x)
 --
 -- > isFinite 1.0
 -- True
-export isFinite : Float -> Bool
+export
+isFinite : Float -> Bool
 isFinite x = not (isNaN x) && not (isInfinite x)
 
 -- ── Interpolation ───────────────────────────────────────────────────────
@@ -91,7 +96,8 @@ isFinite x = not (isNaN x) && not (isInfinite x)
 -- 20.0
 -- > lerp 0.0 10.0 (0.0 - 1.0)
 -- -10.0
-export lerp : Float -> Float -> Float -> Float
+export
+lerp : Float -> Float -> Float -> Float
 lerp a b t = a + (b - a) * t
 
 -- | Approximate equality: `True` iff `|a - b| <= eps`.  Uses an ABSOLUTE
@@ -119,7 +125,8 @@ lerp a b t = a + (b - a) * t
 -- False
 -- > approxEq 0.0 0.0 0.0
 -- True
-export approxEq : Float -> Float -> Float -> Bool
+export
+approxEq : Float -> Float -> Float -> Bool
 approxEq a b eps = abs (a - b) <= eps
 
 -- ── Logarithms ──────────────────────────────────────────────────────────
@@ -133,7 +140,8 @@ approxEq a b eps = abs (a - b) <= eps
 -- 3.0
 -- > logBase 10.0 1000.0
 -- 2.9999999999999996
-export logBase : Float -> Float -> Float
+export
+logBase : Float -> Float -> Float
 logBase base x = log x / log base
 
 -- ── Pure integer helpers ────────────────────────────────────────────────
@@ -159,7 +167,8 @@ logBase base x = log x / log base
 -- 2
 -- > floorDiv 0 5
 -- 0
-export floorDiv : Int -> Int -> Int
+export
+floorDiv : Int -> Int -> Int
 floorDiv a b =
   let q = a / b
   let r = a - q * b
@@ -181,7 +190,8 @@ floorDiv a b =
 -- -1
 -- > floorMod 0 5
 -- 0
-export floorMod : Int -> Int -> Int
+export
+floorMod : Int -> Int -> Int
 floorMod a b = a - floorDiv a b * b
 
 -- | Greatest common divisor via the Euclidean algorithm, on absolute
@@ -191,7 +201,8 @@ floorMod a b = a - floorDiv a b * b
 -- 6
 -- > gcdInt 17 5
 -- 1
-export gcdInt : Int -> Int -> Int
+export
+gcdInt : Int -> Int -> Int
 gcdInt a b = gcdGo (absInt a) (absInt b)
 
 gcdGo : Int -> Int -> Int
@@ -204,7 +215,8 @@ gcdGo a b = gcdGo b (a % b)
 -- 12
 -- > lcmInt 3 5
 -- 15
-export lcmInt : Int -> Int -> Int
+export
+lcmInt : Int -> Int -> Int
 lcmInt 0 _ = 0
 lcmInt _ 0 = 0
 lcmInt a b = absInt (a / gcdInt a b * b)
@@ -218,7 +230,8 @@ lcmInt a b = absInt (a / gcdInt a b * b)
 -- 1
 -- > powInt 5 3
 -- 125
-export powInt : Int -> Int -> Int
+export
+powInt : Int -> Int -> Int
 powInt _ 0 = 1
 powInt b n = if n < 0 then 1 else powGo b n 1
 

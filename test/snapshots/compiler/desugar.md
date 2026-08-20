@@ -1,5 +1,5 @@
 # META
-source_lines=1045
+source_lines=1050
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage — Stage 1 port of `lib/desugar.ml`.  Lowers surface
@@ -65,7 +65,8 @@ import support.util.{
 -- ── Bottom-up traversal engine (mirror of map_expr / map_decl) ────────────
 -- `mapExpr f e` rewrites every subexpression of `e` with `f`, post-order: the
 -- children are rewritten first, then `f` is applied to the rebuilt node.
-export mapExpr : (Expr -> Expr) -> Expr -> Expr
+export
+mapExpr : (Expr -> Expr) -> Expr -> Expr
 mapExpr f e = f (mapKids f e)
 
 mapKids : (Expr -> Expr) -> Expr -> Expr
@@ -144,7 +145,8 @@ mapInterp : (Expr -> Expr) -> InterpPart -> InterpPart
 mapInterp _ (InterpStr s) = InterpStr s
 mapInterp f (InterpExpr e) = InterpExpr (mapExpr f e)
 
-export mapDecl : (Expr -> Expr) -> Decl -> Decl
+export
+mapDecl : (Expr -> Expr) -> Decl -> Decl
 mapDecl f (DFunDef pub n ps e) = DFunDef pub n ps (mapExpr f e)
 mapDecl f (d@(DInterface { methods, ... })) =
   DInterface { d | methods = map (mapIfaceMethod f) methods }
@@ -165,7 +167,8 @@ mapImplMethod : (Expr -> Expr) -> ImplMethod -> ImplMethod
 mapImplMethod f (ImplMethod n ps e) = ImplMethod n ps (mapExpr f e)
 
 -- exported: the method_marker stage reuses this bottom-up traversal engine
-export mapProg : (Expr -> Expr) -> List Decl -> List Decl
+export
+mapProg : (Expr -> Expr) -> List Decl -> List Decl
 mapProg f prog = map (mapDecl f) prog
 
 -- ── AST smart constructors (shared by the sugar + derive passes) ──────────
@@ -496,7 +499,8 @@ deriveForNewtype name params con fty iface =
 -- `checkGuardExhaustiveness`'s standalone pass over the surface `EGuards` shape.
 -- Pure: it returns messages + locs and the driver pushes them, so errors keep
 -- accumulating rather than raising here.
-export checkDerives : List Decl -> List (String, Option Loc)
+export
+checkDerives : List Decl -> List (String, Option Loc)
 checkDerives decls = flatMap declDeriveErrors decls
 
 -- The `match derives` guard is load-bearing, not style: Medaka is strict, so
@@ -1037,7 +1041,8 @@ rewriteAliasQual _ e = e
 -- Ported in the reference order (later passes run last): merge_iface_defaults →
 -- expand_decl → desugar_record_puns → lower_container_literals →
 -- desugar_list_comps → desugar_questions → lower_do_blocks → desugar_sugar.
-export desugar : List Decl -> List Decl
+export
+desugar : List Decl -> List Decl
 desugar prog = qualifyAliasRefs prog
   |> mergeIfaceDefaults
   |> fillImplDefaults

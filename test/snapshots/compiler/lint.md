@@ -1,5 +1,5 @@
 # META
-source_lines=4260
+source_lines=4282
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -418,7 +418,8 @@ preferAssignOpRule = Rule {
   fix = Some preferAssignFix,
 }
 
-export allRules : List Rule
+export
+allRules : List Rule
 allRules = [
   matchParamRule,
   derivableRule,
@@ -457,7 +458,8 @@ duplicateBodyRule = CrossFileRule {
   check = ruleDuplicateBody,
 }
 
-export allCrossFileRules : List CrossFileRule
+export
+allCrossFileRules : List CrossFileRule
 allCrossFileRules = [duplicateBodyRule]
 
 -- ── runner ───────────────────────────────────────────────────────────────────
@@ -467,7 +469,8 @@ allCrossFileRules = [duplicateBodyRule]
 -- location.  Each rule's findings are re-stamped with the rule's (possibly
 -- CLI-overridden) severity so a `--deny` promotion propagates without the rule
 -- knowing about flags.
-export lintProgram : List Rule -> String -> String -> Positions -> List Decl -> List Finding
+export
+lintProgram : List Rule -> String -> String -> Positions -> List Decl -> List Finding
 lintProgram rules path src pos prog =
   flatMap (runRuleOn path src pos prog) rules
 
@@ -503,7 +506,8 @@ isStdlibPath path = contains "stdlib" (splitOnChar '/' path)
 -- splice over the decl's own source line range (`DeclPos` start..end).  Splices
 -- are applied bottom-up (descending start line) so earlier line numbers stay
 -- valid.  Returns `(rewrittenSource, fixedCount)`; unchanged source if no fix.
-export applyFixes : List String -> List String -> String -> List Decl -> Positions -> (String, Int)
+export
+applyFixes : List String -> List String -> String -> List Decl -> Positions -> (String, Int)
 applyFixes only disable src prog pos =
   let rules = filterList (ruleActiveFixable only disable) allRules
   let orc = buildOracle prog
@@ -603,7 +607,8 @@ dropN n (_::xs) = dropN (n - 1) xs
 -- surfaces can never apply the flags differently.
 
 -- Parse --prefix=v1,v2,... from argv; returns [] if not present.
-export parseLintFlagList : String -> List String -> List String
+export
+parseLintFlagList : String -> List String -> List String
 parseLintFlagList prefix [] = []
 parseLintFlagList prefix (x::rest)
   | startsWith prefix x =
@@ -618,7 +623,8 @@ parseLintFlagList prefix (x::rest)
 -- `splitLintNames ""` returns `[""]`, not `[]` — callers with an optional,
 -- possibly-absent value should special-case the empty string themselves
 -- (see mcp.mdk's `lintNameListArg`).
-export splitLintNames : String -> List String
+export
+splitLintNames : String -> List String
 splitLintNames s = splitLintNamesGo (stringToChars s) s 0 0 (stringLength s)
 
 splitLintNamesGo : Array Char -> String -> Int -> Int -> Int -> List String
@@ -630,7 +636,8 @@ splitLintNamesGo chars s start i n
 
 -- Apply finding-level filters.  Operates on Finding.rule (a String) so no
 -- Rule-record field access is needed by the caller.
-export applyFindingFilters : List String -> List String -> List String -> List Finding -> List Finding
+export
+applyFindingFilters : List String -> List String -> List String -> List Finding -> List Finding
 applyFindingFilters disable only deny findings =
   let after1 = applyFindingOnly only findings
   let after2 = applyFindingDisable disable after1
@@ -659,7 +666,8 @@ lintFindingDisableGo names (f::rest)
   | otherwise = f :: lintFindingDisableGo names rest
 
 -- --deny: promote findings to SevError when their rule is in the list.
-export applyFindingDeny : List String -> List Finding -> List Finding
+export
+applyFindingDeny : List String -> List Finding -> List Finding
 applyFindingDeny [] findings = findings
 applyFindingDeny names findings = lintFindingDenyGo names findings
 
@@ -674,14 +682,16 @@ lintFindingDenyGo names (f::rest)
   } :: lintFindingDenyGo names rest
   | otherwise = f :: lintFindingDenyGo names rest
 
-export isFindingError : Finding -> Bool
+export
+isFindingError : Finding -> Bool
 isFindingError f = match f.severity
   SevError => True
   SevWarning => False
 
 -- ── rendering ─────────────────────────────────────────────────────────────────
 
-export findingToDiag : Finding -> Diag
+export
+findingToDiag : Finding -> Diag
 findingToDiag f =
   Diag f.severity f.rule "[\{f.rule}] \{f.message}" f.loc None None
 
@@ -698,7 +708,8 @@ findingToDiag f =
 -- behaviour on a missing target.  Uses `parseWithPositionsLocated` (#649) so a
 -- `Finding` at a nested sub-expression (`exprRuleFindings`) carries THAT
 -- expression's own location, not the enclosing decl's.
-export lintFileDiagTriple : List String -> List String -> List String -> String -> <IO> (String, String, List Diag)
+export
+lintFileDiagTriple : List String -> List String -> List String -> String -> <IO> (String, String, List Diag)
 lintFileDiagTriple disable only deny path =
   let src = readFileSafe path
   let (decls, pos) = parseWithPositionsLocated src
@@ -711,7 +722,8 @@ lintFileDiagTriple disable only deny path =
 -- raw source text: findings are produced by `lintProgram`, then filtered through
 -- the inline-suppression directives (`-- lint-disable-*`) recovered from `src`'s
 -- comment side channel (see `applySuppressions`).
-export lintToLines : String -> String -> Positions -> List Decl -> String
+export
+lintToLines : String -> String -> Positions -> List Decl -> String
 lintToLines src path pos prog =
   joinNl (map
     findingLine
@@ -756,7 +768,8 @@ public export data Directive = Directive DirScope (List String)
 
 -- Filter out every finding covered by an inline-suppression directive found in
 -- the source's comment side channel.
-export applySuppressions : String -> List Finding -> List Finding
+export
+applySuppressions : String -> List Finding -> List Finding
 applySuppressions src findings =
   applySuppressionsDirs (collectDirectives src) findings
 
@@ -767,7 +780,8 @@ applySuppressions src findings =
 -- exists to skip).  `applySuppressions` is this function plus the parse, so the
 -- cached and uncached paths share ONE suppression implementation and cannot
 -- drift apart.
-export applySuppressionsDirs : List Directive -> List Finding -> List Finding
+export
+applySuppressionsDirs : List Directive -> List Finding -> List Finding
 applySuppressionsDirs dirs findings =
   filterList (f => not (isSuppressed dirs f)) findings
 
@@ -776,14 +790,16 @@ applySuppressionsDirs dirs findings =
 -- finding covered by an inline directive in ITS OWN file's comment side channel.
 -- Directives are parsed once per file (not per finding).  General over any
 -- cross-file rule; the cross-file report path calls this before flag filters.
-export applySuppressionsMulti : List (String, String) -> List Finding -> List Finding
+export
+applySuppressionsMulti : List (String, String) -> List Finding -> List Finding
 applySuppressionsMulti srcs findings =
   applySuppressionsMultiDirs (map fileDirectivesOf srcs) findings
 
 -- Pre-parsed-directive counterpart of `applySuppressionsMulti`, for the same
 -- reason `applySuppressionsDirs` exists: a `--cache` run already holds every
 -- file's directives and must not re-lex to recover them.
-export applySuppressionsMultiDirs : List (String, List Directive) -> List Finding -> List Finding
+export
+applySuppressionsMultiDirs : List (String, List Directive) -> List Finding -> List Finding
 applySuppressionsMultiDirs dirTable findings =
   filterList (f => not (findingSuppressedMulti dirTable f)) findings
 
@@ -808,7 +824,8 @@ lookupDirs path ((p, ds)::rest) =
   else
     lookupDirs path rest
 
-export collectDirectives : String -> List Directive
+export
+collectDirectives : String -> List Directive
 collectDirectives src =
   flatMap (c => dirToList (parseDirective c)) (collectComments src)
 
@@ -3816,7 +3833,8 @@ dropPrefixN k s = stringSlice k (stringLength s) s
 -- access is confined to this runner (and the registry bindings above), so the CLI
 -- stays clear of the field-scanner gap.  --deny promotion is left to the CLI
 -- (which already owns it for per-file findings).
-export runCrossFileRules : List String -> List String -> List (String, Positions, List Decl) -> List Finding
+export
+runCrossFileRules : List String -> List String -> List (String, Positions, List Decl) -> List Finding
 runCrossFileRules only disable files =
   flatMap (runCrossRuleOn only disable files) allCrossFileRules
 
@@ -3843,7 +3861,8 @@ runCrossRuleOn only disable files r
 -- (falling back to a full uncached run) when it goes False.  Adding a cross-file
 -- rule then costs a slower lint, never a wrong one — the #395 invariant: a miss
 -- is always safe, a wrong hit is silent wrongness.
-export crossFileCacheSound : Bool
+export
+crossFileCacheSound : Bool
 crossFileCacheSound = match allCrossFileRules
   [r] => r.name == ruleNameDuplicateBody
   _ => False
@@ -3851,7 +3870,8 @@ crossFileCacheSound = match allCrossFileRules
 -- Cached counterpart of `runCrossFileRules`: same --only/--disable gating, same
 -- severity restamp, same join — but fed occurrences instead of parses.  Callers
 -- MUST check `crossFileCacheSound` first (see above).
-export runCrossFileRulesFromOccs : List String -> List String -> List (String, Int, String, String) -> List Finding
+export
+runCrossFileRulesFromOccs : List String -> List String -> List (String, Int, String, String) -> List Finding
 runCrossFileRulesFromOccs only disable occs =
   flatMap (runCrossRuleFromOccs only disable occs) allCrossFileRules
 
@@ -4036,7 +4056,8 @@ ruleDuplicateBody files = dupJoin (flatMap fileDupOccs files)
 -- which in a clean tree is a handful out of ~10k — so the `sortUniqS` that
 -- orders the output for determinism now sorts that handful rather than every
 -- key.  Same findings, same order.
-export dupJoin : List (String, Int, String, String) -> List Finding
+export
+dupJoin : List (String, Int, String, String) -> List Finding
 dupJoin occs =
   let groups = groupOccsByKey occs
   let live = filterList (k => dupGroupFires (findWithDefault [] k groups)) (dupDistinctKeys occs)
@@ -4087,7 +4108,8 @@ dupGroupFires grp = listLen grp >= 2
   && listLen (sortUniqS (map occFile grp)) >= 2
 
 -- one occurrence per eligible top-level DFunDef: (file, line, name, structuralKey)
-export fileDupOccs : (String, Positions, List Decl) -> List (String, Int, String, String)
+export
+fileDupOccs : (String, Positions, List Decl) -> List (String, Int, String, String)
 fileDupOccs (path, pos, decls) =
   flatMap (dupOccOfDecl path) (declLocList pos decls)
 

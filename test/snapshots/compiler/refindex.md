@@ -1,5 +1,5 @@
 # META
-source_lines=1649
+source_lines=1660
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/refindex.mdk — cross-file reference index (#254 Stage 0).
@@ -1324,7 +1324,8 @@ emptyIndex _ =
 -- editor-buffer override callback (return `None` to fall back to disk), exactly
 -- as `analyzeProject`/`projectEntrySchemes` take it.  Best-effort on load error
 -- (returns an empty index — Stage 1 decides how to surface a partial project).
-export buildRefIndex : (String -> Option String) -> String -> List String -> String -> String -> <IO> RefIndex
+export
+buildRefIndex : (String -> Option String) -> String -> List String -> String -> String -> <IO> RefIndex
 buildRefIndex read entry roots runtimeSrc coreSrc =
   let parseCache = Ref []
   -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
@@ -1349,7 +1350,8 @@ buildRefIndex read entry roots runtimeSrc coreSrc =
         }
 
 -- Disk-only convenience (no editor-buffer overrides) — the CLI/probe entry.
-export buildRefIndexDisk : String -> List String -> String -> String -> <IO> RefIndex
+export
+buildRefIndexDisk : String -> List String -> String -> String -> <IO> RefIndex
 buildRefIndexDisk entry roots runtimeSrc coreSrc =
   buildRefIndex noOverride entry roots runtimeSrc coreSrc
 
@@ -1527,7 +1529,8 @@ topoOrderModules ctx read midPaths =
 -- whole-project scope (see the section header above for why this differs
 -- from `buildRefIndex`). `read` is the same editor-buffer override callback
 -- (unsaved buffers win over disk).
-export buildRefIndexProject : (String -> Option String) -> String -> String -> String -> <IO> RefIndex
+export
+buildRefIndexProject : (String -> Option String) -> String -> String -> String -> <IO> RefIndex
 -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
 -- lint-disable-next-line rule-prefer-assign-op
 buildRefIndexProject read projectRoot runtimeSrc coreSrc =
@@ -1548,7 +1551,8 @@ buildRefIndexProject read projectRoot runtimeSrc coreSrc =
     }
 
 -- Disk-only convenience (no editor-buffer overrides) — the CLI/probe entry.
-export buildRefIndexProjectDisk : String -> String -> String -> <IO> RefIndex
+export
+buildRefIndexProjectDisk : String -> String -> String -> <IO> RefIndex
 buildRefIndexProjectDisk projectRoot runtimeSrc coreSrc =
   buildRefIndexProject noOverride projectRoot runtimeSrc coreSrc
 
@@ -1570,13 +1574,15 @@ buildRefIndexProjectDisk projectRoot runtimeSrc coreSrc =
 -- and the shorter, more obvious name returning ONE head is exactly the footgun
 -- that produced #964 — a caller that genuinely wants one location should say so
 -- at the call site rather than reach for the name that looks like the default.
-export defsOf : RefIndex -> String -> List (String, Loc)
+export
+defsOf : RefIndex -> String -> List (String, Loc)
 defsOf idx key = match hmGet key idx.defs
   Some r => reverseList !r
   None => []
 
 -- Every use site of a binder, in source order.  O(#uses).
-export usesOf : RefIndex -> String -> List (String, Loc)
+export
+usesOf : RefIndex -> String -> List (String, Loc)
 usesOf idx key = match hmGet key idx.refs
   Some r => reverseList !r
   None => []
@@ -1584,7 +1590,8 @@ usesOf idx key = match hmGet key idx.refs
 -- The binder referenced/defined at (uri, line, col).  O(size of THAT file) — a
 -- scan of one file's occurrences, independent of project size.  `line` is
 -- 1-based, `col` 0-based (the `Loc` convention).
-export binderAt : RefIndex -> String -> Int -> Int -> Option String
+export
+binderAt : RefIndex -> String -> Int -> Int -> Option String
 binderAt idx uri line col = match hmGet uri idx.occ
   Some r => scanOcc line col !r
   None => None
@@ -1607,22 +1614,26 @@ locContains (Loc _ sl sc el ec) line col
 
 -- Total O(1) build-op count (hash gets/sets + list pushes) — the perf-gate
 -- signal.  Linear build ⇒ this ~doubles when the project doubles.
-export riOps : RefIndex -> Int
+export
+riOps : RefIndex -> Int
 riOps idx = idx.ops
 
 -- All indexed binder keys (defs).  For probes / Stage-1 enumeration.  O(#defs).
-export allDefKeys : RefIndex -> List String
+export
+allDefKeys : RefIndex -> List String
 allDefKeys idx = hmKeys idx.defs
 
 -- Count of use sites recorded for a key.  O(#uses).
-export usesCount : RefIndex -> String -> Int
+export
+usesCount : RefIndex -> String -> Int
 usesCount idx key = listLength (usesOf idx key)
 
 -- The number of occurrences a `binderAt` on `uri` would scan (that file's own
 -- occurrence-list length).  This is the exact work a query does — a per-query
 -- re-walk would grow with the whole project; a correct index keeps it O(clicked
 -- file).  The scaling gate holds this FLAT as project size grows.
-export occCountFor : RefIndex -> String -> Int
+export
+occCountFor : RefIndex -> String -> Int
 occCountFor idx uri = match hmGet uri idx.occ
   Some r => listLength !r
   None => 0

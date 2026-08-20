@@ -1,5 +1,5 @@
 # META
-source_lines=56
+source_lines=59
 stages=DESUGAR,MARK
 # SOURCE
 -- Deterministic per-stage OPERATION counter for the self-hosted pipeline.
@@ -44,19 +44,22 @@ opCountOn = Ref False
 
 -- Turn counting on/off.  Called ONCE by a profiler driver at entry with the value of
 -- `perfEnabled ()`; never per element (getEnv is <IO> and must stay out of the scan).
-export setOpCounting : Bool -> Unit
+export
+setOpCounting : Bool -> Unit
 setOpCounting b = opCountOn := b
 
 -- Count one operation, but ONLY when counting is on (Option C gating).  Pure-typed:
 -- `setRef` carries no effect row, so callers keep their non-<IO> signatures.
-export opBump : Unit -> Unit
+export
+opBump : Unit -> Unit
 opBump () = match !opCountOn
   True => opCounter := !opCounter + 1
   False => ()
 
 -- Read the cumulative counter.  Paired snapshots (before/after a stage) yield that
 -- stage's op delta, exactly as timer.mdk's `allocSnap` yields an alloc delta.
-export opSnap : Unit -> Int
+export
+opSnap : Unit -> Int
 opSnap () = !opCounter
 # DESUGAR
 (DTypeSig false "opCounter" (TyApp (TyCon "Ref") (TyCon "Int")))

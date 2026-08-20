@@ -1,5 +1,5 @@
 # META
-source_lines=66
+source_lines=73
 stages=DESUGAR,MARK
 # SOURCE
 -- Shared filesystem-path string operations for the self-hosted compiler.
@@ -8,7 +8,8 @@ stages=DESUGAR,MARK
 -- and the build/test drivers need live here once instead of per file.
 
 -- dirname: the path up to (not including) the final "/"; "." if none.
-export dirOf : String -> String
+export
+dirOf : String -> String
 dirOf path = dirGo path (stringLength path)
 
 dirGo : String -> Int -> String
@@ -22,7 +23,8 @@ dirGo path i =
     dirGo path (i - 1)
 
 -- basename: the text after the final "/" (whole string if none).
-export baseOf : String -> String
+export
+baseOf : String -> String
 baseOf path = baseGo path (stringLength path) (stringLength path)
 
 baseGo : String -> Int -> Int -> String
@@ -34,11 +36,13 @@ baseGo path end i =
     baseGo path end (i - 1)
 
 -- Alias of baseOf (kept for call sites that read more naturally as baseName).
-export baseName : String -> String
+export
+baseName : String -> String
 baseName path = baseOf path
 
 -- Drop a trailing ".ext" from the basename (no-op if the dot is before a "/").
-export chopExt : String -> String
+export
+chopExt : String -> String
 chopExt path = chopGo path (stringLength path)
 
 chopGo : String -> Int -> String
@@ -53,11 +57,13 @@ chopGo path i =
     chopGo path (i - 1)
 -- no extension in the basename
 
-export joinPath : String -> String -> String
+export
+joinPath : String -> String -> String
 joinPath a b = "\{a}/\{b}"
 
 -- Drop a trailing ".mdk".
-export stripMdk : String -> String
+export
+stripMdk : String -> String
 stripMdk s =
   let n = stringLength s
   if n >= 4 && stringSlice (n - 4) n s == ".mdk" then
@@ -66,7 +72,8 @@ stripMdk s =
     s
 
 -- Module id from a path: basename with the ".mdk" extension stripped.
-export modIdOf : String -> String
+export
+modIdOf : String -> String
 modIdOf path = stripMdk (baseName path)
 # DESUGAR
 (DTypeSig true "dirOf" (TyFun (TyCon "String") (TyCon "String")))

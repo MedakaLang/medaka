@@ -1,5 +1,5 @@
 # META
-source_lines=54
+source_lines=64
 stages=DESUGAR,MARK
 # SOURCE
 -- `OrdMap a` is a transparent alias for `Map String a` (stdlib/map.mdk).
@@ -13,47 +13,57 @@ import map.{Map(..), set, get, has, size, delete, keys, mapWithKey}
 
 export type OrdMap a = Map String a
 
-export omEmpty : OrdMap a
+export
+omEmpty : OrdMap a
 omEmpty = Tip
 
-export omSize : OrdMap a -> Int
+export
+omSize : OrdMap a -> Int
 omSize m = size m
 
-export omInsert : String -> a -> OrdMap a -> OrdMap a
+export
+omInsert : String -> a -> OrdMap a -> OrdMap a
 omInsert k v m = set k v m
 
-export omLookup : String -> OrdMap a -> Option a
+export
+omLookup : String -> OrdMap a -> Option a
 omLookup k m = get k m
 
-export omHasKey : String -> OrdMap a -> Bool
+export
+omHasKey : String -> OrdMap a -> Bool
 omHasKey k m = has k m
 
-export omDelete : String -> OrdMap a -> OrdMap a
+export
+omDelete : String -> OrdMap a -> OrdMap a
 omDelete k m = delete k m
 
 -- Materialize the key set, sorted ascending. Only for the (rare) sites that
 -- need to iterate a whole OrdMap-backed set rather than test membership
 -- (e.g. an error-path "did you mean" candidate list) — the O(n) cost is fine
 -- there precisely because it is off the hot membership-testing path.
-export omKeys : OrdMap a -> List String
+export
+omKeys : OrdMap a -> List String
 omKeys m = keys m
 
 -- Build a membership set from a name list.
-export omFromNames : List String -> OrdMap Unit -> OrdMap Unit
+export
+omFromNames : List String -> OrdMap Unit -> OrdMap Unit
 omFromNames [] m = m
 omFromNames (x::rest) m = omFromNames rest (omInsert x () m)
 
 -- Transform every value in place, preserving the exact tree shape and key set
 -- (structural `mapWithKey`, key ignored).  Used to finalise per-key list buckets
 -- that were built by prepend — one `reverseL` per bucket restores insert order.
-export omMapValues : (a -> b) -> OrdMap a -> OrdMap b
+export
+omMapValues : (a -> b) -> OrdMap a -> OrdMap b
 omMapValues f m = mapWithKey (_ v => f v) m
 
 -- Generic key-value index.  NOTE: when used to memoise an assoc list whose
 -- first-match semantics matter, insert the list REVERSED so the first list
 -- entry wins on a duplicate key (the caller does the reverse, matching the old
 -- `emFromPairs (reverseL t)` convention).
-export omFromPairs : List (String, a) -> OrdMap a -> OrdMap a
+export
+omFromPairs : List (String, a) -> OrdMap a -> OrdMap a
 omFromPairs [] m = m
 omFromPairs ((k, v)::rest) m = omFromPairs rest (omInsert k v m)
 # DESUGAR

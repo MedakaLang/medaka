@@ -1,5 +1,5 @@
 # META
-source_lines=448
+source_lines=455
 stages=DESUGAR,MARK
 # SOURCE
 {- toml.mdk — a minimal TOML subset sufficient to parse `medaka.toml`.
@@ -204,7 +204,8 @@ parseLinesAcc (l::ls) section acc =
 
    > parse "name = \"hello\" # a comment" == Ok (Toml [("name", TStr "hello")])
    True -}
-export parse : String -> Result String Toml
+export
+parse : String -> Result String Toml
 parse s = map Toml (parseLinesAcc (lines s) "" [])
 
 -- Parse-error cases: a line with no `=` and a missing value both produce Err.
@@ -276,7 +277,8 @@ parseWorkspaceMembers src = match parse src
 
    > parseGetStr "server.host" "[package]\nname = \"x\""
    None -}
-export getString : String -> Toml -> Option String
+export
+getString : String -> Toml -> Option String
 getString key (Toml kvs) = match lookupKvs key kvs
   None => None
   Some (TStr s) => Some s
@@ -302,7 +304,8 @@ getString key (Toml kvs) = match lookupKvs key kvs
 
    > parseGetArr "workspace.members" "[workspace]\nmembers = []"
    Some [] -}
-export getArray : String -> Toml -> Option (List String)
+export
+getArray : String -> Toml -> Option (List String)
 getArray key (Toml kvs) = match lookupKvs key kvs
   None => None
   Some (TArr xs) => Some xs
@@ -319,7 +322,8 @@ getArray key (Toml kvs) = match lookupKvs key kvs
 
    > parsePackageName "[package]\nversion = \"0.1.0\""
    None -}
-export packageName : Toml -> Option String
+export
+packageName : Toml -> Option String
 packageName doc = getString "name" doc
 
 {- | Extract `version` from a parsed `[package]` section.
@@ -331,7 +335,8 @@ packageName doc = getString "name" doc
 
    > parsePackageVersion "[package]\nname = \"x\""
    None -}
-export packageVersion : Toml -> Option String
+export
+packageVersion : Toml -> Option String
 packageVersion doc = getString "version" doc
 
 {- | Extract `entry` from a parsed `[package]` section.
@@ -343,7 +348,8 @@ packageVersion doc = getString "version" doc
 
    > parsePackageEntry "[package]\nname = \"x\""
    None -}
-export packageEntry : Toml -> Option String
+export
+packageEntry : Toml -> Option String
 packageEntry doc = getString "entry" doc
 
 {- | Extract `members` from a parsed `[workspace]` section.
@@ -355,7 +361,8 @@ packageEntry doc = getString "entry" doc
 
    > parseWorkspaceMembers "[package]\nname = \"x\""
    None -}
-export workspaceMembers : Toml -> Option (List String)
+export
+workspaceMembers : Toml -> Option (List String)
 workspaceMembers doc = getArray "workspace.members" doc
 
 -- ── Eq and Debug instances ──────────────────────────────────────────────────

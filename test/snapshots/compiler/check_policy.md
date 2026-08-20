@@ -1,5 +1,5 @@
 # META
-source_lines=703
+source_lines=711
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/check_policy.mdk — the native `medaka check-policy` capability
@@ -70,7 +70,8 @@ import support.util.{sortUniqS, joinWith, reverseL, escStr, lookupAssoc}
 -- positional is the file.  Defaults: allow "Cache,Log", fn "transform".
 public export data PolicyArgs = PolicyArgs (Option String) String String
 
-export parsePolicyArgs : List String -> PolicyArgs
+export
+parsePolicyArgs : List String -> PolicyArgs
 parsePolicyArgs argv = parsePolicyGo argv None "Cache,Log" "transform"
 
 parsePolicyGo : List String -> Option String -> String -> String -> PolicyArgs
@@ -516,7 +517,8 @@ public export data PolicyOutcome =
   | PolicyAccept String String (List Decl) (List Decl) (List Decl)  -- header fn coreD rtD userD
   | PolicyReject String
 
-export runCheckPolicy : String -> String -> String -> String -> String -> PolicyOutcome
+export
+runCheckPolicy : String -> String -> String -> String -> String -> PolicyOutcome
 runCheckPolicy rtSrc coreSrc src allowStr fnName =
   let policy = parsePolicy allowStr
   let rawUser = parse src
@@ -547,7 +549,8 @@ runCheckPolicy rtSrc coreSrc src allowStr fnName =
 -- Run the accepted plugin and return the captured run output (LOG lines + the
 -- transform-result line).  Called by the CLI AFTER it has printed the accept
 -- header, so a panic on an unstubbed extern surfaces post-header (oracle parity).
-export runAcceptedPlugin : String -> List Decl -> List Decl -> List Decl -> String
+export
+runAcceptedPlugin : String -> List Decl -> List Decl -> List Decl -> String
 runAcceptedPlugin fnName coreD rtD userD = runPlugin fnName rtD coreD userD
 
 firstOf : List String -> String
@@ -620,7 +623,8 @@ lowerChar c = c
 
 -- Render the whole capability row as TOML.
 -- Returns the full TOML block (bare header if no effects).
-export manifestToml : List Atom -> String
+export
+manifestToml : List Atom -> String
 manifestToml [] = "[package.capabilities]\n"
 manifestToml atoms =
   let lines = map atomToToml atoms
@@ -635,7 +639,8 @@ joinTomlLines (x::xs) = "\{x}\n\{joinTomlLines xs}"
 -- differs from check-policy's "transform" which is the plugin convention).
 public export data ManifestArgs = ManifestArgs (Option String) String
 
-export parseManifestArgs : List String -> ManifestArgs
+export
+parseManifestArgs : List String -> ManifestArgs
 parseManifestArgs argv = parseManifestGo argv None "main"
 
 parseManifestGo : List String -> Option String -> String -> ManifestArgs
@@ -647,7 +652,8 @@ parseManifestGo (f::rest) (file@(Some _)) fn = parseManifestGo rest file fn
 -- Run manifest extraction: typecheck the file, read the named fn's inferred
 -- effect row, return TOML.
 -- Returns (toml, fnEffects) so the caller can also drive round-trip validation.
-export runManifest : String -> String -> String -> String -> String
+export
+runManifest : String -> String -> String -> String -> String
 runManifest rtSrc coreSrc src fnName =
   let rawUser = parse src
   let userD = desugar rawUser
@@ -664,7 +670,8 @@ runManifest rtSrc coreSrc src fnName =
 -- PPrefix (Some s) → "Label=s"
 -- PUnit / PPrefix None → "Label"
 -- Returns a comma-joined string suitable for --allow.
-export manifestToAllowStr : List Atom -> String
+export
+manifestToAllowStr : List Atom -> String
 manifestToAllowStr atoms =
   let toks = map atomToAllowTok atoms
   joinWith "," toks
@@ -693,7 +700,8 @@ joinSemiTok : List String -> String
 joinSemiTok xs = joinWith ";" xs
 
 -- Full manifest extraction returning the atom list (for round-trip gate).
-export runManifestAtoms : String -> String -> String -> String -> List Atom
+export
+runManifestAtoms : String -> String -> String -> String -> List Atom
 runManifestAtoms rtSrc coreSrc src fnName =
   let rawUser = parse src
   let userD = desugar rawUser

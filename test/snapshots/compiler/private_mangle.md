@@ -1,5 +1,5 @@
 # META
-source_lines=1074
+source_lines=1079
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -151,7 +151,8 @@ import support.ordmap.{
 -- import-aware to their origin module's mangled name.  Returns the rewritten
 -- (coreDecls, modules) in the same shape `runEmit` already threads to
 -- elaborateModules.
-export mangleUnits : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
+export
+mangleUnits : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 mangleUnits coreDecls modules =
   let allUnits = ("core", coreDecls)::modules
   let _ = symbolInjectivityGuard allUnits
@@ -775,10 +776,12 @@ pubSigNames (_::rest) = pubSigNames rest
 
 -- `<mid>__<name>` with the mid sanitized to a valid identifier (`/`, `.`, `-` →
 -- `_`).  The emitted symbol is `@mdk_<thisname>`, so only [A-Za-z0-9_] are safe.
-export mangledName : String -> String -> String
+export
+mangledName : String -> String -> String
 mangledName mid name = "\{sanitizeId mid}__\{name}"
 
-export sanitizeId : String -> String
+export
+sanitizeId : String -> String
 sanitizeId s = sanitizeGo s 0 (stringLength s) ""
 
 sanitizeGo : String -> Int -> Int -> String -> String
@@ -789,7 +792,8 @@ sanitizeGo s i len acc =
     let c2 = if safeChar c then c else "_"
     sanitizeGo s (i + 1) len (acc ++ c2)
 
-export safeChar : String -> Bool
+export
+safeChar : String -> Bool
 safeChar c = c >= "a" && c <= "z"
   || c >= "A" && c <= "Z"
   || c >= "0" && c <= "9"
@@ -799,7 +803,8 @@ safeChar c = c >= "a" && c <= "z"
 -- (the emitted IR carries the decimal constant).  Shared by BOTH backends so the
 -- dict-witness tag / route-key dispatch agrees across LLVM and WasmGC — the hash
 -- MUST be byte-identical between them.
-export hashName : String -> Int
+export
+hashName : String -> Int
 hashName s = hashChars (stringToChars s) 0 5381
 
 hashChars : Array Char -> Int -> Int -> Int

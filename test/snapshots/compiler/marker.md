@@ -1,5 +1,5 @@
 # META
-source_lines=518
+source_lines=523
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted method_marker stage — Stage 1 port of `lib/method_marker.ml`.
@@ -222,10 +222,12 @@ declDefines _ = []
 implMethodNameOf : ImplMethod -> String
 implMethodNameOf (ImplMethod n _ _) = n
 
-export declRefs : Decl -> List String
+export
+declRefs : Decl -> List String
 declRefs d = flatMap collectVars (declBodies d)
 
-export declBodies : Decl -> List Expr
+export
+declBodies : Decl -> List Expr
 declBodies (DFunDef _ _ _ body) = [body]
 declBodies (DImpl { methods, ... }) = map implMethodBody methods
 declBodies (DInterface { methods, ... }) = flatMap ifaceMethodBodies methods
@@ -480,7 +482,8 @@ declLocalBound (DAttrib _ d) = declLocalBound d
 declLocalBound (DLetGroup _ binds) = flatMap letBindBound binds
 declLocalBound d = flatMap localBoundExpr (declBodies d)
 
-export localBoundNames : List Decl -> List String
+export
+localBoundNames : List Decl -> List String
 localBoundNames prog = flatMap declLocalBound prog
 
 -- ── Top-level entry ───────────────────────────────────────────────────────
@@ -501,7 +504,8 @@ markWith preludeMethods preludeDroppable preludeConstrained prog =
   let constrained = keepNotIn toRemove (preludeConstrained ++ userConstrained)
   markProgram methodSet constrained prog2
 
-export markWithPrelude : List Decl -> List Decl -> List Decl
+export
+markWithPrelude : List Decl -> List Decl -> List Decl
 markWithPrelude preludeProg prog =
   markWith
     (interfaceMethodNames preludeProg)
@@ -514,7 +518,8 @@ markWithPrelude preludeProg prog =
 -- prelude should `let mark = markerFor preludeProg` once and call `mark` per
 -- file — the prelude scans (interfaceMethodNames/droppablePreludeFns/
 -- constrainedFnNames) then happen once instead of per file.
-export markerFor : List Decl -> List Decl -> List Decl
+export
+markerFor : List Decl -> List Decl -> List Decl
 markerFor preludeProg =
   let preludeMethods = interfaceMethodNames preludeProg
   let preludeDroppable = droppablePreludeFns preludeProg

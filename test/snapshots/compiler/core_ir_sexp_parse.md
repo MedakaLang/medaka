@@ -1,5 +1,5 @@
 # META
-source_lines=393
+source_lines=394
 stages=DESUGAR,MARK
 # SOURCE
 -- Round-trip deserializer for the Core IR S-expression format produced by
@@ -380,7 +380,8 @@ toCtorType (SList ((SAtom "ct")::[ctor, ty])) = (toStr ctor, toStr ty)
 toCtorType other =
   panic ("core_ir_sexp_parse: bad ctor-type: " ++ sexprToStr other)
 
-export parseCProgram : String -> CProgram
+export
+parseCProgram : String -> CProgram
 parseCProgram s = match parseAll s
   SList ((SAtom "CProgram")::[SList binds, SList ctorArities, SList ctorTypes, SList impls]) => CProgram (map toCBind binds) (map toCtorArity ctorArities) (map toCtorType ctorTypes) (map toCImplEntry impls)
   other => panic ("core_ir_sexp_parse: bad CProgram: " ++ sexprToStr other)

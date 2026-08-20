@@ -1,5 +1,5 @@
 # META
-source_lines=51
+source_lines=54
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted `test "…" = <expr>` runner (Phase 127 restored 2026-07-11).
@@ -22,7 +22,8 @@ import eval.eval.{Value(..), EvalEnv(..), eval, extendEnv, force, ppValue}
 import tools.doctest.{ExResult(..)}
 
 -- True iff the program declares at least one `test "…"`.
-export hasTests : List Decl -> Bool
+export
+hasTests : List Decl -> Bool
 hasTests [] = False
 hasTests ((DTest _ _ _)::_) = True
 hasTests (_::rest) = hasTests rest
@@ -36,7 +37,8 @@ exprLine (EHeadAnnot e _) = exprLine e
 exprLine _ = 0
 
 -- Each `test "…" = body` as (name, line, body), in source order.
-export collectTests : List Decl -> List (String, Int, Expr)
+export
+collectTests : List Decl -> List (String, Int, Expr)
 collectTests [] = []
 collectTests ((DTest _ name body)::rest) =
   (name, exprLine body, body) :: collectTests rest
@@ -45,7 +47,8 @@ collectTests (_::rest) = collectTests rest
 -- Evaluate one test body to an Expectation value and classify it.  A body that
 -- does not reduce to Pass/Fail is an `Errored` (e.g. a partial closure); a body
 -- that genuinely panics is unrecoverable and aborts the whole run.
-export runOneTest : List (String, Value e) -> Expr -> <e> ExResult
+export
+runOneTest : List (String, Value e) -> Expr -> <e> ExResult
 runOneTest evalEnv body =
   let env = extendEnv (EvalEnv [[]]) evalEnv
   match force (eval env body)

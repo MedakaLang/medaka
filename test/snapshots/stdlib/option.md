@@ -1,5 +1,5 @@
 # META
-source_lines=25
+source_lines=26
 stages=DESUGAR,MARK
 # SOURCE
 {- option.mdk — the `Option` eliminator.
@@ -18,7 +18,8 @@ stages=DESUGAR,MARK
    42
    > option 0 (x => x + 1) None
    0 -}
-export option : b -> (a -> <e> b) -> Option a -> <e> b
+export
+option : b -> (a -> <e> b) -> Option a -> <e> b
 option dflt f (Some x) = f x
 option dflt _ None = dflt
 

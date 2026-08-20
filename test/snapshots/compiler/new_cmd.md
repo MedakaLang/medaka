@@ -1,5 +1,5 @@
 # META
-source_lines=69
+source_lines=70
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted implementation of `medaka new <name>`.
@@ -51,7 +51,8 @@ writeProjectFile path contents = match writeFile path contents
   Err msg => panic ("medaka new: writeFile failed: " ++ msg)
 
 -- Scaffold the project.  Returns the exit code.
-export newProject : String -> <IO> Int
+export
+newProject : String -> <IO> Int
 newProject name =
   if invalidName name then
     let _ = ePutStrLn ("medaka new: invalid project name: \"" ++ name ++ "\"")

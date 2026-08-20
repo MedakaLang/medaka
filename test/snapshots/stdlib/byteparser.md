@@ -1,5 +1,5 @@
 # META
-source_lines=391
+source_lines=417
 stages=DESUGAR,MARK
 # SOURCE
 -- | byteparser — a binary parser-combinator library for Medaka.
@@ -45,7 +45,8 @@ public export data BResult a = BOk a Int | BErr String Int
 public export data ByteParser a = ByteParser (Array Int -> Int -> BResult a)
 
 -- | Run the wrapped function directly.
-export runBP : ByteParser a -> Array Int -> Int -> BResult a
+export
+runBP : ByteParser a -> Array Int -> Int -> BResult a
 runBP (ByteParser f) input pos = f input pos
 
 -- ---------------------------------------------------------------------------
@@ -63,7 +64,8 @@ export impl Mappable BResult where
 --
 --   Lets callers chain position-threading steps without repeating the
 --   `BErr m ep => BErr m ep` pass-through boilerplate.
-export onOk : BResult a -> (a -> Int -> BResult b) -> BResult b
+export
+onOk : BResult a -> (a -> Int -> BResult b) -> BResult b
 onOk (BErr m ep) _ = BErr m ep
 onOk (BOk a pos) k = k a pos
 
@@ -104,7 +106,8 @@ export impl Alternative ByteParser where
 -- ---------------------------------------------------------------------------
 
 -- | Fail unconditionally with a message.
-export failWith : String -> ByteParser a
+export
+failWith : String -> ByteParser a
 failWith msg = ByteParser (_ pos => BErr msg pos)
 
 -- | Consume one byte if it satisfies the predicate.
@@ -113,20 +116,22 @@ failWith msg = ByteParser (_ pos => BErr msg pos)
 -- Ok 65
 -- > runByteParser (satisfy (b => b == 65)) (arrayFromList [99])
 -- Err "unexpected byte at byte 0"
-export satisfy : (Int -> Bool) -> ByteParser Int
+export
+satisfy : (Int -> Bool) -> ByteParser Int
 satisfy pred = ByteParser (satisfyStep pred)
 
 satisfyStep : (Int -> Bool) -> Array Int -> Int -> BResult Int
 satisfyStep pred input pos
   | pos >= arrayLength input = BErr "unexpected end of input" pos
-  | pred input.[pos] = BOk input.[pos] (pos + 1)
+  | pred input[pos] = BOk input[pos] (pos + 1)
   | otherwise = BErr "unexpected byte" pos
 
 -- | Consume any single byte.
 --
 -- > runByteParser anyByte (arrayFromList [42])
 -- Ok 42
-export anyByte : ByteParser Int
+export
+anyByte : ByteParser Int
 anyByte = satisfy (_ => True)
 
 -- | Consume exactly the given byte value.
@@ -135,7 +140,8 @@ anyByte = satisfy (_ => True)
 -- Ok 255
 -- > runByteParser (byte 0x00) (arrayFromList [1])
 -- Err "unexpected byte at byte 0"
-export byte : Int -> ByteParser Int
+export
+byte : Int -> ByteParser Int
 byte b = satisfy (== b)
 
 -- | Match the end of input.  Yields Unit; consumes nothing.
@@ -144,7 +150,8 @@ byte b = satisfy (== b)
 -- Ok ()
 -- > runByteParser eof (arrayFromList [1])
 -- Err "expected end of input at byte 0"
-export eof : ByteParser Unit
+export
+eof : ByteParser Unit
 eof = ByteParser eofStep
 
 eofStep : Array Int -> Int -> BResult Unit
@@ -153,12 +160,13 @@ eofStep input pos
   | otherwise = BErr "expected end of input" pos
 
 -- | Peek at the current byte without consuming it.
-export peek : ByteParser Int
+export
+peek : ByteParser Int
 peek = ByteParser (input pos =>
   if pos >= arrayLength input then
     BErr "unexpected end of input" pos
   else
-    BOk input.[pos] pos)
+    BOk input[pos] pos)
 
 -- ---------------------------------------------------------------------------
 -- Combinators
@@ -169,7 +177,8 @@ peek = ByteParser (input pos =>
 --
 -- > runByteParser (many (byte 1)) (arrayFromList [1, 1, 1, 2])
 -- Ok [1, 1, 1]
-export many : ByteParser a -> ByteParser (List a)
+export
+many : ByteParser a -> ByteParser (List a)
 many p = ByteParser (input pos => manyGo p input pos [])
 
 manyGo : ByteParser a -> Array Int -> Int -> List a -> BResult (List a)
@@ -187,18 +196,21 @@ manyGo p input pos acc = match runBP p input pos
 -- Ok [2, 2]
 -- > runByteParser (some (byte 2)) (arrayFromList [3])
 -- Err "unexpected byte at byte 0"
-export some : ByteParser a -> ByteParser (List a)
+export
+some : ByteParser a -> ByteParser (List a)
 some p = do
   x <- p
   xs <- many p
   pure (x::xs)
 
 -- | Alias for `some`.
-export many1 : ByteParser a -> ByteParser (List a)
+export
+many1 : ByteParser a -> ByteParser (List a)
 many1 p = some p
 
 -- | One-or-more `p` separated by `sep`.
-export sepBy1 : ByteParser a -> ByteParser b -> ByteParser (List a)
+export
+sepBy1 : ByteParser a -> ByteParser b -> ByteParser (List a)
 sepBy1 p sep = do
   x <- p
   xs <- many (do
@@ -207,7 +219,8 @@ sepBy1 p sep = do
   pure (x::xs)
 
 -- | Zero-or-more `p` separated by `sep`.
-export sepBy : ByteParser a -> ByteParser b -> ByteParser (List a)
+export
+sepBy : ByteParser a -> ByteParser b -> ByteParser (List a)
 sepBy p sep = orElse (sepBy1 p sep) (pure [])
 
 -- | Try `p`; produce `Some` on success, `None` (consuming nothing) on failure.
@@ -216,11 +229,13 @@ sepBy p sep = orElse (sepBy1 p sep) (pure [])
 -- Ok Some 5
 -- > runByteParser (optional (byte 5)) (arrayFromList [9])
 -- Ok None
-export optional : ByteParser a -> ByteParser (Option a)
+export
+optional : ByteParser a -> ByteParser (Option a)
 optional p = orElse (map Some p) (pure None)
 
 -- | `between open close p` parses `open`, then `p`, then `close`, yielding `p`.
-export between : ByteParser open -> ByteParser close -> ByteParser a -> ByteParser a
+export
+between : ByteParser open -> ByteParser close -> ByteParser a -> ByteParser a
 between open close p = do
   _ <- open
   x <- p
@@ -228,7 +243,8 @@ between open close p = do
   pure x
 
 -- | First successful parser in the list; fails if all fail.
-export choice : List (ByteParser a) -> ByteParser a
+export
+choice : List (ByteParser a) -> ByteParser a
 choice [] = failWith "choice: no alternatives"
 choice (q::rest) = orElse q (choice rest)
 
@@ -237,7 +253,8 @@ choice (q::rest) = orElse q (choice rest)
 -- Structurally identical to compiler/frontend/parser.mdk's chainl1, but over
 -- a different parser type (ByteParser vs token Parser) — not soundly
 -- shareable without a generic Monad/Alternative abstraction.
-export chainl1 : ByteParser a -> ByteParser (a -> a -> a) -> ByteParser a
+export
+chainl1 : ByteParser a -> ByteParser (a -> a -> a) -> ByteParser a
 -- lint-disable-next-line rule-duplicate-body
 chainl1 p op = do
   x <- p
@@ -255,17 +272,19 @@ chainl1Rest p op acc = orElse
 --
 -- > runByteParser (takeBytes 3) (arrayFromList [10, 20, 30, 40])
 -- Ok [10, 20, 30]
-export takeBytes : Int -> ByteParser (List Int)
+export
+takeBytes : Int -> ByteParser (List Int)
 takeBytes n = ByteParser (takeBytesGo n [])
 
 takeBytesGo : Int -> List Int -> Array Int -> Int -> BResult (List Int)
 takeBytesGo n acc input pos
   | n <= 0 = BOk (reverse acc) pos
   | pos >= arrayLength input = BErr "unexpected end of input" pos
-  | otherwise = takeBytesGo (n - 1) (input.[pos]::acc) input (pos + 1)
+  | otherwise = takeBytesGo (n - 1) (input[pos]::acc) input (pos + 1)
 
 -- | Read exactly N bytes, returning them as an Array Int slice.
-export takeSlice : Int -> ByteParser (Array Int)
+export
+takeSlice : Int -> ByteParser (Array Int)
 takeSlice n = map arrayFromList (takeBytes n)
 
 -- ---------------------------------------------------------------------------
@@ -281,14 +300,15 @@ takeSlice n = map arrayFromList (takeBytes n)
 -- Ok 255
 -- > runByteParser (beUint 4) (arrayFromList [0, 0, 1, 0])
 -- Ok 256
-export beUint : Int -> ByteParser Int
+export
+beUint : Int -> ByteParser Int
 beUint n = ByteParser (beUintGo n 0)
 
 beUintGo : Int -> Int -> Array Int -> Int -> BResult Int
 beUintGo n acc input pos
   | n <= 0 = BOk acc pos
   | pos >= arrayLength input = BErr "unexpected end of input" pos
-  | otherwise = beUintGo (n - 1) (acc * 256 + input.[pos]) input (pos + 1)
+  | otherwise = beUintGo (n - 1) (acc * 256 + input[pos]) input (pos + 1)
 
 -- | Read a big-endian SIGNED integer of exactly N bytes (N in 1..8),
 --   two's-complement.
@@ -304,7 +324,8 @@ beUintGo n acc input pos
 -- Ok -1
 -- > runByteParser (beSint 2) (arrayFromList [0, 1])
 -- Ok 1
-export beSint : Int -> ByteParser Int
+export
+beSint : Int -> ByteParser Int
 beSint n = do
   u <- beUint n
   let threshold = pow2 (8 * n - 1)
@@ -322,7 +343,8 @@ pow2 n = shiftLeft 1 n
 -- Ok 1.5
 -- > runByteParser beFloat64 (arrayFromList [192, 0, 0, 0, 0, 0, 0, 0])
 -- Ok -2.0
-export beFloat64 : ByteParser Float
+export
+beFloat64 : ByteParser Float
 beFloat64 = do
   arr <- takeSlice 8
   pure (bytesToFloat64 arr 0)
@@ -337,14 +359,15 @@ beFloat64 = do
 -- Ok 255
 -- > runByteParser (leUint 4) (arrayFromList [0, 1, 0, 0])
 -- Ok 256
-export leUint : Int -> ByteParser Int
+export
+leUint : Int -> ByteParser Int
 leUint n = ByteParser (leUintGo n 0 0)
 
 leUintGo : Int -> Int -> Int -> Array Int -> Int -> BResult Int
 leUintGo n shift acc input pos
   | n <= 0 = BOk acc pos
   | pos >= arrayLength input = BErr "unexpected end of input" pos
-  | otherwise = leUintGo (n - 1) (shift + 8) (acc + input.[pos] * pow2 shift) input (pos + 1)
+  | otherwise = leUintGo (n - 1) (shift + 8) (acc + input[pos] * pow2 shift) input (pos + 1)
 
 -- | Read a little-endian SIGNED integer of exactly N bytes (N in 1..8),
 --   two's-complement.  Mirror of `beSint`: least-significant byte first,
@@ -358,7 +381,8 @@ leUintGo n shift acc input pos
 -- Ok -1
 -- > runByteParser (leSint 2) (arrayFromList [1, 0])
 -- Ok 1
-export leSint : Int -> ByteParser Int
+export
+leSint : Int -> ByteParser Int
 leSint n = do
   u <- leUint n
   let threshold = pow2 (8 * n - 1)
@@ -373,7 +397,8 @@ leSint n = do
 -- Ok 1.5
 -- > runByteParser leFloat64 (arrayFromList [0, 0, 0, 0, 0, 0, 0, 192])
 -- Ok -2.0
-export leFloat64 : ByteParser Float
+export
+leFloat64 : ByteParser Float
 leFloat64 = do
   bytes <- takeBytes 8
   pure (bytesToFloat64 (arrayFromList (reverse bytes)) 0)
@@ -389,7 +414,8 @@ leFloat64 = do
 -- Ok 42
 -- > runByteParser (byte 42) (arrayFromList [7])
 -- Err "unexpected byte at byte 0"
-export runByteParser : ByteParser a -> Array Int -> Result String a
+export
+runByteParser : ByteParser a -> Array Int -> Result String a
 runByteParser p bytes = match runBP p bytes 0
   BOk a _ => Ok a
   BErr m pos => Err "\{m} at byte \{pos}"

@@ -1,5 +1,5 @@
 # META
-source_lines=135
+source_lines=137
 stages=DESUGAR,MARK
 # SOURCE
 {- validation.mdk — an accumulating-error applicative.
@@ -107,7 +107,8 @@ export impl Display (Validation e a) requires Display e, Display a where
 
    > validationToResult (Success 1)
    Ok 1 -}
-export validationToResult : Validation e a -> Result e a
+export
+validationToResult : Validation e a -> Result e a
 validationToResult (Success a) = Ok a
 validationToResult (Failure e) = Err e
 
@@ -118,7 +119,8 @@ validationToResult (Failure e) = Err e
    Success 1
    > resultToValidation (Err "bad" : Result String Int)
    Failure "bad" -}
-export resultToValidation : Result e a -> Validation e a
+export
+resultToValidation : Result e a -> Validation e a
 resultToValidation (Ok a) = Success a
 resultToValidation (Err e) = Failure e
 

@@ -1,5 +1,5 @@
 # META
-source_lines=394
+source_lines=395
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -372,7 +372,8 @@ renderEntry (DocEntry name sig doc) =
 -- runtimeSrc / coreSrc are the prelude sources (runtime.mdk + core.mdk), read
 -- by the caller from MEDAKA_ROOT; src is the target file; filename gives the
 -- module-name basename.
-export runDoc : String -> String -> String -> String -> String
+export
+runDoc : String -> String -> String -> String -> String
 runDoc runtimeSrc coreSrc src filename =
   let parsed = parseWithPositions src
   let rawDecls = fst parsed

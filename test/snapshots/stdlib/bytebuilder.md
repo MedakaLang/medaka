@@ -1,5 +1,5 @@
 # META
-source_lines=367
+source_lines=381
 stages=DESUGAR,MARK
 # SOURCE
 -- | bytebuilder — a byte-level output builder for Medaka.
@@ -28,7 +28,8 @@ import list.{reverse}
 export data Builder = Builder (MutArray Int)
 
 -- | Create a new, empty builder.
-export newBuilder : Unit -> Builder
+export
+newBuilder : Unit -> Builder
 newBuilder _ = Builder (new ())
 
 -- ---------------------------------------------------------------------------
@@ -36,19 +37,22 @@ newBuilder _ = Builder (new ())
 -- ---------------------------------------------------------------------------
 
 -- | Emit one byte (masked to low 8 bits).
-export emitU8 : Int -> Builder -> Unit
+export
+emitU8 : Int -> Builder -> Unit
 emitU8 b (Builder a) = push (bitAnd b 255) a
 
 -- | Emit a big-endian 2-byte unsigned integer.
 --   Inverse of `beUint 2`.
-export emitU16BE : Int -> Builder -> Unit
+export
+emitU16BE : Int -> Builder -> Unit
 emitU16BE v buf =
   emitU8 (bitAnd (shiftRight v 8) 255) buf
   emitU8 (bitAnd v 255) buf
 
 -- | Emit a big-endian 3-byte unsigned integer.
 --   Inverse of `beUint 3`.
-export emitU24BE : Int -> Builder -> Unit
+export
+emitU24BE : Int -> Builder -> Unit
 emitU24BE v buf =
   emitU8 (bitAnd (shiftRight v 16) 255) buf
   emitU8 (bitAnd (shiftRight v 8) 255) buf
@@ -56,7 +60,8 @@ emitU24BE v buf =
 
 -- | Emit a big-endian 4-byte unsigned integer.
 --   Inverse of `beUint 4`.
-export emitU32BE : Int -> Builder -> Unit
+export
+emitU32BE : Int -> Builder -> Unit
 emitU32BE v buf =
   emitU8 (bitAnd (shiftRight v 24) 255) buf
   emitU8 (bitAnd (shiftRight v 16) 255) buf
@@ -65,14 +70,16 @@ emitU32BE v buf =
 
 -- | Emit a little-endian 2-byte unsigned integer.
 --   Inverse of `leUint 2`.  Byte order is the reverse of `emitU16BE`.
-export emitU16LE : Int -> Builder -> Unit
+export
+emitU16LE : Int -> Builder -> Unit
 emitU16LE v buf =
   emitU8 (bitAnd v 255) buf
   emitU8 (bitAnd (shiftRight v 8) 255) buf
 
 -- | Emit a little-endian 3-byte unsigned integer.
 --   Inverse of `leUint 3`.  Byte order is the reverse of `emitU24BE`.
-export emitU24LE : Int -> Builder -> Unit
+export
+emitU24LE : Int -> Builder -> Unit
 emitU24LE v buf =
   emitU8 (bitAnd v 255) buf
   emitU8 (bitAnd (shiftRight v 8) 255) buf
@@ -80,7 +87,8 @@ emitU24LE v buf =
 
 -- | Emit a little-endian 4-byte unsigned integer.
 --   Inverse of `leUint 4`.  Byte order is the reverse of `emitU32BE`.
-export emitU32LE : Int -> Builder -> Unit
+export
+emitU32LE : Int -> Builder -> Unit
 emitU32LE v buf =
   emitU8 (bitAnd v 255) buf
   emitU8 (bitAnd (shiftRight v 8) 255) buf
@@ -89,7 +97,8 @@ emitU32LE v buf =
 
 -- | Emit a list of byte values, each masked to low 8 bits.
 --   Inverse of `takeBytes (length xs)`.
-export emitBytes : List Int -> Builder -> Unit
+export
+emitBytes : List Int -> Builder -> Unit
 emitBytes [] _ = ()
 emitBytes (b::rest) buf =
   emitU8 b buf
@@ -108,7 +117,8 @@ emitBytes (b::rest) buf =
 
 -- | Emit an `nbytes`-wide big-endian two's-complement signed integer.
 --   Inverse of `beSint nbytes`.
-export emitBeSint : Int -> Int -> Builder -> Unit
+export
+emitBeSint : Int -> Int -> Builder -> Unit
 emitBeSint nbytes v buf =
   let unsigned = if v >= 0 then v else v + shiftLeft 1 (8 * nbytes)
   emitBeUint nbytes unsigned buf
@@ -117,7 +127,8 @@ emitBeSint nbytes v buf =
 --   Inverse of `beUint nbytes`.
 --   The unsigned mirror of `emitBeSint`; useful when the value is always
 --   non-negative and you want to choose the width dynamically at runtime.
-export emitBeUint : Int -> Int -> Builder -> Unit
+export
+emitBeUint : Int -> Int -> Builder -> Unit
 emitBeUint 0 _ _ = ()
 emitBeUint n v buf =
   emitBeUint (n - 1) (shiftRight v 8) buf
@@ -132,14 +143,16 @@ emitBeUint n v buf =
 
 -- | Emit an `nbytes`-wide little-endian two's-complement signed integer.
 --   Inverse of `leSint nbytes`.
-export emitLeSint : Int -> Int -> Builder -> Unit
+export
+emitLeSint : Int -> Int -> Builder -> Unit
 emitLeSint nbytes v buf =
   let unsigned = if v >= 0 then v else v + shiftLeft 1 (8 * nbytes)
   emitLeUint nbytes unsigned buf
 
 -- | Emit exactly `nbytes` bytes of a non-negative integer in little-endian
 --   order.  Inverse of `leUint nbytes`.  The unsigned mirror of `emitLeSint`.
-export emitLeUint : Int -> Int -> Builder -> Unit
+export
+emitLeUint : Int -> Int -> Builder -> Unit
 emitLeUint 0 _ _ = ()
 emitLeUint n v buf =
   emitU8 (bitAnd v 255) buf
@@ -151,7 +164,8 @@ emitLeUint n v buf =
 
 -- | Extract the accumulated bytes as a fixed-size `Array Int`.
 --   Bytes are already in emission order (no reverse pass needed).
-export buildArray : Builder -> Array Int
+export
+buildArray : Builder -> Array Int
 buildArray (Builder a) = toArray a
 
 -- ---------------------------------------------------------------------------

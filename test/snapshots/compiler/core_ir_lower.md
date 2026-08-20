@@ -1,5 +1,5 @@
 # META
-source_lines=1758
+source_lines=1777
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -92,7 +92,8 @@ composeVar : String
 composeVar = "$cf"
 
 -- ── expressions ────────────────────────────────────────────────────────────
-export lower : Expr -> CExpr
+export
+lower : Expr -> CExpr
 lower (ELit l) = CLit l
 -- PLAN.md #11: dictPass rewrites every ENumLit to ELit before lowering; this
 -- arm is defensive (a non-rewritten path) — a Float-stamped ref lowers to a
@@ -266,7 +267,8 @@ initialRows ((Arm pat _ _)::rest) i =
 -- impl method's clauses into a decision tree via this same Maranget compiler —
 -- the backend-neutral transform Axis-1 designates as shared by both backends
 -- (only leaf emission differs: bytecode SWITCH vs LLVM switch/br).
-export compileTree : List Bool -> List (List Pat, Int) -> CTree
+export
+compileTree : List Bool -> List (List Pat, Int) -> CTree
 compileTree _ [] = CTFail
 compileTree guards (row::rest) = compileRows guards row rest (row::rest)
 
@@ -345,7 +347,8 @@ unitName = "__unit__"
 -- exported for the LLVM backend (slice 7): impl-method clauses are canonicalised
 -- into the matrix form before `compileTree` (same as `initialRows` does for match
 -- arms) — part of the shared backend-neutral decision-tree pass (Axis-1).
-export canonPat : Pat -> Pat
+export
+canonPat : Pat -> Pat
 canonPat (PVar _ _) = PWild
 canonPat PWild = PWild
 canonPat (PLit (LBool True)) = PCon "True" []
@@ -534,7 +537,8 @@ lowerStmt _ = panic "core_ir lower: unsupported block statement"
 -- Coalesce top-level multi-clause `DFunDef`s into one CBind per name (preserving
 -- first-appearance order, exactly as eval.mdk's funGroupNames), gather the ctor
 -- arity + ctor→type tables.  Interfaces/impls are slice-5 (no dispatch yet).
-export lowerProgram : List Decl -> CProgram
+export
+lowerProgram : List Decl -> CProgram
 lowerProgram prog =
   ctorFieldOrdersRef := buildCtorFieldOrders prog
   CProgram
@@ -563,7 +567,8 @@ lowerProgram prog =
 -- DECLARED order (DData named-field variants), the same order
 -- the emitter's record cell layout / recFieldTable use, so the positional indices
 -- line up with the cell's stored field offsets (verified by the fixture byte-diff).
-export lowerProgramEmit : List Decl -> CProgram
+export
+lowerProgramEmit : List Decl -> CProgram
 lowerProgramEmit prog =
   hoistNullaryMemo (rewriteProgramRecPats
     (declaredRecordFieldOrders prog)
@@ -592,7 +597,8 @@ lowerProgramEmit prog =
 -- The declaration answers both: it is always present, it is independent of DCE and
 -- of which expression positions any scan walks, and it is the only thing all four
 -- record operations (create / access / update / pattern) can agree on.
-export declaredRecordFieldOrders : List Decl -> List (String, List String)
+export
+declaredRecordFieldOrders : List Decl -> List (String, List String)
 declaredRecordFieldOrders prog = flatMap recPatFieldOrderEntries prog
 
 recPatFieldOrderEntries : Decl -> List (String, List String)
@@ -1143,7 +1149,8 @@ cInitialRows ((CArm pat _ _)::rest) i =
 -- the top-level function-group half of lowerProgram, exposed for the multi-module
 -- driver (core_ir_eval.cevalModules), which lowers each module's groups separately
 -- (per-module local frames) rather than as one flat program.
-export lowerGroups : List Decl -> List CBind
+export
+lowerGroups : List Decl -> List CBind
 lowerGroups prog = lgGroup (funClausesOf prog)
 
 -- O(n log n) group-by-name, IDENTICAL output to
@@ -1305,10 +1312,12 @@ lowerImpls prog =
 ifaceImplHeadsRef : Ref (List (String, String, String, String))
 ifaceImplHeadsRef = Ref []
 
-export installIfaceImplHeads : List (String, String, String, String) -> Unit
+export
+installIfaceImplHeads : List (String, String, String, String) -> Unit
 installIfaceImplHeads t = ifaceImplHeadsRef := t
 
-export ifaceImplHeadTable : List Decl -> List (String, String, String, String)
+export
+ifaceImplHeadTable : List Decl -> List (String, String, String, String)
 ifaceImplHeadTable prog = flatMap ifaceImplHeadEntries prog
 
 ifaceImplHeadEntries : Decl -> List (String, String, String, String)
@@ -1334,7 +1343,8 @@ ifaceImplHeadEntries _ = []
 -- identities, so BOTH candidate defaults survive the intersection and every caller
 -- falls back to first-match.  Not fixable here: `mdk_default_<method>_<tag>` has no
 -- interface component, so the two default bodies have one symbol between them.
-export ifaceIdsAtTag : String -> List String
+export
+ifaceIdsAtTag : String -> List String
 ifaceIdsAtTag tag = ifaceIdsAtTagGo tag !ifaceImplHeadsRef
 
 ifaceIdsAtTagGo : String -> List (String, String, String, String) -> List String
@@ -1350,7 +1360,8 @@ ifaceIdsAtTagGo tag ((ifaceId, _, t, k)::rest)
 -- existing program's dict words and dispatch arms are byte-identical), else the
 -- canonical full-type key — the same word `keyForSiteByIface` stamps into the
 -- caller's dict cell.
-export ifaceImplRouteKeys : String -> List String
+export
+ifaceImplRouteKeys : String -> List String
 ifaceImplRouteKeys iface = ifaceRouteKeysGo iface !ifaceImplHeadsRef
 
 ifaceRouteKeysGo : String -> List (String, String, String, String) -> List String
@@ -1374,7 +1385,8 @@ declRouteKey tag key unique = if unique then tag else key
 -- An UNINSTALLED table answers True — the
 -- pre-#1036 bare-head behaviour — so a driver that never lowered through
 -- `lowerImpls` degrades to today's output rather than mis-keying.
-export ifaceDeclHeadUnique : String -> String -> Bool
+export
+ifaceDeclHeadUnique : String -> String -> Bool
 ifaceDeclHeadUnique iface tag =
   listLen (declKeysAtHead !ifaceImplHeadsRef iface tag []) <= 1
 
@@ -1389,7 +1401,8 @@ declKeysAtHead ((_, i, t, k)::rest) iface tag acc
 -- one `disp` from all modules' decls jointly (an impl in module B for an interface
 -- in the prelude needs the prelude's dispatch positions), then lowers each
 -- module's impls against it.
-export lowerImplsWith : List ((String, String, String), List Int) -> List Decl -> List CImplEntry
+export
+lowerImplsWith : List ((String, String, String), List Int) -> List Decl -> List CImplEntry
 lowerImplsWith disp prog = flatMap (lowerDeclImpl disp) prog
 
 lowerDeclImpl : List ((String, String, String), List Int) -> Decl -> List CImplEntry
@@ -1443,7 +1456,8 @@ lowerDefault ifaceId typeParams (IfaceMethod mname _ (Some (MethodDefault pats b
 -- list/string instruction instead of falling to the `LTInt` default (the last
 -- EMITTER-GAPS.md #3 residual: `ap@List` / `andThen@List`, whose `++` operand is
 -- a CALL result like `map f xs` / `f x`, not a param).
-export returnsSelfTable : List Decl -> List ((String, String), Bool)
+export
+returnsSelfTable : List Decl -> List ((String, String), Bool)
 returnsSelfTable prog = flatMap ifaceReturnsSelfEntries prog
 
 ifaceReturnsSelfEntries : Decl -> List ((String, String), Bool)
@@ -1513,7 +1527,8 @@ tyMentionsParams (TyConstrained _ t) params = tyMentionsParams t params
 -- where the `++` LEFT operand `f x` is an indirect call the method-call
 -- inference (returnsSelfTable) cannot reach.  Result-side analogue scoped to
 -- function-typed params, not the whole-method result.
-export selfFnParamTable : List Decl -> List ((String, String), List Int)
+export
+selfFnParamTable : List Decl -> List ((String, String), List Int)
 selfFnParamTable prog = flatMap ifaceSelfFnParamEntries prog
 
 ifaceSelfFnParamEntries : Decl -> List ((String, String), List Int)
@@ -1544,7 +1559,8 @@ methodArgTys _ = []
 -- partially-applied inner `filterMap` lowers to a direct `@mdk_impl_<tag>_filterMap`
 -- call instead of an un-dispatchable arg-tag fallback).  Keyed by BARE method name
 -- (interface method names are distinct across the prelude's interfaces).
-export methodIfaceTable : List Decl -> List (String, (String, Int))
+export
+methodIfaceTable : List Decl -> List (String, (String, Int))
 methodIfaceTable prog = flatMap ifaceMethodArityEntries prog
 
 ifaceMethodArityEntries : Decl -> List (String, (String, Int))
@@ -1569,7 +1585,8 @@ ifaceMethodArityEntry ifaceName (IfaceMethod mname mty _) =
 -- `@mdk_default_foldMap_List` serves both a List-monoid and a String-monoid fold.
 -- A constraint over ONLY interface params contributes no slot (it dispatches via
 -- the impl, not a per-call dict); mirrors typecheck's `constraintIsMethodLevel`.
-export methodConstraintIfaces : List Decl -> List (String, List String)
+export
+methodConstraintIfaces : List Decl -> List (String, List String)
 methodConstraintIfaces prog = flatMap methodConstraintIfaceEntries prog
 
 methodConstraintIfaceEntries : Decl -> List (String, List String)
@@ -1632,7 +1649,8 @@ tyMentionsNonParam (TyConstrained _ t) params = tyMentionsNonParam t params
 -- change is ADDITIVE: only fields with a known scalar head (Float/Bool/Int/…)
 -- change typing.  Both positional (`ConPos`) and named-field (`ConNamed`)
 -- payloads are covered, in the same DECLARED order the cell layout stores.
-export ctorFieldTypeNames : List Decl -> List (String, List String)
+export
+ctorFieldTypeNames : List Decl -> List (String, List String)
 ctorFieldTypeNames prog = flatMap ctorFieldTypeEntries prog
 
 ctorFieldTypeEntries : Decl -> List (String, List String)
@@ -1677,7 +1695,8 @@ tyHeadName _ = ""
 -- applied / function / tuple) maps to "" and the emitter falls back to the
 -- existing guess, so the seed is ADDITIVE: only known-scalar declared params/
 -- returns change typing (and `Int`-annotated fns seed LTInt = current default).
-export declSigTypeNames : List Decl -> List (String, (List String, String))
+export
+declSigTypeNames : List Decl -> List (String, (List String, String))
 declSigTypeNames prog = flatMap declSigTypeEntries prog
 
 declSigTypeEntries : Decl -> List (String, (List String, String))

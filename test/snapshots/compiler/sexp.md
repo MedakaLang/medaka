@@ -1,5 +1,5 @@
 # META
-source_lines=326
+source_lines=334
 stages=DESUGAR,MARK
 # SOURCE
 -- Structural S-expression dump of the self-host AST, mirroring dev/astdump.ml
@@ -42,7 +42,8 @@ import frontend.ast.{
 }
 import support.util.{escStr, joinNl, joinWith}
 
-export boolStr : Bool -> String
+export
+boolStr : Bool -> String
 boolStr True = "true"
 boolStr False = "false"
 
@@ -51,13 +52,16 @@ boolStr False = "false"
 joinSp : List String -> String
 joinSp xs = joinWith " " xs
 
-export node : String -> List String -> String
+export
+node : String -> List String -> String
 node tag parts = "(" ++ joinSp (tag::parts) ++ ")"
 
-export slist : List String -> String
+export
+slist : List String -> String
 slist xs = "(" ++ joinSp xs ++ ")"
 
-export litSexp : Lit -> String
+export
+litSexp : Lit -> String
 litSexp (LInt n) = node "LInt" [intToString n]
 litSexp (LFloat f) = node "LFloat" [floatToString f]
 litSexp (LString s) = node "LString" [escStr s]
@@ -65,7 +69,8 @@ litSexp (LChar s) = node "LChar" [escStr s]
 litSexp (LBool b) = node "LBool" [boolStr b]
 litSexp LUnit = "LUnit"
 
-export patSexp : Pat -> String
+export
+patSexp : Pat -> String
 patSexp (PVar x _) = node "PVar" [escStr x]
 patSexp PWild = "PWild"
 patSexp (PLit l) = node "PLit" [litSexp l]
@@ -99,7 +104,8 @@ constraintSexp : Constraint -> String
 constraintSexp (Constraint { constraintHead = iface, constraintArgs = args }) =
   node "cstr" (escStr iface :: map tySexp args)
 
-export optStrSexp : Option String -> String
+export
+optStrSexp : Option String -> String
 optStrSexp (Some s) = node "Some" [escStr s]
 optStrSexp None = "None"
 
@@ -117,7 +123,8 @@ armSexp : Arm -> String
 armSexp (Arm p gs body) =
   node "arm" [patSexp p, slist (map guardSexp gs), exprSexp body]
 
-export exprSexp : Expr -> String
+export
+exprSexp : Expr -> String
 -- ELoc is TRANSPARENT in the structural dump (mirror of dev/astdump.ml:69
 -- `ELoc(_,e) -> sexp_expr e`): the parse/sexp gates stay byte-identical to the
 -- OCaml oracle, which strips locs before dumping.
@@ -326,7 +333,8 @@ usePathSexp (UseWild ids) = node "UseWild" [slist (map escStr ids)]
 usePathSexp (UseAlias ids a) =
   node "UseAlias" [slist (map escStr ids), escStr a]
 
-export programToSexp : List Decl -> String
+export
+programToSexp : List Decl -> String
 programToSexp prog = joinNl (map declSexp prog)
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Attr" true))))

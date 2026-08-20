@@ -1,5 +1,5 @@
 # META
-source_lines=461
+source_lines=488
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lsp_harness.mdk — a Medaka-native test harness that drives the
@@ -41,7 +41,8 @@ import string.{isDigit}
 
 -- ── JSON-RPC message builders ───────────────────────────────────────────────
 
-export initializeMsg : Int -> Json
+export
+initializeMsg : Int -> Json
 initializeMsg idn = jObject
   [
     ("jsonrpc", JString "2.0"),
@@ -50,7 +51,8 @@ initializeMsg idn = jObject
     ("params", jObject [("capabilities", jObject [])]),
   ]
 
-export initializedMsg : Json
+export
+initializedMsg : Json
 initializedMsg = jObject
   [
     ("jsonrpc", JString "2.0"),
@@ -58,7 +60,8 @@ initializedMsg = jObject
     ("params", jObject []),
   ]
 
-export didOpenMsg : String -> String -> Json
+export
+didOpenMsg : String -> String -> Json
 didOpenMsg uri text = jObject
   [
     ("jsonrpc", JString "2.0"),
@@ -79,7 +82,8 @@ didOpenMsg uri text = jObject
     ),
   ]
 
-export requestMsg : Int -> String -> Json -> Json
+export
+requestMsg : Int -> String -> Json -> Json
 requestMsg idn method params = jObject
   [
     ("jsonrpc", JString "2.0"),
@@ -90,7 +94,8 @@ requestMsg idn method params = jObject
 
 -- textDocument/didChange (Full sync): the whole document is replaced by `text`.
 -- Drives the per-keystroke diagnostics path the parse-cache optimizes.
-export didChangeMsg : String -> String -> Json
+export
+didChangeMsg : String -> String -> Json
 didChangeMsg uri text = jObject
   [
     ("jsonrpc", JString "2.0"),
@@ -105,7 +110,8 @@ didChangeMsg uri text = jObject
   ]
 
 -- params for a text-document request carrying a cursor position (hover etc.).
-export docPosParams : String -> Int -> Int -> Json
+export
+docPosParams : String -> Int -> Int -> Json
 docPosParams uri line ch = jObject
   [
     ("textDocument", jObject [("uri", JString uri)]),
@@ -113,21 +119,25 @@ docPosParams uri line ch = jObject
   ]
 
 -- params for a whole-document request (documentSymbol etc.).
-export docParams : String -> Json
+export
+docParams : String -> Json
 docParams uri = jObject [("textDocument", jObject [("uri", JString uri)])]
 
-export shutdownMsg : Int -> Json
+export
+shutdownMsg : Int -> Json
 shutdownMsg idn = jObject
   [("jsonrpc", JString "2.0"), ("id", JInt idn), ("method", JString "shutdown")]
 
-export exitMsg : Json
+export
+exitMsg : Json
 exitMsg = jObject [("jsonrpc", JString "2.0"), ("method", JString "exit")]
 
 -- ── framing (byte-counted Content-Length) ──────────────────────────────────
 -- utf8Len / utf8CharWidth moved to support/util.mdk (imported above).
 
 -- One Content-Length-framed packet.
-export frame : Json -> String
+export
+frame : Json -> String
 frame j =
   let body = stringify j
   stringConcat
@@ -137,7 +147,8 @@ frame j =
 
 -- Drive `<medakaBin> lsp` with the framed message sequence; return raw stdout
 -- (the concatenated response frames + the LSP's trailing unit print).
-export runSession : String -> List Json -> <IO> Result String String
+export
+runSession : String -> List Json -> <IO> Result String String
 runSession medakaBin msgs =
   let req = stringConcat (map frame msgs)
   let tmp = "/tmp/medaka_lsp_harness_req.txt"
@@ -154,7 +165,8 @@ public export data Frame = Frame Int String Bool
 
 -- (frames, cleanlyConsumed).  cleanlyConsumed = every frame boundary landed on a
 -- header and the tail held only the trailing unit-print (`0`/`()`/whitespace).
-export parseFrames : String -> (List Frame, Bool)
+export
+parseFrames : String -> (List Frame, Bool)
 parseFrames s =
   let arr = stringToChars s
   pfGo s arr (arrayLength arr) 0
@@ -247,12 +259,14 @@ takeBytes arr len i remaining
 -- ── response accessors ──────────────────────────────────────────────────────
 
 -- Every frame byteValid?
-export allByteValid : List Frame -> Bool
+export
+allByteValid : List Frame -> Bool
 allByteValid [] = True
 allByteValid ((Frame _ _ ok)::rest) = ok && allByteValid rest
 
 -- The response frame whose "id" == idn, parsed.
-export responseById : Int -> List Frame -> Option Json
+export
+responseById : Int -> List Frame -> Option Json
 responseById _ [] = None
 responseById idn ((Frame _ body _)::rest) = match parse body
   Ok j => match lookup "id" j
@@ -264,7 +278,8 @@ responseById idn ((Frame _ body _)::rest) = match parse body
 
 -- result.contents.value of hover response `idn` (the markdown ```medaka\n<name> :
 -- <ty>\n``` string), or None.
-export hoverValue : Int -> List Frame -> Option String
+export
+hoverValue : Int -> List Frame -> Option String
 hoverValue idn frames = do
   j <- responseById idn frames
   res <- lookup "result" j
@@ -273,7 +288,8 @@ hoverValue idn frames = do
   asString v
 
 -- Does completion response `idn` include a CompletionItem whose label == needle?
-export completionHasLabel : Int -> List Frame -> String -> Bool
+export
+completionHasLabel : Int -> List Frame -> String -> Bool
 completionHasLabel idn frames needle = match responseById idn frames
   None => False
   Some j => match lookup "result" j
@@ -294,7 +310,8 @@ labelEq it needle = match lookup "label" it
   None => False
 
 -- Does `hay` contain `needle` as a substring? (reuses the module's matchesAt).
-export strContains : String -> String -> Bool
+export
+strContains : String -> String -> Bool
 strContains hay needle =
   let h = stringToChars hay
   strContainsGo h (arrayLength h) needle 0
@@ -313,7 +330,8 @@ strContainsGo h hlen needle i
    tokens all share one tokenType (the reported-bug acceptance check). -}
 
 -- result.data of response `idn` as a List Int, or None.
-export semanticData : Int -> List Frame -> Option (List Int)
+export
+semanticData : Int -> List Frame -> Option (List Int)
 semanticData idn frames = match responseById idn frames
   None => None
   Some j => match lookup "result" j
@@ -333,7 +351,8 @@ jIntArrayToList a i n
 public export data DecTok = DecTok Int Int Int Int
 
 -- Undo delta encoding: walk the flat 5-int stream, tracking prevLine/prevChar.
-export decodeSemToks : List Int -> List DecTok
+export
+decodeSemToks : List Int -> List DecTok
 decodeSemToks ints = decodeGo 0 0 ints
 
 decodeGo : Int -> Int -> List Int -> List DecTok
@@ -345,7 +364,8 @@ decodeGo _ _ _ = []
 
 -- All length-`len` tokens share one tokenType AND there are at least `minCount`
 -- of them.  For the fixture: the three length-4 `Expr` tokens, same type.
-export lenTokensShareType : Int -> Int -> List DecTok -> Bool
+export
+lenTokensShareType : Int -> Int -> List DecTok -> Bool
 lenTokensShareType len minCount toks =
   let matching = filterLen len toks
   match matching
@@ -370,13 +390,15 @@ allSameType ty0 ((DecTok _ _ _ ty)::rest) = ty == ty0 && allSameType ty0 rest
 -- Does the decoded token stream contain at least one token of legend type `ty`?
 -- Used to assert the classifier emits DISTINCT types (e.g. type=1 AND
 -- enumMember=2 both present → it separates types from constructors).
-export hasTokenType : Int -> List DecTok -> Bool
+export
+hasTokenType : Int -> List DecTok -> Bool
 hasTokenType _ [] = False
 hasTokenType ty ((DecTok _ _ _ t)::rest) = t == ty || hasTokenType ty rest
 
 -- Total diagnostics across every publishDiagnostics notification for `uri`.
 -- (Threshold checks — ==0 / >=1 — so summing across republishes is fine.)
-export diagCountFor : String -> List Frame -> Int
+export
+diagCountFor : String -> List Frame -> Int
 diagCountFor _ [] = 0
 diagCountFor uri ((Frame _ body _)::rest) = match parse body
   Ok j =>
@@ -392,7 +414,8 @@ isPublishFor uri j = methodEq j "textDocument/publishDiagnostics"
 
 -- Was a publishDiagnostics notification emitted at all for `uri`?  Guards against
 -- a vacuous `diagCountFor … == 0` when the LSP never published for that file.
-export diagPublishedFor : String -> List Frame -> Bool
+export
+diagPublishedFor : String -> List Frame -> Bool
 diagPublishedFor _ [] = False
 diagPublishedFor uri ((Frame _ body _)::rest) = match parse body
   Ok j => if isPublishFor uri j then True else diagPublishedFor uri rest
@@ -403,7 +426,8 @@ diagPublishedFor uri ((Frame _ body _)::rest) = match parse body
 -- entry buffer each keystroke rather than serving a stale parse: the final publish
 -- must reflect the final text, not an earlier cached one.  None means "never
 -- published" (the caller pairs this with diagPublishedFor to reject that).
-export lastDiagCountFor : String -> List Frame -> Option Int
+export
+lastDiagCountFor : String -> List Frame -> Option Int
 lastDiagCountFor uri frames = lastDiagGo uri frames None
 
 lastDiagGo : String -> List Frame -> Option Int -> Option Int
@@ -441,10 +465,12 @@ jDiagLen j = match lookup "params" j
 
 -- ── assertion accumulator ───────────────────────────────────────────────────
 
-export failCount : Ref Int
+export
+failCount : Ref Int
 failCount = Ref 0
 
-export check : String -> Bool -> <IO> Unit
+export
+check : String -> Bool -> <IO> Unit
 check name ok =
   if ok then println (stringConcat ["PASS ", name])
   else
@@ -452,7 +478,8 @@ check name ok =
     println (stringConcat ["FAIL ", name])
 
 -- Print the run summary; (passed, failed) counts derived from `total`.
-export summary : Int -> <IO> Unit
+export
+summary : Int -> <IO> Unit
 summary total =
   let failed = !failCount
   println (stringConcat

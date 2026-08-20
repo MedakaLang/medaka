@@ -1,5 +1,5 @@
 # META
-source_lines=665
+source_lines=676
 stages=DESUGAR,MARK
 # SOURCE
 {- json.mdk — a JSON value type with a parser and serializer.
@@ -61,7 +61,8 @@ public export data Json =
    True
    > stringify (jArray []) == "[]"
    True -}
-export jArray : List Json -> Json
+export
+jArray : List Json -> Json
 jArray xs = JArray (arrayFromList xs)
 
 {- | Build a `JObject` from a list of key/value pairs (order preserved).
@@ -70,7 +71,8 @@ jArray xs = JArray (arrayFromList xs)
    True
    > stringify (jObject []) == "{}"
    True -}
-export jObject : List (String, Json) -> Json
+export
+jObject : List (String, Json) -> Json
 jObject xs = JObject (arrayFromList xs)
 
 -- A codepoint to a `Char`, for the fixed control-char escapes below (`\n`
@@ -156,7 +158,8 @@ memberStrings pairs i acc
    True
    > stringify (JFloat 1000.0) == "1000.0"
    True -}
-export stringify : Json -> String
+export
+stringify : Json -> String
 stringify JNull = "null"
 stringify (JBool True) = "true"
 stringify (JBool False) = "false"
@@ -490,7 +493,8 @@ dispatchValue arr j c
    Err "invalid number"
    > parse "1e"
    Err "invalid number" -}
-export parse : String -> Result String Json
+export
+parse : String -> Result String Json
 parse s = parseTop (stringToChars s)
 
 parseTop : Array Char -> Result String Json
@@ -511,7 +515,8 @@ ensureEnd arr j v
    True
    > lookup "z" (jObject [("a", JInt 1)]) == None
    True -}
-export lookup : String -> Json -> Option Json
+export
+lookup : String -> Json -> Option Json
 lookup key (JObject pairs) = lookupGo key pairs 0 (arrayLength pairs)
 lookup _ _ = None
 
@@ -529,7 +534,8 @@ lookupGo key pairs i n
    True
    > at 0 (JInt 1) == None
    True -}
-export at : Int -> Json -> Option Json
+export
+at : Int -> Json -> Option Json
 at k (JArray arr)
   | k >= 0 && k < arrayLength arr = Some (arrayGetUnsafe k arr)
   | otherwise = None
@@ -541,7 +547,8 @@ at _ _ = None
    True
    > asString (JInt 1) == None
    True -}
-export asString : Json -> Option String
+export
+asString : Json -> Option String
 asString (JString s) = Some s
 asString _ = None
 
@@ -551,7 +558,8 @@ asString _ = None
    True
    > asInt JNull == None
    True -}
-export asInt : Json -> Option Int
+export
+asInt : Json -> Option Int
 asInt (JInt n) = Some n
 asInt _ = None
 
@@ -561,7 +569,8 @@ asInt _ = None
    True
    > asFloat (JInt 1) == None
    True -}
-export asFloat : Json -> Option Float
+export
+asFloat : Json -> Option Float
 asFloat (JFloat f) = Some f
 asFloat _ = None
 
@@ -571,7 +580,8 @@ asFloat _ = None
    True
    > asBool JNull == None
    True -}
-export asBool : Json -> Option Bool
+export
+asBool : Json -> Option Bool
 asBool (JBool b) = Some b
 asBool _ = None
 
@@ -583,7 +593,8 @@ asBool _ = None
    True
    > asArray (JInt 1) == None
    True -}
-export asArray : Json -> Option (Array Json)
+export
+asArray : Json -> Option (Array Json)
 asArray (JArray a) = Some a
 asArray _ = None
 

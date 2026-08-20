@@ -1,5 +1,5 @@
 # META
-source_lines=229
+source_lines=249
 stages=DESUGAR,MARK
 # SOURCE
 {- net.mdk — an ergonomic TCP/DNS layer over the host `net*` externs.
@@ -54,13 +54,15 @@ export data Listener = Listener Int
 
    Non-executing example (net is unbound under `medaka run`; see module doc):
    `resolve "localhost"` yields `Ok ["127.0.0.1", …]`. -}
-export resolve : String -> <Net "_"> Result String (List String)
+export
+resolve : String -> <Net "_"> Result String (List String)
 resolve host = netResolve host
 
 {- | Connect to `host`:`port` (DNS resolution happens internally). Prefer
    `withConnection` over a bare `connect` unless you need to hold the
    connection across a larger scope than one bracketed call. -}
-export connect : String -> Int -> <Net "_"> Result String Connection
+export
+connect : String -> Int -> <Net "_"> Result String Connection
 connect host port = map Connection (netTcpConnect host port)
 
 -- ── Server ───────────────────────────────────────────────────────────────
@@ -68,15 +70,18 @@ connect host port = map Connection (netTcpConnect host port)
 {- | Bind + listen on `addr`:`port` (port `0` picks an OS-assigned ephemeral
    port — pair with `listenPort` to discover it; this is what makes a
    single-process loopback self-test hermetic). -}
-export listen : String -> Int -> <Net "_"> Result String Listener
+export
+listen : String -> Int -> <Net "_"> Result String Listener
 listen addr port = map Listener (netTcpListen addr port)
 
 {- | The actual bound port of a `Listener` (useful after `listen addr 0`). -}
-export listenPort : Listener -> <Net "_"> Result String Int
+export
+listenPort : Listener -> <Net "_"> Result String Int
 listenPort (Listener fd) = netListenPort fd
 
 {- | Block until a peer connects, then return the accepted `Connection`. -}
-export accept : Listener -> <Net "_"> Result String Connection
+export
+accept : Listener -> <Net "_"> Result String Connection
 accept (Listener fd) = map Connection (netTcpAccept fd)
 
 -- ── Transfer (single call — may be short, see sendAll/recvAll) ────────────
@@ -84,34 +89,40 @@ accept (Listener fd) = map Connection (netTcpAccept fd)
 {- | One `send(2)` call. May write FEWER bytes than given (`Ok n` with
    `n < length bs`) — use `sendAll` unless you are handling short writes
    yourself. -}
-export send : Connection -> Array Int -> <Net "_"> Result String Int
+export
+send : Connection -> Array Int -> <Net "_"> Result String Int
 send (Connection fd) bs = netSend fd bs
 
 {- | One `recv(2)` call, at most `n` bytes. `Ok []` (an empty `Array`) means the
    peer closed the connection (EOF) — use `recvAll` to read to EOF. -}
-export recv : Connection -> Int -> <Net "_"> Result String (Array Int)
+export
+recv : Connection -> Int -> <Net "_"> Result String (Array Int)
 recv (Connection fd) n = netRecv fd n
 
 -- ── Lifecycle ────────────────────────────────────────────────────────────
 
 {- | Shut down `how` (0=read, 1=write, 2=both) of a connection without closing
    the fd. Rarely needed directly — `close`/the brackets are the common path. -}
-export shutdown : Connection -> Int -> <Net "_"> Result String Unit
+export
+shutdown : Connection -> Int -> <Net "_"> Result String Unit
 shutdown (Connection fd) how = netShutdown fd how
 
 {- | Close a connection's fd. Idempotent-safe (a double `close` is `Ok`, per the
    C shim). Prefer `withConnection`, which calls this for you on every path. -}
-export close : Connection -> <Net "_"> Result String Unit
+export
+close : Connection -> <Net "_"> Result String Unit
 close (Connection fd) = netClose fd
 
 {- | Close a listener's fd (mirrors `close`, for the `Listener` handle). -}
-export closeListener : Listener -> <Net "_"> Result String Unit
+export
+closeListener : Listener -> <Net "_"> Result String Unit
 closeListener (Listener fd) = netClose fd
 
 {- | Set the socket read/write timeout in milliseconds (`0` = blocking, no
    timeout). Recommended on any long-lived connection — a blocking-only model
    needs a timeout to avoid hanging forever on a stalled peer. -}
-export setTimeout : Connection -> Int -> <Net "_"> Result String Unit
+export
+setTimeout : Connection -> Int -> <Net "_"> Result String Unit
 setTimeout (Connection fd) ms = netSetTimeout fd ms
 
 -- ── Full-write / full-read loops (handle short send/recv) ─────────────────
@@ -121,7 +132,8 @@ setTimeout (Connection fd) ms = netSetTimeout fd ms
    `send`. A `send` that legitimately reports `0` written on a non-empty buffer
    is treated as a stalled connection and reported as `Err`, so this loop is
    guaranteed to terminate. -}
-export sendAll : Connection -> Array Int -> <Net "_"> Result String Unit
+export
+sendAll : Connection -> Array Int -> <Net "_"> Result String Unit
 sendAll conn bs =
   if arrayLength bs == 0 then Ok ()
   else match send conn bs
@@ -140,24 +152,28 @@ recvAllLoop conn buf = match recv conn 4096
 {- | Read until the peer closes the connection (EOF), accumulating every chunk.
    `Err` on the first failed `recv` (whatever has been read so far is
    discarded — a partial read is not distinguishable from a fresh failure). -}
-export recvAll : Connection -> <Net "_"> Result String (Array Int)
+export
+recvAll : Connection -> <Net "_"> Result String (Array Int)
 recvAll conn = recvAllLoop conn (new ())
 
 -- ── Text convenience (UTF-8, via stdlib/string) ────────────────────────────
 
 {- | Encode `s` as UTF-8 and write every byte (`sendAll`). -}
-export sendString : Connection -> String -> <Net "_"> Result String Unit
+export
+sendString : Connection -> String -> <Net "_"> Result String Unit
 sendString conn s = sendAll conn (toUtf8 s)
 
 {- | Read to EOF and decode the bytes as UTF-8 (`recvAll` + `fromUtf8`). Use
    `recvString` only when the peer is expected to close after writing (e.g. a
    one-shot request/response); for a persistent connection, size a `recv`/
    `recvN` read explicitly instead. -}
-export recvString : Connection -> <Net "_"> Result String String
+export
+recvString : Connection -> <Net "_"> Result String String
 recvString conn = map fromUtf8 (recvAll conn)
 
 {- | Send `s` followed by `"\n"`, UTF-8 encoded (`sendAll`). -}
-export sendLine : Connection -> String -> <Net "_"> Result String Unit
+export
+sendLine : Connection -> String -> <Net "_"> Result String Unit
 sendLine conn s = sendString conn (s ++ "\n")
 
 recvLineLoop : Connection -> MutArray Int -> <Net "_"> Result String (Option String)
@@ -182,7 +198,8 @@ recvLineLoop conn buf =
    (no read-ahead buffer to manage across calls) at the cost of a syscall per
    byte — fine for line-oriented protocols exchanging small messages, not
    recommended for bulk transfer (use `recvAll`/`recv` there). -}
-export recvLine : Connection -> <Net "_"> Result String (Option String)
+export
+recvLine : Connection -> <Net "_"> Result String (Option String)
 recvLine conn = recvLineLoop conn (new ())
 
 -- ── Brackets (the blessed leak-safe pattern — NET-DESIGN.md §4) ───────────
@@ -199,7 +216,8 @@ recvLine conn = recvLineLoop conn (new ())
 
    Non-executing example:
    `withConnection "127.0.0.1" 9000 (conn => sendString conn "hi")` -}
-export withConnection : String -> Int -> (Connection -> <Net "_"> Result String a) -> <Net "_"> Result String a
+export
+withConnection : String -> Int -> (Connection -> <Net "_"> Result String a) -> <Net "_"> Result String a
 withConnection host port body = match connect host port
   Err e => Err e
   Ok conn =>
@@ -209,7 +227,8 @@ withConnection host port body = match connect host port
 
 {- | Bind + listen on `addr`:`port`, run `body` on the resulting `Listener`, and
    close it afterward NO MATTER what `body` returns. Returns `body`'s result. -}
-export withListener : String -> Int -> (Listener -> <Net "_"> Result String a) -> <Net "_"> Result String a
+export
+withListener : String -> Int -> (Listener -> <Net "_"> Result String a) -> <Net "_"> Result String a
 withListener addr port body = match listen addr port
   Err e => Err e
   Ok lis =>
@@ -224,7 +243,8 @@ withListener addr port body = match listen addr port
    per-connection `handle` failure does not (it's swallowed after closing, so
    the server keeps serving). Pair with `withListener` to close the listener
    itself when the loop does end. -}
-export serveLoop : Listener -> (Connection -> <Net "_"> Result String Unit) -> <Net "_"> Result String Unit
+export
+serveLoop : Listener -> (Connection -> <Net "_"> Result String Unit) -> <Net "_"> Result String Unit
 serveLoop lis handle = match accept lis
   Err e => Err e
   Ok conn =>

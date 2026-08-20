@@ -1,5 +1,5 @@
 # META
-source_lines=171
+source_lines=172
 stages=DESUGAR,MARK
 # SOURCE
 -- DEAD-CODE ELIMINATION for the native LLVM emit path (Stage 3 #2a).
@@ -43,7 +43,8 @@ import hash_map.{HashMap, new, set, has, findWithDefault}
 -- ── entry point ────────────────────────────────────────────────────────────
 -- Filter `decls` (the flattened, elaborated whole-program decl list) to retain
 -- every non-DFunDef decl plus the DFunDefs reachable from main + impls/interfaces.
-export dceFilter : List Decl -> List Decl
+export
+dceFilter : List Decl -> List Decl
 dceFilter decls = filterReachable (reachableNames decls) decls
 
 -- Drop only unreachable DFunDefs; keep everything else verbatim, in order.

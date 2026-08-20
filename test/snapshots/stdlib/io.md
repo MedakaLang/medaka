@@ -1,5 +1,5 @@
 # META
-source_lines=71
+source_lines=77
 stages=DESUGAR,MARK
 # SOURCE
 {- io.mdk — files, standard streams, environment, and process I/O.
@@ -24,12 +24,14 @@ import core.{Debug, Display, Option, Result, fromOption}
 
 {- | Write a value to stderr (no trailing newline), rendered via `Display` —
    the stderr analog of the prelude's `print`. -}
-export eprint : Display a => a -> <IO> Unit
+export
+eprint : Display a => a -> <IO> Unit
 eprint x = ePutStr (display x)
 
 {- | Write a value to stderr followed by a newline — the stderr analog of
    `println`. Use for diagnostics and errors so they don't pollute stdout. -}
-export eprintln : Display a => a -> <IO> Unit
+export
+eprintln : Display a => a -> <IO> Unit
 eprintln x = ePutStrLn (display x)
 
 -- ── Debug output ─────────────────────────────────────────────────────────
@@ -39,7 +41,8 @@ eprintln x = ePutStrLn (display x)
    user-facing), `inspect` produces round-trippable output: strings and chars
    are quoted, ADTs print with constructor names and field values.  Handy for
    tracing intermediate values without a custom `Display` impl. -}
-export inspect : Debug a => a -> <IO> Unit
+export
+inspect : Debug a => a -> <IO> Unit
 inspect x = putStrLn (debug x)
 
 -- ── Files ────────────────────────────────────────────────────────────────
@@ -50,7 +53,8 @@ inspect x = putStrLn (debug x)
    a trailing newline produces, whereas readLines drops it — so this stays a
    local helper.  Splits on `\n`, dropping a trailing `\r` (so CRLF files work)
    and the final empty line a trailing newline would otherwise produce. -}
-export stripCR : String -> String
+export
+stripCR : String -> String
 stripCR s =
   let n = stringLength s
   if n > 0 && stringSlice (n - 1) n s == "\r" then
@@ -65,13 +69,15 @@ splitLines s = match stringIndexOf "\n" s
 
 {- | Read a file and split it into lines, or `Err` with the host message on a
    read failure. The trailing newline does not produce a final empty line. -}
-export readLines : String -> <IO> Result String (List String)
+export
+readLines : String -> <IO> Result String (List String)
 readLines path = map splitLines (readFile path)
 
 -- ── Environment ──────────────────────────────────────────────────────────
 
 {- | An environment variable's value, or `fallback` when it is unset. -}
-export getEnvOr : String -> String -> <IO> String
+export
+getEnvOr : String -> String -> <IO> String
 getEnvOr name fallback = fromOption fallback (getEnv name)
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "fromOption" false))))

@@ -1,5 +1,5 @@
 # META
-source_lines=148
+source_lines=153
 stages=DESUGAR,MARK
 # SOURCE
 {- hex.mdk — hex (base16) encoding/decoding of raw bytes.
@@ -71,7 +71,8 @@ encodeGo bytes i upper acc
    ""
    > encode (fromList [0])
    "00" -}
-export encode : Array Int -> String
+export
+encode : Array Int -> String
 encode bytes =
   stringFromChars (arrayFromList (encodeGo
     bytes
@@ -83,7 +84,8 @@ encode bytes =
 
    > encodeUpper (fromList [255, 0, 16])
    "FF0010" -}
-export encodeUpper : Array Int -> String
+export
+encodeUpper : Array Int -> String
 encodeUpper bytes =
   stringFromChars (arrayFromList (encodeGo
     bytes
@@ -95,7 +97,8 @@ encodeUpper bytes =
 
    > encodeString "Hello"
    "48656c6c6f" -}
-export encodeString : String -> String
+export
+encodeString : String -> String
 encodeString s = encode (toUtf8 s)
 
 -- ── Decode ──────────────────────────────────────────────────────────────────
@@ -122,7 +125,8 @@ decodeGo chars i n acc
    Err "hex.decode: odd-length input"
    > decode "zz"
    Err "hex.decode: invalid hex digit" -}
-export decode : String -> Result String (Array Int)
+export
+decode : String -> Result String (Array Int)
 decode s =
   let chars = toChars s
   let n = arrayLength chars
@@ -135,7 +139,8 @@ decode s =
 
    > decodeString "48656c6c6f"
    Ok "Hello" -}
-export decodeString : String -> Result String String
+export
+decodeString : String -> Result String String
 decodeString s = map fromUtf8 (decode s)
 
 -- ── Properties ──────────────────────────────────────────────────────────────
