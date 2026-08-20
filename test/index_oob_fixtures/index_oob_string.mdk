@@ -1,0 +1,3 @@
+-- #1787: an out-of-range String index (`impl Index String Int Char`), which
+-- indexes the CODEPOINT array — 3 codepoints here, so 10 is out of range.
+main = println "abc"[10]

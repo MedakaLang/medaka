@@ -33,14 +33,17 @@
    only the final one-or-two blocks (<=128 bytes) are synthesized to hold
    the 0x80 marker, zero padding, and the 64-bit big-endian bit length. -}
 
--- Writes here stay on `Array.set` rather than the `arr[i] := v` sugar, on
--- purpose. `setIndex` is an `IndexMut` method and its dispatch is not
--- devirtualized for a monomorphic receiver, which measured +14% on the
--- `feMul` loop in `pds/lib/field.mdk` (0.575s -> 0.658s, 200k muls, 2026-08-20)
--- when the sugar was swapped in. The rest of the tree (gzip, sqlite,
--- pds/lib/base58.mdk, the pds tests) uses the sugar; these three hot modules
--- are the deliberate exception. Revisit if monomorphic `index`/`setIndex`
--- ever specializes.
+-- Writes here are still on `Array.set` rather than the `arr[i] := v` sugar the
+-- rest of the tree uses (#1786) -- but the reason is now HISTORICAL, and this
+-- comment is a note to whoever migrates them, not a warning against it.
+--
+-- The cost was never dispatch (`setIndex` on a monomorphic `Array` receiver emits
+-- a direct call, same as `Array.set`). It was an INLINING asymmetry: `setIndex`'s
+-- out-of-bounds branch interpolated a message, which put it past LLVM's inline
+-- threshold, so it never inlined into the hot loops where `Array.set` did --
+-- 0.588s vs 0.677s over 200k feMuls. #1787 removed the interpolation, and both
+-- spellings now inline. Migrating these three modules is mechanical and wanted;
+-- re-measure when you do, and delete this comment.
 import array.{get, set, make, blit}
 
 -- ── Constants ────────────────────────────────────────────────────────

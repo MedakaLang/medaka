@@ -1,0 +1,6 @@
+-- #1787: an out-of-range Array READ.  The bound check lives in the prelude's
+-- `impl Index (Array a) Int a`, which raises `indexErrorAt` (E-INDEX-OOB) —
+-- so the index in the message comes from the abort, not from the caller.
+main =
+  let a = [|5, 6, 7|]
+  println a[9]

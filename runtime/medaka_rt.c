@@ -206,6 +206,25 @@ noreturn void mdk_oob(void) {
   exit(1);
 }
 
+/* Out-of-range `arr[i]` / `arr[i] := v` raised by a container's OWN Index/IndexMut
+ * impl, carrying the offending index (#1787).  `idx` is a RAW (already >>1-untagged)
+ * i64, matching mdk_slice_oob's convention.
+ *
+ * Why this exists rather than letting the impl interpolate its own message and pass
+ * it to mdk_oob: mdk_oob takes no argument, so the message the impl built was
+ * evaluated and DISCARDED on native -- `run` printed "index 7 out of bounds" while a
+ * built binary printed "index out of bounds" for the same program.  The dead
+ * interpolation was not free: it cost ~10 points of LLVM inline cost, which put
+ * `index`/`setIndex` at 235 against a threshold of 225 and stopped them being inlined
+ * into hot loops, making `arr[i] := v` ~15% slower than the `Array.set` function it
+ * desugars to.  Formatting here fixes both: the engines agree, and the impl's cold
+ * branch is one call. */
+noreturn void mdk_oob_at(long long idx) {
+  mdk_flush_run_stdout_on_abort();
+  fprintf(stderr, "runtime error [E-INDEX-OOB]: index %lld out of bounds\n", idx);
+  exit(1);
+}
+
 /* Out-of-range `arr.[lo..hi]` / `arr.[lo..=hi]` (#550).  The emitted slice used to
  * allocate `end - lo` slots and copy `a[lo + i]` with NO bounds check, so an
  * over-range slice READ OFF THE END OF THE HEAP and surfaced whatever it found —

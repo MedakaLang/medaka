@@ -61,6 +61,16 @@ extern panic : String -> a
 -- E-INDEX-OOB trap) -- unlike `panic`, which is always coded E-PANIC.
 extern indexError : String -> a
 
+-- Coded-OOB abort carrying the offending index, for a container's own
+-- `Index`/`IndexMut` impl (#1787).  Prefer this over `indexError` with an
+-- interpolated message: `indexError`'s message is DROPPED by the native and wasm
+-- backends (they raise a fixed-text E-INDEX-OOB abort), so interpolating one made
+-- `run` and a built binary disagree, and the dead string-building cost enough LLVM
+-- inline budget to stop `index`/`setIndex` inlining into hot loops.  Here the index
+-- is formatted by the abort itself (native @mdk_oob_at), so every engine that can
+-- report it does.
+extern indexErrorAt : Int -> a
+
 -- Coded-OOB abort for a container's own `Slice` impl to raise on an
 -- out-of-bounds slice range (#670).  Args are `(lo, hiIncl)` -- the original low
 -- bound and the INCLUSIVE upper bound (adjusted end - 1) -- so the message reads

@@ -300,6 +300,7 @@ pHashFloat : Value a -> Value a
 pHashInt : Value a -> Value a
 pHashString : Value a -> Value a
 pHypot : Value a -> Value a -> Value a
+pIndexErrorAt : Value a -> Value a
 pIntBitsToFloat : Value a -> Value a
 pIntToFloat : Value a -> Value a
 pIntToString : Value a -> Value a

@@ -2207,7 +2207,8 @@ emitIoExtern e _ name _ = gapE e ("unsupported IO extern " ++ name)
 -- auto-print emitted downstream is dead code.  Return ("1", LTUnit) so
 -- emitPrint sees LTUnit (safe) rather than LTCon/LTClosure (compile panic).
 isAbortExtern : String -> Bool
-isAbortExtern name = contains name ["panic", "exit", "indexError", "sliceError"]
+isAbortExtern name =
+  contains name ["panic", "exit", "indexError", "indexErrorAt", "sliceError"]
 
 emitAbortExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
 emitAbortExtern e env name args = match emitArgs e env args
@@ -2218,6 +2219,14 @@ emitAbortExtern e env name args = match emitArgs e env args
       -- abort externs) but ignored -- @mdk_oob takes no args and prints the
       -- fixed "runtime error [E-INDEX-OOB]: index out of bounds" text.
       let _ = emit e "  call void @mdk_oob()"
+      ("1", LTUnit)
+    else if name == "indexErrorAt" then
+      -- indexErrorAt carries the offending index into the abort (@mdk_oob_at),
+      -- which formats it -- so a built binary prints the same "index N out of
+      -- bounds" text `run` does, where plain indexError could only drop the
+      -- message (#1787).  The arg is a RAW i64 there, as in sliceError.
+      let idx_raw = untagInt e a
+      let _ = emit e "  call void @mdk_oob_at(i64 \{idx_raw})"
       ("1", LTUnit)
     else
       let cname = if name == "panic" then "panic" else "exit"
