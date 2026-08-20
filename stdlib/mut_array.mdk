@@ -80,7 +80,7 @@ export impl Index (MutArray a) Int a where
     if i >= 0 && i < !len then
       arrayGetUnsafe i !backing
     else
-      indexError "index \{intToString i} out of bounds"
+      indexErrorAt i
 
 {- | First element, or `None` when empty.
 
@@ -162,7 +162,7 @@ export impl IndexMut (MutArray a) Int a where
     if i >= 0 && i < !len then
       let _ = arraySetUnsafe i v !backing
       MutArray backing len
-    else indexError "index \{intToString i} out of bounds"
+    else indexErrorAt i
 
 {- | Exchange the elements at two indices.  Caller ensures both are in range. -}
 export swap : Int -> Int -> MutArray a -> Unit
