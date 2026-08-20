@@ -143,7 +143,8 @@ public export data Value e =
 public export data EvalEnv v = EvalEnv (List (List (String, Ref v)))
 
 -- ── value rendering (mirrors lib/eval.ml pp_value byte-for-byte) ───────────
-export ppValue : Value e -> String
+export
+ppValue : Value e -> String
 ppValue (VInt n) = intToString n
 ppValue (VFloat f) = floatToString f
 ppValue (VString s) = s
@@ -217,7 +218,8 @@ listSliceGo (x::xs) i lo hi
   | i >= lo = x :: listSliceGo xs (i + 1) lo hi
   | otherwise = listSliceGo xs (i + 1) lo hi
 
-export startsWithAt : String -> Bool
+export
+startsWithAt : String -> Bool
 startsWithAt s =
   let cs = stringToChars s
   arrayLength cs > 0 && arrayGetUnsafe 0 cs == '@'
@@ -229,10 +231,12 @@ containsInt x (y::ys) = x == y || containsInt x ys
 -- ── typeclass dispatch: ctor→type table + runtime tag ─────────────────────
 -- A process-global ctor→type map (mirrors lib/eval.ml's ctor_to_type Hashtbl);
 -- evalProgram seeds it before any dispatch.  Reading it stays pure (ref read).
-export ctorToTypeRef : Ref (List (String, String))
+export
+ctorToTypeRef : Ref (List (String, String))
 ctorToTypeRef = Ref []
 
-export buildCtorToType : List Decl -> List (String, String)
+export
+buildCtorToType : List Decl -> List (String, String)
 buildCtorToType prog = flatMap ctorTypeEntries prog
 
 ctorTypeEntries : Decl -> List (String, String)
@@ -247,7 +251,8 @@ variantName (Variant n _) = n
 
 -- named-field constructor field order: maps ctor name → ordered field name list.
 -- Only ConNamed variants produce entries; positional ConPos ones produce nothing.
-export ctorFieldOrdersRef : Ref (List (String, List String))
+export
+ctorFieldOrdersRef : Ref (List (String, List String))
 ctorFieldOrdersRef = Ref []
 
 -- ARGSTAMP-UNIFY / genuine #21: per (impl-method-name, head-tag) the number of
@@ -281,7 +286,8 @@ ifaceDispatchRef = Ref []
 -- interpreter the lookup always returned None and the fix was INERT.  Sharing the
 -- code is not sharing the DATA: bind them here so a driver cannot install one
 -- without the other.)
-export installDispatchTables : List Decl -> List ((String, String, String), List Int)
+export
+installDispatchTables : List Decl -> List ((String, String, String), List Int)
 installDispatchTables allDecls =
   let disp = buildIfaceDispatch allDecls
   methodReqCountRef := (buildMethodReqCounts allDecls)
@@ -339,7 +345,8 @@ ifaceIdsAtTagEGo tag ((ifaceId, t, k)::rest)
 -- name, which `pickTagFallback` reads back through the ordinary env when — and
 -- only when — the bare name is genuinely ambiguous.  `#` and `::` cannot occur in
 -- a Medaka identifier, so these cells can never collide with a user binding.
-export defaultCellName : String -> String -> String
+export
+defaultCellName : String -> String -> String
 defaultCellName ifaceId method = "\{ifaceId}#\{method}"
 
 -- the interface a method belongs to ("" if it is not an interface method).
@@ -412,7 +419,8 @@ methodsOfIfaceIn iface (((_, i, m), _)::rest)
   | i == iface = m :: methodsOfIfaceIn iface rest
   | otherwise = methodsOfIfaceIn iface rest
 
-export buildMethodReqCounts : List Decl -> List ((String, String), Int)
+export
+buildMethodReqCounts : List Decl -> List ((String, String), Int)
 buildMethodReqCounts prog =
   let arities = flatMap methodDeclArities prog
   flatMap (implMethodReqCounts arities) prog
@@ -479,7 +487,8 @@ lookupReqCount mname tag (((m, t), c)::rest)
   | m == mname && t == tag = Some c
   | otherwise = lookupReqCount mname tag rest
 
-export buildCtorFieldOrders : List Decl -> List (String, List String)
+export
+buildCtorFieldOrders : List Decl -> List (String, List String)
 buildCtorFieldOrders prog = flatMap ctorFieldOrderEntries prog
 
 ctorFieldOrderEntries : Decl -> List (String, List String)
@@ -525,7 +534,8 @@ sumInts : List Int -> Int
 sumInts [] = 0
 sumInts (x::xs) = x + sumInts xs
 
-export tyvarsInArgs : List Ty -> Int
+export
+tyvarsInArgs : List Ty -> Int
 tyvarsInArgs ts = sumInts (map countTyvars ts)
 
 -- 🚨 B-2.2-e: `implKeyOf` AND ITS PRIVATE `ppTyK` PRINTER FAMILY ARE DELETED HERE.
@@ -589,7 +599,8 @@ tyvarsInArgs ts = sumInts (map countTyvars ts)
 -- DISPATCH namespace; it is deliberately distinct from core_ir_lower's MATCH
 -- pattern-canonical `tupleName = "__tuple__"` (which stays arity-erased — a match
 -- column is arity-homogeneous and carries its arity in HTuple).
-export tupleHeadTag : Int -> String
+export
+tupleHeadTag : Int -> String
 tupleHeadTag n = "__tuple" ++ intToString n ++ "__"
 
 -- ⚠️ THE `TyFun` ARM IS THE DEFINITION-SIDE HALF OF #1617 AND CANNOT BE OMITTED
@@ -656,7 +667,8 @@ tyMentions (TyRow _ tail _) params = match tail
   None => False
 
 -- ── environment ───────────────────────────────────────────────────────────
-export lookupEnv : EvalEnv (Value e) -> String -> <e> Value e
+export
+lookupEnv : EvalEnv (Value e) -> String -> <e> Value e
 lookupEnv (EvalEnv frames) name = lookupFrames frames name
 
 -- #1047: the non-panicking form.  `lookupEnv` on a missing name is a hard panic,
@@ -692,7 +704,8 @@ lookupFrames (frame::rest) name = match lookupFrameCell frame name
 -- method.  NOTE: in this runtime EVERY top-level group installs as a VMulti (even a
 -- single-clause standalone), so the OCaml "first VMulti wins" test is too coarse —
 -- the candidates' shape (VTypedImpl vs VClosure) is the real discriminator.
-export lookupMethod : EvalEnv (Value e) -> String -> <e> Value e
+export
+lookupMethod : EvalEnv (Value e) -> String -> <e> Value e
 lookupMethod (EvalEnv frames) name = lookupMethodFrames frames frames name
 
 lookupMethodFrames : List (List (String, Ref (Value e))) -> List (List (String, Ref (Value e))) -> String -> <e> Value e
@@ -744,7 +757,8 @@ blackholeCell name _ =
     "E-CYCLIC-VALUE"
     "\{name} refers to itself during initialization (non-productive cyclic value)"
 
-export force : Value e -> <e> Value e
+export
+force : Value e -> <e> Value e
 force (VThunk f) = f ()
 force v = v
 
@@ -781,16 +795,19 @@ addrCell ((n, cell)::rest) slot name
   | n == name = cell
   | otherwise = panic "EVarAt: slot/name mismatch; want \{name}, found \{n}"
 
-export extendEnv : EvalEnv (Value e) -> List (String, Value e) -> EvalEnv (Value e)
+export
+extendEnv : EvalEnv (Value e) -> List (String, Value e) -> EvalEnv (Value e)
 extendEnv (EvalEnv frames) binds = EvalEnv (map cellOf binds :: frames)
 
 cellOf : (String, Value e) -> (String, Ref (Value e))
 cellOf (n, v) = (n, Ref v)
 
-export pushFrame : EvalEnv (Value e) -> List (String, Ref (Value e)) -> EvalEnv (Value e)
+export
+pushFrame : EvalEnv (Value e) -> List (String, Ref (Value e)) -> EvalEnv (Value e)
 pushFrame (EvalEnv frames) frame = EvalEnv (frame::frames)
 
-export findCell : List (String, Ref (Value e)) -> String -> Ref (Value e)
+export
+findCell : List (String, Ref (Value e)) -> String -> Ref (Value e)
 findCell [] name = panic ("findCell: missing " ++ name)
 findCell ((n, cell)::rest) name
   | n == name = cell
@@ -881,7 +898,8 @@ ordGt Gt = True
 ordGt _ = False
 
 -- ── pattern matching ──────────────────────────────────────────────────────
-export matchPat : Pat -> Value e -> Option (List (String, Value e))
+export
+matchPat : Pat -> Value e -> Option (List (String, Value e))
 matchPat (PVar x _) v = Some [(x, v)]
 matchPat PWild _ = Some []
 matchPat (PLit (LInt n)) (VInt m) = if n == m then Some [] else None
@@ -965,7 +983,8 @@ matchPats (p::ps) (v::vs) = match matchPat p v
 matchPats _ _ = None
 
 -- ── constructor builders ──────────────────────────────────────────────────
-export makeCtor : String -> Int -> Value e
+export
+makeCtor : String -> Int -> Value e
 makeCtor name arity = makeCtorGo name arity []
 
 makeCtorGo : String -> Int -> List (Value e) -> Value e
@@ -978,14 +997,16 @@ makeCtorGo name arity acc
 -- binds `apply` (function application), so `import eval.{apply}` is ambiguous at
 -- a call site; `applyValue` lets core_ir_eval.mdk reuse this runtime's value
 -- application unambiguously.
-export applyValue : Value e -> Value e -> <e> Value e
+export
+applyValue : Value e -> Value e -> <e> Value e
 applyValue f x = apply f x
 
 -- P0-2(a): guard the host C-stack against unbounded non-tail recursion.  We
 -- increment a depth counter on entry, raise a clean E-STACK-OVERFLOW past the
 -- limit, and decrement on the balanced return (a runtimePanic is noreturn, so a
 -- tripped guard just exits — the counter never needs unwinding).
-export apply : Value e -> Value e -> <e> Value e
+export
+apply : Value e -> Value e -> <e> Value e
 apply f x =
   let d = !evalDepthRef + 1
   evalDepthRef := d
@@ -1053,7 +1074,8 @@ isDispatching _ = False
 -- #1047: [env] + [method] are threaded in only to reach the per-interface default
 -- cells on the ambiguous-default path (`pickTagFallback`); every other arm ignores
 -- them, so no dispatch decision outside that path can depend on them.
-export narrowMethod : EvalEnv (Value e) -> String -> Value e -> String -> <e> Value e
+export
+narrowMethod : EvalEnv (Value e) -> String -> Value e -> String -> <e> Value e
 narrowMethod _ _ (VMulti vs) "" = VMulti vs
 narrowMethod env method (VMulti vs) tag =
   stripResolved (pickByTag env method vs tag)
@@ -1185,7 +1207,8 @@ awaitsArgs _ = False
 -- the concrete head tag an EMethodAt route narrows by: RKey is literal; RDict/
 -- RDictFwd forward the enclosing function's dict parameter; RNone leaves the
 -- VMulti for arg-tag fallback ("").
-export routeTag : EvalEnv (Value e) -> Route -> <e> String
+export
+routeTag : EvalEnv (Value e) -> Route -> <e> String
 routeTag _ RNone = ""
 routeTag _ (RKey key _) = key
 routeTag env (RDict d) = match lookupEnv env d
@@ -1202,13 +1225,15 @@ routeTag _ (RScalar _) =
 
 -- a constrained-function occurrence: apply one runtime dictionary per resolved
 -- route as a leading argument (matching the dict params dict_pass prepended).
-export applyDicts : EvalEnv (Value e) -> Value e -> List Route -> <e> Value e
+export
+applyDicts : EvalEnv (Value e) -> Value e -> List Route -> <e> Value e
 applyDicts _ v [] = v
 applyDicts env v (r::rest) = applyDicts env (apply v (dictOfRoute env r)) rest
 
 -- apply an already-built list of VDict values directly (used to forward an impl's
 -- own requires into its body at a return-position RDictFwd site, Phase 83/84 #5).
-export applyValues : Value e -> List (Value e) -> <e> Value e
+export
+applyValues : Value e -> List (Value e) -> <e> Value e
 applyValues v [] = v
 applyValues v (x::rest) = applyValues (apply v x) rest
 
@@ -1237,7 +1262,8 @@ dictOfRoute _ (RScalar _) =
 -- narrow a method VMulti by a route, returning the narrowed value and any
 -- forwarded requires (non-empty only for RDictFwd return-position sites where the
 -- enclosing dict carries nested element dicts for the selected impl, Phase 83/84 #5).
-export methodAtNarrow : EvalEnv (Value e) -> String -> Value e -> Route -> <e> (Value e, List (Value e))
+export
+methodAtNarrow : EvalEnv (Value e) -> String -> Value e -> Route -> <e> (Value e, List (Value e))
 methodAtNarrow _ _ v RNone = (v, [])
 methodAtNarrow env method v (RKey key _) = (narrowMethod env method v key, [])
 -- ARGSTAMP-UNIFY Phase 2+3 / genuine #21: under eval dict-threading an arg-position
@@ -1293,7 +1319,8 @@ applyClosure env (p::ps) body arg =
 -- VClosureF analog of applyClosure: the body is a host fn run on the fully-
 -- extended env once the last param binds; partial application keeps the same
 -- body fn and grows env (mirrors VClosure exactly).
-export applyClosureF : EvalEnv (Value e) -> List Pat -> (EvalEnv (Value e) -> <e> Value e) -> Value e -> <e> Option (Value e)
+export
+applyClosureF : EvalEnv (Value e) -> List Pat -> (EvalEnv (Value e) -> <e> Value e) -> Value e -> <e> Option (Value e)
 applyClosureF _ [] _ _ = panic "applied closure with no parameters"
 applyClosureF env [p] f arg = match matchPat p arg
   None => None
@@ -1323,7 +1350,8 @@ isPartial (VTypedImpl _ _ _ _ _) = True
 isPartial _ = False
 
 -- ── the evaluator ─────────────────────────────────────────────────────────
-export eval : EvalEnv (Value e) -> Expr -> <e> Value e
+export
+eval : EvalEnv (Value e) -> Expr -> <e> Value e
 eval _ (ELit (LInt n)) = VInt n
 -- PLAN.md #11: dictPass rewrites every ENumLit to ELit before eval; these arms
 -- are defensive for an untyped/non-elaborate eval path (a bare int → VInt; a
@@ -1452,7 +1480,8 @@ evalMethodAt env name route implRoutes methodRoutes =
 -- but not SUFFICIENT proxy for "the callee declares dict params" — a terminal body
 -- that still takes VALUE params awaits args and slips through it; that is #413, which
 -- implDictRoutes (below) closes properly by consulting the declared count.
-export applyMethodDicts : EvalEnv (Value e) -> String -> Route -> Value e -> List (Value e) -> List Route -> List Route -> <e> Value e
+export
+applyMethodDicts : EvalEnv (Value e) -> String -> Route -> Value e -> List (Value e) -> List Route -> List Route -> <e> Value e
 applyMethodDicts env name route narrowed fwdReqs0 implRoutes methodRoutes =
   let tag = routeTag env route
   -- ONE scan of methodReqCountRef per dispatch.  Both consumers below derive from
@@ -1594,7 +1623,8 @@ implDictRoutes None _ implRoutes = implRoutes
 -- Retained for the Core-IR interpreter's CIndex/CStringIndex/CListIndex arms
 -- (see the note on listNthAt above): the EIndex eval arm is gone (desugared to
 -- `index`), so this is only reachable via the now-unreachable Core-IR nodes.
-export evalIndex : Value e -> Value e -> Value e
+export
+evalIndex : Value e -> Value e -> Value e
 evalIndex container (VInt i) = evalIndexInt container i
 evalIndex _ _ = panic "index is not an Int"
 
@@ -1614,7 +1644,8 @@ stringIndexCp s i
     runtimePanic "E-INDEX-OOB" ("index " ++ intToString i ++ " out of bounds")
   | otherwise = VChar (charToStr (arrayGetUnsafe i (stringToChars s)))
 
-export evalSlice : Value e -> Value e -> Value e -> Bool -> Value e
+export
+evalSlice : Value e -> Value e -> Value e -> Bool -> Value e
 evalSlice container (VInt lo) (VInt hi) incl = evalSliceInt container lo hi incl
 evalSlice _ _ _ _ = panic "slice index must be Int"
 
@@ -1633,15 +1664,18 @@ sliceArray a lo hiX
   | otherwise =
     VArray (arrayMakeWith (hiX - lo) (i => arrayGetUnsafe (lo + i) a))
 
-export evalRange : Value e -> Value e -> Bool -> (List Int -> Value e) -> Value e
+export
+evalRange : Value e -> Value e -> Bool -> (List Int -> Value e) -> Value e
 evalRange (VInt lo) (VInt hi) incl mk =
   mk (intSeq lo (if incl then hi + 1 else hi))
 evalRange _ _ _ _ = panic "range bound must be Int"
 
-export rangeListMk : List Int -> Value e
+export
+rangeListMk : List Int -> Value e
 rangeListMk ns = VList (map VInt ns)
 
-export rangeArrayMk : List Int -> Value e
+export
+rangeArrayMk : List Int -> Value e
 rangeArrayMk ns = VArray (arrayFromList (map VInt ns))
 
 evalFieldAssign : EvalEnv (Value e) -> FieldAssign -> <e> (String, Value e)
@@ -1657,7 +1691,8 @@ recordCreateVals con (f::fs) assigns = match lookupAssoc f assigns
   Some v => v :: recordCreateVals con fs assigns
   None => panic ("missing field: " ++ f)
 
-export evalRecordUpdate : Value e -> List (String, Value e) -> Value e
+export
+evalRecordUpdate : Value e -> List (String, Value e) -> Value e
 evalRecordUpdate (VRecord name existing) updates =
   VRecord name (map (mergeField updates) existing)
 evalRecordUpdate _ _ = panic "record update on non-record"
@@ -1670,7 +1705,8 @@ mergeField updates (k, v) = match lookupAssoc k updates
 -- variant (named-field constructor) update: `Con { base | f = v … }`.
 -- Looks up the constructor's field order from ctorFieldOrdersRef, then replaces
 -- positional values for the named fields in `updates`, keeping the rest.
-export evalVariantUpdate : String -> Value e -> List (String, Value e) -> Value e
+export
+evalVariantUpdate : String -> Value e -> List (String, Value e) -> Value e
 evalVariantUpdate con (VCon con' vals) updates
   | con == con' =
     VCon con (applyVariantUpdates updates (ctorFieldOrderFor con) vals)
@@ -1701,14 +1737,16 @@ applyFieldUpdate updates field old = match lookupAssoc field updates
   Some v => v
   None => old
 
-export evalValueField : Value e -> Value e
+export
+evalValueField : Value e -> Value e
 evalValueField (VRef cell) = !cell
 evalValueField (VRecord _ fields) = match lookupAssoc "value" fields
   Some v => v
   None => panic "record has no field 'value'"
 evalValueField _ = panic "field access on non-record/ref"
 
-export evalField : Value e -> String -> Value e
+export
+evalField : Value e -> String -> Value e
 evalField (VRecord _ fields) field = fieldOr fields field
 evalField _ _ = panic "field access on non-record"
 
@@ -1801,7 +1839,8 @@ topGroupValue env clauses = VMulti (map (clauseClosure env) clauses)
 clauseClosure : EvalEnv (Value e) -> (List Pat, Expr) -> Value e
 clauseClosure env (pats, body) = VClosure env pats body
 
-export isNullary : List Pat -> Bool
+export
+isNullary : List Pat -> Bool
 isNullary [] = True
 isNullary _ = False
 
@@ -1840,7 +1879,8 @@ negFloatIEEE f =
   let _ = arraySetUnsafe 0 (bitXor (arrayGetUnsafe 0 bs) 128) bs
   bytesToFloat64 bs 0
 
-export evalUnop : String -> Value e -> Value e
+export
+evalUnop : String -> Value e -> Value e
 evalUnop "-" (VInt n) = VInt (0 - n)
 evalUnop "-" (VFloat f) = VFloat (negFloatIEEE f)
 evalUnop "-" _ = panic "unary minus on non-number"
@@ -1882,17 +1922,20 @@ evalOr env (VBool False) r = eval env r
 evalOr env (VCon "False" []) r = eval env r
 evalOr _ _ _ = panic "'||' on non-Bool"
 
-export consVal : Value e -> Value e -> Value e
+export
+consVal : Value e -> Value e -> Value e
 consVal hv (VList xs) = VList (hv::xs)
 consVal _ _ = panic "cons (::) rhs is not a list"
 
-export appendVal : Value e -> Value e -> Value e
+export
+appendVal : Value e -> Value e -> Value e
 appendVal (VList a) (VList b) = VList (a ++ b)
 appendVal (VString a) (VString b) = VString (a ++ b)
 appendVal _ _ =
   panic "'++' requires Semigroup (List, String, or a type with append)"
 
-export evalArith : String -> Value e -> Value e -> Value e
+export
+evalArith : String -> Value e -> Value e -> Value e
 evalArith "+" (VInt a) (VInt b) = VInt (a + b)
 evalArith "-" (VInt a) (VInt b) = VInt (a - b)
 evalArith "*" (VInt a) (VInt b) = VInt (a * b)
@@ -1925,7 +1968,8 @@ evalArith ">=" a b = VBool (not (ordLt (valueCompare a b)))
 evalArith op _ _ = panic ("unknown op '" ++ op ++ "'")
 
 -- ── program driver ────────────────────────────────────────────────────────
-export collectCtors : List Decl -> List (String, Value e)
+export
+collectCtors : List Decl -> List (String, Value e)
 collectCtors prog = flatMap ctorsOfDecl prog
 
 ctorsOfDecl : Decl -> List (String, Value e)
@@ -1937,7 +1981,8 @@ ctorsOfDecl _ = []
 ctorEntry : Variant -> (String, Value e)
 ctorEntry (Variant n payload) = (n, makeCtor n (payloadArity payload))
 
-export payloadArity : ConPayload -> Int
+export
+payloadArity : ConPayload -> Int
 payloadArity (ConPos tys) = listLen tys
 payloadArity (ConNamed fs _) = listLen fs
 
@@ -2086,7 +2131,8 @@ receiverParam (p::_) = [p]
 -- decl list is a resolve error) was equally available before this unit and is an
 -- argument, not a removal.  Retiring either default moves behaviour and is its
 -- own unit.
-export lookupPositions : String -> String -> String -> List ((String, String, String), List Int) -> List Int
+export
+lookupPositions : String -> String -> String -> List ((String, String, String), List Int) -> List Int
 lookupPositions ifaceId iface mname tbl = match positionsById ifaceId mname tbl
   Some p => p
   None => positionsByName iface mname tbl
@@ -2179,7 +2225,8 @@ implMethodEntry env disp o ifaceName typeArgs (ImplMethod mname pats body) =
   let inner = implMethodValue env positions pats body
   (mname, (tyvarsInArgs typeArgs, VTypedImpl tag key positions 0 inner))
 
-export headTyconHead : List Ty -> Option String
+export
+headTyconHead : List Ty -> Option String
 headTyconHead [] = None
 headTyconHead (t::_) = headTycon t
 
@@ -2203,7 +2250,8 @@ qualifiedDefaultEntry ifaceId mname scored =
 
 -- coalesce all candidates for each method name into one VMulti, most-specific
 -- (fewest type vars) first
-export coalesceImpls : List (String, (Int, Value e)) -> List (String, Value e)
+export
+coalesceImpls : List (String, (Int, Value e)) -> List (String, Value e)
 coalesceImpls scored =
   map (n => (n, coalesceOne n scored)) (dedup (map fst scored))
 
@@ -2231,7 +2279,8 @@ insertScore x (y::ys)
   | fst y <= fst x = y :: insertScore x ys
   | otherwise = x :: y::ys
 
-export implMethodNames : List Decl -> List String
+export
+implMethodNames : List Decl -> List String
 implMethodNames prog = dedup (flatMap implDeclNames prog)
 
 implDeclNames : Decl -> List String
@@ -2267,12 +2316,14 @@ qualifiedDefaultName ifaceId n = [defaultCellName ifaceId n]
 -- case of evalModules (evalOne); the shared helpers it used (cellResult,
 -- installGroups, installConsts, coalesceImpls, …) are retained by evalModules.
 
-export cellResult : (String, Ref (Value e)) -> (String, Value e)
+export
+cellResult : (String, Ref (Value e)) -> (String, Value e)
 cellResult (n, cell) = (n, !cell)
 
 -- True/False plus `otherwise` (a trivial prelude binding ubiquitous in guards;
 -- the eval_probe oracle injects the same so prelude-free fixtures can use it)
-export boolSeeds : List (String, Value e)
+export
+boolSeeds : List (String, Value e)
 boolSeeds =
   [("True", VBool True), ("False", VBool False), ("otherwise", VBool True)]
 
@@ -2317,17 +2368,20 @@ prim1M f = VPrim f
 -- appending is just <Mut>).  ePutStr/ePutStrLn (stderr) are discarded HERE (the
 -- oracle table); under `medaka run` ioExternBindings overrides them with prims
 -- that stream to the real host stderr.
-export outputRef : Ref String
+export
+outputRef : Ref String
 outputRef = Ref ""
 
 -- Runtime-diagnostic side channels (RUNTIME-DIAGNOSTIC-CHANNEL-DESIGN.md).
 -- currentEvalLoc is updated at every ELoc node; currentEvalFile is set once by
 -- the run driver to the target path (the parser leaves Loc.file "").  Neither is
 -- read on a successful eval, so valid-program output is untouched.
-export currentEvalLoc : Ref Loc
+export
+currentEvalLoc : Ref Loc
 currentEvalLoc = Ref (Loc "" 0 0 0 0)
 
-export currentEvalFile : Ref String
+export
+currentEvalFile : Ref String
 currentEvalFile = Ref ""
 
 -- P0-2(a): evaluator recursion-depth guard.  The tree-walker recurses on the
@@ -2351,7 +2405,8 @@ evalDepthLimit = 25000
 -- instead of located text. Set once by the `run --json` CLI arm; read only at
 -- the panic chokepoint, so it is inert (default False) on every other path —
 -- including every valid-program eval gate.
-export runJsonMode : Ref Bool
+export
+runJsonMode : Ref Bool
 runJsonMode = Ref False
 
 -- Diagnostics the DRIVER produced BEFORE eval started (typecheck-stage warnings,
@@ -2370,7 +2425,8 @@ runJsonMode = Ref False
 -- document.  Triples, not a flat `List Diag`, because `cjAllToJson`'s unit is
 -- (path, src, diags) and a multi-module run's warnings belong to different files.
 -- Inert (default []) on every non-`--json` path.
-export pendingRunDiags : Ref (List (String, String, List Diag))
+export
+pendingRunDiags : Ref (List (String, String, List Diag))
 pendingRunDiags = Ref []
 
 -- Update currentEvalLoc from an ELoc span, but IGNORE the placeholder span the
@@ -2395,7 +2451,8 @@ updateEvalLoc (Loc f sl sc el ec)
 -- range,severity,source}]}]}) is byte-shape-identical to a compile-time
 -- diagnostic. `cjRangeOfLoc` ignores its `src` argument (range comes purely
 -- from the Loc), so passing "" needs no source-text threading.
-export runtimePanic : String -> String -> a
+export
+runtimePanic : String -> String -> a
 runtimePanic code msg = match !currentEvalLoc
   Loc f sl sc el ec =>
     let ff = if f == "" then !currentEvalFile else f
@@ -2576,7 +2633,8 @@ u64ToSignedInt (a0, a1, a2, a3) =
 -- over `rngStateRef` for property-value generation (deliberately unrelated: a
 -- passing prop prints `OK (100 tests)` regardless of the draws, and a failing
 -- prop's shrunk counterexample is engine-specific — see test/diff_compiler_test.sh).
-export rngStateRef : Ref Int
+export
+rngStateRef : Ref Int
 rngStateRef = Ref 123456789
 
 rngU64Ref : Ref (Int, Int, Int, Int)
@@ -2669,7 +2727,8 @@ pFlushStdout _ = panic "flushStdout: expected Unit"
 -- fresh row `e` — a top-level Value-typed value would fall to the value
 -- restriction (function applications are not generalized) and pin one global
 -- row across the oracle and run paths.
-export externBindings : Unit -> List (String, Value e)
+export
+externBindings : Unit -> List (String, Value e)
 externBindings _ = [
   ("randomInt", prim2M pRandomInt),
   ("randomBool", prim1M pRandomBool),
@@ -3166,7 +3225,8 @@ buildWith f i n =
 mkGroup : List (String, (List Pat, Expr)) -> String -> (String, List (List Pat, Expr))
 mkGroup defs name = (name, clausesForName name defs)
 
-export installConsts : List (String, Ref (Value e)) -> List (String, Value e) -> <e> Unit
+export
+installConsts : List (String, Ref (Value e)) -> List (String, Value e) -> <e> Unit
 installConsts _ [] = ()
 installConsts cells ((n, v)::rest) =
   findCell cells n := v
@@ -3178,7 +3238,8 @@ installGroups env cells ((n, clauses)::rest) =
   findCell cells n := topGroupValue env clauses
   installGroups env cells rest
 
-export lookupBinding : String -> List (String, Value e) -> Option (Value e)
+export
+lookupBinding : String -> List (String, Value e) -> Option (Value e)
 lookupBinding _ [] = None
 lookupBinding name ((n, v)::rest)
   | n == name = Some v
@@ -3191,10 +3252,12 @@ lookupBinding name ((n, v)::rest)
 -- binding is evaluated EAGERLY at native startup, so an aborting nullary would
 -- fire on every `medaka` invocation.  The runtimePanic call therefore stays
 -- inline at each (lazy) match arm.
-export noMainMsg : String
+export
+noMainMsg : String
 noMainMsg = "program has no 'main' binding"
 
-export evalMain : List Decl -> String
+export
+evalMain : List Decl -> String
 evalMain prog = match lookupBinding "main" (evalOne [] ("__main__", prog))
   Some v => ppValue (force v)
   None => runtimePanic "E-NO-MAIN" noMainMsg
@@ -3207,15 +3270,18 @@ evalMain prog = match lookupBinding "main" (evalOne [] ("__main__", prog))
 -- Like evalOutput, but drops any prelude function the user program redefines
 -- (mirrors the reference's prelude_for shadow-drop) so a user `sum` doesn't
 -- coalesce with the prelude's point-free `sum` into a mixed-arity VMulti.
-export evalOutputWith : List Decl -> List Decl -> String
+export
+evalOutputWith : List Decl -> List Decl -> String
 evalOutputWith preludeDecls userDecls = evalOneOutput
   []
   ("__main__", dropShadowed (funNamesOf userDecls) preludeDecls ++ userDecls)
 
-export funNamesOf : List Decl -> List String
+export
+funNamesOf : List Decl -> List String
 funNamesOf decls = map fst (funDefs decls)
 
-export dropShadowedExp : List String -> List Decl -> List Decl
+export
+dropShadowedExp : List String -> List Decl -> List Decl
 dropShadowedExp names decls = dropShadowed names decls
 
 dropShadowed : List String -> List Decl -> List Decl
@@ -3256,14 +3322,16 @@ runMainForEffect binds = match lookupBinding "main" binds
 data ModInfo v =
   | ModInfo String (List Decl) (List (String, List (List Pat, Expr))) (List (String, Ref v)) (EvalEnv v)
 
-export evalModules : List Decl -> List (String, List Decl) -> <e> List (String, Value e)
+export
+evalModules : List Decl -> List (String, List Decl) -> <e> List (String, Value e)
 evalModules preludeDecls modules = evalModulesWith [] preludeDecls modules
 
 -- B2 (RUN-EFFECTS): evalModules with EXTRA extern bindings installed alongside
 -- externBindings — the seam `medaka run` uses to install real-I/O prims
 -- (ioExternBindings) without them ever reaching the differential-oracle
 -- drivers, so the oracle's `e := <Mut>` purity stays a type-level guarantee.
-export evalModulesWith : List (String, Value e) -> List Decl -> List (String, List Decl) -> <e> List (String, Value e)
+export
+evalModulesWith : List (String, Value e) -> List Decl -> List (String, List Decl) -> <e> List (String, Value e)
 evalModulesWith extraExterns preludeDecls modules =
   let externs = externBindings () ++ extraExterns
   let moduleDecls = flatMap snd modules
@@ -3319,7 +3387,8 @@ buildModInfos coreExports exportsMap ((mid, decls)::rest) =
 -- The exported entry is the SAME global cell, never a copy: that cell holds the
 -- coalesced dispatcher, so an alias is a second name for one dispatcher and impl
 -- coalescing is untouched.
-export methodCellsOf : List (String, Ref (Value e)) -> List Decl -> List (String, Ref (Value e))
+export
+methodCellsOf : List (String, Ref (Value e)) -> List Decl -> List (String, Ref (Value e))
 methodCellsOf globalCells decls =
   flatMap (methodCell globalCells) (moduleMethodNames decls)
 
@@ -3371,7 +3440,8 @@ rootLocals (_::rest) = rootLocals rest
 -- file's own helpers (locals) and imported names but also prelude methods like
 -- `eq`/`compare` (globals), which rootLocals alone omits.  Mirrors lib/eval.ml's
 -- eval_modules_root_env.
-export evalModulesRootEnv : List Decl -> List (String, List Decl) -> <e> List (String, Value e)
+export
+evalModulesRootEnv : List Decl -> List (String, List Decl) -> <e> List (String, Value e)
 evalModulesRootEnv preludeDecls modules =
   evalModulesRootEnvWith [] preludeDecls modules
 
@@ -3381,7 +3451,8 @@ evalModulesRootEnv preludeDecls modules =
 -- (testCapableExterns) can override the frozen clock/GC constants without those
 -- prims reaching the differential-oracle probes.  Kept in LOCKSTEP with
 -- evalModulesWith — the two module drivers are deliberate parallel copies.
-export evalModulesRootEnvWith : List (String, Value e) -> List Decl -> List (String, List Decl) -> <e> List (String, Value e)
+export
+evalModulesRootEnvWith : List (String, Value e) -> List Decl -> List (String, List Decl) -> <e> List (String, Value e)
 evalModulesRootEnvWith extraExterns preludeDecls modules =
   let externs = externBindings () ++ extraExterns
   let moduleDecls = flatMap snd modules
@@ -3438,7 +3509,8 @@ groupsOf decls =
 public export data ModExports v =
   | ModExports (List (String, Ref v)) (List (String, List String))
 
-export modExportCells : ModExports v -> List (String, Ref v)
+export
+modExportCells : ModExports v -> List (String, Ref v)
 modExportCells (ModExports cells _) = cells
 
 -- type name → the constructors a `T(..)` member of an IMPORT may bind, for one
@@ -3554,7 +3626,8 @@ modExportCells (ModExports cells _) = cells
 -- `test/must_fail_fixtures/1305-newtype-ctor-import-native-divergence/claim.txt`.
 --     Copying the emitter here would still have imported a bug into the
 -- interpreters — just not that one.
-export ctorsByTypeOf : List Decl -> List (String, List String)
+export
+ctorsByTypeOf : List Decl -> List (String, List String)
 ctorsByTypeOf decls = flatMap ctorNamesOfDecl decls
 
 ctorNamesOfDecl : Decl -> List (String, List String)
@@ -3564,7 +3637,8 @@ ctorNamesOfDecl _ = []
 -- value names a DUse binds, resolved to the exporting module's exported cells
 -- (mirrors lib/eval.ml build_imports); names resolving to a ctor/global are
 -- omitted (reached via the global frame instead).
-export importFrameOf : List (String, ModExports (Value e)) -> List Decl -> List (String, Ref (Value e))
+export
+importFrameOf : List (String, ModExports (Value e)) -> List Decl -> List (String, Ref (Value e))
 importFrameOf exportsMap decls = flatMap (useImports exportsMap) decls
 
 useImports : List (String, ModExports (Value e)) -> Decl -> List (String, Ref (Value e))
@@ -3586,7 +3660,8 @@ useImports _ _ = []
 -- ORIGIN up in this list and enters it under the LOCAL name.  With core absent from
 -- exportsMap that lookup missed, `keep` bound nothing, and only an unaliased reference
 -- survived — by falling through to the global frame, which is not binding, just luck.
-export pubReexports : ModExports (Value e) -> List (String, ModExports (Value e)) -> List Decl -> List (String, Ref (Value e))
+export
+pubReexports : ModExports (Value e) -> List (String, ModExports (Value e)) -> List Decl -> List (String, Ref (Value e))
 pubReexports coreExports exportsMap decls =
   flatMap (reexport coreExports exportsMap) decls
 
@@ -3684,7 +3759,8 @@ firstOrEmpty (x::_) = x
 -- Run a multi-module program for its OUTPUT (the loader-driven analog of
 -- evalOutput): evaluate every module in dependency order, force the root
 -- module's `main` for its IO side-effects, return the captured stdout.
-export evalModulesOutput : List Decl -> List (String, List Decl) -> String
+export
+evalModulesOutput : List Decl -> List (String, List Decl) -> String
 evalModulesOutput preludeDecls modules =
   outputRef := ""
   let binds = evalModules preludeDecls modules
@@ -3875,7 +3951,8 @@ pRename _ _ = panic "rename: expected String String"
 -- trailing args here (setRef progArgsRef) before driving the evaluator; deriving
 -- them inside eval.mdk would mean re-parsing the CLI's own grammar.  Default []
 -- keeps every other driver (which never sets it) at "no program args".
-export progArgsRef : Ref (List String)
+export
+progArgsRef : Ref (List String)
 progArgsRef = Ref []
 
 pArgs : Value e -> <Env | e> Value e
@@ -3905,7 +3982,8 @@ pReadExactly : Value e -> <Stdin | e> Value e
 pReadExactly (VInt n) = vOptionString (readExactly n)
 pReadExactly _ = panic "readExactly: expected Int"
 
-export ioExternBindings : Unit -> List (String, Value e)
+export
+ioExternBindings : Unit -> List (String, Value e)
 ioExternBindings _ = [
   -- Clock / GC / stderr — these OVERRIDE the frozen constants in externBindings
   ("wallTimeSec", prim1M pWallTimeSecIO),
@@ -3951,7 +4029,8 @@ ioExternBindings _ = [
 -- process), exit (a single doctest's `exit 0` would terminate the whole
 -- long-lived test process and falsely report SUCCESS — THE hazard), and every
 -- file / env / stdin / net extern (no sandbox / capability flag in test/repl).
-export testCapableExterns : Unit -> List (String, Value e)
+export
+testCapableExterns : Unit -> List (String, Value e)
 testCapableExterns _ = [
   ("wallTimeSec", prim1M pWallTimeSecIO),
   ("monotonicSec", prim1M pMonotonicSecIO),
@@ -3964,7 +4043,8 @@ testCapableExterns _ = [
 -- The row is the coarse `IO` alias: ioExternBindings now spans FileRead/FileWrite/
 -- Env/Stdin/Stderr/Clock, and `IO` in a BOUND expands to exactly that join
 -- (typecheck.expandIoInBound), so writing them out one by one would buy nothing.
-export evalModulesOutputRun : List Decl -> List (String, List Decl) -> <IO> String
+export
+evalModulesOutputRun : List Decl -> List (String, List Decl) -> <IO> String
 evalModulesOutputRun preludeDecls modules =
   outputRef := ""
   -- Only the real `medaka run` CLI driver reaches this function (never the
@@ -3982,7 +4062,8 @@ evalModulesOutputRun preludeDecls modules =
 -- the root module's FULL env — locals ∪ imports ∪ globals — so an imported
 -- `runAsync` is reachable), which trampolines the suspensions and performs the
 -- stored row, appending to outputRef.  Mirrors bin/main.ml's Run-branch dispatch.
-export evalModulesOutputAsync : List Decl -> List (String, List Decl) -> <e> String
+export
+evalModulesOutputAsync : List Decl -> List (String, List Decl) -> <e> String
 evalModulesOutputAsync preludeDecls modules =
   outputRef := ""
   -- Same reasoning as evalModulesOutputRun above: only the real `medaka run`
@@ -4010,30 +4091,35 @@ driveAsyncMain binds = match lookupBinding "main" binds
 -- + user into ONE by-name frame and forces nullary thunks after every impl
 -- installs, whereas evalModules uses separate prelude/module install order — the
 -- binding/install/thunk-force hazard class (phases 96/103/121/125/134).
-export evalOne : List Decl -> (String, List Decl) -> <e> List (String, Value e)
+export
+evalOne : List Decl -> (String, List Decl) -> <e> List (String, Value e)
 evalOne preludeDecls (rootId, prog) = evalModules preludeDecls [(rootId, prog)]
 
 -- 1-module wrapper over evalModulesWith: the doctest single-file path passes a
 -- capability list (testCapableExterns) so a prelude-only doctest sees the same
 -- real clock/stderr as `medaka run`.
-export evalOneWith : List (String, Value e) -> List Decl -> (String, List Decl) -> <e> List (String, Value e)
+export
+evalOneWith : List (String, Value e) -> List Decl -> (String, List Decl) -> <e> List (String, Value e)
 evalOneWith extraExterns preludeDecls (rootId, prog) =
   evalModulesWith extraExterns preludeDecls [(rootId, prog)]
 
 -- run a single program for OUTPUT (mirror evalOutput): the 1-module evalModules
 -- already forces the root module's `main` for effects and returns captured stdout.
-export evalOneOutput : List Decl -> (String, List Decl) -> String
+export
+evalOneOutput : List Decl -> (String, List Decl) -> String
 evalOneOutput preludeDecls (rootId, prog) =
   evalModulesOutput preludeDecls [(rootId, prog)]
 
 -- the root module's FULL frame (locals ∪ imports ∪ globals), mirror
 -- evalModulesRootEnv — the prop runner needs prelude methods (eq/compare) visible.
-export evalOneRootEnv : List Decl -> (String, List Decl) -> <e> List (String, Value e)
+export
+evalOneRootEnv : List Decl -> (String, List Decl) -> <e> List (String, Value e)
 evalOneRootEnv preludeDecls (rootId, prog) =
   evalModulesRootEnv preludeDecls [(rootId, prog)]
 
 -- 1-module wrapper over evalModulesRootEnvWith: repl installs a capability list
 -- (testCapableExterns) so an interactive session sees the real clock/stderr.
-export evalOneRootEnvWith : List (String, Value e) -> List Decl -> (String, List Decl) -> <e> List (String, Value e)
+export
+evalOneRootEnvWith : List (String, Value e) -> List Decl -> (String, List Decl) -> <e> List (String, Value e)
 evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
   evalModulesRootEnvWith extraExterns preludeDecls [(rootId, prog)]

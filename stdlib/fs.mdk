@@ -30,7 +30,8 @@ public export data FileStat =
 
 {- | `stat path` — like `statFile`, but wraps the raw tuple in a `FileStat`.
      `Err` (strerror) if the path cannot be stat'd (e.g. does not exist). -}
-export stat : String -> <FileRead "_"> Result String FileStat
+export
+stat : String -> <FileRead "_"> Result String FileStat
 stat p = map
   ((sz, d, f, m) => FileStat { size = sz, isDir = d, isFile = f, mtime = m })
   (statFile p)
@@ -40,7 +41,8 @@ stat p = map
 {- | `copyFile src dst` — byte-clean copy: read `src`'s raw bytes, write them to
      `dst` (truncating). Threads the `Result`, so a read failure short-circuits
      before any write. -}
-export copyFile : String -> String -> <FileRead "_", FileWrite "_"> Result String Unit
+export
+copyFile : String -> String -> <FileRead "_", FileWrite "_"> Result String Unit
 copyFile src dst = match readFileBytes src
   Ok bytes => writeFileBytes dst bytes
   Err e => Err e
@@ -50,7 +52,8 @@ copyFile src dst = match readFileBytes src
      already-existing directory (an `EEXIST`/"File exists" error from `makeDir`)
      is ignored; any other failure (e.g. permission denied) is reported. Stays
      `<FileWrite _>` — it never reads the filesystem, only writes. -}
-export mkdirAll : String -> <FileWrite "_"> Result String Unit
+export
+mkdirAll : String -> <FileWrite "_"> Result String Unit
 mkdirAll path =
   if path == "" || path == "." || path == "/" then Ok ()
   else match mkdirAll (dirname path)
@@ -64,7 +67,8 @@ mkdirAll path =
      paths (each prefixed with `root` via `path.joinPath`), depth-first, and
      includes BOTH files and subdirectories. `Err` (strerror) on the first
      directory that cannot be read or entry that cannot be stat'd. -}
-export walkDir : String -> <FileRead "_"> Result String (List String)
+export
+walkDir : String -> <FileRead "_"> Result String (List String)
 walkDir root = match listDir root
   Err e => Err e
   Ok entries => walkEntries root entries []
@@ -81,13 +85,16 @@ walkEntries root (name::rest) acc =
     else walkEntries root rest (acc ++ [full])
 
 {- | `isDir path` — `Ok True` if `path` exists and is a directory. -}
-export isDir : String -> <FileRead "_"> Result String Bool
+export
+isDir : String -> <FileRead "_"> Result String Bool
 isDir p = map (st => st.isDir) (stat p)
 
 {- | `isFile path` — `Ok True` if `path` exists and is a regular file. -}
-export isFile : String -> <FileRead "_"> Result String Bool
+export
+isFile : String -> <FileRead "_"> Result String Bool
 isFile p = map (st => st.isFile) (stat p)
 
 {- | `fileSize path` — the size of `path` in bytes. -}
-export fileSize : String -> <FileRead "_"> Result String Int
+export
+fileSize : String -> <FileRead "_"> Result String Int
 fileSize p = map (st => st.size) (stat p)

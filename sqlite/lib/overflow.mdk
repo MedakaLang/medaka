@@ -43,7 +43,8 @@ import list.{reverse}
 -- 4061
 -- > maxLocalPayload 512
 -- 477
-export maxLocalPayload : Int -> Int
+export
+maxLocalPayload : Int -> Int
 maxLocalPayload usable = usable - 35
 
 -- | `M` — the minimum number of payload bytes a spilling cell keeps locally.
@@ -53,7 +54,8 @@ maxLocalPayload usable = usable - 35
 -- 489
 -- > minLocalPayload 512
 -- 39
-export minLocalPayload : Int -> Int
+export
+minLocalPayload : Int -> Int
 minLocalPayload usable = (usable - 12) * 32 / 255 - 23
 
 -- | How many payload bytes one overflow page carries (`U - 4`; the first four
@@ -61,7 +63,8 @@ minLocalPayload usable = (usable - 12) * 32 / 255 - 23
 --
 -- > overflowCapacity 4096
 -- 4092
-export overflowCapacity : Int -> Int
+export
+overflowCapacity : Int -> Int
 overflowCapacity usable = usable - 4
 
 -- ---------------------------------------------------------------------------
@@ -88,7 +91,8 @@ overflowCapacity usable = usable - 4
 --
 -- > localPayloadSize 4096 10005
 -- 1821
-export localPayloadSize : Int -> Int -> Int
+export
+localPayloadSize : Int -> Int -> Int
 localPayloadSize usable payloadLen =
   let x = maxLocalPayload usable
   if payloadLen <= x then payloadLen
@@ -103,14 +107,16 @@ localPayloadSize usable payloadLen =
 -- False
 -- > spills 4096 4062
 -- True
-export spills : Int -> Int -> Bool
+export
+spills : Int -> Int -> Bool
 spills usable payloadLen = payloadLen > maxLocalPayload usable
 
 -- | The number of bytes that spill out of the leaf onto the overflow chain.
 --
 -- > spilledSize 4096 10005
 -- 8184
-export spilledSize : Int -> Int -> Int
+export
+spilledSize : Int -> Int -> Int
 spilledSize usable payloadLen = payloadLen - localPayloadSize usable payloadLen
 
 -- | How many overflow pages a `spilled`-byte tail needs (ceiling division).
@@ -126,7 +132,8 @@ spilledSize usable payloadLen = payloadLen - localPayloadSize usable payloadLen
 -- 2
 -- > overflowPageCount 4096 8184
 -- 2
-export overflowPageCount : Int -> Int -> Int
+export
+overflowPageCount : Int -> Int -> Int
 overflowPageCount usable spilled =
   if spilled <= 0 then 0
   else
@@ -144,7 +151,8 @@ overflowPageCount usable spilled =
 -- [5, 6]
 -- > overflowChainPages 4096 5 0
 -- []
-export overflowChainPages : Int -> Int -> Int -> List Int
+export
+overflowChainPages : Int -> Int -> Int -> List Int
 overflowChainPages usable firstPage spilled =
   chainGo firstPage (overflowPageCount usable spilled) 0 []
 

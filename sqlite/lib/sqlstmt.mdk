@@ -260,7 +260,8 @@ import string.{toInt, toUpper, fromChars, contains, join}
 --
 -- > map renderSelect (parseSelect "SELECT n FROM t WHERE a IN (SELECT x FROM u UNION SELECT y FROM v) ORDER BY n")
 -- Ok "SELECT n FROM t WHERE (a IN (SELECT x FROM u UNION SELECT y FROM v)) ORDER BY n ASC"
-export parseSelect : String -> Result String Select
+export
+parseSelect : String -> Result String Select
 parseSelect s = runParser statement s
 
 -- Skip leading space, read the SELECT, tolerate `;`, then demand end of input.
@@ -384,7 +385,8 @@ applyTail sel ob lm off = sel
 --
 -- > map renderCompound (parseQuery "SELECT DISTINCT a FROM t WHERE a > 1 UNION SELECT b FROM u")
 -- Ok "SELECT DISTINCT a FROM t WHERE (a > 1) UNION SELECT b FROM u"
-export parseQuery : String -> Result String Compound
+export
+parseQuery : String -> Result String Compound
 parseQuery s = runParser queryStatement s
 
 queryStatement : Parser Compound
@@ -792,7 +794,8 @@ applyOpt f (Some x) sel = f x sel
 --
 -- > map renderSelect (parseSelect "SELECT count(*) FROM t")
 -- Ok "SELECT count(*) FROM t"
-export renderSelect : Select -> String
+export
+renderSelect : Select -> String
 renderSelect (Select { from = tbl, fromAlias = fa, joins = js, where_ = w, groupBy = gb, having = h, orderBy = ob, limit = lm, offset = off, distinct = dist, columns = cols, columnAliases = cas }) =
   -- Tie the render back-edge: install THIS module's compound renderer into
   -- lib.sqlparse's hole so `renderSqlExpr` can render an `EInSubquery`'s subquery.
@@ -809,7 +812,8 @@ renderSelect (Select { from = tbl, fromAlias = fa, joins = js, where_ = w, group
 --
 -- > renderCompound (Compound (selectFromNamed "t" "a") [(OpUnion, selectFromNamed "u" "b")] [] None None)
 -- "SELECT a FROM t UNION SELECT b FROM u"
-export renderCompound : Compound -> String
+export
+renderCompound : Compound -> String
 renderCompound (Compound first rest ob lm off) =
   let _ = setSubqueryRenderer renderCompound
   "\{renderSelect first}\{renderSetArms rest}\{renderOrder ob}\{renderInt " LIMIT " lm}\{renderInt " OFFSET " off}"
@@ -865,7 +869,8 @@ renderAliasText (Some a) = " AS \{a}"
 --
 -- > map selectColumnNames (parseSelect "SELECT * FROM t")
 -- Ok []
-export selectColumnNames : Select -> List String
+export
+selectColumnNames : Select -> List String
 selectColumnNames (Select { columns = cols, columnAliases = cas }) =
   map colName (zipCols cols cas)
 
@@ -932,7 +937,8 @@ renderInt kw (Some n) = "\{kw}\{n}"
 --   DISTINCT rejection — are exercised end-to-end against `sqlite3` by
 --   `sqlite/test/sql_oracle.sh` and on both backends by
 --   `sqlite/inmem_sqlparse_probe.mdk`.)
-export queryString : Db -> String -> RowType a -> Result String (List a)
+export
+queryString : Db -> String -> RowType a -> Result String (List a)
 queryString db sql rt = do
   q <- parseQuery sql
   runCompoundNonDistinct db q rt
@@ -959,7 +965,8 @@ runNonDistinct db sel rt =
 --
 --   (Note it is strictly better-behaved than the raw `lib.select.queryDistinct`,
 --   which dedups UNCONDITIONALLY and leaves honouring the flag to its caller.)
-export queryStringDistinct : Eq a => Db -> String -> RowType a -> Result String (List a)
+export
+queryStringDistinct : Eq a => Db -> String -> RowType a -> Result String (List a)
 queryStringDistinct db sql rt = do
   q <- parseQuery sql
   runCompoundQ db q rt
@@ -978,7 +985,8 @@ runCompoundQ db (Compound first rest ob lm off) rt = match rest
 --
 --   (No doctest: it needs a live `Db`.  Gated end-to-end by
 --   `sqlite/test/sql_oracle.sh` and `sqlite/test/dml_oracle.sh`.)
-export runSelect : Eq a => Db -> Select -> RowType a -> Result String (List a)
+export
+runSelect : Eq a => Db -> Select -> RowType a -> Result String (List a)
 runSelect db sel rt =
   if sel.distinct then
     queryDistinct db sel rt
@@ -1044,7 +1052,8 @@ public export data Stmt =
 --
 -- > parseStmt "DELETE FROM t LIMIT 1"
 -- Err "unsupported SQL: 'LIMIT' at 20"
-export parseStmt : String -> Result String Stmt
+export
+parseStmt : String -> Result String Stmt
 parseStmt s = runParser statementAny s
 
 statementAny : Parser Stmt
@@ -1145,7 +1154,8 @@ deleteBranch = do
 --
 -- > map renderStmt (parseStmt "delete from t where a is null")
 -- Ok "DELETE FROM t WHERE (a IS NULL)"
-export renderStmt : Stmt -> String
+export
+renderStmt : Stmt -> String
 renderStmt st =
   let _ = setSubqueryRenderer renderCompound
   renderStmtGo st

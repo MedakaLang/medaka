@@ -23,10 +23,12 @@ errorSexp NonCanonicalProjectPath = "noncanonical-project-path"
 errorSexp InvalidSourceSpan = "invalid-source-span"
 errorSexp NegativeStructuralIndex = "negative-structural-index"
 
-export stableNodeIdToSexp : StableNodeId -> String
+export
+stableNodeIdToSexp : StableNodeId -> String
 stableNodeIdToSexp nodeId = foldStableNodeId
   (path startLine startCol endLine endCol childPath role => node "stable-node-id" [escStr path, node "span" [intToString startLine, intToString startCol, intToString endLine, intToString endCol], node "child-path" [slist (map intToString childPath)], roleSexp role])
   nodeId
 
-export stableNodeIdErrorToSexp : StableNodeIdError -> String
+export
+stableNodeIdErrorToSexp : StableNodeIdError -> String
 stableNodeIdErrorToSexp err = node "stable-node-id-error" [errorSexp err]

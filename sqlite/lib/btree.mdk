@@ -95,10 +95,12 @@ beU32 bytes off = do
 -- | A decoded table row: its rowid and the column cells.
 public export data Row = Row Int (List Cell)
 
-export rowRowid : Row -> Int
+export
+rowRowid : Row -> Int
 rowRowid (Row rid _) = rid
 
-export rowCells : Row -> List Cell
+export
+rowCells : Row -> List Cell
 rowCells (Row _ cs) = cs
 
 export impl Display Row where
@@ -106,19 +108,23 @@ export impl Display Row where
     "\{intToString rid}: \{join "|" (map display cells)}"
 
 -- Page-type constants.
-export pageTableLeaf : Int
+export
+pageTableLeaf : Int
 pageTableLeaf = 13
 
-export pageTableInterior : Int
+export
+pageTableInterior : Int
 pageTableInterior = 5
 
 -- | Read the page-type byte of the page whose B-tree header starts at
 --   `hdrOffset` in the whole-file byte array.
-export pageType : Array Int -> Int -> Result String Int
+export
+pageType : Array Int -> Int -> Result String Int
 pageType bytes hdrOffset = byteAt bytes hdrOffset
 
 -- | Read the cell count from a page B-tree header at `hdrOffset`.
-export pageCellCount : Array Int -> Int -> Result String Int
+export
+pageCellCount : Array Int -> Int -> Result String Int
 pageCellCount bytes hdrOffset = beU16 bytes (hdrOffset + cellCountOffset)
 
 -- Read a big-endian uint16 at absolute byte offset `off`.
@@ -146,7 +152,8 @@ bStep label (BOk a pos) k = k a pos
 -- except page 1 where it is pageBase + dbHeaderSize).
 --
 -- Returns Err if the page is not a table-leaf page.
-export decodeLeafPage : Array Int -> Int -> Int -> Int -> Int -> Result String (List Row)
+export
+decodeLeafPage : Array Int -> Int -> Int -> Int -> Int -> Result String (List Row)
 decodeLeafPage bytes pageSize usable pageBase hdrOffset = do
   pt <- pageType bytes hdrOffset
   if pt /= pageTableLeaf then Err "decodeLeafPage: page type \{intToString pt} is not a table-leaf page (0x0D)"
@@ -187,7 +194,8 @@ decodeCells bytes pageSize usable pageBase cpArrayStart nCells i acc
 --
 -- See `lib.overflow` for the threshold arithmetic that decides how much of a
 -- payload stays in the cell.
-export decodeLeafCell : Array Int -> Int -> Int -> Int -> Result String Row
+export
+decodeLeafCell : Array Int -> Int -> Int -> Int -> Result String Row
 decodeLeafCell bytes pageSize usable off = bStep
   "payload-length varint"
   (runBP sqVarint bytes off)
@@ -281,7 +289,8 @@ pageHdrOffset pageSize pageNum =
 --
 -- `hdrOffset` for page 1 = dbHeaderSize; for all other pages = pageBase.
 -- `usable` is `pageSize - reservedPerPage` (needed for overflow-chain reads).
-export scanTablePage : Array Int -> Int -> Int -> Int -> Int -> Result String (List Row)
+export
+scanTablePage : Array Int -> Int -> Int -> Int -> Int -> Result String (List Row)
 scanTablePage bytes pageSize usable pageNum hdrOffset = do
   ptype <- pageType bytes hdrOffset
   if ptype == pageTableLeaf then do
@@ -339,6 +348,7 @@ scanInteriorCells bytes pageSize usable cpArrayStart pageBase nCells i rightmost
 -- ---------------------------------------------------------------------------
 
 -- | Render a decoded row (or error) as "rowid: cell|cell|..." for doctests.
-export showRow : Result String Row -> String
+export
+showRow : Result String Row -> String
 showRow (Err e) = "Err: \{e}"
 showRow (Ok row) = display row

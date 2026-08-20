@@ -52,7 +52,8 @@ slotOf key cap = bitAnd (hash key) intMaxBound % cap
 
 {- | A fresh, empty hash table. Takes `Unit` (not a nullary value) so each call
    allocates its own table rather than sharing one mutable cell. -}
-export new : Unit -> HashMap k v
+export
+new : Unit -> HashMap k v
 new _ = HashMap (Ref (arrayMake initialCapacity [])) (Ref 0)
 
 -- ── Query (pure reads) ──────────────────────────────────────────────────
@@ -61,14 +62,16 @@ new _ = HashMap (Ref (arrayMake initialCapacity [])) (Ref 0)
 
    > size (fromList [(1, 10), (2, 20), (1, 30)])
    2 -}
-export size : HashMap k v -> Int
+export
+size : HashMap k v -> Int
 size (HashMap _ count) = !count
 
 {- | `True` when there are no entries.
 
    > isEmpty (new () : HashMap Int Int)
    True -}
-export isEmpty : HashMap k v -> Bool
+export
+isEmpty : HashMap k v -> Bool
 isEmpty m = size m == 0
 
 bucketLookup : Eq k => k -> List (k, v) -> Option v
@@ -83,7 +86,8 @@ bucketLookup key ((k, v)::rest)
    Some 20
    > get 9 (fromList [(1, 10), (2, 20)])
    None -}
-export get : (Eq k, Hashable k) => k -> HashMap k v -> Option v
+export
+get : (Eq k, Hashable k) => k -> HashMap k v -> Option v
 get key (HashMap buckets _) =
   let arr = !buckets
   bucketLookup key (arrayGetUnsafe (slotOf key (arrayLength arr)) arr)
@@ -92,14 +96,16 @@ get key (HashMap buckets _) =
 
    > has 2 (fromList [(1, 10), (2, 20)])
    True -}
-export has : (Eq k, Hashable k) => k -> HashMap k v -> Bool
+export
+has : (Eq k, Hashable k) => k -> HashMap k v -> Bool
 has key m = isSome (get key m)
 
 {- | Value at a key, or a fallback.
 
    > findWithDefault 0 9 (fromList [(1, 10)])
    0 -}
-export findWithDefault : (Eq k, Hashable k) => v -> k -> HashMap k v -> v
+export
+findWithDefault : (Eq k, Hashable k) => v -> k -> HashMap k v -> v
 findWithDefault d key m = fromOption d (get key m)
 
 -- ── Bucket helpers (for insert/delete) ──────────────────────────────────
@@ -126,7 +132,8 @@ bucketRemove key ((k, v)::rest)
 
 {- | Insert (or overwrite) the value at a key, in place. Resizes (doubling)
    when the load factor passes 0.75. -}
-export set : (Eq k, Hashable k) => k -> v -> HashMap k v -> Unit
+export
+set : (Eq k, Hashable k) => k -> v -> HashMap k v -> Unit
 set key val (HashMap buckets count) =
   let arr = !buckets
   let idx = slotOf key (arrayLength arr)
@@ -179,7 +186,8 @@ putRaw key val buckets count =
 
    > size (fromList [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8)])
    8 -}
-export fromList : (Eq k, Hashable k) => List (k, v) -> HashMap k v
+export
+fromList : (Eq k, Hashable k) => List (k, v) -> HashMap k v
 fromList pairs =
   let m = new ()
   insertAll pairs m
@@ -194,7 +202,8 @@ insertAll ((k, v)::rest) m =
 -- ── Deletion (mutating) ─────────────────────────────────────────────────
 
 {- | Remove a key, in place. A no-op when absent. -}
-export delete : (Eq k, Hashable k) => k -> HashMap k v -> Unit
+export
+delete : (Eq k, Hashable k) => k -> HashMap k v -> Unit
 delete key (HashMap buckets count) =
   let arr = !buckets
   let idx = slotOf key (arrayLength arr)
@@ -220,26 +229,30 @@ collectBuckets arr i n acc
    `toList` would be shadowed by the method and mistyped (`List v` vs the
    pairs `List (k, v)`). `toList` below is a thin exported alias, never used
    internally. -}
-export entries : HashMap k v -> List (k, v)
+export
+entries : HashMap k v -> List (k, v)
 entries (HashMap buckets _) =
   collectBuckets !buckets 0 (arrayLength !buckets) []
 
 {- | Conventional alias for `entries` (all key/value pairs). -}
-export toList : HashMap k v -> List (k, v)
+export
+toList : HashMap k v -> List (k, v)
 toList m = entries m
 
 {- | All keys, in unspecified order.
 
    > keys (fromList [(5, 50)])
    [5] -}
-export keys : HashMap k v -> List k
+export
+keys : HashMap k v -> List k
 keys m = map fst (entries m)
 
 {- | All values, in unspecified order.
 
    > values (fromList [(5, 50)])
    [50] -}
-export values : HashMap k v -> List v
+export
+values : HashMap k v -> List v
 values m = map snd (entries m)
 
 -- ── Instances ───────────────────────────────────────────────────────────

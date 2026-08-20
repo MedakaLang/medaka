@@ -42,20 +42,23 @@ specs = [
 ]
 
 -- | The shared fixture database, built purely from `specs`.
-export db : Result String Db
+export
+db : Result String Db
 db = do
   bytes <- buildDatabaseMulti specs
   fromBytes bytes
 
 -- | Run a SELECT against the fixture, decoding every row to raw `Cell`s.
 --   Threads any build/parse error into the `Result` so a test sees it as a FAIL.
-export q : String -> Result String (List (List Cell))
+export
+q : String -> Result String (List (List Cell))
 q sql = do
   d <- db
   queryString d sql tCells
 
 -- | Like `q`, but honours `SELECT DISTINCT` (dedup on decoded rows).
-export qd : String -> Result String (List (List Cell))
+export
+qd : String -> Result String (List (List Cell))
 qd sql = do
   d <- db
   queryStringDistinct d sql tCells

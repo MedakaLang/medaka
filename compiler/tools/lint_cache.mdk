@@ -95,7 +95,8 @@ cacheFormatVersion = 1
 -- Measured on the real corpus (206 files, 4.6 MB): 1 lane = 12.4 ms, 2 lanes =
 -- 24 ms.  ~12 ms on a ~350 ms warm run to take the collision odds from ~1e-9 to
 -- ~1e-18.  Bought.
-export contentHashOf : String -> String
+export
+contentHashOf : String -> String
 contentHashOf src =
   let n = stringLength src
   let lane2 = if n == 0 then 0 else hashString (stringSlice 1 n src)
@@ -124,7 +125,8 @@ contentHashOf src =
 -- Cost, MEASURED on the real 3.37 MB binary: ~10 ms readFileBytes + ~15 ms hash
 -- = ~25 ms, paid once per run.  (#395 records 5.7–6.1 ms; that figure does not
 -- reproduce — measure before quoting it.)  ~7% of a ~350 ms warm run.
-export ruleSetStamp : Unit -> <IO> String
+export
+ruleSetStamp : Unit -> <IO> String
 ruleSetStamp _ = match readFileBytes (executablePath ())
   Err _ => ""
   Ok bs => "\{fnv62 bs (arrayLength bs) 0 fnv62Offset}"
@@ -153,7 +155,8 @@ fnv62 bs n i acc
 
 -- The cache lives next to the project's `medaka.toml` (the caller resolves that
 -- root) and is gitignored.
-export cacheDirOf : String -> String
+export
+cacheDirOf : String -> String
 cacheDirOf root = "\{root}/.medaka/lint-cache"
 
 -- A source path → its shard filename.  Flattened (the cache dir is flat) and
@@ -161,7 +164,8 @@ cacheDirOf root = "\{root}/.medaka/lint-cache"
 -- `a/b.mdk` with `a_b.mdk`.  The hash is only a filename disambiguator, never a
 -- correctness argument: the full path is stored INSIDE the shard and checked on
 -- load, so a collision costs both files a permanent miss, never a wrong hit.
-export shardPathOf : String -> String -> String
+export
+shardPathOf : String -> String -> String
 shardPathOf cacheDir srcPath =
   "\{cacheDir}/\{sanitizePath srcPath}-\{hashString srcPath}.json"
 
@@ -186,7 +190,8 @@ sanitizeChar c
 
 -- ── encode ───────────────────────────────────────────────────────────────────
 
-export encodeEntry : String -> LintEntry -> String
+export
+encodeEntry : String -> LintEntry -> String
 encodeEntry stamp e = stringify (jObject
   [
     ("version", JInt cacheFormatVersion),
@@ -238,7 +243,8 @@ encScope (DScopeLine l) = JInt l
 
 -- `path` and `hash` are checked against what the CALLER observed on disk, so a
 -- shard can only ever answer for the exact file+content it was written from.
-export decodeEntry : String -> String -> String -> String -> Option LintEntry
+export
+decodeEntry : String -> String -> String -> String -> Option LintEntry
 decodeEntry stamp path hash text = match parse text
   Err _ => None
   Ok j =>
@@ -347,7 +353,8 @@ map5 _ _ _ _ _ _ = None
 -- ── load ─────────────────────────────────────────────────────────────────────
 
 -- Try to answer for `path` at content `hash`.  `None` on any doubt whatsoever.
-export loadEntry : String -> String -> String -> String -> <IO> Option LintEntry
+export
+loadEntry : String -> String -> String -> String -> <IO> Option LintEntry
 loadEntry cacheDir stamp path hash = match readFile (shardPathOf cacheDir path)
   Err _ => None
   Ok text => decodeEntry stamp path hash text
@@ -372,7 +379,8 @@ loadEntry cacheDir stamp path hash = match readFile (shardPathOf cacheDir path)
 --     answer (build_cmd.mdk uses it for the same reason).
 --   * The temp dir must live INSIDE the cache dir, not /tmp: rename(2) fails
 --     with EXDEV across filesystems, and /tmp here is a RAM-backed tmpfs.
-export storeEntries : String -> String -> List LintEntry -> <IO> Unit
+export
+storeEntries : String -> String -> List LintEntry -> <IO> Unit
 storeEntries cacheDir stamp entries =
   let dirty = filterList entryDirty entries
   if listLen dirty == 0 then ()

@@ -136,7 +136,8 @@ cellBodyBytes (CFloat f) = toList (floatToBytes64 f)
 --
 -- Round-trip: `runByteParser parseRecord (encodeRecord cells) == Ok cells`
 -- holds for all cell lists including CFloat.
-export encodeRecord : List Cell -> Result String (Array Int)
+export
+encodeRecord : List Cell -> Result String (Array Int)
 encodeRecord cells = do
   -- 1. Collect serial codes.
   serials <- collectSerials cells []

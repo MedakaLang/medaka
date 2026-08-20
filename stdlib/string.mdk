@@ -63,31 +63,38 @@ import core.{Eq, Ord, Debug, Foldable, Mappable, Option, Ordering}
    True
    > isDigit 'x'
    False -}
-export isDigit : Char -> Bool
+export
+isDigit : Char -> Bool
 isDigit c = charCode c >= 48 && charCode c <= 57
 
 -- | True for any Unicode letter.
-export isAlpha : Char -> Bool
+export
+isAlpha : Char -> Bool
 isAlpha c = charIsAlpha c
 
 -- | True for a Unicode letter or an ASCII digit.
-export isAlphaNum : Char -> Bool
+export
+isAlphaNum : Char -> Bool
 isAlphaNum c = charIsAlpha c || isDigit c
 
 -- | True for any Unicode whitespace.
-export isSpace : Char -> Bool
+export
+isSpace : Char -> Bool
 isSpace c = charIsSpace c
 
 -- | True for an uppercase letter.
-export isUpper : Char -> Bool
+export
+isUpper : Char -> Bool
 isUpper c = charIsUpper c
 
 -- | True for a lowercase letter.
-export isLower : Char -> Bool
+export
+isLower : Char -> Bool
 isLower c = charIsLower c
 
 -- | True for a Unicode punctuation character.
-export isPunct : Char -> Bool
+export
+isPunct : Char -> Bool
 isPunct c = charIsPunct c
 
 {- | `'0'`..`'9'` → `Some 0`..`Some 9`, `'a'`..`'f'`/`'A'`..`'F'` →
@@ -99,7 +106,8 @@ isPunct c = charIsPunct c
    Some 15
    > digitToInt 'z'
    None -}
-export digitToInt : Char -> Option Int
+export
+digitToInt : Char -> Option Int
 digitToInt c = digitVal (charCode c)
 
 digitVal : Int -> Option Int
@@ -117,7 +125,8 @@ digitVal n
    Some 'c'
    > intToDigit 42
    None -}
-export intToDigit : Int -> Option Char
+export
+intToDigit : Int -> Option Char
 intToDigit n
   | n >= 0 && n <= 9 = charFromCode (n + 48)
   | n >= 10 && n <= 15 = charFromCode (n + 87)
@@ -126,7 +135,8 @@ intToDigit n
 -- ── Conversion ──────────────────────────────────────────────────────────────
 
 -- | A one-character string.
-export fromChar : Char -> String
+export
+fromChar : Char -> String
 fromChar c = charToStr c
 
 {- | The codepoints of a string as an array (not grapheme clusters).  Returns
@@ -135,7 +145,8 @@ fromChar c = charToStr c
 
    > arrayLength (toChars "héllo→")
    6 -}
-export toChars : String -> Array Char
+export
+toChars : String -> Array Char
 toChars s = stringToChars s
 
 {- | Build a string from a `List Char`.  For an `Array Char` (e.g. the result
@@ -143,7 +154,8 @@ toChars s = stringToChars s
 
    > fromChars ['h', 'i']
    "hi" -}
-export fromChars : List Char -> String
+export
+fromChars : List Char -> String
 fromChars cs = stringFromChars (arrayFromList cs)
 
 {- | The raw UTF-8 bytes of a string as an `Array Int` (each 0..255), in order.
@@ -152,7 +164,8 @@ fromChars cs = stringFromChars (arrayFromList cs)
 
    > arrayLength (toUtf8 "héllo")
    6 -}
-export toUtf8 : String -> Array Int
+export
+toUtf8 : String -> Array Int
 toUtf8 s = stringToUtf8Bytes s
 
 {- | Rebuild a string from a UTF-8 `Array Int` byte stream (low 8 bits of each).
@@ -160,14 +173,16 @@ toUtf8 s = stringToUtf8Bytes s
 
    > fromUtf8 (toUtf8 "héllo→")
    "héllo→" -}
-export fromUtf8 : Array Int -> String
+export
+fromUtf8 : Array Int -> String
 fromUtf8 bytes = stringFromUtf8Bytes bytes
 
 {- | The number of UTF-8 bytes a string encodes to (>= its codepoint count).
 
    > utf8ByteLength "héllo"
    6 -}
-export utf8ByteLength : String -> Int
+export
+utf8ByteLength : String -> Int
 utf8ByteLength s = arrayLength (toUtf8 s)
 
 {- | Parse a decimal integer, an optional leading `-`/`+` allowed; `None` on
@@ -191,7 +206,8 @@ utf8ByteLength s = arrayLength (toUtf8 s)
    None
    > toInt "99999999999999999999"
    None -}
-export toInt : String -> Option Int
+export
+toInt : String -> Option Int
 toInt s =
   let a = toChars s
   parseInt a (arrayLength a)
@@ -247,7 +263,8 @@ finishInt seen acc negative =
    Some 3.5
    > toFloat "nope"
    None -}
-export toFloat : String -> Option Float
+export
+toFloat : String -> Option Float
 toFloat s = stringToFloat s
 
 -- ── Inspection ──────────────────────────────────────────────────────────────
@@ -260,14 +277,16 @@ toFloat s = stringToFloat s
    True
    > startsWith "lo" "hello"
    False -}
-export startsWith : String -> String -> Bool
+export
+startsWith : String -> String -> Bool
 startsWith prefix s = stringSlice 0 (stringLength prefix) s == prefix
 
 {- | True when `s` ends with `suffix`.
 
    > endsWith "lo" "hello"
    True -}
-export endsWith : String -> String -> Bool
+export
+endsWith : String -> String -> Bool
 endsWith suffix s =
   stringSlice (stringLength s - stringLength suffix) (stringLength s) s ==
     suffix
@@ -284,7 +303,8 @@ endsWith suffix s =
    Some "hi"
    > stripPrefix "hello" "hello"
    Some "" -}
-export stripPrefix : String -> String -> Option String
+export
+stripPrefix : String -> String -> Option String
 stripPrefix prefix s =
   if startsWith prefix s then
     Some (stringSlice (stringLength prefix) (stringLength s) s)
@@ -300,7 +320,8 @@ stripPrefix prefix s =
    None
    > stripSuffix "" "hi"
    Some "hi" -}
-export stripSuffix : String -> String -> Option String
+export
+stripSuffix : String -> String -> Option String
 stripSuffix suffix s =
   if endsWith suffix s then
     Some (stringSlice 0 (stringLength s - stringLength suffix) s)
@@ -314,7 +335,8 @@ stripSuffix suffix s =
    True
    > contains "xyz" "hello"
    False -}
-export contains : String -> String -> Bool
+export
+contains : String -> String -> Bool
 contains needle haystack = isSome (indexOf needle haystack)
 
 {- | Codepoint index of the first occurrence of `needle` in `haystack`, or
@@ -325,7 +347,8 @@ contains needle haystack = isSome (indexOf needle haystack)
    Some 3
    > indexOf "z" "hello"
    None -}
-export indexOf : String -> String -> Option Int
+export
+indexOf : String -> String -> Option Int
 indexOf needle haystack = stringIndexOf needle haystack
 
 {- | Codepoint index of the *last* occurrence of `needle` in `haystack`, or
@@ -336,7 +359,8 @@ indexOf needle haystack = stringIndexOf needle haystack
    Some 3
    > lastIndexOf "z" "hello"
    None -}
-export lastIndexOf : String -> String -> Option Int
+export
+lastIndexOf : String -> String -> Option Int
 lastIndexOf needle haystack
   | needle == "" = Some (stringLength haystack)
   | otherwise = lastIndexOfGo needle haystack 0 None
@@ -353,7 +377,8 @@ lastIndexOfGo needle haystack from acc = match indexOf needle (stringSlice from 
    2
    > countOccurrences "ll" "lllll"
    2 -}
-export countOccurrences : String -> String -> Int
+export
+countOccurrences : String -> String -> Int
 countOccurrences needle haystack
   | needle == "" = 0
   | otherwise = countGo needle (stringLength needle) haystack 0
@@ -366,21 +391,24 @@ countGo needle nlen haystack acc = match indexOf needle haystack
 -- ── Transformation ──────────────────────────────────────────────────────────
 
 -- | Prepend a prefix; `flip` of `Semigroup.append`.
-export prepend : String -> String -> String
+export
+prepend : String -> String -> String
 prepend pre s = pre ++ s
 
 {- | Concatenate all strings in order.
 
    > concat ["a", "bc", "d"]
    "abcd" -}
-export concat : List String -> String
+export
+concat : List String -> String
 concat parts = stringConcat parts
 
 {- | Concatenate with `sep` between each adjacent pair.
 
    > join ", " ["a", "b", "c"]
    "a, b, c" -}
-export join : String -> List String -> String
+export
+join : String -> List String -> String
 join sep parts = stringConcat (intersperse sep parts)
 
 intersperse : a -> List a -> List a
@@ -392,7 +420,8 @@ intersperse sep (x::xs) = x :: sep :: intersperse sep xs
 
    > repeat 3 "ab"
    "ababab" -}
-export repeat : Int -> String -> String
+export
+repeat : Int -> String -> String
 repeat n s = stringConcat (replic n s)
 
 replic : Int -> a -> List a
@@ -402,7 +431,8 @@ replic n x = if n <= 0 then [] else x :: replic (n - 1) x
 
    > reverse "abc"
    "cba" -}
-export reverse : String -> String
+export
+reverse : String -> String
 reverse s =
   let a = toChars s
   stringFromChars (reverseArr a (arrayLength a))
@@ -412,13 +442,15 @@ reverseArr a n = arrayMakeWith n (i => arrayGetUnsafe (n - 1 - i) a)
 
 {- | Strip leading whitespace.  Finds the first non-space codepoint index, then
    slices — no rebuild. -}
-export trimLeft : String -> String
+export
+trimLeft : String -> String
 trimLeft s =
   let a = toChars s
   stringSlice (firstNonSpace a 0 (arrayLength a)) (stringLength s) s
 
 -- | Strip trailing whitespace.
-export trimRight : String -> String
+export
+trimRight : String -> String
 trimRight s =
   let a = toChars s
   stringSlice 0 (lastNonSpace a (arrayLength a - 1) + 1) s
@@ -427,7 +459,8 @@ trimRight s =
 
    > trim "  hi  "
    "hi" -}
-export trim : String -> String
+export
+trim : String -> String
 trim s =
   let a = toChars s
   let n = arrayLength a
@@ -457,7 +490,8 @@ firstSpace a i n
 
    > toUpper "Straße"
    "STRAßE" -}
-export toUpper : String -> String
+export
+toUpper : String -> String
 toUpper s = stringToUpper s
 
 {- | Lowercase every character. **ASCII-only** (issue #417): a non-ASCII byte
@@ -465,14 +499,16 @@ toUpper s = stringToUpper s
 
    > toLower "HÉLLO"
    "hÉllo" -}
-export toLower : String -> String
+export
+toLower : String -> String
 toLower s = stringToLower s
 
 {- | Uppercase the first character, leave the rest alone.
 
    > capitalize "hello"
    "Hello" -}
-export capitalize : String -> String
+export
+capitalize : String -> String
 capitalize s =
   let a = toChars s
   if arrayLength a == 0 then
@@ -485,7 +521,8 @@ capitalize s =
 
    > replace "l" "L" "hello"
    "heLlo" -}
-export replace : String -> String -> String -> String
+export
+replace : String -> String -> String -> String
 replace old new s = if old == "" then s else replaceFirst old new s
 
 replaceFirst : String -> String -> String -> String
@@ -502,7 +539,8 @@ spliceAt i oldLen new s = stringSlice 0 i s
 
    > replaceAll "l" "L" "hello"
    "heLLo" -}
-export replaceAll : String -> String -> String -> String
+export
+replaceAll : String -> String -> String -> String
 replaceAll old new s =
   if old == "" then
     s
@@ -523,28 +561,32 @@ replaceAllGo oldLen old new s = match indexOf old s
 
    > sliceClamped 1 4 "hello"
    "ell" -}
-export sliceClamped : Int -> Int -> String -> String
+export
+sliceClamped : Int -> Int -> String -> String
 sliceClamped lo hi s = stringSlice lo hi s
 
 {- | First `n` codepoints (fewer if shorter).
 
    > take 3 "hello"
    "hel" -}
-export take : Int -> String -> String
+export
+take : Int -> String -> String
 take n s = stringSlice 0 n s
 
 {- | Drop the first `n` codepoints.
 
    > drop 3 "hello"
    "lo" -}
-export drop : Int -> String -> String
+export
+drop : Int -> String -> String
 drop n s = stringSlice n (stringLength s) s
 
 {- | `(take n s, drop n s)`.
 
    > splitAt 2 "hello"
    ("he", "llo") -}
-export splitAt : Int -> String -> (String, String)
+export
+splitAt : Int -> String -> (String, String)
 splitAt n s = (take n s, drop n s)
 
 {- | Split on `sep`, dropping the separators.  An empty `sep` yields `[s]`.
@@ -553,7 +595,8 @@ splitAt n s = (take n s, drop n s)
    ["a", "b", "c"]
    > split "," "abc"
    ["abc"] -}
-export split : String -> String -> List String
+export
+split : String -> String -> List String
 split sep s = if sep == "" then [s] else splitGo (stringLength sep) sep s
 
 splitGo : Int -> String -> String -> List String
@@ -565,7 +608,8 @@ splitGo sepLen sep s = match indexOf sep s
 
    > lines "a\nb\nc"
    ["a", "b", "c"] -}
-export lines : String -> List String
+export
+lines : String -> List String
 lines s = map stripCR (split nl s)
 
 stripCR : String -> String
@@ -580,7 +624,8 @@ stripCR line =
 
    > words "  hello   world "
    ["hello", "world"] -}
-export words : String -> List String
+export
+words : String -> List String
 words s =
   let a = toChars s
   let n = arrayLength a
@@ -601,7 +646,8 @@ wordsEmit a n s start e =
 
    > unlines ["a", "b"]
    "a\nb\n" -}
-export unlines : List String -> String
+export
+unlines : List String -> String
 unlines parts = stringConcat (map addNL parts)
 
 addNL : String -> String
@@ -615,7 +661,8 @@ nl = "\n"
 
    > unwords ["a", "b", "c"]
    "a b c" -}
-export unwords : List String -> String
+export
+unwords : List String -> String
 unwords parts = join " " parts
 
 -- ── Padding ──────────────────────────────────────────────────────────────────
@@ -624,7 +671,8 @@ unwords parts = join " " parts
 
    > padLeft 5 '.' "ab"
    "...ab" -}
-export padLeft : Int -> Char -> String -> String
+export
+padLeft : Int -> Char -> String -> String
 padLeft n c s =
   if stringLength s >= n then
     s
@@ -635,7 +683,8 @@ padLeft n c s =
 
    > padRight 5 '.' "ab"
    "ab..." -}
-export padRight : Int -> Char -> String -> String
+export
+padRight : Int -> Char -> String -> String
 padRight n c s =
   if stringLength s >= n then
     s
@@ -647,7 +696,8 @@ padRight n c s =
 
    > center 5 '.' "ab"
    ".ab.." -}
-export center : Int -> Char -> String -> String
+export
+center : Int -> Char -> String -> String
 center n c s =
   if stringLength s >= n then
     s

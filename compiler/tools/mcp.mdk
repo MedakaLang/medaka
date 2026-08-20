@@ -1427,7 +1427,8 @@ serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck = match readLineOpt ()
 -- (e.g. medaka_check resolves a `file` target's imports against stdlibDir).
 -- `stalenessCheck` is medaka_cli.mdk's `sourceStalenessVerdict`, threaded down
 -- as a closure (#846) — see the "staleness signal" section above.
-export runMcpServer : String -> String -> String -> (Unit -> <IO> Option String) -> <IO> Unit
+export
+runMcpServer : String -> String -> String -> (Unit -> <IO> Option String) -> <IO> Unit
 runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck =
   let _ = logMcp "medaka mcp server start"
   serveLoop runtimeSrc coreSrc stdlibDir stalenessCheck

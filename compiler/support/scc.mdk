@@ -31,7 +31,8 @@ tjLowOf x = fromOption 0 (omLookup x !tjLow)
 tjOnStack : String -> Bool
 tjOnStack x = fromOption False (omLookup x !tjOn)
 
-export tarjanSCCs : List String -> OrdMap (List String) -> List (List String)
+export
+tarjanSCCs : List String -> OrdMap (List String) -> List (List String)
 tarjanSCCs names adj =
   tjCounter := 0
   tjStack := []

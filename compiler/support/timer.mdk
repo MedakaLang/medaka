@@ -15,7 +15,8 @@
 -- All timing output goes to stderr so stdout is not disturbed.
 
 -- True when MEDAKA_PERF is set to any value in the environment.
-export perfEnabled : Unit -> <IO> Bool
+export
+perfEnabled : Unit -> <IO> Bool
 perfEnabled () = match getEnv "MEDAKA_PERF"
   Some _ => True
   None => False
@@ -42,33 +43,38 @@ perfEnabled () = match getEnv "MEDAKA_PERF"
 -- `MEDAKA_PERF_WASM="$flag"` with an unset flag — i.e. the off-switch silently fails
 -- OPEN, the ~277 s saving evaporates, and the only symptom is a slow shard. An
 -- off-switch whose failure mode is "still on, silently" is not an off-switch.
-export perfWasmEnabled : Unit -> <IO> Bool
+export
+perfWasmEnabled : Unit -> <IO> Bool
 perfWasmEnabled () = match getEnv "MEDAKA_PERF_WASM"
   Some "" => False
   Some _ => True
   None => False
 
 -- Current wall-clock time in seconds (gettimeofday).
-export now : Unit -> <IO> Float
+export
+now : Unit -> <IO> Float
 now () = wallTimeSec ()
 
 -- Emit one timed phase to stderr.  Label, elapsed time (seconds), and an ops
 -- string (free-form: "N decls", "runtime+core", etc).  No-op when on = False.
 -- Format: [perf] <label>\t<elapsed>s\t<ops>
-export emitPhase : Bool -> String -> Float -> String -> <IO> Unit
+export
+emitPhase : Bool -> String -> Float -> String -> <IO> Unit
 emitPhase False _ _ _ = ()
 emitPhase True label elapsed ops =
   ePutStrLn "[perf] \{label}\t\{floatToString elapsed}s\t\{ops}"
 
 -- Emit the total pipeline time to stderr.  No-op when on = False.
-export emitTotal : Bool -> Float -> <IO> Unit
+export
+emitTotal : Bool -> Float -> <IO> Unit
 emitTotal False _ = ()
 emitTotal True elapsed =
   ePutStrLn ("[perf] total\t" ++ floatToString elapsed ++ "s")
 
 -- Count total declarations across a list of (moduleId, decls) pairs.
 -- Used by drivers as a cheap proxy for "work units" without modifying stages.
-export totalDecls : List (String, List a) -> Int
+export
+totalDecls : List (String, List a) -> Int
 totalDecls [] = 0
 totalDecls ((_, ds)::rest) = countList ds + totalDecls rest
 
@@ -79,11 +85,13 @@ countList (_::xs) = 1 + countList xs
 -- GC-backed allocation snapshot: total bytes allocated since process start.
 -- Use paired snapshots to measure per-stage byte allocations.
 -- Backed by Gc.allocated_bytes (monotonically increasing float).
-export allocSnap : Unit -> <IO> Float
+export
+allocSnap : Unit -> <IO> Float
 allocSnap () = allocBytes ()
 
 -- Extended total emit with allocation (four-field format to match emitPhaseAO).
-export emitTotalA : Bool -> Float -> Float -> <IO> Unit
+export
+emitTotalA : Bool -> Float -> Float -> <IO> Unit
 emitTotalA False _ _ = ()
 emitTotalA True elapsed allocTotal =
   ePutStrLn
@@ -101,7 +109,8 @@ emitTotalA True elapsed allocTotal =
 -- No existing consumer breaks: the gate's TIME/ALLOC arms and profile_compiler.sh
 -- read whitespace-split fields 2/3/4, none of which move when a 5th tab-field is
 -- appended. `opDelta` is a snapshot-subtract of opcount.opSnap across the stage.
-export emitPhaseAO : Bool -> String -> Float -> Float -> String -> Int -> <IO> Unit
+export
+emitPhaseAO : Bool -> String -> Float -> Float -> String -> Int -> <IO> Unit
 emitPhaseAO False _ _ _ _ _ = ()
 emitPhaseAO True label elapsed allocDelta ops opDelta =
   ePutStrLn

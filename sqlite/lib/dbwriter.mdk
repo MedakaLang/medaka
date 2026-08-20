@@ -605,7 +605,8 @@ lastRowid (_::rest) = lastRowid rest
 --   TEXT/BLOB is fine).  Returns `Err` on more leaves than fit one interior
 --   page, a sqlite_master record too large for one page, or any
 --   record-encoding error.
-export buildDatabase : String -> String -> Int -> Option Int -> List (List Cell) -> Result String (Array Int)
+export
+buildDatabase : String -> String -> Int -> Option Int -> List (List Cell) -> Result String (Array Int)
 buildDatabase name createSql colCount ipkColIdx rows =
   buildDatabaseMulti [(name, createSql, ipkColIdx, rows)]
 
@@ -667,7 +668,8 @@ pageCountOf batches = 1 + length batches
 
 -- A planned table: its name, CREATE text, and rows partitioned into leaf
 -- batches (so its page count is known before page assignment).
-export buildDatabaseMulti : List (String, String, Option Int, List (List Cell)) -> Result String (Array Int)
+export
+buildDatabaseMulti : List (String, String, Option Int, List (List Cell)) -> Result String (Array Int)
 buildDatabaseMulti specs = do
   plans <- planTables specs []
   assembleImage plans
@@ -784,12 +786,14 @@ buildAllTablePages ((_, _, batches)::rest) base acc = do
 
 -- | Build the byte image of a single-table SQLite database with explicit
 --   per-row rowids (`(rowid, cells)`).  See `buildDatabase`.
-export buildDatabaseExplicit : String -> String -> Int -> Option Int -> List (Int, List Cell) -> Result String (Array Int)
+export
+buildDatabaseExplicit : String -> String -> Int -> Option Int -> List (Int, List Cell) -> Result String (Array Int)
 buildDatabaseExplicit name createSql colCount ipkColIdx rows =
   buildDatabaseMultiExplicit [(name, createSql, ipkColIdx, rows)]
 
 -- | Like `buildDatabaseMulti` but every table's rows carry an explicit rowid.
-export buildDatabaseMultiExplicit : List (String, String, Option Int, List (Int, List Cell)) -> Result String (Array Int)
+export
+buildDatabaseMultiExplicit : List (String, String, Option Int, List (Int, List Cell)) -> Result String (Array Int)
 buildDatabaseMultiExplicit specs = do
   plans <- planTablesExplicit specs []
   assembleImage plans
@@ -1003,7 +1007,8 @@ buildIndexMasterRows ((name, tbl, sql, _)::rest) page rid acc = do
 --   value — `lib.writer.buildTableWithIndexes` derives both from the schema.
 --
 --   With an empty `indexSpecs` this is byte-identical to `buildDatabaseMulti`.
-export buildDatabaseMultiWithIndexes : List (String, String, Option Int, List (List Cell)) -> List (String, String, String, List (Cell, Int)) -> Result String (Array Int)
+export
+buildDatabaseMultiWithIndexes : List (String, String, Option Int, List (List Cell)) -> List (String, String, String, List (Cell, Int)) -> Result String (Array Int)
 buildDatabaseMultiWithIndexes specs indexSpecs = do
   plans <- planTables specs []
   indexPlans <- planIndexes indexSpecs []
@@ -1016,7 +1021,8 @@ buildDatabaseMultiWithIndexes specs indexSpecs = do
 -- | Build the database image and `writeFileBytes` it to `path`.  Returns
 --   `Err` on a build error (overflow / encoding); the file-write Result is
 --   propagated otherwise.
-export writeDatabase : String -> String -> String -> Int -> Option Int -> List (List Cell) -> <FileWrite> Result String Unit
+export
+writeDatabase : String -> String -> String -> Int -> Option Int -> List (List Cell) -> <FileWrite> Result String Unit
 writeDatabase path name createSql colCount ipkColIdx rows = do
   img <- buildDatabase name createSql colCount ipkColIdx rows
   writeFileBytes path img

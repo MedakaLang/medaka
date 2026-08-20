@@ -109,49 +109,56 @@ deriving (Eq, Debug)
 --
 -- > cdName (ColDef "id" "INTEGER" True False)
 -- "id"
-export cdName : ColDef -> String
+export
+cdName : ColDef -> String
 cdName (ColDef n _ _ _) = n
 
 -- | The column's DECLARED type text, uppercased; `""` when the DDL omitted it.
 --
 -- > cdType (ColDef "id" "INTEGER" True False)
 -- "INTEGER"
-export cdType : ColDef -> String
+export
+cdType : ColDef -> String
 cdType (ColDef _ t _ _) = t
 
 -- | Is this column the `PRIMARY KEY`?
 --
 -- > cdIsPk (ColDef "id" "INTEGER" True False)
 -- True
-export cdIsPk : ColDef -> Bool
+export
+cdIsPk : ColDef -> Bool
 cdIsPk (ColDef _ _ pk _) = pk
 
 -- | Is this column `NOT NULL`?
 --
 -- > cdNotNull (ColDef "name" "TEXT" False True)
 -- True
-export cdNotNull : ColDef -> Bool
+export
+cdNotNull : ColDef -> Bool
 cdNotNull (ColDef _ _ _ nn) = nn
 
 -- | The table's name.
 --
 -- > ctTable (CreateTable "users" [])
 -- "users"
-export ctTable : CreateTable -> String
+export
+ctTable : CreateTable -> String
 ctTable (CreateTable n _) = n
 
 -- | The table's columns, in DDL order.
 --
 -- > map cdName (ctCols (CreateTable "t" [ColDef "a" "INTEGER" False False]))
 -- ["a"]
-export ctCols : CreateTable -> List ColDef
+export
+ctCols : CreateTable -> List ColDef
 ctCols (CreateTable _ cs) = cs
 
 -- | The table's column names, in DDL order.
 --
 -- > ctColNames (CreateTable "t" [ColDef "a" "INTEGER" False False, ColDef "b" "TEXT" False False])
 -- ["a", "b"]
-export ctColNames : CreateTable -> List String
+export
+ctColNames : CreateTable -> List String
 ctColNames ct = map cdName (ctCols ct)
 
 -- ---------------------------------------------------------------------------
@@ -167,7 +174,8 @@ ctColNames ct = map cdName (ctCols ct)
 -- Some 1
 -- > ctIpkIndex (CreateTable "t" [ColDef "a" "TEXT" False False])
 -- None
-export ctIpkIndex : CreateTable -> Option Int
+export
+ctIpkIndex : CreateTable -> Option Int
 ctIpkIndex ct = ipkGo (ctCols ct) 0
 
 ipkGo : List ColDef -> Int -> Option Int
@@ -182,7 +190,8 @@ ipkGo (c::rest) i =
 --
 -- > ctNotNullIndexes (CreateTable "t" [ColDef "a" "TEXT" False True, ColDef "b" "TEXT" False False, ColDef "c" "INTEGER" False True])
 -- [0, 2]
-export ctNotNullIndexes : CreateTable -> List Int
+export
+ctNotNullIndexes : CreateTable -> List Int
 ctNotNullIndexes ct = nnGo (ctCols ct) 0 []
 
 nnGo : List ColDef -> Int -> List Int -> List Int
@@ -200,7 +209,8 @@ nnGo (c::rest) i acc =
 -- Some 1
 -- > ctColIndex (CreateTable "t" [ColDef "a" "INTEGER" False False]) "zz"
 -- None
-export ctColIndex : CreateTable -> String -> Option Int
+export
+ctColIndex : CreateTable -> String -> Option Int
 ctColIndex ct name = colIdxGo (ctCols ct) (toUpper name) 0
 
 colIdxGo : List ColDef -> String -> Int -> Option Int
@@ -223,7 +233,8 @@ colIdxGo (c::rest) upper i =
 -- [AffBlob, AffBlob, AffReal]
 -- > [affinityOfType "DECIMAL", affinityOfType "REAL", affinityOfType "CLOB"]
 -- [AffInt, AffReal, AffText]
-export affinityOfType : String -> Affinity
+export
+affinityOfType : String -> Affinity
 affinityOfType t =
   let u = toUpper t
   if contains "INT" u then
@@ -241,7 +252,8 @@ affinityOfType t =
 --
 -- > cdAffinity (ColDef "n" "VARCHAR(20)" False False)
 -- AffText
-export cdAffinity : ColDef -> Affinity
+export
+cdAffinity : ColDef -> Affinity
 cdAffinity c = affinityOfType (cdType c)
 
 -- | Coerce a value toward a column's affinity, exactly as sqlite3 does on the
@@ -263,7 +275,8 @@ cdAffinity c = affinityOfType (cdType c)
 -- CText "7"
 -- > applyAffinity AffText CNull
 -- CNull
-export applyAffinity : Affinity -> Cell -> Cell
+export
+applyAffinity : Affinity -> Cell -> Cell
 applyAffinity _ CNull = CNull
 applyAffinity AffBlob c = c
 applyAffinity AffText c = textify c
@@ -344,7 +357,8 @@ realOfTrimmed t s = match toFloat t
 --
 -- > renderCreate (CreateTable "kv" [ColDef "k" "" False False, ColDef "v" "REAL" False False])
 -- "CREATE TABLE kv(k, v REAL)"
-export renderCreate : CreateTable -> String
+export
+renderCreate : CreateTable -> String
 renderCreate ct =
   "CREATE TABLE \{ctTable ct}(\{join ", " (map renderColDef (ctCols ct))})"
 
@@ -392,7 +406,8 @@ nnText True = " NOT NULL"
 -- Err "table-level constraint 'UNIQUE' is not supported — only per-column PRIMARY KEY and NOT NULL are at 32"
 -- > parseCreateTable "CREATE TABLE t(a INTEGER) WITHOUT ROWID"
 -- Err "unsupported SQL after CREATE TABLE: 'WITHOUT' at 34"
-export parseCreateTable : String -> Result String CreateTable
+export
+parseCreateTable : String -> Result String CreateTable
 parseCreateTable s = runParser createStatement s
 
 createStatement : Parser CreateTable
@@ -416,7 +431,8 @@ createTail = do
 --
 -- > map ctTable (runParser createTableP "CREATE TABLE t(a INTEGER)")
 -- Ok "t"
-export createTableP : Parser CreateTable
+export
+createTableP : Parser CreateTable
 createTableP = do
   _ <- keyword "CREATE"
   _ <- keyword "TABLE"
@@ -531,7 +547,8 @@ notAConstraint w =
 -- | The words that may FOLLOW a column's type.  `PRIMARY` and `NOT` are handled;
 --   the rest exist so `typeNameP` does not mistake one of them for a type name
 --   and so `noMoreConstraints` can name what it refused.
-export constraintWords : List String
+export
+constraintWords : List String
 constraintWords = [
   "PRIMARY",
   "NOT",
@@ -605,7 +622,8 @@ constraintReject col (Some w) =
 -- True
 -- > ipkAgrees (CreateTable "t" [ColDef "id" "INTEGER" True False]) None
 -- False
-export ipkAgrees : CreateTable -> Option Int -> Bool
+export
+ipkAgrees : CreateTable -> Option Int -> Bool
 ipkAgrees ct readerIpk = ctIpkIndex ct == readerIpk
 
 -- ---------------------------------------------------------------------------
@@ -639,21 +657,24 @@ deriving (Eq, Debug)
 --
 -- > ixName (CreateIndex "idx_name" "people" "name")
 -- "idx_name"
-export ixName : CreateIndex -> String
+export
+ixName : CreateIndex -> String
 ixName (CreateIndex n _ _) = n
 
 -- | The table the index is on.
 --
 -- > ixTable (CreateIndex "idx_name" "people" "name")
 -- "people"
-export ixTable : CreateIndex -> String
+export
+ixTable : CreateIndex -> String
 ixTable (CreateIndex _ t _) = t
 
 -- | The single indexed column.
 --
 -- > ixColumn (CreateIndex "idx_name" "people" "name")
 -- "name"
-export ixColumn : CreateIndex -> String
+export
+ixColumn : CreateIndex -> String
 ixColumn (CreateIndex _ _ c) = c
 
 -- | Render a `CreateIndex` to the canonical `CREATE INDEX …` text that is stored
@@ -661,7 +682,8 @@ ixColumn (CreateIndex _ _ c) = c
 --
 -- > renderCreateIndex (CreateIndex "idx_name" "people" "name")
 -- "CREATE INDEX idx_name ON people (name)"
-export renderCreateIndex : CreateIndex -> String
+export
+renderCreateIndex : CreateIndex -> String
 renderCreateIndex (CreateIndex n t c) = "CREATE INDEX \{n} ON \{t} (\{c})"
 
 -- | Parse a whole `CREATE INDEX` statement.  A trailing `;` is tolerated;
@@ -689,7 +711,8 @@ renderCreateIndex (CreateIndex n t c) = "CREATE INDEX \{n} ON \{t} (\{c})"
 -- Err "DESC ordering in an index is not supported — v1 indexes ascending only at 26"
 -- > parseCreateIndex "CREATE INDEX i ON t(lower(a))"
 -- Err "expression / function indexes are not supported — v1 indexes a single bare column name at 26"
-export parseCreateIndex : String -> Result String CreateIndex
+export
+parseCreateIndex : String -> Result String CreateIndex
 parseCreateIndex s = runParser createIndexStatement s
 
 createIndexStatement : Parser CreateIndex
@@ -704,7 +727,8 @@ createIndexStatement = do
 --
 -- > map ixName (runParser createIndexP "CREATE INDEX i ON t(a)")
 -- Ok "i"
-export createIndexP : Parser CreateIndex
+export
+createIndexP : Parser CreateIndex
 createIndexP = do
   _ <- keyword "CREATE"
   _ <- rejectUniqueIndex
@@ -813,7 +837,8 @@ partialReject _ w = failWith "unsupported SQL after CREATE INDEX: '\{w}'"
 -- Ok None
 -- > runParser (afterKeyword "WHERE" intDigits) "WHERE x"
 -- Err "expected a number at 6"
-export afterKeyword : String -> Parser a -> Parser (Option a)
+export
+afterKeyword : String -> Parser a -> Parser (Option a)
 afterKeyword kw p = do
   k <- optional (keyword kw)
   afterKeywordStep k p
@@ -830,7 +855,8 @@ afterKeywordStep (Some _) p = map Some p
 -- Ok ["1", "2", "3"]
 -- > runParser (commaSep1 intDigits) "1,"
 -- Err "expected a number at 2"
-export commaSep1 : Parser a -> Parser (List a)
+export
+commaSep1 : Parser a -> Parser (List a)
 commaSep1 p = do
   x <- p
   xs <- commaSepRest p

@@ -107,14 +107,16 @@ public export data Diag =
 
 -- Smart constructor for a diagnostic with no structured help/fix (the common
 -- case) — keeps the ~15 plain construction sites terse.
-export mkDiag : Severity -> String -> String -> Option Loc -> Diag
+export
+mkDiag : Severity -> String -> String -> Option Loc -> Diag
 mkDiag sev code msg loc = Diag sev code msg loc None None
 
 -- Build the (help, fix) pair for a resolve error's structured suggestion.  Only
 -- did-you-mean yields both today: `help` is prose; `fix` replaces the misspelled
 -- identifier's OWN span (its loc start, end = start + name length) with the
 -- suggested name — an exact, single-span, agent-applicable edit.
-export resErrorHelpFix : ResError -> (Option String, Option Fix)
+export
+resErrorHelpFix : ResError -> (Option String, Option Fix)
 resErrorHelpFix e = match resErrorDidYouMean e
   Some (bad, sug) =>
     let help = Some "did you mean '\{sug}'?"
@@ -123,7 +125,8 @@ resErrorHelpFix e = match resErrorDidYouMean e
   None => (None, None)
 
 -- Convert a resolve error to a Diag, attaching structured help/fix (did-you-mean).
-export diagOfResError : ResError -> Diag
+export
+diagOfResError : ResError -> Diag
 diagOfResError e =
   let (help, fix) = resErrorHelpFix e
   Diag SevError (resErrorCode e) (ppResError e) (resErrorLoc e) help fix
@@ -154,7 +157,8 @@ diagOfResError e =
 -- A typecheck-stage diagnostic that really is a WARNING belongs on the
 -- `matchWarnings` channel instead — see `diagOfTypeWarning` below, which is
 -- control-flow-free and carries the author's own `W-*` code end to end.
-export diagOfTypeError : TcDiag -> Diag
+export
+diagOfTypeError : TcDiag -> Diag
 diagOfTypeError (TcDiag code _ loc msg help fix) =
   Diag SevError code msg loc help (map fixOfLocRepl fix)
 
@@ -244,7 +248,8 @@ diagOfTypeWarning (TcDiag code _ loc w help _) =
 -- visible as itself, now rendered beside `"kind":"warning"`.  The mismatch is then
 -- legible to its author on their first run, instead of being confidently mislabelled
 -- as a type error.
-export diagKind : Severity -> String -> String
+export
+diagKind : Severity -> String -> String
 diagKind SevError code = codeKind code
 diagKind SevWarning code
   | codeKind code == "lint" = "lint"
@@ -254,7 +259,8 @@ diagKind SevWarning code
 -- §2): L→lex, P→parse, R→resolve, T→type, W→warning.  An unrecognized prefix
 -- falls back to "error".  ⚠️ Severity-blind by construction — prefer `diagKind`
 -- above unless the severity at your call site is a literal 1.
-export codeKind : String -> String
+export
+codeKind : String -> String
 codeKind code
   | startsWith "L-" code = "lex"
   | startsWith "P-" code = "parse"
@@ -323,7 +329,8 @@ oldNewFixOf f sl sc (old, new) =
 -- expiry (.claude/ORCHESTRATING.md, "DERIVE, don't encode"), so it goes stale the
 -- next time anyone adds a clause and nothing notices — which is exactly how it
 -- rotted, unremarked, twice. Read the clauses; they cannot lie.
-export parseErrCode : String -> String
+export
+parseErrCode : String -> String
 parseErrCode msg
   | startsWith "unterminated string" msg = "L-UNTERMINATED-STRING"
   | startsWith "unterminated block" msg = "L-UNTERMINATED-COMMENT"
@@ -365,7 +372,8 @@ parseErrCode msg
 -- own (single-char, display-only) range.  Every other parse hint (`\x->`, `$`,
 -- `case…of`) needs a multi-edit rewrite, so it stays help/message-only (no
 -- `fix`) — this is deliberately narrow, not a general parse-error-fix engine.
-export parseErrHelpFix : String -> Loc -> (Option String, Option Fix)
+export
+parseErrHelpFix : String -> Loc -> (Option String, Option Fix)
 parseErrHelpFix msg (Loc f sl sc el ec)
   | startsWith "Use '::' for List cons" msg = (
     Some "replace '::' with ':' for a type signature",
@@ -451,14 +459,16 @@ parseErrHelpFix msg (Loc f sl sc el ec)
 
 -- ── rendering ──────────────────────────────────────────────────────────────
 
-export ppSeverity : Severity -> String
+export
+ppSeverity : Severity -> String
 ppSeverity SevError = "error"
 ppSeverity SevWarning = "warning"
 
 -- Render a diagnostic as "severity: message" (loc-free, diffable against
 -- the location-stripped oracle — the loc is consumed by the LSP, not this text
 -- form, so the diff gate stays byte-identical).
-export ppDiag : Diag -> String
+export
+ppDiag : Diag -> String
 ppDiag (Diag sev _ msg _ _ _) = "\{ppSeverity sev}: \{msg}"
 
 -- Plain-text CLI renderer (Stage-A positioned output, Stage-C carat block).
@@ -475,11 +485,13 @@ ppDiag (Diag sev _ msg _ _ _) = "\{ppSeverity sev}: \{msg}"
 -- whole-doc range).  `src` is the target file's source text (to echo the
 -- offending line); when the source line can't be read the carat block is
 -- omitted (mirrors `show_snippet`'s `None -> ()`), leaving just the header.
-export ppDiagCli : String -> Diag -> String
+export
+ppDiagCli : String -> Diag -> String
 ppDiagCli file diag = ppDiagCliSrc "" file diag
 
 -- Stage-C: carat-aware renderer.  `src` carries the file's source text.
-export ppDiagCliSrc : String -> String -> Diag -> String
+export
+ppDiagCliSrc : String -> String -> Diag -> String
 ppDiagCliSrc src file (Diag _ _ msg (Some (Loc _ sl sc _ _)) _ _) =
   let header = "\{file}:\{intToString sl}:\{intToString sc}: \{msg}"
   match nthLine src sl
@@ -520,7 +532,8 @@ nthLineGo cs i len cur target acc
 -- Arguments: runtimeSrc (runtime.mdk source), coreSrc (core.mdk source),
 -- progSrc (target source).
 
-export analyze : String -> String -> String -> List Diag
+export
+analyze : String -> String -> String -> List Diag
 analyze runtimeSrc coreSrc progSrc =
   analyzeFrom runtimeSrc coreSrc (parse progSrc) []
 
@@ -528,14 +541,16 @@ analyze runtimeSrc coreSrc progSrc =
 -- `parseLocated` so the ELoc wrappers carry REAL line/col spans (the pure
 -- `parse` carries placeholder locs).  Type-error Diags then surface the true
 -- expr-level span; runtime/core stay on `parse` (their locs are never reported).
-export analyzeLocated : String -> String -> String -> List Diag
+export
+analyzeLocated : String -> String -> String -> List Diag
 analyzeLocated runtimeSrc coreSrc progSrc =
   analyzeFrom runtimeSrc coreSrc (parseLocated progSrc) []
 
 -- B.10.x: like analyzeLocated but enforcing the internal-extern guard unless
 -- `allowInternal` is set (the single-file `medaka check` error path).  Other
 -- callers (LSP, playground) keep `analyzeLocated`, which is unguarded.
-export analyzeLocatedG : Bool -> String -> String -> String -> List Diag
+export
+analyzeLocatedG : Bool -> String -> String -> String -> List Diag
 analyzeLocatedG allowInternal runtimeSrc coreSrc progSrc =
   analyzeFrom
     runtimeSrc
@@ -643,7 +658,8 @@ stripWarnPrefix s =
 
 -- ── text entry point (for diff gate) ──────────────────────────────────────
 
-export analyzeToLines : String -> String -> String -> String
+export
+analyzeToLines : String -> String -> String -> String
 analyzeToLines runtimeSrc coreSrc progSrc =
   joinNl (map ppDiag (analyze runtimeSrc coreSrc progSrc))
 
@@ -758,7 +774,8 @@ parseErrLoc path e =
 -- any machine-applicable fix.  One definition shared by the stale-buffer path and
 -- the loader's `LoadParseFailed` path (#100) so an imported module's parse error
 -- is byte-for-byte the diagnostic that file gets when checked directly.
-export parseErrDiag : String -> ParseError -> Diag
+export
+parseErrDiag : String -> ParseError -> Diag
 parseErrDiag path e =
   let ploc = parseErrLoc path e
   let (phelp, pfix) = parseErrHelpFix (parseErrorMessage e) ploc
@@ -795,7 +812,8 @@ preludeDesugared parseCacheRef src = match lookupAssoc src !parseCacheRef
     parseCacheRef := (src, decls) :: !parseCacheRef
     decls
 
-export analyzeProject : Ref (List (String, String)) -> Ref (List (String, List Decl)) -> (String -> Option String) -> String -> List String -> String -> String -> <IO> List (String, List Diag)
+export
+analyzeProject : Ref (List (String, String)) -> Ref (List (String, List Decl)) -> (String -> Option String) -> String -> List String -> String -> String -> <IO> List (String, List Diag)
 analyzeProject cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let staleRef = newStale ()
   let wread = p => wrappedRead cacheRef staleRef read p
@@ -827,7 +845,8 @@ analyzeProject cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
 -- module (checked last), so its locals and its import-scoped seed (runtime + core
 -- + imported names) are available to the hover lookup fallback chain.  None on a
 -- load error (a buffer with an unresolved import) — hover then degrades to null.
-export projectEntrySchemes : Ref (List (String, String)) -> Ref (List (String, List Decl)) -> (String -> Option String) -> String -> List String -> String -> String -> <IO> Option (List (String, Scheme))
+export
+projectEntrySchemes : Ref (List (String, String)) -> Ref (List (String, List Decl)) -> (String -> Option String) -> String -> List String -> String -> String -> <IO> Option (List (String, Scheme))
 projectEntrySchemes cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let staleRef = newStale ()
   let wread = p => wrappedRead cacheRef staleRef read p
@@ -974,7 +993,8 @@ lookupTcDiags mid ((m, d)::rest)
 --   "## FILE <path>"  followed by each diag's "severity: message" line.
 -- The harness splits on the marker and sorts each file's lines, diffing against
 -- the OCaml analyze_project's per-file buckets.
-export analyzeProjectToLines : Ref (List (String, String)) -> (String -> Option String) -> String -> List String -> String -> String -> <IO> String
+export
+analyzeProjectToLines : Ref (List (String, String)) -> (String -> Option String) -> String -> List String -> String -> String -> <IO> String
 analyzeProjectToLines cacheRef read entry roots runtimeSrc coreSrc =
   let parseCacheRef = Ref []
   joinNl (projectLines (analyzeProject
@@ -1013,12 +1033,14 @@ ppDiagLoc (Diag sev _ msg (Some (Loc _ sl sc _ _)) _ _) =
 
 -- Build a 0-based LSP Position JSON: { "character": ch, "line": line }
 -- (alphabetical: character < line)
-export cjPosition : Int -> Int -> Json
+export
+cjPosition : Int -> Int -> Json
 cjPosition line ch = jObject [("character", JInt ch), ("line", JInt line)]
 
 -- Build an LSP Range JSON: { "end": ..., "start": ... }
 -- (alphabetical: end < start)
-export cjRange : Int -> Int -> Int -> Int -> Json
+export
+cjRange : Int -> Int -> Int -> Int -> Json
 cjRange sl sc el ec =
   jObject [("end", cjPosition el ec), ("start", cjPosition sl sc)]
 
@@ -1031,7 +1053,8 @@ cjRange sl sc el ec =
 -- The key is present with a null value (not omitted) so consumers distinguish
 -- "unlocated" from "field missing". See the Diag JSON contract in
 -- compiler/DIAGNOSTIC-CODES-DESIGN.md.
-export cjRangeOfLoc : String -> Option Loc -> Json
+export
+cjRangeOfLoc : String -> Option Loc -> Json
 cjRangeOfLoc src (Some (Loc _ sl sc el ec)) = cjRange (sl - 1) sc (el - 1) ec
 cjRangeOfLoc src None = JNull
 
@@ -1051,17 +1074,20 @@ cjSevCode _ = 2
 -- uniform call shape).
 -- Stage 2: a single optional JSON field — `[]` when absent so the key is omitted
 -- entirely (keeps every non-suggestion diagnostic's JSON byte-identical to Stage 1).
-export optField : String -> Option Json -> List (String, Json)
+export
+optField : String -> Option Json -> List (String, Json)
 optField k (Some v) = [(k, v)]
 optField _ None = []
 
 -- Render a machine-applicable Fix as { "range": {...}, "replacement": "..." },
 -- the range covering exactly the span to overwrite (mirrors the LSP text edit).
-export cjFixJson : Fix -> Json
+export
+cjFixJson : Fix -> Json
 cjFixJson (Fix (Loc _ sl sc el ec) repl) = jObject
   [("range", cjRange (sl - 1) sc (el - 1) ec), ("replacement", JString repl)]
 
-export cjDiagnostic : String -> String -> Diag -> Json
+export
+cjDiagnostic : String -> String -> Diag -> Json
 cjDiagnostic _ src (Diag sev code msg loc help fix) =
   jObject
     ([("code", JString code)] ++ optField "fix" (map cjFixJson fix) ++ optField "help" (map JString help) ++ [("kind", JString (diagKind sev code)), ("message", JString msg), ("range", cjRangeOfLoc src loc), ("severity", JInt (cjSevCode sev)), ("source", JString "medaka")])
@@ -1069,7 +1095,8 @@ cjDiagnostic _ src (Diag sev code msg loc help fix) =
 -- Build the per-file entry: { "file": path, "diagnostics": [...] }.
 -- `src` is the file's source text (for whole-doc range fallback).
 -- `diags` is the List Diag from analyzeProject.
-export cjFileEntry : String -> String -> List Diag -> Json
+export
+cjFileEntry : String -> String -> List Diag -> Json
 cjFileEntry path src diags = jObject
   [
     ("file", JString path),
@@ -1082,13 +1109,15 @@ cjTriple (path, src, diags) = cjFileEntry path src diags
 -- Serialize the analyzeProject result as the top-level JSON object:
 -- { "files": [ { "file": ..., "diagnostics": [...] }, ... ] }
 -- Needs sources for whole-doc range fallback.
-export cjAllToJson : List (String, String, List Diag) -> String
+export
+cjAllToJson : List (String, String, List Diag) -> String
 cjAllToJson triples = stringify (jObject
   [("files", JArray (arrayFromList (map cjTriple triples)))])
 
 -- Read each file's source for the range fallback.  On read error, use "" so
 -- diagnostics still serialize (the error itself is in the diag list).
-export readDiagSrc : (String, List Diag) -> <IO> (String, String, List Diag)
+export
+readDiagSrc : (String, List Diag) -> <IO> (String, String, List Diag)
 readDiagSrc (path, diags) = match readFile path
   Ok src => (path, src, diags)
   Err _ => (path, "", diags)
@@ -1101,7 +1130,8 @@ readDiagSrc (path, diags) = match readFile path
 -- project-root prefix turns `<root>/stdlib/list.mdk` into `stdlib/list.mdk`,
 -- matching the already-relative target + project imports (we run from the root,
 -- so root == cwd).  A path without the prefix (already relative) passes through.
-export relDiagPath : String -> String -> String
+export
+relDiagPath : String -> String -> String
 relDiagPath root path =
   let pre = root ++ "/"
   if startsWith pre path then
@@ -1122,7 +1152,8 @@ relDiagTriple root (path, src, diags) = (relDiagPath root path, src, diags)
 -- serializer + routing live in ONE place, byte-for-byte.
 
 -- True iff the diagnostic is a hard error (severity 1), not a warning.
-export diagIsError : Diag -> Bool
+export
+diagIsError : Diag -> Bool
 diagIsError (Diag SevError _ _ _ _ _) = True
 diagIsError _ = False
 
@@ -1132,7 +1163,8 @@ cjHasErrD (_, diags) = anyList diagIsError diags
 -- readFile that yields "" on error (any real read failure surfaces as a diag).
 -- Shared with medaka_cli's driver code (which imports it) so the two don't
 -- diverge — the one canonical "read a target, tolerate a missing file" helper.
-export readFileSafe : String -> <IO> String
+export
+readFileSafe : String -> <IO> String
 readFileSafe path = match readFile path
   Ok src => src
   Err _ => ""
@@ -1141,7 +1173,8 @@ readFileSafe path = match readFile path
 -- Mirrors runCheckJsonCmd's inline parse-error diag (built inline, not via
 -- cjDiagnostic) so a hard parse failure still carries a stable `code`, a range,
 -- and — for the two single-token hints — a machine-applicable `fix`.
-export cjParseErrJson : String -> String -> ParseError -> String
+export
+cjParseErrJson : String -> String -> ParseError -> String
 cjParseErrJson target src e =
   let ln = parseErrorLine e - 1
   let col = parseErrorCol e
@@ -1159,7 +1192,8 @@ cjParseErrJson target src e =
 -- file on disk to resolve imports against) and for a no-import file.  `target` is
 -- the value that lands in each diagnostic's `file` field (cjRangeOfLoc ignores the
 -- filename inside each Loc), so an inline check can pass a stable synthetic name.
-export checkJsonSingle : Bool -> String -> String -> String -> String -> (String, Bool)
+export
+checkJsonSingle : Bool -> String -> String -> String -> String -> (String, Bool)
 checkJsonSingle allowInternal rsrc csrc target src = match parseResult src
   Err e => (cjParseErrJson target src e, True)
   Ok _ =>
@@ -1171,7 +1205,8 @@ checkJsonSingle allowInternal rsrc csrc target src = match parseResult src
 -- import span + available-modules hint; single module → checkJsonSingle (honouring
 -- the owning-root trust signal); multi-module → analyzeProject.  `stdlibDir` is the
 -- <root>/stdlib dir; roots are derived from the target's directory + stdlibDir.
-export checkJsonFile : Bool -> String -> String -> String -> String -> <IO> (String, Bool)
+export
+checkJsonFile : Bool -> String -> String -> String -> String -> <IO> (String, Bool)
 checkJsonFile allowInternal rsrc csrc target stdlibDir =
   let src = readFileSafe target
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]

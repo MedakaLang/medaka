@@ -77,7 +77,8 @@ public export data Codemod =
 
 -- ── registry ────────────────────────────────────────────────────────────────
 -- Adding a codemod = one `mkX`/`warnX` pair + one entry here.
-export allCodemods : List Codemod
+export
+allCodemods : List Codemod
 allCodemods = [effectLabelsCodemod]
 
 effectLabelsCodemod : Codemod
@@ -90,22 +91,28 @@ effectLabelsCodemod = Codemod {
 }
 
 -- ── accessors (the CLI uses these; never the record fields) ──────────────────
-export codemodName : Codemod -> String
+export
+codemodName : Codemod -> String
 codemodName (Codemod { name, ... }) = name
 
-export codemodDescr : Codemod -> String
+export
+codemodDescr : Codemod -> String
 codemodDescr (Codemod { descr, ... }) = descr
 
-export codemodArgHelp : Codemod -> String
+export
+codemodArgHelp : Codemod -> String
 codemodArgHelp (Codemod { argHelp, ... }) = argHelp
 
-export codemodMk : Codemod -> List String -> Result String (Decl -> (Decl, Bool))
+export
+codemodMk : Codemod -> List String -> Result String (Decl -> (Decl, Bool))
 codemodMk (Codemod { mk, ... }) args = mk args
 
-export codemodWarnDecls : Codemod -> List String -> List Decl -> List String
+export
+codemodWarnDecls : Codemod -> List String -> List Decl -> List String
 codemodWarnDecls (Codemod { warn, ... }) args decls = warn args decls
 
-export findCodemod : String -> Option Codemod
+export
+findCodemod : String -> Option Codemod
 findCodemod name = findCodemodGo name allCodemods
 
 findCodemodGo : String -> List Codemod -> Option Codemod
@@ -117,7 +124,8 @@ findCodemodGo name (c::rest) =
     findCodemodGo name rest
 
 -- Registry listing for the bare `medaka codemod` invocation.
-export codemodListing : String
+export
+codemodListing : String
 codemodListing = joinNl (map codemodListingLine allCodemods)
 
 codemodListingLine : Codemod -> String
@@ -131,7 +139,8 @@ codemodListingLine c =
 -- codemod from doubling as `fmt` and keeps it off non-fmt-clean or #51 float
 -- files that carry no target label).  Parse errors surface as `Err ParseError`
 -- so the CLI reports them through the shared `ppParseError` path.
-export codemodSource : (Decl -> (Decl, Bool)) -> String -> Result ParseError (Option String)
+export
+codemodSource : (Decl -> (Decl, Bool)) -> String -> Result ParseError (Option String)
 codemodSource xf src = match parseResult src
   Err e => Err e
   Ok _ =>

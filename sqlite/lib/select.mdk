@@ -262,7 +262,8 @@ deriving (Eq, Debug)
 -- | The canonical SQL keyword for a set operator (`UNION ALL` is two words).
 --   Shared by `runCompound`'s column-count error message and the compound
 --   renderer so the two never drift.
-export setOpSql : SetOp -> String
+export
+setOpSql : SetOp -> String
 setOpSql OpUnion = "UNION"
 setOpSql OpUnionAll = "UNION ALL"
 setOpSql OpIntersect = "INTERSECT"
@@ -281,182 +282,228 @@ setOpSql OpExcept = "EXCEPT"
 public export data Expr a = MkExpr SqlExpr
 
 -- | Recover the untyped expression (e.g. to put it in `where_`).
-export unExpr : Expr a -> SqlExpr
+export
+unExpr : Expr a -> SqlExpr
 unExpr (MkExpr x) = x
 
 -- | Wrap an untyped expression at an arbitrary phantom type (internal).
-export mkE : SqlExpr -> Expr a
+export
+mkE : SqlExpr -> Expr a
 mkE x = MkExpr x
 
 -- Column references, each fixing the phantom witness type.
-export eColInt : String -> Expr Int
+export
+eColInt : String -> Expr Int
 eColInt name = MkExpr (ECol name)
 
-export eColText : String -> Expr String
+export
+eColText : String -> Expr String
 eColText name = MkExpr (ECol name)
 
-export eColFloat : String -> Expr Float
+export
+eColFloat : String -> Expr Float
 eColFloat name = MkExpr (ECol name)
 
 -- | An untyped column reference (when you don't want a witness).
-export eCol : String -> Expr a
+export
+eCol : String -> Expr a
 eCol name = MkExpr (ECol name)
 
 -- Literals.
-export eLitI : Int -> Expr Int
+export
+eLitI : Int -> Expr Int
 eLitI n = MkExpr (ELit (LInt n))
 
-export eLitT : String -> Expr String
+export
+eLitT : String -> Expr String
 eLitT s = MkExpr (ELit (LText s))
 
-export eLitF : Float -> Expr Float
+export
+eLitF : Float -> Expr Float
 eLitF f = MkExpr (ELit (LFloat f))
 
 -- Comparisons: both operands share the phantom `a`, result is `Expr Bool`.
-export eEq : Expr a -> Expr a -> Expr Bool
+export
+eEq : Expr a -> Expr a -> Expr Bool
 eEq l r = MkExpr (EBin OpEq (unExpr l) (unExpr r))
 
-export eNe : Expr a -> Expr a -> Expr Bool
+export
+eNe : Expr a -> Expr a -> Expr Bool
 eNe l r = MkExpr (EBin OpNe (unExpr l) (unExpr r))
 
-export eLt : Expr a -> Expr a -> Expr Bool
+export
+eLt : Expr a -> Expr a -> Expr Bool
 eLt l r = MkExpr (EBin OpLt (unExpr l) (unExpr r))
 
-export eLe : Expr a -> Expr a -> Expr Bool
+export
+eLe : Expr a -> Expr a -> Expr Bool
 eLe l r = MkExpr (EBin OpLe (unExpr l) (unExpr r))
 
-export eGt : Expr a -> Expr a -> Expr Bool
+export
+eGt : Expr a -> Expr a -> Expr Bool
 eGt l r = MkExpr (EBin OpGt (unExpr l) (unExpr r))
 
-export eGe : Expr a -> Expr a -> Expr Bool
+export
+eGe : Expr a -> Expr a -> Expr Bool
 eGe l r = MkExpr (EBin OpGe (unExpr l) (unExpr r))
 
 -- Arithmetic combinators: both operands share the phantom `a`, result is
 -- `Expr a` (the value stays in the same numeric domain for the type checker).
-export eAdd : Expr a -> Expr a -> Expr a
+export
+eAdd : Expr a -> Expr a -> Expr a
 eAdd l r = MkExpr (EArith AAdd (unExpr l) (unExpr r))
 
-export eSub : Expr a -> Expr a -> Expr a
+export
+eSub : Expr a -> Expr a -> Expr a
 eSub l r = MkExpr (EArith ASub (unExpr l) (unExpr r))
 
-export eMul : Expr a -> Expr a -> Expr a
+export
+eMul : Expr a -> Expr a -> Expr a
 eMul l r = MkExpr (EArith AMul (unExpr l) (unExpr r))
 
-export eDiv : Expr a -> Expr a -> Expr a
+export
+eDiv : Expr a -> Expr a -> Expr a
 eDiv l r = MkExpr (EArith ADiv (unExpr l) (unExpr r))
 
-export eMod : Expr a -> Expr a -> Expr a
+export
+eMod : Expr a -> Expr a -> Expr a
 eMod l r = MkExpr (EArith AMod (unExpr l) (unExpr r))
 
 -- | `||` string concatenation.  Typed `String -> String -> String` (the typed
 --   layer does not model SQLite's number-to-text coercion — that is a runtime
 --   behavior of the untyped evaluator, not something the phantom layer should
 --   pretend is type-safe).
-export eConcat : Expr String -> Expr String -> Expr String
+export
+eConcat : Expr String -> Expr String -> Expr String
 eConcat l r = MkExpr (EConcat (unExpr l) (unExpr r))
 
 -- | `x LIKE pattern` / `x NOT LIKE pattern` — case-insensitive (ASCII only).
-export eLike : Expr String -> Expr String -> Expr Bool
+export
+eLike : Expr String -> Expr String -> Expr Bool
 eLike x pat = MkExpr (ELike (unExpr x) (unExpr pat))
 
-export eNotLike : Expr String -> Expr String -> Expr Bool
+export
+eNotLike : Expr String -> Expr String -> Expr Bool
 eNotLike x pat = MkExpr (ENot (ELike (unExpr x) (unExpr pat)))
 
 -- | `x IN (v1, .., vn)` / `x NOT IN (v1, .., vn)`.
-export eIn : Expr a -> List (Expr a) -> Expr Bool
+export
+eIn : Expr a -> List (Expr a) -> Expr Bool
 eIn x vs = MkExpr (EIn (unExpr x) (map unExpr vs))
 
-export eNotIn : Expr a -> List (Expr a) -> Expr Bool
+export
+eNotIn : Expr a -> List (Expr a) -> Expr Bool
 eNotIn x vs = MkExpr (ENot (EIn (unExpr x) (map unExpr vs)))
 
 -- | `x BETWEEN lo AND hi` / `x NOT BETWEEN lo AND hi` — inclusive, exactly
 --   `lo <= x AND x <= hi` (SQLite's own definition; there is no `EBetween`
 --   node, see the `SqlExpr` doc comment).
-export eBetween : Expr a -> Expr a -> Expr a -> Expr Bool
+export
+eBetween : Expr a -> Expr a -> Expr a -> Expr Bool
 eBetween x lo hi =
   MkExpr (EAnd
     (EBin OpGe (unExpr x) (unExpr lo))
     (EBin OpLe (unExpr x) (unExpr hi)))
 
-export eNotBetween : Expr a -> Expr a -> Expr a -> Expr Bool
+export
+eNotBetween : Expr a -> Expr a -> Expr a -> Expr Bool
 eNotBetween x lo hi =
   MkExpr (ENot (EAnd
     (EBin OpGe (unExpr x) (unExpr lo))
     (EBin OpLe (unExpr x) (unExpr hi))))
 
 -- | `COALESCE(a, b, ..)` — the first non-NULL argument, or NULL if all are.
-export eCoalesce : List (Expr a) -> Expr a
+export
+eCoalesce : List (Expr a) -> Expr a
 eCoalesce es = MkExpr (ECoalesce (map unExpr es))
 
 -- | `IFNULL(a, b)` — SQLite defines this as exactly `COALESCE(a, b)`.
-export eIfNull : Expr a -> Expr a -> Expr a
+export
+eIfNull : Expr a -> Expr a -> Expr a
 eIfNull a b = MkExpr (ECoalesce [unExpr a, unExpr b])
 
 -- | Searched `CASE WHEN c1 THEN r1 .. [ELSE re] END`.  There is no typed
 --   builder for the simple `CASE x WHEN v THEN r` form — build the equivalent
 --   `eEq x v` conditions directly, exactly what the SQL parser desugars to.
-export eCase : List (Expr Bool, Expr a) -> Option (Expr a) -> Expr a
+export
+eCase : List (Expr Bool, Expr a) -> Option (Expr a) -> Expr a
 eCase whens els = MkExpr (ECase (map unExprPair whens) (map unExpr els))
 
 unExprPair : (Expr Bool, Expr a) -> (SqlExpr, SqlExpr)
 unExprPair (c, r) = (unExpr c, unExpr r)
 
 -- | `TRUE` / `FALSE` — SQLite represents both as the integer literals `1`/`0`.
-export eTrue : Expr Bool
+export
+eTrue : Expr Bool
 eTrue = MkExpr (ELit (LInt 1))
 
-export eFalse : Expr Bool
+export
+eFalse : Expr Bool
 eFalse = MkExpr (ELit (LInt 0))
 
 -- String scalar functions (SQLite semantics — see the evaluator section below
 -- for the exact per-function NULL/coercion rules, verified against `sqlite3`).
-export eLength : Expr String -> Expr Int
+export
+eLength : Expr String -> Expr Int
 eLength s = MkExpr (EFn "LENGTH" [unExpr s])
 
-export eUpper : Expr String -> Expr String
+export
+eUpper : Expr String -> Expr String
 eUpper s = MkExpr (EFn "UPPER" [unExpr s])
 
-export eLower : Expr String -> Expr String
+export
+eLower : Expr String -> Expr String
 eLower s = MkExpr (EFn "LOWER" [unExpr s])
 
-export eTrimSql : Expr String -> Expr String
+export
+eTrimSql : Expr String -> Expr String
 eTrimSql s = MkExpr (EFn "TRIM" [unExpr s])
 
-export eLtrim : Expr String -> Expr String
+export
+eLtrim : Expr String -> Expr String
 eLtrim s = MkExpr (EFn "LTRIM" [unExpr s])
 
-export eRtrim : Expr String -> Expr String
+export
+eRtrim : Expr String -> Expr String
 eRtrim s = MkExpr (EFn "RTRIM" [unExpr s])
 
 -- | `substr(s, start)` — 1-indexed, negative `start` counts from the end.
-export eSubstr2 : Expr String -> Expr Int -> Expr String
+export
+eSubstr2 : Expr String -> Expr Int -> Expr String
 eSubstr2 s start = MkExpr (EFn "SUBSTR" [unExpr s, unExpr start])
 
 -- | `substr(s, start, len)` — see `fnSubstr3`'s doc comment for the exact
 --   (verified-against-`sqlite3`) rules for zero/negative `start`/`len`.
-export eSubstr3 : Expr String -> Expr Int -> Expr Int -> Expr String
+export
+eSubstr3 : Expr String -> Expr Int -> Expr Int -> Expr String
 eSubstr3 s start len =
   MkExpr (EFn "SUBSTR" [unExpr s, unExpr start, unExpr len])
 
-export eReplaceSql : Expr String -> Expr String -> Expr String -> Expr String
+export
+eReplaceSql : Expr String -> Expr String -> Expr String -> Expr String
 eReplaceSql s from to =
   MkExpr (EFn "REPLACE" [unExpr s, unExpr from, unExpr to])
 
 -- Logical combinators: force `Expr Bool` operands and result.
-export eAnd : Expr Bool -> Expr Bool -> Expr Bool
+export
+eAnd : Expr Bool -> Expr Bool -> Expr Bool
 eAnd l r = MkExpr (EAnd (unExpr l) (unExpr r))
 
-export eOr : Expr Bool -> Expr Bool -> Expr Bool
+export
+eOr : Expr Bool -> Expr Bool -> Expr Bool
 eOr l r = MkExpr (EOr (unExpr l) (unExpr r))
 
-export eNot : Expr Bool -> Expr Bool
+export
+eNot : Expr Bool -> Expr Bool
 eNot e = MkExpr (ENot (unExpr e))
 
 -- Null tests over any column type.
-export eIsNull : Expr a -> Expr Bool
+export
+eIsNull : Expr a -> Expr Bool
 eIsNull e = MkExpr (EIsNull (unExpr e))
 
-export eNotNull : Expr a -> Expr Bool
+export
+eNotNull : Expr a -> Expr Bool
 eNotNull e = MkExpr (ENotNull (unExpr e))
 
 -- Aggregate constructors.  These build a REAL `EAgg` node — unlike the legacy
@@ -467,23 +514,29 @@ eNotNull e = MkExpr (ENotNull (unExpr e))
 -- SUM/MIN/MAX stay in the operand's domain.
 
 -- | `COUNT(*)` — counts rows, NULLs included.  The only operand-less aggregate.
-export aCountStar : Expr Int
+export
+aCountStar : Expr Int
 aCountStar = MkExpr (EAgg FnCount None)
 
 -- | `COUNT(e)` — counts the rows where `e` is non-NULL.
-export aCount : Expr a -> Expr Int
+export
+aCount : Expr a -> Expr Int
 aCount e = MkExpr (EAgg FnCount (Some (unExpr e)))
 
-export aSum : Expr a -> Expr a
+export
+aSum : Expr a -> Expr a
 aSum e = MkExpr (EAgg FnSum (Some (unExpr e)))
 
-export aAvg : Expr a -> Expr Float
+export
+aAvg : Expr a -> Expr Float
 aAvg e = MkExpr (EAgg FnAvg (Some (unExpr e)))
 
-export aMin : Expr a -> Expr a
+export
+aMin : Expr a -> Expr a
 aMin e = MkExpr (EAgg FnMin (Some (unExpr e)))
 
-export aMax : Expr a -> Expr a
+export
+aMax : Expr a -> Expr a
 aMax e = MkExpr (EAgg FnMax (Some (unExpr e)))
 
 -- ---------------------------------------------------------------------------
@@ -492,12 +545,14 @@ aMax e = MkExpr (EAgg FnMax (Some (unExpr e)))
 
 -- | A bare SELECT over a table: no WHERE, no GROUP BY, no ORDER BY, no
 --   limit/offset.
-export selectFrom : String -> Select
+export
+selectFrom : String -> Select
 selectFrom tbl = selectFromAs tbl None
 
 -- | A bare SELECT over a table with an optional alias (`FROM tbl AS a`).
 --   `selectFrom tbl` is `selectFromAs tbl None`.
-export selectFromAs : String -> Option String -> Select
+export
+selectFromAs : String -> Option String -> Select
 selectFromAs tbl alias = Select {
   from = tbl,
   fromAlias = alias,
@@ -514,20 +569,23 @@ selectFromAs tbl alias = Select {
 }
 
 -- | Attach an alias to the `from` table of an existing `Select`.
-export withFromAlias : Option String -> Select -> Select
+export
+withFromAlias : Option String -> Select -> Select
 withFromAlias alias sel = { sel | fromAlias = alias }
 
 -- | Append an INNER JOIN of `tbl` with the type-safe `on` predicate.  Joins are
 --   applied in call order (each appends), so the combined row lays out the
 --   `from` columns first, then each joined table's columns in this order.  The
 --   phantom `Expr Bool` is stripped here, exactly like `withWhere`.
-export innerJoin : String -> Expr Bool -> Select -> Select
+export
+innerJoin : String -> Expr Bool -> Select -> Select
 innerJoin tbl onExpr sel = innerJoinAs tbl None onExpr sel
 
 -- | Append an INNER JOIN with an optional table alias (`JOIN tbl AS a ON …`).
 --   `innerJoin` is `innerJoinAs tbl None`.  When aliased, the `on` predicate (and
 --   the rest of the query) references this table's columns through the alias.
-export innerJoinAs : String -> Option String -> Expr Bool -> Select -> Select
+export
+innerJoinAs : String -> Option String -> Expr Bool -> Select -> Select
 innerJoinAs tbl alias onExpr sel = { sel | joins = sel.joins ++ [Join {
     table = tbl,
     kind = JInner,
@@ -540,12 +598,14 @@ innerJoinAs tbl alias onExpr sel = { sel | joins = sel.joins ++ [Join {
 --   `on`, the joined table's columns are null-padded instead of dropping the
 --   row.  Decode a LEFT-joined table's columns via `tOption` (see
 --   `lib.rowtype`) since they may be `CNull` when unmatched.
-export leftJoin : String -> Expr Bool -> Select -> Select
+export
+leftJoin : String -> Expr Bool -> Select -> Select
 leftJoin tbl onExpr sel = leftJoinAs tbl None onExpr sel
 
 -- | Append a LEFT [OUTER] JOIN with an optional table alias.  `leftJoin` is
 --   `leftJoinAs tbl None`.
-export leftJoinAs : String -> Option String -> Expr Bool -> Select -> Select
+export
+leftJoinAs : String -> Option String -> Expr Bool -> Select -> Select
 leftJoinAs tbl alias onExpr sel = { sel | joins = sel.joins ++ [Join {
     table = tbl,
     kind = JLeft,
@@ -558,12 +618,14 @@ leftJoinAs tbl alias onExpr sel = { sel | joins = sel.joins ++ [Join {
 --   accumulated left side matches `on`, the LEFT columns are null-padded instead
 --   of dropping the row.  The combined column layout is unchanged (`from` columns
 --   first, then this table's) — only which side goes NULL differs from `leftJoin`.
-export rightJoin : String -> Expr Bool -> Select -> Select
+export
+rightJoin : String -> Expr Bool -> Select -> Select
 rightJoin tbl onExpr sel = rightJoinAs tbl None onExpr sel
 
 -- | Append a RIGHT [OUTER] JOIN with an optional table alias.  `rightJoin` is
 --   `rightJoinAs tbl None`.
-export rightJoinAs : String -> Option String -> Expr Bool -> Select -> Select
+export
+rightJoinAs : String -> Option String -> Expr Bool -> Select -> Select
 rightJoinAs tbl alias onExpr sel = { sel | joins = sel.joins ++ [Join {
     table = tbl,
     kind = JRight,
@@ -575,12 +637,14 @@ rightJoinAs tbl alias onExpr sel = { sel | joins = sel.joins ++ [Join {
 --   union of `leftJoin` and `rightJoin`: matched pairs, every unmatched left row
 --   (right null-padded), and every unmatched right row (left null-padded), once
 --   each.  Combined column layout is unchanged.
-export fullJoin : String -> Expr Bool -> Select -> Select
+export
+fullJoin : String -> Expr Bool -> Select -> Select
 fullJoin tbl onExpr sel = fullJoinAs tbl None onExpr sel
 
 -- | Append a FULL [OUTER] JOIN with an optional table alias.  `fullJoin` is
 --   `fullJoinAs tbl None`.
-export fullJoinAs : String -> Option String -> Expr Bool -> Select -> Select
+export
+fullJoinAs : String -> Option String -> Expr Bool -> Select -> Select
 fullJoinAs tbl alias onExpr sel = { sel | joins = sel.joins ++ [Join {
     table = tbl,
     kind = JFull,
@@ -592,12 +656,14 @@ fullJoinAs tbl alias onExpr sel = { sel | joins = sel.joins ++ [Join {
 --   `ON` predicate.  A placeholder `on` (`ELit (LInt 1)`) is stored but never
 --   evaluated (the executor produces the full product for `JCross`) and never
 --   rendered (the SQL/round-trip renderers omit `ON` for a CROSS join).
-export crossJoin : String -> Select -> Select
+export
+crossJoin : String -> Select -> Select
 crossJoin tbl sel = crossJoinAs tbl None sel
 
 -- | Append a CROSS JOIN with an optional table alias.  `crossJoin` is
 --   `crossJoinAs tbl None`.
-export crossJoinAs : String -> Option String -> Select -> Select
+export
+crossJoinAs : String -> Option String -> Select -> Select
 crossJoinAs tbl alias sel = { sel | joins = sel.joins ++ [Join {
     table = tbl,
     kind = JCross,
@@ -608,13 +674,16 @@ crossJoinAs tbl alias sel = { sel | joins = sel.joins ++ [Join {
 -- | Attach a typed `Expr Bool` predicate as the WHERE clause.  The phantom
 --   wrapper is stripped here — this is the type-safe boundary at which an
 --   `Expr Bool` becomes an untyped `SqlExpr`.
-export withWhere : Expr Bool -> Select -> Select
+export
+withWhere : Expr Bool -> Select -> Select
 withWhere e sel = { sel | where_ = Some (unExpr e) }
 
-export withLimit : Int -> Select -> Select
+export
+withLimit : Int -> Select -> Select
 withLimit n sel = { sel | limit = Some n }
 
-export withOffset : Int -> Select -> Select
+export
+withOffset : Int -> Select -> Select
 withOffset n sel = { sel | offset = Some n }
 
 -- | Order the results by `col`, ascending when `asc = True`, descending when
@@ -623,7 +692,8 @@ withOffset n sel = { sel | offset = Some n }
 --   primary sort key, the second breaks ties on the first, etc. — matching
 --   `ORDER BY a ASC, b DESC` when chained `withOrderBy "a" True |> withOrderBy "b" False`.
 --   Sugar for `withOrderByExpr (ECol col)`.
-export withOrderBy : String -> Bool -> Select -> Select
+export
+withOrderBy : String -> Bool -> Select -> Select
 withOrderBy col asc sel = { sel | orderBy = sel.orderBy ++ [(ECol col, asc)] }
 
 -- | Order by an arbitrary EXPRESSION — a computed column (`ORDER BY price*qty`)
@@ -631,18 +701,21 @@ withOrderBy col asc sel = { sel | orderBy = sel.orderBy ++ [(ECol col, asc)] }
 --   `withOrderBy`.  In an aggregate query the expression must be built from
 --   GROUP BY keys, aggregates, and literals; otherwise it is an `Err` at
 --   execution, matching SQL.  The key need NOT appear in the select list.
-export withOrderByExpr : SqlExpr -> Bool -> Select -> Select
+export
+withOrderByExpr : SqlExpr -> Bool -> Select -> Select
 withOrderByExpr e asc sel = { sel | orderBy = sel.orderBy ++ [(e, asc)] }
 
 -- | GROUP BY the named columns (left-to-right key order).  Sugar for
 --   `withGroupExprs (map ECol cols)`.
-export withGroupCols : List String -> Select -> Select
+export
+withGroupCols : List String -> Select -> Select
 withGroupCols cols sel = { sel | groupBy = map ECol cols }
 
 -- | GROUP BY arbitrary key EXPRESSIONS (e.g. `GROUP BY salary / 1000`).  Any
 --   non-aggregate projection / HAVING / ORDER BY expression must then be built
 --   from these keys (structurally) plus literals.
-export withGroupExprs : List SqlExpr -> Select -> Select
+export
+withGroupExprs : List SqlExpr -> Select -> Select
 withGroupExprs es sel = { sel | groupBy = es }
 
 -- | Attach a HAVING predicate — a filter over the GROUPED rows, so it may
@@ -651,14 +724,16 @@ withGroupExprs es sel = { sel | groupBy = es }
 --
 --   NAME: deliberately NOT `withHaving` — `lib.aggregate` already exports that
 --   for the legacy `AggQuery`, and a module importing both would collide.
-export withHavingPred : Expr Bool -> Select -> Select
+export
+withHavingPred : Expr Bool -> Select -> Select
 withHavingPred e sel = { sel | having = Some (unExpr e) }
 
 -- | Mark the SELECT as DISTINCT: `render` emits `SELECT DISTINCT`, and
 --   `queryDistinct` dedups the DECODED, projected rows (see `Select.distinct`
 --   doc comment for why this needs a separate `Eq a`-constrained entry point
 --   rather than living on plain `query`).
-export withDistinct : Select -> Select
+export
+withDistinct : Select -> Select
 withDistinct sel = { sel | distinct = True }
 
 -- | Set the PROJECTION column list (`SELECT <e1>, <e2>, … FROM …`).  The list is
@@ -670,7 +745,8 @@ withDistinct sel = { sel | distinct = True }
 --   the default `SELECT *` behaviour (raw cells pass through unchanged).
 --
 --   Example: `withColumns [unExpr (eAdd (eColInt "a") (eColInt "b")), unExpr (eColText "name")]`.
-export withColumns : List SqlExpr -> Select -> Select
+export
+withColumns : List SqlExpr -> Select -> Select
 withColumns cols sel =
   { sel | columns = cols, columnAliases = map (_ => None) cols }
 
@@ -679,7 +755,8 @@ withColumns cols sel =
 --   `(expr, None)` for an unaliased one; the alias flows into rendering and
 --   `selectColumnNames` but the executor treats the projection exactly as
 --   `withColumns` would.
-export withColumnsAliased : List (SqlExpr, Option String) -> Select -> Select
+export
+withColumnsAliased : List (SqlExpr, Option String) -> Select -> Select
 withColumnsAliased cols sel =
   { sel | columns = map fst cols, columnAliases = map snd cols }
 
@@ -692,7 +769,8 @@ withColumnsAliased cols sel =
 --   (left-to-right); literal values are NEVER inlined into the SQL text.
 --   Identifiers (table + column names) are charset-asserted (`[A-Za-z0-9_]`);
 --   an illegal identifier yields `Err`.
-export render : Select -> Result String (String, List Literal)
+export
+render : Select -> Result String (String, List Literal)
 render (Select { from = tbl, fromAlias = fa, joins = js, where_ = w, groupBy = gb, having = h, orderBy = ob, limit = lm, offset = of_, distinct = dst, columns = cols, columnAliases = cas }) =
   if not (validIdent tbl) then Err "render: invalid table name: \{tbl}"
   else do
@@ -942,7 +1020,8 @@ renderSetArmsParam ((op, sel)::rest) = do
 --   this reproduces exactly the strings the legacy `lib.aggregate.aggName` puns
 --   on (`count(*)`, `sum(salary)`, …) — so the render output of a shimmed
 --   `AggQuery` and a native `Select` agree.
-export aggFnSql : AggFn -> String
+export
+aggFnSql : AggFn -> String
 aggFnSql FnCount = "count"
 aggFnSql FnSum = "sum"
 aggFnSql FnAvg = "avg"
@@ -1095,7 +1174,8 @@ boolTri False = TFalse
 -- | Compile `expr` against a column-name→index resolver into a row predicate.
 --   The row is kept iff the predicate evaluates to `TTrue` — SQL's rule.  `Err`
 --   on an unknown column name.
-export compilePred : (String -> Option Int) -> SqlExpr -> Result String (List Cell -> Bool)
+export
+compilePred : (String -> Option Int) -> SqlExpr -> Result String (List Cell -> Bool)
 compilePred lookup e = do
   t <- compileTri lookup e
   Ok (cells => t cells == TTrue)
@@ -1181,7 +1261,8 @@ compileCmp lookup op l r = do
 -- cell), or an arithmetic expression (both sides compiled to accessors, then
 -- combined per row via `evalArith`).  Returns a `List Cell -> Cell` accessor.
 -- Exported so `lib.mutate` can evaluate UPDATE SET right-hand sides.
-export compileOperand : (String -> Option Int) -> SqlExpr -> Result String (List Cell -> Cell)
+export
+compileOperand : (String -> Option Int) -> SqlExpr -> Result String (List Cell -> Cell)
 compileOperand lookup (ECol name) = match lookup name
   None => Err "compilePred: unknown column: \{name}"
   Some i => Ok (cells => nthCell cells i)
@@ -1217,7 +1298,8 @@ compileOperand lookup _ = Err "compilePred: operand must be a column or literal"
 
 -- | Compile any `SqlExpr` value operand to a per-row `List Cell -> Cell`
 --   accessor (an alias of `compileOperand` for the UPDATE SET call site).
-export compileValue : (String -> Option Int) -> SqlExpr -> Result String (List Cell -> Cell)
+export
+compileValue : (String -> Option Int) -> SqlExpr -> Result String (List Cell -> Cell)
 compileValue = compileOperand
 
 -- ---------------------------------------------------------------------------
@@ -1357,12 +1439,14 @@ likeMatchStar tc tn ti pc pn pi =
 -- name for rendering with the SAME ASCII-only fold, rather than hand-rolling
 -- a second copy (a first draft did exactly that; `medaka lint`'s cross-file
 -- `rule-duplicate-body` caught the two `charFromCodeOr`-shaped helpers).
-export asciiUpperChar : Char -> Char
+export
+asciiUpperChar : Char -> Char
 asciiUpperChar c =
   let n = charCode c
   if n >= 97 && n <= 122 then charFromCodeOr c (n - 32) else c
 
-export asciiLowerChar : Char -> Char
+export
+asciiLowerChar : Char -> Char
 asciiLowerChar c =
   let n = charCode c
   if n >= 65 && n <= 90 then charFromCodeOr c (n + 32) else c
@@ -1372,7 +1456,8 @@ charFromCodeOr fallback n = match charFromCode n
   Some c => c
   None => fallback
 
-export asciiFold : (Char -> Char) -> String -> String
+export
+asciiFold : (Char -> Char) -> String -> String
 asciiFold f s =
   let chars = stringToChars s
   fromChars (asciiFoldGo f chars 0 (arrayLength chars))
@@ -1770,7 +1855,8 @@ applyCmp op o = match (op, o)
 
 -- | Execute a `Select` and decode each result row via `rt`.  Ignores `distinct`
 --   (see `queryDistinct`).  A decode error on any row aborts the whole query.
-export query : Db -> Select -> RowType a -> Result String (List a)
+export
+query : Db -> Select -> RowType a -> Result String (List a)
 query db sel rt = do
   rows <- runPipeline db sel
   decodeCells rt (applyOffsetLimit (selOffset sel) (selLimit sel) rows) []
@@ -1779,7 +1865,8 @@ query db sel rt = do
 --   ORDER BY, but dedups on the DECODED, PROJECTED rows and applies LIMIT/OFFSET
 --   AFTER the dedup (SQL: DISTINCT collapses the result set, LIMIT slices what's
 --   left).  `nub` is stable, so the ORDER BY ordering survives the dedup.
-export queryDistinct : Eq a => Db -> Select -> RowType a -> Result String (List a)
+export
+queryDistinct : Eq a => Db -> Select -> RowType a -> Result String (List a)
 queryDistinct db sel rt = do
   rows <- runPipeline db sel
   decoded <- decodeCells rt rows []
@@ -1804,7 +1891,8 @@ queryDistinct db sel rt = do
 --   compound is just its `Select` with the trailing clauses applied; a
 --   multi-arm compound folds the arms left with the set operator.  Arm-level
 --   `SELECT DISTINCT` is honoured (deduped in cell-land).  No `Eq a` needed.
-export runCompound : Db -> Compound -> RowType a -> Result String (List a)
+export
+runCompound : Db -> Compound -> RowType a -> Result String (List a)
 runCompound db comp rt = do
   finalCells <- runCompoundCells db comp
   decodeCells rt finalCells []
@@ -1814,7 +1902,8 @@ runCompound db comp rt = do
 --   stopping just before decode.  This is `runCompound` minus the `RowType`
 --   decode, exposed so `materializeSelect` can evaluate an `IN (SELECT …)`
 --   subquery straight to cells without inventing a decoder.
-export runCompoundCells : Db -> Compound -> Result String (List (List Cell))
+export
+runCompoundCells : Db -> Compound -> Result String (List (List Cell))
 runCompoundCells db (Compound first rest ob lm off) = do
   n0 <- selectColumnCount db first
   firstCells <- runArmCells db first
@@ -2277,7 +2366,8 @@ containsAgg es = match concatAggs es
 --   pipeline materializes subqueries (`materializeSelect`), so `lib.mutate` uses
 --   this to reject `IN (SELECT …)` in an UPDATE/DELETE WHERE with a clean message
 --   rather than reaching `compileTri`'s internal-error arm.
-export containsInSubquery : SqlExpr -> Bool
+export
+containsInSubquery : SqlExpr -> Bool
 containsInSubquery (ECol _) = False
 containsInSubquery (ELit _) = False
 containsInSubquery (EAgg _ operand) = match operand
@@ -3000,7 +3090,8 @@ decodeCells rt (cells::rest) acc = do
 --
 -- > renderShow (render (withColumns [unExpr (eUpper (eColText "name"))] (selectFrom "users")))
 -- "SELECT upper(name) FROM users ## []"
-export renderShow : Result String (String, List Literal) -> String
+export
+renderShow : Result String (String, List Literal) -> String
 renderShow (Err e) = "ERR \{e}"
 renderShow (Ok (sql, binds)) = "\{sql} ## \{showBinds binds}"
 
