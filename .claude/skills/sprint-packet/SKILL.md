@@ -23,9 +23,10 @@ not say "verbatim" (`per RUN-<stage>-NNN Actions 2,5 — read
 rulings/RUN-<stage>-NNN.md`); the implementer already reads every ruling its
 packet cites, and v5 ruling files are self-contained by construction. An
 overshoot in authored prose is a `Decisions surfaced` line, never a silent cut.
-(Measured, `sprint/emit-inputs`: 3 of 5 packets ran over — 286/309/469/299 —
-every overshoot the planner correctly refusing to drop ruling-mandated text, and
-one planner spending three trimming passes on the ceiling alone. A ceiling that
+(Measured, `sprint/emit-inputs`, counted off the archived packets: every one of
+the four slice packets ran over — 285 / 325 / 511 / 613 lines — each overshoot
+the planner correctly refusing to drop ruling-mandated text, and one planner
+spending three trimming passes on the ceiling alone. A ceiling that
 puts the contract and the limit in direct conflict makes the planner choose.)
 Measured (2026-08-17 baseline): packets ran 53–89KB, packet prose is re-read at
 cache-read prices by EVERY consumer turn (implementer ~150 requests, breaker,
@@ -413,8 +414,9 @@ the judgment seat, so this is not a planner-discipline rule.)
 > packet — a premise is false, a site is missing, the transform is wrong at a leaf
 > — STOP and report the finding. Do not resolve it silently, do not adapt around
 > it, and do not push a diff that implements what you believe over what is
-> written. A written refusal is worth more than a green gate: refusals were right
-> 5 of 6 times on record and caught two S0s.
+> written. A written refusal is worth more than a green gate: on the audited
+> record refusals caught two S0s and every orchestrator scoping error, and no
+> refusal has yet cost a sprint a landing.
 >
 > You have probe budget for this: spend up to ~15 minutes converting a
 > disagreement from an opinion into a measurement (a discriminating probe, a

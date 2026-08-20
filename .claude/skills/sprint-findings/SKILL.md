@@ -54,12 +54,16 @@ seat at the moment it preserves the attempt-1 report (it already writes the
 `*-attempt1-BLOCKED.md` copy and a `self-audit:` line; the row is the third half
 of the same action) and carried to a verdict by the rear seat like any other.
 
-(Measured, `sprint/emit-inputs`: the Refusals table carried 15 reviewer findings
-and ZERO refusals, in a sprint with 3 BLOCKED writer dispatches, 6
-ruling-recorded falsified premises and 1 not-sustained fixer mechanism claim.
-The instrument added in v5 *because the workflow's highest-value signal was
-un-countable* was, in its first sprint, un-countable in the opposite direction —
-and H9's grading criterion (4) was therefore ungradable.)
+(Measured, `sprint/emit-inputs`, from the archived record: the sprint closed
+with the Refusals table holding **zero rows**, and the seat that owns the file
+recorded its reading of that as "none occurred this sprint" — against 3 BLOCKED
+writer dispatches, 6 ruling-recorded falsified premises and 1 not-sustained
+fixer mechanism claim, all of them recoverable from DECISIONS.md. Separately, 17
+genuine Findings rows spent most of the sprint physically under the `## Refusals`
+header through an append-position mistake, repaired at close. **The lesson is
+the first half, not the second:** an empty table is a CLAIM, discharged by the
+three-source cross-check at wrap-up, never an observation. H9's grading
+criterion (4) was ungradable for this sprint as a result.)
 
 Why a table and not prose: two rulings in `sprint/ctor-identity` state
 "refusals right 7 of 8" and **the denominator is not derivable from that

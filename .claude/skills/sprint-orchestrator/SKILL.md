@@ -153,11 +153,13 @@ PRs, no stacks. Mechanics you own:
   SHA on the branch, and the sprint's whole citation graph rests on those SHAs
   (DECISIONS.md, every report, DEBT.md rows, the PR body, and already-posted
   public issue comments). Nothing would flag it — the SHAs would simply resolve
-  to nothing. **After any merge of `main`, before re-enqueueing, run the
-  citation-graph check** (one `sprint-verifier` line): collect
-  `grep -ohE '\b[0-9a-f]{7,40}\b' DECISIONS.md DEBT.md reports/*.md | sort -u`
-  and `git cat-file -e <sha>^{commit}` each; a SHA that no longer resolves is a
-  MISMATCH. And the sequencing ruling asks one more question, because a clean
+  to nothing. (SHA citations are checked continuously by the rear seat's
+  claim-surface sweep, not by a post-merge pass: a MERGE rewrites no SHAs, and
+  a rebased-away commit still resolves to `git cat-file -e` as an unreachable
+  object — so a post-rebase citation check cannot fail and would be exactly the
+  vacuous instrument §6's `fails-on:` rule exists to keep out. The rule above is
+  the whole defence; there is no detector behind it.) And the sequencing ruling
+  asks one more question, because a clean
   merge is free adversarial evidence: *what did main's independent change prove
   or falsify about the design grain we chose?* (`sprint/emit-inputs`: an
   unrelated PR's new extern composed with the in-flight catalog refactor at zero
@@ -398,9 +400,11 @@ interventions, three different formats, none citable.
    300k` instead (note: that form saves to user settings, so it outlives the
    sprint).
 1. **Pin the base:** confirm with Val that this checkout's HEAD is the
-   intended base, then `BASE=$(git rev-parse HEAD)` — DECISIONS.md line 1.
-   Never name a moving ref. **DECISIONS.md line 2 is `SESSION=<this front-seat
-   session id>`** (from the transcript path under `~/.claude/projects`).
+   intended base, then `BASE=$(git rev-parse HEAD)` in DECISIONS.md's header
+   block, under the title. Never name a moving ref. **`SESSION=<this front-seat
+   session id>` goes on the line beside it** (from the transcript path under
+   `~/.claude/projects`) — beside `BASE=`, not at a line NUMBER: the last
+   sprint's `BASE=` sat on line 3 against a skill that said line 1.
    Daughters and subagents inherit it, so one id scopes the whole sprint's cost
    report — without it the report pools unrelated sessions in exactly the
    `main-session` / `general-purpose` rows the cost hypotheses are graded on
@@ -687,7 +691,10 @@ fix-forward, you re-enqueue. The record dir is not disposed until MERGED.
 ## Phase-boundary block — three actions, ONE trigger, in this order
 
 Not per tick. A phase boundary is: opening the heavy round, the terminal
-enqueue, or ~5 landings without one. At each, run ALL THREE — they share a
+enqueue, or ~5 landings without one. ⚠️ **A writer return PREEMPTS the block** —
+run `slice-landed` first and resume the block after; the block holds no lane and
+defers no dispatch, or the instrument that grades throughput has started costing
+it. At each boundary, run ALL THREE — they share a
 trigger because each has been skipped in the sprint that ran the others
 (`sprint/emit-inputs`: the sequence check ran and recovered two lost rulings;
 rotation ran ZERO times in the sprint that adopted it, leaving H3 ungraded while
@@ -869,7 +876,7 @@ attribute to a session, and an open green PR looks identical from both sides.
 7. **Continuous-improvement chain — STRICTLY SERIAL, and after MERGED.**
    (a) Generate the cost report, SPRINT-SCOPED: `python3
    scripts/sprint-cost-report.py --since <sprint start ISO> --session <SESSION
-   from DECISIONS.md line 2> > <record dir>/COSTS.md` — then append the
+   from DECISIONS.md's header> > <record dir>/COSTS.md` — then append the
    sprint's own instruments, which the cost hypotheses are graded on and which
    otherwise live only inside five planner reports: the planner `corrections:`
    total (`grep -h '^\*\*corrections:' reports/plan-*.md` — H9 criterion 5), the

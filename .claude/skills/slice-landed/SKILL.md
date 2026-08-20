@@ -265,9 +265,10 @@ waits on adjudication:
    `license` (the writer's judgment that the packet is wrong, backed by a
    probe) or `assertion` (a step-0 mechanical check that stopped the dispatch
    before judgment entered); the two have different failure modes, and grading
-   them as one thing is why "refusals were right 5 of 6" has never had a
-   derivable denominator (`sprint/emit-inputs`: 3 BLOCKED dispatches, 6
-   ruling-recorded falsified premises, ZERO rows). The rear seat carries the
+   them as one thing is why the inherited "refusals were right 5 of 6" ratio has
+   never had a derivable denominator in the sprints that produced it — this
+   table is what makes the next one countable (`sprint/emit-inputs`: 3 BLOCKED
+   dispatches, 6 ruling-recorded falsified premises, ZERO rows). The rear seat carries the
    row to its verdict once the brain rules.
 
 ## Reviewer returns

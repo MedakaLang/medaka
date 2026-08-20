@@ -82,7 +82,8 @@ verbatim.
   planner-authored prose; §7/§8 boilerplate and ruling-mandated verbatim text
   sit outside it and travel by pointer unless the ruling said verbatim. Never
   cut ruling-mandated content to hit a number — an overshoot in authored prose
-  is a `Decisions surfaced` line.
+  is a `Decisions surfaced` line. (All four slice packets of `sprint/emit-inputs`
+  ran over — 285/325/511/613 — every time correctly.)
 - **REPAIR fixes bypass you (v4).** When a brain ruling says REPAIR, the front
   seat dispatches the fixer directly from the ruling + repro bundle. Your only
   involvement is downstream: fold the finding into any QUEUED packet's §4 it

@@ -119,9 +119,19 @@ on the tags mechanically — an untagged line is noise it will bounce):
    any issue comment drafted this turn), three mechanical checks, reported as a
    table with no interpretation: every `path:LINE` citation still resolves to a
    line matching the quoted fragment (`sed -n '<n>p' <path>`); every count of
-   the form "N <things>" that ships a command re-runs to N; every 40-hex or
-   abbreviated SHA resolves (`git cat-file -e <sha>^{commit}`). Mismatches come
-   back as `finding:` rows — the verifier fixes nothing. This is ADDITIVE and is
+   the form "N <things>" that ships a command re-runs to N; every token written
+   AS a commit citation resolves (`git cat-file -e <sha>^{commit}`) — a
+   commit-citation POSITION (`@<sha>`, `head <sha>`, "landed at <sha>"), never
+   every hex-looking token: a bare `\b[0-9a-f]{7,40}\b` sweep over a real record
+   dir matches 79 tokens of which 38 are decimals, CI run ids and MD5s, and a
+   48%-false instrument stops being believed.
+   **A mismatch is a CORRECTION, not a finding:** it goes back to the seat that
+   wrote the artifact, which fixes the citation and logs one line. It becomes a
+   `finding:` row ONLY if the underlying claim — not its citation — is wrong.
+   Routing citation typos into the findings lifecycle would put them through a
+   brain ruling and onto the enqueue gate ("an OPEN row anywhere blocks the
+   enqueue"), which is the Opus attention this sweep exists to give back. This
+   is ADDITIVE and is
    never a reason to trim a reviewer: in `sprint/emit-inputs` five of eighteen
    findings were exactly this class (an invalid abbreviated SHA, an awk-artifact
    count, "six fixtures" that were four, `file:LINE` citations invalidated in
