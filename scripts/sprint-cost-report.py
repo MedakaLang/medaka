@@ -100,6 +100,13 @@ def main():
     ap.add_argument("--until", default=None)
     ap.add_argument("--projects-root", default=os.path.expanduser("~/.claude/projects"))
     ap.add_argument("--match", default="", help="substring filter on project dir name")
+    ap.add_argument("--session", action="append", default=[],
+                    help="only sessions whose label or id contains this (repeatable). "
+                         "A sprint report MUST be scoped this way: the unfiltered "
+                         "report pools unrelated sessions into main-session/"
+                         "general-purpose, the rows the cost hypotheses are graded on")
+    ap.add_argument("--exclude-session", action="append", default=[],
+                    help="drop sessions whose label or id contains this (repeatable)")
     args = ap.parse_args()
     since = datetime.datetime.fromisoformat(args.since).timestamp()
     until = datetime.datetime.fromisoformat(args.until).timestamp() if args.until else float("inf")
@@ -131,6 +138,11 @@ def main():
             except OSError:
                 pass
             label = f"{os.path.basename(proj).replace('-root-medaka--claude-worktrees-', 'wt:').replace('-root-medaka', 'medaka')}/{slug or sid[:8]}"
+            hay = f"{label} {sid}"
+            if args.session and not any(s in hay for s in args.session):
+                continue
+            if any(s in hay for s in args.exclude_session):
+                continue
             for model, u, ts in requests_of(sj):
                 by_type["main-session"].add(model, u)
                 by_model[model].add(model, u)
@@ -164,7 +176,13 @@ def main():
 
     hdr = ("| | reqs | input | cache-w 5m | cache-w 1h | cache-read | hit% | output | est cost |\n"
            "|---|---|---|---|---|---|---|---|---|")
-    print(f"# Token cost report — sessions modified {args.since} .. {args.until or 'now'}\n")
+    scope = ""
+    if args.session:
+        scope += f", sessions matching {args.session}"
+    if args.exclude_session:
+        scope += f", excluding {args.exclude_session}"
+    print(f"# Token cost report — sessions modified {args.since} .. "
+          f"{args.until or 'now'}{scope or ' (UNFILTERED — not sprint-scoped)'}\n")
     print("## By model\n" + hdr)
     for k in sorted(by_model, key=lambda k: -by_model[k].cost):
         print(row(k, by_model[k]))

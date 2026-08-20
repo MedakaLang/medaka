@@ -34,13 +34,32 @@ return, BEFORE the consult is relayed:
 
 ```
 ## Refusals
-| id | raised-by (role, slice) | the claim | adjudicated in | verdict | evidence |
+| id | raised-by (role, slice) | mechanism | the claim | adjudicated in | verdict | evidence |
 ```
 
 `verdict` ∈ `UPHELD` / `OVERRULED (<the measurement that beat it>)` /
-`PARTIAL`. One row per refusal, stop-and-report, declined out-of-band
-instruction, or falsified premise — including a planner's or spike's, which
-never reach a `REFUSED` verdict line at all.
+`PARTIAL`. `mechanism` ∈ `license` (a writer's judgment that the packet is
+wrong, backed by a probe) / `assertion` (a step-0 mechanical check that stopped
+the dispatch before judgment entered) — the two instruments have different
+failure modes and an assertion can itself be vacuous, so principle 1's "a
+refused slice is landed work" must be graded against the one that did the work.
+
+**What belongs in this table, exhaustively:** every writer verdict of `REFUSED`
+or `BLOCKED`; every `declined-out-of-band:` line in DECISIONS.md; every premise
+a ruling records as FALSIFIED; every pre-licensed partial refusal — including a
+planner's or spike's, which never reach a `REFUSED` verdict line at all. **What
+does NOT belong: a reviewer finding**, whatever its severity — those are rows of
+the Findings table above. The row for a BLOCKED dispatch is opened by the FRONT
+seat at the moment it preserves the attempt-1 report (it already writes the
+`*-attempt1-BLOCKED.md` copy and a `self-audit:` line; the row is the third half
+of the same action) and carried to a verdict by the rear seat like any other.
+
+(Measured, `sprint/emit-inputs`: the Refusals table carried 15 reviewer findings
+and ZERO refusals, in a sprint with 3 BLOCKED writer dispatches, 6
+ruling-recorded falsified premises and 1 not-sustained fixer mechanism claim.
+The instrument added in v5 *because the workflow's highest-value signal was
+un-countable* was, in its first sprint, un-countable in the opposite direction —
+and H9's grading criterion (4) was therefore ungradable.)
 
 Why a table and not prose: two rulings in `sprint/ctor-identity` state
 "refusals right 7 of 8" and **the denominator is not derivable from that

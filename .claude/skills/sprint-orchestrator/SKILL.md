@@ -111,10 +111,12 @@ every wake rewrites the daughter's whole grown context at write prices
 (~$270/sprint-pair at the 2026-08-17 baseline; the brain ran an 80% hit rate).
 The LEDGERS, not the contexts, are the state — so ROTATE each daughter:
 
-- **When:** at every phase boundary (at minimum: just before you send
-  `phase: heavy-round`, and again after the terminal enqueue if the queue wait
-  is long), plus opportunistically after ~5 landings if no boundary occurred.
-  Never mid-consult and never with a handoff unacknowledged.
+- **When:** at every phase boundary — this is item 3 of the "Phase-boundary
+  block" below, and it fires on that block's trigger, not on your judgment.
+  Never mid-consult and never with a handoff unacknowledged. Declining one is
+  allowed; declining one SILENTLY is not (`rotated: none at <boundary> —
+  <reason>`). It went unexercised for a whole sprint after adoption because it
+  was the one boundary duty with no shared trigger and no attestation.
 - **How:** finish/collect anything in flight; release the old daughter; spawn
   the successor with the ORIGINAL spawn message plus: *"You are a successor
   seat. Before acting, read DECISIONS.md end-to-end"* (rear successor: *"also
@@ -144,6 +146,22 @@ PRs, no stacks. Mechanics you own:
   `slice-landed`'s FIX-LANDED light path merges it. Fix-forward parallelism is
   bounded by disjointness, not caution; fixes never block the next-slice
   dispatch.
+- 🚨 **The sprint branch is MERGED into, never rebased.** When `main` diverges
+  (the sprint PR reads `mergeable: CONFLICTING`), the resolution is `git merge
+  origin/main` in the landing worktree under a brain sequencing ruling — never
+  `rebase`, never `pull --rebase`. This is not style: a rebase rewrites every
+  SHA on the branch, and the sprint's whole citation graph rests on those SHAs
+  (DECISIONS.md, every report, DEBT.md rows, the PR body, and already-posted
+  public issue comments). Nothing would flag it — the SHAs would simply resolve
+  to nothing. **After any merge of `main`, before re-enqueueing, run the
+  citation-graph check** (one `sprint-verifier` line): collect
+  `grep -ohE '\b[0-9a-f]{7,40}\b' DECISIONS.md DEBT.md reports/*.md | sort -u`
+  and `git cat-file -e <sha>^{commit}` each; a SHA that no longer resolves is a
+  MISMATCH. And the sequencing ruling asks one more question, because a clean
+  merge is free adversarial evidence: *what did main's independent change prove
+  or falsify about the design grain we chose?* (`sprint/emit-inputs`: an
+  unrelated PR's new extern composed with the in-flight catalog refactor at zero
+  adaptation — a live validation the sprint's own review could not produce.)
 - **Goldens are re-cut, never merged** — the merge-time rule, its fast-forward
   short-circuit, and the oracle-rebuild-first re-cut checklist live in
   `slice-landed` step 1. One re-cutter, always at the merged head, always
@@ -272,7 +290,10 @@ its packet named" means the report path in the dispatch brief, and
    judgment call and it is not yours. Re-request BY NUMBER on: a count
    mismatch, a missing file, or a number OUTSIDE the contiguous run starting
    at the one you allocated. This is a mechanical check — two integers and a
-   file list.
+   file list, plus one `head -2`: a ruling file whose SECOND line is not
+   `applies-to:` bounces back to the brain by number, same as a missing file.
+   That field is what lets you hand a planner its ruling PATHS by `grep -l`
+   instead of the whole ledger (`slice-landed` step 4).
 
    **Confirm by number, but do NOT wake the brain to do it.** Your
    `scribed: RUN-<stage>-NNN at DECISIONS.md:<line>` lines RIDE THE NEXT
@@ -311,7 +332,7 @@ definition — override per-dispatch only on a brain ruling.
 | `slice-breaker` | Opus 5 | Rear | Adversarial breaks on the landed slice, in a front-created worktree |
 | `spec-conformance-reviewer` | Sonnet 5 | Rear | Read-only: slice vs specs, rulings, DEBT rows |
 | `domain-adversary` | Opus 5 | Rear (you create its worktree) | ONE property class the contract could not ask about — dispatched only when the contract's §8b budgeted a domain review |
-| `sprint-planner` | Sonnet 5 | Front | Next contract-depth packet (~250-line ceiling) — slice, family, or review; fixes bypass it |
+| `sprint-planner` | Sonnet 5 | Front | Next contract-depth packet (≤250 lines of AUTHORED prose) — slice, family, or review; fixes bypass it |
 | `bug-reproducer` | Sonnet 5 | Front (on rear's consult-driven request; front creates its worktree) | Mechanical half of a finding; drafts, never files |
 | `sprint-verifier` | Haiku 4.5 | Either seat | Mechanical run-and-report: readbacks, ledger sweeps, the golden re-cut checklist |
 | `sprint-scout` | Haiku 4.5 | Front | Bounded read-only enumeration against a pinned commit |
@@ -378,7 +399,12 @@ interventions, three different formats, none citable.
    sprint).
 1. **Pin the base:** confirm with Val that this checkout's HEAD is the
    intended base, then `BASE=$(git rev-parse HEAD)` — DECISIONS.md line 1.
-   Never name a moving ref.
+   Never name a moving ref. **DECISIONS.md line 2 is `SESSION=<this front-seat
+   session id>`** (from the transcript path under `~/.claude/projects`).
+   Daughters and subagents inherit it, so one id scopes the whole sprint's cost
+   report — without it the report pools unrelated sessions in exactly the
+   `main-session` / `general-purpose` rows the cost hypotheses are graded on
+   (`sprint/emit-inputs`: ~52% of a $513 report was three other sessions).
 2. **Create the record dir** `/var/tmp/medaka-sprints/<stage>/`: DECISIONS.md,
    DEBT.md, FINDINGS.md (rear's file; carries the Findings and Refusals
    tables — `sprint-findings`), OBLIGATIONS.md (yours; one row per ruling
@@ -514,8 +540,17 @@ interventions, three different formats, none citable.
    worktree later agents are forbidden to read, which is how one sprint spent
    two extra rebuilds on attribution; `runtime/` is required as well as
    `stdlib/`, or the first `build` dies at the link step ([D-TWO-ARM-RUNTIME],
-   `debug-pipeline` skill). Record path + SHA in DECISIONS.md and name the depot
-   in every packet §2 (not in fix briefs — see the consumer note above).
+   `debug-pipeline` skill). Record path + SHA in DECISIONS.md, name the depot
+   in every packet §2 (not in fix briefs — see the consumer note above), **and
+   carry the path in every `landed:` handoff's `base-arm` field** — the
+   reviewers are the depot's real consumers and the packet sentence never
+   reaches them (`slice-landed` step 2).
+
+   ⚠️ **Standing re-grade condition:** `sprint/emit-inputs` built this depot and
+   it had ZERO consumers, while the one breaker that needed a base arm rebuilt
+   it by hand. If a second sprint reports zero depot consumers WITH the
+   `base-arm` handoff field live, retire the depot — a cold `make medaka` at
+   sprint start is a real cost, not a free option.
 
    🚨 **Never tell a writer to borrow an emitter to warm its build.** This is
    the single most-attempted "optimization" in a sprint and it does not work:
@@ -610,7 +645,16 @@ Each tick derives state from scratch — never carry state across ticks:
    a moving branch head (`pgrep -af "<worktree>"` + head check) — YOUR
    dispatches only; the rear seat sweeps its own reviewers on the same poke.
    Stale row → discriminate stall vs phantom; resume with the check, not the
-   verdict.
+   verdict. **A writer that ends its turn with no report gets exactly ONE
+   resume** (SendMessage: "report your actual state; run every build in the
+   FOREGROUND — never background, never end a turn with anything running"). A
+   second no-report turn = `TaskStop`, preserve whatever report exists,
+   redispatch FRESH from the same packet/ruling, and log the abandonment as a
+   `self-audit:` line with the agent id. Do not resume twice: two resumes cost
+   more than a redispatch and the second has never worked (`sprint/emit-inputs`:
+   one fixer stalled twice on a backgrounded build whose completion
+   notification never arrived; foregrounded, that build finished in under two
+   minutes).
 5. **Orphans:** `xargs -P` pools / builds outliving YOUR dispatched agents'
    turns — `TaskStop` the agent first, reap by PID, never box-wide `pkill`.
 6. **Self-audit — per EVENT, not per tick (v5).** The MOMENT you do anything
@@ -629,7 +673,7 @@ Each tick derives state from scratch — never carry state across ticks:
 7. **Obligations poke (~5 s):** every OBLIGATIONS.md row whose `due-by` phase
    is the phase you are now PAST is poked at its owner seat. String compare
    against the current phase — no reading of rulings, no judgment. (The
-   ruling-sequence check is NOT here: see "Ledger sequence check" below. It
+   ruling-sequence check is NOT here: see the "Phase-boundary block" below. It
    runs at phase boundaries, because the per-ruling `scribed:` confirmation
    already covers the per-tick window and a check that duplicates another
    check is pure weight at the serialization point.)
@@ -640,10 +684,26 @@ with ticks 3 (poke → CI state) and 6 only, until `scripts/pr.sh complete`
 silently; a queue bounce is a finding → brain designs the fix, it lands
 fix-forward, you re-enqueue. The record dir is not disposed until MERGED.
 
-## Ledger sequence check — at phase boundaries and before the enqueue
+## Phase-boundary block — three actions, ONE trigger, in this order
 
-Not per tick. Run it whenever you rotate a daughter, open the heavy round, or
-approach the terminal enqueue:
+Not per tick. A phase boundary is: opening the heavy round, the terminal
+enqueue, or ~5 landings without one. At each, run ALL THREE — they share a
+trigger because each has been skipped in the sprint that ran the others
+(`sprint/emit-inputs`: the sequence check ran and recovered two lost rulings;
+rotation ran ZERO times in the sprint that adopted it, leaving H3 ungraded while
+daughter cache-writes sat at 53%/51% of their cost; the obligations writeback
+ran only at wrap-up and found 47 stale rows).
+
+1. **Ledger sequence check** — the command below; both halves load-bearing.
+2. **Obligations reconcile** — one `sprint-verifier` dispatch (~$0.10): every
+   `obligations-closed:` / `DONE` claim in DECISIONS.md log lines has a matching
+   non-OPEN OBLIGATIONS.md row, and vice versa. It reports mismatches; YOU write
+   the statuses. A two-file string comparison does not belong in a ~487k-token
+   front-seat context.
+3. **Rotate both daughters** per the rotation protocol — never mid-consult,
+   never with a handoff unacknowledged. Log `rotated: <seat> at <boundary>`; if
+   you DECLINE a rotation the line is `rotated: none at <boundary> — <reason>`.
+   The absence of either line is the finding a retro cannot reconstruct.
 
 ```sh
 comm -3 <(grep -oE '^## RUN-<stage>-[0-9]{3}' DECISIONS.md | sed 's/^## //' | sort -u) \
@@ -755,12 +815,25 @@ attribute to a session, and an open green PR looks identical from both sides.
 3. **Findings + obligations + ruling-sequence sweep — a `sprint-verifier`
    dispatch, not front-seat work (v5).** Hand it ONE checklist: every
    FINDINGS.md row terminal (the `sprint-findings` exit guarantee); every
-   FINDINGS Refusals row carrying a verdict; every OBLIGATIONS.md row terminal
+   FINDINGS Refusals row carrying a verdict, **and the row SET complete against
+   its three mechanical sources** — hand it these three counts and require them
+   to match the table: BLOCKED/REFUSED verdicts in the dispatch logs,
+   `grep -c '^declined-out-of-band:' DECISIONS.md`, and `grep -rl 'falsif'
+   rulings/` (each hit read to confirm it names a premise). A source event with
+   no row is a MISMATCH, not a judgment call; every OBLIGATIONS.md row terminal
    (`DONE` with its evidence, or `VOIDED` naming the ruling); the ruling
    sequence contiguous and matching `ls rulings/` — **hand it the exact command
-   from "Ledger sequence check" above; the obvious unanchored grep is BLIND
+   from the "Phase-boundary block" above; the obvious unanchored grep is BLIND
    (see the 🚨 note there), and a Haiku seat given a checklist will render the
-   obvious one**; every `VAL-<stage>-NNN` block's `executed:` non-blank. An OPEN row anywhere blocks the enqueue.
+   obvious one**; every `VAL-<stage>-NNN` block's `executed:` field containing
+   NO token from {`PENDING`, `TBD`, `owed`, `awaiting`, `when … lands`} — a
+   token match, not an assessment. An OPEN row anywhere blocks the enqueue.
+   ⚠️ **No checklist item handed to this seat may contain a judgment clause.**
+   (Measured, `sprint/emit-inputs`: the item read "flag if blank or says PENDING
+   *without follow-up*"; the Haiku verifier rendered the judgment clause and
+   returned MATCH on `executed: … PENDING, owed when L1 lands` — the sprint's
+   ONE genuinely unexecuted obligation. The clause was the defect, not the
+   tier.)
    These five checks are mechanical by construction and belong at the cheapest
    tier: one Haiku dispatch instead of several output-heavy turns in a
    ~487k-token front-seat context. **This is a token-tier saving, not a
@@ -794,9 +867,15 @@ attribute to a session, and an open green PR looks identical from both sides.
    not the narrative; brain approves each close; the REAR seat executes with
    readback.
 7. **Continuous-improvement chain — STRICTLY SERIAL, and after MERGED.**
-   (a) Generate the cost report: `python3 scripts/sprint-cost-report.py
-   --since <sprint start ISO> > <record dir>/COSTS.md` (post-hoc transcript
-   aggregation; no mid-sprint logging exists or is needed). (b) Dispatch
+   (a) Generate the cost report, SPRINT-SCOPED: `python3
+   scripts/sprint-cost-report.py --since <sprint start ISO> --session <SESSION
+   from DECISIONS.md line 2> > <record dir>/COSTS.md` — then append the
+   sprint's own instruments, which the cost hypotheses are graded on and which
+   otherwise live only inside five planner reports: the planner `corrections:`
+   total (`grep -h '^\*\*corrections:' reports/plan-*.md` — H9 criterion 5), the
+   Refusals-table row count (H9 criterion 4), and the landing count from
+   DEBT.md (post-hoc transcript aggregation; no mid-sprint logging exists or is
+   needed). (b) Dispatch
    `friction-triage` on FRICTION.md and WAIT for it; the rear seat files its
    accepted drafts. (c) Only then dispatch `sprint-retro` with the full record
    dir (COSTS.md included), both seats' self-audit logs, and friction-triage's
