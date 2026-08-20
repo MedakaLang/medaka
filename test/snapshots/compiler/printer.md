@@ -1,5 +1,5 @@
 # META
-source_lines=2094
+source_lines=2101
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted pretty printer for Medaka — a port of lib/printer.ml, producing
@@ -1861,14 +1861,21 @@ map2VariantComment _ [] = []
 map2VariantComment (v::vs) (vc::vcs) =
   variantCommentedDoc v vc :: map2VariantComment vs vcs
 
+-- `export` above a VALUE-level declaration (a type signature or an extern
+-- declaration) sits on its own line, never collapsed onto the signature
+-- (STYLE.md §10) — unlike `export data`/`export impl`, which stay collapsed
+-- since those are genuinely type-level exports (see `visPrefix`).
+valueExportPrefix : Bool -> Doc
+valueExportPrefix pub = if pub then Cat (text "export") Hardline else Nil
+
 export
 printDecl : Decl -> Doc
-printDecl (DTypeSig pub n t) = Cat
-  (if pub then Cat (text "export") Hardline else Nil)
-  (Cat (text n) (Cat (text " : ") (printType t)))
-printDecl (DExtern pub n t) = Cat
-  (if pub then Cat (text "export") Hardline else Nil)
-  (Cat (text "extern ") (Cat (text n) (Cat (text " : ") (printType t))))
+printDecl (DTypeSig pub n t) =
+  Cat (valueExportPrefix pub) (Cat (text n) (Cat (text " : ") (printType t)))
+printDecl (DExtern pub n t) =
+  Cat
+    (valueExportPrefix pub)
+    (Cat (text "extern ") (Cat (text n) (Cat (text " : ") (printType t))))
 printDecl (DFunDef pub n pats body) =
   let header = Cat (if pub then text "export " else Nil) (Cat (text n) (concatD (map (p => Cat (text " ") (printPatAtom p)) pats)))
   Cat header (printDefRhs body)
@@ -2750,9 +2757,11 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "map2VariantComment" ((PList) PWild) (EListLit))
 (DFunDef false "map2VariantComment" (PWild (PList)) (EListLit))
 (DFunDef false "map2VariantComment" ((PCons (PVar "v") (PVar "vs")) (PCons (PVar "vc") (PVar "vcs"))) (EBinOp "::" (EApp (EApp (EVar "variantCommentedDoc") (EVar "v")) (EVar "vc")) (EApp (EApp (EVar "map2VariantComment") (EVar "vs")) (EVar "vcs"))))
+(DTypeSig false "valueExportPrefix" (TyFun (TyCon "Bool") (TyCon "Doc")))
+(DFunDef false "valueExportPrefix" ((PVar "pub")) (EIf (EVar "pub") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "export")))) (EVar "Hardline")) (EVar "Nil")))
 (DTypeSig true "printDecl" (TyFun (TyCon "Decl") (TyCon "Doc")))
-(DFunDef false "printDecl" ((PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "t"))) (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "export")))) (EVar "Hardline")) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EVar "printType") (EVar "t"))))))
-(DFunDef false "printDecl" ((PCon "DExtern" (PVar "pub") (PVar "n") (PVar "t"))) (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "export")))) (EVar "Hardline")) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "extern ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EVar "printType") (EVar "t")))))))
+(DFunDef false "printDecl" ((PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "t"))) (EApp (EApp (EVar "Cat") (EApp (EVar "valueExportPrefix") (EVar "pub"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EVar "printType") (EVar "t"))))))
+(DFunDef false "printDecl" ((PCon "DExtern" (PVar "pub") (PVar "n") (PVar "t"))) (EApp (EApp (EVar "Cat") (EApp (EVar "valueExportPrefix") (EVar "pub"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "extern ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EVar "printType") (EVar "t")))))))
 (DFunDef false "printDecl" ((PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "pats") (PVar "body"))) (EBlock (DoLet false false (PVar "header") (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EVar "text") (ELit (LString "export "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EVar "concatD") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printPatAtom") (EVar "p"))))) (EVar "pats")))))) (DoExpr (EApp (EApp (EVar "Cat") (EVar "header")) (EApp (EVar "printDefRhs") (EVar "body"))))))
 (DFunDef false "printDecl" ((PCon "DLetGroup" (PVar "pub") (PVar "bindings"))) (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EVar "text") (ELit (LString "export "))) (EVar "Nil"))) (EApp (EVar "letGroupDecl") (EVar "bindings"))))
 (DFunDef false "printDecl" ((PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "n")) (rf "dataParams" (PVar "params")) (rf "dataCtors" (PVar "variants")) (rf "dataDerives" (PVar "derives"))) false)) (EBlock (DoLet false false (PVar "head") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "data ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EVar "concatD") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "text") (EVar "p"))))) (EVar "params")))))) (DoLet false false (PVar "variantDocs") (EApp (EVar "dataVariantDocs") (EVar "variants"))) (DoLet false false (PVar "deriveDoc") (EIf (EApp (EVar "isEmptyL") (EVar "derives")) (EVar "Nil") (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EVar "printDerives") (EVar "derives"))))) (DoExpr (EApp (EVar "group") (EApp (EApp (EVar "Cat") (EApp (EVar "visPrefix") (EVar "vis"))) (EApp (EApp (EVar "Cat") (EVar "head")) (EApp (EApp (EVar "Cat") (EVar "variantDocs")) (EVar "deriveDoc"))))))))
@@ -3491,9 +3500,11 @@ declLine d = render (printDecl d) ++ "\n"
 (DFunDef false "map2VariantComment" ((PList) PWild) (EListLit))
 (DFunDef false "map2VariantComment" (PWild (PList)) (EListLit))
 (DFunDef false "map2VariantComment" ((PCons (PVar "v") (PVar "vs")) (PCons (PVar "vc") (PVar "vcs"))) (EBinOp "::" (EApp (EApp (EVar "variantCommentedDoc") (EVar "v")) (EVar "vc")) (EApp (EApp (EVar "map2VariantComment") (EVar "vs")) (EVar "vcs"))))
+(DTypeSig false "valueExportPrefix" (TyFun (TyCon "Bool") (TyCon "Doc")))
+(DFunDef false "valueExportPrefix" ((PVar "pub")) (EIf (EVar "pub") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "export")))) (EVar "Hardline")) (EVar "Nil")))
 (DTypeSig true "printDecl" (TyFun (TyCon "Decl") (TyCon "Doc")))
-(DFunDef false "printDecl" ((PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "t"))) (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "export")))) (EVar "Hardline")) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EVar "printType") (EVar "t"))))))
-(DFunDef false "printDecl" ((PCon "DExtern" (PVar "pub") (PVar "n") (PVar "t"))) (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "export")))) (EVar "Hardline")) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "extern ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EVar "printType") (EVar "t")))))))
+(DFunDef false "printDecl" ((PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "t"))) (EApp (EApp (EVar "Cat") (EApp (EVar "valueExportPrefix") (EVar "pub"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EVar "printType") (EVar "t"))))))
+(DFunDef false "printDecl" ((PCon "DExtern" (PVar "pub") (PVar "n") (PVar "t"))) (EApp (EApp (EVar "Cat") (EApp (EVar "valueExportPrefix") (EVar "pub"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "extern ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EVar "printType") (EVar "t")))))))
 (DFunDef false "printDecl" ((PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "pats") (PVar "body"))) (EBlock (DoLet false false (PVar "header") (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EVar "text") (ELit (LString "export "))) (EVar "Nil"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printPatAtom") (EVar "p"))))) (EVar "pats")))))) (DoExpr (EApp (EApp (EVar "Cat") (EVar "header")) (EApp (EVar "printDefRhs") (EVar "body"))))))
 (DFunDef false "printDecl" ((PCon "DLetGroup" (PVar "pub") (PVar "bindings"))) (EApp (EApp (EVar "Cat") (EIf (EVar "pub") (EApp (EVar "text") (ELit (LString "export "))) (EVar "Nil"))) (EApp (EVar "letGroupDecl") (EVar "bindings"))))
 (DFunDef false "printDecl" ((PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "n")) (rf "dataParams" (PVar "params")) (rf "dataCtors" (PVar "variants")) (rf "dataDerives" (PVar "derives"))) false)) (EBlock (DoLet false false (PVar "head") (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString "data ")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "text") (EVar "p"))))) (EVar "params")))))) (DoLet false false (PVar "variantDocs") (EApp (EVar "dataVariantDocs") (EVar "variants"))) (DoLet false false (PVar "deriveDoc") (EIf (EApp (EVar "isEmptyL") (EVar "derives")) (EVar "Nil") (EApp (EApp (EVar "Cat") (EVar "Line")) (EApp (EVar "printDerives") (EVar "derives"))))) (DoExpr (EApp (EVar "group") (EApp (EApp (EVar "Cat") (EApp (EVar "visPrefix") (EVar "vis"))) (EApp (EApp (EVar "Cat") (EVar "head")) (EApp (EApp (EVar "Cat") (EVar "variantDocs")) (EVar "deriveDoc"))))))))

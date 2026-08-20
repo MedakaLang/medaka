@@ -1857,14 +1857,21 @@ map2VariantComment _ [] = []
 map2VariantComment (v::vs) (vc::vcs) =
   variantCommentedDoc v vc :: map2VariantComment vs vcs
 
+-- `export` above a VALUE-level declaration (a type signature or an extern
+-- declaration) sits on its own line, never collapsed onto the signature
+-- (STYLE.md §10) — unlike `export data`/`export impl`, which stay collapsed
+-- since those are genuinely type-level exports (see `visPrefix`).
+valueExportPrefix : Bool -> Doc
+valueExportPrefix pub = if pub then Cat (text "export") Hardline else Nil
+
 export
 printDecl : Decl -> Doc
-printDecl (DTypeSig pub n t) = Cat
-  (if pub then Cat (text "export") Hardline else Nil)
-  (Cat (text n) (Cat (text " : ") (printType t)))
-printDecl (DExtern pub n t) = Cat
-  (if pub then Cat (text "export") Hardline else Nil)
-  (Cat (text "extern ") (Cat (text n) (Cat (text " : ") (printType t))))
+printDecl (DTypeSig pub n t) =
+  Cat (valueExportPrefix pub) (Cat (text n) (Cat (text " : ") (printType t)))
+printDecl (DExtern pub n t) =
+  Cat
+    (valueExportPrefix pub)
+    (Cat (text "extern ") (Cat (text n) (Cat (text " : ") (printType t))))
 printDecl (DFunDef pub n pats body) =
   let header = Cat (if pub then text "export " else Nil) (Cat (text n) (concatD (map (p => Cat (text " ") (printPatAtom p)) pats)))
   Cat header (printDefRhs body)

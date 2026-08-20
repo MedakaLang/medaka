@@ -10,9 +10,15 @@ MEDAKA="${MEDAKA:-$ROOT/medaka}"
 
 WASM_EMIT="$ROOT/compiler/backend/wasm_emit.mdk"
 EMIT_SUPPORT="$ROOT/compiler/backend/emit_support.mdk"
-grep -Fq 'export makeWasmEmitInput' "$WASM_EMIT" \
-  && grep -Fq 'export emitProgram : WasmEmitInput -> CProgram -> String' "$WASM_EMIT" \
-  && grep -Fq 'export emitProgramGaps : WasmEmitInput -> CProgram -> List String' "$WASM_EMIT" \
+# `export` a value/function signature now formats split — its own line above
+# the signature (#1804) — so a single-line `grep -F 'export <sig>'` is a false
+# negative against correctly-formatted source. Match the `export` keyword and
+# the signature as independent single-line greps instead of one combined
+# literal, tolerating either the split or (pre-fmt) collapsed spelling.
+grep -Eq '^export$|^export ' "$WASM_EMIT" \
+  && grep -Fq 'makeWasmEmitInput' "$WASM_EMIT" \
+  && grep -Fq 'emitProgram : WasmEmitInput -> CProgram -> String' "$WASM_EMIT" \
+  && grep -Fq 'emitProgramGaps : WasmEmitInput -> CProgram -> List String' "$WASM_EMIT" \
   || { echo "FAIL: WasmEmitInput API is incomplete"; exit 1; }
 for legacy in installMethodIface installDeclRetTypes installCtorFloatFields installMainIsFloatHint installRecFieldOrders methodIfaceTableRef methodIfaceIndexRef setMethodIfaceTable methodIfaceOf methodArityOf mainIsFloatHintRef declRetTypesRef declRetTypesMapW ctorFloatFieldsRef declRecFieldsRef recFieldTableW; do
   if grep -Eq "^(export )?$legacy([ :]|$)" "$WASM_EMIT" "$EMIT_SUPPORT"; then
