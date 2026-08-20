@@ -157,6 +157,30 @@ cost, not theme): the `gates` skill.
   gh api graphql -f query='{repository(owner:"MedakaLang",name:"medaka"){pullRequest(number:N){isInMergeQueue state}}}' --jq '.data.repository.pullRequest'
   ```
 
+🚨 **[W-GH-WRITE-VERIFY] A `gh` write can report success while writing nothing — always read
+the result back, never the exit code.** Two concrete traps beyond [W-MERGE-EXIT-CODE], both hit
+in one session (#1212):
+  - `gh pr edit --body-file <f>` can silently no-op (observed on a Projects-classic deprecation
+    error) — the body is unchanged but the command exits 0. Verify by re-reading the body
+    length, not the exit code. Workaround: `gh api -X PATCH repos/OWNER/REPO/pulls/N -f body="…"`.
+  - **`-f body=@file` does NOT expand `@file`** — it writes the four literal characters `@file`
+    as the body. Only `-F` expands `@file` into the file's contents. This is the workaround for
+    the bullet above, so routing around one bug lands directly in the other.
+
+⚠️ **[W-QUEUE-FROZEN] Once a PR is enqueued, treat its branch as frozen.** The queue merges the
+branch as it stood at enqueue time — a commit pushed afterward can be left behind, landing on
+the branch but not in what actually reaches `main` (#1213). Need a change after enqueue? Dequeue
+first, or land it as a follow-up PR. Checking `origin/<branch>` is NOT sufficient once queued —
+verify against `main` itself:
+```sh
+git merge-base --is-ancestor <sha> origin/main && echo "on main" || echo "NOT on main"
+```
+Same trap, adjacent: a stale check-run in `statusCheckRollup` looks identical to a fresh one.
+Discriminate by `started_at` vs. your push time, not by conclusion alone:
+```sh
+gh api repos/MedakaLang/medaka/commits/$SHA/check-runs --jq '.check_runs[]|"\(.name) \(.conclusion) \(.started_at)"'
+```
+
 ### 🎯 "What should I work on?" → **GitHub Issues.** Not a doc.
 
 ```sh
