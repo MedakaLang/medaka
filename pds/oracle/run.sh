@@ -13,7 +13,8 @@
 # no `timeout` (use curl --retry --retry-connrefused instead).
 set -eu
 
-# ---- pinned identity of the service/ payload (docs/ops/PDS-ORACLE.md, F-5) — fallback route ----
+# ---- pinned identity of the service/ payload (docs/ops/PDS-ORACLE.md, "Why Route B is a
+# faithful substitute" under the Route B provenance table) — fallback route ----
 PINNED_REV="374cf1d4ba782d4391bbb73e4e2d3f320d4846d6"
 RAW_BASE="https://raw.githubusercontent.com/bluesky-social/pds/${PINNED_REV}/service"
 
@@ -32,8 +33,9 @@ IMAGE_TAG="ghcr.io/bluesky-social/pds:0.4"
 
 # ---- primary (docker) route identity ----
 PDS_ORACLE_IMAGE_REPO="ghcr.io/bluesky-social/pds"
-# The IMMUTABLE pin. Multi-arch INDEX digest (docs/ops/PDS-ORACLE.md F-2/F-3) — NOT a
-# per-platform manifest digest, NOT the mutable :0.4 tag. Overridable ONLY so the digest
+# The IMMUTABLE pin. Multi-arch INDEX digest (docs/ops/PDS-ORACLE.md, "Pinned digest (the
+# anchor — not the tag)" under the Route A provenance table) — NOT a per-platform manifest
+# digest, NOT the mutable :0.4 tag. Overridable ONLY so the digest
 # check can be proven fail-capable (acceptance A3).
 PDS_ORACLE_IMAGE_DIGEST="${PDS_ORACLE_IMAGE_DIGEST:-sha256:d95725b24dbe53af9d91dc69750556931ebed6c396f2cfa42b221434db642f12}"
 PDS_ORACLE_CONTAINER="${PDS_ORACLE_CONTAINER:-medaka-pds-oracle}"
