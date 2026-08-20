@@ -1,5 +1,5 @@
 # META
-source_lines=988
+source_lines=1069
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -136,6 +136,7 @@ import support.util.{
 -- O(map) linear `lookupAssoc` scan — the map is built once per unit in mangleUnitU.
 import support.ordmap.{
   OrdMap,
+  omInsert,
   omLookup,
   omFromPairs,
   omFromNames,
@@ -153,11 +154,91 @@ import support.ordmap.{
 export mangleUnits : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 mangleUnits coreDecls modules =
   let allUnits = ("core", coreDecls)::modules
+  let _ = symbolInjectivityGuard allUnits
   let exportsPerUnit = buildExportsPerUnit [] allUnits
   let ctorExportsPerUnit = map unitCtorExportEntry allUnits
   let coreOut = mangleUnitU exportsPerUnit ctorExportsPerUnit ("core", coreDecls)
   let modsOut = map (mangleModule exportsPerUnit ctorExportsPerUnit) modules
   (coreOut, modsOut)
+
+-- ── emitted-symbol injectivity guard (X-L.H / #348 / #748; drains #1677) ──────
+-- `mangledName` is `"\{sanitizeId mid}__\{name}"`, and `sanitizeId` is MANY-TO-ONE
+-- (`lib_plain.mdk` and `lib/plain.mdk` both sanitize to `lib_plain`).  Two distinct
+-- `(module, name)` pre-images could therefore land on ONE emitted symbol, and
+-- nothing downstream noticed: `core_ir_lower.lgGroup`'s bare-name merge folds them
+-- into one `define` with an unreachable second clause, the binary links, runs the
+-- wrong one, and exits 0 with no diagnostic anywhere (#1677's pinned repro).
+--
+-- This turns that fold into a build refusal, at the ONE site every emit driver
+-- already funnels through, so all eight callers inherit it (VAL-EMIT-001) instead
+-- of six per-driver copies desyncing.  The mangling SCHEME is unchanged: this only
+-- observes the map `mangleUnitU` is about to build.
+--
+-- SCOPE — deliberately stated, because a partial check cited as a total one is how
+-- this bug class survives:
+--   * covers the MODULE-MANGLED domain only — the definition sites `mangleUnitU`
+--     renames: top-level functions (`unitDefNames`, `main` excluded exactly as
+--     `localRenameEntry` excludes it) and local constructors (`unitLocalCtorNames`,
+--     reserved fixed-tag ctors already filtered out).  Ctors travel the identical
+--     `mangledName`/`sanitizeId` collapse, so leaving them out would leave half the
+--     map unchecked while claiming the map is injective.
+--   * does NOT cover emitter-MINTED symbols (gensym'd lambdas/etas/impls, and
+--     `llvm_emit.ensureDefaultEmitted`'s `fname`-keyed dedup-on-mint, which silently
+--     suppresses a second definition of an already-minted name).  Those pre-images
+--     do not exist here.  This guard does not make that domain safe.
+-- Functions and constructors are checked as SEPARATE domains: they are emitted into
+-- separate symbol namespaces (a ctor becomes `@mdk_ctorpap_<sym>_<n>`), so merging
+-- them could only manufacture a false positive, never catch a real collision.
+--
+-- INTENTIONALLY OVER-INCLUSIVE (RUN-EMIT-018): it refuses on the NAME MAP, never on
+-- reachability.  `dce.dceFilter` runs AFTER this site in every driver, and
+-- non-uniformly across them (`llvm_emit_modules_main` half 0 only,
+-- `wasm_emit_gaps_main` not at all), so a DCE-aware check would refuse different
+-- programs per driver.  A collision masked only because one side is currently dead
+-- is a latent silent mis-link waiting for the edit that makes it live.
+symbolInjectivityGuard : List (String, List Decl) -> Unit
+symbolInjectivityGuard allUnits =
+  let _ = checkSymbolsInjective "function" (flatMap unitFnSymbolPairs allUnits) omEmpty
+  let _ = checkSymbolsInjective "constructor" (flatMap unitCtorSymbolPairs allUnits) omEmpty
+  ()
+
+-- (emitted symbol, pre-image label) for the top-level FUNCTIONS this unit defines
+-- and `mangleUnitU` will rename.  Mirrors `buildUnitRenameMap`'s local half
+-- (`dedup (unitDefNames …)` minus `isExcludedName`) so the domain is the same set
+-- of definition sites, not a re-derived approximation.
+unitFnSymbolPairs : (String, List Decl) -> List (String, String)
+unitFnSymbolPairs (mid, decls) = map
+  (symbolPreImagePair mid)
+  (filterList notExcludedName (dedup (unitDefNames (mid, decls))))
+
+notExcludedName : String -> Bool
+notExcludedName n = not (isExcludedName n)
+
+-- (emitted symbol, pre-image label) for the CONSTRUCTORS this unit declares.
+-- Mirrors `buildUnitCtorRenameMap`'s local half.
+unitCtorSymbolPairs : (String, List Decl) -> List (String, String)
+unitCtorSymbolPairs (mid, decls) =
+  map (symbolPreImagePair mid) (dedup (unitLocalCtorNames decls))
+
+-- the pre-image label is the `(module, name)` pair itself, spelled `<mid>.<name>` --
+-- the diagnostic has to name the SOURCES, not just the collided symbol string.
+symbolPreImagePair : String -> String -> (String, String)
+symbolPreImagePair mid n = (mangledName mid n, "\{mid}.\{n}")
+
+-- Injectivity, one pass, O(n log n) via the same weight-balanced tree the rename
+-- map uses (the compiler's own emission is ~9.6k module-mangled symbols; a
+-- `List`-as-a-map here would be the fourteenth quadratic).  Two entries agreeing on
+-- BOTH symbol and pre-image are the SAME pre-image seen twice (a duplicate unit id
+-- in `allUnits`), not a collision.  Anything else refuses, naming BOTH sources.
+checkSymbolsInjective : String -> List (String, String) -> OrdMap String -> Unit
+checkSymbolsInjective _ [] _ = ()
+checkSymbolsInjective what ((sym, pre)::rest) seen = match omLookup sym seen
+  None => checkSymbolsInjective what rest (omInsert sym pre seen)
+  Some prev =>
+    if prev == pre then
+      checkSymbolsInjective what rest seen
+    else
+      panic "emitted-symbol collision: \{what}s `\{prev}` and `\{pre}` both mangle to `\{sym}` -- two distinct (module, name) pairs cannot share one emitted symbol, so the emitter would silently keep one and drop the other. Rename one of the two modules so their ids differ after `sanitizeId` (which maps `.`, `/` and `-` all to `_`), or rename one of the two definitions."
 -- Per-unit CONSTRUCTOR exports: (mid, [(typeName, [ctorName])]).  Mirrors
 -- exportsPerUnit but for data/record ctors, so an importing unit can map
 -- `import M.{T(..)}` / `import M.{Ctor}` to `<M>__<Ctor>` (see ctorImportEntries).
@@ -993,9 +1074,22 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "joinDot" false) (mem "dedup" false) (mem "dedupBy" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omEmpty" false) (mem "omSize" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omEmpty" false) (mem "omSize" false))))
 (DTypeSig true "mangleUnits" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
-(DFunDef false "mangleUnits" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "exportsPerUnit") (EApp (EApp (EVar "buildExportsPerUnit") (EListLit)) (EVar "allUnits"))) (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EApp (EVar "map") (EVar "unitCtorExportEntry")) (EVar "allUnits"))) (DoLet false false (PVar "coreOut") (EApp (EApp (EApp (EVar "mangleUnitU") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit")) (ETuple (ELit (LString "core")) (EVar "coreDecls")))) (DoLet false false (PVar "modsOut") (EApp (EApp (EVar "map") (EApp (EApp (EVar "mangleModule") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit"))) (EVar "modules"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut")))))
+(DFunDef false "mangleUnits" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "symbolInjectivityGuard") (EVar "allUnits"))) (DoLet false false (PVar "exportsPerUnit") (EApp (EApp (EVar "buildExportsPerUnit") (EListLit)) (EVar "allUnits"))) (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EApp (EVar "map") (EVar "unitCtorExportEntry")) (EVar "allUnits"))) (DoLet false false (PVar "coreOut") (EApp (EApp (EApp (EVar "mangleUnitU") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit")) (ETuple (ELit (LString "core")) (EVar "coreDecls")))) (DoLet false false (PVar "modsOut") (EApp (EApp (EVar "map") (EApp (EApp (EVar "mangleModule") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit"))) (EVar "modules"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut")))))
+(DTypeSig false "symbolInjectivityGuard" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Unit")))
+(DFunDef false "symbolInjectivityGuard" ((PVar "allUnits")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "checkSymbolsInjective") (ELit (LString "function"))) (EApp (EApp (EVar "flatMap") (EVar "unitFnSymbolPairs")) (EVar "allUnits"))) (EVar "omEmpty"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkSymbolsInjective") (ELit (LString "constructor"))) (EApp (EApp (EVar "flatMap") (EVar "unitCtorSymbolPairs")) (EVar "allUnits"))) (EVar "omEmpty"))) (DoExpr (ELit LUnit))))
+(DTypeSig false "unitFnSymbolPairs" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "unitFnSymbolPairs" ((PTuple (PVar "mid") (PVar "decls"))) (EApp (EApp (EVar "map") (EApp (EVar "symbolPreImagePair") (EVar "mid"))) (EApp (EApp (EVar "filterList") (EVar "notExcludedName")) (EApp (EVar "dedup") (EApp (EVar "unitDefNames") (ETuple (EVar "mid") (EVar "decls")))))))
+(DTypeSig false "notExcludedName" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "notExcludedName" ((PVar "n")) (EApp (EVar "not") (EApp (EVar "isExcludedName") (EVar "n"))))
+(DTypeSig false "unitCtorSymbolPairs" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "unitCtorSymbolPairs" ((PTuple (PVar "mid") (PVar "decls"))) (EApp (EApp (EVar "map") (EApp (EVar "symbolPreImagePair") (EVar "mid"))) (EApp (EVar "dedup") (EApp (EVar "unitLocalCtorNames") (EVar "decls")))))
+(DTypeSig false "symbolPreImagePair" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "symbolPreImagePair" ((PVar "mid") (PVar "n")) (ETuple (EApp (EApp (EVar "mangledName") (EVar "mid")) (EVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "mid"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "")))))
+(DTypeSig false "checkSymbolsInjective" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyCon "Unit")))))
+(DFunDef false "checkSymbolsInjective" (PWild (PList) PWild) (ELit LUnit))
+(DFunDef false "checkSymbolsInjective" ((PVar "what") (PCons (PTuple (PVar "sym") (PVar "pre")) (PVar "rest")) (PVar "seen")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "sym")) (EVar "seen")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "checkSymbolsInjective") (EVar "what")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "sym")) (EVar "pre")) (EVar "seen")))) (arm (PCon "Some" (PVar "prev")) () (EIf (EBinOp "==" (EVar "prev") (EVar "pre")) (EApp (EApp (EApp (EVar "checkSymbolsInjective") (EVar "what")) (EVar "rest")) (EVar "seen")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "emitted-symbol collision: ")) (EApp (EVar "display") (EVar "what"))) (ELit (LString "s `"))) (EApp (EVar "display") (EVar "prev"))) (ELit (LString "` and `"))) (EApp (EVar "display") (EVar "pre"))) (ELit (LString "` both mangle to `"))) (EApp (EVar "display") (EVar "sym"))) (ELit (LString "` -- two distinct (module, name) pairs cannot share one emitted symbol, so the emitter would silently keep one and drop the other. Rename one of the two modules so their ids differ after `sanitizeId` (which maps `.`, `/` and `-` all to `_`), or rename one of the two definitions."))))))))
 (DTypeSig false "buildExportsPerUnit" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "buildExportsPerUnit" (PWild (PList)) (EListLit))
 (DFunDef false "buildExportsPerUnit" ((PVar "acc") (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EBlock (DoLet false false (PVar "entry") (EApp (EApp (EVar "unitExportEntry") (EVar "acc")) (ETuple (EVar "mid") (EVar "decls")))) (DoExpr (EBinOp "::" (EVar "entry") (EApp (EApp (EVar "buildExportsPerUnit") (EBinOp "::" (EVar "entry") (EVar "acc"))) (EVar "rest"))))))
@@ -1276,9 +1370,22 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Arm" true) (mem "Guard" true) (mem "GuardArm" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "FieldAssign" true) (mem "RecPatField" true) (mem "LetBind" true) (mem "FunClause" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "PropParam" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Variant" true) (mem "DataVis" true))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "joinDot" false) (mem "dedup" false) (mem "dedupBy" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omEmpty" false) (mem "omSize" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omEmpty" false) (mem "omSize" false))))
 (DTypeSig true "mangleUnits" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))))
-(DFunDef false "mangleUnits" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "exportsPerUnit") (EApp (EApp (EVar "buildExportsPerUnit") (EListLit)) (EVar "allUnits"))) (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EApp (EMethodRef "map") (EVar "unitCtorExportEntry")) (EVar "allUnits"))) (DoLet false false (PVar "coreOut") (EApp (EApp (EApp (EVar "mangleUnitU") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit")) (ETuple (ELit (LString "core")) (EVar "coreDecls")))) (DoLet false false (PVar "modsOut") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "mangleModule") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit"))) (EVar "modules"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut")))))
+(DFunDef false "mangleUnits" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "allUnits") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "symbolInjectivityGuard") (EVar "allUnits"))) (DoLet false false (PVar "exportsPerUnit") (EApp (EApp (EVar "buildExportsPerUnit") (EListLit)) (EVar "allUnits"))) (DoLet false false (PVar "ctorExportsPerUnit") (EApp (EApp (EMethodRef "map") (EVar "unitCtorExportEntry")) (EVar "allUnits"))) (DoLet false false (PVar "coreOut") (EApp (EApp (EApp (EVar "mangleUnitU") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit")) (ETuple (ELit (LString "core")) (EVar "coreDecls")))) (DoLet false false (PVar "modsOut") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "mangleModule") (EVar "exportsPerUnit")) (EVar "ctorExportsPerUnit"))) (EVar "modules"))) (DoExpr (ETuple (EVar "coreOut") (EVar "modsOut")))))
+(DTypeSig false "symbolInjectivityGuard" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Unit")))
+(DFunDef false "symbolInjectivityGuard" ((PVar "allUnits")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "checkSymbolsInjective") (ELit (LString "function"))) (EApp (EApp (EDictApp "flatMap") (EVar "unitFnSymbolPairs")) (EVar "allUnits"))) (EVar "omEmpty"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkSymbolsInjective") (ELit (LString "constructor"))) (EApp (EApp (EDictApp "flatMap") (EVar "unitCtorSymbolPairs")) (EVar "allUnits"))) (EVar "omEmpty"))) (DoExpr (ELit LUnit))))
+(DTypeSig false "unitFnSymbolPairs" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "unitFnSymbolPairs" ((PTuple (PVar "mid") (PVar "decls"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "symbolPreImagePair") (EVar "mid"))) (EApp (EApp (EVar "filterList") (EVar "notExcludedName")) (EApp (EVar "dedup") (EApp (EVar "unitDefNames") (ETuple (EVar "mid") (EVar "decls")))))))
+(DTypeSig false "notExcludedName" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "notExcludedName" ((PVar "n")) (EApp (EVar "not") (EApp (EVar "isExcludedName") (EVar "n"))))
+(DTypeSig false "unitCtorSymbolPairs" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "unitCtorSymbolPairs" ((PTuple (PVar "mid") (PVar "decls"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "symbolPreImagePair") (EVar "mid"))) (EApp (EVar "dedup") (EApp (EVar "unitLocalCtorNames") (EVar "decls")))))
+(DTypeSig false "symbolPreImagePair" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "symbolPreImagePair" ((PVar "mid") (PVar "n")) (ETuple (EApp (EApp (EVar "mangledName") (EVar "mid")) (EVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "mid"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "")))))
+(DTypeSig false "checkSymbolsInjective" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyCon "Unit")))))
+(DFunDef false "checkSymbolsInjective" (PWild (PList) PWild) (ELit LUnit))
+(DFunDef false "checkSymbolsInjective" ((PVar "what") (PCons (PTuple (PVar "sym") (PVar "pre")) (PVar "rest")) (PVar "seen")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "sym")) (EVar "seen")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "checkSymbolsInjective") (EVar "what")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "sym")) (EVar "pre")) (EVar "seen")))) (arm (PCon "Some" (PVar "prev")) () (EIf (EBinOp "==" (EVar "prev") (EVar "pre")) (EApp (EApp (EApp (EVar "checkSymbolsInjective") (EVar "what")) (EVar "rest")) (EVar "seen")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "emitted-symbol collision: ")) (EApp (EMethodRef "display") (EVar "what"))) (ELit (LString "s `"))) (EApp (EMethodRef "display") (EVar "prev"))) (ELit (LString "` and `"))) (EApp (EMethodRef "display") (EVar "pre"))) (ELit (LString "` both mangle to `"))) (EApp (EMethodRef "display") (EVar "sym"))) (ELit (LString "` -- two distinct (module, name) pairs cannot share one emitted symbol, so the emitter would silently keep one and drop the other. Rename one of the two modules so their ids differ after `sanitizeId` (which maps `.`, `/` and `-` all to `_`), or rename one of the two definitions."))))))))
 (DTypeSig false "buildExportsPerUnit" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "buildExportsPerUnit" (PWild (PList)) (EListLit))
 (DFunDef false "buildExportsPerUnit" ((PVar "acc") (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EBlock (DoLet false false (PVar "entry") (EApp (EApp (EVar "unitExportEntry") (EVar "acc")) (ETuple (EVar "mid") (EVar "decls")))) (DoExpr (EBinOp "::" (EVar "entry") (EApp (EApp (EVar "buildExportsPerUnit") (EBinOp "::" (EVar "entry") (EVar "acc"))) (EVar "rest"))))))
