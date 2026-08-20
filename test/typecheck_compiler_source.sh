@@ -94,7 +94,7 @@ if [ "${1:-}" = "--one" ]; then
 fi
 
 [ -x "$SELF" ] || {
-  echo "build the oracle first: FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one $(basename "$SELF") (missing $SELF)"
+  echo "SKIP: build the oracle first: FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one $(basename "$SELF") (missing $SELF)"
   exit 2
 }
 
