@@ -589,8 +589,7 @@ Idris-inspired. Private by default, file structure mirrors module hierarchy.
 
 ```
 -- src/utils.lang
-export
-greet : String -> String
+export greet : String -> String
 greet name = "Hello, " ++ name
 
 internal : String -> String  -- private, not exported
@@ -603,16 +602,12 @@ main =
   print (greet "Alice")
 ```
 
-The `export` keyword can appear on its own line before a declaration (Idris style) or inline:
+The `export` keyword goes on the same line as the declaration it modifies.
+Unlike Idris, Medaka does not accept `export` split onto its own line above a
+value's type signature — the formatter (`medaka fmt`) rewrites that split form
+by collapsing it onto the signature line:
 
 ```
--- standalone export (Idris style)
-export
-toList : BTree a -> List a
-toList Leaf = []
-toList (Node l v r) = toList l ++ (v :: toList r)
-
--- inline export (equivalent)
 export toList : BTree a -> List a
 toList Leaf = []
 toList (Node l v r) = toList l ++ (v :: toList r)
