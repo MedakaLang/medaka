@@ -68,11 +68,7 @@ import frontend.parser.{
   Positions,
 }
 import frontend.desugar.{desugar}
-import frontend.resolve.{
-  resolveModulesToHumane,
-  resolveModulesToHumaneG,
-  resolveModulesToHumaneByPath,
-}
+import frontend.resolve.{resolveModulesToHumaneByPath}
 import driver.loader.{
   LoadError,
   LoadMsg,
@@ -1973,7 +1969,7 @@ runRunCmd argv =
 -- hadTypeErrors reflects THIS run only.  A type error makes
 -- evalModulesOutput miscompile (the G1 bug), so we never reach it.
 -- Resolve-phase errors (e.g. PrivateNameAccess) ride a SEPARATE channel
--- hadTypeErrors does not cover, so resolveModulesToHumane is consulted
+-- hadTypeErrors does not cover, so resolveModulesToHumaneByPath is consulted
 -- FIRST (mirroring `check`/`build`) and run aborts with the same humane
 -- diagnostic before elaborate/eval.
 

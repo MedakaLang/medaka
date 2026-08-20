@@ -116,3 +116,69 @@ so no rule was cut to save prose.
   rule is an absence-of-disaster test. Adoption via the `corrections: <n>`
   instrument (see H9's Evidence column) is in; whether H9 survives its first
   graded sprint is Val's call.
+
+---
+
+## v6 — 2026-08-20, from `sprint/emit-inputs` (12 proposals, 2 retirements, 2 escalations)
+
+The sprint that FIRST RAN v5. Six landings, ~2.1/hour to MERGED, 32 rulings, 18
+findings, max severity S2, zero S0/S1. Adversarial review caught 11 of 18;
+required-check CI and the existing gates caught **zero** — third sprint running,
+and the standing argument for deferred verification and against ever trading the
+review pair for schedule.
+
+### Adopted
+
+| # | Change | Where | Evidence |
+|---|---|---|---|
+| P1 | A packet MAY NOT contain an ancestor SHA; the dispatch brief supplies the sprint head, re-derived at lane grant | packet §1, `slice-landed` 3 | Two BLOCKED Opus dispatches (~162k tokens), same class, opposite polarity: pinned to the plan base it passes on a tree with zero sprint commits (vacuous); pinned to a sprint-only commit it can never pass in HARNESS mode (unsatisfiable) |
+| P2 | Every acceptance clause carries `fails-on:`; binds the brain for checks it MANDATES, not only probes it runs | packet §6, `sprint-brain`, `sprint-planner` | Three cannot-fail instruments in three unrelated domains in ONE sprint; two authored or endorsed by the judgment seat, so it cannot be a planner-discipline rule |
+| P3 | Refusals table defined exhaustively (REFUSED/BLOCKED/`declined-out-of-band:`/falsified premise/pre-licensed partial), reviewer findings excluded, `mechanism: license\|assertion` column (E2), three-source cross-check at wrap-up, verifier's VAL item de-judgment-claused | `sprint-findings` 1b, orchestrator 3, `slice-landed`, `sprint-rear` | Table closed with ZERO rows and the owning seat read that as "none occurred" — against 3 BLOCKED dispatches and 6 ruling-recorded falsified premises. H9's criterion (4) was ungradable |
+| P4 | Per-landing + heavy-round claim-surface sweep (Haiku, ~$0.35): citations resolve, counted claims re-run, commit citations exist | `sprint-rear` pipeline 3 | Five mechanical citation/count defects consumed reviewer attention at 20–60× the price. ADDITIVE — never a reason to trim the review pair |
+| P5 | `base-arm <depot path>` mandatory in the `landed:` handoff, in the rear's inputs, in the breaker's brief AND in `slice-breaker.md` itself | `slice-landed` 2, `sprint-rear`, `slice-breaker`, packet §2 | Depot built, ZERO consumers; the one breaker that needed a base arm built its own (two rebuilds, inside ~35 of its 55 min of build time) against a packet sentence addressed to the writer |
+| P6 | Rulings carry `applies-to:` and one `falsified-premise:` line per falsified premise; planners are handed ruling PATHS by `grep -rl`, not "read DECISIONS.md" | `sprint-brain`, `slice-landed` 4, orchestrator scribe 9 | Ledger ended at 3,905 lines/242 KB; three planner reports name ledger reading as their dominant cost, the L1 planner spending 40 of 55 minutes on it plus two other documents |
+| P7 | The 250-line packet ceiling counts PLANNER-AUTHORED prose; ruling text and §7/§8 boilerplate travel by pointer | packet preamble, `sprint-planner` | All four slice packets over — 285/325/511/613 — every overshoot the planner correctly refusing to drop ruling-mandated text; one spent three passes on the ceiling alone |
+| P8 | The sprint branch is MERGED into, never rebased; the sequencing ruling also asks what main's independent change proved about our design grain | orchestrator | Derived under enqueue pressure as RUN-EMIT-029; a rebase silently voids the ledger's whole citation graph. (The drafted post-merge citation check was NOT adopted — see Declined) |
+| P9 | ONE phase-boundary block: ledger sequence check + obligations reconcile + rotate both daughters, one trigger, `rotated: none — <reason>` when declined; a writer return preempts it | orchestrator | The sequence check ran and recovered 2 lost rulings; rotation ran ZERO times in the sprint that ADOPTED it (H3 ungraded, daughter cache-writes 53%/51% of cost); the obligations writeback ran only at wrap-up, 47 stale rows |
+| P10 | A stalled writer gets TWO resumes, the second CORRECTIVE (names the mechanism, quotes §8); abandon on the third. Fix briefs paste §7 + §8's first two bullets inline | orchestrator heartbeat 4, packet Fix form | Two stalls of one fixer on a backgrounded build. ⚠️ The retro's own draft said "one resume, the second has never worked" — DECISIONS.md:3304-3306 shows resume 2 is what landed the fix (`895c44c5`). Adopted against the draft |
+| P11 | `sprint-cost-report.py --session/--exclude-session`; `SESSION=` recorded beside `BASE=`; COSTS.md carries the sprint's own instruments | `scripts/sprint-cost-report.py`, orchestrator 1 + 7(a) | ~52% of a $513 report was three unrelated sessions, landing in the `main-session`/`general-purpose` rows H5/H10 are graded on; H9's `corrections:` never reached COSTS.md as its own criterion (5) requires |
+| P12 | A planner's negative claim about the tree carries the command that would have falsified it | `sprint-planner` | "No deterministic net-extern fixture pattern exists" when `test/net_fixtures/` + `test/diff_net.sh` existed and were CI-registered; propagated into a partial refusal and two packet revisions |
+| D1 | DELETE `effort: low` from `sprint-verifier.md` / `sprint-scout.md` | both agent defs | H11's own second probe: the harness silently drops `effort` on Haiku 4.5 (records `None`). A control that appears set and is not |
+| D2 | DELETE the tick-time `self-audit: clean` clause (the per-EVENT rule is untouched) | orchestrator heartbeat 6 | **Val, 2026-08-20.** Derived across all three sprint records (~9,000 ledger lines): the clause produced ONE line ever (`pds-phase0-substrate/DECISIONS.md:1000`), and it rode a tick already recording live lanes with agent ids, orphan state and a dispatch decision — the attestation added nothing the line did not already prove. Nor is it functioning as a prompt: the two sprints running the per-TICK form produced 0 and 5 self-audit lines, the sprint running the per-EVENT form produced 7. Stated trade (retro's): it was the only positive attestation that a quiet interval was quiet — answered by the data, since a seat that skips the event line skips this one too |
+| — | `friction-triage` gains a SATURATED class: a fully-characterised, already-mitigated, not-ours-to-fix issue takes an occurrence COUNT, never a drafted comment; only a NEW mechanism reopens drafting. #1148 and #1716 named as saturated | `friction-triage` | #1148 accumulated 7 comments / ~32 occurrences across 5 sprints, one per sprint, after its mechanism was fully characterised on 2026-07-31. Each cost a triage slot, a rear-seat filing and a reader's attention for zero marginal information |
+| E1 (partial) | packet §8 + `AGENTS.md` `[B-ISOLATION-COMPOUND]` + `ORCHESTRATING.md`: one plain command per Bash call, multi-step work into a script file, the mandatory build redirect INSIDE it; `make` denied in your OWN worktree is a BLOCKED verdict | packet §8, AGENTS.md, ORCHESTRATING.md | 7 refusals across 6 agents, 8 distinct shapes, all in-tree (#1148). The docs named only the `cp` trigger. The expensive failure is the agent that continues source-only and produces unsupportable existence claims |
+
+### Declined, with the reason (do not re-propose without new evidence)
+
+- **P8's post-merge citation-graph check** (drafted, adopted, then REMOVED the
+  same day on independent review). It cannot fail: a merge rewrites no SHAs, and
+  a rebased-away commit still resolves to `git cat-file -e` as an unreachable
+  object — verified in a scratch repo. Its regex also matched 79 tokens on a
+  healthy record of which 38 were decimals, CI run ids and MD5s. SHA resolution
+  belongs to P4's sweep, which sees the real defect (a mistyped abbreviation)
+  continuously. Naming it here because the *idea* will recur.
+
+### Deletion quota — honest accounting
+
+v5's own retro flagged that round as 23 additions to 0 deletions with the
+front-seat skill growing 62%. **v6 does better, but not by much:** three
+removals — D1 (two lines), the drafted citation-graph check, and D2's tick
+clause — plus one net-negative rule (`friction-triage`'s SATURATED class, which
+removes a recurring per-sprint comment) against ~14 additions, measured by an
+independent review at +17.7 KB / ~4.4k tokens across the always-loaded files,
+≈1% of a sprint-scoped run. P7 is the only change that reduces downstream
+packet weight. The next retro should still carry a real deletion quota.
+
+### Escalated to Val — open, not decided here
+
+- **E1 (emit-inputs): RESOLVED by Val, 2026-08-20** — mitigate in docs, stop
+  tallying, take it upstream. The avoidance rule, the `sh
+  test/build_native_medaka.sh` workaround and the BLOCKED exit are adopted
+  above; `friction-triage` now treats #1148 as saturated; an upstream report is
+  drafted. Remedies 2 and 3 (clear the carried-forward denial; recognise `make
+  -C <own worktree>`) remain the harness's, not ours.
+- **E2 (emit-inputs): should the Refusals ledger distinguish license from
+  assertion?** ADOPTED as a `mechanism:` column rather than left open — the two
+  instruments have different failure modes and an assertion can itself be
+  vacuous (one of the two that fired was). Recorded here so the adoption is
+  visible as a decision, not an assumption; reversible in one column.
