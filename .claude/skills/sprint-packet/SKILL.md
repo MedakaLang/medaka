@@ -429,12 +429,26 @@ the judgment seat, so this is not a planner-discipline rule.)
 > - Verify the binary you probe is the one you built: `MEDAKA_STRICT=1` on every
 >   probe.
 > - **One plain command per Bash call; multi-step work goes into a script file
->   first** (write it under your worktree's `scratch/`, then run it). In an
->   isolated worktree the auto-mode classifier refuses compound commands it
->   cannot prove stay inside your tree — 7 refusals across 6 agents in
->   `sprint/emit-inputs`, costing one agent ~10 minutes of workarounds. This is
->   an environment fact (#1148), not a permission you can argue with: write the
->   script, don't retry the compound.
+>   first** (write it under your worktree's `scratch/` with the Write tool, then
+>   run the file). In an isolated worktree the auto-mode classifier refuses
+>   compound shells it cannot prove stay inside your tree, even when every path
+>   in them is yours. Refused shapes, observed: `cd X && …`, a `;`-chain ending
+>   in `echo $?`, a heredoc, a `for` loop over `cat`, `python3 - <<EOF`, a pipe
+>   feeding `git` its args, and a redirect combined with `-C` — 7 refusals
+>   across 6 agents in `sprint/emit-inputs`, one costing ~10 minutes and one
+>   "materially slowing the session". **A redirect that AGENTS.md makes
+>   mandatory ([D-BUILD-PIPE]: `medaka build`'s exit code does not survive a
+>   pipe) goes INSIDE the script** — the harness's own suggested remedy, "try it
+>   without the redirect", is not available to you, and one agent recorded that
+>   dead end verbatim.
+> - 🚨 **If `make` is denied INSIDE YOUR OWN WORKTREE, you are BLOCKED — report
+>   it and stop.** That denial is STATEFUL (#1148, OPEN, S2): it survives
+>   abandoning the command shape that caused it, and it has cost a whole
+>   session's ability to build. Do NOT quietly continue source-only: a no-build
+>   agent's "no such site exists" is a hypothesis, not a finding, and reporting
+>   it as one is worse than the lost hour. It is also non-deterministic — a
+>   sibling agent doing the identical thing may be fine — so it is neither your
+>   fault nor something you can test your way out of.
 > - Push and report. The rear seat watches CI, not you. Do not poll CI, do not
 >   send per-shard updates.
 > - **Never file, edit, comment on, or close a GitHub issue.** Issue writes are

@@ -1328,7 +1328,18 @@ to that issue **aimed at the wrong half**.
   it or test for it; you can only avoid it. `AGENTS.md` recommends the `cp` in the
   build section, so agents find it on their own — **pre-empt it explicitly in the prompt** ("do NOT
   cp an emitter from any other tree; plain `make -C <your-worktree> medaka` cold-bootstraps and is
-  correct"). Cost of not borrowing: ~4 s. Cost of borrowing: the agent.
+  correct"). Cost of not borrowing: ~31 s, the seed-bootstrap step only — `cp` skips the
+  `.medaka_emitter.srcstamp` provenance stamp, so stages A+B rebuild anyway (AGENTS.md
+  [B-BORROW-EMITTER]; the ~4 s figure here was the pre-2026-07-16 understatement). Cost of
+  borrowing: the agent.
+- **⚠️ `cp` is NOT the only trigger — ordinary compound Bash trips the same stateful denial**
+  (#1148, OPEN, S2), with no cross-tree read anywhere: `cd X && …`, `;`-chains, heredocs, `for`
+  loops, `python3 - <<EOF`, a pipe feeding `git` its args, a redirect combined with `-C`. Seven
+  refusals across six agents in one sprint, all confined to their own trees. **Put the remedy in
+  every isolated agent's prompt:** one plain command per Bash call, multi-step work into a script
+  file first, the mandatory build redirect ([D-BUILD-PIPE]) *inside* that script. And name the
+  exit: an agent whose `make` is denied inside its OWN worktree reports BLOCKED — a no-build
+  agent that keeps going produces existence claims it cannot support.
 - **A construct-removal census MUST scan the always-loaded prelude (`stdlib/core.mdk`) for REAL uses** (not
   just doc-comment/string matches). A missed prelude use makes the *compiled* binary fail to load the
   prelude → it errors on EVERY program, mimicking a codegen/DCE miscompile (an Opus agent spent a 12-build

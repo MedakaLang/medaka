@@ -262,6 +262,16 @@ and that is FINE; it cold-bootstraps for ~31s, and borrowing does not even save 
 that blocks every later `make`. Rationale + the `[B-BORROW-EMITTER]` measurement: the
 `sprint-orchestrator` skill.
 
+🚨 **[B-ISOLATION-COMPOUND] `cp` is NOT the only trigger, and the build denial is STATEFUL
+(#1148, OPEN).** In an isolated worktree the classifier also refuses ordinary compound shells
+that never leave your tree — `cd X && …`, `;`-chains ending in `echo $?`, heredocs, a `for`
+loop, `python3 - <<EOF`, a pipe feeding `git` its args, a redirect combined with `-C` (8 shapes,
+7 refusals across 6 agents in one sprint). ⇒ **One plain command per Bash call; multi-step work
+goes into a script file first, and a mandatory redirect ([D-BUILD-PIPE]) goes INSIDE that
+script** — "drop the redirect" is not available to you. If `make` is then denied *inside your
+own worktree*, you are BLOCKED: stop and report it. Do not degrade to source-only work — a
+no-build agent's "no such site exists" is not a finding.
+
 **[B-ENV] Environment.** opam/dune NOT needed. Native build: **clang + Boehm GC** (Debian:
 `clang` + `libgc-dev`, `-lgc`; macOS: Apple clang + `brew install bdw-gc`). `node` ≥24 only for
 wasm/sqlite/playground gates.
