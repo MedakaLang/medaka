@@ -1,5 +1,0 @@
-export
-runThing : Int -> Int
-runThing n = n + 1
-
-main = println (runThing 1)
