@@ -29,9 +29,7 @@ import support.util.{joinNl}
 import frontend.resolve.{
   resolveToLines,
   resolveModulesToLines,
-  resolveModulesToHumane,
   resolveModulesToLinesG,
-  resolveModulesToHumaneG,
   singleFileImportErrors,
   ppResError,
 }
@@ -120,20 +118,22 @@ checkHasErrors rsrc csrc tsrc =
 -- order) and DESUGARS each, then calls these.  This RESOLVES imports (vs the
 -- single-file path's `UnknownModule`), mirroring how `build`/`run` route through
 -- loadProgram → the multi-module typecheck.  Output mirrors runCheck's shape over
--- the entry module: multi-module resolve diagnostics short-circuit first, else the
--- entry module's schemes/type-errors/match-warnings via checkModulesEntryReport.
+-- the entry module: the entry module's schemes/type-errors/match-warnings via
+-- checkModulesEntryReport.
 -- `rtD`/`coreD` are the DESUGARED runtime/core decls; `mods` are the DESUGARED
 -- loaded modules (entry last).  Kept separate from runCheck so the no-import path
 -- stays byte-identical (the CLI routes 1-module loads through runCheck).
+-- (#1440) No longer re-checks multi-module resolve diagnostics here: the ONE
+-- caller, `checkRoute` (`compiler/driver/medaka_cli.mdk`), already resolved
+-- via `resolveModulesToHumaneByPath` and only reaches this function in its
+-- `""` (no-resolve-errors) branch, so a second resolve pass here could only
+-- ever repeat that same `""` — `allowInternal`/`trustedMods` are unused now
+-- for the same reason (kept for signature stability with that call site).
 export runCheckModules : Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> String
 runCheckModules allowInternal trustedMods rtD coreD mods =
-  let resDiags = resolveModulesToHumaneG allowInternal trustedMods rtD coreD mods
-  match resDiags
-    "" =>
-      let exWarns = entryExhaust rtD coreD mods
-      let report = checkModulesEntryReport rtD coreD mods
-      joinNonEmpty exWarns report
-    _ => resDiags
+  let exWarns = entryExhaust rtD coreD mods
+  let report = checkModulesEntryReport rtD coreD mods
+  joinNonEmpty exWarns report
 
 -- exit-code predicate analog of checkHasErrors for the multi-module path: a
 -- resolve error OR any type error in the entry module.
