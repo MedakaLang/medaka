@@ -85,7 +85,7 @@
 -- random-access page layout stays on `Array` (set/blit) because Builder cannot
 -- express positional writes.
 
-import array.{set, blit, sliceClamped}
+import array.{blit, sliceClamped}
 import bytebuilder.{
   newBuilder,
   emitU8,
@@ -255,8 +255,8 @@ packCells page (cell::rest)  cpStart contentTop floor i errMsg =
     blit cell 0 page newTop clen
     -- Write the page-relative pointer (u16, big-endian) for cell i.
     let ptrOff = cpStart + i * 2
-    set ptrOff       (bitAnd (newTop / 256) 255) page
-    set (ptrOff + 1) (bitAnd newTop 255)         page
+    page[ptrOff] := bitAnd (newTop / 256) 255
+    page[ptrOff + 1] := bitAnd newTop 255
     packCells page rest cpStart newTop floor (i + 1) errMsg
 
 -- Write the 8-byte TABLE-leaf page header (type 0x0D) at `hdrOff`.
@@ -270,20 +270,21 @@ writeLeafHeader page hdrOff nCells contentStart =
 writeLeafHeaderTyped : Array Int -> Int -> Int -> Int -> Int -> Unit
 writeLeafHeaderTyped page hdrOff typeByte nCells contentStart =
   -- +0 page type
-  set hdrOff typeByte page
+  page[hdrOff] := typeByte
   -- +1 first freeblock (u16) = 0
-  set (hdrOff + 1) 0 page
-  set (hdrOff + 2) 0 page
+  page[hdrOff + 1] := 0
+  page[hdrOff + 2] := 0
   -- +3 cell count (u16)
-  set (hdrOff + 3) (bitAnd (nCells / 256) 255) page
-  set (hdrOff + 4) (bitAnd nCells 255)         page
+  page[hdrOff + 3] := bitAnd (nCells / 256) 255
+  page[hdrOff + 4] := bitAnd nCells 255
   -- +5 cell-content-area start (u16; 0 means 65536, but our pages are 4096 so
   --    contentStart is always in range and never 0 unless empty — an empty
   --    page writes contentStart = pageSize = 4096, which is the correct value)
-  set (hdrOff + 5) (bitAnd (contentStart / 256) 255) page
-  set (hdrOff + 6) (bitAnd contentStart 255)         page
+  page[hdrOff + 5] := bitAnd (contentStart / 256) 255
+  page[hdrOff + 6] := bitAnd contentStart 255
   -- +7 fragmented free bytes = 0
-  set (hdrOff + 7) 0 page
+  page[hdrOff + 7] := 0
+  ()
 
 -- ---------------------------------------------------------------------------
 -- Interior page assembly (0x05) — one interior root over N leaf children
@@ -302,10 +303,11 @@ writeLeafHeaderTyped page hdrOff typeByte nCells contentStart =
 -- | Write a big-endian u32 at absolute page offset `off`.
 setU32BE : Array Int -> Int -> Int -> Unit
 setU32BE page off v =
-  set off (bitAnd (v / 16777216) 255) page
-  set (off + 1) (bitAnd (v / 65536) 255) page
-  set (off + 2) (bitAnd (v / 256) 255) page
-  set (off + 3) (bitAnd v 255) page
+  page[off] := bitAnd (v / 16777216) 255
+  page[off + 1] := bitAnd (v / 65536) 255
+  page[off + 2] := bitAnd (v / 256) 255
+  page[off + 3] := bitAnd v 255
+  ()
 
 -- | Encode one interior cell: [4-byte BE left-child page][rowid varint].
 encodeInteriorCell : Int -> Int -> Array Int
@@ -326,18 +328,18 @@ encodeInteriorCells ((child, key)::rest) acc =
 writeInteriorHeader : Array Int -> Int -> Int -> Int -> Unit
 writeInteriorHeader page nCells contentStart rightmost =
   -- +0 page type
-  set 0 pageTableInteriorByte page
+  page[0] := pageTableInteriorByte
   -- +1 first freeblock (u16) = 0
-  set 1 0 page
-  set 2 0 page
+  page[1] := 0
+  page[2] := 0
   -- +3 cell count (u16)
-  set 3 (bitAnd (nCells / 256) 255) page
-  set 4 (bitAnd nCells 255)         page
+  page[3] := bitAnd (nCells / 256) 255
+  page[4] := bitAnd nCells 255
   -- +5 cell-content-area start (u16)
-  set 5 (bitAnd (contentStart / 256) 255) page
-  set 6 (bitAnd contentStart 255)         page
+  page[5] := bitAnd (contentStart / 256) 255
+  page[6] := bitAnd contentStart 255
   -- +7 fragmented free bytes = 0
-  set 7 0 page
+  page[7] := 0
   -- +8 right-most-child pointer (u32)
   setU32BE page 8 rightmost
 

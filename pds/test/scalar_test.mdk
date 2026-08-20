@@ -20,7 +20,7 @@
    key for the low-S boundary is the corpus's `high` rows.
 
    This file uses the BOUNDS-CHECKED public array API (`arr[i]`,
-   `Array.set`) — no restricted internal externs. -}
+   `arr[i] := v`, `Array.set`) — no restricted internal externs. -}
 
 import test.{expectEqual, expectTrue, expectFalse}
 import array as A
@@ -47,7 +47,7 @@ import lib.scalar.{
 bitBytes : Int -> Array Int
 bitBytes k =
   let out = arrayMake 32 0
-  let () = A.set (31 - shiftRight k 3) (shiftLeft 1 (k - shiftLeft (shiftRight k 3) 3)) out
+  out[31 - shiftRight k 3] := shiftLeft 1 (k - shiftLeft (shiftRight k 3) 3)
   out
 
 -- 32 big-endian bytes, decremented by one (wraps at 0, which no input here
@@ -64,7 +64,7 @@ decGo out i =
   else
     let v = out[i]
     if v == 0 then
-      let () = A.set i 255 out
+      out[i] := 255
       decGo out (i - 1)
     else A.set i (v - 1) out
 
@@ -81,7 +81,7 @@ incGo out i =
   else
     let v = out[i]
     if v == 255 then
-      let () = A.set i 0 out
+      out[i] := 0
       incGo out (i - 1)
     else A.set i (v + 1) out
 
@@ -97,7 +97,7 @@ halveGo bs out i carry =
   if i >= 32 then ()
   else
     let cur = bs[i]
-    let () = A.set i (shiftRight cur 1 + shiftLeft carry 7) out
+    out[i] := shiftRight cur 1 + shiftLeft carry 7
     halveGo bs out (i + 1) (bitAnd cur 1)
 
 allOnes : Array Int

@@ -29,7 +29,7 @@
    specific vector's stated output. Leading-zero-byte handling is verified
    independently via the multiformats/multibase vectors (site 3-5) as well. -}
 
-import array.{get, set, make}
+import array.{get, make}
 import string.{fromChars, toChars}
 
 export base58btcAlphabet : String
@@ -103,7 +103,7 @@ carryByteIntoDigits buf size i carry length =
   if carry == 0 && i >= length || j < 0 then i
   else
     let cur = carry + 256 * byteAt j buf
-    set j (cur % 58) buf
+    buf[j] := cur % 58
     carryByteIntoDigits buf size (i + 1) (cur / 58) length
 
 -- Fold every input byte (index `idx .. n-1`) into the digit buffer in turn.
@@ -209,7 +209,7 @@ carryDigitIntoBytes buf size i carry length =
   if carry == 0 && i >= length || j < 0 then i
   else
     let cur = carry + 58 * byteAt j buf
-    set j (cur % 256) buf
+    buf[j] := cur % 256
     carryDigitIntoBytes buf size (i + 1) (cur / 256) length
 
 foldDigitsIntoBytes : List Int -> Array Int -> Int -> Int -> Int

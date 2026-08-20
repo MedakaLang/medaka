@@ -40,7 +40,7 @@ import lib.field.{
 bitBytes : Int -> Array Int
 bitBytes k =
   let out = arrayMake 32 0
-  let () = set (31 - shiftRight k 3) (shiftLeft 1 (k - shiftLeft (shiftRight k 3) 3)) out
+  out[31 - shiftRight k 3] := shiftLeft 1 (k - shiftLeft (shiftRight k 3) 3)
   out
 
 -- 32 big-endian bytes, decremented by one (wraps at 0, which no input here
@@ -57,7 +57,7 @@ decGo out i =
   else
     let v = out[i]
     if v == 0 then
-      let () = set i 255 out
+      out[i] := 255
       decGo out (i - 1)
     else set i (v - 1) out
 

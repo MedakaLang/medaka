@@ -33,6 +33,14 @@
    only the final one-or-two blocks (<=128 bytes) are synthesized to hold
    the 0x80 marker, zero padding, and the 64-bit big-endian bit length. -}
 
+-- Writes here stay on `Array.set` rather than the `arr[i] := v` sugar, on
+-- purpose. `setIndex` is an `IndexMut` method and its dispatch is not
+-- devirtualized for a monomorphic receiver, which measured +14% on the
+-- `feMul` loop in `pds/lib/field.mdk` (0.575s -> 0.658s, 200k muls, 2026-08-20)
+-- when the sugar was swapped in. The rest of the tree (gzip, sqlite,
+-- pds/lib/base58.mdk, the pds tests) uses the sugar; these three hot modules
+-- are the deliberate exception. Revisit if monomorphic `index`/`setIndex`
+-- ever specializes.
 import array.{get, set, make, blit}
 
 -- ── Constants ────────────────────────────────────────────────────────

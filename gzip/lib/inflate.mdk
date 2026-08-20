@@ -36,7 +36,7 @@
 -- the design doc calls out: forgetting this makes stored-block bytes
 -- invisible to a subsequent Huffman block's `copyBack`.
 
-import array.{get, set, make, sliceClamped}
+import array.{get, make, sliceClamped}
 import mut_array.{MutArray, new, push, get as maGet, toArray, fromList}
 import lib.bitio.{
   BitReader,
@@ -304,7 +304,7 @@ readClLengthsGo r i nClen lens
   | otherwise = do
     v <- getBits 3 r
     idx <- lookupTable clOrder i "clOrder"
-    let _ = set idx v lens
+    let _ = lens[idx] := v
     readClLengthsGo r (i + 1) nClen lens
 
 -- | Read HLIT/HDIST/HCLEN and the HCLEN code-length lengths, and build the
@@ -338,7 +338,7 @@ fillRepeatGo : Array Int -> Int -> Int -> Int -> Unit
 fillRepeatGo lens i limit val
   | i >= limit = ()
   | otherwise =
-    let _ = set i val lens
+    lens[i] := val
     fillRepeatGo lens (i + 1) limit val
 
 -- | Decode `total` (= HLIT+257 + HDIST+1) code lengths for the real
@@ -360,7 +360,7 @@ readCodeLengthsGo clHuff r lens i total prevLen
   | otherwise = match decodeSym clHuff r
     Err e => Err e
     Ok sym if sym < symRepPrev =>
-      let _ = set i sym lens
+      lens[i] := sym
       readCodeLengthsGo clHuff r lens (i + 1) total sym
     Ok sym if sym == symRepPrev => if prevLen < 0 then Err "dynamic Huffman: repeat-previous code (16) with no previous code length to repeat"
     else match getBits 2 r
