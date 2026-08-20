@@ -114,7 +114,8 @@ relUnderRoots (r::rs) path =
 -- sibling file's `import <id>` would use to reach an enumerated file — so a
 -- file discovered by directory walk (not by following an import edge) still
 -- lands under the identical BinderKey namespace as the entry-rooted loader.
-export moduleIdOfPath : List String -> String -> String
+export
+moduleIdOfPath : List String -> String -> String
 moduleIdOfPath roots path =
   slashToDot (stripSuffixStr ".mdk" (relUnderRoots roots path))
 
@@ -126,7 +127,8 @@ moduleIdOfPath roots path =
 -- root is `compiler/` (where `medaka.toml` lives), not `compiler/frontend/`.
 -- `None` when no `medaka.toml` is found walking up to the top — distinct from
 -- "found a root", so a caller cannot mistake "gave up" for "found" (#220).
-export findProjectRoot : String -> <IO> Option String
+export
+findProjectRoot : String -> <IO> Option String
 findProjectRoot startDir = findRootGo startDir
 
 -- Convenience wrapper for the (common) callers that want the old
@@ -135,7 +137,8 @@ findProjectRoot startDir = findRootGo startDir
 -- that need to tell "found" from "gave up" (e.g. the internal-extern trust
 -- boundary, or a `medaka lint` with no target args) must match on
 -- `findProjectRoot` directly instead of reaching for this.
-export findProjectRootOrSelf : String -> <IO> String
+export
+findProjectRootOrSelf : String -> <IO> String
 findProjectRootOrSelf startDir = match findProjectRoot startDir
   Some root => root
   None => startDir
@@ -157,7 +160,8 @@ findProjectRootOrSelf startDir = match findProjectRoot startDir
 -- resolved against the project root, not `src/`).  De-duplicated to a single
 -- root when the entry already sits AT the project root (or no `medaka.toml`
 -- was found, in which case `findProjectRoot` falls back to `entryDir` itself).
-export entrySearchRoots : String -> <IO> List String
+export
+entrySearchRoots : String -> <IO> List String
 entrySearchRoots entryDir =
   let projRoot = findProjectRootOrSelf entryDir
   if projRoot == entryDir then [projRoot] else [entryDir, projRoot]
@@ -273,7 +277,8 @@ joinPathL root p =
     stringConcat [root, "/", p]
 
 -- read + parse `<root>/medaka.toml`'s [dependencies]; [] if missing/none.
-export readDeps : String -> <IO> List (String, String)
+export
+readDeps : String -> <IO> List (String, String)
 readDeps root =
   let tomlPath = stringConcat [root, "/medaka.toml"]
   if fileExists tomlPath then match readFile tomlPath
@@ -303,7 +308,8 @@ resolveDepFile deps modId = match splitOnChar "." modId
 
 -- "core" is the implicit prelude — its names are already in scope, so an
 -- `import core.{…}` is a no-op the loader must skip (else it duplicates).
-export importModId : UsePath -> String
+export
+importModId : UsePath -> String
 importModId (UseName ns) =
   if listLen ns > 1 then
     joinDot (initList ns)
@@ -337,7 +343,8 @@ directImports (_::rest) = directImports rest
 -- `readModuleProgF` produces ("unknown module: <id>"); `None`
 -- for any other loader error text (cycle / unreadable file) so callers only
 -- special-case the one message shape they can actually re-locate.
-export unknownModuleIdOf : String -> Option String
+export
+unknownModuleIdOf : String -> Option String
 unknownModuleIdOf msg =
   let prefix = "unknown module: "
   if startsWith prefix msg then
@@ -347,7 +354,8 @@ unknownModuleIdOf msg =
 
 -- The Loc of the first `DUse` (top-level or under `DAttrib`) importing module
 -- id `mid`, or `None` if no such import appears in `decls`.
-export findImportLoc : String -> List Decl -> Option Loc
+export
+findImportLoc : String -> List Decl -> Option Loc
 findImportLoc _ [] = None
 findImportLoc mid ((DUse _ path loc)::rest) =
   if importModId path == mid then
@@ -369,7 +377,8 @@ findImportLoc mid (_::rest) = findImportLoc mid rest
 -- never spelled in an `import`.  Deduped + sorted (`sortUniqS`) so the result
 -- is deterministic regardless of `listDir`'s on-disk ordering — required for a
 -- stable golden.
-export availableModuleIds : String -> <IO> List String
+export
+availableModuleIds : String -> <IO> List String
 availableModuleIds stdlibDir = match listDir stdlibDir
   Err _ => []
   Ok entries => sortUniqS (filterMap mdkBaseName entries)
@@ -386,7 +395,8 @@ mdkBaseName name =
 -- Plain "available modules: array, list, map, string" text (no leading
 -- separator) — this is what feeds the structured JSON `help` field.  `[]` (no
 -- stdlib dir readable) yields "".
-export availableModulesText : String -> <IO> String
+export
+availableModulesText : String -> <IO> String
 availableModulesText stdlibDir = match availableModuleIds stdlibDir
   [] => ""
   ids => stringConcat ["available modules: ", joinComma ids]
@@ -395,7 +405,8 @@ availableModulesText stdlibDir = match availableModuleIds stdlibDir
 -- message, e.g. " — available modules: array, list, map, string".  `[]` (no
 -- stdlib dir readable) yields "" so callers can unconditionally append without
 -- a conditional.
-export availableModulesHint : String -> <IO> String
+export
+availableModulesHint : String -> <IO> String
 availableModulesHint stdlibDir = match availableModulesText stdlibDir
   "" => ""
   txt => " — " ++ txt
@@ -446,7 +457,8 @@ public export data LoadError =
 -- returned.  Keeps the ~15 callers that only report a string a one-line change,
 -- and upgrades them for free: a module parse error now prints
 -- `path:line:col: message` instead of a bare unlocated `parse error` panic.
-export loadErrorMessage : LoadError -> String
+export
+loadErrorMessage : LoadError -> String
 loadErrorMessage (LoadMsg m) = m
 loadErrorMessage (LoadParseFailed path _ e) =
   "\{path}:\{parseErrorLine e}:\{parseErrorCol e}: \{parseErrorMessage e}"
@@ -714,7 +726,8 @@ canonicalModId deps roots m = match findModuleFile deps roots m
 -- round-trip back to this file (the exact guard `canonicalModId` uses; a bare
 -- path has no import spelling `m` to fall back to the way `canonicalModId` does,
 -- and its first-root id is the closest analogue).
-export canonicalPathId : List (String, String) -> List String -> String -> <IO> String
+export
+canonicalPathId : List (String, String) -> List String -> String -> <IO> String
 canonicalPathId deps roots path =
   let cPath = canonicalizePath path
   let fallback = moduleIdOfPath roots path
@@ -845,7 +858,8 @@ childDeps deps owningRoot roots =
 -- `canonicalModId`/`revLookupRoot`'s established pattern for the "two spellings,
 -- one physical dir" problem — `owningRoot` may be a RELATIVE `roots` entry while
 -- the physical dir is absolute) so the comparison is spelling-independent.
-export projectTrustedMods : String -> List String -> String -> List (String, List Decl) -> <IO> List String
+export
+projectTrustedMods : String -> List String -> String -> List (String, List Decl) -> <IO> List String
 projectTrustedMods entry roots stdlibRoot mods = match findProjectRoot (parentDir entry)
   Some projectRoot =>
     let deps = readDeps projectRoot
@@ -869,13 +883,15 @@ trustedModsGo deps roots trustedRoots (m::ms) = match findModuleFile deps roots 
 -- twin of the walk below, which is exactly the parallel-driver shape that lets a
 -- fix land in one copy and silently miss the other.  Same order, same cycle
 -- detection — there is only one implementation of either now.
-export loadProgram : String -> List String -> <IO> Result String (List (String, List Decl))
+export
+loadProgram : String -> List String -> <IO> Result String (List (String, List Decl))
 loadProgram entry roots = mapErr loadErrorMessage (loadProgramE entry roots)
 
 -- `loadProgram` with the structured error retained.  The check/--json drivers use
 -- this so a `LoadParseFailed` can be attributed to the module that owns it; the
 -- string-only callers keep the flattened `loadProgram` above.
-export loadProgramE : String -> List String -> <IO> Result LoadError (List (String, List Decl))
+export
+loadProgramE : String -> List String -> <IO> Result LoadError (List (String, List Decl))
 loadProgramE entry roots = map
   (mods => map dropPathTriple mods)
   (loadProgramFilesE (_ => None) entry roots)
@@ -923,7 +939,8 @@ visitModsF parseFn read deps roots stack visited acc (d::ds) = match visitModF p
 -- `Loader.load_program ~read` returning `(mod_id, file_path, prog)` triples.
 -- A `read` of `(_ => None)` is exactly `loadProgram` (disk-only) plus paths.
 -- Uses placeholder-loc `parseResult`.
-export loadProgramFilesE : (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
+export
+loadProgramFilesE : (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
 loadProgramFilesE read entry roots =
   let deps = readDeps (findProjectRootOrSelf (parentDir entry))
   map
@@ -942,7 +959,8 @@ loadProgramFilesE read entry roots =
 -- resulting decls carry REAL ELoc spans (B.10.2b) — the LSP project path uses
 -- this so type-error diagnostics get expr-level ranges, mirroring the single-doc
 -- `analyzeLocated`.
-export loadProgramFilesLocatedE : (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
+export
+loadProgramFilesLocatedE : (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
 loadProgramFilesLocatedE read entry roots =
   let deps = readDeps (findProjectRootOrSelf (parentDir entry))
   map
@@ -1010,13 +1028,15 @@ takeFirst n (x::xs)
 -- memo `parseCacheRef`.  Behaviourally identical (same located decls per module);
 -- only the cost differs (unchanged deps skip re-parsing).  The LSP threads a
 -- session-lived cache so reuse spans didChange events.
-export loadProgramFilesLocatedCached : Ref (List (String, List Decl)) -> (String -> Option String) -> String -> List String -> <IO> Result String (List (String, String, List Decl))
+export
+loadProgramFilesLocatedCached : Ref (List (String, List Decl)) -> (String -> Option String) -> String -> List String -> <IO> Result String (List (String, String, List Decl))
 loadProgramFilesLocatedCached parseCacheRef read entry roots =
   mapErr
     loadErrorMessage
     (loadProgramFilesLocatedCachedE parseCacheRef read entry roots)
 
-export loadProgramFilesLocatedCachedE : Ref (List (String, List Decl)) -> (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
+export
+loadProgramFilesLocatedCachedE : Ref (List (String, List Decl)) -> (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
 loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
   let deps = readDeps (findProjectRootOrSelf (parentDir entry))
   map

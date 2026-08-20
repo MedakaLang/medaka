@@ -1,5 +1,5 @@
 # META
-source_lines=302
+source_lines=317
 stages=DESUGAR,MARK
 # SOURCE
 {- bits64.mdk — 64-bit-unsigned arithmetic over the 63-bit `Int` fixnum.
@@ -38,11 +38,13 @@ export type U64 = (Int, Int, Int, Int)
 -- ── Construction ────────────────────────────────────────────────────────
 
 -- The all-zero `uint64`.
-export zero : U64
+export
+zero : U64
 zero = (0, 0, 0, 0)
 
 -- The `uint64` value 1.
-export one : U64
+export
+one : U64
 one = (1, 0, 0, 0)
 
 {- | Split a Medaka `Int` into `uint64` limbs, masking to the low 64 bits.
@@ -61,7 +63,8 @@ one = (1, 0, 0, 0)
    (0, 1, 0, 0)
    > ofInt 4294967296
    (0, 0, 1, 0) -}
-export ofInt : Int -> U64
+export
+ofInt : Int -> U64
 ofInt n = (
   bitAnd n 65535,
   bitAnd (shiftRight n 16) 65535,
@@ -77,7 +80,8 @@ ofInt n = (
    True
    > isZero (ofInt 5)
    False -}
-export isZero : U64 -> Bool
+export
+isZero : U64 -> Bool
 isZero (a0, a1, a2, a3) = a0 == 0 && a1 == 0 && a2 == 0 && a3 == 0
 
 {- | Compare two `uint64` values (unsigned).
@@ -90,7 +94,8 @@ isZero (a0, a1, a2, a3) = a0 == 0 && a1 == 0 && a2 == 0 && a3 == 0
    Gt
    > cmp64 (0, 0, 0, 1) (65535, 65535, 65535, 0)
    Gt -}
-export cmp64 : U64 -> U64 -> Ordering
+export
+cmp64 : U64 -> U64 -> Ordering
 cmp64 (a0, a1, a2, a3) (b0, b1, b2, b3) =
   if a3 /= b3 then
     if a3 > b3 then Gt else Lt
@@ -113,7 +118,8 @@ cmp64 (a0, a1, a2, a3) (b0, b1, b2, b3) =
    (0, 1, 0, 0)
    > add64 (65535, 65535, 65535, 65535) (ofInt 1)
    (0, 0, 0, 0) -}
-export add64 : U64 -> U64 -> U64
+export
+add64 : U64 -> U64 -> U64
 add64 (a0, a1, a2, a3) (b0, b1, b2, b3) =
   let s0 = a0 + b0
   let s1 = a1 + b1 + shiftRight s0 16
@@ -130,7 +136,8 @@ add64 (a0, a1, a2, a3) (b0, b1, b2, b3) =
    (2, 0, 0, 0)
    > sub64 (ofInt 0) (ofInt 1)
    (65535, 65535, 65535, 65535) -}
-export sub64 : U64 -> U64 -> U64
+export
+sub64 : U64 -> U64 -> U64
 sub64 (a0, a1, a2, a3) (b0, b1, b2, b3) =
   let d0 = a0 - b0
   let d1 = a1 - b1 - (if d0 < 0 then 1 else 0)
@@ -147,7 +154,8 @@ sub64 (a0, a1, a2, a3) (b0, b1, b2, b3) =
    (0, 0, 1, 0)
    > mulLow64 (0, 0, 0, 1) (0, 1, 0, 0)
    (0, 0, 0, 0) -}
-export mulLow64 : U64 -> U64 -> U64
+export
+mulLow64 : U64 -> U64 -> U64
 mulLow64 (a0, a1, a2, a3) (b0, b1, b2, b3) =
   let c0 = a0 * b0
   let c1 = a0 * b1 + a1 * b0 + shiftRight c0 16
@@ -161,7 +169,8 @@ mulLow64 (a0, a1, a2, a3) (b0, b1, b2, b3) =
 
    > and64 (ofInt 12) (ofInt 10)
    (8, 0, 0, 0) -}
-export and64 : U64 -> U64 -> U64
+export
+and64 : U64 -> U64 -> U64
 and64 (a0, a1, a2, a3) (b0, b1, b2, b3) =
   (bitAnd a0 b0, bitAnd a1 b1, bitAnd a2 b2, bitAnd a3 b3)
 
@@ -169,7 +178,8 @@ and64 (a0, a1, a2, a3) (b0, b1, b2, b3) =
 
    > or64 (ofInt 12) (ofInt 10)
    (14, 0, 0, 0) -}
-export or64 : U64 -> U64 -> U64
+export
+or64 : U64 -> U64 -> U64
 or64 (a0, a1, a2, a3) (b0, b1, b2, b3) =
   (bitOr a0 b0, bitOr a1 b1, bitOr a2 b2, bitOr a3 b3)
 
@@ -177,7 +187,8 @@ or64 (a0, a1, a2, a3) (b0, b1, b2, b3) =
 
    > xor64 (ofInt 12) (ofInt 10)
    (6, 0, 0, 0) -}
-export xor64 : U64 -> U64 -> U64
+export
+xor64 : U64 -> U64 -> U64
 xor64 (a0, a1, a2, a3) (b0, b1, b2, b3) =
   (bitXor a0 b0, bitXor a1 b1, bitXor a2 b2, bitXor a3 b3)
 
@@ -188,7 +199,8 @@ xor64 (a0, a1, a2, a3) (b0, b1, b2, b3) =
    30
    > limbAt (ofInt 65536) 1
    1 -}
-export limbAt : U64 -> Int -> Int
+export
+limbAt : U64 -> Int -> Int
 limbAt (a0, a1, a2, a3) i =
   if i == 0 then
     a0
@@ -232,7 +244,8 @@ shrLimb u ws bs i =
    (1, 0, 0, 0)
    > shr64 (0, 0, 0, 32768) 63
    (1, 0, 0, 0) -}
-export shr64 : U64 -> Int -> U64
+export
+shr64 : U64 -> Int -> U64
 shr64 u n =
   let ws = shiftWords n
   let bs = n - ws * 16
@@ -257,7 +270,8 @@ shlLimb u ws bs i =
    (0, 1, 0, 0)
    > shl64 (ofInt 1) 63
    (0, 0, 0, 32768) -}
-export shl64 : U64 -> Int -> U64
+export
+shl64 : U64 -> Int -> U64
 shl64 u n =
   let ws = shiftWords n
   let bs = n - ws * 16
@@ -298,7 +312,8 @@ modGo dividend divisor rem i =
    (5, 0, 0, 0)
    > mod64 (0, 0, 0, 32768) (ofInt 3)
    (2, 0, 0, 0) -}
-export mod64 : U64 -> U64 -> U64
+export
+mod64 : U64 -> U64 -> U64
 mod64 dividend divisor =
   if isZero divisor then
     dividend

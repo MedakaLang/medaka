@@ -118,7 +118,8 @@ public export data TyConOrigin =
 -- unreachable for an interface (the language provides none; `Eq`/`Ord`/`Debug`
 -- are declarations in `stdlib/core.mdk`), and it maps to absence for the same
 -- reason: there is no module to name.
-export ifaceIdentity : TyConOrigin -> String -> String
+export
+ifaceIdentity : TyConOrigin -> String -> String
 ifaceIdentity (OriginModule m) name = "\{m}::\{name}"
 ifaceIdentity OriginUnresolved _ = ""
 ifaceIdentity OriginBuiltin _ = ""
@@ -134,7 +135,8 @@ ifaceIdentity OriginBuiltin _ = ""
 -- loud, a false hit is silent), that one answers ACCEPTANCE (a false reject
 -- refuses a valid program).  Neither shape may be copied to the other site;
 -- the derivation is written at `sameTyConHead`.
-export ifaceIdMatches : String -> String -> Bool
+export
+ifaceIdMatches : String -> String -> Bool
 ifaceIdMatches a b = a /= "" && a == b
 
 -- ── Cross-cutting identity substrate (#1111 A-2.0) ─────────────────────────
@@ -274,7 +276,8 @@ deriving (Eq, Ord, Debug)
 -- answer and the module answer, so it cannot fall through to a sentinel or
 -- forget an inhabitant.  A third inhabitant added here would break every
 -- consumer at COMPILE time, which is the point.
-export identOriginFold : a -> (String -> a) -> IdentOrigin -> a
+export
+identOriginFold : a -> (String -> a) -> IdentOrigin -> a
 identOriginFold onBuiltin _ IdentBuiltin = onBuiltin
 identOriginFold _ onModule (IdentModule mid) = onModule mid
 
@@ -286,7 +289,8 @@ identOriginFold _ onModule (IdentModule mid) = onModule mid
 -- There is deliberately NO total counterpart for the module case: `""` is
 -- exactly what must stay unrepresentable, so a module origin is only ever
 -- obtainable from `identOriginOf`, which checks.
-export identOriginBuiltin : IdentOrigin
+export
+identOriginBuiltin : IdentOrigin
 identOriginBuiltin = IdentBuiltin
 
 -- `(namespace, origin, name)` — the full identity of a declaration, or of an
@@ -321,7 +325,8 @@ public export data Ident = Ident Ns IdentOrigin String deriving (Eq, Ord, Debug)
 --     recorded", never an identity.  Refusing it here means no `Ident` can
 --     carry it, so no later unit has to re-litigate the empty-id question at
 --     its own call site.
-export identOriginOf : TyConOrigin -> Option IdentOrigin
+export
+identOriginOf : TyConOrigin -> Option IdentOrigin
 identOriginOf OriginUnresolved = None
 identOriginOf OriginBuiltin = Some IdentBuiltin
 identOriginOf (OriginModule mid) =
@@ -333,7 +338,8 @@ identOriginOf (OriginModule mid) =
 -- The convenience form every conversion site will actually want: build an
 -- identity from the `(namespace, TyConOrigin, name)` triple a table's writer
 -- already has in hand, or `None` if that origin is not an identity.
-export mkIdent : Ns -> TyConOrigin -> String -> Option Ident
+export
+mkIdent : Ns -> TyConOrigin -> String -> Option Ident
 mkIdent ns origin name = map (io => Ident ns io name) (identOriginOf origin)
 
 -- ── RE-HOMED FROM `types/registry.mdk` (#1111 A-2.3; oracle-identity family
@@ -406,7 +412,8 @@ deriving (Eq, Ord, Debug)
 -- `None` is honest absence (an `OriginUnresolved` head on the flat/
 -- single-file driver path, or the `OriginModule ""` §8 I6.3 refuses), and it
 -- lands in the `TkBare` half rather than being smuggled into a shared key.
-export tabKeyOf : Ns -> TyConOrigin -> String -> TabKey
+export
+tabKeyOf : Ns -> TyConOrigin -> String -> TabKey
 tabKeyOf ns origin name = match mkIdent ns origin name
   Some ident => TkIdent ident
   None => TkBare ns name
@@ -416,7 +423,8 @@ tabKeyOf ns origin name = match mkIdent ns origin name
 -- "is any user-declared type called this?", `rejectCyclicAliases`' name-keyed
 -- dependency graph). Marked at each such call site; never used to build a
 -- lookup key.
-export tabKeyName : TabKey -> String
+export
+tabKeyName : TabKey -> String
 tabKeyName (TkIdent (Ident _ _ name)) = name
 tabKeyName (TkBare _ name) = name
 
@@ -429,7 +437,8 @@ tabKeyName (TkBare _ name) = name
 -- namespace and many share a module id, so a name-last comparison does the
 -- two cheap-but-useless compares before the one that actually decides. The
 -- derived instance is still kept for the doctests below.
-export tabKeyEq : TabKey -> TabKey -> Bool
+export
+tabKeyEq : TabKey -> TabKey -> Bool
 tabKeyEq (TkIdent (Ident ns1 o1 n1)) (TkIdent (Ident ns2 o2 n2)) = n1 == n2
   && ns1 == ns2
   && o1 == o2
@@ -440,7 +449,8 @@ tabKeyEq _ _ = False
 -- shadows (the ordering every reader of those two tables assumes — the
 -- module's own decls are registered as a front overlay over the accumulated
 -- universe).
-export lookupTab : TabKey -> List (TabKey, v) -> Option v
+export
+lookupTab : TabKey -> List (TabKey, v) -> Option v
 lookupTab _ [] = None
 lookupTab k ((k2, v)::rest) = if tabKeyEq k k2 then Some v else lookupTab k rest
 
@@ -450,7 +460,8 @@ lookupTab k ((k2, v)::rest) = if tabKeyEq k k2 then Some v else lookupTab k rest
 -- one consumer is a diagnostic HINT (`noImplHint`, `types/typecheck.mdk`),
 -- which asks whether a name is user-declared at all in order to decide
 -- whether "add `deriving`" is applicable advice.
-export tabHasName : String -> List (TabKey, v) -> Bool
+export
+tabHasName : String -> List (TabKey, v) -> Bool
 tabHasName _ [] = False
 tabHasName n ((k, _)::rest) = tabKeyName k == n || tabHasName n rest
 
@@ -611,7 +622,8 @@ tabHasName n ((k, _)::rest) = tabKeyName k == n || tabHasName n rest
 -- and #1259 (`universeDataEnv`, constructor schemes — already a false reject
 -- BEFORE this unit, which is why nothing about it moved here).  Whoever re-keys
 -- one drains a row in `test/must_fail_fixtures/` as well as fixing the table.
-export sameTyConHead : String -> TyConOrigin -> String -> TyConOrigin -> Bool
+export
+sameTyConHead : String -> TyConOrigin -> String -> TyConOrigin -> Bool
 sameTyConHead n1 o1 n2 o2 = n1 == n2 && not (tyConIdsConflict o1 o2)
 
 -- True iff BOTH origins are identities and they name DIFFERENT declarations.
@@ -698,7 +710,8 @@ public export data Ty =
 -- identity.  Kept as a helper rather than inlining the record literal so that
 -- adding an identity field does not re-churn the construction sites the way a
 -- partial record pattern already spares the match sites.
-export tyConUnresolved : String -> Option Loc -> Ty
+export
+tyConUnresolved : String -> Option Loc -> Ty
 tyConUnresolved n l =
   TyCon { tyConName = n, tyConLoc = l, tyConOrigin = OriginUnresolved }
 
@@ -709,7 +722,8 @@ tyConUnresolved n l =
 -- type constructors (`(,)` … `(,,,,)` → `TyCon "__tupleN__"`) and typecheck's
 -- synthesised scalar-route tag.  Resolve's origin stamper only ever fills in an
 -- `OriginUnresolved` head, so a node built here is left alone by construction.
-export tyConBuiltin : String -> Option Loc -> Ty
+export
+tyConBuiltin : String -> Option Loc -> Ty
 tyConBuiltin n l =
   TyCon { tyConName = n, tyConLoc = l, tyConOrigin = OriginBuiltin }
 
@@ -744,7 +758,8 @@ public export data Constraint =
 -- (`Constraint { c | constraintArgs = … }`).  Re-synthesising from projected
 -- fields silently resets an acquired identity, and the stamper's immunity rule
 -- (fill in only a still-unresolved origin) makes that reset permanent.
-export constraintUnresolved : String -> List Ty -> Constraint
+export
+constraintUnresolved : String -> List Ty -> Constraint
 constraintUnresolved iface args = Constraint {
   constraintHead = iface,
   constraintArgs = args,
@@ -771,7 +786,8 @@ constraintUnresolved iface args = Constraint {
 
 -- the first `Some` loc, else the second (so a captured record-site span wins,
 -- and a `None` capture still degrades to the live fallback).
-export orElseLoc : Option Loc -> Option Loc -> Option Loc
+export
+orElseLoc : Option Loc -> Option Loc -> Option Loc
 orElseLoc (Some l) _ = Some l
 orElseLoc None fallback = fallback
 
@@ -781,7 +797,8 @@ orElseLoc None fallback = fallback
 -- still falls back to the file-start caret), so a type built only from type
 -- variables yields `None`.  A `DTypeSig` has no `Loc` of its own — only its
 -- `Ty` payload does — so this is how a signature-level diagnostic is located.
-export firstTyLoc : Ty -> Option Loc
+export
+firstTyLoc : Ty -> Option Loc
 firstTyLoc (TyCon { tyConLoc = loc }) = loc
 firstTyLoc (TyVar _) = None
 firstTyLoc (TyApp f x) = orElseLoc (firstTyLoc f) (firstTyLoc x)
@@ -793,7 +810,8 @@ firstTyLoc (TyRow _ _ l) = l
 
 -- The same walk across a LIST of types, left to right — an impl head's args
 -- (`impl Iface Ty1 Ty2…`), a tuple's elements, a method's signature parts.
-export firstTyLocList : List Ty -> Option Loc
+export
+firstTyLocList : List Ty -> Option Loc
 firstTyLocList [] = None
 firstTyLocList (t::rest) = orElseLoc (firstTyLoc t) (firstTyLocList rest)
 
@@ -1112,21 +1130,25 @@ public export data UsePath =
   | UseAlias (List String) String
 
 -- the name a UseGroup member has in the EXPORTING module (what to look up).
-export useMemberOrigin : UseMember -> String
+export
+useMemberOrigin : UseMember -> String
 useMemberOrigin (UseMember n _ _ _) = n
 
 -- the member's alias, if it was written `a as b`.
-export useMemberAlias : UseMember -> Option String
+export
+useMemberAlias : UseMember -> Option String
 useMemberAlias (UseMember _ _ _ alias) = alias
 
 -- the name a UseGroup member binds HERE: its alias if it has one, else its own name.
-export useMemberLocal : UseMember -> String
+export
+useMemberLocal : UseMember -> String
 useMemberLocal (UseMember n _ _ alias) = match alias
   Some a => a
   None => n
 
 -- the local name a MODULE alias binds an origin export under: `A` + `f` → `A.f`.
-export qualifiedLocal : String -> String -> String
+export
+qualifiedLocal : String -> String -> String
 qualifiedLocal alias n = "\{alias}.\{n}"
 
 -- a property-test parameter `(name : ty)`.
@@ -1163,14 +1185,16 @@ public export data Require =
 -- The `constraintUnresolved` peers.  See its comment for the full contract; the
 -- short version is: these are the ONLY producers of an unresolved occurrence
 -- identity for their node, and a REBUILD must use record update instead.
-export superUnresolved : String -> List String -> Super
+export
+superUnresolved : String -> List String -> Super
 superUnresolved iface params = Super {
   superHead = iface,
   superParams = params,
   superOrigin = OriginUnresolved,
 }
 
-export requireUnresolved : String -> List Ty -> Require
+export
+requireUnresolved : String -> List Ty -> Require
 requireUnresolved iface args = Require {
   requireHead = iface,
   requireArgs = args,
@@ -1199,7 +1223,8 @@ public export data Attr = AttrDeprecated String | AttrInline | AttrMustUse
 -- convention as `TyCon`'s `Option Loc`); the pure `parse` path leaves placeholders.
 public export data DeriveRef = DeriveRef String (Option Loc)
 
-export deriveRefName : DeriveRef -> String
+export
+deriveRefName : DeriveRef -> String
 deriveRefName (DeriveRef n _) = n
 
 public export data Decl =
@@ -1396,7 +1421,8 @@ public export data Decl =
 -- the identity-destroying shape #1219 found in `substTyVars`, and one the
 -- immunity rule cannot repair (`stampDeclOrigin` re-stamps only what a driver
 -- re-runs over, and the emit path runs it once).
-export dDataUnresolved : DataVis -> String -> List String -> List Variant -> List DeriveRef -> Decl
+export
+dDataUnresolved : DataVis -> String -> List String -> List Variant -> List DeriveRef -> Decl
 dDataUnresolved vis n params variants derives = DData {
   dataVis = vis,
   dataName = n,
@@ -1406,7 +1432,8 @@ dDataUnresolved vis n params variants derives = DData {
   dataOrigin = OriginUnresolved,
 }
 
-export dTypeAliasUnresolved : Bool -> String -> List String -> Ty -> Decl
+export
+dTypeAliasUnresolved : Bool -> String -> List String -> Ty -> Decl
 dTypeAliasUnresolved pub n params rhs = DTypeAlias {
   tyAliasPub = pub,
   tyAliasName = n,
@@ -1421,7 +1448,8 @@ dTypeAliasUnresolved pub n params rhs = DTypeAlias {
 -- the set of files allowed to name that constructor to three (this one, resolve's
 -- stamper, and a probe that only patterns on it), and that ratchet is worth more
 -- than the one line of directness it costs here.
-export dInterfaceUnresolved : Bool -> Bool -> String -> List String -> List Super -> List IfaceMethod -> Decl
+export
+dInterfaceUnresolved : Bool -> Bool -> String -> List String -> List Super -> List IfaceMethod -> Decl
 dInterfaceUnresolved pub isDefault n typarams supers methods = DInterface {
   pub = pub,
   def = isDefault,
@@ -1439,7 +1467,8 @@ dInterfaceUnresolved pub isDefault n typarams supers methods = DInterface {
 -- churn saving (`DImpl` was already a record); it exists so the parser and
 -- desugar do not have to NAME `OriginUnresolved`, which is what keeps that
 -- constructor's file set pinned at three.
-export dImplUnresolved : Bool -> String -> List Ty -> List Require -> List ImplMethod -> Decl
+export
+dImplUnresolved : Bool -> String -> List Ty -> List Require -> List ImplMethod -> Decl
 dImplUnresolved pub iface tys reqs methods = DImpl {
   pub = pub,
   iface = iface,
@@ -1449,7 +1478,8 @@ dImplUnresolved pub iface tys reqs methods = DImpl {
   implOrigin = OriginUnresolved,
 }
 
-export dNewtypeUnresolved : Bool -> String -> List String -> String -> Ty -> List DeriveRef -> Decl
+export
+dNewtypeUnresolved : Bool -> String -> List String -> String -> Ty -> List DeriveRef -> Decl
 dNewtypeUnresolved pub n params con fty derives = DNewtype {
   newtypePub = pub,
   newtypeName = n,
@@ -1486,7 +1516,8 @@ dNewtypeUnresolved pub n params con fty derives = DNewtype {
 -- first, then the rebuilt node), OR-folding the change flags.  Effect rows nest,
 -- so recursing the carried type of a `TyEffect` BEFORE applying `f` at that node
 -- is what lets a transform see an already-rewritten inner row.
-export mapTyFull : (Ty -> (Ty, Bool)) -> Ty -> (Ty, Bool)
+export
+mapTyFull : (Ty -> (Ty, Bool)) -> Ty -> (Ty, Bool)
 mapTyFull f ty =
   let (ty1, c1) = mapTyKids f ty
   let (ty2, c2) = f ty1
@@ -1540,7 +1571,8 @@ mapConstraintsB f ((c@(Constraint { constraintArgs = tys }))::rest) =
 -- type aliases, newtypes, let-groups, and `@attr`-wrapped decls.  `DEffect`
 -- decls carry no Ty and are left untouched (the effect-labels codemod warns
 -- about them separately).
-export mapTyInDecl : (Ty -> (Ty, Bool)) -> Decl -> (Decl, Bool)
+export
+mapTyInDecl : (Ty -> (Ty, Bool)) -> Decl -> (Decl, Bool)
 mapTyInDecl f (DTypeSig pub n t) =
   let (t2, c) = mapTyFull f t
   (DTypeSig pub n t2, c)
@@ -1690,7 +1722,8 @@ mapFunClausesB f ((FunClause ps e)::rest) =
 -- header above; NOT a build error), but threads the
 -- change flag purely.  Ref-typed fields (EBinOp/EUnOp/EFieldAccess/ESlice/EIndex
 -- /ERecordUpdate/EMethodAt/EDictAt/ENumLit) are carried through unchanged.
-export mapTyInExpr : (Ty -> (Ty, Bool)) -> Expr -> (Expr, Bool)
+export
+mapTyInExpr : (Ty -> (Ty, Bool)) -> Expr -> (Expr, Bool)
 mapTyInExpr _ (ELit l) = (ELit l, False)
 mapTyInExpr _ (EVar n) = (EVar n, False)
 mapTyInExpr f (EApp a b) =

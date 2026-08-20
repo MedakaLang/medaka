@@ -99,7 +99,8 @@ public export data Agg =
 
 -- | The canonical SQL text of an aggregate — also the name a HAVING predicate
 --   uses to reference it (see `eCountStar`/`eSum`/...).
-export aggName : Agg -> String
+export
+aggName : Agg -> String
 aggName AggCountStar = "count(*)"
 aggName (AggCount c) = "count(\{c})"
 aggName (AggSum c) = "sum(\{c})"
@@ -134,7 +135,8 @@ public export data AggQuery =
 
 -- | A bare aggregate query over a table with an aggregate select-list, no
 --   WHERE / GROUP BY / HAVING.
-export aggFrom : String -> List Agg -> AggQuery
+export
+aggFrom : String -> List Agg -> AggQuery
 aggFrom tbl aggs = AggQuery {
   from = tbl,
   where_ = None,
@@ -144,15 +146,18 @@ aggFrom tbl aggs = AggQuery {
 }
 
 -- | Attach a pre-aggregation WHERE (typed `Expr Bool`, same as `withWhere`).
-export withAggWhere : Expr Bool -> AggQuery -> AggQuery
+export
+withAggWhere : Expr Bool -> AggQuery -> AggQuery
 withAggWhere e q = { q | where_ = Some (unExpr e) }
 
 -- | Group by one or more columns (left-to-right key order).
-export withGroupBy : List String -> AggQuery -> AggQuery
+export
+withGroupBy : List String -> AggQuery -> AggQuery
 withGroupBy cols q = { q | groupBy = cols }
 
 -- | Attach a HAVING predicate over the aggregate-output row.
-export withHaving : Expr Bool -> AggQuery -> AggQuery
+export
+withHaving : Expr Bool -> AggQuery -> AggQuery
 withHaving e q = { q | having = Some (unExpr e) }
 
 -- ---------------------------------------------------------------------------
@@ -166,22 +171,28 @@ withHaving e q = { q | having = Some (unExpr e) }
 -- real aggregates and therefore also work in the SELECT list and in ORDER BY.
 -- ---------------------------------------------------------------------------
 
-export eCountStar : Expr Int
+export
+eCountStar : Expr Int
 eCountStar = mkE (ECol (aggName AggCountStar))
 
-export eCount : String -> Expr Int
+export
+eCount : String -> Expr Int
 eCount c = mkE (ECol (aggName (AggCount c)))
 
-export eSum : String -> Expr a
+export
+eSum : String -> Expr a
 eSum c = mkE (ECol (aggName (AggSum c)))
 
-export eAvg : String -> Expr Float
+export
+eAvg : String -> Expr Float
 eAvg c = mkE (ECol (aggName (AggAvg c)))
 
-export eMin : String -> Expr a
+export
+eMin : String -> Expr a
 eMin c = mkE (ECol (aggName (AggMin c)))
 
-export eMax : String -> Expr a
+export
+eMax : String -> Expr a
 eMax c = mkE (ECol (aggName (AggMax c)))
 
 -- ---------------------------------------------------------------------------
@@ -194,7 +205,8 @@ eMax c = mkE (ECol (aggName (AggMax c)))
 --
 --   The projection list is set to `groupBy keys ++ aggregates`, which reproduces
 --   the pinned output-row layout the old executor guaranteed.
-export toSelect : AggQuery -> Select
+export
+toSelect : AggQuery -> Select
 toSelect (AggQuery { from = tbl, where_ = w, groupBy = gcols, aggs = aggs, having = h }) =
   let keyExprs = map ECol gcols
   let base = withColumns (keyExprs ++ map aggExpr aggs) (withGroupExprs keyExprs (selectFrom tbl))
@@ -244,5 +256,6 @@ findAggByName (a::rest) name =
 -- | Execute an `AggQuery`, decoding each output group via `rt`.  Byte-identical
 --   in behaviour to the old standalone executor — it is now the unified
 --   `lib.select.query` running the lowered `Select`.
-export queryAgg : Db -> AggQuery -> RowType a -> Result String (List a)
+export
+queryAgg : Db -> AggQuery -> RowType a -> Result String (List a)
 queryAgg db q rt = query db (toSelect q) rt

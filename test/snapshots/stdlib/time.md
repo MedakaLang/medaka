@@ -1,5 +1,5 @@
 # META
-source_lines=224
+source_lines=242
 stages=DESUGAR,MARK
 # SOURCE
 {- time.mdk — durations + a UTC civil calendar, plus thin wrappers over the
@@ -39,60 +39,69 @@ public export data Duration = Duration Int
 --
 -- > toMillis (millis 250)
 -- 250
-export millis : Int -> Duration
+export
+millis : Int -> Duration
 millis n = Duration n
 
 -- | A duration of `n` seconds.
 --
 -- > toMillis (seconds 5)
 -- 5000
-export seconds : Int -> Duration
+export
+seconds : Int -> Duration
 seconds n = Duration (n * 1000)
 
 -- | A duration of `n` minutes.
 --
 -- > toSeconds (minutes 2)
 -- 120
-export minutes : Int -> Duration
+export
+minutes : Int -> Duration
 minutes n = Duration (n * 60000)
 
 -- | A duration of `n` hours.
 --
 -- > toSeconds (hours 1)
 -- 3600
-export hours : Int -> Duration
+export
+hours : Int -> Duration
 hours n = Duration (n * 3600000)
 
 -- | A duration of `n` days.
 --
 -- > toSeconds (days 1)
 -- 86400
-export days : Int -> Duration
+export
+days : Int -> Duration
 days n = Duration (n * 86400000)
 
 -- | The duration as whole milliseconds.
-export toMillis : Duration -> Int
+export
+toMillis : Duration -> Int
 toMillis (Duration ms) = ms
 
 -- | The duration as whole seconds (truncated toward zero).
 --
 -- > toSeconds (millis 2500)
 -- 2
-export toSeconds : Duration -> Int
+export
+toSeconds : Duration -> Int
 toSeconds (Duration ms) = ms / 1000
 
 -- | Add two durations.
 --
 -- > toMillis (addDuration (seconds 1) (millis 500))
 -- 1500
-export addDuration : Duration -> Duration -> Duration
+export
+addDuration : Duration -> Duration -> Duration
 addDuration (Duration a) (Duration b) = Duration (a + b)
 
 -- | Subtract the second duration from the first.
 --
 -- > toMillis (subDuration (seconds 2) (millis 500))
 -- 1500
-export subDuration : Duration -> Duration -> Duration
+export
+subDuration : Duration -> Duration -> Duration
 subDuration (Duration a) (Duration b) = Duration (a - b)
 
 -- ── UTC civil calendar ──────────────────────────────────────────────────
@@ -146,7 +155,8 @@ civilFromDays z0 =
 -- "2024-02-29T00:00:00Z"
 -- > formatIso (fromEpochSeconds (0 - 1))
 -- "1969-12-31T23:59:59Z"
-export fromEpochSeconds : Int -> DateTime
+export
+fromEpochSeconds : Int -> DateTime
 fromEpochSeconds secs =
   let ds = floorDiv secs 86400
   let sod = secs - ds * 86400
@@ -165,7 +175,8 @@ fromEpochSeconds secs =
 --
 -- > toEpochSeconds (fromEpochSeconds 1000000000)
 -- 1000000000
-export toEpochSeconds : DateTime -> Int
+export
+toEpochSeconds : DateTime -> Int
 toEpochSeconds dt =
   daysFromCivil dt.year dt.month dt.day * 86400 + dt.hour * 3600 + dt.minute * 60 +
     dt.second
@@ -190,34 +201,41 @@ pad4 n =
 --
 -- > formatIso (DateTime { year = 2024, month = 3, day = 5, hour = 7, minute = 8, second = 9 })
 -- "2024-03-05T07:08:09Z"
-export formatIso : DateTime -> String
+export
+formatIso : DateTime -> String
 formatIso dt = "\{pad4 dt.year}-\{pad2 dt.month}-\{pad2 dt.day}T\{pad2 dt.hour}:\{pad2 dt.minute}:\{pad2 dt.second}Z"
 
 -- ── Effectful helpers (over the `<Clock>` externs) ──────────────────────
 -- | Current wall-clock time in Unix epoch seconds (Float).
-export now : Unit -> <Clock> Float
+export
+now : Unit -> <Clock> Float
 now u = wallTimeSec u
 
 -- | Current UTC civil time, from the wall clock (floored to whole seconds).
-export nowDateTime : Unit -> <Clock> DateTime
+export
+nowDateTime : Unit -> <Clock> DateTime
 nowDateTime u = fromEpochSeconds (floatToInt (wallTimeSec u))
 
 -- | A monotonic-clock reading in seconds (immune to wall-clock adjustment).
 -- Use two readings to time an interval, or `elapsedSince`.
-export monotonic : Unit -> <Clock> Float
+export
+monotonic : Unit -> <Clock> Float
 monotonic u = monotonicSec u
 
 -- | Seconds elapsed on the monotonic clock since an earlier `monotonic ()`
 -- reading.  Time a block with `let t0 = monotonic ()  … elapsedSince t0`.
-export elapsedSince : Float -> <Clock> Float
+export
+elapsedSince : Float -> <Clock> Float
 elapsedSince start = monotonicSec () - start
 
 -- | Sleep for `ms` milliseconds.
-export sleep : Int -> <Clock> Unit
+export
+sleep : Int -> <Clock> Unit
 sleep ms = sleepMs ms
 
 -- | Sleep for `s` seconds.
-export sleepSeconds : Int -> <Clock> Unit
+export
+sleepSeconds : Int -> <Clock> Unit
 sleepSeconds s = sleepMs (s * 1000)
 
 -- Round-trip: epoch → civil → epoch is the identity (n constrained ≥ 0 to a

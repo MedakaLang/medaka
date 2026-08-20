@@ -202,13 +202,15 @@ subqueryRenderHole = Ref (_ => "<IN-subquery renderer not installed>")
 --   the first step of each lib.sqlstmt parse entry.  The write lands in `map`'s
 --   run-time continuation, so constructing `setSubqueryParser p` never forces `p`
 --   (which would re-enter the parse cycle).
-export setSubqueryParser : Parser Compound -> Parser Unit
+export
+setSubqueryParser : Parser Compound -> Parser Unit
 setSubqueryParser p = map (_ => subqueryParserHole := p) (pure ())
 
 -- | Install the compound-query INLINE renderer used by `renderSqlExpr` for an
 --   `EInSubquery` node.  Called (via a strict `let`) at each lib.sqlstmt render
 --   entry, so a subquery is always rendered by lib.sqlstmt's `renderCompound`.
-export setSubqueryRenderer : (Compound -> String) -> Unit
+export
+setSubqueryRenderer : (Compound -> String) -> Unit
 setSubqueryRenderer f = subqueryRenderHole := f
 
 -- A parser that DEFERS to the installed compound-query parser at RUN time: the
@@ -244,7 +246,8 @@ subqueryParser = do
 --
 -- > parseSqlExpr "a = 1 bogus"
 -- Err "expected end of input at 6"
-export parseSqlExpr : String -> Result String SqlExpr
+export
+parseSqlExpr : String -> Result String SqlExpr
 parseSqlExpr s = runParser topLevel s
 
 -- The whole-input parser: skip leading space, parse an expression, demand EOF.
@@ -263,7 +266,8 @@ topLevel = do
 -- | Run `p`, then consume any trailing whitespace.  This is the token
 --   discipline the whole grammar relies on: after any token, the position sits
 --   on the next non-space character.
-export lexeme : Parser a -> Parser a
+export
+lexeme : Parser a -> Parser a
 lexeme p = do
   x <- p
   _ <- spaces
@@ -282,7 +286,8 @@ lexeme p = do
 -- Ok "<="
 -- > runParser (symbol ")") "x"
 -- Err "expected ')' at 0"
-export symbol : String -> Parser String
+export
+symbol : String -> Parser String
 symbol s = label "expected '\{s}'" (attempt (lexeme (string s)))
 
 -- Characters that may START an identifier: a letter or `_`.
@@ -305,7 +310,8 @@ identChar c = isAlphaNum c || c == '_'
 -- Ok "users"
 -- > runParser (lexeme word) "SELECT  "
 -- Ok "SELECT"
-export word : Parser String
+export
+word : Parser String
 word = do
   c <- satisfy identStart
   cs <- many (satisfy identChar)
@@ -332,7 +338,8 @@ word = do
 --   (`LENGTH`/`UPPER`/…/`COALESCE`/`IFNULL`) are deliberately NOT reserved —
 --   same rationale as `COUNT`/`SUM`/…: a bare `length` with no `(` after it is
 --   still an ordinary column, exactly as in SQLite.
-export reservedWords : List String
+export
+reservedWords : List String
 reservedWords = [
   "AND",
   "OR",
@@ -375,7 +382,8 @@ reservedWords = [
 -- True
 -- > isReserved "notes"
 -- False
-export isReserved : String -> Bool
+export
+isReserved : String -> Bool
 isReserved w = elem (toUpper w) reservedWords
 
 -- | Match the given keyword (which MUST be written uppercase) case-insensitively
@@ -390,7 +398,8 @@ isReserved w = elem (toUpper w) reservedWords
 -- Ok ()
 -- > runParser (keyword "NOT") "notes"
 -- Err "expected keyword 'NOT' at 0"
-export keyword : String -> Parser Unit
+export
+keyword : String -> Parser Unit
 keyword kw = label
   "expected keyword '\{kw}'"
   (attempt
@@ -416,7 +425,8 @@ keywordCheck kw w =
 -- Ok "NOTES"
 -- > runParser sqlIdent "and"
 -- Err "expected a column name at 0"
-export sqlIdent : Parser String
+export
+sqlIdent : Parser String
 sqlIdent = label
   "expected a column name"
   (attempt (lexeme
@@ -469,7 +479,8 @@ identCheck w =
 --
 -- > runParser column "foo(name)"
 -- Err "unsupported function 'foo' — only count/sum/avg/min/max/length/upper/lower/substr/trim/ltrim/rtrim/replace/coalesce/ifnull are supported at 4"
-export column : Parser SqlExpr
+export
+column : Parser SqlExpr
 column = do
   name <- sqlIdent
   paren <- optional (char '(')
@@ -524,7 +535,8 @@ notCall name (Some _) =
 --
 -- > map dumpLiteral (runParser literal "X'4142'")
 -- Ok "LBlob X'4142'"
-export literal : Parser Literal
+export
+literal : Parser Literal
 literal = label
   "expected a literal"
   (choice [nullLit, boolLit, blobLit, numLit, textLit])
@@ -644,7 +656,8 @@ blobFrom s = match decode s
 --
 -- > map dumpExpr (runParser sqlExpr "a = 1 AND b = 2")
 -- Ok "EAnd (EBin OpEq (ECol a) (ELit (LInt 1))) (EBin OpEq (ECol b) (ELit (LInt 2)))"
-export sqlExpr : Parser SqlExpr
+export
+sqlExpr : Parser SqlExpr
 sqlExpr = orExpr
 
 -- OR — loosest, left-associative.
@@ -921,7 +934,8 @@ negAtom = do
 --
 -- > map dumpExpr (runParser caseExpr "CASE a WHEN 1 THEN 'one' WHEN 2 THEN 'two' END")
 -- Ok "ECase [((EBin OpEq (ECol a) (ELit (LInt 1))), (ELit (LText 'one'))), ((EBin OpEq (ECol a) (ELit (LInt 2))), (ELit (LText 'two')))] None"
-export caseExpr : Parser SqlExpr
+export
+caseExpr : Parser SqlExpr
 caseExpr = do
   _ <- keyword "CASE"
   subj <- optional addExpr
@@ -975,7 +989,8 @@ simpleWhen subj (v, r) = (EBin OpEq subj v, r)
 -- An unknown name is NOT consumed here — it falls through to `column` in
 -- `atom`'s `choice`, which reports the "unsupported function" error (see
 -- `notCall`) with the FULL list of what IS supported.
-export fnCall : Parser SqlExpr
+export
+fnCall : Parser SqlExpr
 fnCall = do
   name <- fnHead
   args <- sepBy1 sqlExpr (symbol ",")
@@ -1063,7 +1078,8 @@ fnFromArgs name _ = failWith "internal: unknown scalar function '\{name}'"
 --
 -- > runParser aggCall "sum(*)"
 -- Err "expected an expression at 4"
-export aggCall : Parser SqlExpr
+export
+aggCall : Parser SqlExpr
 aggCall = do
   fn <- aggHead
   operand <- aggOperand fn
@@ -1094,7 +1110,8 @@ aggFnOf w = match lookupAggFn (toUpper w)
 -- Some FnCount
 -- > lookupAggFn "TOTAL"
 -- None
-export lookupAggFn : String -> Option AggFn
+export
+lookupAggFn : String -> Option AggFn
 lookupAggFn "COUNT" = Some FnCount
 lookupAggFn "SUM" = Some FnSum
 lookupAggFn "AVG" = Some FnAvg
@@ -1121,7 +1138,8 @@ starOperand = do
 -- Ok True
 -- > map hasAgg (parseSqlExpr "a > 2")
 -- Ok False
-export hasAgg : SqlExpr -> Bool
+export
+hasAgg : SqlExpr -> Bool
 hasAgg (ECol _) = False
 hasAgg (ELit _) = False
 hasAgg (EAgg _ _) = True
@@ -1190,7 +1208,8 @@ hasAggOpt (Some e) = hasAgg e
 -- Ok "(CASE WHEN (a > 1) THEN 'x' ELSE 'y' END)"
 -- > map renderSqlExpr (parseSqlExpr "upper(name)")
 -- Ok "upper(name)"
-export renderSqlExpr : SqlExpr -> String
+export
+renderSqlExpr : SqlExpr -> String
 renderSqlExpr (ECol name) = name
 renderSqlExpr (ELit l) = renderLiteral l
 renderSqlExpr (EBin op l r) =
@@ -1238,7 +1257,8 @@ renderCaseElseText (Some e) = "ELSE \{renderSqlExpr e} "
 -- "'it''s'"
 -- > renderLiteral LNull
 -- "NULL"
-export renderLiteral : Literal -> String
+export
+renderLiteral : Literal -> String
 renderLiteral (LInt n) = "\{n}"
 renderLiteral (LFloat f) = "\{f}"
 renderLiteral (LText s) = "'\{replaceAll "'" "''" s}'"
@@ -1297,7 +1317,8 @@ cmpText OpGe = ">="
 -- Ok "ENot (ELike (ECol a) (ELit (LText 'x%')))"
 -- > map dumpExpr (parseSqlExpr "a NOT BETWEEN 1 AND 10")
 -- Ok "ENot (EAnd (EBin OpGe (ECol a) (ELit (LInt 1))) (EBin OpLe (ECol a) (ELit (LInt 10))))"
-export dumpExpr : SqlExpr -> String
+export
+dumpExpr : SqlExpr -> String
 dumpExpr (ECol name) = "ECol \{name}"
 dumpExpr (ELit l) = "ELit (\{dumpLiteral l})"
 dumpExpr (EBin op l r) = "EBin \{dumpCmp op} (\{dumpExpr l}) (\{dumpExpr r})"
@@ -1339,7 +1360,8 @@ dumpCaseElse (Some e) = "(Some (\{dumpExpr e}))"
 -- Ok "LText 'it''s'"
 -- > map dumpLiteral (runParser literal "X'4142'")
 -- Ok "LBlob X'4142'"
-export dumpLiteral : Literal -> String
+export
+dumpLiteral : Literal -> String
 dumpLiteral (LInt n) = "LInt \{n}"
 dumpLiteral (LFloat f) = "LFloat \{f}"
 dumpLiteral (LText s) = "LText \{renderLiteral (LText s)}"

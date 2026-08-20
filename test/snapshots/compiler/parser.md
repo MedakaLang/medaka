@@ -1,5 +1,5 @@
 # META
-source_lines=5058
+source_lines=5076
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser — Stage 1 port of `lib/parser.mly`.  A monadic
@@ -3617,34 +3617,42 @@ public export data Positions =
 -- token/line arrays like the other channels — the AST carries no locations and
 -- `parse` never sees it.
 
-export positionsDecls : Positions -> List DeclPos
+export
+positionsDecls : Positions -> List DeclPos
 positionsDecls (Positions ds _ _ _) = ds
 
-export positionsVariantLines : Positions -> List Int
+export
+positionsVariantLines : Positions -> List Int
 positionsVariantLines (Positions _ vs _ _) = vs
 
-export positionsLastContentLine : Positions -> Int
+export
+positionsLastContentLine : Positions -> Int
 positionsLastContentLine (Positions _ _ l _) = l
 
-export positionsChainLines : Positions -> List (List Int)
+export
+positionsChainLines : Positions -> List (List Int)
 positionsChainLines (Positions _ _ _ cl) = cl
 
-export declPosLine : DeclPos -> Int
+export
+declPosLine : DeclPos -> Int
 declPosLine (DeclPos l _ _ _) = l
 
-export declPosEndLine : DeclPos -> Int
+export
+declPosEndLine : DeclPos -> Int
 declPosEndLine (DeclPos _ e _ _) = e
 
 -- The decl's NAME-token `Loc` (#331), or `None` for a decl with no single name
 -- token or where the name-finder couldn't resolve one — callers fall back to
 -- the (line, 0)..(end_line, 0) range built from `declPosLine`/`declPosEndLine`.
-export declPosNameLoc : DeclPos -> Option Loc
+export
+declPosNameLoc : DeclPos -> Option Loc
 declPosNameLoc (DeclPos _ _ nl _) = nl
 
 -- The decl's ordered CHILD name-token `Loc`s (#331, increment 2), in
 -- `symbolPartsOfDecl` outline order; `[]` for childless decls.  Per-child `None`
 -- where the finder missed (LSP falls back to the parent range for that child).
-export declPosChildLocs : DeclPos -> List (Option Loc)
+export
+declPosChildLocs : DeclPos -> List (Option Loc)
 declPosChildLocs (DeclPos _ _ _ cs) = cs
 
 -- Parse one decl, capturing the (startTokIdx, endTokIdx) span around it.
@@ -4284,7 +4292,8 @@ lastContentLineGo toks lines ((_, s, e)::rest) acc =
 -- Parse `src` and return the position side-channel alongside the decls.  The
 -- non-panicking `parseWithPositionsOpt` does the work; this wrapper preserves the
 -- panic-on-unparseable behaviour the compiler + `medaka fmt` rely on.
-export parseWithPositions : String -> (List Decl, Positions)
+export
+parseWithPositions : String -> (List Decl, Positions)
 parseWithPositions src = match parseWithPositionsOpt src
   Some r => r
   None => panic "parse error"
@@ -4306,14 +4315,16 @@ parseWithPositions src = match parseWithPositionsOpt src
 -- `lintFileDiagTriple` and `compiler/driver/medaka_cli.mdk`'s
 -- `lintFileFresh`) — no separate tokenize pass, no separate `setLocState`
 -- call; the double-tokenize this used to cost is gone.
-export parseWithPositionsLocated : String -> (List Decl, Positions)
+export
+parseWithPositionsLocated : String -> (List Decl, Positions)
 parseWithPositionsLocated src = parseWithPositions src
 
 -- Non-panicking positions parse for the LSP.  Returns `None` when the source
 -- doesn't parse (instead of `panic "parse error"`), so documentSymbol / definition
 -- / inlayHint degrade to empty results rather than crashing the whole server —
 -- files are unparseable constantly mid-edit.
-export parseWithPositionsOpt : String -> Option (List Decl, Positions)
+export
+parseWithPositionsOpt : String -> Option (List Decl, Positions)
 parseWithPositionsOpt src = match tokenizeWithLines src
   (tokList, lineList) =>
     let toks = arrayFromList tokList
@@ -4366,7 +4377,8 @@ resultDecls toks (POk ds pos)
 -- same uninformative string, while `parseResult` (used by the CLI `check`
 -- path) already special-cases it.  Shares `firstLexError` with `parseResult`
 -- so both entries agree on wording.
-export parse : String -> List Decl
+export
+parse : String -> List Decl
 parse src =
   let toks = arrayFromList (tokenize src)
   match firstLexError toks 0
@@ -4378,7 +4390,8 @@ parse src =
 -- Separate from `parse` (which stays pure / placeholder-loc) because `setRef`
 -- is <Mut> and `parse` is called from pure contexts across the pipeline; the
 -- token stream is byte-identical (`tokenizeWithOffsets` vs `tokenize`).
-export parseLocated : String -> List Decl
+export
+parseLocated : String -> List Decl
 parseLocated src = match tokenizeWithOffsetPairs src
   (tokList, offPairs) =>
     let _ = setLocState src (arrayFromList offPairs)
@@ -4400,13 +4413,16 @@ parseLocated src = match tokenizeWithOffsetPairs src
 -- from the error token's char offset via the lexer's `offsetToLineCol`.
 public export data ParseError = ParseError Int Int String
 
-export parseErrorLine : ParseError -> Int
+export
+parseErrorLine : ParseError -> Int
 parseErrorLine (ParseError l _ _) = l
 
-export parseErrorCol : ParseError -> Int
+export
+parseErrorCol : ParseError -> Int
 parseErrorCol (ParseError _ c _) = c
 
-export parseErrorMessage : ParseError -> String
+export
+parseErrorMessage : ParseError -> String
 parseErrorMessage (ParseError _ _ m) = m
 
 -- Char offset of token index `i` from the parallel offset array.  Two synthetic
@@ -4981,7 +4997,8 @@ semicolonMsg =
 -- Parse `src`, returning `Ok decls` or a structured, located `Err ParseError`.
 -- Purely additive: does NOT touch the panicking `parse` path the happy-path
 -- drivers (check / eval / fmt) rely on.
-export parseResult : String -> Result ParseError (List Decl)
+export
+parseResult : String -> Result ParseError (List Decl)
 parseResult src = match tokenizeWithOffsets src
   (tokList, offList) => parseResultWith src tokList offList
 
@@ -4996,7 +5013,8 @@ parseResult src = match tokenizeWithOffsets src
 -- `tokenizeWithOffsets` does (both are `layout*` over the same chars) and its
 -- pair STARTS are exactly the latter's offsets, so `map fst` feeds
 -- `parseResultWith` the array it expects — one tokenize, not two.
-export parseLocatedResult : String -> Result ParseError (List Decl)
+export
+parseLocatedResult : String -> Result ParseError (List Decl)
 parseLocatedResult src = match tokenizeWithOffsetPairs src
   (tokList, offPairs) =>
     let _ = setLocState src (arrayFromList offPairs)

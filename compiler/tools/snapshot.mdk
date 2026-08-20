@@ -222,7 +222,8 @@ import string.{
 
 -- Canonical FILE order.  (The worker renders in a different order — OFF-mode stages
 -- before ON-mode ones — and the supervisor reorders into this.)
-export snapSections : List String
+export
+snapSections : List String
 snapSections = [
   "META",
   "SOURCE",
@@ -243,7 +244,8 @@ snapSections = [
 ]
 
 -- The ONE enforcement point for the header grammar: `^# <NAME>$`, anchored, exact.
-export isHeaderLine : String -> Bool
+export
+isHeaderLine : String -> Bool
 isHeaderLine l = anyList (n => l == "# \{n}") snapSections
 
 -- A rendered section whose content contains a header-shaped line cannot round-trip.
@@ -294,7 +296,8 @@ diagNamesOf secs = map secName (filterList secIsDiag secs)
 -- upper-case form).  An unknown name is a HARD ERROR rather than a silent no-op: a
 -- typo'd stage would otherwise omit the very section the run was meant to check and
 -- report a clean pass — the exact silent-green failure this harness exists to kill.
-export parseStages : String -> Result String (List String)
+export
+parseStages : String -> Result String (List String)
 parseStages spec =
   let names = filterList (/= "") (map (s => toUpper (trim s)) (split "," spec))
   match filterList (n => not (anyList (== n) snapSections)) names
@@ -377,7 +380,8 @@ isRunSection n = n == "EVAL" || n == "CRASH"
 canonText : String -> String
 canonText text = blockOf (map trimRight (contentLines text))
 
-export normalizeText : String -> String -> String
+export
+normalizeText : String -> String -> String
 normalizeText root text = blockOf (map (normalizeLine root) (contentLines text))
 
 normalizeLine : String -> String -> String
@@ -676,7 +680,8 @@ emitRawTagged name content diag =
 encodeLines : List String -> String
 encodeLines ls = stringConcat (map (l => "D\{l}\n") ls)
 
-export runSnapshotWorker : String -> List String -> List String -> <IO> Unit
+export
+runSnapshotWorker : String -> List String -> List String -> <IO> Unit
 runSnapshotWorker root sel files = match loadPrelude root
   Err msg =>
     let _ = ePutStrLn msg
@@ -809,7 +814,8 @@ chunkSize = 25
 -- One worker process: the stage set it runs under, and the fixtures it runs.
 type Chunk = (List String, List String)
 
-export runSnapshotSupervisor : String -> SnapMode -> Bool -> Option String -> List String -> List String -> <IO> Bool
+export
+runSnapshotSupervisor : String -> SnapMode -> Bool -> Option String -> List String -> List String -> <IO> Bool
 runSnapshotSupervisor root mode forceIsolate outDir cli files =
   let results = superviseChunks root mode outDir (chunksOf root outDir forceIsolate cli files)
   reportResults results
@@ -1076,7 +1082,8 @@ metaDiagsIn (l::rest) =
 
 -- Read a snapshot back.  SOURCE is taken by exact line count from META; every other
 -- section is delimited by the header grammar.
-export parseSnapshot : String -> List (String, String)
+export
+parseSnapshot : String -> List (String, String)
 parseSnapshot text =
   let ls = splitNl text
   collectSections ls (metaSourceLines ls)

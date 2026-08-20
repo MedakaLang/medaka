@@ -48,7 +48,8 @@ import support.scc.{tarjanSCCs}
 -- `CDict` head).  A `CMethod` head is interface DISPATCH — deliberately NOT
 -- followed (see `eagerReachMap`; resolving it to impl bodies is #553/#561).  Used
 -- by the value-init-order topo sort (via `eagerReachMap`) in both emitters.
-export eagerVars : List String -> CExpr -> List String
+export
+eagerVars : List String -> CExpr -> List String
 eagerVars _ (CLam _ _) = []
 eagerVars b (CVar x _) = if contains x b then [] else [x]
 eagerVars _ (CLit _) = []
@@ -201,7 +202,8 @@ eagerCalleesMap nameSet (b::rest) = omInsert
 -- every cross-SCC callee's reach is already computed when a caller SCC is folded.
 -- Members of one SCC share the SCC's reach set — the condensation, not a
 -- visited-list, is what makes the fixpoint well-defined (and deterministic).
-export eagerReachMap : List CBind -> OrdMap (List String)
+export
+eagerReachMap : List CBind -> OrdMap (List String)
 eagerReachMap binds =
   let allNames = bindNames binds
   let nameSet = omFromNames allNames omEmpty
@@ -232,7 +234,8 @@ insertReach (n::rest) reached acc =
 -- the value globals a value binding depends on EAGERLY, transitively through
 -- calls — the COMPLETE init-order edge set the topo sort consumes on both
 -- backends (replaces the old direct-only `eagerVars [] body`).
-export bindEagerReach : OrdMap (List String) -> CBind -> List String
+export
+bindEagerReach : OrdMap (List String) -> CBind -> List String
 bindEagerReach rm (CBind name [CClause [] _]) = fromOption [] (omLookup name rm)
 bindEagerReach _ _ = []
 
@@ -246,7 +249,8 @@ bindEagerReach _ _ = []
 -- one of the same name — exactly the FIRST-match semantics the linear `findBind`
 -- had.  Its key SET is `map bindName binds`, so `omHasKey n` is the same test as
 -- the old `contains n names`.
-export bindNameMap : List CBind -> OrdMap CBind
+export
+bindNameMap : List CBind -> OrdMap CBind
 bindNameMap [] = omEmpty
 bindNameMap (b::rest) = omInsert (bindName b) b (bindNameMap rest)
 
@@ -433,7 +437,8 @@ foldTaintSCCs adj methodSet (scc::rest) acc =
 -- ~+1.1% self-compile IR / ~+3-5% emit wall-time; the fast path is NOT free on the
 -- compiler.  See EAGER-INIT-DESIGN.md §10.3, and F2 (follow CMethod -> resolved-impl
 -- edges) for the strictly-additive follow-up that would drop the set to genuine cycles.
-export lazyGlobalNames : List CBind -> List String
+export
+lazyGlobalNames : List CBind -> List String
 lazyGlobalNames binds =
   let allNames = bindNames binds
   let nameSet = omFromNames allNames omEmpty
@@ -452,7 +457,8 @@ lazyGlobalNames binds =
 -- wasm_emit's numPolyPatsAt/floatPatsAt did NOT, which is what made an explicit
 -- `Num a =>` signature *disable* the very runtime dispatch it should have guaranteed
 -- (2026-07-14; fixture `test/wasm/fixtures/polynum_sq_sig_float.mdk`).
-export isDictParamName : String -> Bool
+export
+isDictParamName : String -> Bool
 isDictParamName x = stringLength x >= 5 && stringSlice 0 5 x == "$dict"
 
 -- ── clause fall-through labelling (shared by BOTH backends) ──────────────────
@@ -483,20 +489,23 @@ isDictParamName x = stringLength x >= 5 && stringSlice 0 5 x == "$dict"
 -- `CLam`: a closure owns its own clause scope, so a `__fallthrough__` under a
 -- lambda is not this clause's — it stays BARE and each backend lowers a bare
 -- sentinel to its non-exhaustive abort.
-export ftPrefix : String
+export
+ftPrefix : String
 ftPrefix = "__ft__"
 
 -- `Some lbl` when `x` is a labelled fall-through sentinel (`__ft__<lbl>`); `None`
 -- for anything else — including a BARE `__fallthrough__`, which means "no enclosing
 -- clause to fall through to" → the backend's non-exhaustive abort.
-export ftLabelOf : String -> Option String
+export
+ftLabelOf : String -> Option String
 ftLabelOf x =
   if startsWith ftPrefix x then
     Some (stringSlice (stringLength ftPrefix) (stringLength x) x)
   else
     None
 
-export labelFallthrough : CExpr -> String -> CExpr
+export
+labelFallthrough : CExpr -> String -> CExpr
 labelFallthrough (e@(CVar x r)) label =
   if x == fallthroughName then
     CVar (ftPrefix ++ label) r
@@ -546,7 +555,8 @@ labelFallthroughGuard (CGBind p e) label = CGBind p (labelFallthrough e label)
 -- both emitters compare a range bound as a plain Int (LLVM against its `n*2+1` tagged
 -- word, WasmGC against an untagged i31), and only the COMPARISON differs — so the bound
 -- decoding is shared and the emit is not.
-export rngBound : Lit -> Int
+export
+rngBound : Lit -> Int
 rngBound (LInt n) = n
 rngBound (LChar c) = charCode (arrayGetUnsafe 0 (stringToChars c))
 rngBound _ = 0

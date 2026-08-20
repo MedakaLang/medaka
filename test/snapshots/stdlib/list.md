@@ -1,5 +1,5 @@
 # META
-source_lines=954
+source_lines=1027
 stages=DESUGAR,MARK
 # SOURCE
 -- list.mdk — operations on List a
@@ -19,7 +19,8 @@ export import core.{Filterable, filter, filterMap}
 
 -- Construction
 
-export singleton : a -> List a
+export
+singleton : a -> List a
 singleton a = [a]
 
 {- | The half-open integer interval `[lo, hi)` — `lo` up to but excluding `hi`.
@@ -33,7 +34,8 @@ singleton a = [a]
    []
    > range 0 1
    [0] -}
-export range : Int -> Int -> List Int
+export
+range : Int -> Int -> List Int
 range lo hi = [lo..hi]
 
 {- | `rangeStep lo hi step` — arithmetic sequence from `lo`, stepping by `step`,
@@ -43,7 +45,8 @@ range lo hi = [lo..hi]
    [0, 3, 6, 9]
    > rangeStep 5 0 (-2)
    [5, 3, 1] -}
-export rangeStep : Int -> Int -> Int -> List Int
+export
+rangeStep : Int -> Int -> Int -> List Int
 rangeStep lo hi step
   | step > 0 && lo < hi = lo :: rangeStep (lo + step) hi step
   | step < 0 && lo > hi = lo :: rangeStep (lo + step) hi step
@@ -53,7 +56,8 @@ rangeStep lo hi step
 
    > replicate 3 0
    [0, 0, 0] -}
-export replicate : Int -> a -> List a
+export
+replicate : Int -> a -> List a
 replicate n x
   | n <= 0 = []
   | otherwise = x :: replicate (n - 1) x
@@ -66,7 +70,8 @@ replicate n x
    []
    > iterate 1 (n => n * 2) 1
    [1] -}
-export iterate : Int -> (a -> <e> a) -> a -> <e> List a
+export
+iterate : Int -> (a -> <e> a) -> a -> <e> List a
 iterate n f x
   | n <= 0 = []
   | otherwise = x :: iterate (n - 1) f (f x)
@@ -80,7 +85,8 @@ iterate n f x
    []
    > unfold (n => if n > 0 then None else Some (n, n + 1)) 0
    [0] -}
-export unfold : (b -> <e> Option (a, b)) -> b -> <e> List a
+export
+unfold : (b -> <e> Option (a, b)) -> b -> <e> List a
 unfold gen seed = match gen seed
   None => []
   Some (x, next) => x :: unfold gen next
@@ -92,7 +98,8 @@ unfold gen seed = match gen seed
 
    > reverse [1, 2, 3]
    [3, 2, 1] -}
-export reverse : List a -> List a
+export
+reverse : List a -> List a
 reverse xs = go xs []
   where
     go [] acc = acc
@@ -102,7 +109,8 @@ reverse xs = go xs []
 
    > intersperse 0 [1, 2, 3]
    [1, 0, 2, 0, 3] -}
-export intersperse : a -> List a -> List a
+export
+intersperse : a -> List a -> List a
 intersperse _ [] = []
 intersperse _ [x] = [x]
 intersperse sep (x::xs) = x :: sep :: intersperse sep xs
@@ -112,7 +120,8 @@ intersperse sep (x::xs) = x :: sep :: intersperse sep xs
 
    > intercalate [0] [[1], [2, 3], [4]]
    [1, 0, 2, 3, 0, 4] -}
-export intercalate : List a -> List (List a) -> List a
+export
+intercalate : List a -> List (List a) -> List a
 intercalate sep xss = flat (intersperse sep xss)
 
 {- | Turn rows into columns.  Ragged rows are allowed: shorter rows simply
@@ -122,7 +131,8 @@ intercalate sep xss = flat (intersperse sep xss)
    [[1, 4], [2, 5], [3, 6]]
    > transpose [[1, 2], [3], [4, 5, 6]]
    [[1, 3, 4], [2, 5], [6]] -}
-export transpose : List (List a) -> List (List a)
+export
+transpose : List (List a) -> List (List a)
 transpose [] = []
 transpose ([]::xss) = transpose xss
 transpose ((x::xs)::xss) =
@@ -132,7 +142,8 @@ transpose ((x::xs)::xss) =
 
    > subsequences [1, 2, 3]
    [[], [1], [2], [1, 2], [3], [1, 3], [2, 3], [1, 2, 3]] -}
-export subsequences : List a -> List (List a)
+export
+subsequences : List a -> List (List a)
 subsequences [] = [[]]
 subsequences (x::xs) = flatMap (sub => [sub, x::sub]) (subsequences xs)
 
@@ -141,7 +152,8 @@ subsequences (x::xs) = flatMap (sub => [sub, x::sub]) (subsequences xs)
 
    > permutations [1, 2, 3]
    [[1, 2, 3], [1, 3, 2], [2, 1, 3], [2, 3, 1], [3, 1, 2], [3, 2, 1]] -}
-export permutations : List a -> List (List a)
+export
+permutations : List a -> List (List a)
 permutations [] = [[]]
 permutations xs =
   flatMap ((h, rest) => map (h :: _) (permutations rest)) (selections xs)
@@ -158,7 +170,8 @@ selections (x::xs) = (x, xs) :: map ((y, ys) => (y, x::ys)) (selections xs)
 
    > scanLeft (acc x => acc + x) 0 [1, 2, 3]
    [0, 1, 3, 6] -}
-export scanLeft : (b -> a -> <e> b) -> b -> List a -> <e> List b
+export
+scanLeft : (b -> a -> <e> b) -> b -> List a -> <e> List b
 scanLeft _ z [] = [z]
 scanLeft f z (x::xs) = z :: scanLeft f (f z x) xs
 
@@ -166,7 +179,8 @@ scanLeft f z (x::xs) = z :: scanLeft f (f z x) xs
 
    > scanRight (x acc => x + acc) 0 [1, 2, 3]
    [6, 5, 3, 0] -}
-export scanRight : (a -> b -> <e> b) -> b -> List a -> <e> List b
+export
+scanRight : (a -> b -> <e> b) -> b -> List a -> <e> List b
 scanRight _ z [] = [z]
 scanRight f z (x::xs) = match scanRight f z xs
   q::qs => f x q :: q::qs
@@ -178,7 +192,8 @@ scanRight f z (x::xs) = match scanRight f z xs
 
    > findIndex (x => x > 2) [1, 2, 3, 4]
    Some 2 -}
-export findIndex : (a -> <e> Bool) -> List a -> <e> Option Int
+export
+findIndex : (a -> <e> Bool) -> List a -> <e> Option Int
 findIndex p xs = go 0 xs
   where
     go _ [] = None
@@ -190,7 +205,8 @@ findIndex p xs = go 0 xs
 
    > findIndices (x => x > 2) [1, 3, 2, 4]
    [1, 3] -}
-export findIndices : (a -> <e> Bool) -> List a -> <e> List Int
+export
+findIndices : (a -> <e> Bool) -> List a -> <e> List Int
 findIndices p xs = go 0 xs
   where
     go _ [] = []
@@ -202,7 +218,8 @@ findIndices p xs = go 0 xs
 
    > elemIndex 3 [1, 2, 3, 2]
    Some 2 -}
-export elemIndex : Eq a => a -> List a -> Option Int
+export
+elemIndex : Eq a => a -> List a -> Option Int
 elemIndex x xs = findIndex (== x) xs
 
 {- | Indices of every occurrence of `x` (by `Eq`).
@@ -211,7 +228,8 @@ elemIndex x xs = findIndex (== x) xs
    [1, 3]
    > elemIndices 9 [1, 2, 3]
    [] -}
-export elemIndices : Eq a => a -> List a -> List Int
+export
+elemIndices : Eq a => a -> List a -> List Int
 elemIndices x xs = findIndices (== x) xs
 
 {- | Look `key` up in an association list, returning the first match.
@@ -222,7 +240,8 @@ elemIndices x xs = findIndices (== x) xs
    Some "b"
    > lookup 9 [(1, "a"), (2, "b")]
    None -}
-export lookup : Eq k => k -> List (k, v) -> Option v
+export
+lookup : Eq k => k -> List (k, v) -> Option v
 lookup _ [] = None
 lookup key ((k, v)::rest)
   | key == k = Some v
@@ -235,7 +254,8 @@ lookup key ((k, v)::rest)
    Some 30
    > findMap (x => if x > 9 then Some x else None) [1, 2, 3]
    None -}
-export findMap : (a -> <e> Option b) -> List a -> <e> Option b
+export
+findMap : (a -> <e> Option b) -> List a -> <e> Option b
 findMap _ [] = None
 findMap f (x::rest) = match f x
   Some y => Some y
@@ -253,7 +273,8 @@ findMap f (x::rest) = match f x
    Some 3
    > reduce (x y => x + y) ([] : List Int)
    None -}
-export reduce : (a -> a -> <e> a) -> List a -> <e> Option a
+export
+reduce : (a -> a -> <e> a) -> List a -> <e> Option a
 reduce _ [] = None
 reduce f (x::xs) = Some (go x xs)
   where
@@ -267,7 +288,8 @@ reduce f (x::xs) = Some (go x xs)
    Some 47
    > maximumBy compare ([] : List Int)
    None -}
-export maximumBy : (a -> a -> <e> Ordering) -> List a -> <e> Option a
+export
+maximumBy : (a -> a -> <e> Ordering) -> List a -> <e> Option a
 maximumBy cmp xs = reduce pick xs
   where
     pick a b = match cmp b a
@@ -281,7 +303,8 @@ maximumBy cmp xs = reduce pick xs
    Some 23
    > minimumBy compare ([] : List Int)
    None -}
-export minimumBy : (a -> a -> <e> Ordering) -> List a -> <e> Option a
+export
+minimumBy : (a -> a -> <e> Ordering) -> List a -> <e> Option a
 minimumBy cmp xs = reduce pick xs
   where
     pick a b = match cmp b a
@@ -296,7 +319,8 @@ minimumBy cmp xs = reduce pick xs
    [0, 2, 6]
    > mapWithIndex (i x => i + x) [10, 20]
    [10, 21] -}
-export mapWithIndex : (Int -> a -> <e> b) -> List a -> <e> List b
+export
+mapWithIndex : (Int -> a -> <e> b) -> List a -> <e> List b
 mapWithIndex f xs = go 0 xs
   where
     go _ [] = []
@@ -306,7 +330,8 @@ mapWithIndex f xs = go 0 xs
 
    > indexed ["a", "b", "c"]
    [(0, "a"), (1, "b"), (2, "c")] -}
-export indexed : List a -> List (Int, a)
+export
+indexed : List a -> List (Int, a)
 indexed xs = mapWithIndex (i x => (i, x)) xs
 
 {- | Left-to-right `map` threading an accumulator: `f` sees the running state
@@ -315,7 +340,8 @@ indexed xs = mapWithIndex (i x => (i, x)) xs
 
    > mapAccumL (s x => (s + x, s)) 0 [1, 2, 3]
    (6, [0, 1, 3]) -}
-export mapAccumL : (s -> a -> <e> (s, b)) -> s -> List a -> <e> (s, List b)
+export
+mapAccumL : (s -> a -> <e> (s, b)) -> s -> List a -> <e> (s, List b)
 mapAccumL _ s [] = (s, [])
 mapAccumL f s (x::xs) =
   let (s2, y) = f s x
@@ -327,7 +353,8 @@ mapAccumL f s (x::xs) =
 
    > mapAccumR (s x => (s + x, s)) 0 [1, 2, 3]
    (6, [5, 3, 0]) -}
-export mapAccumR : (s -> a -> <e> (s, b)) -> s -> List a -> <e> (s, List b)
+export
+mapAccumR : (s -> a -> <e> (s, b)) -> s -> List a -> <e> (s, List b)
 mapAccumR _ s [] = (s, [])
 mapAccumR f s (x::xs) =
   let (s2, ys) = mapAccumR f s xs
@@ -348,7 +375,8 @@ mapAccumR f s (x::xs) =
    [9, 1, 2]
    > insertAt 7 9 [1, 2]
    [1, 2, 9] -}
-export insertAt : Int -> a -> List a -> List a
+export
+insertAt : Int -> a -> List a -> List a
 insertAt _ x [] = [x]
 insertAt i x (y::rest)
   | i <= 0 = x :: y::rest
@@ -361,7 +389,8 @@ insertAt i x (y::rest)
    [1, 9, 3]
    > updateAt 7 9 [1, 2]
    [1, 2] -}
-export updateAt : Int -> a -> List a -> List a
+export
+updateAt : Int -> a -> List a -> List a
 updateAt _ _ [] = []
 updateAt i x (y::rest)
   | i < 0 = y::rest
@@ -374,7 +403,8 @@ updateAt i x (y::rest)
    [1, 3]
    > removeAt 7 [1, 2]
    [1, 2] -}
-export removeAt : Int -> List a -> List a
+export
+removeAt : Int -> List a -> List a
 removeAt _ [] = []
 removeAt i (y::rest)
   | i < 0 = y::rest
@@ -387,7 +417,8 @@ removeAt i (y::rest)
 
    > take 2 [1, 2, 3, 4]
    [1, 2] -}
-export take : Int -> List a -> List a
+export
+take : Int -> List a -> List a
 take _ [] = []
 take n (x::xs)
   | n <= 0 = []
@@ -397,7 +428,8 @@ take n (x::xs)
 
    > drop 2 [1, 2, 3, 4]
    [3, 4] -}
-export drop : Int -> List a -> List a
+export
+drop : Int -> List a -> List a
 drop _ [] = []
 drop n (xs@(_::rest))
   | n <= 0 = xs
@@ -413,7 +445,8 @@ drop n (xs@(_::rest))
    []
    > takeWhile (x => x < 3) ([] : List Int)
    [] -}
-export takeWhile : (a -> <e> Bool) -> List a -> <e> List a
+export
+takeWhile : (a -> <e> Bool) -> List a -> <e> List a
 takeWhile _ [] = []
 takeWhile p (x::xs)
   | p x = x :: takeWhile p xs
@@ -429,7 +462,8 @@ takeWhile p (x::xs)
    [1, 2, 3]
    > dropWhile (x => x < 3) ([] : List Int)
    [] -}
-export dropWhile : (a -> <e> Bool) -> List a -> <e> List a
+export
+dropWhile : (a -> <e> Bool) -> List a -> <e> List a
 dropWhile _ [] = []
 dropWhile p (xs@(x::rest))
   | p x = dropWhile p rest
@@ -445,7 +479,8 @@ dropWhile p (xs@(x::rest))
    ([], [1, 2, 3])
    > span (x => x < 3) ([] : List Int)
    ([], []) -}
-export span : (a -> <e> Bool) -> List a -> <e> (List a, List a)
+export
+span : (a -> <e> Bool) -> List a -> <e> (List a, List a)
 span _ [] = ([], [])
 span p (xs@(x::rest))
   | p x = let (a, b) = span p rest in (x::a, b)
@@ -462,14 +497,16 @@ span p (xs@(x::rest))
    ([], [1, 2, 3])
    > break (x => x > 2) ([] : List Int)
    ([], []) -}
-export break : (a -> <e> Bool) -> List a -> <e> (List a, List a)
+export
+break : (a -> <e> Bool) -> List a -> <e> (List a, List a)
 break p xs = span (x => not (p x)) xs
 
 {- | `(take n xs, drop n xs)`, in a single pass.
 
    > splitAt 2 [1, 2, 3, 4]
    ([1, 2], [3, 4]) -}
-export splitAt : Int -> List a -> (List a, List a)
+export
+splitAt : Int -> List a -> (List a, List a)
 splitAt _ [] = ([], [])
 splitAt n (xs@(x::rest))
   | n <= 0 = ([], xs)
@@ -480,7 +517,8 @@ splitAt n (xs@(x::rest))
 
    > sliceClamped 1 3 [10, 20, 30, 40]
    [20, 30] -}
-export sliceClamped : Int -> Int -> List a -> List a
+export
+sliceClamped : Int -> Int -> List a -> List a
 sliceClamped lo hi xs = drop lo (take hi xs)
 
 {- | Split into consecutive groups of `n` (the last group may be shorter).
@@ -488,7 +526,8 @@ sliceClamped lo hi xs = drop lo (take hi xs)
 
    > chunks 2 [1, 2, 3, 4, 5]
    [[1, 2], [3, 4], [5]] -}
-export chunks : Int -> List a -> List (List a)
+export
+chunks : Int -> List a -> List (List a)
 chunks _ [] = []
 chunks n (xs@(_::_))
   | n <= 0 = []
@@ -503,7 +542,8 @@ chunks n (xs@(_::_))
    [0, 1]
    > dropWhileEnd (x => x == 0) [0, 0]
    [] -}
-export dropWhileEnd : (a -> <e> Bool) -> List a -> <e> List a
+export
+dropWhileEnd : (a -> <e> Bool) -> List a -> <e> List a
 dropWhileEnd p xs = reverse (dropWhile p (reverse xs))
 
 {- | The longest *suffix* whose elements all satisfy the predicate — the mirror
@@ -515,7 +555,8 @@ dropWhileEnd p xs = reverse (dropWhile p (reverse xs))
    []
    > takeWhileEnd (x => x > 0) [1, 2]
    [1, 2] -}
-export takeWhileEnd : (a -> <e> Bool) -> List a -> <e> List a
+export
+takeWhileEnd : (a -> <e> Bool) -> List a -> <e> List a
 takeWhileEnd p xs = reverse (takeWhile p (reverse xs))
 
 {- | Split on every occurrence of the separator *sublist*, dropping the
@@ -531,7 +572,8 @@ takeWhileEnd p xs = reverse (takeWhile p (reverse xs))
    [[1, 2]]
    > split [0] [0, 1]
    [[], [1]] -}
-export split : Eq a => List a -> List a -> List (List a)
+export
+split : Eq a => List a -> List a -> List (List a)
 split [] xs = [xs]
 split sep xs = go xs
   where
@@ -562,7 +604,8 @@ split sep xs = go xs
    False
    > startsWith ([] : List Int) [1]
    True -}
-export startsWith : Eq a => List a -> List a -> Bool
+export
+startsWith : Eq a => List a -> List a -> Bool
 startsWith [] _ = True
 startsWith _ [] = False
 startsWith (p::ps) (x::xs) = p == x && startsWith ps xs
@@ -573,7 +616,8 @@ startsWith (p::ps) (x::xs) = p == x && startsWith ps xs
    True
    > endsWith [1, 2] [1, 2, 3]
    False -}
-export endsWith : Eq a => List a -> List a -> Bool
+export
+endsWith : Eq a => List a -> List a -> Bool
 endsWith suffix xs = startsWith (reverse suffix) (reverse xs)
 
 {- | True when `sub` occurs as a contiguous run anywhere in `xs`.  `O(n*m)`
@@ -586,7 +630,8 @@ endsWith suffix xs = startsWith (reverse suffix) (reverse xs)
    False
    > contains ([] : List Int) [1]
    True -}
-export contains : Eq a => List a -> List a -> Bool
+export
+contains : Eq a => List a -> List a -> Bool
 contains sub [] = startsWith sub []
 contains sub (xs@(_::rest))
   | startsWith sub xs = True
@@ -599,7 +644,8 @@ contains sub (xs@(_::rest))
 
    > sortBy (x y => compare y x) [3, 1, 2]
    [3, 2, 1] -}
-export sortBy : (a -> a -> <e> Ordering) -> List a -> <e> List a
+export
+sortBy : (a -> a -> <e> Ordering) -> List a -> <e> List a
 sortBy _ [] = []
 sortBy _ [x] = [x]
 sortBy cmp xs =
@@ -618,7 +664,8 @@ merge cmp (xs@(x::xs')) (ys@(y::ys')) = match cmp x y
 
    > sort [3, 1, 2, 1]
    [1, 1, 2, 3] -}
-export sort : Ord a => List a -> List a
+export
+sort : Ord a => List a -> List a
 sort xs = sortBy compare xs
 
 {- | Sort by a derived key, computing the key once per element via a
@@ -627,7 +674,8 @@ sort xs = sortBy compare xs
 
    > sortOn (x => 0 - x) [1, 3, 2]
    [3, 2, 1] -}
-export sortOn : Ord b => (a -> <e> b) -> List a -> <e> List a
+export
+sortOn : Ord b => (a -> <e> b) -> List a -> <e> List a
 sortOn key xs =
   let decorated = map (x => (key x, x)) xs
   map snd (sortBy ((k1, _) (k2, _) => compare k1 k2) decorated)
@@ -637,7 +685,8 @@ sortOn key xs =
 
    > nubBy (x y => x == y) [1, 2, 1, 3, 2]
    [1, 2, 3] -}
-export nubBy : (a -> a -> <e> Bool) -> List a -> <e> List a
+export
+nubBy : (a -> a -> <e> Bool) -> List a -> <e> List a
 nubBy same xs = go xs []
   where
     go [] _ = []
@@ -649,7 +698,8 @@ nubBy same xs = go xs []
 
    > nub [1, 2, 1, 3, 2, 1]
    [1, 2, 3] -}
-export nub : Eq a => List a -> List a
+export
+nub : Eq a => List a -> List a
 nub xs = nubBy (==) xs
 
 {- | Remove the *first* element matching a custom equality; unchanged when
@@ -657,7 +707,8 @@ nub xs = nubBy (==) xs
 
    > deleteBy (x y => x == y) 2 [1, 2, 3, 2]
    [1, 3, 2] -}
-export deleteBy : (a -> a -> <e> Bool) -> a -> List a -> <e> List a
+export
+deleteBy : (a -> a -> <e> Bool) -> a -> List a -> <e> List a
 deleteBy _ _ [] = []
 deleteBy same x (y::rest)
   | same x y = rest
@@ -670,7 +721,8 @@ deleteBy same x (y::rest)
    [1, 3, 2]
    > delete 9 [1, 2]
    [1, 2] -}
-export delete : Eq a => a -> List a -> List a
+export
+delete : Eq a => a -> List a -> List a
 delete x xs = deleteBy (==) x xs
 
 -- Set-like operations (`union` / `intersect` / `difference`) are deliberately
@@ -684,7 +736,8 @@ delete x xs = deleteBy (==) x xs
 
    > groupBy (x y => x == y) [1, 1, 2, 3, 3, 3]
    [[1, 1], [2], [3, 3, 3]] -}
-export groupBy : (a -> a -> <e> Bool) -> List a -> <e> List (List a)
+export
+groupBy : (a -> a -> <e> Bool) -> List a -> <e> List (List a)
 groupBy _ [] = []
 groupBy same (x::xs) =
   let (grp, rest) = span (y => same x y) xs
@@ -694,14 +747,16 @@ groupBy same (x::xs) =
 
    > group [1, 1, 2, 3, 3]
    [[1, 1], [2], [3, 3]] -}
-export group : Eq a => List a -> List (List a)
+export
+group : Eq a => List a -> List (List a)
 group xs = groupBy (==) xs
 
 {- | `(filter p xs, filter (not . p) xs)`, in a single pass.
 
    > partition (x => x > 2) [1, 2, 3, 4]
    ([3, 4], [1, 2]) -}
-export partition : (a -> <e> Bool) -> List a -> <e> (List a, List a)
+export
+partition : (a -> <e> Bool) -> List a -> <e> (List a, List a)
 partition _ [] = ([], [])
 partition p (x::xs) =
   let (yes, no) = partition p xs
@@ -713,7 +768,8 @@ partition p (x::xs) =
    [1, 3]
    > somes ([] : List (Option Int))
    [] -}
-export somes : List (Option a) -> List a
+export
+somes : List (Option a) -> List a
 somes [] = []
 somes ((Some x)::rest) = x :: somes rest
 somes (None::rest) = somes rest
@@ -722,7 +778,8 @@ somes (None::rest) = somes rest
 
    > oks [Ok 1, Err "boom", Ok 3]
    [1, 3] -}
-export oks : List (Result e a) -> List a
+export
+oks : List (Result e a) -> List a
 oks [] = []
 oks ((Ok x)::rest) = x :: oks rest
 oks ((Err _)::rest) = oks rest
@@ -731,7 +788,8 @@ oks ((Err _)::rest) = oks rest
 
    > errs [Ok 1, Err "boom", Ok 3]
    ["boom"] -}
-export errs : List (Result e a) -> List e
+export
+errs : List (Result e a) -> List e
 errs [] = []
 errs ((Err e)::rest) = e :: errs rest
 errs ((Ok _)::rest) = errs rest
@@ -740,7 +798,8 @@ errs ((Ok _)::rest) = errs rest
 
    > partitionResults [Ok 1, Err "boom", Ok 3]
    (["boom"], [1, 3]) -}
-export partitionResults : List (Result e a) -> (List e, List a)
+export
+partitionResults : List (Result e a) -> (List e, List a)
 partitionResults [] = ([], [])
 partitionResults ((Ok x)::rest) =
   let (es, xs) = partitionResults rest
@@ -753,7 +812,8 @@ partitionResults ((Err e)::rest) =
 
    > tally [1, 2, 1, 3, 1, 2]
    [(1, 3), (2, 2), (3, 1)] -}
-export tally : Eq a => List a -> List (a, Int)
+export
+tally : Eq a => List a -> List (a, Int)
 tally xs = go xs []
   where
     go [] acc = acc
@@ -766,11 +826,13 @@ tally xs = go xs []
 -- Inspection
 -- `isEmpty` and `length` come from `impl Foldable List` in core.mdk.
 
-export head : List a -> Option a
+export
+head : List a -> Option a
 head [] = None
 head (x::_) = Some x
 
-export tail : List a -> Option (List a)
+export
+tail : List a -> Option (List a)
 tail [] = None
 tail (_::xs) = Some xs
 
@@ -784,21 +846,25 @@ tail (_::xs) = Some xs
    Some (1, [])
    > uncons ([] : List Int)
    None -}
-export uncons : List a -> Option (a, List a)
+export
+uncons : List a -> Option (a, List a)
 uncons [] = None
 uncons (x::xs) = Some (x, xs)
 
-export last : List a -> Option a
+export
+last : List a -> Option a
 last [] = None
 last [x] = Some x
 last (x::xs) = last xs
 
-export init : List a -> Option (List a)
+export
+init : List a -> Option (List a)
 init [] = None
 init (x::[]) = Some []
 init (x::xs) = map (x :: _) (init xs)
 
-export get : Int -> List a -> Option a
+export
+get : Int -> List a -> Option a
 get _ [] = None
 get 0 (x::_) = Some x
 get i (_::xs) = get (i - 1) xs
@@ -812,7 +878,8 @@ get i (_::xs) = get (i - 1) xs
    [(1, 10), (2, 20)]
    > zip [] [1, 2]
    [] -}
-export zip : List a -> List b -> List (a, b)
+export
+zip : List a -> List b -> List (a, b)
 zip [] _ = []
 zip _ [] = []
 zip (x::xs) (y::ys) = (x, y) :: zip xs ys
@@ -824,7 +891,8 @@ zip (x::xs) (y::ys) = (x, y) :: zip xs ys
    [(1, 3, 5), (2, 4, 6)]
    > zip3 [1, 2, 3] [4, 5] [6]
    [(1, 4, 6)] -}
-export zip3 : List a -> List b -> List c -> List (a, b, c)
+export
+zip3 : List a -> List b -> List c -> List (a, b, c)
 zip3 [] _ _ = []
 zip3 _ [] _ = []
 zip3 _ _ [] = []
@@ -837,7 +905,8 @@ zip3 (x::xs) (y::ys) (z::zs) = (x, y, z) :: zip3 xs ys zs
    [11, 22, 33]
    > zipWith (x y => x * y) [1, 2, 3, 4] [10, 20]
    [10, 40] -}
-export zipWith : (a -> b -> <e> c) -> List a -> List b -> <e> List c
+export
+zipWith : (a -> b -> <e> c) -> List a -> List b -> <e> List c
 zipWith _ [] _ = []
 zipWith _ _ [] = []
 zipWith f (x::xs) (y::ys) = f x y :: zipWith f xs ys
@@ -849,7 +918,8 @@ zipWith f (x::xs) (y::ys) = f x y :: zipWith f xs ys
    [(1, 3, 5, 7), (2, 4, 6, 8)]
    > zip4 [1, 2] [3] [5, 6] [7, 8]
    [(1, 3, 5, 7)] -}
-export zip4 : List a -> List b -> List c -> List d -> List (a, b, c, d)
+export
+zip4 : List a -> List b -> List c -> List d -> List (a, b, c, d)
 zip4 [] _ _ _ = []
 zip4 _ [] _ _ = []
 zip4 _ _ [] _ = []
@@ -863,7 +933,8 @@ zip4 (w::ws) (x::xs) (y::ys) (z::zs) = (w, x, y, z) :: zip4 ws xs ys zs
    [111, 222]
    > zipWith3 (x y z => x + y + z) [1, 2, 3] [10, 20] [100]
    [111] -}
-export zipWith3 : (a -> b -> c -> <e> d) -> List a -> List b -> List c -> <e> List d
+export
+zipWith3 : (a -> b -> c -> <e> d) -> List a -> List b -> List c -> <e> List d
 zipWith3 _ [] _ _ = []
 zipWith3 _ _ [] _ = []
 zipWith3 _ _ _ [] = []
@@ -875,7 +946,8 @@ zipWith3 f (x::xs) (y::ys) (z::zs) = f x y z :: zipWith3 f xs ys zs
    ([1, 3], [2, 4])
    > unzip []
    ([], []) -}
-export unzip : List (a, b) -> (List a, List b)
+export
+unzip : List (a, b) -> (List a, List b)
 unzip [] = ([], [])
 unzip ((x, y)::xys) = let (xs, ys) = unzip xys in (x::xs, y::ys)
 
@@ -885,7 +957,8 @@ unzip ((x, y)::xys) = let (xs, ys) = unzip xys in (x::xs, y::ys)
    ([1, 4], [2, 5], [3, 6])
    > unzip3 ([] : List (Int, Int, Int))
    ([], [], []) -}
-export unzip3 : List (a, b, c) -> (List a, List b, List c)
+export
+unzip3 : List (a, b, c) -> (List a, List b, List c)
 unzip3 [] = ([], [], [])
 unzip3 ((x, y, z)::rest) =
   let (xs, ys, zs) = unzip3 rest in (x::xs, y::ys, z::zs)

@@ -1,5 +1,5 @@
 # META
-source_lines=1982
+source_lines=2037
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -402,7 +402,8 @@ originModuleOf origin = identOriginFold "" (m => m) origin
 
 -- The one renderer — see the module doc-comment above for the collision
 -- argument. Treat the result as OPAQUE. EXACTLY FOUR netstrings, always.
-export identKey : Ident -> String
+export
+identKey : Ident -> String
 identKey (Ident ns origin name) = lenKey (nsTag ns)
   ++ lenKey (originTag origin)
   ++ lenKey (originModuleOf origin)
@@ -431,7 +432,8 @@ identKey (Ident ns origin name) = lenKey (nsTag ns)
 -- The empty third netstring is the same fixed-width filler `identKey`'s
 -- builtin arm uses (`lenKey "" = "0:"` is a real netstring); it is not a
 -- module id, forbidden or otherwise.
-export tabKeyRender : TabKey -> String
+export
+tabKeyRender : TabKey -> String
 tabKeyRender (TkIdent ident) = identKey ident
 tabKeyRender (TkBare ns name) = lenKey (nsTag ns)
   ++ lenKey "bare"
@@ -442,12 +444,14 @@ tabKeyRender (TkBare ns name) = lenKey (nsTag ns)
 -- own: each element contributes exactly four netstrings, so a stream of `4n`
 -- netstrings decodes to exactly one list, and two lists of different length
 -- render to strings of different length.
-export identKeys : List Ident -> String
+export
+identKeys : List Ident -> String
 identKeys idents = joinWith "" (map identKey idents)
 
 -- The `TabKey` peer of `identKeys`, and the one `regKeyRender` actually calls.
 -- Same argument: four netstrings per element, on BOTH `TabKey` arms.
-export tabKeys : List TabKey -> String
+export
+tabKeys : List TabKey -> String
 tabKeys keys = joinWith "" (map tabKeyRender keys)
 
 ordKey : Int -> String
@@ -518,16 +522,19 @@ deriving (Eq, Ord, Debug)
 
 -- The one-identity case — by far the most common, and the shape the
 -- `Ident`-taking convenience wrappers below all go through.
-export regKeyOf : Ident -> RegKey
+export
+regKeyOf : Ident -> RegKey
 regKeyOf ident = RegKey [TkIdent ident] []
 
 -- An identity TUPLE (`ImplUniverse`'s concrete bucket, `ifaceDispatchRef`,
 -- `checkCallObligationsU`'s dedup key).
-export regKeyN : List Ident -> RegKey
+export
+regKeyN : List Ident -> RegKey
 regKeyN idents = RegKey (map TkIdent idents) []
 
 -- An identity plus an ordinal (`universeIfaceParamKinds`' `<iface>@<slot>`).
-export regKeyAt : Ident -> Int -> RegKey
+export
+regKeyAt : Ident -> Int -> RegKey
 regKeyAt ident slot = RegKey [TkIdent ident] [slot]
 
 -- Identity tuple PLUS ordinals — the shape `checkCallObligationsU`'s dedup key
@@ -538,7 +545,8 @@ regKeyAt ident slot = RegKey [TkIdent ident] [slot]
 -- present identities. Neither `regKeyN` (no ordinals) nor `regKeyAt` (one
 -- ident, one ordinal) can express that, so the conversion would otherwise
 -- have had to spell `RegKey` by hand and re-derive the injectivity argument.
-export regKeyNAt : List Ident -> List Int -> RegKey
+export
+regKeyNAt : List Ident -> List Int -> RegKey
 regKeyNAt idents ords = RegKey (map TkIdent idents) ords
 
 -- ── The `TabKey`-taking mints (A-2.4 + A-2.2b) ────────────────────────────
@@ -547,13 +555,15 @@ regKeyNAt idents ords = RegKey (map TkIdent idents) ords
 -- key through `tabKeyOf` (the ONE total mint). A site that CAN prove it has
 -- identity should still prefer the `Ident` forms — `regKeyOfTab (TkIdent i)`
 -- and `regKeyOf i` are the same key, but the latter says so in the type.
-export regKeyOfTab : TabKey -> RegKey
+export
+regKeyOfTab : TabKey -> RegKey
 regKeyOfTab key = RegKey [key] []
 
 -- `universeIfaceParamKinds`' (interface × slot) key, in the shape that keeps
 -- the slot an ORDINAL rather than text spliced into a name. This is the direct
 -- replacement for `ifaceSlotKey`'s `"\{iface}@\{i}"` (`types/typecheck.mdk`).
-export regKeyTabAt : TabKey -> Int -> RegKey
+export
+regKeyTabAt : TabKey -> Int -> RegKey
 regKeyTabAt key slot = RegKey [key] [slot]
 
 -- The `TabKey` peer of `regKeyN` — an identity TUPLE whose members may or may
@@ -563,7 +573,8 @@ regKeyTabAt key slot = RegKey [key] [slot]
 -- `types/typecheck.mdk`, and the `ifaceRegistered` TOMBSTONE beside it: #1539
 -- retired that gate, so cite the live name) while its head half is whatever `headTyconTy`
 -- projected, so ONE key genuinely mixes the two populations.
-export regKeyNTab : List TabKey -> RegKey
+export
+regKeyNTab : List TabKey -> RegKey
 regKeyNTab keys = RegKey keys []
 
 -- The `TabKey` peer of `regKeyNAt` — an identity TUPLE plus ordinals, which is
@@ -571,19 +582,23 @@ regKeyNTab keys = RegKey keys []
 -- vector's arity and the indices of the positions the identity block came
 -- from, so two vectors differing only in WHICH position is absent stay apart
 -- (#607). `checkCallObligationsU`'s dedup key is the first user.
-export regKeyNTabAt : List TabKey -> List Int -> RegKey
+export
+regKeyNTabAt : List TabKey -> List Int -> RegKey
 regKeyNTabAt keys ords = RegKey keys ords
 
-export regKeyTabs : RegKey -> List TabKey
+export
+regKeyTabs : RegKey -> List TabKey
 regKeyTabs (RegKey keys _) = keys
 
-export regKeyOrdinals : RegKey -> List Int
+export
+regKeyOrdinals : RegKey -> List Int
 regKeyOrdinals (RegKey _ ords) = ords
 
 -- OPAQUE, exactly as `identKey` is. The leading key-count netstring is what
 -- makes the identity block and the ordinal block unambiguously separable
 -- without assuming anything about tag or name spellings.
-export regKeyRender : RegKey -> String
+export
+regKeyRender : RegKey -> String
 regKeyRender (RegKey keys ords) = lenKey "\{listLen keys}"
   ++ tabKeys keys
   ++ joinWith "" (map ordKey ords)
@@ -594,13 +609,16 @@ regKeyRender (RegKey keys ords) = lenKey "\{listLen keys}"
 -- `regKeyRender`'s opaque output.
 public export data Registry v = Registry (OrdMap (RegKey, v))
 
-export regEmpty : Registry v
+export
+regEmpty : Registry v
 regEmpty = Registry omEmpty
 
-export regLookupK : RegKey -> Registry v -> Option v
+export
+regLookupK : RegKey -> Registry v -> Option v
 regLookupK k (Registry m) = map ((_, v) => v) (omLookup (regKeyRender k) m)
 
-export regLookup : Ident -> Registry v -> Option v
+export
+regLookup : Ident -> Registry v -> Option v
 regLookup ident r = regLookupK (regKeyOf ident) r
 
 -- ⚠️ `regKeyRender k` is bound ONCE. Medaka is strict, so the two-call form
@@ -608,33 +626,40 @@ regLookup ident r = regLookupK (regKeyOf ident) r
 -- `support/util.mdk`'s `dedupBy` carries the same warning verbatim for the
 -- same reason, and `check` is GC-bound. The first cut of this file called
 -- `identKey ident` twice here.
-export regInsertCheckedK : RegKey -> v -> Registry v -> (Registry v, Bool)
+export
+regInsertCheckedK : RegKey -> v -> Registry v -> (Registry v, Bool)
 regInsertCheckedK k v (Registry m) =
   let s = regKeyRender k
   (Registry (omInsert s (k, v) m), omHasKey s m)
 
-export regInsertChecked : Ident -> v -> Registry v -> (Registry v, Bool)
+export
+regInsertChecked : Ident -> v -> Registry v -> (Registry v, Bool)
 regInsertChecked ident v r = regInsertCheckedK (regKeyOf ident) v r
 
 -- ⚠️ NOT `fst (regInsertCheckedK …)`: that form did the `omHasKey` tree walk
 -- and threw the answer away. The overwrite signal costs a lookup, so the
 -- caller who does not want it does not pay for it.
-export regInsertK : RegKey -> v -> Registry v -> Registry v
+export
+regInsertK : RegKey -> v -> Registry v -> Registry v
 regInsertK k v (Registry m) = Registry (omInsert (regKeyRender k) (k, v) m)
 
-export regInsert : Ident -> v -> Registry v -> Registry v
+export
+regInsert : Ident -> v -> Registry v -> Registry v
 regInsert ident v r = regInsertK (regKeyOf ident) v r
 
-export regDeleteK : RegKey -> Registry v -> Registry v
+export
+regDeleteK : RegKey -> Registry v -> Registry v
 regDeleteK k (Registry m) = Registry (omDelete (regKeyRender k) m)
 
-export regDelete : Ident -> Registry v -> Registry v
+export
+regDelete : Ident -> Registry v -> Registry v
 regDelete ident r = regDeleteK (regKeyOf ident) r
 
 -- Enumeration order is `regKeyRender` order (a sorted `OrdMap`), which is
 -- NEITHER declaration order NOR alphabetical by name — see "What a conversion
 -- still has to review" in the module doc-comment. It IS deterministic.
-export regEntries : Registry v -> List (RegKey, v)
+export
+regEntries : Registry v -> List (RegKey, v)
 regEntries (Registry m) = map snd (toList m)
 
 -- Symmetry with `mregKeys`/`sregKeys`. Derivable (`map fst (regEntries r)`),
@@ -642,21 +667,25 @@ regEntries (Registry m) = map snd (toList m)
 -- their keys and the third cannot is a papercut every conversion pays, and
 -- because a caller who wants only the keys should not have to know that the
 -- values come along for free. Same order caveat as `regEntries`.
-export regKeys : Registry v -> List RegKey
+export
+regKeys : Registry v -> List RegKey
 regKeys r = map fst (regEntries r)
 
-export regSize : Registry v -> Int
+export
+regSize : Registry v -> Int
 regSize (Registry m) = omSize m
 
 -- The bulk-delete `rejectCyclicAliases` (`types/typecheck.mdk`) needs: it
 -- enumerates the alias table, computes a cyclic set, then rebuilds the table
 -- without those entries. The predicate takes the whole `(key, value)` pair
 -- so it drops straight into `filterList`'s shape, matching the existing site.
-export regFilter : ((RegKey, v) -> Bool) -> Registry v -> Registry v
+export
+regFilter : ((RegKey, v) -> Bool) -> Registry v -> Registry v
 regFilter p r = regFromEntries (filterList p (regEntries r))
 
 -- Last entry wins on a duplicate key, matching `regInsert`.
-export regFromEntries : List (RegKey, v) -> Registry v
+export
+regFromEntries : List (RegKey, v) -> Registry v
 regFromEntries entries = regFromEntriesGo entries regEmpty
 
 regFromEntriesGo : List (RegKey, v) -> Registry v -> Registry v
@@ -667,7 +696,8 @@ regFromEntriesGo ((k, v)::rest) acc = regFromEntriesGo rest (regInsertK k v acc)
 -- copies whole tables between the two in both directions). RIGHT-BIASED: an
 -- entry in `newer` wins over the same key in `older`, which is what a
 -- last-write-wins table's copy has always meant.
-export regMerge : Registry v -> Registry v -> Registry v
+export
+regMerge : Registry v -> Registry v -> Registry v
 regMerge older newer = regFromEntriesGo (regEntries newer) older
 
 -- ── MultiRegistry: explicitly commutative — no entry can be lost to order ──
@@ -680,17 +710,20 @@ regMerge older newer = regFromEntriesGo (regEntries newer) older
 -- result.
 public export data MultiRegistry v = MultiRegistry (OrdMap (RegKey, List v))
 
-export mregEmpty : MultiRegistry v
+export
+mregEmpty : MultiRegistry v
 mregEmpty = MultiRegistry omEmpty
 
-export mregAddK : RegKey -> v -> MultiRegistry v -> MultiRegistry v
+export
+mregAddK : RegKey -> v -> MultiRegistry v -> MultiRegistry v
 mregAddK k v (MultiRegistry m) =
   let s = regKeyRender k
   match omLookup s m
     Some (_, vs) => MultiRegistry (omInsert s (k, v::vs) m)
     None => MultiRegistry (omInsert s (k, [v]) m)
 
-export mregAdd : Ident -> v -> MultiRegistry v -> MultiRegistry v
+export
+mregAdd : Ident -> v -> MultiRegistry v -> MultiRegistry v
 mregAdd ident v mr = mregAddK (regKeyOf ident) v mr
 
 -- ⚠️ APPEND, not `mregAddK`'s prepend, and the difference is load-bearing for
@@ -740,38 +773,45 @@ mregAdd ident v mr = mregAddK (regKeyOf ident) v mr
 -- `mregAddK` stays the default: a bucket whose order genuinely does not matter
 -- should pay O(1), and a caller reaching for THIS one is asserting that its
 -- bucket order is semantic. Say which in the call site's comment.
-export mregAppendK : RegKey -> v -> MultiRegistry v -> MultiRegistry v
+export
+mregAppendK : RegKey -> v -> MultiRegistry v -> MultiRegistry v
 mregAppendK k v (MultiRegistry m) =
   let s = regKeyRender k
   match omLookup s m
     Some (_, vs) => MultiRegistry (omInsert s (k, vs ++ [v]) m)
     None => MultiRegistry (omInsert s (k, [v]) m)
 
-export mregLookupK : RegKey -> MultiRegistry v -> List v
+export
+mregLookupK : RegKey -> MultiRegistry v -> List v
 mregLookupK k (MultiRegistry m) = match omLookup (regKeyRender k) m
   Some (_, vs) => vs
   None => []
 
-export mregLookup : Ident -> MultiRegistry v -> List v
+export
+mregLookup : Ident -> MultiRegistry v -> List v
 mregLookup ident mr = mregLookupK (regKeyOf ident) mr
 
 -- `MultiRegistry` had NO enumeration at all in this file's first cut, so a
 -- conversion could write a table it could never walk. Same order caveat as
 -- `regEntries`.
-export mregEntries : MultiRegistry v -> List (RegKey, List v)
+export
+mregEntries : MultiRegistry v -> List (RegKey, List v)
 mregEntries (MultiRegistry m) = map snd (toList m)
 
-export mregKeys : MultiRegistry v -> List RegKey
+export
+mregKeys : MultiRegistry v -> List RegKey
 mregKeys mr = map fst (mregEntries mr)
 
 -- Number of DISTINCT keys, not the total number of values added.
-export mregSize : MultiRegistry v -> Int
+export
+mregSize : MultiRegistry v -> Int
 mregSize (MultiRegistry m) = omSize m
 
 -- Bucket-CONCATENATING union: no value from either side is dropped, which is
 -- the invariant that makes this type worth having. `newer`'s values for a
 -- shared key are prepended, matching `mregAdd`'s own prepend.
-export mregMerge : MultiRegistry v -> MultiRegistry v -> MultiRegistry v
+export
+mregMerge : MultiRegistry v -> MultiRegistry v -> MultiRegistry v
 mregMerge older newer = mregMergeGo (mregEntries newer) older
 
 mregMergeGo : List (RegKey, List v) -> MultiRegistry v -> MultiRegistry v
@@ -788,30 +828,38 @@ mregAddAll k (v::vs) acc = mregAddAll k vs (mregAddK k v acc)
 -- mean" candidate list need.
 public export data SetRegistry = SetRegistry (OrdMap RegKey)
 
-export sregEmpty : SetRegistry
+export
+sregEmpty : SetRegistry
 sregEmpty = SetRegistry omEmpty
 
-export sregAddK : RegKey -> SetRegistry -> SetRegistry
+export
+sregAddK : RegKey -> SetRegistry -> SetRegistry
 sregAddK k (SetRegistry m) = SetRegistry (omInsert (regKeyRender k) k m)
 
-export sregAdd : Ident -> SetRegistry -> SetRegistry
+export
+sregAdd : Ident -> SetRegistry -> SetRegistry
 sregAdd ident s = sregAddK (regKeyOf ident) s
 
-export sregMemberK : RegKey -> SetRegistry -> Bool
+export
+sregMemberK : RegKey -> SetRegistry -> Bool
 sregMemberK k (SetRegistry m) = omHasKey (regKeyRender k) m
 
-export sregMember : Ident -> SetRegistry -> Bool
+export
+sregMember : Ident -> SetRegistry -> Bool
 sregMember ident s = sregMemberK (regKeyOf ident) s
 
 -- `implCountForIfaceU` (`types/typecheck.mdk`) is `omSize` over a per-iface
 -- tag set; it could not be written against this type without this.
-export sregSize : SetRegistry -> Int
+export
+sregSize : SetRegistry -> Int
 sregSize (SetRegistry m) = omSize m
 
-export sregKeys : SetRegistry -> List RegKey
+export
+sregKeys : SetRegistry -> List RegKey
 sregKeys (SetRegistry m) = map snd (toList m)
 
-export sregMerge : SetRegistry -> SetRegistry -> SetRegistry
+export
+sregMerge : SetRegistry -> SetRegistry -> SetRegistry
 sregMerge older newer = sregMergeGo (sregKeys newer) older
 
 sregMergeGo : List RegKey -> SetRegistry -> SetRegistry
@@ -849,7 +897,8 @@ tabKeysEq _ _ = False
 -- so a prepend still shadows, which is the overlay ordering
 -- `registerIfaceParamKinds` relies on (a module's own decls are registered as a
 -- FRONT overlay over the accumulated universe).
-export lookupReg : RegKey -> List (RegKey, v) -> Option v
+export
+lookupReg : RegKey -> List (RegKey, v) -> Option v
 lookupReg _ [] = None
 lookupReg k ((k2, v)::rest) = if regKeyEq k k2 then Some v else lookupReg k rest
 -- ── HeadKey: the result of projecting a type's HEAD TYPE CONSTRUCTOR ──────
@@ -965,7 +1014,8 @@ deriving (Eq, Ord, Debug)
 -- ⚠️ There is deliberately no `headKeyOfRigid`: `HkRigid` is applied at exactly
 -- one site (`headTyconMono`'s `TRigid` arm) and a one-line helper would make
 -- that site read like a routine mint rather than the flagged violation it is.
-export headKeyOfCon : TyConOrigin -> String -> HeadKey
+export
+headKeyOfCon : TyConOrigin -> String -> HeadKey
 headKeyOfCon origin name = HkDecl (tabKeyOf NsType origin name)
 
 -- The bare name inside a head key, whatever its inhabitant.  Allocation-free:
@@ -987,7 +1037,8 @@ headKeyOfCon origin name = HkDecl (tabKeyOf NsType origin name)
 -- (`types/typecheck.mdk`, column 0) — that wrapper is the SPELLING of the
 -- residual, not an instance of it.  Pipe to `wc -l` for the size; do not copy
 -- the size back into this comment.
-export headKeyName : HeadKey -> String
+export
+headKeyName : HeadKey -> String
 headKeyName (HkDecl k) = tabKeyName k
 headKeyName (HkRigid name) = name
 
@@ -1033,7 +1084,8 @@ headKeyName (HkRigid name) = name
 -- `checkCallObligationsU`'s argument vector — where the head is one COMPONENT
 -- of the key rather than the whole of it, so a `RegKey` is the wrong return
 -- type.
-export headKeyDecl : HeadKey -> Option TabKey
+export
+headKeyDecl : HeadKey -> Option TabKey
 headKeyDecl (HkDecl key) = Some key
 headKeyDecl (HkRigid _) = None
 
@@ -1052,12 +1104,14 @@ headKeyDecl (HkRigid _) = None
 -- absence never matches, not even itself.  A consumer that needs to tell the
 -- two apart must call `headKeyDecl`; adding a `TkBare` fallback HERE would
 -- resurrect the bare-name collision the identity layer exists to remove.
-export headKeyIdent : HeadKey -> Option Ident
+export
+headKeyIdent : HeadKey -> Option Ident
 headKeyIdent (HkDecl (TkIdent ident)) = Some ident
 headKeyIdent (HkDecl (TkBare _ _)) = None
 headKeyIdent (HkRigid _) = None
 
-export headBucketKey : Option HeadKey -> Option RegKey
+export
+headBucketKey : Option HeadKey -> Option RegKey
 headBucketKey None = Some (RegKey [] [])
 headBucketKey (Some (HkDecl key)) = Some (regKeyOfTab key)
 headBucketKey (Some (HkRigid _)) = None
@@ -1101,7 +1155,8 @@ headBucketKey (Some (HkRigid _)) = None
 -- rejected. What this rendering DOES guarantee is that a rigid never compares
 -- equal to a DECLARATION of the same spelling, and never to a rigid at a
 -- different position — the two conflations a bare-name vector admits.
-export dispKeyRender : RegKey -> List (Int, String) -> String
+export
+dispKeyRender : RegKey -> List (Int, String) -> String
 dispKeyRender base rigids = lenKey (regKeyRender base)
   ++ lenKey "\{listLen rigids}"
   ++ joinWith "" (map ((i, name) => ordKey i ++ lenKey name) rigids)

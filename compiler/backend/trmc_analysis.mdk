@@ -56,16 +56,19 @@ public export data SelfRef = SelfByVar String | SelfByMethod String String
 -- Backend-agnostic; relocated here so the analysis is self-contained (the emitters
 -- re-import them).
 
-export flattenApp : CExpr -> List CExpr -> (CExpr, List CExpr)
+export
+flattenApp : CExpr -> List CExpr -> (CExpr, List CExpr)
 flattenApp (CApp f a) acc = flattenApp f (a::acc)
 flattenApp hd acc = (hd, acc)
 
 -- ── small list helpers ────────────────────────────────────────────
-export lengthS : List a -> Int
+export
+lengthS : List a -> Int
 lengthS [] = 0
 lengthS (_::xs) = 1 + lengthS xs
 
-export freeVars : List String -> CExpr -> List String
+export
+freeVars : List String -> CExpr -> List String
 freeVars _ (CLit _) = []
 freeVars b (CVar x _) = if contains x b then [] else [x]
 freeVars b (CApp f a) = freeVars b f ++ freeVars b a
@@ -112,7 +115,8 @@ freeVars _ _ = []
 -- collect the captured dict-param names (RDict/RDictFwd) from a list of Routes.
 -- RKey and RNone carry no captured variable name; only RDict/RDictFwd name a dict
 -- parameter that the enclosing closure must capture from its env.
-export routeDictNames : List String -> List Route -> List String
+export
+routeDictNames : List String -> List Route -> List String
 routeDictNames _ [] = []
 routeDictNames b ((RDict d)::rest) = (if contains d b then [] else [d])
   ++ routeDictNames b rest
@@ -127,20 +131,24 @@ routeDictNames b ((RLocal _ dicts)::rest) = routeDictNames b dicts
   ++ routeDictNames b rest
 routeDictNames b (_::rest) = routeDictNames b rest
 
-export freeVarsFields : List String -> List CField -> List String
+export
+freeVarsFields : List String -> List CField -> List String
 freeVarsFields _ [] = []
 freeVarsFields b ((CField _ ex)::rest) = freeVars b ex ++ freeVarsFields b rest
 
-export freeVarsList : List String -> List CExpr -> List String
+export
+freeVarsList : List String -> List CExpr -> List String
 freeVarsList _ [] = []
 freeVarsList b (e::rest) = freeVars b e ++ freeVarsList b rest
 
-export freeVarsArms : List String -> List CArm -> List String
+export
+freeVarsArms : List String -> List CArm -> List String
 freeVarsArms _ [] = []
 freeVarsArms b ((CArm pat _ body)::rest) = freeVars (patVars pat ++ b) body
   ++ freeVarsArms b rest
 
-export freeVarsStmts : List String -> List CStmt -> List String
+export
+freeVarsStmts : List String -> List CStmt -> List String
 freeVarsStmts _ [] = []
 freeVarsStmts b ((CSExpr ex)::rest) = freeVars b ex ++ freeVarsStmts b rest
 freeVarsStmts b ((CSLet _ pat ex)::rest) = freeVars b ex
@@ -148,21 +156,25 @@ freeVarsStmts b ((CSLet _ pat ex)::rest) = freeVars b ex
 freeVarsStmts b ((CSAssign _ ex)::rest) = freeVars b ex ++ freeVarsStmts b rest
 freeVarsStmts b (_::rest) = freeVarsStmts b rest
 
-export freeVarsBinds : List String -> List CBind -> List String
+export
+freeVarsBinds : List String -> List CBind -> List String
 freeVarsBinds _ [] = []
 freeVarsBinds b ((CBind _ [CClause [] rhs])::rest) = freeVars b rhs
   ++ freeVarsBinds b rest
 freeVarsBinds b (_::rest) = freeVarsBinds b rest
 
-export bindNames : List CBind -> List String
+export
+bindNames : List CBind -> List String
 bindNames [] = []
 bindNames (b::rest) = bindName b :: bindNames rest
 
-export bindName : CBind -> String
+export
+bindName : CBind -> String
 bindName (CBind name _) = name
 
 -- the variables a pattern binds.
-export patVars : Pat -> List String
+export
+patVars : Pat -> List String
 patVars (PVar x _) = [x]
 patVars (PCon _ args) = patVarsList args
 patVars (PCons h t) = patVars h ++ patVars t
@@ -171,11 +183,13 @@ patVars (PList ps) = patVarsList ps
 patVars (PAs x _ p) = x :: patVars p
 patVars _ = []
 
-export patVarsList : List Pat -> List String
+export
+patVarsList : List Pat -> List String
 patVarsList [] = []
 patVarsList (p::rest) = patVars p ++ patVarsList rest
 
-export patVarNames : List Pat -> List String
+export
+patVarNames : List Pat -> List String
 patVarNames ps = patVarsList ps
 
 -- ── TRMC eligibility analysis (TRMC-DESIGN.md §"Phase 1 scope") ──────────────
@@ -189,18 +203,21 @@ patVarNames ps = patVarsList ps
 -- back to the current stack-growing codegen.  Structural + deterministic, so
 -- interp- and native-emit produce identical IR (fixpoint holds by construction).
 -- `ic`/`ar` are the (backend-neutral) ctor lookups (`isCtor`/`ctorArity`).
-export trmcEligible : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> List (List Pat, CExpr) -> Bool
+export
+trmcEligible : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> List (List Pat, CExpr) -> Bool
 trmcEligible ic ar self arity clauses = trmcClausesOk ic ar self arity clauses
   && trmcAnyCons ic ar self arity clauses
 
 -- every clause body is TRMC-safe (no misplaced self-call).
-export trmcClausesOk : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> List (List Pat, CExpr) -> Bool
+export
+trmcClausesOk : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> List (List Pat, CExpr) -> Bool
 trmcClausesOk _ _ _ _ [] = True
 trmcClausesOk ic ar self arity ((_, body)::rest) = trmcBodyOk ic ar self arity body
   && trmcClausesOk ic ar self arity rest
 
 -- at least one clause has an eligible cons/ctor-tail leaf.
-export trmcAnyCons : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> List (List Pat, CExpr) -> Bool
+export
+trmcAnyCons : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> List (List Pat, CExpr) -> Bool
 trmcAnyCons _ _ _ _ [] = False
 trmcAnyCons ic ar self arity ((_, body)::rest) = trmcBodyHasCons ic ar self arity body
   || trmcAnyCons ic ar self arity rest
@@ -213,7 +230,8 @@ trmcAnyCons ic ar self arity ((_, body)::rest) = trmcBodyHasCons ic ar self arit
 -- for SelfByMethod — `freeVars` is BLIND to the method name, so a dispatched self
 -- recursion outside an eligible tail leaf MUST be caught here, TRMC-DESIGN
 -- §"SAFETY-CRITICAL", or it is silently accepted and MISCOMPILED).
-export trmcBodyOk : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> CExpr -> Bool
+export
+trmcBodyOk : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> CExpr -> Bool
 trmcBodyOk ic ar self arity (CIf c t f) = selfFree self c
   && trmcBodyOk ic ar self arity t
   && trmcBodyOk ic ar self arity f
@@ -243,7 +261,8 @@ trmcBodyOk ic ar self arity ex =
 
 -- every match-arm body is TRMC-safe in tail position (guards must be self-free —
 -- a self-call inside a guard would run outside the loop's tail position).
-export trmcArmsOk : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> List CArm -> Bool
+export
+trmcArmsOk : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> List CArm -> Bool
 trmcArmsOk _ _ _ _ [] = True
 trmcArmsOk ic ar self arity ((CArm _ guards body)::rest) = trmcGuardsSelfFree self guards
   && trmcBodyOk ic ar self arity body
@@ -251,7 +270,8 @@ trmcArmsOk ic ar self arity ((CArm _ guards body)::rest) = trmcGuardsSelfFree se
 
 -- every guard expr is self-free (guards run before the arm body, not in tail
 -- position — a self-call there can't be a tail leaf).
-export trmcGuardsSelfFree : SelfRef -> List CGuard -> Bool
+export
+trmcGuardsSelfFree : SelfRef -> List CGuard -> Bool
 trmcGuardsSelfFree _ [] = True
 trmcGuardsSelfFree self ((CGBool c)::rest) = selfFree self c
   && trmcGuardsSelfFree self rest
@@ -263,7 +283,8 @@ trmcGuardsSelfFree self ((CGBind _ c)::rest) = selfFree self c
 -- not satisfy trmcAnyCons; a function whose ONLY self-calls are plain-tail (pure
 -- tail recursion) is left to the musttail path, not TRMC.  At least one cons/ctor
 -- tail must exist to warrant the destination-passing loop.)
-export trmcBodyHasCons : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> CExpr -> Bool
+export
+trmcBodyHasCons : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> CExpr -> Bool
 trmcBodyHasCons ic ar self arity (CIf _ t f) = trmcBodyHasCons ic ar self arity t
   || trmcBodyHasCons ic ar self arity f
 trmcBodyHasCons ic ar self arity (CLet _ _ _ b) =
@@ -274,7 +295,8 @@ trmcBodyHasCons ic ar self arity (CDecision _ arms _) =
   trmcArmsHaveCons ic ar self arity arms
 trmcBodyHasCons ic ar self arity ex = isCtorTail ic ar self arity ex
 
-export trmcArmsHaveCons : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> List CArm -> Bool
+export
+trmcArmsHaveCons : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> List CArm -> Bool
 trmcArmsHaveCons _ _ _ _ [] = False
 trmcArmsHaveCons ic ar self arity ((CArm _ _ body)::rest) = trmcBodyHasCons ic ar self arity body
   || trmcArmsHaveCons ic ar self arity rest
@@ -289,7 +311,8 @@ trmcArmsHaveCons ic ar self arity ((CArm _ _ body)::rest) = trmcBodyHasCons ic a
 --     saturated self-call, every other field self-free.
 -- `self` is a SelfRef: SelfByVar (top-level define) → the self-call spine head is
 -- `CVar self`; SelfByMethod (Phase 2 B-dispatch) → `CMethod method (RKey tag) …`.
-export isCtorTail : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> CExpr -> Bool
+export
+isCtorTail : (String -> Bool) -> (String -> Int) -> SelfRef -> Int -> CExpr -> Bool
 isCtorTail _ _ self arity (CBinPrim "::" head tail _) = selfFree self head
   && isSelfSatApp self arity tail
 isCtorTail ic ar self arity ex = match flattenApp ex []
@@ -302,17 +325,20 @@ isCtorTail ic ar self arity ex = match flattenApp ex []
 
 -- the field list of a saturated ctor app is TRMC-eligible: the LAST field is the
 -- saturated self-call (`isSelfSatApp`), every OTHER (leading) field is self-free.
-export ctorTailFieldsOk : SelfRef -> Int -> List CExpr -> Bool
+export
+ctorTailFieldsOk : SelfRef -> Int -> List CExpr -> Bool
 ctorTailFieldsOk self arity fields = match splitLastF fields
   Some (lead, last) => allSelfFreeF self lead && isSelfSatApp self arity last
   None => False
 
-export allSelfFreeF : SelfRef -> List CExpr -> Bool
+export
+allSelfFreeF : SelfRef -> List CExpr -> Bool
 allSelfFreeF _ [] = True
 allSelfFreeF self (x::rest) = selfFree self x && allSelfFreeF self rest
 
 -- split a non-empty list into (leading elements, last element).
-export splitLastF : List a -> Option (List a, a)
+export
+splitLastF : List a -> Option (List a, a)
 splitLastF [] = None
 splitLastF [x] = Some ([], x)
 splitLastF (x::rest) = map ((lead, last) => (x::lead, last)) (splitLastF rest)
@@ -328,7 +354,8 @@ splitLastF (x::rest) = map ((lead, last) => (x::lead, last)) (splitLastF rest)
 -- SelfByMethod: a `CMethod method (RKey tag) …`-headed spine (the dispatched
 -- recursive call post-restampIface — the only shape that lowers to a direct
 -- `@mdk_impl_<tag>_<method>` recursion).
-export isSelfSatApp : SelfRef -> Int -> CExpr -> Bool
+export
+isSelfSatApp : SelfRef -> Int -> CExpr -> Bool
 isSelfSatApp self arity ex = match flattenApp ex []
   (CDict f routes, args) => isSelfHead self (CDict f routes)
     && dictRoutesForwarded routes
@@ -337,7 +364,8 @@ isSelfSatApp self arity ex = match flattenApp ex []
 
 -- is `hd` the head of a self-call for this SelfRef?  A top-level define with a
 -- constrained scheme occurs as `CDict self routes` (dict_pass), NOT `CVar self`.
-export isSelfHead : SelfRef -> CExpr -> Bool
+export
+isSelfHead : SelfRef -> CExpr -> Bool
 isSelfHead (SelfByVar self) (CVar f _) = f == self
 isSelfHead (SelfByVar self) (CDict f _) = f == self
 isSelfHead (SelfByMethod method tag) (CMethod m route _ _) = m == method
@@ -355,7 +383,8 @@ dictRoutesForwarded _ = False
 
 -- a route is `RKey tag …` for this tag (the concrete-impl dispatch a dispatched
 -- self-recursion carries after restampIface).
-export routeIsKey : String -> Route -> Bool
+export
+routeIsKey : String -> Route -> Bool
 routeIsKey tag (RKey t _) = t == tag
 routeIsKey _ _ = False
 
@@ -366,7 +395,8 @@ routeIsKey _ _ = False
 -- a dict-carrying self-recursion outside an eligible tail leaf is silently
 -- accepted (the same hazard TRMC-DESIGN §"SAFETY-CRITICAL" records for CMethod).
 -- SelfByMethod: the CMethod-aware walk.
-export selfFree : SelfRef -> CExpr -> Bool
+export
+selfFree : SelfRef -> CExpr -> Bool
 selfFree (SelfByVar self) ex = not (contains self (freeVars [] ex))
   && not (mentionsSelfDict self ex)
 selfFree (SelfByMethod method tag) ex = not (mentionsSelfMethod method tag ex)
@@ -377,7 +407,8 @@ selfFree (SelfByMethod method tag) ex = not (mentionsSelfMethod method tag ex)
 -- a NON-tail position is invisible to the freeVars-based `selfFree` and would be
 -- wrongly accepted as "self-free" → the body TRMC-transformed → the non-tail self
 -- recursion DROPPED → silent miscompile.  This full structural walk closes that.
-export mentionsSelfMethod : String -> String -> CExpr -> Bool
+export
+mentionsSelfMethod : String -> String -> CExpr -> Bool
 mentionsSelfMethod method tag (CMethod m route _ _) = m == method
   && routeIsKey tag route
 mentionsSelfMethod method tag (CApp f a) = mentionsSelfMethod method tag f
@@ -431,47 +462,55 @@ mentionsSelfMethod method tag (CListSlice a lo hi _) = mentionsSelfMethod method
   || mentionsSelfMethod method tag hi
 mentionsSelfMethod _ _ _ = False
 
-export mentionsSelfMethodList : String -> String -> List CExpr -> Bool
+export
+mentionsSelfMethodList : String -> String -> List CExpr -> Bool
 mentionsSelfMethodList _ _ [] = False
 mentionsSelfMethodList method tag (x::rest) = mentionsSelfMethod method tag x
   || mentionsSelfMethodList method tag rest
 
-export mentionsSelfMethodArms : String -> String -> List CArm -> Bool
+export
+mentionsSelfMethodArms : String -> String -> List CArm -> Bool
 mentionsSelfMethodArms _ _ [] = False
 mentionsSelfMethodArms method tag ((CArm _ guards body)::rest) = mentionsSelfMethodGuards method tag guards
   || mentionsSelfMethod method tag body
   || mentionsSelfMethodArms method tag rest
 
-export mentionsSelfMethodGuards : String -> String -> List CGuard -> Bool
+export
+mentionsSelfMethodGuards : String -> String -> List CGuard -> Bool
 mentionsSelfMethodGuards _ _ [] = False
 mentionsSelfMethodGuards method tag ((CGBool c)::rest) = mentionsSelfMethod method tag c
   || mentionsSelfMethodGuards method tag rest
 mentionsSelfMethodGuards method tag ((CGBind _ c)::rest) = mentionsSelfMethod method tag c
   || mentionsSelfMethodGuards method tag rest
 
-export mentionsSelfMethodFields : String -> String -> List CField -> Bool
+export
+mentionsSelfMethodFields : String -> String -> List CField -> Bool
 mentionsSelfMethodFields _ _ [] = False
 mentionsSelfMethodFields method tag ((CField _ v)::rest) = mentionsSelfMethod method tag v
   || mentionsSelfMethodFields method tag rest
 
-export mentionsSelfMethodStmts : String -> String -> List CStmt -> Bool
+export
+mentionsSelfMethodStmts : String -> String -> List CStmt -> Bool
 mentionsSelfMethodStmts _ _ [] = False
 mentionsSelfMethodStmts method tag (s::rest) = mentionsSelfMethodStmt method tag s
   || mentionsSelfMethodStmts method tag rest
 
-export mentionsSelfMethodStmt : String -> String -> CStmt -> Bool
+export
+mentionsSelfMethodStmt : String -> String -> CStmt -> Bool
 mentionsSelfMethodStmt method tag (CSExpr ex) = mentionsSelfMethod method tag ex
 mentionsSelfMethodStmt method tag (CSLet _ _ ex) =
   mentionsSelfMethod method tag ex
 mentionsSelfMethodStmt method tag (CSAssign _ ex) =
   mentionsSelfMethod method tag ex
 
-export mentionsSelfMethodBinds : String -> String -> List CBind -> Bool
+export
+mentionsSelfMethodBinds : String -> String -> List CBind -> Bool
 mentionsSelfMethodBinds _ _ [] = False
 mentionsSelfMethodBinds method tag ((CBind _ clauses)::rest) = mentionsSelfMethodClauses method tag clauses
   || mentionsSelfMethodBinds method tag rest
 
-export mentionsSelfMethodClauses : String -> String -> List CClause -> Bool
+export
+mentionsSelfMethodClauses : String -> String -> List CClause -> Bool
 mentionsSelfMethodClauses _ _ [] = False
 mentionsSelfMethodClauses method tag ((CClause _ body)::rest) = mentionsSelfMethod method tag body
   || mentionsSelfMethodClauses method tag rest
@@ -481,7 +520,8 @@ mentionsSelfMethodClauses method tag ((CClause _ body)::rest) = mentionsSelfMeth
 -- (CDict f routes)` returns only the route dict names, never `f`, so a
 -- constrained define's self-occurrence outside an eligible tail leaf is
 -- invisible to the freeVars-based walk — this full structural walk closes that.
-export mentionsSelfDict : String -> CExpr -> Bool
+export
+mentionsSelfDict : String -> CExpr -> Bool
 mentionsSelfDict self (CDict f _) = f == self
 mentionsSelfDict self (CApp f a) = mentionsSelfDict self f
   || mentionsSelfDict self a
@@ -578,7 +618,8 @@ mentionsSelfDictClauses self ((CClause _ body)::rest) = mentionsSelfDict self bo
 -- self-call's LOOP-INVARIANT leading dict slots when storing recomputed args
 -- (a CDict self-call's arg list covers only the VALUE params; the routes forward
 -- the define's own dict params by identity, so those slots are never rewritten).
-export dropFirstN : Int -> List a -> List a
+export
+dropFirstN : Int -> List a -> List a
 dropFirstN n xs
   | n <= 0 = xs
 dropFirstN _ [] = []
@@ -587,7 +628,8 @@ dropFirstN n (_::rest) = dropFirstN (n - 1) rest
 -- does any nullary let-group binding's RHS reference `self`?  (Only the nullary
 -- shape is descendable here; a parametric where-helper that called `self` would
 -- be a misplaced self-call, so treat a non-nullary binding conservatively too.)
-export selfRefersToBinds : SelfRef -> List CBind -> Bool
+export
+selfRefersToBinds : SelfRef -> List CBind -> Bool
 selfRefersToBinds _ [] = False
 selfRefersToBinds self ((CBind _ [CClause [] rhs])::rest) = not (selfFree self rhs)
   || selfRefersToBinds self rest
@@ -595,7 +637,8 @@ selfRefersToBinds self ((CBind _ clauses)::rest) = selfRefersToBindClauses self 
   || selfRefersToBinds self rest
 selfRefersToBinds self (_::rest) = selfRefersToBinds self rest
 
-export selfRefersToBindClauses : SelfRef -> List CClause -> Bool
+export
+selfRefersToBindClauses : SelfRef -> List CClause -> Bool
 selfRefersToBindClauses _ [] = False
 selfRefersToBindClauses self ((CClause _ body)::rest) = not (selfFree self body)
   || selfRefersToBindClauses self rest
@@ -603,7 +646,8 @@ selfRefersToBindClauses self ((CClause _ body)::rest) = not (selfFree self body)
 -- the recursion args of an eligible ctor-tail's self-call (the LAST field's
 -- saturated self CApp-spine args).  Works for both the `::` form and a general
 -- ctor app: the last field is always the self-call.
-export consTailArgs : CExpr -> List CExpr
+export
+consTailArgs : CExpr -> List CExpr
 consTailArgs (CBinPrim "::" _ tail _) = match flattenApp tail []
   (_, args) => args
 consTailArgs ex = match flattenApp ex []
@@ -613,7 +657,8 @@ consTailArgs ex = match flattenApp ex []
     None => []
 
 -- the ctor NAME of an eligible ctor-tail leaf (`Cons` for the `::` form).
-export ctorTailName : CExpr -> String
+export
+ctorTailName : CExpr -> String
 ctorTailName (CBinPrim "::" _ _ _) = "Cons"
 ctorTailName ex = match flattenApp ex []
   (CVar ctor _, _) => ctor
@@ -624,14 +669,16 @@ ctorTailName ex = match flattenApp ex []
 -- `Cons`, but only the `::` form is the reserved list cell (`$C_Cons`); a user
 -- `Cons` resolves to the remapped `$CU_Cons`.  The WasmGC emitter's TRMC loop keys
 -- the cons-cell struct id off this, since the ctor name alone can't distinguish them.
-export ctorTailIsCons : CExpr -> Bool
+export
+ctorTailIsCons : CExpr -> Bool
 ctorTailIsCons (CBinPrim "::" _ _ _) = True
 ctorTailIsCons _ = False
 
 -- the LEADING (non-last) field exprs of an eligible ctor-tail leaf — the fields
 -- that get stored into the cell (the last field is the destination link, not
 -- stored).  For `::` this is `[head]`.
-export ctorTailLeadFields : CExpr -> List CExpr
+export
+ctorTailLeadFields : CExpr -> List CExpr
 ctorTailLeadFields (CBinPrim "::" head _ _) = [head]
 ctorTailLeadFields ex = match flattenApp ex []
   (_, fields) => match splitLastF fields
@@ -642,7 +689,8 @@ ctorTailLeadFields ex = match flattenApp ex []
 -- offset `8*(idx+1)`).  Axis A: always the LAST field ⇒ `arity-1`.  Kept COMPUTED
 -- (not hardcoded "last") so Phase-2 F1(b) [self-call in any field] is a localized
 -- detection patch — the emit already offsets by this index (TRMC-DESIGN F1(b) seam).
-export ctorTailSelfIdx : CExpr -> Int
+export
+ctorTailSelfIdx : CExpr -> Int
 ctorTailSelfIdx (CBinPrim "::" _ _ _) = 1
 ctorTailSelfIdx ex = match flattenApp ex []
   (_, fields) => lengthS fields - 1
@@ -678,14 +726,17 @@ ctorTailSelfIdx ex = match flattenApp ex []
 public export data DispGroup = DispGroup String (List String)
 
 -- the root / member names of a group (members include the root).
-export dispRootOf : DispGroup -> String
+export
+dispRootOf : DispGroup -> String
 dispRootOf (DispGroup root _) = root
 
-export dispMembersOf : DispGroup -> List String
+export
+dispMembersOf : DispGroup -> List String
 dispMembersOf (DispGroup _ members) = members
 
 -- look up which group (if any) a fn name belongs to.
-export dispGroupOf : List DispGroup -> String -> Option DispGroup
+export
+dispGroupOf : List DispGroup -> String -> Option DispGroup
 dispGroupOf [] _ = None
 dispGroupOf ((DispGroup root members)::rest) name =
   if contains name members then
@@ -694,24 +745,29 @@ dispGroupOf ((DispGroup root members)::rest) name =
     dispGroupOf rest name
 
 -- ── clause/arm accessors shared by the detection and both emitters ───────────
-export clauseArityOf : List CClause -> Int
+export
+clauseArityOf : List CClause -> Int
 clauseArityOf ((CClause pats _)::_) = listLen pats
 clauseArityOf [] = 0
 
-export clauseBodyOf : CClause -> CExpr
+export
+clauseBodyOf : CClause -> CExpr
 clauseBodyOf (CClause _ body) = body
 
-export armBody : CArm -> CExpr
+export
+armBody : CArm -> CExpr
 armBody (CArm _ _ body) = body
 
 -- only ordinary bool guards (a refutable guard binder would complicate the leaf
 -- rewrite — reject the group).
-export allBoolGuards : List CGuard -> Bool
+export
+allBoolGuards : List CGuard -> Bool
 allBoolGuards [] = True
 allBoolGuards ((CGBool _)::rest) = allBoolGuards rest
 allBoolGuards _ = False
 
-export lastStmtExpr : List CStmt -> Option CExpr
+export
+lastStmtExpr : List CStmt -> Option CExpr
 lastStmtExpr [] = None
 lastStmtExpr [CSExpr ex] = Some ex
 lastStmtExpr (_::rest) = lastStmtExpr rest
@@ -722,7 +778,8 @@ lastStmtExpr (_::rest) = lastStmtExpr rest
 -- a cross-backend redesign — deliberately deferred, see
 -- compiler/WASM-TMC-GAP-DESIGN.md §5 Stage 3.  The Stage-1 self-recursive and
 -- impl paths use `dictCountUniform` below instead.
-export dispNonDict : List CClause -> Bool
+export
+dispNonDict : List CClause -> Bool
 dispNonDict clauses = not (anyList dispClauseHasLeadingDict clauses)
 
 dispClauseHasLeadingDict : CClause -> Bool
@@ -743,7 +800,8 @@ dispIsDictParamName x = startsWith "$dict" x
 -- clause-dispatch tree; a non-uniform count rejects.  An eta-reshaped binding
 -- (`$eta` params appended AFTER the dict) keeps declining on its own: its body's
 -- self-call is no longer saturated at the new arity, so `trmcEligible` fails.
-export dictCountUniform : List (List Pat) -> Bool
+export
+dictCountUniform : List (List Pat) -> Bool
 dictCountUniform [] = True
 dictCountUniform (pats::rest) = dictCountUniformGo (leadingDictCount pats) rest
 
@@ -753,7 +811,8 @@ dictCountUniformGo n (pats::rest) = leadingDictCount pats == n
   && dictCountUniformGo n rest
 
 -- count of leading `$dict…` params in one clause's param list.
-export leadingDictCount : List Pat -> Int
+export
+leadingDictCount : List Pat -> Int
 leadingDictCount ((PVar x _)::rest) =
   if dispIsDictParamName x then
     1 + leadingDictCount rest
@@ -762,14 +821,16 @@ leadingDictCount ((PVar x _)::rest) =
 leadingDictCount _ = 0
 
 -- CClause-shaped wrapper (the wasm emitter's clause representation).
-export dictUniformClauses : List CClause -> Bool
+export
+dictUniformClauses : List CClause -> Bool
 dictUniformClauses clauses = dictCountUniform (map clausePatsOf clauses)
 
 clausePatsOf : CClause -> List Pat
 clausePatsOf (CClause pats _) = pats
 
 -- (pats, body)-pair wrapper (the LLVM emitter's clause representation).
-export dictUniformPairs : List (List Pat, CExpr) -> Bool
+export
+dictUniformPairs : List (List Pat, CExpr) -> Bool
 dictUniformPairs pairs = dictCountUniform (map pairPatsOf pairs)
 
 pairPatsOf : (List Pat, CExpr) -> List Pat
@@ -781,7 +842,8 @@ pairPatsOf (pats, _) = pats
 -- (candidate roots/members); `allBinds` = ALL binds (fn + value — the
 -- external-entry check must see references from value-bind bodies too); `impls`
 -- = the lowered impl/default entries (their bodies can call into a group).
-export detectDispatchGroups : (String -> String) -> (String -> Bool) -> (String -> Int) -> (String -> Int -> List CClause -> Bool) -> List CBind -> List CBind -> List CImplEntry -> List DispGroup
+export
+detectDispatchGroups : (String -> String) -> (String -> Bool) -> (String -> Int) -> (String -> Int -> List CClause -> Bool) -> List CBind -> List CBind -> List CImplEntry -> List DispGroup
 detectDispatchGroups cf isFn fa s1 binds allBinds impls =
   -- pass 0: global tables.  `consTargets` = the bottom callee of every peeled
   -- tail spine cons (root-candidacy pre-gate: only a fn somebody conses onto can
@@ -881,7 +943,8 @@ dispBfs headsIx (h::rest) visited =
     dispBfs headsIx (nexts ++ rest) (h::visited)
 
 -- peel a chain of conses `h1 :: h2 :: … :: bottom` → (heads, bottom).
-export dispPeelCons : CExpr -> (List CExpr, CExpr)
+export
+dispPeelCons : CExpr -> (List CExpr, CExpr)
 dispPeelCons (CBinPrim "::" h t _) =
   let (hs, b) = dispPeelCons t
   (h::hs, b)
@@ -891,7 +954,8 @@ dispPeelCons e = ([], e)
 -- heads, bottom callee, its args); None if the leaf is not that shape.  This ONE
 -- classifier is shared by detection, validation, and the leaf emit, so the three
 -- agree exactly on what is (and is not) a spine cons.
-export dispSpineParts : (String -> String) -> (String -> Bool) -> (String -> Int) -> (String -> Bool) -> CExpr -> Option (List CExpr, String, List CExpr)
+export
+dispSpineParts : (String -> String) -> (String -> Bool) -> (String -> Int) -> (String -> Bool) -> CExpr -> Option (List CExpr, String, List CExpr)
 dispSpineParts cf isFn fa ok e = match dispPeelCons e
   ([], _) => None
   (heads, bottom) => match flattenApp bottom []
@@ -924,17 +988,20 @@ dispExprConsTargets cf isFn fa fnSet other = match dispSpineParts cf isFn fa (f 
 
 -- a saturated direct call to `root` (canonicalized): flattenApp head is `CVar f`,
 -- `cf f == root`, arg count == arity.
-export dispIsSatRootCall : (String -> String) -> String -> Int -> CExpr -> Bool
+export
+dispIsSatRootCall : (String -> String) -> String -> Int -> CExpr -> Bool
 dispIsSatRootCall cf root arity e = match flattenApp e []
   (CVar f _, args) => cf f == root && listLen args == arity
   _ => False
 
 -- does `e` mention `root` as a call head anywhere (used to keep cons HEADS
 -- root-free so the cell's lead fields don't themselves re-enter the spine)?
-export dispCallsRoot : (String -> String) -> String -> CExpr -> Bool
+export
+dispCallsRoot : (String -> String) -> String -> CExpr -> Bool
 dispCallsRoot cf root e = contains root (allCallHeads cf e)
 
-export allCallHeads : (String -> String) -> CExpr -> List String
+export
+allCallHeads : (String -> String) -> CExpr -> List String
 allCallHeads cf (CVar f _) = [cf f]
 allCallHeads cf (CApp f a) = allCallHeads cf f ++ allCallHeads cf a
 allCallHeads cf (CLam _ b) = allCallHeads cf b
@@ -1099,7 +1166,8 @@ dispMarkDoomed parents m doomed =
 -- group's own member count).  The DETECTION above no longer calls it — it probes
 -- `bindIx` instead, because this linear scan ran once per worklist step over ALL
 -- binds (#1029).  Do not reach for it from a per-element loop.
-export dispFindBind : List CBind -> String -> Option CBind
+export
+dispFindBind : List CBind -> String -> Option CBind
 dispFindBind [] _ = None
 dispFindBind ((CBind n cs)::rest) m =
   if n == m then

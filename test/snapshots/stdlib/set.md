@@ -1,5 +1,5 @@
 # META
-source_lines=649
+source_lines=666
 stages=DESUGAR,MARK
 # SOURCE
 {- set.mdk — an immutable, ordered set of unique elements.
@@ -103,7 +103,8 @@ doubleR x1 _ t4 = panic "Set.doubleR: malformed left subtree"
 
    > size (singleton 5)
    1 -}
-export singleton : a -> Set a
+export
+singleton : a -> Set a
 singleton x = Bin 1 x Tip Tip
 
 {- | Build a set from a list, dropping duplicates.
@@ -121,7 +122,8 @@ singleton x = Bin 1 x Tip Tip
 
    > size (Set { } : Set Int)
    0 -}
-export fromList : Ord a => List a -> Set a
+export
+fromList : Ord a => List a -> Set a
 fromList xs = fold (s x => insert x s) Tip xs
 
 -- ── Query ───────────────────────────────────────────────────────────────
@@ -130,7 +132,8 @@ fromList xs = fold (s x => insert x s) Tip xs
 
    > size (fromList [1, 2, 3, 2])
    3 -}
-export size : Set a -> Int
+export
+size : Set a -> Int
 size Tip = 0
 size (Bin s _ _ _) = s
 
@@ -140,7 +143,8 @@ size (Bin s _ _ _) = s
    True
    > has 9 (fromList [1, 2, 3])
    False -}
-export has : Ord a => a -> Set a -> Bool
+export
+has : Ord a => a -> Set a -> Bool
 has x Tip = False
 has x (Bin _ y l r) = match compare x y
   Lt => has x l
@@ -155,7 +159,8 @@ has x (Bin _ y l r) = match compare x y
    3
    > size (insert 9 (fromList [1, 2, 3]))
    4 -}
-export insert : Ord a => a -> Set a -> Set a
+export
+insert : Ord a => a -> Set a -> Set a
 insert x Tip = singleton x
 insert x (Bin s y l r) = match compare x y
   Lt => balance y (insert x l) r
@@ -173,7 +178,8 @@ insert x (Bin s y l r) = match compare x y
    [1, 2, 3]
    > size (delete 9 (fromList [1, 2, 3]))
    3 -}
-export delete : Ord a => a -> Set a -> Set a
+export
+delete : Ord a => a -> Set a -> Set a
 delete x Tip = Tip
 delete x (Bin _ y l r) = match compare x y
   Lt => balance y (delete x l) r
@@ -206,7 +212,8 @@ glueMin l r = match minView r
 
    > minView (Set { } : Set Int)
    None -}
-export minView : Set a -> Option (a, Set a)
+export
+minView : Set a -> Option (a, Set a)
 minView Tip = None
 minView (Bin _ x l r) = match minView l
   None => Some (x, r)
@@ -216,7 +223,8 @@ minView (Bin _ x l r) = match minView l
 
    > maxView (Set { } : Set Int)
    None -}
-export maxView : Set a -> Option (a, Set a)
+export
+maxView : Set a -> Option (a, Set a)
 maxView Tip = None
 maxView (Bin _ x l r) = match maxView r
   None => Some (x, l)
@@ -226,21 +234,24 @@ maxView (Bin _ x l r) = match maxView r
 
    > getMin (fromList [3, 1, 2])
    Some 1 -}
-export getMin : Set a -> Option a
+export
+getMin : Set a -> Option a
 getMin s = map ((x, _) => x) (minView s)
 
 {- | Largest element, or `None`.
 
    > getMax (fromList [3, 1, 2])
    Some 3 -}
-export getMax : Set a -> Option a
+export
+getMax : Set a -> Option a
 getMax s = map ((x, _) => x) (maxView s)
 
 {- | Drop the smallest element (a no-op on the empty set).
 
    > toList (deleteMin (fromList [3, 1, 2]))
    [2, 3] -}
-export deleteMin : Set a -> Set a
+export
+deleteMin : Set a -> Set a
 deleteMin s = match minView s
   None => Tip
   Some (_, s') => s'
@@ -249,7 +260,8 @@ deleteMin s = match minView s
 
    > toList (deleteMax (fromList [3, 1, 2]))
    [1, 2] -}
-export deleteMax : Set a -> Set a
+export
+deleteMax : Set a -> Set a
 deleteMax s = match maxView s
   None => Tip
   Some (_, s') => s'
@@ -345,7 +357,8 @@ splitMember x (Bin _ y l r) = match compare x y
    [1, 2, 3, 4]
    > toList (union (fromList [1, 2, 3]) (fromList [2]))
    [1, 2, 3] -}
-export union : Ord a => Set a -> Set a -> Set a
+export
+union : Ord a => Set a -> Set a -> Set a
 union Tip b = b
 union a Tip = a
 union (Bin _ x l r) b =
@@ -364,7 +377,8 @@ union (Bin _ x l r) b =
    []
    > toList (intersection (fromList [1, 2, 3]) (fromList [2]))
    [2] -}
-export intersection : Ord a => Set a -> Set a -> Set a
+export
+intersection : Ord a => Set a -> Set a -> Set a
 intersection Tip b = Tip
 intersection a Tip = Tip
 intersection (Bin _ x l r) b =
@@ -384,7 +398,8 @@ intersection (Bin _ x l r) b =
    [1, 2]
    > toList (difference (fromList [1, 2, 3]) (fromList [1, 2, 3]))
    [] -}
-export difference : Ord a => Set a -> Set a -> Set a
+export
+difference : Ord a => Set a -> Set a -> Set a
 difference Tip b = Tip
 difference a Tip = a
 difference a (Bin _ x l r) =
@@ -398,7 +413,8 @@ difference a (Bin _ x l r) =
    True
    > isSubsetOf (fromList [1, 4]) (fromList [1, 2, 3])
    False -}
-export isSubsetOf : Ord a => Set a -> Set a -> Bool
+export
+isSubsetOf : Ord a => Set a -> Set a -> Bool
 isSubsetOf a b = size a <= size b && subsetGo a b
 
 {- The size test above is an O(1) reject that settles the commonest `False`.
@@ -506,7 +522,8 @@ export impl Monoid (Set a) requires Ord a where
    True
    > wellFormed (Set { } : Set Int)
    True -}
-export wellFormed : Ord a => Set a -> Bool
+export
+wellFormed : Ord a => Set a -> Bool
 wellFormed Tip = True
 wellFormed (Bin s x l r) =
   let sizeOk = size l + size r + 1 == s

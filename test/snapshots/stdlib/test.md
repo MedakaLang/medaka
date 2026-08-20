@@ -1,5 +1,5 @@
 # META
-source_lines=129
+source_lines=139
 stages=DESUGAR,MARK
 # SOURCE
 -- test.mdk — unit testing library.
@@ -16,14 +16,16 @@ public export data Expectation = Pass | Fail String deriving (Debug)
 
    > pass
    Pass -}
-export pass : Expectation
+export
+pass : Expectation
 pass = Pass
 
 {- | Fails with the given message.
 
    > fail "not ready"
    Fail "not ready" -}
-export fail : String -> Expectation
+export
+fail : String -> Expectation
 fail msg = Fail msg
 
 {- | Passes when the `Bool` is `True`.
@@ -32,7 +34,8 @@ fail msg = Fail msg
    Pass
    > expectTrue False
    Fail "expected True but got False" -}
-export expectTrue : Bool -> Expectation
+export
+expectTrue : Bool -> Expectation
 expectTrue True = Pass
 expectTrue False = Fail "expected True but got False"
 
@@ -42,7 +45,8 @@ expectTrue False = Fail "expected True but got False"
    Pass
    > expectFalse True
    Fail "expected False but got True" -}
-export expectFalse : Bool -> Expectation
+export
+expectFalse : Bool -> Expectation
 expectFalse False = Pass
 expectFalse True = Fail "expected False but got True"
 
@@ -52,7 +56,8 @@ expectFalse True = Fail "expected False but got True"
    Pass
    > expectEqual 1 2
    Fail "expected 1 but got 2" -}
-export expectEqual : (Eq a, Debug a) => a -> a -> Expectation
+export
+expectEqual : (Eq a, Debug a) => a -> a -> Expectation
 expectEqual expected actual =
   if eq expected actual then
     Pass
@@ -65,7 +70,8 @@ expectEqual expected actual =
    Pass
    > expectNotEqual 1 1
    Fail "expected values to differ but both were 1" -}
-export expectNotEqual : (Eq a, Debug a) => a -> a -> Expectation
+export
+expectNotEqual : (Eq a, Debug a) => a -> a -> Expectation
 expectNotEqual expected actual =
   if neq expected actual then
     Pass
@@ -78,7 +84,8 @@ expectNotEqual expected actual =
    Pass
    > expectLessThan 10 15
    Fail "expected 15 < 10" -}
-export expectLessThan : (Ord a, Debug a) => a -> a -> Expectation
+export
+expectLessThan : (Ord a, Debug a) => a -> a -> Expectation
 expectLessThan expected actual =
   if lt actual expected then
     Pass
@@ -91,7 +98,8 @@ expectLessThan expected actual =
    Pass
    > expectGreaterThan 10 3
    Fail "expected 3 > 10" -}
-export expectGreaterThan : (Ord a, Debug a) => a -> a -> Expectation
+export
+expectGreaterThan : (Ord a, Debug a) => a -> a -> Expectation
 expectGreaterThan expected actual =
   if gt actual expected then
     Pass
@@ -110,7 +118,8 @@ expectAllStep Pass e = e
    Pass
    > expectAll [Pass, Fail "oops", Pass]
    Fail "oops" -}
-export expectAll : List Expectation -> Expectation
+export
+expectAll : List Expectation -> Expectation
 expectAll es = fold expectAllStep Pass es
 
 -- ── Test runner ──────────────────────────────────────────────────────────
@@ -129,7 +138,8 @@ goTests ((name, thunk)::rest) passed failed = match thunk ()
 
 {- | Run a list of `(name, thunk)` test pairs.  Prints each result and a
    final summary; returns `True` when all tests pass. -}
-export runTests : List (String, Unit -> Expectation) -> <IO> Bool
+export
+runTests : List (String, Unit -> Expectation) -> <IO> Bool
 runTests tests = goTests tests 0 0
 # DESUGAR
 (DData Public "Expectation" () ((variant "Pass" (ConPos)) (variant "Fail" (ConPos (TyCon "String")))) ())

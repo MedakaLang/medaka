@@ -1,5 +1,5 @@
 # META
-source_lines=641
+source_lines=643
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted comment-preserving formatter — port of lib/printer.ml's
@@ -622,7 +622,8 @@ walkDecls st srcLines (d::ds) (p::ps) (c::rest) =
 -- position list and the decl list differ in length, fall back to the plain
 -- comment-free `programToString`-equivalent (render each decl + "\n").  Mirror
 -- of lib/printer.ml's length guard.
-export formatProgram : List Decl -> List DeclPos -> List Int -> List (List Int) -> List Comment -> Int -> String -> String
+export
+formatProgram : List Decl -> List DeclPos -> List Int -> List (List Int) -> List Comment -> Int -> String -> String
 formatProgram decls declPositions variantLines chainLines comments _lastContentLine src =
   if listLen declPositions /= listLen decls then stringConcat (map (d => render (printDecl d) ++ "\n") decls)
   else
@@ -640,7 +641,8 @@ drainAll (FmtState pieces (c::rest) vlines cursor started) =
   drainAll (emitComment (FmtState pieces rest vlines cursor started) c)
 
 -- Convenience: parse + collect comments + format, from source text.
-export formatSource : String -> String
+export
+formatSource : String -> String
 formatSource src = match parseWithPositions src
   (decls, pos) => formatProgram decls (positionsDecls pos) (positionsVariantLines pos) (positionsChainLines pos) (collectComments src) (positionsLastContentLine pos) src
 # DESUGAR

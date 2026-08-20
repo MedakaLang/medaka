@@ -1,5 +1,5 @@
 # META
-source_lines=2289
+source_lines=2302
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka lexer — Stage 1 port of `lib/lexer.mll`.
@@ -147,7 +147,8 @@ deriving (Eq)
 
 -- Mirrors `lib/lexer.mll` `token_to_string`.  String-bearing tokens use
 -- `debugStringLit` (the `%S`-style quoted/escaped form); ints use `intToString`.
-export tokenToString : Token -> String
+export
+tokenToString : Token -> String
 tokenToString (TInt n _) = "INT " ++ intToString n
 tokenToString (TFloat f) = "FLOAT " ++ floatToString f
 tokenToString (TString s) = "STRING " ++ debugStringLit s
@@ -249,7 +250,8 @@ tokenToString (TLexError s) = "LEX_ERROR " ++ debugStringLit s
 -- spelling in backticks; literal categories render as a phrase (`a number`);
 -- layout/synthetic tokens render as a plain phrase (`end of input`) since
 -- they have no surface spelling a user typed.
-export describeToken : Token -> String
+export
+describeToken : Token -> String
 describeToken (TInt _ _) = "a number"
 describeToken (TFloat _) = "a number"
 describeToken (TString _) = "a string"
@@ -2123,7 +2125,8 @@ layoutWithOffsetPairs src len = elseFilterPairs (layoutPairs
   None
   False)
 
-export tokenize : String -> List Token
+export
+tokenize : String -> List Token
 tokenize s =
   let src = stringToChars s
   let len = arrayLength src
@@ -2133,7 +2136,8 @@ tokenize s =
 -- char offset.  The position side-channel (`compiler/parser.mdk`) consults the
 -- line array to record per-decl / per-variant source lines.  The Token stream
 -- (`map fst`) is byte-identical to `tokenize`.
-export tokenizeWithLines : String -> (List Token, List Int)
+export
+tokenizeWithLines : String -> (List Token, List Int)
 tokenizeWithLines s =
   let src = stringToChars s
   let len = arrayLength src
@@ -2148,7 +2152,8 @@ tokenizeWithLines s =
 -- token index — the structured parse-error path (`parser.mdk`'s `parseResult`)
 -- needs the column to mirror the OCaml oracle's `L:C` format.  The Token stream
 -- (`map fst`) is byte-identical to `tokenize`.
-export tokenizeWithOffsets : String -> (List Token, List Int)
+export
+tokenizeWithOffsets : String -> (List Token, List Int)
 tokenizeWithOffsets s =
   let src = stringToChars s
   let len = arrayLength src
@@ -2163,7 +2168,8 @@ tokenizeWithOffsets s =
 -- path (`parseLocated`) to give `locOfSpan` a true end offset so ELoc ranges
 -- match OCaml's `$endpos`-derived end_line/end_col exactly.  The Token stream
 -- (`map fst`) is byte-identical to `tokenize`.
-export tokenizeWithOffsetPairs : String -> (List Token, List (Int, Int))
+export
+tokenizeWithOffsetPairs : String -> (List Token, List (Int, Int))
 tokenizeWithOffsetPairs s =
   let src = stringToChars s
   let len = arrayLength src
@@ -2176,14 +2182,16 @@ tokenizeWithOffsetPairs s =
 -- pair, mirroring the OCaml `pos_lnum` / `pos_cnum - pos_bol` reported by the
 -- parse-error oracle.  Reuses `posLineColFrom` (the comment side-channel's
 -- offset→line/col walk).  Used by `parseResult` to locate a structured error.
-export offsetToLineCol : String -> Int -> (Int, Int)
+export
+offsetToLineCol : String -> Int -> (Int, Int)
 offsetToLineCol s off = posLineColFrom (stringToChars s) off 0 1 0
 
 -- Precompute the sorted array of line-start char offsets for a source string:
 -- offset 0, plus the offset just after every '\n'.  One O(N) scan.  Fed to
 -- `offsetToLineColFast` so the located-parse pass can resolve each offset in
 -- O(log N) instead of re-walking from 0 (which made `locOfSpan` O(N²)).
-export lineStartsOf : String -> Array Int
+export
+lineStartsOf : String -> Array Int
 lineStartsOf s =
   let src = stringToChars s
   let len = arrayLength src
@@ -2200,7 +2208,8 @@ lineStartsGo src len i
 -- byte-identical to `offsetToLineCol` for every offset: line = 1 + (# newlines
 -- strictly before `off`); col = off - (start of that line).  The '\n' AT `off`
 -- is NOT counted (mirrors `posLineColFrom`'s `p >= target` guard checked first).
-export offsetToLineColFast : Array Int -> Int -> (Int, Int)
+export
+offsetToLineColFast : Array Int -> Int -> (Int, Int)
 offsetToLineColFast lineStarts off =
   let idx = lineStartSearch lineStarts off 0 (arrayLength lineStarts - 1)
   (idx + 1, off - arrayGetUnsafe idx lineStarts)
@@ -2248,13 +2257,16 @@ advanceLine src target p line
 -- before layout — see `stripComments`).
 export data Comment = Comment Int Int String
 
-export commentLine : Comment -> Int
+export
+commentLine : Comment -> Int
 commentLine (Comment l _ _) = l
 
-export commentCol : Comment -> Int
+export
+commentCol : Comment -> Int
 commentCol (Comment _ c _) = c
 
-export commentText : Comment -> String
+export
+commentText : Comment -> String
 commentText (Comment _ _ t) = t
 
 -- Convert a source char offset to (1-based line, 0-based column) by scanning
@@ -2286,7 +2298,8 @@ rawToCommentsGo src (_::rest) p line lineStart =
   rawToCommentsGo src rest p line lineStart
 
 -- Tokenize-and-collect the comment side channel, in source order.
-export collectComments : String -> List Comment
+export
+collectComments : String -> List Comment
 collectComments s =
   let src = stringToChars s
   let len = arrayLength src

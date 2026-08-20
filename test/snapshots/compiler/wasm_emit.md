@@ -1,5 +1,5 @@
 # META
-source_lines=9300
+source_lines=9304
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -404,7 +404,8 @@ data WasmEmitInputData =
 
 export type WasmEmitInput = WasmEmitInputData
 
-export makeWasmEmitInput : List (String, (String, Int)) -> List (String, (List String, String)) -> List (String, List String) -> Bool -> List (String, List String) -> WasmEmitInput
+export
+makeWasmEmitInput : List (String, (String, Int)) -> List (String, (List String, String)) -> List (String, List String) -> Bool -> List (String, List String) -> WasmEmitInput
 makeWasmEmitInput methodIfaces declSigTypes ctorFieldTypes mainIsFloat recordFieldOrders = WasmEmitInputData methodIfaces (omFromPairs (reverseL methodIfaces) omEmpty) declSigTypes (omFromPairs (reverseL declSigTypes) omEmpty) ctorFieldTypes (omFromPairs (reverseL (map ctorToFloatIdxs ctorFieldTypes)) omEmpty) mainIsFloat recordFieldOrders (omFromPairs (reverseL recordFieldOrders) omEmpty) (recordLabelIndex recordFieldOrders omEmpty)
 
 inputMainIsFloat : WasmEmitInput -> Bool
@@ -1034,12 +1035,14 @@ noteFuncRef emit nm =
     let _ = setRef emit.functionReferenceNames (omInsert nm () !emit.functionReferenceNames)
     setRef emit.functionReferences (nm :: !emit.functionReferences)
 
-export emitProgram : WasmEmitInput -> CProgram -> String
+export
+emitProgram : WasmEmitInput -> CProgram -> String
 emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp
 
 -- Record mode is a complete ordinary emission with a fresh event lifecycle.
 -- It is intentionally separate from the all-binding/no-main census below.
-export emitProgramRecord : WasmEmitInput -> CProgram -> (String, List String)
+export
+emitProgramRecord : WasmEmitInput -> CProgram -> (String, List String)
 emitProgramRecord input cp =
   let emit = freshWasmEmit WGapRecord
   let text = emitProgramWith emit input cp
@@ -1093,7 +1096,8 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
 -- ADT/string/closure-heavy, so ref-mode is the representative path) and never
 -- calls the main-requiring emitRefMain.  Each binding is wrapped with setGapBindingOfW
 -- so a recorded gap is attributed to its source binding.
-export emitProgramGaps : WasmEmitInput -> CProgram -> List String
+export
+emitProgramGaps : WasmEmitInput -> CProgram -> List String
 emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let emit = freshWasmEmit WGapRecord
   let _ = setRef useStrRef (programUsesStr groups)

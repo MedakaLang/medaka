@@ -124,10 +124,12 @@ public export data Docs = Docs (List (String, String))
 -- Exported alongside `Docs`/`uriOfPath` so `medaka_references` (mcp.mdk) can
 -- build a single-buffer table and reuse `referencesResult` verbatim — the
 -- SAME code path the LSP handler runs, per #254's "one code path" design.
-export emptyDocs : Docs
+export
+emptyDocs : Docs
 emptyDocs = Docs []
 
-export docsPut : String -> String -> Docs -> Docs
+export
+docsPut : String -> String -> Docs -> Docs
 docsPut uri src (Docs xs) = Docs ((uri, src) :: docsRemove uri xs)
 
 docsRemove : String -> List (String, String) -> List (String, String)
@@ -521,7 +523,8 @@ implLabel iface = stringConcat ["impl ", iface]
 -- `medaka_symbols` (#255) — parse-only, no typecheck, so it's a pure function of
 -- `src` and safe for the stateless MCP disk-read harness (mirrors `typeAtPoint`'s
 -- export shape).
-export documentSymbols : String -> List Json
+export
+documentSymbols : String -> List Json
 documentSymbols src = match parseWithPositionsOpt src
   None => []
   Some (decls, positions) => map renderSymbol (collapseSymbols (symbolParts decls (positionsDecls positions)))
@@ -749,7 +752,8 @@ hoverFor runtimeSrc coreSrc uri src params docs = match (positionLine params, po
 -- loader's read/disk fallback (readModuleProgF).  None ⇒ off any identifier or
 -- not in scope — the caller maps that to a clean "no symbol" result, never a
 -- crash.
-export typeAtPoint : String -> String -> String -> String -> Int -> Int -> <IO> Option String
+export
+typeAtPoint : String -> String -> String -> String -> Int -> Int -> <IO> Option String
 -- Not a single-monad passthrough bind: identifierAt/hoverScheme are pure Option
 -- while hoverEnvFor is <IO> Option, and the nesting deliberately mirrors hoverFor's
 -- load-bearing order — a `do` block cannot express the mixed pure/IO steps.
@@ -1473,7 +1477,8 @@ pathOfUri uri =
   else
     uri
 
-export uriOfPath : String -> String
+export
+uriOfPath : String -> String
 uriOfPath path =
   if stringLength path >= 7 && stringSlice 0 7 path == "file://" then
     path
@@ -1632,7 +1637,8 @@ handleDefinition idJson params docs =
 -- sibling `uri` field — the MCP handler passes the caller's own `file` string
 -- through unmodified (no `uriOfPath` wrapping) so a relative request path stays
 -- relative in the result (path-stable for a golden).
-export definitionResult : String -> String -> Json -> Json
+export
+definitionResult : String -> String -> Json -> Json
 definitionResult uri src params = match (positionLine params, positionChar params)
   (Some line, Some col) => match identifierAt src line col
     None => JNull
@@ -1683,7 +1689,8 @@ handleReferences runtimeSrc coreSrc idJson params docs =
 -- intra-project only — `buildRefIndexProject` enumerates under the project
 -- root alone, never the separate stdlib root, so it never descends into
 -- stdlib/prelude bodies.
-export referencesResult : String -> String -> String -> String -> Json -> Docs -> <IO> Json
+export
+referencesResult : String -> String -> String -> String -> Json -> Docs -> <IO> Json
 referencesResult runtimeSrc coreSrc uri src params docs = match (positionLine params, positionChar params)
   (Some line, Some col) => match identifierAt src line col
     None => jArray []
@@ -1912,7 +1919,8 @@ serve runtimeSrc coreSrc docs = match serveOnce runtimeSrc coreSrc docs
   Step docs2 True => serve runtimeSrc coreSrc docs2
 
 -- Public entry point for the driver.
-export runServer : String -> String -> <IO> Unit
+export
+runServer : String -> String -> <IO> Unit
 runServer runtimeSrc coreSrc =
   let _ = logLine "=== medaka-lsp session start ==="
   serve runtimeSrc coreSrc emptyDocs

@@ -741,7 +741,8 @@ export type EmitInput = EmitInputData
 -- `recordFieldOrders` is LAST on purpose: every other list-shaped parameter here is
 -- `List (String, List String)` too, so appending it where its neighbour is a String
 -- means a mis-ordered call site is a TYPE error rather than a silently swapped table.
-export makeEmitInput : List ((String, String), Bool) -> List ((String, String), List Int) -> List (String, (String, Int)) -> List (String, List String) -> List (String, List String) -> List (String, (List String, String)) -> Bool -> Bool -> Int -> List String -> List (String, String) -> String -> List (String, List String) -> EmitInput
+export
+makeEmitInput : List ((String, String), Bool) -> List ((String, String), List Int) -> List (String, (String, Int)) -> List (String, List String) -> List (String, List String) -> List (String, (List String, String)) -> Bool -> Bool -> Int -> List String -> List (String, String) -> String -> List (String, List String) -> EmitInput
 makeEmitInput returnsSelf selfFnParams methodIfaces methodConstraintIfaces ctorFieldTypes declSigTypes mainIsUnit mainIsFloat emitHalf preludeBinds preludeImpls srcName recordFieldOrders = EmitInputData { returnsSelf = returnsSelf, selfFnParams = selfFnParams, methodIfaces = methodIfaces, methodIfaceIndex = omFromPairs (reverseL methodIfaces) omEmpty, methodConstraintIfaces = methodConstraintIfaces, ctorFieldIndex = omFromPairs (reverseL ctorFieldTypes) omEmpty, declSigIndex = omFromPairs (reverseL declSigTypes) omEmpty, mainIsUnit = mainIsUnit, mainIsFloat = mainIsFloat, emitHalf = emitHalf, preludeBinds = preludeBinds, preludeImpls = preludeImpls, srcName = srcName, recordFieldOrders = recordFieldOrders }
 
 data Emit =
@@ -914,7 +915,8 @@ installLazyGlobalMap : Emit -> List String -> Unit
 installLazyGlobalMap e names =
   e.lazyGlobalMap := Some (omFromNames names omEmpty)
 
-export isLazyGlobal : Emit -> String -> Bool
+export
+isLazyGlobal : Emit -> String -> Bool
 -- Intentional cross-file duplicate of isLazyGlobalW in wasm_emit.mdk (#561 PR-B); not consolidating (tiny query over a backend-local Ref / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
 isLazyGlobal e x = match !e.lazyGlobalMap
@@ -10736,14 +10738,16 @@ emitRangeList e env lo hi incl =
 -- LLVM function per top-level `name p… = …` binding, then a single
 -- `@main` that computes the top-level nullary value bindings (in source order),
 -- then `main`'s body, then a type-directed print.
-export emitProgram : EmitInput -> CProgram -> String
+export
+emitProgram : EmitInput -> CProgram -> String
 emitProgram input cp =
   let (text, _) = emitProgramMode Strict input cp
   text
 
 -- Record-mode emission is self-contained: callers receive both the rendered LLVM and
 -- the gap events, so no state can leak across emissions in one process.
-export emitProgramRecord : EmitInput -> CProgram -> (String, List String)
+export
+emitProgramRecord : EmitInput -> CProgram -> (String, List String)
 emitProgramRecord input cp = emitProgramMode Record input cp
 
 -- Per-emission derived-state config (RUN-EMIT-002): the fields the six-row
@@ -11162,7 +11166,8 @@ ctag _ = "?"
 -- real prelude/compiler module carries no `main`).  Emits every fn-bind, value
 -- bind, and impl group; returns the recorded gap events ("<binding>\t<reason>").
 -- The emitted LLVM text is discarded by the probe — only the gap log matters.
-export emitProgramGaps : EmitInput -> CProgram -> List String
+export
+emitProgramGaps : EmitInput -> CProgram -> List String
 emitProgramGaps input (CProgram groups ctorArs ctorTypes implEntries) =
   -- #561 PR-A: the gap census emits every value bind ORDINARILY (eager load), so
   -- install an EMPTY lazy set — this also RESETS any prior emitProgram's set so it

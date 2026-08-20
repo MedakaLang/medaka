@@ -15,29 +15,35 @@ import string.{join}
 -- pure write-only side channel (see support/opcount.mdk) and is a NO-OP unless a
 -- profiler driver turned counting on, so it cannot change the emitted IR for any
 -- input and does not perturb the `||` short-circuit below.
-export contains : String -> List String -> Bool
+export
+contains : String -> List String -> Bool
 contains _ [] = False
 contains x (y::ys) =
   let _ = opBump ()
   x == y || contains x ys
 
-export listLen : List a -> Int
+export
+listLen : List a -> Int
 listLen [] = 0
 listLen (_::xs) = 1 + listLen xs
 
-export reverseL : List a -> List a
+export
+reverseL : List a -> List a
 reverseL xs = reverse xs
 
-export anyList : (a -> Bool) -> List a -> Bool
+export
+anyList : (a -> Bool) -> List a -> Bool
 anyList _ [] = False
 anyList p (x::xs) = p x || anyList p xs
 
-export allList : (a -> Bool) -> List a -> Bool
+export
+allList : (a -> Bool) -> List a -> Bool
 allList _ [] = True
 allList p (x::xs) = p x && allList p xs
 
 -- first value bound to a String key in an association list
-export lookupAssoc : String -> List (String, b) -> Option b
+export
+lookupAssoc : String -> List (String, b) -> Option b
 lookupAssoc _ [] = None
 lookupAssoc k ((k2, v)::rest)
   | k == k2 = let _ = opBump () in Some v
@@ -49,10 +55,12 @@ lookupAssoc k ((k2, v)::rest)
 -- the compiler consumers stay unedited.  Importing `string` is near-free here:
 -- String's instances live in `core` (always-present prelude), so the import adds
 -- no new instance surface — only `join` itself (2026-06-30 util migration note).
-export joinWith : String -> List String -> String
+export
+joinWith : String -> List String -> String
 joinWith sep xs = join sep xs
 
-export joinNl : List String -> String
+export
+joinNl : List String -> String
 joinNl xs = joinWith "\n" xs
 
 -- Split a string on '\n' into its lines.  No newline is retained; a trailing
@@ -60,7 +68,8 @@ joinNl xs = joinWith "\n" xs
 -- of joinNl on newline-free pieces.  (Centralizes the latent splitNl cluster —
 -- see HELPER-CENSUS.md — used by the formatter to interleave inner-block
 -- trailing comments into a rendered decl's output lines.)
-export splitNl : String -> List String
+export
+splitNl : String -> List String
 splitNl s =
   let chars = stringToChars s
   splitNlGo chars (arrayLength chars) 0 0
@@ -74,7 +83,8 @@ splitNlGo chars n start i
 -- Split a string on a given character.  Like splitNl but parameterised on the
 -- separator.  An empty string yields [""] (one empty segment); a trailing
 -- separator yields a final empty string.
-export splitOnChar : Char -> String -> List String
+export
+splitOnChar : Char -> String -> List String
 splitOnChar sep s =
   let chars = stringToChars s
   splitOnCharGo chars sep (arrayLength chars) 0 0
@@ -86,7 +96,8 @@ splitOnCharGo chars sep n start i
   | otherwise = splitOnCharGo chars sep n start (i + 1)
 
 -- Join dotted path components with "." in O(total length) (see joinWith).
-export joinDot : List String -> String
+export
+joinDot : List String -> String
 joinDot xs = joinWith "." xs
 
 -- canonical for #242/#243: order-preserving dedup keeping the FIRST occurrence
@@ -118,7 +129,8 @@ joinDot xs = joinWith "." xs
 -- TWICE for every KEPT element — free when the key is `identity`/`fst`, but a
 -- doubled heap allocation for any key that BUILDS a string (`lenKey …`,
 -- `intToString …`).  Every such projection is on a `check`-path caller.
-export dedupBy : (a -> String) -> List a -> List a
+export
+dedupBy : (a -> String) -> List a -> List a
 dedupBy key xs = dedupByGo key xs omEmpty
 
 dedupByGo : (a -> String) -> List a -> OrdMap Unit -> List a
@@ -131,7 +143,8 @@ dedupByGo key (x::xs) seen =
 
 -- canonical for #242/#243: the String-identity specialization of `dedupBy`.
 -- Kept so existing `dedup` callers are unchanged.
-export dedup : List String -> List String
+export
+dedup : List String -> List String
 dedup xs = dedupBy identity xs
 
 -- #242: length-prefix a String field so COMPOSITE `dedupBy` keys concatenate
@@ -140,20 +153,23 @@ dedup xs = dedupBy identity xs
 -- silently merge two elements the naive `List`-scan clones kept distinct.
 -- Length-prefixing makes the split point unambiguous for ANY content, so no
 -- character has to be reserved.
-export lenKey : String -> String
+export
+lenKey : String -> String
 lenKey s = "\{intToString (stringLength s)}:\{s}"
 
 -- Split a list into its leading prefix and final element: Some (init, last),
 -- or None for the empty list.  (Was duplicated byte-identically across ~10
 -- entry mains.)
-export splitLast : List a -> Option (List a, a)
+export
+splitLast : List a -> Option (List a, a)
 splitLast [] = None
 splitLast [x] = Some ([], x)
 splitLast (x::rest) = map ((init, lst) => (x::init, lst)) (splitLast rest)
 
 -- minimal string escaping for the structural / diagnostic dumps (matches
 -- dev/astdump.ml's esc_str and dev/diagdump.ml): backslash, quote, \n \t \r.
-export escStr : String -> String
+export
+escStr : String -> String
 escStr s = "\"" ++ stringConcat (escFrom (stringToChars s) 0) ++ "\""
 
 -- Collect the per-character escapes into a list and let `stringConcat` join
@@ -185,7 +201,8 @@ escOne c
 
 -- Shared with printer.mdk's escSOne (which imports it). escOne/escSOne are a
 -- deliberate divergent-by-design pair, but the hex digits are not — one copy.
-export escOneHex2 : Int -> String
+export
+escOneHex2 : Int -> String
 escOneHex2 b = escOneHexDigit (b / 16) ++ escOneHexDigit (b % 16)
 
 escOneHexDigit : Int -> String
@@ -200,35 +217,42 @@ escOneHexDigit d
 
 -- ── More generic list/option/string/int helpers ───────────────────────────
 
-export isEmptyL : List a -> Bool
+export
+isEmptyL : List a -> Bool
 isEmptyL [] = True
 isEmptyL _ = False
 
-export isNonEmptyL : List a -> Bool
+export
+isNonEmptyL : List a -> Bool
 isNonEmptyL xs = not (isEmptyL xs)
 
-export filterList : (a -> Bool) -> List a -> List a
+export
+filterList : (a -> Bool) -> List a -> List a
 filterList _ [] = []
 filterList p (x::xs)
   | p x = x :: filterList p xs
   | otherwise = filterList p xs
 
-export initList : List a -> List a
+export
+initList : List a -> List a
 initList [] = []
 initList [_] = []
 initList (x::xs) = x :: initList xs
 
-export zipL : List a -> List b -> List (a, b)
+export
+zipL : List a -> List b -> List (a, b)
 zipL xs ys = zip xs ys
 
-export maxI : Int -> Int -> Int
+export
+maxI : Int -> Int -> Int
 -- Intentional: this IS the compiler's hot monomorphic Int max (AGENTS.md
 -- anti-pattern: don't delegate hot inner-loop helpers to the dict-passed
 -- prelude Ord method).
 -- lint-disable-next-line rule-if-max-min
 maxI a b = if a >= b then a else b
 
-export minI : Int -> Int -> Int
+export
+minI : Int -> Int -> Int
 -- Intentional: see maxI above.
 -- lint-disable-next-line rule-if-max-min
 minI a b = if a <= b then a else b
@@ -237,7 +261,8 @@ minI a b = if a <= b then a else b
 -- cost).  Classic two-row dynamic-programming over the target chars — O(|a|·|b|)
 -- time, O(|b|) space.  Used by resolve.mdk to suggest a near "did you mean"
 -- name for an unbound reference.
-export editDistance : String -> String -> Int
+export
+editDistance : String -> String -> Int
 editDistance a b =
   let bs = arrCharList (stringToChars b) 0
   editLastInt (editLoop
@@ -278,12 +303,14 @@ editLastInt [x] = x
 editLastInt (_::xs) = editLastInt xs
 
 -- prefix/suffix tests: (prefix/suffix, string) argument order.
-export startsWith : String -> String -> Bool
+export
+startsWith : String -> String -> Bool
 startsWith pre s =
   let n = stringLength pre
   n <= stringLength s && stringSlice 0 n s == pre
 
-export endsWith : String -> String -> Bool
+export
+endsWith : String -> String -> Bool
 endsWith suf s =
   let n = stringLength s
   let k = stringLength suf
@@ -298,7 +325,8 @@ endsWith suf s =
 -- "does this line name one of my bindings?" with a single set lookup instead
 -- of scanning every candidate name per line — see medaka_cli's userSchemeLines,
 -- which was O(lines × names) before.  Linear in the line's length.
-export schemeLineName : String -> Option String
+export
+schemeLineName : String -> Option String
 schemeLineName l = schemeLineNameGo l 0 (stringLength l)
 
 schemeLineNameGo : String -> Int -> Int -> Option String
@@ -312,15 +340,18 @@ schemeLineNameGo l i n
 -- imports it by name (`import support.util.{… isSome …}`, typecheck.mdk:94), so
 -- deleting it here breaks that import.  Blocked on the ws:typecheck arc (#160)
 -- dropping `isSome` from typecheck.mdk's import list first; then delete this.
-export isSome : Option a -> Bool
+export
+isSome : Option a -> Bool
 isSome (Some _) = True
 isSome None = False
 
-export mapOption : (a -> b) -> Option a -> Option b
+export
+mapOption : (a -> b) -> Option a -> Option b
 mapOption _ None = None
 mapOption f (Some x) = Some (f x)
 
-export orElseOpt : Option a -> Option a -> Option a
+export
+orElseOpt : Option a -> Option a -> Option a
 orElseOpt (Some x) _ = Some x
 orElseOpt None y = y
 
@@ -353,23 +384,27 @@ trimRightGo chars end
     trimRightGo chars (end - 1)
   | otherwise = stringFromChars (arraySubChars chars 0 end)
 
-export stringTrimLeft : String -> String
+export
+stringTrimLeft : String -> String
 stringTrimLeft s =
   let chars = stringToChars s
   let len = arrayLength chars
   trimLeftGo chars 0 len
 
-export stringTrimRight : String -> String
+export
+stringTrimRight : String -> String
 stringTrimRight s =
   let chars = stringToChars s
   let len = arrayLength chars
   trimRightGo chars len
 
-export stringTrim : String -> String
+export
+stringTrim : String -> String
 stringTrim s = stringTrimRight (stringTrimLeft s)
 
 -- ── sorted-unique String list (insertion sort, dedups equal keys) ─────────
-export sortUniqS : List String -> List String
+export
+sortUniqS : List String -> List String
 sortUniqS xs = sortUniqSGo xs []
 
 sortUniqSGo : List String -> List String -> List String
@@ -386,7 +421,8 @@ sortInsertS x (y::ys) = match stringCompare x y
 -- ── UTF-8 byte width ──────────────────────────────────────────────────────
 -- Content-Length frames count bytes; strings count codepoints — sum each
 -- codepoint's encoded width.
-export utf8CharWidth : Int -> Int
+export
+utf8CharWidth : Int -> Int
 utf8CharWidth cp
   | cp < 128 = 1
   | cp < 2048 = 2
@@ -398,7 +434,8 @@ utf8LenGo arr len i acc
   | i >= len = acc
   | otherwise = utf8LenGo arr len (i + 1) (acc + utf8CharWidth (charCode (arrayGetUnsafe i arr)))
 
-export utf8Len : String -> Int
+export
+utf8Len : String -> Int
 utf8Len s =
   let arr = stringToChars s
   utf8LenGo arr (arrayLength arr) 0 0
@@ -435,7 +472,8 @@ decMagNorm s =
      Eq
      > compareDecMag "123" "1230"
      Lt -}
-export compareDecMag : String -> String -> Ordering
+export
+compareDecMag : String -> String -> Ordering
 compareDecMag a b =
   let na = decMagNorm a
   let nb = decMagNorm b
@@ -466,7 +504,8 @@ decFold (c::cs) acc = decFold cs (acc * 10 + (charCode c - 48))
      Some 4611686018427387903
      > parseDecChecked "4611686018427387904"
      None -}
-export parseDecChecked : String -> Option Int
+export
+parseDecChecked : String -> Option Int
 parseDecChecked s =
   let cs = stringToChars s
   let n = arrayLength cs
@@ -484,11 +523,13 @@ parseDecChecked s =
 -- The guard-desugar fallthrough sentinel: desugar emits `EVar fallthroughName`
 -- as a non-exhaustive-match trap, eval binds it to a VFallthrough prim, and the
 -- emitter intercepts it in emitApp.  All three MUST use the same string.
-export fallthroughName : String
+export
+fallthroughName : String
 fallthroughName = "__fallthrough__"
 
 -- Default head-tag for a None with no resolved type-constructor head; both the
 -- interpreter (eval) and the IR lowering compute dispatch off it, so they must
 -- agree on the literal.
-export noneHeadTag : String
+export
+noneHeadTag : String
 noneHeadTag = "__none__"

@@ -1,5 +1,5 @@
 # META
-source_lines=750
+source_lines=761
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build` ported to self-hosted Medaka
@@ -73,7 +73,8 @@ splitWSGo s i start acc =
 
 -- ---- environment / asset resolution ----
 
-export envOr : String -> String -> <IO> String
+export
+envOr : String -> String -> <IO> String
 -- Intentional cross-file duplicate of the same helper in lsp_harness_main.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
 envOr name dflt = match getEnv name
@@ -89,13 +90,16 @@ envOr name dflt = match getEnv name
 -- IS this default layout, so the in-repo dev build keeps working with no env
 -- vars set: exeDir is the repo root, exactly what MEDAKA_ROOT needs to be.  An
 -- explicit env var always wins (envOr only falls back to these when unset).
-export exeDir : <IO> String
+export
+exeDir : <IO> String
 exeDir = dirOf (executablePath ())
 
-export defaultMedakaRoot : <IO> String
+export
+defaultMedakaRoot : <IO> String
 defaultMedakaRoot = exeDir
 
-export defaultMedakaEmitter : <IO> String
+export
+defaultMedakaEmitter : <IO> String
 defaultMedakaEmitter = joinPath exeDir "medaka_emitter"
 
 -- Reads a stdlib prelude file (stdlib/runtime.mdk or stdlib/core.mdk) and, on
@@ -121,7 +125,8 @@ defaultMedakaEmitter = joinPath exeDir "medaka_emitter"
 -- `parseErrDiag`/`ppDiagCliSrc` machinery — plus a context line naming it as the
 -- prelude.  Same shape as the #892 fix for `medaka test`.  (One extra prelude
 -- parse on the happy path; the source is re-parsed downstream regardless.)
-export readPreludeFile : String -> <IO> Result String String
+export
+readPreludeFile : String -> <IO> Result String String
 readPreludeFile path = match readFile path
   Err e => Err "error: cannot read the stdlib prelude at \"\{path}\" (\{e})\n  set MEDAKA_ROOT to your medaka repo/install root, run from the project root, or place stdlib/ next to the medaka binary"
   Ok src => match parseResult src
@@ -160,7 +165,8 @@ stripTrailingUnit s =
 -- itself writes the same output path.  mktemp -d allocates the directory
 -- atomically, so uniqueness depends on nothing but the process.  The 6-X
 -- template is accepted by both GNU and BSD mktemp (dual-platform).
-export makeTempDir : Unit -> <IO> Result String String
+export
+makeTempDir : Unit -> <IO> Result String String
 makeTempDir _ = match runCommand "mktemp" ["-d", "/tmp/medaka_build_XXXXXX"]
   Err e => Err e
   Ok (0, out, _) =>
@@ -180,7 +186,8 @@ removeEntries dir (n::rest) =
 
 -- Tear the scratch dir down so a build leaks nothing into /tmp.  Every Result is
 -- discarded on purpose: a cleanup failure must never fail an otherwise-good build.
-export cleanupTempDir : String -> <IO> Unit
+export
+cleanupTempDir : String -> <IO> Unit
 cleanupTempDir dir = match listDir dir
   Err _ => ()
   Ok entries =>
@@ -361,7 +368,8 @@ emitStderrNote emitErr =
 -- outPath  = output binary path
 -- keepIrCli = True iff `--keep-ir` was passed on the command line (OR'd with
 --             MEDAKA_KEEP_IR inside effectiveKeepIr)
-export runBuild : String -> String -> String -> BuildTarget -> String -> String -> Bool -> <IO> BuildResult
+export
+runBuild : String -> String -> String -> BuildTarget -> String -> String -> Bool -> <IO> BuildResult
 runBuild root medaka cc TNative inputAbs outPath keepIrCli =
   let _ = sweepStaleTempDirs ()
   runBuildNative root medaka cc inputAbs outPath keepIrCli
@@ -396,7 +404,8 @@ runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli =
 -- (walking up from the entry's own dir) resolves nothing useful: a future
 -- native test-execution engine builds a synthesized doctest entry there and
 -- must still see the real project's import roots.
-export runBuildNativeRoots : String -> String -> String -> String -> String -> String -> Bool -> List String -> <IO> BuildResult
+export
+runBuildNativeRoots : String -> String -> String -> String -> String -> String -> Bool -> List String -> <IO> BuildResult
 runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots =
   let emitter = joinPath root "compiler/entries/llvm_emit_modules_main.mdk"
   let runtimeP = joinPath root "stdlib/runtime.mdk"
@@ -671,7 +680,8 @@ withEmitHalf half prog args =
 -- `main` is neither a fn bind nor a value bind) — it exists only to give the loader
 -- a graph to walk.  DCE is off in this mode, so what lands in the object is the
 -- WHOLE prelude, not what the stub happened to reach.
-export emitPreludeObj : String -> String -> String -> String -> <IO> BuildResult
+export
+emitPreludeObj : String -> String -> String -> String -> <IO> BuildResult
 emitPreludeObj cc root medaka outObjPath = match makeTempDir ()
   Err e => BuildErr "error: could not create a scratch directory for the prelude compile: \{e}"
   Ok tmpDir =>
@@ -731,7 +741,8 @@ emitPreludeObjIn cc root medaka outObjPath tmpDir = match detectGC cc tmpDir
 -- omitted from a `-c` compile.  Having the COMPILER decide the flags (rather than
 -- a gate hand-rolling `clang -c medaka_rt.c` with guessed flags) is the whole
 -- point: it removes the drift surface that this optimization keeps rediscovering.
-export emitRtObj : String -> String -> String -> <IO> BuildResult
+export
+emitRtObj : String -> String -> String -> <IO> BuildResult
 emitRtObj cc root outObjPath = match makeTempDir ()
   Err e => BuildErr "error: could not create a scratch directory for the runtime compile: \{e}"
   Ok tmpDir =>

@@ -14,7 +14,8 @@
    42
    > option 0 (x => x + 1) None
    0 -}
-export option : b -> (a -> <e> b) -> Option a -> <e> b
+export
+option : b -> (a -> <e> b) -> Option a -> <e> b
 option dflt f (Some x) = f x
 option dflt _ None = dflt
 

@@ -69,7 +69,8 @@ public export data ExecOut = OutRows (List (List Cell)) | OutChanged Int | OutOk
 -- []
 -- > outRows OutOk
 -- []
-export outRows : ExecOut -> List (List Cell)
+export
+outRows : ExecOut -> List (List Cell)
 outRows (OutRows rows) = rows
 outRows (OutChanged _) = []
 outRows OutOk = []
@@ -80,7 +81,8 @@ outRows OutOk = []
 -- 3
 -- > outChanged OutOk
 -- 0
-export outChanged : ExecOut -> Int
+export
+outChanged : ExecOut -> Int
 outChanged (OutChanged n) = n
 outChanged (OutRows _) = 0
 outChanged OutOk = 0
@@ -95,7 +97,8 @@ outChanged OutOk = 0
 --   (No doctest: it needs a live database file.  Every statement kind, and every
 --   rejection, is gated end-to-end against the real `sqlite3` CLI by
 --   `sqlite/test/dml_oracle.sh`.)
-export execSql : String -> String -> <FileRead, FileWrite> Result String ExecOut
+export
+execSql : String -> String -> <FileRead, FileWrite> Result String ExecOut
 execSql path sql = do
   st <- parseStmt sql
   execStmt path st
@@ -103,7 +106,8 @@ execSql path sql = do
 -- | Run an already-parsed `Stmt` against the database at `path`.
 --
 --   (No doctest: it needs a live database file — see `execSql`.)
-export execStmt : String -> Stmt -> <FileRead, FileWrite> Result String ExecOut
+export
+execStmt : String -> Stmt -> <FileRead, FileWrite> Result String ExecOut
 execStmt path (SSelect sel) = do
   db <- openDb path
   rows <- runSelect db sel tCells
@@ -159,7 +163,8 @@ foldRow (e::rest) acc = do
 --
 -- > constCell (ECol "x")
 -- Err "VALUES: 'x' is not a constant expression — a column reference cannot appear in an INSERT's VALUES"
-export constCell : SqlExpr -> Result String Cell
+export
+constCell : SqlExpr -> Result String Cell
 constCell e = constApply e (compileValue noColumns e)
 
 constApply : SqlExpr -> Result String (List Cell -> Cell) -> Result String Cell

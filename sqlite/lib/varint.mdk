@@ -47,7 +47,8 @@ groupMask = 127
 -- Ok 128
 -- > runByteParser sqVarint (arrayFromList [0x81, 0x80, 0x01])
 -- Ok 16385
-export sqVarint : ByteParser Int
+export
+sqVarint : ByteParser Int
 sqVarint = ByteParser sqVarintGo
 
 -- Decode up to 9 bytes.  `byteNum` counts which byte we are on (1-indexed).
@@ -71,7 +72,8 @@ sqVarintLoop input pos acc byteNum
 -- ---------------------------------------------------------------------------
 
 -- | Number of bytes in the varint encoding of `n` (for header-len self-sizing).
-export sqVarintSize : Int -> Int
+export
+sqVarintSize : Int -> Int
 sqVarintSize n
   | n < 128 = 1
   | n < 16384 = 2
@@ -105,7 +107,8 @@ appendEnd (x::r) b = x :: appendEnd r b
 -- For v < 2^56: 1..8 groups of 7 bits, continuation bit on all but the last.
 -- For v ≥ 2^56: first 8 bytes carry 7 bits each (56 bits, with continuation
 -- bits); the 9th byte carries the low 8 bits (all 8, no continuation bit).
-export sqVarintBytes : Int -> List Int
+export
+sqVarintBytes : Int -> List Int
 sqVarintBytes v =
   if v >= sqVarint9Threshold then
     let low8 = bitAnd v 255

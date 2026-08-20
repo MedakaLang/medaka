@@ -1,5 +1,5 @@
 # META
-source_lines=31308
+source_lines=31358
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -486,10 +486,12 @@ normHole p = p
 -- exactly `Atom "Foo" (dtopFor "Foo")` (= PUnit in Stage 1).
 public export data Atom = Atom String Param
 
-export atomLabel : Atom -> String
+export
+atomLabel : Atom -> String
 atomLabel (Atom l _) = l
 
-export atomParam : Atom -> Param
+export
+atomParam : Atom -> Param
 atomParam (Atom _ p) = p
 
 -- ── effect-label DOMAIN registry (v2 Stage 2a) ─────────────────────────────
@@ -563,7 +565,8 @@ prefixConcrete s =
 
 -- p1 ⊑ p2 : is p1 at least as constrained (more specific) as p2?  In the Prefix
 -- domain, p1 ⊑ p2 iff p1's concrete part starts with p2's concrete part.
-export dsub : Param -> Param -> Bool
+export
+dsub : Param -> Param -> Bool
 dsub p1 p2 = dsubN (normHole p1) (normHole p2)
 
 dsubN : Param -> Param -> Bool
@@ -705,7 +708,8 @@ commonPrefixLen a b i =
 
 -- manifest / error text for a param.  ⊤ renders as empty so a ⊤-param atom
 -- renders as JUST its label — byte-identical to v1.
-export drender : Param -> String
+export
+drender : Param -> String
 drender p = drenderN (normHole p)
 
 drenderN : Param -> String
@@ -849,7 +853,8 @@ atomOfWritten (l, Some pat) =
 -- brace-delimited, comma-separated literal `{a,b,c}` (the parser's `effParamFor`
 -- TLBrace clause builds exactly this).  Decode it back to the element list.
 -- (Keeps the carrier type `Option String`, so no AST `TyEffect` ripple.)
-export decodeSetParam : String -> List String
+export
+decodeSetParam : String -> List String
 decodeSetParam s =
   let n = stringLength s
   if n >= 2 && stringSlice 0 1 s == "{" && stringSlice (n - 1) n s == "}" then
@@ -871,7 +876,8 @@ decodeSetParam s =
 -- `<Net "a.com/*">` under a Product-registered Net means Host=a.com/*, Method=⊤.
 -- (A *third* nested level would make this encoding fiddly — WS-4 is the natural
 -- stopping point for the carrier hack; widen the AST carrier THEN, not piecemeal.)
-export decodeProductParam : String -> Param
+export
+decodeProductParam : String -> Param
 decodeProductParam s =
   let n = stringLength s
   if n >= 4 && stringSlice 0 3 s == "@P{" && stringSlice (n - 1) n s == "}" then
@@ -1091,7 +1097,8 @@ effrowNorm (EffRow labels tail) = match tail
   None => EffRow labels tail
 
 -- the concrete labels (atoms) currently known for a row (ignores the open tail)
-export effrowLabels : EffRow -> List Atom
+export
+effrowLabels : EffRow -> List Atom
 effrowLabels r = match effrowNorm r
   EffRow labels _ => labels
 
@@ -5662,10 +5669,12 @@ mkMethodOccObl iface typarams mty occ prov loc = UObligation {
 -- Getters for the LSP (cross-module).  The raw Refs are nullary value globals
 -- (@mdk_g_), which the import-aware mangling map doesn't carry, so expose them
 -- through functions — the form every other tools→typecheck import already uses.
-export currentLocalSchemes : Unit -> List (String, Scheme)
+export
+currentLocalSchemes : Unit -> List (String, Scheme)
 currentLocalSchemes _ = perRun.value.localSchemesOut.value
 
-export currentSeedSchemes : Unit -> List (String, Scheme)
+export
+currentSeedSchemes : Unit -> List (String, Scheme)
 currentSeedSchemes _ = perRun.value.seedSchemesOut.value
 
 recordLocalBind : String -> Mono -> Unit
@@ -6518,7 +6527,8 @@ sitesFor fn idx = fromOption [] (omLookup fn idx)
 -- the dispatch-index registry: each interface method → index of its first arg
 -- mentioning the interface typaram.  Methods with NO such arg (return-position)
 -- contribute nothing.  Computed structurally from interface decls.
-export argDispatchIndices : List Decl -> List (String, Int)
+export
+argDispatchIndices : List Decl -> List (String, Int)
 argDispatchIndices prog = flatMap argDispatchOfDecl prog
 
 argDispatchOfDecl : Decl -> List (String, Int)
@@ -6649,22 +6659,28 @@ resolveArgStamp implTable keyTable name tagRef implRef am fullMono encl =
 public export data TcDiag =
   | TcDiag String Int (Option Loc) String (Option String) (Option (Loc, String))
 
-export tcCode : TcDiag -> String
+export
+tcCode : TcDiag -> String
 tcCode (TcDiag c _ _ _ _ _) = c
 
-export tcSeverity : TcDiag -> Int
+export
+tcSeverity : TcDiag -> Int
 tcSeverity (TcDiag _ s _ _ _ _) = s
 
-export tcLoc : TcDiag -> Option Loc
+export
+tcLoc : TcDiag -> Option Loc
 tcLoc (TcDiag _ _ l _ _ _) = l
 
-export tcMsg : TcDiag -> String
+export
+tcMsg : TcDiag -> String
 tcMsg (TcDiag _ _ _ m _ _) = m
 
-export tcHelp : TcDiag -> Option String
+export
+tcHelp : TcDiag -> Option String
 tcHelp (TcDiag _ _ _ _ h _) = h
 
-export tcFix : TcDiag -> Option (Loc, String)
+export
+tcFix : TcDiag -> Option (Loc, String)
 tcFix (TcDiag _ _ _ _ _ f) = f
 
 -- ── type-error accumulator ─────────────────────────────────────────────────
@@ -6714,7 +6730,8 @@ typeErrorsSticky : Ref Bool
 typeErrorsSticky = Ref False
 
 -- Clear the sticky accumulator.  Call once at the start of a build/run pipeline.
-export resetTypeErrorsSticky : Unit -> Unit
+export
+resetTypeErrorsSticky : Unit -> Unit
 resetTypeErrorsSticky _ = typeErrorsSticky := False
 
 -- #760: True only while inferUserImplBodies runs (the CHECK-path ground-impl obligation
@@ -6727,7 +6744,8 @@ useFastIfaceMethodTy : Ref Bool
 useFastIfaceMethodTy = Ref False
 
 -- True iff any type error was pushed since the last resetTypeErrorsSticky.
-export hadTypeErrors : Unit -> Bool
+export
+hadTypeErrors : Unit -> Bool
 hadTypeErrors _ = !typeErrorsSticky
 
 -- issue 1146 — THE SOLE WRITER of the `typeErrors` channel.  Every push, deduped
@@ -6982,7 +7000,8 @@ currentMethodMismatch = Ref None
 --     `headTyconNameMono`, which is the pair THAT comment means.
 --
 -- Stage 2 query: did the last-elaborated `main` infer to an `Async`-headed type?
-export mainTypeIsAsync : Unit -> Bool
+export
+mainTypeIsAsync : Unit -> Bool
 mainTypeIsAsync _ = match driverState.value.mainSchemeRef.value
   Some (Forall _ _ t) => headTyconNameMono t == Some "Async"
   None => False
@@ -6992,7 +7011,8 @@ mainTypeIsAsync _ = match driverState.value.mainSchemeRef.value
 -- the LLVM emitter to suppress the auto-print of Unit-returning mains even when no
 -- explicit `main : <IO> Unit` annotation is present — e.g. `main = applyEff f 42`
 -- where `applyEff : (a -> <IO> b) -> a -> <IO> b` and `f : Int -> <IO> Unit`.
-export mainTypeIsUnit : Unit -> Bool
+export
+mainTypeIsUnit : Unit -> Bool
 mainTypeIsUnit _ = match driverState.value.mainSchemeRef.value
   Some (Forall _ _ t) => match normalize t
     TCon "Unit" _ => True
@@ -7003,7 +7023,8 @@ mainTypeIsUnit _ = match driverState.value.mainSchemeRef.value
 -- Used by the LLVM/WasmGC emitters to render a bare Float value main correctly
 -- even when the structural `mainKind`/`refMainKind` can't see through a polymorphic
 -- HOF's return type (e.g. `main = fold (acc x => acc + x) 0.0 [1.0, 2.0, 3.0]`).
-export mainTypeIsFloat : Unit -> Bool
+export
+mainTypeIsFloat : Unit -> Bool
 mainTypeIsFloat _ = match driverState.value.mainSchemeRef.value
   Some (Forall _ _ t) => match normalize t
     TCon "Float" _ => True
@@ -7059,7 +7080,8 @@ mainTypeIsFloat _ = match driverState.value.mainSchemeRef.value
 -- like an error is, so a `# TYPES` section holding one is NOT `--bless`-able.  Keyed on
 -- the accumulator rather than sniffing the rendered text: the renderer must not have to
 -- guess which of its own lines are diagnostics.
-export hadMatchWarnings : Unit -> Bool
+export
+hadMatchWarnings : Unit -> Bool
 hadMatchWarnings _ = match driverState.value.matchWarnings.value
   [] => False
   _ => True
@@ -7304,7 +7326,8 @@ anyListM p (x::xs) = p x || anyListM p xs
 -- `Unbound _ _ => TVar cell` rebuilt a cell on every call.  That is why this matches
 -- on the whole parameter instead of destructuring it in the head: a multi-clause
 -- definition cannot name the value it matched, so it cannot give it back unchanged.
-export normalize : Mono -> Mono
+export
+normalize : Mono -> Mono
 -- lint-disable-next-line rule-match-on-param
 normalize m = match m
   TVar cell => match !cell
@@ -7852,7 +7875,8 @@ substMonoP pos subst esub t = match normalize t
   TEff r => TEff (substRow esub r)
 
 -- ── rendering (mirrors lib/typecheck.ml pp_mono byte-for-byte) ─────────────
-export ppScheme : Scheme -> String
+export
+ppScheme : Scheme -> String
 ppScheme (Forall _ _ t) = ppMono t
 
 -- Render a scheme WITH its constraint context (`Num a => a -> a -> a`).  The
@@ -7863,7 +7887,8 @@ ppScheme (Forall _ _ t) = ppMono t
 -- deduped for a stable display order.  Empty list ⇒ plain ppScheme (no `=>`).
 -- Single-vs-multiple form mirrors ppConstrDoc in tools/doc.mdk (`Num a =>` /
 -- `(Num a, Ord b) =>`).
-export ppSchemeCon : List VecObl -> Scheme -> String
+export
+ppSchemeCon : List VecObl -> Scheme -> String
 ppSchemeCon [] s = ppScheme s
 ppSchemeCon cons (Forall _ _ t) =
   let ctx = Ref []
@@ -7893,7 +7918,8 @@ renderConstraintCtx ctx cnt (o::rest) =
 -- most-recent typecheck left populated).  A name with no recorded obligations
 -- renders as plain ppScheme.  Used by schemeLines (`check --types`) and the LSP
 -- hover/completion/inlay renderers so all display surfaces show `Num a => …`.
-export ppSchemeNamed : String -> Scheme -> String
+export
+ppSchemeNamed : String -> Scheme -> String
 ppSchemeNamed n s =
   -- #837: key the obligation lookup by (name, binding-id), exactly as the check-path
   -- reader does — recovering the id from schemeDefIdsRef (top-level binders of the
@@ -14849,7 +14875,8 @@ unifyClauses env v ((pats, body)::rest) =
 -- Flat arm's own acceptance and diagnostics, and grades the Flat-vs-Module relation
 -- only through a clause true on both sides of the #1564 fix — every arm that ACCEPTS
 -- must compute the same value.  Read its header before changing either arm.
-export elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
+export
+elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
 elaborateOne runtimeDecls coreDecls (rootId, prog) =
   let (coreD, modules) = elaborateModules runtimeDecls coreDecls [(rootId, prog)]
   coreD ++ flatMap snd modules
@@ -14877,7 +14904,8 @@ setDictEligible names =
   driverState.value.dictEligibleRef := names
   driverState.value.dictEligibleSetRef := namesToSet names omEmpty
 
-export elaborateDict : List Decl -> List String -> List String -> List Decl -> List Decl
+export
+elaborateDict : List Decl -> List String -> List String -> List Decl -> List Decl
 elaborateDict runtimeDecls dictNames eligibleNames prog =
   driverState.value.superDeclsRef := prog
   let _ = setDictEligible eligibleNames
@@ -15115,7 +15143,8 @@ dropShadowedCore names (d::rest) = d :: dropShadowedCore names rest
 
 -- the user program's top-level functions carrying a `=>` constraint in their
 -- signature — the set elaborateDict dict-passes
-export constrainedSigNames : List Decl -> List String
+export
+constrainedSigNames : List Decl -> List String
 constrainedSigNames prog = flatMap constrainedSigName prog
 
 constrainedSigName : Decl -> List String
@@ -15135,7 +15164,8 @@ isConstrainedTy _ = False
 -- arg-tag already resolves those, and the goldens type-check with them on RKey, so
 -- they stay OUT.  [allDecls] supplies the interface set for returnPosMethodNames;
 -- bodies come from [preludeDecls] (the shadow-dropped prelude).
-export preludeReturnPosDictNames : List Decl -> List Decl -> List String
+export
+preludeReturnPosDictNames : List Decl -> List Decl -> List String
 preludeReturnPosDictNames preludeDecls allDecls =
   let rpNames = returnPosMethodNames allDecls
   filterList
@@ -15155,7 +15185,8 @@ preludeReturnPosDictNames preludeDecls allDecls =
 -- which no golden driver shares — so module/`=== TYPES ===`/eval goldens stay
 -- byte-identical; the body sites route RDict $dict_<method>_<slot> through the same
 -- activeDictVars layer registerConstraintRegs already builds for return-position.
-export preludeArgPosDictNames : List Decl -> List Decl -> List String
+export
+preludeArgPosDictNames : List Decl -> List Decl -> List String
 preludeArgPosDictNames preludeDecls allDecls =
   let rpSet = preludeReturnPosDictNames preludeDecls allDecls
   filterList (n => not (contains n rpSet)) (constrainedSigNames preludeDecls)
@@ -18460,7 +18491,8 @@ globalCoherenceConflict env = match cohScan CohSweepGlobal (reverseL (map cohImp
 -- prelude-free arg; checkToLinesWithRuntime runs no coherence (byte-identical).
 
 -- exported so the single-file front-end drivers set the user boundary before check
-export setCoherenceUserDecls : List Decl -> Unit
+export
+setCoherenceUserDecls : List Decl -> Unit
 setCoherenceUserDecls ds = driverState.value.coherenceUserDecls := ds
 
 -- ── instance-`requires` impl-dict routing (Phase 83/84 single-level) ────────
@@ -21663,7 +21695,8 @@ spineParts t = match normalize t
 
 -- recognise a fully-saturated tuple spine (arity >= 2 — `()`/Unit stays
 -- `TCon "Unit"`, never a tuple); return its element monos in order.
-export tupleSpine : Mono -> Option (List Mono)
+export
+tupleSpine : Mono -> Option (List Mono)
 tupleSpine t = match spineParts t
   (TCon n _, args) =>
     if listLen args >= 2 && n == tupleHeadTagTc (listLen args) then
@@ -21723,7 +21756,8 @@ tupleUnifyClash a b = match (tupleSpine a, tupleSpine b)
 -- Callers pass the 1-module decl list (preludeDecls ++ user buffer) and read
 -- schemes by name; no eval, so this is the typecheck-only sibling of the
 -- 1-module path.
-export checkProgramSchemes : List Decl -> List Decl -> List (String, Scheme)
+export
+checkProgramSchemes : List Decl -> List Decl -> List (String, Scheme)
 checkProgramSchemes coreProg userProg =
   driverState.value.implInferEnabled := False
   checkProgramSeededSplit [] coreProg userProg
@@ -21734,7 +21768,8 @@ checkProgramSchemes coreProg userProg =
 -- `check_program`, which seeds `Runtime.entries` into the initial env — the LSP
 -- hover/completion/inlay handlers run this so externs resolve and a `let input =
 -- readLine ()` hovers as `String`, not a free `a`.
-export checkProgramSchemesWithRuntime : List Decl -> List Decl -> List Decl -> List (String, Scheme)
+export
+checkProgramSchemesWithRuntime : List Decl -> List Decl -> List Decl -> List (String, Scheme)
 checkProgramSchemesWithRuntime runtimeDecls coreProg userProg =
   driverState.value.implInferEnabled := False
   -- #1280: `coreProg` IS the prelude boundary this entry exists to carry, so the
@@ -27322,7 +27357,8 @@ typeErrorLines : List String -> List String
 typeErrorLines [] = []
 typeErrorLines (e::rest) = "TYPE ERROR: " ++ e :: typeErrorLines rest
 
-export checkToLines : List Decl -> String
+export
+checkToLines : List Decl -> String
 checkToLines prog =
   let schemes = checkProgramSchemes [] prog
   let progCe = flatClassEnvOf prog
@@ -27421,7 +27457,8 @@ seedAndCheckSplit runtimeDecls coreProg userProg =
 -- the caller would otherwise have pre-concatenated onto [userProg]; keeping the two
 -- apart is what lets the flat path scope shadow-hood per module (SHADOW-SEMANTICS S1 —
 -- see flatShadowScopingRef).  Prelude-free callers pass [].
-export checkToLinesWithRuntime : List Decl -> List Decl -> List Decl -> String
+export
+checkToLinesWithRuntime : List Decl -> List Decl -> List Decl -> String
 checkToLinesWithRuntime runtimeDecls coreProg userProg =
   let schemes = seedAndCheckSplit runtimeDecls coreProg userProg
   let errs = reverseL perRun.value.typeErrors.items.value
@@ -27442,7 +27479,8 @@ checkToLinesWithRuntime runtimeDecls coreProg userProg =
 -- typeErrors accumulator, ignoring the success-path scheme dump and the match WARNINGS
 -- (which are not errors).  Used by check.mdk's checkHasErrors to gate the CLI exit code
 -- WITHOUT altering runCheck's reported stdout.
-export checkErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
+export
+checkErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
 checkErrorsWithRuntime runtimeDecls coreProg userProg =
   let _ = seedAndCheckSplit runtimeDecls coreProg userProg
   match perRun.value.typeErrors.items.value
@@ -27456,7 +27494,8 @@ checkErrorsWithRuntime runtimeDecls coreProg userProg =
 -- The oracle is built from the program's own data decls + the syntactic builtins
 -- (same set check_match's env-backed oracle has in the no-prelude path).  Diffs
 -- against `dev/diagdump.exe --check-match` (the harness sorts).
-export checkMatchToLines : List Decl -> List Decl -> String
+export
+checkMatchToLines : List Decl -> List Decl -> String
 checkMatchToLines runtimeDecls prog =
   driverState.value.matchWarnings := []
   driverState.value.matchOracle := (buildOracle prog)
@@ -27469,7 +27508,8 @@ checkMatchToLines runtimeDecls prog =
 -- accumulated errors and non-exhaustive-match warnings as `TcDiag`s — each
 -- carrying its own code, span (B.10.2b / S4), message, and optional help/fix —
 -- so diagnostics.mdk maps them straight to structured `Diag` values.
-export checkProgramDiags : List Decl -> List Decl -> List Decl -> (List TcDiag, List TcDiag)
+export
+checkProgramDiags : List Decl -> List Decl -> List Decl -> (List TcDiag, List TcDiag)
 checkProgramDiags runtimeDecls coreProg userProg =
   let _ = seedAndCheckSplit runtimeDecls coreProg userProg
   (
@@ -30024,7 +30064,8 @@ cmCheckWorker mid seed accData _accAll prog =
 
 -- check every module in dependency order against a shared prelude + runtime.
 -- modules = (moduleId, desugared program) in dependency-first order.
-export checkModules : List Decl -> List Decl -> List (String, List Decl) -> List (String, List (String, Scheme))
+export
+checkModules : List Decl -> List Decl -> List (String, List Decl) -> List (String, List (String, Scheme))
 checkModules runtimeDecls coreDecls0 modules0 =
   -- #1110: acquire type-constructor identity over the whole graph before anything
   -- typechecks; the rebind shadows the raw params so no line below can read the
@@ -30085,7 +30126,8 @@ checkModules runtimeDecls coreDecls0 modules0 =
 -- skipping `resetCrossModuleState` leaks the previous run's universe; skipping THIS write
 -- leaves the previous run's INDEX in place, and a stale index can pick a wrong interface
 -- where an empty one merely declines to the floor.  A standalone caller must do BOTH.
-export checkModuleFullDiags : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), List TcDiag, List TcDiag)
+export
+checkModuleFullDiags : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), List TcDiag, List TcDiag)
 checkModuleFullDiags mid seedVars accData accAll prog =
   -- #415 item 1: same seeding preamble as the flat entry points (one body), but the
   -- oracle decls are THIS module's own first.
@@ -30201,7 +30243,8 @@ cmDiagsWorker mid seed accData accAll prog =
   let (schemes, errs, warns) = checkModuleFullDiags mid seed accData accAll prog
   (schemes, (errs, warns))
 
-export checkModulesDiags : List Decl -> List Decl -> List (String, List Decl) -> List (String, (List TcDiag, List TcDiag))
+export
+checkModulesDiags : List Decl -> List Decl -> List (String, List Decl) -> List (String, (List TcDiag, List TcDiag))
 checkModulesDiags runtimeDecls coreDecls0 modules0 =
   -- #1110: acquire type-constructor identity over the whole graph before anything
   -- typechecks; the rebind shadows the raw params so no line below can read the
@@ -30262,7 +30305,8 @@ attachEntryDiag e [(mid, (errs, warns))] = [(mid, (e::errs, warns))]
 attachEntryDiag e (m::rest) = m :: attachEntryDiag e rest
 
 -- the entry module is last in dependency-first order
-export entryOwnSchemes : List (String, List (String, Scheme)) -> List (String, Scheme)
+export
+entryOwnSchemes : List (String, List (String, Scheme)) -> List (String, Scheme)
 entryOwnSchemes [] = []
 entryOwnSchemes [(_, ss)] = ss
 entryOwnSchemes (_::rest) = entryOwnSchemes rest
@@ -30341,7 +30385,8 @@ cmEntryCollect isLast _mid extra rest =
 -- entry's `name : scheme` lines followed by its non-exhaustive-match warnings.
 -- The harness sorts, so scheme/warn relative order is not load-bearing.  Mirrors
 -- runCheck's single-file shape, but over the entry module of a resolved graph.
-export checkModulesEntryReport : List Decl -> List Decl -> List (String, List Decl) -> String
+export
+checkModulesEntryReport : List Decl -> List Decl -> List (String, List Decl) -> String
 checkModulesEntryReport runtimeDecls coreDecls modules =
   let (schemes, errs, warns) = checkModulesEntryFull runtimeDecls coreDecls modules
   match errs
@@ -30350,7 +30395,8 @@ checkModulesEntryReport runtimeDecls coreDecls modules =
 
 -- exit-code predicate analog of checkHasErrors: any type error in ANY module of
 -- the resolved graph (entry or imported — see cmEntryCollect / foldModules).
-export checkModulesEntryHasErrors : List Decl -> List Decl -> List (String, List Decl) -> Bool
+export
+checkModulesEntryHasErrors : List Decl -> List Decl -> List (String, List Decl) -> Bool
 checkModulesEntryHasErrors runtimeDecls coreDecls modules =
   let (_, errs, _) = checkModulesEntryFull runtimeDecls coreDecls modules
   match errs
@@ -30359,7 +30405,8 @@ checkModulesEntryHasErrors runtimeDecls coreDecls modules =
 
 -- run the multi-module front-end and render the ENTRY module's own bindings as
 -- `name : scheme` per line (the harness sorts) — diffs vs dev/tc_module_probe.
-export checkModulesEntryLines : List Decl -> List Decl -> List (String, List Decl) -> String
+export
+checkModulesEntryLines : List Decl -> List Decl -> List (String, List Decl) -> String
 checkModulesEntryLines runtimeDecls coreDecls modules =
   joinNl (schemeLines (entryOwnSchemes (checkModules
     runtimeDecls
@@ -30372,7 +30419,8 @@ checkModulesEntryLines runtimeDecls coreDecls modules =
 -- section vs its per-module oracle).  Scheme of a module depends only on its
 -- dependency-closure (which precedes it in topo order), so a module's section
 -- is identical whether checked alone or inside a larger union closure.
-export checkModulesAllLines : List Decl -> List Decl -> List (String, List Decl) -> String
+export
+checkModulesAllLines : List Decl -> List Decl -> List (String, List Decl) -> String
 checkModulesAllLines runtimeDecls coreDecls modules =
   joinNl (allModuleLines (checkModules runtimeDecls coreDecls modules))
 
@@ -30393,7 +30441,8 @@ allModuleLines ((mid, ss)::rest) =
 -- of the untyped arg-tag fallback.  RKey-only (dictNames = []): the bootstrap
 -- source uses no `=>`-constrained user polymorphism, so no EDictAt / dict params
 -- and no pendingDictApps / pendingRecDictApps to resolve.
-export elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
+export
+elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 -- E4: apply D3b's ARG-position dict-passing per module, mirroring elaborateDict.
 -- Runs on every path (single elaboration mode, #157).
 --
@@ -31189,7 +31238,8 @@ shadowBareName sm n = match lookupAssoc n sm
 -- The mark sub-phase of elaborateModules (RKey-only): compute rpNames over the
 -- full module graph and prePassDict each module.  Exported so profiling drivers
 -- can bracket the mark phase vs the typecheck phase separately.
-export markModules : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
+export
+markModules : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 markModules coreDecls modules =
   let rpNames = returnPosMethodNames (coreDecls ++ flatMap snd modules)
   let core2 = prePassDict rpNames [] coreDecls

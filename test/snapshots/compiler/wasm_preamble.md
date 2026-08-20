@@ -1,5 +1,5 @@
 # META
-source_lines=1701
+source_lines=1739
 stages=DESUGAR,MARK
 # SOURCE
 -- WasmGC module PREAMBLE — the fixed lines that head every emitted WAT module
@@ -41,7 +41,8 @@ stages=DESUGAR,MARK
 -- section, function defs, `(start)`, and the trailing `)`), so this preamble
 -- deliberately leaves the `(module` paren OPEN.
 
-export preambleHeadLines : List String
+export
+preambleHeadLines : List String
 preambleHeadLines = [
   ";; Medaka WasmGC backend (Stage 2.4c) — emitted WAT.",
   ";; Value rep: WASMGC-DESIGN.md §3 / §8.6.  W2 = scalar i32; W3 = (ref eq) + i31/structs.",
@@ -51,7 +52,8 @@ preambleHeadLines = [
 -- the §6 host-import IO seam (emitted AFTER the type section, since some engines /
 -- the binary format want imports grouped, but WAT order here is fine either way —
 -- kept after the rec group for readability of the emitted module).
-export importLines : List String
+export
+importLines : List String
 importLines = [
   "  ;; ── §6 host-import IO seam (§10 fork e — custom import) ──",
   "  (import \"env\" \"mdk_write_int\" (func $mdk_write_int (param i32)))",
@@ -75,7 +77,8 @@ importLines = [
 -- the $args array.  A capture-free top-level fn used as a VALUE gets a wrapper
 -- closure (arity = param count, env = []).  Direct saturated top-level calls stay
 -- a plain `call` (the fast path) and never touch this machinery.
-export closTypeLines : List String
+export
+closTypeLines : List String
 closTypeLines = [
   "    ;; ── §4 closure ABI (arity-in-struct, uniform code sig) ──",
   "    (type $argarr (array (mut (ref null eq))))",
@@ -92,7 +95,8 @@ closTypeLines = [
 --                            return_call $__mdk_apply on the result with the surplus.
 -- `$mdk_pap` is the PAP code: env[0] is the original closure, env[1..] the saved
 -- partial args; it concatenates saved + incoming and re-applies the original.
-export closApplyLines : List String
+export
+closApplyLines : List String
 closApplyLines = [
   "  ;; ── §4 universal apply runtime (exact / under-PAP / over-saturate) ──",
   "  (func $mdk_pap (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))",
@@ -160,7 +164,8 @@ closApplyLines = [
 -- the SCALAR-only preamble (no ADTs in the program): the W2 shape verbatim — an
 -- empty forward-compat rec group + the imports.  Kept byte-identical to the W2
 -- output so the 15 scalar fixtures do not move.
-export preambleScalarLines : List String
+export
+preambleScalarLines : List String
 preambleScalarLines = preambleHeadLines
   ++ [
     "  ;; ── §3 type section (one rec group, iso-recursive / nominal-modulo-canon) ──",
@@ -182,7 +187,8 @@ preambleScalarLines = preambleHeadLines
 -- writes them one byte at a time through ONE custom host import — the §6 stdout seam,
 -- engine-portable (no GC-array↔JS interop needed).  The JS runner just accumulates
 -- raw bytes and UTF-8-decodes them.
-export ioByteImportLines : List String
+export
+ioByteImportLines : List String
 ioByteImportLines = [
   "  ;; ── §6 host-import IO seam (§10 fork e — byte-level custom import) ──",
   "  (import \"env\" \"mdk_write_byte\" (func $mdk_write_byte (param i32)))",
@@ -192,7 +198,8 @@ ioByteImportLines = [
 -- uses strings (`useStrRef`).  `$str` caches the codepoint count so `stringLength`
 -- is O(1) (RUNTIME-DESIGN §7 decision 2 / §5 INTRINSIC).  `$u8arr` is the UTF-8 byte
 -- backing store (mutable so `array.new_data` / `array.new` can fill it).
-export strTypeLines : List String
+export
+strTypeLines : List String
 strTypeLines = [
   "    ;; ── §3.3 String aggregate (UTF-8 bytes + cached codepoint count) ──",
   "    (type $u8arr (array (mut i8)))",
@@ -213,7 +220,8 @@ strTypeLines = [
 --                     so the WasmGC direct value-main auto-print must agree).
 --   $mdk_int_to_str — render an i64 in decimal into a fresh $str (intToString; the
 --                     LEAF extern).  cp_count == byte_len (all ASCII digits/sign).
-export ioRuntimeLines : List String
+export
+ioRuntimeLines : List String
 ioRuntimeLines = [
   "  ;; ── §2.1 Int representation seam: i31 fast path / $boxint i64 box ──",
   "  ;; layer-17 SOUNDNESS: Ints in [-2^30, 2^30) are i31ref immediates; outside that",
@@ -275,7 +283,8 @@ ioRuntimeLines = [
 --   $mdk_print_strln— write a $str's bytes + a trailing '\n' (putStrLn / String main).
 --   $mdk_int_to_str — render an i64 in decimal into a fresh $str (intToString; the
 --                     LEAF extern).  cp_count == byte_len (all ASCII digits/sign).
-export ioStrRuntimeLines : List String
+export
+ioStrRuntimeLines : List String
 ioStrRuntimeLines = [
   "  ;; ── §6 string byte-write runtime ($str-dependent) ──",
   "  (func $mdk_print_str (param $s (ref $str))",
@@ -328,7 +337,8 @@ ioStrRuntimeLines = [
 -- (`mdk_eputstr`) writes a String's UTF-8 bytes to fd 2; the JS runner accumulates
 -- these into a separate buffer it prints on `process.stderr`; focused gates assert
 -- stderr directly.
-export stderrByteImportLines : List String
+export
+stderrByteImportLines : List String
 stderrByteImportLines = [
   "  (import \"env\" \"mdk_write_err_byte\" (func $mdk_write_err_byte (param i32)))"
 ]
@@ -345,7 +355,8 @@ stderrByteImportLines = [
    corpus it is effectively always set, because the prelude's `Index`/`IndexMut`
    impls are emitted whether or not the program indexes anything; ~15 lines of
    WAT.  Measure before assuming otherwise. -}
-export trapIntRuntimeLines : List String
+export
+trapIntRuntimeLines : List String
 trapIntRuntimeLines = [
   "  ;; -- #1787 numbered-trap decimal runtime (stderr, no newline) --",
   "  ;; write the decimal digits of a NON-NEGATIVE i64 (most-significant first).",
@@ -367,7 +378,8 @@ trapIntRuntimeLines = [
 -- the stderr byte-write runtime ($str-dependent).  Peer of $mdk_print_str/_strln but
 -- routing each byte through $mdk_write_err_byte (matches medaka_rt.c mdk_eputstr /
 -- mdk_eputstrln: payload bytes verbatim, optional trailing '\n').
-export stderrRuntimeLines : List String
+export
+stderrRuntimeLines : List String
 stderrRuntimeLines = [
   "  ;; ── W8 stderr byte-write runtime (ePutStr / ePutStrLn) ──",
   "  (func $mdk_eprint_str (param $s (ref $str))",
@@ -397,7 +409,8 @@ stderrRuntimeLines = [
 --   $mdk_str_upper /
 --   $mdk_str_lower    — ASCII-only case map over BYTES (mdk_string_to_upper/lower).
 --   $mdk_cp_count     — count codepoints in a byte range (UTF-8 non-continuation bytes).
-export strLeafRuntimeLines : List String
+export
+strLeafRuntimeLines : List String
 strLeafRuntimeLines = [
   "  ;; ── W8 string LEAF ops (byte-identical to medaka_rt.c) ──",
   "  ;; count UTF-8 codepoints in a $u8arr over [0,n): every non-continuation byte.",
@@ -583,7 +596,8 @@ strLeafRuntimeLines = [
 -- only when the program uses BOTH strings AND lists (`useStrLeafRef && useListRef`),
 -- so $C_Cons is in scope.  A Nil is an i31 immediate (ordinal 0); a Cons is a
 -- $C_Cons struct.  We detect Nil by `ref.test (ref $C_Cons)` being false.
-export strConcatRuntimeLines : List String
+export
+strConcatRuntimeLines : List String
 strConcatRuntimeLines = [
   "  ;; ── W8 stringConcat (List String) — walk the W7 cons list ──",
   "  (func $mdk_str_concat (param $list (ref eq)) (result (ref $str))",
@@ -625,7 +639,8 @@ strConcatRuntimeLines = [
 -- List append walks the left list into a fixed array, then conses back-to-front
 -- onto `b` so cell identity/order matches the W7 cons rep.  Gated by useStrLeafRef
 -- && useListRef (both forced by `noteW8Binop "++"`), so $str + $C_Cons are in scope.
-export appendRuntimeLines : List String
+export
+appendRuntimeLines : List String
 appendRuntimeLines = [
   "  ;; ── W13 runtime-dispatched `++` (String concat OR List append) ──",
   "  ;; List append is ITERATIVE (destination-passing over the mut $C_Cons tail),",
@@ -683,7 +698,8 @@ appendRuntimeLines = [
 --     ⚠️ #305: a 3-way cannot express NaN's unorderedness, so the emitter does NOT
 --     compare this against 0 for an ordering op — it calls $mdk_value_lt/le/gt/ge,
 --     which answer $float directly and use this only for the $str/int shapes.
-export valueEqRuntimeLines : List String
+export
+valueEqRuntimeLines : List String
 valueEqRuntimeLines = [
   "  ;; -- layer-9 runtime-shape-dispatched `==`/`/=` (String byte-equal OR immediate identity) --",
   "  (func $mdk_value_eq (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
@@ -811,7 +827,8 @@ valueModZeroTrapW : List String
 valueModZeroTrapW = asciiTrapBytesW "runtime error [E-MOD-ZERO]: modulo by zero\n"
   ++ ["        unreachable"]
 
-export valueArithRuntimeLines : List String
+export
+valueArithRuntimeLines : List String
 valueArithRuntimeLines = [
   "  ;; -- A0 runtime value-tag-dispatched arithmetic (poly-`Num`: Int i31/$boxint OR $float) --",
   "  (func $mdk_value_add (param $a (ref eq)) (param $b (ref eq)) (result (ref eq))",
@@ -919,10 +936,12 @@ valueArithRuntimeLines = [
 -- overflow (i64 ops wrap naturally).  Emitted when the program uses any RNG extern.
 --   randomInt lo hi : INCLUSIVE [lo,hi]; randomBool : LSB; randomChar : ASCII [32,126].
 -- randomFloat is DEFERRED (W8b) with the Float-formatting work.
-export rngStateGlobalLines : List String
+export
+rngStateGlobalLines : List String
 rngStateGlobalLines = ["  (global $mdk_rng_state (mut i64) (i64.const 0))"]
 
-export rngRuntimeLines : List String
+export
+rngRuntimeLines : List String
 rngRuntimeLines = [
   "  ;; ── W8 SplitMix64 RNG (byte-identical to medaka_rt.c) ──",
   "  (func $mdk_next_u64 (result i64)",
@@ -954,7 +973,8 @@ rngRuntimeLines = [
 -- hashInt/hashChar : SplitMix64 finalizer (mix64) of the value, masked to [0,2^30).
 -- hashBool : 0/1 direct.  hashString : FNV-1a over UTF-8 BYTES, masked.  hashFloat
 -- is DEFERRED (W8b, Float work).  Mask 0x3FFFFFFF = 2^30-1 fits i31 (non-negative).
-export hashRuntimeLines : List String
+export
+hashRuntimeLines : List String
 hashRuntimeLines = [
   "  ;; ── W8 per-type hashers (byte-identical to medaka_rt.c) ──",
   "  ;; SplitMix64 finalizer as a pure mixer (no state update).",
@@ -977,7 +997,8 @@ hashRuntimeLines = [
 -- the $str-dependent hasher (hashString): FNV-1a over UTF-8 BYTES, masked.  offset
 -- 0xCBF29CE484222325, prime 0x100000001B3 (all i64 wrapping).  Emitted only when the
 -- program uses strings (a hashInt-only program never names the absent `$str`).
-export hashStringRuntimeLines : List String
+export
+hashStringRuntimeLines : List String
 hashStringRuntimeLines = [
   "  ;; hashString : FNV-1a over UTF-8 BYTES, masked.",
   "  (func $mdk_hash_string (param $s (ref $str)) (result i32)",
@@ -998,7 +1019,8 @@ hashStringRuntimeLines = [
 -- Each takes an UNBOXED i32 codepoint (caller does ref.cast + i31.get_u first)
 -- and returns an i32 (0/1 for predicates; codepoint for case-mappers).
 -- The caller wraps the result with ref.i31.
-export charClassRuntimeLines : List String
+export
+charClassRuntimeLines : List String
 charClassRuntimeLines = [
   "  ;; ── W11b ASCII char classification + case mapping (byte-identical to medaka_rt.c) ──",
   "  (func $mdk_char_is_alpha (param $c i32) (result i32)",
@@ -1078,7 +1100,8 @@ charClassRuntimeLines = [
 -- deferred IO/WASI host surface; a non-JS wedge target would later need the in-WAT
 -- dtoa. The host caches the formatted bytes and exposes them as (length, byte-at-index)
 -- so the module rebuilds a $str without GC<->JS interop.
-export floatFmtImportLines : List String
+export
+floatFmtImportLines : List String
 floatFmtImportLines = [
   "  ;; -- W8b floatToString host seam (shortest-round-trip since #57 — reproduced JS-side, see run.js) --",
   "  (import \"env\" \"mdk_float_fmt\" (func $mdk_float_fmt (param f64) (result i32)))",
@@ -1096,7 +1119,8 @@ floatFmtImportLines = [
 -- Every JS harness that instantiates a module (test/wasm/run.js + the playground
 -- worker.js / compile.mjs / *_test.mjs) provides these $mdk_<name> functions.
 -- Gated on WasmEmit.useMath (set by noteW8Extern when a host-math extern is referenced).
-export mathHostImportLines : List String
+export
+mathHostImportLines : List String
 mathHostImportLines = [
   "  ;; -- #101 libm math host seam (JS Math.*, see run.js / worker.js) --",
   "  (import \"env\" \"mdk_cbrt\" (func $mdk_cbrt (param f64) (result f64)))",
@@ -1128,7 +1152,8 @@ mathHostImportLines = [
 -- byte-identical per WH3) reproduces medaka_rt.c mdk_string_to_float: strtod + a full-
 -- consumption endptr check + an empty-string reject. Gated on per-emission
 -- WasmEmit.useFloatStr demand (set by noteW8Extern when "stringToFloat" is referenced).
-export floatStrImportLines : List String
+export
+floatStrImportLines : List String
 floatStrImportLines = [
   "  ;; -- stringToFloat host seam (strtod acceptance set JS-side, see run.js) --",
   "  (import \"env\" \"mdk_str_to_float\" (func $mdk_str_to_float (result f64)))",
@@ -1143,7 +1168,8 @@ floatStrImportLines = [
 -- #370: the ok channel exists because the acceptance set and the value are independent
 -- — strtod("nan") SUCCEEDS with a NaN value, while strtod("") and strtod("1.5 ") fail.
 -- Testing the f64 for NaN can distinguish neither.
-export floatStrRuntimeLines : List String
+export
+floatStrRuntimeLines : List String
 floatStrRuntimeLines = [
   "  ;; stringToFloat : $str -> Option Float (ref eq).",
   "  (func $mdk_string_to_float (param $s (ref $str)) (result (ref eq))",
@@ -1182,7 +1208,8 @@ floatStrRuntimeLines = [
 -- it fits.  Each subtraction is Sterbenz-exact (t <= x < 2t) and each halving of t is
 -- exact, so the remainder is the exact IEEE fmod.  Guards reproduce fmod's NaN cases
 -- (b==0, a inf, a/b NaN); b==inf with finite a returns a (via x<y).  No host import.
-export floatRemRuntimeLines : List String
+export
+floatRemRuntimeLines : List String
 floatRemRuntimeLines = [
   "  (func $mdk_float_rem (param $a f64) (param $b f64) (result f64)",
   "    (local $x f64) (local $y f64) (local $t f64)",
@@ -1219,7 +1246,8 @@ floatRemRuntimeLines = [
   "        (f64.copysign (local.get $x) (local.get $a)))))",
 ]
 
-export floatRuntimeLines : List String
+export
+floatRuntimeLines : List String
 floatRuntimeLines = [
   "  ;; -- W8b Float runtime (byte-identical to medaka_rt.c) --",
   "  ;; intToFloat : i64 (full-width unboxed Int) -> boxed (struct $float).  #199: reads",
@@ -1280,7 +1308,8 @@ floatRuntimeLines = [
 -- the float HASH ($mdk_hash_float) — bit-reinterpret f64 -> i64 then mix64 & mask.
 -- Emitted only when the program uses BOTH Float and a per-type hasher (so the shared
 -- $mdk_hash_mix64 from hashRuntimeLines is in scope).
-export hashFloatRuntimeLines : List String
+export
+hashFloatRuntimeLines : List String
 hashFloatRuntimeLines = [
   "  ;; hashFloat (#758): normalise -0.0 -> +0.0 and every NaN -> one qNaN bit",
   "  ;; pattern, then reinterpret bits as i64 -> mix64 -> mask [0,2^30).  Matches",
@@ -1300,7 +1329,8 @@ hashFloatRuntimeLines = [
 -- randomFloat ($mdk_random_float) — SplitMix64 draw -> f64 in [-1,1).  Needs the W8
 -- $mdk_next_u64 from rngRuntimeLines (gated on float+rng co-use).  `(next>>11)` is the
 -- top 53 bits; * 2^-53 gives [0,1); * 2 - 1 gives [-1,1) — EXACTLY medaka_rt.c.
-export randomFloatRuntimeLines : List String
+export
+randomFloatRuntimeLines : List String
 randomFloatRuntimeLines = [
   "  ;; randomFloat : SplitMix64 -> f64 in [-1,1) (NOTE the -1 offset — see medaka_rt.c).",
   "  (func $mdk_random_float (result (ref $float))",
@@ -1334,7 +1364,8 @@ randomFloatRuntimeLines = [
 --     fold a Cons chain right-to-left ending in Nil (i31 ord 1).
 --   exit      : mdk_exit(i32) host import then `unreachable` (stack-polymorphic).
 -- Gated on useIORef (set by noteW8Extern when any IO extern is referenced).
-export ioHostImportLines : List String
+export
+ioHostImportLines : List String
 ioHostImportLines = [
   "  ;; -- W12 IO host surface (byte-channel marshaling, see run.js) --",
   "  (import \"env\" \"mdk_path_reset\" (func $mdk_path_reset))",
@@ -1353,7 +1384,8 @@ ioHostImportLines = [
 -- the IO host-surface runtime: the byte-channel marshalers + the five extern bodies.
 -- $str-dependent (every path/result is a $str) and $C_Ok/$C_Err/$C_Some/$T_List are
 -- always declared in ref-mode, so these are always in scope when emitted.
-export ioHostRuntimeLines : List String
+export
+ioHostRuntimeLines : List String
 ioHostRuntimeLines = [
   "  ;; -- W12 IO host-surface runtime --",
   "  ;; push a $str's bytes to the host path buffer (reset first).",
@@ -1414,7 +1446,8 @@ ioHostRuntimeLines = [
 -- the cons-list types ($C_Cons / Nil), which are only declared when the program uses
 -- a list. Gated on the fresh emission's WasmEmit.useArgs demand (set when `args` is
 -- referenced, which also forces useListRef so $C_Cons is in scope).
-export ioArgsRuntimeLines : List String
+export
+ioArgsRuntimeLines : List String
 ioArgsRuntimeLines = [
   "  ;; build a $str from the i-th host arg (mdk_arg_len(i) + mdk_arg_byte(i,j)).",
   "  (func $mdk_arg_to_str (param $idx i32) (result (ref $str))",
@@ -1451,7 +1484,8 @@ ioArgsRuntimeLines = [
 -- mdk_read_file_bytes / mdk_write_file_bytes).  Gated on per-emission
 -- WasmEmit.useFileBytes demand; IO, Array, and String cofactors keep $mdk_push_path /
 -- $mdk_io_result_to_str in scope, declare $arr, and provide the Err/path $str.
-export fileBytesHostImportLines : List String
+export
+fileBytesHostImportLines : List String
 fileBytesHostImportLines = [
   "  ;; -- stage-D writeFileBytes host imports (path via mdk_path_push; bytes streamed) --",
   "  (import \"env\" \"mdk_write_file_reset\" (func $mdk_write_file_reset))",
@@ -1459,7 +1493,8 @@ fileBytesHostImportLines = [
   "  (import \"env\" \"mdk_write_file_commit\" (func $mdk_write_file_commit (result i32)))",
 ]
 
-export fileBytesRuntimeLines : List String
+export
+fileBytesRuntimeLines : List String
 fileBytesRuntimeLines = [
   "  ;; -- stage-D byte-clean file I/O runtime --",
   "  ;; readFileBytes : $str path -> Result String (Array Int).  1=Ok bytes / 0=Err msg.",
@@ -1505,7 +1540,8 @@ fileBytesRuntimeLines = [
 -- ref-mode.)  $mdk_str_compare(a, b) -> Ordering (ref eq): memcmp the common prefix,
 -- tie-break by length, return Lt/Eq/Gt (i31 0/1/2).  Both byte-identical to medaka_rt.c
 -- (mdk_string_index_of / mdk_string_compare).  Needs $mdk_cp_count from strLeafRuntime.
-export strSearchRuntimeLines : List String
+export
+strSearchRuntimeLines : List String
 strSearchRuntimeLines = [
   "  ;; -- W8b stringIndexOf / stringCompare (byte-identical to medaka_rt.c) --",
   "  (func $mdk_str_index_of (param $needle (ref $str)) (param $hay (ref $str)) (result (ref eq))",
@@ -1573,7 +1609,8 @@ strSearchRuntimeLines = [
 --   $mdk_chars_to_str : two-pass — sum encoded byte length, alloc $u8arr, encode each
 --     codepoint in place (same lead/continuation masks as $mdk_char_to_str), cp_count
 --     = array.len.
-export strCodecRuntimeLines : List String
+export
+strCodecRuntimeLines : List String
 strCodecRuntimeLines = [
   "  ;; -- W11b UTF-8 codec (byte-identical to medaka_rt.c) --",
   "  ;; decode a $str's UTF-8 bytes into a fresh $arr of cp_count i31 Char codepoints.",
@@ -1693,7 +1730,8 @@ strCodecRuntimeLines = [
 -- (struct.new $C_Some ordinal 0 + the i31 codepoint) / None (i31 ordinal 1).  The
 -- reserved Option ctors ($C_Some / the Option root) are emitted unconditionally in
 -- ref-mode. Gated independently by `WasmEmit.useCharFromCode` — needs no $str/$arr.
-export charFromCodeRuntimeLines : List String
+export
+charFromCodeRuntimeLines : List String
 charFromCodeRuntimeLines = [
   "  ;; -- W11b charFromCode (byte-identical to medaka_rt.c mdk_char_from_code) --",
   "  (func $mdk_char_from_code (param $cp i32) (result (ref eq))",

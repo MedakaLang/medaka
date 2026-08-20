@@ -30,7 +30,8 @@ import support.util.{listLen, reverseL, joinNl, startsWith, stringTrim, splitNl}
 -- rendering, and the 1-based source line of the input line (for `loc`).
 public export data Example = Example String (Option String) Int
 
-export exampleInput : Example -> String
+export
+exampleInput : Example -> String
 exampleInput (Example i _ _) = i
 
 -- Exported for the native execution engine (compiler/tools/native_doctest.mdk),
@@ -38,10 +39,12 @@ exampleInput (Example i _ _) = i
 -- renders one as `debug (…)` (a String, printable) and a smoke example raw (an
 -- arbitrary, not-necessarily-printable type), and the synthesized `main` has to
 -- treat the two differently.
-export exampleExpected : Example -> Option String
+export
+exampleExpected : Example -> Option String
 exampleExpected (Example _ e _) = e
 
-export exampleLine : Example -> Int
+export
+exampleLine : Example -> Int
 exampleLine (Example _ _ l) = l
 
 -- The outcome of running one example.
@@ -55,16 +58,20 @@ public export data RunResult =
   | RunResult Int Int Int Int (List (Example, ExResult))
 -- total passed failed errors details
 
-export runPassed : RunResult -> Int
+export
+runPassed : RunResult -> Int
 runPassed (RunResult _ p _ _ _) = p
 
-export runFailed : RunResult -> Int
+export
+runFailed : RunResult -> Int
 runFailed (RunResult _ _ f _ _) = f
 
-export runErrors : RunResult -> Int
+export
+runErrors : RunResult -> Int
 runErrors (RunResult _ _ _ e _) = e
 
-export runDetails : RunResult -> List (Example, ExResult)
+export
+runDetails : RunResult -> List (Example, ExResult)
 runDetails (RunResult _ _ _ _ d) = d
 
 -- ── engine selection (#81 Stage 3) ──────────────────────────────────────────
@@ -78,7 +85,8 @@ runDetails (RunResult _ _ _ _ d) = d
 -- would start lying the day a second engine ships.
 public export data Engine = EngInterp | EngNative
 
-export engineName : Engine -> String
+export
+engineName : Engine -> String
 engineName EngInterp = "eval"
 engineName EngNative = "native"
 
@@ -91,12 +99,14 @@ engineName EngNative = "native"
 -- `compiler/entries/native_doctest_probe_main.mdk` (native) both render through
 -- these — they were three duplicated bodies until #81 Stage 2.
 
-export doctestFailSuffix : RunResult -> String
+export
+doctestFailSuffix : RunResult -> String
 doctestFailSuffix result
   | runFailed result > 0 || runErrors result > 0 = " (\{intToString (runFailed result)} failed, \{intToString (runErrors result)} errors)"
   | otherwise = ""
 
-export printDoctestDetails : String -> List (Example, ExResult) -> <IO> Unit
+export
+printDoctestDetails : String -> List (Example, ExResult) -> <IO> Unit
 printDoctestDetails _ [] = ()
 printDoctestDetails target ((ex, res)::rest) =
   let _ = printDoctestOne target ex res
@@ -253,7 +263,8 @@ extractGo examples curInput expectedRev (c::rest)
 
 -- ── Public extraction ───────────────────────────────────────────────────────
 
-export extractExamples : List Comment -> List Example
+export
+extractExamples : List Comment -> List Example
 extractExamples comments =
   let pairs = map commentToPair comments
   let expanded = concatMapC pairs
@@ -272,11 +283,13 @@ concatMapC (c::rest) = (if isBlockComment c then expandBlock c else [c])
 -- (so the comparison is against the language's own Debug contract, matching
 -- ppValue (VString s) = s); a smoke example stays raw.
 
-export synthName : Int -> String
+export
+synthName : Int -> String
 synthName i = "__dt_" ++ intToString i ++ "__"
 
 -- Build the synthetic source line for example i.
-export synthSrc : Int -> Example -> String
+export
+synthSrc : Int -> Example -> String
 synthSrc i ex =
   let rhs = match exampleExpected ex
     Some _ => "debug (" ++ exampleInput ex ++ ")"
@@ -291,7 +304,8 @@ synthSrc i ex =
 -- `frontend/parser.mdk`) individually, so one bad example becomes a single
 -- located `Errored` result (see `oneResult` below) instead of zeroing the
 -- whole file's coverage.
-export buildSynthResults : List Example -> List (Result String (List Decl))
+export
+buildSynthResults : List Example -> List (Result String (List Decl))
 buildSynthResults examples = buildSynthResultsGo 0 examples
 
 buildSynthResultsGo : Int -> List Example -> List (Result String (List Decl))
@@ -308,7 +322,8 @@ synthOne i ex = match parseResult (synthSrc i ex)
 -- in order.  A failed example contributes NO decl (and so no `__dt_i__`
 -- binding) — its outcome is reported straight from `synthResults` in
 -- `oneResult`, without ever reaching `lookupBinding`.
-export buildSynthDecls : List (Result String (List Decl)) -> List Decl
+export
+buildSynthDecls : List (Result String (List Decl)) -> List Decl
 buildSynthDecls synthResults = concatOkDecls synthResults
 
 concatOkDecls : List (Result String (List Decl)) -> List Decl
@@ -329,7 +344,8 @@ concatOkDecls ((Err _)::rest) = concatOkDecls rest
 -- implements this contract directly; the interpreter arm (test_cmd.mdk) is a
 -- thin adapter over `lookupBinding (synthName i) env` / `ppValue (force v)`.
 
-export buildDetailsFrom : Result String (List (Result String String)) -> List (Result String (List Decl)) -> List Example -> RunResult
+export
+buildDetailsFrom : Result String (List (Result String String)) -> List (Result String (List Decl)) -> List Example -> RunResult
 buildDetailsFrom renderedResult synthResults examples =
   let details = detailsGoFrom renderedResult synthResults examples
   let passed = countResult isPass details
@@ -399,7 +415,8 @@ countResult p ((_, r)::rest)
   | p r = 1 + countResult p rest
   | otherwise = countResult p rest
 
-export hasUseDecls : List Decl -> Bool
+export
+hasUseDecls : List Decl -> Bool
 hasUseDecls decls = anyUse decls
 
 anyUse : List Decl -> Bool

@@ -1,127 +1,127 @@
 running doctests in stdlib/list.mdk
-  ok   stdlib/list.mdk:24: range 2 5
-  ok   stdlib/list.mdk:26: range 5 5
-  ok   stdlib/list.mdk:28: range 5 2
-  ok   stdlib/list.mdk:30: range 0 1
-  ok   stdlib/list.mdk:38: rangeStep 0 10 3
-  ok   stdlib/list.mdk:40: rangeStep 5 0 (-2)
-  ok   stdlib/list.mdk:50: replicate 3 0
-  ok   stdlib/list.mdk:59: iterate 4 (n => n * 2) 1
-  ok   stdlib/list.mdk:61: iterate 0 (n => n * 2) 1
-  ok   stdlib/list.mdk:63: iterate 1 (n => n * 2) 1
-  ok   stdlib/list.mdk:73: unfold (n => if n > 5 then None else Some (n, n + 1)) 1
-  ok   stdlib/list.mdk:75: unfold (n => if n > 0 then None else Some (n, n + 1)) 1
-  ok   stdlib/list.mdk:77: unfold (n => if n > 0 then None else Some (n, n + 1)) 0
-  ok   stdlib/list.mdk:89: reverse [1, 2, 3]
-  ok   stdlib/list.mdk:99: intersperse 0 [1, 2, 3]
-  ok   stdlib/list.mdk:109: intercalate [0] [[1], [2, 3], [4]]
-  ok   stdlib/list.mdk:117: transpose [[1, 2, 3], [4, 5, 6]]
-  ok   stdlib/list.mdk:119: transpose [[1, 2], [3], [4, 5, 6]]
-  ok   stdlib/list.mdk:129: subsequences [1, 2, 3]
-  ok   stdlib/list.mdk:138: permutations [1, 2, 3]
-  ok   stdlib/list.mdk:155: scanLeft (acc x => acc + x) 0 [1, 2, 3]
-  ok   stdlib/list.mdk:163: scanRight (x acc => x + acc) 0 [1, 2, 3]
-  ok   stdlib/list.mdk:175: findIndex (x => x > 2) [1, 2, 3, 4]
-  ok   stdlib/list.mdk:187: findIndices (x => x > 2) [1, 3, 2, 4]
-  ok   stdlib/list.mdk:199: elemIndex 3 [1, 2, 3, 2]
-  ok   stdlib/list.mdk:206: elemIndices 2 [1, 2, 3, 2]
-  ok   stdlib/list.mdk:208: elemIndices 9 [1, 2, 3]
-  ok   stdlib/list.mdk:217: lookup 2 [(1, "a"), (2, "b")]
-  ok   stdlib/list.mdk:219: lookup 9 [(1, "a"), (2, "b")]
-  ok   stdlib/list.mdk:230: findMap (x => if x > 2 then Some (x * 10) else None) [1, 2, 3, 4]
-  ok   stdlib/list.mdk:232: findMap (x => if x > 9 then Some x else None) [1, 2, 3]
-  ok   stdlib/list.mdk:246: reduce (x y => x + y) [1, 2, 3, 4]
-  ok   stdlib/list.mdk:248: reduce (x y => if x > y then x else y) [3, 1, 2]
-  ok   stdlib/list.mdk:250: reduce (x y => x + y) ([] : List Int)
-  ok   stdlib/list.mdk:262: maximumBy (x y => compare (x % 10) (y % 10)) [23, 47, 15]
-  ok   stdlib/list.mdk:264: maximumBy compare ([] : List Int)
-  ok   stdlib/list.mdk:276: minimumBy (x y => compare (x % 10) (y % 10)) [23, 47, 15]
-  ok   stdlib/list.mdk:278: minimumBy compare ([] : List Int)
-  ok   stdlib/list.mdk:291: mapWithIndex (i x => i * x) [1, 2, 3]
-  ok   stdlib/list.mdk:293: mapWithIndex (i x => i + x) [10, 20]
-  ok   stdlib/list.mdk:303: indexed ["a", "b", "c"]
-  ok   stdlib/list.mdk:312: mapAccumL (s x => (s + x, s)) 0 [1, 2, 3]
-  ok   stdlib/list.mdk:324: mapAccumR (s x => (s + x, s)) 0 [1, 2, 3]
-  ok   stdlib/list.mdk:341: insertAt 1 9 [1, 2, 3]
-  ok   stdlib/list.mdk:343: insertAt 0 9 [1, 2]
-  ok   stdlib/list.mdk:345: insertAt 7 9 [1, 2]
-  ok   stdlib/list.mdk:356: updateAt 1 9 [1, 2, 3]
-  ok   stdlib/list.mdk:358: updateAt 7 9 [1, 2]
-  ok   stdlib/list.mdk:369: removeAt 1 [1, 2, 3]
-  ok   stdlib/list.mdk:371: removeAt 7 [1, 2]
-  ok   stdlib/list.mdk:384: take 2 [1, 2, 3, 4]
-  ok   stdlib/list.mdk:394: drop 2 [1, 2, 3, 4]
-  ok   stdlib/list.mdk:404: takeWhile (x => x < 3) [1, 2, 3, 1]
-  ok   stdlib/list.mdk:406: takeWhile (x => x < 9) [1, 2, 3]
-  ok   stdlib/list.mdk:408: takeWhile (x => x < 0) [1, 2, 3]
-  ok   stdlib/list.mdk:410: takeWhile (x => x < 3) ([] : List Int)
-  ok   stdlib/list.mdk:420: dropWhile (x => x < 3) [1, 2, 3, 1]
-  ok   stdlib/list.mdk:422: dropWhile (x => x < 9) [1, 2, 3]
-  ok   stdlib/list.mdk:424: dropWhile (x => x < 0) [1, 2, 3]
-  ok   stdlib/list.mdk:426: dropWhile (x => x < 3) ([] : List Int)
-  ok   stdlib/list.mdk:436: span (x => x < 3) [1, 2, 3, 1]
-  ok   stdlib/list.mdk:438: span (x => x < 9) [1, 2, 3]
-  ok   stdlib/list.mdk:440: span (x => x < 0) [1, 2, 3]
-  ok   stdlib/list.mdk:442: span (x => x < 3) ([] : List Int)
-  ok   stdlib/list.mdk:453: break (x => x > 2) [1, 2, 3, 1]
-  ok   stdlib/list.mdk:455: break (x => x > 9) [1, 2, 3]
-  ok   stdlib/list.mdk:457: break (x => x > 0) [1, 2, 3]
-  ok   stdlib/list.mdk:459: break (x => x > 2) ([] : List Int)
-  ok   stdlib/list.mdk:466: splitAt 2 [1, 2, 3, 4]
-  ok   stdlib/list.mdk:477: sliceClamped 1 3 [10, 20, 30, 40]
-  ok   stdlib/list.mdk:485: chunks 2 [1, 2, 3, 4, 5]
-  ok   stdlib/list.mdk:496: dropWhileEnd (x => x == 0) [1, 2, 0, 0]
-  ok   stdlib/list.mdk:498: dropWhileEnd (x => x == 0) [0, 1, 0]
-  ok   stdlib/list.mdk:500: dropWhileEnd (x => x == 0) [0, 0]
-  ok   stdlib/list.mdk:508: takeWhileEnd (x => x > 1) [1, 2, 3]
-  ok   stdlib/list.mdk:510: takeWhileEnd (x => x > 9) [1, 2, 3]
-  ok   stdlib/list.mdk:512: takeWhileEnd (x => x > 0) [1, 2]
-  ok   stdlib/list.mdk:522: split [0] [1, 0, 2, 0, 3]
-  ok   stdlib/list.mdk:524: split [0, 0] [1, 0, 0, 2]
-  ok   stdlib/list.mdk:526: split [9] [1, 2]
-  ok   stdlib/list.mdk:528: split [0] [0, 1]
-  ok   stdlib/list.mdk:555: startsWith [1, 2] [1, 2, 3]
-  ok   stdlib/list.mdk:557: startsWith [2, 3] [1, 2, 3]
-  ok   stdlib/list.mdk:559: startsWith ([] : List Int) [1]
-  ok   stdlib/list.mdk:568: endsWith [2, 3] [1, 2, 3]
-  ok   stdlib/list.mdk:570: endsWith [1, 2] [1, 2, 3]
-  ok   stdlib/list.mdk:579: contains [2, 3] [1, 2, 3, 4]
-  ok   stdlib/list.mdk:581: contains [2, 4] [1, 2, 3, 4]
-  ok   stdlib/list.mdk:583: contains ([] : List Int) [1]
-  ok   stdlib/list.mdk:596: sortBy (x y => compare y x) [3, 1, 2]
-  ok   stdlib/list.mdk:615: sort [3, 1, 2, 1]
-  ok   stdlib/list.mdk:624: sortOn (x => 0 - x) [1, 3, 2]
-  ok   stdlib/list.mdk:634: nubBy (x y => x == y) [1, 2, 1, 3, 2]
-  ok   stdlib/list.mdk:646: nub [1, 2, 1, 3, 2, 1]
-  ok   stdlib/list.mdk:654: deleteBy (x y => x == y) 2 [1, 2, 3, 2]
-  ok   stdlib/list.mdk:665: delete 2 [1, 2, 3, 2]
-  ok   stdlib/list.mdk:667: delete 9 [1, 2]
-  ok   stdlib/list.mdk:681: groupBy (x y => x == y) [1, 1, 2, 3, 3, 3]
-  ok   stdlib/list.mdk:691: group [1, 1, 2, 3, 3]
-  ok   stdlib/list.mdk:698: partition (x => x > 2) [1, 2, 3, 4]
-  ok   stdlib/list.mdk:708: somes [Some 1, None, Some 3]
-  ok   stdlib/list.mdk:710: somes ([] : List (Option Int))
-  ok   stdlib/list.mdk:719: oks [Ok 1, Err "boom", Ok 3]
-  ok   stdlib/list.mdk:728: errs [Ok 1, Err "boom", Ok 3]
-  ok   stdlib/list.mdk:737: partitionResults [Ok 1, Err "boom", Ok 3]
-  ok   stdlib/list.mdk:750: tally [1, 2, 1, 3, 1, 2]
-  ok   stdlib/list.mdk:777: uncons [1, 2, 3]
-  ok   stdlib/list.mdk:779: uncons [1]
-  ok   stdlib/list.mdk:781: uncons ([] : List Int)
-  ok   stdlib/list.mdk:807: zip [1, 2, 3] [10, 20]
-  ok   stdlib/list.mdk:809: zip [] [1, 2]
-  ok   stdlib/list.mdk:819: zip3 [1, 2] [3, 4] [5, 6]
-  ok   stdlib/list.mdk:821: zip3 [1, 2, 3] [4, 5] [6]
-  ok   stdlib/list.mdk:832: zipWith (x y => x + y) [1, 2, 3] [10, 20, 30]
-  ok   stdlib/list.mdk:834: zipWith (x y => x * y) [1, 2, 3, 4] [10, 20]
-  ok   stdlib/list.mdk:844: zip4 [1, 2] [3, 4] [5, 6] [7, 8]
-  ok   stdlib/list.mdk:846: zip4 [1, 2] [3] [5, 6] [7, 8]
-  ok   stdlib/list.mdk:858: zipWith3 (x y z => x + y + z) [1, 2] [10, 20] [100, 200]
-  ok   stdlib/list.mdk:860: zipWith3 (x y z => x + y + z) [1, 2, 3] [10, 20] [100]
-  ok   stdlib/list.mdk:870: unzip [(1, 2), (3, 4)]
-  ok   stdlib/list.mdk:872: unzip []
-  ok   stdlib/list.mdk:880: unzip3 [(1, 2, 3), (4, 5, 6)]
-  ok   stdlib/list.mdk:882: unzip3 ([] : List (Int, Int, Int))
+  ok   stdlib/list.mdk:25: range 2 5
+  ok   stdlib/list.mdk:27: range 5 5
+  ok   stdlib/list.mdk:29: range 5 2
+  ok   stdlib/list.mdk:31: range 0 1
+  ok   stdlib/list.mdk:40: rangeStep 0 10 3
+  ok   stdlib/list.mdk:42: rangeStep 5 0 (-2)
+  ok   stdlib/list.mdk:53: replicate 3 0
+  ok   stdlib/list.mdk:63: iterate 4 (n => n * 2) 1
+  ok   stdlib/list.mdk:65: iterate 0 (n => n * 2) 1
+  ok   stdlib/list.mdk:67: iterate 1 (n => n * 2) 1
+  ok   stdlib/list.mdk:78: unfold (n => if n > 5 then None else Some (n, n + 1)) 1
+  ok   stdlib/list.mdk:80: unfold (n => if n > 0 then None else Some (n, n + 1)) 1
+  ok   stdlib/list.mdk:82: unfold (n => if n > 0 then None else Some (n, n + 1)) 0
+  ok   stdlib/list.mdk:95: reverse [1, 2, 3]
+  ok   stdlib/list.mdk:106: intersperse 0 [1, 2, 3]
+  ok   stdlib/list.mdk:117: intercalate [0] [[1], [2, 3], [4]]
+  ok   stdlib/list.mdk:126: transpose [[1, 2, 3], [4, 5, 6]]
+  ok   stdlib/list.mdk:128: transpose [[1, 2], [3], [4, 5, 6]]
+  ok   stdlib/list.mdk:139: subsequences [1, 2, 3]
+  ok   stdlib/list.mdk:149: permutations [1, 2, 3]
+  ok   stdlib/list.mdk:167: scanLeft (acc x => acc + x) 0 [1, 2, 3]
+  ok   stdlib/list.mdk:176: scanRight (x acc => x + acc) 0 [1, 2, 3]
+  ok   stdlib/list.mdk:189: findIndex (x => x > 2) [1, 2, 3, 4]
+  ok   stdlib/list.mdk:202: findIndices (x => x > 2) [1, 3, 2, 4]
+  ok   stdlib/list.mdk:215: elemIndex 3 [1, 2, 3, 2]
+  ok   stdlib/list.mdk:223: elemIndices 2 [1, 2, 3, 2]
+  ok   stdlib/list.mdk:225: elemIndices 9 [1, 2, 3]
+  ok   stdlib/list.mdk:235: lookup 2 [(1, "a"), (2, "b")]
+  ok   stdlib/list.mdk:237: lookup 9 [(1, "a"), (2, "b")]
+  ok   stdlib/list.mdk:249: findMap (x => if x > 2 then Some (x * 10) else None) [1, 2, 3, 4]
+  ok   stdlib/list.mdk:251: findMap (x => if x > 9 then Some x else None) [1, 2, 3]
+  ok   stdlib/list.mdk:266: reduce (x y => x + y) [1, 2, 3, 4]
+  ok   stdlib/list.mdk:268: reduce (x y => if x > y then x else y) [3, 1, 2]
+  ok   stdlib/list.mdk:270: reduce (x y => x + y) ([] : List Int)
+  ok   stdlib/list.mdk:283: maximumBy (x y => compare (x % 10) (y % 10)) [23, 47, 15]
+  ok   stdlib/list.mdk:285: maximumBy compare ([] : List Int)
+  ok   stdlib/list.mdk:298: minimumBy (x y => compare (x % 10) (y % 10)) [23, 47, 15]
+  ok   stdlib/list.mdk:300: minimumBy compare ([] : List Int)
+  ok   stdlib/list.mdk:314: mapWithIndex (i x => i * x) [1, 2, 3]
+  ok   stdlib/list.mdk:316: mapWithIndex (i x => i + x) [10, 20]
+  ok   stdlib/list.mdk:327: indexed ["a", "b", "c"]
+  ok   stdlib/list.mdk:337: mapAccumL (s x => (s + x, s)) 0 [1, 2, 3]
+  ok   stdlib/list.mdk:350: mapAccumR (s x => (s + x, s)) 0 [1, 2, 3]
+  ok   stdlib/list.mdk:368: insertAt 1 9 [1, 2, 3]
+  ok   stdlib/list.mdk:370: insertAt 0 9 [1, 2]
+  ok   stdlib/list.mdk:372: insertAt 7 9 [1, 2]
+  ok   stdlib/list.mdk:384: updateAt 1 9 [1, 2, 3]
+  ok   stdlib/list.mdk:386: updateAt 7 9 [1, 2]
+  ok   stdlib/list.mdk:398: removeAt 1 [1, 2, 3]
+  ok   stdlib/list.mdk:400: removeAt 7 [1, 2]
+  ok   stdlib/list.mdk:414: take 2 [1, 2, 3, 4]
+  ok   stdlib/list.mdk:425: drop 2 [1, 2, 3, 4]
+  ok   stdlib/list.mdk:436: takeWhile (x => x < 3) [1, 2, 3, 1]
+  ok   stdlib/list.mdk:438: takeWhile (x => x < 9) [1, 2, 3]
+  ok   stdlib/list.mdk:440: takeWhile (x => x < 0) [1, 2, 3]
+  ok   stdlib/list.mdk:442: takeWhile (x => x < 3) ([] : List Int)
+  ok   stdlib/list.mdk:453: dropWhile (x => x < 3) [1, 2, 3, 1]
+  ok   stdlib/list.mdk:455: dropWhile (x => x < 9) [1, 2, 3]
+  ok   stdlib/list.mdk:457: dropWhile (x => x < 0) [1, 2, 3]
+  ok   stdlib/list.mdk:459: dropWhile (x => x < 3) ([] : List Int)
+  ok   stdlib/list.mdk:470: span (x => x < 3) [1, 2, 3, 1]
+  ok   stdlib/list.mdk:472: span (x => x < 9) [1, 2, 3]
+  ok   stdlib/list.mdk:474: span (x => x < 0) [1, 2, 3]
+  ok   stdlib/list.mdk:476: span (x => x < 3) ([] : List Int)
+  ok   stdlib/list.mdk:488: break (x => x > 2) [1, 2, 3, 1]
+  ok   stdlib/list.mdk:490: break (x => x > 9) [1, 2, 3]
+  ok   stdlib/list.mdk:492: break (x => x > 0) [1, 2, 3]
+  ok   stdlib/list.mdk:494: break (x => x > 2) ([] : List Int)
+  ok   stdlib/list.mdk:502: splitAt 2 [1, 2, 3, 4]
+  ok   stdlib/list.mdk:514: sliceClamped 1 3 [10, 20, 30, 40]
+  ok   stdlib/list.mdk:523: chunks 2 [1, 2, 3, 4, 5]
+  ok   stdlib/list.mdk:535: dropWhileEnd (x => x == 0) [1, 2, 0, 0]
+  ok   stdlib/list.mdk:537: dropWhileEnd (x => x == 0) [0, 1, 0]
+  ok   stdlib/list.mdk:539: dropWhileEnd (x => x == 0) [0, 0]
+  ok   stdlib/list.mdk:548: takeWhileEnd (x => x > 1) [1, 2, 3]
+  ok   stdlib/list.mdk:550: takeWhileEnd (x => x > 9) [1, 2, 3]
+  ok   stdlib/list.mdk:552: takeWhileEnd (x => x > 0) [1, 2]
+  ok   stdlib/list.mdk:563: split [0] [1, 0, 2, 0, 3]
+  ok   stdlib/list.mdk:565: split [0, 0] [1, 0, 0, 2]
+  ok   stdlib/list.mdk:567: split [9] [1, 2]
+  ok   stdlib/list.mdk:569: split [0] [0, 1]
+  ok   stdlib/list.mdk:597: startsWith [1, 2] [1, 2, 3]
+  ok   stdlib/list.mdk:599: startsWith [2, 3] [1, 2, 3]
+  ok   stdlib/list.mdk:601: startsWith ([] : List Int) [1]
+  ok   stdlib/list.mdk:611: endsWith [2, 3] [1, 2, 3]
+  ok   stdlib/list.mdk:613: endsWith [1, 2] [1, 2, 3]
+  ok   stdlib/list.mdk:623: contains [2, 3] [1, 2, 3, 4]
+  ok   stdlib/list.mdk:625: contains [2, 4] [1, 2, 3, 4]
+  ok   stdlib/list.mdk:627: contains ([] : List Int) [1]
+  ok   stdlib/list.mdk:641: sortBy (x y => compare y x) [3, 1, 2]
+  ok   stdlib/list.mdk:661: sort [3, 1, 2, 1]
+  ok   stdlib/list.mdk:671: sortOn (x => 0 - x) [1, 3, 2]
+  ok   stdlib/list.mdk:682: nubBy (x y => x == y) [1, 2, 1, 3, 2]
+  ok   stdlib/list.mdk:695: nub [1, 2, 1, 3, 2, 1]
+  ok   stdlib/list.mdk:704: deleteBy (x y => x == y) 2 [1, 2, 3, 2]
+  ok   stdlib/list.mdk:716: delete 2 [1, 2, 3, 2]
+  ok   stdlib/list.mdk:718: delete 9 [1, 2]
+  ok   stdlib/list.mdk:733: groupBy (x y => x == y) [1, 1, 2, 3, 3, 3]
+  ok   stdlib/list.mdk:744: group [1, 1, 2, 3, 3]
+  ok   stdlib/list.mdk:752: partition (x => x > 2) [1, 2, 3, 4]
+  ok   stdlib/list.mdk:763: somes [Some 1, None, Some 3]
+  ok   stdlib/list.mdk:765: somes ([] : List (Option Int))
+  ok   stdlib/list.mdk:775: oks [Ok 1, Err "boom", Ok 3]
+  ok   stdlib/list.mdk:785: errs [Ok 1, Err "boom", Ok 3]
+  ok   stdlib/list.mdk:795: partitionResults [Ok 1, Err "boom", Ok 3]
+  ok   stdlib/list.mdk:809: tally [1, 2, 1, 3, 1, 2]
+  ok   stdlib/list.mdk:839: uncons [1, 2, 3]
+  ok   stdlib/list.mdk:841: uncons [1]
+  ok   stdlib/list.mdk:843: uncons ([] : List Int)
+  ok   stdlib/list.mdk:873: zip [1, 2, 3] [10, 20]
+  ok   stdlib/list.mdk:875: zip [] [1, 2]
+  ok   stdlib/list.mdk:886: zip3 [1, 2] [3, 4] [5, 6]
+  ok   stdlib/list.mdk:888: zip3 [1, 2, 3] [4, 5] [6]
+  ok   stdlib/list.mdk:900: zipWith (x y => x + y) [1, 2, 3] [10, 20, 30]
+  ok   stdlib/list.mdk:902: zipWith (x y => x * y) [1, 2, 3, 4] [10, 20]
+  ok   stdlib/list.mdk:913: zip4 [1, 2] [3, 4] [5, 6] [7, 8]
+  ok   stdlib/list.mdk:915: zip4 [1, 2] [3] [5, 6] [7, 8]
+  ok   stdlib/list.mdk:928: zipWith3 (x y z => x + y + z) [1, 2] [10, 20] [100, 200]
+  ok   stdlib/list.mdk:930: zipWith3 (x y z => x + y + z) [1, 2, 3] [10, 20] [100]
+  ok   stdlib/list.mdk:941: unzip [(1, 2), (3, 4)]
+  ok   stdlib/list.mdk:943: unzip []
+  ok   stdlib/list.mdk:952: unzip3 [(1, 2, 3), (4, 5, 6)]
+  ok   stdlib/list.mdk:954: unzip3 ([] : List (Int, Int, Int))
 
 stdlib/list.mdk: 123/123 passed
 Testing "reverse is an involution" ... OK (100 tests)

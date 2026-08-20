@@ -1,5 +1,5 @@
 # META
-source_lines=136
+source_lines=141
 stages=DESUGAR,MARK
 # SOURCE
 -- nonempty — a guaranteed-non-empty list.
@@ -41,7 +41,8 @@ public export data NonEmpty a = NECons a (List a)
    [9]
    > head (singleton 9)
    9 -}
-export singleton : a -> NonEmpty a
+export
+singleton : a -> NonEmpty a
 singleton x = NECons x []
 
 {- | Build a `NonEmpty` from a plain list, or `None` if the list is empty.
@@ -51,7 +52,8 @@ singleton x = NECons x []
    True
    > fromList ([] : List Int)
    None -}
-export fromList : List a -> Option (NonEmpty a)
+export
+fromList : List a -> Option (NonEmpty a)
 fromList [] = None
 fromList (x::rest) = Some (NECons x rest)
 
@@ -63,21 +65,24 @@ fromList (x::rest) = Some (NECons x rest)
 
    > head (NECons 7 [8, 9])
    7 -}
-export head : NonEmpty a -> a
+export
+head : NonEmpty a -> a
 head (NECons x _) = x
 
 {- | The largest element.  Total.
 
    > maximum (NECons 3 [1, 4, 1, 5])
    5 -}
-export maximum : Ord a => NonEmpty a -> a
+export
+maximum : Ord a => NonEmpty a -> a
 maximum (NECons x xs) = fold (acc y => max y acc) x xs
 
 {- | The smallest element.  Total.
 
    > minimum (NECons 3 [1, 4, 1, 5])
    1 -}
-export minimum : Ord a => NonEmpty a -> a
+export
+minimum : Ord a => NonEmpty a -> a
 minimum (NECons x xs) = fold (acc y => min y acc) x xs
 
 -- ---------------------------------------------------------------------------

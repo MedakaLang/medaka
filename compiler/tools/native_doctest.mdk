@@ -142,7 +142,8 @@ definesMain (_::rest) = definesMain rest
 --
 -- The build environment (repo root, `medaka`, `CC`) is read here rather than
 -- taken as parameters, mirroring `medaka build`'s own `runBuildPlainCmd`.
-export runNativeDoctests : String -> String -> List Decl -> List Example -> List (Result String (List Decl)) -> <IO> RunResult
+export
+runNativeDoctests : String -> String -> List Decl -> List Example -> List (Result String (List Decl)) -> <IO> RunResult
 runNativeDoctests target tsrc userDecls examples synthResults =
   buildDetailsFrom
     (nativeRendered target tsrc userDecls examples synthResults)

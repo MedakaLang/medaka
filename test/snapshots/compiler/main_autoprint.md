@@ -1,5 +1,5 @@
 # META
-source_lines=128
+source_lines=131
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/main_autoprint.mdk — shared composite-`main` auto-print wrap.
@@ -71,7 +71,8 @@ definesPrintln (_::rest) = definesPrintln rest
 -- Auto-print fires iff main's inferred type is neither Unit nor `Async _`, the
 -- entry `main` is a zero-arg VALUE (empty param list), AND `println` is in scope.
 -- Requires the caller to have run an elaborate first (populates mainSchemeRef).
-export shouldAutoPrintMain : List Decl -> List (String, List Decl) -> Bool
+export
+shouldAutoPrintMain : List Decl -> List (String, List Decl) -> Bool
 shouldAutoPrintMain coreDecls modules =
   if mainTypeIsUnit () || mainTypeIsAsync () then False
   else
@@ -95,7 +96,8 @@ isMainTypeSig _ = False
 
 -- Rewrite the entry module's `main = <e>` decl to `main = println <e>`, and drop
 -- any explicit `main : T` signature (now stale — see isMainTypeSig).
-export autoPrintWrapModules : List (String, List Decl) -> List (String, List Decl)
+export
+autoPrintWrapModules : List (String, List Decl) -> List (String, List Decl)
 autoPrintWrapModules [] = []
 autoPrintWrapModules [(mid, decls)] =
   [(mid, map wrapMainDecl (filter (d => not (isMainTypeSig d)) decls))]
@@ -124,7 +126,8 @@ wrapPrintln body = EApp (EVar "println") body
 -- multi-module gate deliberately avoids, so it is skipped there (best-effort —
 -- the compiler graph never wraps, so this never affects the fixpoint).  Returns
 -- the type-error `TcDiag`s for the caller to render.
-export underivedMainDiags : List Decl -> List Decl -> List (String, List Decl) -> List TcDiag
+export
+underivedMainDiags : List Decl -> List Decl -> List (String, List Decl) -> List TcDiag
 underivedMainDiags runtimeDecls coreDecls [(_, entryDecls)] =
   let _ = setCoherenceUserDecls entryDecls
   let (tcErrs, _) = checkProgramDiags runtimeDecls coreDecls entryDecls

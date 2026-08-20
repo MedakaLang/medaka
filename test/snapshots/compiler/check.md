@@ -1,5 +1,5 @@
 # META
-source_lines=166
+source_lines=170
 stages=DESUGAR,MARK
 # SOURCE
 -- Composed self-hosted front-end LOGIC — wires the stage ports into one
@@ -49,7 +49,8 @@ import types.typecheck.{
 -- exported so the batch typecheck harness's synthetic entry can pull this
 -- module into a single union closure (does not change its inferred schemes),
 -- and so compiler/entries/check_main.mdk + compiler/medaka_cli.mdk can drive it.
-export runCheck : String -> String -> String -> String
+export
+runCheck : String -> String -> String -> String
 runCheck rsrc csrc tsrc =
   let raw = parse tsrc
   let desugared = desugar raw
@@ -99,7 +100,8 @@ joinNonEmpty a b = "\{a}\n\{b}"
 -- sources, while ignoring exhaustiveness WARNINGS (not errors) and the success
 -- scheme dump.  Keeping this separate from runCheck leaves its stdout byte-
 -- identical (the diff_native_cli gate stays green); only the exit code is gated.
-export checkHasErrors : String -> String -> String -> Bool
+export
+checkHasErrors : String -> String -> String -> Bool
 checkHasErrors rsrc csrc tsrc =
   let raw = parse tsrc
   let desugared = desugar raw
@@ -133,7 +135,8 @@ checkHasErrors rsrc csrc tsrc =
 -- `""` (no-resolve-errors) branch, so a second resolve pass here could only
 -- ever repeat that same `""` — `allowInternal`/`trustedMods` are unused now
 -- for the same reason (kept for signature stability with that call site).
-export runCheckModules : Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> String
+export
+runCheckModules : Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> String
 runCheckModules allowInternal trustedMods rtD coreD mods =
   let exWarns = entryExhaust rtD coreD mods
   let report = checkModulesEntryReport rtD coreD mods
@@ -141,7 +144,8 @@ runCheckModules allowInternal trustedMods rtD coreD mods =
 
 -- exit-code predicate analog of checkHasErrors for the multi-module path: a
 -- resolve error OR any type error in the entry module.
-export checkModulesHasErrors : Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> Bool
+export
+checkModulesHasErrors : Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> Bool
 checkModulesHasErrors allowInternal trustedMods rtD coreD mods =
   let resDiags = resolveModulesToLinesG allowInternal trustedMods rtD coreD mods
   match resDiags

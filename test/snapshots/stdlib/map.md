@@ -1,5 +1,5 @@
 # META
-source_lines=732
+source_lines=761
 stages=DESUGAR,MARK
 # SOURCE
 {- map.mdk — an immutable, ordered key→value map.
@@ -118,7 +118,8 @@ doubleR k1 v1 _ t4 = panic "Map.doubleR: malformed left subtree"
 
    > size (singleton 1 "a")
    1 -}
-export singleton : k -> v -> Map k v
+export
+singleton : k -> v -> Map k v
 singleton k v = Bin 1 k v Tip Tip
 
 {- | Build a map from an association list.  Later pairs win on duplicate keys.
@@ -142,7 +143,8 @@ singleton k v = Bin 1 k v Tip Tip
    [1, 2, 3]
    > findWithDefault 0 1 (fromList [(1, 10), (1, 20)])
    20 -}
-export fromList : Ord k => List (k, v) -> Map k v
+export
+fromList : Ord k => List (k, v) -> Map k v
 fromList xs = fold (m (k, v) => set k v m) Tip xs
 
 -- ── Query ───────────────────────────────────────────────────────────────
@@ -151,7 +153,8 @@ fromList xs = fold (m (k, v) => set k v m) Tip xs
 
    > size (fromList [(1, 10), (2, 20), (1, 30)])
    2 -}
-export size : Map k v -> Int
+export
+size : Map k v -> Int
 size Tip = 0
 size (Bin s _ _ _ _) = s
 
@@ -159,7 +162,8 @@ size (Bin s _ _ _ _) = s
 
    > isEmpty (empty : Map Int Int)
    True -}
-export isEmpty : Map k v -> Bool
+export
+isEmpty : Map k v -> Bool
 isEmpty Tip = True
 isEmpty _ = False
 
@@ -169,7 +173,8 @@ isEmpty _ = False
    Some 20
    > get 9 (fromList [(1, 10), (2, 20)])
    None -}
-export get : Ord k => k -> Map k v -> Option v
+export
+get : Ord k => k -> Map k v -> Option v
 get k Tip = None
 get k (Bin _ k2 v l r) = match compare k k2
   Lt => get k l
@@ -192,7 +197,8 @@ export impl Index (Map k v) k v requires Ord k where
    True
    > has 9 (fromList [(1, 10), (2, 20)])
    False -}
-export has : Ord k => k -> Map k v -> Bool
+export
+has : Ord k => k -> Map k v -> Bool
 has k Tip = False
 has k (Bin _ k2 _ l r) = match compare k k2
   Lt => has k l
@@ -205,7 +211,8 @@ has k (Bin _ k2 _ l r) = match compare k k2
    20
    > findWithDefault 0 9 (fromList [(1, 10), (2, 20)])
    0 -}
-export findWithDefault : Ord k => v -> k -> Map k v -> v
+export
+findWithDefault : Ord k => v -> k -> Map k v -> v
 findWithDefault d k m = match get k m
   None => d
   Some v => v
@@ -216,7 +223,8 @@ findWithDefault d k m = match get k m
 
    > findWithDefault 0 2 (set 2 99 (fromList [(1, 10), (2, 20)]))
    99 -}
-export set : Ord k => k -> v -> Map k v -> Map k v
+export
+set : Ord k => k -> v -> Map k v -> Map k v
 set k v Tip = singleton k v
 set k v (Bin s k2 v2 l r) = match compare k k2
   Lt => balance k2 v2 (set k v l) r
@@ -228,7 +236,8 @@ set k v (Bin s k2 v2 l r) = match compare k k2
 
    > findWithDefault 0 1 (insertWith (n o => n + o) 1 5 (fromList [(1, 10)]))
    15 -}
-export insertWith : Ord k => (v -> v -> v) -> k -> v -> Map k v -> Map k v
+export
+insertWith : Ord k => (v -> v -> v) -> k -> v -> Map k v -> Map k v
 insertWith f k v Tip = singleton k v
 insertWith f k v (Bin s k2 v2 l r) = match compare k k2
   Lt => balance k2 v2 (insertWith f k v l) r
@@ -240,7 +249,8 @@ insertWith f k v (Bin s k2 v2 l r) = match compare k k2
 
    > findWithDefault 0 1 (adjust (n => n * 10) 1 (fromList [(1, 5), (2, 6)]))
    50 -}
-export adjust : Ord k => (v -> v) -> k -> Map k v -> Map k v
+export
+adjust : Ord k => (v -> v) -> k -> Map k v -> Map k v
 adjust f k Tip = Tip
 adjust f k (Bin s k2 v2 l r) = match compare k k2
   Lt => Bin s k2 v2 (adjust f k l) r
@@ -255,7 +265,8 @@ adjust f k (Bin s k2 v2 l r) = match compare k k2
    False
    > size (delete 9 (fromList [(1, 10), (2, 20)]))
    2 -}
-export delete : Ord k => k -> Map k v -> Map k v
+export
+delete : Ord k => k -> Map k v -> Map k v
 delete k Tip = Tip
 delete k (Bin _ k2 v2 l r) = match compare k k2
   Lt => balance k2 v2 (delete k l) r
@@ -287,14 +298,16 @@ glueMin l r = match minView r
 
 {- | Split off the smallest entry: `Some (key, value, rest)`, or `None` when
    empty.  `rest` stays balanced. -}
-export minView : Map k v -> Option (k, v, Map k v)
+export
+minView : Map k v -> Option (k, v, Map k v)
 minView Tip = None
 minView (Bin _ k v l r) = match minView l
   None => Some (k, v, r)
   Some (km, vm, l') => Some (km, vm, balance k v l' r)
 
 {- | Split off the largest entry: `Some (key, value, rest)`, or `None`. -}
-export maxView : Map k v -> Option (k, v, Map k v)
+export
+maxView : Map k v -> Option (k, v, Map k v)
 maxView Tip = None
 maxView (Bin _ k v l r) = match maxView r
   None => Some (k, v, l)
@@ -304,21 +317,24 @@ maxView (Bin _ k v l r) = match maxView r
 
    > getMin (fromList [(3, 0), (1, 0), (2, 0)])
    Some (1, 0) -}
-export getMin : Map k v -> Option (k, v)
+export
+getMin : Map k v -> Option (k, v)
 getMin m = map ((k, v, _) => (k, v)) (minView m)
 
 {- | Largest key/value, or `None`.
 
    > getMax (fromList [(3, 0), (1, 0), (2, 0)])
    Some (3, 0) -}
-export getMax : Map k v -> Option (k, v)
+export
+getMax : Map k v -> Option (k, v)
 getMax m = map ((k, v, _) => (k, v)) (maxView m)
 
 {- | Drop the smallest entry (a no-op on the empty map).
 
    > keys (deleteMin (fromList [(3, 0), (1, 0), (2, 0)]))
    [2, 3] -}
-export deleteMin : Map k v -> Map k v
+export
+deleteMin : Map k v -> Map k v
 deleteMin m = match minView m
   None => Tip
   Some (_, _, m') => m'
@@ -327,7 +343,8 @@ deleteMin m = match minView m
 
    > keys (deleteMax (fromList [(3, 0), (1, 0), (2, 0)]))
    [1, 2] -}
-export deleteMax : Map k v -> Map k v
+export
+deleteMax : Map k v -> Map k v
 deleteMax m = match maxView m
   None => Tip
   Some (_, _, m') => m'
@@ -335,12 +352,14 @@ deleteMax m = match maxView m
 -- ── Folds and traversal (in ascending key order) ────────────────────────
 
 {- | Right fold over key/value pairs in ascending key order. -}
-export foldrWithKey : (k -> v -> b -> <e> b) -> b -> Map k v -> <e> b
+export
+foldrWithKey : (k -> v -> b -> <e> b) -> b -> Map k v -> <e> b
 foldrWithKey f z Tip = z
 foldrWithKey f z (Bin _ k v l r) = foldrWithKey f (f k v (foldrWithKey f z r)) l
 
 {- | Left fold over key/value pairs in ascending key order. -}
-export foldlWithKey : (b -> k -> v -> <e> b) -> b -> Map k v -> <e> b
+export
+foldlWithKey : (b -> k -> v -> <e> b) -> b -> Map k v -> <e> b
 foldlWithKey f z Tip = z
 foldlWithKey f z (Bin _ k v l r) = foldlWithKey f (f (foldlWithKey f z l) k v) r
 
@@ -348,21 +367,24 @@ foldlWithKey f z (Bin _ k v l r) = foldlWithKey f (f (foldlWithKey f z l) k v) r
 
    > toList (fromList [(2, 20), (1, 10), (3, 30)])
    [(1, 10), (2, 20), (3, 30)] -}
-export toList : Map k v -> List (k, v)
+export
+toList : Map k v -> List (k, v)
 toList m = foldrWithKey (k v acc => (k, v)::acc) [] m
 
 {- | All keys, ascending.
 
    > keys (fromList [(2, 0), (3, 0), (1, 0)])
    [1, 2, 3] -}
-export keys : Map k v -> List k
+export
+keys : Map k v -> List k
 keys m = foldrWithKey (k _ acc => k::acc) [] m
 
 {- | All values, ordered by their keys.
 
    > elems (fromList [(2, 20), (1, 10), (3, 30)])
    [10, 20, 30] -}
-export elems : Map k v -> List v
+export
+elems : Map k v -> List v
 elems m = foldrWithKey (k v acc => v::acc) [] m
 
 {- | Map a function over the values, keeping keys and structure.  The key is
@@ -370,7 +392,8 @@ elems m = foldrWithKey (k v acc => v::acc) [] m
 
    > elems (mapWithKey (k v => k + v) (fromList [(1, 10), (2, 20)]))
    [11, 22] -}
-export mapWithKey : (k -> v -> <e> w) -> Map k v -> <e> Map k w
+export
+mapWithKey : (k -> v -> <e> w) -> Map k v -> <e> Map k w
 mapWithKey f Tip = Tip
 mapWithKey f (Bin s k v l r) = Bin s k (f k v) (mapWithKey f l) (mapWithKey f r)
 
@@ -456,7 +479,8 @@ splitLookup k (Bin _ k2 v2 l r) = match compare k k2
 
    > keys (filterWithKey (k v => v > 15) (fromList [(1, 10), (2, 20), (3, 30)]))
    [2, 3] -}
-export filterWithKey : Ord k => (k -> v -> <e> Bool) -> Map k v -> <e> Map k v
+export
+filterWithKey : Ord k => (k -> v -> <e> Bool) -> Map k v -> <e> Map k v
 filterWithKey p Tip = Tip
 filterWithKey p (Bin _ k v l r) =
   let l2 = filterWithKey p l
@@ -471,7 +495,8 @@ filterWithKey p (Bin _ k v l r) =
    1
    > size (union (fromList [(1, 1)]) (fromList [(1, 2), (2, 2)]))
    2 -}
-export union : Ord k => Map k v -> Map k v -> Map k v
+export
+union : Ord k => Map k v -> Map k v -> Map k v
 union Tip b = b
 union a Tip = a
 union (Bin _ k v l r) b =
@@ -483,7 +508,8 @@ union (Bin _ k v l r) b =
 
    > findWithDefault 0 1 (unionWith (x y => x + y) (fromList [(1, 1)]) (fromList [(1, 2)]))
    3 -}
-export unionWith : Ord k => (v -> v -> v) -> Map k v -> Map k v -> Map k v
+export
+unionWith : Ord k => (v -> v -> v) -> Map k v -> Map k v -> Map k v
 unionWith f Tip b = b
 unionWith f a Tip = a
 unionWith f (Bin _ k v l r) b =
@@ -497,7 +523,8 @@ unionWith f (Bin _ k v l r) b =
 
    > keys (difference (fromList [(1, 0), (2, 0), (3, 0)]) (fromList [(2, 0)]))
    [1, 3] -}
-export difference : Ord k => Map k v -> Map k w -> Map k v
+export
+difference : Ord k => Map k v -> Map k w -> Map k v
 difference Tip b = Tip
 difference a Tip = a
 difference a (Bin _ k _ l r) =
@@ -509,7 +536,8 @@ difference a (Bin _ k _ l r) =
 
    > toList (intersectionWith (x y => x + y) (fromList [(1, 10), (2, 20)]) (fromList [(2, 2), (3, 3)]))
    [(2, 22)] -}
-export intersectionWith : Ord k => (v -> w -> x) -> Map k v -> Map k w -> Map k x
+export
+intersectionWith : Ord k => (v -> w -> x) -> Map k v -> Map k w -> Map k x
 intersectionWith f Tip b = Tip
 intersectionWith f a Tip = Tip
 intersectionWith f (Bin _ k v l r) b =
@@ -607,7 +635,8 @@ export impl Monoid (Map k v) requires Ord k where
    map `wellFormed`; it is exported as a debugging aid and as the backbone of
    this module's property tests.  Re-walks subtrees for the order check, so it
    is O(n log n) — not for hot paths. -}
-export wellFormed : Ord k => Map k v -> Bool
+export
+wellFormed : Ord k => Map k v -> Bool
 wellFormed Tip = True
 wellFormed (Bin s k v l r) =
   let sizeOk = size l + size r + 1 == s

@@ -1,5 +1,5 @@
 # META
-source_lines=430
+source_lines=434
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka REPL (Stage 4, Phase B.9)
@@ -71,7 +71,8 @@ preludeNamesRef : Ref (List String)
 preludeNamesRef = Ref []
 
 -- ── Initialise session ────────────────────────────────────────────────────
-export initSession : List Decl -> List Decl -> Unit
+export
+initSession : List Decl -> List Decl -> Unit
 initSession runtimeDecls preludeDecls =
   runtimeDeclsRef := runtimeDecls
   preludeDeclsRef := preludeDecls
@@ -131,7 +132,8 @@ afterParenToks [] = False
 afterParenToks (TRParen::rest) = afterIdentToks (skipNoiseToks rest)
 afterParenToks (_::rest) = afterParenToks rest
 
-export isDecl : String -> Bool
+export
+isDecl : String -> Bool
 isDecl src = looksLikeDecl (tokenize src)
 
 -- ── Multi-line continuation heuristic ────────────────────────────────────
@@ -172,7 +174,8 @@ endsWithBlankLine src =
   let len = stringLength src
   if len >= 2 then stringSlice (len - 2) len src == "\n\n" else False
 
-export needsMore : String -> Bool
+export
+needsMore : String -> Bool
 needsMore source =
   if endsWithBlankLine source then False
   else
@@ -381,7 +384,8 @@ processCommand cmd =
             True
 
 -- ── Main REPL loop ────────────────────────────────────────────────────────
-export replLoop : Unit -> <IO> Unit
+export
+replLoop : Unit -> <IO> Unit
 replLoop _ =
   let _ = putStrLn "medaka repl (:quit to exit, :reset to clear session)"
   replLoopGo "" False

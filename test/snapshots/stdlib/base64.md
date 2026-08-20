@@ -1,5 +1,5 @@
 # META
-source_lines=236
+source_lines=242
 stages=DESUGAR,MARK
 # SOURCE
 {- base64.mdk — RFC 4648 base64 encoding/decoding of raw bytes.
@@ -105,7 +105,8 @@ encodeGo bytes i n urlSafe acc
    "Zm9vYmE="
    > encode (toUtf8 "foobar")
    "Zm9vYmFy" -}
-export encode : Array Int -> String
+export
+encode : Array Int -> String
 encode bytes =
   stringFromChars (arrayFromList (encodeGo
     bytes
@@ -118,7 +119,8 @@ encode bytes =
 
    > encodeUrlSafe (fromList [255, 239, 191])
    "_--_" -}
-export encodeUrlSafe : Array Int -> String
+export
+encodeUrlSafe : Array Int -> String
 encodeUrlSafe bytes =
   stringFromChars (arrayFromList (encodeGo bytes 0 (arrayLength bytes) True []))
 
@@ -196,14 +198,16 @@ decodeWith s urlSafe =
    Err "base64.decode: length not a multiple of 4"
    > decode "Z@=="
    Err "base64.decode: invalid character or padding" -}
-export decode : String -> Result String (Array Int)
+export
+decode : String -> Result String (Array Int)
 decode s = decodeWith s False
 
 {- | URL-and-filename-safe base64 → bytes.
 
    > decodeUrlSafe "_--_"
    Ok [|255, 239, 191|] -}
-export decodeUrlSafe : String -> Result String (Array Int)
+export
+decodeUrlSafe : String -> Result String (Array Int)
 decodeUrlSafe s = decodeWith s True
 
 -- ── String convenience ───────────────────────────────────────────────────────
@@ -212,14 +216,16 @@ decodeUrlSafe s = decodeWith s True
 
    > encodeString "foo"
    "Zm9v" -}
-export encodeString : String -> String
+export
+encodeString : String -> String
 encodeString s = encode (toUtf8 s)
 
 {- | Standard base64 → UTF-8-decoded String.
 
    > decodeString "Zm9v"
    Ok "foo" -}
-export decodeString : String -> Result String String
+export
+decodeString : String -> Result String String
 decodeString s = map fromUtf8 (decode s)
 
 -- ── Properties ──────────────────────────────────────────────────────────────

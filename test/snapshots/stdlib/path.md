@@ -1,5 +1,5 @@
 # META
-source_lines=309
+source_lines=321
 stages=DESUGAR,MARK
 # SOURCE
 {- path.mdk — POSIX ("/"-separated) path manipulation.
@@ -46,7 +46,8 @@ import string.{split, startsWith, endsWith, contains}
 
    > dirname "c.txt"
    "." -}
-export dirname : String -> String
+export
+dirname : String -> String
 dirname path = dirnameGo path (stringLength path)
 
 dirnameGo : String -> Int -> String
@@ -70,7 +71,8 @@ dirnameGo path i =
 
    > basename "a/b/"
    "" -}
-export basename : String -> String
+export
+basename : String -> String
 basename path = basenameGo path (stringLength path) (stringLength path)
 
 basenameGo : String -> Int -> Int -> String
@@ -92,7 +94,8 @@ basenameGo path end i =
 
    > extname ".bashrc"
    "" -}
-export extname : String -> String
+export
+extname : String -> String
 extname path =
   let b = basename path
   extnameGo b (stringLength b)
@@ -113,7 +116,8 @@ extnameGo b i =
 
    > stem ".bashrc"
    ".bashrc" -}
-export stem : String -> String
+export
+stem : String -> String
 stem path =
   let b = basename path
   let e = extname path
@@ -127,7 +131,8 @@ stem path =
 
    > hasExtension ".md" "a/b.txt"
    False -}
-export hasExtension : String -> String -> Bool
+export
+hasExtension : String -> String -> Bool
 hasExtension ext path = normalizeExt (extname path) == normalizeExt ext
 
 normalizeExt : String -> String
@@ -141,7 +146,8 @@ normalizeExt e = if startsWith "." e || e == "" then e else "." ++ e
 
    > withExtension "md" "a/b"
    "a/b.md" -}
-export withExtension : String -> String -> String
+export
+withExtension : String -> String -> String
 withExtension ext path =
   let base = basename path
   let e = extname path
@@ -161,7 +167,8 @@ withExtension ext path =
 
    > joinPath "" "c.txt"
    "c.txt" -}
-export joinPath : String -> String -> String
+export
+joinPath : String -> String -> String
 joinPath a b =
   if a == "" then
     b
@@ -191,7 +198,8 @@ stripLeadingSlash s =
 
    > joinAll []
    "" -}
-export joinAll : List String -> String
+export
+joinAll : List String -> String
 joinAll [] = ""
 joinAll (s::rest) = joinAllGo s rest
 
@@ -207,7 +215,8 @@ joinAllGo acc (s::rest) = joinAllGo (joinPath acc s) rest
 
    > segments "/a//b/"
    ["a", "b"] -}
-export segments : String -> List String
+export
+segments : String -> List String
 segments path = filterEmpty (split "/" path)
 
 filterEmpty : List String -> List String
@@ -227,7 +236,8 @@ filterEmpty (s::rest) =
 
    > isAbsolute "a/b"
    False -}
-export isAbsolute : String -> Bool
+export
+isAbsolute : String -> Bool
 isAbsolute path = startsWith "/" path
 
 {- | Drop `prefix` from the front of `path` if `path` starts with it as a
@@ -239,7 +249,8 @@ isAbsolute path = startsWith "/" path
 
    > stripPrefix "a/x" "a/b/c.txt"
    "a/b/c.txt" -}
-export stripPrefix : String -> String -> String
+export
+stripPrefix : String -> String -> String
 stripPrefix prefix path =
   let plen = stringLength prefix
   if prefix == "" then
@@ -271,7 +282,8 @@ stripPrefix prefix path =
 
    > normalize ""
    "." -}
-export normalize : String -> String
+export
+normalize : String -> String
 normalize path =
   let abs = isAbsolute path
   let cleaned = normGo abs (segments path) []

@@ -1,5 +1,5 @@
 # META
-source_lines=24
+source_lines=25
 stages=DESUGAR,MARK
 # SOURCE
 {- result.mdk — the `Result` eliminator.
@@ -17,7 +17,8 @@ stages=DESUGAR,MARK
    42
    > result (e => e) (x => x + 1) (Err 7)
    7 -}
-export result : (e -> <eff> c) -> (a -> <eff> c) -> Result e a -> <eff> c
+export
+result : (e -> <eff> c) -> (a -> <eff> c) -> Result e a -> <eff> c
 result onErr onOk (Ok x) = onOk x
 result onErr onOk (Err e) = onErr e
 

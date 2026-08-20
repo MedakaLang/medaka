@@ -1,5 +1,5 @@
 # META
-source_lines=336
+source_lines=337
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/native_doctest.mdk — the NATIVE doctest execution engine
@@ -146,7 +146,8 @@ definesMain (_::rest) = definesMain rest
 --
 -- The build environment (repo root, `medaka`, `CC`) is read here rather than
 -- taken as parameters, mirroring `medaka build`'s own `runBuildPlainCmd`.
-export runNativeDoctests : String -> String -> List Decl -> List Example -> List (Result String (List Decl)) -> <IO> RunResult
+export
+runNativeDoctests : String -> String -> List Decl -> List Example -> List (Result String (List Decl)) -> <IO> RunResult
 runNativeDoctests target tsrc userDecls examples synthResults =
   buildDetailsFrom
     (nativeRendered target tsrc userDecls examples synthResults)

@@ -32,7 +32,8 @@ mkUser (i, n, a) = Ok User { id = i, name = n, age = a }
 --
 -- > rtWidth userRow
 -- 3
-export userRow : RowType User
+export
+userRow : RowType User
 -- Intentional cross-file duplicate: parallel demo/probe script wiring the same fixture shape (not shared production logic to consolidate).
 -- lint-disable-next-line rule-duplicate-body
 userRow = tCustom mkUser (t3 tInt tText (tOption tInt))
@@ -53,7 +54,8 @@ showOpt (Some n) = "Some \{n}"
 -- "User(2, Bob, None)"
 -- > decodeUser [CInt 1, CText "x"]
 -- "Err: tOption: expected 1 column(s), got 0"
-export decodeUser : List Cell -> String
+export
+decodeUser : List Cell -> String
 decodeUser cells = match rtDecode userRow cells
   Ok u => showUser u
   Err e => "Err: \{e}"
@@ -71,7 +73,8 @@ decodeUser cells = match rtDecode userRow cells
 -- "Err: tInt: expected integer column, got CText \"x\""
 -- > showI (rtDecode tInt [CInt 1, CInt 2])
 -- "Err: tInt: expected exactly 1 column"
-export showI : Result String Int -> String
+export
+showI : Result String Int -> String
 showI (Ok n) = intToString n
 showI (Err e) = "Err: \{e}"
 
@@ -83,7 +86,8 @@ showI (Err e) = "Err: \{e}"
 -- "False"
 -- > showB (rtDecode tBool [CInt 5])
 -- "Err: tBool: expected 0 or 1, got 5"
-export showB : Result String Bool -> String
+export
+showB : Result String Bool -> String
 showB (Ok True) = "True"
 showB (Ok False) = "False"
 showB (Err e) = "Err: \{e}"
@@ -94,7 +98,8 @@ showB (Err e) = "Err: \{e}"
 -- "None"
 -- > showOptR (rtDecode (tOption tInt) [CInt 9])
 -- "Some 9"
-export showOptR : Result String (Option Int) -> String
+export
+showOptR : Result String (Option Int) -> String
 showOptR (Ok o) = showOpt o
 showOptR (Err e) = "Err: \{e}"
 
@@ -104,7 +109,8 @@ showOptR (Err e) = "Err: \{e}"
 -- "(2, Bob)"
 -- > showP2 (rtDecode (t2 tInt tText) [CText "no", CText "Bob"])
 -- "Err: tInt: expected integer column, got CText \"no\""
-export showP2 : Result String (Int, String) -> String
+export
+showP2 : Result String (Int, String) -> String
 showP2 (Ok p) = match p
   (a, b) => "(\{a}, \{b})"
 showP2 (Err e) = "Err: \{e}"
@@ -120,7 +126,8 @@ showP2 (Err e) = "Err: \{e}"
 -- "7.0"
 -- > showF (rtDecode tFloat [CText "x"])
 -- "Err: tFloat: expected numeric column, got CText \"x\""
-export showF : Result String Float -> String
+export
+showF : Result String Float -> String
 showF (Ok f) = floatToString f
 showF (Err e) = "Err: \{e}"
 

@@ -1,5 +1,5 @@
 # META
-source_lines=211
+source_lines=217
 stages=DESUGAR,MARK
 # SOURCE
 {- hash_set.mdk — a mutable hash set (Module 6).
@@ -47,7 +47,8 @@ slotOf x cap = bitAnd (hash x) intMaxBound % cap
 -- ── Construction ────────────────────────────────────────────────────────
 
 {- | A fresh, empty hash set. Takes `Unit` so each call allocates its own. -}
-export new : Unit -> HashSet a
+export
+new : Unit -> HashSet a
 new _ = HashSet (Ref (arrayMake initialCapacity [])) (Ref 0)
 
 -- ── Query (pure reads) ──────────────────────────────────────────────────
@@ -56,7 +57,8 @@ new _ = HashSet (Ref (arrayMake initialCapacity [])) (Ref 0)
 
    > size (fromList [1, 2, 3, 2, 1])
    3 -}
-export size : HashSet a -> Int
+export
+size : HashSet a -> Int
 size (HashSet _ count) = !count
 
 bucketHas : Eq a => a -> List a -> Bool
@@ -71,7 +73,8 @@ bucketHas x (y::rest)
    True
    > has 9 (fromList [1, 2, 3])
    False -}
-export has : (Eq a, Hashable a) => a -> HashSet a -> Bool
+export
+has : (Eq a, Hashable a) => a -> HashSet a -> Bool
 has x (HashSet buckets _) =
   let arr = !buckets
   bucketHas x (arrayGetUnsafe (slotOf x (arrayLength arr)) arr)
@@ -86,7 +89,8 @@ bucketRemove x (y::rest)
 
 {- | Add an element, in place. A no-op when already present. Resizes (doubling)
    past load factor 0.75. -}
-export insert : (Eq a, Hashable a) => a -> HashSet a -> Unit
+export
+insert : (Eq a, Hashable a) => a -> HashSet a -> Unit
 insert x (HashSet buckets count) =
   let arr = !buckets
   let idx = slotOf x (arrayLength arr)
@@ -137,7 +141,8 @@ putRaw x buckets count =
 
    > size (fromList [1, 2, 3, 4, 5, 6, 7, 8, 8, 1])
    8 -}
-export fromList : (Eq a, Hashable a) => List a -> HashSet a
+export
+fromList : (Eq a, Hashable a) => List a -> HashSet a
 fromList xs =
   let s = new ()
   insertAll xs s
@@ -150,7 +155,8 @@ insertAll (x::rest) s =
   insertAll rest s
 
 {- | Remove an element, in place. A no-op when absent. -}
-export delete : (Eq a, Hashable a) => a -> HashSet a -> Unit
+export
+delete : (Eq a, Hashable a) => a -> HashSet a -> Unit
 delete x (HashSet buckets count) =
   let arr = !buckets
   let idx = slotOf x (arrayLength arr)

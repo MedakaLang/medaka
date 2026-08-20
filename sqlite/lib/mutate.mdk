@@ -222,7 +222,8 @@ requireSome msg None = Err msg
 --
 --   (No doctest: it needs a live database file.  Gated end-to-end against the
 --   real `sqlite3` CLI by `sqlite/test/dml_oracle.sh`.)
-export rewriteTable : String -> String -> String -> (String -> List (Int, List Cell) -> Result String (List (Int, List Cell), Int)) -> <FileRead, FileWrite> Result String Int
+export
+rewriteTable : String -> String -> String -> (String -> List (Int, List Cell) -> Result String (List (Int, List Cell), Int)) -> <FileRead, FileWrite> Result String Int
 rewriteTable verb path table f = do
   db <- openDb path
   (img, cnt) <- rewriteImage verb db table f
@@ -305,7 +306,8 @@ coerceRowGo ct (c::rest) i acc = do
 
 -- | Delete all rows of `table` in the SQLite file at `path` where `where_`
 --   evaluates to true.  Returns `Ok n` where `n` is the count of rows deleted.
-export delete : String -> String -> Expr Bool -> <FileRead, FileWrite> Result String Int
+export
+delete : String -> String -> Expr Bool -> <FileRead, FileWrite> Result String Int
 delete path table where_ = rewriteTable
   "delete"
   path
@@ -354,7 +356,8 @@ public export data Assign = Assign String SqlExpr
 -- | Build an assignment from the type-safe phantom layer, e.g.
 --   `assign "total" (eAdd (eColInt "total") (eLitI 10))`.  The phantom wrapper
 --   is stripped here (the type-safe boundary), mirroring `withWhere`.
-export assign : String -> Expr a -> Assign
+export
+assign : String -> Expr a -> Assign
 assign col e = Assign col (unExpr e)
 
 -- ---------------------------------------------------------------------------
@@ -369,7 +372,8 @@ assign col e = Assign col (unExpr e)
 --   check (see the header), so `SET n = '5'` on an INTEGER column stores the
 --   integer 5, exactly as sqlite3 does, and `SET n = NULL` on a NOT NULL column
 --   is an `Err` rather than a quietly-corrupted row.
-export update : String -> String -> List Assign -> Expr Bool -> <FileRead, FileWrite> Result String Int
+export
+update : String -> String -> List Assign -> Expr Bool -> <FileRead, FileWrite> Result String Int
 update path table assigns where_ = rewriteTable
   "update"
   path
@@ -479,7 +483,8 @@ findAssign ((i, cell)::rest) idx orig =
 --
 --   (No doctest: it needs a live database file.  Gated end-to-end against the
 --   real `sqlite3` CLI by `sqlite/test/dml_oracle.sh`.)
-export insert : String -> String -> Option (List String) -> List (List Cell) -> <FileRead, FileWrite> Result String Int
+export
+insert : String -> String -> Option (List String) -> List (List Cell) -> <FileRead, FileWrite> Result String Int
 insert path table cols rows = rewriteTable
   "insert"
   path
@@ -613,7 +618,8 @@ dupKeyName ct (Some i) = ipkName ct i
 --
 --   (No doctest: it needs a live database file.  Gated end-to-end against the
 --   real `sqlite3` CLI by `sqlite/test/dml_oracle.sh`.)
-export createTableIn : String -> CreateTable -> <FileRead, FileWrite> Result String Unit
+export
+createTableIn : String -> CreateTable -> <FileRead, FileWrite> Result String Unit
 createTableIn path ct = createWith path ct (fileExists path)
 
 -- (`fileExists` yields a bare `Bool`, not a `Result`, so it cannot be `<-`-bound

@@ -1,5 +1,5 @@
 # META
-source_lines=184
+source_lines=185
 stages=DESUGAR,MARK
 # SOURCE
 -- LLVM runtime-declaration PREAMBLE — the fixed `declare i64 @mdk_…` lines that
@@ -16,7 +16,8 @@ stages=DESUGAR,MARK
 -- tree-walker oracle, so these lines must stay in EXACTLY this order with EXACTLY
 -- these strings.  The trailing "" is the blank separator line after the decls.
 
-export preambleLines : List String
+export
+preambleLines : List String
 preambleLines = [
   "; Medaka native spike (Stage 2.4) — emitted textual LLVM IR.",
   "; Value rep is PROVISIONAL (uniform 64-bit tagged word); see RUNTIME-DESIGN.md.",

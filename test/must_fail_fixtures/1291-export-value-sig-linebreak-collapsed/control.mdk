@@ -1,4 +1,0 @@
-export
-data Widget = Widget Int
-
-main = println 1

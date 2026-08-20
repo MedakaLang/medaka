@@ -86,7 +86,8 @@ colDefSql (Column { colName, colType, isPrimaryKey }) =
 --
 -- > createTableSql (TableSchema { schemaTableName = "kv", columns = [Column { colName = "k", colType = TText, isPrimaryKey = False }, Column { colName = "v", colType = TInteger, isPrimaryKey = False }] })
 -- "CREATE TABLE kv(k TEXT, v INTEGER)"
-export createTableSql : TableSchema -> String
+export
+createTableSql : TableSchema -> String
 createTableSql (TableSchema { schemaTableName, columns }) =
   let colDefs = map colDefSql columns
   stringConcat ["CREATE TABLE ", schemaTableName, "(", join ", " colDefs, ")"]
@@ -97,7 +98,8 @@ createTableSql (TableSchema { schemaTableName, columns }) =
 
 -- | Find the 0-based index of the first column with `isPrimaryKey = True`,
 -- or `None` if no such column exists.
-export schemaIpkIndex : TableSchema -> Option Int
+export
+schemaIpkIndex : TableSchema -> Option Int
 schemaIpkIndex (TableSchema { columns, ... }) = findIndex
   (c => match c
     Column { isPrimaryKey, ... } => isPrimaryKey)
@@ -133,7 +135,8 @@ validateRows expected (r::rest) =
 -- * A row too large for one leaf cell is stored on overflow pages — there is
 --   no size limit on a TEXT/BLOB value.
 -- * Returns `Err` on a row width mismatch or an IPK type mismatch.
-export writeTable : String -> TableSchema -> List (List Cell) -> <FileWrite> Result String Unit
+export
+writeTable : String -> TableSchema -> List (List Cell) -> <FileWrite> Result String Unit
 writeTable path schema rows = match schema
   TableSchema { schemaTableName = name, columns } => do
     let colCount = length columns
@@ -144,7 +147,8 @@ writeTable path schema rows = match schema
 
 -- | Like `writeTable` but returns the raw byte image instead of writing to
 -- disk.  Useful for testing and round-trip inspection.
-export buildTable : TableSchema -> List (List Cell) -> Result String (Array Int)
+export
+buildTable : TableSchema -> List (List Cell) -> Result String (Array Int)
 buildTable schema rows = match schema
   TableSchema { schemaTableName = name, columns } => do
     let colCount = length columns
@@ -189,13 +193,15 @@ collectSpecs (t::rest) acc = do
 -- `(schema, rows)` entries.  The single-table case (`[entry]`) produces the
 -- same image as `buildTable` (both route through the parameterized page
 -- builder).
-export buildTables : List (TableSchema, List (List Cell)) -> Result String (Array Int)
+export
+buildTables : List (TableSchema, List (List Cell)) -> Result String (Array Int)
 buildTables tables = do
   specs <- collectSpecs tables []
   buildDatabaseMulti specs
 
 -- | Build a multi-table SQLite database and `writeFileBytes` it to `path`.
-export writeTables : String -> List (TableSchema, List (List Cell)) -> <FileWrite> Result String Unit
+export
+writeTables : String -> List (TableSchema, List (List Cell)) -> <FileWrite> Result String Unit
 writeTables path tables = do
   img <- buildTables tables
   writeFileBytes path img
@@ -239,13 +245,15 @@ collectSpecsExplicit (t::rest) acc = do
   collectSpecsExplicit rest (spec::acc)
 
 -- | Build the byte image of a multi-table database from explicit-rowid entries.
-export buildTablesExplicit : List (TableSchema, List (Int, List Cell)) -> Result String (Array Int)
+export
+buildTablesExplicit : List (TableSchema, List (Int, List Cell)) -> Result String (Array Int)
 buildTablesExplicit tables = do
   specs <- collectSpecsExplicit tables []
   buildDatabaseMultiExplicit specs
 
 -- | Build an explicit-rowid multi-table database and `writeFileBytes` it.
-export writeTablesExplicit : String -> List (TableSchema, List (Int, List Cell)) -> <FileWrite> Result String Unit
+export
+writeTablesExplicit : String -> List (TableSchema, List (Int, List Cell)) -> <FileWrite> Result String Unit
 writeTablesExplicit path tables = do
   img <- buildTablesExplicit tables
   writeFileBytes path img
@@ -268,7 +276,8 @@ writeTablesExplicit path tables = do
 
 -- | Build the byte image of a single table plus its secondary indexes.
 --   `indexes` is a list of `(indexName, columnName)`.
-export buildTableWithIndexes : TableSchema -> List (List Cell) -> List (String, String) -> Result String (Array Int)
+export
+buildTableWithIndexes : TableSchema -> List (List Cell) -> List (String, String) -> Result String (Array Int)
 buildTableWithIndexes schema rows indexes = match schema
   TableSchema { schemaTableName = name, columns } => do
     let colCount = length columns
@@ -279,7 +288,8 @@ buildTableWithIndexes schema rows indexes = match schema
     buildDatabaseMultiWithIndexes [(name, sql, ipk, rows)] idxSpecs
 
 -- | Build a single-table-with-indexes database and `writeFileBytes` it.
-export writeTableWithIndexes : String -> TableSchema -> List (List Cell) -> List (String, String) -> <FileWrite> Result String Unit
+export
+writeTableWithIndexes : String -> TableSchema -> List (List Cell) -> List (String, String) -> <FileWrite> Result String Unit
 writeTableWithIndexes path schema rows indexes = do
   img <- buildTableWithIndexes schema rows indexes
   writeFileBytes path img

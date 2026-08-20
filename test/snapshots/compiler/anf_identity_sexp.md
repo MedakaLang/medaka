@@ -1,5 +1,5 @@
 # META
-source_lines=32
+source_lines=34
 stages=DESUGAR,MARK
 # SOURCE
 -- Stable, lossless rendering for X-A's preparatory StableNodeId substrate.
@@ -27,12 +27,14 @@ errorSexp NonCanonicalProjectPath = "noncanonical-project-path"
 errorSexp InvalidSourceSpan = "invalid-source-span"
 errorSexp NegativeStructuralIndex = "negative-structural-index"
 
-export stableNodeIdToSexp : StableNodeId -> String
+export
+stableNodeIdToSexp : StableNodeId -> String
 stableNodeIdToSexp nodeId = foldStableNodeId
   (path startLine startCol endLine endCol childPath role => node "stable-node-id" [escStr path, node "span" [intToString startLine, intToString startCol, intToString endLine, intToString endCol], node "child-path" [slist (map intToString childPath)], roleSexp role])
   nodeId
 
-export stableNodeIdErrorToSexp : StableNodeIdError -> String
+export
+stableNodeIdErrorToSexp : StableNodeIdError -> String
 stableNodeIdErrorToSexp err = node "stable-node-id-error" [errorSexp err]
 # DESUGAR
 (DUse false (UseGroup ("ir" "anf_identity") ((mem "StableGeneratedRole" true) (mem "StableNodeId" false) (mem "StableNodeIdError" true) (mem "foldStableNodeId" false))))

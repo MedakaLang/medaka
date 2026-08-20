@@ -74,7 +74,8 @@ import support.util.{
 -- ── synthetic tuple constructor names ─────────────────────────────────────
 -- (exported so the type-aware `check_match` exhaustiveness in typecheck.mdk can
 -- reuse the same synthetic per-arity tuple constructor names.)
-export tupleCtorName : Int -> String
+export
+tupleCtorName : Int -> String
 tupleCtorName n = "__tuple\{n}__"
 
 -- recover the arity from a tupleCtorName result, else None
@@ -152,7 +153,8 @@ public export data Oracle = Oracle {
     ctorFields : OrdMap (List String),  -- ctor → declared field names in order (DData ConNamed variants)
   }
 
-export buildOracle : List Decl -> Oracle
+export
+buildOracle : List Decl -> Oracle
 buildOracle prog = Oracle {
   -- No `reverseL`/`oracleMap` here: `lookupTab` is FIRST-match-wins, so the
   -- natural order (user data ahead of the builtins, an earlier `data` decl
@@ -245,7 +247,8 @@ fieldName (Field n _) = n
 oGetCtorFields : Oracle -> String -> Option (List String)
 oGetCtorFields oracle c = omLookup c oracle.ctorFields
 
-export oGetCtors : Oracle -> TabKey -> Option (List String)
+export
+oGetCtors : Oracle -> TabKey -> Option (List String)
 oGetCtors oracle t
   | (Some _) <- tupleArityOfName (tabKeyName t) = Some [tabKeyName t]
   | otherwise = lookupTab t oracle.typeCtors
@@ -253,7 +256,8 @@ oGetCtors oracle t
 -- The tuple short-circuit mints `OriginBuiltin` to match `oGetCtors`' own
 -- short-circuit, which answers off the NAME before either table is consulted —
 -- so the synthetic `__tupleN__` key never actually reaches a row on either end.
-export oGetCtorType : Oracle -> String -> Option TabKey
+export
+oGetCtorType : Oracle -> String -> Option TabKey
 oGetCtorType oracle c
   | (Some _) <- tupleArityOfName c = Some (tabKeyOf NsType OriginBuiltin c)
   | otherwise = omLookup c oracle.ctorType
@@ -264,7 +268,8 @@ oGetArity oracle c
   | otherwise = fromOption 0 (omLookup c oracle.ctorArity)
 
 -- ── pattern → canonical matrix pattern ────────────────────────────────────
-export desugarPat : Oracle -> Pat -> Pat
+export
+desugarPat : Oracle -> Pat -> Pat
 desugarPat _ PWild = PWild
 desugarPat _ (PVar _ _) = PWild
 desugarPat _ (PLit (LBool True)) = PCon "True" []
@@ -392,7 +397,8 @@ tryEachType oracle (c::cs) = match oGetCtorType oracle c
   None => tryEachType oracle cs
 
 -- ── usefulness (the Maranget recursion) ───────────────────────────────────
-export useful : Oracle -> Option TabKey -> List (List Pat) -> List Pat -> Bool
+export
+useful : Oracle -> Option TabKey -> List (List Pat) -> List Pat -> Bool
 useful _ _ [] _ = True
 useful _ _ (_::_) [] = False
 useful oracle col0 pmat (h::restQ) = usefulHead oracle col0 pmat h restQ
@@ -497,7 +503,8 @@ usefulBranchIn oracle buckets restQ c =
 -- `precMatrix` (a guarded arm may fail its guard at runtime, so it can't render a
 -- later same-shape arm dead) — which is exactly what keeps this conservative: we
 -- flag an arm only when it is provably dead via unconditional predecessors.
-export patUnreachable : Oracle -> Option TabKey -> List (List Pat) -> Pat -> Bool
+export
+patUnreachable : Oracle -> Option TabKey -> List (List Pat) -> Pat -> Bool
 patUnreachable oracle col0 precMatrix qpat =
   not (useful oracle col0 precMatrix [qpat])
 
@@ -511,7 +518,8 @@ patUnreachable oracle col0 precMatrix qpat =
 -- accumulated covered-matrix: we never claim a range covers anything, staying
 -- conservative (we may miss a genuinely-dead arm covered only by a range, but we
 -- never flag a reachable one).
-export patHasRange : Pat -> Bool
+export
+patHasRange : Pat -> Bool
 patHasRange (PRng _ _ _) = True
 patHasRange (PCon _ args) = anyList patHasRange args
 patHasRange (PCons h t) = patHasRange h || patHasRange t
@@ -535,7 +543,8 @@ recFieldHasRange (RecPatField _ _ (Some p)) = patHasRange p
 -- columns recurse into each branch; an incomplete column NAMES a missing
 -- constructor and recurses on the default matrix — so the two never disagree
 -- on whether the warning fires.
-export usefulWitness : Oracle -> Option TabKey -> List (List Pat) -> Int -> Option (List Pat)
+export
+usefulWitness : Oracle -> Option TabKey -> List (List Pat) -> Int -> Option (List Pat)
 usefulWitness _ _ [] ncols = Some (replicate ncols PWild)
 usefulWitness _ _ (_::_) 0 = None
 usefulWitness oracle col0 pmat ncols =
@@ -597,7 +606,8 @@ firstMissing (c::cs) present =
 -- carry `PCon`/`PWild`, so the general pattern printer is overkill; this maps
 -- the canonical matrix constructors back to their surface form (`[]`/`::`/
 -- tuples/`()`) and names user constructors with wildcard arguments.
-export renderWitness : Pat -> String
+export
+renderWitness : Pat -> String
 renderWitness p = renderWit False p
 
 renderWit : Bool -> Pat -> String
@@ -921,7 +931,8 @@ interpBinds (InterpExpr e) = collectLetBinds e
 -- OTHER module's arity/type, producing a spurious W-NONEXHAUSTIVE-CLAUSES warning
 -- against a genuinely exhaustive group.  (`buildOracle` is duplicate-tolerant, so
 -- the checkDecls⊆oracleDecls overlap is harmless.)
-export checkGuardExhaustivenessWith : List Decl -> List Decl -> List (String, Option Loc)
+export
+checkGuardExhaustivenessWith : List Decl -> List Decl -> List (String, Option Loc)
 checkGuardExhaustivenessWith oracleDecls checkDecls =
   let oracle = buildOracle (checkDecls ++ oracleDecls)
   flatMap (checkNamedGroup oracle) (groupByName (topFunDefClauses checkDecls))
@@ -932,7 +943,8 @@ checkNamedGroup oracle (name, clauses) = checkGroup oracle name clauses
 
 -- Back-compat: build the oracle from the checked decls only (the historical
 -- entry-only oracle) and drop the loc channel to a plain message list.
-export checkGuardExhaustiveness : List Decl -> List String
+export
+checkGuardExhaustiveness : List Decl -> List String
 checkGuardExhaustiveness prog = map fst (checkGuardExhaustivenessWith prog prog)
 
 topFunDefClauses : List Decl -> List (String, (List Pat, Expr))
@@ -967,10 +979,12 @@ ifaceMethodWarnings oracle (IfaceMethod _ _ (Some (MethodDefault _ body))) =
   letGroupWarnings oracle body
 
 -- one warning per line (the harness sorts); oracle built from a superset of decls
-export exhaustToLinesWith : List Decl -> List Decl -> String
+export
+exhaustToLinesWith : List Decl -> List Decl -> String
 exhaustToLinesWith oracleDecls checkDecls =
   joinNl (map fst (checkGuardExhaustivenessWith oracleDecls checkDecls))
 
 -- entry-only oracle (self-contained single file: no imports available)
-export exhaustToLines : List Decl -> String
+export
+exhaustToLines : List Decl -> String
 exhaustToLines prog = exhaustToLinesWith prog prog

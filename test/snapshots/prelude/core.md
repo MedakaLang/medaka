@@ -1,5 +1,5 @@
 # META
-source_lines=1642
+source_lines=1699
 stages=TYPES
 # SOURCE
 {- core.mdk — the foundation every other Medaka module rests on.
@@ -55,7 +55,8 @@ export interface Eq a where
   eq : a -> a -> Bool
 
 -- | Negation of `eq`.  Standalone so impls cannot make it disagree with `eq`.
-export neq : Eq a => a -> a -> Bool
+export
+neq : Eq a => a -> a -> Bool
 neq x y = not (eq x y)
 
 export impl Eq Int where
@@ -174,7 +175,8 @@ export interface Ord a requires Eq a where
    0
    > clamp 0 10 99
    10 -}
-export clamp : Ord a => a -> a -> a -> a
+export
+clamp : Ord a => a -> a -> a -> a
 clamp lo hi = min hi >> max lo
 
 {- | `isEven n` is `True` when `n` is divisible by 2 (negatives included).
@@ -183,7 +185,8 @@ clamp lo hi = min hi >> max lo
    True
    > isEven 7
    False -}
-export isEven : Int -> Bool
+export
+isEven : Int -> Bool
 isEven n = n % 2 == 0
 
 {- | `isOdd n` is `True` when `n` is not divisible by 2.
@@ -192,7 +195,8 @@ isEven n = n % 2 == 0
    True
    > isOdd 8
    False -}
-export isOdd : Int -> Bool
+export
+isOdd : Int -> Bool
 isOdd n = n % 2 /= 0
 
 export impl Ord Int where
@@ -686,10 +690,12 @@ export impl Hashable (a, b, c, d, e) requires Hashable a, Hashable b, Hashable c
    (debug x)`).  These are ordinary Medaka functions over the string-only
    `putStr`/`putStrLn` externs, which moves the `Display` constraint into
    Medaka where dict-passing works (an extern can't receive a dictionary). -}
-export println : Display a => a -> <IO> Unit
+export
+println : Display a => a -> <IO> Unit
 println x = putStrLn (display x)
 
-export print : Display a => a -> <IO> Unit
+export
+print : Display a => a -> <IO> Unit
 print x = putStr (display x)
 
 {- | Numeric arithmetic.  Backs `+`, `-`, `*`, `/` for user-defined numeric
@@ -779,7 +785,8 @@ export impl Mappable (Result e) where
 
    > replaceWith (Some 5) 9
    Some 9 -}
-export replaceWith : Mappable f => f a -> b -> f b
+export
+replaceWith : Mappable f => f a -> b -> f b
 replaceWith fa b = map (_ => b) fa
 
 {- | `Mappable` plus the ability to lift a plain value and apply a wrapped
@@ -819,7 +826,8 @@ export impl Applicative (Result e) where
    None
    > map2 (a b => a + b) [1, 2] [10, 20]
    [11, 21, 12, 22] -}
-export map2 : Applicative f => (a -> b -> c) -> f a -> f b -> f c
+export
+map2 : Applicative f => (a -> b -> c) -> f a -> f b -> f c
 map2 f fa fb = ap (map f fa) fb
 
 {- | Lift a ternary function over three applicative values — Haskell's `liftA3`.
@@ -828,7 +836,8 @@ map2 f fa fb = ap (map f fa) fb
    Some 6
    > map3 (a b c => a + b + c) [1] [10, 20] [100]
    [111, 121] -}
-export map3 : Applicative f => (a -> b -> c -> d) -> f a -> f b -> f c -> f d
+export
+map3 : Applicative f => (a -> b -> c -> d) -> f a -> f b -> f c -> f d
 map3 f fa fb fc = ap (ap (map f fa) fb) fc
 
 {- | Sequencing of computations, threading the result.  Equivalent to
@@ -838,19 +847,23 @@ export interface Thenable m requires Applicative m where
   andThen : m a -> (a -> <e> m b) -> <e> m b
 
 -- | `andThen` with arguments flipped — the Haskell/Scala `flatMap`.
-export flatMap : Thenable m => (a -> <e> m b) -> m a -> <e> m b
+export
+flatMap : Thenable m => (a -> <e> m b) -> m a -> <e> m b
 flatMap f ma = andThen ma f
 
 -- | Collapse one layer of nesting.  Haskell calls this `join`.
-export flat : Thenable m => m (m a) -> m a
+export
+flat : Thenable m => m (m a) -> m a
 flat x = andThen x identity
 
 -- | Run an action only when the condition holds.
-export when : Thenable m => Bool -> m Unit -> m Unit
+export
+when : Thenable m => Bool -> m Unit -> m Unit
 when b m = if b then m else pure ()
 
 -- | Run an action only when the condition is false.  Dual of `when`.
-export unless : Thenable m => Bool -> m Unit -> m Unit
+export
+unless : Thenable m => Bool -> m Unit -> m Unit
 unless b m = if b then pure () else m
 
 {- | Monadic left fold: thread an accumulator through an effectful step, in
@@ -858,7 +871,8 @@ unless b m = if b then pure () else m
 
    > foldThen (acc x => Some (acc + x)) 0 [1, 2, 3]
    Some 6 -}
-export foldThen : Thenable m => (b -> a -> <e> m b) -> b -> List a -> <e> m b
+export
+foldThen : Thenable m => (b -> a -> <e> m b) -> b -> List a -> <e> m b
 foldThen _ z [] = pure z
 foldThen f z (x::xs) = andThen (f z x) (z2 => foldThen f z2 xs)
 
@@ -867,7 +881,8 @@ foldThen f z (x::xs) = andThen (f z x) (z2 => foldThen f z2 xs)
 
    > repeatThen 3 (Some 7)
    Some [7, 7, 7] -}
-export repeatThen : Thenable m => Int -> m a -> m (List a)
+export
+repeatThen : Thenable m => Int -> m a -> m (List a)
 repeatThen n action
   | n <= 0 = pure []
   | otherwise = andThen action (x => map (x :: _) (repeatThen (n - 1) action))
@@ -877,7 +892,8 @@ repeatThen n action
 
    > filterThen (x => Some (x > 1)) [1, 2, 3]
    Some [2, 3] -}
-export filterThen : Thenable m => (a -> <e> m Bool) -> List a -> <e> m (List a)
+export
+filterThen : Thenable m => (a -> <e> m Bool) -> List a -> <e> m (List a)
 filterThen _ [] = pure []
 filterThen f (x::xs) = andThen
   (f x)
@@ -888,7 +904,8 @@ filterThen f (x::xs) = andThen
 
    > forEach [1, 2, 3] (x => Some ())
    Some () -}
-export forEach : Thenable m => List a -> (a -> <e> m Unit) -> <e> m Unit
+export
+forEach : Thenable m => List a -> (a -> <e> m Unit) -> <e> m Unit
 forEach [] _ = pure ()
 forEach (x::xs) f = andThen (f x) (_ => forEach xs f)
 
@@ -897,7 +914,8 @@ forEach (x::xs) f = andThen (f x) (_ => forEach xs f)
 
    > runEach [Some 1, Some 2]
    Some () -}
-export runEach : Thenable m => List (m a) -> m Unit
+export
+runEach : Thenable m => List (m a) -> m Unit
 runEach [] = pure ()
 runEach (x::xs) = andThen x (_ => runEach xs)
 
@@ -964,7 +982,8 @@ export impl Alternative Option where
    Some ()
    > (guard False : Option Unit)
    None -}
-export guard : Alternative f => Bool -> f Unit
+export
+guard : Alternative f => Bool -> f Unit
 guard True = pure ()
 guard False = noMatch
 
@@ -1258,7 +1277,8 @@ export impl Traversable (Result e) where
    True
    > any (x => x > 10) [1, 2, 3]
    False -}
-export any : Foldable t => (a -> <e> Bool) -> t a -> <e> Bool
+export
+any : Foldable t => (a -> <e> Bool) -> t a -> <e> Bool
 any f = fold (acc x => acc || f x) False
 
 {- | True when every element satisfies the predicate.  Vacuously true on
@@ -1268,13 +1288,15 @@ any f = fold (acc x => acc || f x) False
    True
    > all (x => x > 0) []
    True -}
-export all : Foldable t => (a -> <e> Bool) -> t a -> <e> Bool
+export
+all : Foldable t => (a -> <e> Bool) -> t a -> <e> Bool
 all f = fold (acc x => acc && f x) True
 
 {- | First element satisfying the predicate, or `None` if none do.
    Latches the first hit via an as-pattern so subsequent elements don't
    overwrite the answer. -}
-export find : Foldable t => (a -> <e> Bool) -> t a -> <e> Option a
+export
+find : Foldable t => (a -> <e> Bool) -> t a -> <e> Option a
 find f = fold g None
   where
     g (acc@(Some _)) _ = acc
@@ -1283,7 +1305,8 @@ find f = fold g None
       | otherwise = None
 
 -- | Number of elements satisfying the predicate.
-export count : Foldable t => (a -> <e> Bool) -> t a -> <e> Int
+export
+count : Foldable t => (a -> <e> Bool) -> t a -> <e> Int
 count f = fold g 0
   where
     g acc x
@@ -1293,19 +1316,23 @@ count f = fold g 0
 {- | Sum of a numeric foldable.  Identity is `0`; in practice this only
    works for `Int` today because `(+)` is a builtin that doesn't yet
    dispatch through `Num.add` for user-defined numeric types. -}
-export sum : (Foldable t, Num a) => t a -> a
+export
+sum : (Foldable t, Num a) => t a -> a
 sum xs = fold (+) (fromInt 0) xs
 
 -- | Product of a numeric foldable.  Identity is `1`.  Same caveat as `sum`.
-export product : (Foldable t, Num a) => t a -> a
+export
+product : (Foldable t, Num a) => t a -> a
 product xs = fold (*) (fromInt 1) xs
 
 -- | True when the value appears in the container (by `Eq`).
-export elem : (Foldable t, Eq a) => a -> t a -> Bool
+export
+elem : (Foldable t, Eq a) => a -> t a -> Bool
 elem a = fold (acc x => acc || x == a) False
 
 -- | True when the value does *not* appear in the container.  `not . elem`.
-export notElem : (Foldable t, Eq a) => a -> t a -> Bool
+export
+notElem : (Foldable t, Eq a) => a -> t a -> Bool
 notElem a xs = not (elem a xs)
 
 {- | Largest element by `Ord`, or `None` when the container is empty.  Generic
@@ -1315,7 +1342,8 @@ notElem a xs = not (elem a xs)
    Some 3
    > maximum ([] : List Int)
    None -}
-export maximum : (Foldable t, Ord a) => t a -> Option a
+export
+maximum : (Foldable t, Ord a) => t a -> Option a
 maximum = fold step None
   where
     step None x = Some x
@@ -1325,7 +1353,8 @@ maximum = fold step None
 
    > minimum [3, 1, 2]
    Some 1 -}
-export minimum : (Foldable t, Ord a) => t a -> Option a
+export
+minimum : (Foldable t, Ord a) => t a -> Option a
 minimum = fold step None
   where
     step None x = Some x
@@ -1346,38 +1375,45 @@ export impl Filterable List where
 -- ─── Bool helpers ───────────────────────────────────────────────────────
 
 -- | Alias for `True`, idiomatic in guard chains.
-export otherwise : Bool
+export
+otherwise : Bool
 otherwise = True
 
 -- | Logical negation.
-export not : Bool -> Bool
+export
+not : Bool -> Bool
 not True = False
 not False = True
 
 {- | Strict logical AND.  The lazy short-circuiting form is the `&&`
    operator, which is hard-wired in the evaluator. -}
-export and : Bool -> Bool -> Bool
+export
+and : Bool -> Bool -> Bool
 and True True = True
 and _ _ = False
 
 -- | Strict logical OR.  See `and` for the lazy form.
-export or : Bool -> Bool -> Bool
+export
+or : Bool -> Bool -> Bool
 or False False = False
 or _ _ = True
 
 -- | Exclusive OR.
-export xor : Bool -> Bool -> Bool
+export
+xor : Bool -> Bool -> Bool
 xor a b = a /= b
 
 -- ─── Option helpers ─────────────────────────────────────────────────────
 
 -- | True if the value is present.
-export isSome : Option a -> Bool
+export
+isSome : Option a -> Bool
 isSome (Some _) = True
 isSome None = False
 
 -- | True if the value is absent.
-export isNone : Option a -> Bool
+export
+isNone : Option a -> Bool
 isNone None = True
 isNone (Some _) = False
 
@@ -1387,71 +1423,83 @@ isNone (Some _) = False
    42
    > fromOption 0 None
    0 -}
-export fromOption : a -> Option a -> a
+export
+fromOption : a -> Option a -> a
 fromOption _ (Some a) = a
 fromOption d None = d
 
 -- | Turn an `Option` into a `Result`, supplying the error for `None`.
-export toResult : e -> Option a -> Result e a
+export
+toResult : e -> Option a -> Result e a
 toResult _ (Some a) = Ok a
 toResult e None = Err e
 
 {- | Forget the error: `Ok x → Some x`, `Err _ → None`.
    Named to match the "from-Result" intuition; this is the inverse of
    `toResult` modulo the discarded error value. -}
-export fromResult : Result e a -> Option a
+export
+fromResult : Result e a -> Option a
 fromResult (Ok a) = Some a
 fromResult (Err _) = None
 
 -- ─── Result helpers ─────────────────────────────────────────────────────
 
 -- | True if the result is `Ok`.
-export isOk : Result e a -> Bool
+export
+isOk : Result e a -> Bool
 isOk (Ok _) = True
 isOk (Err _) = False
 
 -- | True if the result is `Err`.
-export isErr : Result e a -> Bool
+export
+isErr : Result e a -> Bool
 isErr (Err _) = True
 isErr (Ok _) = False
 
 {- | Unwrap with a default for `Err`.  Named distinctly from
    `fromOption` so the two don't collide when both are in scope. -}
-export fromResultOr : a -> Result e a -> a
+export
+fromResultOr : a -> Result e a -> a
 fromResultOr _ (Ok a) = a
 fromResultOr d (Err _) = d
 
 {- | Apply a function to the `Err` side, leaving `Ok` alone.  The `Ok`
    analogue is just `map` from `Mappable (Result e)`. -}
-export mapErr : (e -> f) -> Result e a -> Result f a
+export
+mapErr : (e -> f) -> Result e a -> Result f a
 mapErr f (Err e) = Err (f e)
 mapErr _ (Ok a) = Ok a
 
 -- ─── Utility functions ──────────────────────────────────────────────────
 
 -- | Return the argument unchanged.
-export identity : a -> a
+export
+identity : a -> a
 identity x = x
 
 {- | First component of a pair.
    > fst (1, 2)
    1 -}
-export fst : (a, b) -> a
+export
+fst : (a, b) -> a
 fst (a, _) = a
 
 {- | Second component of a pair.
    > snd ("a", True)
    True -}
-export snd : (a, b) -> b
+export
+snd : (a, b) -> b
 snd (_, b) = b
 
 {- | Return the first argument; useful as a building block for ignoring
    a callback's input (`map (const 0) xs == replicate (length xs) 0`). -}
-export const : a -> b -> a
+export
+const : a -> b -> a
 const x _ = x
 
 -- | Swap the first two arguments of a binary function.
-export flip : (a -> b -> <e> c) -> b -> a -> <e> c
+export
+flip : (a -> b -> <e> c) -> b -> a -> <e> c
 flip f b a = f a b
 
 {- | Apply a binary function `f` to two arguments after running each through a
@@ -1460,7 +1508,8 @@ flip f b a = f a b
 
    > on compare fst (1, 9) (2, 8)
    Lt -}
-export on : (b -> b -> <e> c) -> (a -> b) -> a -> a -> <e> c
+export
+on : (b -> b -> <e> c) -> (a -> b) -> a -> a -> <e> c
 on f g x y = f (g x) (g y)
 
 {- | Turn a function on a pair into a function of two arguments.  The inverse
@@ -1468,7 +1517,8 @@ on f g x y = f (g x) (g y)
 
    > curry fst 1 2
    1 -}
-export curry : ((a, b) -> <e> c) -> a -> b -> <e> c
+export
+curry : ((a, b) -> <e> c) -> a -> b -> <e> c
 curry f a b = f (a, b)
 
 {- | Turn a two-argument function into a function on a pair.  The inverse of
@@ -1476,7 +1526,8 @@ curry f a b = f (a, b)
 
    > uncurry (a b => a + b) (3, 4)
    7 -}
-export uncurry : (a -> b -> <e> c) -> (a, b) -> <e> c
+export
+uncurry : (a -> b -> <e> c) -> (a, b) -> <e> c
 uncurry f (a, b) = f a b
 
 {- | Run a wrapped computation for its structure/effect and discard the result,
@@ -1484,22 +1535,26 @@ uncurry f (a, b) = f a b
 
    > discard (Some 5)
    Some () -}
-export discard : Mappable f => f a -> f Unit
+export
+discard : Mappable f => f a -> f Unit
 discard fa = map (_ => ()) fa
 
 {- | Right-to-left function composition: `(compose g f) x == g (f x)`.
    Spelled `<<` as an operator. -}
-export compose : (b -> <e> c) -> (a -> <e> b) -> a -> <e> c
+export
+compose : (b -> <e> c) -> (a -> <e> b) -> a -> <e> c
 compose g f a = g (f a)
 
 {- | Left-to-right function composition: `(pipe f g) x == g (f x)`.
    Spelled `>>` as an operator. -}
-export pipe : (a -> <e> b) -> (b -> <e> c) -> a -> <e> c
+export
+pipe : (a -> <e> b) -> (b -> <e> c) -> a -> <e> c
 pipe f g a = g (f a)
 
 {- | Function application as a function.  Mainly useful for higher-order
    code that wants to defer "actually call this" decisions. -}
-export apply : (a -> <e> b) -> a -> <e> b
+export
+apply : (a -> <e> b) -> a -> <e> b
 apply f a = f a
 
 -- ─── 4. Arbitrary (property-test generators) ────────────────────────────
@@ -1527,7 +1582,8 @@ export impl Arbitrary Char where
   arbitrary () = randomChar ()
 
 -- | Generate a random string of 0–10 printable ASCII chars.
-export arbitraryString : Unit -> <Rand> String
+export
+arbitraryString : Unit -> <Rand> String
 arbitraryString () = go (randomInt 0 10) ""
   where
     go 0 acc = acc
@@ -1537,7 +1593,8 @@ export impl Arbitrary String where
   arbitrary () = arbitraryString ()
 
 -- | Generate a list of up to `maxLen` elements using `gen`.
-export arbitraryList : (Unit -> <Rand> a) -> Int -> <Rand> List a
+export
+arbitraryList : (Unit -> <Rand> a) -> Int -> <Rand> List a
 arbitraryList gen maxLen = go (randomInt 0 maxLen) []
   where
     go 0 acc = acc

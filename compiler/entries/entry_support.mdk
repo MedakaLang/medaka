@@ -43,7 +43,8 @@ import driver.main_autoprint.{
 -- typecheck diagnostic, which are far likelier in a harness than a wrong arity.
 --
 -- Route every such path through `failWith` rather than a bare `ePutStrLn`.
-export failWith : String -> <IO> Unit
+export
+failWith : String -> <IO> Unit
 failWith msg =
   let _ = ePutStrLn msg
   exit 1
@@ -51,7 +52,8 @@ failWith msg =
 -- ── file readers ───────────────────────────────────────────────────────────────
 
 -- parse + desugar each prelude file in order, concatenating their decls.
-export readAllDecls : List String -> <IO> Result String (List Decl)
+export
+readAllDecls : List String -> <IO> Result String (List Decl)
 readAllDecls [] = Ok []
 readAllDecls (p::rest) = match readFile p
   Err msg => Err msg
@@ -59,7 +61,8 @@ readAllDecls (p::rest) = match readFile p
 
 -- read each target file, keeping (path, source) pairs in order (for batch harnesses
 -- that need the path to prefix each section's sentinel).
-export readAllSources : List String -> <IO> Result String (List (String, String))
+export
+readAllSources : List String -> <IO> Result String (List (String, String))
 readAllSources [] = Ok []
 readAllSources (p::rest) = match readFile p
   Err msg => Err msg
@@ -69,12 +72,14 @@ readAllSources (p::rest) = match readFile p
 
 -- CLI shape: <runtime.mdk> <prelude.mdk>... <target.mdk>.  Reads + parses + desugars
 -- all three, then calls `emit runtimeDecls preludeDecls userDecls` (which prints).
-export driveRuntime : (List Decl -> List Decl -> List Decl -> <IO> Unit) -> <IO> Unit
+export
+driveRuntime : (List Decl -> List Decl -> List Decl -> <IO> Unit) -> <IO> Unit
 driveRuntime emit = driveRuntimeArgs (args ()) emit
 
 -- same as driveRuntime, but takes the argv explicitly so a probe can strip a leading
 -- flag (e.g. the argstamp parity probe's ON|OFF mode) before dispatching.
-export driveRuntimeArgs : List String -> (List Decl -> List Decl -> List Decl -> <IO> Unit) -> <IO> Unit
+export
+driveRuntimeArgs : List String -> (List Decl -> List Decl -> List Decl -> <IO> Unit) -> <IO> Unit
 driveRuntimeArgs (runtimePath::rest) emit = match splitLast rest
   Some (preludePaths, targetPath) => match readFile runtimePath
     Ok rsrc => match readAllDecls preludePaths
@@ -89,7 +94,8 @@ driveRuntimeArgs _ emit = failWith usageRuntime
 
 -- CLI shape: <prelude.mdk>... <target.mdk> (no separate runtime).  Calls
 -- `emit preludeDecls userDecls` (which prints).
-export drivePrelude : (List Decl -> List Decl -> <IO> Unit) -> <IO> Unit
+export
+drivePrelude : (List Decl -> List Decl -> <IO> Unit) -> <IO> Unit
 drivePrelude emit = match splitLast (args ())
   Some (preludePaths, targetPath) => match readAllDecls preludePaths
     Ok preludeDecls => match readFile targetPath
@@ -98,13 +104,16 @@ drivePrelude emit = match splitLast (args ())
     Err msg => failWith msg
   None => failWith usagePrelude
 
-export usageRuntime : String
+export
+usageRuntime : String
 usageRuntime = "usage: <runtime.mdk> <prelude.mdk>... <file.mdk>"
 
-export usagePrelude : String
+export
+usagePrelude : String
 usagePrelude = "usage: <prelude.mdk>... <file.mdk>"
 
-export usageModules : String
+export
+usageModules : String
 usageModules = "usage: <runtime.mdk> <core.mdk> <entry.mdk> [root ...]"
 
 -- CLI shape: <runtime.mdk> <core.mdk> <entry.mdk> [root ...].  Loads <entry.mdk>
@@ -113,7 +122,8 @@ usageModules = "usage: <runtime.mdk> <core.mdk> <entry.mdk> [root ...]"
 -- (which owns elaboration/lowering/emission and does its own IO).  Shared by the
 -- LLVM/WasmGC multi-module emit drivers (llvm_bootstrap_lex_main,
 -- llvm_emit_modules_main, wasm_emit_gaps_main, wasm_emit_modules_main).
-export driveModules : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) -> <IO> Unit
+export
+driveModules : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) -> <IO> Unit
 driveModules runEmit = match args ()
   runtimeP::coreP::entry::roots =>
     driveModulesGo runEmit runtimeP coreP entry (rootsOrDefault entry roots)
@@ -160,7 +170,8 @@ moduleLoadHint e = match unknownModuleIdOf e
 -- <e>` and re-emitted; a bare underived-ADT main surfaces the clean `No impl of
 -- Display …` error.  A Unit/Async main (incl. every compiler-graph main) takes
 -- the unchanged path, so emitter output on the compiler graph is byte-identical.
-export runEmitWith : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
+export
+runEmitWith : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runEmitWith emitTail runtimeDecls coreDecls modules =
   let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
   let (coreD, modules2) = elaborateModules runtimeDecls coreMangled modulesMangled
@@ -172,7 +183,8 @@ runEmitWith emitTail runtimeDecls coreDecls modules =
   else emitTail runtimeDecls coreD modules2
 
 -- Mangle + elaborate + emit a (possibly wrapped) module list from scratch.
-export emitModulesWith : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
+export
+emitModulesWith : (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 emitModulesWith emitTail runtimeDecls coreDecls modules =
   let (coreMangled, modulesMangled) = mangleUnits coreDecls modules
   let (coreD, modules2) = elaborateModules runtimeDecls coreMangled modulesMangled
@@ -184,7 +196,8 @@ emitModulesWith emitTail runtimeDecls coreDecls modules =
 
 -- TYPED path: drop prelude fns the user shadows, elaborate (typecheck stamps the
 -- EMethodAt routes), eval for stdout.  Shared by eval_typed_main + eval_typed_batch.
-export evalTypedString : List Decl -> List Decl -> List Decl -> String
+export
+evalTypedString : List Decl -> List Decl -> List Decl -> String
 evalTypedString runtimeDecls preludeDecls userDecls =
   let livePrelude = dropShadowedExp (funNamesOf userDecls) preludeDecls
   evalOneOutput
@@ -195,7 +208,8 @@ evalTypedString runtimeDecls preludeDecls userDecls =
 -- (elaborateOne owns the dict-set + per-module eval).  Byte-identical to the TYPED
 -- path here — the difference is elaboration-internal.  Shared by eval_dict_main +
 -- eval_dict_batch.
-export evalDictString : List Decl -> List Decl -> List Decl -> String
+export
+evalDictString : List Decl -> List Decl -> List Decl -> String
 evalDictString runtimeDecls preludeDecls userDecls =
   let userNames = funNamesOf userDecls
   let livePrelude = dropShadowedExp userNames preludeDecls
@@ -210,7 +224,8 @@ evalDictString runtimeDecls preludeDecls userDecls =
 -- (the self-hosted evaluator reseeds a global ctor->type table per program, so a
 -- lazy string-builder could force one program's dispatch after the next clobbers
 -- that table).
-export batchLoop : String -> (List Decl -> String) -> List String -> <IO> Unit
+export
+batchLoop : String -> (List Decl -> String) -> List String -> <IO> Unit
 batchLoop sentinel render [] = putStr ""
 batchLoop sentinel render (path::rest) = match readFile path
   Err msg =>
@@ -222,7 +237,8 @@ batchLoop sentinel render (path::rest) = match readFile path
 
 -- batch CLI shape: <runtime.mdk> <core.mdk> <target.mdk>...  runtime + core parsed
 -- + desugared ONCE, then `render runtimeDecls coreDecls targetDecls` per target.
-export driveRuntimeBatch : String -> (List Decl -> List Decl -> List Decl -> String) -> <IO> Unit
+export
+driveRuntimeBatch : String -> (List Decl -> List Decl -> List Decl -> String) -> <IO> Unit
 driveRuntimeBatch sentinel render = match args ()
   runtimePath::corePath::targets => match readFile runtimePath
     Err msg => failWith msg
@@ -237,7 +253,8 @@ driveRuntimeBatch sentinel render = match args ()
 -- lazy batch CLI shape: <runtime.mdk> <core.mdk> <target.mdk>...  runtime + core
 -- PARSED (raw, not desugared — resolve/check take the raw AST), all target sources
 -- read, then `render runtimeParsed coreParsed [(path,src)]` builds one output blob.
-export driveParseSources : (List Decl -> List Decl -> List (String, String) -> String) -> <IO> Unit
+export
+driveParseSources : (List Decl -> List Decl -> List (String, String) -> String) -> <IO> Unit
 driveParseSources render = match args ()
   runtimePath::corePath::targets => match readFile runtimePath
     Err msg => failWith msg

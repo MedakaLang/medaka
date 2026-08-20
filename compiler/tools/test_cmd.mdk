@@ -108,7 +108,8 @@ import driver.diagnostics.{
 import support.util.{listLen, joinNl, isNonEmptyL}
 import support.path.{dirOf}
 
-export rootsOrDefault : String -> List String -> List String
+export
+rootsOrDefault : String -> List String -> List String
 rootsOrDefault target [] = [dirOf target]
 rootsOrDefault _ roots = roots
 
@@ -123,7 +124,8 @@ rootsOrDefault _ roots = roots
 -- behavior), `[EngNative]` under `medaka test --native` (SWAPS the engine,
 -- doesn't add one), or an explicit `--engines eval,native` list. It has NO
 -- effect on the prop/`test "…"` phases, which remain interpreter-only.
-export runTest : List Engine -> String -> String -> String -> List String -> <IO> Bool
+export
+runTest : List Engine -> String -> String -> String -> List String -> <IO> Bool
 runTest engines runtimeP coreP target roots = match readPreludeFile runtimeP
   Err e =>
     let _ = ePutStrLn e
@@ -319,7 +321,8 @@ runEnginesTagged (e::rest) runtimeDecls coreDecls target tsrc userDecls roots ex
 -- `runChosen`/`runSingle`/`runMulti`, the other inside `runNativeDoctests`
 -- itself) — extraction, synth generation, and judging are never duplicated
 -- here, only the execution engine differs.
-export runChosenOn : Engine -> List Decl -> List Decl -> String -> String -> List Decl -> List String -> List Example -> List Decl -> List (Result String (List Decl)) -> <IO> RunResult
+export
+runChosenOn : Engine -> List Decl -> List Decl -> String -> String -> List Decl -> List String -> List Example -> List Decl -> List (Result String (List Decl)) -> <IO> RunResult
 runChosenOn EngInterp runtimeDecls coreDecls target _tsrc userDecls roots examples synthDecls synthResults = runChosen runtimeDecls coreDecls target userDecls roots examples synthDecls synthResults
 runChosenOn EngNative _runtimeDecls _coreDecls target tsrc userDecls _roots examples _synthDecls synthResults = runNativeDoctests target tsrc userDecls examples synthResults
 
@@ -361,7 +364,8 @@ renderOneExample env i ex = match lookupBinding (synthName i) env
 -- the gate could drift out of sync with this function silently (a change here
 -- with no matching probe update would go undetected). Calling this export means
 -- the gate now tracks whatever this function does, mechanically, by construction.
-export singleRootId : List String -> String -> <IO> String
+export
+singleRootId : List String -> String -> <IO> String
 singleRootId roots target =
   let deps = readDeps (findProjectRootOrSelf (dirOf target))
   canonicalPathId deps roots target
@@ -674,7 +678,8 @@ testFailSuffix failed errors
 -- never an unqualified pass.  The `test "…"` phase is intentionally NOT reported
 -- (medaka_test covers doctests + props, per #252); a file's `test "…"` decls are
 -- run only by the human `medaka test`.
-export runTestReport : List Engine -> String -> String -> String -> String -> String -> <IO> (List (Engine, RunResult), List PropResult)
+export
+runTestReport : List Engine -> String -> String -> String -> String -> String -> <IO> (List (Engine, RunResult), List PropResult)
 runTestReport engines runtimeSrc coreSrc target tsrc stdlibDir =
   let runtimeDecls = desugar (parse runtimeSrc)
   let coreDecls = desugar (parse coreSrc)

@@ -1,5 +1,5 @@
 # META
-source_lines=309
+source_lines=310
 stages=DESUGAR,MARK
 # SOURCE
 -- annotate.mdk — Lexical-addressing EMISSION pass (STAGE2-DESIGN §2.0).
@@ -309,7 +309,8 @@ annotateImplMethod (ImplMethod nm pats body) =
 
 -- EMIT the lexical addresses across a whole program.  The eval drivers run this
 -- right before eval and the EVarAt arm in eval.mdk indexes frames by it.
-export annotateProgram : List Decl -> List Decl
+export
+annotateProgram : List Decl -> List Decl
 annotateProgram prog = map annotateDecl prog
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))

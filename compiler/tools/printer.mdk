@@ -325,7 +325,8 @@ go col ((Item i Break (Fill True (d::ds)))::z) =
   else
     newlineStr i :: go i rest
 
-export render : Doc -> String
+export
+render : Doc -> String
 render doc = stringConcat (go 0 [Item 0 Break doc])
 
 -- Render a Doc UNCONDITIONALLY flat — every Group/FlatGroup/Line/Softline
@@ -1199,7 +1200,8 @@ collectChain _ acc head = (head, acc)
 -- Number of operands in a decl's continuation-chain body (0 if it is not one).
 -- `medaka fmt` uses this to verify its per-operand comment list lines up with
 -- the AST before taking the commented path.
-export declChainLen : Decl -> Int
+export
+declChainLen : Decl -> Int
 declChainLen (DAttrib _ inner) = declChainLen inner
 declChainLen (DFunDef _ _ _ body) = chainLenBody body
 declChainLen _ = 0
@@ -1255,7 +1257,8 @@ printChainCommentedRhs op e comments =
 -- Print a whole DFunDef (optionally @attr-wrapped) whose body is a continuation
 -- chain, interleaving `comments` (one per operand).  Falls back to the plain
 -- `printDecl` for anything else (fmt only calls this for a verified chain decl).
-export printDeclChainCommented : Decl -> List (Option String) -> Doc
+export
+printDeclChainCommented : Decl -> List (Option String) -> Doc
 printDeclChainCommented (DAttrib attrs inner) comments =
   Cat (concatD (map attrDoc attrs)) (printDeclChainCommented inner comments)
 printDeclChainCommented (DFunDef pub n pats body) comments =
@@ -1278,7 +1281,8 @@ printDefChainRhs body _ = printDefRhs body
 -- statement in source order; `None` = no trailing comment.
 
 -- Statement count of a decl's block/do body (0 if it is not one).
-export declBlockLen : Decl -> Int
+export
+declBlockLen : Decl -> Int
 declBlockLen (DAttrib _ inner) = declBlockLen inner
 declBlockLen (DFunDef _ _ _ body) = blockLenBody body
 declBlockLen _ = 0
@@ -1322,7 +1326,8 @@ printBlockCommentedRhs body _ = printDefRhs body
 -- Print a whole DFunDef (optionally @attr-wrapped) whose body is a bare/do
 -- block, interleaving `comments` (one per statement).  Falls back to `printDecl`
 -- for anything else (fmt only calls this for a verified block decl).
-export printDeclBlockCommented : Decl -> List (Option String) -> Doc
+export
+printDeclBlockCommented : Decl -> List (Option String) -> Doc
 printDeclBlockCommented (DAttrib attrs inner) comments =
   Cat (concatD (map attrDoc attrs)) (printDeclBlockCommented inner comments)
 printDeclBlockCommented (DFunDef pub n pats body) comments =
@@ -1750,7 +1755,8 @@ fieldTyDoc (Field fn ft) = Cat (text fn) (Cat (text " : ") (printType ft))
 -- last — output lines align 1:1 with the source field lines, so fmt's generic
 -- interior-comment splice re-attaches each field's trailing comment by source-line
 -- index.  Falls back to the plain renderer for any non-single-ConNamed shape.
-export printNamedFieldData : DataVis -> String -> List String -> List Variant -> List DeriveRef -> Doc
+export
+printNamedFieldData : DataVis -> String -> List String -> List Variant -> List DeriveRef -> Doc
 printNamedFieldData vis n params [Variant cname (ConNamed fields nameOmitted)] derives =
   let eqPart = if nameOmitted then text " =" else Cat (text " = ") (text cname)
   let head = Cat (text "data ") (Cat (text n) (Cat (concatD (map (p => Cat (text " ") (text p)) params)) eqPart))
@@ -1804,7 +1810,8 @@ dataVariantDocs (v::vs) = Cat
 -- stays inline after it (`| Field String  -- .foo`).  Any non-empty entry forces
 -- the one-variant-per-line layout via `Hardline` (never the soft `Line`
 -- `dataVariantDocs` uses), so a documented `data` is never reflowed flat.
-export printDataDeclCommented : DataVis -> String -> List String -> List Variant -> List DeriveRef -> List (List String, List String) -> Doc
+export
+printDataDeclCommented : DataVis -> String -> List String -> List Variant -> List DeriveRef -> List (List String, List String) -> Doc
 printDataDeclCommented vis n params variants derives vcomments =
   let head = Cat (text "data ") (Cat (text n) (concatD (map (p => Cat (text " ") (text p)) params)))
   let variantDocs = dataVariantDocsCommented variants vcomments
@@ -1850,13 +1857,21 @@ map2VariantComment _ [] = []
 map2VariantComment (v::vs) (vc::vcs) =
   variantCommentedDoc v vc :: map2VariantComment vs vcs
 
-export printDecl : Decl -> Doc
-printDecl (DTypeSig pub n t) = Cat
-  (if pub then text "export " else Nil)
-  (Cat (text n) (Cat (text " : ") (printType t)))
-printDecl (DExtern pub n t) = Cat
-  (if pub then text "export " else Nil)
-  (Cat (text "extern ") (Cat (text n) (Cat (text " : ") (printType t))))
+-- `export` above a VALUE-level declaration (a type signature or an extern
+-- declaration) sits on its own line, never collapsed onto the signature
+-- (STYLE.md §10) — unlike `export data`/`export impl`, which stay collapsed
+-- since those are genuinely type-level exports (see `visPrefix`).
+valueExportPrefix : Bool -> Doc
+valueExportPrefix pub = if pub then Cat (text "export") Hardline else Nil
+
+export
+printDecl : Decl -> Doc
+printDecl (DTypeSig pub n t) =
+  Cat (valueExportPrefix pub) (Cat (text n) (Cat (text " : ") (printType t)))
+printDecl (DExtern pub n t) =
+  Cat
+    (valueExportPrefix pub)
+    (Cat (text "extern ") (Cat (text n) (Cat (text " : ") (printType t))))
 printDecl (DFunDef pub n pats body) =
   let header = Cat (if pub then text "export " else Nil) (Cat (text n) (concatD (map (p => Cat (text " ") (printPatAtom p)) pats)))
   Cat header (printDefRhs body)
@@ -2069,14 +2084,17 @@ ppConstr (Constraint { constraintHead = iface, constraintArgs = args }) =
 
 -- ── Public entry points ───────────────────────────
 
-export exprToString : Expr -> String
+export
+exprToString : Expr -> String
 exprToString e = render (printExpr precTop e)
 
-export declToString : Decl -> String
+export
+declToString : Decl -> String
 declToString d = render (printDecl d)
 
 -- program_to_string: each decl rendered + a trailing newline, concatenated.
-export programToString : List Decl -> String
+export
+programToString : List Decl -> String
 programToString decls = stringConcat (map declLine decls)
 
 declLine : Decl -> String

@@ -1,5 +1,5 @@
 # META
-source_lines=357
+source_lines=362
 stages=DESUGAR,MARK
 # SOURCE
 -- X-0D's additive elaboration-to-engine comparison carrier (#1399).
@@ -125,7 +125,8 @@ pendingFacts = [
   DraftPending FactCapabilityManifest ProducerCapabilityManifest "effects manifest producer",
 ]
 
-export buildDraftSemanticProgram : List Decl -> List Decl -> List (String, List Decl) -> Bool -> Bool -> DraftSemanticProgram
+export
+buildDraftSemanticProgram : List Decl -> List Decl -> List (String, List Decl) -> Bool -> Bool -> DraftSemanticProgram
 buildDraftSemanticProgram runtimeDecls coreD modules mainIsUnit mainIsFloat =
   let allDecls = dceFilter (coreD ++ flatMap snd modules)
   let semMods = semanticModules coreD modules
@@ -208,7 +209,8 @@ draftModuleSexp (DraftModule mid decls) =
 -- dedicated table receipts. This is not a faithful typed-AST equality claim,
 -- and none of it certifies that a legacy answer is semantically correct. Future
 -- .P stages add independent producer observations and semantic comparisons.
-export compareDraftSemanticProgram : DraftSemanticProgram -> List Decl -> List Decl -> List (String, List Decl) -> Bool -> Bool -> List DraftReceipt
+export
+compareDraftSemanticProgram : DraftSemanticProgram -> List Decl -> List Decl -> List (String, List Decl) -> Bool -> Bool -> List DraftReceipt
 compareDraftSemanticProgram (DraftSemanticProgram (DraftObservation runtimeProducer runtimePopulation draftRuntime) (DraftObservation coreProducer corePopulation draftCore) (DraftObservation modulesProducer modulesPopulation draftModules) (DraftObservation legacyCoreProducer legacyCorePopulation draftLegacyCore) (DraftObservation returnsSelfProducer returnsSelfPopulation draftReturnsSelf) (DraftObservation selfFnProducer selfFnPopulation draftSelfFnParams) (DraftObservation methodIfaceProducer methodIfacePopulation draftMethodIface) (DraftObservation methodConstraintsProducer methodConstraintsPopulation draftMethodConstraints) (DraftObservation ctorFieldsProducer ctorFieldsPopulation draftCtorFieldTypes) (DraftObservation declSigsProducer declSigsPopulation draftDeclSigTypes) (DraftObservation mainUnitProducer mainUnitPopulation draftMainIsUnit) (DraftObservation mainFloatProducer mainFloatPopulation draftMainIsFloat) _) runtimeDecls coreD modules mainIsUnit mainIsFloat =
   let allDecls = dceFilter (coreD ++ flatMap snd modules)
   [
@@ -234,11 +236,13 @@ dropFirstRows ((DraftRows mid (_::rows))::rest) = DraftRows mid rows :: rest
 
 -- Test-only negative seam. Draft constructors are intentionally public during
 -- migration; this named helper keeps the probe's malformed-field control small.
-export draftWithoutFirstMethodIface : DraftSemanticProgram -> DraftSemanticProgram
+export
+draftWithoutFirstMethodIface : DraftSemanticProgram -> DraftSemanticProgram
 draftWithoutFirstMethodIface (DraftSemanticProgram runtimeD coreD modules legacyCore returnsSelf selfFnParams (DraftObservation producer population methodIface) methodConstraints ctorFieldTypes declSigTypes mainIsUnit mainIsFloat pending) = DraftSemanticProgram runtimeD coreD modules legacyCore returnsSelf selfFnParams (DraftObservation producer population (dropFirstRows methodIface)) methodConstraints ctorFieldTypes declSigTypes mainIsUnit mainIsFloat pending
 
 -- Provenance is part of the compared field, not decorative output.
-export draftWithWrongMethodIfaceProvenance : DraftSemanticProgram -> DraftSemanticProgram
+export
+draftWithWrongMethodIfaceProvenance : DraftSemanticProgram -> DraftSemanticProgram
 draftWithWrongMethodIfaceProvenance (DraftSemanticProgram runtimeD coreD modules legacyCore returnsSelf selfFnParams (DraftObservation _ _ methodIface) methodConstraints ctorFieldTypes declSigTypes mainIsUnit mainIsFloat pending) = DraftSemanticProgram runtimeD coreD modules legacyCore returnsSelf selfFnParams (DraftObservation ProducerRuntimeTypes PopulationRuntimeDecls methodIface) methodConstraints ctorFieldTypes declSigTypes mainIsUnit mainIsFloat pending
 
 producerSexp : DraftProducer -> String
@@ -357,7 +361,8 @@ differentCount (_::rest) = differentCount rest
 -- structural receipt. This dump exposes populations, source-unit row counts,
 -- pending producers, and exact transport-comparison verdicts without copying a
 -- full prelude-sized CProgram into a second golden family.
-export draftSemanticProgramToSexp : DraftSemanticProgram -> List DraftReceipt -> String
+export
+draftSemanticProgramToSexp : DraftSemanticProgram -> List DraftReceipt -> String
 draftSemanticProgramToSexp (DraftSemanticProgram runtimeD coreD modules legacyCore returnsSelf selfFnParams methodIface methodConstraints ctorFieldTypes declSigTypes mainIsUnit mainIsFloat pending) receipts = node "DraftSemanticProgram" [node "runtime" [declObservationSexp runtimeD], node "prelude" [declObservationSexp coreD], node "modules" [moduleObservationSexp modules], node "legacy-core" [coreObservationSexp legacyCore], node "returns-self" [rowsObservationSexp returnsSelf], node "self-fn-params" [rowsObservationSexp selfFnParams], node "method-iface" [rowsObservationSexp methodIface], node "method-constraints" [rowsObservationSexp methodConstraints], node "ctor-field-types" [rowsObservationSexp ctorFieldTypes], node "decl-sig-types" [rowsObservationSexp declSigTypes], node "main-is-unit" [boolObservationSexp mainIsUnit], node "main-is-float" [boolObservationSexp mainIsFloat], node "pending-facts" [slist (map pendingSexp pending)], node "transport-receipts" [slist (map receiptSexp receipts)], node "summary" [node "receipts" [intToString (listLen receipts)], node "different" [intToString (differentCount receipts)]]]
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))

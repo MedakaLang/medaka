@@ -31,10 +31,12 @@ import list.{reverse}
 -- | An open database: the parsed header plus the whole-file bytes.
 public export data Db = Db DbHeader (Array Int)
 
-export dbHeader : Db -> DbHeader
+export
+dbHeader : Db -> DbHeader
 dbHeader (Db h _) = h
 
-export dbBytes : Db -> Array Int
+export
+dbBytes : Db -> Array Int
 dbBytes (Db _ b) = b
 
 -- | A schema-table entry (one row of sqlite_master).
@@ -46,20 +48,25 @@ public export data SchemaEntry = SchemaEntry {
     sql : String,  -- the original CREATE statement
   }
 
-export schemaName : SchemaEntry -> String
+export
+schemaName : SchemaEntry -> String
 schemaName e = e.ename
 
-export schemaType : SchemaEntry -> String
+export
+schemaType : SchemaEntry -> String
 schemaType e = e.etype
 
-export schemaRootPage : SchemaEntry -> Int
+export
+schemaRootPage : SchemaEntry -> Int
 schemaRootPage e = e.rootPage
 
-export schemaSql : SchemaEntry -> String
+export
+schemaSql : SchemaEntry -> String
 schemaSql e = e.sql
 
 -- | Parse a whole-file byte image into a `Db`.  PURE — no IO.
-export fromBytes : Array Int -> Result String Db
+export
+fromBytes : Array Int -> Result String Db
 fromBytes bytes = match runByteParser parseHeader bytes
   Err e => Err "header: \{e}"
   Ok h =>
@@ -69,7 +76,8 @@ fromBytes bytes = match runByteParser parseHeader bytes
       Ok (Db h bytes)
 
 -- | Open a database file: read its bytes, then parse.  Carries <FileRead>.
-export openDb : String -> <FileRead> Result String Db
+export
+openDb : String -> <FileRead> Result String Db
 openDb path = match readFileBytes path
   Err e => Err "readFileBytes: \{e}"
   Ok bytes => fromBytes bytes
@@ -89,11 +97,13 @@ hdrOffsetOf db n =
 --   what SQLite's overflow-threshold arithmetic is defined over.  sqlite3
 --   normally reserves 0 bytes, so `usableOf == headerPageSize`; a db written
 --   with e.g. an encryption reserve is still read correctly.
-export usableOf : Db -> Int
+export
+usableOf : Db -> Int
 usableOf db = headerPageSize (dbHeader db) - headerReserved (dbHeader db)
 
 -- | Read the full schema (all rows of sqlite_master on page 1).
-export readSchema : Db -> Result String (List SchemaEntry)
+export
+readSchema : Db -> Result String (List SchemaEntry)
 readSchema db =
   let bytes = dbBytes db
   let ps = headerPageSize (dbHeader db)
@@ -128,7 +138,8 @@ cellInt _ = 0
 --   `SELECT name FROM users` resolve to the same table.  Only the lookup
 --   comparison folds; the entry's `ename` keeps its stored/original case,
 --   and the not-found error still echoes the name as the caller wrote it.
-export findTable : Db -> String -> Result String SchemaEntry
+export
+findTable : Db -> String -> Result String SchemaEntry
 findTable db name = flatMap (findTableGo name) (readSchema db)
 
 findTableGo : String -> List SchemaEntry -> Result String SchemaEntry
@@ -145,7 +156,8 @@ findTableGo name (e::rest) =
 -- Walks table-interior pages (0x05) recursively — left-children in cell order
 -- then the right-most child — and table-leaf pages (0x0D) directly, returning
 -- all rows in rowid order across all pages.
-export scanTableRows : Db -> String -> Result String (List Row)
+export
+scanTableRows : Db -> String -> Result String (List Row)
 scanTableRows db name = do
   entry <- findTable db name
   let bytes = dbBytes db
@@ -157,7 +169,8 @@ scanTableRows db name = do
 -- | Like `scanTableRows` but also returns the INTEGER PRIMARY KEY column index
 --   (if any) parsed from the schema's CREATE TABLE SQL.  Both the dump path and
 --   the typed query path should use this so the IPK substitution is shared.
-export scanTableRowsIpk : Db -> String -> Result String (Option Int, List Row)
+export
+scanTableRowsIpk : Db -> String -> Result String (Option Int, List Row)
 scanTableRowsIpk db name = do
   entry <- findTable db name
   let bytes = dbBytes db
@@ -174,7 +187,8 @@ scanTableRowsIpk db name = do
 -- | The index (0-based) of an INTEGER PRIMARY KEY column in the CREATE TABLE
 --   statement, if any.  Scans the stored sql for "INTEGER PRIMARY KEY" and counts
 --   which top-level comma-separated column definition it falls in.
-export pkColumnIndex : String -> Option Int
+export
+pkColumnIndex : String -> Option Int
 pkColumnIndex sql = pkScan (stringToChars sql)
 
 pkScan : Array Char -> Option Int
@@ -215,7 +229,8 @@ matchesGo arr i needle j
 --   `None` if absent.  Reuses the `pkScan` paren-depth walk: at the start of
 --   each top-level (depth-1) column definition we read the leading identifier
 --   and compare it (case-insensitively, like SQLite) to `col`.
-export columnIndex : String -> String -> Option Int
+export
+columnIndex : String -> String -> Option Int
 columnIndex sql col =
   ciScan (stringToChars sql) (lowerChars (stringToChars col))
 
@@ -293,7 +308,8 @@ lowerCode : Int -> Int
 lowerCode c = if c >= 65 && c <= 90 then c + 32 else c
 
 -- | All column names of a table, in declaration order.
-export columnNames : Db -> String -> Result String (List String)
+export
+columnNames : Db -> String -> Result String (List String)
 columnNames db name =
   map (entry => colNamesOf (schemaSql entry)) (findTable db name)
 
@@ -354,7 +370,8 @@ readIdentTake arr i j len acc =
 -- | Given the IPK column index (if any), a row's rowid, and its raw cells,
 --   return the cells with the IPK column replaced by the rowid.
 --   For non-IPK tables (pkIdx = None) the cells are returned unchanged.
-export rowCellsWithIpk : Option Int -> Row -> List Cell
+export
+rowCellsWithIpk : Option Int -> Row -> List Cell
 rowCellsWithIpk pkIdx row = substituteIpk pkIdx 0 (rowRowid row) (rowCells row)
 
 substituteIpk : Option Int -> Int -> Int -> List Cell -> List Cell

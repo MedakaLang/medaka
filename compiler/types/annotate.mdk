@@ -305,5 +305,6 @@ annotateImplMethod (ImplMethod nm pats body) =
 
 -- EMIT the lexical addresses across a whole program.  The eval drivers run this
 -- right before eval and the EVarAt arm in eval.mdk indexes frames by it.
-export annotateProgram : List Decl -> List Decl
+export
+annotateProgram : List Decl -> List Decl
 annotateProgram prog = map annotateDecl prog

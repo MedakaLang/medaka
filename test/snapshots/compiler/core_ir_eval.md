@@ -1,5 +1,5 @@
 # META
-source_lines=615
+source_lines=621
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR evaluator — STAGE2-DESIGN §2.1's "trivial Core-IR tree-walker" that
@@ -103,7 +103,8 @@ import eval.eval.{
 }
 
 -- ── the evaluator ─────────────────────────────────────────────────────────
-export ceval : EvalEnv (Value e) -> CExpr -> <e> Value e
+export
+ceval : EvalEnv (Value e) -> CExpr -> <e> Value e
 ceval _ (CLit l) = litValue l
 ceval env (CVar x _) = if startsWithAt x then VUnit else lookupEnv env x
 ceval env (CApp f x) = applyValue (ceval env f) (ceval env x)
@@ -401,7 +402,8 @@ cClauseClosure env (CClause pats body) = VClosureF env pats (e => ceval e body)
 -- Mirror of eval.mdk's evalProgram, but installs Core IR groups.  A nullary
 -- top-level binding becomes a deferred VThunk (forced on first lookup) so
 -- point-free defs can reference values installed later, in any order.
-export cevalProgram : CProgram -> <e> List (String, Value e)
+export
+cevalProgram : CProgram -> <e> List (String, Value e)
 cevalProgram (CProgram groups ctorArs ctorToType implEntries) =
   ctorToTypeRef := ctorToType
   let ctors = map ctorBinding ctorArs
@@ -485,7 +487,8 @@ cTopGroupValue env [CClause pats body]
 cTopGroupValue env clauses = VMulti (map (cClauseClosure env) clauses)
 
 -- ── entry point (pure-value path, diffed via pp_value of `main`) ───────────
-export cevalMain : CProgram -> String
+export
+cevalMain : CProgram -> String
 cevalMain prog = match lookupBinding "main" (cevalProgram prog)
   Some v => ppValue (force v)
   None => panic "core_ir eval: no `main` binding"
@@ -494,7 +497,8 @@ cevalMain prog = match lookupBinding "main" (cevalProgram prog)
 -- append to eval.mdk's outputRef) and return the captured stdout — the Core-IR
 -- analog of eval.mdk's evalOutput, for the typed / run corpora that diff stdout
 -- (=== EVAL === goldens) rather than pp_value of `main`.
-export cevalOutput : CProgram -> String
+export
+cevalOutput : CProgram -> String
 cevalOutput prog =
   outputRef := ""
   let binds = cevalProgram prog
@@ -529,7 +533,8 @@ cRunMainForEffect binds = match lookupBinding "main" binds
 data CModInfo v =
   | CModInfo String (List Decl) (List CBind) (List CImplEntry) (List (String, Ref v)) (EvalEnv v)
 
-export cevalModules : List Decl -> List (String, List Decl) -> <e> List (String, Value e)
+export
+cevalModules : List Decl -> List (String, List Decl) -> <e> List (String, Value e)
 cevalModules preludeDecls modules =
   let moduleDecls = flatMap snd modules
   let allDecls = preludeDecls ++ moduleDecls
@@ -611,7 +616,8 @@ cRootLocals (_::rest) = cRootLocals rest
 -- Run a multi-module Core-IR program for its OUTPUT (the loader-driven analog of
 -- cevalOutput): evaluate every module in dependency order, force the root module's
 -- `main` for its IO side-effects, return the captured stdout.
-export cevalModulesOutput : List Decl -> List (String, List Decl) -> String
+export
+cevalModulesOutput : List Decl -> List (String, List Decl) -> String
 cevalModulesOutput preludeDecls modules =
   outputRef := ""
   let binds = cevalModules preludeDecls modules
