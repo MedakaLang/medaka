@@ -265,6 +265,7 @@ recUpdateVerdict : Option Loc -> String -> List String -> List ResError
 recordFieldOwner : String -> Field -> (String, String)
 reexportBindings : UsePath -> ModuleExports -> List (String, String)
 reexportOrigins : UsePath -> ModuleExports -> List String
+renderModuleErrorsByPath : List (String, String) -> (String, List ResError) -> List String
 resErrorCode : ResError -> String
 resErrorDedupKey : ResError -> String
 resErrorDidYouMean : ResError -> Option (String, String)
@@ -275,9 +276,8 @@ resolveModuleG : List String -> List Decl -> List Decl -> Map String ModuleExpor
 resolveModulesErrors : List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List ResError
 resolveModulesErrorsByPathGo : List (String, String) -> Bool -> List String -> List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List String
 resolveModulesErrorsG : Bool -> List String -> List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List ResError
-resolveModulesToHumane : List Decl -> List Decl -> List (String, List Decl) -> String
+resolveModulesErrorsPairsG : Bool -> List String -> List Decl -> List Decl -> Map String ModuleExports -> List (String, List Decl) -> List (String, List ResError)
 resolveModulesToHumaneByPath : List (String, String) -> Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> String
-resolveModulesToHumaneG : Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> String
 resolveModulesToLines : List Decl -> List Decl -> List (String, List Decl) -> String
 resolveModulesToLinesG : Bool -> List String -> List Decl -> List Decl -> List (String, List Decl) -> String
 resolveProgram : List Decl -> List Decl -> List Decl -> List ResError

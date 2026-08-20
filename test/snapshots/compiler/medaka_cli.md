@@ -1,5 +1,5 @@
 # META
-source_lines=3144
+source_lines=3140
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -72,11 +72,7 @@ import frontend.parser.{
   Positions,
 }
 import frontend.desugar.{desugar}
-import frontend.resolve.{
-  resolveModulesToHumane,
-  resolveModulesToHumaneG,
-  resolveModulesToHumaneByPath,
-}
+import frontend.resolve.{resolveModulesToHumaneByPath}
 import driver.loader.{
   LoadError,
   LoadMsg,
@@ -1977,7 +1973,7 @@ runRunCmd argv =
 -- hadTypeErrors reflects THIS run only.  A type error makes
 -- evalModulesOutput miscompile (the G1 bug), so we never reach it.
 -- Resolve-phase errors (e.g. PrivateNameAccess) ride a SEPARATE channel
--- hadTypeErrors does not cover, so resolveModulesToHumane is consulted
+-- hadTypeErrors does not cover, so resolveModulesToHumaneByPath is consulted
 -- FIRST (mirroring `check`/`build`) and run aborts with the same humane
 -- diagnostic before elaborate/eval.
 
@@ -3158,7 +3154,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "LetBind" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "Positions" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
-(DUse false (UseGroup ("frontend" "resolve") ((mem "resolveModulesToHumane" false) (mem "resolveModulesToHumaneG" false) (mem "resolveModulesToHumaneByPath" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "resolveModulesToHumaneByPath" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" false) (mem "LoadMsg" false) (mem "LoadParseFailed" false) (mem "loadProgramFilesLocatedE" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "entrySearchRoots" false) (mem "projectTrustedMods" false) (mem "unknownModuleIdOf" false) (mem "findImportLoc" false) (mem "availableModulesHint" false) (mem "availableModulesText" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProject" false) (mem "analyzeLocated" false) (mem "analyzeLocatedG" false) (mem "ppDiagCli" false) (mem "ppDiagCliSrc" false) (mem "Diag" true) (mem "Severity" true) (mem "SevError" false) (mem "cjPosition" false) (mem "cjRange" false) (mem "cjRangeOfLoc" false) (mem "cjDiagnostic" false) (mem "cjFileEntry" false) (mem "cjAllToJson" false) (mem "readDiagSrc" false) (mem "parseErrCode" false) (mem "parseErrHelpFix" false) (mem "codeKind" false) (mem "optField" false) (mem "cjFixJson" false) (mem "mkDiag" false) (mem "checkJsonFile" false) (mem "readFileSafe" false) (mem "diagIsError" false))))
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JInt" false) (mem "JString" false) (mem "JArray" false) (mem "JObject" false) (mem "JNull" false) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false))))
@@ -3604,7 +3600,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true) (mem "Pat" false) (mem "LetBind" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false) (mem "parseResult" false) (mem "ParseError" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "Positions" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
-(DUse false (UseGroup ("frontend" "resolve") ((mem "resolveModulesToHumane" false) (mem "resolveModulesToHumaneG" false) (mem "resolveModulesToHumaneByPath" false))))
+(DUse false (UseGroup ("frontend" "resolve") ((mem "resolveModulesToHumaneByPath" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" false) (mem "LoadMsg" false) (mem "LoadParseFailed" false) (mem "loadProgramFilesLocatedE" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "entrySearchRoots" false) (mem "projectTrustedMods" false) (mem "unknownModuleIdOf" false) (mem "findImportLoc" false) (mem "availableModulesHint" false) (mem "availableModulesText" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProject" false) (mem "analyzeLocated" false) (mem "analyzeLocatedG" false) (mem "ppDiagCli" false) (mem "ppDiagCliSrc" false) (mem "Diag" true) (mem "Severity" true) (mem "SevError" false) (mem "cjPosition" false) (mem "cjRange" false) (mem "cjRangeOfLoc" false) (mem "cjDiagnostic" false) (mem "cjFileEntry" false) (mem "cjAllToJson" false) (mem "readDiagSrc" false) (mem "parseErrCode" false) (mem "parseErrHelpFix" false) (mem "codeKind" false) (mem "optField" false) (mem "cjFixJson" false) (mem "mkDiag" false) (mem "checkJsonFile" false) (mem "readFileSafe" false) (mem "diagIsError" false))))
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JInt" false) (mem "JString" false) (mem "JArray" false) (mem "JObject" false) (mem "JNull" false) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false))))
