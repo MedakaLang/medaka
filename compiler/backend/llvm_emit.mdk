@@ -10744,14 +10744,69 @@ emitProgram input cp =
 export emitProgramRecord : EmitInput -> CProgram -> (String, List String)
 emitProgramRecord input cp = emitProgramMode Record input cp
 
-emitProgramMode : GapMode -> EmitInput -> CProgram -> (String, List String)
-emitProgramMode gapMode input (CProgram groups ctorArs ctorTypes implEntries) =
+-- Per-emission derived-state config (RUN-EMIT-002): the fields the six-row
+-- divergence census found differing between emitProgramMode and
+-- emitProgramGaps. Each is a value the caller supplies here — never a shared
+-- default silently overwritten afterward (packet S-emit-input-record §5).
+data EmitStateConfig =
+  | EmitStateConfig {
+      counter0 : Int,
+      globalsReg0 : List (String, (Bool, LTy)),
+      gapMode : GapMode,
+      lazyGlobalNames : List String,
+      runDispatchAnalysis : Bool,
+    }
+
+-- Row #5/#6 (RUN-EMIT-002: one disposition, not two): when the caller wants the
+-- dispatch-graph TMC groups computed (emitProgramMode), install them via the
+-- full detection sequence; otherwise leave `gDispGroups` empty, matching
+-- emitProgramGaps' plain per-bind census. `gDispDropMembers` over an empty
+-- group list is identity, so routing floatFwSet through it unconditionally
+-- reproduces emitProgramGaps' bare `collectFloatFw` while keeping ONE call site
+-- for the whole disposition.
+installDispatchState : Emit -> Bool -> List CBind -> List CBind -> List CImplEntry -> Unit
+installDispatchState e runAnalysis groupsAll fnBindsList implEntries =
+  let _ = if runAnalysis then
+    installDispatchGroupsFull e groupsAll fnBindsList implEntries
+  else
+    e.gDispGroups := []
+  e.floatFwSet := gDispDropMembers e (collectFloatFw e fnBindsList)
+
+-- (b′) dispatch-graph TMC: run the SHARED detection (backend/trmc_analysis.mdk)
+-- before any fn emit, so emitFn can route group members/roots. Hooks: the LLVM
+-- canonFnName + a clause-derived fn-arity table with wasm's progFnArity contract
+-- (-1 when unknown); v5's stage-1-claims hook is the LLVM Stage-1 gate (no
+-- uniform-ctor condition — the backends' hooks unify when wasm's gate retires).
+-- gDispGroupEtaStable then drops any group containing a single-clause member
+-- that eta-saturation would re-arity (deficit > 0 — such a member's inlined
+-- clause-arity body would diverge from the ordinary define's ABI); dropped
+-- groups fall back to ordinary codegen, no transform, no regression.
+installDispatchGroupsFull : Emit -> List CBind -> List CBind -> List CImplEntry -> Unit
+installDispatchGroupsFull e groupsAll fnBindsList implEntries =
+  let gDispArs = gDispFnArsOf fnBindsList
+  e.gDispArs := gDispArs
+  -- #990: index the fn-arity table so detectDispatchGroups' per-ref gDispIsFn/
+  -- gDispFnArity is O(log fns) not O(fns) — reverseL ⇒ first-pair-wins = lookupAssoc.
+  e.gDispArMap := (Some (omFromPairs (reverseL gDispArs) omEmpty))
+  e.gDispBinds := fnBindsList
+  let dispGroups0 = detectDispatchGroups
+    (n => canonFnName e n)
+    (n => gDispIsFn e n)
+    (n => gDispFnArity e n)
+    (nm ar cs => gDispStage1Claims e nm ar cs)
+    fnBindsList
+    groupsAll
+    implEntries
+  e.gDispGroups := (gDispKeepEtaStable e fnBindsList dispGroups0)
+
+-- ONE construction path (RUN-EMIT-002) for the per-emission derived state: the
+-- `Emit` record literal, the nine `install*` calls, and the post-install
+-- dispatch/float-state block — shared by emitProgramMode and emitProgramGaps.
+buildEmitState : EmitStateConfig -> EmitInput -> List CBind -> List (String, Int) -> List (String, String) -> List CImplEntry -> Emit
+buildEmitState cfg input groups ctorArs ctorTypes implEntries =
   let e = Emit {
-    -- issue #118: the two halves are emitted by INDEPENDENT emitter runs, so they
-    -- get disjoint gensym ranges or their lifted defines collide — see
-    -- programHalfIdBase.  Mode 0 keeps starting at 0, so its IR is unchanged.
     input = input,
-    counter = Ref (if input.emitHalf == emitHalfProgram then programHalfIdBase else 0),
+    counter = Ref cfg.counter0,
     buf = Ref [],
     fnNames = Ref (collectFns groups),
     sigs = Ref (inferSigs input.declSigIndex (fnBinds groups)),
@@ -10760,15 +10815,8 @@ emitProgramMode gapMode input (CProgram groups ctorArs ctorTypes implEntries) =
     recFields = Ref (input.recordFieldOrders ++ collectRecords groups),
     implEntries = Ref implEntries,
     ctorTypes = Ref ctorTypes,
-    -- The PRELUDE half emits no `@mdk_program_main`, hence no init prologue to mark
-    -- the globals initialised as it computes them — so they start READY, exactly as
-    -- the non-emitting gaps driver does (initGlobalsRegReady).  Without this every
-    -- prelude body that loads a global would hit the forward-dependency gap.
-    globalsReg = Ref (if input.emitHalf == emitHalfPrelude then
-      initGlobalsRegReady (valBinds groups)
-    else
-      initGlobalsReg (valBinds groups)),
-    gapMode = gapMode,
+    globalsReg = Ref cfg.globalsReg0,
+    gapMode = cfg.gapMode,
     gapLog = Ref [],
     curGapBind = Ref "?",
     defineCounter = Ref 0,
@@ -10809,7 +10857,7 @@ emitProgramMode gapMode input (CProgram groups ctorArs ctorTypes implEntries) =
   -- #561 PR-A: classify LAZY value globals (dispatch-reaching / cyclic) once per
   -- program.  Reads of these lower to `call @mdk_force_<x>()`; every other global
   -- stays on the byte-identical eager prologue.
-  let _ = installLazyGlobalMap e (lazyGlobalNames groups)
+  let _ = installLazyGlobalMap e cfg.lazyGlobalNames
   let _ = installCtorMap e ctorArs
   -- #990: index the ctor→type table so cellTag's per-ctor ctorTypeId/ctorOrdinal/
   -- ctorHasSiblings lookups are O(log types) not O(types) — reverseL ⇒ first-wins.
@@ -10824,36 +10872,34 @@ emitProgramMode gapMode input (CProgram groups ctorArs ctorTypes implEntries) =
   -- O(impls) — byte-identical IR, O(N²)→O(N log N) emit on dispatch-heavy code.
   let _ = installImplIndex e implEntries
   let _ = installImplMethodSet e implEntries
-  -- (b′) dispatch-graph TMC: run the SHARED detection (backend/trmc_analysis.mdk)
-  -- before any fn emit, so emitFn can route group members/roots.  Hooks: the LLVM
-  -- canonFnName + a clause-derived fn-arity table with wasm's progFnArity contract
-  -- (-1 when unknown); v5's stage-1-claims hook is the LLVM Stage-1 gate (no
-  -- uniform-ctor condition — the backends' hooks unify when wasm's gate retires).
-  -- gDispGroupEtaStable then drops any group containing a single-clause member
-  -- that eta-saturation would re-arity (deficit > 0 — such a member's inlined
-  -- clause-arity body would diverge from the ordinary define's ABI); dropped
-  -- groups fall back to ordinary codegen, no transform, no regression.
-  let gDispArs = gDispFnArsOf (fnBinds groups)
-  e.gDispArs := gDispArs
-  -- #990: index the fn-arity table so detectDispatchGroups' per-ref gDispIsFn/
-  -- gDispFnArity is O(log fns) not O(fns) — reverseL ⇒ first-pair-wins = lookupAssoc.
-  e.gDispArMap := (Some (omFromPairs (reverseL gDispArs) omEmpty))
-  e.gDispBinds := (fnBinds groups)
-  let dispGroups0 = detectDispatchGroups
-    (n => canonFnName e n)
-    (n => gDispIsFn e n)
-    (n => gDispFnArity e n)
-    (nm ar cs => gDispStage1Claims e nm ar cs)
-    (fnBinds groups)
-    groups
-    implEntries
-  e.gDispGroups := (gDispKeepEtaStable e (fnBinds groups) dispGroups0)
   -- a group member must never be ADVERTISED as having a float `__fw` worker (the
   -- group path emits no standalone defines, so a float-context caller would call
   -- a nonexistent symbol; v3/v4 make external float callers impossible anyway —
   -- belt and braces).
-  e.floatFwSet := (gDispDropMembers e (collectFloatFw e (fnBinds groups)))
+  let _ = installDispatchState e cfg.runDispatchAnalysis groups (fnBinds groups) implEntries
   e.floatClosureFns := (collectFloatClosureFns e (fnBinds groups))
+  e
+
+emitProgramMode : GapMode -> EmitInput -> CProgram -> (String, List String)
+emitProgramMode gapMode input (CProgram groups ctorArs ctorTypes implEntries) =
+  -- issue #118: the two halves are emitted by INDEPENDENT emitter runs, so they
+  -- get disjoint gensym ranges or their lifted defines collide — see
+  -- programHalfIdBase.  Mode 0 keeps starting at 0, so its IR is unchanged.
+  -- The PRELUDE half emits no `@mdk_program_main`, hence no init prologue to mark
+  -- the globals initialised as it computes them — so they start READY, exactly as
+  -- the non-emitting gaps driver does (initGlobalsRegReady).  Without this every
+  -- prelude body that loads a global would hit the forward-dependency gap.
+  let cfg = EmitStateConfig {
+    counter0 = if input.emitHalf == emitHalfProgram then programHalfIdBase else 0,
+    globalsReg0 = if input.emitHalf == emitHalfPrelude then
+      initGlobalsRegReady (valBinds groups)
+    else
+      initGlobalsReg (valBinds groups),
+    gapMode = gapMode,
+    lazyGlobalNames = lazyGlobalNames groups,
+    runDispatchAnalysis = True,
+  }
+  let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries
   let _ = resetEmittedDefaults e
   let _ = emitPreamble e
   let _ = emitGlobalDecls e (valBinds groups)
@@ -11116,78 +11162,19 @@ ctag _ = "?"
 -- The emitted LLVM text is discarded by the probe — only the gap log matters.
 export emitProgramGaps : EmitInput -> CProgram -> List String
 emitProgramGaps input (CProgram groups ctorArs ctorTypes implEntries) =
-  let e = Emit {
-    input = input,
-    counter = Ref 0,
-    buf = Ref [],
-    fnNames = Ref (collectFns groups),
-    sigs = Ref (inferSigs input.declSigIndex (fnBinds groups)),
-    ctors = Ref ctorArs,
-    lams = Ref [],
-    recFields = Ref (input.recordFieldOrders ++ collectRecords groups),
-    implEntries = Ref implEntries,
-    ctorTypes = Ref ctorTypes,
-    globalsReg = Ref (initGlobalsRegReady (valBinds groups)),
-    gapMode = Record,
-    gapLog = Ref [],
-    curGapBind = Ref "?",
-    defineCounter = Ref 0,
-    closureArity = Ref [],
-    closureRetTy = Ref [],
-    trmcCtx = Ref TrmcOff,
-    gDispCtx = Ref GDispOff,
-    gDispGroups = Ref [],
-    gDispBinds = Ref [],
-    gDispArs = Ref [],
-    gDispArMap = Ref None,
-    emittedDefaults = Ref [],
-    curImplTag = Ref "",
-    curSelfFnParams = Ref [],
-    knownFnMap = Ref None,
-    lazyGlobalMap = Ref None,
-    ctorMap = Ref None,
-    sigMap = Ref None,
-    defArityMap = Ref None,
-    recByName = Ref None,
-    recByLabel = Ref None,
-    implsByMethod = Ref None,
-    implMethodSet = Ref None,
-    ctorTypeMap = Ref None,
-    ctorsByType = Ref None,
-    ctorOrdinalMap = Ref None,
-    typeIdMap = Ref None,
-    dispCache = Ref [],
-    dictConstCache = Ref [],
-    distinctTypeNamesCache = Ref None,
-    floatFwSet = Ref [],
-    floatClosureFns = Ref [],
-  }
-  let _ = resetDistinctTypeNames e
-  e.dictConstCache := []
-  e.dispCache := []
-  let _ = installKnownFnMap e (collectFns groups)
   -- #561 PR-A: the gap census emits every value bind ORDINARILY (eager load), so
   -- install an EMPTY lazy set — this also RESETS any prior emitProgram's set so it
-  -- cannot leak into the census.
-  let _ = installLazyGlobalMap e []
-  let _ = installCtorMap e ctorArs
-  -- #990: index the ctor→type table so cellTag's per-ctor ctorTypeId/ctorOrdinal/
-  -- ctorHasSiblings lookups are O(log types) not O(types) — reverseL ⇒ first-wins.
-  let _ = installCtorTypeMap e ctorTypes
-  -- #352: index the CONSTANT record field-order table (by name and by label) so every
-  -- per-field-op probe is O(log records) not O(records) — same first-match answers.
-  let _ = installRecFieldIndex e (recFieldTable e)
-  let _ = installSigMap e (sigTable e)
-  let _ = installDefArityMap e (fnBinds groups)
-  -- #990: install the by-method impl index (see emitProgram) — resets any prior
-  -- program's index so a same-process re-emit can never route through a stale bucket.
-  let _ = installImplIndex e implEntries
-  let _ = installImplMethodSet e implEntries
-  e.floatFwSet := (collectFloatFw e (fnBinds groups))
-  e.floatClosureFns := (collectFloatClosureFns e (fnBinds groups))
-  -- the gap census emits every bind ORDINARILY — reset the (b′) groups so a prior
-  -- emitProgram's routing state can never leak into this path.
-  e.gDispGroups := []
+  -- cannot leak into the census. Likewise `runDispatchAnalysis = False` resets the
+  -- (b′) groups (see installDispatchState) so a prior emitProgram's routing state
+  -- can never leak into this path.
+  let cfg = EmitStateConfig {
+    counter0 = 0,
+    globalsReg0 = initGlobalsRegReady (valBinds groups),
+    gapMode = Record,
+    lazyGlobalNames = [],
+    runDispatchAnalysis = False,
+  }
+  let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries
   let _ = resetEmittedDefaults e
   let _ = emitPreamble e
   let _ = emitFnsGaps e (fnBinds groups)
