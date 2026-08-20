@@ -1,7 +1,0 @@
-import zmod.{IZ, szK}  -- SAME two modules, SAME call -- only the import order differs
-import amod.{af}
-
-applyIt : (Int -> Int) -> Int
-applyIt g = g 5
-
-main = println (applyIt (szK "hi"))

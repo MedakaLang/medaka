@@ -39,7 +39,7 @@ import frontend.ast.{
 -- B-2.2-e: the ONE route-word mint.  This module used to reach it as
 -- `eval.eval.implKeyOf`; that mirror is deleted and both sides of the dict-word
 -- seam now call `route_key.implRouteKeyWord` with the impl's own `implOrigin`.
-import types.route_key.{implRouteKeyWord}
+import types.route_key.{implRouteKeyWord, ifaceWordOf}
 import ir.core_ir.{
   CExpr(..),
   CArm(..),
@@ -80,6 +80,7 @@ import support.util.{
   startsWith,
   dedupBy,
   lenKey,
+  splitOnChar,
 }
 
 -- a synthetic binder for the lowered composition operators; constructed
@@ -1554,21 +1555,50 @@ methodArgTys _ = []
 -- in the default body and re-stamp them to the concrete dispatch tag (so the
 -- partially-applied inner `filterMap` lowers to a direct `@mdk_impl_<tag>_filterMap`
 -- call instead of an un-dispatchable arg-tag fallback).  Keyed by BARE method name
--- (interface method names are distinct across the prelude's interfaces).
+-- ROW SHAPE, #1450/#1668: each row is `(method, (ifaceName, ifaceWord, arity))`.
+-- The row COUNT and the `(ifaceName, arity)` pair are UNCHANGED -- `makeEmitInput`
+-- projects the pair straight back out for the existing bare-name index, so the
+-- INTERFACE leg above keeps its current bare spelling and its current answers.
+-- The third component is ADDITIVE: `ifaceWordOf implOrigin ifaceName`, the
+-- DECLARATION identity of the interface (`"zmod::IZ"`; the bare name when no origin
+-- is stamped, i.e. single-file, where a cross-module collision cannot exist).  It
+-- lets the emitter index the ARITY leg by interface DECLARATION instead of by bare
+-- method name -- which is the whole of #1450 / #1668: two modules declaring
+-- same-spelled methods on unrelated interfaces collapse to ONE bare-name row, and
+-- whichever declaration lands last silently supplies BOTH impls' emitted arity.
 export
-methodIfaceTable : List Decl -> List (String, (String, Int))
+methodIfaceTable : List Decl -> List (String, (String, String, Int))
 methodIfaceTable prog = flatMap ifaceMethodArityEntries prog
 
-ifaceMethodArityEntries : Decl -> List (String, (String, Int))
+ifaceMethodArityEntries : Decl -> List (String, (String, String, Int))
 -- #1037
 ifaceMethodArityEntries (DAttrib _ d) = ifaceMethodArityEntries d
-ifaceMethodArityEntries (DInterface { name = ifaceName, methods, ... }) =
-  map (m => ifaceMethodArityEntry ifaceName m) methods
+ifaceMethodArityEntries (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) = map (m => ifaceMethodArityEntry (ifaceWordOf o ifaceName) ifaceName m) methods
 ifaceMethodArityEntries _ = []
 
-ifaceMethodArityEntry : String -> IfaceMethod -> (String, (String, Int))
-ifaceMethodArityEntry ifaceName (IfaceMethod mname mty _) =
-  (mname, (ifaceName, listLen (methodArgTys mty)))
+ifaceMethodArityEntry : String -> String -> IfaceMethod -> (String, (String, String, Int))
+ifaceMethodArityEntry ifaceWord ifaceName (IfaceMethod mname mty _) =
+  (mname, (ifaceName, ifaceWord, listLen (methodArgTys mty)))
+
+-- The identity-keyed lookup word for the ARITY leg (#1450, #1668): the interface's
+-- DECLARATION word and the method name, spliced.  Minted here, beside the table it
+-- keys, and read by both backends -- `ifaceWordOf` never answers `""` (it falls back
+-- to the bare interface name), so this word is never the absence-matches-absence
+-- hazard `ifaceIdentity` carries.  `#` cannot occur in either half.
+export
+ifaceMethodArityKey : String -> String -> String
+ifaceMethodArityKey ifaceWord mname = "\{ifaceWord}#\{mname}"
+
+-- The interface DECLARATION word an impl route key carries in its first field
+-- (`route_key.implRouteKeyWord` = `<iface word>|<type args>|<method>`).  This is a
+-- READ of the key's existing, already-identity-bearing content -- NOT a re-keying
+-- of it, and not a read of `CImplTagged`'s bare `iface` field, which keeps its
+-- current spelling and its current route-word readers (#1277 / PR #1346 E4).
+export
+ifaceWordOfKey : String -> String
+ifaceWordOfKey key = match splitOnChar '|' key
+  w::_ => w
+  [] => key
 
 -- ── method → method-level constraint INTERFACE names (native backend, G7) ────
 -- Per interface method that carries a method-level `=>` constraint (foldMap's
