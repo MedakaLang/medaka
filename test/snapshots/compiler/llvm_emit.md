@@ -1,5 +1,5 @@
 # META
-source_lines=11211
+source_lines=11204
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -2919,80 +2919,73 @@ emitDebugLitExtern e env "debugCharLit" args = match emitArgs e env args
 emitDebugLitExtern e _ name _ = gapE e ("unsupported debug-lit extern " ++ name)
 
 -- ── extern dispatch: applied form ───────────────────────────────────────────
--- Is `name` a KNOWN extern of any family the emitter handles?  The OR of every
--- family predicate (plus the `arrayMakeWith` intrinsic, which has no `isXxx`
--- predicate — it is dispatched by exact name).  Drives both the saturated CApp
--- head path (emitExternApplied) and the value-position eta-wrap (emitVar →
--- emitExternEtaClosure); keeping the membership in ONE place means the two paths
--- can never disagree about what counts as an extern.
+-- ONE name-keyed catalog (RUN-EMIT-005 (B) grain (c) / RUN-EMIT-006, #358):
+-- each row pairs a family's existing membership predicate with its existing
+-- emitter — the per-name clause bodies inside `emitXExtern` stay exactly
+-- where they are; only the SELECTION ladder collapses.  `isAnyExtern` and
+-- `emitExternApplied` both derive from this one list, so a family can't
+-- register in one without the other — no more hand-kept-in-sync OR-chain +
+-- if-chain pair.  `arrayMakeWith` has no `isXxx` predicate (exact-name
+-- dispatch, its `:10564` signature omits the name param) so it stays a
+-- literal pre-check ahead of the table on both sides, exactly as before.
+type ExternEmitter = Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+
+externCatalog : List (String -> Bool, ExternEmitter)
+externCatalog = [
+  (isStrExtern, emitStrExtern),
+  (isNumExtern, emitNumExtern),
+  (isIoExtern, emitIoExtern),
+  (isAbortExtern, emitAbortExtern),
+  (isArrIntrinsic, emitArrIntrinsic),
+  (isArrLeafExtern, emitArrLeafExtern),
+  (isCharExtern, emitCharExtern),
+  (isStrCharExtern, emitStrCharExtern),
+  (isUnicodeExtern, emitUnicodeExtern),
+  (isAdtExtern, emitAdtExtern),
+  (isEnvExtern, emitEnvExtern),
+  (isFileExtern, emitFileExtern),
+  (isNetExtern, emitNetExtern),
+  (isRngExtern, emitRngExtern),
+  (isHashExtern, emitHashExtern),
+  (isBitExtern, emitBitExtern),
+  (isDebugLitExtern, emitDebugLitExtern),
+  (isPerfExtern, emitPerfExtern),
+]
+
+-- first (and, by the disjointness the catalog assumes, only) row whose
+-- predicate accepts `name`.
+findExternFamily : String -> List (String -> Bool, ExternEmitter) -> Option ExternEmitter
+findExternFamily _ [] = None
+findExternFamily name ((pred, fn)::rest)
+  | pred name = Some fn
+  | otherwise = findExternFamily name rest
+
+-- Is `name` a KNOWN extern of any family the emitter handles?  Drives both the
+-- saturated CApp head path (emitExternApplied) and the value-position eta-wrap
+-- (emitVar → emitExternEtaClosure); keeping the membership in ONE place means
+-- the two paths can never disagree about what counts as an extern.
 isAnyExtern : String -> Bool
-isAnyExtern name = isStrExtern name
-  || isNumExtern name
-  || isIoExtern name
-  || isAbortExtern name
-  || isArrIntrinsic name
-  || name == "arrayMakeWith"
-  || isArrLeafExtern name
-  || isCharExtern name
-  || isStrCharExtern name
-  || isUnicodeExtern name
-  || isAdtExtern name
-  || isEnvExtern name
-  || isFileExtern name
-  || isNetExtern name
-  || isRngExtern name
-  || isHashExtern name
-  || isBitExtern name
-  || isDebugLitExtern name
-  || isPerfExtern name
+isAnyExtern name = name == "arrayMakeWith"
+  || anyList ((pred, _) => pred name) externCatalog
 
 -- SATURATED extern application: route a known extern + its (non-empty) argument
 -- list to the right family emitter.  Factored out of emitApp's CVar-head ladder
 -- so that the VALUE-position eta-wrap (emitExternEtaClosure) can REPLAY the exact
 -- applied-form codegen on synthetic `%argK` operands — value/applied byte-
--- consistency by construction, no parallel codegen to drift.  The family order is
--- the ladder's original order (behaviour-preserving; `arrayMakeWith` keeps its
--- exact-name slot ahead of the arrayLeaf family).  Caller guards `hasArgs args`.
+-- consistency by construction, no parallel codegen to drift.  A name matching
+-- no catalog row is out-of-catalog: `gapE` decides loudly (`panic`, `Strict`,
+-- every real build) or quietly-recorded (`noteGap`, `Record`, the D4 census
+-- scaffold) — the same mode-aware floor the old terminal
+-- `else -> emitDebugLitExtern` reached, now explicit instead of borrowed from
+-- debugLit's own wildcard clause (RUN-EMIT-006 §5 property 5: debugLit is an
+-- ordinary keyed entry now, and the table-lookup miss carries the fallthrough
+-- role). Caller guards `hasArgs args`.
 emitExternApplied : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
 emitExternApplied e env fname args =
-  if isStrExtern fname then
-    emitStrExtern e env fname args
-  else if isNumExtern fname then
-    emitNumExtern e env fname args
-  else if isIoExtern fname then
-    emitIoExtern e env fname args
-  else if isAbortExtern fname then
-    emitAbortExtern e env fname args
-  else if isArrIntrinsic fname then
-    emitArrIntrinsic e env fname args
-  else if fname == "arrayMakeWith" then
-    emitArrayMakeWith e env args
-  else if isArrLeafExtern fname then
-    emitArrLeafExtern e env fname args
-  else if isCharExtern fname then
-    emitCharExtern e env fname args
-  else if isStrCharExtern fname then
-    emitStrCharExtern e env fname args
-  else if isUnicodeExtern fname then
-    emitUnicodeExtern e env fname args
-  else if isAdtExtern fname then
-    emitAdtExtern e env fname args
-  else if isEnvExtern fname then
-    emitEnvExtern e env fname args
-  else if isFileExtern fname then
-    emitFileExtern e env fname args
-  else if isNetExtern fname then
-    emitNetExtern e env fname args
-  else if isRngExtern fname then
-    emitRngExtern e env fname args
-  else if isHashExtern fname then
-    emitHashExtern e env fname args
-  else if isBitExtern fname then
-    emitBitExtern e env fname args
-  else if isPerfExtern fname then
-    emitPerfExtern e env fname args
-  else
-    emitDebugLitExtern e env fname args
+  if fname == "arrayMakeWith" then emitArrayMakeWith e env args
+  else match findExternFamily fname externCatalog
+    Some fn => fn e env fname args
+    None => gapE e ("unsupported extern " ++ fname)
 
 emitBin : Emit -> List (String, (String, LTy)) -> String -> CExpr -> CExpr -> String -> (String, LTy)
 emitBin e env op l r tag
@@ -11752,10 +11745,16 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "emitDebugLitExtern" ((PVar "e") (PVar "env") (PLit (LString "debugStringLit")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "a")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r"))) (ELit (LString " = call i64 @mdk_debug_string_lit(i64 "))) (EApp (EVar "display") (EVar "a"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r") (EVar "LTStr"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: debugStringLit takes one argument"))))))
 (DFunDef false "emitDebugLitExtern" ((PVar "e") (PVar "env") (PLit (LString "debugCharLit")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "a")) () (EBlock (DoLet false false (PVar "cp") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "a"))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r"))) (ELit (LString " = call i64 @mdk_debug_char_lit(i64 "))) (EApp (EVar "display") (EVar "cp"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r") (EVar "LTStr"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: debugCharLit takes one argument"))))))
 (DFunDef false "emitDebugLitExtern" ((PVar "e") PWild (PVar "name") PWild) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (ELit (LString "unsupported debug-lit extern ")) (EVar "name"))))
+(DTypeAlias false "ExternEmitter" () (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "LTy")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
+(DTypeSig false "externCatalog" (TyApp (TyCon "List") (TyTuple (TyFun (TyCon "String") (TyCon "Bool")) (TyCon "ExternEmitter"))))
+(DFunDef false "externCatalog" () (EListLit (ETuple (EVar "isStrExtern") (EVar "emitStrExtern")) (ETuple (EVar "isNumExtern") (EVar "emitNumExtern")) (ETuple (EVar "isIoExtern") (EVar "emitIoExtern")) (ETuple (EVar "isAbortExtern") (EVar "emitAbortExtern")) (ETuple (EVar "isArrIntrinsic") (EVar "emitArrIntrinsic")) (ETuple (EVar "isArrLeafExtern") (EVar "emitArrLeafExtern")) (ETuple (EVar "isCharExtern") (EVar "emitCharExtern")) (ETuple (EVar "isStrCharExtern") (EVar "emitStrCharExtern")) (ETuple (EVar "isUnicodeExtern") (EVar "emitUnicodeExtern")) (ETuple (EVar "isAdtExtern") (EVar "emitAdtExtern")) (ETuple (EVar "isEnvExtern") (EVar "emitEnvExtern")) (ETuple (EVar "isFileExtern") (EVar "emitFileExtern")) (ETuple (EVar "isNetExtern") (EVar "emitNetExtern")) (ETuple (EVar "isRngExtern") (EVar "emitRngExtern")) (ETuple (EVar "isHashExtern") (EVar "emitHashExtern")) (ETuple (EVar "isBitExtern") (EVar "emitBitExtern")) (ETuple (EVar "isDebugLitExtern") (EVar "emitDebugLitExtern")) (ETuple (EVar "isPerfExtern") (EVar "emitPerfExtern"))))
+(DTypeSig false "findExternFamily" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyFun (TyCon "String") (TyCon "Bool")) (TyCon "ExternEmitter"))) (TyApp (TyCon "Option") (TyCon "ExternEmitter")))))
+(DFunDef false "findExternFamily" (PWild (PList)) (EVar "None"))
+(DFunDef false "findExternFamily" ((PVar "name") (PCons (PTuple (PVar "pred") (PVar "fn")) (PVar "rest"))) (EIf (EApp (EVar "pred") (EVar "name")) (EApp (EVar "Some") (EVar "fn")) (EIf (EVar "otherwise") (EApp (EApp (EVar "findExternFamily") (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isAnyExtern" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isAnyExtern" ((PVar "name")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "isStrExtern") (EVar "name")) (EApp (EVar "isNumExtern") (EVar "name"))) (EApp (EVar "isIoExtern") (EVar "name"))) (EApp (EVar "isAbortExtern") (EVar "name"))) (EApp (EVar "isArrIntrinsic") (EVar "name"))) (EBinOp "==" (EVar "name") (ELit (LString "arrayMakeWith")))) (EApp (EVar "isArrLeafExtern") (EVar "name"))) (EApp (EVar "isCharExtern") (EVar "name"))) (EApp (EVar "isStrCharExtern") (EVar "name"))) (EApp (EVar "isUnicodeExtern") (EVar "name"))) (EApp (EVar "isAdtExtern") (EVar "name"))) (EApp (EVar "isEnvExtern") (EVar "name"))) (EApp (EVar "isFileExtern") (EVar "name"))) (EApp (EVar "isNetExtern") (EVar "name"))) (EApp (EVar "isRngExtern") (EVar "name"))) (EApp (EVar "isHashExtern") (EVar "name"))) (EApp (EVar "isBitExtern") (EVar "name"))) (EApp (EVar "isDebugLitExtern") (EVar "name"))) (EApp (EVar "isPerfExtern") (EVar "name"))))
+(DFunDef false "isAnyExtern" ((PVar "name")) (EBinOp "||" (EBinOp "==" (EVar "name") (ELit (LString "arrayMakeWith"))) (EApp (EApp (EVar "anyList") (ELam ((PTuple (PVar "pred") PWild)) (EApp (EVar "pred") (EVar "name")))) (EVar "externCatalog"))))
 (DTypeSig false "emitExternApplied" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "LTy")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
-(DFunDef false "emitExternApplied" ((PVar "e") (PVar "env") (PVar "fname") (PVar "args")) (EIf (EApp (EVar "isStrExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitStrExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isNumExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitNumExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isIoExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitIoExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isAbortExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitAbortExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isArrIntrinsic") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitArrIntrinsic") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EBinOp "==" (EVar "fname") (ELit (LString "arrayMakeWith"))) (EApp (EApp (EApp (EVar "emitArrayMakeWith") (EVar "e")) (EVar "env")) (EVar "args")) (EIf (EApp (EVar "isArrLeafExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitArrLeafExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isCharExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitCharExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isStrCharExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitStrCharExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isUnicodeExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitUnicodeExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isAdtExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitAdtExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isEnvExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitEnvExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isFileExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitFileExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isNetExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitNetExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isRngExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitRngExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isHashExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitHashExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isBitExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitBitExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isPerfExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitPerfExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "emitDebugLitExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")))))))))))))))))))))
+(DFunDef false "emitExternApplied" ((PVar "e") (PVar "env") (PVar "fname") (PVar "args")) (EIf (EBinOp "==" (EVar "fname") (ELit (LString "arrayMakeWith"))) (EApp (EApp (EApp (EVar "emitArrayMakeWith") (EVar "e")) (EVar "env")) (EVar "args")) (EMatch (EApp (EApp (EVar "findExternFamily") (EVar "fname")) (EVar "externCatalog")) (arm (PCon "Some" (PVar "fn")) () (EApp (EApp (EApp (EApp (EVar "fn") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args"))) (arm (PCon "None") () (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (ELit (LString "unsupported extern ")) (EVar "fname")))))))
 (DTypeSig false "emitBin" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "LTy")))) (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
 (DFunDef false "emitBin" ((PVar "e") (PVar "env") (PVar "op") (PVar "l") (PVar "r") (PVar "tag")) (EIf (EApp (EVar "isCmpOp") (EVar "op")) (EApp (EApp (EApp (EApp (EApp (EVar "emitCmp") (EVar "e")) (EVar "env")) (EVar "op")) (EVar "l")) (EVar "r")) (EIf (EApp (EVar "isArithOp") (EVar "op")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArith") (EVar "e")) (EVar "env")) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")) (EIf (EBinOp "==" (EVar "op") (ELit (LString "::"))) (EBlock (DoLet false false (PTuple (PVar "lv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "l"))) (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "r"))) (DoExpr (EApp (EApp (EApp (EVar "emitCtorAlloc") (EVar "e")) (ELit (LString "Cons"))) (EListLit (EVar "lv") (EVar "rv"))))) (EIf (EBinOp "==" (EVar "op") (ELit (LString "++"))) (EBlock (DoLet false false (PTuple (PVar "lv") (PVar "lty")) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "l"))) (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "r"))) (DoLet false false (PVar "r2") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EMatch (EVar "lty") (arm (PCon "LTStr") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r2"))) (ELit (LString " = call i64 @mdk_string_append(i64 "))) (EApp (EVar "display") (EVar "lv"))) (ELit (LString ", i64 "))) (EApp (EVar "display") (EVar "rv"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r2") (EVar "LTStr"))))) (arm (PCon "LTCon") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r2"))) (ELit (LString " = call i64 @mdk_list_append(i64 "))) (EApp (EVar "display") (EVar "lv"))) (ELit (LString ", i64 "))) (EApp (EVar "display") (EVar "rv"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r2") (EVar "LTCon"))))) (arm (PCon "LTUnknown") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r2"))) (ELit (LString " = call i64 @mdk_append(i64 "))) (EApp (EVar "display") (EVar "lv"))) (ELit (LString ", i64 "))) (EApp (EVar "display") (EVar "rv"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r2") (EVar "LTUnknown"))))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r2"))) (ELit (LString " = call i64 @mdk_append(i64 "))) (EApp (EVar "display") (EVar "lv"))) (ELit (LString ", i64 "))) (EApp (EVar "display") (EVar "rv"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r2") (EVar "LTUnknown")))))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "unsupported binary operator '")) (EVar "op")) (ELit (LString "'")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig false "isArithOp" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -13937,10 +13936,16 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "emitDebugLitExtern" ((PVar "e") (PVar "env") (PLit (LString "debugStringLit")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "a")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString " = call i64 @mdk_debug_string_lit(i64 "))) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r") (EVar "LTStr"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: debugStringLit takes one argument"))))))
 (DFunDef false "emitDebugLitExtern" ((PVar "e") (PVar "env") (PLit (LString "debugCharLit")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "a")) () (EBlock (DoLet false false (PVar "cp") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "a"))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString " = call i64 @mdk_debug_char_lit(i64 "))) (EApp (EMethodRef "display") (EVar "cp"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r") (EVar "LTStr"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: debugCharLit takes one argument"))))))
 (DFunDef false "emitDebugLitExtern" ((PVar "e") PWild (PVar "name") PWild) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (ELit (LString "unsupported debug-lit extern ")) (EVar "name"))))
+(DTypeAlias false "ExternEmitter" () (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "LTy")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
+(DTypeSig false "externCatalog" (TyApp (TyCon "List") (TyTuple (TyFun (TyCon "String") (TyCon "Bool")) (TyCon "ExternEmitter"))))
+(DFunDef false "externCatalog" () (EListLit (ETuple (EVar "isStrExtern") (EVar "emitStrExtern")) (ETuple (EVar "isNumExtern") (EVar "emitNumExtern")) (ETuple (EVar "isIoExtern") (EVar "emitIoExtern")) (ETuple (EVar "isAbortExtern") (EVar "emitAbortExtern")) (ETuple (EVar "isArrIntrinsic") (EVar "emitArrIntrinsic")) (ETuple (EVar "isArrLeafExtern") (EVar "emitArrLeafExtern")) (ETuple (EVar "isCharExtern") (EVar "emitCharExtern")) (ETuple (EVar "isStrCharExtern") (EVar "emitStrCharExtern")) (ETuple (EVar "isUnicodeExtern") (EVar "emitUnicodeExtern")) (ETuple (EVar "isAdtExtern") (EVar "emitAdtExtern")) (ETuple (EVar "isEnvExtern") (EVar "emitEnvExtern")) (ETuple (EVar "isFileExtern") (EVar "emitFileExtern")) (ETuple (EVar "isNetExtern") (EVar "emitNetExtern")) (ETuple (EVar "isRngExtern") (EVar "emitRngExtern")) (ETuple (EVar "isHashExtern") (EVar "emitHashExtern")) (ETuple (EVar "isBitExtern") (EVar "emitBitExtern")) (ETuple (EVar "isDebugLitExtern") (EVar "emitDebugLitExtern")) (ETuple (EVar "isPerfExtern") (EVar "emitPerfExtern"))))
+(DTypeSig false "findExternFamily" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyFun (TyCon "String") (TyCon "Bool")) (TyCon "ExternEmitter"))) (TyApp (TyCon "Option") (TyCon "ExternEmitter")))))
+(DFunDef false "findExternFamily" (PWild (PList)) (EVar "None"))
+(DFunDef false "findExternFamily" ((PVar "name") (PCons (PTuple (PVar "pred") (PVar "fn")) (PVar "rest"))) (EIf (EApp (EVar "pred") (EVar "name")) (EApp (EVar "Some") (EVar "fn")) (EIf (EVar "otherwise") (EApp (EApp (EVar "findExternFamily") (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isAnyExtern" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isAnyExtern" ((PVar "name")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "isStrExtern") (EVar "name")) (EApp (EVar "isNumExtern") (EVar "name"))) (EApp (EVar "isIoExtern") (EVar "name"))) (EApp (EVar "isAbortExtern") (EVar "name"))) (EApp (EVar "isArrIntrinsic") (EVar "name"))) (EBinOp "==" (EVar "name") (ELit (LString "arrayMakeWith")))) (EApp (EVar "isArrLeafExtern") (EVar "name"))) (EApp (EVar "isCharExtern") (EVar "name"))) (EApp (EVar "isStrCharExtern") (EVar "name"))) (EApp (EVar "isUnicodeExtern") (EVar "name"))) (EApp (EVar "isAdtExtern") (EVar "name"))) (EApp (EVar "isEnvExtern") (EVar "name"))) (EApp (EVar "isFileExtern") (EVar "name"))) (EApp (EVar "isNetExtern") (EVar "name"))) (EApp (EVar "isRngExtern") (EVar "name"))) (EApp (EVar "isHashExtern") (EVar "name"))) (EApp (EVar "isBitExtern") (EVar "name"))) (EApp (EVar "isDebugLitExtern") (EVar "name"))) (EApp (EVar "isPerfExtern") (EVar "name"))))
+(DFunDef false "isAnyExtern" ((PVar "name")) (EBinOp "||" (EBinOp "==" (EVar "name") (ELit (LString "arrayMakeWith"))) (EApp (EApp (EVar "anyList") (ELam ((PTuple (PVar "pred") PWild)) (EApp (EVar "pred") (EVar "name")))) (EVar "externCatalog"))))
 (DTypeSig false "emitExternApplied" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "LTy")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
-(DFunDef false "emitExternApplied" ((PVar "e") (PVar "env") (PVar "fname") (PVar "args")) (EIf (EApp (EVar "isStrExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitStrExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isNumExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitNumExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isIoExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitIoExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isAbortExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitAbortExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isArrIntrinsic") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitArrIntrinsic") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EBinOp "==" (EVar "fname") (ELit (LString "arrayMakeWith"))) (EApp (EApp (EApp (EVar "emitArrayMakeWith") (EVar "e")) (EVar "env")) (EVar "args")) (EIf (EApp (EVar "isArrLeafExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitArrLeafExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isCharExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitCharExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isStrCharExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitStrCharExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isUnicodeExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitUnicodeExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isAdtExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitAdtExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isEnvExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitEnvExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isFileExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitFileExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isNetExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitNetExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isRngExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitRngExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isHashExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitHashExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isBitExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitBitExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EIf (EApp (EVar "isPerfExtern") (EVar "fname")) (EApp (EApp (EApp (EApp (EVar "emitPerfExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "emitDebugLitExtern") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args")))))))))))))))))))))
+(DFunDef false "emitExternApplied" ((PVar "e") (PVar "env") (PVar "fname") (PVar "args")) (EIf (EBinOp "==" (EVar "fname") (ELit (LString "arrayMakeWith"))) (EApp (EApp (EApp (EVar "emitArrayMakeWith") (EVar "e")) (EVar "env")) (EVar "args")) (EMatch (EApp (EApp (EVar "findExternFamily") (EVar "fname")) (EVar "externCatalog")) (arm (PCon "Some" (PVar "fn")) () (EApp (EApp (EApp (EApp (EVar "fn") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args"))) (arm (PCon "None") () (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (ELit (LString "unsupported extern ")) (EVar "fname")))))))
 (DTypeSig false "emitBin" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "LTy")))) (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
 (DFunDef false "emitBin" ((PVar "e") (PVar "env") (PVar "op") (PVar "l") (PVar "r") (PVar "tag")) (EIf (EApp (EVar "isCmpOp") (EVar "op")) (EApp (EApp (EApp (EApp (EApp (EVar "emitCmp") (EVar "e")) (EVar "env")) (EVar "op")) (EVar "l")) (EVar "r")) (EIf (EApp (EVar "isArithOp") (EVar "op")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArith") (EVar "e")) (EVar "env")) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")) (EIf (EBinOp "==" (EVar "op") (ELit (LString "::"))) (EBlock (DoLet false false (PTuple (PVar "lv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "l"))) (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "r"))) (DoExpr (EApp (EApp (EApp (EVar "emitCtorAlloc") (EVar "e")) (ELit (LString "Cons"))) (EListLit (EVar "lv") (EVar "rv"))))) (EIf (EBinOp "==" (EVar "op") (ELit (LString "++"))) (EBlock (DoLet false false (PTuple (PVar "lv") (PVar "lty")) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "l"))) (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "r"))) (DoLet false false (PVar "r2") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EMatch (EVar "lty") (arm (PCon "LTStr") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r2"))) (ELit (LString " = call i64 @mdk_string_append(i64 "))) (EApp (EMethodRef "display") (EVar "lv"))) (ELit (LString ", i64 "))) (EApp (EMethodRef "display") (EVar "rv"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r2") (EVar "LTStr"))))) (arm (PCon "LTCon") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r2"))) (ELit (LString " = call i64 @mdk_list_append(i64 "))) (EApp (EMethodRef "display") (EVar "lv"))) (ELit (LString ", i64 "))) (EApp (EMethodRef "display") (EVar "rv"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r2") (EVar "LTCon"))))) (arm (PCon "LTUnknown") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r2"))) (ELit (LString " = call i64 @mdk_append(i64 "))) (EApp (EMethodRef "display") (EVar "lv"))) (ELit (LString ", i64 "))) (EApp (EMethodRef "display") (EVar "rv"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r2") (EVar "LTUnknown"))))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r2"))) (ELit (LString " = call i64 @mdk_append(i64 "))) (EApp (EMethodRef "display") (EVar "lv"))) (ELit (LString ", i64 "))) (EApp (EMethodRef "display") (EVar "rv"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r2") (EVar "LTUnknown")))))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "unsupported binary operator '")) (EVar "op")) (ELit (LString "'")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig false "isArithOp" (TyFun (TyCon "String") (TyCon "Bool")))

@@ -2915,80 +2915,73 @@ emitDebugLitExtern e env "debugCharLit" args = match emitArgs e env args
 emitDebugLitExtern e _ name _ = gapE e ("unsupported debug-lit extern " ++ name)
 
 -- ── extern dispatch: applied form ───────────────────────────────────────────
--- Is `name` a KNOWN extern of any family the emitter handles?  The OR of every
--- family predicate (plus the `arrayMakeWith` intrinsic, which has no `isXxx`
--- predicate — it is dispatched by exact name).  Drives both the saturated CApp
--- head path (emitExternApplied) and the value-position eta-wrap (emitVar →
--- emitExternEtaClosure); keeping the membership in ONE place means the two paths
--- can never disagree about what counts as an extern.
+-- ONE name-keyed catalog (RUN-EMIT-005 (B) grain (c) / RUN-EMIT-006, #358):
+-- each row pairs a family's existing membership predicate with its existing
+-- emitter — the per-name clause bodies inside `emitXExtern` stay exactly
+-- where they are; only the SELECTION ladder collapses.  `isAnyExtern` and
+-- `emitExternApplied` both derive from this one list, so a family can't
+-- register in one without the other — no more hand-kept-in-sync OR-chain +
+-- if-chain pair.  `arrayMakeWith` has no `isXxx` predicate (exact-name
+-- dispatch, its `:10564` signature omits the name param) so it stays a
+-- literal pre-check ahead of the table on both sides, exactly as before.
+type ExternEmitter = Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+
+externCatalog : List (String -> Bool, ExternEmitter)
+externCatalog = [
+  (isStrExtern, emitStrExtern),
+  (isNumExtern, emitNumExtern),
+  (isIoExtern, emitIoExtern),
+  (isAbortExtern, emitAbortExtern),
+  (isArrIntrinsic, emitArrIntrinsic),
+  (isArrLeafExtern, emitArrLeafExtern),
+  (isCharExtern, emitCharExtern),
+  (isStrCharExtern, emitStrCharExtern),
+  (isUnicodeExtern, emitUnicodeExtern),
+  (isAdtExtern, emitAdtExtern),
+  (isEnvExtern, emitEnvExtern),
+  (isFileExtern, emitFileExtern),
+  (isNetExtern, emitNetExtern),
+  (isRngExtern, emitRngExtern),
+  (isHashExtern, emitHashExtern),
+  (isBitExtern, emitBitExtern),
+  (isDebugLitExtern, emitDebugLitExtern),
+  (isPerfExtern, emitPerfExtern),
+]
+
+-- first (and, by the disjointness the catalog assumes, only) row whose
+-- predicate accepts `name`.
+findExternFamily : String -> List (String -> Bool, ExternEmitter) -> Option ExternEmitter
+findExternFamily _ [] = None
+findExternFamily name ((pred, fn)::rest)
+  | pred name = Some fn
+  | otherwise = findExternFamily name rest
+
+-- Is `name` a KNOWN extern of any family the emitter handles?  Drives both the
+-- saturated CApp head path (emitExternApplied) and the value-position eta-wrap
+-- (emitVar → emitExternEtaClosure); keeping the membership in ONE place means
+-- the two paths can never disagree about what counts as an extern.
 isAnyExtern : String -> Bool
-isAnyExtern name = isStrExtern name
-  || isNumExtern name
-  || isIoExtern name
-  || isAbortExtern name
-  || isArrIntrinsic name
-  || name == "arrayMakeWith"
-  || isArrLeafExtern name
-  || isCharExtern name
-  || isStrCharExtern name
-  || isUnicodeExtern name
-  || isAdtExtern name
-  || isEnvExtern name
-  || isFileExtern name
-  || isNetExtern name
-  || isRngExtern name
-  || isHashExtern name
-  || isBitExtern name
-  || isDebugLitExtern name
-  || isPerfExtern name
+isAnyExtern name = name == "arrayMakeWith"
+  || anyList ((pred, _) => pred name) externCatalog
 
 -- SATURATED extern application: route a known extern + its (non-empty) argument
 -- list to the right family emitter.  Factored out of emitApp's CVar-head ladder
 -- so that the VALUE-position eta-wrap (emitExternEtaClosure) can REPLAY the exact
 -- applied-form codegen on synthetic `%argK` operands — value/applied byte-
--- consistency by construction, no parallel codegen to drift.  The family order is
--- the ladder's original order (behaviour-preserving; `arrayMakeWith` keeps its
--- exact-name slot ahead of the arrayLeaf family).  Caller guards `hasArgs args`.
+-- consistency by construction, no parallel codegen to drift.  A name matching
+-- no catalog row is out-of-catalog: `gapE` decides loudly (`panic`, `Strict`,
+-- every real build) or quietly-recorded (`noteGap`, `Record`, the D4 census
+-- scaffold) — the same mode-aware floor the old terminal
+-- `else -> emitDebugLitExtern` reached, now explicit instead of borrowed from
+-- debugLit's own wildcard clause (RUN-EMIT-006 §5 property 5: debugLit is an
+-- ordinary keyed entry now, and the table-lookup miss carries the fallthrough
+-- role). Caller guards `hasArgs args`.
 emitExternApplied : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
 emitExternApplied e env fname args =
-  if isStrExtern fname then
-    emitStrExtern e env fname args
-  else if isNumExtern fname then
-    emitNumExtern e env fname args
-  else if isIoExtern fname then
-    emitIoExtern e env fname args
-  else if isAbortExtern fname then
-    emitAbortExtern e env fname args
-  else if isArrIntrinsic fname then
-    emitArrIntrinsic e env fname args
-  else if fname == "arrayMakeWith" then
-    emitArrayMakeWith e env args
-  else if isArrLeafExtern fname then
-    emitArrLeafExtern e env fname args
-  else if isCharExtern fname then
-    emitCharExtern e env fname args
-  else if isStrCharExtern fname then
-    emitStrCharExtern e env fname args
-  else if isUnicodeExtern fname then
-    emitUnicodeExtern e env fname args
-  else if isAdtExtern fname then
-    emitAdtExtern e env fname args
-  else if isEnvExtern fname then
-    emitEnvExtern e env fname args
-  else if isFileExtern fname then
-    emitFileExtern e env fname args
-  else if isNetExtern fname then
-    emitNetExtern e env fname args
-  else if isRngExtern fname then
-    emitRngExtern e env fname args
-  else if isHashExtern fname then
-    emitHashExtern e env fname args
-  else if isBitExtern fname then
-    emitBitExtern e env fname args
-  else if isPerfExtern fname then
-    emitPerfExtern e env fname args
-  else
-    emitDebugLitExtern e env fname args
+  if fname == "arrayMakeWith" then emitArrayMakeWith e env args
+  else match findExternFamily fname externCatalog
+    Some fn => fn e env fname args
+    None => gapE e ("unsupported extern " ++ fname)
 
 emitBin : Emit -> List (String, (String, LTy)) -> String -> CExpr -> CExpr -> String -> (String, LTy)
 emitBin e env op l r tag
