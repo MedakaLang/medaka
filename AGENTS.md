@@ -250,10 +250,15 @@ for an old macOS laptop problem that doesn't apply here.
 alive when touching a script: `stat -c %Y` *or* `stat -f %m`, `pkg-config`/`-lgc` *or* `brew
 --prefix bdw-gc`, no Mach-O-only link flags.
 
-⚠️ **[B-CI-UBUNTU-ONLY] Upheld by convention only — CI is 100% `ubuntu-latest`**
-(`grep -rn runs-on .github/workflows/*.yml`: 11/11 hits, zero macOS mentions). A macOS-only break
-ships with every check green; mitigate with a manual macOS smoke test before tagging a release
-(#549).
+⚠️ **[B-CI-UBUNTU-ONLY] Upheld by convention only — CI is 100% `ubuntu-latest`** — don't trust a
+count in this file, derive it: every `runs-on:` hit across the workflows should read
+`ubuntu-latest` and zero should mention macOS:
+```sh
+grep -rn "runs-on" .github/workflows/*.yml | grep -vc ubuntu-latest   # 0 = clean
+grep -rin macos .github/workflows/*.yml | wc -l                       # 0 = clean
+```
+A macOS-only break ships with every check green; mitigate with a manual macOS smoke test before
+tagging a release (#549).
 
 Two platform facts: emitted LLVM IR carries **no target triple** (seed cold-bootstraps on x86 or
 arm from the same bytes); the compiler's stack comes from a **256 MB GC-aware worker pthread**
@@ -275,14 +280,18 @@ PREFLIGHT_DRY=1 sh test/preflight.sh                 # ✅ FIRST STEP if unsure 
 make preflight       # ✅ THE LOOP — derives the gate set from YOUR diff, and the oracle
                      #    set from those gates. Touching parser.mdk: 9 oracles, 11 gates.
 sh test/run_gates.sh 'diff_compiler_parse*'          # ✅ targeted, by name
-sh test/build_oracles.sh --for 'diff_compiler_*'     # ✅ fresh-worktree recipe: 52 oracles, ~2 min
+sh test/build_oracles.sh --for 'diff_compiler_*'     # ✅ fresh-worktree recipe, ~2 min — count
+                                                      #    drifts, derive: `sh test/build_oracles.sh
+                                                      #    --for --list 'diff_compiler_*' | wc -l`
 sh test/build_oracles.sh --for --list '<pattern>'    # ✅ DERIVE ONLY — which oracle names a
                                                       #    pattern resolves to, builds nothing
 FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one <name>   # ✅ exactly one
 sh test/build_oracles.sh --for '<pattern>' --list    # ❌ NOT derive-only — this BUILDS
 sh test/run_gates.sh                                 # ❌ ALL of them — count drifts, derive:
                                                       #    `ls test/diff_compiler_*.sh | wc -l`
-FORCE=1 sh test/build_oracles.sh                     # ❌ all 54 oracles. Almost never right.
+FORCE=1 sh test/build_oracles.sh                     # ❌ ALL of them — count drifts, derive:
+                                                      #    `sh test/build_oracles.sh --list | wc -l`.
+                                                      #    Almost never right.
 ```
 
 ⚠️ **[L-DERIVE-ONLY]** `--list` must come IMMEDIATELY after `--for` — reversed fails SILENTLY
