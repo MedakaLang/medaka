@@ -81,6 +81,10 @@ is rejected. **`harden-typechecker` skill.** `compiler/typecheck.mdk` (+ mirror 
 operator-constraint logic; check `builtins`/the binop typing path).
 
 ### G3 — `Num a =>` arithmetic at Float — ✅ CLOSED 2026-06-12 (`8752c60`)
+**Residual, reopened:** `paramUsedInArith` (`llvm_emit.mdk`) does not traverse
+`CMatch`/`CDecision`/`CLam` — the pre-fix condition (same silent-garbage / SIGSEGV class,
+by operator) is restored for arithmetic reachable only inside a match arm or lambda; see
+#1789.
 **Repro:** `double : Num a => a -> a ; double x = x + x ; double 2.5` → interp `5.`, native
 **`-4.86e-63`** (garbage). `x * x` at Float → **SIGSEGV 139**. Both fine at **Int**;
 concrete `Float -> Float` fine.
