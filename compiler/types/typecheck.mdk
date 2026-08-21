@@ -5500,6 +5500,19 @@ ceFunctorKey = regKeyOfTab (ifaceTabKey (OriginModule "fmod") "Functor")
 -- now a named field on ONE cell (a type fact, not prose), the last piece of #158/#176.
 -- A record OF Refs (fields stay `Ref …`): every writer mutates a field-Ref in place, so
 -- no whole-record copy is allocated per set.
+--
+-- ⚠️ FIELD PROSE GOES HERE, NOT ON THE FIELD.  This record has the two-line
+-- `data X =` / `  | X {` header shape that #829 ([T-PERRUN-COMMENTS]) corrupts: a
+-- trailing `--` comment on a field survives `fmt --write` only by moving onto a
+-- DIFFERENT field, and `fmt --check` does not catch it.  Measured on this very leaf —
+-- two field comments were silently relocated by one `fmt --write`.  So:
+--
+--   * `argDispatchIdxByIdRef` / `methodDispatchIdxByIdRef` — #1351 L1 (EXPAND).  The
+--     identity-keyed siblings of `argDispatchIdxRef` / `methodDispatchIdxRef`, keyed
+--     `(IfaceRef, method name)` instead of the bare method name.  Written in lockstep
+--     with their bare-name peers at exactly the peers' own write sites (see
+--     `argDispatchIndicesById`); read by NOBODY yet — leaf L3 migrates the readers
+--     (`methodDispatchIdx`, `argDispatchOf`) onto them.
 data DriverState =
   | DriverState {
       effectDomains : Ref (List (String, Param)),
@@ -5509,6 +5522,7 @@ data DriverState =
       declEnvsRef : Ref DeclEnvs,
       abstractRecordTypesRef : Ref (List String),
       argDispatchIdxRef : Ref (List (String, Int)),
+      argDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),
       dictEligibleRef : Ref (List String),
       dictEligibleSetRef : Ref (OrdMap Unit),
       mangledShadowMapRef : Ref (List (String, String)),
@@ -5518,6 +5532,7 @@ data DriverState =
       superDeclsRef : Ref (List Decl),
       standaloneValuesRef : Ref (List String),
       methodDispatchIdxRef : Ref (List (String, Int)),
+      methodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),
       matchOracle : Ref Oracle,
       matchWarnings : Ref (List TcDiag),
       promotionHarvestRef : Ref (List String),
@@ -5539,6 +5554,7 @@ freshDriverState _ = DriverState {
   declEnvsRef = Ref emptyDeclEnvs,
   abstractRecordTypesRef = Ref [],
   argDispatchIdxRef = Ref [],
+  argDispatchIdxByIdRef = Ref [],
   dictEligibleRef = Ref [],
   dictEligibleSetRef = Ref omEmpty,
   mangledShadowMapRef = Ref [],
@@ -5548,6 +5564,7 @@ freshDriverState _ = DriverState {
   superDeclsRef = Ref [],
   standaloneValuesRef = Ref [],
   methodDispatchIdxRef = Ref [],
+  methodDispatchIdxByIdRef = Ref [],
   matchOracle = Ref (buildOracle []),
   matchWarnings = Ref [],
   promotionHarvestRef = Ref [],
@@ -6251,6 +6268,7 @@ data CrossRun = CrossRun {
     universeMethodCollidedRef : Ref (List String),  -- #1111 A-2.5: the method NAMES the line above holds ≥2 distinct identities for (normally EMPTY)
     universeRegisteredIfacesRef : Ref (OrdMap Unit),  -- #1111 A-2.4: DELIBERATELY still bare-name — a Unit-valued NAME-membership set, see ifaceRegistered
     universeMethodDispatchIdxRef : Ref (List (String, Int)),
+    universeMethodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),  -- #1351 L1 EXPAND: identity-keyed sibling of the line above, grown in the SAME fold so the two can never come to describe different universes.  No reader yet — L3 migrates them.
     universeRecordByName : Ref (OrdMap RecordInfo),
     universeRecordIdentsRef : Ref (OrdMap (List (Ident, String, RecordInfo))),  -- #1111 A-2.12 (#1319 unit 2): the identity-keyed COMPANION of the line above — see insertRecordIdents
     universeRecordCollidedRef : Ref (List String),  -- #1111 A-2.12: the registry KEYS the line above holds ≥2 distinct identities for (normally EMPTY)
@@ -6374,6 +6392,7 @@ freshCrossRun env = CrossRun {
   universeMethodCollidedRef = Ref [],
   universeRegisteredIfacesRef = Ref omEmpty,
   universeMethodDispatchIdxRef = Ref [],
+  universeMethodDispatchIdxByIdRef = Ref [],
   universeRecordByName = Ref omEmpty,
   universeRecordIdentsRef = Ref omEmpty,
   universeRecordCollidedRef = Ref [],
@@ -6536,6 +6555,38 @@ argDispatchOfDecl _ = []
 argDispatchOfMethod : List String -> IfaceMethod -> List (String, Int)
 argDispatchOfMethod typarams (IfaceMethod mname mty _) = match firstDispatchIdx (dispatchTyparams typarams) 0 (methodArgs mty)
   Some i => [(mname, i)]
+  None => []
+
+-- #1351 L1 (EXPAND): the IDENTITY-CARRYING sibling of `argDispatchIndices` above.  Same
+-- walk, same arms, same `firstDispatchIdx` classification — the ONLY difference is the
+-- key: `(IfaceRef, method name)` instead of the bare method name.  `IfaceRef` is this
+-- file's existing module-qualified interface identity (`irName` spelling + `irOrigin` I4
+-- identity); it is already minted at the peer population site
+-- `registerMethodIfaceParamsDecl` out of the SAME two `DInterface` fields, so this adds
+-- no new notion of identity, only a second key-shape for an existing one.
+--
+-- ⚠️ NOTHING READS THIS YET, deliberately.  It is the substrate leaf L3 migrates
+-- `methodDispatchIdx`/`argDispatchOf` onto; until then the bare-name tables stay
+-- authoritative.  Do not add a reader here — adding a reader is a MIGRATE leaf, and
+-- doing both at once is the partial-motion shape this family was cut to avoid.
+--
+-- 🔒 Purity note, load-bearing for L1's zero-behaviour-change property:
+-- `argDispatchIndices` and everything it reaches (`argDispatchOfDecl`,
+-- `argDispatchOfMethod`, `dispatchTyparams`, `firstDispatchIdx`, `argMentions`,
+-- `methodArgs`) is pure and structural, so running this second walk beside it advances
+-- no counter, mints no id and registers nothing.  Contrast `ifaceMethodSchemes`, which
+-- is NOT pure — see `ifaceMethodSchemeIds` for what that forced there.
+argDispatchIndicesById : List Decl -> List ((IfaceRef, String), Int)
+argDispatchIndicesById prog = flatMap argDispatchOfDeclById prog
+
+argDispatchOfDeclById : Decl -> List ((IfaceRef, String), Int)
+argDispatchOfDeclById (DAttrib _ d) = argDispatchOfDeclById d
+argDispatchOfDeclById (DInterface { name, typarams, methods, ifaceOrigin, ... }) = flatMap (argDispatchOfMethodById IfaceRef { irName = name, irOrigin = ifaceOrigin } typarams) methods
+argDispatchOfDeclById _ = []
+
+argDispatchOfMethodById : IfaceRef -> List String -> IfaceMethod -> List ((IfaceRef, String), Int)
+argDispatchOfMethodById iface typarams (IfaceMethod mname mty _) = match firstDispatchIdx (dispatchTyparams typarams) 0 (methodArgs mty)
+  Some i => [((iface, mname), i)]
   None => []
 
 -- The DISCRIMINATING (receiver) typaram(s) of an interface — its FIRST typaram.
@@ -7108,6 +7159,7 @@ data PerRun = PerRun {
     pendingSites : Ref (List PendingEntry),  -- `Num a =>` on an unrelated scheme (types/numlit_bidir).
     pendingRLocalSites : Ref (List PendingEntry),
     shadowStandaloneSchemesRef : Ref (List (String, Scheme)),
+    ifaceMethodSchemesByIdRef : Ref (List ((IfaceRef, String), Scheme)),  -- #1351 L1 EXPAND: the Module arm's interface-method schemes under an identity key — the substrate leaf L2 migrates `pickSchemes` onto.  No reader yet.
     definerShadowNamesRef : Ref (List String),
     definerShadowSigsRef : Ref (List (String, Ty)),
     bodyImplEnvRef : Ref ImplEnv,
@@ -7204,6 +7256,7 @@ freshPerRun _ = PerRun {
   pendingSites = Ref [],
   pendingRLocalSites = Ref [],
   shadowStandaloneSchemesRef = Ref [],
+  ifaceMethodSchemesByIdRef = Ref [],
   definerShadowNamesRef = Ref [],
   definerShadowSigsRef = Ref [],
   bodyImplEnvRef = Ref emptyImplEnv,
@@ -14908,6 +14961,8 @@ elaborateDict runtimeDecls dictNames eligibleNames prog =
   driverState.value.implInferEnabled := True
   let allNames = discoverAll runtimeDecls prog dictNames eligibleNames
   driverState.value.argDispatchIdxRef := (argDispatchIndices prog)
+  -- #1351 L1 EXPAND: the identity-keyed sibling, written in lockstep.  No reader yet.
+  driverState.value.argDispatchIdxByIdRef := (argDispatchIndicesById prog)
   let argNames = map fst driverState.value.argDispatchIdxRef.value
   -- P0-18: [] — the confirmed definer-shadow-emit path is elaborateModules; this
   -- single-file scratch elaborate stays shadow-map-free (byte-identical discovery).
@@ -22098,6 +22153,8 @@ checkBodyImpl seed mode prog0 =
       driverState.value.standaloneValuesRef := (dedup (importerShadows ++ definerShadows))
       perRun.value.shadowStandaloneSchemesRef := (pickStandaloneSchemes importerShadows seed)
       driverState.value.methodDispatchIdxRef := crossRun.value.universeMethodDispatchIdxRef.value
+      -- #1351 L1 EXPAND: lockstep copy of the identity-keyed universe.  No reader yet.
+      driverState.value.methodDispatchIdxByIdRef := crossRun.value.universeMethodDispatchIdxByIdRef.value
       perRun.value.funConstraintsRef := crossRun.value.crossModuleFunConstraintsRef.value
       perRun.value.funConstraintIfacesRef := crossRun.value.crossModuleFunConstraintIfacesRef.value
       -- B-2.2-f (#1113): the declared-prefix sidecar rides the IDS table — every
@@ -22323,7 +22380,14 @@ checkBodyImpl seed mode prog0 =
       perRun.value.methodShadowNamesRef := methodNames
       []
     Module _ _ implDecls =>
-      let sm = pickSchemes importerShadows (ifaceMethodSchemes implDecls)
+      -- #1351 L1 EXPAND.  `ifaceMethodSchemes implDecls` is hoisted into a binding so it
+      -- is called EXACTLY ONCE, as before: it is effectful (mints tyvar ids, registers
+      -- method constraints), so a second call here would shift ids and break this leaf's
+      -- zero-behaviour-change property.  `pickSchemes` is pure, so hoisting moves no
+      -- effect relative to the `methodConstraintsRef` write below.
+      let ifaceSchemes = ifaceMethodSchemes implDecls
+      perRun.value.ifaceMethodSchemesByIdRef := (zipIfaceMethodSchemeIds (ifaceMethodSchemeIds implDecls) ifaceSchemes)
+      let sm = pickSchemes importerShadows ifaceSchemes
       perRun.value.methodConstraintsRef := (perRun.value.methodConstraintsRef.value ++ crossRun.value.crossModuleMethodConstraintsRef.value)
       sm
   let env1 = extendVars (extendVars (extendVars dataEnv seed) globalS) shadowLayer
@@ -25504,6 +25568,51 @@ declIfaceMethods (DInterface { name, typarams, methods, ... }) =
   methodSchemes (declGradedScope typarams methods) typarams methods
 declIfaceMethods _ = []
 
+-- #1351 L1 (EXPAND): the IDENTITY-CARRYING sibling of `ifaceMethodSchemes` above.
+--
+-- 🚨 WHY THIS IS A KEY-ONLY WALK AND NOT A SECOND `ifaceMethodSchemes` CALL.  A second
+-- call would NOT be observationally neutral: `methodSchemes` mints tyvar ids through
+-- `sigToSchemeTvsIn` (off `PerRun.tyvarCounter`) AND registers method-level constraints
+-- into `methodConstraintsRef`.  Re-obtaining the same schemes under a richer key that way
+-- would shift every downstream tyvar id — an observable change, which L1 (a pure-addition
+-- leaf) may not make.  `methodSchemesPure` is no escape: it drops the registration but
+-- still mints ids.  So this walk produces ONLY the keys, and `zipIfaceMethodSchemeIds`
+-- pairs them against the single, existing scheme list.
+--
+-- The pairing is positional, so the two walks must stay arm-for-arm identical.  Note in
+-- particular that `declIfaceMethods` does NOT unwrap `DAttrib` (an attributed interface
+-- contributes no schemes) and neither does `declIfaceMethodIds` — that asymmetry against
+-- `argDispatchOfDeclById`, which DOES unwrap it, is inherited from the functions being
+-- mirrored, not a slip.
+--
+-- ⚠️ NOTHING READS THE RESULT YET — it is the substrate leaf L2 migrates `pickSchemes`
+-- onto.  Written-only by design; see the matching note on `argDispatchIndicesById`.
+ifaceMethodSchemeIds : List Decl -> List (IfaceRef, String)
+ifaceMethodSchemeIds [] = []
+ifaceMethodSchemeIds (d::rest) = declIfaceMethodIds d
+  ++ ifaceMethodSchemeIds rest
+
+declIfaceMethodIds : Decl -> List (IfaceRef, String)
+declIfaceMethodIds (DInterface { name, methods, ifaceOrigin, ... }) = map
+  (ifaceMethodIdRow IfaceRef { irName = name, irOrigin = ifaceOrigin })
+  methods
+declIfaceMethodIds _ = []
+
+ifaceMethodIdRow : IfaceRef -> IfaceMethod -> (IfaceRef, String)
+ifaceMethodIdRow iface (IfaceMethod mname _ _) = (iface, mname)
+
+-- Pair `ifaceMethodSchemeIds`' keys against `ifaceMethodSchemes`' own output,
+-- positionally: the two walks visit the same decls in the same order and emit exactly one
+-- row per `IfaceMethod` of every `DInterface`, so row i of one is row i of the other.
+-- Ragged input truncates rather than raising — this is written-only substrate, and a
+-- length disagreement must not be able to fail a build that is otherwise fine.  L2, the
+-- first reader, is where such a mismatch becomes a graded fact.
+zipIfaceMethodSchemeIds : List (IfaceRef, String) -> List (String, Scheme) -> List ((IfaceRef, String), Scheme)
+zipIfaceMethodSchemeIds [] _ = []
+zipIfaceMethodSchemeIds _ [] = []
+zipIfaceMethodSchemeIds (k::ks) ((_, s)::ss) =
+  (k, s) :: zipIfaceMethodSchemeIds ks ss
+
 -- Error-path B4: register each interface method → (iface, typarams, declared Ty)
 -- so checkImplObligations can recover its dispatch (iface-param) types at a call
 -- site.  Built from the SAME prog the impl lookup uses, so an interface absent
@@ -27746,6 +27855,10 @@ appendUniverseAccums prog =
   -- old `argDispatchIndices (accAll ++ prog)` flatMap produced; the sole reader is a
   -- first-wins lookupAssoc, so a prior-module entry this module never names is never queried.
   crossRun.value.universeMethodDispatchIdxRef := (crossRun.value.universeMethodDispatchIdxRef.value ++ argDispatchIndices prog)
+  -- #1351 L1 EXPAND: the identity-keyed sibling accumulator, appended in the SAME order,
+  -- in the SAME fold, so it cannot come to describe a different universe than the line
+  -- above.  No reader yet — L3 migrates `methodDispatchIdx` onto it.
+  crossRun.value.universeMethodDispatchIdxByIdRef := (crossRun.value.universeMethodDispatchIdxByIdRef.value ++ argDispatchIndicesById prog)
   -- #1112 A-3.4 PR2: the #154 PR3 leg that grew the three `obUniv*` obligation-universe
   -- accumulators here is GONE.  Its consumer — the Module arm's `obUniv` — now projects
   -- stage K's `IE` at the reader's ordinal instead (`ieUniverseAt`), so this fold was
@@ -30530,6 +30643,8 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   let _ = (driverState.value.userIfaceNamesRef := (collectIfaceNames (flatMap snd modules)))  -- WS-1b: gate super-expansion to user interfaces
   let rpNames = returnPosMethodNames allDecls
   driverState.value.argDispatchIdxRef := (argDispatchIndices allDecls)
+  -- #1351 L1 EXPAND: the identity-keyed sibling, written in lockstep.  No reader yet.
+  driverState.value.argDispatchIdxByIdRef := (argDispatchIndicesById allDecls)
   let argNames = map fst driverState.value.argDispatchIdxRef.value
   let _ = setDictEligible (moduleUserFnNames modules)
   -- #194: eliminate the redundant MANDATORY promotion-discovery whole-program
