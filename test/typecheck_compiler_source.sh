@@ -45,7 +45,15 @@
 # Exit:  0 clean (zero error-severity diagnostics, entries count > 0);
 #        1 an error-severity diagnostic was found (offending FILE/entry + lines
 #          printed), or a worker crashed, or the entries glob matched zero files;
-#        2 oracle missing (build it first: FORCE=1 JOBS=1 sh test/build_oracles.sh).
+#        2 oracle missing (build it first: FORCE=1 JOBS=1 sh test/build_oracles.sh),
+#          or ./medaka + ./medaka_emitter missing for pass 3 (run `make medaka`).
+#
+# ⚠️ TWO DRIVERS, NOT ONE (issue #1811). Passes 1 and 2 below run the CHECK
+# driver (`analyzeProject`). `medaka run`/`medaka build` typecheck through a
+# SECOND driver (`elaborateModules`, after a graph-global
+# buildStandaloneShadowsGraph/prePassDictArg rewrite) that derives errors the
+# first one structurally cannot see. Pass 3 runs that second driver over the
+# same closure. See pass 3's own header for why it costs a whole `medaka build`.
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -1067,5 +1075,74 @@ if ! sh "$ROOT/test/registry_keying_ratchet.sh" "$ROOT"; then
   exit 1
 fi
 
-echo "PASS: compiler source is type-clean (0 error-severity diagnostics across medaka_cli.mdk + $n_entries entries)."
+# ── Pass 3: the ELABORATE driver's view of the SAME closure (issue #1811) ───
+#
+# Passes 1 and 2 run ONE driver: `analyzeProject` / `diagnostics_project_main` —
+# the same pass `medaka check` uses.  `medaka run` / `medaka build` do NOT use it
+# alone: they run a SECOND typecheck through `elaborateModules`, which first runs
+# `buildStandaloneShadowsGraph` + `prePassDictArg` over the WHOLE graph (mangled,
+# graph-global) and only then typechecks.  A type error that only that rewrite
+# derives is invisible to passes 1 and 2 by construction — `check` exits 0 while
+# `run`/`build` exit 1 with "type error … detected during elaboration" (#1812).
+#
+# That is not hypothetical: the four-module `A2` corpus (an alias import plus an
+# imported standalone shadowing an interface method) reads `check=0 build=1` on
+# this very tree.  So `soundness` — the job that exists because "ALL the gate
+# shards pass on an ill-typed compiler" — was vetting the compiler with an
+# instrument blind to a whole class of ill-typedness.  This pass closes that:
+# it puts the compiler's own closure through the elaborate driver's gate, which
+# is exactly what `medaka build` does (typecheckGateRoute, medaka_cli.mdk:
+# `resetTypeErrorsSticky` → `elaborateModules` → `hadTypeErrors`).
+#
+# WHY THE WHOLE `build`, AND NOT SOMETHING NARROWER.  No entry point exposes
+# "elaborate + hadTypeErrors" on its own: the emit drivers (entry_support.mdk's
+# runEmitWith) call `elaborateModules` and never read `hadTypeErrors`, so they
+# are not fail-capable for this.  `medaka build` is the only shipped consumer of
+# that gate that reaches a whole project, so the arm pays for the emit + clang
+# tail it does not need.  MEDAKA_CLANG_OPT=-O0 keeps that tail cheap (the binary
+# is discarded): 40s at -O0 against 77s at the -O2 default, measured on the dev
+# box.  If a narrower fail-capable seam ever exists, this should move to it.
+#
+# ⚠️ MEDAKA_STRICT=1 is deliberate ([B-STALENESS]): the arm is only meaningful if
+# ./medaka was built from THIS compiler/ tree, and a stale binary must say so
+# loudly rather than answer about someone else's source.  The failure branch
+# below discriminates that case, and a non-type failure generally, from the type
+# diagnostic this arm exists to surface.
+MEDAKA_BIN="${MEDAKA:-$ROOT/medaka}"
+if [ ! -x "$MEDAKA_BIN" ]; then
+  echo "SKIP: the elaborate arm needs the compiler binary: run \`make medaka\` first (missing $MEDAKA_BIN)"
+  exit 2
+fi
+if [ -z "${MEDAKA_EMITTER:-}" ] && [ ! -x "$ROOT/medaka_emitter" ]; then
+  echo "SKIP: the elaborate arm needs the native emitter: run \`make medaka\` first (missing $ROOT/medaka_emitter)"
+  exit 2
+fi
+
+elab_log="$RESULTS/elaborate.log"
+# [D-BUILD-PIPE]: `medaka build`'s exit code does NOT survive a pipe — redirect
+# to a file, read $? immediately, and read the file only afterwards.
+(cd "$ROOT" && MEDAKA_STRICT=1 MEDAKA_CLANG_OPT=-O0 \
+  "$MEDAKA_BIN" build "$ENTRY" -o "$RESULTS/medaka_cli.elabprobe") > "$elab_log" 2>&1
+elab_status=$?
+
+if [ "$elab_status" -ne 0 ]; then
+  if grep -q 'may be stale; rebuild' "$elab_log"; then
+    echo "FAIL: the elaborate arm ran a STALE ./medaka (MEDAKA_STRICT=1 tripped) — this says"
+    echo "  nothing about the compiler source. Rebuild with \`make medaka\` and re-run."
+  elif grep -qE '^error(@|:)|error: type error in' "$elab_log"; then
+    echo "FAIL: compiler source has a type error the CHECK driver does not derive"
+    echo "  (medaka_cli.mdk closure, elaborate driver — passes 1/2 above were GREEN)."
+    echo "  This is the #1811 class. Do NOT weaken or narrow this arm to make it pass."
+  else
+    echo "FAIL: the elaborate arm exited $elab_status with no type diagnostic — that is a"
+    echo "  defect in THIS arm's mechanism (emitter gap, clang, resource limit), not a"
+    echo "  finding about the compiler's types. Fix the arm, do not bless the output."
+  fi
+  cat "$elab_log"
+  exit 1
+fi
+
+echo "PASS: medaka_cli.mdk closure is elaborate-clean (medaka build's elaborate + hadTypeErrors gate)."
+
+echo "PASS: compiler source is type-clean (0 error-severity diagnostics across medaka_cli.mdk + $n_entries entries, both drivers)."
 exit 0
