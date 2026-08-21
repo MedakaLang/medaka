@@ -1,5 +1,5 @@
 # META
-source_lines=31387
+source_lines=31403
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -17013,9 +17013,25 @@ implMethodName (ImplMethod n _ _) = n
 
 -- a loc to attribute the error to: the first present impl-method body's span (the
 -- impl head carries no Loc of its own).  None for a wholly-empty impl body.
+--
+-- 🚨 [RUN-METHID-035, F6] Computed from the impl-method's OWN parsed AST body,
+-- independent of whether that body was ever type-inferred.  `exprLoc` alone
+-- only recognizes an OUTERMOST `ELoc`/`EDoOrigin` wrapper (by design — see its
+-- own comment), and a body shaped `f x` (an application, e.g. `gandThen2 p =
+-- gandThen2 p`) is NOT itself ELoc-wrapped at that outer node, so `exprLoc`
+-- alone returns `None` for it.  Before this fix, `pushTypeErrorOnceAt`'s
+-- `orElseLoc loc !currentLoc` fallback then anchored T-INCOMPLETE-IMPL at
+-- whatever OTHER declaration the type-inference walk had most recently
+-- entered — which was RIGHT, by ACCIDENT, only when a same-spelled-but-
+-- unrelated sibling interface caused this method's body to be (wrongly)
+-- type-inferred anyway, setting `currentLoc` as a side effect (#1647 removed
+-- that accident; see RUN-METHID-035).  `appArgLoc` (Bite 3, above) peels one
+-- application to the argument's own span, so `f x` resolves to `x`'s loc —
+-- a location genuinely inside the impl block, sourced from the AST alone.
 firstImplMethodLoc : List ImplMethod -> Option Loc
 firstImplMethodLoc [] = None
-firstImplMethodLoc ((ImplMethod _ _ body)::_) = exprLoc body
+firstImplMethodLoc ((ImplMethod _ _ body)::_) =
+  orElseLoc (exprLoc body) (appArgLoc body)
 
 -- the names of an interface's REQUIRED methods (those whose merged IfaceMethod
 -- carries NO default body).  Since #1557 A-3.5a this is called ONCE PER INTERFACE at
@@ -34334,7 +34350,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "implMethodName" ((PCon "ImplMethod" (PVar "n") PWild PWild)) (EVar "n"))
 (DTypeSig false "firstImplMethodLoc" (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "firstImplMethodLoc" ((PList)) (EVar "None"))
-(DFunDef false "firstImplMethodLoc" ((PCons (PCon "ImplMethod" PWild PWild (PVar "body")) PWild)) (EApp (EVar "exprLoc") (EVar "body")))
+(DFunDef false "firstImplMethodLoc" ((PCons (PCon "ImplMethod" PWild PWild (PVar "body")) PWild)) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "exprLoc") (EVar "body"))) (EApp (EVar "appArgLoc") (EVar "body"))))
 (DTypeSig false "requiredMethodNames" (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "requiredMethodNames" ((PList)) (EListLit))
 (DFunDef false "requiredMethodNames" ((PCons (PCon "IfaceMethod" (PVar "n") PWild (PCon "None")) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "requiredMethodNames") (EVar "rest"))))
@@ -39453,7 +39469,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "implMethodName" ((PCon "ImplMethod" (PVar "n") PWild PWild)) (EVar "n"))
 (DTypeSig false "firstImplMethodLoc" (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "firstImplMethodLoc" ((PList)) (EVar "None"))
-(DFunDef false "firstImplMethodLoc" ((PCons (PCon "ImplMethod" PWild PWild (PVar "body")) PWild)) (EApp (EVar "exprLoc") (EVar "body")))
+(DFunDef false "firstImplMethodLoc" ((PCons (PCon "ImplMethod" PWild PWild (PVar "body")) PWild)) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "exprLoc") (EVar "body"))) (EApp (EVar "appArgLoc") (EVar "body"))))
 (DTypeSig false "requiredMethodNames" (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "requiredMethodNames" ((PList)) (EListLit))
 (DFunDef false "requiredMethodNames" ((PCons (PCon "IfaceMethod" (PVar "n") PWild (PCon "None")) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "requiredMethodNames") (EVar "rest"))))
