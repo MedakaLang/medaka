@@ -4697,18 +4697,33 @@ emitImplCall e fname argOps resTy =
   (r, resTy)
 
 -- a call to a statically-resolved impl fn (RKey / single arg-tag group) that
--- may be UNDER-APPLIED.  A point-free prelude binding (`length = fold f 0`)
--- lowers to the impl method applied to FEWER args than the impl fn's full arity:
--- a saturated `emitImplCall` would emit a call missing its trailing parameter(s),
--- which on the native backend reads a garbage register for the missing arg and
--- crashes.  When `lengthS argOps < arity`, build a PARTIAL-APPLICATION closure
--- capturing the supplied words; the residual closure completes the call when the
--- remaining args arrive at an indirect call site.  Saturated (`==`) ⇒ the plain
--- direct call, unchanged.  (Over-application can't arise at an impl call head —
--- the method's declared arity is its full arity.)
+-- may be UNDER- or OVER-APPLIED.  A point-free prelude binding (`length = fold f
+-- 0`) lowers to the impl method applied to FEWER args than the impl fn's full
+-- arity: a saturated `emitImplCall` would emit a call missing its trailing
+-- parameter(s), which on the native backend reads a garbage register for the
+-- missing arg and crashes.  When `lengthS argOps < arity`, build a PARTIAL-
+-- APPLICATION closure capturing the supplied words; the residual closure
+-- completes the call when the remaining args arrive at an indirect call site.
+-- Saturated (`==`) ⇒ the plain direct call, unchanged.
+--
+-- Over-application CAN arise at an impl call head as of S-emit-arity-by-
+-- declaration (#1450/#1668, 7d57ac53): `argOps` is built from the CALL SITE's
+-- surface arg count, while `arity` is now the matched entry's OWN declared
+-- arity — and those can diverge whenever `implFor`'s same-spelled-interface
+-- selection (#1810, untouched here) hands back an entry whose interface
+-- declares fewer params than the call site's other same-spelled candidate.
+-- Before this branch existed, `lengthS argOps > arity` fell to `otherwise` and
+-- silently called the impl fn with its own extra, unread argument — a wrong
+-- value at exit 0 with no diagnostic (F17/RUN-METHID-086). Route it through the
+-- same `emitOverApp` used by `emitKnownFnSat`, so the excess arg applies against
+-- the impl's return value: on the normal (non-#1810-confused) over-application
+-- shape that's a legitimate call to a returned closure, and on the #1810
+-- selection-confusion shape the return value isn't a closure at all, so the
+-- indirect call faults loudly instead of returning a silently-wrong number.
 emitImplCallSat : Emit -> String -> List String -> Int -> LTy -> (String, LTy)
 emitImplCallSat e fname argOps arity resTy
   | lengthS argOps < arity = emitPapClosure e fname argOps arity
+  | lengthS argOps > arity = emitOverApp e fname argOps arity resTy
   | otherwise = emitImplCall e fname argOps resTy
 
 -- a call to a known top-level function (`@<sym>`, sym already mdk-prefixed) that
