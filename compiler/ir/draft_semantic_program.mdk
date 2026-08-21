@@ -97,7 +97,7 @@ public export data DraftReceipt =
 -- current Medaka, and this migration carrier must not add another collision
 -- surface while owner-qualified FieldId is still pending.
 public export data DraftSemanticProgram =
-  | DraftSemanticProgram (DraftObservation (List Decl)) (DraftObservation (List Decl)) (DraftObservation (List DraftModule)) (DraftObservation CProgram) (DraftObservation (List (DraftRows ((String, String), Bool)))) (DraftObservation (List (DraftRows ((String, String), List Int)))) (DraftObservation (List (DraftRows (String, (String, Int))))) (DraftObservation (List (DraftRows (String, List String)))) (DraftObservation (List (DraftRows (String, List String)))) (DraftObservation (List (DraftRows (String, (List String, String))))) (DraftObservation Bool) (DraftObservation Bool) (List DraftPending)
+  | DraftSemanticProgram (DraftObservation (List Decl)) (DraftObservation (List Decl)) (DraftObservation (List DraftModule)) (DraftObservation CProgram) (DraftObservation (List (DraftRows ((String, String), Bool)))) (DraftObservation (List (DraftRows ((String, String), List Int)))) (DraftObservation (List (DraftRows (String, (String, String, Int))))) (DraftObservation (List (DraftRows (String, List String)))) (DraftObservation (List (DraftRows (String, List String)))) (DraftObservation (List (DraftRows (String, (List String, String))))) (DraftObservation Bool) (DraftObservation Bool) (List DraftPending)
 
 moduleOf : (String, List Decl) -> DraftModule
 moduleOf (mid, decls) = DraftModule mid decls
