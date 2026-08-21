@@ -1,5 +1,5 @@
 # META
-source_lines=11326
+source_lines=11341
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -4701,18 +4701,33 @@ emitImplCall e fname argOps resTy =
   (r, resTy)
 
 -- a call to a statically-resolved impl fn (RKey / single arg-tag group) that
--- may be UNDER-APPLIED.  A point-free prelude binding (`length = fold f 0`)
--- lowers to the impl method applied to FEWER args than the impl fn's full arity:
--- a saturated `emitImplCall` would emit a call missing its trailing parameter(s),
--- which on the native backend reads a garbage register for the missing arg and
--- crashes.  When `lengthS argOps < arity`, build a PARTIAL-APPLICATION closure
--- capturing the supplied words; the residual closure completes the call when the
--- remaining args arrive at an indirect call site.  Saturated (`==`) ⇒ the plain
--- direct call, unchanged.  (Over-application can't arise at an impl call head —
--- the method's declared arity is its full arity.)
+-- may be UNDER- or OVER-APPLIED.  A point-free prelude binding (`length = fold f
+-- 0`) lowers to the impl method applied to FEWER args than the impl fn's full
+-- arity: a saturated `emitImplCall` would emit a call missing its trailing
+-- parameter(s), which on the native backend reads a garbage register for the
+-- missing arg and crashes.  When `lengthS argOps < arity`, build a PARTIAL-
+-- APPLICATION closure capturing the supplied words; the residual closure
+-- completes the call when the remaining args arrive at an indirect call site.
+-- Saturated (`==`) ⇒ the plain direct call, unchanged.
+--
+-- Over-application CAN arise at an impl call head as of S-emit-arity-by-
+-- declaration (#1450/#1668, 7d57ac53): `argOps` is built from the CALL SITE's
+-- surface arg count, while `arity` is now the matched entry's OWN declared
+-- arity — and those can diverge whenever `implFor`'s same-spelled-interface
+-- selection (#1810, untouched here) hands back an entry whose interface
+-- declares fewer params than the call site's other same-spelled candidate.
+-- Before this branch existed, `lengthS argOps > arity` fell to `otherwise` and
+-- silently called the impl fn with its own extra, unread argument — a wrong
+-- value at exit 0 with no diagnostic (F17/RUN-METHID-086). Route it through the
+-- same `emitOverApp` used by `emitKnownFnSat`, so the excess arg applies against
+-- the impl's return value: on the normal (non-#1810-confused) over-application
+-- shape that's a legitimate call to a returned closure, and on the #1810
+-- selection-confusion shape the return value isn't a closure at all, so the
+-- indirect call faults loudly instead of returning a silently-wrong number.
 emitImplCallSat : Emit -> String -> List String -> Int -> LTy -> (String, LTy)
 emitImplCallSat e fname argOps arity resTy
   | lengthS argOps < arity = emitPapClosure e fname argOps arity
+  | lengthS argOps > arity = emitOverApp e fname argOps arity resTy
   | otherwise = emitImplCall e fname argOps resTy
 
 -- a call to a known top-level function (`@<sym>`, sym already mdk-prefixed) that
@@ -12160,7 +12175,7 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DTypeSig false "emitImplCall" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "LTy") (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DFunDef false "emitImplCall" ((PVar "e") (PVar "fname") (PVar "argOps") (PVar "resTy")) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r"))) (ELit (LString " = call i64 @"))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "("))) (EApp (EVar "display") (EApp (EVar "argDecls") (EVar "argOps")))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r") (EVar "resTy")))))
 (DTypeSig false "emitImplCallSat" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "LTy") (TyTuple (TyCon "String") (TyCon "LTy"))))))))
-(DFunDef false "emitImplCallSat" ((PVar "e") (PVar "fname") (PVar "argOps") (PVar "arity") (PVar "resTy")) (EIf (EBinOp "<" (EApp (EVar "lengthS") (EVar "argOps")) (EVar "arity")) (EApp (EApp (EApp (EApp (EVar "emitPapClosure") (EVar "e")) (EVar "fname")) (EVar "argOps")) (EVar "arity")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "emitImplCall") (EVar "e")) (EVar "fname")) (EVar "argOps")) (EVar "resTy")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "emitImplCallSat" ((PVar "e") (PVar "fname") (PVar "argOps") (PVar "arity") (PVar "resTy")) (EIf (EBinOp "<" (EApp (EVar "lengthS") (EVar "argOps")) (EVar "arity")) (EApp (EApp (EApp (EApp (EVar "emitPapClosure") (EVar "e")) (EVar "fname")) (EVar "argOps")) (EVar "arity")) (EIf (EBinOp ">" (EApp (EVar "lengthS") (EVar "argOps")) (EVar "arity")) (EApp (EApp (EApp (EApp (EApp (EVar "emitOverApp") (EVar "e")) (EVar "fname")) (EVar "argOps")) (EVar "arity")) (EVar "resTy")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "emitImplCall") (EVar "e")) (EVar "fname")) (EVar "argOps")) (EVar "resTy")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "emitKnownFnSat" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "LTy") (TyTuple (TyCon "String") (TyCon "LTy"))))))))
 (DFunDef false "emitKnownFnSat" ((PVar "e") (PVar "sym") (PVar "argOps") (PVar "arity") (PVar "resTy")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "arity") (ELit (LInt 0))) (EBinOp "<" (EApp (EVar "lengthS") (EVar "argOps")) (EVar "arity"))) (EApp (EApp (EApp (EApp (EVar "emitPapClosure") (EVar "e")) (EVar "sym")) (EVar "argOps")) (EVar "arity")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "arity") (ELit (LInt 0))) (EBinOp ">" (EApp (EVar "lengthS") (EVar "argOps")) (EVar "arity"))) (EApp (EApp (EApp (EApp (EApp (EVar "emitOverApp") (EVar "e")) (EVar "sym")) (EVar "argOps")) (EVar "arity")) (EVar "resTy")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "emitImplCall") (EVar "e")) (EVar "sym")) (EVar "argOps")) (EVar "resTy")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "emitOverApp" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "LTy") (TyTuple (TyCon "String") (TyCon "LTy"))))))))
@@ -14367,7 +14382,7 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DTypeSig false "emitImplCall" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "LTy") (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DFunDef false "emitImplCall" ((PVar "e") (PVar "fname") (PVar "argOps") (PVar "resTy")) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString " = call i64 @"))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "("))) (EApp (EMethodRef "display") (EApp (EVar "argDecls") (EVar "argOps")))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r") (EVar "resTy")))))
 (DTypeSig false "emitImplCallSat" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "LTy") (TyTuple (TyCon "String") (TyCon "LTy"))))))))
-(DFunDef false "emitImplCallSat" ((PVar "e") (PVar "fname") (PVar "argOps") (PVar "arity") (PVar "resTy")) (EIf (EBinOp "<" (EApp (EVar "lengthS") (EVar "argOps")) (EVar "arity")) (EApp (EApp (EApp (EApp (EVar "emitPapClosure") (EVar "e")) (EVar "fname")) (EVar "argOps")) (EVar "arity")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "emitImplCall") (EVar "e")) (EVar "fname")) (EVar "argOps")) (EVar "resTy")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "emitImplCallSat" ((PVar "e") (PVar "fname") (PVar "argOps") (PVar "arity") (PVar "resTy")) (EIf (EBinOp "<" (EApp (EVar "lengthS") (EVar "argOps")) (EVar "arity")) (EApp (EApp (EApp (EApp (EVar "emitPapClosure") (EVar "e")) (EVar "fname")) (EVar "argOps")) (EVar "arity")) (EIf (EBinOp ">" (EApp (EVar "lengthS") (EVar "argOps")) (EVar "arity")) (EApp (EApp (EApp (EApp (EApp (EVar "emitOverApp") (EVar "e")) (EVar "fname")) (EVar "argOps")) (EVar "arity")) (EVar "resTy")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "emitImplCall") (EVar "e")) (EVar "fname")) (EVar "argOps")) (EVar "resTy")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "emitKnownFnSat" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "LTy") (TyTuple (TyCon "String") (TyCon "LTy"))))))))
 (DFunDef false "emitKnownFnSat" ((PVar "e") (PVar "sym") (PVar "argOps") (PVar "arity") (PVar "resTy")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "arity") (ELit (LInt 0))) (EBinOp "<" (EApp (EVar "lengthS") (EVar "argOps")) (EVar "arity"))) (EApp (EApp (EApp (EApp (EVar "emitPapClosure") (EVar "e")) (EVar "sym")) (EVar "argOps")) (EVar "arity")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "arity") (ELit (LInt 0))) (EBinOp ">" (EApp (EVar "lengthS") (EVar "argOps")) (EVar "arity"))) (EApp (EApp (EApp (EApp (EApp (EVar "emitOverApp") (EVar "e")) (EVar "sym")) (EVar "argOps")) (EVar "arity")) (EVar "resTy")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "emitImplCall") (EVar "e")) (EVar "sym")) (EVar "argOps")) (EVar "resTy")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "emitOverApp" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "LTy") (TyTuple (TyCon "String") (TyCon "LTy"))))))))
