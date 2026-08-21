@@ -5488,7 +5488,20 @@ emitDispatchArmBody e dictPtr ent name methWords argOps slot endL =
     let _ = emit e "  store i64 \{rv}, ptr \{slot}"
     emit e ("  br label %" ++ endL)
   else
-    let cellCount = implReqCount e name ent - lengthS methWords
+    -- #1816: CLAMP AT ZERO.  `implReqCount` is `listLen (implPats ent) - declared
+    -- arity`, which goes NEGATIVE for an ETA-SHORT clause -- exactly what an
+    -- interface DEFAULT specialized into an impl is (`mapFirst f = bimap f identity`
+    -- binds 1 of `mapFirst`'s 2 declared params).  `loadReqDicts` already treated a
+    -- negative as zero, so the operand list was always right; but F10's `armArity`
+    -- below ADDS this number back, and a negative there cancelled the declared arity
+    -- straight down to `listLen (implPats ent)` -- under-applying the define
+    -- `gatherGroup` mints at `maxInt (clauseArity) (declared + nDicts)`.  The arm then
+    -- called an arity-2 define with 1 operand and re-applied the rest to whatever came
+    -- back, which is the E-NONEXHAUSTIVE-MATCH of #1816.  A dict COUNT is never
+    -- negative; clamping restores `armArity == the define's arity` for the eta-short
+    -- case and is byte-identical everywhere else (the clamp only fires where
+    -- `loadReqDicts` already emitted nothing).
+    let cellCount = maxInt 0 (implReqCount e name ent - lengthS methWords)
     let cellDicts = loadReqDicts e dictPtr cellCount 0
     -- F10 (#1450/#1668 follow-on): SATURATE AGAINST THIS ARM'S OWN DECLARED ARITY.
     -- The dispatcher is keyed by BARE method name and its `%argK` count is the arity
