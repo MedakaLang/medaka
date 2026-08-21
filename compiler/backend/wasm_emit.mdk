@@ -3693,7 +3693,7 @@ emitGeneralArm prog name (Some (tag, key)) blk dpar argInstrs nArgs =
   let reqLoads = flatMap (loadReqDict dpar) (rangeList 0 reqDicts)
   reqLoads
     ++ argInstrs
-    ++ dispatchCallSeqW prog tag name nArgs
+    ++ dispatchCallSeqW prog tag key name nArgs
     ++ ["br " ++ blk]
 
 -- #747: the call instruction(s) a matched dispatch arm emits.  A nullary/return-
@@ -3704,13 +3704,40 @@ emitGeneralArm prog name (Some (tag, key)) blk dpar argInstrs nArgs =
 -- the resolved tag's side effect runs once and is shared across every occurrence at
 -- that tag (matching eval's per-VTypedImpl memoThunk).  Each tag owns its own `$memo`
 -- CAF ⇒ distinct tags memoise independently.  Otherwise the ordinary impl call.
-dispatchCallSeqW : Prog -> String -> String -> Int -> List String
-dispatchCallSeqW prog tag name nArgs =
+dispatchCallSeqW : Prog -> String -> String -> String -> Int -> List String
+dispatchCallSeqW prog tag key name nArgs =
   let memoName = "$memo_\{tag}_\{name}"
   if nArgs == 0 && isLazyGlobalW prog memoName then
     ["call $force_" ++ gname memoName]
+  else if armArityMismatchW prog key name nArgs then
+    gapLP prog "wasm F10: dispatch arm for '\{name}' at '\{key}' declares arity \{intToString (methodArityOfTagW prog name key)} but this bare-name dispatcher supplies \{intToString nArgs} argument(s)"
   else
     ["call $" ++ implFnSymOfTag tag name]
+
+-- F10 (#1450/#1668 follow-on).  The dispatcher an RDict site emits is keyed by BARE
+-- method name and pushes exactly the arg count THAT SITE saw, while each arm's impl
+-- define is now minted at its own interface's DECLARATION arity (gatherImplGroup).
+-- On an arity collision -- two modules declaring same-spelled methods on unrelated
+-- interfaces -- those two numbers diverge and the arm emitted a `call` with the wrong
+-- operand count: a module `wasm-tools` rejects, and the peer of the LLVM channel's
+-- silent-wrongness (which emitDispatchArmBody now repairs by PAP/over-apply).
+--
+-- The wasm arm has no CExpr left to route through `emitClosure` -- `argInstrs` is
+-- already a flat instruction sequence -- so building the residual PAP here needs
+-- lifted-wrapper machinery this repair does not have licence to add.  What it CAN do
+-- is refuse to emit the malformed module: a NAMED emit gap in place of a call whose
+-- operand count cannot match its callee.  Loud stays loud, and it is attributed.
+--
+-- The predicate is exactly the malformedness condition, not an approximation.  The
+-- arm pushes `implReqDictCount + nArgs` operands and the define takes
+-- `maxI (implGroupArity cls) (declaredArity + nDicts)`; both reduce to equality iff
+-- `nArgs == declaredArity`.  `> 0` guards the prelude-free / typed path, where the
+-- iface table is absent and `methodArityOfTagW` answers 0 for every method (see
+-- `methodValArityByName`) -- there the old direct call is kept unchanged.
+armArityMismatchW : Prog -> String -> String -> Int -> Bool
+armArityMismatchW prog key name nArgs =
+  let a = methodArityOfTagW prog name key
+  a > 0 && a /= nArgs
 
 -- one comparison + call per candidate impl group.  loaded tag (i32) == dictTag
 -- routeKey?  if so: load this impl's nested requires-dicts from the dict param's
@@ -3733,7 +3760,7 @@ emitDispatchChain prog name ((tag, key)::rest) blk tagRead dpar argInstrs nArgs 
   let reqLoads = flatMap (loadReqDict dpar) (rangeList 0 reqDicts)
   indentBy idt (tagRead
     ++ ["i32.const " ++ intToString (dictTag key), "i32.eq", "if"])
-    ++ indentBy (idt + 1) (reqLoads ++ argInstrs ++ dispatchCallSeqW prog tag name nArgs ++ ["br " ++ blk])
+    ++ indentBy (idt + 1) (reqLoads ++ argInstrs ++ dispatchCallSeqW prog tag key name nArgs ++ ["br " ++ blk])
     ++ indentBy idt ["else"]
     ++ emitDispatchChain prog name rest blk tagRead dpar argInstrs nArgs (idt + 1)
     ++ indentBy idt ["end"]

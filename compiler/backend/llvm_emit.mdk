@@ -4917,7 +4917,8 @@ emitMethodDispatch e env name d methRoutes argOps = match soleImplDirectSite e n
     -- run≠build SIGTRAP.  Concrete-grounded callers (a real dict) are unaffected: the
     -- direct call is the same impl the tag-dispatch chain would have selected.
     let symTag = implFnSymE e name ent
-    emitImplCall e (implFnName symTag name) argOps LTInt
+    -- F10: saturate against the impl's own declared arity (see emitDispatchArmBody).
+    emitKnownFnSat e (implFnName symTag name) argOps (methodArityOfEntry e ent name) LTInt
   None => emitMethodDispatchChain e env name d methRoutes argOps
 
 -- WS-1b: Some impl iff [name] has exactly one tagged impl AND that impl takes no
@@ -5204,7 +5205,10 @@ emitDispatcherBody : Emit -> String -> Int -> Int -> (String, LTy)
 emitDispatcherBody e name nmw nargs = match soleImplDirect e name
   Some ent =>
     let symTag = implFnSymE e name ent
-    emitImplCall e (implFnName symTag name) (dispWordNames "%arg" nargs 0) LTInt
+    -- F10: same saturation as emitDispatchArmBody — the sole impl's declared arity
+    -- can still differ from `nargs` when a SECOND interface declares the same method
+    -- name at another arity and supplies the bare table's row.
+    emitKnownFnSat e (implFnName symTag name) (dispWordNames "%arg" nargs 0) (methodArityOfEntry e ent name) LTInt
   None => emitDispatchBody e name "%dict" (dispWordNames "%mw" nmw 0) (dispWordNames "%arg" nargs 0)
 
 dispParamDecls : Int -> Int -> String
@@ -5471,7 +5475,21 @@ emitDispatchArmBody e dictPtr ent name methWords argOps slot endL =
   else
     let cellCount = implReqCount e name ent - lengthS methWords
     let cellDicts = loadReqDicts e dictPtr cellCount 0
-    let (rv, _) = emitImplCall e (implFnName symTag name) (methWords ++ cellDicts ++ argOps) LTInt
+    -- F10 (#1450/#1668 follow-on): SATURATE AGAINST THIS ARM'S OWN DECLARED ARITY.
+    -- The dispatcher is keyed by BARE method name and its `%argK` count is the arity
+    -- the SITE saw, so on an arity collision (two modules declaring same-spelled
+    -- methods on unrelated interfaces) one arm's impl define -- which
+    -- `gatherGroup` now mints at its interface's DECLARATION arity -- disagrees with
+    -- that count, and a raw `emitImplCall` emitted a call whose argument count
+    -- differed from its callee's parameter count.  That is UB, and it is the
+    -- mismatch the arity slice introduced: the define moved to the declaration
+    -- answer while this call site kept the bare one.  `emitKnownFnSat` closes the
+    -- gap WITHOUT re-opening which declaration supplies the arity: under-application
+    -- becomes the residual PAP the source `op x` actually denotes, over-application
+    -- the indirect re-apply.  Collision-free programs supply exactly the declared
+    -- count, so this is the plain direct call, byte-identical.
+    let armArity = methodArityOfEntry e ent name + lengthS methWords + cellCount
+    let (rv, _) = emitKnownFnSat e (implFnName symTag name) (methWords ++ cellDicts ++ argOps) armArity LTInt
     let _ = emit e "  store i64 \{rv}, ptr \{slot}"
     emit e ("  br label %" ++ endL)
 
@@ -5643,7 +5661,9 @@ emitArgDispatchChain e method tagReg (g::rest) argOps slot endL =
   let next = "argnext" ++ n
   let _ = emit e "  br i1 \{cond}, label %\{yes}, label %\{next}"
   let _ = emit e (yes ++ ":")
-  let (rv, _) = emitImplCall e (implFnName (groupSymTag g) method) argOps LTInt
+  -- F10: saturate against this group's own declared arity, the same answer the
+  -- single-group site above already takes (see emitDispatchArmBody).
+  let (rv, _) = emitKnownFnSat e (implFnName (groupSymTag g) method) argOps (methodArityOfTag e method tag) LTInt
   let _ = emit e "  store i64 \{rv}, ptr \{slot}"
   let _ = emit e ("  br label %" ++ endL)
   let _ = emit e (next ++ ":")
