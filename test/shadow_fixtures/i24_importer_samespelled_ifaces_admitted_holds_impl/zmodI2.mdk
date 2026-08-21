@@ -1,0 +1,8 @@
+export interface Method b where
+  mth : Int -> b -> Int
+
+impl Method String where
+  mth n s = 7
+
+export zf : Int -> Int
+zf n = n

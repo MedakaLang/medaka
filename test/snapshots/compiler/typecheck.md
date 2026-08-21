@@ -1,5 +1,5 @@
 # META
-source_lines=31787
+source_lines=31797
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -17212,6 +17212,16 @@ implMethodName (ImplMethod n _ _) = n
 -- that accident; see RUN-METHID-035).  `appArgLoc` (Bite 3, above) peels one
 -- application to the argument's own span, so `f x` resolves to `x`'s loc —
 -- a location genuinely inside the impl block, sourced from the AST alone.
+--
+-- ⚠️ [RUN-METHID-161] THIS FIX IS CURRENTLY INERT, and that is expected: its
+-- trigger is #1647 — the change that introduced the reachability guarded against
+-- above — and #1647 was REVERTED in this same sprint at `f585bfbb`.  At the
+-- resulting BASE the diagnostic still lands correctly, by the same accident this
+-- comment already describes (the same-spelled sibling interface type-infers the
+-- body and sets `currentLoc`), so nothing on the tree today can discriminate this
+-- fix from its absence.  A discriminating test pin becomes CONSTRUCTIBLE — and is
+-- OWED — the moment #1647 or anything in its class re-lands.  Do not delete this
+-- as dead code on the strength of it being unexercised.
 firstImplMethodLoc : List ImplMethod -> Option Loc
 firstImplMethodLoc [] = None
 firstImplMethodLoc ((ImplMethod _ _ body)::_) =

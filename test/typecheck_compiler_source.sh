@@ -1077,6 +1077,14 @@ fi
 
 # ── Pass 3: the ELABORATE driver's view of the SAME closure (issue #1811) ───
 #
+# ⚠️ SCOPE, STATED UP FRONT: passes 1-2 cover the FULL compiler-source closure
+# (`medaka_cli.mdk` plus every entry point under compiler/entries/ — 71 closures as
+# of this writing); pass 3 covers `medaka_cli.mdk` ALONE — 1 closure, not the set.
+# The reason is cost, not principle: this arm
+# pays a whole `medaka build` per closure (~40s at -O0, see below) against the
+# soundness job's ~171s total budget, so running it per entry does not fit. The
+# PASS lines at the end of this pass are scoped to match; keep them that way.
+#
 # Passes 1 and 2 run ONE driver: `analyzeProject` / `diagnostics_project_main` —
 # the same pass `medaka check` uses.  `medaka run` / `medaka build` do NOT use it
 # alone: they run a SECOND typecheck through `elaborateModules`, which first runs
@@ -1142,7 +1150,10 @@ if [ "$elab_status" -ne 0 ]; then
   exit 1
 fi
 
-echo "PASS: medaka_cli.mdk closure is elaborate-clean (medaka build's elaborate + hadTypeErrors gate)."
+echo "PASS: elaborate driver clean for ONE closure only: $ENTRY (medaka build's"
+echo "  elaborate + hadTypeErrors gate). The $n_entries entry closures passes 1-2 cover are NOT"
+echo "  covered by this arm — see the cost note in pass 3's header."
 
-echo "PASS: compiler source is type-clean (0 error-severity diagnostics across medaka_cli.mdk + $n_entries entries, both drivers)."
+echo "PASS: compiler source is type-clean (0 error-severity diagnostics; CHECK driver across"
+echo "  $ENTRY + $n_entries entries, ELABORATE driver across $ENTRY only)."
 exit 0

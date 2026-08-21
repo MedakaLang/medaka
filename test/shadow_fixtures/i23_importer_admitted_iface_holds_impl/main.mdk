@@ -1,0 +1,15 @@
+-- DIRECTION UNDER TEST: false MISS -- `ieRowAdmittedBy` answering False where it
+-- should answer True. The ADMITTED declaration genuinely HAS an impl at the
+-- receiver head, so a false MISS does NOT produce an error: the impl query
+-- silently falls through to the bare-name STANDALONE FALLBACK (`fmodI.mth = 99`) and the
+-- program prints the OLD, right-looking value at exit 0. This fixture therefore
+-- fails by producing a plausible answer THROUGH THE WRONG PATH, not by asserting
+-- a value differs -- which is why the graded value (55, the admitted interface's
+-- own impl) must be pinned on check/run/build, not just the exit code.
+-- Provenance: copied verbatim from the S-impl-query-by-declaration slice-breaker's
+-- corpora (attempt 5 / IMPLADM); RUN-METHID-136. No acceptance clause covered this direction.
+import fmodI.{mth}
+import amodI.{IA, af}
+import zmodI
+
+main = println (mth "abc" 5 + af 0)

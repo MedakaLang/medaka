@@ -20,6 +20,12 @@ permuter tries all 3! = 6 orderings.
 
 ## HOW THE EXPECTED VALUES WERE ESTABLISHED
 
+❗ READ THIS FIRST -- the divergence pinned below is EXPECTED, not a regression:
+S2-DECL's ruled value `99` for this exact corpus is UNIMPLEMENTED in the tree (the
+spec's own text marks it "PREDICTED UNDER THIS CLAUSE, not measured"). Owner is
+Leg 2b, per RUN-METHID-122; see RUN-METHID-117 and RUN-METHID-139. Do not "fix"
+this case's signatures to `99` -- they record what today's binary actually does.
+
 ⚠️ UPDATED 2026-08-16: a spec ruling now exists and settles the correct answer for
 this exact corpus. `docs/spec/SHADOW-SEMANTICS.md`'s S2-DECL (🔒 RULED 2026-08-09,
 against #1351 itself) decides it, and this sprint's DECISIONS.md RUN-XMOD-006
