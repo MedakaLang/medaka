@@ -1,5 +1,5 @@
 # META
-source_lines=31578
+source_lines=31632
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -17344,7 +17344,43 @@ importedMethodEntry prog n cs = match filterList (c => methodCandImported prog n
   -- genuinely 0-candidate case — the fallback is not wrong, but the comment above
   -- must not be read as "every 2+ candidate case is already an upstream reject".
   -- Adjacent to the open #1288 re-export-merge family; not owned here.
+  --
+  -- ── F23 (#1351 L2 repair): the admission test is a LADDER, not one widened test ──
+  -- 🚨 L2 widened the member filter IN PLACE so that a path naming only the INTERFACE
+  -- (`import zmodI.{IZ, zf}`, no `mth`) also witnesses that interface's candidate.
+  -- That is right for #1351, where NO path binds the method name at all — but in
+  -- every `import msifa.{MSIA, mth}` + `import msifb.{MSIB}` shape it promoted the
+  -- second import from "brings in the TYPE only" to "witnesses a candidate", turning
+  -- a 1-candidate override into a 2-candidate decline to the bare-name FLOOR.  That
+  -- floor is last-write-wins over module order, so nine method_scope fixtures moved:
+  -- four to a SILENT ACCEPT of an invalid program (the floor's interface happened to
+  -- have an impl) and five to a reject naming the WRONG interface.  MEASURED, both
+  -- shapes, nine for nine (F23 isolation: reverting this one filter and KEEPING
+  -- `pickSchemesByDecl` restores all nine; keeping the filter and reverting
+  -- `pickSchemesByDecl` restores none).
+  --
+  -- Both readings are wanted, in PRECEDENCE order — the same nearest-scope-wins
+  -- ladder `scopedMethodEntry` above already runs, with one rung more:
+  --
+  --   rung 1  a path that binds the METHOD name and witnesses this declaration.
+  --           When any candidate clears this rung, the method-name imports ARE the
+  --           module's statement about which declaration it means, and a bare
+  --           interface-name import must not dilute it.
+  --   rung 2  only if rung 1 admits NOTHING: a path that names the candidate's
+  --           INTERFACE and witnesses this declaration (S2-DECL (c) nameability).
+  --           This is the 0-candidate fall-through L2 was fixing, and it is reached
+  --           only where the narrow rung had already declined to the floor.
+  --
+  -- So this can only turn "0 → floor" into "1 → the admitted declaration"; a shape
+  -- the narrow rung decides is decided identically to before the widening, and a
+  -- rung-1 tie (≥2) still declines to the floor rather than inventing a third
+  -- answer.  `depExportsMethodIdent` is untouched at both rungs, so the #1275/#1272
+  -- BYSTANDER stays refused by IDENTITY, never by spelling.  No second resolver:
+  -- this is `importedMethodEntry`'s own filter, run twice at two admissions.
   [only] => Some (snd only)
+  [] => match filterList (c => methodCandAdmitted prog n c) cs
+    [only] => Some (snd only)
+    _ => preludeMethodEntry n cs
   _ => preludeMethodEntry n cs
 
 -- The implicit prelude is in scope in every module without a `DUse`, so it is the last
@@ -17369,16 +17405,25 @@ ownMethodIdent ((DInterface { methods, ifaceOrigin, ... })::rest) n =
 ownMethodIdent (_::rest) n = ownMethodIdent rest n
 
 -- Is candidate [c] the declaration of [n] that one of THIS module's imports brings in?
+-- RUNG 1 of `importedMethodEntry`'s ladder: the METHOD name must come through the
+-- path.  [wide] = False, so a path that names only the candidate's interface does
+-- NOT witness it here.
 methodCandImported : List Decl -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
-methodCandImported prog n c = anyUsePathBinds prog n c
+methodCandImported prog n c = anyUsePathBinds prog False n c
 
-anyUsePathBinds : List Decl -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
-anyUsePathBinds [] _ _ = False
-anyUsePathBinds ((DAttrib _ d)::rest) n c = anyUsePathBinds [d] n c
-  || anyUsePathBinds rest n c
-anyUsePathBinds ((DUse _ path _)::rest) n c = usePathWitnesses path n c
-  || anyUsePathBinds rest n c
-anyUsePathBinds (_::rest) n c = anyUsePathBinds rest n c
+-- RUNG 2 (F23): the same question with S2-DECL (c)'s INTERFACE-nameability reading
+-- also admitted.  Reached only when rung 1 admitted nothing — see
+-- `importedMethodEntry`, where the precedence between the two rungs is argued.
+methodCandAdmitted : List Decl -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
+methodCandAdmitted prog n c = anyUsePathBinds prog True n c
+
+anyUsePathBinds : List Decl -> Bool -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
+anyUsePathBinds [] _ _ _ = False
+anyUsePathBinds ((DAttrib _ d)::rest) wide n c = anyUsePathBinds [d] wide n c
+  || anyUsePathBinds rest wide n c
+anyUsePathBinds ((DUse _ path _)::rest) wide n c = usePathWitnesses path wide n c
+  || anyUsePathBinds rest wide n c
+anyUsePathBinds (_::rest) wide n c = anyUsePathBinds rest wide n c
 
 -- ── #1111 A-2.5b (#1272 / #1275): the witness reads IDENTITY, not spelling ──
 -- An import witnesses a candidate when TWO things hold:
@@ -17442,11 +17487,11 @@ anyUsePathBinds (_::rest) n c = anyUsePathBinds rest n c
 -- that silently keeps the floor today can therefore start being decided correctly then;
 -- the change is monotone in the right direction, but it IS a behaviour change and this
 -- unit's fixtures do not cover it.
-usePathWitnesses : UsePath -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
-usePathWitnesses path n (ident, (iface, _, _, _)) =
+usePathWitnesses : UsePath -> Bool -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
+usePathWitnesses path wide n (ident, (iface, _, _, _)) =
   let dep = usePathModuleId path
   dep /= "core"
-    && usePathAdmitsDecl path n iface
+    && usePathAdmitsDecl path wide n iface
     && depExportsMethodIdent dep n ident
 
 -- ── #1351 L2 (MIGRATE Leg 2b): the MEMBER filter admits an INTERFACE spelling ──
@@ -17476,9 +17521,18 @@ usePathWitnesses path n (ident, (iface, _, _, _)) =
 -- one.  So this can turn "0 → floor" into "1 → the admitted declaration", which is
 -- the intended fix, and "1 → override" into "2 → floor", a fall-back to today's
 -- behaviour, never a new third answer.
-usePathAdmitsDecl : UsePath -> String -> IfaceRef -> Bool
-usePathAdmitsDecl path n iface = usePathBindsName path n
-  || usePathBindsName path iface.irName
+--
+-- 🚨 F23 REPAIR: that last sentence was the defect.  "1 → override" becoming
+-- "2 → floor" is NOT a harmless fall-back to today's behaviour when the ONE was the
+-- correct answer and the floor is bare-name last-write-wins — MEASURED, it turned
+-- nine method_scope fixtures into four silent accepts and five wrong-interface
+-- rejects.  So [wide] is no longer always True: it is False at
+-- `importedMethodEntry`'s rung 1 (method-name imports decide when they say anything)
+-- and True only at rung 2, where rung 1 admitted nothing.  See the ladder argument at
+-- `importedMethodEntry`.
+usePathAdmitsDecl : UsePath -> Bool -> String -> IfaceRef -> Bool
+usePathAdmitsDecl path wide n iface = usePathBindsName path n
+  || wide && usePathBindsName path iface.irName
 
 -- `None` from importedBindings is the WILDCARD form (`import m.*`), which binds every
 -- name the dependency exports — and, unlike A-2.5's deleted `usePathNamesMember`, that
@@ -34573,7 +34627,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "scopedMethodEntry" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))) (TyApp (TyCon "Option") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))))))
 (DFunDef false "scopedMethodEntry" ((PVar "prog") (PVar "n") (PVar "cs")) (EMatch (EApp (EApp (EVar "ownMethodIdent") (EVar "prog")) (EVar "n")) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EApp (EVar "lookupMethodCand") (EVar "ident")) (EVar "cs")) (arm (PCon "Some" (PVar "payload")) () (EApp (EVar "Some") (EVar "payload"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "importedMethodEntry") (EVar "prog")) (EVar "n")) (EVar "cs"))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "importedMethodEntry") (EVar "prog")) (EVar "n")) (EVar "cs")))))
 (DTypeSig false "importedMethodEntry" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))) (TyApp (TyCon "Option") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))))))
-(DFunDef false "importedMethodEntry" ((PVar "prog") (PVar "n") (PVar "cs")) (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EApp (EApp (EVar "methodCandImported") (EVar "prog")) (EVar "n")) (EVar "c")))) (EVar "cs")) (arm (PList (PVar "only")) () (EApp (EVar "Some") (EApp (EVar "snd") (EVar "only")))) (arm PWild () (EApp (EApp (EVar "preludeMethodEntry") (EVar "n")) (EVar "cs")))))
+(DFunDef false "importedMethodEntry" ((PVar "prog") (PVar "n") (PVar "cs")) (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EApp (EApp (EVar "methodCandImported") (EVar "prog")) (EVar "n")) (EVar "c")))) (EVar "cs")) (arm (PList (PVar "only")) () (EApp (EVar "Some") (EApp (EVar "snd") (EVar "only")))) (arm (PList) () (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EApp (EApp (EVar "methodCandAdmitted") (EVar "prog")) (EVar "n")) (EVar "c")))) (EVar "cs")) (arm (PList (PVar "only")) () (EApp (EVar "Some") (EApp (EVar "snd") (EVar "only")))) (arm PWild () (EApp (EApp (EVar "preludeMethodEntry") (EVar "n")) (EVar "cs"))))) (arm PWild () (EApp (EApp (EVar "preludeMethodEntry") (EVar "n")) (EVar "cs")))))
 (DTypeSig false "preludeMethodEntry" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))) (TyApp (TyCon "Option") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))
 (DFunDef false "preludeMethodEntry" ((PVar "n") (PVar "cs")) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsMethod")) (EApp (EVar "OriginModule") (ELit (LString "core")))) (EVar "n")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ident")) () (EApp (EApp (EVar "lookupMethodCand") (EVar "ident")) (EVar "cs")))))
 (DTypeSig false "ownMethodIdent" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ident")))))
@@ -34582,16 +34636,18 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ownMethodIdent" ((PCons (PRec "DInterface" ((rf "methods" None) (rf "ifaceOrigin" None)) true) (PVar "rest")) (PVar "n")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EApp (EVar "ifaceMethodNames") (EVar "methods"))) (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsMethod")) (EVar "ifaceOrigin")) (EVar "n")) (EApp (EApp (EVar "ownMethodIdent") (EVar "rest")) (EVar "n"))))
 (DFunDef false "ownMethodIdent" ((PCons PWild (PVar "rest")) (PVar "n")) (EApp (EApp (EVar "ownMethodIdent") (EVar "rest")) (EVar "n")))
 (DTypeSig false "methodCandImported" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyCon "Bool")))))
-(DFunDef false "methodCandImported" ((PVar "prog") (PVar "n") (PVar "c")) (EApp (EApp (EApp (EVar "anyUsePathBinds") (EVar "prog")) (EVar "n")) (EVar "c")))
-(DTypeSig false "anyUsePathBinds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyCon "Bool")))))
-(DFunDef false "anyUsePathBinds" ((PList) PWild PWild) (EVar "False"))
-(DFunDef false "anyUsePathBinds" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "n") (PVar "c")) (EBinOp "||" (EApp (EApp (EApp (EVar "anyUsePathBinds") (EListLit (EVar "d"))) (EVar "n")) (EVar "c")) (EApp (EApp (EApp (EVar "anyUsePathBinds") (EVar "rest")) (EVar "n")) (EVar "c"))))
-(DFunDef false "anyUsePathBinds" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest")) (PVar "n") (PVar "c")) (EBinOp "||" (EApp (EApp (EApp (EVar "usePathWitnesses") (EVar "path")) (EVar "n")) (EVar "c")) (EApp (EApp (EApp (EVar "anyUsePathBinds") (EVar "rest")) (EVar "n")) (EVar "c"))))
-(DFunDef false "anyUsePathBinds" ((PCons PWild (PVar "rest")) (PVar "n") (PVar "c")) (EApp (EApp (EApp (EVar "anyUsePathBinds") (EVar "rest")) (EVar "n")) (EVar "c")))
-(DTypeSig false "usePathWitnesses" (TyFun (TyCon "UsePath") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyCon "Bool")))))
-(DFunDef false "usePathWitnesses" ((PVar "path") (PVar "n") (PTuple (PVar "ident") (PTuple (PVar "iface") PWild PWild PWild))) (EBlock (DoLet false false (PVar "dep") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "dep") (ELit (LString "core"))) (EApp (EApp (EApp (EVar "usePathAdmitsDecl") (EVar "path")) (EVar "n")) (EVar "iface"))) (EApp (EApp (EApp (EVar "depExportsMethodIdent") (EVar "dep")) (EVar "n")) (EVar "ident"))))))
-(DTypeSig false "usePathAdmitsDecl" (TyFun (TyCon "UsePath") (TyFun (TyCon "String") (TyFun (TyCon "IfaceRef") (TyCon "Bool")))))
-(DFunDef false "usePathAdmitsDecl" ((PVar "path") (PVar "n") (PVar "iface")) (EBinOp "||" (EApp (EApp (EVar "usePathBindsName") (EVar "path")) (EVar "n")) (EApp (EApp (EVar "usePathBindsName") (EVar "path")) (EFieldAccess (EVar "iface") "irName"))))
+(DFunDef false "methodCandImported" ((PVar "prog") (PVar "n") (PVar "c")) (EApp (EApp (EApp (EApp (EVar "anyUsePathBinds") (EVar "prog")) (EVar "False")) (EVar "n")) (EVar "c")))
+(DTypeSig false "methodCandAdmitted" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyCon "Bool")))))
+(DFunDef false "methodCandAdmitted" ((PVar "prog") (PVar "n") (PVar "c")) (EApp (EApp (EApp (EApp (EVar "anyUsePathBinds") (EVar "prog")) (EVar "True")) (EVar "n")) (EVar "c")))
+(DTypeSig false "anyUsePathBinds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyCon "Bool"))))))
+(DFunDef false "anyUsePathBinds" ((PList) PWild PWild PWild) (EVar "False"))
+(DFunDef false "anyUsePathBinds" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "wide") (PVar "n") (PVar "c")) (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "anyUsePathBinds") (EListLit (EVar "d"))) (EVar "wide")) (EVar "n")) (EVar "c")) (EApp (EApp (EApp (EApp (EVar "anyUsePathBinds") (EVar "rest")) (EVar "wide")) (EVar "n")) (EVar "c"))))
+(DFunDef false "anyUsePathBinds" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest")) (PVar "wide") (PVar "n") (PVar "c")) (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "usePathWitnesses") (EVar "path")) (EVar "wide")) (EVar "n")) (EVar "c")) (EApp (EApp (EApp (EApp (EVar "anyUsePathBinds") (EVar "rest")) (EVar "wide")) (EVar "n")) (EVar "c"))))
+(DFunDef false "anyUsePathBinds" ((PCons PWild (PVar "rest")) (PVar "wide") (PVar "n") (PVar "c")) (EApp (EApp (EApp (EApp (EVar "anyUsePathBinds") (EVar "rest")) (EVar "wide")) (EVar "n")) (EVar "c")))
+(DTypeSig false "usePathWitnesses" (TyFun (TyCon "UsePath") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyCon "Bool"))))))
+(DFunDef false "usePathWitnesses" ((PVar "path") (PVar "wide") (PVar "n") (PTuple (PVar "ident") (PTuple (PVar "iface") PWild PWild PWild))) (EBlock (DoLet false false (PVar "dep") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "dep") (ELit (LString "core"))) (EApp (EApp (EApp (EApp (EVar "usePathAdmitsDecl") (EVar "path")) (EVar "wide")) (EVar "n")) (EVar "iface"))) (EApp (EApp (EApp (EVar "depExportsMethodIdent") (EVar "dep")) (EVar "n")) (EVar "ident"))))))
+(DTypeSig false "usePathAdmitsDecl" (TyFun (TyCon "UsePath") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "IfaceRef") (TyCon "Bool"))))))
+(DFunDef false "usePathAdmitsDecl" ((PVar "path") (PVar "wide") (PVar "n") (PVar "iface")) (EBinOp "||" (EApp (EApp (EVar "usePathBindsName") (EVar "path")) (EVar "n")) (EBinOp "&&" (EVar "wide") (EApp (EApp (EVar "usePathBindsName") (EVar "path")) (EFieldAccess (EVar "iface") "irName")))))
 (DTypeSig false "usePathBindsName" (TyFun (TyCon "UsePath") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "usePathBindsName" ((PVar "path") (PVar "n")) (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "bs")) () (EApp (EApp (EVar "contains") (EVar "n")) (EApp (EApp (EVar "map") (EVar "snd")) (EVar "bs"))))))
 (DTypeSig false "depExportsMethodIdent" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Ident") (TyCon "Bool")))))
@@ -39720,7 +39776,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "scopedMethodEntry" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))) (TyApp (TyCon "Option") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))))))
 (DFunDef false "scopedMethodEntry" ((PVar "prog") (PVar "n") (PVar "cs")) (EMatch (EApp (EApp (EVar "ownMethodIdent") (EVar "prog")) (EVar "n")) (arm (PCon "Some" (PVar "ident")) () (EMatch (EApp (EApp (EVar "lookupMethodCand") (EVar "ident")) (EVar "cs")) (arm (PCon "Some" (PVar "payload")) () (EApp (EVar "Some") (EVar "payload"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "importedMethodEntry") (EVar "prog")) (EVar "n")) (EVar "cs"))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "importedMethodEntry") (EVar "prog")) (EVar "n")) (EVar "cs")))))
 (DTypeSig false "importedMethodEntry" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))) (TyApp (TyCon "Option") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))))))
-(DFunDef false "importedMethodEntry" ((PVar "prog") (PVar "n") (PVar "cs")) (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EApp (EApp (EVar "methodCandImported") (EVar "prog")) (EVar "n")) (EVar "c")))) (EVar "cs")) (arm (PList (PVar "only")) () (EApp (EVar "Some") (EApp (EVar "snd") (EVar "only")))) (arm PWild () (EApp (EApp (EVar "preludeMethodEntry") (EVar "n")) (EVar "cs")))))
+(DFunDef false "importedMethodEntry" ((PVar "prog") (PVar "n") (PVar "cs")) (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EApp (EApp (EVar "methodCandImported") (EVar "prog")) (EVar "n")) (EVar "c")))) (EVar "cs")) (arm (PList (PVar "only")) () (EApp (EVar "Some") (EApp (EVar "snd") (EVar "only")))) (arm (PList) () (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EApp (EApp (EVar "methodCandAdmitted") (EVar "prog")) (EVar "n")) (EVar "c")))) (EVar "cs")) (arm (PList (PVar "only")) () (EApp (EVar "Some") (EApp (EVar "snd") (EVar "only")))) (arm PWild () (EApp (EApp (EVar "preludeMethodEntry") (EVar "n")) (EVar "cs"))))) (arm PWild () (EApp (EApp (EVar "preludeMethodEntry") (EVar "n")) (EVar "cs")))))
 (DTypeSig false "preludeMethodEntry" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))) (TyApp (TyCon "Option") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))
 (DFunDef false "preludeMethodEntry" ((PVar "n") (PVar "cs")) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsMethod")) (EApp (EVar "OriginModule") (ELit (LString "core")))) (EVar "n")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ident")) () (EApp (EApp (EVar "lookupMethodCand") (EVar "ident")) (EVar "cs")))))
 (DTypeSig false "ownMethodIdent" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ident")))))
@@ -39729,16 +39785,18 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ownMethodIdent" ((PCons (PRec "DInterface" ((rf "methods" None) (rf "ifaceOrigin" None)) true) (PVar "rest")) (PVar "n")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EApp (EVar "ifaceMethodNames") (EVar "methods"))) (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsMethod")) (EVar "ifaceOrigin")) (EVar "n")) (EApp (EApp (EVar "ownMethodIdent") (EVar "rest")) (EVar "n"))))
 (DFunDef false "ownMethodIdent" ((PCons PWild (PVar "rest")) (PVar "n")) (EApp (EApp (EVar "ownMethodIdent") (EVar "rest")) (EVar "n")))
 (DTypeSig false "methodCandImported" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyCon "Bool")))))
-(DFunDef false "methodCandImported" ((PVar "prog") (PVar "n") (PVar "c")) (EApp (EApp (EApp (EVar "anyUsePathBinds") (EVar "prog")) (EVar "n")) (EVar "c")))
-(DTypeSig false "anyUsePathBinds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyCon "Bool")))))
-(DFunDef false "anyUsePathBinds" ((PList) PWild PWild) (EVar "False"))
-(DFunDef false "anyUsePathBinds" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "n") (PVar "c")) (EBinOp "||" (EApp (EApp (EApp (EVar "anyUsePathBinds") (EListLit (EVar "d"))) (EVar "n")) (EVar "c")) (EApp (EApp (EApp (EVar "anyUsePathBinds") (EVar "rest")) (EVar "n")) (EVar "c"))))
-(DFunDef false "anyUsePathBinds" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest")) (PVar "n") (PVar "c")) (EBinOp "||" (EApp (EApp (EApp (EVar "usePathWitnesses") (EVar "path")) (EVar "n")) (EVar "c")) (EApp (EApp (EApp (EVar "anyUsePathBinds") (EVar "rest")) (EVar "n")) (EVar "c"))))
-(DFunDef false "anyUsePathBinds" ((PCons PWild (PVar "rest")) (PVar "n") (PVar "c")) (EApp (EApp (EApp (EVar "anyUsePathBinds") (EVar "rest")) (EVar "n")) (EVar "c")))
-(DTypeSig false "usePathWitnesses" (TyFun (TyCon "UsePath") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyCon "Bool")))))
-(DFunDef false "usePathWitnesses" ((PVar "path") (PVar "n") (PTuple (PVar "ident") (PTuple (PVar "iface") PWild PWild PWild))) (EBlock (DoLet false false (PVar "dep") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "dep") (ELit (LString "core"))) (EApp (EApp (EApp (EVar "usePathAdmitsDecl") (EVar "path")) (EVar "n")) (EVar "iface"))) (EApp (EApp (EApp (EVar "depExportsMethodIdent") (EVar "dep")) (EVar "n")) (EVar "ident"))))))
-(DTypeSig false "usePathAdmitsDecl" (TyFun (TyCon "UsePath") (TyFun (TyCon "String") (TyFun (TyCon "IfaceRef") (TyCon "Bool")))))
-(DFunDef false "usePathAdmitsDecl" ((PVar "path") (PVar "n") (PVar "iface")) (EBinOp "||" (EApp (EApp (EVar "usePathBindsName") (EVar "path")) (EVar "n")) (EApp (EApp (EVar "usePathBindsName") (EVar "path")) (EFieldAccess (EVar "iface") "irName"))))
+(DFunDef false "methodCandImported" ((PVar "prog") (PVar "n") (PVar "c")) (EApp (EApp (EApp (EApp (EVar "anyUsePathBinds") (EVar "prog")) (EVar "False")) (EVar "n")) (EVar "c")))
+(DTypeSig false "methodCandAdmitted" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyCon "Bool")))))
+(DFunDef false "methodCandAdmitted" ((PVar "prog") (PVar "n") (PVar "c")) (EApp (EApp (EApp (EApp (EVar "anyUsePathBinds") (EVar "prog")) (EVar "True")) (EVar "n")) (EVar "c")))
+(DTypeSig false "anyUsePathBinds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyCon "Bool"))))))
+(DFunDef false "anyUsePathBinds" ((PList) PWild PWild PWild) (EVar "False"))
+(DFunDef false "anyUsePathBinds" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "wide") (PVar "n") (PVar "c")) (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "anyUsePathBinds") (EListLit (EVar "d"))) (EVar "wide")) (EVar "n")) (EVar "c")) (EApp (EApp (EApp (EApp (EVar "anyUsePathBinds") (EVar "rest")) (EVar "wide")) (EVar "n")) (EVar "c"))))
+(DFunDef false "anyUsePathBinds" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest")) (PVar "wide") (PVar "n") (PVar "c")) (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "usePathWitnesses") (EVar "path")) (EVar "wide")) (EVar "n")) (EVar "c")) (EApp (EApp (EApp (EApp (EVar "anyUsePathBinds") (EVar "rest")) (EVar "wide")) (EVar "n")) (EVar "c"))))
+(DFunDef false "anyUsePathBinds" ((PCons PWild (PVar "rest")) (PVar "wide") (PVar "n") (PVar "c")) (EApp (EApp (EApp (EApp (EVar "anyUsePathBinds") (EVar "rest")) (EVar "wide")) (EVar "n")) (EVar "c")))
+(DTypeSig false "usePathWitnesses" (TyFun (TyCon "UsePath") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyCon "Bool"))))))
+(DFunDef false "usePathWitnesses" ((PVar "path") (PVar "wide") (PVar "n") (PTuple (PVar "ident") (PTuple (PVar "iface") PWild PWild PWild))) (EBlock (DoLet false false (PVar "dep") (EApp (EVar "usePathModuleId") (EVar "path"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "dep") (ELit (LString "core"))) (EApp (EApp (EApp (EApp (EVar "usePathAdmitsDecl") (EVar "path")) (EVar "wide")) (EVar "n")) (EVar "iface"))) (EApp (EApp (EApp (EVar "depExportsMethodIdent") (EVar "dep")) (EVar "n")) (EVar "ident"))))))
+(DTypeSig false "usePathAdmitsDecl" (TyFun (TyCon "UsePath") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "IfaceRef") (TyCon "Bool"))))))
+(DFunDef false "usePathAdmitsDecl" ((PVar "path") (PVar "wide") (PVar "n") (PVar "iface")) (EBinOp "||" (EApp (EApp (EVar "usePathBindsName") (EVar "path")) (EVar "n")) (EBinOp "&&" (EVar "wide") (EApp (EApp (EVar "usePathBindsName") (EVar "path")) (EFieldAccess (EVar "iface") "irName")))))
 (DTypeSig false "usePathBindsName" (TyFun (TyCon "UsePath") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "usePathBindsName" ((PVar "path") (PVar "n")) (EMatch (EApp (EVar "importedBindings") (EVar "path")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "bs")) () (EApp (EApp (EVar "contains") (EVar "n")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "bs"))))))
 (DTypeSig false "depExportsMethodIdent" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Ident") (TyCon "Bool")))))
