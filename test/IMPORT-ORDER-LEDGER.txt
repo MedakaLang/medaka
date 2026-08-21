@@ -98,23 +98,33 @@
 
 733-ambiguous-ctor-reject-cascade-order-dependent | #733 | check=1;codes=R-AMBIGUOUS-CTOR;schemes=;run=1:;build=1/-: | check=1;codes=R-AMBIGUOUS-CTOR,T-TYPE-MISMATCH;schemes=;run=1:;build=1/-:
 
-# ── #1351 (OPEN): universeMethodDispatchIdxRef bare-method-name collision ─────
-# Two unrelated interfaces sharing a bare method name at DIFFERING dispatch
-# argument indices, plus a standalone shadow of the same name. Import-line order
-# alone decides between a clean type-check that prints `7` (wrong under every
-# reading per the issue's hand-derivation — see this case's own case.txt) and a
-# rejected program. See test/import_order_fixtures/1351-.../case.txt for how the
-# two signatures below were established and why neither is claimed correct.
-#
-# ⚠️ RE-POINTED 2026-08-08 by #1354 unit A, and the signatures below were RE-CUT
-# from the gate at that time. The entry's member list changed from `zmodI.{zf}`
-# to `zmodI.{IZ, zf}`. Under the OLD spelling this case now CONVERGES, because
-# SHADOW-SEMANTICS S1's interface operand is scoped to what the module can NAME
-# and neither interface was nameable there — so `mth` is no longer a shadow and
-# the bare-name dispatch-index table is never consulted. That convergence is
-# real and it is NOT a fix: naming either interface in its own import brings the
-# order-dependence back unchanged. The row was re-pointed rather than drained
-# precisely because draining it would have left an OPEN, `verified`, S0 issue
-# with no mechanical guard, on the strength of a spelling that stopped reaching
-# the defect.
-1351-methoddispatchidx-import-order-collision | #1351 | check=0;codes=;schemes=main : Unit\n;run=0:7\n;build=0/0:7\n | check=1;codes=T-TYPE-MISMATCH;schemes=;run=1:;build=1/-:
+# ── #1351 — order-DEPENDENCE row DRAINED 2026-08-21 (RUN-METHID-106) ──────────
+# This row licensed an EXPECTED divergence: import-line order alone decided
+# between accept and reject. RUN-METHID-099/S-receiver-position-both-arms L1/L2
+# made the reject order-INVARIANT (was 3-of-6 accept/3-of-6 reject per
+# RUN-METHID-057; now check/run/build reject with T-TYPE-MISMATCH in EVERY
+# ordering, verified via `sh test/diff_compiler_import_order.sh` before this
+# row was deleted). Deleting the row does not remove a guard — it removes a
+# LICENCE: with no row, divergence at this fixture is a plain gate FAILURE by
+# default (stricter than the row provided, not weaker). #1351 stays OPEN —
+# uniform reject is not the correct value `99` (RUN-METHID-057's F12): an
+# order-invariant wrong answer satisfies "one signature" just as well as a
+# correct one. Convergence to `99` remains owed to S-impl-query-by-declaration.
+# #1351 is guarded post-deletion by: the must-fail pin (re-cut to the
+# uniform-reject signature, verified reproducing per RUN-METHID-083), the
+# EMITTER-VERDICT-LEDGER row (in test/EMITTER-VERDICT-LEDGER.txt, re-cut
+# separately — that axis is untouched by this deletion), and this gate's own
+# default convergence requirement created by the row's absence. Fixture kept,
+# unledgered on the order-dependence axis; the still-open emitter-verdict axis
+# on this same case is tracked in test/EMITTER-VERDICT-LEDGER.txt.
+
+# ── #1810 (OPEN): rdict/filterTagged same-head collision drops interface identity
+# implsOf/filterTagged (compiler/backend/llvm_emit.mdk:1267-1274) filter the
+# runtime-dict dispatcher's candidate impls by METHOD NAME ALONE — the `iface`
+# field is bound in the pattern and never read. Two unrelated interfaces sharing
+# a spelling, with impls at the SAME head tycon, share one dispatcher symbol and
+# resolve to the FIRST arm the emitter happened to emit — import order decides
+# emission order, hence which impl BOTH components of the pair get. See
+# test/import_order_fixtures/1810-.../case.txt for how the two signatures below
+# were established.
+1810-rdict-samehead-filtertagged-collision | #1810 | check=0;codes=;schemes=main : Unit\n;run=0:(110, 110)\n;build=0/0:(110, 110)\n | check=0;codes=;schemes=main : Unit\n;run=0:(11, 11)\n;build=0/0:(11, 11)\n

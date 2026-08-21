@@ -5500,6 +5500,9 @@ ceFunctorKey = regKeyOfTab (ifaceTabKey (OriginModule "fmod") "Functor")
 -- now a named field on ONE cell (a type fact, not prose), the last piece of #158/#176.
 -- A record OF Refs (fields stay `Ref …`): every writer mutates a field-Ref in place, so
 -- no whole-record copy is allocated per set.
+--
+-- ⚠️ NO TRAILING `--` COMMENT ON ANY FIELD BELOW (#829/[T-PERRUN-COMMENTS] corrupts
+-- this header shape) — field prose lives on the reader, e.g. `dispatchIdxScoped`.
 data DriverState =
   | DriverState {
       effectDomains : Ref (List (String, Param)),
@@ -5509,6 +5512,7 @@ data DriverState =
       declEnvsRef : Ref DeclEnvs,
       abstractRecordTypesRef : Ref (List String),
       argDispatchIdxRef : Ref (List (String, Int)),
+      argDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),
       dictEligibleRef : Ref (List String),
       dictEligibleSetRef : Ref (OrdMap Unit),
       mangledShadowMapRef : Ref (List (String, String)),
@@ -5518,6 +5522,7 @@ data DriverState =
       superDeclsRef : Ref (List Decl),
       standaloneValuesRef : Ref (List String),
       methodDispatchIdxRef : Ref (List (String, Int)),
+      methodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),
       matchOracle : Ref Oracle,
       matchWarnings : Ref (List TcDiag),
       promotionHarvestRef : Ref (List String),
@@ -5539,6 +5544,7 @@ freshDriverState _ = DriverState {
   declEnvsRef = Ref emptyDeclEnvs,
   abstractRecordTypesRef = Ref [],
   argDispatchIdxRef = Ref [],
+  argDispatchIdxByIdRef = Ref [],
   dictEligibleRef = Ref [],
   dictEligibleSetRef = Ref omEmpty,
   mangledShadowMapRef = Ref [],
@@ -5548,6 +5554,7 @@ freshDriverState _ = DriverState {
   superDeclsRef = Ref [],
   standaloneValuesRef = Ref [],
   methodDispatchIdxRef = Ref [],
+  methodDispatchIdxByIdRef = Ref [],
   matchOracle = Ref (buildOracle []),
   matchWarnings = Ref [],
   promotionHarvestRef = Ref [],
@@ -6251,6 +6258,7 @@ data CrossRun = CrossRun {
     universeMethodCollidedRef : Ref (List String),  -- #1111 A-2.5: the method NAMES the line above holds ≥2 distinct identities for (normally EMPTY)
     universeRegisteredIfacesRef : Ref (OrdMap Unit),  -- #1111 A-2.4: DELIBERATELY still bare-name — a Unit-valued NAME-membership set, see ifaceRegistered
     universeMethodDispatchIdxRef : Ref (List (String, Int)),
+    universeMethodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),  -- #1351 L1 EXPAND: identity-keyed sibling of the line above, grown in the SAME fold so the two can never come to describe different universes.  No reader yet — L3 migrates them.
     universeRecordByName : Ref (OrdMap RecordInfo),
     universeRecordIdentsRef : Ref (OrdMap (List (Ident, String, RecordInfo))),  -- #1111 A-2.12 (#1319 unit 2): the identity-keyed COMPANION of the line above — see insertRecordIdents
     universeRecordCollidedRef : Ref (List String),  -- #1111 A-2.12: the registry KEYS the line above holds ≥2 distinct identities for (normally EMPTY)
@@ -6374,6 +6382,7 @@ freshCrossRun env = CrossRun {
   universeMethodCollidedRef = Ref [],
   universeRegisteredIfacesRef = Ref omEmpty,
   universeMethodDispatchIdxRef = Ref [],
+  universeMethodDispatchIdxByIdRef = Ref [],
   universeRecordByName = Ref omEmpty,
   universeRecordIdentsRef = Ref omEmpty,
   universeRecordCollidedRef = Ref [],
@@ -6536,6 +6545,38 @@ argDispatchOfDecl _ = []
 argDispatchOfMethod : List String -> IfaceMethod -> List (String, Int)
 argDispatchOfMethod typarams (IfaceMethod mname mty _) = match firstDispatchIdx (dispatchTyparams typarams) 0 (methodArgs mty)
   Some i => [(mname, i)]
+  None => []
+
+-- #1351 L1 (EXPAND): the IDENTITY-CARRYING sibling of `argDispatchIndices` above.  Same
+-- walk, same arms, same `firstDispatchIdx` classification — the ONLY difference is the
+-- key: `(IfaceRef, method name)` instead of the bare method name.  `IfaceRef` is this
+-- file's existing module-qualified interface identity (`irName` spelling + `irOrigin` I4
+-- identity); it is already minted at the peer population site
+-- `registerMethodIfaceParamsDecl` out of the SAME two `DInterface` fields, so this adds
+-- no new notion of identity, only a second key-shape for an existing one.
+--
+-- ⚠️ NOTHING READS THIS YET, deliberately.  It is the substrate leaf L3 migrates
+-- `methodDispatchIdx`/`argDispatchOf` onto; until then the bare-name tables stay
+-- authoritative.  Do not add a reader here — adding a reader is a MIGRATE leaf, and
+-- doing both at once is the partial-motion shape this family was cut to avoid.
+--
+-- 🔒 Purity note, load-bearing for L1's zero-behaviour-change property:
+-- `argDispatchIndices` and everything it reaches (`argDispatchOfDecl`,
+-- `argDispatchOfMethod`, `dispatchTyparams`, `firstDispatchIdx`, `argMentions`,
+-- `methodArgs`) is pure and structural, so running this second walk beside it advances
+-- no counter, mints no id and registers nothing.  Contrast `ifaceMethodSchemes`, which
+-- is NOT pure — see `ifaceMethodSchemeIds` for what that forced there.
+argDispatchIndicesById : List Decl -> List ((IfaceRef, String), Int)
+argDispatchIndicesById prog = flatMap argDispatchOfDeclById prog
+
+argDispatchOfDeclById : Decl -> List ((IfaceRef, String), Int)
+argDispatchOfDeclById (DAttrib _ d) = argDispatchOfDeclById d
+argDispatchOfDeclById (DInterface { name, typarams, methods, ifaceOrigin, ... }) = flatMap (argDispatchOfMethodById IfaceRef { irName = name, irOrigin = ifaceOrigin } typarams) methods
+argDispatchOfDeclById _ = []
+
+argDispatchOfMethodById : IfaceRef -> List String -> IfaceMethod -> List ((IfaceRef, String), Int)
+argDispatchOfMethodById iface typarams (IfaceMethod mname mty _) = match firstDispatchIdx (dispatchTyparams typarams) 0 (methodArgs mty)
+  Some i => [((iface, mname), i)]
   None => []
 
 -- The DISCRIMINATING (receiver) typaram(s) of an interface — its FIRST typaram.
@@ -7108,6 +7149,7 @@ data PerRun = PerRun {
     pendingSites : Ref (List PendingEntry),  -- `Num a =>` on an unrelated scheme (types/numlit_bidir).
     pendingRLocalSites : Ref (List PendingEntry),
     shadowStandaloneSchemesRef : Ref (List (String, Scheme)),
+    ifaceMethodSchemesByIdRef : Ref (List ((IfaceRef, String), Scheme)),  -- #1351 L1 EXPAND: the Module arm's interface-method schemes under an identity key — the substrate leaf L2 migrates `pickSchemes` onto.  No reader yet.
     definerShadowNamesRef : Ref (List String),
     definerShadowSigsRef : Ref (List (String, Ty)),
     bodyImplEnvRef : Ref ImplEnv,
@@ -7204,6 +7246,7 @@ freshPerRun _ = PerRun {
   pendingSites = Ref [],
   pendingRLocalSites = Ref [],
   shadowStandaloneSchemesRef = Ref [],
+  ifaceMethodSchemesByIdRef = Ref [],
   definerShadowNamesRef = Ref [],
   definerShadowSigsRef = Ref [],
   bodyImplEnvRef = Ref emptyImplEnv,
@@ -8976,12 +9019,92 @@ standaloneSchemeFor env name sym = match lookupAssoc name perRun.value.shadowSta
 -- Ungated, unlike argDispatchOf — RLocal detection must run on the eval path too.
 methodDispatchIdx : String -> Option Int
 methodDispatchIdx name =
-  lookupAssoc name driverState.value.methodDispatchIdxRef.value
+  dispatchIdxScoped
+    name
+    driverState.value.methodDispatchIdxByIdRef.value
+    driverState.value.methodDispatchIdxRef.value
 
 -- the dispatch-arg index of an arg-position method, but only when stamping is
 -- enabled (the emit path) — off, every EMethodAt is a return-position site.
 argDispatchOf : String -> Option Int
-argDispatchOf name = lookupAssoc name driverState.value.argDispatchIdxRef.value
+argDispatchOf name =
+  dispatchIdxScoped
+    name
+    driverState.value.argDispatchIdxByIdRef.value
+    driverState.value.argDispatchIdxRef.value
+
+-- ── #1351 L3 (MIGRATE Leg 1): the IDENTITY-SCOPED dispatch-index read ───────────
+--
+-- Both readers above used to answer "which argument position is dispatch-relevant
+-- for the bare name [name]" with `lookupAssoc` — FIRST MATCH over the decl-walk
+-- order of `argDispatchIndices`.  When two interfaces declare the same method name
+-- at DIFFERENT dispatch indices, that order is module-processing order, so the
+-- RECEIVER ARGUMENT of an occurrence was decided by import-clause order.  This is
+-- Leg 1 of #1351, and it is MEASURED: on the flip direction of #1351's own corpus
+-- the index read here is `idx=0` on three orderings and `idx=1` on the other three,
+-- on all three arms (L3's clause-1 Leg-1 conflict probe).
+--
+-- The successor asks the SAME question L2's shadow layer already asked and takes the
+-- SAME answer: the declaration `applyMethodScopeOverrides` admits for [name] in THIS
+-- module, then that declaration's own row out of L1's identity-keyed table.  It is a
+-- LOOKUP, not a second resolver — the resolution happened at `methodIfaceParamsRef`'s
+-- population site (the named prohibition, RUN-METHID-056).
+--
+-- ⚠️ Both readers are re-keyed through ONE accessor on purpose.  `argDispatchOf` has
+-- THREE callers (`inferMethodAt`'s return-route decision, `inferDefinerShadowApp`'s
+-- arg-stamp push, and `stampWorthyMethod`'s predicate) and `methodDispatchIdx` has
+-- one (`recordRLocalSite`).  They answer ONE question, so they move as a SET
+-- (RUN-METHID-004/093); re-keying the shared accessor rather than each call site is
+-- what makes a partial move unrepresentable here.  Their signatures are unchanged,
+-- so no caller is edited.
+--
+-- ⚠️ MISS FALLS BACK TO THE BARE-NAME ANSWER, deliberately, exactly as
+-- `pickSchemesByDecl` does.  A miss means "this module's scope does not decide it"
+-- (no `methodIfaceParamsRef` entry, or the admitted declaration contributes no row).
+-- Answering `None` instead would tell `recordRLocalSite` the name has no dispatch
+-- index at all — turning a dispatched site into an RLocal one, a routing change, not
+-- a conservative one.
+--
+-- ── The two fields this reader consumes (re-homed here by L3, RUN-METHID-054) ──
+-- `argDispatchIdxByIdRef` / `methodDispatchIdxByIdRef` (`DriverState`) — #1351 L1
+-- (EXPAND).  The identity-keyed siblings of `argDispatchIdxRef` /
+-- `methodDispatchIdxRef`, keyed `(IfaceRef, method name)` instead of the bare method
+-- name.  Written in lockstep with their bare-name peers at exactly the peers' own
+-- write sites (see `argDispatchIndicesById`).  L1 wrote them and nothing read them;
+-- THIS function is the reader L1 was expanding for.
+--
+-- ⚠️ Their prose lives HERE, not on the fields, because `data DriverState` has the
+-- two-line `data X =` / `  | X {` header shape that #829 ([T-PERRUN-COMMENTS])
+-- corrupts: a trailing `--` comment on a field survives `fmt --write` only by moving
+-- onto a DIFFERENT field, and `fmt --check` does not catch it — measured live at L1,
+-- where one `fmt --write` silently relocated two field comments.
+--
+-- 🚨 The bare-name WRITE is NOT retired (RUN-METHID-093 struck that instruction):
+-- `argNames` (`prePassDictArg`'s arg-position name set) reads `argDispatchIdxRef` as
+-- a NAME SET, and §4 F1 declares that use untouched by this family.  Deleting the
+-- old table is L5's contract job, after `argNames`' consumer joins the site set.
+dispatchIdxScoped : String -> List ((IfaceRef, String), Int) -> List (String, Int) -> Option Int
+dispatchIdxScoped name byId bare = match admittedIfaceFor name
+  None => lookupAssoc name bare
+  Some iface => match lookupIdxById iface name byId
+    Some i => Some i
+    None => lookupAssoc name bare
+
+-- ⚠️ ONE `admittedIfaceFor`, NOT TWO.  Leg 1 (this reader) and Leg 3
+-- (`ieImplExistsForHead`) both need "which declaration does this module admit for
+-- [name]", and they must get it from the SAME read — S2-DECL (b) is precisely the rule
+-- that both halves come from one declaration, so two near-duplicate readers of
+-- `methodIfaceParamsRef` would be the defect wearing the fix's clothes.  The definition
+-- lives beside `ieImplExistsForHead`; this site consumes it.
+--
+-- ⚠️ `sameTyConHead`, not a bare `irName` compare — the same rule `lookupSchemeById`
+-- states: this is a LOOKUP, where a false HIT is a wrong dispatch index (silent
+-- wrongness) and a false MISS only costs the fall-back to today's answer.
+lookupIdxById : IfaceRef -> String -> List ((IfaceRef, String), Int) -> Option Int
+lookupIdxById _ _ [] = None
+lookupIdxById iface n (((ir, mn), i)::rest)
+  | mn == n && sameTyConHead ir.irName ir.irOrigin iface.irName iface.irOrigin = Some i
+  | otherwise = lookupIdxById iface n rest
 
 -- Phase 69.x-e: if [name] is a method with method-level constraints (foldMap's
 -- `Monoid m`), map each constraint's scheme id through this occurrence's
@@ -14908,6 +15031,8 @@ elaborateDict runtimeDecls dictNames eligibleNames prog =
   driverState.value.implInferEnabled := True
   let allNames = discoverAll runtimeDecls prog dictNames eligibleNames
   driverState.value.argDispatchIdxRef := (argDispatchIndices prog)
+  -- #1351 L1 EXPAND: the identity-keyed sibling, written in lockstep.  No reader yet.
+  driverState.value.argDispatchIdxByIdRef := (argDispatchIndicesById prog)
   let argNames = map fst driverState.value.argDispatchIdxRef.value
   -- P0-18: [] — the confirmed definer-shadow-emit path is elaborateModules; this
   -- single-file scratch elaborate stays shadow-map-free (byte-identical discovery).
@@ -15763,10 +15888,47 @@ headTabOf (Some hk) = Some (dispHeadTab hk)
 -- unconditionally), so this widening cannot re-erase a user's own top-level function.
 -- MEASURED as the control on `B-2.1-c`'s five-file corpus: the definer arm's located
 -- reject is byte-identical before and after.
+--
+-- ── #1351/#1664 Leg 3: THE QUERY IS SCOPED TO THE ADMITTED DECLARATION ──────────
+-- S2-DECL (b) (`docs/spec/SHADOW-SEMANTICS.md`): the importer arm is evaluated against
+-- a DECLARATION, and that one declaration supplies BOTH halves — the receiver argument
+-- AND the impl query, which asks *"does an `impl` of THAT interface exist at the
+-- receiver's head tycon"*.  This test used to ask only *"does SOME impl declaring a
+-- method spelled [name] exist at that head"*, with no declaration component, which is
+-- verbatim S2-DECL (c)'s non-conformance: a module could receive `True` about an impl
+-- of a declaration it cannot even name (`test/must_fail_fixtures/1664-decl-agreeing-
+-- both-admitted/iz-unadmitted.mdk` — `IZ` UNADMITTED, `impl IZ String` still in the
+-- graph, and the occurrence dispatched into it and printed `7`).
+--
+-- ⚠️ THE IMPL UNIVERSE IS UNCHANGED — `DICT-SEMANTICS.md` §8 I5 / S2-DECL's own "What it
+-- does NOT change": this narrows what the query ASKS, never which modules' instances may
+-- answer.  `ieHeadRows … env` is still the graph-global bucket, unfiltered.
+--
+-- ⚠️ ALL THREE EXISTENCE READS MOVE TOGETHER, BY CONSTRUCTION rather than by diligence
+-- (RUN-METHID-004; the 🚨 block above records the MEASURED S0 a subset move produced).
+-- The admitted declaration is read HERE, inside the one query, from [name] alone — so
+-- `inferShadowApp`, `definerReceiverDispatches` and `resolveRLocalSite` are not edited
+-- at all and a partial move is unrepresentable.  It is also the only correct place: all
+-- three reads must name ONE population asked ONE question, and threading the scope
+-- through three call sites would let a future edit give them three.
 ieImplExistsForHead : ImplEnv -> String -> HeadKey -> Bool
 ieImplExistsForHead env name hk =
-  -- goal-side key projected ONCE, here — see `headTabOf` for why.
-  ieImplExistsForHeadGo (ieHeadRows (Some hk) env) name (dispHeadTab hk)
+  -- goal-side key AND the admitted declaration both projected ONCE, here — see
+  -- `headTabOf` for why the goal key is hoisted; the `omLookup` is hoisted for the
+  -- same reason ([T-PERF-HUNT]: Medaka is strict, so an in-loop projection is rebuilt
+  -- once per row).  The scan itself stays the same single linear walk of `ieHeadRows`
+  -- with one more conjunct per row — no rescan, no new bucket.
+  ieImplExistsForHeadGo (ieHeadRows (Some hk) env) name (dispHeadTab hk) (admittedIfaceFor name)
+
+-- The declaration THIS module's import scope admits for [name] — `methodIfaceParamsRef`
+-- is `applyMethodScopeOverrides`' output, so this is L2's ALREADY-RESOLVED answer, re-read
+-- rather than recomputed (RUN-METHID-056: no second resolver beside
+-- `applyMethodScopeOverrides`).  Same lookup `admittedSchemeFor` and
+-- `definerReceiverIsDictVar` already perform on the same table.
+admittedIfaceFor : String -> Option IfaceRef
+admittedIfaceFor name = map
+  ((iface, _, _, _) => iface)
+  (omLookup name perRun.value.methodIfaceParamsRef.value)
 
 -- 🚨 STILL SPELLING-KEYED, THROUGH `dispHeadTab`/`headTabIs` — the retest keeps the
 -- projection strength of the bucket it scans and NOT a stronger one.  The BUCKET moved
@@ -15779,11 +15941,39 @@ ieImplExistsForHead env name hk =
 -- are the partition, exactly as `ieCountHeadByIfaceGo` owes it.
 -- The method table is `ImplRow`'s last field — payload, never a key component (§9.3) —
 -- which is the same `methods` list `KeyEntry` carried and `keyEntryOfRow` copies out.
-ieImplExistsForHeadGo : List ImplRow -> String -> TabKey -> Bool
-ieImplExistsForHeadGo [] _ _ = False
-ieImplExistsForHeadGo ((ImplRow _ _ _ tys _ ms)::rest) name goal
-  | headTabIs (univReceiverTag tys) goal && contains name ms = True
-  | otherwise = ieImplExistsForHeadGo rest name goal
+--
+-- #1351/#1664 Leg 3: the row's 3rd field, `IfaceRef`, was ALREADY THERE and was
+-- discarded by this pattern (`ImplRow _ _ _ tys _ ms`).  Nothing about `ImplRow`
+-- widened; the retest stopped throwing away the identity it was already carrying.
+ieImplExistsForHeadGo : List ImplRow -> String -> TabKey -> Option IfaceRef -> Bool
+ieImplExistsForHeadGo [] _ _ _ = False
+ieImplExistsForHeadGo ((ImplRow _ _ ir tys _ ms)::rest) name goal admitted
+  | headTabIs (univReceiverTag tys) goal && contains name ms && ieRowAdmittedBy ir admitted = True
+  | otherwise = ieImplExistsForHeadGo rest name goal admitted
+
+-- Does this row's interface match the declaration the querying module admits?
+--
+-- ⚠️ `None` FALLS BACK TO THE BARE-NAME ANSWER — every row passes — and that is the
+-- SETTLED reading, not a hedge.  S2-DECL (c) narrows the query to declarations `M` can
+-- name; (d)'s `None` arm ("S1 already says `N` is not a shadow in `M`; the standalone
+-- denotes.  Unchanged by this clause") hands the EMPTY-admitted-set case to S1, upstream
+-- of this query, so S2-DECL gives this site no instruction for a table miss.  A miss here
+-- is `methodIfaceParamsRef` holding no entry for [name] — "this module's scope does not
+-- decide it" — and the file's own two precedents for exactly that miss both fall back:
+-- `pickSchemesByDecl`'s ⚠️ block ("a miss must not DROP the binding") and
+-- `admittedSchemeFor`'s ("never a guess").  Answering `False` unconditionally instead
+-- would turn a dispatched occurrence into an `RLocal` one on every shape this slice does
+-- not decide — a routing change, not a conservative one.
+--
+-- ⚠️ `ieRowIfaceMatches` (`sameTyConHead` over `irName`/`irOrigin`), NOT a bare `irName`
+-- compare and NOT `ieCountHeadByIfaceGo`'s deliberately spelling-only test: this is a
+-- LOOKUP where a false HIT is silent wrongness (an impl of an unnameable declaration
+-- answering `True` — the #1664 defect) and a false MISS costs only the fall-through to
+-- the standalone.  It is the one standing comparator for IfaceRef-vs-IfaceRef identity in
+-- this family (`ieEntriesForIface`, `cohSameIface`, `lookupSchemeById`).
+ieRowAdmittedBy : IfaceRef -> Option IfaceRef -> Bool
+ieRowAdmittedBy _ None = True
+ieRowAdmittedBy ir (Some iface) = ieRowIfaceMatches ir iface
 
 -- C5: stamp RLocal on each recorded standalone-shadow arg-position site whose
 -- receiver mono now grounds to a concrete head tycon with NO impl of the method.
@@ -17003,9 +17193,35 @@ implMethodName (ImplMethod n _ _) = n
 
 -- a loc to attribute the error to: the first present impl-method body's span (the
 -- impl head carries no Loc of its own).  None for a wholly-empty impl body.
+--
+-- 🚨 [RUN-METHID-035, F6] Computed from the impl-method's OWN parsed AST body,
+-- independent of whether that body was ever type-inferred.  `exprLoc` alone
+-- only recognizes an OUTERMOST `ELoc`/`EDoOrigin` wrapper (by design — see its
+-- own comment), and a body shaped `f x` (an application, e.g. `gandThen2 p =
+-- gandThen2 p`) is NOT itself ELoc-wrapped at that outer node, so `exprLoc`
+-- alone returns `None` for it.  Before this fix, `pushTypeErrorOnceAt`'s
+-- `orElseLoc loc !currentLoc` fallback then anchored T-INCOMPLETE-IMPL at
+-- whatever OTHER declaration the type-inference walk had most recently
+-- entered — which was RIGHT, by ACCIDENT, only when a same-spelled-but-
+-- unrelated sibling interface caused this method's body to be (wrongly)
+-- type-inferred anyway, setting `currentLoc` as a side effect (#1647 removed
+-- that accident; see RUN-METHID-035).  `appArgLoc` (Bite 3, above) peels one
+-- application to the argument's own span, so `f x` resolves to `x`'s loc —
+-- a location genuinely inside the impl block, sourced from the AST alone.
+--
+-- ⚠️ [RUN-METHID-161] THIS FIX IS CURRENTLY INERT, and that is expected: its
+-- trigger is #1647 — the change that introduced the reachability guarded against
+-- above — and #1647 was REVERTED in this same sprint at `f585bfbb`.  At the
+-- resulting BASE the diagnostic still lands correctly, by the same accident this
+-- comment already describes (the same-spelled sibling interface type-infers the
+-- body and sets `currentLoc`), so nothing on the tree today can discriminate this
+-- fix from its absence.  A discriminating test pin becomes CONSTRUCTIBLE — and is
+-- OWED — the moment #1647 or anything in its class re-lands.  Do not delete this
+-- as dead code on the strength of it being unexercised.
 firstImplMethodLoc : List ImplMethod -> Option Loc
 firstImplMethodLoc [] = None
-firstImplMethodLoc ((ImplMethod _ _ body)::_) = exprLoc body
+firstImplMethodLoc ((ImplMethod _ _ body)::_) =
+  orElseLoc (exprLoc body) (appArgLoc body)
 
 -- the names of an interface's REQUIRED methods (those whose merged IfaceMethod
 -- carries NO default body).  Since #1557 A-3.5a this is called ONCE PER INTERFACE at
@@ -17269,7 +17485,62 @@ importedMethodEntry prog n cs = match filterList (c => methodCandImported prog n
   -- genuinely 0-candidate case — the fallback is not wrong, but the comment above
   -- must not be read as "every 2+ candidate case is already an upstream reject".
   -- Adjacent to the open #1288 re-export-merge family; not owned here.
+  --
+  -- ── F23 (#1351 L2 repair): the admission test is a LADDER, not one widened test ──
+  -- 🚨 L2 widened the member filter IN PLACE so that a path naming only the INTERFACE
+  -- (`import zmodI.{IZ, zf}`, no `mth`) also witnesses that interface's candidate.
+  -- That is right for #1351, where NO path binds the method name at all — but in
+  -- every `import msifa.{MSIA, mth}` + `import msifb.{MSIB}` shape it promoted the
+  -- second import from "brings in the TYPE only" to "witnesses a candidate", turning
+  -- a 1-candidate override into a 2-candidate decline to the bare-name FLOOR.  That
+  -- floor is last-write-wins over module order, so nine method_scope fixtures moved:
+  -- four to a SILENT ACCEPT of an invalid program (the floor's interface happened to
+  -- have an impl) and five to a reject naming the WRONG interface.  MEASURED, both
+  -- shapes, nine for nine (F23 isolation: reverting this one filter and KEEPING
+  -- `pickSchemesByDecl` restores all nine; keeping the filter and reverting
+  -- `pickSchemesByDecl` restores none).
+  --
+  -- Both readings are wanted, in PRECEDENCE order — the same nearest-scope-wins
+  -- ladder `scopedMethodEntry` above already runs, with one rung more:
+  --
+  --   rung 1  a path that binds the METHOD name and witnesses this declaration.
+  --           When any candidate clears this rung, the method-name imports ARE the
+  --           module's statement about which declaration it means, and a bare
+  --           interface-name import must not dilute it.
+  --   rung 2  only if rung 1 admits NOTHING: a path that names the candidate's
+  --           INTERFACE and witnesses this declaration.  This is the 0-candidate
+  --           fall-through L2 was fixing, and it is reached only where the narrow
+  --           rung had already declined to the floor.
+  --
+  -- ── WHAT GROUNDS THE PRECEDENCE (RUN-METHID-116; supersedes the `S2-DECL (c)`
+  -- grounding this comment used to assert) ────────────────────────────────────────
+  -- ⚠️ S2-DECL DOES NOT GOVERN THIS CORPUS.  The method_scope fixtures have NO
+  -- standalone of the colliding name (`mth` exists only as two interface methods), so
+  -- S1's shadow-hood conjunct — `N ∈ funDef-names(standalones …)`,
+  -- `docs/spec/SHADOW-SEMANTICS.md:249-253` — is vacuously FALSE and S2-DECL never
+  -- fires, exactly as that document's ruled #1182/#1620/#1265 rows say.  Do not read
+  -- this ladder as implementing S2-DECL (c).
+  -- What it DOES instantiate is clause (d)'s RATIONALE, borrowed as a principle and
+  -- not cited as a governing clause: a pick is legitimate exactly when the source
+  -- carries a discriminator ((d) mandates its reject because there is *"no
+  -- discriminator written in the source"*).  `import msa.{MA, mth}` names the method
+  -- and `import msb.{MB}` does not — a distinction the author wrote down — so rung 1
+  -- is not a tie-break supplied from outside the program.
+  -- 🚨 KNOWN GAP (RUN-METHID-116): a WILDCARD import carries no discriminator yet
+  -- reaches rung 1 — `usePathBindsName` answers True for every name under `UseWild` —
+  -- so `import msb.*` witnesses `mth` at rung 1, rung 1 admits 2, and the ladder
+  -- declines to the arbitrary bare-name floor.  Unfixed here.
+  --
+  -- So this can only turn "0 → floor" into "1 → the admitted declaration"; a shape
+  -- the narrow rung decides is decided identically to before the widening, and a
+  -- rung-1 tie (≥2) still declines to the floor rather than inventing a third
+  -- answer.  `depExportsMethodIdent` is untouched at both rungs, so the #1275/#1272
+  -- BYSTANDER stays refused by IDENTITY, never by spelling.  No second resolver:
+  -- this is `importedMethodEntry`'s own filter, run twice at two admissions.
   [only] => Some (snd only)
+  [] => match filterList (c => methodCandAdmitted prog n c) cs
+    [only] => Some (snd only)
+    _ => preludeMethodEntry n cs
   _ => preludeMethodEntry n cs
 
 -- The implicit prelude is in scope in every module without a `DUse`, so it is the last
@@ -17294,16 +17565,26 @@ ownMethodIdent ((DInterface { methods, ifaceOrigin, ... })::rest) n =
 ownMethodIdent (_::rest) n = ownMethodIdent rest n
 
 -- Is candidate [c] the declaration of [n] that one of THIS module's imports brings in?
+-- RUNG 1 of `importedMethodEntry`'s ladder: the METHOD name must come through the
+-- path.  [wide] = False, so a path that names only the candidate's interface does
+-- NOT witness it here.
 methodCandImported : List Decl -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
-methodCandImported prog n c = anyUsePathBinds prog n c
+methodCandImported prog n c = anyUsePathBinds prog False n c
 
-anyUsePathBinds : List Decl -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
-anyUsePathBinds [] _ _ = False
-anyUsePathBinds ((DAttrib _ d)::rest) n c = anyUsePathBinds [d] n c
-  || anyUsePathBinds rest n c
-anyUsePathBinds ((DUse _ path _)::rest) n c = usePathWitnesses path n c
-  || anyUsePathBinds rest n c
-anyUsePathBinds (_::rest) n c = anyUsePathBinds rest n c
+-- RUNG 2 (F23): the same question with the INTERFACE-nameability reading also
+-- admitted.  Reached only when rung 1 admitted nothing — see `importedMethodEntry`,
+-- where the precedence between the two rungs is argued and grounded (RUN-METHID-116;
+-- NOT in S2-DECL (c), which does not govern a corpus with no standalone).
+methodCandAdmitted : List Decl -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
+methodCandAdmitted prog n c = anyUsePathBinds prog True n c
+
+anyUsePathBinds : List Decl -> Bool -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
+anyUsePathBinds [] _ _ _ = False
+anyUsePathBinds ((DAttrib _ d)::rest) wide n c = anyUsePathBinds [d] wide n c
+  || anyUsePathBinds rest wide n c
+anyUsePathBinds ((DUse _ path _)::rest) wide n c = usePathWitnesses path wide n c
+  || anyUsePathBinds rest wide n c
+anyUsePathBinds (_::rest) wide n c = anyUsePathBinds rest wide n c
 
 -- ── #1111 A-2.5b (#1272 / #1275): the witness reads IDENTITY, not spelling ──
 -- An import witnesses a candidate when TWO things hold:
@@ -17367,10 +17648,52 @@ anyUsePathBinds (_::rest) n c = anyUsePathBinds rest n c
 -- that silently keeps the floor today can therefore start being decided correctly then;
 -- the change is monotone in the right direction, but it IS a behaviour change and this
 -- unit's fixtures do not cover it.
-usePathWitnesses : UsePath -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
-usePathWitnesses path n (ident, _) =
+usePathWitnesses : UsePath -> Bool -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
+usePathWitnesses path wide n (ident, (iface, _, _, _)) =
   let dep = usePathModuleId path
-  dep /= "core" && usePathBindsName path n && depExportsMethodIdent dep n ident
+  dep /= "core"
+    && usePathAdmitsDecl path wide n iface
+    && depExportsMethodIdent dep n ident
+
+-- ── #1351 L2 (MIGRATE Leg 2b): the MEMBER filter admits an INTERFACE spelling ──
+-- SHADOW-SEMANTICS S2-DECL clause (c) admits a declaration `I` in module `M` iff `I`
+-- is NAMEABLE in `M` (S1-NS(a)) — an INTERFACE-name question.  The member filter used
+-- to ask only `usePathBindsName path n`, the METHOD name, and those are different
+-- tests: `import zmodI.{IZ, zf}` makes `IZ` nameable while binding no `mth`, so
+-- `IZ`'s candidate went UNWITNESSED, `importedMethodEntry` saw zero candidates, and
+-- the overlay declined to the bare-name last-write-wins FLOOR — whose winner is
+-- module-processing order.  That fall-through IS #1351's order-dependence at Leg 2b,
+-- MEASURED six-for-six (RUN-METHID-058).
+--
+-- 🚨 THIS IS NOT A-2.5's DELETED `usePathNamesMember`, AND THE DIFFERENCE IS THE WHOLE
+-- SAFETY ARGUMENT.  A-2.5 put a bare interface-NAME compare in the SECOND conjunct,
+-- i.e. it decided WHICH DECLARATION by spelling, and interface names are not globally
+-- unique — that is what shipped #1275 and #1272.  Here the spelling only widens the
+-- FIRST conjunct, the member filter, which is inherently a spelling question (an
+-- import member list IS a list of spellings).  The identity conjunct
+-- `depExportsMethodIdent dep n ident` is UNCHANGED and still pins which declaration is
+-- witnessed, so #1275's BYSTANDER (a same-named interface in another module) is still
+-- refused: its spelling passes the member filter, its `Ident` does not appear in
+-- `dep`'s export row, and the witness is False.  No second resolver is introduced —
+-- this is `applyMethodScopeOverrides`' own admission test, widened in place.
+--
+-- Failure direction: strictly MORE candidates can now be witnessed.  On 0 or ≥2 the
+-- overlay still declines to the floor (today's answer); it overrides only on exactly
+-- one.  So this can turn "0 → floor" into "1 → the admitted declaration", which is
+-- the intended fix, and "1 → override" into "2 → floor", a fall-back to today's
+-- behaviour, never a new third answer.
+--
+-- 🚨 F23 REPAIR: that last sentence was the defect.  "1 → override" becoming
+-- "2 → floor" is NOT a harmless fall-back to today's behaviour when the ONE was the
+-- correct answer and the floor is bare-name last-write-wins — MEASURED, it turned
+-- nine method_scope fixtures into four silent accepts and five wrong-interface
+-- rejects.  So [wide] is no longer always True: it is False at
+-- `importedMethodEntry`'s rung 1 (method-name imports decide when they say anything)
+-- and True only at rung 2, where rung 1 admitted nothing.  See the ladder argument at
+-- `importedMethodEntry`.
+usePathAdmitsDecl : UsePath -> Bool -> String -> IfaceRef -> Bool
+usePathAdmitsDecl path wide n iface = usePathBindsName path n
+  || wide && usePathBindsName path iface.irName
 
 -- `None` from importedBindings is the WILDCARD form (`import m.*`), which binds every
 -- name the dependency exports — and, unlike A-2.5's deleted `usePathNamesMember`, that
@@ -22082,6 +22405,8 @@ checkBodyImpl seed mode prog0 =
       driverState.value.standaloneValuesRef := (dedup (importerShadows ++ definerShadows))
       perRun.value.shadowStandaloneSchemesRef := (pickStandaloneSchemes importerShadows seed)
       driverState.value.methodDispatchIdxRef := crossRun.value.universeMethodDispatchIdxRef.value
+      -- #1351 L1 EXPAND: lockstep copy of the identity-keyed universe.  No reader yet.
+      driverState.value.methodDispatchIdxByIdRef := crossRun.value.universeMethodDispatchIdxByIdRef.value
       perRun.value.funConstraintsRef := crossRun.value.crossModuleFunConstraintsRef.value
       perRun.value.funConstraintIfacesRef := crossRun.value.crossModuleFunConstraintIfacesRef.value
       -- B-2.2-f (#1113): the declared-prefix sidecar rides the IDS table — every
@@ -22307,7 +22632,19 @@ checkBodyImpl seed mode prog0 =
       perRun.value.methodShadowNamesRef := methodNames
       []
     Module _ _ implDecls =>
-      let sm = pickSchemes importerShadows (ifaceMethodSchemes implDecls)
+      -- #1351 L1 EXPAND.  `ifaceMethodSchemes implDecls` is hoisted into a binding so it
+      -- is called EXACTLY ONCE, as before: it is effectful (mints tyvar ids, registers
+      -- method constraints), so a second call here would shift ids and break this leaf's
+      -- zero-behaviour-change property.  `pickSchemes` is pure, so hoisting moves no
+      -- effect relative to the `methodConstraintsRef` write below.
+      let ifaceSchemes = ifaceMethodSchemes implDecls
+      perRun.value.ifaceMethodSchemesByIdRef := (zipIfaceMethodSchemeIds (ifaceMethodSchemeIds implDecls) ifaceSchemes)
+      -- #1351 L2 MIGRATE.  The importer-shadow layer now binds each shadowed method
+      -- name to the scheme of the declaration THIS module's import scope admits
+      -- (`applyMethodScopeOverrides`), not to `lookupAssoc`'s decl-walk first match.
+      -- Falls back to the bare-name answer on a miss — see `pickSchemesByDecl`.
+      let sm = pickSchemesByDecl importerShadows ifaceSchemes
+        perRun.value.ifaceMethodSchemesByIdRef.value
       perRun.value.methodConstraintsRef := (perRun.value.methodConstraintsRef.value ++ crossRun.value.crossModuleMethodConstraintsRef.value)
       sm
   let env1 = extendVars (extendVars (extendVars dataEnv seed) globalS) shadowLayer
@@ -25488,6 +25825,51 @@ declIfaceMethods (DInterface { name, typarams, methods, ... }) =
   methodSchemes (declGradedScope typarams methods) typarams methods
 declIfaceMethods _ = []
 
+-- #1351 L1 (EXPAND): the IDENTITY-CARRYING sibling of `ifaceMethodSchemes` above.
+--
+-- 🚨 WHY THIS IS A KEY-ONLY WALK AND NOT A SECOND `ifaceMethodSchemes` CALL.  A second
+-- call would NOT be observationally neutral: `methodSchemes` mints tyvar ids through
+-- `sigToSchemeTvsIn` (off `PerRun.tyvarCounter`) AND registers method-level constraints
+-- into `methodConstraintsRef`.  Re-obtaining the same schemes under a richer key that way
+-- would shift every downstream tyvar id — an observable change, which L1 (a pure-addition
+-- leaf) may not make.  `methodSchemesPure` is no escape: it drops the registration but
+-- still mints ids.  So this walk produces ONLY the keys, and `zipIfaceMethodSchemeIds`
+-- pairs them against the single, existing scheme list.
+--
+-- The pairing is positional, so the two walks must stay arm-for-arm identical.  Note in
+-- particular that `declIfaceMethods` does NOT unwrap `DAttrib` (an attributed interface
+-- contributes no schemes) and neither does `declIfaceMethodIds` — that asymmetry against
+-- `argDispatchOfDeclById`, which DOES unwrap it, is inherited from the functions being
+-- mirrored, not a slip.
+--
+-- ⚠️ NOTHING READS THE RESULT YET — it is the substrate leaf L2 migrates `pickSchemes`
+-- onto.  Written-only by design; see the matching note on `argDispatchIndicesById`.
+ifaceMethodSchemeIds : List Decl -> List (IfaceRef, String)
+ifaceMethodSchemeIds [] = []
+ifaceMethodSchemeIds (d::rest) = declIfaceMethodIds d
+  ++ ifaceMethodSchemeIds rest
+
+declIfaceMethodIds : Decl -> List (IfaceRef, String)
+declIfaceMethodIds (DInterface { name, methods, ifaceOrigin, ... }) = map
+  (ifaceMethodIdRow IfaceRef { irName = name, irOrigin = ifaceOrigin })
+  methods
+declIfaceMethodIds _ = []
+
+ifaceMethodIdRow : IfaceRef -> IfaceMethod -> (IfaceRef, String)
+ifaceMethodIdRow iface (IfaceMethod mname _ _) = (iface, mname)
+
+-- Pair `ifaceMethodSchemeIds`' keys against `ifaceMethodSchemes`' own output,
+-- positionally: the two walks visit the same decls in the same order and emit exactly one
+-- row per `IfaceMethod` of every `DInterface`, so row i of one is row i of the other.
+-- Ragged input truncates rather than raising — this is written-only substrate, and a
+-- length disagreement must not be able to fail a build that is otherwise fine.  L2, the
+-- first reader, is where such a mismatch becomes a graded fact.
+zipIfaceMethodSchemeIds : List (IfaceRef, String) -> List (String, Scheme) -> List ((IfaceRef, String), Scheme)
+zipIfaceMethodSchemeIds [] _ = []
+zipIfaceMethodSchemeIds _ [] = []
+zipIfaceMethodSchemeIds (k::ks) ((_, s)::ss) =
+  (k, s) :: zipIfaceMethodSchemeIds ks ss
+
 -- Error-path B4: register each interface method → (iface, typarams, declared Ty)
 -- so checkImplObligations can recover its dispatch (iface-param) types at a call
 -- site.  Built from the SAME prog the impl lookup uses, so an interface absent
@@ -27730,6 +28112,10 @@ appendUniverseAccums prog =
   -- old `argDispatchIndices (accAll ++ prog)` flatMap produced; the sole reader is a
   -- first-wins lookupAssoc, so a prior-module entry this module never names is never queried.
   crossRun.value.universeMethodDispatchIdxRef := (crossRun.value.universeMethodDispatchIdxRef.value ++ argDispatchIndices prog)
+  -- #1351 L1 EXPAND: the identity-keyed sibling accumulator, appended in the SAME order,
+  -- in the SAME fold, so it cannot come to describe a different universe than the line
+  -- above.  No reader yet — L3 migrates `methodDispatchIdx` onto it.
+  crossRun.value.universeMethodDispatchIdxByIdRef := (crossRun.value.universeMethodDispatchIdxByIdRef.value ++ argDispatchIndicesById prog)
   -- #1112 A-3.4 PR2: the #154 PR3 leg that grew the three `obUniv*` obligation-universe
   -- accumulators here is GONE.  Its consumer — the Module arm's `obUniv` — now projects
   -- stage K's `IE` at the reader's ordinal instead (`ieUniverseAt`), so this fold was
@@ -28232,6 +28618,57 @@ pickSchemes [] _ = []
 pickSchemes (n::ns) table = match lookupAssoc n table
   Some s => (n, s) :: pickSchemes ns table
   None => pickSchemes ns table
+
+-- ── #1351 L2 (MIGRATE Leg 2b): the IDENTITY-SCOPED picker for the shadow layer ──
+--
+-- `pickSchemes` above answers "which scheme does the bare name [n] have" with
+-- `lookupAssoc` — FIRST MATCH over `ifaceMethodSchemes`' decl-walk order.  When two
+-- interfaces declare the same method name, that order is module-processing order, so
+-- the scheme an importer shadow is CHECKED AGAINST is decided by import-clause order.
+-- MEASURED six-for-six (RUN-METHID-058): on `#1351`'s corpus the accept/reject split
+-- tracks this row's identity with zero exceptions — `IA.mth : a -> Int -> Int`
+-- unifies at `a := String` and accepts (wrongly, silently, value `7`); `IZ.mth : Int
+-- -> b -> Int` does not and rejects loudly.  This is Leg 2b.
+--
+-- The successor asks `applyMethodScopeOverrides`' ALREADY-RESOLVED answer — the
+-- declaration THIS module's own import scope admits for [n] — and takes that
+-- declaration's own scheme row out of L1's identity-keyed table.  It is a LOOKUP, not
+-- a second resolver: the resolution happened at `methodIfaceParamsRef`'s population
+-- site and is only consulted here (the named prohibition in this leaf's packet).
+--
+-- ⚠️ MISS FALLS BACK TO `pickSchemes`' OWN ANSWER, deliberately.  Both misses are
+-- real: `methodIfaceParamsRef` holds no entry for [n] (not an interface method at
+-- all), or the admitted declaration contributes no row to `ifaceMethodSchemesByIdRef`
+-- (its interface is not among `implDecls`).  A miss must not DROP the binding — that
+-- would remove a name from the shadow layer, i.e. turn a checked occurrence into an
+-- unchecked one, `exit 1 → exit 0`, a severity INCREASE.  Falling back keeps exactly
+-- today's answer for every shape this leaf does not decide.
+pickSchemesByDecl : List String -> List (String, Scheme) -> List ((IfaceRef, String), Scheme) -> List (String, Scheme)
+pickSchemesByDecl [] _ _ = []
+pickSchemesByDecl (n::ns) table byId = match admittedSchemeFor n byId
+  Some s => (n, s) :: pickSchemesByDecl ns table byId
+  None => match lookupAssoc n table
+    Some s => (n, s) :: pickSchemesByDecl ns table byId
+    None => pickSchemesByDecl ns table byId
+
+-- The declaration `applyMethodScopeOverrides` resolved for [n] IN THIS MODULE, then
+-- that declaration's own scheme row.  `None` at either step means "this module's
+-- scope does not decide it", and the caller keeps the bare-name answer — never a
+-- guess, the same discipline `scopedMethodEntry` states for the table itself.
+admittedSchemeFor : String -> List ((IfaceRef, String), Scheme) -> Option Scheme
+admittedSchemeFor n byId = match omLookup n perRun.value.methodIfaceParamsRef.value
+  None => None
+  Some (iface, _, _, _) => lookupSchemeById iface n byId
+
+-- ⚠️ `sameTyConHead`, not a bare `irName` compare: this is a LOOKUP, where a false HIT
+-- is silent wrongness (the wrong interface's scheme), so absence-makes-no-claim plus
+-- name equality is the comparator the file's own rule (`cohSameIface`'s header) picks
+-- for this direction.  A false MISS costs only the fall-back to today's answer.
+lookupSchemeById : IfaceRef -> String -> List ((IfaceRef, String), Scheme) -> Option Scheme
+lookupSchemeById _ _ [] = None
+lookupSchemeById iface n (((ir, mn), s)::rest)
+  | mn == n && sameTyConHead ir.irName ir.irOrigin iface.irName iface.irOrigin = Some s
+  | otherwise = lookupSchemeById iface n rest
 
 -- Bug C: for each importer-shadow name, pick from [table] the scheme that is the
 -- imported STANDALONE — the one whose receiver (first arrow domain) heads in a
@@ -30514,6 +30951,8 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   let _ = (driverState.value.userIfaceNamesRef := (collectIfaceNames (flatMap snd modules)))  -- WS-1b: gate super-expansion to user interfaces
   let rpNames = returnPosMethodNames allDecls
   driverState.value.argDispatchIdxRef := (argDispatchIndices allDecls)
+  -- #1351 L1 EXPAND: the identity-keyed sibling, written in lockstep.  No reader yet.
+  driverState.value.argDispatchIdxByIdRef := (argDispatchIndicesById allDecls)
   let argNames = map fst driverState.value.argDispatchIdxRef.value
   let _ = setDictEligible (moduleUserFnNames modules)
   -- #194: eliminate the redundant MANDATORY promotion-discovery whole-program

@@ -1,4 +1,23 @@
 issue: 1351
+what: RE-CUT 2026-08-21 at sprint/method-identity leaf L2 (fix/1351-pin-recut, per
+what: RUN-METHID-072 action 4). L2 (compiler/types/typecheck.mdk) binds an importer
+what: shadow to the ADMITTED declaration's scheme, which makes ALL SIX orderings of
+what: this repro's import graph REJECT instead of the old accept-on-three/reject-
+what: on-three split -- main.mdk (this fixture's pinned ordering) now rejects too.
+what: Verified first-hand on the sprint/method-identity binary (MEDAKA_STRICT=1) at
+what: 030cfb2a (L2's own commit):
+what:   medaka check --json main.mdk -> exit 1, one diagnostic on main.mdk:
+what:     T-TYPE-MISMATCH 14:20-14:25 "Type mismatch: Int vs String"
+what:   medaka run main.mdk          -> exit 1, same diagnostic on stderr, stdout empty
+what:   medaka run order-swapped.mdk -> exit 1, IDENTICAL diagnostic (was already
+what:     REJECTED before L2 -- now both orderings agree, which is the point)
+what:   medaka run control.mdk       -> exit 0, stdout 99 (unchanged -- see why-control)
+what: #1351 IS STILL OPEN. RUN-METHID-057 ruled a uniform reject is order-INVARIANCE,
+what: not convergence to the hand-derived correct answer (99, per control.mdk) --
+what: convergence is owed to a later slice, S-impl-query-by-declaration. Only the
+what: MANIFESTATION moved: from a wrong value (7) at exit 0 to a loud reject at exit
+what: 1. The pin is RE-CUT to the new signature below, on the SAME program, for the
+what: SAME open issue -- not drained, not deleted, not re-pointed to a different file.
 what: `universeMethodDispatchIdxRef` (compiler/types/typecheck.mdk) maps a BARE
 what: interface-method name to that method's dispatch argument index, accumulated
 what: across the whole import graph by plain concatenation, and read by a first-match
@@ -40,24 +59,33 @@ what: suite exists: deleting it would have left an OPEN, `verified`, S0 issue wi
 what: mechanical guard, on the strength of a spelling that had stopped reaching the
 what: defect. The not-nameable spelling is separately guarded, as a POSITIVE test, by
 what: test/shadow_fixtures/i17_importer_two_ifaces_neither_nameable/.
-cmd: run main.mdk
-exit: 0
-stdout: 7
+cmd: check-json main.mdk
+exit: 1
+diag-code: T-TYPE-MISMATCH 14:20-14:25
 control: run control.mdk
-why-verb: `run` rather than `build-run`: the defect is reached in the shared front end
-why-verb: (methodDispatchIdx / recordRLocalSite, compiler/types/typecheck.mdk), which
-why-verb: `medaka run` and `medaka build` both go through, so the two engines are not
-why-verb: two independent observations here and `run` is the cheaper verb (no clang).
-why-verb: The native arm was confirmed by hand anyway (see `what:` above): `medaka
-why-verb: build main.mdk` exits 0 and the produced binary prints the same 7 at exit 0.
-why-verb: `check` cannot be the verb: check is clean (exit 0, zero diagnostics) on
-why-verb: main.mdk -- the silence is precisely the S0, so there is no diagnostic for
-why-verb: `check --json` to key on.
-why-stdout: the observable is a WRONG VALUE AT EXIT 0, not a wrong exit code alone
-why-stdout: (`exit: 0` by itself asserts nothing -- a correct program also exits 0).
-why-stdout: `7` is exactly `impl IZ String`'s body, so the only thing that can move
-why-stdout: this string is a change to which candidate's dispatch geometry the call
-why-stdout: resolves through -- which is the defect.
+why-verb: RE-CUT 2026-08-21 (was `run main.mdk`, `exit: 0`, `stdout: 7`; see the
+why-verb: RE-CUT `what:` paragraph above). L2 made this graph REJECT instead of
+why-verb: silently accepting, so the reason the old pin gave for excluding `check`
+why-verb: ("check is clean -- the silence IS the S0") no longer holds: check --json
+why-verb: now emits exactly one diagnostic on main.mdk. `check-json` is the more
+why-verb: discriminating verb available for a loud-reject observable -- unlike
+why-verb: plain `run`, whose diagnostic lands on stderr (ungraded by this suite's
+why-verb: `run` verb) and whose stdout on failure is simply empty, which would pin
+why-verb: `exit: 1` + no stdout and match ANY unrelated type error in this fixture,
+why-verb: not specifically this one. `check --json`'s diagnostic renders to the
+why-verb: graded stream, so `diag-code` can key on it directly. Confirmed by hand
+why-verb: (see `what:` above) that plain `medaka run main.mdk` also now rejects
+why-verb: (exit 1, same message on stderr) and that native `build` is unaffected by
+why-verb: this re-cut (the defect and its fix both live in the shared front end,
+why-verb: typecheck.mdk, which `run`/`check`/`build` all pass through identically).
+why-diag-code: `diag-code` (code + range, message NOT asserted) rather than `diag`
+why-diag-code: (full message) per this gate's own default (TESTING-DESIGN.md S4.5):
+why-diag-code: the CODE (`T-TYPE-MISMATCH`) and RANGE (14:20-14:25, the `"abc"`
+why-diag-code: argument literal at `mth "abc" 5`) are what the defect actually
+why-diag-code: pins -- a String reaching a call site whose only satisfiable
+why-diag-code: candidate expects Int there. The message prose ("Type mismatch: Int
+why-diag-code: vs String") could reasonably be reworded by an unrelated diagnostics
+why-diag-code: pass; the code+range would not move for that reason.
 why-control: control.mdk is main.mdk with ONE variable removed: the `import
 why-control: zmodI.{IZ, zf}` line (and the then-unreachable `zf 0` use). Only IA is in
 why-control: the module graph, so there is nothing bare-name `mth` can collide with
@@ -74,6 +102,12 @@ why-note: in the permutation differential, ledgered in test/IMPORT-ORDER-LEDGER.
 why-note: where all six orderings are compared and the two distinct signatures are
 why-note: pinned. A value pin cannot grade order-invariance and that gate cannot pin
 why-note: a hand-derived value; the two are complementary and both are needed.
+why-note: POST-L2: order-swapped.mdk now ALSO rejects with the identical diagnostic
+why-note: (see the RE-CUT `what:` paragraph) -- it still cannot serve as this
+why-note: fixture's `control:` (this suite requires the control to exit 0), so the
+why-note: division of labor is unchanged: this fixture pins the hand-derived
+why-note: observable on ONE ordering, the import-order gate grades invariance
+why-note: across all six.
 why-note: TRAP (per the issue's own "Trap for whoever pins or fixes this" section):
 why-note: `methodDispatchIdx`'s only caller, `recordRLocalSite`, is gated on `not
 why-note: (contains name driverState.value.standaloneValuesRef.value)` -- WITHOUT a

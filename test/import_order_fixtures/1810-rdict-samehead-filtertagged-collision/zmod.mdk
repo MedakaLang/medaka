@@ -1,0 +1,14 @@
+-- #1810 import_order case: the other, unrelated module. No import edge either
+-- direction. Same spelling, same head type Int, different body.
+export interface Same a where
+  sizeOf : a -> Int
+
+impl Same Int where
+  sizeOf n = n + 100
+
+zWrap : Same a => a -> Int
+zWrap x = sizeOf x
+
+export
+zValue : Int
+zValue = zWrap 10

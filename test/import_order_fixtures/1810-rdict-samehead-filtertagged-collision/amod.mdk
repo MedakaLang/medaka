@@ -1,0 +1,13 @@
+-- #1810 import_order case: same-spelled interface, SAME head type as zmod (Int).
+export interface Same a where
+  sizeOf : a -> Int
+
+impl Same Int where
+  sizeOf n = n + 1
+
+aWrap : Same a => a -> Int
+aWrap x = sizeOf x
+
+export
+aValue : Int
+aValue = aWrap 10

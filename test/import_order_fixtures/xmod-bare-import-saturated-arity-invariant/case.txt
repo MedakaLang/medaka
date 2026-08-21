@@ -1,0 +1,36 @@
+entry: main.mdk
+what: REGRESSION GUARD for #1668 (xmod-saturated-bare-import-arity-shadow), drained
+what: by slice S-emit-arity-by-declaration. Two modules declare interfaces whose
+what: methods share the bare name `step` at DIFFERENT declared arities --
+what: `pmod.P.step : a -> Int` (1 user arg, and the program's only impl) and
+what: `qmod.Q.step : b -> Int -> Int` (2, no impl anywhere). `main.mdk` imports qmod
+what: BARE -- binding no names at all, but still entering qmod's interface
+what: DECLARATION into the module graph -- and calls `step 5`, fully saturated.
+what:
+what: UNLEDGERED ON PURPOSE. An unledgered case in this corpus is graded INVARIANT
+what: across every permutation of its import clauses -- precisely the property #1668
+what: violated -- so no ground truth is pinned. This is the [G-PIN-DRAIN] re-point of
+what: `test/must_fail_fixtures/1668-xmod-saturated-bare-import-arity-shadow/`, whose
+what: pmod.mdk / qmod.mdk / main.mdk are copied here BYTE-FOR-BYTE (copied, not
+what: symlinked -- a separate corpus, per [T-SHARED-CORPUS]).
+
+## HOW THE EXPECTED VALUES WERE ESTABLISHED
+
+Nothing is pinned as a value: this case grades ORDER-INVARIANCE only. The correct
+answer is hand-derived independently: `step 5` denotes `impl P Int`'s `step x = x + 1`
+(P is the only interface `main.mdk` names; qmod binds nothing), so `step 5 = 6` and
+`step 5 == 6` is **True** on every correct arm.
+
+MEASURED on the fixed binary (slice S-emit-arity-by-declaration, cold `make medaka`,
+emitter regenerated twice per [T-EMITTER-BENCH], MEDAKA_STRICT=1): both orderings,
+`run` -> True exit 0 and `build` + EXECUTE -> True exit 0.
+
+BEFORE the fix, measured on the BASE arm (cold-built at
+19b76b9f8490c56ff7a063ccf61434550de8107c): the qmod-first ordering built a binary
+that printed **False** at exit 0 -- the emitter had lowered the saturated `step 5`
+as a 1-of-2 PARTIAL APPLICATION and `== 6` compared the resulting closure POINTER
+against the tagged Int 6 -- while the pmod-first ordering printed True. `check` and
+`run` were correct on BOTH orderings even then, which is why the guard has to reach
+`build`+EXECUTE. The same shape was also measured on the WASM arm: at BASE
+`$mdk_impl_Int_step` was emitted with TWO params and `wasm-tools validate` rejected
+the module; after the fix it has ONE and validates.

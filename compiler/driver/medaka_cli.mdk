@@ -557,12 +557,25 @@ renderTripleWarnings (path, src, diags) =
 -- per-module diagnostics for the human message, falling back to the generic
 -- deflection only if analyzeProject surfaces none (never leaves the user with
 -- exit 1 and no text).
+--
+-- 🚨 #1813: the None arm must NOT send the user to `medaka check`.  This arm fires
+-- EXACTLY when `analyzeProject` (check's own predicate) surfaced nothing while the
+-- elaborate pass armed `hadTypeErrors` — i.e. precisely the #1812 divergence, where
+-- `medaka check` on this program exits 0 and reports success.  The old text read
+-- "Run `medaka check` for details" and so named the one command guaranteed to
+-- confirm the wrong thing.  The elaborate pass's own diagnostic text is NOT
+-- reachable here (`elaborateModules` returns decls, not diags, and the sticky
+-- accumulator `hadTypeErrors` reads is a Bool), so the arm still cannot print the
+-- real error — but it now says WHERE the error was detected and warns that `check`
+-- may not show it, instead of promising detail that command will not deliver.
 locatedOrGeneric : String -> List String -> String -> String -> <IO> String
 locatedOrGeneric target roots rsrc csrc = match locatedProjectErrors target roots rsrc csrc
   Some t => t
   None => "error: type error in "
     ++ target
-    ++ ". Run `medaka check` for details"
+    ++ ", detected during elaboration (the run/build type pass); no located"
+    ++ " diagnostic is available for it, and `medaka check` may not report this"
+    ++ " program at all — see issue #1812"
 
 -- Route by module count: a single loaded module (no non-core imports) ⇒ the
 -- single-file runCheck (byte-identical full dump); >1 module ⇒ the multi-module

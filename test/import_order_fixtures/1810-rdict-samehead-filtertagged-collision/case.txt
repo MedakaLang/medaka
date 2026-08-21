@@ -1,0 +1,21 @@
+entry: main.mdk
+what: #1810 rdict/filterTagged same-head collision -- two unrelated modules each
+what: declare an interface spelled `Same` with a method spelled `sizeOf`, both
+what: with an impl at the SAME head tycon (Int) but different bodies (+1 vs
+what: +100). The runtime-dict dispatcher the emitter builds for `sizeOf`
+what: (implsOf/filterTagged, compiler/backend/llvm_emit.mdk:1267-1274) filters
+what: candidate impls by method name alone, discarding the `iface` field it
+what: already has bound. Import-line order alone decides which impl's answer
+what: BOTH components of the pair get.
+
+Sources are the same two modules pinned by
+test/must_fail_fixtures/1810-rdict-filtertagged-drops-iface-identity/ (amod.mdk,
+zmod.mdk), copied byte-for-byte into this directory as a genuinely separate
+corpus per the shared-corpus trap.
+
+## HOW THE EXPECTED VALUES WERE ESTABLISHED
+
+The signatures below are exactly what `sh test/diff_compiler_import_order.sh`
+itself printed for this case while UNLEDGERED, transcribed verbatim, on a cold
+`make medaka` of this worktree at commit ba8d9eb62cac4ba219069f4db1669e265ae39e7a,
+MEDAKA_STRICT=1.

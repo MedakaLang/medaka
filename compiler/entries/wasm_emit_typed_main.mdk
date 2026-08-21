@@ -861,7 +861,7 @@ refTrapStateAbortProgram = CProgram
   []
 
 implSelfInput : WasmEmitInput
-implSelfInput = makeWasmEmitInput [("walk", ("Loop", 2))] [] [] False []
+implSelfInput = makeWasmEmitInput [("walk", ("Loop", "Loop", 2))] [] [] False []
 
 implSelfLoc : Loc
 implSelfLoc = Loc "<impl-self-state>" 1 1 1 1
@@ -964,13 +964,27 @@ reemitDefaultState _ =
 defaultStateLoc : Loc
 defaultStateLoc = Loc "<default-state>" 1 1 1 1
 
+-- The P/U pair is deliberately parallel (prelude half vs untyped half); the two
+-- inputs coinciding is a property of THIS probe, not a duplicate to consolidate.
 defaultStateInputP : WasmEmitInput
-defaultStateInputP =
-  makeWasmEmitInput [("synthDefault", ("DefaultFace", 1))] [] [] False []
+-- lint-disable-next-line rule-duplicate-body
+defaultStateInputP = makeWasmEmitInput
+  [("synthDefault", ("DefaultFace", "DefaultFace", 1))]
+  []
+  []
+  False
+  []
 
+-- The P/U pair is deliberately parallel (prelude half vs untyped half); the two
+-- inputs coinciding is a property of THIS probe, not a duplicate to consolidate.
 defaultStateInputU : WasmEmitInput
-defaultStateInputU =
-  makeWasmEmitInput [("synthDefault", ("DefaultFace", 1))] [] [] False []
+-- lint-disable-next-line rule-duplicate-body
+defaultStateInputU = makeWasmEmitInput
+  [("synthDefault", ("DefaultFace", "DefaultFace", 1))]
+  []
+  []
+  False
+  []
 
 defaultStateCall : String -> CExpr
 defaultStateCall tag =
