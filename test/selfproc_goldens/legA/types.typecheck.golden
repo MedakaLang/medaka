@@ -17,6 +17,7 @@ addRecordIdentCand : String -> TyConOrigin -> String -> (Map String (List (Ident
 addRecordIdentRaw : String -> String -> Ident -> List Field -> DataEnv -> DataEnv
 addVariantIdentsRaw : String -> TyConOrigin -> List Variant -> DataEnv -> DataEnv
 addVariants : TcEnv -> List (String, Mono) -> List (String, Ref Effvar) -> List Int -> List Int -> Mono -> List Variant -> TcEnv
+admittedSchemeFor : String -> List ((IfaceRef, String), Scheme) -> Option Scheme
 aliasArityMsg : String -> Int -> Int -> String
 aliasConstraintEntries : List Decl -> List ((String, String), a) -> List (String, a)
 aliasDfsVisit : List (String, List String) -> Ref (List String) -> Ref (List String) -> Ref (List String) -> String -> Unit
@@ -1139,6 +1140,7 @@ lookupQualPayload : String -> String -> List ((String, String), a) -> Option a
 lookupRecordByMangledHead : Mono -> String -> String -> Option (String, RecordInfo)
 lookupRecordByName : String -> Option RecordInfo
 lookupRecordForReceiver : Mono -> String -> Option RecordInfo
+lookupSchemeById : IfaceRef -> String -> List ((IfaceRef, String), Scheme) -> Option Scheme
 lookupSchemeIface : String -> Int -> List ((String, Int), List VecObl) -> Option IfaceRef
 lookupSchemeObls : String -> Int -> List ((String, Int), List VecObl) -> Option (List VecObl)
 lookupSchemeOblsByName : String -> List ((String, Int), List VecObl) -> Option (List VecObl)
@@ -1316,6 +1318,7 @@ phantomMethodMsg : String -> List String -> (String, Ty, List (String, List Kind
 phantomMethodMsgs : CeRow -> List String
 pickMostSpecificEntry : List Mono -> List KeyEntry -> Option KeyEntry
 pickSchemes : List String -> List (String, Scheme) -> List (String, Scheme)
+pickSchemesByDecl : List String -> List (String, Scheme) -> List ((IfaceRef, String), Scheme) -> List (String, Scheme)
 pickStandaloneSchemes : List String -> List (String, Scheme) -> List (String, Scheme)
 pinLocalIfDictForwarded : Int -> Int -> String -> Option Loc -> Mono -> Bool
 pinnedEntryMatches : (Mono, String, String, Option Loc) -> Mono -> Mono -> Bool
@@ -1805,6 +1808,7 @@ useAdmittedRows : Bool -> List Decl -> List (String, (String, String))
 useDefinerRows : Bool -> UsePath -> List (String, (String, String))
 useFastIfaceMethodTy : Ref Bool
 useModuleId : Decl -> List String
+usePathAdmitsDecl : UsePath -> String -> IfaceRef -> Bool
 usePathBindsCtor : UsePath -> String -> String -> Bool
 usePathBindsName : UsePath -> String -> Bool
 usePathModuleId : UsePath -> String
