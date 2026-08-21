@@ -1,0 +1,14 @@
+-- Control for #1810: identical shape, but the two impls sit at DIFFERENT head
+-- tycons (Int vs Widget) so the runtime dispatcher never collides.
+export interface Same a where
+  sizeOf : a -> Int
+
+impl Same Int where
+  sizeOf n = n + 1
+
+aWrap : Same a => a -> Int
+aWrap x = sizeOf x
+
+export
+aValue : Int
+aValue = aWrap 10

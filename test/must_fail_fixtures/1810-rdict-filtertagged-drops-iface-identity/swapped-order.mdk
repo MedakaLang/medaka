@@ -1,0 +1,7 @@
+-- Evidence only (ungraded): main.mdk with the two import lines SWAPPED, nothing
+-- else, showing the wrong value flips with import order — the discharge condition
+-- distinguishing this from a mere wrong-constant bug.
+import zmod.{zValue}
+import amod.{aValue}
+
+main = println (aValue, zValue)

@@ -1,0 +1,15 @@
+-- #1810 pin: same-spelled interface, SAME head type as zmod (Int). implsOf/filterTagged
+-- (compiler/backend/llvm_emit.mdk:1267-1274) filters the runtime-dict dispatcher's
+-- candidate impls by METHOD NAME ALONE — the `iface` field is bound and never read.
+export interface Same a where
+  sizeOf : a -> Int
+
+impl Same Int where
+  sizeOf n = n + 1
+
+aWrap : Same a => a -> Int
+aWrap x = sizeOf x
+
+export
+aValue : Int
+aValue = aWrap 10
