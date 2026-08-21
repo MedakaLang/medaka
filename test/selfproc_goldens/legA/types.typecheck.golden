@@ -17,6 +17,7 @@ addRecordIdentCand : String -> TyConOrigin -> String -> (Map String (List (Ident
 addRecordIdentRaw : String -> String -> Ident -> List Field -> DataEnv -> DataEnv
 addVariantIdentsRaw : String -> TyConOrigin -> List Variant -> DataEnv -> DataEnv
 addVariants : TcEnv -> List (String, Mono) -> List (String, Ref Effvar) -> List Int -> List Int -> Mono -> List Variant -> TcEnv
+admittedIfaceFor : String -> Option IfaceRef
 admittedSchemeFor : String -> List ((IfaceRef, String), Scheme) -> Option Scheme
 aliasArityMsg : String -> Int -> Int -> String
 aliasConstraintEntries : List Decl -> List ((String, String), a) -> List (String, a)
@@ -562,6 +563,7 @@ discoverPromoted : List Decl -> List Decl -> List String -> List String
 discoverPromotedJoint : List Decl -> List Decl -> List String -> List String -> List String -> List String
 discoverPromotedModules : List Decl -> List Decl -> List (String, List Decl) -> List String -> List String -> List String
 dispHeadTab : HeadKey -> TabKey
+dispatchIdxScoped : String -> List ((IfaceRef, String), Int) -> List (String, Int) -> Option Int
 dispatchMonosOf : List String -> Ty -> Mono -> List Mono
 dispatchTyparams : List String -> List String
 distinctIdentsIn2 : List (Ident, String) -> Bool
@@ -827,7 +829,7 @@ ieHeadProbeEnv : ImplEnv
 ieHeadProbeZmod : List Decl
 ieHeadRows : Option HeadKey -> ImplEnv -> List ImplRow
 ieImplExistsForHead : ImplEnv -> String -> HeadKey -> Bool
-ieImplExistsForHeadGo : List ImplRow -> String -> TabKey -> Bool
+ieImplExistsForHeadGo : List ImplRow -> String -> TabKey -> Option IfaceRef -> Bool
 ieIndexRows : List ImplRow -> ImplEnv -> ImplEnv
 ieInsertRow : ImplRow -> ImplEnv -> ImplEnv
 ieInsertRowAt : TabKey -> ImplRow -> ImplEnv -> ImplEnv
@@ -838,6 +840,7 @@ ieProbeBareKey : RegKey
 ieProbeBlobHead : HeadKey
 ieProbeEnv : ImplEnv
 ieProbeKey : String -> RegKey
+ieRowAdmittedBy : IfaceRef -> Option IfaceRef -> Bool
 ieRowHeadMatches : List Ty -> List Mono -> Bool
 ieRowHeadTriple : Option ImplRow -> Option (Ty, List Ty, List Require)
 ieRowIfaceMatches : IfaceRef -> IfaceRef -> Bool
@@ -1133,6 +1136,7 @@ lookupBy : (a -> a -> Bool) -> a -> List (a, b) -> Option b
 lookupCtor : TcEnv -> String -> Option Scheme
 lookupCtxKind : Loc -> List (Loc, String) -> Option String
 lookupDomain : String -> List (String, Param) -> Param
+lookupIdxById : IfaceRef -> String -> List ((IfaceRef, String), Int) -> Option Int
 lookupIfaceById : Int -> List VecObl -> Option IfaceRef
 lookupLocalFlag : TcEnv -> String -> Bool
 lookupMethodCand : Ident -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Option (IfaceRef, List String, Ty, List (String, List Kind))
