@@ -1,0 +1,17 @@
+-- UNGRADED EVIDENCE (this gate executes only `cmd:` and `control:`).
+--
+-- THE SEVERITY PROBE, and the post-drain guard's other half. It is the S0 this
+-- defect is NOT: a body that is ill-typed under its own interface's declaration and
+-- well-typed only under the same-spelled OTHER one. `medaka check` REJECTS it
+-- (measured — see claim.txt), so the wrong-signature attribution never becomes a
+-- wrong ACCEPTANCE on the check path; that is why #1647 is S1 and not S0.
+--
+-- ⚠️ Re-run this by hand before closing #1647 on a drain: a "fix" that merely stops
+-- the emit path from inferring impl bodies would drain the graded row while ALSO
+-- being able to swallow this rejection. It must still be rejected after the fix.
+import speakera.{useA}
+import illtypedb.{useC}
+
+main =
+  let _ = println useA
+  println useC
