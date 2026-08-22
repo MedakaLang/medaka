@@ -182,3 +182,62 @@ packet weight. The next retro should still carry a real deletion quota.
   instruments have different failure modes and an assertion can itself be
   vacuous (one of the two that fired was). Recorded here so the adoption is
   visible as a decision, not an assumption; reversible in one column.
+
+---
+
+## v8 — 2026-08-22, Val's directive after `sprint/selector-identity` (not a retro round)
+
+**This entry is a RESET, not an adoption round.** Val's ruling, verbatim in
+intent: the workflow had accreted so much bookkeeping and tracking that agents
+could no longer stay focused; the sprint model is re-stated as *"a series of
+implementers that run one after another and do minimal verification … then at
+the end a more thorough review round to catch gaps and a fix round to address
+them."* Goals, in order: (1) high throughput of implemented code, (2) low
+token cost, (3) correctness prior to merge to main.
+
+Evidence for the reset (`/var/tmp/medaka-sprints/selector-identity/`): 1 of 4
+packets landed; packet-04 dispatched five times, every BLOCKED verdict a
+process defect (tree-placement admissibility), zero packet-content defects;
+9 of 38 rulings (24%) adjudicated the workflow itself; DECISIONS.md reached
+523 KB. Prior: method-identity's rear seat cost $219 of prompt-cache traffic
+for $4.88 of output (COSTS.md); machinery:product ratio 83:17 (H15).
+
+### Adopted (the v8 shape)
+
+- **Serial implementers, minimal per-slice verification** — a one-page packet
+  (≤80 lines target), 3–5 acceptance checks as a ceiling; CI and the end
+  review own everything else. Parallel pair only with contract-declared,
+  `sprint-disjoint.sh`-verified disjointness, re-verified at dispatch.
+- **One end-of-sprint review round** (`sprint-reviewer`, new role folding
+  slice-breaker + spec-conformance-reviewer + domain-adversary lenses into
+  one whole-diff pass) **+ one fix round**, then the merge queue as the
+  correctness authority. Consistent with the 2026-08-13 audit's "repair round
+  is load-bearing".
+- **Single-session front seat, no persistent daughters.** Routine judgment
+  is the orchestrator's; contested calls go to Val.
+- **State = STATUS.md + NOTES.md + git history.** Mid-sprint findings are
+  one NOTES.md line each, triaged at the review round (except
+  blocks-later-slices, fixed immediately).
+- **Worktree placement**: harness `isolation:"worktree"` mints (proven,
+  selector-identity dispatches #4/#5) + a verbatim licensed `--ff-only` sync
+  in packet §2. The derive-your-tree/refuse-on-mismatch contract (v5 #7/#8)
+  is retired as structurally unsatisfiable (selector-identity RETRO §1).
+
+### Retired
+
+Roles: `sprint-brain`, `sprint-rear`, `sprint-planner`, `sprint-verifier`,
+`sprint-scout`, `bug-reproducer`, `friction-triage`, `slice-breaker`,
+`spec-conformance-reviewer`, `domain-adversary`. Skills: `slice-landed`,
+`sprint-findings`. Mechanisms: rulings-as-files + DECISIONS/OBLIGATIONS/
+FINDINGS/QUEUE/DEBT/FRICTION ledgers, per-slice reviewer pairs, mid-sprint
+findings lifecycle, brain rotation, heartbeat self-audit, base-arm depot as a
+standing requirement. The incident lessons those mechanisms encoded survive
+as checklist lines inside the three remaining skills and two agent defs —
+lessons live in gates and checklists, not process.
+
+### Standing bias, binding on future retros
+
+A retro proposes AT MOST three changes, deletion-biased; a new rule is
+proposable only for a failure that occurred in that sprint, cost something
+real, and cannot live in an existing gate or checklist line. This ledger
+remains the place a declined proposal goes to die visibly.
