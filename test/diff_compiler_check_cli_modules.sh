@@ -2463,5 +2463,45 @@ case "$sa6_out$sa6_flat" in
     fi ;;
 esac
 
+# 26. #1719 — human `check` must NOT silently drop a non-entry module's
+#     non-exhaustive-match warning.  `mid26.mdk` (imported, non-entry) has an
+#     incomplete `match` over `Shape`; the entry only calls the covered arm, so
+#     the ENTRY's own exhaustiveness check (which only ever looks at the
+#     entry) sees nothing and the project is otherwise clean (exit 0).  Before
+#     the fix, plain `check` printed exactly "main : Unit" with NOTHING on
+#     either channel — reading as a clean bill of health — while `check --json`
+#     already reported the warning against `mid26.mdk`.  The fix adds a
+#     one-line stderr NOTE naming the hidden count and pointing at `--json`,
+#     without changing stdout (still just the scheme dump) or the exit code.
+cat > "$TMP/mid26.mdk" <<'EOF'
+public export data Shape26 = Circle26 Int | Square26 Int
+
+export area26 : Shape26 -> Int
+area26 s = match s
+  Circle26 r => r * r
+EOF
+cat > "$TMP/main26.mdk" <<'EOF'
+import mid26.{Shape26, Circle26, area26}
+
+main = println (area26 (Circle26 3))
+EOF
+main26_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/main26.mdk" 2>/tmp/main26.err)"
+main26_code=$?
+main26_err="$(cat /tmp/main26.err)"
+case "$main26_out" in
+  "main : Unit")
+    case "$main26_err" in
+      *"further diagnostic"*"--json"*)
+        if [ "$main26_code" -eq 0 ]; then
+          pass=$((pass+1)); printf 'ok   1719/hidden-note (non-entry non-exhaustive warning surfaced as a note, exit 0)\n'
+        else
+          fail=$((fail+1)); printf 'FAIL 1719/hidden-note (note present but exit %d)\n' "$main26_code"
+        fi ;;
+      *)
+        fail=$((fail+1)); printf 'FAIL 1719/hidden-note (no hidden-diagnostic note on stderr: [%s])\n' "$main26_err" ;;
+    esac ;;
+  *) fail=$((fail+1)); printf 'FAIL 1719/hidden-note (stdout changed: [%s])\n' "$main26_out" ;;
+esac
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
