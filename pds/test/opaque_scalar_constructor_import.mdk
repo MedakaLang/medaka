@@ -1,0 +1,13 @@
+-- Negative opacity cell: `Sc(..)` must not expose the private constructor.
+-- If `Sc` becomes `public export data`, this fabricates a raw scalar.
+import lib.scalar.{Sc(..)}
+
+forged : Sc
+forged = Sc [|0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0|]
+
+consume : Sc -> Unit
+consume _ = ()
+
+main =
+  let () = consume forged
+  println 0

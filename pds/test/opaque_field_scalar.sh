@@ -18,19 +18,24 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
 
 # These are distinct permanent attack cells: two exact `Array.set` sentinel
-# mutations and two raw-array forgeries. Keep this floor in sync with the list.
-FAIL_FLOOR=4
+# mutations, two raw-array forgeries, and two constructor-import probes. Keep
+# this floor in sync with the lists.
+FAIL_FLOOR=6
 PASS_FLOOR=1
-FAIL_CELLS="
+TYPE_MISMATCH_CELLS="
 pds/test/opaque_field_sentinel_attack.mdk
 pds/test/opaque_scalar_sentinel_attack.mdk
 pds/test/opaque_field_raw_forgery.mdk
 pds/test/opaque_scalar_raw_forgery.mdk
 "
+ABSTRACT_EXPORT_CELLS="
+pds/test/opaque_field_constructor_import.mdk
+pds/test/opaque_scalar_constructor_import.mdk
+"
 PASS_CELLS="pds/test/opaque_field_scalar_control.mdk"
 
 fail_ran=0
-for rel in $FAIL_CELLS; do
+for rel in $TYPE_MISMATCH_CELLS; do
   path="$ROOT/$rel"
   out="$WORK/fail-$fail_ran.out"
   if [ ! -f "$path" ]; then
@@ -49,6 +54,31 @@ for rel in $FAIL_CELLS; do
   fi
   fail_ran=$((fail_ran + 1))
   echo "PASS: rejected opacity attack $rel"
+done
+
+# These cells must fail at import resolution, rather than with the expression
+# type mismatch above. They pin `export data`'s abstract constructor boundary:
+# changing either declaration to `public export data` would make its cell
+# resolve and then successfully unwrap/mutate or construct the representation.
+for rel in $ABSTRACT_EXPORT_CELLS; do
+  path="$ROOT/$rel"
+  out="$WORK/abstract-$fail_ran.out"
+  if [ ! -f "$path" ]; then
+    echo "FAIL: missing required abstract-export attack cell $rel"
+    exit 1
+  fi
+  if "$MEDAKA" check "$path" >"$out" 2>&1; then
+    echo "FAIL: $rel checked successfully; private constructors are exported"
+    cat "$out"
+    exit 1
+  fi
+  if ! grep -q 'exports no constructors' "$out" || ! grep -q 'exported abstractly' "$out"; then
+    echo "FAIL: $rel failed for an unexpected reason, not abstract constructor export"
+    cat "$out"
+    exit 1
+  fi
+  fail_ran=$((fail_ran + 1))
+  echo "PASS: rejected abstract constructor import $rel"
 done
 
 pass_ran=0
