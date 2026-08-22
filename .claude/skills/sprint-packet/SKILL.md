@@ -15,13 +15,23 @@ discussed", no unstated context. Packets are files in
 this transformation to these N named sites," it is not a slice yet — it is design
 work, and it goes back to the planner or the brain.
 
-**Packets are contracts, not encyclopedias (v4, H9).** Target **≤ 250 lines of
-PLANNER-AUTHORED prose**; a packet past that is usually doing the implementer's
-discovery for it. §7/§8's verbatim boilerplate and any text a ruling requires
-verbatim are OUTSIDE the count, and travel by pointer wherever the ruling did
-not say "verbatim" (`per RUN-<stage>-NNN Actions 2,5 — read
-rulings/RUN-<stage>-NNN.md`); the implementer already reads every ruling its
-packet cites, and v5 ruling files are self-contained by construction. An
+**Packets are contracts, not encyclopedias (v4, H9; ceiling re-scoped v7,
+retro D2).** Target **≤ 250 lines of
+PLANNER-AUTHORED prose in §1–§8**; a packet past that is usually doing the
+implementer's
+discovery for it. OUTSIDE the count: §7/§8's verbatim boilerplate, any text a
+ruling requires
+verbatim (travels by pointer wherever the ruling did
+not say "verbatim" — `per RUN-<stage>-NNN Actions 2,5 — read
+rulings/RUN-<stage>-NNN.md`; the implementer already reads every ruling its
+packet cites, and v5 ruling files are self-contained by construction), **and
+the whole generated §0a standing-carries block** — a leaf inheriting nine
+standing rulings and a leaf inheriting two are not the same document, and a
+ceiling that treats them alike puts the carries in competition with the
+sections the ceiling exists to bound (measured: the flat ceiling was violated
+in 4 of 5 `sprint/method-identity` packets — 374/375/423/575/727 lines — and
+then ratified by the brain as mis-calibrated, which teaches that stated
+limits are advisory). An
 overshoot in authored prose is a `Decisions surfaced` line, never a silent cut.
 (Measured, `sprint/emit-inputs`, counted off the archived packets: every one of
 the four slice packets ran over — 285 / 325 / 511 / 613 lines — each overshoot
@@ -80,10 +90,16 @@ instead of partial motion. Three slice forms result:
    golden/snapshot moves (a ruling missing these bounces back to the brain
    before dispatch) — the repro-bundle path, branch `fix/<finding-slug>`, the
    two SHAs, the front-seat repo path (the tree the fixer must NOT be in), and
-   the report path. §1's derive-your-tree block, §6's minimal set, §7's
+   the report path. §1's tree block, §6's minimal set, §7's
    refusal license, and §8/§9 bind verbatim — and because a fix has no packet
-   to carry them, **the brief PASTES §7 and §8's first two bullets inline**
-   (foreground builds, never background; `MEDAKA_STRICT=1` on every probe). A
+   to carry them, **the brief PASTES §1's tree block (the twice-run toplevel
+   equality assertion, with the absolute worktree path the front seat created
+   filled in), §7, and §8's first two bullets inline**
+   (foreground builds, never background; `MEDAKA_STRICT=1` on every probe).
+   §1 is the block whose omission cost two contended trees in
+   `sprint/method-identity` — fixers carry no packet, the old paste list
+   omitted exactly §1, and **the two dispatches with no §1 were exactly the
+   two that lost their tree** (RUN-METHID-148). A
    rule that binds "verbatim" from a document the agent must go and load is a
    rule that has been skipped: same failure the out-of-roster-dispatch rule
    (orchestrator item 10) already fixes for one-off agents, reopened by the
@@ -137,6 +153,35 @@ may drop the number but never the handle. The orchestrator bounces ledger
 entries and consults that carry naked identifiers, same as missing report
 sections.
 
+## §0a Standing carries — DERIVED, not authored (v7, retro P3a)
+
+Every packet opens with the standing rulings and open obligations that bind
+its slice. **§0a is generated, never written**: the front seat derives it at
+lane grant and pastes it into the packet whole —
+
+```sh
+D=/var/tmp/medaka-sprints/<stage>
+grep -n "^applies-to:.*\(<slice-id>\|ALL\)" "$D"/rulings/*.md
+awk -F'|' '$7 ~ /OPEN/ && ($3 " " $5) ~ /<slice-id>/' "$D"/OBLIGATIONS.md
+```
+
+(With the leading `|`, `awk -F'|'` yields $2=id, $3=ruling, $4=owner-seat,
+$5=action, $6=due-by, $7=status — the match is on ruling+action text, never
+$4, which is always a seat name. Executed against the method-identity ledger
+per the §4 executed-facts rule: the $4 form returns **0** rows; the
+$3/$5 form returns **19** OPEN rows for `arity`, first hit
+`| RUN-METHID-001.6 | RUN-METHID-001 | FRONT | Add slice 0 as a hard
+predecessor of S-emit-arity-by-declaration …` — an unexecuted formula here
+would silently regenerate the exact carry loss this section exists to fix.)
+
+Every hit is a carry, quoted with its ruling number. The planner does not
+select from the block and the front seat does not summarise it; because it is
+generated, it cannot grow by authorship, and it is excluded from the length
+ceiling. (Measured, `sprint/method-identity`: an authored §0 failed to carry
+the receiver-position family's standing clauses to a leaf writer THREE times —
+L2, L3-v1, L3-v2 — ruled *"a packet template gap, not repeated writer
+error"*, RUN-METHID-115.)
+
 ## §0b Terse mode — inter-agent text is for machines that bill by the token
 
 **Every artifact whose reader is another agent — reports, packets, consults,
@@ -172,25 +217,29 @@ every word whose deletion changes anything.
   sandbox stayed pinned elsewhere, every later Bash call was refused). Instead,
   verbatim in every packet:
 
-  > **First command, always: `git rev-parse --show-toplevel`** — report it in
-  > Evidence. What you compare it against is the MODE your brief names (the
-  > front seat fixed it at sprint start from the isolation probe):
+  > **Your brief names an absolute worktree path the front seat created for
+  > you. First command, always: `git rev-parse --show-toplevel` — it must
+  > EQUAL that path, character for character.** Report it in Evidence. If it
+  > does not — you are in the front seat's checkout, the bare repo, or
+  > anywhere else — **STOP and report BLOCKED. Do not `cd`, do not
+  > EnterWorktree, do not create a worktree of your own** (the isolation
+  > classifier forbids you to operate one you create, so the attempt degrades
+  > into working where you already stand, which is someone else's tree). A
+  > dispatch that landed in the wrong tree is a dispatch defect, and the seat
+  > fixes it, not you.
   >
-  > - **HARNESS mode** — your tree is whatever the harness gave you. Do NOT
-  >   EnterWorktree, do NOT `cd`, do not trust any path in this packet or in
-  >   CLAUDE.md. If your toplevel EQUALS the front-seat repo path your brief
-  >   names, STOP and report BLOCKED: the dispatch lost its isolation and
-  >   working there corrupts the seat's own checkout.
-  > - **FRONT-SEAT mode** — your brief names a worktree the front seat created
-  >   FOR you, and your toplevel must already equal it. If it does not (you are
-  >   in the front seat's own repo, or anywhere else), STOP and report BLOCKED;
-  >   do not `cd` your way there — a dispatch that landed in the wrong tree is a
-  >   dispatch defect, and the seat fixes it, not you.
+  > **Run the equality check TWICE: once as your first command, and again
+  > immediately before your commit.** A tree can be reassigned mid-task; a
+  > single upfront check cannot see it, and the only moment that matters is
+  > the point of no return. (Measured, `sprint/method-identity`
+  > RUN-METHID-148: a fixer's step-0 check passed honestly — against the bare
+  > repo root, a negative test the front seat's own checkout also passes —
+  > and its tree was contended AFTER the check and BEFORE the commit.)
   >
-  > Then, both modes: `git rev-parse HEAD` and `git merge-base --is-ancestor
+  > Then: `git rev-parse HEAD` and `git merge-base --is-ancestor
   > <sprint-head> HEAD` — report both; a non-ancestor HEAD is a wrong-base
   > dispatch → BLOCKED, never adapt, UNLESS your brief explicitly licenses the
-  > re-base (mode C), in which case run exactly the command it gives you and
+  > re-base, in which case run exactly the command it gives you and
   > report it under `Deviations from packet`.
   > Commit on your branch and push by ref: `git push origin
   > HEAD:refs/heads/<branch>` — never `checkout` **a branch a sibling worktree
@@ -202,7 +251,7 @@ every word whose deletion changes anything.
   ancestor SHA fails in one of exactly two ways and `sprint/emit-inputs`
   produced both, one Opus dispatch each: pinned to the plan BASE it passes on a
   tree holding ZERO sprint commits (vacuous); pinned to a sprint-branch-only
-  commit it can never pass in HARNESS mode until the sprint PR merges
+  commit it can never pass in a `main`-minted tree until the sprint PR merges
   (unsatisfiable). The `git diff <pinned>..HEAD -- <§5 files>` check above is
   NOT a substitute — it passes trivially whenever the sprint has not touched
   those files, which is exactly how the vacuous one passed.
@@ -254,7 +303,7 @@ nothing about the reviewers who read this packet afterwards, and it has been
 read as if it did — in `sprint/emit-inputs` a breaker built its own base arm by
 hand (two full rebuilds, ~35 of its 55 minutes) against a packet carrying that
 sentence. The reviewers' depot path arrives in their own brief (`slice-landed`
-step 2's `base-arm` field), not from here.
+step 3's depot line), not from here.
 
 ## §3 Mission
 
@@ -456,10 +505,10 @@ the judgment seat, so this is not a planner-discipline rule.)
 >   carries forward across a session and sometimes does not (#1148, OPEN, S2);
 >   a sibling agent doing the identical thing may be fine. It is neither your
 >   fault nor something you can test your way out of.
-> - Push and report. The rear seat watches CI, not you. Do not poll CI, do not
+> - Push and report. The front seat watches CI, not you. Do not poll CI, do not
 >   send per-shard updates.
 > - **Never file, edit, comment on, or close a GitHub issue.** Issue writes are
->   seat-only (the sprint-rear seat executes them, with readback). A bug you
+>   executed only by a dedicated filing dispatch, with readback. A bug you
 >   find goes in your report's findings; a body you want filed goes in your
 >   report as a draft. "I filed #N" in a report is a deviation-from-packet.
 > - Do not spawn subagents. Do the work yourself, sequentially.

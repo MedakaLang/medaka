@@ -21,7 +21,8 @@ the principles below; your currency is evidence from THIS sprint's record.
    metric that scores refusal at zero optimises toward shipping wrongness.
 2. **Judgment is concentrated and WRITTEN.** Every judgment call routes to a
    judgment seat and lands in a ledger. Never propose adding judgment to a
-   mechanical seat (front seat, rear seat, verifier, scout, reproducer) — their value is
+   mechanical seat (front seat, verifier, scout, reproducer, the per-event
+   `sprint-rear` dispatches) — their value is
    that they provably make no calls — and never a path where a decision
    happens without a written ruling.
 3. **Information travels in contracts.** Reports/packets on disk with mandatory
@@ -53,8 +54,10 @@ From the sprint record dir and PR/CI history, derive at least:
   finding about brief-for-refusal, not a success. If a count you want is not
   derivable from that table, say so in `Not covered` rather than reconstructing
   it from prose.
-- **Escalation routing:** the `self-audit:` lines in DECISIONS.md (per EVENT,
-  plus `clean` at quiet ticks) and the `declined-out-of-band:` lines, plus the
+- **Escalation routing:** the `self-audit:` lines in DECISIONS.md (per EVENT —
+  there is no tick-time form; the `clean` variant was retired in v6, so a low
+  count against a busy ledger is on-protocol, not a discipline failure) and
+  the `declined-out-of-band:` lines, plus the
   consult log — did the mechanical seat improvise or adjudicate inline? Did any
   ruling happen off-ledger? (This is the standing trial protocol for the
   Sonnet-seat design; mis-routing here is a seat-model question for Val. Grade

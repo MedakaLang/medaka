@@ -115,4 +115,4 @@ Severity honestly: S0 = wrong answer or destroyed source with NO error. Do not
 inflate — a false S0 costs a repair slice; do not deflate — a buried S0 ships.
 `CLEAR` must still fill `Not covered`: the attacks you did NOT run are exactly
 what the heavy round needs to know. CLEAR-with-empty-not-covered is the one
-report shape the rear seat should distrust on sight.
+report shape the intaking seat should distrust on sight.

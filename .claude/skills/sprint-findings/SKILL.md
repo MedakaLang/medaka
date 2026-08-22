@@ -11,17 +11,16 @@ wrong" in passing. The playbook exists because findings are where sprints leak:
 the audited sprints' worst outcomes were findings mishandled — a phantom drain
 nearly closing five live bugs, an unreproduced claim filed as fact, evidence
 surviving only as session-scratch prose. The lifecycle below is mechanical and
-runs at the REAR seat (`sprint-rear` owns FINDINGS.md, dispatches the
-reproducer, and executes every filing; its brain consults relay through the
-front seat verbatim); every judgment inside it is a brain ruling.
+runs at the FRONT seat (v7 — it owns FINDINGS.md and dispatches the
+reproducer; `gh issue` writes execute in stateless per-event `sprint-rear`
+filing dispatches); every judgment inside it is a brain ruling.
 
 ## 1. Intake — every finding gets a row before anything else
 
 Append to `/var/tmp/medaka-sprints/<stage>/FINDINGS.md` immediately, one row:
-`F<n> | <one-line claim> | source report path | status: OPEN`. The REAR seat
-is the file's sole writer: a finding surfacing at the front seat (any report
-it intakes — refusals included) reaches this file as a `finding: <claim> |
-report <path>` message, appended by the rear seat on receipt. No triage yet,
+`F<n> | <one-line claim> | source report path | status: OPEN`. The FRONT seat
+is the file's sole writer (v7): any report it intakes — refusals included —
+that carries a finding gets its row appended in the same intake. No triage yet,
 no severity yet, no dedup yet — the row exists so the finding cannot be lost
 between its report and its ruling. A finding mentioned in conversation or a
 return message but absent from a report file gets BOUNCED to its reporter
@@ -29,8 +28,8 @@ first (reports are the record; chat is not).
 
 ## 1b. Refusals get their own table — the signal must be COUNTABLE
 
-FINDINGS.md carries a second section, opened by whichever seat takes the
-return, BEFORE the consult is relayed:
+FINDINGS.md carries a second section, opened by the front seat at intake,
+BEFORE the brain consult is sent:
 
 ```
 ## Refusals
@@ -52,7 +51,7 @@ does NOT belong: a reviewer finding**, whatever its severity — those are rows 
 the Findings table above. The row for a BLOCKED dispatch is opened by the FRONT
 seat at the moment it preserves the attempt-1 report (it already writes the
 `*-attempt1-BLOCKED.md` copy and a `self-audit:` line; the row is the third half
-of the same action) and carried to a verdict by the rear seat like any other.
+of the same action) and carried to a verdict like any other.
 
 (Measured, `sprint/emit-inputs`, from the archived record: the sprint closed
 with the Refusals table holding **zero rows**, and the seat that owns the file
@@ -79,8 +78,7 @@ sections.
 
 The mechanical and architectural halves are deliberately SPLIT: repro, pin, and
 attribution are fixture work (Sonnet), and spending brain judgment on them
-muddies the ruling with shell mechanics. The rear seat requests the dispatch
-(a `consult:`-tagged request through the front seat); the FRONT seat creates
+muddies the ruling with shell mechanics. The FRONT seat creates
 the worktree at the slice head (`git worktree add` — all worktree creation is
 front-seat) and dispatches `bug-reproducer` with the FINDINGS row, the source
 report path, both SHAs (pinned base + slice head), and that worktree path (it
@@ -185,9 +183,11 @@ WITH the disproving derivation — debunking needs the same proof as filing;
 
 ## 4. Filing protocol — when the ruling is FILE
 
-Mechanical, in order; the REAR seat executes from the reproducer's bundle, the
+Mechanical, in order; a stateless `sprint-rear` filing dispatch executes from
+the reproducer's bundle (v7), the
 brain has already ruled. **No other agent runs a `gh issue` write, ever** —
-drafters draft, the rear seat files, always with readback:
+drafters draft, the filing dispatch files, always with readback pasted in its
+report:
 
 1. **The first-hand repro requirement is satisfied by the reproducer's bundle**
    — it ran fresh, independently of the reporting agent. A finding with no

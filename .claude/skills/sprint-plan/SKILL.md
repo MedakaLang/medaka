@@ -1,6 +1,6 @@
 ---
 name: sprint-plan
-description: Cut a sprint — choose a coherent, well-bounded set of slices (~5+ is the sweet spot) and write the sprint contract, at boundary depth only. Run ONCE per sprint, before the orchestrator session starts; judgment-heavy, so run on Opus 5 minimum, Fable 5 when the sprint spans a spec or moves formal semantics. The contract it produces is what sprint-orchestrator executes and sprint-planner deepens just-in-time.
+description: Cut a sprint — choose a coherent, well-bounded set of slices (3–5 is the sweet spot; v7) and write the sprint contract, at boundary depth only. Run ONCE per sprint, before the orchestrator session starts; judgment-heavy, so run on Opus 5 minimum, Fable 5 when the sprint spans a spec or moves formal semantics. The contract it produces is what sprint-orchestrator executes and sprint-planner deepens just-in-time.
 ---
 
 # Sprint planning — cutting the slice set
@@ -73,15 +73,24 @@ rework). It buys a lane refill that a chain cannot supply. If the refill packet
 DOES start rotting, that is evidence it was never independent, and it goes back
 through the planner like any other falsified premise.
 
-**Size the set: at least ~5 slices is the sweet spot, scaled by slice weight.**
-Fewer than that and the sprint machinery (contract, ledgers, heavy round) costs
-more than it amortizes — land 2 slices as ordinary PRs instead. The ceiling is
-what the heavy round can genuinely attack in one pass: if the projected total
-diff is too large to adversarially review, the sprint is two sprints. This
-ceiling binds HARDER under v3's deferred-verification model — the heavy round
+**Size the set: 3–5 slices (v7 — revised down from ~5+ on measurement).**
+Fewer than 3 and the sprint machinery (contract, ledgers, heavy round) costs
+more than it amortizes — land 2 slices as ordinary PRs instead. Above ~5 the
+coordination cost grows FASTER than linearly, because every seat's per-turn
+cost is proportional to its accumulated context and every packet inherits the
+accumulated standing-carry set: `sprint/method-identity` (6-slice cut counting
+the family) measured packet §0 carries growing to nine by the late leaves and
+failing to propagate three times, packets growing 374→727 lines, an
+obligations tracker at 339 rows, and a front-seat context averaging ~514k
+tokens/request as the largest cost line on the board — while the machinery:
+product ratio hit 83:17 against a ~63:25 baseline (COSTS.md; hypothesis H15).
+The other ceiling still binds: what the heavy round can genuinely attack in
+one pass — if the projected total
+diff is too large to adversarially review, the sprint is two sprints, and this
+binds HARDER under v3's deferred-verification model (the heavy round
 is the first adversarial pass over deliberately under-verified work, and the
 terminal merge-queue run is the first full-gate run, so a sprint too big for
-its heavy round has no backstop at all. Each slice
+its heavy round has no backstop at all). Each slice
 should be roughly one writer-session of work; a slice that is obviously several
 becomes a family candidate (flag it — the spike decides), and a slice that is an
 afternoon's triviality gets merged into a neighbor or dropped to the ordinary
@@ -101,7 +110,22 @@ Per slice, the contract records exactly six things:
    family / what new fixture class / what differential", not exact commands.
 4. **Classification guess** — parity vs behavior-changing (drives the model
    tier; the packet may overturn it).
-5. **Depends-on** — other slices by ID, forming the landing order.
+5. **Depends-on** — other slices by ID, forming the landing order. **A
+   dependency EDGE between two slices that touch the same question or
+   subsystem is a MEASURED claim, not an assertion (v7):** the row states the
+   direction's evidence (a probe, a call-graph derivation, a prior sprint's
+   measurement — with the command). If the direction is asserted rather than
+   derived, the pair's first slice is a JOINT SPIKE over both — one timeboxed
+   dispatch that grades the coupled surfaces together before either is cut.
+   (Measured, `sprint/method-identity`: CONTRACT §3's one-way "impl-query
+   depends on receiver-position" column was falsified mid-sprint — the legs
+   are MUTUALLY dependent, the composed pair of wrong answers landed on the
+   ruled-correct value by accident, and correcting either alone moved 3 cells
+   from correct to wrong. RUN-METHID-115's own finding is exactly what a
+   Leg-1×Leg-3 joint spike would have produced before either was cut, and its
+   absence made the spine slice uncuttable mid-sprint — the single largest
+   contributor to a ~17-hour adjudication tail. The orchestrator's SCOPE-RESET
+   rule handles this when it happens anyway; this rule is the cheaper end.)
 6. **`refill: yes|no`** — exactly one row in the table carries `yes` (the
    independent refill above), or §3 carries the one-line why-not.
 
