@@ -23,9 +23,8 @@
 # arm of the sha256 domain scan is covered by pds/test/sha256_vectors.sh phase
 # B, which hashes the corpus — including its 1,000,000-byte `Repeat` vector —
 # through the built binary; a non-tail-recursive domain scan shows up THERE as
-# a native stack overflow. pds/test/encodings_vectors.sh exercises base58's
-# valid-input scan through both eval and native; its rejection cells here are
-# eval-only. The uvarintEncode guard has no native cell.
+# a native stack overflow. Base58's valid and rejection cells are eval-only.
+# The uvarintEncode guard has no native cell.
 #
 # POSIX sh (dual-platform floor — this box's /bin/sh is dash: no
 # 'printf \xNN', no 'timeout'). Model: pds/test/encodings_vectors.sh.
