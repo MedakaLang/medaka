@@ -277,6 +277,13 @@ denied every way, you are BLOCKED: stop and report. Do not degrade to source-onl
 no-build agent's "no such site exists" is not a finding. The denial SOMETIMES carries forward
 across a session and sometimes does not; it is not predictable and not testable.
 
+🚨 **[B-RELPATH-DENY] `medaka fmt --write <relative/path>` / `medaka lint <relative/path>` can
+be silently denied too (#1823)** — a DIFFERENT mechanism from `[B-ISOLATION-COMPOUND]` (#1148):
+this fires on a single, plain, non-compound command, keyed on path *form* (relative vs.
+absolute), and the denial message is generic, not the isolation-specific phrasing. The
+identical command with an absolute path succeeds immediately. ⇒ Always pass absolute paths to
+`fmt`/`lint`, per `[T-WORKTREE-PATHS]`'s general advice.
+
 **[B-ENV] Environment.** opam/dune NOT needed. Native build: **clang + Boehm GC** (Debian:
 `clang` + `libgc-dev`, `-lgc`; macOS: Apple clang + `brew install bdw-gc`). `node` ≥24 only for
 wasm/sqlite/playground gates.
