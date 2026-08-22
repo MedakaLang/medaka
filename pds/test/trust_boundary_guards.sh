@@ -1,14 +1,13 @@
 #!/bin/sh
-# pds/test/trust_boundary_guards.sh — the PANIC half of RUN-PDS0-036's
-# hostile-input guards.
+# pds/test/trust_boundary_guards.sh — one-process PANIC guards for
+# RUN-PDS0-036 and #1727.
 #
-# Two of the four guards installed by that ruling abort the process instead of
-# returning a value (`sha256`'s 0..255 element domain and `uvarintEncode`'s
-# non-negative argument, both on `-> Array Int` signatures where `Result` is
-# not available). Medaka has no catchable panics, so neither can be asserted
-# from an in-language `medaka test` file: the first abort would shadow every
-# later assertion. This gate runs pds/test/guard_probes_main.mdk ONE CASE PER
-# PROCESS and grades the outcome from outside.
+# The SHA-256 and base58 byte domains and uvarintEncode's non-negative domain
+# abort instead of returning a value: their result types have no `Result`
+# channel. Medaka has no catchable panics, so they cannot be asserted from an
+# in-language `medaka test` file: the first abort would shadow every later
+# assertion. This gate runs pds/test/guard_probes_main.mdk ONE CASE PER PROCESS
+# and grades the outcome from outside.
 #
 # Every guard is graded in BOTH directions:
 #   PANIC cell   — must exit NON-ZERO *and* print the guard's own message.
@@ -24,7 +23,9 @@
 # arm of the sha256 domain scan is covered by pds/test/sha256_vectors.sh phase
 # B, which hashes the corpus — including its 1,000,000-byte `Repeat` vector —
 # through the built binary; a non-tail-recursive domain scan shows up THERE as
-# a native stack overflow. The uvarintEncode guard has no native cell.
+# a native stack overflow. pds/test/encodings_vectors.sh exercises base58's
+# valid-input scan through both eval and native; its rejection cells here are
+# eval-only. The uvarintEncode guard has no native cell.
 #
 # POSIX sh (dual-platform floor — this box's /bin/sh is dash: no
 # 'printf \xNN', no 'timeout'). Model: pds/test/encodings_vectors.sh.
