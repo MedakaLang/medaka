@@ -492,7 +492,10 @@ moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) = match unknownModuleIdOf
 -- Dependency-first file order (helper before entry), same as the loader/JSON.
 locatedProjectErrors : String -> List String -> String -> String -> <IO> Option String
 locatedProjectErrors target roots rsrc csrc =
-  fst (locatedProjectDiags target roots rsrc csrc)
+  errTextOf (locatedProjectDiags target roots rsrc csrc)
+
+errTextOf : (Option String, List (String, String, List Diag), Int) -> Option String
+errTextOf (errText, _, _) = errText
 
 -- BOTH halves of the project analysis from ONE `analyzeProject` pass: the rendered
 -- errors (exactly what `locatedProjectErrors` returns) AND the COHERENCE warnings.
@@ -525,7 +528,16 @@ locatedProjectErrors target roots rsrc csrc =
 -- equal to the CLI's own `target` argument.  Pre-filtering would make "last" mean
 -- "the last module that happens to warn", so a clean entry would silently cost an
 -- imported module its warning.  Emptiness is filtered at the emit sites instead.
-locatedProjectDiags : String -> List String -> String -> String -> <IO> (Option String, List (String, String, List Diag))
+-- #1719: the third component is a CHEAP count (no rendering — see the "KEEP IT
+-- UNRENDERED" note above) of warning diagnostics that exist in a NON-ENTRY
+-- module but are NEITHER an error NOR the one coherence code the second
+-- component already carries — i.e. exactly the diagnostics human `check`
+-- would otherwise drop with no trace (matchWarnings/exhaustiveness on an
+-- imported module).  `check` uses this to print a one-line "N further
+-- diagnostics" note instead of silently reading as clean; `run`/`build` (the
+-- other two callers) ignore it, so their narrow-to-coherence behaviour and
+-- its measured perf/noise rationale (see `isCoherenceWarn`) are untouched.
+locatedProjectDiags : String -> List String -> String -> String -> <IO> (Option String, List (String, String, List Diag), Int)
 locatedProjectDiags target roots rsrc csrc =
   let cacheRef = Ref []
   let parseCacheRef = Ref []
@@ -534,10 +546,19 @@ locatedProjectDiags target roots rsrc csrc =
   (
     joinedOrNone (flatMap renderTripleErrors triples),
     map cohWarnsOfTriple triples,
+    length (flatMap hiddenWarnsOfTriple (dropEntryTriple triples)),
   )
 
 cohWarnsOfTriple : (String, String, List Diag) -> (String, String, List Diag)
 cohWarnsOfTriple (path, src, diags) = (path, src, filter isCoherenceWarn diags)
+
+-- the warn diagnostics on one (non-entry) module's triple that neither
+-- channel above already surfaces (see the doc comment on `locatedProjectDiags`).
+hiddenWarnsOfTriple : (String, String, List Diag) -> List Diag
+hiddenWarnsOfTriple (_, _, diags) = filter isHiddenNonEntryWarn diags
+
+isHiddenNonEntryWarn : Diag -> Bool
+isHiddenNonEntryWarn d = isDiagWarn d && not (isCoherenceWarn d)
 
 joinedOrNone : List String -> Option String
 joinedOrNone [] = None
@@ -660,16 +681,22 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
       -- `locatedProjectDiags`, not `locatedProjectErrors`: the SAME single
       -- `analyzeProject` pass, keeping the coherence warnings its `fst` discards.
       match locatedProjectDiags target roots rsrc csrc
-        (Some errText, _) =>
+        (Some errText, _, _) =>
           let _ = putStr errText
           exit 1
-        (None, projWarns) =>
+        (None, projWarns, hiddenCount) =>
           let _ = putStrLn (runCheckModules allowInternal trusted rtD coreD modsD)
           -- F-3d: an IMPORTED module's ⊑-incomparable pair, LOCATED against that
           -- module's own file.  The line above reaches the ENTRY's diagnostics only,
           -- which is why `dropEntryTriple` (not the whole list) is right here — see
           -- its note for the four graph positions this was silent in.
           let _ = emitWarningLines (flatMap renderTripleWarnings (dropEntryTriple projWarns))
+          -- #1719: a non-entry module can carry OTHER warnings (chiefly
+          -- non-exhaustive-match) that the line above does not surface — human
+          -- `check` used to just drop these with no trace, reading as a clean
+          -- bill of health.  Say so instead of staying silent; `--json` already
+          -- reports them per-file.
+          let _ = emitHiddenDiagNote hiddenCount
           -- 0.1.0 main-shape warning (see below): runCheckModules/
           -- checkModulesHasErrors never call elaborateModules, so mainSchemeRef
           -- is never populated on this route either — mainShapeWarnings runs
@@ -1004,6 +1031,18 @@ emitLocatedWarnings src file ws =
 emitWarningLines : List String -> <IO> Unit
 emitWarningLines [] = ()
 emitWarningLines ls = ePutStrLn (joinNl ls)
+
+-- #1719: human `check` on a multi-module project surfaces the entry module's
+-- own warnings in full and every module's coherence warning (see the calls
+-- above), but — for the measured perf/noise reasons `isCoherenceWarn` documents
+-- — does not render a non-entry module's OTHER warnings (chiefly
+-- non-exhaustive-match).  Rather than let that read as a clean bill of health,
+-- name the count and point at `--json`, which already reports them per-file.
+emitHiddenDiagNote : Int -> <IO> Unit
+emitHiddenDiagNote 0 = ()
+emitHiddenDiagNote n =
+  ePutStrLn
+    "\{intToString n} further diagnostic(s) in imported modules; rerun with --json to see them"
 
 -- The (path, src, coherence-warnings) triple of a SINGLE-file analysis.  The
 -- single-module twin of what `locatedProjectDiags` returns, so both `run` arms hand
@@ -1688,8 +1727,8 @@ typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc target mod
       -- behaviour F-3d wants — the reject it replaced was whole-graph too — but it is
       -- not identity, and reading it as identity is how the next reader "restores"
       -- the entry-only scoping and re-silences the imported case.
-      (Some errText, _) => TGErr errText
-      (None, projWarns) =>
+      (Some errText, _, _) => TGErr errText
+      (None, projWarns, _) =>
         let _ = resetTypeErrorsSticky ()
         let _ = elaborateModules rtD coreD modsD
         match hadTypeErrors ()
@@ -1959,10 +1998,10 @@ runRunCmd argv =
                       -- single `analyzeProject` pass, but keeping the WARNINGS the
                       -- errors-only accessor discarded (see its own note).
                       "" => match locatedProjectDiags target roots rsrc csrc
-                        (Some errText, _) =>
+                        (Some errText, _, _) =>
                           let _ = ePutStrLn errText
                           exit 1
-                        (None, projWarns) =>
+                        (None, projWarns, _) =>
                           let _ = resetTypeErrorsSticky ()
                           let elaborated = elaborateModules rtD coreD modsD
                           match hadTypeErrors ()
