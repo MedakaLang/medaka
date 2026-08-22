@@ -212,3 +212,15 @@ test "fromBytesReduce ACCEPTS 2^256-1" =
 
 test "isOdd 1 is True, isOdd 0 is False" =
   expectTrue (feIsOdd feOne && not (feIsOdd feZero))
+
+-- A raw representation of p has an odd low limb, but its canonical
+-- representative is 0. This distinguishes parity of the field element from
+-- parity of the transparent alias's uncanonicalized storage.
+rawPLimbs : Fe
+rawPLimbs = [|
+  67107887, 67108799, 67108863, 67108863, 67108863, 67108863, 67108863,
+  67108863, 67108863, 4194303,
+|]
+
+test "isOdd reads the canonical representative, not raw limb parity" =
+  expectFalse (feIsOdd rawPLimbs)

@@ -163,11 +163,13 @@ expPMinus2 = [|
 |]
 
 -- | The additive identity.
-export feZero : Fe
+export
+feZero : Fe
 feZero = [|0, 0, 0, 0, 0, 0, 0, 0, 0, 0|]
 
 -- | The multiplicative identity.
-export feOne : Fe
+export
+feOne : Fe
 feOne = [|1, 0, 0, 0, 0, 0, 0, 0, 0, 0|]
 
 -- | A field element: exactly 10 limbs, base 2^26, least-significant first,
@@ -247,7 +249,8 @@ subPGo n i borrow =
 --   `feFromBytesReduce`, since this is the same enforcement at the limb
 --   boundary — the only way to reach it is to build a non-10-limb `Fe`
 --   through the transparent alias.
-export feCanonicalize : Array Int -> Fe
+export
+feCanonicalize : Array Int -> Fe
 feCanonicalize raw =
   if arrayLength raw /= 10 then
     panic "field.feCanonicalize: expected 10 limbs, got \{intToString (arrayLength raw)}"
@@ -302,7 +305,8 @@ byteRangeGo bs i =
 --
 --   The `0 <= b <= 255` element contract IS enforced here (and the length):
 --   an out-of-range element is an `Err`, never silently taken mod 256.
-export feFromBytes : Array Int -> Result String Fe
+export
+feFromBytes : Array Int -> Result String Fe
 feFromBytes bs =
   if arrayLength bs /= 32 then Err "field.feFromBytes: expected 32 bytes, got \{intToString (arrayLength bs)}"
   else
@@ -322,7 +326,8 @@ feFromBytes bs =
 --   `Result`-typed, so a violation PANICS rather than aliasing mod 256. A
 --   loud abort is the point: silently masking an out-of-range element would
 --   compute a different value than the caller wrote.
-export feFromBytesReduce : Array Int -> Fe
+export
+feFromBytesReduce : Array Int -> Fe
 feFromBytesReduce bs =
   if arrayLength bs /= 32 then
     panic "field.feFromBytesReduce: expected 32 bytes, got \{intToString (arrayLength bs)}"
@@ -333,7 +338,8 @@ feFromBytesReduce bs =
 
 -- | The canonical 32 big-endian bytes of a field element. Canonicalizes
 --   first, so it is total over any well-formed 10-limb array.
-export feToBytes : Fe -> Array Int
+export
+feToBytes : Fe -> Array Int
 feToBytes a =
   let n = feCanonicalize a
   let out = arrayMake 32 0
@@ -357,7 +363,8 @@ toBytesGo n out li acc accBits pos =
 
 -- | Are two canonical elements equal? Canonical representatives are unique,
 --   so this is limb-wise equality.
-export feEqual : Fe -> Fe -> Bool
+export
+feEqual : Fe -> Fe -> Bool
 feEqual a b = equalGo a b 0
 
 equalGo : Fe -> Fe -> Int -> Bool
@@ -376,7 +383,8 @@ equalGo a b i =
 --   writable by any caller, and a predicate that consulted it would report a
 --   true zero as non-zero (and a non-zero as zero) for the rest of the
 --   process, at exit 0, with no diagnostic. Do not "simplify" this back.
-export feIsZero : Fe -> Bool
+export
+feIsZero : Fe -> Bool
 feIsZero a = isZeroGo a 0
 
 isZeroGo : Fe -> Int -> Bool
@@ -389,13 +397,15 @@ isZeroGo a i =
     isZeroGo a (i + 1)
 
 -- | Is the canonical representative odd? (The low bit of limb 0.)
-export feIsOdd : Fe -> Bool
-feIsOdd a = bitAnd a[0] 1 == 1
+export
+feIsOdd : Fe -> Bool
+feIsOdd a = bitAnd (feCanonicalize a)[0] 1 == 1
 
 -- ── Arithmetic ───────────────────────────────────────────────────────
 
 -- | Addition mod p. Limb-wise, then feCanonicalize: each sum is < 2^27.
-export feAdd : Fe -> Fe -> Fe
+export
+feAdd : Fe -> Fe -> Fe
 feAdd a b =
   let e = arrayMake 10 0
   let () = addGo a b e 0
@@ -411,7 +421,8 @@ addGo a b e i =
 -- | Additive inverse mod p, computed as `p - a` with borrow. `a` is canonical
 --   so `0 <= a < p`, hence `0 < p - a <= p`; `feCanonicalize` maps the `a = 0`
 --   case (`p - 0 = p`) back to 0.
-export feNegate : Fe -> Fe
+export
+feNegate : Fe -> Fe
 feNegate a =
   let e = arrayMake 10 0
   let () = negateGo a e 0 0
@@ -431,7 +442,8 @@ negateGo a e i borrow =
 
 -- | Subtraction mod p. NEGATE-THEN-ADD, exactly as the reference does it —
 --   `libsecp256k1` has no `secp256k1_fe_sub` either.
-export feSub : Fe -> Fe -> Fe
+export
+feSub : Fe -> Fe -> Fe
 feSub a b = feAdd a (feNegate b)
 
 -- | Multiplication mod p: schoolbook columns, then CARRY, then fold.
@@ -439,7 +451,8 @@ feSub a b = feAdd a (feNegate b)
 --   The three steps and their bounds are the module header's headroom chain.
 --   The order is load-bearing: folding an uncarried column would reach
 --   2^69.1 against a 2^62 ceiling and wrap silently.
-export feMul : Fe -> Fe -> Fe
+export
+feMul : Fe -> Fe -> Fe
 feMul a b =
   -- Step 1 — the 19 schoolbook columns (index 19 receives the final carry).
   -- Peak: column 8, nine terms, < 2^55.170.
@@ -518,7 +531,8 @@ foldGo c e q =
 --   FOR SPEED, and a separate carry chain would be a second thing to prove.
 --   The bound is identical — a doubled cross term `2*a_i*a_j` replaces the two
 --   equal terms it stands for, so no column grows.
-export feSquare : Fe -> Fe
+export
+feSquare : Fe -> Fe
 feSquare a = feMul a a
 
 -- | Multiplicative inverse mod p, by Fermat's little theorem: `a^(p-2)`,
@@ -544,7 +558,8 @@ feSquare a = feMul a a
 --
 -- > feEqual (feMul (feInverse feOne) feOne) feOne
 -- True
-export feInverse : Fe -> Fe
+export
+feInverse : Fe -> Fe
 feInverse a = powGo a 255 feOne
 
 powGo : Fe -> Int -> Fe -> Fe

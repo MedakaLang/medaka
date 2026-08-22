@@ -1,5 +1,5 @@
 # META
-source_lines=2302
+source_lines=2324
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka lexer — Stage 1 port of `lib/lexer.mll`.
@@ -1900,7 +1900,15 @@ armsHerald : Bool -> Option Token -> Bool
 armsHerald opener (Some TDo) = True
 armsHerald opener _ = opener
 
--- a token that can START an application-argument atom
+-- a token that can START an application-argument atom.  `TBang` is included
+-- (#1751): a Ref-deref argument (`!r`) is unambiguous in this position ever
+-- since `!=` became its own token (#1739 half B), so a continuation line
+-- opening with `!` continues the application exactly like the inline
+-- `g "x" !r` case (`derefArg`, `compiler/frontend/parser.mdk`), rather than
+-- opening a spurious nested block.  `-`/`TMinusTight` is deliberately NOT
+-- included: it is head-gated (Rule C, `negLitArg`/`appArg`) so that `5 -1`
+-- keeps parsing as subtraction, and folding it into this continuation
+-- decision — which has no head to gate on — would risk disturbing that rule.
 canStartAtom : Token -> Bool
 canStartAtom (TInt _ _) = True
 canStartAtom (TFloat _) = True
@@ -1916,6 +1924,7 @@ canStartAtom TLArray = True
 canStartAtom TLBrace = True
 canStartAtom TAt = True
 canStartAtom (TInterpOpen _) = True
+canStartAtom TBang = True
 canStartAtom _ = False
 
 -- applyNl dispatches on the bracket-frame stack.  Top-level (`frames == []`)
@@ -1966,12 +1975,22 @@ dropFrame (f::fs) = f - 1 :: fs
 
 -- conforms to LAYOUT-SEMANTICS.md §5.4 (Stage B deeper-line then/else path);
 -- edits must keep both mechanisms in step (LAYOUT-CONFORMANCE-ROADMAP WS-2).
+--
+-- #1751: the fallback INDENT (the `otherwise` arm below) carries `toff` — the
+-- offset of the deeper line's own first token — not `off` (the offset of the
+-- RNewline that ended the PREVIOUS line, the convention every other
+-- INDENT/DEDENT/NEWLINE synthetic token uses, per the note on `layout` above).
+-- This is the one INDENT that a parse error routinely blames directly
+-- (`expectTok TDedent` failing on it, "unexpected an indent; expected a
+-- dedent") because it fires when the deeper line DOESN'T look like an
+-- application continuation, so misattributing it to the tail of the prior
+-- line sends the reader to a line that is fine.
 resolveCont : Int -> Int -> List Int -> List RawTok -> List Int -> Option Token -> Bool -> List (Token, Int)
 resolveCont col off stack ((RTok t toff tend)::more) frames prev opener
   | canStartAtom t = layout (RTok t toff tend :: more) stack frames prev opener
   | t == TThen = layout (RTok t toff tend :: more) stack frames prev opener
   | t == TElse = layout (RTok t toff tend :: more) stack frames prev opener
-  | otherwise = (TIndent, off) :: layout (RTok t toff tend :: more) (col::stack) (bumpFrame frames) None False
+  | otherwise = (TIndent, toff) :: layout (RTok t toff tend :: more) (col::stack) (bumpFrame frames) None False
 resolveCont col off stack rest frames prev opener =
   layout rest stack frames None False
 
@@ -2084,13 +2103,16 @@ wouldIndentPairs col off stack rest frames prev opener
   | opener || not (prevCanEnd prev) = (TIndent, off, off) :: layoutPairs rest (col::stack) (bumpFrame frames) None False
   | otherwise = resolveContPairs col off stack rest frames prev opener
 
+-- #1751: mirrors `resolveCont`'s fallback-INDENT location fix — `toff`/`tend`
+-- (the deeper line's own first token span), not `off` (the prior line's
+-- RNewline offset). Must stay in step with `resolveCont` (WS-2, above).
 resolveContPairs : Int -> Int -> List Int -> List RawTok -> List Int -> Option Token -> Bool -> List (Token, Int, Int)
 resolveContPairs col off stack ((RTok t toff tend)::more) frames prev opener
   | canStartAtom t =
     layoutPairs (RTok t toff tend :: more) stack frames prev opener
   | t == TThen = layoutPairs (RTok t toff tend :: more) stack frames prev opener
   | t == TElse = layoutPairs (RTok t toff tend :: more) stack frames prev opener
-  | otherwise = (TIndent, off, off) :: layoutPairs (RTok t toff tend :: more) (col::stack) (bumpFrame frames) None False
+  | otherwise = (TIndent, toff, toff) :: layoutPairs (RTok t toff tend :: more) (col::stack) (bumpFrame frames) None False
 resolveContPairs col off stack rest frames prev opener =
   layoutPairs rest stack frames None False
 
@@ -2933,6 +2955,7 @@ collectComments s =
 (DFunDef false "canStartAtom" ((PCon "TLBrace")) (EVar "True"))
 (DFunDef false "canStartAtom" ((PCon "TAt")) (EVar "True"))
 (DFunDef false "canStartAtom" ((PCon "TInterpOpen" PWild)) (EVar "True"))
+(DFunDef false "canStartAtom" ((PCon "TBang")) (EVar "True"))
 (DFunDef false "canStartAtom" (PWild) (EVar "False"))
 (DTypeSig false "applyNl" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Token")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int")))))))))))
 (DFunDef false "applyNl" ((PVar "col") (PVar "off") (PVar "rest") (PList) (PVar "frames") (PVar "prev") (PVar "opener")) (EBinOp "::" (ETuple (EVar "TNewline") (EVar "off")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EVar "rest")) (EListLit)) (EVar "frames")) (EVar "None")) (EVar "False"))))
@@ -2951,7 +2974,7 @@ collectComments s =
 (DFunDef false "dropFrame" ((PList)) (EListLit))
 (DFunDef false "dropFrame" ((PCons (PVar "f") (PVar "fs"))) (EBinOp "::" (EBinOp "-" (EVar "f") (ELit (LInt 1))) (EVar "fs")))
 (DTypeSig false "resolveCont" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Token")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int")))))))))))
-(DFunDef false "resolveCont" ((PVar "col") (PVar "off") (PVar "stack") (PCons (PCon "RTok" (PVar "t") (PVar "toff") (PVar "tend")) (PVar "more")) (PVar "frames") (PVar "prev") (PVar "opener")) (EIf (EApp (EVar "canStartAtom") (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "==" (EVar "t") (EVar "TThen")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "==" (EVar "t") (EVar "TElse")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "TIndent") (EVar "off")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EBinOp "::" (EVar "col") (EVar "stack"))) (EApp (EVar "bumpFrame") (EVar "frames"))) (EVar "None")) (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "resolveCont" ((PVar "col") (PVar "off") (PVar "stack") (PCons (PCon "RTok" (PVar "t") (PVar "toff") (PVar "tend")) (PVar "more")) (PVar "frames") (PVar "prev") (PVar "opener")) (EIf (EApp (EVar "canStartAtom") (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "==" (EVar "t") (EVar "TThen")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "==" (EVar "t") (EVar "TElse")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "TIndent") (EVar "toff")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EBinOp "::" (EVar "col") (EVar "stack"))) (EApp (EVar "bumpFrame") (EVar "frames"))) (EVar "None")) (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DFunDef false "resolveCont" ((PVar "col") (PVar "off") (PVar "stack") (PVar "rest") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "None")) (EVar "False")))
 (DTypeSig false "popDedents" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int")))))))))
 (DFunDef false "popDedents" ((PVar "col") (PVar "off") (PList) (PVar "rest") (PVar "frames")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EVar "rest")) (EListLit)) (EVar "frames")) (EVar "None")) (EVar "False")))
@@ -2995,7 +3018,7 @@ collectComments s =
 (DTypeSig false "wouldIndentPairs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Token")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int") (TyCon "Int")))))))))))
 (DFunDef false "wouldIndentPairs" ((PVar "col") (PVar "off") (PVar "stack") (PVar "rest") (PVar "frames") (PVar "prev") (PVar "opener")) (EIf (EApp (EVar "prevIsTrailingOp") (EVar "prev")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "||" (EVar "opener") (EApp (EVar "not") (EApp (EVar "prevCanEnd") (EVar "prev")))) (EBinOp "::" (ETuple (EVar "TIndent") (EVar "off") (EVar "off")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EVar "rest")) (EBinOp "::" (EVar "col") (EVar "stack"))) (EApp (EVar "bumpFrame") (EVar "frames"))) (EVar "None")) (EVar "False"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveContPairs") (EVar "col")) (EVar "off")) (EVar "stack")) (EVar "rest")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "resolveContPairs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Token")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int") (TyCon "Int")))))))))))
-(DFunDef false "resolveContPairs" ((PVar "col") (PVar "off") (PVar "stack") (PCons (PCon "RTok" (PVar "t") (PVar "toff") (PVar "tend")) (PVar "more")) (PVar "frames") (PVar "prev") (PVar "opener")) (EIf (EApp (EVar "canStartAtom") (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "==" (EVar "t") (EVar "TThen")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "==" (EVar "t") (EVar "TElse")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "TIndent") (EVar "off") (EVar "off")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EBinOp "::" (EVar "col") (EVar "stack"))) (EApp (EVar "bumpFrame") (EVar "frames"))) (EVar "None")) (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "resolveContPairs" ((PVar "col") (PVar "off") (PVar "stack") (PCons (PCon "RTok" (PVar "t") (PVar "toff") (PVar "tend")) (PVar "more")) (PVar "frames") (PVar "prev") (PVar "opener")) (EIf (EApp (EVar "canStartAtom") (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "==" (EVar "t") (EVar "TThen")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "==" (EVar "t") (EVar "TElse")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "TIndent") (EVar "toff") (EVar "toff")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EBinOp "::" (EVar "col") (EVar "stack"))) (EApp (EVar "bumpFrame") (EVar "frames"))) (EVar "None")) (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DFunDef false "resolveContPairs" ((PVar "col") (PVar "off") (PVar "stack") (PVar "rest") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "None")) (EVar "False")))
 (DTypeSig false "popDedentsPairs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int") (TyCon "Int")))))))))
 (DFunDef false "popDedentsPairs" ((PVar "col") (PVar "off") (PList) (PVar "rest") (PVar "frames")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EVar "rest")) (EListLit)) (EVar "frames")) (EVar "None")) (EVar "False")))
@@ -3684,6 +3707,7 @@ collectComments s =
 (DFunDef false "canStartAtom" ((PCon "TLBrace")) (EVar "True"))
 (DFunDef false "canStartAtom" ((PCon "TAt")) (EVar "True"))
 (DFunDef false "canStartAtom" ((PCon "TInterpOpen" PWild)) (EVar "True"))
+(DFunDef false "canStartAtom" ((PCon "TBang")) (EVar "True"))
 (DFunDef false "canStartAtom" (PWild) (EVar "False"))
 (DTypeSig false "applyNl" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Token")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int")))))))))))
 (DFunDef false "applyNl" ((PVar "col") (PVar "off") (PVar "rest") (PList) (PVar "frames") (PVar "prev") (PVar "opener")) (EBinOp "::" (ETuple (EVar "TNewline") (EVar "off")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EVar "rest")) (EListLit)) (EVar "frames")) (EVar "None")) (EVar "False"))))
@@ -3702,7 +3726,7 @@ collectComments s =
 (DFunDef false "dropFrame" ((PList)) (EListLit))
 (DFunDef false "dropFrame" ((PCons (PVar "f") (PVar "fs"))) (EBinOp "::" (EBinOp "-" (EVar "f") (ELit (LInt 1))) (EVar "fs")))
 (DTypeSig false "resolveCont" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Token")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int")))))))))))
-(DFunDef false "resolveCont" ((PVar "col") (PVar "off") (PVar "stack") (PCons (PCon "RTok" (PVar "t") (PVar "toff") (PVar "tend")) (PVar "more")) (PVar "frames") (PVar "prev") (PVar "opener")) (EIf (EApp (EVar "canStartAtom") (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "==" (EVar "t") (EVar "TThen")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "==" (EVar "t") (EVar "TElse")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "TIndent") (EVar "off")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EBinOp "::" (EVar "col") (EVar "stack"))) (EApp (EVar "bumpFrame") (EVar "frames"))) (EVar "None")) (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "resolveCont" ((PVar "col") (PVar "off") (PVar "stack") (PCons (PCon "RTok" (PVar "t") (PVar "toff") (PVar "tend")) (PVar "more")) (PVar "frames") (PVar "prev") (PVar "opener")) (EIf (EApp (EVar "canStartAtom") (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "==" (EVar "t") (EVar "TThen")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "==" (EVar "t") (EVar "TElse")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "TIndent") (EVar "toff")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EBinOp "::" (EVar "col") (EVar "stack"))) (EApp (EVar "bumpFrame") (EVar "frames"))) (EVar "None")) (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DFunDef false "resolveCont" ((PVar "col") (PVar "off") (PVar "stack") (PVar "rest") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "None")) (EVar "False")))
 (DTypeSig false "popDedents" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int")))))))))
 (DFunDef false "popDedents" ((PVar "col") (PVar "off") (PList) (PVar "rest") (PVar "frames")) (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EVar "rest")) (EListLit)) (EVar "frames")) (EVar "None")) (EVar "False")))
@@ -3746,7 +3770,7 @@ collectComments s =
 (DTypeSig false "wouldIndentPairs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Token")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int") (TyCon "Int")))))))))))
 (DFunDef false "wouldIndentPairs" ((PVar "col") (PVar "off") (PVar "stack") (PVar "rest") (PVar "frames") (PVar "prev") (PVar "opener")) (EIf (EApp (EVar "prevIsTrailingOp") (EVar "prev")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "||" (EVar "opener") (EApp (EVar "not") (EApp (EVar "prevCanEnd") (EVar "prev")))) (EBinOp "::" (ETuple (EVar "TIndent") (EVar "off") (EVar "off")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EVar "rest")) (EBinOp "::" (EVar "col") (EVar "stack"))) (EApp (EVar "bumpFrame") (EVar "frames"))) (EVar "None")) (EVar "False"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveContPairs") (EVar "col")) (EVar "off")) (EVar "stack")) (EVar "rest")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "resolveContPairs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "Option") (TyCon "Token")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int") (TyCon "Int")))))))))))
-(DFunDef false "resolveContPairs" ((PVar "col") (PVar "off") (PVar "stack") (PCons (PCon "RTok" (PVar "t") (PVar "toff") (PVar "tend")) (PVar "more")) (PVar "frames") (PVar "prev") (PVar "opener")) (EIf (EApp (EVar "canStartAtom") (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "==" (EVar "t") (EVar "TThen")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "==" (EVar "t") (EVar "TElse")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "TIndent") (EVar "off") (EVar "off")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EBinOp "::" (EVar "col") (EVar "stack"))) (EApp (EVar "bumpFrame") (EVar "frames"))) (EVar "None")) (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "resolveContPairs" ((PVar "col") (PVar "off") (PVar "stack") (PCons (PCon "RTok" (PVar "t") (PVar "toff") (PVar "tend")) (PVar "more")) (PVar "frames") (PVar "prev") (PVar "opener")) (EIf (EApp (EVar "canStartAtom") (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "==" (EVar "t") (EVar "TThen")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EBinOp "==" (EVar "t") (EVar "TElse")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EVar "stack")) (EVar "frames")) (EVar "prev")) (EVar "opener")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "TIndent") (EVar "toff") (EVar "toff")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EVar "t")) (EVar "toff")) (EVar "tend")) (EVar "more"))) (EBinOp "::" (EVar "col") (EVar "stack"))) (EApp (EVar "bumpFrame") (EVar "frames"))) (EVar "None")) (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DFunDef false "resolveContPairs" ((PVar "col") (PVar "off") (PVar "stack") (PVar "rest") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "None")) (EVar "False")))
 (DTypeSig false "popDedentsPairs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int") (TyCon "Int")))))))))
 (DFunDef false "popDedentsPairs" ((PVar "col") (PVar "off") (PList) (PVar "rest") (PVar "frames")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EVar "rest")) (EListLit)) (EVar "frames")) (EVar "None")) (EVar "False")))
