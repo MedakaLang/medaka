@@ -34,10 +34,13 @@ aliasFixtureEnv : DataEnv
 aliasFixturePrivCore : Decl
 aliasFixturePubCore : Decl
 aliasFixturePubM : Decl
+aliasMethodKeyRows : String -> List (String, Ident) -> Map String (IfaceRef, List String, Ty, List (String, List Kind)) -> Map String (IfaceRef, List String, Ty, List (String, List Kind))
+aliasMethodKeysFor : String -> String -> Map String (IfaceRef, List String, Ty, List (String, List Kind)) -> Map String (IfaceRef, List String, Ty, List (String, List Kind))
 aliasMethodRenames : List (String, List String) -> List Decl -> List (String, String)
 aliasMethodRenamesOf : List (String, List String) -> Decl -> List (String, String)
 aliasMethodRenamesOfPath : List String -> UsePath -> List (String, String)
 aliasNamesAt : Int -> List String
+aliasQualifiedMethodEntries : List Decl -> Map String (IfaceRef, List String, Ty, List (String, List Kind)) -> Map String (IfaceRef, List String, Ty, List (String, List Kind))
 aliasSchemeEntry : List (String, List (String, Scheme)) -> String -> (String, Scheme) -> (String, Scheme)
 aliasSchemes : List (String, List (String, Scheme)) -> String -> List (String, Scheme) -> List (String, Scheme)
 aliasUniverseAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
