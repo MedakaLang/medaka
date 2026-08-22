@@ -1,9 +1,0 @@
--- issue #1386: an UNRELATED interface, deliberately using a DIFFERENT method
--- name (`mthb`, not `mth`) than ifacea's `IA.mth`. main.mdk's `Blob` implements
--- ONLY this interface. Unlike #1276's fixture, there is NO bare-name collision
--- anywhere in this program: nothing but `IA` is ever named `mth`. That is the
--- point -- it isolates the defect to pass-placement (obligation-checking is
--- skipped outright for an alias-qualified occurrence), not to the witness/
--- collision table #1276 pins.
-export interface IB a where
-  mthb : a -> Int

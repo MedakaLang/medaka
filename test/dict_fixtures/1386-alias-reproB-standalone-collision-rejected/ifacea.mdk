@@ -1,0 +1,4 @@
+-- #1386 Repro B: the interface main.mdk's occurrence actually names. It is
+-- reached ONLY through the module alias `A`.
+export interface IA a where
+  mth : a -> Int

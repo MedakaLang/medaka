@@ -1,0 +1,14 @@
+-- #1386 Repro B -- REGRESSION GUARD, constructed fresh per S-alias-supply's
+-- report §6.3 (this shape has no committed must_fail fixture; it was only a
+-- scratch probe verifying the fix's SUPPLY shape, not a de-alias rewrite).
+-- `A.mth` unambiguously names ifacea's `IA.mth`; `fmod` exports an UNRELATED
+-- standalone also spelled `mth : Blob -> Int` returning 42. `Blob` has no
+-- `IA` impl at all. Correct verdict: reject with `No impl of IA for Blob;
+-- write an 'impl IA Blob'.` -- exactly like the bare-collision siblings
+-- above, but discriminating a DE-ALIAS REWRITE fix (which would have left
+-- this cell silently printing 42, the standalone's body) from the SUPPLY fix
+-- that was actually landed (which rejects here too).
+import ifacea as A
+import fmod.{Blob, mth}
+
+main = println (A.mth Blob)

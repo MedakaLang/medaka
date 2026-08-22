@@ -1,0 +1,36 @@
+-- 🚨 KNOWN-BAD LEDGER ROW (#1182 / #1265 class, OPEN): this is a DIFFERENT,
+-- PRE-EXISTING coverage gap from the #1276/#1386 rows in this file -- NOT
+-- something S-alias-supply drained, and NOT something its fix touches. That
+-- fix repairs the CHECKED half (impl-obligation existence); this pins the
+-- DISPATCH half (which impl's body actually RUNS) still disagreeing with it.
+--
+-- `Blob` implements BOTH `IA` and `IB`. `A.mth Blob` and `B.mth Blob` are
+-- alias-qualified calls that name TWO DIFFERENT interfaces. Correct answer:
+-- 1 then 2 (each call dispatches to the impl its own alias names). OBSERVED
+-- (still, on this binary): 1 then 1 -- `B.mth Blob` silently runs `IA`'s
+-- body on check, run, AND build alike, because `renameAliasedMethods`
+-- erases the alias to a bare `mth` before dispatch is decided, and ordinary
+-- dispatch has no per-alias-occurrence discriminator.
+--
+-- Witness from F-fix-alias-collision's report (Note N1), confirmed
+-- reproducing identically at both the pre-sprint merge-base `9824e65b` and
+-- the sprint head -- neither this sprint's fix nor the alias-collision fix
+-- caused it. THIS ROW IS EXPECTED TO STAY GREEN (i.e. keep reproducing the
+-- WRONG value) until #1182/#1265 land; a value change here is the signal to
+-- re-pin it, not a regression in this gate.
+import ifa.{IA}
+import ifb.{IB}
+import ifa as A
+import ifb as B
+
+public export data Blob = Blob
+
+export impl IA Blob where
+  mth b = 1
+
+export impl IB Blob where
+  mth b = 2
+
+main =
+  let _ = println (A.mth Blob)
+  println (B.mth Blob)

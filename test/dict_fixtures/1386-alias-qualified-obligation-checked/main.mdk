@@ -1,0 +1,19 @@
+-- REGRESSION GUARD for #1386, re-pointed here from the drained must_fail pin
+-- test/must_fail_fixtures/1386-alias-qualified-method-no-obligation-check
+-- (drained by S-alias-supply, sprint/alias-provenance). `A.mth` unambiguously
+-- names ifacea's `IA.mth` -- `A` is an alias of `ifacea`, which exports no
+-- standalone `mth`, only `IA.mth`. `Blob` implements only `IB` (method
+-- `mthb`), never `IA`. Correct verdict: reject with `No impl of IA for Blob;
+-- write an 'impl IA Blob'.` -- and it now does, on check/run/build alike.
+-- Previously (base main, pre-fix): `medaka check` exited 0, `main : Unit`,
+-- no diagnostic at all -- the impl obligation for an alias-qualified method
+-- occurrence was never checked (see the drained pin's claim.txt).
+import ifacea as A
+import ifaceb.{IB}
+
+public export data Blob = Blob
+
+export impl IB Blob where
+  mthb b = 2
+
+main = println (A.mth Blob)

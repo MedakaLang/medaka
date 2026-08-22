@@ -1,0 +1,114 @@
+issue: 1852
+what: RE-VERIFIED 2026-08-22 at sprint/alias-provenance head
+what: ba44803ed9844af133aa7edd51dd1788d8680b56 by S-collision-settle, first-hand on a
+what: cold `make medaka` in that worktree, MEDAKA_STRICT=1 on every probe, exit codes
+what: read directly (never through a pipe).
+what: Two interfaces (`IA`, `IZ`), declared in TWO SEPARATE modules (`amod.mdk`,
+what: `zmod.mdk`), share ONE method name `szK` and ONE receiver head tycon `Int`
+what: (`impl IA Int` / `impl IZ Int`) but declare it at DIFFERENT ARITY:
+what: `szK : a -> Int` (IA) vs `szK : b -> Int -> Int` (IZ). Each interface has a
+what: direct wrapper (`viaA`, `viaZ`) so the call site is unambiguous by import.
+what: `check` accepts; the defect is build-only in the sense that only the EXECUTED
+what: BINARY is import-order-sensitive.
+what: HAND-DERIVED EXPECTED VALUES (language semantics, not eval output):
+what:   `viaA 5` = `szK 5` under IA = `5 + 100` = 105.
+what:   `viaZ 5 3` = `szK 5 3` under IZ = `3 + 7` = 10.
+what: MEASURED at ba44803e, all three verbs, both import orderings:
+what:   main.mdk      (import amod THEN zmod) -> check exit 0 ("main : Unit");
+what:                 run -> stdout `105` then
+what:                 `[E-NOT-A-FUNCTION]: applied non-function: 105`, exit 1;
+what:                 BUILD exit 0, EXEC -> stdout `105` then
+what:                 `[E-FATAL-SIGNAL]: fatal memory fault (segmentation fault)`,
+what:                 exit 139.  <- PINNED, repeated 3x, identical all three times.
+what:   raw-probe.mdk (import zmod THEN amod, otherwise byte-identical) -> check exit 0;
+what:                 run -> same `105` / E-NOT-A-FUNCTION, exit 1; BUILD exit 0,
+what:                 EXEC -> exit 0, stdout line 1 = `70063270698976` (a 14-digit
+what:                 BUILD-VARYING integer where 105 is owed), line 2 = `10`.
+what:                 NOT pinned here -- see why-stdout.
+what:   control.mdk   -> check/run/build+exec all exit 0, stdout `105` then `10`.
+what: HISTORICAL ARM, measured first-hand by S-collision-settle on a cold-bootstrapped
+what: binary built in an isolated worktree at 7d57ac53 (the S-emit-arity-by-declaration
+what: fix commit for #1450/#1668): the SAME main.mdk built at exit 0 and EXECUTED at
+what: exit 0 printing `105` then `105` -- a SILENT WRONG VALUE (the second line owes
+what: `10`), repeated 3x, deterministic. raw-probe.mdk at 7d57ac53: exit 0,
+what: `69814342780896` then `10`. So this program's az-ordering cell has moved
+what: silent-wrong (7d57ac53) -> segfault (ba44803e) with no fix in between claiming
+what: it; the current loud crash is the LESS severe of the two manifestations.
+what: `105`,`105` AT EXIT 0 IS NOT A DRAIN OF THIS ROW -- it is the [W-QUIETER]
+what: severity increase. If a future binary produces it, do not retire this pin.
+what: MINIMIZATION, inherited from the F10 bundle's own derivation and NOT re-run
+what: here: the two interfaces do NOT collapse into one module -- a single-file
+what: version (both `interface`/`impl` blocks inlined into main.mdk) is rejected up
+what: front, exit 1: "Method 'szK' is declared by two interfaces in this module: 'IA'
+what: and 'IZ' ... Rename the method in one of them, or merge the two interfaces." So
+what: the cross-MODULE split is LOAD-BEARING: R-DUPLICATE-IFACE-METHOD only fires
+what: within one module and has no import table to see a collision arriving through
+what: two `import`s.
+cmd: build-run main.mdk
+exit: 139
+stdout: 105
+control: build-run control.mdk
+why-verb: `build-run` because BOTH observable defects (the az-ordering segfault pinned
+why-verb: here, and the za-ordering pointer-shaped exit-0 value recorded in
+why-verb: raw-probe.mdk) exist ONLY in the EXECUTED BINARY -- `check` accepts and `run`
+why-verb: is loud-and-order-invariant on every ordering measured, so `build-run` is the
+why-verb: only verb that reaches the order-sensitivity at all. `build` alone would
+why-verb: grade `medaka build`'s own exit (0, uninteresting -- the emitter does not
+why-verb: refuse this program); the crash happens after the binary starts running.
+why-stdout: THE MORE DANGEROUS CELL (za ordering, raw-probe.mdk: exit 0, a 14-digit
+why-stdout: pointer-shaped integer printed where 105 is owed) is DELIBERATELY NOT the
+why-stdout: pinned observable, on the same principle #1620's claim.txt states for its
+why-stdout: own raw-probe.mdk: the printed value is a live heap/stack address, not
+why-stdout: byte-stable across builds (four distinct values measured across separate
+why-stdout: builds of this same source: 70104438996960 / 70123789547488 /
+why-stdout: 70235528726496 / 70063270698976, plus 69814342780896 at 7d57ac53). An
+why-stdout: exact-stdout pin on it would false-drain on the next unrelated rebuild.
+why-stdout: The az-ordering SEGFAULT pinned here is deterministic (repeated 3x on this
+why-stdout: binary, identical exit 139 and identical stdout `105` all three times) and
+why-stdout: is caused by the exact same defect -- same two colliding interfaces, same
+why-stdout: receiver head, same arity mismatch, order flipped.
+why-stdout: DRAIN CONDITIONS, exactly two: (1) correctly disambiguating `szK` by
+why-stdout: interface identity makes the executed binary print `105` then `10` at exit
+why-stdout: 0 -- stdout and exit both move -> DRAINED; (2) rejecting the collision at
+why-stdout: build time makes `medaka build` itself fail -- `build-run` reports
+why-stdout: "build-run MALFORMED: 'medaka build' itself failed" at exit 126, which also
+why-stdout: fails this row's exact `exit: 139` assertion -> DRAINED, and the failure
+why-stdout: text names a build failure so it reads correctly as "fixed by rejection".
+why-stdout: `105`,`105` at exit 0 is NEITHER -- see the [W-QUIETER] paragraph above.
+why-control: control.mdk is main.mdk with the COLLISION removed and nothing else
+why-control: changed: `zmod_ctrl.mdk` is `zmod.mdk` with its method renamed
+why-control: `szK` -> `szZ` (interface renamed `IZ` -> `IZctrl` to match), so there is
+why-control: no shared method name and nothing for arity resolution to conflate. Same
+why-control: import order (amod then the z-module), same wrapper shape, same receiver
+why-control: type `Int`, same two integer literals passed. Graded with the SAME
+why-control: `build-run` verb, so it exercises the entire pipeline this pin blames
+why-control: (front end, emitter, clang, the executed binary) -- a red here means that
+why-control: path broke in general, not that this bug's environment moved.
+why-note: THREE extra files ship here beyond main.mdk/control.mdk/claim.txt.
+why-note: `amod.mdk` and `zmod.mdk` are the two colliding modules and ARE part of the
+why-note: graded program (imported by both main.mdk and raw-probe.mdk).
+why-note: `zmod_ctrl.mdk` is the non-colliding sibling imported ONLY by control.mdk.
+why-note: `raw-probe.mdk` is NOT run by this gate: it carries the za-ordering
+why-note: pointer-shaped cell, ruled the more dangerous of the two (build-varying
+why-note: integer at exit 0 vs. a loud crash) but not byte-stable enough to assert
+why-note: exactly -- see why-stdout.
+why-note: This fixture uses the `build-run` verb and needs clang.
+why-note: NOT #1182 -- that reproduces by IMPL-BLOCK ORDER within candidates of ONE
+why-note: method's specificity ranking; here the two methods belong to two DIFFERENT
+why-note: interfaces at DIFFERENT ARITY and only the BUILT BINARY is
+why-note: import-order-sensitive.
+why-note: NOT #1620 -- that reproduces unconditionally with SAME arity, return-type
+why-note: divergence; this reproduces only via BUILD, is IMPORT-ORDER dependent, and
+why-note: one of its two cells is a segfault rather than a wrong-but-well-typed value.
+why-note: NOT #1450 -- measured side by side at 7d57ac53 and at ba44803e by
+why-note: S-collision-settle. #1450's regression guard
+why-note: (test/import_order_fixtures/xmod-iface-method-name-arity-invariant/) pairs
+why-note: `impl IA Int` with `impl IZ String` -- DIFFERENT receiver head tycons -- and
+why-note: prints 12 at exit 0 on both orderings at BOTH SHAs. This fixture pairs
+why-note: `impl IA Int` with `impl IZ Int` -- the SAME receiver head tycon -- and
+why-note: diverges by import order at both SHAs. Same-head is the load-bearing axis;
+why-note: the two are different shapes, not one shape with two records.
+why-note: Source: F10 bundle
+why-note: /var/tmp/medaka-sprints/selector-identity/findings/F10/pin/ (authored at base
+why-note: fad180d4, `issue: PENDING`); re-verified and re-derived at ba44803e by
+why-note: sprint/alias-provenance slice S-collision-settle.

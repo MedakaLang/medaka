@@ -1,0 +1,9 @@
+-- #1386 Repro B: an UNRELATED module exporting a STANDALONE function that
+-- happens to share `mth`'s bare spelling. Before the fix, the alias-erasure
+-- mechanism rewrote `A.mth` to a bare `mth` occurrence that this standalone
+-- could silently satisfy, running the WRONG function body (42) instead of
+-- rejecting for `Blob`'s missing `IA` impl.
+public export data Blob = Blob
+
+export mth : Blob -> Int
+mth b = 42
