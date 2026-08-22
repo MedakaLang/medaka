@@ -1,0 +1,11 @@
+-- #1718: trailing `->` per line IS a supported multi-line signature form, but
+-- every wrapped line must indent at the same depth as the first continuation
+-- line (or deeper). This one dedents the third line past that depth, which
+-- must fail with a diagnostic naming the true cause, not a bare "unexpected
+-- `->`" / "expected type atom".
+f : Int ->
+      String ->
+    Bool
+f x y = True
+
+main = println (f 1 "a")

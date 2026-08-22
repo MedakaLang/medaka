@@ -1,0 +1,9 @@
+-- #1718 regression guard: the SUPPORTED trailing-`->` multi-line signature
+-- form (every wrapped line at the same depth as the first continuation)
+-- must keep parsing clean — the #1718 diagnostic must not misfire here.
+f : Int ->
+    String ->
+    Bool
+f x y = True
+
+main = println (f 1 "a")

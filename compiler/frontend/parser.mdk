@@ -4512,7 +4512,24 @@ unexpectedLeftoverMsg src toks offs srcLen pos =
   let offset = locateOffset toks offs srcLen pos
   match leadingIndentAt src offset
     Some col if col > 0 => leadingIndentMsg (peekTok toks pos) base col
-    _ => base
+    _ => trailingArrowLeftoverMsg (peekTok toks pos) base
+
+-- #1718: a trailing-`->` type-signature continuation IS supported
+-- (`tyArrowTail`/`tyArrowSkipLayout` above) as long as every wrapped line
+-- indents at the same depth the first continuation established, or deeper.
+-- A later line that dedents past that depth breaks the continuation, and the
+-- resulting parse failure surfaces here — as a mid-line, non-leading `->`
+-- reported leftover at the FIRST arrow of the signature — with no hint that
+-- the true fault is a later line's indentation, not the arrow itself
+-- (`expected type atom` / a bare `unexpected \`->\`` before this fix). This is
+-- the trailing-side twin of #66's leading-`->` fix just above: name the real
+-- cause instead of the token the parser happened to choke on. A leading `->`
+-- is still never accepted at any indentation (#66), so — unlike the leading
+-- case — there's no alternative form to point to; the fix is always to
+-- re-indent the wrapped lines, which is what this message says.
+trailingArrowLeftoverMsg : Token -> String -> String
+trailingArrowLeftoverMsg TArrow base = "\{base}. This looks like a multi-line type signature using trailing `->` continuations — that form IS supported, but every wrapped line must indent at the same depth as the first continuation line, or deeper; a later line that dedents past it breaks the continuation (re-indent the wrapped lines to line up)"
+trailingArrowLeftoverMsg _ base = base
 
 -- `->` is deliberately absent from the leading-operator continuation set
 -- (LAYOUT-SEMANTICS.md §5: the 7 leading ops are `|> >> << && || ++ ::`;
