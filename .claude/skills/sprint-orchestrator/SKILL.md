@@ -56,12 +56,26 @@ instead.
    contract). Base = current sprint-branch head. While an implementer runs,
    author the NEXT slice's packet — that is your idle work, not extra
    verification.
-2. **Dispatch** one `sprint-implementer` with `isolation: "worktree"` and the
+2. **Pre-dispatch freshness check — yours, not the implementer's.**
+   `git fetch origin main sprint/<stage>`. If `origin/main` has moved past
+   your last resync point, resync NOW, before dispatching: real merge-base,
+   diff merge-base..origin/main against this stage's touched files to
+   confirm no overlap (it almost never overlaps — main moves fast on
+   unrelated files far more often than it touches your slice's own
+   surface), merge `origin/main` into the sprint branch on a disposable
+   branch, push, update the packet's base to the new head. This is a git
+   command, not agent judgment — a dispatched implementer hitting `BLOCKED`
+   on stale-main is a wasted round-trip (worktree mint + a refusal write-up
+   for zero code), confirmed costly across a full sprint (5 of 9 dispatches
+   in one sprint were exactly this, every resulting merge conflict-free and
+   file-disjoint). Do this check every time you're about to dispatch, not
+   only after a BLOCKED report.
+3. **Dispatch** one `sprint-implementer` with `isolation: "worktree"` and the
    contract's model tier for the slice. The brief is one line: the packet
    path. (The harness mints the worktree from `main`'s tip; the packet's §2
    sync commands handle that — never ask the agent to derive or refuse over
    its cwd.)
-3. **On return, read the report file** (never just the return line) and branch
+4. **On return, read the report file** (never just the return line) and branch
    on the Verdict:
    - `LANDED @sha` — merge that SHA into the sprint branch
      (`git merge --no-ff <sha>` on your sprint checkout; resolve nothing by
@@ -74,11 +88,13 @@ instead.
      shows the slice is trickier than classified. If the refusal overturns
      the slice's premise entirely, mark it `dropped` and tell Val in your
      next status message.
-   - `BLOCKED` — a dispatch/environment defect. Fix the environment,
-     re-dispatch. Twice blocked the same way = stop and report to Val.
+   - `BLOCKED` — should now be rare (step 2 catches ordinary stale-main
+     BLOCKED before dispatch); treat one as a real dispatch/environment
+     defect, not routine staleness. Fix it, re-dispatch. Twice blocked the
+     same way = stop and report to Val.
    - `SPIKE-DONE` — fold the findings into the packet and dispatch the real
      slice.
-4. Next slice.
+5. Next slice.
 
 **Parallel writers** — only for a pair the contract marks `parallel-ok` with
 disjointness evidence, re-verified at dispatch time against the CURRENT head:
