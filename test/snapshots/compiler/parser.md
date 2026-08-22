@@ -1,5 +1,5 @@
 # META
-source_lines=5076
+source_lines=5093
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser — Stage 1 port of `lib/parser.mly`.  A monadic
@@ -4516,7 +4516,24 @@ unexpectedLeftoverMsg src toks offs srcLen pos =
   let offset = locateOffset toks offs srcLen pos
   match leadingIndentAt src offset
     Some col if col > 0 => leadingIndentMsg (peekTok toks pos) base col
-    _ => base
+    _ => trailingArrowLeftoverMsg (peekTok toks pos) base
+
+-- #1718: a trailing-`->` type-signature continuation IS supported
+-- (`tyArrowTail`/`tyArrowSkipLayout` above) as long as every wrapped line
+-- indents at the same depth the first continuation established, or deeper.
+-- A later line that dedents past that depth breaks the continuation, and the
+-- resulting parse failure surfaces here — as a mid-line, non-leading `->`
+-- reported leftover at the FIRST arrow of the signature — with no hint that
+-- the true fault is a later line's indentation, not the arrow itself
+-- (`expected type atom` / a bare `unexpected \`->\`` before this fix). This is
+-- the trailing-side twin of #66's leading-`->` fix just above: name the real
+-- cause instead of the token the parser happened to choke on. A leading `->`
+-- is still never accepted at any indentation (#66), so — unlike the leading
+-- case — there's no alternative form to point to; the fix is always to
+-- re-indent the wrapped lines, which is what this message says.
+trailingArrowLeftoverMsg : Token -> String -> String
+trailingArrowLeftoverMsg TArrow base = "\{base}. This looks like a multi-line type signature using trailing `->` continuations — that form IS supported, but every wrapped line must indent at the same depth as the first continuation line, or deeper; a later line that dedents past it breaks the continuation (re-indent the wrapped lines to line up)"
+trailingArrowLeftoverMsg _ base = base
 
 -- `->` is deliberately absent from the leading-operator continuation set
 -- (LAYOUT-SEMANTICS.md §5: the 7 leading ops are `|> >> << && || ++ ::`;
@@ -6498,7 +6515,10 @@ parseResultWith src tokList offList =
 (DTypeSig false "leadingIndentAllBlank" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "leadingIndentAllBlank" ((PVar "chars") (PVar "i") (PVar "limit")) (EIf (EBinOp ">=" (EVar "i") (EVar "limit")) (EVar "True") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (arm (PLit (LChar " ")) () (EApp (EApp (EApp (EVar "leadingIndentAllBlank") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "limit"))) (arm (PLit (LChar "\t")) () (EApp (EApp (EApp (EVar "leadingIndentAllBlank") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "limit"))) (arm PWild () (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "unexpectedLeftoverMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))))
-(DFunDef false "unexpectedLeftoverMsg" ((PVar "src") (PVar "toks") (PVar "offs") (PVar "srcLen") (PVar "pos")) (EBlock (DoLet false false (PVar "base") (EBinOp "++" (ELit (LString "unexpected ")) (EApp (EVar "describeToken") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))))) (DoLet false false (PVar "offset") (EApp (EApp (EApp (EApp (EVar "locateOffset") (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "pos"))) (DoExpr (EMatch (EApp (EApp (EVar "leadingIndentAt") (EVar "src")) (EVar "offset")) (arm (PCon "Some" (PVar "col")) ((GBool (EBinOp ">" (EVar "col") (ELit (LInt 0))))) (EApp (EApp (EApp (EVar "leadingIndentMsg") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))) (EVar "base")) (EVar "col"))) (arm PWild () (EVar "base"))))))
+(DFunDef false "unexpectedLeftoverMsg" ((PVar "src") (PVar "toks") (PVar "offs") (PVar "srcLen") (PVar "pos")) (EBlock (DoLet false false (PVar "base") (EBinOp "++" (ELit (LString "unexpected ")) (EApp (EVar "describeToken") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))))) (DoLet false false (PVar "offset") (EApp (EApp (EApp (EApp (EVar "locateOffset") (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "pos"))) (DoExpr (EMatch (EApp (EApp (EVar "leadingIndentAt") (EVar "src")) (EVar "offset")) (arm (PCon "Some" (PVar "col")) ((GBool (EBinOp ">" (EVar "col") (ELit (LInt 0))))) (EApp (EApp (EApp (EVar "leadingIndentMsg") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))) (EVar "base")) (EVar "col"))) (arm PWild () (EApp (EApp (EVar "trailingArrowLeftoverMsg") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))) (EVar "base")))))))
+(DTypeSig false "trailingArrowLeftoverMsg" (TyFun (TyCon "Token") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "trailingArrowLeftoverMsg" ((PCon "TArrow") (PVar "base")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "base"))) (ELit (LString ". This looks like a multi-line type signature using trailing `->` continuations — that form IS supported, but every wrapped line must indent at the same depth as the first continuation line, or deeper; a later line that dedents past it breaks the continuation (re-indent the wrapped lines to line up)"))))
+(DFunDef false "trailingArrowLeftoverMsg" (PWild (PVar "base")) (EVar "base"))
 (DTypeSig false "leadingIndentMsg" (TyFun (TyCon "Token") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "leadingIndentMsg" ((PCon "TArrow") (PVar "base") (PVar "col")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "base"))) (ELit (LString ". A line can't start with `->` — it's not a supported continuation at any indentation; put `->` at the end of the previous line instead (e.g. `f : Int ->` then an indented `Int`)"))))
 (DFunDef false "leadingIndentMsg" (PWild (PVar "base") (PVar "col")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "base"))) (ELit (LString ". Indentation (column "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "col")))) (ELit (LString ") doesn't match the enclosing block"))))
@@ -8034,7 +8054,10 @@ parseResultWith src tokList offList =
 (DTypeSig false "leadingIndentAllBlank" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "leadingIndentAllBlank" ((PVar "chars") (PVar "i") (PVar "limit")) (EIf (EBinOp ">=" (EVar "i") (EVar "limit")) (EVar "True") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (arm (PLit (LChar " ")) () (EApp (EApp (EApp (EVar "leadingIndentAllBlank") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "limit"))) (arm (PLit (LChar "\t")) () (EApp (EApp (EApp (EVar "leadingIndentAllBlank") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "limit"))) (arm PWild () (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "unexpectedLeftoverMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))))
-(DFunDef false "unexpectedLeftoverMsg" ((PVar "src") (PVar "toks") (PVar "offs") (PVar "srcLen") (PVar "pos")) (EBlock (DoLet false false (PVar "base") (EBinOp "++" (ELit (LString "unexpected ")) (EApp (EVar "describeToken") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))))) (DoLet false false (PVar "offset") (EApp (EApp (EApp (EApp (EVar "locateOffset") (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "pos"))) (DoExpr (EMatch (EApp (EApp (EVar "leadingIndentAt") (EVar "src")) (EVar "offset")) (arm (PCon "Some" (PVar "col")) ((GBool (EBinOp ">" (EVar "col") (ELit (LInt 0))))) (EApp (EApp (EApp (EVar "leadingIndentMsg") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))) (EVar "base")) (EVar "col"))) (arm PWild () (EVar "base"))))))
+(DFunDef false "unexpectedLeftoverMsg" ((PVar "src") (PVar "toks") (PVar "offs") (PVar "srcLen") (PVar "pos")) (EBlock (DoLet false false (PVar "base") (EBinOp "++" (ELit (LString "unexpected ")) (EApp (EVar "describeToken") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))))) (DoLet false false (PVar "offset") (EApp (EApp (EApp (EApp (EVar "locateOffset") (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "pos"))) (DoExpr (EMatch (EApp (EApp (EVar "leadingIndentAt") (EVar "src")) (EVar "offset")) (arm (PCon "Some" (PVar "col")) ((GBool (EBinOp ">" (EVar "col") (ELit (LInt 0))))) (EApp (EApp (EApp (EVar "leadingIndentMsg") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))) (EVar "base")) (EVar "col"))) (arm PWild () (EApp (EApp (EVar "trailingArrowLeftoverMsg") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))) (EVar "base")))))))
+(DTypeSig false "trailingArrowLeftoverMsg" (TyFun (TyCon "Token") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "trailingArrowLeftoverMsg" ((PCon "TArrow") (PVar "base")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString ". This looks like a multi-line type signature using trailing `->` continuations — that form IS supported, but every wrapped line must indent at the same depth as the first continuation line, or deeper; a later line that dedents past it breaks the continuation (re-indent the wrapped lines to line up)"))))
+(DFunDef false "trailingArrowLeftoverMsg" (PWild (PVar "base")) (EVar "base"))
 (DTypeSig false "leadingIndentMsg" (TyFun (TyCon "Token") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "leadingIndentMsg" ((PCon "TArrow") (PVar "base") (PVar "col")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString ". A line can't start with `->` — it's not a supported continuation at any indentation; put `->` at the end of the previous line instead (e.g. `f : Int ->` then an indented `Int`)"))))
 (DFunDef false "leadingIndentMsg" (PWild (PVar "base") (PVar "col")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString ". Indentation (column "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "col")))) (ELit (LString ") doesn't match the enclosing block"))))
