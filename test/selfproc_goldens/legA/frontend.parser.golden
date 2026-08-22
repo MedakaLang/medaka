@@ -533,6 +533,7 @@ tokEndOffsetAtArr : Array (Int, Int) -> Int -> Int
 tokIdxOrNone : Array Token -> Int -> Option Int
 tokOffsetAt : Int -> Int
 tokOffsetAtArr : Array (Int, Int) -> Int -> Int
+trailingArrowLeftoverMsg : Token -> String -> String
 tupleCtorTailFor : Int -> Token -> Parser Ty
 tupleCtorTyName : Int -> String
 tupleCtorTyOfArity : Int -> Parser Ty
