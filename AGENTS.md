@@ -158,14 +158,19 @@ cost, not theme): the `gates` skill.
   ```
 
 🚨 **[W-GH-WRITE-VERIFY] A `gh` write can report success while writing nothing — always read
-the result back, never the exit code.** Two concrete traps beyond [W-MERGE-EXIT-CODE], both hit
-in one session (#1212):
+the result back, never the exit code.** Three concrete traps beyond [W-MERGE-EXIT-CODE], the
+first two both hit in one session (#1212):
   - `gh pr edit --body-file <f>` can silently no-op (observed on a Projects-classic deprecation
     error) — the body is unchanged but the command exits 0. Verify by re-reading the body
     length, not the exit code. Workaround: `gh api -X PATCH repos/OWNER/REPO/pulls/N -f body="…"`.
   - **`-f body=@file` does NOT expand `@file`** — it writes the four literal characters `@file`
     as the body. Only `-F` expands `@file` into the file's contents. This is the workaround for
     the bullet above, so routing around one bug lands directly in the other.
+  - **`gh issue edit --body-file <f>` REPLACES THE WHOLE BODY** — using it to append silently
+    CLOBBERS prior content. Not a no-op and not a literal-string bug — it succeeds and destroys
+    (#1824). For an append: read the existing body first (`gh issue view N --json body -q
+    .body`), concatenate the new content locally, then write the full combined result back —
+    never `--body-file` with just the new fragment.
 
 ⚠️ **[W-QUEUE-FROZEN] Once a PR is enqueued, treat its branch as frozen.** The queue merges the
 branch as it stood at enqueue time — a commit pushed afterward can be left behind, landing on
