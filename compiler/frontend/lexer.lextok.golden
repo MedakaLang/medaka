@@ -12116,6 +12116,11 @@ EQUAL
 UPPER "True"
 NEWLINE
 IDENT "canStartAtom"
+UPPER "TBang"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "canStartAtom"
 UNDERSCORE
 EQUAL
 UPPER "False"
@@ -12691,7 +12696,7 @@ EQUAL
 LPAREN
 UPPER "TIndent"
 COMMA
-IDENT "off"
+IDENT "toff"
 RPAREN
 CONS
 IDENT "layout"
@@ -14066,9 +14071,9 @@ EQUAL
 LPAREN
 UPPER "TIndent"
 COMMA
-IDENT "off"
+IDENT "toff"
 COMMA
-IDENT "off"
+IDENT "toff"
 RPAREN
 CONS
 IDENT "layoutPairs"
