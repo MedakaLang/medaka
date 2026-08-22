@@ -1,0 +1,8 @@
+export interface IA a where
+  szK : a -> Int  -- arity 1
+
+export impl IA Int where
+  szK n = n + 100
+
+export viaA : IA a => a -> Int
+viaA x = szK x

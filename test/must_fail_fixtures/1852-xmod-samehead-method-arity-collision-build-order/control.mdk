@@ -1,0 +1,6 @@
+import amod.{viaA}
+import zmod_ctrl.{viaZ}
+
+main =
+  println (viaA 5)
+  println (viaZ 5 3)
