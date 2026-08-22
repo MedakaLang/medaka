@@ -99,13 +99,13 @@ argDispatchOfDeclById : Decl -> List ((IfaceRef, String), Int)
 argDispatchOfMethod : List String -> IfaceMethod -> List (String, Int)
 argDispatchOfMethodById : IfaceRef -> List String -> IfaceMethod -> List ((IfaceRef, String), Int)
 argImplDictRoutesFor : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> Mono -> List Route
-argImplDictRoutesForEncl : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> String -> Mono -> List Mono -> List Route
-argImplReqRoutes : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> List (String, Mono) -> List Require -> Int -> List Route
-argImplRequiresRoutes : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> String -> Mono -> List Mono -> Int -> List Route
+argImplDictRoutesForEncl : Map String (List ImplEntry) -> String -> String -> String -> Mono -> List Mono -> List Route
+argImplReqRoutes : Map String (List ImplEntry) -> String -> List (String, Mono) -> List Require -> Int -> List Route
+argImplRequiresRoutes : Map String (List ImplEntry) -> String -> String -> String -> Mono -> List Mono -> Int -> List Route
 argMentions : List String -> Ty -> Bool
 argOnlyEffVarMsg : String -> String -> String -> String
 argPerformableOccs : Bool -> Ty -> List (String, List Atom)
-argReqRoute : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> List (String, Mono) -> List Ty -> Int -> Route
+argReqRoute : Map String (List ImplEntry) -> String -> String -> List (String, Mono) -> List Ty -> Int -> Route
 argStampMono : PendingEntry -> Mono
 argStampPairs : PendingEntry -> List (Int, String)
 armDictSites : Arm -> List (Ref (List Route))
@@ -899,7 +899,7 @@ implDeclWithReqs : Decl -> List (IfaceRef, List Ty, List Require)
 implDeclsWithReqs : List Decl -> List (IfaceRef, List Ty, List Require)
 implDictNames : String -> Int -> List String
 implDictPassMethods : Int -> List ImplMethod -> List ImplMethod
-implDictRoutesForFull : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> String -> Mono -> List Mono -> List Route
+implDictRoutesForFull : Map String (List ImplEntry) -> String -> String -> String -> Mono -> List Mono -> List Route
 implEntryFromTys : String -> List Ty -> List Require -> List ImplMethod -> List ImplEntry
 implEntryOf : Decl -> List ImplEntry
 implHeadGround : Decl -> Bool
@@ -1579,9 +1579,9 @@ rootIdOf : Mono -> Int
 rootVarId : Mono -> Int
 routeLocalSym : Route -> String
 routeOf : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> Undetermined -> Mono -> Route
-routeOfD : Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> String -> Undetermined -> Mono -> List Mono -> Int -> Route
+routeOfD : Map String (List ImplEntry) -> String -> String -> Undetermined -> Mono -> List Mono -> Int -> Route
 routeRDictName : Route -> List String
-routeUndeterminedTop : List Decl -> Map String (List ImplEntry) -> Map String (List KeyEntry) -> String -> Route
+routeUndeterminedTop : List Decl -> Map String (List ImplEntry) -> String -> Route
 routesOfMonos : Map String (List ImplEntry) -> Map String (List KeyEntry) -> List Mono -> List Route
 routesOfMonosTop : List Decl -> Map String (List ImplEntry) -> Map String (List KeyEntry) -> List Mono -> List String -> List Route
 routesOfMonosTopV : List Decl -> Map String (List ImplEntry) -> Map String (List KeyEntry) -> List Mono -> List String -> List (List Mono) -> List Route
@@ -1776,7 +1776,7 @@ unboundVarFresh : String -> Mono
 unboundVarMsg : String -> String
 undeclaredConstraintMsg : String -> Ty -> String -> String -> String
 undeterminedRetEffVars : List (String, List Kind) -> Ty -> List String
-undeterminedRoute : Map String (List ImplEntry) -> Map String (List KeyEntry) -> Undetermined -> Route
+undeterminedRoute : Map String (List ImplEntry) -> Undetermined -> Route
 unify : Mono -> Mono -> Unit
 unifyAll : Mono -> List Mono -> Unit
 unifyAllNumlit : Mono -> List Mono -> Unit
