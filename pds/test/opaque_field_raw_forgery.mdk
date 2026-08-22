@@ -1,0 +1,16 @@
+-- Negative opacity cell: a caller must not be able to fabricate an `Fe` from
+-- raw limbs. `pds/test/opaque_field_scalar.sh` requires this file to fail.
+import lib.field.{Fe}
+
+forged : Fe
+forged = [|
+  67107887, 67108799, 67108863, 67108863, 67108863, 67108863, 67108863,
+  67108863, 67108863, 4194303,
+|]
+
+consume : Fe -> Unit
+consume _ = ()
+
+main =
+  let () = consume forged
+  println 0

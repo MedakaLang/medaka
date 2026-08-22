@@ -1,0 +1,15 @@
+-- Positive opacity cell: public byte ingress, sentinels, and arithmetic remain
+-- usable without exposing either module's mutable limb storage.
+import lib.field.{feZero, feOne, feAdd, feEqual, feFromBytesReduce}
+import lib.scalar.{scZero, scOne, scAdd, scEqual, scFromBytesReduce}
+
+main =
+  let bytes = arrayMake 32 0
+  let fe = feFromBytesReduce bytes
+  let sc = scFromBytesReduce bytes
+  let fieldOk = feEqual (feAdd fe feOne) feOne && feEqual (feAdd fe feZero) feZero
+  let scalarOk = scEqual (scAdd sc scOne) scOne && scEqual (scAdd sc scZero) scZero
+  if fieldOk && scalarOk then
+    println "opaque public API OK"
+  else
+    panic "opaque public API failed"
