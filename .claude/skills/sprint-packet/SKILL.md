@@ -162,8 +162,17 @@ lane grant and pastes it into the packet whole —
 ```sh
 D=/var/tmp/medaka-sprints/<stage>
 grep -n "^applies-to:.*\(<slice-id>\|ALL\)" "$D"/rulings/*.md
-awk -F'|' '$7 ~ /OPEN/ && $4 ~ /<slice-id>/' "$D"/OBLIGATIONS.md
+awk -F'|' '$7 ~ /OPEN/ && ($3 " " $5) ~ /<slice-id>/' "$D"/OBLIGATIONS.md
 ```
+
+(With the leading `|`, `awk -F'|'` yields $2=id, $3=ruling, $4=owner-seat,
+$5=action, $6=due-by, $7=status — the match is on ruling+action text, never
+$4, which is always a seat name. Executed against the method-identity ledger
+per the §4 executed-facts rule: the $4 form returns **0** rows; the
+$3/$5 form returns **19** OPEN rows for `arity`, first hit
+`| RUN-METHID-001.6 | RUN-METHID-001 | FRONT | Add slice 0 as a hard
+predecessor of S-emit-arity-by-declaration …` — an unexecuted formula here
+would silently regenerate the exact carry loss this section exists to fix.)
 
 Every hit is a carry, quoted with its ruling number. The planner does not
 select from the block and the front seat does not summarise it; because it is
@@ -294,7 +303,7 @@ nothing about the reviewers who read this packet afterwards, and it has been
 read as if it did — in `sprint/emit-inputs` a breaker built its own base arm by
 hand (two full rebuilds, ~35 of its 55 minutes) against a packet carrying that
 sentence. The reviewers' depot path arrives in their own brief (`slice-landed`
-step 2's `base-arm` field), not from here.
+step 3's depot line), not from here.
 
 ## §3 Mission
 

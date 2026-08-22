@@ -35,8 +35,9 @@ file. They are fire-and-forget agents, never continued.
 
 **v7 retired the persistent rear daughter, on measurement**
 (`sprint/method-identity` COSTS.md): it cost $219.04 — 17.5% of the sprint —
-of which $4.88 was output and the rest prompt-cache churn on the 5-minute
-subagent TTL; its SendMessage transport lost four results in one sprint; and
+of which $4.88 was output and the rest prompt-cache traffic ($109 of 5-minute
+subagent-TTL rewrites + $105 of re-reads; statelessness removes both
+pools); its SendMessage transport lost four results in one sprint; and
 it once ran nine hours with nothing legible to the coordinator. The relay hop
 (`consult: [rear]` → front → brain → front → rear) is gone: findings and CI
 reds reach the brain directly from your intake, and every result that used to
@@ -97,7 +98,8 @@ the context, are the state — so ROTATE the brain:
 
 - **When:** at every phase boundary — this is item 3 of the "Phase-boundary
   block" below, and it fires on that block's trigger, not on your judgment.
-  Never mid-consult and never with a handoff unacknowledged. Declining one is
+  Never mid-consult and never with a `scribed:` confirmation outstanding.
+  Declining one is
   allowed; declining one SILENTLY is not (`rotated: none at <boundary> —
   <reason>`).
 - **How:** finish/collect anything in flight; release the old daughter; spawn
@@ -229,7 +231,7 @@ escalations arrive in their reports and route through you):
 | Anything that would write a new RULING to DECISIONS.md | Definitionally a decision. (Mechanical appends — the BASE pin, dispatch-log lines, lane grants with evidence, recorded idle reasons, self-audit lines, `declined-out-of-band:` lines, OBLIGATIONS.md rows, `VAL-<stage>-NNN` blocks, and the concatenation of the brain's own ruling FILES into DECISIONS.md — are yours and need no consult) |
 | **A landed slice significantly diverges from the planned architecture** | Val standing directive (2026-07-31): divergence is a signal to re-decide together, and it has no other channel — gates test behavior, adversarial review tests soundness and craft, **nothing tests conformance to the plan**. Escalate to VAL, not just the brain |
 | **A measurement or upheld refusal falsifies a CONTRACT premise (not merely a packet's), or a spine slice is measured uncompletable** | SCOPE-RESET (v7), never adjudicate-through — see the block below the table |
-| **Catch-all: either seat is about to do something not written in its loop** | Unrecognized judgment moments are how every recorded seat error happened |
+| **Catch-all: you or the brain is about to do something not written in the loop** | Unrecognized judgment moments are how every recorded seat error happened |
 
 On that architecture row: divergence is **not** presumptively wrong — the agent
 touching the code is often right and the plan often is not. The bar for accepting
@@ -327,7 +329,11 @@ its packet named" means the report path in the dispatch brief, and
    file list, plus one `head -2`: a ruling file whose SECOND line is not
    `applies-to:` bounces back to the brain by number, same as a missing file.
    That field is what lets you hand a planner its ruling PATHS by `grep -l`
-   instead of the whole ledger (`slice-landed` step 4).
+   instead of the whole ledger (`slice-landed` step 4). **A ruling that
+   licenses a NEW expected red → append its row (with `masks:`/`unmask-by:`
+   derived per step 5's format) to EXPECTED-RED.md at scribe time, citing the
+   ruling (v7.1)** — otherwise the licensed red fails tick 3's verbatim-match
+   check every tick until a consult patches it.
 
    **Confirm by number, but do NOT wake the brain to do it.** Your
    `scribed: RUN-<stage>-NNN at DECISIONS.md:<line>` lines RIDE THE NEXT
@@ -560,7 +566,7 @@ interventions, three different formats, none citable.
    exactly this shape converted the unknown into a one-agent answer.)
 6. **Dispatch `sprint-planner` for packet #1.** On `PACKET-READY`: run the
    completeness scan, **create the worktree at the sprint-branch head**
-   (`slice-landed` step 3's recipe — that step's rules apply at first
+   (`slice-landed` step 2's recipe — that step's rules apply at first
    dispatch too), dispatch implementer #1, append the QUEUE.md row, and
    immediately dispatch the planner for packet #2. Runway invariant from
    here: the next packet is ALWAYS ready before the current slice lands. One
@@ -600,7 +606,7 @@ interventions, three different formats, none citable.
    carry the path in every reviewer brief with one imperative line** — "a
    base-vs-head differential uses THIS depot; do not build a base binary" —
    the reviewers are the depot's real consumers and the packet sentence never
-   reaches them (`slice-landed` step 2).
+   reaches them (`slice-landed` step 3).
 
    ⚠️ **Standing re-grade condition met, depot KEPT (v7):** `sprint/emit-inputs`
    built this depot and it had ZERO consumers; the mandatory brief field fixed
@@ -684,7 +690,7 @@ Each tick derives state from scratch — never carry state across ticks:
 0. **Interlock:** `SEQUENCE.lock` exists → append `tick: deferred (sequence
    live)` to DECISIONS.md and stop this tick.
 1. **Writer lane:** at least one implementer live? If not: read QUEUE.md for
-   the next queued packet and run `slice-landed` step 3 (refill) now. If the
+   the next queued packet and run `slice-landed` step 2 (refill) now. If the
    queue is empty, dispatch the CONTRACT's designated **independent-refill**
    slice (`sprint-plan` §3) before recording anything; record an idle reason
    only if that slice is already landed or genuinely blocked — then treat it
@@ -696,7 +702,9 @@ Each tick derives state from scratch — never carry state across ticks:
 3. **CI sweep (v7 — yours now, one command):** `gh pr view <sprint PR> --json
    statusCheckRollup,state`. For any red shard: check EXPECTED-RED.md for a
    verbatim gate-name match (licensed = not a finding; partial/ambiguous
-   match → brain); then check whether the shard RAN anything (`gh api
+   match → brain); then, on a rollup-state CHANGE only (a standing licensed
+   red re-checked every tick is a wasted request), check whether the shard
+   RAN anything (`gh api
    repos/MedakaLang/medaka/actions/runs/<id>/jobs --paginate --jq
    '.jobs[]|"\(.name)\t"+([.steps[]?|"\(.name)=\(.conclusion)"]|join(" | "))'`
    — a narrowed shard reports green having run nothing, and that green
@@ -800,7 +808,8 @@ work — the sprint's single most-recurring failure shape, six instances.)
    the statuses. A two-file string comparison does not belong in a large
    front-seat context.
 3. **Rotate the brain** per the rotation protocol — never mid-consult,
-   never with a handoff unacknowledged. Log `rotated: sprint-brain at
+   never with a `scribed:` confirmation outstanding. Log `rotated:
+   sprint-brain at
    <boundary>`; if
    you DECLINE a rotation the line is `rotated: none at <boundary> — <reason>`.
    The absence of either line is the finding a retro cannot reconstruct.
@@ -913,7 +922,7 @@ attribute to a session, and an open green PR looks identical from both sides.
    review, its
    `domain-adversary` dispatches ride the same form** — one property class
    each, in parallel. The heavy round also gets ONE claim-surface sweep
-   (`slice-landed` step 2's verifier checklist) over the whole round's
+   (`slice-landed` step 3's verifier checklist) over the whole round's
    artifacts — cross-slice citation rot is invisible to a per-slice pass.
    **Deferred golden captures recorded
    in FINDINGS.md are executed now** — each via the `slice-landed` re-cut
@@ -942,9 +951,14 @@ attribute to a session, and an open green PR looks identical from both sides.
    OBLIGATIONS.md row scoped to a REMAINING ACTIVITY is OPEN** — with D1's
    row-creation rule every row IS so scoped, so an OPEN row anywhere blocks
    the enqueue; the criterion is stated this way so a legacy `this slice` row
-   can never make it unsatisfiable again. The checklist additionally counts
-   `rotated:` lines against phase-boundary blocks (v7 — see the boundary
-   block's enforcement note).
+   can never make it unsatisfiable again. The checklist additionally verifies
+   the boundary blocks (v7.1): derive the EXPECTED boundary count
+   independently — ⌈DEBT.md landing rows ÷ 5⌉ plus the `phase: heavy-round`
+   line plus the terminal enqueue — and MISMATCH when complete boundary
+   blocks (sequence-check paste + verifier id + `rotated:` line) number
+   fewer; counting `rotated:` lines against observed blocks alone is vacuous
+   when a boundary was skipped whole, which is the two-sprints-unexercised
+   case this attestation exists for.
    ⚠️ **No checklist item handed to this seat may contain a judgment clause.**
    (Measured, `sprint/emit-inputs`: the item read "flag if blank or says PENDING
    *without follow-up*"; the Haiku verifier rendered the judgment clause and
@@ -961,8 +975,11 @@ attribute to a session, and an open green PR looks identical from both sides.
    sweep; the one Haiku `sprint-scout` dispatch that did happen returned that
    sprint's largest compiler finding.)
 4. **Report + DEBT sweep:** `reports/` holds every dispatched agent's report —
-   your dispatch log is the checklist; run the check over every report:
-   `sh scripts/sprint-report-check.sh reports/*.md`.
+   your dispatch log is the checklist; run the check over the REPORT PATHS
+   the dispatch log names, never a bare `reports/*.md` glob (the dir also
+   holds probe writeups and non-§9 artifacts, and a sweep with known-false
+   alarms is how a check stops being believed — non-report artifacts belong
+   under `scratch/<lane>/` or `probes/`, not `reports/`).
    A missing report, or a missing section, is a finding.
    **DEBT.md holds exactly one row per landing** — one per `LANDED`,
    `FIX-LANDED` and `family-final` verdict in the dispatch logs, no

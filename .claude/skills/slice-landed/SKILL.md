@@ -1,6 +1,6 @@
 ---
 name: slice-landed
-description: The FRONT seat's fixed sequence for the moment an implementer returns — report intake, merge into the sprint branch (golden rule), push the merged SHA and dispatch the reviewers, refill the writer lane from the merged head, dispatch the planner, then bookkeeping. Run on EVERY implementer return (landed, refused, blocked, spike, fixer, or family leaf). Order is load-bearing.
+description: The FRONT seat's fixed sequence for the moment an implementer returns — report intake, merge into the sprint branch (golden rule), refill the writer lane from the merged head, THEN push the merged SHA and dispatch the reviewers, dispatch the planner, then bookkeeping. Run on EVERY implementer return (landed, refused, blocked, spike, fixer, or family leaf). Order is load-bearing.
 ---
 
 # Slice landed — the front-seat completion sequence
@@ -13,7 +13,7 @@ comes FIRST — before the lane refill — because the next worktree must be cut
 from the MERGED head: a worktree cut pre-merge starts one slice behind the
 sprint branch, which manufactures exactly the two-sided golden merge the golden
 rule below exists to prevent. The merge is local and takes seconds; the
-downstream pipeline (push, PR, reviewer dispatch) is step 2's fixed command
+downstream pipeline (push, PR, reviewer dispatch) is step 3's fixed command
 sequence at THIS seat (v7 — the persistent rear seat is retired), and CI is
 watched by the heartbeat, not by this sequence. Do not reorder, do
 not interleave.
@@ -108,7 +108,8 @@ immediately after fetching, or fetch into a pinned SHA first.) Then:
   BLESSES a wrong golden, permanently), then `sh test/capture_goldens.sh
   --frozen selfproc_legA` and the snapshot gate's `--bless <path>` per moved
   file, then report the diff (legA must be additive-only). Commit the re-cut
-  on the sprint branch; the step-2 handoff WAITS for it (rare case;
+  on the sprint branch; steps 2 AND 3 WAIT for it — the refill worktree cuts
+  from the re-cut head (rare case;
   correctness beats latency here).
 - **A merge conflict touching a golden** → `git -C <landing> merge --abort`,
   then treat as the non-empty case above: re-merge taking the pre-merge
@@ -117,47 +118,31 @@ immediately after fetching, or fetch into a pinned SHA first.) Then:
 - **A merge conflict in source files** → `git -C <landing> merge --abort` →
   brain (sequencing ruling), never hand-resolved at this seat.
 
-**2. Post-merge pipeline — yours, fixed sequence (v7):**
-- **Push the merged SHA, by SHA, never by branch tip:** `git push origin
-  <merged sprint-branch SHA>:refs/heads/sprint/<stage>` — so a later merge
-  racing the push can never make CI grade a different head than the one this
-  landing produced. Update the sprint PR body if the landing changes it
-  (`scripts/pr.sh body` — raw `gh` body writes silently no-op; verify by
-  readback). The PR stays DRAFT all sprint.
-- **Dispatch both reviewers, in parallel:** `slice-breaker` into a worktree
-  YOU create now at the merged head (`git worktree add <path> <sha>`), and
-  `spec-conformance-reviewer` (read-only, no worktree). Give each the packet
-  path, implementer report path, the merged head SHA, its report path under
-  `reports/`, a per-lane scratch dir, **and the sprint's base-arm depot path
-  (orchestrator step 6b) with one imperative line: "a base-vs-head
-  differential uses THIS depot — do not build a base binary."** A reviewer
-  that builds its own base arm is a plumbing defect costing the roster's most
-  expensive half-hour (one breaker: ~35 of 55 minutes, against a depot that
-  sat unused). `NONE (docs-only landing)` is a value for the depot line;
-  blank is not.
-- **Claim-surface sweep — one `sprint-verifier` dispatch (~$0.35), in
-  parallel.** Over the artifacts this landing produced (implementer report,
-  the DEBT.md row, this landing's DECISIONS.md entries, any issue-comment
-  draft), three mechanical checks reported as a table with no interpretation:
-  every `path:LINE` citation still resolves to a line matching the quoted
-  fragment (`sed -n '<n>p' <path>`); every count of the form "N <things>"
-  that ships a command re-runs to N; every token written AS a commit citation
-  (`@<sha>`, `head <sha>`, "landed at <sha>" — never every hex-looking
-  token) resolves (`git cat-file -e <sha>^{commit}`). **A mismatch is a
-  CORRECTION, not a finding:** it goes back to the seat that wrote the
-  artifact, which fixes the citation and logs one line; it becomes a
-  FINDINGS.md row ONLY if the underlying claim — not its citation — is wrong.
-You do NOT wait for any of these; their returns arrive like any other agent's.
-
-**3. Refill the writer lane.** Take the next `status: queued` packet row from
+**2. Refill the writer lane — BEFORE the pipeline (v7.1).** Nothing in the
+pipeline is on the writer's critical path (push and reviewers are events; a
+few minutes' reviewer delay is immaterial against their ~30–55-minute
+runtime), and the skill's own rationale is that writer idle is the measured
+bottleneck — so the next writer leaves first. ONE exception: if step 1
+required a golden RE-CUT, the refill WAITS for the re-cut commit and cuts
+from the re-cut head (a worktree cut before it starts a commit behind on
+goldens). Take the next `status: queued` packet row from
 QUEUE.md (row format: `<slice handle> | packet <path> | depends-on <handles|
 NONE> | status: queued|dispatched|landed|refused`) and:
 - **Completeness scan** (mechanical presence check): every §1–§9 section
-  present, §4 facts each carrying a command, §1 carrying pinned SHA + branch +
+  present, PLUS a §0a standing-carries block (v7.1 — a packet with no §0a at
+  all fails the scan), §4 facts each carrying a command, §1 carrying pinned
+  SHA + branch +
   form + classification (NOT a worktree path — the packet is forbidden to
-  carry one; in FRONT-SEAT mode the path lives in the brief you write).
+  carry one; the path lives in the brief you write), and — string check —
+  no §6 golden/fixture CAPTURE line targeting an area a FINDINGS.md row
+  marks known-broken (v7.1; the capture defers to the fix per packet §6's
+  freeze rule).
   Missing anything → BOUNCE to the
   planner, take the next independent packet instead.
+- **Generate and paste §0a (v7.1):** run the sprint-packet §0a recipe (the
+  `applies-to:` grep over `rulings/` + the OBLIGATIONS.md awk) at THIS lane
+  grant and paste the output whole into the packet's §0a before dispatch —
+  the planner does not author it and you do not summarise it.
 - **Provision the tree — YOU create it, every dispatch (v7, P2c):**
   `git worktree add <absolute path under the record dir> <merged head SHA>`,
   verified before dispatch (`git -C <path> rev-parse HEAD` equals the SHA;
@@ -205,6 +190,44 @@ NONE> | status: queued|dispatched|landed|refused`) and:
 If no packet is queued, that is a runway failure: note it in QUEUE.md and make
 step 4 a blocking priority.
 
+**3. Post-merge pipeline — yours, fixed sequence, after the refill is away
+(v7.1):**
+- **Push the merged SHA, by SHA, never by branch tip:** `git push origin
+  <merged sprint-branch SHA>:refs/heads/sprint/<stage>` — so a later merge
+  racing the push can never make CI grade a different head than the one this
+  landing produced. Update the sprint PR body if the landing changes it
+  (`scripts/pr.sh body` — raw `gh` body writes silently no-op; verify by
+  readback). The PR stays DRAFT all sprint.
+- **Dispatch both reviewers, in parallel:** `slice-breaker` into a worktree
+  YOU create now at the merged head (`git worktree add <path> <sha>`), and
+  `spec-conformance-reviewer` (read-only, no worktree). Give each the packet
+  path, implementer report path, the merged head SHA, its report path under
+  `reports/`, a per-lane scratch dir, **and the sprint's base-arm depot path
+  (orchestrator step 6b) with one imperative line: "a base-vs-head
+  differential uses THIS depot — do not build a base binary."** A reviewer
+  that builds its own base arm is a plumbing defect costing the roster's most
+  expensive half-hour (one breaker: ~35 of 55 minutes, against a depot that
+  sat unused). `NONE (docs-only landing)` is a value for the depot line;
+  blank is not. **Open one QUEUE.md lane row per reviewer dispatch (v7.1):**
+  `<reviewer handle> | worktree <path|read-only> | region review |
+  evidence REVIEW | dispatched-at <utc>` — closed with `returned-at` at
+  intake. Without it, heartbeat tick 4's liveness sweep has no reviewer rows
+  to audit, and a stalled reviewer is exactly the illegible-stall class v7
+  retired the rear seat over.
+- **Claim-surface sweep — one `sprint-verifier` dispatch (~$0.35), in
+  parallel.** Over the artifacts this landing produced (implementer report,
+  the DEBT.md row, this landing's DECISIONS.md entries, any issue-comment
+  draft), three mechanical checks reported as a table with no interpretation:
+  every `path:LINE` citation still resolves to a line matching the quoted
+  fragment (`sed -n '<n>p' <path>`); every count of the form "N <things>"
+  that ships a command re-runs to N; every token written AS a commit citation
+  (`@<sha>`, `head <sha>`, "landed at <sha>" — never every hex-looking
+  token) resolves (`git cat-file -e <sha>^{commit}`). **A mismatch is a
+  CORRECTION, not a finding:** it goes back to the seat that wrote the
+  artifact, which fixes the citation and logs one line; it becomes a
+  FINDINGS.md row ONLY if the underlying claim — not its citation — is wrong.
+You do NOT wait for any of these; their returns arrive like any other agent's.
+
 **4. Dispatch `sprint-planner`** for slice N+2's packet: the contract section
 or ruling to plan, the just-landed report's path (it must read "Deviations"
 and "Decisions surfaced" before writing — feed-forward is its rule), the
@@ -239,7 +262,7 @@ skill's slice-forms handling; `BLOCKED` → brain consult.
 A fixer is a writer dispatched by YOU on a brain REPAIR ruling (branch
 `fix/<finding-slug>`, cut from the sprint head at lane grant). On return: step
 0 intake → **step 1 merge** (same golden rule, same PRE-MERGE grep) → push the
-merged SHA (by SHA, step 2's form) and update the FINDINGS row to
+merged SHA (by SHA, step 3's form) and update the FINDINGS row to
 fixed-pending-review (NO reviewer dispatch — the heavy round reviews
 fixes — unless the REPAIR ruling's Actions said otherwise) → close the fixer's
 lane row → bookkeeping, **including the fixer's five-field DEBT.md row** (one

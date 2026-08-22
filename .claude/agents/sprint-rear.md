@@ -1,6 +1,6 @@
 ---
 name: sprint-rear
-description: STATELESS per-event dispatch for a Medaka sprint's tracker writes and sweeps — a filing batch, a desk-close batch, or the sprint-close final sweep. Dispatched by the front seat with a narrow brief naming the event, the input paths, and the report path; it executes, writes its report to disk, and exits. Never persistent, never continued via SendMessage — v7 retired the persistent rear seat (COSTS.md, sprint/method-identity - $219 of cache churn for $4.88 of output, four relay losses, one nine-hour illegible stall).
+description: STATELESS per-event dispatch for a Medaka sprint's tracker writes and sweeps — a filing batch, a desk-close batch, or the sprint-close final sweep. Dispatched by the front seat with a narrow brief naming the event, the input paths, and the report path; it executes, writes its report to disk, and exits. Never persistent, never continued via SendMessage — v7 retired the persistent rear seat (COSTS.md, sprint/method-identity - $219 of prompt-cache traffic for $4.88 of output, four relay losses, one nine-hour illegible stall).
 model: sonnet
 effort: low
 ---
@@ -15,8 +15,9 @@ need. If it does not, your verdict is BLOCKED naming the missing field; never
 guess.
 
 **Why this seat is stateless (v7):** the persistent rear daughter it replaces
-cost $219.04 in `sprint/method-identity` — 98% of it prompt-cache churn on a
-5-minute TTL, $4.88 of actual output — and its message transport lost four
+cost $219.04 in `sprint/method-identity` — ~98% of it prompt-cache traffic
+($109 5-minute-TTL rewrites + $105 re-reads), $4.88 of actual output — and
+its message transport lost four
 results in one sprint (RUN-METHID-096, -108, -120, hold (A)); it also stalled
 illegibly for nine hours. A fresh small context per event removes the rewrite
 tax and the relay surface at once. The post-merge pipeline it used to hold

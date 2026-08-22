@@ -28,8 +28,8 @@ first (reports are the record; chat is not).
 
 ## 1b. Refusals get their own table — the signal must be COUNTABLE
 
-FINDINGS.md carries a second section, opened by whichever seat takes the
-return, BEFORE the consult is relayed:
+FINDINGS.md carries a second section, opened by the front seat at intake,
+BEFORE the brain consult is sent:
 
 ```
 ## Refusals
