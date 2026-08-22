@@ -82,3 +82,20 @@ why-note: over it can ever be stable, independent of any future fix.
 why-note: A fix makes `check` correctly reject this program (`No impl of IA for Blob`,
 why-note: exit 1) -- a different exit code AND a different stdout line -- draining this
 why-note: row. The control keeps accepting, unchanged, either way.
+correction: DRAINED by S-alias-supply (sprint/alias-provenance). `compiler/types/typecheck.mdk`
+correction: now supplies an `A.<method>` -> declaring-Ident entry for every method the
+correction: aliased module exports (`aliasQualifiedMethodEntries`/`aliasMethodKeysFor`/
+correction: `aliasMethodKeyRows`, wired into `checkBodyImpl`'s Module arm), so
+correction: `recordImplObligation` now sees the alias-qualified occurrence and checks it
+correction: against IA -- the interface the occurrence actually names -- instead of never
+correction: recording an obligation at all. `check main.mdk` now rejects with `No impl of
+correction: IA for Blob; write an 'impl IA Blob'.`, exit 1 (verified first-hand,
+correction: MEDAKA_STRICT=1). Same fix drains #1276's sibling pin
+correction: (test/must_fail_fixtures/1276-alias-method-provenance-erased). Repro B (an
+correction: alias whose method name also names a standalone exported by another module --
+correction: this fixture's own why-note (1) candidate) was constructed and independently
+correction: verified to reject on check/run/build, confirming the fix is the SUPPLY shape
+correction: (additive keying under the dotted `A.mth` spelling) and not a de-alias rewrite
+correction: of the occurrence, which would have left that cell silently wrong. Fixture
+correction: directory is left in place per [G-PIN-DRAIN] -- re-pointing at a regression
+correction: gate is a follow-up, not done in this slice.

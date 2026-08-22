@@ -17444,6 +17444,51 @@ applyMethodScopeOverrides prog floor =
     crossRun.value.universeMethodCollidedRef.value
     floor
 
+-- ── #1386 / #1276: SUPPLY the ALIAS-QUALIFIED method spellings ──────────────────
+-- `import m as A` … `A.mth` keeps its `A.mth` spelling on the diagnostic-producing
+-- `check` path: only `elaborateModules` runs `renameAliasedMethods`, and the three
+-- `check*` drivers do not, so every reader keyed by the OCCURRENCE name misses.
+-- `recordImplObligation` is one of them, which is why an alias-qualified method call
+-- has NO impl obligation recorded at all (#1386, S0 — `check` exits 0 on a program
+-- with no matching impl anywhere).
+--
+-- The remedy is a SUPPLY, not a re-key and not a rewrite: add `A.<method>` → the entry
+-- `m`'s OWN declaration identity gives, for every method `m` exports.  ADDITIVE by
+-- construction — a bare method name can never be spelled with a dot, so no existing key
+-- is overwritten and no name that already had an answer gets a different one.
+--
+-- ⚠️ NOT a de-aliasing rewrite of the occurrence.  Rewriting `A.mth` to bare `mth` on
+-- this path (the other candidate shape) ERASES the very distinction that makes the
+-- occurrence decidable: `import fmod.{mth}` beside `import ifacea as A` then makes
+-- `A.mth` and `mth` the same name, and the standalone shadow wins — #1386's Repro B,
+-- measured to survive that shape unchanged.
+aliasQualifiedMethodEntries : List Decl -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
+aliasQualifiedMethodEntries [] tab = tab
+aliasQualifiedMethodEntries ((DAttrib _ d)::rest) tab =
+  aliasQualifiedMethodEntries rest (aliasQualifiedMethodEntries [d] tab)
+aliasQualifiedMethodEntries ((DUse _ path _)::rest) tab = match path
+  UseAlias _ a => aliasQualifiedMethodEntries rest (aliasMethodKeysFor a (usePathModuleId path) tab)
+  _ => aliasQualifiedMethodEntries rest tab
+aliasQualifiedMethodEntries (_::rest) tab = aliasQualifiedMethodEntries rest tab
+
+-- every method the aliased module EXPORTS, keyed under the local `A.<method>` spelling
+-- and carrying that method's own declaration identity (`lookupMethodCand ident`), never
+-- a bare-name last-write-wins pick.
+aliasMethodKeysFor : String -> String -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
+aliasMethodKeysFor a mid tab = match omLookup mid driverState.value.graphMethodExportsRef.value
+  None => tab
+  Some rows => aliasMethodKeyRows a rows tab
+
+aliasMethodKeyRows : String -> List (String, Ident) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
+aliasMethodKeyRows _ [] tab = tab
+aliasMethodKeyRows a ((mname, ident)::rest) tab =
+  let tab2 = match omLookup mname crossRun.value.universeMethodIdentsRef.value
+    None => tab
+    Some cs => match lookupMethodCand ident cs
+      None => tab
+      Some payload => omInsert (qualifiedLocal a mname) payload tab
+  aliasMethodKeyRows a rest tab2
+
 overrideScopedMethods : List Decl -> OrdMap (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))) -> List String -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
 overrideScopedMethods _ _ [] floor = floor
 overrideScopedMethods prog cands (n::rest) floor =
@@ -22453,7 +22498,7 @@ checkBodyImpl seed mode prog0 =
   let _ = match mode
     Flat _ => registerMethodIfaceParamsAll fullUniverse
     Module _ _ _ =>
-      perRun.value.methodIfaceParamsRef := (applyMethodScopeOverrides prog crossRun.value.universeMethodIfaceParamsRef.value)
+      perRun.value.methodIfaceParamsRef := (aliasQualifiedMethodEntries prog (applyMethodScopeOverrides prog crossRun.value.universeMethodIfaceParamsRef.value))
       perRun.value.registeredIfacesRef := crossRun.value.universeRegisteredIfacesRef.value
   -- #154 PR-A: the dominant remaining O(N²) in the multi-module typecheck.  The Module arm
   -- used to `registerAllData initialEnv (accData ++ prog0)` — re-registering (and re-minting
