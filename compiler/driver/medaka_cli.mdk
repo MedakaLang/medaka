@@ -1860,7 +1860,17 @@ finishRunEval target jsonMode elaborated mods cohWarns =
   -- Reached only when the program did NOT panic (`panic` is a noreturn C abort), so
   -- this and `runtimePanic`'s merge are mutually exclusive — the envelope is emitted
   -- exactly once, never twice and never zero times.
-  flushPendingRunDiags jsonMode
+  let _ = flushPendingRunDiags jsonMode
+  -- #1681: the main-shape warning text already reads as a rejection ("'main'
+  -- must be a value of type Unit …"), but `run` used to exit 0 anyway — making
+  -- a program that computed and discarded a real value indistinguishable, by
+  -- exit code, from one that ran clean. Since `main` was never applied/printed
+  -- in this case (the underlying no-op behavior is unchanged, see the 0.1.0
+  -- audit #3 note above), align the exit code with what the message already
+  -- implies: nonzero, so a script/CI oracle keyed on exit code sees the truth.
+  match mainWarns
+    [] => ()
+    _::_ => exit 1
 
 flushPendingRunDiags : Bool -> <IO> Unit
 flushPendingRunDiags False = ()

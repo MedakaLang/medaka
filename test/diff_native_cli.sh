@@ -246,6 +246,27 @@ else
   printf 'skip run/* (native run not yet wired)\n'
 fi
 
+# ── run: non-Unit main shape (#1681) ─────────────────────────────────────────
+# `run/main_shape_nonunit.mdk` is `main = 3 + 1` — main's inferred type is Int,
+# not Unit, so `run` never applies/prints it (unchanged, deliberate no-op) and
+# emits the rejection-shaped W-MAIN-SHAPE warning on stderr. Before #1681 the
+# process still exited 0 with 0 bytes of stdout — indistinguishable, by exit
+# code, from a correct silent program. Fixed: `run` now exits 1 for this shape
+# (compiler/driver/medaka_cli.mdk's finishRunEval), aligning the exit code with
+# what the message already implies. Pin both halves: exit code AND that stdout
+# stays genuinely empty (the underlying no-op behavior is intentional and
+# unchanged — see the 0.1.0 audit #3 note in medaka_cli.mdk).
+if [ "$RUN_WIRED" = 1 ]; then
+  nu_f="$FIX/run/main_shape_nonunit.mdk"
+  nu_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$nu_f" 2>/dev/null)"
+  nu_status=$?
+  if [ "$nu_status" -eq 1 ] && [ -z "$nu_out" ]; then
+    pass=$((pass+1)); printf 'ok   run/main_shape_nonunit (exit 1, empty stdout)\n'
+  else
+    fail=$((fail+1)); printf 'FAIL run/main_shape_nonunit (want exit 1 + empty stdout, got exit %s stdout [%s])\n' "$nu_status" "$nu_out"
+  fi
+fi
+
 # ── test ──────────────────────────────────────────────────────────────────────
 TEST_FIXTURES="doc prop nodoc"
 test_probe="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" test "$FIX/test/doc.mdk" 2>&1)"

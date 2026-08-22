@@ -1,0 +1,9 @@
+-- #1750: `fmt --write` must preserve the triple-quoted spelling (both
+-- single-line and multi-line forms) instead of collapsing it to a plain
+-- double-quoted literal with `\n` escapes.
+tripleQuoted = """hi"""
+
+multiline = """
+  hello
+  world
+  """
