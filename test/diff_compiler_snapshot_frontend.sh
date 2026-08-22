@@ -78,7 +78,15 @@
 # This script owns that map (the `bless_one` case below) — it is the same table as the
 # `run_family` calls, and if you add a family you must add it in both places.
 #
-# Exit:   0 if every snapshot matches (or every named fixture blessed), else 1.
+# Exit:   0 if every snapshot matches (or every named fixture blessed);
+#         1 if the gate RAN and found a real diff (or --check compared nothing);
+#         2 if the gate could not run at all — a toolchain/setup problem, e.g. the
+#           compiler hasn't been built (`make medaka`) — same convention every other
+#           `test/diff_compiler_*.sh` gate uses (`grep -rn 'exit 2' test/diff_compiler_*.sh`).
+#         The distinction is INTENTIONAL, not incidental: 1 means "the check found
+#         something to fix in the tree"; 2 means "fix your environment, the check never
+#         ran." A caller branching on exit code alone should treat both as failure, but
+#         they answer different questions (#1799).
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

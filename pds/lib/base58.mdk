@@ -32,7 +32,8 @@
 import array.{get, make}
 import string.{fromChars, toChars}
 
-export base58btcAlphabet : String
+export
+base58btcAlphabet : String
 base58btcAlphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
 {- | Maximum input length, in CHARACTERS, that `base58btcDecode` will accept.
@@ -59,7 +60,8 @@ base58btcAlphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
    encoding more than ~750 bytes produces a string this decoder will refuse.
    That is intended — the guard is about hostile input, not round-trip
    algebra. -}
-export base58btcMaxInputChars : Int
+export
+base58btcMaxInputChars : Int
 base58btcMaxInputChars = 1024
 
 -- The alphabet as an array, for O(1) digit->char lookup during encode.
@@ -79,6 +81,16 @@ charAtA i arr = match get i arr
   None => panic "base58: char index out of bounds"
 
 -- ── Encode ───────────────────────────────────────────────────────────────
+
+-- Every element of `bytes` inside the documented `0..255` byte domain?
+-- Mirrors `pds/lib/sha256.mdk`'s entry-point guard: a tail-recursive index
+-- scan that allocates nothing.
+byteDomainOk : Array Int -> Int -> Int -> Bool
+byteDomainOk bytes len i =
+  if i >= len then True
+  else
+    let b = bytes[i]
+    if b < 0 || b > 255 then False else byteDomainOk bytes len (i + 1)
 
 -- Number of leading zero BYTES in `bytes`, starting at index `i`.
 countLeadingZeroBytes : Array Int -> Int -> Int
@@ -135,6 +147,9 @@ digitsToChars buf i size
    character (see the module header); this is a separate step from the
    big-integer division below it, by design.
 
+   Panics if any array element falls outside the byte domain `0..255`,
+   matching the input contract enforced by `sha256`, `field`, and `scalar`.
+
    NOTE (documented erratum): draft-msporny-base58-02 §5 states this same
    6-byte input (`0x0000287fb4cd`) encodes to `"111233QC4"` (9 chars). That
    is inconsistent with the draft's OWN algorithm in its OWN §3-4: `"11233QC4"`
@@ -150,21 +165,25 @@ digitsToChars buf i size
    ""
    > base58btcEncode (arrayFromList [0, 0, 40, 127, 180, 205])
    "11233QC4" -}
-export base58btcEncode : Array Int -> String
+export
+base58btcEncode : Array Int -> String
 base58btcEncode bytes =
   let n = arrayLength bytes
-  let zeroes = countLeadingZeroBytes bytes 0
-  if zeroes == n then
-    -- all-zero (or empty) input: purely `zeroes` '1' characters, no digits.
-    fromChars (replicateChar '1' zeroes)
+  if not (byteDomainOk bytes n 0) then
+    panic "base58btcEncode: every element must be a byte in 0..255"
   else
-    -- upper bound on base58 digit count for `n` bytes: n * log(256)/log(58) + 1,
-    -- approximated as the classic integer bound n*138/100 + 1.
-    let size = n * 138 / 100 + 1
-    let buf = make size 0
-    let length = foldBytesIntoDigits bytes zeroes n buf size 0
-    let start = skipZeroDigits buf (size - length) size
-    fromChars (replicateChar '1' zeroes ++ digitsToChars buf start size)
+    let zeroes = countLeadingZeroBytes bytes 0
+    if zeroes == n then
+      -- all-zero (or empty) input: purely `zeroes` '1' characters, no digits.
+      fromChars (replicateChar '1' zeroes)
+    else
+      -- upper bound on base58 digit count for `n` bytes: n * log(256)/log(58) + 1,
+      -- approximated as the classic integer bound n*138/100 + 1.
+      let size = n * 138 / 100 + 1
+      let buf = make size 0
+      let length = foldBytesIntoDigits bytes zeroes n buf size 0
+      let start = skipZeroDigits buf (size - length) size
+      fromChars (replicateChar '1' zeroes ++ digitsToChars buf start size)
 
 replicateChar : Char -> Int -> List Char
 replicateChar c n
@@ -241,7 +260,8 @@ replicateInt x n
 
    > base58btcDecode "0"
    Err "base58btcDecode: invalid character '0'" -}
-export base58btcDecode : String -> Result String (Array Int)
+export
+base58btcDecode : String -> Result String (Array Int)
 base58btcDecode s =
   let chars = toChars s
   let n = arrayLength chars
