@@ -11,7 +11,7 @@
 #   Phase A (eval)   — bounded (--max-bytes 64) so the interpreter arm stays
 #                       fast; the ~210KB SHA256LongMsg.rsp records are
 #                       skipped here and picked up by phase B.
-#   Phase B (native) — the FULL corpus, all three files, no bound.
+#   Phase B (native) — the FULL ledger-owned corpus, no bound.
 #
 # Auto-enrolled in the `sqlite` CI shard by the `'pds/test/*'` glob
 # (pds/README.md "CI classification policy", RUN-PDS0-001 A4 /
@@ -29,17 +29,30 @@ export MEDAKA_ROOT
 export MEDAKA_EMITTER="$ROOT/medaka_emitter"
 
 DRIVER="$ROOT/pds/test/sha256_vector_driver.mdk"
-V1="$ROOT/pds/test/vectors/SHA256ShortMsg.rsp"
-V2="$ROOT/pds/test/vectors/SHA256LongMsg.rsp"
-V3="$ROOT/pds/test/vectors/sha256_worked_examples.txt"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
 
+VECTOR_LIST="$WORK/vector-files.lst"
+if ! sh "$ROOT/pds/test/vector_provenance.sh" --files-for S-sha256 > "$VECTOR_LIST"; then
+  echo "FAIL: could not derive SHA-256 vector files from the provenance ledger"
+  exit 1
+fi
+set --
+while IFS= read -r rel; do
+  [ -z "$rel" ] && continue
+  set -- "$@" "$ROOT/$rel"
+done < "$VECTOR_LIST"
+vector_count=$#
+if [ "$vector_count" -eq 0 ]; then
+  echo "FAIL: provenance ledger names no S-sha256 vector files"
+  exit 1
+fi
+
 # ── Phase A — eval engine, bounded ──────────────────────────────────────
 echo "phase A: eval engine (--max-bytes 64)"
 EVAL_OUT="$WORK/eval.out"
-"$MEDAKA" run "$DRIVER" --max-bytes 64 "$V1" "$V2" "$V3" >"$EVAL_OUT" 2>&1
+"$MEDAKA" run "$DRIVER" --max-bytes 64 "$@" >"$EVAL_OUT" 2>&1
 eval_rc=$?
 cat "$EVAL_OUT"
 if [ "$eval_rc" -ne 0 ]; then
@@ -61,7 +74,7 @@ if [ "$rc" -ne 0 ]; then
 fi
 
 NATIVE_OUT="$WORK/native.out"
-"$DRIVER_BIN" "$V1" "$V2" "$V3" >"$NATIVE_OUT" 2>&1
+"$DRIVER_BIN" "$@" >"$NATIVE_OUT" 2>&1
 native_rc=$?
 cat "$NATIVE_OUT"
 if [ "$native_rc" -ne 0 ]; then
@@ -74,6 +87,7 @@ native_checked=$(awk -F'[: ]+' '/ ok,/ { s += $2 } END { print s+0 }' "$NATIVE_O
 # 65 (ShortMsg) + 64 (LongMsg) + 3 (worked examples) — raise this when
 # vectors are added.
 FLOOR=132
+EVAL_FLOOR=67
 # A non-numeric count makes `[` ERROR rather than compare, and with `set -e`
 # off control falls through to the PASS branch — so the floor guard could
 # never fail on the one thing it exists to catch (RUN-PDS0-040, F20). Check
@@ -83,10 +97,19 @@ case "$native_checked" in
     echo "FAIL: native record count is not a number ('$native_checked') — the driver's summary line did not parse; the anti-rot floor could not be graded."
     exit 1 ;;
 esac
+case "$eval_checked" in
+  ''|*[!0-9]*)
+    echo "FAIL: eval record count is not a number ('$eval_checked') — the driver's summary line did not parse; the anti-rot floor could not be graded."
+    exit 1 ;;
+esac
+if [ "$eval_checked" -lt "$EVAL_FLOOR" ]; then
+  echo "FAIL: only $eval_checked records checked (eval), expected >= $EVAL_FLOOR"
+  exit 1
+fi
 if [ "$native_checked" -lt "$FLOOR" ]; then
   echo "FAIL: only $native_checked records checked (native), expected >= $FLOOR"
   exit 1
 fi
 
-echo "PASS: sha256 vectors — $native_checked records across 3 files (eval: $eval_checked, native: $native_checked)"
+echo "PASS: sha256 vectors — $native_checked records across $vector_count files (eval: $eval_checked, native: $native_checked)"
 exit 0

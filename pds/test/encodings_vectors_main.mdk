@@ -1,8 +1,9 @@
 -- Vector driver for S-encodings (#1701 encodings base58btc + multiformats).
 --
--- medaka run pds/test/encodings_vectors_main.mdk <vectors-dir>
+-- medaka run pds/test/encodings_vectors_main.mdk <ledger-owned-vector>...
 --
--- Reads the six corpora under <vectors-dir>, checks pds/lib/base58.mdk and
+-- Reads every S-encodings corpus selected by VECTOR-PROVENANCE.txt, checks
+-- pds/lib/base58.mdk and
 -- pds/lib/multiformats.mdk against them, and prints one line per checked
 -- cell: "<PASS|FAIL>\t<arm>\t<expected>\t<actual>". The LAST stdout line is
 -- exactly "TOTAL: PASS" or "TOTAL: FAIL" — that is what the gate
@@ -11,6 +12,7 @@
 -- below) and is not counted toward PASS or FAIL.
 
 import string.{lines, split, trim, toUtf8, startsWith, stripPrefix, toInt}
+import path.{basename}
 import hex.{encode, decode}
 import lib.base58.{base58btcAlphabet, base58btcEncode, base58btcDecode}
 import lib.multiformats.{
@@ -159,7 +161,7 @@ erratumReports (l :: rest) = match split "\t" l
     -- still matches the corrected column it discloses, so disagreement
     -- aborts. Still NOT a graded PASS/FAIL cell: the driver's header
     -- contract that erratum rows are "not counted toward PASS or FAIL"
-    -- stays true, and encodings_vectors.sh's PASS_FLOOR is unchanged.
+    -- stays true, and encodings_vectors.sh's EVAL_FLOOR is unchanged.
     let () = if correctedExpected /= encoded then
       panic "encodings_vectors: erratum row's corrected column \{correctedExpected} disagrees with this implementation's output \{encoded} — the disclosure is stale"
     else ()
@@ -234,12 +236,26 @@ varintRejectChecks line = match split "\t" line
 
 -- ── main ─────────────────────────────────────────────────────────────────
 
+runVectorFile : String -> <Stdout, FileRead "_"> List Int
+runVectorFile fname = match basename fname
+  "multibase_basic.csv" => multibaseArm fname (toUtf8 "yes mani !")
+  "multibase_leading_zero.csv" =>
+    multibaseArm fname (arrayFromList (0 :: toList (toUtf8 "yes mani !")))
+  "multibase_two_leading_zeros.csv" => multibaseArm fname (arrayFromList (0 :: 0 :: toList (toUtf8 "yes mani !")))
+  "base58_draft_msporny_02.txt" => base58SpecArm fname
+  "multicodec_table.csv" => multicodecArm fname
+  "unsigned_varint_examples.txt" => varintArm fname
+  other =>
+    panic "encodings_vectors: ledger selected unsupported corpus: \{other}"
+
+runVectorFiles : List String -> <Stdout, FileRead "_"> List Int
+runVectorFiles [] = []
+runVectorFiles (fname::rest) = runVectorFile fname ++ runVectorFiles rest
+
 main = match args ()
-  [dir] =>
-    let basic = toUtf8 "yes mani !"
-    let oneZero = arrayFromList (0 :: toList basic)
-    let twoZero = arrayFromList (0 :: 0 :: toList basic)
-    let results = multibaseArm (dir ++ "/multibase_basic.csv") basic ++ multibaseArm (dir ++ "/multibase_leading_zero.csv") oneZero ++ multibaseArm (dir ++ "/multibase_two_leading_zeros.csv") twoZero ++ base58SpecArm (dir ++ "/base58_draft_msporny_02.txt") ++ multicodecArm (dir ++ "/multicodec_table.csv") ++ varintArm (dir ++ "/unsigned_varint_examples.txt")
+  [] => ePutStrLn "usage: medaka run pds/test/encodings_vectors_main.mdk <ledger-owned-vector>..."
+  files =>
+    let results = runVectorFiles files
     let passCount = sum results
     let total = length results
     let () = putStrLn "counted: \{intToString passCount}/\{intToString total} PASS lines"
@@ -247,4 +263,3 @@ main = match args ()
       putStrLn "TOTAL: PASS"
     else
       putStrLn "TOTAL: FAIL"
-  _ => ePutStrLn "usage: medaka run pds/test/encodings_vectors_main.mdk <vectors-dir>"
