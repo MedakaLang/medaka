@@ -19,6 +19,7 @@ addVariantIdentsRaw : String -> TyConOrigin -> List Variant -> DataEnv -> DataEn
 addVariants : TcEnv -> List (String, Mono) -> List (String, Ref Effvar) -> List Int -> List Int -> Mono -> List Variant -> TcEnv
 admittedIfaceFor : String -> Option IfaceRef
 admittedSchemeFor : String -> List ((IfaceRef, String), Scheme) -> Option Scheme
+aliasAmbiguityMsg : String -> List (String, String, String, Ident, Loc) -> String
 aliasArityMsg : String -> Int -> Int -> String
 aliasConstraintEntries : List Decl -> List ((String, String), a) -> List (String, a)
 aliasDfsVisit : List (String, List String) -> Ref (List String) -> Ref (List String) -> Ref (List String) -> String -> Unit
@@ -34,13 +35,22 @@ aliasFixtureEnv : DataEnv
 aliasFixturePrivCore : Decl
 aliasFixturePubCore : Decl
 aliasFixturePubM : Decl
-aliasMethodKeyRows : String -> List (String, Ident) -> Map String (IfaceRef, List String, Ty, List (String, List Kind)) -> Map String (IfaceRef, List String, Ty, List (String, List Kind))
-aliasMethodKeysFor : String -> String -> Map String (IfaceRef, List String, Ty, List (String, List Kind)) -> Map String (IfaceRef, List String, Ty, List (String, List Kind))
+aliasMethodKeyApply : Map String (List (String, String, String, Ident, Loc)) -> List String -> Map String (IfaceRef, List String, Ty, List (String, List Kind)) -> Map String (IfaceRef, List String, Ty, List (String, List Kind))
+aliasMethodKeyCands : List Decl -> List (String, String, String, Ident, Loc)
+aliasMethodKeyEntry : String -> List (String, String, String, Ident, Loc) -> Map String (IfaceRef, List String, Ty, List (String, List Kind)) -> Map String (IfaceRef, List String, Ty, List (String, List Kind))
+aliasMethodKeyGroup : List (String, String, String, Ident, Loc) -> Map String (List (String, String, String, Ident, Loc)) -> Map String (List (String, String, String, Ident, Loc))
+aliasMethodKeyRows : String -> String -> Loc -> List (String, Ident) -> List (String, String, String, Ident, Loc)
+aliasMethodKeysFor : String -> String -> Loc -> List (String, String, String, Ident, Loc)
 aliasMethodRenames : List (String, List String) -> List Decl -> List (String, String)
 aliasMethodRenamesOf : List (String, List String) -> Decl -> List (String, String)
 aliasMethodRenamesOfPath : List String -> UsePath -> List (String, String)
 aliasNamesAt : Int -> List String
 aliasQualifiedMethodEntries : List Decl -> Map String (IfaceRef, List String, Ty, List (String, List Kind)) -> Map String (IfaceRef, List String, Ty, List (String, List Kind))
+aliasRowIdents : List (String, String, String, Ident, Loc) -> List Ident -> List Ident
+aliasRowKey : (String, String, String, Ident, Loc) -> String
+aliasRowLastLoc : List (String, String, String, Ident, Loc) -> Option Loc
+aliasRowMethodOf : List (String, String, String, Ident, Loc) -> String
+aliasRowModule : (String, String, String, Ident, Loc) -> String
 aliasSchemeEntry : List (String, List (String, Scheme)) -> String -> (String, Scheme) -> (String, Scheme)
 aliasSchemes : List (String, List (String, Scheme)) -> String -> List (String, Scheme) -> List (String, Scheme)
 aliasUniverseAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))

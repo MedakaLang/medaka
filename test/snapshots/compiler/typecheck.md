@@ -1,5 +1,5 @@
 # META
-source_lines=31767
+source_lines=31864
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
@@ -17457,9 +17457,32 @@ applyMethodScopeOverrides prog floor =
 -- with no matching impl anywhere).
 --
 -- The remedy is a SUPPLY, not a re-key and not a rewrite: add `A.<method>` → the entry
--- `m`'s OWN declaration identity gives, for every method `m` exports.  ADDITIVE by
--- construction — a bare method name can never be spelled with a dot, so no existing key
--- is overwritten and no name that already had an answer gets a different one.
+-- `m`'s OWN declaration identity gives, for every method `m` exports.  Additive against
+-- the PRE-EXISTING bare-name floor (`applyMethodScopeOverrides`) — a bare method name
+-- can never be spelled with a dot, so no name that already had an answer gets a
+-- different one.
+--
+-- 🚨 NOT additive against THIS BLOCK'S OWN entries, and the sentence above used to claim
+-- it was.  Two DIFFERENT modules aliased under the SAME name (`import ifa as A` beside
+-- `import ifb as A`) that both export a method spelled `mth` mint the SAME key `A.mth`,
+-- and the plain `omInsert` this block shipped with let the later `import` silently
+-- overwrite the earlier one.  MEASURED: two interfaces `IA`/`IB` each declaring `mth`,
+-- an entry with both aliases and `impl IA Blob` only — with `ifa as A` FIRST the program
+-- is REJECTED `No impl of IB for Blob`, and with the two `import … as A` lines SWAPPED
+-- (nothing else changed) it is ACCEPTED and prints 1.  Permuting two imports flipped the
+-- accept/reject verdict, on `check`, `run` and `build` alike.
+--
+-- The fix is decided PER KEY, not per insertion: gather every (alias import × exported
+-- method) candidate row first, group by the `A.<method>` key, and insert only where all
+-- the rows under that key name ONE declaration IDENTITY.  Identity, not module id, is
+-- the discriminator — a re-export hop reaches the same declaration through two module
+-- ids and is NOT ambiguous.  A key that several distinct declarations claim gets
+-- `T-AMBIGUOUS-ALIAS-METHOD` and NO entry at all, so the two orderings agree: both
+-- reject, with the same message at the same span, and neither picks a winner.  Rejected
+-- at the IMPORT rather than at the occurrence, for the reason `R-DUPLICATE-IFACE-METHOD`
+-- (`frontend/resolve.mdk`) is: the ambiguity becomes unrepresentable rather than merely
+-- unreported.  ⚠️ That is an acceptance NARROWING — a program carrying the colliding
+-- alias pair but never spelling `A.mth` is rejected now too.
 --
 -- ⚠️ NOT a de-aliasing rewrite of the occurrence.  Rewriting `A.mth` to bare `mth` on
 -- this path (the other candidate shape) ERASES the very distinction that makes the
@@ -17467,31 +17490,105 @@ applyMethodScopeOverrides prog floor =
 -- `A.mth` and `mth` the same name, and the standalone shadow wins — #1386's Repro B,
 -- measured to survive that shape unchanged.
 aliasQualifiedMethodEntries : List Decl -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
-aliasQualifiedMethodEntries [] tab = tab
-aliasQualifiedMethodEntries ((DAttrib _ d)::rest) tab =
-  aliasQualifiedMethodEntries rest (aliasQualifiedMethodEntries [d] tab)
-aliasQualifiedMethodEntries ((DUse _ path _)::rest) tab = match path
-  UseAlias _ a => aliasQualifiedMethodEntries rest (aliasMethodKeysFor a (usePathModuleId path) tab)
-  _ => aliasQualifiedMethodEntries rest tab
-aliasQualifiedMethodEntries (_::rest) tab = aliasQualifiedMethodEntries rest tab
+aliasQualifiedMethodEntries prog tab =
+  let grouped = aliasMethodKeyGroup (aliasMethodKeyCands prog) omEmpty
+  aliasMethodKeyApply grouped (omKeys grouped) tab
 
--- every method the aliased module EXPORTS, keyed under the local `A.<method>` spelling
--- and carrying that method's own declaration identity (`lookupMethodCand ident`), never
--- a bare-name last-write-wins pick.
-aliasMethodKeysFor : String -> String -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
-aliasMethodKeysFor a mid tab = match omLookup mid driverState.value.graphMethodExportsRef.value
+-- one CANDIDATE row per (alias import × method the aliased module exports):
+-- (the local `A.<method>` key, the bare method name, the aliased module id, that
+-- method's own declaration identity, the `import … as A` span the row came from).
+-- Gathering before inserting is what makes the answer independent of import order.
+aliasMethodKeyCands : List Decl -> List (String, String, String, Ident, Loc)
+aliasMethodKeyCands [] = []
+aliasMethodKeyCands ((DAttrib _ d)::rest) = aliasMethodKeyCands [d]
+  ++ aliasMethodKeyCands rest
+aliasMethodKeyCands ((DUse _ path loc)::rest) = match path
+  UseAlias _ a => aliasMethodKeysFor a (usePathModuleId path) loc
+    ++ aliasMethodKeyCands rest
+  _ => aliasMethodKeyCands rest
+aliasMethodKeyCands (_::rest) = aliasMethodKeyCands rest
+
+-- every method the aliased module EXPORTS, under the local `A.<method>` spelling and
+-- carrying that method's own declaration identity, never a bare-name last-write-wins pick.
+aliasMethodKeysFor : String -> String -> Loc -> List (String, String, String, Ident, Loc)
+aliasMethodKeysFor a mid loc = match omLookup mid driverState.value.graphMethodExportsRef.value
+  None => []
+  Some rows => aliasMethodKeyRows a mid loc rows
+
+aliasMethodKeyRows : String -> String -> Loc -> List (String, Ident) -> List (String, String, String, Ident, Loc)
+aliasMethodKeyRows _ _ _ [] = []
+aliasMethodKeyRows a mid loc ((mname, ident)::rest) =
+  (qualifiedLocal a mname, mname, mid, ident, loc) ::
+    aliasMethodKeyRows a mid loc rest
+
+-- Group the candidate rows BY KEY.  An OrdMap rather than a per-key `filterList` over
+-- the whole row list: aliases × exported methods is small but the pairwise shape is the
+-- quadratic compiler/AGENTS.md keeps finding, and there is no reason to mint another.
+aliasMethodKeyGroup : List (String, String, String, Ident, Loc) -> OrdMap (List (String, String, String, Ident, Loc)) -> OrdMap (List (String, String, String, Ident, Loc))
+aliasMethodKeyGroup [] g = g
+aliasMethodKeyGroup (r::rest) g =
+  let k = aliasRowKey r
+  aliasMethodKeyGroup rest (omInsert k (fromOption [] (omLookup k g) ++ [r]) g)
+
+-- One decision per KEY.  Exactly one declaration identity behind it ⇒ supply the entry
+-- (the #1386 / #1276 remedy, unchanged).  Two or more ⇒ no entry and a hard ambiguity
+-- diagnostic; suppressing the entry is what keeps the follow-on `No impl of <the loser>`
+-- message — which named an interface the occurrence never unambiguously picked — from
+-- being reported instead of the real cause.
+aliasMethodKeyApply : OrdMap (List (String, String, String, Ident, Loc)) -> List String -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
+aliasMethodKeyApply _ [] tab = tab
+aliasMethodKeyApply g (k::rest) tab =
+  let hits = fromOption [] (omLookup k g)
+  let tab2 = match aliasRowIdents hits []
+    [] => tab
+    [_] => aliasMethodKeyEntry k hits tab
+    _ =>
+      let _ = pushTypeErrorOnceAt "T-AMBIGUOUS-ALIAS-METHOD" (aliasRowLastLoc hits) (aliasAmbiguityMsg k hits)
+      tab
+  aliasMethodKeyApply g rest tab2
+
+aliasMethodKeyEntry : String -> List (String, String, String, Ident, Loc) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
+aliasMethodKeyEntry _ [] tab = tab
+aliasMethodKeyEntry k ((_, mname, _, ident, _)::_) tab = match omLookup mname crossRun.value.universeMethodIdentsRef.value
   None => tab
-  Some rows => aliasMethodKeyRows a rows tab
-
-aliasMethodKeyRows : String -> List (String, Ident) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
-aliasMethodKeyRows _ [] tab = tab
-aliasMethodKeyRows a ((mname, ident)::rest) tab =
-  let tab2 = match omLookup mname crossRun.value.universeMethodIdentsRef.value
+  Some cs => match lookupMethodCand ident cs
     None => tab
-    Some cs => match lookupMethodCand ident cs
-      None => tab
-      Some payload => omInsert (qualifiedLocal a mname) payload tab
-  aliasMethodKeyRows a rest tab2
+    Some payload => omInsert k payload tab
+
+aliasRowKey : (String, String, String, Ident, Loc) -> String
+aliasRowKey (k, _, _, _, _) = k
+
+aliasRowModule : (String, String, String, Ident, Loc) -> String
+aliasRowModule (_, _, m, _, _) = m
+
+-- The DISTINCT declaration identities behind one key.  ⚠️ IDENTITY, not module id: the
+-- same declaration reached through a re-export hop arrives twice under two module ids
+-- and must NOT read as ambiguous.
+aliasRowIdents : List (String, String, String, Ident, Loc) -> List Ident -> List Ident
+aliasRowIdents [] acc = acc
+aliasRowIdents ((_, _, _, i, _)::rest) acc
+  | anyList (== i) acc = aliasRowIdents rest acc
+  | otherwise = aliasRowIdents rest (acc ++ [i])
+
+-- The LAST colliding import's span — the one that used to silently overwrite.  Both
+-- orderings of the same two imports land on the same line, so the diagnostic's span is
+-- as order-independent as its verdict.
+aliasRowLastLoc : List (String, String, String, Ident, Loc) -> Option Loc
+aliasRowLastLoc [] = None
+aliasRowLastLoc [(_, _, _, _, l)] = Some l
+aliasRowLastLoc (_::rest) = aliasRowLastLoc rest
+
+-- Phrased after `ppResError (DuplicateInterfaceMethod …)`: name the two things that
+-- collide, say the occurrence cannot be attributed to either, then name both fixes.
+-- The module list is `sortUniqS`-ordered so the message does not encode import order.
+aliasAmbiguityMsg : String -> List (String, String, String, Ident, Loc) -> String
+aliasAmbiguityMsg k hits =
+  let mods = joinWith " and " (map (m => "'\{m}'") (sortUniqS (map aliasRowModule hits)))
+  "'\{k}' is ambiguous: this alias names more than one module declaring a method '\{aliasRowMethodOf hits}' — \{mods}. An occurrence of '\{k}' could not be attributed to any of them. Give those imports different alias names, or import the method by name."
+
+aliasRowMethodOf : List (String, String, String, Ident, Loc) -> String
+aliasRowMethodOf [] = ""
+aliasRowMethodOf ((_, m, _, _, _)::_) = m
 
 overrideScopedMethods : List Decl -> OrdMap (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))) -> List String -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
 overrideScopedMethods _ _ [] floor = floor
@@ -34767,15 +34864,42 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "applyMethodScopeOverrides" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))
 (DFunDef false "applyMethodScopeOverrides" ((PVar "prog") (PVar "floor")) (EApp (EApp (EApp (EApp (EVar "overrideScopedMethods") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodIdentsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodCollidedRef") "value")) (EVar "floor")))
 (DTypeSig false "aliasQualifiedMethodEntries" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))
-(DFunDef false "aliasQualifiedMethodEntries" ((PList) (PVar "tab")) (EVar "tab"))
-(DFunDef false "aliasQualifiedMethodEntries" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "tab")) (EApp (EApp (EVar "aliasQualifiedMethodEntries") (EVar "rest")) (EApp (EApp (EVar "aliasQualifiedMethodEntries") (EListLit (EVar "d"))) (EVar "tab"))))
-(DFunDef false "aliasQualifiedMethodEntries" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest")) (PVar "tab")) (EMatch (EVar "path") (arm (PCon "UseAlias" PWild (PVar "a")) () (EApp (EApp (EVar "aliasQualifiedMethodEntries") (EVar "rest")) (EApp (EApp (EApp (EVar "aliasMethodKeysFor") (EVar "a")) (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "tab")))) (arm PWild () (EApp (EApp (EVar "aliasQualifiedMethodEntries") (EVar "rest")) (EVar "tab")))))
-(DFunDef false "aliasQualifiedMethodEntries" ((PCons PWild (PVar "rest")) (PVar "tab")) (EApp (EApp (EVar "aliasQualifiedMethodEntries") (EVar "rest")) (EVar "tab")))
-(DTypeSig false "aliasMethodKeysFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))))))
-(DFunDef false "aliasMethodKeysFor" ((PVar "a") (PVar "mid") (PVar "tab")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphMethodExportsRef") "value")) (arm (PCon "None") () (EVar "tab")) (arm (PCon "Some" (PVar "rows")) () (EApp (EApp (EApp (EVar "aliasMethodKeyRows") (EVar "a")) (EVar "rows")) (EVar "tab")))))
-(DTypeSig false "aliasMethodKeyRows" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))))))
-(DFunDef false "aliasMethodKeyRows" (PWild (PList) (PVar "tab")) (EVar "tab"))
-(DFunDef false "aliasMethodKeyRows" ((PVar "a") (PCons (PTuple (PVar "mname") (PVar "ident")) (PVar "rest")) (PVar "tab")) (EBlock (DoLet false false (PVar "tab2") (EMatch (EApp (EApp (EVar "omLookup") (EVar "mname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodIdentsRef") "value")) (arm (PCon "None") () (EVar "tab")) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EApp (EVar "lookupMethodCand") (EVar "ident")) (EVar "cs")) (arm (PCon "None") () (EVar "tab")) (arm (PCon "Some" (PVar "payload")) () (EApp (EApp (EApp (EVar "omInsert") (EApp (EApp (EVar "qualifiedLocal") (EVar "a")) (EVar "mname"))) (EVar "payload")) (EVar "tab"))))))) (DoExpr (EApp (EApp (EApp (EVar "aliasMethodKeyRows") (EVar "a")) (EVar "rest")) (EVar "tab2")))))
+(DFunDef false "aliasQualifiedMethodEntries" ((PVar "prog") (PVar "tab")) (EBlock (DoLet false false (PVar "grouped") (EApp (EApp (EVar "aliasMethodKeyGroup") (EApp (EVar "aliasMethodKeyCands") (EVar "prog"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EApp (EVar "aliasMethodKeyApply") (EVar "grouped")) (EApp (EVar "omKeys") (EVar "grouped"))) (EVar "tab")))))
+(DTypeSig false "aliasMethodKeyCands" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")))))
+(DFunDef false "aliasMethodKeyCands" ((PList)) (EListLit))
+(DFunDef false "aliasMethodKeyCands" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "aliasMethodKeyCands") (EListLit (EVar "d"))) (EApp (EVar "aliasMethodKeyCands") (EVar "rest"))))
+(DFunDef false "aliasMethodKeyCands" ((PCons (PCon "DUse" PWild (PVar "path") (PVar "loc")) (PVar "rest"))) (EMatch (EVar "path") (arm (PCon "UseAlias" PWild (PVar "a")) () (EBinOp "++" (EApp (EApp (EApp (EVar "aliasMethodKeysFor") (EVar "a")) (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "loc")) (EApp (EVar "aliasMethodKeyCands") (EVar "rest")))) (arm PWild () (EApp (EVar "aliasMethodKeyCands") (EVar "rest")))))
+(DFunDef false "aliasMethodKeyCands" ((PCons PWild (PVar "rest"))) (EApp (EVar "aliasMethodKeyCands") (EVar "rest")))
+(DTypeSig false "aliasMethodKeysFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")))))))
+(DFunDef false "aliasMethodKeysFor" ((PVar "a") (PVar "mid") (PVar "loc")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphMethodExportsRef") "value")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "rows")) () (EApp (EApp (EApp (EApp (EVar "aliasMethodKeyRows") (EVar "a")) (EVar "mid")) (EVar "loc")) (EVar "rows")))))
+(DTypeSig false "aliasMethodKeyRows" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))))))))
+(DFunDef false "aliasMethodKeyRows" (PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "aliasMethodKeyRows" ((PVar "a") (PVar "mid") (PVar "loc") (PCons (PTuple (PVar "mname") (PVar "ident")) (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EVar "qualifiedLocal") (EVar "a")) (EVar "mname")) (EVar "mname") (EVar "mid") (EVar "ident") (EVar "loc")) (EApp (EApp (EApp (EApp (EVar "aliasMethodKeyRows") (EVar "a")) (EVar "mid")) (EVar "loc")) (EVar "rest"))))
+(DTypeSig false "aliasMethodKeyGroup" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")))))))
+(DFunDef false "aliasMethodKeyGroup" ((PList) (PVar "g")) (EVar "g"))
+(DFunDef false "aliasMethodKeyGroup" ((PCons (PVar "r") (PVar "rest")) (PVar "g")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "aliasRowKey") (EVar "r"))) (DoExpr (EApp (EApp (EVar "aliasMethodKeyGroup") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (EBinOp "++" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "g"))) (EListLit (EVar "r")))) (EVar "g"))))))
+(DTypeSig false "aliasMethodKeyApply" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))))))
+(DFunDef false "aliasMethodKeyApply" (PWild (PList) (PVar "tab")) (EVar "tab"))
+(DFunDef false "aliasMethodKeyApply" ((PVar "g") (PCons (PVar "k") (PVar "rest")) (PVar "tab")) (EBlock (DoLet false false (PVar "hits") (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "g")))) (DoLet false false (PVar "tab2") (EMatch (EApp (EApp (EVar "aliasRowIdents") (EVar "hits")) (EListLit)) (arm (PList) () (EVar "tab")) (arm (PList PWild) () (EApp (EApp (EApp (EVar "aliasMethodKeyEntry") (EVar "k")) (EVar "hits")) (EVar "tab"))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-ALIAS-METHOD"))) (EApp (EVar "aliasRowLastLoc") (EVar "hits"))) (EApp (EApp (EVar "aliasAmbiguityMsg") (EVar "k")) (EVar "hits")))) (DoExpr (EVar "tab")))))) (DoExpr (EApp (EApp (EApp (EVar "aliasMethodKeyApply") (EVar "g")) (EVar "rest")) (EVar "tab2")))))
+(DTypeSig false "aliasMethodKeyEntry" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))))))
+(DFunDef false "aliasMethodKeyEntry" (PWild (PList) (PVar "tab")) (EVar "tab"))
+(DFunDef false "aliasMethodKeyEntry" ((PVar "k") (PCons (PTuple PWild (PVar "mname") PWild (PVar "ident") PWild) PWild) (PVar "tab")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "mname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodIdentsRef") "value")) (arm (PCon "None") () (EVar "tab")) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EApp (EVar "lookupMethodCand") (EVar "ident")) (EVar "cs")) (arm (PCon "None") () (EVar "tab")) (arm (PCon "Some" (PVar "payload")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (EVar "payload")) (EVar "tab")))))))
+(DTypeSig false "aliasRowKey" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")) (TyCon "String")))
+(DFunDef false "aliasRowKey" ((PTuple (PVar "k") PWild PWild PWild PWild)) (EVar "k"))
+(DTypeSig false "aliasRowModule" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")) (TyCon "String")))
+(DFunDef false "aliasRowModule" ((PTuple PWild PWild (PVar "m") PWild PWild)) (EVar "m"))
+(DTypeSig false "aliasRowIdents" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))) (TyFun (TyApp (TyCon "List") (TyCon "Ident")) (TyApp (TyCon "List") (TyCon "Ident")))))
+(DFunDef false "aliasRowIdents" ((PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "aliasRowIdents" ((PCons (PTuple PWild PWild PWild (PVar "i") PWild) (PVar "rest")) (PVar "acc")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "i")))) (EVar "acc")) (EApp (EApp (EVar "aliasRowIdents") (EVar "rest")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EVar "aliasRowIdents") (EVar "rest")) (EBinOp "++" (EVar "acc") (EListLit (EVar "i")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "aliasRowLastLoc" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))) (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "aliasRowLastLoc" ((PList)) (EVar "None"))
+(DFunDef false "aliasRowLastLoc" ((PList (PTuple PWild PWild PWild PWild (PVar "l")))) (EApp (EVar "Some") (EVar "l")))
+(DFunDef false "aliasRowLastLoc" ((PCons PWild (PVar "rest"))) (EApp (EVar "aliasRowLastLoc") (EVar "rest")))
+(DTypeSig false "aliasAmbiguityMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))) (TyCon "String"))))
+(DFunDef false "aliasAmbiguityMsg" ((PVar "k") (PVar "hits")) (EBlock (DoLet false false (PVar "mods") (EApp (EApp (EVar "joinWith") (ELit (LString " and "))) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "'"))))) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "map") (EVar "aliasRowModule")) (EVar "hits")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EVar "k"))) (ELit (LString "' is ambiguous: this alias names more than one module declaring a method '"))) (EApp (EVar "display") (EApp (EVar "aliasRowMethodOf") (EVar "hits")))) (ELit (LString "' — "))) (EApp (EVar "display") (EVar "mods"))) (ELit (LString ". An occurrence of '"))) (EApp (EVar "display") (EVar "k"))) (ELit (LString "' could not be attributed to any of them. Give those imports different alias names, or import the method by name."))))))
+(DTypeSig false "aliasRowMethodOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))) (TyCon "String")))
+(DFunDef false "aliasRowMethodOf" ((PList)) (ELit (LString "")))
+(DFunDef false "aliasRowMethodOf" ((PCons (PTuple PWild (PVar "m") PWild PWild PWild) PWild)) (EVar "m"))
 (DTypeSig false "overrideScopedMethods" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))))
 (DFunDef false "overrideScopedMethods" (PWild PWild (PList) (PVar "floor")) (EVar "floor"))
 (DFunDef false "overrideScopedMethods" ((PVar "prog") (PVar "cands") (PCons (PVar "n") (PVar "rest")) (PVar "floor")) (EBlock (DoLet false false (PVar "floor2") (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "cands")) (arm (PCon "None") () (EVar "floor")) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EApp (EApp (EVar "scopedMethodEntry") (EVar "prog")) (EVar "n")) (EVar "cs")) (arm (PCon "None") () (EVar "floor")) (arm (PCon "Some" (PVar "payload")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "payload")) (EVar "floor"))))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "overrideScopedMethods") (EVar "prog")) (EVar "cands")) (EVar "rest")) (EVar "floor2")))))
@@ -39923,15 +40047,42 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "applyMethodScopeOverrides" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))
 (DFunDef false "applyMethodScopeOverrides" ((PVar "prog") (PVar "floor")) (EApp (EApp (EApp (EApp (EVar "overrideScopedMethods") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodIdentsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodCollidedRef") "value")) (EVar "floor")))
 (DTypeSig false "aliasQualifiedMethodEntries" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))
-(DFunDef false "aliasQualifiedMethodEntries" ((PList) (PVar "tab")) (EVar "tab"))
-(DFunDef false "aliasQualifiedMethodEntries" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "tab")) (EApp (EApp (EVar "aliasQualifiedMethodEntries") (EVar "rest")) (EApp (EApp (EVar "aliasQualifiedMethodEntries") (EListLit (EVar "d"))) (EVar "tab"))))
-(DFunDef false "aliasQualifiedMethodEntries" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest")) (PVar "tab")) (EMatch (EVar "path") (arm (PCon "UseAlias" PWild (PVar "a")) () (EApp (EApp (EVar "aliasQualifiedMethodEntries") (EVar "rest")) (EApp (EApp (EApp (EVar "aliasMethodKeysFor") (EVar "a")) (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "tab")))) (arm PWild () (EApp (EApp (EVar "aliasQualifiedMethodEntries") (EVar "rest")) (EVar "tab")))))
-(DFunDef false "aliasQualifiedMethodEntries" ((PCons PWild (PVar "rest")) (PVar "tab")) (EApp (EApp (EVar "aliasQualifiedMethodEntries") (EVar "rest")) (EVar "tab")))
-(DTypeSig false "aliasMethodKeysFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))))))
-(DFunDef false "aliasMethodKeysFor" ((PVar "a") (PVar "mid") (PVar "tab")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphMethodExportsRef") "value")) (arm (PCon "None") () (EVar "tab")) (arm (PCon "Some" (PVar "rows")) () (EApp (EApp (EApp (EVar "aliasMethodKeyRows") (EVar "a")) (EVar "rows")) (EVar "tab")))))
-(DTypeSig false "aliasMethodKeyRows" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))))))
-(DFunDef false "aliasMethodKeyRows" (PWild (PList) (PVar "tab")) (EVar "tab"))
-(DFunDef false "aliasMethodKeyRows" ((PVar "a") (PCons (PTuple (PVar "mname") (PVar "ident")) (PVar "rest")) (PVar "tab")) (EBlock (DoLet false false (PVar "tab2") (EMatch (EApp (EApp (EVar "omLookup") (EVar "mname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodIdentsRef") "value")) (arm (PCon "None") () (EVar "tab")) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EApp (EVar "lookupMethodCand") (EVar "ident")) (EVar "cs")) (arm (PCon "None") () (EVar "tab")) (arm (PCon "Some" (PVar "payload")) () (EApp (EApp (EApp (EVar "omInsert") (EApp (EApp (EVar "qualifiedLocal") (EVar "a")) (EVar "mname"))) (EVar "payload")) (EVar "tab"))))))) (DoExpr (EApp (EApp (EApp (EVar "aliasMethodKeyRows") (EVar "a")) (EVar "rest")) (EVar "tab2")))))
+(DFunDef false "aliasQualifiedMethodEntries" ((PVar "prog") (PVar "tab")) (EBlock (DoLet false false (PVar "grouped") (EApp (EApp (EVar "aliasMethodKeyGroup") (EApp (EVar "aliasMethodKeyCands") (EVar "prog"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EApp (EVar "aliasMethodKeyApply") (EVar "grouped")) (EApp (EVar "omKeys") (EVar "grouped"))) (EVar "tab")))))
+(DTypeSig false "aliasMethodKeyCands" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")))))
+(DFunDef false "aliasMethodKeyCands" ((PList)) (EListLit))
+(DFunDef false "aliasMethodKeyCands" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "aliasMethodKeyCands") (EListLit (EVar "d"))) (EApp (EVar "aliasMethodKeyCands") (EVar "rest"))))
+(DFunDef false "aliasMethodKeyCands" ((PCons (PCon "DUse" PWild (PVar "path") (PVar "loc")) (PVar "rest"))) (EMatch (EVar "path") (arm (PCon "UseAlias" PWild (PVar "a")) () (EBinOp "++" (EApp (EApp (EApp (EVar "aliasMethodKeysFor") (EVar "a")) (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "loc")) (EApp (EVar "aliasMethodKeyCands") (EVar "rest")))) (arm PWild () (EApp (EVar "aliasMethodKeyCands") (EVar "rest")))))
+(DFunDef false "aliasMethodKeyCands" ((PCons PWild (PVar "rest"))) (EApp (EVar "aliasMethodKeyCands") (EVar "rest")))
+(DTypeSig false "aliasMethodKeysFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")))))))
+(DFunDef false "aliasMethodKeysFor" ((PVar "a") (PVar "mid") (PVar "loc")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "graphMethodExportsRef") "value")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "rows")) () (EApp (EApp (EApp (EApp (EVar "aliasMethodKeyRows") (EVar "a")) (EVar "mid")) (EVar "loc")) (EVar "rows")))))
+(DTypeSig false "aliasMethodKeyRows" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ident"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))))))))
+(DFunDef false "aliasMethodKeyRows" (PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "aliasMethodKeyRows" ((PVar "a") (PVar "mid") (PVar "loc") (PCons (PTuple (PVar "mname") (PVar "ident")) (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EVar "qualifiedLocal") (EVar "a")) (EVar "mname")) (EVar "mname") (EVar "mid") (EVar "ident") (EVar "loc")) (EApp (EApp (EApp (EApp (EVar "aliasMethodKeyRows") (EVar "a")) (EVar "mid")) (EVar "loc")) (EVar "rest"))))
+(DTypeSig false "aliasMethodKeyGroup" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")))))))
+(DFunDef false "aliasMethodKeyGroup" ((PList) (PVar "g")) (EVar "g"))
+(DFunDef false "aliasMethodKeyGroup" ((PCons (PVar "r") (PVar "rest")) (PVar "g")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "aliasRowKey") (EVar "r"))) (DoExpr (EApp (EApp (EVar "aliasMethodKeyGroup") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (EBinOp "++" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "g"))) (EListLit (EVar "r")))) (EVar "g"))))))
+(DTypeSig false "aliasMethodKeyApply" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))))))
+(DFunDef false "aliasMethodKeyApply" (PWild (PList) (PVar "tab")) (EVar "tab"))
+(DFunDef false "aliasMethodKeyApply" ((PVar "g") (PCons (PVar "k") (PVar "rest")) (PVar "tab")) (EBlock (DoLet false false (PVar "hits") (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "g")))) (DoLet false false (PVar "tab2") (EMatch (EApp (EApp (EVar "aliasRowIdents") (EVar "hits")) (EListLit)) (arm (PList) () (EVar "tab")) (arm (PList PWild) () (EApp (EApp (EApp (EVar "aliasMethodKeyEntry") (EVar "k")) (EVar "hits")) (EVar "tab"))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-ALIAS-METHOD"))) (EApp (EVar "aliasRowLastLoc") (EVar "hits"))) (EApp (EApp (EVar "aliasAmbiguityMsg") (EVar "k")) (EVar "hits")))) (DoExpr (EVar "tab")))))) (DoExpr (EApp (EApp (EApp (EVar "aliasMethodKeyApply") (EVar "g")) (EVar "rest")) (EVar "tab2")))))
+(DTypeSig false "aliasMethodKeyEntry" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind"))))))))))
+(DFunDef false "aliasMethodKeyEntry" (PWild (PList) (PVar "tab")) (EVar "tab"))
+(DFunDef false "aliasMethodKeyEntry" ((PVar "k") (PCons (PTuple PWild (PVar "mname") PWild (PVar "ident") PWild) PWild) (PVar "tab")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "mname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodIdentsRef") "value")) (arm (PCon "None") () (EVar "tab")) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EApp (EVar "lookupMethodCand") (EVar "ident")) (EVar "cs")) (arm (PCon "None") () (EVar "tab")) (arm (PCon "Some" (PVar "payload")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (EVar "payload")) (EVar "tab")))))))
+(DTypeSig false "aliasRowKey" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")) (TyCon "String")))
+(DFunDef false "aliasRowKey" ((PTuple (PVar "k") PWild PWild PWild PWild)) (EVar "k"))
+(DTypeSig false "aliasRowModule" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc")) (TyCon "String")))
+(DFunDef false "aliasRowModule" ((PTuple PWild PWild (PVar "m") PWild PWild)) (EVar "m"))
+(DTypeSig false "aliasRowIdents" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))) (TyFun (TyApp (TyCon "List") (TyCon "Ident")) (TyApp (TyCon "List") (TyCon "Ident")))))
+(DFunDef false "aliasRowIdents" ((PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "aliasRowIdents" ((PCons (PTuple PWild PWild PWild (PVar "i") PWild) (PVar "rest")) (PVar "acc")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "i")))) (EVar "acc")) (EApp (EApp (EVar "aliasRowIdents") (EVar "rest")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EVar "aliasRowIdents") (EVar "rest")) (EBinOp "++" (EVar "acc") (EListLit (EVar "i")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "aliasRowLastLoc" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))) (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "aliasRowLastLoc" ((PList)) (EVar "None"))
+(DFunDef false "aliasRowLastLoc" ((PList (PTuple PWild PWild PWild PWild (PVar "l")))) (EApp (EVar "Some") (EVar "l")))
+(DFunDef false "aliasRowLastLoc" ((PCons PWild (PVar "rest"))) (EApp (EVar "aliasRowLastLoc") (EVar "rest")))
+(DTypeSig false "aliasAmbiguityMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))) (TyCon "String"))))
+(DFunDef false "aliasAmbiguityMsg" ((PVar "k") (PVar "hits")) (EBlock (DoLet false false (PVar "mods") (EApp (EApp (EVar "joinWith") (ELit (LString " and "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "'"))))) (EApp (EVar "sortUniqS") (EApp (EApp (EMethodRef "map") (EVar "aliasRowModule")) (EVar "hits")))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString "' is ambiguous: this alias names more than one module declaring a method '"))) (EApp (EMethodRef "display") (EApp (EVar "aliasRowMethodOf") (EVar "hits")))) (ELit (LString "' — "))) (EApp (EMethodRef "display") (EVar "mods"))) (ELit (LString ". An occurrence of '"))) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString "' could not be attributed to any of them. Give those imports different alias names, or import the method by name."))))))
+(DTypeSig false "aliasRowMethodOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Ident") (TyCon "Loc"))) (TyCon "String")))
+(DFunDef false "aliasRowMethodOf" ((PList)) (ELit (LString "")))
+(DFunDef false "aliasRowMethodOf" ((PCons (PTuple PWild (PVar "m") PWild PWild PWild) PWild)) (EVar "m"))
 (DTypeSig false "overrideScopedMethods" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))))))))))
 (DFunDef false "overrideScopedMethods" (PWild PWild (PList) (PVar "floor")) (EVar "floor"))
 (DFunDef false "overrideScopedMethods" ((PVar "prog") (PVar "cands") (PCons (PVar "n") (PVar "rest")) (PVar "floor")) (EBlock (DoLet false false (PVar "floor2") (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "cands")) (arm (PCon "None") () (EVar "floor")) (arm (PCon "Some" (PVar "cs")) () (EMatch (EApp (EApp (EApp (EVar "scopedMethodEntry") (EVar "prog")) (EVar "n")) (EVar "cs")) (arm (PCon "None") () (EVar "floor")) (arm (PCon "Some" (PVar "payload")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "payload")) (EVar "floor"))))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "overrideScopedMethods") (EVar "prog")) (EVar "cands")) (EVar "rest")) (EVar "floor2")))))

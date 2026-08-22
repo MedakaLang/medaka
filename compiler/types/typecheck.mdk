@@ -17453,9 +17453,32 @@ applyMethodScopeOverrides prog floor =
 -- with no matching impl anywhere).
 --
 -- The remedy is a SUPPLY, not a re-key and not a rewrite: add `A.<method>` → the entry
--- `m`'s OWN declaration identity gives, for every method `m` exports.  ADDITIVE by
--- construction — a bare method name can never be spelled with a dot, so no existing key
--- is overwritten and no name that already had an answer gets a different one.
+-- `m`'s OWN declaration identity gives, for every method `m` exports.  Additive against
+-- the PRE-EXISTING bare-name floor (`applyMethodScopeOverrides`) — a bare method name
+-- can never be spelled with a dot, so no name that already had an answer gets a
+-- different one.
+--
+-- 🚨 NOT additive against THIS BLOCK'S OWN entries, and the sentence above used to claim
+-- it was.  Two DIFFERENT modules aliased under the SAME name (`import ifa as A` beside
+-- `import ifb as A`) that both export a method spelled `mth` mint the SAME key `A.mth`,
+-- and the plain `omInsert` this block shipped with let the later `import` silently
+-- overwrite the earlier one.  MEASURED: two interfaces `IA`/`IB` each declaring `mth`,
+-- an entry with both aliases and `impl IA Blob` only — with `ifa as A` FIRST the program
+-- is REJECTED `No impl of IB for Blob`, and with the two `import … as A` lines SWAPPED
+-- (nothing else changed) it is ACCEPTED and prints 1.  Permuting two imports flipped the
+-- accept/reject verdict, on `check`, `run` and `build` alike.
+--
+-- The fix is decided PER KEY, not per insertion: gather every (alias import × exported
+-- method) candidate row first, group by the `A.<method>` key, and insert only where all
+-- the rows under that key name ONE declaration IDENTITY.  Identity, not module id, is
+-- the discriminator — a re-export hop reaches the same declaration through two module
+-- ids and is NOT ambiguous.  A key that several distinct declarations claim gets
+-- `T-AMBIGUOUS-ALIAS-METHOD` and NO entry at all, so the two orderings agree: both
+-- reject, with the same message at the same span, and neither picks a winner.  Rejected
+-- at the IMPORT rather than at the occurrence, for the reason `R-DUPLICATE-IFACE-METHOD`
+-- (`frontend/resolve.mdk`) is: the ambiguity becomes unrepresentable rather than merely
+-- unreported.  ⚠️ That is an acceptance NARROWING — a program carrying the colliding
+-- alias pair but never spelling `A.mth` is rejected now too.
 --
 -- ⚠️ NOT a de-aliasing rewrite of the occurrence.  Rewriting `A.mth` to bare `mth` on
 -- this path (the other candidate shape) ERASES the very distinction that makes the
@@ -17463,31 +17486,105 @@ applyMethodScopeOverrides prog floor =
 -- `A.mth` and `mth` the same name, and the standalone shadow wins — #1386's Repro B,
 -- measured to survive that shape unchanged.
 aliasQualifiedMethodEntries : List Decl -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
-aliasQualifiedMethodEntries [] tab = tab
-aliasQualifiedMethodEntries ((DAttrib _ d)::rest) tab =
-  aliasQualifiedMethodEntries rest (aliasQualifiedMethodEntries [d] tab)
-aliasQualifiedMethodEntries ((DUse _ path _)::rest) tab = match path
-  UseAlias _ a => aliasQualifiedMethodEntries rest (aliasMethodKeysFor a (usePathModuleId path) tab)
-  _ => aliasQualifiedMethodEntries rest tab
-aliasQualifiedMethodEntries (_::rest) tab = aliasQualifiedMethodEntries rest tab
+aliasQualifiedMethodEntries prog tab =
+  let grouped = aliasMethodKeyGroup (aliasMethodKeyCands prog) omEmpty
+  aliasMethodKeyApply grouped (omKeys grouped) tab
 
--- every method the aliased module EXPORTS, keyed under the local `A.<method>` spelling
--- and carrying that method's own declaration identity (`lookupMethodCand ident`), never
--- a bare-name last-write-wins pick.
-aliasMethodKeysFor : String -> String -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
-aliasMethodKeysFor a mid tab = match omLookup mid driverState.value.graphMethodExportsRef.value
+-- one CANDIDATE row per (alias import × method the aliased module exports):
+-- (the local `A.<method>` key, the bare method name, the aliased module id, that
+-- method's own declaration identity, the `import … as A` span the row came from).
+-- Gathering before inserting is what makes the answer independent of import order.
+aliasMethodKeyCands : List Decl -> List (String, String, String, Ident, Loc)
+aliasMethodKeyCands [] = []
+aliasMethodKeyCands ((DAttrib _ d)::rest) = aliasMethodKeyCands [d]
+  ++ aliasMethodKeyCands rest
+aliasMethodKeyCands ((DUse _ path loc)::rest) = match path
+  UseAlias _ a => aliasMethodKeysFor a (usePathModuleId path) loc
+    ++ aliasMethodKeyCands rest
+  _ => aliasMethodKeyCands rest
+aliasMethodKeyCands (_::rest) = aliasMethodKeyCands rest
+
+-- every method the aliased module EXPORTS, under the local `A.<method>` spelling and
+-- carrying that method's own declaration identity, never a bare-name last-write-wins pick.
+aliasMethodKeysFor : String -> String -> Loc -> List (String, String, String, Ident, Loc)
+aliasMethodKeysFor a mid loc = match omLookup mid driverState.value.graphMethodExportsRef.value
+  None => []
+  Some rows => aliasMethodKeyRows a mid loc rows
+
+aliasMethodKeyRows : String -> String -> Loc -> List (String, Ident) -> List (String, String, String, Ident, Loc)
+aliasMethodKeyRows _ _ _ [] = []
+aliasMethodKeyRows a mid loc ((mname, ident)::rest) =
+  (qualifiedLocal a mname, mname, mid, ident, loc) ::
+    aliasMethodKeyRows a mid loc rest
+
+-- Group the candidate rows BY KEY.  An OrdMap rather than a per-key `filterList` over
+-- the whole row list: aliases × exported methods is small but the pairwise shape is the
+-- quadratic compiler/AGENTS.md keeps finding, and there is no reason to mint another.
+aliasMethodKeyGroup : List (String, String, String, Ident, Loc) -> OrdMap (List (String, String, String, Ident, Loc)) -> OrdMap (List (String, String, String, Ident, Loc))
+aliasMethodKeyGroup [] g = g
+aliasMethodKeyGroup (r::rest) g =
+  let k = aliasRowKey r
+  aliasMethodKeyGroup rest (omInsert k (fromOption [] (omLookup k g) ++ [r]) g)
+
+-- One decision per KEY.  Exactly one declaration identity behind it ⇒ supply the entry
+-- (the #1386 / #1276 remedy, unchanged).  Two or more ⇒ no entry and a hard ambiguity
+-- diagnostic; suppressing the entry is what keeps the follow-on `No impl of <the loser>`
+-- message — which named an interface the occurrence never unambiguously picked — from
+-- being reported instead of the real cause.
+aliasMethodKeyApply : OrdMap (List (String, String, String, Ident, Loc)) -> List String -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
+aliasMethodKeyApply _ [] tab = tab
+aliasMethodKeyApply g (k::rest) tab =
+  let hits = fromOption [] (omLookup k g)
+  let tab2 = match aliasRowIdents hits []
+    [] => tab
+    [_] => aliasMethodKeyEntry k hits tab
+    _ =>
+      let _ = pushTypeErrorOnceAt "T-AMBIGUOUS-ALIAS-METHOD" (aliasRowLastLoc hits) (aliasAmbiguityMsg k hits)
+      tab
+  aliasMethodKeyApply g rest tab2
+
+aliasMethodKeyEntry : String -> List (String, String, String, Ident, Loc) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
+aliasMethodKeyEntry _ [] tab = tab
+aliasMethodKeyEntry k ((_, mname, _, ident, _)::_) tab = match omLookup mname crossRun.value.universeMethodIdentsRef.value
   None => tab
-  Some rows => aliasMethodKeyRows a rows tab
-
-aliasMethodKeyRows : String -> List (String, Ident) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
-aliasMethodKeyRows _ [] tab = tab
-aliasMethodKeyRows a ((mname, ident)::rest) tab =
-  let tab2 = match omLookup mname crossRun.value.universeMethodIdentsRef.value
+  Some cs => match lookupMethodCand ident cs
     None => tab
-    Some cs => match lookupMethodCand ident cs
-      None => tab
-      Some payload => omInsert (qualifiedLocal a mname) payload tab
-  aliasMethodKeyRows a rest tab2
+    Some payload => omInsert k payload tab
+
+aliasRowKey : (String, String, String, Ident, Loc) -> String
+aliasRowKey (k, _, _, _, _) = k
+
+aliasRowModule : (String, String, String, Ident, Loc) -> String
+aliasRowModule (_, _, m, _, _) = m
+
+-- The DISTINCT declaration identities behind one key.  ⚠️ IDENTITY, not module id: the
+-- same declaration reached through a re-export hop arrives twice under two module ids
+-- and must NOT read as ambiguous.
+aliasRowIdents : List (String, String, String, Ident, Loc) -> List Ident -> List Ident
+aliasRowIdents [] acc = acc
+aliasRowIdents ((_, _, _, i, _)::rest) acc
+  | anyList (== i) acc = aliasRowIdents rest acc
+  | otherwise = aliasRowIdents rest (acc ++ [i])
+
+-- The LAST colliding import's span — the one that used to silently overwrite.  Both
+-- orderings of the same two imports land on the same line, so the diagnostic's span is
+-- as order-independent as its verdict.
+aliasRowLastLoc : List (String, String, String, Ident, Loc) -> Option Loc
+aliasRowLastLoc [] = None
+aliasRowLastLoc [(_, _, _, _, l)] = Some l
+aliasRowLastLoc (_::rest) = aliasRowLastLoc rest
+
+-- Phrased after `ppResError (DuplicateInterfaceMethod …)`: name the two things that
+-- collide, say the occurrence cannot be attributed to either, then name both fixes.
+-- The module list is `sortUniqS`-ordered so the message does not encode import order.
+aliasAmbiguityMsg : String -> List (String, String, String, Ident, Loc) -> String
+aliasAmbiguityMsg k hits =
+  let mods = joinWith " and " (map (m => "'\{m}'") (sortUniqS (map aliasRowModule hits)))
+  "'\{k}' is ambiguous: this alias names more than one module declaring a method '\{aliasRowMethodOf hits}' — \{mods}. An occurrence of '\{k}' could not be attributed to any of them. Give those imports different alias names, or import the method by name."
+
+aliasRowMethodOf : List (String, String, String, Ident, Loc) -> String
+aliasRowMethodOf [] = ""
+aliasRowMethodOf ((_, m, _, _, _)::_) = m
 
 overrideScopedMethods : List Decl -> OrdMap (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))) -> List String -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
 overrideScopedMethods _ _ [] floor = floor
