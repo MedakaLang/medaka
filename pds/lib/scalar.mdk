@@ -59,16 +59,11 @@
    reduced value is ever exposed. That is what makes `scEqual` limb-wise
    equality, and it is what the reference corpus grades.
 
-   `Array` is mutable, so: every operation allocates a fresh workspace and
-   result and NEVER writes into an argument. `scZero`, `scOne` and the
-   private `nLimbs` / `cLimbs` / `expNMinus2` are meant as shared immutable
-   constants, and nothing in THIS module writes through a value it did not
-   allocate — but `Sc` is a transparent alias for `Array Int`, so nothing
-   enforces that from outside: a caller can write through `scZero`/`scOne`
-   directly, and this module has no way to detect it. Making these values
-   genuinely immutable (an abstract `Sc`) is filed as follow-up work for the
-   ECDSA slice. `scIsZero` therefore checks the argument's own limbs directly
-   rather than comparing against `scZero` — see its doc comment.
+   `Array` is mutable, so every operation allocates a fresh workspace and
+   result and NEVER writes into an argument. `Sc` is an abstract data type:
+   only this module can unwrap the limb array, so callers cannot mutate the
+   `scZero`/`scOne` sentinels or fabricate non-canonical raw limbs. The private
+   `nLimbs` / `cLimbs` / `expNMinus2` remain module-owned work data.
 
    ── The headroom chain (derived against THIS code) ───────────────────
    `Int` is a 63-bit fixnum whose non-negative ceiling is `2^62 - 1`, and it
@@ -105,18 +100,13 @@
    Reduction is consequently enforced STRUCTURALLY — every public operation
    ends in `reduceWide`, and the reference corpus grades the result — and
    must NEVER be left to overflow to catch a violation. What breaks the
-   chain: admitting non-canonical inputs; folding before carrying; and any
+   chain: folding before carrying; and any
    "accumulate several products, reduce once" restructuring.
 
    `carryAll` additionally PANICS if anything carries out of limb 31, which
-   would mean a caller handed `reduceWide` a value >= 2^512. A CANONICAL
-   product of two values < n is < 2^512, so no canonical-input caller reaches
-   it — but the guard IS reachable from the public API: `scMul` fed a
-   non-canonical `Sc` (constructible because `Sc` is a transparent alias, see
-   above) drives the workspace past 2^512 and the panic fires, loudly and
-   correctly, on both engines. This was tested by direct construction during
-   this sprint's heavy round and the panic fired; the guard is live, not dead
-   code.
+   would mean an internal arithmetic workspace held a value >= 2^512. A
+   CANONICAL product of two values < n is < 2^512, so no public path reaches
+   it. The guard remains a defense against an internal arithmetic regression.
 
    ── Bounds-checked array API, deliberately ───────────────────────────
    This module reads with `arr[i]` and writes with `Array.set` — the
@@ -202,25 +192,31 @@ expNMinus2 = [|
 |]
 
 -- | A scalar mod `n`: exactly 16 limbs, base 2^16, least-significant first.
---   Every value handed out by this module is canonical (`0 <= v < n`).
-export type Sc = Array Int
+--   Every value handed out by this module is canonical (`0 <= v < n`). Its
+--   constructor is private so callers obtain values only through this module's
+--   byte and arithmetic API.
+export data Sc = Sc (Array Int)
+
+rawSc : Sc -> Array Int
+rawSc (Sc limbs) = limbs
 
 -- | The additive identity.
-export scZero : Sc
-scZero = [|0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0|]
+export
+scZero : Sc
+scZero = Sc [|0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0|]
 
 -- | The multiplicative identity.
-export scOne : Sc
-scOne = [|1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0|]
+export
+scOne : Sc
+scOne = Sc [|1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0|]
 
 -- ── Carrying, folding, reducing ──────────────────────────────────────
 
 -- Carry-propagate the whole 32-limb workspace IN PLACE, leaving every limb
 -- below 2^16. PANICS if anything carries out of limb 31: that would mean the
 -- workspace held a value >= 2^512. No CANONICAL-input caller in this module
--- produces that (a product of two values < n is < 2^512) — but it IS
--- reachable from the public API (a non-canonical `Sc` fed to `scMul`; tested
--- by direct construction, the panic fired). The guard is live, not dead code.
+-- produces that (a product of two values < n is < 2^512). The guard is a live
+-- defense against an internal arithmetic regression.
 carryAll : Array Int -> Unit
 carryAll w = carryGo w 0 0
 
@@ -339,7 +335,7 @@ reduceWide w =
   let () = if gteNLimbs w then subNInPlace w else ()
   let out = arrayMake 16 0
   let () = copyLow w out 0
-  out
+  Sc out
 
 copyLow : Array Int -> Array Int -> Int -> Unit
 copyLow w out i =
@@ -377,11 +373,11 @@ byteRangeGo bs i =
     let b = bs[i]
     if b < 0 || b > 255 then False else byteRangeGo bs (i + 1)
 
--- Widen 16 canonical limbs into a fresh 32-limb workspace.
-wideOf : Sc -> Array Int
-wideOf a =
+-- Widen internal 16 canonical limbs into a fresh 32-limb workspace.
+wideOfRaw : Array Int -> Array Int
+wideOfRaw limbs =
   let w = arrayMake nWide 0
-  let () = copyLow a w 0
+  let () = copyLow limbs w 0
   w
 
 -- | Parse 32 big-endian bytes as a CANONICAL scalar: a value >= n is
@@ -392,13 +388,14 @@ wideOf a =
 --
 --   The `0 <= b <= 255` element contract IS enforced here (and the length):
 --   an out-of-range element is an `Err`, never silently taken mod 256.
-export scFromBytes : Array Int -> Result String Sc
+export
+scFromBytes : Array Int -> Result String Sc
 scFromBytes bs =
   if arrayLength bs /= 32 then Err "scalar.scFromBytes: expected 32 bytes, got \{intToString (arrayLength bs)}"
   else
     if not (byteArrayOk bs) then Err "scalar.scFromBytes: every element must be a byte in 0..255"
     else
-      let w = wideOf (limbsOfBytes bs)
+      let w = wideOfRaw (limbsOfBytes bs)
       if gteNLimbs w then
         Err "scalar.scFromBytes: value is not canonical (>= n)"
       else
@@ -412,25 +409,26 @@ scFromBytes bs =
 --   `Result`-typed, so a violation PANICS rather than aliasing mod 256. A
 --   loud abort is the point: silently masking an out-of-range element would
 --   compute a different value than the caller wrote.
-export scFromBytesReduce : Array Int -> Sc
+export
+scFromBytesReduce : Array Int -> Sc
 scFromBytesReduce bs =
   if arrayLength bs /= 32 then
     panic "scalar.scFromBytesReduce: expected 32 bytes, got \{intToString (arrayLength bs)}"
   else if not (byteArrayOk bs) then
     panic "scalar.scFromBytesReduce: every element must be a byte in 0..255"
   else
-    reduceWide (wideOf (limbsOfBytes bs))
+    reduceWide (wideOfRaw (limbsOfBytes bs))
 
--- | The canonical 32 big-endian bytes of a scalar. Reduces first, so it is
---   total over any well-formed 16-limb array.
-export scToBytes : Sc -> Array Int
+-- | The canonical 32 big-endian bytes of a scalar.
+export
+scToBytes : Sc -> Array Int
 scToBytes a =
-  let v = reduceWide (wideOf a)
+  let v = rawSc a
   let out = arrayMake 32 0
   let () = toBytesGo v out 0
   out
 
-toBytesGo : Sc -> Array Int -> Int -> Unit
+toBytesGo : Array Int -> Array Int -> Int -> Unit
 toBytesGo v out i =
   if i >= 16 then ()
   else
@@ -442,10 +440,11 @@ toBytesGo v out i =
 
 -- | Are two canonical scalars equal? Canonical representatives are unique,
 --   so this is limb-wise equality.
-export scEqual : Sc -> Sc -> Bool
-scEqual a b = equalGo a b 0
+export
+scEqual : Sc -> Sc -> Bool
+scEqual a b = equalGo (rawSc a) (rawSc b) 0
 
-equalGo : Sc -> Sc -> Int -> Bool
+equalGo : Array Int -> Array Int -> Int -> Bool
 equalGo a b i =
   if i >= 16 then
     True
@@ -455,16 +454,11 @@ equalGo a b i =
     equalGo a b (i + 1)
 
 -- | Is this scalar zero?
---
---   Checks the ARGUMENT'S OWN LIMBS. Deliberately NOT `scEqual a scZero`:
---   `Sc` is a transparent alias for a mutable `Array Int`, so `scZero` is
---   writable by any caller, and a predicate that consulted it would report a
---   true zero as non-zero (and a non-zero as zero) for the rest of the
---   process, at exit 0, with no diagnostic. Do not "simplify" this back.
-export scIsZero : Sc -> Bool
-scIsZero a = isZeroGo a 0
+export
+scIsZero : Sc -> Bool
+scIsZero a = isZeroGo (rawSc a) 0
 
-isZeroGo : Sc -> Int -> Bool
+isZeroGo : Array Int -> Int -> Bool
 isZeroGo a i =
   if i >= 16 then
     True
@@ -497,13 +491,14 @@ isZeroGo a i =
 --
 -- > scIsHigh (scSub (scInverse (scAdd scOne scOne)) scOne)
 -- False
-export scIsHigh : Sc -> Bool
+export
+scIsHigh : Sc -> Bool
 scIsHigh s =
   let d = arrayMake 17 0
-  let () = dblGo s d 0 0
+  let () = dblGo (rawSc s) d 0 0
   if d[16] /= 0 then True else gteNGo d 15
 
-dblGo : Sc -> Array Int -> Int -> Int -> Unit
+dblGo : Array Int -> Array Int -> Int -> Int -> Unit
 dblGo s d i carry =
   if i >= 16 then A.set 16 carry d
   else
@@ -515,13 +510,14 @@ dblGo s d i carry =
 
 -- | Addition mod `n`. Limb-wise into a fresh workspace (each sum < 2^17),
 --   then `reduceWide`.
-export scAdd : Sc -> Sc -> Sc
+export
+scAdd : Sc -> Sc -> Sc
 scAdd a b =
   let w = arrayMake nWide 0
-  let () = addGo a b w 0
+  let () = addGo (rawSc a) (rawSc b) w 0
   reduceWide w
 
-addGo : Sc -> Sc -> Array Int -> Int -> Unit
+addGo : Array Int -> Array Int -> Array Int -> Int -> Unit
 addGo a b w i =
   if i >= 16 then ()
   else
@@ -531,13 +527,14 @@ addGo a b w i =
 -- | Additive inverse mod `n`, computed as `n - a` with borrow. `a` is
 --   canonical so `0 <= a < n`, hence `0 < n - a <= n`; `reduceWide`'s
 --   conditional subtraction maps the `a = 0` case (`n - 0 = n`) back to 0.
-export scNegate : Sc -> Sc
+export
+scNegate : Sc -> Sc
 scNegate a =
   let w = arrayMake nWide 0
-  let () = negateGo a w 0 0
+  let () = negateGo (rawSc a) w 0 0
   reduceWide w
 
-negateGo : Sc -> Array Int -> Int -> Int -> Unit
+negateGo : Array Int -> Array Int -> Int -> Int -> Unit
 negateGo a w i borrow =
   if i >= 16 then ()
   else
@@ -551,7 +548,8 @@ negateGo a w i borrow =
 
 -- | Subtraction mod `n`. NEGATE-THEN-ADD, exactly as the reference does it —
 --   `libsecp256k1` has no `secp256k1_scalar_sub` either.
-export scSub : Sc -> Sc -> Sc
+export
+scSub : Sc -> Sc -> Sc
 scSub a b = scAdd a (scNegate b)
 
 -- | Multiplication mod `n`: schoolbook columns into a 32-limb workspace,
@@ -560,20 +558,21 @@ scSub a b = scAdd a (scNegate b)
 --
 --   The bound is the module header's headroom chain: the peak intermediate
 --   is column 15, sixteen terms, < 2^36 against a 2^62 ceiling.
-export scMul : Sc -> Sc -> Sc
+export
+scMul : Sc -> Sc -> Sc
 scMul a b =
   let w = arrayMake nWide 0
-  let () = mulAccum a b w 0
+  let () = mulAccum (rawSc a) (rawSc b) w 0
   reduceWide w
 
-mulAccum : Sc -> Sc -> Array Int -> Int -> Unit
+mulAccum : Array Int -> Array Int -> Array Int -> Int -> Unit
 mulAccum a b w i =
   if i >= 16 then ()
   else
     let () = mulAccumRow a b w i 0
     mulAccum a b w (i + 1)
 
-mulAccumRow : Sc -> Sc -> Array Int -> Int -> Int -> Unit
+mulAccumRow : Array Int -> Array Int -> Array Int -> Int -> Int -> Unit
 mulAccumRow a b w i j =
   if j >= 16 then ()
   else
@@ -605,7 +604,8 @@ mulAccumRow a b w i j =
 --
 -- > scEqual (scMul (scInverse scOne) scOne) scOne
 -- True
-export scInverse : Sc -> Sc
+export
+scInverse : Sc -> Sc
 scInverse a = powGo a 255 scOne
 
 powGo : Sc -> Int -> Sc -> Sc

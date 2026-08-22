@@ -1,0 +1,8 @@
+-- Negative opacity cell: these shared field sentinels must never be mutable by
+-- a caller. `pds/test/opaque_field_scalar.sh` requires this file to fail.
+import array as A
+import lib.field.{feZero, feOne}
+
+main =
+  let () = A.set 0 7 feZero
+  A.set 0 9 feOne

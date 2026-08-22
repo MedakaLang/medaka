@@ -1,0 +1,7 @@
+-- Negative opacity cell: `Fe(..)` must not expose the private constructor.
+-- If `Fe` becomes `public export data`, this unwraps and mutates its limbs.
+import array as A
+import lib.field.{Fe(..), feZero}
+
+main = match feZero
+  Fe limbs => A.set 0 7 limbs

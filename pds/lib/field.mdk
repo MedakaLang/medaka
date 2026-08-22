@@ -11,10 +11,10 @@
    `pds/test/vectors/field_reference_corpus.txt` with its provenance row in
    `pds/test/VECTOR-PROVENANCE.txt` — never as inline literals here (G5).
 
-   An element is an `Array Int` of exactly 10 limbs. Not a record and not a
-   tuple: tuples top out at arity 5, and a record forbids the indexed loops
-   the schoolbook multiply is written as. The reference unrolls its limbs into
-   a struct FOR SPEED, and speed is out of scope in Phase 0.
+   An element privately holds an `Array Int` of exactly 10 limbs. Not a record
+   and not a tuple: tuples top out at arity 5, and a record forbids the indexed
+   loops the schoolbook multiply is written as. The reference unrolls its limbs
+   into a struct FOR SPEED, and speed is out of scope in Phase 0.
 
    ── The canonical invariant ──────────────────────────────────────────
    Every value produced by every public operation here is CANONICAL: fully
@@ -23,16 +23,11 @@
    then some. No weakly-normalized or higher-magnitude element is ever
    exposed. Normalization here is EAGER, at every public boundary.
 
-   `Array` is mutable, so: every operation allocates a fresh result array and
-   NEVER writes into an argument. `feZero`, `feOne` and the private `pLimbs` are
-   meant as shared immutable constants, and nothing in THIS module writes
-   through a value it did not allocate — but `Fe` is a transparent alias for
-   `Array Int`, so nothing enforces that from outside: a caller can write
-   through `feZero`/`feOne` directly, and this module has no way to detect it.
-   Making these values genuinely immutable (an abstract `Fe`) is filed as
-   follow-up work for the ECDSA slice. `feIsZero` therefore checks the
-   argument's own limbs directly rather than comparing against `feZero` — see
-   its doc comment.
+   `Array` is mutable, so every operation allocates a fresh result array and
+   NEVER writes into an argument. `Fe` is an abstract data type: only this
+   module can unwrap the limb array, so callers cannot mutate sentinels or
+   fabricate non-canonical raw limbs. `feZero`, `feOne`, and the private
+   `pLimbs` are therefore safe shared constants.
 
    ── The headroom chain (derived against THIS code) ───────────────────
    `Int` is a 63-bit fixnum whose non-negative ceiling is `2^62 - 1`, and it
@@ -70,7 +65,7 @@
    only after several operations have accumulated past the invariant, by which
    point the wrong answer has no visible relationship to the site that caused
    it. Eager normalization is therefore enforced STRUCTURALLY — by this
-   module's own discipline (every public operation ends in `feCanonicalize`) and
+   module's own discipline (every public operation ends in canonicalization) and
    by the reference corpus — and must NEVER be left to overflow to catch a
    violation. What breaks the chain: admitting inputs above magnitude 1 (at
    magnitude 8 the column sum is `9*2^58 = 2^61.17`, 0.83 bits clear, and the
@@ -162,20 +157,24 @@ expPMinus2 = [|
   0xff, 0xfe, 0xff, 0xff, 0xfc, 0x2d,
 |]
 
+-- | A field element: exactly 10 limbs, base 2^26, least-significant first,
+--   limb 9 holding 22 bits. Every value handed out by this module is
+--   canonical (`0 <= v < p`). Its constructor is private so callers can only
+--   obtain canonical values through this module's byte and arithmetic API.
+export data Fe = Fe (Array Int)
+
+rawFe : Fe -> Array Int
+rawFe (Fe limbs) = limbs
+
 -- | The additive identity.
 export
 feZero : Fe
-feZero = [|0, 0, 0, 0, 0, 0, 0, 0, 0, 0|]
+feZero = Fe [|0, 0, 0, 0, 0, 0, 0, 0, 0, 0|]
 
 -- | The multiplicative identity.
 export
 feOne : Fe
-feOne = [|1, 0, 0, 0, 0, 0, 0, 0, 0, 0|]
-
--- | A field element: exactly 10 limbs, base 2^26, least-significant first,
---   limb 9 holding 22 bits. Every value handed out by this module is
---   canonical (`0 <= v < p`).
-export type Fe = Array Int
+feOne = Fe [|1, 0, 0, 0, 0, 0, 0, 0, 0, 0|]
 
 -- ── Carrying, folding, canonicalizing ────────────────────────────────
 
@@ -237,33 +236,26 @@ subPGo n i borrow =
       let () = set i d n
       subPGo n (i + 1) 0
 
--- | Reduce any 10-limb array to the canonical representative of its value
---   mod p. The argument is NOT modified.
+-- Reduce an internal 10-limb array to the canonical representative of its
+-- value mod p. The argument is NOT modified.
 --
 --   Each limb must be non-negative and small enough that the carry chain
 --   stays inside the 63-bit fixnum — every producer in this module keeps
 --   limbs below 2^43, against a ceiling of 2^62 (see the module header).
 --
---   The length half of that contract is enforced loudly, the same way the
---   module already enforces its byte-length contracts at `feFromBytes` /
---   `feFromBytesReduce`, since this is the same enforcement at the limb
---   boundary — the only way to reach it is to build a non-10-limb `Fe`
---   through the transparent alias.
-export
-feCanonicalize : Array Int -> Fe
-feCanonicalize raw =
-  if arrayLength raw /= 10 then
-    panic "field.feCanonicalize: expected 10 limbs, got \{intToString (arrayLength raw)}"
+--   Only module-owned work arrays reach this boundary; opaque `Fe` prevents
+--   callers from introducing malformed or non-canonical limb arrays.
+canonicalize : Array Int -> Fe
+canonicalize raw =
+  let n = arrayCopy raw
+  let () = reduceCarry n
+  -- After reduceCarry the value is < 2^256, and 2^256 - p = 2^32 + 977 < p,
+  -- so ONE conditional subtraction is enough.
+  if gtePLimbs n then
+    let () = subPInPlace n
+    Fe n
   else
-    let n = arrayCopy raw
-    let () = reduceCarry n
-    -- After reduceCarry the value is < 2^256, and 2^256 - p = 2^32 + 977 < p,
-    -- so ONE conditional subtraction is enough.
-    if gtePLimbs n then
-      let () = subPInPlace n
-      n
-    else
-      n
+    Fe n
 
 -- ── Serialization ────────────────────────────────────────────────────
 
@@ -316,7 +308,7 @@ feFromBytes bs =
       if gtePLimbs n then
         Err "field.feFromBytes: value is not canonical (>= p)"
       else
-        Ok n
+        Ok (Fe n)
 
 -- | Parse ANY 32 big-endian bytes, reducing mod p. This mirrors
 --   `secp256k1_fe_set_b32_mod` and is what the reference corpus's `red` rows
@@ -334,19 +326,18 @@ feFromBytesReduce bs =
   else if not (byteArrayOk bs) then
     panic "field.feFromBytesReduce: every element must be a byte in 0..255"
   else
-    feCanonicalize (limbsOfBytes bs)
+    canonicalize (limbsOfBytes bs)
 
--- | The canonical 32 big-endian bytes of a field element. Canonicalizes
---   first, so it is total over any well-formed 10-limb array.
+-- | The canonical 32 big-endian bytes of a field element.
 export
 feToBytes : Fe -> Array Int
 feToBytes a =
-  let n = feCanonicalize a
+  let n = rawFe a
   let out = arrayMake 32 0
   let () = toBytesGo n out 0 0 0 31
   out
 
-toBytesGo : Fe -> Array Int -> Int -> Int -> Int -> Int -> Unit
+toBytesGo : Array Int -> Array Int -> Int -> Int -> Int -> Int -> Unit
 toBytesGo n out li acc accBits pos =
   if pos < 0 then ()
   else
@@ -365,9 +356,9 @@ toBytesGo n out li acc accBits pos =
 --   so this is limb-wise equality.
 export
 feEqual : Fe -> Fe -> Bool
-feEqual a b = equalGo a b 0
+feEqual a b = equalGo (rawFe a) (rawFe b) 0
 
-equalGo : Fe -> Fe -> Int -> Bool
+equalGo : Array Int -> Array Int -> Int -> Bool
 equalGo a b i =
   if i >= 10 then
     True
@@ -377,17 +368,11 @@ equalGo a b i =
     equalGo a b (i + 1)
 
 -- | Is this element zero?
---
---   Checks the ARGUMENT'S OWN LIMBS. Deliberately NOT `feEqual a feZero`:
---   `Fe` is a transparent alias for a mutable `Array Int`, so `feZero` is
---   writable by any caller, and a predicate that consulted it would report a
---   true zero as non-zero (and a non-zero as zero) for the rest of the
---   process, at exit 0, with no diagnostic. Do not "simplify" this back.
 export
 feIsZero : Fe -> Bool
-feIsZero a = isZeroGo a 0
+feIsZero a = isZeroGo (rawFe a) 0
 
-isZeroGo : Fe -> Int -> Bool
+isZeroGo : Array Int -> Int -> Bool
 isZeroGo a i =
   if i >= 10 then
     True
@@ -399,19 +384,19 @@ isZeroGo a i =
 -- | Is the canonical representative odd? (The low bit of limb 0.)
 export
 feIsOdd : Fe -> Bool
-feIsOdd a = bitAnd (feCanonicalize a)[0] 1 == 1
+feIsOdd a = bitAnd (rawFe a)[0] 1 == 1
 
 -- ── Arithmetic ───────────────────────────────────────────────────────
 
--- | Addition mod p. Limb-wise, then feCanonicalize: each sum is < 2^27.
+-- | Addition mod p. Limb-wise, then canonicalization: each sum is < 2^27.
 export
 feAdd : Fe -> Fe -> Fe
 feAdd a b =
   let e = arrayMake 10 0
-  let () = addGo a b e 0
-  feCanonicalize e
+  let () = addGo (rawFe a) (rawFe b) e 0
+  canonicalize e
 
-addGo : Fe -> Fe -> Array Int -> Int -> Unit
+addGo : Array Int -> Array Int -> Array Int -> Int -> Unit
 addGo a b e i =
   if i >= 10 then ()
   else
@@ -419,16 +404,16 @@ addGo a b e i =
     addGo a b e (i + 1)
 
 -- | Additive inverse mod p, computed as `p - a` with borrow. `a` is canonical
---   so `0 <= a < p`, hence `0 < p - a <= p`; `feCanonicalize` maps the `a = 0`
+--   so `0 <= a < p`, hence `0 < p - a <= p`; canonicalization maps the `a = 0`
 --   case (`p - 0 = p`) back to 0.
 export
 feNegate : Fe -> Fe
 feNegate a =
   let e = arrayMake 10 0
-  let () = negateGo a e 0 0
-  feCanonicalize e
+  let () = negateGo (rawFe a) e 0 0
+  canonicalize e
 
-negateGo : Fe -> Array Int -> Int -> Int -> Unit
+negateGo : Array Int -> Array Int -> Int -> Int -> Unit
 negateGo a e i borrow =
   if i >= 10 then ()
   else
@@ -457,7 +442,7 @@ feMul a b =
   -- Step 1 — the 19 schoolbook columns (index 19 receives the final carry).
   -- Peak: column 8, nine terms, < 2^55.170.
   let c = arrayMake 20 0
-  let () = mulAccum a b c 0
+  let () = mulAccum (rawFe a) (rawFe b) c 0
   -- Step 2 — carry EVERY column below 2^26 before anything is folded.
   let () = carryChain c 0
   -- Step 3 — fold the high half back with 2^260 = r1 * 2^26 + r0.
@@ -465,16 +450,16 @@ feMul a b =
   let () = foldHigh c e
   let res = arrayMake 10 0
   let () = blit e 0 res 0 10
-  feCanonicalize res
+  canonicalize res
 
-mulAccum : Fe -> Fe -> Array Int -> Int -> Unit
+mulAccum : Array Int -> Array Int -> Array Int -> Int -> Unit
 mulAccum a b c i =
   if i >= 10 then ()
   else
     let () = mulAccumRow a b c i 0
     mulAccum a b c (i + 1)
 
-mulAccumRow : Fe -> Fe -> Array Int -> Int -> Int -> Unit
+mulAccumRow : Array Int -> Array Int -> Array Int -> Int -> Int -> Unit
 mulAccumRow a b c i j =
   if j >= 10 then ()
   else
