@@ -7,7 +7,7 @@
 -- the PRECISE Core IR both shipping emitters consume, dicts and routes included.
 --
 --   medaka build --allow-internal compiler/entries/core_ir_typed_modules_dump_main.mdk -o <bin>
---   <bin> <runtime.mdk> <core.mdk> <entry.mdk> [root ...]
+--   <bin> <stdlib/runtime.mdk> <core.mdk> <entry.mdk> [root ...]
 --
 -- (Build it native: `medaka run` on any compiler-graph entry overflows the
 -- tree-walking interpreter's 25000-frame budget.)
