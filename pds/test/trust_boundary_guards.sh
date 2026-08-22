@@ -47,7 +47,7 @@ PROBE="$ROOT/pds/test/guard_probes_main.mdk"
 # Anti-rot floor: the number of cells committed today. A run that silently
 # executed fewer than this is NOT a pass ("this didn't run" is
 # indistinguishable from "this passed" — docs/ops/TESTING-DESIGN.md §0).
-CELL_FLOOR=5
+CELL_FLOOR=8
 
 out="$(mktemp "${TMPDIR:-/tmp}/trust-boundary-out.XXXXXX")"
 trap 'rm -f "$out"' EXIT
@@ -103,6 +103,10 @@ expect_ok() {
 expect_panic sha256-over  "sha256: every element must be a byte in 0..255"
 expect_panic sha256-under "sha256: every element must be a byte in 0..255"
 expect_ok    sha256-edges "OK sha256-edges len=32"
+
+expect_panic base58-over  "base58btcEncode: every element must be a byte in 0..255"
+expect_panic base58-under "base58btcEncode: every element must be a byte in 0..255"
+expect_ok    base58-edges "OK base58-edges value=15Q"
 
 expect_panic uvarint-neg "unsigned-varint encodes non-negative values only"
 expect_ok    uvarint-ok  "OK uvarint-ok len=2"
