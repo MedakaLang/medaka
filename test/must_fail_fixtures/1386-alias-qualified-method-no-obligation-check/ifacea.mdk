@@ -1,6 +1,0 @@
--- issue #1386: the interface main.mdk's occurrence actually names. It is
--- reached ONLY through the module alias `A` (`import ifacea as A`), and that
--- alias is the only thing in the program that says which module `mth` came
--- from.
-export interface IA a where
-  mth : a -> Int

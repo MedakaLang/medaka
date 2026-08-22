@@ -1,0 +1,20 @@
+-- CONTROL for the row above, carried over from the drained pin's own
+-- control.mdk. Keeps the SAME alias-qualified call shape and the SAME
+-- two-module method-name collision, and lets `Blob` implement `IA`, the
+-- interface the occurrence actually names. A valid program that must print
+-- 1. If it breaks, alias imports or alias-qualified method calls broke, not
+-- #1276.
+--
+-- ⚠️ It needs a separate `import ifacea.{IA}` because an alias binds VALUES
+-- only and an alias-qualified name in TYPE position is a parse error, so
+-- `impl A.IA Blob` is not spellable.
+import ifacea as A
+import ifacea.{IA}
+import ifaceb.{IB}
+
+public export data Blob = Blob
+
+export impl IA Blob where
+  mth b = 1
+
+main = println (A.mth Blob)

@@ -1,0 +1,13 @@
+-- CONTROL for the row above: same alias-qualified call shape and the same
+-- standalone-name collision, with `Blob` genuinely implementing `IA`. A
+-- valid program that must ACCEPT and print 1 (IA's own impl, not fmod's
+-- standalone 42). If it breaks, alias-qualified method resolution broke
+-- outright, not #1386's narrower defect.
+import ifacea as A
+import ifacea.{IA}
+import fmod.{Blob, mth}
+
+export impl IA Blob where
+  mth b = 1
+
+main = println (A.mth Blob)

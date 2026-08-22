@@ -1,0 +1,5 @@
+-- #1276: the other half of the bare-METHOD-NAME collision. main.mdk imports
+-- only the TYPE `IB` from here -- never `mth` -- so nothing in main.mdk
+-- binds the bare name `mth` at all.
+export interface IB a where
+  mth : a -> Int

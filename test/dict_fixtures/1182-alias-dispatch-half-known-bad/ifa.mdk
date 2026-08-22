@@ -1,0 +1,2 @@
+export interface IA a where
+  mth : a -> Int

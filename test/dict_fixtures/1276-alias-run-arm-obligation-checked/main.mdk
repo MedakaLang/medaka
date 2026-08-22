@@ -1,0 +1,19 @@
+-- REGRESSION GUARD for #1276, re-pointed here from the drained must_fail pin
+-- test/must_fail_fixtures/1276-alias-method-provenance-erased
+-- (drained by S-alias-supply, sprint/alias-provenance; same fix as #1386
+-- above). `A.mth` unambiguously names ifacea's `IA.mth` -- the alias `A` is
+-- the ONLY provider of `mth` in this file -- and `Blob` has no `IA` impl at
+-- all, only an `IB` one (bare-name collision with `IB.mth`). Correct
+-- verdict: reject with `No impl of IA for Blob; write an 'impl IA Blob'.`
+-- Previously (base main, pre-fix): both `check` and `run` were clean at exit
+-- 0 and `run` printed `2` -- IB's impl body, selected by the pre-alias-fix
+-- bare-name last-write-wins floor (see the drained pin's claim.txt).
+import ifacea as A
+import ifaceb.{IB}
+
+public export data Blob = Blob
+
+export impl IB Blob where
+  mth b = 2
+
+main = println (A.mth Blob)
