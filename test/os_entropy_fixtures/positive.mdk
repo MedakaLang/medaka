@@ -1,0 +1,25 @@
+renderBytes : Array Int -> Int -> String
+renderBytes bs i =
+  if i == arrayLength bs then ""
+  else
+    let sep = if i == 0 then "" else ","
+    sep ++ intToString bs[i] ++ renderBytes bs (i + 1)
+
+bytesInDomain : Array Int -> Int -> Bool
+bytesInDomain bs i =
+  if i == arrayLength bs then True
+  else
+    let b = bs[i]
+    b >= 0 && b <= 255 && bytesInDomain bs (i + 1)
+
+main =
+  let empty = osEntropyBytes 0
+  let bs = osEntropyBytes 32
+  if arrayLength empty /= 0 then
+    panic "zero-length entropy result was not empty"
+  else if arrayLength bs /= 32 then
+    panic "entropy result had the wrong length"
+  else if not (bytesInDomain bs 0) then
+    panic "entropy result contained a non-byte"
+  else
+    println ("ok:" ++ renderBytes bs 0)

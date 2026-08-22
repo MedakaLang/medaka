@@ -1,5 +1,5 @@
 # META
-source_lines=281
+source_lines=285
 stages=DESUGAR,MARK
 # SOURCE
 -- Built-in extern declarations.
@@ -160,6 +160,10 @@ extern randomBool : Unit -> <Rand> Bool
 extern randomFloat : Unit -> <Rand> Float
 extern randomChar : Unit -> <Rand> Char
 extern setSeed : Int -> <Rand> Unit
+-- | Return exactly `n` bytes from the operating system entropy
+-- source. Panics for a negative length or if the host source fails. This is
+-- intentionally separate from the deterministic, seedable `random*` family.
+extern osEntropyBytes : Int -> <Rand> Array Int
 extern charToStr : Char -> String
 extern intToFloat : Int -> Float
 extern floatToInt : Float -> Int
@@ -353,6 +357,7 @@ extern stringToLower : String -> String
 (DExtern false "randomFloat" (TyFun (TyCon "Unit") (TyEffect ("Rand") None (TyCon "Float"))))
 (DExtern false "randomChar" (TyFun (TyCon "Unit") (TyEffect ("Rand") None (TyCon "Char"))))
 (DExtern false "setSeed" (TyFun (TyCon "Int") (TyEffect ("Rand") None (TyCon "Unit"))))
+(DExtern false "osEntropyBytes" (TyFun (TyCon "Int") (TyEffect ("Rand") None (TyApp (TyCon "Array") (TyCon "Int")))))
 (DExtern false "charToStr" (TyFun (TyCon "Char") (TyCon "String")))
 (DExtern false "intToFloat" (TyFun (TyCon "Int") (TyCon "Float")))
 (DExtern false "floatToInt" (TyFun (TyCon "Float") (TyCon "Int")))
@@ -491,6 +496,7 @@ extern stringToLower : String -> String
 (DExtern false "randomFloat" (TyFun (TyCon "Unit") (TyEffect ("Rand") None (TyCon "Float"))))
 (DExtern false "randomChar" (TyFun (TyCon "Unit") (TyEffect ("Rand") None (TyCon "Char"))))
 (DExtern false "setSeed" (TyFun (TyCon "Int") (TyEffect ("Rand") None (TyCon "Unit"))))
+(DExtern false "osEntropyBytes" (TyFun (TyCon "Int") (TyEffect ("Rand") None (TyApp (TyCon "Array") (TyCon "Int")))))
 (DExtern false "charToStr" (TyFun (TyCon "Char") (TyCon "String")))
 (DExtern false "intToFloat" (TyFun (TyCon "Int") (TyCon "Float")))
 (DExtern false "floatToInt" (TyFun (TyCon "Float") (TyCon "Int")))

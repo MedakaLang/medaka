@@ -3982,6 +3982,13 @@ pReadExactly : Value e -> <Stdin | e> Value e
 pReadExactly (VInt n) = vOptionString (readExactly n)
 pReadExactly _ = panic "readExactly: expected Int"
 
+-- ── OS entropy ────────────────────────────────────────────────────────────
+-- This binding is deliberately installed only by `medaka run`. It must not
+-- enter the deterministic oracle table or the long-lived test/repl process.
+pOsEntropyBytes : Value e -> <Rand | e> Value e
+pOsEntropyBytes (VInt n) = vIntArray (osEntropyBytes n)
+pOsEntropyBytes _ = panic "osEntropyBytes: expected Int"
+
 export
 ioExternBindings : Unit -> List (String, Value e)
 ioExternBindings _ = [
@@ -4016,6 +4023,8 @@ ioExternBindings _ = [
   ("readLineOpt", prim1M pReadLineOpt),
   ("readAll", prim1M pReadAll),
   ("readExactly", prim1 pReadExactly),
+  -- Entropy
+  ("osEntropyBytes", prim1M pOsEntropyBytes),
   -- Process
   ("exit", prim1 pExit),
 ]
