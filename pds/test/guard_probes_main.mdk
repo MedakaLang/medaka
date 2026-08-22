@@ -1,4 +1,4 @@
--- Committed hostile-input guard probes for RUN-PDS0-036. Each case is ONE
+-- Committed hostile-input guard probes for RUN-PDS0-036 and #1727. Each case is ONE
 -- process because a panic aborts the process; the shell gate
 -- pds/test/trust_boundary_guards.sh runs them one at a time and grades exit
 -- codes AND messages. NOT named *_test.mdk on purpose: Medaka has no
@@ -12,6 +12,7 @@
 --   medaka run pds/test/guard_probes_main.mdk <case>
 
 import lib.sha256.{sha256}
+import lib.base58.{base58btcEncode}
 import lib.multiformats.{uvarintEncode}
 
 main = match args ()
@@ -33,6 +34,12 @@ main = match args ()
   ["sha256-edges"] =>
     let d = sha256 (arrayFromList [0, 255])
     println "OK sha256-edges len=\{intToString (arrayLength d)}"
+  ["base58-over"] =>
+    println (base58btcEncode (arrayFromList [0, 256]))
+  ["base58-under"] =>
+    println (base58btcEncode (arrayFromList [0, 0 - 1]))
+  ["base58-edges"] =>
+    println "OK base58-edges value=\{base58btcEncode (arrayFromList [0, 255])}"
   -- unsigned-varint encodes non-negative values only.
   ["uvarint-neg"] =>
     let v = uvarintEncode (0 - 1)
