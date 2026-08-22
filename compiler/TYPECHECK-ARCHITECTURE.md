@@ -252,7 +252,7 @@ what a later group may observe of an earlier one's generalization, is unspecifie
 | **Superclass-evidence expansion (WS-1b)** | `expandSupersTable` | ~100 lines owned | DICT §3 `super` |
 | Arg-position AST prepass | `prePassDictArg`, `prePassDeclScoped`, `rewriteArgScoped` | 23 / 269 / **0** | SHADOW §1 (S1, S9), §3; DICT §5 |
 | **D3a arg-position dispatch stamping** | `argDispatchIndices` | ~190 lines / 4 cells | DICT §5 |
-| Per-run dispatch indices | `buildImplTable`, `buildKeyTable` | ~95 lines | — |
+| Per-run dispatch indices | `buildImplTable` | ~95 lines | — |
 | Cross-run impl-key registry | `univConcreteBucket`, `univHeadless` | ~144 lines | DICT §6 C4, §8 I2 |
 | Specificity selection | `selectImplEntryByIface`, `pickMostSpecificEntry`, `tySubsumesV`, `matchStep` | ~660 lines | DICT §3 `inst` |
 

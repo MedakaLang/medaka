@@ -18979,13 +18979,13 @@ public export data ImplEntry =
 -- (findImplEntry, the iface-unknown `""` fallback), so the earlier-declared of two
 -- coherent siblings at the same head still wins there.  (#203: the element/requires
 -- routers that USED to first-match this table — the former implDictRoutesIn /
--- argImplDictRoutesForGo — now select the most-specific impl over KeyBuckets via
--- `ieSelectRowByIface` (and `matchedEntry`, until B-2.1-d deleted it); forward order
+-- argImplDictRoutesForGo — now select the most-specific impl over the graph-global
+-- impl universe via `ieSelectRowByIface` (and `matchedEntry`, until B-2.1-d deleted it
+-- along with `KeyBuckets`, the routers' prior source); forward order
 -- still decides their tie-break when no unique min⊑ exists.)  This is NOT the coherence structure —
 -- cohScan scans a separate reverseL-ed list; these buckets keep forward
 -- order and coherence is not routed through them.
 export type ImplBuckets = OrdMap (List ImplEntry)
-export type KeyBuckets = OrdMap (List KeyEntry)
 
 -- the entries at head tycon [tag] (empty when no impl heads there), in declaration
 -- order.  Shared by both bucket flavours (List ImplEntry / List KeyEntry).
@@ -19506,8 +19506,8 @@ pickMostSpecificEntry goals (e::rest) = match findMostSpecificEntry (e::rest) (e
 --     pair AT THE DECLARATION.  Every step is true and the conclusion "so the goal
 --     never reaches the selector" DOES NOT FOLLOW — **a declaration-time rejection
 --     is not an early exit.**  Errors accumulate here by design (see
---     `diagnostics.mdk`), so both impls are still registered in `KeyBuckets` and the
---     goal still reaches this arm.  The counterexample was already sitting in this
+--     `diagnostics.mdk`), so both impls are still registered in the graph-global impl
+--     universe and the goal still reaches this arm.  The counterexample was already sitting in this
 --     stage's own flip list: `check_json_fixtures/conflicting_impl_overlap.mdk`
 --     emits `T-CONFLICTING-IMPL` **and** this diagnostic on one file.
 --
@@ -19728,8 +19728,9 @@ entryCovers (KeyEntry _ _ _ _ _ candTys _ _) (KeyEntry _ _ _ _ _ otherTys _ _) =
 -- are rigid and match only the same name.  Mirrors lib/typecheck.ml's `subsumes`.
 --
 -- ⚠️ n=1 reduction is ALGEBRAIC, not a fixture claim: a KeyEntry's `itys` for a
--- single-param impl is exactly `[hty]` (keyEntryOf destructures `tys` as `headTy::_`
--- and stores the SAME `tys` as itys), and `zipL [g] [s] == [(g, s)]`, so
+-- single-param impl is exactly `[hty]` (keyEntryOfRow destructures `tys` as `headTy::_`
+-- and stores the SAME `tys` as itys — `keyEntryOf`'s deleted predecessor did the same),
+-- and `zipL [g] [s] == [(g, s)]`, so
 --     tySubsumesV [g] [s] == matchOneSided tyStep eqStr tyStructEq [(g, s)] []
 -- which is the REMOVED `tySubsumes g s` body term for term.  Every single-param
 -- decision is therefore unchanged by construction, not by fixture census.  A length
@@ -19874,8 +19875,8 @@ tyStructEqList _ _ = False
 -- no-unique-minimum goal is graph-global declaration order, not an
 -- arbitrary-but-deterministic order nothing could state.
 --
--- The `KeyEntry` a row projects to, field for field what `keyEntryOf` builds from
--- the same `DImpl` — same `headTyconTy` head projection, same `implKeyTc` key,
+-- The `KeyEntry` a row projects to, field for field what the deleted `keyEntryOf` built
+-- from the same `DImpl` — same `headTyconTy` head projection, same `implKeyTc` key,
 -- same `tys` as `itys` — with `instRefSeq` where `bucketKeyEntriesFrom` stamped a
 -- per-table ordinal.  `[]` for a row with no head type at all (`tys = []`), which
 -- is exactly `keyEntryOf`'s own `[] => []` arm: such a row is unselectable on both
@@ -20582,12 +20583,13 @@ headKeyNameOr dflt None = dflt
 -- #203 (G): the return-position element/requires routes.  Was a FIRST-MATCH scan of the
 -- ImplBuckets [tag] bucket (which OMITS no-requires impls, so it could never see the
 -- specific `List Int` sibling next to `List a` and always discharged `List a`'s requires).
--- Now selects the MOST-SPECIFIC matching impl over the ALL-impls KeyBuckets registry via
--- the shared method-keyed selector (`ieSelectRowByMethod` since ARCH B-2.1-b2, which
+-- Now selects the MOST-SPECIFIC matching impl over the graph-global impl universe (`IE`)
+-- via the shared method-keyed selector (`ieSelectRowByMethod` since ARCH B-2.1-b2, which
 -- replaced `matchedEntry`; §3 `inst` = min⊑) and discharges THAT impl's OWN
 -- requires — [] for a no-requires specific impl.  Non-overlapping site (one match) → the
--- same impl the first-match scan returned ⇒ byte-identical routes.  [implTable] is still
--- threaded for the nested requires recursion (which re-buckets by each requires' own head).
+-- same impl the first-match scan returned ⇒ byte-identical routes.  [implTable] is a dead
+-- parameter here (see the header a few lines below implDictRoutesForFull's body for the
+-- measurement — it is NOT threaded for a live re-bucketing).
 -- The OUTER head match still uses headSubstWithParams (multi-param augmentation).
 implDictRoutesForFull : ImplBuckets -> String -> String -> String -> Mono -> List Mono -> List Route
 -- #609: the impl is now selected on the SAME full param-mono vector the head subst
@@ -20736,7 +20738,7 @@ matchStep (TyCon { tyConName = n, tyConOrigin = o }) m = match normalize m
   -- #1111 A-2.10: the IMPL-HEAD-vs-GOAL match reads identity too, by the same
   -- `sameTyConHead` rule `unifyN` uses.  This is the dispatch half: `impl C a.T`
   -- no longer matches a goal whose head is `b.T`.  ⚠️ It does NOT make dispatch
-  -- identity-KEYED — `KeyBuckets`/`obUniv*` are still spelling-keyed (#1274,
+  -- identity-KEYED — `ImplBuckets`/`obUniv*` are still spelling-keyed (#1274,
   -- `dispHeadTab`); this narrows the candidates a bucket's scan accepts, which
   -- is why the two can be landed in either order.
   TCon n2 o2 => if sameTyConHead n o n2 o2 then MOk else MFail
@@ -21343,8 +21345,8 @@ argImplRequiresRoutes implTable iface encl tag m rest depth =
       None => []
 
 -- #203 (F): pick the impl whose `requires` this nested obligation must discharge.
---   • iface known → the MOST-SPECIFIC impl of that iface over the ALL-impls KeyBuckets
---     registry (§3 `inst` = min⊑) and ITS OWN requires — [] for a no-requires specific
+--   • iface known → the MOST-SPECIFIC impl of that iface over the graph-global impl
+--     universe (`IE`, §3 `inst` = min⊑) and ITS OWN requires — [] for a no-requires specific
 --     impl (the `List Int` sibling), never the general `List a`'s.  The old
 --     `findImplEntry` searched ImplBuckets (no-requires impls OMITTED) and first-matched,
 --     so it was structurally blind to `List Int` and always returned `List a`'s requires.
@@ -21401,8 +21403,8 @@ argImplDictRoutesFor implTable name tag mono =
 -- == "" recovers the original global routing (binop path, single-method impls).
 -- #203 (H): the arg/op-position element routes.  Was a FIRST-MATCH scan of the
 -- ImplBuckets [tag] bucket (blind to no-requires siblings, see implDictRoutesForFull);
--- now selects the MOST-SPECIFIC matching impl over the ALL-impls KeyBuckets registry via
--- the shared method-keyed selector (`ieSelectRowByMethod` since ARCH B-2.1-b2, which
+-- now selects the MOST-SPECIFIC matching impl over the graph-global impl universe (`IE`)
+-- via the shared method-keyed selector (`ieSelectRowByMethod` since ARCH B-2.1-b2, which
 -- replaced `matchedEntry`) and discharges THAT impl's OWN requires.  A
 -- non-overlapping site (one match) selects the same impl the first-match scan did ⇒
 -- byte-identical routes.
@@ -22278,7 +22280,7 @@ checkBodyImpl seed mode prog0 =
   -- completeness / obligations): Flat = whole flattened program; Module = imported
   -- data + impl universe + this module.
   -- #154 PR-A: every consumer of `fullUniverse` is a `Flat _ =>` arm (grep confirms:
-  -- buildDefinerShadows / buildKeyTable / registerMethodIfaceParamsAll
+  -- buildDefinerShadows / registerMethodIfaceParamsAll
   -- / checkImplObligations / checkCallObligations — all Flat).  #1557 A-3.5a removed
   -- `checkImplCompleteness` from that list: impl-completeness no longer takes a decl
   -- list on either arm, it reads `classEnvHere` (whose Flat arm is built from `prog`,
@@ -23689,8 +23691,10 @@ oblIfaceKey ir = tabKeyOf NsIface ir.irOrigin ir.irName
 --
 -- The sites this ledger enrols split into TWO independent tables:
 --
---   T1  the head partition — `headBucketRender`/`headBucketKey` (written by
---       `bucketKeyEntriesFrom` and `ieFileRowByHead`) and its retests
+--   T1  the head partition — `headBucketKey` (written, at the time of this ledger, by
+--       `bucketKeyEntriesFrom` and `ieFileRowByHead`; `bucketKeyEntriesFrom` and its
+--       sibling `headBucketRender` were later deleted by `S-keytable-payoff`, `75f4148f`)
+--       and its retests
 --       `headTabIs`/`headTabEq`/`headTabOf`, consumed by `ieImplExistsForHeadGo`,
 --       `ieCountHeadByIfaceGo` and `ieCountHeadByMethodGo`.  ⚠️ ARCH B-2.1-d deleted
 --       this tier's `KeyBuckets` readers (`bucketOfHead`, `implExistsForHeadGo`,
@@ -23906,7 +23910,11 @@ bucketRecvMatch ((tys, _)::rest) dm = match tys
 -- is now reached only when the KeyBuckets union has no match at all (e.g. an empty
 -- arg list, the arm above).  The fallback is retained rather than deleted because
 -- `ImplUniverse` and `KeyBuckets` are populated from different decl sets and this
--- stage is a bug fix, not a registry merge.  Regression:
+-- stage is a bug fix, not a registry merge.  ⚠️ `keyEntryOf` and `KeyBuckets` (this whole
+-- paragraph's subject) were later deleted outright by `S-keytable-payoff` (`75f4148f`);
+-- `findMatchingImplReqsU` below reads `ImplUniverse` only.  This paragraph is kept as the
+-- historical record of the #1128 fix it documents, not as a description of the current
+-- table.  Regression:
 -- test/typecheck_error_fixtures/overlap_specific_req_wins.mdk (concrete-vs-headless) and
 -- overlap_same_head_req_wins{,_swapped}.mdk (#326 within-bucket min⊑).
 findMatchingImplReqsU : ImplUniverse -> IfaceRef -> List Mono -> Option (List (String, Mono), List Require)
@@ -28152,11 +28160,12 @@ buildDefinerShadows implDecls prog =
 -- ⚠️ ARCH B-2.1-d REMOVED THE KEY-BUCKET LINE from this fold, with the
 -- `universeKeyBucketsRef` cell it grew.  That line re-entered `bucketKeyEntries` once per
 -- module with a NON-EMPTY accumulator, which is what duplicated declaration indices across
--- modules and left each module's slice descending; `buildKeyTable` is now
--- `bucketKeyEntries`' sole caller and passes `omEmpty` (see `mergeByDeclIdx`).  Do not
--- re-add a cumulative key-bucket accumulator here: impl EXISTENCE and impl SELECTION both
--- read the graph-global `bodyImplEnvRef` now, and a prefix-keyed second population is the
--- shape B-2.1-c/-f/-g each measured an S0 out of.
+-- modules and left each module's slice descending; at the time, `buildKeyTable` was
+-- `bucketKeyEntries`' sole caller and passed `omEmpty` (see `mergeByDeclIdx`).  Both
+-- `buildKeyTable` and `bucketKeyEntries` (and the whole key-bucket table, `KeyBuckets`) were
+-- deleted by `S-keytable-payoff`.  Do not re-add a cumulative key-bucket accumulator here:
+-- impl EXISTENCE and impl SELECTION both read the graph-global `bodyImplEnvRef` now, and a
+-- prefix-keyed second population is the shape B-2.1-c/-f/-g each measured an S0 out of.
 -- ⚠️ #1557 A-3.5a REMOVED THE COMPLETENESS LINE from this fold, with the
 -- `universeIfaceRequiredRef` cell and its `insertIfaceRequired` writer.  The ordering
 -- guarantee this comment records ("this module's own decls are visible at the read")
@@ -31076,7 +31085,7 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   let coreSchemesA = elabModuleStamp "" runtimeSeed [] core2a core2a
   -- #154 PR-C: elabHarvestWorker → elabWorker → elabModuleStamp reads accAll as its
   -- impl-body universe (`accAll ++ prog`, order-observable through buildImplTable/
-  -- buildKeyTable/resolveSites) but forwards accData only to checkModuleFullImpl's dead
+  -- resolveSites) but forwards accData only to checkModuleFullImpl's dead
   -- Module `accData` field.  wantAll=True keeps the impl-universe concat byte-identical;
   -- wantData=False drops the dead accData concat (`[]` initial).
   let _ = foldModules
