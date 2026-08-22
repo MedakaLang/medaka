@@ -443,7 +443,9 @@ under *Writing tests*.
 
 - **[H-FMT] Format** — **Run `medaka fmt --write <changed.mdk>` and re-`git add` before
   committing any `.mdk` edit.** Bare `medaka fmt <file>` is READ-ONLY. ⚠️ **Tree is NOT
-  fmt-clean**: `sqlite/lib/varint.mdk`, `stdlib/byteparser.mdk`. → dossier
+  fully fmt-clean** — the list of which files fail `medaka fmt --check` is DERIVED, not
+  hand-typed (a hand-typed list here rotted twice over, #1794): `make fmt-clean-census`
+  (`test/fmt_clean_census.sh`) reports the current set on demand. → dossier
 - **[H-LINT] Lint** — **MAX RATCHET, all ~20 rules gated.** Also runs `medaka lint compiler
   stdlib sqlite`. **Run `medaka lint` on files you touch.** Disable inline: `-- lint-disable-
   next-line <rule>` (also `-line`, `-file`; omit rule = all). ⚠️ `--fix` bails on any decl with

@@ -61,6 +61,12 @@ test/bench                     perf harness. Reports numbers; asserts nothing.
 test/profile_compiler          per-stage time/allocation profiler.
 test/tmc_census                emits the TMC census that diff_compiler_tmc_parity CONSUMES.
 test/wasm/w1                   a scratch wasm probe.
+test/fmt_clean_census          derived fmt-clean report (#1794, `make fmt-clean-census`): lists
+                                which tracked .mdk files outside test/ fail `medaka fmt --check`,
+                                replacing AGENTS.md's old hand-typed exception list. Always
+                                exits 0 and asserts nothing — deliberately on-demand, not a
+                                gate, to avoid surfacing tree-wide pre-existing formatting
+                                debt as a sudden required-check failure (see the script header).
 
 # ── sqlite (the GATES are sqlite/test/*_oracle.sh — those are in the `sqlite` shard) ──
 # Self-described, in its own header: "it is a status report, not a gate". It prints

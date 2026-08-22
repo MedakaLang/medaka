@@ -11,6 +11,19 @@ subcommand) prints that subcommand's flags.
 Tree-cleanliness verified 2026-07-14: `sqlite/lib/varint.mdk` and `stdlib/byteparser.mdk` both
 fail `fmt --check`. AGENTS.md used to claim "the whole tree is clean" — it isn't.
 
+#1794 (2026-08-22): that hand-typed two-file list rotted, in both directions at once —
+`gzip/lib/inflate.mdk` landed on `main` unformatted with no entry anywhere (fixed by
+reformatting it in the same PR that added this paragraph, plain `fmt --write` — no deliberate
+reason it was left unformatted, unlike a possible varint.mdk/byteparser.mdk rationale that
+turned out not to apply either), and separately, by the time anyone re-checked, varint.mdk and
+byteparser.mdk had themselves *already* been reformatted clean, so the "known exceptions" were
+stale in the other direction too. There was never a documented root cause tying those two files
+together (no dossier entry beyond "verified not clean on this date") — so there was nothing to
+match `inflate.mdk` against. The fix: stop hand-typing the list. `make fmt-clean-census`
+(`test/fmt_clean_census.sh`) derives it fresh from `git ls-files` + `medaka fmt --check`,
+excluding `test/` the same way the pre-commit hook does. On-demand only, not a CI gate — see the
+script's own header for why (blast-radius caution, same spirit as #1654).
+
 `fmt --write` on a file holding a float literal ≥ 1e15 (#51, CLOSED 2026-07-15; re-probed
 2026-07-16 per #361): it still writes `9e+15`, but the lexer now reads that back correctly
 (`main = println 9000000000000000.0` → `fmt --write` → `main = println 9e+15` →
