@@ -1,0 +1,14 @@
+g : String -> Int -> String -> Int
+g a b c = b
+
+n : Int
+n = 7
+
+demo : Int
+demo =
+  g
+    "x"
+    -n
+    "h"
+
+main = println demo
