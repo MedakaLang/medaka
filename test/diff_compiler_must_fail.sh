@@ -192,6 +192,13 @@ PY
 }
 
 # claim_get <file> <key>  -> all values for that key, one per line
+#
+# This gate reads only the specific keys named above (issue, what, cmd, control, exit,
+# stdout, ...) — an unrecognized key in claim.txt is silently invisible to it. That is
+# why the optional `superseded-by:` field (#1653 — "closed as a duplicate of #N, pin
+# deliberately retained", read by test/must_fail_census.sh's HALF 1) needs NO change
+# here: this gate's uniqueness check (keyed on `issue:`) and its directory-prefix check
+# both keep working unchanged with `superseded-by:` present in a claim.txt.
 claim_get() { sed -n "s/^$2:[[:space:]]*//p" "$1"; }
 claim_has() { grep -q "^$2:" "$1"; }
 

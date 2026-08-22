@@ -687,6 +687,23 @@ label has no reason field and needs no review, which makes it a skip-list. Self-
 directions, each half checked where it can be: the **gate** fails when an entry has a fixture after
 all; the **census** reports when an entry's issue is closed.
 
+**`superseded-by:` — the one state PINNED-BUT-CLOSED cannot otherwise express (#1653).** An issue
+closed as a *duplicate* of a still-open issue, whose fixture is deliberately kept, is a legitimate
+CLOSED state — but plain PINNED-BUT-CLOSED has no way to say so, and re-flags it forever (measured:
+#1071 closed-as-dup-of-#1062, PR #1652). An optional `claim.txt` key, `superseded-by: <N>`, lets a
+fixture name the surviving issue. `diff_compiler_must_fail.sh` needs no change — it reads specific
+known keys and ignores an unrecognized one, so its uniqueness check (keyed on `issue:`) and its
+directory-prefix check both keep working with the field present. The census's HALF 1 treats it as
+benign ONLY when it self-drains in every direction, never as a bare skip-list:
+- `#N` unreadable (deleted/transferred/API refusal) ⇒ still a finding, same as an unreadable
+  `issue:` already gets.
+- `#N` itself CLOSED ⇒ still a finding — the exemption has no subject left.
+- `#N` OPEN but pinned by NO fixture anywhere in the corpus ⇒ still a finding — the mechanism this
+  fixture claims is guarded elsewhere isn't actually guarded anywhere else, so this fixture is the
+  only remaining guard and cannot be silently ignored.
+- `#N` OPEN and pinned by some other fixture in the corpus ⇒ benign, reported distinctly rather than
+  silently — the only state the field is for.
+
 ### 4.7 `--promote` for the inline tiers (steal OCaml)
 
 OCaml's `expect` mode needs **zero dedicated promotion machinery**: its `run-expect`
