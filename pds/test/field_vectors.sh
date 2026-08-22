@@ -15,11 +15,6 @@
 #                      Measured: stride 1 is ~83 s under eval, stride 7 ~14 s.
 #   Phase B (native) — the FULL corpus, all 944 rows, no bound (~0.3 s).
 #
-# The corpus path is spelled out here rather than enumerated, matching the
-# in-tree precedent (pds/test/sha256_vectors.sh names V1/V2/V3 explicitly).
-# Recorded as a known divergence from the ledger's dynamic enumeration —
-# see this slice's DEBT.md row.
-#
 # Auto-enrolled in the `sqlite` CI shard by the `'pds/test/*'` glob
 # (pds/README.md "CI classification policy"), so no ci.yml edit is needed.
 #
@@ -34,19 +29,35 @@ export MEDAKA_ROOT
 export MEDAKA_EMITTER="$ROOT/medaka_emitter"
 
 DRIVER="$ROOT/pds/test/field_vectors_main.mdk"
-CORPUS="${FIELD_CORPUS:-$ROOT/pds/test/vectors/field_reference_corpus.txt}"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
 
+VECTOR_LIST="$WORK/vector-files.lst"
+if ! sh "$ROOT/pds/test/vector_provenance.sh" --files-for S-field > "$VECTOR_LIST"; then
+  echo "FAIL: could not derive field vector files from the provenance ledger"
+  exit 1
+fi
+set --
+while IFS= read -r rel; do
+  [ -z "$rel" ] && continue
+  set -- "$@" "$ROOT/$rel"
+done < "$VECTOR_LIST"
+vector_count=$#
+if [ "$vector_count" -eq 0 ]; then
+  echo "FAIL: provenance ledger names no S-field vector files"
+  exit 1
+fi
+
 # Rows the corpus commits today: 44 each of red/sqr/neg/inv + 256 each of
 # mul/add/sub. RAISE THIS when rows are added to the corpus.
 FLOOR=944
+EVAL_FLOOR=135
 
 # ── Phase A — eval engine, bounded ──────────────────────────────────────
 echo "phase A: eval engine (--stride 7)"
 EVAL_OUT="$WORK/eval.out"
-"$MEDAKA" run "$DRIVER" --stride 7 "$CORPUS" >"$EVAL_OUT" 2>&1
+"$MEDAKA" run "$DRIVER" --stride 7 "$@" >"$EVAL_OUT" 2>&1
 eval_rc=$?
 grep -v '^PASS' "$EVAL_OUT"
 if [ "$eval_rc" -ne 0 ]; then
@@ -73,7 +84,7 @@ if [ "$rc" -ne 0 ]; then
 fi
 
 NATIVE_OUT="$WORK/native.out"
-"$DRIVER_BIN" "$CORPUS" >"$NATIVE_OUT" 2>&1
+"$DRIVER_BIN" "$@" >"$NATIVE_OUT" 2>&1
 native_rc=$?
 grep -v '^PASS' "$NATIVE_OUT"
 if [ "$native_rc" -ne 0 ]; then
@@ -96,10 +107,19 @@ case "$native_checked" in
     echo "FAIL: native row count is not a number ('$native_checked') — the driver's summary line did not parse; the anti-rot floor could not be graded."
     exit 1 ;;
 esac
+case "$eval_checked" in
+  ''|*[!0-9]*)
+    echo "FAIL: eval row count is not a number ('$eval_checked') — the driver's summary line did not parse; the anti-rot floor could not be graded."
+    exit 1 ;;
+esac
+if [ "$eval_checked" -lt "$EVAL_FLOOR" ]; then
+  echo "FAIL: only $eval_checked rows checked (eval), expected >= $EVAL_FLOOR"
+  exit 1
+fi
 if [ "$native_checked" -lt "$FLOOR" ]; then
   echo "FAIL: only $native_checked rows checked (native), expected >= $FLOOR"
   exit 1
 fi
 
-echo "PASS: field vectors — $native_checked rows (eval: $eval_checked at stride 7, native: $native_checked)"
+echo "PASS: field vectors — $native_checked rows across $vector_count files (eval: $eval_checked at stride 7, native: $native_checked)"
 exit 0
