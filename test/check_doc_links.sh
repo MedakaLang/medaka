@@ -29,6 +29,40 @@
 # Both checks are text-only against the CURRENT source tree — a dead
 # reference means the file genuinely does not exist on disk right now.
 #
+# ⚠️ KNOWN GAP — tier 2 is BLIND TO DIRECTORY CITATIONS (#1654): the
+# `\.(mdk|sh|c|md|txt|toml|yml)` requirement means a bare citation of a
+# directory (no extension — e.g. `test/must_fail_fixtures/1071-.../`) is
+# never extracted, so it can never be reported dead. `dead: N` above is
+# therefore a LOWER BOUND, not a complete count — this is a deliberate,
+# measured gap, not an oversight.
+#
+# #1654 named one concrete live instance (`.claude/sprint-b/DECISIONS.md:583`
+# citing a directory deleted in PR #1652); that citing file was itself
+# deleted by an unrelated commit (2f8c5bca, the sprint-record cleanup) a few
+# hours after the issue was filed, so nothing was left to doc-fix for that
+# specific case by the time this was investigated.
+#
+# Widening tier 2 to accept directory paths (trailing "/", resolved with
+# `-d`) was measured, not just proposed: a throwaway tree-wide scan for
+# directory-shaped citations under the five tracked roots found ~2300 such
+# citations, of which 113 point at paths that do not exist on disk today.
+# That 113 is dominated by two shapes that are NOT doc rot and would be
+# false positives on naive widening — build-output directories that legitimately
+# don't exist pre-build (`test/bin/`, `playground/site/`, `runtime/core/`,
+# `compiler/bootstrap/native/` — accounting for the large majority) and
+# citations inside archival/historical docs (`archive/**`, design-doc
+# narrations of concluded arcs) that are correct AS HISTORY and would need a
+# FILE exception, not a fix. The remainder (a handful of must_fail_fixtures/
+# directory citations in compiler/TYPECHECK-ARCH-BUG-FIT.md,
+# compiler/TYPECHECK-TARGET-ARCHITECTURE.md, docs/spec/DICT-SEMANTICS.md) are
+# genuinely stale but each needs a human judgment call (correct the number vs.
+# annotate as historical), same as the archival cases. Given the size and the
+# ambiguity, widening tier 2 is DEFERRED rather than landed blind against the
+# required `soundness` check — see #1654 for the measurement and the reasoning
+# in full. This paragraph is the record; it is not a license to skip-list a
+# directory citation the gate cannot see (that would be the unfalsifiable
+# ratchet line the header below forbids).
+#
 # THE EXCEPTIONS FILE IS A RATCHET, NOT A SKIP-LIST (test/DOC-LINK-EXCEPTIONS.txt):
 # some dead references are legitimate HISTORY (PLAN-ARCHIVE.md, archive/**,
 # bootstrap logs narrating a past where compiler/typecheck.mdk genuinely

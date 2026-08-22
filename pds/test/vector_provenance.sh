@@ -9,7 +9,7 @@
 # NO NETWORK. This gate never fetches source-url and never verifies
 # source-sha256 — see the ledger's own DOES-NOT-PROVE block.
 #
-# This gate runs its own SELF-TEST first, on seven synthetic fixtures built in a
+# This gate runs its own SELF-TEST first, on nine synthetic fixtures built in a
 # mktemp -d outside the tree, before it ever looks at the real tree: the real
 # corpus is empty at the time this slice lands (no consumer slice has landed
 # yet), so without the self-test every CI run of this gate would be vacuously
@@ -26,7 +26,7 @@ set -u
 ROOT="${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}"
 
 # One parent scratch dir for every mktemp -d this gate creates (the check_corpus
-# call plus the seven self-test scenarios), reaped by ONE EXIT/HUP/INT/TERM
+# call plus the nine self-test scenarios), reaped by ONE EXIT/HUP/INT/TERM
 # handler below — there was no such handler at all before this (RUN-PDS0-009
 # F5 rider (a)). Per-site `rm -rf` on the normal path stays, to bound peak
 # disk; the handler below is only the crash path.
@@ -43,6 +43,48 @@ sha256_of_file() {
     echo "vector_provenance: need sha256sum or shasum, neither found" >&2
     exit 2
   fi
+}
+
+# Print the repo-relative files owned by one exact consumer id, in stable order.
+# The caller first gets the same full corpus validation as the normal provenance
+# gate, so this query cannot turn a malformed or drifting ledger into a driver
+# input list. Consumer ids are the first whitespace-delimited token in the
+# ledger's `consumer:` value (for example, S-sha256 or S-encodings).
+list_consumer_files() {
+  lcf_root="$1"
+  lcf_consumer="$2"
+  lcf_ledger="$lcf_root/pds/test/VECTOR-PROVENANCE.txt"
+
+  if ! check_corpus "$lcf_root" >/dev/null; then
+    echo "vector_provenance: cannot list $lcf_consumer files: corpus validation failed" >&2
+    return 1
+  fi
+
+  awk -v WANT="$lcf_consumer" '
+    function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+    function flush() {
+      split(consumer, parts, /[ \t]+/)
+      if (type == "vector" && parts[1] == WANT && file != "") print file
+    }
+    /^[ \t]*\[(impl|vector)\][ \t]*$/ {
+      flush()
+      line = $0
+      gsub(/^[ \t]*\[|\][ \t]*$/, "", line)
+      type = line
+      file = ""
+      consumer = ""
+      next
+    }
+    type == "vector" {
+      colon = index($0, ":")
+      if (colon == 0) next
+      key = trim(substr($0, 1, colon - 1))
+      val = trim(substr($0, colon + 1))
+      if (key == "file") file = val
+      if (key == "consumer") consumer = val
+    }
+    END { flush() }
+  ' "$lcf_ledger" | LC_ALL=C sort
 }
 
 # ── check_corpus <root> ───────────────────────────────────────────────────────
@@ -538,6 +580,181 @@ EOF
     st_rc=1
   fi
 
+  # T8 — consumer enumeration follows ledger rows, not a hard-coded path list.
+  # The second file is the regression cell for #1729/F12: an older gate naming
+  # only first.txt never sees it. The query must return both in stable order.
+  t8="$(mktemp -d "$VP_WORK/t8.XXXXXX")"
+  mkdir -p "$t8/pds/test"
+  mk_vector "$t8" "pds/test/first.txt" "first vector"
+  mk_vector "$t8" "pds/test/later.txt" "later vector with a wrong answer"
+  first_hash="$(sha256_of_file "$t8/pds/test/first.txt")"
+  later_hash="$(sha256_of_file "$t8/pds/test/later.txt")"
+  cat > "$t8/pds/test/VECTOR-PROVENANCE.txt" << EOF
+[vector]
+file: pds/test/first.txt
+local-sha256: $first_hash
+kind: published-artifact
+source: Test Fixture First
+source-url: https://example.invalid/t8-first
+source-sha256: UNAVAILABLE
+source-note: synthetic self-test fixture, no real artifact
+extraction: hand-written for self-test T8
+retrieved: 2026-08-22
+consumer: S-self-test (#1729)
+
+[vector]
+file: pds/test/later.txt
+local-sha256: $later_hash
+kind: published-artifact
+source: Test Fixture Later
+source-url: https://example.invalid/t8-later
+source-sha256: UNAVAILABLE
+source-note: synthetic self-test fixture, no real artifact
+extraction: hand-written for self-test T8
+retrieved: 2026-08-22
+consumer: S-self-test (#1729)
+EOF
+  t8_out="$(list_consumer_files "$t8" S-self-test)"; t8_rc=$?
+  rm -rf "$t8"
+  t8_expected="pds/test/first.txt
+pds/test/later.txt"
+  if [ "$t8_rc" -eq 0 ] && [ "$t8_out" = "$t8_expected" ]; then
+    echo "T8 dynamic consumer enumeration: PASS"
+  else
+    echo "T8 dynamic consumer enumeration: FAIL (rc=$t8_rc)"
+    printf '%s\n' "$t8_out"
+    st_rc=1
+  fi
+
+  # T9 — integration: every real vector gate must hand its ledger-selected
+  # corpus to the engine. The fake engine rejects only an argument containing
+  # `wrong-answer`; a hard-coded old gate never passes that path and therefore
+  # goes green, making this cell fail for the pre-#1729 implementation.
+  t9="$(mktemp -d "$VP_WORK/t9.XXXXXX")"
+  mkdir -p "$t9/pds/test/vectors"
+  cp "$ROOT/pds/test/vector_provenance.sh" "$t9/pds/test/vector_provenance.sh"
+  for gate in sha256_vectors.sh field_vectors.sh scalar_vectors.sh encodings_vectors.sh; do
+    cp "$ROOT/pds/test/$gate" "$t9/pds/test/$gate"
+  done
+  for consumer in sha256 field scalar encodings; do
+    mk_vector "$t9" "pds/test/vectors/$consumer-wrong-answer.txt" "deliberately wrong answer for $consumer"
+  done
+  sha_hash="$(sha256_of_file "$t9/pds/test/vectors/sha256-wrong-answer.txt")"
+  field_hash="$(sha256_of_file "$t9/pds/test/vectors/field-wrong-answer.txt")"
+  scalar_hash="$(sha256_of_file "$t9/pds/test/vectors/scalar-wrong-answer.txt")"
+  encodings_hash="$(sha256_of_file "$t9/pds/test/vectors/encodings-wrong-answer.txt")"
+  cat > "$t9/pds/test/VECTOR-PROVENANCE.txt" << EOF
+[vector]
+file: pds/test/vectors/sha256-wrong-answer.txt
+local-sha256: $sha_hash
+kind: published-artifact
+source: Synthetic SHA fixture
+source-url: https://example.invalid/t9-sha256
+source-sha256: UNAVAILABLE
+source-note: synthetic self-test fixture, no real artifact
+extraction: hand-written for self-test T9
+retrieved: 2026-08-22
+consumer: S-sha256 (#1729)
+
+[vector]
+file: pds/test/vectors/field-wrong-answer.txt
+local-sha256: $field_hash
+kind: published-artifact
+source: Synthetic field fixture
+source-url: https://example.invalid/t9-field
+source-sha256: UNAVAILABLE
+source-note: synthetic self-test fixture, no real artifact
+extraction: hand-written for self-test T9
+retrieved: 2026-08-22
+consumer: S-field (#1729)
+
+[vector]
+file: pds/test/vectors/scalar-wrong-answer.txt
+local-sha256: $scalar_hash
+kind: published-artifact
+source: Synthetic scalar fixture
+source-url: https://example.invalid/t9-scalar
+source-sha256: UNAVAILABLE
+source-note: synthetic self-test fixture, no real artifact
+extraction: hand-written for self-test T9
+retrieved: 2026-08-22
+consumer: S-scalar (#1729)
+
+[vector]
+file: pds/test/vectors/encodings-wrong-answer.txt
+local-sha256: $encodings_hash
+kind: published-artifact
+source: Synthetic encodings fixture
+source-url: https://example.invalid/t9-encodings
+source-sha256: UNAVAILABLE
+source-note: synthetic self-test fixture, no real artifact
+extraction: hand-written for self-test T9
+retrieved: 2026-08-22
+consumer: S-encodings (#1729)
+EOF
+  cat > "$t9/fake-medaka" << 'EOF'
+#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in
+    *wrong-answer*)
+      echo "FAKE-ENGINE: rejected ledgered wrong-answer corpus: $arg"
+      exit 1 ;;
+  esac
+done
+
+case "$1:$2" in
+  run:*sha256*) echo "67 ok, 0 failed" ;;
+  run:*field*)
+    echo "counted: 135/135 rows ok, 0 skipped (stride 7)"
+    echo "TOTAL: PASS" ;;
+  run:*scalar*)
+    echo "op red: 1 ok"
+    echo "counted: 40/40 rows ok, 0 skipped (stride 26)"
+    echo "TOTAL: PASS" ;;
+  run:*encodings*)
+    i=0
+    while [ "$i" -lt 29 ]; do
+      printf 'PASS\tfixture-%s\n' "$i"
+      i=$((i + 1))
+    done
+    echo "TOTAL: PASS" ;;
+  build:*)
+    driver="$2"
+    shift 2
+    out=""
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "-o" ]; then out="$2"; break; fi
+      shift
+    done
+    case "$driver" in
+      *sha256*) body='echo "132 ok, 0 failed"' ;;
+      *field*) body='echo "counted: 944/944 rows ok, 0 skipped (stride 1)"; echo "TOTAL: PASS"' ;;
+      *scalar*) body='echo "counted: 1028/1028 rows ok, 0 skipped (stride 1)"; echo "TOTAL: PASS"' ;;
+      *) exit 1 ;;
+    esac
+    printf '#!/bin/sh\n%s\n' "$body" > "$out"
+    chmod +x "$out" ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "$t9/fake-medaka"
+
+  t9_rc=0
+  for gate in sha256_vectors.sh field_vectors.sh scalar_vectors.sh encodings_vectors.sh; do
+    t9_out="$(MEDAKA_ROOT="$t9" MEDAKA="$t9/fake-medaka" sh "$t9/pds/test/$gate" 2>&1)"
+    t9_gate_rc=$?
+    if [ "$t9_gate_rc" -ne 0 ] \
+       && printf '%s' "$t9_out" | grep -q 'FAKE-ENGINE: rejected ledgered wrong-answer corpus'; then
+      echo "T9 $gate consumes ledgered wrong answer: PASS"
+    else
+      echo "T9 $gate consumes ledgered wrong answer: FAIL (rc=$t9_gate_rc)"
+      printf '%s\n' "$t9_out"
+      t9_rc=1
+    fi
+  done
+  rm -rf "$t9"
+  if [ "$t9_rc" -ne 0 ]; then st_rc=1; fi
+
   return "$st_rc"
 }
 
@@ -548,7 +765,7 @@ main() {
     echo "SELF-TEST FAILED"
     exit 1
   fi
-  echo "=== self-test: all seven scenarios passed ==="
+  echo "=== self-test: all nine scenarios passed ==="
   echo "=== real tree: $ROOT ==="
   if ! check_corpus "$ROOT"; then
     echo "vector_provenance: REAL TREE CHECK FAILED"
@@ -557,5 +774,14 @@ main() {
   echo "vector_provenance: PASS"
   exit 0
 }
+
+if [ "${1:-}" = "--files-for" ]; then
+  if [ "$#" -ne 2 ] || [ -z "$2" ]; then
+    echo "usage: vector_provenance.sh --files-for <consumer-id>" >&2
+    exit 2
+  fi
+  list_consumer_files "$ROOT" "$2"
+  exit $?
+fi
 
 main

@@ -25,14 +25,28 @@ export MEDAKA_ROOT
 
 # Floor = the "PASS\t" line count committed today (29 — see the slice report
 # for the paste). Raise this when you add a checked cell.
-PASS_FLOOR=29
-
-VECTORS_DIR="${1:-$ROOT/pds/test/vectors}"
+EVAL_FLOOR=29
 
 out="$(mktemp "${TMPDIR:-/tmp}/encodings-vectors-out.XXXXXX")"
-trap 'rm -f "$out"' EXIT
+vector_list="$(mktemp "${TMPDIR:-/tmp}/encodings-vector-files.XXXXXX")"
+trap 'rm -f "$out" "$vector_list"' EXIT HUP INT TERM
 
-"$MEDAKA" run "$ROOT/pds/test/encodings_vectors_main.mdk" "$VECTORS_DIR" > "$out" 2>&1
+if ! sh "$ROOT/pds/test/vector_provenance.sh" --files-for S-encodings > "$vector_list"; then
+  echo "FAIL: could not derive encodings vector files from the provenance ledger"
+  exit 1
+fi
+set --
+while IFS= read -r rel; do
+  [ -z "$rel" ] && continue
+  set -- "$@" "$ROOT/$rel"
+done < "$vector_list"
+vector_count=$#
+if [ "$vector_count" -eq 0 ]; then
+  echo "FAIL: provenance ledger names no S-encodings vector files"
+  exit 1
+fi
+
+"$MEDAKA" run "$ROOT/pds/test/encodings_vectors_main.mdk" "$@" > "$out" 2>&1
 code=$?
 
 last_line="$(tail -n 1 "$out")"
@@ -60,11 +74,11 @@ case "$pass_count" in
     cat "$out"
     exit 1 ;;
 esac
-if [ "$pass_count" -lt "$PASS_FLOOR" ]; then
-  echo "FAIL: only $pass_count PASS lines, expected >= $PASS_FLOOR (vacuous-green guard: the driver may have silently read zero rows)"
+if [ "$pass_count" -lt "$EVAL_FLOOR" ]; then
+  echo "FAIL: only $pass_count PASS lines (eval), expected >= $EVAL_FLOOR (vacuous-green guard: the driver may have silently read zero rows)"
   cat "$out"
   exit 1
 fi
 
-echo "PASS: encodings_vectors — $pass_count PASS lines (floor $PASS_FLOOR)"
+echo "PASS: encodings_vectors — $pass_count PASS lines across $vector_count files (eval floor $EVAL_FLOOR)"
 exit 0

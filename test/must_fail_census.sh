@@ -140,6 +140,26 @@ echo
 # is offline and cannot read issue state (see diff_compiler_must_fail.sh's REPRO comment).
 # The gate proves each fixture still REPRODUCES on every PR; this census proves the tracker
 # still agrees. When they disagree — pin says BROKEN, tracker says FIXED — one is wrong.
+#
+# ── optional `superseded-by:` field (#1653) ───────────────────────────────────
+# A CLOSED-but-legitimate state recurs: an issue closed as a duplicate of a still-open
+# issue, its fixture deliberately kept (measured: #1071 dup-of #1062, PR #1652). A
+# claim.txt may carry one extra key naming that surviving issue:
+#   issue: 1071
+#   superseded-by: 1062
+# `diff_compiler_must_fail.sh` needs no change for this — it reads specific known keys
+# and ignores unrecognized ones, so `superseded-by:` is invisible to its uniqueness and
+# prefix checks (verified 2026-08-22).
+# This field drains in BOTH directions, or it becomes the un-expiring skip-list this
+# script's own header forbids:
+#   * #N (`superseded-by:`) unreadable            -> finding, same as an unreadable
+#     `issue:` already gets.
+#   * #N CLOSED                                   -> finding — the exemption has no
+#     subject left.
+#   * #N OPEN but pinned by NO fixture in this corpus -> finding — the mechanism is
+#     unpinned and this retained fixture is the only remaining guard.
+#   * #N OPEN and pinned by some fixture in this corpus -> benign, reported distinctly
+#     (not counted as a PINNED-BUT-CLOSED finding).
 echo "── PINNED-BUT-CLOSED: issues CLOSED whose fixture still pins a LIVE bug ──"
 h1=0
 while IFS="$(printf '\t')" read -r n dir; do
@@ -152,6 +172,51 @@ while IFS="$(printf '\t')" read -r n dir; do
     continue
   fi
   if [ "$state" = "CLOSED" ]; then
+    # ── optional `superseded-by:` exemption (#1653) ──────────────────────────────
+    # A CLOSED issue whose fixture also carries `superseded-by: <N>` claims "this was
+    # closed as a duplicate of #N, and the pin is deliberately retained." That claim is
+    # benign ONLY while ALL THREE hold, or it becomes the un-expiring skip-list this
+    # census's own header forbids:
+    #   1. #N itself must be readable and OPEN     — a closed superseder has no subject
+    #      left (nothing justifies keeping this pin as benign any more).
+    #   2. #N must be readable at all               — same treatment as an unreadable
+    #      `issue:` already gets above.
+    #   3. #N must be pinned by SOME fixture in this corpus — otherwise the mechanism
+    #      this fixture was "superseded by" isn't actually guarded anywhere else, and
+    #      THIS fixture is the only remaining guard; benign-and-ignored would be wrong.
+    # Any of the three failing falls through to an ordinary finding, not silence.
+    sb="$(sed -n 's/^superseded-by:[[:space:]]*//p' "$FIXDIR/$dir/claim.txt" | head -1)"
+    if [ -n "$sb" ]; then
+      sb_state="$(gh issue view "$sb" --json state -q .state 2>/dev/null)" || sb_state=""
+      if [ -z "$sb_state" ]; then
+        echo "  ⚠️  #$n — CLOSED, superseded-by: #$sb, but #$sb could NOT be read (deleted,"
+        echo "      transferred, or the API refused). An unreadable superseder is not a subject."
+        echo "      fixture: test/must_fail_fixtures/$dir/"
+        findings=$((findings+1)); h1=$((h1+1))
+        continue
+      fi
+      if [ "$sb_state" = "CLOSED" ]; then
+        echo "  🚨 SUPERSEDED-BUT-SUPERSEDER-CLOSED  #$n — superseded-by: #$sb, but #$sb is ALSO"
+        echo "      CLOSED. The exemption has no subject left: nothing justifies treating this"
+        echo "      pin as benign any more. Judge like an ordinary PINNED-BUT-CLOSED finding."
+        echo "      fixture: test/must_fail_fixtures/$dir/"
+        findings=$((findings+1)); h1=$((h1+1))
+        continue
+      fi
+      # sb_state = OPEN. Still benign only if #$sb is itself pinned somewhere in the corpus.
+      if grep -q "^$sb$(printf '\t')" "$TMP/pinned"; then
+        echo "  ✅ #$n closed as a duplicate, superseded by #$sb (open) — benign."
+        echo "      fixture: test/must_fail_fixtures/$dir/"
+        continue
+      fi
+      echo "  🚨 SUPERSEDED-BY-UNPINNED  #$n — superseded-by: #$sb (open), but NO fixture in"
+      echo "      this corpus pins #$sb. The mechanism this fixture claims is guarded elsewhere"
+      echo "      isn't actually guarded anywhere else — this fixture is the ONLY remaining guard,"
+      echo "      so it cannot be treated as benign-and-ignorable."
+      echo "      fixture: test/must_fail_fixtures/$dir/"
+      findings=$((findings+1)); h1=$((h1+1))
+      continue
+    fi
     what="$(sed -n 's/^what:[[:space:]]*//p' "$FIXDIR/$dir/claim.txt" | head -1)"
     echo "  🚨 PINNED-BUT-CLOSED  #$n — the pin says BROKEN, the tracker says FIXED. One is wrong."
     echo "      fixture: test/must_fail_fixtures/$dir/"
