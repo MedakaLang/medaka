@@ -1,6 +1,6 @@
 ---
 name: friction-triage
-description: Wrap-up agent that processes the sprint's friction ledger — clusters items by mechanism, dedupes against the tracker (and flags tracker dupes it notices), decides which items deserve issues, and drafts them ready-to-file. Dispatch once at sprint wrap-up with FRICTION.md and the reports dir (handles for identifiers appear in the sprint ledgers — reuse them). It drafts; the rear seat files with readback.
+description: Wrap-up agent that processes the sprint's friction ledger — clusters items by mechanism, dedupes against the tracker (and flags tracker dupes it notices), decides which items deserve issues, and drafts them ready-to-file. Dispatch once at sprint wrap-up with FRICTION.md and the reports dir (handles for identifiers appear in the sprint ledgers — reuse them). It drafts; a stateless sprint-rear filing dispatch files with readback.
 model: sonnet
 tools: Read, Grep, Glob, Bash, Write
 ---
@@ -32,7 +32,7 @@ reasons, not filing everything.
    into the repo's docs, and the fix is not ours to make. For those, the item
    is `SATURATED (#N, <k> occurrences)` in your table and NOTHING is drafted —
    occurrence 33 teaches nobody anything, and the comment costs a triage slot,
-   a rear-seat filing, and a reader's attention every sprint. The ONE thing
+   a filing dispatch, and a reader's attention every sprint. The ONE thing
    that reopens drafting is a **new mechanism**: a trigger shape, a failure
    mode, or an affected population the issue does not already describe. Count
    it, name the new shape if there is one, move on.
@@ -56,7 +56,8 @@ reasons, not filing everything.
    body (the occurrences with report citations, the cost, the concrete fix if
    one is known), suggested labels (`ws:tooling`/`ws:testing`/severity `S3:
    friction & debt` unless the evidence says higher). Handles per the packet
-   contract §0; no closing keywords anywhere. The rear seat files with
+   contract §0; no closing keywords anywhere. A `sprint-rear` filing dispatch
+   files with
    readback — gh writes silently no-op here, so drafting and filing are
    deliberately split.
 5. **Route, don't absorb, the out-of-scope:** an item that is actually a BUG

@@ -1,6 +1,6 @@
 ---
 name: slice-landed
-description: The FRONT seat's fixed sequence for the moment an implementer returns — report intake, merge into the sprint branch (golden rule), refill the writer lane from the merged head, one handoff message to the sprint-rear seat, dispatch the planner, then bookkeeping. Run on EVERY implementer return (landed, refused, blocked, spike, fixer, or family leaf). Order is load-bearing.
+description: The FRONT seat's fixed sequence for the moment an implementer returns — report intake, merge into the sprint branch (golden rule), push the merged SHA and dispatch the reviewers, refill the writer lane from the merged head, dispatch the planner, then bookkeeping. Run on EVERY implementer return (landed, refused, blocked, spike, fixer, or family leaf). Order is load-bearing.
 ---
 
 # Slice landed — the front-seat completion sequence
@@ -13,8 +13,9 @@ comes FIRST — before the lane refill — because the next worktree must be cut
 from the MERGED head: a worktree cut pre-merge starts one slice behind the
 sprint branch, which manufactures exactly the two-sided golden merge the golden
 rule below exists to prevent. The merge is local and takes seconds; the
-sequence stays short because everything downstream of it (push, PR, CI,
-reviewers) leaves in one message to the `sprint-rear` seat. Do not reorder, do
+downstream pipeline (push, PR, reviewer dispatch) is step 2's fixed command
+sequence at THIS seat (v7 — the persistent rear seat is retired), and CI is
+watched by the heartbeat, not by this sequence. Do not reorder, do
 not interleave.
 
 **All merges happen in the LANDING WORKTREE** — the dedicated worktree holding
@@ -24,11 +25,15 @@ checked out in two worktrees, so ad-hoc checkouts fail against sibling trees).
 
 ## Step 0 — report intake (always, for every verdict)
 
-0. **Take the lock:** `touch /var/tmp/medaka-sprints/<stage>/SEQUENCE.lock`.
+0. **Take the lock:** write `/var/tmp/medaka-sprints/<stage>/SEQUENCE.lock`
+   with holder / purpose / acquired-at / expected-by (v7 — a zero-byte lock
+   cannot answer a routine status question without a consult).
    The heartbeat takes no dispatch/merge action while it exists; `rm` it as
-   this sequence's final act. (A tick finding a lock older than ~30 min —
-   `find <dir>/SEQUENCE.lock -mmin +30` non-empty — escalates to the brain
-   rather than deleting it.)
+   this sequence's final act. (A tick finding the lock past its own
+   `expected-by` checks ARTIFACT PROGRESS — `find` on the directories the
+   holder writes to, newer than its last known artifact — and escalates to
+   the brain on a dead holder rather than deleting the lock; elapsed time
+   alone is not a verdict, RUN-METHID-123/-125.)
 1. The report file exists at the packet's named path under
    `/var/tmp/medaka-sprints/<stage>/reports/`. If the agent wrote in-worktree
    anyway, copy it out NOW.
@@ -46,7 +51,15 @@ checked out in two worktrees, so ad-hoc checkouts fail against sibling trees).
 
 ## Verdict = LANDED (or `LANDED family-final @<sha>`)
 
-**1. Merge into the sprint branch — the handoff token.** In the landing
+**1. Merge into the sprint branch.** First, the PRE-MERGE gate (v7, P1b) —
+run and PASTE into the merge status line:
+```sh
+grep -n 'PRE-MERGE:' /var/tmp/medaka-sprints/<stage>/OBLIGATIONS.md
+```
+Empty output is a passing result and is pasted as such; a hit is a
+merge-conditioning action the brain wrote — discharge it (evidence into the
+row) or consult before merging. A merge reported without the pasted output is
+a deviation. Then, in the landing
 worktree:
 ```sh
 git -C <landing> fetch origin <slice-branch>
@@ -104,19 +117,37 @@ immediately after fetching, or fetch into a pinned SHA first.) Then:
 - **A merge conflict in source files** → `git -C <landing> merge --abort` →
   brain (sequencing ruling), never hand-resolved at this seat.
 
-**2. Hand off to the rear seat — one message, fixed format:**
-`landed: <slice handle> | head <merged sprint-branch SHA> | report <path> |
-packet <path> | breaker-wt <path> | base-arm <depot path>` — where
-`breaker-wt` is a worktree YOU create now at the merged head (`git worktree add
-<path> <sha>`); it is MANDATORY in the message (an optional field here
-deadlocked the breaker dispatch in review). `base-arm` is the sprint's depot
-path (orchestrator step 6b) and is mandatory for the same reason: an optional
-field is a field the next seat omits, and in `sprint/emit-inputs` the depot had
-ZERO consumers while the one breaker that needed a base arm built its own — two
-full rebuilds, inside the ~35 of its 55 minutes that went to builds.
-`NONE (docs-only landing)` is a value; blank is not. The rear seat pushes exactly the named SHA, dispatches
-both reviewers, and replies `ack:`. You do NOT wait for the reply; the
-heartbeat's poke tick collects it.
+**2. Post-merge pipeline — yours, fixed sequence (v7):**
+- **Push the merged SHA, by SHA, never by branch tip:** `git push origin
+  <merged sprint-branch SHA>:refs/heads/sprint/<stage>` — so a later merge
+  racing the push can never make CI grade a different head than the one this
+  landing produced. Update the sprint PR body if the landing changes it
+  (`scripts/pr.sh body` — raw `gh` body writes silently no-op; verify by
+  readback). The PR stays DRAFT all sprint.
+- **Dispatch both reviewers, in parallel:** `slice-breaker` into a worktree
+  YOU create now at the merged head (`git worktree add <path> <sha>`), and
+  `spec-conformance-reviewer` (read-only, no worktree). Give each the packet
+  path, implementer report path, the merged head SHA, its report path under
+  `reports/`, a per-lane scratch dir, **and the sprint's base-arm depot path
+  (orchestrator step 6b) with one imperative line: "a base-vs-head
+  differential uses THIS depot — do not build a base binary."** A reviewer
+  that builds its own base arm is a plumbing defect costing the roster's most
+  expensive half-hour (one breaker: ~35 of 55 minutes, against a depot that
+  sat unused). `NONE (docs-only landing)` is a value for the depot line;
+  blank is not.
+- **Claim-surface sweep — one `sprint-verifier` dispatch (~$0.35), in
+  parallel.** Over the artifacts this landing produced (implementer report,
+  the DEBT.md row, this landing's DECISIONS.md entries, any issue-comment
+  draft), three mechanical checks reported as a table with no interpretation:
+  every `path:LINE` citation still resolves to a line matching the quoted
+  fragment (`sed -n '<n>p' <path>`); every count of the form "N <things>"
+  that ships a command re-runs to N; every token written AS a commit citation
+  (`@<sha>`, `head <sha>`, "landed at <sha>" — never every hex-looking
+  token) resolves (`git cat-file -e <sha>^{commit}`). **A mismatch is a
+  CORRECTION, not a finding:** it goes back to the seat that wrote the
+  artifact, which fixes the citation and logs one line; it becomes a
+  FINDINGS.md row ONLY if the underlying claim — not its citation — is wrong.
+You do NOT wait for any of these; their returns arrive like any other agent's.
 
 **3. Refill the writer lane.** Take the next `status: queued` packet row from
 QUEUE.md (row format: `<slice handle> | packet <path> | depends-on <handles|
@@ -127,27 +158,34 @@ NONE> | status: queued|dispatched|landed|refused`) and:
   carry one; in FRONT-SEAT mode the path lives in the brief you write).
   Missing anything → BOUNCE to the
   planner, take the next independent packet instead.
-- **Provision the tree per the sprint's recorded MODE** (set by the sprint-start
-  isolation probe; orchestrator step 5b). HARNESS mode: create nothing for a
-  writer — the flag mints its tree. FRONT-SEAT mode: `git worktree add <path
-  under the record dir> <merged head SHA>` and name that path in the brief.
-  Either way, reviewer/reproducer/domain-adversary worktrees are yours, and no
-  agent creates its own. Record both SHAs in the dispatch brief.
+- **Provision the tree — YOU create it, every dispatch (v7, P2c):**
+  `git worktree add <absolute path under the record dir> <merged head SHA>`,
+  verified before dispatch (`git -C <path> rev-parse HEAD` equals the SHA;
+  `git -C <path> status --porcelain` empty); name that path in the brief.
+  Writers, fixers, reviewers, reproducers, adversaries, probes alike — no
+  agent creates its own tree (self-provisioning is structurally blocked: 2 of
+  2 delegated dispatches collided in `sprint/method-identity`; 3 of 3
+  front-seat-provisioned isolated correctly). Set `isolation: "worktree"`
+  per the sprint's recorded probe outcome. Record both SHAs in the dispatch
+  brief, **and a per-lane scratch dir** (P2d):
+  `<record-dir>/scratch/<lane-slug>/`, never the shared `scratch/` root (one
+  breaker's `scratch/ir.sh` was overwritten mid-session by a sibling lane
+  sharing the root).
 - **Pre-dispatch checklist — three mechanical assertions, no judgment (v5):**
-  1. The mode's flag matches the mode: `isolation: "worktree"` set **on the
-     Agent tool call** (not merely described in the prompt) in HARNESS mode,
-     absent in FRONT-SEAT mode. A writer dispatched with neither a flag nor a
-     named tree runs in the front seat's own checkout — that happened once and
+  1. The brief names the created worktree's absolute path, and requires the
+     agent's toplevel equality check against it TWICE — first command, and
+     again immediately before commit (packet §1, v7 form). A writer
+     dispatched with no named tree runs in the front seat's own checkout —
+     that happened once and
      it switched the seat's branch out from under it, losing an observed
      uncommitted edit and costing three rulings to close.
-  2. The brief names **the front-seat repo path** as a tree the agent must NOT
-     be in, and requires as its first act: `git rev-parse --show-toplevel`,
+  2. The brief requires as its first act: `git rev-parse --show-toplevel`,
      `git rev-parse HEAD`, and
      `git merge-base --is-ancestor <merged head SHA> HEAD && echo BASE-OK` —
-     all three reported in Evidence. A harness-minted tree can come from
+     all three reported in Evidence. A minted tree can come from
      `main` rather than the sprint branch, and `git rev-parse HEAD` looks
-     perfectly healthy when it does (that is probe outcome C, and the mode
-     table gives it a rebase branch rather than a lost dispatch).
+     perfectly healthy when it does (probe outcome C: the licensed re-base
+     travels in the brief rather than losing the dispatch).
      **That SHA is re-derived NOW** (`git -C <landing> rev-parse HEAD`) — not
      the packet's pinned SHA, not one copied from a previous brief. A packet
      is FORBIDDEN to carry an ancestor SHA (packet §1): if one appears inside
@@ -184,23 +222,25 @@ skill's slice-forms handling; `BLOCKED` → brain consult.
 - Route the report mechanically: "Decisions surfaced" ≠ NONE or "Deviations
   from packet" ≠ NONE → brain consult. "Not covered" → OPEN-QUESTIONS.md
   verbatim. "Friction" → FRICTION.md verbatim. Any bug/gap anywhere →
-  `finding: <one-line claim> | report <path>` message to the REAR seat
-  (FINDINGS.md is its file; it appends the row on receipt — the front seat
-  never writes FINDINGS.md).
+  append the FINDINGS.md row yourself (v7 — FINDINGS.md is YOUR file) and run
+  the `sprint-findings` lifecycle.
 - DEBT row present with all five §6 fields non-blank (presence check only).
 - Append dispatch-log entries to DECISIONS.md; update QUEUE.md's lane table
   (lane row format: `<occupant handle> | worktree <path> | region <file-set
-  summary> | evidence <disjoint-run id|SOLE>`; close the old row, open the
-  new).
+  summary> | evidence <disjoint-run id|SOLE> | dispatched-at <utc>`; close
+  the old row — recording `returned-at <utc>` on it — open the
+  new). **The two timestamps are the sprint's landed-slices-per-hour
+  instrument (v7)** — the metric principle 4 grades on was under-derivable
+  from every audited record dir because no dispatch start/end existed.
 - **Release the lock** — last act.
 
 ## Verdict = FIX-LANDED — fixer return, light path
 
 A fixer is a writer dispatched by YOU on a brain REPAIR ruling (branch
 `fix/<finding-slug>`, cut from the sprint head at lane grant). On return: step
-0 intake → **step 1 merge** (same golden rule) → handoff to the rear seat as
-`landed-fix: <finding handle> | head <sha> | report <path>` (rear pushes and
-updates the FINDINGS row; NO reviewer dispatch — the heavy round reviews
+0 intake → **step 1 merge** (same golden rule, same PRE-MERGE grep) → push the
+merged SHA (by SHA, step 2's form) and update the FINDINGS row to
+fixed-pending-review (NO reviewer dispatch — the heavy round reviews
 fixes — unless the REPAIR ruling's Actions said otherwise) → close the fixer's
 lane row → bookkeeping, **including the fixer's five-field DEBT.md row** (one
 row per landing, fixes included — with no fix packet it is the only structured
@@ -212,12 +252,12 @@ was extra).
 
 Lighter path: intake the leaf's report block (step 0); if the packet licenses
 per-leaf merging (the family packet's §6 must say `per-leaf-merge: yes|no` —
-planner's call at cut time), run step 1 on the leaf's `@<sha>` and send the
-rear seat `landed-leaf: <family handle> leaf <id> | head <sha>` (rear PUSHES
-only — no reviewer dispatch; reviewers fire once, at family-final). Then
+planner's call at cut time), run step 1 on the leaf's `@<sha>` and push the
+merged SHA (push only —
+no reviewer dispatch; reviewers fire once, at family-final). Then
 **continue the SAME implementer via SendMessage** ("leaf <next-id> next").
 Leaf "Decisions surfaced" / "Deviations" still route to the brain immediately;
-leaf findings forward as `finding:` messages. No planner dispatch mid-family.
+leaf findings get FINDINGS.md rows immediately. No planner dispatch mid-family.
 Release the lock after each leaf intake.
 
 ## Verdict = `SPIKE-DONE (stability: STABLE | UNSTABLE)`
@@ -255,14 +295,16 @@ waits on adjudication:
    - `BLOCKED` → a packet defect (missing section, unreadable path, premise
      it could not evaluate): BOUNCE the packet to the planner with the report;
      brain consult only if the blockage names a judgment question.
-3. Bookkeeping as above. Findings in the report still forward to the rear
-   seat as `finding:` messages (the refusal path skips the merge handoff, not
+3. Bookkeeping as above. Findings in the report still get FINDINGS.md rows
+   (the refusal path skips the merge, not
    findings intake — refusals are the highest-yield finding source on
-   record). **Also send `refusal: <raised-by> | <mechanism: license|assertion>
+   record). **Also append the Refusals-table row yourself (v7):
+   `<raised-by> | <mechanism: license|assertion>
    | <claim> | report <path>`** — one per REFUSED verdict, per BLOCKED verdict,
    per stop-and-report, per declined out-of-band instruction, and per falsified
    premise, whichever the report carried, so the signal is COUNTABLE. **A
-   BLOCKED dispatch is a refusal row and is the one most often missed** — send
+   BLOCKED dispatch is a refusal row and is the one most often missed** —
+   append
    it in the same breath as preserving the attempt-1 report. `mechanism:` is
    `license` (the writer's judgment that the packet is wrong, backed by a
    probe) or `assertion` (a step-0 mechanical check that stopped the dispatch
@@ -270,14 +312,15 @@ waits on adjudication:
    them as one thing is why the inherited "refusals were right 5 of 6" ratio has
    never had a derivable denominator in the sprints that produced it — this
    table is what makes the next one countable (`sprint/emit-inputs`: 3 BLOCKED
-   dispatches, 6 ruling-recorded falsified premises, ZERO rows). The rear seat carries the
+   dispatches, 6 ruling-recorded falsified premises, ZERO rows). You carry the
    row to its verdict once the brain rules.
 
 ## Reviewer returns
 
-Reviewers return to the REAR seat (it dispatched them); it runs intake and
-the `sprint-findings` lifecycle there. The only reviewer-driven actions at
-YOUR seat, each arriving as a rear-seat reply or a brain ruling: a REPAIR
+Reviewers return to YOU (v7 — you dispatched them): run step-0-style intake
+(report on disk, six sections, bounce on a miss) and the `sprint-findings`
+lifecycle on any finding. A `CLEAR` with an empty "Not covered" bounces on
+sight. Then, per brain ruling as findings resolve: a REPAIR
 ruling → you dispatch the fixer directly from the ruling + repro bundle (v4 —
 no fix packet; the sprint-packet Fix form defines the brief), lane grant (run
 `scripts/sprint-disjoint.sh` YOURSELF at grant time, PAIRWISE against a lane
