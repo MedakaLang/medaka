@@ -1,0 +1,40 @@
+-- DICT-SEMANTICS §3: a declared `=>` predicate that NOTHING in the program
+-- satisfies must REJECT.
+--
+-- RE-POINTED DRAINED PIN. This program is
+-- test/must_fail_fixtures/1161-sig-constraint-unsatisfiable-accepted/main.mdk
+-- verbatim; it was ACCEPTED at exit 0 there, printing 222 -- the body of an
+-- impl the goal matches on NEITHER argument -- and the fixture pinned that.
+-- It drained on 2026-08-23 (slice S-obligation-nary-payload) and is kept here,
+-- per [G-PIN-DRAIN], as the regression guard for the REJECT direction.
+--
+-- SPEC ANSWER (hand-derived from §3, NOT captured): `useIx : Ix a Bool =>
+-- a -> Int` is called at `a = Int`, so the goal is the predicate `Ix Int Bool`.
+-- The program declares only `impl Ix Int Char`, and §3's matching set is ONE φ
+-- against the WHOLE vector: φ(`Ix Int Char`) would need Char = Bool. The set is
+-- EMPTY, `inst` is inapplicable, and the goal is a missing-instance rejection --
+-- T-NO-IMPL, `No impl of Ix for Int Bool`, on check, run AND build.
+--
+-- 🚨 THE ROW IS ALSO A NARROWING GUARD, AND THAT IS THE HALF WORTH GUARDING.
+-- The channel dropped this predicate ENTIRELY: `constraintArgMonos` answered
+-- `None` for the non-tyvar argument `Bool`, `declaredOblOne` turned that into
+-- `[]`, and the obligation payload was IDS ONLY with no room for a ground
+-- argument -- so nothing was recorded, nothing was checked, and `check` even
+-- printed the scheme as `useIx : a -> Int` with the context silently gone.
+-- The fix carries the whole argument vector (`VecObl.voArgs`) and admits ONLY
+-- bare-bound-tyvar and fully-GROUND arguments, so that a predicate it records
+-- can always be instantiated correctly at the call. Its ACCEPT-direction twin
+-- is s3-nary-sig-constraint-goal-vector.mdk (`Ix a Char =>` WITH the satisfying
+-- impl present, and a competing `Ix Int Bool` beside it, asserting 222): if a
+-- future tightening of this channel starts over-rejecting, that row goes red
+-- first.
+interface Ix a b where
+  ix : a -> b -> Int
+
+impl Ix Int Char where
+  ix _ _ = 222
+
+useIx : Ix a Bool => a -> Int
+useIx x = ix x True
+
+main = println (useIx 1)

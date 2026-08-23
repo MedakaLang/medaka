@@ -25,15 +25,19 @@
 -- Section 4 additionally reverses the two `Ix` blocks and asserts the answer
 -- does not move.
 --
--- 🚨 THIS ROW IS ORDER-SENSITIVE IN A DIMENSION IT DOES NOT ASSERT, AND THAT
--- IS DELIBERATE. Writing the requires clause the OTHER way round --
--- `requires Ix a Char, Dbg2 a` -- still prints 116 on this binary. That
--- residual is pinned as a MUST-FAIL at
--- test/must_fail_fixtures/1154-multi-entry-requires-decl-order-decides/, and
--- it is why this file must keep `Dbg2 a` first. Do NOT "tidy" the requires
--- clause into source order to match the body: that turns a green row red and
--- double-pins an open bug. The trigger is NOT a simple positional rule --
--- five measured orderings do not fit one -- see that fixture's claim.txt.
+-- 🚨 THIS ROW WAS ORDER-SENSITIVE IN A DIMENSION IT DOES NOT ASSERT, AND THAT
+-- IS WHY IT WAS GREEN WHILE THE BUG WAS LIVE. Writing the requires clause the
+-- OTHER way round -- `requires Ix a Char, Dbg2 a` -- printed 116 until
+-- 2026-08-23. An impl-`requires` body read whichever dict slot was registered
+-- LAST (`activeDictVars` is keyed on the tyvar id, which BOTH entries share),
+-- so putting the multi-parameter predicate last made this file right by
+-- accident. That residual was pinned as a must-fail at
+-- test/must_fail_fixtures/1154-multi-entry-requires-decl-order-decides/;
+-- S-obligation-nary-payload drained it (`implReqDictVarOf` resolves an
+-- impl-`requires` site by its PREDICATE), and the swapped ordering is now
+-- graded beside this one as s3-nary-requires-multi-entry-swapped.mdk.
+-- KEEP THIS CLAUSE AS WRITTEN ANYWAY: the pair's whole value is that the two
+-- orderings are both present and must agree.
 interface Ix a b where
   ix : a -> b -> Int
 

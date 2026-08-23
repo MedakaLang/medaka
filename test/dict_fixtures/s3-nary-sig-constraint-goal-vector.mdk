@@ -32,13 +32,20 @@
 -- This file printed 111 at exit 0 on BOTH engines with `check --json` clean, and
 -- swapping the two `impl` blocks printed 222.
 --
--- ⚠️ STILL OPEN on this same program: the inferred scheme prints `useIx : a ->
--- Int` with the context dropped, and the sibling shape `Ix a Bool =>` (which NO
--- impl satisfies) is accepted at exit 0.  That is #1161 symptom 2, whose home is
+-- ⚠️ CLOSED 2026-08-23, and this row acquired a SECOND job when it closed.  On
+-- this same program the inferred scheme used to print `useIx : a -> Int` with the
+-- context dropped, and the sibling shape `Ix a Bool =>` (which NO impl satisfies)
+-- was accepted at exit 0 — #1161 symptom 2, whose home is
 -- `declaredSchemeOblsFor` → `declaredOblOne` → `constraintArgMonos` on an
--- ids-only obligation payload — a different channel from the routing one this
--- fixture grades.  Pinned at
--- test/must_fail_fixtures/1161-sig-constraint-unsatisfiable-accepted/.
+-- ids-only obligation payload, a different channel from the routing one this
+-- fixture grades.  S-obligation-nary-payload widened that payload
+-- (`VecObl.voArgs`) so the predicate survives and the goal is checked; the
+-- REJECT direction is now graded at
+-- test/dict_fixtures/s3-sig-constraint-unsatisfiable-rejects.mdk.
+-- 🚨 THIS FILE IS THAT NARROWING'S ACCEPT-DIRECTION GUARD.  `Ix a Char =>` HAS a
+-- satisfying impl, so it must keep being accepted, and keep routing to `Ix Int
+-- Char` rather than to the competing `Ix Int Bool` beside it.  An over-rejecting
+-- tightening of `declaredOblOne` reds this row before anything else does.
 interface Ix a b where
   ix : a -> b -> Int
 
