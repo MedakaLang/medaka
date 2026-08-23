@@ -311,6 +311,7 @@ pLog2 : Value a -> Value a
 pMakeDir : Value a -> <FileWrite> Value a
 pMonotonicSec : Value a -> Value a
 pMonotonicSecIO : Value a -> <Clock> Value a
+pOsEntropyBytes : Value a -> <Rand> Value a
 pPanic : Value a -> b
 pPow : Value a -> Value a -> Value a
 pPutStr : Value a -> Value a

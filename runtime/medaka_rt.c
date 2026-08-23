@@ -1731,6 +1731,33 @@ long long mdk_random_char(long long u) { (void)u;  /* RAW codepoint — emitter 
   return 32 + (long long)(mdk_next_u64() % 95ULL);
 }
 
+/* osEntropyBytes : Int -> <Rand> Array Int.
+ * getentropy(3) is provided by both supported hosts (glibc/Linux and Darwin)
+ * and caps each request at 256 bytes. Fill in bounded chunks and expose each
+ * byte as a tagged Medaka Int. There is deliberately no SplitMix fallback:
+ * unavailable OS entropy is a loud failure, never predictable key material. */
+long long mdk_os_entropy_bytes(long long n_tagged) {
+  long long n = n_tagged >> 1;
+  if (n < 0)
+    mdk_panic(mdk_str_cstr("osEntropyBytes: length must be non-negative"));
+  if (n > (LLONG_MAX / 8) - 1)
+    mdk_panic(mdk_str_cstr("osEntropyBytes: requested length is too large"));
+
+  long long *cell = (long long *)mdk_alloc(8 * (n + 1));
+  cell[0] = n;
+  unsigned char chunk[256];
+  long long off = 0;
+  while (off < n) {
+    size_t want = (size_t)((n - off) > 256 ? 256 : (n - off));
+    if (getentropy(chunk, want) != 0)
+      mdk_panic(mdk_str_cstr("osEntropyBytes: operating system entropy source failed"));
+    for (size_t i = 0; i < want; i++)
+      cell[off + (long long)i + 1] = (((long long)chunk[i]) << 1) | 1;
+    off += (long long)want;
+  }
+  return (long long)cell;
+}
+
 /* ── Hashable per-type hashers — SPECIFIED, byte-identical to lib/eval.ml ──────
  * The old structural `__hashRaw` (OCaml Hashtbl.hash) can't run here: this runtime
  * is type-erased, so one i64 word can't tell a tagged Int from a String pointer
