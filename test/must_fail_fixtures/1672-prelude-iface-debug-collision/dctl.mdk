@@ -1,5 +1,0 @@
-export interface D2 a where
-  dbg : a -> String
-
-export impl D2 Int where
-  dbg x = "d"

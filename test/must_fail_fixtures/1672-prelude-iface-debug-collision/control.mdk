@@ -1,3 +1,0 @@
-import dctl.{dbg}
-
-main = println (dbg 5 == "d")

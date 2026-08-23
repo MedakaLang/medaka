@@ -1,7 +1,0 @@
--- #1620, module 2 of 2. Declares interface `Beta`, whose method `ping` returns an Int.
---
--- THIS is the module whose method NAME the entry imports, so `ping` in the entry denotes
--- `Beta.ping : a -> Int` and nothing else. That single fact is what makes the expected
--- value derivable without settling any name-resolution question -- see main.mdk.
-export interface Beta a where
-  ping : a -> Int

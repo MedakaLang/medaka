@@ -7,17 +7,24 @@
 -- `Blob` implements BOTH `IA` and `IB`. `A.mth Blob` and `B.mth Blob` are
 -- alias-qualified calls that name TWO DIFFERENT interfaces. Correct answer:
 -- 1 then 2 (each call dispatches to the impl its own alias names). OBSERVED
--- (still, on this binary): 1 then 1 -- `B.mth Blob` silently runs `IA`'s
--- body on check, run, AND build alike, because `renameAliasedMethods`
--- erases the alias to a bare `mth` before dispatch is decided, and ordinary
--- dispatch has no per-alias-occurrence discriminator.
+-- (slice 2, `cdca5045`, changed which impl the last-write-wins floor picks
+-- for the collided name `mth`): 2 then 2 -- NOT value-neutral. Both calls
+-- still collapse onto ONE impl on check, run, AND build alike, because
+-- `renameAliasedMethods` erases the alias to a bare `mth` before dispatch
+-- is decided and ordinary dispatch has no per-alias-occurrence
+-- discriminator -- but which impl they collapse onto changed: `admittedIfaceFor
+-- "mth"` now answers from the last-write-wins `registerMethodIfaceParamsMethods`
+-- table, which resolves to `IB` (declared second) for both calls. So the OLD
+-- pinned behavior (1,1) had `A.mth Blob` correct and `B.mth Blob` wrong; the
+-- NEW behavior (2,2) has `B.mth Blob` correct and `A.mth Blob` now wrong --
+-- still one-of-two wrong, but a different one.
 --
 -- Witness from F-fix-alias-collision's report (Note N1), confirmed
 -- reproducing identically at both the pre-sprint merge-base `9824e65b` and
 -- the sprint head -- neither this sprint's fix nor the alias-collision fix
--- caused it. THIS ROW IS EXPECTED TO STAY GREEN (i.e. keep reproducing the
--- WRONG value) until #1182/#1265 land; a value change here is the signal to
--- re-pin it, not a regression in this gate.
+-- caused the ORIGINAL (1,1) misbehavior. THIS ROW IS EXPECTED TO STAY GREEN
+-- (i.e. keep reproducing A WRONG value) until #1182/#1265 land; a value
+-- change here is the signal to re-pin it, not a regression in this gate.
 import ifa.{IA}
 import ifb.{IB}
 import ifa as A
