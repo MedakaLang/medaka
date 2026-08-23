@@ -1,0 +1,5 @@
+import xmod1542.lib_a.{boom}
+
+export
+relay : Int -> Int
+relay n = boom n

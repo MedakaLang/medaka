@@ -1,10 +1,18 @@
 #!/bin/sh
 # Differential validation for `medaka run --json` (RUNTIME-DIAGNOSTIC-CHANNEL-
-# DESIGN.md Fork C, Stage 4): each of the 6 error_quality_fixtures/eval/*.mdk
+# DESIGN.md Fork C, Stage 4): each of the error_quality_fixtures/eval/*.mdk
 # fixtures must emit a JSON diagnostic envelope through the SAME
 # `driver.diagnostics.cjAllToJson` serializer `medaka check --json` uses —
 # {"files":[{"file":...,"diagnostics":[{code,kind,message,range,severity,
 # source}]}]} — byte-identical in shape, just carrying the runtime E-* code.
+#
+# #1542: `cross_module_panic.mdk` / `cross_module_panic_nested.mdk` pin the
+# `"file"` field itself — a panic raised inside an IMPORTED module (helper
+# modules under `xmod1542/`, kept in a SUBDIRECTORY so this loop's flat
+# `*.mdk` glob never picks them up as standalone fixtures) must name the
+# RAISING module, not the entry file. `cross_module_panic_nested.mdk` adds a
+# third module (entry -> lib_b -> lib_a) so an intermediate, non-panicking
+# frame doesn't leave a stale attribution behind.
 #
 # This drives the freshly-built ./medaka CLI directly (the --json flag lives in
 # medaka_cli.mdk, not in any test/bin/* probe oracle), mirroring how

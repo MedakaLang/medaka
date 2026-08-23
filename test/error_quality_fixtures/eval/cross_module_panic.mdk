@@ -1,0 +1,3 @@
+import xmod1542.lib_a.{boom}
+
+main = println (boom 1)

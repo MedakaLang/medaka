@@ -90,6 +90,7 @@ evalDepthLimit : Int
 evalDepthRef : Ref Int
 evalField : Value a -> String -> Value a
 evalFieldAssign : EvalEnv (Value a) -> FieldAssign -> (String, Value a)
+evalFileTagName : String
 evalIf : EvalEnv (Value a) -> Value a -> Expr -> Expr -> Value a
 evalIndex : Value a -> Value a -> Value a
 evalIndexInt : Value a -> Int -> Value a
@@ -230,8 +231,10 @@ methodsOfIfaceIn : String -> List ((String, String, String), List Int) -> List S
 mkGroup : List (String, (List Pat, Expr)) -> String -> (String, List (List Pat, Expr))
 modExportCells : ModExports a -> List (String, Ref a)
 modImplEntries : List ((String, String, String), List Int) -> ModInfo (Value a) -> List (String, (Int, Value a))
+moduleFileOf : String -> String
 moduleMethodNames : List Decl -> List String
 moduleMethodNamesOf : Decl -> List String
+modulePathMap : Ref (List (String, String))
 narrowMethod : EvalEnv (Value a) -> String -> Value a -> String -> Value a
 negFloatIEEE : Float -> Float
 noMainMsg : String
@@ -458,5 +461,6 @@ valueListEq : List (Value a) -> List (Value a) -> Bool
 valueTag : Value a -> Int
 variantFieldOrder : Variant -> List (String, List String)
 variantName : Variant -> String
+withCallFile : EvalEnv (Value a) -> (Unit -> Value a) -> Value a
 withEnvFrame : List (String, Ref (Value a)) -> Value a -> Option (Value a)
 zipFieldOrder : List String -> List (Value a) -> List (String, Value a)
