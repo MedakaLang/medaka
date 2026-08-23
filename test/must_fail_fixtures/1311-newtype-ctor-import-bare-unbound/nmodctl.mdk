@@ -1,7 +1,0 @@
--- #1311 CONTROL support module: identical shape to nmod.mdk (one type, one
--- constructor, one accessor) except `newtype` is replaced by `public export data`
--- -- the ONE variable this isolates: whether the constructor is actually EXPORTED.
-public export data NT = Wrap Int
-
-export unNT : NT -> Int
-unNT (Wrap n) = n

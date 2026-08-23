@@ -265,6 +265,7 @@ kebab-case; never renumber (append only).
 | `R-EXTERN-WITH-BODY` | `ExternWithBody` |
 | `R-PRIVATE-NAME` | `PrivateNameAccess` |
 | `R-NO-EXPORTED-CTORS` | `NoExportedConstructors` |
+| `R-NEWTYPE-CTOR-PRIVATE` | `NewtypeCtorNotExported` — an import member (`T(..)` or the ctor named directly) tries to bring in a `newtype`'s constructor (#1311). Deliberately a separate code from `R-NO-EXPORTED-CTORS`: that code's type is exported *abstractly* and its message ends "export with `public export`", which is a real remedy there — but a `newtype`'s constructor is unconditionally module-private (`public newtype` is a parse error; there is no spelling that exports it), so the same advice would be actively wrong. Before this code existed, resolve accepted the member silently and the failure surfaced two stages later as a bare `T-UNBOUND: Unbound variable: <ctor>` at the *use* site, with no mention of the import. A `.*` wildcard import stays silent (as it already is for an abstractly-exported `data`'s ctors) since there is no import member to locate a refusal on. |
 | `R-ABSTRACT-FIELD` | `AbstractFieldAccess` |
 | `R-UNKNOWN-MODULE` | `UnknownModule` |
 | `R-AS-PATTERN-MISPLACED` | `AsPatternMisplaced` |

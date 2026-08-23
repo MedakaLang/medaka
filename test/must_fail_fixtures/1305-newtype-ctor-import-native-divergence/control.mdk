@@ -1,7 +1,0 @@
--- CONTROL: the same graph with the `(..)` dropped from the newtype member, so the
--- emitter's newtype arm has nothing to expand.  `Wrap` is k1305's by every layer.
--- Hand-derived expected output: 1, and the built binary agrees.
-import n1305.{NT, unNT}
-import k1305.{KT, Wrap, unKT}
-
-main = println (unKT (Wrap 3 4))
