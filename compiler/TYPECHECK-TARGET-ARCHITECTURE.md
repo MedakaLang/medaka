@@ -631,6 +631,50 @@ reset bundle are unchanged (settled).
 > paragraph's invariants as design intent to be verified at extraction time, not
 > as properties the current code has.
 
+> 🚨 **D AS DESIGNED CANNOT BE BUILT. Stage F-2 (#1120) was WITHDRAWN 2026-07-30,
+> not deferred, and the paragraphs above are the specification it was withdrawn
+> against.** Two independent adversarial passes falsified **all three** of D's
+> stated invariants, plus both implied ones:
+>
+> - *no inbound dependency from the inference core* — **false.** `unifyN` itself
+>   calls `typeMismatch`, which calls `poisonMismatchVars`; 55 external callers,
+>   21+ in the core.
+> - *fires only on failure* — **false.** `inferAppExpr` called
+>   `detectSwappedArgs2` before any error existed, and `tupleCallShapeHint`
+>   unconditionally.
+> - *must not perturb inference* — **false.** `detectSwappedArgs2` **replaced**
+>   the inference result with a fabricated `freshVar ()`. (The #1147 note above
+>   is the surviving half of this finding; the component it describes is gone.)
+> - *pure extraction, byte-identical* — **false.** 36 of 61 functions need
+>   back-imports, so the 2-module split is a **loader cycle**: it does not build.
+> - *"push a structured `TcDiag`"* — **the interface does not exist.** `TcDiag`'s
+>   message field is an already-rendered `String`, and the obvious repair (carry
+>   operands, render downstream) was separately adjudicated and rejected at
+>   **+58 special cases, −0 duplicated judgments** — relocation presented as
+>   removal.
+>
+> Sizing was also ~2× over (~590–720 real lines, not ~1,200) because the per-row
+> counts were taken from banner spans.
+>
+> **Tree check, not inference:** `ls compiler/types/` → `annotate.mdk`
+> `registry.mdk` `route_key.mdk` `typecheck.mdk`. **There is no extracted D
+> module and there is not going to be one under this design.**
+>
+> **What replaced it, both since CLOSED:** **#1146** (sever inference's
+> control-flow dependence on the diagnostic accumulator — the *fourth* false
+> thing, and the one that explains the other three: the dependency is not merely
+> present but **inverted**, inference reading the error path's accumulator as a
+> control signal at 5 sites, 3 gating) and **#1147** (retire the
+> `detectSwappedArgs2` speculative-unifiability duplicate). **#480** unbundled
+> and landed on its own.
+>
+> ⚠️ **The goal was right and the mechanism was wrong.** Getting diagnostics out
+> of inference remains a live aim; *extracting a D module* is not the way to it,
+> and the seven-component end state in this section still draws D as if it were.
+> **An owner decision is owed** — fold D's duties into their host components, or
+> re-scope a buildable D — and until it is taken, read every D row in this
+> document as unreached, not pending. Tracked by **#1660**.
+
 ### Cross-cutting substrate
 
 - **Registry discipline (the #1070 "owed gate").** One registry abstraction for
@@ -723,7 +767,7 @@ Keyed to the map's §4 layers. "Kept" means structurally unchanged.
 | L7 `checkBodyImpl` spine, `CheckMode`, promotion fixpoint | E | One driver, one mode; fixpoint → scheduled marking (staged: consumers → collapse → schedule) |
 | L7 universe marshalling (`load`/`store`/`appendUniverse*`) | K | Retired at E-4 (the marshalling serves the fallback path; a shim survives until then) |
 | L7 import seeding/aliasing/ctor overlay | R + K | Visibility filtering at R; identity makes overlay collision-free (#733/#756) |
-| L8 error-path machinery | D | Extracted |
+| L8 error-path machinery | D | 🚨 **NOT extracted — F-2 (#1120) WITHDRAWN as unbuildable 2026-07-30.** This row read "Extracted" for three weeks after the withdrawal. The machinery stays in `typecheck.mdk`; the live descendants are #1146 (sever inference's control-flow dependence on the accumulator) and #1147 (retire `detectSwappedArgs2`), both CLOSED. See §2 D's warning block — an owner decision on the component model is owed |
 | `marker.mdk` `EVar`→`EMethodRef` | R (adjunct) | Kept as pre-pass (decl-level inputs only); dict-app marking for unsignatured fns moves onto E's schedule |
 | `private_mangle.mdk` | backend | Emit-only rendering of identities; no longer semantics-bearing |
 
@@ -1162,6 +1206,25 @@ orders merges, and the plan does not pretend otherwise.
   `importDefinersOf` is still built from import syntax only, and every other
   consumer of `currentImportDefinersRef` still has that blind spot.
 
+  ⚠️ **UPDATE 2 (Val, 2026-08-09): #1326's FIX no longer lives here — it was
+  re-homed to #1425**, which owns the issue plus all three coupled sites. PR
+  #1424 implemented the provenance filter and it worked (the repro flips to exit
+  0, order-independently, with a 36-cell over-widening matrix showing four
+  changed cells, all improvements) — but removing the bad attribution rows
+  removed the compensation two OTHER laundering sites in the same seam were
+  leaning on, and two gates went red including the `§8 I1` conformance pin for
+  the very clause the fix implements. PR #1424 was narrowed to its re-export arm
+  (draining #1369) and the rest went to #1425. **#1326 stays OPEN and its
+  must-fail fixture stays pinned.**
+
+  ⇒ **Membership as it actually stands, since both original members have moved:**
+  the fails-OPEN member (`export import` residual on **#845**, now CLOSED) is
+  drained; the fails-CLOSED member (**#1326**) is owned by **#1425**. What is
+  left to this unit is the *question*, not the two patches — and #1337 is
+  flagged on the epic as a **shell**: a scoping pass whose members have been
+  re-homed out from under it. **Do not read #1337 as an implementable unit
+  without re-scoping it first.**
+
   **Deliberately open — do NOT pre-decide** (per the epic's 2026-08-05
   instrument note, *"stop pre-clustering residuals into guessed units; scoping
   passes partition them"*; the epic's own ledger records A-2's plan errors as
@@ -1260,6 +1323,32 @@ orders merges, and the plan does not pretend otherwise.
   makes collide — identity-stamping built before A under-discriminates with
   keys that merely look unique.* *Drains #1072/#1071/#1062; #1046/#1075
   complete at F-1.*
+
+  🚨 **Correction — the commit-point formulation above is OVERTAKEN. B-2 did not
+  deliver "C4/I2 by construction"; it delivered CONJUNCT 2 ONLY.** The standing
+  ruling is the owner's own third measurement (#1113's closing comment; Phase
+  4/4b close-out relocated to #1659):
+  > **"C4/I2 holds as CONJUNCT 2 ONLY … Evidence is order-invariant; the
+  > instance consulted is not."**
+  >
+  > Identity landed in the **word**, not in the **key**.
+  >
+  **Three live failing shapes name the gap, all still OPEN:** **#1182** (two
+  interfaces declaring the same method name — `impl` block order decides which
+  runs), **#1620** (the same collision inside ONE file), **#1619** (a
+  cross-module interface default silently hijacked by a same-spelled interface).
+  Phase 4b — the `keyForSite` selector re-key — is **deferred and owned by
+  #1182**, and `implEntryRouteWords`' superset-OR is **still live** in
+  `compiler/backend/llvm_emit.mdk`.
+
+  **Conjunct 1 is therefore still unmet and is the head of the remaining spine**
+  (`#1351 ∧ #1450 → #1182`, per the 2026-08-17 re-derivation on epic #1122),
+  carried by sprint **selector-identity (#1832)**, whose §8 exit criterion is
+  explicitly *"C4/I2 conjunct 1 asked a FIFTH time, and measured, not
+  asserted"*. ⚠️ **Read every "B-2 landed" marker in this document as conjunct 2
+  only.** A planner who reads B-2 as having settled dispatch identity will scope
+  #1832's work as already done — which is the exact misrouting this row's
+  staleness caused before (#1660).
 - **B-3 ⊕ (#991, #994) + the deferral policy.** Obligation storage completion
   and lockstep-pair fusion — mechanical, byte-identical bars, independent of
   Stage A. **Scope extension:** one *written* obligation-deferral policy
@@ -1373,8 +1462,16 @@ orders merges, and the plan does not pretend otherwise.
   evidence instead of arg-tag). Calling-convention change across
   typecheck/dict_pass/core_ir_lower/both backends: benchmark-emitter + seed
   re-mint discipline.
-- **F-2. Extract D (error-path machinery)** — pure extraction, byte-identical;
-  #480's loc-helper dedupe rides in this diff.
+- **F-2. Extract D (error-path machinery)** — ~~pure extraction, byte-identical;
+  #480's loc-helper dedupe rides in this diff.~~ 🚨 **WITHDRAWN 2026-07-30
+  (#1120) — not deferred, not blocked, not rescheduled: the stage as specified
+  cannot be built, and the version that could be is a net loss.** Every claim in
+  the struck text is false (the split is a loader cycle, so "pure extraction,
+  byte-identical" is unreachable); see §2 D's warning block for the full
+  falsification. `#480` was unbundled and landed on its own. The live
+  descendants — **#1146** and **#1147**, both CLOSED — are what the goal
+  actually cashed out as. **Do not re-schedule F-2 from this line;** re-scoping
+  component D is an owner decision, tracked by **#1660**.
 - **F-3 ⊕ (#311/#614). Coherence (a)→(c). ✅ COMPLETE 2026-08-01** — landed as four
   ordered PRs, not one: **F-3a** (thread the full goal vector, #1154/#1161),
   **F-3b** (union headless impls into every bucket, #1128), **F-3c** (the
@@ -1397,7 +1494,8 @@ orders merges, and the plan does not pretend otherwise.
 its decision is made in writing inside A-1, not as a separate node) ;
 B-1 ∥ C ∥ D (dependency-independent of A after S; landing interleaved) ;
 E-1 ⟶ E-2 ⟶ E-3 ⟶ E-4 ; B-3 anytime after S ; F-1 after C-1, E-2, and
-S-2(f) ; F-2/F-3 anytime after S. The graded arc (#822→#823→#824) runs as a
+S-2(f) ; ~~F-2~~/F-3 anytime after S (**F-2 WITHDRAWN**, see its §6 entry —
+this node no longer exists). The graded arc (#822→#823→#824) runs as a
 peer, coordinating at A-3 (kind machinery) and D-3 (coverage rules).
 
 ⚠️ **The spine above predates the 2026-08-05 audit, whose amendment on epic
@@ -1415,7 +1513,9 @@ and the B-1 design run around it.
 
 **Sizing honesty.** A is weeks of serialized work (every golden family moves at
 least once; "fleet-parallel" applies to development, not landing); B-1, B-2 and
-E-4 are the three design-first items; B-3/C-2/D-1/F-2/F-3 are single-PR sized.
+E-4 are the three design-first items; B-3/C-2/D-1/F-3 are single-PR sized (F-2
+stood here too, and its sizing is the record of why this line is a guess: it was
+~2× over on line count and infinitely over on feasibility — see §6).
 Nothing in this plan is a side quest — #993's own warning generalizes to the
 whole arc.
 
@@ -1440,7 +1540,9 @@ whole arc.
   declared up front.
 - **Byte-identical where claimed — with stated scope.** B-3, C-1
   (module-placement probes), E-2 (Module path only; per-fixture sign-off for
-  Flat divergences), F-2 carry byte-identical bars; A and B-2 explicitly do
+  Flat divergences) carry byte-identical bars — **F-2 stood in this list and its
+  bar was unreachable: the split is a loader cycle, so there was no build to be
+  byte-identical to** (#1120); A and B-2 explicitly do
   not (identity and selection *are* semantics) and say so per golden family.
 - **Seed and emitter discipline.** Any stage that perturbs the compiler's own
   emitted IR (A at scale, B-2, F-1) runs the benchmark-emitter two-rebuild

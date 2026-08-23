@@ -367,6 +367,24 @@ safest extraction candidate in the file (§7.4).
 > of application nodes, with no observable effect; still, the invariant was aspirational,
 > not enforced. Nothing enforces it for the remaining rows either.
 
+> 🚨 **"Safest extraction candidate" is FALSIFIED — the extraction was attempted and
+> WITHDRAWN (#1120, 2026-07-30).** Not deferred: the stage as specified cannot be built.
+> **36 of 61 functions need back-imports, so the two-module split is a loader cycle** —
+> `compiler/driver/loader.mdk` returns `Err (LoadMsg …)`, and there is no build to be
+> byte-identical to. The *"no inbound dependency from the inference core"* premise that
+> makes this the safest candidate is false at the root: `unifyN` itself calls
+> `typeMismatch` → `poisonMismatchVars`, with 55 external callers, 21+ in the core. The
+> `~1,050` figure is also ~2× over — the per-row counts come from **banner spans**, and
+> the real total is ~590–720 lines (this document's own §2 is titled *"Why the 75 banner
+> sections are not the architecture"*).
+>
+> **The goal survives; the mechanism does not.** Getting diagnostics out of inference is
+> pursued instead by **#1146** (sever inference's control-flow dependence on the
+> diagnostic accumulator — the dependency is *inverted*: inference reads the error path's
+> accumulator as a control signal at 5 sites, 3 gating) and **#1147** (above), both
+> CLOSED. `TYPECHECK-TARGET-ARCHITECTURE.md` §2 D carries the full falsification and the
+> owner decision still owed on component D; tracked by **#1660**.
+
 ---
 
 ## 5. Control flow: the spine is not linear
@@ -535,9 +553,20 @@ miscount its `coh*` helper signatures as cells (§0 trap 4).
 
 But purity is necessary, not sufficient: this file imports `mangledName` from
 `compiler/backend/private_mangle.mdk`, so a "pure ⇒ extractable" argument must clear the
-seam list (§7.7) as well as the state graph. The
+seam list (§7.7) as well as the state graph. ~~The
 ~1,200 lines of error-path machinery (Layer 8) are a stronger candidate: they fire only on
-failure, must not perturb inference, and have no inbound dependency from the inference core.
+failure, must not perturb inference, and have no inbound dependency from the inference core.~~
+
+🚨 **The struck sentence is FALSE in every clause and was acted on before it was checked
+(#1120, WITHDRAWN 2026-07-30).** ~1,200 is a banner-span artifact (~590–720 real);
+*fires only on failure* and *must not perturb inference* were both false of code that ran
+on the success path of two-argument applications; and *no inbound dependency from the
+inference core* is false at `unifyN` itself. The split is a **loader cycle** — 36 of 61
+functions need back-imports — so it does not build at all. This paragraph is left in place,
+struck rather than deleted, because it is the load-bearing example for item 4's own caveat:
+**purity is necessary, not sufficient, and neither is a plausible-sounding invariant nobody
+ran a grep against.** See §4's warning block and
+`TYPECHECK-TARGET-ARCHITECTURE.md` §2 D; tracked by **#1660**.
 
 **5. `entail` is the proof the target shape works.** 620 lines, 49 functions, 5 state
 cells, one gateway. The #156 consolidation produced the file's best-encapsulated subsystem.
