@@ -3034,6 +3034,7 @@ buildExports coreExp known modId prog env = ModuleExports {
 expNewtypeCtorsDirect : List Decl -> List (String, String)
 expNewtypeCtorsDirect [] = []
 expNewtypeCtorsDirect ((DNewtype { newtypePub = True, newtypeName = n, newtypeCtor = con })::rest) = (con, n) :: expNewtypeCtorsDirect rest
+expNewtypeCtorsDirect ((DAttrib _ d)::rest) = expNewtypeCtorsDirect (d::rest)
 expNewtypeCtorsDirect (_::rest) = expNewtypeCtorsDirect rest
 
 -- pub DTypeSig/DExtern/DFunDef
@@ -3042,6 +3043,7 @@ expValuesDirect [] = []
 expValuesDirect ((DTypeSig True n _)::rest) = n :: expValuesDirect rest
 expValuesDirect ((DExtern True n _)::rest) = n :: expValuesDirect rest
 expValuesDirect ((DFunDef True n _ _)::rest) = n :: expValuesDirect rest
+expValuesDirect ((DAttrib _ d)::rest) = expValuesDirect (d::rest)
 expValuesDirect (_::rest) = expValuesDirect rest
 
 -- methods of PUBLIC interfaces that are bound as values (lib's final iter loop)
@@ -3056,6 +3058,7 @@ pubIfaceMethodSets : List Decl -> List (List String)
 pubIfaceMethodSets [] = []
 pubIfaceMethodSets ((DInterface { pub = True, methods, ... })::rest) =
   map ifaceMethodNm methods :: pubIfaceMethodSets rest
+pubIfaceMethodSets ((DAttrib _ d)::rest) = pubIfaceMethodSets (d::rest)
 pubIfaceMethodSets (_::rest) = pubIfaceMethodSets rest
 
 -- pub newtype + VisPublic/VisAbstract data & record (the type name only)
@@ -3069,6 +3072,7 @@ expTypesDirect ((DData { dataVis = VisAbstract, dataName = n })::rest) =
   n :: expTypesDirect rest
 expTypesDirect ((DTypeAlias { tyAliasPub = True, tyAliasName = n })::rest) =
   n :: expTypesDirect rest
+expTypesDirect ((DAttrib _ d)::rest) = expTypesDirect (d::rest)
 expTypesDirect (_::rest) = expTypesDirect rest
 
 -- pub newtype ctor + VisPublic data ctors (VisAbstract exports NO ctors)
@@ -3078,12 +3082,14 @@ expCtorsDirect ((DNewtype { newtypePub = True, newtypeCtor = con })::rest) =
   con :: expCtorsDirect rest
 expCtorsDirect ((DData { dataVis = VisPublic, dataCtors = vs })::rest) = map variantName vs
   ++ expCtorsDirect rest
+expCtorsDirect ((DAttrib _ d)::rest) = expCtorsDirect (d::rest)
 expCtorsDirect (_::rest) = expCtorsDirect rest
 
 expTypeCtorsDirect : List Decl -> List (String, List String)
 expTypeCtorsDirect [] = []
 expTypeCtorsDirect ((DNewtype { newtypePub = True, newtypeName = n, newtypeCtor = con })::rest) = (n, [con]) :: expTypeCtorsDirect rest
 expTypeCtorsDirect ((DData { dataVis = VisPublic, dataName = n, dataCtors = vs })::rest) = (n, map variantName vs) :: expTypeCtorsDirect rest
+expTypeCtorsDirect ((DAttrib _ d)::rest) = expTypeCtorsDirect (d::rest)
 expTypeCtorsDirect (_::rest) = expTypeCtorsDirect rest
 
 -- field owners for PUBLIC data (named-field variants) + record
@@ -3091,22 +3097,26 @@ expFieldOwnersDirect : List Decl -> List (String, String)
 expFieldOwnersDirect [] = []
 expFieldOwnersDirect ((DData { dataVis = VisPublic, dataCtors = vs })::rest) = flatMap variantFieldOwners vs
   ++ expFieldOwnersDirect rest
+expFieldOwnersDirect ((DAttrib _ d)::rest) = expFieldOwnersDirect (d::rest)
 expFieldOwnersDirect (_::rest) = expFieldOwnersDirect rest
 
 expInterfacesDirect : List Decl -> List String
 expInterfacesDirect [] = []
 expInterfacesDirect ((DInterface { pub = True, name = n, ... })::rest) =
   n :: expInterfacesDirect rest
+expInterfacesDirect ((DAttrib _ d)::rest) = expInterfacesDirect (d::rest)
 expInterfacesDirect (_::rest) = expInterfacesDirect rest
 
 expIfaceMethodsDirect : List Decl -> List (String, List String)
 expIfaceMethodsDirect [] = []
 expIfaceMethodsDirect ((DInterface { pub = True, name = n, methods, ... })::rest) = (n, map ifaceMethodNm methods) :: expIfaceMethodsDirect rest
+expIfaceMethodsDirect ((DAttrib _ d)::rest) = expIfaceMethodsDirect (d::rest)
 expIfaceMethodsDirect (_::rest) = expIfaceMethodsDirect rest
 
 expEffectsDirect : List Decl -> List String
 expEffectsDirect [] = []
 expEffectsDirect ((DEffect True n _)::rest) = n :: expEffectsDirect rest
+expEffectsDirect ((DAttrib _ d)::rest) = expEffectsDirect (d::rest)
 expEffectsDirect (_::rest) = expEffectsDirect rest
 
 reExpEffects : ModuleExports -> OrdMap ModuleExports -> List Decl -> List String

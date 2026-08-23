@@ -1,5 +1,5 @@
 # META
-source_lines=4553
+source_lines=4563
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage — Stage 2 port of `lib/resolve.ml` (single-file
@@ -3038,6 +3038,7 @@ buildExports coreExp known modId prog env = ModuleExports {
 expNewtypeCtorsDirect : List Decl -> List (String, String)
 expNewtypeCtorsDirect [] = []
 expNewtypeCtorsDirect ((DNewtype { newtypePub = True, newtypeName = n, newtypeCtor = con })::rest) = (con, n) :: expNewtypeCtorsDirect rest
+expNewtypeCtorsDirect ((DAttrib _ d)::rest) = expNewtypeCtorsDirect (d::rest)
 expNewtypeCtorsDirect (_::rest) = expNewtypeCtorsDirect rest
 
 -- pub DTypeSig/DExtern/DFunDef
@@ -3046,6 +3047,7 @@ expValuesDirect [] = []
 expValuesDirect ((DTypeSig True n _)::rest) = n :: expValuesDirect rest
 expValuesDirect ((DExtern True n _)::rest) = n :: expValuesDirect rest
 expValuesDirect ((DFunDef True n _ _)::rest) = n :: expValuesDirect rest
+expValuesDirect ((DAttrib _ d)::rest) = expValuesDirect (d::rest)
 expValuesDirect (_::rest) = expValuesDirect rest
 
 -- methods of PUBLIC interfaces that are bound as values (lib's final iter loop)
@@ -3060,6 +3062,7 @@ pubIfaceMethodSets : List Decl -> List (List String)
 pubIfaceMethodSets [] = []
 pubIfaceMethodSets ((DInterface { pub = True, methods, ... })::rest) =
   map ifaceMethodNm methods :: pubIfaceMethodSets rest
+pubIfaceMethodSets ((DAttrib _ d)::rest) = pubIfaceMethodSets (d::rest)
 pubIfaceMethodSets (_::rest) = pubIfaceMethodSets rest
 
 -- pub newtype + VisPublic/VisAbstract data & record (the type name only)
@@ -3073,6 +3076,7 @@ expTypesDirect ((DData { dataVis = VisAbstract, dataName = n })::rest) =
   n :: expTypesDirect rest
 expTypesDirect ((DTypeAlias { tyAliasPub = True, tyAliasName = n })::rest) =
   n :: expTypesDirect rest
+expTypesDirect ((DAttrib _ d)::rest) = expTypesDirect (d::rest)
 expTypesDirect (_::rest) = expTypesDirect rest
 
 -- pub newtype ctor + VisPublic data ctors (VisAbstract exports NO ctors)
@@ -3082,12 +3086,14 @@ expCtorsDirect ((DNewtype { newtypePub = True, newtypeCtor = con })::rest) =
   con :: expCtorsDirect rest
 expCtorsDirect ((DData { dataVis = VisPublic, dataCtors = vs })::rest) = map variantName vs
   ++ expCtorsDirect rest
+expCtorsDirect ((DAttrib _ d)::rest) = expCtorsDirect (d::rest)
 expCtorsDirect (_::rest) = expCtorsDirect rest
 
 expTypeCtorsDirect : List Decl -> List (String, List String)
 expTypeCtorsDirect [] = []
 expTypeCtorsDirect ((DNewtype { newtypePub = True, newtypeName = n, newtypeCtor = con })::rest) = (n, [con]) :: expTypeCtorsDirect rest
 expTypeCtorsDirect ((DData { dataVis = VisPublic, dataName = n, dataCtors = vs })::rest) = (n, map variantName vs) :: expTypeCtorsDirect rest
+expTypeCtorsDirect ((DAttrib _ d)::rest) = expTypeCtorsDirect (d::rest)
 expTypeCtorsDirect (_::rest) = expTypeCtorsDirect rest
 
 -- field owners for PUBLIC data (named-field variants) + record
@@ -3095,22 +3101,26 @@ expFieldOwnersDirect : List Decl -> List (String, String)
 expFieldOwnersDirect [] = []
 expFieldOwnersDirect ((DData { dataVis = VisPublic, dataCtors = vs })::rest) = flatMap variantFieldOwners vs
   ++ expFieldOwnersDirect rest
+expFieldOwnersDirect ((DAttrib _ d)::rest) = expFieldOwnersDirect (d::rest)
 expFieldOwnersDirect (_::rest) = expFieldOwnersDirect rest
 
 expInterfacesDirect : List Decl -> List String
 expInterfacesDirect [] = []
 expInterfacesDirect ((DInterface { pub = True, name = n, ... })::rest) =
   n :: expInterfacesDirect rest
+expInterfacesDirect ((DAttrib _ d)::rest) = expInterfacesDirect (d::rest)
 expInterfacesDirect (_::rest) = expInterfacesDirect rest
 
 expIfaceMethodsDirect : List Decl -> List (String, List String)
 expIfaceMethodsDirect [] = []
 expIfaceMethodsDirect ((DInterface { pub = True, name = n, methods, ... })::rest) = (n, map ifaceMethodNm methods) :: expIfaceMethodsDirect rest
+expIfaceMethodsDirect ((DAttrib _ d)::rest) = expIfaceMethodsDirect (d::rest)
 expIfaceMethodsDirect (_::rest) = expIfaceMethodsDirect rest
 
 expEffectsDirect : List Decl -> List String
 expEffectsDirect [] = []
 expEffectsDirect ((DEffect True n _)::rest) = n :: expEffectsDirect rest
+expEffectsDirect ((DAttrib _ d)::rest) = expEffectsDirect (d::rest)
 expEffectsDirect (_::rest) = expEffectsDirect rest
 
 reExpEffects : ModuleExports -> OrdMap ModuleExports -> List Decl -> List String
@@ -5436,12 +5446,14 @@ takeOriginTrace _ =
 (DTypeSig false "expNewtypeCtorsDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "expNewtypeCtorsDirect" ((PList)) (EListLit))
 (DFunDef false "expNewtypeCtorsDirect" ((PCons (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeName" (PVar "n")) (rf "newtypeCtor" (PVar "con"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "con") (EVar "n")) (EApp (EVar "expNewtypeCtorsDirect") (EVar "rest"))))
+(DFunDef false "expNewtypeCtorsDirect" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "expNewtypeCtorsDirect") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "expNewtypeCtorsDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expNewtypeCtorsDirect") (EVar "rest")))
 (DTypeSig false "expValuesDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "expValuesDirect" ((PList)) (EListLit))
 (DFunDef false "expValuesDirect" ((PCons (PCon "DTypeSig" (PCon "True") (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expValuesDirect") (EVar "rest"))))
 (DFunDef false "expValuesDirect" ((PCons (PCon "DExtern" (PCon "True") (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expValuesDirect") (EVar "rest"))))
 (DFunDef false "expValuesDirect" ((PCons (PCon "DFunDef" (PCon "True") (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expValuesDirect") (EVar "rest"))))
+(DFunDef false "expValuesDirect" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "expValuesDirect") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "expValuesDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expValuesDirect") (EVar "rest")))
 (DTypeSig false "publicIfaceMethodVals" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Env") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "publicIfaceMethodVals" ((PVar "prog") (PVar "env")) (EApp (EApp (EVar "flatMap") (EApp (EVar "keepBoundMethods") (EVar "env"))) (EApp (EVar "pubIfaceMethodSets") (EVar "prog"))))
@@ -5450,6 +5462,7 @@ takeOriginTrace _ =
 (DTypeSig false "pubIfaceMethodSets" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "pubIfaceMethodSets" ((PList)) (EListLit))
 (DFunDef false "pubIfaceMethodSets" ((PCons (PRec "DInterface" ((rf "pub" (PCon "True")) (rf "methods" None)) true) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "map") (EVar "ifaceMethodNm")) (EVar "methods")) (EApp (EVar "pubIfaceMethodSets") (EVar "rest"))))
+(DFunDef false "pubIfaceMethodSets" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "pubIfaceMethodSets") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "pubIfaceMethodSets" ((PCons PWild (PVar "rest"))) (EApp (EVar "pubIfaceMethodSets") (EVar "rest")))
 (DTypeSig false "expTypesDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "expTypesDirect" ((PList)) (EListLit))
@@ -5457,32 +5470,39 @@ takeOriginTrace _ =
 (DFunDef false "expTypesDirect" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expTypesDirect") (EVar "rest"))))
 (DFunDef false "expTypesDirect" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisAbstract")) (rf "dataName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expTypesDirect") (EVar "rest"))))
 (DFunDef false "expTypesDirect" ((PCons (PRec "DTypeAlias" ((rf "tyAliasPub" (PCon "True")) (rf "tyAliasName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expTypesDirect") (EVar "rest"))))
+(DFunDef false "expTypesDirect" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "expTypesDirect") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "expTypesDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expTypesDirect") (EVar "rest")))
 (DTypeSig false "expCtorsDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "expCtorsDirect" ((PList)) (EListLit))
 (DFunDef false "expCtorsDirect" ((PCons (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeCtor" (PVar "con"))) false) (PVar "rest"))) (EBinOp "::" (EVar "con") (EApp (EVar "expCtorsDirect") (EVar "rest"))))
 (DFunDef false "expCtorsDirect" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataCtors" (PVar "vs"))) false) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "variantName")) (EVar "vs")) (EApp (EVar "expCtorsDirect") (EVar "rest"))))
+(DFunDef false "expCtorsDirect" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "expCtorsDirect") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "expCtorsDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expCtorsDirect") (EVar "rest")))
 (DTypeSig false "expTypeCtorsDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "expTypeCtorsDirect" ((PList)) (EListLit))
 (DFunDef false "expTypeCtorsDirect" ((PCons (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeName" (PVar "n")) (rf "newtypeCtor" (PVar "con"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EListLit (EVar "con"))) (EApp (EVar "expTypeCtorsDirect") (EVar "rest"))))
 (DFunDef false "expTypeCtorsDirect" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataName" (PVar "n")) (rf "dataCtors" (PVar "vs"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EApp (EVar "map") (EVar "variantName")) (EVar "vs"))) (EApp (EVar "expTypeCtorsDirect") (EVar "rest"))))
+(DFunDef false "expTypeCtorsDirect" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "expTypeCtorsDirect") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "expTypeCtorsDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expTypeCtorsDirect") (EVar "rest")))
 (DTypeSig false "expFieldOwnersDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "expFieldOwnersDirect" ((PList)) (EListLit))
 (DFunDef false "expFieldOwnersDirect" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataCtors" (PVar "vs"))) false) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "variantFieldOwners")) (EVar "vs")) (EApp (EVar "expFieldOwnersDirect") (EVar "rest"))))
+(DFunDef false "expFieldOwnersDirect" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "expFieldOwnersDirect") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "expFieldOwnersDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expFieldOwnersDirect") (EVar "rest")))
 (DTypeSig false "expInterfacesDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "expInterfacesDirect" ((PList)) (EListLit))
 (DFunDef false "expInterfacesDirect" ((PCons (PRec "DInterface" ((rf "pub" (PCon "True")) (rf "name" (PVar "n"))) true) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expInterfacesDirect") (EVar "rest"))))
+(DFunDef false "expInterfacesDirect" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "expInterfacesDirect") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "expInterfacesDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expInterfacesDirect") (EVar "rest")))
 (DTypeSig false "expIfaceMethodsDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "expIfaceMethodsDirect" ((PList)) (EListLit))
 (DFunDef false "expIfaceMethodsDirect" ((PCons (PRec "DInterface" ((rf "pub" (PCon "True")) (rf "name" (PVar "n")) (rf "methods" None)) true) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EApp (EVar "map") (EVar "ifaceMethodNm")) (EVar "methods"))) (EApp (EVar "expIfaceMethodsDirect") (EVar "rest"))))
+(DFunDef false "expIfaceMethodsDirect" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "expIfaceMethodsDirect") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "expIfaceMethodsDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expIfaceMethodsDirect") (EVar "rest")))
 (DTypeSig false "expEffectsDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "expEffectsDirect" ((PList)) (EListLit))
 (DFunDef false "expEffectsDirect" ((PCons (PCon "DEffect" (PCon "True") (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expEffectsDirect") (EVar "rest"))))
+(DFunDef false "expEffectsDirect" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "expEffectsDirect") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "expEffectsDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expEffectsDirect") (EVar "rest")))
 (DTypeSig false "reExpEffects" (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "reExpEffects" ((PVar "coreExp") (PVar "known") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "overPubUse") (EVar "coreExp")) (EVar "known")) (EVar "reExpEffectsFrom"))) (EApp (EVar "pubUsePaths") (EVar "prog"))))
@@ -6662,12 +6682,14 @@ takeOriginTrace _ =
 (DTypeSig false "expNewtypeCtorsDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "expNewtypeCtorsDirect" ((PList)) (EListLit))
 (DFunDef false "expNewtypeCtorsDirect" ((PCons (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeName" (PVar "n")) (rf "newtypeCtor" (PVar "con"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "con") (EVar "n")) (EApp (EVar "expNewtypeCtorsDirect") (EVar "rest"))))
+(DFunDef false "expNewtypeCtorsDirect" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "expNewtypeCtorsDirect") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "expNewtypeCtorsDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expNewtypeCtorsDirect") (EVar "rest")))
 (DTypeSig false "expValuesDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "expValuesDirect" ((PList)) (EListLit))
 (DFunDef false "expValuesDirect" ((PCons (PCon "DTypeSig" (PCon "True") (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expValuesDirect") (EVar "rest"))))
 (DFunDef false "expValuesDirect" ((PCons (PCon "DExtern" (PCon "True") (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expValuesDirect") (EVar "rest"))))
 (DFunDef false "expValuesDirect" ((PCons (PCon "DFunDef" (PCon "True") (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expValuesDirect") (EVar "rest"))))
+(DFunDef false "expValuesDirect" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "expValuesDirect") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "expValuesDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expValuesDirect") (EVar "rest")))
 (DTypeSig false "publicIfaceMethodVals" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Env") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "publicIfaceMethodVals" ((PVar "prog") (PVar "env")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "keepBoundMethods") (EVar "env"))) (EApp (EVar "pubIfaceMethodSets") (EVar "prog"))))
@@ -6676,6 +6698,7 @@ takeOriginTrace _ =
 (DTypeSig false "pubIfaceMethodSets" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "pubIfaceMethodSets" ((PList)) (EListLit))
 (DFunDef false "pubIfaceMethodSets" ((PCons (PRec "DInterface" ((rf "pub" (PCon "True")) (rf "methods" None)) true) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EMethodRef "map") (EVar "ifaceMethodNm")) (EVar "methods")) (EApp (EVar "pubIfaceMethodSets") (EVar "rest"))))
+(DFunDef false "pubIfaceMethodSets" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "pubIfaceMethodSets") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "pubIfaceMethodSets" ((PCons PWild (PVar "rest"))) (EApp (EVar "pubIfaceMethodSets") (EVar "rest")))
 (DTypeSig false "expTypesDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "expTypesDirect" ((PList)) (EListLit))
@@ -6683,32 +6706,39 @@ takeOriginTrace _ =
 (DFunDef false "expTypesDirect" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expTypesDirect") (EVar "rest"))))
 (DFunDef false "expTypesDirect" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisAbstract")) (rf "dataName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expTypesDirect") (EVar "rest"))))
 (DFunDef false "expTypesDirect" ((PCons (PRec "DTypeAlias" ((rf "tyAliasPub" (PCon "True")) (rf "tyAliasName" (PVar "n"))) false) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expTypesDirect") (EVar "rest"))))
+(DFunDef false "expTypesDirect" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "expTypesDirect") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "expTypesDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expTypesDirect") (EVar "rest")))
 (DTypeSig false "expCtorsDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "expCtorsDirect" ((PList)) (EListLit))
 (DFunDef false "expCtorsDirect" ((PCons (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeCtor" (PVar "con"))) false) (PVar "rest"))) (EBinOp "::" (EVar "con") (EApp (EVar "expCtorsDirect") (EVar "rest"))))
 (DFunDef false "expCtorsDirect" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataCtors" (PVar "vs"))) false) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "variantName")) (EVar "vs")) (EApp (EVar "expCtorsDirect") (EVar "rest"))))
+(DFunDef false "expCtorsDirect" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "expCtorsDirect") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "expCtorsDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expCtorsDirect") (EVar "rest")))
 (DTypeSig false "expTypeCtorsDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "expTypeCtorsDirect" ((PList)) (EListLit))
 (DFunDef false "expTypeCtorsDirect" ((PCons (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeName" (PVar "n")) (rf "newtypeCtor" (PVar "con"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EListLit (EVar "con"))) (EApp (EVar "expTypeCtorsDirect") (EVar "rest"))))
 (DFunDef false "expTypeCtorsDirect" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataName" (PVar "n")) (rf "dataCtors" (PVar "vs"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EApp (EMethodRef "map") (EVar "variantName")) (EVar "vs"))) (EApp (EVar "expTypeCtorsDirect") (EVar "rest"))))
+(DFunDef false "expTypeCtorsDirect" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "expTypeCtorsDirect") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "expTypeCtorsDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expTypeCtorsDirect") (EVar "rest")))
 (DTypeSig false "expFieldOwnersDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "expFieldOwnersDirect" ((PList)) (EListLit))
 (DFunDef false "expFieldOwnersDirect" ((PCons (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataCtors" (PVar "vs"))) false) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "variantFieldOwners")) (EVar "vs")) (EApp (EVar "expFieldOwnersDirect") (EVar "rest"))))
+(DFunDef false "expFieldOwnersDirect" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "expFieldOwnersDirect") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "expFieldOwnersDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expFieldOwnersDirect") (EVar "rest")))
 (DTypeSig false "expInterfacesDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "expInterfacesDirect" ((PList)) (EListLit))
 (DFunDef false "expInterfacesDirect" ((PCons (PRec "DInterface" ((rf "pub" (PCon "True")) (rf "name" (PVar "n"))) true) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expInterfacesDirect") (EVar "rest"))))
+(DFunDef false "expInterfacesDirect" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "expInterfacesDirect") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "expInterfacesDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expInterfacesDirect") (EVar "rest")))
 (DTypeSig false "expIfaceMethodsDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "expIfaceMethodsDirect" ((PList)) (EListLit))
 (DFunDef false "expIfaceMethodsDirect" ((PCons (PRec "DInterface" ((rf "pub" (PCon "True")) (rf "name" (PVar "n")) (rf "methods" None)) true) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EApp (EMethodRef "map") (EVar "ifaceMethodNm")) (EVar "methods"))) (EApp (EVar "expIfaceMethodsDirect") (EVar "rest"))))
+(DFunDef false "expIfaceMethodsDirect" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "expIfaceMethodsDirect") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "expIfaceMethodsDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expIfaceMethodsDirect") (EVar "rest")))
 (DTypeSig false "expEffectsDirect" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "expEffectsDirect" ((PList)) (EListLit))
 (DFunDef false "expEffectsDirect" ((PCons (PCon "DEffect" (PCon "True") (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "expEffectsDirect") (EVar "rest"))))
+(DFunDef false "expEffectsDirect" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "expEffectsDirect") (EBinOp "::" (EVar "d") (EVar "rest"))))
 (DFunDef false "expEffectsDirect" ((PCons PWild (PVar "rest"))) (EApp (EVar "expEffectsDirect") (EVar "rest")))
 (DTypeSig false "reExpEffects" (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "reExpEffects" ((PVar "coreExp") (PVar "known") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "overPubUse") (EVar "coreExp")) (EVar "known")) (EVar "reExpEffectsFrom"))) (EApp (EVar "pubUsePaths") (EVar "prog"))))
