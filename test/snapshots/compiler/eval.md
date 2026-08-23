@@ -1,5 +1,5 @@
 # META
-source_lines=4191
+source_lines=4197
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, port of lib/eval.ml's tree-walking
@@ -2417,8 +2417,10 @@ currentEvalFile = Ref ""
 -- RUNTIME error gets the same per-module attribution a resolve error already
 -- gets.  Consulted only at module-env construction (buildModInfos), never on
 -- the hot eval path, so it stays inert on every successful run.  Empty on
--- every non-`run` driver (doctests, prop runner, oracles), which just falls
--- back to the module id itself (moduleFileOf) instead of a real path.
+-- every non-`run` driver (doctests, prop runner, snapshot tool, oracles),
+-- which then falls back to "" (moduleFileOf) — i.e. the whole `$__evalFile__`
+-- tag/stamp mechanism below goes inert, leaving `currentEvalFile` exactly as
+-- untouched as it was before this fix on every one of those drivers.
 export
 modulePathMap : Ref (List (String, String))
 modulePathMap = Ref []
@@ -2432,13 +2434,17 @@ modulePathMap = Ref []
 evalFileTagName : String
 evalFileTagName = "$__evalFile__"
 
--- Resolve a module id to its real file path via `modulePathMap`, falling back
--- to the bare module id when the map has no entry (non-`run` drivers, or a
--- module the loader didn't hand a path for).
+-- Resolve a module id to its real file path via `modulePathMap`, falling
+-- back to "" (NOT the bare module id) when the map has no entry.  "" is the
+-- value `runtimePanic` already treats as "no file known" (its own fallback
+-- to `currentEvalFile` fires exactly on f == ""), so an unmapped module
+-- leaves attribution exactly as it was pre-fix instead of substituting a
+-- synthetic id (e.g. a snapshot-tool fixture's `__main__`) that was never a
+-- real, printable file.
 moduleFileOf : String -> String
 moduleFileOf mid = match lookupAssoc mid !modulePathMap
   Some path => path
-  None => mid
+  None => ""
 
 -- P0-2(a): evaluator recursion-depth guard.  The tree-walker recurses on the
 -- host C stack (`eval`->`apply`->`eval`...) with no TCO, so a deep non-tail
@@ -5062,7 +5068,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "evalFileTagName" (TyCon "String"))
 (DFunDef false "evalFileTagName" () (ELit (LString "$__evalFile__")))
 (DTypeSig false "moduleFileOf" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "moduleFileOf" ((PVar "mid")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EUnOp "!" (EVar "modulePathMap"))) (arm (PCon "Some" (PVar "path")) () (EVar "path")) (arm (PCon "None") () (EVar "mid"))))
+(DFunDef false "moduleFileOf" ((PVar "mid")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EUnOp "!" (EVar "modulePathMap"))) (arm (PCon "Some" (PVar "path")) () (EVar "path")) (arm (PCon "None") () (ELit (LString "")))))
 (DTypeSig false "evalDepthRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "evalDepthRef" () (EApp (EVar "Ref") (ELit (LInt 0))))
 (DTypeSig false "evalDepthLimit" (TyCon "Int"))
@@ -6520,7 +6526,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "evalFileTagName" (TyCon "String"))
 (DFunDef false "evalFileTagName" () (ELit (LString "$__evalFile__")))
 (DTypeSig false "moduleFileOf" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "moduleFileOf" ((PVar "mid")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EUnOp "!" (EVar "modulePathMap"))) (arm (PCon "Some" (PVar "path")) () (EVar "path")) (arm (PCon "None") () (EVar "mid"))))
+(DFunDef false "moduleFileOf" ((PVar "mid")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EUnOp "!" (EVar "modulePathMap"))) (arm (PCon "Some" (PVar "path")) () (EVar "path")) (arm (PCon "None") () (ELit (LString "")))))
 (DTypeSig false "evalDepthRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "evalDepthRef" () (EApp (EVar "Ref") (ELit (LInt 0))))
 (DTypeSig false "evalDepthLimit" (TyCon "Int"))
