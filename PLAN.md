@@ -1410,7 +1410,31 @@ recursion.
 **Why parked:** QoL diagnostic, off the canonicalization critical path. Needs TRMC's classifier (do
 after #56). The complement to the TRMC + big-stack stack-safety work, not a blocker.
 
-### Future idea (parked, not scheduled): bare effectful statements (drop `let _ =`)
+### Bare effectful statements (drop `let _ =`) — DONE for bare blocks, 2026-08-23
+
+**Status update 2026-08-23:** this section's premise was stale. The parser already accepted a
+bare expression as a non-final block statement (`parseExprStmt`/`exprStmtFor`'s `DoExpr`
+fallback) — that part of the "Idea" below had shipped, unguarded, with no record of when. What
+was still open was exactly the **Type policy** call flagged below: `inferStmt`'s `DoExpr` case
+discarded a non-final statement's result of **any** type with no diagnostic at all (verified: a
+bare `Int`-typed call silently dropped its result). Closed by `checkStmtNotDiscarded`
+(`compiler/types/typecheck.mdk`, `T-DISCARDED-VALUE`): a non-final bare statement must now
+unify to `Unit` — a free/unconstrained result type is pinned to `Unit` (no error, matches "value
+unused"); a concrete non-`Unit` type is rejected with a dedicated message + a `let _ = ` fix
+where the statement's own span is recoverable. `let _ = e` is untouched and remains the
+explicit-discard spelling (still ~1450 occurrences repo-wide; this is additive sugar, not a
+migration).
+
+**Not addressed by this pass:** the `do`-block half of the tax described below. Also stale as
+described — `<IO>` is not a monad in Medaka (`stdlib/io.mdk`: "There is no IO monad — an action
+runs when it is evaluated"), so an effectful call belongs in a bare block, not a `do` block
+(`do` is for genuine `Thenable` types; mixing an effect call into one hits
+`T-DO-NOT-MONAD`/`doRequiresMonadMsg`, which says as much: *"For IO sequencing use a bare
+indented block, not `do`"*). Whether `sqlite/lib/dbwriter.mdk buildLeafPage` (the motivating
+case cited below) still needs `let _ =` inside an actual `do` block (sequencing two genuine
+`Thenable` actions, not an IO call) was not re-verified — check before resurrecting that half.
+
+**Original parked idea, kept for context:**
 
 **Problem (the `let _ =` tax):** sequencing Unit-returning effects (`putStr`, `writeFile`, `set_ref`,
 `logLine`, dispatch handlers) is written as a stack of `let _ = action` bindings — ~1450 occurrences

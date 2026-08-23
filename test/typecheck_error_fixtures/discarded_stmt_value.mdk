@@ -1,0 +1,11 @@
+-- T-DISCARDED-VALUE: a bare (non-final, non-`let`) block statement whose
+-- inferred type does not unify with `Unit` silently discarded its result
+-- before `checkStmtNotDiscarded` existed -- no diagnostic at all. This
+-- fixture pins the reject: a bare `Int`-typed statement, not bound with
+-- `let _ = ` and not the block's final (return) expression.
+addOne : Int -> Int
+addOne x = x + 1
+
+main =
+  addOne 5
+  0
