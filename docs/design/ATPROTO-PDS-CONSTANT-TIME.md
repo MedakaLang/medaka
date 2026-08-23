@@ -90,15 +90,13 @@ The third round's overflow is required to be zero by proof, not checked by a
 secret-derived branch.
 
 Why three rounds suffice under the conservative producer contract: each limb is
-below `2^43`. The first carry pass can return at most `2^21 - 1`. Folding that
-overflow adds less than `2^31` to limb 0 and less than `2^27` to limb 1. The
-second carry pass can therefore return at most 1: the fold additions can add at
-most one carry into limb 2, while limbs 2 through 8 were already carried and
-limb 9 was already below `2^22`; that single propagated carry is the only route
-back above bit 255. Folding an overflow of 1 adds exactly 977 and 64 to the two
-low limbs, which cannot propagate across the remaining eight carried limbs, so
-the third carry pass returns zero. All three rounds execute even for already
-canonical input.
+below `2^43`. Let `M = 2^256` and `c = 2^32 + 977`. Carry entering limb 9
+means the first pass can return at most `H0 = 2^21`. After its fold, the total
+value is `V1 = L0 + H0*c`, where `L0 < M`, hence `V1 < M + 2^54` and the
+second carry overflow is at most 1. If that overflow is zero, the second folded
+value is already below `M`. If it is one, its remainder is below `2^54`, so the
+second folded value is below `2^54 + c < M`. The third carry pass therefore
+returns zero. All three rounds execute even for already canonical input.
 
 The implementation must retain the module's non-negative intermediates and
 existing `2^62 - 1` ceiling argument. A `3 -> 2` mutation must be rejected by
