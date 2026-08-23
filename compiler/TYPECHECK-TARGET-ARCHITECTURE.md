@@ -1277,6 +1277,16 @@ orders merges, and the plan does not pretend otherwise.
   Also on the emitter arc's X-C path (#1402 sits behind #1318 → #1137). Not
   byte-identical; moves emitted dict-param arity ⇒ seed re-mint discipline and
   the adversarial bar, per the issue.
+  **✅ LANDED 2026-08-23** (sprint predicate-slots, PR #1862; #1318/#1177/#1154
+  and #1161's unsatisfiable leg closed): slot identity = (interface, full
+  argument vector) on the signatured, single-module path; emitted dict-param
+  arity moved lockstep across eval/native/wasm. The review round measured four
+  places the identity does not yet reach — same-interface slot collapse
+  (#1866), cross-module (#1867/#1868), inferred bindings (#1869) — owned by
+  **B-4.2 ⊕ (#1871)**, which inherits this row's before-or-with-E-5 coupling:
+  the 2026-08-23 desk-note on #1137 records the arity rule B-4 froze AND names
+  #1866 as the one shape where that rule is false in the compiler today, so
+  E-5 must adjudicate #1866 explicitly before its cardinality freezes.
 
 **Stage C — One method-body judgment**
 
@@ -1374,6 +1384,12 @@ orders merges, and the plan does not pretend otherwise.
   sized" claim below is the sizing error this stage is the record of: c and d move
   acceptance in **opposite** directions, so bundling them makes CI unable to say
   which half moved a golden. Residue: **#1183**.
+  ⚠️ Correction (2026-08-23, predicate-slots planning finding 2): F-3a's "thread
+  the full goal vector" delivered a deliberately transitional per-slot vector
+  (the `CSlot` layer), not predicate-identity threading — that landed at B-4
+  (#1318, PR #1862), which retired the transitional layer. Do not read this
+  row's ✅ as "goal vectors are done"; B-4.2 (#1871) tracks where they still
+  are not.
 - **F-4. Hygiene residuals**: #176 (ref-growth probe, after A-3 changes the ref
   population).
 
