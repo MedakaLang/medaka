@@ -10,6 +10,7 @@ import lib.secp256k1.{
   pointCompressed,
   pointFromCompressed,
   publicPointForSecret,
+  pointRawFixedGeneratorIsCanonicalInfinityForTest,
 }
 import array as A
 import hex.{decode, encode}
@@ -67,17 +68,17 @@ good c label =
 mul : Array Int -> String -> String -> String -> <IO> Unit
 mul c scalar expected label =
   if not (token expected) then bad c label
-  else match scFromBytes (bytes scalar)
-    Err _ =>
-      if scalar == n && expected == "INF" then
-        good c label
-      else
-        bad c label
-    Ok x =>
-      if expected /= "INF" && encode (pointCompressed (publicPointForSecret x)) == expected then
-        good c label
-      else
-        bad c label
+  else
+    if scalar == n && expected == "INF" then match pointRawFixedGeneratorIsCanonicalInfinityForTest (bytes scalar)
+      Ok True => good c "\{label} raw-ladder canonical-infinity"
+      _ => bad c label
+    else match scFromBytes (bytes scalar)
+      Ok x =>
+        if expected /= "INF" && encode (pointCompressed (publicPointForSecret x)) == expected then
+          good c label
+        else
+          bad c label
+      Err _ => bad c label
 
 add : Array Int -> String -> String -> String -> String -> <IO> Unit
 add c a b expected label =
