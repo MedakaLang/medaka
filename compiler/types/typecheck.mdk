@@ -1,15 +1,33 @@
--- Self-hosted typecheck stage — port of lib/typecheck.ml's HM core.  SLICE 1:
--- the Hindley-Milner engine — monotypes with Ref-based union-find tyvars,
--- level-based generalization, unification (occurs-check + level adjust),
--- instantiation, and inference for literals, variables, application, lambdas,
--- let (let-polymorphism), if, tuples, lists, annotations, ADT constructors, and
--- match/pattern inference. Validated WITHOUT the prelude (engine only) against
--- dev/tc_probe.exe — so it needs only the HM core, not the typeclass /
--- dict-passing layer (the === TYPES === rendering drops constraints).
+-- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
+-- and dict-passing elaboration.  Architecture doc, including the component model this
+-- file is being decomposed towards: `compiler/TYPECHECK-TARGET-ARCHITECTURE.md`.
 --
--- Deferred to later slices: operators (EBinOp/EInfix route through Num/Eq from
--- the prelude), effect rows, records, interfaces/impls + constraint solving,
--- and explicit type signatures.
+-- The HM core is monotypes over Ref-based union-find tyvars, level-based
+-- generalization, unification (occurs-check + level adjust), and instantiation.  On
+-- top of it, and NOT deferred elsewhere, this file also carries: interfaces, impls,
+-- superclasses and coherence; constraint solving and the dict-passing elaboration the
+-- backends consume; effect rows; records; explicit signatures; and operator inference.
+-- Exhaustiveness is the one part that lives elsewhere and is still called from here --
+-- `checkMatchExhaustive` (`compiler/frontend/exhaust.mdk`), once per `EMatch`
+-- ([P-EXHAUST-IN-TYPECHECK]).
+--
+-- WARNING: TWO DRIVERS, AND THEY ARE NOT THE SAME FUNCTION.  `elaborateModules` /
+-- `elaborateOne` are the typed pipeline behind `run`, `build` and `test`; the
+-- `check*` family (`checkModulesAllLines`, `checkModuleFullDiags`, `checkToLines`,
+-- `checkProgramSchemesWithRuntime`) is what `medaka check`, `check --json`, the LSP,
+-- MCP and `test/typecheck_compiler_source.sh` go through.  The `check` family does not
+-- run every mark pass the elaborate family runs (`prePassDictArg`'s definer-shadow
+-- argument is `[]` on some check paths), so ACCEPTING UNDER ONE DRIVER IS NOT EVIDENCE
+-- ABOUT THE OTHER: a program can pass `check` at exit 0 with zero diagnostics and be
+-- rejected by `run` and `build`.  That divergence is pinned as a fixture
+-- (`test/must_fail_fixtures/1812-alias-import-check-accepts-run-build-reject/`) and its
+-- consequence for the gate over this compiler's own source is #1811.  Fix inference
+-- behaviour in whichever driver you measured, then check the other.
+--
+-- History: this began as a prelude-less HM engine validated against the (since removed)
+-- OCaml reference compiler.  Both that reference and its `dev/tc_probe.exe` harness are
+-- gone; native is the sole compiler.  The remaining probe is
+-- `compiler/entries/selfproc_tc_probe.mdk`.
 
 import frontend.ast.{
   Lit(..),
