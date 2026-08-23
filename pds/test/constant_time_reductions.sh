@@ -92,7 +92,9 @@ ir_call_shape_ok() {
   body=$2
   case "$name" in
     canonicalize) expected='444837400 70' ;; carryFoldRound) expected='1550513033 241' ;;
-    carryGo) expected='3778194225 239' ;; carryPassGo) expected='173258734 434' ;;
+    carryAll) expected='4232113032 67' ;; carryGo) expected='3778194225 239' ;;
+    carryPass) expected='2372681006 49' ;; carryPassGo) expected='173258734 434' ;;
+    copyLow) expected='3155186103 116' ;;
     foldAccum) expected='3786743205 133' ;; foldAccumRow) expected='3148195415 193' ;;
     foldOnce) expected='3086817660 152' ;; reduceCarry) expected='1494584225 93' ;;
     reduceFixed) expected='4074489195 234' ;; reduceWide) expected='1838799703 160' ;;
@@ -103,6 +105,17 @@ ir_call_shape_ok() {
   esac
   actual=$(sed -n 's/.*call i64 @\([^ (]*\).*/\1/p' "$body" | cksum | awk '{ print $1 " " $2 }')
   [ "$actual" = "$expected" ]
+}
+
+emitted_local_closure_ok() {
+  dir=$1
+  prefix=$2
+  for body in "$dir"/*.ll; do
+    sed -n "s/.*call i64 @mdk_${prefix}__\([^ (]*\).*/\1/p" "$body"
+  done | sort -u | while IFS= read -r callee; do
+    [ -z "$callee" ] && continue
+    [ -s "$dir/$callee.ll" ] || exit 1
+  done
 }
 
 helper_ir_ok() {
@@ -168,7 +181,7 @@ source_write_shape_ok() {
         [ "$(grep -F -c 'set i ' "$body" || true)" -eq 1 ] ;;
     selectPCandidate)
       [ "$writes" -eq 1 ] && [ "$(grep -F -c 'set i ' "$body" || true)" -eq 1 ] ;;
-    carryGo|subNCandidate|selectNCandidate)
+    carryGo|subNCandidate|selectNCandidate|copyLow)
       [ "$writes" -eq 1 ] && [ "$(grep -F -c 'A.set i ' "$body" || true)" -eq 1 ] ;;
     takeHigh)
       [ "$writes" -eq 2 ] && [ "$(grep -F -c 'A.set (i - 16) ' "$body" || true)" -eq 1 ] &&
@@ -199,6 +212,7 @@ source_shape_ok() {
     canonicalize) expected='1918979222 101' ;; carryAll) expected='3784023453 28' ;;
     carryFoldRound) expected='3658556356 112' ;; carryGo) expected='2803185373 258' ;;
     carryPass) expected='1250453555 31' ;; carryPassGo) expected='797599452 263' ;;
+    copyLow) expected='3333185083 104' ;;
     foldAccum) expected='1811712224 107' ;; foldAccumRow) expected='590181241 149' ;;
     foldOnce) expected='1770996279 84' ;; reduceCarry) expected='2596813441 92' ;;
     reduceFixed) expected='736687942 206' ;; reduceWide) expected='1389933683 128' ;;
@@ -235,7 +249,8 @@ source_helpers_ok() {
     "subNCandidate:$scalar:1" \
     "selectNCandidate:$scalar:1" \
     "subNSelect:$scalar:0" \
-    "reduceWide:$scalar:0"
+    "reduceWide:$scalar:0" \
+    "copyLow:$scalar:1"
   do
     name=${spec%%:*}
     rest=${spec#*:}
@@ -487,6 +502,20 @@ if source_helpers_ok "$FIELD" "$WORK/scalar_wrapper_source_mutant.mdk" "$WORK/so
 fi
 pass 'scalar leaky-wrapper mutation is rejected by exact source graph'
 
+awk '
+  /let \(\) = A.set i w\[i\] out/ {
+    print "    let value = w[i]"
+    print "    let copied = if value == 0 then shiftRight value 0 else value"
+    print "    let () = A.set i copied out"
+    next
+  }
+  { print }
+' "$SCALAR" > "$WORK/scalar_copy_source_mutant.mdk"
+if source_helpers_ok "$FIELD" "$WORK/scalar_copy_source_mutant.mdk" "$WORK/source-scalar-copy-mutant"; then
+  fail 'scalar transitive copy mutation is rejected by closed source graph'
+fi
+pass 'scalar transitive copy mutation is rejected by closed source graph'
+
 # Private same-module witnesses. The mutation copies never touch the worktree.
 cp "$FIELD" "$WORK/field_probe.mdk"
 append_field_probe "$WORK/field_probe.mdk"
@@ -520,10 +549,12 @@ cp "$FIELD" "$WORK/field_emit.mdk"
 append_field_probe "$WORK/field_emit.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/field_emit.mdk" -o "$WORK/field_emit" --keep-ir > "$WORK/build.log" 2>&1
 check_emitted_helpers "$WORK/field_emit.ll" "$WORK/field-ir" \
-  carryPassGo:1:3:3:0:0:22 carryFoldRound:0:2:2:0:0:11 \
+  carryPass:0:0:0:0:0:2 carryPassGo:1:3:3:0:0:22 carryFoldRound:0:2:2:0:0:11 \
   reduceCarry:0:0:0:0:0:3 subPCandidate:1:4:2:0:0:29 \
   selectPCandidate:1:2:1:0:0:7 subPSelect:0:0:0:1:0:9 \
   canonicalize:0:0:0:0:1:3
+emitted_local_closure_ok "$WORK/field-ir" field_emit || fail 'field emitted local call graph is closed'
+pass 'field emitted local call graph is closed, including carryPass'
 extract_function selectPCandidate "$WORK/field_emit.ll" "$WORK/select-current.ll"
 current_ir_branches=$(grep -c 'br i1' "$WORK/select-current.ll" || true)
 [ "$current_ir_branches" -eq 1 ] || fail "current native IR has one public-counter branch (got $current_ir_branches)"
@@ -563,10 +594,12 @@ cp "$SCALAR" "$WORK/scalar_emit.mdk"
 append_scalar_probe "$WORK/scalar_emit.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_emit.mdk" -o "$WORK/scalar_emit" --keep-ir > "$WORK/build-scalar.log" 2>&1
 check_emitted_helpers "$WORK/scalar_emit.ll" "$WORK/scalar-ir" \
-  carryGo:2:1:1:0:0:12 takeHigh:1:1:2:0:0:9 foldAccum:1:0:0:0:0:6 \
+  carryAll:0:0:0:0:0:3 carryGo:2:1:1:0:0:12 takeHigh:1:1:2:0:0:9 foldAccum:1:0:0:0:0:6 \
   foldAccumRow:1:3:1:0:0:9 foldOnce:0:0:0:1:0:7 reduceFixed:0:0:0:0:0:9 \
   subNCandidate:1:2:1:0:0:15 selectNCandidate:1:2:1:0:0:7 \
-  subNSelect:0:0:0:1:0:9 reduceWide:0:0:0:1:0:7
+  subNSelect:0:0:0:1:0:9 reduceWide:0:0:0:1:0:7 copyLow:1:1:1:0:0:6
+emitted_local_closure_ok "$WORK/scalar-ir" scalar_emit || fail 'scalar emitted local call graph is closed'
+pass 'scalar emitted local call graph is closed, including carryAll and copyLow'
 extract_function selectNCandidate "$WORK/scalar_emit.ll" "$WORK/scalar-select-current.ll"
 extract_function subNCandidate "$WORK/scalar_emit.ll" "$WORK/scalar-borrow-current.ll"
 [ "$(grep -c 'br i1' "$WORK/scalar-select-current.ll" || true)" -eq 1 ] || fail 'current scalar select IR has only its public-counter branch'
@@ -640,6 +673,16 @@ fi
 grep -F -q '__leakyShift' "$WORK/scalar-wrapper-subn.ll" || fail 'scalar leaky-wrapper call reaches native IR'
 pass 'scalar leaky-wrapper mutation is rejected by native IR callee graph'
 
+cp "$WORK/scalar_copy_source_mutant.mdk" "$WORK/scalar_copy_mutant.mdk"
+append_scalar_probe "$WORK/scalar_copy_mutant.mdk"
+MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_copy_mutant.mdk" -o "$WORK/scalar_copy_mutant" --keep-ir > "$WORK/build-scalar-copy-mutant.log" 2>&1
+extract_function copyLow "$WORK/scalar_copy_mutant.ll" "$WORK/scalar-copy-mutant.ll"
+if helper_ir_ok "$WORK/scalar-copy-mutant.ll" 1 1 1 0 0 6 && ir_call_shape_ok copyLow "$WORK/scalar-copy-mutant.ll"; then
+  fail 'scalar transitive copy mutation is rejected by emitted helper shape'
+fi
+grep -F -q 'mdk_value_eq' "$WORK/scalar-copy-mutant.ll" || fail 'scalar transitive copy branch reaches native IR'
+pass 'scalar transitive copy mutation is rejected by emitted helper shape'
+
 disassemble() {
   binary=$1
   symbol=$2
@@ -695,6 +738,12 @@ disassemble "$WORK/scalar_wrapper_mutant" "$wrapper_symbol" "$WORK/scalar-wrappe
 grep -F -q 'mdk_value_eq' "$WORK/scalar-wrapper-subn.asm" || fail 'scalar leaky-wrapper branch reaches final native helper'
 pass 'scalar leaky-wrapper mutation is visible in final native helper'
 
+copy_symbol=$(find_native_symbol "$WORK/scalar_copy_mutant" copyLow)
+[ -n "$copy_symbol" ] || fail 'scalar transitive copy final native helper symbol exists'
+disassemble "$WORK/scalar_copy_mutant" "$copy_symbol" "$WORK/scalar-copy-mutant.asm"
+grep -F -q 'mdk_value_eq' "$WORK/scalar-copy-mutant.asm" || fail 'scalar transitive copy branch reaches final native helper'
+pass 'scalar transitive copy mutation is visible in final native helper'
+
 field_reducer_symbol=$(find_native_symbol "$WORK/field_emit" fieldSelectWitness)
 scalar_reducer_symbol=$(find_native_symbol "$WORK/scalar_emit" scalarSelectWitness)
 [ -n "$field_reducer_symbol" ] || fail 'final native field reducer witness symbol exists'
@@ -734,5 +783,5 @@ printf 'receipt: target=%s %s\n' "$(uname -s)" "$(uname -m)"
 printf 'receipt: compiler=%s\n' "$(clang --version | sed -n '1p')"
 printf 'receipt: medaka=%s\n' "$($MEDAKA --version | sed -n '1p')"
 
-[ "$checked" -ge 38 ] || fail "anti-rot floor (expected at least 38, got $checked)"
+[ "$checked" -ge 43 ] || fail "anti-rot floor (expected at least 43, got $checked)"
 printf 'PASS: constant-time reduction controls — %s assertions\n' "$checked"
