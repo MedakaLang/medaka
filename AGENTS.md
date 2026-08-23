@@ -531,12 +531,21 @@ Each of these was paid for in an incident — pointers, not post-mortems.
 - ⚠️ **[T-FIXTURE-LINES]** A fixture's line count is load-bearing (goldens pin `file:LINE:COL`).
   Keep comment edits line-count-neutral (`git diff --numstat` reads `N N`), or re-derive the
   golden. In-place edits only; see [T-SHARED-CORPUS] for add/move/delete.
-- 🚨 **[T-PERRUN-COMMENTS]** `fmt --write` can CORRUPT comments on a two-line `data X =\n | X {
-  … }` header — #829 REOPENED; `fmt --check` won't catch it. Check:
-  `grep -n '^data <Name> =$' -A1 compiler/types/typecheck.mdk` — `  | <Name> {` next = unsafe;
-  `data <Name> = <Name> {` one line = safe. Safe: no comment; or a comment on an already-single-
-  line header. Unsafe shape: put prose on the nearby function instead (PR #1296). Diff the decl
-  by eye after editing.
+- ⚠️ **[T-PERRUN-COMMENTS]** `fmt --write` USED TO corrupt comments on a two-line `data X =\n
+  | X { … }` header (#829, reopened 2026-08-05 after a prior "fixed" claim proved wrong on
+  re-verification — that history is why this bullet still says "diff by eye", not "trust it").
+  Root cause: `spliceInterior`'s source→output line mapping anchored to the decl's overall
+  start line (the `data X =` line) instead of the variant's own line (`| X {`), and its
+  standalone-vs-trailing comment classification compared a SOURCE column against the
+  RENDERED output's field indent instead of the comment's own source line — both broke once
+  the header's two source lines collapsed to the render's one. Fixed in `compiler/tools/fmt.mdk`
+  (`spliceInterior`/`classifyIdxs`/`isStandaloneSrc`); regression fixtures cover BOTH header
+  shapes: `test/fmt_fixtures/record_standalone_comment.mdk` (single-line, the original repro)
+  and `test/fmt_fixtures/record_standalone_comment_twoline_header.mdk` (two-line, the shape
+  that stayed broken through the reopening) — gated by `diff_compiler_fmt.sh` and
+  `diff_native_cli.sh`. Given this bullet's own history of a false "fixed" retraction, still
+  diff a comment-bearing record decl by eye after `fmt --write` rather than trusting this note
+  alone.
 - ⚠️ **[T-SHARED-CORPUS]** A fixture directory is a SHARED CORPUS — add/move/delete enrolls you
   in gates you never named. ENUMERATE every consumer, run all of them. Never trust a count —
   derive it, word-bound the grep both sides (`grep -n 'Word-boundaries' test/preflight.sh`).

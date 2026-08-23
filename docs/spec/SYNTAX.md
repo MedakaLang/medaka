@@ -557,6 +557,31 @@ impl Eq2 (Box a) requires Eq2 a where        -- conditional impl
   eq2 (Box x) (Box y) = eq2 x y
 ```
 
+An impl method body accepts the same equation-guard shapes as a top-level
+multi-clause function — inline `| cond = body`, an indented `| … = …` arm
+block, and multiple guarded/unguarded clauses stacked by name (#508):
+
+```medaka
+interface Eq2 a where
+  eq2 : a -> a -> Bool
+
+interface Ord2 a requires Eq2 a where
+  compare2 : a -> a -> Ordering
+
+data T = T Int
+
+impl Eq2 T where
+  eq2 (T a) (T b) = a == b
+
+impl Ord2 T where
+  compare2 (T a) (T b)
+    | a < b = Lt
+    | a > b = Gt
+    | otherwise = Eq
+
+main = println (compare2 (T 1) (T 2))
+```
+
 There are no **named impls** (`impl Name of Iface Ty where`), no `default impl`, and
 no `@Name` impl-hint at a use site — all three were removed together (a plain `impl`
 covers every case; overlap resolves by picking the most-specific instance

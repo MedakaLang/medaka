@@ -1,0 +1,1 @@
+{"files":[{"file":"<fixture>","diagnostics":[{"code":"W-MAIN-SHAPE","kind":"warning","message":"'main' must be a value of type Unit. Write 'main = …', not 'main () = …' or 'main x = …' ('medaka run' never applies main; it forces a zero-arg main for its effects)","range":{"end":{"character":17,"line":7},"start":{"character":10,"line":7}},"severity":2,"source":"medaka"}]}]}

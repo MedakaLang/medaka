@@ -1,0 +1,5 @@
+-- #1236: a bare non-Unit VALUE main whose body is a binop (`1 + 2`), not an
+-- `EApp` spine — the case that used to lose its `Loc` entirely (`mainBodyLoc`
+-- only walked `EApp`) and, separately, never reached `check --json` at all.
+main : Int
+main = 1 + 2
