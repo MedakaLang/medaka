@@ -513,7 +513,6 @@ declTopFnNames : List Decl -> List String
 declaredConstraintArgs : String -> List (List Mono)
 declaredConstraintFor : String -> CDeclared
 declaredConstraintIds : String -> List Int
-declaredConstraintSlots : String -> List CSlot
 declaredCrossModuleObls : String -> Option (List VecObl)
 declaredEffects : Ty -> List Atom
 declaredIfacesOn : String -> Ty -> List String
@@ -655,6 +654,7 @@ emptyDataEnv : DataEnv
 emptyDeclEnvs : DeclEnvs
 emptyImplEnv : ImplEnv
 emptyImplUniverse : ImplUniverse
+emptyShadowDicts : ShadowDicts
 enclDictVarOf : Option Predicate -> Mono -> String -> Option String
 enclPreds : String -> List (Int, Predicate)
 enclSlot : String -> Mono -> Option Int
@@ -1598,7 +1598,7 @@ resolveMemberRows : (String, String) -> List (String, a) -> List (String, a)
 resolveMethodDicts : Map String (List ImplEntry) -> List (Ref (List Route), List Mono) -> Unit
 resolveOpSite : Bool -> Map String (List ImplEntry) -> String -> Ref Route -> Mono -> Bool -> String -> Unit
 resolveOpSites : Bool -> Map String (List ImplEntry) -> List PendingEntry -> Unit
-resolveRLocalSite : List Decl -> Map String (List ImplEntry) -> String -> Ref Route -> Mono -> String -> List Mono -> List String -> Unit
+resolveRLocalSite : List Decl -> Map String (List ImplEntry) -> String -> Ref Route -> Mono -> String -> List Mono -> List String -> List (List Mono) -> Unit
 resolveRLocalSites : List Decl -> Map String (List ImplEntry) -> List PendingEntry -> Unit
 resolveRecMono : String -> Mono -> Route
 resolveSite : Map String (List ImplEntry) -> List String -> String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> Unit
@@ -1683,10 +1683,10 @@ setNumlitFloats : Unit -> Unit
 setNumlitFloatsGo : List (Mono, Ref (Option Float), Int, Ref Route) -> Unit
 shadowBareName : List (String, String) -> String -> String
 shadowDomainFor : TcEnv -> String -> String -> Option Mono
-shadowStandaloneDictSlots : List CSlot -> List (Int, Mono) -> (List Mono, List String)
-shadowStandaloneDictSlotsAt : Option Scheme -> String -> Mono -> (List Mono, List String)
-shadowStandaloneDicts : TcEnv -> String -> String -> Mono -> (List Mono, List String)
-shadowStandaloneDictsWith : Option Scheme -> String -> String -> Mono -> (List Mono, List String)
+shadowStandaloneDictSlots : List CSlot -> List (List Mono) -> List (Int, Mono) -> ShadowDicts
+shadowStandaloneDictSlotsAt : Option Scheme -> String -> Mono -> ShadowDicts
+shadowStandaloneDicts : TcEnv -> String -> String -> Mono -> ShadowDicts
+shadowStandaloneDictsWith : Option Scheme -> String -> String -> Mono -> ShadowDicts
 shadowStandaloneHead : TcEnv -> Expr -> Option (String, List (Ref Route))
 shadowVarHeadMethodScheme : TcEnv -> String -> Expr -> Mono
 sigConstraintArgTys : Ty -> List (List Ty)

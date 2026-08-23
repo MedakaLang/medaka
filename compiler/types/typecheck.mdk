@@ -2283,7 +2283,12 @@ public export data SiteKind =
   -- standalone-shadow RLocal site: mangled standalone symbol, forceLocal (P0-20),
   -- and the shadowing standalone's own `=>`-constraint dict monos + iface names
   -- (S-1).  Primary mono = receiver mono; encl is unused ("").
-  | SKRLocal String Bool (List Mono) (List String)
+  -- FIX-shadow-arity-skew: the 5th field is the slot-parallel predicate ARGUMENT VECTOR
+  -- list, so `resolveRLocalSites` can select each slot with `routesOfMonosTopV`'s vector
+  -- goal instead of the scalar `Ix Int _`.  It is `ShadowDicts`' third projection and
+  -- must stay aligned with the other two — see that record.  Empty ⇒ the scalar router,
+  -- term for term, which is every 1-ary `=>` constraint in compiler + stdlib + sqlite.
+  | SKRLocal String Bool (List Mono) (List String) (List (List Mono))
 
 public export data PendingEntry =
   -- fields: name/method, route ref to stamp, primary mono, enclosing-fn name, kind,
@@ -5946,6 +5951,29 @@ data CDeclared =
       cdArgs : List (List Mono),
     }
 
+-- FIX-shadow-arity-skew: the shadow route's expanded dict slots, the SAME three
+-- slot-parallel projections `inferDictAtFound` hands `pushDictApp` — monos, route WORDS
+-- (iface spellings), and each slot's call-instantiated predicate ARGUMENT VECTOR.  The
+-- vectors were the residual `declaredConstraintArgs`' header named as "STILL LIVE, same
+-- shape": `SKRLocal` carried only the first two, so `resolveRLocalSites` selected every
+-- shadow-route slot with the SCALAR `routesOfMonosTop` goal and a multi-argument
+-- predicate shattered into `Ix Int _`, first-declared-wins.  They travel as ONE record
+-- for the reason `CDeclared` does: three parallel lists a reader must re-align is the
+-- hazard `CSlot` was introduced to remove, and `callArgVecsV` only guarantees
+-- slot-parallelism with the `constraintMonosOf` output computed from the same expansion.
+-- [sdArgVecs] empty ⇒ `routesOfMonosTopV` IS `routesOfMonosTop`, term for term.
+data ShadowDicts =
+  | ShadowDicts {
+      sdMonos : List Mono,
+      sdIfaces : List String,
+      sdArgVecs : List (List Mono),
+    }
+
+-- the empty shadow-dict stamp: an unconstrained standalone, or a route that resolves to
+-- nothing.  Byte-identical to the `([], [])` this returned before the vectors joined it.
+emptyShadowDicts : ShadowDicts
+emptyShadowDicts = ShadowDicts { sdMonos = [], sdIfaces = [], sdArgVecs = [] }
+
 -- THE pairing point — the only place in the tree where a slot-id list meets a
 -- slot-parallel interface list.
 --
@@ -9061,7 +9089,7 @@ recordRLocalSite env name tagRef inst
       Some am =>
         let sym = routeLocalSym !tagRef
         let dicts = shadowStandaloneDictSlotsAt (standaloneSchemeFor env name sym) (if sym == "" then name else sym) am
-        perRun.value.pendingRLocalSites := PendingEntry name tagRef am "" (SKRLocal sym (standaloneValuePinned name) (fst dicts) (snd dicts)) !currentLoc :: perRun.value.pendingRLocalSites.value
+        perRun.value.pendingRLocalSites := PendingEntry name tagRef am "" (SKRLocal sym (standaloneValuePinned name) dicts.sdMonos dicts.sdIfaces dicts.sdArgVecs) !currentLoc :: perRun.value.pendingRLocalSites.value
       None => ()
 
 -- the SHADOWING STANDALONE's scheme.  An IMPORTER shadow's bare name is rebound by env1
@@ -9375,7 +9403,7 @@ qualConstraintKey name = map
   (lookupAssoc name perRun.value.currentImportDefinersRef.value)
 
 -- the callee's registered dict-slot IDS, UNPAIRED and UNTRUNCATED — the exact list the
--- pre-U1b `declaredConstraintSlots` returned as its first component.
+-- pre-U1b `declaredConstraintFor` returned as its first component.
 --
 -- 🚨 WHY THIS EXISTS, AND WHY IT IS NOT THE PARALLEL-LIST HAZARD `CSlot` REMOVED.
 -- `pairSlots` truncates to the SHORTER of (ids, ifaces), which is correct everywhere the
@@ -9396,7 +9424,7 @@ qualConstraintKey name = map
 declaredConstraintIds : String -> List Int
 declaredConstraintIds name = match qualConstraintIds name
   Some ids => ids
-  -- same #739 source-exact discipline as `declaredConstraintSlots`' `None` arm below:
+  -- same #739 source-exact discipline as `declaredConstraintFor`'s `None` arm below:
   -- a known import with no qual entry is genuinely unconstrained, and must NOT fall
   -- through to the source-blind bare-name table.
   None =>
@@ -9421,26 +9449,20 @@ lookupQualPayload src name (((m, n), v)::rest)
   | m == src && n == name = Some v
   | otherwise = lookupQualPayload src name rest
 
--- WS-2/D2: a constrained callee's declared dict slots (constraint tyvar id + interface
--- occurrence, PAIRED — see `CSlot`; never two parallel lists).  Prefer
--- the (import-source, name)-keyed QUAL table for a cross-module callee; fall back to the
--- bare-name funConstraintsRef first-match for local / wildcard / re-export.
--- S-1: shared with shadowStandaloneDictSlots — an IMPORTED constrained standalone that
--- shadows a method is exactly a cross-module callee, so it needs the SAME resolution.
--- Reading only the bare-name table there left the importer shadow's dicts EMPTY on `run`
--- (funConstraintsRef is reset per module and only re-seeded from the cross-module table
--- on the EMIT path), so `build` was right and `run` was wrong — the inverse skew.
+-- WS-2/D2 + B-2.2-f (#1113): the slots-only projection `declaredConstraintSlots` is
+-- RETIRED.  It had exactly two readers — `inferDictAtFound` and the shadow route — and
+-- FIX-shadow-arity-skew is what a slots-only projection costs: slice 3 widened what
+-- `cdSlots` is keyed by (whole predicate, vector included), the call sides that had a
+-- vector agreed with the widened definition side, and the one reader still taking the
+-- bare-slots projection expanded against a constant `[]` and collapsed two slots into
+-- one.  Take `declaredConstraintFor` and project BOTH halves off the one entry decision,
+-- or you are re-opening this bug by construction.  (The same argument that removed
+-- `declaredConstraintK`: two readers re-deriving which entry a name resolves to is the
+-- drift `qualConstraintKey` was factored out to remove.)
 --
--- B-2.2-f (#1113): this is now a PROJECTION of `declaredConstraintFor`, which resolves
--- the slots and their DECLARED-PREFIX length in ONE entry decision.  There is
--- deliberately no parallel `declaredConstraintK`: two readers re-deriving which entry a
--- name resolves to is the drift `qualConstraintKey` was factored out to remove.
-declaredConstraintSlots : String -> List CSlot
-declaredConstraintSlots name = (declaredConstraintFor name).cdSlots
-
 -- B-2.2-f (#1113): the ONE resolution — a constrained callee's declared dict slots AND
 -- how many of them its own `=>` context declared (the rest being super slots
--- `expandSupersPairs` appends downstream).  Arms mirror `declaredConstraintSlots`'
+-- `expandSupersPairs` appends downstream).  Arms mirror the retired `declaredConstraintSlots`'
 -- former body exactly, keyed once through `qualConstraintKey`.
 --
 -- 🚨 The prefix is CLAMPED against the slots actually returned (`clampPrefix`).
@@ -9499,7 +9521,7 @@ clampPrefix slots (Some (CDPLen k)) = CDPLen (minI k (listLen slots))
 
 -- #739: is [name] an explicitly-imported value (has a known source module)?  A miss in
 -- the qual constraint table for such a name is authoritative ("unconstrained in its
--- source"), so declaredConstraintSlots must NOT fall through to the source-blind bare-name
+-- source"), so `declaredConstraintFor` must NOT fall through to the source-blind bare-name
 -- table for it.  A local / wildcard / re-export name is absent here and keeps the old path.
 hasImportDefiner : String -> Bool
 hasImportDefiner name = match lookupAssoc name perRun.value.currentImportDefinersRef.value
@@ -9624,7 +9646,7 @@ instantiateTracked (Forall ids evars t) =
 
 -- #1161 (F-3a-ii): the callee's declared per-slot predicate ARGUMENT VECTORS, as
 -- recorded at signature registration (registerMember).  Bare-name keyed, mirroring the
--- `None` arm of declaredConstraintSlots.
+-- `None` arm of `declaredConstraintFor`.
 -- ⚠️ THIS IS THE LOCAL LOOKUP ONLY, and that is now a NARROWER claim than it was.
 -- S-xmod-vector-supply (#1868 silent / #1867 loud) CLOSED the cross-module residual this
 -- header used to describe: `crossModuleFunConstraintArgsQualRef` is the `(definer module,
@@ -9651,19 +9673,22 @@ instantiateTracked (Forall ids evars t) =
 -- `funConstraintArgsRef`.  The residual's cost is what drained with it: `useIx : Ix a
 -- Char => a -> Int` printed 222 compiled alone and 111 imported — byte-identical source,
 -- different answer, exit 0, both engines.
--- ⚠️ SECOND RESIDUAL, STILL LIVE, same shape: `resolveRLocalSites` /
--- `SKRLocal` (the standalone-shadow arg-position stamp) fills its dict routes with the
--- SCALAR `routesOfMonosTop`, not `routesOfMonosTopV`, so an importer-shadowed
--- constrained standalone with a multi-argument predicate keeps today's per-tyvar goal.
--- Threading it would mean widening the `SKRLocal` payload at all four of its producers,
--- whose monos come from `shadowStandaloneDictSlots` → `declaredConstraintSlots`.
--- ⚠️ S-xmod-vector-supply left it EXACTLY where it was, deliberately and measurably:
--- `declaredConstraintSlots` is `cdSlots`, and this slice changed only `cdArgs`, which
--- that path never reads.  So closing the cross-module residual made this neighbour
--- neither newly wrong nor newly reachable — it keeps its scalar per-tyvar goal, is
--- simply NOT COVERED, and this comment is still the only place that says so.  It is also
--- no longer BLOCKED on the id-attribution hazard: the paragraph above measures that
--- hazard as an artefact of bare-name entry resolution, not of the vectors themselves.
+-- ✅ SECOND RESIDUAL — CLOSED by FIX-shadow-arity-skew, and the prose that stood here is
+-- kept only as the record of why it had to be.  It read: `resolveRLocalSites` / `SKRLocal`
+-- fill their dict routes with the SCALAR `routesOfMonosTop`, so an importer- or
+-- definer-shadowed constrained standalone with a multi-argument predicate keeps the
+-- per-tyvar goal; and S-xmod-vector-supply left it there deliberately, on the measured
+-- ground that it changed only `cdArgs` while the shadow route read only `cdSlots`, so the
+-- neighbour was "neither newly wrong nor newly reachable".
+-- 🚨 That clearance was SOUND FOR ITS OWN SLICE AND FALSIFIED BY THE NEXT ONE.
+-- S-slot-key-vector (#1866) re-keyed `cdSlots` ITSELF on the whole predicate, which is
+-- precisely the premise the clearance rested on, and the shadow route — still expanding
+-- against a constant `[]` — under-counted the definition's dict params: `run` E-PANIC,
+-- `build` a per-execution heap pointer, wasm illegal cast, `check` exit 0.  The lesson is
+-- not "that reasoning was careless"; it is that "reads only X, and I touched only Y" has
+-- a HALF-LIFE OF ONE SLICE, and a comment recording such a clearance must be re-read by
+-- whoever next moves X.  `SKRLocal` now carries the vectors and both resolvers select
+-- through `routesOfMonosTopV`; empty vectors make that the scalar router term for term.
 declaredConstraintArgs : String -> List (List Mono)
 declaredConstraintArgs name =
   fromOption [] (lookupAssocVecs name perRun.value.funConstraintArgsRef.value)
@@ -9860,8 +9885,19 @@ expandSupersPairs allDecls declared =
 -- already agreed with slot-for-slot.  `superSlotOf`'s `firstOrZero` id-collapse is
 -- untouched and still owed.
 --
--- `expandSupersPairs` is a projection of this, so there is ONE fixpoint and the sequence
--- cannot drift between the vector-carrying and vector-free readers.
+-- 🚨 F7 / FIX-shadow-arity-skew: the sentence that stood here — "`expandSupersPairs` is a
+-- projection of this, so there is ONE fixpoint and the sequence cannot drift between the
+-- vector-carrying and vector-free readers" — is FALSE IN THE GENERAL CASE and is retracted.
+-- One fixpoint does NOT imply one sequence: `expandSupersPairs` feeds it a constant `[]`
+-- suffix, and since the dedup key is the WHOLE PREDICATE, a vector-free reader collapses
+-- exactly the slots a vector-carrying reader keeps.  What actually holds is narrower:
+-- the SYNTHETIC-id path (`expandSupersIfaceEntry`) never drifts, because it carries no
+-- real tyvar ids and no vectors at all, so every one of its keys gains the SAME constant
+-- empty suffix and its sequence is byte-unchanged.  Any OTHER vector-free reader of a
+-- REAL slot list drifts against `expandSupersEntry` — which is the bug
+-- `shadowStandaloneDictSlots` shipped, and the reason `expandSupersPairs` now has exactly
+-- one caller.  Before adding a second, check whether its slots have vectors available: if
+-- they do, it belongs on `expandSupersVecs`.
 expandSupersVecs : List Decl -> List (CSlot, List Mono) -> List (CSlot, List Mono)
 expandSupersVecs allDecls declared = expandSupersFix allDecls declared declared
 
@@ -12450,7 +12486,7 @@ recordImporterShadowDicts env mname (r::rest) tx =
     (routeLocalSym !r)
     tx
   let _ = setRef perRun.value.pendingRLocalSites
-    (PendingEntry mname r tx "" (SKRLocal (routeLocalSym !r) True (fst dicts) (snd dicts)) !currentLoc
+    (PendingEntry mname r tx "" (SKRLocal (routeLocalSym !r) True dicts.sdMonos dicts.sdIfaces dicts.sdArgVecs) !currentLoc
       ::perRun.value.pendingRLocalSites.value)
   recordImporterShadowDicts env mname rest tx
 
@@ -12623,7 +12659,7 @@ inferDefinerShadowApp env name tagRef implRef f x =
   -- interface METHOD scheme, whose dicts are the method's, not the standalone's — asking
   -- there would be meaningless.  A dict-var receiver dispatches through its dict and is
   -- likewise not the standalone.  ([], []) for an unconstrained standalone.
-  let dicts = if dispatches || isDictVar then ([], [])
+  let dicts = if dispatches || isDictVar then emptyShadowDicts
     else shadowStandaloneDicts env name sym xt
   -- Route by the ACTUAL argument type on BOTH the eval path (pendingRLocalSites,
   -- read by resolveRLocalSites) and the emit path (pendingArgStamps, read by
@@ -12644,7 +12680,7 @@ inferDefinerShadowApp env name tagRef implRef f x =
   -- lint-disable-next-line rule-prefer-assign-op
   let _ = if isDictVar then ()
     else setRef perRun.value.pendingRLocalSites
-      (PendingEntry name tagRef xt "" (SKRLocal (routeLocalSym !tagRef) (not dispatches) (fst dicts) (snd dicts)) !currentLoc
+      (PendingEntry name tagRef xt "" (SKRLocal (routeLocalSym !tagRef) (not dispatches) dicts.sdMonos dicts.sdIfaces dicts.sdArgVecs) !currentLoc
         ::perRun.value.pendingRLocalSites.value)
   let _ = match argDispatchOf name
     -- #609: the SKArg full mono is the DISPATCH arm's method scheme (`ft`) — the
@@ -13174,7 +13210,7 @@ stampRoutes (r::rest) =
 -- independent hole in this same arm.  ([] , []) for an unconstrained standalone, which
 -- SHORT-CIRCUITS BEFORE THE UNIFY, so an unconstrained shadow (all 5 of the compiler's
 -- own) does not even perturb the substitution — the fixpoint provably cannot move.
-shadowStandaloneDicts : TcEnv -> String -> String -> Mono -> (List Mono, List String)
+shadowStandaloneDicts : TcEnv -> String -> String -> Mono -> ShadowDicts
 shadowStandaloneDicts env name sym xt =
   -- P0-20's sym-awareness lesson, mirrored: on the mangled emit path the standalone is
   -- bound under `<mid>__name`, so a BARE-name lookup here would be silently inert and
@@ -13190,7 +13226,7 @@ shadowStandaloneDicts env name sym xt =
 -- imported standalone, so every dict slot silently resolves to nothing.  That is why the
 -- importer shadow was correct on `build`/`wasm` (which reach the standalone through the
 -- MANGLED symbol) and still under-applied on `run`.
-shadowStandaloneDictsWith : Option Scheme -> String -> String -> Mono -> (List Mono, List String)
+shadowStandaloneDictsWith : Option Scheme -> String -> String -> Mono -> ShadowDicts
 shadowStandaloneDictsWith mscheme name sym xt =
   let _ = recordStandaloneSigObligations name sym xt
   shadowStandaloneDictSlotsAt mscheme (if sym == "" then name else sym) xt
@@ -13202,9 +13238,12 @@ shadowStandaloneDictsWith mscheme name sym xt =
 -- the DISPATCH arm too and spuriously reject `size (Box 3)` with `Num Box`.  When the
 -- receiver does turn out to have an impl, stampRLocalOrFallback simply discards these
 -- slots and the route dispatches as before.
-shadowStandaloneDictSlotsAt : Option Scheme -> String -> Mono -> (List Mono, List String)
+shadowStandaloneDictSlotsAt : Option Scheme -> String -> Mono -> ShadowDicts
 shadowStandaloneDictSlotsAt mscheme key xt =
-  let slots = declaredConstraintSlots key
+  -- FIX-shadow-arity-skew: ONE resolution, two projections — the slots AND the argument
+  -- vectors must come from the same entry decision, exactly as `inferDictAtFound` does.
+  let dc = declaredConstraintFor key
+  let slots = dc.cdSlots
   -- REJECT direction — from the SIGNATURE, NOT from schemeObligationsRef.
   -- ⚠️ For a SIGNATURED binding the two obligation tables live in DIFFERENT ID SPACES:
   -- funConstraintsRef's ids (and the env scheme's quantified ids) come from
@@ -13219,15 +13258,15 @@ shadowStandaloneDictSlotsAt mscheme key xt =
   -- ⚠️ Gated on the UNTRUNCATED id list, not on `slots`: this guard also decides whether
   -- the `unify` below runs, so a truncation here would remove a unification side effect.
   -- See `declaredConstraintIds`.
-  if isEmptyL (declaredConstraintIds key) then ([], [])
+  if isEmptyL (declaredConstraintIds key) then emptyShadowDicts
   else match mscheme
-    None => ([], [])
+    None => emptyShadowDicts
     Some s =>
       let inst = instantiateTracked s
       let r = freshVar ()
       let eff = openRow ()
       let _ = unify (fst inst) (TFun xt eff r)
-      shadowStandaloneDictSlots slots (snd inst)
+      shadowStandaloneDictSlots slots dc.cdArgs (snd inst)
 
 -- the standalone's dict ROUTE slots for this call: its declared constraint ids mapped
 -- through the call's instantiation subst.  Expanded with transitive supers EXACTLY as
@@ -13236,14 +13275,34 @@ shadowStandaloneDictSlotsAt mscheme key xt =
 -- merely moved the arity disagreement.  Empty on the plain `check` path
 -- (funConstraintsRef is empty there) — check stamps no routes, so that is correct;
 -- recordStandaloneSigObligations is what gives `check` its reject direction.
-shadowStandaloneDictSlots : List CSlot -> List (Int, Mono) -> (List Mono, List String)
-shadowStandaloneDictSlots slots subst =
-  if isEmptyL slots then ([], [])
+--
+-- 🚨 FIX-shadow-arity-skew: "EXACTLY as inferDictAtFound does" is a claim about the
+-- (slot, VECTOR) pairs fed to the fixpoint, NOT about the slot list alone, and this is
+-- where that distinction was paid for.  This expanded via `expandSupersPairs`, which
+-- pairs every slot with a constant `[]`; once S-slot-key-vector (#1866) re-keyed
+-- `dedupSlotVecs` on the WHOLE PREDICATE, `(Ix a Char, Ix a Bool) => …` opened TWO slots
+-- on the definition side (`expandSupersEntry`, which `dictArityOf` sizes from) and this
+-- call side still collapsed them to ONE — 1 dict passed to a 2-dict definition.  Measured
+-- on the packet's reproducer at `e19298f5`: `check` exit 0, `run` E-PANIC
+-- "intToString: not an Int", `build` exit 0 printing a DIFFERENT heap pointer every
+-- execution, wasm "illegal cast".  Take the vectors from the same `declaredConstraintFor`
+-- entry the slots came from, or re-open it.
+shadowStandaloneDictSlots : List CSlot -> List (List Mono) -> List (Int, Mono) -> ShadowDicts
+shadowStandaloneDictSlots slots args subst =
+  if isEmptyL slots then emptyShadowDicts
   else
-    let expanded = expandSupersPairs driverState.value.superDeclsRef.value slots
+    let expandedV = expandSupersVecs driverState.value.superDeclsRef.value (zipSlotVecs slots args)
+    let expanded = map fst expandedV
     -- the ROUTE half stays a SPELLING, exactly as `inferDictAtFound`'s `pushDictApp`
     -- does — route words, not identities (see `dispHeadTab`).
-    (constraintMonosOf (map (sl => sl.csId) expanded) subst, map (sl => sl.csIface.irName) expanded)
+    -- [sdArgVecs] is `callArgVecsV` over the SAME expansion against the SAME subst, so it
+    -- is slot-parallel to [sdMonos] by construction (that function's own header states
+    -- the invariant and the shared drop rule that preserves it).
+    ShadowDicts {
+      sdMonos = constraintMonosOf (map (sl => sl.csId) expanded) subst,
+      sdIfaces = map (sl => sl.csIface.irName) expanded,
+      sdArgVecs = callArgVecsV expandedV subst,
+    }
 
 -- ── S-1, REJECT direction on the plain `check` path ───────────────────────────
 -- Record the standalone's declared `=>` constraints as CALL obligations, resolved from
@@ -16433,11 +16492,11 @@ resolveRLocalSites _ _ [] = goalSiteLoc := None
 resolveRLocalSites prog implTable ((PendingEntry name tagRef am _ kind loc)::rest) =
   goalSiteLoc := loc
   let _ = match kind
-    SKRLocal sym forceLocal monos ifaces =>
+    SKRLocal sym forceLocal monos ifaces argVecs =>
       if forceLocal then
-        tagRef := RLocal sym (routesOfMonosTop prog implTable monos ifaces)
+        tagRef := RLocal sym (routesOfMonosTopV prog implTable monos ifaces argVecs)
       else
-        resolveRLocalSite prog implTable name tagRef am sym monos ifaces
+        resolveRLocalSite prog implTable name tagRef am sym monos ifaces argVecs
     _ => ()
   resolveRLocalSites prog implTable rest
 
@@ -16448,8 +16507,8 @@ resolveRLocalSites prog implTable ((PendingEntry name tagRef am _ kind loc)::res
 -- stamped the correct RKey<receiverHead> via resolveArgStamps.
 -- An ungrounded receiver (still a tyvar) → leave it.  Mirrors lib/typecheck.ml's
 -- RLocal-vs-ordinary-dispatch split (the oracle keys the genuine case off the receiver).
-resolveRLocalSite : List Decl -> ImplBuckets -> String -> Ref Route -> Mono -> String -> List Mono -> List String -> Unit
-resolveRLocalSite prog implTable name tagRef am sym monos ifaces = match headTyconMono am
+resolveRLocalSite : List Decl -> ImplBuckets -> String -> Ref Route -> Mono -> String -> List Mono -> List String -> List (List Mono) -> Unit
+resolveRLocalSite prog implTable name tagRef am sym monos ifaces argVecs = match headTyconMono am
   -- S2 (THE INVERSION): route by SHADOW KIND first, receiver second.
   --   * DEFINER shadow (the name is this module's own top-level fn) → the standalone,
   --     UNCONDITIONALLY.  The impl universe is not consulted; a grounded head with a live
@@ -16478,11 +16537,11 @@ resolveRLocalSite prog implTable name tagRef am sym monos ifaces = match headTyc
   Some tag => stampRLocalOrFallback
     (not (isDefinerShadow name) && ieImplExistsForHead perRun.value.bodyImplEnvRef.value name tag)
     tagRef sym
-    (routesOfMonosTop prog implTable monos ifaces)
+    (routesOfMonosTopV prog implTable monos ifaces argVecs)
   -- An UNGROUNDED definer-shadow receiver keeps the old default (RLocal → standalone);
   -- other (importer) ungrounded sites stay untouched (deferred/polymorphic).
   None => if contains name perRun.value.definerShadowNamesRef.value then
-    tagRef := (RLocal sym (routesOfMonosTop prog implTable monos ifaces))
+    tagRef := (RLocal sym (routesOfMonosTopV prog implTable monos ifaces argVecs))
   else ()
 
 -- C5: hasImpl ⇒ genuine method; route already correct (RNone for arg-tag eval,
@@ -24124,8 +24183,8 @@ insertUnivImpl univ (iface, tys, reqs) =
 -- assumed from the fallback's OWN call site (`pushDictApp`'s routing arg). TRACED,
 -- not instrumented: `ifaceForInferredId`'s result is written by `registerInferredFor`
 -- directly into `funConstraintIfacesRef` (`map (ifaceForInferredId m) ids`); that
--- table is read by `declaredConstraintSlots`'s `None` arm (when `qualConstraintFor`
--- misses); `declaredConstraintSlots` feeds `inferDictAtFound`, which calls
+-- table is read by `declaredConstraintFor`'s `None` arm (when `qualConstraintFor`
+-- misses); `declaredConstraintFor` feeds `inferDictAtFound`, which calls
 -- `recordCallObligations`, which calls `recordObl (Predicate { iface = s.csIface, … })
 -- 0 PCallSlot …` — an `ImplUniverse` goal, unconditionally, for any slot whose
 -- `csIface.irName /= ""`. So the SAME value this fallback mints reaches BOTH a
