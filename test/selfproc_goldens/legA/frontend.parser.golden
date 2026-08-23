@@ -204,6 +204,7 @@ implHeadTokGo : Array Token -> Int -> Int -> Option Int
 implHeadTokIdx : Array Token -> Int -> Option Int
 implHeadTokStep : Array Token -> Int -> Int -> Token -> Option Int
 implMethod : Parser ImplMethod
+implMethodRest : String -> List Pat -> Token -> Parser ImplMethod
 implMethods : Parser (List ImplMethod)
 implMethodsCons : Parser (List ImplMethod)
 implMethodsLoop : Parser (List ImplMethod)
