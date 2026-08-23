@@ -28,6 +28,10 @@ import lib.field.{
   feInverse,
   feEqual,
   feIsZero,
+  feZeroBit,
+  feEqualBit,
+  feSelect,
+  feNegateCt,
   feIsOdd,
   feFromBytes,
   feFromBytesReduce,
@@ -132,6 +136,14 @@ test "a + b = b + a" =
   expectTrue (allPairs (a b => feEqual (feAdd a b) (feAdd b a)))
 
 test "-0 = 0" = expectTrue (feIsZero (feNegate feZero))
+
+test "fixed-control zero/equality bits agree with the public predicates" = expectTrue (all (a => feZeroBit a == (if feIsZero a then 1 else 0) && feEqualBit a a == 1 && feEqualBit a (feAdd a feOne) == 0) samples)
+
+test "fixed-control select visits both choices without changing their values" = expectTrue (allPairs (a b => feEqual (feSelect 0 a b) a && feEqual (feSelect 1 a b) b))
+
+test "fixed-control negation agrees with field negation, including zero" =
+  expectTrue
+    (feEqual (feNegateCt feZero) feZero && all (a => feEqual (feNegateCt a) (feNegate a)) samples)
 
 -- ── Multiplicative structure ──────────────────────────────────────────
 

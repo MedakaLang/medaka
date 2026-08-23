@@ -36,6 +36,11 @@ import lib.scalar.{
   scEqual,
   scIsZero,
   scIsHigh,
+  scZeroBit,
+  scEqualBit,
+  scSelect,
+  scNegateCt,
+  scHighBit,
   scFromBytes,
   scFromBytesReduce,
   scToBytes,
@@ -198,6 +203,14 @@ test "a + b = b + a" =
 
 test "-0 = 0" = expectTrue (scIsZero (scNegate scZero))
 
+test "fixed-control zero/equality bits agree with the public predicates" = expectTrue (all (a => scZeroBit a == (if scIsZero a then 1 else 0) && scEqualBit a a == 1 && scEqualBit a (scAdd a scOne) == 0) samples)
+
+test "fixed-control select visits both choices without changing their values" = expectTrue (allPairs (a b => scEqual (scSelect 0 a b) a && scEqual (scSelect 1 a b) b))
+
+test "fixed-control negation agrees with scalar negation, including zero" =
+  expectTrue
+    (scEqual (scNegateCt scZero) scZero && all (a => scEqual (scNegateCt a) (scNegate a)) samples)
+
 -- ── Multiplicative structure ──────────────────────────────────────────
 
 test "a * 1 = a" = expectTrue (all (a => scEqual (scMul a scOne) a) samples)
@@ -318,6 +331,10 @@ test "isHigh (n_h + 1) is True" = expectTrue (scIsHigh nHalfPlus1)
 test "isHigh 0 is False" = expectFalse (scIsHigh scZero)
 
 test "isHigh (n-1) is True" = expectTrue (scIsHigh nMinus1)
+
+test "fixed-control high bit agrees at every low-S boundary" =
+  expectTrue
+    (scHighBit nHalf == 0 && scHighBit nHalfPlus1 == 1 && scHighBit scZero == 0 && scHighBit nMinus1 == 1)
 
 -- 2 * n_h = n - 1, so n_h really is floor(n/2): a check on the DERIVATION
 -- above, independent of scIsHigh.

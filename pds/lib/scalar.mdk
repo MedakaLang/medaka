@@ -127,10 +127,11 @@
 
    This does NOT certify every exported helper or a future signing module.
    Equality/zero tests, `scIsHigh`, and the general negation path still
-   contain value-dependent control. P15 requires the signing slice to census
-   and repair or justify every secret-bearing call before native signing
-   ships. Eval/Wasm retain value parity; Wasm's ordinary boxed `Int` carrier
-   is outside this native constant-time claim. -}
+   contain value-dependent control. Their `*Bit`/`*Ct` siblings below are the
+   fixed-control building blocks for the signing path; P15 still requires
+   that path to close every transitive native callee before it ships.
+   Eval/Wasm retain value parity; Wasm's ordinary boxed `Int` carrier is
+   outside this native constant-time claim. -}
 
 -- Writes here are still on `Array.set` rather than the `arr[i] := v` sugar the
 -- rest of the tree uses (#1786) -- but the reason is now HISTORICAL, and this
@@ -162,6 +163,15 @@ nLimbs : Array Int
 nLimbs = [|
   0x4141, 0xd036, 0x5e8c, 0xbfd2, 0xa03b, 0xaf48, 0xdce6, 0xbaae, 0xfffe,
   0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
+|]
+
+-- floor(n/2) + 1 = (n + 1) / 2, least-significant limb first. `scHighBit`
+-- subtracts this threshold with a fixed borrow chain; a non-borrow is exactly
+-- the strict low-S predicate `s > floor(n/2)`.
+nHalfPlusOneLimbs : Array Int
+nHalfPlusOneLimbs = [|
+  0x20a1, 0x681b, 0x2f46, 0xdfe9, 0x501d, 0x57a4, 0x6e73, 0x5d57, 0xffff,
+  0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0x7fff,
 |]
 
 -- c = 2^256 - n = 0x14551231950b75fc4402da1732fc9bebf, NINE limbs (129 bits).
@@ -460,6 +470,48 @@ isZeroGo a i =
   else
     isZeroGo a (i + 1)
 
+-- | Fixed-control zero predicate for secret-bearing arithmetic. Returns the
+--   arithmetic bit 1 exactly for zero and 0 otherwise.
+export
+scZeroBit : Sc -> Int
+scZeroBit a = scZeroBorrow (rawSc a) 0 1
+
+scZeroBorrow : Array Int -> Int -> Int -> Int
+scZeroBorrow a i borrow =
+  if i >= 16 then borrow
+  else
+    let t = a[i] + limbMask + 1 - borrow
+    scZeroBorrow a (i + 1) (1 - shiftRight t 16)
+
+-- | Fixed-control equality predicate for secret-bearing arithmetic. Returns
+--   1 exactly when the canonical limb arrays agree and 0 otherwise.
+export
+scEqualBit : Sc -> Sc -> Int
+scEqualBit a b = scEqualBorrow (rawSc a) (rawSc b) 0 1
+
+scEqualBorrow : Array Int -> Array Int -> Int -> Int -> Int
+scEqualBorrow a b i borrow =
+  if i >= 16 then borrow
+  else
+    let t = bitXor a[i] b[i] + limbMask + 1 - borrow
+    scEqualBorrow a b (i + 1) (1 - shiftRight t 16)
+
+-- | Fixed-control selection. `bit` must be 0 or 1; 0 selects `a` and 1
+--   selects `b`. Every limb is visited and the inputs remain unmodified.
+export
+scSelect : Int -> Sc -> Sc -> Sc
+scSelect bit a b =
+  let out = arrayMake 16 0
+  let () = scSelectGo bit (rawSc a) (rawSc b) out 0
+  Sc out
+
+scSelectGo : Int -> Array Int -> Array Int -> Array Int -> Int -> Unit
+scSelectGo bit a b out i =
+  if i >= 16 then ()
+  else
+    let () = A.set i (a[i] + bit * (b[i] - a[i])) out
+    scSelectGo bit a b out (i + 1)
+
 -- | The LOW-S PREDICATE: is `s` strictly greater than `floor(n/2)`?
 --
 --   ECDSA signatures are malleable — `(r, s)` and `(r, n - s)` are both
@@ -490,6 +542,21 @@ scIsHigh s =
   let d = arrayMake 17 0
   let () = dblGo (rawSc s) d 0 0
   if d[16] /= 0 then True else gteNGo d 15
+
+-- | Fixed-control LOW-S predicate for secret-bearing arithmetic. Returns 1
+--   exactly when `s > floor(n/2)`. The threshold subtraction visits all
+--   sixteen limbs and returns `1 - borrow`; it never calls `scIsHigh` or
+--   converts a secret-derived value to Bool.
+export
+scHighBit : Sc -> Int
+scHighBit s = 1 - scHighBorrow (rawSc s) 0 0
+
+scHighBorrow : Array Int -> Int -> Int -> Int
+scHighBorrow s i borrow =
+  if i >= 16 then borrow
+  else
+    let t = s[i] + limbMask + 1 - nHalfPlusOneLimbs[i] - borrow
+    scHighBorrow s (i + 1) (1 - shiftRight t 16)
 
 dblGo : Array Int -> Array Int -> Int -> Int -> Unit
 dblGo s d i carry =
@@ -538,6 +605,25 @@ negateGo a w i borrow =
     else
       let () = A.set i d w
       negateGo a w (i + 1) 0
+
+-- | Fixed-control additive inverse for secret-bearing arithmetic. The full
+--   modulus subtraction always runs; arithmetic selection maps the `a = 0`
+--   candidate `n` to canonical zero without calling branch-bearing
+--   `scNegate` or converting the zero bit to Bool.
+export
+scNegateCt : Sc -> Sc
+scNegateCt a =
+  let out = arrayMake 16 0
+  let () = scNegateCtGo (rawSc a) out 0 0
+  scSelect (scZeroBit a) (Sc out) scZero
+
+scNegateCtGo : Array Int -> Array Int -> Int -> Int -> Unit
+scNegateCtGo a out i borrow =
+  if i >= 16 then ()
+  else
+    let t = nLimbs[i] + limbMask + 1 - a[i] - borrow
+    let () = A.set i (bitAnd t limbMask) out
+    scNegateCtGo a out (i + 1) (1 - shiftRight t 16)
 
 -- | Subtraction mod `n`. NEGATE-THEN-ADD, exactly as the reference does it —
 --   `libsecp256k1` has no `secp256k1_scalar_sub` either.

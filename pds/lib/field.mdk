@@ -92,8 +92,9 @@
 
    This does NOT certify every exported helper or a future signing module.
    `feEqual`, `feIsZero`, and the general negation path still contain
-   value-dependent control. P15 requires the signing slice to census and
-   repair or justify every secret-bearing call before native signing ships.
+   value-dependent control. Their `*Bit`/`*Ct` siblings below are the
+   fixed-control building blocks for the signing path; P15 still requires
+   that path to close every transitive native callee before it ships.
    Eval/Wasm retain value parity; Wasm's ordinary boxed `Int` carrier is
    outside this native constant-time claim. -}
 
@@ -398,6 +399,54 @@ isZeroGo a i =
   else
     isZeroGo a (i + 1)
 
+-- | Fixed-control zero predicate for secret-bearing arithmetic. Returns the
+--   arithmetic bit 1 exactly for zero and 0 otherwise. The borrow chain
+--   subtracts one from the complete ten-limb value without an early exit or
+--   Bool conversion; its loop depends only on the public limb index.
+export
+feZeroBit : Fe -> Int
+feZeroBit a = feZeroBorrow (rawFe a) 0 1
+
+feZeroBorrow : Array Int -> Int -> Int -> Int
+feZeroBorrow a i borrow =
+  if i >= 9 then
+    let t = a[9] + topMask + 1 - borrow
+    1 - shiftRight t 22
+  else
+    let t = a[i] + limbMask + 1 - borrow
+    feZeroBorrow a (i + 1) (1 - shiftRight t 26)
+
+-- | Fixed-control equality predicate for secret-bearing arithmetic. Returns
+--   1 exactly when the canonical limb arrays agree and 0 otherwise.
+export
+feEqualBit : Fe -> Fe -> Int
+feEqualBit a b = feEqualBorrow (rawFe a) (rawFe b) 0 1
+
+feEqualBorrow : Array Int -> Array Int -> Int -> Int -> Int
+feEqualBorrow a b i borrow =
+  if i >= 9 then
+    let t = bitXor a[9] b[9] + topMask + 1 - borrow
+    1 - shiftRight t 22
+  else
+    let t = bitXor a[i] b[i] + limbMask + 1 - borrow
+    feEqualBorrow a b (i + 1) (1 - shiftRight t 26)
+
+-- | Fixed-control selection. `bit` must be 0 or 1; 0 selects `a` and 1
+--   selects `b`. Every limb is visited and the inputs remain unmodified.
+export
+feSelect : Int -> Fe -> Fe -> Fe
+feSelect bit a b =
+  let out = arrayMake 10 0
+  let () = feSelectGo bit (rawFe a) (rawFe b) out 0
+  Fe out
+
+feSelectGo : Int -> Array Int -> Array Int -> Array Int -> Int -> Unit
+feSelectGo bit a b out i =
+  if i >= 10 then ()
+  else
+    let () = set i (a[i] + bit * (b[i] - a[i])) out
+    feSelectGo bit a b out (i + 1)
+
 -- | Is the canonical representative odd? (The low bit of limb 0.)
 export
 feIsOdd : Fe -> Bool
@@ -441,6 +490,27 @@ negateGo a e i borrow =
     else
       let () = set i d e
       negateGo a e (i + 1) 0
+
+-- | Fixed-control additive inverse for secret-bearing arithmetic. The full
+--   modulus subtraction always runs; arithmetic selection maps the `a = 0`
+--   candidate `p` to canonical zero without calling branch-bearing
+--   `feNegate` or converting the zero bit to Bool.
+export
+feNegateCt : Fe -> Fe
+feNegateCt a =
+  let out = arrayMake 10 0
+  let () = feNegateCtGo (rawFe a) out 0 0
+  feSelect (feZeroBit a) (Fe out) feZero
+
+feNegateCtGo : Array Int -> Array Int -> Int -> Int -> Unit
+feNegateCtGo a out i borrow =
+  if i >= 9 then
+    let t = pLimbs[9] + topMask + 1 - a[9] - borrow
+    set 9 (bitAnd t topMask) out
+  else
+    let t = pLimbs[i] + limbMask + 1 - a[i] - borrow
+    let () = set i (bitAnd t limbMask) out
+    feNegateCtGo a out (i + 1) (1 - shiftRight t 26)
 
 -- | Subtraction mod p. NEGATE-THEN-ADD, exactly as the reference does it —
 --   `libsecp256k1` has no `secp256k1_fe_sub` either.
