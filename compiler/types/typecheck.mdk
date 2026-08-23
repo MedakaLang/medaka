@@ -9153,7 +9153,9 @@ dispatchIdxScoped name byId = match admittedIfaceFor name
 --
 -- ⚠️ `sameTyConHead`, not a bare `irName` compare — the same rule `lookupSchemeById`
 -- states: this is a LOOKUP, where a false HIT is a wrong dispatch index (silent
--- wrongness) and a false MISS only costs the fall-back to today's answer.
+-- wrongness) and a false MISS routes the call site to RLocal instead of falling back
+-- to a bare-name answer — see `:9088-9101` for why that is a routing change, not a
+-- free miss.
 lookupIdxById : IfaceRef -> String -> List ((IfaceRef, String), Int) -> Option Int
 lookupIdxById _ _ [] = None
 lookupIdxById iface n (((ir, mn), i)::rest)
@@ -21078,8 +21080,7 @@ implDictRoutesForFull : ImplBuckets -> String -> String -> String -> Mono -> Lis
 -- prefix `stampKeyTable` onto the graph-global `IE`.  🚨 THIS IS THE LEG WHOSE
 -- ABSENCE MAKES THE OTHER TWO AN S0: with legs 1/2 moved and this one left behind,
 -- #1564's impl gained a dict param it was never passed — `check` exit 0, built
--- binary 139 (RUN-B-023).  ⚠️ [keyTable] is a DEAD PARAMETER AWAITING THE SWEEP, not
--- a live re-bucketing.  This comment used to justify it as *"still threaded for the
+-- binary 139 (RUN-B-023).  This comment used to justify the parameter as *"still threaded for the
 -- nested `requires` recursion, which re-buckets by each requires' own head"* — MEASURED
 -- FALSE, and the recursion's own end point already says so: it terminates at
 -- `selectReqImpl`, whose signature takes no `KeyBuckets` at all, and whose header
