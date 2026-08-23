@@ -17,7 +17,7 @@
 --   "error: <message>"   or   "warning: <message>"
 -- one per line, sorted by the harness.
 
-import frontend.ast.{Decl, Loc(..)}
+import frontend.ast.{Decl(..), Expr(..), Loc(..), Pat}
 import frontend.parser.{
   parse,
   parseLocated,
@@ -51,6 +51,9 @@ import types.typecheck.{
   setCoherenceUserDecls,
   TcDiag(..),
   tcMsg,
+  elaborateModules,
+  mainTypeIsUnit,
+  mainTypeIsAsync,
 }
 import driver.loader.{
   LoadMsg,
@@ -934,6 +937,13 @@ rawDeclsOfMod (_, _, prog) = prog
 midToDesugaredPair : (String, String, List Decl) -> (String, List Decl)
 midToDesugaredPair (mid, _, prog) = (mid, desugar prog)
 
+-- (mid, rawDecls) → (mid, desugared decls) — the 2-tuple sibling of
+-- `midToDesugaredPair`, for module lists that have already dropped the file
+-- path (`loadProgramE`'s result, e.g.), needed by `mainShapeWarnings`'s
+-- `elaborateModules` call in `checkJsonFile`'s multi-module arm.
+desugarModPair : (String, List Decl) -> (String, List Decl)
+desugarModPair (mid, prog) = (mid, desugar prog)
+
 -- Whenever `import` is present the multi-module path runs BOTH resolve and
 -- typecheck over the same file, and an unbound name is a resolve-phase fact —
 -- resolve already reported it (with the did-you-mean / import hint) before
@@ -1145,6 +1155,120 @@ relDiagPath root path =
 relDiagTriple : String -> (String, String, List Diag) -> (String, String, List Diag)
 relDiagTriple root (path, src, diags) = (relDiagPath root path, src, diags)
 
+-- Fold [warns] into the ONE (path, src, diags) triple whose path matches
+-- [path] (the entry always has a bucket, even a clean one — `seedAll`), so the
+-- main-shape warning lands INSIDE the entry file's existing `diagnostics`
+-- array instead of manufacturing a second, duplicate `{"file": ...}` entry for
+-- the same path.  A no-match ([] warns, or a path `analyzeProject` never
+-- bucketed) leaves the list untouched.
+mergeMainWarns : String -> List Diag -> List (String, String, List Diag) -> List (String, String, List Diag)
+mergeMainWarns _ [] triples = triples
+mergeMainWarns _ _ [] = []
+mergeMainWarns path warns ((p, s, ds)::rest)
+  | p == path = (p, s, ds ++ warns)::rest
+  | otherwise = (p, s, ds) :: mergeMainWarns path warns rest
+
+-- ── main-shape beginner-footgun warning (0.1.0 audit #3; #1236) ─────────────
+-- `medaka run` evaluates top-level bindings and checks `main` EXISTS but never
+-- APPLIES it: a `main` that isn't a zero-arg Unit-typed value silently no-ops
+-- (exit 0, no output, no diagnostic).  Two distinct beginner shapes surface the
+-- same way:
+--   (1) `main` is a FUNCTION (`main () = …` / `main x = …`) — visible on the
+--       raw (pre-desugar) Decl as a non-empty param list; no type info needed.
+--   (2) `main` is a zero-arg value whose inferred type is neither Unit nor
+--       `Async _` (e.g. `main = 5`) — reuses mainTypeIsUnit/mainTypeIsAsync,
+--       the same hooks `runProgramOutput`/the emitter already use to decide how
+--       to force `main`; only meaningful once elaborateModules has stamped
+--       typecheck.mdk's mainSchemeRef.
+-- Both are ordinary LOCATED `W-MAIN-SHAPE` Diags now — the SAME `Diag` type
+-- every other diagnostic uses, so every caller (human CLI, `check --json`,
+-- `run --json`, `medaka mcp`) renders/serializes them uniformly instead of each
+-- inventing its own presentation.  #1236: this used to be `<unknown location>`
+-- text with no `code`, invisible on `check --json`, and raw (non-JSON) text on
+-- `run --json` — three separate holes in the SAME message, fixed once here by
+-- routing it through the ordinary Diag pipeline instead of a bespoke one.
+--
+-- Originally lived in medaka_cli.mdk (CLI-only); moved here so `checkJsonSingle`/
+-- `checkJsonFile` (below) can fold it into the SAME `{"files":[...]}` envelope
+-- `check --json` already builds, and `medaka_cli.mdk`'s human/run-json callers
+-- import it from here instead of keeping a second copy.
+
+-- Find a top-level `main` DFunDef among a module's raw decls (skipping @attr
+-- wrappers).  Returns its param list + body so callers can inspect arity and
+-- locate the body's first ELoc span.
+export
+findMainFunDef : List Decl -> Option (List Pat, Expr)
+findMainFunDef [] = None
+findMainFunDef ((DAttrib _ d)::rest) = findMainFunDef (d::rest)
+findMainFunDef ((DFunDef _ "main" ps body)::_) = Some (ps, body)
+findMainFunDef (_::rest) = findMainFunDef rest
+
+-- Best-effort location: the first ELoc span walking the outermost expr spine
+-- (mirrors frontend/desugar.mdk's private `exprLoc`, duplicated here so this
+-- stays self-contained).  #1236: `exprLoc`/the old copy of this function only
+-- descended through `EApp`, so a binop/unary/postfix-headed body (`main = 1 +
+-- 2`, `main = -x`, `main = r.field`) fell through to `<unknown location>` even
+-- though the wrapped leaf operand carries a real span two hops down — descend
+-- through the same "binop/app/unary/postfix levels stay unwrapped" shapes the
+-- parser documents (`parseAtom`'s comment, compiler/frontend/parser.mdk).
+export
+mainBodyLoc : Expr -> Option Loc
+mainBodyLoc (ELoc l _) = Some l
+mainBodyLoc (EApp f _) = mainBodyLoc f
+mainBodyLoc (EBinOp _ a _ _) = mainBodyLoc a
+mainBodyLoc (EUnOp _ a _) = mainBodyLoc a
+mainBodyLoc (EFieldAccess a _ _) = mainBodyLoc a
+mainBodyLoc (EIndex a _ _) = mainBodyLoc a
+mainBodyLoc (ESlice a _ _ _ _) = mainBodyLoc a
+mainBodyLoc _ = None
+
+export
+mainArityMsg : String
+mainArityMsg = "'main' must be a value of type Unit. Write 'main = …', not 'main () = …' or 'main x = …' ('medaka run' never applies main; it forces a zero-arg main for its effects)"
+
+export
+mainNonUnitMsg : String
+mainNonUnitMsg = "'main' must be a value of type Unit (e.g. an IO action). 'medaka run' only forces main for its side effects and prints nothing for a plain value; wrap the intended effect, e.g. 'main = println \"hi\"'"
+
+-- The ARITY shape (`main () = …` / `main x = …`) needs no type info, so it's
+-- safe to call before (or without) elaborateModules — and takes precedence
+-- over the non-Unit-value check below (no double warning).
+export
+mainArityWarning : List Decl -> Option Diag
+mainArityWarning decls = match findMainFunDef decls
+  Some (_::_, body) =>
+    Some (mkDiag SevWarning "W-MAIN-SHAPE" mainArityMsg (mainBodyLoc body))
+  _ => None
+
+-- The non-Unit/non-Async VALUE shape (`main = 5`).  Only meaningful once
+-- elaborateModules has run (mainSchemeRef populated) — callers must ensure
+-- that happened first.
+export
+mainNonUnitWarning : List Decl -> Option Diag
+mainNonUnitWarning decls = match findMainFunDef decls
+  Some ([], body) =>
+    if mainTypeIsUnit () || mainTypeIsAsync () then
+      None
+    else
+      Some (mkDiag SevWarning "W-MAIN-SHAPE" mainNonUnitMsg (mainBodyLoc body))
+  _ => None
+
+-- Shared driver: the arity check is free (no typecheck needed); only when it
+-- finds nothing do we pay for an extra elaborateModules call (routes that
+-- don't already run it for their own purposes) so mainSchemeRef is populated
+-- for the non-Unit-value check.  `modsDFull` is the FULL desugared module list
+-- (elaborateModules needs the whole graph, not just the entry) — the caller
+-- already has it computed for its own typecheck pass.
+export
+mainShapeWarnings : List Decl -> List Decl -> List (String, List Decl) -> List Decl -> List Diag
+mainShapeWarnings rtD coreD modsDFull entryDecls = match mainArityWarning entryDecls
+  Some d => [d]
+  None =>
+    let _ = elaborateModules rtD coreD modsDFull
+    match mainNonUnitWarning entryDecls
+      Some d => [d]
+      None => []
+
 -- ── check → structured-diagnostics JSON ─────────────────────────────────────
 --
 -- Shared by `medaka check --json` (runCheckJsonCmd in medaka_cli) and the
@@ -1201,7 +1325,17 @@ checkJsonSingle allowInternal rsrc csrc target src = match parseResult src
   Err e => (cjParseErrJson target src e, True)
   Ok _ =>
     let diags = analyzeLocatedG allowInternal rsrc csrc src
-    (cjAllToJson [(target, src, diags)], anyList diagIsError diags)
+    let hasErr = anyList diagIsError diags
+    -- #1236: fold the main-shape warning (`main () = …` / `main = 1 + 2`) into
+    -- the SAME envelope `check --json` already builds, instead of leaving it
+    -- entirely absent from this channel. Only on a clean program (no type
+    -- error already reported) — mirrors `checkRoute`'s human-CLI gating, and
+    -- avoids a second, possibly-inconsistent typecheck pass over an ill-typed
+    -- program (`elaborateModules` inside `mainShapeWarnings` is not free).
+    let mainWarns = if hasErr then [] else
+      let entryRaw = parseLocated src
+      mainShapeWarnings (desugar (parse rsrc)) (desugar (parse csrc)) [(target, desugar entryRaw)] entryRaw
+    (cjAllToJson [(target, src, diags ++ mainWarns)], hasErr)
 
 -- File check → JSON.  Reads `target`, then routes exactly like runCheckJsonCmd:
 -- parse error → single diag; load error (bad import) → R-MODULE-LOAD diag with the
@@ -1249,9 +1383,23 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
           let cacheRef = Ref []
           let parseCacheRef = Ref []
           let results = analyzeProject cacheRef parseCacheRef (_ => None) target roots rsrc csrc
+          let hasErr = anyList cjHasErrD results
+          -- #1236: same main-shape fold as the single-module arm above, only on
+          -- a clean project.  `analyzeProject` already parsed+cached the entry
+          -- module's LOCATED decls in `parseCacheRef` (keyed by source text, see
+          -- `parseCachedLocated`) — reuse that instead of re-parsing, so the
+          -- `Loc` this warning carries matches the one every other diagnostic on
+          -- this file would.
+          let mainWarns = if hasErr then [] else
+            let entryRaw = match lookupAssoc src !parseCacheRef
+              Some decls => decls
+              None => parseLocated src
+            let modsDFull = map desugarModPair mods
+            mainShapeWarnings (desugar (parse rsrc)) (desugar (parse csrc)) modsDFull entryRaw
           let triples = map readDiagSrc results
           let root = dirOf stdlibDir
+          let relTriples = map (relDiagTriple root) triples
           (
-            cjAllToJson (map (relDiagTriple root) triples),
-            anyList cjHasErrD results,
+            cjAllToJson (mergeMainWarns (relDiagPath root target) mainWarns relTriples),
+            hasErr,
           )

@@ -1,0 +1,8 @@
+-- #1236: `main` declared with an explicit (empty) param list — the FUNCTION
+-- shape of the same W-MAIN-SHAPE warning, gated on arity alone (no typecheck
+-- needed), unrelated top-level code included to prove the warning doesn't
+-- disturb it (T-GLOBAL-TABLE: feature + unrelated code still behaves).
+helper : Int -> Int
+helper x = x + 1
+
+main () = println (helper 41)

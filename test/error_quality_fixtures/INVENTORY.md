@@ -135,7 +135,8 @@ previously is long fixed (the user's own panic message now surfaces as
 | `runtime_nonexhaustive` | match with no arm | `:1:29: runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match` | Located (caret on the scrutinee); no missing-arm value named; JSON no `fix` |
 | `explicit_panic` | `panic "user not found"` | `:2:37: runtime error [E-PANIC]: user not found` | Located (caret on the panic message literal); user's message correctly surfaces; JSON no `fix` |
 | `let_else_fail` | let-else with `panic` else | `:3:42: runtime error [E-PANIC]: empty list` | Located (caret on the panic message literal) via idiomatic let-else; JSON no `fix` |
-| `main_not_value` (added 2026-07-04) | `main () = println "hi"` (should be `main = …`) | `:1:10: 'main' must be a value of type Unit — write 'main = …', not 'main () = …' or 'main x = …' (…)` | **New this session**: `medaka run` (and `check`) now emit a located, actionable warning naming the exact fix, where before it was a silent no-op (exit 0, no output). Not yet a structured `--json` diagnostic (`check --json` shows an empty `diagnostics` array for this file) — text-only |
+| `main_not_value` (added 2026-07-04) | `main () = println "hi"` (should be `main = …`) | `:1:10: 'main' must be a value of type Unit — write 'main = …', not 'main () = …' or 'main x = …' (…)` | `medaka run` (and `check`, `build`) emit a located, actionable warning naming the exact fix, where before it was a silent no-op (exit 0, no output). **Fixed 2026-08-23 (#1236):** now a proper `W-MAIN-SHAPE` `Diag` — carries a real `Loc` (was `<unknown location>`), appears in `check --json`'s `diagnostics` array (was absent), and `run --json` emits the SAME `Diag` JSON envelope (was raw caret-art text on a stream a machine consumer parses as JSON). See `test/check_json_fixtures/main_shape_arity.mdk`/`main_shape_nonunit.mdk` for the `check --json` regression coverage and `eval/main_not_unit_value.mdk` (below) for the zero-arg non-Unit VALUE sibling shape |
+| `main_not_unit_value` (added 2026-08-23, #1236) | `main = 1 + 2` (a zero-arg VALUE main, neither Unit nor Async) | `:1:7: 'main' must be a value of type Unit (e.g. an IO action) …` | Same `W-MAIN-SHAPE` code as `main_not_value` above, different shape: the body is a binop spine (`EBinOp`), not an `EApp` spine — the case that used to lose its `Loc` entirely (`mainBodyLoc` only walked `EApp`) even before the `--json` holes |
 
 ## build/ (`medaka build`)
 
@@ -143,7 +144,7 @@ previously is long fixed (the user's own panic message now surfaces as
 |---|---|---|---|
 | `internal_extern_use` | `arrayGetUnsafe` outside stdlib | `'arrayGetUnsafe' is an internal-only primitive … (pass --allow-internal to override)` | Clear + actionable; **location is `:1:0`** (line 0), not the use site |
 | `type_error_at_build` | `"x" + 1` | `error: emitter failed compiling … / No such file or directory` | ⚠️ **build does not surface the type error** `check` gives ("No impl of Num for String"); confusing emitter/file error instead |
-| `main_takes_unit` | `main () = …` | `error: emitter failed compiling … / No such file or directory` | ⚠️ Confusing "emitter failed / No such file" for a common `main` shape (silent no-op under `run`) |
+| `main_takes_unit` | `main () = …` | `error: emitter failed compiling … / No such file or directory` | ⚠️ Confusing "emitter failed / No such file" for a common `main` shape (silent no-op under `run`). **Since #1236:** the located `warning: … W-MAIN-SHAPE …` now prints BEFORE this — additive, still exits 1 the same way (the emitter's own hard guard is unchanged) — so the confusing message now at least has an actionable warning ahead of it naming the exact fix |
 
 ---
 
