@@ -1,0 +1,27 @@
+{- | Cross-engine value-parity probe for #1724's fixed reduction paths.
+
+   This is not an answer key: the external 944/1028-row corpora own absolute
+   correctness. It prints the same public operations on eval/native/Wasm so a
+   backend-specific value change cannot hide behind the native corpora. -}
+
+import lib.field.{feFromBytesReduce, feMul, feInverse, feToBytes}
+import lib.scalar.{scFromBytesReduce, scMul, scInverse, scToBytes}
+
+renderBytes : Array Int -> Int -> String -> String
+renderBytes bs i acc =
+  if i >= arrayLength bs then
+    acc
+  else
+    renderBytes bs (i + 1) "\{acc}\{intToString bs[i]},"
+
+emit : String -> Array Int -> <IO> Unit
+emit label bs = println "\{label}:\{renderBytes bs 0 ""}"
+
+main =
+  let maxBytes = arrayMake 32 255
+  let fieldMax = feFromBytesReduce maxBytes
+  let scalarMax = scFromBytesReduce maxBytes
+  let () = emit "field-mul" (feToBytes (feMul fieldMax fieldMax))
+  let () = emit "field-inv" (feToBytes (feInverse fieldMax))
+  let () = emit "scalar-mul" (scToBytes (scMul scalarMax scalarMax))
+  emit "scalar-inv" (scToBytes (scInverse scalarMax))

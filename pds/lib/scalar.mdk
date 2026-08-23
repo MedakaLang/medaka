@@ -33,20 +33,19 @@
    `reduceWide` (the one reduction path every public operation ends in):
 
      1. carry-propagate the whole 32-limb workspace so every limb < 2^16;
-     2. WHILE the high half (limbs 16..31) is non-zero: replace
-        `H * 2^256 + L` by `H * c + L` (using `2^256 = c (mod n)`), zeroing
-        the high half, then carry-propagate again;
-     3. ONE conditional subtraction of `n`.
+     2. run exactly FOUR folds replacing `H * 2^256 + L` by `H * c + L`
+        (using `2^256 = c (mod n)`), with a carry pass after each fold;
+     3. unconditionally subtract `n` and arithmetically select the difference
+        or original value from the final borrow.
 
    **Why it terminates, and why it terminates CANONICAL.** Each fold replaces
    `V = H*2^256 + L` (with `H >= 1`) by `V - H*n`, which is congruent mod `n`
    and STRICTLY smaller; the values are non-negative integers, so the loop
    must stop. Concretely it converges fast — from below 2^512 the bounds run
-   2^512 -> 2^385 -> 2^258.4 -> just over 2^256 -> below 2^256 — but the loop
-   is written as "until the high half is zero", so correctness does not
-   depend on that count. When it stops, `V < 2^256`; since `n > 2^255`,
-   `2^256 < 2n`, so ONE conditional subtraction is enough to land in
-   `[0, n)`. Step 3 is that subtraction.
+   2^512 -> 2^385 -> 2^258.4 -> just over 2^256 -> below 2^256. The fixed
+   fourth fold handles the last case without inspecting the high half. Then
+   `V < 2^256`; since `n > 2^255`, `2^256 < 2n`, so one unconditional
+   subtract-and-select lands in `[0, n)`.
 
    The rejected alternative was shift-and-subtract on the 512-bit product:
    simplest to argue, but ~256 compare-and-subtract passes per multiply,
@@ -120,24 +119,18 @@
    signature), so no such measurement could license it and the question does
    not arise.
 
-   ── Not constant-time ────────────────────────────────────────────────
-   These operations are NOT constant-time. The reduction path has
-   data-dependent iteration count and a data-dependent conditional
-   subtraction. Do NOT use these modules with secret material — private
-   keys, ECDSA nonces — until #1724 is resolved.
+   ── Constant-time boundary ───────────────────────────────────────────
+   The native reduction path implements #1724's fixed-control contract:
+   exactly four fold/carry rounds and an unconditional arithmetic
+   subtract-and-select. `scInverse`'s exponent ladder is also fixed-shape;
+   its exponent is a public compile-time constant.
 
-   Every public operation here ends in the reduction path, so every one
-   of them inherits this leak. `scInverse`'s square-and-multiply ladder
-   is clean by itself — its exponent is a public compile-time constant
-   with a fixed iteration count — but its leak is entirely inherited
-   from the reduction underneath, and `scInverse` amplifies it: it runs
-   its Fermat chain through `scMul` ~451 times, so a single inversion
-   produces on the order of 450 correlated timing samples of the leaky
-   reduction.
-
-   Constant-time-with-respect-to-secret-inputs is a settled requirement
-   for the signing path, not an open question — it is simply not
-   implemented here, and #1724 tracks it. -}
+   This does NOT certify every exported helper or a future signing module.
+   Equality/zero tests, `scIsHigh`, and the general negation path still
+   contain value-dependent control. P15 requires the signing slice to census
+   and repair or justify every secret-bearing call before native signing
+   ships. Eval/Wasm retain value parity; Wasm's ordinary boxed `Int` carrier
+   is outside this native constant-time claim. -}
 
 -- Writes here are still on `Array.set` rather than the `arr[i] := v` sugar the
 -- rest of the tree uses (#1786) -- but the reason is now HISTORICAL, and this
@@ -228,23 +221,10 @@ carryGo w i carry =
     let () = A.set i (bitAnd v limbMask) w
     carryGo w (i + 1) (shiftRight v 16)
 
--- Are limbs 16..31 all zero, i.e. is the workspace's value already < 2^256?
-highIsZero : Array Int -> Bool
-highIsZero w = highZeroGo w 16
-
-highZeroGo : Array Int -> Int -> Bool
-highZeroGo w i =
-  if i >= nWide then
-    True
-  else if w[i] /= 0 then
-    False
-  else
-    highZeroGo w (i + 1)
-
 -- One fold pass: `H * 2^256 + L` becomes `H * c + L`, IN PLACE, with the high
 -- half zeroed. Congruent mod `n` (because `2^256 = c (mod n)`) and STRICTLY
 -- smaller whenever `H > 0` (because `c < 2^256`) — that pair is the whole
--- termination argument for `reduceLoop`.
+-- reduction argument for the fixed four-fold schedule.
 --
 -- The highest limb touched is `15 + 8 = 23`, inside the workspace. The
 -- accumulated column is < 2^35.171 (module header), well under the 2^62
@@ -278,15 +258,20 @@ foldAccumRow w h i j =
     let () = A.set k (w[k] + h[i] * cLimbs[j]) w
     foldAccumRow w h i (j + 1)
 
--- Fold until the high half is empty. Terminates: each iteration subtracts a
--- positive multiple of `n` from a non-negative integer (see `foldOnce`).
-reduceLoop : Array Int -> Unit
-reduceLoop w =
+-- Exactly four unconditional folds after the initial carry. The proof in
+-- docs/design/ATPROTO-PDS-CONSTANT-TIME.md §4 covers every admitted workspace
+-- below 2^512; the fourth fold executes even when the high half is already 0.
+reduceFixed : Array Int -> Unit
+reduceFixed w =
   let () = carryAll w
-  if highIsZero w then ()
-  else
-    let () = foldOnce w
-    reduceLoop w
+  let () = foldOnce w
+  let () = carryAll w
+  let () = foldOnce w
+  let () = carryAll w
+  let () = foldOnce w
+  let () = carryAll w
+  let () = foldOnce w
+  carryAll w
 
 -- Is the workspace's low half >= n? Compared most-significant limb first.
 -- Precondition: limbs 16..31 are zero and limbs 0..15 are each < 2^16.
@@ -303,22 +288,30 @@ gteNGo w i =
     let b = nLimbs[i]
     if a > b then True else if a < b then False else gteNGo w (i - 1)
 
--- w := w - n over limbs 0..15, IN PLACE. Precondition: w >= n (so the top
--- limb never borrows).
-subNInPlace : Array Int -> Unit
-subNInPlace w = subNGo w 0 0
+-- Compute w - n into `diff` with a fixed-width, branchless borrow chain.
+subNCandidate : Array Int -> Array Int -> Int -> Int -> Int
+subNCandidate w diff i borrow =
+  if i >= 16 then borrow
+  else
+    let t = w[i] + limbMask + 1 - nLimbs[i] - borrow
+    let () = A.set i (bitAnd t limbMask) diff
+    subNCandidate w diff (i + 1) (1 - shiftRight t 16)
 
-subNGo : Array Int -> Int -> Int -> Unit
-subNGo w i borrow =
+-- Blend the unconditional subtraction candidate into w. The loop condition is
+-- the public limb index; `keepDiff` is used only arithmetically.
+selectNCandidate : Array Int -> Array Int -> Int -> Int -> Unit
+selectNCandidate w diff keepDiff i =
   if i >= 16 then ()
   else
-    let d = w[i] - nLimbs[i] - borrow
-    if d < 0 then
-      let () = A.set i (d + limbMask + 1) w
-      subNGo w (i + 1) 1
-    else
-      let () = A.set i d w
-      subNGo w (i + 1) 0
+    let original = w[i]
+    let () = A.set i (original + keepDiff * (diff[i] - original)) w
+    selectNCandidate w diff keepDiff (i + 1)
+
+subNSelect : Array Int -> Unit
+subNSelect w =
+  let diff = arrayMake 16 0
+  let borrow = subNCandidate w diff 0 0
+  selectNCandidate w diff (1 - borrow) 0
 
 -- Reduce a 32-limb workspace to the canonical scalar of its value mod `n`,
 -- returning a FRESH 16-limb array. The workspace is consumed (mutated), so
@@ -327,12 +320,12 @@ subNGo w i borrow =
 -- Precondition: every limb non-negative, and the value below 2^512 (see
 -- `carryAll`, which panics otherwise).
 --
--- After `reduceLoop` the value is < 2^256, and `n > 2^255` gives
--- `2^256 < 2n`, so ONE conditional subtraction lands in `[0, n)`.
+-- After `reduceFixed` the value is < 2^256, and `n > 2^255` gives
+-- `2^256 < 2n`, so one subtract-and-select lands in `[0, n)`.
 reduceWide : Array Int -> Sc
 reduceWide w =
-  let () = reduceLoop w
-  let () = if gteNLimbs w then subNInPlace w else ()
+  let () = reduceFixed w
+  let () = subNSelect w
   let out = arrayMake 16 0
   let () = copyLow w out 0
   Sc out
@@ -526,7 +519,7 @@ addGo a b w i =
 
 -- | Additive inverse mod `n`, computed as `n - a` with borrow. `a` is
 --   canonical so `0 <= a < n`, hence `0 < n - a <= n`; `reduceWide`'s
---   conditional subtraction maps the `a = 0` case (`n - 0 = n`) back to 0.
+--   final subtract-and-select maps the `a = 0` case (`n - 0 = n`) back to 0.
 export
 scNegate : Sc -> Sc
 scNegate a =
@@ -553,8 +546,8 @@ scSub : Sc -> Sc -> Sc
 scSub a b = scAdd a (scNegate b)
 
 -- | Multiplication mod `n`: schoolbook columns into a 32-limb workspace,
---   then `reduceWide` (carry, fold-until-clear by `c = 2^256 - n`, one
---   conditional subtraction).
+--   then `reduceWide` (fixed carry/fold schedule by `c = 2^256 - n`, one
+--   unconditional subtract-and-select).
 --
 --   The bound is the module header's headroom chain: the peak intermediate
 --   is column 15, sixteen terms, < 2^36 against a 2^62 ceiling.
@@ -597,7 +590,8 @@ mulAccumRow a b w i j =
 --   in particular a signing routine must reject `k = 0` before inverting it,
 --   and must never treat a zero result as valid.
 --
---   Not constant-time (see the module header).
+--   Fixed-shape on the native reduction path; see the module header's P15
+--   boundary for helpers outside this call graph.
 --
 -- > scEqual (scInverse scZero) scZero
 -- True

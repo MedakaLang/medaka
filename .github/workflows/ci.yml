@@ -473,8 +473,8 @@ jobs:
             # ENGINE_JOBS=NCPU/2, which is the right hedge when it shares a runner with other
             # gates and leaves HALF THE BOX IDLE when it doesn't. It doesn't, now.
             #
-            # `wasm_arm` (#597): this shard — and ONLY this shard — installs wasm-tools +
-            # Node and builds the wasm oracle, so diff_compiler_engines can actually run its
+            # `wasm_arm` (#597): this shard installs wasm-tools + Node and builds the Wasm
+            # oracle, so diff_compiler_engines can actually run its
             # T2 (native == wasm) and T3 (all three agree) tiers. Without it the gate honestly
             # degrades to a TWO-engine differential and the required check goes green having
             # never compared the backends. MEDAKA_REQUIRE_WASM=1 (set with it) makes that
@@ -533,7 +533,11 @@ jobs:
             # directory level deep (`*` does not cross `/`) so any future pds/ in-language
             # gate is auto-enrolled with NO ci.yml edit, as long as it lands directly in
             # pds/test/ (see pds/README.md's "CI classification policy" section).
+            # constant_time_parity is covered by the PDS glob and requires the Wasm arm.
+            # Enabling it here deliberately spends the toolchain/oracle setup on this shard
+            # while keeping the gate enrolled exactly once.
             pattern: "'sqlite/test/*oracle' 'gzip/test/*oracle' 'pds/test/*'"
+            wasm_arm: "1"
           - name: frontend
             # 'native_fixtures/run' (T8): 11 native-only regression assertions (parse-error
             # location + foreign-syntax hints + one eval dispatch check). A real gate that
@@ -914,8 +918,8 @@ jobs:
       # If you change how either is installed, change it in BOTH places (grep
       # WASM_TOOLS_VERSION — two consumers, by construction).
       #
-      # Guarded on matrix.wasm_arm so the other six shards pay nothing: ~3s of setup-node
-      # plus ~1s of curl, on the one shard that needs it.
+      # Guarded on matrix.wasm_arm so shards without a Wasm differential pay nothing:
+      # ~3s of setup-node plus ~1s of curl.
       - name: Set up Node.js ${{ env.WASM_NODE_VERSION }} (wasm arm)
         if: steps.plan.outputs.has_work == 'true' && matrix.wasm_arm != ''
         uses: actions/setup-node@v4
@@ -1025,7 +1029,7 @@ jobs:
       # (UNQUOTED substitution is deliberate; quoting it would collapse the gate list
       # into ONE argument and silently degrade the shard to a single bad glob.)
       #
-      # ── `full_cores` / `wasm_arm` — set ONLY on the `engines` shard ───────────────
+      # ── `full_cores` / `wasm_arm` — opt-in per shard ─────────────────────────────
       # diff_compiler_engines picks its own fan-out: ENGINE_JOBS, defaulting to NCPU/2.
       # That default is a HEDGE against sharing a runner with other gates (run_gates'
       # outer pool would otherwise oversubscribe it) — and on a 4-core hosted runner it
@@ -1043,8 +1047,8 @@ jobs:
       # will be slower in absolute terms; the RATIO is the transferable part.
       #
       # Derived from `nproc` rather than hardcoded, so it tracks GitHub's runner size.
-      # Every other shard leaves it empty and the gate's own default applies (and no
-      # other shard contains that gate — the coverage gate enforces exactly-one).
+      # Shards without one of the Wasm differentials leave it empty. The coverage gate
+      # independently enforces that each gate is enrolled exactly once.
       - name: Gate shard — ${{ matrix.name }}
         if: steps.plan.outputs.has_work == 'true'
         run: |
@@ -1059,7 +1063,7 @@ jobs:
           # block for why it must be exit 1 and never exit 2 (#597).
           if [ -n "${{ matrix.wasm_arm }}" ]; then
             export MEDAKA_REQUIRE_WASM=1
-            echo "engines shard: MEDAKA_REQUIRE_WASM=1 — the wasm arm is mandatory here"
+            echo "${{ matrix.name }} shard: MEDAKA_REQUIRE_WASM=1 — the wasm arm is mandatory here"
           fi
           sh test/run_gates.sh ${{ steps.plan.outputs.pats }}
 
