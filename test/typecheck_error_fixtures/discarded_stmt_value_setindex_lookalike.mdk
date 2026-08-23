@@ -1,0 +1,13 @@
+-- T-DISCARDED-VALUE: the `setIndex` discard exemption (checkStmtNotDiscarded /
+-- isExemptInPlaceSetIndex, typecheck.mdk) is keyed on BOTH the callee name AND
+-- the discarded value's own head type constructor (Array/MutArray, the two
+-- real in-place `IndexMut` impls) -- never on the bare name alone. This
+-- fixture pins the negative case: a user's OWN unrelated function that
+-- happens to be named `setIndex` (method names are not globally unique,
+-- #1111 A-2.5) but returns `Bool`, not a container, must still be flagged.
+setIndex : Bool -> String -> Int -> Bool
+setIndex existed name n = existed
+
+main =
+  setIndex True "x" 1
+  0

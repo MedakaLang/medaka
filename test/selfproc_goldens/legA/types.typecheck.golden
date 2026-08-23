@@ -678,6 +678,7 @@ eqInt : Int -> Int -> Bool
 eqIntList : List Int -> List Int -> Bool
 eqStr : String -> String -> Bool
 erredDuring : (Unit -> a) -> (Bool, a)
+exemptInPlaceIndexMutHeads : List String
 exitLevel : Unit -> Unit
 expandIoInBound : List Atom -> List Atom
 expandSupersCross : List Decl -> List (String, List Int) -> List (String, List IfaceRef) -> (List (String, List Int), List (String, List IfaceRef))
@@ -1102,6 +1103,7 @@ isCtorAppSpine : Expr -> Bool
 isDefinerShadow : String -> Bool
 isDoLoweredAndThenCallee : Expr -> Bool
 isDoLoweredAndThenCalleeExpr : Expr -> Bool
+isExemptInPlaceSetIndex : Mono -> Expr -> Bool
 isHoleParam : Param -> Bool
 isHoleStr : String -> Bool
 isLetrecGroup : List String -> Bool
@@ -1712,6 +1714,7 @@ standaloneShadowScheme : String -> Option Mono
 standaloneShadowSigTy : String -> String -> Option Ty
 standaloneShadowsFromSet : Map String Unit -> Map String Unit -> List Decl -> List String
 standaloneValuePinned : String -> Bool
+stmtCalleeName : Expr -> Option String
 storeDataUniverse : Unit -> Unit
 strHasSlash : String -> Bool
 strHasSlashGo : String -> Int -> Int -> Bool

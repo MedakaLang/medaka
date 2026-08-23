@@ -9939,12 +9939,67 @@ inferStmt _ _ = panic "typecheck: unsupported block statement"
 -- or offer the fix), so it is reported here instead with its own code and a
 -- one-token `fix` (`let _ = `) for the intentional-discard case.
 checkStmtNotDiscarded : Mono -> Expr -> Unit
-checkStmtNotDiscarded t e = match normalize t
-  TCon "Unit" _ => ()
-  TVar cell => match !cell
-    Unbound _ _ => unify t (tconBuiltin "Unit")
-    Link _ => panic "checkStmtNotDiscarded: normalize left a Link"
-  nt => pushDiscardedValueError nt e
+checkStmtNotDiscarded t e
+  | isExemptInPlaceSetIndex t e = ()
+  | otherwise = match normalize t
+    TCon "Unit" _ => ()
+    TVar cell => match !cell
+      Unbound _ _ => unify t (tconBuiltin "Unit")
+      Link _ => panic "checkStmtNotDiscarded: normalize left a Link"
+    nt => pushDiscardedValueError nt e
+
+-- `a[i] := v` desugars to `setIndex a i v` (`rewriteAssignIndex`, desugar.mdk), and
+-- `IndexMut.setIndex : c -> k -> v -> c` (core.mdk) returns the container BY
+-- INTERFACE CONTRACT so a caller can chain — but every current impl (`Array`,
+-- `MutArray`, mut_array.mdk) mutates in place and returns the SAME value, so the
+-- bare-statement idiom `arr[i] := v` (real code: sqlite/lib/dbwriter.mdk,
+-- gzip/lib/{huffman,inflate}.mdk) never actually loses anything by discarding it.
+--
+-- ⚠️ NOT exempted by callee name alone: `setIndex` is not a reserved word and
+-- method names are not globally unique (#1111 A-2.5) — a user's OWN unrelated
+-- binding named `setIndex` (e.g. `setIndex : HashMap -> String -> Int -> Bool`,
+-- an existed-already probe) would silently dodge the discard check too, which
+-- is exactly the bug this check exists to catch. `isExemptInPlaceSetIndex`
+-- therefore also requires the DISCARDED VALUE's own head type constructor to be
+-- one of the two real in-place `IndexMut` impls (`Array`/`MutArray`) — since
+-- `setIndex : c -> k -> v -> c`, that head IS the receiver's head, so this reads
+-- the receiver's type off the statement's own already-inferred `t` for free,
+-- no separate route/interface lookup needed. A future persistent-container
+-- `IndexMut` impl (`setIndex` returning a NEW value) would need EXCLUDING from
+-- `exemptInPlaceIndexMutHeads`, not just narrowing further.
+-- `setIndex` is an `IndexMut` interface method, so `marker.mdk` rewrites every
+-- `EVar` naming it to `EMethodRef` before typecheck ever sees it — except this
+-- driver has TWO whole-program entry points (`checkModulesDiags`, used by
+-- `check`, vs `elaborateModules`, used by `build`/`run`; see harden-typechecker
+-- skill), and only the latter runs with `implInferEnabled` on, which stamps
+-- the call's resolved dispatch route onto the node BEFORE this check runs,
+-- turning `EMethodRef "setIndex"` into `EMethodAt "setIndex" …` — reproduced:
+-- `medaka check` on sqlite/lib/dbwriter.mdk was clean while `medaka build`
+-- rejected the same file, because `stmtCalleeName` didn't yet cover
+-- `EMethodAt`/`EDictAt`. So `stmtCalleeName` must handle both stamped forms
+-- alongside the unstamped `EMethodRef`, where `appSpineName` (this file's
+-- other spine-name walk, used elsewhere) covers neither.
+stmtCalleeName : Expr -> Option String
+stmtCalleeName (ELoc _ e) = stmtCalleeName e
+stmtCalleeName (EDoOrigin _ e) = stmtCalleeName e
+stmtCalleeName (EAnnot e _) = stmtCalleeName e
+stmtCalleeName (EApp f _) = stmtCalleeName f
+stmtCalleeName (EVar n) = Some n
+stmtCalleeName (EVarId n _) = Some n
+stmtCalleeName (EVarAt n _) = Some n
+stmtCalleeName (EMethodRef n) = Some n
+stmtCalleeName (EMethodAt n _ _ _) = Some n
+stmtCalleeName (EDictAt n _) = Some n
+stmtCalleeName _ = None
+
+exemptInPlaceIndexMutHeads : List String
+exemptInPlaceIndexMutHeads = ["Array", "MutArray"]
+
+isExemptInPlaceSetIndex : Mono -> Expr -> Bool
+isExemptInPlaceSetIndex t e = match headTyconNameMono t
+  Some hd => stmtCalleeName e == Some "setIndex"
+    && contains hd exemptInPlaceIndexMutHeads
+  None => False
 
 pushDiscardedValueError : Mono -> Expr -> Unit
 pushDiscardedValueError nt e =

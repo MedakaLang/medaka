@@ -1,5 +1,5 @@
 # META
-source_lines=32358
+source_lines=32413
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -9943,12 +9943,67 @@ inferStmt _ _ = panic "typecheck: unsupported block statement"
 -- or offer the fix), so it is reported here instead with its own code and a
 -- one-token `fix` (`let _ = `) for the intentional-discard case.
 checkStmtNotDiscarded : Mono -> Expr -> Unit
-checkStmtNotDiscarded t e = match normalize t
-  TCon "Unit" _ => ()
-  TVar cell => match !cell
-    Unbound _ _ => unify t (tconBuiltin "Unit")
-    Link _ => panic "checkStmtNotDiscarded: normalize left a Link"
-  nt => pushDiscardedValueError nt e
+checkStmtNotDiscarded t e
+  | isExemptInPlaceSetIndex t e = ()
+  | otherwise = match normalize t
+    TCon "Unit" _ => ()
+    TVar cell => match !cell
+      Unbound _ _ => unify t (tconBuiltin "Unit")
+      Link _ => panic "checkStmtNotDiscarded: normalize left a Link"
+    nt => pushDiscardedValueError nt e
+
+-- `a[i] := v` desugars to `setIndex a i v` (`rewriteAssignIndex`, desugar.mdk), and
+-- `IndexMut.setIndex : c -> k -> v -> c` (core.mdk) returns the container BY
+-- INTERFACE CONTRACT so a caller can chain — but every current impl (`Array`,
+-- `MutArray`, mut_array.mdk) mutates in place and returns the SAME value, so the
+-- bare-statement idiom `arr[i] := v` (real code: sqlite/lib/dbwriter.mdk,
+-- gzip/lib/{huffman,inflate}.mdk) never actually loses anything by discarding it.
+--
+-- ⚠️ NOT exempted by callee name alone: `setIndex` is not a reserved word and
+-- method names are not globally unique (#1111 A-2.5) — a user's OWN unrelated
+-- binding named `setIndex` (e.g. `setIndex : HashMap -> String -> Int -> Bool`,
+-- an existed-already probe) would silently dodge the discard check too, which
+-- is exactly the bug this check exists to catch. `isExemptInPlaceSetIndex`
+-- therefore also requires the DISCARDED VALUE's own head type constructor to be
+-- one of the two real in-place `IndexMut` impls (`Array`/`MutArray`) — since
+-- `setIndex : c -> k -> v -> c`, that head IS the receiver's head, so this reads
+-- the receiver's type off the statement's own already-inferred `t` for free,
+-- no separate route/interface lookup needed. A future persistent-container
+-- `IndexMut` impl (`setIndex` returning a NEW value) would need EXCLUDING from
+-- `exemptInPlaceIndexMutHeads`, not just narrowing further.
+-- `setIndex` is an `IndexMut` interface method, so `marker.mdk` rewrites every
+-- `EVar` naming it to `EMethodRef` before typecheck ever sees it — except this
+-- driver has TWO whole-program entry points (`checkModulesDiags`, used by
+-- `check`, vs `elaborateModules`, used by `build`/`run`; see harden-typechecker
+-- skill), and only the latter runs with `implInferEnabled` on, which stamps
+-- the call's resolved dispatch route onto the node BEFORE this check runs,
+-- turning `EMethodRef "setIndex"` into `EMethodAt "setIndex" …` — reproduced:
+-- `medaka check` on sqlite/lib/dbwriter.mdk was clean while `medaka build`
+-- rejected the same file, because `stmtCalleeName` didn't yet cover
+-- `EMethodAt`/`EDictAt`. So `stmtCalleeName` must handle both stamped forms
+-- alongside the unstamped `EMethodRef`, where `appSpineName` (this file's
+-- other spine-name walk, used elsewhere) covers neither.
+stmtCalleeName : Expr -> Option String
+stmtCalleeName (ELoc _ e) = stmtCalleeName e
+stmtCalleeName (EDoOrigin _ e) = stmtCalleeName e
+stmtCalleeName (EAnnot e _) = stmtCalleeName e
+stmtCalleeName (EApp f _) = stmtCalleeName f
+stmtCalleeName (EVar n) = Some n
+stmtCalleeName (EVarId n _) = Some n
+stmtCalleeName (EVarAt n _) = Some n
+stmtCalleeName (EMethodRef n) = Some n
+stmtCalleeName (EMethodAt n _ _ _) = Some n
+stmtCalleeName (EDictAt n _) = Some n
+stmtCalleeName _ = None
+
+exemptInPlaceIndexMutHeads : List String
+exemptInPlaceIndexMutHeads = ["Array", "MutArray"]
+
+isExemptInPlaceSetIndex : Mono -> Expr -> Bool
+isExemptInPlaceSetIndex t e = match headTyconNameMono t
+  Some hd => stmtCalleeName e == Some "setIndex"
+    && contains hd exemptInPlaceIndexMutHeads
+  None => False
 
 pushDiscardedValueError : Mono -> Expr -> Unit
 pushDiscardedValueError nt e =
@@ -33968,7 +34023,23 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "inferStmt" ((PVar "env") (PCon "DoBind" (PVar "pat") (PVar "e"))) (EBlock (DoLet false false (PVar "t") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-BIND-OUTSIDE-DO"))) (EVar "bindOutsideDoMsg"))) (DoLet false false (PVar "pr") (EApp (EApp (EVar "inferPat") (EVar "env")) (EVar "pat"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EVar "fst") (EVar "pr"))) (EVar "t"))) (DoExpr (EApp (EApp (EVar "extendLocalVars") (EVar "env")) (EApp (EVar "snd") (EVar "pr"))))))
 (DFunDef false "inferStmt" (PWild PWild) (EApp (EVar "panic") (ELit (LString "typecheck: unsupported block statement"))))
 (DTypeSig false "checkStmtNotDiscarded" (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Unit"))))
-(DFunDef false "checkStmtNotDiscarded" ((PVar "t") (PVar "e")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Unit")) PWild) () (ELit LUnit)) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Unbound" PWild PWild) () (EApp (EApp (EVar "unify") (EVar "t")) (EApp (EVar "tconBuiltin") (ELit (LString "Unit"))))) (arm (PCon "Link" PWild) () (EApp (EVar "panic") (ELit (LString "checkStmtNotDiscarded: normalize left a Link")))))) (arm (PVar "nt") () (EApp (EApp (EVar "pushDiscardedValueError") (EVar "nt")) (EVar "e")))))
+(DFunDef false "checkStmtNotDiscarded" ((PVar "t") (PVar "e")) (EIf (EApp (EApp (EVar "isExemptInPlaceSetIndex") (EVar "t")) (EVar "e")) (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Unit")) PWild) () (ELit LUnit)) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Unbound" PWild PWild) () (EApp (EApp (EVar "unify") (EVar "t")) (EApp (EVar "tconBuiltin") (ELit (LString "Unit"))))) (arm (PCon "Link" PWild) () (EApp (EVar "panic") (ELit (LString "checkStmtNotDiscarded: normalize left a Link")))))) (arm (PVar "nt") () (EApp (EApp (EVar "pushDiscardedValueError") (EVar "nt")) (EVar "e")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "stmtCalleeName" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "stmtCalleeName" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "stmtCalleeName") (EVar "e")))
+(DFunDef false "stmtCalleeName" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "stmtCalleeName") (EVar "e")))
+(DFunDef false "stmtCalleeName" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "stmtCalleeName") (EVar "e")))
+(DFunDef false "stmtCalleeName" ((PCon "EApp" (PVar "f") PWild)) (EApp (EVar "stmtCalleeName") (EVar "f")))
+(DFunDef false "stmtCalleeName" ((PCon "EVar" (PVar "n"))) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "stmtCalleeName" ((PCon "EVarId" (PVar "n") PWild)) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "stmtCalleeName" ((PCon "EVarAt" (PVar "n") PWild)) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "stmtCalleeName" ((PCon "EMethodRef" (PVar "n"))) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "stmtCalleeName" ((PCon "EMethodAt" (PVar "n") PWild PWild PWild)) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "stmtCalleeName" ((PCon "EDictAt" (PVar "n") PWild)) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "stmtCalleeName" (PWild) (EVar "None"))
+(DTypeSig false "exemptInPlaceIndexMutHeads" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "exemptInPlaceIndexMutHeads" () (EListLit (ELit (LString "Array")) (ELit (LString "MutArray"))))
+(DTypeSig false "isExemptInPlaceSetIndex" (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Bool"))))
+(DFunDef false "isExemptInPlaceSetIndex" ((PVar "t") (PVar "e")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "t")) (arm (PCon "Some" (PVar "hd")) () (EBinOp "&&" (EBinOp "==" (EApp (EVar "stmtCalleeName") (EVar "e")) (EApp (EVar "Some") (ELit (LString "setIndex")))) (EApp (EApp (EVar "contains") (EVar "hd")) (EVar "exemptInPlaceIndexMutHeads")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "pushDiscardedValueError" (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Unit"))))
 (DFunDef false "pushDiscardedValueError" ((PVar "nt") (PVar "e")) (EBlock (DoLet false false (PVar "loc") (EApp (EVar "exprLoc") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-DISCARDED-VALUE"))) (EVar "loc")) (EApp (EVar "discardedValueMsg") (EVar "nt"))) (ELit (LString "bind it with 'let _ = …' if dropping the value is intentional, or use its value"))) (EApp (EVar "discardedValueFix") (EVar "loc"))))))
 (DTypeSig false "discardedValueMsg" (TyFun (TyCon "Mono") (TyCon "String")))
@@ -39229,7 +39300,23 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "inferStmt" ((PVar "env") (PCon "DoBind" (PVar "pat") (PVar "e"))) (EBlock (DoLet false false (PVar "t") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-BIND-OUTSIDE-DO"))) (EVar "bindOutsideDoMsg"))) (DoLet false false (PVar "pr") (EApp (EApp (EVar "inferPat") (EVar "env")) (EVar "pat"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EVar "fst") (EVar "pr"))) (EVar "t"))) (DoExpr (EApp (EApp (EVar "extendLocalVars") (EVar "env")) (EApp (EVar "snd") (EVar "pr"))))))
 (DFunDef false "inferStmt" (PWild PWild) (EApp (EVar "panic") (ELit (LString "typecheck: unsupported block statement"))))
 (DTypeSig false "checkStmtNotDiscarded" (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Unit"))))
-(DFunDef false "checkStmtNotDiscarded" ((PVar "t") (PVar "e")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Unit")) PWild) () (ELit LUnit)) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Unbound" PWild PWild) () (EApp (EApp (EVar "unify") (EVar "t")) (EApp (EVar "tconBuiltin") (ELit (LString "Unit"))))) (arm (PCon "Link" PWild) () (EApp (EVar "panic") (ELit (LString "checkStmtNotDiscarded: normalize left a Link")))))) (arm (PVar "nt") () (EApp (EApp (EVar "pushDiscardedValueError") (EVar "nt")) (EVar "e")))))
+(DFunDef false "checkStmtNotDiscarded" ((PVar "t") (PVar "e")) (EIf (EApp (EApp (EVar "isExemptInPlaceSetIndex") (EVar "t")) (EVar "e")) (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Unit")) PWild) () (ELit LUnit)) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Unbound" PWild PWild) () (EApp (EApp (EVar "unify") (EVar "t")) (EApp (EVar "tconBuiltin") (ELit (LString "Unit"))))) (arm (PCon "Link" PWild) () (EApp (EVar "panic") (ELit (LString "checkStmtNotDiscarded: normalize left a Link")))))) (arm (PVar "nt") () (EApp (EApp (EVar "pushDiscardedValueError") (EVar "nt")) (EVar "e")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "stmtCalleeName" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "stmtCalleeName" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "stmtCalleeName") (EVar "e")))
+(DFunDef false "stmtCalleeName" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "stmtCalleeName") (EVar "e")))
+(DFunDef false "stmtCalleeName" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "stmtCalleeName") (EVar "e")))
+(DFunDef false "stmtCalleeName" ((PCon "EApp" (PVar "f") PWild)) (EApp (EVar "stmtCalleeName") (EVar "f")))
+(DFunDef false "stmtCalleeName" ((PCon "EVar" (PVar "n"))) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "stmtCalleeName" ((PCon "EVarId" (PVar "n") PWild)) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "stmtCalleeName" ((PCon "EVarAt" (PVar "n") PWild)) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "stmtCalleeName" ((PCon "EMethodRef" (PVar "n"))) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "stmtCalleeName" ((PCon "EMethodAt" (PVar "n") PWild PWild PWild)) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "stmtCalleeName" ((PCon "EDictAt" (PVar "n") PWild)) (EApp (EVar "Some") (EVar "n")))
+(DFunDef false "stmtCalleeName" (PWild) (EVar "None"))
+(DTypeSig false "exemptInPlaceIndexMutHeads" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "exemptInPlaceIndexMutHeads" () (EListLit (ELit (LString "Array")) (ELit (LString "MutArray"))))
+(DTypeSig false "isExemptInPlaceSetIndex" (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Bool"))))
+(DFunDef false "isExemptInPlaceSetIndex" ((PVar "t") (PVar "e")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "t")) (arm (PCon "Some" (PVar "hd")) () (EBinOp "&&" (EBinOp "==" (EApp (EVar "stmtCalleeName") (EVar "e")) (EApp (EVar "Some") (ELit (LString "setIndex")))) (EApp (EApp (EVar "contains") (EVar "hd")) (EVar "exemptInPlaceIndexMutHeads")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "pushDiscardedValueError" (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Unit"))))
 (DFunDef false "pushDiscardedValueError" ((PVar "nt") (PVar "e")) (EBlock (DoLet false false (PVar "loc") (EApp (EVar "exprLoc") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-DISCARDED-VALUE"))) (EVar "loc")) (EApp (EVar "discardedValueMsg") (EVar "nt"))) (ELit (LString "bind it with 'let _ = …' if dropping the value is intentional, or use its value"))) (EApp (EVar "discardedValueFix") (EVar "loc"))))))
 (DTypeSig false "discardedValueMsg" (TyFun (TyCon "Mono") (TyCon "String")))
