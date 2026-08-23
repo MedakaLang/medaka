@@ -83,7 +83,26 @@ check_emitted_helpers() {
     body="$dir/$name.ll"
     extract_function "$name" "$ir" "$body"
     helper_ir_ok "$body" "$expected" "$expected_indices" "$expected_sets" "$expected_makes" "$expected_copies" "$expected_total" || fail "$name native IR operation/control shape"
+    ir_call_shape_ok "$name" "$body" || fail "$name native IR exact callee graph"
   done
+}
+
+ir_call_shape_ok() {
+  name=$1
+  body=$2
+  case "$name" in
+    canonicalize) expected='444837400 70' ;; carryFoldRound) expected='1550513033 241' ;;
+    carryGo) expected='3778194225 239' ;; carryPassGo) expected='173258734 434' ;;
+    foldAccum) expected='3786743205 133' ;; foldAccumRow) expected='3148195415 193' ;;
+    foldOnce) expected='3086817660 152' ;; reduceCarry) expected='1494584225 93' ;;
+    reduceFixed) expected='4074489195 234' ;; reduceWide) expected='1838799703 160' ;;
+    selectNCandidate) expected='2528052175 146' ;; selectPCandidate) expected='119278451 145' ;;
+    subNCandidate) expected='2597640850 328' ;; subNSelect) expected='1807119209 206' ;;
+    subPCandidate) expected='2254594368 624' ;; subPSelect) expected='253077062 204' ;;
+    takeHigh) expected='1628856368 182' ;; *) return 1 ;;
+  esac
+  actual=$(sed -n 's/.*call i64 @\([^ (]*\).*/\1/p' "$body" | cksum | awk '{ print $1 " " $2 }')
+  [ "$actual" = "$expected" ]
 }
 
 helper_ir_ok() {
@@ -173,6 +192,25 @@ extract_source_function() {
   [ -s "$output" ] || return 1
 }
 
+source_shape_ok() {
+  name=$1
+  body=$2
+  case "$name" in
+    canonicalize) expected='1918979222 101' ;; carryAll) expected='3784023453 28' ;;
+    carryFoldRound) expected='3658556356 112' ;; carryGo) expected='2803185373 258' ;;
+    carryPass) expected='1250453555 31' ;; carryPassGo) expected='797599452 263' ;;
+    foldAccum) expected='1811712224 107' ;; foldAccumRow) expected='590181241 149' ;;
+    foldOnce) expected='1770996279 84' ;; reduceCarry) expected='2596813441 92' ;;
+    reduceFixed) expected='736687942 206' ;; reduceWide) expected='1389933683 128' ;;
+    selectNCandidate) expected='503125172 203' ;; selectPCandidate) expected='2300619837 201' ;;
+    subNCandidate) expected='3306359253 219' ;; subNSelect) expected='1155645251 125' ;;
+    subPCandidate) expected='1795641584 328' ;; subPSelect) expected='764393686 125' ;;
+    takeHigh) expected='2782148329 134' ;; *) return 1 ;;
+  esac
+  actual=$(cksum "$body" | awk '{ print $1 " " $2 }')
+  [ "$actual" = "$expected" ]
+}
+
 source_helpers_ok() {
   field=$1
   scalar=$2
@@ -205,6 +243,7 @@ source_helpers_ok() {
     allowed=${spec##*:}
     body="$dir/$name.mdk"
     extract_source_function "$name" "$file" "$body" || return 1
+    source_shape_ok "$name" "$body" || return 1
     actual=$(awk '{ line=$0; while (match(line, /if[[:space:]]/)) { n++; line=substr(line, RSTART + RLENGTH) } } END { print n + 0 }' "$body")
     [ "$actual" -eq "$allowed" ] || return 1
     comparisons=$(awk '{ line=$0; while (match(line, /(==|\/=|<=|>=| < | > )/)) { n++; line=substr(line, RSTART + RLENGTH) } } END { print n + 0 }' "$body")
@@ -431,6 +470,23 @@ if source_helpers_ok "$FIELD" "$WORK/scalar_rebound_index_source_mutant.mdk" "$W
 fi
 pass 'scalar rebound secret-index mutation is rejected by source structure'
 
+awk '
+  /^subNCandidate :/ {
+    print "leakyShift : Int -> Int -> Int"
+    print "leakyShift x amount = if x == 0 then 0 else shiftRight x amount"
+    print ""
+  }
+  /subNCandidate w diff \(i \+ 1\) \(1 - shiftRight t 16\)/ {
+    print "    subNCandidate w diff (i + 1) (1 - leakyShift t 16)"
+    next
+  }
+  { print }
+' "$SCALAR" > "$WORK/scalar_wrapper_source_mutant.mdk"
+if source_helpers_ok "$FIELD" "$WORK/scalar_wrapper_source_mutant.mdk" "$WORK/source-scalar-wrapper-mutant"; then
+  fail 'scalar leaky-wrapper mutation is rejected by exact source graph'
+fi
+pass 'scalar leaky-wrapper mutation is rejected by exact source graph'
+
 # Private same-module witnesses. The mutation copies never touch the worktree.
 cp "$FIELD" "$WORK/field_probe.mdk"
 append_field_probe "$WORK/field_probe.mdk"
@@ -574,6 +630,16 @@ fi
 grep -F -q 'call i64 @mdk_array__set(i64 %arg3,' "$WORK/scalar-rebound-index-mutant.ll" || fail 'scalar rebound secret-index mutation reaches native IR'
 pass 'scalar rebound secret-index mutation is rejected by native IR operand provenance'
 
+cp "$WORK/scalar_wrapper_source_mutant.mdk" "$WORK/scalar_wrapper_mutant.mdk"
+append_scalar_probe "$WORK/scalar_wrapper_mutant.mdk"
+MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_wrapper_mutant.mdk" -o "$WORK/scalar_wrapper_mutant" --keep-ir > "$WORK/build-scalar-wrapper-mutant.log" 2>&1
+extract_function subNCandidate "$WORK/scalar_wrapper_mutant.ll" "$WORK/scalar-wrapper-subn.ll"
+if ir_call_shape_ok subNCandidate "$WORK/scalar-wrapper-subn.ll"; then
+  fail 'scalar leaky-wrapper mutation is rejected by native IR callee graph'
+fi
+grep -F -q '__leakyShift' "$WORK/scalar-wrapper-subn.ll" || fail 'scalar leaky-wrapper call reaches native IR'
+pass 'scalar leaky-wrapper mutation is rejected by native IR callee graph'
+
 disassemble() {
   binary=$1
   symbol=$2
@@ -623,6 +689,12 @@ fi
 grep -F -q 'mdk_value_eq' "$WORK/scalar-select-mutant.asm" || fail 'scalar conditional-select mutation is visible in final native disassembly'
 pass 'scalar conditional-select mutation is rejected by final native disassembly'
 
+wrapper_symbol=$(find_native_symbol "$WORK/scalar_wrapper_mutant" subNCandidate)
+[ -n "$wrapper_symbol" ] || fail 'scalar leaky-wrapper final native helper symbol exists'
+disassemble "$WORK/scalar_wrapper_mutant" "$wrapper_symbol" "$WORK/scalar-wrapper-subn.asm"
+grep -F -q 'mdk_value_eq' "$WORK/scalar-wrapper-subn.asm" || fail 'scalar leaky-wrapper branch reaches final native helper'
+pass 'scalar leaky-wrapper mutation is visible in final native helper'
+
 field_reducer_symbol=$(find_native_symbol "$WORK/field_emit" fieldSelectWitness)
 scalar_reducer_symbol=$(find_native_symbol "$WORK/scalar_emit" scalarSelectWitness)
 [ -n "$field_reducer_symbol" ] || fail 'final native field reducer witness symbol exists'
@@ -662,5 +734,5 @@ printf 'receipt: target=%s %s\n' "$(uname -s)" "$(uname -m)"
 printf 'receipt: compiler=%s\n' "$(clang --version | sed -n '1p')"
 printf 'receipt: medaka=%s\n' "$($MEDAKA --version | sed -n '1p')"
 
-[ "$checked" -ge 35 ] || fail "anti-rot floor (expected at least 35, got $checked)"
+[ "$checked" -ge 38 ] || fail "anti-rot floor (expected at least 38, got $checked)"
 printf 'PASS: constant-time reduction controls — %s assertions\n' "$checked"
