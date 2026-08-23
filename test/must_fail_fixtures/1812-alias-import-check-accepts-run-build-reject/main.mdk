@@ -1,0 +1,9 @@
+-- #1812. `zmodI` is imported ALIAS-QUALIFIED and BEFORE `amodI`; that ordering makes
+-- `medaka check` exit 0 with zero diagnostics while `run` and `build` both correctly
+-- reject the same program. See claim.txt: three of the six orderings of these same
+-- three imports are silent, and they are exactly the ones where zmodI precedes amodI.
+import zmodI as Z
+import fmodI.{mth}
+import amodI.{af}
+
+main = println (mth "abc" 5 + af 0 + Z.zf 0)

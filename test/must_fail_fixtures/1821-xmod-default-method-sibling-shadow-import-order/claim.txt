@@ -1,0 +1,68 @@
+issue: 1821
+what: Two interfaces declared in DIFFERENT modules share one method spelling (`dflt`),
+what: each supplying it as a DEFAULT BODY. The entry file imports that name from exactly
+what: ONE of them -- `import amod1821.{Sup, IA, sup, sib, dflt}` -- while the other
+what: module's import list names only `{IB, other}` and does NOT bind `dflt` under any
+what: name. EXCHANGING THE TWO IMPORT LINES, AND NOTHING ELSE, CHANGES THE ANSWER.
+what:
+what: THE CORRECT ANSWER IS 71, DERIVED WITHOUT RUNNING ANYTHING. The occurrence
+what: `dflt (T 7)` has `dflt` bound by the import list to `amod1821`'s method. `IA`'s
+what: default body is `sib x + 1`; `impl IA T` gives `sib x = sup x * 10`; `impl Sup T`
+what: gives `sup (T 7) = 7`. So 7 * 10 + 1 = 71. `9000` is `IB`'s default body -- an
+what: interface whose `dflt` is not in scope in this file under any name at all.
+what:
+what: ACTUAL, at `main` 2ed7b5b9, `check` clean and exit 0 on every arm:
+what:   main.mdk    (amod imported first) -> run 71,   built binary 71    <- correct
+what:   swapped.mdk (bmod imported first) -> run 9000, built binary 9000  <- THIS PIN
+what: Silent wrongness at exit 0 with no diagnostic on any channel, decided by the order
+what: of two import lines.
+what:
+what: 🚨 THE ISSUE'S NAMED MECHANISM IS NOT WHAT THIS PIN MEASURES. #1821 points at
+what: `siblingShadows` / `ifaceOfMethodIn` (compiler/eval/eval.mdk), which is EVAL-ONLY;
+what: the defect reproduces identically on the BUILT NATIVE BINARY, which never runs that
+what: code. So the eval-side account is at best one of two sites and cannot be the whole
+what: cause. A fix landed against `siblingShadows` alone would leave the native arm wrong
+what: and would look green under `run`. Derive the real site; do not inherit the citation.
+what:
+what: SEVERITY: filed S2, but the observable is a wrong value at exit 0 with no error on
+what: any channel -- S0 shape. Not relabelled here (a fixture does not grade severity);
+what: recorded so the reader does not take S2 as measured.
+cmd: run swapped.mdk
+exit: 0
+stdout: 9000
+control: run main.mdk
+why-fixture: The GRADED arm is deliberately `swapped.mdk`, the ordering that produces the
+why-fixture: WRONG value, with the exact stdout `9000` pinned. That polarity is what makes
+why-fixture: the row honest under a partial fix: if some change made BOTH orderings print
+why-fixture: 9000 -- more wrong, not less -- this row STAYS RED, because the graded stdout
+why-fixture: is still 9000. The row drains only when this ordering stops answering 9000.
+why-fixture: `9000` is also a positive, non-accidental marker: it appears nowhere in the
+why-fixture: entry file and can only arrive from `bmod1821`'s default body, so no
+why-fixture: unrelated failure can produce it (a pre-`main` failure prints nothing and
+why-fixture: exits nonzero).
+why-fixture: `run` is the graded verb because all engines agree here, so there is no
+why-fixture: divergence to exploit and no clang needed. Measured first-hand at `main`
+why-fixture: 2ed7b5b9 on a binary cold-built in this worktree (no borrowed emitter),
+why-fixture: MEDAKA_STRICT=1, every command redirected to a file with $? read directly --
+why-fixture: never piped.
+why-control: control.mdk is not used; the control IS `main.mdk`, which is BYTE-IDENTICAL
+why-control: to the graded `swapped.mdk` except that its two `import` lines are exchanged.
+why-control: MEASURED: 71 at exit 0 on run, build and the executed binary -- the
+why-control: hand-derived answer. Because the two files differ in nothing else, a green
+why-control: control establishes that the program is well-formed, the impls are reachable,
+why-control: and the correct answer IS computable by the compiler as it stands: the ONLY
+why-control: variable between the red arm and the green one is the order of two import
+why-control: lines. If this control goes red the shape itself broke and the pin's evidence
+why-control: is void, which is exactly what a control is for here.
+why-note: TWO UNGRADED VARIANTS ship alongside, and they carry the isolation the control
+why-note: cannot (a control must exit 0, so it cannot itself be a rename twin AND the
+why-note: order twin at once):
+why-note:   variant-renamed-amod-first.mdk / variant-renamed-cmod-first.mdk -- the same
+why-note:   program in BOTH import orders against `cmod1821.mdk`, which is `bmod1821.mdk`
+why-note:   with its colliding method renamed `dflt` -> `zzdflt` and nothing else changed.
+why-note:   MEASURED: 71 in BOTH orders, on all three verbs. That is what isolates the
+why-note:   observation to the bare method SPELLING -- not to `requires`-super chains, not
+why-note:   to default bodies, not to two interfaces per program, not to importing two
+why-note:   modules.
+why-note: `cmod1821.mdk` is shipped because those variants import it; it is not reachable
+why-note: from the graded or control file.

@@ -1,0 +1,11 @@
+-- Byte-identical to main.mdk except the three import lines are permuted so that amodI
+-- precedes zmodI. NOT graded (it exits 1, and a control must exit 0). MEASURED: check,
+-- run and build all exit 1 with the SAME located diagnostic --
+--   <file>:8:20: Type mismatch: Int vs String
+-- i.e. the three verbs AGREE here. That agreement is the whole point: the divergence
+-- main.mdk pins is decided by import order alone.
+import amodI.{af}
+import fmodI.{mth}
+import zmodI as Z
+
+main = println (mth "abc" 5 + af 0 + Z.zf 0)

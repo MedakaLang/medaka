@@ -1,0 +1,15 @@
+import amod1821.{Sup, IA, sup, sib, dflt}
+import bmod1821.{IB, other}
+
+data T = T Int
+
+impl Sup T where
+  sup (T n) = n
+
+impl IA T where
+  sib x = sup x * 10
+
+impl IB T where
+  other _ = 1
+
+main = println (dflt (T 7))

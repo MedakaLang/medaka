@@ -1,0 +1,4 @@
+export interface IB a where
+  other : a -> Int
+  zzdflt : a -> Int
+  zzdflt _ = 9000

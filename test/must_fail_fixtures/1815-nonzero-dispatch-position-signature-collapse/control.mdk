@@ -1,0 +1,18 @@
+-- CONTROL. Byte-identical to main.mdk except that `IZ`'s dispatch-relevant typaram `b`
+-- is moved to `mth`'s FIRST argument (index 0) and `wrap`'s signature follows it. The
+-- definer-shadowed standalone, the =>-constraint, the impl and the body shape are all
+-- unchanged. That isolates the observation to the DISPATCH POSITION, not to
+-- definer shadowing, not to constrained signatures, not to `mth` in particular.
+export interface IZ b where
+  mth : b -> Int -> Int
+
+impl IZ String where
+  mth s n = 7
+
+mth : Int -> Int -> Int
+mth m n = 99
+
+wrap : IZ b => b -> Int -> Int
+wrap x n = mth x n
+
+main = println 0
