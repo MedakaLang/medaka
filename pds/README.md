@@ -283,6 +283,15 @@ cmp /tmp/x pds/test/vectors/scalar_reference_corpus.txt   # must be byte-identic
 belongs to next sprint's signing slice. There is deliberately no
 `scNormalizeLow` here.
 
+The accepted signing contract's first implementation step adds separate
+fixed-control building blocks without changing those public Bool helpers:
+`feZeroBit`/`feEqualBit`/`feSelect`/`feNegateCt` and
+`scZeroBit`/`scEqualBit`/`scSelect`/`scNegateCt`/`scHighBit`. Their arithmetic
+bits, selection, and negation paths are enrolled in
+`pds/test/constant_time_reductions.sh`'s closed source, emitted-IR, and linked
+native controls. This certifies those helpers, not the still-unwritten point
+or signing call graph.
+
 **Run the gates locally:**
 
 ```sh

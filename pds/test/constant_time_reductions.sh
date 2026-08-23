@@ -101,7 +101,17 @@ ir_call_shape_ok() {
     selectNCandidate) expected='2528052175 146' ;; selectPCandidate) expected='119278451 145' ;;
     subNCandidate) expected='2597640850 328' ;; subNSelect) expected='1807119209 206' ;;
     subPCandidate) expected='2254594368 624' ;; subPSelect) expected='253077062 204' ;;
-    takeHigh) expected='1628856368 182' ;; *) return 1 ;;
+    takeHigh) expected='1628856368 182' ;;
+    feZeroBit) expected='1334897826 93' ;; feZeroBorrow) expected='3190414508 366' ;;
+    feEqualBit) expected='3866854817 116' ;; feEqualBorrow) expected='1799738399 454' ;;
+    feSelect) expected='2431464765 149' ;; feSelectGo) expected='218780675 160' ;;
+    feNegateCt) expected='2191561892 230' ;; feNegateCtGo) expected='3980975781 565' ;;
+    scZeroBit) expected='735493066 95' ;; scZeroBorrow) expected='2133022951 217' ;;
+    scEqualBit) expected='803674573 119' ;; scEqualBorrow) expected='768047878 251' ;;
+    scSelect) expected='721711084 152' ;; scSelectGo) expected='2010823749 161' ;;
+    scHighBit) expected='2703992254 116' ;; scHighBorrow) expected='2129175628 279' ;;
+    scNegateCt) expected='1081324241 235' ;; scNegateCtGo) expected='2055894317 327' ;;
+    *) return 1 ;;
   esac
   actual=$(sed -n 's/.*call i64 @\([^ (]*\).*/\1/p' "$body" | cksum | awk '{ print $1 " " $2 }')
   [ "$actual" = "$expected" ]
@@ -140,6 +150,14 @@ helper_ir_ok() {
     [ "$copies" -eq "$expected_copies" ] && [ "$total" -eq "$expected_total" ]
 }
 
+raw_accessor_ir_ok() {
+  body=$1
+  [ "$(grep -c 'br i1' "$body" || true)" -eq 2 ] &&
+    [ "$(grep -E -c 'call i64 @mdk_value_(eq|ne|lt|le|gt|ge)\(' "$body" || true)" -eq 0 ] &&
+    [ "$(grep -F -c 'call i64 @mdk_hash_bool(' "$body" || true)" -eq 0 ] &&
+    [ "$(grep -E -c 'call i64 @mdk_(impl_Array_index|array__set|array_make|array_copy)\(' "$body" || true)" -eq 0 ]
+}
+
 source_indices_ok() {
   body=$1
   awk '
@@ -176,12 +194,12 @@ source_write_shape_ok() {
     carryFoldRound)
       [ "$writes" -eq 2 ] && [ "$(grep -F -c 'set 0 ' "$body" || true)" -eq 1 ] &&
         [ "$(grep -F -c 'set 1 ' "$body" || true)" -eq 1 ] ;;
-    subPCandidate)
+    subPCandidate|feNegateCtGo)
       [ "$writes" -eq 2 ] && [ "$(grep -F -c 'set 9 ' "$body" || true)" -eq 1 ] &&
         [ "$(grep -F -c 'set i ' "$body" || true)" -eq 1 ] ;;
-    selectPCandidate)
+    selectPCandidate|feSelectGo)
       [ "$writes" -eq 1 ] && [ "$(grep -F -c 'set i ' "$body" || true)" -eq 1 ] ;;
-    carryGo|subNCandidate|selectNCandidate|copyLow)
+    carryGo|subNCandidate|selectNCandidate|copyLow|scSelectGo|scNegateCtGo)
       [ "$writes" -eq 1 ] && [ "$(grep -F -c 'A.set i ' "$body" || true)" -eq 1 ] ;;
     takeHigh)
       [ "$writes" -eq 2 ] && [ "$(grep -F -c 'A.set (i - 16) ' "$body" || true)" -eq 1 ] &&
@@ -219,6 +237,17 @@ source_shape_ok() {
     selectNCandidate) expected='503125172 203' ;; selectPCandidate) expected='2300619837 201' ;;
     subNCandidate) expected='3306359253 219' ;; subNSelect) expected='1155645251 125' ;;
     subPCandidate) expected='1795641584 328' ;; subPSelect) expected='764393686 125' ;;
+    feZeroBit) expected='1598842918 42' ;; feZeroBorrow) expected='2456388451 212' ;;
+    feEqualBit) expected='243104385 56' ;; feEqualBorrow) expected='1904311731 242' ;;
+    feSelect) expected='564879547 108' ;; feSelectGo) expected='4272630245 150' ;;
+    feNegateCt) expected='2668735364 126' ;; feNegateCtGo) expected='3283175466 296' ;;
+    rawFe) expected='714619739 33' ;;
+    scZeroBit) expected='1698366246 42' ;; scZeroBorrow) expected='2082986577 156' ;;
+    scEqualBit) expected='1611320584 56' ;; scEqualBorrow) expected='3496656700 174' ;;
+    scSelect) expected='1808119660 108' ;; scSelectGo) expected='1022110123 152' ;;
+    scHighBit) expected='601342344 46' ;; scHighBorrow) expected='1879936321 172' ;;
+    scNegateCt) expected='1370341835 126' ;; scNegateCtGo) expected='272873770 217' ;;
+    rawSc) expected='3051169895 33' ;;
     takeHigh) expected='2782148329 134' ;; *) return 1 ;;
   esac
   actual=$(cksum "$body" | awk '{ print $1 " " $2 }')
@@ -239,6 +268,15 @@ source_helpers_ok() {
     "selectPCandidate:$field:1" \
     "subPSelect:$field:0" \
     "canonicalize:$field:0" \
+    "feZeroBit:$field:0" \
+    "feZeroBorrow:$field:1" \
+    "feEqualBit:$field:0" \
+    "feEqualBorrow:$field:1" \
+    "feSelect:$field:0" \
+    "feSelectGo:$field:1" \
+    "feNegateCt:$field:0" \
+    "feNegateCtGo:$field:1" \
+    "rawFe:$field:0" \
     "carryAll:$scalar:0" \
     "carryGo:$scalar:2" \
     "foldOnce:$scalar:0" \
@@ -250,7 +288,18 @@ source_helpers_ok() {
     "selectNCandidate:$scalar:1" \
     "subNSelect:$scalar:0" \
     "reduceWide:$scalar:0" \
-    "copyLow:$scalar:1"
+    "copyLow:$scalar:1" \
+    "scZeroBit:$scalar:0" \
+    "scZeroBorrow:$scalar:1" \
+    "scEqualBit:$scalar:0" \
+    "scEqualBorrow:$scalar:1" \
+    "scSelect:$scalar:0" \
+    "scSelectGo:$scalar:1" \
+    "scHighBit:$scalar:0" \
+    "scHighBorrow:$scalar:1" \
+    "scNegateCt:$scalar:0" \
+    "scNegateCtGo:$scalar:1" \
+    "rawSc:$scalar:0"
   do
     name=${spec%%:*}
     rest=${spec#*:}
@@ -310,7 +359,19 @@ fieldSelectWitness =
   let canonical = canonicalize [|1, 0, 0, 0, 0, 0, 0, 0, 0, 0|]
   arrayLength (feToBytes canonical) == 32
 
-main = if fieldRoundsWitness && fieldSelectWitness then println "PASS field-rounds" else panic "FAIL field-rounds"
+fieldCtHelpersWitness : Bool
+fieldCtHelpersWitness =
+  let two = feAdd feOne feOne
+  feZeroBit feZero == 1
+    && feZeroBit feOne == 0
+    && feEqualBit feOne feOne == 1
+    && feEqualBit feOne two == 0
+    && feEqual (feSelect 0 feOne two) feOne
+    && feEqual (feSelect 1 feOne two) two
+    && feEqual (feNegateCt feZero) feZero
+    && feEqual (feAdd two (feNegateCt two)) feZero
+
+main = if fieldRoundsWitness && fieldSelectWitness && fieldCtHelpersWitness then println "PASS field-rounds" else panic "FAIL field-rounds"
 EOF
 }
 
@@ -342,7 +403,22 @@ scalarSelectWitness =
   let canonical = reduceWide (arrayMake 32 0)
   arrayLength (scToBytes canonical) == 32
 
-main = if scalarRoundsWitness && scalarSelectWitness then println "PASS scalar-rounds" else panic "FAIL scalar-rounds"
+scalarCtHelpersWitness : Bool
+scalarCtHelpersWitness =
+  let two = scAdd scOne scOne
+  let high = scNegateCt scOne
+  scZeroBit scZero == 1
+    && scZeroBit scOne == 0
+    && scEqualBit scOne scOne == 1
+    && scEqualBit scOne two == 0
+    && scEqual (scSelect 0 scOne two) scOne
+    && scEqual (scSelect 1 scOne two) two
+    && scEqual (scNegateCt scZero) scZero
+    && scEqual (scAdd two (scNegateCt two)) scZero
+    && scHighBit scZero == 0
+    && scHighBit high == 1
+
+main = if scalarRoundsWitness && scalarSelectWitness && scalarCtHelpersWitness then println "PASS scalar-rounds" else panic "FAIL scalar-rounds"
 EOF
 }
 
@@ -516,6 +592,54 @@ if source_helpers_ok "$FIELD" "$WORK/scalar_copy_source_mutant.mdk" "$WORK/sourc
 fi
 pass 'scalar transitive copy mutation is rejected by closed source graph'
 
+awk '
+  /^feZeroBit a =/ {
+    print "feZeroBit a = hashBool (feEqual a feZero)"
+    next
+  }
+  { print }
+' "$FIELD" > "$WORK/field_zero_sentinel_mutant.mdk"
+if source_helpers_ok "$WORK/field_zero_sentinel_mutant.mdk" "$SCALAR" "$WORK/source-field-zero-mutant"; then
+  fail 'field sentinel/Bool zero mutation is rejected by source structure'
+fi
+pass 'field sentinel/Bool zero mutation is rejected by source structure'
+
+awk '
+  /^scHighBit s =/ {
+    print "scHighBit s = hashBool (scIsHigh s)"
+    next
+  }
+  { print }
+' "$SCALAR" > "$WORK/scalar_high_bool_mutant.mdk"
+if source_helpers_ok "$FIELD" "$WORK/scalar_high_bool_mutant.mdk" "$WORK/source-scalar-high-mutant"; then
+  fail 'scalar Bool high mutation is rejected by source structure'
+fi
+pass 'scalar Bool high mutation is rejected by source structure'
+
+awk '
+  /scHighBorrow s \(i \+ 1\) \(1 - shiftRight t 16\)/ {
+    print "    scHighBorrow s (i + 1) (if shiftRight t 16 == 0 then 1 else 0)"
+    next
+  }
+  { print }
+' "$SCALAR" > "$WORK/scalar_high_branch_mutant.mdk"
+if source_helpers_ok "$FIELD" "$WORK/scalar_high_branch_mutant.mdk" "$WORK/source-scalar-high-branch-mutant"; then
+  fail 'scalar high-bit secret-branch mutation is rejected by source structure'
+fi
+pass 'scalar high-bit secret-branch mutation is rejected by source structure'
+
+awk '
+  /let \(\) = set i \(a\[i\] \+ bit \* \(b\[i\] - a\[i\]\)\) out/ {
+    print "    let () = if bit == 1 then set i b[i] out else set i a[i] out"
+    next
+  }
+  { print }
+' "$FIELD" > "$WORK/field_helper_select_mutant.mdk"
+if source_helpers_ok "$WORK/field_helper_select_mutant.mdk" "$SCALAR" "$WORK/source-field-helper-select-mutant"; then
+  fail 'field helper conditional-select mutation is rejected by source structure'
+fi
+pass 'field helper conditional-select mutation is rejected by source structure'
+
 # Private same-module witnesses. The mutation copies never touch the worktree.
 cp "$FIELD" "$WORK/field_probe.mdk"
 append_field_probe "$WORK/field_probe.mdk"
@@ -552,7 +676,13 @@ check_emitted_helpers "$WORK/field_emit.ll" "$WORK/field-ir" \
   carryPass:0:0:0:0:0:2 carryPassGo:1:3:3:0:0:22 carryFoldRound:0:2:2:0:0:11 \
   reduceCarry:0:0:0:0:0:3 subPCandidate:1:4:2:0:0:29 \
   selectPCandidate:1:2:1:0:0:7 subPSelect:0:0:0:1:0:9 \
-  canonicalize:0:0:0:0:1:3
+  canonicalize:0:0:0:0:1:3 \
+  feZeroBit:0:0:0:0:0:4 feZeroBorrow:1:2:0:0:0:17 \
+  feEqualBit:0:0:0:0:0:5 feEqualBorrow:1:4:0:0:0:22 \
+  feSelect:0:0:0:1:0:7 feSelectGo:1:3:1:0:0:8 \
+  feNegateCt:0:0:0:1:0:10 feNegateCtGo:1:4:2:0:0:26
+extract_function rawFe "$WORK/field_emit.ll" "$WORK/field-ir/rawFe.ll"
+raw_accessor_ir_ok "$WORK/field-ir/rawFe.ll" || fail 'field opaque-value accessor has only invariant representation dispatch'
 emitted_local_closure_ok "$WORK/field-ir" field_emit || fail 'field emitted local call graph is closed'
 pass 'field emitted local call graph is closed, including carryPass'
 extract_function selectPCandidate "$WORK/field_emit.ll" "$WORK/select-current.ll"
@@ -566,6 +696,22 @@ if grep -F -q 'mdk_value_eq' "$WORK/select-current.ll" "$WORK/borrow-current.ll"
 fi
 pass 'current field IR has only public-counter control'
 pass 'complete field reducer IR matches the approved helper control shape'
+
+cp "$WORK/field_zero_sentinel_mutant.mdk" "$WORK/field_zero_sentinel_emit.mdk"
+append_field_probe "$WORK/field_zero_sentinel_emit.mdk"
+MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/field_zero_sentinel_emit.mdk" -o "$WORK/field_zero_sentinel_emit" --keep-ir > "$WORK/build-field-zero-mutant.log" 2>&1
+extract_function feZeroBit "$WORK/field_zero_sentinel_emit.ll" "$WORK/field-zero-mutant.ll"
+grep -F -q 'mdk_hash_bool' "$WORK/field-zero-mutant.ll" || fail 'field sentinel/Bool zero mutation reaches native IR'
+grep -F -q '__feEqual' "$WORK/field-zero-mutant.ll" || fail 'field sentinel zero mutation calls branch-bearing equality'
+pass 'field sentinel/Bool zero mutation is rejected by native IR closure'
+
+cp "$WORK/field_helper_select_mutant.mdk" "$WORK/field_helper_select_emit.mdk"
+append_field_probe "$WORK/field_helper_select_emit.mdk"
+MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/field_helper_select_emit.mdk" -o "$WORK/field_helper_select_emit" --keep-ir > "$WORK/build-field-helper-select-mutant.log" 2>&1
+extract_function feSelectGo "$WORK/field_helper_select_emit.ll" "$WORK/field-helper-select-mutant.ll"
+grep -F -q 'mdk_value_eq' "$WORK/field-helper-select-mutant.ll" || fail 'field helper conditional-select mutation reaches native IR'
+[ "$(grep -c 'br i1' "$WORK/field-helper-select-mutant.ll" || true)" -gt 1 ] || fail 'field helper conditional-select mutation adds secret IR control'
+pass 'field helper conditional-select mutation is rejected by native IR control'
 
 cp "$WORK/field_borrow_source_mutant.mdk" "$WORK/field_borrow_branch_mutant.mdk"
 append_field_probe "$WORK/field_borrow_branch_mutant.mdk"
@@ -597,7 +743,14 @@ check_emitted_helpers "$WORK/scalar_emit.ll" "$WORK/scalar-ir" \
   carryAll:0:0:0:0:0:3 carryGo:2:1:1:0:0:12 takeHigh:1:1:2:0:0:9 foldAccum:1:0:0:0:0:6 \
   foldAccumRow:1:3:1:0:0:9 foldOnce:0:0:0:1:0:7 reduceFixed:0:0:0:0:0:9 \
   subNCandidate:1:2:1:0:0:15 selectNCandidate:1:2:1:0:0:7 \
-  subNSelect:0:0:0:1:0:9 reduceWide:0:0:0:1:0:7 copyLow:1:1:1:0:0:6
+  subNSelect:0:0:0:1:0:9 reduceWide:0:0:0:1:0:7 copyLow:1:1:1:0:0:6 \
+  scZeroBit:0:0:0:0:0:4 scZeroBorrow:1:1:0:0:0:10 \
+  scEqualBit:0:0:0:0:0:5 scEqualBorrow:1:2:0:0:0:12 \
+  scSelect:0:0:0:1:0:7 scSelectGo:1:3:1:0:0:8 \
+  scHighBit:0:0:0:0:0:5 scHighBorrow:1:2:0:0:0:12 \
+  scNegateCt:0:0:0:1:0:10 scNegateCtGo:1:2:1:0:0:15
+extract_function rawSc "$WORK/scalar_emit.ll" "$WORK/scalar-ir/rawSc.ll"
+raw_accessor_ir_ok "$WORK/scalar-ir/rawSc.ll" || fail 'scalar opaque-value accessor has only invariant representation dispatch'
 emitted_local_closure_ok "$WORK/scalar-ir" scalar_emit || fail 'scalar emitted local call graph is closed'
 pass 'scalar emitted local call graph is closed, including carryAll and copyLow'
 extract_function selectNCandidate "$WORK/scalar_emit.ll" "$WORK/scalar-select-current.ll"
@@ -610,6 +763,22 @@ fi
 grep -F -q 'call i64 @mdk_array__set(i64 %arg2,' "$WORK/scalar-borrow-current.ll" || fail 'scalar borrow IR writes only at its public index argument'
 pass 'current scalar IR has only public-counter control'
 pass 'complete scalar reducer IR matches the approved helper control shape'
+
+cp "$WORK/scalar_high_bool_mutant.mdk" "$WORK/scalar_high_bool_emit.mdk"
+append_scalar_probe "$WORK/scalar_high_bool_emit.mdk"
+MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_high_bool_emit.mdk" -o "$WORK/scalar_high_bool_emit" --keep-ir > "$WORK/build-scalar-high-mutant.log" 2>&1
+extract_function scHighBit "$WORK/scalar_high_bool_emit.ll" "$WORK/scalar-high-mutant.ll"
+grep -F -q 'mdk_hash_bool' "$WORK/scalar-high-mutant.ll" || fail 'scalar Bool high mutation reaches native IR'
+grep -F -q '__scIsHigh' "$WORK/scalar-high-mutant.ll" || fail 'scalar high mutation calls branch-bearing predicate'
+pass 'scalar Bool high mutation is rejected by native IR closure'
+
+cp "$WORK/scalar_high_branch_mutant.mdk" "$WORK/scalar_high_branch_emit.mdk"
+append_scalar_probe "$WORK/scalar_high_branch_emit.mdk"
+MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_high_branch_emit.mdk" -o "$WORK/scalar_high_branch_emit" --keep-ir > "$WORK/build-scalar-high-branch-mutant.log" 2>&1
+extract_function scHighBorrow "$WORK/scalar_high_branch_emit.ll" "$WORK/scalar-high-branch-mutant.ll"
+grep -F -q 'mdk_value_eq' "$WORK/scalar-high-branch-mutant.ll" || fail 'scalar high-bit secret-branch mutation reaches native IR'
+[ "$(grep -c 'br i1' "$WORK/scalar-high-branch-mutant.ll" || true)" -gt 1 ] || fail 'scalar high-bit mutation adds secret IR control'
+pass 'scalar high-bit secret-branch mutation is rejected by native IR control'
 
 cp "$WORK/scalar_select_source_mutant.mdk" "$WORK/scalar_branch_mutant.mdk"
 append_scalar_probe "$WORK/scalar_branch_mutant.mdk"
@@ -731,6 +900,30 @@ if grep -F -q 'mdk_value_eq' "$WORK/scalar-select-current.asm"; then
 fi
 grep -F -q 'mdk_value_eq' "$WORK/scalar-select-mutant.asm" || fail 'scalar conditional-select mutation is visible in final native disassembly'
 pass 'scalar conditional-select mutation is rejected by final native disassembly'
+
+field_helper_select_symbol=$(find_native_symbol "$WORK/field_emit" feSelectGo)
+field_helper_select_mutant_symbol=$(find_native_symbol "$WORK/field_helper_select_emit" feSelectGo)
+[ -n "$field_helper_select_symbol" ] || fail 'current final native field helper select symbol exists'
+[ -n "$field_helper_select_mutant_symbol" ] || fail 'mutant final native field helper select symbol exists'
+disassemble "$WORK/field_emit" "$field_helper_select_symbol" "$WORK/field-helper-select-current.asm"
+disassemble "$WORK/field_helper_select_emit" "$field_helper_select_mutant_symbol" "$WORK/field-helper-select-mutant.asm"
+if grep -F -q 'mdk_value_eq' "$WORK/field-helper-select-current.asm"; then
+  fail 'current final field helper select has no secret equality selection'
+fi
+grep -F -q 'mdk_value_eq' "$WORK/field-helper-select-mutant.asm" || fail 'field helper conditional-select mutation is visible in final native helper'
+pass 'field helper conditional-select mutation is rejected by final native control'
+
+scalar_high_symbol=$(find_native_symbol "$WORK/scalar_emit" scHighBorrow)
+scalar_high_mutant_symbol=$(find_native_symbol "$WORK/scalar_high_branch_emit" scHighBorrow)
+[ -n "$scalar_high_symbol" ] || fail 'current final native scalar high-bit symbol exists'
+[ -n "$scalar_high_mutant_symbol" ] || fail 'mutant final native scalar high-bit symbol exists'
+disassemble "$WORK/scalar_emit" "$scalar_high_symbol" "$WORK/scalar-high-current.asm"
+disassemble "$WORK/scalar_high_branch_emit" "$scalar_high_mutant_symbol" "$WORK/scalar-high-mutant.asm"
+if grep -F -q 'mdk_value_eq' "$WORK/scalar-high-current.asm"; then
+  fail 'current final scalar high-bit borrow has no secret equality control'
+fi
+grep -F -q 'mdk_value_eq' "$WORK/scalar-high-mutant.asm" || fail 'scalar high-bit secret-branch mutation is visible in final native helper'
+pass 'scalar high-bit secret-branch mutation is rejected by final native control'
 
 wrapper_symbol=$(find_native_symbol "$WORK/scalar_wrapper_mutant" subNCandidate)
 [ -n "$wrapper_symbol" ] || fail 'scalar leaky-wrapper final native helper symbol exists'
