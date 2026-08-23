@@ -41,8 +41,8 @@ Implementation adds:
   operations, fixed-schedule scalar multiplication, compressed codec, and
   ECDSA/RFC-6979 internals;
 - `pds/lib/sign.mdk`: the only consumer-facing key/signature interface;
-- `pds/lib/hmac_sha256.mdk`: fixed-shape HMAC-SHA-256 over byte arrays, private
-  to the signing layer.
+- a future HMAC-SHA-256 module: fixed-shape HMAC-SHA-256 over byte arrays,
+  private to the signing layer.
 
 `sign.mdk` exports opaque `SecretKey`, `PublicKey`, and `Signature` values and
 the following semantic surface (exact constructor names are private):
