@@ -2583,29 +2583,21 @@ routeLocalSym _ = ""
 -- #154 PR-B: PERSISTENT per-run dispatch-index accumulator for the multi-module path.
 -- checkBodyImpl's Module arm used to `argDispatchIndices implDecls` (= `accAll ++ prog`) —
 -- a flatMap over EVERY earlier module's decls once per module, an O(N²) rebuild on the
--- emit path (elabWorker / elabModuleStamp).  `argDispatchIndices` is a pure structural
--- scan of the DInterface decls (no tyvars, no side effects), so the result is just a
--- concatenation of each module's interface indices: `argDispatchIndices (a ++ b)` =
--- `argDispatchIndices a ++ argDispatchIndices b`.  Grow this list ONE module at a time in
--- `appendUniverseAccums` (BEFORE the Module arm reads it, so module k sees interfaces
--- 1..k INCLUDING its own — the same membership `accAll ++ prog` gave), copy it into the
--- resetState-wiped methodDispatchIdxRef in the Module arm.  Byte-identical to the old
--- per-module rebuild — but NOT for the reason this comment used to give.  It said "method
--- names are globally unique and the sole reader is methodDispatchIdx's `lookupAssoc`
--- (first-wins)".  🚨 #1111 A-2.5 (#1092): method names are NOT globally unique.  The
--- equality survives WITHOUT that premise: `argDispatchIndices` is a pure concatenation and
--- `lookupAssoc` is first-wins on BOTH sides, so accumulator and rebuild hold the same
--- entries in the same core-first left-to-right order and therefore make the SAME pick,
--- whatever it is.  What uniqueness was silently doing is making that pick UNAMBIGUOUS;
--- without it, WHICH of two same-named methods' dispatch indices wins is decided by
--- registration order.
--- ⚠️ Whether that order-decided pick is ever OBSERVABLY wrong is UNVERIFIED, and this row
--- must not be recorded as fixed on the strength of A-2.5: A-2.5 overlays
--- methodIfaceParamsRef, NOT this list, so it does not touch this table at all.  Two probes
--- built to expose the pick (one method name at two different dispatch ARG POSITIONS across
--- two modules, both registration orders) returned the CORRECT value on the A-2.5 binary and
--- on main alike — i.e. they discriminate nothing, so they are evidence of neither verdict.
--- Unowned; umbrella #1070 / #1111.
+-- emit path (elabWorker / elabModuleStamp).  The scan is pure and structural (no tyvars,
+-- no side effects) and distributes over `++`, so the accumulator grown ONE module at a
+-- time in `appendUniverseAccums` (BEFORE the Module arm copies it, so module k sees
+-- interfaces 1..k INCLUDING its own — the same membership `accAll ++ prog` gave) holds
+-- exactly what the per-module rebuild held.
+--
+-- ✅ #1351 L5 (CONTRACT): the accumulator this paragraph described is now the
+-- IDENTITY-KEYED one, `universeMethodDispatchIdxByIdRef`, copied into
+-- `methodDispatchIdxByIdRef`.  Its bare-name predecessor is DELETED, and with it the
+-- whole hazard the rest of this comment used to carry: the pick between two same-named
+-- methods' dispatch indices is no longer made by a first-wins `lookupAssoc` over
+-- registration order, because the key now carries the declaring interface's identity
+-- (`IfaceRef`, `irOrigin` included) and `dispatchIdxScoped` asks for ONE declaration —
+-- the one `admittedIfaceFor` says this module admits.  A prior module's entry that this
+-- module cannot name is unreachable by construction rather than merely unqueried.
 -- Survives per-module `resetState`; cleared per
 -- RUN by `resetCrossModuleState`; seeded by the core pass (also Module mode).
 -- FLAT-PATH SHADOW FIX (facet 1): interface-method names that a USER top-level fn
@@ -4911,7 +4903,7 @@ ieProbeBlobHead = headKeyOfCon (OriginModule "amod") "Blob"
 -- "WHY NOT JUST CALL registerAllData/…" block above `DataEnv` for the full
 -- derivation, which applies here unchanged.
 --
--- EXCLUDES `universeMethodDispatchIdxRef` and `universeIfaceMethodsRef` —
+-- EXCLUDES `universeMethodDispatchIdxByIdRef` and `universeIfaceMethodsRef` —
 -- lifted bare and unchanged, NEVER keyed here (#1112's decomposition row,
 -- re-grounded in #1519's own bookkeeping comment 2026-08-11 after #1353
 -- closed): `universeIfaceMethodsRef` belongs to #1354's method-namespace unit
@@ -4920,7 +4912,8 @@ ieProbeBlobHead = headKeyOfCon (OriginModule "amod") "Blob"
 -- FILTER AT THE READ (`nameableIfaceShadows` narrowing the graph-global set
 -- per module), not a re-keying of the table, so keying it here would build a
 -- second, differently-shaped answer to a question that already has one live
--- decision point.  `universeMethodDispatchIdxRef` is #1351's (OPEN S0), and
+-- decision point.  `universeMethodDispatchIdxByIdRef` is #1351's (OPEN S0; its
+-- bare-name predecessor `universeMethodDispatchIdxRef` was retired at L5), and
 -- `TYPECHECK-TARGET-ARCHITECTURE.md` §9 independently routes it to `IE`/
 -- RLocal-site channels, not `CE`.
 --
@@ -5509,7 +5502,7 @@ ceFunctorKey = regKeyOfTab (ifaceTabKey (OriginModule "fmod") "Functor")
 -- per-ref prose and clustered in NEITHER `resetState` (PerRun/Toggles) NOR
 -- `resetCrossModuleState` (CrossRun).  They have HETEROGENEOUS lifecycles
 -- (driver-set-once preamble state like `effectDomains`/`mainSchemeRef`; module-path
--- scratch set fresh per module like `standaloneValuesRef`/`methodDispatchIdxRef`;
+-- scratch set fresh per module like `standaloneValuesRef`/`methodDispatchIdxByIdRef`;
 -- group-scoped state reset before each check group like `matchOracle`/`matchWarnings`),
 -- so there is NO single `freshDriverState` reset point: `freshDriverState` is the
 -- INITIAL construction only, and every field is (re)written at its OWN current site,
@@ -5529,7 +5522,6 @@ data DriverState =
       graphCtorExportsRef : Ref (OrdMap (List (String, String, Ident))),
       declEnvsRef : Ref DeclEnvs,
       abstractRecordTypesRef : Ref (List String),
-      argDispatchIdxRef : Ref (List (String, Int)),
       argDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),
       dictEligibleRef : Ref (List String),
       dictEligibleSetRef : Ref (OrdMap Unit),
@@ -5539,7 +5531,6 @@ data DriverState =
       coherenceUserDecls : Ref (List Decl),
       superDeclsRef : Ref (List Decl),
       standaloneValuesRef : Ref (List String),
-      methodDispatchIdxRef : Ref (List (String, Int)),
       methodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),
       matchOracle : Ref Oracle,
       matchWarnings : Ref (List TcDiag),
@@ -5561,7 +5552,6 @@ freshDriverState _ = DriverState {
   graphCtorExportsRef = Ref omEmpty,
   declEnvsRef = Ref emptyDeclEnvs,
   abstractRecordTypesRef = Ref [],
-  argDispatchIdxRef = Ref [],
   argDispatchIdxByIdRef = Ref [],
   dictEligibleRef = Ref [],
   dictEligibleSetRef = Ref omEmpty,
@@ -5571,7 +5561,6 @@ freshDriverState _ = DriverState {
   coherenceUserDecls = Ref [],
   superDeclsRef = Ref [],
   standaloneValuesRef = Ref [],
-  methodDispatchIdxRef = Ref [],
   methodDispatchIdxByIdRef = Ref [],
   matchOracle = Ref (buildOracle []),
   matchWarnings = Ref [],
@@ -6292,8 +6281,7 @@ data CrossRun = CrossRun {
     universeMethodIdentsRef : Ref (OrdMap (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))))),  -- #1111 A-2.5 (#1092): the identity-keyed COMPANION of the line above — see methodIdentOf
     universeMethodCollidedRef : Ref (List String),  -- #1111 A-2.5: the method NAMES the line above holds ≥2 distinct identities for (normally EMPTY)
     universeRegisteredIfacesRef : Ref (OrdMap Unit),  -- #1111 A-2.4: DELIBERATELY still bare-name — a Unit-valued NAME-membership set, see ifaceRegistered
-    universeMethodDispatchIdxRef : Ref (List (String, Int)),
-    universeMethodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),  -- #1351 L1 EXPAND: identity-keyed sibling of the line above, grown in the SAME fold so the two can never come to describe different universes.  No reader yet — L3 migrates them.
+    universeMethodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),  -- #1351: the interface dispatch-index universe, keyed ((IfaceRef, method name), Int).  Its bare-name-keyed predecessor `universeMethodDispatchIdxRef` was RETIRED by L5 (CONTRACT) once `dispatchIdxScoped` stopped falling back to it — read via `methodDispatchIdxByIdRef`.
     universeRecordByName : Ref (OrdMap RecordInfo),
     universeRecordIdentsRef : Ref (OrdMap (List (Ident, String, RecordInfo))),  -- #1111 A-2.12 (#1319 unit 2): the identity-keyed COMPANION of the line above — see insertRecordIdents
     universeRecordCollidedRef : Ref (List String),  -- #1111 A-2.12: the registry KEYS the line above holds ≥2 distinct identities for (normally EMPTY)
@@ -6416,7 +6404,6 @@ freshCrossRun env = CrossRun {
   universeMethodIdentsRef = Ref omEmpty,
   universeMethodCollidedRef = Ref [],
   universeRegisteredIfacesRef = Ref omEmpty,
-  universeMethodDispatchIdxRef = Ref [],
   universeMethodDispatchIdxByIdRef = Ref [],
   universeRecordByName = Ref omEmpty,
   universeRecordIdentsRef = Ref omEmpty,
@@ -8973,7 +8960,7 @@ inferIntRange env lo hi container =
 
 -- a method occurrence.  Return-position: record (routeRef, result mono) so
 -- resolveSites can stamp RKey/RDict.  D3a arg-position (name in
--- argDispatchIdxRef): the dispatch is decided by the DISCRIMINATING-ARGUMENT type,
+-- argDispatchIdxByIdRef): the dispatch is decided by the DISCRIMINATING-ARGUMENT type,
 -- not the result, so queue recordArgStamp on the arg-position mono instead — it is
 -- NOT a pendingSites/methodSiteFns return-position site.
 inferMethodAt : TcEnv -> String -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Mono
@@ -9064,23 +9051,17 @@ standaloneSchemeFor env name sym = match lookupAssoc name perRun.value.shadowSta
   None => lookupVar env (if sym == "" then name else sym)
 
 -- C5: the dispatch-arg index of an interface method, from the graph-wide map
--- methodDispatchIdxRef (built by checkModuleFullImpl from every interface decl).
+-- methodDispatchIdxByIdRef (built by checkModuleFullImpl from every interface decl).
 -- Ungated, unlike argDispatchOf — RLocal detection must run on the eval path too.
 methodDispatchIdx : String -> Option Int
 methodDispatchIdx name =
-  dispatchIdxScoped
-    name
-    driverState.value.methodDispatchIdxByIdRef.value
-    driverState.value.methodDispatchIdxRef.value
+  dispatchIdxScoped name driverState.value.methodDispatchIdxByIdRef.value
 
 -- the dispatch-arg index of an arg-position method, but only when stamping is
 -- enabled (the emit path) — off, every EMethodAt is a return-position site.
 argDispatchOf : String -> Option Int
 argDispatchOf name =
-  dispatchIdxScoped
-    name
-    driverState.value.argDispatchIdxByIdRef.value
-    driverState.value.argDispatchIdxRef.value
+  dispatchIdxScoped name driverState.value.argDispatchIdxByIdRef.value
 
 -- ── #1351 L3 (MIGRATE Leg 1): the IDENTITY-SCOPED dispatch-index read ───────────
 --
@@ -9107,20 +9088,43 @@ argDispatchOf name =
 -- what makes a partial move unrepresentable here.  Their signatures are unchanged,
 -- so no caller is edited.
 --
--- ⚠️ MISS FALLS BACK TO THE BARE-NAME ANSWER, deliberately, exactly as
--- `pickSchemesByDecl` does.  A miss means "this module's scope does not decide it"
--- (no `methodIfaceParamsRef` entry, or the admitted declaration contributes no row).
--- Answering `None` instead would tell `recordRLocalSite` the name has no dispatch
--- index at all — turning a dispatched site into an RLocal one, a routing change, not
--- a conservative one.
+-- ⚠️ A MISS IS NOW `None`, AND THAT IS L5 (CONTRACT), NOT A HEDGE REMOVED BY HAND.
+-- Both arms used to fall back to `lookupAssoc name bare` — the bare-name-keyed table
+-- whose first-match-over-decl-walk-order answer IS #1351's residual order-dependence.
+-- Retiring it needed the precondition L3 wrote down here verbatim ("after `argNames`'
+-- consumer joins the site set") to be TRUE, and L5 MEASURED it rather than assuming it:
+--
+--   * `methodIfaceParamsRef` is `applyMethodScopeOverrides`' output, and that is an
+--     OVERLAY on the graph-wide universe floor, never a rebuild (its own ⚠️, and the
+--     A-2.5 note at the Module-arm write site).  Scoping re-decides WHICH declaration a
+--     colliding name maps to; it does not NARROW the key set.  So this reader's domain
+--     is a SUPERSET of the retired bare tables' domain, not a subset of it — the
+--     direction that makes the fall-back dead rather than load-bearing.
+--   * `argNames`' consumer was ALREADY scoped: `prePassModulePairArg` hands
+--     `filterList keep argNames` (keep = `nameableIfaceMethodSet` of the module's own
+--     decls) to `prePassDictArg`, so a name this module cannot name is never marked
+--     `EMethodAt` and never reaches here.
+--   * MEASURED, panic-instrumented, before the edit: across 327 programs
+--     (`shadow_fixtures`, `import_order_fixtures`, `must_fail_fixtures`) on `check`,
+--     `run` AND `build` — the last being the only path where `argDispatchOf`'s stamping
+--     gate is open — plus the compiler's own self-compile, the fall-back arm DECIDED
+--     ZERO sites.  `admittedIfaceFor` never missed at all; the id-table miss did occur
+--     (`fromInt`) and the bare table missed there too, so both spellings already
+--     answered `None`.
+--
+-- The old prose said answering `None` would turn a dispatched site into an RLocal one.
+-- That risk was real while the bare table could still answer; with the measurement
+-- above it cannot, and keeping the arm would keep import order deciding a receiver
+-- argument on any program the corpus does not yet contain.
 --
 -- ── The two fields this reader consumes (re-homed here by L3, RUN-METHID-054) ──
 -- `argDispatchIdxByIdRef` / `methodDispatchIdxByIdRef` (`DriverState`) — #1351 L1
--- (EXPAND).  The identity-keyed siblings of `argDispatchIdxRef` /
--- `methodDispatchIdxRef`, keyed `(IfaceRef, method name)` instead of the bare method
--- name.  Written in lockstep with their bare-name peers at exactly the peers' own
--- write sites (see `argDispatchIndicesById`).  L1 wrote them and nothing read them;
--- THIS function is the reader L1 was expanding for.
+-- (EXPAND), keyed `(IfaceRef, method name)`.  The `IfaceRef` half carries `irOrigin`,
+-- the module-identity component, so a bare method name shared by two interfaces in
+-- different modules gets distinct rows instead of colliding.  L1 wrote them and nothing
+-- read them; THIS function is the reader L1 was expanding for, and since L5 (CONTRACT)
+-- they are the ONLY dispatch-index tables — the bare-name peers they were written in
+-- lockstep with are deleted, so lockstep is no longer a property anything can break.
 --
 -- ⚠️ Their prose lives HERE, not on the fields, because `data DriverState` has the
 -- two-line `data X =` / `  | X {` header shape that #829 ([T-PERRUN-COMMENTS])
@@ -9128,16 +9132,17 @@ argDispatchOf name =
 -- onto a DIFFERENT field, and `fmt --check` does not catch it — measured live at L1,
 -- where one `fmt --write` silently relocated two field comments.
 --
--- 🚨 The bare-name WRITE is NOT retired (RUN-METHID-093 struck that instruction):
--- `argNames` (`prePassDictArg`'s arg-position name set) reads `argDispatchIdxRef` as
--- a NAME SET, and §4 F1 declares that use untouched by this family.  Deleting the
--- old table is L5's contract job, after `argNames`' consumer joins the site set.
-dispatchIdxScoped : String -> List ((IfaceRef, String), Int) -> List (String, Int) -> Option Int
-dispatchIdxScoped name byId bare = match admittedIfaceFor name
-  None => lookupAssoc name bare
-  Some iface => match lookupIdxById iface name byId
-    Some i => Some i
-    None => lookupAssoc name bare
+-- ✅ The bare-name tables are RETIRED (L5, CONTRACT).  `argDispatchIdxRef`,
+-- `methodDispatchIdxRef` and the `CrossRun` accumulator behind the latter
+-- (`universeMethodDispatchIdxRef`) are gone, along with this reader's `bare`
+-- parameter.  `argNames` — the one use of the old table that was a NAME SET rather
+-- than an index lookup — is now a pure local `map fst (argDispatchIndices …)` at both
+-- of its sites (`elaborateDict`, `elabWorker`); it needed no table storage, only the
+-- same structural walk, so no third copy of the universe survives.
+dispatchIdxScoped : String -> List ((IfaceRef, String), Int) -> Option Int
+dispatchIdxScoped name byId = match admittedIfaceFor name
+  None => None
+  Some iface => lookupIdxById iface name byId
 
 -- ⚠️ ONE `admittedIfaceFor`, NOT TWO.  Leg 1 (this reader) and Leg 3
 -- (`ieImplExistsForHead`) both need "which declaration does this module admit for
@@ -15259,10 +15264,10 @@ elaborateDict runtimeDecls dictNames eligibleNames prog =
   let _ = setDictEligible eligibleNames
   driverState.value.implInferEnabled := True
   let allNames = discoverAll runtimeDecls prog dictNames eligibleNames
-  driverState.value.argDispatchIdxRef := (argDispatchIndices prog)
-  -- #1351 L1 EXPAND: the identity-keyed sibling, written in lockstep.  No reader yet.
   driverState.value.argDispatchIdxByIdRef := (argDispatchIndicesById prog)
-  let argNames = map fst driverState.value.argDispatchIdxRef.value
+  -- #1351 L5 (CONTRACT): the NAME SET only — `prePassDictArg` wants the names, not the
+  -- indices, and the indices are now answered exclusively by the identity-keyed table above.
+  let argNames = map fst (argDispatchIndices prog)
   -- P0-18: [] — the confirmed definer-shadow-emit path is elaborateModules; this
   -- single-file scratch elaborate stays shadow-map-free (byte-identical discovery).
   let prog2 = prePassDictArg (returnPosMethodNames prog ++ methodConstraintNames prog) allNames argNames [] prog
@@ -22960,8 +22965,8 @@ checkBodyImpl seed mode prog0 =
     Module mid _ _ =>
       driverState.value.standaloneValuesRef := (dedup (importerShadows ++ definerShadows))
       perRun.value.shadowStandaloneSchemesRef := (pickStandaloneSchemes importerShadows seed)
-      driverState.value.methodDispatchIdxRef := crossRun.value.universeMethodDispatchIdxRef.value
-      -- #1351 L1 EXPAND: lockstep copy of the identity-keyed universe.  No reader yet.
+      -- #1351: the per-module copy of the identity-keyed dispatch-index universe, read by
+      -- `methodDispatchIdx` through `dispatchIdxScoped`.  Its bare-name peer was retired at L5.
       driverState.value.methodDispatchIdxByIdRef := crossRun.value.universeMethodDispatchIdxByIdRef.value
       perRun.value.funConstraintsRef := crossRun.value.crossModuleFunConstraintsRef.value
       perRun.value.funConstraintIfacesRef := crossRun.value.crossModuleFunConstraintIfacesRef.value
@@ -28803,12 +28808,10 @@ appendUniverseAccums prog =
   crossRun.value.universeMethodCollidedRef := (snd identAcc)
   -- #154 PR-B: grow the dispatch-index accumulator by THIS module's interface indices.
   -- APPEND (universe first) so the accumulated list stays in the same core-first order the
-  -- old `argDispatchIndices (accAll ++ prog)` flatMap produced; the sole reader is a
-  -- first-wins lookupAssoc, so a prior-module entry this module never names is never queried.
-  crossRun.value.universeMethodDispatchIdxRef := (crossRun.value.universeMethodDispatchIdxRef.value ++ argDispatchIndices prog)
-  -- #1351 L1 EXPAND: the identity-keyed sibling accumulator, appended in the SAME order,
-  -- in the SAME fold, so it cannot come to describe a different universe than the line
-  -- above.  No reader yet — L3 migrates `methodDispatchIdx` onto it.
+  -- old `argDispatchIndices (accAll ++ prog)` flatMap produced.  #1351 L5 (CONTRACT) deleted
+  -- the bare-name accumulator that used to be grown alongside this one: its only reader was
+  -- `dispatchIdxScoped`'s fall-back arm, and the reader is now identity-keyed only, so a
+  -- prior-module entry this module never names cannot be queried by spelling at all.
   crossRun.value.universeMethodDispatchIdxByIdRef := (crossRun.value.universeMethodDispatchIdxByIdRef.value ++ argDispatchIndicesById prog)
   -- #1112 A-3.4 PR2: the #154 PR3 leg that grew the three `obUniv*` obligation-universe
   -- accumulators here is GONE.  Its consumer — the Module arm's `obUniv` — now projects
@@ -31644,10 +31647,10 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   let _ = (driverState.value.superDeclsRef := allDecls)  -- WS-1b: interfaces in scope for the discovery scratch typecheck
   let _ = (driverState.value.userIfaceNamesRef := (collectIfaceNames (flatMap snd modules)))  -- WS-1b: gate super-expansion to user interfaces
   let rpNames = returnPosMethodNames allDecls
-  driverState.value.argDispatchIdxRef := (argDispatchIndices allDecls)
-  -- #1351 L1 EXPAND: the identity-keyed sibling, written in lockstep.  No reader yet.
   driverState.value.argDispatchIdxByIdRef := (argDispatchIndicesById allDecls)
-  let argNames = map fst driverState.value.argDispatchIdxRef.value
+  -- #1351 L5 (CONTRACT): the NAME SET only — `prePassDictArg` wants the names, not the
+  -- indices, and the indices are now answered exclusively by the identity-keyed table above.
+  let argNames = map fst (argDispatchIndices allDecls)
   let _ = setDictEligible (moduleUserFnNames modules)
   -- #194: eliminate the redundant MANDATORY promotion-discovery whole-program
   -- typecheck.  Direct-promotion == ∅ ⟹ full-promoted == ∅ (inherited promotion needs a
