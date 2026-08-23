@@ -376,6 +376,68 @@ byteRangeGo bs i =
     let b = bs[i]
     if b < 0 || b > 255 then False else byteRangeGo bs (i + 1)
 
+-- | Fixed-control candidate parser for secret-key ingress. The length branch is
+--   public; for a 32-element input every element is visited, masked into a
+--   safe byte, and contributes arithmetically to one aggregate validity bit.
+--   The returned scalar is always canonical, including on an invalid input.
+--   This is intentionally separate from the public, branch-bearing
+--   `scFromBytes` wire parser below.
+export
+scSecretCandidate : Array Int -> (Int, Sc)
+scSecretCandidate bs =
+  if arrayLength bs /= 32 then
+    (0, scZero)
+  else
+    scSecretCandidate32 bs
+
+scSecretCandidate32 : Array Int -> (Int, Sc)
+scSecretCandidate32 bs =
+  let safeBytes = arrayMake 32 0
+  let bytesBit = scanSecretBytes bs safeBytes 0 1
+  let limbs = limbsOfBytes safeBytes
+  let rangeBit = secretBelowNBit limbs
+  let nonzeroBit = secretNonzeroBit limbs
+  let candidate = reduceWide (wideOfRaw limbs)
+  (bytesBit * rangeBit * nonzeroBit, candidate)
+
+-- For non-negative fixnums, `(b - 256) >> 62` is -1 exactly when b <= 255.
+-- Negative values can make that subtraction wrap at the most-negative Int,
+-- but their independent sign bit is 0, so the product remains a correct bit.
+-- Both terms are arithmetic 0/1 values; this deliberately has no Bool branch.
+secretByteBit : Int -> Int
+secretByteBit b = (1 + shiftRight b 62) * bitAnd (shiftRight (b - 256) 62) 1
+
+scanSecretBytes : Array Int -> Array Int -> Int -> Int -> Int
+scanSecretBytes bs safeBytes i validBit =
+  if i >= 32 then validBit
+  else
+    let b = bs[i]
+    let byteBit = secretByteBit b
+    let () = A.set i (bitAnd b 255 * byteBit) safeBytes
+    scanSecretBytes bs safeBytes (i + 1) (validBit * byteBit)
+
+-- Borrow after subtracting n is 1 exactly when the raw 256-bit limbs are < n.
+secretBelowNBit : Array Int -> Int
+secretBelowNBit limbs = secretBelowNBorrow limbs 0 0
+
+secretBelowNBorrow : Array Int -> Int -> Int -> Int
+secretBelowNBorrow limbs i borrow =
+  if i >= 16 then borrow
+  else
+    let t = limbs[i] + limbMask + 1 - nLimbs[i] - borrow
+    secretBelowNBorrow limbs (i + 1) (1 - shiftRight t 16)
+
+-- Borrow after subtracting one is 0 exactly when the raw limbs are nonzero.
+secretNonzeroBit : Array Int -> Int
+secretNonzeroBit limbs = 1 - secretNonzeroBorrow limbs 0 1
+
+secretNonzeroBorrow : Array Int -> Int -> Int -> Int
+secretNonzeroBorrow limbs i borrow =
+  if i >= 16 then borrow
+  else
+    let t = limbs[i] + limbMask + 1 - borrow
+    secretNonzeroBorrow limbs (i + 1) (1 - shiftRight t 16)
+
 -- Widen internal 16 canonical limbs into a fresh 32-limb workspace.
 wideOfRaw : Array Int -> Array Int
 wideOfRaw limbs =
