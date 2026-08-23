@@ -1,12 +1,23 @@
 {- | Consumer-facing secret-key ingress for the PDS signing boundary.
 
    A `SecretKey` stores the scalar candidate, never the caller-owned byte
-   array. Public-key and signature APIs arrive in their own slices. -}
+   array. `PublicKey` stores the internal affine point; consumers use only the
+   compressed SEC 1 representation. -}
 
 import lib.scalar.{Sc, scSecretCandidate}
+import lib.secp256k1.{
+  AffinePoint,
+  pointFromCompressed,
+  pointCompressed,
+  publicPointForSecret,
+}
 
 -- | An admitted secp256k1 secret scalar. Its constructor stays module-private.
 export data SecretKey = SecretKey Sc
+
+-- | A parsed or derived secp256k1 public key. Its affine carrier and
+--   constructor stay private to this consumer boundary.
+export data PublicKey = PublicKey AffinePoint
 
 -- | Admit exactly the scalars in `[1, n)`. Length is public; for a 32-element
 --   input the scalar module completes its full fixed-control scan before this
@@ -19,3 +30,20 @@ secretKeyFromBytes bs =
     Ok (SecretKey candidate)
   else
     Err "sign.secretKeyFromBytes: expected a 32-byte scalar in 1..n-1"
+
+-- | Parse one public compressed SEC 1 key. Invalid wire values are rejected
+--   before a `PublicKey` exists.
+export
+publicKeyFromCompressed : Array Int -> Result String PublicKey
+publicKeyFromCompressed bytes = map PublicKey (pointFromCompressed bytes)
+
+-- | Serialize a public key in its fixed 33-byte compressed form.
+export
+publicKeyCompressed : PublicKey -> Array Int
+publicKeyCompressed (PublicKey point) = pointCompressed point
+
+-- | Derive the public key for an admitted secret scalar via the fixed 256-bit
+--   ladder in `secp256k1.mdk`.
+export
+publicKeyForSecret : SecretKey -> PublicKey
+publicKeyForSecret (SecretKey scalar) = PublicKey (publicPointForSecret scalar)

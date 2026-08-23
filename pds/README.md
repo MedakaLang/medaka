@@ -310,3 +310,24 @@ asserting that every infinity result uses the canonical coordinates.
 ```sh
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/inlang_test_oracle.sh
 ```
+
+## secp256k1 public keys (S-public-key, #1700 step 2)
+
+`pds/lib/sign.mdk` is the only consumer-facing key boundary. It now exports
+opaque `SecretKey` and `PublicKey` values plus
+`secretKeyFromBytes`, `publicKeyFromCompressed`, `publicKeyCompressed`, and
+`publicKeyForSecret`. PDS consumers must not import `lib.secp256k1` directly.
+
+The producer runs the accepted fixed 256-round MSB-first ladder: every round
+computes one complete addition and both complete doublings before coordinate
+selection. Secret affine conversion performs one field inverse; compressed
+encoding is exactly 33 bytes. Public decoding accepts only prefixes `0x02` and
+`0x03`, canonical x coordinates, and square curve RHS values.
+
+`pds/test/secp256k1_public_key_test.mdk` pins compressed G/2G/3G, keys for
+small and leading-zero secret scalars, both parity prefixes, and malformed
+wire rejection. It is enrolled in the existing in-language gate:
+
+```sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/inlang_test_oracle.sh
+```

@@ -1,6 +1,8 @@
 {- | Opaque affine/Jacobian secp256k1 point carriers and complete Jacobian
    arithmetic. `JPoint X Y Z` represents `(X / Z^2, Y / Z^3)` and infinity is
-   always canonicalized to `(0, 1, 0)`.
+   always canonicalized to `(0, 1, 0)`. Secret scalar multiplication follows
+   the signing contract's fixed 256-round MSB-first ladder; compressed decoding
+   is a public-input boundary.
 
    `pointAddComplete` implements signing contract §3.2: every call computes
    generic addition, doubling, infinity, and all condition bits before the
@@ -16,13 +18,19 @@ import lib.field.{
   feSquare,
   feZeroBit,
   feEqualBit,
+  feEqual,
   feSelect,
   feNegateCt,
+  feFromBytes,
   feFromBytesReduce,
+  feToBytes,
+  feInverse,
 }
+import lib.scalar.{Sc, scToBytes}
+import array.{set}
 
--- | Affine coordinates are a distinct opaque carrier; conversion is a later
---   slice, so no affine/Jacobian representation boundary is exposed here.
+-- | Affine coordinates are a distinct opaque carrier. They never encode
+--   infinity: the secret scalar boundary admits only nonzero scalars.
 export data AffinePoint = AffinePoint Fe Fe
 
 -- | Jacobian coordinates with a module-private constructor.
@@ -43,6 +51,22 @@ generatorY = feFromBytesReduce
     0x0e, 0x11, 0x08, 0xa8, 0xfd, 0x17, 0xb4, 0x48, 0xa6, 0x85, 0x54, 0x19,
     0x9c, 0x47, 0xd0, 0x8f, 0xfb, 0x10, 0xd4, 0xb8,
   |]
+
+fieldSeven : Fe
+fieldSeven = feFromBytesReduce
+  [|
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 7,
+  |]
+
+-- `(p + 1) / 4`, valid because secp256k1's field prime is 3 mod 4. Reading
+-- this fixed public exponent MSB first gives the square-root candidate.
+sqrtExponent : Array Int
+sqrtExponent = [|
+  0x3f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+  0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+  0xff, 0xff, 0xbf, 0xff, 0xff, 0x0c,
+|]
 
 -- | The canonical infinity `(0, 1, 0)`.
 export
@@ -152,3 +176,104 @@ pointAddComplete (p@(JPoint x1 y1 z1)) (q@(JPoint x2 y2 z2)) =
   let afterQInfinity = pointSelect qInf afterOpposite p
   let afterPInfinity = pointSelect pInf afterQInfinity q
   pointCanonicalize afterPInfinity
+
+-- | Fixed 256-round, MSB-first ladder. The byte and bit indexes are derived
+--   only from the public loop counter. Every round computes the complete add
+--   and both complete doublings before arithmetic selection.
+scalarMultiplySecret : Sc -> JPoint -> JPoint
+scalarMultiplySecret scalar point =
+  scalarLadder (scToBytes scalar) pointInfinity point 0
+
+scalarLadder : Array Int -> JPoint -> JPoint -> Int -> JPoint
+scalarLadder bytes r0 r1 i =
+  if i >= 256 then r0
+  else
+    let byte = bytes[i / 8]
+    let bit = bitAnd (shiftRight byte (7 - i % 8)) 1
+    let added = pointAddComplete r0 r1
+    let doubled0 = pointDoubleComplete r0
+    let doubled1 = pointDoubleComplete r1
+    let next0 = pointSelect bit doubled0 added
+    let next1 = pointSelect bit added doubled1
+    scalarLadder bytes next0 next1 (i + 1)
+
+-- The secret-bearing caller has established that this point is non-infinity,
+-- so this executes exactly one inverse with no Z==0 branch.
+secretAffine : JPoint -> AffinePoint
+secretAffine (JPoint x y z) =
+  let zInv = feInverse z
+  let zInv2 = feSquare zInv
+  let zInv3 = feMul zInv zInv2
+  AffinePoint (feMul x zInv2) (feMul y zInv3)
+
+-- | Derive the affine public point for an admitted secret scalar.
+export
+publicPointForSecret : Sc -> AffinePoint
+publicPointForSecret scalar =
+  secretAffine (scalarMultiplySecret scalar pointGenerator)
+
+sqrtCandidate : Fe -> Fe
+sqrtCandidate rhs = sqrtGo rhs 0 feOne
+
+sqrtGo : Fe -> Int -> Fe -> Fe
+sqrtGo base i acc =
+  if i >= 256 then acc
+  else
+    let squared = feSquare acc
+    let multiplied = feMul squared base
+    let byte = sqrtExponent[i / 8]
+    let bit = bitAnd (shiftRight byte (7 - i % 8)) 1
+    sqrtGo base (i + 1) (feSelect bit squared multiplied)
+
+curveRhs : Fe -> Fe
+curveRhs x = feAdd (feMul (feSquare x) x) fieldSeven
+
+-- | Fixed compressed representation of a non-infinity affine point.
+export
+pointCompressed : AffinePoint -> Array Int
+pointCompressed (AffinePoint x y) =
+  let xBytes = feToBytes x
+  let yBytes = feToBytes y
+  let out = arrayMake 33 0
+  let () = set 0 (2 + bitAnd yBytes[31] 1) out
+  let () = copyPointX xBytes out 0
+  out
+
+copyPointX : Array Int -> Array Int -> Int -> Unit
+copyPointX input out i =
+  if i >= 32 then ()
+  else
+    let () = set (i + 1) input[i] out
+    copyPointX input out (i + 1)
+
+-- | Parse a public SEC 1 compressed point. Rejections are public-input
+--   control flow; the square-root exponent and its parity selection are fixed.
+export
+pointFromCompressed : Array Int -> Result String AffinePoint
+pointFromCompressed bytes =
+  if arrayLength bytes /= 33 then Err "secp256k1.pointFromCompressed: expected 33 bytes"
+  else
+    let prefix = bytes[0]
+    if prefix /= 2 && prefix /= 3 then Err "secp256k1.pointFromCompressed: expected compressed prefix 0x02 or 0x03"
+    else
+      let xBytes = arrayMake 32 0
+      let () = copyCompressedX bytes xBytes 0
+      match feFromBytes xBytes
+        Err message => Err "secp256k1.pointFromCompressed: \{message}"
+        Ok x =>
+          let rhs = curveRhs x
+          let root = sqrtCandidate rhs
+          if not (feEqual (feSquare root) rhs) then Err "secp256k1.pointFromCompressed: curve RHS is not a square"
+          else
+            let rootBytes = feToBytes root
+            let rootParity = bitAnd rootBytes[31] 1
+            let wantedParity = prefix - 2
+            let y = feSelect (bitXor rootParity wantedParity) root (feNegateCt root)
+            Ok (AffinePoint x y)
+
+copyCompressedX : Array Int -> Array Int -> Int -> Unit
+copyCompressedX input out i =
+  if i >= 32 then ()
+  else
+    let () = set i input[i + 1] out
+    copyCompressedX input out (i + 1)
