@@ -984,9 +984,15 @@ at a specific stage. Do not treat the two as equally gradeable.
 written.** F-3a-ii — the arity-neutral intermediate this row *offered as an option*, since
 scheduled ahead of F-3b — **landed**, and variant A now prints **`222`** on `run` and on
 the shipped native binary, with A and B agreeing. The first half of the prediction is dead.
-The second half **still holds**: `check` still prints `useIx : a -> Int` with the context
-erased, and the unsatisfiable `Ix a Bool =>` is still accepted at exit 0 — leg 4, below,
-now pinned at `test/must_fail_fixtures/1161-sig-constraint-unsatisfiable-accepted/`.
+The second half held until 2026-08-23: `check` printed `useIx : a -> Int` with the context
+erased, and the unsatisfiable `Ix a Bool =>` was accepted at exit 0 — leg 4, below.
+**CLOSED** by the slice `S-obligation-nary-payload`, which widened the obligation payload
+itself (`VecObl.voArgs` carries the predicate's whole argument vector, and
+`declaredOblMixed` records a predicate whose arguments are bare bound tyvars and ground
+types). `check` now prints `useIx : Ix a Bool => a -> Int` and rejects with
+`No impl of Ix for Int Bool`; the regression guard is
+`test/dict_fixtures/s3-sig-constraint-unsatisfiable-rejects.mdk`, and its accept-direction
+twin is `test/dict_fixtures/s3-nary-sig-constraint-goal-vector.mdk`.
 
 ⚠️ **SCOPE THE REFUTATION PRECISELY — the unqualified reading is WRONG.** "Order no longer
 decides on this leg" holds only when the multi-argument predicate is the **first predicate

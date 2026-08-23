@@ -1,0 +1,63 @@
+-- DICT-SEMANTICS §1/§3 at a TWO-ENTRY `requires`, with the MULTI-PARAMETER
+-- predicate written FIRST -- the ordering its sibling
+-- s3-nary-requires-multi-entry.mdk deliberately could not use.
+--
+-- RE-POINTED DRAINED PIN. This program is
+-- test/must_fail_fixtures/1154-multi-entry-requires-decl-order-decides/main.mdk
+-- verbatim; it printed 116 there and the fixture pinned that. It drained on
+-- 2026-08-23 (slice S-obligation-nary-payload) and is kept here as the cheapest
+-- regression test the corpus has, per [G-PIN-DRAIN].
+--
+-- SPEC ANSWER (hand-derived from §1/§3, NOT captured from any engine, and
+-- identical to the sibling's for the same reasons -- the two files differ ONLY
+-- in the order of the `requires` entries, which changes no program meaning):
+--   `impl Sh (Box a) requires Ix a Char, Dbg2 a` pins the second `Ix`
+--   parameter to `Char`. At the goal `Sh (Box Int)` the head match binds
+--   a ↦ Int, so that obligation is the ground predicate `Ix Int Char`. §3's
+--   matching set is ONE φ against the WHOLE vector: φ(`Ix Int Bool`) would need
+--   Bool = Char, so the set is the singleton {`impl Ix Int Char`} -- 222.
+--   `Dbg2 a` at a ↦ Int gives `dbg2 5` = 5. 222 + 5 = 227.
+--
+-- THE WRONG ANSWER THIS ROW CATCHES IS 116 (= 111, the `Ix Int Bool` body, + 5).
+-- Declaration order of the two `impl Ix` blocks is WRONG-ANSWER-FIRST on
+-- purpose, and Section 4 reverses them and asserts the answer does not move.
+--
+-- 🚨 WHAT THE DEFECT ACTUALLY WAS, because the obvious reading was wrong and
+-- cost a slice to correct: NOT the goal vector, and NOT the routing ladder. The
+-- routes handed to the call site were already correct at every position (the
+-- typed Core IR dump showed `(RKey "Ix|Int Char|") (RKey "Int")`, in `requires`
+-- order). The loss was on the CONSUMPTION side: `registerReqSlots` opens one
+-- dict slot per `requires` ENTRY but keys `activeDictVars` on the tyvar ids
+-- INSIDE the entry, so `Ix a Char, Dbg2 a` registered `a`'s id TWICE, and
+-- `firstDictForEncl` scanned a cons-list whose head is the LAST registration.
+-- Every method use in the body therefore read the LAST slot -- `sh` lowered to
+-- `CMethod "ix" (RDict "$dict_sh_1")` beside `CMethod "dbg2" (RDict
+-- "$dict_sh_1")`, with `$dict_sh_0` bound and never read. That is why the
+-- LAST `requires` entry was the only one that came out right, and why moving
+-- `Ix` to the end of the clause (the sibling file) hid the bug. Fixed by
+-- `implReqDictVarOf`: an impl-`requires` site is resolved by its PREDICATE, the
+-- rule #1177 established one channel over.
+interface Ix a b where
+  ix : a -> b -> Int
+
+impl Ix Int Bool where
+  ix _ _ = 111
+
+impl Ix Int Char where
+  ix _ _ = 222
+
+interface Dbg2 a where
+  dbg2 : a -> Int
+
+impl Dbg2 Int where
+  dbg2 n = n
+
+data Box a = MkBox a
+
+interface Sh a where
+  sh : a -> Int
+
+impl Sh (Box a) requires Ix a Char, Dbg2 a where
+  sh (MkBox x) = ix x 'z' + dbg2 x
+
+main = println (sh (MkBox 5))

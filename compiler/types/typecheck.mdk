@@ -5859,7 +5859,24 @@ ifaceRefNone = IfaceRef { irName = "", irOrigin = OriginUnresolved }
 -- inhabitant: a cross-family mixup is now an ordinary type error in the compiler's own
 -- typechecker, defended by `make check-self` / `typecheck_compiler_source.sh` rather
 -- than by care.  The widening IS the disambiguation.
-data VecObl = VecObl { voIface : IfaceRef, voIds : List Int }
+--
+-- #1161 (S-obligation-nary-payload): [voArgs] is the predicate's WHOLE argument
+-- vector as monos, at the recording site's instantiation — the `Predicate.args`
+-- shape, carried here so a predicate with a GROUND argument (`Ix a Bool =>`)
+-- survives the channel at all.  `[]` means "no vector was recoverable", exactly
+-- the convention `zipSlotArgs`/`enclPreds` already use for the slot channel, and
+-- it reproduces the pre-widening ids-only behaviour byte for byte.
+--
+-- ⚠️ [voIds] IS NOT REDUNDANT WITH IT, AND MUST NOT BE DERIVED FROM IT.  Two
+-- producers have only an id (`vecOblsOfSlots` lifts a `CSlot`, whose payload is
+-- `csId : Int`; `superSlotVecOf` maps typaram names positionally onto ids), and a
+-- `Mono` is a `Ref Tyvar` that cannot be minted from an id.  [voIds] also remains
+-- the currency of the dict-slot cardinality (`vecOblLeadId`) and of the coverage
+-- subset test (`pairsOfVecObls`), neither of which has anything to say about a
+-- ground argument.  When [voArgs] is non-empty, [voIds] holds the ids of exactly
+-- its BARE-TYVAR positions, in order.
+data VecObl =
+  | VecObl { voIface : IfaceRef, voIds : List Int, voArgs : List Mono }
 
 -- U1b (#1482): ONE dict slot of a constrained callee — the interface the slot
 -- discharges, paired with the scheme-var id it is keyed on.
@@ -7173,6 +7190,13 @@ data PerRun = PerRun {
     pendingArgStamps : Ref (List PendingEntry),
     activeDictVars : Ref (List (Int, String)),
     activeDictPreds : Ref (List (String, Mono, String)),
+    -- #1154 RESIDUAL: the impl-`requires` twin of `enclPreds`.  One entry per dict slot
+    -- an impl's `requires` opens: the tyvar ids the slot is keyed on, and the WHOLE
+    -- predicate that slot discharges.  `activeDictVars` above cannot answer a body's
+    -- method site on its own — every entry of `requires Ix a Char, Dbg2 a` carries the
+    -- SAME id `a`, so its first-match returns the LAST-registered slot for every method
+    -- in the body.  See `implReqDictVarOf`.
+    implReqPreds : Ref (List (String, List Int, Predicate)),
     funConstraintsRef : Ref (List (String, List Int)),
     funConstraintDeclaredRef : Ref (List (String, CDeclaredPrefix)),
     funConstraintArgsRef : Ref (List (String, List (List Mono))),
@@ -7270,6 +7294,7 @@ freshPerRun _ = PerRun {
   pendingArgStamps = Ref [],
   activeDictVars = Ref [],
   activeDictPreds = Ref [],
+  implReqPreds = Ref [],
   funConstraintsRef = Ref [],
   funConstraintDeclaredRef = Ref [],
   funConstraintArgsRef = Ref [],
@@ -7949,7 +7974,13 @@ ppSchemeCon cons (Forall _ _ t) =
 renderConstraintCtx : Ref (List (Int, String)) -> Ref Int -> List VecObl -> List String
 renderConstraintCtx _ _ [] = []
 renderConstraintCtx ctx cnt (o::rest) =
-  let s = joinWith " " (o.voIface.irName :: map (id => nameOf ctx cnt id) o.voIds)
+  -- #1161: a vector-carrying entry renders its WHOLE argument vector under the SAME
+  -- naming context as the body, so `Ix a Bool =>` prints with its ground argument
+  -- instead of degrading to `Ix a`.  An ids-only entry renders exactly as before.
+  let s = if isEmptyL o.voArgs then
+    joinWith " " (o.voIface.irName :: map (id => nameOf ctx cnt id) o.voIds)
+  else
+    joinWith " " (o.voIface.irName :: map (ppGo ctx cnt 2) o.voArgs)
   s :: renderConstraintCtx ctx cnt rest
 
 -- Render a binding's scheme WITH its inferred/declared constraint context, looked
@@ -9472,11 +9503,14 @@ recordCallObligations (s::ss) (mono::ms)
     -- declared-context path (declaredSchemeOblsFor); this path stays as-is.
     -- ⚠️ #1161 (F-3a-ii) widened the ROUTING goal (pushDictApp's 4th component) but
     -- deliberately NOT this OBLIGATION channel — measured: making this site n-ary from
-    -- the same vector still ACCEPTS an unsatisfiable `Ix a Bool =>` at exit 0, because
+    -- the same vector still ACCEPTED an unsatisfiable `Ix a Bool =>` at exit 0, because
     -- the acceptance decision is made upstream in `declaredSchemeOblsFor` →
-    -- `declaredOblOne` → `constraintArgMonos`, which returns `None` for a non-tyvar
-    -- argument on an ids-only payload.  That is #1161 symptom 2, pinned in
-    -- test/must_fail_fixtures/1161-sig-constraint-unsatisfiable-accepted/.
+    -- `declaredOblOne` → `constraintArgMonos`, which returned `None` for a non-tyvar
+    -- argument on an ids-only payload.  That was #1161 symptom 2, and it is CLOSED: the
+    -- payload now carries the whole vector (`VecObl.voArgs`) and `declaredOblMixed`
+    -- records the predicate.  ⚠️ THIS SITE IS STILL 1-ARY AND STILL DELIBERATELY SO —
+    -- the fix landed upstream precisely so that emitted dict arity did not move.
+    -- Regression: test/dict_fixtures/s3-sig-constraint-unsatisfiable-rejects.mdk.
     -- P1 (#1446) / U1b (#1482): `funConstraintIfacesRef`'s payload is `List IfaceRef`,
     -- so this site records the interface OCCURRENCE's identity instead of
     -- `OriginUnresolved`.  It was one of the two `ifaceRefBare` producers.
@@ -11552,8 +11586,11 @@ vecOblsOfSlots : List CSlot -> List VecObl
 vecOblsOfSlots [] = []
 vecOblsOfSlots (s::rest)
   | s.csIface.irName == "" = vecOblsOfSlots rest
-  | otherwise =
-    VecObl { voIface = s.csIface, voIds = [s.csId] } :: vecOblsOfSlots rest
+  | otherwise = VecObl {
+    voIface = s.csIface,
+    voIds = [s.csId],
+    voArgs = [],
+  } :: vecOblsOfSlots rest
 
 -- map each (iface, scheme-var-id VECTOR) through the instantiation subst to this
 -- call's monos, pushing ONE joint obligation per predicate onto the call channel
@@ -11565,7 +11602,7 @@ vecOblsOfSlots (s::rest)
 -- be a different predicate (#607).
 recordSchemeCallObligations : Int -> List VecObl -> List (Int, Mono) -> Unit
 recordSchemeCallObligations _ [] _ = ()
-recordSchemeCallObligations originId (o::rest) subst = match substMonos o.voIds subst
+recordSchemeCallObligations originId (o::rest) subst = match substVecOblArgs o subst
   Some monos =>
     -- P1 (#1446) / U1b (#1482): `schemeObligationsRef` and its cross-module mirrors
     -- store `VecObl`, whose interface half is an identity-carrying `IfaceRef`, so this
@@ -11577,6 +11614,25 @@ recordSchemeCallObligations originId (o::rest) subst = match substMonos o.voIds 
     } originId PSchemeReinst !currentLoc
     recordSchemeCallObligations originId rest subst
   None => recordSchemeCallObligations originId rest subst
+
+-- #1161: this predicate's goal at THIS call's instantiation.  An ids-only entry
+-- (`voArgs == []`) takes the historical `substMonos` path unchanged; a vector-carrying
+-- entry maps its BARE-tyvar positions through [subst] and keeps its GROUND positions as
+-- written — the two argument classes `declaredOblMixed` admits, and the only two this
+-- can instantiate without inventing a mono.  `None` (an unmapped quantified id) still
+-- skips the whole predicate: a partial vector is a different predicate (#607).
+substVecOblArgs : VecObl -> List (Int, Mono) -> Option (List Mono)
+substVecOblArgs o subst
+  | isEmptyL o.voArgs = substMonos o.voIds subst
+  | otherwise = substOblArgs o.voArgs subst
+
+substOblArgs : List Mono -> List (Int, Mono) -> Option (List Mono)
+substOblArgs [] _ = Some []
+substOblArgs (m::rest) subst = match normalize m
+  TVar cell => match lookupAssocI (tyvarId cell) subst
+    Some inst => map (inst :: _) (substOblArgs rest subst)
+    None => None
+  _ => map (m :: _) (substOblArgs rest subst)
 
 -- the monos [ids] map to under [subst], in order; None if any id is unmapped.
 substMonos : List Int -> List (Int, Mono) -> Option (List Mono)
@@ -16146,7 +16202,58 @@ firstDictForEncl id pfx ((eid, ename)::rest)
 activeDictVarOfEncl : Option Predicate -> Mono -> String -> Option String
 activeDictVarOfEncl goal m encl = match enclDictVarOf goal m encl
   Some dname => Some dname
-  None => activeDictVarForEncl m encl
+  -- #1154 RESIDUAL: the impl-`requires` channel, asked by PREDICATE, between the
+  -- signature channel and the historical tyvar-id scan.  It answers only where an impl
+  -- `requires` slot of THIS method carries the goal's interface at the goal's variable;
+  -- everything else falls through to `activeDictVarForEncl` unchanged.
+  None => match implReqDictVarOf goal m encl
+    Some dname => Some dname
+    None => activeDictVarForEncl m encl
+
+-- 🚨 #1154 RESIDUAL: AN IMPL-`requires` SITE IS RESOLVED BY ITS PREDICATE, NOT BY ITS
+-- CONSTRAINT VAR'S ID — the same rule #1177 established for the SIGNATURE `=>` channel,
+-- on the channel #1177 did not reach.  `registerReqSlots` opens one dict slot per
+-- `requires` ENTRY but keys `activeDictVars` on the tyvar ids INSIDE the entry, so
+-- `impl Sh (Box a) requires Ix a Char, Dbg2 a` registers `a`'s id TWICE — once per slot.
+-- `firstDictForEncl` then scans a cons-list whose head is the LAST registration, so
+-- EVERY method use in the body read the LAST slot: `ix x 'z'` read the `Dbg2` dict, its
+-- route degraded, and first-declared-`impl Ix` won.  MEASURED on the typed Core IR dump
+-- at this slice's base — `sh`'s body lowered to `CMethod "ix" (RDict "$dict_sh_1")` and
+-- `CMethod "dbg2" (RDict "$dict_sh_1")`, with `$dict_sh_0` bound and never read — which
+-- is why moving the `Ix` entry to the END of the `requires` list (a meaning-preserving
+-- edit) moved the answer from 116 to the correct 227.
+--
+-- ⚠️ THIS IS NOT THE `argReqRoute`/`EKNestedTop` GOAL-VECTOR SEAM, AND THAT SEAM IS NOT
+-- BROKEN.  The routes handed to the call site are already correct at every position
+-- (`(RKey "Ix|Int Char|") (RKey "Int")`, in `requires` order); the loss is entirely on
+-- the CONSUMPTION side, in which slot the impl BODY reads.  A fix aimed at the routing
+-- ladder would have moved nothing.
+--
+-- ⚠️ FAILING TO MATCH FALLS BACK, deliberately, exactly as `enclSlotIndex` does: a goal
+-- with no recoverable interface, a var no `requires` slot of this method is keyed on, or
+-- an interface no entry names, all answer as they did before.  Two passes, most specific
+-- first, for `enclSlotIndex`'s reason — a `requires` may name one interface twice at
+-- different arguments (`Ix a Char, Ix a Bool`), where only the recorded vector separates
+-- the two slots.
+implReqDictVarOf : Option Predicate -> Mono -> String -> Option String
+implReqDictVarOf None _ _ = None
+implReqDictVarOf (Some p) m encl
+  | encl == "" = None
+  | otherwise = match normalize m
+    TVar cell =>
+      let entries = perRun.value.implReqPreds.value
+      let pfx = "$dict_\{encl}_"
+      match implReqPick (tyvarId cell) p pfx True entries
+        Some dname => Some dname
+        None => implReqPick (tyvarId cell) p pfx False entries
+    TApp a _ => implReqDictVarOf (Some p) a encl
+    _ => None
+
+implReqPick : Int -> Predicate -> String -> Bool -> List (String, List Int, Predicate) -> Option String
+implReqPick _ _ _ _ [] = None
+implReqPick target p pfx needArgs ((dname, ids, sp)::rest)
+  | startsWith pfx dname && containsI target ids && sp.iface.irName /= "" && sp.iface.irName == p.iface.irName && (not needArgs || predArgsAgree p.args sp.args) = Some dname
+  | otherwise = implReqPick target p pfx needArgs rest
 
 -- 🚨 #1177: A USE SITE IS RESOLVED BY ITS PREDICATE, NOT BY ITS CONSTRAINT VAR'S ID.
 -- `funConstraintsRef` is the SHATTERED per-tyvar slot table, so a context naming two
@@ -25839,9 +25946,16 @@ registersElementDict mname rpNames = contains mname rpNames
 registerReqSlots : String -> List (String, Mono) -> Int -> List Require -> Unit
 registerReqSlots _ _ _ [] = ()
 registerReqSlots mname implTvMap slot ((Require { requireHead = iface, requireArgs = rargs })::rest) =
-  let ids = flatMap (a => monoTyvarIds (fromAstType implTvMap a)) rargs
+  let argMonos = map (a => fromAstType implTvMap a) rargs
+  let ids = flatMap monoTyvarIds argMonos
   let _ = registerEachActive ids (dictParamName mname slot)
-  let _ = registerPredGiven iface (map (a => fromAstType implTvMap a) rargs) (dictParamName mname slot)
+  let _ = registerPredGiven iface argMonos (dictParamName mname slot)
+  -- #1154 RESIDUAL: record the WHOLE predicate beside the ids, in the SAME op that
+  -- registers them, so the two can never be written apart (`setFunConstraintEntry`'s
+  -- rule, one channel over).  `registerPredGiven` above cannot serve this: it is
+  -- single-subject and STRUCTURED-only, so `requires Ix a Char` registers nothing there.
+  let entry = (dictParamName mname slot, ids, Predicate { iface = ifaceRefBare iface, args = argMonos })
+  perRun.value.implReqPreds := entry::perRun.value.implReqPreds.value
   registerReqSlots mname implTvMap (slot + 1) rest
 
 -- #412: the PREDICATE-keyed half of the given registry.  `activeDictVars` above is keyed
@@ -27146,14 +27260,60 @@ declaredSchemeOblsFor sigTvMaps m boundIds = match lookupSigTvMap m sigTvMaps
     flatMap (declaredOblOne boundIds tvMap) (sigConstraintsOf ty)
 
 declaredOblOne : List Int -> List (String, Mono) -> Constraint -> List VecObl
-declaredOblOne boundIds tvMap (Constraint { constraintHead = iface, constraintArgs = args, constraintOrigin = co }) = match constraintArgMonos args tvMap
-  None => []
-  Some monos => match boundTyvarIds boundIds monos
-    -- U1b (#1482): `constraintOrigin` is the #1110 interface-OCCURRENCE identity of the
-    -- `=>` predicate as written in this module's scope — the same layer `DImpl.implOrigin`
-    -- is stamped in, which is what makes the goal and the impl comparable.
-    Some ids => [VecObl { voIface = IfaceRef { irName = iface, irOrigin = co }, voIds = ids }]
-    None => []
+declaredOblOne boundIds tvMap (Constraint { constraintHead = iface, constraintArgs = args, constraintOrigin = co }) =
+  -- U1b (#1482): `constraintOrigin` is the #1110 interface-OCCURRENCE identity of the
+  -- `=>` predicate as written in this module's scope — the same layer `DImpl.implOrigin`
+  -- is stamped in, which is what makes the goal and the impl comparable.
+  let ifref = IfaceRef { irName = iface, irOrigin = co }
+  match constraintArgMonos args tvMap
+    None => declaredOblMixed boundIds ifref tvMap args
+    Some monos => match boundTyvarIds boundIds monos
+      Some ids => [VecObl { voIface = ifref, voIds = ids, voArgs = [] }]
+      None => []
+
+-- #1161 SYMPTOM 2: the predicate has an argument that is not a bare tyvar, so
+-- `constraintArgMonos` answered `None` and the WHOLE predicate used to be discarded —
+-- `Ix a Bool =>` with no `impl Ix _ Bool` anywhere reached neither the displayed scheme
+-- nor any caller's obligation list, and `check` accepted it at exit 0 while the call
+-- dispatched to an unrelated impl.  DICT-SEMANTICS §3 makes `match(IE, Ix Int Bool)`
+-- empty and the goal a missing-instance rejection, so the predicate must survive the
+-- channel: record its WHOLE argument vector in `voArgs`, and the ids of its bare-tyvar
+-- positions in `voIds` (one dict slot per deferred variable, unchanged cardinality).
+--
+-- 🚨 THE ADMISSION TEST IS DELIBERATELY NARROW, AND EVERY CLAUSE OF IT IS LOAD-BEARING —
+-- this is a NARROWING (programs that were accepted now reject), so an argument this
+-- function admits without being able to instantiate CORRECTLY would substitute to a
+-- wrong-but-CONCRETE goal, which is strictly worse than the missing one it replaces:
+--   * a BARE tyvar bound by this scheme — `recordSchemeCallObligations` maps it through
+--     the call's instantiation subst, exactly as the ids-only path always did;
+--   * a GROUND argument (no tyvars anywhere, `monoTyvarIds` empty) — it needs no
+--     substitution, so the signature's mono IS the call's mono;
+--   * nothing else.  An unbound tyvar has no id to defer on, and a STRUCTURED argument
+--     mentioning a tyvar (`Ix a (List b)`) would carry the SIGNATURE's tyvar cell into
+--     the caller's goal — the wrong-module-ids hazard, one scope over.  Both are dropped
+--     exactly as before.
+-- At least one bare bound tyvar is REQUIRED: a fully ground declared context (`Sz Int =>`)
+-- carries no per-use obligation on this channel and stays dropped, which keeps the
+-- narrowing to the shape the issue is about.
+declaredOblMixed : List Int -> IfaceRef -> List (String, Mono) -> List Ty -> List VecObl
+declaredOblMixed boundIds ifref tvMap args =
+  let monos = map (fromAstType tvMap) args
+  let ids = flatMap (declaredOblArgId boundIds) monos
+  if isEmptyL ids || not (allList (declaredOblArgOk boundIds) monos) then
+    []
+  else
+    [VecObl { voIface = ifref, voIds = ids, voArgs = monos }]
+
+-- the scheme-quantified id of a BARE-tyvar argument; [] for a ground one.
+declaredOblArgId : List Int -> Mono -> List Int
+declaredOblArgId boundIds m = match normalize m
+  TVar cell if containsI (tyvarId cell) boundIds => [tyvarId cell]
+  _ => []
+
+declaredOblArgOk : List Int -> Mono -> Bool
+declaredOblArgOk boundIds m = match normalize m
+  TVar cell => containsI (tyvarId cell) boundIds
+  _ => isEmptyL (monoTyvarIds m)
 
 -- the monos a predicate's arguments resolve to under a tyvar-name -> mono map, in
 -- declaration order; None if ANY argument is not a plain tyvar or is absent from the
@@ -27190,8 +27350,18 @@ lookupSigTvMap m ((n, ty, tvMap)::rest)
 dedupVecObls : List VecObl -> List VecObl
 dedupVecObls xs = dedupBy vecOblKey xs
 
+-- #1161: the GROUND half of the vector joins the key.  `(Ix a Bool, Ix a Char)` is two
+-- predicates sharing one interface AND one id vector — without the ground positions the
+-- dedup would collapse them into one, silently dropping half a declared context.  An
+-- ids-only entry contributes a constant empty suffix, so its key is order-equivalent to
+-- the pre-widening one.
 vecOblKey : VecObl -> String
-vecOblKey o = lenKey o.voIface.irName ++ joinWith "," (map intToString o.voIds)
+vecOblKey o = "\{lenKey o.voIface.irName}\{joinWith "," (map intToString o.voIds)}|\{joinWith "," (map oblArgKey o.voArgs)}"
+
+-- a ground argument keys on its head tycon name; a tyvar position carries no
+-- discriminating information here (its id is already in `voIds`) and keys as "*".
+oblArgKey : Mono -> String
+oblArgKey m = lenKey (fromOption "*" (headTyconNameMono m))
 
 -- membership of ONE vector in the DECLARED set (reportUncoveredVec) — not a
 -- dedup, and the declared set is a handful of entries, so it stays a scan.
@@ -27239,7 +27409,7 @@ oblPredOf o = match o.oblProj
 -- `Tag a` (DICT-SEMANTICS §4 `gen` / §4.2 OD2).
 vecOblOfPred : List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
 vecOblOfPred boundIds (iface, ds, loc) = match boundTyvarIds boundIds ds
-  Some ids => [VecObl { voIface = iface, voIds = ids }]
+  Some ids => [VecObl { voIface = iface, voIds = ids, voArgs = [] }]
   None => residualVecObls boundIds iface ds loc
 
 -- ── #1549: residual reduction at `gen` ──────────────────────────────────────
@@ -27291,7 +27461,7 @@ residualVecObls boundIds iface ds loc
 
 keepBoundResidual : List Int -> (IfaceRef, List Mono) -> List VecObl
 keepBoundResidual boundIds (iface, args) = match boundTyvarIds boundIds args
-  Some ids => [VecObl { voIface = iface, voIds = ids }]
+  Some ids => [VecObl { voIface = iface, voIds = ids, voArgs = [] }]
   None => []
 
 -- §3 `inst`, run for its RESIDUAL rather than for a verdict.  A predicate whose
@@ -27741,6 +27911,7 @@ superSlotVecOf subst (Super { superHead = superName, superParams = params, super
       VecObl {
         voIface = IfaceRef { irName = superName, irOrigin = so },
         voIds = mapped,
+        voArgs = [],
       }
     ]
   else
