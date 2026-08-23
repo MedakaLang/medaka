@@ -1,0 +1,22 @@
+-- UNGRADED. #1815's second, independently-constructed fixture, kept because it rules out
+-- one candidate explanation for main.mdk that a single-typaram interface cannot rule out:
+-- with one typaram the occurrence could be intercepted upstream by
+-- `shadowStandaloneHead`/`isShadowStandalone`, both gated on `singleTyparamIfaceMethod`.
+-- A 2-typaram interface cannot be gated that way, and the collapse is identical here:
+-- `useIface` reports as `Int -> Int -> Int -> Int`, with `Ix a i =>` and BOTH typarams
+-- gone.
+interface Ix a i where
+  get : Int -> a -> i -> Int
+
+data Box = Box Int
+
+impl Ix Box Int where
+  get n (Box m) k = m + k + n
+
+get : Int -> Int -> Int -> Int
+get n m k = 99
+
+useIface : Ix a i => Int -> a -> i -> Int
+useIface n x k = get n x k
+
+main = println 0

@@ -1,0 +1,71 @@
+issue: 1684
+what: A PLAIN top-level standalone whose bare name collides with a PRELUDE INTERFACE
+what: METHOD is, in a MULTI-MODULE program, silently mangled into an impl method for
+what: that interface. `medaka run` evaluates the user's own function correctly; the
+what: EMITTED BINARY routes the call to the prelude interface method instead. Both at
+what: exit 0, no diagnostic on any channel -- run and the built binary disagree with
+what: each other about the same occurrence.
+what:
+what: THE CORRECT ANSWER IS 6, DERIVED WITHOUT RUNNING ANYTHING. `A.shrink` is
+what: alias-qualified to amod1684's own standalone, whose body is `n + 1`, applied to 5.
+what: `[0, 2]` is `Arbitrary.shrink`'s list-shaped prelude default (stdlib/core.mdk) --
+what: a method belonging to an interface this program declares no impl for and never
+what: mentions.
+what:
+what: ACTUAL, at `main` 9ef15af9, `check` clean and exit 0 on every arm:
+what:   main.mdk    -> check 0 clean   run 0 -> 6      build 0, binary 0 -> [0, 2]  <- PIN
+what:   control.mdk -> check 0 clean   run 0 -> 6      build 0, binary 0 -> 6
+what:   variant-singlefile.mdk -> check 0   run 0 -> 6   build 0, binary 0 -> 6
+what:
+what: THE DEFECT NEEDS THE MULTI-MODULE LOADER PATH. The single-file variant, which has
+what: the identical name collision and no import at all, is CORRECT on every verb. That
+what: is why this pin cannot be reduced to one file, and it is the discriminator against
+what: the closed #50 (a single-file standalone-vs-prelude-method shadow, fixed by the
+what: definer-shadow inversion): #50's fix does not reach this shape.
+what:
+what: MECHANISM AS FILED, NOT RE-DERIVED HERE. #1684 reports the user's own standalone
+what: being emitted as `define i64 @mdk_impl_Int_shrink(i64 %arg0)` alongside
+what: `@mdk_impl_Bool_shrink` etc., for a program declaring no `impl` whatsoever. This
+what: fixture does not inspect the emitted IR; it grades the observable divergence. A
+what: reader wanting the IR should re-derive it rather than inherit the citation.
+cmd: build-run main.mdk
+exit: 0
+stdout: [0, 2]
+control: build-run control.mdk
+why-verb: `build-run` grades the EXECUTED BINARY's stdout, which is the only channel the
+why-verb: defect appears on. `check` is clean, `run` is correct, and `build` itself
+why-verb: succeeds at exit 0 -- three verbs that would each pin a green, right-looking
+why-verb: observation. Grading `run` instead would pin `6`, the CORRECT answer, and the
+why-verb: row would then drain on any change that broke `run` -- exactly backwards.
+why-fixture: The graded stdout `[0, 2]` is a positive, non-accidental marker: it is a
+why-fixture: LIST, and nothing in this program produces a list. `A.shrink 5` is
+why-fixture: `Int -> Int` by its own declared signature, so no correct execution and no
+why-fixture: partial failure can print it -- it can only arrive from `Arbitrary.shrink`'s
+why-fixture: prelude default body. A pre-`main` failure prints nothing and exits nonzero.
+why-fixture: The row drains when the built binary stops answering `[0, 2]` here. Note
+why-fixture: that a fix which made `run` ALSO print `[0, 2]` -- convergence in the wrong
+why-fixture: direction, turning a detectable disagreement into agreed silent wrongness --
+why-fixture: leaves this row RED, which is correct: that would be a severity increase.
+why-fixture: Measured first-hand at `main` 9ef15af9 on a binary cold-built in this
+why-fixture: worktree (no borrowed emitter), MEDAKA_STRICT=1, every command redirected to
+why-fixture: a file with $? read directly -- never piped.
+why-control: control.mdk is main.mdk with ONE variable changed: it imports bmod1684.mdk,
+why-control: which is amod1684.mdk with `shrink` respelled `shrinkz` and nothing else
+why-control: touched. The alias-qualified import, the multi-module loader path, the
+why-control: arithmetic and the verb are all unchanged. MEASURED: check 0 clean, run 0
+why-control: printing 6, build 0, executed binary 0 printing 6 -- all four arms agree on
+why-control: the hand-derived answer. That isolates the observation to the bare NAME
+why-control: colliding with a prelude interface method: not to alias imports, not to
+why-control: two-module programs, not to `println`, not to the loader in general.
+why-control: Graded on the SAME verb as the pin (`build-run`), so a green control also
+why-control: establishes that the emit-and-execute path itself is working.
+why-note: ONE UNGRADED VARIANT ships alongside: variant-singlefile.mdk, the same
+why-note: collision in a single file with no import and no loader. NOT graded, because it
+why-note: is CORRECT -- run 6 and binary 6 -- and a must-fail row must pin a defect.
+why-note: MEASURED, and worth recording because it is the discriminator no control can
+why-note: carry: `check` on it prints BOTH `shrink : a -> List a` (the prelude method)
+why-note: AND `shrink : Int -> Int` (the user's standalone), i.e. the frontend sees the
+why-note: collision perfectly well in the single-file case and still routes correctly.
+why-note: So whatever loses the distinction is on the multi-module path specifically.
+why-note: bmod1684.mdk is shipped because control.mdk imports it; it is not reachable
+why-note: from the graded file.

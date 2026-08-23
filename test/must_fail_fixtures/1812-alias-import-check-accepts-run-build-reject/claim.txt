@@ -1,0 +1,81 @@
+issue: 1812
+what: A method occurrence reached through an ALIAS-QUALIFIED import (`import zmodI as Z`)
+what: is silently accepted by `medaka check` -- exit 0, ZERO diagnostics on every module
+what: of the graph -- while `medaka run` and `medaka build` both correctly REJECT the
+what: same program. Introduced by #1351's own L2 fix (030cfb2a) as a side effect on an
+what: adjacent corpus cell.
+what:
+what: THE DIVERGENCE IS DECIDED BY IMPORT ORDER. This corpus is #1351's three modules
+what: (amodI/zmodI/fmodI) with zmodI alias-qualified. Measured first-hand at `main`
+what: 2ed7b5b9, all six orderings of the three import lines, `check` vs `run`/`build`:
+what:   fmodI, amodI, Z  -> check 1 (located)   run 1  build 1
+what:   fmodI, Z, amodI  -> check 0 SILENT      run 1  build 1   <-- divergent
+what:   amodI, fmodI, Z  -> check 1 (located)   run 1  build 1
+what:   amodI, Z, fmodI  -> check 1 (located)   run 1  build 1
+what:   Z, fmodI, amodI  -> check 0 SILENT      run 1  build 1   <-- divergent
+what:   Z, amodI, fmodI  -> check 0 SILENT      run 1  build 1   <-- divergent (main.mdk)
+what: Three of six, and the predicate is sharp: `check` goes silent on exactly the
+what: orderings where zmodI is imported BEFORE amodI.
+what:
+what: WHAT THE CORRECT BEHAVIOUR IS. `run`/`build` are RIGHT to reject: the occurrence is
+what: `mth "abc" 5`, a String in FIRST position, and `impl IZ String`'s method takes an
+what: Int first (`mth : Int -> b -> Int`), so no candidate is satisfiable there. Either
+what: the imported standalone answers (99 -- see control.mdk) or the program is rejected;
+what: `check` reporting SUCCESS is neither. The graded observable is therefore `check`'s
+what: silence, not the rejection.
+what:
+what: NOT MERELY A SUPPRESSED MESSAGE. In the silent orderings the LOCATED pipeline has
+what: nothing at all: `run`'s error is `locatedOrGeneric`'s `None` arm (analyzeProject
+what: surfaced zero diagnostics while the elaborate pass armed `hadTypeErrors`), which is
+what: why its text is the unlocated fallback rather than a file:line:col diagnostic. So
+what: the divergence is UPSTREAM of rendering. A fix must make `check` derive the
+what: diagnostic, not make the renderer print one it already has.
+what:
+what: 🚨 DO NOT FIX BY REVERTING L2. On the cell where the parent commit was already
+what: broken, L2 was a severity IMPROVEMENT -- a silent wrong answer on all three verbs
+what: became a loud correct rejection on run/build -- so a wholesale revert reintroduces
+what: #1351's silent wrong answer. [W-QUIETER] runs in the unusual direction here: the
+what: honest fix makes `check` LOUDER. A fix that instead quietens run/build to match
+what: check is a severity increase dressed as convergence, and it would drain this row.
+cmd: check-json main.mdk
+exit: 0
+stdout: {"files":[{"file":"test/must_fail_fixtures/1812-alias-import-check-accepts-run-build-reject//zmodI.mdk","diagnostics":[]},{"file":"test/must_fail_fixtures/1812-alias-import-check-accepts-run-build-reject//fmodI.mdk","diagnostics":[]},{"file":"test/must_fail_fixtures/1812-alias-import-check-accepts-run-build-reject//amodI.mdk","diagnostics":[]},{"file":"test/must_fail_fixtures/1812-alias-import-check-accepts-run-build-reject//main.mdk","diagnostics":[]}]}
+control: run control.mdk
+why-verb: `check-json` rather than plain `check` because the defect IS the silence, and
+why-verb: only the JSON stream renders "how many diagnostics were produced" to a graded
+why-verb: channel. Plain `check` on this program prints `main : Unit` at exit 0, which is
+why-verb: what a CLEAN program prints -- pinning that would match any clean program in
+why-verb: this fixture, not specifically this bug. The JSON pins the whole per-module
+why-verb: diagnostic set as EMPTY across all four modules, which is the actual claim.
+why-verb: This is also the channel the harm lands on: CI, the LSP and MCP consume
+why-verb: `check --json`, and #1362 (D-JSON-HOLE) is the S0-graded sibling of exactly
+why-verb: this class.
+why-fixture: The row drains when `check --json` on this ordering stops reporting an empty
+why-fixture: diagnostic set -- i.e. when `check` agrees with `run`/`build`. A partial fix
+why-fixture: that made only SOME of the three silent orderings loud would leave this one
+why-fixture: red, correctly: main.mdk is the `Z, amodI, fmodI` ordering specifically.
+why-fixture: Measured first-hand at `main` 2ed7b5b9 on a binary cold-built in this
+why-fixture: worktree (no borrowed emitter), MEDAKA_STRICT=1, every command redirected to
+why-fixture: a file with $? read directly -- never piped.
+why-control: control.mdk is main.mdk with ONE variable removed: `zmodI` is not in the
+why-control: module graph at all (and the then-unreachable `Z.zf 0` use goes with it), so
+why-control: there is no second interface declaring `mth` at a differing dispatch index
+why-control: for the bare name to collide with. MEASURED: check 0, run 0 printing 99,
+why-control: build 0, executed binary 0 printing 99 -- all four arms agree and the answer
+why-control: is the hand-derived one. That isolates the observation to "a second
+why-control: interface at a differing dispatch index is present in the graph", not to
+why-control: alias imports in general, not to three-module graphs, not to `mth "abc" 5`.
+why-control: ⚠️ Stated plainly because a control cannot carry it: this control does NOT
+why-control: isolate the ALIAS. It cannot -- the alias-free twin of main.mdk REJECTS at
+why-control: exit 1 (that is #1351's own pinned fixture), and a control must exit 0. The
+why-control: alias's role is isolated by the ungraded variant instead; see why-note.
+why-note: ONE UNGRADED VARIANT ships alongside: variant-loud-ordering.mdk, byte-identical
+why-note: to main.mdk except that the three import lines are permuted so amodI precedes
+why-note: zmodI. NOT graded, because it exits 1 and a control must exit 0. MEASURED:
+why-note: check, run and build ALL exit 1 with the same located diagnostic
+why-note: (T-TYPE-MISMATCH, "Type mismatch: Int vs String", at the `"abc"` argument). The
+why-note: three verbs AGREE there. That agreement, against main.mdk's disagreement on a
+why-note: file differing only in import-line order, is what establishes the defect as
+why-note: order-decided rather than intrinsic to the alias or to the program.
+why-note: This corpus deliberately reuses #1351's three modules unchanged, so the two
+why-note: pins are comparable; the fixture-local copies mean neither can move the other.

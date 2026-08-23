@@ -1,0 +1,19 @@
+-- UNGRADED. main.mdk plus the one call the collapse makes unreachable:
+-- `wrap 5 "hi"`, which the DECLARED signature `IZ b => Int -> b -> Int` accepts at
+-- `b = String` (there is an `impl IZ String`). MEASURED: rejected by check, run AND
+-- build with `Type mismatch: Int vs String` reported at the CALL SITE in `main`, not
+-- inside `wrap`'s body -- the downstream consequence of the collapse main.mdk pins.
+-- Not graded: it exits 1, and it pins the symptom rather than the cause.
+export interface IZ b where
+  mth : Int -> b -> Int
+
+impl IZ String where
+  mth n s = 7
+
+mth : Int -> Int -> Int
+mth n m = 99
+
+wrap : IZ b => Int -> b -> Int
+wrap n x = mth n x
+
+main = println (wrap 5 "hi")

@@ -1,0 +1,8 @@
+-- main.mdk with ONE variable removed: zmodI is not in the module graph at all, so there
+-- is no second interface declaring `mth` at a differing dispatch index for the bare name
+-- to collide with, and the imported standalone answers. MEASURED: check/run/build all
+-- exit 0 and the binary prints 99.
+import fmodI.{mth}
+import amodI.{af}
+
+main = println (mth "abc" 5 + af 0)

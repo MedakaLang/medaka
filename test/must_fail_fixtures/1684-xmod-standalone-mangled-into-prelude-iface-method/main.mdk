@@ -1,0 +1,8 @@
+-- GRADED under `build-run`. The correct answer is 6, derived by hand: `A.shrink` is
+-- alias-qualified to amod1684's own standalone, whose body is `n + 1`, applied to 5.
+-- `medaka run` agrees and prints 6. The BUILT BINARY prints a list instead -- the call
+-- was routed to the prelude `Arbitrary.shrink`. Both at exit 0, no diagnostic on any
+-- channel: run and the binary disagree with each other. See claim.txt.
+import amod1684 as A
+
+main = println (A.shrink 5)

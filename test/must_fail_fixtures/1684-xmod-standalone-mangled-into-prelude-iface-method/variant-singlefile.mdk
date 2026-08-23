@@ -1,0 +1,8 @@
+-- UNGRADED. The same collision in ONE file: no loader, no import, no alias. MEASURED:
+-- run 6 and the built binary 6 -- CORRECT. That is what establishes the defect as
+-- specific to the multi-module emit path rather than to the name collision in general,
+-- and it is why this pin cannot be a single-file fixture.
+shrink : Int -> Int
+shrink n = n + 1
+
+main = println (shrink 5)

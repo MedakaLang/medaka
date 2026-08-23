@@ -1,0 +1,7 @@
+export interface Sup a where
+  sup : a -> Int
+
+export interface IA a requires Sup a where
+  sib : a -> Int
+  dflt : a -> Int
+  dflt x = sib x + 1

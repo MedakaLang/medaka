@@ -1,0 +1,95 @@
+issue: 1815
+what: An EXPLICIT, user-written constrained signature is silently REPLACED BY INFERENCE
+what: when the function's body calls a definer-shadowed method whose interface dispatches
+what: at an argument position other than 0. The declared signature -- its `=>`-constraint
+what: AND its polymorphic type variable -- is dropped entirely; the function is inferred
+what: as if it had never been annotated.
+what:
+what: WHAT THE DECLARATION SAYS, AND WHAT SURVIVES:
+what:   declared in main.mdk:     wrap : IZ b => Int -> b -> Int
+what:   reported by check --types: wrap : Int -> Int -> Int        <- THIS PIN
+what: `IZ b =>` and `b` are both gone. Nothing in the program licenses that: `wrap` is
+what: annotated, the annotation is well-formed, `IZ` is declared in the same file, and
+what: `impl IZ String` exists. An explicit signature is a CONSTRAINT on inference, not a
+what: hint -- a checker may reject a body that does not match it, but it may not silently
+what: substitute a different, narrower one and then report that as the function's type.
+what:
+what: THE VARIABLE IS THE DISPATCH POSITION, AND ONLY THAT. control.mdk moves `IZ`'s
+what: dispatch-relevant typaram from `mth`'s SECOND argument to its FIRST and changes
+what: nothing else -- same definer shadow, same =>-constraint, same impl, same body
+what: shape. MEASURED: `wrap : IZ a => a -> Int -> Int` -- the signature SURVIVES INTACT.
+what: Index 0 works; index 1 collapses.
+what:
+what: THIS IS A HOLE IN P0-19's COVERAGE, NOT AN UNCLASSIFIED INFERENCE BUG. P0-19's
+what: constrained-receiver arm (compiler/types/typecheck.mdk, ~2550) exists specifically
+what: so that definer-shadow occurrences inside a =>-constrained function's own body
+what: dispatch through the dict rather than resolving to the standalone. See
+what: docs/spec/SHADOW-SEMANTICS.md S2 and SHADOW-INVERSION-DESIGN.md.
+what:
+what: 🚨 THE OBVIOUS MECHANISM IS ALREADY DISPROVEN -- DO NOT RE-SPEND THAT DAY. #1815
+what: instrumented the hypothesis that `inferDefinerShadowApp` peels argument 0
+what: regardless of the interface's real dispatch index:
+what:   - a panic probe inside `inferDefinerShadowApp`, confirmed working in general (it
+what:     caught an unrelated toList/Map definer-shadow occurrence during the compiler's
+what:     own self-compile), NEVER FIRED for either fixture, on check, run OR build;
+what:   - forcing `definerReceiverDispatches`'s `isDefinerShadow` arm to return True
+what:     unconditionally had ZERO effect -- identical collapse.
+what: The collapse is real and does NOT run through that peel. Named but unchased:
+what: `definerShadowVarHead`/`inferDefinerShadowVarApp`, `standaloneShadowScheme`, the
+what: `recordRLocalSite` gate, and whether an annotated function's own declared scheme is
+what: consulted at all when checking its own body. Derive the site; do not inherit a
+what: citation, including this one.
+cmd: check-types main.mdk
+exit: 0
+stdout-line: wrap : Int -> Int -> Int
+control: check-types control.mdk
+why-verb: `check-types` because the defect is a TYPE, and `--types` is the only channel
+why-verb: that renders one. Every other verb is green here: `check` exits 0, `run` exits
+why-verb: 0 printing `0`, `build` exits 0. main.mdk deliberately contains NO call that
+why-verb: would be rejected, so the graded arm pins the COLLAPSE ITSELF at exit 0 rather
+why-verb: than a downstream rejection -- see variant-reject-at-call.mdk for the symptom,
+why-verb: and why-note for why the symptom is the wrong thing to grade.
+why-fixture: `stdout-line:` rather than `stdout:` because `check --types` dumps the WHOLE
+why-fixture: prelude ahead of the module's own bindings -- ~130 lines. Pinning all of it
+why-fixture: would make this row drain on any unrelated prelude signature change, which
+why-fixture: would report "#1815 is fixed" for a reason having nothing to do with #1815.
+why-fixture: The single exact line `wrap : Int -> Int -> Int` is the whole claim.
+why-fixture: The row drains when that line stops appearing -- i.e. when `wrap` reports
+why-fixture: with its declared constraint. ⚠️ Note what this does NOT assert: that the
+why-fixture: replacement line is correct. A fix must make `wrap` report as
+why-fixture: `IZ b => Int -> b -> Int`, matching the declaration; a change that merely
+why-fixture: collapsed it to some OTHER wrong monotype would also drain this row. That is
+why-fixture: the honest limit of a one-line assertion, stated rather than papered over --
+why-fixture: control.mdk is what shows the intended shape.
+why-fixture: Measured first-hand at `main` 9ef15af9 on a binary cold-built in this
+why-fixture: worktree (no borrowed emitter), MEDAKA_STRICT=1, every command redirected to
+why-fixture: a file with $? read directly -- never piped.
+why-control: control.mdk is main.mdk with the dispatch position moved from index 1 to
+why-control: index 0 and nothing else changed. MEASURED at exit 0 with
+why-control: `wrap : IZ a => a -> Int -> Int` present -- the constraint and the typaram
+why-control: both survive. It is graded on the SAME verb as the pin, so a green control
+why-control: also establishes that `check --types` itself works and that definer
+why-control: shadowing plus an explicit =>-constraint is not by itself enough to trigger
+why-control: the collapse. ⚠️ The control's own stdout is not graded by this harness
+why-control: (exit 0 is), so the surviving signature is recorded here as a measurement,
+why-control: not as an assertion the suite enforces.
+why-note: TWO UNGRADED VARIANTS ship alongside.
+why-note:   variant-multityparam.mdk -- #1815's second, independently-constructed fixture,
+why-note:   kept because it rules out something a single-typaram interface cannot: with
+why-note:   one typaram the occurrence could be intercepted upstream by
+why-note:   `shadowStandaloneHead`/`isShadowStandalone`, both gated on
+why-note:   `singleTyparamIfaceMethod`. A 2-typaram interface cannot be gated that way.
+why-note:   MEASURED: `useIface : Int -> Int -> Int -> Int` -- `Ix a i =>` and BOTH
+why-note:   typarams gone. Same collapse, so that interception is not the explanation.
+why-note:   variant-reject-at-call.mdk -- main.mdk plus `wrap 5 "hi"`, a call the DECLARED
+why-note:   signature accepts at `b = String` (there is an `impl IZ String`). MEASURED:
+why-note:   check, run and build ALL exit 1 with `Type mismatch: Int vs String` at
+why-note:   19:23 -- reported at the CALL SITE in `main`, not inside `wrap`'s body, which
+why-note:   is itself evidence that the collapse happened before the call was checked.
+why-note:   NOT graded: it exits 1, and it pins the downstream symptom rather than the
+why-note:   cause. A partial fix could plausibly silence the rejection while leaving the
+why-note:   signature collapsed; grading it would call that fixed.
+why-note: SEVERITY IS PROVISIONAL AND ONE AXIS IS UNTESTED, per the filing: a call at the
+why-note: type inference collapsed TO (rather than a different type, which is what both
+why-note: variants test) has not been tried, and that cell is the silent-wrong-dispatch
+why-note: precondition. S1 is what is measured; not relabelled here.
