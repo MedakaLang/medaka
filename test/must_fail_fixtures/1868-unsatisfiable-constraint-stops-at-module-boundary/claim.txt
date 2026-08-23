@@ -1,0 +1,61 @@
+issue: 1868
+what: #1161's unsatisfiable-constraint fix (sprint `predicate-slots`, PR #1862) does
+what: NOT cross a module boundary. `lib1868.mdk` exports
+what: `useIx : Ix a Bool => a -> Int` with `impl Ix Int Char` as its ONLY impl;
+what: `main.mdk` imports it and calls `useIx 5`, i.e. instantiates the constraint at
+what: the goal `Ix Int Bool`.
+what:
+what: THE CORRECT ANSWER IS A LOCATED REJECTION, DERIVED FROM THE SPEC, NOT CAPTURED.
+what: `docs/spec/DICT-SEMANTICS.md` §3: `match(IE, Ix Int Bool)` is EMPTY -- `impl Ix
+what: Int Char` is not a matching instance of the goal `Ix Int Bool` (no φ with
+what: φ(Ix Int Char) = Ix Int Bool). §3 names that case explicitly: an empty matching
+what: set "is not ambiguous overlap and not a C1 violation but `inst` inapplicability
+what: -- the missing-instance rejection", and `assum` cannot discharge it either
+what: because `Ix Int Bool` is nowhere in the caller's context P. So the program must
+what: be REJECTED. The single-file twin (singlefile.mdk, below) shows the compiler
+what: already agrees when no module boundary is involved.
+what:
+what: ACTUAL, ACROSS the boundary: `check` exit 0 with no diagnostic, `run` prints 222
+what: at exit 0, and the executed native binary prints 222 at exit 0. The goal
+what: `Ix Int Bool` dispatches into `impl Ix Int Char` -- an impl matching NEITHER
+what: argument of the goal. Silent, exit 0, all three engines.
+what:
+what: Pre-existing at the pre-sprint base and NOT a regression; #1161 was closed on the
+what: strength of a single-file pin and this leg stayed fully live. This is the SILENT
+what: half of the constraint-argument-vector-does-not-cross-a-module-boundary gap;
+what: #1867 is the LOUD half of the same gap.
+cmd: run main.mdk
+exit: 0
+stdout: 222
+control: run control.mdk
+why-fixture: `run` grades the interpreter, where the wrong value is produced silently at
+why-fixture: exit 0; `build` + execute produce the same 222 and would do equally well,
+why-fixture: but `run` needs no clang. The pinned observable is the exact stdout `222`
+why-fixture: at exit 0 -- an unrelated pre-`main` failure prints nothing and exits
+why-fixture: nonzero, so it cannot masquerade as this bug. ⚠️ Note the drain direction:
+why-fixture: the FIX makes this program REJECT (exit 1), so the row drains on the exit
+why-fixture: code, not on a different number. Measured first-hand at `main` 2ed7b5b9 on
+why-fixture: a binary cold-built in this worktree (no borrowed emitter), MEDAKA_STRICT=1,
+why-fixture: redirected to a file with $? read directly -- never piped.
+why-control: control.mdk + ctllib1868.mdk are the SATISFIABLE cross-module twin: the same
+why-control: module split, the same interface, the same single `impl Ix Int Char`, the
+why-control: same imported constrained function -- with the exported signature's
+why-control: predicate changed from the unsatisfiable `Ix a Bool` to the satisfiable
+why-control: `Ix a Char` (and the body's argument correspondingly `'z'`). MEASURED:
+why-control: exit 0, prints 222 on run, build and the executed binary -- the CORRECT
+why-control: answer this time. That isolates the observation to the constraint being
+why-control: UNSATISFIABLE at the call's instantiation, not to cross-module imports, not
+why-control: to constrained exports, and not to `Ix` in general. If it goes red the
+why-control: cross-module constrained-import path broke and #1868 is NOT drained.
+why-note: singlefile.mdk is the byte-equivalent SINGLE-FILE program (the shape #1161's
+why-note: own pin covers). MEASURED at 2ed7b5b9: check, run AND build all exit 1 with
+why-note: `No impl of Ix for Int Bool` located at the call site -- the fix working
+why-note: correctly. It is NOT graded (one cmd per fixture, and a control must exit 0)
+why-note: and is carried here because it is the discriminator that makes this a
+why-note: cross-module gap rather than a missing check: the compiler already knows the
+why-note: right answer and loses it at the boundary.
+why-note2: fix shape per the issue: whatever gives an imported constrained function's
+why-note2: obligation vector a cross-module twin (`declaredConstraintArgs`' own header at
+why-note2: compiler/types/typecheck.mdk ~9509 records that there is none) makes main.mdk
+why-note2: reject with `No impl of Ix for Int Bool` at exit 1, draining this row. Close
+why-note2: #1868 and delete this fixture when that happens.

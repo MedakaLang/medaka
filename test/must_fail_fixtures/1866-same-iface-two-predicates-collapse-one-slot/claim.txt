@@ -1,0 +1,54 @@
+issue: 1866
+what: Two predicates over the SAME interface at one tyvar id collapse to ONE dict
+what: slot in a `=>` signature context. `useIx : (Ix a Char, Ix a Bool) => a -> Int`
+what: declares TWO predicates; the emitted function takes ONE dict parameter, so
+what: both `ix x 'z'` and `ix x True` route through the same slot.
+what:
+what: THE CORRECT ANSWER IS 333, DERIVED FROM THE SPEC, NOT CAPTURED FROM ANY ENGINE.
+what: `docs/spec/DICT-SEMANTICS.md` §3: `match(IE, Ix Int Char)` = {impl Ix Int Char}
+what: and `match(IE, Ix Int Bool)` = {impl Ix Int Bool} -- each goal has exactly one
+what: matching instance, so `min-specific` is forced and there is nothing to tie-break.
+what: §3 additionally requires that any tie-break "must be a property of the instances
+what: and the goal alone -- never of search order, declaration order, or resolution
+what: position". So `ix x 'z' + ix x True` = 222 + 111 = 333.
+what:
+what: ACTUAL: 444 (= 222 + 222 -- both occurrences reach `impl Ix Int Char`), exit 0,
+what: `check` clean. ⚠️ ALL THREE ENGINES AGREE ON 444 -- eval, native `build`, and the
+what: executed binary. This pin therefore does NOT rest on engine disagreement; the
+what: value it asserts is the spec-derived wrong answer, and no golden was captured.
+what:
+what: Mechanism (from the issue, source-read not instrumented): `cslotKey s =
+what: lenKey s.csIface.irName ++ intToString s.csId` (compiler/types/typecheck.mdk
+what: ~9866 at 2ed7b5b9) carries no argument vector, so `dedupSlots` merges both
+what: `Ix`-headed predicates at the same lead tyvar id into one `CSlot`.
+cmd: run main.mdk
+exit: 0
+stdout: 444
+control: run control.mdk
+why-fixture: `run` is graded because all three engines agree here -- there is no
+why-fixture: divergence to exploit, and `run` needs no clang. The pinned observable is
+why-fixture: the exact stdout `444` at exit 0: an unrelated pre-`main` failure prints
+why-fixture: nothing and a different wrong route prints a different number, so neither
+why-fixture: can masquerade as this bug. Measured first-hand at `main` 2ed7b5b9 on a
+why-fixture: binary cold-built in this worktree (no borrowed emitter), MEDAKA_STRICT=1,
+why-fixture: output redirected to a file with $? read directly -- never piped.
+why-control: control.mdk is the DIFFERENT-INTERFACE twin: byte-structurally identical
+why-control: except the second predicate heads a second interface `Jx` instead of a
+why-control: second `Ix`. That is exactly #1177's shape, which sprint `predicate-slots`
+why-control: (PR #1862) FIXED -- so it isolates the one distinguishing feature, "both
+why-control: predicates head the SAME interface", and nothing else. MEASURED: prints
+why-control: 333 at exit 0 on run, build and the executed binary. If this control ever
+why-control: goes red, #1177's fix regressed and #1866 is NOT drained.
+why-note: swapped.mdk is the SAME program with the two predicates written in the other
+why-note: order in the signature. MEASURED at 2ed7b5b9: it prints 222 (= 111 + 111),
+why-note: not 444 -- i.e. which impl both occurrences collapse onto is decided by the
+why-note: order the predicates appear in the `=>` context, the exact dependence §3
+why-note: forbids. It is NOT graded (one cmd per fixture); it is carried here so the
+why-note: order-dependence is visible to whoever fixes this, and a fix must make BOTH
+why-note: main.mdk and swapped.mdk print 333.
+why-note2: `check --types` reports `useIx : (Ix a Bool, Ix a Char) => a -> Int` for both
+why-note2: files -- the signature channel still shows two predicates. Only the SLOT
+why-note2: channel collapses them, which is why `check` cannot see this.
+why-note3: fix shape per the issue: widening `cslotKey`/`dedupSlots` to key on the full
+why-note3: predicate (interface + argument vector) makes main.mdk print 333, draining
+why-note3: this row. Close #1866 and delete this fixture when that happens.

@@ -1,0 +1,3 @@
+import ctllib1868.{Ix, ix, useIx}
+
+main = println (useIx 5)

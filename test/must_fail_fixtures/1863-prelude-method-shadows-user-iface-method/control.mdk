@@ -1,0 +1,7 @@
+interface Sub a where
+  subby : a -> a -> Int
+
+impl Sub Int where
+  subby _ _ = 222
+
+main = println (subby 1 2)
