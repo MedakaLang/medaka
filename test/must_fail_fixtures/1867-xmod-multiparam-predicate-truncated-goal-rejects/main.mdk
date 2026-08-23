@@ -1,3 +1,0 @@
-import lib1867.{Dbg, Ix, dbg, ix, useBoth}
-
-main = println (useBoth 5)

@@ -1,8 +1,0 @@
-export interface Ix a b where
-  ix : a -> b -> Int
-
-export impl Ix Int Char where
-  ix _ _ = 222
-
-export useIx : Ix a Bool => a -> Int
-useIx x = ix x True

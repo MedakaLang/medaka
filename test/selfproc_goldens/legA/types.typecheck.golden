@@ -1440,9 +1440,11 @@ pushTypeErrorOnce : String -> String -> Unit
 pushTypeErrorOnceAt : String -> Option Loc -> String -> Unit
 pushUnknownField : String -> String -> Unit
 pushUnknownFieldMaybeSuggest : String -> String -> List String -> Unit
+qualConstraintDecl : String -> Option CDeclared
 qualConstraintFor : String -> Option (List CSlot)
 qualConstraintIds : String -> Option (List Int)
 qualConstraintKey : String -> Option (String, String)
+qualDeclOf : String -> String -> List Int -> CDeclared
 qualSchemeOblsFor : String -> Option (List VecObl)
 quoteStr : String -> String
 quotedNames : List String -> String
@@ -1869,7 +1871,7 @@ variantNamed : String -> List Variant -> Bool
 vecOblKey : VecObl -> String
 vecOblLeadId : VecObl -> List Int
 vecOblOfPred : List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
-vecOblsOfSlots : List CSlot -> List VecObl
+vecOblsOfSlotVecs : List (CSlot, List Mono) -> List VecObl
 vectorGoal : String -> List Mono -> Option (Mono, List Mono)
 wMark : Windowed a -> Int
 wNew : Unit -> Windowed a
@@ -1883,6 +1885,9 @@ walkDispatch : List String -> Ty -> Mono -> List (String, Mono)
 wildOverlayDecls : Int -> List DeclEnvModule -> String -> List Decl
 wildSchemeOblEntry : String -> ((String, String), List VecObl) -> List (String, List VecObl)
 wrapIf : Bool -> String -> String
+xmodOblArgId : Mono -> List Int
+xmodOblArgOk : Mono -> Bool
+xmodVecObl : CSlot -> List Mono -> VecObl
 zerosL : Int -> List Int
 zipIfaceMethodSchemeIds : List (IfaceRef, String) -> List (String, Scheme) -> List ((IfaceRef, String), Scheme)
 zipSlotArgs : List CSlot -> List (List Mono) -> List (Int, Predicate)
