@@ -490,10 +490,13 @@ ppDiagCli : String -> Diag -> String
 ppDiagCli file diag = ppDiagCliSrc "" file diag
 
 -- Stage-C: carat-aware renderer.  `src` carries the file's source text.
+-- #1500: the header now leads with "<severity>: " so a human reading stderr
+-- (or an agent grepping it as text, not `--json`) can tell a fatal error from
+-- an advisory warning without tracking the exit code.
 export
 ppDiagCliSrc : String -> String -> Diag -> String
-ppDiagCliSrc src file (Diag _ _ msg (Some (Loc _ sl sc _ _)) _ _) =
-  let header = "\{file}:\{intToString sl}:\{intToString sc}: \{msg}"
+ppDiagCliSrc src file (Diag sev _ msg (Some (Loc _ sl sc _ _)) _ _) =
+  let header = "\{ppSeverity sev}: \{file}:\{intToString sl}:\{intToString sc}: \{msg}"
   match nthLine src sl
     None => header
     Some lineText =>
