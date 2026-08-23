@@ -128,6 +128,11 @@ public export data ResError =
   -- name, owning module
   | NoExportedConstructors String String (Option Loc)
   -- type, owning module (exported abstractly)
+  | NewtypeCtorNotExported String String (Option Loc)
+  -- member name as written (the type name for `T(..)`, or the ctor name for a
+  -- direct `Ctor` import member), owning module.  A `newtype`'s constructor is
+  -- unconditionally module-private (no `public newtype` spelling exists), so
+  -- unlike NoExportedConstructors there is no `public export` remedy (#1311).
   | AbstractFieldAccess String String (Option Loc)
   -- type name, field name: a record-pattern field on a type whose fields are not
   -- in scope because the type was exported abstractly (`export` without `public`)
@@ -236,6 +241,7 @@ resErrorLoc (MethodNotInInterface _ _ l) = l
 resErrorLoc (ExternWithBody _ l) = l
 resErrorLoc (PrivateNameAccess _ _ l) = l
 resErrorLoc (NoExportedConstructors _ _ l) = l
+resErrorLoc (NewtypeCtorNotExported _ _ l) = l
 resErrorLoc (AbstractFieldAccess _ _ l) = l
 resErrorLoc (UnknownModule _ l) = l
 resErrorLoc (NonRecursiveValueLet _ l) = l
@@ -2079,6 +2085,8 @@ resErrorSexp (PrivateNameAccess n m _) =
   "(PrivateNameAccess \{escStr n} \{escStr m})"
 resErrorSexp (NoExportedConstructors n m _) =
   "(NoExportedConstructors \{escStr n} \{escStr m})"
+resErrorSexp (NewtypeCtorNotExported n m _) =
+  "(NewtypeCtorNotExported \{escStr n} \{escStr m})"
 resErrorSexp (AbstractFieldAccess t f _) =
   "(AbstractFieldAccess \{escStr t} \{escStr f})"
 resErrorSexp (UnknownModule n _) = "(UnknownModule " ++ escStr n ++ ")"
@@ -2199,6 +2207,7 @@ ppResError (ExternWithBody n _) = "Extern '"
 ppResError (PrivateNameAccess n m _) =
   "Module '\{m}' has no exported name '\{n}'"
 ppResError (NoExportedConstructors n m _) = "'\{n}' exports no constructors from module '\{m}' (exported abstractly). Remove `(..)` or export with `public export`"
+ppResError (NewtypeCtorNotExported n m _) = "'\{n}' exports no constructors: a `newtype`'s constructor is always module-private, and `public` is a parse error on `newtype`. Expose it with an accessor function, or declare '\{n}' as a `public export data` with one variant"
 ppResError (AbstractFieldAccess t f _) = "'\{t}' is exported abstractly. Field '\{f}' is not accessible; declare it `public export` to expose its fields"
 ppResError (UnknownModule n _) = "Unknown module: " ++ n
 ppResError (AsPatternMisplaced _) = "`@` as-patterns are only allowed in a binding position (a lambda parameter, a do-block bind, or a match pattern)"
@@ -2256,6 +2265,7 @@ resErrorCode (MethodNotInInterface _ _ _) = "R-METHOD-NOT-IN-INTERFACE"
 resErrorCode (ExternWithBody _ _) = "R-EXTERN-WITH-BODY"
 resErrorCode (PrivateNameAccess _ _ _) = "R-PRIVATE-NAME"
 resErrorCode (NoExportedConstructors _ _ _) = "R-NO-EXPORTED-CTORS"
+resErrorCode (NewtypeCtorNotExported _ _ _) = "R-NEWTYPE-CTOR-PRIVATE"
 resErrorCode (AbstractFieldAccess _ _ _) = "R-ABSTRACT-FIELD"
 resErrorCode (UnknownModule _ _) = "R-UNKNOWN-MODULE"
 resErrorCode (NonRecursiveValueLet _ _) = "R-NONREC-VALUE-LET"
@@ -2325,6 +2335,13 @@ public export data ModuleExports = ModuleExports {
     expInterfaces : List String,
     expIfaceMethods : List (String, List String),
     expEffects : List String,  -- exported effect labels (Phase 146)
+    -- (ctorName, typeName) pairs for `export newtype` decls (#1311) — a
+    -- newtype's ctor is unconditionally module-private (typecheck's
+    -- `publicDataDecls` never publishes it), so unlike `expCtors`/
+    -- `expTypeCtors` this table exists ONLY to let the import path refuse it
+    -- with a located, explanatory diagnostic instead of silently admitting it
+    -- and leaving typecheck to fail with a bare `Unbound variable`.
+    expNewtypeCtors : List (String, String),
   }
 -- public type → its exported ctors
 -- (field, owner type/ctor)
@@ -2367,6 +2384,14 @@ isPubExp exp n = contains n exp.expValues
 typeCtorsOf : String -> ModuleExports -> Option (List String)
 typeCtorsOf name exp = lookupAssoc name exp.expTypeCtors
 
+-- newtype's type name, if `name` is that newtype's exported ctor (#1311).
+newtypeTypeOfCtor : String -> ModuleExports -> Option String
+newtypeTypeOfCtor name exp = lookupAssoc name exp.expNewtypeCtors
+
+-- is `name` a `newtype` this module exports (checked by TYPE name, for `T(..)`)?
+isNewtypeExport : String -> ModuleExports -> Bool
+isNewtypeExport name exp = contains name (map snd exp.expNewtypeCtors)
+
 -- ── usePaths / pubUsePaths ─────────────────────────────────────────────────
 usePathsOf : List Decl -> List UsePath
 usePathsOf [] = []
@@ -2400,8 +2425,15 @@ importedNamesMM (UseGroup _ members) exp =
   let names = map localOfExpanded expanded
   let expandErrs = flatMap (expandMemberErrs exp) members
   (names, expandErrs ++ flatMap (pubErrExpanded exp) expanded)
-importedNamesMM (UseWild _) exp =
-  (exp.expValues ++ exp.expTypes ++ exp.expCtors, [])
+-- #1311: `.*` silently excludes a private newtype's ctor from `expCtors` —
+-- same silent treatment a VisAbstract data type's ctors already get here (they
+-- are simply never IN `expCtors` to begin with).  No diagnostic on a wildcard
+-- import: the user never named the ctor, so there is no import member to
+-- locate a refusal on — same reasoning `.*` already applies to abstract data.
+importedNamesMM (UseWild _) exp = (
+  exp.expValues ++ exp.expTypes ++ filterList (c => not (contains c (map fst exp.expNewtypeCtors))) exp.expCtors,
+  [],
+)
 -- `import m as A` binds m's exported VALUES as `A.name`, and nothing unqualified.
 -- Values only: a qualified reference parses as a field access, whose field must be
 -- lowercase, so `A.SomeType` / `A.SomeCtor` cannot be spelled at all (it is a parse
@@ -2435,12 +2467,24 @@ pubErrLoc exp (n, loc) =
 -- ORIGIN (that is the name m exports), while scope binds the LOCAL.  Conflating the
 -- two would make `import m.{privateThing as x}` silently legal.  Ctors expanded from
 -- `T(..) as U` keep their OWN names — one alias cannot rename N constructors.
+-- #1311: a `newtype`'s ctor is unconditionally module-private (typecheck's
+-- `publicDataDecls` never publishes it, and `public newtype` is a parse
+-- error — there is no spelling that exports it).  `expNewtypeCtors` still
+-- lets resolve's OTHER tables (`expCtors`/`expTypeCtors`) see it, so both
+-- arms below refuse it explicitly rather than let it fall through to the
+-- generic paths, which would silently admit it exactly as #1311 found.
 expandMemberNames : ModuleExports -> UseMember -> List (String, String, Loc)
-expandMemberNames _ (m@(UseMember name False loc _)) =
-  [(name, useMemberLocal m, loc)]
-expandMemberNames exp (m@(UseMember name True loc _)) = match typeCtorsOf name exp
-  Some ctors => (name, useMemberLocal m, loc) :: map (c => (c, c, loc)) ctors
+expandMemberNames exp (m@(UseMember name False loc _)) = match newtypeTypeOfCtor name exp
+  Some _ => []  -- refused; see expandMemberErrs
   None => [(name, useMemberLocal m, loc)]
+expandMemberNames exp (m@(UseMember name True loc _))
+  | isNewtypeExport name exp =
+    -- keep the TYPE name bound (mirrors abstract `data`: `NT` itself is
+    -- still importable, only its ctor is refused) but do NOT expand to the ctor.
+    [(name, useMemberLocal m, loc)]
+  | otherwise = match typeCtorsOf name exp
+    Some ctors => (name, useMemberLocal m, loc) :: map (c => (c, c, loc)) ctors
+    None => [(name, useMemberLocal m, loc)]
 
 localOfExpanded : (String, String, Loc) -> String
 localOfExpanded (_, local, _) = local
@@ -2450,14 +2494,19 @@ pubErrExpanded : ModuleExports -> (String, String, Loc) -> List ResError
 pubErrExpanded exp (origin, _, loc) = pubErrLoc exp (origin, loc)
 
 expandMemberErrs : ModuleExports -> UseMember -> List ResError
-expandMemberErrs _ (UseMember _ False _ _) = []
-expandMemberErrs exp (UseMember name True loc _) = match typeCtorsOf name exp
-  Some _ => []
-  None =>
-    if contains name exp.expTypes then
-      [NoExportedConstructors name exp.modId (Some loc)]
-    else
-      []
+expandMemberErrs exp (UseMember name False loc _) = match newtypeTypeOfCtor name exp
+  Some tyName => [NewtypeCtorNotExported tyName exp.modId (Some loc)]
+  None => []
+expandMemberErrs exp (UseMember name True loc _)
+  | isNewtypeExport name exp =
+    [NewtypeCtorNotExported name exp.modId (Some loc)]
+  | otherwise = match typeCtorsOf name exp
+    Some _ => []
+    None =>
+      if contains name exp.expTypes then
+        [NoExportedConstructors name exp.modId (Some loc)]
+      else
+        []
 
 -- ── import contributions to the env ────────────────────────────────────────
 public export data ImportAdds =
@@ -2947,6 +2996,7 @@ coreExports preludeDecls = ModuleExports {
   expInterfaces = map fst (interfaceList preludeDecls),
   expIfaceMethods = interfaceList preludeDecls,
   expEffects = effectNames preludeDecls,
+  expNewtypeCtors = [],  -- the prelude declares no `newtype` today; nothing to refuse
 }
 
 -- type → its ctors, ignoring visibility (the vis-filtered `expTypeCtorsDirect` is
@@ -2973,7 +3023,18 @@ buildExports coreExp known modId prog env = ModuleExports {
   expInterfaces = expInterfacesDirect prog ++ reExpInterfaces coreExp known prog,
   expIfaceMethods = expIfaceMethodsDirect prog ++ reExpIfaceMethods coreExp known prog,
   expEffects = expEffectsDirect prog ++ reExpEffects coreExp known prog,
+  expNewtypeCtors = expNewtypeCtorsDirect prog,
 }
+
+-- pub `newtype` (ctorName, typeName) pairs — the deliberately module-private
+-- constructors NoExportedConstructors' import path must refuse rather than
+-- silently accept (#1311).  Gated on `newtypePub` exactly like
+-- `expCtorsDirect`/`expTypeCtorsDirect` (an unexported newtype's ctor is
+-- simply not visible to import at all, same as today).
+expNewtypeCtorsDirect : List Decl -> List (String, String)
+expNewtypeCtorsDirect [] = []
+expNewtypeCtorsDirect ((DNewtype { newtypePub = True, newtypeName = n, newtypeCtor = con })::rest) = (con, n) :: expNewtypeCtorsDirect rest
+expNewtypeCtorsDirect (_::rest) = expNewtypeCtorsDirect rest
 
 -- pub DTypeSig/DExtern/DFunDef
 expValuesDirect : List Decl -> List String

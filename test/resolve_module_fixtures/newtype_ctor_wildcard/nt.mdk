@@ -1,0 +1,3 @@
+-- #1311: a `newtype`'s constructor is unconditionally module-private -- `public`
+-- is a parse error on `newtype`, so there is no spelling that exports it.
+export newtype NT = Wrap Int

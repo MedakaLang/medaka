@@ -99,6 +99,7 @@ expFieldOwnersDirect : List Decl -> List (String, String)
 expIfaceMethodsDirect : List Decl -> List (String, List String)
 expInterfacesDirect : List Decl -> List String
 expInterfacesOf : ModuleExports -> List String
+expNewtypeCtorsDirect : List Decl -> List (String, String)
 expTypeCtorsDirect : List Decl -> List (String, List String)
 expTypesDirect : List Decl -> List String
 expTypesOf : ModuleExports -> List String
@@ -175,6 +176,7 @@ isHint : String -> Bool
 isIfaceAmbiguous : Env -> String -> Bool
 isImportedModuleName : Env -> String -> Bool
 isModId : String -> (String, List String) -> Bool
+isNewtypeExport : String -> ModuleExports -> Bool
 isPubExp : ModuleExports -> String -> Bool
 isTransparentDecl : Decl -> Bool
 isTupleCtorTyName : String -> Bool
@@ -202,6 +204,7 @@ mergeAdds : ImportAdds -> ImportAdds -> ImportAdds
 mkScope : List String -> Scope
 modulesExportingName : Env -> String -> List String
 newlyDuplicated : Option Loc -> Map String Unit -> List String -> List ResError
+newtypeTypeOfCtor : String -> ModuleExports -> Option String
 noteOriginTrace : String -> List Decl -> Unit
 numberFrom : Int -> List String -> List (String, Int)
 oneImport : Map String ModuleExports -> UsePath -> Loc -> ImportAdds

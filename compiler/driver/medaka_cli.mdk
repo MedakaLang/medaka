@@ -131,6 +131,7 @@ import eval.eval.{
   evalModulesOutputRun,
   evalModulesOutputAsync,
   currentEvalFile,
+  modulePathMap,
   runJsonMode,
   pendingRunDiags,
   progArgsRef,
@@ -1958,6 +1959,11 @@ runRunCmd argv =
               Ok modsWithPath =>
                 let mods = map dropModPath modsWithPath
                 let pathMap = map modIdToPath modsWithPath
+                -- #1542: same per-module (modId -> path) map #41 already built
+                -- here for resolve-phase attribution, now ALSO published to the
+                -- evaluator so a RUNTIME error raised inside an imported module
+                -- reports THAT module's file instead of the entry's.
+                modulePathMap := pathMap
                 let rtD = desugar (parse rsrc)
                 let coreD = desugar (parse csrc)
                 let modsD = map desugarPair mods
