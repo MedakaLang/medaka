@@ -132,6 +132,34 @@ source_writes_allocations_ok() {
   ' "$body"
 }
 
+source_write_shape_ok() {
+  name=$1
+  body=$2
+  writes=$(grep -E -c '(^|[[:space:]])(A\.)?set[[:space:]]' "$body" || true)
+  case "$name" in
+    carryPassGo)
+      [ "$writes" -eq 3 ] && [ "$(grep -F -c 'set 9 ' "$body" || true)" -eq 1 ] &&
+        [ "$(grep -F -c 'set i ' "$body" || true)" -eq 1 ] &&
+        [ "$(grep -F -c 'set (i + 1) ' "$body" || true)" -eq 1 ] ;;
+    carryFoldRound)
+      [ "$writes" -eq 2 ] && [ "$(grep -F -c 'set 0 ' "$body" || true)" -eq 1 ] &&
+        [ "$(grep -F -c 'set 1 ' "$body" || true)" -eq 1 ] ;;
+    subPCandidate)
+      [ "$writes" -eq 2 ] && [ "$(grep -F -c 'set 9 ' "$body" || true)" -eq 1 ] &&
+        [ "$(grep -F -c 'set i ' "$body" || true)" -eq 1 ] ;;
+    selectPCandidate)
+      [ "$writes" -eq 1 ] && [ "$(grep -F -c 'set i ' "$body" || true)" -eq 1 ] ;;
+    carryGo|subNCandidate|selectNCandidate)
+      [ "$writes" -eq 1 ] && [ "$(grep -F -c 'A.set i ' "$body" || true)" -eq 1 ] ;;
+    takeHigh)
+      [ "$writes" -eq 2 ] && [ "$(grep -F -c 'A.set (i - 16) ' "$body" || true)" -eq 1 ] &&
+        [ "$(grep -F -c 'A.set i ' "$body" || true)" -eq 1 ] ;;
+    foldAccumRow)
+      [ "$writes" -eq 1 ] && [ "$(grep -F -c 'A.set k ' "$body" || true)" -eq 1 ] ;;
+    *) [ "$writes" -eq 0 ] ;;
+  esac
+}
+
 extract_source_function() {
   name=$1
   input=$2
@@ -186,6 +214,7 @@ source_helpers_ok() {
     if grep -F -q 'hashBool' "$body"; then return 1; fi
     source_indices_ok "$body" || return 1
     source_writes_allocations_ok "$body" || return 1
+    source_write_shape_ok "$name" "$body" || return 1
     if [ "$name" = carryGo ]; then
       grep -F -q 'if i >= nWide then if carry /= 0 then panic' "$body" || return 1
     fi
@@ -385,6 +414,23 @@ if source_helpers_ok "$FIELD" "$WORK/scalar_write_source_mutant.mdk" "$WORK/sour
 fi
 pass 'scalar secret-write mutation is rejected by source structure'
 
+awk '
+  /let t = w\[i\] \+ limbMask \+ 1 - nLimbs\[i\] - borrow/ {
+    print
+    print "    let k = borrow"
+    next
+  }
+  /A.set i \(bitAnd t limbMask\) diff/ {
+    print "    let () = A.set k (bitAnd t limbMask) diff"
+    next
+  }
+  { print }
+' "$SCALAR" > "$WORK/scalar_rebound_index_source_mutant.mdk"
+if source_helpers_ok "$FIELD" "$WORK/scalar_rebound_index_source_mutant.mdk" "$WORK/source-scalar-rebound-index-mutant"; then
+  fail 'scalar rebound secret-index mutation is rejected by source structure'
+fi
+pass 'scalar rebound secret-index mutation is rejected by source structure'
+
 # Private same-module witnesses. The mutation copies never touch the worktree.
 cp "$FIELD" "$WORK/field_probe.mdk"
 append_field_probe "$WORK/field_probe.mdk"
@@ -472,6 +518,7 @@ extract_function subNCandidate "$WORK/scalar_emit.ll" "$WORK/scalar-borrow-curre
 if grep -F -q 'mdk_value_eq' "$WORK/scalar-select-current.ll" "$WORK/scalar-borrow-current.ll"; then
   fail 'current scalar reduction IR contains secret equality control'
 fi
+grep -F -q 'call i64 @mdk_array__set(i64 %arg2,' "$WORK/scalar-borrow-current.ll" || fail 'scalar borrow IR writes only at its public index argument'
 pass 'current scalar IR has only public-counter control'
 pass 'complete scalar reducer IR matches the approved helper control shape'
 
@@ -516,6 +563,16 @@ write_calls=$(grep -F -c 'call i64 @mdk_array__set(' "$WORK/scalar-write-mutant.
 make_calls=$(grep -F -c 'call i64 @mdk_array_make(' "$WORK/scalar-write-mutant.ll" || true)
 [ "$write_calls" -gt 1 ] && [ "$make_calls" -gt 0 ] || fail 'scalar secret-write mutation reaches native IR'
 pass 'scalar secret-write mutation is rejected by native IR call multiset'
+
+cp "$WORK/scalar_rebound_index_source_mutant.mdk" "$WORK/scalar_rebound_index_mutant.mdk"
+append_scalar_probe "$WORK/scalar_rebound_index_mutant.mdk"
+MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_rebound_index_mutant.mdk" -o "$WORK/scalar_rebound_index_mutant" --keep-ir > "$WORK/build-scalar-rebound-index-mutant.log" 2>&1
+extract_function subNCandidate "$WORK/scalar_rebound_index_mutant.ll" "$WORK/scalar-rebound-index-mutant.ll"
+if grep -F -q 'call i64 @mdk_array__set(i64 %arg2,' "$WORK/scalar-rebound-index-mutant.ll"; then
+  fail 'scalar rebound secret-index mutation is rejected by native IR operand provenance'
+fi
+grep -F -q 'call i64 @mdk_array__set(i64 %arg3,' "$WORK/scalar-rebound-index-mutant.ll" || fail 'scalar rebound secret-index mutation reaches native IR'
+pass 'scalar rebound secret-index mutation is rejected by native IR operand provenance'
 
 disassemble() {
   binary=$1
@@ -605,5 +662,5 @@ printf 'receipt: target=%s %s\n' "$(uname -s)" "$(uname -m)"
 printf 'receipt: compiler=%s\n' "$(clang --version | sed -n '1p')"
 printf 'receipt: medaka=%s\n' "$($MEDAKA --version | sed -n '1p')"
 
-[ "$checked" -ge 33 ] || fail "anti-rot floor (expected at least 33, got $checked)"
+[ "$checked" -ge 35 ] || fail "anti-rot floor (expected at least 35, got $checked)"
 printf 'PASS: constant-time reduction controls — %s assertions\n' "$checked"
