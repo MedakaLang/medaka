@@ -1,5 +1,5 @@
 # META
-source_lines=32413
+source_lines=32429
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -16545,21 +16545,32 @@ monoHeadAgrees a b = match headTyconNameMono a
 -- declared by, plus its full instantiated type-parameter vector when [fullMono] lets
 -- `ifaceParamMonos` recover one.  `None` for a non-method name (a top-level
 -- constrained call), which is what keeps those sites on the tyvar-keyed lookup.
+--
+-- SLICE-1 SUPPLY (#1182): the interface is read from `admittedIfaceFor`, NOT from
+-- `ifaceOfMethodName` — the SAME `omLookup name perRun.value.methodIfaceParamsRef`,
+-- with the `.irName` projection removed.  No new channel, no new parameter: the
+-- identity was already in the tuple this lookup returns and was being thrown away one
+-- line later by `ifaceRefBare`.  PURE SUPPLY: this predicate's only consumers are
+-- `enclSlotIndex`/`indexOfPredGo` and `implReqDictVarOf`/`implReqPick`, both of which
+-- compare `sp.iface.irName == p.iface.irName` — a NAME compare that cannot see an
+-- origin — so nothing selects differently today.  What it buys is that the goal side
+-- is no longer laundered through `OriginUnresolved`, which is the precondition for
+-- re-keying those two comparators onto `sameTyConHead`.
 goalPredOf : String -> Mono -> Option Predicate
 goalPredOf name fullMono = map
-  (ifn => Predicate {
-    iface = ifaceRefBare ifn,
+  (ifr => Predicate {
+    iface = ifr,
     args = fromOption [] (ifaceParamMonos name fullMono),
   })
-  (ifaceOfMethodName name)
+  (admittedIfaceFor name)
 
 -- the operator/unop form: the node carries one operand mono, not a method occurrence,
 -- so no argument vector is recoverable (`stampOpRouteVal` says the same).  Every
 -- operator interface is single-param anyway, so the interface alone is the predicate.
+-- Same SLICE-1 supply as `goalPredOf` above, same table, same reasoning.
 goalPredOfOp : String -> Option Predicate
-goalPredOfOp name = map
-  (ifn => Predicate { iface = ifaceRefBare ifn, args = [] })
-  (ifaceOfMethodName name)
+goalPredOfOp name =
+  map (ifr => Predicate { iface = ifr, args = [] }) (admittedIfaceFor name)
 
 -- Phase 151 / Gap G: stamp each comparison/equality OPERATOR site's EBinOp route
 -- ref with the resolved Eq/Ord impl key (RKey) — but ONLY when the operand type
@@ -26122,7 +26133,7 @@ registersElementDict mname rpNames = contains mname rpNames
 
 registerReqSlots : String -> List (String, Mono) -> Int -> List Require -> Unit
 registerReqSlots _ _ _ [] = ()
-registerReqSlots mname implTvMap slot ((Require { requireHead = iface, requireArgs = rargs })::rest) =
+registerReqSlots mname implTvMap slot ((Require { requireHead = iface, requireArgs = rargs, requireOrigin = ro })::rest) =
   let argMonos = map (a => fromAstType implTvMap a) rargs
   let ids = flatMap monoTyvarIds argMonos
   let _ = registerEachActive ids (dictParamName mname slot)
@@ -26131,7 +26142,12 @@ registerReqSlots mname implTvMap slot ((Require { requireHead = iface, requireAr
   -- registers them, so the two can never be written apart (`setFunConstraintEntry`'s
   -- rule, one channel over).  `registerPredGiven` above cannot serve this: it is
   -- single-subject and STRUCTURED-only, so `requires Ix a Char` registers nothing there.
-  let entry = (dictParamName mname slot, ids, Predicate { iface = ifaceRefBare iface, args = argMonos })
+  -- SLICE-1 SUPPLY (#1182): `requireOrigin` is a field of the `Require` this arm
+  -- ALREADY destructures — `reqToObligation` reads the same pair to build a real
+  -- `IfaceRef` — so this was a projection thrown away in place, not a missing channel.
+  -- PURE SUPPLY: `implReqPreds`' only reader is `implReqPick`, which compares
+  -- `sp.iface.irName` against the goal's, so no slot is picked differently today.
+  let entry = (dictParamName mname slot, ids, Predicate { iface = IfaceRef { irName = iface, irOrigin = ro }, args = argMonos })
   perRun.value.implReqPreds := entry::perRun.value.implReqPreds.value
   registerReqSlots mname implTvMap (slot + 1) rest
 
@@ -35289,9 +35305,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "monoHeadAgrees" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
 (DFunDef false "monoHeadAgrees" ((PVar "a") (PVar "b")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "a")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "x")) () (EMatch (EApp (EVar "headTyconNameMono") (EVar "b")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "y")) () (EBinOp "==" (EVar "x") (EVar "y")))))))
 (DTypeSig false "goalPredOf" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Predicate")))))
-(DFunDef false "goalPredOf" ((PVar "name") (PVar "fullMono")) (EApp (EApp (EVar "map") (ELam ((PVar "ifn")) (ERecordCreate "Predicate" ((fa "iface" (EApp (EVar "ifaceRefBare") (EVar "ifn"))) (fa "args" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "ifaceParamMonos") (EVar "name")) (EVar "fullMono")))))))) (EApp (EVar "ifaceOfMethodName") (EVar "name"))))
+(DFunDef false "goalPredOf" ((PVar "name") (PVar "fullMono")) (EApp (EApp (EVar "map") (ELam ((PVar "ifr")) (ERecordCreate "Predicate" ((fa "iface" (EVar "ifr")) (fa "args" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "ifaceParamMonos") (EVar "name")) (EVar "fullMono")))))))) (EApp (EVar "admittedIfaceFor") (EVar "name"))))
 (DTypeSig false "goalPredOfOp" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Predicate"))))
-(DFunDef false "goalPredOfOp" ((PVar "name")) (EApp (EApp (EVar "map") (ELam ((PVar "ifn")) (ERecordCreate "Predicate" ((fa "iface" (EApp (EVar "ifaceRefBare") (EVar "ifn"))) (fa "args" (EListLit)))))) (EApp (EVar "ifaceOfMethodName") (EVar "name"))))
+(DFunDef false "goalPredOfOp" ((PVar "name")) (EApp (EApp (EVar "map") (ELam ((PVar "ifr")) (ERecordCreate "Predicate" ((fa "iface" (EVar "ifr")) (fa "args" (EListLit)))))) (EApp (EVar "admittedIfaceFor") (EVar "name"))))
 (DTypeSig false "binopPrimitiveHead" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "binopPrimitiveHead" ((PVar "h")) (EApp (EApp (EVar "contains") (EVar "h")) (EListLit (ELit (LString "Int")) (ELit (LString "Float")) (ELit (LString "String")) (ELit (LString "Bool")) (ELit (LString "Char")))))
 (DTypeSig false "binopBuiltinHead" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -36673,7 +36689,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "registersElementDict" ((PVar "mname") (PVar "rpNames")) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "mname")) (EVar "rpNames")) (EApp (EVar "isSome") (EApp (EVar "argDispatchOf") (EVar "mname")))))
 (DTypeSig false "registerReqSlots" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyCon "Unit"))))))
 (DFunDef false "registerReqSlots" (PWild PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "registerReqSlots" ((PVar "mname") (PVar "implTvMap") (PVar "slot") (PCons (PRec "Require" ((rf "requireHead" (PVar "iface")) (rf "requireArgs" (PVar "rargs"))) false) (PVar "rest"))) (EBlock (DoLet false false (PVar "argMonos") (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EApp (EApp (EVar "fromAstType") (EVar "implTvMap")) (EVar "a")))) (EVar "rargs"))) (DoLet false false (PVar "ids") (EApp (EApp (EVar "flatMap") (EVar "monoTyvarIds")) (EVar "argMonos"))) (DoLet false false PWild (EApp (EApp (EVar "registerEachActive") (EVar "ids")) (EApp (EApp (EVar "dictParamName") (EVar "mname")) (EVar "slot")))) (DoLet false false PWild (EApp (EApp (EApp (EVar "registerPredGiven") (EVar "iface")) (EVar "argMonos")) (EApp (EApp (EVar "dictParamName") (EVar "mname")) (EVar "slot")))) (DoLet false false (PVar "entry") (ETuple (EApp (EApp (EVar "dictParamName") (EVar "mname")) (EVar "slot")) (EVar "ids") (ERecordCreate "Predicate" ((fa "iface" (EApp (EVar "ifaceRefBare") (EVar "iface"))) (fa "args" (EVar "argMonos")))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implReqPreds")) (EBinOp "::" (EVar "entry") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implReqPreds") "value")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerReqSlots") (EVar "mname")) (EVar "implTvMap")) (EBinOp "+" (EVar "slot") (ELit (LInt 1)))) (EVar "rest")))))
+(DFunDef false "registerReqSlots" ((PVar "mname") (PVar "implTvMap") (PVar "slot") (PCons (PRec "Require" ((rf "requireHead" (PVar "iface")) (rf "requireArgs" (PVar "rargs")) (rf "requireOrigin" (PVar "ro"))) false) (PVar "rest"))) (EBlock (DoLet false false (PVar "argMonos") (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EApp (EApp (EVar "fromAstType") (EVar "implTvMap")) (EVar "a")))) (EVar "rargs"))) (DoLet false false (PVar "ids") (EApp (EApp (EVar "flatMap") (EVar "monoTyvarIds")) (EVar "argMonos"))) (DoLet false false PWild (EApp (EApp (EVar "registerEachActive") (EVar "ids")) (EApp (EApp (EVar "dictParamName") (EVar "mname")) (EVar "slot")))) (DoLet false false PWild (EApp (EApp (EApp (EVar "registerPredGiven") (EVar "iface")) (EVar "argMonos")) (EApp (EApp (EVar "dictParamName") (EVar "mname")) (EVar "slot")))) (DoLet false false (PVar "entry") (ETuple (EApp (EApp (EVar "dictParamName") (EVar "mname")) (EVar "slot")) (EVar "ids") (ERecordCreate "Predicate" ((fa "iface" (ERecordCreate "IfaceRef" ((fa "irName" (EVar "iface")) (fa "irOrigin" (EVar "ro"))))) (fa "args" (EVar "argMonos")))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implReqPreds")) (EBinOp "::" (EVar "entry") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implReqPreds") "value")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerReqSlots") (EVar "mname")) (EVar "implTvMap")) (EBinOp "+" (EVar "slot") (ELit (LInt 1)))) (EVar "rest")))))
 (DTypeSig false "registerPredGiven" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "String") (TyCon "Unit")))))
 (DFunDef false "registerPredGiven" ((PVar "iface") (PList (PVar "subject")) (PVar "dname")) (EIf (EApp (EVar "monoIsBareTyvar") (EVar "subject")) (ELit LUnit) (EIf (EVar "otherwise") (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "activeDictPreds")) (EBinOp "::" (ETuple (EVar "iface") (EVar "subject") (EVar "dname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "activeDictPreds") "value"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "registerPredGiven" (PWild PWild PWild) (ELit LUnit))
@@ -40566,9 +40582,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "monoHeadAgrees" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
 (DFunDef false "monoHeadAgrees" ((PVar "a") (PVar "b")) (EMatch (EApp (EVar "headTyconNameMono") (EVar "a")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "x")) () (EMatch (EApp (EVar "headTyconNameMono") (EVar "b")) (arm (PCon "None") () (EVar "True")) (arm (PCon "Some" (PVar "y")) () (EBinOp "==" (EVar "x") (EVar "y")))))))
 (DTypeSig false "goalPredOf" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Predicate")))))
-(DFunDef false "goalPredOf" ((PVar "name") (PVar "fullMono")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "ifn")) (ERecordCreate "Predicate" ((fa "iface" (EApp (EVar "ifaceRefBare") (EVar "ifn"))) (fa "args" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "ifaceParamMonos") (EVar "name")) (EVar "fullMono")))))))) (EApp (EVar "ifaceOfMethodName") (EVar "name"))))
+(DFunDef false "goalPredOf" ((PVar "name") (PVar "fullMono")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "ifr")) (ERecordCreate "Predicate" ((fa "iface" (EVar "ifr")) (fa "args" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "ifaceParamMonos") (EVar "name")) (EVar "fullMono")))))))) (EApp (EVar "admittedIfaceFor") (EVar "name"))))
 (DTypeSig false "goalPredOfOp" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Predicate"))))
-(DFunDef false "goalPredOfOp" ((PVar "name")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "ifn")) (ERecordCreate "Predicate" ((fa "iface" (EApp (EVar "ifaceRefBare") (EVar "ifn"))) (fa "args" (EListLit)))))) (EApp (EVar "ifaceOfMethodName") (EVar "name"))))
+(DFunDef false "goalPredOfOp" ((PVar "name")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "ifr")) (ERecordCreate "Predicate" ((fa "iface" (EVar "ifr")) (fa "args" (EListLit)))))) (EApp (EVar "admittedIfaceFor") (EVar "name"))))
 (DTypeSig false "binopPrimitiveHead" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "binopPrimitiveHead" ((PVar "h")) (EApp (EApp (EVar "contains") (EVar "h")) (EListLit (ELit (LString "Int")) (ELit (LString "Float")) (ELit (LString "String")) (ELit (LString "Bool")) (ELit (LString "Char")))))
 (DTypeSig false "binopBuiltinHead" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -41950,7 +41966,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "registersElementDict" ((PVar "mname") (PVar "rpNames")) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "mname")) (EVar "rpNames")) (EApp (EVar "isSome") (EApp (EVar "argDispatchOf") (EVar "mname")))))
 (DTypeSig false "registerReqSlots" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyCon "Unit"))))))
 (DFunDef false "registerReqSlots" (PWild PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "registerReqSlots" ((PVar "mname") (PVar "implTvMap") (PVar "slot") (PCons (PRec "Require" ((rf "requireHead" (PVar "iface")) (rf "requireArgs" (PVar "rargs"))) false) (PVar "rest"))) (EBlock (DoLet false false (PVar "argMonos") (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EApp (EApp (EVar "fromAstType") (EVar "implTvMap")) (EVar "a")))) (EVar "rargs"))) (DoLet false false (PVar "ids") (EApp (EApp (EDictApp "flatMap") (EVar "monoTyvarIds")) (EVar "argMonos"))) (DoLet false false PWild (EApp (EApp (EVar "registerEachActive") (EVar "ids")) (EApp (EApp (EVar "dictParamName") (EVar "mname")) (EVar "slot")))) (DoLet false false PWild (EApp (EApp (EApp (EVar "registerPredGiven") (EVar "iface")) (EVar "argMonos")) (EApp (EApp (EVar "dictParamName") (EVar "mname")) (EVar "slot")))) (DoLet false false (PVar "entry") (ETuple (EApp (EApp (EVar "dictParamName") (EVar "mname")) (EVar "slot")) (EVar "ids") (ERecordCreate "Predicate" ((fa "iface" (EApp (EVar "ifaceRefBare") (EVar "iface"))) (fa "args" (EVar "argMonos")))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implReqPreds")) (EBinOp "::" (EVar "entry") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implReqPreds") "value")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerReqSlots") (EVar "mname")) (EVar "implTvMap")) (EBinOp "+" (EVar "slot") (ELit (LInt 1)))) (EVar "rest")))))
+(DFunDef false "registerReqSlots" ((PVar "mname") (PVar "implTvMap") (PVar "slot") (PCons (PRec "Require" ((rf "requireHead" (PVar "iface")) (rf "requireArgs" (PVar "rargs")) (rf "requireOrigin" (PVar "ro"))) false) (PVar "rest"))) (EBlock (DoLet false false (PVar "argMonos") (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EApp (EApp (EVar "fromAstType") (EVar "implTvMap")) (EVar "a")))) (EVar "rargs"))) (DoLet false false (PVar "ids") (EApp (EApp (EDictApp "flatMap") (EVar "monoTyvarIds")) (EVar "argMonos"))) (DoLet false false PWild (EApp (EApp (EVar "registerEachActive") (EVar "ids")) (EApp (EApp (EVar "dictParamName") (EVar "mname")) (EVar "slot")))) (DoLet false false PWild (EApp (EApp (EApp (EVar "registerPredGiven") (EVar "iface")) (EVar "argMonos")) (EApp (EApp (EVar "dictParamName") (EVar "mname")) (EVar "slot")))) (DoLet false false (PVar "entry") (ETuple (EApp (EApp (EVar "dictParamName") (EVar "mname")) (EVar "slot")) (EVar "ids") (ERecordCreate "Predicate" ((fa "iface" (ERecordCreate "IfaceRef" ((fa "irName" (EVar "iface")) (fa "irOrigin" (EVar "ro"))))) (fa "args" (EVar "argMonos")))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implReqPreds")) (EBinOp "::" (EVar "entry") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implReqPreds") "value")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerReqSlots") (EVar "mname")) (EVar "implTvMap")) (EBinOp "+" (EVar "slot") (ELit (LInt 1)))) (EVar "rest")))))
 (DTypeSig false "registerPredGiven" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "String") (TyCon "Unit")))))
 (DFunDef false "registerPredGiven" ((PVar "iface") (PList (PVar "subject")) (PVar "dname")) (EIf (EApp (EVar "monoIsBareTyvar") (EVar "subject")) (ELit LUnit) (EIf (EVar "otherwise") (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "activeDictPreds")) (EBinOp "::" (ETuple (EVar "iface") (EVar "subject") (EVar "dname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "activeDictPreds") "value"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "registerPredGiven" (PWild PWild PWild) (ELit LUnit))
