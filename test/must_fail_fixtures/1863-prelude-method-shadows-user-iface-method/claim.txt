@@ -1,0 +1,66 @@
+issue: 1863
+what: A user-defined interface METHOD whose name collides with a PRELUDE METHOD is
+what: silently dispatched to the PRELUDE's impl instead of the user's -- exit 0,
+what: `check` clean, wrong answer.
+what:
+what: main.mdk declares `interface Sub a where sub : a -> a -> Int` with the single
+what: `impl Sub Int where sub _ _ = 222`, and calls `sub 1 2`. `sub` collides with
+what: `Num`'s subtraction (stdlib/core.mdk:705).
+what:
+what: THE CORRECT ANSWER IS 222, DERIVED FROM THE SPEC, NOT CAPTURED FROM ANY ENGINE.
+what: `docs/spec/DICT-SEMANTICS.md` §3: the occurrence's goal is `Sub Int`, and
+what: `match(IE, Sub Int)` = {impl Sub Int} -- the only impl of `Sub` in the program.
+what: `Num Int` is not a matching instance of a `Sub` goal at all: §3's `match` is
+what: taken over instances "of the same class", and `Num` is a different interface.
+what: So the goal has exactly one matching instance, `inst` selects it, and
+what: `sub 1 2` = 222. The rename control below measures that the compiler produces
+what: exactly this whenever the name does not collide.
+what:
+what: ACTUAL: -1 at exit 0 on `check` (clean), `run` and the executed native binary --
+what: `Num Int`'s `sub`, i.e. `1 - 2`. The user's impl body never executes.
+cmd: run main.mdk
+exit: 0
+stdout: -1
+control: run control.mdk
+why-fixture: `run` grades the interpreter, where the silent wrong value appears; `build`
+why-fixture: + execute produce the same -1 and would do equally well, but `run` needs no
+why-fixture: clang. The pinned observable is the exact stdout `-1` at exit 0. It is a
+why-fixture: POSITIVE marker and it is derivable: -1 is `1 - 2`, the prelude denotation,
+why-fixture: and no other route in this program produces it. An unrelated pre-`main`
+why-fixture: failure prints nothing and exits nonzero, so it cannot masquerade as this
+why-fixture: bug. Measured first-hand at `main` 2ed7b5b9 on a binary cold-built in this
+why-fixture: worktree (no borrowed emitter), MEDAKA_STRICT=1, redirected to a file with
+why-fixture: $? read directly -- never piped.
+why-control: control.mdk is the RENAME twin: byte-structurally identical with the method
+why-control: named `subby` instead of `sub`, at its declaration, its impl and its call
+why-control: site. MEASURED: 222 at exit 0 on run, build and the executed binary. That
+why-control: isolates the observation to the NAME COLLISION WITH THE PRELUDE and nothing
+why-control: else -- not to single-method interfaces, not to `impl Sub Int`, not to
+why-control: dispatch in general. If it goes red, the environment moved and #1863 is
+why-control: NOT drained.
+why-note: ⚠️ FIXTURE RE-POINTED FROM #1169 (2026-08-23). This directory was
+why-note: `1169-iface-requires-multiparam-wrong-dict-slot/`, whose claim asserted that a
+why-note: multi-parameter interface-level `requires Ix a b` super chain read the wrong
+why-note: dict slot. THAT ATTRIBUTION WAS WRONG and #1169 is now closed as a duplicate
+why-note: of #1863. The evidence, re-measured first-hand at 2ed7b5b9 before re-pointing:
+why-note: variant-2arg-requires.mdk is #1169's original program verbatim (`check` clean
+why-note: exit 0, `run` E-PANIC `unknown op '-'` exit 1, built binary -121 at exit 0);
+why-note: variant-2arg-rename-subby.mdk is that SAME program with only the method
+why-note: renamed `sub` -> `subby`, and it prints the CORRECT 1222 at exit 0 on all
+why-note: three verbs, with the `requires Ix a b` chain and everything else untouched.
+why-note: The super chain routes correctly today; the METHOD NAME is what collides. The
+why-note: super-slot-collapse mechanism #1169's title actually described was folded into
+why-note: B-4's representation slice (sprint `predicate-slots`, PR #1862) as a site.
+why-note2: variant-2arg-direct-ix.mdk is the old fixture's control -- the same `Ix`
+why-note2: interface and both impls with the `Sub`/`requires` layer dropped entirely
+why-note2: (`ix 1 'z' + 1000`); it printed 1222 at exit 0. All three variant-* files are
+why-note2: carried for the record and are NOT graded (one cmd and one control per
+why-note2: fixture); main.mdk/control.mdk above are the sharper repro -- minimal, and
+why-note2: pinning the SILENT wrong answer rather than the -121 nonsense value.
+why-note3: fix shape per the issue: whatever stops bare-method-name dispatch from
+why-note3: preferring (or failing to exclude) the prelude's own impls of a same-named
+why-note3: method makes main.mdk print 222, draining this row. Close #1863 and delete
+why-note3: this fixture when that happens. Note the ADJACENT-BUT-DISTINCT collision axis:
+why-note3: #1182 is two USER interfaces sharing a method name with impl-block order
+why-note3: deciding; here one side is always the prelude and the user's impl is never
+why-note3: reached regardless of order.
