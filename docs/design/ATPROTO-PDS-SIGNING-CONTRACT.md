@@ -115,12 +115,15 @@ non-negative borrow formula and returns `1 - borrow`; it does not call
 Bool-returning `scIsHigh`.
 
 `secretKeyFromBytes` first checks the public length, then scans all 32
-big-endian bytes into a fixed-width scalar carrier. It unconditionally computes
-both (a) the borrow from subtracting `n`, which proves `< n`, and (b) the borrow
-from subtracting one, which proves nonzero. It combines those arithmetic bits
-into one `validBit`. Construction of `SecretKey` or `Err` may branch only once
-on that declassified aggregate after the scan; there is no per-byte, zero, or
-range early return. The native closure includes this parser and its helpers.
+elements. For each `Int`, fixed-width subtraction produces arithmetic bits for
+`>= 0` and `<= 255`; the scan combines all 32 byte-validity bits without an
+early return and builds the big-endian scalar from masked byte values. It then
+unconditionally computes both (a) the borrow from subtracting `n`, which proves
+`< n`, and (b) the borrow from subtracting one, which proves nonzero. It
+combines byte-domain, range, and nonzero bits into one `validBit`. Construction
+of `SecretKey` or `Err` may branch only once on that declassified aggregate
+after the scan; there is no per-element, zero, or range early return. The
+native closure includes this parser and its helpers.
 
 All loops use only public fixed limb indices. These helpers join the existing
 constant-time source/IR/final-code closure gate; a wrapper is not accepted
@@ -325,13 +328,21 @@ drift.
 
 The signing corpus input manifest is committed source, not runtime randomness:
 
-- private keys `1`, `2`, `3`, `n/2`, `n/2+1`, `n-2`, `n-1`, plus eight
+- private keys `1`, `2`, `3`, `n/2-1`, `n/2`, `n/2+1`, `n-2`, `n-1`, plus eight
   literal 32-byte values derived once as SHA-256 of the ASCII labels
   `medaka-pds-signing-key-0` through `-7` and reduced only by rejection;
 - digests `00..00`, `00..01`, `ff..ff`, SEC 2 generator x, and twelve literal
   SHA-256 digests of `medaka-pds-signing-message-0` through `-11`;
 - the 16 matching-index pairs plus a fixed 8x8 cross-product of the first eight
   keys and digests: 80 rows.
+
+The PDS behavior corpus is a separate 16-row message corpus. It pairs those 16
+keys by index with the literal UTF-8 messages
+`medaka-pds-oracle-message-0` through `-15`; its generator records and asserts
+each message's SHA-256 digest before comparing signatures. These are not the
+16 matching-index rows of the prehashed signing corpus, and the four digest
+edge cases above remain independent-oracle-only rows. The committed provenance
+pins both counts: 80 prehashed signing rows and 16 raw-message PDS rows.
 
 The generator obtains compressed public key, RFC-6979 `k`, raw `r`, raw `s`,
 low-S `s`, and compact signature from both independent implementations. It
@@ -348,7 +359,7 @@ before k256's `SignPrimitive` wrapper calls `normalize_s`; the driver performs
 and records normalization separately. The generator takes no runtime choice
 of revision, algorithm, or capture point: only its output path is variable.
 
-For the 16 matching-index message rows, the PDS comparison runs the pinned
+For the 16 raw-message PDS rows, the comparison runs the pinned
 image with `docker run --rm --entrypoint node ... --input-type=module -e ...`.
 The script imports the absolute installed
 `@atproto/crypto/dist/secp256k1/keypair.js`, parses lower-case key/message hex,
@@ -390,7 +401,8 @@ and transactional mutations. It must prove red for:
 12. one Wycheproof negative row removed or flipped;
 13. the dual-oracle signing agreement check disabled;
 14. a transitive secret-bearing wrapper omitted from the closure manifest;
-15. private-key range or zero parsing changed to an early return;
+15. private-key byte-domain, range, or zero parsing changed to an early return
+    or its aggregate validity bit omitted;
 16. the gate-only candidate seam no longer reaches candidate 1 or exhaustion.
 
 The native structural gate starts at `publicKeyForSecret` and `signDigest`,
