@@ -1,0 +1,21 @@
+{- | Consumer-facing secret-key ingress for the PDS signing boundary.
+
+   A `SecretKey` stores the scalar candidate, never the caller-owned byte
+   array. Public-key and signature APIs arrive in their own slices. -}
+
+import lib.scalar.{Sc, scSecretCandidate}
+
+-- | An admitted secp256k1 secret scalar. Its constructor stays module-private.
+export data SecretKey = SecretKey Sc
+
+-- | Admit exactly the scalars in `[1, n)`. Length is public; for a 32-element
+--   input the scalar module completes its full fixed-control scan before this
+--   one declassified aggregate-validity branch constructs a key or an error.
+export
+secretKeyFromBytes : Array Int -> Result String SecretKey
+secretKeyFromBytes bs =
+  let (validBit, candidate) = scSecretCandidate bs
+  if validBit == 1 then
+    Ok (SecretKey candidate)
+  else
+    Err "sign.secretKeyFromBytes: expected a 32-byte scalar in 1..n-1"

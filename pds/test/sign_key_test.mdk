@@ -1,0 +1,67 @@
+{- | Structural admission tests for `pds/lib/sign.mdk` secret-key ingress.
+
+   These are acceptance/rejection boundaries, not scalar answer keys: the
+   secp256k1 order constants are inputs used to exercise the contract. -}
+
+import test.{expectTrue}
+import array as A
+import lib.sign.{secretKeyFromBytes}
+
+isOk : Result String a -> Bool
+isOk (Ok _) = True
+isOk (Err _) = False
+
+isErr : Result String a -> Bool
+isErr (Ok _) = False
+isErr (Err _) = True
+
+oneBytes : Array Int
+oneBytes = [|
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 1,
+|]
+
+nBytes : Array Int
+nBytes = [|
+  0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+  0xff, 0xff, 0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2,
+  0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
+|]
+
+setAt : Int -> Int -> Array Int -> Array Int
+setAt i value bs =
+  let out = arrayCopy bs
+  let () = A.set i value out
+  out
+
+decLast : Array Int -> Array Int
+decLast bs = setAt 31 (bs[31] - 1) bs
+
+incLast : Array Int -> Array Int
+incLast bs = setAt 31 (bs[31] + 1) bs
+
+test "secret key accepts one and n - 1" =
+  expectTrue
+    (isOk (secretKeyFromBytes oneBytes) && isOk (secretKeyFromBytes (decLast nBytes)))
+
+test "secret key rejects public short and long lengths" =
+  expectTrue
+    (isErr (secretKeyFromBytes (arrayMake 31 0)) && isErr (secretKeyFromBytes (arrayMake 33 0)))
+
+test "secret key rejects zero, n, n + 1, and maximum" =
+  expectTrue
+    (isErr (secretKeyFromBytes (arrayMake 32 0)) && isErr (secretKeyFromBytes nBytes) && isErr (secretKeyFromBytes (incLast nBytes)) && isErr (secretKeyFromBytes (arrayMake 32 255)))
+
+test "secret key rejects -1 in early middle and final positions" =
+  expectTrue
+    (isErr (secretKeyFromBytes (setAt 0 (-1) oneBytes)) && isErr (secretKeyFromBytes (setAt 16 (-1) oneBytes)) && isErr (secretKeyFromBytes (setAt 31 (-1) oneBytes)))
+
+test "secret key rejects 256 in early middle and final positions" =
+  expectTrue
+    (isErr (secretKeyFromBytes (setAt 0 256 oneBytes)) && isErr (secretKeyFromBytes (setAt 16 256 oneBytes)) && isErr (secretKeyFromBytes (setAt 31 256 oneBytes)))
+
+test "secret key stores a scalar before caller input mutates" =
+  let mutable = arrayCopy oneBytes
+  let admitted = secretKeyFromBytes mutable
+  let () = A.set 31 0 mutable
+  expectTrue (isOk admitted && isErr (secretKeyFromBytes mutable))
