@@ -19955,8 +19955,8 @@ pickMostSpecificEntry goals (e::rest) = match findMostSpecificEntry (e::rest) (e
 --     residue is pinned as a KNOWN-BAD row in
 --     `test/diff_compiler_dict_semantics.sh` §4 and tracked at #1183.
 --
---  🚦 ONE INTERFACE.  `ieEntriesForMethod` filters by METHOD NAME, not by interface, so
---     two impls of two DIFFERENT interfaces that happen to share a method name can
+--  🚦 ONE INTERFACE.  `ieEntriesForMethod` used to filter by METHOD NAME alone, so
+--     two impls of two DIFFERENT interfaces that happen to share a method name could
 --     arrive together.  Their head vectors are ⊑-incomparable for a reason that has
 --     nothing to do with overlap, and §6 C1 is a condition on the instances of ONE
 --     class (`match(IE, C τ̄)`).  Selecting across that set is a candidate-set
@@ -19965,19 +19965,28 @@ pickMostSpecificEntry goals (e::rest) = match findMostSpecificEntry (e::rest) (e
 --     `ieEntriesForIface` cannot produce such a set, so the gate is a no-op
 --     there.)
 --
---     🚨 THIS GATE IS NOT INERT — IT IS DECLINING TO REPORT A LIVE S0 (**#1182**),
---     and an earlier revision of this comment claimed inertness "per the same
---     sweep", which was wrong twice over: the sweep measured this branch's own
---     corpus, and the shape is one no tree file happens to have.  Two interfaces
---     each declaring `m`, with impls that could match one receiver: swapping the two
---     `impl` BLOCKS and nothing else flips the answer between `1` and `2`, `check`
---     clean, exit 0, on BOTH engines.  That is pre-existing (it reproduces on
---     `main` without F-3c) and the scoping above is still right — it is a
---     bare-name-keyed candidate set, whose fix is to SCOPE the set by interface
---     (#1182 option 1), not to call it ambiguity.  But a gate that silently swallows
---     a live silent order-dependence has to say which one, or the next reader
---     re-derives it from scratch.  When #1182 lands, this gate becomes genuinely
---     unreachable and can be deleted with its own fixture.
+--     🚨 #1182 HAS LANDED, AND THIS GATE IS *STILL NOT DELETABLE*.  The bug it was
+--     declining to report is fixed — `ieEntriesForMethod` now admits on the
+--     ADMITTED DECLARATION as well as the spelling — and the pinned repro
+--     (`test/must_fail_fixtures/1182-two-ifaces-same-method-name-order-decides`)
+--     drained: both impl-block orderings now answer `1` on `run` AND on the built
+--     binary.  What is NOT true is the tempting corollary "every candidate set now
+--     shares one interface by construction".  DERIVED, not assumed:
+--       * on the `Some iface` arm the corollary HOLDS.  `ieRowAdmittedBy` →
+--         `ieRowIfaceMatches` → `sameTyConHead n1 o1 n2 o2 = n1 == n2 && …`, so every
+--         admitted row carries `ir.irName == iface.irName`; `keyEntryOfRow` writes
+--         exactly that `ir.irName` into the `KeyEntry` field `keyEntryIface` reads.
+--         Two admitted rows therefore cannot disagree, and `candsOneIface` is `Some`.
+--       * on the `None` arm it DOES NOT.  `ieRowAdmittedBy _ None = True` is the
+--         deliberate fall-back to the bare-name answer for a `methodIfaceParamsRef`
+--         miss (its own doc-comment owns that derivation, and answering `False`
+--         there would be a routing change, not a conservative one).  On that arm the
+--         scan is byte-for-byte the pre-#1182 one, so a two-interface set is exactly
+--         as constructible as it ever was.
+--     ⇒ the disagree branch is NOT unreachable by construction; deleting it would
+--     re-arm the wrong message on precisely the shape the fix does not reach.  It
+--     stays.  What DID change is its extent: it can now only be reached through a
+--     table miss, never through a scoped name.
 --
 -- ⚠️ NOT SUPPRESSED when the declaration-time coherence sweep already fired for the
 -- same interface, and that was a considered call rather than an oversight.  The two
@@ -20384,12 +20393,44 @@ ieEntriesForIface ((r@(ImplRow _ _ ir tys _ _))::rest) iface goals
 -- The METHOD-keyed candidate scan — the successor of `matchingEntriesGo` (deleted by
 -- B-2.1-d).  Same
 -- method-name membership test, same head match, same order.
-ieEntriesForMethod : List ImplRow -> String -> List Mono -> List KeyEntry
-ieEntriesForMethod [] _ _ = []
-ieEntriesForMethod ((r@(ImplRow _ _ _ tys _ ms))::rest) name goals
-  | contains name ms && ieRowHeadMatches tys goals = keyEntryOfRow r
-    ++ ieEntriesForMethod rest name goals
-  | otherwise = ieEntriesForMethod rest name goals
+--
+-- ── #1182: THE CANDIDATE KEY NOW HAS AN INTERFACE COMPONENT ──────────────────
+-- 🚨 It used to admit a row on `contains name ms` ALONE, so two impls of two
+-- DIFFERENT interfaces that merely share a method SPELLING landed in ONE candidate
+-- set and were ranked against each other by `pickMostSpecificEntry`.  Their head
+-- vectors are ⊑-incomparable for a reason that has nothing to do with overlap, so
+-- the selector fell to the head of the list and THE DECLARATION ORDER OF THE TWO
+-- `impl` BLOCKS decided which body ran — silently, at exit 0, on both engines
+-- (`test/must_fail_fixtures/1182-two-ifaces-same-method-name-order-decides`: the
+-- entry imports the method name from `a1` ONLY, so the occurrence has exactly one
+-- binding, and it printed `2` — A2's body — under one ordering and `1` under the
+-- other).  §6 C1 is a condition on the instances of ONE class (`match(IE, C τ̄)`);
+-- a set drawn across two classes is a candidate-set DEFORMATION, not a program.
+--
+-- The admitted declaration is the SAME one `ieImplExistsForHeadGo` already tests
+-- for the EXISTENCE read (`ieRowAdmittedBy`, `admittedIfaceFor`), through the same
+-- comparator — `ieRowIfaceMatches` (`sameTyConHead` over `irName`/`irOrigin`), NOT a
+-- bare `irName` compare and NOT `ieCountHeadByIfaceGo`'s deliberately spelling-only
+-- test.  Selection is this shape's SECOND consumer; the existence read was its first.
+--
+-- ⚠️ `None` (this module's scope decides nothing for [name]) FALLS BACK TO THE
+-- BARE-NAME ANSWER — every row passes, i.e. today's behaviour exactly.  The
+-- derivation is `ieRowAdmittedBy`'s own doc-comment and is not restated here; the
+-- consequence that IS specific to this site is recorded on `candsOneIface`.
+--
+-- ⚠️ BEHAVIOUR-NARROWING BY DESIGN ([W-QUIETER] in the opposite direction): supplying
+-- identity REMOVES candidates, so a program that used to dispatch by accident can now
+-- fail to find an impl.  That is the point — the removed candidates implement an
+-- interface the occurrence does not name.
+--
+-- ⚠️ THE IMPL UNIVERSE IS UNCHANGED (`DICT-SEMANTICS.md` §8 I5): this narrows what the
+-- scan ASKS, never which modules' instances may answer.  `ieHeadRows … env` is still
+-- the graph-global bucket, unfiltered.
+ieEntriesForMethod : List ImplRow -> String -> Option IfaceRef -> List Mono -> List KeyEntry
+ieEntriesForMethod [] _ _ _ = []
+ieEntriesForMethod ((r@(ImplRow _ _ ir tys _ ms))::rest) name admitted goals
+  | contains name ms && ieRowAdmittedBy ir admitted && ieRowHeadMatches tys goals = keyEntryOfRow r ++ ieEntriesForMethod rest name admitted goals
+  | otherwise = ieEntriesForMethod rest name admitted goals
 
 -- The head-plus-headless union, on `IE`: the goal head's own bucket merged with the
 -- headless one, since a fully-general `impl C a` matches every goal but heads at
@@ -20415,11 +20456,11 @@ ieCandidatesForIface env hk iface goals =
     (ieEntriesForIface (ieHeadRows (Some hk) env) iface goals)
     (ieEntriesForIface (ieHeadRows None env) iface goals)
 
-ieCandidatesForMethod : ImplEnv -> HeadKey -> String -> List Mono -> List KeyEntry
-ieCandidatesForMethod env hk name goals =
+ieCandidatesForMethod : ImplEnv -> HeadKey -> String -> Option IfaceRef -> List Mono -> List KeyEntry
+ieCandidatesForMethod env hk name admitted goals =
   mergeByDeclIdx
-    (ieEntriesForMethod (ieHeadRows (Some hk) env) name goals)
-    (ieEntriesForMethod (ieHeadRows None env) name goals)
+    (ieEntriesForMethod (ieHeadRows (Some hk) env) name admitted goals)
+    (ieEntriesForMethod (ieHeadRows None env) name admitted goals)
 
 -- 🚨 ENTRY POINT 1 of 3 — the INTERFACE-keyed row selector (§3 `inst` =
 -- min⊑(match)), read by the checker leg and by BOTH halves of the router leg.
@@ -20442,9 +20483,25 @@ ieSelectRowByIface env iface goals = match goalHeadCon goals
 -- 🚨 ENTRY POINT 2 of 3 — the METHOD-keyed row selector, read by leg 3's two
 -- element-dict route sites AND (since ARCH B-2.1-g) by the route WORD itself, through
 -- `keyForSite`.  It replaced `matchedEntry`, which B-2.1-d deleted.
+--
+-- ── #1182: the admitted declaration is read HERE, from [name] alone ───────────
+-- ⚠️ DELIBERATELY NOT A NEW PARAMETER ON THIS FUNCTION, and the reason is
+-- `ieImplExistsForHead`'s verbatim — its three existence readers move together "by
+-- construction rather than by diligence" precisely because the scope is projected
+-- inside the one query.  This selector has the SAME three real callers
+-- (`keyForSite`, `implDictRoutesForFull`, `argImplDictRoutesForEncl`), each passing a
+-- bare `name : String`; threading `admittedIfaceFor name` through them would let a
+-- future edit give the three selection sites three different scopes, which is the
+-- MEASURED S0 shape (RUN-METHID-004).  Reading it here makes a partial move
+-- unrepresentable and leaves all three callers untouched.
+--
+-- ⚠️ ONE `omLookup` PER SELECTION, hoisted out of the row scan for the same reason
+-- `ieImplExistsForHead` hoists its own ([T-PERF-HUNT]: Medaka is strict, so an in-loop
+-- projection is rebuilt once per row).  It is inside the `Some hk` arm because a goal
+-- with no head tycon selects nothing and must not pay for the lookup.
 ieSelectRowByMethod : ImplEnv -> String -> List Mono -> Option ImplRow
 ieSelectRowByMethod env name goals = match goalHeadCon goals
-  Some hk => ieRowOfEntry env (pickMostSpecificEntry goals (ieCandidatesForMethod env hk name goals))
+  Some hk => ieRowOfEntry env (pickMostSpecificEntry goals (ieCandidatesForMethod env hk name (admittedIfaceFor name) goals))
   None => None
 
 -- The inverse of `keyEntryOfRow`, and it is EXACT rather than heuristic: the
