@@ -1,6 +1,6 @@
 # atproto PDS field/scalar constant-time reduction contract
 
-**Status:** accepted implementation contract for #1724; implementation pending.
+**Status:** proposed implementation contract for #1724; implementation pending.
 
 This document specifies the smallest complete landing that closes the three
 reduction leaks named by #1724. It is subordinate to P15 in
@@ -14,7 +14,8 @@ loop, still leaks. Neither subset may land or be described as constant-time.
 ## 1. Property and boundary
 
 For every admitted input to the private reduction paths in
-`pds/lib/field.mdk` and `pds/lib/scalar.mdk`, execution must have:
+`pds/lib/field.mdk` and `pds/lib/scalar.mdk`, the native executable used to
+deploy a PDS must have:
 
 - an input-independent number of carry, fold, subtraction, selection, and
   allocation steps;
@@ -26,6 +27,16 @@ Loop and recursion conditions may depend on public counters and fixed array
 lengths. Bounds checks on fixed-length arrays at public indices are therefore
 inside the property. Malformed-input rejection remains outside it: lengths and
 the fact of canonical-wire rejection are public API outcomes.
+
+Native is the security boundary because it is the PDS deployment engine. Eval
+and Wasm remain required value-parity arms, but this contract does not claim
+constant-time execution for them. Wasm's ordinary `Int` carrier selects between
+`i31ref` and boxed `i64` representations according to the value; boxing can
+branch and allocate below any PDS helper. A Wasm constant-time claim therefore
+requires a separately accepted uniform integer/crypto carrier or backend
+representation design. It cannot be established by scanning the PDS helper,
+and the absence of host entropy already independently prevents Wasm key
+generation. This engine boundary must not be widened by inference.
 
 This contract covers the reduction paths named by #1724. It does **not** by
 itself certify every exported field/scalar helper or the future signing module.
@@ -66,28 +77,35 @@ reduction does not widen the accepted domain.
 Any new producer or relaxed magnitude bound invalidates this contract until its
 maximum pass count and fixnum headroom are re-derived.
 
-## 3. Field schedule: exactly two carry/fold rounds
+## 3. Field schedule: exactly three carry/fold rounds
 
-Replace `reduceCarry`'s value-dependent recursion with exactly two calls to a
+Replace `reduceCarry`'s value-dependent recursion with exactly three calls to a
 round shaped as:
 
 1. run the fixed ten-limb `carryPass`;
 2. unconditionally add `overflow * 977` to limb 0 and `overflow * 64` to
    limb 1.
 
-The second round's overflow is required to be zero by proof, not checked by a
+The third round's overflow is required to be zero by proof, not checked by a
 secret-derived branch.
 
-Why two rounds suffice: each admitted producer limb is below `2^43`. A carry
-pass over ten limbs can therefore return an overflow below `2^21`. Folding it
-adds less than `2^31` to limb 0 and less than `2^27` to limb 1. Those additions
-cannot propagate through the remaining already-carried limbs to bit 256, so the
-second carry pass leaves zero overflow. Both rounds execute even for already
+Why three rounds suffice under the conservative producer contract: each limb is
+below `2^43`. The first carry pass can return at most `2^21 - 1`. Folding that
+overflow adds less than `2^31` to limb 0 and less than `2^27` to limb 1. The
+second carry pass can therefore return at most 1: the fold additions can add at
+most one carry into limb 2, while limbs 2 through 8 were already carried and
+limb 9 was already below `2^22`; that single propagated carry is the only route
+back above bit 255. Folding an overflow of 1 adds exactly 977 and 64 to the two
+low limbs, which cannot propagate across the remaining eight carried limbs, so
+the third carry pass returns zero. All three rounds execute even for already
 canonical input.
 
 The implementation must retain the module's non-negative intermediates and
-existing `2^62 - 1` ceiling argument. A one-round mutation must be rejected by
-the permanent pass-count control and by an adversarial value witness.
+existing `2^62 - 1` ceiling argument. A `3 -> 2` mutation must be rejected by
+the permanent pass-count control and by the conservative-bound witness with
+limbs 0 through 8 equal to `2^26 - 1` and limb 9 equal to `2^43 - 1`. That
+witness is private test access to the reduction precondition, not a fabricated
+public `Fe`.
 
 ## 4. Scalar schedule: exactly four fold/carry rounds
 
@@ -107,7 +125,9 @@ fold maps `V = H*2^256 + L` to `H*c + L`:
 - after fold 1, the value is below `2^385`;
 - after fold 2, it is below `2^258`, so the high half is at most 3;
 - after fold 3, it is below `2^256 + 3c`, so its high half is at most 1;
-- after fold 4, it is below `4c < 2^131 < 2^256`.
+- before fold 4, if the high half is 0 the value is already below `2^256` and
+  the unconditional zero fold preserves it; if the high half is 1, its low
+  half is below `3c`, so fold 4 produces less than `4c < 2^131 < 2^256`.
 
 Four rounds therefore clear the high half for the whole admitted domain. A
 three-round mutation must be rejected by the permanent pass-count control and
@@ -165,7 +185,7 @@ The corpora establish values, not constant-time structure.
 ### 6.2 Adversarial count witnesses
 
 Add committed inputs that need the last permitted round. Demonstrate before
-landing that field `2 -> 1` and scalar `4 -> 3` mutations make the focused
+landing that field `3 -> 2` and scalar `4 -> 3` mutations make the focused
 regression red. A pass-count grep alone is insufficient because it could
 protect a needlessly large or semantically unused number.
 
@@ -174,7 +194,7 @@ protect a needlessly large or semantically unused number.
 Add a registered POSIX-shell PDS gate scoped to the dedicated reduction
 helpers. It must:
 
-- require the exact field-two and scalar-four schedules;
+- require the exact field-three and scalar-four schedules;
 - require the unconditional borrow-and-blend helper shape for both moduli;
 - reject calls from the reduction entry points to the retired early-exit
   comparison or conditional-subtraction helpers;
@@ -187,21 +207,34 @@ transactional and restore the exact source on success, failure, and signal.
 
 ### 6.4 Emitted-control check
 
-A small PDS probe must force the reduction helpers through native and Wasm
-emission. The gate must inspect helper-scoped generated control flow, not grep
-an entire output file:
+A small PDS probe must force the reduction helpers through native emission. The
+gate must inspect helper-scoped generated control flow, not grep an entire
+output file:
 
 - native: the relevant helper bodies contain only the approved arithmetic and
   bit operations and no limb-derived conditional branch;
-- Wasm: the helper bodies contain no `if` or `br_if` controlled by limb data;
-- native C bit helpers used by the formula are compiled for the tested target
-  and checked not to introduce a conditional jump.
+- native C bit helpers used by the formula and the final linked reducer are
+  disassembled for the tested target and checked not to introduce a
+  limb-derived conditional jump;
+- a conditional-selection mutation must make the emitted-control checker red,
+  independently of the source-structure checker.
+
+Eval and Wasm run the same value witnesses and corpora for semantic parity.
+They are not emitted constant-time evidence: Wasm's transitive integer boxing
+is value-dependent, and eval is not the deployed PDS engine.
 
 Generated IR is evidence about the reviewed compiler/target pair, not a
 universal hardware timing proof. The gate must identify its target and compiler
 configuration in its receipt.
 
-### 6.5 Empirical timing control
+### 6.5 Operational cost
+
+Record focused native and Wasm timings for field multiplication and scalar
+inversion before and after the redesign. These are cost receipts, not acceptance
+thresholds and not constant-time proofs. A material regression is reviewed
+rather than hidden; it does not license restoring a secret-dependent shortcut.
+
+### 6.6 Empirical timing control
 
 An empirical timing test is supplementary, never the primary proof. If added,
 it must compare populations chosen to exercise the old pass/subtract branches,
@@ -219,10 +252,13 @@ must report:
 - the fixed counts and their proofs;
 - mutation receipts for both reduced counts and conditional selection;
 - exact 944/944 and 1028/1028 corpus grades;
-- emitted-control grades for native and Wasm;
+- native emitted-control grade and eval/Wasm value-parity grades;
+- focused native/Wasm cost receipts;
 - any empirical timing evidence with its limitations;
 - an explicit statement that arbitrary-operation/signing constant-time status
   remains governed by P15 and the future secret-bearing call-graph audit.
 
-Only after this contract is implemented and #1724 is closed may #1700 feed a
-private key, RFC 6979 nonce, or derived secret through these reduction paths.
+Only after this contract is accepted, implemented, and #1724 is closed may
+#1700 feed a private key, RFC 6979 nonce, or derived secret through these
+reduction paths in the native PDS. A Wasm secret-bearing signing deployment
+remains blocked on its separately accepted uniform-carrier/backend design.

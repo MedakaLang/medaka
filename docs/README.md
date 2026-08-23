@@ -51,7 +51,7 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 |-----|------------|--------|
 | [`ASYNC-RUNTIME-DESIGN.md`](design/ASYNC-RUNTIME-DESIGN.md) | Async runtime v2 — the ASYNC-DESIGN §5 swap | DESIGN LOCKED |
 | [`AT-IMPL-PORT-DESIGN.md`](design/AT-IMPL-PORT-DESIGN.md) | `@Impl` Named-Instance-Selection Hint — Native Port Design | SUPERSEDED |
-| [`ATPROTO-PDS-CONSTANT-TIME.md`](design/ATPROTO-PDS-CONSTANT-TIME.md) | atproto PDS field/scalar constant-time reduction contract | accepted implementation contract for #1724; implementation pending. |
+| [`ATPROTO-PDS-CONSTANT-TIME.md`](design/ATPROTO-PDS-CONSTANT-TIME.md) | atproto PDS field/scalar constant-time reduction contract | proposed implementation contract for #1724; implementation pending. |
 | [`ATPROTO-PDS-DESIGN.md`](design/ATPROTO-PDS-DESIGN.md) | A self-hosted atproto PDS in Medaka | DESIGN |
 | [`CAPABILITY-EFFECTS.md`](design/CAPABILITY-EFFECTS.md) | Capability-safe effects — Medaka's headline direction | PARTIAL |
 | [`CAPABILITY-PLATFORM.md`](design/CAPABILITY-PLATFORM.md) | The capability platform — runtime/product architecture | OPEN |
