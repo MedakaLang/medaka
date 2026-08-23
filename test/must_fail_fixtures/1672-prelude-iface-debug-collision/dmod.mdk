@@ -1,5 +1,0 @@
-export interface D a where
-  debug : a -> String
-
-export impl D Int where
-  debug x = "d"

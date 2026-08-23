@@ -583,7 +583,7 @@ discoverPromoted : List Decl -> List Decl -> List String -> List String
 discoverPromotedJoint : List Decl -> List Decl -> List String -> List String -> List String -> List String
 discoverPromotedModules : List Decl -> List Decl -> List (String, List Decl) -> List String -> List String -> List String
 dispHeadTab : HeadKey -> TabKey
-dispatchIdxScoped : String -> List ((IfaceRef, String), Int) -> List (String, Int) -> Option Int
+dispatchIdxScoped : String -> List ((IfaceRef, String), Int) -> Option Int
 dispatchMonosOf : List String -> Ty -> Mono -> List Mono
 dispatchTyparams : List String -> List String
 distinctIdentsIn2 : List (Ident, String) -> Bool
@@ -836,7 +836,7 @@ ieBuildSnapsEmit : ImplRow -> List ImplRow -> ImplUniverse -> List (Int, ImplUni
 ieBuildSnapsGo : List ImplRow -> ImplUniverse -> List (Int, ImplUniverse)
 ieCandidacyVisibleAt : Int -> Int -> Bool
 ieCandidatesForIface : ImplEnv -> HeadKey -> IfaceRef -> List Mono -> List KeyEntry
-ieCandidatesForMethod : ImplEnv -> HeadKey -> String -> List Mono -> List KeyEntry
+ieCandidatesForMethod : ImplEnv -> HeadKey -> String -> Option IfaceRef -> List Mono -> List KeyEntry
 ieCountHeadByIface : ImplEnv -> IfaceRef -> Option HeadKey -> Int
 ieCountHeadByIfaceGo : List ImplRow -> IfaceRef -> Option TabKey -> Int
 ieCountHeadByMethod : ImplEnv -> String -> Option HeadKey -> Int
@@ -844,7 +844,7 @@ ieCountHeadByMethodGo : List ImplRow -> String -> Option TabKey -> Int
 ieDefinesReqMethodAt : ImplEnv -> String -> Option HeadKey -> Bool
 ieDefinesReqMethodAtGo : List ImplRow -> String -> Option TabKey -> Bool
 ieEntriesForIface : List ImplRow -> IfaceRef -> List Mono -> List KeyEntry
-ieEntriesForMethod : List ImplRow -> String -> List Mono -> List KeyEntry
+ieEntriesForMethod : List ImplRow -> String -> Option IfaceRef -> List Mono -> List KeyEntry
 ieFileRow : ImplRow -> ImplEnv -> ImplEnv
 ieFileRowByHead : ImplRow -> ImplEnv -> ImplEnv
 ieGenImplIn : String -> Decl
