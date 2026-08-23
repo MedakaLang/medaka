@@ -9457,13 +9457,19 @@ inferDictAtFound name routesRef inst =
     -- so this call site applies one dict per EXPANDED slot — matching the def params
     -- dictArityOf/dictPass will prepend from the expanded table.  Each super slot's id
     -- equals its sub slot's id (shared type param), still pinned in [snd inst].
-    let expanded = expandSupersPairs driverState.value.superDeclsRef.value slots
+    -- S-dict-arity-contract: expand carrying each slot's argument vector, so an APPENDED
+    -- super slot routes on the vector its `requires` clause names (`requires Ix a b` off
+    -- a `Sub a b` slot ⇒ `Ix Int Char`, not `Ix Int`).  The slot sequence is identical to
+    -- `expandSupersPairs`' — it is a projection of this call — so dict ARITY is untouched
+    -- here and the define side (`expandSupersEntry`) still agrees slot for slot.
+    let expandedV = expandSupersVecs driverState.value.superDeclsRef.value (zipSlotVecs slots (declaredConstraintArgs name))
+    let expanded = map fst expandedV
     let ids = map (s => s.csId) expanded
     let monos = constraintMonosOf ids (snd inst)
     -- the ROUTING goal stays a spelling (`resolveDictApps` asks the SPELLING-keyed
     -- `KeyBuckets` a route-word question — see `dispHeadTab`); only the OBLIGATION goal
     -- below carries identity.
-    let _ = pushDictApp (routesRef, monos, map (s => s.csIface.irName) expanded, callArgVecs (declaredConstraintArgs name) ids (snd inst), !currentLoc)
+    let _ = pushDictApp (routesRef, monos, map (s => s.csIface.irName) expanded, callArgVecsV expandedV (snd inst), !currentLoc)
     perRun.value.dictAppFns := (consSiteFn perRun.value.currentFn.value monos perRun.value.dictAppFns.value)
     -- #11 soundness: record this call's instantiated impl obligations (iface paired
     -- with the call's constraint mono), checked after inference by checkCallObligations.
@@ -9575,21 +9581,19 @@ lookupAssocVecs k ((k2, v)::rest)
   | otherwise = lookupAssocVecs k rest
 
 -- Slot-parallel to constraintMonosOf's OUTPUT, and it must stay that way: it walks the
--- SAME [ids] against the SAME [subst] and applies the SAME drop rule, so slot i of the
--- result describes slot i of [monos].  [vecs] is the callee's stored vector list, which
--- covers only the DECLARED slots — expandSupersPairs appends the transitive super slots
--- AFTER them (order/indices preserved, see its header), so the list simply runs out and
--- those slots take the `[]` arm.  A slot with no stored vector, a stored vector that is
--- empty, an inferred/promoted fn or a cross-module callee therefore yields the singleton
--- `[m]` — which is the scalar goal routesOfMonosTop already used.
-callArgVecs : List (List Mono) -> List Int -> List (Int, Mono) -> List (List Mono)
-callArgVecs _ [] _ = []
-callArgVecs [] (id::rest) subst = match lookupAssocI id subst
-  Some m => [m] :: callArgVecs [] rest subst
-  None => callArgVecs [] rest subst
-callArgVecs (v::vs) (id::rest) subst = match lookupAssocI id subst
-  Some m => substArgVec subst m v :: callArgVecs vs rest subst
-  None => callArgVecs vs rest subst
+-- SAME slot list against the SAME [subst] and applies the SAME drop rule (an id absent
+-- from the instantiation is skipped on both sides), so slot i of the result describes
+-- slot i of [monos].
+-- S-dict-arity-contract: each slot now arrives PAIRED with its own vector — the stored
+-- signature vector for a declared slot, the `requires`-mapped one for an appended super
+-- slot (`expandSupersVecs`).  A slot whose vector is empty — an inferred/promoted fn, a
+-- cross-module callee (#1161's residual), a super whose params did not all resolve —
+-- still yields the singleton `[m]`, the scalar goal `routesOfMonosTop` already used.
+callArgVecsV : List (CSlot, List Mono) -> List (Int, Mono) -> List (List Mono)
+callArgVecsV [] _ = []
+callArgVecsV ((s, v)::rest) subst = match lookupAssocI s.csId subst
+  Some m => substArgVec subst m v :: callArgVecsV rest subst
+  None => callArgVecsV rest subst
 
 -- 🚨 STRUCTURAL, not top-level-only.  The stored vector is in the SIGNATURE's
 -- instantiation vars; the call's [subst] maps the scheme's quantified ids to THIS
@@ -9720,15 +9724,54 @@ idsForIfaceSlotsGo i (_::rest) = i :: idsForIfaceSlotsGo (i + 1) rest
 -- new (iface, id) pair appears.  Result is the declared slots first (order/indices
 -- preserved) then the appended supers, deduped by (iface, id).
 expandSupersPairs : List Decl -> List CSlot -> List CSlot
-expandSupersPairs allDecls declared = expandSupersFix allDecls declared declared
+expandSupersPairs allDecls declared =
+  map fst (expandSupersVecs allDecls (map (s => (s, [])) declared))
 
-expandSupersFix : List Decl -> List CSlot -> List CSlot -> List CSlot
+-- 🚨 S-dict-arity-contract: the SAME fixpoint, carrying each slot's PREDICATE ARGUMENT
+-- VECTOR (in the callee signature's instantiation vars) alongside the slot.  `Ix a b`
+-- reached as `requires Ix a b` from a `Sub a b` slot used to route on `a`'s mono ALONE
+-- — `callArgVecs`' stored-vector list covers only the DECLARED prefix, so every appended
+-- super slot took the singleton `[m]` arm, `Ix Int _` matched both `impl Ix Int Bool`
+-- and `impl Ix Int Char`, and first-declared won.  Measured on `sup2.mdk`
+-- (`S-predicate-representation` Note N2): 111 where the spec says 222, exit 0, silent.
+--
+-- ⚠️ THIS DOES NOT MOVE WHICH SLOTS EXIST, DELIBERATELY, AND IT MUST NOT.  The vector
+-- rides along; `dedupSlots`/`cslotKey` and `superSlotOf`'s `firstOrZero` keying are
+-- untouched, so the slot SEQUENCE is byte-identical to before and the two id-free
+-- expansion entry points stay in step.  `expandSupersIfaceEntry` in particular expands a
+-- SYNTHETIC id list (`idsForIfaceSlots`, slot index) purely to reproduce the same iface
+-- SEQUENCE — it has no real tyvar ids and no vectors at all, so keying a super slot on a
+-- per-position argument id (the representation fix `superSlotOf`'s `firstOrZero` still
+-- owes) would desynchronize it from the id entry and change dict ARITY on one path only.
+-- That is why the collapse this slice lands is at the DECLARED-slot producer
+-- (`constraintTyVars`) and the super half is a ROUTE fix, not a slot fix.
+--
+-- `expandSupersPairs` is a projection of this, so there is ONE fixpoint and the sequence
+-- cannot drift between the vector-carrying and vector-free readers.
+expandSupersVecs : List Decl -> List (CSlot, List Mono) -> List (CSlot, List Mono)
+expandSupersVecs allDecls declared = expandSupersFix allDecls declared declared
+
+expandSupersFix : List Decl -> List (CSlot, List Mono) -> List (CSlot, List Mono) -> List (CSlot, List Mono)
 expandSupersFix allDecls acc frontier =
-  let next = dedupSlots (acc ++ flatMap (superSlotsOf allDecls) frontier)
+  let next = dedupSlotVecs (acc ++ flatMap (superSlotsOfV allDecls) frontier)
   if listLen next == listLen acc then
     acc
   else
     expandSupersFix allDecls next (dropN (listLen acc) next)
+
+-- keyed on the SLOT only (`cslotKey`), so this dedups exactly as `dedupSlots` does and
+-- the vector never participates in the arity decision.
+dedupSlotVecs : List (CSlot, List Mono) -> List (CSlot, List Mono)
+dedupSlotVecs xs = dedupBy (p => cslotKey (fst p)) xs
+
+-- pair each declared slot with the argument vector its signature recorded.  The vector
+-- list is a PREFIX (`keptConstraintArgs`; `registerInferredFor` records none, and a
+-- cross-module callee has no qual vector table — #1161's residual), so a slot past its
+-- end gets `[]`, which every consumer reads as "no vector recoverable".
+zipSlotVecs : List CSlot -> List (List Mono) -> List (CSlot, List Mono)
+zipSlotVecs [] _ = []
+zipSlotVecs (s::rest) [] = (s, []) :: zipSlotVecs rest []
+zipSlotVecs (s::rest) (v::vs) = (s, v) :: zipSlotVecs rest vs
 
 -- the direct super slots of one (iface, id) slot: look up iface's (typarams, supers);
 -- the super-param NAMES index into typarams, which map positionally to [id] (a single
@@ -9738,27 +9781,49 @@ expandSupersFix allDecls acc frontier =
 -- name).  U1b (#1482) did not re-key either: doing so would change which slots exist,
 -- i.e. dict ARITY, which is emitted-code shape and #1425's ground.  The slot's own
 -- identity comes from the `Super` occurrence that produced it.
-superSlotsOf : List Decl -> CSlot -> List CSlot
-superSlotsOf allDecls s
+-- S-dict-arity-contract: it ALSO maps the sub-predicate's own argument vector
+-- positionally onto its type parameters, so each super slot can carry the vector its
+-- `requires` clause names.  [vec] empty (no vector recorded for this slot) ⇒ every super
+-- gets `[]` too, i.e. exactly today's singleton-goal behaviour.
+superSlotsOfV : List Decl -> (CSlot, List Mono) -> List (CSlot, List Mono)
+superSlotsOfV allDecls (s, vec)
   | not (contains s.csIface.irName driverState.value.userIfaceNamesRef.value) = []   -- WS-1b: only expand USER interface supers (prelude chains stay arg-tag)
   | otherwise = match ifaceSupersOf allDecls s.csIface.irName
     None => []
     Some (typarams, supers) =>
       let subst = zipL typarams (replicate (listLen typarams) s.csId)
-      flatMap (superSlotOf subst) supers
+      let vsubst = if listLen vec == listLen typarams then zipL typarams vec else []
+      flatMap (superSlotOfV subst vsubst) supers
 
 -- one `Super superName params`: map each param name through subst → its id; emit the
 -- super slot only if ALL params resolved (matches the oracle's length guard).
 superSlotOf : List (String, Int) -> Super -> List CSlot
-superSlotOf subst (Super { superHead = superName, superParams = params, superOrigin = so }) =
+superSlotOf subst sup = map fst (superSlotOfV subst [] sup)
+
+-- ⚠️ THE SLOT HALF IS UNCHANGED — same guard, same `firstOrZero` id.  Only the vector is
+-- new: each super param name resolved through the sub-predicate's positional vector
+-- [vsubst], and ONLY when every param resolves (a partial vector would route on a
+-- shorter-than-declared argument list and match nothing, which degrades to the bare head
+-- tag — worse than the singleton it replaces).
+superSlotOfV : List (String, Int) -> List (String, Mono) -> Super -> List (CSlot, List Mono)
+superSlotOfV subst vsubst (Super { superHead = superName, superParams = params, superOrigin = so }) =
   let mapped = filterMaybeIds (map (p => lookupAssoc p subst) params)
+  let vmapped = filterMaybeMonos (map (p => lookupAssoc p vsubst) params)
   if listLen mapped == listLen params then
-    CSlot {
-      csIface = IfaceRef { irName = superName, irOrigin = so },
-      csId = firstOrZero mapped,
-    }::[]
+    (
+      CSlot {
+        csIface = IfaceRef { irName = superName, irOrigin = so },
+        csId = firstOrZero mapped,
+      },
+      if listLen vmapped == listLen params then vmapped else [],
+    )::[]
   else
     []
+
+filterMaybeMonos : List (Option Mono) -> List Mono
+filterMaybeMonos [] = []
+filterMaybeMonos ((Some x)::rest) = x :: filterMaybeMonos rest
+filterMaybeMonos (None::rest) = filterMaybeMonos rest
 
 -- every super slot in a `requires` chain carries the SAME id; represent the slot by it.
 firstOrZero : List Int -> Int
@@ -26645,7 +26710,7 @@ processSCC env sigs grouped members =
   -- `groupConstraintMonosRef` answers a SPELLING question (`dictVarSatisfiesIface`
   -- compares interface NAMES), so U1b (#1482) projects back to the name here rather than
   -- widening a second ref for a reader that would only throw the identity away.
-  perRun.value.groupConstraintMonosRef := (flatMap (r => map ifaceMonoName (regIfaceMonosOf r)) regs)
+  perRun.value.groupConstraintMonosRef := (flatMap (r => flatMap ifaceMonoName (regIfaceMonosOf r)) regs)
   -- #837: the schemeObligationsRef snapshot/restore window is RETIRED.  It existed
   -- because registerLocalScheme entries were NAME-KEYED and body-scoped: a prelude
   -- where-helper named `g` (core's `find`) leaked obligations onto an unrelated
@@ -26727,7 +26792,7 @@ placeholderBinding (m, v) = (m, monoScheme v)
 -- slot-parallel predicate argument VECTORS).  The first two components are unchanged;
 -- the third is carried alongside, never instead of, so nothing downstream that sizes or
 -- orders dict slots can move.
-preunifySigsEx : List (String, Ty) -> List (String, Mono) -> (List (String, List (IfaceRef, Mono), List (List Mono)), List (String, Ty, List (String, Mono)))
+preunifySigsEx : List (String, Ty) -> List (String, Mono) -> (List (String, List (IfaceRef, List Mono), List (List Mono)), List (String, Ty, List (String, Mono)))
 preunifySigsEx _ [] = ([], [])
 preunifySigsEx sigs ((m, v)::rest) =
   let (restRegs, restTvs) = preunifySigsEx sigs rest
@@ -26752,17 +26817,35 @@ instantiateSigTracked ty =
   let etbl = freshEffMap (dedup (effTailNames ty ++ rowArgNames ty))
   (fromAstTypeE etbl tvs ty, tvs)
 
--- the (iface, tyvarName) pairs of a signature's `=>` constraints (each constraint
--- argument that is a single type variable; multi-param/structured args skipped)
-sigConstraints : Ty -> List (IfaceRef, String)
+-- 🚨 ONE ENTRY PER PREDICATE (S-dict-arity-contract, #1318/B-4) — the (iface, bare
+-- tyvar NAMES) pairs of a signature's `=>` constraints, ONE per constraint that has at
+-- least one bare-type-variable argument.  A constraint whose arguments are all
+-- structured/concrete carries no dict slot and contributes nothing, as before.
+--
+-- This list IS the dict-param cardinality of a `=>`-constrained top-level fn: it feeds
+-- `registerMemberSlots` → `funConstraintsRef`, which `dictArityOf` (define side) and
+-- `inferDictAtFound` (call side) both size from.  It used to emit one entry per bare
+-- tyvar ARGUMENT — `Ix a b =>` shattered into TWO dict params for ONE predicate, both
+-- routed from the same single-argument goal — so the emitted convention disagreed with
+-- the METHOD-level channel (`methodLevelConstraintVarNames`/`constraintFirstNonParam`,
+-- one slot per constraint since #818) and with the impl-`requires` channel
+-- (`registerReqSlots`, one slot per ENTRY).  All three channels now agree: one dict per
+-- predicate.  ⚠️ The names are kept as a LIST, not collapsed to the first one here,
+-- because WHICH of them is still an abstract tyvar after body inference is not knowable
+-- until `registerMemberSlots` normalizes the instantiated monos — and every abstract one
+-- must still reach `activeDictVars`, or a body use dispatching on the predicate's SECOND
+-- variable loses its route.
+sigConstraints : Ty -> List (IfaceRef, List String)
 sigConstraints (TyConstrained cs _) = flatMap constraintTyVars cs
 sigConstraints _ = []
 
 -- U1b (#1482): carries `constraintOrigin` (the #1110 interface-occurrence identity)
 -- alongside the spelling, so `registerMember`'s slot-parallel iface list — and hence
 -- every obligation `recordCallObligations` later mints from it — is identity-carrying.
-constraintTyVars : Constraint -> List (IfaceRef, String)
-constraintTyVars (Constraint { constraintHead = iface, constraintArgs = tys, constraintOrigin = co }) = map (n => (IfaceRef { irName = iface, irOrigin = co }, n)) (tyVarArgNames tys)
+constraintTyVars : Constraint -> List (IfaceRef, List String)
+constraintTyVars (Constraint { constraintHead = iface, constraintArgs = tys, constraintOrigin = co }) = match tyVarArgNames tys
+  [] => []
+  ns => [(IfaceRef { irName = iface, irOrigin = co }, ns)]
 
 tyVarArgNames : List Ty -> List String
 tyVarArgNames [] = []
@@ -26770,12 +26853,12 @@ tyVarArgNames ((TyVar n)::rest) = n :: tyVarArgNames rest
 tyVarArgNames (_::rest) = tyVarArgNames rest
 
 -- #1161 (F-3a-ii): slot-parallel to `sigConstraints` — the WHOLE predicate's argument
--- type list, repeated once per tyvar slot that predicate shatters into.  `Ix a Char`
--- shatters into ONE slot (only `a` is a bare tyvar) carrying `[TyVar a, TyCon Char]`;
--- `Ix a b` shatters into TWO slots, BOTH carrying `[TyVar a, TyVar b]` — the two slots
--- are evidence for the same single predicate, so they get the same goal.
+-- type list, ONE per slot.  `Ix a Char` and `Ix a b` are each ONE slot carrying their
+-- full argument list (`[TyVar a, TyCon Char]` / `[TyVar a, TyVar b]`) — evidence for one
+-- predicate, so one goal.
 -- Length-parallel to sigConstraints by construction: both are `flatMap … cs` over the
--- SAME constraint list, and both emit one element per `tyVarArgNames tys` entry.
+-- SAME constraint list, and both emit one element per constraint that has at least one
+-- bare tyvar argument.
 -- Matches sigConstraints' TOP-LEVEL-`TyConstrained`-only shape deliberately, so the two
 -- cannot desynchronize on a nested-constraint spine.
 sigConstraintArgTys : Ty -> List (List Ty)
@@ -26783,16 +26866,27 @@ sigConstraintArgTys (TyConstrained cs _) = flatMap constraintTyVarArgs cs
 sigConstraintArgTys _ = []
 
 constraintTyVarArgs : Constraint -> List (List Ty)
-constraintTyVarArgs (Constraint { constraintArgs = tys }) =
-  map (_ => tys) (tyVarArgNames tys)
+constraintTyVarArgs (Constraint { constraintArgs = tys }) = match tyVarArgNames tys
+  [] => []
+  _ => [tys]
 
 -- like constraintVarMonos but KEEPS the iface name paired with each constraint var's
 -- mono (slot order preserved), so registerMember can register call-obligation ifaces.
-constraintVarIfaceMonos : List (IfaceRef, String) -> List (String, Mono) -> List (IfaceRef, Mono)
+-- S-dict-arity-contract: the payload is now the predicate's WHOLE bare-tyvar mono list,
+-- one entry per predicate.  An entry survives when AT LEAST ONE of its names is in
+-- [tvMap] (the drop rule `constraintVarArgMonos` mirrors exactly); the monos of the
+-- names that are absent are simply not carried, which is what the per-name walk did.
+constraintVarIfaceMonos : List (IfaceRef, List String) -> List (String, Mono) -> List (IfaceRef, List Mono)
 constraintVarIfaceMonos [] _ = []
-constraintVarIfaceMonos ((iface, name)::rest) tvMap = match lookupAssoc name tvMap
-  Some mono => (iface, mono) :: constraintVarIfaceMonos rest tvMap
-  None => constraintVarIfaceMonos rest tvMap
+constraintVarIfaceMonos ((iface, names)::rest) tvMap = match constraintNameMonos names tvMap
+  [] => constraintVarIfaceMonos rest tvMap
+  monos => (iface, monos) :: constraintVarIfaceMonos rest tvMap
+
+constraintNameMonos : List String -> List (String, Mono) -> List Mono
+constraintNameMonos [] _ = []
+constraintNameMonos (n::rest) tvMap = match lookupAssoc n tvMap
+  Some mono => mono :: constraintNameMonos rest tvMap
+  None => constraintNameMonos rest tvMap
 
 -- #1161 (F-3a-ii): as constraintVarIfaceMonos, but yields each kept slot's predicate
 -- argument vector as MONOS at the signature instantiation.  Drops exactly the slots
@@ -26806,20 +26900,19 @@ constraintVarIfaceMonos ((iface, name)::rest) tvMap = match lookupAssoc name tvM
 -- (`constraintArgVarNames`) is a full structural `tyVarNames` walk of each argument —
 -- so the interior `b` of `List b` is mapped, and fromAstType's unmapped-var → `TCon n`
 -- fallback is unreachable here.
-constraintVarArgMonos : List (IfaceRef, String) -> List (List Ty) -> List (String, Mono) -> List (List Mono)
+constraintVarArgMonos : List (IfaceRef, List String) -> List (List Ty) -> List (String, Mono) -> List (List Mono)
 constraintVarArgMonos [] _ _ = []
 constraintVarArgMonos _ [] _ = []
-constraintVarArgMonos ((_, name)::rest) (args::argsRest) tvMap = match lookupAssoc name tvMap
-  Some _ =>
-    map (fromAstType tvMap) args :: constraintVarArgMonos rest argsRest tvMap
-  None => constraintVarArgMonos rest argsRest tvMap
+constraintVarArgMonos ((_, names)::rest) (args::argsRest) tvMap = match constraintNameMonos names tvMap
+  [] => constraintVarArgMonos rest argsRest tvMap
+  _ => map (fromAstType tvMap) args :: constraintVarArgMonos rest argsRest tvMap
 
 -- After body inference, register each member's constraint variables by their
 -- *surviving* (normalized) tyvar id: in activeDictVars (id → dict param name, for
 -- in-body RDict routing) and per-fn in funConstraintsRef (for call-site dict
 -- application).  Done per group so a callee's constraints are known before its
 -- (later-group) callers infer.
-registerConstraintRegs : List (String, List (IfaceRef, Mono), List (List Mono)) -> Unit
+registerConstraintRegs : List (String, List (IfaceRef, List Mono), List (List Mono)) -> Unit
 registerConstraintRegs [] = ()
 registerConstraintRegs ((m, ifaceMonos, argVecs)::rest) =
   let _ = registerMember m ifaceMonos argVecs
@@ -26864,7 +26957,7 @@ setFunConstraintEntry m slots argsOpt =
 -- registerMemberSlots keeps a slot only when its mono is still an abstract TVar (a
 -- body-forced-concrete constraint takes no dict slot); it emits the (iface, id) pair in
 -- ONE traversal, so the iface list cannot be filtered differently from the id list.
-registerMember : String -> List (IfaceRef, Mono) -> List (List Mono) -> Unit
+registerMember : String -> List (IfaceRef, List Mono) -> List (List Mono) -> Unit
 -- An UNCONSTRAINED member (empty constraint list) gets NO funConstraintsRef /
 -- funConstraintIfacesRef entry.  These refs are keyed by BARE NAME and accumulate
 -- across the per-module elaboration; an unconstrained top-level fn that shares a
@@ -26888,12 +26981,12 @@ registerMember m ifaceMonos argVecs =
 -- the second clause stops early.  That is why #994's fusion keeps this payload
 -- entry-level and OPTIONAL instead of folding it into `CSlot` — see
 -- `setFunConstraintEntry`.
-keptConstraintArgs : List (IfaceRef, Mono) -> List (List Mono) -> List (List Mono)
+keptConstraintArgs : List (IfaceRef, List Mono) -> List (List Mono) -> List (List Mono)
 keptConstraintArgs [] _ = []
 keptConstraintArgs _ [] = []
-keptConstraintArgs ((_, mono)::rest) (v::vs) = match normalize mono
-  TVar _ => v :: keptConstraintArgs rest vs
-  _ => keptConstraintArgs rest vs
+keptConstraintArgs ((_, monos)::rest) (v::vs) = match abstractSlotIds monos
+  [] => keptConstraintArgs rest vs
+  _ => v :: keptConstraintArgs rest vs
 
 -- [kept] is the next dict-param slot; a constraint variable forced concrete by the
 -- body takes no dict and doesn't advance the slot (so param names stay 0..k-1,
@@ -26904,17 +26997,46 @@ keptConstraintArgs ((_, mono)::rest) (v::vs) = match normalize mono
 -- `normalize mono` is-a-`TVar` filter to the identical list; one traversal carrying the
 -- pair makes "the iface list is filtered the same way" unrepresentable-otherwise instead
 -- of a comment two functions apart.
-registerMemberSlots : String -> Int -> List (IfaceRef, Mono) -> List CSlot
+-- S-dict-arity-contract: ONE slot per PREDICATE.  [monos] is the predicate's whole
+-- bare-tyvar argument list at the signature instantiation; the slot survives when at
+-- least one of them is still abstract after body inference (a predicate ALL of whose
+-- variables the body forced concrete takes no dict, as before), and it is keyed on the
+-- FIRST such id — the same "first dispatch variable" rule the method-level channel has
+-- used since #818 (`constraintFirstNonParam`).
+--
+-- ⚠️ EVERY abstract id of the predicate is registered in `activeDictVars` against THAT
+-- ONE slot, not just the lead: `Ix a b => …` binds one dict param, and a body use whose
+-- dispatch variable is `b` must still find it.  `activeDictVarForEncl`'s id-keyed lookup
+-- is what answers those sites (`enclSlotIndex`'s predicate/first-id rungs are keyed on
+-- the slot's lead id and legitimately miss).  This mirrors `registerReqSlots`'
+-- `registerEachActive`, which has keyed many ids onto one `requires` slot all along.
+registerMemberSlots : String -> Int -> List (IfaceRef, List Mono) -> List CSlot
 registerMemberSlots _ _ [] = []
-registerMemberSlots m kept ((iface, mono)::rest) = match normalize mono
-  TVar cell =>
-    let id = tyvarId cell
-    perRun.value.activeDictVars := (id, dictParamName m kept)::perRun.value.activeDictVars.value
+registerMemberSlots m kept ((iface, monos)::rest) = match abstractSlotIds monos
+  [] => registerMemberSlots m kept rest
+  id::more =>
+    let _ = registerEachActiveId (id::more) (dictParamName m kept)
     CSlot {
       csIface = iface,
       csId = id,
     } :: registerMemberSlots m (kept + 1) rest
-  _ => registerMemberSlots m kept rest
+
+-- the ids of [monos] that are still ABSTRACT type variables, in order.  The filter
+-- `registerMemberSlots` and `keptConstraintArgs` must agree on, factored so the two
+-- cannot drift (they decide, respectively, whether a slot exists and whether its
+-- argument vector is recorded — a disagreement desynchronizes `funConstraintArgsRef`
+-- from `funConstraintsRef`).
+abstractSlotIds : List Mono -> List Int
+abstractSlotIds [] = []
+abstractSlotIds (mono::rest) = match normalize mono
+  TVar cell => tyvarId cell :: abstractSlotIds rest
+  _ => abstractSlotIds rest
+
+registerEachActiveId : List Int -> String -> Unit
+registerEachActiveId [] _ = ()
+registerEachActiveId (id::rest) dname =
+  perRun.value.activeDictVars := (id, dname)::perRun.value.activeDictVars.value
+  registerEachActiveId rest dname
 
 -- Pass B: infer each member's clauses, unifying with its placeholder.
 -- Phase 73 (bidirectional, signature-driven parameter typing): a member WITH a
@@ -27784,13 +27906,13 @@ pairsOfVecObls (o::rest) = map (id => (o.voIface.irName, id)) o.voIds
 -- (arity >= 2) whose EXACT argument vector is not among the declared vectors
 -- (vector-valued superclass closure, censusSuperCloseVec / superSlotVecOf) is
 -- uncovered, and is reported when the pair test did not already flag one of its args.
-checkSigConstraintCoverage : List (String, List (IfaceRef, Mono), List (List Mono)) -> List (String, Ty) -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> List (String, Scheme) -> Unit
+checkSigConstraintCoverage : List (String, List (IfaceRef, List Mono), List (List Mono)) -> List (String, Ty) -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> List (String, Scheme) -> Unit
 checkSigConstraintCoverage _ _ _ _ _ [] = ()
 checkSigConstraintCoverage regs sigs sigTvMaps callObls addedObls ((m, sch)::rest) =
   let _ = checkSigConstraintOne regs sigs sigTvMaps callObls addedObls m sch
   checkSigConstraintCoverage regs sigs sigTvMaps callObls addedObls rest
 
-checkSigConstraintOne : List (String, List (IfaceRef, Mono), List (List Mono)) -> List (String, Ty) -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> Scheme -> Unit
+checkSigConstraintOne : List (String, List (IfaceRef, List Mono), List (List Mono)) -> List (String, Ty) -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> Scheme -> Unit
 checkSigConstraintOne regs sigs sigTvMaps callObls addedObls m sch = match omLookup m driverState.value.sigTyMapRef.value
   None => ()   -- unsigned member: its inferred constraints are promoted, not checked
   Some _ =>
@@ -27820,31 +27942,36 @@ pairIface m id =
 -- the declared (iface, id) constraint pairs of member m: each declared constraint
 -- mono normalized to its surviving tyvar id (single-param shape; concrete-grounded
 -- constraints — no tyvar — carry no dict slot and are skipped).
-declaredPairsFor : String -> List (String, List (IfaceRef, Mono), List (List Mono)) -> List (String, Int)
+declaredPairsFor : String -> List (String, List (IfaceRef, List Mono), List (List Mono)) -> List (String, Int)
 declaredPairsFor m regs = flatMap declaredPairOne (regIfaceMonosFor m regs)
 
 -- #1161 (F-3a-ii): a reg is a triple, so its (iface, mono) component needs a named
 -- accessor (`snd`/`lookupAssoc` no longer apply).  Both spellings — first-match by name,
 -- and the whole-list projection — are exactly what the two consumers used before.
-regIfaceMonosFor : String -> List (String, List (IfaceRef, Mono), List (List Mono)) -> List (IfaceRef, Mono)
+regIfaceMonosFor : String -> List (String, List (IfaceRef, List Mono), List (List Mono)) -> List (IfaceRef, List Mono)
 regIfaceMonosFor _ [] = []
 regIfaceMonosFor m ((n, ims, _)::rest)
   | m == n = ims
   | otherwise = regIfaceMonosFor m rest
 
-regIfaceMonosOf : (String, List (IfaceRef, Mono), List (List Mono)) -> List (IfaceRef, Mono)
+regIfaceMonosOf : (String, List (IfaceRef, List Mono), List (List Mono)) -> List (IfaceRef, List Mono)
 regIfaceMonosOf (_, ims, _) = ims
 
 -- U1b (#1482): project a reg's (interface occurrence, mono) pair back to the SPELLING
 -- for `groupConstraintMonosRef`, whose only reader (`dictVarSatisfiesIface`) compares
 -- interface NAMES.
-ifaceMonoName : (IfaceRef, Mono) -> (String, Mono)
-ifaceMonoName (ir, mono) = (ir.irName, mono)
+-- ⚠️ S-dict-arity-contract: a reg entry is now ONE PREDICATE carrying ALL its bare-tyvar
+-- monos, so this fans back out to one (name, mono) pair per variable.  Collapsing the
+-- SLOT must not collapse the READ-ONLY census this and `declaredPairOne` feed: they
+-- answer "is this variable declared at this interface", not "how many dicts", and
+-- dropping `b` from `Ix a b =>` would make a body use at `b` UNCOVERED — an
+-- over-rejection of a program that type-checks today.
+ifaceMonoName : (IfaceRef, List Mono) -> List (String, Mono)
+ifaceMonoName (ir, monos) = map (mono => (ir.irName, mono)) monos
 
-declaredPairOne : (IfaceRef, Mono) -> List (String, Int)
-declaredPairOne (iface, mono) = match normalize mono
-  TVar cell => [(iface.irName, tyvarId cell)]
-  _ => []
+declaredPairOne : (IfaceRef, List Mono) -> List (String, Int)
+declaredPairOne (iface, monos) =
+  map (id => (iface.irName, id)) (abstractSlotIds monos)
 
 -- UNGATED transitive super-closure over declared (iface, id) slots — mirrors
 -- expandSupersPairs but WITHOUT the userIfaceNamesRef gate, so prelude super chains
