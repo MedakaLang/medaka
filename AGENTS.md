@@ -449,7 +449,8 @@ under *Writing tests*.
 - **[H-LINT] Lint** — **MAX RATCHET, all ~20 rules gated.** Also runs `medaka lint compiler
   stdlib sqlite`. **Run `medaka lint` on files you touch.** Disable inline: `-- lint-disable-
   next-line <rule>` (also `-line`, `-file`; omit rule = all). ⚠️ `--fix` bails on any decl with
-  an interior comment.
+  an interior comment. 🚨 Exit code alone does not reflect findings unless `--deny` is used
+  (#1822) — read the output, not just `$?`.
 - **[H-SNAPSHOT] Snapshot** — CHECK ONLY. **Run `make snapshot-check` first**; bless with `sh
   test/diff_compiler_snapshot_frontend.sh --bless <file.mdk>`, re-stage `test/snapshots/`.
   - **[H-SNAPSHOT-NEW]** New source file → `--new` (**SUITE-WIDE**, never overwrites). ⇒ run
