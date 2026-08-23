@@ -1,19 +1,50 @@
-# Planning contract
+# Cutting a v8 sprint
 
-Derive candidate pool from current tracker, merged PRs, source/history, specs, and adjacent workstreams. Reproduce inherited claims. Select coherent set by one stage acceptance claim, not issue count or utilization.
+Run this once before the orchestration session. The output is one compact
+`/var/tmp/medaka-sprints/<stage>/CONTRACT.md`, shadowed by one tracker issue.
 
-Classify each slice: standard when boundary/sites known; spike when discovery remains; family only when members share mechanical transform and independent acceptance. Mark parity only when behavior is provably unchanged; all behavior-changing work, spikes, and unstable families route to Sol-backed heavy implementer. Write only next packet fully; sketch later DAG leaves until predecessor evidence settles premises. One planner may precompute successor packet, then rotate out.
+## Derive before cutting
 
-Designate one `refill: yes` slice independent of main DAG, shared goldens, and unresolved rulings; prepare it after packet #1. If no candidate qualifies, state why.
+- The backlog is GitHub Issues. Start with open S0s, then the chosen
+  workstream. Confirm each candidate is still open and still owed against the
+  pinned source revision; `needs-repro` work is a cheap repro slice or stays
+  out.
+- Search the source, merged history, design docs, and adjacent workstreams for
+  the issue IDs. Inherited plans and one-directional citations are claims,
+  not evidence.
+- State the sprint's single question. Admit only 3–5 slices that advance it,
+  share its context, and have their dependencies in the sprint or already
+  landed. Put all sites answering one decision in one slice. Fewer than three
+  is an ordinary PR; more than five is two sprints.
 
-Specify boundary depth: authority, producers/consumers/fallbacks/mirrors, identity scope, performance constraint, observable behavior, named regions, collision edges, generated artifacts, direct/nearest-miss checks, and `could move`. Do not prescribe internals beyond verified need. Separate property from mechanism.
+## Contract shape
 
-Before placing any formula, example command, control result, or check status in settled facts, execute it and capture command/output. Never infer passing reason from expected output. Planner report's `Decisions surfaced` begins `corrections: <n>` with one line per corrected inherited claim; zero is explicit.
+The contract contains:
 
-Parallel writers require proof beyond different files: no shared API/carrier/semantic authority/generated artifact/premise, independent checks, deterministic integration order, explicit live collision scan. Failed proof serializes work.
+1. Question.
+2. In/out scope, with a reason for every exclusion.
+3. Slice table. Each row has a descriptive ID, short mission, approximate
+   surface, acceptance shape, dependency order, and `parallel-ok` only with
+   derived disjointness evidence.
+4. Settled facts with the commands that proved them. These seed packets so
+   writers do not repeat discovery.
+5. Issue-close policy, including any fixture/pin checks.
+6. Expected-red gates, if any.
+7. Exit criteria, including domain property classes the whole-diff reviewer
+   must cover when the stage enters crypto, protocol, hostile input,
+   concurrency, or irreversible-effect territory.
 
-Budget domain review when next use introduces constant-time, hostile-input, protocol/crypto, irreversible-effect, or concurrency properties absent from acceptance cells. Name one property class and forward context per review.
+Keep it at boundary depth. Packets name exact transforms and commands just in
+time; speculative design-ahead is rework. An exit criterion that requests
+deletion must also license a falsifiable alternative when no pre-fix fixture
+can reach the dead path (for example, an N-way differential demonstrating the
+path is unreachable by construction).
 
-Adversarially read contract before handoff: construct missing route, attack no-op/unreachable claims, test whether pin drains on shape rather than mechanism, enumerate case splits and search depth, verify stage acceptance can fail, and name repair-round budget.
+## Admission
 
-Every expected-red row includes command-derived `masks:` and first-half `unmask-by:`; wrap-up is forbidden. Name pinned base-arm depot path/SHA for base differentials, never fix attribution.
+Create the sprint branch and draft PR from the pinned revision. Post a short
+issue update with §1–§3 and §7, then read it back. Do one adversarial contract
+read: identify the slice most likely to refuse, relayed rather than derived
+facts, accidental shared decisions, and non-failing acceptance. Correct those
+now. The contract may change when evidence changes; record each change as one
+line in `NOTES.md`.

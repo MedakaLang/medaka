@@ -20,15 +20,33 @@ from memory. Run the commands.
 
 ---
 
+## Mode — v8 sprint
+
+When closing a `medaka-throughput-sprint` v8 run, use its compact run record:
+`CONTRACT.md`, `STATUS.md`, `NOTES.md`, packets, and reports. `STATUS.md` and
+`NOTES.md` are the only state ledgers; do not require `FRICTION.md`,
+`DECISIONS.md`, `OBLIGATIONS.md`, `FINDINGS.md`, or reports with legacy six
+sections. Derive residuals from `NOTES.md`, landed/refused/dropped rows, the
+reviewer/retro reports, and PR/CI readbacks. The tracker, self-draining-pin,
+safe-worktree, process, scratch, and learning guarantees below still apply.
+
+Codex agent liveness is derived with `list_agents`, not Claude task lists. It
+is evidence only: it does not attribute arbitrary worktree paths or PIDs to
+this sprint. Interrupt only a positively identified task-owned live agent with
+`interrupt_agent`; where ownership is unclear, hold and report rather than
+stopping a sibling's work.
+
 ## Step 1 — every issue encountered is in the tracker
 
 Sweep three sources, because each hides a different class of loose end:
 
-1. **Agents' FRICTION REPORTS.** Every implementer/reviewer you spawned was required to
-   surface bugs, gaps, missing stdlib functions, misleading errors, stale docs, and
-   workarounds. Re-read your own conversation for those. Each is triaged into exactly one
-   of: **immediate fix** (did it), **filed issue**, or **no-action-with-a-one-line-why**.
-   "I'll remember it" is not a fourth option — you won't.
+1. **Agents' residual reports.** In an ordinary orchestration, re-read the
+   agents' friction reports and your conversation. In a v8 sprint, read
+   `NOTES.md` plus slice/review/retro reports instead. Surface bugs, gaps,
+   missing stdlib functions, misleading errors, stale docs, and workarounds.
+   Each is triaged into exactly one of: **immediate fix** (did it), **filed
+   issue**, or **no-action-with-a-one-line-why**. "I'll remember it" is not a
+   fourth option — you won't.
 2. **Review RESIDUALS.** Conformance/craft reviews routinely return non-blocking findings
    (a narrower bug the fix left open, an over/under-coverage gap, a pre-existing bug the
    change exposed). Each becomes a follow-up issue — `verified` if you reproduced it,
@@ -78,8 +96,11 @@ an excused one.
 
 ## Step 3 — reap child worktrees (safely — the box is shared)
 
-Isolated subagents leave `worktree-agent-*` / `fix/*` worktrees. The harness auto-removes
-an *unchanged* isolated worktree, but merged/abandoned ones with commits linger.
+Isolated subagents may leave `worktree-agent-*` / `fix/*` worktrees. In a v8
+Codex sprint the conductor-created worktrees persist until the conductor
+explicitly reaps them; do not assume automatic harness cleanup. Other runners
+may auto-remove an unchanged isolated worktree, while merged or abandoned ones
+with commits can linger.
 
 ```sh
 git worktree list
@@ -108,8 +129,8 @@ git worktree prune                              # metadata for already-deleted d
 there is genuinely nothing to lose. `prune` is unconditionally safe.
 
 🚨 **ATTRIBUTION IS USUALLY THE REAL BLOCKER, AND IT DOES NOT RESOLVE.** `git worktree list`
-shows `agent-<id>` names that say **nothing** about which session spawned them, and
-`TaskList` will not map them either. On a shared box with several orchestrators this means
+shows `agent-<id>` names that say **nothing** about which session spawned them, and Codex
+`list_agents` does not map them to paths either. On a shared box with several orchestrators this means
 you frequently **cannot** tell your own agents' trees from a sibling's. When a check is
 structurally unable to attribute what it found: **REPORT AND HOLD, DO NOT ACT.** Never
 `git worktree remove` a sibling *session's* tree even when (1)–(4) say it is harmless — a
@@ -120,15 +141,17 @@ owner reap their own.
 
 ## Step 4 — reap orphan processes (never a box-wide kill)
 
-The lethal one is a bare `build_oracles.sh` → an `xargs -P` pool that **outlives its
-agent's turn and gets RESPAWNED by the harness**, dragging the shared box's load average.
+The lethal one is a bare `build_oracles.sh` → an `xargs -P` pool that outlives
+its agent's turn, dragging the shared box's load average. Some non-v8 runners
+may respawn it; a v8 Codex run must reason from the live agent/process state and
+must not assume a respawning harness.
 
 ```sh
 ps -eo pid,etimes,args | grep -E 'build_oracles|xargs -P|clang' | grep -v grep
 ```
 
 Reaping order matters:
-1. **`TaskStop <agentId>` the owning agent FIRST** — otherwise the harness respawns the pool.
+1. **Use Codex `interrupt_agent` on the positively identified owning live agent FIRST.** Derive the live set with `list_agents`; if you cannot attribute the process to a task you own, do not interrupt or kill it.
 2. Reap **only that agent's** PIDs: `ps -eo pid,args | grep "agent-<id>" | grep -v grep | awk '{print $1}' | xargs -r kill`.
 3. **NEVER** `pkill -f build_oracles.sh` / `pkill -f 'xargs -P'` box-wide — it kills other
    sessions' builds (the sandbox blocks it, correctly). A *live* agent's own fan-out is not
@@ -153,8 +176,9 @@ Reaping order matters:
 
 ## Step 6 — write the learnings down (so the next session inherits them)
 
-The friction reports and the surprises you hit are worth more than the fixes. Route each
-durable one to where it will actually be found:
+The residual reports (or, for v8, `NOTES.md` and its reports) and the surprises
+you hit are worth more than the fixes. Route each durable one to where it will
+actually be found:
 
 - **`.claude/ORCHESTRATING.md`** — a *role* learning (a watcher pattern that lied, a
   merge-queue nuance, a false-bounce race, "reproduce before you trust the diagnosis"
@@ -190,10 +214,10 @@ uncommitted.
 **One-screen checklist:**
 
 ```
-[ ] every friction item / review residual / in-tree marker → filed (read back the #) or no-action'd
+[ ] every residual (FRICTION reports, or v8 STATUS/NOTES/reports) / review residual / in-tree marker → filed (read back the #) or no-action'd
 [ ] every open bug pinned (must_fail_census.sh --all is empty of yours), or explicitly un-pinnable
 [ ] git worktree list → merged/abandoned agent trees removed; none with unmerged commits destroyed
-[ ] ps … build_oracles|xargs -P → TaskStop owner, reap its PIDs only; no box-wide pkill
+[ ] ps … build_oracles|xargs -P → interrupt positively identified Codex owner, reap its PIDs only; no box-wide pkill
 [ ] scratch + /tmp cleaned; repo git status clean; no stray stash
 [ ] durable learnings → ORCHESTRATING.md / AGENTS.md / memory / skill (committed, not dangling)
 [ ] main fetched + green; honest report with open-issue numbers
