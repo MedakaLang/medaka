@@ -994,6 +994,15 @@ types). `check` now prints `useIx : Ix a Bool => a -> Int` and rejects with
 `test/dict_fixtures/s3-sig-constraint-unsatisfiable-rejects.mdk`, and its accept-direction
 twin is `test/dict_fixtures/s3-nary-sig-constraint-goal-vector.mdk`.
 
+⚠️ **CLOSED IS SINGLE-FILE ONLY — do not read it as the whole obligation-channel gap.** The
+end-of-sprint review round (2026-08-23) found the fix does not cross a module boundary: an
+imported constrained function with the same unsatisfiable-goal shape still silently accepts
+(no cross-module qual twin for the argument-vector table — `declaredConstraintArgs`' own
+header has recorded this residual since before this sprint). Filed as **#1868**. Separately,
+two predicates over the *same* interface at one tyvar id still collapse to one dict slot in
+this same `=>` channel (`(Ix a Char, Ix a Bool) => …` gives `444` where `333` is correct) —
+filed as **#1866**, and it is why #1137's arity rule needs the caveat recorded on that issue.
+
 ⚠️ **SCOPE THE REFUTATION PRECISELY — the unqualified reading is WRONG.** "Order no longer
 decides on this leg" holds only when the multi-argument predicate is the **first predicate
 declared over its type variable**. Measured A/B, cold builds either side, varying only
