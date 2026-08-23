@@ -56,20 +56,26 @@ instead.
    contract). Base = current sprint-branch head. While an implementer runs,
    author the NEXT slice's packet — that is your idle work, not extra
    verification.
-2. **Pre-dispatch freshness check — yours, not the implementer's.**
-   `git fetch origin main sprint/<stage>`. If `origin/main` has moved past
-   your last resync point, resync NOW, before dispatching: real merge-base,
-   diff merge-base..origin/main against this stage's touched files to
-   confirm no overlap (it almost never overlaps — main moves fast on
-   unrelated files far more often than it touches your slice's own
-   surface), merge `origin/main` into the sprint branch on a disposable
-   branch, push, update the packet's base to the new head. This is a git
-   command, not agent judgment — a dispatched implementer hitting `BLOCKED`
-   on stale-main is a wasted round-trip (worktree mint + a refusal write-up
-   for zero code), confirmed costly across a full sprint (5 of 9 dispatches
-   in one sprint were exactly this, every resulting merge conflict-free and
-   file-disjoint). Do this check every time you're about to dispatch, not
-   only after a BLOCKED report.
+2. **Pre-dispatch freshness check — yours, not the implementer's, EVERY
+   dispatch, fix-round packets included.** `git fetch origin main
+   sprint/<stage>`. If `origin/main` has moved past your last resync point,
+   resync NOW, before dispatching: real merge-base, diff merge-base..
+   origin/main against this stage's touched files to confirm no overlap (it
+   almost never overlaps — main moves fast on unrelated files far more often
+   than it touches your slice's own surface), merge `origin/main` into the
+   sprint branch on a disposable branch, push, update the packet's base to
+   the new head. This is a git command, not agent judgment — a dispatched
+   implementer hitting `BLOCKED` on stale-main is a wasted round-trip
+   (worktree mint + a refusal write-up for zero code), confirmed costly
+   across a full sprint (5 of 9 dispatches in one sprint were exactly this,
+   every resulting merge conflict-free and file-disjoint). Do this check
+   every time you're about to dispatch, not only after a BLOCKED report.
+   ⚠️ **This applies identically to a fix-round dispatch** — `predicate-
+   slots` re-broke on exactly this gap: the resync habit had only ever been
+   exercised on slice dispatch, so a fix packet's first dispatch blocked on
+   a base that had gone stale while the review round ran. Run the same
+   fetch-and-resync before EVERY `sprint-implementer` dispatch in the fix
+   round too, not just in the per-slice loop.
 3. **Dispatch** one `sprint-implementer` with `isolation: "worktree"` and the
    contract's model tier for the slice. The brief is one line: the packet
    path. (The harness mints the worktree from `main`'s tip; the packet's §2
@@ -121,8 +127,11 @@ by serialization.
    *dismiss* (with one NOTES.md line saying why). Anything you'd argue with
    Val about goes to Val.
 3. **Fix round.** Dispatch fix packets (same implementer contract, small
-   packets) serially until the fix-now bin is empty. A fix that moves a
-   golden gets the same by-name bless discipline.
+   packets) serially until the fix-now bin is empty. Run the SAME
+   pre-dispatch freshness check as the per-slice loop's step 2 before each
+   one — the review round can take long enough for `main` to move under you,
+   and a fix-round dispatch is not exempt from the resync just because it's
+   small. A fix that moves a golden gets the same by-name bless discipline.
 4. **Land.** `medaka fmt --write` + `medaka lint` clean on touched files;
    `make preflight` if the diff touches blast-radius paths, else let CI
    answer. Mark the PR ready, `gh pr merge --auto --merge`. The merge queue

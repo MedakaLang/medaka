@@ -73,6 +73,19 @@ Contract sections: **§1 the question · §2 in/out (each Out with its reason) �
 §5 issue-closure policy (every close checks the PIN, not the narrative) ·
 §6 expected-red gates for the duration, if any · §7 exit criteria.**
 
+⚠️ **A §7 criterion demanding dead-code deletion ("delete X, with a fixture
+that can fail") can be unfalsifiable as written** — if the dead path is
+already unreachable everywhere the tree can drive it, no fixture can go red
+before the fix, and no fixture can prove the deletion safe. `predicate-slots`
+paid for this: 3 full rebuilds + 298 assertions to demonstrate the literal
+form was unmeetable, then a mid-sprint stop for Val to accept the only
+evidence that existed. **Pre-license a second discharge form in the
+criterion itself**: an N-way build differential (the code path forced live /
+forced dead / as-is, compared) showing the path is unreachable by
+construction is an equally valid close, stated as such up front — not
+improvised and escalated mid-sprint when the literal form turns out
+unmeetable.
+
 If the sprint dogfoods the language in a new domain (crypto, protocols,
 concurrency, irreversible external effects), name the property classes the
 end-of-sprint review must cover in §7 — or state in one line why none apply.
