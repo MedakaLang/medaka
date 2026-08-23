@@ -13,4 +13,5 @@ MEDAKA_STRICT=1 "$MEDAKA" build "$DRIVER" -o "$W/driver" > "$W/build.out" 2>&1 |
 "$W/driver" "$CORPUS" > "$W/native.out" 2>&1
 [ "$(tail -1 "$W/native.out")" = 'TOTAL: PASS' ] || { cat "$W/native.out"; exit 1; }
 grep -q '^counted: 25/25 rows ok$' "$W/native.out" || { cat "$W/native.out"; exit 1; }
-echo 'PASS: 25 secp256k1 point rows; bounded eval sample and native full corpus'
+grep -F -q 'row 17 raw-ladder canonical-infinity' "$W/native.out" || { cat "$W/native.out"; exit 1; }
+echo 'PASS: 25 secp256k1 point rows; nG raw ladder reached canonical infinity'

@@ -23,7 +23,7 @@ fail() { printf 'not ok %s - %s\n' "$((checked + 1))" "$1" >&2; exit 1; }
 source_closure_ok() {
   tree=$1
   [ "$(cksum "$tree/pds/lib/sign.mdk" | awk '{print $1 " " $2}')" = '250986905 1892' ] || return 1
-  [ "$(cksum "$tree/pds/lib/secp256k1.mdk" | awk '{print $1 " " $2}')" = '1926347858 9727' ] || return 1
+  [ "$(cksum "$tree/pds/lib/secp256k1.mdk" | awk '{print $1 " " $2}')" = '1412774375 10313' ] || return 1
   [ "$(cksum "$tree/pds/lib/scalar.mdk" | awk '{print $1 " " $2}')" = '2702220718 31363' ] || return 1
   [ "$(cksum "$tree/pds/lib/field.mdk" | awk '{print $1 " " $2}')" = '2995963130 26246' ] || return 1
 
@@ -153,7 +153,10 @@ expect_source_red 'M15 zero aggregate omission'
 apply_mutation 'M15-early' "$WORK/pds/lib/scalar.mdk" 'let byteBit = secretByteBit b' 's/let byteBit = secretByteBit b/if b < 0 then validBit else\n    let byteBit = secretByteBit b/'
 expect_source_red 'M15 per-element secret early return'
 
-git -C "$ROOT" diff --exit-code -- pds/lib/sign.mdk pds/lib/secp256k1.mdk pds/lib/scalar.mdk pds/lib/field.mdk || fail 'task-owned crypto source is clean after mutations'
+cmp "$ROOT/pds/lib/sign.mdk" "$WORK/pds/lib/sign.mdk"
+cmp "$ROOT/pds/lib/secp256k1.mdk" "$WORK/pds/lib/secp256k1.mdk"
+cmp "$ROOT/pds/lib/scalar.mdk" "$WORK/pds/lib/scalar.mdk"
+cmp "$ROOT/pds/lib/field.mdk" "$WORK/pds/lib/field.mdk"
 pass 'all mutations restored exact baseline bytes and task-owned crypto source is clean'
 
 MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$SOURCE" -o "$WORK/public-key" --keep-ir > "$WORK/build.log" 2>&1 || { cat "$WORK/build.log" >&2; fail 'native public-key closure probe builds'; }

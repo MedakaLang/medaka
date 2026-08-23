@@ -197,6 +197,18 @@ scalarLadder bytes r0 r1 i =
     let next1 = pointSelect bit added doubled1
     scalarLadder bytes next0 next1 (i + 1)
 
+-- | Internal test observation for a fixed-width raw scalar carrier. This
+--   deliberately bypasses `Sc` only to exercise the 256-round ladder at the
+--   group order; signing continues to admit scalars exclusively through
+--   `scFromBytes`/`SecretKey`.
+export
+pointRawFixedGeneratorIsCanonicalInfinityForTest : Array Int -> Result String Bool
+pointRawFixedGeneratorIsCanonicalInfinityForTest bytes =
+  if arrayLength bytes /= 32 then
+    Err "secp256k1.test: expected 32 raw scalar bytes"
+  else
+    Ok (pointIsCanonicalInfinity (scalarLadder bytes pointInfinity pointGenerator 0))
+
 -- The secret-bearing caller has established that this point is non-infinity,
 -- so this executes exactly one inverse with no Z==0 branch.
 secretAffine : JPoint -> AffinePoint
