@@ -815,6 +815,7 @@ mergeIfaceDefaults prog = map mergeIfaceDecl prog
 mergeIfaceDecl : Decl -> Decl
 mergeIfaceDecl (d@(DInterface { methods, ... })) =
   DInterface { d | methods = mergeIfaceMethods methods }
+mergeIfaceDecl (DAttrib attrs d) = DAttrib attrs (mergeIfaceDecl d)
 mergeIfaceDecl d = d
 
 mergeIfaceMethods : List IfaceMethod -> List IfaceMethod
@@ -898,6 +899,7 @@ ifaceDefaultsStep : String -> Decl -> List Decl -> List IfaceMethod
 ifaceDefaultsStep target (DInterface { name, methods, ... }) rest
   | name == target = filterList ifaceMethodHasDefault methods
   | otherwise = ifaceDefaults target rest
+ifaceDefaultsStep target (DAttrib _ d) rest = ifaceDefaultsStep target d rest
 ifaceDefaultsStep target _ rest = ifaceDefaults target rest
 
 ifaceMethodHasDefault : IfaceMethod -> Bool

@@ -1,8 +1,0 @@
--- issue #1063: a decl attribute above an `export`ed declaration silently drops the
--- export. dep.mdk says `export greet : String`, but because a `@deprecated` line sits
--- above it the name is not exported. The ONLY diagnostic points HERE, at the importer's
--- import list -- never at the attribute in dep.mdk that actually caused it, and dep.mdk
--- itself is reported completely clean.
-import dep.{greet}
-
-main = println greet
