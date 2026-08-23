@@ -1,0 +1,1 @@
+TYPE ERROR: this statement's value (Int) is silently discarded — only a `Unit`-typed expression may stand alone as a statement

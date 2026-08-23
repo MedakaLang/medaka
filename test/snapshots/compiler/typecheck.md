@@ -1,5 +1,5 @@
 # META
-source_lines=32323
+source_lines=32358
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -9908,7 +9908,8 @@ inferLastStmt env s =
 
 inferStmt : TcEnv -> DoStmt -> TcEnv
 inferStmt env (DoExpr e) =
-  let _ = infer env e
+  let t = infer env e
+  let _ = checkStmtNotDiscarded t e
   env
 -- #866: the binder's own Loc is threaded to blockRecLet for the pin note.  A
 -- FUNCTION-FORM block let (`let h a p q = …`) parses with rec=True and lands HERE, not
@@ -9932,6 +9933,40 @@ inferStmt env (DoBind pat e) =
   let _ = unify (fst pr) t
   extendLocalVars env (snd pr)
 inferStmt _ _ = panic "typecheck: unsupported block statement"
+
+-- A bare (non-final, non-`let`) block statement discards its value.  A free
+-- result var (nothing downstream constrained it) is pinned to `Unit` via plain
+-- `unify` — always succeeds, and is exactly what "this value goes unused"
+-- means for an otherwise-unconstrained type.  A CONCRETE non-`Unit` type is a
+-- real mismatch, but routing it through bare `unify` would render the generic
+-- `Type mismatch: Int vs Unit` (ERROR-QUALITY.md dim 3/5: doesn't name the rule
+-- or offer the fix), so it is reported here instead with its own code and a
+-- one-token `fix` (`let _ = `) for the intentional-discard case.
+checkStmtNotDiscarded : Mono -> Expr -> Unit
+checkStmtNotDiscarded t e = match normalize t
+  TCon "Unit" _ => ()
+  TVar cell => match !cell
+    Unbound _ _ => unify t (tconBuiltin "Unit")
+    Link _ => panic "checkStmtNotDiscarded: normalize left a Link"
+  nt => pushDiscardedValueError nt e
+
+pushDiscardedValueError : Mono -> Expr -> Unit
+pushDiscardedValueError nt e =
+  let loc = exprLoc e
+  pushTypeErrorHelpFixAt
+    "T-DISCARDED-VALUE"
+    loc
+    (discardedValueMsg nt)
+    "bind it with 'let _ = …' if dropping the value is intentional, or use its value"
+    (discardedValueFix loc)
+
+discardedValueMsg : Mono -> String
+discardedValueMsg nt = "this statement's value (\{ppMono nt}) is silently discarded — only a `Unit`-typed expression may stand alone as a statement"
+
+discardedValueFix : Option Loc -> Option (Loc, String)
+discardedValueFix (Some (Loc f sl sc _ _)) =
+  Some (Loc f sl sc sl sc, "let _ = ")
+discardedValueFix None = None
 
 blockRecLet : TcEnv -> String -> Option Loc -> Expr -> TcEnv
 blockRecLet env x xloc e =
@@ -33926,12 +33961,21 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "inferLastStmt" ((PVar "env") (PCon "DoExpr" (PVar "e"))) (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))
 (DFunDef false "inferLastStmt" ((PVar "env") (PVar "s")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "inferStmt") (EVar "env")) (EVar "s"))) (DoExpr (EApp (EVar "tconBuiltin") (ELit (LString "Unit"))))))
 (DTypeSig false "inferStmt" (TyFun (TyCon "TcEnv") (TyFun (TyCon "DoStmt") (TyCon "TcEnv"))))
-(DFunDef false "inferStmt" ((PVar "env") (PCon "DoExpr" (PVar "e"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoExpr (EVar "env"))))
+(DFunDef false "inferStmt" ((PVar "env") (PCon "DoExpr" (PVar "e"))) (EBlock (DoLet false false (PVar "t") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "checkStmtNotDiscarded") (EVar "t")) (EVar "e"))) (DoExpr (EVar "env"))))
 (DFunDef false "inferStmt" ((PVar "env") (PCon "DoLet" PWild (PCon "True") (PCon "PVar" (PVar "x") (PVar "xloc")) (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "blockRecLet") (EVar "env")) (EVar "x")) (EApp (EVar "Some") (EVar "xloc"))) (EVar "e")))
 (DFunDef false "inferStmt" ((PVar "env") (PCon "DoLet" PWild PWild (PVar "pat") (PVar "e"))) (EApp (EApp (EApp (EVar "blockLet") (EVar "env")) (EVar "pat")) (EVar "e")))
 (DFunDef false "inferStmt" ((PVar "env") (PCon "DoAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EApp (EVar "extendLocalVar") (EVar "env")) (EVar "x")) (EApp (EVar "monoScheme") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))))
 (DFunDef false "inferStmt" ((PVar "env") (PCon "DoBind" (PVar "pat") (PVar "e"))) (EBlock (DoLet false false (PVar "t") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-BIND-OUTSIDE-DO"))) (EVar "bindOutsideDoMsg"))) (DoLet false false (PVar "pr") (EApp (EApp (EVar "inferPat") (EVar "env")) (EVar "pat"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EVar "fst") (EVar "pr"))) (EVar "t"))) (DoExpr (EApp (EApp (EVar "extendLocalVars") (EVar "env")) (EApp (EVar "snd") (EVar "pr"))))))
 (DFunDef false "inferStmt" (PWild PWild) (EApp (EVar "panic") (ELit (LString "typecheck: unsupported block statement"))))
+(DTypeSig false "checkStmtNotDiscarded" (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Unit"))))
+(DFunDef false "checkStmtNotDiscarded" ((PVar "t") (PVar "e")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Unit")) PWild) () (ELit LUnit)) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Unbound" PWild PWild) () (EApp (EApp (EVar "unify") (EVar "t")) (EApp (EVar "tconBuiltin") (ELit (LString "Unit"))))) (arm (PCon "Link" PWild) () (EApp (EVar "panic") (ELit (LString "checkStmtNotDiscarded: normalize left a Link")))))) (arm (PVar "nt") () (EApp (EApp (EVar "pushDiscardedValueError") (EVar "nt")) (EVar "e")))))
+(DTypeSig false "pushDiscardedValueError" (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Unit"))))
+(DFunDef false "pushDiscardedValueError" ((PVar "nt") (PVar "e")) (EBlock (DoLet false false (PVar "loc") (EApp (EVar "exprLoc") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-DISCARDED-VALUE"))) (EVar "loc")) (EApp (EVar "discardedValueMsg") (EVar "nt"))) (ELit (LString "bind it with 'let _ = …' if dropping the value is intentional, or use its value"))) (EApp (EVar "discardedValueFix") (EVar "loc"))))))
+(DTypeSig false "discardedValueMsg" (TyFun (TyCon "Mono") (TyCon "String")))
+(DFunDef false "discardedValueMsg" ((PVar "nt")) (EBinOp "++" (EBinOp "++" (ELit (LString "this statement's value (")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "nt")))) (ELit (LString ") is silently discarded — only a `Unit`-typed expression may stand alone as a statement"))))
+(DTypeSig false "discardedValueFix" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String")))))
+(DFunDef false "discardedValueFix" ((PCon "Some" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") PWild PWild))) (EApp (EVar "Some") (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EVar "sc")) (ELit (LString "let _ = ")))))
+(DFunDef false "discardedValueFix" ((PCon "None")) (EVar "None"))
 (DTypeSig false "blockRecLet" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "TcEnv"))))))
 (DFunDef false "blockRecLet" ((PVar "env") (PVar "x") (PVar "xloc") (PVar "e")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "checkRecBindNonFunction") (EVar "x")) (EVar "e"))) (DoLet false false PWild (EApp (EVar "enterLevel") (ELit LUnit))) (DoLet false false (PVar "oblN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))) (DoLet false false (PVar "callN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls"))) (DoLet false false (PVar "dictN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictApps"))) (DoLet false false (PVar "placeholder") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false (PVar "envSelf") (EApp (EApp (EApp (EVar "extendLocalVar") (EVar "env")) (EVar "x")) (EApp (EVar "monoScheme") (EVar "placeholder")))) (DoLet false false (PVar "t1") (EApp (EApp (EVar "infer") (EVar "envSelf")) (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "placeholder")) (EVar "t1"))) (DoLet false false PWild (EApp (EVar "exitLevel") (ELit LUnit))) (DoLet false false (PVar "addedObls") (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (EVar "oblN0"))) (DoLet false false PWild (EApp (EApp (EVar "defaultAmbiguousNum") (EVar "addedObls")) (EVar "t1"))) (DoLet false false PWild (EApp (EApp (EVar "registerAmbiguousConstraints") (EVar "addedObls")) (EListLit (EVar "t1")))) (DoLet false false PWild (EApp (EApp (EVar "recordLocalBind") (EVar "x")) (EVar "t1"))) (DoLet false false (PVar "sch") (EApp (EApp (EVar "genRestricted") (EApp (EVar "not") (EApp (EApp (EApp (EApp (EApp (EVar "pinLocalIfDictForwarded") (EVar "callN0")) (EVar "dictN0")) (EVar "x")) (EVar "xloc")) (EVar "t1")))) (EVar "t1"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "registerLocalScheme") (EVar "x")) (EVar "sch")) (EVar "oblN0")) (EVar "callN0")) (EVar "dictN0"))) (DoExpr (EApp (EApp (EApp (EVar "seedAlphaLets") (EApp (EApp (EApp (EVar "extendLocalVar") (EVar "env")) (EVar "x")) (EVar "sch"))) (EVar "x")) (EVar "e")))))
 (DTypeSig false "blockLet" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "TcEnv")))))
@@ -39178,12 +39222,21 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "inferLastStmt" ((PVar "env") (PCon "DoExpr" (PVar "e"))) (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))
 (DFunDef false "inferLastStmt" ((PVar "env") (PVar "s")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "inferStmt") (EVar "env")) (EVar "s"))) (DoExpr (EApp (EVar "tconBuiltin") (ELit (LString "Unit"))))))
 (DTypeSig false "inferStmt" (TyFun (TyCon "TcEnv") (TyFun (TyCon "DoStmt") (TyCon "TcEnv"))))
-(DFunDef false "inferStmt" ((PVar "env") (PCon "DoExpr" (PVar "e"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoExpr (EVar "env"))))
+(DFunDef false "inferStmt" ((PVar "env") (PCon "DoExpr" (PVar "e"))) (EBlock (DoLet false false (PVar "t") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "checkStmtNotDiscarded") (EVar "t")) (EVar "e"))) (DoExpr (EVar "env"))))
 (DFunDef false "inferStmt" ((PVar "env") (PCon "DoLet" PWild (PCon "True") (PCon "PVar" (PVar "x") (PVar "xloc")) (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "blockRecLet") (EVar "env")) (EVar "x")) (EApp (EVar "Some") (EVar "xloc"))) (EVar "e")))
 (DFunDef false "inferStmt" ((PVar "env") (PCon "DoLet" PWild PWild (PVar "pat") (PVar "e"))) (EApp (EApp (EApp (EVar "blockLet") (EVar "env")) (EVar "pat")) (EVar "e")))
 (DFunDef false "inferStmt" ((PVar "env") (PCon "DoAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EApp (EVar "extendLocalVar") (EVar "env")) (EVar "x")) (EApp (EVar "monoScheme") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))))
 (DFunDef false "inferStmt" ((PVar "env") (PCon "DoBind" (PVar "pat") (PVar "e"))) (EBlock (DoLet false false (PVar "t") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-BIND-OUTSIDE-DO"))) (EVar "bindOutsideDoMsg"))) (DoLet false false (PVar "pr") (EApp (EApp (EVar "inferPat") (EVar "env")) (EVar "pat"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EApp (EVar "fst") (EVar "pr"))) (EVar "t"))) (DoExpr (EApp (EApp (EVar "extendLocalVars") (EVar "env")) (EApp (EVar "snd") (EVar "pr"))))))
 (DFunDef false "inferStmt" (PWild PWild) (EApp (EVar "panic") (ELit (LString "typecheck: unsupported block statement"))))
+(DTypeSig false "checkStmtNotDiscarded" (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Unit"))))
+(DFunDef false "checkStmtNotDiscarded" ((PVar "t") (PVar "e")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TCon" (PLit (LString "Unit")) PWild) () (ELit LUnit)) (arm (PCon "TVar" (PVar "cell")) () (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Unbound" PWild PWild) () (EApp (EApp (EVar "unify") (EVar "t")) (EApp (EVar "tconBuiltin") (ELit (LString "Unit"))))) (arm (PCon "Link" PWild) () (EApp (EVar "panic") (ELit (LString "checkStmtNotDiscarded: normalize left a Link")))))) (arm (PVar "nt") () (EApp (EApp (EVar "pushDiscardedValueError") (EVar "nt")) (EVar "e")))))
+(DTypeSig false "pushDiscardedValueError" (TyFun (TyCon "Mono") (TyFun (TyCon "Expr") (TyCon "Unit"))))
+(DFunDef false "pushDiscardedValueError" ((PVar "nt") (PVar "e")) (EBlock (DoLet false false (PVar "loc") (EApp (EVar "exprLoc") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-DISCARDED-VALUE"))) (EVar "loc")) (EApp (EVar "discardedValueMsg") (EVar "nt"))) (ELit (LString "bind it with 'let _ = …' if dropping the value is intentional, or use its value"))) (EApp (EVar "discardedValueFix") (EVar "loc"))))))
+(DTypeSig false "discardedValueMsg" (TyFun (TyCon "Mono") (TyCon "String")))
+(DFunDef false "discardedValueMsg" ((PVar "nt")) (EBinOp "++" (EBinOp "++" (ELit (LString "this statement's value (")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "nt")))) (ELit (LString ") is silently discarded — only a `Unit`-typed expression may stand alone as a statement"))))
+(DTypeSig false "discardedValueFix" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyTuple (TyCon "Loc") (TyCon "String")))))
+(DFunDef false "discardedValueFix" ((PCon "Some" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") PWild PWild))) (EApp (EVar "Some") (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "sc")) (EVar "sl")) (EVar "sc")) (ELit (LString "let _ = ")))))
+(DFunDef false "discardedValueFix" ((PCon "None")) (EVar "None"))
 (DTypeSig false "blockRecLet" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "TcEnv"))))))
 (DFunDef false "blockRecLet" ((PVar "env") (PVar "x") (PVar "xloc") (PVar "e")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "checkRecBindNonFunction") (EVar "x")) (EVar "e"))) (DoLet false false PWild (EApp (EVar "enterLevel") (ELit LUnit))) (DoLet false false (PVar "oblN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))) (DoLet false false (PVar "callN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls"))) (DoLet false false (PVar "dictN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictApps"))) (DoLet false false (PVar "placeholder") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false (PVar "envSelf") (EApp (EApp (EApp (EVar "extendLocalVar") (EVar "env")) (EVar "x")) (EApp (EVar "monoScheme") (EVar "placeholder")))) (DoLet false false (PVar "t1") (EApp (EApp (EVar "infer") (EVar "envSelf")) (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "placeholder")) (EVar "t1"))) (DoLet false false PWild (EApp (EVar "exitLevel") (ELit LUnit))) (DoLet false false (PVar "addedObls") (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (EVar "oblN0"))) (DoLet false false PWild (EApp (EApp (EVar "defaultAmbiguousNum") (EVar "addedObls")) (EVar "t1"))) (DoLet false false PWild (EApp (EApp (EVar "registerAmbiguousConstraints") (EVar "addedObls")) (EListLit (EVar "t1")))) (DoLet false false PWild (EApp (EApp (EVar "recordLocalBind") (EVar "x")) (EVar "t1"))) (DoLet false false (PVar "sch") (EApp (EApp (EVar "genRestricted") (EApp (EVar "not") (EApp (EApp (EApp (EApp (EApp (EVar "pinLocalIfDictForwarded") (EVar "callN0")) (EVar "dictN0")) (EVar "x")) (EVar "xloc")) (EVar "t1")))) (EVar "t1"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "registerLocalScheme") (EVar "x")) (EVar "sch")) (EVar "oblN0")) (EVar "callN0")) (EVar "dictN0"))) (DoExpr (EApp (EApp (EApp (EVar "seedAlphaLets") (EApp (EApp (EApp (EVar "extendLocalVar") (EVar "env")) (EVar "x")) (EVar "sch"))) (EVar "x")) (EVar "e")))))
 (DTypeSig false "blockLet" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyCon "TcEnv")))))

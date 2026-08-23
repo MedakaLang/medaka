@@ -329,6 +329,7 @@ checkSigConstraintCoverage : List (String, List (IfaceRef, List Mono), List (Lis
 checkSigConstraintOne : List (String, List (IfaceRef, List Mono), List (List Mono)) -> List (String, Ty) -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> Scheme -> Unit
 checkSigTooGeneral : String -> Ty -> List (String, Mono) -> Unit
 checkSigsTooGeneral : List (String, Ty, List (String, Mono)) -> Unit
+checkStmtNotDiscarded : Mono -> Expr -> Unit
 checkSuperImpls : List Decl -> ClassEnv -> ImplEnv -> Int -> Unit
 checkSurvivorCallObligations : String -> String -> List String -> Ty -> List (String, Mono) -> List (IfaceRef, List Mono, Option Loc) -> Option Loc -> Unit
 checkSurvivorDispatchMonos : String -> String -> List String -> Ty -> List (String, Mono) -> String -> List Mono -> Option Loc -> Unit
@@ -573,6 +574,8 @@ dictPassModulesScoped : List String -> List ((String, String), List Int) -> List
 dictVarSatisfiesIface : String -> Int -> List (String, Mono) -> Bool
 directImports : String -> List (String, List Decl) -> List String
 directSupers : String -> List String
+discardedValueFix : Option Loc -> Option (Loc, String)
+discardedValueMsg : Mono -> String
 discoverAll : List Decl -> List Decl -> List String -> List String -> List String
 discoverNext : List Decl -> List Decl -> List String -> List String -> List String
 discoverNextJoint : List Decl -> List Decl -> List String -> List String -> List String -> List String -> List String
@@ -1424,6 +1427,7 @@ publicValNames : List Decl -> List String
 pureRow : EffRow
 pushCoherenceWarning : Option Loc -> String -> Unit
 pushDictApp : (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> Unit
+pushDiscardedValueError : Mono -> Expr -> Unit
 pushIncompleteImpl : (Option Loc, String) -> Unit
 pushNoImplError : String -> Option Loc -> List Mono -> Unit
 pushPendingObl : IfaceRef -> List String -> Ty -> Mono -> Provenance -> Option Loc -> Unit

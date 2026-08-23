@@ -9904,7 +9904,8 @@ inferLastStmt env s =
 
 inferStmt : TcEnv -> DoStmt -> TcEnv
 inferStmt env (DoExpr e) =
-  let _ = infer env e
+  let t = infer env e
+  let _ = checkStmtNotDiscarded t e
   env
 -- #866: the binder's own Loc is threaded to blockRecLet for the pin note.  A
 -- FUNCTION-FORM block let (`let h a p q = …`) parses with rec=True and lands HERE, not
@@ -9928,6 +9929,40 @@ inferStmt env (DoBind pat e) =
   let _ = unify (fst pr) t
   extendLocalVars env (snd pr)
 inferStmt _ _ = panic "typecheck: unsupported block statement"
+
+-- A bare (non-final, non-`let`) block statement discards its value.  A free
+-- result var (nothing downstream constrained it) is pinned to `Unit` via plain
+-- `unify` — always succeeds, and is exactly what "this value goes unused"
+-- means for an otherwise-unconstrained type.  A CONCRETE non-`Unit` type is a
+-- real mismatch, but routing it through bare `unify` would render the generic
+-- `Type mismatch: Int vs Unit` (ERROR-QUALITY.md dim 3/5: doesn't name the rule
+-- or offer the fix), so it is reported here instead with its own code and a
+-- one-token `fix` (`let _ = `) for the intentional-discard case.
+checkStmtNotDiscarded : Mono -> Expr -> Unit
+checkStmtNotDiscarded t e = match normalize t
+  TCon "Unit" _ => ()
+  TVar cell => match !cell
+    Unbound _ _ => unify t (tconBuiltin "Unit")
+    Link _ => panic "checkStmtNotDiscarded: normalize left a Link"
+  nt => pushDiscardedValueError nt e
+
+pushDiscardedValueError : Mono -> Expr -> Unit
+pushDiscardedValueError nt e =
+  let loc = exprLoc e
+  pushTypeErrorHelpFixAt
+    "T-DISCARDED-VALUE"
+    loc
+    (discardedValueMsg nt)
+    "bind it with 'let _ = …' if dropping the value is intentional, or use its value"
+    (discardedValueFix loc)
+
+discardedValueMsg : Mono -> String
+discardedValueMsg nt = "this statement's value (\{ppMono nt}) is silently discarded — only a `Unit`-typed expression may stand alone as a statement"
+
+discardedValueFix : Option Loc -> Option (Loc, String)
+discardedValueFix (Some (Loc f sl sc _ _)) =
+  Some (Loc f sl sc sl sc, "let _ = ")
+discardedValueFix None = None
 
 blockRecLet : TcEnv -> String -> Option Loc -> Expr -> TcEnv
 blockRecLet env x xloc e =
