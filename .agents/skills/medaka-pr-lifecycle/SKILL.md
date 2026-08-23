@@ -63,6 +63,17 @@ delta and delta-specific checks. Carry an older receipt forward only under the
 revision-inheritance rule in `medaka-verification-scope`; otherwise reverify the
 affected property.
 
+**v8 sprint exception.** For a sprint run under `medaka-throughput-sprint`,
+the single independent `sprint_reviewer` on the exact final head is the
+required independent review. The slice packets' focused 3–5-check receipts,
+together with the final focused receipts named by the review/fix round, are
+the receipt input for that review. Do not require a second reviewer, a
+per-slice reviewer, or a separate verifier path merely because this lifecycle
+skill normally names a fresh reviewer. If a subsequent fix changes the
+reviewed property, obtain the required exact-head re-review or explicitly
+valid receipt inheritance before enqueueing. This exception does not alter
+ordinary non-sprint PR review requirements.
+
 When receipts carry across a final non-executable delta, make the inheritance
 explicit in both the review brief and PR body: name the fully verified SHA, the
 final head SHA, enumerate every intervening path, state why none can affect the
@@ -71,9 +82,11 @@ as the final exact-head verification or silently imply that all commands reran.
 
 ## 5. Enqueue and prove completion
 
-Only after the latest head is PR-CI green, the independent compiler-reviewer
-verdict is clean, and no blocking findings remain, use the verified helper
-rather than interpreting `gh` exit codes:
+Only after the latest head is PR-CI green, the independent review verdict is
+clean, and no blocking findings remain, use the verified helper rather than
+interpreting `gh` exit codes. For ordinary PRs this is the independent
+compiler-reviewer; for a v8 sprint it is the exact-head `sprint_reviewer`
+described above:
 
 ```sh
 sh scripts/pr.sh enqueue --number N --interval 10 --timeout 300

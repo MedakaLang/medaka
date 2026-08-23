@@ -1,120 +1,114 @@
 ---
 name: medaka-throughput-sprint
-description: Runs coherent, stage-sized Medaka compiler sprints with continuous implementer occupancy, prepared handoff packets, proven-disjoint parallel writers, rolling parallel verification and CI, and a mandatory repair round. Use when executing many related refactor or migration slices for one reviewable stage without sacrificing quality.
+description: "Run a Medaka implementation sprint (v8): 3–5 serial packeted slices, minimal slice checks, one whole-diff review and fix round, then merge-queue closeout. Use for one coherent stage, not an ordinary small PR."
 ---
 
-# Medaka Throughput Sprint
+# Medaka throughput sprint (v8)
 
-Optimize, in order: continuous eligible-writer occupancy, low rework, then integrated slices per hour. Treat packet preparation as conductor's primary product. Use GitHub issues and comments for durable run state; keep compiler diffs free of process ledgers.
+Run one coherent implementation stage from this session. The priority order is
+implementation throughput, low process cost, then correctness before merge.
+The deliberately small mechanism is serial writers with 3–5 focused checks,
+one whole-diff review at the end, one serial fix round, and the merge queue.
+Do not recreate the retired persistent brain/rear/planner/verifier seats,
+per-slice review, or process-ledger system.
 
-Read [github-protocol.md](references/github-protocol.md), [codex-mapping.md](references/codex-mapping.md), and [run-ledgers.md](references/run-ledgers.md) before admitting sprint. Read [planning.md](references/planning.md) before cutting stage. Read [packet.md](references/packet.md) before dispatching any writer. Read [findings-and-retro.md](references/findings-and-retro.md) before findings intake or closeout.
+Use this skill only when the work naturally cuts into 3–5 dependent slices.
+For fewer than three slices, make an ordinary PR instead. The root conductor
+authors packets and makes routine sequencing decisions; escalate only a choice
+that materially changes accepted semantics or the approved contract.
 
-## Admit one coherent sprint
+## Read only what the phase needs
 
-Select one architecture stage and tightly coupled subitems. Require one reviewable claim, fixed behavior, bounded ownership, ordered slice DAG, and stage-level exit checks. Split or combine tracker nodes when source evidence requires it. Never enlarge scope merely to keep agents busy.
+- Before admitting or cutting a sprint, read [planning.md](references/planning.md).
+- Before writing, executing, or assessing a slice packet, read
+  [packet.md](references/packet.md).
+- Before dispatching an agent or relying on a report, read
+  [transport.md](references/transport.md). It documents the real Codex
+  worktree and fixed-model limits rather than pretending that Claude transport
+  exists here.
 
-Pin base revision. Create conductor integration branch/worktree. Post admission comment on stage issue with scope, non-goals, semantic authority, tentative DAG, expected mirrors, repair-round requirement, and enqueue approval boundary.
+Use `gates` when a gate is involved, `medaka-verification-scope` before
+choosing local checks, `medaka-pr-lifecycle` for PR/queue/merge work, and
+`orchestrator-wrapup` before declaring the sprint complete.
 
-Before first writer, run one disposable isolation smoke probe. First report toplevel/head/status and compare to conductor path. If equal, stop before any git mutation and select `FRONT-SEAT`: conductor creates each writer worktree and every writer command uses that absolute `workdir`. Only inside a proven distinct tree test `/var/tmp` write, throwaway commit, push-by-ref, and remote-ref cleanup. Correct ancestry selects `HARNESS`; wrong head selects `HARNESS+REBASE` with one explicitly licensed SHA-pinned rebase. Anything else blocks for judgment. Never claim isolation before probe.
+## Durable state
 
-For each expected red, record `masks:` with command-derived skipped successor checks and `unmask-by:` scheduled in sprint's first half. `unmask-by: wrap-up` is invalid. After writer #1 is active, build one immutable base-arm depot from pinned base for reviewer/reproducer differentials; copy binaries plus `stdlib/` and `runtime/`, record SHA/path, and never use depot for fix before/after attribution.
+Create `/var/tmp/medaka-sprints/<stage>/` with `CONTRACT.md`, `packets/`, and
+`reports/`. Its only run-state files are:
 
-Derive candidate scope from current issues, source, history, and merged work; inherited plans are claims. Budget property-class review when code's deployment domain adds obligations stage acceptance cannot express: constant-time behavior, hostile-input trust boundaries, crypto/protocol misuse, irreversible effects, or concurrency. Dispatch one property class per `domain-adversary` review.
+- `STATUS.md`: one row per slice with `queued`, `running`, `landed`,
+  `refused`, or `dropped`, plus landed SHA and report path. Update it at every
+  transition.
+- `NOTES.md`: append-only one-line findings, decisions, scope declines, and
+  contract edits. The end review triages these; only a finding that blocks a
+  later slice is fixed immediately or escalated.
 
-Escalate only choices materially changing accepted programs, runtime meaning, type/effect/interface semantics, evaluation order, failure behavior, or cross-backend semantic contract. Reorder, split, defer, or cancel work autonomously when evidence changes.
+Do not add decision, obligation, finding, queue, debt, or friction ledgers.
+Git history plus these two files is the resumable record. The conductor alone
+opens/edits issues and PRs, pushes the integration branch, and verifies every
+GitHub write by readback.
 
-Use one persistent `sprint-brain` judgment seat when rulings become frequent. It reads primary artifacts and writes numbered ruling files; conductor mechanically applies them. Never run two brains concurrently. Rotate brain and rear at phase boundaries and after roughly five landings: successor reads required ledgers first. Keep `sprint-rear` live when slots permit; root conductor remains responsible for transport and final state. Ledgers, not growing daughter context, carry state.
+## Start
 
-## Keep rolling lanes full
+1. Re-derive the candidate from tracker, current source, history, and its
+   semantic authority at one pinned `origin/main` revision. Write the compact
+   contract and create the sprint branch/early draft PR from that revision.
+2. Check `known-red` before diagnosing a red gate. Keep any expected-red
+   statement in contract §6; do not invent a second ledger.
+3. Write `STATUS.md`, author packet 1, and retain only the next packet in
+   preparation while a writer is active.
 
-Maintain lanes in priority order:
+## Slice loop
 
-1. primary writer on eligible slice;
-2. preparation for successor; target prepared-queue depth two while tracking
-   dispatchable depth separately;
-3. prompt integration of completed slices;
-4. high-value parallel verification and lightweight review;
-5. CI on coherent pushed checkpoints;
-6. broader preparation or proven-disjoint extra writers.
+1. Author a one-page packet from the contract. Its base is the current sprint
+   head. Before *every* implementer dispatch, including fixes, fetch the
+   sprint branch and `origin/main`. If main has moved, examine the true
+   merge-base and overlap against stage-owned files; when safe, resync the
+   sprint branch and update the packet base before dispatching. A stale-main
+   block is a conductor transport failure, not routine implementer work.
+2. Dispatch one `sprint_implementer` using the transport reference. While it
+   runs, prepare only the successor packet. Parallel writers are exceptional:
+   the contract must mark them `parallel-ok` and prove current-head
+   disjointness, including generated artifacts and fixtures. Otherwise run
+   serially.
+3. Read the on-disk report, not merely the return line. For `LANDED @sha`,
+   verify the commit and merge that exact SHA into the sprint branch; never
+   merge a mutable branch name. Push, update `STATUS.md`, and continue without
+   waiting for CI. For `REFUSED`, correct the packet or contract and record a
+   one-line note before retrying; if its premise is overturned, drop it. For
+   `BLOCKED`, repair the actual transport/environment fault; stop and report
+   the same block after two attempts. For `SPIKE-DONE`, revise and dispatch the
+   real packet.
 
-Never consume last available child slot with verification while eligible writer waits. Root conductor prepares packets directly; delegate bounded research only when it shortens eligibility path. On writer completion, dispatch successor immediately only when it is dispatchable. A prepared packet is not dispatchable while it overlaps an unreviewed carrier, harness, generated artifact, or acceptance boundary from the completed slice. Run lightweight diff review first for such overlap; overlap builds and verification, not successor edits. Create its writer worktree only after this gate clears.
+## Review, repair, and landing
 
-Designate one dependency-free `independent-refill` packet outside main DAG and prepare it immediately after packet #1. If none exists, record why. Two prepared packets depending on active slice do not protect runway.
+1. When every slice is landed or dropped, dispatch one `sprint_reviewer` on
+   the exact sprint head and merge-base. Give it the contract, `NOTES.md`, and
+   any domain property classes named by the contract. It reviews the complete
+   diff, not individual slices. A second reviewer is allowed only when it has
+   a distinct stated lens.
+2. Triage review and NOTES leads into fix-now, file, or dismiss. Reproduce
+   before filing; apply [W-QUIETER] when a formerly failing path begins to
+   return a value. Record terse rationale in `NOTES.md`.
+3. Stop ordinary work and dispatch small fix packets serially until fix-now is
+   empty. Repeat the same pre-dispatch freshness/resync check. Re-review the
+   final exact head if a fix changes a reviewed claim or invalidates evidence.
+4. Run targeted fmt/lint and the proportional checks chosen through
+   `medaka-verification-scope`; use `make preflight` only when its blast radius
+   is warranted. Mark the PR ready and take it through the lifecycle skill:
+   enqueue, required CI, merge-group result, and fresh-main ancestry of each
+   reported landing SHA.
+5. Update the tracking issue with what landed, what was filed, exact SHAs, and
+   whether successor work is unblocked. Dispatch `sprint_retro`, persist its
+   short report under `reports/`, update terminal `STATUS.md`, then run wrapup.
 
-Use child completion or ten-minute intervals as heartbeat. Record active writer, prepared depth, dispatchable depth, completed/integrated/reworked/discarded slices, writer gaps, integration and verification backlog, bottleneck, and concrete scheduling action. Status-only heartbeat fails contract.
+## Invariants
 
-At phase boundaries, verify ruling sequence and obligation closure mechanically. Pause by writing exact head, active work, dispatchable packets, open findings/refusals/obligations, CI state, and next action; do not rely on live agent context.
-
-## Admit writers by evidence
-
-Slice eligible when writer can reach first edit after targeted named-code reading without architecture discovery or observable-semantic choice. Packet must satisfy [packet.md](references/packet.md).
-
-Eligibility also requires an exact route/read observability matrix. For every migrated semantic field, distinguish shipping/probe routes (including scalar, ref, record, census, or aborting routes as applicable), name the reader reached, and classify evidence as data-correctness, ownership-only, or vacuous. A route with a discarded read is not dispatchable evidence.
-
-One writer remains default. Add writers only after proving disjointness: distinct paths/regions, no shared API/carrier/semantic authority, no shared generated artifacts, no premise dependency, independent checks, deterministic integration order, and explicit collision scan. Different files alone do not prove disjointness. Every writer gets isolated worktree/branch.
-
-If pinned assumptions or owned region changed, writer stops; it does not adapt across another writer's work. Conductor re-admits packet.
-
-After dispatch, packet is immutable. Mid-flight communication has two channels only:
-
-- `fact:` derived advisory evidence; non-binding;
-- `stop:` abort dispatch.
-
-Added sites, edits, checks, or acceptance criteria require packet revision before work starts or successor packet after landing. Writer declines and records any inline amendment. Track every refusal or premise conflict with claimant, claim, evidence, adjudication, and terminal verdict (`UPHELD`, `OVERRULED`, or `PARTIAL`). Zero refusals must remain distinguishable from missing records.
-
-## Integrate and verify continuously
-
-Only conductor integrates. Inspect diff against packet, run cheapest fail-capable integration discriminator, commit one coherent slice, push coherent checkpoints early, and post checkpoint SHA plus receipts/debt to stage issue. Do not let optional prose delay integration or successor dispatch.
-
-Require every non-brain agent response to contain literal `time:` plus `Verdict`, `Evidence`, `Decisions surfaced`, `Deviations from packet`, `Not covered`, and `Friction`; `NONE` is valid, omission is not. Every dispatch names report path. Because read-only Codex roles cannot write `/var/tmp`, conductor writes returned text verbatim to that path, then always runs `sh scripts/sprint-report-check.sh <report>`; never summarize or reconstruct it. Role-specific tables/findings live inside Evidence. Brain uses numbered ruling-file contract instead.
-
-After every behavior-changing landing, run mandatory parallel pair: `sprint-reviewer` as slice breaker attacking claim/counterexamples, and `sprint-conformance-reviewer` checking packet/rulings/spec/prose. Queue pair behind writer when slots clamp; do not defer it to heavy round. For parity landings, run pair when `could move`, nearest miss, or overlap review demands it.
-
-Run remaining verification in spare capacity: direct reproducer and nearest miss, compile/typecheck, changed-boundary differential, relevant eval/native/Wasm mirror, emitter fixpoint, then breadth. CI is parallel verifier. Continue writing while CI runs; stop writer only when failure invalidates packet/shared premise. Record unrun, skipped, inconclusive, stale, or superseded checks as debt, never green.
-
-Generated snapshots, selfproc goldens, seed, and similar exact-head artifacts have one derivation authority. Never merge competing generated outputs.
-
-Mutation execution has one conductor-owned serialized lane. Designers and
-reviewers may specify or audit rows; only `compiler-mutation-verifier` mutates
-source. `sprint-verifier` owns ordinary gates and never substitutes legacy or
-generic rows for caller's matrix. Create a durable receipt directory at
-admission; after final freeze, bind one row per applicable field/class pair.
-Capture each transaction's command/output there with exact transform,
-expected/observed ID, exit state, restore hash, clean porcelain, and process
-proof.
-
-One assigned executable turn without a command or live yielded session is a
-stall: interrupt and re-dispatch with exact packet. Long builds use yielded
-sessions and polling instead of partial completion reports.
-
-## Repair before landing
-
-Repair round is mandatory and budgeted from admission. Stop admitting ordinary slices; preserve one repair writer when actionable findings exist. Run heavy independent adversarial review over exact pushed head, work every `could move` and nearest-miss obligation, reconcile CI, run remaining proportional gates, audit deleted/retained legacy authorities, and update GitHub debt disposition.
-
-Re-derive packet, ruling, debt, and comment claims: counts, SHAs, line numbers, performance figures, executed checks, and required/optional status. Verify touched or relied-on safety prose and structural invariants. Treat filename-only search, one-hop enumeration, and unexecuted mechanism claims as candidates, not evidence.
-
-Push repaired head and obtain clean blocking verdict. Prepare final PR summary and explicit residuals. Ask user before enqueueing full sprint PR. Green CI, prior sprint approval, or permission to push does not imply enqueue approval.
-
-Freeze pushed repair head during final heavy review and mutation. Any head
-movement requires delta review and invalidation analysis before prior receipts
-can carry forward.
-
-Run `orchestrator-wrapup` before declaring completion.
-
-After merge-queue completion, run retrospective against durable artifacts and terminal `merge_group` CI. Attribute each finding to refusal, slice review, domain review, repair review, CI, or nobody. Propose at least two rule retirements with evidence; workflow only grows otherwise. Port accepted durable changes into `.agents/skills/` and `.codex/agents/`, not Claude-only definitions.
-
-## Measure outcomes
-
-Track externally observed timestamps:
-
-- primary-writer active minutes / eligible elapsed minutes;
-- writer gaps and blockers;
-- prepared versus dispatchable queue depth;
-- dispatch-to-first-edit and dispatch-to-coherent-diff latency;
-- diff-to-integration latency;
-- completed, integrated, reworked, and discarded slices;
-- rework minutes per integrated slice;
-- integrated slices per hour;
-- verification/CI overlap.
-
-Optimize integrated coherent slices, not utilization, token output, or diff size. Weak packets that create rework reduce throughput.
+- Pin refs before an operation; shared remotes and `origin/main` move.
+- Never edit compiler source while a build is in flight. Use `MEDAKA_STRICT=1`
+  for probes whose result matters.
+- Rebuild relevant oracles after a merge/rebase before any golden capture or
+  bless. A packet licenses only its named golden paths.
+- No dispatched agent performs GitHub write operations. Every `gh` write by
+  the conductor is read back; queue state and fresh-main ancestry, not command
+  exit status, prove a landing.
