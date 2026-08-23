@@ -1,4 +1,4 @@
-{- | Fixed-ladder public-key and compressed SEC 1 boundary checks. The point
+{- | Fixed-ladder public-key check source and compressed SEC 1 boundary checks. The point
    constants are SEC 2 multiples of G, not values captured from this code. -}
 
 import test.{expectEqual, expectTrue}
