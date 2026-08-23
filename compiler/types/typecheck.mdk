@@ -9777,22 +9777,35 @@ expandSupersTable allDecls =
   setFunConstraintTables (expandSupersCross
     allDecls
     perRun.value.funConstraintsRef.value
-    perRun.value.funConstraintIfacesRef.value)
+    perRun.value.funConstraintIfacesRef.value
+    perRun.value.funConstraintArgsRef.value)
 
 -- as expandSupersTable but operates on the cross-module snapshot pair (so a
 -- cross-module constrained fn gets the same expansion — else it under-fills).
-expandSupersCross : List Decl -> List (String, List Int) -> List (String, List IfaceRef) -> (List (String, List Int), List (String, List IfaceRef))
-expandSupersCross allDecls idsTbl ifacesTbl = (
-  map (expandSupersEntry allDecls ifacesTbl) idsTbl,
+-- S-slot-key-vector (#1866): [argsTbl] joins, for the ID entry only.  The id entry is the
+-- one whose dedup decides emitted dict ARITY, and since the key is now the whole predicate
+-- it needs the same argument vectors the CALL side already expands with
+-- (`inferDictAtFound`'s `zipSlotVecs slots dc.cdArgs`) — otherwise define and call
+-- disagree on the slot count for `(Ix a Char, Ix a Bool) => …`.  The IFACE entry
+-- deliberately does NOT take it: it expands a SYNTHETIC id list purely to reproduce the
+-- same iface SEQUENCE, and feeding it vectors it has no id space for would move that
+-- sequence.  See `expandSupersIfaceEntry`.
+expandSupersCross : List Decl -> List (String, List Int) -> List (String, List IfaceRef) -> List (String, List (List Mono)) -> (List (String, List Int), List (String, List IfaceRef))
+expandSupersCross allDecls idsTbl ifacesTbl argsTbl = (
+  map (expandSupersEntry allDecls ifacesTbl argsTbl) idsTbl,
   map (expandSupersIfaceEntry allDecls) ifacesTbl,
 )
 
 -- expand one (fn, ids) entry: the parallel iface list is looked up by fn name.
-expandSupersEntry : List Decl -> List (String, List IfaceRef) -> (String, List Int) -> (String, List Int)
-expandSupersEntry allDecls ifacesTbl (fn, ids) =
+-- S-slot-key-vector (#1866): so is the parallel ARGUMENT-VECTOR list, which `zipSlotVecs`
+-- pairs onto the slots (a legitimate PREFIX — a slot past its end reads `[]`, i.e. "no
+-- vector recoverable", and keys exactly as it did before this widening).
+expandSupersEntry : List Decl -> List (String, List IfaceRef) -> List (String, List (List Mono)) -> (String, List Int) -> (String, List Int)
+expandSupersEntry allDecls ifacesTbl argsTbl (fn, ids) =
   let ifaces = fromOption [] (lookupAssocS fn ifacesTbl)
-  let pairs = expandSupersPairs allDecls (pairSlots ids ifaces)
-  (fn, map (s => s.csId) pairs)
+  let args = fromOption [] (lookupAssocVecs fn argsTbl)
+  let pairs = expandSupersVecs allDecls (zipSlotVecs (pairSlots ids ifaces) args)
+  (fn, map (s => (fst s).csId) pairs)
 
 -- expand one (fn, ifaces) entry the SAME way, returning the parallel iface names.
 expandSupersIfaceEntry : List Decl -> (String, List IfaceRef) -> (String, List IfaceRef)
@@ -9831,16 +9844,21 @@ expandSupersPairs allDecls declared =
 -- and `impl Ix Int Char`, and first-declared won.  Measured on `sup2.mdk`
 -- (`S-predicate-representation` Note N2): 111 where the spec says 222, exit 0, silent.
 --
--- ⚠️ THIS DOES NOT MOVE WHICH SLOTS EXIST, DELIBERATELY, AND IT MUST NOT.  The vector
--- rides along; `dedupSlots`/`cslotKey` and `superSlotOf`'s `firstOrZero` keying are
--- untouched, so the slot SEQUENCE is byte-identical to before and the two id-free
--- expansion entry points stay in step.  `expandSupersIfaceEntry` in particular expands a
--- SYNTHETIC id list (`idsForIfaceSlots`, slot index) purely to reproduce the same iface
--- SEQUENCE — it has no real tyvar ids and no vectors at all, so keying a super slot on a
--- per-position argument id (the representation fix `superSlotOf`'s `firstOrZero` still
--- owes) would desynchronize it from the id entry and change dict ARITY on one path only.
--- That is why the collapse this slice lands is at the DECLARED-slot producer
--- (`constraintTyVars`) and the super half is a ROUTE fix, not a slot fix.
+-- 🚨 S-slot-key-vector (#1866) MOVED WHICH SLOTS EXIST HERE, deliberately — the sentence
+-- that used to stand in this paragraph ("THIS DOES NOT MOVE WHICH SLOTS EXIST … AND IT
+-- MUST NOT") is now FALSE and is retracted rather than left to mislead.  The dedup is
+-- `dedupSlotVecs` over `cslotVecKey`, i.e. over the WHOLE PREDICATE, so
+-- `(Ix a Char, Ix a Bool) => …` now opens TWO slots where it opened one.  The old wording
+-- was right about the HAZARD and wrong about the remedy: what must not move is the
+-- SYNTHETIC-id path.  `expandSupersIfaceEntry` expands `idsForIfaceSlots` (slot index)
+-- purely to reproduce the same iface SEQUENCE, and it has no real tyvar ids and no vectors
+-- at all — so it goes through `expandSupersPairs`, whose slots all carry `[]`, whose keys
+-- therefore all gain the same constant empty suffix, and whose sequence is consequently
+-- byte-identical to before.  Only the ID entry (`expandSupersEntry`) was given real
+-- vectors, and it is the entry `dictArityOf` sizes from and the one the CALL side
+-- (`inferDictAtFound`, which has expanded WITH vectors since S-dict-arity-contract)
+-- already agreed with slot-for-slot.  `superSlotOf`'s `firstOrZero` id-collapse is
+-- untouched and still owed.
 --
 -- `expandSupersPairs` is a projection of this, so there is ONE fixpoint and the sequence
 -- cannot drift between the vector-carrying and vector-free readers.
@@ -9855,10 +9873,18 @@ expandSupersFix allDecls acc frontier =
   else
     expandSupersFix allDecls next (dropN (listLen acc) next)
 
--- keyed on the SLOT only (`cslotKey`), so this dedups exactly as `dedupSlots` does and
--- the vector never participates in the arity decision.
+-- S-slot-key-vector (#1866): keyed on the WHOLE PREDICATE — slot AND argument vector — so
+-- the vector DOES participate in the arity decision.  `(Ix a Char, Ix a Bool) => …` is two
+-- predicates sharing one interface spelling and one lead tyvar id; keying on `cslotKey`
+-- alone merged them into ONE dict slot and both `ix x 'z'` and `ix x True` routed through
+-- it (444 where the spec says 333, silently, all three engines agreeing).  `(Shw a, Shw a)`
+-- is the case this must still collapse — genuinely the SAME predicate written twice — and
+-- it does, because its two vectors key identically.
+-- ⚠️ The two id-free expansion entry points stay in step BECAUSE the widening is a SUFFIX:
+-- `expandSupersIfaceEntry` carries no vectors at all (`expandSupersPairs`), so every one of
+-- its keys gains the same constant empty suffix and its slot SEQUENCE is byte-unchanged.
 dedupSlotVecs : List (CSlot, List Mono) -> List (CSlot, List Mono)
-dedupSlotVecs xs = dedupBy (p => cslotKey (fst p)) xs
+dedupSlotVecs xs = dedupBy cslotVecKey xs
 
 -- pair each declared slot with the argument vector its signature recorded.  The vector
 -- list is a PREFIX (`keptConstraintArgs`; and `registerInferredFor` records `[]` for a
@@ -9951,16 +9977,32 @@ dedupPairs xs = dedupBy slotKey xs
 slotKey : (String, Int) -> String
 slotKey (iface, id) = lenKey iface ++ intToString id
 
--- U1b (#1482): the `CSlot` analogue.  ⚠️ Keyed on the SPELLING, deliberately — this
--- dedup decides how many dict slots a constrained fn has, so keying it on identity
--- would give two same-spelled interfaces two slots where today they share one, moving
--- emitted dict ARITY.  That is a separate judgment with a different blast radius
--- (#1425's ground), and U1b does not make it.
-dedupSlots : List CSlot -> List CSlot
-dedupSlots xs = dedupBy cslotKey xs
-
+-- U1b (#1482): the `CSlot` analogue's key.  ⚠️ Keyed on the interface SPELLING,
+-- deliberately — this key feeds the dedup that decides how many dict slots a constrained
+-- fn has, so keying it on identity would give two same-spelled interfaces two slots where
+-- today they share one, moving emitted dict ARITY.  That is a separate judgment with a
+-- different blast radius (#1425's ground), and neither U1b nor S-slot-key-vector makes it:
+-- the latter widens on the predicate's ARGUMENT VECTOR (`cslotVecKey`), never on identity.
+-- ⚠️ NOT a dedup key on its own any more — the only `dedupBy` over slots is
+-- `dedupSlotVecs`, over `cslotVecKey`.  The vector-free `dedupSlots` that used to live
+-- here was deleted with #1866: keeping it would have let a reader dedup slots without
+-- their vectors, which is exactly the collapse that slice removed.
 cslotKey : CSlot -> String
 cslotKey s = lenKey s.csIface.irName ++ intToString s.csId
+
+-- S-slot-key-vector (#1866): THE dict-slot identity — `cslotKey` plus the predicate's
+-- argument vector.  Exactly the widening `vecOblKey` already carries on the obligation
+-- channel, for the same reason and with the same per-argument encoding (`oblArgKey`): a
+-- ground position keys on its head tycon, a tyvar position keys as "*" because its id is
+-- already in `cslotKey`.  `|` cannot appear in the prefix (a `lenKey` netstring followed
+-- by decimal digits), so the encoding is injective over the two components.
+-- ⚠️ An EMPTY vector contributes a constant empty suffix, so a caller that carries no
+-- vectors at all (`expandSupersPairs`, and hence `expandSupersIfaceEntry`'s synthetic-id
+-- expansion) keys order-equivalently to the pre-widening `cslotKey` — which is what keeps
+-- that path's slot sequence byte-identical.  It is also why widening on a PARTIAL vector
+-- supply degrades to today's collapse rather than to a wrong slot count.
+cslotVecKey : (CSlot, List Mono) -> String
+cslotVecKey (s, vec) = "\{cslotKey s}|\{joinWith "," (map oblArgKey vec)}"
 
 -- the type a method ultimately returns (strip its argument arrows); the impl is
 -- chosen by this type's head tycon (pure : a -> f a → f a; empty : f a → f a)
@@ -15522,7 +15564,11 @@ discoverPromotedModules runtimeDecls coreDecls modules rpNames argNames =
   -- #994 (B-3-a): kept as ONE tuple from here to the write (`setCrossFunConstraintTables`)
   -- rather than unbundled into two locals.  ⚠️ The expansion must be computed HERE, before
   -- `resetState`, and only the WRITE moved past it.
-  let expandedPair = expandSupersCross joint snapshot snapshotIfaces
+  -- S-slot-key-vector (#1866): the same promoted filter over the VECTOR table, so the
+  -- snapshot expansion keys its slots on the whole predicate exactly as the per-run one
+  -- does.  Read here, before `resetState`, with the other three.
+  let snapshotArgs = promotedConstraints promoted perRun.value.funConstraintArgsRef.value
+  let expandedPair = expandSupersCross joint snapshot snapshotIfaces snapshotArgs
   let _ = resetState ()
   typeErrorsSticky := savedSticky
   let _ = wRestore perRun.value.typeErrors savedErrSnap
@@ -27255,14 +27301,22 @@ setFunConstraintEntry m slots argsOpt =
   -- B-2.2-f (#1113): the DECLARED-prefix sidecar, written in the SAME op as the ids it
   -- describes so the two can never be written apart.
   --
-  -- 🚨 `dedupSlots`, not `listLen slots` — MEASURED, not defensive.  `expandSupersPairs`
-  -- starts from `dedupSlots declared`, so a signature whose context names one interface
-  -- twice on one tyvar (`twice : (Shw a, Shw a) => a -> Int`) contributes ONE slot where
-  -- `slots` holds two.  Recording the unshrunk length would put `index < k` one slot past
-  -- the real declared prefix and mark the first APPENDED super slot as declared — the
-  -- unsafe direction, silently.
+  -- 🚨 The DEDUPED length, not `listLen slots` — MEASURED, not defensive.  The expansion
+  -- starts from the deduped declared slots, so a signature whose context names one
+  -- interface twice on one tyvar (`twice : (Shw a, Shw a) => a -> Int`) contributes ONE
+  -- slot where `slots` holds two.  Recording the unshrunk length would put `index < k` one
+  -- slot past the real declared prefix and mark the first APPENDED super slot as declared —
+  -- the unsafe direction, silently.
+  -- 🚨 S-slot-key-vector (#1866): it must be the SAME dedup the expansion runs, and that
+  -- is now `dedupSlotVecs` over the slots PAIRED WITH THEIR VECTORS.  Keeping the
+  -- vector-free dedup that used to stand here (`dedupSlots`, now deleted — see
+  -- `cslotKey`) would under-count `(Ix a Char, Ix a Bool) => …` (one
+  -- where the expansion now yields two) and re-introduce the same off-by-one in the other
+  -- direction.  [argsOpt] is the very prefix `expandSupersEntry` reads back out of
+  -- `funConstraintArgsRef`, so the two dedups see identical input; `None` (no vector row
+  -- at all) yields `[]` per slot, i.e. exactly the pre-widening count.
   let _ = setRef perRun.value.funConstraintDeclaredRef
-    ((m, CDPLen (listLen (dedupSlots slots)))::perRun.value.funConstraintDeclaredRef.value)
+    ((m, CDPLen (listLen (dedupSlotVecs (zipSlotVecs slots (fromOption [] argsOpt)))))::perRun.value.funConstraintDeclaredRef.value)
   perRun.value.funConstraintIfacesRef := ((m, map (s => s.csIface) slots)::perRun.value.funConstraintIfacesRef.value)
   match argsOpt
     Some args => (perRun.value.funConstraintArgsRef := ((m, args)::perRun.value.funConstraintArgsRef.value))

@@ -449,6 +449,7 @@ containsVecObl : VecObl -> List VecObl -> Bool
 countInSubst : List Int -> List (Int, Mono) -> Int
 crossRun : Ref CrossRun
 cslotKey : CSlot -> String
+cslotVecKey : (CSlot, List Mono) -> String
 ctorCandImported : List Decl -> String -> (Ident, String, Scheme) -> Bool
 ctorCandScheme : (Ident, String, Scheme) -> Scheme
 ctorHeadIsUpper : String -> Bool
@@ -535,7 +536,6 @@ dedupPairs : List (String, Int) -> List (String, Int)
 dedupPairsById : List (Int, String) -> List (Int, String)
 dedupPairsByIdGo : List (Int, String) -> List Int -> List (Int, String)
 dedupSlotVecs : List (CSlot, List Mono) -> List (CSlot, List Mono)
-dedupSlots : List CSlot -> List CSlot
 dedupVecObls : List VecObl -> List VecObl
 defaultAmbiguousNum : List UObligation -> Mono -> Unit
 defaultBodyLocalNum : List UObligation -> Mono -> Unit
@@ -683,8 +683,8 @@ erredDuring : (Unit -> a) -> (Bool, a)
 exemptInPlaceIndexMutHeads : List String
 exitLevel : Unit -> Unit
 expandIoInBound : List Atom -> List Atom
-expandSupersCross : List Decl -> List (String, List Int) -> List (String, List IfaceRef) -> (List (String, List Int), List (String, List IfaceRef))
-expandSupersEntry : List Decl -> List (String, List IfaceRef) -> (String, List Int) -> (String, List Int)
+expandSupersCross : List Decl -> List (String, List Int) -> List (String, List IfaceRef) -> List (String, List (List Mono)) -> (List (String, List Int), List (String, List IfaceRef))
+expandSupersEntry : List Decl -> List (String, List IfaceRef) -> List (String, List (List Mono)) -> (String, List Int) -> (String, List Int)
 expandSupersFix : List Decl -> List (CSlot, List Mono) -> List (CSlot, List Mono) -> List (CSlot, List Mono)
 expandSupersIfaceEntry : List Decl -> (String, List IfaceRef) -> (String, List IfaceRef)
 expandSupersPairs : List Decl -> List CSlot -> List CSlot
