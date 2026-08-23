@@ -298,3 +298,15 @@ or signing call graph.
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/scalar_vectors.sh
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/inlang_test_oracle.sh
 ```
+
+## secp256k1 points (S-point-core, #1700)
+
+`pds/lib/secp256k1.mdk` introduces opaque affine and Jacobian point carriers,
+the SEC 2 generator, canonical infinity `(0, 1, 0)`, and the contract's
+compute-and-select complete addition/doubling formulas. Its in-language suite
+checks the infinity, equal, opposite, and ordinary-generator paths while also
+asserting that every infinity result uses the canonical coordinates.
+
+```sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/inlang_test_oracle.sh
+```

@@ -1,0 +1,154 @@
+{- | Opaque affine/Jacobian secp256k1 point carriers and complete Jacobian
+   arithmetic. `JPoint X Y Z` represents `(X / Z^2, Y / Z^3)` and infinity is
+   always canonicalized to `(0, 1, 0)`.
+
+   `pointAddComplete` implements signing contract §3.2: every call computes
+   generic addition, doubling, infinity, and all condition bits before the
+   arithmetic selection precedence generic -> equal -> opposite -> qInf ->
+   pInf. Point-path subtraction is add-of-`feNegateCt` only. -}
+
+import lib.field.{
+  Fe,
+  feZero,
+  feOne,
+  feAdd,
+  feMul,
+  feSquare,
+  feZeroBit,
+  feEqualBit,
+  feSelect,
+  feNegateCt,
+  feFromBytesReduce,
+}
+
+-- | Affine coordinates are a distinct opaque carrier; conversion is a later
+--   slice, so no affine/Jacobian representation boundary is exposed here.
+export data AffinePoint = AffinePoint Fe Fe
+
+-- | Jacobian coordinates with a module-private constructor.
+export data JPoint = JPoint Fe Fe Fe
+
+generatorX : Fe
+generatorX = feFromBytesReduce
+  [|
+    0x79, 0xbe, 0x66, 0x7e, 0xf9, 0xdc, 0xbb, 0xac, 0x55, 0xa0, 0x62, 0x95,
+    0xce, 0x87, 0x0b, 0x07, 0x02, 0x9b, 0xfc, 0xdb, 0x2d, 0xce, 0x28, 0xd9,
+    0x59, 0xf2, 0x81, 0x5b, 0x16, 0xf8, 0x17, 0x98,
+  |]
+
+generatorY : Fe
+generatorY = feFromBytesReduce
+  [|
+    0x48, 0x3a, 0xda, 0x77, 0x26, 0xa3, 0xc4, 0x65, 0x5d, 0xa4, 0xfb, 0xfc,
+    0x0e, 0x11, 0x08, 0xa8, 0xfd, 0x17, 0xb4, 0x48, 0xa6, 0x85, 0x54, 0x19,
+    0x9c, 0x47, 0xd0, 0x8f, 0xfb, 0x10, 0xd4, 0xb8,
+  |]
+
+-- | The canonical infinity `(0, 1, 0)`.
+export
+pointInfinity : JPoint
+pointInfinity = JPoint feZero feOne feZero
+
+-- | SEC 2's secp256k1 generator `(Gx, Gy, 1)`.
+export
+pointGenerator : JPoint
+pointGenerator = JPoint generatorX generatorY feOne
+
+fieldSubCt : Fe -> Fe -> Fe
+fieldSubCt a b = feAdd a (feNegateCt b)
+
+fieldDouble : Fe -> Fe
+fieldDouble a = feAdd a a
+
+fieldTriple : Fe -> Fe
+fieldTriple a = feAdd a (fieldDouble a)
+
+fieldEightfold : Fe -> Fe
+fieldEightfold a = fieldDouble (fieldDouble (fieldDouble a))
+
+-- | Select all coordinates: 0 selects `a`, 1 selects `b`.
+export
+pointSelect : Int -> JPoint -> JPoint -> JPoint
+pointSelect bit (JPoint ax ay az) (JPoint bx by bz) =
+  JPoint (feSelect bit ax bx) (feSelect bit ay by) (feSelect bit az bz)
+
+pointCanonicalize : JPoint -> JPoint
+pointCanonicalize (p@(JPoint _ _ z)) = pointSelect (feZeroBit z) p pointInfinity
+
+-- | Projective equality observation, requiring no inversion.
+export
+pointEqual : JPoint -> JPoint -> Bool
+pointEqual (JPoint x1 y1 z1) (JPoint x2 y2 z2) =
+  let z1z1 = feSquare z1
+  let z2z2 = feSquare z2
+  let xEqual = feEqualBit (feMul x1 z2z2) (feMul x2 z1z1)
+  let yEqual = feEqualBit (feMul y1 (feMul z2 z2z2)) (feMul y2 (feMul z1 z1z1))
+  xEqual * yEqual == 1
+
+-- | Compare a non-infinity point with supplied affine coordinates. This is a
+--   test/internal observation, not affine conversion.
+export
+pointEqualsAffine : JPoint -> Fe -> Fe -> Bool
+pointEqualsAffine (JPoint px py pz) x y =
+  let pz2 = feSquare pz
+  let xEqual = feEqualBit px (feMul x pz2)
+  let yEqual = feEqualBit py (feMul y (feMul pz pz2))
+  xEqual * yEqual == 1
+
+-- | True only for the unique `(0, 1, 0)` infinity encoding.
+export
+pointIsCanonicalInfinity : JPoint -> Bool
+pointIsCanonicalInfinity (JPoint x y z) =
+  feEqualBit x feZero * feEqualBit y feOne * feZeroBit z == 1
+
+-- | Additive inverse, retaining the canonical infinity representative.
+export
+pointNegate : JPoint -> JPoint
+pointNegate (JPoint x y z) = pointCanonicalize (JPoint x (feNegateCt y) z)
+
+-- | One fixed formula for ordinary points, Y=0, and infinity inputs.
+export
+pointDoubleComplete : JPoint -> JPoint
+pointDoubleComplete (JPoint x1 y1 z1) =
+  let a = feSquare x1
+  let b = feSquare y1
+  let c = feSquare b
+  let d = fieldDouble (fieldSubCt (fieldSubCt (feSquare (feAdd x1 b)) a) c)
+  let e = fieldTriple a
+  let f = feSquare e
+  let x3 = fieldSubCt f (fieldDouble d)
+  let y3 = fieldSubCt (feMul e (fieldSubCt d x3)) (fieldEightfold c)
+  let z3 = fieldDouble (feMul y1 z1)
+  pointCanonicalize (JPoint x3 y3 z3)
+
+-- | Complete addition by unconditional candidates then arithmetic selection.
+export
+pointAddComplete : JPoint -> JPoint -> JPoint
+pointAddComplete (p@(JPoint x1 y1 z1)) (q@(JPoint x2 y2 z2)) =
+  let z1z1 = feSquare z1
+  let z2z2 = feSquare z2
+  let u1 = feMul x1 z2z2
+  let u2 = feMul x2 z1z1
+  let s1 = feMul y1 (feMul z2 z2z2)
+  let s2 = feMul y2 (feMul z1 z1z1)
+  let h = fieldSubCt u2 u1
+  let i = feSquare (fieldDouble h)
+  let j = feMul h i
+  let r = fieldDouble (fieldSubCt s2 s1)
+  let v = feMul u1 i
+  let genericX = fieldSubCt (fieldSubCt (feSquare r) j) (fieldDouble v)
+  let genericY = fieldSubCt (feMul r (fieldSubCt v genericX)) (fieldDouble (feMul s1 j))
+  let genericZ = feMul (fieldSubCt (fieldSubCt (feSquare (feAdd z1 z2)) z1z1) z2z2) h
+  let generic = JPoint genericX genericY genericZ
+  let doubled = pointDoubleComplete p
+  let pInf = feZeroBit z1
+  let qInf = feZeroBit z2
+  let sameX = feZeroBit h
+  let sameY = feZeroBit r
+  let equal = sameX * sameY
+  let opposite = sameX * (1 - sameY)
+  let afterEqual = pointSelect equal generic doubled
+  let afterOpposite = pointSelect opposite afterEqual pointInfinity
+  let afterQInfinity = pointSelect qInf afterOpposite p
+  let afterPInfinity = pointSelect pInf afterQInfinity q
+  pointCanonicalize afterPInfinity
