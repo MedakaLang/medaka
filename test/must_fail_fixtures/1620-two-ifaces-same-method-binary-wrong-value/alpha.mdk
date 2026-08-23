@@ -1,8 +1,0 @@
--- #1620, module 1 of 2. Declares interface `Alpha`, whose method `ping` returns a String.
---
--- The entry imports only the INTERFACE NAME (`import alpha.{Alpha}`), never the method
--- name, so `Alpha.ping` is not bound to any spelling in the entry. It reaches the selector
--- only through the impl universe -- which is the point: the candidate set is keyed by bare
--- METHOD NAME, so this impl still competes for an occurrence that names Beta's method.
-export interface Alpha a where
-  ping : a -> String
