@@ -1,0 +1,29 @@
+{- | Native closure probe for the secret-key ingress and composed public-key
+   output. It intentionally excludes public compressed-key decoding: that path
+   has public wire-input branches and is outside this native secret claim. -}
+
+import lib.sign.{secretKeyFromBytes, publicKeyCompressed, publicKeyForSecret}
+
+secretOne : Array Int
+secretOne = [|
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 1,
+|]
+
+generatorCompressed : Array Int
+generatorCompressed = [|
+  0x02, 0x79, 0xbe, 0x66, 0x7e, 0xf9, 0xdc, 0xbb, 0xac, 0x55, 0xa0, 0x62, 0x95,
+  0xce, 0x87, 0x0b, 0x07, 0x02, 0x9b, 0xfc, 0xdb, 0x2d, 0xce, 0x28, 0xd9, 0x59,
+  0xf2, 0x81, 0x5b, 0x16, 0xf8, 0x17, 0x98,
+|]
+
+main = match secretKeyFromBytes secretOne
+  Err message =>
+    panic "constant_time_public_key: rejected fixed secret: \{message}"
+  Ok secret =>
+    let publicWord = arrayLength secretOne
+    let runtimeBitsOk = bitXor publicWord publicWord == 0
+    if runtimeBitsOk && publicKeyCompressed (publicKeyForSecret secret) == generatorCompressed then
+      println "PASS public-key-closure"
+    else
+      panic "constant_time_public_key: composed public key mismatch"

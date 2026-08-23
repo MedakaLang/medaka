@@ -12,8 +12,8 @@ MEDAKA_STRICT=1 "$MEDAKA" run "$SOURCE" > "$WORK/eval.out" 2> "$WORK/eval.err"
 MEDAKA_STRICT=1 "$MEDAKA" build "$SOURCE" -o "$WORK/native" > "$WORK/native-build.log" 2>&1
 "$WORK/native" > "$WORK/native.out" 2> "$WORK/native.err"
 
-[ "$(wc -l < "$WORK/eval.out")" -eq 4 ] || {
-  echo 'FAIL: eval parity probe did not emit four rows' >&2
+[ "$(wc -l < "$WORK/eval.out")" -eq 5 ] || {
+  echo 'FAIL: eval parity probe did not emit five rows' >&2
   exit 1
 }
 cmp "$WORK/eval.out" "$WORK/native.out" || {
@@ -61,10 +61,10 @@ if [ -x "$WASM_EMITTER" ] && command -v node >/dev/null 2>&1 && command -v wasm-
 
   run_wasm_corpus S-field "$ROOT/pds/test/field_vectors_main.mdk" 944
   run_wasm_corpus S-scalar "$ROOT/pds/test/scalar_vectors_main.mdk" 1028
-  echo 'PASS: PDS constant-time reduction value parity — eval == native == Wasm (4 public rows, full Wasm corpora)'
+  echo 'PASS: PDS constant-time reduction/key value parity — eval == native == Wasm (5 public rows, full Wasm corpora)'
 elif [ "${MEDAKA_REQUIRE_WASM:-0}" = 1 ]; then
   echo 'FAIL: Wasm parity is required but emitter/node/wasm-tools is unavailable' >&2
   exit 1
 else
-  echo 'PASS: PDS constant-time reduction value parity — eval == native (4 rows); Wasm unavailable'
+  echo 'PASS: PDS constant-time reduction/key value parity — eval == native (5 rows); Wasm unavailable'
 fi
