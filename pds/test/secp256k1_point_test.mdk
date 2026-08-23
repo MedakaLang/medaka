@@ -1,0 +1,91 @@
+{- | Structural complete-Jacobian checks.  `2G` and `3G` are SEC 2 multiples
+   of the published generator, used as inputs to these group-law assertions. -}
+
+import test.{expectTrue}
+import lib.field.{Fe, feFromBytesReduce}
+import lib.secp256k1.{
+  pointInfinity,
+  pointGenerator,
+  pointAddComplete,
+  pointDoubleComplete,
+  pointNegate,
+  pointEqual,
+  pointEqualsAffine,
+  pointIsCanonicalInfinity,
+}
+
+twoGX : Fe
+twoGX = feFromBytesReduce
+  [|
+    0xc6, 0x04, 0x7f, 0x94, 0x41, 0xed, 0x7d, 0x6d, 0x30, 0x45, 0x40, 0x6e,
+    0x95, 0xc0, 0x7c, 0xd8, 0x5c, 0x77, 0x8e, 0x4b, 0x8c, 0xef, 0x3c, 0xa7,
+    0xab, 0xac, 0x09, 0xb9, 0x5c, 0x70, 0x9e, 0xe5,
+  |]
+
+twoGY : Fe
+twoGY = feFromBytesReduce
+  [|
+    0x1a, 0xe1, 0x68, 0xfe, 0xa6, 0x3d, 0xc3, 0x39, 0xa3, 0xc5, 0x84, 0x19,
+    0x46, 0x6c, 0xea, 0xee, 0xf7, 0xf6, 0x32, 0x65, 0x32, 0x66, 0xd0, 0xe1,
+    0x23, 0x64, 0x31, 0xa9, 0x50, 0xcf, 0xe5, 0x2a,
+  |]
+
+threeGX : Fe
+threeGX = feFromBytesReduce
+  [|
+    0xf9, 0x30, 0x8a, 0x01, 0x92, 0x58, 0xc3, 0x10, 0x49, 0x34, 0x4f, 0x85,
+    0xf8, 0x9d, 0x52, 0x29, 0xb5, 0x31, 0xc8, 0x45, 0x83, 0x6f, 0x99, 0xb0,
+    0x86, 0x01, 0xf1, 0x13, 0xbc, 0xe0, 0x36, 0xf9,
+  |]
+
+threeGY : Fe
+threeGY = feFromBytesReduce
+  [|
+    0x38, 0x8f, 0x7b, 0x0f, 0x63, 0x2d, 0xe8, 0x14, 0x0f, 0xe3, 0x37, 0xe6,
+    0x2a, 0x37, 0xf3, 0x56, 0x65, 0x00, 0xa9, 0x99, 0x34, 0xc2, 0x23, 0x1b,
+    0x6c, 0xb9, 0xfd, 0x75, 0x84, 0xb8, 0xe6, 0x72,
+  |]
+
+test "infinity plus infinity is canonical infinity" =
+  let result = pointAddComplete pointInfinity pointInfinity
+  expectTrue
+    (pointEqual result pointInfinity && pointIsCanonicalInfinity result)
+
+test "infinity plus G is G" =
+  expectTrue (pointEqual
+    (pointAddComplete pointInfinity pointGenerator)
+    pointGenerator)
+
+test "G plus infinity is G" =
+  expectTrue (pointEqual
+    (pointAddComplete pointGenerator pointInfinity)
+    pointGenerator)
+
+test "G plus G is the SEC 2 2G point" =
+  expectTrue (pointEqualsAffine
+    (pointAddComplete pointGenerator pointGenerator)
+    twoGX
+    twoGY)
+
+test "G plus 2G is the SEC 2 3G point" =
+  let twoG = pointDoubleComplete pointGenerator
+  expectTrue (pointEqualsAffine
+    (pointAddComplete pointGenerator twoG)
+    threeGX
+    threeGY)
+
+test "G plus negative G is canonical infinity" =
+  let result = pointAddComplete pointGenerator (pointNegate pointGenerator)
+  expectTrue
+    (pointEqual result pointInfinity && pointIsCanonicalInfinity result)
+
+test "doubling G is the SEC 2 2G point" =
+  expectTrue (pointEqualsAffine
+    (pointDoubleComplete pointGenerator)
+    twoGX
+    twoGY)
+
+test "doubling infinity is canonical infinity" =
+  let result = pointDoubleComplete pointInfinity
+  expectTrue
+    (pointEqual result pointInfinity && pointIsCanonicalInfinity result)

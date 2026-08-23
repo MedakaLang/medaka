@@ -12,8 +12,8 @@ MEDAKA_STRICT=1 "$MEDAKA" run "$SOURCE" > "$WORK/eval.out" 2> "$WORK/eval.err"
 MEDAKA_STRICT=1 "$MEDAKA" build "$SOURCE" -o "$WORK/native" > "$WORK/native-build.log" 2>&1
 "$WORK/native" > "$WORK/native.out" 2> "$WORK/native.err"
 
-[ "$(wc -l < "$WORK/eval.out")" -eq 4 ] || {
-  echo 'FAIL: eval parity probe did not emit four rows' >&2
+[ "$(wc -l < "$WORK/eval.out")" -eq 5 ] || {
+  echo 'FAIL: eval parity probe did not emit five rows' >&2
   exit 1
 }
 cmp "$WORK/eval.out" "$WORK/native.out" || {
@@ -24,7 +24,12 @@ cmp "$WORK/eval.out" "$WORK/native.out" || {
 WASM_EMITTER=${MEDAKA_WASM_EMITTER:-"$ROOT/test/bin/wasm_emit_modules_main"}
 if [ -x "$WASM_EMITTER" ] && command -v node >/dev/null 2>&1 && command -v wasm-tools >/dev/null 2>&1; then
   MEDAKA_WASM_EMITTER="$WASM_EMITTER" MEDAKA_STRICT=1 "$MEDAKA" build --target wasm "$SOURCE" -o "$WORK/probe.wasm" > "$WORK/wasm-build.log" 2>&1
-  node "$ROOT/test/wasm/run.js" "$WORK/probe.wasm" > "$WORK/wasm.out" 2> "$WORK/wasm.err"
+  node "$ROOT/test/wasm/run.js" "$WORK/probe.wasm" > "$WORK/wasm-raw.out" 2> "$WORK/wasm.err"
+  [ "$(wc -l < "$WORK/wasm-raw.out")" -eq 6 ] && [ "$(tail -1 "$WORK/wasm-raw.out")" = 0 ] || {
+    echo 'FAIL: Wasm parity probe did not emit five rows plus the runner result' >&2
+    exit 1
+  }
+  sed '$d' "$WORK/wasm-raw.out" > "$WORK/wasm.out"
   cmp "$WORK/native.out" "$WORK/wasm.out" || {
     echo 'FAIL: PDS reduction values differ between native and Wasm' >&2
     exit 1
@@ -61,10 +66,10 @@ if [ -x "$WASM_EMITTER" ] && command -v node >/dev/null 2>&1 && command -v wasm-
 
   run_wasm_corpus S-field "$ROOT/pds/test/field_vectors_main.mdk" 944
   run_wasm_corpus S-scalar "$ROOT/pds/test/scalar_vectors_main.mdk" 1028
-  echo 'PASS: PDS constant-time reduction value parity — eval == native == Wasm (4 public rows, full Wasm corpora)'
+  echo 'PASS: PDS constant-time reduction/key value parity — eval == native == Wasm (5 public rows, full Wasm corpora)'
 elif [ "${MEDAKA_REQUIRE_WASM:-0}" = 1 ]; then
   echo 'FAIL: Wasm parity is required but emitter/node/wasm-tools is unavailable' >&2
   exit 1
 else
-  echo 'PASS: PDS constant-time reduction value parity — eval == native (4 rows); Wasm unavailable'
+  echo 'PASS: PDS constant-time reduction/key value parity — eval == native (5 rows); Wasm unavailable'
 fi

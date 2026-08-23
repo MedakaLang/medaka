@@ -1,0 +1,136 @@
+import lib.scalar.{scFromBytes}
+import lib.secp256k1.{
+  JPoint,
+  pointInfinity,
+  pointGenerator,
+  pointDoubleComplete,
+  pointAddComplete,
+  pointNegate,
+  pointEqual,
+  pointCompressed,
+  pointFromCompressed,
+  publicPointForSecret,
+  pointRawFixedGeneratorIsCanonicalInfinityForTest,
+}
+import array as A
+import hex.{decode, encode}
+import io.{readLines}
+import string.{split, trim}
+
+n : String
+n = "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"
+g : String
+g = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+two : String
+two = "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5"
+neg : String
+neg = "0379be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+three : String
+three = "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
+
+bytes : String -> Array Int
+bytes s = match decode s
+  Ok b => b
+  Err _ => panic "point corpus malformed hex"
+
+token : String -> Bool
+token s =
+  if s == "INF" then True
+  else match pointFromCompressed (bytes s)
+    Ok p => encode (pointCompressed p) == s
+    Err _ => False
+
+known : String -> Result String JPoint
+known s =
+  if s == "INF" then
+    Ok pointInfinity
+  else if s == g then
+    Ok pointGenerator
+  else if s == two then
+    Ok (pointDoubleComplete pointGenerator)
+  else if s == three then
+    Ok (pointAddComplete pointGenerator (pointDoubleComplete pointGenerator))
+  else if s == neg then
+    Ok (pointNegate pointGenerator)
+  else
+    Err "unknown public point token"
+
+bad : Array Int -> String -> <IO> Unit
+bad c label =
+  let () = A.set 1 (c[1] + 1) c
+  println "FAIL\t\{label}"
+
+good : Array Int -> String -> <IO> Unit
+good c label =
+  let () = A.set 0 (c[0] + 1) c
+  println "PASS\t\{label}"
+
+mul : Array Int -> String -> String -> String -> <IO> Unit
+mul c scalar expected label =
+  if not (token expected) then bad c label
+  else
+    if scalar == n && expected == "INF" then match pointRawFixedGeneratorIsCanonicalInfinityForTest (bytes scalar)
+      Ok True => good c "\{label} raw-ladder canonical-infinity"
+      _ => bad c label
+    else match scFromBytes (bytes scalar)
+      Ok x =>
+        if expected /= "INF" && encode (pointCompressed (publicPointForSecret x)) == expected then
+          good c label
+        else
+          bad c label
+      Err _ => bad c label
+
+add : Array Int -> String -> String -> String -> String -> <IO> Unit
+add c a b expected label =
+  if not (token a && token b && token expected) then bad c label
+  else match known a
+    Err _ => bad c label
+    Ok x => match known b
+      Err _ => bad c label
+      Ok y => match known expected
+        Err _ => bad c label
+        Ok z =>
+          if pointEqual (pointAddComplete x y) z then
+            good c label
+          else
+            bad c label
+
+dbl : Array Int -> String -> String -> String -> <IO> Unit
+dbl c a expected label =
+  if not (token a && token expected) then bad c label
+  else match known a
+    Err _ => bad c label
+    Ok x => match known expected
+      Err _ => bad c label
+      Ok z =>
+        if pointEqual (pointDoubleComplete x) z then
+          good c label
+        else
+          bad c label
+
+line : Array Int -> Int -> String -> <IO> Unit
+line c i s = match split " " (trim s)
+  ["mul", a, z] => mul c a z "row \{intToString i}"
+  ["add", a, b, z] => add c a b z "row \{intToString i}"
+  ["double", a, z] => dbl c a z "row \{intToString i}"
+  _ => bad c "row \{intToString i}"
+
+go : Array Int -> List String -> Int -> <IO> Unit
+go c [] i = ()
+go c (x::xs) i =
+  let () = line c i x
+  go c xs (i + 1)
+
+main : <IO, Env, FileRead "_"> Unit
+main = match args ()
+  [file] => match readLines file
+    Err e => panic "cannot read point corpus: \{e}"
+    Ok rows =>
+      let c = arrayMake 2 0
+      let () = go c rows 1
+      let () = println "counted: \{intToString c[0]}/\{intToString (c[0] + c[1])} rows ok"
+      if c[1] == 0 && c[0] > 0 then println "TOTAL: PASS"
+      else
+        let () = println "TOTAL: FAIL"
+        exit 1
+  _ => panic "usage: secp256k1_point_vectors_main <corpus>"
