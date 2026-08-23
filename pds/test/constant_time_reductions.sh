@@ -68,21 +68,40 @@ check_emitted_helpers() {
   shift 2
   mkdir -p "$dir"
   for spec in "$@"; do
-    name=${spec%:*}
-    expected=${spec##*:}
+    name=${spec%%:*}
+    rest=${spec#*:}
+    expected=${rest%%:*}
+    expected_indices=${rest##*:}
     body="$dir/$name.ll"
     extract_function "$name" "$ir" "$body"
-    helper_ir_ok "$body" "$expected" || fail "$name native IR operation/control shape"
+    helper_ir_ok "$body" "$expected" "$expected_indices" || fail "$name native IR operation/control shape"
   done
 }
 
 helper_ir_ok() {
   body=$1
   expected=$2
+  expected_indices=$3
   branches=$(grep -c 'br i1' "$body" || true)
   comparisons=$(grep -E -c 'call i64 @mdk_value_(eq|ne|lt|le|gt|ge)\(' "$body" || true)
   hashes=$(grep -F -c 'call i64 @mdk_hash_bool(' "$body" || true)
-  [ "$branches" -eq "$expected" ] && [ "$comparisons" -eq "$expected" ] && [ "$hashes" -eq 0 ]
+  indices=$(grep -F -c 'call i64 @mdk_impl_Array_index(' "$body" || true)
+  [ "$branches" -eq "$expected" ] && [ "$comparisons" -eq "$expected" ] && [ "$hashes" -eq 0 ] && [ "$indices" -eq "$expected_indices" ]
+}
+
+source_indices_ok() {
+  body=$1
+  awk '
+    {
+      line=$0
+      while (match(line, /\[[^]]+\]/)) {
+        idx=substr(line, RSTART + 1, RLENGTH - 2)
+        if (idx != "0" && idx != "1" && idx != "9" && idx != "i" &&
+            idx != "i + 1" && idx != "j" && idx != "k") exit 1
+        line=substr(line, RSTART + RLENGTH)
+      }
+    }
+  ' "$body"
 }
 
 extract_source_function() {
@@ -137,6 +156,7 @@ source_helpers_ok() {
     if [ "$name" = carryGo ]; then expected_comparisons=3; fi
     [ "$comparisons" -eq "$expected_comparisons" ] || return 1
     if grep -F -q 'hashBool' "$body"; then return 1; fi
+    source_indices_ok "$body" || return 1
     if [ "$name" = carryGo ]; then
       grep -F -q 'if i >= nWide then if carry /= 0 then panic' "$body" || return 1
     fi
@@ -306,6 +326,21 @@ if source_helpers_ok "$FIELD" "$WORK/scalar_hash_source_mutant.mdk" "$WORK/sourc
 fi
 pass 'scalar comparison/hashBool mutation is rejected by source structure'
 
+awk '
+  /selectNCandidate w diff keepDiff \(i \+ 1\)/ {
+    print "    let secretIndex = bitAnd original 1"
+    print "    let sampled = w[secretIndex]"
+    print "    let () = A.set i (w[i] + 0 * sampled) w"
+    print
+    next
+  }
+  { print }
+' "$SCALAR" > "$WORK/scalar_index_source_mutant.mdk"
+if source_helpers_ok "$FIELD" "$WORK/scalar_index_source_mutant.mdk" "$WORK/source-scalar-index-mutant"; then
+  fail 'scalar secret-index mutation is rejected by source structure'
+fi
+pass 'scalar secret-index mutation is rejected by source structure'
+
 # Private same-module witnesses. The mutation copies never touch the worktree.
 cp "$FIELD" "$WORK/field_probe.mdk"
 append_field_probe "$WORK/field_probe.mdk"
@@ -339,8 +374,8 @@ cp "$FIELD" "$WORK/field_emit.mdk"
 append_field_probe "$WORK/field_emit.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/field_emit.mdk" -o "$WORK/field_emit" --keep-ir > "$WORK/build.log" 2>&1
 check_emitted_helpers "$WORK/field_emit.ll" "$WORK/field-ir" \
-  carryPassGo:1 carryFoldRound:0 reduceCarry:0 subPCandidate:1 \
-  selectPCandidate:1 subPSelect:0 canonicalize:0
+  carryPassGo:1:3 carryFoldRound:0:2 reduceCarry:0:0 subPCandidate:1:4 \
+  selectPCandidate:1:2 subPSelect:0:0 canonicalize:0:0
 extract_function selectPCandidate "$WORK/field_emit.ll" "$WORK/select-current.ll"
 current_ir_branches=$(grep -c 'br i1' "$WORK/select-current.ll" || true)
 [ "$current_ir_branches" -eq 1 ] || fail "current native IR has one public-counter branch (got $current_ir_branches)"
@@ -380,8 +415,8 @@ cp "$SCALAR" "$WORK/scalar_emit.mdk"
 append_scalar_probe "$WORK/scalar_emit.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_emit.mdk" -o "$WORK/scalar_emit" --keep-ir > "$WORK/build-scalar.log" 2>&1
 check_emitted_helpers "$WORK/scalar_emit.ll" "$WORK/scalar-ir" \
-  carryGo:2 takeHigh:1 foldAccum:1 foldAccumRow:1 foldOnce:0 reduceFixed:0 \
-  subNCandidate:1 selectNCandidate:1 subNSelect:0 reduceWide:0
+  carryGo:2:1 takeHigh:1:1 foldAccum:1:0 foldAccumRow:1:3 foldOnce:0:0 reduceFixed:0:0 \
+  subNCandidate:1:2 selectNCandidate:1:2 subNSelect:0:0 reduceWide:0:0
 extract_function selectNCandidate "$WORK/scalar_emit.ll" "$WORK/scalar-select-current.ll"
 extract_function subNCandidate "$WORK/scalar_emit.ll" "$WORK/scalar-borrow-current.ll"
 [ "$(grep -c 'br i1' "$WORK/scalar-select-current.ll" || true)" -eq 1 ] || fail 'current scalar select IR has only its public-counter branch'
@@ -405,11 +440,22 @@ cp "$WORK/scalar_hash_source_mutant.mdk" "$WORK/scalar_hash_mutant.mdk"
 append_scalar_probe "$WORK/scalar_hash_mutant.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_hash_mutant.mdk" -o "$WORK/scalar_hash_mutant" --keep-ir > "$WORK/build-scalar-hash-mutant.log" 2>&1
 extract_function selectNCandidate "$WORK/scalar_hash_mutant.ll" "$WORK/scalar-hash-mutant.ll"
-if helper_ir_ok "$WORK/scalar-hash-mutant.ll" 1; then
+if helper_ir_ok "$WORK/scalar-hash-mutant.ll" 1 2; then
   fail 'scalar comparison/hashBool mutation is rejected by native IR operation allowlist'
 fi
 grep -F -q 'mdk_hash_bool' "$WORK/scalar-hash-mutant.ll" || fail 'scalar comparison/hashBool mutation reaches native IR'
 pass 'scalar comparison/hashBool mutation is rejected by native IR operation allowlist'
+
+cp "$WORK/scalar_index_source_mutant.mdk" "$WORK/scalar_index_mutant.mdk"
+append_scalar_probe "$WORK/scalar_index_mutant.mdk"
+MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_index_mutant.mdk" -o "$WORK/scalar_index_mutant" --keep-ir > "$WORK/build-scalar-index-mutant.log" 2>&1
+extract_function selectNCandidate "$WORK/scalar_index_mutant.ll" "$WORK/scalar-index-mutant.ll"
+if helper_ir_ok "$WORK/scalar-index-mutant.ll" 1 2; then
+  fail 'scalar secret-index mutation is rejected by native IR call shape'
+fi
+index_calls=$(grep -F -c 'call i64 @mdk_impl_Array_index(' "$WORK/scalar-index-mutant.ll" || true)
+[ "$index_calls" -gt 2 ] || fail 'scalar secret-index mutation reaches native IR'
+pass 'scalar secret-index mutation is rejected by native IR call shape'
 
 disassemble() {
   binary=$1
@@ -499,5 +545,5 @@ printf 'receipt: target=%s %s\n' "$(uname -s)" "$(uname -m)"
 printf 'receipt: compiler=%s\n' "$(clang --version | sed -n '1p')"
 printf 'receipt: medaka=%s\n' "$($MEDAKA --version | sed -n '1p')"
 
-[ "$checked" -ge 29 ] || fail "anti-rot floor (expected at least 29, got $checked)"
+[ "$checked" -ge 31 ] || fail "anti-rot floor (expected at least 31, got $checked)"
 printf 'PASS: constant-time reduction controls — %s assertions\n' "$checked"
