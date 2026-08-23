@@ -1,6 +1,6 @@
 # atproto PDS field/scalar constant-time reduction contract
 
-**Status:** proposed implementation contract for #1724; implementation pending.
+**Status:** accepted implementation contract for #1724; implementation complete, landing pending.
 
 This document specifies the smallest complete landing that closes the three
 reduction leaks named by #1724. It is subordinate to P15 in

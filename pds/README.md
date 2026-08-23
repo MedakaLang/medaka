@@ -246,13 +246,14 @@ this module optimises for being easy to argue about instead: **16 limbs of
 
 🚨 **The field's reduction does not transfer, and that is the reason the two
 modules are separate rather than shared.** `2^256 − p` is `2^32 + 977`, ~33
-bits, which is what makes the field's SINGLE fold pass fully reduce. `2^256 −
+bits, which is what makes the field's fixed three-round carry/fold schedule
+fully reduce under its conservative raw-limb bound. `2^256 −
 n = 0x14551231950b75fc4402da1732fc9bebf` is **129 bits**: one fold of a
 512-bit product lands below 2^385, not below 2^256. `scalar.mdk` therefore
-folds **until the high half is empty** (each pass subtracts a positive
-multiple of `n`, so it strictly decreases and terminates) and then makes ONE
-conditional subtraction. Read the module header before changing anything in
-it — it carries that argument and the headroom derivation.
+runs exactly **four** fold/carry rounds, including zero high halves, and then
+makes one unconditional arithmetic subtract-and-select. Read the module header
+before changing anything in it — it carries that argument and the headroom
+derivation.
 
 **The answer key.** `pds/test/vectors/scalar_reference_corpus.txt` (1028 rows:
 `red`/`neg`/`inv`/`high`/`ovf` over 52 inputs, `mul`/`add`/`sub` over 256
