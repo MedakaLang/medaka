@@ -1,7 +1,0 @@
--- issue #1063: this file plainly says `export greet`, and the export is silently
--- dropped anyway -- because a decl attribute (`@deprecated "old greet"`) sits above the
--- declaration. NOTHING is ever reported against THIS file: `medaka check` emits zero
--- diagnostics here, and the attribute line is never referenced by any message.
-@deprecated "old greet"
-export greet : String
-greet = "hi"

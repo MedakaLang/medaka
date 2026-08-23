@@ -1,9 +1,0 @@
--- CONTROL for #1063: byte-identical to main.mdk except it imports dep_ok.mdk, which is
--- byte-identical to dep.mdk with the `@deprecated "old greet"` attribute line DELETED.
--- Presence vs absence of that one attribute line is the ONE flipped variable, and it is
--- the control the issue body itself states. It must check clean, exit 0, with no
--- diagnostic anywhere -- proving the export, the selective import and the reference all
--- work fine, and that the attribute is what breaks them.
-import dep_ok.{greet}
-
-main = println greet

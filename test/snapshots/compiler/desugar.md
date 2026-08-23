@@ -1,5 +1,5 @@
 # META
-source_lines=1050
+source_lines=1052
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage — Stage 1 port of `lib/desugar.ml`.  Lowers surface
@@ -819,6 +819,7 @@ mergeIfaceDefaults prog = map mergeIfaceDecl prog
 mergeIfaceDecl : Decl -> Decl
 mergeIfaceDecl (d@(DInterface { methods, ... })) =
   DInterface { d | methods = mergeIfaceMethods methods }
+mergeIfaceDecl (DAttrib attrs d) = DAttrib attrs (mergeIfaceDecl d)
 mergeIfaceDecl d = d
 
 mergeIfaceMethods : List IfaceMethod -> List IfaceMethod
@@ -902,6 +903,7 @@ ifaceDefaultsStep : String -> Decl -> List Decl -> List IfaceMethod
 ifaceDefaultsStep target (DInterface { name, methods, ... }) rest
   | name == target = filterList ifaceMethodHasDefault methods
   | otherwise = ifaceDefaults target rest
+ifaceDefaultsStep target (DAttrib _ d) rest = ifaceDefaultsStep target d rest
 ifaceDefaultsStep target _ rest = ifaceDefaults target rest
 
 ifaceMethodHasDefault : IfaceMethod -> Bool
@@ -1373,6 +1375,7 @@ desugar prog = qualifyAliasRefs prog
 (DFunDef false "mergeIfaceDefaults" ((PVar "prog")) (EApp (EApp (EVar "map") (EVar "mergeIfaceDecl")) (EVar "prog")))
 (DTypeSig false "mergeIfaceDecl" (TyFun (TyCon "Decl") (TyCon "Decl")))
 (DFunDef false "mergeIfaceDecl" ((PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EVar "mergeIfaceMethods") (EVar "methods"))))))
+(DFunDef false "mergeIfaceDecl" ((PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EVar "mergeIfaceDecl") (EVar "d"))))
 (DFunDef false "mergeIfaceDecl" ((PVar "d")) (EVar "d"))
 (DTypeSig false "mergeIfaceMethods" (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "IfaceMethod"))))
 (DFunDef false "mergeIfaceMethods" ((PVar "methods")) (EApp (EApp (EVar "foldlMethods") (EListLit)) (EVar "methods")))
@@ -1407,6 +1410,7 @@ desugar prog = qualifyAliasRefs prog
 (DFunDef false "ifaceDefaults" ((PVar "target") (PCons (PVar "d") (PVar "rest"))) (EApp (EApp (EApp (EVar "ifaceDefaultsStep") (EVar "target")) (EVar "d")) (EVar "rest")))
 (DTypeSig false "ifaceDefaultsStep" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "IfaceMethod"))))))
 (DFunDef false "ifaceDefaultsStep" ((PVar "target") (PRec "DInterface" ((rf "name" None) (rf "methods" None)) true) (PVar "rest")) (EIf (EBinOp "==" (EVar "name") (EVar "target")) (EApp (EApp (EVar "filterList") (EVar "ifaceMethodHasDefault")) (EVar "methods")) (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceDefaults") (EVar "target")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "ifaceDefaultsStep" ((PVar "target") (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (EApp (EApp (EApp (EVar "ifaceDefaultsStep") (EVar "target")) (EVar "d")) (EVar "rest")))
 (DFunDef false "ifaceDefaultsStep" ((PVar "target") PWild (PVar "rest")) (EApp (EApp (EVar "ifaceDefaults") (EVar "target")) (EVar "rest")))
 (DTypeSig false "ifaceMethodHasDefault" (TyFun (TyCon "IfaceMethod") (TyCon "Bool")))
 (DFunDef false "ifaceMethodHasDefault" ((PCon "IfaceMethod" PWild PWild (PCon "Some" PWild))) (EVar "True"))
@@ -1795,6 +1799,7 @@ desugar prog = qualifyAliasRefs prog
 (DFunDef false "mergeIfaceDefaults" ((PVar "prog")) (EApp (EApp (EMethodRef "map") (EVar "mergeIfaceDecl")) (EVar "prog")))
 (DTypeSig false "mergeIfaceDecl" (TyFun (TyCon "Decl") (TyCon "Decl")))
 (DFunDef false "mergeIfaceDecl" ((PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EVar "mergeIfaceMethods") (EVar "methods"))))))
+(DFunDef false "mergeIfaceDecl" ((PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EVar "mergeIfaceDecl") (EVar "d"))))
 (DFunDef false "mergeIfaceDecl" ((PVar "d")) (EVar "d"))
 (DTypeSig false "mergeIfaceMethods" (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "IfaceMethod"))))
 (DFunDef false "mergeIfaceMethods" ((PVar "methods")) (EApp (EApp (EVar "foldlMethods") (EListLit)) (EVar "methods")))
@@ -1829,6 +1834,7 @@ desugar prog = qualifyAliasRefs prog
 (DFunDef false "ifaceDefaults" ((PVar "target") (PCons (PVar "d") (PVar "rest"))) (EApp (EApp (EApp (EVar "ifaceDefaultsStep") (EVar "target")) (EVar "d")) (EVar "rest")))
 (DTypeSig false "ifaceDefaultsStep" (TyFun (TyCon "String") (TyFun (TyCon "Decl") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "IfaceMethod"))))))
 (DFunDef false "ifaceDefaultsStep" ((PVar "target") (PRec "DInterface" ((rf "name" None) (rf "methods" None)) true) (PVar "rest")) (EIf (EBinOp "==" (EVar "name") (EVar "target")) (EApp (EApp (EVar "filterList") (EVar "ifaceMethodHasDefault")) (EVar "methods")) (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceDefaults") (EVar "target")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "ifaceDefaultsStep" ((PVar "target") (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (EApp (EApp (EApp (EVar "ifaceDefaultsStep") (EVar "target")) (EVar "d")) (EVar "rest")))
 (DFunDef false "ifaceDefaultsStep" ((PVar "target") PWild (PVar "rest")) (EApp (EApp (EVar "ifaceDefaults") (EVar "target")) (EVar "rest")))
 (DTypeSig false "ifaceMethodHasDefault" (TyFun (TyCon "IfaceMethod") (TyCon "Bool")))
 (DFunDef false "ifaceMethodHasDefault" ((PCon "IfaceMethod" PWild PWild (PCon "Some" PWild))) (EVar "True"))

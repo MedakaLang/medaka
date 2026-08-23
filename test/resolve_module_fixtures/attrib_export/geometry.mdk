@@ -1,0 +1,7 @@
+@deprecated "use geometry2 instead"
+public export data Point = Point Int Int
+
+@deprecated "use originX2 instead"
+export
+originX : Point -> Int
+originX (Point x _) = x
