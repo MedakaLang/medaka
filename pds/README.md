@@ -324,10 +324,12 @@ selection. Secret affine conversion performs one field inverse; compressed
 encoding is exactly 33 bytes. Public decoding accepts only prefixes `0x02` and
 `0x03`, canonical x coordinates, and square curve RHS values.
 
-`pds/test/secp256k1_public_key_test.mdk` pins compressed G/2G/3G, keys for
-small and leading-zero secret scalars, both parity prefixes, and malformed
-wire rejection. It is enrolled in the existing in-language gate:
+`pds/test/secp256k1_public_key_checks.mdk` documents the seven focused checks:
+compressed G/2G/3G, keys for small and leading-zero secret scalars, both parity
+prefixes, and malformed wire rejection. The existing assertion driver runs them
+natively because the generic interpreter roster would put four complete
+256-round ladders on its hot path:
 
 ```sh
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/inlang_test_oracle.sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/secp256k1_public_key.sh
 ```
