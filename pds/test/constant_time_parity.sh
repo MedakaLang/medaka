@@ -24,7 +24,12 @@ cmp "$WORK/eval.out" "$WORK/native.out" || {
 WASM_EMITTER=${MEDAKA_WASM_EMITTER:-"$ROOT/test/bin/wasm_emit_modules_main"}
 if [ -x "$WASM_EMITTER" ] && command -v node >/dev/null 2>&1 && command -v wasm-tools >/dev/null 2>&1; then
   MEDAKA_WASM_EMITTER="$WASM_EMITTER" MEDAKA_STRICT=1 "$MEDAKA" build --target wasm "$SOURCE" -o "$WORK/probe.wasm" > "$WORK/wasm-build.log" 2>&1
-  node "$ROOT/test/wasm/run.js" "$WORK/probe.wasm" > "$WORK/wasm.out" 2> "$WORK/wasm.err"
+  node "$ROOT/test/wasm/run.js" "$WORK/probe.wasm" > "$WORK/wasm-raw.out" 2> "$WORK/wasm.err"
+  [ "$(wc -l < "$WORK/wasm-raw.out")" -eq 6 ] && [ "$(tail -1 "$WORK/wasm-raw.out")" = 0 ] || {
+    echo 'FAIL: Wasm parity probe did not emit five rows plus the runner result' >&2
+    exit 1
+  }
+  sed '$d' "$WORK/wasm-raw.out" > "$WORK/wasm.out"
   cmp "$WORK/native.out" "$WORK/wasm.out" || {
     echo 'FAIL: PDS reduction values differ between native and Wasm' >&2
     exit 1
