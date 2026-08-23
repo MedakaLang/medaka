@@ -71,10 +71,18 @@ check_emitted_helpers() {
     name=${spec%%:*}
     rest=${spec#*:}
     expected=${rest%%:*}
-    expected_indices=${rest##*:}
+    rest=${rest#*:}
+    expected_indices=${rest%%:*}
+    rest=${rest#*:}
+    expected_sets=${rest%%:*}
+    rest=${rest#*:}
+    expected_makes=${rest%%:*}
+    rest=${rest#*:}
+    expected_copies=${rest%%:*}
+    expected_total=${rest##*:}
     body="$dir/$name.ll"
     extract_function "$name" "$ir" "$body"
-    helper_ir_ok "$body" "$expected" "$expected_indices" || fail "$name native IR operation/control shape"
+    helper_ir_ok "$body" "$expected" "$expected_indices" "$expected_sets" "$expected_makes" "$expected_copies" "$expected_total" || fail "$name native IR operation/control shape"
   done
 }
 
@@ -82,11 +90,22 @@ helper_ir_ok() {
   body=$1
   expected=$2
   expected_indices=$3
+  expected_sets=$4
+  expected_makes=$5
+  expected_copies=$6
+  expected_total=$7
   branches=$(grep -c 'br i1' "$body" || true)
   comparisons=$(grep -E -c 'call i64 @mdk_value_(eq|ne|lt|le|gt|ge)\(' "$body" || true)
   hashes=$(grep -F -c 'call i64 @mdk_hash_bool(' "$body" || true)
   indices=$(grep -F -c 'call i64 @mdk_impl_Array_index(' "$body" || true)
-  [ "$branches" -eq "$expected" ] && [ "$comparisons" -eq "$expected" ] && [ "$hashes" -eq 0 ] && [ "$indices" -eq "$expected_indices" ]
+  sets=$(grep -F -c 'call i64 @mdk_array__set(' "$body" || true)
+  makes=$(grep -F -c 'call i64 @mdk_array_make(' "$body" || true)
+  copies=$(grep -F -c 'call i64 @mdk_array_copy(' "$body" || true)
+  total=$(grep -E -c 'call i64 @' "$body" || true)
+  [ "$branches" -eq "$expected" ] && [ "$comparisons" -eq "$expected" ] &&
+    [ "$hashes" -eq 0 ] && [ "$indices" -eq "$expected_indices" ] &&
+    [ "$sets" -eq "$expected_sets" ] && [ "$makes" -eq "$expected_makes" ] &&
+    [ "$copies" -eq "$expected_copies" ] && [ "$total" -eq "$expected_total" ]
 }
 
 source_indices_ok() {
@@ -101,6 +120,15 @@ source_indices_ok() {
         line=substr(line, RSTART + RLENGTH)
       }
     }
+  ' "$body"
+}
+
+source_writes_allocations_ok() {
+  body=$1
+  awk '
+    /(^|[[:space:]])(A\.)?set[[:space:]]/ &&
+      $0 !~ /(A\.)?set (0|1|9|i|j|k|\(i \+ 1\)|\(i - 16\)) / { exit 1 }
+    /arrayMake[[:space:]]/ && $0 !~ /arrayMake (10|16|32) / { exit 1 }
   ' "$body"
 }
 
@@ -157,6 +185,7 @@ source_helpers_ok() {
     [ "$comparisons" -eq "$expected_comparisons" ] || return 1
     if grep -F -q 'hashBool' "$body"; then return 1; fi
     source_indices_ok "$body" || return 1
+    source_writes_allocations_ok "$body" || return 1
     if [ "$name" = carryGo ]; then
       grep -F -q 'if i >= nWide then if carry /= 0 then panic' "$body" || return 1
     fi
@@ -341,6 +370,21 @@ if source_helpers_ok "$FIELD" "$WORK/scalar_index_source_mutant.mdk" "$WORK/sour
 fi
 pass 'scalar secret-index mutation is rejected by source structure'
 
+awk '
+  /let \(\) = A.set i \(original \+ keepDiff \* \(diff\[i\] - original\)\) w/ {
+    print "    let secretIndex = bitAnd original 1"
+    print "    let scratch = arrayMake 2 0"
+    print "    let () = A.set secretIndex 0 scratch"
+    print
+    next
+  }
+  { print }
+' "$SCALAR" > "$WORK/scalar_write_source_mutant.mdk"
+if source_helpers_ok "$FIELD" "$WORK/scalar_write_source_mutant.mdk" "$WORK/source-scalar-write-mutant"; then
+  fail 'scalar secret-write mutation is rejected by source structure'
+fi
+pass 'scalar secret-write mutation is rejected by source structure'
+
 # Private same-module witnesses. The mutation copies never touch the worktree.
 cp "$FIELD" "$WORK/field_probe.mdk"
 append_field_probe "$WORK/field_probe.mdk"
@@ -374,8 +418,10 @@ cp "$FIELD" "$WORK/field_emit.mdk"
 append_field_probe "$WORK/field_emit.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/field_emit.mdk" -o "$WORK/field_emit" --keep-ir > "$WORK/build.log" 2>&1
 check_emitted_helpers "$WORK/field_emit.ll" "$WORK/field-ir" \
-  carryPassGo:1:3 carryFoldRound:0:2 reduceCarry:0:0 subPCandidate:1:4 \
-  selectPCandidate:1:2 subPSelect:0:0 canonicalize:0:0
+  carryPassGo:1:3:3:0:0:22 carryFoldRound:0:2:2:0:0:11 \
+  reduceCarry:0:0:0:0:0:3 subPCandidate:1:4:2:0:0:29 \
+  selectPCandidate:1:2:1:0:0:7 subPSelect:0:0:0:1:0:9 \
+  canonicalize:0:0:0:0:1:3
 extract_function selectPCandidate "$WORK/field_emit.ll" "$WORK/select-current.ll"
 current_ir_branches=$(grep -c 'br i1' "$WORK/select-current.ll" || true)
 [ "$current_ir_branches" -eq 1 ] || fail "current native IR has one public-counter branch (got $current_ir_branches)"
@@ -415,8 +461,10 @@ cp "$SCALAR" "$WORK/scalar_emit.mdk"
 append_scalar_probe "$WORK/scalar_emit.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_emit.mdk" -o "$WORK/scalar_emit" --keep-ir > "$WORK/build-scalar.log" 2>&1
 check_emitted_helpers "$WORK/scalar_emit.ll" "$WORK/scalar-ir" \
-  carryGo:2:1 takeHigh:1:1 foldAccum:1:0 foldAccumRow:1:3 foldOnce:0:0 reduceFixed:0:0 \
-  subNCandidate:1:2 selectNCandidate:1:2 subNSelect:0:0 reduceWide:0:0
+  carryGo:2:1:1:0:0:12 takeHigh:1:1:2:0:0:9 foldAccum:1:0:0:0:0:6 \
+  foldAccumRow:1:3:1:0:0:9 foldOnce:0:0:0:1:0:7 reduceFixed:0:0:0:0:0:9 \
+  subNCandidate:1:2:1:0:0:15 selectNCandidate:1:2:1:0:0:7 \
+  subNSelect:0:0:0:1:0:9 reduceWide:0:0:0:1:0:7
 extract_function selectNCandidate "$WORK/scalar_emit.ll" "$WORK/scalar-select-current.ll"
 extract_function subNCandidate "$WORK/scalar_emit.ll" "$WORK/scalar-borrow-current.ll"
 [ "$(grep -c 'br i1' "$WORK/scalar-select-current.ll" || true)" -eq 1 ] || fail 'current scalar select IR has only its public-counter branch'
@@ -440,7 +488,7 @@ cp "$WORK/scalar_hash_source_mutant.mdk" "$WORK/scalar_hash_mutant.mdk"
 append_scalar_probe "$WORK/scalar_hash_mutant.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_hash_mutant.mdk" -o "$WORK/scalar_hash_mutant" --keep-ir > "$WORK/build-scalar-hash-mutant.log" 2>&1
 extract_function selectNCandidate "$WORK/scalar_hash_mutant.ll" "$WORK/scalar-hash-mutant.ll"
-if helper_ir_ok "$WORK/scalar-hash-mutant.ll" 1 2; then
+if helper_ir_ok "$WORK/scalar-hash-mutant.ll" 1 2 1 0 0 7; then
   fail 'scalar comparison/hashBool mutation is rejected by native IR operation allowlist'
 fi
 grep -F -q 'mdk_hash_bool' "$WORK/scalar-hash-mutant.ll" || fail 'scalar comparison/hashBool mutation reaches native IR'
@@ -450,12 +498,24 @@ cp "$WORK/scalar_index_source_mutant.mdk" "$WORK/scalar_index_mutant.mdk"
 append_scalar_probe "$WORK/scalar_index_mutant.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_index_mutant.mdk" -o "$WORK/scalar_index_mutant" --keep-ir > "$WORK/build-scalar-index-mutant.log" 2>&1
 extract_function selectNCandidate "$WORK/scalar_index_mutant.ll" "$WORK/scalar-index-mutant.ll"
-if helper_ir_ok "$WORK/scalar-index-mutant.ll" 1 2; then
+if helper_ir_ok "$WORK/scalar-index-mutant.ll" 1 2 1 0 0 7; then
   fail 'scalar secret-index mutation is rejected by native IR call shape'
 fi
 index_calls=$(grep -F -c 'call i64 @mdk_impl_Array_index(' "$WORK/scalar-index-mutant.ll" || true)
 [ "$index_calls" -gt 2 ] || fail 'scalar secret-index mutation reaches native IR'
 pass 'scalar secret-index mutation is rejected by native IR call shape'
+
+cp "$WORK/scalar_write_source_mutant.mdk" "$WORK/scalar_write_mutant.mdk"
+append_scalar_probe "$WORK/scalar_write_mutant.mdk"
+MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_write_mutant.mdk" -o "$WORK/scalar_write_mutant" --keep-ir > "$WORK/build-scalar-write-mutant.log" 2>&1
+extract_function selectNCandidate "$WORK/scalar_write_mutant.ll" "$WORK/scalar-write-mutant.ll"
+if helper_ir_ok "$WORK/scalar-write-mutant.ll" 1 2 1 0 0 7; then
+  fail 'scalar secret-write mutation is rejected by native IR call multiset'
+fi
+write_calls=$(grep -F -c 'call i64 @mdk_array__set(' "$WORK/scalar-write-mutant.ll" || true)
+make_calls=$(grep -F -c 'call i64 @mdk_array_make(' "$WORK/scalar-write-mutant.ll" || true)
+[ "$write_calls" -gt 1 ] && [ "$make_calls" -gt 0 ] || fail 'scalar secret-write mutation reaches native IR'
+pass 'scalar secret-write mutation is rejected by native IR call multiset'
 
 disassemble() {
   binary=$1
@@ -545,5 +605,5 @@ printf 'receipt: target=%s %s\n' "$(uname -s)" "$(uname -m)"
 printf 'receipt: compiler=%s\n' "$(clang --version | sed -n '1p')"
 printf 'receipt: medaka=%s\n' "$($MEDAKA --version | sed -n '1p')"
 
-[ "$checked" -ge 31 ] || fail "anti-rot floor (expected at least 31, got $checked)"
+[ "$checked" -ge 33 ] || fail "anti-rot floor (expected at least 33, got $checked)"
 printf 'PASS: constant-time reduction controls — %s assertions\n' "$checked"
