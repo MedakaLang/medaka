@@ -48,10 +48,10 @@
 -- is fixed and this is a DISTINCT SURVIVING ARM of the same family -- the
 -- interface-`requires` / `supers` arm rather than the impl-`requires` arm.
 --
--- ⚠️ THIS ROW PINS A WRONG BUILD VALUE ON PURPOSE. Do not "confirm" 20 against
--- the binary -- the binary is the thing that is wrong. The row goes RED the day
--- native starts printing 77, which is the signal to re-pin it to ALL_EXACT
--- `77\n77` and close #1127.
+-- ✅ #1127 DRAINED 2026-08-23 (S-predicate-representation, #1177's fix): native
+-- now prints 77/77, so the row was re-pinned to ALL_EXACT `77\n77` -- the value
+-- HAND-DERIVED above, never the binary's new answer -- and its Section 4
+-- KNOWN-BAD permutation entry removed. Everything above is history, not present.
 interface D a where
   dm : a -> Int
 

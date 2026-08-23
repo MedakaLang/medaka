@@ -35,7 +35,9 @@
 # have every engine equally wrong, which is exactly why `diff_compiler_engines`
 # cannot see them. s3-min-fully-general-sibling WAS such a cell (both engines
 # printing the same WRONG number at exit 0) until #1128 was fixed on 2026-08-01;
-# s6-1-4-supers-per-construction-goal still is one, on the build arm alone.
+# s6-1-4-supers-per-construction-goal was one on the build arm alone until #1127
+# drained on 2026-08-23. Both rows are kept, re-pinned to their hand-derived spec
+# answers -- a drained row is the cheapest regression test the corpus has.
 #
 # ###################################################################
 # # FOUR ASSERTION SECTIONS, BECAUSE VERDICTS ARE NOT ENOUGH        #
@@ -170,8 +172,12 @@
 #   derives this file automatically because it is a FLAT `.mdk` with two `impl Sz`
 #   blocks. #1618's `check` and `run` cells were ALREADY CORRECT while the bug was
 #   live -- its real assertion is the `build` cell that `ALL_EXACT` forces to agree.
-# * s6-1-4-supers-per-construction-goal -- #1127 (OPEN, S0 `verified`). SILENT
-#   WRONGNESS ON THE BUILD PATH. A §3 `super` projection out of a general `C`-instance
+# * s6-1-4-supers-per-construction-goal -- #1127, DRAINED 2026-08-23 by
+#   S-predicate-representation (#1177's fix). What follows is the HISTORY the row
+#   pinned; the row itself is now `ALL_EXACT 77\n77`, per its fixture header's own
+#   drain instruction, and its Section 4 KNOWN-BAD permutation entry is GONE (the
+#   two build values converged, which is what that entry existed to detect).
+#   WAS: SILENT WRONGNESS ON THE BUILD PATH. A §3 `super` projection out of a general `C`-instance
 #   constructed at a GROUND goal reaches the GENERAL `D`-dict, not the
 #   most-specific one: `check` exits 0, `run` prints the correct 77/77, and the
 #   SHIPPED NATIVE BINARY prints 20/77. §6 C2 names this exact break ("a
@@ -529,7 +535,7 @@ i7-qual4-gate-eq.mdk|§8 I7 qual. 4 -- THE GATE, class `Eq` (#1539). Sibling of 
 i7-qual4-gate-ord.mdk|§8 I7 qual. 4 -- THE GATE, class `Ord` (#1539). Sibling of the `Num` row. `Ord a requires Eq a`, so the superclass is demanded too; the FIRST diagnostic is the `Ord` one, which section 6 pins by span|REJECT|REJECT|REJECT|NONE||T-NO-IMPL
 i7-qual4-gate-semigroup.mdk|§8 I7 qual. 4 -- THE GATE, class `Semigroup` (#1539). Sibling of the `Num` row, for the `++` seam|REJECT|REJECT|REJECT|NONE||T-NO-IMPL
 i7-qual4-user-class-same-spelling.mdk|§8 I7 qual. 2+4 -- THE U1 DISCRIMINATOR (#1539). ⚠️ THIS ROW PINS A PROTECTION, NOT A RULE, AND IS SUPPOSED TO GO RED. I7 qual. 2 says a user MAY declare an interface spelled `Num` and "it is never rejected for that"; the tree rejects it `R-DUPLICATE-DEF` because the prelude`s decls are FLATTENED into the user`s list, so the collision reads as a within-module duplicate. §7.1 U1 makes the prelude a node and this reject evaporates. WHOEVER LANDS U1 OWNS THIS ROW: do not re-bless to ACCEPT and move on -- re-pin it as the I7 conformance discriminator it becomes (program ACCEPTED, `frobnicate` resolves to the USER`s class, and `1 + 1` still demands the PRELUDE`s `Num` and prints 2). Until #1539 the gate asked `ifaceRegistered "Num"`, a table THIS declaration writes to; it now asks `builtinClassPresent BNum`, so the answer no longer depends on this file|REJECT|REJECT|REJECT|NONE||R-DUPLICATE-DEF
-s6-1-4-supers-per-construction-goal.mdk|§6.1 choice-point 4 / §6 C2 / §3 `super` -- LEDGER #1127 (OPEN, S0 SILENT WRONGNESS ON THE BUILD PATH): a SUPERCLASS projection out of a general `C`-instance built at a ground goal reaches the GENERAL `D` dict. check exit 0; run prints the CORRECT 77/77; the SHIPPED BINARY prints 20/77. §6.1.4`s "tempting-but-wrong" pre-bake, live. Distinct from #412 (CLOSED, impl-`requires` arm -- its repro is correct on this binary)|ACCEPT|ACCEPT|ACCEPT|SPLIT_EXACT|77\n77%%20\n77|
+s6-1-4-supers-per-construction-goal.mdk|§6.1 choice-point 4 / §6 C2 / §3 `super` -- #1127 DRAINED (S-predicate-representation, #1177`s fix). The row is RE-PINNED to the SPEC ANSWER exactly as its fixture header instructed ("the row goes RED the day native starts printing 77 ... re-pin it to ALL_EXACT 77\n77 and close #1127"), never re-blessed to whatever the binary now says: 77/77 was hand-derived in that header BEFORE anything ran. The build arm reached the GENERAL `D`-dict because a use site was resolved by its constraint VAR`s id rather than by its PREDICATE (`enclDictVarOf`), which is the same defect #1177 pinned one channel over; both drained in one change. The control `s6-1-4-direct-constraint-control` (the `assum` arm, always correct) is what keeps this row honest -- the two must now agree|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|77\n77|
 s6-1-4-direct-constraint-control.mdk|CONTROL for #1127: the SAME instance set, goal and call shape with `D a` declared DIRECTLY, so `dm` is reached by §3 `assum` instead of `super`. Native is CORRECT here (77/77), which localises the defect to the superclass-projection arm rather than to min⊑ selection|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|77\n77|
 s8-i1-samename-independent-dict-arity/main.mdk|§8 I1: dict arity is keyed by BINDING IDENTITY, not bare name -- two modules` same-named `widget` abstract 1 and 0 dicts respectively (arity asserted structurally in section 3)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|101\n201|
 s8-i1-samename-unconstrained-poly-callee/main.mdk|§8 I1, THE EVAL-PATH HALF ITS `s8-i1-samename-independent-dict-arity/` SIBLING CANNOT ASSERT (RUN-XMOD-049, #1425). That sibling`s two arity rows in section 3 read the EMIT path, where `runEmitWith` has already run `mangleUnits` and made the bare keys accidentally identity-bearing, so they are structurally incapable of failing on this defect class however broken the eval path is; and its value row cannot see it either, because its `pick` is MONOMORPHIC so define and call site agree on the phantom slot and the number is right by accident. Here the unconstrained same-named binding is POLYMORPHIC (`a -> a`), so a phantom leading dict parameter is VALUE-OBSERVABLE -- it returns the dictionary instead of its argument. Hand-derived, not captured: `C.pick (1 : Int)` = `sz 1 + 100` = 101, `U.use 1` = `pick 1 + 200` = 201. MEASURED KNOWN-BAD at a1086fbb: `run` printed 101 and then died `E-PANIC: unknown op `+`` (the phantom dict being added to 200) while `build`+execute printed the correct 101/201. ⚠️ THE ENTRY`S IMPORT ORDER IS LOAD-BEARING -- `umod` first; in the other order this fixture is GREEN AT BASE and asserts nothing, because #1425`s two sites mask each other. See main.mdk`s header|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|101\n201|
@@ -1068,8 +1074,7 @@ done)"
 # and asserted to DIFFER, so the row reds the day they converge (the drain)
 # instead of silently passing or silently being skipped.
 #   entry | iface | orig-build-value | perm-build-value | issue
-KNOWNBAD_PERM='s6-1-4-supers-per-construction-goal.mdk|D|20\n77|77\n77|#1127
-s6-2-t4-open-goal-deferred.mdk|Sh|1|2|#1183'
+KNOWNBAD_PERM='s6-2-t4-open-goal-deferred.mdk|Sh|1|2|#1183'
 
 # THE SAME LEDGER FOR THE **RUN** ARM. ⚠️ It exists because the build-arm ledger
 # above is NOT a general escape hatch: `RUN-DIFF` had no known-bad branch at all,

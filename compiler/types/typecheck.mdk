@@ -16139,18 +16139,143 @@ firstDictForEncl id pfx ((eid, ename)::rest)
 -- slot keeps the forwarded dict the one actually bound in the body.  Falls back to
 -- the global lookup when the var is not one of encl's (a genuine element dict from a
 -- different in-scope impl).
-activeDictVarOfEncl : Mono -> String -> Option String
-activeDictVarOfEncl m encl = match enclDictVarOf m encl
+-- #1177: [goal] is the PREDICATE the use site has to discharge (its interface, and
+-- the instantiated argument vector when the occurrence let one be recovered), NOT
+-- just the constraint var — see `enclDictVarOf`.  `None` reproduces the pre-#1177
+-- tyvar-keyed lookup exactly.
+activeDictVarOfEncl : Option Predicate -> Mono -> String -> Option String
+activeDictVarOfEncl goal m encl = match enclDictVarOf goal m encl
   Some dname => Some dname
   None => activeDictVarForEncl m encl
 
-enclDictVarOf : Mono -> String -> Option String
-enclDictVarOf m encl
+-- 🚨 #1177: A USE SITE IS RESOLVED BY ITS PREDICATE, NOT BY ITS CONSTRAINT VAR'S ID.
+-- `funConstraintsRef` is the SHATTERED per-tyvar slot table, so a context naming two
+-- interfaces over ONE type variable — `useIx : (Dbg a, Ix a Char) => a -> Int` —
+-- registers TWO slots carrying the SAME id.  The old body asked `indexOfId (tyvarId
+-- cell) ids`, whose FIRST match is slot 0 whichever predicate the site belongs to, so
+-- EVERY method use in the body read slot 0: `ix` read the `Dbg` dict, its route
+-- degraded to the bare head tag, and first-declared-`impl` won.  Swapping the two
+-- predicates — a meaning-preserving edit — moved the answer from 116 to the correct
+-- 227, on both engines, at exit 0, with `check --json` clean.
+--
+-- The slots are id-parallel to `funConstraintIfacesRef` (both projections come off ONE
+-- `CSlot` list, `setFunConstraintEntry`) and prefix-parallel to `funConstraintArgsRef`
+-- (#1161 F-3a-ii), so the whole predicate of each slot is recoverable HERE without any
+-- new table — see `enclPreds`.
+--
+-- ⚠️ FAILING TO MATCH FALLS BACK TO THE HISTORICAL FIRST-ID SCAN, deliberately, and
+-- that is what keeps this change narrow.  A goal with no recoverable interface (a
+-- top-level constrained call routed through EKNestedTop, a method absent from
+-- `methodIfaceParamsRef`), a slot registered by `registerInferredFor` with an
+-- unrecoverable iface (`""`), and a super slot appended past `pairSlots`' truncation
+-- all answer exactly as they did before.  The ONLY sites whose answer moves are those
+-- where a LATER slot at the same id carries the goal's interface and an earlier one
+-- does not — i.e. precisely the #1177 shape.
+enclDictVarOf : Option Predicate -> Mono -> String -> Option String
+enclDictVarOf goal m encl
   | encl == "" = None
   | otherwise = match normalize m
-    TVar cell => map (dictParamName encl) (indexOfId (tyvarId cell) (fromOption [] (lookupAssocSL2 encl perRun.value.funConstraintsRef.value)))
-    TApp a _ => enclDictVarOf a encl
+    TVar cell =>
+      map (dictParamName encl) (enclSlotIndex goal (tyvarId cell) encl)
+    TApp a _ => enclDictVarOf goal a encl
     _ => None
+
+-- the slot index [target]'s dict param sits at in [encl]'s own constraint slots:
+-- by PREDICATE when the goal supplies one and a slot answers it, else the historical
+-- first-tyvar-id match.
+enclSlotIndex : Option Predicate -> Int -> String -> Option Int
+enclSlotIndex None target encl = indexOfId target (enclSlotIds encl)
+enclSlotIndex (Some p) target encl = match indexOfPred target p (enclPreds encl)
+  Some i => Some i
+  None => indexOfId target (enclSlotIds encl)
+
+enclSlotIds : String -> List Int
+enclSlotIds encl =
+  fromOption [] (lookupAssocSL2 encl perRun.value.funConstraintsRef.value)
+
+-- [encl]'s own constraint slots as PREDICATES, in slot order: each slot's interface
+-- and the argument vector its signature recorded, paired with the tyvar id the slot
+-- is keyed on.  `Predicate` is reused rather than a second n-ary shape invented.
+-- The vector list is a PREFIX of the slots (`keptConstraintArgs`, and
+-- `registerInferredFor` records none at all), so a slot past its end gets `args = []`
+-- — which `predArgsAgree` reads as "no vector to disambiguate on", never as a match.
+enclPreds : String -> List (Int, Predicate)
+enclPreds encl =
+  zipSlotArgs
+    (pairSlots
+      (enclSlotIds encl)
+      (fromOption
+        []
+        (lookupAssocS encl perRun.value.funConstraintIfacesRef.value)))
+    (declaredConstraintArgs encl)
+
+zipSlotArgs : List CSlot -> List (List Mono) -> List (Int, Predicate)
+zipSlotArgs [] _ = []
+zipSlotArgs (s::rest) [] =
+  (s.csId, Predicate { iface = s.csIface, args = [] }) :: zipSlotArgs rest []
+zipSlotArgs (s::rest) (v::vs) =
+  (s.csId, Predicate { iface = s.csIface, args = v }) :: zipSlotArgs rest vs
+
+-- TWO PASSES, MOST SPECIFIC FIRST, and the order is behaviour: a context may name one
+-- interface twice over one variable at different arguments (`(Ix a Char, Ix a Bool)`),
+-- where the iface alone cannot tell the two slots apart and only the recorded argument
+-- vector can.  Pass 1 requires both; pass 2 requires the interface alone, which is what
+-- answers #1177's `(Dbg a, Ix a Char)`.
+indexOfPred : Int -> Predicate -> List (Int, Predicate) -> Option Int
+indexOfPred target p preds = match indexOfPredGo 0 target p True preds
+  Some i => Some i
+  None => indexOfPredGo 0 target p False preds
+
+indexOfPredGo : Int -> Int -> Predicate -> Bool -> List (Int, Predicate) -> Option Int
+indexOfPredGo _ _ _ _ [] = None
+indexOfPredGo i target p needArgs ((id, sp)::rest)
+  | id == target && sp.iface.irName /= "" && sp.iface.irName == p.iface.irName && (not needArgs || predArgsAgree p.args sp.args) = Some i
+  | otherwise = indexOfPredGo (i + 1) target p needArgs rest
+
+-- Does the goal's instantiated argument vector agree with a slot's recorded one?
+-- ⚠️ EMPTY ON EITHER SIDE IS **NOT** AGREEMENT — an absent vector must not let pass 1
+-- claim a slot it knows nothing about, or the two passes collapse into one and the
+-- `(Ix a Char, Ix a Bool)` discrimination is lost.  Agreement is head-tycon-wise and
+-- only where BOTH sides are ground: the recorded vector is in the SIGNATURE's
+-- instantiation vars while the goal is in the call's, so a position that is a variable
+-- on either side carries no information here and must not veto.
+predArgsAgree : List Mono -> List Mono -> Bool
+predArgsAgree [] _ = False
+predArgsAgree _ [] = False
+predArgsAgree gs vs
+  | listLen gs /= listLen vs = False
+  | otherwise = argHeadsAgree gs vs
+
+argHeadsAgree : List Mono -> List Mono -> Bool
+argHeadsAgree (g::gs) (v::vs) = monoHeadAgrees g v && argHeadsAgree gs vs
+argHeadsAgree _ _ = True
+
+monoHeadAgrees : Mono -> Mono -> Bool
+monoHeadAgrees a b = match headTyconNameMono a
+  None => True
+  Some x => match headTyconNameMono b
+    None => True
+    Some y => x == y
+
+-- #1177: the predicate a METHOD occurrence discharges — the interface [name] is
+-- declared by, plus its full instantiated type-parameter vector when [fullMono] lets
+-- `ifaceParamMonos` recover one.  `None` for a non-method name (a top-level
+-- constrained call), which is what keeps those sites on the tyvar-keyed lookup.
+goalPredOf : String -> Mono -> Option Predicate
+goalPredOf name fullMono = map
+  (ifn => Predicate {
+    iface = ifaceRefBare ifn,
+    args = fromOption [] (ifaceParamMonos name fullMono),
+  })
+  (ifaceOfMethodName name)
+
+-- the operator/unop form: the node carries one operand mono, not a method occurrence,
+-- so no argument vector is recoverable (`stampOpRouteVal` says the same).  Every
+-- operator interface is single-param anyway, so the interface alone is the predicate.
+goalPredOfOp : String -> Option Predicate
+goalPredOfOp name = map
+  (ifn => Predicate { iface = ifaceRefBare ifn, args = [] })
+  (ifaceOfMethodName name)
 
 -- Phase 151 / Gap G: stamp each comparison/equality OPERATOR site's EBinOp route
 -- ref with the resolved Eq/Ord impl key (RKey) — but ONLY when the operand type
@@ -16281,11 +16406,12 @@ resolveOpSites isBinop implTable ((PendingEntry method tagRef operandMono encl k
 -- builtin (RNone) via a top-level fn's own declared constraint slot, never
 -- activeDictVarOf — a residual, not a regression (mirrors the `++` residual exactly).
 opDictVarOf : Bool -> String -> Mono -> Bool -> String -> Option String
-opDictVarOf True "append" m _ encl = enclDictVarOf m encl
-opDictVarOf True _ m inImpl encl
+opDictVarOf True "append" m _ encl =
+  enclDictVarOf (goalPredOfOp "append") m encl
+opDictVarOf True name m inImpl encl
   | inImpl = activeDictVarOf m
-  | otherwise = enclDictVarOf m encl
-opDictVarOf False _ m _ encl = enclDictVarOf m encl
+  | otherwise = enclDictVarOf (goalPredOfOp name) m encl
+opDictVarOf False name m _ encl = enclDictVarOf (goalPredOfOp name) m encl
 
 -- #156 S3c: a thin adapter over `entail` (EKOp kind).  `entail`'s ladder IS this
 -- resolver's ladder: assum = opDictVarOf → RDict; inst = stampOpRouteVal (builtin head →
@@ -20957,9 +21083,17 @@ entailAssum m encl name kind = match entailAssumVar m encl name kind
 -- routes through opDictVarOf (isBinop/inImpl-keyed, needs the method [name]).  [name] is
 -- ignored by the non-op kinds.
 entailAssumVar : Mono -> String -> String -> EntailKind -> Option String
-entailAssumVar m encl _ (EKReturn _ _) = activeDictVarOfEncl m encl
+-- #1177: the genuine/arg kinds now hand `activeDictVarOfEncl` the site's PREDICATE —
+-- [name]'s interface plus the vector `ifaceParamMonos` recovers from the kind's own
+-- full occurrence mono, the SAME vector `entailInst` selects the impl row on — so the
+-- slot the body reads and the impl the site dispatches to answer one question.  The
+-- nested/top kind keeps `activeDictVarForEncl` (no predicate: [name] there is a
+-- constrained FUNCTION, not a method occurrence).
+entailAssumVar m encl name (EKReturn fullMono _) =
+  activeDictVarOfEncl (goalPredOf name fullMono) m encl
 entailAssumVar m encl _ (EKNestedTop _ _ _ _) = activeDictVarForEncl m encl
-entailAssumVar m encl _ (EKArg _) = activeDictVarOfEncl m encl
+entailAssumVar m encl name (EKArg fullMono) =
+  activeDictVarOfEncl (goalPredOf name fullMono) m encl
 entailAssumVar m encl name (EKOp isBinop inImpl) =
   opDictVarOf isBinop name m inImpl encl
 
