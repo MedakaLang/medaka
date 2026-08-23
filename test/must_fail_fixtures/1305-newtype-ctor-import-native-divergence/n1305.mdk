@@ -1,7 +1,0 @@
--- A newtype.  Its constructor is not importable by ANY spelling: measured on
--- `main`, both `import n1305.{NT(..)}` and `import n1305.{NT, Wrap}` give
--- `Unbound variable: Wrap` with no collision present.
-export newtype NT = Wrap Int
-
-export unNT : NT -> Int
-unNT (Wrap n) = n

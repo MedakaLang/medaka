@@ -1,0 +1,7 @@
+-- naming the newtype ctor directly (`Wrap`, no `(..)`) is the identical refusal
+-- (#1311) -- resolve refuses it BEFORE it ever reaches typecheck as a bare
+-- unbound variable.
+import nt.{NT, Wrap}
+
+count : NT -> Int
+count _ = 0

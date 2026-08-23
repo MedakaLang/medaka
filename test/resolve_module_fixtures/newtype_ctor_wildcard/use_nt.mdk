@@ -1,0 +1,7 @@
+-- asking for `NT(..)` on a `newtype` is NewtypeCtorNotExported (#1311) -- the
+-- type name itself still resolves (used in the signature below), only the ctor
+-- is refused, mirroring how abstract_ctors' NoExportedConstructors behaves.
+import nt.{NT(..)}
+
+count : NT -> Int
+count _ = 0

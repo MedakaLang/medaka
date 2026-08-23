@@ -1,6 +1,0 @@
--- The `Wrap` the front end actually binds: a PUBLIC data constructor of the same
--- spelling at a DIFFERENT arity.
-public export data KT = Wrap Int Int
-
-export unKT : KT -> Int
-unKT (Wrap a b) = b - a

@@ -1,9 +1,0 @@
--- #1311 CONTROL: identical to main.mdk except it imports `nmodctl` (where `NT` is
--- `public export data`, constructor genuinely exported) instead of `nmod` (where
--- `NT` is `newtype`, constructor unconditionally private). That is the one
--- variable: whether the constructor `Wrap(..)` names was ever actually exported.
--- Must be diagnostic-free and print 5 at exit 0. If this breaks, ordinary wildcard
--- constructor import broke outright -- not #1311.
-import nmodctl.{NT(..), unNT}
-
-main = println (unNT (Wrap 5))
