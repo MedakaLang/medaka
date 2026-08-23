@@ -159,6 +159,7 @@ preambleLines = [
   "declare i64 @mdk_random_bool(i64)",
   "declare i64 @mdk_random_float(i64)",
   "declare i64 @mdk_random_char(i64)",
+  "declare i64 @mdk_os_entropy_bytes(i64)",
   "declare i64 @mdk_hash_int(i64)",
   "declare i64 @mdk_bit_and(i64, i64)",
   "declare i64 @mdk_bit_or(i64, i64)",

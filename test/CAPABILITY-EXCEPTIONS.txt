@@ -152,12 +152,13 @@ assertSnapshot	interp	BUG	unimplemented in all 3 engines (see llvm/wasm TODO row
 assertSnapshot	llvm	TODO	unimplemented in all 3 engines, no stdlib caller — forward-declared snapshot-testing primitive, not an asymmetric regression
 
 # ============================================================================
-# WASM — 60 rows: 12 PERMANENT (net, run-stdout-flush plumbing), 2 TRAP-STUB
-# (int bounds), 1 TODO (assertSnapshot), 45 WASM-GAP (unported, no structural
-# blocker).
+# WASM — derive live category counts with diff_compiler_capability_matrix.sh;
+# this section includes permanent gaps, trap stubs, TODOs, and unported WASM-GAPs.
 # (arraySortBy/arraySortInPlaceBy formerly filed DEAD here — REMOVED 2026-07-13,
 # same history as the LLVM rows above.)
 # ============================================================================
+
+osEntropyBytes	wasm	WASM-GAP	OS/browser entropy host import is not wired; native/eval only (#1726)
 
 # --- run-stdout-flush plumbing (2) — PERMANENT. stashRunStdout /
 #     enableRunStdoutFlush are internal `medaka run` CLI plumbing ("run drops

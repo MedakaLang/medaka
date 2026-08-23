@@ -58,6 +58,8 @@
 #   - PENDING detail starts with #<issue>.
 #
 # ── BOUNDARY: edge-domain externs pinned across eval/native/wasm ──────────────
+# EFFECTFUL VERDICT (#1726): osEntropyBytes carries <Rand>, so this pure/value
+# ledger must exclude it; the capability matrix and its dedicated gate grade it.
 # floatToInt: the founding case (#346/PR#473).  Nine cells already pin NaN/+-inf/
 # over/under/i64-clamp/neg-zero; two representative ones referenced here.
 floatToInt	BOUNDARY	llvm/float_to_int_nan,llvm/float_to_int_over,llvm/float_to_int_clamp_i64	#346: partial map Float->Int; NaN->0, over->intMaxBound, under->intMinBound, clamp to 63-bit Int (not i64) bounds
