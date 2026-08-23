@@ -26,6 +26,17 @@ the stage.
    slice moves. List each golden path the writer may bless. Unlisted goldens
    are findings, never blessing authority.
 
+   When a slice adds or renames a file matching a repository test-discovery
+   convention (for example `*_test.mdk`), name its registered route and run
+   that route in acceptance. Avoiding one heavyweight runner does not permit a
+   convention-matching file that makes the repository's self-draining roster
+   fail.
+
+   For corpus-backed protocol work, require an explicit gate observation for
+   every exceptional semantic route. If a public parser intentionally rejects
+   a row but the row is meant to exercise an internal primitive, the receipt
+   must prove that primitive executed; parser rejection alone is not evidence.
+
 §6 is a ceiling as well as a floor. Broader gates, property testing, and CI
 belong to the whole-diff review and merge queue unless the packet names them.
 State expected values from the semantics before capturing output.
