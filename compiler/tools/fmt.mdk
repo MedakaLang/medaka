@@ -278,38 +278,51 @@ renderNamedFieldMulti st decl = declDoc st decl
 -- after the first standalone one in a block is off by the count of
 -- standalone lines already eaten.
 --
--- The two kinds are told apart by `commentCol` against `fieldIndent` (the
--- column every field line itself starts at): a trailing comment's `--`
--- starts well past that column (code precedes it on the line); a standalone
--- comment's `--` starts AT it (only whitespace precedes it — it opens its
--- own line). Only standalone comments shift the count; a trailing comment
--- always renders inline on its own field's line, and a run of standalone
--- comments immediately preceding a field renders as its own lines ABOVE
--- that field, in source order — instead of being torn across two different
--- fields' trailing positions (the reported defect) or, worse, collapsed
--- together with an unrelated trailing comment (the PerRun-shaped case:
--- trailing and standalone comments interleaved in the same record).
-spliceInterior : String -> Int -> List Comment -> (String, List Comment)
-spliceInterior declStr startLine interior =
+-- The two kinds are told apart by whether anything but whitespace precedes
+-- the comment on its own SOURCE line: a trailing comment's `--` follows code
+-- earlier on that line; a standalone comment's `--` is the first thing on
+-- it (only whitespace precedes it — it opens its own line). This is checked
+-- against the SOURCE line's own leading-space count (`isStandaloneSrc`), not
+-- the RENDERED output's field indent — a two-line `data X =\n  | X { ... }`
+-- header nests its fields one indent level deeper in source than the
+-- collapsed single-line render uses, so comparing a source column against a
+-- render-derived indent misclassified every comment there (#829 reopened).
+-- Only standalone comments shift the count; a trailing comment always
+-- renders inline on its own field's line, and a run of standalone comments
+-- immediately preceding a field renders as its own lines ABOVE that field,
+-- in source order — instead of being torn across two different fields'
+-- trailing positions (the reported defect) or, worse, collapsed together
+-- with an unrelated trailing comment (the PerRun-shaped case: trailing and
+-- standalone comments interleaved in the same record).
+spliceInterior : List String -> String -> Int -> List Comment -> (String, List Comment)
+spliceInterior srcLines declStr startLine interior =
   let outLines = splitNl declStr
-  let fieldIndent = fieldIndentOf outLines
-  let classified = classifyIdxs startLine fieldIndent 0 interior
+  let classified = classifyIdxs startLine srcLines 0 interior
   let groups = groupRuns classified
   match attachInterior outLines groups 0
     (newLines, consumed) => (joinNl newLines, consumed)
 
--- The indent every field line renders at (leading-space count of the first
--- output line after the opening `Decl = Ctor {` line, or 0 if there is none).
-fieldIndentOf : List String -> Int
-fieldIndentOf [] = 0
-fieldIndentOf [_] = 0
-fieldIndentOf (_::ln::_) = leadingSpaceCount ln
+-- Fetch source line `n` (1-indexed) from the whole-file `srcLines`, or "" if
+-- out of range (should not happen for a comment's own line).
+nthLine : List String -> Int -> String
+nthLine [] _ = ""
+nthLine (l::ls) n
+  | n <= 1 = l
+  | otherwise = nthLine ls (n - 1)
+
+-- A comment is STANDALONE iff nothing but whitespace precedes it on its own
+-- SOURCE line — its column equals that line's own leading-space count. See
+-- `spliceInterior`'s comment for why this must be measured against the
+-- SOURCE line, not the rendered output's field indent.
+isStandaloneSrc : List String -> Comment -> Bool
+isStandaloneSrc srcLines c =
+  commentCol c == leadingSpaceCount (nthLine srcLines (commentLine c))
 
 data CKind = CTrailing | CStandalone
 
-classifyKind : Int -> Comment -> CKind
-classifyKind fieldIndent c =
-  if commentCol c <= fieldIndent then
+classifyKind : List String -> Comment -> CKind
+classifyKind srcLines c =
+  if isStandaloneSrc srcLines c then
     CStandalone
   else
     CTrailing
@@ -318,15 +331,15 @@ classifyKind fieldIndent c =
 -- accounting for the source lines already eaten by earlier STANDALONE
 -- comments in this same list (a trailing comment eats nothing — its line is
 -- already accounted for by the field it trails).
-classifyIdxs : Int -> Int -> Int -> List Comment -> List (Comment, Int, CKind)
+classifyIdxs : Int -> List String -> Int -> List Comment -> List (Comment, Int, CKind)
 classifyIdxs _ _ _ [] = []
-classifyIdxs startLine fieldIndent eaten (c::cs) =
-  let k = classifyKind fieldIndent c
+classifyIdxs startLine srcLines eaten (c::cs) =
+  let k = classifyKind srcLines c
   let idx = commentLine c - startLine - eaten
   let eaten1 = match k
     CStandalone => eaten + 1
     CTrailing => eaten
-  (c, idx, k) :: classifyIdxs startLine fieldIndent eaten1 cs
+  (c, idx, k) :: classifyIdxs startLine srcLines eaten1 cs
 
 -- Group consecutive (source-order) comments sharing the same computed index
 -- into runs.  Relies on `classifyIdxs` producing a non-decreasing index
@@ -572,18 +585,35 @@ stepDeclSpan (FmtState pieces1 cs1 vlines1 cursor1 started1) srcLines chainOls d
         let pieces3 = "\n" :: verbatimSpan srcLines line endLine :: pieces2
         FmtState pieces3 csRest vlines1 endLine True
       else
-        stepDeclNormal st2 decl line endLine
+        stepDeclNormal st2 srcLines decl line endLine
 
 -- The normal (reflowing) path: render the decl's Doc, splice interior comments
 -- by output-line index, and append end-line trailing comments inline.  Used for
 -- every decl WITHOUT an interior trailing comment (see stepDecl's safety-net).
-stepDeclNormal : FmtState -> Decl -> Int -> Int -> FmtState
-stepDeclNormal (FmtState pieces2 cs1 vlines1 cursor1 started1) decl line endLine =
+stepDeclNormal : FmtState -> List String -> Decl -> Int -> Int -> FmtState
+stepDeclNormal (FmtState pieces2 cs1 vlines1 cursor1 started1) srcLines decl line endLine =
   -- A single-variant named-field data decl that carries field comments is
   -- rendered one-field-per-line and routed through the generic interior
   -- splice (the per-variant vcommentsFor path cannot attach per-field
   -- comments).  Other data decls keep the vcommentsFor path.
   let nfMulti = isSingleNamedFieldData decl && isNonEmptyL (filterList (isInterior line endLine) cs1)
+  -- #829 (two-line header): `printNamedFieldData` always renders the header as
+  -- ONE output line (`data X = X {`), but a source header can be split across
+  -- TWO lines (`data X =` / `  | X { ... }`, e.g. `DriverState`). `line` is the
+  -- decl's overall start (the `data X =` line) — using it as `spliceInterior`'s
+  -- source→output base assumes the header is 1:1, so on a two-line header
+  -- every field/comment index comes out one line short, shifting every
+  -- interior comment onto the field after the one it describes. The variant's
+  -- OWN line (`| X {`, the head of `vlines1` before `renderNamedFieldMulti`
+  -- consumes it) is where the collapsed header line actually originated, so
+  -- use that as the base instead — it equals `line` on the (already-safe)
+  -- single-line header, where the ctor opens on the same line as `data X =`.
+  let headerLine = if nfMulti then
+      match vlines1
+        (vl::_) => vl
+        [] => line
+    else
+      line
   let st2 = FmtState pieces2 cs1 vlines1 cursor1 started1
   match (if nfMulti then renderNamedFieldMulti st2 decl else declDoc st2 decl)
     (declStr0, (FmtState pieces3 cs3 vlines3 _cursor3 _started3)) =>
@@ -592,7 +622,7 @@ stepDeclNormal (FmtState pieces2 cs1 vlines1 cursor1 started1) decl line endLine
       -- named-field data decl, nfMulti) interleaves inner-block trailing
       -- comments inline.
       let interior = if isDataDeclF decl && not nfMulti then [] else filterList (isInterior line endLine) cs3
-      match spliceInterior declStr0 line interior
+      match spliceInterior srcLines declStr0 headerLine interior
         (declStr, consumed) =>
           let cs3b = dropConsumed cs3 consumed
           match takeTrailing cs3b endLine

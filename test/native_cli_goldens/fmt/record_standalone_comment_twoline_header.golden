@@ -1,0 +1,16 @@
+-- #829 (reopened): the SAME standalone-comment-block hazard as
+-- record_standalone_comment.mdk, but on a record whose header is still the
+-- two-line `data X =\n  | X { ... }` form (e.g. `DriverState`,
+-- compiler/types/typecheck.mdk) instead of the already-collapsed single-line
+-- form. `printNamedFieldData` always renders the header as ONE output line,
+-- so the comment-splice line mapping must anchor to the variant's OWN source
+-- line (where `| Cfg {` opens), not the decl's overall start line (`data
+-- Cfg =`) — else every interior comment lands one field short.
+data Cfg = Cfg {
+    alpha : Int,  -- comment about alpha
+    beta : Int,
+    -- a standalone comment block describing the NEXT field,
+    -- spanning two lines.
+    gamma : Int,
+    delta : Int,  -- comment about delta
+  }
