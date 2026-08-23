@@ -963,7 +963,7 @@ pass 'final linked scalar reducer calls the approved helpers'
 # Native bit helpers are C calls below the generated Medaka helpers. Inspect
 # the linked implementations on the tested target; either helper growing a
 # conditional jump invalidates the arithmetic proof.
-for helper in mdk_bit_and mdk_shift_right; do
+for helper in mdk_bit_and mdk_bit_xor mdk_shift_right; do
   symbol=$(find_exact_symbol "$WORK/field_emit" "$helper")
   [ -n "$symbol" ] || fail "final native $helper symbol exists"
   disassemble "$WORK/field_emit" "$symbol" "$WORK/$helper.asm"
@@ -976,5 +976,5 @@ printf 'receipt: target=%s %s\n' "$(uname -s)" "$(uname -m)"
 printf 'receipt: compiler=%s\n' "$(clang --version | sed -n '1p')"
 printf 'receipt: medaka=%s\n' "$($MEDAKA --version | sed -n '1p')"
 
-[ "$checked" -ge 43 ] || fail "anti-rot floor (expected at least 43, got $checked)"
+[ "$checked" -ge 54 ] || fail "anti-rot floor (expected at least 54, got $checked)"
 printf 'PASS: constant-time reduction controls — %s assertions\n' "$checked"
