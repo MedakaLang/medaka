@@ -221,6 +221,7 @@ crossModuleFunConstraintIfacesRef -- cross-module fn constraint-iface snapshot, 
 crossModuleFunConstraintIfacesQualRef -- cross-module fn constraint-iface snapshot, module-qualified mirror
 crossModuleFunConstraintDeclaredRef -- cross-module DECLARED-PREFIX sidecar to crossModuleFunConstraintsRef; per-entry scalar, not a slot-parallel list -- B-2.2-f (#1113)
 crossModuleFunConstraintDeclaredQualRef -- module-qualified mirror of the line above, keyed (definer module, fn name), resolved through the same qualConstraintKey decision as the ids and ifaces qual tables
+crossModuleFunConstraintArgsQualRef -- #1871 B-4.2 (S-xmod-vector-supply): module-qualified cross-module predicate ARGUMENT-VECTOR supply, keyed (definer module, fn name), one argument-vector-per-slot list per entry -- written by attributeModuleEntries and read via declaredConstraintFor`s cdArgs so inferDictAtFound/dictArityOf size and route dict slots from the full argument vector, not just the lead tyvar id
 crossModuleMethodConstraintsRef -- cross-module method constraint-arity snapshot, bare name
 crossModuleMethodConstraintsQualRef -- cross-module method constraint-arity snapshot, module-qualified mirror
 coreSchemeObligationsRef -- #673: core pass own scheme-obligations snapshot, taken after the core pass
