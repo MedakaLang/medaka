@@ -72,9 +72,17 @@ check_emitted_helpers() {
     expected=${spec##*:}
     body="$dir/$name.ll"
     extract_function "$name" "$ir" "$body"
-    actual=$(grep -c 'br i1' "$body" || true)
-    [ "$actual" -eq "$expected" ] || fail "$name native IR branch count (expected $expected, got $actual)"
+    helper_ir_ok "$body" "$expected" || fail "$name native IR operation/control shape"
   done
+}
+
+helper_ir_ok() {
+  body=$1
+  expected=$2
+  branches=$(grep -c 'br i1' "$body" || true)
+  comparisons=$(grep -E -c 'call i64 @mdk_value_(eq|ne|lt|le|gt|ge)\(' "$body" || true)
+  hashes=$(grep -F -c 'call i64 @mdk_hash_bool(' "$body" || true)
+  [ "$branches" -eq "$expected" ] && [ "$comparisons" -eq "$expected" ] && [ "$hashes" -eq 0 ]
 }
 
 extract_source_function() {
@@ -85,7 +93,7 @@ extract_source_function() {
     $0 ~ ("^" name " :") { found = 1; next }
     found && $0 ~ ("^" name " ") { inside = 1 }
     inside && /^[A-Za-z][A-Za-z0-9]* :/ { exit }
-    inside { print }
+    inside && $0 !~ /^[[:space:]]*--/ { print }
   ' "$input" > "$output"
   [ -s "$output" ] || return 1
 }
@@ -96,12 +104,15 @@ source_helpers_ok() {
   dir=$3
   mkdir -p "$dir"
   for spec in \
+    "carryPass:$field:0" \
     "carryPassGo:$field:1" \
     "carryFoldRound:$field:0" \
     "reduceCarry:$field:0" \
     "subPCandidate:$field:1" \
     "selectPCandidate:$field:1" \
     "subPSelect:$field:0" \
+    "canonicalize:$field:0" \
+    "carryAll:$scalar:0" \
     "carryGo:$scalar:2" \
     "foldOnce:$scalar:0" \
     "takeHigh:$scalar:1" \
@@ -110,7 +121,8 @@ source_helpers_ok() {
     "reduceFixed:$scalar:0" \
     "subNCandidate:$scalar:1" \
     "selectNCandidate:$scalar:1" \
-    "subNSelect:$scalar:0"
+    "subNSelect:$scalar:0" \
+    "reduceWide:$scalar:0"
   do
     name=${spec%%:*}
     rest=${spec#*:}
@@ -120,6 +132,11 @@ source_helpers_ok() {
     extract_source_function "$name" "$file" "$body" || return 1
     actual=$(awk '{ line=$0; while (match(line, /if[[:space:]]/)) { n++; line=substr(line, RSTART + RLENGTH) } } END { print n + 0 }' "$body")
     [ "$actual" -eq "$allowed" ] || return 1
+    comparisons=$(awk '{ line=$0; while (match(line, /(==|\/=|<=|>=| < | > )/)) { n++; line=substr(line, RSTART + RLENGTH) } } END { print n + 0 }' "$body")
+    expected_comparisons=$allowed
+    if [ "$name" = carryGo ]; then expected_comparisons=3; fi
+    [ "$comparisons" -eq "$expected_comparisons" ] || return 1
+    if grep -F -q 'hashBool' "$body"; then return 1; fi
     if [ "$name" = carryGo ]; then
       grep -F -q 'if i >= nWide then if carry /= 0 then panic' "$body" || return 1
     fi
@@ -211,16 +228,18 @@ run_probe() {
     cat "$WORK/probe-native-build.log" "$WORK/probe-native.out" >&2
     fail "$label"
   fi
+  engines=eval/native
   wasm_emitter=${MEDAKA_WASM_EMITTER:-"$ROOT/test/bin/wasm_emit_modules_main"}
   if [ -x "$wasm_emitter" ] && command -v node >/dev/null 2>&1 && command -v wasm-tools >/dev/null 2>&1; then
     if ! MEDAKA_WASM_EMITTER="$wasm_emitter" MEDAKA_STRICT=1 "$MEDAKA" build --target wasm "$file" -o "$WORK/probe.wasm" > "$WORK/probe-wasm-build.log" 2>&1 || ! node "$ROOT/test/wasm/run.js" "$WORK/probe.wasm" > "$WORK/probe-wasm.out" 2>&1 || ! grep -F -q "$expected" "$WORK/probe-wasm.out"; then
       cat "$WORK/probe-wasm-build.log" "$WORK/probe-wasm.out" >&2
       fail "$label"
     fi
+    engines=$engines/Wasm
   elif [ "${MEDAKA_REQUIRE_WASM:-0}" = 1 ]; then
     fail "$label (Wasm required but unavailable)"
   fi
-  pass "$label (eval/native/Wasm)"
+  pass "$label ($engines)"
 }
 
 run_probe_red() {
@@ -272,6 +291,20 @@ if source_helpers_ok "$FIELD" "$WORK/scalar_select_source_mutant.mdk" "$WORK/sou
   fail 'scalar select secret-branch mutation is rejected by source structure'
 fi
 pass 'scalar select secret-branch mutation is rejected by source structure'
+
+awk '
+  /selectNCandidate w diff keepDiff \(i \+ 1\)/ {
+    print "    let secret = hashBool (original < diff[i])"
+    print "    let () = A.set i (w[i] + 0 * secret) w"
+    print
+    next
+  }
+  { print }
+' "$SCALAR" > "$WORK/scalar_hash_source_mutant.mdk"
+if source_helpers_ok "$FIELD" "$WORK/scalar_hash_source_mutant.mdk" "$WORK/source-scalar-hash-mutant"; then
+  fail 'scalar comparison/hashBool mutation is rejected by source structure'
+fi
+pass 'scalar comparison/hashBool mutation is rejected by source structure'
 
 # Private same-module witnesses. The mutation copies never touch the worktree.
 cp "$FIELD" "$WORK/field_probe.mdk"
@@ -368,6 +401,16 @@ scalar_mutant_ir_branches=$(grep -c 'br i1' "$WORK/scalar-select-mutant.ll" || t
 grep -F -q 'mdk_value_eq' "$WORK/scalar-select-mutant.ll" || fail 'scalar conditional-select mutation exposes equality in native IR'
 pass 'scalar conditional-select mutation is rejected by native IR control'
 
+cp "$WORK/scalar_hash_source_mutant.mdk" "$WORK/scalar_hash_mutant.mdk"
+append_scalar_probe "$WORK/scalar_hash_mutant.mdk"
+MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_hash_mutant.mdk" -o "$WORK/scalar_hash_mutant" --keep-ir > "$WORK/build-scalar-hash-mutant.log" 2>&1
+extract_function selectNCandidate "$WORK/scalar_hash_mutant.ll" "$WORK/scalar-hash-mutant.ll"
+if helper_ir_ok "$WORK/scalar-hash-mutant.ll" 1; then
+  fail 'scalar comparison/hashBool mutation is rejected by native IR operation allowlist'
+fi
+grep -F -q 'mdk_hash_bool' "$WORK/scalar-hash-mutant.ll" || fail 'scalar comparison/hashBool mutation reaches native IR'
+pass 'scalar comparison/hashBool mutation is rejected by native IR operation allowlist'
+
 disassemble() {
   binary=$1
   symbol=$2
@@ -456,5 +499,5 @@ printf 'receipt: target=%s %s\n' "$(uname -s)" "$(uname -m)"
 printf 'receipt: compiler=%s\n' "$(clang --version | sed -n '1p')"
 printf 'receipt: medaka=%s\n' "$($MEDAKA --version | sed -n '1p')"
 
-[ "$checked" -ge 27 ] || fail "anti-rot floor (expected at least 27, got $checked)"
+[ "$checked" -ge 29 ] || fail "anti-rot floor (expected at least 29, got $checked)"
 printf 'PASS: constant-time reduction controls — %s assertions\n' "$checked"
