@@ -1,0 +1,19 @@
+-- S-cardinality-conformance (closes out #1871): the ACCEPT half of the cross-module
+-- cardinality row, paired with s-cardinality-xmod-reject/. ONE exported bare-tyvar
+-- predicate `Ix a b`, ONE impl (so no ambiguity), calling `ix` with the caller-
+-- instantiated vector. ⚠️ NOT a same-interface TWO-vector cross-module row (the
+-- #1866 shape) -- that shape is currently UNREACHABLE cross-module: any concrete-
+-- argument declared constraint crossing a module boundary is rejected outright by
+-- the still-open #1867 residual (N2, S-xmod-vector-supply's report), independent of
+-- and unmoved by this sprint. See this slice's report Notes for the measured
+-- discriminating probes. This row instead pins that a SINGLE cross-module vector
+-- reaches the key end to end: value 111 and, per section 3 (IRS below), arity 1
+-- dict + 2 values = 3 params.
+export interface Ix a b where
+  ix : a -> b -> Int
+
+export impl Ix Int Bool where
+  ix _ _ = 111
+
+export useIx : Ix a b => a -> b -> Int
+useIx p q = ix p q

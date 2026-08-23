@@ -1,0 +1,23 @@
+-- S-cardinality-conformance (closes out #1871): the #1866 shape, RESTORED from the
+-- drained must_fail pin (was test/must_fail_fixtures/1866-same-iface-two-predicates-
+-- collapse-one-slot/main.mdk before S-slot-key-vector drained it). ONE interface, TWO
+-- predicates sharing the SAME lead tyvar but DISTINCT argument vectors --
+-- `(Ix a Char, Ix a Bool)` -- must open TWO dict slots, not one. Section 1 pins the
+-- value (333 = 222+111); section 3 (IRS below) pins the arity (2 dicts + 1 value = 3
+-- params); section 4 auto-permutes the two `impl Ix` blocks, which is this corpus's
+-- own order-independence check (S-slot-key-vector's own report additionally measured
+-- a THIRD declaration order by hand -- see that slice's report for the swapped-order
+-- probe this fixture does not repeat).
+interface Ix a b where
+  ix : a -> b -> Int
+
+impl Ix Int Char where
+  ix _ _ = 222
+
+impl Ix Int Bool where
+  ix _ _ = 111
+
+useIx : (Ix a Char, Ix a Bool) => a -> Int
+useIx x = ix x 'z' + ix x True
+
+main = println (useIx 5)

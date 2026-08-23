@@ -1,0 +1,33 @@
+-- S-cardinality-conformance (closes out #1871): the SIGNATURED oracle for
+-- s-cardinality-inferred.mdk / s-cardinality-inferred-swapped.mdk -- identical
+-- interfaces, impls (in the -inferred.mdk order) and bodies, with explicit `=>`
+-- signatures on `useIx`/`useJx`. This is the #1869 fixture's own `control.mdk`,
+-- RESTORED (the drained pin's control never moved -- it was correct at base and
+-- stays correct here). Same value (2442) and, per section 3 (IRS below), the SAME
+-- slot count as its inferred counterpart -- proving the inferred path's arity now
+-- matches the declared path's, not merely its value.
+interface Ix a b where
+  ix : a -> b -> Int
+
+impl Ix Int Bool where
+  ix _ _ = 111
+
+impl Ix Int Char where
+  ix _ _ = 222
+
+interface Jx a b where
+  jx : a -> b -> Int
+
+impl Jx Int Char where
+  jx _ _ = 2220
+
+impl Jx Int Bool where
+  jx _ _ = 1110
+
+useIx : Ix a b => a -> b -> Int
+useIx p q = ix p q
+
+useJx : Jx a b => a -> b -> Int
+useJx p q = jx p q
+
+main = println (useIx 5 'z' + useJx 5 'z')
