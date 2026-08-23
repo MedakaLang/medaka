@@ -562,11 +562,24 @@ multi-clause function — inline `| cond = body`, an indented `| … = …` arm
 block, and multiple guarded/unguarded clauses stacked by name (#508):
 
 ```medaka
+interface Eq2 a where
+  eq2 : a -> a -> Bool
+
+interface Ord2 a requires Eq2 a where
+  compare2 : a -> a -> Ordering
+
+data T = T Int
+
+impl Eq2 T where
+  eq2 (T a) (T b) = a == b
+
 impl Ord2 T where
   compare2 (T a) (T b)
-    | a < b = LT
-    | a > b = GT
-    | otherwise = EQ
+    | a < b = Lt
+    | a > b = Gt
+    | otherwise = Eq
+
+main = println (compare2 (T 1) (T 2))
 ```
 
 There are no **named impls** (`impl Name of Iface Ty where`), no `default impl`, and
