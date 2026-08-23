@@ -2908,14 +2908,35 @@ implMethodsCons = do
   rest <- implMethodsLoop
   pure (m::rest)
 
--- impl methods are `name pats = body` (multi-clause = repeated entries)
+-- impl methods are `name pats = body` (multi-clause = repeated entries), and,
+-- exactly like a top-level `parseFunOrSig` clause, may instead be a guarded
+-- clause: a single `| cond = body` on the same line, or an INDENT block of
+-- `| cond = body` arms (#508 — this used to be parser-only-supported at top
+-- level; an impl method's clause list is already multi-clause-aware
+-- downstream (`implDictPassMethods`/typecheck's per-name clause grouping),
+-- so mirroring `parseFunOrSig`'s TIndent/TPipe arms is enough.
 implMethod : Parser ImplMethod
 implMethod = do
   name <- identNameP
   pats <- many parseParamPat
-  expectTok TEqual
+  t <- peekP
+  implMethodRest name pats t
+
+implMethodRest : String -> List Pat -> Token -> Parser ImplMethod
+implMethodRest name pats TEqual = do
+  advance
   body <- parseBody
   pure (ImplMethod name pats body)
+implMethodRest name pats TIndent = do
+  advance
+  arms <- parseGuardArms
+  body <- guardArmsWhereOpt arms
+  expectTok TDedent
+  pure (ImplMethod name pats body)
+implMethodRest name pats TPipe = do
+  arm <- parseGuardArm
+  pure (ImplMethod name pats (EGuards [arm]))
+implMethodRest _ _ _ = failP "expected = or | in impl method"
 
 -- a Haskell-style `where` scoping over ALL guard arms (it sits at the guards'
 -- indentation, inside their INDENT block): `guards WHERE INDENT bindings DEDENT

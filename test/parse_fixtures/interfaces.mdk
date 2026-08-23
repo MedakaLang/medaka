@@ -16,6 +16,23 @@ impl Eq (Option a) requires Eq a where
 impl Debug a where
   debug _ = "?"
 
+-- #508: a guarded clause parses inside an impl method body, same shapes as a
+-- top-level multi-clause function (inline `|` and an indented arm block).
+interface Sz a where
+  eq2 : a -> a -> Bool
+
+data T = T Int
+
+impl Sz T where
+  eq2 (T a) (T b) | a == b = True
+  eq2 _ _ = False
+
+impl Ord2 T where
+  compare2 (T a) (T b)
+    | a < b = LT
+    | a > b = GT
+    | otherwise = EQ
+
 clamp lo hi = min hi >> max lo
 
 combine = f << g

@@ -1,5 +1,5 @@
 # META
-source_lines=5093
+source_lines=5114
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser — Stage 1 port of `lib/parser.mly`.  A monadic
@@ -2912,14 +2912,35 @@ implMethodsCons = do
   rest <- implMethodsLoop
   pure (m::rest)
 
--- impl methods are `name pats = body` (multi-clause = repeated entries)
+-- impl methods are `name pats = body` (multi-clause = repeated entries), and,
+-- exactly like a top-level `parseFunOrSig` clause, may instead be a guarded
+-- clause: a single `| cond = body` on the same line, or an INDENT block of
+-- `| cond = body` arms (#508 — this used to be parser-only-supported at top
+-- level; an impl method's clause list is already multi-clause-aware
+-- downstream (`implDictPassMethods`/typecheck's per-name clause grouping),
+-- so mirroring `parseFunOrSig`'s TIndent/TPipe arms is enough.
 implMethod : Parser ImplMethod
 implMethod = do
   name <- identNameP
   pats <- many parseParamPat
-  expectTok TEqual
+  t <- peekP
+  implMethodRest name pats t
+
+implMethodRest : String -> List Pat -> Token -> Parser ImplMethod
+implMethodRest name pats TEqual = do
+  advance
   body <- parseBody
   pure (ImplMethod name pats body)
+implMethodRest name pats TIndent = do
+  advance
+  arms <- parseGuardArms
+  body <- guardArmsWhereOpt arms
+  expectTok TDedent
+  pure (ImplMethod name pats body)
+implMethodRest name pats TPipe = do
+  arm <- parseGuardArm
+  pure (ImplMethod name pats (EGuards [arm]))
+implMethodRest _ _ _ = failP "expected = or | in impl method"
 
 -- a Haskell-style `where` scoping over ALL guard arms (it sits at the guards'
 -- indentation, inside their INDENT block): `guards WHERE INDENT bindings DEDENT
@@ -6054,7 +6075,12 @@ parseResultWith src tokList offList =
 (DTypeSig false "implMethodsCons" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "ImplMethod"))))
 (DFunDef false "implMethodsCons" () (EApp (EApp (EVar "andThen") (EVar "implMethod")) (ELam ((PVar "m")) (EApp (EApp (EVar "andThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "implMethodsLoop")) (ELam ((PVar "rest")) (EApp (EVar "pure") (EBinOp "::" (EVar "m") (EVar "rest"))))))))))
 (DTypeSig false "implMethod" (TyApp (TyCon "Parser") (TyCon "ImplMethod")))
-(DFunDef false "implMethod" () (EApp (EApp (EVar "andThen") (EVar "identNameP")) (ELam ((PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EVar "many") (EVar "parseParamPat"))) (ELam ((PVar "pats")) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TEqual"))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "parseBody")) (ELam ((PVar "body")) (EApp (EVar "pure") (EApp (EApp (EApp (EVar "ImplMethod") (EVar "name")) (EVar "pats")) (EVar "body"))))))))))))
+(DFunDef false "implMethod" () (EApp (EApp (EVar "andThen") (EVar "identNameP")) (ELam ((PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EVar "many") (EVar "parseParamPat"))) (ELam ((PVar "pats")) (EApp (EApp (EVar "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EApp (EVar "implMethodRest") (EVar "name")) (EVar "pats")) (EVar "t")))))))))
+(DTypeSig false "implMethodRest" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "ImplMethod"))))))
+(DFunDef false "implMethodRest" ((PVar "name") (PVar "pats") (PCon "TEqual")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "parseBody")) (ELam ((PVar "body")) (EApp (EVar "pure") (EApp (EApp (EApp (EVar "ImplMethod") (EVar "name")) (EVar "pats")) (EVar "body"))))))))
+(DFunDef false "implMethodRest" ((PVar "name") (PVar "pats") (PCon "TIndent")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "parseGuardArms")) (ELam ((PVar "arms")) (EApp (EApp (EVar "andThen") (EApp (EVar "guardArmsWhereOpt") (EVar "arms"))) (ELam ((PVar "body")) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EVar "pure") (EApp (EApp (EApp (EVar "ImplMethod") (EVar "name")) (EVar "pats")) (EVar "body"))))))))))))
+(DFunDef false "implMethodRest" ((PVar "name") (PVar "pats") (PCon "TPipe")) (EApp (EApp (EVar "andThen") (EVar "parseGuardArm")) (ELam ((PVar "arm")) (EApp (EVar "pure") (EApp (EApp (EApp (EVar "ImplMethod") (EVar "name")) (EVar "pats")) (EApp (EVar "EGuards") (EListLit (EVar "arm"))))))))
+(DFunDef false "implMethodRest" (PWild PWild PWild) (EApp (EVar "failP") (ELit (LString "expected = or | in impl method"))))
 (DTypeSig false "guardArmsWhereOpt" (TyFun (TyApp (TyCon "List") (TyCon "GuardArm")) (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "guardArmsWhereOpt" ((PVar "arms")) (EApp (EApp (EVar "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "guardArmsWhereFor") (EVar "arms")) (EVar "t")))))
 (DTypeSig false "guardArmsWhereFor" (TyFun (TyApp (TyCon "List") (TyCon "GuardArm")) (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr")))))
@@ -7593,7 +7619,12 @@ parseResultWith src tokList offList =
 (DTypeSig false "implMethodsCons" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "ImplMethod"))))
 (DFunDef false "implMethodsCons" () (EApp (EApp (EMethodRef "andThen") (EVar "implMethod")) (ELam ((PVar "m")) (EApp (EApp (EMethodRef "andThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "implMethodsLoop")) (ELam ((PVar "rest")) (EApp (EMethodRef "pure") (EBinOp "::" (EVar "m") (EVar "rest"))))))))))
 (DTypeSig false "implMethod" (TyApp (TyCon "Parser") (TyCon "ImplMethod")))
-(DFunDef false "implMethod" () (EApp (EApp (EMethodRef "andThen") (EVar "identNameP")) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "many") (EVar "parseParamPat"))) (ELam ((PVar "pats")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TEqual"))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "parseBody")) (ELam ((PVar "body")) (EApp (EMethodRef "pure") (EApp (EApp (EApp (EVar "ImplMethod") (EVar "name")) (EVar "pats")) (EVar "body"))))))))))))
+(DFunDef false "implMethod" () (EApp (EApp (EMethodRef "andThen") (EVar "identNameP")) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "many") (EVar "parseParamPat"))) (ELam ((PVar "pats")) (EApp (EApp (EMethodRef "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EApp (EVar "implMethodRest") (EVar "name")) (EVar "pats")) (EVar "t")))))))))
+(DTypeSig false "implMethodRest" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "ImplMethod"))))))
+(DFunDef false "implMethodRest" ((PVar "name") (PVar "pats") (PCon "TEqual")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "parseBody")) (ELam ((PVar "body")) (EApp (EMethodRef "pure") (EApp (EApp (EApp (EVar "ImplMethod") (EVar "name")) (EVar "pats")) (EVar "body"))))))))
+(DFunDef false "implMethodRest" ((PVar "name") (PVar "pats") (PCon "TIndent")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "parseGuardArms")) (ELam ((PVar "arms")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "guardArmsWhereOpt") (EVar "arms"))) (ELam ((PVar "body")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TDedent"))) (ELam (PWild) (EApp (EMethodRef "pure") (EApp (EApp (EApp (EVar "ImplMethod") (EVar "name")) (EVar "pats")) (EVar "body"))))))))))))
+(DFunDef false "implMethodRest" ((PVar "name") (PVar "pats") (PCon "TPipe")) (EApp (EApp (EMethodRef "andThen") (EVar "parseGuardArm")) (ELam ((PVar "arm")) (EApp (EMethodRef "pure") (EApp (EApp (EApp (EVar "ImplMethod") (EVar "name")) (EVar "pats")) (EApp (EVar "EGuards") (EListLit (EVar "arm"))))))))
+(DFunDef false "implMethodRest" (PWild PWild PWild) (EApp (EVar "failP") (ELit (LString "expected = or | in impl method"))))
 (DTypeSig false "guardArmsWhereOpt" (TyFun (TyApp (TyCon "List") (TyCon "GuardArm")) (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "guardArmsWhereOpt" ((PVar "arms")) (EApp (EApp (EMethodRef "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EVar "guardArmsWhereFor") (EVar "arms")) (EVar "t")))))
 (DTypeSig false "guardArmsWhereFor" (TyFun (TyApp (TyCon "List") (TyCon "GuardArm")) (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Expr")))))
