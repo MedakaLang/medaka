@@ -27,11 +27,23 @@ The deployment claim is narrow and testable:
   key-generation contract must use `osEntropyBytes` on native/eval and keep the
   explicit Wasm gap. This document does not settle design §7 Q6.
 
+One result is deliberately declassified: after both RFC 6979 candidates and
+both complete signing computations have run, their aggregate `validBit` may be
+converted once to the public API result “signature” or “retry bound exhausted.”
+The candidate chosen, the reason a candidate was invalid, and every value used
+to reach that aggregate remain secret. P15 therefore promises fixed control
+and allocation through production of that aggregate, not indistinguishability
+between the externally observable success and exhaustion outcomes. This narrow
+exception was accepted in #1877; it is not precedent for another secret-derived
+branch.
+
 The admitted secret key is exactly a canonical scalar `d` with `1 <= d < n`.
-Invalid length, zero, and `>= n` rejection are API outcomes outside the
-constant-time domain. Once admitted, the key's value must not affect control or
-allocation. The signing input is a 32-byte SHA-256 digest, not an arbitrary
-message; hashing variable-length application data occurs before this boundary.
+Invalid length is public. For an input of length 32, zero and `>= n` are tested
+by the fixed parser in §3.1; only its final aggregate accepted/rejected bit is a
+declassified validation result. Once admitted, the key's value must not affect
+control or allocation. The signing input is a 32-byte SHA-256 digest, not an
+arbitrary message; hashing variable-length application data occurs before this
+boundary.
 
 ## 2. Modules and public API
 
@@ -41,8 +53,8 @@ Implementation adds:
   operations, fixed-schedule scalar multiplication, compressed codec, and
   ECDSA/RFC-6979 internals;
 - `pds/lib/sign.mdk`: the only consumer-facing key/signature interface;
-- a future HMAC-SHA-256 module: fixed-shape HMAC-SHA-256 over byte arrays,
-  private to the signing layer.
+- the planned module named `hmac_sha256.mdk` in the PDS library directory:
+  fixed-shape HMAC-SHA-256 over byte arrays, private to the signing layer.
 
 `sign.mdk` exports opaque `SecretKey`, `PublicKey`, and `Signature` values and
 the following semantic surface (exact constructor names are private):
@@ -102,6 +114,14 @@ Equivalent scalar helpers are `scZeroBit`, `scEqualBit`, `scSelect`, and
 non-negative borrow formula and returns `1 - borrow`; it does not call
 Bool-returning `scIsHigh`.
 
+`secretKeyFromBytes` first checks the public length, then scans all 32
+big-endian bytes into a fixed-width scalar carrier. It unconditionally computes
+both (a) the borrow from subtracting `n`, which proves `< n`, and (b) the borrow
+from subtracting one, which proves nonzero. It combines those arithmetic bits
+into one `validBit`. Construction of `SecretKey` or `Err` may branch only once
+on that declassified aggregate after the scan; there is no per-byte, zero, or
+range early return. The native closure includes this parser and its helpers.
+
 All loops use only public fixed limb indices. These helpers join the existing
 constant-time source/IR/final-code closure gate; a wrapper is not accepted
 unless its entire transitive native callee graph is scanned.
@@ -109,15 +129,40 @@ unless its entire transitive native callee graph is scanned.
 ### 3.2 Complete Jacobian addition by compute-and-select
 
 No incomplete formula receives a secret-dependent exceptional branch. Each
-`pointAddComplete(P,Q)` invocation unconditionally computes:
+`pointAddComplete(P,Q)` invocation unconditionally computes the following
+generic-add candidate:
 
-1. the standard secp256k1 Jacobian generic-add candidate;
-2. the standard Jacobian double candidate for `P`;
-3. the canonical infinity candidate;
-4. fixed-control flags `pInf`, `qInf`, `sameX`, and `sameY` from `Z`, `U1/U2`,
-   and `S1/S2` with the arithmetic helpers above;
-5. an arithmetic selection chain choosing generic add, double, infinity, `P`,
-   or `Q` for all exceptional cases.
+```text
+Z1Z1 = Z1^2; Z2Z2 = Z2^2
+U1 = X1*Z2Z2; U2 = X2*Z1Z1
+S1 = Y1*Z2*Z2Z2; S2 = Y2*Z1*Z1Z1
+H = U2-U1; I = (2*H)^2; J = H*I
+r = 2*(S2-S1); V = U1*I
+X3 = r^2-J-2*V
+Y3 = r*(V-X3)-2*S1*J
+Z3 = ((Z1+Z2)^2-Z1Z1-Z2Z2)*H
+```
+
+It also unconditionally computes this doubling candidate for `P`:
+
+```text
+A = X1^2; B = Y1^2; C = B^2
+D = 2*((X1+B)^2-A-C)
+E = 3*A; F = E^2
+X3 = F-2*D
+Y3 = E*(D-X3)-8*C
+Z3 = 2*Y1*Z1
+```
+
+It then computes:
+
+1. the canonical infinity candidate;
+2. `pInf=feZeroBit(Z1)`, `qInf=feZeroBit(Z2)`,
+   `sameX=feZeroBit(H)`, and `sameY=feZeroBit(r)`;
+3. `equal=sameX*sameY` and `opposite=sameX*(1-sameY)`;
+4. an arithmetic selection chain, on all three coordinates, starting with
+   generic add and selecting double for `equal`, infinity for `opposite`, `P`
+   for `qInf`, then `Q` for `pInf`.
 
 All candidates and flags are computed for every call. The selections implement
 the truth table:
@@ -130,7 +175,10 @@ the truth table:
 | same affine x and opposite y | infinity |
 | otherwise | generic add |
 
-The selection order gives the infinity rows priority. Point doubling is the
+The final two selections give the infinity rows priority; if both inputs are
+infinity, selecting `Q` still produces infinity. `pointSelect` uses `feSelect`
+for every coordinate. Every result with `Z=0` is arithmetically canonicalized
+to `(0,1,0)`. Point doubling is the
 same fixed operation for `Y = 0` and infinity; its formula naturally produces
 `Z = 0`, then the result is canonicalized to `(0,1,0)` with arithmetic
 selection. This compute-and-select construction, not a claim about an
@@ -149,15 +197,17 @@ computes:
 
 ```text
 A  = pointAddComplete R0 R1
-D0 = pointAddComplete R0 R0
-D1 = pointAddComplete R1 R1
+D0 = pointDoubleComplete R0
+D1 = pointDoubleComplete R1
 R0 = pointSelect bit D0 A
 R1 = pointSelect bit A D1
 ```
 
 `bit` is extracted arithmetically from a fixed byte/limb index. There is no
 secret-index table and no branch/swap on the bit. The schedule therefore runs
-768 complete additions for every scalar, including leading zero bits. This is
+256 complete additions and 512 complete doublings for every scalar, including
+leading zero bits. The scalar carrier is exactly 32 big-endian bytes and the
+public loop index selects byte `i / 8` and bit `7 - (i % 8)`. This is
 deliberately slower than a window table and requires no performance exception:
 PDS signing volume is low and correctness/security dominate.
 
@@ -199,8 +249,10 @@ The mathematically unbounded retry loop is made an explicit fixed-domain API:
    multiplication, `r`, inverse, `s`, and low-S normalization;
 6. arithmetic-select the first candidate for which `1 <= k < n`, `r != 0`,
    and `s != 0`;
-7. return `Err "RFC 6979 retry bound exhausted"` only if neither candidate is
-   valid.
+7. return an internal fixed-shape `{ validBit, compact }` value with the same
+   allocation shape whether zero, one, or two candidates were valid;
+8. only `signDigest` converts the declassified aggregate `validBit` once to
+   `Ok Signature` or `Err "RFC 6979 retry bound exhausted"`.
 
 Thus every admitted call performs two candidate generations and two signing
 computations. Candidate 0 is the ordinary RFC 6979 result; candidate 1 is
@@ -208,9 +260,16 @@ exactly the next result RFC 6979 prescribes after rejecting candidate 0. The
 bounded failure is explicit rather than a hidden variable-time loop. Since
 `2^256-n < 2^129`, candidate-range rejection is below `2^-127` per draw, and
 `r=0`/`s=0` are each approximately `2^-256`; two failures are below the
-project's operational threat floor while remaining a real, tested `Result`
+project’s operational threat floor while remaining a real, tested `Result`
 case. This probability argument does not turn the error into success or permit
 removing its test.
+
+The gate-only probe has an injectable candidate seam: it substitutes the two
+32-byte candidate values and their range-valid bits after the normal fixed
+HMAC schedule, while leaving both complete signature computations and the
+final aggregate selection intact. Production has no injection parameter. This
+seam must demonstrate candidate-1 selection and two-candidate exhaustion; the
+exhaustion witness must reach exactly the single declassified branch above.
 
 Candidate validity uses fixed borrow/zero bits. `k^-1` is never computed as a
 meaningful candidate from zero: the arithmetic still runs on a safe selected
@@ -238,10 +297,15 @@ or invalid data. It computes `w=s^-1`, `u1=z*w`, `u2=r*w`, and
 modulo `n` equals `r`. High-S is rejected at signature parsing and again at the
 verification boundary so a future alternate constructor cannot bypass it.
 
-Public-input status does not weaken value acceptance: all Wycheproof invalid
-rows must reject, and every supported valid row must accept. “Acceptable” rows
-are treated as invalid unless the committed normalization policy explicitly
-names the flag and reason; the initial policy names none.
+Public-input status does not weaken value acceptance. The pinned Wycheproof
+file has 242 rows: 163 marked `valid` and 79 marked `invalid`. Of the 163 valid
+rows, the project predicate `s > floor(n/2)` identifies 69 high-S and 94 low-S
+rows. The corpus preserves the upstream result and flags verbatim, and adds a
+separate project expectation: accept exactly the 94 upstream-valid low-S rows;
+reject the other 148. The generator asserts all four counts and recomputes the
+high-S predicate. It never rewrites an upstream `valid` result into `invalid`.
+An upstream `acceptable` row would reject unless a later accepted policy names
+its flag and reason; this pinned artifact has none.
 
 ## 6. External authorities and corpus production
 
@@ -255,7 +319,7 @@ drift.
 | deterministic nonce algorithm | IETF RFC 6979 text, `https://www.rfc-editor.org/rfc/rfc6979.txt` | `456e8f17558fdbd206f968b96fc6f1b4a71ea331ab30ad17f711ab3adaa7d701` |
 | completeness review | IACR ePrint 2015/1060 PDF | `b836c9cf41f7826f2c5a6e252487b5013a4da6dc9838da11397c4022a1567326` |
 | point/sign oracle A | bitcoin-core/libsecp256k1 tag `v0.8.0`, peeled commit `6e2c8bc4ecdc6e71dbe7a368f360d8d453ce435d`, commit archive | `3fe9fd705f4fdf2fe90d6e04b6c1fedd7e8f244a119315886f6468f52c2dfc33` |
-| nonce/sign oracle B | RustCrypto `k256` tag `k256/v0.13.4`, commit `5ac8f5d77f11399ff48d87b0554935f6eddda342`, commit archive | `2413c10980e3a2648118953a6468699670d7f03674fe4dcbffa5d3ecc835ec5f` |
+| nonce/sign oracle B | RustCrypto `k256` tag `k256/v0.13.4`, commit `5ac8f5d77f11399ff48d87b0554935f6eddda342`, commit archive; locked `rfc6979` 0.4.0 crates.io checksum `f8dd2a808d456c4a54e300a23e9f5a67e122c3024119acbfd73e3bf664491cb2` | `2413c10980e3a2648118953a6468699670d7f03674fe4dcbffa5d3ecc835ec5f` |
 | verification negatives | Google Wycheproof tag `google-wycheproof/v0.9`, commit `cff6adf42662469a1871e57303a0ad1d758ed8c0`, `testvectors_v1/ecdsa_secp256k1_sha256_p1363_test.json` | `6508e9cc99c169c7d59a6891d939387f115491c479088ddcdcec4d137be69f34` |
 | PDS behavior | official image digest `ghcr.io/bluesky-social/pds@sha256:d95725b24dbe53af9d91dc69750556931ebed6c396f2cfa42b221434db642f12`, revision `374cf1d4ba782d4391bbb73e4e2d3f320d4846d6` | OCI digest is the artifact identity |
 
@@ -271,16 +335,36 @@ The signing corpus input manifest is committed source, not runtime randomness:
 
 The generator obtains compressed public key, RFC-6979 `k`, raw `r`, raw `s`,
 low-S `s`, and compact signature from both independent implementations. It
-emits a row only if all fields agree byte-for-byte. libsecp256k1's nonce
-callback is instrumented to record the candidate; RustCrypto's `rfc6979`
-dependency is called at the pinned lockfile revision to record it independently.
-The PDS oracle must agree on the compact signature for at least the 16
-matching-index rows; PDS output never supplies the expected file by itself.
+emits a row only if all fields agree byte-for-byte. The committed libsecp256k1
+driver records `k` from `nonce_function_rfc6979_impl` and captures raw `s` in
+`secp256k1_ecdsa_sig_sign` immediately before its `high =
+secp256k1_scalar_is_high(sigs)` normalization. It includes the pinned tree's
+internal source/headers and builds with `cc -O2
+-DUSE_FORCE_WIDEMUL_INT64=1 -I<clone>`.
+
+The committed Rust driver and lockfile call locked `rfc6979` 0.4.0 to record
+`k`, then call `ecdsa_core::hazmat::sign_prehashed` directly to capture raw `s`
+before k256's `SignPrimitive` wrapper calls `normalize_s`; the driver performs
+and records normalization separately. The generator takes no runtime choice
+of revision, algorithm, or capture point: only its output path is variable.
+
+For the 16 matching-index message rows, the PDS comparison runs the pinned
+image with `docker run --rm --entrypoint node ... --input-type=module -e ...`.
+The script imports the absolute installed
+`@atproto/crypto/dist/secp256k1/keypair.js`, parses lower-case key/message hex,
+calls `Secp256k1Keypair.import(key, {exportable:false})`,
+`publicKeyBytes()`, and `sign(message)`, and emits lower-case hex JSON. This
+intentionally exercises the PDS API's SHA-256 hashing and low-S compact
+signature behavior; it does not pass the already-hashed signing-corpus digest.
+PDS output never supplies the expected file by itself.
 
 Point rows include infinity identities internally, `G`, `2G`, `3G`, the
-small-scalar set above, `nG = infinity`, and compressed round trips. SEC 2
-anchors `G`; both pinned implementations must agree on every derived multiple.
-Self-agreement or Medaka-captured output is never an answer key.
+small-scalar set above, `nG = infinity`, and compressed round trips. No located
+published artifact supplies all requested small multiples. The accepted #1877
+authority recut therefore anchors `G` in SEC 2 and requires byte-identical
+agreement between the pinned libsecp256k1 and RustCrypto k256 implementations
+for every derived multiple. Medaka self-agreement or Medaka-captured output is
+never an answer key.
 
 Wycheproof ingestion keeps `tcId`, public key, message, 64-byte signature,
 result, and flags. The gate asserts the source says `numberOfTests: 242` and
@@ -305,7 +389,9 @@ and transactional mutations. It must prove red for:
 11. compact output changed from 64-byte P1363 to DER or variable length;
 12. one Wycheproof negative row removed or flipped;
 13. the dual-oracle signing agreement check disabled;
-14. a transitive secret-bearing wrapper omitted from the closure manifest.
+14. a transitive secret-bearing wrapper omitted from the closure manifest;
+15. private-key range or zero parsing changed to an early return;
+16. the gate-only candidate seam no longer reaches candidate 1 or exhaustion.
 
 The native structural gate starts at `publicKeyForSecret` and `signDigest`,
 closes every local/transitive callee, and checks source, emitted LLVM helper
