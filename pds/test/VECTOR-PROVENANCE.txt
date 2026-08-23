@@ -335,3 +335,33 @@ extraction:    pds/tools/gen_scalar_corpus.sh — clones libsecp256k1 at the pin
 retrieved:     2026-08-17
 consumer:      S-scalar (#1700 secp256k1 group ops + RFC 6979 + low-S)
 notes:         1028 rows (1042 lines incl. 14 header comments): red/neg/inv/high/ovf over all 52 inputs, and mul/add/sub over 256 pairs. Operands are RAW 32-byte big-endian values that may be >= n; results are canonical. `inv 0` is 0 in this reference and that convention is pinned here executably (RUN-PDS0-016 Q1). `ovf` rows record secp256k1_scalar_set_b32's overflow flag, i.e. the >= n boundary that scFromBytes rejects on. `high` rows are the STRICT low-S predicate s > floor(n/2), so high(n_h) is 0 and high(n_h+1) is 1.
+
+[impl]
+id:            k256
+repo:          https://github.com/RustCrypto/elliptic-curves
+version:       k256/v0.13.4
+commit:        5ac8f5d77f11399ff48d87b0554935f6eddda342
+retrieved:     2026-08-23
+notes:         independent RustCrypto secp256k1 implementation used as the mandatory byte-identical secondary oracle for the point corpus.
+
+[vector]
+file:          pds/test/vectors/secp256k1_parameters.txt
+local-sha256:  a226d5945548da2501910cf99fe20b9c3381043b5ed44ac16de8dea4ec002606
+kind:          published-artifact
+source:        SEC 2 v2, §2.4.1 secp256k1 domain parameters
+source-url:    https://www.secg.org/sec2-v2.pdf
+source-sha256: 87b8f3703364ed5b21ba8582e411cc0cbf477bcaa3f4f45e0d6580d1c00d9952
+extraction:    pds/tools/gen_point_corpus.sh verifies the SEC 2 PDF digest and writes exactly p,a,b,n,Gx,Gy,compressed G.
+retrieved:     2026-08-23
+consumer:      S-point-corpus (#1700 secp256k1 public points)
+
+[vector]
+file:          pds/test/vectors/point_public_key_corpus.txt
+local-sha256:  58f4af12b3146713854a51d8fd04bae8b3703a1e383d7e278d6f5e7ac350d28b
+kind:          reference-impl
+impl:          libsecp256k1
+impl-secondary: k256
+source-url:    https://github.com/bitcoin-core/secp256k1/archive/6e2c8bc4ecdc6e71dbe7a368f360d8d453ce435d.tar.gz
+extraction:    pds/tools/gen_point_corpus.sh verifies the SEC 2 PDF, the exact libsecp256k1 and k256 commit archives and pins, runs the committed C and Rust drivers, requires byte-identical output, and writes 17 mul, 6 add, and 2 double rows.
+retrieved:     2026-08-23
+consumer:      S-point-corpus (#1700 secp256k1 public points)

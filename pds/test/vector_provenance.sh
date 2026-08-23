@@ -250,7 +250,7 @@ check_corpus() {
       }
 
       vec_common_n = split("file local-sha256 kind source-url extraction retrieved consumer", vec_common, " ")
-      vec_known_n = split("file local-sha256 kind source-url extraction retrieved consumer source source-sha256 source-note impl notes", vec_known, " ")
+      vec_known_n = split("file local-sha256 kind source-url extraction retrieved consumer source source-sha256 source-note impl impl-secondary notes", vec_known, " ")
       for (i = 1; i <= n_vec; i++) {
         for (k = 1; k <= vec_common_n; k++) {
           rk = vec_common[k]
@@ -302,6 +302,15 @@ check_corpus() {
             fail = 1
           } else if (!(impl_id in impl_id_first)) {
             print "FAIL: UNPINNED IMPL: [vector] stanza at line " vec_line[i] " names impl \"" impl_id "\" but no [impl] stanza defines it"
+            fail = 1
+          }
+          secondary_id = vec_val[i, "impl-secondary"]
+          if ((i, "impl-secondary") in vec_haskey && !(secondary_id in impl_id_first)) {
+            print "FAIL: UNPINNED SECONDARY IMPL: [vector] stanza at line " vec_line[i] " names impl-secondary \"" secondary_id "\" but no [impl] stanza defines it"
+            fail = 1
+          }
+          if ((i, "impl-secondary") in vec_haskey && secondary_id == impl_id) {
+            print "FAIL: [vector] stanza at line " vec_line[i] ": impl-secondary must differ from impl"
             fail = 1
           }
         }
@@ -755,6 +764,42 @@ EOF
   rm -rf "$t9"
   if [ "$t9_rc" -ne 0 ]; then st_rc=1; fi
 
+  # T10/T11 exercise the optional secondary authority used by the point corpus.
+  for case_name in missing same; do
+    tx="$(mktemp -d "$VP_WORK/$case_name.XXXXXX")"
+    mkdir -p "$tx/pds/test"
+    mk_vector "$tx" "pds/test/x.txt" x
+    tx_hash="$(sha256_of_file "$tx/pds/test/x.txt")"
+    secondary=secondary
+    [ "$case_name" = same ] && secondary=primary
+    cat > "$tx/pds/test/VECTOR-PROVENANCE.txt" << EOF
+[impl]
+id: primary
+repo: https://example.invalid/primary
+version: v1
+commit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+retrieved: 2026-08-23
+
+[vector]
+file: pds/test/x.txt
+local-sha256: $tx_hash
+kind: reference-impl
+impl: primary
+impl-secondary: $secondary
+source-url: https://example.invalid/$case_name
+extraction: self-test
+retrieved: 2026-08-23
+consumer: self-test
+EOF
+    tx_out="$(check_corpus "$tx")"; tx_rc=$?
+    rm -rf "$tx"
+    if [ "$tx_rc" -eq 1 ]; then
+      echo "T10/T11 secondary $case_name: PASS"
+    else
+      echo "T10/T11 secondary $case_name: FAIL"; st_rc=1
+    fi
+  done
+
   return "$st_rc"
 }
 
@@ -765,7 +810,7 @@ main() {
     echo "SELF-TEST FAILED"
     exit 1
   fi
-  echo "=== self-test: all nine scenarios passed ==="
+  echo "=== self-test: all eleven scenarios passed ==="
   echo "=== real tree: $ROOT ==="
   if ! check_corpus "$ROOT"; then
     echo "vector_provenance: REAL TREE CHECK FAILED"
