@@ -6,7 +6,7 @@
    97 bytes, so both SHA-256 block counts and all allocation sizes are fixed
    for each schedule site. -}
 
-import lib.sha256.{sha256}
+import lib.sha256.{sha256FixedBytes}
 import array as A
 
 blockBytes : Int
@@ -53,9 +53,9 @@ hmacSha256FixedKey : Array Int -> Array Int -> Array Int
 hmacSha256FixedKey key message =
   if arrayLength key /= keyBytes then panic "hmac_sha256: expected a 32-byte key"
   else
-    let inner = sha256 (joined (keyPad key 0x36) message)
+    let inner = sha256FixedBytes (joined (keyPad key 0x36) message)
     let outerInput = joined (keyPad key 0x5c) inner
     if arrayLength outerInput /= blockBytes + digestBytes then
       panic "hmac_sha256: internal digest length invariant failed"
     else
-      sha256 outerInput
+      sha256FixedBytes outerInput

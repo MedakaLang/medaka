@@ -253,7 +253,26 @@ byteDomainOk msg len i =
     let b = msg[i]
     if b < 0 || b > 255 then False else byteDomainOk msg len (i + 1)
 
-export sha256 : Array Int -> Array Int
+sha256AssumeByteDomain : Array Int -> Array Int
+sha256AssumeByteDomain msg =
+  let len = arrayLength msg
+  let numFull = len / 64
+  let tailLen = len - numFull * 64
+  let afterFull = processFullBlocks msg numFull h0Init 0
+  let tail = buildTail msg len tailLen
+  let (h0, h1, h2, h3, h4, h5, h6, h7) = processTail tail afterFull
+  digestBytes (h0, h1, h2, h3, h4, h5, h6, h7)
+
+-- | Signing-internal SHA-256 entry. HMAC constructs every input byte from
+--   fixed pads, SHA-256 state, canonical scalar bytes, or an admitted digest,
+--   so repeating the public byte-domain scan here would introduce a
+--   secret-derived early exit into the native signing closure.
+export
+sha256FixedBytes : Array Int -> Array Int
+sha256FixedBytes msg = sha256AssumeByteDomain msg
+
+export
+sha256 : Array Int -> Array Int
 sha256 msg =
   let len = arrayLength msg
   if not (byteDomainOk msg len 0) then
@@ -264,12 +283,7 @@ sha256 msg =
     -- `pds/lib/field.mdk`'s `feFromBytesReduce`.
     panic "sha256: every element must be a byte in 0..255"
   else
-    let numFull = len / 64
-    let tailLen = len - numFull * 64
-    let afterFull = processFullBlocks msg numFull h0Init 0
-    let tail = buildTail msg len tailLen
-    let (h0, h1, h2, h3, h4, h5, h6, h7) = processTail tail afterFull
-    digestBytes (h0, h1, h2, h3, h4, h5, h6, h7)
+    sha256AssumeByteDomain msg
 
 digestWord : Array Int -> Int -> Int -> Unit
 digestWord out i word =

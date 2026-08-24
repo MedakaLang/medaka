@@ -1,0 +1,65 @@
+{- | Cross-engine value carrier for the internal step-3 signing closure.
+
+   Native owns the timing/control claim. Eval and Wasm execute this same
+   carrier only to prove values, including the candidate-1/exhaustion seam and
+   the public high-S/malformed compact boundaries. -}
+
+import lib.scalar.{Sc, scFromBytesReduce}
+import lib.secp256k1.{
+  ecdsaSignDigestForTest,
+  ecdsaSignatureFromCompact,
+  rfc6979InjectedNonceProbeForTest,
+}
+import hex.{decode, encode}
+
+bytes : String -> Array Int
+bytes value = match decode value
+  Ok decoded => decoded
+  Err message => panic "constant_time_signing: invalid fixture: \{message}"
+
+scalar : String -> Sc
+scalar value = scFromBytesReduce (bytes value)
+
+zero32 : Array Int
+zero32 =
+  bytes "0000000000000000000000000000000000000000000000000000000000000000"
+
+one32 : Array Int
+one32 = bytes "0000000000000000000000000000000000000000000000000000000000000001"
+
+two32 : Array Int
+two32 = bytes "0000000000000000000000000000000000000000000000000000000000000002"
+
+expectedCompact : String
+expectedCompact = "a0b37f8fba683cc68f6574cd43b39f0343a50008bf6ccea9d13231d9e7e2e1e411edc8d307254296264aebfc3dc76cd8b668373a072fd64665b50000e9fcce52"
+
+highSCompact : Array Int
+highSCompact =
+  bytes
+    "813ef79ccefa9a56f7ba805f0e478584fe5f0dd5f567bc09b5123ccbc9832365900e75ad233fcc908509dbff5922647db37c21f4afd3203ae8dc4ae7794b0f87"
+
+expectRejected : String -> Array Int -> <IO> Unit
+expectRejected label compact = match ecdsaSignatureFromCompact compact
+  Err _ => println "\{label}:reject"
+  Ok _ => panic "constant_time_signing: \{label} compact input was accepted"
+
+main =
+  let key = scalar "0000000000000000000000000000000000000000000000000000000000000001"
+  let (validBit, _, _, _, _, compact) = ecdsaSignDigestForTest key zero32
+  let () = if validBit == 1 && encode compact == expectedCompact then
+    println "sign:\{encode compact}"
+  else
+    panic "constant_time_signing: exact signature drifted"
+  let (_, _, selected1, selected1Bytes) = rfc6979InjectedNonceProbeForTest key zero32 one32 0 two32 1
+  let () = if selected1 == 1 && selected1Bytes == two32 then
+    println "candidate-1:valid=1:selected=2"
+  else
+    panic "constant_time_signing: candidate-1 seam disconnected"
+  let (_, _, exhausted, exhaustedBytes) = rfc6979InjectedNonceProbeForTest key zero32 one32 0 two32 0
+  let () = if exhausted == 0 && exhaustedBytes == one32 then
+    println "exhaustion:valid=0:selected=1"
+  else
+    panic "constant_time_signing: exhaustion seam disconnected"
+  let () = expectRejected "high-s" highSCompact
+  let () = expectRejected "malformed" (arrayMake 63 0)
+  println "PASS signing-value-carrier"
