@@ -32,6 +32,7 @@ import lib.scalar.{
   scOne,
   scFromBytes,
   scFromBytesReduce,
+  scFromFixedBytesReduce,
   scSecretCandidate,
   scEqual,
   scIsZero,
@@ -502,7 +503,7 @@ signCandidate secret digest (Rfc6979Candidate nonceRangeBit nonce _) =
   let nonceValidBit = nonceRangeBit * (1 - scZeroBit nonce)
   let safeNonce = scSelect (1 - nonceValidBit) nonce scOne
   let (AffinePoint x _) = secretAffine (scalarMultiplySecret safeNonce pointGenerator)
-  let r = scFromBytesReduce (feToBytes x)
+  let r = scFromFixedBytesReduce (feToBytes x)
   let rawS = scMul (scInverse safeNonce) (scAdd digest (scMul r secret))
   let lowS = scSelect (scHighBit rawS) rawS (scNegateCt rawS)
   let validBit = nonceValidBit * (1 - scZeroBit r) * (1 - scZeroBit rawS)

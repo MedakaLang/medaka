@@ -4,6 +4,7 @@
 import hashlib
 import pathlib
 import re
+import subprocess
 import sys
 
 ORDER = int("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141", 16)
@@ -86,12 +87,37 @@ def require_generator_authorities(root: pathlib.Path) -> None:
             fail(f"generator authority pin missing or duplicated: {literal}")
     active = [
         r'^"\$WORK/libsecp-sign" "\$HERE/signing_inputs\.txt" > "\$WORK/libsecp\.out"$',
+        r'^record_oracle_completion libsecp256k1 "\$WORK/libsecp\.out" "\$ORACLE_RECEIPT"$',
         r'^cargo run --quiet --locked --manifest-path "\$WORK/rust/Cargo\.toml" -- "\$HERE/signing_inputs\.txt" > "\$WORK/k256\.out"$',
-        r'^cmp "\$WORK/libsecp\.out" "\$WORK/k256\.out" \|\| \{$',
+        r'^record_oracle_completion k256 "\$WORK/k256\.out" "\$ORACLE_RECEIPT"$',
+        r'^compare_oracle_outputs "\$WORK/libsecp\.out" "\$WORK/k256\.out" "\$ORACLE_RECEIPT"$',
+        r'^require_oracle_completion "\$ORACLE_RECEIPT"$',
     ]
+    positions = []
     for pattern in active:
-        if re.search(pattern, generator, re.MULTILINE) is None:
+        match = re.search(pattern, generator, re.MULTILINE)
+        if match is None:
             fail(f"independent signing oracle execution disabled: {pattern}")
+        positions.append(match.start())
+    if positions != sorted(positions):
+        fail("independent signing oracle execution/receipt order drifted")
+    proof = subprocess.run(
+        ["sh", str(root / "pds/tools/gen_signing_corpus.sh"), "--oracle-control"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    proof_lines = proof.stdout.splitlines()
+    if proof.returncode != 0 or len(proof_lines) != 3:
+        fail("fresh oracle run/compare completion evidence is absent")
+    labels_and_hashes = [line.split() for line in proof_lines]
+    if any(len(fields) != 2 for fields in labels_and_hashes):
+        fail("oracle completion receipt is malformed")
+    if [fields[0] for fields in labels_and_hashes] != ["libsecp256k1", "k256", "compared"]:
+        fail("oracle completion receipt labels drifted")
+    if len({fields[1] for fields in labels_and_hashes}) != 1:
+        fail("oracle completion receipt did not compare matching fresh outputs")
     lock = (root / "pds/tools/signing_k256/Cargo.lock").read_text()
     if f'name = "rfc6979"\nversion = "0.4.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "{RFC6979_SHA}"' not in lock:
         fail("locked rfc6979 0.4.0 checksum drifted")

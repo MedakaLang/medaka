@@ -6,9 +6,12 @@
 
 import lib.scalar.{Sc, scFromBytesReduce}
 import lib.secp256k1.{
+  AffinePoint,
+  ecdsaInjectedSignProbeForTest,
   ecdsaSignDigestForTest,
   ecdsaSignatureFromCompact,
-  rfc6979InjectedNonceProbeForTest,
+  ecdsaVerifyRawForTest,
+  pointFromUncompressedForTest,
 }
 import hex.{decode, encode}
 
@@ -38,6 +41,23 @@ highSCompact =
   bytes
     "813ef79ccefa9a56f7ba805f0e478584fe5f0dd5f567bc09b5123ccbc9832365900e75ad233fcc908509dbff5922647db37c21f4afd3203ae8dc4ae7794b0f87"
 
+generatorUncompressed : Array Int
+generatorUncompressed =
+  bytes
+    "0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8"
+
+generatorPoint : AffinePoint
+generatorPoint = match pointFromUncompressedForTest generatorUncompressed
+  Ok point => point
+  Err message =>
+    panic "constant_time_signing: invalid generator fixture: \{message}"
+
+highR : Array Int
+highR = bytes "813ef79ccefa9a56f7ba805f0e478584fe5f0dd5f567bc09b5123ccbc9832365"
+
+highS : Array Int
+highS = bytes "900e75ad233fcc908509dbff5922647db37c21f4afd3203ae8dc4ae7794b0f87"
+
 expectRejected : String -> Array Int -> <IO> Unit
 expectRejected label compact = match ecdsaSignatureFromCompact compact
   Err _ => println "\{label}:reject"
@@ -50,16 +70,21 @@ main =
     println "sign:\{encode compact}"
   else
     panic "constant_time_signing: exact signature drifted"
-  let (_, _, selected1, selected1Bytes) = rfc6979InjectedNonceProbeForTest key zero32 one32 0 two32 1
-  let () = if selected1 == 1 && selected1Bytes == two32 then
-    println "candidate-1:valid=1:selected=2"
+  let ((normal0, normal1), (candidate0Valid, candidate0R, candidate0RawS, candidate0LowS), (candidate1Valid, candidate1R, candidate1RawS, candidate1LowS), (selected1, selected1Compact)) = ecdsaInjectedSignProbeForTest key zero32 one32 0 two32 1
+  let candidate1Ok = normal0 /= normal1 && candidate0Valid == 0 && candidate1Valid == 1 && selected1 == 1 && candidate0R /= candidate1R && encode selected1Compact == encode candidate1R ++ encode candidate1LowS
+  let () = if candidate1Ok then
+    println "candidate-1:computations=2:c0.valid=0:c0.r=\{encode candidate0R}:c0.raw_s=\{encode candidate0RawS}:c0.low_s=\{encode candidate0LowS}:c1.valid=1:c1.r=\{encode candidate1R}:c1.raw_s=\{encode candidate1RawS}:c1.low_s=\{encode candidate1LowS}"
   else
-    panic "constant_time_signing: candidate-1 seam disconnected"
-  let (_, _, exhausted, exhaustedBytes) = rfc6979InjectedNonceProbeForTest key zero32 one32 0 two32 0
-  let () = if exhausted == 0 && exhaustedBytes == one32 then
-    println "exhaustion:valid=0:selected=1"
+    panic "constant_time_signing: complete candidate-1 seam disconnected"
+  let ((exhaustNormal0, exhaustNormal1), (exhaust0Valid, exhaust0R, exhaust0RawS, exhaust0LowS), (exhaust1Valid, exhaust1R, exhaust1RawS, exhaust1LowS), (exhausted, exhaustedCompact)) = ecdsaInjectedSignProbeForTest key zero32 one32 0 two32 0
+  let exhaustionOk = exhaustNormal0 == normal0 && exhaustNormal1 == normal1 && exhaust0Valid == 0 && exhaust1Valid == 0 && exhausted == 0 && arrayLength exhaustedCompact == 64
+  let () = if exhaustionOk then
+    println "exhaustion:computations=2:c0.valid=0:c0.r=\{encode exhaust0R}:c0.raw_s=\{encode exhaust0RawS}:c0.low_s=\{encode exhaust0LowS}:c1.valid=0:c1.r=\{encode exhaust1R}:c1.raw_s=\{encode exhaust1RawS}:c1.low_s=\{encode exhaust1LowS}:aggregate=0"
   else
-    panic "constant_time_signing: exhaustion seam disconnected"
-  let () = expectRejected "high-s" highSCompact
+    panic "constant_time_signing: complete exhaustion seam disconnected"
+  let () = if not (ecdsaVerifyRawForTest generatorPoint zero32 highR highS) then
+    expectRejected "high-s:compact=reject:verify" highSCompact
+  else
+    panic "constant_time_signing: high-s verifier boundary accepted"
   let () = expectRejected "malformed" (arrayMake 63 0)
   println "PASS signing-value-carrier"

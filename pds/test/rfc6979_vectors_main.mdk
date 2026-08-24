@@ -32,7 +32,7 @@ scalar value = match scFromBytes (bytes value)
   Err message => panic "rfc6979_vectors: invalid secret key: \{message}"
 
 bump : Array Int -> Int -> Unit
-bump counts i = A.set i (counts[i] + 1) counts
+bump counts i = A.set i (1 + counts[i]) counts
 
 pass : Array Int -> String -> <IO> Unit
 pass counts label =
