@@ -84,10 +84,19 @@ name: CI
 # fixture dir with no discoverable consumer), or preflight having no opinion about a
 # changed non-prose path — each one widens the run back to everything. See the `gateset`
 # step for the three checks and why each exists.
-
+#
+# ── `push: main` REMOVED — the queue already covers it (#1927) ─────────────────
+#
+# Before the merge queue existed, `push: main` was how a merge got tested at all. Now
+# every commit reaching `main` was already tested by a `merge_group` run at that exact
+# SHA (the queue only merges what went green there) — so the `push: main` run was a
+# byte-for-byte duplicate full suite, paid twice per merge for zero new signal. `schedule`
+# below is the safety net for anything that could still land outside the queue (it
+# can't today — bypass_actors is empty and the ruleset covers deletion/non-fast-forward
+# too — but the net stays cheap insurance against a future ruleset edit).
 on:
   push:
-    branches: [main, testing-arc]
+    branches: [testing-arc]
   pull_request:
   # REQUIRED BY THE MERGE QUEUE. A queued PR is tested on a `merge_group` event — a
   # temporary branch holding YOUR pr merged on top of everything already queued ahead
@@ -103,6 +112,19 @@ on:
   # typecheck.mdk auto-merged fine and their GOLDENS silently diverged, taking main red.
   merge_group:
   workflow_dispatch:
+  # Safety net for #1927 (removed `push: main` above) + the oracle-cache producer.
+  # `schedule` runs on the default branch, and `event_name != 'pull_request'` already
+  # means "run the full suite" everywhere in this file (see `detect`/`gateset` below) —
+  # so this is a genuine, unnarrowed full-suite run of `main`, once a day, with no new
+  # branching logic needed. Also reachable on demand via `workflow_dispatch` above.
+  # Mitigation (b) for #1927's oracle-cache offset (issue body, "Mitigations to
+  # evaluate"): this run's `oracle_key` is 'full' (same as the old push run's), same
+  # hashFiles key, so it becomes the daily producer of the cache a `merge_group` run
+  # restores from the default branch. A `merge_group` between refreshes just rebuilds on
+  # a cache miss — ~17s/shard per the issue's own measurement, the same cost any cache
+  # miss already pays today.
+  schedule:
+    - cron: '43 9 * * *' # arbitrary off-the-hour time, ahead of nightly.yml's 07:17
 
 concurrency:
   group: ci-${{ github.ref }}
