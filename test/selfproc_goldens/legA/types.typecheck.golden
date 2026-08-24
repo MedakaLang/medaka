@@ -115,12 +115,12 @@ argDispatchOfMethodById : IfaceRef -> List String -> IfaceMethod -> List ((Iface
 argHeadsAgree : List Mono -> List Mono -> Bool
 argImplDictRoutesFor : Map String (List ImplEntry) -> String -> String -> Mono -> List Route
 argImplDictRoutesForEncl : Map String (List ImplEntry) -> String -> String -> String -> Mono -> List Mono -> List Route
-argImplReqRoutes : Map String (List ImplEntry) -> String -> List (String, Mono) -> List Require -> Int -> List Route
-argImplRequiresRoutes : Map String (List ImplEntry) -> String -> String -> String -> Mono -> List Mono -> Int -> List Route
+argImplReqRoutes : Map String (List ImplEntry) -> String -> List (String, Mono) -> List Require -> Int -> Int -> List Route
+argImplRequiresRoutes : Map String (List ImplEntry) -> String -> String -> String -> Mono -> List Mono -> Int -> Int -> List Route
 argMentions : List String -> Ty -> Bool
 argOnlyEffVarMsg : String -> String -> String -> String
 argPerformableOccs : Bool -> Ty -> List (String, List Atom)
-argReqRoute : Map String (List ImplEntry) -> String -> String -> List (String, Mono) -> List Ty -> Int -> Route
+argReqRoute : Map String (List ImplEntry) -> String -> String -> List (String, Mono) -> List Ty -> Int -> Int -> Route
 argStampMono : PendingEntry -> Mono
 argStampPairs : PendingEntry -> List (Int, String)
 armDictSites : Arm -> List (Ref (List Route))
@@ -833,6 +833,7 @@ idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
 idsForIfaceSlots : List IfaceRef -> List Int
 idsForIfaceSlotsGo : Int -> List IfaceRef -> List Int
 ieAddRows : List ImplRow -> ImplEnv -> ImplEnv
+ieAnyRowForIface : List ImplRow -> IfaceRef -> Bool
 ieBuildSnaps : List ImplRow -> List (Int, ImplUniverse)
 ieBuildSnapsEmit : ImplRow -> List ImplRow -> ImplUniverse -> List (Int, ImplUniverse)
 ieBuildSnapsGo : List ImplRow -> ImplUniverse -> List (Int, ImplUniverse)
@@ -850,6 +851,7 @@ ieEntriesForMethod : List ImplRow -> String -> Option IfaceRef -> List Mono -> L
 ieFileRow : ImplRow -> ImplEnv -> ImplEnv
 ieFileRowByHead : ImplRow -> ImplEnv -> ImplEnv
 ieGenImplIn : String -> Decl
+ieHeadCandidateExists : ImplEnv -> IfaceRef -> HeadKey -> Bool
 ieHeadCollidesByIface : ImplEnv -> IfaceRef -> Option HeadKey -> Bool
 ieHeadCollidesByMethod : ImplEnv -> String -> Option HeadKey -> Bool
 ieHeadProbeAmod : List Decl
@@ -1264,6 +1266,8 @@ monoIsFunction : Mono -> Bool
 monoIsTyvarId : Mono -> Int -> Bool
 monoSameGiven : Mono -> Mono -> Bool
 monoScheme : Mono -> Scheme
+monoSize : Mono -> Int
+monoSizes : List Mono -> Int
 monoSpineHeadIsCon : Mono -> Bool
 monoTyvarId : Mono -> Int
 monoTyvarIds : Mono -> List Int
@@ -1574,6 +1578,7 @@ reqToObligation : List (String, Mono) -> Require -> (IfaceRef, List Mono)
 reqTyToMono : List (String, Mono) -> Ty -> Mono
 requiredMethodNames : List IfaceMethod -> List String
 requiresDepthMsg : IfaceRef -> List Mono -> String
+requiresNonShrinkingFuel : Int
 requiresUnroutedMsg : IfaceRef -> List Mono -> String
 resetCrossModuleState : Unit -> Unit
 resetState : Unit -> Unit
@@ -1581,9 +1586,12 @@ resetTypeErrorsSticky : Unit -> Unit
 residualBoundPreds : List Int -> IfaceRef -> List Mono -> Option Loc -> List (IfaceRef, List Int, List Mono)
 residualInferredPredOf : List Int -> (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, Int, List Mono)
 residualInferredPreds : List Int -> List (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, Int, List Mono)
+residualMixedPred : List Int -> IfaceRef -> List Mono -> List (IfaceRef, List Int, List Mono)
+residualOblArgs : List Int -> List Mono -> List Mono
 residualPredOne : Int -> (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
 residualPredsOf : Int -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 residualReduceFuel : Int
+residualRefutableNow : IfaceRef -> List Mono -> Bool
 residualVecObls : List Int -> IfaceRef -> List Mono -> Option Loc -> List VecObl
 resolveArgStamp : Map String (List ImplEntry) -> String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> Unit
 resolveArgStamps : Map String (List ImplEntry) -> List PendingEntry -> Unit
@@ -1625,7 +1633,7 @@ rootIdOf : Mono -> Int
 rootVarId : Mono -> Int
 routeLocalSym : Route -> String
 routeOf : Map String (List ImplEntry) -> String -> String -> Undetermined -> Mono -> Route
-routeOfD : Map String (List ImplEntry) -> String -> String -> Undetermined -> Mono -> List Mono -> Int -> Route
+routeOfD : Map String (List ImplEntry) -> String -> String -> Undetermined -> Mono -> List Mono -> Int -> Int -> Route
 routeRDictName : Route -> List String
 routeUndeterminedTop : List Decl -> Map String (List ImplEntry) -> String -> Route
 routesOfMonos : Map String (List ImplEntry) -> List Mono -> List Route
