@@ -3,27 +3,34 @@ name: CI
 # GitHub-HOSTED runners. Free and unlimited for public repositories, 20 concurrent
 # jobs on the Free plan.
 #
-# ── Why there is no shared "build" job ──────────────────────────────────────────
-# The obvious shape — build once, upload an artifact, fan out — was tried and is
-# WRONG here. Measured on a hosted runner:
+# ── The ORACLES are built per shard; the BINARY is built once ───────────────────
+# These are two different questions, and this file used to answer both with "build
+# it in every job". Measured on a hosted runner:
 #
 #     Install toolchain .................  13s
-#     make medaka (cold, from seed) .....  80s     <- fine
+#     make medaka (cold, from seed) .....  80s     <- SHARED, see `build:` below
 #     FORCE=1 build_oracles.sh .......... 18+ min  <- 93% of the job, and climbing
 #
-# `build_oracles.sh` compiles 54 probe binaries (54 × `medaka build` + clang). On
-# the 12-core dev box that is ~34s; on a small hosted runner it dominates
-# everything and blows the timeout. Caching it would only help when the compiler is
-# untouched — which is exactly never, for compiler work.
+# ORACLES: sharing them is WRONG here. `build_oracles.sh` compiles 54 probe binaries
+# (54 × `medaka build` + clang). On the 12-core dev box that is ~34s; on a small
+# hosted runner it dominates everything and blows the timeout. Caching it would only
+# help when the compiler is untouched — which is exactly never, for compiler work.
 #
 # The fix: NO GATE NEEDS ALL 54. A gate names its oracle as `test/bin/<name>`, so
 # `build_oracles.sh --for '<gate-pattern>'` derives the set straight from the gate
 # scripts. Per shard: engines 2, frontend 14, types 10, eval 19, backend 6, tools 6.
 # So each shard builds its own handful CONCURRENTLY with the others — the critical
-# path drops from 54-serial to 19-parallel, and the artifact plumbing disappears.
+# path drops from 54-serial to 19-parallel, with no artifact plumbing.
 #
 # `test/preflight.sh` uses the SAME derivation, so an agent touching the parser
 # builds 9 oracles locally instead of 54. One source of truth, two consumers.
+#
+# THE BINARY: sharing it is RIGHT (#1928), and the reasoning above never applied to
+# it. `make medaka` is a pure function of the checkout — one SHA, byte-identical
+# output — and it was being recomputed in TEN jobs, ~27% of all CI job-seconds. It
+# now runs exactly once, in the `build:` job, and the ten consumers download it. The
+# 18-minute item that made "build once, fan out" untenable is the ORACLE line, not
+# this one; note the `<- fine` this line used to carry.
 #
 # ── Why the drift check is inside each shard ────────────────────────────────────
 # It cannot be a separate job: a fresh checkout in a fresh VM would never see drift
@@ -42,7 +49,12 @@ name: CI
 # therefore cannot hit on the runs that need the binaries; the former cache only
 # added restore/save work. A seed-only cache is not useful either: measured on the
 # dev box, compiling the immutable seed is 1.6s of a 30.1s cold bootstrap; the
-# remaining 28.3s depends on current source. Keep the cold builds parallel.
+# remaining 28.3s depends on current source.
+#
+# That is about CACHING — a cross-run, keyed restore — and it is still true. It is
+# NOT about the `build:` job (#1928), which is intra-run transport at a FIXED SHA:
+# no key to mis-hit, no cross-SHA restore, and the consumer asserts the emitter's
+# provenance stamp against its own checkout before using it.
 #
 # Per-shard `test/bin/*` oracle caches remain below. Their exact keys are useful
 # on repeated runs and must cover every artifact input; never add a partial
@@ -406,8 +418,95 @@ jobs:
           echo "▶ NARROWED pull_request run: $(printf '%s\n' $gates | grep -c .) gate(s)."
           echo "  The merge_group run of this same PR still executes the FULL suite on the MERGED tree."
 
-  gates:
+  # ── Build ./medaka ONCE per run, not ten times (#1928) ───────────────────────
+  #
+  # `make medaka` is a pure function of the checkout: at one SHA it produces
+  # byte-identical binaries no matter which job runs it. It used to run in TEN jobs
+  # (the 7 `gates` shards + `soundness` + `inlang` + `wasm`) — ~27% of all CI
+  # job-seconds spent recomputing the same answer. Now it runs here, once, and those
+  # ten take `binary: artifact` on the same setup action.
+  #
+  # ⚠️ THIS JOB IS **NOT** ONE OF THE ELEVEN REQUIRED CONTEXTS, and must not become
+  # one — that would need a ruleset edit, which is not atomic with a commit.
+  #
+  # ⚠️ IT IS ALSO `needs: detect` WITH A CONDITIONAL *STEP*, NEVER A CONDITIONAL JOB.
+  # Same shape as every heavy job in this file, and for the same reason: a required
+  # consumer that `needs:` a job which can itself be SKIPPED can dead-end. This job
+  # always RUNS and always REPORTS; on a docs-only PR its steps no-op in seconds and
+  # it still reports success, so `needs: [detect, build]` downstream is always
+  # satisfiable. (Nothing downstream asks for the artifact on a docs-only run either
+  # — every consumer's download is behind the same docs_only/has_work guard.)
+  #
+  # WALL CLOCK: roughly neutral today (one ~90s serial hop replaces ten parallel
+  # ones), a real win under runner contention — we are runner-bound at 20 concurrent
+  # jobs, so ten fewer cold builds is ten fewer jobs holding a runner. The banked win
+  # is job-SECONDS. See #1928's own honest-tradeoff section.
+  #
+  # NOT a cache — see "Why the Medaka binary is not cached (#111)" in the header.
+  # This is intra-run artifact transport at a FIXED SHA, which is the case that note
+  # explicitly is not about: there is no key to mis-hit and no cross-SHA restore.
+  #
+  # `seed-health` deliberately does NOT consume this artifact. It asks a different
+  # question ("can the committed seed still bootstrap a working emitter?") and must
+  # keep answering it from the seed itself. See its own header below.
+  build:
+    name: build medaka once
     needs: detect
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup medaka (toolchain + build)
+        if: needs.detect.outputs.docs_only != 'true'
+        uses: ./.github/actions/setup-medaka
+        with:
+          binary: build
+
+      # The stamp is a HIDDEN file, so `include-hidden-files: true` is mandatory —
+      # upload-artifact@v4 silently drops dotfiles without it (a warning in the log,
+      # a green step, and every consumer re-running stage A for nothing). Why the
+      # stamp travels at all, and the same-SHA invariant that makes it sound, is
+      # documented at the consuming step in .github/actions/setup-medaka/action.yml.
+      #
+      # `if-no-files-found: error`: an empty upload here would degrade ten jobs into
+      # a download failure apiece, which is loud but points at the wrong place.
+      #
+      # Retention is 1 day: this artifact is scratch, meaningful only inside its own
+      # run, and it is ~10 MB × every run of a busy repo.
+      - name: Upload ./medaka + ./medaka_emitter + provenance stamp
+        if: needs.detect.outputs.docs_only != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: medaka-binaries
+          path: |
+            medaka
+            medaka_emitter
+            .medaka_emitter.srcstamp
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  gates:
+    # `build` is added to `needs` so the binaries exist; `detect` stays for its
+    # outputs. See the `if:` below for why this does NOT reintroduce the
+    # skipped-required-context hazard the header warns about.
+    needs: [detect, build]
+    # ⚠️ THIS CONDITION MUST NEVER BE ABLE TO EVALUATE FALSE FOR A REASON OTHER THAN
+    # `detect` ITSELF FAILING — this is a REQUIRED context and a job that does not run
+    # does not report. It exists solely to neutralise ONE new failure mode introduced
+    # by `needs: build`:
+    #
+    #   without it, `build` failing would SKIP all seven shards, and GitHub reports a
+    #   skipped job as a non-failure — i.e. a broken `make medaka` would go from RED
+    #   (today: the shard that builds it fails) to GREEN-BY-SKIP. Loud -> silent is a
+    #   severity INCREASE, not a fix.
+    #
+    # With `always()`, the job runs anyway, the download step below fails, and the
+    # shard is red — which is the behaviour this change is supposed to preserve. The
+    # `needs.detect.result == 'success'` conjunct reproduces EXACTLY today's
+    # `needs: detect` propagation and adds nothing new.
+    if: ${{ always() && needs.detect.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
@@ -929,13 +1028,18 @@ jobs:
       # to the same wasm-tools/Node pin, so the toolchain cannot drift between the two
       # jobs that install it. Guarded on matrix.wasm_arm so shards without a Wasm
       # differential pay nothing: ~3s of setup-node plus ~1s of curl.
-      - name: Setup medaka (toolchain + wasm arm + build)
+      #
+      # The BINARY is no longer built here — it is downloaded from the `build` job,
+      # which made it once for the whole run (#1928). The toolchain install stays:
+      # clang is still needed to compile this shard's ORACLES, and those genuinely
+      # differ per shard.
+      - name: Setup medaka (toolchain + wasm arm + downloaded binary)
         if: steps.plan.outputs.has_work == 'true'
         uses: ./.github/actions/setup-medaka
         with:
           sqlite: 'true'
           wasm: ${{ matrix.wasm_arm != '' }}
-          binary: build
+          binary: artifact
 
       # Per-shard: this shard's oracle set, keyed the same way as the binary
       # above (plus test/build_oracles.sh itself — the script that builds them)
@@ -1117,7 +1221,10 @@ jobs:
   # typechecks it. `seed-health` proves the seed WORKS; it never proves the current
   # source is well-typed, nor that emission has reached a fixpoint.
   soundness:
-    needs: detect
+    # `build` for the binaries (#1928); `detect` for its outputs. The `if:` is the
+    # same guard, for the same reason, as the one on `gates` above — read it there.
+    needs: [detect, build]
+    if: ${{ always() && needs.detect.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -1216,11 +1323,14 @@ jobs:
             exit 1
           fi
 
-      - name: Setup medaka (toolchain + build)
+      # Toolchain still needed here (clang builds the typecheck oracle, and
+      # selfcompile_fixpoint.sh cold-bootstraps from the seed on its own); the BINARY
+      # comes from the `build` job (#1928).
+      - name: Setup medaka (toolchain + downloaded binary)
         if: needs.detect.outputs.docs_only != 'true'
         uses: ./.github/actions/setup-medaka
         with:
-          binary: build
+          binary: artifact
 
       # ── Fingerprint mirror parity (#267) ────────────────────────────────────────
       #
@@ -1235,6 +1345,11 @@ jobs:
       # tree it was built from, and asserts it reports "not stale". Needs the binary
       # `make medaka` just built + this same tree, so it lives right here, not in a new
       # gate shard (see AGENTS.md "a gate must run where the bug lands").
+      #
+      # Still true after #1928 moved the build into its own job: the binary arrives by
+      # artifact rather than by `make medaka`, but from the SAME SHA's checkout, so
+      # "the exact tree it was built from" is unchanged. That is precisely the claim
+      # this step now also proves in practice rather than by citation.
       - name: Fingerprint mirror must still agree (issue #267)
         if: needs.detect.outputs.docs_only != 'true'
         run: sh test/check_fingerprint_parity.sh
@@ -1363,16 +1478,18 @@ jobs:
 
   # ── The in-language suite: doctests, properties, `test "..."` decls ───────────
   inlang:
-    needs: detect
+    # `build` for the binaries (#1928); `if:` guard as on `gates` above.
+    needs: [detect, build]
+    if: ${{ always() && needs.detect.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Setup medaka (toolchain + build)
+      - name: Setup medaka (toolchain + downloaded binary)
         if: needs.detect.outputs.docs_only != 'true'
         uses: ./.github/actions/setup-medaka
         with:
-          binary: build
+          binary: artifact
       - name: Doctests, properties, and test decls
         if: needs.detect.outputs.docs_only != 'true'
         run: make test
@@ -1430,7 +1547,9 @@ jobs:
   # docs-only PRs, where its steps skip individually and it reports green in seconds).
   # Adding a job-level `if:` would make a required context never post and hang the queue.
   wasm:
-    needs: detect
+    # `build` for the binaries (#1928); `if:` guard as on `gates` above.
+    needs: [detect, build]
+    if: ${{ always() && needs.detect.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     # wasm-tools/Node versions come from setup-medaka's own input defaults — shared
@@ -1445,12 +1564,12 @@ jobs:
       # box's). wasm-tools (parse + validate the emitted WAT) is NOT on a stock runner
       # either — the pinned prebuilt release is downloaded and extracted OUTSIDE the
       # checkout (see the action for why).
-      - name: Setup medaka (toolchain + wasm + build)
+      - name: Setup medaka (toolchain + wasm + downloaded binary)
         if: needs.detect.outputs.docs_only != 'true'
         uses: ./.github/actions/setup-medaka
         with:
           wasm: 'true'
-          binary: build
+          binary: artifact
 
       # The three WasmGC emitter oracle binaries (wasm_emit_main / _typed_ / _modules_)
       # that these gates drive. Cheap; deliberately NOT cached (they are a pure

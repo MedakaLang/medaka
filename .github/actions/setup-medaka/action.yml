@@ -2,8 +2,10 @@ name: 'Setup medaka'
 description: >-
   Install the clang/libgc toolchain (optionally + sqlite3, the oracle for the
   sqlite/*.sh gates), optionally install the Node + wasm-tools wasm-arm
-  toolchain, and optionally cold-bootstrap ./medaka from the checked-in seed
-  (`make medaka`). Local composite action — the caller must already have
+  toolchain, and optionally put a ./medaka + ./medaka_emitter in place — either
+  by cold-bootstrapping from the checked-in seed (`binary: build`) or by
+  downloading the one the run's `build:` job already made (`binary: artifact`,
+  #1928). Local composite action — the caller must already have
   checked out the repo (`actions/checkout@v4` stays inline in every job; a
   local composite action needs the repo present before it can run, so it
   cannot own checkout itself).
@@ -32,13 +34,25 @@ inputs:
     default: 'false'
   binary:
     description: >-
-      What to produce after the toolchain is installed. 'build' runs
-      `make medaka` (cold bootstrap from compiler/seed/emitter.ll.gz). Leave
-      empty to install the toolchain only. (The `artifact` value — download a
-      pre-built binary instead of building — is S-build-once's to add later,
-      in this same file; do not add or stub it here.)
+      What to produce after the toolchain is installed.
+      'build' runs `make medaka` (cold bootstrap from
+      compiler/seed/emitter.ll.gz) — used by ci.yml's single `build:` job and
+      by nightly.yml.
+      'artifact' downloads that `build:` job's already-built ./medaka +
+      ./medaka_emitter + .medaka_emitter.srcstamp into the repo root instead of
+      rebuilding them (#1928); valid ONLY for a job in the SAME workflow run as
+      that `build:` job — see the step below for the invariant that makes the
+      stamp safe to transport.
+      Empty installs the toolchain only.
     required: false
     default: ''
+  artifact-name:
+    description: >-
+      Name of the artifact `binary: artifact` downloads. Must match the name
+      ci.yml's `build:` job uploads under; one definition per side, never
+      hand-written at a call site.
+    required: false
+    default: 'medaka-binaries'
   wasm-tools-version:
     description: 'wasm-tools release to install when `wasm` is true.'
     required: false
@@ -90,3 +104,77 @@ runs:
       if: inputs.binary == 'build'
       shell: bash
       run: make medaka
+
+    # ── #1928: take what the `build:` job already built; do not rebuild it ───────
+    #
+    # `make medaka` is byte-identical work in every job that runs it at one SHA, and
+    # it was running in TEN of them (~27% of all CI job-seconds). It now runs once,
+    # in ci.yml's `build:` job; everyone else takes this arm.
+    #
+    # ⚠️ `.medaka_emitter.srcstamp` TRAVELS WITH THE BINARIES. That is deliberate and
+    # load-bearing — read this before copying the pattern anywhere else.
+    #
+    # The stamp is gitignored ON PURPOSE (.gitignore, and the long `SRC_STAMP` comment
+    # in test/build_native_medaka.sh): an emitter that arrives WITHOUT one is of
+    # unknown provenance, and stage A rebuilds it from current source. That guard
+    # exists because `cp <other-tree>/medaka_emitter .` gives a stale binary a FRESH
+    # mtime — an actively inverted signal. An artifact download is literally the
+    # "copied in from another tree" case the guard was written to catch.
+    #
+    # THE INVARIANT THAT MAKES SHIPPING IT SAFE HERE, and it is the only one:
+    # producer and consumer are the SAME CHECKOUT AT THE SAME SHA WITHIN ONE WORKFLOW
+    # RUN. Both ran `actions/checkout@v4` on `github.sha`, so the compiler/**.mdk +
+    # runtime/*.c fingerprint the stamp records is EQUAL BY CONSTRUCTION to the one
+    # recomputed here — provenance is not being taken on faith. The step below asserts
+    # it rather than assuming it, so a future edit that breaks the invariant goes red
+    # here instead of silently running a stale compiler in every gate.
+    #
+    # That invariant does NOT hold across runs. Never restore this artifact into a
+    # different-SHA checkout (a loosely-keyed cache, a `workflow_run` consumer, a
+    # manual re-download): the stamp would vouch for source the binary was not built
+    # from, stage A would skip, and every consumer would silently run a stale
+    # compiler. In that shape, drop the stamp and let stage A rebuild.
+    #
+    # Omitting the stamp HERE, conversely, silently eats the entire win: every
+    # consumer re-runs stage A (a full self-emit + clang) and we have bought nothing.
+    - name: Download medaka (built once by the `build` job)
+      if: inputs.binary == 'artifact'
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: .
+
+    - name: Restore executable bits and prove the downloaded binary is not stale
+      if: inputs.binary == 'artifact'
+      shell: bash
+      run: |
+        set -eu
+        # upload-artifact preserves the executable bit; assert it anyway, because a
+        # non-executable ./medaka surfaces as a baffling "not found"-shaped failure
+        # deep inside a gate rather than here.
+        chmod +x ./medaka ./medaka_emitter
+        ls -l ./medaka ./medaka_emitter .medaka_emitter.srcstamp
+
+        # MEDAKA_STRICT=1 turns ./medaka's baked-fingerprint-vs-disk staleness check
+        # from a STDERR-ONLY warning into exit 1 (AGENTS.md [B-STALENESS]/[B-STDERR]):
+        # a binary that did NOT come from this checkout's source fails right here,
+        # loudly, instead of answering wrong in a gate twenty minutes later.
+        printf 'main = println 1928\n' > "$RUNNER_TEMP/artifact_probe.mdk"
+        MEDAKA_STRICT=1 ./medaka run "$RUNNER_TEMP/artifact_probe.mdk"
+
+        # ...and the EMITTER's provenance stamp must equal what stage A would compute
+        # from THIS tree. Mirrors src_fingerprint_full() in
+        # test/build_native_medaka.sh (compiler/**.mdk + runtime/*.c, names AND
+        # contents, repo-relative, LC_ALL=C sorted). This is the same-SHA invariant
+        # above, asserted.
+        stamped="$(cat .medaka_emitter.srcstamp)"
+        live="$( { find compiler -name '*.mdk' -print; find runtime -name '*.c' -print; } \
+                 | LC_ALL=C sort \
+                 | while IFS= read -r f; do printf '%s\n' "$f"; cat "$f"; done \
+                 | sha256sum | cut -d' ' -f1 )"
+        if [ "$stamped" != "$live" ]; then
+          echo "::error::.medaka_emitter.srcstamp ($stamped) does not describe this checkout ($live)."
+          echo "::error::The same-SHA invariant this artifact relies on is BROKEN — see the comment in .github/actions/setup-medaka/action.yml."
+          exit 1
+        fi
+        echo "artifact provenance OK: emitter stamp matches this checkout ($stamped)"
