@@ -19,6 +19,14 @@
 #       that is infra rot, not an opt-in skip, and is reclassified as FAIL (see
 #       the --run-one worker). Invariant: this script must never exit 0 having
 #       executed no tests (either every gate skipped, or none ran at all).
+#
+#       Before any of that, each gate is syntax-checked with its own shebang's
+#       `-n` flag (#1577): dash also exits 2 on a plain shell parse error, which
+#       is otherwise indistinguishable from the "oracle not built" exit-2
+#       convention above — and AGENTS.md tells readers to dismiss THAT verdict
+#       as benign. A gate that fails its own syntax check is reported as a
+#       distinct "SYNTAX ERROR"/BROKEN status (st=3), never folded into the
+#       phantom-skip path.
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -93,6 +101,25 @@ if [ "${1:-}" = "--run-one" ]; then
     *bash*) _shell=bash ;;
     *)      _shell=sh ;;
   esac
+  # ── SYNTAX-CHECK FIRST, before running the gate (#1577) ─────────────────────
+  #
+  # dash exits 2 on a genuine shell parse error (e.g. an unescaped apostrophe
+  # inside a single-quoted string breaking the rest of the file) — the SAME
+  # exit code the gates use, by convention, for "my oracle isn't built" (see
+  # LEGIT_SKIP_RE below). Left unchecked, a gate with a syntax error is
+  # indistinguishable from st=9's phantom skip, and AGENTS.md explicitly tells
+  # readers to dismiss a phantom skip as "not a regression" — funneling a real,
+  # loud breakage into the one verdict everyone is told to wave through.
+  #
+  # Honor the gate's own shebang, not a hardcoded `sh -n`: 6 gates under test/
+  # are `#!/usr/bin/env bash` and use bashisms `sh -n` would reject as false
+  # positives — reuse the same shebang dispatch just above.
+  if ! "$_shell" -n "$g" >"$rd/$name.log" 2>&1; then
+    st=3   # syntax error: the gate script itself is malformed, not "unbuilt"
+    echo "$st" >"$rd/$name.status"
+    printf 'BROKEN %s  (SYNTAX ERROR: %s -n rejected this gate — see log)\n' "$name" "$_shell"
+    exit 0
+  fi
   if JOBS="${INNER_JOBS:-1}" "$_shell" "$g" >"$rd/$name.log" 2>&1; then
     st=0
   else
@@ -280,7 +307,7 @@ printf '%s\n' $gates \
 # regression. An agent hit exactly this tonight and had to read the per-gate
 # annotations to discover the real message was just "you haven't built the oracles".
 # Being loud is right; being loud AND misleading is not.
-pass=0; fail=0; skip=0; phantom=0; failed=""
+pass=0; fail=0; skip=0; phantom=0; syntax=0; failed=""
 for s in "$RESULTDIR"/*.status; do
   [ -f "$s" ] || continue
   name="$(basename "$s" .status)"
@@ -289,6 +316,7 @@ for s in "$RESULTDIR"/*.status; do
     0) pass=$((pass+1)) ;;
     2) skip=$((skip+1)) ;;
     9) fail=$((fail+1)); phantom=$((phantom+1)); failed="$failed $name" ;;
+    3) fail=$((fail+1)); syntax=$((syntax+1)); failed="$failed $name" ;;
     *) fail=$((fail+1)); failed="$failed $name" ;;
   esac
 done
@@ -320,6 +348,7 @@ EOF
   fi
   echo "FAILED:$failed"
   [ "$phantom" -gt 0 ] && echo "  ($phantom of these are phantom skips: oracle not built — see above)"
+  [ "$syntax" -gt 0 ] && echo "  ($syntax of these are SYNTAX ERRORS: the gate script itself is malformed, not unbuilt/failing — see above)"
   # ── PRINT THE FAILING GATE'S OUTPUT. It used to be discarded, and that is a
   # diagnosability hole with teeth: each gate's stdout+stderr goes to a file in a
   # `mktemp -d` that nothing uploads and nothing prints, so a required CI shard could
