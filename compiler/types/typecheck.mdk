@@ -7476,9 +7476,11 @@ normalizeLink cell t = match t
 -- Links are followed (`normalize`) so a solved tyvar is measured at what it stands for
 -- rather than as one node; an unbound one is a leaf.  An EFFECT ROW counts as a single
 -- node (`TFun` ignores its row, `TEff` is a leaf): the shrinking argument is about the
--- TYPE spine a `requires` chain walks down, and under-counting can only make a step look
--- NON-shrinking — which burns fuel and terminates.  Erring the other way (over-counting a
--- child) is the direction that would let a chain run forever, and no arm here does that.
+-- TYPE spine a `requires` chain walks down.  Under-counting a CHILD more than its parent —
+-- exactly what the effect-row leaf above does — makes a step look shrinking (free), not
+-- NON-shrinking; it is over-counting a child that would make a step look non-shrinking,
+-- burning fuel and terminating.  Either way the measure stays a well-founded natural, so
+-- termination does not depend on which direction the under-count goes.
 monoSize : Mono -> Int
 monoSize m = match normalize m
   TApp f a => 1 + monoSize f + monoSize a
@@ -7494,7 +7496,8 @@ monoSizes (m::rest) = monoSize m + monoSizes rest
 -- How many NON-SHRINKING `requires` steps a route chain may take before the fuse cuts
 -- it.  Only a genuinely non-shrinking context (`impl C (T a) requires C (T (T a))`)
 -- spends this; a shrinking chain spends one unit at its seed and nothing after, so the
--- constant bounds divergence WITHOUT bounding the depth of any valid program.  See
+-- constant bounds divergence WITHOUT bounding the depth of any valid program — it is now
+-- the ONLY thing standing between a valid program and an unbounded search (#1924).  See
 -- `argImplRequiresRoutes`.
 requiresNonShrinkingFuel : Int
 requiresNonShrinkingFuel = 32
