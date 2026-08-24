@@ -141,6 +141,12 @@ with no shard pattern in `ci.yml` SILENTLY NEVER RUNS. Registration rules, the
 `test/CI-COVERAGE-EXCEPTIONS.txt` escape hatch, and `[W-SHARD-COST]` (shards are scheduled by
 cost, not theme): the `gates` skill.
 
+⚠️ **[W-THIRD-CONSUMER] `ci.yml` shard patterns are TWO classifications, not the whole
+list.** `test/preflight.sh` independently derives its own gate set from the diff (its
+`changed path → gate patterns` case block, [L-PREFLIGHT]) — a THIRD consumer any new
+subproject's files/patterns must also be visible to, or `make preflight` silently widens or
+narrows scope with no error.
+
 **Zero approvals required** — the checks are the gate; an agent can self-merge on green.
 `--auto` enqueues into the merge queue ([W-MERGE-QUEUE]).
 
