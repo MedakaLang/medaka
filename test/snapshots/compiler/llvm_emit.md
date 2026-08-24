@@ -1,5 +1,5 @@
 # META
-source_lines=11408
+source_lines=11412
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -4010,6 +4010,22 @@ emitBlock e env [CSExpr ex] = emitExpr e env ex
 emitBlock e env ((CSExpr ex)::rest) =
   let _ = emitExpr e env ex
   emitBlock e env rest
+-- last-position block-let `[let pat = e]`: mirror cevalBlock's cBlockLetLast
+-- (core_ir_eval :265/:277) — evaluate `e` (for effect + to honour the binding),
+-- destructure, and the block yields Unit.  Without this a block ending in a let
+-- would recurse into `emitBlock e env2 []` and hit the "empty block" gap.  A
+-- refutable pattern still gets the trap-on-miss check (P0-2c).  MUST come before
+-- every `(CSLet _ ...)::rest` arm below — each of those matches a ONE-element
+-- list too (`rest = []`), so a singleton-list arm placed after them is dead code
+-- for every pattern shape (#1741 — that was the actual bug: this arm previously
+-- sat after the `::rest` arms and never ran).
+emitBlock e env [CSLet _ pat ex] =
+  let (v, _) = emitExpr e env ex
+  let _ = if refutableCsLet e pat then
+    let _ = emitRefutableCsLet e env pat v
+    env
+  else bindPattern e env pat v (CLit (LInt 0))
+  ("1", LTUnit)
 -- #314: a block-statement function-`let` (`let go i = … go …`) lowers to a
 -- `CSLet` whose rhs is a `CLam` and whose body may call `go` recursively (the
 -- self-ref is annotated AGlobal since the non-recursive let does not scope its own
@@ -4058,18 +4074,6 @@ emitBlock e env ((CSLet _ pat ex)::rest) =
   else
     let env2 = bindPattern e env pat v (CBlock rest)
     emitBlock e env2 rest
--- last-position block-let `[let pat = e]`: mirror cevalBlock's cBlockLetLast
--- (core_ir_eval :265/:277) — evaluate `e` (for effect + to honour the binding),
--- destructure, and the block yields Unit.  Without this a block ending in a let
--- would recurse into `emitBlock e env2 []` and hit the "empty block" gap.  A
--- refutable pattern still gets the trap-on-miss check (P0-2c).
-emitBlock e env [CSLet _ pat ex] =
-  let (v, _) = emitExpr e env ex
-  let _ = if refutableCsLet e pat then
-    let _ = emitRefutableCsLet e env pat v
-    env
-  else bindPattern e env pat v (CLit (LInt 0))
-  ("1", LTUnit)
 -- `let mut x = e` reuses the irrefutable `CSLet _ (PVar x)` arm above (the mut
 -- flag carries no extra emit work — a mutable local is just an SSA value the
 -- block's tail rebinds).  A reassignment `x = e` (CSAssign, gap B1) mirrors the
@@ -12152,12 +12156,12 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DTypeSig false "emitBlock" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "LTy")))) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyTuple (TyCon "String") (TyCon "LTy"))))))
 (DFunDef false "emitBlock" ((PVar "e") (PVar "env") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex")))
 (DFunDef false "emitBlock" ((PVar "e") (PVar "env") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoExpr (EApp (EApp (EApp (EVar "emitBlock") (EVar "e")) (EVar "env")) (EVar "rest")))))
+(DFunDef false "emitBlock" ((PVar "e") (PVar "env") (PList (PCon "CSLet" PWild (PVar "pat") (PVar "ex")))) (EBlock (DoLet false false (PTuple (PVar "v") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoLet false false PWild (EIf (EApp (EApp (EVar "refutableCsLet") (EVar "e")) (EVar "pat")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitRefutableCsLet") (EVar "e")) (EVar "env")) (EVar "pat")) (EVar "v"))) (DoExpr (EVar "env"))) (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EVar "pat")) (EVar "v")) (EApp (EVar "CLit") (EApp (EVar "LInt") (ELit (LInt 0))))))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit")))))
 (DFunDef false "emitBlock" ((PVar "e") (PVar "env") (PCons (PCon "CSLet" PWild (PCon "PVar" (PVar "x") PWild) (PCon "CLam" (PVar "pats") (PVar "body"))) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "w") (PVar "ty")) (EApp (EApp (EApp (EApp (EApp (EVar "emitRecLam") (EVar "e")) (EVar "env")) (EVar "x")) (EVar "pats")) (EVar "body"))) (DoExpr (EApp (EApp (EApp (EVar "emitBlock") (EVar "e")) (EBinOp "::" (ETuple (EVar "x") (ETuple (EVar "w") (EVar "ty"))) (EVar "env"))) (EVar "rest")))))
 (DFunDef false "emitBlock" ((PVar "e") (PVar "env") (PCons (PCon "CSLet" PWild (PCon "PVar" (PVar "x") PWild) (PVar "ex")) (PVar "rest"))) (EIf (EApp (EApp (EVar "staticIsFloat") (EVar "env")) (EVar "ex")) (EBlock (DoLet false false (PVar "d") (EApp (EApp (EApp (EVar "emitFloatD") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoExpr (EApp (EApp (EApp (EVar "emitBlock") (EVar "e")) (EBinOp "::" (ETuple (EVar "x") (ETuple (EVar "d") (EVar "LTFloatU"))) (EVar "env"))) (EVar "rest")))) (EBlock (DoLet false false (PTuple (PVar "v") (PVar "ty")) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoExpr (EApp (EApp (EApp (EVar "emitBlock") (EVar "e")) (EBinOp "::" (ETuple (EVar "x") (ETuple (EVar "v") (EVar "ty"))) (EVar "env"))) (EVar "rest"))))))
 (DFunDef false "emitBlock" ((PVar "e") (PVar "env") (PCons (PCon "CSLet" PWild (PCon "PWild") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoExpr (EApp (EApp (EApp (EVar "emitBlock") (EVar "e")) (EVar "env")) (EVar "rest")))))
 (DFunDef false "emitBlock" ((PVar "e") (PVar "env") (PCons (PCon "CSLet" PWild (PCon "PTuple" (PVar "ps")) (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "v") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EApp (EVar "PTuple") (EVar "ps"))) (EVar "v")) (EApp (EVar "CBlock") (EVar "rest")))) (DoExpr (EApp (EApp (EApp (EVar "emitBlock") (EVar "e")) (EVar "env2")) (EVar "rest")))))
 (DFunDef false "emitBlock" ((PVar "e") (PVar "env") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "v") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoExpr (EIf (EApp (EApp (EVar "refutableCsLet") (EVar "e")) (EVar "pat")) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EVar "emitRefutableCsLet") (EVar "e")) (EVar "env")) (EVar "pat")) (EVar "v"))) (DoExpr (EApp (EApp (EApp (EVar "emitBlock") (EVar "e")) (EVar "env2")) (EVar "rest")))) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EVar "pat")) (EVar "v")) (EApp (EVar "CBlock") (EVar "rest")))) (DoExpr (EApp (EApp (EApp (EVar "emitBlock") (EVar "e")) (EVar "env2")) (EVar "rest"))))))))
-(DFunDef false "emitBlock" ((PVar "e") (PVar "env") (PList (PCon "CSLet" PWild (PVar "pat") (PVar "ex")))) (EBlock (DoLet false false (PTuple (PVar "v") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoLet false false PWild (EIf (EApp (EApp (EVar "refutableCsLet") (EVar "e")) (EVar "pat")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitRefutableCsLet") (EVar "e")) (EVar "env")) (EVar "pat")) (EVar "v"))) (DoExpr (EVar "env"))) (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EVar "pat")) (EVar "v")) (EApp (EVar "CLit") (EApp (EVar "LInt") (ELit (LInt 0))))))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit")))))
 (DFunDef false "emitBlock" ((PVar "e") (PVar "env") (PCons (PCon "CSAssign" (PVar "x") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "v") (PVar "ty")) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoExpr (EApp (EApp (EApp (EVar "emitBlock") (EVar "e")) (EBinOp "::" (ETuple (EVar "x") (ETuple (EVar "v") (EVar "ty"))) (EVar "env"))) (EVar "rest")))))
 (DFunDef false "emitBlock" ((PVar "e") (PVar "env") (PList (PCon "CSAssign" PWild (PVar "ex")))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit")))))
 (DFunDef false "emitBlock" ((PVar "e") PWild (PList)) (EApp (EApp (EVar "gapE") (EVar "e")) (ELit (LString "empty block"))))
@@ -14365,12 +14369,12 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DTypeSig false "emitBlock" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "LTy")))) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyTuple (TyCon "String") (TyCon "LTy"))))))
 (DFunDef false "emitBlock" ((PVar "e") (PVar "env") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex")))
 (DFunDef false "emitBlock" ((PVar "e") (PVar "env") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoExpr (EApp (EApp (EApp (EVar "emitBlock") (EVar "e")) (EVar "env")) (EVar "rest")))))
+(DFunDef false "emitBlock" ((PVar "e") (PVar "env") (PList (PCon "CSLet" PWild (PVar "pat") (PVar "ex")))) (EBlock (DoLet false false (PTuple (PVar "v") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoLet false false PWild (EIf (EApp (EApp (EVar "refutableCsLet") (EVar "e")) (EVar "pat")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitRefutableCsLet") (EVar "e")) (EVar "env")) (EVar "pat")) (EVar "v"))) (DoExpr (EVar "env"))) (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EVar "pat")) (EVar "v")) (EApp (EVar "CLit") (EApp (EVar "LInt") (ELit (LInt 0))))))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit")))))
 (DFunDef false "emitBlock" ((PVar "e") (PVar "env") (PCons (PCon "CSLet" PWild (PCon "PVar" (PVar "x") PWild) (PCon "CLam" (PVar "pats") (PVar "body"))) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "w") (PVar "ty")) (EApp (EApp (EApp (EApp (EApp (EVar "emitRecLam") (EVar "e")) (EVar "env")) (EVar "x")) (EVar "pats")) (EVar "body"))) (DoExpr (EApp (EApp (EApp (EVar "emitBlock") (EVar "e")) (EBinOp "::" (ETuple (EVar "x") (ETuple (EVar "w") (EVar "ty"))) (EVar "env"))) (EVar "rest")))))
 (DFunDef false "emitBlock" ((PVar "e") (PVar "env") (PCons (PCon "CSLet" PWild (PCon "PVar" (PVar "x") PWild) (PVar "ex")) (PVar "rest"))) (EIf (EApp (EApp (EVar "staticIsFloat") (EVar "env")) (EVar "ex")) (EBlock (DoLet false false (PVar "d") (EApp (EApp (EApp (EVar "emitFloatD") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoExpr (EApp (EApp (EApp (EVar "emitBlock") (EVar "e")) (EBinOp "::" (ETuple (EVar "x") (ETuple (EVar "d") (EVar "LTFloatU"))) (EVar "env"))) (EVar "rest")))) (EBlock (DoLet false false (PTuple (PVar "v") (PVar "ty")) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoExpr (EApp (EApp (EApp (EVar "emitBlock") (EVar "e")) (EBinOp "::" (ETuple (EVar "x") (ETuple (EVar "v") (EVar "ty"))) (EVar "env"))) (EVar "rest"))))))
 (DFunDef false "emitBlock" ((PVar "e") (PVar "env") (PCons (PCon "CSLet" PWild (PCon "PWild") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoExpr (EApp (EApp (EApp (EVar "emitBlock") (EVar "e")) (EVar "env")) (EVar "rest")))))
 (DFunDef false "emitBlock" ((PVar "e") (PVar "env") (PCons (PCon "CSLet" PWild (PCon "PTuple" (PVar "ps")) (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "v") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EApp (EVar "PTuple") (EVar "ps"))) (EVar "v")) (EApp (EVar "CBlock") (EVar "rest")))) (DoExpr (EApp (EApp (EApp (EVar "emitBlock") (EVar "e")) (EVar "env2")) (EVar "rest")))))
 (DFunDef false "emitBlock" ((PVar "e") (PVar "env") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "v") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoExpr (EIf (EApp (EApp (EVar "refutableCsLet") (EVar "e")) (EVar "pat")) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EVar "emitRefutableCsLet") (EVar "e")) (EVar "env")) (EVar "pat")) (EVar "v"))) (DoExpr (EApp (EApp (EApp (EVar "emitBlock") (EVar "e")) (EVar "env2")) (EVar "rest")))) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EVar "pat")) (EVar "v")) (EApp (EVar "CBlock") (EVar "rest")))) (DoExpr (EApp (EApp (EApp (EVar "emitBlock") (EVar "e")) (EVar "env2")) (EVar "rest"))))))))
-(DFunDef false "emitBlock" ((PVar "e") (PVar "env") (PList (PCon "CSLet" PWild (PVar "pat") (PVar "ex")))) (EBlock (DoLet false false (PTuple (PVar "v") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoLet false false PWild (EIf (EApp (EApp (EVar "refutableCsLet") (EVar "e")) (EVar "pat")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "emitRefutableCsLet") (EVar "e")) (EVar "env")) (EVar "pat")) (EVar "v"))) (DoExpr (EVar "env"))) (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EVar "pat")) (EVar "v")) (EApp (EVar "CLit") (EApp (EVar "LInt") (ELit (LInt 0))))))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit")))))
 (DFunDef false "emitBlock" ((PVar "e") (PVar "env") (PCons (PCon "CSAssign" (PVar "x") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "v") (PVar "ty")) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoExpr (EApp (EApp (EApp (EVar "emitBlock") (EVar "e")) (EBinOp "::" (ETuple (EVar "x") (ETuple (EVar "v") (EVar "ty"))) (EVar "env"))) (EVar "rest")))))
 (DFunDef false "emitBlock" ((PVar "e") (PVar "env") (PList (PCon "CSAssign" PWild (PVar "ex")))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit")))))
 (DFunDef false "emitBlock" ((PVar "e") PWild (PList)) (EApp (EApp (EVar "gapE") (EVar "e")) (ELit (LString "empty block"))))

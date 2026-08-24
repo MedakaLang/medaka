@@ -4006,6 +4006,22 @@ emitBlock e env [CSExpr ex] = emitExpr e env ex
 emitBlock e env ((CSExpr ex)::rest) =
   let _ = emitExpr e env ex
   emitBlock e env rest
+-- last-position block-let `[let pat = e]`: mirror cevalBlock's cBlockLetLast
+-- (core_ir_eval :265/:277) — evaluate `e` (for effect + to honour the binding),
+-- destructure, and the block yields Unit.  Without this a block ending in a let
+-- would recurse into `emitBlock e env2 []` and hit the "empty block" gap.  A
+-- refutable pattern still gets the trap-on-miss check (P0-2c).  MUST come before
+-- every `(CSLet _ ...)::rest` arm below — each of those matches a ONE-element
+-- list too (`rest = []`), so a singleton-list arm placed after them is dead code
+-- for every pattern shape (#1741 — that was the actual bug: this arm previously
+-- sat after the `::rest` arms and never ran).
+emitBlock e env [CSLet _ pat ex] =
+  let (v, _) = emitExpr e env ex
+  let _ = if refutableCsLet e pat then
+    let _ = emitRefutableCsLet e env pat v
+    env
+  else bindPattern e env pat v (CLit (LInt 0))
+  ("1", LTUnit)
 -- #314: a block-statement function-`let` (`let go i = … go …`) lowers to a
 -- `CSLet` whose rhs is a `CLam` and whose body may call `go` recursively (the
 -- self-ref is annotated AGlobal since the non-recursive let does not scope its own
@@ -4054,18 +4070,6 @@ emitBlock e env ((CSLet _ pat ex)::rest) =
   else
     let env2 = bindPattern e env pat v (CBlock rest)
     emitBlock e env2 rest
--- last-position block-let `[let pat = e]`: mirror cevalBlock's cBlockLetLast
--- (core_ir_eval :265/:277) — evaluate `e` (for effect + to honour the binding),
--- destructure, and the block yields Unit.  Without this a block ending in a let
--- would recurse into `emitBlock e env2 []` and hit the "empty block" gap.  A
--- refutable pattern still gets the trap-on-miss check (P0-2c).
-emitBlock e env [CSLet _ pat ex] =
-  let (v, _) = emitExpr e env ex
-  let _ = if refutableCsLet e pat then
-    let _ = emitRefutableCsLet e env pat v
-    env
-  else bindPattern e env pat v (CLit (LInt 0))
-  ("1", LTUnit)
 -- `let mut x = e` reuses the irrefutable `CSLet _ (PVar x)` arm above (the mut
 -- flag carries no extra emit work — a mutable local is just an SSA value the
 -- block's tail rebinds).  A reassignment `x = e` (CSAssign, gap B1) mirrors the
