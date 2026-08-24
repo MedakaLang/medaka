@@ -1,5 +1,5 @@
 # META
-source_lines=713
+source_lines=741
 stages=DESUGAR,MARK
 # SOURCE
 -- string.mdk — operations on String and Char
@@ -422,12 +422,40 @@ intersperse sep (x::xs) = x :: sep :: intersperse sep xs
 
 {- | Repeat the string `n` times (empty when `n <= 0`).
 
+   Built by doubling (`repeatDbl`) rather than one recursive call per copy,
+   so the interpreted call depth is `O(log n)` instead of `O(n)` — a
+   linear-depth version hits the evaluator's call-depth cap around n ≈ 25000
+   (#1728).
+
    > repeat 3 "ab"
-   "ababab" -}
+   "ababab"
+
+   > repeat 0 "ab"
+   ""
+
+   > repeat (0 - 1) "ab"
+   ""
+
+   > stringLength (repeat 30000 "x")
+   30000 -}
 export
 repeat : Int -> String -> String
-repeat n s = stringConcat (replic n s)
+repeat n s = repeatDbl n s
 
+-- | `k <= 0` bottoms out at `""`; otherwise halve `k`, double the halved
+--   result, and append one more `s` when `k` is odd. `k / 2` shrinks the
+--   argument geometrically, so the call chain is `O(log k)` deep.
+repeatDbl : Int -> String -> String
+repeatDbl k s =
+  if k <= 0 then ""
+  else
+    let h = repeatDbl (k / 2) s
+    if isEven k then h ++ h else h ++ h ++ s
+
+-- | A list of `n` copies of `x` (empty when `n <= 0`). Still used by the
+--   padding helpers below, whose `n` is a display width (small in
+--   practice) rather than a caller-controlled repeat count — #1728 scoped
+--   the doubling fix to `repeat` itself.
 replic : Int -> a -> List a
 replic n x = if n <= 0 then [] else x :: replic (n - 1) x
 
@@ -794,7 +822,9 @@ half k = if k <= 1 then 0 else 1 + half (k - 2)
 (DFunDef false "intersperse" (PWild (PCons (PVar "x") (PList))) (EListLit (EVar "x")))
 (DFunDef false "intersperse" ((PVar "sep") (PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "sep") (EApp (EApp (EVar "intersperse") (EVar "sep")) (EVar "xs")))))
 (DTypeSig true "repeat" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "repeat" ((PVar "n") (PVar "s")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "replic") (EVar "n")) (EVar "s"))))
+(DFunDef false "repeat" ((PVar "n") (PVar "s")) (EApp (EApp (EVar "repeatDbl") (EVar "n")) (EVar "s")))
+(DTypeSig false "repeatDbl" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "repeatDbl" ((PVar "k") (PVar "s")) (EIf (EBinOp "<=" (EVar "k") (ELit (LInt 0))) (ELit (LString "")) (EBlock (DoLet false false (PVar "h") (EApp (EApp (EVar "repeatDbl") (EBinOp "/" (EVar "k") (ELit (LInt 2)))) (EVar "s"))) (DoExpr (EIf (EApp (EVar "isEven") (EVar "k")) (EBinOp "++" (EVar "h") (EVar "h")) (EBinOp "++" (EBinOp "++" (EVar "h") (EVar "h")) (EVar "s")))))))
 (DTypeSig false "replic" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "replic" ((PVar "n") (PVar "x")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EListLit) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "replic") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "x")))))
 (DTypeSig true "reverse" (TyFun (TyCon "String") (TyCon "String")))
@@ -948,7 +978,9 @@ half k = if k <= 1 then 0 else 1 + half (k - 2)
 (DFunDef false "intersperse" (PWild (PCons (PVar "x") (PList))) (EListLit (EVar "x")))
 (DFunDef false "intersperse" ((PVar "sep") (PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "sep") (EApp (EApp (EVar "intersperse") (EVar "sep")) (EVar "xs")))))
 (DTypeSig true "repeat" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "repeat" ((PVar "n") (PVar "s")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "replic") (EVar "n")) (EVar "s"))))
+(DFunDef false "repeat" ((PVar "n") (PVar "s")) (EApp (EApp (EVar "repeatDbl") (EVar "n")) (EVar "s")))
+(DTypeSig false "repeatDbl" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "repeatDbl" ((PVar "k") (PVar "s")) (EIf (EBinOp "<=" (EVar "k") (ELit (LInt 0))) (ELit (LString "")) (EBlock (DoLet false false (PVar "h") (EApp (EApp (EVar "repeatDbl") (EBinOp "/" (EVar "k") (ELit (LInt 2)))) (EVar "s"))) (DoExpr (EIf (EApp (EVar "isEven") (EVar "k")) (EBinOp "++" (EVar "h") (EVar "h")) (EBinOp "++" (EBinOp "++" (EVar "h") (EVar "h")) (EVar "s")))))))
 (DTypeSig false "replic" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "replic" ((PVar "n") (PVar "x")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EListLit) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "replic") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "x")))))
 (DTypeSig true "reverse" (TyFun (TyCon "String") (TyCon "String")))
