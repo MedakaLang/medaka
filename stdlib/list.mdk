@@ -50,13 +50,31 @@ rangeStep lo hi step
 
 {- | A list of `n` copies of `x` (empty when `n <= 0`).
 
+   Built by doubling (`replicateDbl`) rather than one recursive call per
+   copy, so the interpreted call depth is `O(log n)` instead of `O(n)` —
+   the same shape `String.repeat` had before #1728.
+
    > replicate 3 0
-   [0, 0, 0] -}
+   [0, 0, 0]
+
+   > replicate 0 0
+   []
+
+   > take 3 (replicate 30000 1)
+   [1, 1, 1] -}
 export
 replicate : Int -> a -> List a
-replicate n x
-  | n <= 0 = []
-  | otherwise = x :: replicate (n - 1) x
+replicate n x = replicateDbl n x
+
+-- | `k <= 0` bottoms out at `[]`; otherwise halve `k`, double the halved
+--   result, and prepend one more `x` when `k` is odd. `k / 2` shrinks the
+--   argument geometrically, so the call chain is `O(log k)` deep.
+replicateDbl : Int -> a -> List a
+replicateDbl k x =
+  if k <= 0 then []
+  else
+    let h = replicateDbl (k / 2) x
+    if isEven k then h ++ h else x :: h ++ h
 
 {- | `[x, f x, f (f x), …]` of length `n`.  Empty when `n <= 0`.
 
