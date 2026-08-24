@@ -87,16 +87,51 @@
 #                                         whole corpus (#1717). Matches against the
 #                                         fixture's basename (no `.mdk`/`.golden`
 #                                         suffix) — e.g. `--only foo_bar` or
-#                                         `--only 'foo_*'`. Every write, in EVERY
-#                                         mode, is echoed at the end under "Changed
+#                                         `--only 'foo_*'`. Every golden whose
+#                                         content actually MOVED, in EVERY mode, is
+#                                         echoed at the end under "Changed
 #                                         golden(s):" so "did this move only what I
 #                                         meant" is answerable from the tool's own
 #                                         output, no separate `git status` needed.
+#                                         (A byte-identical rewrite is NOT listed —
+#                                         #1838 — even though it was still written.)
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WRITTEN_LOG="$(mktemp)"   # every golden path this run wrote, one per line (#1717)
+WRITTEN_LOG="$(mktemp)"   # every golden path this run wrote AND actually CHANGED, one per line (#1717, #1838)
 record_golden() { printf '%s\n' "$1" >> "$WRITTEN_LOG"; }
+
+# finish_write <golden-path> <tmp-file-with-new-content> : install <tmp-file>
+# as <golden-path>, calling record_golden ONLY when the new content differs
+# from what was already on disk (#1838 — a byte-identical rewrite must not
+# show up under "Changed golden(s):", which #1717 promised would answer "did
+# this move only what I meant" without a separate `git status` round-trip). A
+# golden that didn't exist before this write is always a change (there is no
+# pre-image to be identical to).
+finish_write() {
+  _fw_golden="$1"; _fw_tmp="$2"
+  if [ -f "$_fw_golden" ] && cmp -s "$_fw_tmp" "$_fw_golden"; then
+    : # identical content — still (re)installed below for idempotence, but not reportable
+  else
+    record_golden "$_fw_golden"
+  fi
+  mkdir -p "$(dirname "$_fw_golden")"
+  cp "$_fw_tmp" "$_fw_golden"
+}
+
+# finish_write_dir <golden-dir> <tmp-dir> : directory analogue of finish_write,
+# for the one golden that is a whole scaffold tree (native_cli's `new/proj`).
+finish_write_dir() {
+  _fwd_golden="$1"; _fwd_tmp="$2"
+  if [ -d "$_fwd_golden" ] && diff -rq "$_fwd_golden" "$_fwd_tmp" >/dev/null 2>&1; then
+    :
+  else
+    record_golden "$_fwd_golden"
+  fi
+  rm -rf "$_fwd_golden"
+  mkdir -p "$(dirname "$_fwd_golden")"
+  cp -R "$_fwd_tmp" "$_fwd_golden"
+}
 print_written() {  # print_written : summarize $WRITTEN_LOG, relative to $ROOT
   if [ -s "$WRITTEN_LOG" ]; then
     echo "Changed golden(s):"
@@ -131,7 +166,7 @@ capture_build_golden() {  # $1=fixture .mdk  $2=golden path
     if [ -f "$golden" ] && cmp -s "$out" "$golden"; then :
     else mism=$((mism+1)); [ -f "$golden" ] && { echo "DRIFT $golden"; diff "$golden" "$out" | head -6 | sed 's/^/    /'; } || echo "MISSING $golden"; fi
   else
-    cp "$out" "$golden"; wrote=$((wrote+1)); record_golden "$golden"
+    wrote=$((wrote+1)); finish_write "$golden" "$out"
   fi
 }
 
@@ -204,13 +239,15 @@ if [ -n "$FROZEN_TAG" ]; then
         [ -f "$f" ] || continue
         only_match "$(basename "$f" .mdk)" || continue
         golden="${f%.mdk}.$suffix"
+        rf_tmp="$(mktemp)"
         if [ -n "$extra" ]; then
-          "$RUN" "$extra" "$f" 2>/dev/null | strip_unit | sed "s#$ROOT/##g" > "$golden"
+          "$RUN" "$extra" "$f" 2>/dev/null | strip_unit | sed "s#$ROOT/##g" > "$rf_tmp"
         else
-          "$RUN" "$f" 2>/dev/null | strip_unit | sed "s#$ROOT/##g" > "$golden"
+          "$RUN" "$f" 2>/dev/null | strip_unit | sed "s#$ROOT/##g" > "$rf_tmp"
         fi
         fwrote=$((fwrote+1))
-        record_golden "$golden"
+        finish_write "$golden" "$rf_tmp"
+        rm -f "$rf_tmp"
       done
     done
   }
@@ -244,9 +281,11 @@ if [ -n "$FROZEN_TAG" ]; then
       MODULES="frontend.ast frontend.lexer frontend.parser ir.sexp frontend.desugar frontend.marker types.annotate frontend.resolve frontend.exhaust driver.loader types.typecheck eval.eval tools.check"
       for m in $MODULES; do
         only_match "$m" || continue
-        awk -v M="$m" '/^## MODULE /{cur=($3==M)?1:0; next} cur{print}' "$ALL" | LC_ALL=C sort > "$LEGA_GOLD/$m.golden"
+        lega_tmp="$(mktemp)"
+        awk -v M="$m" '/^## MODULE /{cur=($3==M)?1:0; next} cur{print}' "$ALL" | LC_ALL=C sort > "$lega_tmp"
         fwrote=$((fwrote+1))
-        record_golden "$LEGA_GOLD/$m.golden"
+        finish_write "$LEGA_GOLD/$m.golden" "$lega_tmp"
+        rm -f "$lega_tmp"
       done
       rm -f "$ALL"; trap - EXIT
       if [ "$fwrote" -eq 0 ]; then
@@ -309,9 +348,9 @@ if [ -n "$FROZEN_TAG" ]; then
         fi
         # The fixture's own exit status is part of its behaviour (abort_*/panic
         # fixtures exit non-zero AFTER printing); capture stdout regardless.
-        "$LW/$n.bin" > "${f%.mdk}.native.golden" 2>/dev/null
+        "$LW/$n.bin" > "$LW/$n.out" 2>/dev/null
         fwrote=$((fwrote+1))
-        record_golden "${f%.mdk}.native.golden"
+        finish_write "${f%.mdk}.native.golden" "$LW/$n.out"
       done
       rm -rf "$LW"; trap - EXIT
       # A regenerator that silently writes 0 goldens is how a stale golden ships.
@@ -370,9 +409,10 @@ if [ -n "$FROZEN_TAG" ]; then
         [ -f "$f" ] || continue
         n="$(basename "$f" .mdk)"
         only_match "$n" || continue
+        nc_tmp="$(mktemp)"
         MEDAKA_ROOT="$ROOT" ncbound "$MAIN" check --types "$f" 2>/dev/null \
-          | nc_strip_unit | LC_ALL=C sort > "$NCGOLD/check/$n.golden"
-        fwrote=$((fwrote+1)); record_golden "$NCGOLD/check/$n.golden"
+          | nc_strip_unit | LC_ALL=C sort > "$nc_tmp"
+        fwrote=$((fwrote+1)); finish_write "$NCGOLD/check/$n.golden" "$nc_tmp"; rm -f "$nc_tmp"
       done
 
       # ── fmt/ ────────────────────────────────────────────────────────────
@@ -380,9 +420,10 @@ if [ -n "$FROZEN_TAG" ]; then
         [ -f "$f" ] || continue
         n="$(basename "$f" .mdk)"
         only_match "$n" || continue
+        nc_tmp="$(mktemp)"
         MEDAKA_ROOT="$ROOT" ncbound "$MAIN" fmt --stdout "$f" 2>/dev/null \
-          | nc_strip_unit > "$NCGOLD/fmt/$n.golden"
-        fwrote=$((fwrote+1)); record_golden "$NCGOLD/fmt/$n.golden"
+          | nc_strip_unit > "$nc_tmp"
+        fwrote=$((fwrote+1)); finish_write "$NCGOLD/fmt/$n.golden" "$nc_tmp"; rm -f "$nc_tmp"
       done
 
       # ── new/ ────────────────────────────────────────────────────────────
@@ -390,10 +431,8 @@ if [ -n "$FROZEN_TAG" ]; then
         NCTMP="$(mktemp -d)"
         ( cd "$NCTMP" && MEDAKA_ROOT="$ROOT" ncbound "$MAIN" new proj >/dev/null 2>&1 )
         if [ -d "$NCTMP/proj" ]; then
-          rm -rf "$NCGOLD/new/proj"
           mkdir -p "$NCGOLD/new"
-          cp -R "$NCTMP/proj" "$NCGOLD/new/proj"
-          fwrote=$((fwrote+1)); record_golden "$NCGOLD/new/proj"
+          fwrote=$((fwrote+1)); finish_write_dir "$NCGOLD/new/proj" "$NCTMP/proj"
         else
           echo "  SKIP new/proj (native \`new\` produced no tree)"
         fi
@@ -405,9 +444,10 @@ if [ -n "$FROZEN_TAG" ]; then
         f="$NCFIX/run/$base.mdk"
         [ -f "$f" ] || continue
         only_match "$base" || continue
+        nc_tmp="$(mktemp)"
         MEDAKA_ROOT="$ROOT" ncbound "$MAIN" run "$f" 2>/dev/null \
-          | nc_strip_unit > "$NCGOLD/run/$base.golden"
-        fwrote=$((fwrote+1)); record_golden "$NCGOLD/run/$base.golden"
+          | nc_strip_unit > "$nc_tmp"
+        fwrote=$((fwrote+1)); finish_write "$NCGOLD/run/$base.golden" "$nc_tmp"; rm -f "$nc_tmp"
       done
 
       # ── test/ ───────────────────────────────────────────────────────────
@@ -415,14 +455,16 @@ if [ -n "$FROZEN_TAG" ]; then
         f="$NCFIX/test/$base.mdk"
         [ -f "$f" ] || continue
         only_match "$base" || continue
+        nc_tmp="$(mktemp)"
         MEDAKA_ROOT="$ROOT" ncbound "$MAIN" test "$f" 2>/dev/null \
-          | sed "s#$ROOT/##g" | nc_strip_unit > "$NCGOLD/test/$base.golden"
-        fwrote=$((fwrote+1)); record_golden "$NCGOLD/test/$base.golden"
+          | sed "s#$ROOT/##g" | nc_strip_unit > "$nc_tmp"
+        fwrote=$((fwrote+1)); finish_write "$NCGOLD/test/$base.golden" "$nc_tmp"; rm -f "$nc_tmp"
       done
       if [ -d "$NCFIX/test_dir" ] && only_match dir; then
+        nc_tmp="$(mktemp)"
         MEDAKA_ROOT="$ROOT" ncbound "$MAIN" test "$NCFIX/test_dir" 2>/dev/null \
-          | sed "s#$ROOT/##g" | nc_strip_unit > "$NCGOLD/test/dir.golden"
-        fwrote=$((fwrote+1)); record_golden "$NCGOLD/test/dir.golden"
+          | sed "s#$ROOT/##g" | nc_strip_unit > "$nc_tmp"
+        fwrote=$((fwrote+1)); finish_write "$NCGOLD/test/dir.golden" "$nc_tmp"; rm -f "$nc_tmp"
       fi
 
       # ── build/ (native emit host; needs emitter + clang + libgc) ─────────
@@ -438,8 +480,8 @@ if [ -n "$FROZEN_TAG" ]; then
           ( export MEDAKA_ROOT="$ROOT"; export MEDAKA_EMITTER="$NCEMITTER"
             ncbound "$MAIN" build "$f" -o "$NCBTMP/nat_$base" ) >/dev/null 2>&1
           if [ -x "$NCBTMP/nat_$base" ]; then
-            "$NCBTMP/nat_$base" > "$NCGOLD/build/$base.golden" 2>/dev/null
-            fwrote=$((fwrote+1)); record_golden "$NCGOLD/build/$base.golden"
+            "$NCBTMP/nat_$base" > "$NCBTMP/nat_$base.out" 2>/dev/null
+            fwrote=$((fwrote+1)); finish_write "$NCGOLD/build/$base.golden" "$NCBTMP/nat_$base.out"
           else
             echo "  SKIP build/$base (native build failed)"
           fi
@@ -485,8 +527,8 @@ PY
           '{"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///lsp_sess.mdk"},"position":{"line":0,"character":1}}}' \
           '{"jsonrpc":"2.0","method":"exit","params":{}}'; do nc_lframe "$m" >> "$NCLTMP/lsp_in.bin"; done
         MEDAKA_ROOT="$ROOT" ncbound "$MAIN" lsp < "$NCLTMP/lsp_in.bin" > "$NCLTMP/lsp_out.bin" 2>/dev/null
-        nc_ldecode "$NCLTMP/lsp_out.bin" > "$NCGOLD/lsp/session.ndjson"
-        fwrote=$((fwrote+1)); record_golden "$NCGOLD/lsp/session.ndjson"
+        nc_ldecode "$NCLTMP/lsp_out.bin" > "$NCLTMP/lsp_out.ndjson"
+        fwrote=$((fwrote+1)); finish_write "$NCGOLD/lsp/session.ndjson" "$NCLTMP/lsp_out.ndjson"
         rm -rf "$NCLTMP"
       elif ! command -v python3 >/dev/null 2>&1; then
         only_match lsp && echo "  SKIP lsp/session.ndjson (no python3)"
@@ -667,7 +709,7 @@ emit_golden() {
       else echo "DRIFT    $golden"; diff "$golden" "$out" | head -6 | sed 's/^/    /'; fi
     fi
   else
-    cp "$out" "$golden"; wrote=$((wrote+1)); record_golden "$golden"
+    wrote=$((wrote+1)); finish_write "$golden" "$out"
   fi
 }
 
@@ -683,7 +725,7 @@ emit_to() {
       else echo "DRIFT    $golden"; diff "$golden" "$src" | head -6 | sed 's/^/    /'; fi
     fi
   else
-    mkdir -p "$(dirname "$golden")"; cp "$src" "$golden"; wrote=$((wrote+1)); record_golden "$golden"
+    wrote=$((wrote+1)); finish_write "$golden" "$src"
   fi
 }
 
@@ -847,7 +889,7 @@ if want repl; then
       if [ -f "$golden" ] && cmp -s "$out" "$golden"; then :
       else mism=$((mism+1)); [ -f "$golden" ] && { echo "DRIFT $golden"; diff "$golden" "$out" | head -6 | sed 's/^/    /'; } || echo "MISSING $golden"; fi
     else
-      cp "$out" "$golden"; wrote=$((wrote+1)); record_golden "$golden"
+      wrote=$((wrote+1)); finish_write "$golden" "$out"
     fi
   else
     mism=$((mism+1)); echo "SKIP repl golden — missing $REPL_BIN (run FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one $(basename "$REPL_BIN")) or $REPL_IN"
