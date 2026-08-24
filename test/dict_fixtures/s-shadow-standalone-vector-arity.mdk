@@ -1,0 +1,64 @@
+-- FIX-shadow-arity-skew: the #1866 shape reached through the STANDALONE-SHADOW route
+-- rather than the ordinary constrained-call route. `size` is this module's own top-level
+-- fn AND the name of `Sizeable`'s method, so every occurrence of it is a DEFINER SHADOW
+-- and its dicts come from `shadowStandaloneDictSlots`, not from `inferDictAtFound`.
+--
+-- 🚨 WHY THIS FIXTURE EXISTS. S-slot-key-vector (#1866) re-keyed `dedupSlotVecs` on the
+-- WHOLE PREDICATE, so `(Ix a Char, Ix a Bool)` opens TWO dict slots. The DEFINITION side
+-- (`expandSupersEntry`, which `dictArityOf` sizes from) picked that up; the shadow route
+-- still expanded through `expandSupersPairs`, which pairs every slot with a constant `[]`,
+-- and collapsed the two back into ONE. A 1-dict call against a 2-dict definition:
+-- measured at sprint head `e19298f5`, `check` exit 0, `run` E-PANIC "intToString: not an
+-- Int", `build` exit 0 printing a DIFFERENT heap pointer on every execution, wasm
+-- "instantiate failed: illegal cast" -- three engines disagreeing three ways.
+--
+-- ⚠️ THE SHADOW IS THE FIXTURE. `test/dict_fixtures/s-cardinality-same-iface2.mdk` is this
+-- program with the standalone renamed to `useIx` and the `Sizeable` interface removed --
+-- byte-comparable, and GREEN throughout the regression. Rename `size` here to a name no
+-- interface declares, or delete the `Sizeable` declaration, and this row still passes
+-- while testing nothing: the collision with an in-scope method name is what selects the
+-- route under test.
+--
+-- SPEC ANSWER, hand-derived from the declarations before any binary was run:
+--   `size 5`  -- both predicates satisfied at `a = Int`: `ix 5 'z'` selects
+--              `impl Ix Int Char` = 222 and `ix 5 True` selects `impl Ix Int Bool` = 111,
+--              so 333. (444 is the pre-#1866 collapse -- one slot serving both call sites
+--              -- and 222 is that collapse landing on the other impl; both are wrong and
+--              both are silent.)
+--   `plain 5` -- ONE 2-ary predicate, ONE dict slot, 222.
+--
+-- [T-GLOBAL-TABLE] / review finding F8: `plain` is the FEATURE-PRESENT-PLUS-UNRELATED-
+-- CODE-STILL-BEHAVES half this corpus was missing on this route. It is an ordinary
+-- non-shadow constrained standalone that never touches `Sizeable` and carries a
+-- single-predicate context, so it takes `routesOfMonosTopV`'s scalar arm; its 222 asserts
+-- that widening the shadow route's slot list did not perturb the code beside it.
+--
+-- Section 1 pins both values; section 3 (IRS) pins the two ARITIES -- 2 dicts + 1 value
+-- for `size`, 1 dict + 1 value for `plain` -- which no value can see (a call and a
+-- definition that agree on the WRONG count print a right-looking number).
+interface Sizeable a where
+  size : a -> Int
+
+data Box = Box Int
+
+impl Sizeable Box where
+  size (Box n) = n
+
+interface Ix a b where
+  ix : a -> b -> Int
+
+impl Ix Int Char where
+  ix _ _ = 222
+
+impl Ix Int Bool where
+  ix _ _ = 111
+
+size : (Ix a Char, Ix a Bool) => a -> Int
+size n = ix n 'z' + ix n True
+
+plain : Ix a Char => a -> Int
+plain n = ix n 'z'
+
+main =
+  let _ = println (size 5)
+  println (plain 5)

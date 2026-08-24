@@ -1,0 +1,31 @@
+-- S-cardinality-conformance (closes out #1871): the #1869 shape's OTHER declaration
+-- order, sibling to s-cardinality-inferred.mdk (both `impl` orderings flipped from
+-- that file). Same claim, same expected value (2442) -- the pair is the order-
+-- independence assertion the packet asks for ("both impl orders"), spelled out as two
+-- fixture files rather than relying on section 4's within-file block permuter (which
+-- reverses ONE interface's blocks at a time; this file exercises reversing BOTH
+-- interfaces' blocks together, the shape the original #1869 issue's own two-row table
+-- used).
+interface Ix a b where
+  ix : a -> b -> Int
+
+impl Ix Int Char where
+  ix _ _ = 222
+
+impl Ix Int Bool where
+  ix _ _ = 111
+
+interface Jx a b where
+  jx : a -> b -> Int
+
+impl Jx Int Bool where
+  jx _ _ = 1110
+
+impl Jx Int Char where
+  jx _ _ = 2220
+
+useIx p q = ix p q
+
+useJx p q = jx p q
+
+main = println (useIx 5 'z' + useJx 5 'z')

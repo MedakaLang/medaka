@@ -2283,7 +2283,12 @@ public export data SiteKind =
   -- standalone-shadow RLocal site: mangled standalone symbol, forceLocal (P0-20),
   -- and the shadowing standalone's own `=>`-constraint dict monos + iface names
   -- (S-1).  Primary mono = receiver mono; encl is unused ("").
-  | SKRLocal String Bool (List Mono) (List String)
+  -- FIX-shadow-arity-skew: the 5th field is the slot-parallel predicate ARGUMENT VECTOR
+  -- list, so `resolveRLocalSites` can select each slot with `routesOfMonosTopV`'s vector
+  -- goal instead of the scalar `Ix Int _`.  It is `ShadowDicts`' third projection and
+  -- must stay aligned with the other two — see that record.  Empty ⇒ the scalar router,
+  -- term for term, which is every 1-ary `=>` constraint in compiler + stdlib + sqlite.
+  | SKRLocal String Bool (List Mono) (List String) (List (List Mono))
 
 public export data PendingEntry =
   -- fields: name/method, route ref to stamp, primary mono, enclosing-fn name, kind,
@@ -5878,7 +5883,7 @@ ifaceRefNone = IfaceRef { irName = "", irOrigin = OriginUnresolved }
 -- producers have only an id (`vecOblsOfSlots` lifts a `CSlot`, whose payload is
 -- `csId : Int`; `superSlotVecOf` maps typaram names positionally onto ids), and a
 -- `Mono` is a `Ref Tyvar` that cannot be minted from an id.  [voIds] also remains
--- the currency of the dict-slot cardinality (`vecOblLeadId`) and of the coverage
+-- the currency of the dict-slot cardinality (`leadInferredPred`) and of the coverage
 -- subset test (`pairsOfVecObls`), neither of which has anything to say about a
 -- ground argument.  When [voArgs] is non-empty, [voIds] holds the ids of exactly
 -- its BARE-TYVAR positions, in order.
@@ -5931,7 +5936,43 @@ data CDeclaredPrefix = CDPUnknown | CDPLen Int
 -- declared prefix must come from the SAME entry decision (qual hit / known-import miss
 -- / bare fallback) — a second accessor re-deriving that choice is the drift
 -- `qualConstraintKey` was factored out to remove.  See `declaredConstraintFor`.
-data CDeclared = CDeclared { cdSlots : List CSlot, cdPrefix : CDeclaredPrefix }
+--
+-- S-xmod-vector-supply (#1868/#1867): [cdArgs] joins the SAME entry decision for the
+-- same reason.  It is the callee's slot-parallel predicate ARGUMENT VECTORS — a
+-- legitimate PREFIX of [cdSlots], never a parallel list a reader must re-align (a slot
+-- past its end reads `[]`, i.e. "no vector recoverable", via `zipSlotVecs`).  Resolving
+-- it through a SECOND `qualConstraintKey` call was the available alternative and is
+-- exactly the drift this record exists to prevent: the vectors and the slots they
+-- describe would then be free to come from different modules' entries.
+data CDeclared =
+  | CDeclared {
+      cdSlots : List CSlot,
+      cdPrefix : CDeclaredPrefix,
+      cdArgs : List (List Mono),
+    }
+
+-- FIX-shadow-arity-skew: the shadow route's expanded dict slots, the SAME three
+-- slot-parallel projections `inferDictAtFound` hands `pushDictApp` — monos, route WORDS
+-- (iface spellings), and each slot's call-instantiated predicate ARGUMENT VECTOR.  The
+-- vectors were the residual `declaredConstraintArgs`' header named as "STILL LIVE, same
+-- shape": `SKRLocal` carried only the first two, so `resolveRLocalSites` selected every
+-- shadow-route slot with the SCALAR `routesOfMonosTop` goal and a multi-argument
+-- predicate shattered into `Ix Int _`, first-declared-wins.  They travel as ONE record
+-- for the reason `CDeclared` does: three parallel lists a reader must re-align is the
+-- hazard `CSlot` was introduced to remove, and `callArgVecsV` only guarantees
+-- slot-parallelism with the `constraintMonosOf` output computed from the same expansion.
+-- [sdArgVecs] empty ⇒ `routesOfMonosTopV` IS `routesOfMonosTop`, term for term.
+data ShadowDicts =
+  | ShadowDicts {
+      sdMonos : List Mono,
+      sdIfaces : List String,
+      sdArgVecs : List (List Mono),
+    }
+
+-- the empty shadow-dict stamp: an unconstrained standalone, or a route that resolves to
+-- nothing.  Byte-identical to the `([], [])` this returned before the vectors joined it.
+emptyShadowDicts : ShadowDicts
+emptyShadowDicts = ShadowDicts { sdMonos = [], sdIfaces = [], sdArgVecs = [] }
 
 -- THE pairing point — the only place in the tree where a slot-id list meets a
 -- slot-parallel interface list.
@@ -6352,6 +6393,14 @@ data CrossRun = CrossRun {
     crossModuleFunConstraintsQualRef : Ref (List ((String, String), List Int)),
     crossModuleFunConstraintIfacesRef : Ref (List (String, List IfaceRef)),
     crossModuleFunConstraintIfacesQualRef : Ref (List ((String, String), List IfaceRef)),
+    -- S-xmod-vector-supply (#1868/#1867): the (definer module, exported name)-keyed twin
+    -- of `funConstraintArgsRef`, seeded and consumed exactly like the ids/ifaces/prefix
+    -- qual tables beside it.  ⚠️ THERE IS DELIBERATELY NO BARE-NAME PEER: a stored vector
+    -- carries the DEFINING signature's instantiation tyvars, and only the source-exact
+    -- key guarantees the call site substitutes them through THAT signature's own
+    -- instantiation subst — see `declaredConstraintArgs`' header for why a vector read
+    -- off another module's entry is strictly worse than no vector at all.
+    crossModuleFunConstraintArgsQualRef : Ref (List ((String, String), List (List Mono))),
     crossModuleFunConstraintDeclaredRef : Ref (List (String, CDeclaredPrefix)),
     crossModuleFunConstraintDeclaredQualRef : Ref (List ((String, String), CDeclaredPrefix)),
     crossModuleMethodConstraintsRef : Ref (List (String, List Int)),
@@ -6416,6 +6465,7 @@ freshCrossRun env = CrossRun {
   crossModuleFunConstraintsQualRef = Ref [],
   crossModuleFunConstraintIfacesRef = Ref [],
   crossModuleFunConstraintIfacesQualRef = Ref [],
+  crossModuleFunConstraintArgsQualRef = Ref [],
   crossModuleFunConstraintDeclaredRef = Ref [],
   crossModuleFunConstraintDeclaredQualRef = Ref [],
   crossModuleMethodConstraintsRef = Ref [],
@@ -9039,7 +9089,7 @@ recordRLocalSite env name tagRef inst
       Some am =>
         let sym = routeLocalSym !tagRef
         let dicts = shadowStandaloneDictSlotsAt (standaloneSchemeFor env name sym) (if sym == "" then name else sym) am
-        perRun.value.pendingRLocalSites := PendingEntry name tagRef am "" (SKRLocal sym (standaloneValuePinned name) (fst dicts) (snd dicts)) !currentLoc :: perRun.value.pendingRLocalSites.value
+        perRun.value.pendingRLocalSites := PendingEntry name tagRef am "" (SKRLocal sym (standaloneValuePinned name) dicts.sdMonos dicts.sdIfaces dicts.sdArgVecs) !currentLoc :: perRun.value.pendingRLocalSites.value
       None => ()
 
 -- the SHADOWING STANDALONE's scheme.  An IMPORTER shadow's bare name is rebound by env1
@@ -9291,16 +9341,44 @@ inferDictAt env name routesRef = match lookupVar env name
 -- re-export / check path (mid ""): inferDictAtFound falls back to the bare funConstraintsRef
 -- + funConstraintIfacesRef path (today's behavior; same slots when no collision, since
 -- the qual entry is the same module's same ids the bare first-match returns sans collision).
+-- S-xmod-vector-supply (#1868/#1867): a PROJECTION of `qualConstraintDecl`, which is the
+-- ONE qual-entry resolution.  It was the whole body until this slice; a third reader
+-- (`declaredCrossModuleObls`) needed the same entry's ARGUMENT VECTORS as well as its
+-- slots, and two readers re-deriving which entry a name resolves to is the drift
+-- `qualConstraintKey` was factored out to remove.
 qualConstraintFor : String -> Option (List CSlot)
-qualConstraintFor name = match qualConstraintKey name
+qualConstraintFor name = map (d => d.cdSlots) (qualConstraintDecl name)
+
+-- THE qual-entry resolution: a cross-module constrained callee's whole recorded
+-- constraint fact — slots, declared prefix, and argument vectors — from ONE
+-- `(definer module, exported name)` decision.  `None` ⇒ not an explicitly-imported name,
+-- or that name owns no qual ids entry.
+qualConstraintDecl : String -> Option CDeclared
+qualConstraintDecl name = match qualConstraintKey name
   None => None
   Some (src, origin) =>
-    -- U1b (#1482): the two independent lookups still default to `[]` independently —
+    -- U1b (#1482): the independent lookups still default to `[]` independently —
     -- that is the manufacturable mismatch described on `CSlot` — but they now meet in
     -- `pairSlots`, which owns the policy, instead of in three downstream zips.
-    map (ids => pairSlots ids
-      (fromOption [] (lookupQualPayload src origin crossRun.value.crossModuleFunConstraintIfacesQualRef.value)))
+    map (ids => qualDeclOf src origin ids)
       (lookupQualPayload src origin crossRun.value.crossModuleFunConstraintsQualRef.value)
+
+qualDeclOf : String -> String -> List Int -> CDeclared
+qualDeclOf src origin ids =
+  let slots = pairSlots ids
+    (fromOption [] (lookupQualPayload src origin crossRun.value.crossModuleFunConstraintIfacesQualRef.value))
+  CDeclared {
+    cdSlots = slots,
+    cdPrefix = clampPrefix slots
+      (lookupQualPayload src origin crossRun.value.crossModuleFunConstraintDeclaredQualRef.value),
+    -- S-xmod-vector-supply (#1868/#1867): the vectors of the SAME entry.  An ABSENT row
+    -- is `[]`, which `zipSlotVecs` reads as "no vector recoverable" for every slot —
+    -- byte-identically the pre-slice cross-module behaviour, so a callee registered with
+    -- ids but no args is unaffected.  S-inferred-vector-supply (#1869): an INFERRED callee
+    -- is no longer automatically in that class — `registerInferredFor` writes a real row
+    -- when it recovers one, and writes none (this arm) when it recovers nothing.
+    cdArgs = fromOption [] (lookupQualPayload src origin crossRun.value.crossModuleFunConstraintArgsQualRef.value),
+  }
 
 -- the (import-source module, ORIGINAL exported name) key a cross-module callee's qual
 -- entries live under; `None` ⇒ local fn / wildcard import / re-export / check path.
@@ -9325,7 +9403,7 @@ qualConstraintKey name = map
   (lookupAssoc name perRun.value.currentImportDefinersRef.value)
 
 -- the callee's registered dict-slot IDS, UNPAIRED and UNTRUNCATED — the exact list the
--- pre-U1b `declaredConstraintSlots` returned as its first component.
+-- pre-U1b `declaredConstraintFor` returned as its first component.
 --
 -- 🚨 WHY THIS EXISTS, AND WHY IT IS NOT THE PARALLEL-LIST HAZARD `CSlot` REMOVED.
 -- `pairSlots` truncates to the SHORTER of (ids, ifaces), which is correct everywhere the
@@ -9346,7 +9424,7 @@ qualConstraintKey name = map
 declaredConstraintIds : String -> List Int
 declaredConstraintIds name = match qualConstraintIds name
   Some ids => ids
-  -- same #739 source-exact discipline as `declaredConstraintSlots`' `None` arm below:
+  -- same #739 source-exact discipline as `declaredConstraintFor`'s `None` arm below:
   -- a known import with no qual entry is genuinely unconstrained, and must NOT fall
   -- through to the source-blind bare-name table.
   None =>
@@ -9371,26 +9449,20 @@ lookupQualPayload src name (((m, n), v)::rest)
   | m == src && n == name = Some v
   | otherwise = lookupQualPayload src name rest
 
--- WS-2/D2: a constrained callee's declared dict slots (constraint tyvar id + interface
--- occurrence, PAIRED — see `CSlot`; never two parallel lists).  Prefer
--- the (import-source, name)-keyed QUAL table for a cross-module callee; fall back to the
--- bare-name funConstraintsRef first-match for local / wildcard / re-export.
--- S-1: shared with shadowStandaloneDictSlots — an IMPORTED constrained standalone that
--- shadows a method is exactly a cross-module callee, so it needs the SAME resolution.
--- Reading only the bare-name table there left the importer shadow's dicts EMPTY on `run`
--- (funConstraintsRef is reset per module and only re-seeded from the cross-module table
--- on the EMIT path), so `build` was right and `run` was wrong — the inverse skew.
+-- WS-2/D2 + B-2.2-f (#1113): the slots-only projection `declaredConstraintSlots` is
+-- RETIRED.  It had exactly two readers — `inferDictAtFound` and the shadow route — and
+-- FIX-shadow-arity-skew is what a slots-only projection costs: slice 3 widened what
+-- `cdSlots` is keyed by (whole predicate, vector included), the call sides that had a
+-- vector agreed with the widened definition side, and the one reader still taking the
+-- bare-slots projection expanded against a constant `[]` and collapsed two slots into
+-- one.  Take `declaredConstraintFor` and project BOTH halves off the one entry decision,
+-- or you are re-opening this bug by construction.  (The same argument that removed
+-- `declaredConstraintK`: two readers re-deriving which entry a name resolves to is the
+-- drift `qualConstraintKey` was factored out to remove.)
 --
--- B-2.2-f (#1113): this is now a PROJECTION of `declaredConstraintFor`, which resolves
--- the slots and their DECLARED-PREFIX length in ONE entry decision.  There is
--- deliberately no parallel `declaredConstraintK`: two readers re-deriving which entry a
--- name resolves to is the drift `qualConstraintKey` was factored out to remove.
-declaredConstraintSlots : String -> List CSlot
-declaredConstraintSlots name = (declaredConstraintFor name).cdSlots
-
 -- B-2.2-f (#1113): the ONE resolution — a constrained callee's declared dict slots AND
 -- how many of them its own `=>` context declared (the rest being super slots
--- `expandSupersPairs` appends downstream).  Arms mirror `declaredConstraintSlots`'
+-- `expandSupersPairs` appends downstream).  Arms mirror the retired `declaredConstraintSlots`'
 -- former body exactly, keyed once through `qualConstraintKey`.
 --
 -- 🚨 The prefix is CLAMPED against the slots actually returned (`clampPrefix`).
@@ -9399,21 +9471,16 @@ declaredConstraintSlots name = (declaredConstraintFor name).cdSlots
 -- of a truncated list marks APPENDED slots declared — the unsafe direction.  UNWITNESSED
 -- (instrumented over a full compiler build and a two-module probe; it never fired), so
 -- the clamp is defensive, not measured — it is one token and it fails closed.
+--
+-- S-xmod-vector-supply (#1868/#1867): the qual arm is now `qualConstraintDecl`, shared
+-- with `qualConstraintFor` and `declaredCrossModuleObls`.  The two arms that used to be
+-- spelled out here — a qual KEY hit whose ids payload MISSES, and no qual key at all with
+-- the name still an import — collapse into the one `hasImportDefiner` test below: a
+-- `qualConstraintKey` hit IS a `currentImportDefinersRef` hit (same ref, same lookup), so
+-- the empty `CDeclared` both arms produced is unchanged.
 declaredConstraintFor : String -> CDeclared
-declaredConstraintFor name = match qualConstraintKey name
-  Some (src, origin) => match lookupQualPayload src origin crossRun.value.crossModuleFunConstraintsQualRef.value
-    Some ids =>
-      let slots = pairSlots ids
-        (fromOption [] (lookupQualPayload src origin crossRun.value.crossModuleFunConstraintIfacesQualRef.value))
-      CDeclared {
-        cdSlots = slots,
-        cdPrefix = clampPrefix slots
-          (lookupQualPayload src origin crossRun.value.crossModuleFunConstraintDeclaredQualRef.value),
-      }
-    -- a KNOWN import with no qual entry: genuinely unconstrained in its source module
-    -- (the `hasImportDefiner` arm below, reached through the same fact).  No slots, so
-    -- `CDPLen 0` is the accurate reading and not an absence — see `CDeclaredPrefix`.
-    None => CDeclared { cdSlots = [], cdPrefix = CDPLen 0 }
+declaredConstraintFor name = match qualConstraintDecl name
+  Some d => d
   -- #739: source-exact fallback.  An EXPLICITLY-imported name (present in
   -- currentImportDefinersRef) whose (import-source, name) qual entry is ABSENT is
   -- genuinely UNCONSTRAINED in its source module — every module's constrained fns ARE
@@ -9429,7 +9496,7 @@ declaredConstraintFor name = match qualConstraintKey name
   -- re-export / check-path (mid "") names — absent from currentImportDefinersRef — still
   -- take the bare-name path (byte-identical when there is no collision).
   None =>
-    if hasImportDefiner name then CDeclared { cdSlots = [], cdPrefix = CDPLen 0 }
+    if hasImportDefiner name then CDeclared { cdSlots = [], cdPrefix = CDPLen 0, cdArgs = [] }
     else
       let slots = pairSlots
         (fromOption [] (lookupAssocSL2 name perRun.value.funConstraintsRef.value))
@@ -9437,6 +9504,10 @@ declaredConstraintFor name = match qualConstraintKey name
       CDeclared {
         cdSlots = slots,
         cdPrefix = clampPrefix slots (lookupAssoc name perRun.value.funConstraintDeclaredRef.value),
+        -- the LOCAL / wildcard / re-export / check-path arm keeps the bare-name vector
+        -- table this slice did not touch — `declaredConstraintArgs`, the same lookup
+        -- `enclPreds` uses for the ENCLOSING fn.
+        cdArgs = declaredConstraintArgs name,
       }
 
 -- B-2.2-f (#1113): a recorded prefix, clamped to the slots it indexes into; an ABSENT
@@ -9450,7 +9521,7 @@ clampPrefix slots (Some (CDPLen k)) = CDPLen (minI k (listLen slots))
 
 -- #739: is [name] an explicitly-imported value (has a known source module)?  A miss in
 -- the qual constraint table for such a name is authoritative ("unconstrained in its
--- source"), so declaredConstraintSlots must NOT fall through to the source-blind bare-name
+-- source"), so `declaredConstraintFor` must NOT fall through to the source-blind bare-name
 -- table for it.  A local / wildcard / re-export name is absent here and keeps the old path.
 hasImportDefiner : String -> Bool
 hasImportDefiner name = match lookupAssoc name perRun.value.currentImportDefinersRef.value
@@ -9460,7 +9531,12 @@ hasImportDefiner name = match lookupAssoc name perRun.value.currentImportDefiner
 inferDictAtFound : String -> Ref (List Route) -> (Mono, List (Int, Mono)) -> Mono
 inferDictAtFound name routesRef inst =
   let q = qualConstraintFor name
-  let slots = declaredConstraintSlots name
+  -- S-xmod-vector-supply (#1868/#1867): ONE resolution, two projections.  The slots and
+  -- the argument vectors `zipSlotVecs` pairs them with below MUST come from the same
+  -- entry decision — reading the slots qual-resolved and the vectors off the bare-name
+  -- table is precisely the cross-module gap this slice closes.
+  let dc = declaredConstraintFor name
+  let slots = dc.cdSlots
   -- ⚠️ UNTRUNCATED on purpose — `map (s => s.csId) slots` is NOT the same list when the
   -- arity table hits and the iface table misses.  See `declaredConstraintIds`.
   let declaredIds = declaredConstraintIds name
@@ -9487,7 +9563,7 @@ inferDictAtFound name routesRef inst =
     -- a `Sub a b` slot ⇒ `Ix Int Char`, not `Ix Int`).  The slot sequence is identical to
     -- `expandSupersPairs`' — it is a projection of this call — so dict ARITY is untouched
     -- here and the define side (`expandSupersEntry`) still agrees slot for slot.
-    let expandedV = expandSupersVecs driverState.value.superDeclsRef.value (zipSlotVecs slots (declaredConstraintArgs name))
+    let expandedV = expandSupersVecs driverState.value.superDeclsRef.value (zipSlotVecs slots dc.cdArgs)
     let expanded = map fst expandedV
     let ids = map (s => s.csId) expanded
     let monos = constraintMonosOf ids (snd inst)
@@ -9570,31 +9646,49 @@ instantiateTracked (Forall ids evars t) =
 
 -- #1161 (F-3a-ii): the callee's declared per-slot predicate ARGUMENT VECTORS, as
 -- recorded at signature registration (registerMember).  Bare-name keyed, mirroring the
--- `None` arm of declaredConstraintSlots.
--- ⚠️ RESIDUAL, deliberate: there is NO (definer-module, name)-keyed qual table for
--- argument vectors, so a CROSS-MODULE constrained callee misses here and every slot
--- falls back to its scalar goal — i.e. exactly today's behaviour, never a wrong one.
--- Building one is not a rider: the qual tables are re-seeded across modules and a
--- stored vector's TYVAR arguments carry per-module tyvar ids (each module resets
--- tyvarCounter), so they would need the same id re-attribution `attributeModuleEntries`
--- does for the ids table.  A vector attributed with the WRONG module's ids substitutes
--- to a wrong-but-concrete goal — strictly worse than missing.  See #1161's residual note.
--- ⚠️ AND NAME WHAT THE RESIDUAL NOW COSTS, not just that it exists: because the
--- IN-MODULE path is fixed and this one is not, byte-identical source now ANSWERS
--- DIFFERENTLY depending on where it is called from.  Measured: `useIx : Ix a Char =>
--- a -> Int` prints 222 when its module is compiled alone and 111 when the same module
--- is imported (both engines, exit 0, no diagnostic).  That inconsistency did not exist
--- before — pre-F-3a-ii both sites printed 111 — so closing the gap here also closes a
--- same-source-different-answer split that is worse to debug than the uniform bug was.
--- ⚠️ SECOND RESIDUAL, same shape and same reasoning: `resolveRLocalSites` /
--- `SKRLocal` (the standalone-shadow arg-position stamp) fills its dict routes with the
--- SCALAR `routesOfMonosTop`, not `routesOfMonosTopV`, so an importer-shadowed
--- constrained standalone with a multi-argument predicate keeps today's per-tyvar goal.
--- Threading it would mean widening the `SKRLocal` payload at all four of its producers,
--- whose monos come from `shadowStandaloneDictSlots` → `declaredConstraintSlots` — i.e.
--- it is ENTANGLED with the cross-module residual above and inherits its id-attribution
--- hazard, so it is deliberately not a rider either.  Neither residual is WRONGER than
--- before; both are simply NOT COVERED, and this comment is the only place that says so.
+-- `None` arm of `declaredConstraintFor`.
+-- ⚠️ THIS IS THE LOCAL LOOKUP ONLY, and that is now a NARROWER claim than it was.
+-- S-xmod-vector-supply (#1868 silent / #1867 loud) CLOSED the cross-module residual this
+-- header used to describe: `crossModuleFunConstraintArgsQualRef` is the `(definer module,
+-- exported name)`-keyed twin, seeded beside the ids/ifaces/prefix snapshots and read
+-- through `declaredConstraintFor`'s `cdArgs`, so an IMPORTED constrained callee's call
+-- site now sees the same argument vector a local one does.  What still reads THIS bare
+-- table is (a) `declaredConstraintFor`'s local/wildcard/re-export/check-path arm and
+-- (b) `enclPreds`, whose subject is the ENCLOSING fn and therefore always local.
+--
+-- 🚨 WHY THE QUAL KEY IS WHAT MAKES THE VECTOR SAFE TO CROSS — the hazard this header
+-- used to cite as the reason NOT to build the table, and the measurement that answers
+-- it.  A stored vector's tyvars are not re-attributed by `attributeModuleEntries` (it
+-- only re-keys by `(mid, name)`), and each module resets `tyvarCounter`, so a vector
+-- read off the WRONG module's entry substitutes to a wrong-but-concrete goal — strictly
+-- worse than missing.  The vector is safe because it never needs re-attribution in the
+-- first place: `constraintVarIfaceMonos` (which mints the slot IDS) and
+-- `constraintVarArgMonos` (which mints these VECTORS) are called on ONE signature
+-- instantiation's `snd inst` in `preunifySigsEx`, so a slot's `csId` is literally one of
+-- its own vector's tyvar ids.  The call site then maps BOTH through the same
+-- `instantiateTracked` subst of that callee's own scheme, whose quantified ids are those
+-- same signature vars.  So the vector lives in exactly the id space the already-shipped
+-- ids table crosses in — no wider — and the ONLY way to leave it is to resolve the entry
+-- by bare name.  Hence: qual key, no bare-name cross-module peer, no seed back into
+-- `funConstraintArgsRef`.  The residual's cost is what drained with it: `useIx : Ix a
+-- Char => a -> Int` printed 222 compiled alone and 111 imported — byte-identical source,
+-- different answer, exit 0, both engines.
+-- ✅ SECOND RESIDUAL — CLOSED by FIX-shadow-arity-skew, and the prose that stood here is
+-- kept only as the record of why it had to be.  It read: `resolveRLocalSites` / `SKRLocal`
+-- fill their dict routes with the SCALAR `routesOfMonosTop`, so an importer- or
+-- definer-shadowed constrained standalone with a multi-argument predicate keeps the
+-- per-tyvar goal; and S-xmod-vector-supply left it there deliberately, on the measured
+-- ground that it changed only `cdArgs` while the shadow route read only `cdSlots`, so the
+-- neighbour was "neither newly wrong nor newly reachable".
+-- 🚨 That clearance was SOUND FOR ITS OWN SLICE AND FALSIFIED BY THE NEXT ONE.
+-- S-slot-key-vector (#1866) re-keyed `cdSlots` ITSELF on the whole predicate, which is
+-- precisely the premise the clearance rested on, and the shadow route — still expanding
+-- against a constant `[]` — under-counted the definition's dict params: `run` E-PANIC,
+-- `build` a per-execution heap pointer, wasm illegal cast, `check` exit 0.  The lesson is
+-- not "that reasoning was careless"; it is that "reads only X, and I touched only Y" has
+-- a HALF-LIFE OF ONE SLICE, and a comment recording such a clearance must be re-read by
+-- whoever next moves X.  `SKRLocal` now carries the vectors and both resolvers select
+-- through `routesOfMonosTopV`; empty vectors make that the scalar router term for term.
 declaredConstraintArgs : String -> List (List Mono)
 declaredConstraintArgs name =
   fromOption [] (lookupAssocVecs name perRun.value.funConstraintArgsRef.value)
@@ -9612,8 +9706,10 @@ lookupAssocVecs k ((k2, v)::rest)
 -- S-dict-arity-contract: each slot now arrives PAIRED with its own vector — the stored
 -- signature vector for a declared slot, the `requires`-mapped one for an appended super
 -- slot (`expandSupersVecs`).  A slot whose vector is empty — an inferred/promoted fn, a
--- cross-module callee (#1161's residual), a super whose params did not all resolve —
--- still yields the singleton `[m]`, the scalar goal `routesOfMonosTop` already used.
+-- super whose params did not all resolve — still yields the singleton `[m]`, the scalar
+-- goal `routesOfMonosTop` already used.  ⚠️ A CROSS-MODULE CALLEE IS NO LONGER IN THAT
+-- LIST: S-xmod-vector-supply (#1868/#1867) gave it a real vector — see
+-- `declaredConstraintArgs`' header.
 callArgVecsV : List (CSlot, List Mono) -> List (Int, Mono) -> List (List Mono)
 callArgVecsV [] _ = []
 callArgVecsV ((s, v)::rest) subst = match lookupAssocI s.csId subst
@@ -9706,22 +9802,35 @@ expandSupersTable allDecls =
   setFunConstraintTables (expandSupersCross
     allDecls
     perRun.value.funConstraintsRef.value
-    perRun.value.funConstraintIfacesRef.value)
+    perRun.value.funConstraintIfacesRef.value
+    perRun.value.funConstraintArgsRef.value)
 
 -- as expandSupersTable but operates on the cross-module snapshot pair (so a
 -- cross-module constrained fn gets the same expansion — else it under-fills).
-expandSupersCross : List Decl -> List (String, List Int) -> List (String, List IfaceRef) -> (List (String, List Int), List (String, List IfaceRef))
-expandSupersCross allDecls idsTbl ifacesTbl = (
-  map (expandSupersEntry allDecls ifacesTbl) idsTbl,
+-- S-slot-key-vector (#1866): [argsTbl] joins, for the ID entry only.  The id entry is the
+-- one whose dedup decides emitted dict ARITY, and since the key is now the whole predicate
+-- it needs the same argument vectors the CALL side already expands with
+-- (`inferDictAtFound`'s `zipSlotVecs slots dc.cdArgs`) — otherwise define and call
+-- disagree on the slot count for `(Ix a Char, Ix a Bool) => …`.  The IFACE entry
+-- deliberately does NOT take it: it expands a SYNTHETIC id list purely to reproduce the
+-- same iface SEQUENCE, and feeding it vectors it has no id space for would move that
+-- sequence.  See `expandSupersIfaceEntry`.
+expandSupersCross : List Decl -> List (String, List Int) -> List (String, List IfaceRef) -> List (String, List (List Mono)) -> (List (String, List Int), List (String, List IfaceRef))
+expandSupersCross allDecls idsTbl ifacesTbl argsTbl = (
+  map (expandSupersEntry allDecls ifacesTbl argsTbl) idsTbl,
   map (expandSupersIfaceEntry allDecls) ifacesTbl,
 )
 
 -- expand one (fn, ids) entry: the parallel iface list is looked up by fn name.
-expandSupersEntry : List Decl -> List (String, List IfaceRef) -> (String, List Int) -> (String, List Int)
-expandSupersEntry allDecls ifacesTbl (fn, ids) =
+-- S-slot-key-vector (#1866): so is the parallel ARGUMENT-VECTOR list, which `zipSlotVecs`
+-- pairs onto the slots (a legitimate PREFIX — a slot past its end reads `[]`, i.e. "no
+-- vector recoverable", and keys exactly as it did before this widening).
+expandSupersEntry : List Decl -> List (String, List IfaceRef) -> List (String, List (List Mono)) -> (String, List Int) -> (String, List Int)
+expandSupersEntry allDecls ifacesTbl argsTbl (fn, ids) =
   let ifaces = fromOption [] (lookupAssocS fn ifacesTbl)
-  let pairs = expandSupersPairs allDecls (pairSlots ids ifaces)
-  (fn, map (s => s.csId) pairs)
+  let args = fromOption [] (lookupAssocVecs fn argsTbl)
+  let pairs = expandSupersVecs allDecls (zipSlotVecs (pairSlots ids ifaces) args)
+  (fn, map (s => (fst s).csId) pairs)
 
 -- expand one (fn, ifaces) entry the SAME way, returning the parallel iface names.
 expandSupersIfaceEntry : List Decl -> (String, List IfaceRef) -> (String, List IfaceRef)
@@ -9760,19 +9869,35 @@ expandSupersPairs allDecls declared =
 -- and `impl Ix Int Char`, and first-declared won.  Measured on `sup2.mdk`
 -- (`S-predicate-representation` Note N2): 111 where the spec says 222, exit 0, silent.
 --
--- ⚠️ THIS DOES NOT MOVE WHICH SLOTS EXIST, DELIBERATELY, AND IT MUST NOT.  The vector
--- rides along; `dedupSlots`/`cslotKey` and `superSlotOf`'s `firstOrZero` keying are
--- untouched, so the slot SEQUENCE is byte-identical to before and the two id-free
--- expansion entry points stay in step.  `expandSupersIfaceEntry` in particular expands a
--- SYNTHETIC id list (`idsForIfaceSlots`, slot index) purely to reproduce the same iface
--- SEQUENCE — it has no real tyvar ids and no vectors at all, so keying a super slot on a
--- per-position argument id (the representation fix `superSlotOf`'s `firstOrZero` still
--- owes) would desynchronize it from the id entry and change dict ARITY on one path only.
--- That is why the collapse this slice lands is at the DECLARED-slot producer
--- (`constraintTyVars`) and the super half is a ROUTE fix, not a slot fix.
+-- 🚨 S-slot-key-vector (#1866) MOVED WHICH SLOTS EXIST HERE, deliberately — the sentence
+-- that used to stand in this paragraph ("THIS DOES NOT MOVE WHICH SLOTS EXIST … AND IT
+-- MUST NOT") is now FALSE and is retracted rather than left to mislead.  The dedup is
+-- `dedupSlotVecs` over `cslotVecKey`, i.e. over the WHOLE PREDICATE, so
+-- `(Ix a Char, Ix a Bool) => …` now opens TWO slots where it opened one.  The old wording
+-- was right about the HAZARD and wrong about the remedy: what must not move is the
+-- SYNTHETIC-id path.  `expandSupersIfaceEntry` expands `idsForIfaceSlots` (slot index)
+-- purely to reproduce the same iface SEQUENCE, and it has no real tyvar ids and no vectors
+-- at all — so it goes through `expandSupersPairs`, whose slots all carry `[]`, whose keys
+-- therefore all gain the same constant empty suffix, and whose sequence is consequently
+-- byte-identical to before.  Only the ID entry (`expandSupersEntry`) was given real
+-- vectors, and it is the entry `dictArityOf` sizes from and the one the CALL side
+-- (`inferDictAtFound`, which has expanded WITH vectors since S-dict-arity-contract)
+-- already agreed with slot-for-slot.  `superSlotOf`'s `firstOrZero` id-collapse is
+-- untouched and still owed.
 --
--- `expandSupersPairs` is a projection of this, so there is ONE fixpoint and the sequence
--- cannot drift between the vector-carrying and vector-free readers.
+-- 🚨 F7 / FIX-shadow-arity-skew: the sentence that stood here — "`expandSupersPairs` is a
+-- projection of this, so there is ONE fixpoint and the sequence cannot drift between the
+-- vector-carrying and vector-free readers" — is FALSE IN THE GENERAL CASE and is retracted.
+-- One fixpoint does NOT imply one sequence: `expandSupersPairs` feeds it a constant `[]`
+-- suffix, and since the dedup key is the WHOLE PREDICATE, a vector-free reader collapses
+-- exactly the slots a vector-carrying reader keeps.  What actually holds is narrower:
+-- the SYNTHETIC-id path (`expandSupersIfaceEntry`) never drifts, because it carries no
+-- real tyvar ids and no vectors at all, so every one of its keys gains the SAME constant
+-- empty suffix and its sequence is byte-unchanged.  Any OTHER vector-free reader of a
+-- REAL slot list drifts against `expandSupersEntry` — which is the bug
+-- `shadowStandaloneDictSlots` shipped, and the reason `expandSupersPairs` now has exactly
+-- one caller.  Before adding a second, check whether its slots have vectors available: if
+-- they do, it belongs on `expandSupersVecs`.
 expandSupersVecs : List Decl -> List (CSlot, List Mono) -> List (CSlot, List Mono)
 expandSupersVecs allDecls declared = expandSupersFix allDecls declared declared
 
@@ -9784,15 +9909,24 @@ expandSupersFix allDecls acc frontier =
   else
     expandSupersFix allDecls next (dropN (listLen acc) next)
 
--- keyed on the SLOT only (`cslotKey`), so this dedups exactly as `dedupSlots` does and
--- the vector never participates in the arity decision.
+-- S-slot-key-vector (#1866): keyed on the WHOLE PREDICATE — slot AND argument vector — so
+-- the vector DOES participate in the arity decision.  `(Ix a Char, Ix a Bool) => …` is two
+-- predicates sharing one interface spelling and one lead tyvar id; keying on `cslotKey`
+-- alone merged them into ONE dict slot and both `ix x 'z'` and `ix x True` routed through
+-- it (444 where the spec says 333, silently, all three engines agreeing).  `(Shw a, Shw a)`
+-- is the case this must still collapse — genuinely the SAME predicate written twice — and
+-- it does, because its two vectors key identically.
+-- ⚠️ The two id-free expansion entry points stay in step BECAUSE the widening is a SUFFIX:
+-- `expandSupersIfaceEntry` carries no vectors at all (`expandSupersPairs`), so every one of
+-- its keys gains the same constant empty suffix and its slot SEQUENCE is byte-unchanged.
 dedupSlotVecs : List (CSlot, List Mono) -> List (CSlot, List Mono)
-dedupSlotVecs xs = dedupBy (p => cslotKey (fst p)) xs
+dedupSlotVecs xs = dedupBy cslotVecKey xs
 
 -- pair each declared slot with the argument vector its signature recorded.  The vector
--- list is a PREFIX (`keptConstraintArgs`; `registerInferredFor` records none, and a
--- cross-module callee has no qual vector table — #1161's residual), so a slot past its
--- end gets `[]`, which every consumer reads as "no vector recoverable".
+-- list is a PREFIX (`keptConstraintArgs`; and `registerInferredFor` records `[]` for a
+-- slot whose predicate it could not recover — S-inferred-vector-supply, #1869), so a slot
+-- past its end, or with an empty vector at its position, gets `[]`, which every consumer
+-- reads as "no vector recoverable".
 zipSlotVecs : List CSlot -> List (List Mono) -> List (CSlot, List Mono)
 zipSlotVecs [] _ = []
 zipSlotVecs (s::rest) [] = (s, []) :: zipSlotVecs rest []
@@ -9879,16 +10013,32 @@ dedupPairs xs = dedupBy slotKey xs
 slotKey : (String, Int) -> String
 slotKey (iface, id) = lenKey iface ++ intToString id
 
--- U1b (#1482): the `CSlot` analogue.  ⚠️ Keyed on the SPELLING, deliberately — this
--- dedup decides how many dict slots a constrained fn has, so keying it on identity
--- would give two same-spelled interfaces two slots where today they share one, moving
--- emitted dict ARITY.  That is a separate judgment with a different blast radius
--- (#1425's ground), and U1b does not make it.
-dedupSlots : List CSlot -> List CSlot
-dedupSlots xs = dedupBy cslotKey xs
-
+-- U1b (#1482): the `CSlot` analogue's key.  ⚠️ Keyed on the interface SPELLING,
+-- deliberately — this key feeds the dedup that decides how many dict slots a constrained
+-- fn has, so keying it on identity would give two same-spelled interfaces two slots where
+-- today they share one, moving emitted dict ARITY.  That is a separate judgment with a
+-- different blast radius (#1425's ground), and neither U1b nor S-slot-key-vector makes it:
+-- the latter widens on the predicate's ARGUMENT VECTOR (`cslotVecKey`), never on identity.
+-- ⚠️ NOT a dedup key on its own any more — the only `dedupBy` over slots is
+-- `dedupSlotVecs`, over `cslotVecKey`.  The vector-free `dedupSlots` that used to live
+-- here was deleted with #1866: keeping it would have let a reader dedup slots without
+-- their vectors, which is exactly the collapse that slice removed.
 cslotKey : CSlot -> String
 cslotKey s = lenKey s.csIface.irName ++ intToString s.csId
+
+-- S-slot-key-vector (#1866): THE dict-slot identity — `cslotKey` plus the predicate's
+-- argument vector.  Exactly the widening `vecOblKey` already carries on the obligation
+-- channel, for the same reason and with the same per-argument encoding (`oblArgKey`): a
+-- ground position keys on its head tycon, a tyvar position keys as "*" because its id is
+-- already in `cslotKey`.  `|` cannot appear in the prefix (a `lenKey` netstring followed
+-- by decimal digits), so the encoding is injective over the two components.
+-- ⚠️ An EMPTY vector contributes a constant empty suffix, so a caller that carries no
+-- vectors at all (`expandSupersPairs`, and hence `expandSupersIfaceEntry`'s synthetic-id
+-- expansion) keys order-equivalently to the pre-widening `cslotKey` — which is what keeps
+-- that path's slot sequence byte-identical.  It is also why widening on a PARTIAL vector
+-- supply degrades to today's collapse rather than to a wrong slot count.
+cslotVecKey : (CSlot, List Mono) -> String
+cslotVecKey (s, vec) = "\{cslotKey s}|\{joinWith "," (map oblArgKey vec)}"
 
 -- the type a method ultimately returns (strip its argument arrows); the impl is
 -- chosen by this type's head tycon (pure : a -> f a → f a; empty : f a → f a)
@@ -11728,8 +11878,17 @@ instantiateVarTrackedId x id s = match lookupSchemeObls x id perRun.value.scheme
 -- construction, and the one case where both could answer — a user module exporting a name
 -- core also defines — is exactly the case where the import-scoped answer is the right one.
 declaredCrossModuleObls : String -> Option (List VecObl)
-declaredCrossModuleObls x = match qualConstraintFor x
-  Some slots => Some (vecOblsOfSlots slots)
+declaredCrossModuleObls x = match qualConstraintDecl x
+  -- S-xmod-vector-supply (#1868/#1867): lookup (1) reads the WHOLE qual entry, not just
+  -- its slots.  Reading the slots alone is what made this lookup the truncation point:
+  -- `vecOblsOfSlots` lifted each slot to a ONE-argument obligation, so an imported
+  -- `Ix a Bool =>` was re-checked as the unary goal `Ix Int` — which matched `impl Ix
+  -- Int Char` and ACCEPTED an unsatisfiable program (#1868), and matched two impls and
+  -- REJECTED a legal one (#1867).  The same-module branch one level up
+  -- (`schemeObligationsRef`) has carried the full vector since #1161; this is the
+  -- cross-module twin of that fact, and `substVecOblArgs` already knows how to
+  -- instantiate it.
+  Some d => Some (vecOblsOfSlotVecs (zipSlotVecs d.cdSlots d.cdArgs))
   None => match qualSchemeOblsFor x
     Some obs => Some obs
     None => omLookup x crossRun.value.coreSchemeObligationsRef.value
@@ -11754,23 +11913,60 @@ declaredCrossModuleObls x = match qualConstraintFor x
 qualSchemeOblsFor : String -> Option (List VecObl)
 qualSchemeOblsFor name = omLookup name perRun.value.importedSchemeOblsRef.value
 
--- lift each already-paired dict slot to a 1-ary vector obligation (the "shattered
--- per-tyvar dict slots" shape `funConstraintsRef` stores -- see
--- `recordCallObligations`), skipping slots with no interface.
+-- lift each already-paired dict slot, WITH its recorded predicate argument vector, to a
+-- vector obligation, skipping slots with no interface.
 --
 -- ⚠️ U1b (#1482) DELETED `shatterVecObls`, which is what used to stand here.  It took
 -- an iface list and an id list as two arguments and zipped them, truncating on a
 -- mismatch; the pairing now happens once, in `pairSlots`, so this function cannot be
 -- handed a mispaired input at all.
-vecOblsOfSlots : List CSlot -> List VecObl
-vecOblsOfSlots [] = []
-vecOblsOfSlots (s::rest)
-  | s.csIface.irName == "" = vecOblsOfSlots rest
-  | otherwise = VecObl {
-    voIface = s.csIface,
-    voIds = [s.csId],
-    voArgs = [],
-  } :: vecOblsOfSlots rest
+--
+-- 🚨 S-xmod-vector-supply (#1868/#1867): THE VECTOR IS THE POINT, and its absence here
+-- was the whole cross-module gap.  This used to emit `voArgs = []` unconditionally — the
+-- "shattered per-tyvar dict slots" reading of `funConstraintsRef` — which
+-- `substVecOblArgs` then instantiates through `substMonos o.voIds`, i.e. ONE argument per
+-- slot.  For a binary predicate that is not a weaker obligation, it is a DIFFERENT one:
+-- `Ix a Bool` re-checked as `Ix Int`.  An empty vector still means exactly what it meant
+-- (`voArgs = []` ⇒ the historical ids-only path), so a slot past the args prefix — an
+-- inferred callee whose vector `registerInferredFor` could not recover, a module with no
+-- args row — is byte-identically unchanged.
+vecOblsOfSlotVecs : List (CSlot, List Mono) -> List VecObl
+vecOblsOfSlotVecs [] = []
+vecOblsOfSlotVecs ((s, v)::rest)
+  | s.csIface.irName == "" = vecOblsOfSlotVecs rest
+  | otherwise = xmodVecObl s v :: vecOblsOfSlotVecs rest
+
+-- ONE cross-module slot's obligation.  🚨 THE ADMISSION RULE IS `declaredOblMixed`'S,
+-- DELIBERATELY AND ARGUMENT-FOR-ARGUMENT — this is the same fact for an IMPORTED callee
+-- that that function records for a same-module one, and a channel that admitted a wider
+-- argument class on one side of a module boundary than the other would be a new
+-- divergence, not a fix.  Exactly two classes carry:
+--   * a BARE tyvar — `substOblArgs` maps it through the call's instantiation subst, and
+--     an id that subst does not carry skips the whole predicate (fails CLOSED, as the
+--     ids-only path always did);
+--   * a GROUND argument — no tyvars anywhere, so the signature's mono IS the call's mono.
+-- Anything else — notably a STRUCTURED argument mentioning a tyvar (`Ix a (List b)`) —
+-- would carry the DEFINING signature's tyvar cell into the importer's goal unsubstituted,
+-- which is the wrong-but-concrete goal `declaredConstraintArgs`' header calls strictly
+-- worse than missing.  Those fall back to `voArgs = []`, i.e. exactly today's per-tyvar
+-- goal, which is also where a slot past the args prefix lands.
+-- [voIds] holds the ids of the BARE-TYVAR positions IN ORDER, per `VecObl`'s invariant —
+-- NOT `[s.csId]`, which is only the LEAD one and would understate a `Ix a b =>` vector.
+xmodVecObl : CSlot -> List Mono -> VecObl
+xmodVecObl s v
+  | isEmptyL v || not (allList xmodOblArgOk v) || isEmptyL (flatMap xmodOblArgId v) = VecObl { voIface = s.csIface, voIds = [s.csId], voArgs = [] }
+  | otherwise =
+    VecObl { voIface = s.csIface, voIds = flatMap xmodOblArgId v, voArgs = v }
+
+xmodOblArgOk : Mono -> Bool
+xmodOblArgOk m = match normalize m
+  TVar _ => True
+  _ => isEmptyL (monoTyvarIds m)
+
+xmodOblArgId : Mono -> List Int
+xmodOblArgId m = match normalize m
+  TVar cell => [tyvarId cell]
+  _ => []
 
 -- map each (iface, scheme-var-id VECTOR) through the instantiation subst to this
 -- call's monos, pushing ONE joint obligation per predicate onto the call channel
@@ -12290,7 +12486,7 @@ recordImporterShadowDicts env mname (r::rest) tx =
     (routeLocalSym !r)
     tx
   let _ = setRef perRun.value.pendingRLocalSites
-    (PendingEntry mname r tx "" (SKRLocal (routeLocalSym !r) True (fst dicts) (snd dicts)) !currentLoc
+    (PendingEntry mname r tx "" (SKRLocal (routeLocalSym !r) True dicts.sdMonos dicts.sdIfaces dicts.sdArgVecs) !currentLoc
       ::perRun.value.pendingRLocalSites.value)
   recordImporterShadowDicts env mname rest tx
 
@@ -12463,7 +12659,7 @@ inferDefinerShadowApp env name tagRef implRef f x =
   -- interface METHOD scheme, whose dicts are the method's, not the standalone's — asking
   -- there would be meaningless.  A dict-var receiver dispatches through its dict and is
   -- likewise not the standalone.  ([], []) for an unconstrained standalone.
-  let dicts = if dispatches || isDictVar then ([], [])
+  let dicts = if dispatches || isDictVar then emptyShadowDicts
     else shadowStandaloneDicts env name sym xt
   -- Route by the ACTUAL argument type on BOTH the eval path (pendingRLocalSites,
   -- read by resolveRLocalSites) and the emit path (pendingArgStamps, read by
@@ -12484,7 +12680,7 @@ inferDefinerShadowApp env name tagRef implRef f x =
   -- lint-disable-next-line rule-prefer-assign-op
   let _ = if isDictVar then ()
     else setRef perRun.value.pendingRLocalSites
-      (PendingEntry name tagRef xt "" (SKRLocal (routeLocalSym !tagRef) (not dispatches) (fst dicts) (snd dicts)) !currentLoc
+      (PendingEntry name tagRef xt "" (SKRLocal (routeLocalSym !tagRef) (not dispatches) dicts.sdMonos dicts.sdIfaces dicts.sdArgVecs) !currentLoc
         ::perRun.value.pendingRLocalSites.value)
   let _ = match argDispatchOf name
     -- #609: the SKArg full mono is the DISPATCH arm's method scheme (`ft`) — the
@@ -13014,7 +13210,7 @@ stampRoutes (r::rest) =
 -- independent hole in this same arm.  ([] , []) for an unconstrained standalone, which
 -- SHORT-CIRCUITS BEFORE THE UNIFY, so an unconstrained shadow (all 5 of the compiler's
 -- own) does not even perturb the substitution — the fixpoint provably cannot move.
-shadowStandaloneDicts : TcEnv -> String -> String -> Mono -> (List Mono, List String)
+shadowStandaloneDicts : TcEnv -> String -> String -> Mono -> ShadowDicts
 shadowStandaloneDicts env name sym xt =
   -- P0-20's sym-awareness lesson, mirrored: on the mangled emit path the standalone is
   -- bound under `<mid>__name`, so a BARE-name lookup here would be silently inert and
@@ -13030,7 +13226,7 @@ shadowStandaloneDicts env name sym xt =
 -- imported standalone, so every dict slot silently resolves to nothing.  That is why the
 -- importer shadow was correct on `build`/`wasm` (which reach the standalone through the
 -- MANGLED symbol) and still under-applied on `run`.
-shadowStandaloneDictsWith : Option Scheme -> String -> String -> Mono -> (List Mono, List String)
+shadowStandaloneDictsWith : Option Scheme -> String -> String -> Mono -> ShadowDicts
 shadowStandaloneDictsWith mscheme name sym xt =
   let _ = recordStandaloneSigObligations name sym xt
   shadowStandaloneDictSlotsAt mscheme (if sym == "" then name else sym) xt
@@ -13042,9 +13238,12 @@ shadowStandaloneDictsWith mscheme name sym xt =
 -- the DISPATCH arm too and spuriously reject `size (Box 3)` with `Num Box`.  When the
 -- receiver does turn out to have an impl, stampRLocalOrFallback simply discards these
 -- slots and the route dispatches as before.
-shadowStandaloneDictSlotsAt : Option Scheme -> String -> Mono -> (List Mono, List String)
+shadowStandaloneDictSlotsAt : Option Scheme -> String -> Mono -> ShadowDicts
 shadowStandaloneDictSlotsAt mscheme key xt =
-  let slots = declaredConstraintSlots key
+  -- FIX-shadow-arity-skew: ONE resolution, two projections — the slots AND the argument
+  -- vectors must come from the same entry decision, exactly as `inferDictAtFound` does.
+  let dc = declaredConstraintFor key
+  let slots = dc.cdSlots
   -- REJECT direction — from the SIGNATURE, NOT from schemeObligationsRef.
   -- ⚠️ For a SIGNATURED binding the two obligation tables live in DIFFERENT ID SPACES:
   -- funConstraintsRef's ids (and the env scheme's quantified ids) come from
@@ -13059,15 +13258,15 @@ shadowStandaloneDictSlotsAt mscheme key xt =
   -- ⚠️ Gated on the UNTRUNCATED id list, not on `slots`: this guard also decides whether
   -- the `unify` below runs, so a truncation here would remove a unification side effect.
   -- See `declaredConstraintIds`.
-  if isEmptyL (declaredConstraintIds key) then ([], [])
+  if isEmptyL (declaredConstraintIds key) then emptyShadowDicts
   else match mscheme
-    None => ([], [])
+    None => emptyShadowDicts
     Some s =>
       let inst = instantiateTracked s
       let r = freshVar ()
       let eff = openRow ()
       let _ = unify (fst inst) (TFun xt eff r)
-      shadowStandaloneDictSlots slots (snd inst)
+      shadowStandaloneDictSlots slots dc.cdArgs (snd inst)
 
 -- the standalone's dict ROUTE slots for this call: its declared constraint ids mapped
 -- through the call's instantiation subst.  Expanded with transitive supers EXACTLY as
@@ -13076,14 +13275,34 @@ shadowStandaloneDictSlotsAt mscheme key xt =
 -- merely moved the arity disagreement.  Empty on the plain `check` path
 -- (funConstraintsRef is empty there) — check stamps no routes, so that is correct;
 -- recordStandaloneSigObligations is what gives `check` its reject direction.
-shadowStandaloneDictSlots : List CSlot -> List (Int, Mono) -> (List Mono, List String)
-shadowStandaloneDictSlots slots subst =
-  if isEmptyL slots then ([], [])
+--
+-- 🚨 FIX-shadow-arity-skew: "EXACTLY as inferDictAtFound does" is a claim about the
+-- (slot, VECTOR) pairs fed to the fixpoint, NOT about the slot list alone, and this is
+-- where that distinction was paid for.  This expanded via `expandSupersPairs`, which
+-- pairs every slot with a constant `[]`; once S-slot-key-vector (#1866) re-keyed
+-- `dedupSlotVecs` on the WHOLE PREDICATE, `(Ix a Char, Ix a Bool) => …` opened TWO slots
+-- on the definition side (`expandSupersEntry`, which `dictArityOf` sizes from) and this
+-- call side still collapsed them to ONE — 1 dict passed to a 2-dict definition.  Measured
+-- on the packet's reproducer at `e19298f5`: `check` exit 0, `run` E-PANIC
+-- "intToString: not an Int", `build` exit 0 printing a DIFFERENT heap pointer every
+-- execution, wasm "illegal cast".  Take the vectors from the same `declaredConstraintFor`
+-- entry the slots came from, or re-open it.
+shadowStandaloneDictSlots : List CSlot -> List (List Mono) -> List (Int, Mono) -> ShadowDicts
+shadowStandaloneDictSlots slots args subst =
+  if isEmptyL slots then emptyShadowDicts
   else
-    let expanded = expandSupersPairs driverState.value.superDeclsRef.value slots
+    let expandedV = expandSupersVecs driverState.value.superDeclsRef.value (zipSlotVecs slots args)
+    let expanded = map fst expandedV
     -- the ROUTE half stays a SPELLING, exactly as `inferDictAtFound`'s `pushDictApp`
     -- does — route words, not identities (see `dispHeadTab`).
-    (constraintMonosOf (map (sl => sl.csId) expanded) subst, map (sl => sl.csIface.irName) expanded)
+    -- [sdArgVecs] is `callArgVecsV` over the SAME expansion against the SAME subst, so it
+    -- is slot-parallel to [sdMonos] by construction (that function's own header states
+    -- the invariant and the shared drop rule that preserves it).
+    ShadowDicts {
+      sdMonos = constraintMonosOf (map (sl => sl.csId) expanded) subst,
+      sdIfaces = map (sl => sl.csIface.irName) expanded,
+      sdArgVecs = callArgVecsV expandedV subst,
+    }
 
 -- ── S-1, REJECT direction on the plain `check` path ───────────────────────────
 -- Record the standalone's declared `=>` constraints as CALL obligations, resolved from
@@ -15404,7 +15623,11 @@ discoverPromotedModules runtimeDecls coreDecls modules rpNames argNames =
   -- #994 (B-3-a): kept as ONE tuple from here to the write (`setCrossFunConstraintTables`)
   -- rather than unbundled into two locals.  ⚠️ The expansion must be computed HERE, before
   -- `resetState`, and only the WRITE moved past it.
-  let expandedPair = expandSupersCross joint snapshot snapshotIfaces
+  -- S-slot-key-vector (#1866): the same promoted filter over the VECTOR table, so the
+  -- snapshot expansion keys its slots on the whole predicate exactly as the per-run one
+  -- does.  Read here, before `resetState`, with the other three.
+  let snapshotArgs = promotedConstraints promoted perRun.value.funConstraintArgsRef.value
+  let expandedPair = expandSupersCross joint snapshot snapshotIfaces snapshotArgs
   let _ = resetState ()
   typeErrorsSticky := savedSticky
   let _ = wRestore perRun.value.typeErrors savedErrSnap
@@ -16269,11 +16492,11 @@ resolveRLocalSites _ _ [] = goalSiteLoc := None
 resolveRLocalSites prog implTable ((PendingEntry name tagRef am _ kind loc)::rest) =
   goalSiteLoc := loc
   let _ = match kind
-    SKRLocal sym forceLocal monos ifaces =>
+    SKRLocal sym forceLocal monos ifaces argVecs =>
       if forceLocal then
-        tagRef := RLocal sym (routesOfMonosTop prog implTable monos ifaces)
+        tagRef := RLocal sym (routesOfMonosTopV prog implTable monos ifaces argVecs)
       else
-        resolveRLocalSite prog implTable name tagRef am sym monos ifaces
+        resolveRLocalSite prog implTable name tagRef am sym monos ifaces argVecs
     _ => ()
   resolveRLocalSites prog implTable rest
 
@@ -16284,8 +16507,8 @@ resolveRLocalSites prog implTable ((PendingEntry name tagRef am _ kind loc)::res
 -- stamped the correct RKey<receiverHead> via resolveArgStamps.
 -- An ungrounded receiver (still a tyvar) → leave it.  Mirrors lib/typecheck.ml's
 -- RLocal-vs-ordinary-dispatch split (the oracle keys the genuine case off the receiver).
-resolveRLocalSite : List Decl -> ImplBuckets -> String -> Ref Route -> Mono -> String -> List Mono -> List String -> Unit
-resolveRLocalSite prog implTable name tagRef am sym monos ifaces = match headTyconMono am
+resolveRLocalSite : List Decl -> ImplBuckets -> String -> Ref Route -> Mono -> String -> List Mono -> List String -> List (List Mono) -> Unit
+resolveRLocalSite prog implTable name tagRef am sym monos ifaces argVecs = match headTyconMono am
   -- S2 (THE INVERSION): route by SHADOW KIND first, receiver second.
   --   * DEFINER shadow (the name is this module's own top-level fn) → the standalone,
   --     UNCONDITIONALLY.  The impl universe is not consulted; a grounded head with a live
@@ -16314,11 +16537,11 @@ resolveRLocalSite prog implTable name tagRef am sym monos ifaces = match headTyc
   Some tag => stampRLocalOrFallback
     (not (isDefinerShadow name) && ieImplExistsForHead perRun.value.bodyImplEnvRef.value name tag)
     tagRef sym
-    (routesOfMonosTop prog implTable monos ifaces)
+    (routesOfMonosTopV prog implTable monos ifaces argVecs)
   -- An UNGROUNDED definer-shadow receiver keeps the old default (RLocal → standalone);
   -- other (importer) ungrounded sites stay untouched (deferred/polymorphic).
   None => if contains name perRun.value.definerShadowNamesRef.value then
-    tagRef := (RLocal sym (routesOfMonosTop prog implTable monos ifaces))
+    tagRef := (RLocal sym (routesOfMonosTopV prog implTable monos ifaces argVecs))
   else ()
 
 -- C5: hasImpl ⇒ genuine method; route already correct (RNone for arg-tag eval,
@@ -16484,7 +16707,8 @@ enclSlotIds encl =
 -- and the argument vector its signature recorded, paired with the tyvar id the slot
 -- is keyed on.  `Predicate` is reused rather than a second n-ary shape invented.
 -- The vector list is a PREFIX of the slots (`keptConstraintArgs`, and
--- `registerInferredFor` records none at all), so a slot past its end gets `args = []`
+-- `registerInferredFor` records `[]` for an unrecovered slot), so a slot past its end —
+-- or one whose recorded vector is empty — gets `args = []`
 -- — which `predArgsAgree` reads as "no vector to disambiguate on", never as a match.
 enclPreds : String -> List (Int, Predicate)
 enclPreds encl =
@@ -23276,6 +23500,14 @@ checkBodyImpl seed mode prog0 =
         (attributeModuleEntries mid prog perRun.value.funConstraintsRef.value ++ crossRun.value.crossModuleFunConstraintsQualRef.value)
       let _ = setRef crossRun.value.crossModuleFunConstraintIfacesQualRef
         (attributeModuleEntries mid prog perRun.value.funConstraintIfacesRef.value ++ crossRun.value.crossModuleFunConstraintIfacesQualRef.value)
+      -- S-xmod-vector-supply (#1868/#1867): the ARGUMENT-VECTOR snapshot, attributed by the
+      -- same `(mid, name)` key as the ids/ifaces snapshots it is slot-parallel to.  It gets
+      -- NO `crossModuleFunConstraintArgsRef` bare-name peer and NO seed back into
+      -- `funConstraintArgsRef` (the reset/restore block above): a bare-name vector table is
+      -- the misattribution `declaredConstraintArgs`' header calls strictly worse than
+      -- missing, and the qual key is the whole reason this one is safe.
+      let _ = setRef crossRun.value.crossModuleFunConstraintArgsQualRef
+        (attributeModuleEntries mid prog perRun.value.funConstraintArgsRef.value ++ crossRun.value.crossModuleFunConstraintArgsQualRef.value)
       -- B-2.2-f (#1113): the sidecar's two snapshots, paired with the ids snapshots above.
       let _ = setRef crossRun.value.crossModuleFunConstraintDeclaredRef
         (perRun.value.funConstraintDeclaredRef.value ++ selfNameRows prog crossRun.value.crossModuleFunConstraintDeclaredRef.value)
@@ -23951,8 +24183,8 @@ insertUnivImpl univ (iface, tys, reqs) =
 -- assumed from the fallback's OWN call site (`pushDictApp`'s routing arg). TRACED,
 -- not instrumented: `ifaceForInferredId`'s result is written by `registerInferredFor`
 -- directly into `funConstraintIfacesRef` (`map (ifaceForInferredId m) ids`); that
--- table is read by `declaredConstraintSlots`'s `None` arm (when `qualConstraintFor`
--- misses); `declaredConstraintSlots` feeds `inferDictAtFound`, which calls
+-- table is read by `declaredConstraintFor`'s `None` arm (when `qualConstraintFor`
+-- misses); `declaredConstraintFor` feeds `inferDictAtFound`, which calls
 -- `recordCallObligations`, which calls `recordObl (Predicate { iface = s.csIface, … })
 -- 0 PCallSlot …` — an `ImplUniverse` goal, unconditionally, for any slot whose
 -- `csIface.irName /= ""`. So the SAME value this fallback mints reaches BOTH a
@@ -27113,7 +27345,9 @@ registerConstraintRegs ((m, ifaceMonos, argVecs)::rest) =
 -- TYPE here, not by a filter each writer re-derives and keeps in step by hand.
 --
 -- ⚠️ [argsOpt] is `None` for a writer that registers no `funConstraintArgsRef` entry at
--- all (`registerInferredFor`), and that is why the arg vectors CANNOT join `CSlot`:
+-- all — since S-inferred-vector-supply (#1869) that is `registerInferredFor` only when it
+-- recovered NO vector for any slot (`inferredArgsOpt`), not unconditionally as before —
+-- and that is why the arg vectors CANNOT join `CSlot`:
 -- `keptConstraintArgs` stops when its vector list runs out, so the args payload is
 -- legitimately a PREFIX of the slots, and folding it in per-slot would either truncate
 -- the id list (a dict-ARITY change) or invent a vector.  Entry-ABSENCE is also
@@ -27126,14 +27360,22 @@ setFunConstraintEntry m slots argsOpt =
   -- B-2.2-f (#1113): the DECLARED-prefix sidecar, written in the SAME op as the ids it
   -- describes so the two can never be written apart.
   --
-  -- 🚨 `dedupSlots`, not `listLen slots` — MEASURED, not defensive.  `expandSupersPairs`
-  -- starts from `dedupSlots declared`, so a signature whose context names one interface
-  -- twice on one tyvar (`twice : (Shw a, Shw a) => a -> Int`) contributes ONE slot where
-  -- `slots` holds two.  Recording the unshrunk length would put `index < k` one slot past
-  -- the real declared prefix and mark the first APPENDED super slot as declared — the
-  -- unsafe direction, silently.
+  -- 🚨 The DEDUPED length, not `listLen slots` — MEASURED, not defensive.  The expansion
+  -- starts from the deduped declared slots, so a signature whose context names one
+  -- interface twice on one tyvar (`twice : (Shw a, Shw a) => a -> Int`) contributes ONE
+  -- slot where `slots` holds two.  Recording the unshrunk length would put `index < k` one
+  -- slot past the real declared prefix and mark the first APPENDED super slot as declared —
+  -- the unsafe direction, silently.
+  -- 🚨 S-slot-key-vector (#1866): it must be the SAME dedup the expansion runs, and that
+  -- is now `dedupSlotVecs` over the slots PAIRED WITH THEIR VECTORS.  Keeping the
+  -- vector-free dedup that used to stand here (`dedupSlots`, now deleted — see
+  -- `cslotKey`) would under-count `(Ix a Char, Ix a Bool) => …` (one
+  -- where the expansion now yields two) and re-introduce the same off-by-one in the other
+  -- direction.  [argsOpt] is the very prefix `expandSupersEntry` reads back out of
+  -- `funConstraintArgsRef`, so the two dedups see identical input; `None` (no vector row
+  -- at all) yields `[]` per slot, i.e. exactly the pre-widening count.
   let _ = setRef perRun.value.funConstraintDeclaredRef
-    ((m, CDPLen (listLen (dedupSlots slots)))::perRun.value.funConstraintDeclaredRef.value)
+    ((m, CDPLen (listLen (dedupSlotVecs (zipSlotVecs slots (fromOption [] argsOpt)))))::perRun.value.funConstraintDeclaredRef.value)
   perRun.value.funConstraintIfacesRef := ((m, map (s => s.csIface) slots)::perRun.value.funConstraintIfacesRef.value)
   match argsOpt
     Some args => (perRun.value.funConstraintArgsRef := ((m, args)::perRun.value.funConstraintArgsRef.value))
@@ -27471,7 +27713,7 @@ ppConstraint (Constraint { constraintHead = iface, constraintArgs = tys }) =
 -- `requires` RESIDUAL (`nest x = tagOf (Wrap x)`) gets its dict parameter too.
 -- `inferredConstraintIds` reads `methodSiteFns`/`dictAppFns`, which store a bare mono
 -- with no interface attached, so a compound receiver (`Wrap t`) cannot be reduced
--- there; `residualInferredIds` reduces the SAME predicates the scheme-obligation
+-- there; `residualInferredPreds` reduces the SAME predicates the scheme-obligation
 -- channel just deferred.  Without this the scheme carries `Tag a` while the body
 -- abstracts no dict — `check` would reject the bad call and an ORDINARY correct
 -- program's binary would still read an unpassed dict word (issue 1549's second cell).
@@ -27487,10 +27729,16 @@ maybeInferConstraint sigs callObls addedObls m sch
   | omHasKey m driverState.value.sigNameSetRef.value = ()
   | otherwise =
     let boundIds = schemeIds sch
-    registerInferredFor
-      m
-      (dedupI
-        (inferredConstraintIds m boundIds ++ residualInferredIds boundIds callObls addedObls))
+    -- S-inferred-vector-supply (#1869): the SAME predicate list, read TWICE for two
+    -- different questions — which slots exist (ids, unchanged) and what argument vector
+    -- each slot's predicate carries.  `residualInferredPreds` is evaluated ONCE and both
+    -- questions read its result, so the §3 residual reduction still runs exactly once per
+    -- group (see `residualBoundPreds`).
+    let preds = flatMap oblPredOf addedObls ++ flatMap callPredOf callObls
+    let residualPreds = residualInferredPreds boundIds preds
+    let vecs = directInferredPreds boundIds preds ++ residualPreds
+    let ids = dedupI (inferredConstraintIds m boundIds ++ map inferredPredLead residualPreds)
+    registerInferredFor m ids vecs
 
 -- #11 soundness (ALWAYS-ON): for each generalized member, record the deferred impl
 -- obligations it quantifies over — an addedObls entry whose discriminating mono is a
@@ -27759,19 +28007,40 @@ vecOblOfPred boundIds (iface, ds, loc) = match boundTyvarIds boundIds ds
 -- restore `None` after, exactly as `checkNestedReqs` does, per `goalSiteLoc`'s scoping
 -- rule (outside a drain the selector must fall back rather than inherit a stale span).
 residualVecObls : List Int -> IfaceRef -> List Mono -> Option Loc -> List VecObl
-residualVecObls boundIds iface ds loc
+residualVecObls boundIds iface ds loc =
+  map keepBoundResidual (residualBoundPreds boundIds iface ds loc)
+
+-- S-inferred-vector-supply: the reduction itself, factored out of `residualVecObls` so
+-- the DICT-ABSTRACTION channel can read the residual predicate's ARGUMENT MONOS and not
+-- only the ids `VecObl` keeps.  ⚠️ ONE run per group: `registerInferredFor`'s vectors and
+-- its slot ids are both projections of this one call (see `maybeInferConstraint`), so the
+-- §3 entailment — and the `goalSiteLoc`-scoped diagnostics it can emit — fire exactly as
+-- often as they did before this slice, not twice.
+-- Each entry is (interface, the residual's bare-tyvar ids IN ORDER, the residual's whole
+-- argument vector); a residual not entirely over this scheme's own quantified vars is
+-- dropped, exactly as `keepBoundResidual` always dropped it.
+residualBoundPreds : List Int -> IfaceRef -> List Mono -> Option Loc -> List (IfaceRef, List Int, List Mono)
+residualBoundPreds boundIds iface ds loc
   | isSome (boundTyvarIds boundIds ds) = []
   | not (anyIn (flatMap monoUnboundIds ds) boundIds) = []
   | otherwise =
     goalSiteLoc := loc
     let preds = residualPredsOf residualReduceFuel iface ds
     goalSiteLoc := None
-    flatMap (keepBoundResidual boundIds) preds
+    flatMap (keepBoundResidualPred boundIds) preds
 
-keepBoundResidual : List Int -> (IfaceRef, List Mono) -> List VecObl
-keepBoundResidual boundIds (iface, args) = match boundTyvarIds boundIds args
-  Some ids => [VecObl { voIface = iface, voIds = ids, voArgs = [] }]
+keepBoundResidualPred : List Int -> (IfaceRef, List Mono) -> List (IfaceRef, List Int, List Mono)
+keepBoundResidualPred boundIds (iface, args) = match boundTyvarIds boundIds args
+  Some ids => [(iface, ids, args)]
   None => []
+
+-- ⚠️ `voArgs = []` on purpose and unchanged: the OBLIGATION channel's readers
+-- (`substVecOblArgs`, `dedupVecObls`, `reportUncoveredVec`) are byte-identical only while
+-- this stays the ids-only shape they have always seen.  The argument vector this slice
+-- recovers is consumed by the DICT channel (`funConstraintArgsRef`), not by this one.
+keepBoundResidual : (IfaceRef, List Int, List Mono) -> VecObl
+keepBoundResidual (iface, ids, _) =
+  VecObl { voIface = iface, voIds = ids, voArgs = [] }
 
 -- §3 `inst`, run for its RESIDUAL rather than for a verdict.  A predicate whose
 -- arguments are not all concrete-headed is itself the residual (OD2 defers it); a
@@ -28015,7 +28284,7 @@ residualReduceFuel = 32
 -- half of what `vecOblOfPred` just deferred into the scheme, for the DICT-ABSTRACTION
 -- channel (`registerInferredFor`).  Reads the same two deltas through the same two
 -- projections, so the two channels cannot see different predicates.
--- ⚠️ ONE ID PER RESIDUAL PREDICATE — its RECEIVER (`vecOblLeadId`), not every id in the
+-- ⚠️ ONE ID PER RESIDUAL PREDICATE — its RECEIVER (`leadInferredPred`), not every id in the
 -- vector.  `registerInferredFor` opens one dict SLOT per id it is handed
 -- (`registerActiveDictVars m 0 ids`), and the DIRECT channel next to it contributes one
 -- id per predicate by construction: `methodSiteFns` stores the site's single dispatch
@@ -28028,23 +28297,55 @@ residualReduceFuel = 32
 -- NOT the "a dict slot is a predicate" change (#1318 / #607 item 3): it makes the
 -- residual channel match the cardinality the direct channel already has, it does not
 -- change that cardinality.
-residualInferredIds : List Int -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> List Int
-residualInferredIds boundIds callObls addedObls =
-  flatMap
-    vecOblLeadId
-    (flatMap
-      (residualVecOblOfPred boundIds)
-      (flatMap oblPredOf addedObls ++ flatMap callPredOf callObls))
+-- S-inferred-vector-supply (#1869): it now yields the (iface, LEAD id, ARGUMENT VECTOR)
+-- triple rather than the lead id alone.  `map inferredPredLead` over the result is
+-- byte-identically the id list this used to return — the cardinality note above is
+-- untouched, ONE id per residual predicate — and the vector half is what
+-- `registerInferredFor` records so an inferred slot stops degrading to the scalar goal.
+residualInferredPreds : List Int -> List (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, Int, List Mono)
+residualInferredPreds boundIds preds =
+  flatMap (residualInferredPredOf boundIds) preds
+
+residualInferredPredOf : List Int -> (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, Int, List Mono)
+residualInferredPredOf boundIds (iface, ds, loc) =
+  flatMap leadInferredPred (residualBoundPreds boundIds iface ds loc)
+
+-- the DIRECT arm's twin: a predicate every one of whose arguments is already a bound
+-- tyvar IS its own residual (`residualVecObls` returns [] for it by design), so its own
+-- monos are the vector, and its lead id is the slot `inferredConstraintIds` opens from
+-- the very same site through `methodSiteFns`/`dictAppFns`.
+directInferredPreds : List Int -> List (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, Int, List Mono)
+directInferredPreds boundIds preds =
+  flatMap (directInferredPredOf boundIds) preds
+
+directInferredPredOf : List Int -> (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, Int, List Mono)
+directInferredPredOf boundIds (iface, ds, _) = match boundTyvarIds boundIds ds
+  Some ids => leadInferredPred (iface, ids, ds)
+  None => []
 
 -- the receiver id of a deferred predicate — the one this scheme opens a dict slot for.
-vecOblLeadId : VecObl -> List Int
-vecOblLeadId o = match o.voIds
-  id::_ => [id]
+leadInferredPred : (IfaceRef, List Int, List Mono) -> List (IfaceRef, Int, List Mono)
+leadInferredPred (iface, ids, args) = match ids
+  id::_ => [(iface, id, args)]
   [] => []
 
-residualVecOblOfPred : List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
-residualVecOblOfPred boundIds (iface, ds, loc) =
-  residualVecObls boundIds iface ds loc
+inferredPredLead : (IfaceRef, Int, List Mono) -> Int
+inferredPredLead (_, id, _) = id
+
+-- the argument vector to record for the dict slot [id] of an inferred binding, whose
+-- interface is [ifref]: the first deferred predicate that opened THIS slot.  Matching the
+-- interface too is load-bearing — `registerInferredFor` opens ONE slot per id, so two
+-- predicates on different interfaces (`Ix a b`, `Jx a c`) can share a lead id, and the
+-- wrong one's vector would substitute to a wrong-but-concrete goal, which
+-- `declaredConstraintArgs`' header measures as strictly worse than missing.
+-- [] when nothing matches — the slot then keeps the scalar per-tyvar goal
+-- (`substArgVec`'s empty arm) that EVERY inferred slot had before this slice, which is
+-- the "leave it uncovered" arm, not an invented vector.
+inferredVecFor : IfaceRef -> Int -> List (IfaceRef, Int, List Mono) -> List Mono
+inferredVecFor _ _ [] = []
+inferredVecFor ifref id ((pIface, pId, args)::rest)
+  | ifref.irName /= "" && ifref.irName == pIface.irName && id == pId = args
+  | otherwise = inferredVecFor ifref id rest
 
 -- the tyvar ids of [monos], in order, iff EVERY mono is a TVar bound by this scheme;
 -- None otherwise (a partial vector is a different predicate — never over-reject).
@@ -28314,18 +28615,37 @@ boundTvarId boundIds mono = match normalize mono
   TVar cell => if containsI (tyvarId cell) boundIds then [tyvarId cell] else []
   _ => []
 
-registerInferredFor : String -> List Int -> Unit
-registerInferredFor _ [] = ()
-registerInferredFor m ids =
+-- S-inferred-vector-supply (#1869): [vecs] carries the deferred predicates this
+-- binding's slots were opened from, WITH their whole argument vectors, so an inferred
+-- constrained binding records a real `funConstraintArgsRef` row instead of the hardcoded
+-- `None` that made every inferred call site degrade to the scalar per-tyvar goal —
+-- `useIx p q = ix p q` answering by DECLARATION ORDER while its signatured twin answered
+-- by DICT-SEMANTICS §3.  The vectors are looked up per slot, keyed on (interface, lead
+-- id), and a slot that matches nothing keeps `[]`, i.e. exactly its historical goal.
+registerInferredFor : String -> List Int -> List (IfaceRef, Int, List Mono) -> Unit
+registerInferredFor _ [] _ = ()
+registerInferredFor m ids vecs =
   -- #994 (B-3-a): one `CSlot` per id, so the iface list is a `map` over the very list
   -- that is stored and cannot differ from it in length or order.  ⚠️ This moves
   -- `ifaceForInferredId`'s evaluation BEFORE the `funConstraintsRef` write (it used to
   -- sit in the second `setRef`'s argument, i.e. after it); that is sound only because it
   -- reads `implObls` / `schemeObligationsRef` / `dictApps` and NEITHER fn-constraint
   -- table — checked, since a recovery that consulted them would change answers here.
-  let _ = setFunConstraintEntry m (map (id => CSlot { csIface = ifaceForInferredId m id, csId = id }) ids) None
+  let slots = map (id => CSlot { csIface = ifaceForInferredId m id, csId = id }) ids
+  let _ = setFunConstraintEntry m slots (inferredArgsOpt (map (s => inferredVecFor s.csIface s.csId vecs) slots))
   let _ = registerActiveDictVars m 0 ids
   perRun.value.promotedRef := (m::perRun.value.promotedRef.value)
+
+-- N5 (inherited, slice 1): entry ABSENCE means "no argument vector was recorded for this
+-- callee at all", and every reader turns it into `(slot, [])` — the historical scalar
+-- per-tyvar goal, byte for byte.  A row of all-empty vectors reads identically at every
+-- reader, same-module and cross-module alike, so writing one would only ADD a
+-- `funConstraintArgsRef` / `crossModuleFunConstraintArgsQualRef` row that says nothing.
+-- Recover nothing ⇒ write nothing, exactly as before this slice.
+inferredArgsOpt : List (List Mono) -> Option (List (List Mono))
+inferredArgsOpt vecs
+  | allList isEmptyL vecs = None
+  | otherwise = Some vecs
 
 -- #23: the iface name for an inferred constraint var.  `ifaceForConstraintId` only
 -- recovers it from a pendingImplObligation whose `occ` is a BARE `TVar id`; a

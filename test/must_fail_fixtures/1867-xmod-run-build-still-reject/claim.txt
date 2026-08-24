@@ -1,0 +1,103 @@
+issue: 1867
+what: A LEGAL cross-module program is REJECTED on `run`/`build` while `medaka check`
+what: silently accepts it -- the LIVE residual of #1867 that survives S-candidate-key-
+what: identity's fix. The original `1867-xmod-multiparam-predicate-truncated-goal-
+what: rejects/` fixture pinned a DIFFERENT, narrower observable (`check-json`
+what: rejecting with a truncated-goal `T-AMBIGUOUS-INSTANCE`); that observable
+what: correctly flipped (`check` no longer falsely rejects) and the fixture was
+what: deleted, but the underlying vector-across-a-module-boundary gap is still open
+what: on a different cell, so this fixture RE-PINS #1867 with a corrected, minimal
+what: shape and a different observable.
+what:
+what: CORRECTED PRECONDITION (measured, supersedes the drained fixture's framing and
+what: S-cardinality-xmod-accept's earlier over-broad comment): the trigger is NOT
+what: "any concrete-argument cross-module declared constraint" -- a single-impl
+what: cross-module constrained call ACCEPTS FINE, called or uncalled (both measured
+what: below). The trigger is >= 2 IMPLS OF AN INTERFACE SHARING ARGUMENT 0 reached
+what: through a cross-module constrained call, even when the predicate's OTHER
+what: argument (here, `Char`) is fully concrete and disambiguating.
+what:
+what: `lib.mdk` exports a binary interface `Ix a b` with `ix : a -> b -> Int`, TWO
+what: impls sharing argument 0 (`Ix Int Char`, `Ix Int Bool`), and
+what: `useIx : Ix a Char => a -> Int` (bare tyvar `a`, concrete `Char` -- the goal at
+what: any call site is unambiguously `Ix Int Char`, matching exactly ONE impl).
+what: `main.mdk` imports `useIx` and calls `useIx 5`.
+what:
+what: THE CORRECT ANSWER IS ACCEPT-AND-PRINT-222, same reasoning as the drained
+what: fixture: `match(IE, Ix Int Char)` is a SINGLETON, so there is nothing to be
+what: ambiguous between and the program must be accepted. control.mdk (below) proves
+what: 222 by construction: the identical interface/impls/predicate/call with the
+what: module boundary removed.
+what:
+what: MEASURED FIRST-HAND on a binary cold-built in this worktree (no borrowed
+what: emitter), MEDAKA_STRICT=1, every verb redirected to a file with $? read
+what: directly (never piped):
+what:   ONE impl (`Ix Int Char`), method called cross-module: check 0, run 0
+what:     (prints 222), build 0 (binary prints 222) -- ACCEPTS on all three verbs.
+what:   ONE impl, method NEVER called in the body: build 0 -- ALSO ACCEPTS.
+what:   TWO impls sharing arg 0 (this fixture's shape), method called cross-module:
+what:     check 0 (silent, empty diagnostics -- ACCEPTS); run 1 and build 1, both
+what:     with the unlocated #1812-deflection message ("error: type error in
+what:     <path>, detected during elaboration (the run/build type pass); no located
+what:     diagnostic is available for it, and `medaka check` may not report this
+what:     program at all -- see issue #1812") -- REJECTS.
+what:   The single-file control (same interfaces/impls/predicate/call, no module
+what:     boundary): check 0, run 0, build 0, all printing 222 -- ACCEPTS, isolating
+what:     the observation to the MODULE BOUNDARY, not to multi-impl interfaces or
+what:     `=>` predicates in general.
+cmd: build main.mdk
+exit: 1
+control: run control.mdk
+why-fixture: NO `stdout`/`stdout-line`/`diag`/`diag-code` assertion is pinned, and that
+why-fixture: omission is deliberate, not an oversight -- same discipline as
+why-fixture: test/must_fail_fixtures/1427-alias-reexport-constrained-build-fails's
+why-fixture: exit-only pin. `medaka build`'s failure text here is the #1812-deflection
+why-fixture: message rendered by `locatedOrGeneric`'s `None` arm
+why-fixture: (compiler/driver/medaka_cli.mdk): it is ONE PHYSICAL LINE with the
+why-fixture: entry file's path spliced unconditionally into the middle via string
+why-fixture: concatenation ("error: type error in " ++ target ++ ", detected
+why-fixture: during elaboration ..."), and `target` here is NEVER relativized the way
+why-fixture: `check --json`'s `file` keys are (verified: an absolute path under cwd
+why-fixture: still renders in full in this message, unlike check-json's file list).
+why-fixture: This suite's harness always invokes the graded verb with an ABSOLUTE,
+why-fixture: checkout-location-dependent path ("$FIXDIR/<name>/main.mdk", built from
+why-fixture: `$ROOT`), so a `stdout-line` pin on this message would embed THIS
+why-fixture: worktree's own absolute path and DRAIN (falsely, "issue appears fixed")
+why-fixture: the instant the row is graded from a different checkout -- CI's runner,
+why-fixture: the merge queue, or any other machine. Measured directly: this message
+why-fixture: has NO second, path-free line (unlike #1641's two-line emitter panic,
+why-fixture: whose `stdout-line` pins the path-free second line) -- `wc -l` on the
+why-fixture: captured build output is 1. `diag`/`diag-code` are also unavailable:
+why-fixture: `check --json` on this exact program returns exit 0 with an EMPTY
+why-fixture: diagnostic list (that IS the silent-accept half of the divergence), so
+why-fixture: there is no diagnostic to key on. The exit code (1, vs. the control's 0)
+why-fixture: is therefore the only exact, checkout-portable, fail-capable assertion
+why-fixture: available, and it is what is pinned.
+why-fixture: `build`, not `run`: identical exit/message on this shape (both measured
+why-fixture: above), and `build` is this suite's verb of choice when a valid-looking
+why-fixture: program's build fails outright with no binary produced.
+why-control: control.mdk is the single-file twin: the SAME `Ix a b` interface, the SAME
+why-control: two impls, the SAME `useIx : Ix a Char => a -> Int` and the SAME call,
+why-control: with the module boundary removed and nothing else changed. MEASURED:
+why-control: run exit 0, prints 222. That isolates the observation to the MODULE
+why-control: BOUNDARY specifically -- not to two impls sharing an argument, not to a
+why-control: `=>` predicate with a concrete component, both of which are present and
+why-control: harmless here in the single-file form.
+why-control: `run control.mdk`, not `build control.mdk`: this row's own `cmd:` already
+why-control: uses `build`, and grading the control on `run` instead exercises a
+why-control: SECOND engine (the tree-walking interpreter) end to end rather than
+why-control: re-running the same emitter path twice -- both interpreters must reach
+why-control: the same answer for the shape to count as isolated to the boundary, and
+why-control: `run control.mdk` was the arm actually measured above.
+why-note: #1867 stays OPEN. This pin does not drain it and closes nothing -- it exists
+why-note: so the run/build residual has coverage until a future fix threads the
+why-note: constrained function's argument vector across the module boundary (the
+why-note: mechanism `recordCallObligations`/`declaredConstraintArgs` names, per the
+why-note: original fixture's own why-note2). A fix that makes `check --json` ALSO
+why-note: reject this program (i.e. converges check with run/build by making check
+why-note: loud, per [W-QUIETER]) does NOT drain this row by itself -- `build`'s exit
+why-note: code would stay 1 either way; re-check whether the program becomes 0/222 on
+why-note: all three verbs before closing #1867.
+why-note: This fixture uses the `build` verb and therefore needs clang; the gate's
+why-note: clang guard fails LOUDLY (exit 2) rather than skipping, which is intended --
+why-note: `soundness`, where this suite runs, has clang.

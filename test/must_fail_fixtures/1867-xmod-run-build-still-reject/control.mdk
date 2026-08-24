@@ -5,9 +5,9 @@ impl Ix Int Char where
   ix _ _ = 222
 
 impl Ix Int Bool where
-  ix _ _ = 111
+  ix _ _ = 333
 
-useIx : (Ix a Char, Ix a Bool) => a -> Int
-useIx x = ix x 'z' + ix x True
+useIx : Ix a Char => a -> Int
+useIx p = ix p 'z'
 
 main = println (useIx 5)

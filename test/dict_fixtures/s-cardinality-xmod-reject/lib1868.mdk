@@ -1,0 +1,15 @@
+-- S-cardinality-conformance (closes out #1871): the #1868 shape, RESTORED from the
+-- drained must_fail pin (was test/must_fail_fixtures/1868-unsatisfiable-constraint-
+-- stops-at-module-boundary/, S-xmod-vector-supply's own fixture). ONE exported
+-- predicate `Ix a Bool`, but this module's ONLY impl is `Ix Int Char` -- no impl
+-- satisfies the goal `Ix Int Bool` the importer instantiates. §3's missing-instance
+-- rejection: `match(IE, Ix Int Bool)` is empty. Paired with s-cardinality-xmod-accept/
+-- as the reject/accept half of the cross-module cardinality row §6 asks for.
+export interface Ix a b where
+  ix : a -> b -> Int
+
+export impl Ix Int Char where
+  ix _ _ = 222
+
+export useIx : Ix a Bool => a -> Int
+useIx x = ix x True
