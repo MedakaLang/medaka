@@ -1,0 +1,11 @@
+[package]
+name = "medaka-signing-k256-oracle"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+hex = "=0.4.3"
+k256 = { version = "=0.13.4", features = ["ecdsa"] }
+rfc6979 = "=0.4.0"
+sha2 = "=0.10.9"

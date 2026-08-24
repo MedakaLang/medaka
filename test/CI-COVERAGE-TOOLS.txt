@@ -123,6 +123,11 @@ pds/tools/gen_scalar_corpus    regenerates pds/test/vectors/scalar_reference_cor
 pds/tools/gen_point_corpus     regenerates SEC 2 parameter rows and the point-operation
                                corpus only after pinned libsecp256k1 and k256 agree
                                byte-for-byte; the pds/test gates grade the artifacts.
+pds/tools/gen_signing_corpus   regenerates the 80-row dual-oracle prehashed corpus, the
+                               16-row official-PDS corroboration corpus, and the normalized
+                               242-row Wycheproof corpus from immutable authorities. Needs
+                               network, C/Rust toolchains, and the pinned PDS Docker image;
+                               pds/test/signing_corpus.sh grades the committed artifacts.
 
 # ── pds oracle (S-oracle-standup, #1707; docker re-cut fix-oracle-standup-docker — a
 #    local manual procedure, not a gate) ──
