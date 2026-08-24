@@ -25,6 +25,16 @@
 #     doctests that used to assert full-Unicode case-folding to the ASCII-only
 #     truth the native runtime actually implements; #505 un-deferred once that
 #     was confirmed on a fresh build)
+#   stdlib/array.mdk / stdlib/mut_array.mdk / stdlib/map.mdk (#1712 un-deferred):
+#     these three modules had ZERO doctests/props running under any CI-enforced
+#     gate — the deferral note below used to claim array/mut_array's props had
+#     RNG-draw-dependent shrunk counterexamples and map needed hash-table work,
+#     but re-verification found all three run clean end-to-end natively (30/30 +
+#     7/7 props for array, 11/11 for mut_array, 40/40 + 16/16 props for map) —
+#     the deferral had gone stale. This is the worked-example gap: array.mdk's
+#     Array.concat/concatLookup carried a documented O(outer*total) quadratic
+#     plus a boundary hazard around empty inner arrays that nothing here would
+#     have caught, because nothing ran. See #1710/#1712.
 #   test/compiler_test_fixtures/mixed.mdk  passing + FAILING doctest + prop
 #   test/compiler_test_fixtures/record_prop.mdk  GH #1295: a passing/positional
 #     ADT prop plus a passing RECORD-typed prop (genVariant's ConNamed arm used
@@ -38,14 +48,6 @@
 #     terminates and converges.
 #
 # DEFERRED (pre-existing compiler/native gaps, NOT gate-rerooting regressions):
-#   stdlib/{mut_array,array,map}.mdk — the #55 `$dict_sum_1` panic on the eval/test
-#     path is FIXED (see test/compiler_test_fixtures/sum_dict.mdk, now in the default
-#     set, for the focused regression).  These full modules stay DEFERRED only for
-#     OTHER reasons: array/mut_array carry props whose shrunk counterexamples are
-#     RNG-draw-dependent (differ across impls), and map additionally needs the
-#     hash-table work below.  `medaka test stdlib/{array,mut_array}.mdk` now run clean
-#     end-to-end natively (no `$dict_*` unbound) — add to the gate once their props are
-#     made RNG-independent (or trimmed to passing-only).
 #   error-path doctests — compiler eval has no per-binding panic recovery.
 #
 # hash_map.mdk / hash_set.mdk (P0-10, un-deferred): the interpreter (compiler
@@ -110,6 +112,9 @@ else
          $ROOT/stdlib/bytebuilder.mdk \
          $ROOT/stdlib/hash_map.mdk \
          $ROOT/stdlib/hash_set.mdk \
+         $ROOT/stdlib/array.mdk \
+         $ROOT/stdlib/mut_array.mdk \
+         $ROOT/stdlib/map.mdk \
          $ROOT/test/compiler_test_fixtures/mixed.mdk \
          $ROOT/test/compiler_test_fixtures/sum_dict.mdk \
          $ROOT/test/compiler_test_fixtures/record_prop.mdk \

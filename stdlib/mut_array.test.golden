@@ -1,0 +1,14 @@
+running doctests in stdlib/mut_array.mdk
+  ok   stdlib/mut_array.mdk:41: length (fromList [1, 2, 3])
+  ok   stdlib/mut_array.mdk:61: capacity (fromList [1, 2, 3])
+  ok   stdlib/mut_array.mdk:69: get 1 (fromList [10, 20, 30])
+  ok   stdlib/mut_array.mdk:71: get 5 (fromList [10, 20, 30])
+  ok   stdlib/mut_array.mdk:92: first (fromList [10, 20, 30])
+  ok   stdlib/mut_array.mdk:100: last (fromList [10, 20, 30])
+  ok   stdlib/mut_array.mdk:121: arrayLength (toArray (fromList [1, 2, 3]))
+  ok   stdlib/mut_array.mdk:222: sum (fromList [1, 2, 3, 4])
+  ok   stdlib/mut_array.mdk:224: length (fromList [9, 8, 7])
+  ok   stdlib/mut_array.mdk:235: eq (fromList [1, 2, 3]) (fromList [1, 2, 3])
+  ok   stdlib/mut_array.mdk:242: debug (fromList [1, 2, 3]) == "fromList [1, 2, 3]"
+
+stdlib/mut_array.mdk: 11/11 passed
