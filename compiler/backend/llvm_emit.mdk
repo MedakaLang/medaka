@@ -5258,13 +5258,18 @@ emitDispatchBody : Emit -> String -> String -> List String -> List String -> (St
 emitDispatchBody e name dictPtr methWords argOps =
   let headTag = loadTag e dictPtr
   let impls = implsOf e name
+  -- #1818: mint this ONCE per dispatch body — same set `gatherGroup` built these
+  -- impls' own defines from — and thread it to every arm below, so `armArity`
+  -- there is a lookup into what was already minted, not a fresh `groupImpls`
+  -- walk per arm (which would also be O(program) per arm instead of once here).
+  let groups = implGroupsForMethod e name
   let slot = freshReg e
   let _ = emit e ("  " ++ slot ++ " = alloca i64")
   let endL = "dispend" ++ intToString (freshLocal e)
   let _ = match impls
     [] => match defaultFor e name
       Some entry => emitDefaultDispatchChain e dictPtr headTag (ifaceTags e (methodIfaceOfInput e name)) name entry argOps slot endL
-      None => emitDispatchChain e dictPtr headTag impls name methWords argOps slot endL
+      None => emitDispatchChain e dictPtr headTag impls groups name methWords argOps slot endL
     _ => match defaultFor e name
       -- MIXED default+impls: append default-synthesis arms for interface tags with no
       -- explicit impl (derived-Ord ADTs inheriting `max`/`min` from the default).
@@ -5272,9 +5277,9 @@ emitDispatchBody e name dictPtr methWords argOps =
         let covered = implEntryTags e impls
         let uncovered = tagsMinus (ifaceTags e (methodIfaceOfInput e name)) covered
         match uncovered
-          [] => emitDispatchChain e dictPtr headTag impls name methWords argOps slot endL
-          _ => emitDispatchChainDefaulted e dictPtr headTag impls uncovered name entry methWords argOps slot endL
-      None => emitDispatchChain e dictPtr headTag impls name methWords argOps slot endL
+          [] => emitDispatchChain e dictPtr headTag impls groups name methWords argOps slot endL
+          _ => emitDispatchChainDefaulted e dictPtr headTag impls groups uncovered name entry methWords argOps slot endL
+      None => emitDispatchChain e dictPtr headTag impls groups name methWords argOps slot endL
   let _ = emit e (endL ++ ":")
   let r = freshReg e
   let _ = emit e "  \{r} = load i64, ptr \{slot}"
@@ -5435,15 +5440,15 @@ loadReqDicts e dictPtr n i
 -- the bare head and only one impl can own it.  That is a PRE-EXISTING defect (it
 -- reproduces identically with and without this fix) and it is tracked separately; the
 -- point here is that this change cannot make it worse.
-emitDispatchArm : Emit -> String -> String -> CImplEntry -> String -> List String -> List String -> String -> String -> Unit
-emitDispatchArm e dictPtr headTag ent name methWords argOps slot endL =
+emitDispatchArm : Emit -> String -> String -> CImplEntry -> List ImplGroup -> String -> List String -> List String -> String -> String -> Unit
+emitDispatchArm e dictPtr headTag ent groups name methWords argOps slot endL =
   let cmp = emitRouteWordMatch e headTag (implEntryRouteWords e ent)
   let n = intToString (freshLocal e)
   let yes = "dispyes" ++ n
   let next = "dispnext" ++ n
   let _ = emit e "  br i1 \{cmp}, label %\{yes}, label %\{next}"
   let _ = emit e (yes ++ ":")
-  let _ = emitDispatchArmBody e dictPtr ent name methWords argOps slot endL
+  let _ = emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL
   emit e (next ++ ":")
 
 -- `headTag == w` for a ONE-word set (byte-identical to the pre-#1036 single `icmp`),
@@ -5484,8 +5489,8 @@ emitConstFalse e =
 -- the general instance's UNCONDITIONAL catch-all arm (emitDispatchChain).  Load the
 -- impl's per-instance cell `requires` dicts, call its lifted fn, store the result,
 -- and jump to the dispatcher exit.
-emitDispatchArmBody : Emit -> String -> CImplEntry -> String -> List String -> List String -> String -> String -> Unit
-emitDispatchArmBody e dictPtr ent name methWords argOps slot endL =
+emitDispatchArmBody : Emit -> String -> CImplEntry -> List ImplGroup -> String -> List String -> List String -> String -> String -> Unit
+emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
   let symTag = implFnSymE e name ent
   -- #747: a nullary/return-position/no-requires impl reached through this runtime
   -- dispatch (no method-level or value args) is a per-instance CAF.  core_ir_lower
@@ -5529,7 +5534,24 @@ emitDispatchArmBody e dictPtr ent name methWords argOps slot endL =
     -- becomes the residual PAP the source `op x` actually denotes, over-application
     -- the indirect re-apply.  Collision-free programs supply exactly the declared
     -- count, so this is the plain direct call, byte-identical.
-    let armArity = methodArityOfEntry e ent name + lengthS methWords + cellCount
+    --
+    -- #1818: `armArity` is now READ OFF `gatherGroup`'s own minted define-arity
+    -- (`groupArity`, matched by `symTag` -- the exact identity `gatherGroup` used
+    -- to name this same define), not independently recomputed.  The old formula
+    -- (`methodArityOfEntry + lengthS methWords + cellCount`) is a STRUCTURAL
+    -- duplicate of `gatherGroup`'s `maxInt (clauseArity) (methodArityOfIface + nDicts)`
+    -- -- the two are "coincidentally" equal, and #1816 was exactly the case where a
+    -- negative `cellCount` broke that coincidence.  Consulting the group directly
+    -- makes the two PROVABLY equal instead: this arm's call always saturates
+    -- against the same number the callee's `define` actually has.  Every
+    -- CImplTagged entry reaching this function -- concrete arm or general instance
+    -- alike -- has exactly one group in `groups` (`groupImpls` only ever skips
+    -- `CImplDefault`), so the fallback below is not expected to fire; it is kept as
+    -- the pre-#1818 formula so a genuine miss degrades to the old (already-correct
+    -- post-#1816) behavior rather than panicking.
+    let armArity = match findGroupBySymTag symTag groups
+      Some g => groupArity g
+      None => methodArityOfEntry e ent name + lengthS methWords + cellCount
     let (rv, _) = emitKnownFnSat e (implFnName symTag name) (methWords ++ cellDicts ++ argOps) armArity LTInt
     let _ = emit e "  store i64 \{rv}, ptr \{slot}"
     emit e ("  br label %" ++ endL)
@@ -5559,19 +5581,19 @@ firstGeneralEntry (ent::rest)
   | isGeneralEntry ent = Some ent
   | otherwise = firstGeneralEntry rest
 
-emitDispatchChain : Emit -> String -> String -> List CImplEntry -> String -> List String -> List String -> String -> String -> Unit
-emitDispatchChain e dictPtr headTag impls name methWords argOps slot endL =
-  let _ = emitConcreteArms e dictPtr headTag (filterList (ent => not (isGeneralEntry ent)) impls) name methWords argOps slot endL
+emitDispatchChain : Emit -> String -> String -> List CImplEntry -> List ImplGroup -> String -> List String -> List String -> String -> String -> Unit
+emitDispatchChain e dictPtr headTag impls groups name methWords argOps slot endL =
+  let _ = emitConcreteArms e dictPtr headTag (filterList (ent => not (isGeneralEntry ent)) impls) groups name methWords argOps slot endL
   match firstGeneralEntry impls
     Some gen =>
-      emitDispatchArmBody e dictPtr gen name methWords argOps slot endL
+      emitDispatchArmBody e dictPtr gen groups name methWords argOps slot endL
     None => emit e "  unreachable"
 
-emitConcreteArms : Emit -> String -> String -> List CImplEntry -> String -> List String -> List String -> String -> String -> Unit
-emitConcreteArms _ _ _ [] _ _ _ _ _ = ()
-emitConcreteArms e dictPtr headTag (ent::rest) name methWords argOps slot endL =
-  let _ = emitDispatchArm e dictPtr headTag ent name methWords argOps slot endL
-  emitConcreteArms e dictPtr headTag rest name methWords argOps slot endL
+emitConcreteArms : Emit -> String -> String -> List CImplEntry -> List ImplGroup -> String -> List String -> List String -> String -> String -> Unit
+emitConcreteArms _ _ _ [] _ _ _ _ _ _ = ()
+emitConcreteArms e dictPtr headTag (ent::rest) groups name methWords argOps slot endL =
+  let _ = emitDispatchArm e dictPtr headTag ent groups name methWords argOps slot endL
+  emitConcreteArms e dictPtr headTag rest groups name methWords argOps slot endL
 
 -- GAP 2 phase-b (MIXED case): a method that HAS tagged impls but whose interface ALSO
 -- owns a default AND can carry element tags with no explicit impl — the derived-Ord
@@ -5583,15 +5605,16 @@ emitConcreteArms e dictPtr headTag (ent::rest) name methWords argOps slot endL =
 -- Emit the tagged-impl arms, then — instead of an immediate `unreachable` — append one
 -- default-synthesis arm per `uncovered` iface tag (the same `@mdk_default_<method>_<tag>`
 -- machinery as the pure-default path, its inner `compare` restamped to `RKey tag`).
-emitDispatchChainDefaulted : Emit -> String -> String -> List CImplEntry -> List String -> String -> CImplEntry -> List String -> List String -> String -> String -> Unit
-emitDispatchChainDefaulted e dictPtr headTag [] uncovered name entry _ argOps slot endL = emitDefaultDispatchChain e dictPtr headTag uncovered name entry argOps slot endL
-emitDispatchChainDefaulted e dictPtr headTag (ent::rest) uncovered name entry methWords argOps slot endL =
-  let _ = emitDispatchArm e dictPtr headTag ent name methWords argOps slot endL
+emitDispatchChainDefaulted : Emit -> String -> String -> List CImplEntry -> List ImplGroup -> List String -> String -> CImplEntry -> List String -> List String -> String -> String -> Unit
+emitDispatchChainDefaulted e dictPtr headTag [] _ uncovered name entry _ argOps slot endL = emitDefaultDispatchChain e dictPtr headTag uncovered name entry argOps slot endL
+emitDispatchChainDefaulted e dictPtr headTag (ent::rest) groups uncovered name entry methWords argOps slot endL =
+  let _ = emitDispatchArm e dictPtr headTag ent groups name methWords argOps slot endL
   emitDispatchChainDefaulted
     e
     dictPtr
     headTag
     rest
+    groups
     uncovered
     name
     entry
@@ -5751,6 +5774,24 @@ groupMethodOf (ImplGroup m _ _ _ _ _) = m
 
 groupPositionsOf : ImplGroup -> List Int
 groupPositionsOf (ImplGroup _ _ _ p _ _) = p
+
+-- #1818: the arity `gatherGroup` MINTED for this group's `define` — the single
+-- number every F10 call site should consult rather than re-derive.  See
+-- `armArityOfEntry` below, the one caller that used to recompute it.
+groupArity : ImplGroup -> Int
+groupArity (ImplGroup _ _ _ _ arity _) = arity
+
+-- the group among [groups] whose lifted define is `@mdk_impl_<symTag>_<method>` —
+-- i.e. the one `gatherGroup` built for the SAME impl an entry-holding call site
+-- names.  `symTag` (`implFnSymE`) is exactly the identity `gatherGroup` used to
+-- name that define (`implFnSymTag` over the same entries pool), so this is a
+-- same-identity lookup, not a second guess: any hit is THE group whose `arity`
+-- field is what the define was actually emitted to accept.
+findGroupBySymTag : String -> List ImplGroup -> Option ImplGroup
+findGroupBySymTag _ [] = None
+findGroupBySymTag symTag (g::rest)
+  | groupSymTag g == symTag = Some g
+  | otherwise = findGroupBySymTag symTag rest
 
 headGroup : List ImplGroup -> ImplGroup
 headGroup (g::_) = g
