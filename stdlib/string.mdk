@@ -418,12 +418,40 @@ intersperse sep (x::xs) = x :: sep :: intersperse sep xs
 
 {- | Repeat the string `n` times (empty when `n <= 0`).
 
+   Built by doubling (`repeatDbl`) rather than one recursive call per copy,
+   so the interpreted call depth is `O(log n)` instead of `O(n)` — a
+   linear-depth version hits the evaluator's call-depth cap around n ≈ 25000
+   (#1728).
+
    > repeat 3 "ab"
-   "ababab" -}
+   "ababab"
+
+   > repeat 0 "ab"
+   ""
+
+   > repeat (0 - 1) "ab"
+   ""
+
+   > stringLength (repeat 30000 "x")
+   30000 -}
 export
 repeat : Int -> String -> String
-repeat n s = stringConcat (replic n s)
+repeat n s = repeatDbl n s
 
+-- | `k <= 0` bottoms out at `""`; otherwise halve `k`, double the halved
+--   result, and append one more `s` when `k` is odd. `k / 2` shrinks the
+--   argument geometrically, so the call chain is `O(log k)` deep.
+repeatDbl : Int -> String -> String
+repeatDbl k s =
+  if k <= 0 then ""
+  else
+    let h = repeatDbl (k / 2) s
+    if isEven k then h ++ h else h ++ h ++ s
+
+-- | A list of `n` copies of `x` (empty when `n <= 0`). Still used by the
+--   padding helpers below, whose `n` is a display width (small in
+--   practice) rather than a caller-controlled repeat count — #1728 scoped
+--   the doubling fix to `repeat` itself.
 replic : Int -> a -> List a
 replic n x = if n <= 0 then [] else x :: replic (n - 1) x
 
