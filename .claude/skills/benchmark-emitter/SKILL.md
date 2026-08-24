@@ -29,6 +29,16 @@ did to the *compile-time* work.
 *into* the emitter, a second so the emitter is itself compiled BY that emitter. Only
 then are both arms true single-generation binaries and the comparison means anything.
 
+🚨 **Both rebuilds MUST set `FORCE_EMITTER_REBUILD=1` — a plain `make medaka` is a no-op
+the second time.** Stage A compares a stamped fingerprint against current source; once
+your emitter change is already baked into `medaka_emitter`, that fingerprint matches and
+stage A prints `stage A: emitter up-to-date … skipping rebuild` instead of rebuilding —
+silently leaving you on the OLD emitter for the "second" generation. Run:
+```sh
+FORCE_EMITTER_REBUILD=1 make medaka   # rebuild 1: new behavior, old emitter
+FORCE_EMITTER_REBUILD=1 make medaka   # rebuild 2: new behavior, new (self-)emitter
+```
+
 ## ⚠️ Never use the main checkout's `medaka_emitter` as a baseline
 
 `/root/medaka/medaka_emitter` is a **shared mutable artifact**. Another agent rebuilt it
