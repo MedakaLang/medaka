@@ -24878,11 +24878,15 @@ checkCallObligationsU deferNonGround dedup univ seen (o::rest) =
   let key = oblDedupKey iface occs
   -- dedup=False (IMPL channel): never SKIP — check every obligation like the retired
   -- checkImplObligationsU (S0 #863: a same-key different-verdict obligation must not be
-  -- dropped).  dedup=True (CALL channel): skip a repeat of an already-checked key.
-  if dedup && contains key seen then checkCallObligationsU deferNonGround dedup univ seen rest
-  else
-    let _ = checkOneCallObligation deferNonGround univ iface occs loc
-    checkCallObligationsU deferNonGround dedup univ (key::seen) rest
+  -- dropped).  dedup=True (CALL channel) USED TO skip a repeat of an already-checked key —
+  -- that dropped the CHECK, not just the report, and `oblDedupKey` keys only on head
+  -- constructors (nothing below them in the `requires` chain), so two obligations with
+  -- different verdicts could collide and the second would never be checked at all (#1330,
+  -- S0).  DICT-SEMANTICS §4.2 OD5: dedup is admissible only at emission — every recorded
+  -- obligation is checked; `pushTypeErrorOnceAt` (`:6961`) dedups the emitted diagnostic by
+  -- exact message text, which is what actually keeps a genuinely duplicate report to one.
+  let _ = checkOneCallObligation deferNonGround univ iface occs loc
+  checkCallObligationsU deferNonGround dedup univ (key::seen) rest
 
 -- [occs] is the predicate's whole argument vector.  At arity 1 the match test stays
 -- implMatchesReceiverU (byte-identical to the pre-#607 behaviour: for a 1-param
