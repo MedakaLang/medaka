@@ -6,6 +6,7 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$HERE/../.." && pwd)
 MODE=write
 if [ "${1:-}" = "--check" ]; then MODE=check; shift; fi
+if [ "${1:-}" = "--oracle-control" ]; then MODE=oracle-control; shift; fi
 OUT=${1:-"$ROOT/pds/test/vectors"}
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/pds-signing.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
@@ -38,6 +39,64 @@ check_tag() {
   }
 }
 
+record_oracle_completion() {
+  label=$1 output=$2 receipt=$3
+  [ -s "$output" ] || {
+    echo "gen_signing_corpus: $label produced no fresh output" >&2
+    exit 1
+  }
+  printf '%s %s\n' "$label" "$(sha256_file "$output")" >> "$receipt"
+}
+
+compare_oracle_outputs() {
+  left=$1 right=$2 receipt=$3
+  cmp "$left" "$right" || {
+    diff -u "$left" "$right" >&2
+    exit 1
+  }
+  left_hash=$(sha256_file "$left")
+  right_hash=$(sha256_file "$right")
+  [ "$left_hash" = "$right_hash" ] || {
+    echo "gen_signing_corpus: compared oracle hashes differ" >&2
+    exit 1
+  }
+  printf 'compared %s\n' "$left_hash" >> "$receipt"
+}
+
+require_oracle_completion() {
+  receipt=$1
+  [ "$(wc -l < "$receipt" | tr -d ' ')" -eq 3 ] || {
+    echo "gen_signing_corpus: oracle completion receipt is incomplete" >&2
+    exit 1
+  }
+  libsecp_hash=$(sed -n '1s/^libsecp256k1 //p' "$receipt")
+  k256_hash=$(sed -n '2s/^k256 //p' "$receipt")
+  compared_hash=$(sed -n '3s/^compared //p' "$receipt")
+  [ -n "$libsecp_hash" ] && [ "$libsecp_hash" = "$k256_hash" ] && [ "$libsecp_hash" = "$compared_hash" ] || {
+    echo "gen_signing_corpus: oracle run/compare completion evidence disagrees" >&2
+    exit 1
+  }
+}
+
+oracle_control_proof() {
+  receipt="$WORK/oracle-control.receipt"
+  libsecp_output="$WORK/oracle-control-libsecp.out"
+  k256_output="$WORK/oracle-control-k256.out"
+  rm -f "$receipt" "$libsecp_output" "$k256_output"
+  sh -c 'printf "%s\n" fresh-independent-oracle-output' > "$libsecp_output"
+  record_oracle_completion libsecp256k1 "$libsecp_output" "$receipt"
+  sh -c 'printf "%s\n" fresh-independent-oracle-output' > "$k256_output"
+  record_oracle_completion k256 "$k256_output" "$receipt"
+  compare_oracle_outputs "$libsecp_output" "$k256_output" "$receipt"
+  require_oracle_completion "$receipt"
+  cat "$receipt"
+}
+
+if [ "$MODE" = oracle-control ]; then
+  oracle_control_proof
+  exit 0
+fi
+
 check_tag https://github.com/bitcoin-core/secp256k1 refs/tags/v0.8.0 "$LIBSECP_COMMIT"
 check_tag https://github.com/RustCrypto/elliptic-curves refs/tags/k256/v0.13.4 "$K256_COMMIT"
 check_tag https://github.com/C2SP/wycheproof refs/tags/google-wycheproof/v0.9 "$WYCHEPROOF_COMMIT"
@@ -54,11 +113,15 @@ tar -xzf "$WORK/libsecp.tar.gz" -C "$WORK/libsecp" --strip-components=1
 tar -xzf "$WORK/k256.tar.gz" -C "$WORK/k256" --strip-components=1
 python3 "$HERE/instrument_libsecp_signing.py" "$WORK/libsecp/src/ecdsa_impl.h"
 
+ORACLE_RECEIPT="$WORK/oracle-completion.receipt"
+rm -f "$ORACLE_RECEIPT" "$WORK/libsecp.out" "$WORK/k256.out"
+
 cc -O2 -DUSE_FORCE_WIDEMUL_INT64=1 -I"$WORK/libsecp" \
   -o "$WORK/libsecp-sign" "$HERE/signing_corpus_libsecp.c" \
   "$WORK/libsecp/src/precomputed_ecmult.c" "$WORK/libsecp/src/precomputed_ecmult_gen.c"
 # ORACLE_EXECUTION: libsecp256k1
 "$WORK/libsecp-sign" "$HERE/signing_inputs.txt" > "$WORK/libsecp.out"
+record_oracle_completion libsecp256k1 "$WORK/libsecp.out" "$ORACLE_RECEIPT"
 
 cp "$HERE/signing_k256/Cargo.toml" "$HERE/signing_k256/Cargo.lock" "$WORK/rust/"
 cp -R "$HERE/signing_k256/src" "$WORK/rust/src"
@@ -66,10 +129,9 @@ mkdir "$WORK/rust/.cargo"
 printf '[patch.crates-io]\nk256 = { path = "%s/k256" }\n' "$WORK/k256" > "$WORK/rust/.cargo/config.toml"
 # ORACLE_EXECUTION: k256 + locked rfc6979 0.4.0
 cargo run --quiet --locked --manifest-path "$WORK/rust/Cargo.toml" -- "$HERE/signing_inputs.txt" > "$WORK/k256.out"
-cmp "$WORK/libsecp.out" "$WORK/k256.out" || {
-  diff -u "$WORK/libsecp.out" "$WORK/k256.out" >&2
-  exit 1
-}
+record_oracle_completion k256 "$WORK/k256.out" "$ORACLE_RECEIPT"
+compare_oracle_outputs "$WORK/libsecp.out" "$WORK/k256.out" "$ORACLE_RECEIPT"
+require_oracle_completion "$ORACLE_RECEIPT"
 
 [ "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$PDS_IMAGE")" = "$PDS_REVISION" ] || {
   echo "gen_signing_corpus: official PDS service revision drifted" >&2

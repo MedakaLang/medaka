@@ -47,11 +47,11 @@ cmp "$WORK/native-sample.out" "$WORK/sample-wasm.out" || {
   echo 'FAIL: sampled signing values differ between native and Wasm' >&2
   exit 1
 }
-grep -F -q 'candidate-1:valid=1:selected=2' "$WORK/sample-wasm.out"
-grep -F -q 'exhaustion:valid=0:selected=1' "$WORK/sample-wasm.out"
-grep -F -q 'high-s:reject' "$WORK/sample-wasm.out"
+grep -F -q 'candidate-1:computations=2:c0.valid=0:' "$WORK/sample-wasm.out"
+grep -F -q 'exhaustion:computations=2:c0.valid=0:' "$WORK/sample-wasm.out"
+grep -F -q 'high-s:compact=reject:verify:reject' "$WORK/sample-wasm.out"
 grep -F -q 'malformed:reject' "$WORK/sample-wasm.out"
-echo 'PASS: sampled eval/native/Wasm signing values, candidate-1/exhaustion, high-S/malformed'
+echo 'PASS: sampled eval/native/Wasm signing values, complete candidate-1/exhaustion, verifier high-S, and malformed compact'
 
 MEDAKA_STRICT=1 "$MEDAKA" build "$FULL_DRIVER" -o "$WORK/native-full" > "$WORK/native-full-build.log" 2>&1
 "$WORK/native-full" "$SIGNING" "$WYCHEPROOF" > "$WORK/native-full.out" 2>&1
