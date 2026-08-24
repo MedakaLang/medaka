@@ -60,6 +60,23 @@ finding, never a bless. Decide expected values from semantics before
 capturing anything — a captured golden records what the engine DID, not what
 is correct.
 
+⚠️ **Touching a snapshotted file (comment or signature edit, not just logic)?
+Name "run the snapshot/LEG-A bless-check" as its own §6 line, explicitly.**
+`selector-identity-2`'s fix round landed clean per its own checks but left a
+stale LEG A golden that only the orchestrator's post-merge pass caught — the
+packet's acceptance list never said to run the check, so nothing in-slice
+could have caught it.
+
+**"LEG A diff must be additive-only" allows one exception, stated up front if
+it applies: a verified pure signature change** (row count unchanged, the
+content diff is exactly the signature/comment move and nothing else) is a
+legitimate modified-row diff, not a violation. `selector-identity-2` hit this
+literally: slice 2's 3-row signature-change diff had no way to satisfy the
+literal "additive-only" wording, forcing the reviewer to waive it by judgment
+call instead of by rule. If a slice's transform is known ahead of time to
+rename/re-sign rather than purely add, say so in §6 rather than leaving the
+implementer or reviewer to argue it after the fact.
+
 ## The refusal license — implied verbatim in every packet
 
 > The moment contact with the source contradicts this packet — a false
