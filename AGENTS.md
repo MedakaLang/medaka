@@ -513,7 +513,9 @@ Each of these was paid for in an incident — pointers, not post-mortems.
 *Incident narrative, where an item below has any: `.claude/dossier/traps.md`.*
 
 - ⚠️ **[T-EMITTER-BENCH]** Measuring an emitter change? Read `benchmark-emitter` FIRST. Rebuild
-  **twice**. Run `test/refresh_seed.sh` **twice** after a codegen change.
+  **twice** — a plain second `make medaka` is a no-op (stage A sees a matching fingerprint and
+  prints "skipping rebuild"); force it with **`FORCE_EMITTER_REBUILD=1 make medaka`** each time.
+  Run `test/refresh_seed.sh` **twice** after a codegen change.
 - ⚠️ **[T-PERF-HUNT]** Stage slow, or `perf_scaling` red? Read `perf-hunt`. Profile
   **allocation**, not wall-clock. `whenL False (expensiveCall …)` still evaluates its arg.
 - ⚠️ **[T-DISPATCH-LOADER]** Dispatch bug via loader but green single-file? Usually the EVAL
