@@ -1,0 +1,31 @@
+-- #1741: a block whose LAST statement is a `let` binding used to be UNBUILDABLE
+-- ("empty block" E-PANIC) because emitBlock's singleton `[CSLet _ pat ex]` arm
+-- sat AFTER the general `(CSLet _ ...)::rest` arms, which match a one-element
+-- list too and recursed into the empty-block gap. Covers all three trailing
+-- pattern kinds (PWild/PVar/PTuple) plus a control: a wildcard `let` NOT in
+-- last position, which always built fine.
+f : Int -> <IO> Unit
+f n =
+  println "wild"
+  let _ = println n
+
+g : Int -> <IO> Unit
+g n =
+  println "var"
+  let y = println n
+
+h : <IO> Unit
+h =
+  println "tuple"
+  let (a, b) = (1, 2)
+
+control : Int -> <IO> Unit
+control n =
+  let _ = println "control"
+  println n
+
+main =
+  let _ = f 1
+  let _ = g 2
+  let _ = h
+  control 3

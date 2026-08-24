@@ -141,6 +141,12 @@ with no shard pattern in `ci.yml` SILENTLY NEVER RUNS. Registration rules, the
 `test/CI-COVERAGE-EXCEPTIONS.txt` escape hatch, and `[W-SHARD-COST]` (shards are scheduled by
 cost, not theme): the `gates` skill.
 
+⚠️ **[W-THIRD-CONSUMER] `ci.yml` shard patterns are TWO classifications, not the whole
+list.** `test/preflight.sh` independently derives its own gate set from the diff (its
+`changed path → gate patterns` case block, [L-PREFLIGHT]) — a THIRD consumer any new
+subproject's files/patterns must also be visible to, or `make preflight` silently widens or
+narrows scope with no error.
+
 **Zero approvals required** — the checks are the gate; an agent can self-merge on green.
 `--auto` enqueues into the merge queue ([W-MERGE-QUEUE]).
 
@@ -513,7 +519,9 @@ Each of these was paid for in an incident — pointers, not post-mortems.
 *Incident narrative, where an item below has any: `.claude/dossier/traps.md`.*
 
 - ⚠️ **[T-EMITTER-BENCH]** Measuring an emitter change? Read `benchmark-emitter` FIRST. Rebuild
-  **twice**. Run `test/refresh_seed.sh` **twice** after a codegen change.
+  **twice** — a plain second `make medaka` is a no-op (stage A sees a matching fingerprint and
+  prints "skipping rebuild"); force it with **`FORCE_EMITTER_REBUILD=1 make medaka`** each time.
+  Run `test/refresh_seed.sh` **twice** after a codegen change.
 - ⚠️ **[T-PERF-HUNT]** Stage slow, or `perf_scaling` red? Read `perf-hunt`. Profile
   **allocation**, not wall-clock. `whenL False (expensiveCall …)` still evaluates its arg.
 - ⚠️ **[T-DISPATCH-LOADER]** Dispatch bug via loader but green single-file? Usually the EVAL

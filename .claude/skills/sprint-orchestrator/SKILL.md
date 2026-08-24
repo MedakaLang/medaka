@@ -132,6 +132,11 @@ by serialization.
    one — the review round can take long enough for `main` to move under you,
    and a fix-round dispatch is not exempt from the resync just because it's
    small. A fix that moves a golden gets the same by-name bless discipline.
+   ⚠️ **Any packet — slice or fix — touching a snapshotted file must name
+   "run the snapshot/LEG-A bless-check" as its own §6 acceptance line**
+   (`sprint-packet` §6); don't rely on catching a stale golden yourself after
+   the merge — `selector-identity-2`'s F-fixround-1 shipped clean per its own
+   checks and only the orchestrator's post-merge pass caught the miss.
 4. **Land.** `medaka fmt --write` + `medaka lint` clean on touched files;
    `make preflight` if the diff touches blast-radius paths, else let CI
    answer. Mark the PR ready, `gh pr merge --auto --merge`. The merge queue
