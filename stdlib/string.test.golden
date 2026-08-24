@@ -42,26 +42,29 @@ running doctests in stdlib/string.mdk
   ok   stdlib/string.mdk:378: countOccurrences "ll" "lllll"
   ok   stdlib/string.mdk:400: concat ["a", "bc", "d"]
   ok   stdlib/string.mdk:408: join ", " ["a", "b", "c"]
-  ok   stdlib/string.mdk:421: repeat 3 "ab"
-  ok   stdlib/string.mdk:432: reverse "abc"
-  ok   stdlib/string.mdk:460: trim "  hi  "
-  ok   stdlib/string.mdk:491: toUpper "Straße"
-  ok   stdlib/string.mdk:500: toLower "HÉLLO"
-  ok   stdlib/string.mdk:508: capitalize "hello"
-  ok   stdlib/string.mdk:522: replace "l" "L" "hello"
-  ok   stdlib/string.mdk:540: replaceAll "l" "L" "hello"
-  ok   stdlib/string.mdk:562: sliceClamped 1 4 "hello"
-  ok   stdlib/string.mdk:570: take 3 "hello"
-  ok   stdlib/string.mdk:578: drop 3 "hello"
-  ok   stdlib/string.mdk:586: splitAt 2 "hello"
-  ok   stdlib/string.mdk:594: split "," "a,b,c"
-  ok   stdlib/string.mdk:596: split "," "abc"
-  ok   stdlib/string.mdk:609: lines "a\nb\nc"
-  ok   stdlib/string.mdk:625: words "  hello   world "
-  ok   stdlib/string.mdk:647: unlines ["a", "b"]
-  ok   stdlib/string.mdk:662: unwords ["a", "b", "c"]
-  ok   stdlib/string.mdk:672: padLeft 5 '.' "ab"
-  ok   stdlib/string.mdk:684: padRight 5 '.' "ab"
-  ok   stdlib/string.mdk:697: center 5 '.' "ab"
+  ok   stdlib/string.mdk:426: repeat 3 "ab"
+  ok   stdlib/string.mdk:429: repeat 0 "ab"
+  ok   stdlib/string.mdk:432: repeat (0 - 1) "ab"
+  ok   stdlib/string.mdk:435: stringLength (repeat 30000 "x")
+  ok   stdlib/string.mdk:460: reverse "abc"
+  ok   stdlib/string.mdk:488: trim "  hi  "
+  ok   stdlib/string.mdk:519: toUpper "Straße"
+  ok   stdlib/string.mdk:528: toLower "HÉLLO"
+  ok   stdlib/string.mdk:536: capitalize "hello"
+  ok   stdlib/string.mdk:550: replace "l" "L" "hello"
+  ok   stdlib/string.mdk:568: replaceAll "l" "L" "hello"
+  ok   stdlib/string.mdk:590: sliceClamped 1 4 "hello"
+  ok   stdlib/string.mdk:598: take 3 "hello"
+  ok   stdlib/string.mdk:606: drop 3 "hello"
+  ok   stdlib/string.mdk:614: splitAt 2 "hello"
+  ok   stdlib/string.mdk:622: split "," "a,b,c"
+  ok   stdlib/string.mdk:624: split "," "abc"
+  ok   stdlib/string.mdk:637: lines "a\nb\nc"
+  ok   stdlib/string.mdk:653: words "  hello   world "
+  ok   stdlib/string.mdk:675: unlines ["a", "b"]
+  ok   stdlib/string.mdk:690: unwords ["a", "b", "c"]
+  ok   stdlib/string.mdk:700: padLeft 5 '.' "ab"
+  ok   stdlib/string.mdk:712: padRight 5 '.' "ab"
+  ok   stdlib/string.mdk:725: center 5 '.' "ab"
 
-stdlib/string.mdk: 64/64 passed
+stdlib/string.mdk: 67/67 passed
