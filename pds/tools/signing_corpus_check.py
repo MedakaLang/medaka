@@ -6,6 +6,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import tempfile
 
 ORDER = int("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141", 16)
 HALF_ORDER = ORDER // 2
@@ -79,38 +80,85 @@ def check_manifest(root: pathlib.Path) -> None:
         fail("16-row official-PDS message manifest drifted")
 
 
-def require_generator_authorities(root: pathlib.Path) -> None:
-    generator = (root / "pds/tools/gen_signing_corpus.sh").read_text()
-    literals = [LIBSECP_SHA, K256_SHA, WYCHEPROOF_SHA, PDS_DIGEST, PDS_REVISION]
-    for literal in literals:
-        if generator.count(literal) != 1:
-            fail(f"generator authority pin missing or duplicated: {literal}")
-    active = [
-        r'^"\$WORK/libsecp-sign" "\$HERE/signing_inputs\.txt" > "\$WORK/libsecp\.out"$',
-        r'^record_oracle_completion libsecp256k1 "\$WORK/libsecp\.out" "\$ORACLE_RECEIPT"$',
-        r'^cargo run --quiet --locked --manifest-path "\$WORK/rust/Cargo\.toml" -- "\$HERE/signing_inputs\.txt" > "\$WORK/k256\.out"$',
-        r'^record_oracle_completion k256 "\$WORK/k256\.out" "\$ORACLE_RECEIPT"$',
-        r'^compare_oracle_outputs "\$WORK/libsecp\.out" "\$WORK/k256\.out" "\$ORACLE_RECEIPT"$',
-        r'^require_oracle_completion "\$ORACLE_RECEIPT"$',
-    ]
-    positions = []
-    for pattern in active:
-        match = re.search(pattern, generator, re.MULTILINE)
-        if match is None:
-            fail(f"independent signing oracle execution disabled: {pattern}")
-        positions.append(match.start())
-    if positions != sorted(positions):
-        fail("independent signing oracle execution/receipt order drifted")
-    proof = subprocess.run(
-        ["sh", str(root / "pds/tools/gen_signing_corpus.sh"), "--oracle-control"],
-        cwd=root,
+def run_oracle_control(generator: pathlib.Path, cwd: pathlib.Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["sh", str(generator), "--oracle-control"],
+        cwd=cwd,
         capture_output=True,
         text=True,
         check=False,
     )
+
+
+def oracle_control_completed(proof: subprocess.CompletedProcess[str]) -> bool:
     proof_lines = proof.stdout.splitlines()
     if proof.returncode != 0 or len(proof_lines) != 3:
+        return False
+    labels_and_hashes = [line.split() for line in proof_lines]
+    return (
+        all(len(fields) == 2 for fields in labels_and_hashes)
+        and [fields[0] for fields in labels_and_hashes] == ["libsecp256k1", "k256", "compared"]
+        and len({fields[1] for fields in labels_and_hashes}) == 1
+    )
+
+
+def require_control_mutation_red(
+    root: pathlib.Path,
+    generator: str,
+    real_anchors: list[str],
+    label: str,
+    anchor: str,
+    replacement: str,
+) -> None:
+    if generator.count(anchor) != 1:
+        fail(f"{label} mutation anchor is not unique")
+    mutated = generator.replace(anchor, replacement)
+    for real_anchor in real_anchors:
+        if mutated.count(real_anchor) != generator.count(real_anchor):
+            fail(f"{label} mutation changed a retained real-authority anchor")
+    with tempfile.TemporaryDirectory(prefix="medaka-oracle-control-") as temporary:
+        mutation_root = pathlib.Path(temporary)
+        mutation_generator = mutation_root / "gen_signing_corpus.sh"
+        mutation_generator.write_text(mutated)
+        proof = run_oracle_control(mutation_generator, root)
+    if oracle_control_completed(proof):
+        fail(f"{label} unexpectedly preserved oracle completion")
+
+
+def require_generator_authorities(root: pathlib.Path) -> None:
+    generator_path = root / "pds/tools/gen_signing_corpus.sh"
+    generator = generator_path.read_text()
+    literals = [LIBSECP_SHA, K256_SHA, WYCHEPROOF_SHA, PDS_DIGEST, PDS_REVISION]
+    for literal in literals:
+        if generator.count(literal) != 1:
+            fail(f"generator authority pin missing or duplicated: {literal}")
+    real_anchors = [
+        'LIBSECP_RUNNER="$WORK/libsecp-sign"',
+        'exec cargo run --quiet --locked --manifest-path "$ORACLE_WORK/rust/Cargo.toml" -- "$1"',
+    ]
+    for real_anchor in real_anchors:
+        if generator.count(real_anchor) != 1:
+            fail(f"real signing authority command missing or duplicated: {real_anchor}")
+    common_path = [
+        r'^  ORACLE_WORK="\$WORK" "\$libsecp_runner" "\$input" > "\$libsecp_output"$',
+        r'^  record_oracle_completion libsecp256k1 "\$libsecp_output" "\$receipt"$',
+        r'^  ORACLE_WORK="\$WORK" "\$k256_runner" "\$input" > "\$k256_output"$',
+        r'^  record_oracle_completion k256 "\$k256_output" "\$receipt"$',
+        r'^  compare_oracle_outputs "\$libsecp_output" "\$k256_output" "\$receipt"$',
+        r'^  require_oracle_completion "\$receipt"$',
+    ]
+    positions = []
+    for pattern in common_path:
+        match = re.search(pattern, generator, re.MULTILINE)
+        if match is None:
+            fail(f"common signing oracle execution disabled: {pattern}")
+        positions.append(match.start())
+    if positions != sorted(positions):
+        fail("common signing oracle execution/receipt order drifted")
+    proof = run_oracle_control(generator_path, root)
+    if not oracle_control_completed(proof):
         fail("fresh oracle run/compare completion evidence is absent")
+    proof_lines = proof.stdout.splitlines()
     labels_and_hashes = [line.split() for line in proof_lines]
     if any(len(fields) != 2 for fields in labels_and_hashes):
         fail("oracle completion receipt is malformed")
@@ -118,6 +166,35 @@ def require_generator_authorities(root: pathlib.Path) -> None:
         fail("oracle completion receipt labels drifted")
     if len({fields[1] for fields in labels_and_hashes}) != 1:
         fail("oracle completion receipt did not compare matching fresh outputs")
+    mutations = [
+        (
+            "post-setup early exit",
+            "# ORACLE_MODE_SETUP_COMPLETE",
+            "# ORACLE_MODE_SETUP_COMPLETE\nexit 0 # disable common oracle execution",
+        ),
+        (
+            "libsecp runner disablement",
+            '  ORACLE_WORK="$WORK" "$libsecp_runner" "$input" > "$libsecp_output"',
+            '  : > "$libsecp_output" # disable libsecp runner',
+        ),
+        (
+            "k256 runner disablement",
+            '  ORACLE_WORK="$WORK" "$k256_runner" "$input" > "$k256_output"',
+            '  : > "$k256_output" # disable k256 runner',
+        ),
+        (
+            "oracle comparison skip",
+            '  compare_oracle_outputs "$libsecp_output" "$k256_output" "$receipt"',
+            "  : # skip oracle comparison",
+        ),
+        (
+            "stale oracle output reuse",
+            '  rm -f "$receipt" "$libsecp_output" "$k256_output"',
+            "  : # retain stale pre-existing oracle outputs",
+        ),
+    ]
+    for label, anchor, replacement in mutations:
+        require_control_mutation_red(root, generator, real_anchors, label, anchor, replacement)
     lock = (root / "pds/tools/signing_k256/Cargo.lock").read_text()
     if f'name = "rfc6979"\nversion = "0.4.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "{RFC6979_SHA}"' not in lock:
         fail("locked rfc6979 0.4.0 checksum drifted")
