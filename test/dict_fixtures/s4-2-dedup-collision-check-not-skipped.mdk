@@ -1,0 +1,54 @@
+-- DICT-SEMANTICS §4.2 OD5/OD6 (obligation deferral, dedup): deduplicating two
+-- call obligations must suppress the REPORT of a duplicate, never the CHECK. If
+-- the dedup key collides across two DIFFERENT goals, the second goal is never
+-- adjudicated and an unsatisfiable predicate ships.
+--
+-- REGRESSION GUARD FOR #1330 (call-obligation dedup skips the check), S0,
+-- fixed by sprint/entailment-verdict. Written because the fix DELETED the
+-- self-draining pin `test/must_fail_fixtures/1330-call-obligation-dedup-skips-
+-- check/` per [G-PIN-DRAIN] and left the S0 with no guard: a pin asserts a bug
+-- STILL REPRODUCES, so a fix deletes it and nothing replaces it unless someone
+-- writes the positive row. This is that row. #1330 is also the named OD5
+-- divergence in this gate's own NOT-YET-COVERED punch-list, so it is the first
+-- §4.2 fixture the corpus has ever had.
+--
+-- SPEC ANSWER (hand-derived from §5 `(method)`, NOT captured). `println` is a
+-- `Display`-dispatching prelude method. `println (1, 2)` raises the goal
+-- `Display (Int, Int)`, which the prelude's tuple instance satisfies.
+-- `println (Red, 3)` raises `Display (Color, Int)`, whose tuple instance in
+-- turn requires `Display Color` -- and `data Color = Red` carries no
+-- `deriving Display` and has no `impl Display Color`. §3's matching set for
+-- `Display Color` is EMPTY. THE PROGRAM IS REJECTED, T-NO-IMPL, on check, run
+-- AND build, with the located help `add 'deriving Display' to the 'Color'
+-- type, or write an 'impl Display Color'.`
+--
+-- 🚨 THE TWO `println` GOALS ARE THE WHOLE FIXTURE, AND THEY MUST STAY TWO.
+-- The body below is the drained pin's `main.mdk` VERBATIM, and per that pin's
+-- own header both calls are `Display`-at-a-2-tuple occurrences, so their
+-- call-channel obligations share a dedup key and the collision dropped the
+-- first one's check. Deleting either line, or reshaping either tuple, breaks
+-- the collision and leaves an ordinary missing-instance program -- inert here.
+-- Five prelude-only lines is not minimalism for its own sake.
+--
+-- ⚠️ THE PIN'S `control.mdk` (the same two calls with `data Color = Red
+-- deriving (Display)`, correctly ACCEPTED) IS DELIBERATELY NOT CARRIED OVER.
+-- It is green at the pre-sprint arm AND at the fix, so it cannot regress-test
+-- this fix; it would be an over-rejection guard, which is a different job. If a
+-- future tightening of the dedup channel starts rejecting satisfiable
+-- collisions, that control is the row to add, and this note is where to find it
+-- (git history of test/must_fail_fixtures/1330-call-obligation-dedup-skips-
+-- check/control.mdk).
+--
+-- MEASURED AT THE PRE-SPRINT ARM `264eb95d` (this tree, cold-built): `check`
+-- exit 0 with an EMPTY `--json` diagnostics list, `build` exit 0, AND THE
+-- SHIPPED BINARY DIED AT SIGNAL 139 (SEGFAULT) with empty stdout -- a null dict
+-- reaching a call. Only `run` was loud (exit 1, E-PANIC `intToString: not an
+-- Int`), and `run` is the one verb that does not ship.
+--
+-- ⚠️ NO `impl` BLOCKS AT ALL, so Section 4 derives no permutation pair; the
+-- defect had no declaration-order face.
+data Color = Red
+
+main =
+  let _ = println (Red, 3)
+  println (1, 2)

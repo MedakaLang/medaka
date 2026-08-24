@@ -82,6 +82,35 @@
 # ###################################################################
 # # THE LEDGER -- rows pinned to a KNOWN divergence, newest first    #
 # ###################################################################
+# * s4-2-mixed-vector-no-impl-rejected / s4-2-inferred-ground-arg-predicate-
+#   checked / s4-2-dedup-collision-check-not-skipped / s3-ground-requires-chain-
+#   depth-34 -- FOUR S0s (#1578, #1905, #1330, #1576) FIXED by
+#   sprint/entailment-verdict, arriving here as REPLACEMENT GUARDS rather than as
+#   drains of an existing row. Recorded together because the reason they exist is
+#   one reason, and it is a process failure worth not repeating: that sprint
+#   deleted three self-draining `must_fail` pins per [G-PIN-DRAIN] and added
+#   NOTHING in their place, and the fourth (#1905) never had a pin at all. The
+#   whole sprint diff contained no fixture, no gate case and no doctest, so all
+#   12 CI checks were green at its head while the four S0s had zero regression
+#   coverage between them. A pin asserts a bug STILL REPRODUCES; a fix therefore
+#   DELETES it, and the guard leaves with it unless someone writes the positive
+#   row. These are those rows. Each was verified RED at the pre-sprint arm
+#   `264eb95d` (built by checking that commit's compiler/types/typecheck.mdk --
+#   the only compiler source file the sprint touched -- over this tree and cold-
+#   rebuilding) and GREEN at the sprint head; the per-row measurements are in the
+#   TABLE labels and in each fixture's own header.
+#   ⚠️ THREE OF THE FOUR PRE-SPRINT FAILURES WERE SILENT ON THE VERBS THAT SHIP:
+#   #1905 ran to completion in the built binary printing 222 with every verb at
+#   exit 0; #1330 and #1576 exited 0 from `check` AND `build` and SEGFAULTED at
+#   139 when the binary was executed. Only #1578 had a loud verb. This is why the
+#   §4.2 punch-list entry below insists a fixture family for that subsection has
+#   to assert REJECTION of specific shapes.
+#   ⚠️ NOT CARRIED, AND SAY SO RATHER THAN QUIETLY OMIT: the ACCEPT-direction
+#   controls that shipped inside the deleted pins (#1330's `Color` WITH a Display
+#   impl, #1576's 33-deep twin) are green at BOTH arms, so they cannot regress-
+#   test these fixes and are not regression rows. They would be over-rejection
+#   guards -- a different job, and a real gap. Their sources are in the git
+#   history of test/must_fail_fixtures/.
 # * 1386-alias-qualified-obligation-checked / 1276-alias-run-arm-obligation-
 #   checked / 1386-alias-reproB-standalone-collision-rejected -- #1386 and
 #   #1276 are FIXED (S-alias-supply, sprint/alias-provenance) and BOTH rows
@@ -318,26 +347,37 @@
 #     of a `=>` context the same way the block permuter reverses impls) or record
 #     why not. ⚠️ A permutation differential is only order-free along the axis it
 #     actually permutes -- do not read section 4's green as "order does not decide".
-#   * 🚨 §4.2 (OBLIGATION DEFERRAL, OD1-OD6) IS ENTIRELY UNCOVERED -- six normative
-#     clauses landed in this spec (#1114) and this gate did not move. That gap is
+#   * 🚨 §4.2 (OBLIGATION DEFERRAL, OD1-OD6) IS NO LONGER ENTIRELY UNCOVERED, BUT
+#     IT IS STILL MOSTLY UNCOVERED. Six normative clauses landed in this spec
+#     (#1114) and for a long time this gate did not move at all. That gap is
 #     STRUCTURAL, not an oversight of one PR: this file's self-audit fails for an
 #     unwired FIXTURE, never for an unfixtured CLAUSE, so a whole subsection can be
-#     added to DICT-SEMANTICS.md and nothing here goes red. Recorded as the honest
-#     minimum until fixtures exist.
-#     Two of the six are already known NOT to hold, so a fixture would be red today
-#     rather than green -- which is the point of writing them down:
-#       - OD5 is DIVERGENT on the constrained-binding channel: #1330 (OPEN, S0,
-#         verified) -- five prelude-only lines, `check` 0, `build` 0, binary
-#         SEGFAULTS, because a dedup key collision skips the CHECK and not merely
-#         the report.
-#       - OD6 has three measured residuals (#1330, #1326 and its `run`-only face);
-#         see the §11 OD6 row.
+#     added to DICT-SEMANTICS.md and nothing here goes red.
+#     WHAT EXISTS NOW -- three `s4-2-*` rows, added 2026-08-25 by
+#     FIX-3-regression-fixtures (sprint/entailment-verdict) as the replacement
+#     guards for three S0s whose `must_fail` pins that sprint DELETED per
+#     [G-PIN-DRAIN] without replacing them:
+#       - OD5/OD6 dedup: s4-2-dedup-collision-check-not-skipped.mdk (#1330, now
+#         FIXED). Deduplication may suppress the REPORT of a duplicate obligation,
+#         never the CHECK. Was: five prelude-only lines, `check` 0, `build` 0,
+#         binary SEGFAULTS at 139.
+#       - deferral of a MIXED argument vector:
+#         s4-2-mixed-vector-no-impl-rejected.mdk (#1578, now FIXED).
+#       - deferral of an inferred binding's GROUND predicate argument:
+#         s4-2-inferred-ground-arg-predicate-checked.mdk (#1905, now FIXED).
+#     WHAT IS STILL UNCOVERED: OD1-OD4 have no fixture of their own, and the three
+#     rows above grade the REJECT direction only -- each one's ACCEPT-direction
+#     control (the same shape WITH a satisfying impl) is green on both arms and so
+#     was deliberately not carried, which leaves an over-rejecting tightening of
+#     this channel ungraded here. OD6's other residual, #1326 and its `run`-only
+#     face, is untouched; see the §11 OD6 row.
 #     OD1's own history is the argument for covering this section rather than
 #     trusting it: its first implementation passed every gate in the tree while
 #     dropping a decidable predicate, because a DROPPED obligation produces SILENCE
 #     and silence is what a golden already records for an accepted program. A
 #     §4.2 fixture family therefore has to assert REJECTION of specific shapes; a
-#     corpus of accepted programs cannot see this class at all.
+#     corpus of accepted programs cannot see this class at all. That is exactly the
+#     form the three rows above take.
 #   * Section 4 tests exactly ONE reordering per qualifying fixture -- a full
 #     reversal of the qualifying blocks -- not all N! declaration orders. For
 #     N=2 that IS the only nontrivial permutation; for N=3 (the corpus's max
@@ -588,7 +628,11 @@ s-cardinality-inferred-swapped.mdk|S-cardinality-conformance (closes out #1871):
 s-cardinality-signatured.mdk|S-cardinality-conformance (closes out #1871): the SIGNATURED oracle for the inferred pair above -- #1869`s own `control.mdk`, RESTORED. Same impls, bodies and value (2442) as s-cardinality-inferred.mdk, with explicit `=>` signatures. Section 3 (IRS) pins that its slot count MATCHES the inferred twin`s, not merely its value|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|2442|
 s-cardinality-xmod-reject/main.mdk|S-cardinality-conformance (closes out #1871): the #1868 shape, RESTORED from the drained must_fail pin (S-xmod-vector-supply`s own fixture). The importer instantiates `Ix a Bool` at `Int`, but the definer`s ONLY impl is `Ix Int Char` -- no impl satisfies the goal, so `match(IE, Ix Int Bool)` is empty and the program must be REJECTED (was: silent exit 0, printing 222, pre-fix). Paired with s-cardinality-xmod-accept/ as the reject/accept half of the cross-module cardinality row|REJECT|REJECT|REJECT|NONE||T-NO-IMPL
 s-cardinality-xmod-accept/main.mdk|S-cardinality-conformance (closes out #1871): the ACCEPT half of the cross-module cardinality row, paired with s-cardinality-xmod-reject/. ONE exported bare-tyvar predicate `Ix a b`, ONE impl (no ambiguity), the importer supplying the vector `Int, Bool` across the module boundary. ⚠️ NOT a same-interface TWO-vector cross-module row (the #1866 shape) -- that shape is UNREACHABLE cross-module only when >= 2 IMPLS of an interface SHARE ARGUMENT 0 (the still-open #1867 residual, pinned at test/must_fail_fixtures/1867-xmod-run-build-still-reject/); NOT "any concrete-argument declared constraint" -- a single-impl cross-module constrained call accepts fine, called or uncalled (measured; see that fixture). Value 111; section 3 (IRS) pins the arity (1 dict + 2 values = 3 params) the widened cross-module vector table now recovers end to end|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|111|
-s-shadow-standalone-vector-arity.mdk|FIX-shadow-arity-skew REGRESSION GUARD (review finding F8): the #1866 shape reached through the STANDALONE-SHADOW route instead of the ordinary constrained-call route -- `size` collides with `Sizeable`s method name, so its dicts come from `shadowStandaloneDictSlots`, which expanded through the vector-FREE `expandSupersPairs` and collapsed `(Ix a Char, Ix a Bool)` back to ONE slot against a TWO-slot definition. 🚨 MEASURED at sprint head `e19298f5`: check exit 0, `run` exit 1 E-PANIC `intToString: not an Int`, `build` exit 0 printing a DIFFERENT heap pointer every execution, wasm `instantiate failed: illegal cast` -- three engines, three answers, and s-cardinality-same-iface2.mdk (the same program WITHOUT the shadow) green throughout. Spec answer hand-derived: `size 5` = 222 + 111 = 333, `plain 5` = 222. ⚠️ `plain` is the FEATURE-PRESENT-PLUS-UNRELATED-CODE-STILL-BEHAVES half -- a non-shadow single-predicate standalone beside the widened one, asserting the scalar arm did not move. Section 3 (IRS) carries the two ARITIES, which neither value can see|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|333\n222|'
+s-shadow-standalone-vector-arity.mdk|FIX-shadow-arity-skew REGRESSION GUARD (review finding F8): the #1866 shape reached through the STANDALONE-SHADOW route instead of the ordinary constrained-call route -- `size` collides with `Sizeable`s method name, so its dicts come from `shadowStandaloneDictSlots`, which expanded through the vector-FREE `expandSupersPairs` and collapsed `(Ix a Char, Ix a Bool)` back to ONE slot against a TWO-slot definition. 🚨 MEASURED at sprint head `e19298f5`: check exit 0, `run` exit 1 E-PANIC `intToString: not an Int`, `build` exit 0 printing a DIFFERENT heap pointer every execution, wasm `instantiate failed: illegal cast` -- three engines, three answers, and s-cardinality-same-iface2.mdk (the same program WITHOUT the shadow) green throughout. Spec answer hand-derived: `size 5` = 222 + 111 = 333, `plain 5` = 222. ⚠️ `plain` is the FEATURE-PRESENT-PLUS-UNRELATED-CODE-STILL-BEHAVES half -- a non-shadow single-predicate standalone beside the widened one, asserting the scalar arm did not move. Section 3 (IRS) carries the two ARITIES, which neither value can see|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|333\n222|
+s4-2-mixed-vector-no-impl-rejected.mdk|§3/§4.2 THE #1578 REGRESSION ROW (S0, fixed by sprint/entailment-verdict; its must_fail pin was DELETED by the fix per [G-PIN-DRAIN] and this row is the replacement guard). An inferred binding raises the goal `Conv (Wrap a) b` -- a MIXED argument vector, one STRUCTURED argument and one open tyvar -- against a program declaring only `impl Conv Int Bool`. §3 matching is ONE phi against the WHOLE vector and `Wrap a = Int` has no solution, so the matching set is EMPTY on argument 0 alone, and `main` forces the ground goal `Conv (Wrap Int) Bool`, which is equally unsatisfiable. REJECT, T-NO-IMPL, on all three verbs. MEASURED at the pre-sprint arm `264eb95d` on this tree: check 0 with an EMPTY --json diagnostics list, run 0 PRINTING `int-bool` (the body of an impl the goal matches on NEITHER argument), build 1 at the emitter -- silent wrongness on two of three verbs. ⚠️ VERDICT AND CODE ONLY, NO LOCATION, deliberately: on this binary the reject lands at the DEFINITION, which is the site #1939 (OPEN, this sprint`s own regression) falsely rejects a LEGAL binding at, and a located pin would enshrine that. #1939`s fix may move the reject to the call site; it must not be able to green this program. ⚠️ ONE impl block, so Section 4 derives no permutation pair -- correct, the defect was ACCEPTANCE, not order|REJECT|REJECT|REJECT|NONE||T-NO-IMPL
+s4-2-inferred-ground-arg-predicate-checked.mdk|§4 `gen` + §4.2 THE #1905 REGRESSION ROW (S0, fixed by sprint/entailment-verdict; NO must_fail pin ever existed for it, so before this row the S0 had no guard anywhere in the tree). The inferred `useIx x = ix x <Char literal>` generalises over the residual predicate `Ix a Char` whose SECOND argument is GROUND, forced by that literal; `main` instantiates at `a := Char`, giving the goal `Ix Char Char`, and the program declares only `impl Ix Int Char`, so §3 matching set is EMPTY. REJECT, T-NO-IMPL, `No impl of Ix for Char Char`, on all three verbs. MEASURED at the pre-sprint arm `264eb95d` on this tree: check 0, run 0, build 0 AND THE SHIPPED BINARY RAN TO COMPLETION PRINTING 222 -- every verb green, every verb wrong, because the ground `Char` was dropped on the way into the deferred obligation and a one-argument goal matched a two-argument impl. ⚠️ ALL_EXACT is unavailable to a REJECT row, so the CODE cell is what separates rejected-for-the-spec-reason from rejected-because-the-fixture-has-a-typo. ⚠️ ONE impl block, so Section 4 derives no permutation pair|REJECT|REJECT|REJECT|NONE||T-NO-IMPL
+s4-2-dedup-collision-check-not-skipped.mdk|§4.2 OD5/OD6 THE #1330 REGRESSION ROW, AND THE FIRST §4.2 FIXTURE THIS CORPUS HAS EVER HAD (S0, fixed by sprint/entailment-verdict; its must_fail pin was DELETED by the fix per [G-PIN-DRAIN] and this row is the replacement guard). Deduplicating two call obligations must suppress the REPORT of a duplicate, never the CHECK. Body is the drained pin`s main.mdk VERBATIM: two `println` calls of a 2-tuple both dispatch `Display` at the same tuple head, so their call-channel obligations share a dedup key, and `data Color = Red` has no Display impl. Spec answer: the `Display Color` matching set is EMPTY, so REJECT, T-NO-IMPL, with the located deriving-Display help. MEASURED at the pre-sprint arm `264eb95d` on this tree: check 0 with an EMPTY --json diagnostics list, build 0, AND THE SHIPPED BINARY DIED AT SIGNAL 139 with empty stdout; only `run` was loud (exit 1, E-PANIC `intToString: not an Int`), and `run` is the verb that does not ship. ⚠️ BOTH `println` LINES ARE LOAD-BEARING -- delete either, or reshape either tuple, and the collision is gone and the file is an ordinary missing-instance program the pre-sprint arm ALSO rejected. ⚠️ NO impl blocks, so Section 4 derives no permutation pair. The pin`s ACCEPT-direction control.mdk is deliberately not carried (green at both arms, so not a regression test); the fixture header says where to find it|REJECT|REJECT|REJECT|NONE||T-NO-IMPL
+s3-ground-requires-chain-depth-34.mdk|§3 nested `requires` + W1/W2 decidability -- THE #1576 REGRESSION ROW (S0, fixed by sprint/entailment-verdict; its must_fail pin was DELETED by the fix per [G-PIN-DRAIN] and this row is the replacement guard). A GROUND instance-context chain must be discharged to its base case however long it is. `tagOf` at 34 nested `Wrap`s around `5 : Int` selects `impl Tag (Wrap a)` at each layer, discharges `requires Tag a` against the layer below, and bottoms out at `impl Tag Int`: the spec answer, hand-derived, is the sentinel `ALIVE` then 34 `w`s and `int`, ACCEPT on all three verbs with run`s stdout, the SHIPPED BINARY`s stdout and the pinned value byte-identical. MEASURED at the pre-sprint arm `264eb95d` on this tree: check 0 with an EMPTY --json diagnostics list, build 0, and the SHIPPED BINARY printed `ALIVE` then DIED AT SIGNAL 139; `run` reached the same point loudly with a nonsense diagnosis (E-PANIC naming `++ requires Semigroup`, an operator this goal never mentions). 🚨 34 IS LOAD-BEARING: per the drained pin`s claim.txt the cliff sat between 33 and 34 on two arms, so any depth <= 33 grades green on a compiler that still has this bug. ⚠️ THE ROW DOES NOT PROVE THE CLIFF WAS REMOVED RATHER THAN MOVED -- measured first-hand at depth 100 on this base binary (correct, exit 0), but no committed fixture grades above 34. ⚠️ TWO `impl Tag` blocks of one interface in a FLAT .mdk, so Section 4 DOES derive a permutation pair -- deliberately: reversing them puts the recursive impl first and the base case last|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|ALIVE\nwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwint|'
 
 # ── Section 2 table: exact `medaka check` scheme lines ────────────────────────
 # entry | label | expected scheme line (must appear VERBATIM in check's stdout)
