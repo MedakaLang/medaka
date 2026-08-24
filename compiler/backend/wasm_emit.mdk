@@ -68,7 +68,7 @@
 --   * §3.3 String rep: `(type $str (sub (struct $cp_count i32 $bytes (ref $u8arr))))`
 --     + `(type $u8arr (array (mut i8)))` — UTF-8 bytes + cached codepoint count, so
 --     stringLength is O(1) (mirrors the locked native rep, RUNTIME-DESIGN §7 dec 2).
---     Emitted into the rec group only when the program uses strings (`useStrRef`).
+--     Emitted into the rec group only when the program uses strings (`useStr`).
 --   * String literals (`CLit (LString _)`): bytes in a passive data segment, built at
 --     run time by `array.new_data` (the §11-preferred non-const-array init); cp_count
 --     computed at emit time (UTF-8 codec, peer to llvm_emit.strBytes/utf8Bytes).
@@ -129,7 +129,7 @@
 --     byte-identical across clang and wasm-tools).  pi/e likewise.
 --   * Float ARITHMETIC / COMPARISON — recovered STRUCTURALLY (Core IR is type-erased)
 --     via `cexprIsFloat`: a Float lit / pi/e / Float-returning extern / Float binop /
---     a Float-impl param (the impl tag drives `floatLocalsRef`).  Unbox→f64 op→rebox
+--     a Float-impl param (the impl tag drives `floatLocals`).  Unbox→f64 op→rebox
 --     (arith) or →i31 Bool (compare).  Unary `-` → f64.neg.
 --   * Float EXTERNS — intToFloat/floatToInt/hashFloat/randomFloat are pure WAT (the
 --     boxed-Float conversions; hashFloat = reinterpret+mix64; randomFloat = SplitMix64
@@ -321,41 +321,73 @@ data WTrmcCtx =
   | WTrmcOff
   | WTrmcOn SelfRef Int (List String) (List (String, Int)) Bool String String
 
-data WasmEmit =
-  | WasmEmit {
-      gapMode : WGapMode,
-      gapLog : Ref (List String),
-      curGapBind : Ref String,
-      currentBinding : Ref String,
-      stringSegments : Ref (List (Int, List Int)),
-      nextStringSegmentId : Ref Int,
-      implSelfCtx : Ref ImplSelfCtx,
-      trmcCtx : Ref WTrmcCtx,
-      nextLambdaId : Ref Int,
-      liftedDefinitions : Ref (List (List String)),
-      liftedDefinitionNames : Ref (OrdMap Unit),
-      functionReferences : Ref (List String),
-      functionReferenceNames : Ref (OrdMap Unit),
-      trapImportNeeded : Ref Bool,
-      trapIntNeeded : Ref Bool,
-      useEPut : Ref Bool,
-      useDivGuard : Ref Bool,
-      useRecUpdate : Ref Bool,
-      useRng : Ref Bool,
-      useHash : Ref Bool,
-      useFloatHash : Ref Bool,
-      useFloatStr : Ref Bool,
-      useFloatRng : Ref Bool,
-      useArgs : Ref Bool,
-      useFileBytes : Ref Bool,
-      useStrCodec : Ref Bool,
-      useValueCmp : Ref Bool,
-      useMath : Ref Bool,
-      useCharFromCode : Ref Bool,
-      useCharClass : Ref Bool,
-      emittedDefaultNames : Ref (OrdMap Unit),
-      defaultDefinitions : Ref (List (List String)),
-    }
+-- the active dispatch-group context during a group member's body emit.  `WDispOn root
+-- loopLbl rootArity members` ⇒ redirect SPINE cons leaves (a peeled cons chain
+-- bottoming in a saturated call to a group member) to the dest-passing emit +
+-- `return_call` (the root's inner loop for the root, the member fn itself otherwise),
+-- and base leaves to the dest-close.  WDispOff ⇒ ordinary emit.  Owned by a fresh
+-- WasmEmit (peer of WTrmcCtx) so one emission's group authority cannot reach another.
+data WDispCtx = WDispOff | WDispOn String String Int (List String)
+
+data WasmEmit = WasmEmit {
+    gapMode : WGapMode,
+    gapLog : Ref (List String),
+    curGapBind : Ref String,
+    currentBinding : Ref String,
+    stringSegments : Ref (List (Int, List Int)),
+    nextStringSegmentId : Ref Int,
+    implSelfCtx : Ref ImplSelfCtx,
+    trmcCtx : Ref WTrmcCtx,
+    nextLambdaId : Ref Int,
+    liftedDefinitions : Ref (List (List String)),
+    liftedDefinitionNames : Ref (OrdMap Unit),
+    functionReferences : Ref (List String),
+    functionReferenceNames : Ref (OrdMap Unit),
+    trapImportNeeded : Ref Bool,
+    trapIntNeeded : Ref Bool,
+    useEPut : Ref Bool,
+    useDivGuard : Ref Bool,
+    useRecUpdate : Ref Bool,
+    useRng : Ref Bool,
+    useHash : Ref Bool,
+    useFloatHash : Ref Bool,
+    useFloatStr : Ref Bool,
+    useFloatRng : Ref Bool,
+    useArgs : Ref Bool,
+    useFileBytes : Ref Bool,
+    useStrCodec : Ref Bool,
+    useValueCmp : Ref Bool,
+    useMath : Ref Bool,
+    useCharFromCode : Ref Bool,
+    useCharClass : Ref Bool,
+    emittedDefaultNames : Ref (OrdMap Unit),
+    defaultDefinitions : Ref (List (List String)),
+    -- ── lifted from module-level ambient cells (X-W.H) ─────────────────────
+    -- PROGRAM-lifetime: the representation / runtime demand this emission's
+    -- pre-scan (scanProgW7 / scanImplsW7 / noteW8*) observed, plus the tuple
+    -- arities and the statically-Float top-level globals it seeded.  Each is
+    -- written during the scan and read by the type / import / runtime sections.
+    useStr : Ref Bool,
+    useList : Ref Bool,
+    useArray : Ref Bool,
+    useRefBox : Ref Bool,
+    useStrLeaf : Ref Bool,
+    useFloat : Ref Bool,
+    useStrSearch : Ref Bool,
+    useValueArith : Ref Bool,
+    useIO : Ref Bool,
+    tupleArities : Ref (List Int),
+    floatGlobals : Ref (List String),
+    wDispGroups : Ref (List DispGroup),
+    -- FUNCTION-lifetime dynamic contexts, seeded and restored around each body
+    -- (emitRefFnBind, emitImplGroup, emitLamDefine, seedArmNumEnv/…).  They live
+    -- here for the same reason implSelfCtx / trmcCtx do: a fresh WasmEmit bounds
+    -- them to ONE emission, while the existing save/restore discipline keeps
+    -- their narrower per-body scope.
+    floatLocals : Ref (List String),
+    numPolyLocals : Ref (List String),
+    wDispCtx : Ref WDispCtx,
+  }
 
 freshWasmEmit : WGapMode -> WasmEmit
 freshWasmEmit mode = WasmEmit {
@@ -391,6 +423,21 @@ freshWasmEmit mode = WasmEmit {
   useCharClass = Ref False,
   emittedDefaultNames = Ref omEmpty,
   defaultDefinitions = Ref [],
+  useStr = Ref False,
+  useList = Ref False,
+  useArray = Ref False,
+  useRefBox = Ref False,
+  useStrLeaf = Ref False,
+  useFloat = Ref False,
+  useStrSearch = Ref False,
+  useValueArith = Ref False,
+  useIO = Ref False,
+  tupleArities = Ref [],
+  floatGlobals = Ref [],
+  wDispGroups = Ref [],
+  floatLocals = Ref [],
+  numPolyLocals = Ref [],
+  wDispCtx = Ref WDispOff,
 }
 
 -- Declaration-derived semantic input. Raw lists retain table order where a full
@@ -763,7 +810,7 @@ canonFn prog n =
 -- companion lists retain insertion order for their module-end drains.
 
 -- ── W6 string state ──────────────────────────────────────────────────────────
--- `useStrRef` records whether the program uses any String/Char literal, the
+-- `useStr` records whether the program uses any String/Char literal, the
 -- byte-level IO externs (putStr/putStrLn/…), or a String-returning extern
 -- (intToString/charToStr/stringConcat/…) — any of which forces the §3.3 `$str`
 -- aggregate + the byte-write runtime into the module (and ref-mode, since a String
@@ -773,10 +820,7 @@ canonFn prog n =
 -- so the SAME literal appearing twice in source gets two segments; "per distinct
 -- literal" was aspirational, not what `freshStrSeg`/`emitLitRef emit (LString s)`
 -- actually do — init'd via `array.new_data`, the §11-preferred non-const-array
--- scheme). Segment state belongs to each fresh `WasmEmit`; `useStrRef` remains ambient.
-useStrRef : Ref Bool
-useStrRef = Ref False
-
+-- scheme). Segment state belongs to each fresh `WasmEmit`; `useStr` remains ambient.
 -- ── gap census (mirrors LLVM's per-emission gap recording) ───────────────────
 -- The WasmGC emitter normally `panic`s at the first node it can't lower (`gap`).
 -- In CENSUS mode the gap helpers instead RECORD the reason and return a
@@ -883,23 +927,14 @@ gapL3P prog reason = gapL3 (progEmit prog) reason
 
 -- ── W7 collection state ──────────────────────────────────────────────────────
 -- Which collection reps the program actually uses (gates their type-section decls,
--- peer to `useStrRef`).  `useListRef`: any CList/CRangeList or a HCons/HNil match
--- head → the cons-cell `$C_Cons` + root `$T_List` (Nil is an i31).  `useArrayRef`:
+-- peer to `useStr`).  `useList`: any CList/CRangeList or a HCons/HNil match
+-- head → the cons-cell `$C_Cons` + root `$T_List` (Nil is an i31).  `useArray`:
 -- any CArray/CRangeArray/CIndex/CSlice → the `$arr` (array (mut (ref eq))) type.
--- `useRefBoxRef`: any Ref/setRef/.value → the `$refbox` 1-field mutable struct.
--- `tupleAritiesRef`: the distinct tuple arities present (CTuple / HTuple) → one
+-- `useRefBox`: any Ref/setRef/.value → the `$refbox` 1-field mutable struct.
+-- `tupleArities`: the distinct tuple arities present (CTuple / HTuple) → one
 -- per-arity struct `$C_TupN`.  Records reuse the EXISTING per-ctor struct ($C_<ctor>,
 -- already declared by the W3 ctor type section since a named-field ctor is in the
 -- ctor table) — they need no new type, only the field-order table below.
-useListRef : Ref Bool
-useListRef = Ref False
-
-useArrayRef : Ref Bool
-useArrayRef = Ref False
-
-useRefBoxRef : Ref Bool
-useRefBoxRef = Ref False
-
 -- `WasmEmit.useRecUpdate`: does this emission contain a
 -- `CRecordUpdate`/`CVariantUpdate`?
 -- Gates the `$__rub<d>` scratch local that `emitUpdateCopy` stashes the update base
@@ -926,13 +961,10 @@ useRefBoxRef = Ref False
 -- declaration is not a layout question.
 -- ── W8 extern-use state ──────────────────────────────────────────────────────
 -- Which W8 LEAF runtime groups the program reaches (gates their preamble
--- emission, peer to useStrRef).  useStrLeafRef: any pure-WAT string leaf op
+-- emission, peer to useStr).  useStrLeaf: any pure-WAT string leaf op
 -- (++/charToStr/stringConcat/stringSlice/toUpper/toLower) → the strLeafRuntime.
 -- The per-emission RNG/hash observations live in WasmEmit; `WasmEmit.useEPut` gates the
 -- stderr import + runtime.
-useStrLeafRef : Ref Bool
-useStrLeafRef = Ref False
-
 -- B5 (RUNTIME-TRAP-UNIFY §3 (5)): per-emission event set while a coded runtime trap
 -- writes stderr bytes. Body emission precedes late scalar/ref import bindings, so strict
 -- lets expose this physical fact without ambient authority.
@@ -944,31 +976,22 @@ isLazyGlobalW prog x = omHasKey x (indexLazyGlobalsW (progIndex prog))
 -- Forces ref-mode (a Float is a boxed (ref eq) $float struct) + gates the Float runtime
 -- (floatRuntimeLines + the floatToString host import).  WasmEmit.useFloatHash / useFloatRng
 -- gate the hashFloat / randomFloat runtimes (which need the shared mix64 / next_u64).
-useFloatRef : Ref Bool
-useFloatRef = Ref False
-
 -- WasmEmit.useFloatStr records per-emission stringToFloat host-seam demand. It takes
 -- a $str, pushes its bytes via the IO path channel (mdk_path_reset/mdk_path_push), and
 -- calls mdk_str_to_float to parse the f64 JS-side. Its scalar Float/String/IO
 -- prerequisites remain on their existing carriers.
 
 -- W8b: the program uses stringIndexOf / stringCompare (the strSearchRuntime).
-useStrSearchRef : Ref Bool
-useStrSearchRef = Ref False
-
 -- WasmEmit.useValueCmp records layer-9 per-emission demand from a ref-mode
 -- `==`/`/=`/ordering binop in a string-using program for the runtime-shape-dispatched
 -- $mdk_value_eq / $mdk_value_cmp
 -- (Core IR is type-erased, so a String `==` cannot be told from an Int `==` statically;
 -- the old i31-only lowering trapped `illegal cast` on a String operand).  Its producer
--- also forces useStrSearchRef so $mdk_str_compare (the byte comparator) is in scope.
+-- also forces useStrSearch so $mdk_str_compare (the byte comparator) is in scope.
 
 -- A0/A1 (poly-`Num`-on-Float): the program routes an arithmetic binop through the
 -- runtime value-tag-dispatched $mdk_value_add/sub/mul/div/mod helpers (a polymorphic
--- `Num a` operand — see numPolyLocalsRef).  Gates valueArithRuntimeLines.
-useValueArithRef : Ref Bool
-useValueArithRef = Ref False
-
+-- `Num a` operand — see numPolyLocals).  Gates valueArithRuntimeLines.
 -- A1 (poly-`Num`-on-Float): the pattern-var names bound at the CURRENT function's
 -- POLYMORPHIC `Num`/`Ord` param positions — a param whose declared type head is a type
 -- VARIABLE (lowercase-initial) used arithmetically, OR (no declared sig) any param used
@@ -976,22 +999,13 @@ useValueArithRef = Ref False
 -- such an operand routes to the runtime value-dispatch helper instead of the trapping
 -- inline int primitive; the static Int/Float fast paths (declared `Int`/`Float`, literals,
 -- structural Float) are unchanged.  Seeded (and reset to []) per fn in emitRefFnBind.
-numPolyLocalsRef : Ref (List String)
-numPolyLocalsRef = Ref []
-
 -- W12: the program uses any IO host-surface extern (readFile / fileExists / args /
 -- getEnv / exit).  Gates the IO host imports + the byte-channel marshaling runtime.
--- All of these touch a $str (path/result), so they also force useStrRef.
-useIORef : Ref Bool
-useIORef = Ref False
-
+-- All of these touch a $str (path/result), so they also force useStr.
 -- W8b: the names KNOWN to hold a Float in the CURRENT function/impl body — set while
 -- emitting an `impl Num Float` (etc.) method, whose params are Float but appear as bare
 -- CVars the structural detector can't otherwise see.  `cexprIsFloat` consults this so
 -- `add a b = a + b` lowers to f64 ops.  Reset to [] before every non-Float-impl body.
-floatLocalsRef : Ref (List String)
-floatLocalsRef = Ref []
-
 -- #288: top-level nullary value bindings whose RHS is statically Float (e.g.
 -- `nan = 0.0 / 0.0`).  A `global.get` of such a binding carries no static Float
 -- tag at the USE site, so a `nan <= nan` comparison would fall to the poly
@@ -1002,9 +1016,6 @@ floatLocalsRef = Ref []
 -- (#305: the poly path is IEEE-correct at NaN too now — ordering there calls the
 -- per-op $mdk_value_lt/le/gt/ge rather than comparing a 3-way against 0 — so this
 -- seeding is a code-quality win (inline f64, no call), no longer a correctness fix.)
-floatGlobalsRef : Ref (List String)
-floatGlobalsRef = Ref []
-
 -- convert one ctorFieldTypeNames entry to (ctorName, [floatFieldIndex, …]).
 ctorToFloatIdxs : (String, List String) -> (String, List Int)
 ctorToFloatIdxs (ctor, typeNames) = (ctor, floatFieldIndices typeNames 0)
@@ -1023,15 +1034,12 @@ isFloatCtorField prog ctor idx = match progInput prog
     None => False
 
 -- the distinct tuple arities used anywhere in the program (construction or match).
-tupleAritiesRef : Ref (List Int)
-tupleAritiesRef = Ref []
-
-noteTupleArity : Int -> Unit
-noteTupleArity n =
-  if containsInt n !tupleAritiesRef then
+noteTupleArity : WasmEmit -> Int -> Unit
+noteTupleArity emit n =
+  if containsInt n !emit.tupleArities then
     ()
   else
-    setRef tupleAritiesRef (n :: !tupleAritiesRef)
+    setRef emit.tupleArities (n :: !emit.tupleArities)
 
 containsInt : Int -> List Int -> Bool
 containsInt _ [] = False
@@ -1107,25 +1115,17 @@ emitProgramRecord input cp =
 
 emitProgramWith : WasmEmit -> WasmEmitInput -> CProgram -> String
 emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
-  let _ = setRef useStrRef (programUsesStr groups)
+  let _ = setRef emit.useStr (programUsesStr groups)
   -- W7: scan the program for collection usage (gates type-section decls + forces
-  -- ref-mode — every collection is a boxed (ref eq) value).
-  let _ = setRef useListRef False
-  let _ = setRef useArrayRef False
-  let _ = setRef useRefBoxRef False
-  let _ = setRef useStrLeafRef False
-  let _ = setRef useFloatRef False
-  let _ = setRef useStrSearchRef False
-  let _ = setRef useValueArithRef False
-  let _ = setRef numPolyLocalsRef []
-  let _ = setRef useIORef False
-  let _ = setRef tupleAritiesRef []
+  -- ref-mode — every collection is a boxed (ref eq) value).  The scan only ever
+  -- turns demand ON; `emit` is born with every cell off (freshWasmEmit), so the
+  -- ambient-cell era's explicit per-emission reset block is gone with the cells.
   let _ = scanProgW7 emit groups
   let _ = scanImplsW7 emit impls
   -- W8b: any Float program needs the $str rep — a Float value-main auto-prints through
-  -- floatToString (a $str), and $mdk_float_to_str builds a $str.  Force useStrRef so the
+  -- floatToString (a $str), and $mdk_float_to_str builds a $str.  Force useStr so the
   -- $str type + the $str print runtime emit.
-  let _ = if !useFloatRef then setRef useStrRef True else ()
+  let _ = if !emit.useFloat then setRef emit.useStr True else ()
   let fnNames = collectFnNames groups
   let valNames = collectValNames groups
   let fnArs = collectFnArities input groups
@@ -1136,10 +1136,10 @@ emitProgramWith emit input (CProgram groups ctorArs ctorTypes impls) =
   -- (ref eq) impl args + i31 dict witnesses, the W5 §8.6 uniform rep.  Strings
   -- (W6) also force ref-mode: a String is a boxed (ref eq) $str struct.  W8 RNG /
   -- hash externs produce/consume (ref eq) i31 values, so they force ref-mode too.
-  let useRef = useClos || programUsesAdt groups ctorArs || isNonEmptyList impls || !useStrRef
-    || !useListRef || !useArrayRef || !useRefBoxRef || isNonEmptyList !tupleAritiesRef
-    || !emit.useRng || !emit.useHash || !useFloatRef || !useStrSearchRef
-    || !emit.useCharClass || !useIORef
+  let useRef = useClos || programUsesAdt groups ctorArs || isNonEmptyList impls || !emit.useStr
+    || !emit.useList || !emit.useArray || !emit.useRefBox || isNonEmptyList !emit.tupleArities
+    || !emit.useRng || !emit.useHash || !emit.useFloat || !emit.useStrSearch
+    || !emit.useCharClass || !emit.useIO
   let typeNames = distinctTypeNames ctorTypes
   let prog = Prog index typeNames valNames useClos impls input emit
   if useRef then emitRefProgram prog groups
@@ -1157,20 +1157,10 @@ export
 emitProgramGaps : WasmEmitInput -> CProgram -> List String
 emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let emit = freshWasmEmit WGapRecord
-  let _ = setRef useStrRef (programUsesStr groups)
-  let _ = setRef useListRef False
-  let _ = setRef useArrayRef False
-  let _ = setRef useRefBoxRef False
-  let _ = setRef useStrLeafRef False
-  let _ = setRef useFloatRef False
-  let _ = setRef useStrSearchRef False
-  let _ = setRef useValueArithRef False
-  let _ = setRef numPolyLocalsRef []
-  let _ = setRef useIORef False
-  let _ = setRef tupleAritiesRef []
+  let _ = setRef emit.useStr (programUsesStr groups)
   let _ = scanProgW7 emit groups
   let _ = scanImplsW7 emit impls
-  let _ = if !useFloatRef then setRef useStrRef True else ()
+  let _ = if !emit.useFloat then setRef emit.useStr True else ()
   let fnNames = collectFnNames groups
   let valNames = collectValNames groups
   let fnArs = collectFnArities input groups
@@ -1370,7 +1360,7 @@ isMathHostExternW name = contains
   ]
 
 -- #101: the libm math externs that produce/consume a boxed $float (all of them except
--- the pure-int bitwise ops).  Force useFloatRef so ref-mode + floatRuntimeLines are on.
+-- the pure-int bitwise ops).  Force useFloat so ref-mode + floatRuntimeLines are on.
 isFloatMathExternW : String -> Bool
 isFloatMathExternW name = isMathHostExternW name
   || contains name ["sqrt", "floor", "ceil", "trunc", "round", "floatRem", "intBitsToFloat"]
@@ -1550,7 +1540,7 @@ headUsesStr (CVar fn _) = isStrExternW fn
 headUsesStr h = exprUsesStr h
 
 -- ── W7: scan the program for collection usage (sets the type-section gating refs) ──
--- Sets useListRef/useArrayRef/useRefBoxRef and records every tuple arity seen, from
+-- Sets useList/useArray/useRefBox and records every tuple arity seen, from
 -- BOTH constructions (CList/CTuple/CArray/CRangeArray/CIndex/CSlice/CRangeList, Ref/
 -- setRef) AND match heads (HCons/HNil → list, HTuple n → tuple).  Mirrors how
 -- programUsesStr scans, but mutates the refs as it walks (peer to noteTupleArity).
@@ -1587,15 +1577,14 @@ scanClauseW7 emit (CClause pats body) =
 
 scanExprW7 : WasmEmit -> CExpr -> Unit
 scanExprW7 emit (CList es) =
-  let _ = setRef useListRef True in forEachU (e => scanExprW7 emit e) es
-scanExprW7 emit (CRangeList lo hi _) = let _ = setRef useListRef True in let _ = scanExprW7 emit lo in scanExprW7 emit hi
-scanExprW7 emit (CTuple es) =
-  let _ = noteTupleArity (listLen es) in forEachU (e => scanExprW7 emit e) es
+  let _ = setRef emit.useList True in forEachU (e => scanExprW7 emit e) es
+scanExprW7 emit (CRangeList lo hi _) = let _ = setRef emit.useList True in let _ = scanExprW7 emit lo in scanExprW7 emit hi
+scanExprW7 emit (CTuple es) = let _ = noteTupleArity emit (listLen es) in forEachU (e => scanExprW7 emit e) es
 scanExprW7 emit (CArray es) =
-  let _ = setRef useArrayRef True in forEachU (e => scanExprW7 emit e) es
-scanExprW7 emit (CRangeArray lo hi _) = let _ = setRef useArrayRef True in let _ = scanExprW7 emit lo in scanExprW7 emit hi
-scanExprW7 emit (CIndex a i) = let _ = setRef useArrayRef True in let _ = scanExprW7 emit a in scanExprW7 emit i
-scanExprW7 emit (CSlice a lo hi _) = let _ = setRef useArrayRef True in let _ = scanExprW7 emit a in let _ = scanExprW7 emit lo in scanExprW7 emit hi
+  let _ = setRef emit.useArray True in forEachU (e => scanExprW7 emit e) es
+scanExprW7 emit (CRangeArray lo hi _) = let _ = setRef emit.useArray True in let _ = scanExprW7 emit lo in scanExprW7 emit hi
+scanExprW7 emit (CIndex a i) = let _ = setRef emit.useArray True in let _ = scanExprW7 emit a in scanExprW7 emit i
+scanExprW7 emit (CSlice a lo hi _) = let _ = setRef emit.useArray True in let _ = scanExprW7 emit a in let _ = scanExprW7 emit lo in scanExprW7 emit hi
 scanExprW7 emit (CRecord _ fields) =
   forEachU (f => scanExprW7 emit (cFieldExpr f)) fields
 scanExprW7 emit (CFieldAccess ex _ _) = scanExprW7 emit ex
@@ -1611,14 +1600,14 @@ scanExprW7 emit (CApp f a) =
   forEachU (arg => scanExprW7 emit arg) args
 scanExprW7 emit (CVar x _) =
   if x == "Ref" then
-    setRef useRefBoxRef True
+    setRef emit.useRefBox True
   else
     noteW8Extern emit x
 -- W8b: a Float literal forces the Float rep + runtime.  (Bare `pi`/`e` are NOT keyed
 -- here — scanExprW7 doesn't track binders, so a LOCAL named `e`/`pi`, e.g. `Err e`,
--- would false-positive; useFloatRef is instead forced by a Float literal, a Float
+-- would false-positive; useFloat is instead forced by a Float literal, a Float
 -- extern, OR a Float-kinded main, post-scan in emitProgram.)
-scanExprW7 _ (CLit (LFloat _)) = setRef useFloatRef True
+scanExprW7 emit (CLit (LFloat _)) = setRef emit.useFloat True
 scanExprW7 emit (CLam _ b) = scanExprW7 emit b
 scanExprW7 emit (CBinPrim op l r _) =
   let _ = noteW8Binop emit op in let _ = scanExprW7 emit l in scanExprW7 emit r
@@ -1639,64 +1628,64 @@ scanExprW7 emit (CLetGroup binds b) =
 scanExprW7 _ _ = ()
 
 scanW7Head : WasmEmit -> CExpr -> Unit
-scanW7Head _ (CVar "Ref" _) = setRef useRefBoxRef True
-scanW7Head _ (CVar "setRef" _) = setRef useRefBoxRef True
+scanW7Head emit (CVar "Ref" _) = setRef emit.useRefBox True
+scanW7Head emit (CVar "setRef" _) = setRef emit.useRefBox True
 scanW7Head emit (CVar f _) = noteW8Extern emit f
 scanW7Head emit h = scanExprW7 emit h
 
 -- ── W8: note which W8 LEAF/RNG/hash runtime groups an extern occurrence reaches ──
--- Sets useStrLeafRef (the pure-WAT string ops needing strLeafRuntime), per-emission
+-- Sets useStrLeaf (the pure-WAT string ops needing strLeafRuntime), per-emission
 -- RNG/hash/ePut observations.  Piggybacks on the W7 walk.
 noteW8Extern : WasmEmit -> String -> Unit
 noteW8Extern emit name =
   let _ = if contains name ["charToStr", "stringConcat", "stringSlice", "stringToUpper", "stringToLower"]
-          then setRef useStrLeafRef True else ()
+          then setRef emit.useStrLeaf True else ()
   let _ = if isLeafExternW name && contains name ["randomInt", "randomBool", "randomChar", "setSeed"]
           then setRef emit.useRng True else ()
   -- a Char main from randomChar is auto-printed by encoding the codepoint to a $str
   -- ($mdk_char_to_str → $mdk_print_strln), so randomChar needs the $str rep + the
   -- char-encode strLeaf runtime.
-  let _ = if name == "randomChar" then let _ = setRef useStrRef True in setRef useStrLeafRef True else ()
+  let _ = if name == "randomChar" then let _ = setRef emit.useStr True in setRef emit.useStrLeaf True else ()
   let _ = if contains name ["hashInt", "hashChar", "hashBool", "hashString"]
           then setRef emit.useHash True else ()
   -- W8b: Float externs force the Float runtime (+ ref-mode + $str for floatToString).
   let _ = if contains name ["floatToString", "intToFloat", "floatToInt", "hashFloat", "randomFloat"]
-          then setRef useFloatRef True else ()
+          then setRef emit.useFloat True else ()
   -- #101: libm math externs that produce/consume a boxed $float force the Float runtime
   -- (ref-mode + floatRuntimeLines carries $mdk_round; $mdk_float_rem is floatRemRuntimeLines).
-  let _ = if isFloatMathExternW name then setRef useFloatRef True else ()
+  let _ = if isFloatMathExternW name then setRef emit.useFloat True else ()
   -- #101: the transcendental / binary math externs lower to JS Math.* host imports —
   -- force emit.useMath so mathHostImportLines is declared.
   let _ = if isMathHostExternW name then setRef emit.useMath True else ()
   -- floatToString needs the $str rep to build its result string.
-  let _ = if name == "floatToString" then setRef useStrRef True else ()
+  let _ = if name == "floatToString" then setRef emit.useStr True else ()
   -- layer-6: stringToFloat : String -> Option Float.  Pushes bytes via the IO path
   -- channel then calls mdk_str_to_float (host strtod acceptance set, #370).  Forces floatStr, float, str,
   -- and IO (for mdk_path_reset/mdk_path_push).  The $C_Some ctor is in ref-type-section
-  -- which is always present when useStrRef/useFloatRef forces ref-mode.
+  -- which is always present when useStr/useFloat forces ref-mode.
   let _ = if name == "stringToFloat"
-          then let _ = setRef emit.useFloatStr True in let _ = setRef useFloatRef True in let _ = setRef useStrRef True in setRef useIORef True
+          then let _ = setRef emit.useFloatStr True in let _ = setRef emit.useFloat True in let _ = setRef emit.useStr True in setRef emit.useIO True
           else ()
   -- hashFloat needs the shared mix64 (hashRuntime); randomFloat needs next_u64 (rngRuntime).
   let _ = if name == "hashFloat" then let _ = setRef emit.useFloatHash True in setRef emit.useHash True else ()
   let _ = if name == "randomFloat" then let _ = setRef emit.useFloatRng True in setRef emit.useRng True else ()
   -- W8b: stringIndexOf/stringCompare use the strSearch runtime + cp_count (strLeaf) + $str.
   let _ = if contains name ["stringIndexOf", "stringCompare"]
-          then let _ = setRef useStrSearchRef True in let _ = setRef useStrRef True in setRef useStrLeafRef True else ()
+          then let _ = setRef emit.useStrSearch True in let _ = setRef emit.useStr True in setRef emit.useStrLeaf True else ()
   -- W11b: stringToChars/stringFromChars are the UTF-8 codec between a $str and an $arr
   -- of i31 Char codepoints.  Force the $str rep, the $arr rep, the strLeaf char encoder
   -- ($mdk_char_to_str, reused by stringFromChars), and the codec runtime itself.
   let _ = if contains name ["stringToChars", "stringFromChars"]
-          then let _ = setRef emit.useStrCodec True in let _ = setRef useStrRef True in let _ = setRef useArrayRef True in setRef useStrLeafRef True else ()
+          then let _ = setRef emit.useStrCodec True in let _ = setRef emit.useStr True in let _ = setRef emit.useArray True in setRef emit.useStrLeaf True else ()
   -- W11b: the UTF-8 byte codec ($str <-> Array Int).  Force the codec runtime (carries
   -- $mdk_str_to_utf8_bytes / $mdk_utf8_bytes_to_str), the $str rep, and the $arr rep.
   let _ = if contains name ["stringToUtf8Bytes", "stringFromUtf8Bytes"]
-          then let _ = setRef emit.useStrCodec True in let _ = setRef useStrRef True in setRef useArrayRef True else ()
+          then let _ = setRef emit.useStrCodec True in let _ = setRef emit.useStr True in setRef emit.useArray True else ()
   -- W9: debugStringLit/debugCharLit quote+escape into a fresh $str via $mdk_dbg_quote,
   -- which reuses $mdk_cp_count + $mdk_char_to_str (both in strLeafRuntimeLines).  Force
   -- the $str rep + the strLeaf runtime.  (No $arr needed.)
   let _ = if contains name ["debugStringLit", "debugCharLit"]
-          then let _ = setRef useStrRef True in setRef useStrLeafRef True else ()
+          then let _ = setRef emit.useStr True in setRef emit.useStrLeaf True else ()
   -- W11b: charFromCode : Int -> Option Char — range-check runtime, no $str/$arr needed.
   let _ = if name == "charFromCode" then setRef emit.useCharFromCode True else ()
   -- W11b: char classification + case-mapping externs — pure WAT helpers, no $str/$arr.
@@ -1706,45 +1695,45 @@ noteW8Extern emit name =
   -- W10: panic's message arg is a $str → force the $str rep.  B5: the coded-trap
   -- lowering streams that message through $mdk_eprint_str (gated on this emission's
   -- `useEPut`) after a fixed "runtime error [E-PANIC]: " prefix.
-  let _ = if name == "panic" then let _ = setRef useStrRef True in setRef emit.useEPut True else ()
+  let _ = if name == "panic" then let _ = setRef emit.useStr True in setRef emit.useEPut True else ()
   -- W10: the array intrinsic externs all build/read the $arr rep (and arrayFromList
-  -- consumes a cons list).  Force useArrayRef; arrayFromList also forces useListRef.
+  -- consumes a cons list).  Force useArray; arrayFromList also forces useList.
   let _ = if contains name ["arrayLength", "arrayGetUnsafe", "arrayMake", "arrayMakeWith",
             "arrayCopy", "arraySetUnsafe", "arrayFromList",
             -- stage-A: arrayBlit/arrayFill also operate on $arr.
             "arrayBlit", "arrayFill",
             -- stage-B: float-reinterpret externs build/read $arr.
-            "floatToBytes64", "bytesToFloat64"] then setRef useArrayRef True else ()
+            "floatToBytes64", "bytesToFloat64"] then setRef emit.useArray True else ()
   -- stage-B: float-reinterpret externs consume/produce a boxed $float — force the
-  -- Float rep + runtime ($float is unconditionally declared, but useFloatRef gates the
+  -- Float rep + runtime ($float is unconditionally declared, but useFloat gates the
   -- float runtime helpers a printed/used Float result may reach).
-  let _ = if contains name ["floatToBytes64", "bytesToFloat64"] then setRef useFloatRef True else ()
-  let _ = if name == "arrayFromList" then setRef useListRef True else ()
+  let _ = if contains name ["floatToBytes64", "bytesToFloat64"] then setRef emit.useFloat True else ()
+  let _ = if name == "arrayFromList" then setRef emit.useList True else ()
   -- W12: the IO host-surface externs.  readFile/fileExists/getEnv/args all build a $str
   -- (path/result), so force the $str rep; args additionally builds a Cons list (force
-  -- useListRef).  `exit` needs no $str (it lowers to mdk_exit + unreachable) but still
-  -- forces ref-mode via the useRef predicate (useIORef).
+  -- useList).  `exit` needs no $str (it lowers to mdk_exit + unreachable) but still
+  -- forces ref-mode via the useRef predicate (useIO).
   let _ = if contains name ["readFile", "fileExists", "getEnv", "args"]
-          then setRef useStrRef True else ()
-  let _ = if name == "args" then setRef useListRef True else ()
+          then setRef emit.useStr True else ()
+  let _ = if name == "args" then setRef emit.useList True else ()
   let _ = if name == "args" then setRef emit.useArgs True else ()
   let _ = if contains name ["readFile", "fileExists", "args", "getEnv", "exit"]
-          then setRef useIORef True else ()
+          then setRef emit.useIO True else ()
   -- stage-D: byte-clean file I/O.  Force the IO host channel ($mdk_push_path etc via
-  -- useIORef), the $arr rep (useArrayRef), the $str rep (path/Err message), and the
+  -- useIO), the $arr rep (useArray), the $str rep (path/Err message), and the
   -- fileBytes runtime + write host imports (WasmEmit.useFileBytes).
   let _ = if contains name ["readFileBytes", "writeFileBytes"]
-          then let _ = setRef useIORef True in let _ = setRef useArrayRef True in let _ = setRef useStrRef True in setRef emit.useFileBytes True
+          then let _ = setRef emit.useIO True in let _ = setRef emit.useArray True in let _ = setRef emit.useStr True in setRef emit.useFileBytes True
           else ()
   if contains name ["ePutStr", "ePutStrLn"] then setRef emit.useEPut True else ()
 -- `++` is runtime-dispatched ($mdk_append): needs the $str leaf concat ($mdk_str_append)
 -- AND the W7 cons list types ($C_Cons/$T_List) for the list-append branch.
 noteW8Binop : WasmEmit -> String -> Unit
-noteW8Binop _ "++" =
-  let _ = setRef useStrLeafRef True
-  let _ = setRef useStrRef True
-  setRef useListRef True
-noteW8Binop _ "::" = setRef useListRef True
+noteW8Binop emit "++" =
+  let _ = setRef emit.useStrLeaf True
+  let _ = setRef emit.useStr True
+  setRef emit.useList True
+noteW8Binop emit "::" = setRef emit.useList True
 -- B5: a concrete-Int `/`/`%` needs the divisor-guard scratch local (declared per fn
 -- via w7LocalsAtDepth / the scalar fn+init decls).  Float `/` never traps on zero.
 noteW8Binop emit "/" = setRef emit.useDivGuard True
@@ -1769,11 +1758,10 @@ scanStmtW7 emit (CSAssign _ e) = scanExprW7 emit e
 
 -- a pattern's collection heads: a cons/nil/list pattern → list; a tuple pattern → its arity.
 scanPatW7 : WasmEmit -> Pat -> Unit
-scanPatW7 emit (PCons h t) = let _ = setRef useListRef True in let _ = scanPatW7 emit h in scanPatW7 emit t
+scanPatW7 emit (PCons h t) = let _ = setRef emit.useList True in let _ = scanPatW7 emit h in scanPatW7 emit t
 scanPatW7 emit (PList ps) =
-  let _ = setRef useListRef True in forEachU (p => scanPatW7 emit p) ps
-scanPatW7 emit (PTuple ps) =
-  let _ = noteTupleArity (listLen ps) in forEachU (p => scanPatW7 emit p) ps
+  let _ = setRef emit.useList True in forEachU (p => scanPatW7 emit p) ps
+scanPatW7 emit (PTuple ps) = let _ = noteTupleArity emit (listLen ps) in forEachU (p => scanPatW7 emit p) ps
 scanPatW7 emit (PCon _ args) = forEachU (p => scanPatW7 emit p) args
 scanPatW7 emit (PAs _ _ p) = scanPatW7 emit p
 scanPatW7 _ _ = ()
@@ -1791,9 +1779,9 @@ scanBranchW7 emit (CTBranch h sub) =
   let _ = scanHeadW7 emit h in scanTreeW7 emit sub
 
 scanHeadW7 : WasmEmit -> CHead -> Unit
-scanHeadW7 _ HCons = setRef useListRef True
-scanHeadW7 _ HNil = setRef useListRef True
-scanHeadW7 _ (HTuple n) = noteTupleArity n
+scanHeadW7 emit HCons = setRef emit.useList True
+scanHeadW7 emit HNil = setRef emit.useList True
+scanHeadW7 emit (HTuple n) = noteTupleArity emit n
 scanHeadW7 _ _ = ()
 
 cFieldExpr : CField -> CExpr
@@ -2426,13 +2414,13 @@ emitRefProgram prog groups =
   let imports = ioByteImportLines
     -- W8b: floatToString is a host import (the shortest-round-trip formatter, #57,
     -- lives JS-side).
-    ++ (if !useFloatRef then floatFmtImportLines else [])
+    ++ (if (progEmit prog).useFloat.value then floatFmtImportLines else [])
     -- #101: the libm transcendentals / pow / atan2 / hypot are JS Math.* host imports.
     ++ (if (progEmit prog).useMath.value then mathHostImportLines else [])
     -- layer-6: stringToFloat is a host import (mdk_str_to_float = the host strtod parser).
     ++ (if (progEmit prog).useFloatStr.value then floatStrImportLines else [])
     -- W12: the IO host surface (readFile/fileExists/args/getEnv/exit) host imports.
-    ++ (if !useIORef then ioHostImportLines else [])
+    ++ (if (progEmit prog).useIO.value then ioHostImportLines else [])
     -- stage-D: writeFileBytes's write host imports (reset/push/commit).
     ++ (if (progEmit prog).useFileBytes.value then fileBytesHostImportLines else [])
   let valNames = progValNames prog
@@ -2441,14 +2429,14 @@ emitRefProgram prog groups =
   -- Float and a `<=`/`>=` over it lowers to inline `f64.le`/`f64.ge` (IEEE NaN → False)
   -- rather than the poly runtime-dispatched path (which since #305 is IEEE-correct at
   -- NaN as well, via $mdk_value_lt/le/gt/ge — this is now a code-quality win).
-  let _ = setRef floatGlobalsRef (floatValGlobalNames prog (filterList isValBind groups))
+  let _ = setRef (progEmit prog).floatGlobals (floatValGlobalNames prog (filterList isValBind groups))
   -- Stage-2/3 (b′) WASMGC-TRMC: detect dispatch-graph TMC groups (the lexer's `scan`
   -- token spine, the offside-rule `layout` family, `intersperse`) BEFORE emitting fns,
   -- so emitRefFnBind can route a group member to the dest-passing reset-wrapper +
   -- inner-loop emit.  ALL binds are passed (not just fn binds): the external-entry
   -- root-selection check must see references from value-bind bodies too.
   let dispGroups = wDetectDispatchGroups prog groups
-  let _ = setRef wDispGroupsRef dispGroups
+  let _ = setRef (progEmit prog).wDispGroups dispGroups
   -- W8: the SplitMix64 seed lives in a mutable i64 global (emitted before the value globals).
   let rngGlobal = if (progEmit prog).useRng.value then rngStateGlobalLines else []
   let dispGlobals = flatMap wDispGlobalLines dispGroups
@@ -2480,41 +2468,41 @@ emitRefProgram prog groups =
   -- W6: the byte-write IO runtime (int/bool printers always; the $str-dependent
   -- string runtime only when strings are used) + the string-literal passive data
   -- segments (drained from this Prog's WasmEmit, in segment-index order).
-  let ioRt = ioRuntimeLines ++ (if !useStrRef then ioStrRuntimeLines else [])
+  let ioRt = ioRuntimeLines ++ (if (progEmit prog).useStr.value then ioStrRuntimeLines else [])
   -- W8: the pure-WAT string LEAF ops, stderr runtime, RNG, and hashers — each gated
   -- by its use ref.  strConcat needs the W7 cons list types ($C_Cons), so it is gated
-  -- on useListRef too (a stringConcat always uses a list, so useListRef is set).
-  let strLeafRt = if !useStrLeafRef then strLeafRuntimeLines else []
-  let strConcatRt = if !useStrLeafRef && !useListRef then strConcatRuntimeLines else []
+  -- on useList too (a stringConcat always uses a list, so useList is set).
+  let strLeafRt = if (progEmit prog).useStrLeaf.value then strLeafRuntimeLines else []
+  let strConcatRt = if (progEmit prog).useStrLeaf.value && (progEmit prog).useList.value then strConcatRuntimeLines else []
   -- W13: `++` is runtime-dispatched ($mdk_append); needs $str (str leaf) + $C_Cons (list).
-  let appendRt = if !useStrLeafRef && !useListRef then appendRuntimeLines else []
+  let appendRt = if (progEmit prog).useStrLeaf.value && (progEmit prog).useList.value then appendRuntimeLines else []
   -- layer-9: $mdk_value_eq / $mdk_value_cmp (runtime-shape-dispatched comparison).
-  -- Needs $str (forced via useStrRef when this is set) + $mdk_str_compare (forced via
-  -- useStrSearchRef in emitValueCmpRef).
+  -- Needs $str (forced via useStr when this is set) + $mdk_str_compare (forced via
+  -- useStrSearch in emitValueCmpRef).
   let valueCmpRt = if (progEmit prog).useValueCmp.value then valueEqRuntimeLines else []
   -- A0: runtime value-tag-dispatched arithmetic helpers ($mdk_value_add/…), emitted only
   -- when a poly-`Num` operand is routed to them (A1).  Reference $float/$boxint (always
   -- declared) + $mdk_unbox_int/$mdk_box_int (always in ioRuntimeLines).
-  let valueArithRt = if !useValueArithRef then valueArithRuntimeLines else []
+  let valueArithRt = if (progEmit prog).useValueArith.value then valueArithRuntimeLines else []
   let stderrRt = if (progEmit prog).useEPut.value then stderrRuntimeLines else []
   let rngRt = if (progEmit prog).useRng.value then rngRuntimeLines else []
   let hashRt = if (progEmit prog).useHash.value then hashRuntimeLines else []
-  let hashStrRt = if (progEmit prog).useHash.value && !useStrRef then hashStringRuntimeLines else []
+  let hashStrRt = if (progEmit prog).useHash.value && (progEmit prog).useStr.value then hashStringRuntimeLines else []
   -- W8b: the Float runtime (intToFloat/floatToInt/floatToString) + the hashFloat /
   -- randomFloat helpers (gated separately since they need mix64 / next_u64) + the
   -- string index-of / compare runtime.
-  -- #345 $mdk_float_rem backs the monomorphic Float `%` (useFloatRef) AND the num-poly
-  -- `%` value-dispatch arm ($mdk_value_mod, useValueArithRef) — emit it when EITHER is on,
+  -- #345 $mdk_float_rem backs the monomorphic Float `%` (useFloat) AND the num-poly
+  -- `%` value-dispatch arm ($mdk_value_mod, useValueArith) — emit it when EITHER is on,
   -- so an int-only value-arith program doesn't reference a missing $mdk_float_rem.
-  let floatRemRt = if !useFloatRef || !useValueArithRef then floatRemRuntimeLines else []
-  let floatRt = if !useFloatRef then floatRuntimeLines else []
+  let floatRemRt = if (progEmit prog).useFloat.value || (progEmit prog).useValueArith.value then floatRemRuntimeLines else []
+  let floatRt = if (progEmit prog).useFloat.value then floatRuntimeLines else []
   let hashFloatRt = if (progEmit prog).useFloatHash.value then hashFloatRuntimeLines else []
   let randomFloatRt = if (progEmit prog).useFloatRng.value then randomFloatRuntimeLines else []
   -- layer-6: stringToFloat runtime ($mdk_string_to_float).  Needs ioHostRt for the
   -- path channel ($mdk_path_reset/$mdk_path_push), but emitted AFTER ioHostRt since
   -- those functions are defined there (wasm forward refs are fine, but order is clear).
   let floatStrRt = if (progEmit prog).useFloatStr.value then floatStrRuntimeLines else []
-  let strSearchRt = if !useStrSearchRef then strSearchRuntimeLines else []
+  let strSearchRt = if (progEmit prog).useStrSearch.value then strSearchRuntimeLines else []
   -- W11b: the UTF-8 codec ($mdk_str_to_chars / $mdk_chars_to_str) + charFromCode's
   -- range-check runtime ($mdk_char_from_code).  The codec needs the $str rep ($u8arr)
   -- and the $arr rep (both forced via noteW8Extern).  charFromCode alone needs neither
@@ -2526,7 +2514,7 @@ emitRefProgram prog groups =
   -- W12: the IO host-surface marshaling runtime (byte-channel + the five extern bodies).
   -- The `args` body lives in a separate block (it builds a $C_Cons list, needing the
   -- list types) gated on this emission's useArgs observation.
-  let ioHostRt = if !useIORef then ioHostRuntimeLines else []
+  let ioHostRt = if (progEmit prog).useIO.value then ioHostRuntimeLines else []
   let ioArgsRt = if (progEmit prog).useArgs.value then ioArgsRuntimeLines else []
   -- stage-D: the byte-clean file I/O bodies ($mdk_read_file_bytes_io / _write_).  Needs
   -- ioHostRt in scope ($mdk_push_path / $mdk_io_result_to_str) + the $arr rep.
@@ -2550,7 +2538,7 @@ emitRefProgram prog groups =
             ++ trapIntRt ++ dataSegs ++ forceFns ++ initLines ++ [")"])
 
 -- the passive data segments for string literals — one `(data $strseg_N "…")` per
--- literal OCCURRENCE (#383: no content-dedup, see the `useStrRef` section above for
+-- literal OCCURRENCE (#383: no content-dedup, see the `useStr` section above for
 -- the correction), emitted in segment-index order.  `array.new_data` reads from
 -- these (the §11-preferred non-const-array init scheme; no active memory needed).
 emitDataSegs : WasmEmit -> List String
@@ -2600,8 +2588,8 @@ emitTypeSection prog =
   let userStructs = flatMap (emitTypeStructs prog) userTypes
   let reservedStructs = emitReservedStructs prog
   let closTypes = if progUseClos prog then closTypeLines else []
-  let strTypes = if !useStrRef then strTypeLines else []
-  let w7Types = emitW7Types ()
+  let strTypes = if (progEmit prog).useStr.value then strTypeLines else []
+  let w7Types = emitW7Types (progEmit prog)
   ["  ;; ── §3 type section (rec group) — §3.4 ADT structs + §8.6 (ref eq)/i31 ──",
    "  (rec",
    "    ;; layer-17 §2.1: boxed Int outside ±2^30 (the $mdk_box_int/$mdk_unbox_int seam).",
@@ -2631,18 +2619,18 @@ emitTypeSection prog =
 --     reads the struct's field-0 tag = ordinal 0), so it carries a leading i32 tag.
 --   Array: $arr = (array (mut (ref eq))) — array.len carries the length (§3.3).
 --   Ref:   $refbox = a 1-field MUTABLE struct (setRef overwrites the field).
-emitW7Types : Unit -> List String
-emitW7Types _ =
-  let listT = if !useListRef then
+emitW7Types : WasmEmit -> List String
+emitW7Types emit =
+  let listT = if !emit.useList then
         ["    (type $T_List (sub (struct (field i32))))",
          -- §3/Stage-0: cons TAIL field (index 2) is `mut` so TRMC destination-passing can
          -- `struct.set` a freshly-built child into the parent cell.  Head (index 1) stays
          -- immutable.  `mut` only PERMITS mutation — output is unchanged (nothing writes it yet).
          "    (type $C_Cons (sub $T_List (struct (field i32) (field (ref eq)) (field (mut (ref eq))))))"]
       else []
-  let tupTs = flatMap tupleTypeDecl (reverseL !tupleAritiesRef)
-  let arrT = if !useArrayRef then ["    (type $arr (array (mut (ref eq))))"] else []
-  let refT = if !useRefBoxRef then ["    (type $refbox (sub (struct (field (mut (ref eq))))))"] else []
+  let tupTs = flatMap tupleTypeDecl (reverseL !emit.tupleArities)
+  let arrT = if !emit.useArray then ["    (type $arr (array (mut (ref eq))))"] else []
+  let refT = if !emit.useRefBox then ["    (type $refbox (sub (struct (field (mut (ref eq))))))"] else []
   listT ++ tupTs ++ arrT ++ refT
 
 tupleTypeDecl : Int -> List String
@@ -3148,14 +3136,14 @@ emitRefFnBind prog (CBind name clauses0) =
   -- body is an under-applied CMethod gets eta-saturated to the method's full arity
   -- so the emitted dispatch call pushes every operand (else a validate underflow).
   let clauses = map (etaSaturateFnClause (progInput prog)) clauses0
-  -- W-SQLITE-4: seed (and reset) floatLocalsRef with this fn's declared Float
+  -- W-SQLITE-4: seed (and reset) floatLocals with this fn's declared Float
   -- params before emitting its body, so type-erased Float arith on a param lowers
   -- to f64 ops (mirrors emitImplGroup's `impl … Float` seeding, generalized).
-  let _ = setRef floatLocalsRef (floatParamNames prog name clauses)
+  let _ = setRef (progEmit prog).floatLocals (floatParamNames prog name clauses)
   -- A1 (poly-`Num`-on-Float): seed the polymorphic-`Num`/`Ord` param names so this fn's
   -- bare-CVar arithmetic on a type-var param routes to the runtime value-dispatch helper
-  -- (mirrors floatLocalsRef, and native's LTNum seed).  [] resets for monomorphic fns.
-  let _ = setRef numPolyLocalsRef (numPolyParamNames prog name clauses)
+  -- (mirrors floatLocals, and native's LTNum seed).  [] resets for monomorphic fns.
+  let _ = setRef (progEmit prog).numPolyLocals (numPolyParamNames prog name clauses)
   let arity = clauseArityOf clauses
   let params = synthParams arity
   -- Stage-2/3 (b′): a member of a detected dispatch-TMC group emits via the dest-passing
@@ -3166,7 +3154,7 @@ emitRefFnBind prog (CBind name clauses0) =
   -- would return its own locally-built spine instead of closing the group's shared dest
   -- globals (a miscompile).  Detection keeps a Stage-1-claimable SINGLETON out of any
   -- group (wDispValidate v5), so plain self-TMC fns still take the Stage-1 loop below.
-  match dispGroupOf !wDispGroupsRef name
+  match dispGroupOf (progEmit prog).wDispGroups.value name
     Some grp =>
       let gd = if wDispIsRoot grp name then emitWDispRoot prog grp arity clauses
         else emitWDispMemberFn prog grp name name arity clauses
@@ -3379,9 +3367,9 @@ patTestBind prog (PLit (LString s)) occ clLabel env =
     "i32.ne",
     "br_if " ++ clLabel,
   ]
-  let _ = setRef useStrSearchRef True
-  let _ = setRef useStrLeafRef True
-  let _ = setRef useStrRef True
+  let _ = setRef (progEmit prog).useStrSearch True
+  let _ = setRef (progEmit prog).useStrLeaf True
+  let _ = setRef (progEmit prog).useStr True
   (
     occ ++ ["ref.cast (ref $str)"] ++ emitLitRef (progEmit prog) (LString s) ++ cmpSuffix,
     [],
@@ -4317,9 +4305,9 @@ emitImplGroup prog (ImplG method headTag key arity clauses) =
       -- W8b: an `impl … Float` method's params are Float — record their (pattern-var) names
       -- so the body's bare-CVar arithmetic lowers to f64.  `signum`/`abs`/`negate`/`add`/…
       -- all take Float args.  Reset for every other impl (Int/String/etc. stay i31).
-      let _ = setRef floatLocalsRef (if headTag == "Float" then flatMap clausePatVars clauses else [])
+      let _ = setRef (progEmit prog).floatLocals (if headTag == "Float" then flatMap clausePatVars clauses else [])
       -- A1: impl-method params are concrete-typed (the impl tag), never poly-`Num`; reset.
-      let _ = setRef numPolyLocalsRef []
+      let _ = setRef (progEmit prog).numPolyLocals []
       -- layer-18: arm the plain-tail impl-method return_call context for THIS impl, so a
       -- saturated tail-position self-call (`fold f (f z x) xs` → `CMethod "fold" (RKey
       -- "List")`) lowers to `return_call $mdk_impl_List_fold` (constant stack) rather than a
@@ -4329,7 +4317,7 @@ emitImplGroup prog (ImplG method headTag key arity clauses) =
       let _ = setRef (progEmit prog).implSelfCtx (ImplSelfOn method headTag arity)
       let bodyLines = emitClausesImpl prog fnName params arity clauses
       let _ = setRef (progEmit prog).implSelfCtx savedImplSelf
-      let _ = setRef floatLocalsRef []
+      let _ = setRef (progEmit prog).floatLocals []
       let allLocals = clauseLocals clauses
       let extraLocals = filterList (notIn params) (dedupKeep allLocals)
       let scratch = scratchLocals (clausesMaxDepth clauses)
@@ -4343,10 +4331,10 @@ clausePatVars (CClause pats _) = flatMap patVars pats
 
 -- W-SQLITE-4 (float-param registry): the pattern-var names bound at a fn's
 -- Float-typed parameter positions (from the installed `declSigTypeNames` table),
--- unioned across clauses.  `emitRefFnBind` seeds `floatLocalsRef` with these before
+-- unioned across clauses.  `emitRefFnBind` seeds `floatLocals` with these before
 -- emitting the body, so `f (x : Float) = x + x` sees `x` as Float without a
 -- co-located literal — generalizing the `impl … Float` seeding at emitImplGroup to
--- any sig'd top-level fn.  Empty (no sig / no Float param) resets floatLocalsRef,
+-- any sig'd top-level fn.  Empty (no sig / no Float param) resets floatLocals,
 -- preserving the reset-before-body discipline.
 floatParamNames : Prog -> String -> List CClause -> List String
 floatParamNames prog name clauses = match declParamTypesOf prog name
@@ -4392,7 +4380,7 @@ numPolyClausePatVars ptys (CClause pats body) = numPolyPatsAt ptys pats body
 -- P1: skip a `$dict_*` param WITHOUT consuming a declared type head (see floatPatsAt).
 -- This was the whole bug behind wasm/polynum_sq_sig_float: `sq : Num a => a -> a`
 -- lowers to params [$dict_…__sq_0, x], so the declared head `a` lined up with the DICT
--- slot; `x` fell off the end of `ptys` and was never seeded into numPolyLocalsRef.  Its
+-- slot; `x` fell off the end of `ptys` and was never seeded into numPolyLocals.  Its
 -- `x * x` then took the inline i31 int path and trapped `illegal cast` on the boxed
 -- $float at runtime — i.e. the explicit `Num a =>` signature, the one thing that should
 -- have GUARANTEED runtime dispatch, was precisely what disabled it.
@@ -5132,7 +5120,7 @@ emitExternEtaClosure prog name =
   ]
 
 -- The depth-0 `$__aex*`/`$__raarr*` array-intrinsic scratch locals (a flat copy of the
--- useArrayRef block in w7LocalsAtDepth at depth 0) that an ARRAY-extern eta (func …)
+-- useArray block in w7LocalsAtDepth at depth 0) that an ARRAY-extern eta (func …)
 -- must declare to host emitArrayExternRef's loop counter / size / result $arr / list
 -- cursor / closure-init-value cells / i64 reinterpret accumulator.
 arrayEtaScratchLocals : List String
@@ -5238,19 +5226,19 @@ emitBinRef prog env d op l r tag =
   -- A1 (poly-`Ord`-on-Float sibling): a comparison whose operand is a polymorphic
   -- `Num`/`Ord` param must dispatch on the operand's runtime shape (a boxed $float would
   -- otherwise trap in the int fallback's $mdk_unbox_int ref.cast).  Two routes:
-  --   • string-using program (useStrRef, set by the pre-scan → $str declared): the
+  --   • string-using program (useStr, set by the pre-scan → $str declared): the
   --     $str-capable $mdk_value_cmp / $mdk_value_eq, now with $float arms (A2), handle
   --     String, Int AND Float — one path for a poly operand that could be any of them.
   --   • string-free program: the num-only $mdk_value_cmp_num / $mdk_value_eq_num (A0),
   --     which need only $float/$boxint (always declared) — no $str, so no type-section
-  --     dependency on the pre-scan's useStrRef (which body emission cannot retroactively set).
-  else if isCmpOp op && !useStrRef then
+  --     dependency on the pre-scan's useStr (which body emission cannot retroactively set).
+  else if isCmpOp op && (progEmit prog).useStr.value then
     let _ = setRef (progEmit prog).useValueCmp True
-    let _ = setRef useStrSearchRef True
-    let _ = setRef useStrLeafRef True
+    let _ = setRef (progEmit prog).useStrSearch True
+    let _ = setRef (progEmit prog).useStrLeaf True
     emitValueCmpRef prog env d op l r
-  else if isCmpOp op && isPolyNumBinop l r then
-    -- #371: valueArithRuntimeLines is spliced in WHOLE whenever useValueArithRef is
+  else if isCmpOp op && isPolyNumBinop (progEmit prog) l r then
+    -- #371: valueArithRuntimeLines is spliced in WHOLE whenever useValueArith is
     -- set (wasm_emit.mdk's `valueArithRt` binding) — and it now UNCONDITIONALLY
     -- defines $mdk_value_div/$mdk_value_mod with a baked-in coded divisor-zero
     -- guard (wasm_preamble.mdk) referencing the $mdk_write_err_byte host import,
@@ -5258,7 +5246,7 @@ emitBinRef prog env d op l r tag =
     -- So trapImportNeeded must be forced here too, not just at arith branch below
     -- — else a poly-cmp-only program parses with "unknown func: $mdk_write_err_byte"
     -- (the import undeclared) because the unused div/mod bodies still reference it.
-    let _ = setRef useValueArithRef True
+    let _ = setRef (progEmit prog).useValueArith True
     let _ = setRef (progEmit prog).trapImportNeeded True
     emitValueCmpNumRef prog env d op l r
   -- A1 (poly-`Num`-on-Float): arithmetic whose operand is a polymorphic `Num` param
@@ -5267,8 +5255,8 @@ emitBinRef prog env d op l r tag =
   -- #371: same trap-import note as the isCmpOp branch above — $mdk_value_div/
   -- $mdk_value_mod's guard is baked into valueArithRuntimeLines UNCONDITIONALLY, so
   -- ANY poly-`Num` arith op (not just `/`/`%`) must force the host import.
-  else if isArithOp op && isPolyNumBinop l r then
-    let _ = setRef useValueArithRef True
+  else if isArithOp op && isPolyNumBinop (progEmit prog) l r then
+    let _ = setRef (progEmit prog).useValueArith True
     let _ = setRef (progEmit prog).trapImportNeeded True
     emitRefExpr prog env d l ++ emitRefExpr prog env d r ++ ["call $mdk_value_" ++ valueArithName op]
   else
@@ -5285,14 +5273,14 @@ emitBinRef prog env d op l r tag =
     else li ++ ri ++ [wasmBinOp64 (progEmit prog) op, "call $mdk_box_int"]
 
 -- A1: a binop with a POLYMORPHIC `Num`/`Ord` operand — a bare CVar bound to a param
--- seeded into numPolyLocalsRef.  Only such operands route to the runtime value-dispatch
+-- seeded into numPolyLocals.  Only such operands route to the runtime value-dispatch
 -- helpers; literals / computed sub-expressions / concrete-scalar params stay on the fast path.
-isPolyNumBinop : CExpr -> CExpr -> Bool
-isPolyNumBinop l r = isPolyNumOperand l || isPolyNumOperand r
+isPolyNumBinop : WasmEmit -> CExpr -> CExpr -> Bool
+isPolyNumBinop emit l r = isPolyNumOperand emit l || isPolyNumOperand emit r
 
-isPolyNumOperand : CExpr -> Bool
-isPolyNumOperand (CVar x _) = contains x !numPolyLocalsRef
-isPolyNumOperand _ = False
+isPolyNumOperand : WasmEmit -> CExpr -> Bool
+isPolyNumOperand emit (CVar x _) = contains x !emit.numPolyLocals
+isPolyNumOperand _ _ = False
 
 -- A0: arithmetic op → the $mdk_value_<name> helper suffix.
 valueArithName : String -> String
@@ -5373,7 +5361,7 @@ emitValueCmpRef prog env d op l r =
 -- A1 (poly-`Ord`-on-Float, string-free program): the num-only peer of emitValueCmpRef.
 -- `==`/`/=` go through $mdk_value_eq_num (-> i31 Bool); ordering through $mdk_value_cmp_num
 -- (-> i32 -1/0/1).  Both dispatch $float vs int (i31/$boxint) ONLY — no $str — so they
--- need no pre-scan-set type; gated by useValueArithRef alongside the arith helpers.
+-- need no pre-scan-set type; gated by useValueArith alongside the arith helpers.
 emitValueCmpNumRef : Prog -> List String -> Int -> String -> CExpr -> CExpr -> List String
 emitValueCmpNumRef prog env d op l r =
   let lv = emitRefExpr prog env d l
@@ -5452,8 +5440,8 @@ cexprIsFloat prog env (CVar "e" _) = not (contains "e" env)
 -- W8b: a name known to be Float in the current body (an `impl Num Float` param).
 -- #288: also a top-level nullary binding whose RHS is statically Float, unless a
 -- local of the same name shadows it (mirrors the pi/e `not (contains x env)` guard).
-cexprIsFloat prog env (CVar x _) = contains x !floatLocalsRef
-  || not (contains x env) && contains x !floatGlobalsRef
+cexprIsFloat prog env (CVar x _) = contains x (progEmit prog).floatLocals.value
+  || not (contains x env) && contains x (progEmit prog).floatGlobals.value
 -- C3: also True when the binop itself carries an "Float" scalar-tag (e.g. a nested
 -- Float binop whose operands are type-lost but the typecheck stamped the node).
 cexprIsFloat prog env (CBinPrim op l r tag) = isArithOp op
@@ -5489,7 +5477,7 @@ isArithOp op = contains op ["+", "-", "*", "/", "%"]
 -- W-SQLITE-4 stage 2: collect the PVar names that bind Float ctor-payload fields in
 -- a PCon pattern.  For `PCon c [PVar x, …]`, for each field index i where ctor c is
 -- declared Float (via WasmEmitInput), collect x if the i-th sub-pattern is a
--- PVar.  Used by emitLeafRef/emitGuardArmRef to seed floatLocalsRef for the arm body.
+-- PVar.  Used by emitLeafRef/emitGuardArmRef to seed floatLocals for the arm body.
 ctorPatFloatBinders : Prog -> Pat -> List String
 ctorPatFloatBinders prog (PCon c args) = match progInput prog
   WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ => match omLookup c ctorFloatIndex
@@ -5507,7 +5495,7 @@ ctorPatFloatBindersGo c floatIdxs (_::rest) i =
 -- P1: the match-arm pattern binders whose numeric type is only known at RUNTIME — every
 -- PVar the arm binds that is used as a direct operand of an arith/compare binop and is
 -- NOT one of the declared-Float ctor fields (those already take the static Float fast
--- path via floatLocalsRef, which emitBinRef consults first).
+-- path via floatLocals, which emitBinRef consults first).
 --
 -- A match binder carries NO static type: a tuple field has no declared type at all, and
 -- a ctor field is only known when it is declared Float.  Ref-mode's fallback for an
@@ -5519,7 +5507,7 @@ ctorPatFloatBindersGo c floatIdxs (_::rest) i =
 -- This is exactly what the native backend already does — llvm_emit's binOperandTy falls
 -- back to LTNum (the runtime tag-dispatched @mdk_num_* helpers) for any arith operand
 -- whose type it cannot pin concretely, and a match binder is never in its LTy env, so it
--- is always LTNum there.  Seeding these into numPolyLocalsRef routes them to $mdk_value_*
+-- is always LTNum there.  Seeding these into numPolyLocals routes them to $mdk_value_*
 -- — the WasmGC peers of those very helpers — so BOTH backends now runtime-dispatch the
 -- SAME nodes.  On an Int instantiation $mdk_value_* is byte-identical to the inline int
 -- path, so only correctness changes, never a value.
@@ -6292,7 +6280,7 @@ emitArrayExternRef prog env d "arrayBlit" [src, srcOff, dst, dstOff, len] = emit
 emitArrayExternRef prog env d "arrayBlit" _ =
   gapLP prog "wasm stage-A: arrayBlit takes exactly five arguments"
 -- stage-A: arrayFill val arr — sets every element of arr to val via a loop.
--- Reuses the $__aex* locals declared by w7LocalsAtDepth when useArrayRef.
+-- Reuses the $__aex* locals declared by w7LocalsAtDepth when useArray.
 emitArrayExternRef prog env d "arrayFill" [val, arr] =
   let sfx = intToString d
   let arrL = "$__aexarr" ++ sfx
@@ -6498,7 +6486,7 @@ emitRefTail prog env arity e = match (progEmit prog).trmcCtx.value
     -- (cons/ctor-tail, plain self-call, or base) to the destination-passing emit.
     if isWTrmcWrapper e then emitRefTailWrap prog env arity e
     else emitWasmTrmcLeaf prog env self sarity pslots ctorSet loopLbl exitLbl e
-  WTrmcOff => match !wDispCtxRef
+  WTrmcOff => match (progEmit prog).wDispCtx.value
     WDispOn root loopLbl rootArity members =>
       -- Stage-2/3 (b′) active: descend the structural tail wrappers with the dispatch
       -- context LIVE; redirect SPINE cons leaves + base leaves to the dest globals.
@@ -6982,21 +6970,8 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
 -- nesting of one scan inside another), so the shared globals carry exactly one in-flight
 -- spine; the reset wrapper re-zeroes them per outer call.
 
--- the active dispatch-group context during a group member's body emit.  `WDispOn root
--- loopLbl rootArity members` ⇒ redirect SPINE cons leaves (a peeled cons chain
--- bottoming in a saturated call to a group member) to the dest-passing emit +
--- `return_call` (the root's inner loop for the root, the member fn itself otherwise),
--- and base leaves to the dest-close.  WDispOff ⇒ ordinary emit.
-data WDispCtx = WDispOff | WDispOn String String Int (List String)
-
-wDispCtxRef : Ref WDispCtx
-wDispCtxRef = Ref WDispOff
-
--- the detected (b′) groups for this program (root name + member names; the shared
--- `DispGroup` from backend/trmc_analysis.mdk), computed once in emitRefProgram and
--- consulted by emitRefFnBind.  Empty when no group qualifies.
-wDispGroupsRef : Ref (List DispGroup)
-wDispGroupsRef = Ref []
+-- (`WDispCtx` and the per-emission `WasmEmit.wDispCtx` / `WasmEmit.wDispGroups`
+-- cells that carry this context live with the rest of the emission state, above.)
 
 -- PER-GROUP dest globals (Stage-3): each group root gets its own head/dest/first
 -- triple, so one group's spine build cannot clobber another's — a member's helper
@@ -7128,10 +7103,10 @@ emitWDispMemberFn prog grp emitName origName arity clauses =
   -- call it makes to `scan` is arity-5.  It also carries the MEMBER SET so spine
   -- cons leaves targeting a non-root member return_call that member directly.
   let rootArity = progFnArity prog root
-  let saved = !wDispCtxRef
-  let _ = setRef wDispCtxRef (WDispOn root loopName rootArity (dispMembersOf grp))
+  let saved = (progEmit prog).wDispCtx.value
+  let _ = setRef (progEmit prog).wDispCtx (WDispOn root loopName rootArity (dispMembersOf grp))
   let bodyLines = emitClausesRef prog origName params arity clauses
-  let _ = setRef wDispCtxRef saved
+  let _ = setRef (progEmit prog).wDispCtx saved
   let allLocals = clauseLocals clauses
   let extraLocals = filterList (notIn params) (dedupKeep allLocals)
   let scratch = scratchLocals (clausesMaxDepth clauses)
@@ -7356,7 +7331,7 @@ emitLeafTail prog env arity root arms i = match nthArm arms i
     let (binds, env2) = bindPatRef prog env pat root
     let savedNum = seedArmNumEnv prog pat body
     let bodyCode = emitRefTail prog env2 arity body
-    let _ = restoreArmNumEnv savedNum
+    let _ = restoreArmNumEnv (progEmit prog) savedNum
     binds ++ bodyCode
   None => gapLP prog "ref-mode: tail decision arm index out of range"
 
@@ -7375,7 +7350,7 @@ emitGuardArmTail prog env arity d root occs arms i fail = match nthArm arms i
     -- body is emitted under env3, not env2.
     let (gcode, env3) = emitGuardChainRef prog env2 0 gLabel guards
     let armCode = ["block " ++ gLabel] ++ indent (tests ++ binds ++ gcode ++ emitRefTail prog env3 arity body) ++ ["end"]
-    let _ = restoreArmNumEnv savedNum
+    let _ = restoreArmNumEnv (progEmit prog) savedNum
     armCode ++ emitTreeTail prog env arity d root occs arms fail
   None => gapLP prog "ref-mode: tail guarded arm index out of range"
 
@@ -7454,9 +7429,9 @@ emitLitSwitchTail prog env arity d root foc rest arms ((CTBranch (HLit (LChar c)
 -- W6: String-literal switch head — compare the focus $str against each literal via
 -- `$mdk_str_compare` (returns the i31 1 on equal), reusing the `PLit (LString)` logic.
 emitLitSwitchTail prog env arity d root foc rest arms ((CTBranch (HLit (LString s)) sub)::more) dft idt =
-  let _ = setRef useStrSearchRef True
-  let _ = setRef useStrLeafRef True
-  let _ = setRef useStrRef True
+  let _ = setRef (progEmit prog).useStrSearch True
+  let _ = setRef (progEmit prog).useStrLeaf True
+  let _ = setRef (progEmit prog).useStr True
   indentBy idt (foc ++ ["ref.cast (ref $str)"] ++ emitLitRef (progEmit prog) (LString s) ++ ["call $mdk_str_compare", "ref.cast (ref i31)", "i31.get_u", "i32.const 1", "i32.eq"] ++ ["if"])
     ++ indentBy (idt + 1) (emitTreeTail prog env arity d root rest arms sub)
     ++ indentBy idt ["else"]
@@ -7512,25 +7487,25 @@ emitLamDefine prog lamName pats captured body =
     ++ w7LocalDecls (progEmit prog) (maxRefDepth body)
   let setup = ["local.get $self", "ref.cast (ref $clos)", "local.set $__self_clos"]
   -- A lifted lambda is an INDEPENDENT function: it must NOT inherit the enclosing
-  -- fn's TMC loop context nor a dispatch-group context (wDispCtxRef).
+  -- fn's TMC loop context nor a dispatch-group context (wDispCtx).
   -- emitLamDefine can run while one of those is LIVE (a cons-tail clause body whose
   -- lead-field / recomputed-arg builds a closure is emitted under a live trmc context),
   -- and without clearing it the lambda body's tail leaves would emit `$__tmc_*` /
   -- `$tmcloop` references that this lambda never declares as locals → invalid wasm.
   let savedTrmc = (progEmit prog).trmcCtx.value
-  let savedDisp = !wDispCtxRef
+  let savedDisp = (progEmit prog).wDispCtx.value
   let _ = setRef (progEmit prog).trmcCtx WTrmcOff
-  let _ = setRef wDispCtxRef WDispOff
+  let _ = setRef (progEmit prog).wDispCtx WDispOff
   -- A1 (poly-`Num`-on-Float, design row 6): a lambda's own params carry no declared
   -- sig, so its arith-used params are polymorphic `Num` (the arith-section accumulator
   -- `a x => a + x` in `fold`).  Seed them (unioned with the enclosing poly set, whose
   -- captured vars may also be poly) so the lambda body routes to the value helpers.
-  let savedNumPoly = !numPolyLocalsRef
-  let _ = setRef numPolyLocalsRef (dedupKeep (lamPolyParamNames pats body ++ savedNumPoly))
+  let savedNumPoly = (progEmit prog).numPolyLocals.value
+  let _ = setRef (progEmit prog).numPolyLocals (dedupKeep (lamPolyParamNames pats body ++ savedNumPoly))
   let bodyLines = emitRefTail prog bodyEnv arity body
-  let _ = setRef numPolyLocalsRef savedNumPoly
+  let _ = setRef (progEmit prog).numPolyLocals savedNumPoly
   let _ = setRef (progEmit prog).trmcCtx savedTrmc
-  let _ = setRef wDispCtxRef savedDisp
+  let _ = setRef (progEmit prog).wDispCtx savedDisp
   ["  (func " ++ lamName ++ " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))"]
     ++ map ("  " ++ _) localLines
     ++ indent (setup ++ capPrologue ++ argLoads ++ paramBinds ++ bodyLines)
@@ -7687,12 +7662,12 @@ emitLgLifted prog gid names groupCaps binds (CBind name clauses) =
   -- dispatch-group context so its body doesn't leak `$__tmc_*`/`$tmcloop` references
   -- (see emitLamDefine — same hazard when lifted under a live trmc context).
   let savedTrmc = (progEmit prog).trmcCtx.value
-  let savedDisp = !wDispCtxRef
+  let savedDisp = (progEmit prog).wDispCtx.value
   let _ = setRef (progEmit prog).trmcCtx WTrmcOff
-  let _ = setRef wDispCtxRef WDispOff
+  let _ = setRef (progEmit prog).wDispCtx WDispOff
   let bodyLines = emitClausesRefEnv prog (names ++ groupCaps) name params arity clauses
   let _ = setRef (progEmit prog).trmcCtx savedTrmc
-  let _ = setRef wDispCtxRef savedDisp
+  let _ = setRef (progEmit prog).wDispCtx savedDisp
   let memberLocals = names
   let bodyLocals = filterList (notIn (params ++ groupCaps ++ memberLocals)) (dedupKeep (clauseLocals clauses))
   let scratch = scratchLocals (clausesMaxDepth clauses)
@@ -8209,26 +8184,26 @@ emitTreeRef prog env d decLabel root occs arms (CTSwitch branches dft) =
 
 -- The numeric typing environment an arm's PATTERN BINDERS contribute to its body, saved
 -- so it can be restored after (arms nest).  Two disjoint seeds, both scoped to the body:
---   * floatLocalsRef  — binders at declared-Float ctor fields (W-SQLITE-4 stage 2): a
+--   * floatLocals  — binders at declared-Float ctor fields (W-SQLITE-4 stage 2): a
 --     STATIC Float, so cexprIsFloat sees them and emitBinRef takes the f64 fast path.
---   * numPolyLocalsRef — P1: every OTHER binder used in a num binop, whose type is known
+--   * numPolyLocals — P1: every OTHER binder used in a num binop, whose type is known
 --     only at runtime → routed to the shape-dispatching $mdk_value_* helpers.  Without
 --     this the unknown operand fell to the inline i31 int path and TRAPPED `illegal cast`
 --     on a boxed $float (see armNumPolyBinders).
--- emitBinRef consults floatLocalsRef first, so a declared-Float binder keeps its static
+-- emitBinRef consults floatLocals first, so a declared-Float binder keeps its static
 -- path and only genuinely type-lost operands pay for dispatch.
 seedArmNumEnv : Prog -> Pat -> CExpr -> (List String, List String)
 seedArmNumEnv prog pat body =
-  let savedFloat = !floatLocalsRef
-  let savedNumPoly = !numPolyLocalsRef
-  let _ = setRef floatLocalsRef (ctorPatFloatBinders prog pat ++ savedFloat)
-  let _ = setRef numPolyLocalsRef (armNumPolyBinders prog pat body ++ savedNumPoly)
+  let savedFloat = (progEmit prog).floatLocals.value
+  let savedNumPoly = (progEmit prog).numPolyLocals.value
+  let _ = setRef (progEmit prog).floatLocals (ctorPatFloatBinders prog pat ++ savedFloat)
+  let _ = setRef (progEmit prog).numPolyLocals (armNumPolyBinders prog pat body ++ savedNumPoly)
   (savedFloat, savedNumPoly)
 
-restoreArmNumEnv : (List String, List String) -> Unit
-restoreArmNumEnv (savedFloat, savedNumPoly) =
-  let _ = setRef floatLocalsRef savedFloat
-  setRef numPolyLocalsRef savedNumPoly
+restoreArmNumEnv : WasmEmit -> (List String, List String) -> Unit
+restoreArmNumEnv emit (savedFloat, savedNumPoly) =
+  let _ = setRef emit.floatLocals savedFloat
+  setRef emit.numPolyLocals savedNumPoly
 
 -- a leaf: re-match arm i's pattern against `root` to bind its PVars (loading struct
 -- fields), then emit the body, then `br decLabel` with the value.
@@ -8239,7 +8214,7 @@ emitLeafRef prog env d decLabel root arms i = match nthArm arms i
     let (binds, env2) = bindPatRef prog env pat root
     let savedNum = seedArmNumEnv prog pat body
     let bodyCode = emitRefExpr prog env2 d body
-    let _ = restoreArmNumEnv savedNum
+    let _ = restoreArmNumEnv (progEmit prog) savedNum
     binds ++ bodyCode ++ ["br " ++ decLabel]
   None => gapLP prog "ref-mode: decision arm index out of range"
 
@@ -8264,7 +8239,7 @@ emitGuardArmRef prog env d decLabel root occs arms i fail = match nthArm arms i
     -- body is emitted under env3, not env2.
     let (gcode, env3) = emitGuardChainRef prog env2 d gLabel guards
     let armCode = ["block " ++ gLabel] ++ indent (tests ++ binds ++ gcode ++ emitRefExpr prog env3 d body ++ ["br " ++ decLabel]) ++ ["end"]
-    let _ = restoreArmNumEnv savedNum
+    let _ = restoreArmNumEnv (progEmit prog) savedNum
     armCode ++ emitTreeRef prog env d decLabel root occs arms fail
   None => gapLP prog "ref-mode: guarded arm index out of range"
 
@@ -8437,9 +8412,9 @@ emitLitSwitchRef prog env d decLabel root foc rest arms ((CTBranch (HLit (LChar 
 -- W6: String-literal switch head — compare the focus $str against each literal via
 -- `$mdk_str_compare` (returns the i31 1 on equal), reusing the `PLit (LString)` logic.
 emitLitSwitchRef prog env d decLabel root foc rest arms ((CTBranch (HLit (LString s)) sub)::more) dft idt =
-  let _ = setRef useStrSearchRef True
-  let _ = setRef useStrLeafRef True
-  let _ = setRef useStrRef True
+  let _ = setRef (progEmit prog).useStrSearch True
+  let _ = setRef (progEmit prog).useStrLeaf True
+  let _ = setRef (progEmit prog).useStr True
   indentBy idt (foc ++ ["ref.cast (ref $str)"] ++ emitLitRef (progEmit prog) (LString s) ++ ["call $mdk_str_compare", "ref.cast (ref i31)", "i31.get_u", "i32.const 1", "i32.eq"] ++ ["if"])
     ++ indentBy (idt + 1) (emitTreeRef prog env d decLabel root rest arms sub)
     ++ indentBy idt ["else"]
@@ -8532,7 +8507,7 @@ isFnBind (CBind "main" _) = False
 isFnBind b = not (isValBind b)
 
 -- #288: names of nullary value bindings whose RHS is statically Float (structural
--- `cexprIsFloat`, e.g. `nan = 0.0 / 0.0`).  Seeds floatGlobalsRef so a `global.get`
+-- `cexprIsFloat`, e.g. `nan = 0.0 / 0.0`).  Seeds floatGlobals so a `global.get`
 -- of such a name reads as Float at a comparison site.
 floatValGlobalNames : Prog -> List CBind -> List String
 floatValGlobalNames prog binds = flatMap (floatValGlobalName prog) binds
@@ -8636,8 +8611,8 @@ w7LocalDecls emit maxDepth =
 w7LocalsAtDepth : WasmEmit -> Int -> List String
 w7LocalsAtDepth emit d =
   let sfx = intToString d
-  let rl = if !useListRef then ["(local $__rlacc" ++ sfx ++ " (ref eq))", "(local $__rli" ++ sfx ++ " i32)", "(local $__rllo" ++ sfx ++ " i32)"] else []
-  let ra = if !useArrayRef then ["(local $__raarr" ++ sfx ++ " (ref null $arr))", "(local $__rai" ++ sfx ++ " i32)", "(local $__ralo" ++ sfx ++ " i32)", "(local $__racnt" ++ sfx ++ " i32)", "(local $__ixarr" ++ sfx ++ " (ref null $arr))", "(local $__ixi" ++ sfx ++ " i32)", "(local $__slsrc" ++ sfx ++ " (ref null $arr))", "(local $__sldst" ++ sfx ++ " (ref null $arr))", "(local $__sllo" ++ sfx ++ " i32)", "(local $__sllen" ++ sfx ++ " i32)",
+  let rl = if !emit.useList then ["(local $__rlacc" ++ sfx ++ " (ref eq))", "(local $__rli" ++ sfx ++ " i32)", "(local $__rllo" ++ sfx ++ " i32)"] else []
+  let ra = if !emit.useArray then ["(local $__raarr" ++ sfx ++ " (ref null $arr))", "(local $__rai" ++ sfx ++ " i32)", "(local $__ralo" ++ sfx ++ " i32)", "(local $__racnt" ++ sfx ++ " i32)", "(local $__ixarr" ++ sfx ++ " (ref null $arr))", "(local $__ixi" ++ sfx ++ " i32)", "(local $__slsrc" ++ sfx ++ " (ref null $arr))", "(local $__sldst" ++ sfx ++ " (ref null $arr))", "(local $__sllo" ++ sfx ++ " i32)", "(local $__sllen" ++ sfx ++ " i32)",
     -- W10 array-intrinsic-extern scratch (loop counter, size, result array, list cursor,
     -- closure/init value) for arrayMake/arrayMakeWith/arrayFromList/arraySetUnsafe.
     "(local $__aexi" ++ sfx ++ " i32)", "(local $__aexn" ++ sfx ++ " i32)", "(local $__aexarr" ++ sfx ++ " (ref null $arr))", "(local $__aexlst" ++ sfx ++ " (ref eq))", "(local $__aexf" ++ sfx ++ " (ref eq))", "(local $__aexv" ++ sfx ++ " (ref eq))",
