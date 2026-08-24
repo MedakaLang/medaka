@@ -245,6 +245,35 @@ if exc:
 
 missing = sorted(d for d in corpora if not results[d] and d not in exc)
 if missing:
+    # ── untracked-candidate check ─────────────────────────────────────────
+    # `git ls-files` (the gate universe above, see header) only sees TRACKED
+    # files. A gate script an agent just wrote but hasn't `git add`ed yet is
+    # invisible to `candidates` — so this FAIL can read as "the corpus needs
+    # another consumer" (a structural/design problem) when the real fix is
+    # sitting on disk, untracked, right now. Cross-check: any untracked *.sh
+    # (via `git status --porcelain`, scoped to this worktree same as
+    # `git ls-files`) that already contains a live reference to a missing
+    # corpus is very likely exactly that not-yet-staged gate.
+    untracked_out = subprocess.check_output(
+        ['git', 'status', '--porcelain', '--untracked-files=all'], cwd=root
+    ).decode()
+    untracked_sh = []
+    for line in untracked_out.splitlines():
+        # porcelain: "?? path" for untracked; strip status + leading space
+        if not line.startswith('??'):
+            continue
+        path = line[3:].strip()
+        if path.startswith('"') and path.endswith('"'):
+            path = path[1:-1]
+        if path.endswith('.sh'):
+            untracked_sh.append(path)
+
+    untracked_by_corpus = {}
+    for m in missing:
+        hits = [u for u in untracked_sh if refs(u, m)]
+        if hits:
+            untracked_by_corpus[m] = hits
+
     print()
     print("FAIL: these fixture/golden corpora are consumed by NO gate (checked every")
     print("      tracked *.sh, minus test/CI-COVERAGE-TOOLS.txt, live references only,")
@@ -252,8 +281,24 @@ if missing:
     print("      the parent directory if the leaf has no direct consumer):")
     for m in missing:
         print(f"       {m}")
-    print("       Wire it into (or delete it as dead), or add it to")
-    print("       test/FIXTURE-CORPUS-EXCEPTIONS.txt WITH A REASON AND AN OWNER.")
+        if m in untracked_by_corpus:
+            n = len(untracked_by_corpus[m])
+            print(f"         -> {n} untracked candidate gate{'s' if n != 1 else ''} found "
+                  f"that already reference this corpus: "
+                  f"{', '.join(untracked_by_corpus[m])} — git add "
+                  f"{'them' if n != 1 else 'it'} and re-run.")
+        # Always print the original fallback instruction too — a missing corpus
+        # with no untracked candidate is a genuinely structural gap and must
+        # never lose this guidance just because SOME OTHER missing corpus in
+        # this same run happens to have an untracked candidate.
+        print("         Wire it into (or delete it as dead), or add it to")
+        print("         test/FIXTURE-CORPUS-EXCEPTIONS.txt WITH A REASON AND AN OWNER.")
+    if untracked_by_corpus:
+        print()
+        print("      NOTE: at least one missing corpus above has an untracked *.sh")
+        print("      candidate on disk (see '->' lines) — this may not be a real")
+        print("      coverage gap, just an un-`git add`ed gate. Stage it and re-run")
+        print("      before treating this as a structural corpus problem.")
     rc = 1
 
 if rc == 0:
