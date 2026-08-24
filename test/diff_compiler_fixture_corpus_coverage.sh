@@ -287,15 +287,18 @@ if missing:
                   f"that already reference this corpus: "
                   f"{', '.join(untracked_by_corpus[m])} — git add "
                   f"{'them' if n != 1 else 'it'} and re-run.")
+        # Always print the original fallback instruction too — a missing corpus
+        # with no untracked candidate is a genuinely structural gap and must
+        # never lose this guidance just because SOME OTHER missing corpus in
+        # this same run happens to have an untracked candidate.
+        print("         Wire it into (or delete it as dead), or add it to")
+        print("         test/FIXTURE-CORPUS-EXCEPTIONS.txt WITH A REASON AND AN OWNER.")
     if untracked_by_corpus:
         print()
         print("      NOTE: at least one missing corpus above has an untracked *.sh")
         print("      candidate on disk (see '->' lines) — this may not be a real")
         print("      coverage gap, just an un-`git add`ed gate. Stage it and re-run")
         print("      before treating this as a structural corpus problem.")
-    else:
-        print("       Wire it into (or delete it as dead), or add it to")
-        print("       test/FIXTURE-CORPUS-EXCEPTIONS.txt WITH A REASON AND AN OWNER.")
     rc = 1
 
 if rc == 0:
