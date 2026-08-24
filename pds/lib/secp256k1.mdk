@@ -26,8 +26,139 @@ import lib.field.{
   feToBytes,
   feInverse,
 }
-import lib.scalar.{Sc, scToBytes}
+import lib.hmac_sha256.{hmacSha256FixedKey}
+import lib.scalar.{
+  Sc,
+  scFromBytesReduce,
+  scSecretCandidate,
+  scSelect,
+  scToBytes,
+}
 import array.{set}
+
+-- RFC 6979's internal state and candidates stay private to this module. The
+-- exported `ForTest` observations below expose only fixed-width byte copies and
+-- the aggregate selection bit needed by the gate.
+data Rfc6979State = Rfc6979State (Array Int) (Array Int)
+data Rfc6979Candidate = Rfc6979Candidate Int Sc (Array Int)
+data Rfc6979Schedule = Rfc6979Schedule Rfc6979Candidate Rfc6979Candidate
+
+rfc6979ByteCount : Int
+rfc6979ByteCount = 32
+
+rfc6979Require32 : String -> Array Int -> Unit
+rfc6979Require32 label bytes =
+  if arrayLength bytes /= rfc6979ByteCount then
+    panic ("secp256k1." ++ label ++ ": expected 32 bytes")
+  else
+    ()
+
+copyBytesInto : Array Int -> Array Int -> Int -> Int -> Unit
+copyBytesInto input out offset i =
+  if i >= arrayLength input then ()
+  else
+    let () = set (offset + i) input[i] out
+    copyBytesInto input out offset (i + 1)
+
+rfc6979Message97 : Array Int -> Int -> Array Int -> Array Int -> Array Int
+rfc6979Message97 value marker keyBytes digestBytes =
+  let out = arrayMake 97 0
+  let () = copyBytesInto value out 0 0
+  let () = set 32 marker out
+  let () = copyBytesInto keyBytes out 33 0
+  let () = copyBytesInto digestBytes out 65 0
+  out
+
+rfc6979Message33 : Array Int -> Array Int
+rfc6979Message33 value =
+  let out = arrayMake 33 0
+  let () = copyBytesInto value out 0 0
+  let () = set 32 0 out
+  out
+
+rfc6979Initialize : Sc -> Array Int -> Rfc6979State
+rfc6979Initialize key digest =
+  let () = rfc6979Require32 "rfc6979" digest
+  let keyBytes = scToBytes key
+  let digestBytes = scToBytes (scFromBytesReduce digest)
+  let k0 = arrayMake 32 0
+  let v0 = arrayMake 32 1
+  let k1 = hmacSha256FixedKey k0 (rfc6979Message97 v0 0 keyBytes digestBytes)
+  let v1 = hmacSha256FixedKey k1 v0
+  let k2 = hmacSha256FixedKey k1 (rfc6979Message97 v1 1 keyBytes digestBytes)
+  let v2 = hmacSha256FixedKey k2 v1
+  Rfc6979State k2 v2
+
+rfc6979RejectState : Array Int -> Array Int -> Rfc6979State
+rfc6979RejectState key value =
+  let rejectionKey = hmacSha256FixedKey key (rfc6979Message33 value)
+  let rejectionValue = hmacSha256FixedKey rejectionKey value
+  Rfc6979State rejectionKey rejectionValue
+
+rfc6979Candidate : Array Int -> Rfc6979Candidate
+rfc6979Candidate bytes =
+  let (validBit, scalar) = scSecretCandidate bytes
+  Rfc6979Candidate validBit scalar bytes
+
+rfc6979NonceSchedule : Sc -> Array Int -> Rfc6979Schedule
+rfc6979NonceSchedule key digest =
+  let (Rfc6979State initialKey initialValue) = rfc6979Initialize key digest
+  let candidate0Bytes = hmacSha256FixedKey initialKey initialValue
+  let (Rfc6979State rejectionKey rejectionValue) = rfc6979RejectState initialKey candidate0Bytes
+  let candidate1Bytes = hmacSha256FixedKey rejectionKey rejectionValue
+  Rfc6979Schedule
+    (rfc6979Candidate candidate0Bytes)
+    (rfc6979Candidate candidate1Bytes)
+
+candidateBytes : Rfc6979Candidate -> Array Int
+candidateBytes (Rfc6979Candidate _ _ bytes) = bytes
+
+injectedCandidate : Array Int -> Int -> Rfc6979Candidate
+injectedCandidate bytes validBit =
+  let () = rfc6979Require32 "rfc6979InjectedNonceProbeForTest" bytes
+  Rfc6979Candidate validBit (scFromBytesReduce bytes) bytes
+
+selectBytes : Int -> Array Int -> Array Int -> Array Int
+selectBytes bit a b =
+  let out = arrayMake rfc6979ByteCount 0
+  let () = selectBytesGo bit a b out 0
+  out
+
+selectBytesGo : Int -> Array Int -> Array Int -> Array Int -> Int -> Unit
+selectBytesGo bit a b out i =
+  if i >= rfc6979ByteCount then ()
+  else
+    let () = set i (a[i] + bit * (b[i] - a[i])) out
+    selectBytesGo bit a b out (i + 1)
+
+firstValidCandidate : Rfc6979Schedule -> (Int, Sc, Array Int)
+firstValidCandidate (Rfc6979Schedule (Rfc6979Candidate valid0 scalar0 bytes0) (Rfc6979Candidate valid1 scalar1 bytes1)) =
+  let select1 = (1 - valid0) * valid1
+  let validBit = valid0 + select1
+  (
+    validBit,
+    scSelect select1 scalar0 scalar1,
+    selectBytes select1 bytes0 bytes1,
+  )
+
+-- | Gate observation of both candidates from the production schedule.
+export
+rfc6979CandidateBytesForTest : Sc -> Array Int -> (Array Int, Array Int)
+rfc6979CandidateBytesForTest key digest =
+  let (Rfc6979Schedule candidate0 candidate1) = rfc6979NonceSchedule key digest
+  (candidateBytes candidate0, candidateBytes candidate1)
+
+-- | Gate-only injection after the complete normal HMAC schedule. The first
+--   two fields make that preceding production work observable; the final two
+--   prove first-valid selection and aggregate exhaustion without adding an
+--   injection parameter to production.
+export
+rfc6979InjectedNonceProbeForTest : Sc -> Array Int -> Array Int -> Int -> Array Int -> Int -> (Array Int, Array Int, Int, Array Int)
+rfc6979InjectedNonceProbeForTest key digest bytes0 valid0 bytes1 valid1 =
+  let (Rfc6979Schedule normal0 normal1) = rfc6979NonceSchedule key digest
+  let injected = Rfc6979Schedule (injectedCandidate bytes0 valid0) (injectedCandidate bytes1 valid1)
+  let (validBit, _, selectedBytes) = firstValidCandidate injected
+  (candidateBytes normal0, candidateBytes normal1, validBit, selectedBytes)
 
 -- | Affine coordinates are a distinct opaque carrier. They never encode
 --   infinity: the secret scalar boundary admits only nonzero scalars.

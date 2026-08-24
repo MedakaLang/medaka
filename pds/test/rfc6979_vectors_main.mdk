@@ -1,0 +1,110 @@
+{- | Native driver for the S3-A prehashed signing corpus's exact RFC 6979
+   candidate-0 column. Row 0 additionally exposes candidate 1 and executes
+   both gate-only injected selection routes after the normal schedule. -}
+
+import lib.scalar.{Sc, scFromBytes}
+import lib.secp256k1.{
+  rfc6979CandidateBytesForTest,
+  rfc6979InjectedNonceProbeForTest,
+}
+import array as A
+import hex.{decode, encode}
+import io.{readLines}
+import string.{split, trim}
+
+zero32 : Array Int
+zero32 = arrayMake 32 0
+
+oneBytes : Array Int
+oneBytes = [|
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 1,
+|]
+
+bytes : String -> Array Int
+bytes value = match decode value
+  Ok decoded => decoded
+  Err message => panic "rfc6979_vectors: malformed hex: \{message}"
+
+scalar : String -> Sc
+scalar value = match scFromBytes (bytes value)
+  Ok parsed => parsed
+  Err message => panic "rfc6979_vectors: invalid secret key: \{message}"
+
+bump : Array Int -> Int -> Unit
+bump counts i = A.set i (counts[i] + 1) counts
+
+pass : Array Int -> String -> <IO> Unit
+pass counts label =
+  let () = bump counts 0
+  println "PASS\t\{label}"
+
+fail : Array Int -> String -> <IO> Unit
+fail counts label =
+  let () = bump counts 1
+  println "FAIL\t\{label}"
+
+candidate1Probe : Sc -> Array Int -> Array Int -> Array Int -> Bool
+candidate1Probe key digest candidate0 candidate1 =
+  let (normal0, normal1, selectedValid, selected) = rfc6979InjectedNonceProbeForTest key digest zero32 0 oneBytes 1
+  normal0 == candidate0
+    && normal1 == candidate1
+    && normal0 /= normal1
+    && selectedValid == 1
+    && selected == oneBytes
+
+exhaustionProbe : Sc -> Array Int -> Array Int -> Array Int -> Bool
+exhaustionProbe key digest candidate0 candidate1 =
+  let (normal0, normal1, validBit, selected) = rfc6979InjectedNonceProbeForTest key digest zero32 0 oneBytes 0
+  normal0 == candidate0
+    && normal1 == candidate1
+    && normal0 /= normal1
+    && validBit == 0
+    && selected == zero32
+
+runProbes : Array Int -> Sc -> Array Int -> Array Int -> Array Int -> <IO> Unit
+runProbes counts key digest candidate0 candidate1 =
+  let () = if candidate1Probe key digest candidate0 candidate1 then
+    let () = bump counts 2
+    println "PROBE candidate-1-selection: PASS schedule=2 aggregate=1"
+  else fail counts "candidate-1-selection probe"
+  if exhaustionProbe key digest candidate0 candidate1 then
+    let () = bump counts 2
+    println "PROBE two-candidate-exhaustion: PASS schedule=2 aggregate=0"
+  else fail counts "two-candidate-exhaustion probe"
+
+runRow : Array Int -> Int -> String -> <IO> Unit
+runRow counts lineNo text = match split " " (trim text)
+  ["sign", row, keyHex, digestHex, _, expectedK, _, _, _, _, _] =>
+    let key = scalar keyHex
+    let digest = bytes digestHex
+    let (candidate0, candidate1) = rfc6979CandidateBytesForTest key digest
+    if encode candidate0 == expectedK then
+      let () = pass counts "row \{row} candidate-0"
+      if row == "0" then
+        let () = println "CANDIDATE1 row=0 k=\{encode candidate1}"
+        runProbes counts key digest candidate0 candidate1
+      else ()
+    else fail counts "row \{row} candidate-0 expected=\{expectedK} got=\{encode candidate0}"
+  _ => fail counts "line \{intToString lineNo} malformed signing row"
+
+runRows : Array Int -> List String -> Int -> <IO> Unit
+runRows counts [] _ = ()
+runRows counts (row::rest) lineNo =
+  let () = runRow counts lineNo row
+  runRows counts rest (lineNo + 1)
+
+main : <IO, Env, FileRead "_"> Unit
+main = match args ()
+  [path] => match readLines path
+    Err message => panic "rfc6979_vectors: cannot read corpus: \{message}"
+    Ok rows =>
+      let counts = arrayMake 3 0
+      let () = runRows counts rows 1
+      let () = println "counted: \{intToString counts[0]}/\{intToString (counts[0] + counts[1])} rows ok"
+      let () = println "probes: \{intToString counts[2]}/2 exceptional routes ok"
+      if counts[0] == 80 && counts[1] == 0 && counts[2] == 2 then println "TOTAL: PASS"
+      else
+        let () = println "TOTAL: FAIL"
+        exit 1
+  _ => panic "usage: rfc6979_vectors_main <prehashed-signing-corpus>"
