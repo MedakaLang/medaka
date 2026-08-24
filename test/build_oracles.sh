@@ -29,6 +29,12 @@
 #          sh test/build_oracles.sh --list    # list every oracle name this script
 #                                              # can build (builds nothing)
 #          sh test/build_oracles.sh --build-one <entry>       # build exactly one
+#          sh test/build_oracles.sh --deps <entry>            # print an entry's
+#                                              # transitive .mdk import closure,
+#                                              # one path per line; builds NO
+#                                              # oracle (#1534) — pipe to grep
+#                                              # to answer "does entry X depend
+#                                              # on file Y" cheaply
 #          sh test/build_oracles.sh --for '<gate-pattern>' …  # build only what
 #                                              # those gates read (see #398/#183)
 #                                              # each pattern is its OWN quoted arg:
@@ -206,20 +212,64 @@ if [ "${1:-}" = "--list" ]; then
   exit 0
 fi
 
+# ── --deps <entry> : print the entry's transitive .mdk import closure ──────────
+# (#1534) `--build-one`/`FORCE=1` answer "did a rebuild happen", not "does this
+# entry's import graph actually reach file Y" — `FORCE=1` rebuilds
+# unconditionally regardless of closure membership, and even without `FORCE`
+# the staleness check ($newest_src, above) compares against the newest mtime
+# across the WHOLE compiler/+stdlib/+runtime tree, not this entry's specific
+# transitive imports. So there was no cheap way to answer "does oracle X
+# depend on file Y" short of hand-reading the entry's `import` chain.
+#
+# Reuses the loader machinery `medaka check --json` already exposes — the SAME
+# module graph `medaka build` compiles (`loadProgramFilesLocatedE`,
+# compiler/driver/loader.mdk) — instead of reimplementing import-graph-walking
+# in shell. `check --json`'s `{"files":[...]}` envelope carries one entry per
+# module in the transitive closure, each with a "file" path, REGARDLESS of
+# whether that module has any diagnostics (every module gets a bucket, even a
+# clean one — compiler/driver/diagnostics.mdk's `cjAllToJson`/`mergeMainWarns`).
+# `check` never shells out to clang or produces a `test/bin/*` binary — only
+# `medaka build` does — so this is a genuine no-build discriminator: it needs
+# `./medaka` to exist (bootstrapping it if absent, same as the default path
+# below) but builds no oracle and links nothing.
+#
+#   sh test/build_oracles.sh --deps eval_run_main | grep compiler/frontend/parser.mdk
+#
+# One import path per line, sorted+deduped — deliberately plain (no "note:"/
+# "building" chatter) so it is pipeable/greppable, mirroring `--for --list`'s
+# convention (#832).
+if [ "${1:-}" = "--deps" ]; then
+  e="${2:-}"
+  [ -n "$e" ] || { echo "usage: $0 --deps <entry>" >&2; exit 1; }
+  src="$ROOT/compiler/entries/$e.mdk"
+  [ -f "$src" ] || { echo "FAIL: missing entry $src" >&2; exit 1; }
+  if [ ! -x "$MEDAKA" ]; then
+    echo "native medaka absent — bootstrapping via 'make medaka' (OCaml-free) ..." >&2
+    ( cd "$ROOT" && make medaka ) >&2 || { echo "FAIL: could not build ./medaka" >&2; exit 1; }
+  fi
+  [ -x "$MEDAKA" ] || { echo "FAIL: ./medaka still missing" >&2; exit 1; }
+  ( cd "$ROOT" && MEDAKA_ROOT="$ROOT" "$MEDAKA" check --json --allow-internal "$src" 2>/dev/null ) \
+    | grep -oE '"file":"[^"]*"' \
+    | sed -E 's/^"file":"//; s/"$//' \
+    | sort -u
+  exit 0
+fi
+
 # ── Catch-all: an UNRECOGNIZED first arg is an error, not a silent build-all ───
 # (#474). Before this fix, a typo'd or unimplemented flag (`--help`, `--list`
 # before this fix existed, any fat-fingered `--build-one`/`--for`) fell through
 # every `if` below and landed on the default path: build ALL of $ENTRIES,
 # spawning the xargs -P pool that AGENTS.md documents as having killed agents.
-# `--build-one` is handled (and exits) above this point; `--for` is handled (and
-# does NOT shift $1 away) below — so by the time this case runs, the only
-# LEGITIMATE values left for $1 are unset/empty (build-all — must stay that way)
-# or `--for` (falls through on purpose to the block that consumes it).
+# `--build-one` is handled (and exits) above this point; `--deps` is handled
+# (and exits) just above; `--for` is handled (and does NOT shift $1 away)
+# below — so by the time this case runs, the only LEGITIMATE values left for
+# $1 are unset/empty (build-all — must stay that way) or `--for` (falls
+# through on purpose to the block that consumes it).
 case "${1:-}" in
   ''|--for) ;;
   *)
     echo "FAIL: unknown argument: ${1:-}" >&2
-    echo "usage: $0 [--list | --build-one <entry> | --for ['--list'] '<gate-pattern>' ...]" >&2
+    echo "usage: $0 [--list | --build-one <entry> | --deps <entry> | --for ['--list'] '<gate-pattern>' ...]" >&2
     echo "       (no args = build all $(printf '%s\n' $ENTRIES | grep -vc '^$') oracles)" >&2
     exit 1
     ;;
