@@ -58,13 +58,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install toolchain
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y clang libgc-dev
-
-      - name: Build medaka (cold bootstrap from seed)
-        run: make medaka
+      - name: Setup medaka (toolchain + build)
+        uses: ./.github/actions/setup-medaka
+        with:
+          binary: build
 
       # check_removed_constructs.sh invokes ./medaka directly (no test/bin oracle
       # needed) and derives its own root via `dirname "$0"`, but MEDAKA_ROOT is
@@ -83,13 +80,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install toolchain
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y clang libgc-dev
-
-      - name: Build medaka (cold bootstrap from seed)
-        run: make medaka
+      - name: Setup medaka (toolchain + build)
+        uses: ./.github/actions/setup-medaka
+        with:
+          binary: build
 
       - name: Build the oracles perf_scaling needs
         run: FORCE=1 sh test/build_oracles.sh --for 'diff_compiler_perf_scaling'
@@ -120,13 +114,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install toolchain
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y clang libgc-dev
-
-      - name: Build medaka (cold bootstrap from seed)
-        run: make medaka
+      - name: Setup medaka (toolchain + build)
+        uses: ./.github/actions/setup-medaka
+        with:
+          binary: build
 
       - name: Build the oracle eval_scaling needs
         run: FORCE=1 sh test/build_oracles.sh --for 'diff_compiler_eval_scaling'
@@ -159,13 +150,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install toolchain
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y clang libgc-dev
-
-      - name: Build medaka (cold bootstrap from seed)
-        run: make medaka
+      - name: Setup medaka (toolchain + build)
+        uses: ./.github/actions/setup-medaka
+        with:
+          binary: build
 
       # fuzz_diff.sh reads test/bin/fuzz_gen_main (the native program generator)
       # and test/bin/eval_dict_main (the native-interp oracle). `--for 'fuzz_diff'`
@@ -287,37 +275,18 @@ jobs:
     name: "playground_e2e (Playwright vs the built CM6 playground — #72 pt.4)"
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    env:
-      # Same pinned release ci.yml's `wasm` job uses (see its "Install wasm-tools"
-      # step): build_playground_wasm.sh's own wasm-tools parse/validate step (below)
-      # needs it on PATH, and pinning keeps CI and the dev box byte-identical.
-      WASM_TOOLS_VERSION: 1.219.1
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install toolchain
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y clang libgc-dev
-
-      # node >= 24: build_playground_wasm.sh's own wasm emitter oracle build needs it
-      # (finalized WasmGC), and so does playground/e2e/run.sh itself (README: node v20
-      # can't run the WasmGC playground module).
-      - name: Set up Node.js 24
-        uses: actions/setup-node@v4
+      # node >= 24 + wasm-tools: build_playground_wasm.sh's own wasm emitter oracle
+      # build needs both (finalized WasmGC), and so does playground/e2e/run.sh itself
+      # (README: node v20 can't run the WasmGC playground module). Same pinned
+      # wasm-tools release and install recipe as ci.yml's `wasm` job (setup-medaka's
+      # own input defaults — the single source, #1936).
+      - name: Setup medaka (toolchain + wasm)
+        uses: ./.github/actions/setup-medaka
         with:
-          node-version: 24
-
-      # wasm-tools parses + validates the emitted WAT inside build_playground_wasm.sh
-      # ("[2/2] compiling ... to WasmGC"). Same install recipe as ci.yml's `wasm` job.
-      - name: Install wasm-tools
-        run: |
-          set -eu
-          v="$WASM_TOOLS_VERSION"
-          url="https://github.com/bytecodealliance/wasm-tools/releases/download/v${v}/wasm-tools-${v}-x86_64-linux.tar.gz"
-          curl -sSfL "$url" | tar xz
-          sudo mv "wasm-tools-${v}-x86_64-linux/wasm-tools" /usr/local/bin/wasm-tools
-          wasm-tools --version
+          wasm: 'true'
 
       # playground/e2e/tests/playground.spec.mjs launches
       # `chromium.launch({channel:'chrome'})` — the SYSTEM Google Chrome, never a

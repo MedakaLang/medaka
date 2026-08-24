@@ -135,18 +135,14 @@ env:
   # hidden by parallelism. The emitter is the reused workhorse and stays -O2.
   ORACLE_OPT: -O0
 
-  # ── The wasm toolchain pin — ONE definition, TWO consumers (#597) ────────────
+  # ── The wasm toolchain pin — ONE definition, tree-wide (#1936) ───────────────
   # Pinned to the dev box's version (AGENTS.md: reproducible, deterministic bytes),
   # so CI and local runs parse/validate the emitted WAT with IDENTICAL wasm-tools.
-  #
-  # Workflow-level ON PURPOSE. Two jobs install this toolchain — `wasm:` (its five
-  # WasmGC gates) and `gates:`' `engines` shard (the T2/T3 arms of the 3-engine
-  # differential, #597) — and two copies of a version pin that can silently disagree
-  # is this repo's most-documented failure shape. Both read these two vars; there is
-  # no second number to keep in sync. Node is pinned here for the same reason, and is
-  # consumed by `actions/setup-node`'s node-version in BOTH jobs.
-  WASM_TOOLS_VERSION: "1.219.1"
-  WASM_NODE_VERSION: "24"
+  # Used to live here as two workflow-level vars read by both `wasm:` and `gates:`'
+  # `engines` shard — now it lives as the `wasm-tools-version` / `wasm-node-version`
+  # input defaults on `.github/actions/setup-medaka/action.yml`, the single source
+  # every consumer (this file's `gates`/`wasm` jobs, and nightly.yml) reads from by
+  # not overriding them.
 
 jobs:
   # ── T-4b: docs-only fast path ───────────────────────────────────────────────
@@ -927,53 +923,19 @@ jobs:
       # and a per-shard toolchain would mean a gate moved between shards for cost reasons
       # (which is now a routine act — see the shard-scheduling note above) could silently
       # lose its oracle and start "passing".
-      - name: Install toolchain
-        if: steps.plan.outputs.has_work == 'true'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y clang libgc-dev sqlite3
-
-      # ── The wasm arm of the 3-engine differential (#597) — `engines` shard ONLY ────
-      # These two steps are the PEER of the identically-named steps in the `wasm:` job
-      # below; both read WASM_NODE_VERSION / WASM_TOOLS_VERSION from the workflow-level
-      # `env:` block, so the toolchain cannot drift between the two jobs that install it.
-      # If you change how either is installed, change it in BOTH places (grep
-      # WASM_TOOLS_VERSION — two consumers, by construction).
       #
-      # Guarded on matrix.wasm_arm so shards without a Wasm differential pay nothing:
-      # ~3s of setup-node plus ~1s of curl.
-      - name: Set up Node.js ${{ env.WASM_NODE_VERSION }} (wasm arm)
-        if: steps.plan.outputs.has_work == 'true' && matrix.wasm_arm != ''
-        uses: actions/setup-node@v4
+      # Also the wasm arm of the 3-engine differential (#597, `engines` shard only) —
+      # the PEER of the `wasm:` job's own call to this same action below; both default
+      # to the same wasm-tools/Node pin, so the toolchain cannot drift between the two
+      # jobs that install it. Guarded on matrix.wasm_arm so shards without a Wasm
+      # differential pay nothing: ~3s of setup-node plus ~1s of curl.
+      - name: Setup medaka (toolchain + wasm arm + build)
+        if: steps.plan.outputs.has_work == 'true'
+        uses: ./.github/actions/setup-medaka
         with:
-          node-version: ${{ env.WASM_NODE_VERSION }}
-
-      - name: Install wasm-tools (wasm arm)
-        if: steps.plan.outputs.has_work == 'true' && matrix.wasm_arm != ''
-        run: |
-          set -eu
-          v="$WASM_TOOLS_VERSION"
-          url="https://github.com/bytecodealliance/wasm-tools/releases/download/v${v}/wasm-tools-${v}-x86_64-linux.tar.gz"
-          # Extract OUTSIDE the checkout.  `tar xz` in the workspace leaves
-          # `wasm-tools-${v}-x86_64-linux/` behind after the binary is moved out, and the
-          # gates shards end with a review gate (`git status --porcelain`) that FAILS on any
-          # untracked file — so unpacking here turns a toolchain install into a red shard.
-          # The `wasm:` job has no such gate, which is why this was invisible until the
-          # engines shard grew a wasm arm (#597).
-          d="$(mktemp -d)"
-          curl -sSfL "$url" | tar xz -C "$d"
-          sudo mv "$d/wasm-tools-${v}-x86_64-linux/wasm-tools" /usr/local/bin/wasm-tools
-          rm -rf "$d"
-          wasm-tools --version
-
-      # A fresh checkout has no ./medaka_emitter, so this is the COLD path: it
-      # bootstraps from the checked-in seed (compiler/seed/emitter.ll.gz). Every
-      # shard therefore re-proves the trust anchor. If the seed ever goes stale,
-      # this is what catches it — before anything downstream can be trusted. 80s.
-      #
-      - name: Build medaka (cold bootstrap from seed)
-        if: steps.plan.outputs.has_work == 'true'
-        run: make medaka
+          sqlite: 'true'
+          wasm: ${{ matrix.wasm_arm != '' }}
+          binary: build
 
       # Per-shard: this shard's oracle set, keyed the same way as the binary
       # above (plus test/build_oracles.sh itself — the script that builds them)
@@ -1012,7 +974,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: test/bin
-          key: oracles-${{ matrix.name }}-v3-${{ hashFiles('compiler/**', 'stdlib/**', 'runtime/**', 'test/build_native_medaka.sh', 'test/bootstrap_from_seed.sh', 'test/build_oracles.sh', 'Makefile') }}-${{ hashFiles('.github/workflows/ci.yml') }}-${{ needs.detect.outputs.oracle_key }}
+          key: oracles-${{ matrix.name }}-v3-${{ hashFiles('compiler/**', 'stdlib/**', 'runtime/**', 'test/build_native_medaka.sh', 'test/bootstrap_from_seed.sh', 'test/build_oracles.sh', 'Makefile') }}-${{ hashFiles('.github/workflows/ci.yml', '.github/actions/**') }}-${{ needs.detect.outputs.oracle_key }}
 
       # Only the oracles THIS shard's gates actually read. See the header.
       # Skipped only on an exact cache hit above — a miss always rebuilds with
@@ -1254,14 +1216,11 @@ jobs:
             exit 1
           fi
 
-      - name: Install toolchain
+      - name: Setup medaka (toolchain + build)
         if: needs.detect.outputs.docs_only != 'true'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y clang libgc-dev
-      - name: Build medaka (cold bootstrap from seed)
-        if: needs.detect.outputs.docs_only != 'true'
-        run: make medaka
+        uses: ./.github/actions/setup-medaka
+        with:
+          binary: build
 
       # ── Fingerprint mirror parity (#267) ────────────────────────────────────────
       #
@@ -1384,11 +1343,9 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-      - name: Install toolchain
+      - name: Setup medaka (toolchain only)
         if: needs.detect.outputs.docs_only != 'true'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y clang libgc-dev
+        uses: ./.github/actions/setup-medaka
       - name: Seed must still build a working emitter (drift only warns)
         if: needs.detect.outputs.docs_only != 'true'
         run: |
@@ -1411,14 +1368,11 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Install toolchain
+      - name: Setup medaka (toolchain + build)
         if: needs.detect.outputs.docs_only != 'true'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y clang libgc-dev
-      - name: Build medaka (cold bootstrap from seed)
-        if: needs.detect.outputs.docs_only != 'true'
-        run: make medaka
+        uses: ./.github/actions/setup-medaka
+        with:
+          binary: build
       - name: Doctests, properties, and test decls
         if: needs.detect.outputs.docs_only != 'true'
         run: make test
@@ -1479,51 +1433,24 @@ jobs:
     needs: detect
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    # WASM_TOOLS_VERSION / WASM_NODE_VERSION come from the WORKFLOW-level `env:` block
-    # at the top of this file — shared verbatim with the `engines` gate shard, which
-    # installs the same toolchain for the 3-engine differential's T2/T3 arms (#597).
-    # Do not re-pin either here; that is precisely the drift the hoist prevents.
+    # wasm-tools/Node versions come from setup-medaka's own input defaults — shared
+    # verbatim with the `engines` gate shard's call to the same action, which installs
+    # the same toolchain for the 3-engine differential's T2/T3 arms (#597). Do not
+    # override either here; that is precisely the drift the single source prevents.
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install toolchain
-        if: needs.detect.outputs.docs_only != 'true'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y clang libgc-dev
-
       # node >= 22 is required for the finalized WasmGC 3.0 GC encoding these gates emit
-      # (test/wasm/run.js). ubuntu-latest ships an older node, so pin 24 (the dev box's).
-      - name: Set up Node.js ${{ env.WASM_NODE_VERSION }}
+      # (test/wasm/run.js). ubuntu-latest ships an older node, so this pins 24 (the dev
+      # box's). wasm-tools (parse + validate the emitted WAT) is NOT on a stock runner
+      # either — the pinned prebuilt release is downloaded and extracted OUTSIDE the
+      # checkout (see the action for why).
+      - name: Setup medaka (toolchain + wasm + build)
         if: needs.detect.outputs.docs_only != 'true'
-        uses: actions/setup-node@v4
+        uses: ./.github/actions/setup-medaka
         with:
-          node-version: ${{ env.WASM_NODE_VERSION }}
-
-      # wasm-tools (parse + validate the emitted WAT) is NOT on a stock runner. Download
-      # the pinned prebuilt release — `cargo install` would cost minutes and drift by
-      # version. The URL/version was verified to resolve before landing this job.
-      - name: Install wasm-tools
-        if: needs.detect.outputs.docs_only != 'true'
-        run: |
-          set -eu
-          v="$WASM_TOOLS_VERSION"
-          url="https://github.com/bytecodealliance/wasm-tools/releases/download/v${v}/wasm-tools-${v}-x86_64-linux.tar.gz"
-          # Extract OUTSIDE the checkout.  `tar xz` in the workspace leaves
-          # `wasm-tools-${v}-x86_64-linux/` behind after the binary is moved out, and the
-          # gates shards end with a review gate (`git status --porcelain`) that FAILS on any
-          # untracked file — so unpacking here turns a toolchain install into a red shard.
-          # The `wasm:` job has no such gate, which is why this was invisible until the
-          # engines shard grew a wasm arm (#597).
-          d="$(mktemp -d)"
-          curl -sSfL "$url" | tar xz -C "$d"
-          sudo mv "$d/wasm-tools-${v}-x86_64-linux/wasm-tools" /usr/local/bin/wasm-tools
-          rm -rf "$d"
-          wasm-tools --version
-
-      - name: Build medaka (cold bootstrap from seed)
-        if: needs.detect.outputs.docs_only != 'true'
-        run: make medaka
+          wasm: 'true'
+          binary: build
 
       # The three WasmGC emitter oracle binaries (wasm_emit_main / _typed_ / _modules_)
       # that these gates drive. Cheap; deliberately NOT cached (they are a pure
