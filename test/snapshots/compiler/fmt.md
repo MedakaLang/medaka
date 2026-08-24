@@ -1,5 +1,5 @@
 # META
-source_lines=756
+source_lines=764
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted comment-preserving formatter — port of lib/printer.ml's
@@ -727,10 +727,18 @@ stringTokenSpans (_::ts) (_::ps) = stringTokenSpans ts ps
 
 -- Zip the original literal order against the formatted output's literal
 -- spans, keeping only the ones that need restoring, as (start, end,
--- replacementText) into the FORMATTED text. A length mismatch (formatting
--- somehow changed the literal count) just drops whatever can't be paired —
--- the safe failure mode is "some triple strings stay collapsed", never a
--- misapplied span.
+-- replacementText) into the FORMATTED text. Both lists are walked in
+-- lockstep (one element off each per step), so a token-count mismatch is
+-- ONLY handled safely when it falls at the TAIL: the final `_ _ = []`
+-- clause fires once the shorter list runs out, dropping whatever's left
+-- on the longer one — "some triple strings stay collapsed," never a
+-- misapplied span. A mismatch introduced MID-LIST (a `TString` inserted or
+-- removed before the last one) would desync every pairing after that
+-- point and could splice the wrong literal's text into the wrong span. No
+-- live trigger is known — formatting never reorders or drops string
+-- literals, and interpolated strings are symmetrically invisible to this
+-- tokenization (#1858) — but that's an invariant of the CALLER, not one
+-- this function enforces on its own.
 tripleStringSubs : List (Bool, String) -> List (Int, Int) -> List (Int, Int, String)
 tripleStringSubs ((True, raw)::is) ((s, e)::ss) =
   (s, e, raw) :: tripleStringSubs is ss
