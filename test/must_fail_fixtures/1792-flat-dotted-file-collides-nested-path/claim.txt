@@ -1,0 +1,69 @@
+issue: 1792
+what: `moduleIdOfPath` (compiler/driver/loader.mdk) is a LOSSY path->id map: it
+what: strips the root prefix and the `.mdk` suffix, then replaces every `/`
+what: with `.` (`slashToDot`). A `.` typed literally in a filename and a `.`
+what: synthesized from a path separator are indistinguishable in the result.
+what: `private_mangle.mdk:186` disclaimed this as a theoretical gap uncovered
+what: by `checkSymbolsInjective`'s `prev == pre` guard. This fixture confirms
+what: it is REACHABLE and produces SILENT WRONG BEHAVIOR, not merely a
+what: theoretical non-injectivity: `<root>/a.b.mdk` (flat, literal dot) and
+what: `<root>/a/b.mdk` (nested) both map to module id "a.b".
+what:
+what: The mechanism is NOT "the two files get merged" or "one shadows the
+what: other in a visited-set". It is worse: `loadProgramFilesE` computes the
+what: ENTRY's module id via `moduleIdOfPath roots entry`, then hands only
+what: that STRING to `visitModF`, which loads the actual file bytes via
+what: `readModuleProgF` -> `findModuleFile` -> `findInRoots` ->
+what: `fileOfModuleId root modId`. `fileOfModuleId` reconstructs a path from
+what: the module id alone (dots -> slashes, + ".mdk") -- it has no memory of
+what: the ORIGINAL entry path once `moduleIdOfPath` has collapsed it to a
+what: string. For entry "a.b" that reconstructed path is ALWAYS `<root>/a/b.mdk`
+what: (the nested file), never `<root>/a.b.mdk` (the flat file actually named
+what: on the command line).
+what:
+what: So `medaka run <root>/a.b.mdk`, with `<root>/a/b.mdk` also present under
+what: the same root, silently ignores the named entry file's own bytes and
+what: instead compiles and runs the UNRELATED nested file's content -- with
+what: no diagnostic, no warning, exit 0. `a.b.mdk` says `println 111`;
+what: `a/b.mdk` says `println 222`; running `a.b.mdk` prints 222.
+what:
+what: MEASURED FIRST-HAND on a binary cold-built in this worktree (no
+what: borrowed emitter), MEDAKA_STRICT=1, exit read via a file redirect:
+what:   MEDAKA_STRICT=1 medaka run <dir>/a.b.mdk > out 2>&1; echo $?
+what:     -> exit 0, out = "222"          (WRONG: a.b.mdk's own source says 111)
+what:   MEDAKA_STRICT=1 medaka run <dir>/control.mdk > out 2>&1; echo $?
+what:     -> exit 0, out = "111"          (control: no colliding sibling, correct)
+what: Neither run produces a diagnostic of any kind -- the collision is
+what: entirely invisible to `checkSymbolsInjective`'s guard, confirming the
+what: `private_mangle.mdk:186` disclaimer's hypothesis as REACHABLE, not just
+what: theoretical.
+cmd: run a.b.mdk
+exit: 0
+stdout: 222
+control: run control.mdk
+why-fixture: `stdout: 222` is the whole pinned observation, deliberately: there is no
+why-fixture: diagnostic to key on (`check --json` on this program also exits 0 with no
+why-fixture: diagnostics -- the collision is silent end to end), and no crash to pin an
+why-fixture: exit code against (exit is 0, same as a correct program). The ONLY
+why-fixture: discriminator between "fixed" and "still broken" is WHICH file's content
+why-fixture: came out: 111 (a.b.mdk's own source, correct) vs 222 (a/b.mdk's source,
+why-fixture: the live bug). A future fix that makes `moduleIdOfPath`/loading injective
+why-fixture: (or that at minimum makes `run a.b.mdk` load `a.b.mdk`'s own bytes) flips
+why-fixture: this to 111 and DRAINS the row -- exactly the signal this suite wants.
+why-fixture: `run`, not `check`/`build`: `run` is the tree-walking interpreter, the most
+why-fixture: direct path from "named entry file" to "observed output" with the fewest
+why-fixture: intermediate stages that could independently reintroduce or mask the bug.
+why-control: control.mdk is `println 111` with NO colliding sibling anywhere under the
+why-control: fixture root -- same shape, module id "control" is injective under this
+why-control: root. MEASURED: run control.mdk exits 0, prints 111, matching its own
+why-control: source exactly. This isolates the observation to the COLLISION
+why-control: specifically (two source files mapping to the same module id), not to
+why-control: anything else about `run`, the fixture layout, or a nested subdirectory
+why-control: per se.
+why-note: #1792 stays OPEN. This pin does not require a specific fix shape -- the
+why-note: disclaimer at private_mangle.mdk:186 is updated (this same slice) to say
+why-note: #1792 is CONFIRMED reachable, naming this fixture. A fix could either make
+why-note: `moduleIdOfPath` injective (e.g. reject or escape a literal `.` in a
+why-note: filename) or make the loader resolve an entry by its OWN path rather than by
+why-note: round-tripping through the lossy module id -- either drains this row by
+why-note: making `run a.b.mdk` print 111.

@@ -1,5 +1,5 @@
 # META
-source_lines=1079
+source_lines=1087
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -191,7 +191,15 @@ mangleUnits coreDecls modules =
 --     ids.  `checkSymbolsInjective`'s `prev == pre` skip (below) treats two entries
 --     with the SAME pre-image label as one pre-image seen twice, so two distinct
 --     source units that happen to share ONE canonical module id collapse invisibly
---     — this guard cannot see them.  Uncovered, tracked: #1792.
+--     — this guard cannot see them.  #1792 CONFIRMED reachable (not merely
+--     theoretical): `moduleIdOfPath` (`driver/loader.mdk`) collapses a flat file
+--     with a literal `.` in its name (`<root>/a.b.mdk`) and a nested file
+--     (`<root>/a/b.mdk`) to the identical module id "a.b", and
+--     `loadProgramFilesE` resolves the entry's file BY that collapsed id
+--     (`fileOfModuleId`) rather than by the entry's own path, so `medaka run
+--     <root>/a.b.mdk` silently loads and runs `<root>/a/b.mdk`'s bytes instead
+--     — exit 0, no diagnostic. Repro: `test/must_fail_fixtures/
+--     1792-flat-dotted-file-collides-nested-path/`.
 -- Functions and constructors are checked as SEPARATE domains: they are emitted into
 -- separate symbol namespaces (a ctor becomes `@mdk_ctorpap_<sym>_<n>`), so merging
 -- them could only manufacture a false positive, never catch a real collision.
