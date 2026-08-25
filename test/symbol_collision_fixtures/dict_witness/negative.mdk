@@ -1,0 +1,25 @@
+-- Negative control: two impls of the SAME method name (`zn`, interface `Zn`)
+-- at head tycons `Mzone`/`NYone`, dispatched through one dict parameter
+-- (`callZn`) -- S-4's own construction (#348's original repro shape), adapted
+-- to exercise the dict-witness domain rather than the emitted-symbol domain.
+-- `hashName "Mzone" == hashName "NYone" == 210683374574` (same adjacent-shift
+-- mechanism as the positive control). These two words ARE compared against
+-- each other by `zn`'s shared dispatcher, so this collision is LIVE and must
+-- still REFUSE after FR-1's method-name scoping -- the fix narrows the guard's
+-- population, it does not weaken what it catches within one method's chain.
+interface Zn a where
+  zn : a -> String
+
+data Mzone = Mzone
+data NYone = NYone
+
+impl Zn Mzone where
+  zn _ = "mzone"
+
+impl Zn NYone where
+  zn _ = "nyone"
+
+callZn : Zn a => a -> String
+callZn x = zn x
+
+main = println (callZn Mzone ++ "|" ++ callZn NYone)

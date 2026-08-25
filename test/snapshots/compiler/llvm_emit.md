@@ -1,5 +1,5 @@
 # META
-source_lines=11370
+source_lines=11372
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -1398,7 +1398,9 @@ defaultAtOr fallback e method tag = match defaultForAt e method tag
 -- (`backend.private_mangle`, the ONE shared encoding since #1950) is the identity
 -- on every bare head tag (type heads are `[A-Za-z0-9_]`, tuples are `__tupleN__`),
 -- so every existing symbol is byte-identical; it only ever fires on the C7 /
--- #1036 collision path, which previously emitted an illegal name.
+-- #1036 collision path, which previously emitted a LEGAL but LOSSY name — the
+-- pre-#1950 sanitize collapsed distinct keys onto one identifier, silently
+-- merging two defines rather than producing anything clang would reject.
 defaultFnName : String -> String -> String
 defaultFnName tag method = "mdk_default_\{method}_\{injectiveIdent tag}"
 
