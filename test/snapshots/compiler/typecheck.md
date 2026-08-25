@@ -1,5 +1,5 @@
 # META
-source_lines=33387
+source_lines=33397
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -27448,8 +27448,13 @@ instantiateSigTracked ty =
 
 -- 🚨 ONE ENTRY PER PREDICATE (S-dict-arity-contract, #1318/B-4) — the (iface, bare
 -- tyvar NAMES) pairs of a signature's `=>` constraints, ONE per constraint that has at
--- least one bare-type-variable argument.  A constraint whose arguments are all
--- structured/concrete carries no dict slot and contributes nothing, as before.
+-- least one bare type variable ANYWHERE in its argument types, direct or NESTED
+-- (`tyVarArgNames`'s `dedup (flatMap tyVarNames tys)` walks into `TyApp`/`TyFun`/`TyTuple`
+-- spines, not just top-level `TyVar` arguments — S-structured-predicate-carry). So a
+-- STRUCTURED-only constraint (`Tag (Wrap a) =>`, no bare argument, `a` only reachable by
+-- descending into `Wrap a`) DOES carry a dict slot now.  Only a constraint whose
+-- arguments are entirely ground/closed — no bare type variable anywhere in them, nested
+-- or not — carries no dict slot and contributes nothing.
 --
 -- This list IS the dict-param cardinality of a `=>`-constrained top-level fn: it feeds
 -- `registerMemberSlots` → `funConstraintsRef`, which `dictArityOf` (define side) and
@@ -27639,8 +27644,13 @@ keptConstraintArgs ((_, monos)::rest) (v::vs) = match abstractSlotIds monos
 -- `normalize mono` is-a-`TVar` filter to the identical list; one traversal carrying the
 -- pair makes "the iface list is filtered the same way" unrepresentable-otherwise instead
 -- of a comment two functions apart.
--- S-dict-arity-contract: ONE slot per PREDICATE.  [monos] is the predicate's whole
--- bare-tyvar argument list at the signature instantiation; the slot survives when at
+-- S-dict-arity-contract: ONE slot per PREDICATE.  [monos] is NOT the predicate's own
+-- argument-type list (that can be structured, e.g. `[Wrap a]` for `Tag (Wrap a)`) — it is
+-- the instantiated monos of the bare tyvar NAMES `sigConstraints`/`tyVarArgNames` found
+-- inside those argument types, direct or nested, one per name
+-- (`constraintNameMonos`/`constraintVarArgMonos`).  Each entry of [monos] is therefore
+-- always a `TVar` at the signature instantiation, never a structured mono, even when the
+-- predicate's own argument was structured.  The slot survives when at
 -- least one of them is still abstract after body inference (a predicate ALL of whose
 -- variables the body forced concrete takes no dict, as before), and it is keyed on the
 -- FIRST such id — the same "first dispatch variable" rule the method-level channel has
