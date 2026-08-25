@@ -58,18 +58,26 @@ instead.
    verification.
 2. **Pre-dispatch freshness check — yours, not the implementer's, EVERY
    dispatch, fix-round packets included.** `git fetch origin main
-   sprint/<stage>`. If `origin/main` has moved past your last resync point,
-   resync NOW, before dispatching: real merge-base, diff merge-base..
-   origin/main against this stage's touched files to confirm no overlap (it
-   almost never overlaps — main moves fast on unrelated files far more often
-   than it touches your slice's own surface), merge `origin/main` into the
-   sprint branch on a disposable branch, push, update the packet's base to
-   the new head. This is a git command, not agent judgment — a dispatched
-   implementer hitting `BLOCKED` on stale-main is a wasted round-trip
-   (worktree mint + a refusal write-up for zero code), confirmed costly
-   across a full sprint (5 of 9 dispatches in one sprint were exactly this,
-   every resulting merge conflict-free and file-disjoint). Do this check
-   every time you're about to dispatch, not only after a BLOCKED report.
+   sprint/<stage>`. File overlap alone is NOT the divergence check — check
+   both directions before ruling out a resync:
+   ```sh
+   git merge-base --is-ancestor <sprint-tip> origin/main   # sprint fully in main?
+   git merge-base --is-ancestor origin/main <sprint-tip>   # main fully in sprint?
+   ```
+   If neither holds, the branches have genuinely diverged and a dispatched
+   implementer's `git merge --ff-only` WILL fail regardless of whether the
+   touched files overlap — `emit-state-injectivity`'s S-4 lost a full
+   round-trip (dispatch → BLOCKED report → orchestrator resync → redispatch)
+   to exactly this: file-overlap review said "no overlap, no resync needed,"
+   which was true about files and wrong about ff-only-ability. Resync NOW,
+   before dispatching, whenever the divergence check fails: merge
+   `origin/main` into the sprint branch on a disposable branch, push, update
+   the packet's base to the new head. This is a git command, not agent
+   judgment — a `BLOCKED` report for zero code is a wasted round-trip
+   (worktree mint + a refusal write-up), confirmed costly across a full
+   sprint (5 of 9 dispatches in one sprint were exactly this, every
+   resulting merge conflict-free and file-disjoint). Do this check every
+   time you're about to dispatch, not only after a BLOCKED report.
    ⚠️ **This applies identically to a fix-round dispatch** — `predicate-
    slots` re-broke on exactly this gap: the resync habit had only ever been
    exercised on slice dispatch, so a fix packet's first dispatch blocked on
