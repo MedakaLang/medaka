@@ -1,5 +1,5 @@
 # META
-source_lines=11376
+source_lines=11372
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -264,7 +264,7 @@ import backend.trmc_analysis.{
   dropFirstN,
   clauseArityOf,
 }
-import backend.private_mangle.{hashName, safeChar}
+import backend.private_mangle.{hashName, injectiveIdent}
 import backend.emit_support.{
   eagerReachMap,
   bindEagerReach,
@@ -1394,12 +1394,15 @@ defaultAtOr fallback e method tag = match defaultForAt e method tag
 --
 -- [tag] is a dispatch KEY, and on a head collision that key is the canonical
 -- full-type key (`Speak|(Box String)|`), whose `|`/`(`/space are not legal in an
--- LLVM identifier — clang rejects the define outright.  `safeIdent` is the identity
+-- LLVM identifier — clang rejects the define outright.  `injectiveIdent`
+-- (`backend.private_mangle`, the ONE shared encoding since #1950) is the identity
 -- on every bare head tag (type heads are `[A-Za-z0-9_]`, tuples are `__tupleN__`),
 -- so every existing symbol is byte-identical; it only ever fires on the C7 /
--- #1036 collision path, which previously emitted an illegal name.
+-- #1036 collision path, which previously emitted a LEGAL but LOSSY name — the
+-- pre-#1950 sanitize collapsed distinct keys onto one identifier, silently
+-- merging two defines rather than producing anything clang would reject.
 defaultFnName : String -> String -> String
-defaultFnName tag method = "mdk_default_\{method}_\{safeIdent tag}"
+defaultFnName tag method = "mdk_default_\{method}_\{injectiveIdent tag}"
 
 -- the lifted LLVM name of a tagged impl method: `mdk_impl_<tag>_<method>`.  Type
 -- heads and method names are alphanumeric identifiers (an operator like `+` is a
@@ -1414,7 +1417,11 @@ implFnName tag method = "mdk_impl_\{tag}_\{method}"
 -- collide on `mdk_impl_<head>_<method>` — they need distinct bodies.  When the head
 -- `tag` is the SOLE impl of `(method, head)` (the common case) → the bare head tag,
 -- so every existing impl's symbol stays byte-identical (fixpoint-safe).  On a
--- collision → the sanitized canonical full-type `key`, byte-distinct per impl.
+-- collision → the INJECTIVELY encoded canonical full-type `key`, byte-distinct per
+-- impl.  #1950: this used to be a lossy `[^A-Za-z0-9_] → _` collapse, under which
+-- two keys differing ONLY in those positions landed on one symbol.
+-- `wasm_emit.implFnSymTagW` and `core_ir_lower.implSymTagOf` call the SAME
+-- `injectiveIdent`, so both backends and the guard agree on the emitted symbol.
 -- The typechecker stamps the SAME canonical key into the RKey route (keyForSite),
 -- so emitMethod's `implFnSymOf` and emitGroup's name agree.
 implFnSymTag : List CImplEntry -> String -> String -> String -> String
@@ -1422,7 +1429,7 @@ implFnSymTag entries method tag key =
   if headTagUnique entries method tag then
     tag
   else
-    safeIdent key
+    injectiveIdent key
 
 -- does the head tycon [tag] of [method] have a single impl, or several distinct
 -- ones (C7 collision)?  Count DISTINCT canonical keys at this head — NOT raw
@@ -1456,19 +1463,6 @@ implFnSymOf _ _ _ = ""
 -- byte-identical — just O(bucket) not O(impls) per RKey site.
 implFnSymE : Emit -> String -> CImplEntry -> String
 implFnSymE e method ent = implFnSymOf (methodEntries e method) method ent
-
--- sanitize a canonical impl key to a valid LLVM identifier (mirrors
--- private_mangle.mdk's sanitizeId: anything outside [A-Za-z0-9_] → `_`).
-safeIdent : String -> String
-safeIdent s = safeIdentGo s 0 (stringLength s) ""
-
-safeIdentGo : String -> Int -> Int -> String -> String
-safeIdentGo s i len acc =
-  if i >= len then acc
-  else
-    let c = stringSlice i (i + 1) s
-    let c2 = if safeChar c then c else "_"
-    safeIdentGo s (i + 1) len (acc ++ c2)
 
 -- the method names of the program's tagged impls.  A bare CVar naming one of these,
 -- applied to args, is an arg-position dispatch site (return-position methods are
@@ -5542,9 +5536,11 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
     emit e ("  br label %" ++ endL)
 
 -- #747: the synthesized per-instance CAF bind name for (symTag, method) — must match
--- core_ir_lower.memoBindName EXACTLY (safeIdent == sanitizeId, and symTag already IS
--- the sanitized selector implFnSymTag chose), so the force target names the global
--- core_ir_lower prepended.
+-- core_ir_lower.memoBindName EXACTLY.  It does NOT re-encode: [symTag] is already
+-- the encoded selector `implFnSymTag` chose, and since #1950 both sides spell that
+-- selector with the SAME `private_mangle.injectiveIdent`, so the force target names
+-- the global core_ir_lower prepended.  Adding an encode step here would break that
+-- agreement, not strengthen it.
 memoGlobalName : String -> String -> String
 memoGlobalName symTag method = "$memo_\{symTag}_\{method}"
 
@@ -11386,7 +11382,7 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DUse false (UseGroup ("backend" "llvm_preamble") ((mem "preambleLines" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omSize" false) (mem "omEmpty" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "flattenApp" false) (mem "lengthS" false) (mem "freeVars" false) (mem "routeDictNames" false) (mem "bindName" false) (mem "bindNames" false) (mem "patVars" false) (mem "patVarsList" false) (mem "patVarNames" false) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "splitLastF" false) (mem "selfFree" false) (mem "mentionsSelfMethod" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispFindBind" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dictUniformPairs" false) (mem "dropFirstN" false) (mem "clauseArityOf" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "hashName" false) (mem "safeChar" false))))
+(DUse false (UseGroup ("backend" "private_mangle") ((mem "hashName" false) (mem "injectiveIdent" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "lazyGlobalNames" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "ftLabelOf" false) (mem "labelFallthrough" false) (mem "rngBound" false))))
 (DData Private "GapMode" () ((variant "Strict" (ConPos)) (variant "Record" (ConPos))) ())
 (DTypeSig false "isFallthroughVar" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -11595,11 +11591,11 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DTypeSig false "defaultAtOr" (TyFun (TyCon "CImplEntry") (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "CImplEntry"))))))
 (DFunDef false "defaultAtOr" ((PVar "fallback") (PVar "e") (PVar "method") (PVar "tag")) (EMatch (EApp (EApp (EApp (EVar "defaultForAt") (EVar "e")) (EVar "method")) (EVar "tag")) (arm (PCon "Some" (PVar "ent")) () (EVar "ent")) (arm (PCon "None") () (EVar "fallback"))))
 (DTypeSig false "defaultFnName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "defaultFnName" ((PVar "tag") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk_default_")) (EApp (EVar "display") (EVar "method"))) (ELit (LString "_"))) (EApp (EVar "display") (EApp (EVar "safeIdent") (EVar "tag")))) (ELit (LString ""))))
+(DFunDef false "defaultFnName" ((PVar "tag") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk_default_")) (EApp (EVar "display") (EVar "method"))) (ELit (LString "_"))) (EApp (EVar "display") (EApp (EVar "injectiveIdent") (EVar "tag")))) (ELit (LString ""))))
 (DTypeSig false "implFnName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "implFnName" ((PVar "tag") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk_impl_")) (EApp (EVar "display") (EVar "tag"))) (ELit (LString "_"))) (EApp (EVar "display") (EVar "method"))) (ELit (LString ""))))
 (DTypeSig false "implFnSymTag" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "implFnSymTag" ((PVar "entries") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EApp (EVar "headTagUnique") (EVar "entries")) (EVar "method")) (EVar "tag")) (EVar "tag") (EApp (EVar "safeIdent") (EVar "key"))))
+(DFunDef false "implFnSymTag" ((PVar "entries") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EApp (EVar "headTagUnique") (EVar "entries")) (EVar "method")) (EVar "tag")) (EVar "tag") (EApp (EVar "injectiveIdent") (EVar "key"))))
 (DTypeSig false "headTagUnique" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "headTagUnique" ((PVar "entries") (PVar "method") (PVar "tag")) (EBinOp "<=" (EApp (EVar "lengthS") (EApp (EApp (EApp (EApp (EApp (EVar "distinctKeysAtHead") (EVar "entries")) (EVar "entries")) (EVar "method")) (EVar "tag")) (EListLit))) (ELit (LInt 1))))
 (DTypeSig false "distinctKeysAtHead" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
@@ -11611,10 +11607,6 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "implFnSymOf" (PWild PWild PWild) (ELit (LString "")))
 (DTypeSig false "implFnSymE" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyCon "String")))))
 (DFunDef false "implFnSymE" ((PVar "e") (PVar "method") (PVar "ent")) (EApp (EApp (EApp (EVar "implFnSymOf") (EApp (EApp (EVar "methodEntries") (EVar "e")) (EVar "method"))) (EVar "method")) (EVar "ent")))
-(DTypeSig false "safeIdent" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "safeIdent" ((PVar "s")) (EApp (EApp (EApp (EApp (EVar "safeIdentGo") (EVar "s")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))) (ELit (LString ""))))
-(DTypeSig false "safeIdentGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "safeIdentGo" ((PVar "s") (PVar "i") (PVar "len") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "acc") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s"))) (DoLet false false (PVar "c2") (EIf (EApp (EVar "safeChar") (EVar "c")) (EVar "c") (ELit (LString "_")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "safeIdentGo") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EBinOp "++" (EVar "acc") (EVar "c2")))))))
 (DTypeSig false "taggedMethodNames" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "taggedMethodNames" ((PList)) (EListLit))
 (DFunDef false "taggedMethodNames" ((PCons (PCon "CImplEntry" (PVar "m") PWild (PCon "CImplTagged" PWild PWild PWild PWild PWild PWild)) (PVar "rest"))) (EBinOp "::" (EVar "m") (EApp (EVar "taggedMethodNames") (EVar "rest"))))
@@ -13580,7 +13572,7 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DUse false (UseGroup ("backend" "llvm_preamble") ((mem "preambleLines" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omSize" false) (mem "omEmpty" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "flattenApp" false) (mem "lengthS" false) (mem "freeVars" false) (mem "routeDictNames" false) (mem "bindName" false) (mem "bindNames" false) (mem "patVars" false) (mem "patVarsList" false) (mem "patVarNames" false) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "splitLastF" false) (mem "selfFree" false) (mem "mentionsSelfMethod" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispFindBind" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dictUniformPairs" false) (mem "dropFirstN" false) (mem "clauseArityOf" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "hashName" false) (mem "safeChar" false))))
+(DUse false (UseGroup ("backend" "private_mangle") ((mem "hashName" false) (mem "injectiveIdent" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "lazyGlobalNames" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "ftLabelOf" false) (mem "labelFallthrough" false) (mem "rngBound" false))))
 (DData Private "GapMode" () ((variant "Strict" (ConPos)) (variant "Record" (ConPos))) ())
 (DTypeSig false "isFallthroughVar" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -13789,11 +13781,11 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DTypeSig false "defaultAtOr" (TyFun (TyCon "CImplEntry") (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "CImplEntry"))))))
 (DFunDef false "defaultAtOr" ((PVar "fallback") (PVar "e") (PVar "method") (PVar "tag")) (EMatch (EApp (EApp (EApp (EVar "defaultForAt") (EVar "e")) (EVar "method")) (EVar "tag")) (arm (PCon "Some" (PVar "ent")) () (EVar "ent")) (arm (PCon "None") () (EVar "fallback"))))
 (DTypeSig false "defaultFnName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "defaultFnName" ((PVar "tag") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk_default_")) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EApp (EVar "safeIdent") (EVar "tag")))) (ELit (LString ""))))
+(DFunDef false "defaultFnName" ((PVar "tag") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk_default_")) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EApp (EVar "injectiveIdent") (EVar "tag")))) (ELit (LString ""))))
 (DTypeSig false "implFnName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "implFnName" ((PVar "tag") (PVar "method")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk_impl_")) (EApp (EMethodRef "display") (EVar "tag"))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString ""))))
 (DTypeSig false "implFnSymTag" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "implFnSymTag" ((PVar "entries") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EApp (EVar "headTagUnique") (EVar "entries")) (EVar "method")) (EVar "tag")) (EVar "tag") (EApp (EVar "safeIdent") (EVar "key"))))
+(DFunDef false "implFnSymTag" ((PVar "entries") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EApp (EVar "headTagUnique") (EVar "entries")) (EVar "method")) (EVar "tag")) (EVar "tag") (EApp (EVar "injectiveIdent") (EVar "key"))))
 (DTypeSig false "headTagUnique" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "headTagUnique" ((PVar "entries") (PVar "method") (PVar "tag")) (EBinOp "<=" (EApp (EVar "lengthS") (EApp (EApp (EApp (EApp (EApp (EVar "distinctKeysAtHead") (EVar "entries")) (EVar "entries")) (EVar "method")) (EVar "tag")) (EListLit))) (ELit (LInt 1))))
 (DTypeSig false "distinctKeysAtHead" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
@@ -13805,10 +13797,6 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "implFnSymOf" (PWild PWild PWild) (ELit (LString "")))
 (DTypeSig false "implFnSymE" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyCon "String")))))
 (DFunDef false "implFnSymE" ((PVar "e") (PVar "method") (PVar "ent")) (EApp (EApp (EApp (EVar "implFnSymOf") (EApp (EApp (EVar "methodEntries") (EVar "e")) (EVar "method"))) (EVar "method")) (EVar "ent")))
-(DTypeSig false "safeIdent" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "safeIdent" ((PVar "s")) (EApp (EApp (EApp (EApp (EVar "safeIdentGo") (EVar "s")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))) (ELit (LString ""))))
-(DTypeSig false "safeIdentGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "safeIdentGo" ((PVar "s") (PVar "i") (PVar "len") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "acc") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s"))) (DoLet false false (PVar "c2") (EIf (EApp (EVar "safeChar") (EVar "c")) (EVar "c") (ELit (LString "_")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "safeIdentGo") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EBinOp "++" (EVar "acc") (EVar "c2")))))))
 (DTypeSig false "taggedMethodNames" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "taggedMethodNames" ((PList)) (EListLit))
 (DFunDef false "taggedMethodNames" ((PCons (PCon "CImplEntry" (PVar "m") PWild (PCon "CImplTagged" PWild PWild PWild PWild PWild PWild)) (PVar "rest"))) (EBinOp "::" (EVar "m") (EApp (EVar "taggedMethodNames") (EVar "rest"))))

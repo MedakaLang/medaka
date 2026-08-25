@@ -1,6 +1,6 @@
 #!/bin/sh
 # diff_compiler_llvm_symbol_collision.sh — the emitted-symbol INJECTIVITY gate
-# (X-L.H / #348 / #748; the regression home of the drained #1677 pin).
+# (X-L.H / #348 / #748; the regression home of the drained #1677 and #1950 pins).
 #
 # WHAT IT ASSERTS. `compiler/backend/private_mangle.mangledName` is
 # `"<sanitizeId mid>__<name>"`, and `sanitizeId` maps `.`, `/` and `-` all to `_`.
@@ -48,14 +48,27 @@
 # prevent. With it, "you broke ordinary cross-module codegen" can never be read as
 # "the collision guard works".
 #
-# SCOPE, so this gate is never cited as more than it is: it grades the
+# SCOPE, so this gate is never cited as more than it is. Sections 1–3 grade the
 # MODULE-MANGLED symbol domain (`mangleUnits`' own domain — top-level functions and
-# local constructors). It says nothing about emitter-MINTED symbols (gensym'd
-# lambdas/etas/impls, `llvm_emit.ensureDefaultEmitted`'s dedup-on-mint), which
-# `mangleUnits` never sees. Within the module-mangled domain, the guard makes the
-# `(module, name) -> symbol` map injective for DISTINCT MODULE IDS ONLY — two
-# distinct source units sharing ONE module id collapse invisibly (the
-# `prev == pre` skip in `checkSymbolsInjective`). Uncovered, tracked: #1792.
+# local constructors). Within it, the guard makes the `(module, name) -> symbol`
+# map injective for DISTINCT MODULE IDS ONLY — two distinct source units sharing
+# ONE module id collapse invisibly (the `prev == pre` skip in
+# `checkSymbolsInjective`). Uncovered, tracked: #1792.
+#
+# Section 4 grades part — not all — of the emitter-MINTED domain `mangleUnits`
+# never sees: the C7 impl symbols `mdk_impl_<symTag>_<method>` and the per-instance
+# `$memo_<selector>_<method>` CAFs, both spelled through
+# `private_mangle.injectiveIdent` (#1950). It is silent about the REST of that
+# domain — gensym'd lambdas/etas, `llvm_emit.ensureDefaultEmitted`'s dedup-on-mint,
+# and `mdk_default_*` — and about the WasmGC peers of the two families it does
+# cover (this is an LLVM gate; `test/wasm/` owns that backend).
+#
+# Section 5 covers a DIFFERENT space from 1–4: the DICT-WITNESS TAG domain
+# (`core_ir_lower.dictWitnessTagGuard`, #348/#377), a djb2 hash rather than an
+# emitted-symbol identifier. FR-1 scoped that guard's population by method name
+# (the same grouping key the emitted dispatcher itself uses) so it only fires when
+# two impls a real dispatch chain could actually compare collide; see the
+# fixtures' own comments for the mechanism.
 #
 # ⚠️ `medaka build`'s exit code does NOT survive a pipe (AGENTS.md [D-BUILD-PIPE]).
 # Every invocation below redirects to a file and reads `$?` from the redirect.
@@ -247,6 +260,237 @@ else
   else
     ok "ctor control runs, prints 101 then 1000"
   fi
+fi
+
+# ── 4. the emitter-MINTED impl-symbol domain (#1950), POSITIVE polarity ──────
+# Sections 1–3 grade the MODULE-MANGLED domain, which the header's SCOPE note says
+# is all `mangleUnits` ever sees. This section grades the OTHER half of the
+# emitted-symbol space: the symbols the backends MINT — `mdk_impl_<symTag>_<method>`
+# (TYPECHECK-AUDIT C7) and the per-instance `$memo_<selector>_<method>` CAFs.
+#
+# It is test/must_fail_fixtures/1950-impl-key-sanitize-collision/, DRAINED and
+# repointed here per [G-PIN-DRAIN] — the same move #1677's pin made into sections
+# 1–2, and for the same reason: the coverage outlives the bug. Polarity is
+# INVERTED relative to sections 1–3. Those grade a REFUSAL, because the
+# module-mangled encoding is still many-to-one and a collision there can only be
+# refused. Here the encoding itself was fixed: `private_mangle.injectiveIdent`
+# replaced the lossy `[^A-Za-z0-9_] -> _` collapse, so the colliding program is
+# now simply CORRECT and there is nothing left to refuse. The assertion is
+# therefore "builds, and the two impls get DIFFERENT symbols" — asserting only
+# "it built" would go green again the moment a future encoder re-collapsed the two
+# keys onto one symbol AND something else masked the redefinition.
+#
+# memo.mdk is the second symbol family. It was never reachable while the pin
+# existed: the `mdk_impl_*` collision of the same program masked it (S-2's guard
+# fired first). It has NO guard of its own — `implSymbolCollisionGuard`'s SCOPE is
+# `mdk_impl_*` — so the encoder is the only thing keeping its two CAFs apart, and
+# its two effect lines double as the memo-SHARING assertion.
+
+checked=$((checked + 1))
+IKBIN="$WORK/impl_key.bin"
+IKLOG="$WORK/impl_key.log"
+"$MEDAKA" build "$FIX/impl_key/main.mdk" -o "$IKBIN" --keep-ir > "$IKLOG" 2>&1
+ikst=$?
+
+if [ "$ikst" -ne 0 ]; then
+  fail "the #1950 impl-key program failed to build (exit $ikst)"
+  printf '      two well-typed, unambiguous impls of one method at one head must\n'
+  printf '      build. A refusal here means the emitted-symbol encoding went\n'
+  printf '      many-to-one again (#1950), or the C7 arm broke. Build output:\n'
+  sed 's/^/        /' "$IKLOG"
+else
+  ok "the #1950 impl-key program builds (exit 0)"
+
+  checked=$((checked + 1))
+  IKOUT="$WORK/impl_key.out"
+  "$IKBIN" > "$IKOUT" 2>&1
+  ikrst=$?
+  # Hand-derived: size (MkQ MkA_B MkC) selects impl Sz (Q A_B C) = 1;
+  #               size (MkQ MkA MkB_C) selects impl Sz (Q A B_C) = 2.
+  printf '1|2\n' > "$WORK/impl_key.expected"
+  if [ "$ikrst" -ne 0 ]; then
+    fail "the #1950 impl-key binary exited $ikrst"
+    sed 's/^/        /' "$IKOUT"
+  elif ! diff -u "$WORK/impl_key.expected" "$IKOUT" > "$WORK/impl_key.diff" 2>&1; then
+    fail "the #1950 impl-key binary stdout differs from the hand-derived 1|2"
+    printf '      run != build at exit 0 is the S0 shape this whole gate exists for.\n'
+    sed 's/^/        /' "$WORK/impl_key.diff"
+  else
+    ok "the #1950 impl-key binary runs, prints 1|2"
+  fi
+
+  # The two impls must reach the IR under DISTINCT symbols. "It built" alone is
+  # not the property: a re-collapsed encoding could build again if the second
+  # definition were dropped rather than redefined, which is the SILENT half of
+  # this bug class.
+  checked=$((checked + 1))
+  nsym=$(grep -o 'mdk_impl_[A-Za-z0-9_]*_size' "$IKBIN.ll" 2>/dev/null | sort -u | wc -l | tr -d ' ')
+  if [ "$nsym" != "2" ]; then
+    fail "expected 2 distinct mdk_impl_*_size symbols in the emitted IR, found $nsym"
+    printf '      the two impls collapsed onto one symbol (or the IR was not kept).\n'
+    grep -o 'mdk_impl_[A-Za-z0-9_]*_size' "$IKBIN.ll" 2>/dev/null | sort -u | sed 's/^/        /'
+  else
+    ok "the two impls are emitted under 2 distinct mdk_impl_*_size symbols"
+  fi
+fi
+
+# the `$memo_` CAF family — same colliding key pair, unguarded symbol domain
+checked=$((checked + 1))
+MEMOBIN="$WORK/impl_key_memo.bin"
+MEMOLOG="$WORK/impl_key_memo.log"
+"$MEDAKA" build "$FIX/impl_key/memo.mdk" -o "$MEMOBIN" --keep-ir > "$MEMOLOG" 2>&1
+mmst=$?
+
+if [ "$mmst" -ne 0 ]; then
+  fail "the #1950 \$memo_ program failed to build (exit $mmst)"
+  printf '      core_ir_lower.memoBindName minted both instances one CAF; nothing\n'
+  printf '      guards that family, so this surfaces as a raw clang redefinition.\n'
+  sed 's/^/        /' "$MEMOLOG"
+else
+  ok "the #1950 \$memo_ program builds (exit 0)"
+
+  checked=$((checked + 1))
+  MEMOOUT="$WORK/impl_key_memo.out"
+  "$MEMOBIN" > "$MEMOOUT" 2>&1
+  mmrst=$?
+  # Hand-derived: `banner` is a per-instance CAF, so each impl's effect fires
+  # ONCE however many times it is forced (twice at Q A_B C, once at Q A B_C).
+  printf 'eff-one\neff-two\n1|2|1\n' > "$WORK/impl_key_memo.expected"
+  if [ "$mmrst" -ne 0 ]; then
+    fail "the #1950 \$memo_ binary exited $mmrst"
+    sed 's/^/        /' "$MEMOOUT"
+  elif ! diff -u "$WORK/impl_key_memo.expected" "$MEMOOUT" > "$WORK/impl_key_memo.diff" 2>&1; then
+    fail "the #1950 \$memo_ binary stdout differs from the hand-derived eff-one/eff-two/1|2|1"
+    printf '      a DUPLICATED effect line means the per-instance CAF degraded into\n'
+    printf '      per-call re-evaluation — the other way this fix could go wrong.\n'
+    sed 's/^/        /' "$WORK/impl_key_memo.diff"
+  else
+    ok "the #1950 \$memo_ binary runs, prints eff-one/eff-two/1|2|1 (memo sharing intact)"
+  fi
+
+  checked=$((checked + 1))
+  nmemo=$(grep -o '\$memo_[A-Za-z0-9_]*_banner' "$MEMOBIN.ll" 2>/dev/null | sort -u | wc -l | tr -d ' ')
+  if [ "$nmemo" != "2" ]; then
+    fail "expected 2 distinct \$memo_*_banner globals in the emitted IR, found $nmemo"
+    grep -o '\$memo_[A-Za-z0-9_]*_banner' "$MEMOBIN.ll" 2>/dev/null | sort -u | sed 's/^/        /'
+  else
+    ok "the two instances get 2 distinct \$memo_*_banner CAF globals"
+  fi
+fi
+
+# ── the impl-key CONTROL: ordinary same-head C7 dispatch must stay green ──────
+checked=$((checked + 1))
+IKCBIN="$WORK/impl_key_control.bin"
+IKCLOG="$WORK/impl_key_control.log"
+"$MEDAKA" build "$FIX/impl_key/control.mdk" -o "$IKCBIN" > "$IKCLOG" 2>&1
+ikcst=$?
+
+if [ "$ikcst" -ne 0 ]; then
+  fail "IMPL-KEY CONTROL FAILED TO BUILD (exit $ikcst)"
+  printf '      control.mdk is the same C7 shape with no key on the underscore-vs-\n'
+  printf '      space seam. If it breaks, ordinary same-head dispatch broke and the\n'
+  printf '      positive case above proves nothing. Build output:\n'
+  sed 's/^/        /' "$IKCLOG"
+else
+  ok "impl-key control builds (exit 0)"
+  checked=$((checked + 1))
+  IKCOUT="$WORK/impl_key_control.out"
+  "$IKCBIN" > "$IKCOUT" 2>&1
+  ikcrst=$?
+  printf '1|2\n' > "$WORK/impl_key_control.expected"
+  if [ "$ikcrst" -ne 0 ]; then
+    fail "impl-key control binary exited $ikcrst"
+    sed 's/^/        /' "$IKCOUT"
+  elif ! diff -u "$WORK/impl_key_control.expected" "$IKCOUT" > "$WORK/impl_key_control.diff" 2>&1; then
+    fail "impl-key control binary stdout differs from the hand-derived 1|2"
+    sed 's/^/        /' "$WORK/impl_key_control.diff"
+  else
+    ok "impl-key control runs, prints 1|2"
+  fi
+fi
+
+# ── 5. the DICT-WITNESS TAG domain (FR-1, #348/#377) — scope-narrowing coverage ──
+# `core_ir_lower.dictWitnessTagGuard` checks a SEPARATE space from sections 1-4's
+# emitted-symbol domain: the dict-witness/route-word tag a shared dispatcher
+# compares at runtime (`private_mangle.hashName`, a non-injective djb2 hash — see
+# its own comment for the constructible-collision mechanism). FR-1 fixed the guard
+# to partition its population by METHOD NAME, the same grouping key the emitted
+# dispatcher itself uses (`llvm_emit.implsOf`/`dispFnName` — a method-name lookup),
+# because a collision between two UNRELATED methods' route words is never actually
+# compared at runtime and refusing it was a false positive (F-1/F-2 review
+# findings). This section is the missing regression coverage those findings named.
+
+# positive control: an unrelated-method collision (this program's `JMt` vs the
+# prelude's `Int`) must now BUILD and RUN.
+checked=$((checked + 1))
+DWBIN="$WORK/dict_witness_positive.bin"
+DWLOG="$WORK/dict_witness_positive.log"
+"$MEDAKA" build "$FIX/dict_witness/positive.mdk" -o "$DWBIN" > "$DWLOG" 2>&1
+dwst=$?
+
+if [ "$dwst" -ne 0 ]; then
+  fail "the dict-witness positive control failed to build (exit $dwst)"
+  printf '      an unrelated-method route-word collision (this program'"'"'s route word\n'
+  printf '      vs a prelude impl'"'"'s, for a DIFFERENT method) must not refuse: the two\n'
+  printf '      words are never compared by any real dispatch chain. Build output:\n'
+  sed 's/^/        /' "$DWLOG"
+else
+  ok "the dict-witness positive control builds (exit 0)"
+
+  checked=$((checked + 1))
+  DWOUT="$WORK/dict_witness_positive.out"
+  "$DWBIN" > "$DWOUT" 2>&1
+  dwrst=$?
+  printf 'jmt\n' > "$WORK/dict_witness_positive.expected"
+  if [ "$dwrst" -ne 0 ]; then
+    fail "the dict-witness positive control binary exited $dwrst"
+    sed 's/^/        /' "$DWOUT"
+  elif ! diff -u "$WORK/dict_witness_positive.expected" "$DWOUT" > "$WORK/dict_witness_positive.diff" 2>&1; then
+    fail "the dict-witness positive control stdout differs from the hand-derived jmt"
+    sed 's/^/        /' "$WORK/dict_witness_positive.diff"
+  else
+    ok "the dict-witness positive control runs, prints jmt"
+  fi
+fi
+
+# negative control: a SAME-method-name collision (Mzone/NYone, S-4's construction,
+# dispatched through one dict parameter) must still REFUSE.
+checked=$((checked + 1))
+DWNBIN="$WORK/dict_witness_negative.bin"
+DWNLOG="$WORK/dict_witness_negative.log"
+"$MEDAKA" build "$FIX/dict_witness/negative.mdk" -o "$DWNBIN" > "$DWNLOG" 2>&1
+dwnst=$?
+
+if [ "$dwnst" -eq 0 ]; then
+  fail "the dict-witness negative control built at exit 0 — the guard did NOT fire"
+  printf '      two impls of ONE method name (zn) with colliding route words ARE\n'
+  printf '      compared by that method'"'"'s shared dispatcher; this must still refuse.\n'
+  printf '      Build output:\n'
+  sed 's/^/        /' "$DWNLOG"
+else
+  ok "the dict-witness negative control refused (exit $dwnst)"
+fi
+
+# The message must name both route words -- not merely "it failed".
+checked=$((checked + 1))
+dwnmissing=""
+for want in 'emitted dict-witness tag collision' 'method `zn`' 'Mzone' 'NYone'; do
+  grep -q -- "$want" "$DWNLOG" || dwnmissing="$dwnmissing '$want'"
+done
+if [ -n "$dwnmissing" ]; then
+  fail "dict-witness negative-control diagnostic does not name both route words; missing:$dwnmissing"
+  sed 's/^/        /' "$DWNLOG"
+else
+  ok "dict-witness negative-control refusal names both route words and the method"
+fi
+
+# It must refuse BEFORE producing anything.
+checked=$((checked + 1))
+if [ -e "$DWNBIN" ]; then
+  fail "a binary was produced at $DWNBIN despite the dict-witness refusal"
+  printf '      the property is "refuses before any binary is produced".\n'
+else
+  ok "no binary produced (dict-witness domain)"
 fi
 
 printf '\nchecked %d assertions: %d failed\n' "$checked" "$fails"

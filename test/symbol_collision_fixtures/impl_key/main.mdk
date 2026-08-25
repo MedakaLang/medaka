@@ -1,0 +1,42 @@
+-- #1950 (impl-key sanitize collision), DRAINED and REPOINTED here from
+-- test/must_fail_fixtures/1950-impl-key-sanitize-collision/ per [G-PIN-DRAIN].
+-- Same program bytes, INVERTED polarity: it used to pin the refusal, it now
+-- asserts the FIXED behaviour.
+--
+-- Two DISTINCT impls of one method at one head tycon `Q`, so TYPECHECK-AUDIT C7
+-- applies and each is emitted under its ENCODED canonical dispatch key rather
+-- than the bare head.  The two keys are `main::Sz|(Q A_B C)|` and
+-- `main::Sz|(Q A B_C)|` -- they differ only in where the underscore sits versus
+-- where a space sits.  Under the old MANY-TO-ONE sanitizer (everything outside
+-- [A-Za-z0-9_] -> `_`) both became `main__Sz__Q_A_B_C__` and both methods wanted
+-- the symbol `mdk_impl_main__Sz__Q_A_B_C___size`; `medaka build` died, first at
+-- clang with a raw `invalid redefinition of function`, later (S-2) at a legible
+-- Medaka-level refusal.  `private_mangle.injectiveIdent` removed the collapse.
+--
+-- HAND-DERIVED expected output (semantics, not engine output):
+--   `size (MkQ MkA_B MkC)` selects `impl Sz (Q A_B C)` = 1.
+--   `size (MkQ MkA MkB_C)` selects `impl Sz (Q A B_C)` = 2.  So: `1|2`.
+--
+-- `medaka run` always answered `1|2` -- the tree-walking interpreter has no
+-- symbol mint.  The property this fixture grades is that `build` now agrees.
+data A = MkA
+data B = MkB
+data C = MkC
+data A_B = MkA_B
+data B_C = MkB_C
+
+data Q a b = MkQ a b
+
+interface Sz a where
+  size : a -> Int
+
+impl Sz (Q A_B C) where
+  size _ = 1
+
+impl Sz (Q A B_C) where
+  size _ = 2
+
+main =
+  let x = MkQ MkA_B MkC
+  let y = MkQ MkA MkB_C
+  println "\{size x}|\{size y}"

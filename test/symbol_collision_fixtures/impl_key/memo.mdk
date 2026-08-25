@@ -1,0 +1,50 @@
+-- The `$memo_` half of #1950, which the must-fail pin never reached because the
+-- `mdk_impl_*` collision of the same program masked it.
+--
+-- main.mdk's colliding key pair PLUS a nullary return-position method, so
+-- `core_ir_lower.memoBindName` mints its per-instance CAF (`$memo_<selector>_
+-- <method>`, which flows into `@mdk_g_<name>` / `@mdk_force_<name>`) from the SAME
+-- canonical key the impl symbol is minted from.  That domain has NO guard --
+-- `implSymbolCollisionGuard`'s SCOPE is `mdk_impl_*` only -- so `injectiveIdent`
+-- is the only thing keeping the two CAFs apart.  With a lossy encoder here and an
+-- injective one at the impl symbol, this program reaches clang as a raw
+-- `invalid redefinition of function 'mdk_force_$memo_main__Sz__Q_A_B_C___banner'`
+-- (MEASURED, sprint emit-collision-domain S-3 v2 Arm 2).
+--
+-- HAND-DERIVED expected output (semantics, not engine output): `banner` is a
+-- per-instance CAF, so its effect fires ONCE per instance however many times it
+-- is forced.  `banner` is forced twice at `Q A_B C` and once at `Q A B_C`:
+--   eff-one
+--   eff-two
+--   1|2|1
+-- The two effect lines are therefore also the MEMO-SHARING assertion: printing
+-- `eff-one` twice would mean the CAF degraded into per-call re-evaluation.
+data A = MkA
+data B = MkB
+data C = MkC
+data A_B = MkA_B
+data B_C = MkB_C
+
+data Q a b = MkQ a b
+
+interface Sz a where
+  size : a -> Int
+  banner : a
+
+impl Sz (Q A_B C) where
+  size _ = 1
+  banner =
+    let _ = println "eff-one"
+    MkQ MkA_B MkC
+
+impl Sz (Q A B_C) where
+  size _ = 2
+  banner =
+    let _ = println "eff-two"
+    MkQ MkA MkB_C
+
+main =
+  let p : Q A_B C = banner
+  let q : Q A B_C = banner
+  let p2 : Q A_B C = banner
+  println "\{size p}|\{size q}|\{size p2}"

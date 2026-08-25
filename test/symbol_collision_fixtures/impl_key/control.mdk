@@ -1,0 +1,34 @@
+-- CONTROL for #1950's migrated case: main.mdk with exactly ONE thing changed --
+-- the impl heads are `Q A C` / `Q B C` instead of `Q A_B C` / `Q A B_C`, so
+-- neither key sits on the underscore-vs-space seam.
+--
+-- Everything else is identical: same interface, same head tycon `Q`, same TWO
+-- distinct impls at that ONE head (so the C7 arm still fires and both symbols are
+-- still ENCODED CANONICAL KEYS, not bare head tags), same method, same arity,
+-- same two integer results.
+--
+-- Its job here is the mirror of what it did as a must-fail control: it isolates
+-- the COLLAPSE from the C7 collision arm.  Under the injective encoding both
+-- programs build, so this control's remaining value is that it grades the
+-- ORDINARY same-head multi-impl path with the same verb -- "you broke C7
+-- dispatch outright" can never be read as "the #1950 regression case passes".
+-- Hand-derived expected output: `1|2`.
+data A = MkA
+data B = MkB
+data C = MkC
+
+data Q a b = MkQ a b
+
+interface Sz a where
+  size : a -> Int
+
+impl Sz (Q A C) where
+  size _ = 1
+
+impl Sz (Q B C) where
+  size _ = 2
+
+main =
+  let x = MkQ MkA MkC
+  let y = MkQ MkB MkC
+  println "\{size x}|\{size y}"
