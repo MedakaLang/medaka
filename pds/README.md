@@ -37,59 +37,33 @@ test` runs the interpreter directly.
 
 ## CI classification policy
 
-```
-CI CLASSIFICATION POLICY FOR EVERY TRACKED .sh THIS SPRINT ADDS (RUN-PDS0-001 A4)
+**The policy itself is not restated here.** It lives in `AGENTS.md`
+[W-PROJECT-BY-MANIFEST] (a `medaka.toml` outside `compiler/`/`test/` makes a
+project; it needs a floor gate under `<project>/test/` and a `ci.yml` shard glob
+placed by measured cost; `test/preflight.sh` derives its arm from the manifest
+and needs no edit; `test/diff_compiler_project_enrolment.sh` re-derives and
+compares all three on every run). This block used to duplicate it, and the copy
+had already gone stale — it named the `sqlite` shard as pds's only home, while
+`pds/test/*` has since been split across four shards by cost (#1929).
 
-(a) SHARD GLOB. '.github/workflows/ci.yml', the `- name: sqlite` matrix entry:
-    pattern: "'sqlite/test/*oracle' 'gzip/test/*oracle' 'pds/test/*'"
-    Placement is by COST, not theme: two consecutive green `merge_group` runs
-    (31983057792, 31979717039) put `sqlite` at 162s/203s — cheapest or
-    second-cheapest of the seven shards in both runs (only `backend` at 177s
-    beat it in the second run); `engines` is the pole at 385-389s both times.
+Three things are specific to `pds/` and are NOT in the general policy:
 
-(b) GATE-FILENAME CONVENTION THE GLOB IMPLIES. None — and that is the point.
-    'pds/test/*' enrols every .sh DIRECTLY UNDER pds/test/ — the glob is
-    ONE DIRECTORY LEVEL DEEP; `*` does not cross `/`. So a later slice may
-    name its gate anything (sha256_vectors.sh, base58_vectors.sh,
-    vector_provenance.sh) and needs NO ci.yml edit, AS LONG AS it lands
-    directly in pds/test/. The corollary is binding in BOTH directions:
-    any .sh placed DIRECTLY in pds/test/ WILL BE EXECUTED AS A CI GATE in
-    the `sqlite` shard, so a non-gate must not live there; and any .sh in
-    a SUBDIRECTORY of pds/test/ (e.g. pds/test/vectors/helper.sh) is
-    enrolled by NOTHING and will RED the coverage gate until it gets a
-    test/CI-COVERAGE-TOOLS.txt row or its own pattern. Do not put scripts
-    in subdirectories of pds/test/.
-    ASYMMETRY (do not conflate): the preflight `pds/*)` arm (test/preflight.sh)
-    is a shell `case` pattern and matches AT ANY DEPTH (pds/oracle/run.sh
-    matches it); the shard `pattern:` above is a filesystem glob and does
-    NOT cross a `/`. Both are correct for their own jobs — only the pair
-    reads as consistent when it is not.
-    [RUN-PDS0-003(a)]
-
-(c) TOOLS vs SHARD vs EXCEPTIONS, for the scripts this sprint will add:
-    - A real gate (asserts something and can fail)  -> put it in pds/test/;
-      it is auto-enrolled by (a). No ledger row.
-    - A script that proves nothing about the compiler — an oracle run/compose
-      script (S-oracle-standup), a corpus-extraction script (S-field/S-scalar)
-      — must live OUTSIDE pds/test/ (e.g. pds/oracle/, pds/tools/) and needs a
-      row in test/CI-COVERAGE-TOOLS.txt keyed by its REPO-RELATIVE PATH MINUS
-      .sh (not its basename).
-    - test/CI-COVERAGE-EXCEPTIONS.txt is for a real gate deliberately NOT run
-      in CI, with a reason. No script in this sprint is expected to need it.
-    Every tracked .sh must be in exactly one of these buckets:
-    diff_compiler_ci_shard_coverage.sh enumerates them repo-wide via
-    `git ls-files -z '*.sh'` and fails on any that is in none.
-
-(d) A real gate that turns out to be too EXPENSIVE for the PR path is not a
-    TOOLS-bucket or EXCEPTIONS-bucket case — it still asserts something and
-    can fail. Move it OUT of pds/test/ (it is the directory-level auto-enroll
-    in (a) that must stop applying, not the gate's classification) into
-    pds/nightly/, and name it literally in a .github/workflows/nightly.yml
-    job, the same "named" mechanism check_removed_constructs/fuzz_diff use —
-    see that job's own comment. `pds/nightly/signing_parity.sh` (#1962) is the
-    first instance: its full native+Wasm ECDSA corpus run alone added ~20
-    minutes to the `sqlite` shard.
-```
+* **Depth.** The shard glob is a filesystem glob and does not cross `/`, so a
+  script in a SUBDIRECTORY of `pds/test/` is enrolled by NOTHING and will red
+  `diff_compiler_ci_shard_coverage` until it gets a `test/CI-COVERAGE-TOOLS.txt`
+  row. Do not put scripts in subdirectories of `pds/test/`. (Preflight's arm is a
+  shell `case` pattern and DOES match at any depth — the pair reads as consistent
+  when it is not. [RUN-PDS0-003(a)])
+* **Non-gates.** A script that proves nothing about the compiler — an oracle
+  run/compose script, a corpus-extraction script — must live OUTSIDE `pds/test/`
+  (`pds/oracle/`, `pds/tools/`) and needs a `test/CI-COVERAGE-TOOLS.txt` row keyed
+  by its REPO-RELATIVE PATH MINUS `.sh`, not its basename.
+* **Too expensive for the PR path** is not a TOOLS or EXCEPTIONS case — the gate
+  still asserts something and can fail. Move it OUT of `pds/test/` (it is the
+  directory-level auto-enroll that must stop applying, not the classification)
+  into `pds/nightly/`, and name it literally in a `.github/workflows/nightly.yml`
+  job. `pds/nightly/signing_parity.sh` (#1962) is the first instance: its full
+  native+Wasm ECDSA corpus run alone added ~20 minutes to the `sqlite` shard.
 
 ## Vector provenance (G5)
 
@@ -99,8 +73,9 @@ own implementation** in Phases 0–1, because on a protocol where correctness is
 defined by other people's implementations, a self-captured golden is not weak
 evidence but *anti*-evidence. The gate is `pds/test/vector_provenance.sh` — it
 runs a six-scenario self-test in a `mktemp -d` on every invocation, then checks
-the real tree, and it is auto-enrolled in the `sqlite` CI shard by the classification
-policy above (it landed directly in `pds/test/`, no ci.yml edit needed).
+the real tree. It is enrolled by name in the `types` CI shard (`pds/test/*` was split
+across four shards by cost in #1929 — derive the current home, do not trust a shard
+name written down here: `grep -n 'pds/test' .github/workflows/ci.yml`).
 
 **Enumeration rule (what needs a row):** every regular file under `pds/test/`
 at ANY depth, EXCEPT `*.sh`, `*.mdk`, and the ledger itself — no allowlist, no

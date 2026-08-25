@@ -149,6 +149,20 @@ list.** `test/preflight.sh` independently derives its own gate set from the diff
 subproject's files/patterns must also be visible to, or `make preflight` silently widens or
 narrows scope with no error.
 
+⚠️ **[W-PROJECT-BY-MANIFEST] A directory with a `medaka.toml` outside `compiler/` and
+`test/` IS a project, and CI knows it by that manifest — not by anyone remembering.** Such
+a project needs a floor gate under `<project>/test/` (a `pattern:` matching no gate is a
+hard `::error::`, so the gate must exist before the enrolment does), a `ci.yml` shard glob
+placed by measured cost, and nothing at all in `test/preflight.sh` — preflight's generic arm
+derives the project set from `git ls-files '*medaka.toml'` and maps any changed path under
+`<project>/` to `<project>/test/*` on its own. All three legs are re-derived and compared on
+every run by `test/diff_compiler_project_enrolment.sh`, so enrolment drift reds a gate rather
+than going quiet. ⚠️ **An unenrolled project is not merely untested — an UNMAPPED non-prose
+path widens every PR run to the FULL suite** ([W-THIRD-CONSUMER]), so the map gap costs the
+most expensive possible answer while proving nothing. `demo/` and `playground/` have no
+manifest and are NOT projects; preflight derives their gates per-path instead
+(`_gates_for_path`), from which gate scripts actually reference them.
+
 **Zero approvals required** — the checks are the gate; an agent can self-merge on green.
 `--auto` enqueues into the merge queue ([W-MERGE-QUEUE]).
 

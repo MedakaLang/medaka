@@ -331,6 +331,58 @@ $_g"
   done
 }
 
+# ── THE MANIFEST-DERIVED PROJECT SET ─────────────────────────────────────────
+#
+# "What is a project in this monorepo?" has exactly one answer, and it is not a
+# list anybody maintains: a directory with a `medaka.toml`, outside `compiler/`
+# (the compiler is a project, but it has its own arms above and its own gates)
+# and outside `test/` (those manifests are FIXTURES for the loader's multi-project
+# tests, not projects to CI).
+#
+# This used to be three hand-written case arms — sqlite, gzip, pds — each pasted
+# from the last. mq, parsec and byteparser arrived with manifests and gates and
+# no arm, so every change to one of them derived ZERO gates and ONE UNMAPPED
+# path, which ci.yml then widened to the FULL suite: the most expensive possible
+# answer, arrived at by a map gap rather than by blast radius.
+#
+# Computed ONCE, here, not re-shelled per changed file.
+_projects="$(git -C "$ROOT" ls-files '*medaka.toml' 2>/dev/null \
+  | grep -v '^test/' | grep -v '^compiler/' \
+  | sed 's|/medaka\.toml$||' | sort -u | tr '\n' ' ')"
+
+# Gates that live-reference changed path $1 — the same direct/one-hop scan
+# `_gates_for_fixture_dir` uses, but keyed on a PATH rather than on a fixture
+# directory, climbing to the ancestor directories when the exact file has no
+# named consumer. Stops after the TOP-LEVEL directory (a path with no `/` left),
+# so a miss can never climb to `.` and trivially match every gate in the repo.
+#
+# This exists for `demo/` and `playground/`: both are graded by real gates, and
+# NEITHER is a project (no manifest), so the manifest-derived arm cannot see
+# them and a hand-written gate list would be exactly the drift this file spent
+# five separate comments arguing against. `playground/` in particular is
+# heterogeneous — worker.js is graded by the shim-parity gate, medaka_tokenizer.js
+# by the keyword-sync gate, build_playground_wasm.sh by the wasm playground gate
+# — so per-file derivation with a directory-level fallback is the only shape that
+# is both narrow where it can be and honest where it cannot.
+_gates_for_path() {
+  _pp="$1"
+  while : ; do
+    _pfound=""
+    for _g in $(_gate_candidates); do
+      _consumes "$_g" "$_pp" && _pfound="$_pfound
+$_g"
+    done
+    if [ -n "$_pfound" ]; then
+      printf '%s\n' "$_pfound" | grep -v '^$'
+      return 0
+    fi
+    case "$_pp" in
+      */*) _pp="$(dirname "$_pp")" ;;
+      *)   return 1 ;;
+    esac
+  done
+}
+
 # ── UNMAPPED: a changed path that hits NO arm of the table below ─────────────
 #
 # The table is a semantic map (path → the gates that could plausibly notice a change
@@ -696,36 +748,6 @@ for f in $changed; do
     # identical: a loose file under test/ that someone edits ALONE when the gate reds.
     test/CORE-IR-TYPED-LEDGER.txt) add 'diff_compiler_core_ir_typed_modules' ;;
 
-    # ── sqlite: the derivation structurally CANNOT reach it ───────────────────
-    # `_fixture_dir_for` only fires for a path with a `*fixtures*`/`*goldens*` ancestor
-    # directory. The SQLite corpus has none — its goldens sit loose in `sqlite/test/`
-    # next to the oracles that read them — so the corpus derivation never triggers and
-    # these gates would derive NOTHING. That is not a redundant arm; it is the only
-    # thing standing between "edit the SQLite library" and "preflight runs nothing about
-    # it and prints green".
-    sqlite/test/*|sqlite/lib/*|sqlite/*.mdk|sqlite/medaka.toml)
-      add 'sqlite/test/*oracle' ;;
-
-    # ── gzip: same structural blind spot as sqlite, for the same reason ────────
-    # `gzip/test/inflate_oracle.sh` has no `*fixtures*`/`*goldens*` ancestor either
-    # — its goldens sit loose in `gzip/test/` next to the oracle that reads them —
-    # so the corpus derivation never triggers here and these gates would derive
-    # NOTHING. CI *does* grade this (`gzip/test/*oracle` runs in the `sqlite`
-    # shard), so without this arm a gzip change reports a green preflight having
-    # run nothing about it. See #1333.
-    gzip/test/*|gzip/lib/*|gzip/*.mdk|gzip/medaka.toml)
-      add 'gzip/test/*oracle' ;;
-
-    # ── pds: same structural blind spot as sqlite/gzip (F-8), plus one more ───
-    # pds/ goldens/vector corpora sit loose under pds/test/, so the fixture-dir
-    # derivation cannot reach them; and an UNMAPPED non-prose path widens every
-    # PR run to the FULL suite (ci.yml `detect`). Note the arm is `pds/*)`,
-    # deliberately broader than sqlite's/gzip's four-alternative arms: later
-    # slices add pds/oracle/, vector corpora, and ledger files, and a narrow arm
-    # would leave each of those UNMAPPED.
-    pds/*)
-      add 'pds/test/*' ;;
-
     # ── fixture/golden corpus change: run its ACTUAL consumers, not everything.
     # See _gates_for_fixture_dir above. A directory with zero discoverable
     # consumers is a real finding (dead corpus, or a gap in this derivation) —
@@ -772,8 +794,84 @@ for f in $changed; do
         fi
       fi ;;
 
-    # ── no arm matched: record it, do not silently ignore it. See `unmapped` above.
-    *) note_unmapped "$f" ;;
+    # ── ONE generic arm for every MANIFEST-BEARING PROJECT ────────────────────
+    #
+    # sqlite, gzip and pds used to have three hand-pasted arms here; mq, parsec and
+    # byteparser had none and were UNMAPPED. All six are now derived from
+    # `$_projects` (see its definition above) — the same `git ls-files '*medaka.toml'`
+    # rule ci.yml and diff_compiler_project_enrolment.sh use, so the three consumers
+    # of "what is a project" cannot drift apart silently.
+    #
+    # WHY AN ARM IS NEEDED AT ALL (the reasoning the three old banners carried, and
+    # it is unchanged): `_fixture_dir_for` only fires for a path with a
+    # `*fixtures*`/`*goldens*` ANCESTOR directory. No project has one — every
+    # project's goldens and vector corpora sit loose in `<project>/test/`, next to
+    # the oracles that read them — so the corpus derivation below can never trigger
+    # for them and they would derive NOTHING. That is not a redundant arm; it is the
+    # only thing standing between "edit the SQLite library" and "preflight runs
+    # nothing about it and prints green" (#1333).
+    #
+    # `<project>/test/*` and not `<project>/test/*oracle`: the arm does not need to
+    # know each project's gate-naming convention (sqlite/gzip name theirs
+    # `*_oracle.sh`, pds and the three new projects do not), only that all of a
+    # project's committed gates live under `<project>/test/`. Verified equivalent on
+    # today's tree: every tracked sqlite/test/*.sh and gzip/test/*.sh ends in
+    # `oracle.sh`, so both globs select the same 24 and 2 gates respectively. Tools
+    # that must stay OUT of reach — sqlite/findings/verify_compiler_bugs.sh,
+    # pds/tools/*.sh, pds/oracle/run.sh — live outside `<project>/test/` and are
+    # naturally excluded.
+    #
+    # The arm is deliberately `<project>/*`, i.e. as broad as the old `pds/*)` rather
+    # than as narrow as the old four-alternative sqlite/gzip arms: an UNMAPPED
+    # non-prose path widens every PR run to the FULL suite (ci.yml `detect`), so a
+    # narrow arm pays the whole suite for `sqlite/findings/*` or a new
+    # `<project>/oracle/` subdir that nobody remembered to add.
+    #
+    # ── demo/ and playground/: graded, but NOT projects ───────────────────────
+    # Neither has a manifest, so neither belongs in `$_projects` — but both are read
+    # by real gates, and being UNMAPPED costs the full suite. They get the derived
+    # `_gates_for_path` treatment instead of a hand-written gate list: see that
+    # function's header for why per-file-with-directory-fallback is the only honest
+    # shape for playground/ in particular.
+    *)
+      _proj=""
+      for _pr in $_projects; do
+        case "$f" in "$_pr"/*) _proj="$_pr"; break ;; esac
+      done
+      if [ -n "$_proj" ]; then
+        add "$_proj/test/*"
+      else
+        case "$f" in
+          demo/*|playground/*)
+            _pgset="$(_gates_for_path "$f")" || _pgset=""
+            if [ -z "$_pgset" ]; then
+              # No gate in the repo names this path or any ancestor of it. That is a
+              # real "no opinion", not a narrow answer — say so rather than inventing
+              # a plausible gate list.
+              note_unmapped "$f"
+            else
+              case " ${_reported_paths:-} " in
+                *" $f "*) ;;
+                *) _reported_paths="${_reported_paths:-} $f"
+                   printf 'preflight: %s → %s\n' "$f" \
+                     "$(printf '%s\n' "$_pgset" | xargs -n1 basename | tr '\n' ' ')" ;;
+              esac
+              for _g in $_pgset; do
+                # Repo-relative, minus a leading `test/`, minus `.sh` — the pattern
+                # form run_gates.sh / build_oracles.sh --for / the coverage gate all
+                # resolve. Stripping `$ROOT/test/` alone would leave an ABSOLUTE path
+                # for a gate outside test/ (playground/e2e/run.sh), which resolves to
+                # nothing and would trip the "matches NO gate" guard below.
+                _pat="${_g#"$ROOT"/}"
+                _pat="${_pat#test/}"
+                add "${_pat%.sh}"
+              done
+            fi ;;
+
+          # ── no arm matched: record it, do not silently ignore it. See `unmapped` above.
+          *) note_unmapped "$f" ;;
+        esac
+      fi ;;
   esac
 done
 
@@ -1001,7 +1099,15 @@ fi
 # Only an EXACT pattern is dropped. A wildcard ('diff_compiler_*', a blast-radius diff)
 # that still matches the gate legitimately pulls it back in and it runs like any other —
 # the re-resolve below is what makes that fall out for free rather than needing a rule.
-LOCAL_SKIP='diff_compiler_engines'
+#
+# `playground/e2e/run` joined it when the playground arm started DERIVING gates: it
+# launches the SYSTEM Google Chrome through Playwright and needs a freshly built
+# playground/dist/playground.wasm (~2.6 MB, gitignored). It is a NIGHTLY gate, not a
+# PR gate (.github/workflows/nightly.yml `playground-e2e`; see the reasoning in
+# test/CI-COVERAGE-EXCEPTIONS.txt), so no PR shard would run it either — but it must
+# still be PRINTED above, because the derivation is a statement about the DIFF and
+# "the playground e2e covers this file" is true whoever chooses to pay for it.
+LOCAL_SKIP='diff_compiler_engines playground/e2e/run'
 
 local_skipped=""
 _np=""
