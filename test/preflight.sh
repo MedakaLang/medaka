@@ -352,9 +352,30 @@ _projects="$(git -C "$ROOT" ls-files '*medaka.toml' 2>/dev/null \
 
 # Gates that live-reference changed path $1 — the same direct/one-hop scan
 # `_gates_for_fixture_dir` uses, but keyed on a PATH rather than on a fixture
-# directory, climbing to the ancestor directories when the exact file has no
-# named consumer. Stops after the TOP-LEVEL directory (a path with no `/` left),
-# so a miss can never climb to `.` and trivially match every gate in the repo.
+# directory, walking the path AND every one of its ancestor directories. Stops
+# after the TOP-LEVEL directory (a path with no `/` left), so it can never climb
+# to `.` and trivially match every gate in the repo.
+#
+# ⚠️ This is a UNION over every level, NOT first-match-wins (#1987 F5). It used to
+# stop at the first level with any hit, which made a gate that references only an
+# ANCESTOR of the changed path invisible the moment a narrower level also matched
+# — and the narrower hit did not even have to be a real one. Both live cases:
+#
+#   playground/e2e/tests/playground.spec.mjs derived exactly ONE gate
+#   (diff_compiler_project_enrolment, via a one-hop match on LOCAL_SKIP's
+#   `playground/e2e/run` string) and the gate that actually EXECUTES that spec,
+#   playground/e2e/run.sh, never surfaced — masked at the file level.
+#
+#   playground/worker.js matched diff_compiler_wasm_shim_parity at the file level
+#   only through that gate's `echo "… expected at least playground/worker.js …"`
+#   diagnostic, which short-circuited the climb before the same gate's REAL
+#   reference (`grep -rl … "$ROOT/playground"`, one level up) was ever consulted.
+#   Same gate, right answer, wrong reason — and any OTHER playground/-level gate
+#   would have been lost behind it.
+#
+# The union costs one extra scan per ancestor level (paths here are 1-4 levels
+# deep) and can only ever WIDEN a path's set, which is the safe direction for a
+# derivation whose whole failure mode is a silently-missing gate.
 #
 # This exists for `demo/` and `playground/`: both are graded by real gates, and
 # NEITHER is a project (no manifest), so the manifest-derived arm cannot see
@@ -366,21 +387,26 @@ _projects="$(git -C "$ROOT" ls-files '*medaka.toml' 2>/dev/null \
 # is both narrow where it can be and honest where it cannot.
 _gates_for_path() {
   _pp="$1"
+  _pfound=""
   while : ; do
-    _pfound=""
     for _g in $(_gate_candidates); do
+      case "$_pfound" in
+        *"
+$_g
+"*) continue ;;
+      esac
       _consumes "$_g" "$_pp" && _pfound="$_pfound
-$_g"
+$_g
+"
     done
-    if [ -n "$_pfound" ]; then
-      printf '%s\n' "$_pfound" | grep -v '^$'
-      return 0
-    fi
     case "$_pp" in
       */*) _pp="$(dirname "$_pp")" ;;
-      *)   return 1 ;;
+      *)   break ;;
     esac
   done
+  [ -n "$_pfound" ] || return 1
+  printf '%s' "$_pfound" | grep -v '^$'
+  return 0
 }
 
 # ── UNMAPPED: a changed path that hits NO arm of the table below ─────────────
@@ -788,7 +814,16 @@ for f in $changed; do
                  "$(printf '%s\n' "$_gset" | xargs -n1 basename | tr '\n' ' ')" ;;
           esac
           for _g in $_gset; do
-            _pat="${_g#"$ROOT"/test/}"
+            # Repo-relative, minus a leading `test/`, minus `.sh` — the same two-step
+            # form the manifest-keyed arm below uses, and for the same reason (#1992):
+            # `_gate_candidates` yields EVERY tracked .sh in the repo, not just
+            # test/*.sh, so stripping `$ROOT/test/` alone leaves a gate outside test/
+            # (sqlite/test/*_oracle.sh, playground/e2e/run.sh) as an ABSOLUTE path,
+            # which resolves to no gate and trips the "matches NO gate" hard-fail
+            # below. Latent today only because no such gate consumes a
+            # *fixtures*/*goldens* corpus yet — one arriving must not red this arm.
+            _pat="${_g#"$ROOT"/}"
+            _pat="${_pat#test/}"
             add "${_pat%.sh}"
           done
         fi
