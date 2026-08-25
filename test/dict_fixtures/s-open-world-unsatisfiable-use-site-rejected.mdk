@@ -1,0 +1,48 @@
+-- DICT-SEMANTICS §4.2 (obligation deferral, OD2) -- THE ILLEGAL TWIN of
+-- s-open-world-declared-context-uncalled-accepted.mdk, and the NARROW half of
+-- #1939's fix. Read the two together or neither means anything.
+--
+-- The sibling establishes that a declared context whose impl is not LOADED must
+-- DEFER rather than refute. This file establishes what deferral costs: nothing.
+-- The verdict moves from the definition to the use site; it does not disappear.
+--
+-- SPEC ANSWER, hand-derived from §3, NOT captured. `f1 : Tag (Wrap a) => …` is
+-- declared exactly as in the sibling and is legal for the same reason. `main`
+-- then calls it at `a := Int`, posing the GROUND goal `Tag (Wrap Int)`. A ground
+-- goal cannot instantiate further, so the open-world argument does not apply to
+-- it: `match(IE, Tag (Wrap Int))` is EMPTY -- the program's only `Tag` impl
+-- heads at `Int`, and `Wrap Int = Int` has no solution -- and it stays empty.
+-- REJECT, T-NO-IMPL, on all three verbs.
+--
+-- 🚨 `impl Tag Int` IS LOAD-BEARING AND MUST NOT BE DELETED. It is what makes
+-- the interface non-empty, so the reject cannot be reached by the trivial
+-- "nothing implements Tag at all" route the sibling exercises; the goal must be
+-- refuted for its ARGUMENT, at the site that grounds it.
+--
+-- ⚠️ VERDICT AND CODE, NO LOCATION -- the same discipline
+-- s4-2-mixed-vector-no-impl-rejected.mdk adopted and for the same reason: which
+-- site owns a deferred goal's verdict is exactly what this slice moves, so a
+-- span assertion here would enshrine one arm's answer as the specification.
+-- MEASURED at the pre-slice base `7941e5fe` (this tree, cold-built): REJECT on
+-- all three verbs there too -- so the VERDICT this row pins is UNCHANGED across
+-- the slice BY DESIGN. What moved is how many rejects there are: base emitted
+-- TWO -- one at `f1`'s DEFINITION and one at `main`'s CALL -- where head emits
+-- only the second. The false reject went, the true one did not, which is the
+-- whole claim of the pair. This is a tripwire, not a demonstration: a fix that
+-- bought the sibling's acceptance by DROPPING the obligation instead of
+-- deferring it would turn this file green, and green here is the S0.
+--
+-- ⚠️ ONE impl block, so Section 4 derives no permutation pair -- correct, the
+-- risk being guarded is ACCEPTANCE, not declaration order.
+data Wrap a = Wrap a
+
+interface Tag a where
+  tag : a -> String
+
+impl Tag Int where
+  tag _ = "int"
+
+f1 : Tag (Wrap a) => Wrap a -> String
+f1 x = tag x
+
+main = println (f1 (Wrap 5))

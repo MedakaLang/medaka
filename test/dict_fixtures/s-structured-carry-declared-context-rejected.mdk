@@ -1,0 +1,35 @@
+-- S-structured-carry (#1937): a DECLARED context whose predicate argument is
+-- STRUCTURED (`Conv (Wrap a) b`, not a bare `Conv a b`) must carry to the call
+-- site as the WHOLE instantiated predicate.
+--
+-- Hand-derived from DICT-SEMANTICS §1/§4 BEFORE running anything: `f`'s declared
+-- context is one n-ary predicate `Conv (Wrap a) b`.  At `f (Wrap 'c') True` the
+-- instantiation is `a := Char, b := Bool`, so the goal is `Conv (Wrap Char) Bool`.
+-- The only impl in scope is `Conv (Wrap Int) Bool`.  `Wrap Char` is not `Wrap Int`,
+-- so the goal is unsatisfiable and this file must be a LOCATED reject on every
+-- verb.
+--
+-- 🚨 WHAT THIS PINS THAT NOTHING ELSE DID.  At base (4b45e035) all three verbs
+-- ACCEPTED at exit 0 and `run`/`build` printed `wrap-int-bool` -- the impl for a
+-- DIFFERENT type, chosen silently.  The declared context was ERASED before the
+-- call site was ever consulted, because the obligation channels admitted only a
+-- BARE-tyvar or a fully GROUND predicate argument and dropped a structured one.
+-- That is #1937's silent wrongness, and a verdict row is exactly what sees it:
+-- the pre-fix binary graded ACCEPT/ACCEPT/ACCEPT here.
+--
+-- ⚠️ The sibling `s-structured-carry-declared-context-kept.mdk` is the ACCEPT
+-- direction of the same widening; the two must move together.  A fix that made
+-- this file reject by dropping structured contexts on the floor entirely would
+-- turn the sibling into a false reject, so neither file is meaningful alone.
+data Wrap a = Wrap a
+
+interface Conv a b where
+  conv : a -> b -> String
+
+impl Conv (Wrap Int) Bool where
+  conv _ _ = "wrap-int-bool"
+
+f : Conv (Wrap a) b => Wrap a -> b -> String
+f x y = conv x y
+
+main = println (f (Wrap 'c') True)

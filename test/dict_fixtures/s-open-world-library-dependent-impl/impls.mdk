@@ -1,0 +1,7 @@
+-- The DEPENDENT module. It imports `lib`, so `lib`'s own load graph does not
+-- contain it -- which is the entire point of the fixture: this impl is the
+-- witness `lib.mdk` is checked WITHOUT.
+import lib.{Tag, tag, Wrap(..)}
+
+impl Tag (Wrap Int) where
+  tag _ = "wrap-int"

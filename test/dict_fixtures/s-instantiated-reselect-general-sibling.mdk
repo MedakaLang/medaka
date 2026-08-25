@@ -1,0 +1,43 @@
+-- S-instantiated-reselect (#1909), THE ISSUE'S OWN FILED REPRO, and the
+-- OVER-NARROWING guard its two-ground-impl siblings cannot be.
+--
+-- Hand-derived from DICT-SEMANTICS §3 BEFORE running anything.  A general
+-- `impl Tag (Wrap a)` sits beside a specific `impl Tag (Wrap Bool)`, so each
+-- call's matching set has TWO members and §3 takes the min⊑: `nest True` poses
+-- `Tag (Wrap Bool)` and must select the SPECIFIC impl, `nest 1` poses
+-- `Tag (Wrap Int)`, which the specific impl does not match at all, and must
+-- select the GENERAL one.  `specificW/genericW`.
+--
+-- 🚨 THIS IS THE ROW THAT FAILS IF THE FIX OVER-NARROWS.  Its siblings assert
+-- that a per-instantiation goal is REACHED; this one additionally asserts that
+-- reaching it does not lose the general instance -- a fix that routed every
+-- structured predicate straight to a ground impl would print `specificW/` and
+-- then fail to select anything for `nest 1`.  MEASURED at the pre-slice base
+-- `bffced42` on this tree: `genericW/genericW` at exit 0 on check, run and build
+-- -- i.e. base got the FIRST call wrong (the abstraction-time pick against the
+-- rigid goal `Wrap a` is the general impl, and both instantiations inherited it)
+-- and the second right by accident.
+--
+-- ⚠️ ONE CALL IS NOT ENOUGH, which is why this file does not stop at `nest True`.
+-- #1909's filed repro is the single call, and a single `genericW -> specificW`
+-- move is equally consistent with "now always picks the most specific impl in the
+-- program", which is a different and wrong rule.  The `nest 1` arm is what
+-- discriminates the two.
+--
+-- ⚠️ TWO `impl Tag` BLOCKS, so Section 4 derives a permutation pair.  DICT §3
+-- forbids declaration order deciding a winner even when both candidates match.
+data Wrap a = Wrap a
+
+interface Tag t where
+  tagOf : t -> String
+
+impl Tag (Wrap a) where
+  tagOf _ = "genericW"
+
+impl Tag (Wrap Bool) where
+  tagOf _ = "specificW"
+
+nest : Tag (Wrap a) => a -> String
+nest x = tagOf (Wrap x)
+
+main = println "\{nest True}/\{nest 1}"

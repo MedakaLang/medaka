@@ -1,0 +1,41 @@
+-- S-instantiated-reselect (#1909), the REJECT direction -- the ADMISSION
+-- tripwire for s-instantiated-reselect-declared.mdk.
+--
+-- Hand-derived from DICT-SEMANTICS §3 BEFORE running anything.  Same declared
+-- structured context, same two ground impls, called at a THIRD type: `nest 'c'`
+-- poses `Tag (Wrap Char)`, whose matching set is EMPTY -- `Wrap Char = Wrap Bool`
+-- and `Wrap Char = Wrap Int` each have no solution on argument 0 alone.  The goal
+-- is GROUND, so the open-world argument (OD2, #1939) does not reach it and it
+-- must be REFUTED: REJECT, T-NO-IMPL, on all three verbs.
+--
+-- 🚨 THE VERDICT IS UNCHANGED ACROSS THIS SLICE BY DESIGN, and saying so is the
+-- point.  MEASURED at the pre-slice base `bffced42` on this tree: REJECT with
+-- `No impl of Tag for Wrap Char` at 41:16, identically to head.  This row is a
+-- TRIPWIRE, not a demonstration -- it cannot go from red to green across the fix
+-- and was never expected to.  What it guards is the direction the fix could
+-- plausibly have broken: #1909 WIDENS the goal the call site is keyed on, from
+-- the slot's bare mono to the predicate's own structured argument, and a widening
+-- that admitted the new goal by UNIFYING it against a non-matching impl head
+-- would turn this file green.  Green here is the S0.
+--
+-- ⚠️ VERDICT AND CODE, NO LOCATION: which site owns a refuted structured goal's
+-- diagnostic is adjacent to what the neighbouring open-world rows move, so a span
+-- assertion would enshrine one arm's answer as the spec.
+--
+-- ⚠️ TWO `impl Tag` BLOCKS, so Section 4 derives a permutation pair -- correct and
+-- wanted: a reject must not depend on declaration order either.
+data Wrap a = Wrap a
+
+interface Tag t where
+  tagOf : t -> String
+
+impl Tag (Wrap Bool) where
+  tagOf _ = "boolW"
+
+impl Tag (Wrap Int) where
+  tagOf _ = "intW"
+
+nest : Tag (Wrap a) => a -> String
+nest x = tagOf (Wrap x)
+
+main = println (nest 'c')
