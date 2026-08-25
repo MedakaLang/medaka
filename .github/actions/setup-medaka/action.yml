@@ -54,7 +54,10 @@ inputs:
     required: false
     default: 'medaka-binaries'
   wasm-tools-version:
-    description: 'wasm-tools release to install when `wasm` is true.'
+    description: >-
+      wasm-tools release to install when `wasm` is true. NB: `ops/provision.sh`
+      has its own SEPARATE `WT_VER` pin for the same tool, for provisioning a
+      dev box rather than CI — bump both together or they will silently drift.
     required: false
     default: '1.219.1'
   wasm-node-version:
@@ -165,8 +168,14 @@ runs:
         # ...and the EMITTER's provenance stamp must equal what stage A would compute
         # from THIS tree. Mirrors src_fingerprint_full() in
         # test/build_native_medaka.sh (compiler/**.mdk + runtime/*.c, names AND
-        # contents, repo-relative, LC_ALL=C sorted). This is the same-SHA invariant
-        # above, asserted.
+        # contents, repo-relative, LC_ALL=C sorted). This is NOT the source of the
+        # safety guarantee — the same-SHA checkout invariant above already makes the
+        # ENTIRE tree identical between producer and consumer (Makefile, stdlib/*,
+        # everything, not just this subset). This check is a narrower, defense-in-depth
+        # ASSERTION of the one subset that matters for the emitter's own
+        # self-consistency, proving the mechanism most likely to silently break (an
+        # emitter that predates a parser change, or was copied in from elsewhere)
+        # hasn't.
         stamped="$(cat .medaka_emitter.srcstamp)"
         live="$( { find compiler -name '*.mdk' -print; find runtime -name '*.c' -print; } \
                  | LC_ALL=C sort \

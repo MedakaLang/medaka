@@ -79,6 +79,10 @@ fi
 
 # wasm-tools — no apt package and no Rust toolchain here, so take the upstream
 # prebuilt release binary.
+# NB: this is a SEPARATE pin from the `wasm-tools-version` input default in
+# .github/actions/setup-medaka/action.yml (CI's toolchain install) — this
+# script provisions a dev box, not a CI job, so it does not consume that
+# composite action. Bump both together or they will silently drift.
 if ! command -v wasm-tools >/dev/null 2>&1; then
   WT_VER=1.219.1
   WT_TGZ="/tmp/wasm-tools-${WT_VER}.tar.gz"

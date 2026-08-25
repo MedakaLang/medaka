@@ -292,8 +292,9 @@ room (originally justified because `wasm:` was advisory — that premise is now 
 been required since 2026-07-15, but the placement stands on its own).
 `diff_compiler_preflight_base` (#560) is pure git (builds its own synthetic repo with `git init`),
 needs no compiler/oracle/checkout, and costs ~0 CPU-s; it pins the base-ref derivation in
-preflight.sh, the agent loop and the input to CI's own narrowing, so it belongs in a required
-shard on purpose. `diff_compiler_dict_semantics` (#616, the DICT-SEMANTICS.md conformance gate)
+preflight.sh, the agent loop and the input to CI's own narrowing — a stale base invents phantom
+changed files, enrols gates the diff never touched, and can trip the #492 blast-radius carve-out
+into the ~84-gate run — so it belongs in a required shard on purpose. `diff_compiler_dict_semantics` (#616, the DICT-SEMANTICS.md conformance gate)
 would naturally sit in `types` alongside `diff_compiler_shadow_semantics`, but `types` was the
 pole in both merge_group runs measured on 2026-07-29 (429s/376s) while `frontend` was cheapest
 (182s/228s); it costs ~43s wall and reads no oracle.
