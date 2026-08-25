@@ -79,6 +79,16 @@ CI CLASSIFICATION POLICY FOR EVERY TRACKED .sh THIS SPRINT ADDS (RUN-PDS0-001 A4
     Every tracked .sh must be in exactly one of these buckets:
     diff_compiler_ci_shard_coverage.sh enumerates them repo-wide via
     `git ls-files -z '*.sh'` and fails on any that is in none.
+
+(d) A real gate that turns out to be too EXPENSIVE for the PR path is not a
+    TOOLS-bucket or EXCEPTIONS-bucket case — it still asserts something and
+    can fail. Move it OUT of pds/test/ (it is the directory-level auto-enroll
+    in (a) that must stop applying, not the gate's classification) into
+    pds/nightly/, and name it literally in a .github/workflows/nightly.yml
+    job, the same "named" mechanism check_removed_constructs/fuzz_diff use —
+    see that job's own comment. `pds/nightly/signing_parity.sh` (#1962) is the
+    first instance: its full native+Wasm ECDSA corpus run alone added ~20
+    minutes to the `sqlite` shard.
 ```
 
 ## Vector provenance (G5)

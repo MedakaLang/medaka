@@ -33,6 +33,15 @@ name: Nightly
 #                              no sampling to distinguish "ran zero" from "found
 #                              nothing", so the harness's own exit code is the signal.
 #
+#   pds_signing_parity         moved from the `sqlite` CI shard, 2026-08-25 (#1962):
+#                              its full 322-row native+Wasm ECDSA corpus check alone
+#                              added ~20 minutes to that shard (#1926 F3). Same
+#                              script (pds/nightly/signing_parity.sh), same
+#                              assertions — just off the PR/merge-queue path until
+#                              it's cheap enough not to dominate a shard. PLAIN
+#                              pass/fail: a deterministic parity check, not a
+#                              fuzzer, so red here is a real regression.
+#
 # Mirrors ci.yml's bootstrap (checkout -> install clang/libgc -> cache/cold-build
 # `make medaka` -> build only the oracles the gate needs) — see that file for the
 # full rationale on caching and the oracle `--for` derivation. This workflow is
@@ -355,6 +364,39 @@ jobs:
           path: playground/e2e/screenshots/*.png
           if-no-files-found: warn
           retention-days: 14
+
+  pds-signing-parity:
+    name: "pds/nightly/signing_parity.sh (full ECDSA corpus parity, native+Wasm — #1962)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup medaka (toolchain + wasm arm + build)
+        uses: ./.github/actions/setup-medaka
+        with:
+          wasm: 'true'
+          binary: build
+
+      # test/wasm/build_wasm_oracle.sh reads MEDAKA_EMITTER to find the just-built
+      # emitter (same recipe ci.yml's `sqlite` shard uses for its own wasm arm).
+      - name: Build the wasm emitter oracle (modules entry)
+        run: |
+          export MEDAKA_EMITTER="$PWD/medaka_emitter"
+          sh test/wasm/build_wasm_oracle.sh --modules-only
+
+      # MOVED HERE FROM the `sqlite` CI shard (2026-08-25, #1962): this gate's full
+      # 322-row native+Wasm ECDSA corpus run, through the interpreted WasmGC path,
+      # alone added ~20 minutes to that shard (~845s -> ~35min, #1926 F3). Same
+      # script, same assertions, just off the PR/merge-queue path — invoked by its
+      # literal repo-relative path so diff_compiler_ci_shard_coverage.sh's "named"
+      # mechanism counts it as covered. PLAIN pass/fail (the check-removed-constructs
+      # shape): this is a deterministic parity check, not a fuzzer or a census, so a
+      # red run here is a genuine regression, not a finding to file.
+      - name: Full native/Wasm ECDSA corpus parity
+        env:
+          MEDAKA_ROOT: ${{ github.workspace }}
+        run: sh pds/nightly/signing_parity.sh
 
   # ── The must-fail CENSUS (#569) — the half of the ratchet a GATE cannot run. ────
   #

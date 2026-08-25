@@ -1,6 +1,16 @@
 #!/bin/sh
 # Eval/native/Wasm value parity for #1700 step 3. Native timing is audited by
 # constant_time_signing.sh; this gate makes no Wasm timing claim.
+#
+# MOVED HERE FROM pds/test/ (2026-08-25, #1962): landing directly in pds/test/
+# auto-enrolled it in the `sqlite` CI shard (pds/README.md's classification
+# policy), and its full 322-row native+Wasm corpus run — through the
+# interpreted WasmGC path — alone added ~20 minutes to that shard, pushing it
+# from ~845s to ~35min and making it the CI critical path (see #1926 F3).
+# Unchanged otherwise: same assertions, same corpora. Run nightly instead, by
+# .github/workflows/nightly.yml's `pds-signing-parity` job (named literally
+# there so diff_compiler_ci_shard_coverage.sh still counts it as covered).
+# #1962 tracks making it cheap enough to move back onto the PR path.
 set -eu
 
 ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
