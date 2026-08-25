@@ -268,9 +268,25 @@ for name, pat in pats.items():
 # different gates. Matching only INVOCATION text (`invocation_text`, built above
 # from `run:` step bodies), not the whole raw workflow file, is what keeps a
 # `case`/classifier arm that merely NAMES a script from being misread as running
-# it (#1969).
+# it — EXCEPT that a `run:` step can itself contain a shell `case ... esac`
+# classifier (e.g. ci.yml's "Classify changed files" step), so text-scoping
+# alone doesn't fully solve #1969. A `case` pattern is always immediately
+# followed by `)` (optionally after `|` alternation, e.g. `foo.sh|bar.sh)`); a
+# genuine invocation (`sh test/foo.sh`, `./medaka build test/foo.sh`, a bare
+# `test/foo.sh` command line, ...) never is. So a match immediately followed by
+# `)` is a case-arm mention, not a real invocation, and is excluded (a
+# case-pattern-shaped occurrence INSIDE a real invocation, e.g.
+# `$(sh test/foo.sh)`, is accepted as a rare false-negative rather than solved).
+def _is_real_invocation(g, text):
+    pat = re.compile(rf'(?<![\w/-]){re.escape(g)}\.sh\b')
+    for m in pat.finditer(text):
+        if m.end() < len(text) and text[m.end()] == ')':
+            continue
+        return True
+    return False
+
 named = {g for g in all_gates
-         if g not in seen and re.search(rf'(?<![\w/-]){re.escape(g)}\.sh\b', invocation_text)}
+         if g not in seen and _is_real_invocation(g, invocation_text)}
 missing = sorted(all_gates - set(seen) - named - set(exc))
 
 for name in pats:
