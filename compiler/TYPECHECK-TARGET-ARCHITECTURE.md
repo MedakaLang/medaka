@@ -177,8 +177,8 @@ are stale (`compiler/frontend/resolve.mdk:3106`, `compiler/types/typecheck.mdk:1
 the live ones are the two above, re-derived here exactly as §11's preamble
 instructs. The *claim* is correct; only its coordinates had rotted.
 
-**Two live defects are that seam failing in opposite directions**, which is the
-evidence they are one unit rather than two bugs: **#1326** (S1, `verified`) — a
+**Two defects were that seam failing in opposite directions**, which was the
+evidence they were one unit rather than two bugs: **#1326** — a
 same-named cross-module binding's context is attributed to an *unconstrained*
 sibling, so a legal program is rejected at its own call site (fails **closed**);
 and the **re-export residual on #845** — a declared context is not found across
@@ -186,6 +186,21 @@ one `export import` hop, so the obligation is never checked and `check` greens
 (fails **open**). Both ask *"which `(module, name)` does this local spelling
 denote?"* of **import syntax** rather than of resolve. Adjudications: the
 2026-08-05 comments on #1326, #845 and epic #1122.
+
+⚠️ **UPDATE (structured-predicate-carry sprint, #1948): both members are now
+DRAINED, so this seam is history, not a live pair of bugs.** The re-export
+residual on #845 was already recorded CLOSED elsewhere in this document (§4
+family A/H, #1114/PR #1328). **#1326** — which this document's own 2026-08-09
+UPDATE 2 (below, in the A-2 scoping section) said "stays OPEN" — has since
+been measured fixed too: `docs/spec/DICT-SEMANTICS.md`'s §4.2 OD6 row records
+`check`/`run`/`build` agreeing under both import orderings (exit 0, printing
+`ok / 5`), regression-guarded by
+`test/import_order_fixtures/1326-samename-sibling-constraint-misattributed-import-order/`.
+Its GitHub issue remains open for bookkeeping only — the defect itself is
+drained. Neither member is live evidence for the seam-unification argument
+any longer; the mechanism analysis above (one un-keyed name-resolution seam
+producing a false positive in one direction and a false negative in the
+other) stands as the historical reasoning that motivated it.
 
 **Not this seam, and named here so the scope does not drift:** #1330 and the
 `Debug (Int -> Int)` residual on #792 are POLICY defects on channels whose keys
