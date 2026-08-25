@@ -20,12 +20,15 @@ LIBSECP_CONTROL_RUNNER = """#!/bin/sh
 printf '%s\\n' fresh-independent-oracle-output
 """
 K256_CONTROL_RUNNER = """#!/bin/sh
-control_output=fresh-independent-oracle-output
-printf '%s\\n' "$control_output"
+exec "$ORACLE_CARGO" "$1"
+"""
+CONTROL_CARGO = """#!/bin/sh
+cargo_output=fresh-independent-oracle-output
+printf '%s\\n' "$cargo_output"
 """
 K256_RUNNER = """#!/bin/sh
 # ORACLE_EXECUTION: k256 + locked rfc6979 0.4.0
-exec cargo run --quiet --locked --manifest-path "$ORACLE_WORK/rust/Cargo.toml" -- "$1"
+exec "$ORACLE_CARGO" run --quiet --locked --manifest-path "$ORACLE_WORK/rust/Cargo.toml" -- "$1"
 """
 
 
@@ -103,18 +106,19 @@ def run_oracle_control(generator: pathlib.Path, cwd: pathlib.Path) -> subprocess
 
 def oracle_control_completed(proof: subprocess.CompletedProcess[str]) -> bool:
     proof_lines = proof.stdout.splitlines()
-    if proof.returncode != 0 or len(proof_lines) != 5:
+    if proof.returncode != 0 or "cargo-shim-executed" in proof.stderr or len(proof_lines) != 6:
         return False
     rows = [line.split() for line in proof_lines]
-    if [len(row) for row in rows] != [6, 6, 7, 7, 2]:
+    if [len(row) for row in rows] != [6, 6, 5, 10, 10, 2]:
         return False
-    libsecp_runner, k256_runner, libsecp_output, k256_output, compared = rows
+    libsecp_runner, k256_runner, cargo, libsecp_output, k256_output, compared = rows
     file_ids = [libsecp_runner[3], k256_runner[3]]
     return (
         libsecp_runner[:2] == ["runner", "libsecp256k1"]
         and k256_runner[:2] == ["runner", "k256"]
         and libsecp_output[:2] == ["output", "libsecp256k1"]
         and k256_output[:2] == ["output", "k256"]
+        and cargo[:2] == ["cargo", "k256"]
         and compared[0] == "compared"
         and libsecp_runner[2:6] == libsecp_output[2:6]
         and k256_runner[2:6] == k256_output[2:6]
@@ -128,7 +132,11 @@ def oracle_control_completed(proof: subprocess.CompletedProcess[str]) -> bool:
             is_hex(value, 32)
             for value in [libsecp_runner[4], libsecp_runner[5], k256_runner[4], k256_runner[5]]
         )
-        and len({libsecp_output[6], k256_output[6], compared[1]}) == 1
+        and libsecp_output[6:9] == ["direct", "direct", "direct"]
+        and k256_output[6:9] == cargo[2:5]
+        and is_hex(cargo[2], 32)
+        and is_hex(cargo[4], 32)
+        and len({libsecp_output[9], k256_output[9], compared[1]}) == 1
         and is_hex(compared[1], 32)
     )
 
@@ -156,6 +164,29 @@ def require_control_mutation_red(
         fail(f"{label} unexpectedly preserved oracle completion")
 
 
+def require_control_mutation_green(
+    root: pathlib.Path,
+    generator: str,
+    real_anchors: list[str],
+    label: str,
+    anchor: str,
+    replacement: str,
+) -> None:
+    if generator.count(anchor) != 1:
+        fail(f"{label} mutation anchor is not unique")
+    mutated = generator.replace(anchor, replacement)
+    for real_anchor in real_anchors:
+        if mutated.count(real_anchor) != generator.count(real_anchor):
+            fail(f"{label} mutation changed a retained real-authority anchor")
+    with tempfile.TemporaryDirectory(prefix="medaka-oracle-control-") as temporary:
+        mutation_root = pathlib.Path(temporary)
+        mutation_generator = mutation_root / "gen_signing_corpus.sh"
+        mutation_generator.write_text(mutated)
+        proof = run_oracle_control(mutation_generator, root)
+    if not oracle_control_completed(proof):
+        fail(f"{label} redirected or invalidated the bound cargo authority")
+
+
 def require_generator_authorities(root: pathlib.Path) -> None:
     generator_path = root / "pds/tools/gen_signing_corpus.sh"
     generator = generator_path.read_text()
@@ -165,13 +196,29 @@ def require_generator_authorities(root: pathlib.Path) -> None:
             fail(f"generator authority pin missing or duplicated: {literal}")
     real_anchors = [
         'LIBSECP_RUNNER="$WORK/libsecp-sign"',
-        'exec cargo run --quiet --locked --manifest-path "$ORACLE_WORK/rust/Cargo.toml" -- "$1"',
+        'capture_cargo_identity "$(resolve_command_executable cargo)"',
+        'exec "$ORACLE_CARGO" run --quiet --locked --manifest-path "$ORACLE_WORK/rust/Cargo.toml" -- "$1"',
         'K256_RUNNER="$WORK/k256-runner"',
         f"K256_WRAPPER_EXPECTED_SHA={hashlib.sha256(K256_RUNNER.encode()).hexdigest()}",
     ]
     for real_anchor in real_anchors:
         if generator.count(real_anchor) != 1:
             fail(f"real signing authority command missing or duplicated: {real_anchor}")
+    real_cargo_setup = '''else
+  capture_cargo_identity "$(resolve_command_executable cargo)"
+  check_tag https://github.com/bitcoin-core/secp256k1 refs/tags/v0.8.0 "$LIBSECP_COMMIT"'''
+    if generator.count(real_cargo_setup) != 1:
+        fail("real cargo executable is not resolved at the trusted setup boundary")
+    cargo_binding = '''  CARGO_EXECUTABLE=$(absolute_executable_path "$1")
+  [ -x "$CARGO_EXECUTABLE" ] || {
+    echo "gen_signing_corpus: resolved cargo executable is not executable" >&2
+    exit 1
+  }
+  # Invoke the absolute command path so argv[0]-dispatching tools such as
+  # rustup's cargo symlink retain cargo semantics; attest its canonical target.
+  CARGO_EXPECTED_PATH=$(canonical_executable_path "$CARGO_EXECUTABLE")'''
+    if generator.count(cargo_binding) != 1:
+        fail("cargo invocation path and canonical target are not bound independently")
     runner_assignments = re.findall(r"^  (?:LIBSECP_RUNNER|K256_RUNNER)=.*$", generator, re.MULTILINE)
     if runner_assignments != [
         '  LIBSECP_RUNNER="$WORK/libsecp-control-runner"',
@@ -183,6 +230,7 @@ def require_generator_authorities(root: pathlib.Path) -> None:
     expected_literals = [
         f"LIBSECP_CONTROL_RUNNER_EXPECTED_SHA={hashlib.sha256(LIBSECP_CONTROL_RUNNER.encode()).hexdigest()}",
         f"K256_CONTROL_RUNNER_EXPECTED_SHA={hashlib.sha256(K256_CONTROL_RUNNER.encode()).hexdigest()}",
+        f"CONTROL_CARGO_EXPECTED_SHA={hashlib.sha256(CONTROL_CARGO.encode()).hexdigest()}",
         f"K256_WRAPPER_EXPECTED_SHA={hashlib.sha256(K256_RUNNER.encode()).hexdigest()}",
     ]
     for expected_literal in expected_literals:
@@ -207,6 +255,7 @@ def require_generator_authorities(root: pathlib.Path) -> None:
     wrapper_templates = [
         ("libsecp control", "$WORK/libsecp-control-runner", LIBSECP_CONTROL_RUNNER),
         ("k256 control", "$WORK/k256-control-runner", K256_CONTROL_RUNNER),
+        ("control cargo", "$WORK/control-cargo", CONTROL_CARGO),
         ("k256 real", "$WORK/k256-runner", K256_RUNNER),
     ]
     for label, path, template in wrapper_templates:
@@ -216,10 +265,12 @@ def require_generator_authorities(root: pathlib.Path) -> None:
             fail(f"{label} wrapper template is missing, duplicated, or rewritten")
     common_path = [
         "  attest_oracle_runners \\",
-        '    "$libsecp_runner" "$k256_runner" "$libsecp_expected_sha" "$k256_expected_sha" "$receipt"',
+        '    "$libsecp_runner" "$k256_runner" "$libsecp_expected_sha" "$k256_expected_sha" \\',
+        '    "$cargo_executable" "$cargo_expected_path" "$cargo_expected_file_id" \\',
+        '    "$cargo_expected_content_sha" "$receipt"',
         '  ORACLE_WORK="$WORK" "$libsecp_runner" "$input" > "$libsecp_output"',
         "  record_oracle_completion libsecp256k1 \\",
-        '  ORACLE_WORK="$WORK" "$k256_runner" "$input" > "$k256_output"',
+        '  ORACLE_CARGO="$CARGO_EXECUTABLE" ORACLE_WORK="$WORK" "$k256_runner" "$input" > "$k256_output"',
         "  record_oracle_completion k256 \\",
         '  compare_oracle_outputs "$libsecp_output" "$k256_output" "$receipt"',
         '  require_oracle_completion "$receipt"',
@@ -234,6 +285,22 @@ def require_generator_authorities(root: pathlib.Path) -> None:
     proof = run_oracle_control(generator_path, root)
     if not oracle_control_completed(proof):
         fail("fresh oracle run/compare completion evidence is absent")
+    require_control_mutation_green(
+        root,
+        generator,
+        real_anchors,
+        "task-local cargo PATH shim",
+        "# ORACLE_MODE_SETUP_COMPLETE",
+        "# ORACLE_MODE_SETUP_COMPLETE\n"
+        'cat > "$WORK/cargo" <<\'EOF\'\n'
+        "#!/bin/sh\n"
+        "echo cargo-shim-executed >&2\n"
+        'exec "$WORK/libsecp-control-runner" "$1"\n'
+        "EOF\n"
+        'chmod +x "$WORK/cargo"\n'
+        'PATH="$WORK:$PATH"\n'
+        "export PATH",
+    )
     mutations = [
         (
             "delegating wrapper rewrite",
@@ -263,22 +330,20 @@ def require_generator_authorities(root: pathlib.Path) -> None:
         ),
         (
             "same-content runner copy",
-            '  chmod +x "$WORK/libsecp-control-runner" "$WORK/k256-control-runner"',
-            '  chmod +x "$WORK/libsecp-control-runner" "$WORK/k256-control-runner"\n'
+            '  chmod +x "$WORK/libsecp-control-runner" "$WORK/k256-control-runner" "$WORK/control-cargo"',
+            '  chmod +x "$WORK/libsecp-control-runner" "$WORK/k256-control-runner" "$WORK/control-cargo"\n'
             '  cp "$WORK/libsecp-control-runner" "$WORK/k256-control-runner" # copy first runner bytes',
         ),
         (
             "runner identity receipt omission",
-            '    "$libsecp_runner" "$k256_runner" "$libsecp_expected_sha" "$k256_expected_sha" "$receipt"',
-            '    "$libsecp_runner" "$k256_runner" "$libsecp_expected_sha" "$k256_expected_sha" "$receipt"\n'
+            '    "$cargo_expected_content_sha" "$receipt"',
+            '    "$cargo_expected_content_sha" "$receipt"\n'
             '  : > "$receipt" # omit runner identity receipt',
         ),
         (
             "runner identity receipt forgery",
-            '    "$libsecp_runner" "$k256_runner" "$libsecp_expected_sha" "$k256_expected_sha" "$receipt"',
-            '    "$libsecp_runner" "$k256_runner" "$libsecp_expected_sha" "$k256_expected_sha" "$receipt"\n'
-            "  printf '%s\\n' 'runner libsecp256k1 forged-a forged-file-a forged-expected-a forged-content-a' "
-            "'runner k256 forged-b forged-file-b forged-expected-b forged-content-b' > \"$receipt\"",
+            '    "$LIBSECP_RUNNER_EXPECTED_SHA" "$LIBSECP_RUNNER_CONTENT_SHA" >> "$receipt"',
+            '    "forged-$LIBSECP_RUNNER_EXPECTED_SHA" "$LIBSECP_RUNNER_CONTENT_SHA" >> "$receipt"',
         ),
         (
             "post-setup early exit",
@@ -292,7 +357,7 @@ def require_generator_authorities(root: pathlib.Path) -> None:
         ),
         (
             "k256 runner disablement",
-            '  ORACLE_WORK="$WORK" "$k256_runner" "$input" > "$k256_output"',
+            '  ORACLE_CARGO="$CARGO_EXECUTABLE" ORACLE_WORK="$WORK" "$k256_runner" "$input" > "$k256_output"',
             '  : > "$k256_output" # disable k256 runner',
         ),
         (
