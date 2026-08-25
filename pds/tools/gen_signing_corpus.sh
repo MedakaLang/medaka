@@ -85,7 +85,8 @@ capture_cargo_identity() {
   }
   # Invoke the absolute command path so argv[0]-dispatching tools such as
   # rustup's cargo symlink retain cargo semantics; attest its canonical target.
-  CARGO_EXPECTED_PATH=$(canonical_executable_path "$CARGO_EXECUTABLE")
+  CARGO_EXPECTED_INVOCATION_PATH=$CARGO_EXECUTABLE
+  CARGO_EXPECTED_CANONICAL_PATH=$(canonical_executable_path "$CARGO_EXECUTABLE")
   CARGO_EXPECTED_FILE_ID=$(runner_file_identity "$CARGO_EXECUTABLE")
   CARGO_EXPECTED_CONTENT_SHA=$(sha256_file "$CARGO_EXECUTABLE")
 }
@@ -93,8 +94,9 @@ capture_cargo_identity() {
 attest_oracle_runners() {
   libsecp_runner=$1 k256_runner=$2
   libsecp_expected_sha=$3 k256_expected_sha=$4
-  cargo_executable=$5 cargo_expected_path=$6 cargo_expected_file_id=$7
-  cargo_expected_content_sha=$8 receipt=$9
+  cargo_executable=$5 cargo_expected_invocation_path=$6
+  cargo_expected_canonical_path=$7 cargo_expected_file_id=$8
+  cargo_expected_content_sha=$9 receipt=${10}
   [ -x "$libsecp_runner" ] && [ -x "$k256_runner" ] || {
     echo "gen_signing_corpus: oracle runner is not executable" >&2
     exit 1
@@ -130,12 +132,17 @@ attest_oracle_runners() {
     exit 1
   }
   CARGO_EXECUTABLE=$(absolute_executable_path "$cargo_executable")
+  [ "$CARGO_EXECUTABLE" = "$cargo_expected_invocation_path" ] || {
+    echo "gen_signing_corpus: cargo executable invocation path drifted" >&2
+    exit 1
+  }
+  CARGO_INVOCATION_PATH_SHA=$(sha256_text "$CARGO_EXECUTABLE")
   CARGO_CANONICAL_PATH=$(canonical_executable_path "$CARGO_EXECUTABLE")
-  [ "$CARGO_CANONICAL_PATH" = "$cargo_expected_path" ] || {
+  [ "$CARGO_CANONICAL_PATH" = "$cargo_expected_canonical_path" ] || {
     echo "gen_signing_corpus: cargo executable canonical path drifted" >&2
     exit 1
   }
-  CARGO_PATH_SHA=$(sha256_text "$CARGO_CANONICAL_PATH")
+  CARGO_CANONICAL_PATH_SHA=$(sha256_text "$CARGO_CANONICAL_PATH")
   CARGO_FILE_ID=$(runner_file_identity "$CARGO_EXECUTABLE")
   CARGO_CONTENT_SHA=$(sha256_file "$CARGO_EXECUTABLE")
   [ "$CARGO_FILE_ID" = "$cargo_expected_file_id" ] && \
@@ -151,21 +158,23 @@ attest_oracle_runners() {
   printf 'runner k256 %s %s %s %s\n' \
     "$K256_RUNNER_PATH_SHA" "$K256_RUNNER_FILE_ID" \
     "$K256_RUNNER_EXPECTED_SHA" "$K256_RUNNER_CONTENT_SHA" >> "$receipt"
-  printf 'cargo k256 %s %s %s\n' \
-    "$CARGO_PATH_SHA" "$CARGO_FILE_ID" "$CARGO_CONTENT_SHA" >> "$receipt"
+  printf 'cargo k256 %s %s %s %s\n' \
+    "$CARGO_INVOCATION_PATH_SHA" "$CARGO_CANONICAL_PATH_SHA" \
+    "$CARGO_FILE_ID" "$CARGO_CONTENT_SHA" >> "$receipt"
 }
 
 record_oracle_completion() {
   label=$1 runner_path_sha=$2 runner_file_id=$3 runner_expected_sha=$4
-  runner_content_sha=$5 cargo_path_sha=$6 cargo_file_id=$7 cargo_content_sha=$8
-  output=$9 receipt=${10}
+  runner_content_sha=$5 cargo_invocation_path_sha=$6 cargo_canonical_path_sha=$7
+  cargo_file_id=$8 cargo_content_sha=$9 output=${10} receipt=${11}
   [ -s "$output" ] || {
     echo "gen_signing_corpus: $label produced no fresh output" >&2
     exit 1
   }
-  printf 'output %s %s %s %s %s %s %s %s %s\n' \
+  printf 'output %s %s %s %s %s %s %s %s %s %s\n' \
     "$label" "$runner_path_sha" "$runner_file_id" "$runner_expected_sha" "$runner_content_sha" \
-    "$cargo_path_sha" "$cargo_file_id" "$cargo_content_sha" \
+    "$cargo_invocation_path_sha" "$cargo_canonical_path_sha" \
+    "$cargo_file_id" "$cargo_content_sha" \
     "$(sha256_file "$output")" >> "$receipt"
 }
 
@@ -200,13 +209,13 @@ require_oracle_completion() {
     exit 1
   }
   cargo_line=$(sed -n '3p' "$receipt")
-  expected_cargo_line="cargo k256 $CARGO_PATH_SHA $CARGO_FILE_ID $CARGO_CONTENT_SHA"
+  expected_cargo_line="cargo k256 $CARGO_INVOCATION_PATH_SHA $CARGO_CANONICAL_PATH_SHA $CARGO_FILE_ID $CARGO_CONTENT_SHA"
   [ "$cargo_line" = "$expected_cargo_line" ] || {
     echo "gen_signing_corpus: cargo executable receipt disagrees" >&2
     exit 1
   }
-  libsecp_hash=$(sed -n "4s/^output libsecp256k1 $LIBSECP_RUNNER_PATH_SHA $LIBSECP_RUNNER_FILE_ID $LIBSECP_RUNNER_EXPECTED_SHA $LIBSECP_RUNNER_CONTENT_SHA direct direct direct //p" "$receipt")
-  k256_hash=$(sed -n "5s/^output k256 $K256_RUNNER_PATH_SHA $K256_RUNNER_FILE_ID $K256_RUNNER_EXPECTED_SHA $K256_RUNNER_CONTENT_SHA $CARGO_PATH_SHA $CARGO_FILE_ID $CARGO_CONTENT_SHA //p" "$receipt")
+  libsecp_hash=$(sed -n "4s/^output libsecp256k1 $LIBSECP_RUNNER_PATH_SHA $LIBSECP_RUNNER_FILE_ID $LIBSECP_RUNNER_EXPECTED_SHA $LIBSECP_RUNNER_CONTENT_SHA direct direct direct direct //p" "$receipt")
+  k256_hash=$(sed -n "5s/^output k256 $K256_RUNNER_PATH_SHA $K256_RUNNER_FILE_ID $K256_RUNNER_EXPECTED_SHA $K256_RUNNER_CONTENT_SHA $CARGO_INVOCATION_PATH_SHA $CARGO_CANONICAL_PATH_SHA $CARGO_FILE_ID $CARGO_CONTENT_SHA //p" "$receipt")
   compared_hash=$(sed -n '6s/^compared //p' "$receipt")
   [ -n "$libsecp_hash" ] && [ "$libsecp_hash" = "$k256_hash" ] && \
     [ "$libsecp_hash" = "$compared_hash" ] || {
@@ -218,8 +227,9 @@ require_oracle_completion() {
 run_oracle_pair() {
   libsecp_runner=$1 k256_runner=$2
   libsecp_expected_sha=$3 k256_expected_sha=$4 cargo_executable=$5
-  cargo_expected_path=$6 cargo_expected_file_id=$7 cargo_expected_content_sha=$8
-  input=$9 libsecp_output=${10} k256_output=${11} receipt=${12}
+  cargo_expected_invocation_path=$6 cargo_expected_canonical_path=$7
+  cargo_expected_file_id=$8 cargo_expected_content_sha=$9
+  input=${10} libsecp_output=${11} k256_output=${12} receipt=${13}
   rm -f "$receipt" "$libsecp_output" "$k256_output"
   [ ! -e "$receipt" ] && [ ! -e "$libsecp_output" ] && [ ! -e "$k256_output" ] || {
     echo "gen_signing_corpus: oracle output cleanup did not establish freshness" >&2
@@ -227,19 +237,21 @@ run_oracle_pair() {
   }
   attest_oracle_runners \
     "$libsecp_runner" "$k256_runner" "$libsecp_expected_sha" "$k256_expected_sha" \
-    "$cargo_executable" "$cargo_expected_path" "$cargo_expected_file_id" \
+    "$cargo_executable" "$cargo_expected_invocation_path" \
+    "$cargo_expected_canonical_path" "$cargo_expected_file_id" \
     "$cargo_expected_content_sha" "$receipt"
   ORACLE_WORK="$WORK" "$libsecp_runner" "$input" > "$libsecp_output"
   record_oracle_completion libsecp256k1 \
     "$LIBSECP_RUNNER_PATH_SHA" "$LIBSECP_RUNNER_FILE_ID" \
     "$LIBSECP_RUNNER_EXPECTED_SHA" "$LIBSECP_RUNNER_CONTENT_SHA" \
-    direct direct direct \
+    direct direct direct direct \
     "$libsecp_output" "$receipt"
   ORACLE_CARGO="$CARGO_EXECUTABLE" ORACLE_WORK="$WORK" "$k256_runner" "$input" > "$k256_output"
   record_oracle_completion k256 \
     "$K256_RUNNER_PATH_SHA" "$K256_RUNNER_FILE_ID" \
     "$K256_RUNNER_EXPECTED_SHA" "$K256_RUNNER_CONTENT_SHA" \
-    "$CARGO_PATH_SHA" "$CARGO_FILE_ID" "$CARGO_CONTENT_SHA" \
+    "$CARGO_INVOCATION_PATH_SHA" "$CARGO_CANONICAL_PATH_SHA" \
+    "$CARGO_FILE_ID" "$CARGO_CONTENT_SHA" \
     "$k256_output" "$receipt"
   compare_oracle_outputs "$libsecp_output" "$k256_output" "$receipt"
   require_oracle_completion "$receipt"
@@ -319,7 +331,8 @@ fi
 # ORACLE_MODE_SETUP_COMPLETE
 run_oracle_pair "$LIBSECP_RUNNER" "$K256_RUNNER" \
   "$LIBSECP_EXPECTED_SHA" "$K256_EXPECTED_SHA" "$CARGO_EXECUTABLE" \
-  "$CARGO_EXPECTED_PATH" "$CARGO_EXPECTED_FILE_ID" "$CARGO_EXPECTED_CONTENT_SHA" \
+  "$CARGO_EXPECTED_INVOCATION_PATH" "$CARGO_EXPECTED_CANONICAL_PATH" \
+  "$CARGO_EXPECTED_FILE_ID" "$CARGO_EXPECTED_CONTENT_SHA" \
   "$HERE/signing_inputs.txt" \
   "$LIBSECP_OUTPUT" "$K256_OUTPUT" "$ORACLE_RECEIPT"
 cat "$ORACLE_RECEIPT"
