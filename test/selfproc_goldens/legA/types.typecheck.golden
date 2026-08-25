@@ -1104,6 +1104,7 @@ instantiateVarTrackedId : String -> Int -> Scheme -> Mono
 intercalateComma : List String -> String
 ioAliasLabels : List String
 isArithBinop : String -> Bool
+isBareTyvarMono : Mono -> Bool
 isConPat : Pat -> Bool
 isConstrainedTy : Ty -> Bool
 isCtorAppSpine : Expr -> Bool
@@ -1587,7 +1588,7 @@ residualBoundPreds : List Int -> IfaceRef -> List Mono -> Option Loc -> List (If
 residualInferredPredOf : List Int -> (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, Int, List Mono)
 residualInferredPreds : List Int -> List (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, Int, List Mono)
 residualMixedPred : List Int -> IfaceRef -> List Mono -> List (IfaceRef, List Int, List Mono)
-residualOblArgs : List Int -> List Mono -> List Mono
+residualOblArgs : List Mono -> List Mono
 residualPredOne : Int -> (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
 residualPredsOf : Int -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 residualReduceFuel : Int
@@ -1748,6 +1749,7 @@ substField : List (Int, Mono) -> (String, Mono) -> (String, Mono)
 substMono : List (Int, Mono) -> List (Int, Ref Effvar) -> Mono -> Mono
 substMonoP : Bool -> List (Int, Mono) -> List (Int, Ref Effvar) -> Mono -> Mono
 substMonos : List Int -> List (Int, Mono) -> Option (List Mono)
+substOblArg : Mono -> List (Int, Mono) -> Option Mono
 substOblArgs : List Mono -> List (Int, Mono) -> Option (List Mono)
 substParams : List String -> List (String, Ty) -> List Ty
 substRow : List (Int, Ref Effvar) -> EffRow -> EffRow
@@ -1901,7 +1903,6 @@ wildOverlayDecls : Int -> List DeclEnvModule -> String -> List Decl
 wildSchemeOblEntry : String -> ((String, String), List VecObl) -> List (String, List VecObl)
 wrapIf : Bool -> String -> String
 xmodOblArgId : Mono -> List Int
-xmodOblArgOk : Mono -> Bool
 xmodVecObl : CSlot -> List Mono -> VecObl
 zerosL : Int -> List Int
 zipIfaceMethodSchemeIds : List (IfaceRef, String) -> List (String, Scheme) -> List ((IfaceRef, String), Scheme)

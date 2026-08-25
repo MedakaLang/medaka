@@ -1,0 +1,45 @@
+-- S-structured-carry (#1937), ACCEPT direction: the same STRUCTURED declared
+-- context, at a call site where the goal IS satisfiable.
+--
+-- Hand-derived from DICT-SEMANTICS §1/§4 BEFORE running anything: at
+-- `f (Wrap 5) True` the instantiation is `a := Int, b := Bool`, so the goal is
+-- `Conv (Wrap Int) Bool` -- exactly the impl in scope.  All three verbs must
+-- ACCEPT and both engines must print `wrap-int-bool`.
+--
+-- 🚨 THE VALUE IS NOT WHAT THIS FIXTURE IS FOR.  Base (4b45e035) already printed
+-- `wrap-int-bool` at exit 0 here, so a verdict+value row alone grades green on
+-- both sides of the fix and pins nothing.  What moved is the SCHEME, which
+-- Section 2 asserts:
+--
+--     base: f : Wrap Int -> Bool -> String                        (context ERASED)
+--     head: f : Conv Wrap Int Bool => Wrap Int -> Bool -> String  (context KEPT)
+--
+-- This is #607's and #610's discriminating shape one scope over -- the right
+-- value printed with the constraint silently dropped from the type -- and the
+-- scheme is the only observable that separates them.
+--
+-- ⚠️ The scheme is still MONOMORPHISED (`Wrap Int -> Bool`, not `Wrap a -> b`)
+-- because the single impl in scope improves `a := Int, b := Bool` by a separate
+-- single-impl mechanism that this fixture does not test and #1937 does not touch.
+-- Do NOT "fix" this pin to a polymorphic scheme; that would be pinning a
+-- different change.
+--
+-- ⚠️ The pinned scheme text renders the predicate WITHOUT parentheses --
+-- `Conv Wrap Int Bool` for `Conv (Wrap Int) Bool`, which reads as four arguments
+-- to a two-parameter interface and does not round-trip through the parser.  That
+-- is a printer defect (#1952, `S2: misleading`), newly REACHABLE here because
+-- before this change the context was erased and never printed at all.  The pin
+-- records what the binary prints today; when #1952 lands this row goes RED and
+-- must be re-pinned to the parenthesised form.
+data Wrap a = Wrap a
+
+interface Conv a b where
+  conv : a -> b -> String
+
+impl Conv (Wrap Int) Bool where
+  conv _ _ = "wrap-int-bool"
+
+f : Conv (Wrap a) b => Wrap a -> b -> String
+f x y = conv x y
+
+main = println (f (Wrap 5) True)
