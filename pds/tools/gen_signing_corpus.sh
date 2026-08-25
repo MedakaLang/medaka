@@ -19,6 +19,9 @@ WYCHEPROOF_COMMIT=cff6adf42662469a1871e57303a0ad1d758ed8c0
 WYCHEPROOF_SHA=6508e9cc99c169c7d59a6891d939387f115491c479088ddcdcec4d137be69f34
 PDS_IMAGE=ghcr.io/bluesky-social/pds@sha256:d95725b24dbe53af9d91dc69750556931ebed6c396f2cfa42b221434db642f12
 PDS_REVISION=374cf1d4ba782d4391bbb73e4e2d3f320d4846d6
+LIBSECP_CONTROL_RUNNER_EXPECTED_SHA=28e2b0e12360e48226c4f4751cee04de517de3899d58cdafca850b465605220d
+K256_CONTROL_RUNNER_EXPECTED_SHA=7a56a0f52ca1e58f5d26c4113c82f0679b9e0b27492de543af49eda843e67e44
+K256_WRAPPER_EXPECTED_SHA=a5edef4e1fa03bd27c728f0c2ea79f87c3838f18e50a9430411c5069df85b5c8
 
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d ' ' -f 1
@@ -58,7 +61,8 @@ runner_file_identity() {
 }
 
 attest_oracle_runners() {
-  libsecp_runner=$1 k256_runner=$2 receipt=$3
+  libsecp_runner=$1 k256_runner=$2
+  libsecp_expected_sha=$3 k256_expected_sha=$4 receipt=$5
   [ -x "$libsecp_runner" ] && [ -x "$k256_runner" ] || {
     echo "gen_signing_corpus: oracle runner is not executable" >&2
     exit 1
@@ -81,25 +85,37 @@ attest_oracle_runners() {
   fi
   LIBSECP_RUNNER_CONTENT_SHA=$(sha256_file "$libsecp_runner")
   K256_RUNNER_CONTENT_SHA=$(sha256_file "$k256_runner")
+  [ "$LIBSECP_RUNNER_CONTENT_SHA" = "$libsecp_expected_sha" ] || {
+    echo "gen_signing_corpus: libsecp runner content differs from its expected implementation" >&2
+    exit 1
+  }
+  [ "$K256_RUNNER_CONTENT_SHA" = "$k256_expected_sha" ] || {
+    echo "gen_signing_corpus: k256 runner content differs from its expected implementation" >&2
+    exit 1
+  }
   [ "$LIBSECP_RUNNER_CONTENT_SHA" != "$K256_RUNNER_CONTENT_SHA" ] || {
     echo "gen_signing_corpus: oracle runners have identical content" >&2
     exit 1
   }
-  printf 'runner libsecp256k1 %s %s %s\n' \
-    "$LIBSECP_RUNNER_PATH_SHA" "$LIBSECP_RUNNER_FILE_ID" "$LIBSECP_RUNNER_CONTENT_SHA" >> "$receipt"
-  printf 'runner k256 %s %s %s\n' \
-    "$K256_RUNNER_PATH_SHA" "$K256_RUNNER_FILE_ID" "$K256_RUNNER_CONTENT_SHA" >> "$receipt"
+  LIBSECP_RUNNER_EXPECTED_SHA=$libsecp_expected_sha
+  K256_RUNNER_EXPECTED_SHA=$k256_expected_sha
+  printf 'runner libsecp256k1 %s %s %s %s\n' \
+    "$LIBSECP_RUNNER_PATH_SHA" "$LIBSECP_RUNNER_FILE_ID" \
+    "$LIBSECP_RUNNER_EXPECTED_SHA" "$LIBSECP_RUNNER_CONTENT_SHA" >> "$receipt"
+  printf 'runner k256 %s %s %s %s\n' \
+    "$K256_RUNNER_PATH_SHA" "$K256_RUNNER_FILE_ID" \
+    "$K256_RUNNER_EXPECTED_SHA" "$K256_RUNNER_CONTENT_SHA" >> "$receipt"
 }
 
 record_oracle_completion() {
-  label=$1 runner_path_sha=$2 runner_file_id=$3 runner_content_sha=$4
-  output=$5 receipt=$6
+  label=$1 runner_path_sha=$2 runner_file_id=$3 runner_expected_sha=$4
+  runner_content_sha=$5 output=$6 receipt=$7
   [ -s "$output" ] || {
     echo "gen_signing_corpus: $label produced no fresh output" >&2
     exit 1
   }
-  printf 'output %s %s %s %s %s\n' \
-    "$label" "$runner_path_sha" "$runner_file_id" "$runner_content_sha" \
+  printf 'output %s %s %s %s %s %s\n' \
+    "$label" "$runner_path_sha" "$runner_file_id" "$runner_expected_sha" "$runner_content_sha" \
     "$(sha256_file "$output")" >> "$receipt"
 }
 
@@ -126,15 +142,15 @@ require_oracle_completion() {
   }
   libsecp_runner_line=$(sed -n '1p' "$receipt")
   k256_runner_line=$(sed -n '2p' "$receipt")
-  expected_libsecp_runner_line="runner libsecp256k1 $LIBSECP_RUNNER_PATH_SHA $LIBSECP_RUNNER_FILE_ID $LIBSECP_RUNNER_CONTENT_SHA"
-  expected_k256_runner_line="runner k256 $K256_RUNNER_PATH_SHA $K256_RUNNER_FILE_ID $K256_RUNNER_CONTENT_SHA"
+  expected_libsecp_runner_line="runner libsecp256k1 $LIBSECP_RUNNER_PATH_SHA $LIBSECP_RUNNER_FILE_ID $LIBSECP_RUNNER_EXPECTED_SHA $LIBSECP_RUNNER_CONTENT_SHA"
+  expected_k256_runner_line="runner k256 $K256_RUNNER_PATH_SHA $K256_RUNNER_FILE_ID $K256_RUNNER_EXPECTED_SHA $K256_RUNNER_CONTENT_SHA"
   [ "$libsecp_runner_line" = "$expected_libsecp_runner_line" ] && \
     [ "$k256_runner_line" = "$expected_k256_runner_line" ] || {
     echo "gen_signing_corpus: oracle runner identity receipt disagrees" >&2
     exit 1
   }
-  libsecp_hash=$(sed -n "3s/^output libsecp256k1 $LIBSECP_RUNNER_PATH_SHA $LIBSECP_RUNNER_FILE_ID $LIBSECP_RUNNER_CONTENT_SHA //p" "$receipt")
-  k256_hash=$(sed -n "4s/^output k256 $K256_RUNNER_PATH_SHA $K256_RUNNER_FILE_ID $K256_RUNNER_CONTENT_SHA //p" "$receipt")
+  libsecp_hash=$(sed -n "3s/^output libsecp256k1 $LIBSECP_RUNNER_PATH_SHA $LIBSECP_RUNNER_FILE_ID $LIBSECP_RUNNER_EXPECTED_SHA $LIBSECP_RUNNER_CONTENT_SHA //p" "$receipt")
+  k256_hash=$(sed -n "4s/^output k256 $K256_RUNNER_PATH_SHA $K256_RUNNER_FILE_ID $K256_RUNNER_EXPECTED_SHA $K256_RUNNER_CONTENT_SHA //p" "$receipt")
   compared_hash=$(sed -n '5s/^compared //p' "$receipt")
   [ -n "$libsecp_hash" ] && [ "$libsecp_hash" = "$k256_hash" ] && \
     [ "$libsecp_hash" = "$compared_hash" ] || {
@@ -144,21 +160,25 @@ require_oracle_completion() {
 }
 
 run_oracle_pair() {
-  libsecp_runner=$1 k256_runner=$2 input=$3
-  libsecp_output=$4 k256_output=$5 receipt=$6
+  libsecp_runner=$1 k256_runner=$2
+  libsecp_expected_sha=$3 k256_expected_sha=$4 input=$5
+  libsecp_output=$6 k256_output=$7 receipt=$8
   rm -f "$receipt" "$libsecp_output" "$k256_output"
   [ ! -e "$receipt" ] && [ ! -e "$libsecp_output" ] && [ ! -e "$k256_output" ] || {
     echo "gen_signing_corpus: oracle output cleanup did not establish freshness" >&2
     exit 1
   }
-  attest_oracle_runners "$libsecp_runner" "$k256_runner" "$receipt"
+  attest_oracle_runners \
+    "$libsecp_runner" "$k256_runner" "$libsecp_expected_sha" "$k256_expected_sha" "$receipt"
   ORACLE_WORK="$WORK" "$libsecp_runner" "$input" > "$libsecp_output"
   record_oracle_completion libsecp256k1 \
-    "$LIBSECP_RUNNER_PATH_SHA" "$LIBSECP_RUNNER_FILE_ID" "$LIBSECP_RUNNER_CONTENT_SHA" \
+    "$LIBSECP_RUNNER_PATH_SHA" "$LIBSECP_RUNNER_FILE_ID" \
+    "$LIBSECP_RUNNER_EXPECTED_SHA" "$LIBSECP_RUNNER_CONTENT_SHA" \
     "$libsecp_output" "$receipt"
   ORACLE_WORK="$WORK" "$k256_runner" "$input" > "$k256_output"
   record_oracle_completion k256 \
-    "$K256_RUNNER_PATH_SHA" "$K256_RUNNER_FILE_ID" "$K256_RUNNER_CONTENT_SHA" \
+    "$K256_RUNNER_PATH_SHA" "$K256_RUNNER_FILE_ID" \
+    "$K256_RUNNER_EXPECTED_SHA" "$K256_RUNNER_CONTENT_SHA" \
     "$k256_output" "$receipt"
   compare_oracle_outputs "$libsecp_output" "$k256_output" "$receipt"
   require_oracle_completion "$receipt"
@@ -177,6 +197,8 @@ EOF
   chmod +x "$WORK/libsecp-control-runner" "$WORK/k256-control-runner"
   LIBSECP_RUNNER="$WORK/libsecp-control-runner"
   K256_RUNNER="$WORK/k256-control-runner"
+  LIBSECP_EXPECTED_SHA=$LIBSECP_CONTROL_RUNNER_EXPECTED_SHA
+  K256_EXPECTED_SHA=$K256_CONTROL_RUNNER_EXPECTED_SHA
   ORACLE_RECEIPT="$WORK/oracle-control.receipt"
   LIBSECP_OUTPUT="$WORK/oracle-control-libsecp.out"
   K256_OUTPUT="$WORK/oracle-control-k256.out"
@@ -204,6 +226,7 @@ else
     "$WORK/libsecp/src/precomputed_ecmult.c" "$WORK/libsecp/src/precomputed_ecmult_gen.c"
   # ORACLE_EXECUTION: libsecp256k1
   LIBSECP_RUNNER="$WORK/libsecp-sign"
+  LIBSECP_EXPECTED_SHA=$(sha256_file "$WORK/libsecp-sign")
 
   cp "$HERE/signing_k256/Cargo.toml" "$HERE/signing_k256/Cargo.lock" "$WORK/rust/"
   cp -R "$HERE/signing_k256/src" "$WORK/rust/src"
@@ -216,13 +239,15 @@ exec cargo run --quiet --locked --manifest-path "$ORACLE_WORK/rust/Cargo.toml" -
 EOF
   chmod +x "$WORK/k256-runner"
   K256_RUNNER="$WORK/k256-runner"
+  K256_EXPECTED_SHA=$K256_WRAPPER_EXPECTED_SHA
   ORACLE_RECEIPT="$WORK/oracle-completion.receipt"
   LIBSECP_OUTPUT="$WORK/libsecp.out"
   K256_OUTPUT="$WORK/k256.out"
 fi
 
 # ORACLE_MODE_SETUP_COMPLETE
-run_oracle_pair "$LIBSECP_RUNNER" "$K256_RUNNER" "$HERE/signing_inputs.txt" \
+run_oracle_pair "$LIBSECP_RUNNER" "$K256_RUNNER" \
+  "$LIBSECP_EXPECTED_SHA" "$K256_EXPECTED_SHA" "$HERE/signing_inputs.txt" \
   "$LIBSECP_OUTPUT" "$K256_OUTPUT" "$ORACLE_RECEIPT"
 cat "$ORACLE_RECEIPT"
 

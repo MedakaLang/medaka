@@ -269,6 +269,21 @@ cp "$ROOT/pds/test/vectors/wycheproof_secp256k1_sha256_p1363.txt" "$WORK/pds/tes
 cmp "$ROOT/pds/test/vectors/wycheproof_secp256k1_sha256_p1363.txt" "$WORK/pds/test/vectors/wycheproof_secp256k1_sha256_p1363.txt" >/dev/null
 
 cp "$WORK/pds/tools/gen_signing_corpus.sh" "$WORK/generator.baseline"
+apply_mutation M13-delegate "$WORK/pds/tools/gen_signing_corpus.sh" \
+  '# ORACLE_MODE_SETUP_COMPLETE' \
+  's|# ORACLE_MODE_SETUP_COMPLETE|cat > "\$WORK/k256-runner" <<"EOF"\n#!/bin/sh\nexec "\$ORACLE_WORK/libsecp-sign" "\$1"\nEOF\n# ORACLE_MODE_SETUP_COMPLETE|'
+expect_corpus_red 'M13-delegate bound k256 wrapper rewritten after setup to delegate to libsecp'
+cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
+apply_mutation M13-expected-omit "$WORK/pds/tools/gen_signing_corpus.sh" \
+  'K256_WRAPPER_EXPECTED_SHA=a5edef4e1fa03bd27c728f0c2ea79f87c3838f18e50a9430411c5069df85b5c8' \
+  's/K256_WRAPPER_EXPECTED_SHA=a5edef4e1fa03bd27c728f0c2ea79f87c3838f18e50a9430411c5069df85b5c8/K256_WRAPPER_EXPECTED_SHA= # omit expected implementation digest/'
+expect_corpus_red 'M13-expected-omit fixed k256 implementation digest omitted'
+cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
+apply_mutation M13-expected-forge "$WORK/pds/tools/gen_signing_corpus.sh" \
+  'K256_WRAPPER_EXPECTED_SHA=a5edef4e1fa03bd27c728f0c2ea79f87c3838f18e50a9430411c5069df85b5c8' \
+  's/K256_WRAPPER_EXPECTED_SHA=a5edef4e1fa03bd27c728f0c2ea79f87c3838f18e50a9430411c5069df85b5c8/K256_WRAPPER_EXPECTED_SHA=6708ecba7c620de643c573e90ff5cf2e6502342ffd118cc7553d5ea42a38d6dc/; s|# ORACLE_MODE_SETUP_COMPLETE|cat > "\$WORK/k256-runner" <<"EOF"\n#!/bin/sh\nexec "\$ORACLE_WORK/libsecp-sign" "\$1"\nEOF\n# ORACLE_MODE_SETUP_COMPLETE|'
+expect_corpus_red 'M13-expected-forge delegating wrapper paired with a forged expected digest'
+cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
 apply_mutation M13-alias "$WORK/pds/tools/gen_signing_corpus.sh" \
   'K256_RUNNER="$WORK/k256-runner"' \
   's|K256_RUNNER="\$WORK/k256-runner"|K256_RUNNER="\$WORK/k256-runner"\n  K256_RUNNER="\$WORK/libsecp-sign" # alias the prepared k256 slot to libsecp|'
@@ -280,13 +295,13 @@ apply_mutation M13-copy "$WORK/pds/tools/gen_signing_corpus.sh" \
 expect_corpus_red 'M13-copy second runner replaced by a same-content copy at a distinct path'
 cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
 apply_mutation M13-identity-omit "$WORK/pds/tools/gen_signing_corpus.sh" \
-  'attest_oracle_runners "$libsecp_runner" "$k256_runner" "$receipt"' \
-  's|attest_oracle_runners "\$libsecp_runner" "\$k256_runner" "\$receipt"|attest_oracle_runners "\$libsecp_runner" "\$k256_runner" "\$receipt"\n  : > "\$receipt" # omit runtime runner identity receipt|'
+  '"$libsecp_runner" "$k256_runner" "$libsecp_expected_sha" "$k256_expected_sha" "$receipt"' \
+  's|"\$libsecp_runner" "\$k256_runner" "\$libsecp_expected_sha" "\$k256_expected_sha" "\$receipt"|"\$libsecp_runner" "\$k256_runner" "\$libsecp_expected_sha" "\$k256_expected_sha" "\$receipt"\n  : > "\$receipt" # omit runtime runner identity receipt|'
 expect_corpus_red 'M13-identity-omit runtime runner identity receipt omitted'
 cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
 apply_mutation M13-identity-forge "$WORK/pds/tools/gen_signing_corpus.sh" \
-  '"$LIBSECP_RUNNER_PATH_SHA" "$LIBSECP_RUNNER_FILE_ID" "$LIBSECP_RUNNER_CONTENT_SHA" >> "$receipt"' \
-  's|"\$LIBSECP_RUNNER_PATH_SHA" "\$LIBSECP_RUNNER_FILE_ID" "\$LIBSECP_RUNNER_CONTENT_SHA" >> "\$receipt"|"forged-\$LIBSECP_RUNNER_PATH_SHA" "\$LIBSECP_RUNNER_FILE_ID" "\$LIBSECP_RUNNER_CONTENT_SHA" >> "\$receipt"|'
+  '"$LIBSECP_RUNNER_EXPECTED_SHA" "$LIBSECP_RUNNER_CONTENT_SHA" >> "$receipt"' \
+  's|"\$LIBSECP_RUNNER_EXPECTED_SHA" "\$LIBSECP_RUNNER_CONTENT_SHA" >> "\$receipt"|"forged-\$LIBSECP_RUNNER_EXPECTED_SHA" "\$LIBSECP_RUNNER_CONTENT_SHA" >> "\$receipt"|'
 expect_corpus_red 'M13-identity-forge runtime runner identity receipt forged'
 cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
 apply_mutation M13-libsecp "$WORK/pds/tools/gen_signing_corpus.sh" \
