@@ -1,0 +1,71 @@
+-- DICT-SEMANTICS §3 (`inst` + nested `requires`) / W1-W2 (decidability): a
+-- GROUND instance-context chain must be discharged to its base case however
+-- long it is. There is no depth at which the search may quietly give up and
+-- hand the site something else.
+--
+-- REGRESSION GUARD FOR #1576 (ground requires chain silent past 33), S0, fixed
+-- by sprint/entailment-verdict. Written because the fix DELETED the
+-- self-draining pin `test/must_fail_fixtures/1576-ground-requires-chain-silent-
+-- past-33/` per [G-PIN-DRAIN] and left the S0 with no guard: a pin asserts a
+-- bug STILL REPRODUCES, so a fix deletes it and the guard goes with it unless a
+-- positive row replaces it. This is that row.
+--
+-- SPEC ANSWER (hand-derived from §3, NOT captured). `deepv` is
+-- `tagOf` applied to 34 nested `Wrap`s around `5 : Int`. §3 `inst` selects
+-- `impl Tag (Wrap a)` at each layer and discharges its `requires Tag a` against
+-- the layer below; at the bottom `Tag Int` is the base case. The result is
+-- therefore 34 copies of `"w"` followed by `"int"`:
+--   wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwint        (34 w's, count them)
+-- `main` prints the sentinel `ALIVE` first, so the pinned stdout is two lines.
+-- ACCEPT on check, run AND build, with run's stdout, the SHIPPED BINARY's
+-- stdout and the pinned value all byte-identical (`ALL_EXACT`).
+--
+-- 🚨 34 IS THE LOAD-BEARING NUMBER; DO NOT ROUND IT. Per the drained pin's own
+-- `claim.txt` (measured there at depths 30/31/32/33/34/35/40 on two arms), the
+-- defect had a CLIFF: at depth <= 33 the program was correct at exit 0, at
+-- depth >= 34 it was silently accepted and crashed. A fixture at any depth
+-- <= 33 therefore grades green on a compiler that still has this bug, which is
+-- why the pin was written at 34 and why this row keeps it. The pin's 33-deep
+-- `control.mdk` is NOT carried here: it is green at both arms, so it cannot
+-- regress-test this fix (this slice's rule).
+--
+-- ⚠️ WHAT THIS ROW DOES NOT PROVE: that the fix removed the cliff rather than
+-- MOVING it. A fuse raised to, say, 64 would green this row while leaving the
+-- class live. Measured first-hand on this base binary at depth 100 (a
+-- generated twin of this program): `run` exit 0, `ALIVE` then 100 `w`s and
+-- `int` -- correct -- so the bound is at least 100 here, but no committed
+-- fixture grades any depth above 34. Raising that is a corpus question, not
+-- this row's.
+--
+-- MEASURED AT THE PRE-SPRINT ARM `264eb95d` (this tree, cold-built): `check`
+-- exit 0 with an EMPTY `--json` diagnostics list, `build` exit 0, and the
+-- SHIPPED BINARY printed `ALIVE` and then DIED AT SIGNAL 139 (SEGFAULT) --
+-- the chain's discharge stopped and a null dict reached the recursive call.
+-- `run` reached the same point loudly (exit 1, E-PANIC `'++' requires
+-- Semigroup (List, String, or a type with append)`) after printing `ALIVE`.
+-- So `check` said yes to a program neither engine could execute, and the
+-- sentinel is what pins HOW FAR each verb got rather than merely that it fell
+-- over.
+--
+-- ⚠️ TWO `impl Tag` BLOCKS OF ONE INTERFACE IN ONE FLAT FILE, so Section 4
+-- DOES derive a permutation pair here, deliberately: reversing `impl Tag Int`
+-- and `impl Tag (Wrap a) requires Tag a` puts the recursive impl FIRST and the
+-- base case LAST, which is the declaration order most likely to expose a
+-- search that terminates on position rather than on structure. §3's
+-- order-freedom clause says the value must not move.
+data Wrap a = Wrap a
+
+interface Tag t where
+  tagOf : t -> String
+
+impl Tag Int where
+  tagOf _ = "int"
+
+impl Tag (Wrap a) requires Tag a where
+  tagOf (Wrap x) = "w\{tagOf x}"
+
+deepv = tagOf (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap (Wrap 5))))))))))))))))))))))))))))))))))
+
+main =
+  let _ = println "ALIVE"
+  println deepv
