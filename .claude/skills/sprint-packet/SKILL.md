@@ -67,6 +67,13 @@ stale LEG A golden that only the orchestrator's post-merge pass caught — the
 packet's acceptance list never said to run the check, so nothing in-slice
 could have caught it.
 
+⚠️ **Touching `compiler/backend/*`? Name `sh test/selfcompile_fixpoint.sh`
+(background it if near the foreground ceiling) as its own §6 line, always —
+don't rely on remembering it from the contract.** `emit-state-injectivity`
+had two backend/* slices; only one packet named it, and the gap on the other
+was caught post-hoc by the orchestrator after landing, not by the slice's own
+acceptance list.
+
 **"LEG A diff must be additive-only" allows one exception, stated up front if
 it applies: a verified pure signature change** (row count unchanged, the
 content diff is exactly the signature/comment move and nothing else) is a
