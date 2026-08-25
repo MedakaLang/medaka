@@ -604,7 +604,13 @@ jobs:
             # need before — cheap next to the marginal `setup-medaka` toolchain
             # cost of a second `wasm_arm` row, but not free; it's headroom this row
             # has, not headroom this row lacked before.
-            pattern: "'diff_compiler_lint*' 'diff_compiler_lsp*' 'diff_compiler_mcp' 'diff_compiler_codemod' 'diff_compiler_repl' 'diff_compiler_new' 'diff_compiler_test' 'diff_compiler_test_typecheck' 'diff_compiler_ported' 'diff_compiler_doc' 'diff_compiler_index' 'diff_compiler_references*' 'diff_compiler_capability_matrix' 'diff_compiler_internal_extern' 'diff_compiler_effect*' 'diff_compiler_os_entropy' 'diff_compiler_entry_exit_codes' 'diff_compiler_run_check_agreement' 'diff_compiler_run_stdout_flush' 'diff_compiler_run_entry_subdir' 'diff_compiler_ci_shard_coverage' 'diff_compiler_perf_stage_census' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_source_bytes' 'diff_compiler_fmt_write_safety' 'check_syntax_examples' 'check_build_oracles_for_consistency' 'cross_project_deps' 'cross_project_twonames' 'manifest_emit' 'lsp_harness' 'diff_net' 'pr_helper_test' 'pds/test/constant_time_*'"
+            # #1933 (S-project-floor): `mq/test/check`, `parsec/test/check`,
+            # `byteparser/test/check` added here by freshly measured cost — `tools`
+            # (336s) was the cheapest `gates (*)` shard at contract-authoring time,
+            # confirmed still cheapest by this slice's own `scripts/ci_shard_cost.sh`
+            # run. Each is a floor `./medaka check <project>/main.mdk` for a
+            # manifest-bearing project that previously ran in NO CI job.
+            pattern: "'diff_compiler_lint*' 'diff_compiler_lsp*' 'diff_compiler_mcp' 'diff_compiler_codemod' 'diff_compiler_repl' 'diff_compiler_new' 'diff_compiler_test' 'diff_compiler_test_typecheck' 'diff_compiler_ported' 'diff_compiler_doc' 'diff_compiler_index' 'diff_compiler_references*' 'diff_compiler_capability_matrix' 'diff_compiler_internal_extern' 'diff_compiler_effect*' 'diff_compiler_os_entropy' 'diff_compiler_entry_exit_codes' 'diff_compiler_run_check_agreement' 'diff_compiler_run_stdout_flush' 'diff_compiler_run_entry_subdir' 'diff_compiler_ci_shard_coverage' 'diff_compiler_perf_stage_census' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_source_bytes' 'diff_compiler_fmt_write_safety' 'check_syntax_examples' 'check_build_oracles_for_consistency' 'cross_project_deps' 'cross_project_twonames' 'manifest_emit' 'lsp_harness' 'diff_net' 'pr_helper_test' 'pds/test/constant_time_*' 'mq/test/check' 'parsec/test/check' 'byteparser/test/check'"
             wasm_arm: "1"
     name: gates (${{ matrix.name }})
     steps:
