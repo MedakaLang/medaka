@@ -113,3 +113,5 @@ argv log and state interpretation from canned responses — including the tricky
 body, the `-F`-vs-`-f` distinction, GraphQL queue/state, and multi-poll check
 transitions — plus one throwaway local git repo for `complete`'s real ancestry
 logic. No external repository is touched. POSIX sh, Linux and macOS.
+
+<!-- probe: ci-narrow-and-split sprint, docs-only CI shape verification, safe to keep or revert -->
