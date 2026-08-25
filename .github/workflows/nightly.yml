@@ -523,17 +523,55 @@ jobs:
           echo "pole=$pole" >> "$GITHUB_OUTPUT"
 
           TITLE="nightly ci shard cost drift: pole shard / 1.5x-median crossings"
-          existing="$(gh issue list --state open --limit 100 --json number,title,body \
-            --jq ".[] | select(.title == \"$TITLE\")")"
-          prev_pole="$(printf '%s' "$existing" | grep -o 'pole-name: [^ ]*' | head -1 | sed 's/^pole-name: //')"
+          # `existing_raw` is the issue's `.body` as jq's default (non-raw) output: a
+          # single line, JSON-quoted, with real newlines escaped to literal `\n` pairs.
+          # Unescape it locally (no second `gh` call) so line-anchored extraction works.
+          existing_raw="$(gh issue list --state open --limit 100 --json number,title,body \
+            --jq ".[] | select(.title == \"$TITLE\") | .body")"
+          existing_body=""
+          if [ -n "$existing_raw" ]; then
+            existing_body="$(printf '%s' "$existing_raw" | sed -e 's/^"//' -e 's/"$//' -e 's/\\n/\n/g' -e 's/\\"/"/g')"
+          fi
+
+          # Space-safe: the full value after "pole-name: " to end of line (job display
+          # names contain spaces, e.g. "gates (sqlite)") — not the first token.
+          prev_pole=""
+          if [ -n "$existing_body" ]; then
+            prev_pole="$(printf '%s\n' "$existing_body" | sed -n 's/^pole-name: //p' | head -1)"
+          fi
+
+          # Sorted set of job names in a "jobs over 1.5x the median:" block — the fixed
+          # 40-char name column from `ci_shard_cost.sh`'s own "  %-40s %6ds  (...)"
+          # line format, trimmed of padding. Empty if the block is absent (no hot jobs).
+          extract_hot() {
+            printf '%s\n' "$1" | awk '
+              /^jobs over 1\.5x the median:$/ { inblock=1; next }
+              inblock && /^  [^ ]/ { print substr($0, 3, 40); next }
+              { inblock=0 }
+            ' | sed -e 's/[ \t]*$//' | sort
+          }
 
           findings=0
-          if grep -q '^cost-status: findings' /tmp/cost.log; then
-            findings=1
-          fi
-          if [ -n "$prev_pole" ] && [ "$prev_pole" != "$pole" ]; then
-            findings=1
-            echo "pole changed: '$prev_pole' -> '$pole'"
+          if [ -z "$existing_body" ]; then
+            # No currently open issue: there is nothing to drain against yet, so the
+            # first-ever report stands as findings exactly per the script's own verdict.
+            if grep -q '^cost-status: findings' /tmp/cost.log; then
+              findings=1
+            fi
+          else
+            if [ -n "$prev_pole" ] && [ "$prev_pole" != "$pole" ]; then
+              findings=1
+              echo "pole changed: '$prev_pole' -> '$pole'"
+            fi
+
+            prev_hot="$(extract_hot "$existing_body")"
+            curr_hot="$(extract_hot "$(cat /tmp/cost.log)")"
+            if [ "$prev_hot" != "$curr_hot" ]; then
+              findings=1
+              echo "hot-job set changed:"
+              echo "  was: $prev_hot"
+              echo "  now: $curr_hot"
+            fi
           fi
           echo "findings=$findings" >> "$GITHUB_OUTPUT"
           {
