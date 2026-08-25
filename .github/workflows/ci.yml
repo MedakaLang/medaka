@@ -321,12 +321,16 @@ jobs:
     # outputs. See the `if:` below for why this does NOT reintroduce the
     # skipped-required-context hazard the header warns about.
     needs: [detect, build]
-    # ⚠️ MUST NEVER EVALUATE FALSE FOR A REASON OTHER THAN `detect` ITSELF FAILING —
-    # this is a required context and a skipped job does not report. Without
-    # `always()`, `build` failing would SKIP all seven shards, which GitHub reports
-    # as a non-failure (RED -> GREEN-BY-SKIP, a severity increase). With it, the job
-    # runs anyway, the download step fails, and the shard is correctly red.
-    if: ${{ always() && needs.detect.result == 'success' }}
+    # ⚠️ MUST NEVER EVALUATE FALSE FOR A REASON OTHER THAN THE WORKFLOW RUN ITSELF
+    # BEING CANCELLED — this is a required context and a skipped job does not
+    # report. The guard below runs on every outcome except that: `detect` failing
+    # still runs this job (the download step then fails and the shard is
+    # correctly red — no SKIP, no GREEN-BY-SKIP); `build` failing is the same. It
+    # skips only when the run itself is being torn down (e.g. a superseding push
+    # under `cancel-in-progress`), which is the one case where "does not report"
+    # is itself the correct, non-mergeable signal — and it actually lets
+    # cancellation stop this heavy job, which `always()` never did.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
@@ -443,11 +447,13 @@ jobs:
       - uses: actions/checkout@v4
 
       # ── WHAT DOES *THIS* SHARD ACTUALLY HAVE TO DO? ───────────────────────────────
-      # ⚠️ NEVER GUARDED, AND NEITHER IS THE JOB — there are ELEVEN required checks
-      # with ZERO approvals, and a job skipped by a job-level `if:` (or a workflow
-      # skipped by `paths-ignore:`) never posts a status, leaving the PR permanently
-      # unmergeable. So this job always RUNS and always REPORTS; only STEPS are
-      # conditional, same shape as the docs-only fast path.
+      # ⚠️ THE STEPS BELOW ARE GUARDED; THE JOB IS NOT (except for cancellation) —
+      # there are ELEVEN required checks with ZERO approvals, and a job skipped by
+      # a job-level `if:` (or a workflow skipped by `paths-ignore:`) never posts a
+      # status, leaving the PR permanently unmergeable. So this job RUNS and
+      # REPORTS on every outcome except the whole run being cancelled (the guard
+      # above); only STEPS are conditional, same shape as the
+      # docs-only fast path.
       #
       # Computes `has_work` (every expensive step below hangs off it) and `pats`
       # (the concrete gate list to run) — and prints BOTH the gates it will run and
@@ -673,7 +679,7 @@ jobs:
     # `build` for the binaries (#1928); `detect` for its outputs. The `if:` is the
     # same guard, for the same reason, as the one on `gates` above — read it there.
     needs: [detect, build]
-    if: ${{ always() && needs.detect.result == 'success' }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -855,7 +861,7 @@ jobs:
   inlang:
     # `build` for the binaries (#1928); `if:` guard as on `gates` above.
     needs: [detect, build]
-    if: ${{ always() && needs.detect.result == 'success' }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -893,8 +899,10 @@ jobs:
   # invoked by its LITERAL repo-relative path below, the coverage gate's "named
   # gate" mechanism (same as `soundness`'s fixpoint + typecheck gates).
   #
-  # ⚠️ NEVER job-level `if:` — same required-context deadlock risk as every
-  # other heavy job; only STEPS are gated on `docs_only`. Runs on every
+  # ⚠️ NO job-level `if:` THAT CAN SKIP THE JOB FOR ANYTHING OTHER THAN THE WHOLE
+  # RUN BEING CANCELLED — same required-context deadlock risk as every other
+  # heavy job. The guard below is safe because it only skips on
+  # cancellation; STEPS remain the thing gated on `docs_only`. Runs on every
   # non-docs event, NOT narrowed (these seven ARE the whole wasm surface and are
   # cheap enough to run in full).
   #
@@ -909,7 +917,7 @@ jobs:
   wasm:
     # `build` for the binaries (#1928); `if:` guard as on `gates` above.
     needs: [detect, build]
-    if: ${{ always() && needs.detect.result == 'success' }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     # wasm-tools/Node versions come from setup-medaka's own input defaults — shared
