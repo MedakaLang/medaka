@@ -386,6 +386,12 @@ jobs:
             # `pds/README.md`'s CI classification policy).
             # `constant_time_parity` is covered by the PDS glob and needs the Wasm
             # arm, enabled here so the gate is enrolled exactly once.
+            #
+            # ⚠️ `pds/test/signing_parity.sh` moved OUT to `pds/nightly/` (2026-08-25,
+            # #1962) — its full 322-row native+Wasm corpus run alone added ~20min to
+            # this shard (~845s -> ~35min, #1926 F3). It still runs, nightly, via
+            # nightly.yml's `pds-signing-parity` job; #1962 tracks re-enabling it here
+            # once it's cheap enough not to dominate the shard.
             pattern: "'sqlite/test/*oracle' 'gzip/test/*oracle' 'pds/test/*'"
             wasm_arm: "1"
           - name: frontend
