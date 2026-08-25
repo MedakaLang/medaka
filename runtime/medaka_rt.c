@@ -2266,3 +2266,5 @@ int main(int argc, char **argv) {
   GC_pthread_join(tid, NULL);
   return a.ret;
 }
+
+/* probe: ci-narrow-and-split sprint, compiler-touching CI shape verification */
