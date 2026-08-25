@@ -270,19 +270,29 @@ cmp "$ROOT/pds/test/vectors/wycheproof_secp256k1_sha256_p1363.txt" "$WORK/pds/te
 
 cp "$WORK/pds/tools/gen_signing_corpus.sh" "$WORK/generator.baseline"
 apply_mutation M13-libsecp "$WORK/pds/tools/gen_signing_corpus.sh" \
-  '"$WORK/libsecp-sign" "$HERE/signing_inputs.txt" > "$WORK/libsecp.out"' \
-  's/"\$WORK\/libsecp-sign" "\$HERE\/signing_inputs\.txt" > "\$WORK\/libsecp\.out"/: > "\$WORK\/libsecp.out"/'
-expect_corpus_red 'M13-libsecp first signing oracle disabled'
+  'ORACLE_WORK="$WORK" "$libsecp_runner" "$input" > "$libsecp_output"' \
+  's/ORACLE_WORK="\$WORK" "\$libsecp_runner" "\$input" > "\$libsecp_output"/: > "\$libsecp_output" # disable common-path libsecp runner/'
+expect_corpus_red 'M13-libsecp common-path first signing oracle disabled'
 cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
 apply_mutation M13-k256 "$WORK/pds/tools/gen_signing_corpus.sh" \
-  'cargo run --quiet --locked --manifest-path "$WORK/rust/Cargo.toml" -- "$HERE/signing_inputs.txt" > "$WORK/k256.out"' \
-  's/cargo run --quiet --locked --manifest-path "\$WORK\/rust\/Cargo\.toml" -- "\$HERE\/signing_inputs\.txt" > "\$WORK\/k256\.out"/: > "\$WORK\/k256.out"/'
-expect_corpus_red 'M13-k256 second signing oracle disabled'
+  'ORACLE_WORK="$WORK" "$k256_runner" "$input" > "$k256_output"' \
+  's/ORACLE_WORK="\$WORK" "\$k256_runner" "\$input" > "\$k256_output"/: > "\$k256_output" # disable common-path k256 runner/'
+expect_corpus_red 'M13-k256 common-path second signing oracle disabled'
 cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
 apply_mutation M13-early "$WORK/pds/tools/gen_signing_corpus.sh" \
-  'PDS_REVISION=374cf1d4ba782d4391bbb73e4e2d3f320d4846d6' \
-  's/PDS_REVISION=374cf1d4ba782d4391bbb73e4e2d3f320d4846d6/PDS_REVISION=374cf1d4ba782d4391bbb73e4e2d3f320d4846d6\nexit 0 # disable authorities while preserving command text/'
-expect_corpus_red 'M13-early generator exit with both command strings retained'
+  '# ORACLE_MODE_SETUP_COMPLETE' \
+  's/# ORACLE_MODE_SETUP_COMPLETE/# ORACLE_MODE_SETUP_COMPLETE\nexit 0 # disable common execution while preserving real command text/'
+expect_corpus_red 'M13-early post-setup exit with both real command strings retained'
+cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
+apply_mutation M13-compare "$WORK/pds/tools/gen_signing_corpus.sh" \
+  'compare_oracle_outputs "$libsecp_output" "$k256_output" "$receipt"' \
+  's/compare_oracle_outputs "\$libsecp_output" "\$k256_output" "\$receipt"/: # skip common-path oracle comparison/'
+expect_corpus_red 'M13-compare common-path output comparison skipped'
+cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
+apply_mutation M13-stale "$WORK/pds/tools/gen_signing_corpus.sh" \
+  'rm -f "$receipt" "$libsecp_output" "$k256_output"' \
+  's/rm -f "\$receipt" "\$libsecp_output" "\$k256_output"/: # retain stale pre-existing oracle outputs/'
+expect_corpus_red 'M13-stale pre-existing oracle outputs retained for reuse'
 cp "$ROOT/pds/tools/gen_signing_corpus.sh" "$WORK/pds/tools/gen_signing_corpus.sh"
 cmp "$ROOT/pds/tools/gen_signing_corpus.sh" "$WORK/pds/tools/gen_signing_corpus.sh" >/dev/null
 
