@@ -27,6 +27,8 @@ what: issue) but it is what establishes the CLASS.
 cmd: check-json main.mdk
 exit: 1
 diag-code: T-TYPE-MISMATCH 0:0-0:0
+diag-code: T-MISSING-CONSTRAINT 0:0-0:0
+diag-code: T-MISSING-CONSTRAINT 0:0-0:0
 diag-code: T-IMPL-TOO-SPECIFIC 0:0-0:0
 diag-code: T-IMPL-TOO-SPECIFIC 0:0-0:0
 diag-code: T-TYPE-MISMATCH 0:0-0:0

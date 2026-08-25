@@ -177,8 +177,8 @@ are stale (`compiler/frontend/resolve.mdk:3106`, `compiler/types/typecheck.mdk:1
 the live ones are the two above, re-derived here exactly as §11's preamble
 instructs. The *claim* is correct; only its coordinates had rotted.
 
-**Two live defects are that seam failing in opposite directions**, which is the
-evidence they are one unit rather than two bugs: **#1326** (S1, `verified`) — a
+**Two defects were that seam failing in opposite directions**, which was the
+evidence they were one unit rather than two bugs: **#1326** — a
 same-named cross-module binding's context is attributed to an *unconstrained*
 sibling, so a legal program is rejected at its own call site (fails **closed**);
 and the **re-export residual on #845** — a declared context is not found across
@@ -186,6 +186,21 @@ one `export import` hop, so the obligation is never checked and `check` greens
 (fails **open**). Both ask *"which `(module, name)` does this local spelling
 denote?"* of **import syntax** rather than of resolve. Adjudications: the
 2026-08-05 comments on #1326, #845 and epic #1122.
+
+⚠️ **UPDATE (structured-predicate-carry sprint, #1948): both members are now
+DRAINED, so this seam is history, not a live pair of bugs.** The re-export
+residual on #845 was already recorded CLOSED elsewhere in this document (§4
+family A/H, #1114/PR #1328). **#1326** — which this document's own 2026-08-09
+UPDATE 2 (below, in the A-2 scoping section) said "stays OPEN" — has since
+been measured fixed too: `docs/spec/DICT-SEMANTICS.md`'s §4.2 OD6 row records
+`check`/`run`/`build` agreeing under both import orderings (exit 0, printing
+`ok / 5`), regression-guarded by
+`test/import_order_fixtures/1326-samename-sibling-constraint-misattributed-import-order/`.
+Its GitHub issue remains open for bookkeeping only — the defect itself is
+drained. Neither member is live evidence for the seam-unification argument
+any longer; the mechanism analysis above (one un-keyed name-resolution seam
+producing a false positive in one direction and a false negative in the
+other) stands as the historical reasoning that motivated it.
 
 **Not this seam, and named here so the scope does not drift:** #1330 and the
 `Debug (Int -> Int)` residual on #792 are POLICY defects on channels whose keys
@@ -1217,9 +1232,20 @@ orders merges, and the plan does not pretend otherwise.
   (draining #1369) and the rest went to #1425. **#1326 stays OPEN and its
   must-fail fixture stays pinned.**
 
+  ⚠️ **UPDATE 3 (structured-predicate-carry sprint, #1948): #1326 is now
+  DRAINED — this "stays OPEN" verdict is stale.** See the UPDATE at :190-201
+  above for the measurement (`docs/spec/DICT-SEMANTICS.md`'s §4.2 OD6 row,
+  both import orderings, `check`/`run`/`build` all exit 0 printing `ok / 5`,
+  regression-guarded by `test/import_order_fixtures/1326-samename-sibling-
+  constraint-misattributed-import-order/`). Its GitHub issue remains open for
+  bookkeeping only. This paragraph is left standing, unedited otherwise, as the
+  historical record of the #1425 route that fixed it — do not read "stays
+  OPEN" below this UPDATE as current.
+
   ⇒ **Membership as it actually stands, since both original members have moved:**
   the fails-OPEN member (`export import` residual on **#845**, now CLOSED) is
-  drained; the fails-CLOSED member (**#1326**) is owned by **#1425**. What is
+  drained; the fails-CLOSED member (**#1326**, fixed via **#1425**) is now also
+  DRAINED (UPDATE 3 above). What is
   left to this unit is the *question*, not the two patches — and #1337 is
   flagged on the epic as a **shell**: a scoping pass whose members have been
   re-homed out from under it. **Do not read #1337 as an implementable unit
@@ -1269,11 +1295,14 @@ orders merges, and the plan does not pretend otherwise.
 
   *Otherwise unblocked and off the spine, exactly like #1319 — name identity,
   not origin supply. Serialize only on the one-typecheck.mdk-PR-in-flight rule.
-  Severity-direction warning for whoever takes it: #1326 is an over-rejection,
+  Severity-direction warning, kept as historical record (⚠️ #1326 itself is now
+  DRAINED per UPDATE 3 above — this is no longer live prescriptive guidance for
+  #1326, only the general methodological point): #1326 was an over-rejection,
   and the tempting local fixes (widen the import-definer test; suppress the
-  bare-name fallback) convert a false reject into a dropped obligation — loud →
-  silent, a severity increase, and untestable from the diff by construction
-  since every existing fixture for this channel covers the rejecting case.*
+  bare-name fallback) would have converted a false reject into a dropped obligation
+  — loud → silent, a severity increase, and untestable from the diff by
+  construction since every existing fixture for this channel covered the
+  rejecting case. The fix that actually landed avoided that trap.*
 - **A-3. Whole-graph declaration analysis (K) — honest scope.** Build
   CE/IE/DataEnv once; the **Module path** reads K; the Flat fallback keeps a
   marshalling **shim** (the retirement of the universe-marshalling cells —

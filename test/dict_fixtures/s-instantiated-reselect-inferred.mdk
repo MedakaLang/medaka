@@ -1,0 +1,41 @@
+-- S-instantiated-reselect (#1909), the ACCEPT shape, INFERRED channel -- the
+-- OD6(a) twin of s-instantiated-reselect-declared.mdk.
+--
+-- Byte-for-byte that fixture with the SIGNATURE LINE DELETED.  DICT-SEMANTICS
+-- OD6(a) says a declared context and the identical inferred one must adjudicate
+-- the same way, so the hand-derived answer is the same: `boolW/intW`.
+--
+-- 🚨 IT IS A SEPARATE FIXTURE BECAUSE IT IS A SEPARATE WRITER.  The declared
+-- context is registered by `registerMember`; the inferred one by
+-- `registerInferredFor`, which is a different function reached on a different
+-- pass, and BOTH were ids-only.  Patching one leaves the other statically
+-- committed, at exit 0, with the declared/inferred pair silently disagreeing --
+-- exactly the shape #1869 and #1161 both landed in.  MEASURED at the pre-slice
+-- base `bffced42` on this tree: `boolW/boolW`, identical to its declared twin.
+--
+-- ⚠️ DO NOT REPLACE THIS FIXTURE WITH THE OBVIOUS ONE.  The natural inferred
+-- probe adds a general `impl Tag (Wrap a)` beside the ground impls (that is what
+-- #1909's own `c_1909_inferred` repro does), and it is MIS-SCOPED: with a general
+-- impl in scope the residual `Tag (Wrap t)` is DISCHARGED by residual reduction
+-- at generalization time, the binding keeps no predicate and therefore gets no
+-- dict slot under any #1909 fix at all.  Confirmed on the unmodified base binary:
+-- `check --types` prints `nest : a -> String`, with no context to carry.  The
+-- general impl has to be ABSENT for the inferred binding to retain a predicate,
+-- which is why this file has only the two ground impls.
+--
+-- ⚠️ TWO `impl Tag` BLOCKS, so Section 4 derives a permutation pair.  At base the
+-- two declaration orders printed `boolW/boolW` and `intW/intW` here too.
+data Wrap a = Wrap a
+
+interface Tag t where
+  tagOf : t -> String
+
+impl Tag (Wrap Bool) where
+  tagOf _ = "boolW"
+
+impl Tag (Wrap Int) where
+  tagOf _ = "intW"
+
+nest x = tagOf (Wrap x)
+
+main = println "\{nest True}/\{nest 1}"

@@ -1,0 +1,52 @@
+-- S-instantiated-reselect (#1909), the ACCEPT shape, DECLARED channel.
+--
+-- Hand-derived from DICT-SEMANTICS §3 (`assum` before `inst`, and selection is
+-- never a function of declaration order) BEFORE running anything.  `nest`'s
+-- declared context is `Tag (Wrap a)` -- ONE predicate whose argument is
+-- STRUCTURED, not the bare `Tag a` the compiler's own constraints all are.  Each
+-- CALL instantiates it: `nest True` poses `Tag (Wrap Bool)`, `nest 1` poses
+-- `Tag (Wrap Int)`, and the matching set of each is the singleton naming the impl
+-- of that name.  The body must dispatch on the dict its CALLER supplied, so the
+-- two calls must select DIFFERENTLY: `boolW/intW`.
+--
+-- 🚨 THE FIXTURE IS SELF-EVIDENCING, WHICH IS WHY THE GENERAL IMPL IS ABSENT.
+-- With no `impl Tag (Wrap a)` in the program there is no plausible-looking impl
+-- for a mis-selection to land on: any answer other than `boolW/intW` names one
+-- ground impl TWICE, for two calls at two different types.  MEASURED at the
+-- pre-slice base `bffced42` on this tree: `boolW/boolW`, exit 0, on check, run
+-- AND build alike -- the abstraction-time pick, applied to both instantiations.
+--
+-- 🚨 THE DEFECT HAD TWO HALVES AND EITHER ONE ALONE GRADES THIS ROW RED, which
+-- is the reason it is one row and not two:
+--   * CALL SIDE (`vectorGoal`, compiler/types/typecheck.mdk): a 1-ary argument
+--     vector was declined, so the call site keyed its dict on the SLOT's mono
+--     (`Bool`) instead of the predicate's own argument (`Wrap Bool`).
+--   * CONSUMPTION SIDE (`registerSlotPredGivens`): the signature `=>` channel
+--     never registered a PREDICATE-keyed given, so `entailAssum` could not answer
+--     a structured goal and `entail` fell through to `entailInst`, statically
+--     committing the body and leaving the caller's dict unread.
+--   ⚠️ Landing the consumption side WITHOUT the call side is measurably WORSE
+--   than base: the body then reads a dict keyed on the wrong mono, matches no
+--   dispatcher arm and falls into LLVM `unreachable` (#1958).  If this row ever
+--   needs re-deriving, that is the ordering it must not be re-derived into.
+--
+-- ⚠️ TWO `impl Tag` BLOCKS, so Section 4 derives a permutation pair -- and that
+-- is a load-bearing part of this fixture, not a side effect.  At base the two
+-- orders printed `boolW/boolW` and `intW/intW`: the winner was FIRST-DECLARED,
+-- which DICT §3 forbids outright and which no value pin at a single declaration
+-- order can see.  Section 4 is where that half is graded.
+data Wrap a = Wrap a
+
+interface Tag t where
+  tagOf : t -> String
+
+impl Tag (Wrap Bool) where
+  tagOf _ = "boolW"
+
+impl Tag (Wrap Int) where
+  tagOf _ = "intW"
+
+nest : Tag (Wrap a) => a -> String
+nest x = tagOf (Wrap x)
+
+main = println "\{nest True}/\{nest 1}"

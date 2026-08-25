@@ -1,0 +1,18 @@
+-- DICT-SEMANTICS §4.2 -- THE LIBRARY MODULE OF #1938's REPRODUCTION.
+--
+-- `describe` infers the residual predicate `Tag (Wrap a)`: a concrete head with
+-- an open argument. The impl that satisfies it lives in `impls.mdk`, which
+-- IMPORTS this module -- so it is a DEPENDENT and is absent from this module's
+-- own load graph. `medaka check lib.mdk` must therefore ACCEPT: refuting the
+-- goal here would decide a legal library module's fate by what its consumers
+-- happen to have been compiled alongside it.
+--
+-- This module is a Section 1 ENTRY IN ITS OWN RIGHT, not just a dependency of
+-- main.mdk -- checking the library ALONE is the whole assertion, and checking
+-- the project (main.mdk's row) does not make it.
+public export data Wrap a = Wrap a
+
+export interface Tag a where
+  tag : a -> String
+
+export describe x = tag (Wrap x)
