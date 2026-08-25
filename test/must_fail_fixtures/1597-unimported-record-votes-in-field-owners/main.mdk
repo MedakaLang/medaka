@@ -1,9 +1,0 @@
--- #1597 -- the entry.  Its only job is to put `amod` and `bmod` in ONE graph, with
--- `amod` first.  It uses nothing from either, and neither module imports the other.
---
--- A bare `import m` binds no names; it still creates the dependency edge and the
--- topological ordinal, which is the whole mechanism being pinned.
-import amod
-import bmod
-
-main = println 1

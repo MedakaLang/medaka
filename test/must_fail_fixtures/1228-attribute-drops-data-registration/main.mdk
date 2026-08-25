@@ -1,3 +1,0 @@
-@must_use data Boxed = Boxed Int
-
-main = println (Boxed 5)

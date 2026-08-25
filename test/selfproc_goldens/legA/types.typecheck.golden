@@ -491,17 +491,26 @@ declCtorIdents : List Decl -> List (String, String, Ident)
 declCtorIdentsOf : Decl -> List (String, String, Ident)
 declCtorNamed : String -> Decl -> Bool
 declEnvDeclFieldOwners : List Decl -> Map String (List String) -> Map String (List String)
+declEnvDeclOwnerModules : String -> List Decl -> Map String (List String) -> Map String (List String)
 declEnvDeclsOf : List DeclEnvModule -> List Decl
 declEnvDefinerIndex : Map String (List (String, (String, String))) -> List DeclEnvModule -> Map String (List (String, (String, String)))
+declEnvDirectImports : List DeclEnvModule -> String -> List String
 declEnvKindEntries : List Decl -> List (TabKey, List Kind)
+declEnvMarkReached : List String -> Map String Unit -> Map String Unit
 declEnvModule : Int -> String -> List Decl -> DeclEnvModule
 declEnvModulesFrom : Int -> List (String, List Decl) -> List DeclEnvModule
 declEnvOrdIndex : Map String Int -> List DeclEnvModule -> Map String Int
+declEnvOwnerModules : List DeclEnvModule -> Map String (List String) -> Map String (List String)
+declEnvReachFrom : List DeclEnvModule -> List String -> Map String Unit -> Map String Unit
+declEnvReachGo : List DeclEnvModule -> List DeclEnvModule -> Map String (Map String Unit) -> Map String (Map String Unit)
+declEnvReachIndex : List DeclEnvModule -> Map String (Map String Unit)
+declEnvReachSeed : String -> Map String Unit
 declEnvRowKindEntries : Int -> DeclEnvModule -> List (TabKey, List Kind)
 declEnvRowVisible : Int -> DeclEnvModule -> List Decl
 declEnvSeedChain : List DeclEnvModule -> List (TabKey, List Kind) -> Map String (List String) -> Map String (List (TabKey, List Kind)) -> Map String (Map String (List String)) -> (Map String (List (TabKey, List Kind)), Map String (Map String (List String)))
 declEnvSeedDataUniverse : String -> DeclEnvs -> Unit
 declEnvVariantFieldOwners : List Variant -> Map String (List String) -> Map String (List String)
+declEnvVariantOwnerModules : String -> List Variant -> Map String (List String) -> Map String (List String)
 declEnvVisibleAt : Int -> Int -> Bool
 declEnvVisibleTo : Int -> Int -> Bool -> Bool
 declEnvsOrdOf : String -> DeclEnvs -> Int
@@ -713,7 +722,10 @@ fieldAssignNamePair : FieldAssign -> (String, Unit)
 fieldAssignSites : FieldAssign -> List (Ref Route)
 fieldFixFrom : Option Loc -> String -> Option (Loc, String)
 fieldNameOf : Field -> String
+fieldOwnerAnyReachable : List String -> Bool
 fieldOwnerNames : String -> List String
+fieldOwnerReachFilter : List String -> List String
+fieldOwnerReachable : String -> Bool
 fieldTyOf : Field -> Ty
 fieldTypeE : List (String, Ref Effvar) -> List (String, Mono) -> Field -> Mono
 fillHoleAtom : List (String, Expr) -> Option Expr -> Atom -> Atom

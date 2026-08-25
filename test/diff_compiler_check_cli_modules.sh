@@ -2512,5 +2512,96 @@ case "$main26_out" in
   *) fail=$((fail+1)); printf 'FAIL 1719/hidden-note (stdout changed: [%s])\n' "$main26_out" ;;
 esac
 
+# ── FIELD-OWNER CANDIDACY (#1586, #1597) ─────────────────────────────────────
+# These three legs are the PERMANENT regression tests those two issues' must-fail
+# pins left behind when they drained.  They are here, and not in
+# test/check_module_fixtures/, because that harness diffs only the ENTRY module's
+# sorted scheme dump — #1597's rejection lands in a NON-entry module, whose schemes
+# that dump never contains, so a cell there would read green before AND after.
+#
+# 9. 1586/attributed-owner-votes.  A decl ATTRIBUTE on a record that shares a field
+#    name with an unattributed sibling used to remove it from `fieldOwnersRef`
+#    entirely (`registerData` had no `DAttrib` arm), so the genuinely ambiguous
+#    `.s1586` resolved SILENTLY to `A1586` at exit 0 with `g1586 : A1586 -> Int`.
+#    The attribute is metadata; it must not decide candidacy.  Correct answer,
+#    derived from the byte-similar unattributed program: REJECT as ambiguous.
+cat > "$TMP/attrib1586.mdk" <<'EOF'
+data A1586 = A1586 { s1586 : Int }
+
+@deprecated "old"
+data B1586 = B1586 { s1586 : Int }
+
+g1586 r = r.s1586
+
+main = println (g1586 (A1586 { s1586 = 1 }))
+EOF
+a1586_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/attrib1586.mdk" 2>&1)"
+a1586_code=$?
+case "$a1586_out" in
+  *"Ambiguous field access: '.s1586'"*) if [ "$a1586_code" -eq 1 ]; then pass=$((pass+1)); printf 'ok   1586/attributed-owner-votes (attributed record is a field-owner candidate, exit 1)\n'
+                  else fail=$((fail+1)); printf 'FAIL 1586/attributed-owner-votes (ambiguity reported but exit %d)\n' "$a1586_code"; fi ;;
+  *) fail=$((fail+1)); printf 'FAIL 1586/attributed-owner-votes (attribute still drops the owner: [%s])\n' "$a1586_out" ;;
+esac
+
+# The two #1597 legs SHARE `a1597.mdk` and differ only in whether the reading module
+# imports it — that one variable is the whole claim, so keep them adjacent.
+#
+# 🚨 `readTag1597` MUST STAY UNSIGNATURED in both.  A signature pins the receiver,
+#    `resolveFieldRecord` takes its known-head arm, and the OWNERS path — the only
+#    thing these legs test — is never consulted: both would pass either way.
+cat > "$TMP/a1597.mdk" <<'EOF'
+public export data Zed1597 = Zed1597 { tag1597 : String }
+EOF
+
+# 10. 1597/unimported-does-not-vote.  `b1597` imports NOTHING and is legal on its
+#     own; `main1597` merely puts `a1597` earlier in the topological order.  Field
+#     ownership used to be decided by a raw ordinal comparison, so `Zed1597` voted
+#     in an ambiguity test inside a module that has no import path to it — a FALSE
+#     REJECT on a legal program.  Reachability, not topology, decides candidacy.
+cat > "$TMP/b1597.mdk" <<'EOF'
+public export data Wye1597 = Wye1597 { tag1597 : Int }
+
+readTag1597 w = w.tag1597
+EOF
+cat > "$TMP/main1597.mdk" <<'EOF'
+import a1597
+import b1597
+
+main = println 1
+EOF
+ok1597_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/main1597.mdk" 2>&1)"
+ok1597_code=$?
+case "$ok1597_out" in
+  *"Ambiguous field access"*) fail=$((fail+1)); printf 'FAIL 1597/unimported-does-not-vote (unreachable record still votes: [%s])\n' "$ok1597_out" ;;
+  *) if [ "$ok1597_code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   1597/unimported-does-not-vote (unreachable record withdrawn, exit 0)\n'
+     else fail=$((fail+1)); printf 'FAIL 1597/unimported-does-not-vote (exit %d: [%s])\n' "$ok1597_code" "$ok1597_out"; fi ;;
+esac
+
+# 11. 1597/imported-still-votes — THE OVER-SUPPRESSION GUARD, and the reason leg 10
+#     alone is not enough.  Byte-for-byte leg 10's reading module plus ONE line,
+#     `import a1597`.  With the import the collision is real and the access really
+#     is ambiguous, so it must STAY rejected.  A fix that answered leg 10 by simply
+#     shrinking the owner set would turn this green and go unnoticed.
+cat > "$TMP/b1597imp.mdk" <<'EOF'
+import a1597
+
+public export data Wye1597 = Wye1597 { tag1597 : Int }
+
+readTag1597 w = w.tag1597
+EOF
+cat > "$TMP/main1597imp.mdk" <<'EOF'
+import a1597
+import b1597imp
+
+main = println 1
+EOF
+no1597_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/main1597imp.mdk" 2>&1)"
+no1597_code=$?
+case "$no1597_out" in
+  *"Ambiguous field access: '.tag1597'"*) if [ "$no1597_code" -eq 1 ]; then pass=$((pass+1)); printf 'ok   1597/imported-still-votes (reachable rival still votes, exit 1)\n'
+                  else fail=$((fail+1)); printf 'FAIL 1597/imported-still-votes (ambiguity reported but exit %d)\n' "$no1597_code"; fi ;;
+  *) fail=$((fail+1)); printf 'FAIL 1597/imported-still-votes (over-suppressed a REAL ambiguity: [%s])\n' "$no1597_out" ;;
+esac
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

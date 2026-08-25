@@ -1,7 +1,0 @@
--- The topologically-EARLIER module.  `Zed` is `public export`, so it survives
--- `publicDataDecls` and lands in the field-owner seed of every LATER module in the
--- graph -- including `bmod.mdk`, which does not import it and cannot name it.
---
--- 🚨 DO NOT RENAME `tag`.  The collision with `bmod`'s `Wye.tag` IS the fixture;
--- rename it and `main.mdk` checks clean for the wrong reason.
-public export data Zed = Zed { tag : String }
