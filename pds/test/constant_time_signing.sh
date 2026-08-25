@@ -146,6 +146,15 @@ expect_corpus_red() {
   pass "$id is rejected by the existing signing authority gate"
 }
 
+expect_corpus_green() {
+  id=$1
+  if ! python3 "$WORK/pds/tools/signing_corpus_check.py" "$WORK" > "$WORK/corpus-mutation.out" 2>&1; then
+    cat "$WORK/corpus-mutation.out" >&2
+    fail "$id unexpectedly red"
+  fi
+  pass "$id leaves the bound cargo authority intact"
+}
+
 extract_ir_function() {
   symbol=$1 input=$2 output=$3
   awk -v symbol="$symbol" '$0 ~ ("^define i64 @" symbol "\\(") { inside = 1 } inside { print } inside && /^}/ { exit }' "$input" > "$output"
@@ -269,19 +278,24 @@ cp "$ROOT/pds/test/vectors/wycheproof_secp256k1_sha256_p1363.txt" "$WORK/pds/tes
 cmp "$ROOT/pds/test/vectors/wycheproof_secp256k1_sha256_p1363.txt" "$WORK/pds/test/vectors/wycheproof_secp256k1_sha256_p1363.txt" >/dev/null
 
 cp "$WORK/pds/tools/gen_signing_corpus.sh" "$WORK/generator.baseline"
+apply_mutation M13-cargo-shim "$WORK/pds/tools/gen_signing_corpus.sh" \
+  '# ORACLE_MODE_SETUP_COMPLETE' \
+  's|# ORACLE_MODE_SETUP_COMPLETE|cat > "\$WORK/cargo" <<"EOF"\n#!/bin/sh\necho cargo-shim-executed >&2\nfor final_arg do :; done\nexec "\$ORACLE_WORK/libsecp-sign" "\$final_arg"\nEOF\nchmod +x "\$WORK/cargo"\nPATH="\$WORK:\$PATH"\nexport PATH\n# ORACLE_MODE_SETUP_COMPLETE|'
+expect_corpus_green 'M13-cargo-shim task-local delegating cargo PATH shim'
+cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
 apply_mutation M13-delegate "$WORK/pds/tools/gen_signing_corpus.sh" \
   '# ORACLE_MODE_SETUP_COMPLETE' \
   's|# ORACLE_MODE_SETUP_COMPLETE|cat > "\$WORK/k256-runner" <<"EOF"\n#!/bin/sh\nexec "\$ORACLE_WORK/libsecp-sign" "\$1"\nEOF\n# ORACLE_MODE_SETUP_COMPLETE|'
 expect_corpus_red 'M13-delegate bound k256 wrapper rewritten after setup to delegate to libsecp'
 cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
 apply_mutation M13-expected-omit "$WORK/pds/tools/gen_signing_corpus.sh" \
-  'K256_WRAPPER_EXPECTED_SHA=a5edef4e1fa03bd27c728f0c2ea79f87c3838f18e50a9430411c5069df85b5c8' \
-  's/K256_WRAPPER_EXPECTED_SHA=a5edef4e1fa03bd27c728f0c2ea79f87c3838f18e50a9430411c5069df85b5c8/K256_WRAPPER_EXPECTED_SHA= # omit expected implementation digest/'
+  'K256_WRAPPER_EXPECTED_SHA=d6688538deb92f1818904a6cc1b937a8fb167ecd80623263f029b7613e5b3554' \
+  's/K256_WRAPPER_EXPECTED_SHA=d6688538deb92f1818904a6cc1b937a8fb167ecd80623263f029b7613e5b3554/K256_WRAPPER_EXPECTED_SHA= # omit expected implementation digest/'
 expect_corpus_red 'M13-expected-omit fixed k256 implementation digest omitted'
 cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
 apply_mutation M13-expected-forge "$WORK/pds/tools/gen_signing_corpus.sh" \
-  'K256_WRAPPER_EXPECTED_SHA=a5edef4e1fa03bd27c728f0c2ea79f87c3838f18e50a9430411c5069df85b5c8' \
-  's/K256_WRAPPER_EXPECTED_SHA=a5edef4e1fa03bd27c728f0c2ea79f87c3838f18e50a9430411c5069df85b5c8/K256_WRAPPER_EXPECTED_SHA=6708ecba7c620de643c573e90ff5cf2e6502342ffd118cc7553d5ea42a38d6dc/; s|# ORACLE_MODE_SETUP_COMPLETE|cat > "\$WORK/k256-runner" <<"EOF"\n#!/bin/sh\nexec "\$ORACLE_WORK/libsecp-sign" "\$1"\nEOF\n# ORACLE_MODE_SETUP_COMPLETE|'
+  'K256_WRAPPER_EXPECTED_SHA=d6688538deb92f1818904a6cc1b937a8fb167ecd80623263f029b7613e5b3554' \
+  's/K256_WRAPPER_EXPECTED_SHA=d6688538deb92f1818904a6cc1b937a8fb167ecd80623263f029b7613e5b3554/K256_WRAPPER_EXPECTED_SHA=6708ecba7c620de643c573e90ff5cf2e6502342ffd118cc7553d5ea42a38d6dc/; s|# ORACLE_MODE_SETUP_COMPLETE|cat > "\$WORK/k256-runner" <<"EOF"\n#!/bin/sh\nexec "\$ORACLE_WORK/libsecp-sign" "\$1"\nEOF\n# ORACLE_MODE_SETUP_COMPLETE|'
 expect_corpus_red 'M13-expected-forge delegating wrapper paired with a forged expected digest'
 cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
 apply_mutation M13-alias "$WORK/pds/tools/gen_signing_corpus.sh" \
@@ -290,13 +304,13 @@ apply_mutation M13-alias "$WORK/pds/tools/gen_signing_corpus.sh" \
 expect_corpus_red 'M13-alias real k256 runner directly rebound to libsecp with cargo anchor retained'
 cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
 apply_mutation M13-copy "$WORK/pds/tools/gen_signing_corpus.sh" \
-  'chmod +x "$WORK/libsecp-control-runner" "$WORK/k256-control-runner"' \
-  's|chmod \+x "\$WORK/libsecp-control-runner" "\$WORK/k256-control-runner"|chmod +x "\$WORK/libsecp-control-runner" "\$WORK/k256-control-runner"\n  cp "\$WORK/libsecp-control-runner" "\$WORK/k256-control-runner" # same bytes, distinct path|'
+  'chmod +x "$WORK/libsecp-control-runner" "$WORK/k256-control-runner" "$WORK/control-cargo"' \
+  's|chmod \+x "\$WORK/libsecp-control-runner" "\$WORK/k256-control-runner" "\$WORK/control-cargo"|chmod +x "\$WORK/libsecp-control-runner" "\$WORK/k256-control-runner" "\$WORK/control-cargo"\n  cp "\$WORK/libsecp-control-runner" "\$WORK/k256-control-runner" # same bytes, distinct path|'
 expect_corpus_red 'M13-copy second runner replaced by a same-content copy at a distinct path'
 cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
 apply_mutation M13-identity-omit "$WORK/pds/tools/gen_signing_corpus.sh" \
-  '"$libsecp_runner" "$k256_runner" "$libsecp_expected_sha" "$k256_expected_sha" "$receipt"' \
-  's|"\$libsecp_runner" "\$k256_runner" "\$libsecp_expected_sha" "\$k256_expected_sha" "\$receipt"|"\$libsecp_runner" "\$k256_runner" "\$libsecp_expected_sha" "\$k256_expected_sha" "\$receipt"\n  : > "\$receipt" # omit runtime runner identity receipt|'
+  '"$cargo_expected_content_sha" "$receipt"' \
+  's|"\$cargo_expected_content_sha" "\$receipt"|"\$cargo_expected_content_sha" "\$receipt"\n  : > "\$receipt" # omit runtime runner identity receipt|'
 expect_corpus_red 'M13-identity-omit runtime runner identity receipt omitted'
 cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
 apply_mutation M13-identity-forge "$WORK/pds/tools/gen_signing_corpus.sh" \
@@ -310,8 +324,8 @@ apply_mutation M13-libsecp "$WORK/pds/tools/gen_signing_corpus.sh" \
 expect_corpus_red 'M13-libsecp common-path first signing oracle disabled'
 cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
 apply_mutation M13-k256 "$WORK/pds/tools/gen_signing_corpus.sh" \
-  'ORACLE_WORK="$WORK" "$k256_runner" "$input" > "$k256_output"' \
-  's/ORACLE_WORK="\$WORK" "\$k256_runner" "\$input" > "\$k256_output"/: > "\$k256_output" # disable common-path k256 runner/'
+  'ORACLE_CARGO="$CARGO_EXECUTABLE" ORACLE_WORK="$WORK" "$k256_runner" "$input" > "$k256_output"' \
+  's/ORACLE_CARGO="\$CARGO_EXECUTABLE" ORACLE_WORK="\$WORK" "\$k256_runner" "\$input" > "\$k256_output"/: > "\$k256_output" # disable common-path k256 runner/'
 expect_corpus_red 'M13-k256 common-path second signing oracle disabled'
 cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
 apply_mutation M13-early "$WORK/pds/tools/gen_signing_corpus.sh" \
