@@ -76,11 +76,13 @@ ambiguousImplMsg : String -> String
 ambiguousOverlapMsg : String -> List Mono -> List KeyEntry -> String
 annotTooGeneralMsg : Ty -> String
 anyArgMentions : List String -> List Ty -> Bool
+anyClaimRow : List Int -> List (String, List (List Mono)) -> Bool
 anyClauseEagerlyRefsGroup : List String -> List FunClause -> Bool
 anyConcreteHead : List Mono -> Bool
 anyContainsI : List Int -> List Int -> Bool
 anyCtorSiblingWithholds : Option HeadKey -> String -> String -> List String -> Bool
 anyDepReaches : List String -> List String -> String -> List (String, List Decl) -> Bool
+anyGivenMatches : String -> Mono -> List (String, Mono, String) -> Bool
 anyHoleAtom : List Atom -> Bool
 anyIdPinned : List Int -> List (Int, Mono) -> Bool
 anyIn : List Int -> List Int -> Bool
@@ -778,11 +780,14 @@ genRestricted : Bool -> Mono -> Scheme
 generalize : Mono -> Scheme
 generalizeGroup : TcEnv -> List Int -> List (Int, String) -> List (LetBind, (String, Scheme)) -> TcEnv
 globalCoherenceConflict : ImplEnv -> (Option String, Option String)
-goalDefersOpenWorld : List Mono -> Bool
+goalDefersOpenWorld : IfaceRef -> List Mono -> Bool
 goalHeadCon : List Mono -> Option HeadKey
+goalIdsClaimed : List Int -> Bool
+goalMatchesGiven : IfaceRef -> List Mono -> Bool
 goalPredOf : String -> Mono -> Option Predicate
 goalPredOfOp : String -> Option Predicate
 goalSiteLoc : Ref (Option Loc)
+goalSlotStillOpen : List Mono -> Bool
 goalsClosed : List Mono -> Bool
 graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
 graphCtorExports : List Decl -> List (String, List Decl) -> Map String (List (String, String, Ident))

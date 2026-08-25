@@ -1,5 +1,5 @@
 # META
-source_lines=33286
+source_lines=33387
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -25109,8 +25109,10 @@ checkOneCallObligation deferNonGround univ iface occs loc =
   --   * `medaka check lib.mdk`, where `lib` infers `Tag (Wrap α)` for
   --     `describe x = tag (Wrap x)` and the satisfying `impl Tag (Wrap Int)` lives in a
   --     module that IMPORTS `lib` — still rejected.
-  -- ⚠️ THE GATE IS THREE CONJUNCTS AND EACH ONE IS PAID FOR.  Bare openness is not
-  -- enough:
+  -- ⚠️ THE GATE IS FIVE CONJUNCTS AND EACH ONE IS PAID FOR.  Bare openness is not
+  -- enough.  The three below are slice 2's; the LANDING-SITE pair the fix round added
+  -- (review S0-1 / S0-2 / S2-5) is derived on `goalDefersOpenWorld`'s own header, where
+  -- the three exit-0 type-confused-dict programs they refuse are written out:
   --   * `monoVectorClosed` — a closed goal cannot instantiate further, so its verdict
   --     is the one the use site would reach anyway.  Keep rejecting those.
   --   * `monoHeadIsDecl` — §8 I6.1's rigid-variable forgery.  `headTyconMono` hands a
@@ -25124,10 +25126,14 @@ checkOneCallObligation deferNonGround univ iface occs loc =
   --   * `deferrableVarIds` — RULE 2's own test, one arm up in
   --     `checkUndeterminedObligation`: a goal whose variables NO enclosing scheme
   --     quantifies has nowhere to defer TO, and dropping it would green a program the
-  --     emitter builds a null dict for.  A declared context's variables are `TRigid`,
-  --     contribute no unbound id, and are quantified by the signature itself, so
-  --     `Tag (Wrap a)` above satisfies this vacuously — which is the shape #1939 names.
-  else if goalDefersOpenWorld args then ()
+  --     emitter builds a null dict for.  ⚠️ A DECLARED CONTEXT'S VARIABLES ARE NOT
+  --     `TRigid` AT THIS SITE — MEASURED: `g : Tag (Wrap a) => …` reaches here carrying
+  --     `Tag (Wrap TVar#736)`, an ordinary unbound cell, so this test is a REAL one for
+  --     the declared channel and passes because the id genuinely is deferrable.  (The
+  --     end-of-sprint review's S0-2 asserted the opposite and called this conjunct
+  --     vacuous for a declared context; it is vacuous only for a goal whose openness is
+  --     ALL rigid — S2-5's nested-rigid shape, which conjunct 3 now covers.)
+  else if goalDefersOpenWorld iface args then ()
   -- #838 I4 (was checkOneImplObligation step 9): reportNumOrNoImpl is a strict superset
   -- of pushNoImplError — it reframes a ground `Num`-obligation tracing to a numeric
   -- LITERAL (loc-keyed `numlitReframeLoc`, not prov-keyed) into `T-TYPE-MISMATCH`, and
@@ -25499,7 +25505,7 @@ checkReqOne univ iface args loc
   -- top-level obligation or as a conditional impl's `requires`.  `residualPredsOf`
   -- reduces through `requires` too, so a deferred sub-goal reaches the enclosing scheme
   -- by the route the top-level one takes and is adjudicated where it grounds.
-  | goalDefersOpenWorld args = ()
+  | goalDefersOpenWorld iface args = ()
   | otherwise = pushNoImplError iface.irName loc args
 
 -- #838 I4: the function-typed Ord/Eq unimplementable-head rejects were only used by the
@@ -28639,12 +28645,107 @@ monoClosed t = match normalize t
 -- binding's context is its whole job — so an open goal there always has a scheme to
 -- land on, and it never sees a bare-rigid receiver either (`goalHeadCon` is read for
 -- candidacy, not for concreteness).  An obligation checker has neither guarantee, so it
--- asks all three questions.  Each conjunct's counterexample is on
+-- asks all five questions.  Each conjunct's counterexample is on
 -- `checkOneCallObligation`'s arm.
-goalDefersOpenWorld : List Mono -> Bool
-goalDefersOpenWorld args = not (monoVectorClosed args)
+--
+-- 🚨 CONJUNCTS 3 AND 5 ARE THE FIX-ROUND ADDITIONS (review S0-2 / S0-1 / S2-5), AND
+-- THEY ASK THE ONE QUESTION THE THREE-CONJUNCT FORM NEVER DID: *does this goal have a
+-- landing site that will actually be given a dict?*  "Defer" means "forward this
+-- predicate outward to the binder that quantifies its variables, and let each use site
+-- discharge it".  Where no such binder will carry it, "defer" means DROP, and a dropped
+-- goal is a type-confused dict at exit 0 — MEASURED, three ways, all against the sprint
+-- merge-base `0944ca9d` where every one of them was a located reject:
+--   * S0-2 — `g : Tag (Wrap a) => a -> String ; g x = "…\{tagOf (Box x)}"`.  The goal
+--     `Tag (Box a)` is NOT the declared context and a declared context cannot grow, so
+--     it lands nowhere; HEAD printed `wrapChar|boxInt=123`, `Box Int`'s body applied to
+--     a `Char`.  Conjunct 5.
+--   * S0-1 — `f : Conv (Wrap a) Int => a -> String`.  The MULTI-PARAMETER goal has a
+--     landing site (the declared context IS the goal) but no CONSUMPTION-side answer:
+--     `registerPredGiven` matches `[subject]` only and registers nothing for a longer
+--     vector, so `entailAssum` can never see it, `entail` falls to `entailInst`, and the
+--     body is statically committed to whichever impl was most specific at ABSTRACTION
+--     time while the caller's correct dict goes unread.  HEAD printed `T/T` for
+--     `"\{f True}/\{f 41}"` (expected `T/n=42`), and swapping the two `impl` blocks
+--     changed the answer to `intInt/intInt` — selection by declaration order, which
+--     DICT-SEMANTICS §3 forbids outright.  Conjunct 5, via `goalMatchesGiven`, which is
+--     deliberately `registerPredGiven`'s OWN shape: this gate admits exactly what that
+--     registry can answer, so the two cannot drift into another silent accept.
+--   * S2-5 — `data Bad = Bad zzz ; use (Bad v) = qq (Wrap v)`.  `zzz` is a `TRigid` no
+--     scheme quantifies, so `monoUnboundIds` is empty and conjunct 4 passed VACUOUSLY —
+--     the rigid-head forgery `monoHeadIsDecl` catches at the top level, leaking through
+--     as soon as the rigid is NESTED inside a structure.  Conjunct 3 is the groundness
+--     half made non-vacuous: a goal with no unbound variable at all has nothing for any
+--     scheme to generalize, hence nowhere to defer TO.
+--
+-- ⚠️ CONJUNCT 5 FAILS OPEN ON PURPOSE, and that is what keeps #1939 shape (2) accepted.
+-- `not (goalIdsClaimed …)` is the INFERRED-binding arm: `describe x = tag (Wrap x)` in a
+-- library module reaches this gate BEFORE its own generalization has registered anything
+-- (MEASURED on `test/dict_fixtures/s-open-world-library-dependent-impl/lib.mdk`: the
+-- second check pass reaches the goal `Tag (Wrap α)` with an EMPTY given registry and no
+-- `funConstraintArgsRef` row for `describe`), so its scheme is still open and the goal
+-- is what will populate it.  A binding whose constraint set is already REGISTERED is
+-- fixed — declared or inferred — and a goal claiming its variables must be in it.
+--
+-- ⚠️ MEASURED CORRECTION TO THE REVIEW'S STATED MECHANISM (report S0-2): a declared
+-- context's variables are NOT `TRigid` at this site.  They are ordinary unbound `TVar`s
+-- (`i2_unsound.mdk`'s `g` carries `Tag (Wrap TVar#736)` and its goal is
+-- `Tag (Box TVar#736)` — the SAME cell), so conjunct 4 was never vacuous for S0-2; it
+-- passed because the id genuinely IS deferrable.  The review's conclusion stands, its
+-- mechanism does not, and conjunct 5 is keyed on the fact that was actually there.
+goalDefersOpenWorld : IfaceRef -> List Mono -> Bool
+goalDefersOpenWorld iface args = not (monoVectorClosed args)
   && allList monoHeadIsDecl args
+  && isNonEmptyL (flatMap monoUnboundIds args)
   && allList (i => containsI i perRun.value.deferrableVarIds.value) (flatMap monoUnboundIds args)
+  && (goalMatchesGiven iface args || goalSlotStillOpen args)
+
+-- is there an in-scope PREDICATE-keyed given that answers this goal exactly?
+-- Deliberately `registerPredGiven`'s own shape — single-subject, structural, matched by
+-- `monoSameGiven` on rigid/cell IDENTITY rather than unification — because the question
+-- this gate asks is not "is the goal plausible" but "will `entailAssum` be handed a dict
+-- for it".  A multi-parameter vector answers False here for the same reason it registers
+-- nothing there, which is S0-1's whole gate.
+goalMatchesGiven : IfaceRef -> List Mono -> Bool
+goalMatchesGiven iface [subject] =
+  anyGivenMatches iface.irName subject perRun.value.activeDictPreds.value
+goalMatchesGiven _ _ = False
+
+anyGivenMatches : String -> Mono -> List (String, Mono, String) -> Bool
+anyGivenMatches _ _ [] = False
+anyGivenMatches iface subject ((eiface, esubject, _)::rest) = eiface == iface && monoSameGiven esubject subject
+  || anyGivenMatches iface subject rest
+
+-- COULD a given for this goal still be registered, once the enclosing binding finishes
+-- generalizing?  Both conditions are `registerPredGiven`'s own, because it is the only
+-- writer that can ever answer a structured goal:
+--   * ARITY 1.  It matches `[subject]` and returns `()` for any longer vector, on the
+--     `requires`, declared and inferred channels alike — so a MULTI-PARAMETER structured
+--     goal has no consumption-side answer now and cannot acquire one later, whatever the
+--     binding does.  This is S0-1's INFERRED twin, and the reason this arm is not simply
+--     "unclaimed ⇒ defer": MEASURED on `e1_inf_multi.mdk` (`h x = conv (Wrap x) 0`, no
+--     signature, impls `Conv (Wrap Bool) Int` / `Conv (Wrap Int) Int`), which registers
+--     nothing — `inferredConstraintIds` rejects the compound `Wrap t` — and so is
+--     UNCLAIMED, yet printed `boolInt/boolInt` for `"\{h True}/\{h 1}"`, expected
+--     `boolInt/intInt`.  Its signatured twin `a2_twoarg.mdk` printed the same wrong pair.
+--   * UNCLAIMED.  See below; this is the arm that keeps #1939 shape (2) accepted.
+goalSlotStillOpen : List Mono -> Bool
+goalSlotStillOpen [subject] = not (goalIdsClaimed (monoUnboundIds subject))
+goalSlotStillOpen _ = False
+
+-- has some binding's constraint set ALREADY been registered against one of [ids]?  If
+-- so that binding's context is fixed and this goal must be part of it; if not, the
+-- binding is still generalizing and this goal is what will open its slot.  Reads
+-- `funConstraintArgsRef`, which both channels write (`registerMember` for a declared
+-- context, `registerInferredFor` for an inferred one), so the test does not distinguish
+-- them — the fixedness, not the channel, is what decides.
+goalIdsClaimed : List Int -> Bool
+goalIdsClaimed [] = False
+goalIdsClaimed ids = anyClaimRow ids perRun.value.funConstraintArgsRef.value
+
+anyClaimRow : List Int -> List (String, List (List Mono)) -> Bool
+anyClaimRow _ [] = False
+anyClaimRow ids ((_, vecs)::rest) = anyList (v => anyList (m => anyIn (monoTyvarIds m) ids) v) vecs
+  || anyClaimRow ids rest
 
 -- is this argument's dispatch head a real type CONSTRUCTOR?  `headTyconMono`'s
 -- `TRigid n => Some (HkRigid n)` arm is DICT-SEMANTICS §8 I6.1's known forgery — a type
@@ -37252,7 +37353,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkCallObligationsU" (PWild PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkCallObligationsU" ((PVar "deferNonGround") (PVar "dedup") (PVar "univ") (PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false (PVar "iface") (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (DoLet false false (PVar "occs") (EApp (EVar "uOblArgs") (EVar "o"))) (DoLet false false (PVar "loc") (EFieldAccess (EVar "o") "loc")) (DoLet false false (PVar "key") (EApp (EApp (EVar "oblDedupKey") (EVar "iface")) (EVar "occs"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "checkOneCallObligation") (EVar "deferNonGround")) (EVar "univ")) (EVar "iface")) (EVar "occs")) (EVar "loc"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "deferNonGround")) (EVar "dedup")) (EVar "univ")) (EBinOp "::" (EVar "key") (EVar "seen"))) (EVar "rest")))))
 (DTypeSig false "checkOneCallObligation" (TyFun (TyCon "Bool") (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit")))))))
-(DFunDef false "checkOneCallObligation" ((PVar "deferNonGround") (PVar "univ") (PVar "iface") (PVar "occs") (PVar "loc")) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "map") (EVar "normalize")) (EVar "occs"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "args")) (ELit LUnit) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EApp (EVar "anyListM") (EVar "numUnimplementableHead")) (EVar "args"))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EApp (EApp (EVar "anyListM") (EVar "monoIsFunction")) (EVar "args")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "implMatchesArgsU") (EVar "univ")) (EVar "iface")) (EVar "args")))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EVar "not") (EApp (EVar "builtinClassPresent") (EVar "BNum")))) (ELit LUnit) (EIf (EApp (EVar "not") (EApp (EVar "allConcreteHeads") (EVar "args"))) (EIf (EVar "deferNonGround") (ELit LUnit) (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligations") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc"))) (EIf (EApp (EApp (EApp (EVar "implMatchesArgsU") (EVar "univ")) (EVar "iface")) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "checkNestedReqs") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc")) (EIf (EApp (EVar "goalDefersOpenWorld") (EVar "args")) (ELit LUnit) (EApp (EApp (EApp (EVar "reportNumOrNoImpl") (EFieldAccess (EVar "iface") "irName")) (EVar "args")) (EVar "loc"))))))))))))
+(DFunDef false "checkOneCallObligation" ((PVar "deferNonGround") (PVar "univ") (PVar "iface") (PVar "occs") (PVar "loc")) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "map") (EVar "normalize")) (EVar "occs"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "args")) (ELit LUnit) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EApp (EVar "anyListM") (EVar "numUnimplementableHead")) (EVar "args"))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EApp (EApp (EVar "anyListM") (EVar "monoIsFunction")) (EVar "args")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "implMatchesArgsU") (EVar "univ")) (EVar "iface")) (EVar "args")))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EVar "not") (EApp (EVar "builtinClassPresent") (EVar "BNum")))) (ELit LUnit) (EIf (EApp (EVar "not") (EApp (EVar "allConcreteHeads") (EVar "args"))) (EIf (EVar "deferNonGround") (ELit LUnit) (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligations") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc"))) (EIf (EApp (EApp (EApp (EVar "implMatchesArgsU") (EVar "univ")) (EVar "iface")) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "checkNestedReqs") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc")) (EIf (EApp (EApp (EVar "goalDefersOpenWorld") (EVar "iface")) (EVar "args")) (ELit LUnit) (EApp (EApp (EApp (EVar "reportNumOrNoImpl") (EFieldAccess (EVar "iface") "irName")) (EVar "args")) (EVar "loc"))))))))))))
 (DTypeSig false "implMatchesArgsU" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))
 (DFunDef false "implMatchesArgsU" ((PVar "univ") (PVar "iface") (PList (PVar "a"))) (EApp (EApp (EApp (EVar "implMatchesReceiverU") (EVar "univ")) (EVar "iface")) (EVar "a")))
 (DFunDef false "implMatchesArgsU" ((PVar "univ") (PVar "iface") (PVar "args")) (EApp (EApp (EApp (EVar "implMatchesU") (EVar "univ")) (EVar "iface")) (EVar "args")))
@@ -37323,7 +37424,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkReqObligations" (PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkReqObligations" ((PVar "univ") (PVar "loc") (PCons (PTuple (PVar "ifaceR") (PVar "monoArgs")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "checkReqOne") (EVar "univ")) (EVar "ifaceR")) (EVar "monoArgs")) (EVar "loc"))) (DoExpr (EApp (EApp (EApp (EVar "checkReqObligations") (EVar "univ")) (EVar "loc")) (EVar "rest")))))
 (DTypeSig false "checkReqOne" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit"))))))
-(DFunDef false "checkReqOne" ((PVar "univ") (PVar "iface") (PVar "args") (PVar "loc")) (EIf (EBinOp "&&" (EApp (EApp (EVar "anyListM") (EVar "monoIsFunction")) (EVar "args")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "implMatchesU") (EVar "univ")) (EVar "iface")) (EVar "args")))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EApp (EVar "not") (EApp (EVar "allConcreteHeads") (EVar "args"))) (ELit LUnit) (EIf (EApp (EApp (EApp (EVar "implMatchesU") (EVar "univ")) (EVar "iface")) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "checkNestedReqs") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc")) (EIf (EApp (EVar "goalDefersOpenWorld") (EVar "args")) (ELit LUnit) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
+(DFunDef false "checkReqOne" ((PVar "univ") (PVar "iface") (PVar "args") (PVar "loc")) (EIf (EBinOp "&&" (EApp (EApp (EVar "anyListM") (EVar "monoIsFunction")) (EVar "args")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "implMatchesU") (EVar "univ")) (EVar "iface")) (EVar "args")))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EApp (EVar "not") (EApp (EVar "allConcreteHeads") (EVar "args"))) (ELit LUnit) (EIf (EApp (EApp (EApp (EVar "implMatchesU") (EVar "univ")) (EVar "iface")) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "checkNestedReqs") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc")) (EIf (EApp (EApp (EVar "goalDefersOpenWorld") (EVar "iface")) (EVar "args")) (ELit LUnit) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig false "numUnimplementableHead" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "numUnimplementableHead" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" PWild PWild PWild) () (EVar "True")) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EApp (EVar "unboundSpineHead") (EApp (EVar "spineHeadMono") (EApp (EApp (EVar "TApp") (EVar "a")) (EVar "b"))))) (arm PWild () (EVar "False"))))
 (DTypeSig false "unboundSpineHead" (TyFun (TyCon "Mono") (TyCon "Bool")))
@@ -37968,8 +38069,23 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "monoVectorClosed" ((PVar "args")) (EApp (EApp (EVar "allList") (EVar "monoClosed")) (EVar "args")))
 (DTypeSig false "monoClosed" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "monoClosed" ((PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TVar" PWild) () (EVar "False")) (arm (PCon "TRigid" PWild) () (EVar "False")) (arm (PCon "TCon" PWild PWild) () (EVar "True")) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "&&" (EApp (EVar "monoClosed") (EVar "a")) (EApp (EVar "monoClosed") (EVar "b")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "&&" (EApp (EVar "monoClosed") (EVar "a")) (EApp (EVar "monoClosed") (EVar "b")))) (arm (PCon "TEff" PWild) () (EVar "True"))))
-(DTypeSig false "goalDefersOpenWorld" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))
-(DFunDef false "goalDefersOpenWorld" ((PVar "args")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "monoVectorClosed") (EVar "args"))) (EApp (EApp (EVar "allList") (EVar "monoHeadIsDecl")) (EVar "args"))) (EApp (EApp (EVar "allList") (ELam ((PVar "i")) (EApp (EApp (EVar "containsI") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "deferrableVarIds") "value")))) (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EVar "args")))))
+(DTypeSig false "goalDefersOpenWorld" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
+(DFunDef false "goalDefersOpenWorld" ((PVar "iface") (PVar "args")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "monoVectorClosed") (EVar "args"))) (EApp (EApp (EVar "allList") (EVar "monoHeadIsDecl")) (EVar "args"))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (EApp (EApp (EVar "allList") (ELam ((PVar "i")) (EApp (EApp (EVar "containsI") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "deferrableVarIds") "value")))) (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (EBinOp "||" (EApp (EApp (EVar "goalMatchesGiven") (EVar "iface")) (EVar "args")) (EApp (EVar "goalSlotStillOpen") (EVar "args")))))
+(DTypeSig false "goalMatchesGiven" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
+(DFunDef false "goalMatchesGiven" ((PVar "iface") (PList (PVar "subject"))) (EApp (EApp (EApp (EVar "anyGivenMatches") (EFieldAccess (EVar "iface") "irName")) (EVar "subject")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "activeDictPreds") "value")))
+(DFunDef false "goalMatchesGiven" (PWild PWild) (EVar "False"))
+(DTypeSig false "anyGivenMatches" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono") (TyCon "String"))) (TyCon "Bool")))))
+(DFunDef false "anyGivenMatches" (PWild PWild (PList)) (EVar "False"))
+(DFunDef false "anyGivenMatches" ((PVar "iface") (PVar "subject") (PCons (PTuple (PVar "eiface") (PVar "esubject") PWild) (PVar "rest"))) (EBinOp "||" (EBinOp "&&" (EBinOp "==" (EVar "eiface") (EVar "iface")) (EApp (EApp (EVar "monoSameGiven") (EVar "esubject")) (EVar "subject"))) (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "iface")) (EVar "subject")) (EVar "rest"))))
+(DTypeSig false "goalSlotStillOpen" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))
+(DFunDef false "goalSlotStillOpen" ((PList (PVar "subject"))) (EApp (EVar "not") (EApp (EVar "goalIdsClaimed") (EApp (EVar "monoUnboundIds") (EVar "subject")))))
+(DFunDef false "goalSlotStillOpen" (PWild) (EVar "False"))
+(DTypeSig false "goalIdsClaimed" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool")))
+(DFunDef false "goalIdsClaimed" ((PList)) (EVar "False"))
+(DFunDef false "goalIdsClaimed" ((PVar "ids")) (EApp (EApp (EVar "anyClaimRow") (EVar "ids")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintArgsRef") "value")))
+(DTypeSig false "anyClaimRow" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono"))))) (TyCon "Bool"))))
+(DFunDef false "anyClaimRow" (PWild (PList)) (EVar "False"))
+(DFunDef false "anyClaimRow" ((PVar "ids") (PCons (PTuple PWild (PVar "vecs")) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "anyList") (ELam ((PVar "m")) (EApp (EApp (EVar "anyIn") (EApp (EVar "monoTyvarIds") (EVar "m"))) (EVar "ids")))) (EVar "v")))) (EVar "vecs")) (EApp (EApp (EVar "anyClaimRow") (EVar "ids")) (EVar "rest"))))
 (DTypeSig false "monoHeadIsDecl" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "monoHeadIsDecl" ((PVar "m")) (EMatch (EApp (EVar "headTyconMono") (EVar "m")) (arm (PCon "Some" (PCon "HkRigid" PWild)) () (EVar "False")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "ieHeadCandidateExists" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "HeadKey") (TyCon "Bool")))))
@@ -42584,7 +42700,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkCallObligationsU" (PWild PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkCallObligationsU" ((PVar "deferNonGround") (PVar "dedup") (PVar "univ") (PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false (PVar "iface") (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (DoLet false false (PVar "occs") (EApp (EVar "uOblArgs") (EVar "o"))) (DoLet false false (PVar "loc") (EFieldAccess (EVar "o") "loc")) (DoLet false false (PVar "key") (EApp (EApp (EVar "oblDedupKey") (EVar "iface")) (EVar "occs"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "checkOneCallObligation") (EVar "deferNonGround")) (EVar "univ")) (EVar "iface")) (EVar "occs")) (EVar "loc"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "deferNonGround")) (EVar "dedup")) (EVar "univ")) (EBinOp "::" (EVar "key") (EVar "seen"))) (EVar "rest")))))
 (DTypeSig false "checkOneCallObligation" (TyFun (TyCon "Bool") (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit")))))))
-(DFunDef false "checkOneCallObligation" ((PVar "deferNonGround") (PVar "univ") (PVar "iface") (PVar "occs") (PVar "loc")) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EVar "occs"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "args")) (ELit LUnit) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EApp (EVar "anyListM") (EVar "numUnimplementableHead")) (EVar "args"))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EApp (EApp (EVar "anyListM") (EVar "monoIsFunction")) (EVar "args")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "implMatchesArgsU") (EVar "univ")) (EVar "iface")) (EVar "args")))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EVar "not") (EApp (EVar "builtinClassPresent") (EVar "BNum")))) (ELit LUnit) (EIf (EApp (EVar "not") (EApp (EVar "allConcreteHeads") (EVar "args"))) (EIf (EVar "deferNonGround") (ELit LUnit) (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligations") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc"))) (EIf (EApp (EApp (EApp (EVar "implMatchesArgsU") (EVar "univ")) (EVar "iface")) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "checkNestedReqs") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc")) (EIf (EApp (EVar "goalDefersOpenWorld") (EVar "args")) (ELit LUnit) (EApp (EApp (EApp (EVar "reportNumOrNoImpl") (EFieldAccess (EVar "iface") "irName")) (EVar "args")) (EVar "loc"))))))))))))
+(DFunDef false "checkOneCallObligation" ((PVar "deferNonGround") (PVar "univ") (PVar "iface") (PVar "occs") (PVar "loc")) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EVar "occs"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "args")) (ELit LUnit) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EApp (EVar "anyListM") (EVar "numUnimplementableHead")) (EVar "args"))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EApp (EApp (EVar "anyListM") (EVar "monoIsFunction")) (EVar "args")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "implMatchesArgsU") (EVar "univ")) (EVar "iface")) (EVar "args")))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EVar "not") (EApp (EVar "builtinClassPresent") (EVar "BNum")))) (ELit LUnit) (EIf (EApp (EVar "not") (EApp (EVar "allConcreteHeads") (EVar "args"))) (EIf (EVar "deferNonGround") (ELit LUnit) (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligations") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc"))) (EIf (EApp (EApp (EApp (EVar "implMatchesArgsU") (EVar "univ")) (EVar "iface")) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "checkNestedReqs") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc")) (EIf (EApp (EApp (EVar "goalDefersOpenWorld") (EVar "iface")) (EVar "args")) (ELit LUnit) (EApp (EApp (EApp (EVar "reportNumOrNoImpl") (EFieldAccess (EVar "iface") "irName")) (EVar "args")) (EVar "loc"))))))))))))
 (DTypeSig false "implMatchesArgsU" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))
 (DFunDef false "implMatchesArgsU" ((PVar "univ") (PVar "iface") (PList (PVar "a"))) (EApp (EApp (EApp (EVar "implMatchesReceiverU") (EVar "univ")) (EVar "iface")) (EVar "a")))
 (DFunDef false "implMatchesArgsU" ((PVar "univ") (PVar "iface") (PVar "args")) (EApp (EApp (EApp (EVar "implMatchesU") (EVar "univ")) (EVar "iface")) (EVar "args")))
@@ -42655,7 +42771,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkReqObligations" (PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkReqObligations" ((PVar "univ") (PVar "loc") (PCons (PTuple (PVar "ifaceR") (PVar "monoArgs")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "checkReqOne") (EVar "univ")) (EVar "ifaceR")) (EVar "monoArgs")) (EVar "loc"))) (DoExpr (EApp (EApp (EApp (EVar "checkReqObligations") (EVar "univ")) (EVar "loc")) (EVar "rest")))))
 (DTypeSig false "checkReqOne" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit"))))))
-(DFunDef false "checkReqOne" ((PVar "univ") (PVar "iface") (PVar "args") (PVar "loc")) (EIf (EBinOp "&&" (EApp (EApp (EVar "anyListM") (EVar "monoIsFunction")) (EVar "args")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "implMatchesU") (EVar "univ")) (EVar "iface")) (EVar "args")))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EApp (EVar "not") (EApp (EVar "allConcreteHeads") (EVar "args"))) (ELit LUnit) (EIf (EApp (EApp (EApp (EVar "implMatchesU") (EVar "univ")) (EVar "iface")) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "checkNestedReqs") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc")) (EIf (EApp (EVar "goalDefersOpenWorld") (EVar "args")) (ELit LUnit) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
+(DFunDef false "checkReqOne" ((PVar "univ") (PVar "iface") (PVar "args") (PVar "loc")) (EIf (EBinOp "&&" (EApp (EApp (EVar "anyListM") (EVar "monoIsFunction")) (EVar "args")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "implMatchesU") (EVar "univ")) (EVar "iface")) (EVar "args")))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EApp (EVar "not") (EApp (EVar "allConcreteHeads") (EVar "args"))) (ELit LUnit) (EIf (EApp (EApp (EApp (EVar "implMatchesU") (EVar "univ")) (EVar "iface")) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "checkNestedReqs") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc")) (EIf (EApp (EApp (EVar "goalDefersOpenWorld") (EVar "iface")) (EVar "args")) (ELit LUnit) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig false "numUnimplementableHead" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "numUnimplementableHead" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" PWild PWild PWild) () (EVar "True")) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EApp (EVar "unboundSpineHead") (EApp (EVar "spineHeadMono") (EApp (EApp (EVar "TApp") (EVar "a")) (EVar "b"))))) (arm PWild () (EVar "False"))))
 (DTypeSig false "unboundSpineHead" (TyFun (TyCon "Mono") (TyCon "Bool")))
@@ -43300,8 +43416,23 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "monoVectorClosed" ((PVar "args")) (EApp (EApp (EVar "allList") (EVar "monoClosed")) (EVar "args")))
 (DTypeSig false "monoClosed" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "monoClosed" ((PVar "t")) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TVar" PWild) () (EVar "False")) (arm (PCon "TRigid" PWild) () (EVar "False")) (arm (PCon "TCon" PWild PWild) () (EVar "True")) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "&&" (EApp (EVar "monoClosed") (EVar "a")) (EApp (EVar "monoClosed") (EVar "b")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "&&" (EApp (EVar "monoClosed") (EVar "a")) (EApp (EVar "monoClosed") (EVar "b")))) (arm (PCon "TEff" PWild) () (EVar "True"))))
-(DTypeSig false "goalDefersOpenWorld" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))
-(DFunDef false "goalDefersOpenWorld" ((PVar "args")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "monoVectorClosed") (EVar "args"))) (EApp (EApp (EVar "allList") (EVar "monoHeadIsDecl")) (EVar "args"))) (EApp (EApp (EVar "allList") (ELam ((PVar "i")) (EApp (EApp (EVar "containsI") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "deferrableVarIds") "value")))) (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EVar "args")))))
+(DTypeSig false "goalDefersOpenWorld" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
+(DFunDef false "goalDefersOpenWorld" ((PVar "iface") (PVar "args")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "monoVectorClosed") (EVar "args"))) (EApp (EApp (EVar "allList") (EVar "monoHeadIsDecl")) (EVar "args"))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (EApp (EApp (EVar "allList") (ELam ((PVar "i")) (EApp (EApp (EVar "containsI") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "deferrableVarIds") "value")))) (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EVar "args")))) (EBinOp "||" (EApp (EApp (EVar "goalMatchesGiven") (EVar "iface")) (EVar "args")) (EApp (EVar "goalSlotStillOpen") (EVar "args")))))
+(DTypeSig false "goalMatchesGiven" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
+(DFunDef false "goalMatchesGiven" ((PVar "iface") (PList (PVar "subject"))) (EApp (EApp (EApp (EVar "anyGivenMatches") (EFieldAccess (EVar "iface") "irName")) (EVar "subject")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "activeDictPreds") "value")))
+(DFunDef false "goalMatchesGiven" (PWild PWild) (EVar "False"))
+(DTypeSig false "anyGivenMatches" (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono") (TyCon "String"))) (TyCon "Bool")))))
+(DFunDef false "anyGivenMatches" (PWild PWild (PList)) (EVar "False"))
+(DFunDef false "anyGivenMatches" ((PVar "iface") (PVar "subject") (PCons (PTuple (PVar "eiface") (PVar "esubject") PWild) (PVar "rest"))) (EBinOp "||" (EBinOp "&&" (EBinOp "==" (EVar "eiface") (EVar "iface")) (EApp (EApp (EVar "monoSameGiven") (EVar "esubject")) (EVar "subject"))) (EApp (EApp (EApp (EVar "anyGivenMatches") (EVar "iface")) (EVar "subject")) (EVar "rest"))))
+(DTypeSig false "goalSlotStillOpen" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))
+(DFunDef false "goalSlotStillOpen" ((PList (PVar "subject"))) (EApp (EVar "not") (EApp (EVar "goalIdsClaimed") (EApp (EVar "monoUnboundIds") (EVar "subject")))))
+(DFunDef false "goalSlotStillOpen" (PWild) (EVar "False"))
+(DTypeSig false "goalIdsClaimed" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Bool")))
+(DFunDef false "goalIdsClaimed" ((PList)) (EVar "False"))
+(DFunDef false "goalIdsClaimed" ((PVar "ids")) (EApp (EApp (EVar "anyClaimRow") (EVar "ids")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintArgsRef") "value")))
+(DTypeSig false "anyClaimRow" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono"))))) (TyCon "Bool"))))
+(DFunDef false "anyClaimRow" (PWild (PList)) (EVar "False"))
+(DFunDef false "anyClaimRow" ((PVar "ids") (PCons (PTuple PWild (PVar "vecs")) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EApp (EApp (EVar "anyList") (ELam ((PVar "m")) (EApp (EApp (EVar "anyIn") (EApp (EVar "monoTyvarIds") (EVar "m"))) (EVar "ids")))) (EVar "v")))) (EVar "vecs")) (EApp (EApp (EVar "anyClaimRow") (EVar "ids")) (EVar "rest"))))
 (DTypeSig false "monoHeadIsDecl" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "monoHeadIsDecl" ((PVar "m")) (EMatch (EApp (EVar "headTyconMono") (EVar "m")) (arm (PCon "Some" (PCon "HkRigid" PWild)) () (EVar "False")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "ieHeadCandidateExists" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "HeadKey") (TyCon "Bool")))))
