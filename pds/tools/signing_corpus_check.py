@@ -92,13 +92,28 @@ def run_oracle_control(generator: pathlib.Path, cwd: pathlib.Path) -> subprocess
 
 def oracle_control_completed(proof: subprocess.CompletedProcess[str]) -> bool:
     proof_lines = proof.stdout.splitlines()
-    if proof.returncode != 0 or len(proof_lines) != 3:
+    if proof.returncode != 0 or len(proof_lines) != 5:
         return False
-    labels_and_hashes = [line.split() for line in proof_lines]
+    rows = [line.split() for line in proof_lines]
+    if [len(row) for row in rows] != [5, 5, 6, 6, 2]:
+        return False
+    libsecp_runner, k256_runner, libsecp_output, k256_output, compared = rows
+    file_ids = [libsecp_runner[3], k256_runner[3]]
     return (
-        all(len(fields) == 2 for fields in labels_and_hashes)
-        and [fields[0] for fields in labels_and_hashes] == ["libsecp256k1", "k256", "compared"]
-        and len({fields[1] for fields in labels_and_hashes}) == 1
+        libsecp_runner[:2] == ["runner", "libsecp256k1"]
+        and k256_runner[:2] == ["runner", "k256"]
+        and libsecp_output[:2] == ["output", "libsecp256k1"]
+        and k256_output[:2] == ["output", "k256"]
+        and compared[0] == "compared"
+        and libsecp_runner[2:5] == libsecp_output[2:5]
+        and k256_runner[2:5] == k256_output[2:5]
+        and libsecp_runner[2] != k256_runner[2]
+        and (file_ids == ["unavailable", "unavailable"] or len(set(file_ids)) == 2)
+        and libsecp_runner[4] != k256_runner[4]
+        and all(is_hex(value, 32) for value in [libsecp_runner[2], k256_runner[2]])
+        and all(is_hex(value, 32) for value in [libsecp_runner[4], k256_runner[4]])
+        and len({libsecp_output[5], k256_output[5], compared[1]}) == 1
+        and is_hex(compared[1], 32)
     )
 
 
@@ -135,38 +150,72 @@ def require_generator_authorities(root: pathlib.Path) -> None:
     real_anchors = [
         'LIBSECP_RUNNER="$WORK/libsecp-sign"',
         'exec cargo run --quiet --locked --manifest-path "$ORACLE_WORK/rust/Cargo.toml" -- "$1"',
+        'K256_RUNNER="$WORK/k256-runner"',
     ]
     for real_anchor in real_anchors:
         if generator.count(real_anchor) != 1:
             fail(f"real signing authority command missing or duplicated: {real_anchor}")
+    runner_assignments = re.findall(r"^  (?:LIBSECP_RUNNER|K256_RUNNER)=.*$", generator, re.MULTILINE)
+    if runner_assignments != [
+        '  LIBSECP_RUNNER="$WORK/libsecp-control-runner"',
+        '  K256_RUNNER="$WORK/k256-control-runner"',
+        '  LIBSECP_RUNNER="$WORK/libsecp-sign"',
+        '  K256_RUNNER="$WORK/k256-runner"',
+    ]:
+        fail("signing authority runner bindings drifted or were reassigned")
+    k256_setup = '''  cat > "$WORK/k256-runner" <<'EOF'
+#!/bin/sh
+# ORACLE_EXECUTION: k256 + locked rfc6979 0.4.0
+exec cargo run --quiet --locked --manifest-path "$ORACLE_WORK/rust/Cargo.toml" -- "$1"
+EOF
+  chmod +x "$WORK/k256-runner"
+  K256_RUNNER="$WORK/k256-runner"'''
+    if generator.count(k256_setup) != 1:
+        fail("real k256 runner is not exactly bound to its locked cargo command")
     common_path = [
-        r'^  ORACLE_WORK="\$WORK" "\$libsecp_runner" "\$input" > "\$libsecp_output"$',
-        r'^  record_oracle_completion libsecp256k1 "\$libsecp_output" "\$receipt"$',
-        r'^  ORACLE_WORK="\$WORK" "\$k256_runner" "\$input" > "\$k256_output"$',
-        r'^  record_oracle_completion k256 "\$k256_output" "\$receipt"$',
-        r'^  compare_oracle_outputs "\$libsecp_output" "\$k256_output" "\$receipt"$',
-        r'^  require_oracle_completion "\$receipt"$',
+        '  attest_oracle_runners "$libsecp_runner" "$k256_runner" "$receipt"',
+        '  ORACLE_WORK="$WORK" "$libsecp_runner" "$input" > "$libsecp_output"',
+        "  record_oracle_completion libsecp256k1 \\",
+        '  ORACLE_WORK="$WORK" "$k256_runner" "$input" > "$k256_output"',
+        "  record_oracle_completion k256 \\",
+        '  compare_oracle_outputs "$libsecp_output" "$k256_output" "$receipt"',
+        '  require_oracle_completion "$receipt"',
     ]
     positions = []
-    for pattern in common_path:
-        match = re.search(pattern, generator, re.MULTILINE)
-        if match is None:
-            fail(f"common signing oracle execution disabled: {pattern}")
-        positions.append(match.start())
+    for anchor in common_path:
+        if generator.count(anchor) != 1:
+            fail(f"common signing oracle execution disabled or duplicated: {anchor}")
+        positions.append(generator.index(anchor))
     if positions != sorted(positions):
         fail("common signing oracle execution/receipt order drifted")
     proof = run_oracle_control(generator_path, root)
     if not oracle_control_completed(proof):
         fail("fresh oracle run/compare completion evidence is absent")
-    proof_lines = proof.stdout.splitlines()
-    labels_and_hashes = [line.split() for line in proof_lines]
-    if any(len(fields) != 2 for fields in labels_and_hashes):
-        fail("oracle completion receipt is malformed")
-    if [fields[0] for fields in labels_and_hashes] != ["libsecp256k1", "k256", "compared"]:
-        fail("oracle completion receipt labels drifted")
-    if len({fields[1] for fields in labels_and_hashes}) != 1:
-        fail("oracle completion receipt did not compare matching fresh outputs")
     mutations = [
+        (
+            "direct runner alias",
+            '  K256_RUNNER="$WORK/k256-control-runner"',
+            '  K256_RUNNER="$WORK/libsecp-control-runner" # alias the first runner',
+        ),
+        (
+            "same-content runner copy",
+            '  chmod +x "$WORK/libsecp-control-runner" "$WORK/k256-control-runner"',
+            '  chmod +x "$WORK/libsecp-control-runner" "$WORK/k256-control-runner"\n'
+            '  cp "$WORK/libsecp-control-runner" "$WORK/k256-control-runner" # copy first runner bytes',
+        ),
+        (
+            "runner identity receipt omission",
+            '  attest_oracle_runners "$libsecp_runner" "$k256_runner" "$receipt"',
+            '  attest_oracle_runners "$libsecp_runner" "$k256_runner" "$receipt"\n'
+            '  : > "$receipt" # omit runner identity receipt',
+        ),
+        (
+            "runner identity receipt forgery",
+            '  attest_oracle_runners "$libsecp_runner" "$k256_runner" "$receipt"',
+            '  attest_oracle_runners "$libsecp_runner" "$k256_runner" "$receipt"\n'
+            "  printf '%s\\n' 'runner libsecp256k1 forged-a forged-file-a forged-content-a' "
+            "'runner k256 forged-b forged-file-b forged-content-b' > \"$receipt\"",
+        ),
         (
             "post-setup early exit",
             "# ORACLE_MODE_SETUP_COMPLETE",
