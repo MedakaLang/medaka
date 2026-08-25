@@ -25194,6 +25194,39 @@ checkOneCallObligation deferNonGround univ iface occs loc =
   -- RULE 2/3 undetermined-var analysis.
   else if not (allConcreteHeads args) then
     if deferNonGround then () else checkUndeterminedObligations univ iface args loc
+  -- 🚨 #1867 (S1): A TRUNCATED GOAL IS UNDER-DETERMINED, NOT DECIDABLE HERE.
+  -- `recordCallObligations` records one obligation per SHATTERED per-tyvar dict slot,
+  -- so a call to `useIx : (Ix a Char, Ix a Bool) => a -> Int` records the 1-ary goal
+  -- `Ix Int` — the SECOND parameter of a two-parameter predicate is simply dropped.
+  -- Its own header says this is deliberate ("widening this to a joint vector … moves
+  -- emitted arity"), and it is: the JOINT obligation for the same predicate is recorded
+  -- separately by `declaredSchemeOblsFor`/`declaredOblMixed` and reaches this checker
+  -- with the full vector (`Ix Int Bool`, `Ix Int Char`), where it decides correctly.
+  -- What was NOT safe is letting the truncated goal ALSO decide.  Below,
+  -- `implMatchesArgsU` at arity 1 is `implMatchesReceiverU`, which matches on the
+  -- receiver ALONE, so `Ix Int` matches BOTH `impl Ix Int Char` and `impl Ix Int Bool`;
+  -- `checkNestedReqs` then poses that 1-ary goal to the min⊑ selector
+  -- (`reqObligationsFor` → `findMatchingImplReqsU` → `pickMostSpecificEntry`), which
+  -- finds two ⊑-incomparable candidates and reports `T-AMBIGUOUS-INSTANCE`.  MEASURED:
+  -- that reject is the whole of #1867 — trace order at the base was
+  -- `RECOBL Ix ×2` → `CHKOBL Ix nargs=1 args=Int` → `AMBIGOVERLAP-FIRE ngoals=1 ncands=2`
+  -- → `RECERR T-AMBIGUOUS-INSTANCE`, with the correct 2-ary goals checked separately and
+  -- silently accepting.  `medaka check` never surfaced it and `run`/`build` rejected the
+  -- program unlocated (the #1812 surface).
+  -- ⚠️ THE GATE IS "SOME IMPL OF THIS INTERFACE DECLARES MORE HEAD TYPES THAN THE GOAL
+  -- CARRIES", not "arity 1".  A genuine 1-parameter interface has no impl head longer
+  -- than 1, so this arm cannot fire for it and every existing 1-ary verdict is
+  -- byte-identical.  [W-QUIETER] check: nothing goes silent that was decidable here —
+  -- the truncated goal was never decidable (it cannot see the dropped argument), and
+  -- the joint goal that CAN decide is checked on the same channel.  Negative controls,
+  -- all still rejected with a located diagnostic: an unsatisfiable declared context
+  -- (`No impl of Ix for Int Bool`), the same with the constraint INFERRED rather than
+  -- declared, and a conditional two-parameter instance whose `requires` fails
+  -- (`No impl of Tag for Color`, i.e. `checkNestedReqs` still runs — via the joint goal).
+  -- Measured firings across `stdlib/list.mdk` and `compiler/driver/medaka_cli.mdk`: 0.
+  -- Regression: test/dict_fixtures/s-nary-truncated-goal-not-ambiguous.mdk (accept) and
+  -- s-nary-truncated-goal-joint-rejects.mdk (reject).
+  else if oblGoalIsTruncated univ iface args then ()
   else if implMatchesArgsU univ iface args then
     -- Recurse into a matched CONDITIONAL instance's `requires` (`impl Display (a, b)
     -- requires Display a, Display b`) so an unsatisfied element constraint surfaces
@@ -25252,6 +25285,29 @@ checkOneCallObligation deferNonGround univ iface occs loc =
 implMatchesArgsU : ImplUniverse -> IfaceRef -> List Mono -> Bool
 implMatchesArgsU univ iface [a] = implMatchesReceiverU univ iface a
 implMatchesArgsU univ iface args = implMatchesU univ iface args
+
+-- #1867: is this goal a TRUNCATION of a k-parameter predicate, k > the goal's own
+-- arity?  Scoped to arity 1 because that is the only truncation any producer mints:
+-- `recordCallObligations` shatters a predicate into ONE obligation per dict slot, each
+-- carrying a single mono.  Every other goal on this channel is a whole vector.  See
+-- `checkOneCallObligation`'s arm for the verdict this decides and why deferring is not
+-- a [W-QUIETER] regression.
+oblGoalIsTruncated : ImplUniverse -> IfaceRef -> List Mono -> Bool
+oblGoalIsTruncated univ iface [a0] = univHeadLongerThan univ iface a0 1
+oblGoalIsTruncated _ _ _ = False
+
+-- Does SOME impl of [iface] that this goal could reach declare more than [n] head
+-- types?  Reads exactly the two buckets `implMatchesReceiverU` reads, in the same
+-- order (concrete receiver-head bucket, then the iface's headless bucket), so the
+-- question is asked over precisely the impl set the arity-1 match test would have
+-- matched against — no third universe, no new registry read.
+univHeadLongerThan : ImplUniverse -> IfaceRef -> Mono -> Int -> Bool
+univHeadLongerThan univ iface a0 n = bucketAnyLonger (univConcreteBucket univ iface (headTyconMono a0)) n
+  || bucketAnyLonger (univHeadless univ iface) n
+
+bucketAnyLonger : List (List Ty, List Require) -> Int -> Bool
+bucketAnyLonger [] _ = False
+bucketAnyLonger ((tys, _)::rest) n = listLen tys > n || bucketAnyLonger rest n
 
 -- an undetermined-var check per argument of the predicate (at arity 1 this is exactly
 -- the old single call).

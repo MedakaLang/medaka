@@ -177,6 +177,7 @@ bodyRDictNames : Expr -> List String
 boolOp : Mono -> Mono -> Mono
 boundTvarId : List Int -> Mono -> List Int
 boundTyvarIds : List Int -> List Mono -> Option (List Int)
+bucketAnyLonger : List (List Ty, List Require) -> Int -> Bool
 bucketArgsMatch : List (List Ty, List Require) -> List Mono -> Bool
 bucketArgsMatchReqs : List (List Ty, List Require) -> List Mono -> Bool
 bucketImplEntries : List ImplEntry -> Map String (List ImplEntry) -> Map String (List ImplEntry)
@@ -1334,6 +1335,7 @@ oblAsTuple : UObligation -> (IfaceRef, List Mono, Option Loc)
 oblDedupKey : IfaceRef -> List Mono -> String
 oblDispatchMonos : UObligation -> List Mono
 oblDispatchMonosGo : String -> List String -> Ty -> Mono -> List Mono
+oblGoalIsTruncated : ImplUniverse -> IfaceRef -> List Mono -> Bool
 oblIfaceKey : IfaceRef -> TabKey
 oblIfaceKeys : IfaceRef -> List TabKey
 oblKeyParts : Int -> List (Option HeadKey) -> (List TabKey, List Int)
@@ -1872,6 +1874,7 @@ unitMangledShadows : List String -> (String, List Decl) -> List (String, String)
 univAddIfaceTag : Bool -> RegKey -> TabKey -> Registry SetRegistry -> Registry SetRegistry
 univConcreteBucket : ImplUniverse -> IfaceRef -> Option HeadKey -> List (List Ty, List Require)
 univHeadCountsInCensus : List Ty -> Bool
+univHeadLongerThan : ImplUniverse -> IfaceRef -> Mono -> Int -> Bool
 univHeadless : ImplUniverse -> IfaceRef -> List (List Ty, List Require)
 univReceiverTag : List Ty -> Option HeadKey
 unknownCtorMsg : String -> String

@@ -1,0 +1,19 @@
+-- The CONSTRAINED CALLEE half of `s-nary-truncated-goal-joint-rejects` (#1867).
+--
+-- EXACTLY ONE dimension differs from `s-nary-truncated-goal-not-ambiguous/lib.mdk`:
+-- the second impl's LEAD argument is `Bool`, not `Int`, so `Ix Int Bool` -- the
+-- predicate `useIx 5` actually needs -- has no impl at all.  `impl Ix Int Char` is
+-- still present precisely so the TRUNCATED goal `Ix Int` remains satisfiable by
+-- receiver-only matching: the only thing wrong with the program is the argument
+-- the truncation drops.
+export interface Ix a b where
+  ix : a -> b -> Int
+
+export impl Ix Int Char where
+  ix _ _ = 222
+
+export impl Ix Bool Bool where
+  ix _ _ = 111
+
+export useIx : (Ix a Bool) => a -> Int
+useIx x = ix x True

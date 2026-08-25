@@ -1,0 +1,30 @@
+-- THE FAIL-CAPABLE HALF of `s-nary-truncated-goal-not-ambiguous` (#1867).
+--
+-- Hand-derived from DICT-SEMANTICS §3 BEFORE running anything.  `useIx 5`
+-- instantiates the declared context to `Ix Int Bool`.  No impl has that head
+-- vector (`Ix Int Char` and `Ix Bool Bool` are the only two), (inst) is
+-- inapplicable, and the program must be REJECTED, loudly and by a diagnostic --
+-- `T-NO-IMPL`, "No impl of Ix for Int Bool".
+--
+-- 🚨 WHY THIS ROW EXISTS.  #1867's fix DEFERS a 1-ary goal recorded against an
+-- interface some impl of which declares more head types -- the truncation
+-- `recordCallObligations` mints.  Deferring is sound only because the JOINT
+-- obligation for the same predicate is recorded separately (the declared-context
+-- path) and decides in its place.  This file is the row that fails if that ever
+-- stops being true: the truncated goal `Ix Int` HERE still matches
+-- `impl Ix Int Char` receiver-only, so a fix that deferred the truncated goal
+-- WITHOUT the joint obligation behind it would turn this program into a silent
+-- accept -- a `run` dispatching a `Char`-keyed dict at `Bool`, i.e. a type-confused
+-- dict at exit 0 (§5).  The sibling ACCEPT row cannot see that: it is green under
+-- exactly that broken fix too.
+--
+-- ⚠️ NOT RED AT THE MERGE-BASE, DELIBERATELY, and the row is still not redundant.
+-- #1867's fix is a pure REJECTION-NARROWING, so no verdict moves from reject to
+-- accept; MEASURED at `44257622` cold built, this program rejects on all three
+-- verbs with `T-NO-IMPL` exactly as it does at head.  Its value is forward-facing,
+-- the same standing the `s-nary-given-nonlead-mismatch-rejected` canary has.
+--
+-- ⚠️ VERDICT AND CODE, NO LOCATION.
+import lib.{useIx}
+
+main = println (useIx 5)
