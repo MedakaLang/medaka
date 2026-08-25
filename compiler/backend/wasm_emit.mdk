@@ -820,7 +820,8 @@ canonFn prog n =
 -- so the SAME literal appearing twice in source gets two segments; "per distinct
 -- literal" was aspirational, not what `freshStrSeg`/`emitLitRef emit (LString s)`
 -- actually do — init'd via `array.new_data`, the §11-preferred non-const-array
--- scheme). Segment state belongs to each fresh `WasmEmit`; `useStr` remains ambient.
+-- scheme). Both segment state and `useStr` itself belong to each fresh `WasmEmit`
+-- record (a `Ref Bool` field, not an ambient cell).
 -- ── gap census (mirrors LLVM's per-emission gap recording) ───────────────────
 -- The WasmGC emitter normally `panic`s at the first node it can't lower (`gap`).
 -- In CENSUS mode the gap helpers instead RECORD the reason and return a
