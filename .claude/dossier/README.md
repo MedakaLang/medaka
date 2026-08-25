@@ -15,6 +15,7 @@ carries a bracketed ID and a link into one of the files below.
 | `gates.md` | `make preflight`, the gate suite, oracle staleness, golden capture, the must-fail tracker |
 | `tooling.md` | The pre-commit hook, `fmt`/`lint`/snapshot blessing, and every `.mdk` debugging probe |
 | `traps.md` | The Traps section, dogfooding, writing tests, the shell-gate traps, and the skill table |
+| `ci.md` | `ci.yml` incident narrative: shard-cost derivation, build-once/fan-out, and the per-shard job-guard mechanisms |
 
 ## Why here and not `docs/ops/`
 
