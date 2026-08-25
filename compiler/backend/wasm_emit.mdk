@@ -256,7 +256,7 @@ import backend.trmc_analysis.{
   armBody,
   lastStmtExpr,
 }
-import backend.private_mangle.{hashName, sanitizeId}
+import backend.private_mangle.{hashName, injectiveIdent}
 import backend.emit_support.{
   eagerReachMap,
   bindEagerReach,
@@ -4005,32 +4005,45 @@ applyArgsC hd (a::rest) = applyArgsC (CApp hd a) rest
 implFnSym : Prog -> String -> String -> String
 implFnSym prog tag method = implFnSymOfTag (implSymTagW prog method tag) method
 
--- build the symbol from an ALREADY-RESOLVED symbol tag (a bare head, or a sanitized
--- canonical key) — used where the caller already computed the symTag (the RDict
--- dispatch chain, via methodImpls) so it need not re-resolve through findByTagW.
+-- build the symbol from an ALREADY-RESOLVED symbol tag (a bare head, or an
+-- injectively encoded canonical key) — used where the caller already computed the
+-- symTag (the RDict dispatch chain, via methodImpls) so it need not re-resolve
+-- through findByTagW.
 implFnSymOfTag : String -> String -> String
 implFnSymOfTag symTag method = "mdk_impl_\{symTag}_\{gname method}"
 
 -- resolve a raw dispatch tag (head OR canonical key) to the impl's SYMBOL tag.  Find
 -- the matching impl entry (findByTagW matches on head t OR key k), then apply the C7
 -- head-uniqueness rule to its (head, key).  No entry (a defaulted method has its own
--- $mdk_default_* path, never this) ⇒ sanitize the raw tag defensively.
+-- $mdk_default_* path, never this) ⇒ encode the raw tag defensively.
+--
+-- ⚠️ The fallback arm must use the SAME encoder as `implFnSymTagW` above, not the
+-- lossy `sanitizeId`, even though it is believed unreachable.  It names a symbol a
+-- DEFINITION site spelled with `implFnSymTagW`; the moment the two encoders differ,
+-- a reachable miss here mints a reference to a function that was never defined.
+-- Before #1950 both spellings were `sanitizeId` and so agreed by accident — keeping
+-- them equal by construction is what preserves that, and costs one token.
 implSymTagW : Prog -> String -> String -> String
 implSymTagW prog method tag = match findByTagW method tag (methodEntriesW prog method)
   Some (CImplEntry _ _ (CImplTagged t k _ _ _ _)) =>
     implFnSymTagW (methodEntriesW prog method) method t k
-  _ => sanitizeId tag
+  _ => injectiveIdent tag
 
 -- TYPECHECK-AUDIT C7 (wasm peer of llvm_emit's implFnSymTag): the SYMBOL tag a
 -- same-head-tycon impl is emitted/dispatched under.  Sole impl of (method, head) ⇒
 -- the bare head (existing symbols unchanged); a genuine C7 collision (≥2 distinct
--- canonical keys at one head) ⇒ the sanitized canonical key, byte-distinct per impl.
+-- canonical keys at one head) ⇒ the INJECTIVELY encoded canonical key, byte-distinct
+-- per impl.  #1950: this arm used the MANY-TO-ONE `sanitizeId`, so two keys differing
+-- only in `[^A-Za-z0-9_]` positions collapsed onto one wasm function — the same
+-- defect the LLVM peer carried, independently.  `private_mangle.injectiveIdent` is
+-- the one shared definition, so both backends and `core_ir_lower`'s injectivity
+-- guard agree on the emitted symbol.
 implFnSymTagW : List CImplEntry -> String -> String -> String -> String
 implFnSymTagW entries method tag key =
   if headTagUniqueW entries method tag then
     tag
   else
-    sanitizeId key
+    injectiveIdent key
 
 -- does the head tycon [tag] of [method] have a single impl, or several distinct ones
 -- (C7 collision)?  Count DISTINCT canonical keys at this head — a multi-clause impl
