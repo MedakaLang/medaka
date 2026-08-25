@@ -1,6 +1,6 @@
 abstractFieldMsg : String -> String -> String
 abstractSlotIds : List Mono -> List Int
-activeDictPredOf : String -> Mono -> String -> Option String
+activeDictPredOf : String -> List Mono -> String -> Option String
 activeDictVarForEncl : Mono -> String -> Option String
 activeDictVarOf : Mono -> Option String
 activeDictVarOfEncl : Option Predicate -> Mono -> String -> Option String
@@ -82,7 +82,7 @@ anyConcreteHead : List Mono -> Bool
 anyContainsI : List Int -> List Int -> Bool
 anyCtorSiblingWithholds : Option HeadKey -> String -> String -> List String -> Bool
 anyDepReaches : List String -> List String -> String -> List (String, List Decl) -> Bool
-anyGivenMatches : String -> Mono -> List (String, Mono, String) -> Bool
+anyGivenMatches : String -> List Mono -> List (String, List Mono, String) -> Bool
 anyHoleAtom : List Atom -> Bool
 anyIdPinned : List Int -> List (Int, Mono) -> Bool
 anyIn : List Int -> List Int -> Bool
@@ -736,7 +736,7 @@ firstFieldName : List FieldAssign -> Option String
 firstIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
 firstImplMethodLoc : List ImplMethod -> Option Loc
 firstOrZero : List Int -> Int
-firstPredForEncl : String -> Mono -> String -> List (String, Mono, String) -> Option String
+firstPredForEncl : String -> List Mono -> String -> List (String, List Mono, String) -> Option String
 firstReqMatch : List (List Ty, List Require) -> List Mono -> Option (List (String, Mono), List Require)
 firstRowPerName : Map String Unit -> List (String, (String, String)) -> List (String, (String, String))
 firstTupleCallHint : List Mono -> Option (String, Option (Loc, String))
@@ -788,6 +788,7 @@ goalPredOf : String -> Mono -> Option Predicate
 goalPredOfOp : String -> Option Predicate
 goalSiteLoc : Ref (Option Loc)
 goalSlotStillOpen : List Mono -> Bool
+goalVecOfKind : String -> Mono -> EntailKind -> List Mono
 goalsClosed : List Mono -> Bool
 graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
 graphCtorExports : List Decl -> List (String, List Decl) -> Map String (List (String, String, Ident))
@@ -1282,6 +1283,7 @@ monoTyvarId : Mono -> Int
 monoTyvarIds : Mono -> List Int
 monoUnboundIds : Mono -> List Int
 monoUnboundVarLevels : Mono -> List (Int, Int)
+monoVecSameGiven : List Mono -> List Mono -> Bool
 monoVectorClosed : List Mono -> Bool
 monosTvarIds : List Int -> List Mono -> List Int
 nameOf : Ref (List (Int, String)) -> Ref Int -> Int -> String

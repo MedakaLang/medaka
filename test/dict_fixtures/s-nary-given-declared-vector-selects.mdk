@@ -1,0 +1,55 @@
+-- #1956 / #1937's remainder, THE ACCEPT DIRECTION: a MULTI-ARGUMENT structured
+-- declared context selects PER CALL SITE, from the dict the caller built, and
+-- the answer does not depend on `impl` declaration order.
+--
+-- Hand-derived from DICT-SEMANTICS §3 BEFORE running anything.  `f`'s context is
+-- the 2-ary predicate `Conv (Wrap a) b`, and the body goal IS that predicate, so
+-- `(d_pi : pi) in P` holds and (assum) applies -- and §3's precedence clause
+-- ("assum/super takes precedence; inst fires only when no assumption matches")
+-- forbids the body from committing to an impl of its own.  Each call site
+-- discharges its own instantiated goal by (inst): `f (Wrap 5) True` grounds to
+-- `Conv (Wrap Int) Bool` and `f (Wrap 'c') 7` to `Conv (Wrap Char) Int`, two
+-- singleton matching sets, two different impls.  So the two calls must print
+-- `wrap-int-bool` and `wrap-char-int` respectively, i.e. `wrap-int-bool/wrap-char-int`.
+-- (The two calls are joined with `/` rather than `|` only because `|` is
+-- diff_compiler_dict_semantics.sh's own TABLE field separator.)
+--
+-- 🚨 WHAT THIS PINS, AND WHY IT IS NOT ITS SIBLINGS' DUPLICATE.  The two
+-- `s-multiparam-structured-*` rows both fix the predicate's SECOND argument to
+-- `Int`, so lead-argument-only keying and whole-vector keying are
+-- indistinguishable on them.  Here the two call sites differ at BOTH positions,
+-- which is what makes the vector -- not the lead -- the thing that has to select.
+--
+-- MEASURED at the sprint base `e4587a04` on this tree, cold built:
+-- `run` printed `wrap-int-bool/wrap-int-bool` at exit 0 -- the FIRST impl's body
+-- for both calls, because `registerPredGiven` matched a single-subject
+-- `[subject]` vector and returned `()` for anything longer, so `entailAssum`
+-- could never see this predicate, `entail` fell to `entailInst`, and the body was
+-- statically committed to the ABSTRACTION-time pick while both callers' correctly
+-- built dicts went unread.
+--
+-- 🚨 AND IT WAS DECIDED BY DECLARATION ORDER: with the two `impl Conv` blocks
+-- swapped, the base printed `wrap-char-int/wrap-char-int` -- measured at
+-- `e4587a04` on the byte-identical swapped twin `probes/p1956_swap.mdk`, not on
+-- this file -- which DICT-SEMANTICS §3
+-- forbids outright.  Section 4's permutation pair grades that half automatically.
+--
+-- ⚠️ THE REJECT SIBLING IS s-nary-given-nonlead-mismatch-rejected.mdk: a fix that
+-- answered this goal by matching the LEAD argument alone would also answer that
+-- one, and would hand its body a `Conv (Wrap Int) Int` dict to call at `Bool` --
+-- so neither file is meaningful alone.
+data Wrap a = Wrap a
+
+interface Conv s t where
+  conv : s -> t -> String
+
+impl Conv (Wrap Int) Bool where
+  conv _ _ = "wrap-int-bool"
+
+impl Conv (Wrap Char) Int where
+  conv _ _ = "wrap-char-int"
+
+f : Conv (Wrap a) b => Wrap a -> b -> String
+f w y = conv w y
+
+main = println "\{f (Wrap 5) True}/\{f (Wrap 'c') 7}"

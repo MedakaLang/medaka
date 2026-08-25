@@ -7248,7 +7248,11 @@ data PerRun = PerRun {
     seedSchemesOut : Ref (List (String, Scheme)),
     pendingArgStamps : Ref (List PendingEntry),
     activeDictVars : Ref (List (Int, String)),
-    activeDictPreds : Ref (List (String, Mono, String)),
+    -- #1956: the given is keyed by the predicate's WHOLE argument VECTOR, not by its
+    -- lead argument alone (iface name, arg vector, dict param name).  A vector is the
+    -- same predicate as another iff they have equal length and `monoSameGiven` holds at
+    -- every position, in order — see `monoVecSameGiven`.
+    activeDictPreds : Ref (List (String, List Mono, String)),
     -- #1154 RESIDUAL: the impl-`requires` twin of `enclPreds`.  One entry per dict slot
     -- an impl's `requires` opens: the tyvar ids the slot is keyed on, and the WHOLE
     -- predicate that slot discharges.  `activeDictVars` above cannot answer a body's
@@ -8069,10 +8073,19 @@ renderConstraintCtx ctx cnt (o::rest) =
   -- #1161: a vector-carrying entry renders its WHOLE argument vector under the SAME
   -- naming context as the body, so `Ix a Bool =>` prints with its ground argument
   -- instead of degrading to `Ix a`.  An ids-only entry renders exactly as before.
+  -- #1952: ARGUMENT precedence (3), not 2.  At prec 2 `wrapIf (prec > 2)` leaves an
+  -- application BARE, so a STRUCTURED predicate argument printed as `Conv Wrap a b =>` —
+  -- which is not the same predicate: it reads as a four-argument context and does not
+  -- round-trip through the parser.  This is SOURCE SYNTAX (`check --types`, LSP hover,
+  -- inlay hints all show it as a signature), so it owes the parens unconditionally, at
+  -- arity 1 as much as at arity 2.  Bare-tyvar and nullary-`TCon` arguments are atoms and
+  -- render identically at either precedence, so `Num a =>` / `Ix a Bool =>` do not move —
+  -- and the compiler's and stdlib's own declared contexts are all bare-tyvar 1-ary, so
+  -- neither the snapshot corpus nor the self-compile fixpoint sees this at all.
   let s = if isEmptyL o.voArgs then
     joinWith " " (o.voIface.irName :: map (id => nameOf ctx cnt id) o.voIds)
   else
-    joinWith " " (o.voIface.irName :: map (ppGo ctx cnt 2) o.voArgs)
+    joinWith " " (o.voIface.irName :: map (ppGo ctx cnt 3) o.voArgs)
   s :: renderConstraintCtx ctx cnt rest
 
 -- Render a binding's scheme WITH its inferred/declared constraint context, looked
@@ -21720,8 +21733,31 @@ entailAssum : Mono -> String -> String -> EntailKind -> Option String
 entailAssum m encl name kind = match entailAssumVar m encl name kind
   Some dname => Some dname
   None => match ifaceOfMethodName name
-    Some iface => activeDictPredOf iface m encl
+    Some iface => activeDictPredOf iface (goalVecOfKind name m kind) encl
     None => None
+
+-- #1956: the GOAL PREDICATE's whole argument vector at this site, which is what the
+-- vector-keyed given registry is keyed on.  Each arm is the SAME projection `entailInst`
+-- selects its impl row on, one rung down the ladder — so the rung that ANSWERS a goal
+-- from an in-scope dict and the rung that SELECTS an impl for it ask about one and the
+-- same predicate.  Reading `m` alone here is #1956: `m` is a single position (the
+-- discriminating mono), and a multi-parameter predicate is not identified by it.
+--   * EKReturn / EKArg — `ifaceParamMonos`, exactly `entailInst`'s `paramMonos`/`goals`,
+--     falling back to `[m]` when the method has no registered interface (unchanged
+--     single-position behaviour for a plain `=>`-constrained fn).
+--   * EKNestedTop — `m::rest`: the kind stores only the TAIL past arg 0 on purpose (arg
+--     0 lives in `entail`'s own [m] so the two copies cannot drift), and `entailInst`'s
+--     own arm reassembles it the same way for `keyForSiteByIface`.
+--   * EKOp — `[m]`: an operator node carries one operand mono and no method occurrence,
+--     so no vector is recoverable; every operator interface is single-param anyway
+--     (`goalPredOfOp` and `stampOpRouteVal` say the same).
+goalVecOfKind : String -> Mono -> EntailKind -> List Mono
+goalVecOfKind name m (EKReturn fullMono _) =
+  fromOption [m] (ifaceParamMonos name fullMono)
+goalVecOfKind name m (EKArg fullMono) =
+  fromOption [m] (ifaceParamMonos name fullMono)
+goalVecOfKind _ m (EKNestedTop _ _ _ _ rest) = m::rest
+goalVecOfKind _ m (EKOp _ _) = [m]
 
 -- assum: which in-scope dict-param (if any) does [m]'s head constraint var read?  The
 -- genuine/arg kinds prefer the enclosing method's own slot (activeDictVarOfEncl); the
@@ -25528,8 +25564,17 @@ spineHeadMono t = match normalize t
   TApp f _ => spineHeadMono f
   other => other
 
+-- #1952: a MULTI-ARGUMENT goal names its arguments at ARGUMENT precedence, so
+-- `Conv (Wrap a) Int` no longer prints as `Conv for Wrap a Int` — which reads as a
+-- three-argument predicate and cannot be matched against the impl heads printed beside
+-- it.  ⚠️ The length gate is the whole disambiguation and is not a hedge: with exactly
+-- ONE argument the entire remainder of the message IS that argument, so there is nothing
+-- to mis-group, and `ppMonosShared` is kept there so every existing single-argument
+-- reject (`No impl of Eq for List Int`) renders byte-identically.  This message is prose,
+-- not source — `renderConstraintCtx` is the surface that owes parens unconditionally.
 noImplFoundMsg : String -> List Mono -> String
-noImplFoundMsg iface args = "No impl of \{iface} for \{ppMonosShared args}"
+noImplFoundMsg iface [arg] = "No impl of \{iface} for \{ppMonosShared [arg]}"
+noImplFoundMsg iface args = "No impl of \{iface} for \{ppPredArgsShared args}"
 
 -- Actionable-fix hint (F dimension) for a `No impl of <iface> for <ty>` reject:
 -- only when [args] is a single user-declared data type (a `dataParamKindsRef`
@@ -26656,10 +26701,22 @@ registerReqSlots mname implTvMap slot ((Require { requireHead = iface, requireAr
 -- `entailInst`, statically committing the body to the GENERAL instance and discarding the
 -- most-specific dict the construction site had correctly built and passed.  DICT-SEMANTICS
 -- §3 (assum before inst) + :155-166 (sub-evidence is never pre-baked at the declaration).
--- Keyed by (iface, subject mono) so it is neither iface-blind nor structure-blind, and
--- matched by `monoSameGiven` — structural, on rigid-tyvar IDENTITY, never unification.
--- Only single-parameter ifaces get a subject (multi-param `requires` registers nothing —
--- the tyvar-id path is unchanged for them).
+-- Keyed by (iface, WHOLE argument vector) so it is neither iface-blind nor
+-- structure-blind, and matched by `monoVecSameGiven` — pointwise `monoSameGiven`,
+-- structural, on rigid-tyvar IDENTITY, never unification.
+--
+-- 🚨 #1956 / #1937: THE KEY IS THE VECTOR, NOT THE LEAD ARGUMENT.  This arm used to
+-- match `[subject]` and return `()` for any longer vector, so a MULTI-PARAMETER
+-- declared context (`f : Conv (Wrap a) b => …`) had no consumption-side answer at all:
+-- `entailAssum` could never see it, `entail` fell through to `entailInst`, and the body
+-- was statically committed to whichever impl was most specific at ABSTRACTION time while
+-- the caller's correctly-built dict went unread — so `f (Wrap 5) True` and `f (Wrap 'c')
+-- 7` both took the SAME impl, and swapping the two `impl` blocks changed which one, at
+-- exit 0 (DICT-SEMANTICS §3 forbids selection by declaration order outright).
+-- ⚠️ THE ANSWER TO "when are two predicate argument vectors the same predicate?" IS
+-- POINTWISE STRUCTURAL IDENTITY OVER THE VECTOR: equal length, and `monoSameGiven` at
+-- every position, in order.  `goalMatchesGiven`/`goalSlotStillOpen` follow this shape
+-- exactly, and must keep following it — see their own headers.
 --
 -- §6.1.3's rigid commit is preserved TWICE OVER, and the guard below is the load-bearing
 -- one: `requires S a` is a bare-tyvar given, so it never reaches this registry at all, and
@@ -26669,8 +26726,10 @@ registerReqSlots mname implTvMap slot ((Require { requireHead = iface, requireAr
 -- would, and this is deliberately not unification.  Pinned by
 -- test/build_diff_fixtures/impl_requires_structured_rigid_control.mdk.
 --
--- ⚠️ STRUCTURED subjects ONLY (`monoIsBareTyvar` guard) — a MINIMALITY guard, kept because
--- the bare case buys nothing and costs surface, not because a gate caught it.  A bare-tyvar
+-- ⚠️ STRUCTURED vectors ONLY (the `allList monoIsBareTyvar` guard — a vector EVERY one of
+-- whose positions is a bare tyvar registers nothing) — a MINIMALITY guard, kept because
+-- the all-bare case buys nothing and costs surface, not because a gate caught it.  A
+-- bare-tyvar
 -- given (`requires S a`) is already answered by `activeDictVars`, which `entailAssum`
 -- consults FIRST, so registering it here could only ever produce a second answer to an
 -- already-answered goal.  It would also opt that goal into this registry's one sharp edge:
@@ -26681,11 +26740,21 @@ registerReqSlots mname implTvMap slot ((Require { requireHead = iface, requireAr
 -- A STRUCTURED subject is matched head-first down a TCon spine, so it answers only a goal
 -- of the same shape at the same interface, and the id comparison is reached only after that
 -- shape already agrees.
+--
+-- ⚠️ #1956 WIDENS THAT SHARP EDGE TO MORE POSITIONS, and does not introduce a new one.
+-- A vector like `[Wrap a, b]` is admitted because SOME position is structured, but its
+-- SECOND position is a bare tyvar matched by raw id — the same `TVar`/`TVar` arm of
+-- `monoSameGiven`, one position over.  The structured position still gates the whole
+-- match (all positions must agree, so a stale-id coincidence at a bare position can only
+-- matter for a goal that already agrees structurally elsewhere at the same interface),
+-- which is why this is a widening of an existing hazard rather than a new one.  Removing
+-- it is the same scoped-projection question `activeDictVarOf`'s `inImpl` gate answers,
+-- and belongs with the key-side work (#1904), not here.
 registerPredGiven : String -> List Mono -> String -> Unit
-registerPredGiven iface [subject] dname
-  | monoIsBareTyvar subject = ()
-  | otherwise = perRun.value.activeDictPreds := (iface, subject, dname)::perRun.value.activeDictPreds.value
-registerPredGiven _ _ _ = ()
+registerPredGiven _ [] _ = ()
+registerPredGiven iface args dname
+  | allList monoIsBareTyvar args = ()
+  | otherwise = perRun.value.activeDictPreds := (iface, args, dname)::perRun.value.activeDictPreds.value
 
 -- True iff [m] normalizes to a bare type VARIABLE (the given shape `activeDictVars`
 -- already covers). `TApp`/`TCon`/`TFun` are the STRUCTURED shapes it cannot see.
@@ -26725,24 +26794,35 @@ monoSameGiven a b = match normalize a
     _ => False
   _ => False
 
+-- #1956: THE ANSWER TO "when are two predicate argument vectors the same predicate?" —
+-- POINTWISE STRUCTURAL IDENTITY: equal length, and `monoSameGiven` at every position, in
+-- order.  Deliberately NOT unification and deliberately NOT lead-argument-only: the first
+-- would let a given bind the goal's variables (the whole reason `monoSameGiven` exists),
+-- the second is #1956 itself.  Length is compared by the pattern arms, not by `listLen`,
+-- so a prefix can never pass for the whole vector.
+monoVecSameGiven : List Mono -> List Mono -> Bool
+monoVecSameGiven [] [] = True
+monoVecSameGiven (a::arest) (b::brest) = monoSameGiven a b
+  && monoVecSameGiven arest brest
+monoVecSameGiven _ _ = False
+
 -- assum lookup over the predicate-keyed givens: the in-scope dict param holding evidence
 -- for `iface subject`.  PREFERS the entry owned by the enclosing method [encl] (`$dict_
 -- <encl>_<slot>`) for exactly the reason `activeDictVarForEncl` does: registerImplRequires
 -- registers every method of an impl against the SAME given, so a global first-match would
 -- return whichever method registered LAST — a dict param out of scope in this body.
-activeDictPredOf : String -> Mono -> String -> Option String
-activeDictPredOf iface subject encl =
+activeDictPredOf : String -> List Mono -> String -> Option String
+activeDictPredOf iface goalArgs encl =
   let preds = perRun.value.activeDictPreds.value
-  match firstPredForEncl iface subject "$dict_\{encl}_" preds
+  match firstPredForEncl iface goalArgs "$dict_\{encl}_" preds
     Some dname => Some dname
-    None => firstPredForEncl iface subject "" preds
+    None => firstPredForEncl iface goalArgs "" preds
 
-firstPredForEncl : String -> Mono -> String -> List (String, Mono, String) -> Option String
+firstPredForEncl : String -> List Mono -> String -> List (String, List Mono, String) -> Option String
 firstPredForEncl _ _ _ [] = None
-firstPredForEncl iface subject pfx ((eiface, esubject, ename)::rest)
-  | eiface == iface && startsWith pfx ename && monoSameGiven esubject subject =
-    Some ename
-  | otherwise = firstPredForEncl iface subject pfx rest
+firstPredForEncl iface goalArgs pfx ((eiface, eargs, ename)::rest)
+  | eiface == iface && startsWith pfx ename && monoVecSameGiven eargs goalArgs = Some ename
+  | otherwise = firstPredForEncl iface goalArgs pfx rest
 
 -- the interface a method NAME belongs to, for the predicate-keyed assum lookup.  A
 -- non-method [name] (a top-level constrained call routed through EKNestedTop) is absent
@@ -28676,6 +28756,13 @@ monoClosed t = match normalize t
 --     DICT-SEMANTICS §3 forbids outright.  Conjunct 5, via `goalMatchesGiven`, which is
 --     deliberately `registerPredGiven`'s OWN shape: this gate admits exactly what that
 --     registry can answer, so the two cannot drift into another silent accept.
+--     ⚠️ SUPERSEDED AS A REJECT, NOT AS A RULE (#1956).  `registerPredGiven` is now keyed
+--     on the WHOLE argument vector, so this exact program HAS a consumption-side answer:
+--     `entailAssum` finds the declared context's dict and S0-1 is ACCEPTED, printing
+--     `T/n=42` — the answer DICT-SEMANTICS §3 requires (assum before inst; the caller's
+--     dict is used, not an abstraction-time commitment).  The invariant above is
+--     unchanged and is what made the reject safe to lift: the gate still admits exactly
+--     what the registry answers — the registry simply answers more.
 --   * S2-5 — `data Bad = Bad zzz ; use (Bad v) = qq (Wrap v)`.  `zzz` is a `TRigid` no
 --     scheme quantifies, so `monoUnboundIds` is empty and conjunct 4 passed VACUOUSLY —
 --     the rigid-head forgery `monoHeadIsDecl` catches at the top level, leaking through
@@ -28706,37 +28793,44 @@ goalDefersOpenWorld iface args = not (monoVectorClosed args)
   && (goalMatchesGiven iface args || goalSlotStillOpen args)
 
 -- is there an in-scope PREDICATE-keyed given that answers this goal exactly?
--- Deliberately `registerPredGiven`'s own shape — single-subject, structural, matched by
--- `monoSameGiven` on rigid/cell IDENTITY rather than unification — because the question
--- this gate asks is not "is the goal plausible" but "will `entailAssum` be handed a dict
--- for it".  A multi-parameter vector answers False here for the same reason it registers
--- nothing there, which is S0-1's whole gate.
+-- Deliberately `registerPredGiven`'s own shape — the WHOLE argument vector, structural,
+-- matched by `monoVecSameGiven` (pointwise `monoSameGiven` on rigid/cell IDENTITY) rather
+-- than by unification — because the question this gate asks is not "is the goal
+-- plausible" but "will `entailAssum` be handed a dict for it".
+-- 🚨 THIS SHAPE AND `registerPredGiven`'s MUST MOVE TOGETHER, AND #1956 IS WHY BOTH MOVED
+-- IN ONE STEP.  Widening the registry alone would let this gate keep answering False for
+-- a multi-parameter goal the registry can now answer (a needless reject); widening this
+-- gate alone would re-open exactly the S0-1 hole FIX-1 closed — a goal admitted to defer
+-- with no consumption-side answer, i.e. a dropped predicate and a type-confused dict at
+-- exit 0.  The invariant is that this gate admits EXACTLY what that registry can answer.
 goalMatchesGiven : IfaceRef -> List Mono -> Bool
-goalMatchesGiven iface [subject] =
-  anyGivenMatches iface.irName subject perRun.value.activeDictPreds.value
-goalMatchesGiven _ _ = False
+goalMatchesGiven _ [] = False
+goalMatchesGiven iface args =
+  anyGivenMatches iface.irName args perRun.value.activeDictPreds.value
 
-anyGivenMatches : String -> Mono -> List (String, Mono, String) -> Bool
+anyGivenMatches : String -> List Mono -> List (String, List Mono, String) -> Bool
 anyGivenMatches _ _ [] = False
-anyGivenMatches iface subject ((eiface, esubject, _)::rest) = eiface == iface && monoSameGiven esubject subject
-  || anyGivenMatches iface subject rest
+anyGivenMatches iface args ((eiface, eargs, _)::rest) = eiface == iface && monoVecSameGiven eargs args
+  || anyGivenMatches iface args rest
 
 -- COULD a given for this goal still be registered, once the enclosing binding finishes
 -- generalizing?  Both conditions are `registerPredGiven`'s own, because it is the only
 -- writer that can ever answer a structured goal:
---   * ARITY 1.  It matches `[subject]` and returns `()` for any longer vector, on the
---     `requires`, declared and inferred channels alike — so a MULTI-PARAMETER structured
---     goal has no consumption-side answer now and cannot acquire one later, whatever the
---     binding does.  This is S0-1's INFERRED twin, and the reason this arm is not simply
---     "unclaimed ⇒ defer": MEASURED on `e1_inf_multi.mdk` (`h x = conv (Wrap x) 0`, no
---     signature, impls `Conv (Wrap Bool) Int` / `Conv (Wrap Int) Int`), which registers
---     nothing — `inferredConstraintIds` rejects the compound `Wrap t` — and so is
---     UNCLAIMED, yet printed `boolInt/boolInt` for `"\{h True}/\{h 1}"`, expected
---     `boolInt/intInt`.  Its signatured twin `a2_twoarg.mdk` printed the same wrong pair.
+--   * NON-EMPTY.  It returns `()` for the empty vector and registers nothing, so an
+--     empty goal can never acquire an answer.  (This used to read "ARITY 1", because the
+--     registry matched `[subject]` only — #1956 replaced that narrowing with the whole
+--     vector on all three channels (`requires`, declared, inferred), so a MULTI-PARAMETER
+--     structured goal now DOES have a consumption-side answer and this arm no longer
+--     withholds it.  The programs that pinned the old wording — `e1_inf_multi.mdk`
+--     (`h x = conv (Wrap x) 0`, no signature) and its signatured twin `a2_twoarg.mdk` —
+--     are re-measured against this widening, not assumed: see the S-nary-given report.)
 --   * UNCLAIMED.  See below; this is the arm that keeps #1939 shape (2) accepted.
+--     Asked of the vector's WHOLE unbound-id set, for the same reason the match above is
+--     pointwise: a slot is open only if NO binding has already fixed a context claiming
+--     any variable this predicate mentions, at any position.
 goalSlotStillOpen : List Mono -> Bool
-goalSlotStillOpen [subject] = not (goalIdsClaimed (monoUnboundIds subject))
-goalSlotStillOpen _ = False
+goalSlotStillOpen [] = False
+goalSlotStillOpen args = not (goalIdsClaimed (flatMap monoUnboundIds args))
 
 -- has some binding's constraint set ALREADY been registered against one of [ids]?  If
 -- so that binding's context is fixed and this goal must be part of it; if not, the
