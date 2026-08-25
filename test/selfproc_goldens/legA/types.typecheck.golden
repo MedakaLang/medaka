@@ -1554,6 +1554,7 @@ registerPredGiven : String -> List Mono -> String -> Unit
 registerRecordInfoKeyed : TyConOrigin -> String -> String -> List String -> List Field -> Unit
 registerReqSlots : String -> List (String, Mono) -> Int -> List Require -> Unit
 registerSchemeObligations : Map String Int -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> List (String, Scheme) -> Unit
+registerSlotPredGivens : String -> Int -> List CSlot -> List (List Mono) -> Unit
 registerVariants : TyConOrigin -> TcEnv -> String -> List String -> List Variant -> TcEnv
 registersElementDict : String -> List String -> Bool
 rejectCyclicAliases : Unit -> Unit

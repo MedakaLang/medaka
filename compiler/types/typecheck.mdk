@@ -2287,7 +2287,11 @@ public export data SiteKind =
   -- list, so `resolveRLocalSites` can select each slot with `routesOfMonosTopV`'s vector
   -- goal instead of the scalar `Ix Int _`.  It is `ShadowDicts`' third projection and
   -- must stay aligned with the other two — see that record.  Empty ⇒ the scalar router,
-  -- term for term, which is every 1-ary `=>` constraint in compiler + stdlib + sqlite.
+  -- term for term.  ⚠️ #1909 falsified this comment's second half, which used to add
+  -- "which is every 1-ary `=>` constraint in compiler + stdlib + sqlite": a 1-ary vector
+  -- is no longer pinned to the scalar router, it routes on its own recorded argument.
+  -- That is still byte-identical for a bare-tyvar constraint (the compiler's own), and
+  -- deliberately not for a structured one — see `routesOfMonosTopV`'s header.
   | SKRLocal String Bool (List Mono) (List String) (List (List Mono))
 
 public export data PendingEntry =
@@ -21939,11 +21943,27 @@ undeterminedRoute implTable (CountImpls prog iface) =
 -- dictArityOf / dictPass / scopeArities and the cross-module arity snapshot all read
 -- funConstraintsRef, whose payload this leaves untouched.
 --
--- The widening is GATED ON `listLen v > 1` (topRouteV's two-cons pattern), so a 1-ary
--- `=>` constraint — which is every `=>` constraint in compiler + stdlib + sqlite — takes
--- the SAME `routeOf` call routesOfMonosTop makes, term for term.  The 1-ary path is
--- therefore byte-identical BY CONSTRUCTION, not by measurement; the self-compile
--- fixpoint proves absence-of-regression, never correctness of the new path.
+-- #1909 REWRITES THE INVARIANT THIS HEADER USED TO STATE.  It read: the widening is
+-- "GATED ON `listLen v > 1` (topRouteV's two-cons pattern), so a 1-ary `=>` constraint —
+-- which is every `=>` constraint in compiler + stdlib + sqlite — takes the SAME `routeOf`
+-- call routesOfMonosTop makes, term for term.  The 1-ary path is therefore byte-identical
+-- BY CONSTRUCTION."  That was the #1161 (F-3a-ii) gate, and #1909 is the case its own
+-- closing caveat predicted: byte-identity held for the compiler's bare-tyvar constraints
+-- and never held for a STRUCTURED single-subject one.
+--
+-- THE CORRECTED INVARIANT.  There is no length gate; `vectorGoal` declines only an EMPTY
+-- vector or an unknown interface.  Byte-identity with routesOfMonosTop is now a property
+-- of the VECTOR'S CONTENT, not of its length:
+--   • vector `[m]` where the recorded argument IS the slot's own mono (every bare-tyvar
+--     `=>` constraint — which is still every `=>` constraint in compiler + stdlib +
+--     sqlite): `routeOfD … g0 [] 0 0` with `g0 == m` is `routeOf … m` term for term, so
+--     those callers are byte-identical BY CONSTRUCTION exactly as before;
+--   • vector `[Wrap a]` against slot mono `a` (a structured single-subject predicate):
+--     routes on `Wrap a`, which is the whole point — see `vectorGoal`;
+--   • no vector at all: the `[]` arm below, still the untouched scalar router.
+-- Slot COUNT, slot ORDER and the number of Routes produced are unchanged either way,
+-- which is what still keeps this arity-neutral.  The self-compile fixpoint proves
+-- absence-of-regression, never correctness of the new path — as before.
 routesOfMonosTopV : List Decl -> ImplBuckets -> List Mono -> List String -> List (List Mono) -> List Route
 -- no vectors at all (a caller with nothing to offer) ⇒ the scalar router, unchanged.
 routesOfMonosTopV prog implTable monos ifaces [] =
@@ -21970,16 +21990,23 @@ topRouteV prog implTable iface m goals = match vectorGoal iface goals
   Some (g0, gs) => routeOfD implTable iface "" (CountImpls prog iface) g0 gs 0 0
   None => routeOf implTable iface "" (CountImpls prog iface) m
 
--- `Some (arg0, tail)` exactly when the widening applies: a genuinely MULTI-argument
--- predicate under a KNOWN interface.  Everything else is None ⇒ the scalar route.
+-- `Some (arg0, tail)` exactly when the widening applies: a NON-EMPTY argument vector
+-- under a KNOWN interface.  Everything else is None ⇒ the scalar route.
+-- #1909: the length-1 declining clause (`vectorGoal _ [_] = None`) is GONE.  It made a
+-- 1-ary predicate select on the SLOT's mono instead of on the vector's own argument —
+-- byte-identical while the two coincide (`Shw a => …` records `[a]`, so arg 0 IS the
+-- slot mono) and WRONG the moment they do not (`Tag (Wrap a) => …` records `[Wrap a]`
+-- against slot mono `a`, so the call site keyed its dict on `Bool` where the predicate
+-- is `Tag (Wrap Bool)`).  Arity is not what makes a vector meaningful; a recorded
+-- argument that differs from the slot's own mono is.
 -- ⚠️ `iface == ""` is pinned scalar deliberately: with no interface there is no arity
 -- to give a vector meaning, and `argImplRequiresRoutes`'s own iface-unknown arm pins
 -- its `goals` to `[m]` for the same reason (#1168).  Holding the pin on BOTH sides is
 -- what keeps that function's soundness argument true now that this is its second
--- non-empty-`rest` caller — see the re-derivation in its header.
+-- non-empty-`rest` caller — see the re-derivation in its header.  Dropping the length-1
+-- clause does not touch that pin: it only widens WHICH non-empty vectors get past it.
 vectorGoal : String -> List Mono -> Option (Mono, List Mono)
 vectorGoal _ [] = None
-vectorGoal _ [_] = None
 vectorGoal iface (g0::gs) = if iface == "" then None else Some (g0, gs)
 
 routesOfMonosTop : List Decl -> ImplBuckets -> List Mono -> List String -> List Route
@@ -27571,7 +27598,12 @@ registerMember : String -> List (IfaceRef, List Mono) -> List (List Mono) -> Uni
 registerMember _ [] _ = ()
 registerMember m ifaceMonos argVecs =
   let slots = registerMemberSlots m 0 ifaceMonos
-  setFunConstraintEntry m slots (Some (keptConstraintArgs ifaceMonos argVecs))
+  let keptArgs = keptConstraintArgs ifaceMonos argVecs
+  -- #1909: the PREDICATE-keyed half of the given, alongside the tyvar-id half
+  -- `registerMemberSlots` just wrote.  Exactly `registerReqSlots`' pairing, one channel
+  -- over — see `registerSlotPredGivens`.
+  let _ = registerSlotPredGivens m 0 slots keptArgs
+  setFunConstraintEntry m slots (Some keptArgs)
 
 -- #1161 (F-3a-ii): the argument vectors of the constraints registerMemberSlots KEEPS,
 -- in the same slot order — the same `normalize`-is-a-TVar filter applied to the parallel
@@ -27637,6 +27669,38 @@ registerEachActiveId [] _ = ()
 registerEachActiveId (id::rest) dname =
   perRun.value.activeDictVars := (id, dname)::perRun.value.activeDictVars.value
   registerEachActiveId rest dname
+
+-- #1909: the SIGNATURE channel's `registerPredGiven` call — the one `registerReqSlots`
+-- has made since #412 and this side never did.  `registerEachActiveId` above registers a
+-- fn's declared `=>` given by TYVAR ID only, which cannot express a STRUCTURED given:
+-- `Tag (Wrap a) => …` registers only `a`'s id, and the body's goal `Tag (Wrap a)` looks
+-- up through `activeDictVarOf`, which recurses to the spine head (`TCon "Wrap"`) and
+-- finds no tyvar — so `entailAssum` was unreachable by construction, `entail` fell to
+-- `entailInst`, and the body was statically committed to whichever impl `entailInst`
+-- picked against the ABSTRACTION-time goal, discarding the per-instantiation dict the
+-- call site (`routesOfMonosTopV` → `pickMostSpecificEntry`) had already built correctly.
+-- `registerPredGiven`'s header carries the same paragraph for the `requires` channel.
+--
+-- ⚠️ NO SELECTOR IS CALLED HERE, and none may be: `typecheck.mdk`'s assum-rung rule is
+-- that no selector call may be reachable from `entailAssum`.  This restores an EARLIER
+-- rung's ability to answer; it does not re-select.
+--
+-- Strictly ADDITIVE by construction, via `registerPredGiven`'s own two guards: a
+-- bare-tyvar context (`Shw a => …`) hits `monoIsBareTyvar` and registers nothing (the
+-- tyvar-id path above still answers it byte-identically), and a multi-parameter predicate
+-- (`Ix a Char => …`) misses the `[subject]` pattern and registers nothing.  Only a
+-- STRUCTURED SINGLE-SUBJECT context gains an answer it did not have.
+--
+-- [slot] counts dict params the way `registerMemberSlots`' `kept` does, so the nth kept
+-- slot gets `dictParamName m n`.  The vector list is legitimately a PREFIX of the slots
+-- (`keptConstraintArgs` stops when its input runs out — see `setFunConstraintEntry`), so
+-- the second clause stops early rather than inventing a subject for a vectorless slot.
+registerSlotPredGivens : String -> Int -> List CSlot -> List (List Mono) -> Unit
+registerSlotPredGivens _ _ [] _ = ()
+registerSlotPredGivens _ _ _ [] = ()
+registerSlotPredGivens m slot (s::srest) (v::vrest) =
+  let _ = registerPredGiven s.csIface.irName v (dictParamName m slot)
+  registerSlotPredGivens m (slot + 1) srest vrest
 
 -- Pass B: infer each member's clauses, unifying with its placeholder.
 -- Phase 73 (bidirectional, signature-driven parameter typing): a member WITH a
@@ -29035,8 +29099,17 @@ registerInferredFor m ids vecs =
   -- reads `implObls` / `schemeObligationsRef` / `dictApps` and NEITHER fn-constraint
   -- table — checked, since a recovery that consulted them would change answers here.
   let slots = map (id => CSlot { csIface = ifaceForInferredId m id, csId = id }) ids
-  let _ = setFunConstraintEntry m slots (inferredArgsOpt (map (s => inferredVecFor s.csIface s.csId vecs) slots))
+  let slotVecs = map (s => inferredVecFor s.csIface s.csId vecs) slots
+  let _ = setFunConstraintEntry m slots (inferredArgsOpt slotVecs)
   let _ = registerActiveDictVars m 0 ids
+  -- #1909, the INFERRED twin of `registerMember`'s call: this writer is likewise ids-only
+  -- (`registerActiveDictVars` above), so an inferred binding whose deferred predicate is
+  -- STRUCTURED (`nest x = tagOf (Wrap x)`) had the same unreachable-`entailAssum` gap as
+  -- the declared one, and OD6(a) (declared and inferred must agree) fails without it.
+  -- The subject comes from the vector `inferredVecFor` already recovers per slot since
+  -- #1869; a slot that recovered nothing carries `[]` and registers nothing, exactly as
+  -- it did before.  See `registerSlotPredGivens` for why this adds no selector call.
+  let _ = registerSlotPredGivens m 0 slots slotVecs
   perRun.value.promotedRef := (m::perRun.value.promotedRef.value)
 
 -- N5 (inherited, slice 1): entry ABSENCE means "no argument vector was recorded for this
