@@ -379,7 +379,8 @@ jobs:
           binary: build
 
       # test/wasm/build_wasm_oracle.sh reads MEDAKA_EMITTER to find the just-built
-      # emitter (same recipe ci.yml's `sqlite` shard uses for its own wasm arm).
+      # emitter (same recipe ci.yml's `tools` row uses for its own wasm arm — the
+      # `sqlite` row no longer carries one, per S-sqlite-rebalance).
       - name: Build the wasm emitter oracle (modules entry)
         run: |
           export MEDAKA_EMITTER="$PWD/medaka_emitter"
@@ -400,7 +401,7 @@ jobs:
 
   # ── The must-fail CENSUS (#569) — the half of the ratchet a GATE cannot run. ────
   #
-  # test/diff_compiler_must_fail.sh (in `soundness`) drains one direction: a fix lands,
+  # test/diff_compiler_must_fail.sh (in `compiler-soundness`) drains one direction: a fix lands,
   # the pin stops holding, the gate goes RED. This job drains the directions that need
   # the GitHub API — above all HALF 1: an issue is CLOSED but its fixture STILL
   # REPRODUCES, i.e. THE TRACKER IS LYING. The fixture just ran against the binary; the
@@ -409,12 +410,13 @@ jobs:
   # — closed by a stray `fixed #508` in the prose of the very PR that ADDED the suite.
   # See #583.)
   #
-  # ⭐ WHY IT IS HERE AND NOT IN `soundness`: A REQUIRED CHECK MUST BE CAUSED BY THE DIFF
-  # IT GATES. `soundness` can host the must-fail GATE because a diff can fix a bug; it
-  # must never host this CENSUS, because NO DIFF CAN CLOSE AN ISSUE. Blocking an innocent
-  # PR on repo state its diff never touched is the "not your break" problem
-  # .claude/HANDOFF.md exists to mitigate. Also: soundness is required on every PR AND
-  # every merge-queue entry, so one API blip would stop the whole repo merging; every
+  # ⭐ WHY IT IS HERE AND NOT IN `compiler-soundness`: A REQUIRED CHECK MUST BE CAUSED BY
+  # THE DIFF IT GATES. `compiler-soundness` can host the must-fail GATE because a diff can
+  # fix a bug; it must never host this CENSUS, because NO DIFF CAN CLOSE AN ISSUE. Blocking
+  # an innocent PR on repo state its diff never touched is the "not your break" problem
+  # .claude/HANDOFF.md exists to mitigate. Also: the compiler-soundness job (narrowed on
+  # `compiler_touched`/`soundness_corpora`) runs on every PR its narrowing selects AND
+  # every merge-queue entry, so one API blip would stop those from merging; every
   # agent runs the gate locally with no `gh` auth, where it would have to SKIP ("this
   # didn't run" looking like "this passed") or FAIL; and fork PRs get a restricted token.
   #

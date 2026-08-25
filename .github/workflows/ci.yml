@@ -507,17 +507,15 @@ jobs:
             wasm_arm: "1"
           - name: sqlite
             # #1929: this row used to carry ALL 43 sqlite/gzip/pds oracle+vector gates
-            # and was the CI pole at 827s (single clean post-#1962 merge_group run
-            # `32815119948`), 317s/62% above `wasm` (510s), the next-slowest job —
-            # see the spike report for `S-sqlite-rebalance`. That whole family is now
+            # and was the CI pole, well above `wasm`, the next-slowest job — see the
+            # spike report for `S-sqlite-rebalance`. That whole family is now
             # SPLIT across the other five non-`engines` `gates` rows, each placed by
             # measured per-gate cost (local `time`, not a per-gate CI breakdown — see
             # `S-sqlite-rebalance`'s report for the full table and the packing math),
             # never by theme — same principle as every other row in this matrix.
             # REPURPOSED (F-5: the job NAME must not vanish) to carry just the single
-            # heaviest gate of the lot: `pds/test/inlang_test_oracle.sh` (~409s local,
-            # dwarfing every other individual sqlite/gzip/pds gate — the next-heaviest,
-            # `pds/test/constant_time_parity.sh`, is ~210s). No thematic tie to SQLite
+            # heaviest gate of the lot: `pds/test/inlang_test_oracle.sh`, dwarfing
+            # every other individual sqlite/gzip/pds gate. No thematic tie to SQLite
             # any more; kept here rather than renamed because a lone gate this heavy
             # needs its own row headroom and this row already had none of its own.
             # `wasm_arm` dropped — this gate doesn't read the Wasm oracle.
@@ -539,9 +537,9 @@ jobs:
             # `diff_compiler_run_check_agreement`, because every stage it exercises
             # is in `compiler/types/typecheck.mdk`. Reads no oracle.
             #
-            # #1929: `gzip/test/*oracle` (both gates, ~86s local) plus five pds/
-            # vector-corpus gates that fit neither of the two pds glob buckets moved
-            # to `backend`/`tools` (they're not `constant_time_*` and don't end in
+            # #1929: `gzip/test/*oracle` (both gates) plus five pds/ vector-corpus
+            # gates that fit neither of the two pds glob buckets moved to
+            # `backend`/`tools` (they're not `constant_time_*` and don't end in
             # `_vectors`) land here by cost, cheapest destination with room after the
             # heavier chunks were placed — see `S-sqlite-rebalance`'s report.
             pattern: "'diff_compiler_perf_scaling' 'diff_compiler_typecheck*' 'diff_compiler_check*' 'diff_compiler_exhaust' 'diff_compiler_diagnostics' 'diff_compiler_analyze_project' 'diff_compiler_shadow_semantics' 'effect_param_domain' 'effect_builtin_param_domain' 'effect_product_domain' 'effect_set_domain' 'gzip/test/*oracle' 'pds/test/opaque_field_scalar' 'pds/test/secp256k1_public_key' 'pds/test/signing_corpus' 'pds/test/trust_boundary_guards' 'pds/test/vector_provenance'"
@@ -560,7 +558,7 @@ jobs:
             # fresh oracle build elsewhere would be.
             #
             # #1929: `sqlite/test/*oracle` (the 24 SQLite differential gates diffing
-            # against the real sqlite3 CLI, ~249s local sum) moved here by cost — see
+            # against the real sqlite3 CLI) moved here by cost — see
             # `S-sqlite-rebalance`'s report. NOTE the glob is `'*oracle'`, not
             # `'*_oracle'`: one gate is plain `oracle.sh`, not `<name>_oracle.sh` — the
             # narrower glob silently drops it.
@@ -580,12 +578,12 @@ jobs:
             #
             # #1929: `pds/test/*_vectors` (the 7 pds gates whose basename ends
             # `_vectors` — ecdsa/encodings/field/rfc6979/scalar/sha256/
-            # secp256k1_point, ~203s local sum, incl. the Wasm-vector-free ones only)
-            # moved here by cost — see `S-sqlite-rebalance`'s report. Deliberately a
-            # glob, not a name list, so a future `pds/test/*_vectors.sh` gate
-            # auto-enrolls here without a `ci.yml` edit — same intent as the old
-            # `pds/test/*` catch-all, now split by naming convention because no
-            # single row had 631s of spare room for the whole pds/ family at once.
+            # secp256k1_point, incl. the Wasm-vector-free ones only) moved here by
+            # cost — see `S-sqlite-rebalance`'s report. Deliberately a glob, not a
+            # name list, so a future `pds/test/*_vectors.sh` gate auto-enrolls here
+            # without a `ci.yml` edit — same intent as the old `pds/test/*`
+            # catch-all, now split by naming convention because no single row had
+            # spare room for the whole pds/ family at once.
             pattern: "'diff_compiler_llvm*' 'diff_compiler_build' 'diff_compiler_rt_obj' 'diff_compiler_selfproc' 'diff_compiler_stack_overflow' 'diff_compiler_let_refute' 'diff_compiler_index_oob' 'diff_compiler_tmc_parity' 'selfcompile_lex' 'selfcompile_emit' 'selfcompile_build_fixpoint' 'diff_native_cli' 'diff_native_stack' 'build_cmd' 'pds/test/*_vectors'"
           - name: tools
             # `diff_compiler_mcp` (#253) and `diff_compiler_entry_exit_codes`
@@ -597,12 +595,15 @@ jobs:
             # glob, so a new sibling would silently never run — the exact hazard
             # `diff_compiler_ci_shard_coverage` exists to catch.
             #
-            # #1929: `pds/test/constant_time_*` (the 4 constant-time gates, ~184s
-            # local sum) moved here by cost — see `S-sqlite-rebalance`'s report.
+            # #1929: `pds/test/constant_time_*` (the 4 constant-time gates) moved
+            # here by cost — see `S-sqlite-rebalance`'s report.
             # `wasm_arm` added: `constant_time_parity.sh`/`constant_time_reductions.sh`
             # read the Wasm oracle (`MEDAKA_REQUIRE_WASM`), previously covered by the
-            # old `sqlite` row's arm — S-wasm-split measured the marginal
-            # `setup-medaka` cost of a second `wasm_arm` row at ~13s, cheap.
+            # old `sqlite` row's arm. This also pulls in a wasm-oracle-build step
+            # (`sh test/wasm/build_wasm_oracle.sh --modules-only`) this row did not
+            # need before — cheap next to the marginal `setup-medaka` toolchain
+            # cost of a second `wasm_arm` row, but not free; it's headroom this row
+            # has, not headroom this row lacked before.
             pattern: "'diff_compiler_lint*' 'diff_compiler_lsp*' 'diff_compiler_mcp' 'diff_compiler_codemod' 'diff_compiler_repl' 'diff_compiler_new' 'diff_compiler_test' 'diff_compiler_test_typecheck' 'diff_compiler_ported' 'diff_compiler_doc' 'diff_compiler_index' 'diff_compiler_references*' 'diff_compiler_capability_matrix' 'diff_compiler_internal_extern' 'diff_compiler_effect*' 'diff_compiler_os_entropy' 'diff_compiler_entry_exit_codes' 'diff_compiler_run_check_agreement' 'diff_compiler_run_stdout_flush' 'diff_compiler_run_entry_subdir' 'diff_compiler_ci_shard_coverage' 'diff_compiler_perf_stage_census' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_source_bytes' 'diff_compiler_fmt_write_safety' 'check_syntax_examples' 'check_build_oracles_for_consistency' 'cross_project_deps' 'cross_project_twonames' 'manifest_emit' 'lsp_harness' 'diff_net' 'pr_helper_test' 'pds/test/constant_time_*'"
             wasm_arm: "1"
     name: gates (${{ matrix.name }})

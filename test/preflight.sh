@@ -1236,7 +1236,7 @@ cat <<EOF
 
 ── NOT RUN LOCALLY ───────────────────────────────────────────────
 $engines_line
-$([ "$need_fixpoint" -eq 1 ] || echo "  selfcompile_fixpoint       (not a backend change) — the \`soundness\` check runs it on every event; it is never narrowed.")
+$([ "$need_fixpoint" -eq 1 ] || echo "  selfcompile_fixpoint       (not a backend change) — the \`compiler-soundness\` job runs it (narrowed on \`compiler_touched\`/\`soundness_corpora\`).")
 $([ -n "$inlang_run" ] && echo "  make test                  PARTIAL — ran only the modules THIS diff touched ($(echo $inlang_run)).
                              The \`inlang\` check runs the whole recipe, doctests of every
                              module it names plus diff_compiler_ported." \

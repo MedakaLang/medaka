@@ -235,9 +235,10 @@ ratchet_producer_files() {
 # and the fuzz generator all go through the helper, so only the module that
 # DEFINES the type and the module that CONSUMES it in a pattern may name it.
 #
-# ⚠️ It lives HERE, in a gate the `soundness` job runs on every PR, rather than
-# in the topically-better `test/check_removed_constructs.sh` — that one is
-# NIGHTLY-only, so a ratchet in it cannot block the PR that breaks it.
+# ⚠️ It lives HERE, in a gate the `compiler-soundness` job runs (narrowed on
+# `compiler_touched`/`soundness_corpora`), rather than in the topically-better
+# `test/check_removed_constructs.sh` — that one is NIGHTLY-only, so a ratchet
+# in it cannot block the PR that breaks it.
 #
 # ⚠️ This is a PRODUCER ratchet, not the runtime drain #1110 asks for. It cannot
 # see whether a driver forgot to stamp, nor whether one stamped the WRONG id --
@@ -1082,7 +1083,7 @@ fi
 # of this writing); pass 3 covers `medaka_cli.mdk` ALONE — 1 closure, not the set.
 # The reason is cost, not principle: this arm
 # pays a whole `medaka build` per closure (~40s at -O0, see below) against the
-# soundness job's ~171s total budget, so running it per entry does not fit. The
+# compiler-soundness job's time budget, so running it per entry does not fit. The
 # PASS lines at the end of this pass are scoped to match; keep them that way.
 #
 # Passes 1 and 2 run ONE driver: `analyzeProject` / `diagnostics_project_main` —
@@ -1095,7 +1096,7 @@ fi
 #
 # That is not hypothetical: the four-module `A2` corpus (an alias import plus an
 # imported standalone shadowing an interface method) reads `check=0 build=1` on
-# this very tree.  So `soundness` — the job that exists because "ALL the gate
+# this very tree.  So `compiler-soundness` — the job that exists because "ALL the gate
 # shards pass on an ill-typed compiler" — was vetting the compiler with an
 # instrument blind to a whole class of ill-typedness.  This pass closes that:
 # it puts the compiler's own closure through the elaborate driver's gate, which
