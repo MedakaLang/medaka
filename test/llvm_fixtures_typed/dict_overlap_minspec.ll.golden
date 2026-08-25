@@ -185,21 +185,21 @@ lz_unforced:
   store i8 2, ptr @mdk_gs_$memo_Int_def
   ret i64 %t2
 }
-define i64 @mdk_force_$memo_Default__Box_Int___def() {
+define i64 @mdk_force_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def() {
 entry:
-  %t0 = load i8, ptr @mdk_gs_$memo_Default__Box_Int___def
+  %t0 = load i8, ptr @mdk_gs_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def
   switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
 lz_forced:
-  %t1 = load i64, ptr @mdk_g_$memo_Default__Box_Int___def
+  %t1 = load i64, ptr @mdk_g_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def
   ret i64 %t1
 lz_forcing:
-  call void @mdk_cyclic_value(ptr @.gname.$memo_Default__Box_Int___def)
+  call void @mdk_cyclic_value(ptr @.gname.$memo_zZDefault_7c__28_Box_20_Int_29__7c__def)
   unreachable
 lz_unforced:
-  store i8 1, ptr @mdk_gs_$memo_Default__Box_Int___def
-  %t2 = call i64 @mdk_impl_Default__Box_Int___def()
-  store i64 %t2, ptr @mdk_g_$memo_Default__Box_Int___def
-  store i8 2, ptr @mdk_gs_$memo_Default__Box_Int___def
+  store i8 1, ptr @mdk_gs_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def
+  %t2 = call i64 @mdk_impl_zZDefault_7c__28_Box_20_Int_29__7c__def()
+  store i64 %t2, ptr @mdk_g_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def
+  store i8 2, ptr @mdk_gs_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def
   ret i64 %t2
 }
 define i64 @mdk_force_theVal() {
@@ -214,7 +214,7 @@ lz_forcing:
   unreachable
 lz_unforced:
   store i8 1, ptr @mdk_gs_theVal
-  %t2 = call i64 @mdk_impl_Default__Box_a___def(i64 ptrtoint (ptr @mdk_dc_0 to i64))
+  %t2 = call i64 @mdk_impl_zZDefault_7c__28_Box_20_a_29__7c__def(i64 ptrtoint (ptr @mdk_dc_0 to i64))
   store i64 %t2, ptr @mdk_g_theVal
   store i8 2, ptr @mdk_gs_theVal
   ret i64 %t2
@@ -258,7 +258,7 @@ entry:
   ret i64 15
 }
 
-define i64 @mdk_impl_Default__Box_a___def(i64 %arg0) {
+define i64 @mdk_impl_zZDefault_7c__28_Box_20_a_29__7c__def(i64 %arg0) {
 entry:
   %t0 = call i64 @mdk_disp_def_0_0(i64 %arg0)
   %t1 = call ptr @mdk_alloc(i64 16)
@@ -269,7 +269,7 @@ entry:
   ret i64 %t3
 }
 
-define i64 @mdk_impl_Default__Box_Int___def() {
+define i64 @mdk_impl_zZDefault_7c__28_Box_20_Int_29__7c__def() {
 entry:
   %t0 = call ptr @mdk_alloc(i64 16)
   store i64 0, ptr %t0
@@ -281,12 +281,12 @@ entry:
 
 @mdk_g_$memo_Int_def = global i64 0
 @mdk_gs_$memo_Int_def = global i8 0
-@mdk_g_$memo_Default__Box_Int___def = global i64 0
-@mdk_gs_$memo_Default__Box_Int___def = global i8 0
+@mdk_g_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def = global i64 0
+@mdk_gs_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def = global i8 0
 @mdk_g_theVal = global i64 0
 @mdk_gs_theVal = global i8 0
 @.gname.$memo_Int_def = private unnamed_addr constant [14 x i8] c"\24\6D\65\6D\6F\5F\49\6E\74\5F\64\65\66\00"
-@.gname.$memo_Default__Box_Int___def = private unnamed_addr constant [29 x i8] c"\24\6D\65\6D\6F\5F\44\65\66\61\75\6C\74\5F\5F\42\6F\78\5F\49\6E\74\5F\5F\5F\64\65\66\00"
+@.gname.$memo_zZDefault_7c__28_Box_20_Int_29__7c__def = private unnamed_addr constant [46 x i8] c"\24\6D\65\6D\6F\5F\7A\5A\44\65\66\61\75\6C\74\5F\37\63\5F\5F\32\38\5F\42\6F\78\5F\32\30\5F\49\6E\74\5F\32\39\5F\5F\37\63\5F\5F\64\65\66\00"
 @.gname.theVal = private unnamed_addr constant [7 x i8] c"\74\68\65\56\61\6C\00"
 @mdk_dc_0 = internal constant [1 x i64] [i64 -308483285326192921]
 define i64 @mdk_disp_def_0_0(i64 %dict) {
@@ -309,7 +309,7 @@ dispyes10:
   %t11 = inttoptr i64 %dict to ptr
   %t12 = getelementptr i8, ptr %t11, i64 8
   %t13 = load i64, ptr %t12
-  %t14 = call i64 @mdk_impl_Default__Box_a___def(i64 %t13)
+  %t14 = call i64 @mdk_impl_zZDefault_7c__28_Box_20_a_29__7c__def(i64 %t13)
   store i64 %t14, ptr %t2
   br label %dispend3
 dispnext10:
@@ -318,7 +318,7 @@ dispnext10:
   %t17 = or i1 %t15, %t16
   br i1 %t17, label %dispyes18, label %dispnext18
 dispyes18:
-  %t19 = call i64 @mdk_force_$memo_Default__Box_Int___def()
+  %t19 = call i64 @mdk_force_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def()
   store i64 %t19, ptr %t2
   br label %dispend3
 dispnext18:

@@ -2415,25 +2415,34 @@ fi
 #     argument, the value cell landing in the dict slot, hence the 139).
 # So the pair is the discriminator, and the route word is what makes them agree.
 #
-# ⚠️ THE SYMBOL IS NOW MODULE-QUALIFIED, AND BOTH GREPS TOLERATE THAT DELIBERATELY.
+# ⚠️ THE SYMBOL IS NOW INJECTIVELY-ESCAPED, AND BOTH GREPS TOLERATE THAT DELIBERATELY.
 # ARCH B-2.2-b1/e made the impl route word carry the interface's origin, so this callee
-# went from `@mdk_impl_Tag__Wrap_Int___tagOf` to `@mdk_impl_iface__Tag__Wrap_Int___tagOf`.
-# The old LITERAL grep found nothing and this leg reddened in CI with an empty capture,
-# which reads exactly like "the specific impl is not the callee" — i.e. like a dispatch
+# was first `@mdk_impl_Tag__Wrap_Int___tagOf`, then module-qualified as
+# `@mdk_impl_iface__Tag__Wrap_Int___tagOf`. `private_mangle.injectiveIdent` then re-spelled
+# the whole route word: it writes the key `zZ`-prefixed with every non-alphanumeric byte
+# replaced by a self-delimiting `_<hex>_` escape and alphanumerics passed through verbatim
+# (`_3a_`=`:`, `_7c_`=`|`, `_28_`/`_29_`=parens, `_20_`=space), so the current symbol is
+# `@mdk_impl_zZiface_3a__3a_Tag_7c__28_Wrap_20_Int_29__7c__tagOf`. Each re-spelling made the
+# old LITERAL grep find nothing and this leg reddened in CI with an empty capture, which
+# reads exactly like "the specific impl is not the callee" — i.e. like a dispatch
 # regression. It was not: measured at that commit, both orders BUILD, both binaries print
 # `wrap-int-specific`, and the two IRs are BYTE-IDENTICAL.
-# The patterns below therefore allow an optional `<module>__` prefix and NOTHING ELSE.
-# Both load-bearing halves are intact: the `(i64 %x)$` anchor still pins ARITY 1 (a
-# one-argument call at end of line), and `Wrap_Int` still pins the SPECIFIC impl over the
-# general `Wrap_a` one. Do not relax either to silence a future red — a red here means
-# the orders diverged or the general impl won, and both are the S0 this leg exists for.
+# The patterns below therefore allow an arbitrary alphanumeric/underscore prefix and
+# suffix around the escaped `(Wrap Int)` payload, and NOTHING ELSE. Both load-bearing
+# halves are intact: the `(i64 %x)$` anchor still pins ARITY 1 (a one-argument call at
+# end of line), and the escaped `_28_Wrap_20_Int_29_` substring still pins the SPECIFIC
+# impl over the general escaped `_28_Wrap_20_a_29_` one — that substring is absent from
+# the general impl's spelling, and the general impl's call also takes 2 args, so the
+# arity-1 anchor excludes it a second, independent way. Do not relax either to silence a
+# future red — a red here means the orders diverged or the general impl won, and both are
+# the S0 this leg exists for.
 if [ ! -f "$TMP/sa4c.main.bin.ll" ] || [ ! -f "$TMP/sa4c.control.bin.ll" ]; then
   fail=$((fail+1)); printf 'FAIL SA-4c/route-word-order-invariant (no IR kept — build refused, see the leg above)\n'
 elif diff "$TMP/sa4c.main.bin.ll" "$TMP/sa4c.control.bin.ll" >/dev/null 2>&1 \
-  && grep -qE 'call i64 @mdk_impl_[A-Za-z_0-9]*Tag__Wrap_Int___tagOf\(i64 %[a-z0-9]*\)$' "$TMP/sa4c.main.bin.ll"; then
+  && grep -qE 'call i64 @mdk_impl_[A-Za-z_0-9]*_28_Wrap_20_Int_29_[A-Za-z_0-9]*\(i64 %[a-z0-9]*\)$' "$TMP/sa4c.main.bin.ll"; then
   pass=$((pass+1)); printf 'ok   SA-4c/route-word-order-invariant (both orders IR-identical; arity-1 specific impl called)\n'
 else
-  sa4c_site="$(grep -oE 'call i64 @mdk_impl_[A-Za-z_0-9]*Tag__Wrap[A-Za-z_0-9]*\(i64[^)]*\)' "$TMP/sa4c.main.bin.ll" | head -2 | tr '\n' ' ')"
+  sa4c_site="$(grep -oE 'call i64 @mdk_impl_[A-Za-z_0-9]*_28_Wrap_20_[A-Za-z_0-9]*_29_[A-Za-z_0-9]*\(i64[^)]*\)' "$TMP/sa4c.main.bin.ll" | head -2 | tr '\n' ' ')"
   fail=$((fail+1)); printf 'FAIL SA-4c/route-word-order-invariant (IR differs between import orders, or the specific impl is not the arity-1 callee: [%s])\n' "$sa4c_site"
 fi
 
