@@ -20,6 +20,7 @@ cmd: check-json main.mdk
 exit: 1
 diag-code: T-INFINITE-TYPE 10:10-10:15
 diag-code: T-INFINITE-TYPE 10:10-10:15
+diag-code: T-MISSING-CONSTRAINT 10:10-10:15
 diag-code: T-TYPE-MISMATCH 12:20-12:21
 diag-code: T-NO-IMPL 10:10-10:15
 diag-code: T-NO-IMPL 12:16-12:19
@@ -48,3 +49,13 @@ why-note: same name as a prelude standalone must be checked in a scope where the
 why-note: prelude's own scheme for that name is not still present. That flips
 why-note: `check-json main.mdk` to exit 0 with zero diagnostics, draining this
 why-note: row. Close #1191 and delete this fixture when that happens.
+why-note: RE-MEASURED on `structured-predicate-carry`'s head (sprint FIX-1,
+why-note: `d341e7ae`) after that sprint's obligation-channel widening
+why-note: (`substOblArgs`/`declaredOblArgOk`) started admitting a mixed
+why-note: constraint on this same failed-elaboration path: the defect is
+why-note: UNCHANGED (still exit 1, still `Cannot construct infinite type
+why-note: involving a`/`No impl of Num for a b` citing the prelude's own
+why-note: tyvars, control still exit 0 clean) but the cascade now also raises
+why-note: one `T-MISSING-CONSTRAINT` at the same span. Added to the pin rather
+why-note: than treated as a drain -- confirmed unrelated to #1191's own fix
+why-note: shape above.
