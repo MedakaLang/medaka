@@ -98,7 +98,7 @@ paid twice per merge for zero new signal. `schedule` is the safety net for anyth
 still land outside the queue (it can't today — bypass_actors is empty and the ruleset covers
 deletion/non-fast-forward too — but the net stays cheap insurance against a future ruleset edit).
 
-The `schedule` trigger's `oracle_key` is `'full'` (same as the old push run's), same `hashFiles`
+The `schedule` trigger's `oracle_key` is `'full'` (same as the old push run's), same hashFiles
 key, so it becomes the daily producer of the cache a `merge_group` run restores from the default
 branch. A `merge_group` between refreshes just rebuilds on a cache miss — ~17s/shard per #1927's
 own measurement, the same cost any cache miss already pays today. This is mitigation (b) for
