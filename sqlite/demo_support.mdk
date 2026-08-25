@@ -91,3 +91,5 @@ parseN : String -> Int
 parseN s = match toInt s
   Some n => n
   None => 0
+
+-- probe: ci-narrow-and-split sprint, project-only CI shape verification
