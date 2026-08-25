@@ -1,5 +1,5 @@
 # META
-source_lines=33665
+source_lines=33697
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -25230,13 +25230,32 @@ checkOneCallObligation deferNonGround univ iface occs loc =
   -- Measured firings across `stdlib/list.mdk` and `compiler/driver/medaka_cli.mdk`: 0.
   -- Regression: test/dict_fixtures/s-nary-truncated-goal-not-ambiguous.mdk (accept) and
   -- s-nary-truncated-goal-joint-rejects.mdk (reject).
-  else if oblGoalIsTruncated univ iface args then ()
-  else if implMatchesArgsU univ iface args then
+  -- ⚡ PERF (#1974): the truncation gate and the match test below read THE SAME two
+  -- buckets, so they are answered from ONE pair of lookups (`oblCallVerdict`) rather
+  -- than the two-then-two the separate `oblGoalIsTruncated` / `implMatchesArgsU` calls
+  -- performed.  Every `mregLookupK` RENDERS ITS KEY INTO A FRESH STRING (`insertUnivImplAt`
+  -- carries the same warning for the same reason, and `check` is GC-bound), so the
+  -- doubled lookups were ~70 MB of extra garbage at N=400 modules and ~22% of the whole
+  -- `typecheck` stage on `diff_compiler_perf_scaling.sh`'s `modules` shape — enough to
+  -- push its TIME arm over the gate's 3.0x-per-doubling ceiling (measured 1.63 s -> 1.28 s
+  -- at N=400 with the gate stubbed out).  The VERDICTS are byte-identical: same buckets,
+  -- same concrete-then-headless order, same two tests, truncation still asked FIRST and
+  -- over BOTH buckets.
+  else match oblCallVerdict univ iface args
+    -- truncated goal — defer to the joint obligation (see the block above).
+    None => ()
     -- Recurse into a matched CONDITIONAL instance's `requires` (`impl Display (a, b)
     -- requires Display a, Display b`) so an unsatisfied element constraint surfaces
     -- (`main = (Red, 5)` → `No impl of Display for Color`) instead of the head-only
     -- match silently accepting (→ null element dict → SIGSEGV at runtime).
-    checkNestedReqs univ iface args loc
+    Some True => checkNestedReqs univ iface args loc
+    Some False => checkOneCallObligationNoImpl iface args loc
+
+-- the no-impl tail of `checkOneCallObligation` — reached when the goal is neither a
+-- truncation nor matched by any impl.  Extracted verbatim so `oblCallVerdict`'s three
+-- verdicts can be a `match` without duplicating it; the two arms below are unchanged.
+checkOneCallObligationNoImpl : IfaceRef -> List Mono -> Option Loc -> Unit
+checkOneCallObligationNoImpl iface args loc =
   -- 🚨 #1939 / #1938 (OPEN WORLD): `allConcreteHeads` IS NOT GROUNDNESS, AND ONLY
   -- GROUNDNESS LICENSES A REJECT HERE.  It asks whether every argument has a head
   -- TYCON, which `Wrap a` satisfies while still carrying a variable — so a goal like
@@ -25275,7 +25294,7 @@ checkOneCallObligation deferNonGround univ iface occs loc =
   --     end-of-sprint review's S0-2 asserted the opposite and called this conjunct
   --     vacuous for a declared context; it is vacuous only for a goal whose openness is
   --     ALL rigid — S2-5's nested-rigid shape, which conjunct 3 now covers.)
-  else if goalDefersOpenWorld iface args then ()
+  if goalDefersOpenWorld iface args then ()
   -- #838 I4 (was checkOneImplObligation step 9): reportNumOrNoImpl is a strict superset
   -- of pushNoImplError — it reframes a ground `Num`-obligation tracing to a numeric
   -- LITERAL (loc-keyed `numlitReframeLoc`, not prov-keyed) into `T-TYPE-MISMATCH`, and
@@ -25290,24 +25309,37 @@ implMatchesArgsU : ImplUniverse -> IfaceRef -> List Mono -> Bool
 implMatchesArgsU univ iface [a] = implMatchesReceiverU univ iface a
 implMatchesArgsU univ iface args = implMatchesU univ iface args
 
--- #1867: is this goal a TRUNCATION of a k-parameter predicate, k > the goal's own
--- arity?  Scoped to arity 1 because that is the only truncation any producer mints:
--- `recordCallObligations` shatters a predicate into ONE obligation per dict slot, each
--- carrying a single mono.  Every other goal on this channel is a whole vector.  See
--- `checkOneCallObligation`'s arm for the verdict this decides and why deferring is not
--- a [W-QUIETER] regression.
-oblGoalIsTruncated : ImplUniverse -> IfaceRef -> List Mono -> Bool
-oblGoalIsTruncated univ iface [a0] = univHeadLongerThan univ iface a0 1
-oblGoalIsTruncated _ _ _ = False
-
--- Does SOME impl of [iface] that this goal could reach declare more than [n] head
--- types?  Reads exactly the two buckets `implMatchesReceiverU` reads, in the same
--- order (concrete receiver-head bucket, then the iface's headless bucket), so the
--- question is asked over precisely the impl set the arity-1 match test would have
--- matched against — no third universe, no new registry read.
-univHeadLongerThan : ImplUniverse -> IfaceRef -> Mono -> Int -> Bool
-univHeadLongerThan univ iface a0 n = bucketAnyLonger (univConcreteBucket univ iface (headTyconMono a0)) n
-  || bucketAnyLonger (univHeadless univ iface) n
+-- #1867 + PERF (#1974): the ONE call-obligation verdict, answered from ONE pair of
+-- bucket lookups.  It fuses two questions the separate `oblGoalIsTruncated` /
+-- `implMatchesArgsU` pair asked over THE SAME buckets, each re-minting (and re-RENDERING,
+-- see `insertUnivImplAt`) its registry key:
+--   `None`       — the goal is a TRUNCATION of a k-parameter predicate, k > its own
+--                  arity: some impl of [iface] this goal could reach declares more head
+--                  types than the goal carries.  Scoped to arity 1 because that is the
+--                  only truncation any producer mints — `recordCallObligations` shatters
+--                  a predicate into ONE obligation per dict slot, each carrying a single
+--                  mono; every other goal on this channel is a whole vector.  See
+--                  `checkOneCallObligation`'s block for the verdict this decides and why
+--                  deferring is not a [W-QUIETER] regression.
+--   `Some True`  — some impl matches (receiver-only at arity 1, full head vector above).
+--   `Some False` — no impl matches.
+-- ⚠️ ORDER IS SEMANTIC AND UNCHANGED.  The truncation question is still asked FIRST and
+-- over BOTH buckets (concrete receiver-head bucket, then the iface's headless bucket) —
+-- a goal that is truncated defers even when the concrete bucket would have matched it.
+-- The headless bucket is still read only when the concrete one did not already answer
+-- "truncated", exactly as the old `||` short-circuited; it is then REUSED by the match
+-- test instead of being looked up again.  No third universe, no new registry read.
+oblCallVerdict : ImplUniverse -> IfaceRef -> List Mono -> Option Bool
+oblCallVerdict univ iface [a0] =
+  let cb = univConcreteBucket univ iface (headTyconMono a0)
+  if bucketAnyLonger cb 1 then None
+  else
+    let hb = univHeadless univ iface
+    if bucketAnyLonger hb 1 then
+      None
+    else
+      Some (bucketRecvMatch cb a0 || bucketRecvMatch hb a0)
+oblCallVerdict univ iface args = Some (implMatchesU univ iface args)
 
 bucketAnyLonger : List (List Ty, List Require) -> Int -> Bool
 bucketAnyLonger [] _ = False
@@ -37645,15 +37677,15 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkCallObligationsU" (PWild PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkCallObligationsU" ((PVar "deferNonGround") (PVar "dedup") (PVar "univ") (PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false (PVar "iface") (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (DoLet false false (PVar "occs") (EApp (EVar "uOblArgs") (EVar "o"))) (DoLet false false (PVar "loc") (EFieldAccess (EVar "o") "loc")) (DoLet false false (PVar "key") (EApp (EApp (EVar "oblDedupKey") (EVar "iface")) (EVar "occs"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "checkOneCallObligation") (EVar "deferNonGround")) (EVar "univ")) (EVar "iface")) (EVar "occs")) (EVar "loc"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "deferNonGround")) (EVar "dedup")) (EVar "univ")) (EBinOp "::" (EVar "key") (EVar "seen"))) (EVar "rest")))))
 (DTypeSig false "checkOneCallObligation" (TyFun (TyCon "Bool") (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit")))))))
-(DFunDef false "checkOneCallObligation" ((PVar "deferNonGround") (PVar "univ") (PVar "iface") (PVar "occs") (PVar "loc")) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "map") (EVar "normalize")) (EVar "occs"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "args")) (ELit LUnit) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EApp (EVar "anyListM") (EVar "numUnimplementableHead")) (EVar "args"))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EApp (EApp (EVar "anyListM") (EVar "monoIsFunction")) (EVar "args")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "implMatchesArgsU") (EVar "univ")) (EVar "iface")) (EVar "args")))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EVar "not") (EApp (EVar "builtinClassPresent") (EVar "BNum")))) (ELit LUnit) (EIf (EApp (EVar "not") (EApp (EVar "allConcreteHeads") (EVar "args"))) (EIf (EVar "deferNonGround") (ELit LUnit) (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligations") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc"))) (EIf (EApp (EApp (EApp (EVar "oblGoalIsTruncated") (EVar "univ")) (EVar "iface")) (EVar "args")) (ELit LUnit) (EIf (EApp (EApp (EApp (EVar "implMatchesArgsU") (EVar "univ")) (EVar "iface")) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "checkNestedReqs") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc")) (EIf (EApp (EApp (EVar "goalDefersOpenWorld") (EVar "iface")) (EVar "args")) (ELit LUnit) (EApp (EApp (EApp (EVar "reportNumOrNoImpl") (EFieldAccess (EVar "iface") "irName")) (EVar "args")) (EVar "loc")))))))))))))
+(DFunDef false "checkOneCallObligation" ((PVar "deferNonGround") (PVar "univ") (PVar "iface") (PVar "occs") (PVar "loc")) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "map") (EVar "normalize")) (EVar "occs"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "args")) (ELit LUnit) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EApp (EVar "anyListM") (EVar "numUnimplementableHead")) (EVar "args"))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EApp (EApp (EVar "anyListM") (EVar "monoIsFunction")) (EVar "args")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "implMatchesArgsU") (EVar "univ")) (EVar "iface")) (EVar "args")))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EVar "not") (EApp (EVar "builtinClassPresent") (EVar "BNum")))) (ELit LUnit) (EIf (EApp (EVar "not") (EApp (EVar "allConcreteHeads") (EVar "args"))) (EIf (EVar "deferNonGround") (ELit LUnit) (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligations") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc"))) (EMatch (EApp (EApp (EApp (EVar "oblCallVerdict") (EVar "univ")) (EVar "iface")) (EVar "args")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PCon "True")) () (EApp (EApp (EApp (EApp (EVar "checkNestedReqs") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc"))) (arm (PCon "Some" (PCon "False")) () (EApp (EApp (EApp (EVar "checkOneCallObligationNoImpl") (EVar "iface")) (EVar "args")) (EVar "loc"))))))))))))
+(DTypeSig false "checkOneCallObligationNoImpl" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit")))))
+(DFunDef false "checkOneCallObligationNoImpl" ((PVar "iface") (PVar "args") (PVar "loc")) (EIf (EApp (EApp (EVar "goalDefersOpenWorld") (EVar "iface")) (EVar "args")) (ELit LUnit) (EApp (EApp (EApp (EVar "reportNumOrNoImpl") (EFieldAccess (EVar "iface") "irName")) (EVar "args")) (EVar "loc"))))
 (DTypeSig false "implMatchesArgsU" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))
 (DFunDef false "implMatchesArgsU" ((PVar "univ") (PVar "iface") (PList (PVar "a"))) (EApp (EApp (EApp (EVar "implMatchesReceiverU") (EVar "univ")) (EVar "iface")) (EVar "a")))
 (DFunDef false "implMatchesArgsU" ((PVar "univ") (PVar "iface") (PVar "args")) (EApp (EApp (EApp (EVar "implMatchesU") (EVar "univ")) (EVar "iface")) (EVar "args")))
-(DTypeSig false "oblGoalIsTruncated" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))
-(DFunDef false "oblGoalIsTruncated" ((PVar "univ") (PVar "iface") (PList (PVar "a0"))) (EApp (EApp (EApp (EApp (EVar "univHeadLongerThan") (EVar "univ")) (EVar "iface")) (EVar "a0")) (ELit (LInt 1))))
-(DFunDef false "oblGoalIsTruncated" (PWild PWild PWild) (EVar "False"))
-(DTypeSig false "univHeadLongerThan" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "Mono") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "univHeadLongerThan" ((PVar "univ") (PVar "iface") (PVar "a0") (PVar "n")) (EBinOp "||" (EApp (EApp (EVar "bucketAnyLonger") (EApp (EApp (EApp (EVar "univConcreteBucket") (EVar "univ")) (EVar "iface")) (EApp (EVar "headTyconMono") (EVar "a0")))) (EVar "n")) (EApp (EApp (EVar "bucketAnyLonger") (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface"))) (EVar "n"))))
+(DTypeSig false "oblCallVerdict" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "Bool"))))))
+(DFunDef false "oblCallVerdict" ((PVar "univ") (PVar "iface") (PList (PVar "a0"))) (EBlock (DoLet false false (PVar "cb") (EApp (EApp (EApp (EVar "univConcreteBucket") (EVar "univ")) (EVar "iface")) (EApp (EVar "headTyconMono") (EVar "a0")))) (DoExpr (EIf (EApp (EApp (EVar "bucketAnyLonger") (EVar "cb")) (ELit (LInt 1))) (EVar "None") (EBlock (DoLet false false (PVar "hb") (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface"))) (DoExpr (EIf (EApp (EApp (EVar "bucketAnyLonger") (EVar "hb")) (ELit (LInt 1))) (EVar "None") (EApp (EVar "Some") (EBinOp "||" (EApp (EApp (EVar "bucketRecvMatch") (EVar "cb")) (EVar "a0")) (EApp (EApp (EVar "bucketRecvMatch") (EVar "hb")) (EVar "a0")))))))))))
+(DFunDef false "oblCallVerdict" ((PVar "univ") (PVar "iface") (PVar "args")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "implMatchesU") (EVar "univ")) (EVar "iface")) (EVar "args"))))
 (DTypeSig false "bucketAnyLonger" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))) (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "bucketAnyLonger" ((PList) PWild) (EVar "False"))
 (DFunDef false "bucketAnyLonger" ((PCons (PTuple (PVar "tys") PWild) (PVar "rest")) (PVar "n")) (EBinOp "||" (EBinOp ">" (EApp (EVar "listLen") (EVar "tys")) (EVar "n")) (EApp (EApp (EVar "bucketAnyLonger") (EVar "rest")) (EVar "n"))))
@@ -43019,15 +43051,15 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkCallObligationsU" (PWild PWild PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkCallObligationsU" ((PVar "deferNonGround") (PVar "dedup") (PVar "univ") (PVar "seen") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false (PVar "iface") (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (DoLet false false (PVar "occs") (EApp (EVar "uOblArgs") (EVar "o"))) (DoLet false false (PVar "loc") (EFieldAccess (EVar "o") "loc")) (DoLet false false (PVar "key") (EApp (EApp (EVar "oblDedupKey") (EVar "iface")) (EVar "occs"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "checkOneCallObligation") (EVar "deferNonGround")) (EVar "univ")) (EVar "iface")) (EVar "occs")) (EVar "loc"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "deferNonGround")) (EVar "dedup")) (EVar "univ")) (EBinOp "::" (EVar "key") (EVar "seen"))) (EVar "rest")))))
 (DTypeSig false "checkOneCallObligation" (TyFun (TyCon "Bool") (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit")))))))
-(DFunDef false "checkOneCallObligation" ((PVar "deferNonGround") (PVar "univ") (PVar "iface") (PVar "occs") (PVar "loc")) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EVar "occs"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "args")) (ELit LUnit) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EApp (EVar "anyListM") (EVar "numUnimplementableHead")) (EVar "args"))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EApp (EApp (EVar "anyListM") (EVar "monoIsFunction")) (EVar "args")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "implMatchesArgsU") (EVar "univ")) (EVar "iface")) (EVar "args")))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EVar "not") (EApp (EVar "builtinClassPresent") (EVar "BNum")))) (ELit LUnit) (EIf (EApp (EVar "not") (EApp (EVar "allConcreteHeads") (EVar "args"))) (EIf (EVar "deferNonGround") (ELit LUnit) (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligations") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc"))) (EIf (EApp (EApp (EApp (EVar "oblGoalIsTruncated") (EVar "univ")) (EVar "iface")) (EVar "args")) (ELit LUnit) (EIf (EApp (EApp (EApp (EVar "implMatchesArgsU") (EVar "univ")) (EVar "iface")) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "checkNestedReqs") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc")) (EIf (EApp (EApp (EVar "goalDefersOpenWorld") (EVar "iface")) (EVar "args")) (ELit LUnit) (EApp (EApp (EApp (EVar "reportNumOrNoImpl") (EFieldAccess (EVar "iface") "irName")) (EVar "args")) (EVar "loc")))))))))))))
+(DFunDef false "checkOneCallObligation" ((PVar "deferNonGround") (PVar "univ") (PVar "iface") (PVar "occs") (PVar "loc")) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EVar "occs"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "args")) (ELit LUnit) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EApp (EVar "anyListM") (EVar "numUnimplementableHead")) (EVar "args"))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EApp (EApp (EVar "anyListM") (EVar "monoIsFunction")) (EVar "args")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "implMatchesArgsU") (EVar "univ")) (EVar "iface")) (EVar "args")))) (EApp (EApp (EApp (EVar "pushNoImplError") (EFieldAccess (EVar "iface") "irName")) (EVar "loc")) (EVar "args")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (EApp (EVar "not") (EApp (EVar "builtinClassPresent") (EVar "BNum")))) (ELit LUnit) (EIf (EApp (EVar "not") (EApp (EVar "allConcreteHeads") (EVar "args"))) (EIf (EVar "deferNonGround") (ELit LUnit) (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligations") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc"))) (EMatch (EApp (EApp (EApp (EVar "oblCallVerdict") (EVar "univ")) (EVar "iface")) (EVar "args")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PCon "True")) () (EApp (EApp (EApp (EApp (EVar "checkNestedReqs") (EVar "univ")) (EVar "iface")) (EVar "args")) (EVar "loc"))) (arm (PCon "Some" (PCon "False")) () (EApp (EApp (EApp (EVar "checkOneCallObligationNoImpl") (EVar "iface")) (EVar "args")) (EVar "loc"))))))))))))
+(DTypeSig false "checkOneCallObligationNoImpl" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit")))))
+(DFunDef false "checkOneCallObligationNoImpl" ((PVar "iface") (PVar "args") (PVar "loc")) (EIf (EApp (EApp (EVar "goalDefersOpenWorld") (EVar "iface")) (EVar "args")) (ELit LUnit) (EApp (EApp (EApp (EVar "reportNumOrNoImpl") (EFieldAccess (EVar "iface") "irName")) (EVar "args")) (EVar "loc"))))
 (DTypeSig false "implMatchesArgsU" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))
 (DFunDef false "implMatchesArgsU" ((PVar "univ") (PVar "iface") (PList (PVar "a"))) (EApp (EApp (EApp (EVar "implMatchesReceiverU") (EVar "univ")) (EVar "iface")) (EVar "a")))
 (DFunDef false "implMatchesArgsU" ((PVar "univ") (PVar "iface") (PVar "args")) (EApp (EApp (EApp (EVar "implMatchesU") (EVar "univ")) (EVar "iface")) (EVar "args")))
-(DTypeSig false "oblGoalIsTruncated" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))
-(DFunDef false "oblGoalIsTruncated" ((PVar "univ") (PVar "iface") (PList (PVar "a0"))) (EApp (EApp (EApp (EApp (EVar "univHeadLongerThan") (EVar "univ")) (EVar "iface")) (EVar "a0")) (ELit (LInt 1))))
-(DFunDef false "oblGoalIsTruncated" (PWild PWild PWild) (EVar "False"))
-(DTypeSig false "univHeadLongerThan" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "Mono") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "univHeadLongerThan" ((PVar "univ") (PVar "iface") (PVar "a0") (PVar "n")) (EBinOp "||" (EApp (EApp (EVar "bucketAnyLonger") (EApp (EApp (EApp (EVar "univConcreteBucket") (EVar "univ")) (EVar "iface")) (EApp (EVar "headTyconMono") (EVar "a0")))) (EVar "n")) (EApp (EApp (EVar "bucketAnyLonger") (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface"))) (EVar "n"))))
+(DTypeSig false "oblCallVerdict" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "Bool"))))))
+(DFunDef false "oblCallVerdict" ((PVar "univ") (PVar "iface") (PList (PVar "a0"))) (EBlock (DoLet false false (PVar "cb") (EApp (EApp (EApp (EVar "univConcreteBucket") (EVar "univ")) (EVar "iface")) (EApp (EVar "headTyconMono") (EVar "a0")))) (DoExpr (EIf (EApp (EApp (EVar "bucketAnyLonger") (EVar "cb")) (ELit (LInt 1))) (EVar "None") (EBlock (DoLet false false (PVar "hb") (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface"))) (DoExpr (EIf (EApp (EApp (EVar "bucketAnyLonger") (EVar "hb")) (ELit (LInt 1))) (EVar "None") (EApp (EVar "Some") (EBinOp "||" (EApp (EApp (EVar "bucketRecvMatch") (EVar "cb")) (EVar "a0")) (EApp (EApp (EVar "bucketRecvMatch") (EVar "hb")) (EVar "a0")))))))))))
+(DFunDef false "oblCallVerdict" ((PVar "univ") (PVar "iface") (PVar "args")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "implMatchesU") (EVar "univ")) (EVar "iface")) (EVar "args"))))
 (DTypeSig false "bucketAnyLonger" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))) (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "bucketAnyLonger" ((PList) PWild) (EVar "False"))
 (DFunDef false "bucketAnyLonger" ((PCons (PTuple (PVar "tys") PWild) (PVar "rest")) (PVar "n")) (EBinOp "||" (EBinOp ">" (EApp (EVar "listLen") (EVar "tys")) (EVar "n")) (EApp (EApp (EVar "bucketAnyLonger") (EVar "rest")) (EVar "n"))))

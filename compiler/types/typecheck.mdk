@@ -25226,13 +25226,32 @@ checkOneCallObligation deferNonGround univ iface occs loc =
   -- Measured firings across `stdlib/list.mdk` and `compiler/driver/medaka_cli.mdk`: 0.
   -- Regression: test/dict_fixtures/s-nary-truncated-goal-not-ambiguous.mdk (accept) and
   -- s-nary-truncated-goal-joint-rejects.mdk (reject).
-  else if oblGoalIsTruncated univ iface args then ()
-  else if implMatchesArgsU univ iface args then
+  -- ⚡ PERF (#1974): the truncation gate and the match test below read THE SAME two
+  -- buckets, so they are answered from ONE pair of lookups (`oblCallVerdict`) rather
+  -- than the two-then-two the separate `oblGoalIsTruncated` / `implMatchesArgsU` calls
+  -- performed.  Every `mregLookupK` RENDERS ITS KEY INTO A FRESH STRING (`insertUnivImplAt`
+  -- carries the same warning for the same reason, and `check` is GC-bound), so the
+  -- doubled lookups were ~70 MB of extra garbage at N=400 modules and ~22% of the whole
+  -- `typecheck` stage on `diff_compiler_perf_scaling.sh`'s `modules` shape — enough to
+  -- push its TIME arm over the gate's 3.0x-per-doubling ceiling (measured 1.63 s -> 1.28 s
+  -- at N=400 with the gate stubbed out).  The VERDICTS are byte-identical: same buckets,
+  -- same concrete-then-headless order, same two tests, truncation still asked FIRST and
+  -- over BOTH buckets.
+  else match oblCallVerdict univ iface args
+    -- truncated goal — defer to the joint obligation (see the block above).
+    None => ()
     -- Recurse into a matched CONDITIONAL instance's `requires` (`impl Display (a, b)
     -- requires Display a, Display b`) so an unsatisfied element constraint surfaces
     -- (`main = (Red, 5)` → `No impl of Display for Color`) instead of the head-only
     -- match silently accepting (→ null element dict → SIGSEGV at runtime).
-    checkNestedReqs univ iface args loc
+    Some True => checkNestedReqs univ iface args loc
+    Some False => checkOneCallObligationNoImpl iface args loc
+
+-- the no-impl tail of `checkOneCallObligation` — reached when the goal is neither a
+-- truncation nor matched by any impl.  Extracted verbatim so `oblCallVerdict`'s three
+-- verdicts can be a `match` without duplicating it; the two arms below are unchanged.
+checkOneCallObligationNoImpl : IfaceRef -> List Mono -> Option Loc -> Unit
+checkOneCallObligationNoImpl iface args loc =
   -- 🚨 #1939 / #1938 (OPEN WORLD): `allConcreteHeads` IS NOT GROUNDNESS, AND ONLY
   -- GROUNDNESS LICENSES A REJECT HERE.  It asks whether every argument has a head
   -- TYCON, which `Wrap a` satisfies while still carrying a variable — so a goal like
@@ -25271,7 +25290,7 @@ checkOneCallObligation deferNonGround univ iface occs loc =
   --     end-of-sprint review's S0-2 asserted the opposite and called this conjunct
   --     vacuous for a declared context; it is vacuous only for a goal whose openness is
   --     ALL rigid — S2-5's nested-rigid shape, which conjunct 3 now covers.)
-  else if goalDefersOpenWorld iface args then ()
+  if goalDefersOpenWorld iface args then ()
   -- #838 I4 (was checkOneImplObligation step 9): reportNumOrNoImpl is a strict superset
   -- of pushNoImplError — it reframes a ground `Num`-obligation tracing to a numeric
   -- LITERAL (loc-keyed `numlitReframeLoc`, not prov-keyed) into `T-TYPE-MISMATCH`, and
@@ -25286,24 +25305,37 @@ implMatchesArgsU : ImplUniverse -> IfaceRef -> List Mono -> Bool
 implMatchesArgsU univ iface [a] = implMatchesReceiverU univ iface a
 implMatchesArgsU univ iface args = implMatchesU univ iface args
 
--- #1867: is this goal a TRUNCATION of a k-parameter predicate, k > the goal's own
--- arity?  Scoped to arity 1 because that is the only truncation any producer mints:
--- `recordCallObligations` shatters a predicate into ONE obligation per dict slot, each
--- carrying a single mono.  Every other goal on this channel is a whole vector.  See
--- `checkOneCallObligation`'s arm for the verdict this decides and why deferring is not
--- a [W-QUIETER] regression.
-oblGoalIsTruncated : ImplUniverse -> IfaceRef -> List Mono -> Bool
-oblGoalIsTruncated univ iface [a0] = univHeadLongerThan univ iface a0 1
-oblGoalIsTruncated _ _ _ = False
-
--- Does SOME impl of [iface] that this goal could reach declare more than [n] head
--- types?  Reads exactly the two buckets `implMatchesReceiverU` reads, in the same
--- order (concrete receiver-head bucket, then the iface's headless bucket), so the
--- question is asked over precisely the impl set the arity-1 match test would have
--- matched against — no third universe, no new registry read.
-univHeadLongerThan : ImplUniverse -> IfaceRef -> Mono -> Int -> Bool
-univHeadLongerThan univ iface a0 n = bucketAnyLonger (univConcreteBucket univ iface (headTyconMono a0)) n
-  || bucketAnyLonger (univHeadless univ iface) n
+-- #1867 + PERF (#1974): the ONE call-obligation verdict, answered from ONE pair of
+-- bucket lookups.  It fuses two questions the separate `oblGoalIsTruncated` /
+-- `implMatchesArgsU` pair asked over THE SAME buckets, each re-minting (and re-RENDERING,
+-- see `insertUnivImplAt`) its registry key:
+--   `None`       — the goal is a TRUNCATION of a k-parameter predicate, k > its own
+--                  arity: some impl of [iface] this goal could reach declares more head
+--                  types than the goal carries.  Scoped to arity 1 because that is the
+--                  only truncation any producer mints — `recordCallObligations` shatters
+--                  a predicate into ONE obligation per dict slot, each carrying a single
+--                  mono; every other goal on this channel is a whole vector.  See
+--                  `checkOneCallObligation`'s block for the verdict this decides and why
+--                  deferring is not a [W-QUIETER] regression.
+--   `Some True`  — some impl matches (receiver-only at arity 1, full head vector above).
+--   `Some False` — no impl matches.
+-- ⚠️ ORDER IS SEMANTIC AND UNCHANGED.  The truncation question is still asked FIRST and
+-- over BOTH buckets (concrete receiver-head bucket, then the iface's headless bucket) —
+-- a goal that is truncated defers even when the concrete bucket would have matched it.
+-- The headless bucket is still read only when the concrete one did not already answer
+-- "truncated", exactly as the old `||` short-circuited; it is then REUSED by the match
+-- test instead of being looked up again.  No third universe, no new registry read.
+oblCallVerdict : ImplUniverse -> IfaceRef -> List Mono -> Option Bool
+oblCallVerdict univ iface [a0] =
+  let cb = univConcreteBucket univ iface (headTyconMono a0)
+  if bucketAnyLonger cb 1 then None
+  else
+    let hb = univHeadless univ iface
+    if bucketAnyLonger hb 1 then
+      None
+    else
+      Some (bucketRecvMatch cb a0 || bucketRecvMatch hb a0)
+oblCallVerdict univ iface args = Some (implMatchesU univ iface args)
 
 bucketAnyLonger : List (List Ty, List Require) -> Int -> Bool
 bucketAnyLonger [] _ = False

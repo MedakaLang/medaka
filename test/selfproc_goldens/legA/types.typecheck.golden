@@ -315,6 +315,7 @@ checkModulesPreamble : List Decl -> List Decl -> List (String, List Decl) -> (Li
 checkNestedReqs : ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> Unit
 checkOneAxis : String -> String -> Param -> Unit
 checkOneCallObligation : Bool -> ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> Unit
+checkOneCallObligationNoImpl : IfaceRef -> List Mono -> Option Loc -> Unit
 checkOneEffectParam : String -> String -> Unit
 checkOneIfaceCycle : ClassEnv -> Int -> Ref (Map String Unit) -> CeRow -> Unit
 checkPhantomMethods : ClassEnv -> Int -> Unit
@@ -1332,10 +1333,10 @@ numlitMismatchMsg : Option Loc -> List Mono -> String
 numlitReframeLoc : Option Loc -> Bool
 oblArgKey : Mono -> String
 oblAsTuple : UObligation -> (IfaceRef, List Mono, Option Loc)
+oblCallVerdict : ImplUniverse -> IfaceRef -> List Mono -> Option Bool
 oblDedupKey : IfaceRef -> List Mono -> String
 oblDispatchMonos : UObligation -> List Mono
 oblDispatchMonosGo : String -> List String -> Ty -> Mono -> List Mono
-oblGoalIsTruncated : ImplUniverse -> IfaceRef -> List Mono -> Bool
 oblIfaceKey : IfaceRef -> TabKey
 oblIfaceKeys : IfaceRef -> List TabKey
 oblKeyParts : Int -> List (Option HeadKey) -> (List TabKey, List Int)
@@ -1874,7 +1875,6 @@ unitMangledShadows : List String -> (String, List Decl) -> List (String, String)
 univAddIfaceTag : Bool -> RegKey -> TabKey -> Registry SetRegistry -> Registry SetRegistry
 univConcreteBucket : ImplUniverse -> IfaceRef -> Option HeadKey -> List (List Ty, List Require)
 univHeadCountsInCensus : List Ty -> Bool
-univHeadLongerThan : ImplUniverse -> IfaceRef -> Mono -> Int -> Bool
 univHeadless : ImplUniverse -> IfaceRef -> List (List Ty, List Require)
 univReceiverTag : List Ty -> Option HeadKey
 unknownCtorMsg : String -> String
