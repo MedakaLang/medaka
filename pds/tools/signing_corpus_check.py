@@ -16,6 +16,17 @@ RFC6979_SHA = "f8dd2a808d456c4a54e300a23e9f5a67e122c3024119acbfd73e3bf664491cb2"
 WYCHEPROOF_SHA = "6508e9cc99c169c7d59a6891d939387f115491c479088ddcdcec4d137be69f34"
 PDS_DIGEST = "sha256:d95725b24dbe53af9d91dc69750556931ebed6c396f2cfa42b221434db642f12"
 PDS_REVISION = "374cf1d4ba782d4391bbb73e4e2d3f320d4846d6"
+LIBSECP_CONTROL_RUNNER = """#!/bin/sh
+printf '%s\\n' fresh-independent-oracle-output
+"""
+K256_CONTROL_RUNNER = """#!/bin/sh
+control_output=fresh-independent-oracle-output
+printf '%s\\n' "$control_output"
+"""
+K256_RUNNER = """#!/bin/sh
+# ORACLE_EXECUTION: k256 + locked rfc6979 0.4.0
+exec cargo run --quiet --locked --manifest-path "$ORACLE_WORK/rust/Cargo.toml" -- "$1"
+"""
 
 
 def fail(message: str) -> None:
@@ -95,7 +106,7 @@ def oracle_control_completed(proof: subprocess.CompletedProcess[str]) -> bool:
     if proof.returncode != 0 or len(proof_lines) != 5:
         return False
     rows = [line.split() for line in proof_lines]
-    if [len(row) for row in rows] != [5, 5, 6, 6, 2]:
+    if [len(row) for row in rows] != [6, 6, 7, 7, 2]:
         return False
     libsecp_runner, k256_runner, libsecp_output, k256_output, compared = rows
     file_ids = [libsecp_runner[3], k256_runner[3]]
@@ -105,14 +116,19 @@ def oracle_control_completed(proof: subprocess.CompletedProcess[str]) -> bool:
         and libsecp_output[:2] == ["output", "libsecp256k1"]
         and k256_output[:2] == ["output", "k256"]
         and compared[0] == "compared"
-        and libsecp_runner[2:5] == libsecp_output[2:5]
-        and k256_runner[2:5] == k256_output[2:5]
+        and libsecp_runner[2:6] == libsecp_output[2:6]
+        and k256_runner[2:6] == k256_output[2:6]
         and libsecp_runner[2] != k256_runner[2]
         and (file_ids == ["unavailable", "unavailable"] or len(set(file_ids)) == 2)
-        and libsecp_runner[4] != k256_runner[4]
+        and libsecp_runner[4] == libsecp_runner[5]
+        and k256_runner[4] == k256_runner[5]
+        and libsecp_runner[5] != k256_runner[5]
         and all(is_hex(value, 32) for value in [libsecp_runner[2], k256_runner[2]])
-        and all(is_hex(value, 32) for value in [libsecp_runner[4], k256_runner[4]])
-        and len({libsecp_output[5], k256_output[5], compared[1]}) == 1
+        and all(
+            is_hex(value, 32)
+            for value in [libsecp_runner[4], libsecp_runner[5], k256_runner[4], k256_runner[5]]
+        )
+        and len({libsecp_output[6], k256_output[6], compared[1]}) == 1
         and is_hex(compared[1], 32)
     )
 
@@ -151,6 +167,7 @@ def require_generator_authorities(root: pathlib.Path) -> None:
         'LIBSECP_RUNNER="$WORK/libsecp-sign"',
         'exec cargo run --quiet --locked --manifest-path "$ORACLE_WORK/rust/Cargo.toml" -- "$1"',
         'K256_RUNNER="$WORK/k256-runner"',
+        f"K256_WRAPPER_EXPECTED_SHA={hashlib.sha256(K256_RUNNER.encode()).hexdigest()}",
     ]
     for real_anchor in real_anchors:
         if generator.count(real_anchor) != 1:
@@ -163,17 +180,43 @@ def require_generator_authorities(root: pathlib.Path) -> None:
         '  K256_RUNNER="$WORK/k256-runner"',
     ]:
         fail("signing authority runner bindings drifted or were reassigned")
-    k256_setup = '''  cat > "$WORK/k256-runner" <<'EOF'
-#!/bin/sh
-# ORACLE_EXECUTION: k256 + locked rfc6979 0.4.0
-exec cargo run --quiet --locked --manifest-path "$ORACLE_WORK/rust/Cargo.toml" -- "$1"
-EOF
+    expected_literals = [
+        f"LIBSECP_CONTROL_RUNNER_EXPECTED_SHA={hashlib.sha256(LIBSECP_CONTROL_RUNNER.encode()).hexdigest()}",
+        f"K256_CONTROL_RUNNER_EXPECTED_SHA={hashlib.sha256(K256_CONTROL_RUNNER.encode()).hexdigest()}",
+        f"K256_WRAPPER_EXPECTED_SHA={hashlib.sha256(K256_RUNNER.encode()).hexdigest()}",
+    ]
+    for expected_literal in expected_literals:
+        if generator.count(expected_literal) != 1:
+            fail(f"expected runner implementation digest drifted: {expected_literal}")
+    expected_assignments = re.findall(
+        r"^  (?:LIBSECP_EXPECTED_SHA|K256_EXPECTED_SHA)=.*$", generator, re.MULTILINE
+    )
+    if expected_assignments != [
+        "  LIBSECP_EXPECTED_SHA=$LIBSECP_CONTROL_RUNNER_EXPECTED_SHA",
+        "  K256_EXPECTED_SHA=$K256_CONTROL_RUNNER_EXPECTED_SHA",
+        '  LIBSECP_EXPECTED_SHA=$(sha256_file "$WORK/libsecp-sign")',
+        "  K256_EXPECTED_SHA=$K256_WRAPPER_EXPECTED_SHA",
+    ]:
+        fail("runner expected-implementation bindings drifted or were reassigned")
+    k256_setup = f'''  cat > "$WORK/k256-runner" <<'EOF'
+{K256_RUNNER}EOF
   chmod +x "$WORK/k256-runner"
   K256_RUNNER="$WORK/k256-runner"'''
     if generator.count(k256_setup) != 1:
         fail("real k256 runner is not exactly bound to its locked cargo command")
+    wrapper_templates = [
+        ("libsecp control", "$WORK/libsecp-control-runner", LIBSECP_CONTROL_RUNNER),
+        ("k256 control", "$WORK/k256-control-runner", K256_CONTROL_RUNNER),
+        ("k256 real", "$WORK/k256-runner", K256_RUNNER),
+    ]
+    for label, path, template in wrapper_templates:
+        block = f'''  cat > "{path}" <<'EOF'
+{template}EOF'''
+        if generator.count(block) != 1 or generator.count(f'cat > "{path}"') != 1:
+            fail(f"{label} wrapper template is missing, duplicated, or rewritten")
     common_path = [
-        '  attest_oracle_runners "$libsecp_runner" "$k256_runner" "$receipt"',
+        "  attest_oracle_runners \\",
+        '    "$libsecp_runner" "$k256_runner" "$libsecp_expected_sha" "$k256_expected_sha" "$receipt"',
         '  ORACLE_WORK="$WORK" "$libsecp_runner" "$input" > "$libsecp_output"',
         "  record_oracle_completion libsecp256k1 \\",
         '  ORACLE_WORK="$WORK" "$k256_runner" "$input" > "$k256_output"',
@@ -193,6 +236,27 @@ EOF
         fail("fresh oracle run/compare completion evidence is absent")
     mutations = [
         (
+            "delegating wrapper rewrite",
+            "# ORACLE_MODE_SETUP_COMPLETE",
+            "# ORACLE_MODE_SETUP_COMPLETE\n"
+            'if [ "$MODE" = oracle-control ]; then\n'
+            '  cat > "$WORK/k256-control-runner" <<\'EOF\'\n'
+            "#!/bin/sh\n"
+            'exec "$WORK/libsecp-control-runner" "$1"\n'
+            "EOF\n"
+            "fi",
+        ),
+        (
+            "expected digest omission",
+            "  K256_EXPECTED_SHA=$K256_CONTROL_RUNNER_EXPECTED_SHA",
+            "  K256_EXPECTED_SHA= # omit expected implementation digest",
+        ),
+        (
+            "expected digest forgery",
+            "  K256_EXPECTED_SHA=$K256_CONTROL_RUNNER_EXPECTED_SHA",
+            "  K256_EXPECTED_SHA=" + ("0" * 64) + " # forge expected implementation digest",
+        ),
+        (
             "direct runner alias",
             '  K256_RUNNER="$WORK/k256-control-runner"',
             '  K256_RUNNER="$WORK/libsecp-control-runner" # alias the first runner',
@@ -205,16 +269,16 @@ EOF
         ),
         (
             "runner identity receipt omission",
-            '  attest_oracle_runners "$libsecp_runner" "$k256_runner" "$receipt"',
-            '  attest_oracle_runners "$libsecp_runner" "$k256_runner" "$receipt"\n'
+            '    "$libsecp_runner" "$k256_runner" "$libsecp_expected_sha" "$k256_expected_sha" "$receipt"',
+            '    "$libsecp_runner" "$k256_runner" "$libsecp_expected_sha" "$k256_expected_sha" "$receipt"\n'
             '  : > "$receipt" # omit runner identity receipt',
         ),
         (
             "runner identity receipt forgery",
-            '  attest_oracle_runners "$libsecp_runner" "$k256_runner" "$receipt"',
-            '  attest_oracle_runners "$libsecp_runner" "$k256_runner" "$receipt"\n'
-            "  printf '%s\\n' 'runner libsecp256k1 forged-a forged-file-a forged-content-a' "
-            "'runner k256 forged-b forged-file-b forged-content-b' > \"$receipt\"",
+            '    "$libsecp_runner" "$k256_runner" "$libsecp_expected_sha" "$k256_expected_sha" "$receipt"',
+            '    "$libsecp_runner" "$k256_runner" "$libsecp_expected_sha" "$k256_expected_sha" "$receipt"\n'
+            "  printf '%s\\n' 'runner libsecp256k1 forged-a forged-file-a forged-expected-a forged-content-a' "
+            "'runner k256 forged-b forged-file-b forged-expected-b forged-content-b' > \"$receipt\"",
         ),
         (
             "post-setup early exit",
