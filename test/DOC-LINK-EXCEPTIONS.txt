@@ -174,4 +174,3 @@ REF	test/diff_compiler_eval_typed.sh	migrated into the snapshot # EVAL section i
 
 # ── REF: pds/ — #1722 widened the bare-path matcher to include pds/… ────────
 REF	pds/main.mdk	pds/README.md documents the intentional ABSENCE of pds/main.mdk — pds/medaka.toml has no `entry` key on purpose, so this citation is deliberately naming a file that must not exist
-REF	pds/test/vectors/helper.sh	pds/README.md cites this as an ILLUSTRATIVE example filename (a script in a subdirectory of pds/test/, to explain the CI-enrollment asymmetry) — not a real file
