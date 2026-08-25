@@ -52,18 +52,51 @@ if not wf_paths:
     print(f"FAIL: no workflow files under {wfdir} — nothing to check")
     sys.exit(1)
 
+# Composite actions (`.github/actions/*/action.yml`) are invisible to the workflow
+# glob above but can be the ONLY place a gate is actually invoked from (#1961) — a
+# job's `run:` step can be entirely inside a local composite action's own steps,
+# with no trace of the script's path anywhere in ci.yml itself. Scanned for
+# invocation purposes only (below); they define no shard `pattern:`s of their own.
+actions_dir = pathlib.Path(root) / '.github' / 'actions'
+action_paths = (sorted(actions_dir.glob('*/action.yml')) + sorted(actions_dir.glob('*/action.yaml'))
+                if actions_dir.is_dir() else [])
+
 # `pats` (shard name -> glob pattern) only ever comes from a job shaped like
 # ci.yml's `gates` job (a `strategy.matrix.include` list of {name, pattern}
 # dicts) — but that shape isn't unique to ci.yml BY DESIGN: any workflow file
 # may define shard-style matrix coverage and it is picked up the same way.
 # `wf_text` is the concatenation of every workflow file's raw text, so a gate
 # named literally in a `run:` step in ANY workflow (e.g. nightly.yml) counts.
+# `invocation_text_parts` (#1969) collects ONLY the text of actual invocation
+# sites — `run:` step bodies (workflow jobs AND composite-action steps, #1961) —
+# not the whole raw file. A gate's path merely being MENTIONED somewhere in a
+# workflow (a `case`/classifier arm mapping paths to shard names, a comment, a
+# job `name:`, ...) is not evidence the gate is ever run; only a `run:` step
+# that contains the path is.
+def run_step_texts(doc):
+    texts = []
+    if not isinstance(doc, dict):
+        return texts
+    jobs = doc.get('jobs')
+    if isinstance(jobs, dict):
+        for job in jobs.values():
+            for step in ((job or {}).get('steps') or []):
+                run = (step or {}).get('run')
+                if isinstance(run, str):
+                    texts.append(run)
+    runs = doc.get('runs')
+    if isinstance(runs, dict):
+        for step in (runs.get('steps') or []):
+            run = (step or {}).get('run')
+            if isinstance(run, str):
+                texts.append(run)
+    return texts
+
 pats = {}
-wf_text_parts = []
+invocation_text_parts = []
 parse_failed = []
 for wf in wf_paths:
     txt = wf.read_text()
-    wf_text_parts.append(txt)
     try:
         import yaml
         doc = yaml.safe_load(txt)
@@ -74,17 +107,34 @@ for wf in wf_paths:
             for e in include:
                 if 'name' in e and 'pattern' in e:
                     pats[e['name']] = e['pattern']
+        invocation_text_parts.extend(run_step_texts(doc))
     except Exception:
         # No PyYAML, or this file didn't parse? Fall back to a regex over the
-        # `pattern:` lines for THIS file. Do NOT silently drop it — a coverage
-        # check that cannot read a workflow must say so, not pretend it's empty.
+        # `pattern:` lines for THIS file, and to the whole raw text for
+        # invocation purposes (conservative — a file we can't parse into
+        # `run:` steps still shouldn't silently drop from the invocation
+        # scan). Do NOT silently drop it either way — a coverage check that
+        # cannot read a workflow must say so, not pretend it's empty.
         found = re.findall(r'- name: (\w+)\n\s+pattern: "([^"]+)"', txt)
         if found:
             pats.update(dict(found))
         else:
             parse_failed.append(str(wf))
+        invocation_text_parts.append(txt)
 
-wf_text = '\n'.join(wf_text_parts)
+for act in action_paths:
+    txt = act.read_text()
+    try:
+        import yaml
+        doc = yaml.safe_load(txt)
+        invocation_text_parts.extend(run_step_texts(doc))
+    except Exception:
+        # Same conservative fallback as above — an unparseable composite
+        # action still gets its raw text scanned rather than silently
+        # dropped from the invocation scan.
+        invocation_text_parts.append(txt)
+
+invocation_text = '\n'.join(invocation_text_parts)
 
 if parse_failed and not pats:
     print("FAIL: could not parse any shard patterns out of any workflow, and these files")
@@ -209,12 +259,18 @@ for name, pat in pats.items():
                 dupes.append((key, seen[key], name))
             seen[key] = name
 
-# "Named" = a workflow step invokes the script by its repo-relative path (that is how
-# the `compiler-soundness` job runs the fixpoint + the compiler-source typecheck, and how
-# nightly.yml runs check_removed_constructs / fuzz_diff). Matching on the PATH, not on
-# a bare basename, is what keeps `run.sh` from matching two different gates.
+# "Named" = a `run:` step (in a workflow job OR a local composite action's own
+# steps) invokes the script by its repo-relative path (that is how the
+# `compiler-soundness` job runs the fixpoint + the compiler-source typecheck, how
+# nightly.yml runs check_removed_constructs / fuzz_diff, and how a gate wired up
+# solely through `.github/actions/*/action.yml` gets counted, #1961). Matching on
+# the PATH, not on a bare basename, is what keeps `run.sh` from matching two
+# different gates. Matching only INVOCATION text (`invocation_text`, built above
+# from `run:` step bodies), not the whole raw workflow file, is what keeps a
+# `case`/classifier arm that merely NAMES a script from being misread as running
+# it (#1969).
 named = {g for g in all_gates
-         if g not in seen and re.search(rf'(?<![\w/-]){re.escape(g)}\.sh\b', wf_text)}
+         if g not in seen and re.search(rf'(?<![\w/-]){re.escape(g)}\.sh\b', invocation_text)}
 missing = sorted(all_gates - set(seen) - named - set(exc))
 
 for name in pats:
