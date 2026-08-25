@@ -25,6 +25,11 @@ sha256_file() {
   else shasum -a 256 "$1" | cut -d ' ' -f 1
   fi
 }
+sha256_text() {
+  if command -v sha256sum >/dev/null 2>&1; then printf '%s' "$1" | sha256sum | cut -d ' ' -f 1
+  else printf '%s' "$1" | shasum -a 256 | cut -d ' ' -f 1
+  fi
+}
 fetch() { curl --fail --location --silent --show-error "$1" -o "$2"; }
 check_digest() {
   [ "$(sha256_file "$1")" = "$2" ] || {
@@ -39,13 +44,63 @@ check_tag() {
   }
 }
 
+resolved_runner_path() {
+  runner=$1
+  runner_dir=$(CDPATH= cd -- "$(dirname -- "$runner")" && pwd -P)
+  printf '%s/%s\n' "$runner_dir" "$(basename -- "$runner")"
+}
+
+runner_file_identity() {
+  if identity=$(stat -Lc '%d:%i' "$1" 2>/dev/null); then printf '%s\n' "$identity"
+  elif identity=$(stat -Lf '%d:%i' "$1" 2>/dev/null); then printf '%s\n' "$identity"
+  else printf '%s\n' unavailable
+  fi
+}
+
+attest_oracle_runners() {
+  libsecp_runner=$1 k256_runner=$2 receipt=$3
+  [ -x "$libsecp_runner" ] && [ -x "$k256_runner" ] || {
+    echo "gen_signing_corpus: oracle runner is not executable" >&2
+    exit 1
+  }
+  libsecp_path=$(resolved_runner_path "$libsecp_runner")
+  k256_path=$(resolved_runner_path "$k256_runner")
+  [ "$libsecp_path" != "$k256_path" ] || {
+    echo "gen_signing_corpus: oracle runners resolve to the same path" >&2
+    exit 1
+  }
+  LIBSECP_RUNNER_PATH_SHA=$(sha256_text "$libsecp_path")
+  K256_RUNNER_PATH_SHA=$(sha256_text "$k256_path")
+  LIBSECP_RUNNER_FILE_ID=$(runner_file_identity "$libsecp_runner")
+  K256_RUNNER_FILE_ID=$(runner_file_identity "$k256_runner")
+  if [ "$LIBSECP_RUNNER_FILE_ID" != unavailable ] && [ "$K256_RUNNER_FILE_ID" != unavailable ]; then
+    [ "$LIBSECP_RUNNER_FILE_ID" != "$K256_RUNNER_FILE_ID" ] || {
+      echo "gen_signing_corpus: oracle runners have the same file identity" >&2
+      exit 1
+    }
+  fi
+  LIBSECP_RUNNER_CONTENT_SHA=$(sha256_file "$libsecp_runner")
+  K256_RUNNER_CONTENT_SHA=$(sha256_file "$k256_runner")
+  [ "$LIBSECP_RUNNER_CONTENT_SHA" != "$K256_RUNNER_CONTENT_SHA" ] || {
+    echo "gen_signing_corpus: oracle runners have identical content" >&2
+    exit 1
+  }
+  printf 'runner libsecp256k1 %s %s %s\n' \
+    "$LIBSECP_RUNNER_PATH_SHA" "$LIBSECP_RUNNER_FILE_ID" "$LIBSECP_RUNNER_CONTENT_SHA" >> "$receipt"
+  printf 'runner k256 %s %s %s\n' \
+    "$K256_RUNNER_PATH_SHA" "$K256_RUNNER_FILE_ID" "$K256_RUNNER_CONTENT_SHA" >> "$receipt"
+}
+
 record_oracle_completion() {
-  label=$1 output=$2 receipt=$3
+  label=$1 runner_path_sha=$2 runner_file_id=$3 runner_content_sha=$4
+  output=$5 receipt=$6
   [ -s "$output" ] || {
     echo "gen_signing_corpus: $label produced no fresh output" >&2
     exit 1
   }
-  printf '%s %s\n' "$label" "$(sha256_file "$output")" >> "$receipt"
+  printf 'output %s %s %s %s %s\n' \
+    "$label" "$runner_path_sha" "$runner_file_id" "$runner_content_sha" \
+    "$(sha256_file "$output")" >> "$receipt"
 }
 
 compare_oracle_outputs() {
@@ -65,14 +120,24 @@ compare_oracle_outputs() {
 
 require_oracle_completion() {
   receipt=$1
-  [ "$(wc -l < "$receipt" | tr -d ' ')" -eq 3 ] || {
+  [ "$(wc -l < "$receipt" | tr -d ' ')" -eq 5 ] || {
     echo "gen_signing_corpus: oracle completion receipt is incomplete" >&2
     exit 1
   }
-  libsecp_hash=$(sed -n '1s/^libsecp256k1 //p' "$receipt")
-  k256_hash=$(sed -n '2s/^k256 //p' "$receipt")
-  compared_hash=$(sed -n '3s/^compared //p' "$receipt")
-  [ -n "$libsecp_hash" ] && [ "$libsecp_hash" = "$k256_hash" ] && [ "$libsecp_hash" = "$compared_hash" ] || {
+  libsecp_runner_line=$(sed -n '1p' "$receipt")
+  k256_runner_line=$(sed -n '2p' "$receipt")
+  expected_libsecp_runner_line="runner libsecp256k1 $LIBSECP_RUNNER_PATH_SHA $LIBSECP_RUNNER_FILE_ID $LIBSECP_RUNNER_CONTENT_SHA"
+  expected_k256_runner_line="runner k256 $K256_RUNNER_PATH_SHA $K256_RUNNER_FILE_ID $K256_RUNNER_CONTENT_SHA"
+  [ "$libsecp_runner_line" = "$expected_libsecp_runner_line" ] && \
+    [ "$k256_runner_line" = "$expected_k256_runner_line" ] || {
+    echo "gen_signing_corpus: oracle runner identity receipt disagrees" >&2
+    exit 1
+  }
+  libsecp_hash=$(sed -n "3s/^output libsecp256k1 $LIBSECP_RUNNER_PATH_SHA $LIBSECP_RUNNER_FILE_ID $LIBSECP_RUNNER_CONTENT_SHA //p" "$receipt")
+  k256_hash=$(sed -n "4s/^output k256 $K256_RUNNER_PATH_SHA $K256_RUNNER_FILE_ID $K256_RUNNER_CONTENT_SHA //p" "$receipt")
+  compared_hash=$(sed -n '5s/^compared //p' "$receipt")
+  [ -n "$libsecp_hash" ] && [ "$libsecp_hash" = "$k256_hash" ] && \
+    [ "$libsecp_hash" = "$compared_hash" ] || {
     echo "gen_signing_corpus: oracle run/compare completion evidence disagrees" >&2
     exit 1
   }
@@ -86,10 +151,15 @@ run_oracle_pair() {
     echo "gen_signing_corpus: oracle output cleanup did not establish freshness" >&2
     exit 1
   }
+  attest_oracle_runners "$libsecp_runner" "$k256_runner" "$receipt"
   ORACLE_WORK="$WORK" "$libsecp_runner" "$input" > "$libsecp_output"
-  record_oracle_completion libsecp256k1 "$libsecp_output" "$receipt"
+  record_oracle_completion libsecp256k1 \
+    "$LIBSECP_RUNNER_PATH_SHA" "$LIBSECP_RUNNER_FILE_ID" "$LIBSECP_RUNNER_CONTENT_SHA" \
+    "$libsecp_output" "$receipt"
   ORACLE_WORK="$WORK" "$k256_runner" "$input" > "$k256_output"
-  record_oracle_completion k256 "$k256_output" "$receipt"
+  record_oracle_completion k256 \
+    "$K256_RUNNER_PATH_SHA" "$K256_RUNNER_FILE_ID" "$K256_RUNNER_CONTENT_SHA" \
+    "$k256_output" "$receipt"
   compare_oracle_outputs "$libsecp_output" "$k256_output" "$receipt"
   require_oracle_completion "$receipt"
 }
@@ -101,7 +171,8 @@ printf '%s\n' fresh-independent-oracle-output
 EOF
   cat > "$WORK/k256-control-runner" <<'EOF'
 #!/bin/sh
-printf '%s\n' fresh-independent-oracle-output
+control_output=fresh-independent-oracle-output
+printf '%s\n' "$control_output"
 EOF
   chmod +x "$WORK/libsecp-control-runner" "$WORK/k256-control-runner"
   LIBSECP_RUNNER="$WORK/libsecp-control-runner"
@@ -153,9 +224,9 @@ fi
 # ORACLE_MODE_SETUP_COMPLETE
 run_oracle_pair "$LIBSECP_RUNNER" "$K256_RUNNER" "$HERE/signing_inputs.txt" \
   "$LIBSECP_OUTPUT" "$K256_OUTPUT" "$ORACLE_RECEIPT"
+cat "$ORACLE_RECEIPT"
 
 if [ "$MODE" = oracle-control ]; then
-  cat "$ORACLE_RECEIPT"
   exit 0
 fi
 

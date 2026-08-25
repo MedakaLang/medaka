@@ -269,6 +269,26 @@ cp "$ROOT/pds/test/vectors/wycheproof_secp256k1_sha256_p1363.txt" "$WORK/pds/tes
 cmp "$ROOT/pds/test/vectors/wycheproof_secp256k1_sha256_p1363.txt" "$WORK/pds/test/vectors/wycheproof_secp256k1_sha256_p1363.txt" >/dev/null
 
 cp "$WORK/pds/tools/gen_signing_corpus.sh" "$WORK/generator.baseline"
+apply_mutation M13-alias "$WORK/pds/tools/gen_signing_corpus.sh" \
+  'K256_RUNNER="$WORK/k256-runner"' \
+  's|K256_RUNNER="\$WORK/k256-runner"|K256_RUNNER="\$WORK/k256-runner"\n  K256_RUNNER="\$WORK/libsecp-sign" # alias the prepared k256 slot to libsecp|'
+expect_corpus_red 'M13-alias real k256 runner directly rebound to libsecp with cargo anchor retained'
+cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
+apply_mutation M13-copy "$WORK/pds/tools/gen_signing_corpus.sh" \
+  'chmod +x "$WORK/libsecp-control-runner" "$WORK/k256-control-runner"' \
+  's|chmod \+x "\$WORK/libsecp-control-runner" "\$WORK/k256-control-runner"|chmod +x "\$WORK/libsecp-control-runner" "\$WORK/k256-control-runner"\n  cp "\$WORK/libsecp-control-runner" "\$WORK/k256-control-runner" # same bytes, distinct path|'
+expect_corpus_red 'M13-copy second runner replaced by a same-content copy at a distinct path'
+cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
+apply_mutation M13-identity-omit "$WORK/pds/tools/gen_signing_corpus.sh" \
+  'attest_oracle_runners "$libsecp_runner" "$k256_runner" "$receipt"' \
+  's|attest_oracle_runners "\$libsecp_runner" "\$k256_runner" "\$receipt"|attest_oracle_runners "\$libsecp_runner" "\$k256_runner" "\$receipt"\n  : > "\$receipt" # omit runtime runner identity receipt|'
+expect_corpus_red 'M13-identity-omit runtime runner identity receipt omitted'
+cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
+apply_mutation M13-identity-forge "$WORK/pds/tools/gen_signing_corpus.sh" \
+  '"$LIBSECP_RUNNER_PATH_SHA" "$LIBSECP_RUNNER_FILE_ID" "$LIBSECP_RUNNER_CONTENT_SHA" >> "$receipt"' \
+  's|"\$LIBSECP_RUNNER_PATH_SHA" "\$LIBSECP_RUNNER_FILE_ID" "\$LIBSECP_RUNNER_CONTENT_SHA" >> "\$receipt"|"forged-\$LIBSECP_RUNNER_PATH_SHA" "\$LIBSECP_RUNNER_FILE_ID" "\$LIBSECP_RUNNER_CONTENT_SHA" >> "\$receipt"|'
+expect_corpus_red 'M13-identity-forge runtime runner identity receipt forged'
+cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
 apply_mutation M13-libsecp "$WORK/pds/tools/gen_signing_corpus.sh" \
   'ORACLE_WORK="$WORK" "$libsecp_runner" "$input" > "$libsecp_output"' \
   's/ORACLE_WORK="\$WORK" "\$libsecp_runner" "\$input" > "\$libsecp_output"/: > "\$libsecp_output" # disable common-path libsecp runner/'
