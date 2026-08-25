@@ -473,3 +473,111 @@ jobs:
             gh issue create --title "$TITLE" --label "ws:testing" --body-file "$BODY_FILE"
             echo "opened a new tracking issue"
           fi
+
+  # ── ci-shard-cost-drift: the same self-draining shape as must-fail-census (#1935) ──
+  #
+  # `.github/workflows/ci.yml` used to carry hand-written per-shard cost numbers in its
+  # comments, re-pasted by hand every time someone re-measured — and every paste rotted
+  # the moment the shard layout or corpus size next changed (S-ci-derive-cost,
+  # `.claude/dossier/ci.md`). `scripts/ci_shard_cost.sh` derives the current table live
+  # instead; this job runs it nightly and files/updates ONE tracking issue when the pole
+  # shard changes or a job's wall time crosses ~1.5x the median — never on a clean report.
+  #
+  # It REPORTS. It never edits ci.yml. A CI job that started rewriting its own workflow
+  # file would be a much bigger, unreviewed change than this sprint intends — moving a
+  # gate between shards is a judgment call (see the dossier's per-gate cost history), not
+  # a mechanical rebalance.
+  #
+  # Findings vs. clean is read from the script's own `cost-status:` marker line, never a
+  # bare exit code — the script exits 0 on both findings and clean, and reserves nonzero
+  # for a genuine INFRA failure (no `gh`, no qualifying runs), same discipline as
+  # must_fail_census.sh above.
+  ci-shard-cost-drift:
+    name: "ci_shard_cost drift (pole shard / 1.5x median; findings are FILED, not failed — #1935)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive the current per-job wall-clock table
+        id: cost
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set +e
+          sh scripts/ci_shard_cost.sh > /tmp/cost.log 2>&1
+          rc=$?
+          set -e
+          cat /tmp/cost.log
+
+          if [ "$rc" != "0" ]; then
+            echo "::error::ci_shard_cost.sh could not run (infra) — see the log above."
+            exit 1
+          fi
+
+          pole="$(grep '^pole-name: ' /tmp/cost.log | sed 's/^pole-name: //')"
+          echo "pole=$pole" >> "$GITHUB_OUTPUT"
+
+          TITLE="nightly ci shard cost drift: pole shard / 1.5x-median crossings"
+          existing="$(gh issue list --state open --limit 100 --json number,title,body \
+            --jq ".[] | select(.title == \"$TITLE\")")"
+          prev_pole="$(printf '%s' "$existing" | grep -o 'pole-name: [^ ]*' | head -1 | sed 's/^pole-name: //')"
+
+          findings=0
+          if grep -q '^cost-status: findings' /tmp/cost.log; then
+            findings=1
+          fi
+          if [ -n "$prev_pole" ] && [ "$prev_pole" != "$pole" ]; then
+            findings=1
+            echo "pole changed: '$prev_pole' -> '$pole'"
+          fi
+          echo "findings=$findings" >> "$GITHUB_OUTPUT"
+          {
+            echo "## ci shard cost drift"
+            echo ""
+            echo "Exit $rc — see \`cost-status:\` / \`pole-name:\` in the log below."
+            echo ""
+            echo '```'
+            cat /tmp/cost.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      # ONE tracking issue, updated — not one per night. Same dedup-by-title as
+      # must-fail-census above.
+      - name: File or update the cost-drift tracking issue
+        if: steps.cost.outputs.findings == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          TITLE="nightly ci shard cost drift: pole shard / 1.5x-median crossings"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BODY_FILE="$(mktemp)"
+          {
+            echo "Report on $(date -u +%Y-%m-%dT%H:%MZ). Run: $RUN_URL"
+            echo ""
+            echo "The pole shard changed, or a job crossed ~1.5x the median wall time — a"
+            echo "signal that ci.yml's shard layout may be worth rebalancing, not a broken"
+            echo "build. This job never edits ci.yml itself; moving a gate between shards is"
+            echo "a judgment call (see .claude/dossier/ci.md for the per-gate cost history)."
+            echo ""
+            echo '```'
+            cat /tmp/cost.log
+            echo '```'
+          } > "$BODY_FILE"
+
+          existing="$(gh issue list --state open --limit 100 --json number,title \
+            --jq ".[] | select(.title == \"$TITLE\") | .number" | head -1)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file "$BODY_FILE"
+            echo "updated existing tracking issue #$existing"
+          else
+            gh issue create --title "$TITLE" --label "ws:testing" --body-file "$BODY_FILE"
+            echo "opened a new tracking issue"
+          fi
