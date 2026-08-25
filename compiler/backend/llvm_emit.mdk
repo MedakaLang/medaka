@@ -391,22 +391,20 @@ data GDispCtx =
 -- from methodArityOf, ~3.77×/doubling; #990).  The map returns the SAME first-match value
 -- (`omFromPairs (reverseL …)` makes the FIRST pair win on a duplicate name, matching
 -- lookupAssoc), so the TMC grouping — and therefore the emitted IR — is byte-identical.
--- Uninstalled (None) it FALLS BACK to the list scan, identical answer either way.
+-- RUN-EMIT-003: the second `lookupAssoc n !e.gDispArs` path is RETIRED.
+-- `installDispatchState` installs this map on BOTH arms, so `None` is now a
+-- broken-invariant panic, not a silent slow path that has to agree with the index.
 gDispIsFn : Emit -> String -> Bool
 gDispIsFn e n = match !e.gDispArMap
   Some m => omHasKey n m
-  None => match lookupAssoc n !e.gDispArs
-    Some _ => True
-    None => False
+  None => panic "llvm: gDispArMap read before install (internal error)"
 
 gDispFnArity : Emit -> String -> Int
 gDispFnArity e n = match !e.gDispArMap
   Some m => match omLookup n m
     Some a => a
     None => 0 - 1
-  None => match lookupAssoc n !e.gDispArs
-    Some a => a
-    None => 0 - 1
+  None => panic "llvm: gDispArMap read before install (internal error)"
 
 -- is `n` a member (root included) of a detected group?
 gDispIsMember : Emit -> String -> Bool
@@ -612,8 +610,8 @@ fieldNameToLTy _ = None
 -- GROWS with the program (one entry per annotated fn), and `declSigOf` is called
 -- once per binding per inference pass, so the old scan was quadratic.
 -- the declared (param-type-head-names, return-type-head-name) of a function, or
--- None when it has no annotation.  Falls back to the linear scan only when the
--- index is uninstalled (mirrors `sigLookup`).
+-- None when it has no annotation.  Index-only: this one reads `input.declSigIndex`,
+-- supplied by the caller, so it never had a scan half to fall back to.
 declSigOf : Emit -> String -> Option (List String, String)
 declSigOf e name = omLookup name e.input.declSigIndex
 
@@ -829,11 +827,9 @@ data Emit =
       buf : Ref (List String),
       fnNames : Ref (List String),
       sigs : Ref (List (String, FnSig)),
-      ctors : Ref (List (String, Int)),
       lams : Ref (List String),
       recFields : Ref (List (String, List String)),
       implEntries : Ref (List CImplEntry),
-      ctorTypes : Ref (List (String, String)),
       globalsReg : Ref (List (String, (Bool, LTy))),
       gapMode : GapMode,
       gapLog : Ref (List String),
@@ -865,7 +861,6 @@ data Emit =
       typeIdMap : Ref (Option (OrdMap Int)),
       dispCache : Ref (List String),
       dictConstCache : Ref (List (String, String)),
-      distinctTypeNamesCache : Ref (Option (List String)),
       floatFwSet : Ref (List (String, (Int, List Int))),
       floatClosureFns : Ref (List String),
     }
@@ -998,7 +993,7 @@ isLazyGlobal : Emit -> String -> Bool
 -- lint-disable-next-line rule-duplicate-body
 isLazyGlobal e x = match !e.lazyGlobalMap
   Some m => omHasKey x m
-  None => False
+  None => panic "llvm: lazyGlobalMap read before install (internal error)"
 
 -- ctor-arity table index (ct field is set once at Emit construction, constant).
 installCtorMap : Emit -> List (String, Int) -> Unit
@@ -1044,19 +1039,20 @@ defArityPair e (CBind name [CClause pats body]) =
 defArityPair e (CBind name (c::rest)) = (name, clauseArityC (c::rest))
 defArityPair _ (CBind name []) = (name, 0)
 
--- the recorded emitted define arity of `name` (None when the table is uninstalled
--- or the name is absent — fall back to the unconditional direct call).
+-- the recorded emitted define arity of `name` (None when the name is absent — fall
+-- back to the unconditional direct call).  RUN-EMIT-003: the table is always
+-- installed, so an uninstalled read is a broken invariant, not a second answer.
 defArityOf : Emit -> String -> Option Int
 defArityOf e name = match !e.defArityMap
   Some m => omLookup name m
-  None => None
+  None => panic "llvm: defArityMap read before install (internal error)"
 
 isKnownFn : Emit -> String -> Bool
 isKnownFn e name = match !e.knownFnMap
   Some m => match omLookup name m
     Some _ => True
     None => False
-  None => contains name (fnNames e)
+  None => panic "llvm: knownFnMap read before install (internal error)"
 
 -- Canonicalize a referenced function name to the actual emitted symbol.  The emit
 -- drivers run `mangleUnits` BEFORE `elaborateModules`, so every prelude definition
@@ -1080,8 +1076,8 @@ canonFnName e name =
 -- O(log n) lookup into the CONSTANT global sig table (the `e.sigMap` index built
 -- from `sigTable e` at emitProgram). Byte-identical to `lookupAssoc name (sigTable
 -- e)`: the map is built with `reverseL` so the FIRST list entry wins on a duplicate
--- key, matching lookupAssoc's first-match. Falls back to the linear scan only when
--- the map is uninstalled. Use for GLOBAL-sigs sites (`sigTable e`); the threaded
+-- key, matching lookupAssoc's first-match. RUN-EMIT-003: the linear-scan half is
+-- retired — the map is always installed. Use for GLOBAL-sigs sites (`sigTable e`); the threaded
 -- `sigs` parameter is a DIFFERENT table, not a mutated one — it is indexed too, via
 -- `sigMapOf` below. (This line used to forbid that, claiming threaded `sigs` is
 -- "augmented" with Float-propagation types. It is not: `sigs` is never consed,
@@ -1089,16 +1085,15 @@ canonFnName e name =
 sigLookup : Emit -> String -> Option FnSig
 sigLookup e name = match !e.sigMap
   Some m => omLookup name m
-  None => lookupAssoc name (sigTable e)
+  None => panic "llvm: sigMap read before install (internal error)"
 
 -- The GLOBAL sig table as a map, for the sites that thread `sigs` onward rather
 -- than look up a single name (bindVarTy → paramUseTy). Reuses the installed
--- `e.sigMap` index; rebuilds from `sigTable e` only when uninstalled, which is
--- the same fallback `sigLookup` takes and preserves first-match either way.
+-- `e.sigMap` index.  RUN-EMIT-003: the rebuild-from-`sigTable` path is retired.
 sigMapOf : Emit -> OrdMap FnSig
 sigMapOf e = match !e.sigMap
   Some m => m
-  None => sigsToMap (sigTable e)
+  None => panic "llvm: sigMap read before install (internal error)"
 
 -- the inferred return type of a known function (Int if unknown — keeps the
 -- pre-signature behaviour for any head the table somehow misses).
@@ -1108,19 +1103,15 @@ fnRetTy e name = match sigLookup e name
   None => LTInt
 
 -- ── constructor table ─────────────────────────────────────────────
--- the constructor arity table (set once in emitProgram); membership decides
--- whether a `CVar`/`CApp` head names an ADT constructor (→ heap allocation).
-ctorTable : Emit -> List (String, Int)
-ctorTable e = !e.ctors
-
+-- membership of the constructor arity index decides whether a `CVar`/`CApp` head
+-- names an ADT constructor (→ heap allocation).  RUN-EMIT-003: the raw list form
+-- (`e.ctors`) went with the retired scan; `e.ctorMap` is the only representation.
 isCtor : Emit -> String -> Bool
 isCtor e name = match !e.ctorMap
   Some m => match omLookup name m
     Some _ => True
     None => False
-  None => match lookupAssoc name (ctorTable e)
-    Some _ => True
-    None => False
+  None => panic "llvm: ctorMap read before install (internal error)"
 
 -- ── record field-order table ─────────────────────────────────────
 -- maps record-ctor-name -> [field-names-in-declaration-order].  CFieldAccess uses
@@ -1168,8 +1159,9 @@ recFieldTable e = !e.recFields
 --                   owning that label — exactly `findRecordByLabel`'s answer. Built
 --                   by folding the table in REVERSE so an earlier record overwrites
 --                   a later one, which is what makes "first in table order" win.
--- Uninstalled (None) both readers fall back to the original scans, so a probe that
--- constructs an `Emit` without going through emitProgram is unaffected.
+-- RUN-EMIT-003: both readers' scan fallbacks are RETIRED.  `buildEmitState` is the
+-- ONE `Emit` construction path and it always installs, so there is no probe that
+-- can reach a reader with the index uninstalled.
 installRecFieldIndex : Emit -> List (String, List String) -> Unit
 installRecFieldIndex e t =
   e.recByName := Some (omFromPairs (reverseL t) omEmpty)
@@ -1189,11 +1181,11 @@ insertLabels _ [] acc = acc
 insertLabels owner (l::rest) acc =
   insertLabels owner rest (omInsert l owner acc)
 
--- the record type named `recName`, index-backed (fallback: the raw list scan).
+-- the record type named `recName`, index-backed (RUN-EMIT-003: no scan fallback).
 recFieldsOfName : Emit -> String -> Option (List String)
 recFieldsOfName e recName = match !e.recByName
   Some m => omLookup recName m
-  None => lookupAssoc recName (recFieldTable e)
+  None => panic "llvm: recByName read before install (internal error)"
 
 -- ── impl table ────────────────────────────────────────────────────
 -- the program's CImplEntry list (set once in emitProgram).  A CMethod site reads
@@ -1215,10 +1207,13 @@ implEntriesOf e = !e.implEntries
 -- preserved in each bucket — makes every one of those scans O(bucket): restricting a
 -- scan that already filters by method to just that method's entries yields the IDENTICAL
 -- first-match / flat-map / distinct-key result, so the emitted IR is byte-for-byte
--- unchanged (fixpoint C3a/C3b).  `installImplIndex` builds it once in emitProgram/
--- emitProgramGaps; a helper reaching the routing below without an install (a probe that
--- never called emitProgram) FALLS BACK to the full list, which — being filtered by method
--- downstream — gives the same output either way.  Mirrors wasm_emit's `implsByMethodW`.
+-- unchanged (fixpoint C3a/C3b).  `installImplIndex` builds it once in
+-- `buildEmitState`, the ONE `Emit` construction path shared by emitProgram and
+-- emitProgramGaps.  RUN-EMIT-003: the "fall back to the full list" second path is
+-- RETIRED — it was genuinely reachable (from `installDefArityMap`'s eta replay,
+-- before that install was reordered to run AFTER this one), and a live second path
+-- that has to agree with the index is the duality this slice removes.  Mirrors
+-- wasm_emit's `implsByMethodW`.
 
 -- the interface method an impl entry implements (field 0).
 implEntryMethodOf : CImplEntry -> String
@@ -1246,21 +1241,12 @@ installImplIndex : Emit -> List CImplEntry -> Unit
 installImplIndex e entries =
   e.implsByMethod := Some (groupImplsByMethod entries)
 
--- [method]'s impl entries from the index (original order); [fallback] (the full entry
--- list) is used only when the index is uninstalled — downstream filters by method, so
--- the answer is identical.  Every whole-`implEntries` per-method scan routes through this.
+-- [method]'s impl entries from the index (original order).  Every whole-`implEntries`
+-- per-method scan routes through this — the index is the ONLY path (RUN-EMIT-003).
 methodEntries : Emit -> String -> List CImplEntry
 methodEntries e method = match !e.implsByMethod
   Some m => orEmptyEntries (omLookup method m)
-  None => filterMethod method (implEntriesOf e)
-
--- fallback-only: entries of [method] from the full list, ANY variant (tagged/default),
--- in program order — the same subset the index bucket holds, so the two paths agree.
-filterMethod : String -> List CImplEntry -> List CImplEntry
-filterMethod _ [] = []
-filterMethod method (e::rest)
-  | implEntryMethodOf e == method = e :: filterMethod method rest
-  | otherwise = filterMethod method rest
+  None => panic "llvm: implsByMethod read before install (internal error)"
 
 -- the impls of a method, in program order — only the CImplTagged ones (an
 -- untagged CImplDefault is the arg-tag fallback, never a static-dispatch target).
@@ -1480,13 +1466,11 @@ safeIdentGo s i len acc =
     let c2 = if safeChar c then c else "_"
     safeIdentGo s (i + 1) len (acc ++ c2)
 
--- the distinct method names of the program's tagged impls.  A bare CVar
--- naming one of these, applied to args, is an arg-position dispatch site (return-
--- position methods are CMethod nodes, never a bare applied CVar — so this set is
--- exactly the arg-dispatched methods at a call site).
-implMethodNames : Emit -> List String
-implMethodNames e = dedupS (taggedMethodNames (implEntriesOf e))
-
+-- the method names of the program's tagged impls.  A bare CVar naming one of these,
+-- applied to args, is an arg-position dispatch site (return-position methods are
+-- CMethod nodes, never a bare applied CVar — so this set is exactly the
+-- arg-dispatched methods at a call site).  `installImplMethodSet` dedups it into
+-- `e.implMethodSet`; RUN-EMIT-003 retired the `dedupS`-rebuilding list form.
 taggedMethodNames : List CImplEntry -> List String
 taggedMethodNames [] = []
 taggedMethodNames ((CImplEntry m _ (CImplTagged _ _ _ _ _ _))::rest) =
@@ -1499,7 +1483,8 @@ taggedMethodNames (_::rest) = taggedMethodNames rest
 -- O(N²)) on every call — O(sites · N²) on dispatch-heavy code.  `omFromNames` dedups
 -- via map insertion (O(N log N)); membership is then O(log N) and the deduped rebuild
 -- is gone.  Same set as `contains … (dedupS (taggedMethodNames …))`, so byte-identical.
--- Uninstalled (None) it FALLS BACK to the list scan, identical answer either way.
+-- RUN-EMIT-003: the list-scan second path is RETIRED — the set is installed on the
+-- one `Emit` construction path, so `None` is a broken invariant.
 installImplMethodSet : Emit -> List CImplEntry -> Unit
 installImplMethodSet e entries =
   e.implMethodSet := Some (omFromNames (taggedMethodNames entries) omEmpty)
@@ -1507,7 +1492,7 @@ installImplMethodSet e entries =
 isImplMethod : Emit -> String -> Bool
 isImplMethod e name = match !e.implMethodSet
   Some m => omHasKey name m
-  None => contains name (implMethodNames e)
+  None => panic "llvm: implMethodSet read before install (internal error)"
 
 -- the parameter patterns + body of an impl entry (CImplTagged or CImplDefault).
 implPats : CImplEntry -> List Pat
@@ -1596,9 +1581,8 @@ implEntryRouteWords _ _ = []
 -- dispatch loads the discriminating argument's constructor tag at run time; this
 -- map names the constructors each candidate TYPE owns, so the dispatch chain can
 -- test "is the loaded ctor tag one of type T's constructors?" by OR-ing the
--- hashName of each.
-ctorTypeTable : Emit -> List (String, String)
-ctorTypeTable e = !e.ctorTypes
+-- hashName of each.  RUN-EMIT-003: the raw list form (`e.ctorTypes`) went with the
+-- retired scan; the indices below are the only representation.
 
 -- #990: the ctor→type table indexed into an OrdMap, built once in emitProgram.  `cellTag`
 -- (the composite ctor tag, run on EVERY ctor alloc AND every ctor tag-test) computes
@@ -1668,11 +1652,11 @@ numberFrom : Int -> List String -> List (String, Int)
 numberFrom _ [] = []
 numberFrom i (x::rest) = (x, i) :: numberFrom (i + 1) rest
 
--- the type name owning constructor [name], index-backed (fallback: the raw list scan).
+-- the type name owning constructor [name], index-backed (RUN-EMIT-003: no scan path).
 ctorTypeOf : Emit -> String -> Option String
 ctorTypeOf e name = match !e.ctorTypeMap
   Some m => omLookup name m
-  None => lookupAssoc name (ctorTypeTable e)
+  None => panic "llvm: ctorTypeMap read before install (internal error)"
 
 -- ── globals registry ────────────────────────────────────────────
 -- the top-level value/`Ref` globals registry ref: `name -> (initialised?, LTy)`.
@@ -1702,16 +1686,15 @@ dropAssoc k ((n, v)::rest) = if n == k then rest else (n, v) :: dropAssoc k rest
 -- an empty ctor list and hit the "owns no constructors" gap.  Fall back to the
 -- reserved ctors so the tag-match discriminates on the built-in cell tags.
 -- #352: index-backed (a bucket is non-empty by construction, so an ABSENT type is
--- exactly the old empty-filter case → the reserved fallback). Falls back to the full
--- table filter when uninstalled; identical list, identical order, either way.
+-- exactly the old empty-filter case → the reserved fallback).  RUN-EMIT-003: the
+-- full-table-filter second path is RETIRED; the reserved-ctor arm below is a
+-- SEMANTIC fallback for a type absent from the table, not an uninstalled-index one.
 ctorsOfType : Emit -> String -> List String
 ctorsOfType e ty = match !e.ctorsByType
   Some m => match omLookup ty m
     Some cs => cs
     None => reservedCtorsOfType ty
-  None => match ctorsOfTypeIn ty (ctorTypeTable e)
-    [] => reservedCtorsOfType ty
-    cs => cs
+  None => panic "llvm: ctorsByType read before install (internal error)"
 
 -- the reserved built-in constructors of a runtime ADT, mirroring `reservedTag`'s
 -- ordinal layout (List = Cons|Nil, Option = Some|None, Result = Ok|Err,
@@ -1722,12 +1705,6 @@ reservedCtorsOfType "Option" = ["Some", "None"]
 reservedCtorsOfType "Result" = ["Ok", "Err"]
 reservedCtorsOfType "Ordering" = ["Lt", "Eq", "Gt"]
 reservedCtorsOfType _ = []
-
-ctorsOfTypeIn : String -> List (String, String) -> List String
-ctorsOfTypeIn _ [] = []
-ctorsOfTypeIn ty ((c, t)::rest)
-  | t == ty = c :: ctorsOfTypeIn ty rest
-  | otherwise = ctorsOfTypeIn ty rest
 
 -- ── tag / box helpers (the value-representation, made concrete) ──────────────
 -- untag an immediate int word -> raw i64 (arithmetic shift, preserves sign).
@@ -4475,7 +4452,7 @@ emitMethodValue e env name route implRoutes methRoutes =
 --
 -- A non-RLocal route (RDict/RDictFwd/RKey/RNone) really is dispatching the METHOD, so it
 -- keeps `methodArityOf` — byte-identical to pre-#410 codegen, so the fixpoint cannot move.
--- `<= 0` means the target has no known signature (uninstalled sig table / unknown name);
+-- `<= 0` means the target has no known signature (a name absent from the sig table);
 -- fall back to the old name-derived arity rather than emit a 0-arity closure.
 methValArity : Emit -> String -> Route -> Int
 methValArity e name (RLocal sym dicts) =
@@ -6944,9 +6921,7 @@ fnArity e fname = match !e.sigMap
   Some m => match omLookup fname m
     Some (FnSig ptys _) => lengthS ptys
     None => 0
-  None => match lookupAssoc fname (sigTable e)
-    Some (FnSig ptys _) => lengthS ptys
-    None => 0
+  None => panic "llvm: sigMap read before install (internal error)"
 
 -- the declared arity of constructor `name` (its field count, from the ctor table).
 ctorArity : Emit -> String -> Int
@@ -6954,9 +6929,7 @@ ctorArity e name = match !e.ctorMap
   Some m => match omLookup name m
     Some n => n
     None => 0
-  None => match lookupAssoc name (ctorTable e)
-    Some n => n
-    None => 0
+  None => panic "llvm: ctorMap read before install (internal error)"
 
 -- #35: an APPLIED constructor, dispatched on saturation.  This is the arity check
 -- that the emitVar-side comment below has always ASSUMED but which emitApp did not
@@ -7402,10 +7375,10 @@ ctorOrdinal : Emit -> String -> Int
 ctorOrdinal e name = match ctorTypeOf e name
   -- #352: `ctorTypeOf name = Some ty` means `name` IS in the ctor→type table, so it
   -- is in `ty`'s bucket and therefore in the ordinal map — the map probe and the
-  -- `indexOfStr` scan return the same Int. Fallback when uninstalled.
-  Some ty => match !e.ctorOrdinalMap
+  -- `indexOfStr` scan return the same Int.  RUN-EMIT-003: the scan path is retired.
+  Some _ => match !e.ctorOrdinalMap
     Some m => orZero (omLookup name m)
-    None => orZero (indexOfStr name (ctorsOfType e ty))
+    None => panic "llvm: ctorOrdinalMap read before install (internal error)"
   None => if name == "Nil" then 1 else 0
 
 -- the dense per-type id of the type that owns constructor `name`: its index among
@@ -7417,31 +7390,20 @@ ctorTypeId e name = match ctorTypeOf e name
   -- #352: `e.typeIdMap` is built from the SAME `nubStr (typeNamesOf …)` list that
   -- `distinctTypeNames` memoizes, numbered from 0 — so the probe and the
   -- `indexOfStr` scan agree, and `omSize` is that list's length (nubStr ⇒ distinct).
+  -- RUN-EMIT-003: both `distinctTypeNames`-scan paths are retired.
   Some ty => match !e.typeIdMap
     Some m => orZero (omLookup ty m)
-    None => orZero (indexOfStr ty (distinctTypeNames e))
+    None => panic "llvm: typeIdMap read before install (internal error)"
   None => match !e.typeIdMap
     Some m => omSize m
-    None => lengthS (distinctTypeNames e)
+    None => panic "llvm: typeIdMap read before install (internal error)"
 
--- the distinct type names of the program, in declaration order (the ctor→type
--- table lists each type's ctors consecutively, so dedup-preserving-order gives the
--- type declaration order).
--- `distinctTypeNames` is constant during a program's emission (the ctor→type
--- table is set once), but `ctorTypeId` calls it per ADT-constructor emission and
--- it recomputes the O(n²) `nubStr` each time. Memoize the result (a plain
--- List String — no hash container, so it self-compiles cleanly) in the per-emission
--- context, initialized to None so each emitProgram/emitProgramGaps recomputes.
-resetDistinctTypeNames : Emit -> Unit
-resetDistinctTypeNames e = e.distinctTypeNamesCache := None
-
-distinctTypeNames : Emit -> List String
-distinctTypeNames e = match !e.distinctTypeNamesCache
-  Some xs => xs
-  None =>
-    let xs = nubStr (typeNamesOf (ctorTypeTable e))
-    e.distinctTypeNamesCache := Some xs
-    xs
+-- RUN-EMIT-003: `distinctTypeNames` (and the `distinctTypeNamesCache` memo that
+-- existed only to make its O(n²) `nubStr` affordable) are GONE with the two
+-- `ctorTypeId` scan branches that were their only callers.  `e.typeIdMap` is built
+-- from exactly that `nubStr (typeNamesOf …)` list numbered from 0 (see
+-- `installCtorTypeMap`), so `omSize` IS the distinct-type count and a probe IS the
+-- index — the list never needs materialising during an emission.
 
 typeNamesOf : List (String, String) -> List String
 typeNamesOf [] = []
@@ -10309,20 +10271,13 @@ findFieldIdx e label = match findRecordByLabel e label
   None => panic ("llvm: CFieldAccess: unknown field '" ++ label ++ "'")
 
 -- #352: index-backed — `e.recByLabel` already holds, per label, the FIRST record in
--- table order that owns it, which is exactly what the scan below returns. Fallback to
--- the scan when uninstalled.
+-- table order that owns it, which is exactly what the scan used to return.
+-- RUN-EMIT-003: that scan (`findRecordByLabelIn`) is RETIRED — the index is the
+-- only path, and an uninstalled read is a broken invariant.
 findRecordByLabel : Emit -> String -> Option (String, List String)
 findRecordByLabel e label = match !e.recByLabel
   Some m => omLookup label m
-  None => findRecordByLabelIn (recFieldTable e) label
-
-findRecordByLabelIn : List (String, List String) -> String -> Option (String, List String)
-findRecordByLabelIn [] _ = None
-findRecordByLabelIn ((name, labels)::rest) label =
-  if contains label labels then
-    Some (name, labels)
-  else
-    findRecordByLabelIn rest label
+  None => panic "llvm: recByLabel read before install (internal error)"
 
 indexOfStr : String -> List String -> Option Int
 indexOfStr _ [] = None
@@ -10966,6 +10921,13 @@ data EmitStateConfig =
 -- for the whole disposition.
 installDispatchState : Emit -> Bool -> List CBind -> List CBind -> List CImplEntry -> Unit
 installDispatchState e runAnalysis groupsAll fnBindsList implEntries =
+  -- RUN-EMIT-003: `gDispArMap` is installed on BOTH arms, so no reader can ever
+  -- observe it uninstalled.  The census arm leaves `gDispArs` empty and never
+  -- reaches gDispIsFn/gDispFnArity (they run only under GDispOn, which needs the
+  -- groups this arm does not compute) — an EMPTY map answers exactly what the
+  -- retired `lookupAssoc n ![]` scan answered (False / -1), so this is inert.
+  -- `installDispatchGroupsFull` overwrites it with the real table on the other arm.
+  e.gDispArMap := Some omEmpty
   let _ = if runAnalysis then
     installDispatchGroupsFull e groupsAll fnBindsList implEntries
   else
@@ -11010,11 +10972,9 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
     buf = Ref [],
     fnNames = Ref (collectFns groups),
     sigs = Ref (inferSigs input.declSigIndex (fnBinds groups)),
-    ctors = Ref ctorArs,
     lams = Ref [],
     recFields = Ref (input.recordFieldOrders ++ collectRecords groups),
     implEntries = Ref implEntries,
-    ctorTypes = Ref ctorTypes,
     globalsReg = Ref cfg.globalsReg0,
     gapMode = cfg.gapMode,
     gapLog = Ref [],
@@ -11046,11 +11006,9 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
     typeIdMap = Ref None,
     dispCache = Ref [],
     dictConstCache = Ref [],
-    distinctTypeNamesCache = Ref None,
     floatFwSet = Ref [],
     floatClosureFns = Ref [],
   }
-  let _ = resetDistinctTypeNames e
   e.dictConstCache := []
   e.dispCache := []
   let _ = installKnownFnMap e (collectFns groups)
@@ -11066,12 +11024,18 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
   -- per-field-op probe is O(log records) not O(records) — same first-match answers.
   let _ = installRecFieldIndex e (recFieldTable e)
   let _ = installSigMap e (sigTable e)
-  let _ = installDefArityMap e (fnBinds groups)
   -- #990: group the flat impl-entry list by interface method ONCE, so every per-site
   -- dispatch scan (implsOf/defaultFor/implFnSymE/implEntryRouteKeyE) is O(bucket) not
   -- O(impls) — byte-identical IR, O(N²)→O(N log N) emit on dispatch-heavy code.
+  -- ⚠️ RUN-EMIT-003: these two MUST precede `installDefArityMap`.  That install
+  -- replays `etaSaturateMethodBody` per bind, which reaches `methodBodyDeficit` →
+  -- `methodArityOfRoute` → `methodArityOfTag` → `implFor` → `implsOf` →
+  -- `methodEntries`, i.e. it READS `e.implsByMethod`.  Ordered the other way round
+  -- that read landed on the (now retired) uninstalled-scan branch, which is the one
+  -- place the two paths were both live in a single emission.
   let _ = installImplIndex e implEntries
   let _ = installImplMethodSet e implEntries
+  let _ = installDefArityMap e (fnBinds groups)
   -- a group member must never be ADVERTISED as having a float `__fw` worker (the
   -- group path emits no standalone defines, so a float-context caller would call
   -- a nonexistent symbol; v3/v4 make external float callers impossible anyway —

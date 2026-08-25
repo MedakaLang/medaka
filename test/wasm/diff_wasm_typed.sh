@@ -137,8 +137,14 @@ grep -F 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input
   echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: strict, record, census freshness routes changed"
   exit 1
 }
-grep -F 'wDispCtxRef' "$WASM_SRC" >/dev/null || {
-  echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: nearest-miss wDispCtxRef changed"
+# X-W.H: wDispCtx is now a WasmEmit field too (it was the last ambient neighbour of
+# trmcCtx).  Same assertion, re-anchored: the dispatch context is still its OWN carrier
+# with its OWN save/set/restore routes, not folded into trmcCtx.
+[ "$(grep -F 'let _ = setRef (progEmit prog).wDispCtx WDispOff' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  [ "$(grep -F 'let _ = setRef (progEmit prog).wDispCtx savedDisp' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+  grep -F 'wDispCtx : Ref WDispCtx' "$WASM_SRC" >/dev/null &&
+  grep -F 'wDispCtx = Ref WDispOff' "$WASM_SRC" >/dev/null || {
+  echo "FAIL H2B6-WTRMC-CLEAR-ROUTES: nearest-miss wDispCtx carrier/clear routes changed"
   exit 1
 }
 if grep -E '^(lamIdRef|liftedFnsRef|liftedNamesRef|funcRefsRef|liftedNamesSetW|funcRefsSetW)[[:space:]]*[:=]' "$WASM_SRC" >/dev/null; then
@@ -308,29 +314,18 @@ for required in \
   'noteW8Extern emit name =' \
   'setRef emit.useRng True' \
   'setRef emit.useHash True' \
-  '|| !emit.useRng || !emit.useHash || !useFloatRef' \
+  '|| !emit.useRng || !emit.useHash || !emit.useFloat' \
   'setRef emit.useFloatRng True in setRef emit.useRng True'; do
   grep -F -- "$required" "$WASM_SRC" >/dev/null || {
     echo "FAIL H2B9-RNG-HASH-AUTHORITY: missing $required"
     exit 1
   }
 done
-EXPECTED_MODULE_REFS="$(printf '%s\n' \
-  floatGlobalsRef \
-  floatLocalsRef \
-  numPolyLocalsRef \
-  tupleAritiesRef \
-  useArrayRef \
-  useFloatRef \
-  useIORef \
-  useListRef \
-  useRefBoxRef \
-  useStrLeafRef \
-  useStrRef \
-  useStrSearchRef \
-  useValueArithRef \
-  wDispCtxRef \
-  wDispGroupsRef)"
+# X-W.H: the fifteen module-level cells that used to be listed here are all lifted onto
+# WasmEmit, so the emitter's ambient authority set is EMPTY — the same count llvm_emit.mdk
+# has always had.  A new top-level `name : Ref …` in wasm_emit.mdk is a regression: it
+# reintroduces state that survives a same-process re-emission.
+EXPECTED_MODULE_REFS=""
 ACTUAL_MODULE_REF_SIGS="$(awk '
   /^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:[[:space:]]*Ref([[:space:]]|$)/ { print $1 }
   /^export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:[[:space:]]*Ref([[:space:]]|$)/ { print $2 }
@@ -343,7 +338,7 @@ ACTUAL_MODULE_REF_DEFS="$(awk '
 ' "$WASM_SRC" | LC_ALL=C sort -u)"
 if [ "$ACTUAL_MODULE_REF_SIGS" != "$EXPECTED_MODULE_REFS" ] ||
     [ "$ACTUAL_MODULE_REF_DEFS" != "$EXPECTED_MODULE_REFS" ]; then
-  echo "FAIL H2B-LR-AUTHORITY-SET: top-level Ref authority set changed"
+  echo "FAIL H2B-LR-AUTHORITY-SET: top-level Ref authority set changed (X-W.H: it must stay EMPTY)"
   printf '  observed signatures:\n%s\n' "$ACTUAL_MODULE_REF_SIGS"
   printf '  observed definitions:\n%s\n' "$ACTUAL_MODULE_REF_DEFS"
   exit 1
@@ -362,7 +357,7 @@ for required in \
     exit 1
   }
 done
-grep -F 'then let _ = setRef useIORef True in let _ = setRef useArrayRef True in let _ = setRef useStrRef True in setRef emit.useFileBytes True' "$WASM_SRC" >/dev/null &&
+grep -F 'then let _ = setRef emit.useIO True in let _ = setRef emit.useArray True in let _ = setRef emit.useStr True in setRef emit.useFileBytes True' "$WASM_SRC" >/dev/null &&
   grep -F '++ (if (progEmit prog).useFileBytes.value then fileBytesHostImportLines else [])' "$WASM_SRC" >/dev/null &&
   grep -F 'let fileBytesRt = if (progEmit prog).useFileBytes.value then fileBytesRuntimeLines else []' "$WASM_SRC" >/dev/null &&
   ! grep -E 'setRef emit\.useFileBytes False|setRef useFileBytesRef False' "$WASM_SRC" >/dev/null || {
@@ -376,7 +371,7 @@ grep -F 'then let _ = setRef useIORef True in let _ = setRef useArrayRef True in
     echo "FAIL A4-FILEBYTES-ROUTES: writer/read cardinality or fresh routes changed"
     exit 1
   }
-A4_IO_IMPORT_LINE="$(grep -n -F 'if !useIORef then ioHostImportLines else []' "$WASM_SRC" | cut -d: -f1)"
+A4_IO_IMPORT_LINE="$(grep -n -F 'if (progEmit prog).useIO.value then ioHostImportLines else []' "$WASM_SRC" | cut -d: -f1)"
 A4_FILEBYTES_IMPORT_LINE="$(grep -n -F '(progEmit prog).useFileBytes.value then fileBytesHostImportLines' "$WASM_SRC" | cut -d: -f1)"
 [ -n "$A4_IO_IMPORT_LINE" ] && [ -n "$A4_FILEBYTES_IMPORT_LINE" ] &&
   [ "$A4_IO_IMPORT_LINE" -lt "$A4_FILEBYTES_IMPORT_LINE" ] &&
@@ -460,7 +455,7 @@ for required in \
     exit 1
   }
 done
-grep -F 'then let _ = setRef emit.useFloatStr True in let _ = setRef useFloatRef True in let _ = setRef useStrRef True in setRef useIORef True' "$WASM_SRC" >/dev/null &&
+grep -F 'then let _ = setRef emit.useFloatStr True in let _ = setRef emit.useFloat True in let _ = setRef emit.useStr True in setRef emit.useIO True' "$WASM_SRC" >/dev/null &&
   grep -F '++ (if (progEmit prog).useFloatStr.value then floatStrImportLines else [])' "$WASM_SRC" >/dev/null &&
   grep -F 'let floatStrRt = if (progEmit prog).useFloatStr.value then floatStrRuntimeLines else []' "$WASM_SRC" >/dev/null &&
   ! grep -E 'setRef emit\.useFloatStr False|setRef useFloatStrRef False' "$WASM_SRC" >/dev/null || {
@@ -475,7 +470,7 @@ grep -F 'then let _ = setRef emit.useFloatStr True in let _ = setRef useFloatRef
     exit 1
   }
 A2_FLOATSTR_IMPORT_LINE="$(grep -n -F '(progEmit prog).useFloatStr.value then floatStrImportLines' "$WASM_SRC" | cut -d: -f1)"
-A2_IO_IMPORT_LINE="$(grep -n -F 'if !useIORef then ioHostImportLines else []' "$WASM_SRC" | cut -d: -f1)"
+A2_IO_IMPORT_LINE="$(grep -n -F 'if (progEmit prog).useIO.value then ioHostImportLines else []' "$WASM_SRC" | cut -d: -f1)"
 [ -n "$A2_FLOATSTR_IMPORT_LINE" ] && [ -n "$A2_IO_IMPORT_LINE" ] &&
   [ "$A2_FLOATSTR_IMPORT_LINE" -lt "$A2_IO_IMPORT_LINE" ] &&
   grep -F '++ strCodecRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ fileBytesRt ++ floatStrRt' "$WASM_SRC" >/dev/null || {
@@ -511,7 +506,7 @@ for required in \
   }
 done
 grep -F 'then setRef emit.useCharClass True else ()' "$WASM_SRC" >/dev/null &&
-  grep -F '|| !emit.useCharClass || !useIORef' "$WASM_SRC" >/dev/null &&
+  grep -F '|| !emit.useCharClass || !emit.useIO' "$WASM_SRC" >/dev/null &&
   grep -F 'let charClassRt = if (progEmit prog).useCharClass.value then charClassRuntimeLines else []' "$WASM_SRC" >/dev/null &&
   ! grep -E 'setRef emit\.useCharClass False|setRef useCharClassRef False' "$WASM_SRC" >/dev/null || {
     echo "FAIL H2B-LR-CHARCLASS-ROUTES: writer, operational read, or reset changed"
@@ -562,9 +557,9 @@ for required in \
   }
 done
 grep -F 'let _ = if contains name ["stringToChars", "stringFromChars"]' "$WASM_SRC" >/dev/null &&
-  grep -F 'then let _ = setRef emit.useStrCodec True in let _ = setRef useStrRef True in let _ = setRef useArrayRef True in setRef useStrLeafRef True else ()' "$WASM_SRC" >/dev/null &&
+  grep -F 'then let _ = setRef emit.useStrCodec True in let _ = setRef emit.useStr True in let _ = setRef emit.useArray True in setRef emit.useStrLeaf True else ()' "$WASM_SRC" >/dev/null &&
   grep -F 'let _ = if contains name ["stringToUtf8Bytes", "stringFromUtf8Bytes"]' "$WASM_SRC" >/dev/null &&
-  grep -F 'then let _ = setRef emit.useStrCodec True in let _ = setRef useStrRef True in setRef useArrayRef True else ()' "$WASM_SRC" >/dev/null &&
+  grep -F 'then let _ = setRef emit.useStrCodec True in let _ = setRef emit.useStr True in setRef emit.useArray True else ()' "$WASM_SRC" >/dev/null &&
   ! grep -E 'setRef emit\.useStrCodec False|setRef useStrCodecRef False' "$WASM_SRC" >/dev/null || {
     echo "FAIL H2B-LR-STRCODEC-ROUTES: producers, cofactors, or reset changed"
     exit 1
@@ -590,8 +585,8 @@ for required in \
 done
 VALUECMP_WRITER_LINE="$(grep -n -F 'let _ = setRef (progEmit prog).useValueCmp True' "$WASM_SRC" | head -1 | cut -d: -f1)"
 [ -n "$VALUECMP_WRITER_LINE" ] &&
-  [ "$(sed -n "$((VALUECMP_WRITER_LINE + 1))p" "$WASM_SRC")" = '    let _ = setRef useStrSearchRef True' ] &&
-  [ "$(sed -n "$((VALUECMP_WRITER_LINE + 2))p" "$WASM_SRC")" = '    let _ = setRef useStrLeafRef True' ] &&
+  [ "$(sed -n "$((VALUECMP_WRITER_LINE + 1))p" "$WASM_SRC")" = '    let _ = setRef (progEmit prog).useStrSearch True' ] &&
+  [ "$(sed -n "$((VALUECMP_WRITER_LINE + 2))p" "$WASM_SRC")" = '    let _ = setRef (progEmit prog).useStrLeaf True' ] &&
   grep -F 'let valueCmpRt = if (progEmit prog).useValueCmp.value then valueEqRuntimeLines else []' "$WASM_SRC" >/dev/null &&
   ! grep -E 'setRef (emit|\(progEmit prog\))\.useValueCmp False|setRef useValueCmpRef False' "$WASM_SRC" >/dev/null || {
     echo "FAIL H2B-LR-VALUECMP-ROUTES: writer, cofactors, reader, or reset changed"
@@ -632,7 +627,7 @@ ACTUAL_MATH_HOST_NAMES="$(awk '
   echo "FAIL H2B-LR-MATH-PREDICATE: Math host-extern name set changed"
   exit 1
 }
-MATH_FLOAT_COFACTOR_LINE="$(grep -n -F 'let _ = if isFloatMathExternW name then setRef useFloatRef True else ()' "$WASM_SRC" | cut -d: -f1)"
+MATH_FLOAT_COFACTOR_LINE="$(grep -n -F 'let _ = if isFloatMathExternW name then setRef emit.useFloat True else ()' "$WASM_SRC" | cut -d: -f1)"
 MATH_WRITER_LINE="$(grep -n -F 'let _ = if isMathHostExternW name then setRef emit.useMath True else ()' "$WASM_SRC" | cut -d: -f1)"
 MATH_IMPORT_LINE="$(grep -n -F 'mathHostImportLines else []' "$WASM_SRC" | cut -d: -f1)"
 FLOAT_IMPORT_LINE="$(grep -n -F 'floatFmtImportLines else []' "$WASM_SRC" | cut -d: -f1)"
@@ -642,7 +637,7 @@ FLOATSTR_IMPORT_LINE="$(grep -n -F 'floatStrImportLines else []' "$WASM_SRC" | c
   [ -n "$MATH_IMPORT_LINE" ] &&
   [ -n "$FLOAT_IMPORT_LINE" ] &&
   [ -n "$FLOATSTR_IMPORT_LINE" ] &&
-  [ "$(grep -F 'let _ = if isFloatMathExternW name then setRef useFloatRef True else ()' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  [ "$(grep -F 'let _ = if isFloatMathExternW name then setRef emit.useFloat True else ()' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$(grep -F 'let _ = if isMathHostExternW name then setRef emit.useMath True else ()' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$(grep -F 'mathHostImportLines else []' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$(grep -F 'floatFmtImportLines else []' "$WASM_SRC" | wc -l | tr -d '[:space:]')" -eq 1 ] &&
