@@ -410,7 +410,7 @@ put it where there is room; do not hand-write a number into `ci.yml`.
 
 `sh scripts/ci_shard_cost.sh --runs 4`, N derived fresh: `gh run list --workflow=ci.yml
 --event=merge_group --status=success --json databaseId,createdAt --limit 50`, filtered to
-`createdAt` after `4a636b0f`'s merge commit time (`2026-08-25T08:48:53Z`) — 4 qualifying runs
+createdAt after `4a636b0f`'s merge commit time (`2026-08-25T08:48:53Z`) — 4 qualifying runs
 (`32900786425 32895999437 32838345858 32828602825`), same count the contract's own table used,
 independently re-derived rather than reused:
 
@@ -453,11 +453,11 @@ contract's own ⚠️, the honest window starts at #1942's merge (`19f60b28`, `2
 — pre-#1942 runs predate `push:main`'s removal and would blend two different CI shapes.
 
 `gh run list --workflow=ci.yml --status=success --json databaseId,createdAt,event --limit 100`,
-filtered to `createdAt` after `2026-08-25T04:34:53Z`: **25 runs** — `pull_request` 16 (64%),
+filtered to createdAt after `2026-08-25T04:34:53Z`: **25 runs** — `pull_request` 16 (64%),
 `merge_group` 7 (28%), `schedule` 1 (4%), `push` 1 (4%).
 
-⚠️ **The one `push` run is a stale-target artifact, not a live push-to-main.** Its `createdAt`
-(`2026-08-25T05:10:08Z`) is after #1942 merged, but its `headSha` (`29b4c386`) is a commit that
+⚠️ **The one `push` run is a stale-target artifact, not a live push-to-main.** Its createdAt
+(`2026-08-25T05:10:08Z`) is after #1942 merged, but its headSha (`29b4c386`) is a commit that
 landed on `main` at `04:33:46Z` — one minute *before* #1942 (`04:34:53Z`) — via a workflow queued
 before #1927's `push:[main]` removal reached that commit's ancestry
 (`git merge-base --is-ancestor 3b4cea93 29b4c386` → not an ancestor: #1927's commit `3b4cea93`
