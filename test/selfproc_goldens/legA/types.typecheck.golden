@@ -80,7 +80,6 @@ anyClaimRow : List Int -> List (String, List (List Mono)) -> Bool
 anyClauseEagerlyRefsGroup : List String -> List FunClause -> Bool
 anyConcreteHead : List Mono -> Bool
 anyContainsI : List Int -> List Int -> Bool
-anyCtorSiblingWithholds : Option HeadKey -> String -> String -> List String -> Bool
 anyDepReaches : List String -> List String -> String -> List (String, List Decl) -> Bool
 anyGivenMatches : String -> List Mono -> List (String, List Mono, String) -> Bool
 anyHoleAtom : List Atom -> Bool
@@ -459,6 +458,9 @@ ctorCandImported : List Decl -> String -> (Ident, String, Scheme) -> Bool
 ctorCandScheme : (Ident, String, Scheme) -> Scheme
 ctorHeadIsUpper : String -> Bool
 ctorIdentRow : String -> TyConOrigin -> String -> List (String, String, Ident)
+ctorSiblingWithholdingForHead : Option HeadKey -> Option HeadKey -> String -> String -> Option String
+ctorSiblingWithholdingHere : Mono -> String -> RecordInfo -> String -> Option String
+ctorSiblingWithholdingName : Option HeadKey -> String -> String -> Option String
 ctorSiblingWithholds : Option HeadKey -> String -> String -> Bool
 currentDoOrigin : Ref (Option Loc)
 currentLoc : Ref (Option Loc)
@@ -722,10 +724,12 @@ fieldAssignNamePair : FieldAssign -> (String, Unit)
 fieldAssignSites : FieldAssign -> List (Ref Route)
 fieldFixFrom : Option Loc -> String -> Option (Loc, String)
 fieldNameOf : Field -> String
+fieldNotInAllCtorsMsg : String -> String -> String -> String
 fieldOwnerAnyReachable : List String -> Bool
 fieldOwnerNames : String -> List String
 fieldOwnerReachFilter : List String -> List String
 fieldOwnerReachable : String -> Bool
+fieldSelectionWellTyped : Mono -> String -> RecordInfo -> String -> Mono -> Mono
 fieldTyOf : Field -> Ty
 fieldTypeE : List (String, Ref Effvar) -> List (String, Mono) -> Field -> Mono
 fillHoleAtom : List (String, Expr) -> Option Expr -> Atom -> Atom
@@ -745,6 +749,7 @@ findTupleCand : String -> List (Mono, String, Option (Loc, String)) -> Option (S
 findTvName : Int -> List (String, Mono) -> Option String
 findTvarInMono : Mono -> Int -> Option Mono
 findTvarN : Mono -> Int -> Option Mono
+firstCtorSiblingWithholding : Option HeadKey -> String -> String -> List String -> Option String
 firstDictForEncl : Int -> String -> List (Int, String) -> Option String
 firstDispatchIdx : List String -> Int -> List Ty -> Option Int
 firstFieldName : List FieldAssign -> Option String

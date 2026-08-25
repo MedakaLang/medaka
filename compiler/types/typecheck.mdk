@@ -10484,7 +10484,12 @@ inferFieldAccess env e fname r
       None => freshVar ()
       Some (rname, ri) =>
         r := rname
-        inferFieldOfRecord te rname ri fname
+        let ft = inferFieldOfRecord te rname ri fname
+        -- #1468: the WELL-TYPEDNESS half, and it runs AFTER `inferFieldOfRecord`
+        -- on purpose — that call is what unifies `te` with the record's result
+        -- type, so only here does the receiver's head name the type whose
+        -- constructor set has to be asked about.
+        fieldSelectionWellTyped te rname ri fname ft
 
 -- `cell.value` projects a Ref's contents.  Unify the receiver with `Ref a`
 -- (forcing it, like the reference's `(Ref a).value → a` special case) and return
@@ -10509,6 +10514,68 @@ inferFieldOfRecord te rname ri fname =
   match omLookup fname (recordFieldMap ri)
     Some fm => substMono (fst sr) [] fm
     None => unknownFieldFresh fname rname (recordFieldNames ri)
+
+-- ── #1468: `.f` on a type whose constructors DISAGREE about `f` is rejected ──
+--
+-- The resolution ladder above answers "WHICH declaration does `.f` mean"; it never
+-- asked whether the receiver's TYPE entitles anyone to ask.  For
+-- `data T = | A { x : Int } | B { z : Int }`, `x` has exactly ONE owner, so
+-- `resolveFieldByOwners`' singleton arm hands back `A` with full confidence and the
+-- later unify is SATISFIED — the receiver really is a `T` — and `check` exits 0.
+-- A `T` value carries no static constructor tag, so the emitted code reads slot 0
+-- unconditionally: measured on this base, `getX (B { z = 99 })` printed `v=99`, and
+-- with `B { z : String }` the same program printed a heap address as an `Int`.
+-- `medaka run` already refuses (`E-PANIC unknown field: x`) because the interpreter
+-- resolves fields BY NAME; this restores agreement by refusing EARLIER, at typecheck.
+--
+-- ⚠️ SCOPE — this is #1468 (a field declared by EXACTLY ONE constructor of the
+-- type), NOT #1465 (a field declared by MORE THAN ONE, which wants a dispatched
+-- tag-based selector and a backend change).  A field every constructor declares is
+-- untouched here: no sibling withholds it, so the guard is silent and the access
+-- keeps whatever answer it had.
+--
+-- ⚠️ THE HEAD EQUALITY IS A CASCADE GUARD, NOT A CORRECTNESS ONE.  `te`'s head is
+-- compared against the SELECTED record's own result head, so the guard speaks only
+-- when the receiver genuinely IS a value of the declaring type.  A receiver of some
+-- OTHER type reached this arm through the owner ladder's deliberate
+-- "pick-one-so-unify-complains" fall-through and already has its mismatch; adding a
+-- constructor-set error on top of it would be noise.  `headTyconMono`'s `None` (an
+-- unstamped or non-`TCon` head) decides nothing, per the absence rule
+-- `recordCandIsReceiverDecl` documents.
+fieldSelectionWellTyped : Mono -> String -> RecordInfo -> String -> Mono -> Mono
+fieldSelectionWellTyped te rname ri fname ft = match ctorSiblingWithholdingHere te rname ri fname
+  None => ft
+  Some sib =>
+    let _ = pushTypeError
+      "T-FIELD-NOT-IN-ALL-CTORS"
+      (fieldNotInAllCtorsMsg fname (fromOption rname (headTyconNameMono te)) sib)
+    -- Same poisoned placeholder `unknownFieldFresh` returns: the access is already
+    -- explained, so don't let its result var pile a second cascade on top.
+    let v = freshVar ()
+    let _ = poisonMismatchVars v v
+    v
+
+-- The named constructor, if any, that shares the receiver's head and withholds
+-- `fname`.  `ctorSiblingWithholdingName` is the SAME predicate
+-- `narrowingBlockedByCtorSibling` asks in the multi-owner arm — one implementation,
+-- two callers, so the two paths cannot drift about what "a sibling withholds it"
+-- means.
+ctorSiblingWithholdingHere : Mono -> String -> RecordInfo -> String -> Option String
+ctorSiblingWithholdingHere te rname ri fname =
+  ctorSiblingWithholdingForHead
+    (headTyconMono te)
+    (headTyconMono (recordResultMono ri))
+    rname
+    fname
+
+ctorSiblingWithholdingForHead : Option HeadKey -> Option HeadKey -> String -> String -> Option String
+ctorSiblingWithholdingForHead None _ _ _ = None
+ctorSiblingWithholdingForHead (Some hk) declHead rname fname
+  | Some hk == declHead = ctorSiblingWithholdingName (Some hk) fname rname
+  | otherwise = None
+
+fieldNotInAllCtorsMsg : String -> String -> String -> String
+fieldNotInAllCtorsMsg fname tname sib = "Field '\{fname}' is not declared by every constructor of '\{tname}': constructor '\{sib}' has no '\{fname}'. A '\{tname}' value carries no constructor tag, so '.\{fname}' cannot be resolved; match on the constructor instead"
 
 -- field_owners (Phase 72): every registry KEY whose RecordInfo declares `fname`,
 -- sorted + deduped (mirrors lib/typecheck.ml's `field_candidates` +
@@ -11026,18 +11093,25 @@ narrowedPick _ _ owners _ = pairRecordByName (headL owners)
 -- exact-hit path.
 narrowingBlockedByCtorSibling : Option HeadKey -> String -> String -> Bool
 narrowingBlockedByCtorSibling rk fname survivorKey =
-  anyCtorSiblingWithholds
+  isSome (ctorSiblingWithholdingName rk fname survivorKey)
+
+-- The same walk, answering with the offending key rather than a bare `Bool` — #1468's
+-- diagnostic has to NAME the constructor, and the Bool above is now `isSome` of this
+-- so the two callers cannot drift about what "a sibling withholds it" means.
+ctorSiblingWithholdingName : Option HeadKey -> String -> String -> Option String
+ctorSiblingWithholdingName rk fname survivorKey =
+  firstCtorSiblingWithholding
     rk
     fname
     survivorKey
     (omKeys perRun.value.recordByNameRef.value)
 
-anyCtorSiblingWithholds : Option HeadKey -> String -> String -> List String -> Bool
-anyCtorSiblingWithholds _ _ _ [] = False
-anyCtorSiblingWithholds rk fname skey (k::rest)
-  | k == skey = anyCtorSiblingWithholds rk fname skey rest
-  | ctorSiblingWithholds rk fname k = True
-  | otherwise = anyCtorSiblingWithholds rk fname skey rest
+firstCtorSiblingWithholding : Option HeadKey -> String -> String -> List String -> Option String
+firstCtorSiblingWithholding _ _ _ [] = None
+firstCtorSiblingWithholding rk fname skey (k::rest)
+  | k == skey = firstCtorSiblingWithholding rk fname skey rest
+  | ctorSiblingWithholds rk fname k = Some k
+  | otherwise = firstCtorSiblingWithholding rk fname skey rest
 
 ctorSiblingWithholds : Option HeadKey -> String -> String -> Bool
 ctorSiblingWithholds rk fname k = match lookupRecordByName k

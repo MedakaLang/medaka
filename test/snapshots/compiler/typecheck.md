@@ -1,5 +1,5 @@
 # META
-source_lines=33888
+source_lines=33962
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -10488,7 +10488,12 @@ inferFieldAccess env e fname r
       None => freshVar ()
       Some (rname, ri) =>
         r := rname
-        inferFieldOfRecord te rname ri fname
+        let ft = inferFieldOfRecord te rname ri fname
+        -- #1468: the WELL-TYPEDNESS half, and it runs AFTER `inferFieldOfRecord`
+        -- on purpose — that call is what unifies `te` with the record's result
+        -- type, so only here does the receiver's head name the type whose
+        -- constructor set has to be asked about.
+        fieldSelectionWellTyped te rname ri fname ft
 
 -- `cell.value` projects a Ref's contents.  Unify the receiver with `Ref a`
 -- (forcing it, like the reference's `(Ref a).value → a` special case) and return
@@ -10513,6 +10518,68 @@ inferFieldOfRecord te rname ri fname =
   match omLookup fname (recordFieldMap ri)
     Some fm => substMono (fst sr) [] fm
     None => unknownFieldFresh fname rname (recordFieldNames ri)
+
+-- ── #1468: `.f` on a type whose constructors DISAGREE about `f` is rejected ──
+--
+-- The resolution ladder above answers "WHICH declaration does `.f` mean"; it never
+-- asked whether the receiver's TYPE entitles anyone to ask.  For
+-- `data T = | A { x : Int } | B { z : Int }`, `x` has exactly ONE owner, so
+-- `resolveFieldByOwners`' singleton arm hands back `A` with full confidence and the
+-- later unify is SATISFIED — the receiver really is a `T` — and `check` exits 0.
+-- A `T` value carries no static constructor tag, so the emitted code reads slot 0
+-- unconditionally: measured on this base, `getX (B { z = 99 })` printed `v=99`, and
+-- with `B { z : String }` the same program printed a heap address as an `Int`.
+-- `medaka run` already refuses (`E-PANIC unknown field: x`) because the interpreter
+-- resolves fields BY NAME; this restores agreement by refusing EARLIER, at typecheck.
+--
+-- ⚠️ SCOPE — this is #1468 (a field declared by EXACTLY ONE constructor of the
+-- type), NOT #1465 (a field declared by MORE THAN ONE, which wants a dispatched
+-- tag-based selector and a backend change).  A field every constructor declares is
+-- untouched here: no sibling withholds it, so the guard is silent and the access
+-- keeps whatever answer it had.
+--
+-- ⚠️ THE HEAD EQUALITY IS A CASCADE GUARD, NOT A CORRECTNESS ONE.  `te`'s head is
+-- compared against the SELECTED record's own result head, so the guard speaks only
+-- when the receiver genuinely IS a value of the declaring type.  A receiver of some
+-- OTHER type reached this arm through the owner ladder's deliberate
+-- "pick-one-so-unify-complains" fall-through and already has its mismatch; adding a
+-- constructor-set error on top of it would be noise.  `headTyconMono`'s `None` (an
+-- unstamped or non-`TCon` head) decides nothing, per the absence rule
+-- `recordCandIsReceiverDecl` documents.
+fieldSelectionWellTyped : Mono -> String -> RecordInfo -> String -> Mono -> Mono
+fieldSelectionWellTyped te rname ri fname ft = match ctorSiblingWithholdingHere te rname ri fname
+  None => ft
+  Some sib =>
+    let _ = pushTypeError
+      "T-FIELD-NOT-IN-ALL-CTORS"
+      (fieldNotInAllCtorsMsg fname (fromOption rname (headTyconNameMono te)) sib)
+    -- Same poisoned placeholder `unknownFieldFresh` returns: the access is already
+    -- explained, so don't let its result var pile a second cascade on top.
+    let v = freshVar ()
+    let _ = poisonMismatchVars v v
+    v
+
+-- The named constructor, if any, that shares the receiver's head and withholds
+-- `fname`.  `ctorSiblingWithholdingName` is the SAME predicate
+-- `narrowingBlockedByCtorSibling` asks in the multi-owner arm — one implementation,
+-- two callers, so the two paths cannot drift about what "a sibling withholds it"
+-- means.
+ctorSiblingWithholdingHere : Mono -> String -> RecordInfo -> String -> Option String
+ctorSiblingWithholdingHere te rname ri fname =
+  ctorSiblingWithholdingForHead
+    (headTyconMono te)
+    (headTyconMono (recordResultMono ri))
+    rname
+    fname
+
+ctorSiblingWithholdingForHead : Option HeadKey -> Option HeadKey -> String -> String -> Option String
+ctorSiblingWithholdingForHead None _ _ _ = None
+ctorSiblingWithholdingForHead (Some hk) declHead rname fname
+  | Some hk == declHead = ctorSiblingWithholdingName (Some hk) fname rname
+  | otherwise = None
+
+fieldNotInAllCtorsMsg : String -> String -> String -> String
+fieldNotInAllCtorsMsg fname tname sib = "Field '\{fname}' is not declared by every constructor of '\{tname}': constructor '\{sib}' has no '\{fname}'. A '\{tname}' value carries no constructor tag, so '.\{fname}' cannot be resolved; match on the constructor instead"
 
 -- field_owners (Phase 72): every registry KEY whose RecordInfo declares `fname`,
 -- sorted + deduped (mirrors lib/typecheck.ml's `field_candidates` +
@@ -11030,18 +11097,25 @@ narrowedPick _ _ owners _ = pairRecordByName (headL owners)
 -- exact-hit path.
 narrowingBlockedByCtorSibling : Option HeadKey -> String -> String -> Bool
 narrowingBlockedByCtorSibling rk fname survivorKey =
-  anyCtorSiblingWithholds
+  isSome (ctorSiblingWithholdingName rk fname survivorKey)
+
+-- The same walk, answering with the offending key rather than a bare `Bool` — #1468's
+-- diagnostic has to NAME the constructor, and the Bool above is now `isSome` of this
+-- so the two callers cannot drift about what "a sibling withholds it" means.
+ctorSiblingWithholdingName : Option HeadKey -> String -> String -> Option String
+ctorSiblingWithholdingName rk fname survivorKey =
+  firstCtorSiblingWithholding
     rk
     fname
     survivorKey
     (omKeys perRun.value.recordByNameRef.value)
 
-anyCtorSiblingWithholds : Option HeadKey -> String -> String -> List String -> Bool
-anyCtorSiblingWithholds _ _ _ [] = False
-anyCtorSiblingWithholds rk fname skey (k::rest)
-  | k == skey = anyCtorSiblingWithholds rk fname skey rest
-  | ctorSiblingWithholds rk fname k = True
-  | otherwise = anyCtorSiblingWithholds rk fname skey rest
+firstCtorSiblingWithholding : Option HeadKey -> String -> String -> List String -> Option String
+firstCtorSiblingWithholding _ _ _ [] = None
+firstCtorSiblingWithholding rk fname skey (k::rest)
+  | k == skey = firstCtorSiblingWithholding rk fname skey rest
+  | ctorSiblingWithholds rk fname k = Some k
+  | otherwise = firstCtorSiblingWithholding rk fname skey rest
 
 ctorSiblingWithholds : Option HeadKey -> String -> String -> Bool
 ctorSiblingWithholds rk fname k = match lookupRecordByName k
@@ -35584,11 +35658,20 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkMissingFields" (PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "checkMissingFields" ((PVar "rname") (PCons (PVar "fname") (PVar "rest")) (PVar "supplied")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "fname")) (EVar "supplied")) (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EVar "rest")) (EVar "supplied")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-MISSING-FIELD"))) (EApp (EApp (EVar "missingFieldMsg") (EVar "fname")) (EVar "rname")))) (DoExpr (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EVar "rest")) (EVar "supplied")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "inferFieldAccess" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "String")) (TyCon "Mono"))))))
-(DFunDef false "inferFieldAccess" ((PVar "env") (PVar "e") (PVar "fname") (PVar "r")) (EIf (EBinOp "==" (EVar "fname") (ELit (LString "value"))) (EApp (EApp (EVar "inferValueField") (EVar "env")) (EVar "e")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "te") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "te")) (EVar "fname")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EVar "rname"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "inferFieldOfRecord") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "inferFieldAccess" ((PVar "env") (PVar "e") (PVar "fname") (PVar "r")) (EIf (EBinOp "==" (EVar "fname") (ELit (LString "value"))) (EApp (EApp (EVar "inferValueField") (EVar "env")) (EVar "e")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "te") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "te")) (EVar "fname")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EVar "rname"))) (DoLet false false (PVar "ft") (EApp (EApp (EApp (EApp (EVar "inferFieldOfRecord") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "fieldSelectionWellTyped") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname")) (EVar "ft")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "inferValueField" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyCon "Mono"))))
 (DFunDef false "inferValueField" ((PVar "env") (PVar "e")) (EBlock (DoLet false false (PVar "et") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoLet false false (PVar "inner") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "et")) (EApp (EApp (EVar "TApp") (EApp (EVar "tconBuiltin") (ELit (LString "Ref")))) (EVar "inner")))) (DoExpr (EVar "inner"))))
 (DTypeSig false "inferFieldOfRecord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyCon "Mono"))))))
 (DFunDef false "inferFieldOfRecord" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname")) (EBlock (DoLet false false (PVar "sr") (EApp (EVar "instantiateRecordShared") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "te")) (EApp (EVar "snd") (EVar "sr")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ri"))) (arm (PCon "Some" (PVar "fm")) () (EApp (EApp (EApp (EVar "substMono") (EApp (EVar "fst") (EVar "sr"))) (EListLit)) (EVar "fm"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "unknownFieldFresh") (EVar "fname")) (EVar "rname")) (EApp (EVar "recordFieldNames") (EVar "ri"))))))))
+(DTypeSig false "fieldSelectionWellTyped" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Mono")))))))
+(DFunDef false "fieldSelectionWellTyped" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname") (PVar "ft")) (EMatch (EApp (EApp (EApp (EApp (EVar "ctorSiblingWithholdingHere") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname")) (arm (PCon "None") () (EVar "ft")) (arm (PCon "Some" (PVar "sib")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-FIELD-NOT-IN-ALL-CTORS"))) (EApp (EApp (EApp (EVar "fieldNotInAllCtorsMsg") (EVar "fname")) (EApp (EApp (EVar "fromOption") (EVar "rname")) (EApp (EVar "headTyconNameMono") (EVar "te")))) (EVar "sib")))) (DoLet false false (PVar "v") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "v")) (EVar "v"))) (DoExpr (EVar "v"))))))
+(DTypeSig false "ctorSiblingWithholdingHere" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "ctorSiblingWithholdingHere" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname")) (EApp (EApp (EApp (EApp (EVar "ctorSiblingWithholdingForHead") (EApp (EVar "headTyconMono") (EVar "te"))) (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))) (EVar "rname")) (EVar "fname")))
+(DTypeSig false "ctorSiblingWithholdingForHead" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "ctorSiblingWithholdingForHead" ((PCon "None") PWild PWild PWild) (EVar "None"))
+(DFunDef false "ctorSiblingWithholdingForHead" ((PCon "Some" (PVar "hk")) (PVar "declHead") (PVar "rname") (PVar "fname")) (EIf (EBinOp "==" (EApp (EVar "Some") (EVar "hk")) (EVar "declHead")) (EApp (EApp (EApp (EVar "ctorSiblingWithholdingName") (EApp (EVar "Some") (EVar "hk"))) (EVar "fname")) (EVar "rname")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "fieldNotInAllCtorsMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "fieldNotInAllCtorsMsg" ((PVar "fname") (PVar "tname") (PVar "sib")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' is not declared by every constructor of '"))) (EApp (EVar "display") (EVar "tname"))) (ELit (LString "': constructor '"))) (EApp (EVar "display") (EVar "sib"))) (ELit (LString "' has no '"))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "'. A '"))) (EApp (EVar "display") (EVar "tname"))) (ELit (LString "' value carries no constructor tag, so '."))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' cannot be resolved; match on the constructor instead"))))
 (DTypeSig false "fieldOwnerNames" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "fieldOwnerNames" ((PVar "fname")) (EApp (EVar "fieldOwnerReachFilter") (EApp (EVar "sortUniqS") (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value"))))))
 (DTypeSig false "fieldOwnerReachFilter" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -35632,10 +35715,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "narrowedPick" ((PVar "rk") (PVar "fname") PWild (PList (PTuple (PVar "k") (PVar "ri")))) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "narrowingBlockedByCtorSibling") (EVar "rk")) (EVar "fname")) (EVar "k"))) (EApp (EVar "Some") (ETuple (EVar "k") (EVar "ri"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "narrowedPick" (PWild PWild (PVar "owners") PWild) (EApp (EVar "pairRecordByName") (EApp (EVar "headL") (EVar "owners"))))
 (DTypeSig false "narrowingBlockedByCtorSibling" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "narrowingBlockedByCtorSibling" ((PVar "rk") (PVar "fname") (PVar "survivorKey")) (EApp (EApp (EApp (EApp (EVar "anyCtorSiblingWithholds") (EVar "rk")) (EVar "fname")) (EVar "survivorKey")) (EApp (EVar "omKeys") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef") "value"))))
-(DTypeSig false "anyCtorSiblingWithholds" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))))
-(DFunDef false "anyCtorSiblingWithholds" (PWild PWild PWild (PList)) (EVar "False"))
-(DFunDef false "anyCtorSiblingWithholds" ((PVar "rk") (PVar "fname") (PVar "skey") (PCons (PVar "k") (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "skey")) (EApp (EApp (EApp (EApp (EVar "anyCtorSiblingWithholds") (EVar "rk")) (EVar "fname")) (EVar "skey")) (EVar "rest")) (EIf (EApp (EApp (EApp (EVar "ctorSiblingWithholds") (EVar "rk")) (EVar "fname")) (EVar "k")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "anyCtorSiblingWithholds") (EVar "rk")) (EVar "fname")) (EVar "skey")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "narrowingBlockedByCtorSibling" ((PVar "rk") (PVar "fname") (PVar "survivorKey")) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "ctorSiblingWithholdingName") (EVar "rk")) (EVar "fname")) (EVar "survivorKey"))))
+(DTypeSig false "ctorSiblingWithholdingName" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "ctorSiblingWithholdingName" ((PVar "rk") (PVar "fname") (PVar "survivorKey")) (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "rk")) (EVar "fname")) (EVar "survivorKey")) (EApp (EVar "omKeys") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef") "value"))))
+(DTypeSig false "firstCtorSiblingWithholding" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "firstCtorSiblingWithholding" (PWild PWild PWild (PList)) (EVar "None"))
+(DFunDef false "firstCtorSiblingWithholding" ((PVar "rk") (PVar "fname") (PVar "skey") (PCons (PVar "k") (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "skey")) (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "rk")) (EVar "fname")) (EVar "skey")) (EVar "rest")) (EIf (EApp (EApp (EApp (EVar "ctorSiblingWithholds") (EVar "rk")) (EVar "fname")) (EVar "k")) (EApp (EVar "Some") (EVar "k")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "rk")) (EVar "fname")) (EVar "skey")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "ctorSiblingWithholds" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "ctorSiblingWithholds" ((PVar "rk") (PVar "fname") (PVar "k")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "k")) (arm (PCon "Some" (PVar "ri")) () (EBinOp "&&" (EBinOp "==" (EVar "rk") (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))) (EApp (EVar "isNone") (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ri")))))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "ownerCandidates" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))
@@ -40996,11 +41081,20 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkMissingFields" (PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "checkMissingFields" ((PVar "rname") (PCons (PVar "fname") (PVar "rest")) (PVar "supplied")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "fname")) (EVar "supplied")) (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EVar "rest")) (EVar "supplied")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-MISSING-FIELD"))) (EApp (EApp (EVar "missingFieldMsg") (EVar "fname")) (EVar "rname")))) (DoExpr (EApp (EApp (EApp (EVar "checkMissingFields") (EVar "rname")) (EVar "rest")) (EVar "supplied")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "inferFieldAccess" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "String")) (TyCon "Mono"))))))
-(DFunDef false "inferFieldAccess" ((PVar "env") (PVar "e") (PVar "fname") (PVar "r")) (EIf (EBinOp "==" (EVar "fname") (ELit (LString "value"))) (EApp (EApp (EVar "inferValueField") (EVar "env")) (EVar "e")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "te") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "te")) (EVar "fname")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EVar "rname"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "inferFieldOfRecord") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "inferFieldAccess" ((PVar "env") (PVar "e") (PVar "fname") (PVar "r")) (EIf (EBinOp "==" (EVar "fname") (ELit (LString "value"))) (EApp (EApp (EVar "inferValueField") (EVar "env")) (EVar "e")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "te") (EApp (EVar "normalize") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e")))) (DoExpr (EMatch (EApp (EApp (EVar "resolveFieldRecord") (EVar "te")) (EVar "fname")) (arm (PCon "None") () (EApp (EVar "freshVar") (ELit LUnit))) (arm (PCon "Some" (PTuple (PVar "rname") (PVar "ri"))) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "r")) (EVar "rname"))) (DoLet false false (PVar "ft") (EApp (EApp (EApp (EApp (EVar "inferFieldOfRecord") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "fieldSelectionWellTyped") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname")) (EVar "ft")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "inferValueField" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Expr") (TyCon "Mono"))))
 (DFunDef false "inferValueField" ((PVar "env") (PVar "e")) (EBlock (DoLet false false (PVar "et") (EApp (EApp (EVar "infer") (EVar "env")) (EVar "e"))) (DoLet false false (PVar "inner") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "et")) (EApp (EApp (EVar "TApp") (EApp (EVar "tconBuiltin") (ELit (LString "Ref")))) (EVar "inner")))) (DoExpr (EVar "inner"))))
 (DTypeSig false "inferFieldOfRecord" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyCon "Mono"))))))
 (DFunDef false "inferFieldOfRecord" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname")) (EBlock (DoLet false false (PVar "sr") (EApp (EVar "instantiateRecordShared") (EVar "ri"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "te")) (EApp (EVar "snd") (EVar "sr")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ri"))) (arm (PCon "Some" (PVar "fm")) () (EApp (EApp (EApp (EVar "substMono") (EApp (EVar "fst") (EVar "sr"))) (EListLit)) (EVar "fm"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "unknownFieldFresh") (EVar "fname")) (EVar "rname")) (EApp (EVar "recordFieldNames") (EVar "ri"))))))))
+(DTypeSig false "fieldSelectionWellTyped" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyCon "Mono")))))))
+(DFunDef false "fieldSelectionWellTyped" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname") (PVar "ft")) (EMatch (EApp (EApp (EApp (EApp (EVar "ctorSiblingWithholdingHere") (EVar "te")) (EVar "rname")) (EVar "ri")) (EVar "fname")) (arm (PCon "None") () (EVar "ft")) (arm (PCon "Some" (PVar "sib")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-FIELD-NOT-IN-ALL-CTORS"))) (EApp (EApp (EApp (EVar "fieldNotInAllCtorsMsg") (EVar "fname")) (EApp (EApp (EVar "fromOption") (EVar "rname")) (EApp (EVar "headTyconNameMono") (EVar "te")))) (EVar "sib")))) (DoLet false false (PVar "v") (EApp (EVar "freshVar") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "poisonMismatchVars") (EVar "v")) (EVar "v"))) (DoExpr (EVar "v"))))))
+(DTypeSig false "ctorSiblingWithholdingHere" (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "ctorSiblingWithholdingHere" ((PVar "te") (PVar "rname") (PVar "ri") (PVar "fname")) (EApp (EApp (EApp (EApp (EVar "ctorSiblingWithholdingForHead") (EApp (EVar "headTyconMono") (EVar "te"))) (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))) (EVar "rname")) (EVar "fname")))
+(DTypeSig false "ctorSiblingWithholdingForHead" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "ctorSiblingWithholdingForHead" ((PCon "None") PWild PWild PWild) (EVar "None"))
+(DFunDef false "ctorSiblingWithholdingForHead" ((PCon "Some" (PVar "hk")) (PVar "declHead") (PVar "rname") (PVar "fname")) (EIf (EBinOp "==" (EApp (EVar "Some") (EVar "hk")) (EVar "declHead")) (EApp (EApp (EApp (EVar "ctorSiblingWithholdingName") (EApp (EVar "Some") (EVar "hk"))) (EVar "fname")) (EVar "rname")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "fieldNotInAllCtorsMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "fieldNotInAllCtorsMsg" ((PVar "fname") (PVar "tname") (PVar "sib")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Field '")) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' is not declared by every constructor of '"))) (EApp (EMethodRef "display") (EVar "tname"))) (ELit (LString "': constructor '"))) (EApp (EMethodRef "display") (EVar "sib"))) (ELit (LString "' has no '"))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "'. A '"))) (EApp (EMethodRef "display") (EVar "tname"))) (ELit (LString "' value carries no constructor tag, so '."))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' cannot be resolved; match on the constructor instead"))))
 (DTypeSig false "fieldOwnerNames" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "fieldOwnerNames" ((PVar "fname")) (EApp (EVar "fieldOwnerReachFilter") (EApp (EVar "sortUniqS") (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fname")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef") "value"))))))
 (DTypeSig false "fieldOwnerReachFilter" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -41044,10 +41138,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "narrowedPick" ((PVar "rk") (PVar "fname") PWild (PList (PTuple (PVar "k") (PVar "ri")))) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "narrowingBlockedByCtorSibling") (EVar "rk")) (EVar "fname")) (EVar "k"))) (EApp (EVar "Some") (ETuple (EVar "k") (EVar "ri"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "narrowedPick" (PWild PWild (PVar "owners") PWild) (EApp (EVar "pairRecordByName") (EApp (EVar "headL") (EVar "owners"))))
 (DTypeSig false "narrowingBlockedByCtorSibling" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "narrowingBlockedByCtorSibling" ((PVar "rk") (PVar "fname") (PVar "survivorKey")) (EApp (EApp (EApp (EApp (EVar "anyCtorSiblingWithholds") (EVar "rk")) (EVar "fname")) (EVar "survivorKey")) (EApp (EVar "omKeys") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef") "value"))))
-(DTypeSig false "anyCtorSiblingWithholds" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))))
-(DFunDef false "anyCtorSiblingWithholds" (PWild PWild PWild (PList)) (EVar "False"))
-(DFunDef false "anyCtorSiblingWithholds" ((PVar "rk") (PVar "fname") (PVar "skey") (PCons (PVar "k") (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "skey")) (EApp (EApp (EApp (EApp (EVar "anyCtorSiblingWithholds") (EVar "rk")) (EVar "fname")) (EVar "skey")) (EVar "rest")) (EIf (EApp (EApp (EApp (EVar "ctorSiblingWithholds") (EVar "rk")) (EVar "fname")) (EVar "k")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "anyCtorSiblingWithholds") (EVar "rk")) (EVar "fname")) (EVar "skey")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "narrowingBlockedByCtorSibling" ((PVar "rk") (PVar "fname") (PVar "survivorKey")) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "ctorSiblingWithholdingName") (EVar "rk")) (EVar "fname")) (EVar "survivorKey"))))
+(DTypeSig false "ctorSiblingWithholdingName" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "ctorSiblingWithholdingName" ((PVar "rk") (PVar "fname") (PVar "survivorKey")) (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "rk")) (EVar "fname")) (EVar "survivorKey")) (EApp (EVar "omKeys") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef") "value"))))
+(DTypeSig false "firstCtorSiblingWithholding" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))))
+(DFunDef false "firstCtorSiblingWithholding" (PWild PWild PWild (PList)) (EVar "None"))
+(DFunDef false "firstCtorSiblingWithholding" ((PVar "rk") (PVar "fname") (PVar "skey") (PCons (PVar "k") (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "skey")) (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "rk")) (EVar "fname")) (EVar "skey")) (EVar "rest")) (EIf (EApp (EApp (EApp (EVar "ctorSiblingWithholds") (EVar "rk")) (EVar "fname")) (EVar "k")) (EApp (EVar "Some") (EVar "k")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "rk")) (EVar "fname")) (EVar "skey")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "ctorSiblingWithholds" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "ctorSiblingWithholds" ((PVar "rk") (PVar "fname") (PVar "k")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "k")) (arm (PCon "Some" (PVar "ri")) () (EBinOp "&&" (EBinOp "==" (EVar "rk") (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))) (EApp (EVar "isNone") (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ri")))))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "ownerCandidates" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))
