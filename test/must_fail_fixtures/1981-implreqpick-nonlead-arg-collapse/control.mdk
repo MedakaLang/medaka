@@ -1,0 +1,12 @@
+data W a b c = W a b c
+interface Ix a b c where
+  ix : a -> b -> c -> Int
+impl Ix Int Char Bool where
+  ix _ _ _ = 333
+impl Ix Int Bool Char where
+  ix _ _ _ = 111
+interface Sz s where
+  sz : s -> Int
+impl Sz (W Int Char Bool) where
+  sz (W n x y) = ix n x y + ix n y x
+main = println (sz (W 5 'z' True))

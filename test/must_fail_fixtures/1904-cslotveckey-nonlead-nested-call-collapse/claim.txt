@@ -1,0 +1,40 @@
+issue: 1904
+what: `cslotVecKey`/`oblArgKey` (`compiler/types/typecheck.mdk`) keys a
+what: non-lead tyvar-position argument in a predicate's argument vector as a
+what: bare wildcard regardless of which tyvar occupies that position, so two
+what: predicates differing only in a non-lead position (`Ix a b c` vs.
+what: `Ix a c b`) can collapse to the SAME dict slot. `sprint/nary-predicate-
+what: slots` fixed the direct body-occurrence shape (`indexOfPredGo`), but this
+what: fixture uses a DIFFERENT shape not covered by that fix: two separate
+what: single-predicate helper functions (`callA : Ix a b c => ...`,
+what: `callB : Ix a c b => ...`), each forwarded a dict from the caller's
+what: (`size`)'s own two-predicate context. Both nested calls silently
+what: resolve to the SAME (wrong, for one of them) impl.
+cmd: run main.mdk
+exit: 0
+stdout: 222
+control: run control.mdk
+why-fixture: the issue's own filed repro (`size n x y = ix n x y`) does NOT
+why-fixture: discriminate -- it only ever exercises the first predicate
+why-fixture: directly in `indexOfPredGo` position, a shape `nary-predicate-
+why-fixture: slots` slice 3 already fixed (re-measured first-hand: that exact
+why-fixture: repro now gives the correct 444, not the issue's claimed 666).
+why-fixture: This corrected repro instead routes the two predicates through
+why-fixture: two SEPARATE forwarding functions, `callA`/`callB`, each with
+why-fixture: only one of the two predicates in its own signature -- `size`
+why-fixture: must pass the RIGHT one of its two dicts to each. Measured
+why-fixture: (this build, `MEDAKA_STRICT=1`): both `run` and `build`-executed
+why-fixture: give `222` (= 111 + 111 -- both nested calls silently resolve to
+why-fixture: the `Ix Int Bool Char` impl (111), not the correct `333 + 111 =
+why-fixture: 444`).
+why-control: control.mdk drops `callB`/the second predicate entirely --
+why-control: `callA` alone, called directly from `main`, forwarded ONE dict
+why-control: through ONE predicate. It must print `333` (`Ix Int Char Bool`),
+why-control: proving ordinary single-predicate dict forwarding through a
+why-control: nested call is intact; the defect is specific to forwarding TWO
+why-control: same-interface predicates that differ only in a non-lead
+why-control: position.
+why-note: root cause per the issue is in `cslotVecKey`/`oblArgKey`'s
+why-note: non-lead wildcard keying. A fix makes `main.mdk` print `444`,
+why-note: draining this row. Close #1904 and delete this fixture when that
+why-note: happens (re-verify the control still passes -- it should, unchanged).

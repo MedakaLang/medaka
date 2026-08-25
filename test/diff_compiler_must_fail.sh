@@ -448,6 +448,18 @@ for dir in "$FIXDIR"/*/; do
   run_verb "$verb" "$dir" "$file" "$out"
   got_exit=$?
 
+  # ── build-run's build-failed sentinel (126): this is a MALFORMED fixture, never a
+  #    DRAIN — the binary that would carry the pinned observation never came into being,
+  #    so there is nothing meaningful left to compare (stdout/diag/control all skipped).
+  #    Distinct from the "no claim.txt" MALFORMED case above: this one names the issue and
+  #    the reason, and is counted here rather than falling through to the DRAINED branch
+  #    below (which would misreport "ISSUE #N APPEARS FIXED" for a broken pin, not a fix).
+  if [ "$verb" = "build-run" ] && [ "$got_exit" = "126" ]; then
+    printf 'MALFORMED  %-46s build-run: '\''medaka build'\'' itself failed (issue #%s)\n' "$name" "$issue"
+    printf '           cannot grade an executed binary that never built — see %s\n' "$out"
+    malformed=$((malformed+1)); continue
+  fi
+
   fail=""
 
   # ── exit code: EXACT. Never "nonzero". ──
