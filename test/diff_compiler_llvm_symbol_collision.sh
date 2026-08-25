@@ -63,6 +63,13 @@
 # and `mdk_default_*` — and about the WasmGC peers of the two families it does
 # cover (this is an LLVM gate; `test/wasm/` owns that backend).
 #
+# Section 5 covers a DIFFERENT space from 1–4: the DICT-WITNESS TAG domain
+# (`core_ir_lower.dictWitnessTagGuard`, #348/#377), a djb2 hash rather than an
+# emitted-symbol identifier. FR-1 scoped that guard's population by method name
+# (the same grouping key the emitted dispatcher itself uses) so it only fires when
+# two impls a real dispatch chain could actually compare collide; see the
+# fixtures' own comments for the mechanism.
+#
 # ⚠️ `medaka build`'s exit code does NOT survive a pipe (AGENTS.md [D-BUILD-PIPE]).
 # Every invocation below redirects to a file and reads `$?` from the redirect.
 #
@@ -400,6 +407,90 @@ else
   else
     ok "impl-key control runs, prints 1|2"
   fi
+fi
+
+# ── 5. the DICT-WITNESS TAG domain (FR-1, #348/#377) — scope-narrowing coverage ──
+# `core_ir_lower.dictWitnessTagGuard` checks a SEPARATE space from sections 1-4's
+# emitted-symbol domain: the dict-witness/route-word tag a shared dispatcher
+# compares at runtime (`private_mangle.hashName`, a non-injective djb2 hash — see
+# its own comment for the constructible-collision mechanism). FR-1 fixed the guard
+# to partition its population by METHOD NAME, the same grouping key the emitted
+# dispatcher itself uses (`llvm_emit.implsOf`/`dispFnName` — a method-name lookup),
+# because a collision between two UNRELATED methods' route words is never actually
+# compared at runtime and refusing it was a false positive (F-1/F-2 review
+# findings). This section is the missing regression coverage those findings named.
+
+# positive control: an unrelated-method collision (this program's `JMt` vs the
+# prelude's `Int`) must now BUILD and RUN.
+checked=$((checked + 1))
+DWBIN="$WORK/dict_witness_positive.bin"
+DWLOG="$WORK/dict_witness_positive.log"
+"$MEDAKA" build "$FIX/dict_witness/positive.mdk" -o "$DWBIN" > "$DWLOG" 2>&1
+dwst=$?
+
+if [ "$dwst" -ne 0 ]; then
+  fail "the dict-witness positive control failed to build (exit $dwst)"
+  printf '      an unrelated-method route-word collision (this program'"'"'s route word\n'
+  printf '      vs a prelude impl'"'"'s, for a DIFFERENT method) must not refuse: the two\n'
+  printf '      words are never compared by any real dispatch chain. Build output:\n'
+  sed 's/^/        /' "$DWLOG"
+else
+  ok "the dict-witness positive control builds (exit 0)"
+
+  checked=$((checked + 1))
+  DWOUT="$WORK/dict_witness_positive.out"
+  "$DWBIN" > "$DWOUT" 2>&1
+  dwrst=$?
+  printf 'jmt\n' > "$WORK/dict_witness_positive.expected"
+  if [ "$dwrst" -ne 0 ]; then
+    fail "the dict-witness positive control binary exited $dwrst"
+    sed 's/^/        /' "$DWOUT"
+  elif ! diff -u "$WORK/dict_witness_positive.expected" "$DWOUT" > "$WORK/dict_witness_positive.diff" 2>&1; then
+    fail "the dict-witness positive control stdout differs from the hand-derived jmt"
+    sed 's/^/        /' "$WORK/dict_witness_positive.diff"
+  else
+    ok "the dict-witness positive control runs, prints jmt"
+  fi
+fi
+
+# negative control: a SAME-method-name collision (Mzone/NYone, S-4's construction,
+# dispatched through one dict parameter) must still REFUSE.
+checked=$((checked + 1))
+DWNBIN="$WORK/dict_witness_negative.bin"
+DWNLOG="$WORK/dict_witness_negative.log"
+"$MEDAKA" build "$FIX/dict_witness/negative.mdk" -o "$DWNBIN" > "$DWNLOG" 2>&1
+dwnst=$?
+
+if [ "$dwnst" -eq 0 ]; then
+  fail "the dict-witness negative control built at exit 0 — the guard did NOT fire"
+  printf '      two impls of ONE method name (zn) with colliding route words ARE\n'
+  printf '      compared by that method'"'"'s shared dispatcher; this must still refuse.\n'
+  printf '      Build output:\n'
+  sed 's/^/        /' "$DWNLOG"
+else
+  ok "the dict-witness negative control refused (exit $dwnst)"
+fi
+
+# The message must name both route words -- not merely "it failed".
+checked=$((checked + 1))
+dwnmissing=""
+for want in 'emitted dict-witness tag collision' 'method `zn`' 'Mzone' 'NYone'; do
+  grep -q -- "$want" "$DWNLOG" || dwnmissing="$dwnmissing '$want'"
+done
+if [ -n "$dwnmissing" ]; then
+  fail "dict-witness negative-control diagnostic does not name both route words; missing:$dwnmissing"
+  sed 's/^/        /' "$DWNLOG"
+else
+  ok "dict-witness negative-control refusal names both route words and the method"
+fi
+
+# It must refuse BEFORE producing anything.
+checked=$((checked + 1))
+if [ -e "$DWNBIN" ]; then
+  fail "a binary was produced at $DWNBIN despite the dict-witness refusal"
+  printf '      the property is "refuses before any binary is produced".\n'
+else
+  ok "no binary produced (dict-witness domain)"
 fi
 
 printf '\nchecked %d assertions: %d failed\n' "$checked" "$fails"
