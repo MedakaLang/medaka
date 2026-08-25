@@ -1,3 +1,0 @@
-import lib.{useIx}
-
-main = println (useIx 5)
