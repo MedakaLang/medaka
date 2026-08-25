@@ -953,6 +953,31 @@ for f in $changed; do
   esac
 done
 
+# ── the control-byte ratchet applies to EVERY tracked source file (#1987 F4) ──
+# diff_compiler_source_bytes.sh scans the whole tree (`git ls-files`, filtered by
+# extension) and has no per-file consumer anywhere: no arm of the table above names
+# it, and `_gates_for_path` can only reach it when a path happens to be mentioned
+# inside the gate's own source (which is how playground/* reaches it today — via the
+# gate's `playground/vendor/` exclusion line, by accident rather than by rule).
+#
+# So before this block, a change to demo/ or to any manifest-derived project
+# (mq, parsec, byteparser, sqlite, gzip, pds) derived that gate NEVER. That was a
+# real regression against the old UNMAPPED→FULL fallback, which ran it incidentally.
+# A CR or a NUL pasted into mq/main.mdk would have reached the merge queue with the
+# local loop green.
+#
+# Unconditional by design, and cheap by construction: the gate re-scans the whole
+# tree regardless of what changed, so there is nothing to narrow — the only honest
+# derivation is "any change at all". Guarded on $changed being non-empty so an
+# empty diff still derives an empty gate set.
+#
+# ⚠️ This makes source_bytes the one gate a `<project>/` change derives from OUTSIDE
+# `<project>/test/`. test/diff_compiler_project_enrolment.sh's PREFLIGHT leg knows
+# about it BY NAME (see its UNIVERSAL_GATES) — any OTHER stray gate still fails there.
+if [ -n "$changed" ]; then
+  add 'diff_compiler_source_bytes'
+fi
+
 # ── the IN-LANGUAGE suite (`make test`) is NOT a gate, so nothing above can reach it ──
 #
 # `$gates` is a set of `test/*.sh` scripts run through run_gates.sh. `make test` is a

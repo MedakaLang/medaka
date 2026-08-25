@@ -33,8 +33,17 @@
 #   FLOOR      at least one tracked gate script under `<project>/test/`.
 #   CI         some ci.yml shard pattern resolves to a gate under `<project>/test/`.
 #   PREFLIGHT  a changed file under `<project>/` derives at least one gate, every
-#              derived gate lives under `<project>/test/`, and it produces no
-#              UNMAPPED and no FULL line.
+#              derived gate lives under `<project>/test/` (except the named
+#              UNIVERSAL_GATES below), and it produces no UNMAPPED and no FULL line.
+#
+# THE ONE EXCEPTION. `UNIVERSAL_GATES` (in the PREFLIGHT leg) names gates that are
+# repo-wide by design — they scan the whole tracked tree and have no per-file
+# consumer, so preflight derives them for EVERY changed path and "outside
+# `<project>/test/`" is the correct answer for them, not drift. Today that set is
+# exactly one gate: `test/diff_compiler_source_bytes.sh` (the control-byte ratchet,
+# #1987 F4). It is a NAMED LIST, deliberately not a pattern and not an allowlist
+# mechanism — a stray gate that is stray for any other reason must still fail this
+# leg, which is the whole point of the check.
 #
 # The PREFLIGHT leg deliberately RUNS preflight rather than reading its source: the
 # thing that matters is the derivation's OUTPUT, and a gate that greps for a case
@@ -159,7 +168,13 @@ PY
   derived="$(sed -n 's/^  GATE      //p' "$WORK/pf.out")"
   n_unmapped="$(grep -c '^  UNMAPPED  ' "$WORK/pf.out" || true)"
   n_full="$(grep -c '^  FULL      ' "$WORK/pf.out" || true)"
-  stray="$(printf '%s\n' "$derived" | grep -v '^$' | grep -v "^$p/test/" || true)"
+  # The named universal set — see "THE ONE EXCEPTION" in this script's header.
+  # These are repo-wide gates preflight derives for EVERY changed path, so being
+  # outside $p/test/ is correct for them specifically. Exact-match, one gate, no
+  # patterns: every other stray gate still fails below.
+  UNIVERSAL_GATES='test/diff_compiler_source_bytes.sh'
+  stray="$(printf '%s\n' "$derived" | grep -v '^$' | grep -v "^$p/test/" \
+             | grep -vxF "$UNIVERSAL_GATES" || true)"
   if [ -z "$derived" ]; then
     echo "  PREFLIGHT  FAIL — a change under $p/ derives ZERO gates."
     echo "             Every such change then reads as UNMAPPED to ci.yml's detect job,"
@@ -175,7 +190,7 @@ PY
     printf '%s\n' "$stray" | sed 's/^/             /'
     fails=$((fails + 1))
   else
-    echo "  PREFLIGHT  ok — $(printf '%s\n' "$derived" | grep -c .) gate(s), all under $p/test/, no UNMAPPED/FULL"
+    echo "  PREFLIGHT  ok — $(printf '%s\n' "$derived" | grep -c .) gate(s), all under $p/test/ or in the named universal set, no UNMAPPED/FULL"
   fi
 done
 
