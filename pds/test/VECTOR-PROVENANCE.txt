@@ -365,3 +365,47 @@ source-url:    https://github.com/bitcoin-core/secp256k1/archive/6e2c8bc4ecdc6e7
 extraction:    pds/tools/gen_point_corpus.sh verifies the SEC 2 PDF, the exact libsecp256k1 and k256 commit archives and pins, runs the committed C and Rust drivers, requires byte-identical output, and writes 17 mul, 6 add, and 2 double rows.
 retrieved:     2026-08-23
 consumer:      S-point-corpus (#1700 secp256k1 public points)
+
+[impl]
+id:            official-pds
+repo:          https://github.com/bluesky-social/pds
+version:       0.4.5027 (@atproto/pds 0.5.27, @atproto/crypto 0.5.4)
+commit:        374cf1d4ba782d4391bbb73e4e2d3f320d4846d6
+retrieved:     2026-08-24
+notes:         official image ghcr.io/bluesky-social/pds@sha256:d95725b24dbe53af9d91dc69750556931ebed6c396f2cfa42b221434db642f12; corroborates the independent signing answer only and never supplies it by itself
+
+[vector]
+file:          pds/test/vectors/prehashed_signing_corpus.txt
+local-sha256:  40c8f795f85bcb894238529ac412503cbcb4ddea78b9dfe216c164efc67d743c
+kind:          reference-impl
+impl:          libsecp256k1
+impl-secondary: k256
+source-url:    https://github.com/bitcoin-core/secp256k1/archive/6e2c8bc4ecdc6e71dbe7a368f360d8d453ce435d.tar.gz
+extraction:    pds/tools/gen_signing_corpus.sh verifies both pinned source archives and tag commits; instruments secp256k1_ecdsa_sig_sign exactly before low-S normalization; runs the committed C and locked Rust/rfc6979 drivers; requires byte-identical key, digest, compressed public key, RFC6979 k, r, raw s, low s, and compact signature before emitting each row
+retrieved:     2026-08-24
+consumer:      S3-A-corpora (#1700 secp256k1 RFC6979 signing)
+notes:         80 exact rows from pds/tools/signing_inputs.txt sha256 94da19c323a5c96d5a7b41e99fc9806081c565deae7d69ef3390fad7418fa6b8; 16 matching-index pairs plus the fixed 8x8 cross-product; k256 uses locked rfc6979 0.4.0 checksum f8dd2a808d456c4a54e300a23e9f5a67e122c3024119acbfd73e3bf664491cb2
+
+[vector]
+file:          pds/test/vectors/pds_message_signing_corpus.txt
+local-sha256:  34d89f689258774276fb59f44337d004ae54de221511d496df8de90bb4d6c3d8
+kind:          reference-impl
+impl:          official-pds
+impl-secondary: libsecp256k1
+source-url:    ghcr.io/bluesky-social/pds@sha256:d95725b24dbe53af9d91dc69750556931ebed6c396f2cfa42b221434db642f12
+extraction:    pds/tools/gen_signing_corpus.sh runs the pinned image with node and the committed pds/tools/extract_pds_signatures.mjs; that module imports the image's absolute @atproto/crypto secp256k1 keypair module, signs each literal raw message, and the assembler refuses unless public key and compact signature agree with the already-byte-identical libsecp256k1+k256 result
+retrieved:     2026-08-24
+consumer:      S3-A-corpora (#1700 official-PDS signing corroboration)
+notes:         16 exact raw-message rows; each committed SHA-256 digest is recomputed from its literal UTF-8 message by the offline gate; k256 is the second independent answer implementation in addition to the ledger's impl-secondary field, which has room for one handle
+
+[vector]
+file:          pds/test/vectors/wycheproof_secp256k1_sha256_p1363.txt
+local-sha256:  19809e9b115c0bf9f5facc5fc27d460726d7d2c1c7394e0c622764b17098bde4
+kind:          published-artifact
+source:        Google Wycheproof v0.9 ecdsa_secp256k1_sha256_p1363_test.json
+source-url:    https://raw.githubusercontent.com/C2SP/wycheproof/cff6adf42662469a1871e57303a0ad1d758ed8c0/testvectors_v1/ecdsa_secp256k1_sha256_p1363_test.json
+source-sha256: 6508e9cc99c169c7d59a6891d939387f115491c479088ddcdcec4d137be69f34
+extraction:    pds/tools/gen_signing_corpus.sh verifies the artifact digest and tag commit, then pds/tools/normalize_wycheproof_signing.py preserves tcId, uncompressed public key, message, P1363 signature, upstream result, and flags while separately recording strict-low-S classification and the project accept/reject expectation
+retrieved:     2026-08-24
+consumer:      S3-A-corpora (#1700 secp256k1 compact verification)
+notes:         242 unique tcIds; upstream 163 valid and 79 invalid; valid rows partition into 69 high-S and 94 low-S; project policy accepts 94 and rejects 148
