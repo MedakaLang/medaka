@@ -1,0 +1,28 @@
+-- The PROJECT entry: the whole graph, every module loaded, `Tag (Wrap Int)`
+-- satisfied. ACCEPT on all three verbs, stdout `wrap-int`.
+--
+-- 🚨 THIS ROW IS NOT MERELY lib.mdk's CONTROL -- IT IS A REGRESSION ROW IN ITS
+-- OWN RIGHT, AND IT IS THE ONE THAT SHOWS #1938 IS NOT CONFINED TO CHECKING A
+-- LIBRARY ALONE. MEASURED at the pre-slice base `7941e5fe` (this tree,
+-- cold-built): check, run AND build all exit 1 with
+-- `lib.mdk:18:20: No impl of Tag for Wrap a` -- the WHOLE PROJECT failed to
+-- compile, with the satisfying impl sitting in a loaded sibling module the
+-- entire time. The refutation is decided per-module against `buildImplUniverse`
+-- over that module's OWN decls, so loading the dependent does not rescue it.
+-- Any belief that #1938 costs only a spurious diagnostic on an unusual CLI
+-- invocation is refuted by this row.
+--
+-- ⚠️ `main` DELIBERATELY DOES NOT CALL `describe`. It would be the more obvious
+-- entry, and it does not work: `describe`'s residual is a STRUCTURED predicate
+-- (`Tag (Wrap a)`, not a bare `Tag a`), and `funConstraintsRef`'s dict slots are
+-- shattered per tyvar, so no joint dict slot exists to route it across the
+-- module boundary. That is #1560 / #1937's still-open half, MEASURED byte-
+-- identically at the pre-slice base `7941e5fe` and unrelated to what this
+-- fixture asserts: with `main = println (describe 5)` both arms give check exit
+-- 0 and run exit 1, the #1812 unlocated elaboration error. Calling `tag`
+-- directly keeps this row about the OPEN-WORLD question and nothing else. When
+-- #1560 lands, switching to `describe 5` is the strictly better body.
+import lib.*
+import impls
+
+main = println (tag (Wrap 5))

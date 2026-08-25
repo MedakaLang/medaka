@@ -1,0 +1,49 @@
+-- DICT-SEMANTICS §4.2 (obligation deferral, OD2) -- THE OPEN-WORLD ACCEPT ROW.
+--
+-- REGRESSION GUARD FOR #1939 (a declared constrained function rejected at its
+-- own definition because no impl of its context is LOADED), S1, knowingly
+-- landed at #1907's close-out and fixed by sprint/structured-predicate-carry.
+-- #1939 had no must_fail pin, so before this row it had no guard anywhere.
+--
+-- SPEC ANSWER, hand-derived from §4.2, NOT captured. A goal is refutable only
+-- when no instantiation of it can ever be satisfied. `match(IE, pi)` is read
+-- against the LOADED module graph, and a module's graph NEVER contains its
+-- dependents -- so "no impl heads at `Wrap` here" is a fact about this
+-- compilation unit, not about the goal. A goal that still carries a type
+-- VARIABLE therefore defers (OD2) and is adjudicated at each use site, where it
+-- is ground. Neither `f1` nor `f2` is ever called, so no use site exists and
+-- nothing is adjudicated: ACCEPT on all three verbs, stdout `open-world`.
+--
+-- 🚨 BOTH BINDINGS ARE LOAD-BEARING -- THEY TAKE DIFFERENT CHANNELS, AND THE
+-- FIX HAD TO LAND ON BOTH. `f1`'s single-parameter `Tag (Wrap a)` is discharged
+-- by the CALL-obligation checker (`checkOneCallObligation`, whose
+-- `allConcreteHeads` gate reads `Wrap a` as concrete because it asks for a head
+-- TYCON, not for groundness). `f2`'s two-parameter `Conv (Wrap a) b` is a MIXED
+-- vector that leaves the body as a residual predicate and is adjudicated by
+-- `residualRefutableNow` instead. MEASURED at the pre-slice base `7941e5fe`
+-- (this tree, cold-built): `f2` alone rejected at the DEFINITION,
+-- `No impl of Conv for Wrap a b`; with `residualRefutableNow` fixed and the call
+-- channel untouched, `f1` still rejected, `No impl of Tag for Wrap a`. Either
+-- binding alone grades green against half a fix.
+--
+-- ⚠️ PAIRED WITH s-open-world-unsatisfiable-use-site-rejected.mdk, THE ILLEGAL
+-- TWIN. [W-QUIETER]: this slice turns a loud reject into an acceptance, so the
+-- ACCEPT row is only half the assertion -- without the twin, deleting the
+-- obligation check entirely would grade green here. The twin declares the same
+-- contexts and CALLS one of them at a type nothing satisfies; it must still
+-- reject, one site further out.
+data Wrap a = Wrap a
+
+interface Tag a where
+  tag : a -> String
+
+interface Conv a b where
+  conv : a -> b -> String
+
+f1 : Tag (Wrap a) => Wrap a -> String
+f1 x = tag x
+
+f2 : Conv (Wrap a) b => Wrap a -> b -> String
+f2 x y = conv x y
+
+main = println "open-world"

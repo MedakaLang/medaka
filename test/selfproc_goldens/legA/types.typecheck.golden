@@ -778,6 +778,7 @@ genRestricted : Bool -> Mono -> Scheme
 generalize : Mono -> Scheme
 generalizeGroup : TcEnv -> List Int -> List (Int, String) -> List (LetBind, (String, Scheme)) -> TcEnv
 globalCoherenceConflict : ImplEnv -> (Option String, Option String)
+goalDefersOpenWorld : List Mono -> Bool
 goalHeadCon : List Mono -> Option HeadKey
 goalPredOf : String -> Mono -> Option Predicate
 goalPredOfOp : String -> Option Predicate
@@ -1258,7 +1259,9 @@ moduleDictNames : List Decl -> List Decl -> List (String, List Decl) -> List Str
 modulePubDefiners : Map String (List (String, (String, String))) -> String -> List Decl -> List (String, (String, String))
 moduleUserFnNames : List (String, List Decl) -> List String
 monoArgUnboundIds : Mono -> List Int
+monoClosed : Mono -> Bool
 monoHeadAgrees : Mono -> Mono -> Bool
+monoHeadIsDecl : Mono -> Bool
 monoIdsWithIface : (Mono, String) -> List (Int, String)
 monoIsApp : Mono -> Bool
 monoIsBareTyvar : Mono -> Bool
@@ -1274,6 +1277,7 @@ monoTyvarId : Mono -> Int
 monoTyvarIds : Mono -> List Int
 monoUnboundIds : Mono -> List Int
 monoUnboundVarLevels : Mono -> List (Int, Int)
+monoVectorClosed : List Mono -> Bool
 monosTvarIds : List Int -> List Mono -> List Int
 nameOf : Ref (List (Int, String)) -> Ref Int -> Int -> String
 nameableIfaceMethodSet : List Decl -> Map String Unit
