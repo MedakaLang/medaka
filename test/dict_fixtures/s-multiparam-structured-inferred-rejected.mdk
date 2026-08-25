@@ -1,0 +1,39 @@
+-- FIX-1 (end-of-sprint review S0-1, the INFERRED twin): the same
+-- multi-parameter structured predicate with NO signature at all.
+--
+-- 🚨 THIS ROW IS NOT ITS SIBLING'S CONTROL -- IT TAKES A DIFFERENT CHANNEL AND
+-- WAS FIXED BY A DIFFERENT CONJUNCT.  `s-multiparam-structured-declared-
+-- rejected.mdk` is caught because `h`'s declared context is already REGISTERED
+-- when the body goal is checked, so the goal is "claimed" and must match a
+-- given.  Here nothing is registered at all: `inferredConstraintIds` rejects the
+-- compound `Wrap t`, `ids` comes out empty, and `registerInferredFor` returns on
+-- its empty-ids guard -- so the goal is UNCLAIMED and the claimed-test alone
+-- lets it through.  What refuses it is `goalSlotStillOpen`'s ARITY half: a
+-- 2-ary vector can never acquire a given on ANY channel, because
+-- `registerPredGiven` matches `[subject]` and is the only writer that answers a
+-- structured goal.  MEASURED: with the claimed-test alone this file printed
+-- `boolInt/boolInt` at exit 0 while its declared sibling already rejected --
+-- i.e. OD6(a)'s declared/inferred agreement held only by disagreeing.
+--
+-- Correct answer, hand-derived from §3: `h True` grounds to
+-- `Conv (Wrap Bool) Int` and `h 1` to `Conv (Wrap Int) Int`, so a tree that
+-- could dispatch this would print `boolInt/intInt`.  It cannot, so REJECT.
+--
+-- At the pre-fix sprint head `aa36d555`: check 0, run 0 and build 0, all
+-- printing `boolInt/boolInt` -- the first impl's body for both calls.
+--
+-- ⚠️ VERDICT AND CODE, NO LOCATION.
+data Wrap a = Wrap a
+
+interface Conv s t where
+  conv : s -> t -> String
+
+impl Conv (Wrap Bool) Int where
+  conv _ _ = "boolInt"
+
+impl Conv (Wrap Int) Int where
+  conv _ _ = "intInt"
+
+h x = conv (Wrap x) 0
+
+main = println "\{h True}/\{h 1}"

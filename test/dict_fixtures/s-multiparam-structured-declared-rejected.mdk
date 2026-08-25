@@ -1,0 +1,53 @@
+-- FIX-1 (end-of-sprint review S0-1): a MULTI-PARAMETER interface with a
+-- STRUCTURED predicate argument in a DECLARED context has no consumption-side
+-- answer, so it must be a LOCATED REJECT rather than a silently committed dict.
+--
+-- Hand-derived from DICT-SEMANTICS §3 BEFORE running anything.  `f`'s context is
+-- the 2-ary predicate `Conv (Wrap a) Int`.  At `f True` the goal is
+-- `Conv (Wrap Bool) Int` and at `f 41` it is `Conv (Wrap Int) Int` -- two
+-- DIFFERENT goals matching two different impls, so the two calls must print
+-- `T` and `n=42` respectively.  What the tree can actually do is neither: the
+-- given registry that answers a structured goal (`registerPredGiven`) matches a
+-- SINGLE-subject vector and returns `()` for anything longer, so `entailAssum`
+-- can never see this predicate, `entail` falls through to `entailInst`, and the
+-- body is statically committed to whichever impl was most specific at
+-- ABSTRACTION time while the caller's correctly-built dict goes unread.
+--
+-- 🚨 WHAT THIS PINS.  At the pre-fix sprint head `aa36d555`, on this tree, cold
+-- built: check 0, run 1 (`E-PANIC: if condition is not a Bool`) and build 0 with
+-- the SHIPPED BINARY PRINTING `T/T` -- `Conv (Wrap Bool)`'s body applied to the
+-- `Int` payload 41, read back as a Bool.  Simultaneously a silent wrong answer,
+-- a type-confused dict (§5), and an eval-vs-native divergence (§14 OD6).  The
+-- value was STABLE at -O0, -O1 and -O2 (hand-linked from `--keep-ir`), so it is
+-- not #1958's undefined behaviour -- it is a real wrong answer.
+--
+-- 🚨 AND IT WAS DECIDED BY DECLARATION ORDER.  Swapping the two `impl Conv`
+-- blocks in this file changed the pre-fix answer to `intInt/intInt`, which
+-- DICT-SEMANTICS §3 forbids outright.  Section 4's permutation pair grades that
+-- half automatically now that the row rejects: BOTH orders must reject.
+--
+-- ⚠️ THE ACCEPT SIBLING ALREADY EXISTS and must not move:
+-- `s-open-world-declared-context-uncalled-accepted.mdk`'s `f2` is a
+-- multi-parameter structured context (`Conv (Wrap a) b`) that legitimately
+-- ACCEPTS -- its second argument is a bare tyvar, so the goal never reaches the
+-- open-world defer gate at all and stays a residual.  A fix that rejected here
+-- by refusing multi-parameter structured contexts wholesale would false-reject
+-- that row, so neither file is meaningful alone.
+--
+-- ⚠️ VERDICT AND CODE, NO LOCATION: the span is asserted nowhere, so the reject
+-- may move between definition and call site without a false red.
+data Wrap a = Wrap a
+
+interface Conv s t where
+  conv : s -> t -> String
+
+impl Conv (Wrap Bool) Int where
+  conv (Wrap b) _ = if b then "T" else "F"
+
+impl Conv (Wrap Int) Int where
+  conv (Wrap n) _ = "n=\{n + 1}"
+
+f : Conv (Wrap a) Int => a -> String
+f x = conv (Wrap x) 0
+
+main = println "\{f True}/\{f 41}"

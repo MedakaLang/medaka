@@ -1,0 +1,40 @@
+-- FIX-1 (end-of-sprint review S2-5): a goal whose only openness is a RIGID
+-- nested inside a structured argument must keep rejecting.
+--
+-- The structured sibling of `test/typecheck_error_fixtures/rigid_mono_head_key.
+-- mdk`, whose golden IS this reject one level up.  `zzz` in `data Bad = Bad zzz`
+-- is a type variable NO scheme quantifies -- not the data declaration's (it
+-- takes no parameters) and not `use`'s (it has no signature).  DICT-SEMANTICS §8
+-- I6.1 calls handing such a variable out as a dispatch key a forgery, and
+-- `monoHeadIsDecl` catches it at the TOP LEVEL of a goal.  Nested one
+-- constructor down (`Q (Wrap zzz)`) the head is a real `TCon Wrap`, so that
+-- conjunct is True and the forgery leaked through: a rigid that can never ground
+-- has nowhere to defer TO, so "defer" here is again "drop".
+--
+-- 🚨 WHAT THIS PINS, and the discriminator is the SECOND diagnostic.  At the
+-- pre-fix sprint head `aa36d555` this file emitted ONE error, the `Type
+-- mismatch: Int literal vs zzz` at the call.  At the sprint merge-base
+-- `0944ca9d` it emitted TWO, that one AND `No impl of Q for Wrap zzz`.  Exit
+-- code alone cannot see the loss -- both arms exit 1 -- which is why this row
+-- carries a code assertion and why the bare-rigid control it is derived from
+-- could not have caught it.
+--
+-- ⚠️ CONTROL: `p/g1_rigid.mdk`-shaped (`qq v`, no `Wrap`) still rejects on both
+-- arms via `monoHeadIsDecl`; the leak is specific to the NESTED position.
+--
+-- ⚠️ NOTE THE ROW IS REJECT ON ALL THREE VERBS with T-TYPE-MISMATCH present too:
+-- both codes are asserted, because asserting only T-NO-IMPL would let a future
+-- change lose the mismatch instead and still grade green.
+data Wrap a = Wrap a
+
+interface Q a where
+  qq : a -> Int
+
+impl Q (Wrap Bool) where
+  qq _ = 7
+
+data Bad = Bad zzz
+
+use (Bad v) = qq (Wrap v)
+
+main = println (use (Bad 1))

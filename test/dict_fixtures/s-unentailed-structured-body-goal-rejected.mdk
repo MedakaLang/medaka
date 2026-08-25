@@ -1,0 +1,49 @@
+-- FIX-1 (end-of-sprint review S0-2 / #1959): a structured body goal that the
+-- enclosing DECLARED context does not entail must REJECT, not defer.
+--
+-- Hand-derived from DICT-SEMANTICS §4.2 BEFORE running anything.  "Defer" means
+-- "forward this predicate outward to the binder that quantifies its variables,
+-- and let each use site discharge it".  `g`'s binder is a SIGNATURE, and a
+-- signature is FIXED: it carries `Tag (Wrap a)` and nothing else.  The body's
+-- second goal `Tag (Box a)` can therefore never be forwarded anywhere, so
+-- deferring it means DROPPING it -- and `main = println (g 'z')` has no
+-- `impl Tag (Box Char)` to drop to.  The only sound verdict is a located reject
+-- at the `tagOf (Box x)` occurrence.
+--
+-- 🚨 WHAT THIS PINS.  At the pre-fix sprint head `aa36d555`, on this tree, cold
+-- built: check 0 with ZERO diagnostics and the scheme `g : Tag Wrap a => a ->
+-- String`, run 1 (`E-PANIC: unknown op '+'`), build 0 with the SHIPPED BINARY
+-- PRINTING `wrapChar|boxInt=123` -- `impl Tag (Box Int)`'s body evaluating
+-- `n + 1` over the Char `'z'` (ASCII 122).  A type-confused dict at exit 0.
+-- Stable at -O0/-O1/-O2 (hand-linked from `--keep-ir`), so not #1958's UB.
+--
+-- ⚠️ THE FIRST COMPONENT IS LOAD-BEARING AND MUST STAY.  `tagOf (Wrap x)` IS the
+-- declared context and must keep deferring; only the `Box` half is illegal.  A
+-- gate that rejected both would false-reject
+-- `s-structured-carry-declared-context-kept.mdk` and
+-- `s-instantiated-reselect-declared.mdk`, the ACCEPT siblings of this widening.
+-- The discrimination is by tyvar-cell IDENTITY (`monoSameGiven`), not by
+-- interface name: both goals are at `Tag`, on the same variable, and only the
+-- structural shape tells them apart.
+--
+-- ⚠️ VERDICT AND CODE, NO LOCATION.
+data Wrap a = Wrap a
+
+data Box a = Box a
+
+interface Tag t where
+  tagOf : t -> String
+
+impl Tag (Wrap Int) where
+  tagOf _ = "wrapInt"
+
+impl Tag (Wrap Char) where
+  tagOf _ = "wrapChar"
+
+impl Tag (Box Int) where
+  tagOf (Box n) = "boxInt=\{n + 1}"
+
+g : Tag (Wrap a) => a -> String
+g x = "\{tagOf (Wrap x)}|\{tagOf (Box x)}"
+
+main = println (g 'z')
