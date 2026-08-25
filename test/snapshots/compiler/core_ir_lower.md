@@ -1,5 +1,5 @@
 # META
-source_lines=1807
+source_lines=1942
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -69,7 +69,7 @@ import eval.eval.{
   headTyconHead,
 }
 import list.{replicate}
-import support.ordmap.{OrdMap, omEmpty, omInsert, omHasKey}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omHasKey, omLookup}
 import backend.private_mangle.{sanitizeId}
 import support.util.{
   contains,
@@ -571,6 +571,9 @@ lowerProgram prog =
 export
 lowerProgramEmit : List Decl -> CProgram
 lowerProgramEmit prog =
+  -- #1950: refuse a program whose impls collide on ONE emitted symbol, here rather
+  -- than letting clang report it unlocated.  Both backends reach this seam.
+  let _ = implSymbolCollisionGuard prog
   hoistNullaryMemo (rewriteProgramRecPats
     (declaredRecordFieldOrders prog)
     (lowerProgram prog))
@@ -1327,6 +1330,138 @@ ifaceImplHeadEntries (DAttrib _ d) = ifaceImplHeadEntries d
 ifaceImplHeadEntries (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, ... }) = [(ifaceIdentity o ifaceName, ifaceName, fromOption noneHeadTag (headTyconHead typeArgs), implRouteKeyWord o ifaceName typeArgs None)]
 ifaceImplHeadEntries _ = []
 
+-- ── emitted impl-symbol collision guard (#1950) ───────────────────────────────
+-- An impl method is emitted as `mdk_impl_<symTag>_<method>`, where `symTag` is the
+-- bare head tag when that head is the SOLE impl of (method, head), and otherwise
+-- (TYPECHECK-AUDIT C7) the canonical dispatch key run through a MANY-TO-ONE
+-- sanitizer — `llvm_emit.safeIdent` on the LLVM side, `private_mangle.sanitizeId`
+-- on the wasm side, byte-identical maps of everything outside [A-Za-z0-9_] to `_`.
+-- So two impls whose keys differ ONLY in characters that sanitize to `_`
+-- (`Sz|(Q A_B C)|` vs `Sz|(Q A B_C)|`) land on ONE emitted symbol.  Today that
+-- reaches the user as a RAW, UNLOCATED clang message — `invalid redefinition of
+-- function 'mdk_impl_main__Sz__Q_A_B_C___size'` — naming neither impl and pointing
+-- at a temp-directory `.ll` line (#1950).  This turns it into a Medaka-level refusal
+-- naming BOTH impls by their canonical dispatch keys, plus the symbol they collapse
+-- onto.
+--
+-- ⚠️ NOT BY SOURCE LINE, and that is a property of the pipeline, not of this site.
+-- MEASURED: every emit driver parses through `parser.parse` (`entry_support`'s
+-- `readAllDecls`/`driveModulesGo`) or `loader.loadProgram`, both of which use the
+-- PLACEHOLDER-LOC parser — only `parseLocated`/`parseLocatedResult` (the `check`
+-- and LSP paths) populate spans, and even those leave `Loc`'s `file` field "" for
+-- the caller to fill.  An earlier revision of this guard printed
+-- `firstTyLocList`'s answer and got `:1:0` for BOTH impls of the repro — a wrong
+-- location is worse than none, so the canonical dispatch key (which is
+-- `<module>::<Iface>|<type args>|`, i.e. exactly the impl's declared identity) is
+-- what the message names instead.  Giving the emit path real spans is a
+-- pipeline-wide change and is deliberately not attempted here.
+--
+-- Sited HERE, not in either backend, for the reason `private_mangle`'s own guard
+-- states for itself: `lowerProgramEmit` is the ONE seam every emit driver of BOTH
+-- backends funnels through (`llvm_emit_*_main`, `wasm_emit_*_main`, the playground,
+-- `tools/snapshot.mdk`, the dump probes), so one check serves all of them instead of
+-- a fifth and sixth per-backend copy of the collision predicate desyncing.  The rows
+-- are read off the DECLARATIONS — matched arm-for-arm with `lowerDeclImpl`, DAttrib
+-- unwrapping included (#1037) — because `CImplEntry` carries no source location and
+-- an unlocated refusal would only trade one unlocated message for another.
+-- Enumerating `methods` gives exactly the (method, tag, key) triples
+-- `lowerImplMethod` mints for the same `prog`, so the domain is the entry set, not
+-- an approximation of it.
+--
+-- SCOPE — stated out loud, because a partial check cited as a total one is how this
+-- bug class survives:
+--   * covers TAGGED IMPL METHOD symbols only.  Interface DEFAULTS
+--     (`mdk_default_<method>_<safeIdent tag>`) and emitter-gensym'd lambdas/etas are
+--     minted elsewhere and are NOT checked here.
+--   * it is a check on DISTINCT PRE-IMAGES.  Rows are deduplicated by
+--     (method, head tag, canonical key) FIRST, so two impls that are already
+--     IDENTICAL in that triple pass through silently — that is #1397's shape (two
+--     modules each declaring a same-spelled type, whose head identity is discarded
+--     upstream at `route_key.rkTy`), and no discriminator for it exists in anything
+--     lowering can see.  #1397 is NOT covered and is not made safe by this guard.
+--   * it is likewise NOT a duplicate-clause check: a legitimate multi-clause impl
+--     contributes several rows sharing ONE key, and the joint prelude+module decl
+--     list duplicates each prelude impl.  Both collapse in the dedup and can never
+--     fire this.
+--   * it observes the symbol the backends are about to mint; it does not change the
+--     mangling scheme.  Every collision-free program emits byte-identical IR.
+implSymbolCollisionGuard : List Decl -> Unit
+implSymbolCollisionGuard prog =
+  let rows = dedupImplSymRows (flatMap implSymRowsOf prog) omEmpty
+  checkImplSymbolsInjective (collidingHeads rows omEmpty omEmpty) rows omEmpty
+
+-- one row per lowered impl-method clause: (method, head tag, canonical key).
+-- Matched arm-for-arm with `lowerDeclImpl` — same DAttrib unwrap, same `methods`
+-- traversal, and the tag/key computed by the SAME two expressions `lowerImplMethod`
+-- uses, so the two cannot drift apart on a program.
+implSymRowsOf : Decl -> List (String, String, String)
+implSymRowsOf (DAttrib _ d) = implSymRowsOf d
+implSymRowsOf (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) = map (implSymRow (fromOption noneHeadTag (headTyconHead typeArgs)) (implRouteKeyWord o ifaceName typeArgs None)) methods
+implSymRowsOf _ = []
+
+implSymRow : String -> String -> ImplMethod -> (String, String, String)
+implSymRow tag key (ImplMethod mname _ _) = (mname, tag, key)
+
+-- distinct pre-images, first arrival wins.  This is what keeps #1397's shape and
+-- every multi-clause impl out of the check — see the SCOPE paragraph above.
+dedupImplSymRows : List (String, String, String) -> OrdMap Unit -> List (String, String, String)
+dedupImplSymRows [] _ = []
+dedupImplSymRows ((m, tag, key)::rest) seen
+  | omHasKey (implPreImageKey m tag key) seen = dedupImplSymRows rest seen
+  | otherwise = (m, tag, key) :: dedupImplSymRows rest (omInsert (implPreImageKey m tag key) () seen)
+
+-- `\n` cannot occur in a method name, a head tag or a route word, so this is an
+-- injective rendering of the triple and safe as a set key.
+implPreImageKey : String -> String -> String -> String
+implPreImageKey m tag key = "\{m}\n\{tag}\n\{key}"
+
+-- the (method, head tag) pairs carrying ≥2 DISTINCT canonical keys — i.e. exactly
+-- the pairs `headTagUnique`/`headTagUniqueW` answer False for, so exactly the ones
+-- whose symbols take the sanitized-key arm.  Computed ONCE, in O(n log n) through the
+-- weight-balanced tree, rather than re-scanned per row: the emitters can afford the
+-- linear `distinctKeysAtHead` count because they call it per METHOD BUCKET (#990),
+-- and this guard sees the whole program at once.
+collidingHeads : List (String, String, String) -> OrdMap String -> OrdMap Unit -> OrdMap Unit
+collidingHeads [] _ acc = acc
+collidingHeads ((m, tag, key)::rest) firstKey acc = match omLookup (implHeadKey m tag) firstKey
+  None => collidingHeads rest (omInsert (implHeadKey m tag) key firstKey) acc
+  Some k0 =>
+    if k0 == key then
+      collidingHeads rest firstKey acc
+    else
+      collidingHeads rest firstKey (omInsert (implHeadKey m tag) () acc)
+
+implHeadKey : String -> String -> String
+implHeadKey m tag = "\{m}\n\{tag}"
+
+-- injectivity of (method, tag, key) -> emitted symbol, one pass, O(n log n) through
+-- the same weight-balanced tree `private_mangle`'s guard uses.  Rows are already
+-- distinct pre-images, so ANY second arrival at one symbol is a genuine collision.
+--
+-- ⚠️ The three data lines are UNINDENTED on purpose: `diff_compiler_must_fail.sh`'s
+-- `stdout-line` pins are matched with `grep -qxF` against a claim value its
+-- `claim_get` has stripped leading whitespace from, so an indented line cannot be
+-- pinned.  The #1950 fixture pins these three because they are CONTENT-derived (the
+-- symbol and the two dispatch keys) and therefore cannot false-drain on a rewording
+-- of the prose around them.
+checkImplSymbolsInjective : OrdMap Unit -> List (String, String, String) -> OrdMap String -> Unit
+checkImplSymbolsInjective _ [] _ = ()
+checkImplSymbolsInjective collide ((m, tag, key)::rest) seen =
+  let sym = "mdk_impl_\{implSymTagOf collide m tag key}_\{m}"
+  match omLookup sym seen
+    None => checkImplSymbolsInjective collide rest (omInsert sym key seen)
+    Some prev => panic "emitted impl-symbol collision: two DISTINCT impls of method `\{m}` are emitted under one symbol.\ncollided symbol: \{sym}\nimpl 1 key: \{prev}\nimpl 2 key: \{key}\nTwo distinct impls cannot share one emitted symbol: the backend would define one body twice (the native link fails) or keep one and silently drop the other. The two keys above are the impls' canonical dispatch keys, spelled `<module>::<Interface>|<type arguments>|`; they differ only in characters that are not legal in an emitted identifier, and everything outside [A-Za-z0-9_] is mapped to `_`. Rename one of the two impls' types (or their type arguments) so the keys still differ after that mapping."
+
+-- the SYMBOL tag this row is emitted under — the bare head when it is the sole impl
+-- of (method, head), else the sanitized canonical key.  Mirror of
+-- `llvm_emit.implFnSymTag` / `wasm_emit.implFnSymTagW`, over declaration rows.
+implSymTagOf : OrdMap Unit -> String -> String -> String -> String
+implSymTagOf collide method tag key =
+  if omHasKey (implHeadKey method tag) collide then
+    sanitizeId key
+  else
+    tag
+
 -- #1047: the interface IDENTITIES of every declared impl whose head tag OR
 -- canonical key is [tag] — the reverse of `ifaceImplRouteKeys`.  The emitters'
 -- `defaultFor`/`defaultForW` use it to decide WHICH interface's default body a
@@ -1815,7 +1950,7 @@ nodeTag _ = "?"
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true))))
 (DUse false (UseGroup ("eval" "eval") ((mem "buildCtorToType" false) (mem "buildCtorFieldOrders" false) (mem "ctorFieldOrdersRef" false) (mem "installDispatchTables" false) (mem "lookupPositions" false) (mem "tyvarsInArgs" false) (mem "headTyconHead" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "sanitizeId" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "allList" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "startsWith" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "splitOnChar" false))))
 (DTypeSig false "composeVar" (TyCon "String"))
@@ -2036,7 +2171,7 @@ nodeTag _ = "?"
 (DTypeSig true "lowerProgram" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
 (DFunDef false "lowerProgram" ((PVar "prog")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "ctorFieldOrdersRef")) (EApp (EVar "buildCtorFieldOrders") (EVar "prog")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EVar "lowerGroups") (EVar "prog"))) (EApp (EVar "ctorArities") (EVar "prog"))) (EApp (EVar "buildCtorToType") (EVar "prog"))) (EApp (EVar "lowerImpls") (EVar "prog"))))))
 (DTypeSig true "lowerProgramEmit" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
-(DFunDef false "lowerProgramEmit" ((PVar "prog")) (EApp (EVar "hoistNullaryMemo") (EApp (EApp (EVar "rewriteProgramRecPats") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (EApp (EVar "lowerProgram") (EVar "prog")))))
+(DFunDef false "lowerProgramEmit" ((PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "implSymbolCollisionGuard") (EVar "prog"))) (DoExpr (EApp (EVar "hoistNullaryMemo") (EApp (EApp (EVar "rewriteProgramRecPats") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (EApp (EVar "lowerProgram") (EVar "prog")))))))
 (DTypeSig true "declaredRecordFieldOrders" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "declaredRecordFieldOrders" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "recPatFieldOrderEntries")) (EVar "prog")))
 (DTypeSig false "recPatFieldOrderEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -2288,6 +2423,29 @@ nodeTag _ = "?"
 (DFunDef false "ifaceImplHeadEntries" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "ifaceImplHeadEntries") (EVar "d")))
 (DFunDef false "ifaceImplHeadEntries" ((PRec "DImpl" ((rf "iface" (PVar "ifaceName")) (rf "implOrigin" (PVar "o")) (rf "tys" (PVar "typeArgs"))) true)) (EListLit (ETuple (EApp (EApp (EVar "ifaceIdentity") (EVar "o")) (EVar "ifaceName")) (EVar "ifaceName") (EApp (EApp (EVar "fromOption") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EVar "typeArgs"))) (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "ifaceName")) (EVar "typeArgs")) (EVar "None")))))
 (DFunDef false "ifaceImplHeadEntries" (PWild) (EListLit))
+(DTypeSig false "implSymbolCollisionGuard" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
+(DFunDef false "implSymbolCollisionGuard" ((PVar "prog")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "dedupImplSymRows") (EApp (EApp (EVar "flatMap") (EVar "implSymRowsOf")) (EVar "prog"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EApp (EVar "checkImplSymbolsInjective") (EApp (EApp (EApp (EVar "collidingHeads") (EVar "rows")) (EVar "omEmpty")) (EVar "omEmpty"))) (EVar "rows")) (EVar "omEmpty")))))
+(DTypeSig false "implSymRowsOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))
+(DFunDef false "implSymRowsOf" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "implSymRowsOf") (EVar "d")))
+(DFunDef false "implSymRowsOf" ((PRec "DImpl" ((rf "iface" (PVar "ifaceName")) (rf "implOrigin" (PVar "o")) (rf "tys" (PVar "typeArgs")) (rf "methods" None)) true)) (EApp (EApp (EVar "map") (EApp (EApp (EVar "implSymRow") (EApp (EApp (EVar "fromOption") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EVar "typeArgs")))) (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "ifaceName")) (EVar "typeArgs")) (EVar "None")))) (EVar "methods")))
+(DFunDef false "implSymRowsOf" (PWild) (EListLit))
+(DTypeSig false "implSymRow" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ImplMethod") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))))))
+(DFunDef false "implSymRow" ((PVar "tag") (PVar "key") (PCon "ImplMethod" (PVar "mname") PWild PWild)) (ETuple (EVar "mname") (EVar "tag") (EVar "key")))
+(DTypeSig false "dedupImplSymRows" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))))))
+(DFunDef false "dedupImplSymRows" ((PList) PWild) (EListLit))
+(DFunDef false "dedupImplSymRows" ((PCons (PTuple (PVar "m") (PVar "tag") (PVar "key")) (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EApp (EApp (EVar "implPreImageKey") (EVar "m")) (EVar "tag")) (EVar "key"))) (EVar "seen")) (EApp (EApp (EVar "dedupImplSymRows") (EVar "rest")) (EVar "seen")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "m") (EVar "tag") (EVar "key")) (EApp (EApp (EVar "dedupImplSymRows") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EApp (EApp (EVar "implPreImageKey") (EVar "m")) (EVar "tag")) (EVar "key"))) (ELit LUnit)) (EVar "seen")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "implPreImageKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "implPreImageKey" ((PVar "m") (PVar "tag") (PVar "key")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "tag"))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "key"))) (ELit (LString ""))))
+(DTypeSig false "collidingHeads" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DFunDef false "collidingHeads" ((PList) PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "collidingHeads" ((PCons (PTuple (PVar "m") (PVar "tag") (PVar "key")) (PVar "rest")) (PVar "firstKey") (PVar "acc")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "implHeadKey") (EVar "m")) (EVar "tag"))) (EVar "firstKey")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "collidingHeads") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EApp (EVar "implHeadKey") (EVar "m")) (EVar "tag"))) (EVar "key")) (EVar "firstKey"))) (EVar "acc"))) (arm (PCon "Some" (PVar "k0")) () (EIf (EBinOp "==" (EVar "k0") (EVar "key")) (EApp (EApp (EApp (EVar "collidingHeads") (EVar "rest")) (EVar "firstKey")) (EVar "acc")) (EApp (EApp (EApp (EVar "collidingHeads") (EVar "rest")) (EVar "firstKey")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EApp (EVar "implHeadKey") (EVar "m")) (EVar "tag"))) (ELit LUnit)) (EVar "acc")))))))
+(DTypeSig false "implHeadKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "implHeadKey" ((PVar "m") (PVar "tag")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "tag"))) (ELit (LString ""))))
+(DTypeSig false "checkImplSymbolsInjective" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyCon "Unit")))))
+(DFunDef false "checkImplSymbolsInjective" (PWild (PList) PWild) (ELit LUnit))
+(DFunDef false "checkImplSymbolsInjective" ((PVar "collide") (PCons (PTuple (PVar "m") (PVar "tag") (PVar "key")) (PVar "rest")) (PVar "seen")) (EBlock (DoLet false false (PVar "sym") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk_impl_")) (EApp (EVar "display") (EApp (EApp (EApp (EApp (EVar "implSymTagOf") (EVar "collide")) (EVar "m")) (EVar "tag")) (EVar "key")))) (ELit (LString "_"))) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "sym")) (EVar "seen")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "checkImplSymbolsInjective") (EVar "collide")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "sym")) (EVar "key")) (EVar "seen")))) (arm (PCon "Some" (PVar "prev")) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "emitted impl-symbol collision: two DISTINCT impls of method `")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "` are emitted under one symbol.\ncollided symbol: "))) (EApp (EVar "display") (EVar "sym"))) (ELit (LString "\nimpl 1 key: "))) (EApp (EVar "display") (EVar "prev"))) (ELit (LString "\nimpl 2 key: "))) (EApp (EVar "display") (EVar "key"))) (ELit (LString "\nTwo distinct impls cannot share one emitted symbol: the backend would define one body twice (the native link fails) or keep one and silently drop the other. The two keys above are the impls' canonical dispatch keys, spelled `<module>::<Interface>|<type arguments>|`; they differ only in characters that are not legal in an emitted identifier, and everything outside [A-Za-z0-9_] is mapped to `_`. Rename one of the two impls' types (or their type arguments) so the keys still differ after that mapping.")))))))))
+(DTypeSig false "implSymTagOf" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
+(DFunDef false "implSymTagOf" ((PVar "collide") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "implHeadKey") (EVar "method")) (EVar "tag"))) (EVar "collide")) (EApp (EVar "sanitizeId") (EVar "key")) (EVar "tag")))
 (DTypeSig true "ifaceIdsAtTag" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "ifaceIdsAtTag" ((PVar "tag")) (EApp (EApp (EVar "ifaceIdsAtTagGo") (EVar "tag")) (EUnOp "!" (EVar "ifaceImplHeadsRef"))))
 (DTypeSig false "ifaceIdsAtTagGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
@@ -2469,7 +2627,7 @@ nodeTag _ = "?"
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true))))
 (DUse false (UseGroup ("eval" "eval") ((mem "buildCtorToType" false) (mem "buildCtorFieldOrders" false) (mem "ctorFieldOrdersRef" false) (mem "installDispatchTables" false) (mem "lookupPositions" false) (mem "tyvarsInArgs" false) (mem "headTyconHead" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "sanitizeId" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "allList" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false) (mem "startsWith" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "splitOnChar" false))))
 (DTypeSig false "composeVar" (TyCon "String"))
@@ -2690,7 +2848,7 @@ nodeTag _ = "?"
 (DTypeSig true "lowerProgram" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
 (DFunDef false "lowerProgram" ((PVar "prog")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "ctorFieldOrdersRef")) (EApp (EVar "buildCtorFieldOrders") (EVar "prog")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EVar "lowerGroups") (EVar "prog"))) (EApp (EVar "ctorArities") (EVar "prog"))) (EApp (EVar "buildCtorToType") (EVar "prog"))) (EApp (EVar "lowerImpls") (EVar "prog"))))))
 (DTypeSig true "lowerProgramEmit" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))
-(DFunDef false "lowerProgramEmit" ((PVar "prog")) (EApp (EVar "hoistNullaryMemo") (EApp (EApp (EVar "rewriteProgramRecPats") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (EApp (EVar "lowerProgram") (EVar "prog")))))
+(DFunDef false "lowerProgramEmit" ((PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "implSymbolCollisionGuard") (EVar "prog"))) (DoExpr (EApp (EVar "hoistNullaryMemo") (EApp (EApp (EVar "rewriteProgramRecPats") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (EApp (EVar "lowerProgram") (EVar "prog")))))))
 (DTypeSig true "declaredRecordFieldOrders" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "declaredRecordFieldOrders" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "recPatFieldOrderEntries")) (EVar "prog")))
 (DTypeSig false "recPatFieldOrderEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -2942,6 +3100,29 @@ nodeTag _ = "?"
 (DFunDef false "ifaceImplHeadEntries" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "ifaceImplHeadEntries") (EVar "d")))
 (DFunDef false "ifaceImplHeadEntries" ((PRec "DImpl" ((rf "iface" (PVar "ifaceName")) (rf "implOrigin" (PVar "o")) (rf "tys" (PVar "typeArgs"))) true)) (EListLit (ETuple (EApp (EApp (EVar "ifaceIdentity") (EVar "o")) (EVar "ifaceName")) (EVar "ifaceName") (EApp (EApp (EVar "fromOption") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EVar "typeArgs"))) (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "ifaceName")) (EVar "typeArgs")) (EVar "None")))))
 (DFunDef false "ifaceImplHeadEntries" (PWild) (EListLit))
+(DTypeSig false "implSymbolCollisionGuard" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
+(DFunDef false "implSymbolCollisionGuard" ((PVar "prog")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "dedupImplSymRows") (EApp (EApp (EDictApp "flatMap") (EVar "implSymRowsOf")) (EVar "prog"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EApp (EVar "checkImplSymbolsInjective") (EApp (EApp (EApp (EVar "collidingHeads") (EVar "rows")) (EVar "omEmpty")) (EVar "omEmpty"))) (EVar "rows")) (EVar "omEmpty")))))
+(DTypeSig false "implSymRowsOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))
+(DFunDef false "implSymRowsOf" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "implSymRowsOf") (EVar "d")))
+(DFunDef false "implSymRowsOf" ((PRec "DImpl" ((rf "iface" (PVar "ifaceName")) (rf "implOrigin" (PVar "o")) (rf "tys" (PVar "typeArgs")) (rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "implSymRow") (EApp (EApp (EVar "fromOption") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EVar "typeArgs")))) (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "ifaceName")) (EVar "typeArgs")) (EVar "None")))) (EVar "methods")))
+(DFunDef false "implSymRowsOf" (PWild) (EListLit))
+(DTypeSig false "implSymRow" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ImplMethod") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))))))
+(DFunDef false "implSymRow" ((PVar "tag") (PVar "key") (PCon "ImplMethod" (PVar "mname") PWild PWild)) (ETuple (EVar "mname") (EVar "tag") (EVar "key")))
+(DTypeSig false "dedupImplSymRows" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))))))
+(DFunDef false "dedupImplSymRows" ((PList) PWild) (EListLit))
+(DFunDef false "dedupImplSymRows" ((PCons (PTuple (PVar "m") (PVar "tag") (PVar "key")) (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EApp (EApp (EVar "implPreImageKey") (EVar "m")) (EVar "tag")) (EVar "key"))) (EVar "seen")) (EApp (EApp (EVar "dedupImplSymRows") (EVar "rest")) (EVar "seen")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "m") (EVar "tag") (EVar "key")) (EApp (EApp (EVar "dedupImplSymRows") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EApp (EApp (EVar "implPreImageKey") (EVar "m")) (EVar "tag")) (EVar "key"))) (ELit LUnit)) (EVar "seen")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "implPreImageKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "implPreImageKey" ((PVar "m") (PVar "tag") (PVar "key")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "tag"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString ""))))
+(DTypeSig false "collidingHeads" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DFunDef false "collidingHeads" ((PList) PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "collidingHeads" ((PCons (PTuple (PVar "m") (PVar "tag") (PVar "key")) (PVar "rest")) (PVar "firstKey") (PVar "acc")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "implHeadKey") (EVar "m")) (EVar "tag"))) (EVar "firstKey")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "collidingHeads") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EApp (EVar "implHeadKey") (EVar "m")) (EVar "tag"))) (EVar "key")) (EVar "firstKey"))) (EVar "acc"))) (arm (PCon "Some" (PVar "k0")) () (EIf (EBinOp "==" (EVar "k0") (EVar "key")) (EApp (EApp (EApp (EVar "collidingHeads") (EVar "rest")) (EVar "firstKey")) (EVar "acc")) (EApp (EApp (EApp (EVar "collidingHeads") (EVar "rest")) (EVar "firstKey")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EApp (EVar "implHeadKey") (EVar "m")) (EVar "tag"))) (ELit LUnit)) (EVar "acc")))))))
+(DTypeSig false "implHeadKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "implHeadKey" ((PVar "m") (PVar "tag")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "tag"))) (ELit (LString ""))))
+(DTypeSig false "checkImplSymbolsInjective" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyCon "Unit")))))
+(DFunDef false "checkImplSymbolsInjective" (PWild (PList) PWild) (ELit LUnit))
+(DFunDef false "checkImplSymbolsInjective" ((PVar "collide") (PCons (PTuple (PVar "m") (PVar "tag") (PVar "key")) (PVar "rest")) (PVar "seen")) (EBlock (DoLet false false (PVar "sym") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mdk_impl_")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EApp (EVar "implSymTagOf") (EVar "collide")) (EVar "m")) (EVar "tag")) (EVar "key")))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "sym")) (EVar "seen")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "checkImplSymbolsInjective") (EVar "collide")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "sym")) (EVar "key")) (EVar "seen")))) (arm (PCon "Some" (PVar "prev")) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "emitted impl-symbol collision: two DISTINCT impls of method `")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "` are emitted under one symbol.\ncollided symbol: "))) (EApp (EMethodRef "display") (EVar "sym"))) (ELit (LString "\nimpl 1 key: "))) (EApp (EMethodRef "display") (EVar "prev"))) (ELit (LString "\nimpl 2 key: "))) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString "\nTwo distinct impls cannot share one emitted symbol: the backend would define one body twice (the native link fails) or keep one and silently drop the other. The two keys above are the impls' canonical dispatch keys, spelled `<module>::<Interface>|<type arguments>|`; they differ only in characters that are not legal in an emitted identifier, and everything outside [A-Za-z0-9_] is mapped to `_`. Rename one of the two impls' types (or their type arguments) so the keys still differ after that mapping.")))))))))
+(DTypeSig false "implSymTagOf" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
+(DFunDef false "implSymTagOf" ((PVar "collide") (PVar "method") (PVar "tag") (PVar "key")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "implHeadKey") (EVar "method")) (EVar "tag"))) (EVar "collide")) (EApp (EVar "sanitizeId") (EVar "key")) (EVar "tag")))
 (DTypeSig true "ifaceIdsAtTag" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "ifaceIdsAtTag" ((PVar "tag")) (EApp (EApp (EVar "ifaceIdsAtTagGo") (EVar "tag")) (EUnOp "!" (EVar "ifaceImplHeadsRef"))))
 (DTypeSig false "ifaceIdsAtTagGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
