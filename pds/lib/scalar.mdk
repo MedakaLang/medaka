@@ -484,6 +484,14 @@ scFromBytesReduce bs =
   else
     reduceWide (wideOfRaw (limbsOfBytes bs))
 
+-- | Signing-internal reduction for bytes produced by a fixed-width canonical
+--   serializer. Those producers already establish length and byte domain, so
+--   repeating the public validator here would make secret-derived bytes reach
+--   its branch-bearing early-exit scan.
+export
+scFromFixedBytesReduce : Array Int -> Sc
+scFromFixedBytesReduce bs = reduceWide (wideOfRaw (limbsOfBytes bs))
+
 -- | The canonical 32 big-endian bytes of a scalar.
 export
 scToBytes : Sc -> Array Int

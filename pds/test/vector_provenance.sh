@@ -816,6 +816,7 @@ main() {
     echo "vector_provenance: REAL TREE CHECK FAILED"
     exit 1
   fi
+  python3 "$ROOT/pds/tools/signing_corpus_check.py" "$ROOT" --provenance
   echo "vector_provenance: PASS"
   exit 0
 }

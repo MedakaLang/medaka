@@ -1,0 +1,219 @@
+{- | Native S3-C driver for the 80 exact prehashed signing rows and all 242
+   pinned Wycheproof P1363 verification rows. -}
+
+import lib.scalar.{Sc, scFromBytes}
+import lib.secp256k1.{
+  AffinePoint,
+  ecdsaSignDigestForTest,
+  ecdsaInjectedSignProbeForTest,
+  ecdsaSignatureFromCompact,
+  ecdsaVerifyDigest,
+  ecdsaVerifyRawForTest,
+  pointFromUncompressedForTest,
+}
+import lib.sha256.{sha256}
+import array as A
+import hex.{decode, encode}
+import io.{readLines}
+import string.{split, toInt, trim}
+
+bytes : String -> Array Int
+bytes value =
+  if value == "-" then [||]
+  else match decode value
+    Ok decoded => decoded
+    Err message => panic "ecdsa_vectors: malformed hex: \{message}"
+
+scalar : String -> Sc
+scalar value = match scFromBytes (bytes value)
+  Ok parsed => parsed
+  Err message => panic "ecdsa_vectors: invalid secret key: \{message}"
+
+tcId : String -> Int
+tcId value = match toInt value
+  Some parsed => parsed
+  None => panic "ecdsa_vectors: invalid tcId: \{value}"
+
+bump : Array Int -> Int -> Unit
+bump counts i = A.set i (counts[i] + 1) counts
+
+copy32 : Array Int -> Array Int -> Int -> Int -> Unit
+copy32 input out offset i =
+  if i >= 32 then ()
+  else
+    let () = A.set (offset + i) input[i] out
+    copy32 input out offset (i + 1)
+
+compactOf : Array Int -> Array Int -> Array Int
+compactOf r s =
+  let out = arrayMake 64 0
+  let () = copy32 r out 0 0
+  let () = copy32 s out 32 0
+  out
+
+component : Array Int -> Int -> Array Int
+component compact offset =
+  let out = arrayMake 32 0
+  let () = componentGo compact out offset 0
+  out
+
+componentGo : Array Int -> Array Int -> Int -> Int -> Unit
+componentGo compact out offset i =
+  if i >= 32 then ()
+  else
+    let () = A.set i compact[offset + i] out
+    componentGo compact out offset (i + 1)
+
+one32 : Array Int
+one32 = bytes "0000000000000000000000000000000000000000000000000000000000000001"
+
+two32 : Array Int
+two32 = bytes "0000000000000000000000000000000000000000000000000000000000000002"
+
+runExceptionalProbes : Array Int -> Sc -> Array Int -> Array Int -> <IO> Unit
+runExceptionalProbes counts key digest expectedCandidate0 =
+  let ((normal0, normal1), (candidate0Valid, candidate0R, candidate0RawS, candidate0LowS), (candidate1Valid, candidate1R, candidate1RawS, candidate1LowS), (selectedValid, selectedCompact)) = ecdsaInjectedSignProbeForTest key digest one32 0 two32 1
+  let candidate1Ok = normal0 == expectedCandidate0 && normal0 /= normal1 && candidate0Valid == 0 && candidate1Valid == 1 && selectedValid == 1 && candidate0R /= candidate1R && selectedCompact == compactOf candidate1R candidate1LowS
+  let () = if candidate1Ok then
+    let () = bump counts 2
+    println
+      "PROBE candidate-1-selection: PASS computations=2 c0.valid=0 c0.r=\{encode candidate0R} c0.raw_s=\{encode candidate0RawS} c0.low_s=\{encode candidate0LowS} c1.valid=1 c1.r=\{encode candidate1R} c1.raw_s=\{encode candidate1RawS} c1.low_s=\{encode candidate1LowS}"
+  else
+    let () = bump counts 1
+    println "FAIL candidate-1-selection probe"
+  let ((exhaustNormal0, exhaustNormal1), (exhaust0Valid, exhaust0R, exhaust0RawS, exhaust0LowS), (exhaust1Valid, exhaust1R, exhaust1RawS, exhaust1LowS), (exhaustValid, exhaustCompact)) = ecdsaInjectedSignProbeForTest key digest one32 0 two32 0
+  let exhaustionOk = exhaustNormal0 == normal0 && exhaustNormal1 == normal1 && exhaust0Valid == 0 && exhaust1Valid == 0 && exhaustValid == 0 && arrayLength exhaustCompact == 64
+  if exhaustionOk then
+    let () = bump counts 2
+    println
+      "PROBE two-candidate-exhaustion: PASS computations=2 c0.valid=0 c0.r=\{encode exhaust0R} c0.raw_s=\{encode exhaust0RawS} c0.low_s=\{encode exhaust0LowS} c1.valid=0 c1.r=\{encode exhaust1R} c1.raw_s=\{encode exhaust1RawS} c1.low_s=\{encode exhaust1LowS} aggregate=0"
+  else
+    let () = bump counts 1
+    println "FAIL two-candidate-exhaustion probe"
+
+runSigningRow : Array Int -> Int -> String -> <IO> Unit
+runSigningRow counts lineNo text = match split " " (trim text)
+  ["sign", row, keyHex, digestHex, _, expectedK, expectedR, expectedRawS, expectedLowS, expectedCompact, _] =>
+    let key = scalar keyHex
+    let digest = bytes digestHex
+    let (validBit, nonce, r, rawS, lowS, compact) = ecdsaSignDigestForTest key digest
+    let ok = validBit == 1 && encode nonce == expectedK && encode r == expectedR && encode rawS == expectedRawS && encode lowS == expectedLowS && encode compact == expectedCompact
+    if ok then
+      let () = bump counts 0
+      let () = if row == "0" then
+        runExceptionalProbes counts key digest nonce
+      else
+        ()
+      ()
+    else
+      let () = bump counts 1
+      println
+        "FAIL signing row \{row}: k=\{encode nonce} r=\{encode r} raw_s=\{encode rawS} low_s=\{encode lowS} compact=\{encode compact}"
+  _ =>
+    let () = bump counts 1
+    println "FAIL signing line \{intToString lineNo}: malformed row"
+
+runSigningRows : Array Int -> List String -> Int -> <IO> Unit
+runSigningRows _ [] _ = ()
+runSigningRows counts (row::rest) lineNo =
+  let () = runSigningRow counts lineNo row
+  runSigningRows counts rest (lineNo + 1)
+
+verifyCompact : AffinePoint -> Array Int -> Array Int -> Bool
+verifyCompact publicPoint digest compact = match ecdsaSignatureFromCompact compact
+  Err _ => False
+  Ok signature => ecdsaVerifyDigest publicPoint digest signature
+
+recordHighWitness : Array Int -> AffinePoint -> Array Int -> Array Int -> String -> <IO> Unit
+recordHighWitness counts publicPoint digest compact id =
+  if counts[6] /= 0 then ()
+  else
+    if arrayLength compact /= 64 then
+      let () = bump counts 4
+      println "FAIL high-S witness tcId=\{id}: compact length was not 64"
+    else
+      let r = component compact 0
+      let s = component compact 32
+      if ecdsaVerifyRawForTest publicPoint digest r s then
+        let () = bump counts 4
+        println "FAIL high-S witness tcId=\{id}: verification boundary accepted"
+      else
+        let () = bump counts 6
+        println
+          "WITNESS high-S tcId=\{id}: compact-parser=reject verifier-boundary=reject"
+
+recordMalformedWitness : Array Int -> Array Int -> String -> <IO> Unit
+recordMalformedWitness counts compact id =
+  if counts[7] /= 0 then ()
+  else match ecdsaSignatureFromCompact compact
+    Ok _ =>
+      let () = bump counts 4
+      println "FAIL malformed witness tcId=\{id}: compact parser accepted"
+    Err _ =>
+      let () = bump counts 7
+      println "WITNESS malformed tcId=\{id}: compact-parser=reject"
+
+runWycheproofRow : Array Int -> Array Int -> Int -> String -> <IO> Unit
+runWycheproofRow counts seen lineNo text = match split " " (trim text)
+  ["wycheproof", id, keyHex, messageHex, compactHex, _, _, shape, expected] =>
+    let idValue = tcId id
+    if idValue < 1 || idValue > 242 || seen[idValue] /= 0 then
+      let () = bump counts 4
+      println "FAIL Wycheproof tcId=\{id}: duplicate or out of range"
+    else
+      let () = A.set idValue 1 seen
+      let () = bump counts 5
+      let compact = bytes compactHex
+      let digest = sha256 (bytes messageHex)
+      match pointFromUncompressedForTest (bytes keyHex)
+        Err message =>
+          let () = bump counts 4
+          println "FAIL Wycheproof tcId=\{id}: invalid public key: \{message}"
+        Ok publicPoint =>
+          let actual = verifyCompact publicPoint digest compact
+          let wanted = expected == "accept"
+          let () = if shape == "high" then
+            let () = bump counts 8
+            recordHighWitness counts publicPoint digest compact id
+          else
+            if shape == "malformed" then
+              let () = bump counts 9
+              recordMalformedWitness counts compact id
+            else ()
+          if actual == wanted then if actual then bump counts 3 else bump counts 10
+          else
+            let () = bump counts 4
+            let actualText = if actual then "true" else "false"
+            println
+              "FAIL Wycheproof tcId=\{id}: expected=\{expected} actual=\{actualText} shape=\{shape}"
+  _ =>
+    let () = bump counts 4
+    println "FAIL Wycheproof line \{intToString lineNo}: malformed row"
+
+runWycheproofRows : Array Int -> Array Int -> List String -> Int -> <IO> Unit
+runWycheproofRows _ _ [] _ = ()
+runWycheproofRows counts seen (row::rest) lineNo =
+  let () = runWycheproofRow counts seen lineNo row
+  runWycheproofRows counts seen rest (lineNo + 1)
+
+main : <IO, Env, FileRead "_"> Unit
+main = match args ()
+  [signingPath, wycheproofPath] => match readLines signingPath
+    Err message => panic "ecdsa_vectors: cannot read signing corpus: \{message}"
+    Ok signingRows => match readLines wycheproofPath
+      Err message =>
+        panic "ecdsa_vectors: cannot read Wycheproof corpus: \{message}"
+      Ok wycheproofRows =>
+        let counts = arrayMake 11 0
+        let seen = arrayMake 243 0
+        let () = runSigningRows counts signingRows 1
+        let () = runWycheproofRows counts seen wycheproofRows 1
+        let () = println "signing: \{intToString counts[0]}/80 exact rows ok"
+        let () = println "exceptional probes: \{intToString counts[2]}/2 routes ok"
+        let () = println "Wycheproof: \{intToString counts[3]} accepts / \{intToString counts[10]} rejects; \{intToString counts[5]} unique tcIds"
+        let () = println "Wycheproof classes: high-S=\{intToString counts[8]} malformed=\{intToString counts[9]} witnesses=\{intToString (counts[6] + counts[7])}/2"
+        if counts[0] == 80 && counts[1] == 0 && counts[2] == 2 && counts[3] == 94 && counts[10] == 148 && counts[4] == 0 && counts[5] == 242 && counts[6] == 1 && counts[7] == 1 then println "TOTAL: PASS"
+        else
+          let () = println "TOTAL: FAIL"
+          exit 1
+  _ => panic "usage: ecdsa_vectors_main <prehashed-signing-corpus> <wycheproof-corpus>"
