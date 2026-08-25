@@ -1,5 +1,5 @@
 # META
-source_lines=33491
+source_lines=33609
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -10082,10 +10082,14 @@ cslotKey s = lenKey s.csIface.irName ++ intToString s.csId
 
 -- S-slot-key-vector (#1866): THE dict-slot identity — `cslotKey` plus the predicate's
 -- argument vector.  Exactly the widening `vecOblKey` already carries on the obligation
--- channel, for the same reason and with the same per-argument encoding (`oblArgKey`): a
--- ground position keys on its head tycon, a tyvar position keys as "*" because its id is
--- already in `cslotKey`.  `|` cannot appear in the prefix (a `lenKey` netstring followed
--- by decimal digits), so the encoding is injective over the two components.
+-- channel, for the same reason and with the same per-argument encoding (`oblArgKey`),
+-- which since S-nonlead-arg-identity (#1904) renders each position STRUCTURALLY and keys
+-- each tyvar on its IDENTITY.  ⚠️ That widening was load-bearing HERE and not on the
+-- obligation channel: `cslotKey` carries only `csId`, the LEAD position's id, so before
+-- it this key had no per-position id at all and `(Ix a b c, Ix a c b)` — one interface,
+-- one lead id, two distinct vectors — collapsed to ONE slot.  `|` cannot appear in the
+-- prefix (a `lenKey` netstring followed by decimal digits), so the encoding is injective
+-- over the two components.
 -- ⚠️ An EMPTY vector contributes a constant empty suffix, so a caller that carries no
 -- vectors at all (`expandSupersPairs`, and hence `expandSupersIfaceEntry`'s synthetic-id
 -- expansion) keys order-equivalently to the pre-widening `cslotKey` — which is what keeps
@@ -16786,7 +16790,7 @@ enclSlotIds encl =
 -- The vector list is a PREFIX of the slots (`keptConstraintArgs`, and
 -- `registerInferredFor` records `[]` for an unrecovered slot), so a slot past its end —
 -- or one whose recorded vector is empty — gets `args = []`
--- — which `predArgsAgree` reads as "no vector to disambiguate on", never as a match.
+-- — which `predArgsAgreeEncl` reads as "no vector to disambiguate on", never as a match.
 enclPreds : String -> List (Int, Predicate)
 enclPreds encl =
   zipSlotArgs
@@ -16817,10 +16821,79 @@ indexOfPred target p preds = match indexOfPredGo 0 target p True preds
 indexOfPredGo : Int -> Int -> Predicate -> Bool -> List (Int, Predicate) -> Option Int
 indexOfPredGo _ _ _ _ [] = None
 indexOfPredGo i target p needArgs ((id, sp)::rest)
-  | id == target && sp.iface.irName /= "" && sp.iface.irName == p.iface.irName && (not needArgs || predArgsAgree p.args sp.args) = Some i
+  | id == target && sp.iface.irName /= "" && sp.iface.irName == p.iface.irName && (not needArgs || predArgsAgreeEncl p.args sp.args) = Some i
   | otherwise = indexOfPredGo (i + 1) target p needArgs rest
 
+-- 🚨 S-nonlead-arg-identity (#1904) — THE ENCLOSING-SCOPE ROUTING RELATION, and it is
+-- deliberately a SIBLING of `predArgsAgree` rather than a change to it.
+--
+-- THE CONTRACT ANSWER, for this channel: two argument vectors are the same predicate iff
+-- they have equal length and, AT EVERY POSITION IN ORDER, either both sides normalize to
+-- a type VARIABLE and those variables have the SAME tyvar id, or `monoHeadAgrees` holds
+-- (head-tycon-wise, and only where both sides are ground).  The first disjunct is the new
+-- half; the second is `predArgsAgree` unchanged.
+--
+-- WHY THE ID COMPARISON IS AVAILABLE HERE and not at `predArgsAgree`'s other caller.
+-- `predArgsAgree`'s header states — correctly, for `implReqPick`'s impl-`requires`
+-- channel — that its two vectors live in DIFFERENT instantiations, so a variable position
+-- "carries no information here".  MEASURED, panic-instrumented at `indexOfPred`, on
+-- `probes/p1904_both.mdk`: for a BODY occurrence of the ENCLOSING function's OWN declared
+-- predicate the two vectors are in the SAME instantiation and the ids CORRESPOND —
+-- `goal=Ix[v98,v100,v99] slots=[id98:Ix[v98,v99,v100]]`.  `declaredConstraintArgs`' own
+-- header says why: `constraintVarIfaceMonos` (which mints the slot IDS) and
+-- `constraintVarArgMonos` (which mints these VECTORS) are called on ONE signature
+-- instantiation's `snd inst` in `preunifySigsEx`, so a slot's `csId` is literally one of
+-- its own vector's tyvar ids — and `enclPreds`' subject is the ENCLOSING fn, always local,
+-- so nothing re-instantiates between the recording and this lookup.
+--
+-- ⚠️ SCOPED NARROWER THAN `predArgsAgree` ON PURPOSE.  `indexOfPredGo` is reached only
+-- from `indexOfPred` ← `enclSlotIndex` ← `enclDictVarOf`, i.e. only the enclosing-fn
+-- channel the measurement covers.  `implReqPick`/`implReqDictVarOf` keep calling
+-- `predArgsAgree`: that channel's vectors come from an impl's `requires` in the IMPL's
+-- tyvar space, which this dispatch did NOT measure, and widening it on the unverified
+-- assumption that the same correspondence holds is exactly what the header warns against.
+--
+-- WHAT IT FIXES: `(Ix a b c, Ix a c b)` is all-tyvar at every position, so
+-- `monoHeadAgrees` returned `None`-agrees-with-everything at each one, pass 1 matched
+-- SLOT 0 for both `ix n x y` and `ix n y x`, and the second dict slot the key half opens
+-- was dead — `333 + 333 = 666` where the answer is `333 + 111 = 444`.
+--
+-- ⚠️ FAILING TO MATCH STILL FALLS BACK, exactly as before: a pass-1 miss drops to pass 2
+-- (interface-only) and then to the historical first-id scan, so this can only ever move a
+-- site that pass 1 was previously answering with a WRONG slot — never one it was
+-- answering `None` for.  A goal whose position is an unsolved variable with an id from a
+-- genuinely different instantiation stops matching in pass 1 and is answered by pass 2,
+-- i.e. by the interface alone, which is where such a goal sat before `predArgsAgree`
+-- existed at all.
+predArgsAgreeEncl : List Mono -> List Mono -> Bool
+predArgsAgreeEncl [] _ = False
+predArgsAgreeEncl _ [] = False
+predArgsAgreeEncl gs vs
+  | listLen gs /= listLen vs = False
+  | otherwise = argPosAgreeEncl gs vs
+
+argPosAgreeEncl : List Mono -> List Mono -> Bool
+argPosAgreeEncl (g::gs) (v::vs) = monoPosAgreesEncl g v && argPosAgreeEncl gs vs
+argPosAgreeEncl _ _ = True
+
+-- ONE position of the relation above: TWO VARIABLES compare by IDENTITY (the
+-- `monoSameGiven` `TVar`/`TVar` arm, which is what makes this the same notion of "same
+-- predicate" slice 2 landed on the given channel); every other pairing — including a
+-- variable against a ground type, where the instantiations genuinely may not line up —
+-- keeps `monoHeadAgrees`' permissive head-tycon rule verbatim.
+monoPosAgreesEncl : Mono -> Mono -> Bool
+monoPosAgreesEncl a b = match normalize a
+  TVar c1 => match normalize b
+    TVar c2 => tyvarId c1 == tyvarId c2
+    _ => monoHeadAgrees a b
+  _ => monoHeadAgrees a b
+
 -- Does the goal's instantiated argument vector agree with a slot's recorded one?
+-- ⚠️ SINCE #1904 THIS IS THE `implReqPick` CHANNEL'S RELATION ONLY.  The
+-- enclosing-fn channel (`indexOfPredGo`) calls `predArgsAgreeEncl`, which adds a
+-- tyvar-IDENTITY arm on the strength of a measurement that its two vectors share one
+-- instantiation.  That measurement covers only that channel — the caution below is
+-- unretracted here, and widening it to this one needs its own measurement.
 -- ⚠️ EMPTY ON EITHER SIDE IS **NOT** AGREEMENT — an absent vector must not let pass 1
 -- claim a slot it knows nothing about, or the two passes collapse into one and the
 -- `(Ix a Char, Ix a Bool)` discrimination is lost.  Agreement is head-tycon-wise and
@@ -28263,13 +28336,58 @@ dedupVecObls xs = dedupBy vecOblKey xs
 -- dedup would collapse them into one, silently dropping half a declared context.  An
 -- ids-only entry contributes a constant empty suffix, so its key is order-equivalent to
 -- the pre-widening one.
+-- S-nonlead-arg-identity (#1904) made `oblArgKey` structural and id-carrying.  On THIS
+-- channel that is mostly redundant — `voIds` already carries every position's id — but
+-- not entirely: `voIds` is a FLATTENED concatenation with no position boundaries, so
+-- `Ix (Pair a b) (Pair c d)` and `Ix (Pair a c) (Pair b d)` shared both `voIds` and the
+-- old head-name-only suffix.  The partition this key induces is strictly FINER than
+-- before and identical on bare-tyvar vectors (the shape `dedupVecObls`' spelling caveat
+-- above is about), so a printed `Num a =>` still does not split.
 vecOblKey : VecObl -> String
 vecOblKey o = "\{lenKey o.voIface.irName}\{joinWith "," (map intToString o.voIds)}|\{joinWith "," (map oblArgKey o.voArgs)}"
 
--- a ground argument keys on its head tycon name; a tyvar position carries no
--- discriminating information here (its id is already in `voIds`) and keys as "*".
+-- S-nonlead-arg-identity (#1904): ONE predicate-argument position, rendered as a
+-- PREFIX-FREE PREORDER of the normalized mono, so the key REALISES the sprint's settled
+-- notion of "same predicate" — pointwise `monoSameGiven` over the vector — rather than a
+-- weaker local one.  Every arm below mirrors an arm of `monoSameGiven`:
+--   * `TVar` keys on the tyvar's IDENTITY, not on its mere presence.  This is the whole
+--     fix: the old encoding keyed EVERY tyvar position as the constant "*", so
+--     `(Ix a b c, Ix a c b)` rendered `Ix|*,*,*` twice and `dedupSlotVecs` collapsed two
+--     predicates into ONE dict slot (#1904, S0: `ix n x y + ix n y x` summed 333+333
+--     instead of 333+111).  `vecOblKey` survived that only because `voIds` carries every
+--     position's id in a SECOND component; `cslotVecKey` composes `cslotKey`, which
+--     carries the LEAD id alone (`csId`), so it had no per-position id anywhere.
+--   * `TCon`/`TRigid` fold to the same rendering because `monoSameGiven` equates them by
+--     name across those two constructors.
+--   * `TApp`/`TFun` recurse structurally, so the key sees the SPINE, not just the head —
+--     `Ix (Pair a b) (Pair c d)` and `Ix (Pair a c) (Pair b d)` are now distinct, where a
+--     head-name-plus-flattened-ids encoding (`xmodOblArgId`'s shape) would tie.
+-- ⚠️ TWO deliberate residual under-splits, both PRE-EXISTING and neither widened here:
+--   * TYCON ORIGIN is dropped (name only, as `headTyconNameMono` always did).  It cannot
+--     be folded into a key string at all: `sameTyConHead`'s absent-origin arm is
+--     non-transitive, so no string equivalence can realise it.
+--   * `TEff` (the only remaining arm) keys as "*", where `monoSameGiven` answers False
+--     even against itself.  An effect row in a predicate-argument position keys exactly
+--     as it did before this change.
+-- Injectivity: each arm emits a self-delimiting tag — "v"+digits+"." , "c"+`lenKey`, and
+-- the fixed-arity "a"/"f" — so a preorder walk parses back uniquely and the joined vector
+-- key is injective over the vector.
+-- ⚠️ RAW TYVAR IDS IN A KEY STRING: safe HERE, and not by an "ids are unique" claim.
+-- `cslotKey` already folds the raw lead `csId` into this same key, and the non-lead ids
+-- come from the SAME predicate occurrence in the SAME signature, normalized together.
+-- Both `dedupSlotVecs` call sites compare keys only WITHIN one binding's slot list
+-- (`expandSupersFix`'s frontier, `setFunConstraintEntry`'s declared prefix) and
+-- `vecOblKey`'s `voIds` are equally raw — so this adds no exposure the lead id did not
+-- already carry.  The G4 hazard at `registerPredGiven` is about `activeDictVars`, which
+-- no key here consults.
 oblArgKey : Mono -> String
-oblArgKey m = lenKey (fromOption "*" (headTyconNameMono m))
+oblArgKey m = match normalize m
+  TVar cell => "v\{intToString (tyvarId cell)}."
+  TCon name _ => "c\{lenKey name}"
+  TRigid name => "c\{lenKey name}"
+  TApp a b => "a\{oblArgKey a}\{oblArgKey b}"
+  TFun a _ b => "f\{oblArgKey a}\{oblArgKey b}"
+  _ => "*"
 
 -- membership of ONE vector in the DECLARED set (reportUncoveredVec) — not a
 -- dedup, and the declared set is a handful of entries, so it stays a scan.
@@ -36374,7 +36492,16 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "indexOfPred" ((PVar "target") (PVar "p") (PVar "preds")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "indexOfPredGo") (ELit (LInt 0))) (EVar "target")) (EVar "p")) (EVar "True")) (EVar "preds")) (arm (PCon "Some" (PVar "i")) () (EApp (EVar "Some") (EVar "i"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "indexOfPredGo") (ELit (LInt 0))) (EVar "target")) (EVar "p")) (EVar "False")) (EVar "preds")))))
 (DTypeSig false "indexOfPredGo" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Predicate") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Predicate"))) (TyApp (TyCon "Option") (TyCon "Int"))))))))
 (DFunDef false "indexOfPredGo" (PWild PWild PWild PWild (PList)) (EVar "None"))
-(DFunDef false "indexOfPredGo" ((PVar "i") (PVar "target") (PVar "p") (PVar "needArgs") (PCons (PTuple (PVar "id") (PVar "sp")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "id") (EVar "target")) (EBinOp "/=" (EFieldAccess (EFieldAccess (EVar "sp") "iface") "irName") (ELit (LString "")))) (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "sp") "iface") "irName") (EFieldAccess (EFieldAccess (EVar "p") "iface") "irName"))) (EBinOp "||" (EApp (EVar "not") (EVar "needArgs")) (EApp (EApp (EVar "predArgsAgree") (EFieldAccess (EVar "p") "args")) (EFieldAccess (EVar "sp") "args")))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "indexOfPredGo") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "target")) (EVar "p")) (EVar "needArgs")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "indexOfPredGo" ((PVar "i") (PVar "target") (PVar "p") (PVar "needArgs") (PCons (PTuple (PVar "id") (PVar "sp")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "id") (EVar "target")) (EBinOp "/=" (EFieldAccess (EFieldAccess (EVar "sp") "iface") "irName") (ELit (LString "")))) (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "sp") "iface") "irName") (EFieldAccess (EFieldAccess (EVar "p") "iface") "irName"))) (EBinOp "||" (EApp (EVar "not") (EVar "needArgs")) (EApp (EApp (EVar "predArgsAgreeEncl") (EFieldAccess (EVar "p") "args")) (EFieldAccess (EVar "sp") "args")))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "indexOfPredGo") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "target")) (EVar "p")) (EVar "needArgs")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "predArgsAgreeEncl" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
+(DFunDef false "predArgsAgreeEncl" ((PList) PWild) (EVar "False"))
+(DFunDef false "predArgsAgreeEncl" (PWild (PList)) (EVar "False"))
+(DFunDef false "predArgsAgreeEncl" ((PVar "gs") (PVar "vs")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "gs")) (EApp (EVar "listLen") (EVar "vs"))) (EVar "False") (EIf (EVar "otherwise") (EApp (EApp (EVar "argPosAgreeEncl") (EVar "gs")) (EVar "vs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "argPosAgreeEncl" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
+(DFunDef false "argPosAgreeEncl" ((PCons (PVar "g") (PVar "gs")) (PCons (PVar "v") (PVar "vs"))) (EBinOp "&&" (EApp (EApp (EVar "monoPosAgreesEncl") (EVar "g")) (EVar "v")) (EApp (EApp (EVar "argPosAgreeEncl") (EVar "gs")) (EVar "vs"))))
+(DFunDef false "argPosAgreeEncl" (PWild PWild) (EVar "True"))
+(DTypeSig false "monoPosAgreesEncl" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
+(DFunDef false "monoPosAgreesEncl" ((PVar "a") (PVar "b")) (EMatch (EApp (EVar "normalize") (EVar "a")) (arm (PCon "TVar" (PVar "c1")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TVar" (PVar "c2")) () (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c1")) (EApp (EVar "tyvarId") (EVar "c2")))) (arm PWild () (EApp (EApp (EVar "monoHeadAgrees") (EVar "a")) (EVar "b"))))) (arm PWild () (EApp (EApp (EVar "monoHeadAgrees") (EVar "a")) (EVar "b")))))
 (DTypeSig false "predArgsAgree" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
 (DFunDef false "predArgsAgree" ((PList) PWild) (EVar "False"))
 (DFunDef false "predArgsAgree" (PWild (PList)) (EVar "False"))
@@ -38145,7 +38272,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "vecOblKey" (TyFun (TyCon "VecObl") (TyCon "String")))
 (DFunDef false "vecOblKey" ((PVar "o")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "lenKey") (EFieldAccess (EFieldAccess (EVar "o") "voIface") "irName")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "intToString")) (EFieldAccess (EVar "o") "voIds"))))) (ELit (LString "|"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "oblArgKey")) (EFieldAccess (EVar "o") "voArgs"))))) (ELit (LString ""))))
 (DTypeSig false "oblArgKey" (TyFun (TyCon "Mono") (TyCon "String")))
-(DFunDef false "oblArgKey" ((PVar "m")) (EApp (EVar "lenKey") (EApp (EApp (EVar "fromOption") (ELit (LString "*"))) (EApp (EVar "headTyconNameMono") (EVar "m")))))
+(DFunDef false "oblArgKey" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "++" (EBinOp "++" (ELit (LString "v")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "tyvarId") (EVar "cell"))))) (ELit (LString ".")))) (arm (PCon "TCon" (PVar "name") PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EVar "display") (EApp (EVar "lenKey") (EVar "name")))) (ELit (LString "")))) (arm (PCon "TRigid" (PVar "name")) () (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EVar "display") (EApp (EVar "lenKey") (EVar "name")))) (ELit (LString "")))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EVar "display") (EApp (EVar "oblArgKey") (EVar "a")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "oblArgKey") (EVar "b")))) (ELit (LString "")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "f")) (EApp (EVar "display") (EApp (EVar "oblArgKey") (EVar "a")))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "oblArgKey") (EVar "b")))) (ELit (LString "")))) (arm PWild () (ELit (LString "*")))))
 (DTypeSig false "containsVecObl" (TyFun (TyCon "VecObl") (TyFun (TyApp (TyCon "List") (TyCon "VecObl")) (TyCon "Bool"))))
 (DFunDef false "containsVecObl" (PWild (PList)) (EVar "False"))
 (DFunDef false "containsVecObl" ((PVar "o") (PCons (PVar "o2") (PVar "rest"))) (EBinOp "||" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "o") "voIface") "irName") (EFieldAccess (EFieldAccess (EVar "o2") "voIface") "irName")) (EApp (EApp (EVar "eqIntList") (EFieldAccess (EVar "o") "voIds")) (EFieldAccess (EVar "o2") "voIds"))) (EApp (EApp (EVar "containsVecObl") (EVar "o")) (EVar "rest"))))
@@ -41731,7 +41858,16 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "indexOfPred" ((PVar "target") (PVar "p") (PVar "preds")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "indexOfPredGo") (ELit (LInt 0))) (EVar "target")) (EVar "p")) (EVar "True")) (EVar "preds")) (arm (PCon "Some" (PVar "i")) () (EApp (EVar "Some") (EVar "i"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "indexOfPredGo") (ELit (LInt 0))) (EVar "target")) (EVar "p")) (EVar "False")) (EVar "preds")))))
 (DTypeSig false "indexOfPredGo" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Predicate") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Predicate"))) (TyApp (TyCon "Option") (TyCon "Int"))))))))
 (DFunDef false "indexOfPredGo" (PWild PWild PWild PWild (PList)) (EVar "None"))
-(DFunDef false "indexOfPredGo" ((PVar "i") (PVar "target") (PVar "p") (PVar "needArgs") (PCons (PTuple (PVar "id") (PVar "sp")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "id") (EVar "target")) (EBinOp "/=" (EFieldAccess (EFieldAccess (EVar "sp") "iface") "irName") (ELit (LString "")))) (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "sp") "iface") "irName") (EFieldAccess (EFieldAccess (EVar "p") "iface") "irName"))) (EBinOp "||" (EApp (EVar "not") (EVar "needArgs")) (EApp (EApp (EVar "predArgsAgree") (EFieldAccess (EVar "p") "args")) (EFieldAccess (EVar "sp") "args")))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "indexOfPredGo") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "target")) (EVar "p")) (EVar "needArgs")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "indexOfPredGo" ((PVar "i") (PVar "target") (PVar "p") (PVar "needArgs") (PCons (PTuple (PVar "id") (PVar "sp")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "id") (EVar "target")) (EBinOp "/=" (EFieldAccess (EFieldAccess (EVar "sp") "iface") "irName") (ELit (LString "")))) (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "sp") "iface") "irName") (EFieldAccess (EFieldAccess (EVar "p") "iface") "irName"))) (EBinOp "||" (EApp (EVar "not") (EVar "needArgs")) (EApp (EApp (EVar "predArgsAgreeEncl") (EFieldAccess (EVar "p") "args")) (EFieldAccess (EVar "sp") "args")))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "indexOfPredGo") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "target")) (EVar "p")) (EVar "needArgs")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "predArgsAgreeEncl" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
+(DFunDef false "predArgsAgreeEncl" ((PList) PWild) (EVar "False"))
+(DFunDef false "predArgsAgreeEncl" (PWild (PList)) (EVar "False"))
+(DFunDef false "predArgsAgreeEncl" ((PVar "gs") (PVar "vs")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "gs")) (EApp (EVar "listLen") (EVar "vs"))) (EVar "False") (EIf (EVar "otherwise") (EApp (EApp (EVar "argPosAgreeEncl") (EVar "gs")) (EVar "vs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "argPosAgreeEncl" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
+(DFunDef false "argPosAgreeEncl" ((PCons (PVar "g") (PVar "gs")) (PCons (PVar "v") (PVar "vs"))) (EBinOp "&&" (EApp (EApp (EVar "monoPosAgreesEncl") (EVar "g")) (EVar "v")) (EApp (EApp (EVar "argPosAgreeEncl") (EVar "gs")) (EVar "vs"))))
+(DFunDef false "argPosAgreeEncl" (PWild PWild) (EVar "True"))
+(DTypeSig false "monoPosAgreesEncl" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
+(DFunDef false "monoPosAgreesEncl" ((PVar "a") (PVar "b")) (EMatch (EApp (EVar "normalize") (EVar "a")) (arm (PCon "TVar" (PVar "c1")) () (EMatch (EApp (EVar "normalize") (EVar "b")) (arm (PCon "TVar" (PVar "c2")) () (EBinOp "==" (EApp (EVar "tyvarId") (EVar "c1")) (EApp (EVar "tyvarId") (EVar "c2")))) (arm PWild () (EApp (EApp (EVar "monoHeadAgrees") (EVar "a")) (EVar "b"))))) (arm PWild () (EApp (EApp (EVar "monoHeadAgrees") (EVar "a")) (EVar "b")))))
 (DTypeSig false "predArgsAgree" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
 (DFunDef false "predArgsAgree" ((PList) PWild) (EVar "False"))
 (DFunDef false "predArgsAgree" (PWild (PList)) (EVar "False"))
@@ -43502,7 +43638,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "vecOblKey" (TyFun (TyCon "VecObl") (TyCon "String")))
 (DFunDef false "vecOblKey" ((PVar "o")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EFieldAccess (EFieldAccess (EVar "o") "voIface") "irName")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EMethodRef "map") (EVar "intToString")) (EFieldAccess (EVar "o") "voIds"))))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EMethodRef "map") (EVar "oblArgKey")) (EFieldAccess (EVar "o") "voArgs"))))) (ELit (LString ""))))
 (DTypeSig false "oblArgKey" (TyFun (TyCon "Mono") (TyCon "String")))
-(DFunDef false "oblArgKey" ((PVar "m")) (EApp (EVar "lenKey") (EApp (EApp (EVar "fromOption") (ELit (LString "*"))) (EApp (EVar "headTyconNameMono") (EVar "m")))))
+(DFunDef false "oblArgKey" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "++" (EBinOp "++" (ELit (LString "v")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "tyvarId") (EVar "cell"))))) (ELit (LString ".")))) (arm (PCon "TCon" (PVar "name") PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EVar "name")))) (ELit (LString "")))) (arm (PCon "TRigid" (PVar "name")) () (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EVar "name")))) (ELit (LString "")))) (arm (PCon "TApp" (PVar "a") (PVar "b")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EMethodRef "display") (EApp (EVar "oblArgKey") (EVar "a")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "oblArgKey") (EVar "b")))) (ELit (LString "")))) (arm (PCon "TFun" (PVar "a") PWild (PVar "b")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "f")) (EApp (EMethodRef "display") (EApp (EVar "oblArgKey") (EVar "a")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "oblArgKey") (EVar "b")))) (ELit (LString "")))) (arm PWild () (ELit (LString "*")))))
 (DTypeSig false "containsVecObl" (TyFun (TyCon "VecObl") (TyFun (TyApp (TyCon "List") (TyCon "VecObl")) (TyCon "Bool"))))
 (DFunDef false "containsVecObl" (PWild (PList)) (EVar "False"))
 (DFunDef false "containsVecObl" ((PVar "o") (PCons (PVar "o2") (PVar "rest"))) (EBinOp "||" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EFieldAccess (EVar "o") "voIface") "irName") (EFieldAccess (EFieldAccess (EVar "o2") "voIface") "irName")) (EApp (EApp (EVar "eqIntList") (EFieldAccess (EVar "o") "voIds")) (EFieldAccess (EVar "o2") "voIds"))) (EApp (EApp (EVar "containsVecObl") (EVar "o")) (EVar "rest"))))

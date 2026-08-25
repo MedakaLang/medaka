@@ -122,6 +122,7 @@ argImplRequiresRoutes : Map String (List ImplEntry) -> String -> String -> Strin
 argMentions : List String -> Ty -> Bool
 argOnlyEffVarMsg : String -> String -> String -> String
 argPerformableOccs : Bool -> Ty -> List (String, List Atom)
+argPosAgreeEncl : List Mono -> List Mono -> Bool
 argReqRoute : Map String (List ImplEntry) -> String -> String -> List (String, Mono) -> List Ty -> Int -> Int -> Route
 argStampMono : PendingEntry -> Mono
 argStampPairs : PendingEntry -> List (Int, String)
@@ -1274,6 +1275,7 @@ monoIsBareTyvar : Mono -> Bool
 monoIsBool : Mono -> Bool
 monoIsFunction : Mono -> Bool
 monoIsTyvarId : Mono -> Int -> Bool
+monoPosAgreesEncl : Mono -> Mono -> Bool
 monoSameGiven : Mono -> Mono -> Bool
 monoScheme : Mono -> Scheme
 monoSize : Mono -> Int
@@ -1425,6 +1427,7 @@ prePassLetBindScoped : ArgRw -> LetBind -> LetBind
 prePassModulePair : List String -> (String, List Decl) -> (String, List Decl)
 prePassModulePairArg : List String -> List String -> List String -> List String -> List (String, String) -> (String, List Decl) -> (String, List Decl)
 predArgsAgree : List Mono -> List Mono -> Bool
+predArgsAgreeEncl : List Mono -> List Mono -> Bool
 preferConcrete : Mono -> Mono -> Mono
 prefixConcrete : String -> String
 prefixPatternErrMsg : String -> String -> String
