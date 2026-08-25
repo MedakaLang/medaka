@@ -283,6 +283,11 @@ apply_mutation M13-cargo-shim "$WORK/pds/tools/gen_signing_corpus.sh" \
   's|# ORACLE_MODE_SETUP_COMPLETE|cat > "\$WORK/cargo" <<"EOF"\n#!/bin/sh\necho cargo-shim-executed >&2\nfor final_arg do :; done\nexec "\$ORACLE_WORK/libsecp-sign" "\$final_arg"\nEOF\nchmod +x "\$WORK/cargo"\nPATH="\$WORK:\$PATH"\nexport PATH\n# ORACLE_MODE_SETUP_COMPLETE|'
 expect_corpus_green 'M13-cargo-shim task-local delegating cargo PATH shim'
 cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
+apply_mutation M13-cargo-invocation-alias "$WORK/pds/tools/gen_signing_corpus.sh" \
+  '# ORACLE_MODE_SETUP_COMPLETE' \
+  's|# ORACLE_MODE_SETUP_COMPLETE|ln -s "\$WORK/control-cargo" "\$WORK/control-cargo-alias"\nCARGO_EXECUTABLE="\$WORK/control-cargo-alias"\n# ORACLE_MODE_SETUP_COMPLETE|'
+expect_corpus_red 'M13-cargo-invocation-alias selected cargo path changed to a same-target symlink after setup'
+cp "$WORK/generator.baseline" "$WORK/pds/tools/gen_signing_corpus.sh"
 apply_mutation M13-delegate "$WORK/pds/tools/gen_signing_corpus.sh" \
   '# ORACLE_MODE_SETUP_COMPLETE' \
   's|# ORACLE_MODE_SETUP_COMPLETE|cat > "\$WORK/k256-runner" <<"EOF"\n#!/bin/sh\nexec "\$ORACLE_WORK/libsecp-sign" "\$1"\nEOF\n# ORACLE_MODE_SETUP_COMPLETE|'
