@@ -801,7 +801,7 @@ for f in $changed; do
         if [ ! -d "$ROOT/$_fdir" ]; then
           echo "preflight: note — fixture dir '$_fdir' is DELETED in this diff; nothing to run for it."
         elif [ -z "$_gset" ]; then
-          echo "preflight: WARNING — '$_fdir' has NO discoverable consumer (checked live references across every tracked gate script in the repo — every .sh not listed in test/CI-COVERAGE-TOOLS.txt, which now includes sqlite/test/, test/native_fixtures/ and playground/e2e/ — including one hop through any helper script a gate invokes). This is either a DEAD fixture directory or a gap in this derivation — investigate '$_fdir'. Falling back to the FULL suite for safety."
+          echo "preflight: WARNING — '$_fdir' has NO discoverable consumer (checked live references across every tracked gate script in the repo — every .sh not excluded by test/CI-COVERAGE-TOOLS.txt, a universe that now includes sqlite/test/, test/native_fixtures/ and playground/e2e/ — including one hop through any helper script a gate invokes). This is either a DEAD fixture directory or a gap in this derivation — investigate '$_fdir'. Falling back to the FULL suite for safety."
           mark_full "no-consumer:$_fdir"
         else
           # Report each fixture dir ONCE, however many of its files changed. Adding a
@@ -1065,7 +1065,28 @@ for pat in $pats; do
   if [ "$matched" -eq 0 ]; then
     set +f
     echo "preflight: FAIL — the change→gate map points at '$pat', which matches NO gate."
-    echo "  A gate was probably renamed or deleted (the snapshot migration does this)."
+    # Distinguish the two ways a pattern can match nothing: an EXISTING project's
+    # gate was renamed/deleted out from under a stale glob (the historical case,
+    # see the derivation's header above), vs. the generic manifest-keyed arm
+    # (~line 877, `add "$_proj/test/*"`) firing for a project that has a manifest
+    # but has NEVER had a floor gate yet — a brand-new, not-yet-enrolled project.
+    # Those are different diagnoses and the wrong one sends the reader looking for
+    # a rename that never happened. `diff_compiler_project_enrolment.sh`'s FLOOR
+    # check already has the right wording for the second case; match it here.
+    _no_floor_proj=""
+    for _pr in $_projects; do
+      if [ "$pat" = "$_pr/test/*" ]; then
+        _no_floor_proj="$_pr"
+        break
+      fi
+    done
+    if [ -n "$_no_floor_proj" ] && { [ ! -d "$ROOT/$_no_floor_proj/test" ] || \
+        [ -z "$(git -C "$ROOT" ls-files "$_no_floor_proj/test/*.sh" 2>/dev/null)" ]; }; then
+      echo "  A project with a manifest and no floor gate cannot be enrolled:"
+      echo "  a ci.yml shard pattern matching NO gate is a hard ::error::."
+    else
+      echo "  A gate was probably renamed or deleted (the snapshot migration does this)."
+    fi
     echo "  Your change would have been tested by NOTHING. Fix the map in $0."
     exit 1
   fi

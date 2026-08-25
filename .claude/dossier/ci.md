@@ -109,8 +109,10 @@ own measurement, the same cost any cache miss already pays today. This is mitiga
 A change that touches ONLY prose (top-level `*.md`, `docs/**`, `LICENSE`) used to still run the
 full 40+ minute gate suite. The `detect` job classifies the PR's changed files and every heavy
 job (gates/soundness/seed-health/inlang) reads its output to skip their EXPENSIVE STEPS, not to
-skip THEMSELVES — because branch protection requires eleven named status checks with zero
-approvals (the checks ARE the merge gate), and a job skipped by a job-level `if:`, or a workflow
+skip THEMSELVES — because branch protection requires the ruleset's named status checks (derive
+them: `gh api repos/MedakaLang/medaka/rulesets/18885875 --jq '.rules[]|select(.type==
+"required_status_checks")|.parameters.required_status_checks[].context'`) with zero approvals
+(the checks ARE the merge gate), and a job skipped by a job-level `if:`, or a workflow
 that never runs because of a `paths-ignore:` trigger filter, means GitHub never receives a status
 for that context: it sits at "Expected — waiting for status" forever and the PR becomes
 permanently unmergeable.
@@ -169,7 +171,8 @@ no matter which job runs it. It used to run in TEN jobs (the 7 `gates` shards + 
 `inlang` + `wasm`) — ~27% of all CI job-seconds spent recomputing the same answer. Now it runs in
 the `build:` job, once, and those ten take `binary: artifact` on the same setup action.
 
-The `build:` job is NOT one of the eleven required contexts, and must not become one — that would
+The `build:` job is NOT one of the required contexts (derive them: `gh api …`, see T-4b above),
+and must not become one — that would
 need a ruleset edit, which is not atomic with a commit. It is also `needs: detect` with a
 conditional *step*, never a conditional job — same shape as every heavy job in this file, and for
 the same reason: a required consumer that `needs:` a job which can itself be skipped can dead-end.
@@ -659,10 +662,13 @@ main fail with `GH013: Repository rule violations` rather than the classic prote
 
 Two counts in this file had rotted and were fixed by deriving rather than restating:
 
-- "TEN required checks" → **eleven** (7 `gates (…)` shards + `soundness` + `seed-health` +
-  `inlang` + `wasm`). Verify live: `gh api repos/MedakaLang/medaka/rulesets/<id> --jq
+- "TEN required checks" was restated once as a fixed cardinal here — and a new required
+  context (`compiler-soundness`) joined the ruleset ~24h later, breaking the restatement
+  (#1967). Updating the number only resets the rot clock; the fix is to never write the
+  cardinal down at all. Verify live, every time: `gh api
+  repos/MedakaLang/medaka/rulesets/<id> --jq
   '.rules[]|select(.type=="required_status_checks")|.parameters.required_status_checks[].context'`
-  — never hand-count.
+  — never hand-count, and never cite a count from this file.
 - The `wasm` job's gates, once called "these FIVE" in its own comments → **seven**
   (`diff_wasm.sh`, `diff_wasm_typed.sh`, `diff_playground_input.sh`, `diff_wasm_modules.sh`,
   `diff_sqlite.sh`, `diff_gzip.sh`, `build_wasm_cmd.sh`). Re-derive by grepping the job's own

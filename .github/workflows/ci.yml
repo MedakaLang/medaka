@@ -80,10 +80,12 @@ env:
 jobs:
   # ── T-4b: docs-only fast path ───────────────────────────────────────────────
   # A change that touches ONLY prose (top-level *.md, docs/**, LICENSE) skips the
-  # heavy jobs' EXPENSIVE STEPS, never the jobs themselves. There are ELEVEN
-  # required status checks with ZERO approvals — the checks ARE the merge gate —
-  # so a job skipped by a job-level `if:`, or a workflow skipped by a
-  # `paths-ignore:` trigger filter, never posts a status; the PR sits at
+  # heavy jobs' EXPENSIVE STEPS, never the jobs themselves. The required status
+  # checks (derive them: `gh api repos/MedakaLang/medaka/rulesets/18885875 --jq
+  # '.rules[]|select(.type=="required_status_checks")|.parameters.required_status_checks[].context'`)
+  # are the merge gate, with ZERO approvals — so a job skipped by a job-level
+  # `if:`, or a workflow skipped by a `paths-ignore:` trigger filter, never
+  # posts a status; the PR sits at
   # "Expected — waiting for status" FOREVER and becomes permanently unmergeable.
   # ⚠️ Do NOT convert this into a job-level `if:`, and do NOT path-filter `on:`.
   # Every required job always RUNS and always REPORTS; only its STEPS are
@@ -400,7 +402,8 @@ jobs:
   # intra-run artifact transport at a fixed SHA, NOT a cache (see the file header's
   # #111 note) — no key, no cross-SHA restore.
   #
-  # ⚠️ NOT one of the eleven required contexts, and must not become one — that
+  # ⚠️ NOT one of the required contexts (derive them: `gh api …`, see the
+  # docs-only fast path note above), and must not become one — that
   # needs a ruleset edit, not atomic with a commit. ⚠️ `needs: detect` with a
   # CONDITIONAL STEP, never a conditional job — same shape and reason as every
   # heavy job below: a required consumer that `needs:` a skippable job can
@@ -634,7 +637,8 @@ jobs:
 
       # ── WHAT DOES *THIS* SHARD ACTUALLY HAVE TO DO? ───────────────────────────────
       # ⚠️ THE STEPS BELOW ARE GUARDED; THE JOB IS NOT (except for cancellation) —
-      # there are ELEVEN required checks with ZERO approvals, and a job skipped by
+      # the required checks (derive them: `gh api …`, see the docs-only fast path
+      # note above) carry ZERO approvals, and a job skipped by
       # a job-level `if:` (or a workflow skipped by `paths-ignore:`) never posts a
       # status, leaving the PR permanently unmergeable. So this job RUNS and
       # REPORTS on every outcome except the whole run being cancelled (the guard

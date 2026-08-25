@@ -73,6 +73,13 @@ path = sys.argv[1]
 text = open(path, encoding='utf-8').read()
 lines = text.splitlines()
 
+# Hardcoded job-template names, not ruleset CONTEXTS: `gates` is one matrix job
+# template that expands to 7 required contexts (ruleset 18885875 has 12 required
+# contexts total, this set has 6 entries) — this list must be kept in sync with
+# that ruleset by hand. This gate does NOT verify that sync; it only verifies
+# the fail-safe `if:` shape (a positive-match disjunct on every step) for
+# whichever job templates it's told about here. A ruleset context renamed,
+# added, or removed without a matching edit here goes unnoticed by this gate.
 REQUIRED_JOBS = {"gates", "soundness", "compiler-soundness", "seed-health", "inlang", "wasm"}
 
 # Known-good floors — see header comment. A job not listed here has floor 0.
