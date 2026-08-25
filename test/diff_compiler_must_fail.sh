@@ -101,16 +101,16 @@
 #
 # ── WHERE THIS RUNS, AND WHY IT IS NOT IN A GATE SHARD ─────────────────────────
 #
-# It is a NAMED step in the `soundness` job (.github/workflows/ci.yml), not a shard.
-# A gate shard is NARROWED on `pull_request` by test/preflight.sh's path map: a fix to
-# compiler/frontend/parser.mdk derives 'diff_compiler_parse*' and would NOT derive this
+# It is a NAMED step in the `compiler-soundness` job (.github/workflows/ci.yml), not a
+# shard. A gate shard is NARROWED on `pull_request` by test/preflight.sh's path map: a fix
+# to compiler/frontend/parser.mdk derives 'diff_compiler_parse*' and would NOT derive this
 # gate — so the drain would only fire in the MERGE QUEUE, bouncing the PR after review.
 # The alternative — adding this gate to a dozen preflight `add` arms — is a
 # hand-maintained map of "which bug lives in which file", i.e. the encoded-fact disease
 # this gate exists to cure; it would rot on the first new fixture.
-# `soundness` runs FULL on every event, is already REQUIRED, and already builds ./medaka
-# under `if: docs_only != 'true'` — and a docs-only PR cannot fix a compiler bug, so that
-# guard is exactly right. Being named in a `run:` step satisfies
+# The compiler-soundness job (narrowed on `compiler_touched`/`soundness_corpora`) already
+# builds ./medaka under `if: docs_only != 'true'` — and a docs-only PR cannot fix a compiler
+# bug, so that guard is exactly right. Being named in a `run:` step satisfies
 # diff_compiler_ci_shard_coverage.sh (its `named` set); this basename matches no shard
 # pattern, so there is no duplicate either.
 #
@@ -153,14 +153,14 @@ command -v python3 >/dev/null 2>&1 || { echo "python3 not found (needed to rende
 # is absent, this gate FAILS LOUDLY (exit 2, infra error), exactly like the missing-binary
 # and missing-python3 guards above. A SKIP THAT EXITS 0 IS THE SILENT-GREEN THIS SUITE
 # EXISTS TO PREVENT (#590): every wasm gate exited 0 "skipping" for months because
-# wasm-tools was missing, and nobody noticed the coverage had evaporated. `soundness` —
-# where this suite runs — always has clang.
+# wasm-tools was missing, and nobody noticed the coverage had evaporated.
+# `compiler-soundness` — where this suite runs — always has clang.
 if grep -lE '^(cmd|control):[[:space:]]*build(-run)?[[:space:]]' "$FIXDIR"/*/claim.txt >/dev/null 2>&1; then
   command -v clang >/dev/null 2>&1 || {
     echo "clang not found, but a fixture uses the build/build-run verb (it needs a real native compile)."
     echo "This is an INFRA ERROR, not a skip: a must-fail suite that silently skipped a build"
     echo "fixture would report GREEN having never checked it — the exact silent-green this suite"
-    echo "exists to prevent. Install clang (soundness, where this runs, has it)."
+    echo "exists to prevent. Install clang (compiler-soundness, where this runs, has it)."
     exit 2
   }
 fi
