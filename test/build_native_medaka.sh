@@ -52,6 +52,14 @@ CLI="$ROOT/compiler/driver/medaka_cli.mdk"
 SELFHOST="$ROOT/compiler"
 STDLIB="$ROOT/stdlib"
 FORCE_EMITTER_REBUILD="${FORCE_EMITTER_REBUILD:-0}"
+# OPT-IN, DEFAULT OFF (issue #1928 follow-up). When 1, stage B skips the clang link
+# of ./medaka if a `.medaka.srcstamp` beside it says it was already built from
+# exactly this compiler source. Unset/0 keeps the historical behaviour — stage B
+# ALWAYS relinks — which is what the hot local dev loop and every other CI job get.
+# Only CI's `inlang` job sets this: it downloads ./medaka from the `build` job and
+# then runs `make test`, whose `.PHONY` `medaka` prerequisite would otherwise
+# re-link (~55 s) over the binary it just downloaded. See stage B below.
+SKIP_CLI_LINK_IF_FRESH="${SKIP_CLI_LINK_IF_FRESH:-0}"
 
 command -v "$CC" >/dev/null 2>&1 || { echo "no C compiler ($CC) on PATH — skipping (opt-in)"; exit 2; }
 
@@ -62,7 +70,7 @@ command -v "$CC" >/dev/null 2>&1 || { echo "no C compiler ($CC) on PATH — skip
 # collide with a live build (the PID makes each name unique) and are NOT a lock —
 # there is nothing here for a killed agent to get permanently stuck behind — so this
 # is pure hygiene, not correctness; failures are silently ignored (`|| true`).
-find "$ROOT" -maxdepth 1 \( -name 'medaka.new.*' -o -name 'medaka_emitter.new.*' -o -name '.medaka_emitter.srcstamp.new.*' \) -mtime +1 -delete 2>/dev/null || true
+find "$ROOT" -maxdepth 1 \( -name 'medaka.new.*' -o -name 'medaka_emitter.new.*' -o -name '.medaka_emitter.srcstamp.new.*' -o -name '.medaka.srcstamp.new.*' \) -mtime +1 -delete 2>/dev/null || true
 
 # ---- COLD START: no native emitter yet -> bootstrap emitter_v0 from the seed ----
 # Tolerant: a lagging committed seed must NOT abort the build (it builds a working
@@ -163,6 +171,22 @@ emit_graph() {
 # the warm path warm.
 SRC_STAMP="$ROOT/.medaka_emitter.srcstamp"
 
+# The same idea, one stage down: WHICH SOURCE was ./medaka (the CLI) linked from.
+# Same reasoning as above — the mtime of a downloaded/copied-in ./medaka is an
+# inverted signal — so keep the COMPILER-source fingerprint beside it. This stamp
+# records FP_COMPILER, not FP_FULL, because that is exactly what stage B bakes into
+# the binary as -DMEDAKA_SRC_FP and what `liveSourceFingerprint` recomputes at
+# runtime ([B-STALENESS]); comparing anything else would compare the wrong thing.
+#
+# ⚠️ It describes the DEFAULT output path only. This script also gets called with an
+# explicit output path (test/refresh_seed.sh links into a `mktemp` file), and a build
+# that never wrote $ROOT/medaka must not leave a stamp vouching for it — that would be
+# a stale-binary skip, precisely the silent wrongness the stamp exists to prevent. So
+# both the read and the write below are gated on $OUT being the default path.
+CLI_STAMP="$ROOT/.medaka.srcstamp"
+CLI_STAMP_APPLIES=0
+[ "$OUT" = "$ROOT/medaka" ] && CLI_STAMP_APPLIES=1
+
 # sha256 where available (Linux coreutils / macOS `shasum`); `cksum` is the POSIX
 # floor. This is a staleness check, not a signature — a weak hash only risks a
 # missed rebuild, which FORCE_EMITTER_REBUILD=1 always overrides.
@@ -259,47 +283,61 @@ else
 fi
 
 # ---- STAGE B (WARM): the (fresh) emitter emits the medaka_cli graph -> ./medaka --
-CLI_LL="$WORK/medaka_cli.ll"
-echo "stage B: medaka_emitter -> medaka_cli.ll ..."
-if ! emit_graph "$CLI_LL" "$WORK/emit.err" "$CLI"; then
-  echo "FAIL (emitter crashed compiling medaka_cli.mdk):"; cat "$WORK/emit.err"; exit 1
+# Unconditional BY DEFAULT (see SKIP_CLI_LINK_IF_FRESH at the top): the hot dev loop
+# and every other caller keep relinking exactly as before. The opt-in skip below is
+# symmetric with stage A's — same fingerprint helpers, same stamp file pattern, same
+# "no stamp = unknown provenance = rebuild" fallback — but it compares FP_COMPILER,
+# because that is what stage B actually bakes into the binary (-DMEDAKA_SRC_FP).
+CLI_STAMP_FP=""
+if [ "$CLI_STAMP_APPLIES" = "1" ] && [ -f "$CLI_STAMP" ]; then
+  CLI_STAMP_FP="$(cat "$CLI_STAMP" 2>/dev/null)"
 fi
-trim_unit "$CLI_LL"
-[ -s "$CLI_LL" ] || { echo "FAIL: empty IR for medaka_cli.mdk"; cat "$WORK/emit.err"; exit 1; }
+if [ "$SKIP_CLI_LINK_IF_FRESH" = "1" ] && [ "$CLI_STAMP_APPLIES" = "1" ] \
+   && [ -x "$OUT" ] && [ -n "$CLI_STAMP_FP" ] && [ "$CLI_STAMP_FP" = "$FP_COMPILER" ]; then
+  echo "stage B: medaka up-to-date (compiler source fingerprint unchanged) — skipping rebuild."
+else
+  CLI_LL="$WORK/medaka_cli.ll"
+  echo "stage B: medaka_emitter -> medaka_cli.ll ..."
+  if ! emit_graph "$CLI_LL" "$WORK/emit.err" "$CLI"; then
+    echo "FAIL (emitter crashed compiling medaka_cli.mdk):"; cat "$WORK/emit.err"; exit 1
+  fi
+  trim_unit "$CLI_LL"
+  [ -s "$CLI_LL" ] || { echo "FAIL: empty IR for medaka_cli.mdk"; cat "$WORK/emit.err"; exit 1; }
 
-# The medaka CLI is built at -O0 by DEFAULT: make medaka is the hot compiler-dev
-# loop and does NOT reuse the CLI (the diff gates run compiled test/bin oracles,
-# not the CLI interpreter), so -O2 here would be a straight +~4s clang cost on the
-# most frequent command. But `medaka run`/`test`/`check` DO run the CLI's tree-walk
-# interpreter, which is ~2× faster at -O2 (medaka test 1.3s→0.65s). So for
-# interpreter/doctest-heavy workflows, -O2 is the default (medaka test 1.3s→0.65s);
-# for build-heavy loops where the +~4s clang cost dominates, opt out with CLI_OPT=-O0.
-# (The EMITTER, by contrast, is always -O2 — it's the reused workhorse; see stage A.)
-CLI_OPT="${CLI_OPT:--O2}"
-echo "stage B: clang(medaka_cli.ll, $CLI_OPT) -> $OUT ..."
-# STALENESS STAMP (issue #89): bake the COMPILER-source fingerprint into ./medaka
-# so the CLI can warn when it is run against a NEWER compiler/ than it was built
-# from.  The -D hits ONLY this C compile of medaka_rt.c — never the emitter IR —
-# so it is fixpoint/seed-safe (the text IR is produced before clang runs).  We bake
-# FP_COMPILER (compiler/**.mdk only), NOT FP_FULL: the driver's `liveSourceFingerprint`
-# (compiler/driver/medaka_cli.mdk) recomputes a compiler-only hash at runtime and
-# hard-fails a mismatch under MEDAKA_STRICT, so the baked value must stay byte-for-byte
-# compiler-only.  FP_FULL (which folds in runtime/*.c for the emitter-rebuild trigger,
-# issue #182) is written to .medaka_emitter.srcstamp below, a DIFFERENT consumer.
-# Empty on paths that never set it (returns "" → the check silently skips).
-# $OUT.new.$$ is staged NEXT TO $OUT (never under $WORK — see the stage-A EMIT_NEW
-# comment above for why: cross-device mv is not atomic) so two concurrent `make
-# medaka` invocations in this worktree (issue #1141) each build a private, complete
-# binary and only the final `mv` (a same-filesystem rename, atomic) touches the
-# shared path — neither process can ever observe (or leave behind) a
-# partially-written $OUT, only last-writer-wins on which COMPLETE build stuck.
-OUT_NEW="$OUT.new.$$"
-rm -f "$OUT_NEW"
-if ! "$CC" -pthread "$CLI_OPT" "-DMEDAKA_SRC_FP=$FP_COMPILER" $GC_SECTION_CFLAGS $GC_CFLAGS "$CLI_LL" "$RT" $GC_LIBS "$GC_SECTION_LDFLAGS" -lm -o "$OUT_NEW" 2>"$WORK/cc.err"; then
+  # The medaka CLI is built at -O0 by DEFAULT: make medaka is the hot compiler-dev
+  # loop and does NOT reuse the CLI (the diff gates run compiled test/bin oracles,
+  # not the CLI interpreter), so -O2 here would be a straight +~4s clang cost on the
+  # most frequent command. But `medaka run`/`test`/`check` DO run the CLI's tree-walk
+  # interpreter, which is ~2× faster at -O2 (medaka test 1.3s→0.65s). So for
+  # interpreter/doctest-heavy workflows, -O2 is the default (medaka test 1.3s→0.65s);
+  # for build-heavy loops where the +~4s clang cost dominates, opt out with CLI_OPT=-O0.
+  # (The EMITTER, by contrast, is always -O2 — it's the reused workhorse; see stage A.)
+  CLI_OPT="${CLI_OPT:--O2}"
+  echo "stage B: clang(medaka_cli.ll, $CLI_OPT) -> $OUT ..."
+  # STALENESS STAMP (issue #89): bake the COMPILER-source fingerprint into ./medaka
+  # so the CLI can warn when it is run against a NEWER compiler/ than it was built
+  # from.  The -D hits ONLY this C compile of medaka_rt.c — never the emitter IR —
+  # so it is fixpoint/seed-safe (the text IR is produced before clang runs).  We bake
+  # FP_COMPILER (compiler/**.mdk only), NOT FP_FULL: the driver's `liveSourceFingerprint`
+  # (compiler/driver/medaka_cli.mdk) recomputes a compiler-only hash at runtime and
+  # hard-fails a mismatch under MEDAKA_STRICT, so the baked value must stay byte-for-byte
+  # compiler-only.  FP_FULL (which folds in runtime/*.c for the emitter-rebuild trigger,
+  # issue #182) is written to .medaka_emitter.srcstamp below, a DIFFERENT consumer.
+  # Empty on paths that never set it (returns "" → the check silently skips).
+  # $OUT.new.$$ is staged NEXT TO $OUT (never under $WORK — see the stage-A EMIT_NEW
+  # comment above for why: cross-device mv is not atomic) so two concurrent `make
+  # medaka` invocations in this worktree (issue #1141) each build a private, complete
+  # binary and only the final `mv` (a same-filesystem rename, atomic) touches the
+  # shared path — neither process can ever observe (or leave behind) a
+  # partially-written $OUT, only last-writer-wins on which COMPLETE build stuck.
+  OUT_NEW="$OUT.new.$$"
   rm -f "$OUT_NEW"
-  echo "FAIL (clang medaka): $(cat "$WORK/cc.err")"; exit 1
+  if ! "$CC" -pthread "$CLI_OPT" "-DMEDAKA_SRC_FP=$FP_COMPILER" $GC_SECTION_CFLAGS $GC_CFLAGS "$CLI_LL" "$RT" $GC_LIBS "$GC_SECTION_LDFLAGS" -lm -o "$OUT_NEW" 2>"$WORK/cc.err"; then
+    rm -f "$OUT_NEW"
+    echo "FAIL (clang medaka): $(cat "$WORK/cc.err")"; exit 1
+  fi
+  mv "$OUT_NEW" "$OUT"
 fi
-mv "$OUT_NEW" "$OUT"
 
 # Record WHICH SOURCE this emitter was built from — FP_FULL (compiler + runtime), so
 # a later medaka_rt.c change re-triggers stage A (issue #182). Correct on every path
@@ -311,6 +349,17 @@ mv "$OUT_NEW" "$OUT"
 STAMP_NEW="$SRC_STAMP.new.$$"
 printf '%s\n' "$FP_FULL" > "$STAMP_NEW"
 mv "$STAMP_NEW" "$SRC_STAMP"
+
+# ...and the same for the CLI, recording FP_COMPILER — the value stage B bakes in.
+# Written on both stage-B paths: after a real link it records the fresh provenance,
+# and after a skip it re-writes the value the skip already proved equal, so the two
+# paths converge on the same file content. Gated on the default output path (see
+# CLI_STAMP above): a build that linked somewhere else must not vouch for $ROOT/medaka.
+if [ "$CLI_STAMP_APPLIES" = "1" ]; then
+  CLI_STAMP_NEW="$CLI_STAMP.new.$$"
+  printf '%s\n' "$FP_COMPILER" > "$CLI_STAMP_NEW"
+  mv "$CLI_STAMP_NEW" "$CLI_STAMP"
+fi
 
 echo
 echo "BUILT $OUT — native, OCaml-free."

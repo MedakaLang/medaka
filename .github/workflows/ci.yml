@@ -291,7 +291,7 @@ jobs:
         with:
           binary: build
 
-      # The stamp is a HIDDEN file, so `include-hidden-files: true` is mandatory —
+      # Both stamps are HIDDEN files, so `include-hidden-files: true` is mandatory —
       # upload-artifact@v4 silently drops dotfiles without it (a warning in the log,
       # a green step, and every consumer re-running stage A for nothing). Why the
       # stamp travels at all, and the same-SHA invariant that makes it sound, is
@@ -311,6 +311,7 @@ jobs:
             medaka
             medaka_emitter
             .medaka_emitter.srcstamp
+            .medaka.srcstamp
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
@@ -864,8 +865,19 @@ jobs:
         uses: ./.github/actions/setup-medaka
         with:
           binary: artifact
+      # ⚠️ THE ONE CONSUMER JOB THAT RUNS `make`. `make test` depends on the `.PHONY`
+      # `medaka` target, so it re-enters test/build_native_medaka.sh, whose stage B
+      # (the clang link of ./medaka, ~55 s) is otherwise unconditional — it would
+      # overwrite the binary this job just downloaded and eat the whole #1928 win for
+      # this job. SKIP_CLI_LINK_IF_FRESH=1 makes stage B honour `.medaka.srcstamp`
+      # (which travels with the artifact, same-SHA invariant as the emitter stamp) and
+      # skip the relink. Stage A already skips via `.medaka_emitter.srcstamp`.
+      # Deliberately scoped to THIS step: the flag is default-off everywhere else, so
+      # the local dev loop and every other caller relink exactly as before.
       - name: Doctests, properties, and test decls
         if: needs.detect.outputs.docs_only != 'true'
+        env:
+          SKIP_CLI_LINK_IF_FRESH: '1'
         run: make test
 
   # ── T25: the WasmGC backend gates ─────────────────────────────────────────────
