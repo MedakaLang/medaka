@@ -107,6 +107,27 @@ jobs:
     timeout-minutes: 10
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
+      # #1931. THREE more outputs from the SAME single pass over changed.txt (one
+      # classifier, N outputs — never a second walk that could drift from this one).
+      #
+      # `compiler_touched` answers ONE question and one only: does this diff touch the
+      # build closure of `./medaka` — compiler/stdlib/runtime sources plus the scripts
+      # that build them? It is deliberately NOT widened into "anything a heavy job
+      # reads". A job that also reads corpora OUTSIDE that closure publishes its own
+      # escape-list output below and ORs the two AT THE STEP LEVEL, so the predicate
+      # keeps a single meaning and each corpus list stays next to the job that owns it.
+      # Widening the predicate itself is how one flag silently acquires two meanings
+      # and the next job to read it inherits the wrong one.
+      compiler_touched: ${{ steps.classify.outputs.compiler_touched }}
+      # The `wasm` job's OWN escape list: the corpora its seven gates read from outside
+      # the build closure (sqlite/, gzip/, playground/, test/wasm/, and the engine and
+      # llvm fixture corpora two of them borrow). Derived in `classify`, consumed ONLY
+      # by `wasm`.
+      wasm_corpora: ${{ steps.classify.outputs.wasm_corpora }}
+      # The `inlang` job's OWN escape list, same shape: `make test` runs
+      # test/diff_compiler_ported.sh over the test/ported/ corpus, which is not in
+      # `./medaka`'s build closure. Consumed ONLY by `inlang`.
+      inlang_corpora: ${{ steps.classify.outputs.inlang_corpora }}
       narrow: ${{ steps.gateset.outputs.narrow }}
       gates: ${{ steps.gateset.outputs.gates }}
       oracle_key: ${{ steps.gateset.outputs.oracle_key }}
@@ -122,8 +143,24 @@ jobs:
           # has to distinguish "no non-docs files" from "the classifier bailed early".
           : > "$RUNNER_TEMP/changed.txt"
           : > "$RUNNER_TEMP/nondocs.txt"
+
+          # #1931. EVERY conservative early exit below must publish ALL FOUR outputs,
+          # not just docs_only. An output a consuming step's `if:` reads and `detect`
+          # never wrote comes back as the EMPTY STRING, which is falsy — so omitting one
+          # here would silently SKIP the heavy steps on push, on merge_group, and on
+          # every diff this step could not resolve. That is the one direction this
+          # classifier is never allowed to fail in.
+          full_run() {
+            {
+              echo "docs_only=false"
+              echo "compiler_touched=true"
+              echo "wasm_corpora=true"
+              echo "inlang_corpora=true"
+            } >> "$GITHUB_OUTPUT"
+          }
+
           if [ "$event" != "pull_request" ]; then
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            full_run
             echo "not a pull_request event ($event) — running the full suite."
             exit 0
           fi
@@ -135,14 +172,14 @@ jobs:
           git cat-file -e "$head" 2>/dev/null || git fetch --no-tags --depth=1 origin "$head" 2>/dev/null || true
 
           if ! git cat-file -e "$base" 2>/dev/null || ! git cat-file -e "$head" 2>/dev/null; then
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            full_run
             echo "could not resolve base/head commits locally — running the full suite (conservative default)."
             exit 0
           fi
 
           changed="$(git diff --name-only "$base" "$head" || true)"
           if [ -z "$changed" ]; then
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            full_run
             echo "no changed files resolved — running the full suite (conservative default)."
             exit 0
           fi
@@ -153,6 +190,12 @@ jobs:
           # See the job header for why this is an ALLOWLIST, not a **.md denylist.
           printf '%s\n' "$changed" > "$RUNNER_TEMP/changed.txt"
           docs_only=true
+          # #1931 — see the job `outputs:` block for what each of these means and why
+          # the build-closure predicate stays narrow while the escape lists stay
+          # per-job. All three start false and are raised by the second `case` below.
+          compiler_touched=false
+          wasm_corpora=false
+          inlang_corpora=false
 
           # ONE classifier, TWO consumers: `docs_only` answers "is EVERY changed file
           # prose?"; `gateset` below asks "is THIS file prose?" of the same allowlist,
@@ -180,10 +223,63 @@ jobs:
 
               *) nondoc "$f" ;;
             esac
+
+            # #1931. A SECOND, INDEPENDENT question about the SAME file, in the same
+            # single pass. It is its own `case` on purpose: `case` fires only its first
+            # matching arm, and the prose allowlist above already claims `test/*` with
+            # its must-stay-first arm — so folding these arms into that block would make
+            # test/build_native_medaka.sh (build closure) and test/wasm/* (wasm corpus)
+            # unreachable. These arms are not `elif`s of the allowlist; both run for
+            # every changed file.
+            case "$f" in
+              # ── the build closure of `./medaka`, and NOTHING else (see `outputs:`).
+              # test/build_native_medaka.sh is the literal body of the `medaka` make
+              # target; bootstrap_from_seed.sh and refresh_seed.sh are the cold-start
+              # and re-mint halves of the same build.
+              compiler/*|stdlib/*|runtime/*) compiler_touched=true ;;
+              Makefile|test/build_native_medaka.sh|test/bootstrap_from_seed.sh|test/refresh_seed.sh)
+                compiler_touched=true ;;
+              # The workflow and the shared setup action decide HOW every job builds and
+              # provisions `./medaka`. A change to either must never be able to narrow
+              # itself out of the jobs it is changing.
+              .github/workflows/*|.github/actions/*) compiler_touched=true ;;
+            esac
+
+            # ── `wasm`'s own escape list. Derived by reading every gate the job
+            # invokes for paths outside compiler//stdlib/:
+            #   diff_sqlite.sh        -> sqlite/*_probe.mdk (which import sqlite/lib/*)
+            #   diff_gzip.sh          -> gzip/inflate_demo.mdk (imports gzip/lib/*)
+            #   diff_playground_input -> playground/{build_playground_wasm.sh,
+            #                            dev_compile_node.mjs,dist/playground.wasm},
+            #                            test/engine_fixtures/*, test/engine_value_pins/*
+            #   diff_wasm_typed.sh    -> test/llvm_fixtures/env_args_empty.mdk
+            #   all seven + their oracle builder -> test/wasm/* (fixtures, run.js,
+            #                            build_wasm_oracle.sh, the gate scripts)
+            #   build_wasm_cmd.sh     -> test/build_cmd.sh, test/build_wasm_cmd.sh
+            case "$f" in
+              sqlite/*|gzip/*|playground/*) wasm_corpora=true ;;
+              test/wasm/*|test/build_wasm_cmd.sh|test/build_cmd.sh) wasm_corpora=true ;;
+              test/engine_fixtures/*|test/engine_value_pins/*|test/llvm_fixtures/*)
+                wasm_corpora=true ;;
+            esac
+
+            # ── `inlang`'s own escape list: `make test`'s first line is
+            # test/diff_compiler_ported.sh, which runs the test/ported/ corpus and reads
+            # test/CAPABILITY-EXCEPTIONS.txt. Its remaining lines are `medaka test` over
+            # compiler/ and stdlib/ files, already covered by compiler_touched.
+            case "$f" in
+              test/ported/*|test/diff_compiler_ported.sh|test/CAPABILITY-EXCEPTIONS.txt)
+                inlang_corpora=true ;;
+            esac
           done < "$RUNNER_TEMP/changed.txt"
 
-          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
-          echo "classified: docs_only=$docs_only"
+          {
+            echo "docs_only=$docs_only"
+            echo "compiler_touched=$compiler_touched"
+            echo "wasm_corpora=$wasm_corpora"
+            echo "inlang_corpora=$inlang_corpora"
+          } >> "$GITHUB_OUTPUT"
+          echo "classified: docs_only=$docs_only compiler_touched=$compiler_touched wasm_corpora=$wasm_corpora inlang_corpora=$inlang_corpora"
 
       # ── T-15: narrow the `pull_request` run. NEVER the `merge_group` run. ────────
       # Only the `pull_request` half shrinks — narrowing `merge_group` would trade
@@ -872,8 +968,13 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      # #1931. The job-level `if:` stays `!cancelled()` — NEVER a job-level skip, or
+      # the required context deadlocks. The narrowing is at the STEP level, and it is
+      # the build-closure predicate ORed with THIS job's own corpus list, never a
+      # widened predicate. A prose-or-project-only PR now stops paying for `make test`;
+      # a compiler-touching PR runs exactly as before.
       - name: Setup medaka (toolchain + downloaded binary)
-        if: needs.detect.outputs.docs_only != 'true'
+        if: ${{ needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.inlang_corpora == 'true') }}
         uses: ./.github/actions/setup-medaka
         with:
           binary: artifact
@@ -887,7 +988,7 @@ jobs:
       # Deliberately scoped to THIS step: the flag is default-off everywhere else, so
       # the local dev loop and every other caller relink exactly as before.
       - name: Doctests, properties, and test decls
-        if: needs.detect.outputs.docs_only != 'true'
+        if: ${{ needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.inlang_corpora == 'true') }}
         env:
           SKIP_CLI_LINK_IF_FRESH: '1'
         run: make test
@@ -938,8 +1039,12 @@ jobs:
       # box's). wasm-tools (parse + validate the emitted WAT) is NOT on a stock runner
       # either — the pinned prebuilt release is downloaded and extracted OUTSIDE the
       # checkout (see the action for why).
+      # #1931. Step-level narrowing only; the job-level `if:` above stays
+      # `!cancelled()`. `compiler_touched` is the build-closure predicate and is NOT
+      # widened to cover sqlite/gzip/playground — that list is THIS job's, ORed in here,
+      # so the predicate keeps one meaning for every other reader.
       - name: Setup medaka (toolchain + wasm + downloaded binary)
-        if: needs.detect.outputs.docs_only != 'true'
+        if: ${{ needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.wasm_corpora == 'true') }}
         uses: ./.github/actions/setup-medaka
         with:
           wasm: 'true'
@@ -949,7 +1054,7 @@ jobs:
       # that these gates drive. Cheap; deliberately NOT cached (they are a pure
       # function of the whole compiler graph, which the medaka cache above already keys).
       - name: Build the wasm emitter oracles
-        if: needs.detect.outputs.docs_only != 'true'
+        if: ${{ needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.wasm_corpora == 'true') }}
         run: |
           export MEDAKA_EMITTER="$PWD/medaka_emitter"
           sh test/wasm/build_wasm_oracle.sh
@@ -961,7 +1066,7 @@ jobs:
       # "a skip is not a pass" is the entire reason this gate coverage hole existed. All
       # all run (|| rc=1) before the job fails, so one red gate never hides the others.
       - name: WasmGC backend gates
-        if: needs.detect.outputs.docs_only != 'true'
+        if: ${{ needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.wasm_corpora == 'true') }}
         run: |
           set -u
           export MEDAKA_EMITTER="$PWD/medaka_emitter"
