@@ -1,0 +1,48 @@
+-- DICT-SEMANTICS §3 (`inst`, matching set) / §4.2 (obligation deferral):
+-- an inferred binding whose residual predicate has a MIXED argument vector --
+-- one STRUCTURED argument (`Wrap α`) and one open tyvar -- must not be allowed
+-- to reach `main` unchecked when NOTHING in the program can ever satisfy it.
+--
+-- REGRESSION GUARD FOR #1578 (mixed vector, no matching impl, silent), S0,
+-- fixed by sprint/entailment-verdict. Written because the fix DELETED the
+-- self-draining pin `test/must_fail_fixtures/1578-mixed-vector-no-matching-
+-- impl-silent/` per [G-PIN-DRAIN] and left the S0 with no guard at all: a pin
+-- asserts a bug STILL REPRODUCES, so draining one removes the guard unless a
+-- positive row replaces it. This is that row.
+--
+-- SPEC ANSWER (hand-derived from §3, NOT captured). `h x y = conv (Wrap x) y`
+-- raises the goal `Conv (Wrap α) β`. §3's matching set is ONE φ against the
+-- WHOLE vector: φ(`Conv Int Bool`) would need `Wrap α = Int`, and `Wrap` is a
+-- declared tycon that is not `Int`, so no φ exists. The set is EMPTY on the
+-- structured argument alone -- no instantiation of β can rescue it -- and the
+-- program declares no other `Conv` impl, so `main`'s ground goal
+-- `Conv (Wrap Int) Bool` is likewise unsatisfiable. THE PROGRAM IS REJECTED,
+-- T-NO-IMPL, on check, run AND build.
+--
+-- MEASURED AT THE PRE-SPRINT ARM `264eb95d` (this tree, cold-built): the whole
+-- vector was checked on argument 0 only or not at all -- `check` exit 0 with an
+-- empty `--json` diagnostics list, `run` exit 0 PRINTING `int-bool` (the body of
+-- an impl the goal matches on NEITHER argument), and only `build` died, at the
+-- emitter, `no impl of method 'conv' for type 'Wrap'`. Silent wrongness on two
+-- of three verbs.
+--
+-- ⚠️ THIS ROW PINS THE VERDICT AND THE DIAGNOSTIC CODE, DELIBERATELY NOT THE
+-- LOCATION, and that is load-bearing rather than lazy. On this binary the
+-- rejection lands at `h`'s DEFINITION line, which is the same site #1939 (OPEN
+-- regression, this sprint's own) falsely rejects a LEGAL binding at. #1939's
+-- fix will move where a structured-argument obligation is adjudicated; it must
+-- not be able to green this program, because `main` forces the ground goal
+-- `Conv (Wrap Int) Bool` and that goal is unsatisfiable wherever it is checked.
+-- A row that pinned that location would have enshrined #1939's behaviour as
+-- correct.
+data Wrap a = Wrap a
+
+interface Conv a b where
+  conv : a -> b -> String
+
+impl Conv Int Bool where
+  conv _ _ = "int-bool"
+
+h x y = conv (Wrap x) y
+
+main = println (h 5 True)
