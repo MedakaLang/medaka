@@ -928,8 +928,25 @@ jobs:
   #
   # ⚠️ NO job-level `if:` THAT CAN SKIP THE JOB FOR ANYTHING OTHER THAN THE WHOLE RUN
   # BEING CANCELLED — same required-context deadlock hazard as `gates`/`wasm`/`inlang`
-  # (read the note on `gates`). The narrowing is at the STEP level, exactly as those
-  # three do it, so the job always RUNS and always REPORTS.
+  # (read the note on `gates`). The narrowing is at the STEP level, so the job always
+  # RUNS and always REPORTS.
+  #
+  # ⚠️ THE JOB REPORTING IS NOT ENOUGH — IT MUST NOT REPORT GREEN HAVING RUN NOTHING.
+  # This is where the step-level shape genuinely differs from `gates`, and an earlier
+  # version of this note claimed a parity that did not exist (fix F1). `gates` reaches
+  # its "no SKIP, no GREEN-BY-SKIP" property because its `plan` step is UNGUARDED: on a
+  # `detect` FAILURE every output is the empty string, `plan` still runs, and the shard
+  # falls through to a full run (and the artifact download then fails, correctly red).
+  # A step guarded only on the classifier's outputs has the opposite failure mode:
+  # unwritten outputs make `compiler_touched == 'true'` FALSE, so EVERY guarded step
+  # SKIPS and this required context reports SUCCESS having run nothing. Hence the
+  # leading `needs.detect.result != 'success'` disjunct on every step guard below (and
+  # on `inlang`'s and `wasm`'s): the classifier's answer is trusted ONLY when `detect`
+  # actually succeeded and therefore actually published one. `success` is the only
+  # `needs.<job>.result` value that means "the outputs are real" — `failure`,
+  # `cancelled`, and `skipped` all leave them empty — so on any of the other three the
+  # steps run unguarded and the job fails safe exactly as `gates` does. When `detect`
+  # DOES succeed the disjunct is false and the narrowing is bit-for-bit as before.
   #
   # The guard is `compiler_touched` ORed with THIS job's OWN escape list
   # (`soundness_corpora`), never a widened predicate — see the `detect` job's
@@ -953,7 +970,7 @@ jobs:
       # gate cold-bootstraps from the seed on its own); the BINARY comes from
       # `build` (#1928).
       - name: Setup medaka (toolchain + downloaded binary)
-        if: ${{ needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.soundness_corpora == 'true') }}
+        if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.soundness_corpora == 'true')) }}
         uses: ./.github/actions/setup-medaka
         with:
           binary: artifact
@@ -964,14 +981,14 @@ jobs:
       # #182 broke the mirror once and only human review caught it, no gate
       # proved the two agreed. This one does — see dossier `ci.md`.
       - name: Fingerprint mirror must still agree (issue #267)
-        if: ${{ needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.soundness_corpora == 'true') }}
+        if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.soundness_corpora == 'true')) }}
         run: sh test/check_fingerprint_parity.sh
 
       # `typecheck_compiler_source.sh` exits 2 (SKIP) when its oracle is absent,
       # indistinguishable from a pass in CI — so build the oracle first and
       # assert on the PASS line, not the exit status.
       - name: Build the typecheck oracle
-        if: ${{ needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.soundness_corpora == 'true') }}
+        if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.soundness_corpora == 'true')) }}
         run: FORCE=1 sh test/build_oracles.sh --build-one diagnostics_project_main
 
       # ── The MUST-FAIL suite: the tracker's self-drain (#547) ────────────────
@@ -983,7 +1000,7 @@ jobs:
       # `soundness` runs FULL on every event and is already required. Guarded on
       # docs_only, correctly here — this needs the compiler. History: dossier `ci.md`.
       - name: Open bugs must still reproduce (must-fail suite — a RED here means someone FIXED something)
-        if: ${{ needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.soundness_corpora == 'true') }}
+        if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.soundness_corpora == 'true')) }}
         run: sh test/diff_compiler_must_fail.sh
 
       # `selfcompile_fixpoint.sh` asserts C3a AND C3b, the right bar for a
@@ -998,7 +1015,7 @@ jobs:
       # contention has already flipped from a real failure into a false
       # timeout. History: dossier `ci.md`.
       - name: Compiler source is well-typed and emitter reproduces itself
-        if: ${{ needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.soundness_corpora == 'true') }}
+        if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.soundness_corpora == 'true')) }}
         run: |
           set +e
           JOBS=3 bash test/typecheck_compiler_source.sh > /tmp/tc.log 2>&1 &
@@ -1076,8 +1093,12 @@ jobs:
       # the build-closure predicate ORed with THIS job's own corpus list, never a
       # widened predicate. A prose-or-project-only PR now stops paying for `make test`;
       # a compiler-touching PR runs exactly as before.
+      # The leading `needs.detect.result != 'success'` disjunct is the fail-safe: an
+      # output-only guard reads a FAILED `detect`'s empty outputs as "narrow to
+      # nothing" and reports this required context GREEN having run nothing. Full
+      # rationale at the head of `compiler-soundness` (fix F1).
       - name: Setup medaka (toolchain + downloaded binary)
-        if: ${{ needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.inlang_corpora == 'true') }}
+        if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.inlang_corpora == 'true')) }}
         uses: ./.github/actions/setup-medaka
         with:
           binary: artifact
@@ -1091,7 +1112,7 @@ jobs:
       # Deliberately scoped to THIS step: the flag is default-off everywhere else, so
       # the local dev loop and every other caller relink exactly as before.
       - name: Doctests, properties, and test decls
-        if: ${{ needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.inlang_corpora == 'true') }}
+        if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.inlang_corpora == 'true')) }}
         env:
           SKIP_CLI_LINK_IF_FRESH: '1'
         run: make test
@@ -1146,8 +1167,12 @@ jobs:
       # `!cancelled()`. `compiler_touched` is the build-closure predicate and is NOT
       # widened to cover sqlite/gzip/playground — that list is THIS job's, ORed in here,
       # so the predicate keeps one meaning for every other reader.
+      # The leading `needs.detect.result != 'success'` disjunct is the fail-safe: an
+      # output-only guard reads a FAILED `detect`'s empty outputs as "narrow to
+      # nothing" and reports this required context GREEN having run nothing. Full
+      # rationale at the head of `compiler-soundness` (fix F1).
       - name: Setup medaka (toolchain + wasm + downloaded binary)
-        if: ${{ needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.wasm_corpora == 'true') }}
+        if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.wasm_corpora == 'true')) }}
         uses: ./.github/actions/setup-medaka
         with:
           wasm: 'true'
@@ -1157,7 +1182,7 @@ jobs:
       # that these gates drive. Cheap; deliberately NOT cached (they are a pure
       # function of the whole compiler graph, which the medaka cache above already keys).
       - name: Build the wasm emitter oracles
-        if: ${{ needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.wasm_corpora == 'true') }}
+        if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.wasm_corpora == 'true')) }}
         run: |
           export MEDAKA_EMITTER="$PWD/medaka_emitter"
           sh test/wasm/build_wasm_oracle.sh
@@ -1169,7 +1194,7 @@ jobs:
       # "a skip is not a pass" is the entire reason this gate coverage hole existed. All
       # all run (|| rc=1) before the job fails, so one red gate never hides the others.
       - name: WasmGC backend gates
-        if: ${{ needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.wasm_corpora == 'true') }}
+        if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.wasm_corpora == 'true')) }}
         run: |
           set -u
           export MEDAKA_EMITTER="$PWD/medaka_emitter"
