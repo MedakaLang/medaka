@@ -1,5 +1,5 @@
 # META
-source_lines=1093
+source_lines=1220
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -813,10 +813,110 @@ safeChar c = c >= "a" && c <= "z"
   || c >= "0" && c <= "9"
   || c == "_"
 
+-- #1950: encode an ARBITRARY String as a legal emitted identifier, INJECTIVELY.
+-- This is the ONE definition of that encoding: `llvm_emit.defaultFnName` and
+-- `llvm_emit.implFnSymTag`, `wasm_emit.implSymTagW`/`implFnSymTagW`, and
+-- `core_ir_lower.memoBindName`/`implSymTagOf` all call THIS, so the two backends
+-- and the injectivity guard cannot drift apart about what symbol was emitted.
+--
+-- ⚠️ It is NOT `sanitizeId`, and must never be reimplemented as a wrapper over it.
+-- `sanitizeId` is MANY-TO-ONE — everything outside [A-Za-z0-9_] becomes `_` — which
+-- is exactly #1950: the canonical impl keys `main::Sz|(Q A_B C)|` and
+-- `main::Sz|(Q A B_C)|` both sanitize to `main__Sz__Q_A_B_C__`, so two DISTINCT
+-- impls of one method were minted under one symbol (`run` answered correctly,
+-- `build` died at clang with a raw `invalid redefinition of function`).
+-- `sanitizeId` keeps its lossy mapping because it also spells the module-mangled
+-- compiler symbols, whose names are fixpoint-load-bearing.
+--
+-- The encoding is two branches with DISJOINT IMAGES, which is what makes it
+-- injective on all of `String` and not merely on the keys we happen to mint today:
+--   * a string already spelled only in [A-Za-z0-9_] that does NOT start with the
+--     two-character marker `zZ` maps to ITSELF.  That covers every bare head tag
+--     (`Int`, `MyType`, `__tuple2__`), so every symbol the compiler and every
+--     collision-free program already emits stays byte-identical — this branch is
+--     what keeps the change fixpoint-neutral.
+--   * everything else maps to `zZ` ++ escape, where an alphanumeric character is
+--     kept verbatim and EVERY other character — `_` included, since `_` is the
+--     escape introducer — becomes `_<lowercase hex of its code>_`.  Hex digits are
+--     never `_`, so each escape is self-delimiting and the escape inverts.
+-- Only the second branch can produce a `zZ`-prefixed result, so the two images are
+-- disjoint; each branch is injective on its own domain.  A type head cannot begin
+-- with a lowercase letter, so withholding the identity branch from `zZ`-prefixed
+-- inputs costs no real tag its byte-identical symbol — and only PARITY rests on
+-- that, never correctness.
+export
+injectiveIdent : String -> String
+injectiveIdent s =
+  if allSafeChars s 0 (stringLength s) && not (startsZZ s) then
+    s
+  else
+    "zZ\{escapeGo s 0 (stringLength s) ""}"
+
+-- does [s] already begin with the escape marker?  Such a string must take the
+-- escape branch even if it is otherwise a plain identifier, or the two images
+-- would overlap and injectivity would be lost.
+startsZZ : String -> Bool
+startsZZ s = stringSlice 0 2 s == "zZ"
+
+-- `safeChar` lifted to a whole string.
+allSafeChars : String -> Int -> Int -> Bool
+allSafeChars s i len =
+  if i >= len then
+    True
+  else if safeChar (stringSlice i (i + 1) s) then
+    allSafeChars s (i + 1) len
+  else
+    False
+
+escapeGo : String -> Int -> Int -> String -> String
+escapeGo s i len acc =
+  if i >= len then acc
+  else
+    let c = stringSlice i (i + 1) s
+    let c2 = if alnumChar c then c else "_\{hexOfChar c}_"
+    escapeGo s (i + 1) len (acc ++ c2)
+
+-- `safeChar` MINUS the underscore: `_` introduces an escape, so it has to be
+-- escaped like any other non-alphanumeric character.
+alnumChar : String -> Bool
+alnumChar c = c >= "a" && c <= "z"
+  || c >= "A" && c <= "Z"
+  || c >= "0" && c <= "9"
+
+-- the code of a one-character string in lowercase hex, unpadded — the trailing `_`
+-- delimits the escape, so a fixed width would buy nothing.
+hexOfChar : String -> String
+hexOfChar c = hexOfInt (charCode (arrayGetUnsafe 0 (stringToChars c)))
+
+hexOfInt : Int -> String
+hexOfInt n =
+  if n < 16 then
+    hexNibble n
+  else
+    hexOfInt (n / 16) ++ hexNibble (n % 16)
+
+hexNibble : Int -> String
+hexNibble n = stringSlice n (n + 1) "0123456789abcdef"
+
 -- hashName: a deterministic djb2 string hash (seed 5381), computed in the EMITTER
 -- (the emitted IR carries the decimal constant).  Shared by BOTH backends so the
 -- dict-witness tag / route-key dispatch agrees across LLVM and WasmGC — the hash
 -- MUST be byte-identical between them.
+--
+-- 🚨 `hashName` IS NOT INJECTIVE, and not merely "astronomically unlikely" to
+-- collide — colliding pre-images are CONSTRUCTIBLE, in the FULL i64, with no
+-- masking.  djb2 is the radix-33 polynomial `5381*33^n + Σ c_i*33^i`, and the
+-- identifier alphabet spans 74 code points (`0` = 48 … `z` = 122) — WIDER than the
+-- radix — so `Δ_{i+1} = +1, Δ_i = −33` at two ADJACENT positions is an exact zero:
+-- `hashName "Az" == hashName "BY" == 5862176`, `hashName "Mzone" == hashName
+-- "NYone" == 210683374574`.  Before #348's guard that was a live S0: two impls at
+-- head tycons `Mzone`/`NYone` compiled to one `icmp eq i64 %headTag, 210683374574`
+-- in the shared dispatcher, so `build` answered `mzone|mzone` where the
+-- interpreter answered `mzone|nyone`, at exit 0 with no diagnostic.  The comment
+-- that used to stand at `wasm_emit.dictTag` calling this shape "astronomically
+-- unlikely" was wrong about the mechanism: the hash's non-injectivity has nothing
+-- to do with the tag alphabet being small, and nothing to do with the mask width.
+-- `core_ir_lower.dictWitnessTagGuard` is what makes it loud; keep the two together.
 export
 hashName : String -> Int
 hashName s = hashChars (stringToChars s) 0 5381
@@ -825,6 +925,33 @@ hashChars : Array Char -> Int -> Int -> Int
 hashChars cs i acc
   | i >= arrayLength cs = acc
   | otherwise = hashChars cs (i + 1) (acc * 33 + charCode (arrayGetUnsafe i cs))
+
+-- the i31-safe dict-witness tag: `hashName` masked into the low 30 bits (positive
+-- range of an i31).  The full djb2 hash is an i64 in the LLVM backend (an i64 dict
+-- word); a WasmGC dict witness rides an i31 immediate (31 bits), so the raw hash
+-- (e.g. `hashName "Color"` = 210671116836, a 38-bit value) overflows `i32.const`.
+-- Masking to 30 bits keeps it a positive i32/i31 that `i31.get_s` reads back
+-- unchanged, and — being applied identically at witness CREATION
+-- (`wasm_emit.routeWitness`) and at the dispatch COMPARISON
+-- (`wasm_emit.emitDispatchChain`) — preserves the equality test.  (No bitwise
+-- primitive in the compiler subset; `% 2^30` is the mask.)
+--
+-- Lives HERE, beside `hashName`, rather than in `wasm_emit`, because
+-- `core_ir_lower.dictWitnessTagGuard` must check the WASM tag space with the SAME
+-- expression the wasm emitter mints — a second copy of the mask in the guard is a
+-- copy that can drift, and a drifted guard certifies the wrong property.  The
+-- 30-bit space inherits every `hashName` collision (masking cannot separate equal
+-- values) AND adds its own: two pre-images whose full hashes differ by a nonzero
+-- multiple of 2^30.
+export
+dictTag : String -> Int
+dictTag s = posMod (hashName s) 1073741824
+
+-- a non-negative remainder (Medaka `%` can be negative for a negative dividend; the
+-- djb2 i64 accumulator can wrap negative).
+export
+posMod : Int -> Int -> Int
+posMod n m = (n % m + m) % m
 
 -- ── decl rewrite (rename both the DEFINITION name and all references) ─────────
 renameDecl : OrdMap String -> Decl -> Decl
@@ -1267,10 +1394,30 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "sanitizeGo" ((PVar "s") (PVar "i") (PVar "len") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "acc") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s"))) (DoLet false false (PVar "c2") (EIf (EApp (EVar "safeChar") (EVar "c")) (EVar "c") (ELit (LString "_")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "sanitizeGo") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EBinOp "++" (EVar "acc") (EVar "c2")))))))
 (DTypeSig true "safeChar" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "safeChar" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "a"))) (EBinOp "<=" (EVar "c") (ELit (LString "z")))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "A"))) (EBinOp "<=" (EVar "c") (ELit (LString "Z"))))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "0"))) (EBinOp "<=" (EVar "c") (ELit (LString "9"))))) (EBinOp "==" (EVar "c") (ELit (LString "_")))))
+(DTypeSig true "injectiveIdent" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "injectiveIdent" ((PVar "s")) (EIf (EBinOp "&&" (EApp (EApp (EApp (EVar "allSafeChars") (EVar "s")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))) (EApp (EVar "not") (EApp (EVar "startsZZ") (EVar "s")))) (EVar "s") (EBinOp "++" (EBinOp "++" (ELit (LString "zZ")) (EApp (EVar "display") (EApp (EApp (EApp (EApp (EVar "escapeGo") (EVar "s")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))) (ELit (LString ""))))) (ELit (LString "")))))
+(DTypeSig false "startsZZ" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "startsZZ" ((PVar "s")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 2))) (EVar "s")) (ELit (LString "zZ"))))
+(DTypeSig false "allSafeChars" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
+(DFunDef false "allSafeChars" ((PVar "s") (PVar "i") (PVar "len")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "True") (EIf (EApp (EVar "safeChar") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s"))) (EApp (EApp (EApp (EVar "allSafeChars") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EVar "False"))))
+(DTypeSig false "escapeGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))))
+(DFunDef false "escapeGo" ((PVar "s") (PVar "i") (PVar "len") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "acc") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s"))) (DoLet false false (PVar "c2") (EIf (EApp (EVar "alnumChar") (EVar "c")) (EVar "c") (EBinOp "++" (EBinOp "++" (ELit (LString "_")) (EApp (EVar "display") (EApp (EVar "hexOfChar") (EVar "c")))) (ELit (LString "_"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "escapeGo") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EBinOp "++" (EVar "acc") (EVar "c2")))))))
+(DTypeSig false "alnumChar" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "alnumChar" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "a"))) (EBinOp "<=" (EVar "c") (ELit (LString "z")))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "A"))) (EBinOp "<=" (EVar "c") (ELit (LString "Z"))))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "0"))) (EBinOp "<=" (EVar "c") (ELit (LString "9"))))))
+(DTypeSig false "hexOfChar" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "hexOfChar" ((PVar "c")) (EApp (EVar "hexOfInt") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c"))))))
+(DTypeSig false "hexOfInt" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "hexOfInt" ((PVar "n")) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 16))) (EApp (EVar "hexNibble") (EVar "n")) (EBinOp "++" (EApp (EVar "hexOfInt") (EBinOp "/" (EVar "n") (ELit (LInt 16)))) (EApp (EVar "hexNibble") (EBinOp "%" (EVar "n") (ELit (LInt 16)))))))
+(DTypeSig false "hexNibble" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "hexNibble" ((PVar "n")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "n")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (ELit (LString "0123456789abcdef"))))
 (DTypeSig true "hashName" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "hashName" ((PVar "s")) (EApp (EApp (EApp (EVar "hashChars") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))) (ELit (LInt 5381))))
 (DTypeSig false "hashChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "hashChars" ((PVar "cs") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "hashChars") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "dictTag" (TyFun (TyCon "String") (TyCon "Int")))
+(DFunDef false "dictTag" ((PVar "s")) (EApp (EApp (EVar "posMod") (EApp (EVar "hashName") (EVar "s"))) (ELit (LInt 1073741824))))
+(DTypeSig true "posMod" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "posMod" ((PVar "n") (PVar "m")) (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (EVar "m")) (EVar "m")) (EVar "m")))
 (DTypeSig false "renameDecl" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "patVarsListPM") (EVar "ps"))) (EVar "e"))))
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "ty"))) (EApp (EApp (EApp (EVar "DTypeSig") (EVar "pub")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EVar "ty")))
@@ -1563,10 +1710,30 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "sanitizeGo" ((PVar "s") (PVar "i") (PVar "len") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "acc") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s"))) (DoLet false false (PVar "c2") (EIf (EApp (EVar "safeChar") (EVar "c")) (EVar "c") (ELit (LString "_")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "sanitizeGo") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EBinOp "++" (EVar "acc") (EVar "c2")))))))
 (DTypeSig true "safeChar" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "safeChar" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "a"))) (EBinOp "<=" (EVar "c") (ELit (LString "z")))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "A"))) (EBinOp "<=" (EVar "c") (ELit (LString "Z"))))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "0"))) (EBinOp "<=" (EVar "c") (ELit (LString "9"))))) (EBinOp "==" (EVar "c") (ELit (LString "_")))))
+(DTypeSig true "injectiveIdent" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "injectiveIdent" ((PVar "s")) (EIf (EBinOp "&&" (EApp (EApp (EApp (EVar "allSafeChars") (EVar "s")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))) (EApp (EVar "not") (EApp (EVar "startsZZ") (EVar "s")))) (EVar "s") (EBinOp "++" (EBinOp "++" (ELit (LString "zZ")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EApp (EVar "escapeGo") (EVar "s")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))) (ELit (LString ""))))) (ELit (LString "")))))
+(DTypeSig false "startsZZ" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "startsZZ" ((PVar "s")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 2))) (EVar "s")) (ELit (LString "zZ"))))
+(DTypeSig false "allSafeChars" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
+(DFunDef false "allSafeChars" ((PVar "s") (PVar "i") (PVar "len")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "True") (EIf (EApp (EVar "safeChar") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s"))) (EApp (EApp (EApp (EVar "allSafeChars") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EVar "False"))))
+(DTypeSig false "escapeGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))))
+(DFunDef false "escapeGo" ((PVar "s") (PVar "i") (PVar "len") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "acc") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s"))) (DoLet false false (PVar "c2") (EIf (EApp (EVar "alnumChar") (EVar "c")) (EVar "c") (EBinOp "++" (EBinOp "++" (ELit (LString "_")) (EApp (EMethodRef "display") (EApp (EVar "hexOfChar") (EVar "c")))) (ELit (LString "_"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "escapeGo") (EVar "s")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EBinOp "++" (EVar "acc") (EVar "c2")))))))
+(DTypeSig false "alnumChar" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "alnumChar" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "a"))) (EBinOp "<=" (EVar "c") (ELit (LString "z")))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "A"))) (EBinOp "<=" (EVar "c") (ELit (LString "Z"))))) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LString "0"))) (EBinOp "<=" (EVar "c") (ELit (LString "9"))))))
+(DTypeSig false "hexOfChar" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "hexOfChar" ((PVar "c")) (EApp (EVar "hexOfInt") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c"))))))
+(DTypeSig false "hexOfInt" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "hexOfInt" ((PVar "n")) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 16))) (EApp (EVar "hexNibble") (EVar "n")) (EBinOp "++" (EApp (EVar "hexOfInt") (EBinOp "/" (EVar "n") (ELit (LInt 16)))) (EApp (EVar "hexNibble") (EBinOp "%" (EVar "n") (ELit (LInt 16)))))))
+(DTypeSig false "hexNibble" (TyFun (TyCon "Int") (TyCon "String")))
+(DFunDef false "hexNibble" ((PVar "n")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "n")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (ELit (LString "0123456789abcdef"))))
 (DTypeSig true "hashName" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "hashName" ((PVar "s")) (EApp (EApp (EApp (EVar "hashChars") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))) (ELit (LInt 5381))))
 (DTypeSig false "hashChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "hashChars" ((PVar "cs") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "hashChars") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "dictTag" (TyFun (TyCon "String") (TyCon "Int")))
+(DFunDef false "dictTag" ((PVar "s")) (EApp (EApp (EVar "posMod") (EApp (EVar "hashName") (EVar "s"))) (ELit (LInt 1073741824))))
+(DTypeSig true "posMod" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "posMod" ((PVar "n") (PVar "m")) (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (EVar "m")) (EVar "m")) (EVar "m")))
 (DTypeSig false "renameDecl" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "patVarsListPM") (EVar "ps"))) (EVar "e"))))
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "ty"))) (EApp (EApp (EApp (EVar "DTypeSig") (EVar "pub")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EVar "ty")))

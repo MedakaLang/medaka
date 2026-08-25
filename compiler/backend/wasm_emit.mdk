@@ -256,7 +256,7 @@ import backend.trmc_analysis.{
   armBody,
   lastStmtExpr,
 }
-import backend.private_mangle.{hashName, sanitizeId}
+import backend.private_mangle.{dictTag, hashName, injectiveIdent}
 import backend.emit_support.{
   eagerReachMap,
   bindEagerReach,
@@ -4005,32 +4005,45 @@ applyArgsC hd (a::rest) = applyArgsC (CApp hd a) rest
 implFnSym : Prog -> String -> String -> String
 implFnSym prog tag method = implFnSymOfTag (implSymTagW prog method tag) method
 
--- build the symbol from an ALREADY-RESOLVED symbol tag (a bare head, or a sanitized
--- canonical key) — used where the caller already computed the symTag (the RDict
--- dispatch chain, via methodImpls) so it need not re-resolve through findByTagW.
+-- build the symbol from an ALREADY-RESOLVED symbol tag (a bare head, or an
+-- injectively encoded canonical key) — used where the caller already computed the
+-- symTag (the RDict dispatch chain, via methodImpls) so it need not re-resolve
+-- through findByTagW.
 implFnSymOfTag : String -> String -> String
 implFnSymOfTag symTag method = "mdk_impl_\{symTag}_\{gname method}"
 
 -- resolve a raw dispatch tag (head OR canonical key) to the impl's SYMBOL tag.  Find
 -- the matching impl entry (findByTagW matches on head t OR key k), then apply the C7
 -- head-uniqueness rule to its (head, key).  No entry (a defaulted method has its own
--- $mdk_default_* path, never this) ⇒ sanitize the raw tag defensively.
+-- $mdk_default_* path, never this) ⇒ encode the raw tag defensively.
+--
+-- ⚠️ The fallback arm must use the SAME encoder as `implFnSymTagW` above, not the
+-- lossy `sanitizeId`, even though it is believed unreachable.  It names a symbol a
+-- DEFINITION site spelled with `implFnSymTagW`; the moment the two encoders differ,
+-- a reachable miss here mints a reference to a function that was never defined.
+-- Before #1950 both spellings were `sanitizeId` and so agreed by accident — keeping
+-- them equal by construction is what preserves that, and costs one token.
 implSymTagW : Prog -> String -> String -> String
 implSymTagW prog method tag = match findByTagW method tag (methodEntriesW prog method)
   Some (CImplEntry _ _ (CImplTagged t k _ _ _ _)) =>
     implFnSymTagW (methodEntriesW prog method) method t k
-  _ => sanitizeId tag
+  _ => injectiveIdent tag
 
 -- TYPECHECK-AUDIT C7 (wasm peer of llvm_emit's implFnSymTag): the SYMBOL tag a
 -- same-head-tycon impl is emitted/dispatched under.  Sole impl of (method, head) ⇒
 -- the bare head (existing symbols unchanged); a genuine C7 collision (≥2 distinct
--- canonical keys at one head) ⇒ the sanitized canonical key, byte-distinct per impl.
+-- canonical keys at one head) ⇒ the INJECTIVELY encoded canonical key, byte-distinct
+-- per impl.  #1950: this arm used the MANY-TO-ONE `sanitizeId`, so two keys differing
+-- only in `[^A-Za-z0-9_]` positions collapsed onto one wasm function — the same
+-- defect the LLVM peer carried, independently.  `private_mangle.injectiveIdent` is
+-- the one shared definition, so both backends and `core_ir_lower`'s injectivity
+-- guard agree on the emitted symbol.
 implFnSymTagW : List CImplEntry -> String -> String -> String -> String
 implFnSymTagW entries method tag key =
   if headTagUniqueW entries method tag then
     tag
   else
-    sanitizeId key
+    injectiveIdent key
 
 -- does the head tycon [tag] of [method] have a single impl, or several distinct ones
 -- (C7 collision)?  Count DISTINCT canonical keys at this head — a multi-clause impl
@@ -4831,23 +4844,21 @@ ifaceOfInW tbl m = match lookupAssoc m tbl
 -- with the LLVM emitter so the dict-witness tag matches across backends + the
 -- route-key dispatch agrees.
 
--- the i31-safe dict-witness tag: hashName masked into the low 30 bits (positive
--- range of an i31).  The full djb2 hash is an i64 in the LLVM backend (an i64 dict
--- word); a WasmGC dict witness rides an i31 immediate (31 bits), so the raw hash
--- (e.g. hashName "Color" = 210671116836, a 38-bit value) overflows `i32.const`.
--- Masking to 30 bits keeps it a positive i32/i31 that `i31.get_s` reads back
--- unchanged, and — being applied identically at witness CREATION (routeWitness) and
--- at the dispatch COMPARISON (emitDispatchChain) — preserves the equality test.
--- (No bitwise primitive in the compiler subset; `% 2^30` is the mask.  Collisions
--- across 30-bit-equal tag names are astronomically unlikely for the small impl-tag
--- alphabet; the LLVM 64-bit scheme has the same theoretical collision shape.)
-dictTag : String -> Int
-dictTag s = posMod (hashName s) 1073741824
-
--- a non-negative remainder (Medaka `%` can be negative for a negative dividend; the
--- djb2 i64 accumulator can wrap negative).
-posMod : Int -> Int -> Int
-posMod n m = (n % m + m) % m
+-- `dictTag` (the i31-safe 30-bit mask of `hashName`) and its `posMod` helper moved
+-- to `backend.private_mangle`, beside `hashName`, in #377/#348: the emit-time
+-- collision guard (`core_ir_lower.dictWitnessTagGuard`) has to check THIS tag space
+-- with the SAME expression this emitter mints, and a second copy of the mask is a
+-- copy that can drift.  Imported at the top of this file; the emitted `i32.const`s
+-- are unchanged.
+--
+-- ⚠️ The comment that used to stand here called a 30-bit tag collision
+-- "astronomically unlikely for the small impl-tag alphabet" and the 64-bit LLVM
+-- scheme's the "same theoretical collision shape".  Both halves were wrong:
+-- colliding pre-images are CONSTRUCTIBLE in the full i64 (`hashName "Mzone" ==
+-- hashName "NYone"`), the mechanism is the radix-33 polynomial versus a 74-code-
+-- point alphabet rather than anything about how many tags a program has, and it
+-- was a live silent-wrong-dispatch S0 on both backends until the guard landed.
+-- See `private_mangle.hashName`'s note.
 
 -- ── ref-mode expression emitter — every result is a (ref eq) on the stack ────
 -- `d` is the current match/switch nesting DEPTH: a CDecision/CTSwitch stashes a

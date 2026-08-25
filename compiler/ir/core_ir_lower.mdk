@@ -65,8 +65,10 @@ import eval.eval.{
   headTyconHead,
 }
 import list.{replicate}
-import support.ordmap.{OrdMap, omEmpty, omInsert, omHasKey}
-import backend.private_mangle.{sanitizeId}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omHasKey, omLookup}
+-- `hashName`/`dictTag` are the two dict-witness tag mints, imported (not copied)
+-- so `dictWitnessTagGuard` checks the tag space the backends actually emit.
+import backend.private_mangle.{dictTag, hashName, injectiveIdent}
 import support.util.{
   contains,
   listLen,
@@ -567,6 +569,12 @@ lowerProgram prog =
 export
 lowerProgramEmit : List Decl -> CProgram
 lowerProgramEmit prog =
+  -- #1950: refuse a program whose impls collide on ONE emitted symbol, here rather
+  -- than letting clang report it unlocated.  Both backends reach this seam.
+  let _ = implSymbolCollisionGuard prog
+  -- #348/#377: refuse a program whose dict-witness TAGS collide under djb2, in
+  -- either backend's tag width.  Same seam, same reason.
+  let _ = dictWitnessTagGuard prog
   hoistNullaryMemo (rewriteProgramRecPats
     (declaredRecordFieldOrders prog)
     (lowerProgram prog))
@@ -962,12 +970,20 @@ allMemoKeysRef = Ref []
 -- the synthesized CAF binding name for a memoised (selector, method) instance.  The
 -- `$` prefix is the internal-binder convention (cf. composeVar `$cf`), so it cannot
 -- collide with a user/prelude binding; it flows verbatim into `@mdk_g_<name>`.  The
--- selector is sanitized (`sanitizeId`, the shared mangling helper): a C7 key carries
--- `|`/`(`/`)`/spaces, none legal in that global symbol.  A bare head tag is
--- alphanumeric so `sanitizeId` is the identity on it — every pre-#731 CAF name (all
--- unique-head) stays byte-identical, keeping the fixpoint fixed.
+-- selector is encoded with `private_mangle.injectiveIdent`, the shared emitted-
+-- identifier encoding: a C7 key carries `|`/`(`/`)`/spaces, none legal in that
+-- global symbol.  A bare head tag is alphanumeric, and `injectiveIdent` is the
+-- identity on such strings — every pre-#731 CAF name (all unique-head) stays
+-- byte-identical, keeping the fixpoint fixed.
+--
+-- ⚠️ It was `sanitizeId` until #1950, and that is a SECOND, independent instance of
+-- that bug, one symbol family over: `sanitizeId` is MANY-TO-ONE, so two impls whose
+-- C7 keys differ only in `[^A-Za-z0-9_]` positions were given ONE `$memo_` CAF —
+-- surfacing as a raw `invalid redefinition of function 'mdk_force_$memo_…'` from
+-- clang.  `implSymbolCollisionGuard` below never covered this family (its SCOPE is
+-- `mdk_impl_*`), so the encoder is the only thing keeping these names apart.
 memoBindName : String -> String -> String
-memoBindName selector method = "$memo_\{sanitizeId selector}_\{method}"
+memoBindName selector method = "$memo_\{injectiveIdent selector}_\{method}"
 
 recordMemoRef : String -> String -> Unit
 recordMemoRef tag method = memoRefsRef := (tag, method) :: !memoRefsRef
@@ -1322,6 +1338,338 @@ ifaceImplHeadEntries : Decl -> List (String, String, String, String)
 ifaceImplHeadEntries (DAttrib _ d) = ifaceImplHeadEntries d
 ifaceImplHeadEntries (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, ... }) = [(ifaceIdentity o ifaceName, ifaceName, fromOption noneHeadTag (headTyconHead typeArgs), implRouteKeyWord o ifaceName typeArgs None)]
 ifaceImplHeadEntries _ = []
+
+-- ── emitted impl-symbol collision guard (#1950) ───────────────────────────────
+-- An impl method is emitted as `mdk_impl_<symTag>_<method>`, where `symTag` is the
+-- bare head tag when that head is the SOLE impl of (method, head), and otherwise
+-- (TYPECHECK-AUDIT C7) the canonical dispatch key run through
+-- `private_mangle.injectiveIdent` — the SAME encoding both backends use
+-- (`llvm_emit.implFnSymTag`, `wasm_emit.implFnSymTagW`) and the one called here.
+--
+-- ⚠️ THIS GUARD IS NO LONGER FIREABLE FOR THE #1950 CLASS, BY CONSTRUCTION — AND IS
+-- KEPT ANYWAY.  It used to catch a real collision: both backends spelled the C7 key
+-- with the MANY-TO-ONE `sanitizeId` (everything outside [A-Za-z0-9_] → `_`), so two
+-- impls whose keys differed ONLY in those characters (`Sz|(Q A_B C)|` vs
+-- `Sz|(Q A B_C)|`) landed on ONE emitted symbol and reached the user as a RAW,
+-- UNLOCATED clang `invalid redefinition of function` (#1950).  `injectiveIdent`
+-- removed the collapse at its source, so no two distinct keys can reach one symbol
+-- through this arm any more.  What survives here is the ASSERTION — (method, tag,
+-- key) → symbol is injective — a real invariant of the emitted-symbol scheme that a
+-- future change to either backend's tag rule could otherwise break silently.  Its
+-- live surface is narrower than that invariant: see SCOPE below, in particular that
+-- it never covered #1397's identical-pre-image shape.  Anything it does print now
+-- describes a defect in the SCHEME, not a user naming mistake.
+--
+-- ⚠️ NOT BY SOURCE LINE, and that is a property of the pipeline, not of this site.
+-- MEASURED: every emit driver parses through `parser.parse` (`entry_support`'s
+-- `readAllDecls`/`driveModulesGo`) or `loader.loadProgram`, both of which use the
+-- PLACEHOLDER-LOC parser — only `parseLocated`/`parseLocatedResult` (the `check`
+-- and LSP paths) populate spans, and even those leave `Loc`'s `file` field "" for
+-- the caller to fill.  An earlier revision of this guard printed
+-- `firstTyLocList`'s answer and got `:1:0` for BOTH impls of the repro — a wrong
+-- location is worse than none, so the canonical dispatch key (which is
+-- `<module>::<Iface>|<type args>|`, i.e. exactly the impl's declared identity) is
+-- what the message names instead.  Giving the emit path real spans is a
+-- pipeline-wide change and is deliberately not attempted here.
+--
+-- Sited HERE, not in either backend, for the reason `private_mangle`'s own guard
+-- states for itself: `lowerProgramEmit` is the ONE seam every emit driver of BOTH
+-- backends funnels through (`llvm_emit_*_main`, `wasm_emit_*_main`, the playground,
+-- `tools/snapshot.mdk`, the dump probes), so one check serves all of them instead of
+-- a fifth and sixth per-backend copy of the collision predicate desyncing.  The rows
+-- are read off the DECLARATIONS — matched arm-for-arm with `lowerDeclImpl`, DAttrib
+-- unwrapping included (#1037) — because `CImplEntry` carries no source location and
+-- an unlocated refusal would only trade one unlocated message for another.
+-- Enumerating `methods` gives exactly the (method, tag, key) triples
+-- `lowerImplMethod` mints for the same `prog`, so the domain is the entry set, not
+-- an approximation of it.
+--
+-- SCOPE — stated out loud, because a partial check cited as a total one is how this
+-- bug class survives:
+--   * covers TAGGED IMPL METHOD symbols only.  Interface DEFAULTS
+--     (`mdk_default_<method>_<injectiveIdent tag>`), the per-instance `$memo_` CAFs
+--     (`memoBindName`) and emitter-gensym'd lambdas/etas are minted elsewhere and
+--     are NOT checked here.
+--   * it is a check on DISTINCT PRE-IMAGES.  Rows are deduplicated by
+--     (method, head tag, canonical key) FIRST, so two impls that are already
+--     IDENTICAL in that triple pass through silently — that is #1397's shape (two
+--     modules each declaring a same-spelled type, whose head identity is discarded
+--     upstream at `route_key.rkTy`), and no discriminator for it exists in anything
+--     lowering can see.  #1397 is NOT covered and is not made safe by this guard.
+--   * it is likewise NOT a duplicate-clause check: a legitimate multi-clause impl
+--     contributes several rows sharing ONE key, and the joint prelude+module decl
+--     list duplicates each prelude impl.  Both collapse in the dedup and can never
+--     fire this.
+--   * it observes the symbol the backends are about to mint; it does not change the
+--     mangling scheme.  Every collision-free program emits byte-identical IR.
+implSymbolCollisionGuard : List Decl -> Unit
+implSymbolCollisionGuard prog =
+  let rows = dedupImplSymRows (flatMap implSymRowsOf prog) omEmpty
+  checkImplSymbolsInjective (collidingHeads rows omEmpty omEmpty) rows omEmpty
+
+-- one row per lowered impl-method clause: (method, head tag, canonical key).
+-- Matched arm-for-arm with `lowerDeclImpl` — same DAttrib unwrap, same `methods`
+-- traversal, and the tag/key computed by the SAME two expressions `lowerImplMethod`
+-- uses, so the two cannot drift apart on a program.
+implSymRowsOf : Decl -> List (String, String, String)
+implSymRowsOf (DAttrib _ d) = implSymRowsOf d
+implSymRowsOf (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) = map (implSymRow (fromOption noneHeadTag (headTyconHead typeArgs)) (implRouteKeyWord o ifaceName typeArgs None)) methods
+implSymRowsOf _ = []
+
+implSymRow : String -> String -> ImplMethod -> (String, String, String)
+implSymRow tag key (ImplMethod mname _ _) = (mname, tag, key)
+
+-- distinct pre-images, first arrival wins.  This is what keeps #1397's shape and
+-- every multi-clause impl out of the check — see the SCOPE paragraph above.
+dedupImplSymRows : List (String, String, String) -> OrdMap Unit -> List (String, String, String)
+dedupImplSymRows [] _ = []
+dedupImplSymRows ((m, tag, key)::rest) seen
+  | omHasKey (implPreImageKey m tag key) seen = dedupImplSymRows rest seen
+  | otherwise = (m, tag, key) :: dedupImplSymRows rest (omInsert (implPreImageKey m tag key) () seen)
+
+-- `\n` cannot occur in a method name, a head tag or a route word, so this is an
+-- injective rendering of the triple and safe as a set key.
+implPreImageKey : String -> String -> String -> String
+implPreImageKey m tag key = "\{m}\n\{tag}\n\{key}"
+
+-- the (method, head tag) pairs carrying ≥2 DISTINCT canonical keys — i.e. exactly
+-- the pairs `headTagUnique`/`headTagUniqueW` answer False for, so exactly the ones
+-- whose symbols take the sanitized-key arm.  Computed ONCE, in O(n log n) through the
+-- weight-balanced tree, rather than re-scanned per row: the emitters can afford the
+-- linear `distinctKeysAtHead` count because they call it per METHOD BUCKET (#990),
+-- and this guard sees the whole program at once.
+collidingHeads : List (String, String, String) -> OrdMap String -> OrdMap Unit -> OrdMap Unit
+collidingHeads [] _ acc = acc
+collidingHeads ((m, tag, key)::rest) firstKey acc = match omLookup (implHeadKey m tag) firstKey
+  None => collidingHeads rest (omInsert (implHeadKey m tag) key firstKey) acc
+  Some k0 =>
+    if k0 == key then
+      collidingHeads rest firstKey acc
+    else
+      collidingHeads rest firstKey (omInsert (implHeadKey m tag) () acc)
+
+implHeadKey : String -> String -> String
+implHeadKey m tag = "\{m}\n\{tag}"
+
+-- injectivity of (method, tag, key) -> emitted symbol, one pass, O(n log n) through
+-- the same weight-balanced tree `private_mangle`'s guard uses.  Rows are already
+-- distinct pre-images, so ANY second arrival at one symbol is a genuine collision.
+--
+-- ⚠️ The three data lines are UNINDENTED on purpose: they are CONTENT-derived (the
+-- symbol and the two dispatch keys), so a `stdout-line` pin can match them with
+-- `grep -qxF` against a whitespace-stripped claim value without false-draining on a
+-- rewording of the prose around them.  Keep them flush-left if this message is ever
+-- pinned again.
+checkImplSymbolsInjective : OrdMap Unit -> List (String, String, String) -> OrdMap String -> Unit
+checkImplSymbolsInjective _ [] _ = ()
+checkImplSymbolsInjective collide ((m, tag, key)::rest) seen =
+  let sym = "mdk_impl_\{implSymTagOf collide m tag key}_\{m}"
+  match omLookup sym seen
+    None => checkImplSymbolsInjective collide rest (omInsert sym key seen)
+    Some prev => panic "emitted impl-symbol collision: two DISTINCT impls of method `\{m}` are emitted under one symbol.\ncollided symbol: \{sym}\nimpl 1 key: \{prev}\nimpl 2 key: \{key}\nTwo distinct impls cannot share one emitted symbol: the backend would define one body twice (the native link fails) or keep one and silently drop the other. The two keys above are the impls' canonical dispatch keys, spelled `<module>::<Interface>|<type arguments>|`. Since #1950 those keys are spelled into the symbol by `private_mangle.injectiveIdent`, which is INJECTIVE, so this is NOT a naming mistake you can rename your way out of -- it means the emitted-symbol scheme itself lost injectivity. Please report this message, with both keys above."
+
+-- the SYMBOL tag this row is emitted under — the bare head when it is the sole impl
+-- of (method, head), else the injectively encoded canonical key.  Mirror of
+-- `llvm_emit.implFnSymTag` / `wasm_emit.implFnSymTagW`, over declaration rows: it
+-- MUST call the same `injectiveIdent` they do, or the guard and the backends
+-- disagree about what symbol was actually emitted.
+implSymTagOf : OrdMap Unit -> String -> String -> String -> String
+implSymTagOf collide method tag key =
+  if omHasKey (implHeadKey method tag) collide then
+    injectiveIdent key
+  else
+    tag
+
+-- ── dict-witness TAG injectivity — #348 (native i64), #377 (wasm 30-bit) ──────
+--
+-- A DIFFERENT failure mode from `implSymbolCollisionGuard` above, in a different
+-- space, and no encoding choice can prevent it.  That guard covers the SYMBOL
+-- space, where the collapse was `sanitizeId` being many-to-one and the fix was to
+-- spell the key injectively (#1950).  This one covers the DICT-WITNESS TAG space,
+-- where the map is `hashName` — a HASH.  A hash is a lossy map from an unbounded
+-- domain to a fixed width by construction, so there is no injective spelling to
+-- switch to: the only available discharge is to CHECK, at emit time, that the
+-- program's own pre-images do not happen to collide, and refuse if they do.
+--
+-- 🚨 This is not a theoretical shape, and the estimate it replaces was wrong in
+-- both directions.  `wasm_emit.dictTag`'s own comment used to call a collision
+-- "astronomically unlikely for the small impl-tag alphabet" and the native 64-bit
+-- scheme's the "same THEORETICAL collision shape".  Colliding pre-images are
+-- CONSTRUCTIBLE, in the FULL i64, with no masking and no search: djb2 is the
+-- radix-33 polynomial `5381*33^n + Σ c_i*33^i`, and the identifier alphabet spans
+-- 74 code points (`0` = 48 … `z` = 122) — WIDER than the radix — so
+-- `Δ_{i+1} = +1, Δ_i = −33` at two ADJACENT positions is an exact zero.  Every
+-- `(X, c)` / `(X+1, chr(ord c − 33))` adjacent pair collides: `Az`/`BY`,
+-- `Azure`/`BYure`, `Mzone`/`NYone`.  MEASURED on the pre-guard binary, two impls of
+-- one interface at head tycons `Mzone` and `NYone`, dispatched through a dict
+-- parameter: `medaka build` answered `mzone|mzone` at exit 0 with no diagnostic,
+-- where `medaka run` (the interpreter oracle) answered `mzone|nyone`.  Both head
+-- tags hashed to 210683374574, so the shared dispatcher emitted the SAME
+-- `icmp eq i64 %headTag, 210683374574` for both arms and the first arm won every
+-- call.  The collision has nothing to do with how many tags a program has, and
+-- nothing to do with the mask width — widening the tag would not remove it.
+--
+-- Sited HERE for the same reason `implSymbolCollisionGuard` is: `lowerProgramEmit`
+-- is the ONE seam every emit driver of BOTH backends funnels through, so one check
+-- serves LLVM and WasmGC instead of two per-backend copies of the predicate
+-- desyncing.  Both hashes are imported from `backend.private_mangle` — the SAME
+-- `hashName` the LLVM emitter stamps into `emitDictCell`/`emitRouteWordMatch` and
+-- the SAME `dictTag` the wasm emitter stamps into `routeWitness`/
+-- `emitDispatchChain` — because a guard with its own copy of the hash certifies a
+-- property of the copy, not of what shipped.
+--
+-- The pre-image population IS enumerable at this seam.  A dict witness is
+-- `hashName key` / `dictTag key` where `key` is the route word a module's typecheck
+-- stamped, and `llvm_emit.implEntryRouteWords` states which words those can be: for
+-- each declared impl, EITHER its bare head tag (when the stamping module sees no
+-- collision at that head) OR its canonical dispatch key (when it does) — the
+-- emitter deliberately accepts the union because which one arrives depends on the
+-- CALLER's imports.  So the space is exactly `{head tag, canonical key}` over the
+-- declarations, which this reads off `DImpl` with the same two expressions
+-- `ifaceImplHeadEntries` and `implSymRowsOf` use (DAttrib unwrap included), and
+-- `noneHeadTag` for the general-instance dict header.  That is the entry set, not
+-- an approximation of it.
+--
+-- SCOPE — stated out loud, because a partial check cited as a total one is how this
+-- bug class survives:
+--   * partitioned by METHOD NAME.  The emitted dispatcher only ever compares route
+--     words WITHIN one method name's dispatch chain (`llvm_emit.emitDispatchBody`'s
+--     candidate set is `implsOf e name`, a method-name lookup), so two impls of
+--     UNRELATED methods whose route words happen to hash alike are never actually
+--     compared at runtime — refusing them would be a false positive.  The OLD code
+--     here pooled every impl's route words PROGRAM-WIDE, prelude and stdlib
+--     included, into one injectivity check spanning every method name at once; that
+--     is what let an unrelated prelude impl's route word (e.g. `Int`'s, for a
+--     completely different method) reject an otherwise-correct single-type,
+--     single-interface program.  Do not reintroduce program-wide pooling here.
+--   * covers the DICT-WITNESS TAG space of both backends, and nothing else.  The
+--     native CONSTRUCTOR/record cell headers are NOT in it and are not made safe
+--     here: since the ordinal rep was ratified they are `llvm_emit.cellTag`'s
+--     composite `(typeId, ordinal)`, not a hash, and only the three fixed sentinels
+--     `$tuple`/`$ref`/`$closure` still carry `hashName` — a fixed three-element,
+--     program-independent set.  `llvm_emit`'s own comment marks that boundary
+--     ("Same shape, different NAMESPACES — merging them would silently cross
+--     dict-word and ctor-tag hashing"), and it is why widening this guard to cell
+--     headers would be checking a union that is never compared as one.
+--   * covers the WASM SYMBOL namespaces (`gname`) NOT AT ALL — see #378.  Those
+--     names are not observable here: the wasm local/global identifier sets are
+--     MINTED during wasm-specific lowering (`synthParams`' `$__wparg<n>`,
+--     `scratchLocals`' `$__rf<d>`, lifted-lambda and wrapper params), not carried by
+--     the declaration list this seam sees, so there is no enumerable population to
+--     check at this site.  Deliberately not forced into a shared site that does not
+--     fit; measurement and the site it WOULD need are in the slice report.
+--   * it is a check on DISTINCT PRE-IMAGES that belong to DIFFERENT impls.  Two
+--     words of ONE impl (its head tag and its own canonical key) are allowed to
+--     hash alike: the dispatcher tests both in one `dedupS`'d OR-chain for that same
+--     impl, so either match selects the same body and nothing is lost.
+--   * it observes the tag the backends are about to mint; it does not change the
+--     tag scheme.  Every collision-free program emits byte-identical IR and WAT.
+--   * ⚠️ the WASM pass OVER-APPROXIMATES for native-only builds, deliberately.  This
+--     seam is shared and carries no backend discriminator (`lowerProgramEmit` has
+--     ~14 callers across `entries/`, the playground and `tools/snapshot`, none of
+--     which pass a target), so a pair that collides ONLY in the 30-bit width — full
+--     i64 hashes distinct — refuses `medaka build` as well, though native codegen
+--     for it would have been correct.  Taken in the loud direction on purpose: the
+--     alternative is a silent wrong dispatch under `--target wasm`, and the message
+--     says which width collided so the refusal is not mistaken for a native defect.
+--     Threading a target through those callers is the change that would narrow it,
+--     and it is bigger than this guard.
+dictWitnessTagGuard : List Decl -> Unit
+dictWitnessTagGuard prog =
+  let implRows = flatMap dictRouteWordsOf prog
+  -- the reserved `noneHeadTag` self-pair is seeded PER METHOD NAME that actually
+  -- has a row, not once program-wide: a general instance's runtime dict header is
+  -- `hashName noneHeadTag` for THAT method's dispatch chain (see the SCOPE note
+  -- above), so the reservation only matters within the method it could actually be
+  -- compared in.
+  let sentinelRows = map (m => (m, noneHeadTag, noneHeadTag)) (distinctMethodNamesOf implRows omEmpty)
+  let rows = dedupRouteWords (sentinelRows ++ implRows) omEmpty
+  -- native FIRST: a full-width `hashName` collision is also a `dictTag` collision
+  -- (masking cannot separate equal values), so reporting it in the i64 space names
+  -- the wider defect.  The 30-bit pass then catches what only the MASK conflates.
+  let _ = checkDictTagsInjective nativeDictTagSpace hashName rows omEmpty
+  checkDictTagsInjective wasmDictTagSpace dictTag rows omEmpty
+
+-- distinct method names appearing in a row list, first-arrival order — used only to
+-- scope the `noneHeadTag` sentinel per method (see `dictWitnessTagGuard`).
+distinctMethodNamesOf : List (String, String, String) -> OrdMap Unit -> List String
+distinctMethodNamesOf [] _ = []
+distinctMethodNamesOf ((m, _, _)::rest) seen
+  | omHasKey m seen = distinctMethodNamesOf rest seen
+  | otherwise = m :: distinctMethodNamesOf rest (omInsert m () seen)
+
+nativeDictTagSpace : String
+nativeDictTagSpace = "native (LLVM) i64 dict-witness word `hashName` -- BOTH backends, since the wasm tag is this hash masked"
+
+-- ⚠️ Names the OVER-APPROXIMATION out loud.  This seam has no backend
+-- discriminator (see the SCOPE note on `dictWitnessTagGuard`), so a collision that
+-- exists only in the 30-bit width refuses the NATIVE build too, even though the
+-- native i64 tags are distinct and native codegen would have been correct.  That is
+-- the deliberate direction: a loud refusal on a rare program beats a silent wrong
+-- dispatch under `--target wasm`, and the fix (rename one type) clears both.
+wasmDictTagSpace : String
+wasmDictTagSpace = "wasm (WasmGC) 30-bit i31 dict tag `dictTag` (`hashName` masked to the low 30 bits) -- the full i64 tags are DISTINCT, so native codegen would be correct here and this refusal over-approximates; it is refused anyway because this seam serves both backends"
+
+-- every route word a dict witness for this impl can carry, paired with the impl's
+-- own identity (its canonical dispatch key, which is unique per declared impl) and
+-- the METHOD NAME that route word's dispatch chain is keyed by — the same grouping
+-- key `llvm_emit.implsOf`/`dispFnName` use to decide what a real dispatch chain
+-- compares.  The pairing is what keeps an impl's own two words from grading as a
+-- collision against each other — see the SCOPE paragraph.  Mirrors
+-- `implSymRowsOf`'s per-`ImplMethod` walk: one row-pair per method clause, not one
+-- row-pair per `DImpl`.
+dictRouteWordsOf : Decl -> List (String, String, String)
+dictRouteWordsOf (DAttrib _ d) = dictRouteWordsOf d
+dictRouteWordsOf (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
+  let key = implRouteKeyWord o ifaceName typeArgs None
+  let tag = fromOption noneHeadTag (headTyconHead typeArgs)
+  flatMap (dictRouteWordRowsFor tag key) methods
+dictRouteWordsOf _ = []
+
+dictRouteWordRowsFor : String -> String -> ImplMethod -> List (String, String, String)
+dictRouteWordRowsFor tag key (ImplMethod mname _ _) =
+  [(mname, tag, key), (mname, key, key)]
+
+-- distinct pre-images, first arrival wins, keyed by (method, word) so two DIFFERENT
+-- methods' identical word never spuriously dedup against each other (mirrors
+-- `implPreImageKey`'s `"\{a}\n\{b}"` compound-key shape).  The joint
+-- prelude+module decl list duplicates each prelude impl and a multi-clause impl
+-- contributes one row per clause; both still collapse here and can never fire the
+-- check.
+dedupRouteWords : List (String, String, String) -> OrdMap Unit -> List (String, String, String)
+dedupRouteWords [] _ = []
+dedupRouteWords ((m, w, owner)::rest) seen
+  | omHasKey (dictRouteWordKey m w) seen = dedupRouteWords rest seen
+  | otherwise = (m, w, owner) :: dedupRouteWords rest (omInsert (dictRouteWordKey m w) () seen)
+
+dictRouteWordKey : String -> String -> String
+dictRouteWordKey m w = "\{m}\n\{w}"
+
+-- injectivity of route word -> emitted tag, one pass per space, O(n log n) through
+-- the same weight-balanced tree the two guards above use.  `hash` is passed in so
+-- the native and wasm passes are ONE predicate over two widths rather than two
+-- copies that can disagree about what a collision is.  The map key is
+-- METHOD-NAME-SCOPED (`"\{mname}\n\{intToString (hash w)}"`) so injectivity is
+-- checked WITHIN one method name's population only — the same partition
+-- `dictRouteWordsOf`/`dedupRouteWords` build, and the same grouping key
+-- `implsOf`/`dispFnName` use to decide what a real dispatch chain compares.
+--
+-- ⚠️ The four data lines are UNINDENTED on purpose, for the same reason
+-- `checkImplSymbolsInjective`'s three are: they are CONTENT-derived, so a
+-- `stdout-line` pin can match them with `grep -qxF` without false-draining on a
+-- rewording of the prose around them.
+checkDictTagsInjective : String -> (String -> Int) -> List (String, String, String) -> OrdMap (String, String) -> Unit
+checkDictTagsInjective _ _ [] _ = ()
+checkDictTagsInjective space hash ((m, w, owner)::rest) seen =
+  let t = intToString (hash w)
+  let k = "\{m}\n\{t}"
+  match omLookup k seen
+    None => checkDictTagsInjective space hash rest (omInsert k (w, owner) seen)
+    Some (w0, owner0) =>
+      if owner0 == owner then
+        checkDictTagsInjective space hash rest seen
+      else
+        panic "emitted dict-witness tag collision: two DISTINCT impls of method `\{m}` hash to one dispatch tag.\ntag space: \{space}\ncollided tag: \{t}\nroute word 1: \{w0}\nroute word 2: \{w}\nA dict witness carries this tag, and method `\{m}`'s shared dispatcher selects an impl by comparing it against every OTHER impl of that SAME method name -- these two words ARE compared against each other at that dispatcher, so this collision is live: whichever arm the emitter happened to emit FIRST wins every call through a dictionary, silently, at exit 0. The two words above are the impls' route words: either a bare head tycon or a canonical dispatch key spelled `<module>::<Interface>|<type arguments>|`. This is NOT a naming collision you can rename your way out of by making the names more different -- `hashName` is djb2, a radix-33 polynomial over a 74-code-point alphabet, so it is genuinely non-injective (`hashName \"Az\" == hashName \"BY\"`). One of the two words above may name a type or interface from the prelude or stdlib that you do not own -- rename the OTHER one, one of your own types or interfaces involved in this collision. Please also report this message, with both words above."
 
 -- #1047: the interface IDENTITIES of every declared impl whose head tag OR
 -- canonical key is [tag] — the reverse of `ifaceImplRouteKeys`.  The emitters'
