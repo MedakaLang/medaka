@@ -1,0 +1,189 @@
+name: 'Setup medaka'
+description: >-
+  Install the clang/libgc toolchain (optionally + sqlite3, the oracle for the
+  sqlite/*.sh gates), optionally install the Node + wasm-tools wasm-arm
+  toolchain, and optionally put a ./medaka + ./medaka_emitter in place — either
+  by cold-bootstrapping from the checked-in seed (`binary: build`) or by
+  downloading the one the run's `build:` job already made (`binary: artifact`,
+  #1928). Local composite action — the caller must already have
+  checked out the repo (`actions/checkout@v4` stays inline in every job; a
+  local composite action needs the repo present before it can run, so it
+  cannot own checkout itself).
+  #1936: collapses the copy-pasted toolchain / wasm-tools / version-pin
+  sequence that used to live at eleven step sites across ci.yml plus its own
+  set in nightly.yml into this one file. WASM_TOOLS_VERSION / WASM_NODE_VERSION
+  now have exactly ONE definition tree-wide: the two input defaults below.
+
+inputs:
+  sqlite:
+    description: >-
+      'true' to also install sqlite3 — the oracle for the 22 sqlite/*.sh
+      gates. Installed unconditionally by the `gates` job (every shard, not
+      just the `sqlite` one — see that call site for why); every other job
+      leaves this 'false'.
+    required: false
+    default: 'false'
+  wasm:
+    description: >-
+      'true' to install the wasm arm toolchain: Node (wasm-node-version) via
+      actions/setup-node, then the pinned wasm-tools release
+      (wasm-tools-version), extracted OUTSIDE the checkout so it can never
+      leave an untracked file behind for a shard's `git status --porcelain`
+      drift check to trip on.
+    required: false
+    default: 'false'
+  binary:
+    description: >-
+      What to produce after the toolchain is installed.
+      'build' runs `make medaka` (cold bootstrap from
+      compiler/seed/emitter.ll.gz) — used by ci.yml's single `build:` job and
+      by nightly.yml.
+      'artifact' downloads that `build:` job's already-built ./medaka +
+      ./medaka_emitter + .medaka_emitter.srcstamp into the repo root instead of
+      rebuilding them (#1928); valid ONLY for a job in the SAME workflow run as
+      that `build:` job — see the step below for the invariant that makes the
+      stamp safe to transport.
+      Empty installs the toolchain only.
+    required: false
+    default: ''
+  artifact-name:
+    description: >-
+      Name of the artifact `binary: artifact` downloads. Must match the name
+      ci.yml's `build:` job uploads under; one definition per side, never
+      hand-written at a call site.
+    required: false
+    default: 'medaka-binaries'
+  wasm-tools-version:
+    description: >-
+      wasm-tools release to install when `wasm` is true. NB: `ops/provision.sh`
+      has its own SEPARATE `WT_VER` pin for the same tool, for provisioning a
+      dev box rather than CI — bump both together or they will silently drift.
+    required: false
+    default: '1.219.1'
+  wasm-node-version:
+    description: 'Node.js version to install when `wasm` is true.'
+    required: false
+    default: '24'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install toolchain
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        if [ "${{ inputs.sqlite }}" = "true" ]; then
+          sudo apt-get install -y clang libgc-dev sqlite3
+        else
+          sudo apt-get install -y clang libgc-dev
+        fi
+
+    - name: Set up Node.js ${{ inputs.wasm-node-version }} (wasm arm)
+      if: inputs.wasm == 'true'
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.wasm-node-version }}
+
+    - name: Install wasm-tools (wasm arm)
+      if: inputs.wasm == 'true'
+      shell: bash
+      env:
+        WASM_TOOLS_VERSION: ${{ inputs.wasm-tools-version }}
+      run: |
+        set -eu
+        v="$WASM_TOOLS_VERSION"
+        url="https://github.com/bytecodealliance/wasm-tools/releases/download/v${v}/wasm-tools-${v}-x86_64-linux.tar.gz"
+        # Extract OUTSIDE the checkout. `tar xz` in the workspace leaves
+        # `wasm-tools-${v}-x86_64-linux/` behind after the binary is moved out, and the
+        # gates shards end with a review gate (`git status --porcelain`) that FAILS on any
+        # untracked file — so unpacking here turns a toolchain install into a red shard.
+        d="$(mktemp -d)"
+        curl -sSfL "$url" | tar xz -C "$d"
+        sudo mv "$d/wasm-tools-${v}-x86_64-linux/wasm-tools" /usr/local/bin/wasm-tools
+        rm -rf "$d"
+        wasm-tools --version
+
+    - name: Build medaka (cold bootstrap from seed)
+      if: inputs.binary == 'build'
+      shell: bash
+      run: make medaka
+
+    # ── #1928: take what the `build:` job already built; do not rebuild it ───────
+    #
+    # `make medaka` is byte-identical work in every job that runs it at one SHA, and
+    # it was running in TEN of them (~27% of all CI job-seconds). It now runs once,
+    # in ci.yml's `build:` job; everyone else takes this arm.
+    #
+    # ⚠️ `.medaka_emitter.srcstamp` TRAVELS WITH THE BINARIES. That is deliberate and
+    # load-bearing — read this before copying the pattern anywhere else.
+    #
+    # The stamp is gitignored ON PURPOSE (.gitignore, and the long `SRC_STAMP` comment
+    # in test/build_native_medaka.sh): an emitter that arrives WITHOUT one is of
+    # unknown provenance, and stage A rebuilds it from current source. That guard
+    # exists because `cp <other-tree>/medaka_emitter .` gives a stale binary a FRESH
+    # mtime — an actively inverted signal. An artifact download is literally the
+    # "copied in from another tree" case the guard was written to catch.
+    #
+    # THE INVARIANT THAT MAKES SHIPPING IT SAFE HERE, and it is the only one:
+    # producer and consumer are the SAME CHECKOUT AT THE SAME SHA WITHIN ONE WORKFLOW
+    # RUN. Both ran `actions/checkout@v4` on `github.sha`, so the compiler/**.mdk +
+    # runtime/*.c fingerprint the stamp records is EQUAL BY CONSTRUCTION to the one
+    # recomputed here — provenance is not being taken on faith. The step below asserts
+    # it rather than assuming it, so a future edit that breaks the invariant goes red
+    # here instead of silently running a stale compiler in every gate.
+    #
+    # That invariant does NOT hold across runs. Never restore this artifact into a
+    # different-SHA checkout (a loosely-keyed cache, a `workflow_run` consumer, a
+    # manual re-download): the stamp would vouch for source the binary was not built
+    # from, stage A would skip, and every consumer would silently run a stale
+    # compiler. In that shape, drop the stamp and let stage A rebuild.
+    #
+    # Omitting the stamp HERE, conversely, silently eats the entire win: every
+    # consumer re-runs stage A (a full self-emit + clang) and we have bought nothing.
+    - name: Download medaka (built once by the `build` job)
+      if: inputs.binary == 'artifact'
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: .
+
+    - name: Restore executable bits and prove the downloaded binary is not stale
+      if: inputs.binary == 'artifact'
+      shell: bash
+      run: |
+        set -eu
+        # upload-artifact preserves the executable bit; assert it anyway, because a
+        # non-executable ./medaka surfaces as a baffling "not found"-shaped failure
+        # deep inside a gate rather than here.
+        chmod +x ./medaka ./medaka_emitter
+        ls -l ./medaka ./medaka_emitter .medaka_emitter.srcstamp
+
+        # MEDAKA_STRICT=1 turns ./medaka's baked-fingerprint-vs-disk staleness check
+        # from a STDERR-ONLY warning into exit 1 (AGENTS.md [B-STALENESS]/[B-STDERR]):
+        # a binary that did NOT come from this checkout's source fails right here,
+        # loudly, instead of answering wrong in a gate twenty minutes later.
+        printf 'main = println 1928\n' > "$RUNNER_TEMP/artifact_probe.mdk"
+        MEDAKA_STRICT=1 ./medaka run "$RUNNER_TEMP/artifact_probe.mdk"
+
+        # ...and the EMITTER's provenance stamp must equal what stage A would compute
+        # from THIS tree. Mirrors src_fingerprint_full() in
+        # test/build_native_medaka.sh (compiler/**.mdk + runtime/*.c, names AND
+        # contents, repo-relative, LC_ALL=C sorted). This is NOT the source of the
+        # safety guarantee — the same-SHA checkout invariant above already makes the
+        # ENTIRE tree identical between producer and consumer (Makefile, stdlib/*,
+        # everything, not just this subset). This check is a narrower, defense-in-depth
+        # ASSERTION of the one subset that matters for the emitter's own
+        # self-consistency, proving the mechanism most likely to silently break (an
+        # emitter that predates a parser change, or was copied in from elsewhere)
+        # hasn't.
+        stamped="$(cat .medaka_emitter.srcstamp)"
+        live="$( { find compiler -name '*.mdk' -print; find runtime -name '*.c' -print; } \
+                 | LC_ALL=C sort \
+                 | while IFS= read -r f; do printf '%s\n' "$f"; cat "$f"; done \
+                 | sha256sum | cut -d' ' -f1 )"
+        if [ "$stamped" != "$live" ]; then
+          echo "::error::.medaka_emitter.srcstamp ($stamped) does not describe this checkout ($live)."
+          echo "::error::The same-SHA invariant this artifact relies on is BROKEN — see the comment in .github/actions/setup-medaka/action.yml."
+          exit 1
+        fi
+        echo "artifact provenance OK: emitter stamp matches this checkout ($stamped)"

@@ -12,6 +12,9 @@ _build/
 /.medaka_emitter.srcstamp
 # build_native_medaka.sh output (the native OCaml-free `medaka` CLI binary)
 /medaka
+# Provenance stamp for ./medaka itself (compiler-source fingerprint). Same rationale
+# as /.medaka_emitter.srcstamp above; read by SKIP_CLI_LINK_IF_FRESH=1 only.
+/.medaka.srcstamp
 
 # Native gate oracles (built by test/build_oracles.sh)
 /test/bin/

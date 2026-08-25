@@ -1,108 +1,67 @@
 name: CI
 
 # GitHub-HOSTED runners. Free and unlimited for public repositories, 20 concurrent
-# jobs on the Free plan.
-#
-# ── Why there is no shared "build" job ──────────────────────────────────────────
-# The obvious shape — build once, upload an artifact, fan out — was tried and is
-# WRONG here. Measured on a hosted runner:
-#
-#     Install toolchain .................  13s
-#     make medaka (cold, from seed) .....  80s     <- fine
-#     FORCE=1 build_oracles.sh .......... 18+ min  <- 93% of the job, and climbing
-#
-# `build_oracles.sh` compiles 54 probe binaries (54 × `medaka build` + clang). On
-# the 12-core dev box that is ~34s; on a small hosted runner it dominates
-# everything and blows the timeout. Caching it would only help when the compiler is
-# untouched — which is exactly never, for compiler work.
-#
-# The fix: NO GATE NEEDS ALL 54. A gate names its oracle as `test/bin/<name>`, so
-# `build_oracles.sh --for '<gate-pattern>'` derives the set straight from the gate
-# scripts. Per shard: engines 2, frontend 14, types 10, eval 19, backend 6, tools 6.
-# So each shard builds its own handful CONCURRENTLY with the others — the critical
-# path drops from 54-serial to 19-parallel, and the artifact plumbing disappears.
-#
-# `test/preflight.sh` uses the SAME derivation, so an agent touching the parser
-# builds 9 oracles locally instead of 54. One source of truth, two consumers.
-#
-# ── Why the drift check is inside each shard ────────────────────────────────────
-# It cannot be a separate job: a fresh checkout in a fresh VM would never see drift
-# caused by gates that ran somewhere else. It has to run in the same working tree,
-# right after the gates.
-#
-# NOTE: this repo previously used a self-hosted runner on the dev box. It was
-# removed before going public — a fork PR on a PUBLIC repo with a self-hosted runner
+# jobs on the Free plan. No self-hosted runner — a fork PR on a public repo with one
 # is arbitrary code execution on the runner host. Do not reintroduce one.
 #
-# ── Why the Medaka binary is not cached (#111) ──────────────────────────
+# ── Oracles build per shard; the binary builds once ─────────────────────────────
+# Two different questions. ORACLES: no gate needs all 54, so each shard builds only
+# the handful its own gates read (`build_oracles.sh --for '<pattern>'`, the same
+# derivation `test/preflight.sh` uses locally). THE BINARY (`build:` job, #1928): a
+# pure function of the checkout, so it builds exactly once and the other jobs
+# download it — never rebuilt per shard. History/measurements: dossier `ci.md`.
 #
-# `./medaka` and `./medaka_emitter` depend on the compiler, stdlib, runtime, and
-# build scripts. Those are exactly the files changed by every non-docs compiler
-# PR, while docs-only PRs skip these jobs. An exact, correctness-safe cache key
-# therefore cannot hit on the runs that need the binaries; the former cache only
-# added restore/save work. A seed-only cache is not useful either: measured on the
-# dev box, compiling the immutable seed is 1.6s of a 30.1s cold bootstrap; the
-# remaining 28.3s depends on current source. Keep the cold builds parallel.
+# The drift check (`git diff --exit-code` after the gates run) lives INSIDE each
+# shard, not as a separate job — a fresh checkout in a fresh VM would never see
+# drift caused by gates that ran somewhere else.
 #
-# Per-shard `test/bin/*` oracle caches remain below. Their exact keys are useful
-# on repeated runs and must cover every artifact input; never add a partial
+# ── Why the Medaka binary is not cached across runs (#111) ──────────────────────
+# `./medaka`/`./medaka_emitter` depend on files that change on every non-docs
+# compiler PR, so a correctness-safe cache key can never hit on the runs that need
+# it. This is about cross-run CACHING and is unrelated to the `build:` job above,
+# which is intra-run transport at a fixed SHA — no key, no cross-SHA restore.
+# Per-shard `test/bin/*` oracle caches remain below; never add a partial
 # `restore-keys` fallback, which would turn stale oracles into plausible greens.
 #
-# ── The PR run is NARROWED. The merge_group run is NOT. (T-15, 2026-07-14) ─────
+# ── The PR run is NARROWED. The merge_group run is NOT. (T-15) ─────────────────
+# `pull_request`: each `gates (…)` shard runs only the intersection of its pattern
+# with the gate set `detect` derives from the diff. `merge_group` and `push`: every
+# shard runs its full pattern, unconditionally, always.
 #
-# Every PR used to pay for the whole suite TWICE — once on `pull_request`, once on the
-# `merge_group` branch when the queue tests it merged onto main. GitHub's queue creates
-# one temp branch per entry and cannot combine builds, so the merge_group run is a FIXED
-# cost. We are runner-bound (jobs wait 40-105s for a runner; 20 concurrent, ~11 per run),
-# so the duplicate is what saturates us. The PR half is the half we can shrink.
+# ⚠️ NEVER NARROW `merge_group`, AND NEVER NARROW `soundness`. The queue's whole
+# value is testing the MERGED result — two independently-green branches have
+# auto-merged into a broken tree with zero git conflicts more than once, and no
+# per-PR check can see that. `soundness` is the backstop for a different hole: all
+# gate shards pass on an ill-typed compiler (`make medaka` does not gate on type
+# errors). Both stay full, on every event, forever. Narrowing fails SAFE in every
+# direction (preflight erroring, reporting whole-suite blast radius, or having no
+# opinion about a changed path all widen back to everything) — see the `gateset`
+# step. Incident history: dossier `ci.md`.
 #
-#   pull_request  -> each `gates (…)` shard runs only the intersection of ITS pattern
-#                    with the gate set `detect` derives from the diff (via
-#                    `PREFLIGHT_DRY=1 test/preflight.sh` — the SAME derivation agents run
-#                    locally, not a second copy of it).
-#   merge_group   -> every shard runs its FULL pattern. UNCHANGED. Always.
-#   push to main  -> ditto.
-#
-# ⚠️ NEVER NARROW `merge_group`, AND NEVER NARROW `soundness`.
-#
-# The queue's whole value is that it tests the MERGED RESULT. Three times in one day, two
-# independently-green branches auto-merged with ZERO git conflicts into a broken tree (a
-# derivation scanning a universe the other branch had widened; a gate comparing basenames
-# against files the other had re-keyed to paths; a classifier skipping the suite on a file
-# the other had moved). NO per-PR check can see any of those — only the full suite on the
-# merged tree can. And `soundness` is the backstop for a different hole entirely: ALL the
-# gate shards pass on an ill-typed compiler (`make medaka` does not gate on type errors),
-# which is exactly how a compiler with unbound constructors once shipped to main with every
-# gate green. It is 171s. It stays full, on every event, forever.
-#
-# A PR that passes its narrowed subset and then fails in the queue is simply bounced from
-# the queue. That is correct and expected — it is how bors always worked. Preflight is a
-# FILTER, not an AUTHORITY; CI on the MERGED tree is the authority.
-#
-# The narrowing FAILS SAFE in every direction: preflight erroring, preflight reporting
-# whole-suite blast radius (stdlib/, runtime/, compiler/support/, compiler/entries/, a
-# fixture dir with no discoverable consumer), or preflight having no opinion about a
-# changed non-prose path — each one widens the run back to everything. See the `gateset`
-# step for the three checks and why each exists.
-
+# ── `push: main` REMOVED — the queue already covers it (#1927) ─────────────────
+# Every commit reaching `main` was already tested by a `merge_group` run at that
+# exact SHA (the queue only merges what went green there), so a separate
+# `push: main` run was a byte-for-byte duplicate paid twice per merge for zero new
+# signal. `schedule` below is the cheap safety net for anything that could still
+# land outside the queue.
 on:
   push:
-    branches: [main, testing-arc]
+    branches: [testing-arc]
   pull_request:
-  # REQUIRED BY THE MERGE QUEUE. A queued PR is tested on a `merge_group` event — a
-  # temporary branch holding YOUR pr merged on top of everything already queued ahead
-  # of it. Without this trigger the required checks never run on that branch, the entry
-  # waits forever, and the queue DEADLOCKS. Do not remove it while a merge queue exists.
-  #
-  # This is the whole point of the queue for THIS repo: PR CI tests your BRANCH, the queue
-  # tests the MERGED RESULT. Two green branches merging into a broken tree is not
-  # hypothetical here — it happened twice on 2026-07-13. Git flagged 2 conflicts between the
-  # TMC arc and the arg-tuple removal and cleanly auto-merged a THIRD break it could not see
-  # (a new caller of a signature the other branch had rewritten — different lines, so no
-  # conflict); the merged tree crashed. Separately, two branches that both touched
-  # typecheck.mdk auto-merged fine and their GOLDENS silently diverged, taking main red.
+  # REQUIRED BY THE MERGE QUEUE — a queued PR is tested on a `merge_group` event, a
+  # temp branch holding this PR merged onto everything already queued ahead of it.
+  # Without this trigger the required checks never run on that branch, the entry
+  # waits forever, and the queue DEADLOCKS. Do not remove it while a merge queue
+  # exists. PR CI tests the BRANCH; the queue tests the MERGED RESULT — those have
+  # diverged before (dossier `ci.md`). merge_group:
   merge_group:
   workflow_dispatch:
+  # Safety net for #1927 (removed `push: main`) + the oracle-cache producer — a
+  # genuine, unnarrowed full-suite run of `main` once a day (also reachable via
+  # `workflow_dispatch` above). Its `oracle_key` is 'full', so it is the daily
+  # producer of the cache a `merge_group` run restores from the default branch.
+  schedule:
+    - cron: '43 9 * * *' # arbitrary off-the-hour time, ahead of nightly.yml's 07:17
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -113,66 +72,35 @@ env:
   # hidden by parallelism. The emitter is the reused workhorse and stays -O2.
   ORACLE_OPT: -O0
 
-  # ── The wasm toolchain pin — ONE definition, TWO consumers (#597) ────────────
-  # Pinned to the dev box's version (AGENTS.md: reproducible, deterministic bytes),
-  # so CI and local runs parse/validate the emitted WAT with IDENTICAL wasm-tools.
-  #
-  # Workflow-level ON PURPOSE. Two jobs install this toolchain — `wasm:` (its five
-  # WasmGC gates) and `gates:`' `engines` shard (the T2/T3 arms of the 3-engine
-  # differential, #597) — and two copies of a version pin that can silently disagree
-  # is this repo's most-documented failure shape. Both read these two vars; there is
-  # no second number to keep in sync. Node is pinned here for the same reason, and is
-  # consumed by `actions/setup-node`'s node-version in BOTH jobs.
-  WASM_TOOLS_VERSION: "1.219.1"
-  WASM_NODE_VERSION: "24"
+  # The wasm toolchain pin (#1936) is NOT set here — it lives as the single
+  # `wasm-tools-version` / `wasm-node-version` input default on
+  # `.github/actions/setup-medaka/action.yml`, which every consumer (this file's
+  # `gates`/`wasm` jobs, and nightly.yml) reads by not overriding it.
 
 jobs:
   # ── T-4b: docs-only fast path ───────────────────────────────────────────────
+  # A change that touches ONLY prose (top-level *.md, docs/**, LICENSE) skips the
+  # heavy jobs' EXPENSIVE STEPS, never the jobs themselves. There are ELEVEN
+  # required status checks with ZERO approvals — the checks ARE the merge gate —
+  # so a job skipped by a job-level `if:`, or a workflow skipped by a
+  # `paths-ignore:` trigger filter, never posts a status; the PR sits at
+  # "Expected — waiting for status" FOREVER and becomes permanently unmergeable.
+  # ⚠️ Do NOT convert this into a job-level `if:`, and do NOT path-filter `on:`.
+  # Every required job always RUNS and always REPORTS; only its STEPS are
+  # conditional.
   #
-  # A change that touches ONLY prose (top-level *.md, docs/**, LICENSE) still runs
-  # the full 40+ min gate suite today. This job classifies the PR's changed files
-  # and every heavy job below (gates/soundness/seed-health/inlang) reads its output
-  # to skip their EXPENSIVE STEPS, not to skip THEMSELVES.
+  # ⚠️ THE RULE: `test/**` is NEVER docs (it holds functional goldens, not prose —
+  # a naive `**.md` filter would skip the gates that exist to catch a bad golden
+  # re-cut). `docs/spec/SYNTAX.md` is likewise never docs — it is an executable
+  # spec that `check_syntax_examples.sh` runs, and shipped false for months once
+  # while nothing checked it. Both arms must come first in the case below.
+  # Everything else ending in `.md` is prose. Scoped to the `.md` EXTENSION on
+  # purpose — `.claude/`/`compiler/`/`runtime/` also hold executable non-`.md`
+  # files that must fall through to the catch-all as NOT docs.
   #
-  # ⚠️ Do NOT convert this into `if:` at the JOB level on gates/soundness/etc, and
-  # do NOT path-filter the `on:` trigger above. Branch protection requires TEN named
-  # status checks (the 7 `gates (…)` shards — engines, sqlite, frontend, types, eval,
-  # backend, tools — plus `soundness`, `seed-health`, `inlang`)
-  # with ZERO approvals — the checks ARE the merge gate. A job skipped by a
-  # job-level `if:`, or a workflow that never runs because of a `paths-ignore:`
-  # trigger filter, means GitHub never receives a status for that context. It sits
-  # at "Expected — waiting for status" FOREVER and the PR becomes permanently
-  # unmergeable — not fast, blocked. So every required job must always RUN and
-  # always REPORT (success or failure); only its STEPS are conditional.
-  #
-  # ⚠️ THE RULE: `test/**` is NEVER docs. Every OTHER `.md` in the tree IS docs.
-  #
-  # test/ holds 175 `.md` files and they are FUNCTIONAL, not prose: 167 are snapshot
-  # GOLDENS (test/snapshots/**/*.md), plus test/CAPABILITY-MATRIX.md,
-  # test/ENGINE-DIVERGENCE.md and test/error_quality_fixtures/{INVENTORY,GRADING}.md.
-  # A naive `**.md` filter would classify a blessed golden re-cut as docs-only and
-  # skip every gate that exists to catch exactly that regression — a silent-green
-  # bug, which is the one thing this test suite is built to prevent. So the `test/*`
-  # arm comes FIRST in the case below and must stay there.
-  #
-  # Everything else that ends in `.md` is prose and takes the fast path: the ~50
-  # top-level docs, compiler/**'s ~47 design docs, .claude/**'s playbooks, sqlite/,
-  # archive/, stdlib/README.md, docs/**, LICENSE. Verified: nothing in the build, in
-  # any gate, or in any workflow READS a `.md` outside test/ at runtime.
-  #
-  # Still scoped to the `.md` EXTENSION on purpose — .claude/ also holds
-  # hooks/skill-triage.py and settings.json, compiler/ holds .mdk source, and
-  # runtime/ holds C. Those are executable and fall through to the `*)` catch-all as
-  # NOT docs. Do not widen this to a bare directory glob.
-  #
-  # Conservative in the direction that matters: any unrecognized path → the full
-  # suite. A false "docs-only" is a shipped bug; a false "not docs-only" costs some
-  # CI minutes, which are free on a public repo.
-  #
-  # Only meaningful for `pull_request` (there IS a base/head diff to classify).
-  # Every other trigger (push to main/testing-arc, merge_group, workflow_dispatch)
-  # defaults docs_only=false — always the full suite; those aren't PR-gating a
-  # not-yet-merged change, and the safe direction to be wrong in is "ran too much".
+  # Conservative in the direction that matters: any unrecognized path routes to
+  # the full suite. Only meaningful for `pull_request`; every other trigger
+  # defaults `docs_only=false`. Incident history: dossier `ci.md`.
   detect:
     name: detect docs-only change
     runs-on: ubuntu-latest
@@ -190,9 +118,8 @@ jobs:
         run: |
           set -u
           event="${{ github.event_name }}"
-          # These two files are consumed by the `gateset` step below. Create them
-          # unconditionally, so that step never has to distinguish "no non-docs files"
-          # from "the classifier bailed early".
+          # Consumed by `gateset` below; created unconditionally so that step never
+          # has to distinguish "no non-docs files" from "the classifier bailed early".
           : > "$RUNNER_TEMP/changed.txt"
           : > "$RUNNER_TEMP/nondocs.txt"
           if [ "$event" != "pull_request" ]; then
@@ -227,13 +154,10 @@ jobs:
           printf '%s\n' "$changed" > "$RUNNER_TEMP/changed.txt"
           docs_only=true
 
-          # ── ONE classifier, TWO consumers. ─────────────────────────────────────
-          # `docs_only` is the old question ("is EVERY changed file prose?"). The
-          # `gateset` step below asks a second question of the SAME allowlist ("is THIS
-          # particular file prose?"), so every arm that means "not prose" now also names
-          # the file. A separate list of what-counts-as-prose would be a second copy of
-          # this allowlist, free to drift from it — and this file's own header is a
-          # monument to what that costs.
+          # ONE classifier, TWO consumers: `docs_only` answers "is EVERY changed file
+          # prose?"; `gateset` below asks "is THIS file prose?" of the same allowlist,
+          # so every "not prose" arm also names the file rather than keeping a second
+          # list that could drift from this one.
           nondoc() { docs_only=false; printf '%s\n' "$1" >> "$RUNNER_TEMP/nondocs.txt"; }
 
           while IFS= read -r f; do
@@ -241,40 +165,17 @@ jobs:
               continue
             fi
             case "$f" in
-              # ── test/ IS NEVER DOCS. This arm MUST come first. ────────────────────
-              # test/ holds 175 .md files and they are FUNCTIONAL, not prose: 167 are
-              # snapshot GOLDENS (test/snapshots/**/*.md), plus CAPABILITY-MATRIX.md,
-              # ENGINE-DIVERGENCE.md and the error_quality_fixtures/ graded corpus.
-              # Classifying a blessed golden re-cut as "docs-only" would SKIP THE ENTIRE
-              # SUITE on the exact change most likely to need it — manufacturing the
-              # silent-green failure this suite exists to prevent. Never relax this.
+              # test/ is NEVER docs — this arm must stay first. See the job header.
               test/*) nondoc "$f" ;;
 
-              # ── SYNTAX.md IS NOT PROSE — IT IS AN EXECUTABLE SPEC. ────────────────
-              # AGENTS.md designates SYNTAX.md the ground truth for what the binary
-              # accepts, and test/check_syntax_examples.sh RUNS every one of its
-              # examples through `medaka check`. That gate needs a built compiler, so
-              # it lives in a gate shard — and shards are SKIPPED when docs_only=true.
-              # Classifying a SYNTAX.md edit as docs-only would therefore skip the one
-              # gate that exists to check it, on the one change that needs it.
-              #
-              # This is not hypothetical: SYNTAX.md shipped for months documenting FIVE
-              # REMOVED CONSTRUCTS as live syntax (backtick infix, let-else, named
-              # impls, default impl, @Name) because nothing ever executed it. Same
-              # silent-green shape as the test/ arm above; same answer.
+              # SYNTAX.md is an executable spec, not prose. See the job header.
               docs/spec/SYNTAX.md) nondoc "$f" ;;
 
               docs/*) : ;;
               LICENSE|LICENSE.*) : ;;
 
-              # Every OTHER .md in the tree is prose: root (50), compiler/ (47 design
-              # docs), .claude/ (16 agent playbooks), sqlite/, archive/, qa-beta*/ …
-              # Verified: nothing in the build, in any gate, or in any workflow READS a
-              # .md outside test/ at runtime.
-              # Scoped to `.md` ON PURPOSE — .claude/ also holds hooks/skill-triage.py and
-              # settings.json, and compiler/ holds .mdk source; those are executable and
-              # fall through to the `*)` catch-all as NOT docs. Do not widen to a bare
-              # directory glob.
+              # Every other .md is prose. Scoped to the extension on purpose — see
+              # the job header for why a bare directory glob would be wrong.
               *.md) : ;;
 
               *) nondoc "$f" ;;
@@ -285,53 +186,25 @@ jobs:
           echo "classified: docs_only=$docs_only"
 
       # ── T-15: narrow the `pull_request` run. NEVER the `merge_group` run. ────────
+      # Only the `pull_request` half shrinks — narrowing `merge_group` would trade
+      # away the one property that justifies the queue (testing the MERGED result).
+      # `soundness`/`seed-health` likewise stay FULL on every event. Preflight is a
+      # FILTER, not an AUTHORITY — CI on the merged tree is the authority. Incident
+      # history: dossier `ci.md`.
       #
-      # Each PR used to pay for the whole suite TWICE: once on `pull_request`, and again
-      # on the `merge_group` branch when the queue tests it merged onto main. We are
-      # runner-bound (jobs wait 40-105s for a runner; 20 concurrent, ~11 per run), so the
-      # duplicate is not free.
+      # The derivation is `test/preflight.sh` — NOT reimplemented here, to avoid a
+      # second, drift-prone copy of "which gates does this diff touch". Run in
+      # `PREFLIGHT_DRY=1` mode (prints the derivation, builds nothing) against the
+      # changed-file list `classify` already resolved (a shallow checkout has no
+      # `main` to diff against, so `PREFLIGHT_CHANGED_FILE` parameterizes the INPUT
+      # only, never the derivation).
       #
-      # ⚠️ ONLY the `pull_request` half shrinks, and the direction is NOT negotiable.
-      # The merge_group run's entire value is that it tests the MERGED RESULT: three
-      # separate times in one day, two independently-green branches auto-merged with ZERO
-      # git conflicts into a broken tree (a derivation scanning a universe the other
-      # branch had widened; a gate comparing basenames against files the other had
-      # re-keyed to paths; a classifier skipping the suite on a file the other had moved).
-      # NO per-PR check can see any of those. Narrowing merge_group would trade away the
-      # one property that justifies the queue. `soundness` and `seed-health` likewise stay
-      # FULL on every event — every gate shard passes on an ill-typed compiler, so
-      # soundness is the backstop, and it is only 171s.
-      #
-      # A PR that passes its narrowed subset and then fails in the queue just gets bounced
-      # from the queue. That is correct and expected; it is how bors always worked.
-      # Preflight is a FILTER, not an AUTHORITY — CI on the merged tree is the authority.
-      #
-      # ── The derivation is test/preflight.sh. It is not reimplemented here. ──────
-      #
-      # preflight already maps a diff to a gate set (source file -> gates; fixture corpus
-      # -> the gates that actually READ it, derived by scanning every tracked .sh). A
-      # second, subtly-different copy of "which gates does this diff touch" is exactly the
-      # drift-prone duplication this repo keeps finding and killing. So CI runs preflight
-      # in PREFLIGHT_DRY=1 mode, which prints the derivation and builds nothing, and feeds
-      # it the changed-file list the classify step already resolved (a shallow checkout of
-      # the PR's merge ref has no `main` to diff against, so preflight's own git derivation
-      # cannot run here — PREFLIGHT_CHANGED_FILE parameterizes the INPUT only, never the
-      # derivation).
-      #
-      # ── THREE ways this refuses to narrow. All of them fail SAFE (= run everything). ──
-      #
-      #   1. preflight exits nonzero          -> a stale glob in its map, or a bug. FULL.
-      #   2. preflight prints `FULL <reason>` -> the diff has whole-suite blast radius
-      #                                          (stdlib/, runtime/, compiler/support/,
-      #                                          compiler/entries/, or a fixture dir with
-      #                                          no discoverable consumer). FULL.
-      #   3. preflight prints `UNMAPPED <p>`  -> its map has NO OPINION about path <p>.
-      #      An unmapped path is only tolerable if it is PROSE — and the docs allowlist
-      #      above already decides that, so we ask it (nondocs.txt) rather than writing a
-      #      second list. Unmapped + not prose (Makefile, .github/**, test/run_gates.sh,
-      #      a ledger .txt) -> FULL.
-      #
-      # A gate wrongly INCLUDED costs CI minutes, which are free on a public repo. A gate
+      # THREE ways this refuses to narrow, all failing SAFE (= run everything):
+      #   1. preflight exits nonzero          -> a stale glob in its map, or a bug.
+      #   2. preflight prints `FULL <reason>` -> whole-suite blast radius.
+      #   3. preflight prints `UNMAPPED <p>`  -> no opinion about path <p>, and <p>
+      #      is not prose per the SAME allowlist `classify` built (nondocs.txt).
+      # A gate wrongly INCLUDED costs CI minutes, free on a public repo. A gate
       # wrongly EXCLUDED is a bug that reaches the queue. Bias accordingly, always.
       - name: Derive the gate set for this PR
         id: gateset
@@ -388,8 +261,76 @@ jobs:
           echo "▶ NARROWED pull_request run: $(printf '%s\n' $gates | grep -c .) gate(s)."
           echo "  The merge_group run of this same PR still executes the FULL suite on the MERGED tree."
 
-  gates:
+  # ── Build ./medaka ONCE per run, not ten times (#1928) ───────────────────────
+  # `make medaka` is a pure function of the checkout, so it runs once here and the
+  # other ten jobs (7 `gates` shards + `soundness` + `inlang` + `wasm`) take
+  # `binary: artifact` on the same setup action instead of rebuilding it. This is
+  # intra-run artifact transport at a fixed SHA, NOT a cache (see the file header's
+  # #111 note) — no key, no cross-SHA restore.
+  #
+  # ⚠️ NOT one of the eleven required contexts, and must not become one — that
+  # needs a ruleset edit, not atomic with a commit. ⚠️ `needs: detect` with a
+  # CONDITIONAL STEP, never a conditional job — same shape and reason as every
+  # heavy job below: a required consumer that `needs:` a skippable job can
+  # dead-end, so this job always RUNS and always REPORTS.
+  #
+  # `seed-health` deliberately does NOT consume this artifact — it asks whether
+  # the committed SEED still bootstraps, and must keep answering that from the
+  # seed itself. History/measurements: dossier `ci.md`.
+  build:
+    name: build medaka once
     needs: detect
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup medaka (toolchain + build)
+        if: needs.detect.outputs.docs_only != 'true'
+        uses: ./.github/actions/setup-medaka
+        with:
+          binary: build
+
+      # Both stamps are HIDDEN files, so `include-hidden-files: true` is mandatory —
+      # upload-artifact@v4 silently drops dotfiles without it (a warning in the log,
+      # a green step, and every consumer re-running stage A for nothing). Why the
+      # stamp travels at all, and the same-SHA invariant that makes it sound, is
+      # documented at the consuming step in .github/actions/setup-medaka/action.yml.
+      #
+      # `if-no-files-found: error`: an empty upload here would degrade ten jobs into
+      # a download failure apiece, which is loud but points at the wrong place.
+      #
+      # Retention is 1 day: this artifact is scratch, meaningful only inside its own
+      # run, and it is ~10 MB × every run of a busy repo.
+      - name: Upload ./medaka + ./medaka_emitter + provenance stamp
+        if: needs.detect.outputs.docs_only != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: medaka-binaries
+          path: |
+            medaka
+            medaka_emitter
+            .medaka_emitter.srcstamp
+            .medaka.srcstamp
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  gates:
+    # `build` is added to `needs` so the binaries exist; `detect` stays for its
+    # outputs. See the `if:` below for why this does NOT reintroduce the
+    # skipped-required-context hazard the header warns about.
+    needs: [detect, build]
+    # ⚠️ MUST NEVER EVALUATE FALSE FOR A REASON OTHER THAN THE WORKFLOW RUN ITSELF
+    # BEING CANCELLED — this is a required context and a skipped job does not
+    # report. The guard below runs on every outcome except that: `detect` failing
+    # still runs this job (the download step then fails and the shard is
+    # correctly red — no SKIP, no GREEN-BY-SKIP); `build` failing is the same. It
+    # skips only when the run itself is being torn down (e.g. a superseding push
+    # under `cancel-in-progress`), which is the one case where "does not report"
+    # is itself the correct, non-mergeable signal — and it actually lets
+    # cancellation stop this heavy job, which `always()` never did.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
@@ -409,384 +350,116 @@ jobs:
           # And do NOT use brace expansion: run_gates.sh runs under POSIX sh (dash),
           # which does not expand braces, so it would glob to nothing.
           #
-          # ── SHARDS ARE SCHEDULED BY COST, NOT BY THEME (2026-07-14) ──────────────
-          #
-          # The shard NAMES are thematic and that is fine — they make a failure legible.
-          # The SCHEDULE is not: jobs run in parallel, so total CI wall-clock is the
-          # SLOWEST shard, and grouping by subsystem stacked the three most expensive
-          # gates in the repo onto one runner while five others idled for four minutes.
-          #
-          # ⚠️ HISTORICAL SNAPSHOT — the reasoning below is why the shards are shaped the
-          # way they are; the NUMBERS are from 2026-07-14 and have since rotted. Two of
-          # them provably: the engines corpus was 346 fixtures and is now 435, and
-          # "wasm-tools absent" is no longer true of the `engines` shard, which installs
-          # it and runs a third engine (#597). `engines` is ALSO no longer the critical
-          # path — `types` is. Do not plan against these; re-measure (see the `engines`
-          # entry below for the one-liner) and put new heavy gates where there is room.
-          #
-          # Measured per-gate CPU seconds (2026-07-14, wasm-tools absent = what a hosted
-          # runner saw THEN; a shard's wall ≈ setup + Σcpu / 2, since run_gates' outer pool
-          # is JOBS=2 on a 4-core hosted runner):
-          #
-          #   diff_compiler_engines  ..  834   <- then-346 fixtures x (medaka build + clang)
-          #   build_construct_coverage   282   <- 144 fixtures x (medaka build + clang)
-          #   sqlite/test/*oracle (22)   188   <- 22 gates, 3-15s each
-          #   backend (12 gates)         298
-          #   tools  (27 gates)          114
-          #   types  (20 gates)           36
-          #   eval   (27 gates)           27
-          #   frontend (15 gates)         12
-          #
-          # The old `engines` shard held 834+282+188 = 1304 of the suite's ~1790 CPU-s.
-          # It measured 517s wall while `frontend` measured 138s — i.e. ONE shard WAS the
-          # critical path and the other five were noise. So:
-          #
-          #   * diff_compiler_engines now OWNS a runner (it cannot go below Σcpu/ncores).
-          #   * the 22 sqlite oracles get their own shard — they are 22 INDEPENDENT gates,
-          #     embarrassingly parallel, and they are what CI-COVERAGE-EXCEPTIONS.txt has
-          #     been claiming all along ("Now in the `sqlite` shard" — there wasn't one).
-          #   * build_construct_coverage moves to `frontend`, the CHEAPEST shard (12 CPU-s
-          #     of gates behind a 14-oracle build). It is a backend gate sitting in a shard
-          #     named frontend, and that is deliberate: it is placed where there is idle
-          #     runner, not where its name says. It was also SERIAL — 282s of wall on any
-          #     machine — and is now fanned out (298s -> 111s at run_gates' JOBS=3), which
-          #     is what makes it fit anywhere at all.
-          #
-          # GitHub gives this repo 20 concurrent jobs and we use ~11. More, smaller shards
-          # are nearly free; a long pole is not. When you add a heavy gate, put it where
-          # there is ROOM, and update the table above.
+          # ── SHARDS ARE SCHEDULED BY COST, NOT BY THEME ─────────────────────────
+          # Shard NAMES are thematic (they make a failure legible); the SCHEDULE is
+          # not, because jobs run in parallel and total wall-clock is the SLOWEST
+          # shard. So a gate lands wherever there is ROOM, not where its name says
+          # — several gates below are placed far from their thematic home for
+          # exactly this reason, each noted at its `pattern:` entry. Current
+          # per-shard cost comes from `scripts/ci_shard_cost.sh`, run against
+          # recent green `merge_group` runs — never hand-write a number here.
+          # Placement history and every prior measurement: dossier `ci.md`.
           - name: engines
-            # ALONE ON ITS RUNNER, on purpose: the single most expensive gate in the suite,
-            # and irreducible — every fixture in the corpus pays a full `medaka build` +
-            # clang, now on THREE engines. Anything sharing this shard is added directly to
-            # its wall time.
-            #
-            # ⚠️ This shard is NOT the critical path — `types` is. (It was, before
-            # `full_cores` below gave this gate the whole box; the old "~5.8 min / longest
-            # pole" note outlived the change that fixed it and misrouted #597's design.)
-            # Do not encode a new number here: read the current one off a real run —
-            #   gh run view <id> --json jobs --jq '.jobs[]|select(.name|startswith("gates"))
-            #     |{name, s:(((.completedAt|fromdate)-(.startedAt|fromdate)))}'
-            # and put new heavy gates wherever that says there is room.
-            #
-            # `full_cores` matters as much as the pattern: the gate's own default is
-            # ENGINE_JOBS=NCPU/2, which is the right hedge when it shares a runner with other
-            # gates and leaves HALF THE BOX IDLE when it doesn't. It doesn't, now.
-            #
-            # `wasm_arm` (#597): this shard installs wasm-tools + Node and builds the Wasm
-            # oracle, so diff_compiler_engines can actually run its
-            # T2 (native == wasm) and T3 (all three agree) tiers. Without it the gate honestly
-            # degrades to a TWO-engine differential and the required check goes green having
-            # never compared the backends. MEDAKA_REQUIRE_WASM=1 (set with it) makes that
-            # degradation a HARD FAIL here, so the wiring can never silently rot back.
-            # diff_compiler_rejection_parity (#709) rides ALONG here, not as new weight:
-            # its 26 fixtures were REMOVED from diff_compiler_engines' value differential
-            # (they made zero cross-engine comparison — both backends reject them
-            # identically), so this shard's total build count DROPS. The gate re-asserts
-            # the property they actually carry (both backends reject), and it needs THIS
-            # shard's toolchain: wasm-tools + Node 24 + the wasm oracle + MEDAKA_REQUIRE_WASM=1
-            # (so the wasm-rejection half is mandatory in CI, never silently degraded). It is
-            # ~3s (rejections fail at the front end, before clang/wasm-tools), so it adds
-            # nothing measurable to the shard that already owns the wasm arm.
+            # ALONE ON ITS RUNNER: the single most expensive gate in the suite and
+            # irreducible — every fixture pays a full `medaka build` + clang, on
+            # THREE engines. `full_cores` gives it the whole box rather than the
+            # gate's own ENGINE_JOBS=NCPU/2 hedge (right when sharing a runner,
+            # wasteful when not — it doesn't, here). `wasm_arm` (#597) installs
+            # wasm-tools + Node and builds the Wasm oracle so this gate's T2/T3
+            # tiers actually run; MEDAKA_REQUIRE_WASM=1 makes a degraded run a hard
+            # fail so the wiring cannot silently rot back. diff_compiler_rejection_parity
+            # (#709) rides along here, needing the same toolchain.
+            # Re-derive current cost/critical-path: `sh scripts/ci_shard_cost.sh`.
             pattern: "'diff_compiler_engines' 'diff_compiler_rejection_parity'"
             full_cores: "1"
             wasm_arm: "1"
           - name: sqlite
-            # THE 22 differential gates that diff the pure-Medaka SQLite library against the
-            # REAL sqlite3 CLI (T8). They had never run in CI — not because anyone excluded
-            # them, but because NO PATTERN COULD REACH THEM: run_gates.sh globbed
-            # `$ROOT/test/<pat>.sh` and these live in sqlite/test/. run_gates.sh,
-            # build_oracles.sh --for, and the coverage gate now all resolve a pattern against
-            # BOTH `$ROOT/test/` and `$ROOT/`, so a shard can name a gate anywhere in the tree.
-            #
-            # 22 independent gates, 188 CPU-s total, longest single gate 15s — the most
-            # shardable work in the repo, and it landed in the ALREADY-longest shard. Its own
-            # runner costs nothing (we use 11 of 20 concurrent jobs) and takes ~95s off the
-            # critical path. CI-COVERAGE-EXCEPTIONS.txt already described this shard as
-            # existing; now it does.
-            #
-            # They read NO test/bin oracle (they drive ./medaka directly), so this shard's
-            # oracle step correctly builds nothing. They need `sqlite3`, installed below.
-            #
-            # NOTE the glob is '*oracle', not '*_oracle': 21 of them are <name>_oracle.sh but
-            # the 22nd is plain `oracle.sh`. '*_oracle' silently left it out — and the coverage
-            # gate caught that immediately, on its first run after being widened. Which is the
-            # whole argument for the widened gate in one line.
-            #
-            # gzip/test/*oracle joins this shard for the same two reasons: it is the
-            # same KIND of gate (a project oracle that drives ./medaka directly and
-            # reads no test/bin oracle), and this shard has the most room. Derived
-            # from merge_group run 30971754103 rather than assumed — types 472s,
-            # engines 465s, backend 395s, tools 357s, frontend 352s, eval 313s,
-            # sqlite 246s. Re-derive before moving anything; these numbers rot:
-            #   gh run view <id> --json jobs --jq '.jobs[]|select(.name|startswith("gates"))
-            #     |"\(((.completedAt|fromdate)-(.startedAt|fromdate)))s \(.name)"'
-            # It needs `gzip`, which ships on ubuntu-latest (unlike sqlite3, installed below).
-            #
-            # pds/test/* (S-pds-skeleton, #1705) joins this shard by COST, not theme:
-            # two consecutive green merge_group runs (31983057792, 31979717039) put
-            # `sqlite` at 162s/203s — cheapest or second-cheapest of the seven shards
-            # in both runs (only `backend` at 177s beat it in the second run); `engines`
-            # is the pole at 385-389s both times. Re-derive before moving anything;
-            # these numbers rot — see the gh command a few lines up.
-            # NOTE the glob is 'pds/test/*', not 'pds/test/*oracle': deliberately ONE
-            # directory level deep (`*` does not cross `/`) so any future pds/ in-language
-            # gate is auto-enrolled with NO ci.yml edit, as long as it lands directly in
-            # pds/test/ (see pds/README.md's "CI classification policy" section).
-            # constant_time_parity is covered by the PDS glob and requires the Wasm arm.
-            # Enabling it here deliberately spends the toolchain/oracle setup on this shard
-            # while keeping the gate enrolled exactly once.
+            # The 22 differential gates that diff the pure-Medaka SQLite library
+            # against the real sqlite3 CLI (T8), plus `gzip/test/*oracle` and
+            # `pds/test/*` — all project oracles that drive `./medaka` directly and
+            # read no `test/bin` oracle, parked here by cost (dossier `ci.md`).
+            # NOTE the glob is `'*oracle'`, not `'*_oracle'`: one gate is plain
+            # `oracle.sh`, not `<name>_oracle.sh` — the narrower glob silently
+            # dropped it. NOTE `pds/test/*` is deliberately ONE directory level
+            # deep so a future `pds/` in-language gate auto-enrolls with no
+            # `ci.yml` edit, as long as it lands directly in `pds/test/` (see
+            # `pds/README.md`'s CI classification policy).
+            # `constant_time_parity` is covered by the PDS glob and needs the Wasm
+            # arm, enabled here so the gate is enrolled exactly once.
             pattern: "'sqlite/test/*oracle' 'gzip/test/*oracle' 'pds/test/*'"
             wasm_arm: "1"
           - name: frontend
-            # 'native_fixtures/run' (T8): 11 native-only regression assertions (parse-error
-            # location + foreign-syntax hints + one eval dispatch check). A real gate that
-            # ran NOWHERE — it sits one directory below test/, so even the coverage gate's
-            # `test/*.sh` glob could not see it. It was RED. Its one real failure (compiler
-            # bug T-12) is now an XFAIL in the gate's own expected-failure ledger, so it runs
-            # here green and still fails loudly if the bug regresses OR gets fixed.
-            #
-            # 'build_construct_coverage' (T-3): a BACKEND gate (144 construct fixtures through
-            # the native `medaka build`, stdout diffed against committed goldens), parked here
-            # for COST, not theme — see the shard-scheduling note above. frontend's own 15
-            # gates are 12 CPU-s combined, i.e. this shard was ~130s of oracle build and then
-            # nothing. It has the room; `engines` and `backend` do not.
-            #
-            # 'diff_compiler_wasm_shim_parity' (#370): a WASM gate parked here, again for
-            # COST not theme — it is a text diff of the two JS hosts (run.js vs
-            # playground/worker.js, WASM-SEMANTICS WH3) and needs no compiler, no oracle
-            # and no wasm toolchain, so it costs ~0 CPU-s wherever it lands. It is in a
-            # REQUIRED shard on purpose — originally because the `wasm` job was advisory.
-            # ⚠️ That premise is now FALSE (`wasm` has been a required context since
-            # 2026-07-15; see the `wasm:` job's header for the derivation), but the
-            # placement stands on its own: this gate is free, and a required shard is
-            # where a free gate belongs. Do not "restore symmetry" by moving it.
-            #
-            # 'diff_compiler_preflight_base' (#560): parked here for COST, not theme —
-            # it is pure git (builds its own synthetic repo with `git init`), needs no
-            # compiler, no oracle and no ambient checkout, so it costs ~0 CPU-s wherever
-            # it lands. It pins the base-ref derivation in preflight.sh, which is THE
-            # agent loop and the input to CI's own narrowing: a stale base there invents
-            # phantom changed files, enrols gates the diff never touched, and can trip
-            # the #492 blast-radius carve-out into the ~84-gate run. In a REQUIRED shard
-            # on purpose — the thing every agent runs before pushing should not be the
-            # one thing no gate watches.
-            #
-            # 'diff_compiler_dict_semantics' (#616): the DICT-SEMANTICS.md conformance
-            # gate — dispatch, entailment, ⊑/min⊑ selection, dict-slot elaboration and
-            # cross-module dict arity. Parked here for COST, not theme: its subject is
-            # compiler/types/typecheck.mdk, so its natural home is `types` alongside its
-            # sibling diff_compiler_shadow_semantics — but `types` was the POLE in both
-            # merge_group runs measured on 2026-07-29 (429s on 30410046346, 376s on
-            # 30407173265) while `frontend` was the cheapest (182s / 228s). This gate
-            # costs ~43s wall (measured), drives check+run+build+`build --keep-ir` per
-            # fixture, and reads NO test/bin oracle — so it adds no oracle-build cost
-            # and lands frontend at roughly eval's level rather than deepening the pole.
-            # ⚠️ Re-derive those numbers before moving it; they rot.
+            # `native_fixtures/run` (T8) sits one directory below `test/`, so even
+            # the coverage gate's `test/*.sh` glob could not see it — it ran
+            # nowhere. `build_construct_coverage` (T-3, a BACKEND gate) and
+            # `diff_compiler_wasm_shim_parity` (#370, a WASM gate) and
+            # `diff_compiler_preflight_base` (#560, pure git) and
+            # `diff_compiler_dict_semantics` (#616, a TYPES gate) are all parked
+            # here by cost, not theme — each noted at length in dossier `ci.md`;
+            # the short version is this shard has the room and each of them is
+            # free-to-cheap wherever it lands.
             pattern: "'diff_compiler_lex*' 'diff_compiler_parse*' 'diff_compiler_snapshot*' 'diff_compiler_resolve*' 'diff_compiler_fmt' 'diff_compiler_fmt_roundtrip' 'diff_compiler_wasm_shim_parity' 'diff_compiler_preflight_base' 'diff_compiler_dict_semantics' 'native_fixtures/run' 'build_construct_coverage'"
           - name: types
-            # 'diff_compiler_shadow_semantics': the SHADOW-SEMANTICS.md decision matrix
-            # (standalone fn ⇄ interface-method shadowing). It lives here rather than in
-            # `tools` (with its closest sibling, diff_compiler_run_check_agreement) because
-            # every stage it exercises — definer/importer shadow detection, per-receiver
-            # route stamping, standalone-domain enforcement — is in compiler/types/
-            # typecheck.mdk. It drives check+run+build per fixture but reads NO test/bin
-            # oracle, so it adds no oracle-build cost to this shard.
+            # `diff_compiler_shadow_semantics` (the SHADOW-SEMANTICS.md decision
+            # matrix) lives here, not in `tools` beside its closest sibling
+            # `diff_compiler_run_check_agreement`, because every stage it exercises
+            # is in `compiler/types/typecheck.mdk`. Reads no oracle.
             pattern: "'diff_compiler_perf_scaling' 'diff_compiler_typecheck*' 'diff_compiler_check*' 'diff_compiler_exhaust' 'diff_compiler_diagnostics' 'diff_compiler_analyze_project' 'diff_compiler_shadow_semantics' 'effect_param_domain' 'effect_builtin_param_domain' 'effect_product_domain' 'effect_set_domain'"
           - name: eval
-            # The 4 bootstrap_* stage gates (each native pipeline stage == the interpreter's
-            # output) also ran in NO CI job until 2026-07-13 — found by the coverage gate
-            # once it was taught to look past the diff_compiler_* family. All 4 green, ~2s.
-            #
-            # Named individually, NOT globbed as 'bootstrap_*': that glob also catches
-            # bootstrap_from_seed.sh, the 80s cold bootstrap that seed-health already owns.
-            #
-            # 'diff_compiler_dispatch_shape' is a BACKEND gate living in a shard named
-            # eval, deliberately — shards are scheduled by COST, not by theme (see the
-            # header). It is ~3s (two `medaka build --keep-ir` of tiny probes), and the
-            # backend shard is one of the heaviest. This shard has room; backend does not.
-            # (This line used to call gates(engines) "the 5.8min critical path" — stale and
-            # false; see the engines entry. Re-measure rather than trusting any of it.)
-            #
-            # 'diff_compiler_prelude_obj' (39s) is the soundness gate for the
-            # MEDAKA_PRELUDE_OBJ fast path — it proves the inline and prebuilt link paths
-            # produce IDENTICAL program output across 24 fixtures at both opt levels. It is
-            # the exact analogue of diff_compiler_rt_obj (which lives in `backend`), but
-            # backend is one of the heaviest shards, so it goes where there is ROOM. Same
-            # reasoning as dispatch_shape below and build_construct_coverage in `frontend`.
-            #
-            # 'diff_compiler_slice_oob' (#550, 9.3s measured) is a BACKEND gate here for
-            # the SAME cost reason, third time over: its nearest sibling by shape is
-            # diff_compiler_let_refute (also run≠build, also build+exec, also a coded
-            # runtime abort), which lives in `backend` — but backend has no room, and this
-            # shard does. It needs ./medaka + the emitter (6 real `medaka build` + clang),
-            # which this shard already provides for dispatch_shape's `build --keep-ir`
-            # and prelude_obj.
-            #
-            # 'diff_compiler_ir_size' (#885, ~20s: four `medaka build --keep-ir` of tiny
-            # probes + clang) is the SIZE bound for emitted IR — the clang-bound analogue
-            # of dispatch_shape's SHAPE pin, guarding the SAME #129/#131 prelude-bloat
-            # class. It parks here next to its two siblings for the SAME cost reason: it
-            # needs only ./medaka + the emitter (which this shard already builds), and the
-            # heavier shards have no room. It is NOT in types/engines (the poles).
-            #
-            # 'diff_compiler_origin_agreement' (#1110) is a FRONTEND/TYPES gate here for
-            # the same cost reason, fourth time over. Measured on the 2026-08-02 full
-            # merge-queue run 30725382057, the shard walls were engines 448s, types 422s,
-            # backend 382s, frontend 348s, tools 310s, eval 292s, sqlite 237s — so its two
-            # thematic homes (`frontend`, which owns diff_compiler_resolve*, and `types`)
-            # are both poles and this shard is the cheapest one that already builds a large
-            # oracle set (19). Its marginal cost is one more entry in an xargs -P batch of
-            # 19 plus a couple of seconds of gate time; putting it in `sqlite` (cheaper on
-            # paper) would instead be the FULL serial cost of the first and only oracle
-            # that shard builds. ⚠️ Re-measure before moving it — those numbers rot; the
-            # one-liner is in the `engines` entry above.
-            #
-            # 'diff_compiler_import_order' (#1319 unit 0) is a FRONTEND/TYPES gate here
-            # for the same cost reason, fifth time over — the import-clause permutation
-            # differential, the one artefact that can observe an over-widening in
-            # constructor-name resolution (a golden records the permissive answer and
-            # then defends it). Its thematic homes are `frontend` (which owns
-            # diff_compiler_resolve*) and `types`; derived from the three merge_group
-            # runs 31022994812 / 30983572270 / 30981872310 on 2026-08-05, the shard
-            # walls were engines 324/334/473s, types 299/300/454s, tools 185/178/332s,
-            # backend 166/152/387s, frontend 223/165/299s, sqlite 108/123/199s and eval
-            # 92/83/246s — so both thematic homes are at or near the pole and this is
-            # the cheapest shard on every one of the three. It reads NO test/bin oracle;
-            # it needs only ./medaka + the emitter, which this shard already builds for
-            # dispatch_shape, prelude_obj, slice_oob and ir_size. It drives check + run +
-            # build + exec once per ORDERING — every n! ordering of each case's import
-            # clauses — and measured 25s wall on the dev box at the corpus it landed with.
-            # ⚠️ Re-measure before moving it; these numbers rot, and the count of cases is
-            # derived from the directory, never written down:
-            #   ls -d test/import_order_fixtures/*/ | wc -l
-            # 'diff_compiler_test_native' (#81 Stage 4): CI gate for `medaka test
-            # --native` / `--engines eval,native` — placed here by COST, not theme
-            # (measured 2026-08-05, merge_group run 31043828993: eval 215s was the
-            # cheapest shard after excluding `tools`/`engines` per the arc's own
-            # instructions; `types` 472s was the pole). It reads no test/bin oracle
-            # (only ./medaka + clang) and lands beside its closest sibling here,
-            # diff_compiler_origin_agreement, which also probes test_cmd.mdk's
-            # elaboration path. Measured wall time: ~6s.
-            # 'diff_compiler_draft_semantic' (#1399 X-0D) and
-            # 'diff_compiler_anf_identity' (#1400 X-A) are lightweight
-            # compiled-probe gate parked here for cost: this shard already builds
-            # the adjacent Core/elaboration probes, so its marginal build joins the
-            # existing parallel oracle batch rather than becoming a serial oracle.
-            #
-            # 'diff_compiler_flat_vs_onemodule' (ARCH B-2.1-a, Stage B sprint) is a
-            # TYPECHECK gate here for the same cost reason, fifth time over. Its
-            # thematic home is `types`, which is the SECOND-heaviest shard. Derived
-            # 2026-08-13 from two consecutive green merge_group runs (31655422530 and
-            # 31653614351) rather than trusted from any note in this tree — the shard
-            # walls were eval 149/151s, backend 165/160s, sqlite 185/191s, tools
-            # 202/213s, frontend 289/291s, types 322/324s, engines 373/364s. So
-            # `eval` is the cheapest shard on BOTH runs and `engines` is the POLE,
-            # which is the opposite of what the Stage B brief carried forward; the
-            # numbers rot, re-derive them before moving this line:
-            #   gh run view <id> --json jobs --jq '.jobs[]|select(.name|startswith("gates"))
-            #     |"\(((.completedAt|fromdate)-(.startedAt|fromdate)))s \(.name)"'
-            # It also lands beside its nearest sibling by SHAPE:
-            # diff_compiler_import_order, which likewise grades whether acceptance
-            # depends on import arrangement. It reads NO test/bin oracle and needs no
-            # clang or emitter — only ./medaka, 9 `check`/`run` invocations over
-            # generated tmp fixtures, measured 5.0s wall on the dev box.
-            #
-            # 'diff_compiler_core_ir_typed_modules' (#1608) needs NO new pattern — the
-            # existing 'diff_compiler_core_ir*' glob already matches it, and this shard
-            # is where it belongs anyway, on cost and on oracle overlap. Cost re-derived
-            # 2026-08-14/15 from three consecutive green merge_group runs (31846695129,
-            # 31836577116, 31835386721) rather than trusted from the note above, whose
-            # own numbers had already rotted: shard walls were eval 301/304/312s,
-            # sqlite 318/201/314s, tools 378/174/369s, backend 402/294/401s,
-            # frontend 491/360/393s, types 510/393/499s, engines 398/396/510s. `eval`
-            # is the cheapest by mean AND has by far the lowest variance of the seven;
-            # `types` and `engines` are the poles. ⚠️ Those numbers rot — the ranking in
-            # the paragraph above (eval 149s, engines 373s) is from ONE day earlier in
-            # the same month and is already 2x off in absolute terms. Re-derive with the
-            # `gh run view` command a few lines up before moving anything.
-            #
-            # Oracle overlap is the second reason and it is the stronger one: the gate
-            # reads test/bin/core_ir_typed_modules_main (new), core_ir_modules_main and
-            # eval_modules_main — and this shard ALREADY builds the latter two for
-            # diff_compiler_core_ir_modules and diff_compiler_eval_modules. So the true
-            # marginal cost here is ONE extra oracle build plus ~6 tiny programs
-            # (3 probe invocations + 1 `medaka run` + 1 `medaka build` + clang each).
-            # In any other shard it would be THREE oracle builds.
+            # The 4 `bootstrap_*` stage gates are named individually, NOT globbed
+            # as `bootstrap_*` — that glob also catches `bootstrap_from_seed.sh`,
+            # which `seed-health` already owns. Everything else in this shard's
+            # pattern beyond the `diff_compiler_eval*`/`core_ir*` families
+            # (dispatch_shape, prelude_obj, slice_oob, ir_size, origin_agreement,
+            # draft_semantic, anf_identity, import_order, test_native,
+            # flat_vs_onemodule) is a BACKEND/FRONTEND/TYPES gate parked here by
+            # cost, not theme, each measured and re-measured over many merge_group
+            # runs — full placement history in dossier `ci.md`. Several share
+            # oracle overlap with `core_ir_modules`/`eval_modules`, which this
+            # shard already builds, so their true marginal cost is smaller than a
+            # fresh oracle build elsewhere would be.
             pattern: "'diff_compiler_eval*' 'diff_compiler_core_ir*' 'diff_compiler_dispatch_shape' 'diff_compiler_prelude_obj' 'diff_compiler_slice_oob' 'diff_compiler_ir_size' 'diff_compiler_origin_agreement' 'diff_compiler_draft_semantic' 'diff_compiler_anf_identity' 'diff_compiler_import_order' 'diff_compiler_iface_order' 'diff_compiler_test_native' 'diff_compiler_flat_vs_onemodule' 'bootstrap_lex' 'bootstrap_resolve' 'bootstrap_typecheck' 'bootstrap_eval'"
           - name: backend
-            # 'build_cmd' (T8): THE end-to-end gate for the SHIPPING `medaka build` CLI —
-            # 14 real programs built through the actual CLI, each binary's stdout diffed
-            # against a committed golden. It was MISFILED in CI-COVERAGE-TOOLS.txt as a
-            # "build helper", which is a claim that running it proves nothing about the
-            # compiler; that claim was false, and filing it there made the coverage gate
-            # SUBTRACT it from its own scope and then certify full coverage. Nothing had
-            # invoked it in an unknown length of time. It is the gate that would have caught
-            # this session's diff_compiler_llvm bug (201/201 green against goldens no
-            # `medaka build` binary can produce — it was grading its own probe).
-            # 14 ok / 0 failing. Reads no test/bin oracle; needs only ./medaka + the emitter.
-            #
-            # 'diff_compiler_index_oob' (#1787, 9.6s measured) lands HERE on cost, per
-            # [W-SHARD-COST]. Its nearest sibling by shape is diff_compiler_slice_oob —
-            # same run-vs-build+exec doctrine, same fixture layout — which sits in `eval`
-            # because when it was filed "backend has no room" (see that shard's comment).
-            # That has since INVERTED: derived from run 32336605670, backend 277s is the
-            # CHEAPEST of the seven (eval 326s, tools 323s, engines 408s, sqlite 436s,
-            # types 468s, frontend 530s). Re-derive before moving it; these numbers rot:
-            #   gh run view <id> --json jobs --jq '.jobs[]|select(.name|startswith("gates"))
-            #     |{name,s:((.completedAt|fromdate)-(.startedAt|fromdate))}'
-            # It needs ./medaka + the emitter (6 real `medaka build` + clang), which this
-            # shard already provides for diff_compiler_build and build_cmd.
+            # `build_cmd` (T8) is the end-to-end gate for the SHIPPING `medaka
+            # build` CLI — 14 real programs, stdout diffed against a committed
+            # golden. It was once misfiled as a "build helper" in
+            # CI-COVERAGE-TOOLS.txt (a false claim that running it proves nothing
+            # about the compiler), which made the coverage gate subtract it from
+            # its own scope and certify full coverage while nothing invoked it —
+            # see dossier `ci.md` for the incident it would have caught.
+            # `diff_compiler_index_oob` (#1787) is parked here by cost, its nearest
+            # sibling by shape (`diff_compiler_slice_oob`) sitting in `eval`
+            # instead because the cost ranking has inverted more than once —
+            # re-derive with `scripts/ci_shard_cost.sh` before moving either.
             pattern: "'diff_compiler_llvm*' 'diff_compiler_build' 'diff_compiler_rt_obj' 'diff_compiler_selfproc' 'diff_compiler_stack_overflow' 'diff_compiler_let_refute' 'diff_compiler_index_oob' 'diff_compiler_tmc_parity' 'selfcompile_lex' 'selfcompile_emit' 'selfcompile_build_fixpoint' 'diff_native_cli' 'diff_native_stack' 'build_cmd'"
           - name: tools
-            # 'diff_compiler_mcp' (#253): golden JSON-RPC transcript gate for `medaka
-            # mcp` — same shape as its nearest sibling here, diff_compiler_lsp* (a
-            # dev-tool server driven directly over stdio, no test/bin oracle to
-            # build). Placed by COST, not just theme: it reads no oracle and the
-            # T1 handshake fixture is a handful of tiny `./medaka mcp` invocations
-            # (<1s), so it adds negligible weight to this shard, while `engines` and
-            # `backend` — the two heaviest — have none to spare.
-            # 'diff_compiler_entry_exit_codes' (#440): pins that the shared probe
-            # scaffolding (compiler/entries/entry_support.mdk) exits NON-ZERO on an
-            # error instead of handing a redirecting harness an empty artifact +
-            # success. Parked here for COST, not theme — it is one oracle and six
-            # cheap invocations (~2s), and `tools` is the shard with room (114 CPU-s
-            # vs engines' 834 — engines is the heaviest shard and must never grow;
-            # it is NOT, despite what this line once said, the critical path).
-            # 'diff_compiler_test_typecheck' (#1229): named EXPLICITLY, because the
-            # neighbouring 'diff_compiler_test' entry is an exact name and not a glob
-            # — a new sibling matches nothing and would silently never run in CI, the
-            # exact hazard diff_compiler_ci_shard_coverage exists to catch. It reads no
-            # oracle and is six `./medaka test` invocations over tmp fixtures (~2s), so
-            # it belongs beside diff_compiler_test, whose subject (test_cmd.mdk) it shares.
+            # `diff_compiler_mcp` (#253) and `diff_compiler_entry_exit_codes`
+            # (#440) are parked here by cost — both read no oracle and are a
+            # handful of cheap invocations, while `engines`/`backend` (the two
+            # heaviest shards) have no room to spare.
+            # `diff_compiler_test_typecheck` (#1229) is named EXPLICITLY, not
+            # globbed: its neighbour `diff_compiler_test` is an exact name, not a
+            # glob, so a new sibling would silently never run — the exact hazard
+            # `diff_compiler_ci_shard_coverage` exists to catch.
             pattern: "'diff_compiler_lint*' 'diff_compiler_lsp*' 'diff_compiler_mcp' 'diff_compiler_codemod' 'diff_compiler_repl' 'diff_compiler_new' 'diff_compiler_test' 'diff_compiler_test_typecheck' 'diff_compiler_ported' 'diff_compiler_doc' 'diff_compiler_index' 'diff_compiler_references*' 'diff_compiler_capability_matrix' 'diff_compiler_internal_extern' 'diff_compiler_effect*' 'diff_compiler_os_entropy' 'diff_compiler_entry_exit_codes' 'diff_compiler_run_check_agreement' 'diff_compiler_run_stdout_flush' 'diff_compiler_run_entry_subdir' 'diff_compiler_ci_shard_coverage' 'diff_compiler_perf_stage_census' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_source_bytes' 'diff_compiler_fmt_write_safety' 'check_syntax_examples' 'check_build_oracles_for_consistency' 'cross_project_deps' 'cross_project_twonames' 'manifest_emit' 'lsp_harness' 'diff_net' 'pr_helper_test'"
     name: gates (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v4
 
       # ── WHAT DOES *THIS* SHARD ACTUALLY HAVE TO DO? ───────────────────────────────
+      # ⚠️ THE STEPS BELOW ARE GUARDED; THE JOB IS NOT (except for cancellation) —
+      # there are ELEVEN required checks with ZERO approvals, and a job skipped by
+      # a job-level `if:` (or a workflow skipped by `paths-ignore:`) never posts a
+      # status, leaving the PR permanently unmergeable. So this job RUNS and
+      # REPORTS on every outcome except the whole run being cancelled (the guard
+      # above); only STEPS are conditional, same shape as the
+      # docs-only fast path.
       #
-      # ⚠️ THIS STEP IS NEVER GUARDED, AND NEITHER IS THE JOB. That is the entire design
-      # constraint, and getting it wrong bricks the repo:
-      #
-      #   * a job skipped by a job-level `if:` reports as SKIPPED;
-      #   * a workflow skipped by a `paths-ignore:` trigger filter never reports at all.
-      #
-      # There are TEN required checks and ZERO required approvals — the checks ARE the
-      # merge gate — so either way GitHub leaves that context at "Expected — waiting for
-      # status" FOREVER and the PR becomes permanently UNMERGEABLE. Not fast: blocked.
-      # So every required job always RUNS and always REPORTS; only its STEPS are
-      # conditional. A shard with nothing to do exits 0 in seconds, having said so out
-      # loud. (This is the same shape the docs-only fast path already uses.)
-      #
-      # It computes ONE output, `has_work`, which every expensive step below hangs off,
-      # and `pats`, the concrete gate list to run.
-      #
-      # ── AND IT IS LOUD ABOUT WHAT IT SKIPPED. ─────────────────────────────────────
-      # ORCHESTRATING.md is explicit that a preflight which quietly under-reports its own
-      # coverage is the exact failure this suite exists to prevent. So this prints BOTH
-      # halves: the gates it will run, and every gate in the shard it will NOT — by name,
-      # in the CI log, on every run.
+      # Computes `has_work` (every expensive step below hangs off it) and `pats`
+      # (the concrete gate list to run) — and prints BOTH the gates it will run and
+      # every gate in the shard it will NOT, by name, on every run. A preflight
+      # that quietly under-reports its own coverage is the exact failure this
+      # suite exists to prevent.
       - name: Plan this shard
         id: plan
         env:
@@ -854,31 +527,13 @@ jobs:
             echo
             echo "▶ gates (${{ matrix.name }}) — no gates for this diff (runs FULL in merge_group). Reporting SUCCESS — the check still reports, which is what keeps the PR mergeable."
 
-            # ── #570 + #450: make the no-op VISIBLE where humans/agents actually look ──
-            # The stdout line above is real, but it is buried in a log nobody opens for a
-            # green check. A "gates (${{ matrix.name }}) — pass" check on the PR's Checks
-            # UI is indistinguishable, by text alone, from a shard that ran every gate and
-            # they all passed — and that ambiguity already misled a reviewer into retiring
-            # a correct instruction on an S0 fix (#570), then reappeared verbatim on #576's
-            # 7-shard no-op run (#450 comment) filed BEFORE #570 landed.
-            #
-            # #450's own analysis: the only sound fix is conclusion granularity
-            # (`neutral`/`skipped`), and THAT touches the merge-queue's required-status-
-            # check contract (a required check reporting non-success can block the queue)
-            # — unverified from a worktree with no live PR to test against, so it is
-            # deliberately NOT attempted here. Same reasoning rules out renaming the job
-            # itself: `name: gates (${{ matrix.name }})` above IS the required context the
-            # ruleset matches, so making it conditional would leave the "real" required
-            # context permanently "Expected" on every no-op run — the exact failure mode
-            # the big comment above the `plan` step already warns about, just triggered by
-            # a dynamic name instead of a skipped job.
-            #
-            # So: conclusion and context stay untouched. What moves is the WORDING at
-            # every surface a human/agent looks at WITHOUT opening a log line-by-line —
-            # the annotation title (shown inline in the PR's "Show all checks" panel) and
-            # the job summary heading — now phrased as the self-evident no-op line itself
-            # (`gates (X) — no gates for this diff (runs FULL in merge_group)`), not just a
-            # generic "ran 0 gates" label.
+            # Make the no-op VISIBLE where humans/agents actually look, not just in a
+            # log nobody opens for a green check: a "gates (X) — pass" check is, by
+            # text alone, indistinguishable from a shard that ran every gate and
+            # passed, and that ambiguity has misled a reviewer before (#450, #570).
+            # Conclusion and context stay untouched (changing either touches the
+            # merge queue's required-status-check contract); what moves is the
+            # WORDING at the annotation title and job summary. Incident: dossier `ci.md`.
             echo "::warning title=gates (${{ matrix.name }}) — no gates for this diff (runs FULL in merge_group)::gates (${{ matrix.name }}) matched no gate for this diff and reported SUCCESS WITHOUT RUNNING. Real coverage for these gates runs in the merge queue (merge_group), not on this PR. 'green' here does NOT mean these gates ran."
             {
               echo "### gates (${{ matrix.name }}) — no gates for this diff (runs FULL in merge_group)"
@@ -895,102 +550,42 @@ jobs:
             echo "pats=$pats" >> "$GITHUB_OUTPUT"
           fi
 
-      # sqlite3 is the ORACLE for the 22 sqlite/test/*oracle.sh gates in the `sqlite`
-      # shard — they generate a .db with the real sqlite3 CLI, read it back with both
-      # sqlite3 and the Medaka library, and diff. It ships on ubuntu-latest, but it is
-      # named EXPLICITLY here: an oracle that a gate silently depends on and the workflow
-      # never mentions is exactly how "this didn't run" starts looking like "this passed".
-      #
-      # Installed on EVERY shard rather than only `sqlite`. It is ~1s from the apt cache,
-      # and a per-shard toolchain would mean a gate moved between shards for cost reasons
-      # (which is now a routine act — see the shard-scheduling note above) could silently
-      # lose its oracle and start "passing".
-      - name: Install toolchain
+      # sqlite3 is the ORACLE for the 22 `sqlite/test/*oracle.sh` gates — named
+      # EXPLICITLY (an oracle a gate silently depends on and the workflow never
+      # mentions is how "this didn't run" starts looking like "this passed").
+      # Installed on EVERY shard, not just `sqlite`, so a gate moved between
+      # shards for cost reasons can never silently lose its oracle. Also the wasm
+      # arm of the 3-engine differential (#597, `engines` shard only) — the peer
+      # of the `wasm:` job's own call to this action, same toolchain pin. The
+      # BINARY is downloaded from `build` (#1928); the toolchain install stays,
+      # since clang still compiles this shard's oracles.
+      - name: Setup medaka (toolchain + wasm arm + downloaded binary)
         if: steps.plan.outputs.has_work == 'true'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y clang libgc-dev sqlite3
-
-      # ── The wasm arm of the 3-engine differential (#597) — `engines` shard ONLY ────
-      # These two steps are the PEER of the identically-named steps in the `wasm:` job
-      # below; both read WASM_NODE_VERSION / WASM_TOOLS_VERSION from the workflow-level
-      # `env:` block, so the toolchain cannot drift between the two jobs that install it.
-      # If you change how either is installed, change it in BOTH places (grep
-      # WASM_TOOLS_VERSION — two consumers, by construction).
-      #
-      # Guarded on matrix.wasm_arm so shards without a Wasm differential pay nothing:
-      # ~3s of setup-node plus ~1s of curl.
-      - name: Set up Node.js ${{ env.WASM_NODE_VERSION }} (wasm arm)
-        if: steps.plan.outputs.has_work == 'true' && matrix.wasm_arm != ''
-        uses: actions/setup-node@v4
+        uses: ./.github/actions/setup-medaka
         with:
-          node-version: ${{ env.WASM_NODE_VERSION }}
+          sqlite: 'true'
+          wasm: ${{ matrix.wasm_arm != '' }}
+          binary: artifact
 
-      - name: Install wasm-tools (wasm arm)
-        if: steps.plan.outputs.has_work == 'true' && matrix.wasm_arm != ''
-        run: |
-          set -eu
-          v="$WASM_TOOLS_VERSION"
-          url="https://github.com/bytecodealliance/wasm-tools/releases/download/v${v}/wasm-tools-${v}-x86_64-linux.tar.gz"
-          # Extract OUTSIDE the checkout.  `tar xz` in the workspace leaves
-          # `wasm-tools-${v}-x86_64-linux/` behind after the binary is moved out, and the
-          # gates shards end with a review gate (`git status --porcelain`) that FAILS on any
-          # untracked file — so unpacking here turns a toolchain install into a red shard.
-          # The `wasm:` job has no such gate, which is why this was invisible until the
-          # engines shard grew a wasm arm (#597).
-          d="$(mktemp -d)"
-          curl -sSfL "$url" | tar xz -C "$d"
-          sudo mv "$d/wasm-tools-${v}-x86_64-linux/wasm-tools" /usr/local/bin/wasm-tools
-          rm -rf "$d"
-          wasm-tools --version
-
-      # A fresh checkout has no ./medaka_emitter, so this is the COLD path: it
-      # bootstraps from the checked-in seed (compiler/seed/emitter.ll.gz). Every
-      # shard therefore re-proves the trust anchor. If the seed ever goes stale,
-      # this is what catches it — before anything downstream can be trusted. 80s.
-      #
-      - name: Build medaka (cold bootstrap from seed)
-        if: steps.plan.outputs.has_work == 'true'
-        run: make medaka
-
-      # Per-shard: this shard's oracle set, keyed the same way as the binary
-      # above (plus test/build_oracles.sh itself — the script that builds them)
-      # AND the shard's own `pattern`.
-      #
-      # The pattern is load-bearing in the key and it is easy to miss. WHICH oracles a
-      # shard builds is derived FROM the pattern (`build_oracles.sh --for <pattern>`),
-      # so changing the pattern changes the contents of test/bin. Without the pattern in
-      # the key, a `test/bin` cached before the pattern changed would restore, the build
-      # step would be SKIPPED, and the newly-needed oracles would simply be ABSENT.
-      #
-      # This is not hypothetical — it went live the moment the eval shard gained the
-      # bootstrap_* gates. It fails loudly rather than silently (run_gates.sh reclassifies
-      # a missing oracle as FAIL*, phantom skip, not SKIP — see T1), so it could never
-      # have passed-while-proving-nothing. But it would have read as a baffling CI failure
-      # on an unrelated commit.
-      #
-      # We hash the WHOLE ci.yml rather than the pattern string: a pattern contains quotes,
-      # spaces and `*`, none of which are legal in a cache key, and Actions has no
-      # hash-a-string function. So a comment-only edit to this file also busts the oracle
-      # cache. That over-invalidates, and it is deliberately the safe direction to be wrong
-      # in — the same trade the `compiler/**` glob above makes, for the same reason.
-      #
-      # ── AND the DERIVED GATE SET, via detect's `oracle_key` (T-15). ──────────────
-      # A narrowed `pull_request` run builds only the oracles its SUBSET of this shard's
-      # gates reads. That is a different test/bin than the full run's, under a key that
-      # was otherwise IDENTICAL — so a full run could have restored a narrow cache, SKIPPED
-      # the build step, and found the missing oracles simply ABSENT. `oracle_key` is
-      # 'full' on merge_group/push and a hash of the derived gate set on a narrowed PR, so
-      # the two can never collide. (Loud, not silent, if it ever did: run_gates.sh counts a
-      # missing oracle as FAIL*, phantom skip. But a loud failure on an unrelated commit is
-      # still a bug — key it correctly instead.)
+      # This shard's oracle set, keyed on the compiler/build-script inputs PLUS
+      # the shard's own `pattern` (which oracles get built is DERIVED from the
+      # pattern, so a pattern change without the key changing would restore a
+      # `test/bin` missing the newly-needed oracles) PLUS `detect`'s `oracle_key`
+      # (a narrowed pull_request builds a different, smaller `test/bin` than a
+      # full run under what would otherwise be an identical key). The whole of
+      # `ci.yml` is hashed rather than just the pattern string, since Actions has
+      # no hash-a-string function and a pattern contains characters illegal in a
+      # cache key — a comment-only edit therefore also busts the oracle cache,
+      # deliberately the safe direction to be wrong in. A collision would fail
+      # loudly (run_gates.sh reclassifies a missing oracle as a phantom-skip
+      # FAILURE, never a SKIP), never silently. History: dossier `ci.md`.
       - name: Restore cached oracles for this shard
         id: oracle-cache
         if: steps.plan.outputs.has_work == 'true'
         uses: actions/cache@v4
         with:
           path: test/bin
-          key: oracles-${{ matrix.name }}-v3-${{ hashFiles('compiler/**', 'stdlib/**', 'runtime/**', 'test/build_native_medaka.sh', 'test/bootstrap_from_seed.sh', 'test/build_oracles.sh', 'Makefile') }}-${{ hashFiles('.github/workflows/ci.yml') }}-${{ needs.detect.outputs.oracle_key }}
+          key: oracles-${{ matrix.name }}-v3-${{ hashFiles('compiler/**', 'stdlib/**', 'runtime/**', 'test/build_native_medaka.sh', 'test/bootstrap_from_seed.sh', 'test/build_oracles.sh', 'Makefile') }}-${{ hashFiles('.github/workflows/ci.yml', '.github/actions/**') }}-${{ needs.detect.outputs.oracle_key }}
 
       # Only the oracles THIS shard's gates actually read. See the header.
       # Skipped only on an exact cache hit above — a miss always rebuilds with
@@ -1001,54 +596,31 @@ jobs:
         if: steps.plan.outputs.has_work == 'true' && steps.oracle-cache.outputs.cache-hit != 'true'
         run: FORCE=1 sh test/build_oracles.sh --for ${{ steps.plan.outputs.pats }}
 
-      # build_oracles.sh does NOT build the wasm emitter oracles — it says so itself
-      # ("note: these gates also read probe binaries this script does not build"). That
-      # is why diff_compiler_engines' wasm arm was structurally dead on this runner (#597).
-      #
-      # --modules-only: diff_compiler_engines reads exactly ONE of the three wasm oracles
-      # (WASMBIN=…/wasm_emit_modules_main, diff_compiler_engines.sh:144). Building all
-      # three here would be a ~2.6x over-buy on the shard; the `wasm:` job still builds
-      # all three because its five gates open all three.
-      #
-      # NOT cached (peer of the same decision in the `wasm:` job): a pure function of the
-      # whole compiler graph, which the medaka cache above already keys.
+      # build_oracles.sh does not build the wasm emitter oracles (#597) — this
+      # shard builds them separately. `--modules-only`: diff_compiler_engines
+      # reads exactly one of the three wasm oracles, so building all three here
+      # would over-buy; the `wasm:` job's seven gates open all three and build
+      # accordingly. Not cached — a pure function of the compiler graph, which
+      # the medaka cache above already keys.
       - name: Build the wasm emitter oracle (wasm arm)
         if: steps.plan.outputs.has_work == 'true' && matrix.wasm_arm != ''
         run: |
           export MEDAKA_EMITTER="$PWD/medaka_emitter"
           sh test/wasm/build_wasm_oracle.sh --modules-only
 
-      # Runs the CONCRETE gate list the `plan` step resolved (never a glob) — on a
-      # merge_group/push that is the shard's whole pattern, on a narrowed pull_request
-      # it is the intersection with the diff. This step is reached only when that list
-      # is non-empty (`has_work`), so run_gates.sh's own "no gates match -> exit 1"
-      # guard still means what it says: a genuine resolution failure, never a no-op.
-      # It also reclassifies a missing-oracle exit-2 as a FAILURE rather than a SKIP, so
-      # a shard that ran nothing can never report green.
+      # Runs the CONCRETE gate list `plan` resolved (never a glob) — the shard's
+      # whole pattern on merge_group/push, the diff intersection on a narrowed
+      # pull_request. Reclassifies a missing-oracle exit-2 as a FAILURE, not a
+      # SKIP, so a shard that ran nothing can never report green. (UNQUOTED
+      # substitution is deliberate — quoting would collapse the gate list into
+      # ONE argument and silently degrade the shard to a single bad glob.)
       #
-      # (UNQUOTED substitution is deliberate; quoting it would collapse the gate list
-      # into ONE argument and silently degrade the shard to a single bad glob.)
-      #
-      # ── `full_cores` / `wasm_arm` — opt-in per shard ─────────────────────────────
-      # diff_compiler_engines picks its own fan-out: ENGINE_JOBS, defaulting to NCPU/2.
-      # That default is a HEDGE against sharing a runner with other gates (run_gates'
-      # outer pool would otherwise oversubscribe it) — and on a 4-core hosted runner it
-      # means the suite's single most expensive gate uses TWO CORES and idles the other
-      # two. `engines` is the only gate in its shard, so give it the whole box: at 2
-      # workers it was ~420s; at 4, ~210s. Purely an env knob the gate already exposes —
-      # no gate change. It is what bought the headroom the wasm arm now spends.
-      #
-      # `wasm_arm` turns on MEDAKA_REQUIRE_WASM=1, the companion to the toolchain steps
-      # above: the shard installs wasm-tools + Node and builds the wasm oracle, so the
-      # gate MUST run all three engines here or fail (#597). Measured on the 12-core dev
-      # box at ENGINE_JOBS=4 (the closest available proxy for a 4-core runner): degraded
-      # two-engine 60.9s -> full three-engine 110.0s, i.e. the wasm arm is +49s wall /
-      # x1.94 CPU, plus ~20s of oracle build and ~4s of toolchain setup. A hosted runner
-      # will be slower in absolute terms; the RATIO is the transferable part.
-      #
-      # Derived from `nproc` rather than hardcoded, so it tracks GitHub's runner size.
-      # Shards without one of the Wasm differentials leave it empty. The coverage gate
-      # independently enforces that each gate is enrolled exactly once.
+      # `full_cores` gives `engines` the whole runner instead of its own
+      # ENGINE_JOBS=NCPU/2 hedge (derived from `nproc`, so it tracks runner
+      # size). `wasm_arm` sets MEDAKA_REQUIRE_WASM=1 — the shard already
+      # installed wasm-tools/Node and built the wasm oracle, so a missing wasm
+      # arm here is a WIRING BREAK (exit 1), never the gate's honest elsewhere
+      # degradation (exit 2, T2/T3 "NOT RUN"). See diff_compiler_engines.sh.
       - name: Gate shard — ${{ matrix.name }}
         if: steps.plan.outputs.has_work == 'true'
         run: |
@@ -1068,18 +640,11 @@ jobs:
           sh test/run_gates.sh ${{ steps.plan.outputs.pats }}
 
       # THE REVIEW GATE — must be in THIS job, on the tree the gates just ran over.
-      #
-      # Roc's model: regeneration is the DEFAULT action and `git diff --exit-code`
-      # forces every regenerated byte into review. That guard is what makes a
-      # frictionless `--bless` safe. GHC and OCaml, lacking it, deliberately cripple
-      # blessing instead. This repo has had NEITHER guard — the dangerous quadrant.
-      #
-      # TODAY it catches gates that write into the tree. AFTER the snapshot migration
-      # lands `medaka snapshot --bless`, it becomes the real guard. It must be
-      # load-bearing BEFORE blessing gets easy, not after.
-      #
-      # Skipped on a docs-only run: nothing above ran, so there is nothing to have
-      # drifted — running it anyway would just diff an unmodified checkout.
+      # Roc's model: regeneration is the default action and `git diff --exit-code`
+      # forces every regenerated byte into review, which is what makes a
+      # frictionless `--bless` safe. Today it catches gates that write into the
+      # tree; after the snapshot migration lands `medaka snapshot --bless`, it
+      # becomes the real guard. Skipped on a docs-only run: nothing above ran.
       - name: The tree must not have drifted
         if: steps.plan.outputs.has_work == 'true'
         run: |
@@ -1096,58 +661,36 @@ jobs:
           fi
 
   # ── The trust anchor ─────────────────────────────────────────────────────────
+  # `make medaka` asks "CAN I build from the seed?"; `seed-health` asks "does the
+  # seed still WORK, and how far has it DRIFTED?" — different questions, and only
+  # the second was gated until 2026-07-13 (dossier `ci.md`). Policy: the seed
+  # only has to WORK. Byte-currency (C3a) is a drift detector, not a
+  # requirement — demanding it forced a costly re-mint history before the
+  # policy was fixed (dossier `ci.md`). So drift WARNS and a broken seed FAILS.
+  # Re-mint at checkpoints (`make bootstrap` is strict).
   #
-  # THIS WAS NOT GATED AT ALL until 2026-07-13, and the seed was silently stale on
-  # main. The hole was subtle and is worth understanding, because it is the same
-  # bug class as everything else this suite was hardened against:
-  #
-  #   `make medaka` asks   "CAN I build from the seed?"        -> it passed
-  #   this gate asks       "does the seed still WORK, and how far has it DRIFTED?"
-  #
-  # Those are different questions. A stale seed still cold-bootstraps fine (proven:
-  # it did, seven times over, while C3a was failing) — so the cold build passing
-  # tells you nothing about currency. Nobody was asking the second question.
-  #
-  # POLICY (see the SEED POLICY note in test/bootstrap_from_seed.sh): the seed only
-  # has to WORK. Byte-currency (C3a) is a DRIFT DETECTOR, not a requirement, and
-  # demanding it forced a re-mint on every emitter change — 41 re-mints, 86 MB, 40%
-  # of the repo's entire git history. So here drift WARNS and a seed that can no
-  # longer do its job FAILS. Re-mint at checkpoints (`make bootstrap` is strict).
-  # ── Compiler soundness: the two gates that were documented but never enforced ──
-  #
-  # AGENTS.md has always said: for a compiler `.mdk` change, run the self-compile
-  # fixpoint AND typecheck_compiler_source.sh. Neither ran in CI. They ran when an
-  # agent remembered — which is a habit, not a gate.
-  #
-  # It cost us: `snapshot.mdk` declared `export data SnapMode` (which exports a type
-  # ABSTRACTLY), medaka_cli.mdk imported `SnapMode(..)`, and every SnapCheck/SnapNew/
-  # SnapBless in the CLI was an UNBOUND VARIABLE. It shipped to main and every gate
-  # stayed green — because the emitter's ctor table is global, so the ill-typed source
-  # still emitted a working binary, and `make medaka` does not gate on hadTypeErrors().
-  # Fixed in a10c2705. The bug is not that it broke; it is that it COULDN'T be seen.
-  #
-  #   typecheck  — is the compiler source well-typed?      (the build does NOT ask)
-  #   fixpoint   — does the emitter reproduce itself?      (C3a/C3b byte-identical)
-  #
-  # These two ask questions no other job asks. `gates` runs the compiler; it never
-  # typechecks it. `seed-health` proves the seed WORKS; it never proves the current
-  # source is well-typed, nor that emission has reached a fixpoint.
+  # ── Compiler soundness: two gates documented but never enforced (until a10c2705) ──
+  # `typecheck` asks "is the compiler source well-typed?" (the build does not
+  # ask). `fixpoint` asks "does the emitter reproduce itself?" (C3a/C3b
+  # byte-identical). `gates` runs the compiler; it never typechecks it.
+  # `seed-health` proves the seed works; it never proves the source is
+  # well-typed or that emission reached a fixpoint. Incident: dossier `ci.md`.
   soundness:
-    needs: detect
+    # `build` for the binaries (#1928); `detect` for its outputs. The `if:` is the
+    # same guard, for the same reason, as the one on `gates` above — read it there.
+    needs: [detect, build]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
-      # ── DELIBERATELY UNGUARDED: this step runs even when docs_only=true. ─────────
-      # Every other step in every heavy job is skipped on a docs-only PR. A doc-link
-      # gate guarded that way would be skipped on precisely the PRs it exists to
-      # police — present in the repo, looking like protection, providing none.
-      # It needs no compiler (pure text analysis), so it is nearly free to always run.
-      #
-      # Lives in `soundness` because that job already answers "is the tree coherent?",
-      # and because soundness is a REQUIRED check — so this gates on merge today,
-      # with no repo-settings change needed to make a new job required.
+      # ── DELIBERATELY UNGUARDED: every doc-gate step below runs even when
+      # docs_only=true. Guarding a doc gate on docs_only would skip it on
+      # precisely the PRs it exists to police. Each needs no compiler (pure
+      # text analysis), so each is nearly free to always run. Lives in
+      # `soundness` because that job already answers "is the tree coherent?"
+      # and is already a required check.
       - name: Docs must not cite dead paths
         run: sh test/check_doc_links.sh
 
@@ -1163,35 +706,14 @@ jobs:
       - name: Docs must not cite fabricated symbols
         run: sh test/check_agent_doc_symbols.sh
 
-      # Also unguarded, same reason — and one layer down from both gates above: those
-      # check that a cited PATH exists and a cited SYMBOL resolves; this checks that a
-      # cited CLAUSE LABEL has a definition. docs/spec/SHADOW-SEMANTICS.md declares a
-      # numbered clause set (S1, S2, ...); commit 9c6dcee5 rewrote one clause in a
-      # 173-line hunk and silently carried three sibling clauses (S6, S7, S8) out with
-      # it — its own commit message cites S7 twice AS A LIVE CLAUSE in the commit that
-      # deleted S7's text. Nobody noticed for three weeks: every gate stayed green,
-      # because neither sibling gate above checks this. Pure text analysis, no compiler.
+      # Also unguarded, same reason, one layer down each time: PATHS exist (above)
+      # -> SYMBOLS resolve (above) -> CLAUSE LABELS have a definition (this gate)
+      # -> gate scripts don't PRESCRIBE a dangerous command (next gate). Each
+      # closed a real, silent, multi-week rot with the same shape — pure text
+      # analysis, no compiler. Incident history: dossier `ci.md`.
       - name: Spec clause citations must resolve to a same-document definition
         run: sh test/check_spec_clause_labels.sh
 
-      # Also unguarded, same reason — and the same disease one layer down. The two gates
-      # above check what the DOCS say; this checks what the TOOLS say. ~54 gate scripts
-      # printed `sh test/build_oracles.sh` as their remediation advice — the command
-      # AGENTS.md documents as spawning an `xargs -P` pool that "outlives the agent's turn
-      # and gets RESPAWNED by the harness — it has killed several agents" — at exactly the
-      # moment a reader is most likely to obey, right after a gate failed. A safety rule
-      # that lives only in a doc loses to a message printed by the thing you just ran.
-      #
-      # ⭐ Why a GATE and not one more sweep: #478 fixed 52 scripts and MISSED two — one of
-      # them diff_compiler_engines.sh, the 3-engine differential on the CI critical path —
-      # because #478 scoped itself with a grep keyed on a fixed English phrase, and those
-      # two worded the same hazard differently. The fix was 52/52 complete against a set
-      # that was itself wrong. A SWEEP'S SCOPE IS AN ENCODED FACT TOO, and a wording-keyed
-      # grep confirms itself. This keys on BEHAVIOR (does a message print the untargeted
-      # command?) and derives its file set from `git ls-files`, so a new script is covered
-      # the moment it is added, with nothing to remember. It found 2 further live instances
-      # (capture_goldens.sh, tmc_census.sh) that #527's own hand-grep had missed.
-      # Pure text analysis, no compiler.
       - name: No script may prescribe the bare build_oracles.sh
         run: sh test/check_no_banned_oracle_cmd.sh
 
@@ -1205,25 +727,15 @@ jobs:
       - name: Mutation transactions must restore on red and interruption
         run: sh test/check_mutation_transaction.sh
 
-      # Also unguarded, same reason (#1451). The lexer's reserved-word list
-      # (keywordOrIdent, compiler/frontend/lexer.mdk) is hand-duplicated into
-      # the vscode syntax grammar and the playground tokenizer, and nothing
-      # diffed those literals against it — a word added to or removed from
-      # the lexer left both copies silently wrong. Pure text analysis, no
-      # compiler.
+      # Also unguarded, same reason (#1451): the lexer's reserved-word list is
+      # hand-duplicated into the vscode grammar and the playground tokenizer,
+      # with nothing diffing them against it. Pure text analysis, no compiler.
       - name: Editor keyword lists must stay in sync with the lexer
         run: sh test/check_keyword_sync.sh
 
-      # Also unguarded, and for the same reason. docs/README.md is GENERATED from the
-      # docs' `**Status:**` banners — the whole point being that a hand-maintained index
-      # rots (AGENTS.md's own doc-index table sat mislabelling a doc as "IN PROGRESS"
-      # that the doc itself called COMPLETE, and nothing noticed for weeks).
-      #
-      # But a generator nothing checks is just a suggestion: add a doc, forget
-      # `make docs-index`, and the index silently goes stale — reintroducing the exact
-      # rot it exists to prevent. So regenerate it here and fail if it differs.
-      # That is also why gen_docs_index.sh needs no CI-COVERAGE exception: it is named
-      # in a run: step, which is what the shard-coverage gate asks for.
+      # Also unguarded, same reason. docs/README.md is GENERATED from the docs'
+      # `**Status:**` banners because a hand-maintained index rots — regenerate
+      # here and fail if it differs, or the generator is just a suggestion.
       - name: Docs index must be regenerated, not hand-edited
         run: |
           sh test/gen_docs_index.sh
@@ -1232,89 +744,54 @@ jobs:
             exit 1
           fi
 
-      - name: Install toolchain
+      # Toolchain still needed (clang builds the typecheck oracle; the fixpoint
+      # gate cold-bootstraps from the seed on its own); the BINARY comes from
+      # `build` (#1928).
+      - name: Setup medaka (toolchain + downloaded binary)
         if: needs.detect.outputs.docs_only != 'true'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y clang libgc-dev
-      - name: Build medaka (cold bootstrap from seed)
-        if: needs.detect.outputs.docs_only != 'true'
-        run: make medaka
+        uses: ./.github/actions/setup-medaka
+        with:
+          binary: artifact
 
-      # ── Fingerprint mirror parity (#267) ────────────────────────────────────────
-      #
-      # test/build_native_medaka.sh's src_fingerprint_compiler() (shell/cat-based) and
-      # compiler/driver/medaka_cli.mdk's liveSourceFingerprint (perl-based) are TWO
-      # HAND-SYNCED REIMPLEMENTATIONS of the same hashing algorithm — one bakes
-      # -DMEDAKA_SRC_FP into ./medaka at build time, the other recomputes it live on
-      # every invocation and hard-fails a mismatch under MEDAKA_STRICT=1. #182's first
-      # attempt broke exactly this mirror and only human review (PR #263) caught it —
-      # no gate proved the two still agreed. This one does: it re-exercises the just-
-      # built ./medaka's own staleness self-check, under MEDAKA_STRICT=1, on the exact
-      # tree it was built from, and asserts it reports "not stale". Needs the binary
-      # `make medaka` just built + this same tree, so it lives right here, not in a new
-      # gate shard (see AGENTS.md "a gate must run where the bug lands").
+      # ── Fingerprint mirror parity (#267, PR #263) ───────────────────────────
+      # `test/build_native_medaka.sh` and `compiler/driver/medaka_cli.mdk` are
+      # two hand-synced reimplementations of the same source-fingerprint hash;
+      # #182 broke the mirror once and only human review caught it, no gate
+      # proved the two agreed. This one does — see dossier `ci.md`.
       - name: Fingerprint mirror must still agree (issue #267)
         if: needs.detect.outputs.docs_only != 'true'
         run: sh test/check_fingerprint_parity.sh
 
-      # typecheck_compiler_source.sh exits 2 (SKIP) when its oracle is absent. In CI
-      # a skip here is INDISTINGUISHABLE FROM A PASS — the precise bug this whole job
-      # exists to close — so build the oracle first and assert on the PASS line, not
-      # on the exit status.
+      # `typecheck_compiler_source.sh` exits 2 (SKIP) when its oracle is absent,
+      # indistinguishable from a pass in CI — so build the oracle first and
+      # assert on the PASS line, not the exit status.
       - name: Build the typecheck oracle
         if: needs.detect.outputs.docs_only != 'true'
         run: FORCE=1 sh test/build_oracles.sh --build-one diagnostics_project_main
 
-      # ── The MUST-FAIL suite: the TRACKER's self-drain (#547). ───────────────────
-      #
-      # Every fixture asserts an OPEN issue's bug STILL reproduces. When a fix lands, the
-      # pin stops holding, this goes RED, and the message says to close the issue. It is
-      # the same ratchet the docs already run under ("docs are GATED"; a ledger must FAIL
-      # when an entry stops earning its place) applied to the last un-drained ledger in
-      # the repo. Six entries were already dead when the backlog was re-derived on
-      # 2026-07-14 — two labelled "silent build miscompile" — with nothing to notice.
-      #
-      # ⚠️ IT LIVES HERE, NOT IN A GATE SHARD, AND THAT IS LOAD-BEARING. Shards are
-      # NARROWED on `pull_request` by test/preflight.sh's path map: a fix to
-      # compiler/frontend/parser.mdk derives 'diff_compiler_parse*' and would NOT derive
-      # this gate, so the drain would fire only in the merge queue — bouncing the PR
-      # AFTER review. The alternative (adding it to preflight's `add` arms) is a
-      # hand-maintained map of which-bug-lives-in-which-file: the encoded-fact disease
-      # this gate exists to cure, which would rot on the first new fixture. `soundness`
-      # runs FULL on every event, is already required, and already built ./medaka above.
-      #
-      # Guarded on docs_only like its neighbours — and unlike the doc gates at the top of
-      # this job, that guard is CORRECT here: this needs the compiler, and a docs-only PR
-      # cannot fix a compiler bug.
+      # ── The MUST-FAIL suite: the tracker's self-drain (#547) ────────────────
+      # Every fixture asserts an OPEN issue's bug still reproduces; a fix landing
+      # turns this RED, and the message says to close the issue.
+      # ⚠️ LIVES HERE, NOT IN A GATE SHARD, and that is load-bearing: shards are
+      # narrowed on `pull_request`, and no hand-maintained bug-to-file map could
+      # derive this gate from a diff without rotting on the first new fixture.
+      # `soundness` runs FULL on every event and is already required. Guarded on
+      # docs_only, correctly here — this needs the compiler. History: dossier `ci.md`.
       - name: Open bugs must still reproduce (must-fail suite — a RED here means someone FIXED something)
         if: needs.detect.outputs.docs_only != 'true'
         run: sh test/diff_compiler_must_fail.sh
 
-      # The script asserts C3a AND C3b (its exit status is `c3a && c3b`), which is the
-      # right bar for a checkpoint re-mint but the WRONG bar for CI. They answer two
-      # different questions, and the SEED POLICY (test/bootstrap_from_seed.sh, and the
-      # seed-health job below) is explicit that only one of them may block:
-      #
-      #   C3b — IR1 == IR2. The compiled compiler reproduces its own output. This is
-      #         SOUNDNESS, it is independent of the seed, and it must HARD FAIL.
-      #   C3a — IR1 == the seed-bootstrapped reference. This is a DRIFT DETECTOR: it
-      #         says the checked-in seed is byte-CURRENT, not that anything is broken.
-      #
-      # Blocking on C3a would turn CI red on every emitter change until someone re-mints
-      # the seed — which is precisely the churn that produced 41 re-mints / 86 MB / 40%
-      # of this repo's git history before the policy was fixed. So: C3b errors, C3a warns.
-      #
-      # Do not "simplify" this to the script's exit status. (Also note `| tee` would mask
-      # that status anyway — assert on the verdict lines, as seed-health does.)
-      # Typechecking and fixpoint emission are independent, read-only consumers of the
-      # compiler tree and use separate scratch paths. Recent hosted runs spent ~2.7m and
-      # ~0.8m on them serially. Overlap them, but cap typecheck's entry-worker pool at
-      # three so the fixpoint process retains one of the four hosted-runner cores.
-      #
-      # Do NOT extend this overlap to the must-fail suite above: its fixtures contain
-      # fail-capable 60-second alarms. The first experiment correctly went red when CPU
-      # contention changed a pinned stack-overflow exit 134 into timeout exit 142.
+      # `selfcompile_fixpoint.sh` asserts C3a AND C3b, the right bar for a
+      # checkpoint re-mint but the wrong bar for CI: C3b (the compiled compiler
+      # reproduces its own output) is soundness and must hard fail; C3a (the
+      # seed is byte-current) is a drift detector and must only warn — blocking
+      # on it would turn CI red on every emitter change. Assert on the verdict
+      # lines below, never the script's raw exit status (`| tee` would mask it
+      # anyway). Typecheck and fixpoint run overlapped (independent, read-only,
+      # separate scratch paths) but the must-fail suite above is EXCLUDED from
+      # that overlap — its fixtures carry fail-capable timing alarms that CPU
+      # contention has already flipped from a real failure into a false
+      # timeout. History: dossier `ci.md`.
       - name: Compiler source is well-typed and emitter reproduces itself
         if: needs.detect.outputs.docs_only != 'true'
         run: |
@@ -1362,11 +839,9 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-      - name: Install toolchain
+      - name: Setup medaka (toolchain only)
         if: needs.detect.outputs.docs_only != 'true'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y clang libgc-dev
+        uses: ./.github/actions/setup-medaka
       - name: Seed must still build a working emitter (drift only warns)
         if: needs.detect.outputs.docs_only != 'true'
         run: |
@@ -1384,124 +859,85 @@ jobs:
 
   # ── The in-language suite: doctests, properties, `test "..."` decls ───────────
   inlang:
-    needs: detect
+    # `build` for the binaries (#1928); `if:` guard as on `gates` above.
+    needs: [detect, build]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Install toolchain
+      - name: Setup medaka (toolchain + downloaded binary)
         if: needs.detect.outputs.docs_only != 'true'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y clang libgc-dev
-      - name: Build medaka (cold bootstrap from seed)
-        if: needs.detect.outputs.docs_only != 'true'
-        run: make medaka
+        uses: ./.github/actions/setup-medaka
+        with:
+          binary: artifact
+      # ⚠️ THE ONE CONSUMER JOB THAT RUNS `make`. `make test` depends on the `.PHONY`
+      # `medaka` target, so it re-enters test/build_native_medaka.sh, whose stage B
+      # (the clang link of ./medaka, ~55 s) is otherwise unconditional — it would
+      # overwrite the binary this job just downloaded and eat the whole #1928 win for
+      # this job. SKIP_CLI_LINK_IF_FRESH=1 makes stage B honour `.medaka.srcstamp`
+      # (which travels with the artifact, same-SHA invariant as the emitter stamp) and
+      # skip the relink. Stage A already skips via `.medaka_emitter.srcstamp`.
+      # Deliberately scoped to THIS step: the flag is default-off everywhere else, so
+      # the local dev loop and every other caller relink exactly as before.
       - name: Doctests, properties, and test decls
         if: needs.detect.outputs.docs_only != 'true'
+        env:
+          SKIP_CLI_LINK_IF_FRESH: '1'
         run: make test
 
   # ── T25: the WasmGC backend gates ─────────────────────────────────────────────
+  # WasmGC is one of Medaka's TWO production backends and the engine the
+  # playground runs on, yet its gates ran in NO CI job until T25 — a stock
+  # runner lacks the toolchain and the gates SKIP (exit 2) when it's absent, so
+  # nothing was watching, and two silent wasm miscompiles reached main that way.
+  # History: dossier `ci.md`.
   #
-  # The WasmGC backend is one of Medaka's TWO production backends and the engine the
-  # PLAYGROUND (the 0.1.0 front door) runs on — yet until this job its Wasm gates ran
-  # in NO CI job at all. A stock ubuntu-latest runner has neither wasm-tools nor a
-  # WasmGC-capable node>=22, and the gates SKIP (exit 2) when the toolchain is absent,
-  # so nothing was watching. That is exactly how two silent wasm miscompiles (a `round`
-  # divergence, intToFloat #199) reached main. See CI-COVERAGE-EXCEPTIONS.txt for the
-  # ledger these five rows lived in until T25.
+  # ONE job, not six more gate shards: only these gates need the wasm toolchain,
+  # and adding it to every `gates` shard would tax all seven for a tool one job
+  # needs. These seven gates are NOT sharded (no matrix `pattern:`) — each is
+  # invoked by its LITERAL repo-relative path below, the coverage gate's "named
+  # gate" mechanism (same as `soundness`'s fixpoint + typecheck gates).
   #
-  # ── ONE job, not six more gate shards, ON PURPOSE ────────────────────────────────
-  # Only these gates need wasm-tools + a WasmGC node. Adding that toolchain to
-  # every `gates` shard would tax all six for a tool one job needs — the reasoning
-  # CI-COVERAGE-EXCEPTIONS.txt already spelled out for build_wasm_cmd.
+  # ⚠️ NO job-level `if:` THAT CAN SKIP THE JOB FOR ANYTHING OTHER THAN THE WHOLE
+  # RUN BEING CANCELLED — same required-context deadlock risk as every other
+  # heavy job. The guard below is safe because it only skips on
+  # cancellation; STEPS remain the thing gated on `docs_only`. Runs on every
+  # non-docs event, NOT narrowed (these seven ARE the whole wasm surface and are
+  # cheap enough to run in full).
   #
-  # ── COVERAGE ─────────────────────────────────────────────────────────────────────
-  # diff_compiler_ci_shard_coverage.sh certifies every tracked *.sh is covered. These
-  # five are NOT sharded (they contribute no matrix `pattern:`) — they are "named"
-  # gates: each is invoked by its LITERAL repo-relative path in the run: step below,
-  # the SAME mechanism the soundness job uses for the fixpoint + typecheck gates. Their
-  # CI-COVERAGE-EXCEPTIONS.txt rows were DELETED when this job landed (that file said to).
-  #
-  # ── GUARDING (same shape as every other heavy job) ──────────────────────────────
-  # The JOB is NEVER guarded, so it always RUNS and always REPORTS. A job skipped by a
-  # job-level `if:` sits at "Expected — waiting for status" forever and would DEADLOCK
-  # the merge queue if this were ever a required check. Only the expensive STEPS are
-  # gated on `docs_only != 'true'`, so a docs-only PR skips the wasm toolchain + gates
-  # and reports success in seconds. It runs on every non-docs event — pull_request,
-  # merge_group (the queue tests the merged tree), and push. NOT narrowed: these five
-  # ARE the whole wasm surface and are cheap enough to run in full as one job.
-  #
-  # ── A REQUIRED CHECK (verified 2026-07-17) ───────────────────────────────────────
-  # This block said "NOT YET A REQUIRED CHECK ... advisory-but-visible" until #597. That
-  # was STALE, and it was load-bearing: it is cited by #597 and by docs/spec/
-  # WASM-SEMANTICS.md as the reason wasm parity blocked nothing. `wasm` is in fact in the
-  # required set and has been since 2026-07-15. Derived, not assumed:
-  #
+  # A REQUIRED CHECK, in a repository RULESET (not classic branch protection —
+  # the classic endpoint 404s "Branch not protected", which reads exactly like
+  # "nothing is required" and is how an earlier version of this note rotted).
+  # Derive live, never trust a date in this file:
   #   gh api repos/MedakaLang/medaka/rulesets --jq '.[]|{id,name,enforcement}'
   #   gh api repos/MedakaLang/medaka/rulesets/<id> \
   #     --jq '.rules[]|select(.type=="required_status_checks")
   #            |.parameters.required_status_checks[].context'
-  #
-  # ⚠️ Note WHERE it lives: a REPOSITORY RULESET, not classic branch protection. The
-  # classic endpoint (…/branches/main/protection) answers **404 "Branch not protected"**,
-  # which reads exactly like "nothing is required here" and is how this comment rotted.
-  # That 404 is also why pushes to main fail with `GH013: Repository rule violations`
-  # rather than the classic protection error.
-  #
-  # The job is shaped required-safe and must STAY that way: no job-level `if:`, so it
-  # always runs and always posts its context on every event (incl. merge_group and
-  # docs-only PRs, where its steps skip individually and it reports green in seconds).
-  # Adding a job-level `if:` would make a required context never post and hang the queue.
   wasm:
-    needs: detect
+    # `build` for the binaries (#1928); `if:` guard as on `gates` above.
+    needs: [detect, build]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    # WASM_TOOLS_VERSION / WASM_NODE_VERSION come from the WORKFLOW-level `env:` block
-    # at the top of this file — shared verbatim with the `engines` gate shard, which
-    # installs the same toolchain for the 3-engine differential's T2/T3 arms (#597).
-    # Do not re-pin either here; that is precisely the drift the hoist prevents.
+    # wasm-tools/Node versions come from setup-medaka's own input defaults — shared
+    # verbatim with the `engines` gate shard's call to the same action, which installs
+    # the same toolchain for the 3-engine differential's T2/T3 arms (#597). Do not
+    # override either here; that is precisely the drift the single source prevents.
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install toolchain
-        if: needs.detect.outputs.docs_only != 'true'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y clang libgc-dev
-
       # node >= 22 is required for the finalized WasmGC 3.0 GC encoding these gates emit
-      # (test/wasm/run.js). ubuntu-latest ships an older node, so pin 24 (the dev box's).
-      - name: Set up Node.js ${{ env.WASM_NODE_VERSION }}
+      # (test/wasm/run.js). ubuntu-latest ships an older node, so this pins 24 (the dev
+      # box's). wasm-tools (parse + validate the emitted WAT) is NOT on a stock runner
+      # either — the pinned prebuilt release is downloaded and extracted OUTSIDE the
+      # checkout (see the action for why).
+      - name: Setup medaka (toolchain + wasm + downloaded binary)
         if: needs.detect.outputs.docs_only != 'true'
-        uses: actions/setup-node@v4
+        uses: ./.github/actions/setup-medaka
         with:
-          node-version: ${{ env.WASM_NODE_VERSION }}
-
-      # wasm-tools (parse + validate the emitted WAT) is NOT on a stock runner. Download
-      # the pinned prebuilt release — `cargo install` would cost minutes and drift by
-      # version. The URL/version was verified to resolve before landing this job.
-      - name: Install wasm-tools
-        if: needs.detect.outputs.docs_only != 'true'
-        run: |
-          set -eu
-          v="$WASM_TOOLS_VERSION"
-          url="https://github.com/bytecodealliance/wasm-tools/releases/download/v${v}/wasm-tools-${v}-x86_64-linux.tar.gz"
-          # Extract OUTSIDE the checkout.  `tar xz` in the workspace leaves
-          # `wasm-tools-${v}-x86_64-linux/` behind after the binary is moved out, and the
-          # gates shards end with a review gate (`git status --porcelain`) that FAILS on any
-          # untracked file — so unpacking here turns a toolchain install into a red shard.
-          # The `wasm:` job has no such gate, which is why this was invisible until the
-          # engines shard grew a wasm arm (#597).
-          d="$(mktemp -d)"
-          curl -sSfL "$url" | tar xz -C "$d"
-          sudo mv "$d/wasm-tools-${v}-x86_64-linux/wasm-tools" /usr/local/bin/wasm-tools
-          rm -rf "$d"
-          wasm-tools --version
-
-      - name: Build medaka (cold bootstrap from seed)
-        if: needs.detect.outputs.docs_only != 'true'
-        run: make medaka
+          wasm: 'true'
+          binary: artifact
 
       # The three WasmGC emitter oracle binaries (wasm_emit_main / _typed_ / _modules_)
       # that these gates drive. Cheap; deliberately NOT cached (they are a pure

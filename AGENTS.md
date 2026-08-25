@@ -109,7 +109,9 @@ printf 'public export data X = X Int\n' > /tmp/p/m.mdk; ./medaka check /tmp/p/ma
 
 ## 🚦 How work lands: `main` is PROTECTED — you cannot push to it
 
-*Incident narrative, where an item below has any: `.claude/dossier/workflow.md`.*
+*Incident narrative, where an item below has any: `.claude/dossier/workflow.md`.* For
+`ci.yml` shard-cost derivation, build-once/fan-out, and per-shard job-guard mechanisms
+specifically, see `.claude/dossier/ci.md`.
 
 **[W-PR-FLOW] Every change goes through a PR.** `git push origin main` fails with `GH013:
 Repository rule violations` — no admin bypass.
