@@ -1,5 +1,5 @@
 # META
-source_lines=1027
+source_lines=1045
 stages=DESUGAR,MARK
 # SOURCE
 -- list.mdk — operations on List a
@@ -54,13 +54,31 @@ rangeStep lo hi step
 
 {- | A list of `n` copies of `x` (empty when `n <= 0`).
 
+   Built by doubling (`replicateDbl`) rather than one recursive call per
+   copy, so the interpreted call depth is `O(log n)` instead of `O(n)` —
+   the same shape `String.repeat` had before #1728.
+
    > replicate 3 0
-   [0, 0, 0] -}
+   [0, 0, 0]
+
+   > replicate 0 0
+   []
+
+   > take 3 (replicate 30000 1)
+   [1, 1, 1] -}
 export
 replicate : Int -> a -> List a
-replicate n x
-  | n <= 0 = []
-  | otherwise = x :: replicate (n - 1) x
+replicate n x = replicateDbl n x
+
+-- | `k <= 0` bottoms out at `[]`; otherwise halve `k`, double the halved
+--   result, and prepend one more `x` when `k` is odd. `k / 2` shrinks the
+--   argument geometrically, so the call chain is `O(log k)` deep.
+replicateDbl : Int -> a -> List a
+replicateDbl k x =
+  if k <= 0 then []
+  else
+    let h = replicateDbl (k / 2) x
+    if isEven k then h ++ h else x :: h ++ h
 
 {- | `[x, f x, f (f x), …]` of length `n`.  Empty when `n <= 0`.
 
@@ -1039,7 +1057,9 @@ prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
 (DTypeSig true "rangeStep" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "rangeStep" ((PVar "lo") (PVar "hi") (PVar "step")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "step") (ELit (LInt 0))) (EBinOp "<" (EVar "lo") (EVar "hi"))) (EBinOp "::" (EVar "lo") (EApp (EApp (EApp (EVar "rangeStep") (EBinOp "+" (EVar "lo") (EVar "step"))) (EVar "hi")) (EVar "step"))) (EIf (EBinOp "&&" (EBinOp "<" (EVar "step") (ELit (LInt 0))) (EBinOp ">" (EVar "lo") (EVar "hi"))) (EBinOp "::" (EVar "lo") (EApp (EApp (EApp (EVar "rangeStep") (EBinOp "+" (EVar "lo") (EVar "step"))) (EVar "hi")) (EVar "step"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "replicate" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "replicate" ((PVar "n") (PVar "x")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EVar "x") (EApp (EApp (EVar "replicate") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "x"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "replicate" ((PVar "n") (PVar "x")) (EApp (EApp (EVar "replicateDbl") (EVar "n")) (EVar "x")))
+(DTypeSig false "replicateDbl" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "replicateDbl" ((PVar "k") (PVar "x")) (EIf (EBinOp "<=" (EVar "k") (ELit (LInt 0))) (EListLit) (EBlock (DoLet false false (PVar "h") (EApp (EApp (EVar "replicateDbl") (EBinOp "/" (EVar "k") (ELit (LInt 2)))) (EVar "x"))) (DoExpr (EIf (EApp (EVar "isEven") (EVar "k")) (EBinOp "++" (EVar "h") (EVar "h")) (EBinOp "::" (EVar "x") (EBinOp "++" (EVar "h") (EVar "h"))))))))
 (DTypeSig true "iterate" (TyFun (TyCon "Int") (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "a"))) (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a")))))))
 (DFunDef false "iterate" ((PVar "n") (PVar "f") (PVar "x")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EVar "x") (EApp (EApp (EApp (EVar "iterate") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "f")) (EApp (EVar "f") (EVar "x")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "unfold" (TyFun (TyFun (TyVar "b") (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyTuple (TyVar "a") (TyVar "b"))))) (TyFun (TyVar "b") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a"))))))
@@ -1279,7 +1299,9 @@ prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
 (DTypeSig true "rangeStep" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "rangeStep" ((PVar "lo") (PVar "hi") (PVar "step")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "step") (ELit (LInt 0))) (EBinOp "<" (EVar "lo") (EVar "hi"))) (EBinOp "::" (EVar "lo") (EApp (EApp (EApp (EVar "rangeStep") (EBinOp "+" (EVar "lo") (EVar "step"))) (EVar "hi")) (EVar "step"))) (EIf (EBinOp "&&" (EBinOp "<" (EVar "step") (ELit (LInt 0))) (EBinOp ">" (EVar "lo") (EVar "hi"))) (EBinOp "::" (EVar "lo") (EApp (EApp (EApp (EVar "rangeStep") (EBinOp "+" (EVar "lo") (EVar "step"))) (EVar "hi")) (EVar "step"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig true "replicate" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "replicate" ((PVar "n") (PVar "x")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EVar "x") (EApp (EApp (EVar "replicate") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "x"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "replicate" ((PVar "n") (PVar "x")) (EApp (EApp (EVar "replicateDbl") (EVar "n")) (EVar "x")))
+(DTypeSig false "replicateDbl" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "replicateDbl" ((PVar "k") (PVar "x")) (EIf (EBinOp "<=" (EVar "k") (ELit (LInt 0))) (EListLit) (EBlock (DoLet false false (PVar "h") (EApp (EApp (EVar "replicateDbl") (EBinOp "/" (EVar "k") (ELit (LInt 2)))) (EVar "x"))) (DoExpr (EIf (EApp (EVar "isEven") (EVar "k")) (EBinOp "++" (EVar "h") (EVar "h")) (EBinOp "::" (EVar "x") (EBinOp "++" (EVar "h") (EVar "h"))))))))
 (DTypeSig true "iterate" (TyFun (TyCon "Int") (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "a"))) (TyFun (TyVar "a") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a")))))))
 (DFunDef false "iterate" ((PVar "n") (PVar "f") (PVar "x")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EListLit) (EIf (EVar "otherwise") (EBinOp "::" (EVar "x") (EApp (EApp (EApp (EVar "iterate") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "f")) (EApp (EVar "f") (EVar "x")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "unfold" (TyFun (TyFun (TyVar "b") (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyTuple (TyVar "a") (TyVar "b"))))) (TyFun (TyVar "b") (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a"))))))
