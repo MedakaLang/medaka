@@ -1,0 +1,38 @@
+-- #1867 (S1): A TRUNCATED OBLIGATION MUST NOT DECIDE AMBIGUITY.
+--
+-- Hand-derived from DICT-SEMANTICS §3 BEFORE running anything.  `useIx`'s context
+-- is `(Ix a Char, Ix a Bool)`; at `useIx 5` it instantiates to the two GROUND
+-- predicates `Ix Int Char` (222) and `Ix Int Bool` (111), each matching exactly
+-- one impl by (inst).  Neither is ambiguous, and the program must print 333.
+--
+-- 🚨 WHAT THIS PINS.  `recordCallObligations` records one obligation per SHATTERED
+-- per-tyvar dict slot, so this call site ALSO records the 1-ary goal `Ix Int` --
+-- the second parameter of a two-parameter predicate simply dropped.  That
+-- truncation is deliberate (widening it moves emitted dict arity; the site's own
+-- header records the #1161 decision), and it is harmless as long as the truncated
+-- goal is not allowed to DECIDE anything.  It was: `checkOneCallObligation` at
+-- arity 1 uses `implMatchesReceiverU`, which matches on the receiver ALONE, so
+-- `Ix Int` matched BOTH impls; `checkNestedReqs` then posed that 1-ary goal to the
+-- min⊑ selector, which found two ⊑-incomparable candidates and reported
+-- `T-AMBIGUOUS-INSTANCE` on a program with no ambiguity in it.
+--
+-- MEASURED at `44257622` (the merge-base with main) on this tree, cold built:
+-- `check` exit 0 printing `main : Unit` and `check --json` with ZERO diagnostics,
+-- but `run` and `build` BOTH exit 1 with the unlocated
+-- "type error ... detected during elaboration ... see issue #1812" surface -- so
+-- the three verbs DISAGREED, and the one diagnostic that existed was never
+-- rendered.  That verb split is why this row asserts all three columns.
+--
+-- 🚨 IT MUST BE A DIRECTORY FIXTURE, NOT A SINGLE FILE.  The same source as ONE
+-- module prints 333 at exit 0 even at the base: the ambiguity diagnostic is
+-- recorded there too, but the single-module `run` path never surfaces it.  A
+-- flat `.mdk` sibling of this file would have been GREEN at the base and pinned
+-- nothing.
+--
+-- ⚠️ THE FAIL-CAPABLE HALF is `s-nary-truncated-goal-joint-rejects/`: deferring a
+-- truncated goal is only sound because the JOINT obligation decides in its place,
+-- and that sibling is the row which fails if the joint obligation ever stops
+-- being checked.  Neither file is meaningful alone.
+import lib.{useIx}
+
+main = println (useIx 5)

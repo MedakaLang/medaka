@@ -1,0 +1,54 @@
+-- #1904, THE ROUTING DIRECTION: when an enclosing function's own declared context
+-- names ONE interface twice at two argument vectors that differ only at NON-LEAD
+-- TYVAR positions, the two body occurrences must read TWO DIFFERENT dict slots.
+--
+-- Hand-derived from DICT-SEMANTICS §3 BEFORE running anything.  `size`'s context is
+-- the two 3-ary predicates `Ix a b c` and `Ix a c b`.  The body's first occurrence
+-- `ix n x y` has goal `Ix a b c` and the second `ix n y x` has goal `Ix a c b`, so
+-- `(d_pi : pi) in P` holds for each with a DIFFERENT pi and (assum) applies twice,
+-- to two different assumptions.  At `size 5 'z' True` the instantiation is
+-- a=Int, b=Char, c=Bool, so slot 0 is `Ix Int Char Bool` (333) and slot 1 is
+-- `Ix Int Bool Char` (111).  The program must print 333 + 111 = 444.
+--
+-- 🚨 WHAT THIS PINS, AND WHY BOTH HALVES OF #1904 ARE NEEDED FOR IT.  Two
+-- independent head-tycon-only encodings had to move before this row could be green:
+--   * the KEY (`oblArgKey`, composed into `cslotVecKey`) rendered EVERY tyvar
+--     position as the constant "*", so both predicates keyed as `Ix|*,*,*` and
+--     `dedupSlotVecs` collapsed them into ONE dict slot -- there was no slot 1 to
+--     route to at all;
+--   * the ROUTING (`predArgsAgree`/`monoHeadAgrees`, reached from `enclDictVarOf` ->
+--     `enclSlotIndex` -> `indexOfPredGo` pass 1) treated a tyvar position as
+--     agreeing with EVERYTHING, so even once slot 1 existed both occurrences still
+--     matched slot 0 and the new slot was allocated but never read.
+-- Fixing only the key widens `size`'s emitted dict arity 4 -> 5 params and changes
+-- no answer; fixing only the routing has nothing to route to.
+--
+-- MEASURED at `44257622` (the merge-base with main) on this tree, cold built:
+-- check 0, run 0 and build 0 all printing `666` -- i.e. 333 + 333, the FIRST slot's
+-- dict for both occurrences, a silent wrong answer at exit 0 on both engines.
+--
+-- 🚨 AND IT IS NOT ORDER-DECIDED IN THE USUAL WAY, WHICH IS WHY SECTION 4 IS NOT
+-- THE WHOLE GUARD HERE: swapping the two `impl Ix` blocks leaves the base printing
+-- `666` too (probes/p1904_both_swap.mdk measured at the same base), because the
+-- collapse is to the first CONTEXT SLOT, not to the first IMPL.  Section 4 still
+-- grades this file's permutation for free, but the value row above is what sees the
+-- defect.
+--
+-- ⚠️ THE GROUND-POSITION CONTROL is s-multiparam-* / the `(Ix a Char, Ix a Bool)`
+-- shape: an identical two-slot context whose slots differ at a GROUND position
+-- routes correctly even before #1904, because `monoHeadAgrees` can see a ground
+-- head.  A "fix" that only re-ordered slots, or that made pass 1 stricter without
+-- the tyvar-identity arm, would move that control and not this row.
+interface Ix a b c where
+  ix : a -> b -> c -> Int
+
+impl Ix Int Char Bool where
+  ix _ _ _ = 333
+
+impl Ix Int Bool Char where
+  ix _ _ _ = 111
+
+size : (Ix a b c, Ix a c b) => a -> b -> c -> Int
+size n x y = ix n x y + ix n y x
+
+main = println (size 5 'z' True)

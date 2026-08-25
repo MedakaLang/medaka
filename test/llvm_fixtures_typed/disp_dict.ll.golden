@@ -10,6 +10,7 @@ declare void @mdk_cyclic_value(ptr) noreturn
 declare void @mdk_div_zero() noreturn
 declare void @mdk_mod_zero() noreturn
 declare void @mdk_nonexhaustive_match() noreturn
+declare void @mdk_dispatch_no_impl() noreturn
 declare void @mdk_let_refute() noreturn
 declare void @mdk_print_int(i64)
 declare void @mdk_print_bool(i64)
@@ -273,6 +274,7 @@ dispyes8:
   store i64 %t9, ptr %t2
   br label %dispend3
 dispnext8:
+  call void @mdk_dispatch_no_impl()
   unreachable
 dispend3:
   %t10 = load i64, ptr %t2

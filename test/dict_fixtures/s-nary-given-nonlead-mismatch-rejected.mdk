@@ -1,0 +1,48 @@
+-- #1956, THE REJECT DIRECTION -- THE FALSE-ACCEPT CANARY for
+-- s-nary-given-declared-vector-selects.mdk.  A declared context answers a body
+-- goal only when it IS that goal: equal length and structural identity at EVERY
+-- position, in order.  Agreeing on the LEAD argument alone is not enough.
+--
+-- Hand-derived from DICT-SEMANTICS §3 BEFORE running anything.  `f`'s context is
+-- `Conv (Wrap a) Int`; the body goal is `Conv (Wrap a) Bool`, because `b : Bool`
+-- fixes the interface's second parameter.  These are DIFFERENT predicates, so
+-- `(d_pi : pi) in P` does NOT hold and (assum) is inapplicable.  (inst) is
+-- inapplicable too: `phi` must satisfy `C tau-bar = phi(C T-bar)` against the whole
+-- vector, and `Wrap a = Wrap Int` has no solution for a goal still carrying `a`.
+-- No rule applies at a goal that cannot instantiate further inside this binder and
+-- has no landing site in the (FIXED) signature that binds it, so the program is
+-- REJECTED -- at the body, naming the goal the declared context does not carry.
+--
+-- 🚨 WHAT IT CANARIES.  `impl Conv (Wrap Int) Int` exists precisely so the
+-- CALLER-side obligation `Conv (Wrap Int) Int` at `f 1 True` is satisfiable: the
+-- only thing wrong with this program is the non-lead position of the BODY goal.
+-- A matcher keyed on the lead argument alone -- or one that reached for
+-- unification instead of structural identity -- would answer the body goal from
+-- the given, accept the program, and hand the body a `Conv (Wrap Int) Int`
+-- dictionary to invoke at `Bool`: a type-confused dict (§5) at exit 0.  That is
+-- the S0 this row exists to make loud, and it is one edit away from its accept
+-- sibling.
+--
+-- ⚠️ NOT RED AT THE SPRINT BASE, AND DELIBERATELY SO.  #1956's fix is a pure
+-- ACCEPTANCE WIDENING, so no program's verdict moves from accept to reject; this
+-- row rejects at base `e4587a04` and at head alike.  Its value is forward-facing
+-- -- it goes red the day the matcher is loosened -- which is exactly the pairing
+-- discipline the `s-open-world-*` and `s-structured-carry-*` pairs use.
+--
+-- ⚠️ VERDICT AND CODE, NO LOCATION: the span is asserted nowhere, so the reject
+-- may move between definition and call site without a false red.
+data Wrap a = Wrap a
+
+interface Conv s t where
+  conv : s -> t -> String
+
+impl Conv (Wrap Int) Int where
+  conv _ _ = "int-int"
+
+impl Conv (Wrap Int) Bool where
+  conv _ _ = "int-bool"
+
+f : Conv (Wrap a) Int => a -> Bool -> String
+f x b = conv (Wrap x) b
+
+main = println (f 1 True)

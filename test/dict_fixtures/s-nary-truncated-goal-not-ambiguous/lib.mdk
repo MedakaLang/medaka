@@ -1,0 +1,23 @@
+-- The CONSTRAINED CALLEE half of `s-nary-truncated-goal-not-ambiguous` (#1867).
+--
+-- Two impls of the two-parameter `Ix` that agree at the LEAD argument (`Int`) and
+-- differ only at the SECOND.  That agreement is the whole point: a goal carrying
+-- only the lead cannot tell them apart, so it is the shape under which
+-- `recordCallObligations`' deliberate 1-ary truncation becomes visible.  Change
+-- `Int` to two different lead types in the two impls and the defect disappears
+-- without the fix -- the truncated goal would then match exactly one impl.
+--
+-- `useIx`'s declared context names the interface TWICE at the same lead variable,
+-- which is #1867's own reported shape; the joint (full-vector) obligations
+-- `Ix Int Char` and `Ix Int Bool` are what must decide this program.
+export interface Ix a b where
+  ix : a -> b -> Int
+
+export impl Ix Int Char where
+  ix _ _ = 222
+
+export impl Ix Int Bool where
+  ix _ _ = 111
+
+export useIx : (Ix a Char, Ix a Bool) => a -> Int
+useIx x = ix x 'z' + ix x True

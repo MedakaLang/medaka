@@ -1,6 +1,6 @@
 abstractFieldMsg : String -> String -> String
 abstractSlotIds : List Mono -> List Int
-activeDictPredOf : String -> Mono -> String -> Option String
+activeDictPredOf : String -> List Mono -> String -> Option String
 activeDictVarForEncl : Mono -> String -> Option String
 activeDictVarOf : Mono -> Option String
 activeDictVarOfEncl : Option Predicate -> Mono -> String -> Option String
@@ -82,7 +82,7 @@ anyConcreteHead : List Mono -> Bool
 anyContainsI : List Int -> List Int -> Bool
 anyCtorSiblingWithholds : Option HeadKey -> String -> String -> List String -> Bool
 anyDepReaches : List String -> List String -> String -> List (String, List Decl) -> Bool
-anyGivenMatches : String -> Mono -> List (String, Mono, String) -> Bool
+anyGivenMatches : String -> List Mono -> List (String, List Mono, String) -> Bool
 anyHoleAtom : List Atom -> Bool
 anyIdPinned : List Int -> List (Int, Mono) -> Bool
 anyIn : List Int -> List Int -> Bool
@@ -122,6 +122,7 @@ argImplRequiresRoutes : Map String (List ImplEntry) -> String -> String -> Strin
 argMentions : List String -> Ty -> Bool
 argOnlyEffVarMsg : String -> String -> String -> String
 argPerformableOccs : Bool -> Ty -> List (String, List Atom)
+argPosAgreeEncl : List Mono -> List Mono -> Bool
 argReqRoute : Map String (List ImplEntry) -> String -> String -> List (String, Mono) -> List Ty -> Int -> Int -> Route
 argStampMono : PendingEntry -> Mono
 argStampPairs : PendingEntry -> List (Int, String)
@@ -176,6 +177,7 @@ bodyRDictNames : Expr -> List String
 boolOp : Mono -> Mono -> Mono
 boundTvarId : List Int -> Mono -> List Int
 boundTyvarIds : List Int -> List Mono -> Option (List Int)
+bucketAnyLonger : List (List Ty, List Require) -> Int -> Bool
 bucketArgsMatch : List (List Ty, List Require) -> List Mono -> Bool
 bucketArgsMatchReqs : List (List Ty, List Require) -> List Mono -> Bool
 bucketImplEntries : List ImplEntry -> Map String (List ImplEntry) -> Map String (List ImplEntry)
@@ -313,6 +315,7 @@ checkModulesPreamble : List Decl -> List Decl -> List (String, List Decl) -> (Li
 checkNestedReqs : ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> Unit
 checkOneAxis : String -> String -> Param -> Unit
 checkOneCallObligation : Bool -> ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> Unit
+checkOneCallObligationNoImpl : IfaceRef -> List Mono -> Option Loc -> Unit
 checkOneEffectParam : String -> String -> Unit
 checkOneIfaceCycle : ClassEnv -> Int -> Ref (Map String Unit) -> CeRow -> Unit
 checkPhantomMethods : ClassEnv -> Int -> Unit
@@ -736,7 +739,7 @@ firstFieldName : List FieldAssign -> Option String
 firstIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
 firstImplMethodLoc : List ImplMethod -> Option Loc
 firstOrZero : List Int -> Int
-firstPredForEncl : String -> Mono -> String -> List (String, Mono, String) -> Option String
+firstPredForEncl : String -> List Mono -> String -> List (String, List Mono, String) -> Option String
 firstReqMatch : List (List Ty, List Require) -> List Mono -> Option (List (String, Mono), List Require)
 firstRowPerName : Map String Unit -> List (String, (String, String)) -> List (String, (String, String))
 firstTupleCallHint : List Mono -> Option (String, Option (Loc, String))
@@ -788,6 +791,7 @@ goalPredOf : String -> Mono -> Option Predicate
 goalPredOfOp : String -> Option Predicate
 goalSiteLoc : Ref (Option Loc)
 goalSlotStillOpen : List Mono -> Bool
+goalVecOfKind : String -> Mono -> EntailKind -> List Mono
 goalsClosed : List Mono -> Bool
 graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
 graphCtorExports : List Decl -> List (String, List Decl) -> Map String (List (String, String, Ident))
@@ -1273,6 +1277,7 @@ monoIsBareTyvar : Mono -> Bool
 monoIsBool : Mono -> Bool
 monoIsFunction : Mono -> Bool
 monoIsTyvarId : Mono -> Int -> Bool
+monoPosAgreesEncl : Mono -> Mono -> Bool
 monoSameGiven : Mono -> Mono -> Bool
 monoScheme : Mono -> Scheme
 monoSize : Mono -> Int
@@ -1282,6 +1287,7 @@ monoTyvarId : Mono -> Int
 monoTyvarIds : Mono -> List Int
 monoUnboundIds : Mono -> List Int
 monoUnboundVarLevels : Mono -> List (Int, Int)
+monoVecSameGiven : List Mono -> List Mono -> Bool
 monoVectorClosed : List Mono -> Bool
 monosTvarIds : List Int -> List Mono -> List Int
 nameOf : Ref (List (Int, String)) -> Ref Int -> Int -> String
@@ -1327,6 +1333,7 @@ numlitMismatchMsg : Option Loc -> List Mono -> String
 numlitReframeLoc : Option Loc -> Bool
 oblArgKey : Mono -> String
 oblAsTuple : UObligation -> (IfaceRef, List Mono, Option Loc)
+oblCallVerdict : ImplUniverse -> IfaceRef -> List Mono -> Option Bool
 oblDedupKey : IfaceRef -> List Mono -> String
 oblDispatchMonos : UObligation -> List Mono
 oblDispatchMonosGo : String -> List String -> Ty -> Mono -> List Mono
@@ -1423,6 +1430,7 @@ prePassLetBindScoped : ArgRw -> LetBind -> LetBind
 prePassModulePair : List String -> (String, List Decl) -> (String, List Decl)
 prePassModulePairArg : List String -> List String -> List String -> List String -> List (String, String) -> (String, List Decl) -> (String, List Decl)
 predArgsAgree : List Mono -> List Mono -> Bool
+predArgsAgreeEncl : List Mono -> List Mono -> Bool
 preferConcrete : Mono -> Mono -> Mono
 prefixConcrete : String -> String
 prefixPatternErrMsg : String -> String -> String

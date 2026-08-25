@@ -692,6 +692,23 @@ noreturn void mdk_nonexhaustive_match(void) {
   fputs("runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match\n", stderr);
   exit(1);
 }
+/* Dict-key-mismatch dispatcher trap (#1958).  A `@mdk_disp_*`/arg-tag dispatch
+   chain's fallthrough is reached when the caller's dict/discriminant cell
+   carries a key that matches NONE of the emitted arms.  Every fallthrough site
+   used to terminate with a bare `unreachable` on the header comment's claim
+   "the typechecker proves the dict names a real impl" — that claim was already
+   caught false once for a sibling chain (llvm_emit.mdk :5287, #948: a
+   method-less cross-module impl produced a dict with no matching arm and the
+   bare `unreachable` there was a SIGSEGV on a check-green, eval-correct
+   program).  UB at `-O0` (`ud2` -> SIGTRAP) is an optimizer's coin-flip at
+   `-O1`/`-O2`; this makes the failure loud and identical across opt levels
+   instead.  Matches the interpreter's dispatch-miss shape MINUS the source
+   location (Core IR carries no loc); nonzero exit. */
+noreturn void mdk_dispatch_no_impl(void) {
+  mdk_flush_run_stdout_on_abort();
+  fputs("runtime error [E-DISPATCH-NO-IMPL]: dispatch found no implementation matching the dict key\n", stderr);
+  exit(1);
+}
 /* A refutable block-`let` (`let (Some y) = e` with no `else`) whose scrutinee did
    not match the pattern.  The interpreter's blockLet runtimePanics
    "E-LET-REFUTE"; the emitter previously destructured with NO tag check → an OOB

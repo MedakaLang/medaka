@@ -5325,9 +5325,17 @@ declTagOrKey iface tag key = if ifaceDeclHeadUnique iface tag then tag else key
 -- call `@mdk_default_<method>_<tag>` (ensureDefaultEmitted restamps its inner
 -- same-interface calls to `RKey tag`, keeping `compare` a concrete direct call —
 -- the unsoundness trap is avoided precisely because the tag is concrete here).
--- An exhausted chain is `unreachable` (the dict names a real interface impl).
+-- An exhausted chain used to be a bare `unreachable` on the claim "the dict
+-- names a real interface impl" (#1958: that claim was already false once for a
+-- sibling chain, :5287 above — a method-less cross-module impl gave a dict with
+-- no matching arm, and the bare `unreachable` was UB, a SIGSEGV on a
+-- check-green, eval-correct program).  Now it calls the noreturn
+-- @mdk_dispatch_no_impl trap first, matching the CTFail / non-exhaustive-match
+-- precedent (:7592) so a mismatch is a loud, opt-level-stable abort instead.
 emitDefaultDispatchChain : Emit -> String -> String -> List String -> String -> CImplEntry -> List String -> String -> String -> Unit
-emitDefaultDispatchChain e _ _ [] _ _ _ _ _ = emit e "  unreachable"
+emitDefaultDispatchChain e _ _ [] _ _ _ _ _ =
+  let _ = emit e "  call void @mdk_dispatch_no_impl()"
+  emit e "  unreachable"
 emitDefaultDispatchChain e dictPtr headTag (tag::rest) name entry argOps slot endL =
   let cmp = freshReg e
   let _ = emit e "  \{cmp} = icmp eq i64 \{headTag}, \{intToString (hashName tag)}"
@@ -5564,7 +5572,12 @@ emitDispatchChain e dictPtr headTag impls groups name methWords argOps slot endL
   match firstGeneralEntry impls
     Some gen =>
       emitDispatchArmBody e dictPtr gen groups name methWords argOps slot endL
-    None => emit e "  unreachable"
+    -- #1958: no concrete arm matched and no general (catch-all) impl exists —
+    -- a dict-key mismatch.  Trap loudly (see emitDefaultDispatchChain above)
+    -- instead of a bare `unreachable`.
+    None =>
+      let _ = emit e "  call void @mdk_dispatch_no_impl()"
+      emit e "  unreachable"
 
 emitConcreteArms : Emit -> String -> String -> List CImplEntry -> List ImplGroup -> String -> List String -> List String -> String -> String -> Unit
 emitConcreteArms _ _ _ [] _ _ _ _ _ _ = ()
@@ -5693,7 +5706,12 @@ emitArgTagDispatchGo e method groups argOps discrimPos =
   (r, LTInt)
 
 emitArgDispatchChain : Emit -> String -> String -> List ImplGroup -> List String -> String -> String -> Unit
-emitArgDispatchChain e _ _ [] _ _ _ = emit e "  unreachable"
+-- #1958: the discriminating argument's runtime ctor tag matched no impl
+-- group — a dict/arg-tag key mismatch.  Trap loudly instead of a bare
+-- `unreachable` (see emitDefaultDispatchChain above).
+emitArgDispatchChain e _ _ [] _ _ _ =
+  let _ = emit e "  call void @mdk_dispatch_no_impl()"
+  emit e "  unreachable"
 emitArgDispatchChain e method tagReg (g::rest) argOps slot endL =
   let tag = groupTag g
   let cond = emitTagMatch e tagReg (ctorsOfType e tag)
