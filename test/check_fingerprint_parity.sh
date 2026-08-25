@@ -42,12 +42,13 @@
 # rather than testing "did the tree change" (which every existing staleness path
 # already tests, right down to the mtime-vs-fingerprint fix that fixed #89/#182).
 #
-# WHY THIS RUNS AS AN UNGUARDED STEP IN `soundness`, NOT A NEW GATE SHARD: it
-# needs a freshly-built ./medaka on a tree matching that build (soundness already
-# builds one via `make medaka`, cold, on every event) — a new shard would need
+# WHY THIS RUNS AS A STEP IN `compiler-soundness`, NOT A NEW GATE SHARD: it
+# needs a freshly-built ./medaka on a tree matching that build (compiler-soundness
+# already builds one via `make medaka` when it runs) — a new shard would need
 # its own ci.yml matrix entry and its own oracle plumbing for no reason, when
-# soundness already has exactly the binary and tree state this needs. See
-# AGENTS.md "a gate must run where the bug lands."
+# compiler-soundness (narrowed on `compiler_touched`/`soundness_corpora`) already
+# has exactly the binary and tree state this needs. See AGENTS.md "a gate must
+# run where the bug lands."
 #
 # ⚠️ TREATS A NON-COMPARISON AS FAILURE, NOT A PASS. A missing/non-executable
 # ./medaka, a MEDAKA_ROOT that resolves to a tree with no compiler/ directory, or

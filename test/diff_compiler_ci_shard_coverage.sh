@@ -178,7 +178,7 @@ if tools_path.exists():
 all_gates -= tools
 
 # A gate counts as covered if a shard pattern globs it OR any workflow file names
-# it literally in some step (that is how the `soundness` job runs the fixpoint and
+# it literally in some step (that is how the `compiler-soundness` job runs the fixpoint and
 # the compiler-source typecheck — they are not sharded, they are named; it is also
 # how a scheduled workflow like nightly.yml covers a gate unsuited to the PR path).
 # `wf_text` was already built as the concatenation of every workflow file, above.
@@ -210,7 +210,7 @@ for name, pat in pats.items():
             seen[key] = name
 
 # "Named" = a workflow step invokes the script by its repo-relative path (that is how
-# the `soundness` job runs the fixpoint + the compiler-source typecheck, and how
+# the `compiler-soundness` job runs the fixpoint + the compiler-source typecheck, and how
 # nightly.yml runs check_removed_constructs / fuzz_diff). Matching on the PATH, not on
 # a bare basename, is what keeps `run.sh` from matching two different gates.
 named = {g for g in all_gates
@@ -220,7 +220,7 @@ missing = sorted(all_gates - set(seen) - named - set(exc))
 for name in pats:
     n = sum(1 for v in seen.values() if v == name)
     print(f"  {name:<10} {n:>2} gates")
-print(f"  {'named':<10} {len(named):>2} gates (run by name, unsharded — e.g. the soundness job)")
+print(f"  {'named':<10} {len(named):>2} gates (run by name, unsharded — e.g. the compiler-soundness job)")
 if exc:
     print(f"  {'EXCEPTED':<10} {len(exc):>2} gates (NOT run in CI — ledger below)")
 print(f"  {'TOTAL':<10} {len(seen) + len(named):>2} of {len(all_gates)} covered")

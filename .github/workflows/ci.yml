@@ -107,6 +107,34 @@ jobs:
     timeout-minutes: 10
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
+      # #1931/#1932. FOUR more outputs from the SAME single pass over changed.txt (one
+      # classifier, N outputs — never a second walk that could drift from this one).
+      #
+      # `compiler_touched` answers ONE question and one only: does this diff touch the
+      # build closure of `./medaka` — compiler/stdlib/runtime sources plus the scripts
+      # that build them? It is deliberately NOT widened into "anything a heavy job
+      # reads". A job that also reads corpora OUTSIDE that closure publishes its own
+      # escape-list output below and ORs the two AT THE STEP LEVEL, so the predicate
+      # keeps a single meaning and each corpus list stays next to the job that owns it.
+      # Widening the predicate itself is how one flag silently acquires two meanings
+      # and the next job to read it inherits the wrong one.
+      compiler_touched: ${{ steps.classify.outputs.compiler_touched }}
+      # The `wasm` job's OWN escape list: the corpora its seven gates read from outside
+      # the build closure (sqlite/, gzip/, playground/, test/wasm/, and the engine and
+      # llvm fixture corpora two of them borrow). Derived in `classify`, consumed ONLY
+      # by `wasm`.
+      wasm_corpora: ${{ steps.classify.outputs.wasm_corpora }}
+      # The `inlang` job's OWN escape list, same shape: `make test` runs
+      # test/diff_compiler_ported.sh over the test/ported/ corpus, which is not in
+      # `./medaka`'s build closure. Consumed ONLY by `inlang`.
+      inlang_corpora: ${{ steps.classify.outputs.inlang_corpora }}
+      # #1932. The `compiler-soundness` job's OWN escape list, same shape as the two
+      # above. Its five gates read the must-fail fixture corpus and their own gate
+      # scripts, none of which is in `./medaka`'s build closure — so a PR that only
+      # edits `test/must_fail_fixtures/**` has compiler_touched=false while being
+      # EXACTLY the PR that suite must run on (inverted polarity: a fixture that never
+      # runs reports as "drained"). Consumed ONLY by `compiler-soundness`.
+      soundness_corpora: ${{ steps.classify.outputs.soundness_corpora }}
       narrow: ${{ steps.gateset.outputs.narrow }}
       gates: ${{ steps.gateset.outputs.gates }}
       oracle_key: ${{ steps.gateset.outputs.oracle_key }}
@@ -122,8 +150,25 @@ jobs:
           # has to distinguish "no non-docs files" from "the classifier bailed early".
           : > "$RUNNER_TEMP/changed.txt"
           : > "$RUNNER_TEMP/nondocs.txt"
+
+          # #1931/#1932. EVERY conservative early exit below must publish ALL FIVE outputs,
+          # not just docs_only. An output a consuming step's `if:` reads and `detect`
+          # never wrote comes back as the EMPTY STRING, which is falsy — so omitting one
+          # here would silently SKIP the heavy steps on push, on merge_group, and on
+          # every diff this step could not resolve. That is the one direction this
+          # classifier is never allowed to fail in.
+          full_run() {
+            {
+              echo "docs_only=false"
+              echo "compiler_touched=true"
+              echo "wasm_corpora=true"
+              echo "inlang_corpora=true"
+              echo "soundness_corpora=true"
+            } >> "$GITHUB_OUTPUT"
+          }
+
           if [ "$event" != "pull_request" ]; then
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            full_run
             echo "not a pull_request event ($event) — running the full suite."
             exit 0
           fi
@@ -135,14 +180,14 @@ jobs:
           git cat-file -e "$head" 2>/dev/null || git fetch --no-tags --depth=1 origin "$head" 2>/dev/null || true
 
           if ! git cat-file -e "$base" 2>/dev/null || ! git cat-file -e "$head" 2>/dev/null; then
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            full_run
             echo "could not resolve base/head commits locally — running the full suite (conservative default)."
             exit 0
           fi
 
           changed="$(git diff --name-only "$base" "$head" || true)"
           if [ -z "$changed" ]; then
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            full_run
             echo "no changed files resolved — running the full suite (conservative default)."
             exit 0
           fi
@@ -153,6 +198,13 @@ jobs:
           # See the job header for why this is an ALLOWLIST, not a **.md denylist.
           printf '%s\n' "$changed" > "$RUNNER_TEMP/changed.txt"
           docs_only=true
+          # #1931 — see the job `outputs:` block for what each of these means and why
+          # the build-closure predicate stays narrow while the escape lists stay
+          # per-job. All three start false and are raised by the second `case` below.
+          compiler_touched=false
+          wasm_corpora=false
+          inlang_corpora=false
+          soundness_corpora=false
 
           # ONE classifier, TWO consumers: `docs_only` answers "is EVERY changed file
           # prose?"; `gateset` below asks "is THIS file prose?" of the same allowlist,
@@ -180,15 +232,95 @@ jobs:
 
               *) nondoc "$f" ;;
             esac
+
+            # #1931. A SECOND, INDEPENDENT question about the SAME file, in the same
+            # single pass. It is its own `case` on purpose: `case` fires only its first
+            # matching arm, and the prose allowlist above already claims `test/*` with
+            # its must-stay-first arm — so folding these arms into that block would make
+            # test/build_native_medaka.sh (build closure) and test/wasm/* (wasm corpus)
+            # unreachable. These arms are not `elif`s of the allowlist; both run for
+            # every changed file.
+            case "$f" in
+              # ── the build closure of `./medaka`, and NOTHING else (see `outputs:`).
+              # test/build_native_medaka.sh is the literal body of the `medaka` make
+              # target; bootstrap_from_seed.sh and refresh_seed.sh are the cold-start
+              # and re-mint halves of the same build.
+              compiler/*|stdlib/*|runtime/*) compiler_touched=true ;;
+              Makefile|test/build_native_medaka.sh|test/bootstrap_from_seed.sh|test/refresh_seed.sh)
+                compiler_touched=true ;;
+              # The workflow and the shared setup action decide HOW every job builds and
+              # provisions `./medaka`. A change to either must never be able to narrow
+              # itself out of the jobs it is changing.
+              .github/workflows/*|.github/actions/*) compiler_touched=true ;;
+            esac
+
+            # ── `wasm`'s own escape list. Derived by reading every gate the job
+            # invokes for paths outside compiler//stdlib/:
+            #   diff_sqlite.sh        -> sqlite/*_probe.mdk (which import sqlite/lib/*)
+            #   diff_gzip.sh          -> gzip/inflate_demo.mdk (imports gzip/lib/*)
+            #   diff_playground_input -> playground/{build_playground_wasm.sh,
+            #                            dev_compile_node.mjs,dist/playground.wasm},
+            #                            test/engine_fixtures/*, test/engine_value_pins/*
+            #   diff_wasm_typed.sh    -> test/llvm_fixtures/env_args_empty.mdk
+            #   all seven + their oracle builder -> test/wasm/* (fixtures, run.js,
+            #                            build_wasm_oracle.sh, the gate scripts)
+            #   build_wasm_cmd.sh     -> test/build_cmd.sh, test/build_wasm_cmd.sh
+            case "$f" in
+              sqlite/*|gzip/*|playground/*) wasm_corpora=true ;;
+              test/wasm/*|test/build_wasm_cmd.sh|test/build_cmd.sh) wasm_corpora=true ;;
+              test/engine_fixtures/*|test/engine_value_pins/*|test/llvm_fixtures/*)
+                wasm_corpora=true ;;
+            esac
+
+            # ── `inlang`'s own escape list: `make test`'s first line is
+            # test/diff_compiler_ported.sh, which runs the test/ported/ corpus and reads
+            # test/CAPABILITY-EXCEPTIONS.txt. Its remaining lines are `medaka test` over
+            # compiler/ and stdlib/ files, already covered by compiler_touched.
+            case "$f" in
+              test/ported/*|test/diff_compiler_ported.sh|test/CAPABILITY-EXCEPTIONS.txt)
+                inlang_corpora=true ;;
+            esac
+
+            # ── `compiler-soundness`'s own escape list. Derived by reading all five
+            # gates that job runs for paths outside compiler//stdlib//runtime/:
+            #   diff_compiler_must_fail.sh    -> test/must_fail_fixtures/*/ (the whole
+            #                                    corpus: claim.txt + the .mdk it runs)
+            #                                    and test/MUST-FAIL-NOT-PINNABLE.txt
+            #   typecheck_compiler_source.sh  -> test/registry_keying_ratchet.sh, which
+            #                                    it invokes (NOT a standalone gate — see
+            #                                    that script's header for why it rides
+            #                                    inside this one)
+            #   check_fingerprint_parity.sh   -> nothing outside the closure (it diffs
+            #                                    build_native_medaka.sh against
+            #                                    compiler/driver/medaka_cli.mdk, both
+            #                                    already compiler_touched)
+            #   selfcompile_fixpoint.sh       -> nothing outside the closure (seed,
+            #                                    runtime, stdlib, compiler)
+            #   the oracle build              -> test/build_oracles.sh
+            # Plus each gate SCRIPT itself: editing a gate must run that gate.
+            case "$f" in
+              test/must_fail_fixtures/*|test/MUST-FAIL-NOT-PINNABLE.txt) soundness_corpora=true ;;
+              test/diff_compiler_must_fail.sh|test/check_fingerprint_parity.sh) soundness_corpora=true ;;
+              test/typecheck_compiler_source.sh|test/registry_keying_ratchet.sh) soundness_corpora=true ;;
+              test/selfcompile_fixpoint.sh|test/build_oracles.sh) soundness_corpora=true ;;
+            esac
           done < "$RUNNER_TEMP/changed.txt"
 
-          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
-          echo "classified: docs_only=$docs_only"
+          {
+            echo "docs_only=$docs_only"
+            echo "compiler_touched=$compiler_touched"
+            echo "wasm_corpora=$wasm_corpora"
+            echo "inlang_corpora=$inlang_corpora"
+            echo "soundness_corpora=$soundness_corpora"
+          } >> "$GITHUB_OUTPUT"
+          echo "classified: docs_only=$docs_only compiler_touched=$compiler_touched wasm_corpora=$wasm_corpora inlang_corpora=$inlang_corpora soundness_corpora=$soundness_corpora"
 
       # ── T-15: narrow the `pull_request` run. NEVER the `merge_group` run. ────────
       # Only the `pull_request` half shrinks — narrowing `merge_group` would trade
       # away the one property that justifies the queue (testing the MERGED result).
-      # `soundness`/`seed-health` likewise stay FULL on every event. Preflight is a
+      # `soundness`/`seed-health` likewise stay FULL on every event (#1932: so does
+      # `compiler-soundness`, which is step-narrowed by `detect` but never by the
+      # gate-set derivation below). Preflight is a
       # FILTER, not an AUTHORITY — CI on the merged tree is the authority. Incident
       # history: dossier `ci.md`.
       #
@@ -263,7 +395,7 @@ jobs:
 
   # ── Build ./medaka ONCE per run, not ten times (#1928) ───────────────────────
   # `make medaka` is a pure function of the checkout, so it runs once here and the
-  # other ten jobs (7 `gates` shards + `soundness` + `inlang` + `wasm`) take
+  # other ten jobs (7 `gates` shards + `compiler-soundness` + `inlang` + `wasm`) take
   # `binary: artifact` on the same setup action instead of rebuilding it. This is
   # intra-run artifact transport at a fixed SHA, NOT a cache (see the file header's
   # #111 note) — no key, no cross-SHA restore.
@@ -374,26 +506,20 @@ jobs:
             full_cores: "1"
             wasm_arm: "1"
           - name: sqlite
-            # The 22 differential gates that diff the pure-Medaka SQLite library
-            # against the real sqlite3 CLI (T8), plus `gzip/test/*oracle` and
-            # `pds/test/*` — all project oracles that drive `./medaka` directly and
-            # read no `test/bin` oracle, parked here by cost (dossier `ci.md`).
-            # NOTE the glob is `'*oracle'`, not `'*_oracle'`: one gate is plain
-            # `oracle.sh`, not `<name>_oracle.sh` — the narrower glob silently
-            # dropped it. NOTE `pds/test/*` is deliberately ONE directory level
-            # deep so a future `pds/` in-language gate auto-enrolls with no
-            # `ci.yml` edit, as long as it lands directly in `pds/test/` (see
-            # `pds/README.md`'s CI classification policy).
-            # `constant_time_parity` is covered by the PDS glob and needs the Wasm
-            # arm, enabled here so the gate is enrolled exactly once.
-            #
-            # ⚠️ `pds/test/signing_parity.sh` moved OUT to `pds/nightly/` (2026-08-25,
-            # #1962) — its full 322-row native+Wasm corpus run alone added ~20min to
-            # this shard (~845s -> ~35min, #1926 F3). It still runs, nightly, via
-            # nightly.yml's `pds-signing-parity` job; #1962 tracks re-enabling it here
-            # once it's cheap enough not to dominate the shard.
-            pattern: "'sqlite/test/*oracle' 'gzip/test/*oracle' 'pds/test/*'"
-            wasm_arm: "1"
+            # #1929: this row used to carry ALL 43 sqlite/gzip/pds oracle+vector gates
+            # and was the CI pole, well above `wasm`, the next-slowest job — see the
+            # spike report for `S-sqlite-rebalance`. That whole family is now
+            # SPLIT across the other five non-`engines` `gates` rows, each placed by
+            # measured per-gate cost (local `time`, not a per-gate CI breakdown — see
+            # `S-sqlite-rebalance`'s report for the full table and the packing math),
+            # never by theme — same principle as every other row in this matrix.
+            # REPURPOSED (F-5: the job NAME must not vanish) to carry just the single
+            # heaviest gate of the lot: `pds/test/inlang_test_oracle.sh`, dwarfing
+            # every other individual sqlite/gzip/pds gate. No thematic tie to SQLite
+            # any more; kept here rather than renamed because a lone gate this heavy
+            # needs its own row headroom and this row already had none of its own.
+            # `wasm_arm` dropped — this gate doesn't read the Wasm oracle.
+            pattern: "'pds/test/inlang_test_oracle'"
           - name: frontend
             # `native_fixtures/run` (T8) sits one directory below `test/`, so even
             # the coverage gate's `test/*.sh` glob could not see it — it ran
@@ -410,7 +536,13 @@ jobs:
             # matrix) lives here, not in `tools` beside its closest sibling
             # `diff_compiler_run_check_agreement`, because every stage it exercises
             # is in `compiler/types/typecheck.mdk`. Reads no oracle.
-            pattern: "'diff_compiler_perf_scaling' 'diff_compiler_typecheck*' 'diff_compiler_check*' 'diff_compiler_exhaust' 'diff_compiler_diagnostics' 'diff_compiler_analyze_project' 'diff_compiler_shadow_semantics' 'effect_param_domain' 'effect_builtin_param_domain' 'effect_product_domain' 'effect_set_domain'"
+            #
+            # #1929: `gzip/test/*oracle` (both gates) plus five pds/ vector-corpus
+            # gates that fit neither of the two pds glob buckets moved to
+            # `backend`/`tools` (they're not `constant_time_*` and don't end in
+            # `_vectors`) land here by cost, cheapest destination with room after the
+            # heavier chunks were placed — see `S-sqlite-rebalance`'s report.
+            pattern: "'diff_compiler_perf_scaling' 'diff_compiler_typecheck*' 'diff_compiler_check*' 'diff_compiler_exhaust' 'diff_compiler_diagnostics' 'diff_compiler_analyze_project' 'diff_compiler_shadow_semantics' 'effect_param_domain' 'effect_builtin_param_domain' 'effect_product_domain' 'effect_set_domain' 'gzip/test/*oracle' 'pds/test/opaque_field_scalar' 'pds/test/secp256k1_public_key' 'pds/test/signing_corpus' 'pds/test/trust_boundary_guards' 'pds/test/vector_provenance'"
           - name: eval
             # The 4 `bootstrap_*` stage gates are named individually, NOT globbed
             # as `bootstrap_*` — that glob also catches `bootstrap_from_seed.sh`,
@@ -424,7 +556,13 @@ jobs:
             # oracle overlap with `core_ir_modules`/`eval_modules`, which this
             # shard already builds, so their true marginal cost is smaller than a
             # fresh oracle build elsewhere would be.
-            pattern: "'diff_compiler_eval*' 'diff_compiler_core_ir*' 'diff_compiler_dispatch_shape' 'diff_compiler_prelude_obj' 'diff_compiler_slice_oob' 'diff_compiler_ir_size' 'diff_compiler_origin_agreement' 'diff_compiler_draft_semantic' 'diff_compiler_anf_identity' 'diff_compiler_import_order' 'diff_compiler_iface_order' 'diff_compiler_test_native' 'diff_compiler_flat_vs_onemodule' 'bootstrap_lex' 'bootstrap_resolve' 'bootstrap_typecheck' 'bootstrap_eval'"
+            #
+            # #1929: `sqlite/test/*oracle` (the 24 SQLite differential gates diffing
+            # against the real sqlite3 CLI) moved here by cost — see
+            # `S-sqlite-rebalance`'s report. NOTE the glob is `'*oracle'`, not
+            # `'*_oracle'`: one gate is plain `oracle.sh`, not `<name>_oracle.sh` — the
+            # narrower glob silently drops it.
+            pattern: "'diff_compiler_eval*' 'diff_compiler_core_ir*' 'diff_compiler_dispatch_shape' 'diff_compiler_prelude_obj' 'diff_compiler_slice_oob' 'diff_compiler_ir_size' 'diff_compiler_origin_agreement' 'diff_compiler_draft_semantic' 'diff_compiler_anf_identity' 'diff_compiler_import_order' 'diff_compiler_iface_order' 'diff_compiler_test_native' 'diff_compiler_flat_vs_onemodule' 'bootstrap_lex' 'bootstrap_resolve' 'bootstrap_typecheck' 'bootstrap_eval' 'sqlite/test/*oracle'"
           - name: backend
             # `build_cmd` (T8) is the end-to-end gate for the SHIPPING `medaka
             # build` CLI — 14 real programs, stdout diffed against a committed
@@ -437,7 +575,16 @@ jobs:
             # sibling by shape (`diff_compiler_slice_oob`) sitting in `eval`
             # instead because the cost ranking has inverted more than once —
             # re-derive with `scripts/ci_shard_cost.sh` before moving either.
-            pattern: "'diff_compiler_llvm*' 'diff_compiler_build' 'diff_compiler_rt_obj' 'diff_compiler_selfproc' 'diff_compiler_stack_overflow' 'diff_compiler_let_refute' 'diff_compiler_index_oob' 'diff_compiler_tmc_parity' 'selfcompile_lex' 'selfcompile_emit' 'selfcompile_build_fixpoint' 'diff_native_cli' 'diff_native_stack' 'build_cmd'"
+            #
+            # #1929: `pds/test/*_vectors` (the 7 pds gates whose basename ends
+            # `_vectors` — ecdsa/encodings/field/rfc6979/scalar/sha256/
+            # secp256k1_point, incl. the Wasm-vector-free ones only) moved here by
+            # cost — see `S-sqlite-rebalance`'s report. Deliberately a glob, not a
+            # name list, so a future `pds/test/*_vectors.sh` gate auto-enrolls here
+            # without a `ci.yml` edit — same intent as the old `pds/test/*`
+            # catch-all, now split by naming convention because no single row had
+            # spare room for the whole pds/ family at once.
+            pattern: "'diff_compiler_llvm*' 'diff_compiler_build' 'diff_compiler_rt_obj' 'diff_compiler_selfproc' 'diff_compiler_stack_overflow' 'diff_compiler_let_refute' 'diff_compiler_index_oob' 'diff_compiler_tmc_parity' 'selfcompile_lex' 'selfcompile_emit' 'selfcompile_build_fixpoint' 'diff_native_cli' 'diff_native_stack' 'build_cmd' 'pds/test/*_vectors'"
           - name: tools
             # `diff_compiler_mcp` (#253) and `diff_compiler_entry_exit_codes`
             # (#440) are parked here by cost — both read no oracle and are a
@@ -447,7 +594,18 @@ jobs:
             # globbed: its neighbour `diff_compiler_test` is an exact name, not a
             # glob, so a new sibling would silently never run — the exact hazard
             # `diff_compiler_ci_shard_coverage` exists to catch.
-            pattern: "'diff_compiler_lint*' 'diff_compiler_lsp*' 'diff_compiler_mcp' 'diff_compiler_codemod' 'diff_compiler_repl' 'diff_compiler_new' 'diff_compiler_test' 'diff_compiler_test_typecheck' 'diff_compiler_ported' 'diff_compiler_doc' 'diff_compiler_index' 'diff_compiler_references*' 'diff_compiler_capability_matrix' 'diff_compiler_internal_extern' 'diff_compiler_effect*' 'diff_compiler_os_entropy' 'diff_compiler_entry_exit_codes' 'diff_compiler_run_check_agreement' 'diff_compiler_run_stdout_flush' 'diff_compiler_run_entry_subdir' 'diff_compiler_ci_shard_coverage' 'diff_compiler_perf_stage_census' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_source_bytes' 'diff_compiler_fmt_write_safety' 'check_syntax_examples' 'check_build_oracles_for_consistency' 'cross_project_deps' 'cross_project_twonames' 'manifest_emit' 'lsp_harness' 'diff_net' 'pr_helper_test'"
+            #
+            # #1929: `pds/test/constant_time_*` (the 4 constant-time gates) moved
+            # here by cost — see `S-sqlite-rebalance`'s report.
+            # `wasm_arm` added: `constant_time_parity.sh`/`constant_time_reductions.sh`
+            # read the Wasm oracle (`MEDAKA_REQUIRE_WASM`), previously covered by the
+            # old `sqlite` row's arm. This also pulls in a wasm-oracle-build step
+            # (`sh test/wasm/build_wasm_oracle.sh --modules-only`) this row did not
+            # need before — cheap next to the marginal `setup-medaka` toolchain
+            # cost of a second `wasm_arm` row, but not free; it's headroom this row
+            # has, not headroom this row lacked before.
+            pattern: "'diff_compiler_lint*' 'diff_compiler_lsp*' 'diff_compiler_mcp' 'diff_compiler_codemod' 'diff_compiler_repl' 'diff_compiler_new' 'diff_compiler_test' 'diff_compiler_test_typecheck' 'diff_compiler_ported' 'diff_compiler_doc' 'diff_compiler_index' 'diff_compiler_references*' 'diff_compiler_capability_matrix' 'diff_compiler_internal_extern' 'diff_compiler_effect*' 'diff_compiler_os_entropy' 'diff_compiler_entry_exit_codes' 'diff_compiler_run_check_agreement' 'diff_compiler_run_stdout_flush' 'diff_compiler_run_entry_subdir' 'diff_compiler_ci_shard_coverage' 'diff_compiler_perf_stage_census' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_source_bytes' 'diff_compiler_fmt_write_safety' 'check_syntax_examples' 'check_build_oracles_for_consistency' 'cross_project_deps' 'cross_project_twonames' 'manifest_emit' 'lsp_harness' 'diff_net' 'pr_helper_test' 'pds/test/constant_time_*'"
+            wasm_arm: "1"
     name: gates (${{ matrix.name }})
     steps:
       - uses: actions/checkout@v4
@@ -674,20 +832,25 @@ jobs:
   # requirement — demanding it forced a costly re-mint history before the
   # policy was fixed (dossier `ci.md`). So drift WARNS and a broken seed FAILS.
   # Re-mint at checkpoints (`make bootstrap` is strict).
+
+  # ── #1932: the DOC half of the old `soundness` job, and nothing else. ────────
+  # The five compiler gates that used to live here now run in `compiler-soundness`
+  # below. This is an ADD, not a rename: the context name `soundness` must never
+  # disappear (it is a required check, and a required context that stops reporting
+  # blocks every PR until a ruleset edit — which is not atomic with a commit).
   #
-  # ── Compiler soundness: two gates documented but never enforced (until a10c2705) ──
-  # `typecheck` asks "is the compiler source well-typed?" (the build does not
-  # ask). `fixpoint` asks "does the emitter reproduce itself?" (C3a/C3b
-  # byte-identical). `gates` runs the compiler; it never typechecks it.
-  # `seed-health` proves the seed works; it never proves the source is
-  # well-typed or that emission reached a fixpoint. Incident: dossier `ci.md`.
+  # ⚠️ UNGUARDED, FOREVER — no `docs_only` guard, no `compiler_touched` guard, no
+  # `needs:` on `detect` at all, so there is no output here that a future edit could
+  # accidentally narrow on. Every gate below is pure text analysis (no compiler, no
+  # binary, seconds), and every one of them polices DOC ROT, which lands in exactly
+  # the prose-only PRs a narrowing guard would skip. Guarding a doc gate on
+  # `docs_only` skips it on precisely the PRs it exists to police.
+  #
+  # No `needs: build` either — nothing here reads `./medaka`, so this job no longer
+  # waits on the shared build (#1928) it never consumed.
   soundness:
-    # `build` for the binaries (#1928); `detect` for its outputs. The `if:` is the
-    # same guard, for the same reason, as the one on `gates` above — read it there.
-    needs: [detect, build]
-    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -750,11 +913,65 @@ jobs:
             exit 1
           fi
 
+  # ── Compiler soundness: two gates documented but never enforced (until a10c2705) ──
+  # `typecheck` asks "is the compiler source well-typed?" (the build does not
+  # ask). `fixpoint` asks "does the emitter reproduce itself?" (C3a/C3b
+  # byte-identical). `gates` runs the compiler; it never typechecks it.
+  # `seed-health` proves the seed works; it never proves the source is
+  # well-typed or that emission reached a fixpoint. Incident: dossier `ci.md`.
+  #
+  # ── #1932: the COMPILER half of the old `soundness` job. ────────────────────
+  # Split out of `soundness` so a prose-only or project-only PR stops paying for a
+  # cold self-compile fixpoint + a compiler-source typecheck + an oracle build. The
+  # doc gates above stay unguarded; these five need `./medaka` and are the expensive
+  # half. A NEW required context — the ruleset edit that requires it is a separate,
+  # non-atomic step, so until it lands this job is advisory.
+  #
+  # ⚠️ NO job-level `if:` THAT CAN SKIP THE JOB FOR ANYTHING OTHER THAN THE WHOLE RUN
+  # BEING CANCELLED — same required-context deadlock hazard as `gates`/`wasm`/`inlang`
+  # (read the note on `gates`). The narrowing is at the STEP level, so the job always
+  # RUNS and always REPORTS.
+  #
+  # ⚠️ THE JOB REPORTING IS NOT ENOUGH — IT MUST NOT REPORT GREEN HAVING RUN NOTHING.
+  # This is where the step-level shape genuinely differs from `gates`, and an earlier
+  # version of this note claimed a parity that did not exist (fix F1). `gates` reaches
+  # its "no SKIP, no GREEN-BY-SKIP" property because its `plan` step is UNGUARDED: on a
+  # `detect` FAILURE every output is the empty string, `plan` still runs, and the shard
+  # falls through to a full run (and the artifact download then fails, correctly red).
+  # A step guarded only on the classifier's outputs has the opposite failure mode:
+  # unwritten outputs make `compiler_touched == 'true'` FALSE, so EVERY guarded step
+  # SKIPS and this required context reports SUCCESS having run nothing. Hence the
+  # leading `needs.detect.result != 'success'` disjunct on every step guard below (and
+  # on `inlang`'s and `wasm`'s): the classifier's answer is trusted ONLY when `detect`
+  # actually succeeded and therefore actually published one. `success` is the only
+  # `needs.<job>.result` value that means "the outputs are real" — `failure`,
+  # `cancelled`, and `skipped` all leave them empty — so on any of the other three the
+  # steps run unguarded and the job fails safe exactly as `gates` does. When `detect`
+  # DOES succeed the disjunct is false and the narrowing is bit-for-bit as before.
+  #
+  # The guard is `compiler_touched` ORed with THIS job's OWN escape list
+  # (`soundness_corpora`), never a widened predicate — see the `detect` job's
+  # `outputs:` block. The escape list is NOT optional here and is not a stylistic
+  # echo of `wasm`/`inlang`: `test/must_fail_fixtures/**` and
+  # `test/diff_compiler_must_fail.sh` sit OUTSIDE `./medaka`'s build closure, so
+  # `compiler_touched` alone is FALSE for a PR that only edits a fixture — and under
+  # the must-fail suite's INVERTED polarity a fixture that never runs reports as
+  # "drained". You would be paid in green for silently un-pinning a live soundness
+  # bug. That counterexample is why the list exists.
+  compiler-soundness:
+    # `build` for the binary (#1928); `detect` for its outputs. Same `if:` as `gates`.
+    needs: [detect, build]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
       # Toolchain still needed (clang builds the typecheck oracle; the fixpoint
       # gate cold-bootstraps from the seed on its own); the BINARY comes from
       # `build` (#1928).
       - name: Setup medaka (toolchain + downloaded binary)
-        if: needs.detect.outputs.docs_only != 'true'
+        if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.soundness_corpora == 'true')) }}
         uses: ./.github/actions/setup-medaka
         with:
           binary: artifact
@@ -765,14 +982,14 @@ jobs:
       # #182 broke the mirror once and only human review caught it, no gate
       # proved the two agreed. This one does — see dossier `ci.md`.
       - name: Fingerprint mirror must still agree (issue #267)
-        if: needs.detect.outputs.docs_only != 'true'
+        if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.soundness_corpora == 'true')) }}
         run: sh test/check_fingerprint_parity.sh
 
       # `typecheck_compiler_source.sh` exits 2 (SKIP) when its oracle is absent,
       # indistinguishable from a pass in CI — so build the oracle first and
       # assert on the PASS line, not the exit status.
       - name: Build the typecheck oracle
-        if: needs.detect.outputs.docs_only != 'true'
+        if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.soundness_corpora == 'true')) }}
         run: FORCE=1 sh test/build_oracles.sh --build-one diagnostics_project_main
 
       # ── The MUST-FAIL suite: the tracker's self-drain (#547) ────────────────
@@ -784,7 +1001,7 @@ jobs:
       # `soundness` runs FULL on every event and is already required. Guarded on
       # docs_only, correctly here — this needs the compiler. History: dossier `ci.md`.
       - name: Open bugs must still reproduce (must-fail suite — a RED here means someone FIXED something)
-        if: needs.detect.outputs.docs_only != 'true'
+        if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.soundness_corpora == 'true')) }}
         run: sh test/diff_compiler_must_fail.sh
 
       # `selfcompile_fixpoint.sh` asserts C3a AND C3b, the right bar for a
@@ -799,7 +1016,7 @@ jobs:
       # contention has already flipped from a real failure into a false
       # timeout. History: dossier `ci.md`.
       - name: Compiler source is well-typed and emitter reproduces itself
-        if: needs.detect.outputs.docs_only != 'true'
+        if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.soundness_corpora == 'true')) }}
         run: |
           set +e
           JOBS=3 bash test/typecheck_compiler_source.sh > /tmp/tc.log 2>&1 &
@@ -872,8 +1089,17 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      # #1931. The job-level `if:` stays `!cancelled()` — NEVER a job-level skip, or
+      # the required context deadlocks. The narrowing is at the STEP level, and it is
+      # the build-closure predicate ORed with THIS job's own corpus list, never a
+      # widened predicate. A prose-or-project-only PR now stops paying for `make test`;
+      # a compiler-touching PR runs exactly as before.
+      # The leading `needs.detect.result != 'success'` disjunct is the fail-safe: an
+      # output-only guard reads a FAILED `detect`'s empty outputs as "narrow to
+      # nothing" and reports this required context GREEN having run nothing. Full
+      # rationale at the head of `compiler-soundness` (fix F1).
       - name: Setup medaka (toolchain + downloaded binary)
-        if: needs.detect.outputs.docs_only != 'true'
+        if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.inlang_corpora == 'true')) }}
         uses: ./.github/actions/setup-medaka
         with:
           binary: artifact
@@ -887,7 +1113,7 @@ jobs:
       # Deliberately scoped to THIS step: the flag is default-off everywhere else, so
       # the local dev loop and every other caller relink exactly as before.
       - name: Doctests, properties, and test decls
-        if: needs.detect.outputs.docs_only != 'true'
+        if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.inlang_corpora == 'true')) }}
         env:
           SKIP_CLI_LINK_IF_FRESH: '1'
         run: make test
@@ -938,8 +1164,16 @@ jobs:
       # box's). wasm-tools (parse + validate the emitted WAT) is NOT on a stock runner
       # either — the pinned prebuilt release is downloaded and extracted OUTSIDE the
       # checkout (see the action for why).
+      # #1931. Step-level narrowing only; the job-level `if:` above stays
+      # `!cancelled()`. `compiler_touched` is the build-closure predicate and is NOT
+      # widened to cover sqlite/gzip/playground — that list is THIS job's, ORed in here,
+      # so the predicate keeps one meaning for every other reader.
+      # The leading `needs.detect.result != 'success'` disjunct is the fail-safe: an
+      # output-only guard reads a FAILED `detect`'s empty outputs as "narrow to
+      # nothing" and reports this required context GREEN having run nothing. Full
+      # rationale at the head of `compiler-soundness` (fix F1).
       - name: Setup medaka (toolchain + wasm + downloaded binary)
-        if: needs.detect.outputs.docs_only != 'true'
+        if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.wasm_corpora == 'true')) }}
         uses: ./.github/actions/setup-medaka
         with:
           wasm: 'true'
@@ -949,7 +1183,7 @@ jobs:
       # that these gates drive. Cheap; deliberately NOT cached (they are a pure
       # function of the whole compiler graph, which the medaka cache above already keys).
       - name: Build the wasm emitter oracles
-        if: needs.detect.outputs.docs_only != 'true'
+        if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.wasm_corpora == 'true')) }}
         run: |
           export MEDAKA_EMITTER="$PWD/medaka_emitter"
           sh test/wasm/build_wasm_oracle.sh
@@ -961,7 +1195,7 @@ jobs:
       # "a skip is not a pass" is the entire reason this gate coverage hole existed. All
       # all run (|| rc=1) before the job fails, so one red gate never hides the others.
       - name: WasmGC backend gates
-        if: needs.detect.outputs.docs_only != 'true'
+        if: ${{ needs.detect.result != 'success' || (needs.detect.outputs.docs_only != 'true' && (needs.detect.outputs.compiler_touched == 'true' || needs.detect.outputs.wasm_corpora == 'true')) }}
         run: |
           set -u
           export MEDAKA_EMITTER="$PWD/medaka_emitter"
