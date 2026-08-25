@@ -1,5 +1,5 @@
 # META
-source_lines=9387
+source_lines=9385
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -260,7 +260,7 @@ import backend.trmc_analysis.{
   armBody,
   lastStmtExpr,
 }
-import backend.private_mangle.{hashName, injectiveIdent}
+import backend.private_mangle.{dictTag, hashName, injectiveIdent}
 import backend.emit_support.{
   eagerReachMap,
   bindEagerReach,
@@ -4848,23 +4848,21 @@ ifaceOfInW tbl m = match lookupAssoc m tbl
 -- with the LLVM emitter so the dict-witness tag matches across backends + the
 -- route-key dispatch agrees.
 
--- the i31-safe dict-witness tag: hashName masked into the low 30 bits (positive
--- range of an i31).  The full djb2 hash is an i64 in the LLVM backend (an i64 dict
--- word); a WasmGC dict witness rides an i31 immediate (31 bits), so the raw hash
--- (e.g. hashName "Color" = 210671116836, a 38-bit value) overflows `i32.const`.
--- Masking to 30 bits keeps it a positive i32/i31 that `i31.get_s` reads back
--- unchanged, and — being applied identically at witness CREATION (routeWitness) and
--- at the dispatch COMPARISON (emitDispatchChain) — preserves the equality test.
--- (No bitwise primitive in the compiler subset; `% 2^30` is the mask.  Collisions
--- across 30-bit-equal tag names are astronomically unlikely for the small impl-tag
--- alphabet; the LLVM 64-bit scheme has the same theoretical collision shape.)
-dictTag : String -> Int
-dictTag s = posMod (hashName s) 1073741824
-
--- a non-negative remainder (Medaka `%` can be negative for a negative dividend; the
--- djb2 i64 accumulator can wrap negative).
-posMod : Int -> Int -> Int
-posMod n m = (n % m + m) % m
+-- `dictTag` (the i31-safe 30-bit mask of `hashName`) and its `posMod` helper moved
+-- to `backend.private_mangle`, beside `hashName`, in #377/#348: the emit-time
+-- collision guard (`core_ir_lower.dictWitnessTagGuard`) has to check THIS tag space
+-- with the SAME expression this emitter mints, and a second copy of the mask is a
+-- copy that can drift.  Imported at the top of this file; the emitted `i32.const`s
+-- are unchanged.
+--
+-- ⚠️ The comment that used to stand here called a 30-bit tag collision
+-- "astronomically unlikely for the small impl-tag alphabet" and the 64-bit LLVM
+-- scheme's the "same theoretical collision shape".  Both halves were wrong:
+-- colliding pre-images are CONSTRUCTIBLE in the full i64 (`hashName "Mzone" ==
+-- hashName "NYone"`), the mechanism is the radix-33 polynomial versus a 74-code-
+-- point alphabet rather than anything about how many tags a program has, and it
+-- was a live silent-wrong-dispatch S0 on both backends until the guard landed.
+-- See `private_mangle.hashName`'s note.
 
 -- ── ref-mode expression emitter — every result is a (ref eq) on the stack ────
 -- `d` is the current match/switch nesting DEPTH: a CDecision/CTSwitch stashes a
@@ -9397,7 +9395,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "noneHeadTag" false) (mem "dedupBy" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ifaceIdsAtTag" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dictUniformClauses" false) (mem "dropFirstN" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "hashName" false) (mem "injectiveIdent" false))))
+(DUse false (UseGroup ("backend" "private_mangle") ((mem "dictTag" false) (mem "hashName" false) (mem "injectiveIdent" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "lazyGlobalNames" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false))))
 (DUse false (UseGroup ("backend" "wasm_preamble") ((mem "preambleHeadLines" false) (mem "closTypeLines" false) (mem "closApplyLines" false) (mem "ioByteImportLines" false) (mem "strTypeLines" false) (mem "ioRuntimeLines" false) (mem "ioStrRuntimeLines" false) (mem "stderrByteImportLines" false) (mem "stderrRuntimeLines" false) (mem "trapIntRuntimeLines" false) (mem "strLeafRuntimeLines" false) (mem "strConcatRuntimeLines" false) (mem "appendRuntimeLines" false) (mem "valueEqRuntimeLines" false) (mem "valueArithRuntimeLines" false) (mem "rngStateGlobalLines" false) (mem "rngRuntimeLines" false) (mem "hashRuntimeLines" false) (mem "hashStringRuntimeLines" false) (mem "floatFmtImportLines" false) (mem "mathHostImportLines" false) (mem "floatRemRuntimeLines" false) (mem "floatRuntimeLines" false) (mem "hashFloatRuntimeLines" false) (mem "randomFloatRuntimeLines" false) (mem "floatStrImportLines" false) (mem "floatStrRuntimeLines" false) (mem "strSearchRuntimeLines" false) (mem "strCodecRuntimeLines" false) (mem "charFromCodeRuntimeLines" false) (mem "charClassRuntimeLines" false) (mem "ioHostImportLines" false) (mem "ioHostRuntimeLines" false) (mem "ioArgsRuntimeLines" false) (mem "fileBytesHostImportLines" false) (mem "fileBytesRuntimeLines" false))))
 (DData Private "WTy" () ((variant "WInt" (ConPos)) (variant "WBool" (ConPos)) (variant "WUnit" (ConPos)) (variant "WStr" (ConPos)) (variant "WRef" (ConPos)) (variant "WChar" (ConPos)) (variant "WFloat" (ConPos))) ())
@@ -10461,10 +10459,6 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "restampGuardW" ((PVar "tbl") (PVar "iface") (PVar "tag") (PVar "rr") (PCon "CGBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "CGBind") (EVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "restampIfaceDictsW") (EVar "tbl")) (EVar "iface")) (EVar "tag")) (EVar "rr")) (EVar "e"))))
 (DTypeSig false "ifaceOfInW" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int")))) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "ifaceOfInW" ((PVar "tbl") (PVar "m")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "m")) (EVar "tbl")) (arm (PCon "Some" (PTuple (PVar "iface") PWild)) () (EVar "iface")) (arm (PCon "None") () (ELit (LString "")))))
-(DTypeSig false "dictTag" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "dictTag" ((PVar "s")) (EApp (EApp (EVar "posMod") (EApp (EVar "hashName") (EVar "s"))) (ELit (LInt 1073741824))))
-(DTypeSig false "posMod" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "posMod" ((PVar "n") (PVar "m")) (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (EVar "m")) (EVar "m")) (EVar "m")))
 (DTypeSig false "emitRefExpr" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "emitRefExpr" ((PVar "prog") (PVar "env") (PVar "d") (PCon "CLit" (PVar "l"))) (EApp (EApp (EVar "emitLitRef") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "l")))
 (DFunDef false "emitRefExpr" ((PVar "prog") (PVar "env") (PVar "d") (PCon "CVar" (PVar "x") PWild)) (EApp (EApp (EApp (EApp (EVar "emitVarRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "x")))
@@ -11591,7 +11585,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "noneHeadTag" false) (mem "dedupBy" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ifaceIdsAtTag" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dictUniformClauses" false) (mem "dropFirstN" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
-(DUse false (UseGroup ("backend" "private_mangle") ((mem "hashName" false) (mem "injectiveIdent" false))))
+(DUse false (UseGroup ("backend" "private_mangle") ((mem "dictTag" false) (mem "hashName" false) (mem "injectiveIdent" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "lazyGlobalNames" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false))))
 (DUse false (UseGroup ("backend" "wasm_preamble") ((mem "preambleHeadLines" false) (mem "closTypeLines" false) (mem "closApplyLines" false) (mem "ioByteImportLines" false) (mem "strTypeLines" false) (mem "ioRuntimeLines" false) (mem "ioStrRuntimeLines" false) (mem "stderrByteImportLines" false) (mem "stderrRuntimeLines" false) (mem "trapIntRuntimeLines" false) (mem "strLeafRuntimeLines" false) (mem "strConcatRuntimeLines" false) (mem "appendRuntimeLines" false) (mem "valueEqRuntimeLines" false) (mem "valueArithRuntimeLines" false) (mem "rngStateGlobalLines" false) (mem "rngRuntimeLines" false) (mem "hashRuntimeLines" false) (mem "hashStringRuntimeLines" false) (mem "floatFmtImportLines" false) (mem "mathHostImportLines" false) (mem "floatRemRuntimeLines" false) (mem "floatRuntimeLines" false) (mem "hashFloatRuntimeLines" false) (mem "randomFloatRuntimeLines" false) (mem "floatStrImportLines" false) (mem "floatStrRuntimeLines" false) (mem "strSearchRuntimeLines" false) (mem "strCodecRuntimeLines" false) (mem "charFromCodeRuntimeLines" false) (mem "charClassRuntimeLines" false) (mem "ioHostImportLines" false) (mem "ioHostRuntimeLines" false) (mem "ioArgsRuntimeLines" false) (mem "fileBytesHostImportLines" false) (mem "fileBytesRuntimeLines" false))))
 (DData Private "WTy" () ((variant "WInt" (ConPos)) (variant "WBool" (ConPos)) (variant "WUnit" (ConPos)) (variant "WStr" (ConPos)) (variant "WRef" (ConPos)) (variant "WChar" (ConPos)) (variant "WFloat" (ConPos))) ())
@@ -12655,10 +12649,6 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "restampGuardW" ((PVar "tbl") (PVar "iface") (PVar "tag") (PVar "rr") (PCon "CGBind" (PVar "p") (PVar "e"))) (EApp (EApp (EVar "CGBind") (EVar "p")) (EApp (EApp (EApp (EApp (EApp (EVar "restampIfaceDictsW") (EVar "tbl")) (EVar "iface")) (EVar "tag")) (EVar "rr")) (EVar "e"))))
 (DTypeSig false "ifaceOfInW" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int")))) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "ifaceOfInW" ((PVar "tbl") (PVar "m")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "m")) (EVar "tbl")) (arm (PCon "Some" (PTuple (PVar "iface") PWild)) () (EVar "iface")) (arm (PCon "None") () (ELit (LString "")))))
-(DTypeSig false "dictTag" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "dictTag" ((PVar "s")) (EApp (EApp (EVar "posMod") (EApp (EVar "hashName") (EVar "s"))) (ELit (LInt 1073741824))))
-(DTypeSig false "posMod" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "posMod" ((PVar "n") (PVar "m")) (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (EVar "m")) (EVar "m")) (EVar "m")))
 (DTypeSig false "emitRefExpr" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "emitRefExpr" ((PVar "prog") (PVar "env") (PVar "d") (PCon "CLit" (PVar "l"))) (EApp (EApp (EVar "emitLitRef") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "l")))
 (DFunDef false "emitRefExpr" ((PVar "prog") (PVar "env") (PVar "d") (PCon "CVar" (PVar "x") PWild)) (EApp (EApp (EApp (EApp (EVar "emitVarRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "x")))

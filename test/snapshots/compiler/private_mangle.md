@@ -1,5 +1,5 @@
 # META
-source_lines=1178
+source_lines=1220
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -902,6 +902,21 @@ hexNibble n = stringSlice n (n + 1) "0123456789abcdef"
 -- (the emitted IR carries the decimal constant).  Shared by BOTH backends so the
 -- dict-witness tag / route-key dispatch agrees across LLVM and WasmGC — the hash
 -- MUST be byte-identical between them.
+--
+-- 🚨 `hashName` IS NOT INJECTIVE, and not merely "astronomically unlikely" to
+-- collide — colliding pre-images are CONSTRUCTIBLE, in the FULL i64, with no
+-- masking.  djb2 is the radix-33 polynomial `5381*33^n + Σ c_i*33^i`, and the
+-- identifier alphabet spans 74 code points (`0` = 48 … `z` = 122) — WIDER than the
+-- radix — so `Δ_{i+1} = +1, Δ_i = −33` at two ADJACENT positions is an exact zero:
+-- `hashName "Az" == hashName "BY" == 5862176`, `hashName "Mzone" == hashName
+-- "NYone" == 210683374574`.  Before #348's guard that was a live S0: two impls at
+-- head tycons `Mzone`/`NYone` compiled to one `icmp eq i64 %headTag, 210683374574`
+-- in the shared dispatcher, so `build` answered `mzone|mzone` where the
+-- interpreter answered `mzone|nyone`, at exit 0 with no diagnostic.  The comment
+-- that used to stand at `wasm_emit.dictTag` calling this shape "astronomically
+-- unlikely" was wrong about the mechanism: the hash's non-injectivity has nothing
+-- to do with the tag alphabet being small, and nothing to do with the mask width.
+-- `core_ir_lower.dictWitnessTagGuard` is what makes it loud; keep the two together.
 export
 hashName : String -> Int
 hashName s = hashChars (stringToChars s) 0 5381
@@ -910,6 +925,33 @@ hashChars : Array Char -> Int -> Int -> Int
 hashChars cs i acc
   | i >= arrayLength cs = acc
   | otherwise = hashChars cs (i + 1) (acc * 33 + charCode (arrayGetUnsafe i cs))
+
+-- the i31-safe dict-witness tag: `hashName` masked into the low 30 bits (positive
+-- range of an i31).  The full djb2 hash is an i64 in the LLVM backend (an i64 dict
+-- word); a WasmGC dict witness rides an i31 immediate (31 bits), so the raw hash
+-- (e.g. `hashName "Color"` = 210671116836, a 38-bit value) overflows `i32.const`.
+-- Masking to 30 bits keeps it a positive i32/i31 that `i31.get_s` reads back
+-- unchanged, and — being applied identically at witness CREATION
+-- (`wasm_emit.routeWitness`) and at the dispatch COMPARISON
+-- (`wasm_emit.emitDispatchChain`) — preserves the equality test.  (No bitwise
+-- primitive in the compiler subset; `% 2^30` is the mask.)
+--
+-- Lives HERE, beside `hashName`, rather than in `wasm_emit`, because
+-- `core_ir_lower.dictWitnessTagGuard` must check the WASM tag space with the SAME
+-- expression the wasm emitter mints — a second copy of the mask in the guard is a
+-- copy that can drift, and a drifted guard certifies the wrong property.  The
+-- 30-bit space inherits every `hashName` collision (masking cannot separate equal
+-- values) AND adds its own: two pre-images whose full hashes differ by a nonzero
+-- multiple of 2^30.
+export
+dictTag : String -> Int
+dictTag s = posMod (hashName s) 1073741824
+
+-- a non-negative remainder (Medaka `%` can be negative for a negative dividend; the
+-- djb2 i64 accumulator can wrap negative).
+export
+posMod : Int -> Int -> Int
+posMod n m = (n % m + m) % m
 
 -- ── decl rewrite (rename both the DEFINITION name and all references) ─────────
 renameDecl : OrdMap String -> Decl -> Decl
@@ -1372,6 +1414,10 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "hashName" ((PVar "s")) (EApp (EApp (EApp (EVar "hashChars") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))) (ELit (LInt 5381))))
 (DTypeSig false "hashChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "hashChars" ((PVar "cs") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "hashChars") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "dictTag" (TyFun (TyCon "String") (TyCon "Int")))
+(DFunDef false "dictTag" ((PVar "s")) (EApp (EApp (EVar "posMod") (EApp (EVar "hashName") (EVar "s"))) (ELit (LInt 1073741824))))
+(DTypeSig true "posMod" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "posMod" ((PVar "n") (PVar "m")) (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (EVar "m")) (EVar "m")) (EVar "m")))
 (DTypeSig false "renameDecl" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "patVarsListPM") (EVar "ps"))) (EVar "e"))))
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "ty"))) (EApp (EApp (EApp (EVar "DTypeSig") (EVar "pub")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EVar "ty")))
@@ -1684,6 +1730,10 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "hashName" ((PVar "s")) (EApp (EApp (EApp (EVar "hashChars") (EApp (EVar "stringToChars") (EVar "s"))) (ELit (LInt 0))) (ELit (LInt 5381))))
 (DTypeSig false "hashChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "hashChars" ((PVar "cs") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "hashChars") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "dictTag" (TyFun (TyCon "String") (TyCon "Int")))
+(DFunDef false "dictTag" ((PVar "s")) (EApp (EApp (EVar "posMod") (EApp (EVar "hashName") (EVar "s"))) (ELit (LInt 1073741824))))
+(DTypeSig true "posMod" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "posMod" ((PVar "n") (PVar "m")) (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (EVar "m")) (EVar "m")) (EVar "m")))
 (DTypeSig false "renameDecl" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "patVarsListPM") (EVar "ps"))) (EVar "e"))))
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "ty"))) (EApp (EApp (EApp (EVar "DTypeSig") (EVar "pub")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EVar "ty")))

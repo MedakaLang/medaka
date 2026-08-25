@@ -256,7 +256,7 @@ import backend.trmc_analysis.{
   armBody,
   lastStmtExpr,
 }
-import backend.private_mangle.{hashName, injectiveIdent}
+import backend.private_mangle.{dictTag, hashName, injectiveIdent}
 import backend.emit_support.{
   eagerReachMap,
   bindEagerReach,
@@ -4844,23 +4844,21 @@ ifaceOfInW tbl m = match lookupAssoc m tbl
 -- with the LLVM emitter so the dict-witness tag matches across backends + the
 -- route-key dispatch agrees.
 
--- the i31-safe dict-witness tag: hashName masked into the low 30 bits (positive
--- range of an i31).  The full djb2 hash is an i64 in the LLVM backend (an i64 dict
--- word); a WasmGC dict witness rides an i31 immediate (31 bits), so the raw hash
--- (e.g. hashName "Color" = 210671116836, a 38-bit value) overflows `i32.const`.
--- Masking to 30 bits keeps it a positive i32/i31 that `i31.get_s` reads back
--- unchanged, and — being applied identically at witness CREATION (routeWitness) and
--- at the dispatch COMPARISON (emitDispatchChain) — preserves the equality test.
--- (No bitwise primitive in the compiler subset; `% 2^30` is the mask.  Collisions
--- across 30-bit-equal tag names are astronomically unlikely for the small impl-tag
--- alphabet; the LLVM 64-bit scheme has the same theoretical collision shape.)
-dictTag : String -> Int
-dictTag s = posMod (hashName s) 1073741824
-
--- a non-negative remainder (Medaka `%` can be negative for a negative dividend; the
--- djb2 i64 accumulator can wrap negative).
-posMod : Int -> Int -> Int
-posMod n m = (n % m + m) % m
+-- `dictTag` (the i31-safe 30-bit mask of `hashName`) and its `posMod` helper moved
+-- to `backend.private_mangle`, beside `hashName`, in #377/#348: the emit-time
+-- collision guard (`core_ir_lower.dictWitnessTagGuard`) has to check THIS tag space
+-- with the SAME expression this emitter mints, and a second copy of the mask is a
+-- copy that can drift.  Imported at the top of this file; the emitted `i32.const`s
+-- are unchanged.
+--
+-- ⚠️ The comment that used to stand here called a 30-bit tag collision
+-- "astronomically unlikely for the small impl-tag alphabet" and the 64-bit LLVM
+-- scheme's the "same theoretical collision shape".  Both halves were wrong:
+-- colliding pre-images are CONSTRUCTIBLE in the full i64 (`hashName "Mzone" ==
+-- hashName "NYone"`), the mechanism is the radix-33 polynomial versus a 74-code-
+-- point alphabet rather than anything about how many tags a program has, and it
+-- was a live silent-wrong-dispatch S0 on both backends until the guard landed.
+-- See `private_mangle.hashName`'s note.
 
 -- ── ref-mode expression emitter — every result is a (ref eq) on the stack ────
 -- `d` is the current match/switch nesting DEPTH: a CDecision/CTSwitch stashes a
