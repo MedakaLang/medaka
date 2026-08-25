@@ -40,16 +40,18 @@
 # evidence for. A DIAGNOSTIC REPORTS WHAT IT OBSERVED, NOT WHAT IT CONCLUDED. It prints
 # both facts and stops; a human judges.
 #
-# ── WHY THIS IS NIGHTLY AND NOT IN `soundness` ────────────────────────────────
+# ── WHY THIS IS NIGHTLY AND NOT IN `compiler-soundness` ─────────────────────────
 #
 # ⭐ A REQUIRED CHECK MUST BE CAUSED BY THE DIFF IT GATES.
 #
-# That one line settles gate placement, and it is why `soundness` hosts the must-fail GATE
-# (a diff can fix a bug) but must never host this CENSUS (no diff can close an issue).
-# Blocking an innocent PR on repo state its diff never touched is the "not your break"
-# problem the `known-red` issue label exists to mitigate. Three more reasons, any one sufficient:
-#   * `soundness` is required on every PR AND every merge-queue entry — one API blip or
-#     rate-limit and NOTHING in the repo merges;
+# That one line settles gate placement, and it is why `compiler-soundness` hosts the
+# must-fail GATE (a diff can fix a bug) but must never host this CENSUS (no diff can close
+# an issue). Blocking an innocent PR on repo state its diff never touched is the "not your
+# break" problem the `known-red` issue label exists to mitigate. Three more reasons, any
+# one sufficient:
+#   * the compiler-soundness job (narrowed on `compiler_touched`/`soundness_corpora`) runs
+#     on every PR its narrowing selects, AND every merge-queue entry — one API blip or
+#     rate-limit and nothing selected in the repo merges;
 #   * every agent runs the gate locally via `make gates`/preflight with no `gh` auth, so it
 #     would have to SKIP ("this didn't run" looking like "this passed" — the cardinal sin
 #     this whole suite exists to prevent) or FAIL, breaking the loop;
