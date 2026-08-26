@@ -1,5 +1,5 @@
 # META
-source_lines=33800
+source_lines=33820
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -30861,8 +30861,19 @@ aliasConstraintEntries ((DUse _ path _)::rest) qual = aliasEntriesFor (usePathMo
 aliasConstraintEntries (_::rest) qual = aliasConstraintEntries rest qual
 
 aliasEntriesFor : String -> UsePath -> List ((String, String), a) -> List (String, a)
--- `import m as A` → every constrained fn m defines is callable as `A.<name>`.
-aliasEntriesFor mid (UseAlias _ a) qual = flatMap (moduleAliasEntry mid a) qual
+-- `import m as A` → every constrained fn `m` defines is callable as `A.<name>`.
+-- #1427: resolve `m`'s exports via `graphPubDefiners` (chasing re-exports to their
+-- actual definer) instead of matching `qual`'s definer key against the SPELLED
+-- module.  Mirrors `memberDefinerRow`'s "resolve identity off the graph, not the
+-- spelling" shape.  A re-exporting `m` never itself DEFINES the name, so the old
+-- `defMid == mid` test (`moduleAliasEntry`, still used unchanged by
+-- `schemeOblEntriesFor`) was always false for it and the alias entry silently
+-- dropped — `R.f 1` on a constrained re-exported callee panicked at build.
+-- No direct-match fallback: like the wildcard tier of `useDefinerRows`, this arm
+-- can't enumerate without the graph — safe here because `aliasConstraintEntries`
+-- runs only in `Module` mode, where the envelope always exists.
+aliasEntriesFor mid (UseAlias _ a) qual =
+  flatMap (graphAliasEntry a qual) (graphPubDefiners mid)
 -- `import m.{x as y}` → `y` carries `x`'s dict arity.
 aliasEntriesFor mid (UseGroup _ ms) qual =
   flatMap (memberAliasEntry mid qual) ms
@@ -31478,6 +31489,15 @@ memberAliasEntry mid qual m = match useMemberAlias m
     map
       (e => (local, snd e))
       (filter (e => fst (fst e) == mid && snd (fst e) == origin) qual)
+
+-- one row of `graphPubDefiners mid`: `(localName, (defMid, origin))` — a name `mid`
+-- exports and who actually DEFINES it, re-exports already chased.  Alias-qualify
+-- `localName` when `qual` carries an entry keyed by that SAME `(defMid, origin)`,
+-- not by `mid` itself — see `aliasEntriesFor`'s `UseAlias` arm (#1427).
+graphAliasEntry : String -> List ((String, String), a) -> (String, (String, String)) -> List (String, a)
+graphAliasEntry a qual (localName, (defMid, origin)) = map
+  (e => (qualifiedLocal a localName, snd e))
+  (filterList (e => fst (fst e) == defMid && snd (fst e) == origin) qual)
 
 -- build THIS module's import-scoped seed: walk its DUse decls, and for each one
 -- pick the imported names out of the named dependency's public schemes (held in
@@ -38815,7 +38835,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "aliasConstraintEntries" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest")) (PVar "qual")) (EBinOp "++" (EApp (EApp (EApp (EVar "aliasEntriesFor") (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "path")) (EVar "qual")) (EApp (EApp (EVar "aliasConstraintEntries") (EVar "rest")) (EVar "qual"))))
 (DFunDef false "aliasConstraintEntries" ((PCons PWild (PVar "rest")) (PVar "qual")) (EApp (EApp (EVar "aliasConstraintEntries") (EVar "rest")) (EVar "qual")))
 (DTypeSig false "aliasEntriesFor" (TyFun (TyCon "String") (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyVar "a"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a")))))))
-(DFunDef false "aliasEntriesFor" ((PVar "mid") (PCon "UseAlias" PWild (PVar "a")) (PVar "qual")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "moduleAliasEntry") (EVar "mid")) (EVar "a"))) (EVar "qual")))
+(DFunDef false "aliasEntriesFor" ((PVar "mid") (PCon "UseAlias" PWild (PVar "a")) (PVar "qual")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "graphAliasEntry") (EVar "a")) (EVar "qual"))) (EApp (EVar "graphPubDefiners") (EVar "mid"))))
 (DFunDef false "aliasEntriesFor" ((PVar "mid") (PCon "UseGroup" PWild (PVar "ms")) (PVar "qual")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "memberAliasEntry") (EVar "mid")) (EVar "qual"))) (EVar "ms")))
 (DFunDef false "aliasEntriesFor" (PWild PWild PWild) (EListLit))
 (DTypeSig false "renameAliasedMethods" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
@@ -38949,6 +38969,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "moduleAliasEntry" ((PVar "mid") (PVar "a") (PTuple (PTuple (PVar "defMid") (PVar "n")) (PVar "ids"))) (EIf (EBinOp "==" (EVar "defMid") (EVar "mid")) (EListLit (ETuple (EApp (EApp (EVar "qualifiedLocal") (EVar "a")) (EVar "n")) (EVar "ids"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "memberAliasEntry" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyVar "a"))) (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a")))))))
 (DFunDef false "memberAliasEntry" ((PVar "mid") (PVar "qual") (PVar "m")) (EMatch (EApp (EVar "useMemberAlias") (EVar "m")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "local")) () (EBlock (DoLet false false (PVar "origin") (EApp (EVar "useMemberOrigin") (EVar "m"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (EVar "local") (EApp (EVar "snd") (EVar "e"))))) (EApp (EApp (EVar "filter") (ELam ((PVar "e")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EApp (EVar "fst") (EVar "e"))) (EVar "mid")) (EBinOp "==" (EApp (EVar "snd") (EApp (EVar "fst") (EVar "e"))) (EVar "origin"))))) (EVar "qual"))))))))
+(DTypeSig false "graphAliasEntry" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyVar "a"))) (TyFun (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a")))))))
+(DFunDef false "graphAliasEntry" ((PVar "a") (PVar "qual") (PTuple (PVar "localName") (PTuple (PVar "defMid") (PVar "origin")))) (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (EApp (EApp (EVar "qualifiedLocal") (EVar "a")) (EVar "localName")) (EApp (EVar "snd") (EVar "e"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EApp (EVar "fst") (EVar "e"))) (EVar "defMid")) (EBinOp "==" (EApp (EVar "snd") (EApp (EVar "fst") (EVar "e"))) (EVar "origin"))))) (EVar "qual"))))
 (DTypeSig false "reportAmbiguousImports" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
 (DFunDef false "reportAmbiguousImports" ((PList)) (ELit LUnit))
 (DFunDef false "reportAmbiguousImports" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "reportAmbiguousImports") (EListLit (EVar "d")))) (DoExpr (EApp (EVar "reportAmbiguousImports") (EVar "rest")))))
@@ -44223,7 +44245,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "aliasConstraintEntries" ((PCons (PCon "DUse" PWild (PVar "path") PWild) (PVar "rest")) (PVar "qual")) (EBinOp "++" (EApp (EApp (EApp (EVar "aliasEntriesFor") (EApp (EVar "usePathModuleId") (EVar "path"))) (EVar "path")) (EVar "qual")) (EApp (EApp (EVar "aliasConstraintEntries") (EVar "rest")) (EVar "qual"))))
 (DFunDef false "aliasConstraintEntries" ((PCons PWild (PVar "rest")) (PVar "qual")) (EApp (EApp (EVar "aliasConstraintEntries") (EVar "rest")) (EVar "qual")))
 (DTypeSig false "aliasEntriesFor" (TyFun (TyCon "String") (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyVar "a"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a")))))))
-(DFunDef false "aliasEntriesFor" ((PVar "mid") (PCon "UseAlias" PWild (PVar "a")) (PVar "qual")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "moduleAliasEntry") (EVar "mid")) (EVar "a"))) (EVar "qual")))
+(DFunDef false "aliasEntriesFor" ((PVar "mid") (PCon "UseAlias" PWild (PVar "a")) (PVar "qual")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "graphAliasEntry") (EVar "a")) (EVar "qual"))) (EApp (EVar "graphPubDefiners") (EVar "mid"))))
 (DFunDef false "aliasEntriesFor" ((PVar "mid") (PCon "UseGroup" PWild (PVar "ms")) (PVar "qual")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "memberAliasEntry") (EVar "mid")) (EVar "qual"))) (EVar "ms")))
 (DFunDef false "aliasEntriesFor" (PWild PWild PWild) (EListLit))
 (DTypeSig false "renameAliasedMethods" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))
@@ -44357,6 +44379,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "moduleAliasEntry" ((PVar "mid") (PVar "a") (PTuple (PTuple (PVar "defMid") (PVar "n")) (PVar "ids"))) (EIf (EBinOp "==" (EVar "defMid") (EVar "mid")) (EListLit (ETuple (EApp (EApp (EVar "qualifiedLocal") (EVar "a")) (EVar "n")) (EVar "ids"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "memberAliasEntry" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyVar "a"))) (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a")))))))
 (DFunDef false "memberAliasEntry" ((PVar "mid") (PVar "qual") (PVar "m")) (EMatch (EApp (EVar "useMemberAlias") (EVar "m")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "local")) () (EBlock (DoLet false false (PVar "origin") (EApp (EVar "useMemberOrigin") (EVar "m"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (EVar "local") (EApp (EVar "snd") (EVar "e"))))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "e")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EApp (EVar "fst") (EVar "e"))) (EVar "mid")) (EBinOp "==" (EApp (EVar "snd") (EApp (EVar "fst") (EVar "e"))) (EVar "origin"))))) (EVar "qual"))))))))
+(DTypeSig false "graphAliasEntry" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyVar "a"))) (TyFun (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a")))))))
+(DFunDef false "graphAliasEntry" ((PVar "a") (PVar "qual") (PTuple (PVar "localName") (PTuple (PVar "defMid") (PVar "origin")))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (EApp (EApp (EVar "qualifiedLocal") (EVar "a")) (EVar "localName")) (EApp (EVar "snd") (EVar "e"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EApp (EVar "fst") (EVar "e"))) (EVar "defMid")) (EBinOp "==" (EApp (EVar "snd") (EApp (EVar "fst") (EVar "e"))) (EVar "origin"))))) (EVar "qual"))))
 (DTypeSig false "reportAmbiguousImports" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
 (DFunDef false "reportAmbiguousImports" ((PList)) (ELit LUnit))
 (DFunDef false "reportAmbiguousImports" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "reportAmbiguousImports") (EListLit (EVar "d")))) (DoExpr (EApp (EVar "reportAmbiguousImports") (EVar "rest")))))

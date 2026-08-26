@@ -30857,8 +30857,19 @@ aliasConstraintEntries ((DUse _ path _)::rest) qual = aliasEntriesFor (usePathMo
 aliasConstraintEntries (_::rest) qual = aliasConstraintEntries rest qual
 
 aliasEntriesFor : String -> UsePath -> List ((String, String), a) -> List (String, a)
--- `import m as A` → every constrained fn m defines is callable as `A.<name>`.
-aliasEntriesFor mid (UseAlias _ a) qual = flatMap (moduleAliasEntry mid a) qual
+-- `import m as A` → every constrained fn `m` defines is callable as `A.<name>`.
+-- #1427: resolve `m`'s exports via `graphPubDefiners` (chasing re-exports to their
+-- actual definer) instead of matching `qual`'s definer key against the SPELLED
+-- module.  Mirrors `memberDefinerRow`'s "resolve identity off the graph, not the
+-- spelling" shape.  A re-exporting `m` never itself DEFINES the name, so the old
+-- `defMid == mid` test (`moduleAliasEntry`, still used unchanged by
+-- `schemeOblEntriesFor`) was always false for it and the alias entry silently
+-- dropped — `R.f 1` on a constrained re-exported callee panicked at build.
+-- No direct-match fallback: like the wildcard tier of `useDefinerRows`, this arm
+-- can't enumerate without the graph — safe here because `aliasConstraintEntries`
+-- runs only in `Module` mode, where the envelope always exists.
+aliasEntriesFor mid (UseAlias _ a) qual =
+  flatMap (graphAliasEntry a qual) (graphPubDefiners mid)
 -- `import m.{x as y}` → `y` carries `x`'s dict arity.
 aliasEntriesFor mid (UseGroup _ ms) qual =
   flatMap (memberAliasEntry mid qual) ms
@@ -31474,6 +31485,15 @@ memberAliasEntry mid qual m = match useMemberAlias m
     map
       (e => (local, snd e))
       (filter (e => fst (fst e) == mid && snd (fst e) == origin) qual)
+
+-- one row of `graphPubDefiners mid`: `(localName, (defMid, origin))` — a name `mid`
+-- exports and who actually DEFINES it, re-exports already chased.  Alias-qualify
+-- `localName` when `qual` carries an entry keyed by that SAME `(defMid, origin)`,
+-- not by `mid` itself — see `aliasEntriesFor`'s `UseAlias` arm (#1427).
+graphAliasEntry : String -> List ((String, String), a) -> (String, (String, String)) -> List (String, a)
+graphAliasEntry a qual (localName, (defMid, origin)) = map
+  (e => (qualifiedLocal a localName, snd e))
+  (filterList (e => fst (fst e) == defMid && snd (fst e) == origin) qual)
 
 -- build THIS module's import-scoped seed: walk its DUse decls, and for each one
 -- pick the imported names out of the named dependency's public schemes (held in

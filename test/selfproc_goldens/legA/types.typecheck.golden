@@ -801,6 +801,7 @@ goalSiteLoc : Ref (Option Loc)
 goalSlotStillOpen : List Mono -> Bool
 goalVecOfKind : String -> Mono -> EntailKind -> List Mono
 goalsClosed : List Mono -> Bool
+graphAliasEntry : String -> List ((String, String), a) -> (String, (String, String)) -> List (String, a)
 graphAmbigValues : String -> List (String, List String)
 graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
 graphCtorExports : List Decl -> List (String, List Decl) -> Map String (List (String, String, Ident))
