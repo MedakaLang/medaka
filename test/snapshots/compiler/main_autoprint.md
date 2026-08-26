@@ -1,5 +1,5 @@
 # META
-source_lines=131
+source_lines=132
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/main_autoprint.mdk — shared composite-`main` auto-print wrap.
@@ -24,18 +24,18 @@ stages=DESUGAR,MARK
 -- UNDERIVED detection: a bare ADT main with no `Display` instance (`data H = H;
 -- main = H`) must surface the clean `No impl of Display for H; add 'deriving
 -- Display'` error, NOT a miscompile.  `underivedMainDiags` re-runs the CHECK gate
--- (`checkProgramDiags`, implInferEnabled OFF → checkImplObligations ON) on the
+-- (`checkOneDiags`, implInferEnabled OFF → checkImplObligations ON) on the
 -- WRAPPED, UN-MANGLED program — exactly what source-level `medaka build` of an
 -- explicit `main = println H` already does.  (The design's critical caveat: NEVER
 -- call checkImplObligations on the MANGLED emit-elaborated program — it can't match
 -- mangled `display`/`println` obligations to impl heads and mis-fires on every
--- program.  Routing through checkProgramDiags on un-mangled decls avoids that.)
+-- program.  Routing through checkOneDiags on un-mangled decls avoids that.)
 
 import frontend.ast.{Decl(..), Expr(..), Pat, Loc}
 import types.typecheck.{
   mainTypeIsUnit,
   mainTypeIsAsync,
-  checkProgramDiags,
+  checkOneDiags,
   setCoherenceUserDecls,
   TcDiag,
 }
@@ -121,21 +121,22 @@ wrapPrintln body = EApp (EVar "println") body
 -- Re-run the CHECK gate on the wrapped program to surface an underived-ADT main
 -- as the clean `No impl of Display …` type error.  Gated to a SINGLE loaded
 -- module (the common composite-main shape: playground + `medaka build file.mdk`):
--- the flat core++entry check IS the single-file `analyzeLocated` engine.  A
--- multi-module program flattened this way risks the over-rejection the CLI's
--- multi-module gate deliberately avoids, so it is skipped there (best-effort —
+-- `checkOneDiags` runs the ONE-MODULE Module-arm over just this module (S-migrate-
+-- check-route, E-1 #1115).  A multi-module program flattened this way risks the
+-- over-rejection the CLI's multi-module gate deliberately avoids, so it is
+-- skipped there (best-effort —
 -- the compiler graph never wraps, so this never affects the fixpoint).  Returns
 -- the type-error `TcDiag`s for the caller to render.
 export
 underivedMainDiags : List Decl -> List Decl -> List (String, List Decl) -> List TcDiag
-underivedMainDiags runtimeDecls coreDecls [(_, entryDecls)] =
+underivedMainDiags runtimeDecls coreDecls [(mid, entryDecls)] =
   let _ = setCoherenceUserDecls entryDecls
-  let (tcErrs, _) = checkProgramDiags runtimeDecls coreDecls entryDecls
+  let (tcErrs, _) = checkOneDiags runtimeDecls coreDecls (mid, entryDecls)
   tcErrs
 underivedMainDiags _ _ _ = []
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" false) (mem "Loc" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "checkProgramDiags" false) (mem "setCoherenceUserDecls" false) (mem "TcDiag" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "checkOneDiags" false) (mem "setCoherenceUserDecls" false) (mem "TcDiag" false))))
 (DTypeSig false "entryPair" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "entryPair" ((PList)) (EVar "None"))
 (DFunDef false "entryPair" ((PList (PVar "p"))) (EApp (EVar "Some") (EVar "p")))
@@ -168,11 +169,11 @@ underivedMainDiags _ _ _ = []
 (DFunDef false "wrapPrintln" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "println")))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner")))))
 (DFunDef false "wrapPrintln" ((PVar "body")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "println")))) (EVar "body")))
 (DTypeSig true "underivedMainDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "TcDiag"))))))
-(DFunDef false "underivedMainDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PList (PTuple PWild (PVar "entryDecls")))) (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "entryDecls"))) (DoLet false false (PTuple (PVar "tcErrs") PWild) (EApp (EApp (EApp (EVar "checkProgramDiags") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "entryDecls"))) (DoExpr (EVar "tcErrs"))))
+(DFunDef false "underivedMainDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PList (PTuple (PVar "mid") (PVar "entryDecls")))) (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "entryDecls"))) (DoLet false false (PTuple (PVar "tcErrs") PWild) (EApp (EApp (EApp (EVar "checkOneDiags") (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (EVar "mid") (EVar "entryDecls")))) (DoExpr (EVar "tcErrs"))))
 (DFunDef false "underivedMainDiags" (PWild PWild PWild) (EListLit))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" false) (mem "Loc" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "checkProgramDiags" false) (mem "setCoherenceUserDecls" false) (mem "TcDiag" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "checkOneDiags" false) (mem "setCoherenceUserDecls" false) (mem "TcDiag" false))))
 (DTypeSig false "entryPair" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "entryPair" ((PList)) (EVar "None"))
 (DFunDef false "entryPair" ((PList (PVar "p"))) (EApp (EVar "Some") (EVar "p")))
@@ -205,5 +206,5 @@ underivedMainDiags _ _ _ = []
 (DFunDef false "wrapPrintln" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "println")))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner")))))
 (DFunDef false "wrapPrintln" ((PVar "body")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "println")))) (EVar "body")))
 (DTypeSig true "underivedMainDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "TcDiag"))))))
-(DFunDef false "underivedMainDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PList (PTuple PWild (PVar "entryDecls")))) (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "entryDecls"))) (DoLet false false (PTuple (PVar "tcErrs") PWild) (EApp (EApp (EApp (EVar "checkProgramDiags") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "entryDecls"))) (DoExpr (EVar "tcErrs"))))
+(DFunDef false "underivedMainDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PList (PTuple (PVar "mid") (PVar "entryDecls")))) (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "entryDecls"))) (DoLet false false (PTuple (PVar "tcErrs") PWild) (EApp (EApp (EApp (EVar "checkOneDiags") (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (EVar "mid") (EVar "entryDecls")))) (DoExpr (EVar "tcErrs"))))
 (DFunDef false "underivedMainDiags" (PWild PWild PWild) (EListLit))
