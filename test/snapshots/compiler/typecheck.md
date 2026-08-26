@@ -1,5 +1,5 @@
 # META
-source_lines=34447
+source_lines=34502
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -18121,7 +18121,14 @@ cohClassify : CohSweep -> CohImpl -> List Mono -> List Mono -> String -> String 
 cohClassify sweep e1 xs ys mid1 mid2 (CohScan hard soft)
   | cohStrictlyMoreSpecific xs ys = CohScan hard soft
   | cohStrictlyMoreSpecific ys xs = CohScan hard soft
-  | cohMutuallySubsumes xs ys = CohScan (cohKeepFirst hard (Some (cohHardMsg e1 xs ys mid1 mid2, cohImplLoc e1))) soft
+  | cohMutuallySubsumes xs ys && cohHardInScope sweep mid1 mid2 =
+    CohScan (cohKeepFirst hard (Some (cohHardMsg e1 xs ys mid1 mid2, cohImplLoc e1))) soft
+  -- A mutually-subsuming pair the sweep does NOT own contributes nothing at all --
+  -- it must not fall through to the soft arm below, because HARD and SOFT are
+  -- disjoint classes (mutual subsumption is the exact complement of
+  -- ⊑-incomparability here), and reporting it as `W-INCOMPARABLE-IMPLS`
+  -- would be a wrong classification, not a quieter one.
+  | cohMutuallySubsumes xs ys = CohScan hard soft
   | not (cohSoftInScope sweep mid1 mid2) = CohScan hard soft
   | otherwise = CohScan hard (cohKeepFirst soft (Some (cohIncomparableMsg (cohImplIfaceName e1) xs ys mid1 mid2, cohImplLoc e1)))
 
@@ -18166,6 +18173,45 @@ cohSoftInScope : CohSweep -> String -> String -> Bool
 cohSoftInScope CohSweepOwn _ _ = True
 cohSoftInScope CohSweepGlobal "" "" = True
 cohSoftInScope CohSweepGlobal mid1 mid2 = cohIsCrossModule mid1 mid2
+
+-- Which sweep OWNS a HARD (mutually-subsuming) pair.  #1449 / F8: the SAME rule as
+-- `cohSoftInScope`, and it is a delegation rather than a copy so the two classes can
+-- never drift apart silently.
+--
+-- 🚨 THIS IS THE NARROWING `cohSoftInScope`'s header DECLINED TO MAKE, now made
+-- deliberately.  That header said, of the hard class: "The HARD class double-reports
+-- the same way, and that is PRE-EXISTING … so narrowing it here would be an unrelated
+-- behaviour change riding this one, and one that moves error goldens."  It is no
+-- longer unrelated: the double report IS #1449's shape, and it is user-visible on the
+-- most ordinary program there is.  Measured before this change, on a single file with
+-- two `impl Foo Int`, `medaka check --json` emitted the identical
+-- `T-CONFLICTING-IMPL` message TWICE — once with the declaration's real span (from the
+-- per-module sweep, `checkCoherence` / `CohSweepOwn`) and once span-less (from this
+-- whole-graph sweep, prepended by `checkModulesEntryFull` / `checkModulesDiags`).  An
+-- IMPORT-BEARING two-module program whose overlap is entry-module-local double-reported
+-- identically, so this was never 1-module-specific and never new to E-1 (#1115): the
+-- prepend has been in `checkModulesEntryFull` since 2026-08-01 (`git log -S
+-- 'prependDiagOpt "T-CONFLICTING-IMPL" 1 None hard errs'`).
+--
+-- ⚠️ NOT loud→silent, and here is why that is a claim and not a hope.  The pair this
+-- now declines is INTRA-module, and the per-module sweep's population
+-- (`cohRowsOwnedBy cur hasPrelude`) contains every one of that module's own rows by
+-- construction, with `foldModules` running the worker for EVERY module in the graph.
+-- So the union of the per-module sweeps already covers every intra-module pair the
+-- whole-graph sweep could see, WITH a span, which is strictly the better diagnostic.
+-- The whole-graph sweep's unique contribution -- the pair that SPANS two modules, which
+-- no per-module sweep can see -- is exactly what this predicate keeps.  Control
+-- measured across the change: two modules each declaring `impl Foo Int` for a third
+-- module's interface still reports `Conflicting `impl Foo`. Defined in amod and main`,
+-- once.
+--
+-- The one residual hole is `runFinalChecks`' documented `-1` ordinal sentinel, at which
+-- `checkCoherence` sweeps no rows: an intra-module hard pair would then be reported by
+-- NEITHER sweep.  That path is unreachable today and `ordinalSentinelGuard` already
+-- pushes a loud `T-INTERNAL-ORDINAL` error when it is taken, so the failure announces
+-- itself rather than accepting silently.
+cohHardInScope : CohSweep -> String -> String -> Bool
+cohHardInScope sweep mid1 mid2 = cohSoftInScope sweep mid1 mid2
 
 -- each head matches the other, i.e. they are α-equal up to renaming (`cohSubsumes`
 -- is one-sided matching, so mutual matching means each is an instance of the other).
@@ -33357,9 +33403,18 @@ entryOwnSchemes (_::rest) = entryOwnSchemes rest
 -- Imports are RESOLVED (their public schemes seed the entry), so a valid cross-
 -- module reference no longer falls through to `UnknownModule` — the known "native
 -- check is single-file" limitation, fixed.  The entry is last in dependency-first
--- order.  No-import (1-module) files still route through runCheck (full prelude+
--- user dump, byte-identical); this path is reached ONLY when the load returned
--- more than one module.
+-- order.
+--
+-- ⚠️ ROUTING, corrected 2026-08-26: this comment used to say "no-import (1-module)
+-- files still route through runCheck … this path is reached ONLY when the load
+-- returned more than one module."  FALSE since S-migrate-check-route (E-1 #1115).
+-- A no-import file now reaches HERE too, via the 1-module wrappers
+-- `checkOneScheme` / `checkOneDiags` / `checkOneToLinesWithRuntime` /
+-- `checkOneErrorsWithRuntime`, each of which calls this function with a SINGLETON
+-- module list.  So every clause below must be correct on a 1-module graph, not
+-- merely defensible on one: `foldModules`' singleton clause is a genuinely
+-- user-reachable path (it is where #2024's `accAll` = initial-value defect lives),
+-- and so is the whole-graph coherence prepend at the bottom.
 checkModulesEntryFull : List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List TcDiag, List TcDiag)
 checkModulesEntryFull runtimeDecls coreDecls0 modules0 =
   -- #1110: acquire type-constructor identity over the whole graph before anything
@@ -37538,11 +37593,13 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "cohScanInner" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "cohScanInner" ((PVar "sweep") (PAs "e1" (PCon "CohImpl" (PVar "if1") (PVar "xs") (PVar "mid1") PWild)) (PCons (PCon "CohImpl" (PVar "if2") (PVar "ys") (PVar "mid2") PWild) (PVar "rest")) (PVar "acc")) (EIf (EApp (EVar "cohScanDone") (EVar "acc")) (EVar "acc") (EIf (EBinOp "&&" (EApp (EApp (EVar "cohSameIface") (EVar "if1")) (EVar "if2")) (EApp (EApp (EVar "cohOverlap") (EVar "xs")) (EVar "ys"))) (EApp (EApp (EApp (EApp (EVar "cohScanInner") (EVar "sweep")) (EVar "e1")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cohClassify") (EVar "sweep")) (EVar "e1")) (EVar "xs")) (EVar "ys")) (EVar "mid1")) (EVar "mid2")) (EVar "acc"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "cohScanInner") (EVar "sweep")) (EVar "e1")) (EVar "rest")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "cohClassify" (TyFun (TyCon "CohSweep") (TyFun (TyCon "CohImpl") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "CohScan") (TyCon "CohScan")))))))))
-(DFunDef false "cohClassify" ((PVar "sweep") (PVar "e1") (PVar "xs") (PVar "ys") (PVar "mid1") (PVar "mid2") (PCon "CohScan" (PVar "hard") (PVar "soft"))) (EIf (EApp (EApp (EVar "cohStrictlyMoreSpecific") (EVar "xs")) (EVar "ys")) (EApp (EApp (EVar "CohScan") (EVar "hard")) (EVar "soft")) (EIf (EApp (EApp (EVar "cohStrictlyMoreSpecific") (EVar "ys")) (EVar "xs")) (EApp (EApp (EVar "CohScan") (EVar "hard")) (EVar "soft")) (EIf (EApp (EApp (EVar "cohMutuallySubsumes") (EVar "xs")) (EVar "ys")) (EApp (EApp (EVar "CohScan") (EApp (EApp (EVar "cohKeepFirst") (EVar "hard")) (EApp (EVar "Some") (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "cohHardMsg") (EVar "e1")) (EVar "xs")) (EVar "ys")) (EVar "mid1")) (EVar "mid2")) (EApp (EVar "cohImplLoc") (EVar "e1")))))) (EVar "soft")) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "cohSoftInScope") (EVar "sweep")) (EVar "mid1")) (EVar "mid2"))) (EApp (EApp (EVar "CohScan") (EVar "hard")) (EVar "soft")) (EIf (EVar "otherwise") (EApp (EApp (EVar "CohScan") (EVar "hard")) (EApp (EApp (EVar "cohKeepFirst") (EVar "soft")) (EApp (EVar "Some") (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "cohIncomparableMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "xs")) (EVar "ys")) (EVar "mid1")) (EVar "mid2")) (EApp (EVar "cohImplLoc") (EVar "e1")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
+(DFunDef false "cohClassify" ((PVar "sweep") (PVar "e1") (PVar "xs") (PVar "ys") (PVar "mid1") (PVar "mid2") (PCon "CohScan" (PVar "hard") (PVar "soft"))) (EIf (EApp (EApp (EVar "cohStrictlyMoreSpecific") (EVar "xs")) (EVar "ys")) (EApp (EApp (EVar "CohScan") (EVar "hard")) (EVar "soft")) (EIf (EApp (EApp (EVar "cohStrictlyMoreSpecific") (EVar "ys")) (EVar "xs")) (EApp (EApp (EVar "CohScan") (EVar "hard")) (EVar "soft")) (EIf (EBinOp "&&" (EApp (EApp (EVar "cohMutuallySubsumes") (EVar "xs")) (EVar "ys")) (EApp (EApp (EApp (EVar "cohHardInScope") (EVar "sweep")) (EVar "mid1")) (EVar "mid2"))) (EApp (EApp (EVar "CohScan") (EApp (EApp (EVar "cohKeepFirst") (EVar "hard")) (EApp (EVar "Some") (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "cohHardMsg") (EVar "e1")) (EVar "xs")) (EVar "ys")) (EVar "mid1")) (EVar "mid2")) (EApp (EVar "cohImplLoc") (EVar "e1")))))) (EVar "soft")) (EIf (EApp (EApp (EVar "cohMutuallySubsumes") (EVar "xs")) (EVar "ys")) (EApp (EApp (EVar "CohScan") (EVar "hard")) (EVar "soft")) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "cohSoftInScope") (EVar "sweep")) (EVar "mid1")) (EVar "mid2"))) (EApp (EApp (EVar "CohScan") (EVar "hard")) (EVar "soft")) (EIf (EVar "otherwise") (EApp (EApp (EVar "CohScan") (EVar "hard")) (EApp (EApp (EVar "cohKeepFirst") (EVar "soft")) (EApp (EVar "Some") (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "cohIncomparableMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "xs")) (EVar "ys")) (EVar "mid1")) (EVar "mid2")) (EApp (EVar "cohImplLoc") (EVar "e1")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
 (DTypeSig false "cohSoftInScope" (TyFun (TyCon "CohSweep") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "cohSoftInScope" ((PCon "CohSweepOwn") PWild PWild) (EVar "True"))
 (DFunDef false "cohSoftInScope" ((PCon "CohSweepGlobal") (PLit (LString "")) (PLit (LString ""))) (EVar "True"))
 (DFunDef false "cohSoftInScope" ((PCon "CohSweepGlobal") (PVar "mid1") (PVar "mid2")) (EApp (EApp (EVar "cohIsCrossModule") (EVar "mid1")) (EVar "mid2")))
+(DTypeSig false "cohHardInScope" (TyFun (TyCon "CohSweep") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "cohHardInScope" ((PVar "sweep") (PVar "mid1") (PVar "mid2")) (EApp (EApp (EApp (EVar "cohSoftInScope") (EVar "sweep")) (EVar "mid1")) (EVar "mid2")))
 (DTypeSig false "cohMutuallySubsumes" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
 (DFunDef false "cohMutuallySubsumes" ((PVar "xs") (PVar "ys")) (EBinOp "&&" (EApp (EApp (EVar "cohSubsumes") (EVar "xs")) (EVar "ys")) (EApp (EApp (EVar "cohSubsumes") (EVar "ys")) (EVar "xs"))))
 (DTypeSig false "cohKeepFirst" (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a")))))
@@ -43058,11 +43115,13 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "cohScanInner" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "cohScanInner" ((PVar "sweep") (PAs "e1" (PCon "CohImpl" (PVar "if1") (PVar "xs") (PVar "mid1") PWild)) (PCons (PCon "CohImpl" (PVar "if2") (PVar "ys") (PVar "mid2") PWild) (PVar "rest")) (PVar "acc")) (EIf (EApp (EVar "cohScanDone") (EVar "acc")) (EVar "acc") (EIf (EBinOp "&&" (EApp (EApp (EVar "cohSameIface") (EVar "if1")) (EVar "if2")) (EApp (EApp (EVar "cohOverlap") (EVar "xs")) (EVar "ys"))) (EApp (EApp (EApp (EApp (EVar "cohScanInner") (EVar "sweep")) (EVar "e1")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cohClassify") (EVar "sweep")) (EVar "e1")) (EVar "xs")) (EVar "ys")) (EVar "mid1")) (EVar "mid2")) (EVar "acc"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "cohScanInner") (EVar "sweep")) (EVar "e1")) (EVar "rest")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "cohClassify" (TyFun (TyCon "CohSweep") (TyFun (TyCon "CohImpl") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "CohScan") (TyCon "CohScan")))))))))
-(DFunDef false "cohClassify" ((PVar "sweep") (PVar "e1") (PVar "xs") (PVar "ys") (PVar "mid1") (PVar "mid2") (PCon "CohScan" (PVar "hard") (PVar "soft"))) (EIf (EApp (EApp (EVar "cohStrictlyMoreSpecific") (EVar "xs")) (EVar "ys")) (EApp (EApp (EVar "CohScan") (EVar "hard")) (EVar "soft")) (EIf (EApp (EApp (EVar "cohStrictlyMoreSpecific") (EVar "ys")) (EVar "xs")) (EApp (EApp (EVar "CohScan") (EVar "hard")) (EVar "soft")) (EIf (EApp (EApp (EVar "cohMutuallySubsumes") (EVar "xs")) (EVar "ys")) (EApp (EApp (EVar "CohScan") (EApp (EApp (EVar "cohKeepFirst") (EVar "hard")) (EApp (EVar "Some") (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "cohHardMsg") (EVar "e1")) (EVar "xs")) (EVar "ys")) (EVar "mid1")) (EVar "mid2")) (EApp (EVar "cohImplLoc") (EVar "e1")))))) (EVar "soft")) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "cohSoftInScope") (EVar "sweep")) (EVar "mid1")) (EVar "mid2"))) (EApp (EApp (EVar "CohScan") (EVar "hard")) (EVar "soft")) (EIf (EVar "otherwise") (EApp (EApp (EVar "CohScan") (EVar "hard")) (EApp (EApp (EVar "cohKeepFirst") (EVar "soft")) (EApp (EVar "Some") (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "cohIncomparableMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "xs")) (EVar "ys")) (EVar "mid1")) (EVar "mid2")) (EApp (EVar "cohImplLoc") (EVar "e1")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
+(DFunDef false "cohClassify" ((PVar "sweep") (PVar "e1") (PVar "xs") (PVar "ys") (PVar "mid1") (PVar "mid2") (PCon "CohScan" (PVar "hard") (PVar "soft"))) (EIf (EApp (EApp (EVar "cohStrictlyMoreSpecific") (EVar "xs")) (EVar "ys")) (EApp (EApp (EVar "CohScan") (EVar "hard")) (EVar "soft")) (EIf (EApp (EApp (EVar "cohStrictlyMoreSpecific") (EVar "ys")) (EVar "xs")) (EApp (EApp (EVar "CohScan") (EVar "hard")) (EVar "soft")) (EIf (EBinOp "&&" (EApp (EApp (EVar "cohMutuallySubsumes") (EVar "xs")) (EVar "ys")) (EApp (EApp (EApp (EVar "cohHardInScope") (EVar "sweep")) (EVar "mid1")) (EVar "mid2"))) (EApp (EApp (EVar "CohScan") (EApp (EApp (EVar "cohKeepFirst") (EVar "hard")) (EApp (EVar "Some") (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "cohHardMsg") (EVar "e1")) (EVar "xs")) (EVar "ys")) (EVar "mid1")) (EVar "mid2")) (EApp (EVar "cohImplLoc") (EVar "e1")))))) (EVar "soft")) (EIf (EApp (EApp (EVar "cohMutuallySubsumes") (EVar "xs")) (EVar "ys")) (EApp (EApp (EVar "CohScan") (EVar "hard")) (EVar "soft")) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "cohSoftInScope") (EVar "sweep")) (EVar "mid1")) (EVar "mid2"))) (EApp (EApp (EVar "CohScan") (EVar "hard")) (EVar "soft")) (EIf (EVar "otherwise") (EApp (EApp (EVar "CohScan") (EVar "hard")) (EApp (EApp (EVar "cohKeepFirst") (EVar "soft")) (EApp (EVar "Some") (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "cohIncomparableMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "xs")) (EVar "ys")) (EVar "mid1")) (EVar "mid2")) (EApp (EVar "cohImplLoc") (EVar "e1")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
 (DTypeSig false "cohSoftInScope" (TyFun (TyCon "CohSweep") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "cohSoftInScope" ((PCon "CohSweepOwn") PWild PWild) (EVar "True"))
 (DFunDef false "cohSoftInScope" ((PCon "CohSweepGlobal") (PLit (LString "")) (PLit (LString ""))) (EVar "True"))
 (DFunDef false "cohSoftInScope" ((PCon "CohSweepGlobal") (PVar "mid1") (PVar "mid2")) (EApp (EApp (EVar "cohIsCrossModule") (EVar "mid1")) (EVar "mid2")))
+(DTypeSig false "cohHardInScope" (TyFun (TyCon "CohSweep") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
+(DFunDef false "cohHardInScope" ((PVar "sweep") (PVar "mid1") (PVar "mid2")) (EApp (EApp (EApp (EVar "cohSoftInScope") (EVar "sweep")) (EVar "mid1")) (EVar "mid2")))
 (DTypeSig false "cohMutuallySubsumes" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
 (DFunDef false "cohMutuallySubsumes" ((PVar "xs") (PVar "ys")) (EBinOp "&&" (EApp (EApp (EVar "cohSubsumes") (EVar "xs")) (EVar "ys")) (EApp (EApp (EVar "cohSubsumes") (EVar "ys")) (EVar "xs"))))
 (DTypeSig false "cohKeepFirst" (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyApp (TyCon "Option") (TyVar "a")))))

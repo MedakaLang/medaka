@@ -18117,7 +18117,14 @@ cohClassify : CohSweep -> CohImpl -> List Mono -> List Mono -> String -> String 
 cohClassify sweep e1 xs ys mid1 mid2 (CohScan hard soft)
   | cohStrictlyMoreSpecific xs ys = CohScan hard soft
   | cohStrictlyMoreSpecific ys xs = CohScan hard soft
-  | cohMutuallySubsumes xs ys = CohScan (cohKeepFirst hard (Some (cohHardMsg e1 xs ys mid1 mid2, cohImplLoc e1))) soft
+  | cohMutuallySubsumes xs ys && cohHardInScope sweep mid1 mid2 =
+    CohScan (cohKeepFirst hard (Some (cohHardMsg e1 xs ys mid1 mid2, cohImplLoc e1))) soft
+  -- A mutually-subsuming pair the sweep does NOT own contributes nothing at all --
+  -- it must not fall through to the soft arm below, because HARD and SOFT are
+  -- disjoint classes (mutual subsumption is the exact complement of
+  -- ⊑-incomparability here), and reporting it as `W-INCOMPARABLE-IMPLS`
+  -- would be a wrong classification, not a quieter one.
+  | cohMutuallySubsumes xs ys = CohScan hard soft
   | not (cohSoftInScope sweep mid1 mid2) = CohScan hard soft
   | otherwise = CohScan hard (cohKeepFirst soft (Some (cohIncomparableMsg (cohImplIfaceName e1) xs ys mid1 mid2, cohImplLoc e1)))
 
@@ -18162,6 +18169,45 @@ cohSoftInScope : CohSweep -> String -> String -> Bool
 cohSoftInScope CohSweepOwn _ _ = True
 cohSoftInScope CohSweepGlobal "" "" = True
 cohSoftInScope CohSweepGlobal mid1 mid2 = cohIsCrossModule mid1 mid2
+
+-- Which sweep OWNS a HARD (mutually-subsuming) pair.  #1449 / F8: the SAME rule as
+-- `cohSoftInScope`, and it is a delegation rather than a copy so the two classes can
+-- never drift apart silently.
+--
+-- 🚨 THIS IS THE NARROWING `cohSoftInScope`'s header DECLINED TO MAKE, now made
+-- deliberately.  That header said, of the hard class: "The HARD class double-reports
+-- the same way, and that is PRE-EXISTING … so narrowing it here would be an unrelated
+-- behaviour change riding this one, and one that moves error goldens."  It is no
+-- longer unrelated: the double report IS #1449's shape, and it is user-visible on the
+-- most ordinary program there is.  Measured before this change, on a single file with
+-- two `impl Foo Int`, `medaka check --json` emitted the identical
+-- `T-CONFLICTING-IMPL` message TWICE — once with the declaration's real span (from the
+-- per-module sweep, `checkCoherence` / `CohSweepOwn`) and once span-less (from this
+-- whole-graph sweep, prepended by `checkModulesEntryFull` / `checkModulesDiags`).  An
+-- IMPORT-BEARING two-module program whose overlap is entry-module-local double-reported
+-- identically, so this was never 1-module-specific and never new to E-1 (#1115): the
+-- prepend has been in `checkModulesEntryFull` since 2026-08-01 (`git log -S
+-- 'prependDiagOpt "T-CONFLICTING-IMPL" 1 None hard errs'`).
+--
+-- ⚠️ NOT loud→silent, and here is why that is a claim and not a hope.  The pair this
+-- now declines is INTRA-module, and the per-module sweep's population
+-- (`cohRowsOwnedBy cur hasPrelude`) contains every one of that module's own rows by
+-- construction, with `foldModules` running the worker for EVERY module in the graph.
+-- So the union of the per-module sweeps already covers every intra-module pair the
+-- whole-graph sweep could see, WITH a span, which is strictly the better diagnostic.
+-- The whole-graph sweep's unique contribution -- the pair that SPANS two modules, which
+-- no per-module sweep can see -- is exactly what this predicate keeps.  Control
+-- measured across the change: two modules each declaring `impl Foo Int` for a third
+-- module's interface still reports `Conflicting `impl Foo`. Defined in amod and main`,
+-- once.
+--
+-- The one residual hole is `runFinalChecks`' documented `-1` ordinal sentinel, at which
+-- `checkCoherence` sweeps no rows: an intra-module hard pair would then be reported by
+-- NEITHER sweep.  That path is unreachable today and `ordinalSentinelGuard` already
+-- pushes a loud `T-INTERNAL-ORDINAL` error when it is taken, so the failure announces
+-- itself rather than accepting silently.
+cohHardInScope : CohSweep -> String -> String -> Bool
+cohHardInScope sweep mid1 mid2 = cohSoftInScope sweep mid1 mid2
 
 -- each head matches the other, i.e. they are α-equal up to renaming (`cohSubsumes`
 -- is one-sided matching, so mutual matching means each is an instance of the other).
@@ -33353,9 +33399,18 @@ entryOwnSchemes (_::rest) = entryOwnSchemes rest
 -- Imports are RESOLVED (their public schemes seed the entry), so a valid cross-
 -- module reference no longer falls through to `UnknownModule` — the known "native
 -- check is single-file" limitation, fixed.  The entry is last in dependency-first
--- order.  No-import (1-module) files still route through runCheck (full prelude+
--- user dump, byte-identical); this path is reached ONLY when the load returned
--- more than one module.
+-- order.
+--
+-- ⚠️ ROUTING, corrected 2026-08-26: this comment used to say "no-import (1-module)
+-- files still route through runCheck … this path is reached ONLY when the load
+-- returned more than one module."  FALSE since S-migrate-check-route (E-1 #1115).
+-- A no-import file now reaches HERE too, via the 1-module wrappers
+-- `checkOneScheme` / `checkOneDiags` / `checkOneToLinesWithRuntime` /
+-- `checkOneErrorsWithRuntime`, each of which calls this function with a SINGLETON
+-- module list.  So every clause below must be correct on a 1-module graph, not
+-- merely defensible on one: `foldModules`' singleton clause is a genuinely
+-- user-reachable path (it is where #2024's `accAll` = initial-value defect lives),
+-- and so is the whole-graph coherence prepend at the bottom.
 checkModulesEntryFull : List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List TcDiag, List TcDiag)
 checkModulesEntryFull runtimeDecls coreDecls0 modules0 =
   -- #1110: acquire type-constructor identity over the whole graph before anything

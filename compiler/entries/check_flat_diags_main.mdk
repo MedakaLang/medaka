@@ -1,0 +1,53 @@
+-- Probe for the FLAT arm (E-1 #1115): runs a SINGLE-file program through the
+-- FLAT scheme/diagnostic-tree wrapper (`checkProgramDiags`,
+-- compiler/types/typecheck.mdk → `seedAndCheckSplit` → `checkProgramSeededSplit`
+-- → `Flat`) and prints its verdict plus the first error's diagnostic code.
+--
+-- WHY THIS EXISTS.  test/diff_compiler_flat_vs_onemodule.sh used to reach the FLAT
+-- arm through `medaka check <no-import file>`.  Since S-migrate-check-route that
+-- verb is the MODULE arm (driver/diagnostics.mdk `analyzeFrom` now calls
+-- `checkOneDiags`), so every `FLAT` row in that gate was silently measuring the
+-- Module arm against itself.  A gate whose whole purpose is the Flat/Module
+-- relation cannot borrow a CLI verb for the Flat side — the verb can migrate out
+-- from under it without a single row moving.  This entry is the Flat side's own
+-- committed probe, the mirror image of `check_one_diags_main.mdk`.
+--
+--   medaka run compiler/entries/check_flat_diags_main.mdk <runtime.mdk> <core.mdk> <source.mdk>
+--
+-- prints exactly two lines: `ACCEPT` or `REJECT`, then the first error's code
+-- (or `-` on ACCEPT) — byte-identical in shape to `check_one_diags_main.mdk`, so
+-- the gate grades both arms with one parser.
+--
+-- The `setCoherenceUserDecls` call is NOT incidental: it is what the FLAT front
+-- door (`analyzeFrom`, pre-migration) did immediately before its
+-- `checkProgramDiags`, and it is what keeps a user impl that overrides a prelude
+-- impl from being flagged.  Dropping it would make this probe a different Flat
+-- than any consumer ever ran.
+
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.typecheck.{checkProgramDiags, setCoherenceUserDecls, tcCode}
+
+main = match args ()
+  [runtimeP, coreP, targetP] => run runtimeP coreP targetP
+  _ => ePutStrLn "usage: medaka run compiler/entries/check_flat_diags_main.mdk <runtime.mdk> <core.mdk> <file.mdk>"
+
+run : String -> String -> String -> <IO> Unit
+run runtimeP coreP targetP = match readFile runtimeP
+  Err e => ePutStrLn e
+  Ok rsrc => match readFile coreP
+    Err e => ePutStrLn e
+    Ok csrc => match readFile targetP
+      Err e => ePutStrLn e
+      Ok src =>
+        let desugared = desugar (parse src)
+        let coreDesugared = desugar (parse csrc)
+        let _ = setCoherenceUserDecls desugared
+        let (errs, _warns) = checkProgramDiags (desugar (parse rsrc)) coreDesugared desugared
+        match errs
+          [] =>
+            putStrLn "ACCEPT"
+            putStrLn "-"
+          e::_ =>
+            putStrLn "REJECT"
+            putStrLn (tcCode e)

@@ -380,6 +380,7 @@ cohEqR : Mono -> Mono -> Bool
 cohFreshTys : List Ty -> List Mono
 cohGo : Ref (List (Int, Mono)) -> Mono -> Mono -> Bool
 cohGoR : Ref (List (Int, Mono)) -> Mono -> Mono -> Bool
+cohHardInScope : CohSweep -> String -> String -> Bool
 cohHardMsg : CohImpl -> List Mono -> List Mono -> String -> String -> String
 cohImplIface : CohImpl -> IfaceRef
 cohImplIfaceName : CohImpl -> String
