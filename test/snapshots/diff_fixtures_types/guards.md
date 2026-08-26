@@ -21,6 +21,6 @@ main =
   println (clamp 0 10 15)
   println (clamp 0 10 7)
 # TYPES_USER
-clamp : Ord a => a -> a -> a -> a
 sign : (Num a, Ord a) => a -> String
+clamp : Ord a => a -> a -> a -> a
 main : Unit

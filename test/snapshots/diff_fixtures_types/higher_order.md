@@ -13,7 +13,7 @@ main =
   println (filter isEven [1, 2, 3, 4, 5, 6])
   println (sumList (map double [1, 2, 3]))
 # TYPES_USER
-isEven : Int -> Bool
 double : Num a => a -> a
+isEven : (Eq a, Num a) => a -> Bool
 sumList : (Foldable a, Num b) => a b -> b
 main : Unit
