@@ -628,14 +628,46 @@ not on either prerequisite. The cheap early validation is still the *design* (wo
 plugin interfaces like §6–§7), pressure-tested on paper against real plugin categories
 before any runtime exists.
 
-**Revised first increment (2026-08-26).** Ahead of any platform build, three items
-make §7e's dogfood demo say something the coarse-sandbox world cannot already say:
+### When this starts, and what has to be true first (decided 2026-08-26)
+
+**This work is sequenced AFTER the typechecker and emitter rearchitectures, and it
+is not pitched to anyone outside the project until the security posture is buttoned
+up.** That is a deliberate ordering, not a backlog accident, and the reason is §8's
+"soundness is now a security property": the moment this document's claim is made to
+an outside party, every effect-inference soundness bug becomes a security bug, and
+every open S0 becomes something a skeptic can quote. Getting the rearchitectures
+done first is what makes the claim survivable — so **the rearchitectures are the
+prerequisite, and this platform waits on them.**
+
+**The readiness test is derived, not asserted.** "Buttoned up" must mean a number
+somebody can re-derive on demand, or it will mean whatever the person saying it
+wants it to mean. The concrete gate: **no effect- or capability-related pin left in
+`test/must_fail_fixtures/`** — that corpus deliberately holds live soundness bugs
+(§8), so its effect-related subset draining to zero is exactly the statement
+"soundness is no longer knowingly broken where this claim depends on it." Derive
+the current subset; never trust a count written here:
+
+```sh
+for d in test/must_fail_fixtures/*/; do
+  grep -qiE 'laund|effect var|effvar|effect row|effect arrow|capabilit' "$d/claim.txt" &&
+    printf '%s\n' "$(basename "$d")"
+done
+```
+
+⚠️ That is a keyword sweep, not an adjudicated classification — it over-matches
+(a doctest-gate pin whose prose happens to say "effect") and can under-match a
+laundering bug described in other words. Read the hits; the load-bearing subset is
+the ones where **an effect escapes the row**, because that is exactly a manifest
+that under-reports authority. Those are the pins that must be zero before the
+claim in this document is made to anyone outside the project.
+
+**Then, and only then, the first increment.** Three items, none of which is a
+platform, which together are the smallest truthful version of the claim:
 1. **Fail-open fix in `check-policy`** — a missing entry point must reject
-   (§7e, **#2047**). A prerequisite, not a nicety: every other guarantee is
-   downstream of it.
+   (§7e, **#2047**). The one exception to the sequencing above: this is a live S0
+   in shipped tooling, so it is worth fixing on its own schedule rather than
+   waiting for the platform. Every other guarantee here is downstream of it.
 2. **WS-1b parameter-level policy compare** (`--allow 'Net=host/*'`) — without it
    the demo can only say "uses the network," which is the undifferentiated half.
 3. **A `Net` host import** in the wasm inventory, so a parameterized row has an
    enforcement point to be cashed in at.
-None of the three is a platform; together they are the smallest truthful version of
-the claim.
