@@ -26,7 +26,7 @@ what: `isSyntacticLambda` does not see through `ELoc`), which is separately pinn
 what: at test/must_fail_fixtures/807-let-rec-lambda-rhs-rejected/.
 cmd: check-json main.mdk
 exit: 1
-diag-code: T-NONREC-VALUE-LET None:None-None:None
+diag-code: T-NONREC-VALUE-LET 0:0-0:0
 control: check-json control.mdk
 why-verb: `check-json` because the DEFECT IS THE RANGE, and only the JSON arm
 why-verb: exposes it as data rather than as the rendered words "<unknown
@@ -65,3 +65,13 @@ why-note: The five-diagnostics-at-129:33 measurement above is recorded as eviden
 why-note: not pinned: it lives in test/ported/test_eval_ported.mdk, a shared corpus
 why-note: outside this harness, and a line-number pin into a 941-line file would move
 why-note: for reasons unrelated to #1449.
+why-diag-code: RE-PINNED 2026-08-26 (sprint/one-check-driver, PR #2025, front-door migration
+why-diag-code: to the Module-arm typechecking driver, landed by 439acd0e). Measured on this
+why-diag-code: binary: `range` for this diagnostic is no longer JSON `null` -- it is now the
+why-diag-code: literal object `{"start":{"line":0,"character":0},"end":{"line":0,"character":0}}`
+why-diag-code: -- so `render_diags` prints `0:0-0:0`, not `None:None-None:None`. Per this
+why-diag-code: fixture's own prior warning (above): this is exactly the RENDERING change it
+why-diag-code: called out, not a fix. `checkLetBind` still calls `pushTypeError` with no
+why-diag-code: location argument (unchanged); the Module-arm diagnostics path just defaults a
+why-diag-code: missing range to the zero sentinel instead of passing `null` through. #1449
+why-diag-code: stays OPEN; the diagnostic still carries no location of its own.

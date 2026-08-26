@@ -1,8 +1,0 @@
--- CONTROL for #1191: the SAME binding, renamed so it no longer collides with any
--- prelude standalone. That is the ONE flipped feature -- so this must check clean
--- (exit 0, no diagnostics), isolating the defect to the name collision itself,
--- not to anything else about the shape of this two-argument Int function.
-mySum : Int -> Int -> Int
-mySum a b = a + b
-
-main = println (mySum 1 2)
