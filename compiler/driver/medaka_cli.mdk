@@ -54,6 +54,7 @@ import support.util.{
 }
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omFromNames}
 import support.path.{baseOf, chopExt, joinPath}
+import support.timer.{perfEnabled, now, emitPhase, emitTotal}
 import frontend.ast.{Decl(..), Expr(..), Loc(..), Pat, LetBind(..)}
 import frontend.parser.{
   parse,
@@ -412,6 +413,8 @@ checkHelpText = stringConcat
 
 runCheckCmd : List String -> <IO> Unit
 runCheckCmd argv =
+  let perfOn = perfEnabled ()
+  let perfT0 = now ()
   let jsonMode = hasFlag "--json" argv
   let allowInternal = hasFlag "--allow-internal" argv
   let typesMode = hasFlag "--types" argv
@@ -453,7 +456,12 @@ runCheckCmd argv =
                   let mods = map dropModPath modsWithPath
                   let pathMap = map modIdToPath modsWithPath
                   let trusted = projectTrustedMods target roots stdlibDir mods
-                  checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target mods
+                  let perfTLoad = now ()
+                  let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
+                  let _ = checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target mods
+                  let perfTCheck = now ()
+                  let _ = emitPhase perfOn "check" (perfTCheck - perfTLoad) target
+                  emitTotal perfOn (perfTCheck - perfT0)
     _ =>
       let _ = ePutStrLn "usage: medaka check [--json] [--types] [--allow-internal] <file.mdk>"
       exit 1
@@ -1458,38 +1466,47 @@ runBuildCmd argv =
 -- emit+clang), split out of `runBuildCmd` so the `--json` dispatch above
 -- doesn't have to interleave two argument-parsing arms at one indent level.
 runBuildPlainCmd : List String -> <IO> Unit
-runBuildPlainCmd argv = match parseBuildArgs argv
-  Err msg =>
-    let _ = ePutStrLn msg
-    exit 1
-  Ok (input, outOpt, target) => if not (fileExists input) then
-    let _ = ePutStrLn ("error: no such file: " ++ input)
-    exit 1
-  else
-    let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-    let medaka = envOr "MEDAKA" "medaka"
-    let cc = envOr "CC" "clang"
-    let inputAbs = input
-    let allowInternal = hasFlag "--allow-internal" argv
-    let keepIrCli = hasFlag "--keep-ir" argv
-    let outPath = match outOpt
-      Some o => o
-      None => defaultOutPath target input
-    match typecheckGate allowInternal root inputAbs
-      TGErr msg =>
-        let _ = ePutStrLn msg
-        exit 1
-      -- Warnings BEFORE the emitter runs, so they precede clang's own output
-      -- and any `built <in> -> <out>` line — the same order `check` uses and
-      -- the order a reader scanning a build log expects.  They never change
-      -- the exit code.
-      TGOk gateWarns =>
-        let _ = emitWarningLines gateWarns
-        match runBuild root medaka cc target inputAbs outPath keepIrCli
-          BuildOk msg => println msg
-          BuildErr msg =>
-            let _ = ePutStrLn msg
-            exit 1
+runBuildPlainCmd argv =
+  let perfOn = perfEnabled ()
+  let perfT0 = now ()
+  match parseBuildArgs argv
+    Err msg =>
+      let _ = ePutStrLn msg
+      exit 1
+    Ok (input, outOpt, target) => if not (fileExists input) then
+      let _ = ePutStrLn ("error: no such file: " ++ input)
+      exit 1
+    else
+      let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+      let medaka = envOr "MEDAKA" "medaka"
+      let cc = envOr "CC" "clang"
+      let inputAbs = input
+      let allowInternal = hasFlag "--allow-internal" argv
+      let keepIrCli = hasFlag "--keep-ir" argv
+      let outPath = match outOpt
+        Some o => o
+        None => defaultOutPath target input
+      match typecheckGate allowInternal root inputAbs
+        TGErr msg =>
+          let _ = ePutStrLn msg
+          exit 1
+        -- Warnings BEFORE the emitter runs, so they precede clang's own output
+        -- and any `built <in> -> <out>` line — the same order `check` uses and
+        -- the order a reader scanning a build log expects.  They never change
+        -- the exit code.
+        TGOk gateWarns =>
+          let _ = emitWarningLines gateWarns
+          let perfTTc = now ()
+          let _ = emitPhase perfOn "typecheck" (perfTTc - perfT0) input
+          match runBuild root medaka cc target inputAbs outPath keepIrCli
+            BuildOk msg =>
+              let perfTEmit = now ()
+              let _ = emitPhase perfOn "emit" (perfTEmit - perfTTc) input
+              let _ = emitTotal perfOn (perfTEmit - perfT0)
+              println msg
+            BuildErr msg =>
+              let _ = ePutStrLn msg
+              exit 1
 
 -- `medaka build --json`'s own argument-parsing arm: a flag error still goes
 -- through `parseBuildArgs`, but a bad-args message is now the JSON envelope
@@ -1876,6 +1893,8 @@ runHelpText = stringConcat
 
 runRunCmd : List String -> <IO> Unit
 runRunCmd argv =
+  let perfOn = perfEnabled ()
+  let perfT0 = now ()
   let jsonMode = hasFlag "--json" argv
   match dropFlags argv
     [] =>
@@ -1945,6 +1964,8 @@ runRunCmd argv =
                 let coreD = desugar (parse csrc)
                 let modsD = map desugarPair mods
                 let trusted = projectTrustedMods target roots stdlibDir mods
+                let perfTLoad = now ()
+                let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
                 -- Route by module count, mirroring `checkRoute` EXACTLY, so that
                 -- `run` accepts/rejects the SAME set of programs `medaka check`
                 -- does (beta P0-1 / P1-8).  The old gate was resolve-errors +
@@ -1965,7 +1986,12 @@ runRunCmd argv =
                       [] =>
                         let _ = resetTypeErrorsSticky ()
                         let elaborated = elaborateModules rtD coreD modsD
-                        finishRunEval target jsonMode elaborated mods (cohWarnTriples tsrc target diags)
+                        let perfTCheck = now ()
+                        let _ = emitPhase perfOn "check" (perfTCheck - perfTLoad) target
+                        let _ = finishRunEval target jsonMode elaborated mods (cohWarnTriples tsrc target diags)
+                        let perfTEval = now ()
+                        let _ = emitPhase perfOn "eval" (perfTEval - perfTCheck) target
+                        emitTotal perfOn (perfTEval - perfT0)
                       _ =>
                         let _ = ePutStrLn (joinNl (map (ppDiagCliSrc tsrc target) errs))
                         exit 1
@@ -2003,7 +2029,13 @@ runRunCmd argv =
                               -- elaboration can see still aborts before eval.
                               let _ = ePutStrLn (locatedOrGeneric allowInternal trusted target roots rsrc csrc)
                               exit 1
-                            False => finishRunEval target jsonMode elaborated mods projWarns
+                            False =>
+                              let perfTCheck = now ()
+                              let _ = emitPhase perfOn "check" (perfTCheck - perfTLoad) target
+                              let _ = finishRunEval target jsonMode elaborated mods projWarns
+                              let perfTEval = now ()
+                              let _ = emitPhase perfOn "eval" (perfTEval - perfTCheck) target
+                              emitTotal perfOn (perfTEval - perfT0)
                       _ =>
                         let _ = ePutStrLn resDiags
                         exit 1
