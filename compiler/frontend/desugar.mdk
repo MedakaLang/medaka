@@ -201,9 +201,9 @@ rewriteSugar : Expr -> Expr
 rewriteSugar (EGuards arms) = guardsToCore arms
 rewriteSugar (ESection s) = sectionToCore s
 rewriteSugar (EStringInterp parts) = interpToCore parts
--- `x := e` (reference write) → `setRef x e` (the existing `<Mut>` extern).
+-- `x := e` (reference write) → `setRef x e` (the existing `setRef` extern).
 -- Pure surface sugar: no dedicated typecheck/eval arm — the application flows
--- through `setRef`'s signature (`Ref a -> a -> <Mut> Unit`), so a non-`Ref` LHS
+-- through `setRef`'s signature (`Ref a -> a -> Unit`), so a non-`Ref` LHS
 -- is a type error at the call site.
 rewriteSugar (EBinOp ":=" lhs rhs _) = callBin "setRef" lhs rhs
 -- `a[i]` / `a.[i]` (read position) → `index a i` (Index interface dispatch).

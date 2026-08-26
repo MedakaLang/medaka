@@ -7,7 +7,7 @@ stages=DESUGAR,MARK
 -- tail-recursion-modulo-cons eligible.  Lifted out of `llvm_emit.mdk` (WASMGC-TRMC-DESIGN.md
 -- §5/§7-Stage-0) so BOTH the LLVM backend (`llvm_emit.mdk`) and the WasmGC backend
 -- (`wasm_emit.mdk`, Stage 1+) share one analysis.  The ctor lookups (`isCtor`/`ctorArity`)
--- are PARAMETERIZED as `(ic : String -> <Mut> Bool)` / `(ar : String -> <Mut> Int)` so this
+-- are PARAMETERIZED as `(ic : String -> Bool)` / `(ar : String -> Int)` so this
 -- module carries no backend-specific emit state.  The EMIT (destination-passing loop) stays
 -- backend-specific and lives in each emitter.
 
@@ -716,13 +716,13 @@ ctorTailSelfIdx ex = match flattenApp ex []
 --
 -- The program-coupled lookups are PARAMETERIZED exactly like `trmcEligible`'s
 -- ctor hooks, so this module carries no backend emit state:
---   `cf   : String -> <Mut> String` — canonical fn name (bare→`core__` alias
+--   `cf   : String -> String` — canonical fn name (bare→`core__` alias
 --           resolution: wasm `canonFn`, LLVM `canonFnName`).
---   `isFn : String -> <Mut> Bool`   — is a defined top-level fn.
---   `fa   : String -> <Mut> Int`    — a top-level fn's declared arity; the
+--   `isFn : String -> Bool`   — is a defined top-level fn.
+--   `fa   : String -> Int`    — a top-level fn's declared arity; the
 --           contract is wasm's `progFnArity`: -1 when not a known fn (an LLVM
 --           hook returning 0-when-unknown would let a 0-arg call "saturate").
---   `s1   : String -> Int -> List CClause -> <Mut> Bool` — "would the backend's
+--   `s1   : String -> Int -> List CClause -> Bool` — "would the backend's
 --           Stage-1 self-TMC already claim this fn?" (the v5 singleton check).
 --           A hook while the backends' Stage-1 gates differ (wasm's uniform-ctor
 --           gate); collapses to one shared predicate when that gate is retired.
@@ -1304,8 +1304,8 @@ dispStmtNonTailHeads cf isFn fa memberSet (s::rest) = allCallHeadsStmt cf s
   ++ dispStmtNonTailHeads cf isFn fa memberSet rest
 dispStmtNonTailHeads _ _ _ _ [] = []
 
--- effectful (`<Mut>`) anyList: the spine-cons / call-head walks thread the
--- <Mut> hooks, so a short-circuiting any over a <Mut> predicate is needed.
+-- effectful anyList: the spine-cons / call-head walks thread effectful
+-- hooks, so a short-circuiting any over an effectful predicate is needed.
 anyListM : (a -> Bool) -> List a -> Bool
 anyListM _ [] = False
 anyListM p (x::rest) =

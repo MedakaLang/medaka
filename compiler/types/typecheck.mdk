@@ -1413,7 +1413,7 @@ prefixPatternErrMsg noun pat = "\{noun} \"\{pat}\" must end in '*' or contain a 
 
 -- validate every written effect param in a program's type annotations against
 -- the registry: a Prefix label's pattern must pass prefixPatternOk; an atomic
--- label rejects a param outright.  Runs as a <Mut> pass (errors via
+-- label rejects a param outright.  Runs as a side-effecting pass (errors via
 -- pushTypeError) — the OCaml side does this inline in atom_of_written.
 checkEffectParams : List Decl -> Unit
 checkEffectParams [] = ()
@@ -7440,7 +7440,7 @@ containsI _ [] = False
 containsI x (y::ys) = x == y || containsI x ys
 
 -- `support/util`'s `anyList` takes a PURE predicate, so it cannot carry the
--- path-compressing (hence `<Mut>`) mono predicates below — `monoIsFunction`,
+-- path-compressing (hence effectful) mono predicates below — `monoIsFunction`,
 -- `numUnimplementableHead`, … all normalize.  Same short-circuiting `||` fold, one
 -- effect row wider.  (Medaka has no effect-polymorphic HOFs, so this must be a
 -- second definition rather than a reuse of `anyList`.)

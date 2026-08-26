@@ -231,7 +231,7 @@ rewriteTable verb path table f = do
   Ok cnt
 
 -- Build the new database image.  Pure-ish: only `buildDatabaseMultiExplicit`
--- carries `<Mut>`.
+-- carries internal mutation.
 rewriteImage : String -> Db -> String -> (String -> List (Int, List Cell) -> Result String (List (Int, List Cell), Int)) -> Result String (Array Int, Int)
 rewriteImage verb db table f = do
   schema <- readSchema db

@@ -6628,8 +6628,8 @@ groupImpls : Emit -> List CImplEntry -> List ImplGroup
 groupImpls e entries =
   mapMut (gatherGroup e entries) (distinctImplKeys entries [])
 
--- map a <Mut> function over a list (map is pure; gatherGroup now reads the method
--- arity table to eta-expand point-free impls, so the walk must be <Mut>).
+-- map an effectful function over a list (map is pure; gatherGroup now reads the method
+-- arity table to eta-expand point-free impls, so the walk must be effectful).
 mapMut : (a -> b) -> List a -> List b
 mapMut _ [] = []
 mapMut f (x::rest) = f x :: mapMut f rest
@@ -7387,7 +7387,7 @@ ctorOrdinal e name = match ctorTypeOf e name
   -- is in `ty`'s bucket and therefore in the ordinal map — the map probe and the
   -- `indexOfStr` scan return the same Int.  RUN-EMIT-003: the scan path is retired.
   Some _ => match !e.ctorOrdinalMap
-    Some m => orZero (omLookup name m)
+    Some m => fromOption 0 (omLookup name m)
     None => panic "llvm: ctorOrdinalMap read before install (internal error)"
   None => if name == "Nil" then 1 else 0
 
@@ -7402,7 +7402,7 @@ ctorTypeId e name = match ctorTypeOf e name
   -- `indexOfStr` scan agree, and `omSize` is that list's length (nubStr ⇒ distinct).
   -- RUN-EMIT-003: both `distinctTypeNames`-scan paths are retired.
   Some ty => match !e.typeIdMap
-    Some m => orZero (omLookup ty m)
+    Some m => fromOption 0 (omLookup ty m)
     None => panic "llvm: typeIdMap read before install (internal error)"
   None => match !e.typeIdMap
     Some m => omSize m
@@ -7418,10 +7418,6 @@ ctorTypeId e name = match ctorTypeOf e name
 typeNamesOf : List (String, String) -> List String
 typeNamesOf [] = []
 typeNamesOf ((_, t)::rest) = t :: typeNamesOf rest
-
-orZero : Option Int -> Int
-orZero (Some i) = i
-orZero None = 0
 
 -- dedup a list of strings, preserving first-occurrence order.  #990: the seen-set is an
 -- OrdMap (membership O(log k)) instead of a `contains`-scanned list (O(k)) — so the nub
