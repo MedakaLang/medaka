@@ -151,13 +151,21 @@
 #                TOGETHER, so a List-as-a-set scan over the method pool reads
 #                O(sites x pool). The co-scaled shape from #883; several real
 #                quadratics (#969/#973/#975) were found on it.
+#   errs       — N bindings, each `eK : Int` / `eK = "s"`, i.e. exactly one type
+#                error per binding. The REGRESSION PIN for #2044 (the diagnostic
+#                -count quadratic fixed by S-diag-count): the emitter's
+#                per-diagnostic source-line lookup rescanned the whole file, so
+#                rendering N diagnostics read O(N x file). See the regime note.
 #
-# Both are 0-DIAGNOSTIC by construction, which is what makes a same-generator
-# floor a valid floor for them (see the regime note above).
+# xref and manyifaces are 0-DIAGNOSTIC by construction; errs is N-DIAGNOSTIC by
+# construction. Either is a valid regime — what matters is that a shape's floor
+# comes from the SAME generator and therefore the SAME regime (see the floor
+# block above), and that the regime is ASSERTED at every measured N so a shape
+# cannot silently drift out of it. `grade_shape`'s third argument names it.
 #
 # ── COST ─────────────────────────────────────────────────────────────────────
 #
-# 8 cachegrind invocations (2 shapes x (1 floor + 3 sizes)), ~70 s on this box.
+# 12 cachegrind invocations (3 shapes x (1 floor + 3 sizes)), ~2 min on this box.
 # There is no fan-out knob: cachegrind is single-threaded and the runs are
 # sequential on purpose, so the numbers cannot be perturbed by a noisy neighbour.
 # The bands are sized for cost, not for a floor — `Ir` has no floor to clear.
@@ -220,6 +228,11 @@ FLOOR_N="${IR_FLOOR_N:-1}"
 # whose 4N run stays a few seconds under cachegrind.
 XREF_N="${IR_XREF_N:-250}"
 MANYIFACES_N="${IR_MANYIFACES_N:-100}"
+# errs is deliberately the widest band: #2044's ratios CLIMB with N (see the
+# threshold block), so a narrow band grades the quadratic at its weakest and the
+# pin would be a soft one. 400/800/1600 is where the pre-fix reading was
+# measured (r1 3.215 r2 3.574) and where the fix reads ~2.03/~2.03.
+ERRS_N="${IR_ERRS_N:-400}"
 
 # A netting-noise guard, and the `Ir` analogue of perf_scaling's TIME_FLOOR — but
 # justified differently. It is NOT about a stage being too fast to time: `Ir` has
@@ -267,6 +280,22 @@ gen_manyifaces() {
   } >> "$gf"
 }
 
+# The #2044 regression pin. Each binding is annotated `Int` and bound to a
+# String, which is exactly one `Type mismatch` diagnostic per binding and
+# nothing else — so the diagnostic COUNT scales with N while the per-diagnostic
+# work is constant. That is precisely the axis #2044's quadratic lived on.
+gen_errs() {
+  gn=$1; gf=$2; : > "$gf"
+  {
+    gi=0
+    while [ "$gi" -lt "$gn" ]; do
+      printf 'e%s : Int\ne%s = "s"\n' "$gi" "$gi"
+      gi=$((gi + 1))
+    done
+    printf 'main = println 1\n'
+  } >> "$gf"
+}
+
 # ── measurement ──────────────────────────────────────────────────────────────
 #
 # The `Ir` total is read from cachegrind's own stderr summary ("I refs:"), not
@@ -310,16 +339,51 @@ assert_clean() {
   return 0
 }
 
+# The N-diagnostic counterpart, for a shape whose whole point is that the
+# diagnostic COUNT scales. `assert_clean` is the wrong assertion for such a
+# shape — but "no assertion" is worse, because the drift it guards against is
+# the same one and lands the same way: a fixture that stops producing N
+# diagnostics (or starts producing a different KIND) leaves the shape's floor
+# in a regime the measured runs are no longer in, and the ratios become
+# meaningless while the gate still grades them. So assert the count EXACTLY,
+# at every measured N, floor included.
+assert_diags() {
+  af="$1"; an="$2"
+  if "$MEDAKA" check "$af" >"$WORK/chk.out" 2>&1; then
+    echo "FAIL: generated fixture typechecks CLEANLY — the errs shape has drifted:"
+    echo "  expected $an diagnostics, got a clean check."
+    return 1
+  fi
+  got="$(grep -c '^error: ' "$WORK/chk.out")"
+  if [ "$got" -ne "$an" ]; then
+    echo "FAIL: errs fixture produced $got diagnostics, expected exactly $an —"
+    echo "  the shape has drifted out of its diagnostic regime and its floor no"
+    echo "  longer nets against the same regime."
+    sed 's/^/  /' "$WORK/chk.out" | head -20
+    return 1
+  fi
+  return 0
+}
+
+# Dispatch on the shape's declared regime (grade_shape's 3rd argument).
+assert_regime() {
+  case "$1" in
+    clean) assert_clean "$2" ;;
+    diags) assert_diags "$2" "$3" ;;
+    *) echo "FAIL: unknown regime '$1' — expected 'clean' or 'diags'."; return 1 ;;
+  esac
+}
+
 fail=0
 graded=0
 
 grade_shape() {
-  shape="$1"; base_n="$2"
+  shape="$1"; base_n="$2"; regime="${3:-clean}"
 
   # The floor comes from THIS shape's generator, in THIS shape's diagnostic
   # regime. See the header — a shared baseline is measurably wrong.
   "gen_$shape" "$FLOOR_N" "$WORK/${shape}_floor.mdk" || return 1
-  assert_clean "$WORK/${shape}_floor.mdk" || { fail=1; return 1; }
+  assert_regime "$regime" "$WORK/${shape}_floor.mdk" "$FLOOR_N" || { fail=1; return 1; }
   floor="$(ir_of "$WORK/${shape}_floor.mdk")" || { fail=1; return 1; }
   min_net="$(awk -v f="$floor" -v p="$MIN_NET_FRAC" 'BEGIN{printf "%d", f*p}')"
   printf '%s: floor(N=%s) = %s Ir  (net must exceed %s)\n' \
@@ -329,7 +393,7 @@ grade_shape() {
   nets=""
   for m in "$n1" "$n2" "$n4"; do
     "gen_$shape" "$m" "$WORK/${shape}_$m.mdk" || { fail=1; return 1; }
-    assert_clean "$WORK/${shape}_$m.mdk" || { fail=1; return 1; }
+    assert_regime "$regime" "$WORK/${shape}_$m.mdk" "$m" || { fail=1; return 1; }
     raw="$(ir_of "$WORK/${shape}_$m.mdk")" || { fail=1; return 1; }
     net=$((raw - floor))
     printf '  N=%-6s raw=%-14s net=%s\n' "$m" "$raw" "$net"
@@ -368,8 +432,9 @@ echo "── Ir scaling (Cachegrind instruction counts, net of a per-shape floor
 echo "medaka: $MEDAKA"
 valgrind --version
 
-grade_shape xref "$XREF_N"
-grade_shape manyifaces "$MANYIFACES_N"
+grade_shape xref "$XREF_N" clean
+grade_shape manyifaces "$MANYIFACES_N" clean
+grade_shape errs "$ERRS_N" diags
 
 echo
 # A gate that grades nothing must never report success — the invariant
