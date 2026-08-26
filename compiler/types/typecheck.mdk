@@ -23549,12 +23549,23 @@ checkBodyImpl seed mode prog0 =
   let groundUniverse = match mode
     Flat _ => prog
     Module _ _ implDecls => implDecls
-  -- (#6) superDeclsRef: unified body OWNS it — Flat = coreProg ++ userProg, Module =
-  -- implDecls.  On the emit path elabModuleStamp already sets the same implDecls; on the
-  -- multi-module CHECK path this closes the latent stale/empty-ref gap (behavior change).
+  -- (#6, #1457) superDeclsRef: unified body OWNS it — Flat = coreProg ++ userProg, Module =
+  -- `prog ++ implDecls`.  [implDecls] is core + every EARLIER module ONLY (foldModules never
+  -- folds a module into its own universe), so binding it alone EXCLUDED this module's own
+  -- `interface F t requires L t` decl from ifaceSelfAndSupers/survivorObligationEntailed and
+  -- false-rejected every legal superclass-default body (#1457).  Folding `prog` in matches the
+  -- Flat arm, whose universe is the whole program, self included.
+  -- ⚠️ Operand order is load-bearing, BOTH ways:
+  --   * cost — Medaka is strict, so `xs ++ ys` copies xs and shares ys.  [implDecls] is the
+  --     growing accumulator, so it MUST be the right operand: `prog ++ implDecls` is O(|prog|)
+  --     per module = O(N) overall, whereas `implDecls ++ prog` would resurrect #154 PR-C's
+  --     O(modules²) per-module concat.
+  --   * meaning — ifaceSupersOf/ifaceSelfAndSupers is a FIRST-MATCH scan, so `prog` first makes
+  --     THIS module's own same-spelled interface decl outrank an earlier module's, which is the
+  --     precedence the Flat arm already has.
   let superDecls = match mode
     Flat _ => prog
-    Module _ _ implDecls => implDecls
+    Module _ _ implDecls => prog ++ implDecls
   driverState.value.superDeclsRef := superDecls
   -- (BREAK #3) effect domains: FLAT populates inline; MODULE relies on the driver
   -- preamble (checkModulesPreamble / elaborateModules) populating ONCE over the whole
@@ -30034,8 +30045,11 @@ checkModuleFull : List (String, Scheme) -> List Decl -> List Decl -> List (Strin
 checkModuleFull seedVars accData prog =
   checkModuleFullImpl "" seedVars accData [] prog
 
--- E5: like checkModuleFull but takes [implDecls] (core + every EARLIER module +
--- this module) as the impl-body inference universe.  Under implInferEnabled (now ON
+-- E5: like checkModuleFull but takes [implDecls] (core + every EARLIER module — NOT this
+-- module: foldModules only grows the accumulator for LATER modules, so a module is never in
+-- its own [implDecls]; a caller that needs this module's own decls too must fold [prog] in
+-- itself, as the `superDecls` binding in checkBodyImpl does for #1457) as the impl-body
+-- inference universe.  Under implInferEnabled (now ON
 -- unconditionally) it ALSO infers THIS module's parametric impl
 -- bodies — mirroring checkProgramSeeded's inferImplBodiesIfEnabled — so their
 -- ARG-position ELEMENT dispatch (`eq`/`compare`/… on the impl head tyvar) reaches
