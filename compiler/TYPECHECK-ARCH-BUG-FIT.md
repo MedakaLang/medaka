@@ -76,9 +76,9 @@ prediction was touched.
 | #817 Async method-effect-var ≡ container row | **GAP (ownership)** — explicitly deferred to peer arc #820–#824, whose own coverage rules are open S0s | peer arc; see G-3 |
 | #819 impl body pins an impl-HEAD type var | **GAP** — matrix lists it "(adjacent)"; no design element removes it | none; see G-1 |
 | #825 deferred callback under a pure stored arrow | **GAP (ownership)** — same as #817 | peer arc; see G-3 |
-| #1040 `where`-local method helper at two types | DRAINED-BY **F-1** (#1082) | F |
+| #1040 `where`-local method helper at two types | **SUPERSEDED for the 0.1.0 floor** by sprint `dispatch-must-not-guess` (#1986): now a located `T-LOCAL-CONSTRAINED-MONO` REJECT, not silent drain — see `docs/KNOWN-GAPS.md`. DRAINED-BY **F-1** (#1082) remains the eventual acceptance-widening fix, not yet landed | F |
 | #1043 block-`let` local method helper | DRAINED-BY **F-1** (typecheck half) · ENGINE-REALIZATION (emitter half) — with a scoping caveat, G-2 | F |
-| #1052 local-dict pin merges two rigid sig vars | DRAINED-BY **F-1** (#1082) | F |
+| #1052 local-dict pin merges two rigid sig vars | **SUPERSEDED for the 0.1.0 floor** by sprint `dispatch-must-not-guess` (#1986): now a located `T-LOCAL-CONSTRAINED-MONO` REJECT, not silent drain — see `docs/KNOWN-GAPS.md`. DRAINED-BY **F-1** (#1082) remains the eventual acceptance-widening fix, not yet landed | F |
 | #1069 `dataParamKindsRef` bare-type-name collision | DRAINED-BY **A-1 → A-2** (#1110/#1111) | A |
 | #1070 umbrella: 7 of 15 `universe*` tables collide | DRAINED-BY **A-1 → A-2 → A-3** | A |
 | #1092 `methodIfaceParamsRef` bare-method-name collision | DRAINED-BY **A-1 → A-2**, with a key-precision refinement (G-4) | A |
@@ -1187,6 +1187,13 @@ than the ambiguity arm.
 
 ### #1040 — `where`-local helper at two types · **DRAINED-BY F-1** (#1082)
 
+> ⚠️ **SUPERSEDED for the 0.1.0 floor.** Sprint `dispatch-must-not-guess`
+> (#1986) landed a located `T-LOCAL-CONSTRAINED-MONO` REJECT for this repro
+> ahead of F-1 — see `docs/KNOWN-GAPS.md`. The mechanism analysis and the
+> falsifiable prediction below remain accurate for what happens *when F-1
+> lands*; they no longer describe the *current* (interim, reject-not-drain)
+> state.
+
 **Mechanism (verified).** `dict_pass` prepends `$dict_…` parameters to top-level defs and
 impl methods only; the source states it at `:8893`:
 
@@ -1239,6 +1246,13 @@ inference paths, or #1040 drains and #1043 does not.
 ---
 
 ### #1052 — the local-dict pin is itself unsound · **DRAINED-BY F-1** (#1082)
+
+> ⚠️ **SUPERSEDED for the 0.1.0 floor.** Sprint `dispatch-must-not-guess`
+> (#1986) landed a located `T-LOCAL-CONSTRAINED-MONO` REJECT for this repro
+> ahead of F-1 — see `docs/KNOWN-GAPS.md`. The mechanism analysis and the
+> falsifiable prediction below remain accurate for what happens *when F-1
+> lands*; they no longer describe the *current* (interim, reject-not-drain)
+> state.
 
 **Mechanism (verified from the issue's IR dump).** The pin declines generalization,
 monomorphising the `where`-local `d`, which merges the two **declared, rigid** signature

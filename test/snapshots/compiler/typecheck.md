@@ -1,5 +1,5 @@
 # META
-source_lines=34152
+source_lines=34379
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -5948,6 +5948,13 @@ wMark w = !w.n
 wWindow : Windowed a -> Int -> List a
 wWindow w mark = takeFirst (!w.n - mark) !w.items
 
+-- the WHOLE channel, newest-first, with no copy — the unwindowed read `wWindow w 0`
+-- performs (takeFirst n items).  For a per-binding reader of a module-wide channel
+-- (methodOccArgPairs) that copy is a quadratic; this is the same list wWindow would
+-- have rebuilt.
+wAll : Windowed a -> List a
+wAll w = !w.items
+
 -- for an error-rollback window (inferUserImplBodies): capture both refs together.
 wSnapshot : Windowed a -> (List a, Int)
 wSnapshot w = (!w.items, !w.n)
@@ -7836,11 +7843,21 @@ typeMismatchReport a b = match !currentMethodMismatch
 -- always works), CATEGORIZED (its own code, registered in DIAGNOSTIC-CODES-DESIGN.md).
 pinnedLocalMismatch : (Mono, String, String, Option Loc) -> Mono -> Mono -> Unit
 pinnedLocalMismatch (_, name, iface, loc) a b =
+  pinnedLocalReport name iface loc "\{ppMono a} and \{ppMono b}"
+
+-- #1986 rung 2: the ONE place that renders a pinned local's rejection, shared by both
+-- channels that can detect it — the ordinary unification failure (pinnedLocalMismatch)
+-- and the signature-tyvar collapse (pinnedLocalSigCollapse).  [twoTypes] is the only
+-- thing that differs: the two ground types the binding was used at, or the two declared
+-- signature variables the pin merged.  One renderer so the two can never drift apart in
+-- wording, code, or remedy.
+pinnedLocalReport : String -> String -> Option Loc -> String -> Unit
+pinnedLocalReport name iface loc twoTypes =
   let help = "give '\{name}' a top-level definition instead — a top-level binding can be polymorphic in a constrained type, a local one cannot — or use it at one type only"
   pushTypeErrorHelpFixAt
     "T-LOCAL-CONSTRAINED-MONO"
     loc
-    "local binding '\{name}' is used at two different types (\{ppMono a} and \{ppMono b}), but it cannot be polymorphic: \{constraintPhrase iface}, and only top-level definitions can carry that constraint"
+    "local binding '\{name}' is used at two different types (\{twoTypes}), but it cannot be polymorphic: \{constraintPhrase iface}, and only top-level definitions can carry that constraint"
     help
     None
 
@@ -15161,17 +15178,20 @@ processLetGroup env binds =
   let addedObls = wWindow perRun.value.implObls oblN0
   let _ = defaultGroupNum addedObls (map (p => schemeMono (snd p)) placeholders)
   let _ = registerAmbiguousConstraints addedObls (map (p => schemeMono (snd p)) placeholders)   -- RETPOS soundness
-  -- #866: hoisted out of generalizeGroup's per-binding recursion (both sources are
-  -- fixed for the whole group), so an N-member group scans the pin sets ONCE.  The
-  -- dict half is kept in (id, iface) form so each member can record its own pin note
-  -- (the diagnostic names the interface); the method half carries no interface and
-  -- contributes ids only.
-  let dictPairs = dictForwardedPairs callN0 dictN0
-  let pinned = methodConstrainedIds () ++ map fst dictPairs
-  -- Notes come from BOTH channels (methodConstrainedPairs is note-only and cannot
-  -- change [pinned]); a where-helper is frequently pinned by the METHOD channel, and
-  -- passing only the dict half left every such binding with no explanation.
-  let notePairs = methodConstrainedPairs () ++ dictPairs
+  -- #866: hoisted out of generalizeGroup's per-binding recursion (all three sources are
+  -- fixed for the whole group), so an N-member group scans the pin sets ONCE.  Every
+  -- half is kept in (id, iface) form so each member can record its own pin note (the
+  -- diagnostic names the interface).
+  --
+  -- #1986 rung 1: this is now [localPinIds]/[localPinPairs] — the SAME predicate the
+  -- other four local-generalization sites consult (pinLocalIfDictForwarded).  Until
+  -- this slice, this site was the only one that unioned in the METHOD channels, which
+  -- is why a semantically null `where`→`let` respelling of the same program could
+  -- change which predicate ran and change the answer (#1052).  The two shapes are the
+  -- same set viewed two ways (see localPinPairs), so the pin decision and the
+  -- explanatory note cannot disagree about a binding.
+  let pinned = localPinIds callN0 dictN0
+  let notePairs = localPinPairs callN0 dictN0
   let genv = generalizeGroup env pinned notePairs (zipL binds placeholders)
   -- Round-2 adversarial break "let-alias evasion" (#816): a LOCAL constrained
   -- binding (`let f = hh` re-generalizing `hh : Num x => x -> x`) previously
@@ -15254,9 +15274,63 @@ argStampPairs : PendingEntry -> List (Int, String)
 argStampPairs (PendingEntry name _ am _ _ _) =
   map (id => (id, fromOption "" (ifaceOfMethodName name))) (monoUnboundIds am)
 
+-- #2026: the ENTRY-POINT-NEUTRAL half of the method pin channel, and the reason this
+-- file now has one.  `methodConstrainedIds`/`-Pairs` above read `pendingArgStamps`,
+-- which `inferMethodAt` fills — and `EMethodAt` nodes are minted only by the MARK pass
+-- reached from `elaborateModules`, i.e. only on the run/build path.  `check` routes the
+-- SAME occurrences through `inferVarPlainId`, so that channel is EMPTY there and
+-- `processLetGroup` pinned a where-helper on the emit path while generalizing it on the
+-- check path: `check` greened programs `build` then rejected with no located diagnostic
+-- (#1812 class).  That is exactly the hazard `dictForwardedPairs`' ⚠️ note below says it
+-- reads TWO channels to avoid; the method channel had no second channel to read.
+--
+-- This is it.  BOTH entry points record a method occurrence's impl obligation —
+-- `recordMethodObligationGuarded` is called by `inferMethodAt` (emit) AND
+-- `inferVarPlainId` (check) — and an `OpMethodOcc` obligation carries the same triple
+-- `recordArgStamp` was handed: the method's typarams, its DECLARED type, and THIS
+-- occurrence's instantiated mono.  So the arg-stamp channel's own key is reconstructible
+-- from it without the mark pass: take the method's dispatch-argument index exactly as
+-- `argDispatchOfMethod` does (`firstDispatchIdx (dispatchTyparams typarams)` over
+-- `methodArgs`), then `nthArgMono` that index out of the occurrence mono — which is
+-- `argStampMono`'s definition, term for term.
+--
+-- UNIONED with, not substituted for, `methodConstrainedIds`: a few emit-path arg stamps
+-- have no obligation behind them (a standalone shadow short-circuits
+-- `recordImplObligation`; `inferDefinerShadowApp` stamps directly), so replacing would
+-- silently narrow the emit-path pin.  Duplicated ids are free — `recordPinnedLocals`
+-- dedups by tyvar id.
+--
+-- Read UNWINDOWED, like `methodConstrainedIds` and for the same reason: a helper's pin
+-- must see dispatch sites anywhere in the module, not only inside its own group's
+-- inference.  Hence `wAll` (no per-binding copy of the channel).
+methodOccArgPairs : Unit -> List (Int, String)
+methodOccArgPairs _ = flatMap methodOccArgIdPairs (wAll perRun.value.implObls)
+
+methodOccArgIdPairs : UObligation -> List (Int, String)
+methodOccArgIdPairs o = match o.prov
+  PMethodOcc => match o.oblProj
+    OpMethodOcc typarams mty occ =>
+      methodOccArgIdPairsAt o.pred.iface.irName typarams mty occ
+    OpProjected => []
+  _ => []
+
+-- the arg-position dispatch mono of one method occurrence, in `argStampPairs` shape.
+-- None from either step (a return-position method — no argument mentions the interface
+-- param — or an occurrence whose mono does not have that many arrows yet) contributes
+-- nothing, so a return-position occurrence never widens the pin beyond what the
+-- arg-stamp channel would have recorded on the emit path.
+methodOccArgIdPairsAt : String -> List String -> Ty -> Mono -> List (Int, String)
+methodOccArgIdPairsAt iface typarams mty occ = match firstDispatchIdx (dispatchTyparams typarams) 0 (methodArgs mty)
+  None => []
+  Some idx => match nthArgMono idx occ
+    None => []
+    Some am => map (id => (id, iface)) (monoUnboundIds am)
+
 -- #866 — a SIBLING of methodConstrainedIds above, NOT the same pin.  Both decline a
--- local generalization for the same underlying reason, and the two sets are unioned by
--- processLetGroup, but they are not the same shape and should not be read as such:
+-- local generalization for the same underlying reason, and since #1986 rung 1 the sets
+-- are unioned by [localPinPairs] for ALL FIVE local-generalization sites (before that,
+-- only processLetGroup unioned them).  They are still not the same shape and should not
+-- be read as such:
 --
 --   methodConstrainedIds   ONE channel (pendingArgStamps), read UNWINDOWED — the whole
 --                          module's arg-position METHOD dispatch sites.
@@ -15319,18 +15393,67 @@ callOblMonoIds (iface, monos, _) =
 monoIdsWithIface : (Mono, String) -> List (Int, String)
 monoIdsWithIface (m, iface) = map (id => (id, iface)) (monoUnboundIds m)
 
+-- #1986 rung 1 — THE local-pin predicate.  ALL FIVE local-generalization sites (the
+-- `where`/`let`-GROUP site processLetGroup, and the four genRestricted sites via
+-- pinLocalIfDictForwarded) consult exactly this, so one judgment is made in one place.
+-- Before this slice the group site unioned the two METHOD channels in while the four
+-- genRestricted sites saw the DICT channel alone: a semantically null `where`→`let`
+-- respelling of the same program changed which predicate ran, and so changed the answer
+-- (#1052).  Rung 1 makes the five agree; WHAT the agreed answer should be is rung 2's
+-- question, not this predicate's.
+--
+-- Three channels, in the order their comments appear above:
+--   methodConstrainedPairs  emit-path arg stamps (pendingArgStamps), UNWINDOWED.
+--   methodOccArgPairs       the entry-point-neutral obligation channel (#2026),
+--                           UNWINDOWED — this is what keeps `check` and `build` at the
+--                           same pin decision.
+--   dictForwardedPairs      constrained-callee dict routes, WINDOWED to this binding's
+--                           own inference (#866).
+-- UNION, never substitution: each channel covers sites the others structurally cannot
+-- see (see each function's own note).  Duplicate ids are free — recordPinnedLocals
+-- dedups by tyvar id.
+--
+-- [localPinIds] and [localPinPairs] are the SAME SET viewed two ways, not two
+-- predicates: methodConstrainedPairs yields exactly methodConstrainedIds' ids (both are
+-- `monoUnboundIds (argStampMono e)` over the same pendingArgStamps, in the same order,
+-- one merely paired with the discriminating interface), and the other two channels are
+-- id-projected from the very same calls.  So `localPinIds == map fst localPinPairs` as
+-- a list, and the pin decision and the explanatory note cannot disagree about a
+-- binding.  At the group site this is a re-view of the set that was already computed
+-- there, not a widening of it; the widening is at the four genRestricted sites, which
+-- previously saw the dict channel alone.
+--
+-- ⚠️ The two method channels are UNWINDOWED module-wide reads, which is what makes them
+-- entry-point-neutral and is required (a helper's pin must see dispatch sites anywhere
+-- in the module).  At the group site that cost is paid once per GROUP; at the four
+-- genRestricted sites it is once per BINDING.  See the report Notes for #1986 rung 1.
+localPinIds : Int -> Int -> List Int
+localPinIds callN0 dictN0 = methodConstrainedIds ()
+  ++ map fst (methodOccArgPairs ())
+  ++ map fst (dictForwardedPairs callN0 dictN0)
+
+localPinPairs : Int -> Int -> List (Int, String)
+localPinPairs callN0 dictN0 = methodConstrainedPairs ()
+  ++ methodOccArgPairs ()
+  ++ dictForwardedPairs callN0 dictN0
+
 -- #866: the pin decision AND the note pinnedLocalExplain needs, in one pass, so the
 -- two can never disagree about whether a binding was pinned.  [name]/[loc]
 -- describe the BINDING (what the user must change), not the use site that will later
 -- collide.  Records one entry per pinned var actually free in [t]; a binding with no
 -- pinned var records nothing and returns False, leaving generalization untouched.
+--
+-- ⚠️ NAME IS NARROWER THAN THE BEHAVIOUR: since #1986 rung 1 this consults the METHOD
+-- channels too, not just the dict-forwarding one — see localPinPairs above.  The name
+-- is kept so this slice's LEG A / snapshot diff stays additive; renaming it to
+-- pinLocalIfConstrained is a follow-up.
 pinLocalIfDictForwarded : Int -> Int -> String -> Option Loc -> Mono -> Bool
 pinLocalIfDictForwarded callN0 dictN0 name loc t =
   recordPinnedLocals
     name
     loc
     (freeGenVars perRun.value.currentLevel.value t)
-    (dictForwardedPairs callN0 dictN0)
+    (localPinPairs callN0 dictN0)
     t
 
 -- Shared by all five pin sites: record one note per dict-forwarded var that is free
@@ -15696,10 +15819,14 @@ dropFirst n xs
 dropFirst _ [] = []
 dropFirst n (_::xs) = dropFirst (n - 1) xs
 
--- [constrained] is the group's pin set, computed ONCE by processLetGroup:
--- methodConstrainedIds (arg-position method dispatch) ++ dictForwardedIds
--- (constrained-callee dict sites, #866).  Both name tyvars this group must not
--- generalize over — see those two functions for why.
+-- [constrained] is the group's pin set, computed ONCE by processLetGroup as
+-- [localPinIds]: the two method channels (arg-position method dispatch) ++
+-- the dictForwardedPairs ids (constrained-callee dict sites, #866).  All name tyvars
+-- this group must not generalize over — see localPinPairs and the functions it calls.
+-- Since #1986 rung 1 this is the SAME predicate the four pinLocalIfDictForwarded sites
+-- consult, and [dictPairs] here is that identical list, so it covers every id in
+-- [constrained] and the recordPinnedLocalsGeneric fallback below is a belt-and-braces
+-- path rather than a routine one.
 generalizeGroup : TcEnv -> List Int -> List (Int, String) -> List (LetBind, (String, Scheme)) -> TcEnv
 generalizeGroup env _ _ [] = env
 generalizeGroup env constrained dictPairs (((LetBind name clauses), (_, sch))::rest) =
@@ -25566,11 +25693,20 @@ checkUndeterminedObligations univ iface (a::rest) loc =
 -- If the var is a FORWARDED enclosing-fn dict (activeDictVarOf Some), it's resolved
 -- by dict-passing — fine.  Otherwise it is genuinely free, and the route must pick
 -- an impl with no type to guide it: ONE impl of [iface] → sole-impl default (no
--- error; routeUndeterminedTop stamps it concretely); TWO or more → genuinely
--- ambiguous → AmbiguousImpl (the deliberate divergence from the oracle's silent
--- first-wins).  Skip "Num" (its literal defaulting handles ambiguity) and ifaces
--- with no user impls (zero → existing no-impl path).  This runs on BOTH the check
--- path (checkModuleFullImpl) and the emit/eval path, so `check` rejects too.
+-- error); TWO or more → genuinely ambiguous → AmbiguousImpl (the deliberate
+-- divergence from the oracle's silent first-wins).  RULE 3b (#1180) is the second
+-- spelling of "two or more": one census-counted impl beside a HEADLESS one.  Skip
+-- "Num" (its literal defaulting handles ambiguity) and ifaces with no user impls
+-- (zero → existing no-impl path).  This runs on BOTH the check path
+-- (checkModuleFullImpl) and the emit/eval path, so `check` rejects too.
+--
+-- ⚠️ This block used to say the sole-impl case is one "routeUndeterminedTop stamps
+-- concretely".  MEASURED FALSE (sprint `dispatch-must-not-guess`, 1st attempt at
+-- #1180): `routeUndeterminedTop` is instrumented-unreached for this shape on every
+-- verb — a one-impl program compiles and runs without ever entering it, and the
+-- ambiguity reject the two-impl case produces comes from `pushTypeErrorOnceAt`
+-- below, not from `reportAmbiguousImpl`.  Both render `ambiguousImplMsg`, which is
+-- how the misattribution survived: the MESSAGE is not a witness for the PATH.
 checkUndeterminedObligation : ImplUniverse -> IfaceRef -> Mono -> Option Loc -> Unit
 checkUndeterminedObligation univ iface occ loc
   | iface.irName == "Num" = ()                                       -- RULE 4a: Num → literal defaulting, never ambiguity (a SPELLING test — see checkOneCallObligation)
@@ -25591,6 +25727,33 @@ checkUndeterminedObligation univ iface occ loc
   -- RULE 3: the var escaped its group anchored to NOTHING and the iface has >= 2 impls
   -- ⇒ genuinely ambiguous (the escaped-unanchored case registerDispatchMonos records).
   | implCountForIfaceU univ iface >= 2 =
+    pushTypeErrorOnceAt "T-AMBIGUOUS-INSTANCE" loc (ambiguousImplMsg iface.irName)
+  -- RULE 3b (#1180): the census bucket RULE 3 counts drops a HEADLESS impl
+  -- (`impl Sz a`) by design — `univHeadCountsInCensus` is `censusHeadNameTy`, which
+  -- answers `None` for a bare `TyVar` head — so a program with ONE concrete impl
+  -- beside a fully-general one counted 1 and this undetermined goal was silently
+  -- COMMITTED to the concrete impl (check clean, `run` a wrong value, `build` an
+  -- arg-tag E-PANIC).  Two instances match an unanchored `Sz ?a` and neither is
+  -- preferred over the other for a goal that is not closed, so DICT-SEMANTICS §6.2 T3
+  -- forbids `inst` firing at all: the verdict is the same `T-AMBIGUOUS-INSTANCE`.
+  --
+  -- 🚨 THIS READS A SIBLING BUCKET; IT DOES NOT WIDEN THE CENSUS.  #1617/#1618 gave
+  -- `headTyconTy` a `TyFun` arm and reached the tag set through the shared writer,
+  -- pushing the count 1 → 2 for `impl C Int` beside `impl C (Int -> Int)` and flipping
+  -- a program that never dispatches to the arrow from exit 0 to exit 1 — see
+  -- `univHeadCountsInCensus`' block.  Nothing here touches `univAddIfaceTag`,
+  -- `univHeadCountsInCensus`, or either writer, and an arrow- or tuple-headed impl is
+  -- NOT in `univHeadless` either (its writers file by `univReceiverTag`/`headTyconTy`,
+  -- which DOES have the `TyFun`/`TyTuple` arms), so #1617's two-arrow-impl program has
+  -- an EMPTY headless bucket, a census count of 0, and stays accepted by both guards.
+  -- The `>= 1` conjunct is what keeps it that way: a headless impl alone is a UNIQUE
+  -- instance and must still commit (that is `control.mdk`'s shape, one impl, no
+  -- ambiguity).
+  --
+  -- Both universe writers — `insertUnivImplAt` (Flat) and `ieInsertRowAt` (Module/`IE`)
+  -- — already populate `univHeadless` through the same `univReceiverTag None` arm, so
+  -- this needs no third writer and answers identically single-file and cross-module.
+  | implCountForIfaceU univ iface >= 1 && isNonEmptyL (univHeadless univ iface) =
     pushTypeErrorOnceAt "T-AMBIGUOUS-INSTANCE" loc (ambiguousImplMsg iface.irName)
   | otherwise = ()
 
@@ -28323,9 +28486,73 @@ checkSigTooGeneral : String -> Ty -> List (String, Mono) -> Unit
 checkSigTooGeneral name ty tvs =
   let tvarIds = sigTvarIds (map snd tvs)
   if hasDupI tvarIds then
-    pushTypeError "T-TYPE-TOO-GENERAL" (sigTooGeneralMsg name ty)
+    reportSigTooGeneral name ty (sigCollapsedPair (sigTvarNamedIds tvs))
   else
     ()
+
+-- #1986 rung 2.  `sigTooGeneralMsg` reports the SYMPTOM ("two declared variables are
+-- the same type after inference") and offers no remedy.  When the reason those two
+-- collapsed is a PINNED LOCAL — a `let`/`where` binding this group declined to
+-- generalize because its body forwards a constrained callee's dictionary, then used at
+-- both declared variables (#1052's `d v = sizeOf v` under
+-- `useTwo : (Sized a, Sized b) => a -> b -> Int`) — the cause is the same one
+-- `pinnedLocalMismatch` already explains well on the unification-failure channel, and
+-- the user gets the same two remedies.  So consult the same registry and, on a
+-- correlated collapse, emit the SAME root-cause-honest diagnostic.  This is an ADDITION:
+-- an uncorrelated signature-too-general (the ordinary case) keeps its existing message.
+reportSigTooGeneral : String -> Ty -> Option (Int, String, String) -> Unit
+reportSigTooGeneral name ty None =
+  pushTypeError "T-TYPE-TOO-GENERAL" (sigTooGeneralMsg name ty)
+reportSigTooGeneral name ty (Some (id, v1, v2)) = match pinnedLocalCollapsedInto id
+  None => pushTypeError "T-TYPE-TOO-GENERAL" (sigTooGeneralMsg name ty)
+  Some (_, bname, iface, loc) =>
+    pinnedLocalReport bname iface loc "the signature's '\{v1}' and '\{v2}'"
+
+-- The declared tyvars that still normalize to a TVar, each paired with its declared
+-- NAME — `sigTvarIds`'s information plus the name the user wrote, which the pinned-local
+-- wording needs.  Deliberately a sibling rather than a rewrite of `sigTvarIds`: that
+-- function is the acceptance decision and stays byte-identical.
+sigTvarNamedIds : List (String, Mono) -> List (String, Int)
+sigTvarNamedIds [] = []
+sigTvarNamedIds ((n, m)::rest) = match normalize m
+  TVar cell => (n, tyvarId cell) :: sigTvarNamedIds rest
+  _ => sigTvarNamedIds rest
+
+-- The first collapsed pair: (the shared TVar id, the two declared names sharing it).
+-- `hasDupI` has already said one exists, so `None` here is unreachable in practice and
+-- falls back to the generic message rather than dropping the error.
+sigCollapsedPair : List (String, Int) -> Option (Int, String, String)
+sigCollapsedPair [] = None
+sigCollapsedPair ((n, id)::rest) = match sigCollapsedWith id rest
+  Some n2 => Some (id, n, n2)
+  None => sigCollapsedPair rest
+
+sigCollapsedWith : Int -> List (String, Int) -> Option String
+sigCollapsedWith _ [] = None
+sigCollapsedWith id ((n, i)::rest)
+  | i == id = Some n
+  | otherwise = sigCollapsedWith id rest
+
+-- The pinned local, if any, whose pinned variable IS the one the two declared signature
+-- variables collapsed into.  Identity by TVar id, which is far stricter than
+-- `pinnedEntryMatches`'s rendering test — an unrelated binding's pin var is a different
+-- cell and cannot alias.  Same conservatism as `pinnedLocalExplain` otherwise: same file
+-- as the error, and exactly ONE binding NAME may qualify (a binding with several
+-- constrained slots records one entry PER VAR, so an entry-count test would suppress the
+-- diagnostic for every multi-constraint callee).
+pinnedLocalCollapsedInto : Int -> Option (Mono, String, String, Option Loc)
+pinnedLocalCollapsedInto id = match filterList (e => pinnedEntryIsTvar e id) perRun.value.pinnedLocals.value
+  [] => None
+  first::rest =>
+    if allList (e => pinnedEntryName e == pinnedEntryName first) rest then
+      Some first
+    else
+      None
+
+pinnedEntryIsTvar : (Mono, String, String, Option Loc) -> Int -> Bool
+pinnedEntryIsTvar (stored, _, _, loc) id = match normalize stored
+  TVar cell => tyvarId cell == id && locSameFileAsError loc
+  _ => False
 
 -- collect the TVar ids of those entries in tvs that normalize to a TVar
 -- (concrete-grounded entries are skipped — only same-TVar collapses are an error)
@@ -35034,6 +35261,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "wMark" ((PVar "w")) (EUnOp "!" (EFieldAccess (EVar "w") "n")))
 (DTypeSig false "wWindow" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "wWindow" ((PVar "w") (PVar "mark")) (EApp (EApp (EVar "takeFirst") (EBinOp "-" (EUnOp "!" (EFieldAccess (EVar "w") "n")) (EVar "mark"))) (EUnOp "!" (EFieldAccess (EVar "w") "items"))))
+(DTypeSig false "wAll" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
+(DFunDef false "wAll" ((PVar "w")) (EUnOp "!" (EFieldAccess (EVar "w") "items")))
 (DTypeSig false "wSnapshot" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int"))))
 (DFunDef false "wSnapshot" ((PVar "w")) (ETuple (EUnOp "!" (EFieldAccess (EVar "w") "items")) (EUnOp "!" (EFieldAccess (EVar "w") "n"))))
 (DTypeSig false "wRestore" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyFun (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int")) (TyCon "Unit"))))
@@ -35239,7 +35468,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "typeMismatchReport" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
 (DFunDef false "typeMismatchReport" ((PVar "a") (PVar "b")) (EMatch (EUnOp "!" (EVar "currentMethodMismatch")) (arm (PCon "Some" (PVar "mname")) () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-METHOD-MISMATCH"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Method '")) (EApp (EVar "display") (EVar "mname"))) (ELit (LString "': expected type "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " but got "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString ""))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "pinnedLocalExplain") (EVar "a")) (EVar "b")) (arm (PCon "Some" (PVar "entry")) () (EApp (EApp (EApp (EVar "pinnedLocalMismatch") (EVar "entry")) (EVar "a")) (EVar "b"))) (arm (PCon "None") () (EApp (EApp (EVar "typeMismatchReportRest") (EVar "a")) (EVar "b")))))))
 (DTypeSig false "pinnedLocalMismatch" (TyFun (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
-(DFunDef false "pinnedLocalMismatch" ((PTuple PWild (PVar "name") (PVar "iface") (PVar "loc")) (PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "help") (EBinOp "++" (EBinOp "++" (ELit (LString "give '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' a top-level definition instead — a top-level binding can be polymorphic in a constrained type, a local one cannot — or use it at one type only")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-LOCAL-CONSTRAINED-MONO"))) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "local binding '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' is used at two different types ("))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " and "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "), but it cannot be polymorphic: "))) (EApp (EVar "display") (EApp (EVar "constraintPhrase") (EVar "iface")))) (ELit (LString ", and only top-level definitions can carry that constraint")))) (EVar "help")) (EVar "None")))))
+(DFunDef false "pinnedLocalMismatch" ((PTuple PWild (PVar "name") (PVar "iface") (PVar "loc")) (PVar "a") (PVar "b")) (EApp (EApp (EApp (EApp (EVar "pinnedLocalReport") (EVar "name")) (EVar "iface")) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " and "))) (EApp (EVar "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "")))))
+(DTypeSig false "pinnedLocalReport" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit"))))))
+(DFunDef false "pinnedLocalReport" ((PVar "name") (PVar "iface") (PVar "loc") (PVar "twoTypes")) (EBlock (DoLet false false (PVar "help") (EBinOp "++" (EBinOp "++" (ELit (LString "give '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' a top-level definition instead — a top-level binding can be polymorphic in a constrained type, a local one cannot — or use it at one type only")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-LOCAL-CONSTRAINED-MONO"))) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "local binding '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' is used at two different types ("))) (EApp (EVar "display") (EVar "twoTypes"))) (ELit (LString "), but it cannot be polymorphic: "))) (EApp (EVar "display") (EApp (EVar "constraintPhrase") (EVar "iface")))) (ELit (LString ", and only top-level definitions can carry that constraint")))) (EVar "help")) (EVar "None")))))
 (DTypeSig false "constraintPhrase" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "constraintPhrase" ((PVar "iface")) (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (ELit (LString "its body needs a type-class instance chosen from the type it is used at")) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "its body calls something that needs ")) (EApp (EVar "display") (EApp (EVar "indefiniteArticle") (EVar "iface")))) (ELit (LString " '"))) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "' instance"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "indefiniteArticle" (TyFun (TyCon "String") (TyCon "String")))
@@ -36708,7 +36939,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "groupNames" ((PList) PWild) (EListLit))
 (DFunDef false "groupNames" ((PCons (PTuple (PVar "n") PWild) (PVar "rest")) (PVar "seen")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "seen")) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "groupNames") (EVar "rest")) (EVar "seen"))) (arm (PCon "None") () (EBinOp "::" (EVar "n") (EApp (EApp (EVar "groupNames") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "seen")))))))
 (DTypeSig false "processLetGroup" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyCon "TcEnv"))))
-(DFunDef false "processLetGroup" ((PVar "env") (PVar "binds")) (EBlock (DoLet false false PWild (EApp (EVar "enterLevel") (ELit LUnit))) (DoLet false false (PVar "oblN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))) (DoLet false false (PVar "callN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls"))) (DoLet false false (PVar "dictN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictApps"))) (DoLet false false (PVar "placeholders") (EApp (EApp (EVar "map") (EVar "letBindPlaceholder")) (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "extendLocalVars") (EVar "env")) (EVar "placeholders"))) (DoLet false false PWild (EApp (EApp (EVar "inferLetBinds") (EVar "env2")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false PWild (EApp (EVar "exitLevel") (ELit LUnit))) (DoLet false false (PVar "addedObls") (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (EVar "oblN0"))) (DoLet false false PWild (EApp (EApp (EVar "defaultGroupNum") (EVar "addedObls")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false PWild (EApp (EApp (EVar "registerAmbiguousConstraints") (EVar "addedObls")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false (PVar "dictPairs") (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))) (DoLet false false (PVar "pinned") (EBinOp "++" (EApp (EVar "methodConstrainedIds") (ELit LUnit)) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "dictPairs")))) (DoLet false false (PVar "notePairs") (EBinOp "++" (EApp (EVar "methodConstrainedPairs") (ELit LUnit)) (EVar "dictPairs"))) (DoLet false false (PVar "genv") (EApp (EApp (EApp (EApp (EVar "generalizeGroup") (EVar "env")) (EVar "pinned")) (EVar "notePairs")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false (PVar "callOblsDelta") (EApp (EVar "callOblsWindow") (EVar "callN0"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "registerSchemeObligations") (EVar "omEmpty")) (EListLit)) (EVar "callOblsDelta")) (EVar "addedObls")) (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "binds")))) (DoExpr (EVar "genv"))))
+(DFunDef false "processLetGroup" ((PVar "env") (PVar "binds")) (EBlock (DoLet false false PWild (EApp (EVar "enterLevel") (ELit LUnit))) (DoLet false false (PVar "oblN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))) (DoLet false false (PVar "callN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls"))) (DoLet false false (PVar "dictN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictApps"))) (DoLet false false (PVar "placeholders") (EApp (EApp (EVar "map") (EVar "letBindPlaceholder")) (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "extendLocalVars") (EVar "env")) (EVar "placeholders"))) (DoLet false false PWild (EApp (EApp (EVar "inferLetBinds") (EVar "env2")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false PWild (EApp (EVar "exitLevel") (ELit LUnit))) (DoLet false false (PVar "addedObls") (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (EVar "oblN0"))) (DoLet false false PWild (EApp (EApp (EVar "defaultGroupNum") (EVar "addedObls")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false PWild (EApp (EApp (EVar "registerAmbiguousConstraints") (EVar "addedObls")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false (PVar "pinned") (EApp (EApp (EVar "localPinIds") (EVar "callN0")) (EVar "dictN0"))) (DoLet false false (PVar "notePairs") (EApp (EApp (EVar "localPinPairs") (EVar "callN0")) (EVar "dictN0"))) (DoLet false false (PVar "genv") (EApp (EApp (EApp (EApp (EVar "generalizeGroup") (EVar "env")) (EVar "pinned")) (EVar "notePairs")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false (PVar "callOblsDelta") (EApp (EVar "callOblsWindow") (EVar "callN0"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "registerSchemeObligations") (EVar "omEmpty")) (EListLit)) (EVar "callOblsDelta")) (EVar "addedObls")) (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "binds")))) (DoExpr (EVar "genv"))))
 (DTypeSig false "groupSchemesOf" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))
 (DFunDef false "groupSchemesOf" (PWild (PList)) (EListLit))
 (DFunDef false "groupSchemesOf" ((PVar "genv") (PCons (PCon "LetBind" (PVar "name") PWild) (PVar "rest"))) (EMatch (EApp (EApp (EVar "lookupVar") (EVar "genv")) (EVar "name")) (arm (PCon "Some" (PVar "sch")) () (EBinOp "::" (ETuple (EVar "name") (EVar "sch")) (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "rest")))))
@@ -36727,6 +36958,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "methodConstrainedPairs" (PWild) (EApp (EApp (EVar "flatMap") (EVar "argStampPairs")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingArgStamps") "value")))
 (DTypeSig false "argStampPairs" (TyFun (TyCon "PendingEntry") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
 (DFunDef false "argStampPairs" ((PCon "PendingEntry" (PVar "name") PWild (PVar "am") PWild PWild PWild)) (EApp (EApp (EVar "map") (ELam ((PVar "id")) (ETuple (EVar "id") (EApp (EApp (EVar "fromOption") (ELit (LString ""))) (EApp (EVar "ifaceOfMethodName") (EVar "name")))))) (EApp (EVar "monoUnboundIds") (EVar "am"))))
+(DTypeSig false "methodOccArgPairs" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
+(DFunDef false "methodOccArgPairs" (PWild) (EApp (EApp (EVar "flatMap") (EVar "methodOccArgIdPairs")) (EApp (EVar "wAll") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))))
+(DTypeSig false "methodOccArgIdPairs" (TyFun (TyCon "UObligation") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
+(DFunDef false "methodOccArgIdPairs" ((PVar "o")) (EMatch (EFieldAccess (EVar "o") "prov") (arm (PCon "PMethodOcc") () (EMatch (EFieldAccess (EVar "o") "oblProj") (arm (PCon "OpMethodOcc" (PVar "typarams") (PVar "mty") (PVar "occ")) () (EApp (EApp (EApp (EApp (EVar "methodOccArgIdPairsAt") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface") "irName")) (EVar "typarams")) (EVar "mty")) (EVar "occ"))) (arm (PCon "OpProjected") () (EListLit)))) (arm PWild () (EListLit))))
+(DTypeSig false "methodOccArgIdPairsAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))))))
+(DFunDef false "methodOccArgIdPairsAt" ((PVar "iface") (PVar "typarams") (PVar "mty") (PVar "occ")) (EMatch (EApp (EApp (EApp (EVar "firstDispatchIdx") (EApp (EVar "dispatchTyparams") (EVar "typarams"))) (ELit (LInt 0))) (EApp (EVar "methodArgs") (EVar "mty"))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "idx")) () (EMatch (EApp (EApp (EVar "nthArgMono") (EVar "idx")) (EVar "occ")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "am")) () (EApp (EApp (EVar "map") (ELam ((PVar "id")) (ETuple (EVar "id") (EVar "iface")))) (EApp (EVar "monoUnboundIds") (EVar "am"))))))))
 (DTypeSig false "dictForwardedPairs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "dictForwardedPairs" ((PVar "callN0") (PVar "dictN0")) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "dictAppMonoIds")) (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictApps")) (EVar "dictN0"))) (EApp (EApp (EVar "flatMap") (EVar "callOblMonoIds")) (EApp (EVar "callOblsWindow") (EVar "callN0")))))
 (DTypeSig false "dictAppMonoIds" (TyFun (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
@@ -36735,8 +36972,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "callOblMonoIds" ((PTuple (PVar "iface") (PVar "monos") PWild)) (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EVar "monoIdsWithIface") (ETuple (EVar "m") (EFieldAccess (EVar "iface") "irName"))))) (EVar "monos")))
 (DTypeSig false "monoIdsWithIface" (TyFun (TyTuple (TyCon "Mono") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
 (DFunDef false "monoIdsWithIface" ((PTuple (PVar "m") (PVar "iface"))) (EApp (EApp (EVar "map") (ELam ((PVar "id")) (ETuple (EVar "id") (EVar "iface")))) (EApp (EVar "monoUnboundIds") (EVar "m"))))
+(DTypeSig false "localPinIds" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "localPinIds" ((PVar "callN0") (PVar "dictN0")) (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedIds") (ELit LUnit)) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "methodOccArgPairs") (ELit LUnit)))) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0")))))
+(DTypeSig false "localPinPairs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))))
+(DFunDef false "localPinPairs" ((PVar "callN0") (PVar "dictN0")) (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedPairs") (ELit LUnit)) (EApp (EVar "methodOccArgPairs") (ELit LUnit))) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))))
 (DTypeSig false "pinLocalIfDictForwarded" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
-(DFunDef false "pinLocalIfDictForwarded" ((PVar "callN0") (PVar "dictN0") (PVar "name") (PVar "loc") (PVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "recordPinnedLocals") (EVar "name")) (EVar "loc")) (EApp (EApp (EVar "freeGenVars") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EVar "t"))) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))) (EVar "t")))
+(DFunDef false "pinLocalIfDictForwarded" ((PVar "callN0") (PVar "dictN0") (PVar "name") (PVar "loc") (PVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "recordPinnedLocals") (EVar "name")) (EVar "loc")) (EApp (EApp (EVar "freeGenVars") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EVar "t"))) (EApp (EApp (EVar "localPinPairs") (EVar "callN0")) (EVar "dictN0"))) (EVar "t")))
 (DTypeSig false "recordPinnedLocals" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
 (DFunDef false "recordPinnedLocals" ((PVar "name") (PVar "loc") (PVar "free") (PVar "pairs") (PVar "t")) (EBlock (DoLet false false (PVar "hits") (EApp (EVar "dedupPairsById") (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EApp (EApp (EVar "containsI") (EApp (EVar "fst") (EVar "p"))) (EVar "free")))) (EVar "pairs")))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "hits")) (EVar "False") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pinnedLocals")) (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "p")) (ETuple (EApp (EApp (EVar "tvarMonoOfIn") (EVar "t")) (EApp (EVar "fst") (EVar "p"))) (EVar "name") (EApp (EVar "snd") (EVar "p")) (EVar "loc")))) (EVar "hits")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pinnedLocals") "value")))) (DoExpr (EVar "True")))))))
 (DTypeSig false "recordPinnedLocalsGeneric" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
@@ -38199,7 +38440,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkUndeterminedObligations" (PWild PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "checkUndeterminedObligations" ((PVar "univ") (PVar "iface") (PCons (PVar "a") (PVar "rest")) (PVar "loc")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligation") (EVar "univ")) (EVar "iface")) (EVar "a")) (EVar "loc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligations") (EVar "univ")) (EVar "iface")) (EVar "rest")) (EVar "loc")))))
 (DTypeSig false "checkUndeterminedObligation" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit"))))))
-(DFunDef false "checkUndeterminedObligation" ((PVar "univ") (PVar "iface") (PVar "occ") (PVar "loc")) (EIf (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (ELit LUnit) (EIf (EApp (EVar "isSome") (EApp (EVar "activeDictVarOf") (EVar "occ"))) (ELit LUnit) (EIf (EApp (EApp (EVar "anyIn") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "poisonedVars") "value")) (ELit LUnit) (EIf (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EApp (EApp (EVar "allList") (ELam ((PVar "i")) (EApp (EApp (EVar "containsI") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "deferrableVarIds") "value")))) (EApp (EVar "monoUnboundIds") (EVar "occ")))) (ELit LUnit) (EIf (EBinOp ">=" (EApp (EApp (EVar "implCountForIfaceU") (EVar "univ")) (EVar "iface")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EVar "iface") "irName"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DFunDef false "checkUndeterminedObligation" ((PVar "univ") (PVar "iface") (PVar "occ") (PVar "loc")) (EIf (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (ELit LUnit) (EIf (EApp (EVar "isSome") (EApp (EVar "activeDictVarOf") (EVar "occ"))) (ELit LUnit) (EIf (EApp (EApp (EVar "anyIn") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "poisonedVars") "value")) (ELit LUnit) (EIf (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EApp (EApp (EVar "allList") (ELam ((PVar "i")) (EApp (EApp (EVar "containsI") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "deferrableVarIds") "value")))) (EApp (EVar "monoUnboundIds") (EVar "occ")))) (ELit LUnit) (EIf (EBinOp ">=" (EApp (EApp (EVar "implCountForIfaceU") (EVar "univ")) (EVar "iface")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EVar "iface") "irName"))) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EApp (EVar "implCountForIfaceU") (EVar "univ")) (EVar "iface")) (ELit (LInt 1))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface")))) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EVar "iface") "irName"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "setNumlitFloats" (TyFun (TyCon "Unit") (TyCon "Unit")))
 (DFunDef false "setNumlitFloats" (PWild) (EApp (EVar "setNumlitFloatsGo") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitRefs") "value")))
 (DTypeSig false "setNumlitFloatsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")))) (TyCon "Unit")))
@@ -38803,7 +39044,23 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkSigsTooGeneral" ((PList)) (ELit LUnit))
 (DFunDef false "checkSigsTooGeneral" ((PCons (PTuple (PVar "m") (PVar "ty") (PVar "tvs")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "checkSigTooGeneral") (EVar "m")) (EVar "ty")) (EVar "tvs"))) (DoExpr (EApp (EVar "checkSigsTooGeneral") (EVar "rest")))))
 (DTypeSig false "checkSigTooGeneral" (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyCon "Unit")))))
-(DFunDef false "checkSigTooGeneral" ((PVar "name") (PVar "ty") (PVar "tvs")) (EBlock (DoLet false false (PVar "tvarIds") (EApp (EVar "sigTvarIds") (EApp (EApp (EVar "map") (EVar "snd")) (EVar "tvs")))) (DoExpr (EIf (EApp (EVar "hasDupI") (EVar "tvarIds")) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-TYPE-TOO-GENERAL"))) (EApp (EApp (EVar "sigTooGeneralMsg") (EVar "name")) (EVar "ty"))) (ELit LUnit)))))
+(DFunDef false "checkSigTooGeneral" ((PVar "name") (PVar "ty") (PVar "tvs")) (EBlock (DoLet false false (PVar "tvarIds") (EApp (EVar "sigTvarIds") (EApp (EApp (EVar "map") (EVar "snd")) (EVar "tvs")))) (DoExpr (EIf (EApp (EVar "hasDupI") (EVar "tvarIds")) (EApp (EApp (EApp (EVar "reportSigTooGeneral") (EVar "name")) (EVar "ty")) (EApp (EVar "sigCollapsedPair") (EApp (EVar "sigTvarNamedIds") (EVar "tvs")))) (ELit LUnit)))))
+(DTypeSig false "reportSigTooGeneral" (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyCon "Unit")))))
+(DFunDef false "reportSigTooGeneral" ((PVar "name") (PVar "ty") (PCon "None")) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-TYPE-TOO-GENERAL"))) (EApp (EApp (EVar "sigTooGeneralMsg") (EVar "name")) (EVar "ty"))))
+(DFunDef false "reportSigTooGeneral" ((PVar "name") (PVar "ty") (PCon "Some" (PTuple (PVar "id") (PVar "v1") (PVar "v2")))) (EMatch (EApp (EVar "pinnedLocalCollapsedInto") (EVar "id")) (arm (PCon "None") () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-TYPE-TOO-GENERAL"))) (EApp (EApp (EVar "sigTooGeneralMsg") (EVar "name")) (EVar "ty")))) (arm (PCon "Some" (PTuple PWild (PVar "bname") (PVar "iface") (PVar "loc"))) () (EApp (EApp (EApp (EApp (EVar "pinnedLocalReport") (EVar "bname")) (EVar "iface")) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the signature's '")) (EApp (EVar "display") (EVar "v1"))) (ELit (LString "' and '"))) (EApp (EVar "display") (EVar "v2"))) (ELit (LString "'")))))))
+(DTypeSig false "sigTvarNamedIds" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
+(DFunDef false "sigTvarNamedIds" ((PList)) (EListLit))
+(DFunDef false "sigTvarNamedIds" ((PCons (PTuple (PVar "n") (PVar "m")) (PVar "rest"))) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "tyvarId") (EVar "cell"))) (EApp (EVar "sigTvarNamedIds") (EVar "rest")))) (arm PWild () (EApp (EVar "sigTvarNamedIds") (EVar "rest")))))
+(DTypeSig false "sigCollapsedPair" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))
+(DFunDef false "sigCollapsedPair" ((PList)) (EVar "None"))
+(DFunDef false "sigCollapsedPair" ((PCons (PTuple (PVar "n") (PVar "id")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "sigCollapsedWith") (EVar "id")) (EVar "rest")) (arm (PCon "Some" (PVar "n2")) () (EApp (EVar "Some") (ETuple (EVar "id") (EVar "n") (EVar "n2")))) (arm (PCon "None") () (EApp (EVar "sigCollapsedPair") (EVar "rest")))))
+(DTypeSig false "sigCollapsedWith" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "sigCollapsedWith" (PWild (PList)) (EVar "None"))
+(DFunDef false "sigCollapsedWith" ((PVar "id") (PCons (PTuple (PVar "n") (PVar "i")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "id")) (EApp (EVar "Some") (EVar "n")) (EIf (EVar "otherwise") (EApp (EApp (EVar "sigCollapsedWith") (EVar "id")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "pinnedLocalCollapsedInto" (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
+(DFunDef false "pinnedLocalCollapsedInto" ((PVar "id")) (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "pinnedEntryIsTvar") (EVar "e")) (EVar "id")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pinnedLocals") "value")) (arm (PList) () (EVar "None")) (arm (PCons (PVar "first") (PVar "rest")) () (EIf (EApp (EApp (EVar "allList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "pinnedEntryName") (EVar "e")) (EApp (EVar "pinnedEntryName") (EVar "first"))))) (EVar "rest")) (EApp (EVar "Some") (EVar "first")) (EVar "None")))))
+(DTypeSig false "pinnedEntryIsTvar" (TyFun (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyCon "Int") (TyCon "Bool"))))
+(DFunDef false "pinnedEntryIsTvar" ((PTuple (PVar "stored") PWild PWild (PVar "loc")) (PVar "id")) (EMatch (EApp (EVar "normalize") (EVar "stored")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "&&" (EBinOp "==" (EApp (EVar "tyvarId") (EVar "cell")) (EVar "id")) (EApp (EVar "locSameFileAsError") (EVar "loc")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "sigTvarIds" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "Int"))))
 (DFunDef false "sigTvarIds" ((PList)) (EListLit))
 (DFunDef false "sigTvarIds" ((PCons (PVar "m") (PVar "rest"))) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "::" (EApp (EVar "tyvarId") (EVar "cell")) (EApp (EVar "sigTvarIds") (EVar "rest")))) (arm PWild () (EApp (EVar "sigTvarIds") (EVar "rest")))))
@@ -40516,6 +40773,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "wMark" ((PVar "w")) (EUnOp "!" (EFieldAccess (EVar "w") "n")))
 (DTypeSig false "wWindow" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "wWindow" ((PVar "w") (PVar "mark")) (EApp (EApp (EVar "takeFirst") (EBinOp "-" (EUnOp "!" (EFieldAccess (EVar "w") "n")) (EVar "mark"))) (EUnOp "!" (EFieldAccess (EVar "w") "items"))))
+(DTypeSig false "wAll" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
+(DFunDef false "wAll" ((PVar "w")) (EUnOp "!" (EFieldAccess (EVar "w") "items")))
 (DTypeSig false "wSnapshot" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int"))))
 (DFunDef false "wSnapshot" ((PVar "w")) (ETuple (EUnOp "!" (EFieldAccess (EVar "w") "items")) (EUnOp "!" (EFieldAccess (EVar "w") "n"))))
 (DTypeSig false "wRestore" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyFun (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int")) (TyCon "Unit"))))
@@ -40721,7 +40980,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "typeMismatchReport" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit"))))
 (DFunDef false "typeMismatchReport" ((PVar "a") (PVar "b")) (EMatch (EUnOp "!" (EVar "currentMethodMismatch")) (arm (PCon "Some" (PVar "mname")) () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-METHOD-MISMATCH"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Method '")) (EApp (EMethodRef "display") (EVar "mname"))) (ELit (LString "': expected type "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " but got "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString ""))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "pinnedLocalExplain") (EVar "a")) (EVar "b")) (arm (PCon "Some" (PVar "entry")) () (EApp (EApp (EApp (EVar "pinnedLocalMismatch") (EVar "entry")) (EVar "a")) (EVar "b"))) (arm (PCon "None") () (EApp (EApp (EVar "typeMismatchReportRest") (EVar "a")) (EVar "b")))))))
 (DTypeSig false "pinnedLocalMismatch" (TyFun (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Unit")))))
-(DFunDef false "pinnedLocalMismatch" ((PTuple PWild (PVar "name") (PVar "iface") (PVar "loc")) (PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "help") (EBinOp "++" (EBinOp "++" (ELit (LString "give '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' a top-level definition instead — a top-level binding can be polymorphic in a constrained type, a local one cannot — or use it at one type only")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-LOCAL-CONSTRAINED-MONO"))) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "local binding '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' is used at two different types ("))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " and "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "), but it cannot be polymorphic: "))) (EApp (EMethodRef "display") (EApp (EVar "constraintPhrase") (EVar "iface")))) (ELit (LString ", and only top-level definitions can carry that constraint")))) (EVar "help")) (EVar "None")))))
+(DFunDef false "pinnedLocalMismatch" ((PTuple PWild (PVar "name") (PVar "iface") (PVar "loc")) (PVar "a") (PVar "b")) (EApp (EApp (EApp (EApp (EVar "pinnedLocalReport") (EVar "name")) (EVar "iface")) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "a")))) (ELit (LString " and "))) (EApp (EMethodRef "display") (EApp (EVar "ppMono") (EVar "b")))) (ELit (LString "")))))
+(DTypeSig false "pinnedLocalReport" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit"))))))
+(DFunDef false "pinnedLocalReport" ((PVar "name") (PVar "iface") (PVar "loc") (PVar "twoTypes")) (EBlock (DoLet false false (PVar "help") (EBinOp "++" (EBinOp "++" (ELit (LString "give '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' a top-level definition instead — a top-level binding can be polymorphic in a constrained type, a local one cannot — or use it at one type only")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "pushTypeErrorHelpFixAt") (ELit (LString "T-LOCAL-CONSTRAINED-MONO"))) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "local binding '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' is used at two different types ("))) (EApp (EMethodRef "display") (EVar "twoTypes"))) (ELit (LString "), but it cannot be polymorphic: "))) (EApp (EMethodRef "display") (EApp (EVar "constraintPhrase") (EVar "iface")))) (ELit (LString ", and only top-level definitions can carry that constraint")))) (EVar "help")) (EVar "None")))))
 (DTypeSig false "constraintPhrase" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "constraintPhrase" ((PVar "iface")) (EIf (EBinOp "==" (EVar "iface") (ELit (LString ""))) (ELit (LString "its body needs a type-class instance chosen from the type it is used at")) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "its body calls something that needs ")) (EApp (EMethodRef "display") (EApp (EVar "indefiniteArticle") (EVar "iface")))) (ELit (LString " '"))) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "' instance"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "indefiniteArticle" (TyFun (TyCon "String") (TyCon "String")))
@@ -42190,7 +42451,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "groupNames" ((PList) PWild) (EListLit))
 (DFunDef false "groupNames" ((PCons (PTuple (PVar "n") PWild) (PVar "rest")) (PVar "seen")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "seen")) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "groupNames") (EVar "rest")) (EVar "seen"))) (arm (PCon "None") () (EBinOp "::" (EVar "n") (EApp (EApp (EVar "groupNames") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "seen")))))))
 (DTypeSig false "processLetGroup" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyCon "TcEnv"))))
-(DFunDef false "processLetGroup" ((PVar "env") (PVar "binds")) (EBlock (DoLet false false PWild (EApp (EVar "enterLevel") (ELit LUnit))) (DoLet false false (PVar "oblN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))) (DoLet false false (PVar "callN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls"))) (DoLet false false (PVar "dictN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictApps"))) (DoLet false false (PVar "placeholders") (EApp (EApp (EMethodRef "map") (EVar "letBindPlaceholder")) (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "extendLocalVars") (EVar "env")) (EVar "placeholders"))) (DoLet false false PWild (EApp (EApp (EVar "inferLetBinds") (EVar "env2")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false PWild (EApp (EVar "exitLevel") (ELit LUnit))) (DoLet false false (PVar "addedObls") (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (EVar "oblN0"))) (DoLet false false PWild (EApp (EApp (EVar "defaultGroupNum") (EVar "addedObls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false PWild (EApp (EApp (EVar "registerAmbiguousConstraints") (EVar "addedObls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false (PVar "dictPairs") (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))) (DoLet false false (PVar "pinned") (EBinOp "++" (EApp (EVar "methodConstrainedIds") (ELit LUnit)) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "dictPairs")))) (DoLet false false (PVar "notePairs") (EBinOp "++" (EApp (EVar "methodConstrainedPairs") (ELit LUnit)) (EVar "dictPairs"))) (DoLet false false (PVar "genv") (EApp (EApp (EApp (EApp (EVar "generalizeGroup") (EVar "env")) (EVar "pinned")) (EVar "notePairs")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false (PVar "callOblsDelta") (EApp (EVar "callOblsWindow") (EVar "callN0"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "registerSchemeObligations") (EVar "omEmpty")) (EListLit)) (EVar "callOblsDelta")) (EVar "addedObls")) (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "binds")))) (DoExpr (EVar "genv"))))
+(DFunDef false "processLetGroup" ((PVar "env") (PVar "binds")) (EBlock (DoLet false false PWild (EApp (EVar "enterLevel") (ELit LUnit))) (DoLet false false (PVar "oblN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))) (DoLet false false (PVar "callN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls"))) (DoLet false false (PVar "dictN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictApps"))) (DoLet false false (PVar "placeholders") (EApp (EApp (EMethodRef "map") (EVar "letBindPlaceholder")) (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "extendLocalVars") (EVar "env")) (EVar "placeholders"))) (DoLet false false PWild (EApp (EApp (EVar "inferLetBinds") (EVar "env2")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false PWild (EApp (EVar "exitLevel") (ELit LUnit))) (DoLet false false (PVar "addedObls") (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (EVar "oblN0"))) (DoLet false false PWild (EApp (EApp (EVar "defaultGroupNum") (EVar "addedObls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false PWild (EApp (EApp (EVar "registerAmbiguousConstraints") (EVar "addedObls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false (PVar "pinned") (EApp (EApp (EVar "localPinIds") (EVar "callN0")) (EVar "dictN0"))) (DoLet false false (PVar "notePairs") (EApp (EApp (EVar "localPinPairs") (EVar "callN0")) (EVar "dictN0"))) (DoLet false false (PVar "genv") (EApp (EApp (EApp (EApp (EVar "generalizeGroup") (EVar "env")) (EVar "pinned")) (EVar "notePairs")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false (PVar "callOblsDelta") (EApp (EVar "callOblsWindow") (EVar "callN0"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "registerSchemeObligations") (EVar "omEmpty")) (EListLit)) (EVar "callOblsDelta")) (EVar "addedObls")) (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "binds")))) (DoExpr (EVar "genv"))))
 (DTypeSig false "groupSchemesOf" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))
 (DFunDef false "groupSchemesOf" (PWild (PList)) (EListLit))
 (DFunDef false "groupSchemesOf" ((PVar "genv") (PCons (PCon "LetBind" (PVar "name") PWild) (PVar "rest"))) (EMatch (EApp (EApp (EVar "lookupVar") (EVar "genv")) (EVar "name")) (arm (PCon "Some" (PVar "sch")) () (EBinOp "::" (ETuple (EVar "name") (EVar "sch")) (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "rest")))))
@@ -42209,6 +42470,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "methodConstrainedPairs" (PWild) (EApp (EApp (EDictApp "flatMap") (EVar "argStampPairs")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingArgStamps") "value")))
 (DTypeSig false "argStampPairs" (TyFun (TyCon "PendingEntry") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
 (DFunDef false "argStampPairs" ((PCon "PendingEntry" (PVar "name") PWild (PVar "am") PWild PWild PWild)) (EApp (EApp (EMethodRef "map") (ELam ((PVar "id")) (ETuple (EVar "id") (EApp (EApp (EVar "fromOption") (ELit (LString ""))) (EApp (EVar "ifaceOfMethodName") (EVar "name")))))) (EApp (EVar "monoUnboundIds") (EVar "am"))))
+(DTypeSig false "methodOccArgPairs" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
+(DFunDef false "methodOccArgPairs" (PWild) (EApp (EApp (EDictApp "flatMap") (EVar "methodOccArgIdPairs")) (EApp (EVar "wAll") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))))
+(DTypeSig false "methodOccArgIdPairs" (TyFun (TyCon "UObligation") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
+(DFunDef false "methodOccArgIdPairs" ((PVar "o")) (EMatch (EFieldAccess (EVar "o") "prov") (arm (PCon "PMethodOcc") () (EMatch (EFieldAccess (EVar "o") "oblProj") (arm (PCon "OpMethodOcc" (PVar "typarams") (PVar "mty") (PVar "occ")) () (EApp (EApp (EApp (EApp (EVar "methodOccArgIdPairsAt") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface") "irName")) (EVar "typarams")) (EVar "mty")) (EVar "occ"))) (arm (PCon "OpProjected") () (EListLit)))) (arm PWild () (EListLit))))
+(DTypeSig false "methodOccArgIdPairsAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))))))
+(DFunDef false "methodOccArgIdPairsAt" ((PVar "iface") (PVar "typarams") (PVar "mty") (PVar "occ")) (EMatch (EApp (EApp (EApp (EVar "firstDispatchIdx") (EApp (EVar "dispatchTyparams") (EVar "typarams"))) (ELit (LInt 0))) (EApp (EVar "methodArgs") (EVar "mty"))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "idx")) () (EMatch (EApp (EApp (EVar "nthArgMono") (EVar "idx")) (EVar "occ")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "am")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "id")) (ETuple (EVar "id") (EVar "iface")))) (EApp (EVar "monoUnboundIds") (EVar "am"))))))))
 (DTypeSig false "dictForwardedPairs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "dictForwardedPairs" ((PVar "callN0") (PVar "dictN0")) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "dictAppMonoIds")) (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictApps")) (EVar "dictN0"))) (EApp (EApp (EDictApp "flatMap") (EVar "callOblMonoIds")) (EApp (EVar "callOblsWindow") (EVar "callN0")))))
 (DTypeSig false "dictAppMonoIds" (TyFun (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
@@ -42217,8 +42484,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "callOblMonoIds" ((PTuple (PVar "iface") (PVar "monos") PWild)) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EVar "monoIdsWithIface") (ETuple (EVar "m") (EFieldAccess (EVar "iface") "irName"))))) (EVar "monos")))
 (DTypeSig false "monoIdsWithIface" (TyFun (TyTuple (TyCon "Mono") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
 (DFunDef false "monoIdsWithIface" ((PTuple (PVar "m") (PVar "iface"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "id")) (ETuple (EVar "id") (EVar "iface")))) (EApp (EVar "monoUnboundIds") (EVar "m"))))
+(DTypeSig false "localPinIds" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "localPinIds" ((PVar "callN0") (PVar "dictN0")) (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedIds") (ELit LUnit)) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "methodOccArgPairs") (ELit LUnit)))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0")))))
+(DTypeSig false "localPinPairs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))))
+(DFunDef false "localPinPairs" ((PVar "callN0") (PVar "dictN0")) (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedPairs") (ELit LUnit)) (EApp (EVar "methodOccArgPairs") (ELit LUnit))) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))))
 (DTypeSig false "pinLocalIfDictForwarded" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
-(DFunDef false "pinLocalIfDictForwarded" ((PVar "callN0") (PVar "dictN0") (PVar "name") (PVar "loc") (PVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "recordPinnedLocals") (EVar "name")) (EVar "loc")) (EApp (EApp (EVar "freeGenVars") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EVar "t"))) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))) (EVar "t")))
+(DFunDef false "pinLocalIfDictForwarded" ((PVar "callN0") (PVar "dictN0") (PVar "name") (PVar "loc") (PVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "recordPinnedLocals") (EVar "name")) (EVar "loc")) (EApp (EApp (EVar "freeGenVars") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EVar "t"))) (EApp (EApp (EVar "localPinPairs") (EVar "callN0")) (EVar "dictN0"))) (EVar "t")))
 (DTypeSig false "recordPinnedLocals" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
 (DFunDef false "recordPinnedLocals" ((PVar "name") (PVar "loc") (PVar "free") (PVar "pairs") (PVar "t")) (EBlock (DoLet false false (PVar "hits") (EApp (EVar "dedupPairsById") (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EApp (EApp (EVar "containsI") (EApp (EVar "fst") (EVar "p"))) (EVar "free")))) (EVar "pairs")))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "hits")) (EVar "False") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pinnedLocals")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (ETuple (EApp (EApp (EVar "tvarMonoOfIn") (EVar "t")) (EApp (EVar "fst") (EVar "p"))) (EVar "name") (EApp (EVar "snd") (EVar "p")) (EVar "loc")))) (EVar "hits")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pinnedLocals") "value")))) (DoExpr (EVar "True")))))))
 (DTypeSig false "recordPinnedLocalsGeneric" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
@@ -43681,7 +43952,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkUndeterminedObligations" (PWild PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "checkUndeterminedObligations" ((PVar "univ") (PVar "iface") (PCons (PVar "a") (PVar "rest")) (PVar "loc")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligation") (EVar "univ")) (EVar "iface")) (EVar "a")) (EVar "loc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligations") (EVar "univ")) (EVar "iface")) (EVar "rest")) (EVar "loc")))))
 (DTypeSig false "checkUndeterminedObligation" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit"))))))
-(DFunDef false "checkUndeterminedObligation" ((PVar "univ") (PVar "iface") (PVar "occ") (PVar "loc")) (EIf (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (ELit LUnit) (EIf (EApp (EVar "isSome") (EApp (EVar "activeDictVarOf") (EVar "occ"))) (ELit LUnit) (EIf (EApp (EApp (EVar "anyIn") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "poisonedVars") "value")) (ELit LUnit) (EIf (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EApp (EApp (EVar "allList") (ELam ((PVar "i")) (EApp (EApp (EVar "containsI") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "deferrableVarIds") "value")))) (EApp (EVar "monoUnboundIds") (EVar "occ")))) (ELit LUnit) (EIf (EBinOp ">=" (EApp (EApp (EVar "implCountForIfaceU") (EVar "univ")) (EVar "iface")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EVar "iface") "irName"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DFunDef false "checkUndeterminedObligation" ((PVar "univ") (PVar "iface") (PVar "occ") (PVar "loc")) (EIf (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (ELit LUnit) (EIf (EApp (EVar "isSome") (EApp (EVar "activeDictVarOf") (EVar "occ"))) (ELit LUnit) (EIf (EApp (EApp (EVar "anyIn") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "poisonedVars") "value")) (ELit LUnit) (EIf (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EApp (EApp (EVar "allList") (ELam ((PVar "i")) (EApp (EApp (EVar "containsI") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "deferrableVarIds") "value")))) (EApp (EVar "monoUnboundIds") (EVar "occ")))) (ELit LUnit) (EIf (EBinOp ">=" (EApp (EApp (EVar "implCountForIfaceU") (EVar "univ")) (EVar "iface")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EVar "iface") "irName"))) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EApp (EVar "implCountForIfaceU") (EVar "univ")) (EVar "iface")) (ELit (LInt 1))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface")))) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EVar "iface") "irName"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "setNumlitFloats" (TyFun (TyCon "Unit") (TyCon "Unit")))
 (DFunDef false "setNumlitFloats" (PWild) (EApp (EVar "setNumlitFloatsGo") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitRefs") "value")))
 (DTypeSig false "setNumlitFloatsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")))) (TyCon "Unit")))
@@ -44285,7 +44556,23 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkSigsTooGeneral" ((PList)) (ELit LUnit))
 (DFunDef false "checkSigsTooGeneral" ((PCons (PTuple (PVar "m") (PVar "ty") (PVar "tvs")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "checkSigTooGeneral") (EVar "m")) (EVar "ty")) (EVar "tvs"))) (DoExpr (EApp (EVar "checkSigsTooGeneral") (EVar "rest")))))
 (DTypeSig false "checkSigTooGeneral" (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyCon "Unit")))))
-(DFunDef false "checkSigTooGeneral" ((PVar "name") (PVar "ty") (PVar "tvs")) (EBlock (DoLet false false (PVar "tvarIds") (EApp (EVar "sigTvarIds") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "tvs")))) (DoExpr (EIf (EApp (EVar "hasDupI") (EVar "tvarIds")) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-TYPE-TOO-GENERAL"))) (EApp (EApp (EVar "sigTooGeneralMsg") (EVar "name")) (EVar "ty"))) (ELit LUnit)))))
+(DFunDef false "checkSigTooGeneral" ((PVar "name") (PVar "ty") (PVar "tvs")) (EBlock (DoLet false false (PVar "tvarIds") (EApp (EVar "sigTvarIds") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "tvs")))) (DoExpr (EIf (EApp (EVar "hasDupI") (EVar "tvarIds")) (EApp (EApp (EApp (EVar "reportSigTooGeneral") (EVar "name")) (EVar "ty")) (EApp (EVar "sigCollapsedPair") (EApp (EVar "sigTvarNamedIds") (EVar "tvs")))) (ELit LUnit)))))
+(DTypeSig false "reportSigTooGeneral" (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyCon "Unit")))))
+(DFunDef false "reportSigTooGeneral" ((PVar "name") (PVar "ty") (PCon "None")) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-TYPE-TOO-GENERAL"))) (EApp (EApp (EVar "sigTooGeneralMsg") (EVar "name")) (EVar "ty"))))
+(DFunDef false "reportSigTooGeneral" ((PVar "name") (PVar "ty") (PCon "Some" (PTuple (PVar "id") (PVar "v1") (PVar "v2")))) (EMatch (EApp (EVar "pinnedLocalCollapsedInto") (EVar "id")) (arm (PCon "None") () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-TYPE-TOO-GENERAL"))) (EApp (EApp (EVar "sigTooGeneralMsg") (EVar "name")) (EVar "ty")))) (arm (PCon "Some" (PTuple PWild (PVar "bname") (PVar "iface") (PVar "loc"))) () (EApp (EApp (EApp (EApp (EVar "pinnedLocalReport") (EVar "bname")) (EVar "iface")) (EVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the signature's '")) (EApp (EMethodRef "display") (EVar "v1"))) (ELit (LString "' and '"))) (EApp (EMethodRef "display") (EVar "v2"))) (ELit (LString "'")))))))
+(DTypeSig false "sigTvarNamedIds" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
+(DFunDef false "sigTvarNamedIds" ((PList)) (EListLit))
+(DFunDef false "sigTvarNamedIds" ((PCons (PTuple (PVar "n") (PVar "m")) (PVar "rest"))) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "tyvarId") (EVar "cell"))) (EApp (EVar "sigTvarNamedIds") (EVar "rest")))) (arm PWild () (EApp (EVar "sigTvarNamedIds") (EVar "rest")))))
+(DTypeSig false "sigCollapsedPair" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))
+(DFunDef false "sigCollapsedPair" ((PList)) (EVar "None"))
+(DFunDef false "sigCollapsedPair" ((PCons (PTuple (PVar "n") (PVar "id")) (PVar "rest"))) (EMatch (EApp (EApp (EVar "sigCollapsedWith") (EVar "id")) (EVar "rest")) (arm (PCon "Some" (PVar "n2")) () (EApp (EVar "Some") (ETuple (EVar "id") (EVar "n") (EVar "n2")))) (arm (PCon "None") () (EApp (EVar "sigCollapsedPair") (EVar "rest")))))
+(DTypeSig false "sigCollapsedWith" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "sigCollapsedWith" (PWild (PList)) (EVar "None"))
+(DFunDef false "sigCollapsedWith" ((PVar "id") (PCons (PTuple (PVar "n") (PVar "i")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "i") (EVar "id")) (EApp (EVar "Some") (EVar "n")) (EIf (EVar "otherwise") (EApp (EApp (EVar "sigCollapsedWith") (EVar "id")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "pinnedLocalCollapsedInto" (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
+(DFunDef false "pinnedLocalCollapsedInto" ((PVar "id")) (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "pinnedEntryIsTvar") (EVar "e")) (EVar "id")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pinnedLocals") "value")) (arm (PList) () (EVar "None")) (arm (PCons (PVar "first") (PVar "rest")) () (EIf (EApp (EApp (EVar "allList") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "pinnedEntryName") (EVar "e")) (EApp (EVar "pinnedEntryName") (EVar "first"))))) (EVar "rest")) (EApp (EVar "Some") (EVar "first")) (EVar "None")))))
+(DTypeSig false "pinnedEntryIsTvar" (TyFun (TyTuple (TyCon "Mono") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyCon "Int") (TyCon "Bool"))))
+(DFunDef false "pinnedEntryIsTvar" ((PTuple (PVar "stored") PWild PWild (PVar "loc")) (PVar "id")) (EMatch (EApp (EVar "normalize") (EVar "stored")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "&&" (EBinOp "==" (EApp (EVar "tyvarId") (EVar "cell")) (EVar "id")) (EApp (EVar "locSameFileAsError") (EVar "loc")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "sigTvarIds" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "Int"))))
 (DFunDef false "sigTvarIds" ((PList)) (EListLit))
 (DFunDef false "sigTvarIds" ((PCons (PVar "m") (PVar "rest"))) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EBinOp "::" (EApp (EVar "tyvarId") (EVar "cell")) (EApp (EVar "sigTvarIds") (EVar "rest")))) (arm PWild () (EApp (EVar "sigTvarIds") (EVar "rest")))))

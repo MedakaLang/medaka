@@ -1,0 +1,41 @@
+-- #1180 (undetermined top-level goal committed to the concrete impl) — REGRESSION.
+-- Re-pointed here from test/must_fail_fixtures/1180-undetermined-top-headless-impl-commits/
+-- when the pin DRAINED (sprint `dispatch-must-not-guess`, slice S-undetermined-reject).
+--
+-- `roundtrip`'s constraint var is pinned by neither its argument nor its result, so the
+-- goal reaching quiescence is `Sz ?a` with `?a` neither ground nor rigid. TWO instances
+-- match it — the concrete `impl Sz Widget` and the fully-general `impl Sz a` — and
+-- DICT-SEMANTICS §6.2 T3 permits `inst` to fire only on a CLOSED goal, so committing to
+-- either is a T3 violation. The correct verdict is T-AMBIGUOUS-INSTANCE, which is what
+-- reject_1180_control_two_concrete_impls.mdk produces from the SAME goal shape.
+--
+-- Before the fix all three verbs disagreed: `check` was clean at exit 0, `run` printed
+-- `42` (the concrete impl's body at n = 14 — that value is what identified WHICH impl
+-- was silently selected), and `build` died with an internal
+-- `[E-PANIC]: arg-tag dispatch on impl type that owns no constructors`. The gate this
+-- fixture now lives in is exactly the one that grades check/run/build agreement.
+--
+-- MECHANISM: `checkUndeterminedObligation`'s RULE 3 counts `ImplUniverse`'s census
+-- bucket, and `univHeadCountsInCensus` (= `censusHeadNameTy`) answers `None` for a bare
+-- `TyVar` head, so the headless impl contributed no tag and the count stayed 1. RULE 3b
+-- reads the sibling `univHeadless` bucket instead of widening the census — see the block
+-- on RULE 3b in compiler/types/typecheck.mdk, and #1617/#1618 for why the census itself
+-- must not move.
+interface Sz a where
+  szNew : Int -> a
+  szTag : a -> Int
+
+data Widget = Widget Int
+
+impl Sz Widget where
+  szNew n = Widget (n * 3)
+  szTag (Widget n) = n
+
+impl Sz a where
+  szNew _ = panic "general szNew"
+  szTag _ = 7
+
+roundtrip : Sz a => Int -> Int
+roundtrip n = szTag (szNew n)
+
+main = println (roundtrip 14)

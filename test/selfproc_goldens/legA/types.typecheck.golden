@@ -1211,6 +1211,8 @@ liveTailId : Ref Effvar -> Int
 loadDataUniverse : Int -> Unit
 locEq : Loc -> Loc -> Bool
 locSameFileAsError : Option Loc -> Bool
+localPinIds : Int -> Int -> List Int
+localPinPairs : Int -> Int -> List (Int, String)
 lookupAssocI : Int -> List (Int, a) -> Option a
 lookupAssocS : String -> List (String, List IfaceRef) -> Option (List IfaceRef)
 lookupAssocSL2 : String -> List (String, List Int) -> Option (List Int)
@@ -1284,6 +1286,9 @@ methodEffRetOccs : List (String, List Kind) -> Ty -> List (String, List Atom)
 methodLevelConstraintSlots : List String -> Ty -> List (String, IfaceRef)
 methodLevelConstraintVarNames : List String -> Ty -> List String
 methodMembersOf : List String -> Loc -> List UseMember
+methodOccArgIdPairs : UObligation -> List (Int, String)
+methodOccArgIdPairsAt : String -> List String -> Ty -> Mono -> List (Int, String)
+methodOccArgPairs : Unit -> List (Int, String)
 methodRet : Ty -> Ty
 methodSchemes : List (String, List Kind) -> List String -> List IfaceMethod -> List (String, Scheme)
 methodSchemesPure : List (String, List Kind) -> List IfaceMethod -> List (String, Scheme)
@@ -1420,10 +1425,13 @@ pickSchemes : List String -> List (String, Scheme) -> List (String, Scheme)
 pickSchemesByDecl : List String -> List (String, Scheme) -> List ((IfaceRef, String), Scheme) -> List (String, Scheme)
 pickStandaloneSchemes : List String -> List (String, Scheme) -> List (String, Scheme)
 pinLocalIfDictForwarded : Int -> Int -> String -> Option Loc -> Mono -> Bool
+pinnedEntryIsTvar : (Mono, String, String, Option Loc) -> Int -> Bool
 pinnedEntryMatches : (Mono, String, String, Option Loc) -> Mono -> Mono -> Bool
 pinnedEntryName : (Mono, String, String, Option Loc) -> String
+pinnedLocalCollapsedInto : Int -> Option (Mono, String, String, Option Loc)
 pinnedLocalExplain : Mono -> Mono -> Option (Mono, String, String, Option Loc)
 pinnedLocalMismatch : (Mono, String, String, Option Loc) -> Mono -> Mono -> Unit
+pinnedLocalReport : String -> String -> Option Loc -> String -> Unit
 pinsTyvarMsg : String -> Ty -> List String -> String
 pipeOp : Mono -> Mono -> Mono
 placeholderBinding : (String, Mono) -> (String, Scheme)
@@ -1627,6 +1635,7 @@ reportAmbiguousImports : List Decl -> Unit
 reportAmbiguousImportsIn : Map String Unit -> List Decl -> Unit
 reportAmbiguousOverlap : List Mono -> List KeyEntry -> Unit
 reportNumOrNoImpl : String -> List Mono -> Option Loc -> Unit
+reportSigTooGeneral : String -> Ty -> Option (Int, String, String) -> Unit
 reportUncovered : String -> List (String, Ty, List (String, Mono)) -> List (String, Int) -> List (String, Int) -> Unit
 reportUncoveredVec : String -> List (String, Ty, List (String, Mono)) -> List (String, Int) -> List VecObl -> List VecObl -> Unit
 reqObligationsFor : ImplUniverse -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
@@ -1753,6 +1762,8 @@ shadowStandaloneDicts : TcEnv -> String -> String -> Mono -> ShadowDicts
 shadowStandaloneDictsWith : Option Scheme -> String -> String -> Mono -> ShadowDicts
 shadowStandaloneHead : TcEnv -> Expr -> Option (String, List (Ref Route))
 shadowVarHeadMethodScheme : TcEnv -> String -> Expr -> Mono
+sigCollapsedPair : List (String, Int) -> Option (Int, String, String)
+sigCollapsedWith : Int -> List (String, Int) -> Option String
 sigConstraintArgTys : Ty -> List (List Ty)
 sigConstraints : Ty -> List (IfaceRef, List String)
 sigConstraintsOf : Ty -> List Constraint
@@ -1762,6 +1773,7 @@ sigToSchemeTvs : Ty -> (Scheme, List (String, Mono))
 sigToSchemeTvsIn : List (String, List Kind) -> Ty -> (Scheme, List (String, Mono))
 sigTooGeneralMsg : String -> Ty -> String
 sigTvarIds : List Mono -> List Int
+sigTvarNamedIds : List (String, Mono) -> List (String, Int)
 sigsOf : List Decl -> List (String, Ty)
 singleTyparamIfaceMethod : String -> Bool
 siteRDictName : Ref Route -> List String
@@ -1945,6 +1957,7 @@ vecOblKey : VecObl -> String
 vecOblOfPred : List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
 vecOblsOfSlotVecs : List (CSlot, List Mono) -> List VecObl
 vectorGoal : String -> List Mono -> Option (Mono, List Mono)
+wAll : Windowed a -> List a
 wMark : Windowed a -> Int
 wNew : Unit -> Windowed a
 wPush : Windowed a -> a -> Unit

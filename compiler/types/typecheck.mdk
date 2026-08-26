@@ -5944,6 +5944,13 @@ wMark w = !w.n
 wWindow : Windowed a -> Int -> List a
 wWindow w mark = takeFirst (!w.n - mark) !w.items
 
+-- the WHOLE channel, newest-first, with no copy — the unwindowed read `wWindow w 0`
+-- performs (takeFirst n items).  For a per-binding reader of a module-wide channel
+-- (methodOccArgPairs) that copy is a quadratic; this is the same list wWindow would
+-- have rebuilt.
+wAll : Windowed a -> List a
+wAll w = !w.items
+
 -- for an error-rollback window (inferUserImplBodies): capture both refs together.
 wSnapshot : Windowed a -> (List a, Int)
 wSnapshot w = (!w.items, !w.n)
@@ -7832,11 +7839,21 @@ typeMismatchReport a b = match !currentMethodMismatch
 -- always works), CATEGORIZED (its own code, registered in DIAGNOSTIC-CODES-DESIGN.md).
 pinnedLocalMismatch : (Mono, String, String, Option Loc) -> Mono -> Mono -> Unit
 pinnedLocalMismatch (_, name, iface, loc) a b =
+  pinnedLocalReport name iface loc "\{ppMono a} and \{ppMono b}"
+
+-- #1986 rung 2: the ONE place that renders a pinned local's rejection, shared by both
+-- channels that can detect it — the ordinary unification failure (pinnedLocalMismatch)
+-- and the signature-tyvar collapse (pinnedLocalSigCollapse).  [twoTypes] is the only
+-- thing that differs: the two ground types the binding was used at, or the two declared
+-- signature variables the pin merged.  One renderer so the two can never drift apart in
+-- wording, code, or remedy.
+pinnedLocalReport : String -> String -> Option Loc -> String -> Unit
+pinnedLocalReport name iface loc twoTypes =
   let help = "give '\{name}' a top-level definition instead — a top-level binding can be polymorphic in a constrained type, a local one cannot — or use it at one type only"
   pushTypeErrorHelpFixAt
     "T-LOCAL-CONSTRAINED-MONO"
     loc
-    "local binding '\{name}' is used at two different types (\{ppMono a} and \{ppMono b}), but it cannot be polymorphic: \{constraintPhrase iface}, and only top-level definitions can carry that constraint"
+    "local binding '\{name}' is used at two different types (\{twoTypes}), but it cannot be polymorphic: \{constraintPhrase iface}, and only top-level definitions can carry that constraint"
     help
     None
 
@@ -15157,17 +15174,20 @@ processLetGroup env binds =
   let addedObls = wWindow perRun.value.implObls oblN0
   let _ = defaultGroupNum addedObls (map (p => schemeMono (snd p)) placeholders)
   let _ = registerAmbiguousConstraints addedObls (map (p => schemeMono (snd p)) placeholders)   -- RETPOS soundness
-  -- #866: hoisted out of generalizeGroup's per-binding recursion (both sources are
-  -- fixed for the whole group), so an N-member group scans the pin sets ONCE.  The
-  -- dict half is kept in (id, iface) form so each member can record its own pin note
-  -- (the diagnostic names the interface); the method half carries no interface and
-  -- contributes ids only.
-  let dictPairs = dictForwardedPairs callN0 dictN0
-  let pinned = methodConstrainedIds () ++ map fst dictPairs
-  -- Notes come from BOTH channels (methodConstrainedPairs is note-only and cannot
-  -- change [pinned]); a where-helper is frequently pinned by the METHOD channel, and
-  -- passing only the dict half left every such binding with no explanation.
-  let notePairs = methodConstrainedPairs () ++ dictPairs
+  -- #866: hoisted out of generalizeGroup's per-binding recursion (all three sources are
+  -- fixed for the whole group), so an N-member group scans the pin sets ONCE.  Every
+  -- half is kept in (id, iface) form so each member can record its own pin note (the
+  -- diagnostic names the interface).
+  --
+  -- #1986 rung 1: this is now [localPinIds]/[localPinPairs] — the SAME predicate the
+  -- other four local-generalization sites consult (pinLocalIfDictForwarded).  Until
+  -- this slice, this site was the only one that unioned in the METHOD channels, which
+  -- is why a semantically null `where`→`let` respelling of the same program could
+  -- change which predicate ran and change the answer (#1052).  The two shapes are the
+  -- same set viewed two ways (see localPinPairs), so the pin decision and the
+  -- explanatory note cannot disagree about a binding.
+  let pinned = localPinIds callN0 dictN0
+  let notePairs = localPinPairs callN0 dictN0
   let genv = generalizeGroup env pinned notePairs (zipL binds placeholders)
   -- Round-2 adversarial break "let-alias evasion" (#816): a LOCAL constrained
   -- binding (`let f = hh` re-generalizing `hh : Num x => x -> x`) previously
@@ -15250,9 +15270,63 @@ argStampPairs : PendingEntry -> List (Int, String)
 argStampPairs (PendingEntry name _ am _ _ _) =
   map (id => (id, fromOption "" (ifaceOfMethodName name))) (monoUnboundIds am)
 
+-- #2026: the ENTRY-POINT-NEUTRAL half of the method pin channel, and the reason this
+-- file now has one.  `methodConstrainedIds`/`-Pairs` above read `pendingArgStamps`,
+-- which `inferMethodAt` fills — and `EMethodAt` nodes are minted only by the MARK pass
+-- reached from `elaborateModules`, i.e. only on the run/build path.  `check` routes the
+-- SAME occurrences through `inferVarPlainId`, so that channel is EMPTY there and
+-- `processLetGroup` pinned a where-helper on the emit path while generalizing it on the
+-- check path: `check` greened programs `build` then rejected with no located diagnostic
+-- (#1812 class).  That is exactly the hazard `dictForwardedPairs`' ⚠️ note below says it
+-- reads TWO channels to avoid; the method channel had no second channel to read.
+--
+-- This is it.  BOTH entry points record a method occurrence's impl obligation —
+-- `recordMethodObligationGuarded` is called by `inferMethodAt` (emit) AND
+-- `inferVarPlainId` (check) — and an `OpMethodOcc` obligation carries the same triple
+-- `recordArgStamp` was handed: the method's typarams, its DECLARED type, and THIS
+-- occurrence's instantiated mono.  So the arg-stamp channel's own key is reconstructible
+-- from it without the mark pass: take the method's dispatch-argument index exactly as
+-- `argDispatchOfMethod` does (`firstDispatchIdx (dispatchTyparams typarams)` over
+-- `methodArgs`), then `nthArgMono` that index out of the occurrence mono — which is
+-- `argStampMono`'s definition, term for term.
+--
+-- UNIONED with, not substituted for, `methodConstrainedIds`: a few emit-path arg stamps
+-- have no obligation behind them (a standalone shadow short-circuits
+-- `recordImplObligation`; `inferDefinerShadowApp` stamps directly), so replacing would
+-- silently narrow the emit-path pin.  Duplicated ids are free — `recordPinnedLocals`
+-- dedups by tyvar id.
+--
+-- Read UNWINDOWED, like `methodConstrainedIds` and for the same reason: a helper's pin
+-- must see dispatch sites anywhere in the module, not only inside its own group's
+-- inference.  Hence `wAll` (no per-binding copy of the channel).
+methodOccArgPairs : Unit -> List (Int, String)
+methodOccArgPairs _ = flatMap methodOccArgIdPairs (wAll perRun.value.implObls)
+
+methodOccArgIdPairs : UObligation -> List (Int, String)
+methodOccArgIdPairs o = match o.prov
+  PMethodOcc => match o.oblProj
+    OpMethodOcc typarams mty occ =>
+      methodOccArgIdPairsAt o.pred.iface.irName typarams mty occ
+    OpProjected => []
+  _ => []
+
+-- the arg-position dispatch mono of one method occurrence, in `argStampPairs` shape.
+-- None from either step (a return-position method — no argument mentions the interface
+-- param — or an occurrence whose mono does not have that many arrows yet) contributes
+-- nothing, so a return-position occurrence never widens the pin beyond what the
+-- arg-stamp channel would have recorded on the emit path.
+methodOccArgIdPairsAt : String -> List String -> Ty -> Mono -> List (Int, String)
+methodOccArgIdPairsAt iface typarams mty occ = match firstDispatchIdx (dispatchTyparams typarams) 0 (methodArgs mty)
+  None => []
+  Some idx => match nthArgMono idx occ
+    None => []
+    Some am => map (id => (id, iface)) (monoUnboundIds am)
+
 -- #866 — a SIBLING of methodConstrainedIds above, NOT the same pin.  Both decline a
--- local generalization for the same underlying reason, and the two sets are unioned by
--- processLetGroup, but they are not the same shape and should not be read as such:
+-- local generalization for the same underlying reason, and since #1986 rung 1 the sets
+-- are unioned by [localPinPairs] for ALL FIVE local-generalization sites (before that,
+-- only processLetGroup unioned them).  They are still not the same shape and should not
+-- be read as such:
 --
 --   methodConstrainedIds   ONE channel (pendingArgStamps), read UNWINDOWED — the whole
 --                          module's arg-position METHOD dispatch sites.
@@ -15315,18 +15389,67 @@ callOblMonoIds (iface, monos, _) =
 monoIdsWithIface : (Mono, String) -> List (Int, String)
 monoIdsWithIface (m, iface) = map (id => (id, iface)) (monoUnboundIds m)
 
+-- #1986 rung 1 — THE local-pin predicate.  ALL FIVE local-generalization sites (the
+-- `where`/`let`-GROUP site processLetGroup, and the four genRestricted sites via
+-- pinLocalIfDictForwarded) consult exactly this, so one judgment is made in one place.
+-- Before this slice the group site unioned the two METHOD channels in while the four
+-- genRestricted sites saw the DICT channel alone: a semantically null `where`→`let`
+-- respelling of the same program changed which predicate ran, and so changed the answer
+-- (#1052).  Rung 1 makes the five agree; WHAT the agreed answer should be is rung 2's
+-- question, not this predicate's.
+--
+-- Three channels, in the order their comments appear above:
+--   methodConstrainedPairs  emit-path arg stamps (pendingArgStamps), UNWINDOWED.
+--   methodOccArgPairs       the entry-point-neutral obligation channel (#2026),
+--                           UNWINDOWED — this is what keeps `check` and `build` at the
+--                           same pin decision.
+--   dictForwardedPairs      constrained-callee dict routes, WINDOWED to this binding's
+--                           own inference (#866).
+-- UNION, never substitution: each channel covers sites the others structurally cannot
+-- see (see each function's own note).  Duplicate ids are free — recordPinnedLocals
+-- dedups by tyvar id.
+--
+-- [localPinIds] and [localPinPairs] are the SAME SET viewed two ways, not two
+-- predicates: methodConstrainedPairs yields exactly methodConstrainedIds' ids (both are
+-- `monoUnboundIds (argStampMono e)` over the same pendingArgStamps, in the same order,
+-- one merely paired with the discriminating interface), and the other two channels are
+-- id-projected from the very same calls.  So `localPinIds == map fst localPinPairs` as
+-- a list, and the pin decision and the explanatory note cannot disagree about a
+-- binding.  At the group site this is a re-view of the set that was already computed
+-- there, not a widening of it; the widening is at the four genRestricted sites, which
+-- previously saw the dict channel alone.
+--
+-- ⚠️ The two method channels are UNWINDOWED module-wide reads, which is what makes them
+-- entry-point-neutral and is required (a helper's pin must see dispatch sites anywhere
+-- in the module).  At the group site that cost is paid once per GROUP; at the four
+-- genRestricted sites it is once per BINDING.  See the report Notes for #1986 rung 1.
+localPinIds : Int -> Int -> List Int
+localPinIds callN0 dictN0 = methodConstrainedIds ()
+  ++ map fst (methodOccArgPairs ())
+  ++ map fst (dictForwardedPairs callN0 dictN0)
+
+localPinPairs : Int -> Int -> List (Int, String)
+localPinPairs callN0 dictN0 = methodConstrainedPairs ()
+  ++ methodOccArgPairs ()
+  ++ dictForwardedPairs callN0 dictN0
+
 -- #866: the pin decision AND the note pinnedLocalExplain needs, in one pass, so the
 -- two can never disagree about whether a binding was pinned.  [name]/[loc]
 -- describe the BINDING (what the user must change), not the use site that will later
 -- collide.  Records one entry per pinned var actually free in [t]; a binding with no
 -- pinned var records nothing and returns False, leaving generalization untouched.
+--
+-- ⚠️ NAME IS NARROWER THAN THE BEHAVIOUR: since #1986 rung 1 this consults the METHOD
+-- channels too, not just the dict-forwarding one — see localPinPairs above.  The name
+-- is kept so this slice's LEG A / snapshot diff stays additive; renaming it to
+-- pinLocalIfConstrained is a follow-up.
 pinLocalIfDictForwarded : Int -> Int -> String -> Option Loc -> Mono -> Bool
 pinLocalIfDictForwarded callN0 dictN0 name loc t =
   recordPinnedLocals
     name
     loc
     (freeGenVars perRun.value.currentLevel.value t)
-    (dictForwardedPairs callN0 dictN0)
+    (localPinPairs callN0 dictN0)
     t
 
 -- Shared by all five pin sites: record one note per dict-forwarded var that is free
@@ -15692,10 +15815,14 @@ dropFirst n xs
 dropFirst _ [] = []
 dropFirst n (_::xs) = dropFirst (n - 1) xs
 
--- [constrained] is the group's pin set, computed ONCE by processLetGroup:
--- methodConstrainedIds (arg-position method dispatch) ++ dictForwardedIds
--- (constrained-callee dict sites, #866).  Both name tyvars this group must not
--- generalize over — see those two functions for why.
+-- [constrained] is the group's pin set, computed ONCE by processLetGroup as
+-- [localPinIds]: the two method channels (arg-position method dispatch) ++
+-- the dictForwardedPairs ids (constrained-callee dict sites, #866).  All name tyvars
+-- this group must not generalize over — see localPinPairs and the functions it calls.
+-- Since #1986 rung 1 this is the SAME predicate the four pinLocalIfDictForwarded sites
+-- consult, and [dictPairs] here is that identical list, so it covers every id in
+-- [constrained] and the recordPinnedLocalsGeneric fallback below is a belt-and-braces
+-- path rather than a routine one.
 generalizeGroup : TcEnv -> List Int -> List (Int, String) -> List (LetBind, (String, Scheme)) -> TcEnv
 generalizeGroup env _ _ [] = env
 generalizeGroup env constrained dictPairs (((LetBind name clauses), (_, sch))::rest) =
@@ -25562,11 +25689,20 @@ checkUndeterminedObligations univ iface (a::rest) loc =
 -- If the var is a FORWARDED enclosing-fn dict (activeDictVarOf Some), it's resolved
 -- by dict-passing — fine.  Otherwise it is genuinely free, and the route must pick
 -- an impl with no type to guide it: ONE impl of [iface] → sole-impl default (no
--- error; routeUndeterminedTop stamps it concretely); TWO or more → genuinely
--- ambiguous → AmbiguousImpl (the deliberate divergence from the oracle's silent
--- first-wins).  Skip "Num" (its literal defaulting handles ambiguity) and ifaces
--- with no user impls (zero → existing no-impl path).  This runs on BOTH the check
--- path (checkModuleFullImpl) and the emit/eval path, so `check` rejects too.
+-- error); TWO or more → genuinely ambiguous → AmbiguousImpl (the deliberate
+-- divergence from the oracle's silent first-wins).  RULE 3b (#1180) is the second
+-- spelling of "two or more": one census-counted impl beside a HEADLESS one.  Skip
+-- "Num" (its literal defaulting handles ambiguity) and ifaces with no user impls
+-- (zero → existing no-impl path).  This runs on BOTH the check path
+-- (checkModuleFullImpl) and the emit/eval path, so `check` rejects too.
+--
+-- ⚠️ This block used to say the sole-impl case is one "routeUndeterminedTop stamps
+-- concretely".  MEASURED FALSE (sprint `dispatch-must-not-guess`, 1st attempt at
+-- #1180): `routeUndeterminedTop` is instrumented-unreached for this shape on every
+-- verb — a one-impl program compiles and runs without ever entering it, and the
+-- ambiguity reject the two-impl case produces comes from `pushTypeErrorOnceAt`
+-- below, not from `reportAmbiguousImpl`.  Both render `ambiguousImplMsg`, which is
+-- how the misattribution survived: the MESSAGE is not a witness for the PATH.
 checkUndeterminedObligation : ImplUniverse -> IfaceRef -> Mono -> Option Loc -> Unit
 checkUndeterminedObligation univ iface occ loc
   | iface.irName == "Num" = ()                                       -- RULE 4a: Num → literal defaulting, never ambiguity (a SPELLING test — see checkOneCallObligation)
@@ -25587,6 +25723,33 @@ checkUndeterminedObligation univ iface occ loc
   -- RULE 3: the var escaped its group anchored to NOTHING and the iface has >= 2 impls
   -- ⇒ genuinely ambiguous (the escaped-unanchored case registerDispatchMonos records).
   | implCountForIfaceU univ iface >= 2 =
+    pushTypeErrorOnceAt "T-AMBIGUOUS-INSTANCE" loc (ambiguousImplMsg iface.irName)
+  -- RULE 3b (#1180): the census bucket RULE 3 counts drops a HEADLESS impl
+  -- (`impl Sz a`) by design — `univHeadCountsInCensus` is `censusHeadNameTy`, which
+  -- answers `None` for a bare `TyVar` head — so a program with ONE concrete impl
+  -- beside a fully-general one counted 1 and this undetermined goal was silently
+  -- COMMITTED to the concrete impl (check clean, `run` a wrong value, `build` an
+  -- arg-tag E-PANIC).  Two instances match an unanchored `Sz ?a` and neither is
+  -- preferred over the other for a goal that is not closed, so DICT-SEMANTICS §6.2 T3
+  -- forbids `inst` firing at all: the verdict is the same `T-AMBIGUOUS-INSTANCE`.
+  --
+  -- 🚨 THIS READS A SIBLING BUCKET; IT DOES NOT WIDEN THE CENSUS.  #1617/#1618 gave
+  -- `headTyconTy` a `TyFun` arm and reached the tag set through the shared writer,
+  -- pushing the count 1 → 2 for `impl C Int` beside `impl C (Int -> Int)` and flipping
+  -- a program that never dispatches to the arrow from exit 0 to exit 1 — see
+  -- `univHeadCountsInCensus`' block.  Nothing here touches `univAddIfaceTag`,
+  -- `univHeadCountsInCensus`, or either writer, and an arrow- or tuple-headed impl is
+  -- NOT in `univHeadless` either (its writers file by `univReceiverTag`/`headTyconTy`,
+  -- which DOES have the `TyFun`/`TyTuple` arms), so #1617's two-arrow-impl program has
+  -- an EMPTY headless bucket, a census count of 0, and stays accepted by both guards.
+  -- The `>= 1` conjunct is what keeps it that way: a headless impl alone is a UNIQUE
+  -- instance and must still commit (that is `control.mdk`'s shape, one impl, no
+  -- ambiguity).
+  --
+  -- Both universe writers — `insertUnivImplAt` (Flat) and `ieInsertRowAt` (Module/`IE`)
+  -- — already populate `univHeadless` through the same `univReceiverTag None` arm, so
+  -- this needs no third writer and answers identically single-file and cross-module.
+  | implCountForIfaceU univ iface >= 1 && isNonEmptyL (univHeadless univ iface) =
     pushTypeErrorOnceAt "T-AMBIGUOUS-INSTANCE" loc (ambiguousImplMsg iface.irName)
   | otherwise = ()
 
@@ -28319,9 +28482,73 @@ checkSigTooGeneral : String -> Ty -> List (String, Mono) -> Unit
 checkSigTooGeneral name ty tvs =
   let tvarIds = sigTvarIds (map snd tvs)
   if hasDupI tvarIds then
-    pushTypeError "T-TYPE-TOO-GENERAL" (sigTooGeneralMsg name ty)
+    reportSigTooGeneral name ty (sigCollapsedPair (sigTvarNamedIds tvs))
   else
     ()
+
+-- #1986 rung 2.  `sigTooGeneralMsg` reports the SYMPTOM ("two declared variables are
+-- the same type after inference") and offers no remedy.  When the reason those two
+-- collapsed is a PINNED LOCAL — a `let`/`where` binding this group declined to
+-- generalize because its body forwards a constrained callee's dictionary, then used at
+-- both declared variables (#1052's `d v = sizeOf v` under
+-- `useTwo : (Sized a, Sized b) => a -> b -> Int`) — the cause is the same one
+-- `pinnedLocalMismatch` already explains well on the unification-failure channel, and
+-- the user gets the same two remedies.  So consult the same registry and, on a
+-- correlated collapse, emit the SAME root-cause-honest diagnostic.  This is an ADDITION:
+-- an uncorrelated signature-too-general (the ordinary case) keeps its existing message.
+reportSigTooGeneral : String -> Ty -> Option (Int, String, String) -> Unit
+reportSigTooGeneral name ty None =
+  pushTypeError "T-TYPE-TOO-GENERAL" (sigTooGeneralMsg name ty)
+reportSigTooGeneral name ty (Some (id, v1, v2)) = match pinnedLocalCollapsedInto id
+  None => pushTypeError "T-TYPE-TOO-GENERAL" (sigTooGeneralMsg name ty)
+  Some (_, bname, iface, loc) =>
+    pinnedLocalReport bname iface loc "the signature's '\{v1}' and '\{v2}'"
+
+-- The declared tyvars that still normalize to a TVar, each paired with its declared
+-- NAME — `sigTvarIds`'s information plus the name the user wrote, which the pinned-local
+-- wording needs.  Deliberately a sibling rather than a rewrite of `sigTvarIds`: that
+-- function is the acceptance decision and stays byte-identical.
+sigTvarNamedIds : List (String, Mono) -> List (String, Int)
+sigTvarNamedIds [] = []
+sigTvarNamedIds ((n, m)::rest) = match normalize m
+  TVar cell => (n, tyvarId cell) :: sigTvarNamedIds rest
+  _ => sigTvarNamedIds rest
+
+-- The first collapsed pair: (the shared TVar id, the two declared names sharing it).
+-- `hasDupI` has already said one exists, so `None` here is unreachable in practice and
+-- falls back to the generic message rather than dropping the error.
+sigCollapsedPair : List (String, Int) -> Option (Int, String, String)
+sigCollapsedPair [] = None
+sigCollapsedPair ((n, id)::rest) = match sigCollapsedWith id rest
+  Some n2 => Some (id, n, n2)
+  None => sigCollapsedPair rest
+
+sigCollapsedWith : Int -> List (String, Int) -> Option String
+sigCollapsedWith _ [] = None
+sigCollapsedWith id ((n, i)::rest)
+  | i == id = Some n
+  | otherwise = sigCollapsedWith id rest
+
+-- The pinned local, if any, whose pinned variable IS the one the two declared signature
+-- variables collapsed into.  Identity by TVar id, which is far stricter than
+-- `pinnedEntryMatches`'s rendering test — an unrelated binding's pin var is a different
+-- cell and cannot alias.  Same conservatism as `pinnedLocalExplain` otherwise: same file
+-- as the error, and exactly ONE binding NAME may qualify (a binding with several
+-- constrained slots records one entry PER VAR, so an entry-count test would suppress the
+-- diagnostic for every multi-constraint callee).
+pinnedLocalCollapsedInto : Int -> Option (Mono, String, String, Option Loc)
+pinnedLocalCollapsedInto id = match filterList (e => pinnedEntryIsTvar e id) perRun.value.pinnedLocals.value
+  [] => None
+  first::rest =>
+    if allList (e => pinnedEntryName e == pinnedEntryName first) rest then
+      Some first
+    else
+      None
+
+pinnedEntryIsTvar : (Mono, String, String, Option Loc) -> Int -> Bool
+pinnedEntryIsTvar (stored, _, _, loc) id = match normalize stored
+  TVar cell => tyvarId cell == id && locSameFileAsError loc
+  _ => False
 
 -- collect the TVar ids of those entries in tvs that normalize to a TVar
 -- (concrete-grounded entries are skipped — only same-TVar collapses are an error)
