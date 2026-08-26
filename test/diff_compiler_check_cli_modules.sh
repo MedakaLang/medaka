@@ -1689,8 +1689,8 @@ export interface IA a where
 impl IA Int where
   szK n = n + 100
 
-export viaA : Int -> Int
-viaA n = szK n
+export viaA : IA a => a -> Int
+viaA x = szK x
 EOF
 cat > "$TMP/x1852_zmod.mdk" <<'EOF'
 export interface IZ b where
@@ -1699,7 +1699,7 @@ export interface IZ b where
 impl IZ Int where
   szK s k = k + 7
 
-export viaZ : Int -> Int -> Int
+export viaZ : IZ b => b -> Int -> Int
 viaZ x k = szK x k
 EOF
 cat > "$TMP/x1852_main.mdk" <<'EOF'
