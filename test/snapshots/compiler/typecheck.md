@@ -1,5 +1,5 @@
 # META
-source_lines=34502
+source_lines=34524
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -33457,8 +33457,30 @@ prependDiagOpt code sev help (Some msg) ds =
 -- FULL triple (schemes, errs, warns) as its payload so cmEntryCollect can keep the
 -- terminal module's OWN schemes/warns.  IMPORT-SCOPED seed, exactly like the others.
 cmEntryWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), (List (String, Scheme), List TcDiag, List TcDiag))
+-- ⚠️ `accAll ++ prog`, NOT bare `accAll` — this worker's impl universe includes THIS
+-- module, exactly as the emit driver's `elabWorker` (`elabModuleStamp mid seed accData
+-- (accAll ++ prog) prog`) has always built it.  `foldModules` never folds a module into
+-- its own `accAll` (see `checkModuleFullImpl`'s E5 note: "a caller that needs this
+-- module's own decls too must fold [prog] in itself"), and `checkBodyImpl`'s
+-- `groundUniverse` binding reads `implDecls` RAW on the Module arm — so passing bare
+-- `accAll` made `groundMultiParamObligations` ground a multi-param obligation against a
+-- universe with NONE of the module's own impls in it.  MEASURED, `medaka check` /
+-- `medaka build` on `test/engine_fixtures/return_only_param_dispatch.mdk` (a 1-module
+-- file: `interface Get c v` + `impl Get (Box a) a` + `main = println (get1 (Box 42))`):
+-- with bare `accAll` the return-only `v` never grounds, so the enclosing `Display v`
+-- rejects with `Ambiguous instance for `Display``; with `accAll ++ prog` it grounds to
+-- `Int` and the program checks, builds and prints `42`, as it does on the Flat arm and
+-- on `main`.  This was invisible until E-1 (#1115) routed the no-import front door
+-- through `checkModulesEntryFull` — the 1-module graph is the case where `accAll` is
+-- still its initial value and the omission is total.
+-- Cost: the concat mirrors `elabWorker`'s exactly (growing accumulator on the RIGHT, so
+-- O(|prog|) per module), and this driver is not the perf-gated `checkModules` path.
+-- ⚠️ MIRROR NOT CHANGED: `cmDiagsWorker` (checkModulesDiags, the `analyzeProject`
+-- multi-module path) passes bare `accAll` too and has the same hole — but only for a
+-- module's OWN impls in a 2+-module graph, which is pre-existing on `main` and not this
+-- regression; see the F18 report.
 cmEntryWorker mid seed accData accAll prog =
-  let (schemes, errs, warns) = checkModuleFullDiags mid seed accData accAll prog
+  let (schemes, errs, warns) = checkModuleFullDiags mid seed accData (accAll ++ prog) prog
   (schemes, (schemes, errs, warns))
 
 -- collect: the ENTRY report keeps the ENTRY (last/terminal) module's SCHEMES and
@@ -39920,7 +39942,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "prependDiagOpt" (PWild PWild PWild (PCon "None") (PVar "ds")) (EVar "ds"))
 (DFunDef false "prependDiagOpt" ((PVar "code") (PVar "sev") (PVar "help") (PCon "Some" (PVar "msg")) (PVar "ds")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "None")) (EVar "msg")) (EVar "help")) (EVar "None")) (EVar "ds")))
 (DTypeSig false "cmEntryWorker" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))))
-(DFunDef false "cmEntryWorker" ((PVar "mid") (PVar "seed") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullDiags") (EVar "mid")) (EVar "seed")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoExpr (ETuple (EVar "schemes") (ETuple (EVar "schemes") (EVar "errs") (EVar "warns"))))))
+(DFunDef false "cmEntryWorker" ((PVar "mid") (PVar "seed") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullDiags") (EVar "mid")) (EVar "seed")) (EVar "accData")) (EBinOp "++" (EVar "accAll") (EVar "prog"))) (EVar "prog"))) (DoExpr (ETuple (EVar "schemes") (ETuple (EVar "schemes") (EVar "errs") (EVar "warns"))))))
 (DTypeSig false "cmEntryCollect" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))) (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
 (DFunDef false "cmEntryCollect" ((PVar "isLast") (PVar "_mid") (PVar "extra") (PVar "rest")) (EBlock (DoLet false false (PTuple (PVar "s") (PVar "e") (PVar "w")) (EVar "extra")) (DoLet false false (PTuple (PVar "eS") (PVar "eE") (PVar "eW")) (EVar "rest")) (DoExpr (EIf (EVar "isLast") (ETuple (EVar "s") (EBinOp "++" (EVar "e") (EVar "eE")) (EVar "w")) (ETuple (EVar "eS") (EBinOp "++" (EVar "e") (EVar "eE")) (EVar "eW"))))))
 (DTypeSig true "checkModulesEntryReport" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
@@ -45442,7 +45464,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "prependDiagOpt" (PWild PWild PWild (PCon "None") (PVar "ds")) (EVar "ds"))
 (DFunDef false "prependDiagOpt" ((PVar "code") (PVar "sev") (PVar "help") (PCon "Some" (PVar "msg")) (PVar "ds")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "None")) (EVar "msg")) (EVar "help")) (EVar "None")) (EVar "ds")))
 (DTypeSig false "cmEntryWorker" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))))
-(DFunDef false "cmEntryWorker" ((PVar "mid") (PVar "seed") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullDiags") (EVar "mid")) (EVar "seed")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoExpr (ETuple (EVar "schemes") (ETuple (EVar "schemes") (EVar "errs") (EVar "warns"))))))
+(DFunDef false "cmEntryWorker" ((PVar "mid") (PVar "seed") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullDiags") (EVar "mid")) (EVar "seed")) (EVar "accData")) (EBinOp "++" (EVar "accAll") (EVar "prog"))) (EVar "prog"))) (DoExpr (ETuple (EVar "schemes") (ETuple (EVar "schemes") (EVar "errs") (EVar "warns"))))))
 (DTypeSig false "cmEntryCollect" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))) (TyFun (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
 (DFunDef false "cmEntryCollect" ((PVar "isLast") (PVar "_mid") (PVar "extra") (PVar "rest")) (EBlock (DoLet false false (PTuple (PVar "s") (PVar "e") (PVar "w")) (EVar "extra")) (DoLet false false (PTuple (PVar "eS") (PVar "eE") (PVar "eW")) (EVar "rest")) (DoExpr (EIf (EVar "isLast") (ETuple (EVar "s") (EBinOp "++" (EVar "e") (EVar "eE")) (EVar "w")) (ETuple (EVar "eS") (EBinOp "++" (EVar "e") (EVar "eE")) (EVar "eW"))))))
 (DTypeSig true "checkModulesEntryReport" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
