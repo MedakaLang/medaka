@@ -1,0 +1,39 @@
+-- #1052 / #1986 rung 2 — THE COULD-STILL-PASS SIDE OF THE PIN.
+--
+-- The sibling fixture reject_866_local_dict_forward_merges_rigid_vars pins the
+-- REJECTION: a dict-forwarding `where`-local used at TWO declared, independent
+-- signature variables merges them, and typecheck now says so with a located
+-- T-LOCAL-CONSTRAINED-MONO naming the binding, both variables, the interface, and
+-- the hoist-to-top-level remedy.
+--
+-- This fixture pins the boundary that rejection must NOT cross. `d` is pinned here
+-- too — its body calls `sizeOf`, so it forwards a dictionary and is not generalized
+-- — but every use is at the SAME type, so nothing merges and the program is legal.
+-- A narrowing that rejected this would have made the pin useless: it would outlaw
+-- every constrained `where` helper, not just the ones that merge two variables.
+--
+-- Ground truth, derived from the source, NOT captured: `useTwo (Box 0) (Box 1)`
+-- calls `sizeOf` twice at Box (1 + 1 = 2); `useTwo Tag Tag` twice at Tag
+-- (2 + 2 = 4); 2 + 4 = 6. The value also discriminates WHICH impl each call
+-- reached: a single shared route would print 4 (all Box) or 8 (all Tag).
+--
+-- Verdict: ACCEPT.
+interface Sized a where
+  sizeOf : a -> Int
+
+data Box = Box Int
+
+impl Sized Box where
+  sizeOf _ = 1
+
+data Tag = Tag
+
+impl Sized Tag where
+  sizeOf _ = 2
+
+useTwo : Sized a => a -> a -> Int
+useTwo x y = d x + d y
+  where
+    d v = sizeOf v
+
+main = println (useTwo (Box 0) (Box 1) + useTwo Tag Tag)

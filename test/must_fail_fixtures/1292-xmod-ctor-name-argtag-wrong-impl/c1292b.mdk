@@ -1,9 +1,0 @@
--- The `Box` `main.mdk` actually imports and constructs.  Same spelling as c1292a's,
--- same arity, different type — so the VALUE is indistinguishable and only the TYPE
--- TAG decides which impl runs.
-import c1292i.{Label, label}
-
-public export data TB = Box Int
-
-export impl Label TB where
-  label _ = "bmod"
