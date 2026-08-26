@@ -179,7 +179,7 @@ import ir.core_ir_lower.{
 import ir.core_ir_sexp.{cprogramToSexp}
 import types.annotate.{annotateProgram}
 import types.typecheck.{
-  checkToLinesWithRuntime,
+  checkOneToLinesWithRuntime,
   setCoherenceUserDecls,
   elaborateOne,
   elaborateDict,
@@ -498,11 +498,14 @@ typesOf : List Decl -> List Decl -> (String, Bool)
 typesOf runtimeDecls d =
   let _ = setCoherenceUserDecls d
   let _ = resetTypeErrorsSticky ()
-  let text = checkToLinesWithRuntime runtimeDecls [] d
+  -- coreDecls is always [] here (prelude-free), so there is no prelude-scheme
+  -- to lose crossing to the Module arm's checkOneToLinesWithRuntime -- the
+  -- rendered set is `d`'s own schemes either way (S-migrate-tool-consumers-remainder).
+  let text = checkOneToLinesWithRuntime runtimeDecls [] d
   (text, hadTypeErrors () || hadMatchWarnings ())
 
 -- `# TYPES_USER` — the PRELUDE-AWARE user-only variant.  `# TYPES` above is
--- prelude-FREE (`checkToLinesWithRuntime runtimeDecls [] d`): correct for the minimal
+-- prelude-FREE (`checkOneToLinesWithRuntime runtimeDecls [] d`): correct for the minimal
 -- typecheck_fixtures (which test errors *without* a prelude in scope), but WRONG for a
 -- real program that references prelude types — every prelude reference would be an
 -- unbound-name error.  This variant typechecks `coreDecls ++ d` (prelude in scope) so
@@ -522,7 +525,7 @@ typesOf runtimeDecls d =
 -- [[project_81_prelude_aware_types_design]] — the filter lives here because
 -- compiler/types/typecheck.mdk is LOCKED by ws:typecheck.
 --
--- Diagnostic prose is NEVER filtered: on a type error `checkToLinesWithRuntime` returns
+-- Diagnostic prose is NEVER filtered: on a type error `checkOneToLinesWithRuntime` returns
 -- `TYPE ERROR:` lines instead of a scheme dump (whole run bypasses the filter); and match
 -- warnings are appended to the scheme dump as `Warning:` prose, kept by `isDiagProse`
 -- regardless of any ` : ` a future message might contain.  Both must survive so the
@@ -531,7 +534,14 @@ typesUserOf : List Decl -> List Decl -> List Decl -> (String, Bool)
 typesUserOf runtimeDecls coreDecls d =
   let _ = setCoherenceUserDecls d
   let _ = resetTypeErrorsSticky ()
-  let full = checkToLinesWithRuntime runtimeDecls coreDecls d
+  -- checkOneToLinesWithRuntime (Module arm) already renders ONLY the target
+  -- module's own scheme lines (never coreDecls'), matching what the userNames
+  -- filter below used to have to strip out of the Flat arm's full coreProg++d
+  -- dump -- the opposite direction from lsp.mdk's completion gap (which wanted
+  -- MORE than Module returns); here Module already gives what's wanted, so the
+  -- filter is kept as a harmless belt-and-suspenders no-op rather than removed
+  -- (S-migrate-tool-consumers-remainder).
+  let full = checkOneToLinesWithRuntime runtimeDecls coreDecls d
   let diag = hadTypeErrors () || hadMatchWarnings ()
   let userNames = funNamesOf d ++ externNamesOf d
   -- Filter the SUCCESS path (scheme dump) only; a diagnostic run has no schemes to trim.

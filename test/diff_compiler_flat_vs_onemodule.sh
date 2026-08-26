@@ -10,13 +10,30 @@
 #   checkProgramSeededSplit → checkBodyImpl seed (Flat coreProg) userProg      ⇒ FLAT
 #   checkModuleFullImpl     → checkBodyImpl seedVars (Module mid …) prog       ⇒ MODULE
 #
-# FLAT is not a probe-only path. `medaka check <no-import file>` reaches it (via
-# driver/diagnostics.mdk `analyzeLocatedG` → `analyzeFrom` → `checkProgramDiags`,
-# which is the single-module arm of medaka_cli.mdk's `checkRoute`), and so do
-# `medaka lsp`, `medaka repl`, `medaka doc`, `medaka lint`'s policy pass, `medaka
-# snapshot`, and the `llvm_emit_typed_main` / `wasm_emit_typed_main` emit entries
-# via `elaborateDict`. MODULE is reached by every import-bearing `check`, and by
-# `run` / `build` / `test` — including on a ONE-module program, through the
+# ⚠️ WHICH CONSUMERS REACH FLAT — RE-DERIVED 2026-08-26, and NOT what this header
+# used to say. Through the E-1 (#1115) migration sprint this block claimed `medaka
+# check`, `lsp`, `repl`, `doc`, `lint`'s policy pass and `snapshot` all reached FLAT.
+# Five of those six became false in one sprint (S-migrate-check-route moved `check`'s
+# front door onto `checkOneDiags`; S-migrate-tool-consumers[-remainder] moved `doc`,
+# `repl`, `snapshot`, `check`; `lint` never imported the wrapper family at all), and
+# nothing noticed — because the gate's own FLAT rows were reached through `medaka
+# check`, so they migrated out of the FLAT arm silently along with the verb. That is
+# fixed below: the FLAT rows now run a COMMITTED FLAT PROBE
+# (`compiler/entries/check_flat_diags_main.mdk` → `test/bin/check_flat_diags_main`),
+# never a CLI verb. Do not re-point them at a verb.
+#
+# The AUTHORITATIVE current consumer list is test/CHECK-WRAPPER-CALLERS.txt (gated by
+# test/diff_compiler_check_wrapper_callers.sh), not this comment. As of 2026-08-26 the
+# Flat-family importers there are: tools/lsp.mdk, tools/check_policy.mdk (parked on
+# Flat deliberately — `--fn <name>` is arbitrary user input looked up directly in the
+# effect table, so it needs prelude schemes), entries/typecheck_main.mdk,
+# entries/check_match_main.mdk, entries/playground_main.mdk,
+# entries/origin_agreement_main.mdk, entries/selfproc_tc_probe.mdk, plus this gate's
+# own entries/check_flat_diags_main.mdk. The `llvm_emit_typed_main` /
+# `wasm_emit_typed_main` emit entries reach Flat via `elaborateDict`, outside that
+# wrapper family. MODULE is reached by every import-bearing `check`, by `medaka
+# check` on a no-import file since S-migrate-check-route, by `doc`/`repl`/`snapshot`,
+# and by `run` / `build` / `test` — including on a ONE-module program, through the
 # `elaborateOne` / `elaborateModules` 1-module wrapper.
 #
 # The FLAT arm builds its instance universe with `buildKeyTable fullUniverse` /
@@ -163,6 +180,16 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MEDAKA="${MEDAKA:-$ROOT/medaka}"
 [ -x "$MEDAKA" ] || { echo "build native first: make medaka (missing $MEDAKA)"; exit 2; }
 
+# The FLAT arm's own probe — see the header. `$MEDAKA check` is the MODULE arm now,
+# so it may only serve the MODULE rows below.
+FLAT_BIN="$ROOT/test/bin/check_flat_diags_main"
+if [ ! -x "$FLAT_BIN" ]; then
+  echo "build oracles first: FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one check_flat_diags_main (missing $FLAT_BIN)"
+  exit 2
+fi
+RTFILE="$ROOT/stdlib/runtime.mdk"
+COREFILE="$ROOT/stdlib/core.mdk"
+
 # Portable timeout: `timeout` is coreutils and does NOT exist on macOS, and every
 # script in this tree must run on both. Same shim diff_compiler_engines.sh uses.
 # ⚠️ NOT a drop-in for `timeout`: the child is killed by SIGALRM, so the shell
@@ -252,6 +279,48 @@ printf '%s\n\npublic export data Other = Other Int\n\nmain = println (sizeOf (Ot
 printf '%s\n\n%s\n\nmain = println (sizeOf (make 3))\n' "$SIZER_MK" "$SIZER_MK_OTHER" > "$WORK/c5/p5.mdk"
 printf '%s\n\nmain = println (sizeOf (make 3))\n' "$SIZER_MK" > "$WORK/c5/p6.mdk"
 
+# ── case iface_default_requires_closure (S-flat-reacher-census finding) ──────
+# A superclass-default-method shape: `Fancy t requires Basic t` with a default
+# body for `describe` that calls the superclass method `label`.  The default
+# body's use of `label` is entailed by Fancy's OWN `requires Basic t` — no
+# method-level `=>` needed.  Filed as #2024 (false-reject-split-default-method).
+#
+# DRAINED 2026-08-26: fixed by F1-fix-superdecls
+# (`2324072983a84ab06cf41e98176d37bc98635925`), the same `superDecls` binding
+# fix that drained #1457 at multi-module scale — `Module _ _ implDecls =>
+# implDecls` never contained the declaring module's OWN decls (`foldModules`
+# only grows the accumulator for LATER modules), so `iface.mdk`'s own `Fancy
+# requires Basic` clause was invisible to its own default-method rigidity
+# check. Now `prog ++ implDecls`. Re-verified directly (fresh gate run, this
+# worktree, post-fix): both FLAT and MODULE arms ACCEPT with the correct
+# runtime value `fancy:box7`. Both rows below are PIN, not CHAR — see #2024
+# for the closing comment.
+#
+# S-migrate-check-route (E-1 #1115): `medaka check` on a genuinely no-import file
+# now ALSO routes through `checkOneDiags` (the Module-arm one-module wrapper), not
+# the FLAT arm's own `checkProgramDiags` — so the `flat` row below measures the
+# SAME code path the `module` row does, not a distinct FLAT-arm answer. Both
+# rows agree because both are correct, not because the visibility change
+# happened to make a defect converge.
+IFACE_DEFAULT_DECLS='public export data Box = Box Int
+
+export interface Basic t where
+  label : t -> String
+
+export interface Fancy t requires Basic t where
+  describe : t -> String
+  describe x = "fancy:\{label x}"'
+IFACE_DEFAULT_IMPL='export impl Basic Box where
+  label (Box n) = "box\{n}"
+
+export impl Fancy Box where'
+IFACE_DEFAULT_MAIN='main = println (describe (Box 7))'
+mkdir -p "$WORK/c6f" "$WORK/c6m"
+printf '%s\n\n%s\n\n%s\n' "$IFACE_DEFAULT_DECLS" "$IFACE_DEFAULT_IMPL" "$IFACE_DEFAULT_MAIN" > "$WORK/c6f/flat.mdk"
+printf '%s\n' "$IFACE_DEFAULT_DECLS" > "$WORK/c6m/iface.mdk"
+printf 'import iface.{Box, Basic, Fancy, label, describe}\n\n%s\n\n%s\n' \
+  "$IFACE_DEFAULT_IMPL" "$IFACE_DEFAULT_MAIN" > "$WORK/c6m/main.mdk"
+
 # ── the rows ──────────────────────────────────────────────────────────────────
 # case | label | path | arm | mode | correct | today | code | value
 #   mode PIN  : `correct` is asserted; `today` is ignored (written as the same).
@@ -260,6 +329,11 @@ printf '%s\n\nmain = println (sizeOf (make 3))\n' "$SIZER_MK" > "$WORK/c5/p6.mdk
 #               is named in the DRAIN NOTICE.
 #   value     : expected stdout of `medaka run` when the verdict is ACCEPT ('-'
 #               when the program is expected to be rejected).
+#   issue     : (10th column, optional) per-row issue handle for the DRAIN
+#               NOTICE / "still live" text — defaults to $CHAR_ISSUE when a row
+#               omits it (every pre-existing row cites #1564; a row added later
+#               for a DIFFERENT known defect names its own handle instead of
+#               overloading #1564's).
 ROWS="
 cond_impl_third_module|flat_nest_first|c1fa/flat.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|wrap(int)
 cond_impl_third_module|flat_impl_first|c1fb/flat.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|wrap(int)
@@ -274,6 +348,8 @@ user_iface_dispatch|p1_concrete_hit|c4/p1.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|7
 user_iface_dispatch|p3_no_impl|c4/p3.mdk|FLAT|PIN|REJECT|REJECT|T-NO-IMPL|-
 user_iface_undetermined|p5_two_impls|c5/p5.mdk|FLAT|PIN|REJECT|REJECT|T-AMBIGUOUS-INSTANCE|-
 user_iface_undetermined|p6_one_impl|c5/p6.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|3
+iface_default_requires_closure|flat|c6f/flat.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|fancy:box7
+iface_default_requires_closure|module|c6m/main.mdk|MODULE|PIN|ACCEPT|ACCEPT|-|fancy:box7
 "
 CHAR_ISSUE=1564
 
@@ -301,6 +377,8 @@ for row in $ROWS; do
   today="$(printf '%s' "$row" | cut -d'|' -f7)"
   wantcode="$(printf '%s' "$row" | cut -d'|' -f8)"
   wantval="$(printf '%s' "$row" | cut -d'|' -f9)"
+  rowissue="$(printf '%s' "$row" | cut -d'|' -f10)"
+  [ -n "$rowissue" ] || rowissue="$CHAR_ISSUE"
   f="$WORK/$rel"
   checked=$((checked + 1))
 
@@ -315,20 +393,35 @@ for row in $ROWS; do
   #     first draft of this gate did exactly that and went red on all six accepting
   #     rows the moment the binary lagged the tree by one comment edit — a build
   #     freshness artefact masquerading as a semantic finding (cf. #1421).
-  run_t "$LIMIT" "$MEDAKA" check "$f" > "$WORK/.chk" 2> "$WORK/.chkerr"; cec=$?
-  case "$cec" in
-    0) verdict=ACCEPT ;;
-    1) verdict=REJECT ;;
-    *) verdict="EXIT$cec" ;;
-  esac
-
   gotcode='-'
-  if [ "$verdict" = REJECT ]; then
-    # The stable handle is the JSON `code`, not the message prose (which embeds a
-    # rendered type and a remedy sentence that may legitimately be reworded).
-    run_t "$LIMIT" "$MEDAKA" check --json "$f" > "$WORK/.json" 2> "$WORK/.jsonerr"
-    gotcode="$(tr ',' '\n' < "$WORK/.json" | grep '"code"' | head -1 | sed 's/.*"code":"//; s/".*//')"
-    [ -n "$gotcode" ] || gotcode='!!NO-CODE'
+  if [ "$arm" = FLAT ]; then
+    # FLAT rows: the committed Flat probe, NOT a CLI verb (see the header). It
+    # prints the verdict on line 1 and the first error's code (or `-`) on line 2,
+    # the same two-line shape the ONE arm's probe uses.
+    fout="$(run_t "$LIMIT" "$FLAT_BIN" "$RTFILE" "$COREFILE" "$f" 2>"$WORK/.flaterr")"
+    verdict="$(printf '%s\n' "$fout" | sed -n '1p')"
+    gotcode="$(printf '%s\n' "$fout" | sed -n '2p')"
+    case "$verdict" in
+      ACCEPT|REJECT) ;;
+      *) verdict="PROBE-BAD[$verdict]" ;;
+    esac
+    [ "$verdict" = REJECT ] || gotcode='-'
+    [ "$verdict" != REJECT ] || [ -n "$gotcode" ] || gotcode='!!NO-CODE'
+  else
+    run_t "$LIMIT" "$MEDAKA" check "$f" > "$WORK/.chk" 2> "$WORK/.chkerr"; cec=$?
+    case "$cec" in
+      0) verdict=ACCEPT ;;
+      1) verdict=REJECT ;;
+      *) verdict="EXIT$cec" ;;
+    esac
+
+    if [ "$verdict" = REJECT ]; then
+      # The stable handle is the JSON `code`, not the message prose (which embeds a
+      # rendered type and a remedy sentence that may legitimately be reworded).
+      run_t "$LIMIT" "$MEDAKA" check --json "$f" > "$WORK/.json" 2> "$WORK/.jsonerr"
+      gotcode="$(tr ',' '\n' < "$WORK/.json" | grep '"code"' | head -1 | sed 's/.*"code":"//; s/".*//')"
+      [ -n "$gotcode" ] || gotcode='!!NO-CODE'
+    fi
   fi
 
   gotval='-'
@@ -360,7 +453,7 @@ for row in $ROWS; do
         note="FAIL: characterized as $today/$wantcode, got $today/$gotcode — a DIFFERENT defect, not the pinned one"
         fails=$((fails + 1))
       else
-        note="as characterized — issue #$CHAR_ISSUE still live on this row"
+        note="as characterized — issue #$rowissue still live on this row"
       fi
     elif [ "$verdict" = "$correct" ]; then
       # ⚠️ This message deliberately does NOT spell out the must-fail fixture's
@@ -371,7 +464,7 @@ for row in $ROWS; do
       # against, one axis over. diff_compiler_fixture_corpus_coverage.sh shares
       # the rule, so the edge would also let this gate wrongly certify that
       # corpus as covered. The header names the fixture; grep the issue number.
-      note="DRAIN NOTICE: this row now gives the CORRECT answer ($correct). Issue #$CHAR_ISSUE may be drained — re-derive it, and expect that issue's own must-fail pin (grep $CHAR_ISSUE under the must-fail fixture corpus) to go red: that suite owns the drain, this gate only reports it."
+      note="DRAIN NOTICE: this row now gives the CORRECT answer ($correct). Issue #$rowissue may be drained — re-derive it, and expect that issue's own must-fail pin (grep $rowissue under the must-fail fixture corpus) to go red: that suite owns the drain, this gate only reports it."
       drained=$((drained + 1))
     else
       note="FAIL: neither the correct answer ($correct) nor the characterized one ($today) — got $verdict"
@@ -392,7 +485,7 @@ unset IFS
 # True before AND after the #1564 fix; silent about WHETHER an arm accepts. This is
 # what catches an arm that accepts and miscompiles, which acceptance-agreement
 # would have graded green.
-for case in cond_impl_third_module all_visible no_impl_anywhere user_iface_dispatch user_iface_undetermined; do
+for case in cond_impl_third_module all_visible no_impl_anywhere user_iface_dispatch user_iface_undetermined iface_default_requires_closure; do
   # `grep -c` exits 1 on no match, so count through `wc -l` instead — a `|| echo 0`
   # fallback appends a SECOND line and the arithmetic below then reads "0\n0".
   n="$(grep "^$case=" "$VALFILE" | wc -l | tr -d ' ')"
@@ -406,6 +499,86 @@ for case in cond_impl_third_module all_visible no_impl_anywhere user_iface_dispa
     printf 'ok   [%s]: %s accepting arm(s), one value\n' "$case" "$n"
   fi
 done
+
+# ── THIRD ARM: the new scheme/diagnostic-tree one-module wrapper ─────────────
+# S-check-one-wrapper (E-1 #1115): `checkOneDiags` (compiler/types/typecheck.mdk)
+# is the Module-arm analogue of `elaborateOne` on the SCHEME/DIAGNOSTIC tree — it
+# has no CLI verb reaching it yet (this slice lands it unused), so it is exercised
+# here via a dedicated committed probe (`compiler/entries/check_one_diags_main.mdk`,
+# built as `test/bin/check_one_diags_main`). Unlike the MODULE arm's rows above,
+# this wrapper takes exactly ONE (rootId, prog) — no import graph — so it is graded
+# only against the FLAT arm's own SINGLE-FILE fixtures (the ones already written
+# into $WORK above), reusing their expected (verdict, code) columns rather than
+# introducing a second corpus. A genuinely single-file program has no cross-module
+# concept to diverge on (class (3)/(2) in the census don't apply — there is only
+# one module), so agreement with FLAT is the expected result on all 9 rows.
+#
+# 🚨 THE MEASURED EXCEPTION THIS BLOCK USED TO CARRY IS GONE, 2026-08-26.
+# `iface_default_requires_closure` used to diverge here even with no file split:
+# `checkModulesEntryFull`'s `foldModules` singleton clause called its worker with
+# `accAll` = the INITIAL value the caller passed (`coreDecls`), never `accAll ++
+# prog` — that append only happened for the RECURSIVE (2+-module) clause — so even a
+# true 1-module graph's own `implDecls` excluded the module's OWN decls and `Fancy`'s
+# `requires Basic t` default-method-rigidity closure could not see `Basic`. This row
+# was therefore expected REJECT/T-IMPL-TOO-SPECIFIC.
+#
+# PR #2023 (sprint/dispatch-must-not-guess, merged into main and resynced onto this
+# branch) drained it: the ONE arm now ACCEPTs, the FLAT arm ACCEPTs, the MODULE arm
+# ACCEPTs, and all three compute `fancy:box7`. The row below is set to the SPEC
+# answer (ACCEPT) — derived, not captured: the gate's own §"HOW THE EXPECTED VALUES
+# WERE DERIVED" reasoning always said ACCEPT was correct and REJECT was the defect.
+# The two CHAR rows above (`iface_default_requires_closure` FLAT/MODULE) have since
+# been re-derived and tightened to PIN/ACCEPT (2026-08-26, orchestrator, re-verified
+# by a fresh gate run) — #2024 closed as fixed by the same commit.
+#
+# So all 9 rows below now expect agreement with FLAT. Any row disagreeing is a
+# finding this gate's packet did not anticipate.
+ONE_BIN="$ROOT/test/bin/check_one_diags_main"
+if [ ! -x "$ONE_BIN" ]; then
+  echo "build oracles first: FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one check_one_diags_main (missing $ONE_BIN)"
+  exit 2
+fi
+
+ONE_ROWS="
+cond_impl_third_module|flat_nest_first|c1fa/flat.mdk|ACCEPT|-
+cond_impl_third_module|flat_impl_first|c1fb/flat.mdk|ACCEPT|-
+all_visible|flat|c2f/flat.mdk|ACCEPT|-
+no_impl_anywhere|flat|c3f/flat.mdk|REJECT|T-NO-IMPL
+user_iface_dispatch|p1_concrete_hit|c4/p1.mdk|ACCEPT|-
+user_iface_dispatch|p3_no_impl|c4/p3.mdk|REJECT|T-NO-IMPL
+user_iface_undetermined|p5_two_impls|c5/p5.mdk|REJECT|T-AMBIGUOUS-INSTANCE
+user_iface_undetermined|p6_one_impl|c5/p6.mdk|ACCEPT|-
+iface_default_requires_closure|flat|c6f/flat.mdk|ACCEPT|-
+"
+printf -- '--- ONE arm (checkOneDiags) vs the FLAT rows above -------------------------------------------------\n'
+printf '%-30s %-16s %-8s %s\n' CASE ROW VERDICT CODE
+IFS='
+'
+for row in $ONE_ROWS; do
+  [ -n "$row" ] || continue
+  case="$(printf '%s' "$row" | cut -d'|' -f1)"
+  label="$(printf '%s' "$row" | cut -d'|' -f2)"
+  rel="$(printf '%s' "$row" | cut -d'|' -f3)"
+  wantverdict="$(printf '%s' "$row" | cut -d'|' -f4)"
+  wantcode="$(printf '%s' "$row" | cut -d'|' -f5)"
+  f="$WORK/$rel"
+  checked=$((checked + 1))
+
+  out="$(run_t "$LIMIT" "$ONE_BIN" "$RTFILE" "$COREFILE" "$f" 2>"$WORK/.oneerr")"
+  gotverdict="$(printf '%s\n' "$out" | sed -n '1p')"
+  gotcode="$(printf '%s\n' "$out" | sed -n '2p')"
+
+  printf '%-30s %-16s %-8s %s\n' "$case" "$label" "$gotverdict" "$gotcode"
+
+  if [ "$gotverdict" != "$wantverdict" ]; then
+    printf '    FAIL: ONE arm diverges from FLAT — FLAT %s, ONE %s (case %s, row %s) — check the census (reports/S-flat-reacher-census.md) for whether this is a classified BEHAVIORAL branch before treating it as a bug\n' "$wantverdict" "$gotverdict" "$case" "$label"
+    fails=$((fails + 1))
+  elif [ "$gotcode" != "$wantcode" ]; then
+    printf '    FAIL: ONE arm agrees on verdict but not code — FLAT %s, ONE %s (case %s, row %s)\n' "$wantcode" "$gotcode" "$case" "$label"
+    fails=$((fails + 1))
+  fi
+done
+unset IFS
 
 # "this didn't run" must never look like "this passed".
 if [ "$checked" -eq 0 ]; then

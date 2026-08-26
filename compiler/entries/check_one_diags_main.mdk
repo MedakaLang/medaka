@@ -1,0 +1,42 @@
+-- Probe for S-check-one-wrapper (E-1 #1115): runs a SINGLE-file program through
+-- the new scheme/diagnostic-tree Module-arm one-module wrapper (`checkOneDiags`,
+-- compiler/types/typecheck.mdk) and prints its verdict plus the first error's
+-- diagnostic code, so test/diff_compiler_flat_vs_onemodule.sh's third arm can
+-- grade it against the FLAT arm's own pinned rows without any CLI verb routing
+-- through the new wrapper (nothing does yet — this slice lands it unused).
+--
+--   medaka run compiler/entries/check_one_diags_main.mdk <runtime.mdk> <core.mdk> <source.mdk>
+--
+-- prints exactly two lines: `ACCEPT` or `REJECT`, then the first error's code
+-- (or `-` on ACCEPT).  Single-file only (no import graph) — matches the shape of
+-- the FLAT arm's own corpus rows in the grader above.  `coreP` is the prelude
+-- (stdlib/core.mdk), passed SEPARATELY from the user program — exactly as
+-- `checkOneDiags`/`elaborateOne` expect (see their own header comments) — so
+-- prelude names like `println` resolve.
+
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.typecheck.{checkOneDiags, tcCode}
+
+main = match args ()
+  [runtimeP, coreP, targetP] => run runtimeP coreP targetP
+  _ => ePutStrLn "usage: medaka run compiler/entries/check_one_diags_main.mdk <runtime.mdk> <core.mdk> <file.mdk>"
+
+run : String -> String -> String -> <IO> Unit
+run runtimeP coreP targetP = match readFile runtimeP
+  Err e => ePutStrLn e
+  Ok rsrc => match readFile coreP
+    Err e => ePutStrLn e
+    Ok csrc => match readFile targetP
+      Err e => ePutStrLn e
+      Ok src =>
+        let desugared = desugar (parse src)
+        let coreDesugared = desugar (parse csrc)
+        let (errs, _warns) = checkOneDiags (desugar (parse rsrc)) coreDesugared ("probe", desugared)
+        match errs
+          [] =>
+            putStrLn "ACCEPT"
+            putStrLn "-"
+          e::_ =>
+            putStrLn "REJECT"
+            putStrLn (tcCode e)

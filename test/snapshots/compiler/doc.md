@@ -1,5 +1,5 @@
 # META
-source_lines=395
+source_lines=402
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -7,8 +7,9 @@ stages=DESUGAR,MARK
 -- A faithful port of lib/doc.ml (the OCaml oracle), byte-identical output.
 -- Harvests doc comments from the lexer's side-channel (collectComments),
 -- matches them to top-level PUBLIC declarations by source position, looks up
--- inferred types from the typechecker (checkProgramSchemesWithRuntime, the same
--- single-file path lsp.mdk uses), and renders Markdown.
+-- inferred types from the typechecker (checkOneScheme, the Module-arm
+-- single-module analogue of the single-file path lsp.mdk still uses), and
+-- renders Markdown.
 --
 -- Mirrors lib/doc.ml exactly:
 --   • comment_body / expand_comment / build_comment_tbl / find_doc_for_line
@@ -39,7 +40,7 @@ import frontend.ast.{
   LetBind(..),
 }
 import frontend.desugar.{desugar}
-import types.typecheck.{Scheme(..), ppScheme, checkProgramSchemesWithRuntime}
+import types.typecheck.{Scheme(..), ppScheme, checkOneScheme}
 import support.util.{joinWith, reverseL, escStr, stringTrim, splitNl}
 import support.path.{baseOf, chopExt}
 
@@ -384,25 +385,31 @@ runDoc runtimeSrc coreSrc src filename =
   let entries = extractEntries rawDecls positions schemes comments
   renderMarkdown moduleName entries
 
--- Inferred schemes via the single-file typecheck path (mirror lsp.docSchemes /
--- bin/main.ml: desugar prelude + user, checkProgramSchemesWithRuntime).  The
+-- Inferred schemes via the single-module typecheck path (mirror lsp.docSchemes /
+-- bin/main.ml: desugar prelude + user, checkOneScheme).  The
 -- typechecker reports errors in-band rather than raising; compiler
--- checkProgramSchemesWithRuntime still returns the schemes it inferred, so doc
--- gets inferred types for the names that DID typecheck (OCaml falls to [] on a
--- hard error — divergence only for files with type errors, which are not the
--- doc happy path).
+-- checkOneScheme still returns the schemes it inferred for the user's own
+-- declarations, so doc gets inferred types for the names that DID typecheck
+-- (OCaml falls to [] on a hard error — divergence only for files with type
+-- errors, which are not the doc happy path). Unlike lsp.mdk's completion
+-- consumer, this call site only ever looks up schemes BY NAME for names the
+-- caller already knows it declared (extractEntries/renderSig, never a full-
+-- environment enumeration) — checkOneScheme's Module-arm omission of prelude
+-- schemes (it never adds coreSchemes into the returned list) is therefore
+-- inert here (S-migrate-tool-consumers-remainder, per S-migrate-tool-consumers's
+-- lsp.mdk finding).
 docSchemesFor : String -> String -> List Decl -> List (String, Scheme)
 docSchemesFor runtimeSrc coreSrc rawUser =
   let runtimeDecls = desugar (fst (parseWithPositions runtimeSrc))
   let coreDecls = desugar (fst (parseWithPositions coreSrc))
   let userDecls = desugar rawUser
-  checkProgramSchemesWithRuntime runtimeDecls coreDecls userDecls
+  checkOneScheme runtimeDecls coreDecls ("__user__", userDecls)
 # DESUGAR
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "Constraint" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "Require" true) (mem "LetBind" true))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "Scheme" true) (mem "ppScheme" false) (mem "checkProgramSchemesWithRuntime" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "Scheme" true) (mem "ppScheme" false) (mem "checkOneScheme" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "stringTrim" false) (mem "splitNl" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false))))
 (DData Private "DocEntry" () ((variant "DocEntry" (ConPos (TyCon "String") (TyCon "String") (TyCon "String")))) ())
@@ -514,13 +521,13 @@ docSchemesFor runtimeSrc coreSrc rawUser =
 (DTypeSig true "runDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
 (DFunDef false "runDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename")) (EBlock (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PVar "rawDecls") (EApp (EVar "fst") (EVar "parsed"))) (DoLet false false (PVar "positions") (EApp (EVar "positionsDecls") (EApp (EVar "snd") (EVar "parsed")))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EVar "docSchemesFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "rawDecls"))) (DoLet false false (PVar "moduleName") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "filename")))) (DoLet false false (PVar "entries") (EApp (EApp (EApp (EApp (EVar "extractEntries") (EVar "rawDecls")) (EVar "positions")) (EVar "schemes")) (EVar "comments"))) (DoExpr (EApp (EApp (EVar "renderMarkdown") (EVar "moduleName")) (EVar "entries")))))
 (DTypeSig false "docSchemesFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
-(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "rawUser")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugar") (EApp (EVar "fst") (EApp (EVar "parseWithPositions") (EVar "runtimeSrc"))))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugar") (EApp (EVar "fst") (EApp (EVar "parseWithPositions") (EVar "coreSrc"))))) (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "rawUser"))) (DoExpr (EApp (EApp (EApp (EVar "checkProgramSchemesWithRuntime") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "userDecls")))))
+(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "rawUser")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugar") (EApp (EVar "fst") (EApp (EVar "parseWithPositions") (EVar "runtimeSrc"))))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugar") (EApp (EVar "fst") (EApp (EVar "parseWithPositions") (EVar "coreSrc"))))) (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "rawUser"))) (DoExpr (EApp (EApp (EApp (EVar "checkOneScheme") (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (ELit (LString "__user__")) (EVar "userDecls"))))))
 # MARK
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "Constraint" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "Require" true) (mem "LetBind" true))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "Scheme" true) (mem "ppScheme" false) (mem "checkProgramSchemesWithRuntime" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "Scheme" true) (mem "ppScheme" false) (mem "checkOneScheme" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "stringTrim" false) (mem "splitNl" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false))))
 (DData Private "DocEntry" () ((variant "DocEntry" (ConPos (TyCon "String") (TyCon "String") (TyCon "String")))) ())
@@ -632,4 +639,4 @@ docSchemesFor runtimeSrc coreSrc rawUser =
 (DTypeSig true "runDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
 (DFunDef false "runDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename")) (EBlock (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PVar "rawDecls") (EApp (EVar "fst") (EVar "parsed"))) (DoLet false false (PVar "positions") (EApp (EVar "positionsDecls") (EApp (EVar "snd") (EVar "parsed")))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EVar "docSchemesFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "rawDecls"))) (DoLet false false (PVar "moduleName") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "filename")))) (DoLet false false (PVar "entries") (EApp (EApp (EApp (EApp (EVar "extractEntries") (EVar "rawDecls")) (EVar "positions")) (EVar "schemes")) (EVar "comments"))) (DoExpr (EApp (EApp (EVar "renderMarkdown") (EVar "moduleName")) (EVar "entries")))))
 (DTypeSig false "docSchemesFor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
-(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "rawUser")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugar") (EApp (EVar "fst") (EApp (EVar "parseWithPositions") (EVar "runtimeSrc"))))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugar") (EApp (EVar "fst") (EApp (EVar "parseWithPositions") (EVar "coreSrc"))))) (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "rawUser"))) (DoExpr (EApp (EApp (EApp (EVar "checkProgramSchemesWithRuntime") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "userDecls")))))
+(DFunDef false "docSchemesFor" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "rawUser")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugar") (EApp (EVar "fst") (EApp (EVar "parseWithPositions") (EVar "runtimeSrc"))))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugar") (EApp (EVar "fst") (EApp (EVar "parseWithPositions") (EVar "coreSrc"))))) (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "rawUser"))) (DoExpr (EApp (EApp (EApp (EVar "checkOneScheme") (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (ELit (LString "__user__")) (EVar "userDecls"))))))

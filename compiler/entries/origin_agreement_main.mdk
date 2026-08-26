@@ -24,9 +24,19 @@
 -- exists to test and reports green.  So this drives the REAL entry points, the way
 -- the real drivers drive them, and reads back what THEY produced:
 --
---   flat    checkProgramSchemesWithRuntime   `medaka check` on a no-import file, the
---                                            LSP, `doc`, `repl`, the playground —
+--   flat    checkProgramSchemesWithRuntime   the LSP's completion path and the
+--                                            playground's hover/completion path
+--                                            (E-1 #1115 parked both on Flat — a
+--                                            Module-arm gap in the returned scheme
+--                                            list's completeness, and separately a
+--                                            state-leak across repeated calls found
+--                                            on two more Flat-reaching entries,
+--                                            S-migrate-tool-consumers-remainder) —
 --                                            one buffer at a time, prelude separate.
+--                                            `medaka check`, `doc`, and `repl` moved
+--                                            OFF this tap during E-1 (S-migrate-
+--                                            check-route / S-migrate-tool-consumers
+--                                            [-remainder]) — they no longer fire it.
 --                                            Its result is SCHEMES, i.e. `Mono`,
 --                                            not the stamped decl trees — so it is
 --                                            read through resolve.mdk's agreement
@@ -257,7 +267,9 @@ report stdlibDir runtimeDecls coreDecls triples =
 
 -- ── the three arms ───────────────────────────────────────────────────────────
 
--- FLAT: one buffer at a time, exactly as the LSP / `doc` / `check` drivers call it.
+-- FLAT: one buffer at a time, exactly as the LSP / playground's completion path and
+-- the still-Flat `typecheck_main`/`check_batch` entries call it (`doc`/`repl`/`check`
+-- moved off this tap during E-1 — see the header note above).
 -- Returns (how many times the tap fired, claims).  The segment count is the
 -- anti-vacuity signal for the TAP ITSELF: if a future refactor stops routing the
 -- flat drivers through `checkProgramSeededSplit`, this goes to 0 and the gate reds —

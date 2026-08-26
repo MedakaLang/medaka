@@ -11770,7 +11770,7 @@ seedBuiltinClasses (Flat coreProg) prog =
 -- `TkIdent` impls: a false REJECT of the prelude, which is the #1112 prototype's
 -- 634-diagnostic signature.
 seedBuiltinClasses (Module mid _ _) prog =
-  if mid == "core" || mid == "" then
+  if isPreludeMid mid then
     crossRun.value.builtinClassesRef := builtinClassesOf prog
   else
     ()
@@ -18117,7 +18117,14 @@ cohClassify : CohSweep -> CohImpl -> List Mono -> List Mono -> String -> String 
 cohClassify sweep e1 xs ys mid1 mid2 (CohScan hard soft)
   | cohStrictlyMoreSpecific xs ys = CohScan hard soft
   | cohStrictlyMoreSpecific ys xs = CohScan hard soft
-  | cohMutuallySubsumes xs ys = CohScan (cohKeepFirst hard (Some (cohHardMsg e1 xs ys mid1 mid2, cohImplLoc e1))) soft
+  | cohMutuallySubsumes xs ys && cohHardInScope sweep mid1 mid2 =
+    CohScan (cohKeepFirst hard (Some (cohHardMsg e1 xs ys mid1 mid2, cohImplLoc e1))) soft
+  -- A mutually-subsuming pair the sweep does NOT own contributes nothing at all --
+  -- it must not fall through to the soft arm below, because HARD and SOFT are
+  -- disjoint classes (mutual subsumption is the exact complement of
+  -- ⊑-incomparability here), and reporting it as `W-INCOMPARABLE-IMPLS`
+  -- would be a wrong classification, not a quieter one.
+  | cohMutuallySubsumes xs ys = CohScan hard soft
   | not (cohSoftInScope sweep mid1 mid2) = CohScan hard soft
   | otherwise = CohScan hard (cohKeepFirst soft (Some (cohIncomparableMsg (cohImplIfaceName e1) xs ys mid1 mid2, cohImplLoc e1)))
 
@@ -18162,6 +18169,45 @@ cohSoftInScope : CohSweep -> String -> String -> Bool
 cohSoftInScope CohSweepOwn _ _ = True
 cohSoftInScope CohSweepGlobal "" "" = True
 cohSoftInScope CohSweepGlobal mid1 mid2 = cohIsCrossModule mid1 mid2
+
+-- Which sweep OWNS a HARD (mutually-subsuming) pair.  #1449 / F8: the SAME rule as
+-- `cohSoftInScope`, and it is a delegation rather than a copy so the two classes can
+-- never drift apart silently.
+--
+-- 🚨 THIS IS THE NARROWING `cohSoftInScope`'s header DECLINED TO MAKE, now made
+-- deliberately.  That header said, of the hard class: "The HARD class double-reports
+-- the same way, and that is PRE-EXISTING … so narrowing it here would be an unrelated
+-- behaviour change riding this one, and one that moves error goldens."  It is no
+-- longer unrelated: the double report IS #1449's shape, and it is user-visible on the
+-- most ordinary program there is.  Measured before this change, on a single file with
+-- two `impl Foo Int`, `medaka check --json` emitted the identical
+-- `T-CONFLICTING-IMPL` message TWICE — once with the declaration's real span (from the
+-- per-module sweep, `checkCoherence` / `CohSweepOwn`) and once span-less (from this
+-- whole-graph sweep, prepended by `checkModulesEntryFull` / `checkModulesDiags`).  An
+-- IMPORT-BEARING two-module program whose overlap is entry-module-local double-reported
+-- identically, so this was never 1-module-specific and never new to E-1 (#1115): the
+-- prepend has been in `checkModulesEntryFull` since 2026-08-01 (`git log -S
+-- 'prependDiagOpt "T-CONFLICTING-IMPL" 1 None hard errs'`).
+--
+-- ⚠️ NOT loud→silent, and here is why that is a claim and not a hope.  The pair this
+-- now declines is INTRA-module, and the per-module sweep's population
+-- (`cohRowsOwnedBy cur hasPrelude`) contains every one of that module's own rows by
+-- construction, with `foldModules` running the worker for EVERY module in the graph.
+-- So the union of the per-module sweeps already covers every intra-module pair the
+-- whole-graph sweep could see, WITH a span, which is strictly the better diagnostic.
+-- The whole-graph sweep's unique contribution -- the pair that SPANS two modules, which
+-- no per-module sweep can see -- is exactly what this predicate keeps.  Control
+-- measured across the change: two modules each declaring `impl Foo Int` for a third
+-- module's interface still reports `Conflicting `impl Foo`. Defined in amod and main`,
+-- once.
+--
+-- The one residual hole is `runFinalChecks`' documented `-1` ordinal sentinel, at which
+-- `checkCoherence` sweeps no rows: an intra-module hard pair would then be reported by
+-- NEITHER sweep.  That path is unreachable today and `ordinalSentinelGuard` already
+-- pushes a loud `T-INTERNAL-ORDINAL` error when it is taken, so the failure announces
+-- itself rather than accepting silently.
+cohHardInScope : CohSweep -> String -> String -> Bool
+cohHardInScope sweep mid1 mid2 = cohSoftInScope sweep mid1 mid2
 
 -- each head matches the other, i.e. they are α-equal up to renaming (`cohSubsumes`
 -- is one-sided matching, so mutual matching means each is an instance of the other).
@@ -23676,12 +23722,23 @@ checkBodyImpl seed mode prog0 =
   let groundUniverse = match mode
     Flat _ => prog
     Module _ _ implDecls => implDecls
-  -- (#6) superDeclsRef: unified body OWNS it — Flat = coreProg ++ userProg, Module =
-  -- implDecls.  On the emit path elabModuleStamp already sets the same implDecls; on the
-  -- multi-module CHECK path this closes the latent stale/empty-ref gap (behavior change).
+  -- (#6, #1457) superDeclsRef: unified body OWNS it — Flat = coreProg ++ userProg, Module =
+  -- `prog ++ implDecls`.  [implDecls] is core + every EARLIER module ONLY (foldModules never
+  -- folds a module into its own universe), so binding it alone EXCLUDED this module's own
+  -- `interface F t requires L t` decl from ifaceSelfAndSupers/survivorObligationEntailed and
+  -- false-rejected every legal superclass-default body (#1457).  Folding `prog` in matches the
+  -- Flat arm, whose universe is the whole program, self included.
+  -- ⚠️ Operand order is load-bearing, BOTH ways:
+  --   * cost — Medaka is strict, so `xs ++ ys` copies xs and shares ys.  [implDecls] is the
+  --     growing accumulator, so it MUST be the right operand: `prog ++ implDecls` is O(|prog|)
+  --     per module = O(N) overall, whereas `implDecls ++ prog` would resurrect #154 PR-C's
+  --     O(modules²) per-module concat.
+  --   * meaning — ifaceSupersOf/ifaceSelfAndSupers is a FIRST-MATCH scan, so `prog` first makes
+  --     THIS module's own same-spelled interface decl outrank an earlier module's, which is the
+  --     precedence the Flat arm already has.
   let superDecls = match mode
     Flat _ => prog
-    Module _ _ implDecls => implDecls
+    Module _ _ implDecls => prog ++ implDecls
   driverState.value.superDeclsRef := superDecls
   -- (BREAK #3) effect domains: FLAT populates inline; MODULE relies on the driver
   -- preamble (checkModulesPreamble / elaborateModules) populating ONCE over the whole
@@ -23706,7 +23763,10 @@ checkBodyImpl seed mode prog0 =
     -- `moduleImplUniv` just below for what was measured and how it was shown
     -- fail-capable).  `appendUniverseAccums` no longer grows an impl universe either,
     -- so there is nothing left here for `IE` to be compared against.
-    Module _ _ _ => appendUniverseAccums prog0
+    -- #1499 clause (b) / S1-PRELUDE (a): `mid` is BOUND here now — `appendUniverseAccums`
+    -- must know whether this pass is the PRELUDE's, because the prelude contributes to
+    -- S1's INTERFACE operand but NOT to its STANDALONE one.  See its header.
+    Module mid _ _ => appendUniverseAccums mid prog0
   -- 🚨 #1112 A-3.4 PR2 — THE `IE` READER FLIP.  THIS IS THE ONE PRODUCTION READ OF
   -- STAGE K's `IE`, and it is what makes the registry real rather than shelf-ware.
   --
@@ -30261,8 +30321,11 @@ checkModuleFull : List (String, Scheme) -> List Decl -> List Decl -> List (Strin
 checkModuleFull seedVars accData prog =
   checkModuleFullImpl "" seedVars accData [] prog
 
--- E5: like checkModuleFull but takes [implDecls] (core + every EARLIER module +
--- this module) as the impl-body inference universe.  Under implInferEnabled (now ON
+-- E5: like checkModuleFull but takes [implDecls] (core + every EARLIER module — NOT this
+-- module: foldModules only grows the accumulator for LATER modules, so a module is never in
+-- its own [implDecls]; a caller that needs this module's own decls too must fold [prog] in
+-- itself, as the `superDecls` binding in checkBodyImpl does for #1457) as the impl-body
+-- inference universe.  Under implInferEnabled (now ON
 -- unconditionally) it ALSO infers THIS module's parametric impl
 -- bodies — mirroring checkProgramSeeded's inferImplBodiesIfEnabled — so their
 -- ARG-position ELEMENT dispatch (`eq`/`compare`/… on the impl head tyvar) reaches
@@ -30436,6 +30499,16 @@ buildDefinerShadows implDecls prog =
 -- deleted by `S-keytable-payoff`.  Do not re-add a cumulative key-bucket accumulator here:
 -- impl EXISTENCE and impl SELECTION both read the graph-global `bodyImplEnvRef` now, and a
 -- prefix-keyed second population is the shape B-2.1-c/-f/-g each measured an S0 out of.
+-- BOTH SPELLINGS of the prelude's module id under `Module` mode, in one place.  The
+-- `graph*Exports` peers key the prelude under `"core"`, but the `mid` both Module-mode
+-- drivers actually PASS for the core pass is `""` (`checkModuleFull` →
+-- `checkModuleFullImpl ""`; `elabModuleStamp ""`).  A test of one spelling alone
+-- silently never fires on either driver.  Two callers — `seedBuiltinClasses` and
+-- `appendUniverseAccums` (below) — and they must not drift apart, since both ask the
+-- same question: "is the unit being folded the implicit prelude?"
+isPreludeMid : String -> Bool
+isPreludeMid mid = mid == "core" || mid == ""
+
 -- ⚠️ #1557 A-3.5a REMOVED THE COMPLETENESS LINE from this fold, with the
 -- `universeIfaceRequiredRef` cell and its `insertIfaceRequired` writer.  The ordering
 -- guarantee this comment records ("this module's own decls are visible at the read")
@@ -30444,10 +30517,30 @@ buildDefinerShadows implDecls prog =
 -- admits the reader's OWN row — the same 0..cur-inclusive prefix the accumulator held
 -- here.  Do not re-add a completeness accumulator to restore an ordering property that
 -- has moved onto the ordinal predicate.
-appendUniverseAccums : List Decl -> Unit
-appendUniverseAccums prog =
+appendUniverseAccums : String -> List Decl -> Unit
+appendUniverseAccums mid prog =
   crossRun.value.universeIfaceMethodsRef := (namesToSet (allIfaceMethodNames prog) crossRun.value.universeIfaceMethodsRef.value)
-  crossRun.value.universeFunNamesRef := (namesToSet (map fst (funDefs prog)) crossRun.value.universeFunNamesRef.value)
+  -- 🚨 SHADOW-SEMANTICS S1-PRELUDE (a), RULED 2026-08-10 (#1375 item 2, #1499 clause (b)):
+  -- THE PRELUDE IS NOT S1's LEFT (standalone) OPERAND.  The asymmetry with the line above
+  -- is DELIBERATE and is the ruling's own (`SHADOW-SEMANTICS.md:225`): S1's INTERFACE
+  -- operand is the wider "nameable in M", which INCLUDES the prelude, while its STANDALONE
+  -- operand is pinned by the definer/importer kind partition — and a standalone reaching M
+  -- only as an implicit prelude export is NEITHER kind, so it creates no shadow in M.
+  -- This ref's ONE reader is the `importerShadows` binding in `checkBodyImpl`
+  -- (`standaloneShadowsFromSet`'s `fnSet`), i.e. exactly that left operand; folding the
+  -- prelude's own funDefs in admitted every prelude standalone as an IMPORTER shadow —
+  -- the reading S1-PRELUDE names and REJECTS by consequence — so a user interface method
+  -- colliding with `isEven`/`count` fell back to the prelude function at any receiver head
+  -- carrying no impl, ACCEPTING at exit 0 where the ruling requires a located reject
+  -- (`test/shadow_fixtures/x1_prelude_standalone_not_left_operand.mdk`, x2, matrix rows
+  -- 46-48).  ⚠️ SUBTRACTING the prelude's names at the READ site instead would be WRONG:
+  -- a name the prelude AND a real user module both define IS imported into M by the user
+  -- module and DOES create a shadow there.  Not folding is what expresses "contributes
+  -- nothing"; the union still carries the name via whichever user module defines it.
+  let _ = if isPreludeMid mid then
+    ()
+  else
+    crossRun.value.universeFunNamesRef := (namesToSet (map fst (funDefs prog)) crossRun.value.universeFunNamesRef.value)
   -- #154 PR2 (site #3): grow the methodIfaceParams accumulator by THIS module's
   -- interfaces.  (⚠️ #1569 retired the sibling `registeredIfaces` accumulator this
   -- used to grow in lockstep — see `insertMethodIfaceParams`'s retirement note.)
@@ -33339,9 +33432,18 @@ entryOwnSchemes (_::rest) = entryOwnSchemes rest
 -- Imports are RESOLVED (their public schemes seed the entry), so a valid cross-
 -- module reference no longer falls through to `UnknownModule` — the known "native
 -- check is single-file" limitation, fixed.  The entry is last in dependency-first
--- order.  No-import (1-module) files still route through runCheck (full prelude+
--- user dump, byte-identical); this path is reached ONLY when the load returned
--- more than one module.
+-- order.
+--
+-- ⚠️ ROUTING, corrected 2026-08-26: this comment used to say "no-import (1-module)
+-- files still route through runCheck … this path is reached ONLY when the load
+-- returned more than one module."  FALSE since S-migrate-check-route (E-1 #1115).
+-- A no-import file now reaches HERE too, via the 1-module wrappers
+-- `checkOneScheme` / `checkOneDiags` / `checkOneToLinesWithRuntime` /
+-- `checkOneErrorsWithRuntime`, each of which calls this function with a SINGLETON
+-- module list.  So every clause below must be correct on a 1-module graph, not
+-- merely defensible on one: `foldModules`' singleton clause is a genuinely
+-- user-reachable path (it is where #2024's `accAll` = initial-value defect lives),
+-- and so is the whole-graph coherence prepend at the bottom.
 checkModulesEntryFull : List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List TcDiag, List TcDiag)
 checkModulesEntryFull runtimeDecls coreDecls0 modules0 =
   -- #1110: acquire type-constructor identity over the whole graph before anything
@@ -33384,8 +33486,30 @@ prependDiagOpt code sev help (Some msg) ds =
 -- FULL triple (schemes, errs, warns) as its payload so cmEntryCollect can keep the
 -- terminal module's OWN schemes/warns.  IMPORT-SCOPED seed, exactly like the others.
 cmEntryWorker : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), (List (String, Scheme), List TcDiag, List TcDiag))
+-- ⚠️ `accAll ++ prog`, NOT bare `accAll` — this worker's impl universe includes THIS
+-- module, exactly as the emit driver's `elabWorker` (`elabModuleStamp mid seed accData
+-- (accAll ++ prog) prog`) has always built it.  `foldModules` never folds a module into
+-- its own `accAll` (see `checkModuleFullImpl`'s E5 note: "a caller that needs this
+-- module's own decls too must fold [prog] in itself"), and `checkBodyImpl`'s
+-- `groundUniverse` binding reads `implDecls` RAW on the Module arm — so passing bare
+-- `accAll` made `groundMultiParamObligations` ground a multi-param obligation against a
+-- universe with NONE of the module's own impls in it.  MEASURED, `medaka check` /
+-- `medaka build` on `test/engine_fixtures/return_only_param_dispatch.mdk` (a 1-module
+-- file: `interface Get c v` + `impl Get (Box a) a` + `main = println (get1 (Box 42))`):
+-- with bare `accAll` the return-only `v` never grounds, so the enclosing `Display v`
+-- rejects with `Ambiguous instance for `Display``; with `accAll ++ prog` it grounds to
+-- `Int` and the program checks, builds and prints `42`, as it does on the Flat arm and
+-- on `main`.  This was invisible until E-1 (#1115) routed the no-import front door
+-- through `checkModulesEntryFull` — the 1-module graph is the case where `accAll` is
+-- still its initial value and the omission is total.
+-- Cost: the concat mirrors `elabWorker`'s exactly (growing accumulator on the RIGHT, so
+-- O(|prog|) per module), and this driver is not the perf-gated `checkModules` path.
+-- ⚠️ MIRROR NOT CHANGED: `cmDiagsWorker` (checkModulesDiags, the `analyzeProject`
+-- multi-module path) passes bare `accAll` too and has the same hole — but only for a
+-- module's OWN impls in a 2+-module graph, which is pre-existing on `main` and not this
+-- regression; see the F18 report.
 cmEntryWorker mid seed accData accAll prog =
-  let (schemes, errs, warns) = checkModuleFullDiags mid seed accData accAll prog
+  let (schemes, errs, warns) = checkModuleFullDiags mid seed accData (accAll ++ prog) prog
   (schemes, (schemes, errs, warns))
 
 -- collect: the ENTRY report keeps the ENTRY (last/terminal) module's SCHEMES and
@@ -33422,6 +33546,60 @@ checkModulesEntryHasErrors runtimeDecls coreDecls modules =
   match errs
     [] => False
     _ => True
+
+-- ── ONE-MODULE Module-arm wrapper (S-check-one-wrapper, E-1 #1115) ─────────
+-- The scheme/diagnostic-tree analogue of `elaborateOne` (above): runs a SINGLE
+-- program through the `Module` arm as a degenerate one-entry module list, the
+-- same way `elaborateOne` runs it through `elaborateModules`.  `checkModulesEntryFull`
+-- is the Diags-returning whole-graph driver `elaborateModules` mirrors on the
+-- scheme/diagnostic tree (see the file-header "TWO DRIVERS" note and
+-- `checkModulesPreamble`'s per-entry doc) — it already performs BOTH halves of the
+-- two-part safety property a standalone `Module`-arm caller must uphold
+-- (`resetCrossModuleState` AND the unconditional `graphMethodExportsRef`/
+-- `graphIfaceMethodsRef`/`graphCtorExportsRef`/`mangledFunDefsPresentRef`/`declEnvsRef`
+-- overwrites — see `checkModuleFullDiags`'s header comment just above its `export`).
+-- Delegating to it (rather than hand-assembling a bare `checkModuleFullDiags` call
+-- with an invented module id / degenerate accData/implDecls) gets that property for
+-- free and needs no "empty module id" convention of its own — `foldModules`'s own
+-- singleton-list clause (`[(mid, prog)]`) already IS the degenerate one-entry case,
+-- run through the identical preamble every N-module call gets.  `rootId` names the
+-- program's own module id (analogous to `elaborateOne`'s `rootId`); `checkModulesEntryFull`
+-- has previously only been reached with 2+-module graphs (`checkModulesEntryReport`/
+-- `checkModulesEntryHasErrors`, both import-bearing-only per its own header comment) —
+-- this is its first 1-module caller.
+export
+checkOneScheme : List Decl -> List Decl -> (String, List Decl) -> List (String, Scheme)
+checkOneScheme runtimeDecls coreDecls (rootId, prog) =
+  let (schemes, _, _) = checkModulesEntryFull runtimeDecls coreDecls [(rootId, prog)]
+  schemes
+
+-- diagnostics-returning sibling of `checkOneScheme`, matching `checkProgramDiags`'s
+-- return shape (`(errs, warns)`) exactly, so a call site can swap targets with no
+-- shape change (this slice's own acceptance bar — see the packet).
+export
+checkOneDiags : List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
+checkOneDiags runtimeDecls coreDecls (rootId, prog) =
+  let (_, errs, warns) = checkModulesEntryFull runtimeDecls coreDecls [(rootId, prog)]
+  (errs, warns)
+
+-- S-migrate-check-route (E-1 #1115): thin ONE-MODULE String/Bool wrappers, matching
+-- `checkToLinesWithRuntime`'s / `checkErrorsWithRuntime`'s (runtimeDecls, coreProg,
+-- userProg) shape exactly, so `compiler/tools/check.mdk`'s two rendering/bool call
+-- sites can swap targets with no shape change.  Delegate to the EXISTING entry-report/
+-- -hasErrors functions above (already byte-identical in render logic to
+-- checkToLinesWithRuntime/checkErrorsWithRuntime — `joinNl (schemeLines ++ warns)` on
+-- success, `typeErrorLines` on error) over a singleton module list, rather than
+-- duplicating that rendering logic here.  `"__user__"` mirrors `elaborateOne`'s own
+-- rootId convention for a bare/no-import file (`entry_support.mdk`).
+export
+checkOneToLinesWithRuntime : List Decl -> List Decl -> List Decl -> String
+checkOneToLinesWithRuntime runtimeDecls coreProg userProg =
+  checkModulesEntryReport runtimeDecls coreProg [("__user__", userProg)]
+
+export
+checkOneErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
+checkOneErrorsWithRuntime runtimeDecls coreProg userProg =
+  checkModulesEntryHasErrors runtimeDecls coreProg [("__user__", userProg)]
 
 -- run the multi-module front-end and render the ENTRY module's own bindings as
 -- `name : scheme` per line (the harness sorts) — diffs vs dev/tc_module_probe.

@@ -1,5 +1,5 @@
 # META
-source_lines=711
+source_lines=731
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/check_policy.mdk — the native `medaka check-policy` capability
@@ -11,8 +11,10 @@ stages=DESUGAR,MARK
 --   1. parse + desugar the file;
 --   2. build a call graph (name → set of called top-level names) from the
 --      DESUGARED AST (conservative EVar collection, like collect_evars);
---   3. typecheck single-file (checkProgramSchemesWithRuntime, the same path
---      doc.mdk uses) for inferred schemes;
+--   3. typecheck single-file (checkProgramSchemesWithRuntime, the Flat wrapper
+--      family) for inferred schemes -- `--fn <name>` is arbitrary user input
+--      looked up DIRECTLY in the effect table, so the schemes must include
+--      prelude names too (see the call-site comments below);
 --   4. read each fn's inferred effect row → its concrete labels
 --      (effrowLabels/atomLabel — the native analog of OCaml's effrow_labels);
 --   5. policy compare: a label is forbidden iff it is NOT in the policy set
@@ -526,6 +528,12 @@ runCheckPolicy rtSrc coreSrc src allowStr fnName =
   let rtD = desugar (parse rtSrc)
   let coreD = desugar (parse coreSrc)
   let callGraph = buildCallGraph userD
+  -- Flat wrapper, deliberately NOT migrated to checkOneScheme: `--fn <name>` is
+  -- arbitrary CLI input looked up DIRECTLY in effTable (lookupAssoc fnName), never
+  -- routed through buildCallGraph's userD-restricted traversal. checkOneScheme
+  -- omits prelude schemes (the lsp.mdk gap), so `--fn println` would miss the
+  -- table entirely and the policy check would silently ACCEPT an <IO> function as
+  -- pure. Parked as a Flat-arm consumer alongside tools/lsp.mdk (#1116).
   let schemes = checkProgramSchemesWithRuntime rtD coreD userD
   let effTable = fnEffectsTable schemes
   let fnEffects = match lookupAssoc fnName effTable
@@ -659,6 +667,12 @@ runManifest rtSrc coreSrc src fnName =
   let userD = desugar rawUser
   let rtD = desugar (parse rtSrc)
   let coreD = desugar (parse coreSrc)
+  -- Flat wrapper, deliberately NOT migrated to checkOneScheme: `--fn <name>` is
+  -- arbitrary CLI input looked up DIRECTLY in effTable (lookupAssoc fnName), never
+  -- routed through buildCallGraph's userD-restricted traversal. checkOneScheme
+  -- omits prelude schemes (the lsp.mdk gap), so `--fn println` would miss the
+  -- table entirely and the policy check would silently ACCEPT an <IO> function as
+  -- pure. Parked as a Flat-arm consumer alongside tools/lsp.mdk (#1116).
   let schemes = checkProgramSchemesWithRuntime rtD coreD userD
   let effTable = fnEffectsTable schemes
   let fnEffects = match lookupAssoc fnName effTable
@@ -707,6 +721,12 @@ runManifestAtoms rtSrc coreSrc src fnName =
   let userD = desugar rawUser
   let rtD = desugar (parse rtSrc)
   let coreD = desugar (parse coreSrc)
+  -- Flat wrapper, deliberately NOT migrated to checkOneScheme: `--fn <name>` is
+  -- arbitrary CLI input looked up DIRECTLY in effTable (lookupAssoc fnName), never
+  -- routed through buildCallGraph's userD-restricted traversal. checkOneScheme
+  -- omits prelude schemes (the lsp.mdk gap), so `--fn println` would miss the
+  -- table entirely and the policy check would silently ACCEPT an <IO> function as
+  -- pure. Parked as a Flat-arm consumer alongside tools/lsp.mdk (#1116).
   let schemes = checkProgramSchemesWithRuntime rtD coreD userD
   let effTable = fnEffectsTable schemes
   let fnEffects = match lookupAssoc fnName effTable

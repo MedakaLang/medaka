@@ -1,1 +1,1 @@
-TYPE ERROR: No impl of Num for String
+TYPE ERROR: Type mismatch: Int literal vs String
