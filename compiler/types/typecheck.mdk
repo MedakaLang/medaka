@@ -7813,96 +7813,96 @@ mapLocalSchemes ((n, m)::rest) = (n, generalize m) :: mapLocalSchemes rest
 -- `isCtorAppSpine` below: generalizing `Ref x` would be unsound (polymorphic
 -- reference: write at one type, read at another).
 --
--- 🚨 THE HEAD TEST IS A FIRST-CHARACTER HEURISTIC, NOT A CONSTRUCTOR LOOKUP,
--- AND IT IS DEFEATED TODAY — issue 1150 (OPEN, S0, verified, memory-safety).
--- `isCtorAppSpine`'s head arms accept any name whose first character is
--- uppercase (`ctorHeadIsUpper` below).  A MODULE ALIAS is REQUIRED to be
+-- 🔒 THE HEAD TEST IS AN ACTUAL CONSTRUCTOR LOOKUP, NOT A SPELLING TEST —
+-- issue 1150 (S0, memory-safety), fixed 2026-08-26.  `isCtorAppSpine`'s head
+-- arms ask `lookupCtor env name`, so the predicate now answers "is this name a
+-- REAL, DECLARED constructor?" instead of "does this name start with a capital
+-- letter?".  Threading the `TcEnv` this needs is why `isNonexpansive`,
+-- `isCtorAppSpine`, `clausesAreValue`/`clauseIsValue`,
+-- `memberClauseIsValue` and `sccSchemes` all take an env parameter.
+--
+-- What the old first-character heuristic (`ctorHeadIsUpper`, retained below
+-- only as a cheap pre-filter) got wrong: a MODULE ALIAS is REQUIRED to be
 -- uppercase (`aliasNameFor`, frontend/parser.mdk — lowercase is a hard parse
 -- error) and an alias-qualified value desugars to a FLAT `EVar` carrying the
 -- dotted name (`rewriteAliasQual`, frontend/desugar.mdk, via `qualifiedLocal`
--- in frontend/ast.mdk: `"\{alias}.\{n}"`).  So `ctorHeadIsUpper "H.new"` reads
--- `'H'` and says True: EVERY alias-qualified call in the language is
+-- in frontend/ast.mdk: `"\{alias}.\{n}"`).  So `ctorHeadIsUpper "H.new"` read
+-- `'H'` and said True: EVERY alias-qualified call in the language was
 -- CLASSIFIED as a constructor application.  Classification is not the whole
 -- test — `isCtorAppSpine (EApp f x) = isCtorAppSpine f && isNonexpansive x`
--- still rejects the spine if any argument is expansive, so `H.f (g 1)` is
--- classified but NOT generalized.  It is enough for the repro, whose argument
--- is a value: `let m = H.new ()` over `stdlib/hash_map.mdk` yields a
+-- still rejects the spine if any argument is expansive, so `H.f (g 1)` was
+-- classified but NOT generalized.  It was enough for the repro, whose argument
+-- is a value: `let m = H.new ()` over `stdlib/hash_map.mdk` yielded a
 -- polymorphic mutable table — `check` exit 0, `run` E-NOT-A-FUNCTION, built
--- binary SEGFAULT.
+-- binary SEGFAULT.  Under the lookup, `"H.new"` is absent from the ctor map and
+-- the binding is value-restricted: `check` REJECTS the program.
 --
--- ⚠️ The residual hole TODAY is not the "future uppercase mutable-cell extern"
--- this comment used to warn about: that audit (`grep '^extern [A-Z]'
--- stdlib/runtime.mdk`) is CLEAN — one hit, `Ref` — and the predicate is
--- defeated by the alias route anyway.  But that retirement is CONDITIONAL on
--- the alias hole staying open, because the GRAMMAR still permits the hazard:
--- `externNameFor (TUpper x) = emit x` (frontend/parser.mdk:2312) accepts an
--- uppercase extern NAME, whereas `identNameFor` (:251-253, same file) accepts
--- only `TIdent` for an ordinary identifier.  So the moment issue 1150 is closed
--- NARROWLY — e.g. by rejecting a dotted name in the head test, a one-line patch
--- that satisfies every sentence above — an uppercase mutable-cell extern
--- becomes the SOLE remaining way to defeat the head test.  The clause "the
--- predicate is defeated anyway" expires with that fix; the warning does not,
--- for as long as the head test is spelling-based.
+-- Why the lookup is sound (i.e. why "present in the ctor map" implies "really a
+-- constructor").  `lookupCtor` reads `TcEnv`'s 2nd `OrdMap`, and that map is
+-- written in exactly TWO places — `addCtor` (sole call site, inside
+-- `addVariants`, reached only from `registerVariants`, itself called only from
+-- `registerData`'s `DData` and `DNewtype` arms) and the two prelude ctors
+-- `True`/`False`, hand-seeded straight into the map by `initialEnv`, bypassing
+-- `addCtor` entirely.  Both writers are constructor-only.  ("Populated only by
+-- `addCtor`", which this comment asserted until 2026-07-31, was false — hence
+-- the second clause.)  Re-derive with
+-- `grep -n 'addCtor\|initialEnv' compiler/types/typecheck.mdk`.
 --
--- Note also that `Ref` is not a *constructor* at all: it is an extern FUNCTION
--- (`extern Ref : a -> Ref a`, stdlib/runtime.mdk), never passed to `addCtor`,
--- and calling it one is what made this heuristic look principled.  The
--- principled fix is to stop guessing from spelling and ask the environment:
--- `lookupCtor:4398` reads `TcEnv`'s 2nd `OrdMap`, and that map is written in
--- exactly TWO places — `addCtor:4425` (sole call site, inside `addVariants`,
--- at :8561, reached only from `registerVariants:8316`, itself called only from
--- `registerData`'s `DData` (:8239) and `DNewtype` (:8244) arms) and the two
--- prelude ctors `True`/`False`, hand-seeded straight into the map by
--- `initialEnv:15519`, bypassing `addCtor` entirely.  Both writers are
--- constructor-only, so the lookup is sound — but "populated only by
--- `addCtor`", which this comment asserted until 2026-07-31, was false.
--- Re-derive with `grep -n 'addCtor\|initialEnv' compiler/types/typecheck.mdk`.
---
--- ⚠️ That fix is NOT local, and the unstated cost is what makes the cheap
--- spelling patch attractive: `isNonexpansive:3567`, `isCtorAppSpine:3614`,
--- `clausesAreValue:9396`, `memberClauseIsValue:16063` and `sccSchemes:16054`
--- all take no `TcEnv` today, so threading one rewrites every one of them.
--- Paying that is exactly the branch on which the uppercase-extern warning
--- above starts to matter.
+-- The uppercase-mutable-cell-extern hazard this comment used to warn about is
+-- retired BY CONSTRUCTION rather than by audit: the grammar still permits an
+-- uppercase extern NAME (`externNameFor (TUpper x) = emit x`,
+-- frontend/parser.mdk, vs `identNameFor`, which accepts only `TIdent`), but an
+-- extern is never passed to `addCtor`, so no extern — uppercase or not — can
+-- pass the head test any more.  `Ref` (`extern Ref : a -> Ref a`,
+-- stdlib/runtime.mdk) is exactly such an extern; its by-name exclusion is kept
+-- below purely as defense-in-depth, since the lookup alone already rejects it.
 -- See issue 1150 and docs/spec/DICT-SEMANTICS.md §4.1 G2.
 --
 -- Record creates are non-expansive iff all field expressions are.
 -- Note: this ignores the `mut` flag (like the oracle), so `let mut x = []`
 -- generalizes — the separate `mut`-gen hole is a both-sides follow-up (T1b).
-isNonexpansive : Expr -> Bool
-isNonexpansive (ELoc _ e) = isNonexpansive e
-isNonexpansive (EDoOrigin _ e) = isNonexpansive e
-isNonexpansive (ELit _) = True
-isNonexpansive (EVar _) = True
-isNonexpansive (EVarId _ _) = True
-isNonexpansive (ELam _ _) = True
-isNonexpansive (EAnnot e _) = isNonexpansive e
-isNonexpansive (EHeadAnnot e _) = isNonexpansive e
-isNonexpansive (ETuple es) = allList isNonexpansive es
-isNonexpansive (EListLit es) = allList isNonexpansive es
--- Constructor application: non-expansive iff the spine head is an
--- uppercase-initial EVar — NOT an actual constructor lookup, so a module alias
--- passes it too; see the 🚨 above and issue 1150 — that is NOT `Ref`, and
--- every spine argument is itself non-expansive.  Partial ctor applications
--- (e.g. `MkTwo []`) are also non-expansive — they are closures, not mutable
--- cells.  `isCtorAppSpine` strips ELoc/EDoOrigin wrappers before testing.
-isNonexpansive (app@(EApp _ _)) = isCtorAppSpine app
+isNonexpansive : TcEnv -> Expr -> Bool
+isNonexpansive env (ELoc _ e) = isNonexpansive env e
+isNonexpansive env (EDoOrigin _ e) = isNonexpansive env e
+isNonexpansive _ (ELit _) = True
+isNonexpansive _ (EVar _) = True
+isNonexpansive _ (EVarId _ _) = True
+isNonexpansive _ (ELam _ _) = True
+isNonexpansive env (EAnnot e _) = isNonexpansive env e
+isNonexpansive env (EHeadAnnot e _) = isNonexpansive env e
+isNonexpansive env (ETuple es) = allList (isNonexpansive env) es
+isNonexpansive env (EListLit es) = allList (isNonexpansive env) es
+-- Constructor application: non-expansive iff the spine head is an EVar naming a
+-- REAL, DECLARED constructor (`lookupCtor env`, see the 🔒 above and issue
+-- 1150) — that is NOT `Ref`, and every spine argument is itself non-expansive.
+-- Partial ctor applications (e.g. `MkTwo []`) are also non-expansive — they are
+-- closures, not mutable cells.  `isCtorAppSpine` strips ELoc/EDoOrigin wrappers
+-- before testing.
+isNonexpansive env (app@(EApp _ _)) = isCtorAppSpine env app
 -- Record creation: non-expansive iff every field expression is non-expansive.
-isNonexpansive (ERecordCreate _ fs) = allList
+isNonexpansive env (ERecordCreate _ fs) = allList
   (fa => match fa
-    FieldAssign _ e => isNonexpansive e)
+    FieldAssign _ e => isNonexpansive env e)
   fs
-isNonexpansive _ = False
+isNonexpansive _ _ = False
 
 -- Walk the left spine of an application to its head, testing EVERY argument met
--- on the way, and finally test whether the head LOOKS LIKE a constructor that
--- is safe to generalize: an uppercase-initial EVar — **not** an actual
--- constructor lookup, so an uppercase module alias passes it (issue 1150, OPEN,
--- S0, memory-safety; see the 🚨 on `isNonexpansive` above, which this docblock
--- contradicted until 2026-07-31).  `Ref` is excluded by name because it is the
--- only uppercase extern that builds a mutable cell TODAY (`grep '^extern [A-Z]'
--- stdlib/runtime.mdk` — one hit); the grammar permits more, so that is an
--- audit, not an invariant.
+-- on the way, and finally test whether the head IS a constructor that is safe to
+-- generalize: an EVar naming a constructor DECLARED in this `TcEnv`, asked of
+-- the environment via `lookupCtor` rather than guessed from the name's spelling
+-- (issue 1150, fixed 2026-08-26 — see the 🔒 on `isNonexpansive` above for why
+-- the ctor map's two writers make the lookup sound).  `Ref` stays excluded by
+-- name as defense-in-depth: it is an extern FUNCTION, never passed to
+-- `addCtor`, so `lookupCtor` already rejects it on its own.
+--
+-- `ctorHeadIsUpper` is retained as a pure FAST PATH in front of the lookup: an
+-- ordinary function-application head — the overwhelmingly common `let` RHS —
+-- fails on a single character read instead of an `OrdMap` probe.  It can only
+-- ever narrow, never widen, and it narrows nothing today: every key in the ctor
+-- map is uppercase-initial, because the parser requires a constructor name to
+-- be `TUpper` and the two hand-seeded prelude ctors are `True`/`False`.  Were
+-- that ever to change, the pre-filter would cost a generalization, not
+-- soundness.
 --
 -- The arguments are tested HERE, on the single walk to the head, rather than by
 -- re-entering `isNonexpansive` at each `EApp` level: re-entering would re-walk
@@ -7916,13 +7916,22 @@ isNonexpansive _ = False
 -- immediately.  Testing the argument first would walk its whole subtree before
 -- discovering the spine was never a constructor application at all.  Both
 -- operands are pure `Bool`, so the order is semantically invisible.
-isCtorAppSpine : Expr -> Bool
-isCtorAppSpine (ELoc _ e) = isCtorAppSpine e
-isCtorAppSpine (EDoOrigin _ e) = isCtorAppSpine e
-isCtorAppSpine (EApp f x) = isCtorAppSpine f && isNonexpansive x
-isCtorAppSpine (EVar name) = name /= "Ref" && ctorHeadIsUpper name
-isCtorAppSpine (EVarId name _) = name /= "Ref" && ctorHeadIsUpper name
-isCtorAppSpine _ = False
+isCtorAppSpine : TcEnv -> Expr -> Bool
+isCtorAppSpine env (ELoc _ e) = isCtorAppSpine env e
+isCtorAppSpine env (EDoOrigin _ e) = isCtorAppSpine env e
+isCtorAppSpine env (EApp f x) = isCtorAppSpine env f && isNonexpansive env x
+isCtorAppSpine env (EVar name) = isDeclaredCtorHead env name
+isCtorAppSpine env (EVarId name _) = isDeclaredCtorHead env name
+isCtorAppSpine _ _ = False
+
+-- The head test itself: `name` is a real, declared constructor and is not the
+-- `Ref` extern.  See `isCtorAppSpine`'s docblock for why `lookupCtor` is the
+-- authority, why `ctorHeadIsUpper` is only a fast path in front of it, and why
+-- the `Ref` exclusion is redundant-but-kept.
+isDeclaredCtorHead : TcEnv -> String -> Bool
+isDeclaredCtorHead env name = name /= "Ref"
+  && ctorHeadIsUpper name
+  && isSome (lookupCtor env name)
 
 -- True iff the first character of a name is an ASCII uppercase letter,
 -- i.e. the name looks like a data constructor or type name.
@@ -10262,7 +10271,7 @@ blockLet env (PVar x xloc) e =
   let _ = defaultAmbiguousNum addedObls t   -- PLAN.md #11
   let _ = registerAmbiguousConstraints addedObls [t]   -- RETPOS soundness
   let _ = recordLocalBind x t   -- LSP hover (block let bypasses inferPat)
-  let sch = genRestricted (isNonexpansive e && not (pinLocalIfDictForwarded callN0 dictN0 x (Some xloc) t)) t  -- #866
+  let sch = genRestricted (isNonexpansive env e && not (pinLocalIfDictForwarded callN0 dictN0 x (Some xloc) t)) t  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   -- WS-2: α scope-seed — bindings are immutable, so the prefix is stable.
   seedAlphaLets (extendLocalVar env x sch) x e
@@ -13975,7 +13984,7 @@ inferLetSimple env pat e1 e2 =
 inferLetBody : TcEnv -> Pat -> Mono -> Expr -> Expr -> Int -> Int -> Int -> Mono
 inferLetBody env (PVar x xloc) t1 e1 e2 oblN0 callN0 dictN0 =
   let _ = recordLocalBind x t1  -- LSP hover (PVar let bypasses inferPat)
-  let sch = genRestricted (isNonexpansive e1 && not (pinLocalIfDictForwarded callN0 dictN0 x (Some xloc) t1)) t1  -- #866
+  let sch = genRestricted (isNonexpansive env e1 && not (pinLocalIfDictForwarded callN0 dictN0 x (Some xloc) t1)) t1  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   infer (seedAlphaLets (extendLocalVar env x sch) x e1) e2  -- WS-2: α scope-seed
 inferLetBody env pat t1 _ e2 _ _ _ =
@@ -15456,7 +15465,7 @@ generalizeGroup env constrained dictPairs (((LetBind name clauses), (_, sch))::r
     recordPinnedLocalsGeneric name (clausesLoc clauses) free constrained mono
   else
     False
-  let isVal = clausesAreValue clauses && not pinnedHere
+  let isVal = clausesAreValue env clauses && not pinnedHere
   -- WS-2: α scope-seed — single-clause zero-param bindings only (mirror α's
   -- alphaCollectBinds rule); a multi-clause / parameterized binding is not a
   -- known prefix.
@@ -15469,12 +15478,12 @@ generalizeGroup env constrained dictPairs (((LetBind name clauses), (_, sch))::r
 -- A where-clause binding is a value (generalizable) iff every clause has params
 -- (it's a function) or its zero-arg RHS is non-expansive.  Mirrors the oracle
 -- `ELetGroup` value test (lib/typecheck.ml:1715-1716).
-clausesAreValue : List FunClause -> Bool
-clausesAreValue clauses = allList clauseIsValue clauses
+clausesAreValue : TcEnv -> List FunClause -> Bool
+clausesAreValue env clauses = allList (clauseIsValue env) clauses
 
-clauseIsValue : FunClause -> Bool
-clauseIsValue (FunClause [] rhs) = isNonexpansive rhs
-clauseIsValue (FunClause _ _) = True
+clauseIsValue : TcEnv -> FunClause -> Bool
+clauseIsValue env (FunClause [] rhs) = isNonexpansive env rhs
+clauseIsValue _ (FunClause _ _) = True
 
 -- infer a clause group (multi-clause function), unifying all clauses to one type
 inferClauses : TcEnv -> List (List Pat, Expr) -> Mono
@@ -27610,7 +27619,7 @@ processSCC env sigs grouped members =
   let _ = defaultGroupNum defaultObls (map snd placeholders)
   let _ = defaultEachMember defaultObls placeholders
   let _ = registerAmbiguousConstraints addedObls (map snd placeholders)   -- RETPOS soundness
-  let schemes = sccSchemes sigs grouped (isLetrecGroup members) placeholders
+  let schemes = sccSchemes env2 sigs grouped (isLetrecGroup members) placeholders
   -- #23 two-hop forward: also record constraints FORWARDED from a constrained
   -- callee (living on the call delta, never in addedObls) into schemeObligationsRef,
   -- so a caller of this group re-instantiates them and its own group can ground the
@@ -28074,18 +28083,18 @@ effectEscapeMsg name declared extras = "Function '\{name}' declared with <\{rend
 --   isVal    = plainVal || sigIsFun.
 -- A non-function expansive unsigned binding (`r = Ref []`) is value-restricted and
 -- stays monomorphic.  Mirrors oracle lib/typecheck.ml:2705-2710 + 2756.
-sccSchemes : List (String, Ty) -> OrdMap (List (List Pat, Expr)) -> Bool -> List (String, Mono) -> List (String, Scheme)
-sccSchemes _ _ _ [] = []
-sccSchemes sigs grouped isLetrec ((m, v)::rest) =
-  let plainVal = isLetrec || allList memberClauseIsValue (clausesOf m grouped)
+sccSchemes : TcEnv -> List (String, Ty) -> OrdMap (List (List Pat, Expr)) -> Bool -> List (String, Mono) -> List (String, Scheme)
+sccSchemes _ _ _ _ [] = []
+sccSchemes env sigs grouped isLetrec ((m, v)::rest) =
+  let plainVal = isLetrec || allList (memberClauseIsValue env) (clausesOf m grouped)
   let sigIsFun = memberSigIsFun sigs m v
   let isVal = plainVal || sigIsFun
-  (m, genRestricted isVal v) :: sccSchemes sigs grouped isLetrec rest
+  (m, genRestricted isVal v) :: sccSchemes env sigs grouped isLetrec rest
 
 -- a top-level clause is a value if it has params (function) or a non-expansive RHS
-memberClauseIsValue : (List Pat, Expr) -> Bool
-memberClauseIsValue ([], rhs) = isNonexpansive rhs
-memberClauseIsValue (_, _) = True
+memberClauseIsValue : TcEnv -> (List Pat, Expr) -> Bool
+memberClauseIsValue env ([], rhs) = isNonexpansive env rhs
+memberClauseIsValue _ (_, _) = True
 
 -- Phase 89: a signed binding whose (post-unify) type is an arrow is generalizable
 memberSigIsFun : List (String, Ty) -> String -> Mono -> Bool
