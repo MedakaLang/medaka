@@ -1,5 +1,5 @@
 # META
-source_lines=34216
+source_lines=34269
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -15168,22 +15168,20 @@ processLetGroup env binds =
   let addedObls = wWindow perRun.value.implObls oblN0
   let _ = defaultGroupNum addedObls (map (p => schemeMono (snd p)) placeholders)
   let _ = registerAmbiguousConstraints addedObls (map (p => schemeMono (snd p)) placeholders)   -- RETPOS soundness
-  -- #866: hoisted out of generalizeGroup's per-binding recursion (both sources are
-  -- fixed for the whole group), so an N-member group scans the pin sets ONCE.  The
-  -- dict half is kept in (id, iface) form so each member can record its own pin note
-  -- (the diagnostic names the interface); the method half carries no interface and
-  -- contributes ids only.
-  let dictPairs = dictForwardedPairs callN0 dictN0
-  -- #2026: the method half is the UNION of the emit-path arg-stamp channel and the
-  -- entry-point-neutral obligation channel (see methodOccArgPairs), so `check` and
-  -- `build` reach the same pin decision instead of `check` silently generalizing what
-  -- the emit path pins.
-  let methodOccPairs = methodOccArgPairs ()
-  let pinned = methodConstrainedIds () ++ map fst methodOccPairs ++ map fst dictPairs
-  -- Notes come from BOTH channels (methodConstrainedPairs is note-only and cannot
-  -- change [pinned]); a where-helper is frequently pinned by the METHOD channel, and
-  -- passing only the dict half left every such binding with no explanation.
-  let notePairs = methodConstrainedPairs () ++ methodOccPairs ++ dictPairs
+  -- #866: hoisted out of generalizeGroup's per-binding recursion (all three sources are
+  -- fixed for the whole group), so an N-member group scans the pin sets ONCE.  Every
+  -- half is kept in (id, iface) form so each member can record its own pin note (the
+  -- diagnostic names the interface).
+  --
+  -- #1986 rung 1: this is now [localPinIds]/[localPinPairs] — the SAME predicate the
+  -- other four local-generalization sites consult (pinLocalIfDictForwarded).  Until
+  -- this slice, this site was the only one that unioned in the METHOD channels, which
+  -- is why a semantically null `where`→`let` respelling of the same program could
+  -- change which predicate ran and change the answer (#1052).  The two shapes are the
+  -- same set viewed two ways (see localPinPairs), so the pin decision and the
+  -- explanatory note cannot disagree about a binding.
+  let pinned = localPinIds callN0 dictN0
+  let notePairs = localPinPairs callN0 dictN0
   let genv = generalizeGroup env pinned notePairs (zipL binds placeholders)
   -- Round-2 adversarial break "let-alias evasion" (#816): a LOCAL constrained
   -- binding (`let f = hh` re-generalizing `hh : Num x => x -> x`) previously
@@ -15319,8 +15317,10 @@ methodOccArgIdPairsAt iface typarams mty occ = match firstDispatchIdx (dispatchT
     Some am => map (id => (id, iface)) (monoUnboundIds am)
 
 -- #866 — a SIBLING of methodConstrainedIds above, NOT the same pin.  Both decline a
--- local generalization for the same underlying reason, and the two sets are unioned by
--- processLetGroup, but they are not the same shape and should not be read as such:
+-- local generalization for the same underlying reason, and since #1986 rung 1 the sets
+-- are unioned by [localPinPairs] for ALL FIVE local-generalization sites (before that,
+-- only processLetGroup unioned them).  They are still not the same shape and should not
+-- be read as such:
 --
 --   methodConstrainedIds   ONE channel (pendingArgStamps), read UNWINDOWED — the whole
 --                          module's arg-position METHOD dispatch sites.
@@ -15383,18 +15383,67 @@ callOblMonoIds (iface, monos, _) =
 monoIdsWithIface : (Mono, String) -> List (Int, String)
 monoIdsWithIface (m, iface) = map (id => (id, iface)) (monoUnboundIds m)
 
+-- #1986 rung 1 — THE local-pin predicate.  ALL FIVE local-generalization sites (the
+-- `where`/`let`-GROUP site processLetGroup, and the four genRestricted sites via
+-- pinLocalIfDictForwarded) consult exactly this, so one judgment is made in one place.
+-- Before this slice the group site unioned the two METHOD channels in while the four
+-- genRestricted sites saw the DICT channel alone: a semantically null `where`→`let`
+-- respelling of the same program changed which predicate ran, and so changed the answer
+-- (#1052).  Rung 1 makes the five agree; WHAT the agreed answer should be is rung 2's
+-- question, not this predicate's.
+--
+-- Three channels, in the order their comments appear above:
+--   methodConstrainedPairs  emit-path arg stamps (pendingArgStamps), UNWINDOWED.
+--   methodOccArgPairs       the entry-point-neutral obligation channel (#2026),
+--                           UNWINDOWED — this is what keeps `check` and `build` at the
+--                           same pin decision.
+--   dictForwardedPairs      constrained-callee dict routes, WINDOWED to this binding's
+--                           own inference (#866).
+-- UNION, never substitution: each channel covers sites the others structurally cannot
+-- see (see each function's own note).  Duplicate ids are free — recordPinnedLocals
+-- dedups by tyvar id.
+--
+-- [localPinIds] and [localPinPairs] are the SAME SET viewed two ways, not two
+-- predicates: methodConstrainedPairs yields exactly methodConstrainedIds' ids (both are
+-- `monoUnboundIds (argStampMono e)` over the same pendingArgStamps, in the same order,
+-- one merely paired with the discriminating interface), and the other two channels are
+-- id-projected from the very same calls.  So `localPinIds == map fst localPinPairs` as
+-- a list, and the pin decision and the explanatory note cannot disagree about a
+-- binding.  At the group site this is a re-view of the set that was already computed
+-- there, not a widening of it; the widening is at the four genRestricted sites, which
+-- previously saw the dict channel alone.
+--
+-- ⚠️ The two method channels are UNWINDOWED module-wide reads, which is what makes them
+-- entry-point-neutral and is required (a helper's pin must see dispatch sites anywhere
+-- in the module).  At the group site that cost is paid once per GROUP; at the four
+-- genRestricted sites it is once per BINDING.  See the report Notes for #1986 rung 1.
+localPinIds : Int -> Int -> List Int
+localPinIds callN0 dictN0 = methodConstrainedIds ()
+  ++ map fst (methodOccArgPairs ())
+  ++ map fst (dictForwardedPairs callN0 dictN0)
+
+localPinPairs : Int -> Int -> List (Int, String)
+localPinPairs callN0 dictN0 = methodConstrainedPairs ()
+  ++ methodOccArgPairs ()
+  ++ dictForwardedPairs callN0 dictN0
+
 -- #866: the pin decision AND the note pinnedLocalExplain needs, in one pass, so the
 -- two can never disagree about whether a binding was pinned.  [name]/[loc]
 -- describe the BINDING (what the user must change), not the use site that will later
 -- collide.  Records one entry per pinned var actually free in [t]; a binding with no
 -- pinned var records nothing and returns False, leaving generalization untouched.
+--
+-- ⚠️ NAME IS NARROWER THAN THE BEHAVIOUR: since #1986 rung 1 this consults the METHOD
+-- channels too, not just the dict-forwarding one — see localPinPairs above.  The name
+-- is kept so this slice's LEG A / snapshot diff stays additive; renaming it to
+-- pinLocalIfConstrained is a follow-up.
 pinLocalIfDictForwarded : Int -> Int -> String -> Option Loc -> Mono -> Bool
 pinLocalIfDictForwarded callN0 dictN0 name loc t =
   recordPinnedLocals
     name
     loc
     (freeGenVars perRun.value.currentLevel.value t)
-    (dictForwardedPairs callN0 dictN0)
+    (localPinPairs callN0 dictN0)
     t
 
 -- Shared by all five pin sites: record one note per dict-forwarded var that is free
@@ -15760,10 +15809,14 @@ dropFirst n xs
 dropFirst _ [] = []
 dropFirst n (_::xs) = dropFirst (n - 1) xs
 
--- [constrained] is the group's pin set, computed ONCE by processLetGroup:
--- methodConstrainedIds (arg-position method dispatch) ++ dictForwardedIds
--- (constrained-callee dict sites, #866).  Both name tyvars this group must not
--- generalize over — see those two functions for why.
+-- [constrained] is the group's pin set, computed ONCE by processLetGroup as
+-- [localPinIds]: the two method channels (arg-position method dispatch) ++
+-- the dictForwardedPairs ids (constrained-callee dict sites, #866).  All name tyvars
+-- this group must not generalize over — see localPinPairs and the functions it calls.
+-- Since #1986 rung 1 this is the SAME predicate the four pinLocalIfDictForwarded sites
+-- consult, and [dictPairs] here is that identical list, so it covers every id in
+-- [constrained] and the recordPinnedLocalsGeneric fallback below is a belt-and-braces
+-- path rather than a routine one.
 generalizeGroup : TcEnv -> List Int -> List (Int, String) -> List (LetBind, (String, Scheme)) -> TcEnv
 generalizeGroup env _ _ [] = env
 generalizeGroup env constrained dictPairs (((LetBind name clauses), (_, sch))::rest) =
@@ -36774,7 +36827,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "groupNames" ((PList) PWild) (EListLit))
 (DFunDef false "groupNames" ((PCons (PTuple (PVar "n") PWild) (PVar "rest")) (PVar "seen")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "seen")) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "groupNames") (EVar "rest")) (EVar "seen"))) (arm (PCon "None") () (EBinOp "::" (EVar "n") (EApp (EApp (EVar "groupNames") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "seen")))))))
 (DTypeSig false "processLetGroup" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyCon "TcEnv"))))
-(DFunDef false "processLetGroup" ((PVar "env") (PVar "binds")) (EBlock (DoLet false false PWild (EApp (EVar "enterLevel") (ELit LUnit))) (DoLet false false (PVar "oblN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))) (DoLet false false (PVar "callN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls"))) (DoLet false false (PVar "dictN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictApps"))) (DoLet false false (PVar "placeholders") (EApp (EApp (EVar "map") (EVar "letBindPlaceholder")) (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "extendLocalVars") (EVar "env")) (EVar "placeholders"))) (DoLet false false PWild (EApp (EApp (EVar "inferLetBinds") (EVar "env2")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false PWild (EApp (EVar "exitLevel") (ELit LUnit))) (DoLet false false (PVar "addedObls") (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (EVar "oblN0"))) (DoLet false false PWild (EApp (EApp (EVar "defaultGroupNum") (EVar "addedObls")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false PWild (EApp (EApp (EVar "registerAmbiguousConstraints") (EVar "addedObls")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false (PVar "dictPairs") (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))) (DoLet false false (PVar "methodOccPairs") (EApp (EVar "methodOccArgPairs") (ELit LUnit))) (DoLet false false (PVar "pinned") (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedIds") (ELit LUnit)) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "methodOccPairs"))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "dictPairs")))) (DoLet false false (PVar "notePairs") (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedPairs") (ELit LUnit)) (EVar "methodOccPairs")) (EVar "dictPairs"))) (DoLet false false (PVar "genv") (EApp (EApp (EApp (EApp (EVar "generalizeGroup") (EVar "env")) (EVar "pinned")) (EVar "notePairs")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false (PVar "callOblsDelta") (EApp (EVar "callOblsWindow") (EVar "callN0"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "registerSchemeObligations") (EVar "omEmpty")) (EListLit)) (EVar "callOblsDelta")) (EVar "addedObls")) (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "binds")))) (DoExpr (EVar "genv"))))
+(DFunDef false "processLetGroup" ((PVar "env") (PVar "binds")) (EBlock (DoLet false false PWild (EApp (EVar "enterLevel") (ELit LUnit))) (DoLet false false (PVar "oblN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))) (DoLet false false (PVar "callN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls"))) (DoLet false false (PVar "dictN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictApps"))) (DoLet false false (PVar "placeholders") (EApp (EApp (EVar "map") (EVar "letBindPlaceholder")) (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "extendLocalVars") (EVar "env")) (EVar "placeholders"))) (DoLet false false PWild (EApp (EApp (EVar "inferLetBinds") (EVar "env2")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false PWild (EApp (EVar "exitLevel") (ELit LUnit))) (DoLet false false (PVar "addedObls") (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (EVar "oblN0"))) (DoLet false false PWild (EApp (EApp (EVar "defaultGroupNum") (EVar "addedObls")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false PWild (EApp (EApp (EVar "registerAmbiguousConstraints") (EVar "addedObls")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false (PVar "pinned") (EApp (EApp (EVar "localPinIds") (EVar "callN0")) (EVar "dictN0"))) (DoLet false false (PVar "notePairs") (EApp (EApp (EVar "localPinPairs") (EVar "callN0")) (EVar "dictN0"))) (DoLet false false (PVar "genv") (EApp (EApp (EApp (EApp (EVar "generalizeGroup") (EVar "env")) (EVar "pinned")) (EVar "notePairs")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false (PVar "callOblsDelta") (EApp (EVar "callOblsWindow") (EVar "callN0"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "registerSchemeObligations") (EVar "omEmpty")) (EListLit)) (EVar "callOblsDelta")) (EVar "addedObls")) (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "binds")))) (DoExpr (EVar "genv"))))
 (DTypeSig false "groupSchemesOf" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))
 (DFunDef false "groupSchemesOf" (PWild (PList)) (EListLit))
 (DFunDef false "groupSchemesOf" ((PVar "genv") (PCons (PCon "LetBind" (PVar "name") PWild) (PVar "rest"))) (EMatch (EApp (EApp (EVar "lookupVar") (EVar "genv")) (EVar "name")) (arm (PCon "Some" (PVar "sch")) () (EBinOp "::" (ETuple (EVar "name") (EVar "sch")) (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "rest")))))
@@ -36807,8 +36860,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "callOblMonoIds" ((PTuple (PVar "iface") (PVar "monos") PWild)) (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EVar "monoIdsWithIface") (ETuple (EVar "m") (EFieldAccess (EVar "iface") "irName"))))) (EVar "monos")))
 (DTypeSig false "monoIdsWithIface" (TyFun (TyTuple (TyCon "Mono") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
 (DFunDef false "monoIdsWithIface" ((PTuple (PVar "m") (PVar "iface"))) (EApp (EApp (EVar "map") (ELam ((PVar "id")) (ETuple (EVar "id") (EVar "iface")))) (EApp (EVar "monoUnboundIds") (EVar "m"))))
+(DTypeSig false "localPinIds" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "localPinIds" ((PVar "callN0") (PVar "dictN0")) (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedIds") (ELit LUnit)) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "methodOccArgPairs") (ELit LUnit)))) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0")))))
+(DTypeSig false "localPinPairs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))))
+(DFunDef false "localPinPairs" ((PVar "callN0") (PVar "dictN0")) (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedPairs") (ELit LUnit)) (EApp (EVar "methodOccArgPairs") (ELit LUnit))) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))))
 (DTypeSig false "pinLocalIfDictForwarded" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
-(DFunDef false "pinLocalIfDictForwarded" ((PVar "callN0") (PVar "dictN0") (PVar "name") (PVar "loc") (PVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "recordPinnedLocals") (EVar "name")) (EVar "loc")) (EApp (EApp (EVar "freeGenVars") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EVar "t"))) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))) (EVar "t")))
+(DFunDef false "pinLocalIfDictForwarded" ((PVar "callN0") (PVar "dictN0") (PVar "name") (PVar "loc") (PVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "recordPinnedLocals") (EVar "name")) (EVar "loc")) (EApp (EApp (EVar "freeGenVars") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EVar "t"))) (EApp (EApp (EVar "localPinPairs") (EVar "callN0")) (EVar "dictN0"))) (EVar "t")))
 (DTypeSig false "recordPinnedLocals" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
 (DFunDef false "recordPinnedLocals" ((PVar "name") (PVar "loc") (PVar "free") (PVar "pairs") (PVar "t")) (EBlock (DoLet false false (PVar "hits") (EApp (EVar "dedupPairsById") (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EApp (EApp (EVar "containsI") (EApp (EVar "fst") (EVar "p"))) (EVar "free")))) (EVar "pairs")))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "hits")) (EVar "False") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pinnedLocals")) (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "p")) (ETuple (EApp (EApp (EVar "tvarMonoOfIn") (EVar "t")) (EApp (EVar "fst") (EVar "p"))) (EVar "name") (EApp (EVar "snd") (EVar "p")) (EVar "loc")))) (EVar "hits")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pinnedLocals") "value")))) (DoExpr (EVar "True")))))))
 (DTypeSig false "recordPinnedLocalsGeneric" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
@@ -42264,7 +42321,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "groupNames" ((PList) PWild) (EListLit))
 (DFunDef false "groupNames" ((PCons (PTuple (PVar "n") PWild) (PVar "rest")) (PVar "seen")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "seen")) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "groupNames") (EVar "rest")) (EVar "seen"))) (arm (PCon "None") () (EBinOp "::" (EVar "n") (EApp (EApp (EVar "groupNames") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "seen")))))))
 (DTypeSig false "processLetGroup" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyCon "TcEnv"))))
-(DFunDef false "processLetGroup" ((PVar "env") (PVar "binds")) (EBlock (DoLet false false PWild (EApp (EVar "enterLevel") (ELit LUnit))) (DoLet false false (PVar "oblN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))) (DoLet false false (PVar "callN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls"))) (DoLet false false (PVar "dictN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictApps"))) (DoLet false false (PVar "placeholders") (EApp (EApp (EMethodRef "map") (EVar "letBindPlaceholder")) (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "extendLocalVars") (EVar "env")) (EVar "placeholders"))) (DoLet false false PWild (EApp (EApp (EVar "inferLetBinds") (EVar "env2")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false PWild (EApp (EVar "exitLevel") (ELit LUnit))) (DoLet false false (PVar "addedObls") (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (EVar "oblN0"))) (DoLet false false PWild (EApp (EApp (EVar "defaultGroupNum") (EVar "addedObls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false PWild (EApp (EApp (EVar "registerAmbiguousConstraints") (EVar "addedObls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false (PVar "dictPairs") (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))) (DoLet false false (PVar "methodOccPairs") (EApp (EVar "methodOccArgPairs") (ELit LUnit))) (DoLet false false (PVar "pinned") (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedIds") (ELit LUnit)) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "methodOccPairs"))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "dictPairs")))) (DoLet false false (PVar "notePairs") (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedPairs") (ELit LUnit)) (EVar "methodOccPairs")) (EVar "dictPairs"))) (DoLet false false (PVar "genv") (EApp (EApp (EApp (EApp (EVar "generalizeGroup") (EVar "env")) (EVar "pinned")) (EVar "notePairs")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false (PVar "callOblsDelta") (EApp (EVar "callOblsWindow") (EVar "callN0"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "registerSchemeObligations") (EVar "omEmpty")) (EListLit)) (EVar "callOblsDelta")) (EVar "addedObls")) (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "binds")))) (DoExpr (EVar "genv"))))
+(DFunDef false "processLetGroup" ((PVar "env") (PVar "binds")) (EBlock (DoLet false false PWild (EApp (EVar "enterLevel") (ELit LUnit))) (DoLet false false (PVar "oblN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))) (DoLet false false (PVar "callN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls"))) (DoLet false false (PVar "dictN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictApps"))) (DoLet false false (PVar "placeholders") (EApp (EApp (EMethodRef "map") (EVar "letBindPlaceholder")) (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "extendLocalVars") (EVar "env")) (EVar "placeholders"))) (DoLet false false PWild (EApp (EApp (EVar "inferLetBinds") (EVar "env2")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false PWild (EApp (EVar "exitLevel") (ELit LUnit))) (DoLet false false (PVar "addedObls") (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (EVar "oblN0"))) (DoLet false false PWild (EApp (EApp (EVar "defaultGroupNum") (EVar "addedObls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false PWild (EApp (EApp (EVar "registerAmbiguousConstraints") (EVar "addedObls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false (PVar "pinned") (EApp (EApp (EVar "localPinIds") (EVar "callN0")) (EVar "dictN0"))) (DoLet false false (PVar "notePairs") (EApp (EApp (EVar "localPinPairs") (EVar "callN0")) (EVar "dictN0"))) (DoLet false false (PVar "genv") (EApp (EApp (EApp (EApp (EVar "generalizeGroup") (EVar "env")) (EVar "pinned")) (EVar "notePairs")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false (PVar "callOblsDelta") (EApp (EVar "callOblsWindow") (EVar "callN0"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "registerSchemeObligations") (EVar "omEmpty")) (EListLit)) (EVar "callOblsDelta")) (EVar "addedObls")) (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "binds")))) (DoExpr (EVar "genv"))))
 (DTypeSig false "groupSchemesOf" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))
 (DFunDef false "groupSchemesOf" (PWild (PList)) (EListLit))
 (DFunDef false "groupSchemesOf" ((PVar "genv") (PCons (PCon "LetBind" (PVar "name") PWild) (PVar "rest"))) (EMatch (EApp (EApp (EVar "lookupVar") (EVar "genv")) (EVar "name")) (arm (PCon "Some" (PVar "sch")) () (EBinOp "::" (ETuple (EVar "name") (EVar "sch")) (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "rest")))))
@@ -42297,8 +42354,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "callOblMonoIds" ((PTuple (PVar "iface") (PVar "monos") PWild)) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EVar "monoIdsWithIface") (ETuple (EVar "m") (EFieldAccess (EVar "iface") "irName"))))) (EVar "monos")))
 (DTypeSig false "monoIdsWithIface" (TyFun (TyTuple (TyCon "Mono") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
 (DFunDef false "monoIdsWithIface" ((PTuple (PVar "m") (PVar "iface"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "id")) (ETuple (EVar "id") (EVar "iface")))) (EApp (EVar "monoUnboundIds") (EVar "m"))))
+(DTypeSig false "localPinIds" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "localPinIds" ((PVar "callN0") (PVar "dictN0")) (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedIds") (ELit LUnit)) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "methodOccArgPairs") (ELit LUnit)))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0")))))
+(DTypeSig false "localPinPairs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))))
+(DFunDef false "localPinPairs" ((PVar "callN0") (PVar "dictN0")) (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedPairs") (ELit LUnit)) (EApp (EVar "methodOccArgPairs") (ELit LUnit))) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))))
 (DTypeSig false "pinLocalIfDictForwarded" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
-(DFunDef false "pinLocalIfDictForwarded" ((PVar "callN0") (PVar "dictN0") (PVar "name") (PVar "loc") (PVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "recordPinnedLocals") (EVar "name")) (EVar "loc")) (EApp (EApp (EVar "freeGenVars") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EVar "t"))) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))) (EVar "t")))
+(DFunDef false "pinLocalIfDictForwarded" ((PVar "callN0") (PVar "dictN0") (PVar "name") (PVar "loc") (PVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "recordPinnedLocals") (EVar "name")) (EVar "loc")) (EApp (EApp (EVar "freeGenVars") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EVar "t"))) (EApp (EApp (EVar "localPinPairs") (EVar "callN0")) (EVar "dictN0"))) (EVar "t")))
 (DTypeSig false "recordPinnedLocals" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
 (DFunDef false "recordPinnedLocals" ((PVar "name") (PVar "loc") (PVar "free") (PVar "pairs") (PVar "t")) (EBlock (DoLet false false (PVar "hits") (EApp (EVar "dedupPairsById") (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EApp (EApp (EVar "containsI") (EApp (EVar "fst") (EVar "p"))) (EVar "free")))) (EVar "pairs")))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "hits")) (EVar "False") (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pinnedLocals")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (ETuple (EApp (EApp (EVar "tvarMonoOfIn") (EVar "t")) (EApp (EVar "fst") (EVar "p"))) (EVar "name") (EApp (EVar "snd") (EVar "p")) (EVar "loc")))) (EVar "hits")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pinnedLocals") "value")))) (DoExpr (EVar "True")))))))
 (DTypeSig false "recordPinnedLocalsGeneric" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Mono") (TyCon "Bool")))))))

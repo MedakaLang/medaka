@@ -1211,6 +1211,8 @@ liveTailId : Ref Effvar -> Int
 loadDataUniverse : Int -> Unit
 locEq : Loc -> Loc -> Bool
 locSameFileAsError : Option Loc -> Bool
+localPinIds : Int -> Int -> List Int
+localPinPairs : Int -> Int -> List (Int, String)
 lookupAssocI : Int -> List (Int, a) -> Option a
 lookupAssocS : String -> List (String, List IfaceRef) -> Option (List IfaceRef)
 lookupAssocSL2 : String -> List (String, List Int) -> Option (List Int)
