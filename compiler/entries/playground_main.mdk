@@ -186,11 +186,14 @@ analyzeSingle rsrc csrc tsrc entry runtimeP coreP roots =
     False => guardedEmit rsrc csrc tsrc entry roots [(entry, tsrc, filterWarnings diags)]
 
 -- Multi-module: analyzeProject (loader path).  Clean ⇒ emit.
+-- #1362: `analyzeSingle` above uses the UNGUARDED `analyzeLocated` (the
+-- playground has no `--allow-internal` flag or trusted-root concept); kept
+-- unguarded here too (`allowInternal = True`, `trustedMods = []`) for parity.
 analyzeMulti : String -> String -> String -> String -> String -> String -> List String -> List (String, List Decl) -> <IO> Unit
 analyzeMulti rsrc csrc tsrc entry runtimeP coreP roots _mods =
   let cacheRef = Ref []
   let parseCacheRef = Ref []
-  let results = analyzeProject cacheRef parseCacheRef (_ => None) entry roots rsrc csrc
+  let results = analyzeProject True [] cacheRef parseCacheRef (_ => None) entry roots rsrc csrc
   let triples = map readDiagSrc results
   match any cjHasErr results
     True => emitDiagnostics (cjAllToJson triples)

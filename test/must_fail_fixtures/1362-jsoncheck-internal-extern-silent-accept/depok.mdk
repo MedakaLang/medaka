@@ -1,4 +1,0 @@
--- issue #1362 control: same shape as dep.mdk (same exported name, same type),
--- ONE variable removed -- no internal-extern primitive anywhere in the body.
-export badFn : Array Char -> Int -> Char
-badFn arr i = 'x'

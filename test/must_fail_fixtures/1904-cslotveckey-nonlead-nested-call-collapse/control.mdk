@@ -1,0 +1,11 @@
+interface Ix a b c where
+  ix : a -> b -> c -> Int
+impl Ix Int Char Bool where
+  ix _ _ _ = 333
+impl Ix Int Bool Char where
+  ix _ _ _ = 111
+
+callA : Ix a b c => a -> b -> c -> Int
+callA n x y = ix n x y
+
+main = println (callA 5 'z' True)

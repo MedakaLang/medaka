@@ -2,9 +2,36 @@
 -- sends `mkA.dx` down the field->owners fallback instead of the exact
 -- `lookupRecordByName <head tycon>` hit, and it is why this shape is not covered by any
 -- cell built out of short-form records.
+--
+-- 🚨 THE SIBLING USED TO BE `ACount Int`, POSITIONAL, AND THAT MADE `entry.mdk`'s
+-- `mkA.dx` ILL-TYPED -- the compiler just had no way to say so until #1468's
+-- positional-sibling gap closed (and, for THIS multi-module path, until the ctor-oracle
+-- key mint was repaired: `ctorOracleKeyOf`, `compiler/types/typecheck.mdk`).  `mkA` is
+-- statically typed `RA` and an `RA` value carries no constructor tag, so `.dx` is only
+-- well-typed when EVERY constructor of `RA` declares `dx`; a positional `ACount`
+-- declares no named field at all.  The flat, single-file form of exactly this program
+-- is `test/typecheck_error_fixtures/field_ctor_sibling_positional_lacks_field.mdk`, and
+-- it has rejected since #1468's residual fix landed -- so the positional form here was
+-- an accident of age, not a property this cell was ever guarding.
+-- ⚠️ Do NOT restore `ACount Int` to "make the gate green": that reopens #1468.
+--
+-- THE REPAIR KEEPS ALL FOUR OF `entry.mdk`'s STATED DISCRIMINATORS, deliberately:
+--   * the sibling stays a SEPARATE CONSTRUCTOR of `RA`, so `lookupRecordByName "RA"`
+--     still MISSES and the field->owners fallback is still the arm under test;
+--   * `Dup` is still the registry key for the record `mkA` actually holds;
+--   * `entry.mdk` still imports `{RA, mkA}` with no `(..)`, so no constructor is
+--     witnessed for the owner key `Dup`;
+--   * `dx` is `Zcount`'s FIRST field, as it is `Dup`'s, so the two constructors of `RA`
+--     agree on the slot and no cell-layout question is smuggled in.
+-- 🚨 AND IT IS NAMED `Zcount`, NOT `ACount`, FOR THE ORDERING REASON `entry.mdk`
+-- DOCUMENTS.  `fieldOwnerNames` returns the owners of `dx` `sortUniqS`ed and
+-- `resolveFieldAmbiguous` takes `headL`, so `mkA.dx` lands on the right record only
+-- while `Dup` sorts FIRST among them.  The owner set is now `Dup`, `Wrec`, `Zcount`;
+-- an `A…` spelling would sort ahead of `Dup` and change which record `headL` picks --
+-- loudly, but for a reason having nothing to do with the narrowing this cell guards.
 public export data RA =
   | Dup { dx : Int }
-  | ACount Int
+  | Zcount { dx : Int, zextra : Int }
 
 export mkA : RA
 mkA = Dup { dx = 7 }

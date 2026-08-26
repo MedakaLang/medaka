@@ -1,0 +1,3 @@
+double x = x + x
+
+main = println (double 2.5)

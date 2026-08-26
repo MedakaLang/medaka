@@ -80,7 +80,6 @@ anyClaimRow : List Int -> List (String, List (List Mono)) -> Bool
 anyClauseEagerlyRefsGroup : List String -> List FunClause -> Bool
 anyConcreteHead : List Mono -> Bool
 anyContainsI : List Int -> List Int -> Bool
-anyCtorSiblingWithholds : Option HeadKey -> String -> String -> List String -> Bool
 anyDepReaches : List String -> List String -> String -> List (String, List Decl) -> Bool
 anyGivenMatches : String -> List Mono -> List (String, List Mono, String) -> Bool
 anyHoleAtom : List Atom -> Bool
@@ -459,7 +458,11 @@ ctorCandImported : List Decl -> String -> (Ident, String, Scheme) -> Bool
 ctorCandScheme : (Ident, String, Scheme) -> Scheme
 ctorHeadIsUpper : String -> Bool
 ctorIdentRow : String -> TyConOrigin -> String -> List (String, String, Ident)
-ctorSiblingWithholds : Option HeadKey -> String -> String -> Bool
+ctorOracleKeyOf : Option HeadKey -> Option TabKey
+ctorSiblingWithholdingForHead : Option HeadKey -> Option HeadKey -> String -> String -> Option String
+ctorSiblingWithholdingHere : Mono -> String -> RecordInfo -> String -> Option String
+ctorSiblingWithholdingName : Option HeadKey -> String -> String -> Option String
+ctorSiblingWithholds : String -> String -> Bool
 currentDoOrigin : Ref (Option Loc)
 currentLoc : Ref (Option Loc)
 currentLocalSchemes : Unit -> List (String, Scheme)
@@ -491,17 +494,27 @@ declCtorIdents : List Decl -> List (String, String, Ident)
 declCtorIdentsOf : Decl -> List (String, String, Ident)
 declCtorNamed : String -> Decl -> Bool
 declEnvDeclFieldOwners : List Decl -> Map String (List String) -> Map String (List String)
+declEnvDeclOwnerModules : String -> List Decl -> Map String (List String) -> Map String (List String)
 declEnvDeclsOf : List DeclEnvModule -> List Decl
 declEnvDefinerIndex : Map String (List (String, (String, String))) -> List DeclEnvModule -> Map String (List (String, (String, String)))
+declEnvDirectImports : Map String (List String) -> String -> List String
+declEnvImportIndex : List DeclEnvModule -> Map String (List String) -> Map String (List String)
 declEnvKindEntries : List Decl -> List (TabKey, List Kind)
+declEnvMarkReached : List String -> Map String Unit -> Map String Unit
 declEnvModule : Int -> String -> List Decl -> DeclEnvModule
 declEnvModulesFrom : Int -> List (String, List Decl) -> List DeclEnvModule
 declEnvOrdIndex : Map String Int -> List DeclEnvModule -> Map String Int
+declEnvOwnerModules : List DeclEnvModule -> Map String (List String) -> Map String (List String)
+declEnvReachFrom : Map String (List String) -> List String -> Map String Unit -> Map String Unit
+declEnvReachGo : Map String (List String) -> List DeclEnvModule -> Map String (Map String Unit) -> Map String (Map String Unit)
+declEnvReachIndex : List DeclEnvModule -> Map String (Map String Unit)
+declEnvReachSeed : String -> Map String Unit
 declEnvRowKindEntries : Int -> DeclEnvModule -> List (TabKey, List Kind)
 declEnvRowVisible : Int -> DeclEnvModule -> List Decl
 declEnvSeedChain : List DeclEnvModule -> List (TabKey, List Kind) -> Map String (List String) -> Map String (List (TabKey, List Kind)) -> Map String (Map String (List String)) -> (Map String (List (TabKey, List Kind)), Map String (Map String (List String)))
 declEnvSeedDataUniverse : String -> DeclEnvs -> Unit
 declEnvVariantFieldOwners : List Variant -> Map String (List String) -> Map String (List String)
+declEnvVariantOwnerModules : String -> List Variant -> Map String (List String) -> Map String (List String)
 declEnvVisibleAt : Int -> Int -> Bool
 declEnvVisibleTo : Int -> Int -> Bool -> Bool
 declEnvsOrdOf : String -> DeclEnvs -> Int
@@ -713,7 +726,12 @@ fieldAssignNamePair : FieldAssign -> (String, Unit)
 fieldAssignSites : FieldAssign -> List (Ref Route)
 fieldFixFrom : Option Loc -> String -> Option (Loc, String)
 fieldNameOf : Field -> String
+fieldNotInAllCtorsMsg : String -> String -> String -> String
+fieldOwnerAnyReachable : List String -> Bool
 fieldOwnerNames : String -> List String
+fieldOwnerReachFilter : List String -> List String
+fieldOwnerReachable : String -> Bool
+fieldSelectionWellTyped : Mono -> String -> RecordInfo -> String -> Mono -> Mono
 fieldTyOf : Field -> Ty
 fieldTypeE : List (String, Ref Effvar) -> List (String, Mono) -> Field -> Mono
 fillHoleAtom : List (String, Expr) -> Option Expr -> Atom -> Atom
@@ -733,6 +751,7 @@ findTupleCand : String -> List (Mono, String, Option (Loc, String)) -> Option (S
 findTvName : Int -> List (String, Mono) -> Option String
 findTvarInMono : Mono -> Int -> Option Mono
 findTvarN : Mono -> Int -> Option Mono
+firstCtorSiblingWithholding : String -> String -> List String -> Option String
 firstDictForEncl : Int -> String -> List (Int, String) -> Option String
 firstDispatchIdx : List String -> Int -> List Ty -> Option Int
 firstFieldName : List FieldAssign -> Option String

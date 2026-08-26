@@ -1,5 +1,0 @@
--- issue #1362 control: main.mdk's exact shape, importing depok.mdk (no
--- internal-extern violation) instead of dep.mdk. Must check --json cleanly.
-import depok.{badFn}
-
-main = println (badFn (stringToChars "hi") 0)

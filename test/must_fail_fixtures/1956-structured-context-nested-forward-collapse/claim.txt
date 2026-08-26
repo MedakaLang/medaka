@@ -1,0 +1,39 @@
+issue: 1956
+what: with `f : Conv (Wrap a) b => ...` and two impls `Conv (Wrap Int) Bool` /
+what: `Conv (Wrap Char) Int`, the deferred dict slot is keyed on the
+what: predicate's first abstract id (`a`, the inner leaf of the structured
+what: argument `Wrap a`); the second variable `b` gets no independent route,
+what: so two call sites differing only in `b` (and its correlated structured
+what: leaf) cannot select different dicts when routed through a SHARED
+what: forwarding function.
+cmd: run main.mdk
+exit: 0
+stdout: wrap-int-bool wrap-int-bool
+control: run control.mdk
+why-fixture: the issue's own repro (`f (Wrap 5) True`, `f (Wrap 'c') 7`
+why-fixture: called directly from `main`) is now FIXED -- re-measured
+why-fixture: first-hand on this build: `main = println (f (Wrap 5) True ++ "
+why-fixture: " ++ f (Wrap 'c') 7)` now prints the CORRECT `wrap-int-bool
+why-fixture: wrap-char-int`, because that shape is a direct body occurrence
+why-fixture: of `f`'s own declared predicate -- exactly what `sprint/nary-
+why-fixture: predicate-slots`' slice 3 (`indexOfPredGo`) fixed. This
+why-fixture: fixture instead routes BOTH instantiations through a SHARED
+why-fixture: helper `callA : Conv (Wrap a) b => Wrap a -> b -> String`,
+why-fixture: called twice from `f2`'s body with two different
+why-fixture: instantiations of `(Wrap a, b)`. Measured (this build,
+why-fixture: `MEDAKA_STRICT=1`, both `run` and `build`-executed): both
+why-fixture: calls print `wrap-int-bool` (correct: `wrap-int-bool
+why-fixture: wrap-char-int`) -- the second instantiation silently reuses the
+why-fixture: first's dict.
+why-control: control.mdk calls `callA` ALONE, once, directly from `main`,
+why-control: with the `Wrap Char`/`Int` instantiation. It must print
+why-control: `wrap-char-int`, proving the impl itself and single-instantiation
+why-control: dispatch through the helper are intact -- the defect is specific
+why-control: to forwarding TWO DIFFERENT instantiations of the same
+why-control: structured predicate through the same helper within one caller.
+why-note: root cause per the issue: the deferred dict slot is keyed on the
+why-note: predicate's lead abstract id only; the non-lead variable `b` (and
+why-note: its correlated structured leaf across call sites) gets no
+why-note: independent route. A fix makes `main.mdk` print `wrap-int-bool
+why-note: wrap-char-int`, draining this row. Close #1956 and delete this
+why-note: fixture when that happens.

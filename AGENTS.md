@@ -507,11 +507,6 @@ independent observations of resolve/typecheck behavior — agreeing is not corro
 pointed at one that hardcodes its own reports *identical* and manufactures a false negative.
 **Derive, don't trust a count** (recipe + the #1431 hardcoded case: `debug-pipeline`).
 
-🚨 **[D-JSON-HOLE] `check --json` SILENT-ACCEPTS ON MULTI-MODULE PROJECTS (#1362, OPEN S0);
-`medaka_check` (MCP) inherits it.** Internal-extern violation → exit 0, empty diagnostics.
-**Corroborate an important `--json`/MCP green with human `check`.** Pinned
-`test/must_fail_fixtures/1362-*` — **drains → delete this paragraph.** → dossier
-
 🚨 **[D-BUILD-PIPE] `medaka build`'s exit code does NOT survive a pipe.** **Redirect to a file,
 read `$?`, then read the file.**
 ```sh

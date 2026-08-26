@@ -1,5 +1,5 @@
 # META
-source_lines=1942
+source_lines=1908
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka AST — mirror of lib/ast.ml's surface (pre-desugar) nodes,
@@ -1278,64 +1278,30 @@ public export data Decl =
   -- `name`/`typarams`/`supers`/`methods` are the grandfathered exposure #1216
   -- tracks — the new `ifaceOrigin` is prefixed rather than joining them.
   --
-  -- 🚨 A RECORD PATTERN MATCHES BY LABEL SET, NOT BY CONSTRUCTOR — so every arm
-  -- below MUST NAME AT LEAST ONE LABEL NO SIBLING CONSTRUCTOR HAS.
+  -- ✅ AS OF `S-record-pattern-identity` (#1217/#1462), A RECORD PATTERN MATCHES BY
+  -- CONSTRUCTOR, LIKE ANY OTHER PATTERN — `matchPat`'s `VRecord` arm in
+  -- `compiler/eval/eval.mdk` now binds and compares the constructor, mirroring the
+  -- `VCon` arm below it:
   --
-  -- ⚠️ THIS BLOCK PREVIOUSLY SAID "use a partial pattern, never `...`; a partial
-  -- pattern is strictly better and costs nothing."  BOTH CLAUSES ARE FALSE, and
-  -- ~50 `Ty` sites plus this PR's first cut were written on them (#1217 restates
-  -- the same wrong remedy).  Do not restore that wording.
+  --     matchPat (PRec ctor fields _) (VRecord ctor2 recFields)
+  --       | ctor == ctor2 = matchRecFields fields recFields
+  --       | otherwise = None
   --
-  -- The mechanism, at source rather than by reputation.  `compiler/eval/eval.mdk`:
+  -- So `{ }` and `{ ... }` are no longer universal catch-alls across sibling
+  -- constructors — `DInterface { methods }` (or `DInterface {}`, or `DInterface
+  -- { ... }`) now matches ONLY a `DInterface` value; a `DImpl` value falls through
+  -- to a later arm as expected, and `run`/native agree at exit 0 (previously `run`
+  -- picked the first arm sharing any label while the built binary picked the
+  -- right constructor — see the fix's report, §6.3, for the measured divergence
+  -- table this comment used to reproduce).
   --
-  --     matchPat (PRec _ fields _) (VRecord _ recFields) =
-  --       matchRecFields fields recFields          -- ctor DISCARDED (`_`)
-  --     matchPat (PRec ctor fields _) (VCon ctor2 vals)
-  --       | ctor == ctor2 = …                      -- ctor CHECKED
-  --     matchRecFields [] _ = Some []              -- NO labels ⇒ matches anything
-  --
-  -- The `VRecord` arm binds the constructor to `_` and sits ABOVE the `VCon` arm
-  -- that compares it, so for a record-form value the constructor is never
-  -- consulted: the pattern succeeds iff the value carries every label named.
-  -- Three consequences, none of them what the old wording implied:
-  --
-  --   * **`{ }` and `{ ... }` are BOTH catch-alls** — `matchRecFields [] _` returns
-  --     `Some []`.  Naming zero labels means "any record", including other
-  --     constructors of this very type.
-  --   * **The `...` rest flag is irrelevant HERE** — it is the `_` third argument
-  --     of `PRec` in that arm.  `desugarPat _ (PRec _ _ True) = PWild`
-  --     (`frontend/exhaust.mdk`) is a SECOND, INDEPENDENT defect, about
-  --     EXHAUSTIVENESS.  Two mechanisms, one issue (#1217); fixing either leaves
-  --     the other.
-  --   * **"Partial" is not the safe property; UNIQUENESS OF A NAMED LABEL is.**
-  --     `DInterface { methods }` is partial and WRONG: `DImpl` also has `methods`,
-  --     so a `DImpl` takes the `DInterface` arm.
-  --
-  -- ⚠️ THE FAILURE IS run ≠ build AT EXIT 0.  Native compares the constructor
-  -- correctly; only the interpreter does not.  Measured on this binary with one
-  -- `DImpl` value against arms declared `DIface`-first:
-  --
-  --     pattern                            medaka run      built binary
-  --     DIface { methods }   (shared)      TOOK-DIface     TOOK-DImp     ← diverges
-  --     DIface {}            (zero-field)  TOOK-DIface     TOOK-DImp     ← diverges
-  --     DIface { ifaceOrigin = _, … }      TOOK-DImp       TOOK-DImp     ← agrees
-  --
-  -- 🚨 THE RULE: name one label unique to the constructor, and bind nothing where
-  -- you do not need the value — `DData { dataOrigin = _ }`,
-  -- `DTypeAlias { tyAliasOrigin = _ }`, `DNewtype { newtypeOrigin = _ }`,
-  -- `d@(DInterface { ifaceOrigin = _, methods })`.  The `…Origin` fields are the
-  -- ideal discriminators and that is a free consequence of the prefixing rule
-  -- above: prefixed-per-constructor names are unique BY CONSTRUCTION.  Among
-  -- `Decl`, the only labels shared by two constructors are `DInterface`/`DImpl`'s
-  -- `pub` and `methods` — every other label already discriminates.
-  --
-  -- ⚠️ READ THIS AS A RULE, NOT AS A DESCRIPTION OF THE TREE.  Pre-existing
-  -- `DInterface { … , ... }` arms that name only shared labels still exist in
-  -- several modules; they are #1217's business, not this carrier's.  Their
-  -- severity is LATENT rather than live only because compiler code is never
-  -- interpreted (`test/typecheck_compiler_source.sh` records that the interpreter
-  -- does not finish over the whole compiler, and every gate runs it natively) —
-  -- which is also why NO GATE CAN SEE THIS CLASS.  Do not add to it.
+  -- ⚠️ THE OLD RULE — "name at least one label no sibling constructor has" — is
+  -- still good DEFENSIVE STYLE, not because matching is unsound without it, but
+  -- because it keeps a pattern legible and keeps `desugarPat _ (PRec _ _ True) =
+  -- PWild`'s SEPARATE exhaustiveness defect (also #1217, also fixed in the same
+  -- carrier) from mattering: a record arm that already names a discriminating
+  -- label reads unambiguously regardless of how `...` desugars. Prefer it where
+  -- convenient; it is no longer required for correctness.
   --
   -- ⚠️ Exhaustiveness is a WARNING here, exit 0 — a missed arm does not fail the
   -- build, it fails at RUNTIME.  Audit arms as a SET.

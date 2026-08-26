@@ -1,0 +1,14 @@
+-- #1468 — `.x` on a receiver of type `T` where the SIBLING constructor `B` declares
+-- no `x` at all.  `x` has exactly ONE owner (`A`), so the owner ladder resolved it
+-- with full confidence and the later unify was SATISFIED (the receiver really is a
+-- `T`), which is why `check` used to exit 0 while the BUILT BINARY read `B`'s slot 0
+-- through `A`'s `x`.
+--
+-- The sibling field is deliberately `String`, not `Int`: that is the TYPE-CONFUSION
+-- spelling, which printed a heap address as an `Int` rather than merely the wrong
+-- number.  Both spellings must now reject identically at typecheck.
+data T =
+  | A { x : Int }
+  | B { z : String }
+
+getX t = t.x

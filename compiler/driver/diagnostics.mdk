@@ -37,7 +37,7 @@ import frontend.resolve.{
   resErrorLoc,
   resErrorCode,
   resErrorDidYouMean,
-  resolveModule,
+  resolveModuleG,
   ModuleExports,
 }
 import support.ordmap.{OrdMap, omEmpty, omInsert}
@@ -818,9 +818,18 @@ preludeDesugared parseCacheRef src = match lookupAssoc src !parseCacheRef
     parseCacheRef := (src, decls) :: !parseCacheRef
     decls
 
+-- `allowInternal`/`trustedMods` gate the internal-extern guard on the RESOLVE
+-- pass exactly as `resolveModulesErrorsPairsG` (the human `check`/`run`/`build`
+-- multi-module gate) already does: a module is trusted (no internalExterns
+-- restriction) when `allowInternal` is set OR its modId is in `trustedMods`
+-- (the stdlib-owned modules, per the loader's owning-root) — see `resolvePass`
+-- below.  #1362: previously `analyzeProject` always called the unguarded
+-- `resolveModule` (implicit `internalGuard = []`), so `check --json`/MCP
+-- silently accepted an internal-extern violation a multi-module project's
+-- human `check` correctly rejected via the guarded path.
 export
-analyzeProject : Ref (List (String, String)) -> Ref (List (String, List Decl)) -> (String -> Option String) -> String -> List String -> String -> String -> <IO> List (String, List Diag)
-analyzeProject cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
+analyzeProject : Bool -> List String -> Ref (List (String, String)) -> Ref (List (String, List Decl)) -> (String -> Option String) -> String -> List String -> String -> String -> <IO> List (String, List Diag)
+analyzeProject allowInternal trustedMods cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
   let staleRef = newStale ()
   let wread = p => wrappedRead cacheRef staleRef read p
   let runtimeP = preludeDesugared parseCacheRef runtimeSrc
@@ -836,7 +845,7 @@ analyzeProject cacheRef parseCacheRef read entry roots runtimeSrc coreSrc =
       appendStale staleRef [(entry, [mkDiag SevError "R-MODULE-LOAD" e None])]
     Ok mods =>
       let seeded = seedAll (map midPath mods) []
-      let afterRes = resolvePass runtimeP coreP omEmpty mods seeded
+      let afterRes = resolvePass allowInternal trustedMods runtimeP coreP omEmpty mods seeded
       let afterTc = typecheckPass runtimeP coreP [] mods afterRes
       appendStale staleRef afterTc
 -- A load error (cycle / unknown module / unreadable file) is attributed to the
@@ -891,20 +900,27 @@ foldStale ((path, d)::rest) buckets =
   foldStale rest (pushDiag path d (seedBucket path buckets))
 
 -- ── resolve pass (per module, threading exports) ────────────────────────────
--- Mirror analyze_project's resolve loop: resolveModule per module in dependency
+-- Mirror analyze_project's resolve loop: resolveModuleG per module in dependency
 -- order, accumulating ModuleExports, bucketing each module's errors by its file.
+-- #1362: guarded via `allowInternal`/`trustedMods` exactly like
+-- `resolveModulesErrorsPairsG` (the human check/run/build multi-module gate) —
+-- previously always called the unguarded `resolveModule` (implicit
+-- `internalGuard = []`), so this pass never rejected an internal-extern
+-- violation regardless of caller intent.
 -- Resolve errors have no per-error loc in the compiler pipeline → None.
 -- #926: `known` is now a Map keyed by module id (mirrors resolve.mdk's driver),
 -- so each module's imports resolve via an O(log n) `findExports` lookup instead of a
 -- linear scan of a growing `List ModuleExports`.  Threaded byte-identically:
 -- `omInsert exp.modId exp known` replaces the `exp :: known` prepend.
-resolvePass : List Decl -> List Decl -> OrdMap ModuleExports -> List (String, String, List Decl) -> List (String, List Diag) -> List (String, List Diag)
-resolvePass _ _ _ [] buckets = buckets
-resolvePass rt core known ((mid, path, prog)::rest) buckets =
+resolvePass : Bool -> List String -> List Decl -> List Decl -> OrdMap ModuleExports -> List (String, String, List Decl) -> List (String, List Diag) -> List (String, List Diag)
+resolvePass _ _ _ _ _ [] buckets = buckets
+resolvePass allowInternal trustedMods rt core known ((mid, path, prog)::rest) buckets =
   let desugared = desugar prog
-  let (exp, errs) = resolveModule rt core known mid desugared
+  let (exp, errs) = resolveModuleG (internalGuardFor (allowInternal || contains mid trustedMods)) rt core known mid desugared
   let diags = map diagOfResError errs
   resolvePass
+    allowInternal
+    trustedMods
     rt
     core
     (omInsert exp.modId exp known)
@@ -1006,11 +1022,17 @@ lookupTcDiags mid ((m, d)::rest)
 --   "## FILE <path>"  followed by each diag's "severity: message" line.
 -- The harness splits on the marker and sorts each file's lines, diffing against
 -- the OCaml analyze_project's per-file buckets.
+-- #1362: this diff-gate probe has no `--allow-internal`/trusted-root concept of
+-- its own (it is a raw multi-file diagnostics dump, not a `check` route) — kept
+-- unguarded (`allowInternal = True`, `trustedMods = []`) to preserve its prior
+-- byte-identical behavior; it is not exercising the internal-extern boundary.
 export
 analyzeProjectToLines : Ref (List (String, String)) -> (String -> Option String) -> String -> List String -> String -> String -> <IO> String
 analyzeProjectToLines cacheRef read entry roots runtimeSrc coreSrc =
   let parseCacheRef = Ref []
   joinNl (projectLines (analyzeProject
+    True
+    []
     cacheRef
     parseCacheRef
     read
@@ -1380,9 +1402,15 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
             target
             src
         _ =>
+          -- #1362: the single-module arm above computes `trusted` and threads
+          -- `allowInternal || contains mid trusted` through to its guarded
+          -- analyzer — this arm previously computed no trust set at all and
+          -- passed none through, so the internal-extern guard was always
+          -- empty (silent accept). Same trust computation, hoisted one level.
+          let trusted = projectTrustedMods target roots stdlibDir mods
           let cacheRef = Ref []
           let parseCacheRef = Ref []
-          let results = analyzeProject cacheRef parseCacheRef (_ => None) target roots rsrc csrc
+          let results = analyzeProject allowInternal trusted cacheRef parseCacheRef (_ => None) target roots rsrc csrc
           let hasErr = anyList cjHasErrD results
           -- #1236: same main-shape fold as the single-module arm above, only on
           -- a clean project.  `analyzeProject` already parsed+cached the entry

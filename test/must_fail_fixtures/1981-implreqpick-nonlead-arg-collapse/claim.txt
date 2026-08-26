@@ -1,0 +1,34 @@
+issue: 1981
+what: the impl-`requires` channel (`implReqPick`/`implReqDictVarOf`,
+what: `compiler/types/typecheck.mdk`) routes two same-interface predicates
+what: that differ only in a non-lead argument position (`Ix a b c` vs.
+what: `Ix a c b`) to the SAME dict slot, via the old head-only
+what: `predArgsAgree` comparison. `sprint/nary-predicate-slots` slice 3 fixed
+what: this class only for `indexOfPredGo` (a body occurrence reading its own
+what: enclosing function's predicate); `implReqPick` (an `impl ... requires
+what: ...` obligation site) was left on the unmeasured old comparison.
+cmd: run main.mdk
+exit: 0
+stdout: 222
+control: run control.mdk
+why-fixture: measured first-hand on this build (`MEDAKA_STRICT=1`, `check`
+why-fixture: exit 0/0 errors, `run` and native `build`-executed both print
+why-fixture: `222`). Correct value: `ix n x y` (`Ix Int Char Bool` = 333) +
+why-fixture: `ix n y x` (`Ix Int Bool Char` = 111) = 444. Got 222 = 111 + 111
+why-fixture: -- both calls silently resolve to the same (wrong, for one of
+why-fixture: them) requires-clause dict.
+why-control: control.mdk is byte-identical except `impl Sz (W a b c)
+why-control: requires Ix a b c, Ix a c b` is replaced with the fully-ground
+why-control: `impl Sz (W Int Char Bool)` -- no bound tyvars in the differing
+why-control: positions, so there is nothing for the requires-channel's
+why-control: non-lead collapse to collide. It must print `444` (measured:
+why-control: `444`, exit 0), proving the impl table, the body arithmetic, and
+why-control: ordinary (non-generic) `requires` dispatch are otherwise intact.
+why-note: root cause per the issue: `implReqPick`/`implReqDictVarOf` still
+why-note: call `predArgsAgree` (head-tycon-only comparison) instead of a
+why-note: positional-correspondence relation like slice 3's
+why-note: `predArgsAgreeEncl`. Per the issue, reusing that relation here
+why-note: unmeasured is NOT safe -- an `impl ... requires ...` site is a
+why-note: different instantiation boundary and needs its own fresh
+why-note: measurement. A fix makes `main.mdk` print `444`, draining this row.
+why-note: Close #1981 and delete this fixture when that happens.

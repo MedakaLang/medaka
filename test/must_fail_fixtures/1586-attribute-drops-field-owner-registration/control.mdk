@@ -1,8 +1,0 @@
-data A = A { s : Int }
-
-@deprecated "old"
-data B = B { t : Int }
-
-g r = r.s
-
-main = println (g (A { s = 1 }))

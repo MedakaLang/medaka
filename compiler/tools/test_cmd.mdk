@@ -240,11 +240,16 @@ singleFileTypeErrors target tsrc rsrc csrc =
     [] => None
     _ => Some (joinNl (map (ppDiagCliSrc tsrc target) errs))
 
+-- #1362: `singleFileTypeErrors` above uses the UNGUARDED `analyzeLocated` (no
+-- internal-extern restriction) so a stdlib module under test is never
+-- spuriously rejected; keep this multi-module twin unguarded too
+-- (`allowInternal = True`, `trustedMods = []`) for the same reason — `medaka
+-- test` is not the internal-extern enforcement surface (`check`/`--json` is).
 projectTypeErrors : String -> List String -> String -> String -> <IO> Option String
 projectTypeErrors target roots rsrc csrc =
   let cacheRef = Ref []
   let parseCacheRef = Ref []
-  let results = analyzeProject cacheRef parseCacheRef (_ => None) target roots rsrc csrc
+  let results = analyzeProject True [] cacheRef parseCacheRef (_ => None) target roots rsrc csrc
   let triples = map readDiagSrc results
   let rendered = flatMap renderFileErrors triples
   match rendered

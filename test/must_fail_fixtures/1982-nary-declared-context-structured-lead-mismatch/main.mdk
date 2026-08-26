@@ -1,0 +1,13 @@
+data Wrap a = Wrap a
+data Box a = Box a
+interface Tag2 s t where
+  tagOf : s -> t -> String
+impl Tag2 (Wrap a) Int where
+  tagOf _ _ = "wrap"
+impl Tag2 (Box Int) Int where
+  tagOf (Box n) _ = "box-payload=\{intToString (n + 1)}"
+
+g : Tag2 (Wrap a) Int => a -> String
+g x = "\{tagOf (Wrap x) 0}/\{tagOf (Box x) 0}"
+
+main = println (g 'z')
