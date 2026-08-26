@@ -637,11 +637,11 @@ lookup. The narrow-repair hazard is retired **by construction**, not by audit: a
 is never passed to `addCtor`, so no extern — uppercase or not — can pass the head test
 any more.
 
-⚠️ **Still owed, not done by that slice:** the third condition,
-`docs/spec/DICT-SEMANTICS.md` §4.1 **G2**, whose status row and G3-contingency prose
-still describe #1150 as OPEN and the predicate as holed. G-9 above is also now moot for
-this row (A-1 no longer has a #1150 consumer clause to owe) but remains a live shape for
-other consumers.
+✅ **The third condition is also done, by the same commit:** `docs/spec/DICT-SEMANTICS.md`
+§4.1 **G2**'s status row and G3-contingency prose were rewritten in `ea926c23` itself
+(🔴 HOLED → 🟡 **NO KNOWN HOLE**, #1150 marked CLOSED) — they do not still describe #1150
+as OPEN. G-9 above is also now moot for this row (A-1 no longer has a #1150 consumer
+clause to owe) but remains a live shape for other consumers.
 
 ---
 

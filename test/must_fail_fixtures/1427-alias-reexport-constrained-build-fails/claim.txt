@@ -45,13 +45,25 @@ why-note: test/diff_compiler_dict_semantics.sh: the dict-arity seam now
 why-note: resolves a re-exported name to its TRUE definer, so every NAMED
 why-note: import form routes the dict correctly and the selective spelling
 why-note: prints `2` at exit 0 on all four cells. This ALIAS spelling is
-why-note: byte-identically unchanged, so the two ARE distinct after all:
-why-note: an alias route is not built from those definer rows at all --
-why-note: `aliasEntriesFor` copies qual entries whose definer is
-why-note: `usePathModuleId path`, i.e. the module the importer SPELLS, and
-why-note: a re-exporter spells no entries. ⇒ the residue is ALIAS-SPECIFIC
-why-note: and its site is `aliasEntriesFor`/`aliasConstraintEntries`, not
-why-note: `importDefinersOf`. The control below stays as it is (direct
+why-note: byte-identically unchanged, so the two ARE distinct after all --
+why-note: the residue is ALIAS-SPECIFIC and its site is
+why-note: `aliasEntriesFor`/`aliasConstraintEntries`, not `importDefinersOf`.
+why-note: UPDATE (S-alias-definer-route, #1427/#1337, 2026-08-26):
+why-note: `aliasEntriesFor`'s `UseAlias` arm now resolves `mid`'s exports
+why-note: through `graphPubDefiners` (chasing re-export chains to their
+why-note: true `(definer, origin)` key, mirroring `memberDefinerRow`'s
+why-note: shape) and matches `qual` against THAT key -- not, as before,
+why-note: against the module the importer SPELLS (`moduleAliasEntry`, now
+why-note: used only by `schemeOblEntriesFor`). Measured first-hand
+why-note: (FIX-2-verify-alias-route-delta, two-arm: this one function
+why-note: toggled between the old and new routing, everything else held
+why-note: fixed): `build`/`run` on this fixture are byte-identical on both
+why-note: arms, because `build`'s emitter has already rewritten `A.name`
+why-note: to the origin's real symbol by the time this table is consulted
+why-note: (see the comment above `aliasConstraintEntries`'s EMIT call
+why-note: site) and this fixture's `run` panic is the wholly separate
+why-note: #1369/#1425 dict-arity-seam channel, untouched by either
+why-note: routing. The control below stays as it is (direct
 why-note: import, no hop): it is still green and still isolates the hop. #1427 is kept as its
 why-note: own pin (not merged into #1369's) because the issue tracker
 why-note: still separately tracks the alias-spelling shape and its
