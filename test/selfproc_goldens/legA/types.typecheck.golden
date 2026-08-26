@@ -950,8 +950,8 @@ ifaceMethodRowOf : Decl -> List (String, List String)
 ifaceMethodRows : List Decl -> List (String, List String)
 ifaceMethodSchemeIds : List Decl -> List (IfaceRef, String)
 ifaceMethodSchemes : List Decl -> List (String, Scheme)
-ifaceMethodTy : List Decl -> String -> String -> Option (List String, Ty, List (String, List Kind))
-ifaceMethodTyResolved : List Decl -> String -> String -> Option (List String, Ty, List (String, List Kind))
+ifaceMethodTy : List Decl -> IfaceRef -> String -> Option (List String, Ty, List (String, List Kind))
+ifaceMethodTyResolved : List Decl -> IfaceRef -> String -> Option (List String, Ty, List (String, List Kind))
 ifaceMethodVarApps : String -> IfaceMethod -> List (List Ty, List String)
 ifaceMonoName : (IfaceRef, List Mono) -> List (String, Mono)
 ifaceOfMethodName : String -> Option String
@@ -1057,8 +1057,8 @@ inferHeadAnnot : TcEnv -> Expr -> Ty -> Mono
 inferIf : TcEnv -> Expr -> Expr -> Expr -> Mono
 inferImplBodies : TcEnv -> List Decl -> List String -> List Decl -> Unit
 inferImplBodiesIfEnabledIn : TcEnv -> List Decl -> List Decl -> Unit
-inferImplMethod : TcEnv -> List Decl -> String -> List (String, Mono) -> List Mono -> ImplMethod -> Unit
-inferImplMethods : TcEnv -> List Decl -> String -> List (String, Mono) -> List Mono -> List ImplMethod -> Unit
+inferImplMethod : TcEnv -> List Decl -> IfaceRef -> List (String, Mono) -> List Mono -> ImplMethod -> Unit
+inferImplMethods : TcEnv -> List Decl -> IfaceRef -> List (String, Mono) -> List Mono -> List ImplMethod -> Unit
 inferInfix : TcEnv -> String -> Expr -> Expr -> Mono
 inferIntRange : TcEnv -> Expr -> Expr -> Mono -> Mono
 inferLam : TcEnv -> List Pat -> Expr -> Mono
@@ -1091,7 +1091,7 @@ inferPatRecWith : TcEnv -> String -> RecordInfo -> List RecPatField -> (Mono, Li
 inferPatRng : Lit -> Lit -> (Mono, List (String, Scheme))
 inferPatTuple : TcEnv -> List Pat -> (Mono, List (String, Scheme))
 inferPats : TcEnv -> List Pat -> (List Mono, List (String, Scheme))
-inferPlainImpl : TcEnv -> List Decl -> String -> List Ty -> List ImplMethod -> Unit
+inferPlainImpl : TcEnv -> List Decl -> IfaceRef -> List Ty -> List ImplMethod -> Unit
 inferPropBodies : TcEnv -> List Decl -> Unit
 inferPropBodiesGo : TcEnv -> List Decl -> Unit
 inferRecLet : TcEnv -> String -> Option Loc -> Expr -> Expr -> Mono
@@ -1104,7 +1104,7 @@ inferRecordUpdate : TcEnv -> Expr -> List FieldAssign -> Ref String -> Mono
 inferRecordUpdateField : TcEnv -> Expr -> List FieldAssign -> String -> Ref String -> Mono
 inferRecordUpdatePicked : String -> Mono -> TcEnv -> List FieldAssign -> RecordInfo -> Mono
 inferRecordUpdateWith : TcEnv -> String -> Expr -> List FieldAssign -> RecordInfo -> Mono
-inferRequiresImpl : TcEnv -> List Decl -> List String -> String -> List Ty -> List Require -> List ImplMethod -> Unit
+inferRequiresImpl : TcEnv -> List Decl -> List String -> IfaceRef -> List Ty -> List Require -> List ImplMethod -> Unit
 inferShadowApp : TcEnv -> String -> List (Ref Route) -> Expr -> Expr -> Mono
 inferShadowAppHead : TcEnv -> Expr -> Mono
 inferStmt : TcEnv -> DoStmt -> TcEnv
@@ -1714,6 +1714,7 @@ rowFreeEffvars : EffRow -> List Int
 rowKindMismatchMsg : List (String, Option String) -> Option String -> String
 rowSlotArgMono : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Mono
 runFinalChecks : List Decl -> List Decl -> ClassEnv -> ClassEnv -> ImplEnv -> ImplEnv -> Int -> Bool -> Unit
+sameIfaceDecl : IfaceRef -> IfaceRef -> Bool
 sameRootId : Int -> Mono -> Bool
 sameSpellingHint : Mono -> Mono -> Option String
 sccSchemes : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> Bool -> List (String, Mono) -> List (String, Scheme)
