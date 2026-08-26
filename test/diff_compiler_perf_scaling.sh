@@ -1464,7 +1464,11 @@ TIME_STAGES="parse exhaust-guards desugar resolve mark typecheck elaborate dce m
 # gate's N (190ms @ N=400) — the same "too fast to time-gate" outcome as match/listlit under
 # #115 (match 6.0s->0.11s, listlit 5.3s->0.06s). PROMOTED OUT 2026-07-16; the modules block
 # now SKIPS the typecheck TIME below the floor (unledgered rule-4 behavior) and hard-gates it
-# as SUPERLINEAR if it ever climbs back over.
+# as SUPERLINEAR if it ever climbs back over. ⚠️ Re-decided EVERY run from the live
+# measurement (see the `below` check ~15 lines into the `modules` case below), not a
+# one-time fact pinned by the 190ms @ N=400 sample above — a run under enough concurrent
+# box load to push mt3 back over TIME_FLOOR takes the hard-gate branch instead of the skip,
+# which reads as a regression rather than noise (issue #2018).
 #   xref:emit — ✅ PROMOTED OUT 2026-07-17 (PR #554). The gate FOUND this quadratic
 #     the moment it could see the backend (2026-07-16, issue #359) and has now
 #     watched it DIE: r2=1.98 (< 2.60) — the emit stage scales LINEARLY. The row is
