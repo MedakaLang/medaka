@@ -109,8 +109,10 @@ own measurement, the same cost any cache miss already pays today. This is mitiga
 A change that touches ONLY prose (top-level `*.md`, `docs/**`, `LICENSE`) used to still run the
 full 40+ minute gate suite. The `detect` job classifies the PR's changed files and every heavy
 job (gates/soundness/seed-health/inlang) reads its output to skip their EXPENSIVE STEPS, not to
-skip THEMSELVES — because branch protection requires eleven named status checks with zero
-approvals (the checks ARE the merge gate), and a job skipped by a job-level `if:`, or a workflow
+skip THEMSELVES — because branch protection requires the ruleset's named status checks (derive
+them: `gh api repos/MedakaLang/medaka/rulesets/18885875 --jq '.rules[]|select(.type==
+"required_status_checks")|.parameters.required_status_checks[].context'`) with zero approvals
+(the checks ARE the merge gate), and a job skipped by a job-level `if:`, or a workflow
 that never runs because of a `paths-ignore:` trigger filter, means GitHub never receives a status
 for that context: it sits at "Expected — waiting for status" forever and the PR becomes
 permanently unmergeable.
@@ -169,7 +171,8 @@ no matter which job runs it. It used to run in TEN jobs (the 7 `gates` shards + 
 `inlang` + `wasm`) — ~27% of all CI job-seconds spent recomputing the same answer. Now it runs in
 the `build:` job, once, and those ten take `binary: artifact` on the same setup action.
 
-The `build:` job is NOT one of the eleven required contexts, and must not become one — that would
+The `build:` job is NOT one of the required contexts (derive them: `gh api …`, see T-4b above),
+and must not become one — that would
 need a ruleset edit, which is not atomic with a commit. It is also `needs: detect` with a
 conditional *step*, never a conditional job — same shape as every heavy job in this file, and for
 the same reason: a required consumer that `needs:` a job which can itself be skipped can dead-end.
@@ -403,6 +406,69 @@ comes from `scripts/ci_shard_cost.sh`, which derives the table live from recent 
 scripted once instead of copy-pasted four times). When you add a heavy gate, run the script and
 put it where there is room; do not hand-write a number into `ci.yml`.
 
+#### By-job table (S-ledger-close, 2026-08-26, base `ec8670fa`)
+
+`sh scripts/ci_shard_cost.sh --runs 4`, N derived fresh: `gh run list --workflow=ci.yml
+--event=merge_group --status=success --json databaseId,createdAt --limit 50`, filtered to
+createdAt after `4a636b0f`'s merge commit time (`2026-08-25T08:48:53Z`) — 4 qualifying runs
+(`32900786425 32895999437 32838345858 32828602825`), same count the contract's own table used,
+independently re-derived rather than reused:
+
+```
+gates (backend)                             543s
+gates (frontend)                            525s
+wasm                                        476s
+gates (tools)                               469s
+gates (eval)                                459s
+gates (types)                               419s
+gates (engines)                             398s
+gates (sqlite)                              389s
+compiler-soundness                          374s
+build medaka once                           149s
+seed-health                                  58s
+inlang                                       32s
+soundness                                    21s
+detect docs-only change                       7s
+
+median job wall: 393.5s
+pole: gates (backend) (543s)
+cost-status: clean
+```
+
+Pole moved: `gates (backend)` (543s) is now the pole, not `gates (sqlite)` — the #1968 nightly
+report's 899s/1586s `sqlite` figures (see below) are from a different, unnarrowed event and do
+not carry over to this `merge_group` table.
+
+`ci.yml` hand-written-number check (§5, `grep -n '[0-9]\+s' .github/workflows/ci.yml`): the only
+hits are matrix/timeout-unrelated comments (lines 609/614/616/627) citing prior
+`scripts/ci_shard_cost.sh` runs by name ("confirmed... by this slice's own
+`scripts/ci_shard_cost.sh` run") — every number present is provenance-attributed to the script,
+none is a bare hand-typed figure the script doesn't trace to. #1935's pin holds.
+
+#### By-event table (S-ledger-close, 2026-08-26)
+
+#1926's original method: count runs of `ci.yml` per triggering `event` over a window, report the
+split. Original window: 13 `push` / 32 `pull_request` / 15 `merge_group` (60 total). Per the
+contract's own ⚠️, the honest window starts at #1942's merge (`19f60b28`, `2026-08-25T04:34:53Z`)
+— pre-#1942 runs predate `push:main`'s removal and would blend two different CI shapes.
+
+`gh run list --workflow=ci.yml --status=success --json databaseId,createdAt,event --limit 100`,
+filtered to createdAt after `2026-08-25T04:34:53Z`: **25 runs** — `pull_request` 16 (64%),
+`merge_group` 7 (28%), `schedule` 1 (4%), `push` 1 (4%).
+
+⚠️ **The one `push` run is a stale-target artifact, not a live push-to-main.** Its createdAt
+(`2026-08-25T05:10:08Z`) is after #1942 merged, but its headSha (`29b4c386`) is a commit that
+landed on `main` at `04:33:46Z` — one minute *before* #1942 (`04:34:53Z`) — via a workflow queued
+before #1927's `push:[main]` removal reached that commit's ancestry
+(`git merge-base --is-ancestor 3b4cea93 29b4c386` → not an ancestor: #1927's commit `3b4cea93`
+had not yet landed on the line `29b4c386` was built from). `gh run list --event=push --limit 5`
+confirms **zero** `push` runs of `ci.yml` since `2026-08-25T05:10:08Z` — #1927's pin is holding
+in practice, not just in the `on:` block.
+
+n=25 is smaller than the original window's 60 — report the share as directional, not as a
+stable long-run number; re-run after more post-#1942 history accumulates before treating the
+64/28/4/4 split as settled.
+
 ## No-op shard visibility (#450, #570, #576)
 
 A "gates (X) — pass" check on the PR's Checks UI is, by text alone, indistinguishable from a shard
@@ -596,10 +662,13 @@ main fail with `GH013: Repository rule violations` rather than the classic prote
 
 Two counts in this file had rotted and were fixed by deriving rather than restating:
 
-- "TEN required checks" → **eleven** (7 `gates (…)` shards + `soundness` + `seed-health` +
-  `inlang` + `wasm`). Verify live: `gh api repos/MedakaLang/medaka/rulesets/<id> --jq
+- "TEN required checks" was restated once as a fixed cardinal here — and a new required
+  context (`compiler-soundness`) joined the ruleset ~24h later, breaking the restatement
+  (#1967). Updating the number only resets the rot clock; the fix is to never write the
+  cardinal down at all. Verify live, every time: `gh api
+  repos/MedakaLang/medaka/rulesets/<id> --jq
   '.rules[]|select(.type=="required_status_checks")|.parameters.required_status_checks[].context'`
-  — never hand-count.
+  — never hand-count, and never cite a count from this file.
 - The `wasm` job's gates, once called "these FIVE" in its own comments → **seven**
   (`diff_wasm.sh`, `diff_wasm_typed.sh`, `diff_playground_input.sh`, `diff_wasm_modules.sh`,
   `diff_sqlite.sh`, `diff_gzip.sh`, `build_wasm_cmd.sh`). Re-derive by grepping the job's own

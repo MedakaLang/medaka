@@ -5,6 +5,10 @@
 # doctests/`test "…"` decls exist in this project today, so this script
 # runs `check` only — add a `medaka test` invocation here if that ever
 # changes.
+#
+# `parsec/main.mdk` imports `lib.parser` only, never `lib.toml` — so
+# `parsec/lib/toml.mdk` and `parsec/toml_demo.mdk` are unreachable from the
+# check above and were checked by nothing (#1988). Check them explicitly too.
 set -u
 
 ROOT="${MEDAKA_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
@@ -15,5 +19,7 @@ export MEDAKA_ROOT="$ROOT"
 [ -x "$MEDAKA" ] || { echo "FAIL: no native medaka at $MEDAKA (build it first)"; exit 1; }
 
 "$MEDAKA" check "$ROOT/parsec/main.mdk" || { echo "FAIL: parsec/main.mdk failed check"; exit 1; }
+"$MEDAKA" check "$ROOT/parsec/lib/toml.mdk" || { echo "FAIL: parsec/lib/toml.mdk failed check"; exit 1; }
+"$MEDAKA" check "$ROOT/parsec/toml_demo.mdk" || { echo "FAIL: parsec/toml_demo.mdk failed check"; exit 1; }
 
 echo "OK: parsec/test/check.sh"
