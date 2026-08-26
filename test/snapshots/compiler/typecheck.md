@@ -1,5 +1,5 @@
 # META
-source_lines=33960
+source_lines=33975
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -3315,17 +3315,35 @@ declEnvVariantOwnerModules mid (_::rest) acc =
 -- graph, walked with an explicit seen-set so an import CYCLE terminates rather than
 -- relying on the loader's topological order (the loader rejects cycles, but this
 -- function must not be the thing that discovers that).
+--
+-- ⚠️ THE DIRECT-IMPORT EDGES ARE INDEXED FIRST, AND THAT IS NOT A TIDY-UP.  This
+-- walk visits O(modules) rows per module, so a direct-import lookup that SCANS the
+-- module list makes the whole index CUBIC in the module count on an import chain —
+-- measured at N=400 as 0.84s of the `modules` perf shape's typecheck stage, which is
+-- what reddened `diff_compiler_perf_scaling`'s TIME arm when #1597 landed.  Indexing
+-- the edges once keeps the walk quadratic-with-log (the index's own SIZE is already
+-- quadratic on a chain — each of N modules reaches ~N — so no build can be cheaper).
 declEnvReachIndex : List DeclEnvModule -> OrdMap (OrdMap Unit)
-declEnvReachIndex mods = declEnvReachGo mods mods omEmpty
+declEnvReachIndex mods =
+  declEnvReachGo (declEnvImportIndex mods omEmpty) mods omEmpty
 
-declEnvReachGo : List DeclEnvModule -> List DeclEnvModule -> OrdMap (OrdMap Unit) -> OrdMap (OrdMap Unit)
+-- Module id → its direct `DUse` edges, one row per module.  FIRST row wins, which is
+-- the same tie-break the linear scan this replaces had (it returned the first
+-- `demId` match), and an absent id yields `[]` for the same reason it did there.
+declEnvImportIndex : List DeclEnvModule -> OrdMap (List String) -> OrdMap (List String)
+declEnvImportIndex [] acc = acc
+declEnvImportIndex (m::rest) acc
+  | omHasKey m.demId acc = declEnvImportIndex rest acc
+  | otherwise = declEnvImportIndex rest (omInsert m.demId (flatMap useModuleId m.demDecls) acc)
+
+declEnvReachGo : OrdMap (List String) -> List DeclEnvModule -> OrdMap (OrdMap Unit) -> OrdMap (OrdMap Unit)
 declEnvReachGo _ [] acc = acc
-declEnvReachGo all (m::rest) acc = declEnvReachGo
-  all
+declEnvReachGo edges (m::rest) acc = declEnvReachGo
+  edges
   rest
   (omInsert
     m.demId
-    (declEnvReachFrom all [m.demId] (declEnvReachSeed m.demId))
+    (declEnvReachFrom edges [m.demId] (declEnvReachSeed m.demId))
     acc)
 
 -- The reader's OWN module is reachable from itself, and so is the PRELUDE under both
@@ -3336,11 +3354,11 @@ declEnvReachSeed : String -> OrdMap Unit
 declEnvReachSeed mid =
   omInsert mid () (omInsert "" () (omInsert "core" () omEmpty))
 
-declEnvReachFrom : List DeclEnvModule -> List String -> OrdMap Unit -> OrdMap Unit
+declEnvReachFrom : OrdMap (List String) -> List String -> OrdMap Unit -> OrdMap Unit
 declEnvReachFrom _ [] seen = seen
-declEnvReachFrom all (mid::rest) seen =
-  let fresh = filterList (d => not (omHasKey d seen)) (declEnvDirectImports all mid)
-  declEnvReachFrom all (fresh ++ rest) (declEnvMarkReached fresh seen)
+declEnvReachFrom edges (mid::rest) seen =
+  let fresh = filterList (d => not (omHasKey d seen)) (declEnvDirectImports edges mid)
+  declEnvReachFrom edges (fresh ++ rest) (declEnvMarkReached fresh seen)
 
 declEnvMarkReached : List String -> OrdMap Unit -> OrdMap Unit
 declEnvMarkReached [] seen = seen
@@ -3349,11 +3367,8 @@ declEnvMarkReached (d::rest) seen = declEnvMarkReached rest (omInsert d () seen)
 -- The module ids row [mid] imports directly.  `useModuleId` is the same path→id
 -- mapping every other cross-module table in this file keys on, so a hit here is a hit
 -- in `deOwnerModules`.
-declEnvDirectImports : List DeclEnvModule -> String -> List String
-declEnvDirectImports [] _ = []
-declEnvDirectImports (m::rest) mid
-  | m.demId == mid = flatMap useModuleId m.demDecls
-  | otherwise = declEnvDirectImports rest mid
+declEnvDirectImports : OrdMap (List String) -> String -> List String
+declEnvDirectImports edges mid = fromOption [] (omLookup mid edges)
 
 -- The ONE call site of the two seeds, so a future third table cannot be added on
 -- one side only — the same "one body per direction" property `loadDataUniverse`
@@ -34503,21 +34518,23 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "declEnvVariantOwnerModules" ((PVar "mid") (PCons (PCon "Variant" (PVar "cn") (PCon "ConNamed" PWild PWild)) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "declEnvVariantOwnerModules") (EVar "mid")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "cn")) (EBinOp "::" (EVar "mid") (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "cn")) (EVar "acc"))))) (EVar "acc"))))
 (DFunDef false "declEnvVariantOwnerModules" ((PVar "mid") (PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "declEnvVariantOwnerModules") (EVar "mid")) (EVar "rest")) (EVar "acc")))
 (DTypeSig false "declEnvReachIndex" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "declEnvReachIndex" ((PVar "mods")) (EApp (EApp (EApp (EVar "declEnvReachGo") (EVar "mods")) (EVar "mods")) (EVar "omEmpty")))
-(DTypeSig false "declEnvReachGo" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
+(DFunDef false "declEnvReachIndex" ((PVar "mods")) (EApp (EApp (EApp (EVar "declEnvReachGo") (EApp (EApp (EVar "declEnvImportIndex") (EVar "mods")) (EVar "omEmpty"))) (EVar "mods")) (EVar "omEmpty")))
+(DTypeSig false "declEnvImportIndex" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "declEnvImportIndex" ((PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "declEnvImportIndex" ((PCons (PVar "m") (PVar "rest")) (PVar "acc")) (EIf (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "m") "demId")) (EVar "acc")) (EApp (EApp (EVar "declEnvImportIndex") (EVar "rest")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EVar "declEnvImportIndex") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EApp (EApp (EVar "flatMap") (EVar "useModuleId")) (EFieldAccess (EVar "m") "demDecls"))) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "declEnvReachGo" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
 (DFunDef false "declEnvReachGo" (PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "declEnvReachGo" ((PVar "all") (PCons (PVar "m") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "declEnvReachGo") (EVar "all")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EApp (EApp (EApp (EVar "declEnvReachFrom") (EVar "all")) (EListLit (EFieldAccess (EVar "m") "demId"))) (EApp (EVar "declEnvReachSeed") (EFieldAccess (EVar "m") "demId")))) (EVar "acc"))))
+(DFunDef false "declEnvReachGo" ((PVar "edges") (PCons (PVar "m") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "declEnvReachGo") (EVar "edges")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EApp (EApp (EApp (EVar "declEnvReachFrom") (EVar "edges")) (EListLit (EFieldAccess (EVar "m") "demId"))) (EApp (EVar "declEnvReachSeed") (EFieldAccess (EVar "m") "demId")))) (EVar "acc"))))
 (DTypeSig false "declEnvReachSeed" (TyFun (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
 (DFunDef false "declEnvReachSeed" ((PVar "mid")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (ELit LUnit)) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (ELit LUnit)) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "core"))) (ELit LUnit)) (EVar "omEmpty")))))
-(DTypeSig false "declEnvReachFrom" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DTypeSig false "declEnvReachFrom" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
 (DFunDef false "declEnvReachFrom" (PWild (PList) (PVar "seen")) (EVar "seen"))
-(DFunDef false "declEnvReachFrom" ((PVar "all") (PCons (PVar "mid") (PVar "rest")) (PVar "seen")) (EBlock (DoLet false false (PVar "fresh") (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "d")) (EVar "seen"))))) (EApp (EApp (EVar "declEnvDirectImports") (EVar "all")) (EVar "mid")))) (DoExpr (EApp (EApp (EApp (EVar "declEnvReachFrom") (EVar "all")) (EBinOp "++" (EVar "fresh") (EVar "rest"))) (EApp (EApp (EVar "declEnvMarkReached") (EVar "fresh")) (EVar "seen"))))))
+(DFunDef false "declEnvReachFrom" ((PVar "edges") (PCons (PVar "mid") (PVar "rest")) (PVar "seen")) (EBlock (DoLet false false (PVar "fresh") (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "d")) (EVar "seen"))))) (EApp (EApp (EVar "declEnvDirectImports") (EVar "edges")) (EVar "mid")))) (DoExpr (EApp (EApp (EApp (EVar "declEnvReachFrom") (EVar "edges")) (EBinOp "++" (EVar "fresh") (EVar "rest"))) (EApp (EApp (EVar "declEnvMarkReached") (EVar "fresh")) (EVar "seen"))))))
 (DTypeSig false "declEnvMarkReached" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "declEnvMarkReached" ((PList) (PVar "seen")) (EVar "seen"))
 (DFunDef false "declEnvMarkReached" ((PCons (PVar "d") (PVar "rest")) (PVar "seen")) (EApp (EApp (EVar "declEnvMarkReached") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "d")) (ELit LUnit)) (EVar "seen"))))
-(DTypeSig false "declEnvDirectImports" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "declEnvDirectImports" ((PList) PWild) (EListLit))
-(DFunDef false "declEnvDirectImports" ((PCons (PVar "m") (PVar "rest")) (PVar "mid")) (EIf (EBinOp "==" (EFieldAccess (EVar "m") "demId") (EVar "mid")) (EApp (EApp (EVar "flatMap") (EVar "useModuleId")) (EFieldAccess (EVar "m") "demDecls")) (EIf (EVar "otherwise") (EApp (EApp (EVar "declEnvDirectImports") (EVar "rest")) (EVar "mid")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "declEnvDirectImports" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "declEnvDirectImports" ((PVar "edges") (PVar "mid")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "edges"))))
 (DTypeSig false "declEnvSeedDataUniverse" (TyFun (TyCon "String") (TyFun (TyCon "DeclEnvs") (TyCon "Unit"))))
 (DFunDef false "declEnvSeedDataUniverse" ((PVar "mid") (PVar "envs")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deKindsBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef")) (EApp (EApp (EVar "fromOption") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deOwnersBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerModulesRef")) (EFieldAccess (EVar "envs") "deOwnerModules"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerReachRef")) (EApp (EApp (EVar "fromOption") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deReach")))))))
 (DTypeSig false "deKindAbstractFixture" (TyCon "Decl"))
@@ -39924,21 +39941,23 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "declEnvVariantOwnerModules" ((PVar "mid") (PCons (PCon "Variant" (PVar "cn") (PCon "ConNamed" PWild PWild)) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "declEnvVariantOwnerModules") (EVar "mid")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "cn")) (EBinOp "::" (EVar "mid") (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "cn")) (EVar "acc"))))) (EVar "acc"))))
 (DFunDef false "declEnvVariantOwnerModules" ((PVar "mid") (PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "declEnvVariantOwnerModules") (EVar "mid")) (EVar "rest")) (EVar "acc")))
 (DTypeSig false "declEnvReachIndex" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "declEnvReachIndex" ((PVar "mods")) (EApp (EApp (EApp (EVar "declEnvReachGo") (EVar "mods")) (EVar "mods")) (EVar "omEmpty")))
-(DTypeSig false "declEnvReachGo" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
+(DFunDef false "declEnvReachIndex" ((PVar "mods")) (EApp (EApp (EApp (EVar "declEnvReachGo") (EApp (EApp (EVar "declEnvImportIndex") (EVar "mods")) (EVar "omEmpty"))) (EVar "mods")) (EVar "omEmpty")))
+(DTypeSig false "declEnvImportIndex" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "declEnvImportIndex" ((PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "declEnvImportIndex" ((PCons (PVar "m") (PVar "rest")) (PVar "acc")) (EIf (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "m") "demId")) (EVar "acc")) (EApp (EApp (EVar "declEnvImportIndex") (EVar "rest")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EApp (EVar "declEnvImportIndex") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EApp (EApp (EDictApp "flatMap") (EVar "useModuleId")) (EFieldAccess (EVar "m") "demDecls"))) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "declEnvReachGo" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
 (DFunDef false "declEnvReachGo" (PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "declEnvReachGo" ((PVar "all") (PCons (PVar "m") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "declEnvReachGo") (EDictApp "all")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EApp (EApp (EApp (EVar "declEnvReachFrom") (EDictApp "all")) (EListLit (EFieldAccess (EVar "m") "demId"))) (EApp (EVar "declEnvReachSeed") (EFieldAccess (EVar "m") "demId")))) (EVar "acc"))))
+(DFunDef false "declEnvReachGo" ((PVar "edges") (PCons (PVar "m") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "declEnvReachGo") (EVar "edges")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EApp (EApp (EApp (EVar "declEnvReachFrom") (EVar "edges")) (EListLit (EFieldAccess (EVar "m") "demId"))) (EApp (EVar "declEnvReachSeed") (EFieldAccess (EVar "m") "demId")))) (EVar "acc"))))
 (DTypeSig false "declEnvReachSeed" (TyFun (TyCon "String") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
 (DFunDef false "declEnvReachSeed" ((PVar "mid")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mid")) (ELit LUnit)) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (ELit LUnit)) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "core"))) (ELit LUnit)) (EVar "omEmpty")))))
-(DTypeSig false "declEnvReachFrom" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DTypeSig false "declEnvReachFrom" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
 (DFunDef false "declEnvReachFrom" (PWild (PList) (PVar "seen")) (EVar "seen"))
-(DFunDef false "declEnvReachFrom" ((PVar "all") (PCons (PVar "mid") (PVar "rest")) (PVar "seen")) (EBlock (DoLet false false (PVar "fresh") (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "d")) (EVar "seen"))))) (EApp (EApp (EVar "declEnvDirectImports") (EDictApp "all")) (EVar "mid")))) (DoExpr (EApp (EApp (EApp (EVar "declEnvReachFrom") (EDictApp "all")) (EBinOp "++" (EVar "fresh") (EVar "rest"))) (EApp (EApp (EVar "declEnvMarkReached") (EVar "fresh")) (EVar "seen"))))))
+(DFunDef false "declEnvReachFrom" ((PVar "edges") (PCons (PVar "mid") (PVar "rest")) (PVar "seen")) (EBlock (DoLet false false (PVar "fresh") (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "d")) (EVar "seen"))))) (EApp (EApp (EVar "declEnvDirectImports") (EVar "edges")) (EVar "mid")))) (DoExpr (EApp (EApp (EApp (EVar "declEnvReachFrom") (EVar "edges")) (EBinOp "++" (EVar "fresh") (EVar "rest"))) (EApp (EApp (EVar "declEnvMarkReached") (EVar "fresh")) (EVar "seen"))))))
 (DTypeSig false "declEnvMarkReached" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "declEnvMarkReached" ((PList) (PVar "seen")) (EVar "seen"))
 (DFunDef false "declEnvMarkReached" ((PCons (PVar "d") (PVar "rest")) (PVar "seen")) (EApp (EApp (EVar "declEnvMarkReached") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "d")) (ELit LUnit)) (EVar "seen"))))
-(DTypeSig false "declEnvDirectImports" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "declEnvDirectImports" ((PList) PWild) (EListLit))
-(DFunDef false "declEnvDirectImports" ((PCons (PVar "m") (PVar "rest")) (PVar "mid")) (EIf (EBinOp "==" (EFieldAccess (EVar "m") "demId") (EVar "mid")) (EApp (EApp (EDictApp "flatMap") (EVar "useModuleId")) (EFieldAccess (EVar "m") "demDecls")) (EIf (EVar "otherwise") (EApp (EApp (EVar "declEnvDirectImports") (EVar "rest")) (EVar "mid")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "declEnvDirectImports" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "declEnvDirectImports" ((PVar "edges") (PVar "mid")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "edges"))))
 (DTypeSig false "declEnvSeedDataUniverse" (TyFun (TyCon "String") (TyFun (TyCon "DeclEnvs") (TyCon "Unit"))))
 (DFunDef false "declEnvSeedDataUniverse" ((PVar "mid") (PVar "envs")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deKindsBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef")) (EApp (EApp (EVar "fromOption") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deOwnersBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerModulesRef")) (EFieldAccess (EVar "envs") "deOwnerModules"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerReachRef")) (EApp (EApp (EVar "fromOption") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deReach")))))))
 (DTypeSig false "deKindAbstractFixture" (TyCon "Decl"))

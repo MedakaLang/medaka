@@ -497,15 +497,16 @@ declEnvDeclFieldOwners : List Decl -> Map String (List String) -> Map String (Li
 declEnvDeclOwnerModules : String -> List Decl -> Map String (List String) -> Map String (List String)
 declEnvDeclsOf : List DeclEnvModule -> List Decl
 declEnvDefinerIndex : Map String (List (String, (String, String))) -> List DeclEnvModule -> Map String (List (String, (String, String)))
-declEnvDirectImports : List DeclEnvModule -> String -> List String
+declEnvDirectImports : Map String (List String) -> String -> List String
+declEnvImportIndex : List DeclEnvModule -> Map String (List String) -> Map String (List String)
 declEnvKindEntries : List Decl -> List (TabKey, List Kind)
 declEnvMarkReached : List String -> Map String Unit -> Map String Unit
 declEnvModule : Int -> String -> List Decl -> DeclEnvModule
 declEnvModulesFrom : Int -> List (String, List Decl) -> List DeclEnvModule
 declEnvOrdIndex : Map String Int -> List DeclEnvModule -> Map String Int
 declEnvOwnerModules : List DeclEnvModule -> Map String (List String) -> Map String (List String)
-declEnvReachFrom : List DeclEnvModule -> List String -> Map String Unit -> Map String Unit
-declEnvReachGo : List DeclEnvModule -> List DeclEnvModule -> Map String (Map String Unit) -> Map String (Map String Unit)
+declEnvReachFrom : Map String (List String) -> List String -> Map String Unit -> Map String Unit
+declEnvReachGo : Map String (List String) -> List DeclEnvModule -> Map String (Map String Unit) -> Map String (Map String Unit)
 declEnvReachIndex : List DeclEnvModule -> Map String (Map String Unit)
 declEnvReachSeed : String -> Map String Unit
 declEnvRowKindEntries : Int -> DeclEnvModule -> List (TabKey, List Kind)
