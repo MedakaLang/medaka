@@ -458,6 +458,7 @@ ctorCandImported : List Decl -> String -> (Ident, String, Scheme) -> Bool
 ctorCandScheme : (Ident, String, Scheme) -> Scheme
 ctorHeadIsUpper : String -> Bool
 ctorIdentRow : String -> TyConOrigin -> String -> List (String, String, Ident)
+ctorOracleKeyOf : Option HeadKey -> Option TabKey
 ctorSiblingWithholdingForHead : Option HeadKey -> Option HeadKey -> String -> String -> Option String
 ctorSiblingWithholdingHere : Mono -> String -> RecordInfo -> String -> Option String
 ctorSiblingWithholdingName : Option HeadKey -> String -> String -> Option String

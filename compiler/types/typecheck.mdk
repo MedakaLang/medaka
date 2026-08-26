@@ -191,6 +191,12 @@ import types.registry.{
   -- A-2.13 (#1319 unit 3): the IDENTITY inside a projected head, for the one
   -- record lookup that selects a row by the receiver rather than by a spelling.
   headKeyIdent,
+  -- The DECLARATION half of a projected head, keeping `TkIdent` and `TkBare`
+  -- apart — the mint an IDENTITY-keyed table's reader owes its writer.  Used by
+  -- `ctorOracleKeyOf` below, which keys `matchOracle.typeCtors`; ⚠️ NOT
+  -- `headTabOf`, whose `dispHeadTab` deliberately flattens every head to
+  -- `TkBare` for the SPELLING-keyed dispatch buckets.
+  headKeyDecl,
   -- A-2.2b (#1111): the dispatch-key layer.  `headBucketKey`/`RegKey` key the
   -- head-tycon buckets — ⚠️ by SPELLING, not by identity: this line said "by
   -- IDENTITY" until B-2.1-a3, and `dispHeadTab hk = TkBare NsType (headKeyName hk)`
@@ -11108,13 +11114,52 @@ narrowingBlockedByCtorSibling rk fname survivorKey =
 -- constructor list of the receiver's type instead, from the compiler's own
 -- ctor oracle (`matchOracle`'s `typeCtors`, built from every `Variant` of every
 -- `data` decl regardless of shape) via `oGetCtors`, keyed by `TabKey` — not by
--- bare name — and reachable from `rk : Option HeadKey` through `headTabOf`.
+-- bare name — and reachable from `rk : Option HeadKey` through `ctorOracleKeyOf`.
 ctorSiblingWithholdingName : Option HeadKey -> String -> String -> Option String
-ctorSiblingWithholdingName rk fname survivorKey = match headTabOf rk
+ctorSiblingWithholdingName rk fname survivorKey = match ctorOracleKeyOf rk
   None => None
   Some tk => match oGetCtors driverState.value.matchOracle.value tk
     None => None
     Some ctors => firstCtorSiblingWithholding fname survivorKey ctors
+
+-- 🚨 THE READER'S KEY MINT FOR `matchOracle`'s `typeCtors`, AND IT IS **NOT**
+-- `headTabOf`.  `typeCtors` is the one oracle table keyed by DECLARATION
+-- IDENTITY (`frontend/exhaust.mdk`, oracle-identity leaf L1): its rows are
+-- minted `tabKeyOf NsType <that decl's own dataOrigin> <tyname>`, so a
+-- module-stamped `data T` writes a `TkIdent` row.  `headTabOf` goes through
+-- `dispHeadTab hk = TkBare NsType (headKeyName hk)`, which flattens EVERY head
+-- to `TkBare` — deliberately, because the dispatch head-buckets it was built
+-- for are SPELLING-keyed (the #1317 T1 rule, the closed S0 #1277).  `tabKeyEq`
+-- never equates a `TkBare` lookup with a `TkIdent` row, so keying this table
+-- through `headTabOf` MISSED on every module-stamped type — and both `None`
+-- arms above fail OPEN, i.e. "no sibling withholds the field", i.e. the
+-- narrowing is trusted and the singleton survivor is accepted.
+--
+-- MEASURED (F4, this branch, on `44be8191`):
+-- `test/analyze_project_fixtures/record_ctor_sibling_blocks_narrowing/`
+-- `main_rejects.mdk` — #1468's ORIGINAL cross-module repro — went to `check`
+-- exit 0 with ZERO diagnostics where the pinned oracle expects
+-- `T-TYPE-MISMATCH: Type mismatch: T vs U`, while the byte-identical program
+-- written as ONE file still rejected: single-file decls are unstamped, so
+-- `tabKeyOf NsType OriginUnresolved "T"` is itself `TkBare` and the wrong mint
+-- accidentally agreed.  That is why F1's own single-file acceptance checks
+-- could not see this.  Instrumenting the two `None` arms apart (a marker
+-- `Some` scoped to `fname == "x" && survivorKey == "Zed"`, so the compiler's
+-- own source stayed unaffected) pinned it to the `oGetCtors` arm specifically:
+-- `headTabOf` answered `Some`, the `TabKey` lookup missed.  Same
+-- writer/reader `TkBare`-vs-`TkIdent` mismatch already documented at
+-- `seedAndCheckSplit`, one table over.
+--
+-- The mint below is `matchCol0Type`'s — the OTHER `oGetCtors` reader in this
+-- file — minus the arms it needs only because it starts from a `Mono`: keep
+-- `HkDecl`'s own `TabKey` (which already distinguishes an identity-bearing
+-- `TkIdent` from the flat path's `TkBare`), and refuse to key a rigid head at
+-- all.  §8 I6.1: a type PARAMETER is not a declaration; `matchCol0Type`'s
+-- `TkBare NsType n` for that case is a key no writer can ever have filled, so
+-- `None` here is the same miss without minting a forgery to reach it.
+ctorOracleKeyOf : Option HeadKey -> Option TabKey
+ctorOracleKeyOf None = None
+ctorOracleKeyOf (Some hk) = headKeyDecl hk
 
 firstCtorSiblingWithholding : String -> String -> List String -> Option String
 firstCtorSiblingWithholding _ _ [] = None

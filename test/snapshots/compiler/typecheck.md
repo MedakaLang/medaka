@@ -1,5 +1,5 @@
 # META
-source_lines=33986
+source_lines=34031
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -195,6 +195,12 @@ import types.registry.{
   -- A-2.13 (#1319 unit 3): the IDENTITY inside a projected head, for the one
   -- record lookup that selects a row by the receiver rather than by a spelling.
   headKeyIdent,
+  -- The DECLARATION half of a projected head, keeping `TkIdent` and `TkBare`
+  -- apart — the mint an IDENTITY-keyed table's reader owes its writer.  Used by
+  -- `ctorOracleKeyOf` below, which keys `matchOracle.typeCtors`; ⚠️ NOT
+  -- `headTabOf`, whose `dispHeadTab` deliberately flattens every head to
+  -- `TkBare` for the SPELLING-keyed dispatch buckets.
+  headKeyDecl,
   -- A-2.2b (#1111): the dispatch-key layer.  `headBucketKey`/`RegKey` key the
   -- head-tycon buckets — ⚠️ by SPELLING, not by identity: this line said "by
   -- IDENTITY" until B-2.1-a3, and `dispHeadTab hk = TkBare NsType (headKeyName hk)`
@@ -11112,13 +11118,52 @@ narrowingBlockedByCtorSibling rk fname survivorKey =
 -- constructor list of the receiver's type instead, from the compiler's own
 -- ctor oracle (`matchOracle`'s `typeCtors`, built from every `Variant` of every
 -- `data` decl regardless of shape) via `oGetCtors`, keyed by `TabKey` — not by
--- bare name — and reachable from `rk : Option HeadKey` through `headTabOf`.
+-- bare name — and reachable from `rk : Option HeadKey` through `ctorOracleKeyOf`.
 ctorSiblingWithholdingName : Option HeadKey -> String -> String -> Option String
-ctorSiblingWithholdingName rk fname survivorKey = match headTabOf rk
+ctorSiblingWithholdingName rk fname survivorKey = match ctorOracleKeyOf rk
   None => None
   Some tk => match oGetCtors driverState.value.matchOracle.value tk
     None => None
     Some ctors => firstCtorSiblingWithholding fname survivorKey ctors
+
+-- 🚨 THE READER'S KEY MINT FOR `matchOracle`'s `typeCtors`, AND IT IS **NOT**
+-- `headTabOf`.  `typeCtors` is the one oracle table keyed by DECLARATION
+-- IDENTITY (`frontend/exhaust.mdk`, oracle-identity leaf L1): its rows are
+-- minted `tabKeyOf NsType <that decl's own dataOrigin> <tyname>`, so a
+-- module-stamped `data T` writes a `TkIdent` row.  `headTabOf` goes through
+-- `dispHeadTab hk = TkBare NsType (headKeyName hk)`, which flattens EVERY head
+-- to `TkBare` — deliberately, because the dispatch head-buckets it was built
+-- for are SPELLING-keyed (the #1317 T1 rule, the closed S0 #1277).  `tabKeyEq`
+-- never equates a `TkBare` lookup with a `TkIdent` row, so keying this table
+-- through `headTabOf` MISSED on every module-stamped type — and both `None`
+-- arms above fail OPEN, i.e. "no sibling withholds the field", i.e. the
+-- narrowing is trusted and the singleton survivor is accepted.
+--
+-- MEASURED (F4, this branch, on `44be8191`):
+-- `test/analyze_project_fixtures/record_ctor_sibling_blocks_narrowing/`
+-- `main_rejects.mdk` — #1468's ORIGINAL cross-module repro — went to `check`
+-- exit 0 with ZERO diagnostics where the pinned oracle expects
+-- `T-TYPE-MISMATCH: Type mismatch: T vs U`, while the byte-identical program
+-- written as ONE file still rejected: single-file decls are unstamped, so
+-- `tabKeyOf NsType OriginUnresolved "T"` is itself `TkBare` and the wrong mint
+-- accidentally agreed.  That is why F1's own single-file acceptance checks
+-- could not see this.  Instrumenting the two `None` arms apart (a marker
+-- `Some` scoped to `fname == "x" && survivorKey == "Zed"`, so the compiler's
+-- own source stayed unaffected) pinned it to the `oGetCtors` arm specifically:
+-- `headTabOf` answered `Some`, the `TabKey` lookup missed.  Same
+-- writer/reader `TkBare`-vs-`TkIdent` mismatch already documented at
+-- `seedAndCheckSplit`, one table over.
+--
+-- The mint below is `matchCol0Type`'s — the OTHER `oGetCtors` reader in this
+-- file — minus the arms it needs only because it starts from a `Mono`: keep
+-- `HkDecl`'s own `TabKey` (which already distinguishes an identity-bearing
+-- `TkIdent` from the flat path's `TkBare`), and refuse to key a rigid head at
+-- all.  §8 I6.1: a type PARAMETER is not a declaration; `matchCol0Type`'s
+-- `TkBare NsType n` for that case is a key no writer can ever have filled, so
+-- `None` here is the same miss without minting a forgery to reach it.
+ctorOracleKeyOf : Option HeadKey -> Option TabKey
+ctorOracleKeyOf None = None
+ctorOracleKeyOf (Some hk) = headKeyDecl hk
 
 firstCtorSiblingWithholding : String -> String -> List String -> Option String
 firstCtorSiblingWithholding _ _ [] = None
@@ -34001,7 +34046,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omSize" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "isSome" false) (mem "orElseOpt" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false) (mem "noneHeadTag" false))))
-(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyName" false) (mem "headKeyIdent" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyNTabAt" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SetRegistry" false) (mem "sregEmpty" false) (mem "sregAddK" false) (mem "sregSize" false))))
+(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyName" false) (mem "headKeyIdent" false) (mem "headKeyDecl" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyNTabAt" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SetRegistry" false) (mem "sregEmpty" false) (mem "sregAddK" false) (mem "sregSize" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "funHeadTag" false))))
 (DData Public "Mono" () ((variant "TVar" (ConPos (TyApp (TyCon "Ref") (TyCon "Tyvar")))) (variant "TCon" (ConPos (TyCon "String") (TyCon "TyConOrigin"))) (variant "TRigid" (ConPos (TyCon "String"))) (variant "TApp" (ConPos (TyCon "Mono") (TyCon "Mono"))) (variant "TFun" (ConPos (TyCon "Mono") (TyCon "EffRow") (TyCon "Mono"))) (variant "TEff" (ConPos (TyCon "EffRow")))) ())
 (DData Public "Tyvar" () ((variant "Unbound" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "Link" (ConPos (TyCon "Mono")))) ())
@@ -35741,7 +35786,10 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "narrowingBlockedByCtorSibling" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "narrowingBlockedByCtorSibling" ((PVar "rk") (PVar "fname") (PVar "survivorKey")) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "ctorSiblingWithholdingName") (EVar "rk")) (EVar "fname")) (EVar "survivorKey"))))
 (DTypeSig false "ctorSiblingWithholdingName" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "ctorSiblingWithholdingName" ((PVar "rk") (PVar "fname") (PVar "survivorKey")) (EMatch (EApp (EVar "headTabOf") (EVar "rk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "tk")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EVar "tk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ctors")) () (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "fname")) (EVar "survivorKey")) (EVar "ctors")))))))
+(DFunDef false "ctorSiblingWithholdingName" ((PVar "rk") (PVar "fname") (PVar "survivorKey")) (EMatch (EApp (EVar "ctorOracleKeyOf") (EVar "rk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "tk")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EVar "tk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ctors")) () (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "fname")) (EVar "survivorKey")) (EVar "ctors")))))))
+(DTypeSig false "ctorOracleKeyOf" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyApp (TyCon "Option") (TyCon "TabKey"))))
+(DFunDef false "ctorOracleKeyOf" ((PCon "None")) (EVar "None"))
+(DFunDef false "ctorOracleKeyOf" ((PCon "Some" (PVar "hk"))) (EApp (EVar "headKeyDecl") (EVar "hk")))
 (DTypeSig false "firstCtorSiblingWithholding" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "firstCtorSiblingWithholding" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "firstCtorSiblingWithholding" ((PVar "fname") (PVar "skey") (PCons (PVar "k") (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "skey")) (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "fname")) (EVar "skey")) (EVar "rest")) (EIf (EApp (EApp (EVar "ctorSiblingWithholds") (EVar "fname")) (EVar "k")) (EApp (EVar "Some") (EVar "k")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "fname")) (EVar "skey")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
@@ -39424,7 +39472,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omSize" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "isSome" false) (mem "orElseOpt" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false) (mem "noneHeadTag" false))))
-(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyName" false) (mem "headKeyIdent" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyNTabAt" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SetRegistry" false) (mem "sregEmpty" false) (mem "sregAddK" false) (mem "sregSize" false))))
+(DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyName" false) (mem "headKeyIdent" false) (mem "headKeyDecl" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyNTabAt" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SetRegistry" false) (mem "sregEmpty" false) (mem "sregAddK" false) (mem "sregSize" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "funHeadTag" false))))
 (DData Public "Mono" () ((variant "TVar" (ConPos (TyApp (TyCon "Ref") (TyCon "Tyvar")))) (variant "TCon" (ConPos (TyCon "String") (TyCon "TyConOrigin"))) (variant "TRigid" (ConPos (TyCon "String"))) (variant "TApp" (ConPos (TyCon "Mono") (TyCon "Mono"))) (variant "TFun" (ConPos (TyCon "Mono") (TyCon "EffRow") (TyCon "Mono"))) (variant "TEff" (ConPos (TyCon "EffRow")))) ())
 (DData Public "Tyvar" () ((variant "Unbound" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "Link" (ConPos (TyCon "Mono")))) ())
@@ -41164,7 +41212,10 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "narrowingBlockedByCtorSibling" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "narrowingBlockedByCtorSibling" ((PVar "rk") (PVar "fname") (PVar "survivorKey")) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "ctorSiblingWithholdingName") (EVar "rk")) (EVar "fname")) (EVar "survivorKey"))))
 (DTypeSig false "ctorSiblingWithholdingName" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "ctorSiblingWithholdingName" ((PVar "rk") (PVar "fname") (PVar "survivorKey")) (EMatch (EApp (EVar "headTabOf") (EVar "rk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "tk")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EVar "tk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ctors")) () (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "fname")) (EVar "survivorKey")) (EVar "ctors")))))))
+(DFunDef false "ctorSiblingWithholdingName" ((PVar "rk") (PVar "fname") (PVar "survivorKey")) (EMatch (EApp (EVar "ctorOracleKeyOf") (EVar "rk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "tk")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EVar "tk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ctors")) () (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "fname")) (EVar "survivorKey")) (EVar "ctors")))))))
+(DTypeSig false "ctorOracleKeyOf" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyApp (TyCon "Option") (TyCon "TabKey"))))
+(DFunDef false "ctorOracleKeyOf" ((PCon "None")) (EVar "None"))
+(DFunDef false "ctorOracleKeyOf" ((PCon "Some" (PVar "hk"))) (EApp (EVar "headKeyDecl") (EVar "hk")))
 (DTypeSig false "firstCtorSiblingWithholding" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "firstCtorSiblingWithholding" (PWild PWild (PList)) (EVar "None"))
 (DFunDef false "firstCtorSiblingWithholding" ((PVar "fname") (PVar "skey") (PCons (PVar "k") (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "skey")) (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "fname")) (EVar "skey")) (EVar "rest")) (EIf (EApp (EApp (EVar "ctorSiblingWithholds") (EVar "fname")) (EVar "k")) (EApp (EVar "Some") (EVar "k")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "fname")) (EVar "skey")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
