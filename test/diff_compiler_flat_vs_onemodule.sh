@@ -27,7 +27,7 @@
 # Flat-family importers there are: tools/lsp.mdk, tools/check_policy.mdk (parked on
 # Flat deliberately — `--fn <name>` is arbitrary user input looked up directly in the
 # effect table, so it needs prelude schemes), entries/typecheck_main.mdk,
-# entries/check_batch.mdk, entries/check_match_main.mdk, entries/playground_main.mdk,
+# entries/check_match_main.mdk, entries/playground_main.mdk,
 # entries/origin_agreement_main.mdk, entries/selfproc_tc_probe.mdk, plus this gate's
 # own entries/check_flat_diags_main.mdk. The `llvm_emit_typed_main` /
 # `wasm_emit_typed_main` emit entries reach Flat via `elaborateDict`, outside that
