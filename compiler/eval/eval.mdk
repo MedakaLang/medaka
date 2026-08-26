@@ -87,8 +87,8 @@ import bits64.{
 -- ── values & environment (mutually recursive) ─────────────────────────────
 -- B2 (RUN-EFFECTS): `Value` is EFFECT-POLYMORPHIC — `e` is the row its stored
 -- arrows (VPrim / VThunk / VClosureF bodies) may perform.  The differential
--- oracle instantiates `e := <Mut>` (its purity is a type-level guarantee);
--- `medaka run` instantiates `e` at the I/O row its installed extern prims
+-- oracle instantiates `e` at a row with no I/O externs installed, so it stays
+-- pure regardless of internal mutation; `medaka run` instantiates `e` at the I/O row its installed extern prims
 -- need (see `ioExternBindings`).  `e` is kind-inferred KRow from the `<e>`
 -- tails below.  NOTE: `EvalEnv` is deliberately parameterized over the VALUE
 -- type `v` (kind *), not over the row — data-decl kind inference is
@@ -2383,7 +2383,7 @@ prim1M f = VPrim f
 
 -- captured stdout: putStr/putStrLn append here instead of doing real IO, so the
 -- output buffer can be diffed against the === EVAL === goldens (no <IO> effect;
--- appending is just <Mut>).  ePutStr/ePutStrLn (stderr) are discarded HERE (the
+-- appending is just a plain mutation).  ePutStr/ePutStrLn (stderr) are discarded HERE (the
 -- oracle table); under `medaka run` ioExternBindings overrides them with prims
 -- that stream to the real host stderr.
 export
@@ -3221,7 +3221,7 @@ pArrayMake (VInt n) v = VArray (arrayMake n v)
 pArrayMake _ _ = panic "arrayMake: bad operands"
 
 -- arrayMakeWith : Int -> (Int -> a) -> Array a — higher-order, so it applies the
--- builder Value back through `apply` (hence <Mut>); builds a list then converts,
+-- builder Value back through `apply` (hence effectful); builds a list then converts,
 -- avoiding passing an effectful builder to the pure native arrayMakeWith extern.
 pArrayMakeWith : Value e -> Value e -> <e> Value e
 pArrayMakeWith (VInt n) f = VArray (arrayFromList (buildWith f 0 n))
@@ -3234,7 +3234,7 @@ pArrayCopy : Value e -> <e> Value e
 pArrayCopy (VArray a) = VArray (arrayCopy a)
 pArrayCopy _ = panic "arrayCopy: not an Array"
 
--- arraySetUnsafe : Int -> a -> Array a -> <Mut> Unit — mutate slot i in place.
+-- arraySetUnsafe : Int -> a -> Array a -> Unit — mutate slot i in place.
 -- Routes to the host arraySetUnsafe extern (the native Array is mutable).
 pArraySetUnsafe : Value e -> Value e -> Value e -> <e> Value e
 pArraySetUnsafe (VInt i) v (VArray a) =
@@ -3242,7 +3242,7 @@ pArraySetUnsafe (VInt i) v (VArray a) =
   VUnit
 pArraySetUnsafe _ _ _ = panic "arraySetUnsafe: bad operands"
 
--- arrayFill : a -> Array a -> <Mut> Unit — set every slot to v.  Takes no
+-- arrayFill : a -> Array a -> Unit — set every slot to v.  Takes no
 -- callback, so it delegates straight to the host extern (unlike the sorts and
 -- arrayMakeWith below, whose function argument is a Value closure).
 pArrayFill : Value e -> Value e -> <e> Value e
@@ -3251,7 +3251,7 @@ pArrayFill v (VArray a) =
   VUnit
 pArrayFill _ _ = panic "arrayFill: not an Array"
 
--- arrayBlit : Array a -> Int -> Array a -> Int -> Int -> <Mut> Unit
+-- arrayBlit : Array a -> Int -> Array a -> Int -> Int -> Unit
 -- Copies len elements from src[srcOff..] into dst[dstOff..] in place.
 -- Mirrors OCaml Array.blit semantics (memmove; handles overlapping regions).
 blitGo : Array (Value e) -> Int -> Array (Value e) -> Int -> Int -> <e> Unit
@@ -3382,7 +3382,7 @@ evalModules preludeDecls modules = evalModulesWith [] preludeDecls modules
 -- B2 (RUN-EFFECTS): evalModules with EXTRA extern bindings installed alongside
 -- externBindings — the seam `medaka run` uses to install real-I/O prims
 -- (ioExternBindings) without them ever reaching the differential-oracle
--- drivers, so the oracle's `e := <Mut>` purity stays a type-level guarantee.
+-- drivers, so the oracle stays free of I/O regardless of what `e` is otherwise instantiated at.
 export
 evalModulesWith : List (String, Value e) -> List Decl -> List (String, List Decl) -> <e> List (String, Value e)
 evalModulesWith extraExterns preludeDecls modules =
@@ -3828,7 +3828,7 @@ evalModulesOutput preludeDecls modules =
 -- ── run-path real-I/O externs (B2, RUN-EFFECTS) ────────────────────────────
 -- Real-I/O primitives installed ONLY by `medaka run`'s driver
 -- (evalModulesOutputRun) — never by the differential-oracle drivers, so the
--- oracle's `e := <Mut>` instantiation stays pure by type.
+-- oracle never performs real I/O regardless of what `e` is otherwise instantiated at.
 --
 -- OVERRIDE SEMANTICS: evalModulesWith installs `externBindings () ++ extraExterns`
 -- through installConsts, which is LAST-WRITE-WINS on a duplicate name (findCell
