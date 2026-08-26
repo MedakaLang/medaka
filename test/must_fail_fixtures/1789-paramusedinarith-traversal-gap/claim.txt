@@ -1,0 +1,33 @@
+issue: 1789
+what: `paramUsedInArith`/`paramUseTy` (`compiler/backend/llvm_emit.mdk`) do not
+what: traverse `CDecision` (a `match`'s lowered decision tree) or `CLam` bodies
+what: when deciding whether a parameter is used arithmetically. Both fall
+what: through `trmc_analysis.mdk`'s `flattenApp` catch-all, which only recurses
+what: into `CApp` argument spines, so `anyArithArg` never sees the arithmetic
+what: inside a `match` arm. `numPolySeed` keeps the parameter's default `LTInt`
+what: seed instead of promoting to `LTNum`, so a Float argument used only
+what: inside a match arm is emitted as raw integer arithmetic -- untagging a
+what: boxed Float pointer as an Int immediate, which SIGSEGVs the executed
+what: binary.
+cmd: build-run main.mdk
+exit: 139
+stdout-bytes:
+control: build-run control.mdk
+why-fixture: the interpreter (`run`) has no LTy-seeding pass, so this defect is
+why-fixture: only observable on the EXECUTED native binary -- build-run is the
+why-fixture: only verb that builds and runs it, grading the crash's exit code
+why-fixture: (139, SIGSEGV) and its stdout (empty -- the fatal-signal message
+why-fixture: lands on stderr, which build-run's stdout-only grading does not
+why-fixture: see, so stdout-bytes is pinned empty rather than the error text).
+why-control: control.mdk is the SAME arithmetic (`x + x` on a Float parameter)
+why-control: with the `match` wrapper removed -- structurally identical other
+why-control: than the one feature the issue isolates. It must build-run clean
+why-control: (exit 0) and print `5.0`, proving the parameter, the Float
+why-control: literal, and the arithmetic itself are otherwise intact -- the
+why-control: defect is specific to arithmetic reached only through a
+why-control: match-lowered decision tree (or, per the issue, a lambda body).
+why-note: root cause per the issue: `paramUsedInArith`/`paramUseTy` clause
+why-note: heads cover `CBinPrim`/`CIf`/`CUnOp`/`CLet` only; `CDecision` and
+why-note: `CLam` fall to the `flattenApp` catch-all. A fix makes main's
+why-note: executed binary print `5.0` at exit 0, draining this row. Close
+why-note: #1789 and delete this fixture when that happens.

@@ -1,0 +1,11 @@
+-- #1468 residual — the SIBLING is `ConPos`, not `ConNamed`.  `x` has exactly ONE
+-- named-field owner (`A`), so the owner ladder resolves it with full confidence —
+-- but `B` is a positional constructor of the SAME type `T` that declares no named
+-- field at all, so it withholds `x` unconditionally.  Before the fix, the walk
+-- that looks for a withholding sibling was sourced from `recordByNameRef`, which
+-- `registerRecordInfoKeyed` only ever populates for `ConNamed` variants — `B`
+-- could never appear there, so this narrowing wrongly fired and the built binary
+-- read `B`'s slot 0 through `A`'s `x`.
+data T = A { x : Int } | B Int
+
+getX t = t.x

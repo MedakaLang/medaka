@@ -8,12 +8,25 @@
 --   * the constructor is one of SEVERAL, so the cell carries a real tag and
 --     `cellTag`/`ctorOrdinal` are in play, not just a single-ctor record cell;
 --   * the CONSTRUCTOR NAME IS NOT THE TYPE NAME (`VA` vs `V`), and the field-order
---     table is keyed by the CONSTRUCTOR while `getA : V -> Int` mentions the TYPE;
---   * `VB Int` is a POSITIONAL sibling with no field labels at all, so
---     `declaredRecordFieldOrders` must contribute an entry for `VA` and none for
---     `VB` -- `variantNamedOrder`'s non-`ConNamed` arm returning `[]` rather than a
---     bogus empty-label row is what keeps `findRecByField`/`findRecordByLabel` from
---     ever matching `VB`.
+--     table is keyed by the CONSTRUCTOR while `getA : V -> Int` mentions the TYPE.
+--
+-- 🚨 `VB` USED TO BE `VB Int`, A POSITIONAL SIBLING WITH NO FIELD LABELS, AND THAT
+-- MADE THIS PROGRAM ILL-TYPED -- it just had no way to say so until #1468's
+-- positional-sibling gap was closed.  `getA v = v.a` projects a field off a value
+-- statically typed `V`, and a `V` carries no static constructor tag, so the access
+-- is only well-typed when EVERY constructor of `V` declares the field; the
+-- positional `VB` declared neither `a` nor `b`.  The fixture's own purpose is
+-- FIELD-ORDER INDEXING in a multi-constructor CELL layout, not field-owner
+-- well-typedness -- it predates that fix and exercised the bad shape only by
+-- accident -- so the repair is HERE, not in the checker.  ⚠️ Do NOT restore the
+-- positional form to "make the gate green": that would be re-opening #1468.
+--
+-- `VB` therefore now declares `b`/`a` too, in the SAME slot order as `VA`.  The
+-- order is deliberately not permuted: two constructors of one type declaring the
+-- same label at DIFFERENT slots is #1465 (a dispatched tag-based selector), which
+-- is not implemented, so permuting here would pin a wrong answer rather than test
+-- one.  With both constructors declaring both labels the multi-constructor cell
+-- with a real tag -- the property this fixture exists for -- is unchanged.
 --
 -- EXPECTED VALUE, HAND-DERIVED from this source before any engine was run --
 -- pinned at test/engine_value_pins/engine/record_variant_field_order.pin:
@@ -24,10 +37,12 @@
 --   `b` then `a`, so a positional fill in WRITTEN order would put `1` in slot 0
 --   (`b`) and `2` in slot 1 (`a`) and the pair would read `(2, 1)` -- the exact
 --   transposition, which is why both components are pinned rather than one.
+--   Unchanged by the `VB` repair: `main` still builds a `VA`, and `VB`'s slots are
+--   ordered identically, so neither the layout nor the value it yields moved.
 
 data V =
   | VA { b : Int, a : Int }
-  | VB Int
+  | VB { b : Int, a : Int }
 
 getA : V -> Int
 getA v = v.a

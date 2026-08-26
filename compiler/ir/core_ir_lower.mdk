@@ -2031,6 +2031,7 @@ ctorFieldTypeEntries : Decl -> List (String, List String)
 ctorFieldTypeEntries (DData { dataCtors = variants }) =
   map variantFieldTypeEntry variants
 ctorFieldTypeEntries (DNewtype { newtypeCtor = con, newtypeFieldTy = fieldTy }) = [(con, [tyHeadName fieldTy])]
+ctorFieldTypeEntries (DAttrib _ d) = ctorFieldTypeEntries d
 ctorFieldTypeEntries _ = []
 
 variantFieldTypeEntry : Variant -> (String, List String)
@@ -2131,6 +2132,7 @@ ctorArities ((DData { dataCtors = variants })::rest) = map variantArity variants
 -- Without this the emitter sees `UserId 42` as an unbound variable.
 ctorArities ((DNewtype { newtypeCtor = con })::rest) =
   (con, 1) :: ctorArities rest
+ctorArities ((DAttrib _ d)::rest) = ctorArities (d::rest)
 ctorArities (_::rest) = ctorArities rest
 
 variantArity : Variant -> (String, Int)

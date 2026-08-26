@@ -498,9 +498,9 @@ moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) = match unknownModuleIdOf
 -- module, and not the loc-free `TYPE ERROR: …`/boolean-deflection they used to
 -- collapse to.  `None` when the project has no error diagnostics (clean).
 -- Dependency-first file order (helper before entry), same as the loader/JSON.
-locatedProjectErrors : String -> List String -> String -> String -> <IO> Option String
-locatedProjectErrors target roots rsrc csrc =
-  errTextOf (locatedProjectDiags target roots rsrc csrc)
+locatedProjectErrors : Bool -> List String -> String -> List String -> String -> String -> <IO> Option String
+locatedProjectErrors allowInternal trusted target roots rsrc csrc =
+  errTextOf (locatedProjectDiags allowInternal trusted target roots rsrc csrc)
 
 errTextOf : (Option String, List (String, String, List Diag), Int) -> Option String
 errTextOf (errText, _, _) = errText
@@ -545,11 +545,16 @@ errTextOf (errText, _, _) = errText
 -- diagnostics" note instead of silently reading as clean; `run`/`build` (the
 -- other two callers) ignore it, so their narrow-to-coherence behaviour and
 -- its measured perf/noise rationale (see `isCoherenceWarn`) are untouched.
-locatedProjectDiags : String -> List String -> String -> String -> <IO> (Option String, List (String, String, List Diag), Int)
-locatedProjectDiags target roots rsrc csrc =
+-- #1362: `allowInternal`/`trusted` gate the internal-extern guard on the
+-- resolve half of this pass, exactly like the `resolveModulesToHumaneByPath`
+-- gate every caller here already runs BEFORE this one — this call is
+-- redundant-but-consistent (a resolve error this pass could newly find would
+-- already have been caught upstream), not a second independent gate.
+locatedProjectDiags : Bool -> List String -> String -> List String -> String -> String -> <IO> (Option String, List (String, String, List Diag), Int)
+locatedProjectDiags allowInternal trusted target roots rsrc csrc =
   let cacheRef = Ref []
   let parseCacheRef = Ref []
-  let results = analyzeProject cacheRef parseCacheRef (_ => None) target roots rsrc csrc
+  let results = analyzeProject allowInternal trusted cacheRef parseCacheRef (_ => None) target roots rsrc csrc
   let triples = map readDiagSrc results
   (
     joinedOrNone (flatMap renderTripleErrors triples),
@@ -597,8 +602,8 @@ renderTripleWarnings (path, src, diags) =
 -- accumulator `hadTypeErrors` reads is a Bool), so the arm still cannot print the
 -- real error — but it now says WHERE the error was detected and warns that `check`
 -- may not show it, instead of promising detail that command will not deliver.
-locatedOrGeneric : String -> List String -> String -> String -> <IO> String
-locatedOrGeneric target roots rsrc csrc = match locatedProjectErrors target roots rsrc csrc
+locatedOrGeneric : Bool -> List String -> String -> List String -> String -> String -> <IO> String
+locatedOrGeneric allowInternal trusted target roots rsrc csrc = match locatedProjectErrors allowInternal trusted target roots rsrc csrc
   Some t => t
   None => "error: type error in "
     ++ target
@@ -688,7 +693,7 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
       -- dump + main-shape warnings, unchanged.
       -- `locatedProjectDiags`, not `locatedProjectErrors`: the SAME single
       -- `analyzeProject` pass, keeping the coherence warnings its `fst` discards.
-      match locatedProjectDiags target roots rsrc csrc
+      match locatedProjectDiags allowInternal trusted target roots rsrc csrc
         (Some errText, _, _) =>
           let _ = putStr errText
           exit 1
@@ -1672,7 +1677,7 @@ typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc target mod
   -- stamped EVERY imported module's error with the entry file's path.
   let resDiags = resolveModulesToHumaneByPath pathMap allowInternal trusted rtD coreD modsD
   match resDiags
-    "" => match locatedProjectDiags target roots rsrc csrc
+    "" => match locatedProjectDiags allowInternal trusted target roots rsrc csrc
       -- CHECK-STRENGTH gate: the located per-module ERROR diagnostics, identical to
       -- what `medaka check` prints and to what `--json` reports.
       -- ⚠️ "identical to what `medaka check` prints" is true of ERRORS ONLY, and the
@@ -1688,7 +1693,7 @@ typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc target mod
         let _ = resetTypeErrorsSticky ()
         let _ = elaborateModules rtD coreD modsD
         match hadTypeErrors ()
-          True => TGErr (locatedOrGeneric target roots rsrc csrc)
+          True => TGErr (locatedOrGeneric allowInternal trusted target roots rsrc csrc)
           -- #1236: same main-shape fold as the single-module arm above.
           -- `elaborateModules` just ran over the WHOLE graph (line above), so
           -- mainSchemeRef is already populated — no second typecheck pass.
@@ -1985,7 +1990,7 @@ runRunCmd argv =
                       -- `locatedProjectDiags`, not `locatedProjectErrors`: the same
                       -- single `analyzeProject` pass, but keeping the WARNINGS the
                       -- errors-only accessor discarded (see its own note).
-                      "" => match locatedProjectDiags target roots rsrc csrc
+                      "" => match locatedProjectDiags allowInternal trusted target roots rsrc csrc
                         (Some errText, _, _) =>
                           let _ = ePutStrLn errText
                           exit 1
@@ -1996,7 +2001,7 @@ runRunCmd argv =
                             True =>
                               -- Belt-and-braces: anything only the emit/eval
                               -- elaboration can see still aborts before eval.
-                              let _ = ePutStrLn (locatedOrGeneric target roots rsrc csrc)
+                              let _ = ePutStrLn (locatedOrGeneric allowInternal trusted target roots rsrc csrc)
                               exit 1
                             False => finishRunEval target jsonMode elaborated mods projWarns
                       _ =>

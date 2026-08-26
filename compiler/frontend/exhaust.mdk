@@ -285,9 +285,14 @@ desugarPat _ (PList []) = PCon "Nil" []
 desugarPat oracle (PList (h::rest)) =
   PCon "Cons" [desugarPat oracle h, desugarPat oracle (PList rest)]
 desugarPat oracle (PAs _ _ p) = desugarPat oracle p
-desugarPat _ (PRec _ _ True) = PWild
 desugarPat oracle (PRec name fields _) =
-  -- Lower a record pattern to a constructor-tagged row.
+  -- Lower a record pattern to a constructor-tagged row.  This arm handles the
+  -- `...` (open) form too: `...` means "and I don't care about the other
+  -- FIELDS", never "...the CONSTRUCTOR", and `lookupRecField` already yields
+  -- PWild for every declared field this pattern does not mention.  (#1217: an
+  -- earlier `PRec _ _ True => PWild` arm sat above this one and discarded the
+  -- constructor, making a one-arm `Circle { ... }` match look exhaustive over a
+  -- multi-constructor type.)
   -- For each declared field (in declaration order) use the sub-pattern if
   -- mentioned in this pattern, otherwise PWild.  Falls back to PWild if the
   -- constructor's field layout is unknown (e.g. builtins).

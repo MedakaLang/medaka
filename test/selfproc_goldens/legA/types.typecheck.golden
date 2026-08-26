@@ -71,22 +71,15 @@ alpha : List (String, Expr) -> Expr -> KP
 alphaArms : List (String, Expr) -> Option String -> List Arm -> KP
 alphaCollectBinds : List LetBind -> List (String, Expr) -> List (String, Expr)
 alphaLeftPrefix : KP -> KP
-ambigReexportHelp : String -> String -> List String -> String
-ambigReexportMsg : String -> String -> List String -> String
-ambigRowsOf : String -> Map String (List (String, String)) -> List String -> List (String, List String)
-ambiguousAdmitted : UsePath -> List (String, List String) -> List (String, List String)
-ambiguousExportRows : String -> List (String, (String, String)) -> List (String, List String)
 ambiguousFieldMsg : String -> List String -> String
 ambiguousImplMsg : String -> String
 ambiguousOverlapMsg : String -> List Mono -> List KeyEntry -> String
-andList : List String -> String
 annotTooGeneralMsg : Ty -> String
 anyArgMentions : List String -> List Ty -> Bool
 anyClaimRow : List Int -> List (String, List (List Mono)) -> Bool
 anyClauseEagerlyRefsGroup : List String -> List FunClause -> Bool
 anyConcreteHead : List Mono -> Bool
 anyContainsI : List Int -> List Int -> Bool
-anyCtorSiblingWithholds : Option HeadKey -> String -> String -> List String -> Bool
 anyDepReaches : List String -> List String -> String -> List (String, List Decl) -> Bool
 anyGivenMatches : String -> List Mono -> List (String, List Mono, String) -> Bool
 anyHoleAtom : List Atom -> Bool
@@ -359,9 +352,9 @@ classEnvRowsOf : Int -> List (String, List String, List IfaceMethod, List Super,
 clauseEagerlyRefsGroup : List String -> FunClause -> Bool
 clauseImplDictUser : Int -> ImplMethod -> List String
 clauseIsNonFunction : FunClause -> Bool
-clauseIsValue : TcEnv -> FunClause -> Bool
+clauseIsValue : FunClause -> Bool
 clauseRefs : (List Pat, Expr) -> List String
-clausesAreValue : TcEnv -> List FunClause -> Bool
+clausesAreValue : List FunClause -> Bool
 clausesAt : String -> Map String (List (List Pat, Expr)) -> List (List Pat, Expr)
 clausesLoc : List FunClause -> Option Loc
 clausesOf : String -> Map String (List (List Pat, Expr)) -> List (List Pat, Expr)
@@ -465,7 +458,11 @@ ctorCandImported : List Decl -> String -> (Ident, String, Scheme) -> Bool
 ctorCandScheme : (Ident, String, Scheme) -> Scheme
 ctorHeadIsUpper : String -> Bool
 ctorIdentRow : String -> TyConOrigin -> String -> List (String, String, Ident)
-ctorSiblingWithholds : Option HeadKey -> String -> String -> Bool
+ctorOracleKeyOf : Option HeadKey -> Option TabKey
+ctorSiblingWithholdingForHead : Option HeadKey -> Option HeadKey -> String -> String -> Option String
+ctorSiblingWithholdingHere : Mono -> String -> RecordInfo -> String -> Option String
+ctorSiblingWithholdingName : Option HeadKey -> String -> String -> Option String
+ctorSiblingWithholds : String -> String -> Bool
 currentDoOrigin : Ref (Option Loc)
 currentLoc : Ref (Option Loc)
 currentLocalSchemes : Unit -> List (String, Scheme)
@@ -497,17 +494,27 @@ declCtorIdents : List Decl -> List (String, String, Ident)
 declCtorIdentsOf : Decl -> List (String, String, Ident)
 declCtorNamed : String -> Decl -> Bool
 declEnvDeclFieldOwners : List Decl -> Map String (List String) -> Map String (List String)
+declEnvDeclOwnerModules : String -> List Decl -> Map String (List String) -> Map String (List String)
 declEnvDeclsOf : List DeclEnvModule -> List Decl
-declEnvDefinerIndex : Map String (List (String, (String, String))) -> Map String (List (String, List String)) -> List DeclEnvModule -> (Map String (List (String, (String, String))), Map String (List (String, List String)))
+declEnvDefinerIndex : Map String (List (String, (String, String))) -> List DeclEnvModule -> Map String (List (String, (String, String)))
+declEnvDirectImports : Map String (List String) -> String -> List String
+declEnvImportIndex : List DeclEnvModule -> Map String (List String) -> Map String (List String)
 declEnvKindEntries : List Decl -> List (TabKey, List Kind)
+declEnvMarkReached : List String -> Map String Unit -> Map String Unit
 declEnvModule : Int -> String -> List Decl -> DeclEnvModule
 declEnvModulesFrom : Int -> List (String, List Decl) -> List DeclEnvModule
 declEnvOrdIndex : Map String Int -> List DeclEnvModule -> Map String Int
+declEnvOwnerModules : List DeclEnvModule -> Map String (List String) -> Map String (List String)
+declEnvReachFrom : Map String (List String) -> List String -> Map String Unit -> Map String Unit
+declEnvReachGo : Map String (List String) -> List DeclEnvModule -> Map String (Map String Unit) -> Map String (Map String Unit)
+declEnvReachIndex : List DeclEnvModule -> Map String (Map String Unit)
+declEnvReachSeed : String -> Map String Unit
 declEnvRowKindEntries : Int -> DeclEnvModule -> List (TabKey, List Kind)
 declEnvRowVisible : Int -> DeclEnvModule -> List Decl
 declEnvSeedChain : List DeclEnvModule -> List (TabKey, List Kind) -> Map String (List String) -> Map String (List (TabKey, List Kind)) -> Map String (Map String (List String)) -> (Map String (List (TabKey, List Kind)), Map String (Map String (List String)))
 declEnvSeedDataUniverse : String -> DeclEnvs -> Unit
 declEnvVariantFieldOwners : List Variant -> Map String (List String) -> Map String (List String)
+declEnvVariantOwnerModules : String -> List Variant -> Map String (List String) -> Map String (List String)
 declEnvVisibleAt : Int -> Int -> Bool
 declEnvVisibleTo : Int -> Int -> Bool -> Bool
 declEnvsOrdOf : String -> DeclEnvs -> Int
@@ -554,7 +561,6 @@ defaultEffectLaunderMsg : String -> List Atom -> String
 defaultGroupNum : List UObligation -> List Mono -> Unit
 defaultSubject : String -> String -> String
 defaultSurvivorMap : List (String, Mono) -> List (Int, Mono) -> List (String, Mono)
-definerPairsOf : String -> Map String (List (String, String)) -> List (String, String)
 definerReceiverDispatches : String -> Mono -> Bool
 definerReceiverIsDictVar : String -> Mono -> Bool
 definerRowsOf : List (String, (String, String)) -> List (String, String)
@@ -720,7 +726,12 @@ fieldAssignNamePair : FieldAssign -> (String, Unit)
 fieldAssignSites : FieldAssign -> List (Ref Route)
 fieldFixFrom : Option Loc -> String -> Option (Loc, String)
 fieldNameOf : Field -> String
+fieldNotInAllCtorsMsg : String -> String -> String -> String
+fieldOwnerAnyReachable : List String -> Bool
 fieldOwnerNames : String -> List String
+fieldOwnerReachFilter : List String -> List String
+fieldOwnerReachable : String -> Bool
+fieldSelectionWellTyped : Mono -> String -> RecordInfo -> String -> Mono -> Mono
 fieldTyOf : Field -> Ty
 fieldTypeE : List (String, Ref Effvar) -> List (String, Mono) -> Field -> Mono
 fillHoleAtom : List (String, Expr) -> Option Expr -> Atom -> Atom
@@ -740,12 +751,12 @@ findTupleCand : String -> List (Mono, String, Option (Loc, String)) -> Option (S
 findTvName : Int -> List (String, Mono) -> Option String
 findTvarInMono : Mono -> Int -> Option Mono
 findTvarN : Mono -> Int -> Option Mono
+firstCtorSiblingWithholding : String -> String -> List String -> Option String
 firstDictForEncl : Int -> String -> List (Int, String) -> Option String
 firstDispatchIdx : List String -> Int -> List Ty -> Option Int
 firstFieldName : List FieldAssign -> Option String
 firstIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
 firstImplMethodLoc : List ImplMethod -> Option Loc
-firstMid : List String -> String
 firstOrZero : List Int -> Int
 firstPredForEncl : String -> List Mono -> String -> List (String, List Mono, String) -> Option String
 firstReqMatch : List (List Ty, List Require) -> List Mono -> Option (List (String, Mono), List Require)
@@ -801,8 +812,6 @@ goalSiteLoc : Ref (Option Loc)
 goalSlotStillOpen : List Mono -> Bool
 goalVecOfKind : String -> Mono -> EntailKind -> List Mono
 goalsClosed : List Mono -> Bool
-graphAliasEntry : String -> List ((String, String), a) -> (String, (String, String)) -> List (String, a)
-graphAmbigValues : String -> List (String, List String)
 graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
 graphCtorExports : List Decl -> List (String, List Decl) -> Map String (List (String, String, Ident))
 graphCtorExportsGo : Map String (List (String, String, Ident)) -> List (String, List Decl) -> Map String (List (String, String, Ident))
@@ -817,7 +826,6 @@ groundOneObligation : List Decl -> String -> List String -> Ty -> Mono -> Unit
 groundShadowReceiver : Option Mono -> Mono -> Bool -> Option Loc -> Unit
 groupClauses : List (String, (List Pat, Expr)) -> Map String (List (List Pat, Expr))
 groupClausesGo : List (String, (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
-groupDefinerPairs : Map String (List (String, String)) -> List (String, (String, String)) -> Map String (List (String, String))
 groupNames : List (String, (List Pat, Expr)) -> Map String Unit -> List String
 groupRefs : List (List Pat, Expr) -> List String
 groupSchemesOf : TcEnv -> List LetBind -> List (String, Scheme)
@@ -1128,8 +1136,7 @@ isArithBinop : String -> Bool
 isBareTyvarMono : Mono -> Bool
 isConPat : Pat -> Bool
 isConstrainedTy : Ty -> Bool
-isCtorAppSpine : TcEnv -> Expr -> Bool
-isDeclaredCtorHead : TcEnv -> String -> Bool
+isCtorAppSpine : Expr -> Bool
 isDefinerShadow : String -> Bool
 isDoLoweredAndThenCallee : Expr -> Bool
 isDoLoweredAndThenCalleeExpr : Expr -> Bool
@@ -1140,7 +1147,7 @@ isLetrecGroup : List String -> Bool
 isMangledExportOfAny : List (String, List (String, Scheme)) -> String -> Bool
 isMangledFor : String -> String -> Bool
 isMonoScheme : Scheme -> Bool
-isNonexpansive : TcEnv -> Expr -> Bool
+isNonexpansive : Expr -> Bool
 isRowSlotArg : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Bool
 isShadowStandalone : String -> Bool
 isSubTop : Param -> Bool
@@ -1234,7 +1241,7 @@ maybeStandaloneValueMonoEmit : TcEnv -> String -> Ref Route -> Option Mono
 memberAliasEntry : String -> List ((String, String), a) -> UseMember -> List (String, a)
 memberBinding : UseMember -> (String, String)
 memberBindsCtorName : String -> String -> UseMember -> Bool
-memberClauseIsValue : TcEnv -> (List Pat, Expr) -> Bool
+memberClauseIsValue : (List Pat, Expr) -> Bool
 memberDefinerRow : String -> List (String, (String, String)) -> (String, String) -> List (String, (String, String))
 memberDictName : List String -> UseMember -> List String
 memberMethodRename : List String -> UseMember -> List (String, String)
@@ -1466,7 +1473,6 @@ publicDataDecl : Decl -> Bool
 publicDataDecls : List Decl -> List Decl
 publicValNames : List Decl -> List String
 pureRow : EffRow
-pushAmbiguousImports : String -> Loc -> List (String, List String) -> Unit
 pushCoherenceWarning : Option Loc -> String -> Unit
 pushDictApp : (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> Unit
 pushDiscardedValueError : Mono -> Expr -> Unit
@@ -1599,8 +1605,6 @@ renderProductLit : List (String, Param) -> String
 reopenRow : Bool -> EffRow -> EffRow
 reopenRowN : Bool -> EffRow -> EffRow
 reportAmbiguousImpl : String -> Route
-reportAmbiguousImport : String -> UsePath -> Loc -> Unit
-reportAmbiguousImports : List Decl -> Unit
 reportAmbiguousOverlap : List Mono -> List KeyEntry -> Unit
 reportNumOrNoImpl : String -> List Mono -> Option Loc -> Unit
 reportUncovered : String -> List (String, Ty, List (String, Mono)) -> List (String, Int) -> List (String, Int) -> Unit
@@ -1683,7 +1687,7 @@ rowSlotArgMono : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Mono
 runFinalChecks : List Decl -> List Decl -> ClassEnv -> ClassEnv -> ImplEnv -> ImplEnv -> Int -> Bool -> Unit
 sameRootId : Int -> Mono -> Bool
 sameSpellingHint : Mono -> Mono -> Option String
-sccSchemes : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> Bool -> List (String, Mono) -> List (String, Scheme)
+sccSchemes : List (String, Ty) -> Map String (List (List Pat, Expr)) -> Bool -> List (String, Mono) -> List (String, Scheme)
 schemeHasConcreteDomain : Scheme -> Bool
 schemeIds : Scheme -> List Int
 schemeLines : List (String, Scheme) -> List String

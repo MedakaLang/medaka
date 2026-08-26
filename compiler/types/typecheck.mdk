@@ -136,6 +136,7 @@ import frontend.exhaust.{
   usefulWitness,
   renderWitness,
   desugarPat,
+  oGetCtors,
 }
 import support.char.{isUpper}
 import backend.private_mangle.{mangledName}
@@ -191,6 +192,12 @@ import types.registry.{
   -- A-2.13 (#1319 unit 3): the IDENTITY inside a projected head, for the one
   -- record lookup that selects a row by the receiver rather than by a spelling.
   headKeyIdent,
+  -- The DECLARATION half of a projected head, keeping `TkIdent` and `TkBare`
+  -- apart — the mint an IDENTITY-keyed table's reader owes its writer.  Used by
+  -- `ctorOracleKeyOf` below, which keys `matchOracle.typeCtors`; ⚠️ NOT
+  -- `headTabOf`, whose `dispHeadTab` deliberately flattens every head to
+  -- `TkBare` for the SPELLING-keyed dispatch buckets.
+  headKeyDecl,
   -- A-2.2b (#1111): the dispatch-key layer.  `headBucketKey`/`RegKey` key the
   -- head-tycon buckets — ⚠️ by SPELLING, not by identity: this line said "by
   -- IDENTITY" until B-2.1-a3, and `dispHeadTab hk = TkBare NsType (headKeyName hk)`
@@ -2791,6 +2798,8 @@ data DeclEnvs = DeclEnvs {
     deIfaces : ClassEnv,  -- A-3.3 (#1519) built it; A-3.5c (#1557) made it LIVE — three readers, see the `CE` block
     deKindsBefore : OrdMap (List (TabKey, List Kind)),
     deOwnersBefore : OrdMap (OrdMap (List String)),
+    deOwnerModules : OrdMap (List String),  -- #1597: field-owner KEY → the module ids that declare it — see `declEnvOwnerModules`
+    deReach : OrdMap (OrdMap Unit),  -- #1597: module id → its transitive `DUse` closure (itself + the prelude included) — see `declEnvReachIndex`
   }
 
 -- INITIAL construction only, exactly as `freshDriverState` is: a driver that never
@@ -2808,6 +2817,8 @@ emptyDeclEnvs = DeclEnvs {
   deIfaces = emptyClassEnv,
   deKindsBefore = omEmpty,
   deOwnersBefore = omEmpty,
+  deOwnerModules = omEmpty,
+  deReach = omEmpty,
 }
 
 -- Build the envelope from the prelude + the loader's dependency-first module list.
@@ -2857,6 +2868,11 @@ buildDeclEnvs coreDecls modules =
     deIfaces = buildClassEnv mods,
     deKindsBefore = fst seeds,
     deOwnersBefore = snd seeds,
+    -- #1597: the two halves of the field-owner REACHABILITY filter.  Both are
+    -- whole-graph and reader-independent (the reader is applied at the READ, in
+    -- `fieldOwnerNames`), so they are built here once alongside the seeds.
+    deOwnerModules = declEnvOwnerModules mods omEmpty,
+    deReach = declEnvReachIndex mods,
   }
 
 declEnvModulesFrom : Int -> List (String, List Decl) -> List DeclEnvModule
@@ -3162,15 +3178,23 @@ declEnvRowKindEntries cur m
   | otherwise = []
 
 -- 🚨 THE POPULATION HALF, AND IT MIRRORS `registerData`/`registerVariants` ARM FOR
--- ARM — including the arms they DO NOT have.  There is no `DAttrib` arm, because
--- `registerData` has none either (it falls through its `registerData env _ = env`
--- catch-all).  That gap is a real defect — #1586, S0 — but it spans resolve and
--- typecheck and is a deliberate behaviour change; a RETIREMENT whose bar is
--- neutrality must inherit it, not drain it.  Adding a `DAttrib` arm here would
--- give an attributed data type param kinds it does not have today and move
--- judgments (#1069/#1090 territory) inside a PR that claims to move none.
+-- ARM — including the arms they DO NOT have.  ⚠️ THE `DAttrib` ARM IS NOW ONE OF THE
+-- ARMS THEY DO HAVE.  This block used to record its absence as inherited-on-purpose
+-- (*"That gap is a real defect — #1586, S0 — but … a RETIREMENT whose bar is
+-- neutrality must inherit it, not drain it"*); `S-field-owner-candidates` is the
+-- follow-up that drains it, so `registerData` unwraps `DAttrib` and this mirror
+-- unwraps with it.  Keeping the mirror is the whole discipline here: the moment the
+-- two disagree, an attributed decl means one thing where it is declared and another
+-- to an importer.
+--
+-- ⚠️ ONLY THE OWN-ROW ARM OF `declEnvRowKindEntries` REACHES THIS TODAY.  The
+-- cross-module projection goes through `kindPublicDataDecl`, which still has no
+-- `DAttrib` arm, so an attributed PUBLIC data decl is still invisible to importers'
+-- kind entries.  That is the #1063-family export gap, a different question from
+-- #1228/#1586, and it is deliberately NOT touched here.
 declEnvKindEntries : List Decl -> List (TabKey, List Kind)
 declEnvKindEntries [] = []
+declEnvKindEntries ((DAttrib _ d)::rest) = declEnvKindEntries (d::rest)
 declEnvKindEntries ((DData { dataName = n, dataParams = ps, dataCtors = vs, dataOrigin = o })::rest) = (tyTabKey o n, inferParamKinds ps vs) :: declEnvKindEntries rest
 declEnvKindEntries ((DNewtype { newtypeName = n, newtypeParams = ps, newtypeCtor = con, newtypeFieldTy = fty, newtypeOrigin = o })::rest) = (tyTabKey o n, inferParamKinds ps [Variant con (ConPos [fty])]) :: declEnvKindEntries rest
 declEnvKindEntries (_::rest) = declEnvKindEntries rest
@@ -3210,7 +3234,8 @@ declEnvKindEntries (_::rest) = declEnvKindEntries rest
 -- `registerRecordInfoKeyed` applies, so the owner string is the same `Variant`
 -- constructor name off the same `Decl` node.  `DNewtype` contributes nothing (its
 -- payload is always a synthesised `ConPos`), which is why there is no arm for it,
--- and `DAttrib` has none for the #1586 reason recorded on `declEnvKindEntries`.
+-- and `DAttrib` unwraps and recurses, mirroring `registerData` (#1228/#1586 — see
+-- the note on `declEnvKindEntries`, including which reader actually reaches it).
 declEnvSeedChain : List DeclEnvModule -> List (TabKey, List Kind) -> OrdMap (List String) -> OrdMap (List (TabKey, List Kind)) -> OrdMap (OrdMap (List String)) -> (OrdMap (List (TabKey, List Kind)), OrdMap (OrdMap (List String)))
 declEnvSeedChain [] _ _ km om = (km, om)
 declEnvSeedChain (m::rest) kacc oacc km om =
@@ -3223,6 +3248,8 @@ declEnvSeedChain (m::rest) kacc oacc km om =
 
 declEnvDeclFieldOwners : List Decl -> OrdMap (List String) -> OrdMap (List String)
 declEnvDeclFieldOwners [] acc = acc
+declEnvDeclFieldOwners ((DAttrib _ d)::rest) acc =
+  declEnvDeclFieldOwners (d::rest) acc
 declEnvDeclFieldOwners ((DData { dataCtors = vs })::rest) acc =
   declEnvDeclFieldOwners rest (declEnvVariantFieldOwners vs acc)
 declEnvDeclFieldOwners (_::rest) acc = declEnvDeclFieldOwners rest acc
@@ -3237,6 +3264,115 @@ declEnvVariantFieldOwners (_::rest) acc = declEnvVariantFieldOwners rest acc
 
 fieldNameOf : Field -> String
 fieldNameOf (Field fn _) = fn
+
+-- ── #1597: FIELD-OWNER REACHABILITY ──────────────────────────────────────────
+-- 🚨 WHY THIS IS A SECOND, NARROWER PREDICATE AND NOT A WIDENING OF
+-- `declEnvVisibleAt`.  That predicate is shared by FOUR name-scoping tables plus a
+-- decl-time existence query, and its own 🚨 note forbids widening its readers as a
+-- side effect of anything: *"Widening any of this predicate's readers is a separate
+-- unit with its own fixtures; it is not a side effect of anything."*  #1597 is the
+-- opposite direction anyway — the ordinal prefix is too WIDE for the field-owner
+-- reader, not too narrow.  So the prefix stays exactly as it is, the population stays
+-- exactly as it is, and the FIELD-OWNER READER alone gets one extra conjunct.  No
+-- other reader of `declEnvVisibleAt` sees any of this.
+--
+-- THE PREDICATE: an earlier module's record votes in `resolveFieldByOwners`'
+-- ambiguity test only if that module is in the reading module's transitive `DUse`
+-- closure.  "Earlier in the topological order" is not "reachable" — that conflation
+-- is the whole of #1597, where a module importing NOTHING was rejected because an
+-- unrelated module sorted first.
+--
+-- ⚠️ IT IS AN OVER-APPROXIMATION ON PURPOSE, IN THE SAFE DIRECTION.  The closure
+-- walks every `DUse` edge regardless of publicity, selectivity or re-export, so it
+-- only ever removes a module the reader has NO import path to at all.  A module the
+-- reader can reach but may not legally name still votes, exactly as today.
+
+-- Field-owner KEY → the module ids that declare it.  Same `DData`/`ConNamed` walk as
+-- `declEnvDeclFieldOwners`, including the `DAttrib` unwrap, so the keys here are the
+-- same strings that function puts in the seed.  A LIST, not a single id: two modules
+-- may declare the same named-field constructor name, and collapsing them would drop a
+-- legitimate owner.
+declEnvOwnerModules : List DeclEnvModule -> OrdMap (List String) -> OrdMap (List String)
+declEnvOwnerModules [] acc = acc
+declEnvOwnerModules (m::rest) acc =
+  declEnvOwnerModules rest (declEnvDeclOwnerModules m.demId m.demDecls acc)
+
+declEnvDeclOwnerModules : String -> List Decl -> OrdMap (List String) -> OrdMap (List String)
+declEnvDeclOwnerModules _ [] acc = acc
+declEnvDeclOwnerModules mid ((DAttrib _ d)::rest) acc =
+  declEnvDeclOwnerModules mid (d::rest) acc
+declEnvDeclOwnerModules mid ((DData { dataCtors = vs })::rest) acc =
+  declEnvDeclOwnerModules mid rest (declEnvVariantOwnerModules mid vs acc)
+declEnvDeclOwnerModules mid (_::rest) acc = declEnvDeclOwnerModules mid rest acc
+
+declEnvVariantOwnerModules : String -> List Variant -> OrdMap (List String) -> OrdMap (List String)
+declEnvVariantOwnerModules _ [] acc = acc
+declEnvVariantOwnerModules mid ((Variant cn (ConNamed _ _))::rest) acc =
+  declEnvVariantOwnerModules
+    mid
+    rest
+    (omInsert cn (mid :: fromOption [] (omLookup cn acc)) acc)
+declEnvVariantOwnerModules mid (_::rest) acc =
+  declEnvVariantOwnerModules mid rest acc
+
+-- Module id → every module id it can reach through `DUse` edges.  Built once per
+-- graph, walked with an explicit seen-set so an import CYCLE terminates rather than
+-- relying on the loader's topological order (the loader rejects cycles, but this
+-- function must not be the thing that discovers that).
+--
+-- ⚠️ THE DIRECT-IMPORT EDGES ARE INDEXED FIRST, AND THAT IS NOT A TIDY-UP.  This
+-- walk visits O(modules) rows per module, so a direct-import lookup that SCANS the
+-- module list makes the whole index CUBIC in the module count on an import chain —
+-- measured at N=400 as 0.84s of the `modules` perf shape's typecheck stage, which is
+-- what reddened `diff_compiler_perf_scaling`'s TIME arm when #1597 landed.  Indexing
+-- the edges once keeps the walk quadratic-with-log (the index's own SIZE is already
+-- quadratic on a chain — each of N modules reaches ~N — so no build can be cheaper).
+declEnvReachIndex : List DeclEnvModule -> OrdMap (OrdMap Unit)
+declEnvReachIndex mods =
+  declEnvReachGo (declEnvImportIndex mods omEmpty) mods omEmpty
+
+-- Module id → its direct `DUse` edges, one row per module.  FIRST row wins, which is
+-- the same tie-break the linear scan this replaces had (it returned the first
+-- `demId` match), and an absent id yields `[]` for the same reason it did there.
+declEnvImportIndex : List DeclEnvModule -> OrdMap (List String) -> OrdMap (List String)
+declEnvImportIndex [] acc = acc
+declEnvImportIndex (m::rest) acc
+  | omHasKey m.demId acc = declEnvImportIndex rest acc
+  | otherwise = declEnvImportIndex rest (omInsert m.demId (flatMap useModuleId m.demDecls) acc)
+
+declEnvReachGo : OrdMap (List String) -> List DeclEnvModule -> OrdMap (OrdMap Unit) -> OrdMap (OrdMap Unit)
+declEnvReachGo _ [] acc = acc
+declEnvReachGo edges (m::rest) acc = declEnvReachGo
+  edges
+  rest
+  (omInsert
+    m.demId
+    (declEnvReachFrom edges [m.demId] (declEnvReachSeed m.demId))
+    acc)
+
+-- The reader's OWN module is reachable from itself, and so is the PRELUDE under both
+-- spellings the drivers use for it (`"core"` here, `""` from `declEnvOrdIndex`): no
+-- module writes a `DUse` for the implicit prelude, so a closure that did not seed it
+-- would silently disenfranchise every prelude record.
+declEnvReachSeed : String -> OrdMap Unit
+declEnvReachSeed mid =
+  omInsert mid () (omInsert "" () (omInsert "core" () omEmpty))
+
+declEnvReachFrom : OrdMap (List String) -> List String -> OrdMap Unit -> OrdMap Unit
+declEnvReachFrom _ [] seen = seen
+declEnvReachFrom edges (mid::rest) seen =
+  let fresh = filterList (d => not (omHasKey d seen)) (declEnvDirectImports edges mid)
+  declEnvReachFrom edges (fresh ++ rest) (declEnvMarkReached fresh seen)
+
+declEnvMarkReached : List String -> OrdMap Unit -> OrdMap Unit
+declEnvMarkReached [] seen = seen
+declEnvMarkReached (d::rest) seen = declEnvMarkReached rest (omInsert d () seen)
+
+-- The module ids row [mid] imports directly.  `useModuleId` is the same path→id
+-- mapping every other cross-module table in this file keys on, so a hit here is a hit
+-- in `deOwnerModules`.
+declEnvDirectImports : OrdMap (List String) -> String -> List String
+declEnvDirectImports edges mid = fromOption [] (omLookup mid edges)
 
 -- The ONE call site of the two seeds, so a future third table cannot be added on
 -- one side only — the same "one body per direction" property `loadDataUniverse`
@@ -3270,10 +3406,20 @@ fieldNameOf (Field fn _) = fn
 -- already gates #1553's shipped ctor overlay, so the exposure is shared rather than
 -- created here) — but the exposure's SEVERITY on the kind half is not the same as
 -- the owner half's, and a future reader must not infer "loud" from this site.
+--
+-- ⚠️ THE LAST TWO LINES ARE #1597's HALF AND THEY ARE NOT A THIRD SEED.  They do not
+-- change WHAT is in `fieldOwnersRef`; they hand `fieldOwnerNames` the two facts it
+-- needs to drop a vote at the READ.  `deOwnerModules` is graph-global (the same value
+-- for every reader); `deReach` is indexed by the reading module, and a MISS yields the
+-- empty set — which `fieldOwnerReachFilter` treats as "know nothing, filter nothing".
+-- That is the fallback `#1597`'s own design note requires: a closure miss falls back
+-- to today's prefix answer, never to `[]`.
 declEnvSeedDataUniverse : String -> DeclEnvs -> Unit
 declEnvSeedDataUniverse mid envs =
   perRun.value.dataParamKindsRef := fromOption [] (omLookup mid envs.deKindsBefore)
   perRun.value.fieldOwnersRef := fromOption omEmpty (omLookup mid envs.deOwnersBefore)
+  perRun.value.fieldOwnerModulesRef := envs.deOwnerModules
+  perRun.value.fieldOwnerReachRef := fromOption omEmpty (omLookup mid envs.deReach)
 
 -- ── doctests ─────────────────────────────────────────────────────────────
 -- The three arms of `kindPublicDataDecl` that `publicDataDecl` does NOT have are
@@ -3601,14 +3747,15 @@ dataEnvFromDeclsGo ord (d::rest) acc =
 -- ALIAS IS DROPPED AT THE *READ*, NOT HERE.  That split is the point, and an
 -- earlier draft of this unit got it backwards.
 --
--- The fact being recorded: `registerData` has no `DAttrib` arm (it falls to
--- `registerData env _ = env`) and neither does `publicDataDecl`, so an
--- ATTRIBUTED type alias — `@deprecated "…"` / `type X = Int` — is invisible to
--- the LIVE alias table in both directions today.  MEASURED on this tree: that
--- program is rejected `Type mismatch: Int vs X` + `No impl of Num for X`, i.e.
--- `X` stays an opaque `TCon`.  Letting it into `aliasUniverseAt`'s result would
--- expand it in IMPORTERS while it stayed opaque where it was declared — an
--- acceptance WIDENING, incoherent besides, and not one this unit may make.
+-- ⚠️ THE FACT THIS RECORDED IS NO LONGER TRUE, AND THE PARAGRAPH IS KEPT SO THE
+-- TRANSITION IS READABLE.  It read: *"`registerData` has no `DAttrib` arm (it falls
+-- to `registerData env _ = env`) and neither does `publicDataDecl`, so an ATTRIBUTED
+-- type alias — `@deprecated "…"` / `type X = Int` — is invisible to the LIVE alias
+-- table in both directions today"* — measured then as `Type mismatch: Int vs X` +
+-- `No impl of Num for X`.  `registerData` HAS that arm now (#1228/#1586), so the
+-- alias expands where it is declared, and the read guard went with it (see below).
+-- `publicDataDecl` still has none; it does not need one, because `adPub` is read
+-- off the INNER decl this function has already unwrapped.
 --
 -- ⚠️ WHY THE POPULATION KEEPS IT ANYWAY.  `deTypes`/`deCtorIdents`/
 -- `deRecordIdents`/`deFieldOwnerIdents` all keep A-3.2a's unwrap and are strict
@@ -3618,15 +3765,17 @@ dataEnvFromDeclsGo ord (d::rest) acc =
 -- own precondition comment requires slice 3 to solve the identical problem with
 -- a READ-side guard.  So `adAttrib` is recorded here and applied there.
 --
--- 🚨 THE RE-ADD CONDITION, STATED SO A LATER FIXER CANNOT GET IT HALF-RIGHT.
--- This drop exists ONLY because the live table has no attributed aliases in it.
--- #1228/#1586 are the issues that would change that: whoever gives `registerData`
--- (and `publicDataDecl`) a `DAttrib` arm so an attributed alias expands where it
--- is DECLARED **must delete `adAttrib`'s conjunct in `aliasUniverseAt` in the
--- same diff.** Leaving this guard in place then produces the MIRROR of the
--- widening it was added to prevent — expands locally, opaque in importers — and
--- no fixture in the tree would catch that, because every fixture here asserts the
--- current, both-directions-invisible state.
+-- ✅ THE RE-ADD CONDITION FIRED, AND IT WAS DISCHARGED IN ONE DIFF.  It read:
+-- *"whoever gives `registerData` (and `publicDataDecl`) a `DAttrib` arm so an
+-- attributed alias expands where it is DECLARED **must delete `adAttrib`'s conjunct
+-- in `aliasUniverseAt` in the same diff**"* — because leaving the guard standing
+-- produces the MIRROR of the widening it prevented (expands locally, opaque in
+-- importers).  `S-field-owner-candidates` gave `registerData` that arm and deleted
+-- the conjunct together; `aliasVisibleTo` now has two conditions, not three, and the
+-- alias fixture doctests below were re-derived from that semantics, not captured.
+-- `adAttrib` is still POPULATED here on purpose: it costs nothing, it keeps the
+-- population/read split legible, and the `listLen aliasFixtureEnv.deAliases` doctest
+-- still pins population neutrality.
 dataEnvAddDecl : Int -> Bool -> Decl -> DataEnv -> DataEnv
 dataEnvAddDecl ord _ (DAttrib _ d) acc = dataEnvAddDecl ord True d acc
 dataEnvAddDecl ord _ (DData { dataName, dataParams, dataCtors, dataOrigin, ... }) acc = addDataTypeDecl dataName dataOrigin dataParams dataCtors acc
@@ -3759,9 +3908,13 @@ addAliasDecl name o params rhs ord pub att env =
 --      `DICT-SEMANTICS.md`'s I5 boundary clause says its price does not extend to
 --      names.  That reduction is owed to whichever unit widens the name axis, if
 --      one ever is; it is not scheduled.
---   3. `not ad.adAttrib` — the attributed-alias drop, applied HERE at the read
---      rather than in the population.  See the 🚨 note on `dataEnvAddDecl` for
---      why, and for the condition under which #1228/#1586 must delete it.
+--   3. ⚠️ RETIRED.  This was `not ad.adAttrib`, the attributed-alias drop applied
+--      HERE at the read rather than in the population.  #1228/#1586's re-add
+--      condition on `dataEnvAddDecl` fired: `registerData` gained its `DAttrib`
+--      unwrap arm, so the guard had to go in the same diff.  The POPULATION still
+--      records `adAttrib` and still holds attributed aliases — that neutrality is
+--      what the `listLen aliasFixtureEnv.deAliases` doctest asserts — the read
+--      simply no longer narrows on it.
 --
 -- ⚠️ THE CYCLIC-ALIAS REMOVAL IS PRESERVED BY DOING NOTHING.
 -- `rejectCyclicAliases` DELETES cyclic entries from the per-run
@@ -3805,10 +3958,15 @@ aliasUniverseAt cur ((key, ad)::rest)
 -- the split ruling left the whole name axis alone.  All three conditions stand as
 -- written; the split-out shape is what will make a future name-axis unit cheap, and
 -- conditions 2 and 3 remain structural whatever happens to condition 1.
+-- ⚠️ CONDITION 3 IS GONE — #1228/#1586's re-add condition FIRED.  `registerData` now
+-- has a `DAttrib` unwrap arm, so an attributed alias expands where it is DECLARED;
+-- keeping `not ad.adAttrib` here would have left it opaque in importers, i.e. the
+-- exact mirror-widening `dataEnvAddDecl`'s 🚨 note said this guard must not outlive.
+-- `adAttrib` stays RECORDED (population neutrality is still asserted by the
+-- `listLen aliasFixtureEnv.deAliases` doctest) but no longer filters.
 aliasVisibleTo : Int -> AliasDecl -> Bool
 aliasVisibleTo cur ad = declEnvVisibleTo cur ad.adOrd ad.adPub
   && ad.adOrd /= cur
-  && not ad.adAttrib
 
 -- Fixture for the doctests below: a PUBLIC alias in the prelude row (ordinal 0),
 -- a PRIVATE one beside it, and a public one in a later module (ordinal 1).
@@ -3839,10 +3997,10 @@ aliasFixturePubM = DTypeAlias {
   tyAliasOrigin = OriginModule "m",
 }
 
--- PUBLIC, but wrapped in an attribute — the shape `registerData` and
--- `publicDataDecl` both drop.  It IS in the population (`deAliases` holds four
--- rows, asserted below) and is dropped at the READ by `aliasVisibleTo`'s third
--- condition.  See the 🚨 note on `dataEnvAddDecl`.
+-- PUBLIC, but wrapped in an attribute.  ⚠️ SINCE #1228/#1586 THIS ROW IS VISIBLE:
+-- `registerData` unwraps `DAttrib`, so `aliasVisibleTo`'s third condition is gone
+-- and this alias behaves like any other public one.  It is still in the population
+-- (`deAliases` holds four rows, asserted below) — that half never changed.
 aliasFixtureAttribCore : Decl
 aliasFixtureAttribCore = DAttrib
   [AttrDeprecated "old"]
@@ -3870,27 +4028,28 @@ aliasNamesAt cur =
 -- > aliasNamesAt 0
 -- []
 
--- A reader at ordinal 1 sees the prelude's PUBLIC alias — and NOT its private
--- one, and NOT its ATTRIBUTED public one, which the live table never held in
--- either direction.
+-- A reader at ordinal 1 sees the prelude's PUBLIC aliases — the plain one and the
+-- ATTRIBUTED one (#1228/#1586: an attribute is metadata and no longer hides a
+-- declaration) — and NOT its private one.  `AttribCore` comes first because
+-- `deAliases` is built by PREPEND and it is the last of core's three decls.
 -- > aliasNamesAt 1
--- ["PubCore"]
+-- ["AttribCore", "PubCore"]
 
--- A reader at ordinal 2 sees both public aliases, DESCENDING by ordinal — the
+-- A reader at ordinal 2 sees every public alias, DESCENDING by ordinal — the
 -- order the retired accumulator produced, which `lookupTab`'s first-match and
 -- `emitCyclicAliasErrors`' render order both observe.
 -- > aliasNamesAt 2
--- ["PubM", "PubCore"]
+-- ["PubM", "AttribCore", "PubCore"]
 
 -- Fail-CLOSED at `declEnvsOrdOf`'s miss sentinel, exactly as `declEnvVisibleAt`.
 -- > aliasNamesAt (0 - 1)
 -- []
 
--- POPULATION NEUTRALITY of the attributed-alias drop: all FOUR aliases are in
--- `deAliases` — including the attributed one and the private one — and it is the
--- READ that narrows.  This is the assertion that fails if a later edit "tidies"
--- the guard back into the fold, re-creating the two-rows-one-record divergence
--- `dataEnvAddDecl`'s note exists to prevent.
+-- POPULATION NEUTRALITY: all FOUR aliases are in `deAliases` — including the
+-- attributed one and the private one — and it is the READ that narrows.  This is
+-- the assertion that fails if a later edit "tidies" a visibility question back into
+-- the fold, re-creating the two-rows-one-record divergence `dataEnvAddDecl`'s note
+-- exists to prevent.
 -- > listLen aliasFixtureEnv.deAliases
 -- 4
 
@@ -7301,6 +7460,8 @@ data PerRun = PerRun {
     flatCoreFnNamesRef : Ref (OrdMap Unit),
     flatUserShadowNamesRef : Ref (List String),
     groupConstraintMonosRef : Ref (List (String, Mono)),
+    fieldOwnerModulesRef : Ref (OrdMap (List String)),  -- #1597: field-owner KEY → declaring module ids, graph-global — see fieldOwnerReachable
+    fieldOwnerReachRef : Ref (OrdMap Unit),  -- #1597: the module ids THIS module can reach through DUse — see declEnvSeedDataUniverse
     typeErrors : Windowed TcDiag,  -- issue 1146: the diagnostic OUTPUT channel, on the Windowed discipline
     errorsDetected : Ref Int,  -- issue 1146: the CONTROL signal split out of it — see recordTypeError / erredDuring
     occursCheckFailed : Ref Bool,
@@ -7398,6 +7559,8 @@ freshPerRun _ = PerRun {
   flatCoreFnNamesRef = Ref omEmpty,
   flatUserShadowNamesRef = Ref [],
   groupConstraintMonosRef = Ref [],
+  fieldOwnerModulesRef = Ref omEmpty,
+  fieldOwnerReachRef = Ref omEmpty,
   typeErrors = wNew (),
   errorsDetected = Ref 0,
   occursCheckFailed = Ref False,
@@ -10365,7 +10528,12 @@ inferFieldAccess env e fname r
       None => freshVar ()
       Some (rname, ri) =>
         r := rname
-        inferFieldOfRecord te rname ri fname
+        let ft = inferFieldOfRecord te rname ri fname
+        -- #1468: the WELL-TYPEDNESS half, and it runs AFTER `inferFieldOfRecord`
+        -- on purpose — that call is what unifies `te` with the record's result
+        -- type, so only here does the receiver's head name the type whose
+        -- constructor set has to be asked about.
+        fieldSelectionWellTyped te rname ri fname ft
 
 -- `cell.value` projects a Ref's contents.  Unify the receiver with `Ref a`
 -- (forcing it, like the reference's `(Ref a).value → a` special case) and return
@@ -10391,6 +10559,68 @@ inferFieldOfRecord te rname ri fname =
     Some fm => substMono (fst sr) [] fm
     None => unknownFieldFresh fname rname (recordFieldNames ri)
 
+-- ── #1468: `.f` on a type whose constructors DISAGREE about `f` is rejected ──
+--
+-- The resolution ladder above answers "WHICH declaration does `.f` mean"; it never
+-- asked whether the receiver's TYPE entitles anyone to ask.  For
+-- `data T = | A { x : Int } | B { z : Int }`, `x` has exactly ONE owner, so
+-- `resolveFieldByOwners`' singleton arm hands back `A` with full confidence and the
+-- later unify is SATISFIED — the receiver really is a `T` — and `check` exits 0.
+-- A `T` value carries no static constructor tag, so the emitted code reads slot 0
+-- unconditionally: measured on this base, `getX (B { z = 99 })` printed `v=99`, and
+-- with `B { z : String }` the same program printed a heap address as an `Int`.
+-- `medaka run` already refuses (`E-PANIC unknown field: x`) because the interpreter
+-- resolves fields BY NAME; this restores agreement by refusing EARLIER, at typecheck.
+--
+-- ⚠️ SCOPE — this is #1468 (a field declared by EXACTLY ONE constructor of the
+-- type), NOT #1465 (a field declared by MORE THAN ONE, which wants a dispatched
+-- tag-based selector and a backend change).  A field every constructor declares is
+-- untouched here: no sibling withholds it, so the guard is silent and the access
+-- keeps whatever answer it had.
+--
+-- ⚠️ THE HEAD EQUALITY IS A CASCADE GUARD, NOT A CORRECTNESS ONE.  `te`'s head is
+-- compared against the SELECTED record's own result head, so the guard speaks only
+-- when the receiver genuinely IS a value of the declaring type.  A receiver of some
+-- OTHER type reached this arm through the owner ladder's deliberate
+-- "pick-one-so-unify-complains" fall-through and already has its mismatch; adding a
+-- constructor-set error on top of it would be noise.  `headTyconMono`'s `None` (an
+-- unstamped or non-`TCon` head) decides nothing, per the absence rule
+-- `recordCandIsReceiverDecl` documents.
+fieldSelectionWellTyped : Mono -> String -> RecordInfo -> String -> Mono -> Mono
+fieldSelectionWellTyped te rname ri fname ft = match ctorSiblingWithholdingHere te rname ri fname
+  None => ft
+  Some sib =>
+    let _ = pushTypeError
+      "T-FIELD-NOT-IN-ALL-CTORS"
+      (fieldNotInAllCtorsMsg fname (fromOption rname (headTyconNameMono te)) sib)
+    -- Same poisoned placeholder `unknownFieldFresh` returns: the access is already
+    -- explained, so don't let its result var pile a second cascade on top.
+    let v = freshVar ()
+    let _ = poisonMismatchVars v v
+    v
+
+-- The named constructor, if any, that shares the receiver's head and withholds
+-- `fname`.  `ctorSiblingWithholdingName` is the SAME predicate
+-- `narrowingBlockedByCtorSibling` asks in the multi-owner arm — one implementation,
+-- two callers, so the two paths cannot drift about what "a sibling withholds it"
+-- means.
+ctorSiblingWithholdingHere : Mono -> String -> RecordInfo -> String -> Option String
+ctorSiblingWithholdingHere te rname ri fname =
+  ctorSiblingWithholdingForHead
+    (headTyconMono te)
+    (headTyconMono (recordResultMono ri))
+    rname
+    fname
+
+ctorSiblingWithholdingForHead : Option HeadKey -> Option HeadKey -> String -> String -> Option String
+ctorSiblingWithholdingForHead None _ _ _ = None
+ctorSiblingWithholdingForHead (Some hk) declHead rname fname
+  | Some hk == declHead = ctorSiblingWithholdingName (Some hk) fname rname
+  | otherwise = None
+
+fieldNotInAllCtorsMsg : String -> String -> String -> String
+fieldNotInAllCtorsMsg fname tname sib = "Field '\{fname}' is not declared by every constructor of '\{tname}': constructor '\{sib}' has no '\{fname}'. A '\{tname}' value carries no constructor tag, so '.\{fname}' cannot be resolved; match on the constructor instead"
+
 -- field_owners (Phase 72): every registry KEY whose RecordInfo declares `fname`,
 -- sorted + deduped (mirrors lib/typecheck.ml's `field_candidates` +
 -- `List.sort_uniq compare`).  For a plain record the key is its type name; for a
@@ -10399,9 +10629,42 @@ inferFieldOfRecord te rname ri fname =
 -- The field→owners multimap (fieldOwnersRef) already holds exactly this set of
 -- keys, maintained at registration; `sortUniqS` canonicalizes it so the rendered
 -- owner-list order (ambiguousFieldMsg / headL) is byte-identical to the old walk.
+--
+-- #1597: the owner list is then REACHABILITY-FILTERED — see `fieldOwnerReachFilter`.
+-- This is the one reader of the field→owners multimap that decides ACCEPTANCE, and it
+-- is the only one this filter touches; `mangledHeadCandidates` reads the raw ref
+-- because it asks a spelling question, not a candidacy one.
 fieldOwnerNames : String -> List String
 fieldOwnerNames fname =
-  sortUniqS (fromOption [] (omLookup fname perRun.value.fieldOwnersRef.value))
+  fieldOwnerReachFilter (sortUniqS (fromOption
+    []
+    (omLookup fname perRun.value.fieldOwnersRef.value)))
+
+-- 🚨 #1597, AND IT FAILS OPEN TWICE OVER — deliberately, because the owner half of
+-- the seed is the LOUD one (zero owners ⇒ `pushUnknownField`, exit 1), so a filter
+-- that could empty a non-empty owner set would convert a silent-wrongness family into
+-- a false-reject one.
+--   1. An owner key the index does not know is KEPT.  Locally minted keys (mangled
+--      re-registrations, `where`-scoped records, the flat/single-file driver where
+--      `buildDeclEnvs` never ran) have no `deOwnerModules` row and therefore no vote
+--      to lose.
+--   2. If the filter would remove EVERY owner, the UNFILTERED list is returned.
+-- So this predicate can only ever collapse a spurious AMBIGUITY down towards the
+-- reader's own candidates; no program that resolved before can stop resolving here.
+fieldOwnerReachFilter : List String -> List String
+fieldOwnerReachFilter owners = match filterList fieldOwnerReachable owners
+  [] => owners
+  kept => kept
+
+fieldOwnerReachable : String -> Bool
+fieldOwnerReachable key = match omLookup key perRun.value.fieldOwnerModulesRef.value
+  None => True
+  Some mids => fieldOwnerAnyReachable mids
+
+fieldOwnerAnyReachable : List String -> Bool
+fieldOwnerAnyReachable [] = False
+fieldOwnerAnyReachable (m::rest) = omHasKey m perRun.value.fieldOwnerReachRef.value
+  || fieldOwnerAnyReachable rest
 
 -- Resolve the record (name + info) that owns `fname` for a receiver of type `te`
 -- (normalized).
@@ -10874,24 +11137,83 @@ narrowedPick _ _ owners _ = pairRecordByName (headL owners)
 -- exact-hit path.
 narrowingBlockedByCtorSibling : Option HeadKey -> String -> String -> Bool
 narrowingBlockedByCtorSibling rk fname survivorKey =
-  anyCtorSiblingWithholds
-    rk
-    fname
-    survivorKey
-    (omKeys perRun.value.recordByNameRef.value)
+  isSome (ctorSiblingWithholdingName rk fname survivorKey)
 
-anyCtorSiblingWithholds : Option HeadKey -> String -> String -> List String -> Bool
-anyCtorSiblingWithholds _ _ _ [] = False
-anyCtorSiblingWithholds rk fname skey (k::rest)
-  | k == skey = anyCtorSiblingWithholds rk fname skey rest
-  | ctorSiblingWithholds rk fname k = True
-  | otherwise = anyCtorSiblingWithholds rk fname skey rest
+-- The same walk, answering with the offending key rather than a bare `Bool` — #1468's
+-- diagnostic has to NAME the constructor, and the Bool above is now `isSome` of this
+-- so the two callers cannot drift about what "a sibling withholds it" means.
+--
+-- #1468 residual fix: the candidate list used to be sourced from
+-- `recordByNameRef`, which `registerRecordInfoKeyed` only ever populates for
+-- `ConNamed` variants — a positional (`ConPos`) or nullary sibling of the SAME
+-- type could never appear there, so it could never be found "withholding" the
+-- field even though it declares no named field at all.  Source the FULL
+-- constructor list of the receiver's type instead, from the compiler's own
+-- ctor oracle (`matchOracle`'s `typeCtors`, built from every `Variant` of every
+-- `data` decl regardless of shape) via `oGetCtors`, keyed by `TabKey` — not by
+-- bare name — and reachable from `rk : Option HeadKey` through `ctorOracleKeyOf`.
+ctorSiblingWithholdingName : Option HeadKey -> String -> String -> Option String
+ctorSiblingWithholdingName rk fname survivorKey = match ctorOracleKeyOf rk
+  None => None
+  Some tk => match oGetCtors driverState.value.matchOracle.value tk
+    None => None
+    Some ctors => firstCtorSiblingWithholding fname survivorKey ctors
 
-ctorSiblingWithholds : Option HeadKey -> String -> String -> Bool
-ctorSiblingWithholds rk fname k = match lookupRecordByName k
-  Some ri => rk == headTyconMono (recordResultMono ri)
-    && isNone (omLookup fname (recordFieldMap ri))
-  None => False
+-- 🚨 THE READER'S KEY MINT FOR `matchOracle`'s `typeCtors`, AND IT IS **NOT**
+-- `headTabOf`.  `typeCtors` is the one oracle table keyed by DECLARATION
+-- IDENTITY (`frontend/exhaust.mdk`, oracle-identity leaf L1): its rows are
+-- minted `tabKeyOf NsType <that decl's own dataOrigin> <tyname>`, so a
+-- module-stamped `data T` writes a `TkIdent` row.  `headTabOf` goes through
+-- `dispHeadTab hk = TkBare NsType (headKeyName hk)`, which flattens EVERY head
+-- to `TkBare` — deliberately, because the dispatch head-buckets it was built
+-- for are SPELLING-keyed (the #1317 T1 rule, the closed S0 #1277).  `tabKeyEq`
+-- never equates a `TkBare` lookup with a `TkIdent` row, so keying this table
+-- through `headTabOf` MISSED on every module-stamped type — and both `None`
+-- arms above fail OPEN, i.e. "no sibling withholds the field", i.e. the
+-- narrowing is trusted and the singleton survivor is accepted.
+--
+-- MEASURED (F4, this branch, on `44be8191`):
+-- `test/analyze_project_fixtures/record_ctor_sibling_blocks_narrowing/`
+-- `main_rejects.mdk` — #1468's ORIGINAL cross-module repro — went to `check`
+-- exit 0 with ZERO diagnostics where the pinned oracle expects
+-- `T-TYPE-MISMATCH: Type mismatch: T vs U`, while the byte-identical program
+-- written as ONE file still rejected: single-file decls are unstamped, so
+-- `tabKeyOf NsType OriginUnresolved "T"` is itself `TkBare` and the wrong mint
+-- accidentally agreed.  That is why F1's own single-file acceptance checks
+-- could not see this.  Instrumenting the two `None` arms apart (a marker
+-- `Some` scoped to `fname == "x" && survivorKey == "Zed"`, so the compiler's
+-- own source stayed unaffected) pinned it to the `oGetCtors` arm specifically:
+-- `headTabOf` answered `Some`, the `TabKey` lookup missed.  Same
+-- writer/reader `TkBare`-vs-`TkIdent` mismatch already documented at
+-- `seedAndCheckSplit`, one table over.
+--
+-- The mint below is `matchCol0Type`'s — the OTHER `oGetCtors` reader in this
+-- file — minus the arms it needs only because it starts from a `Mono`: keep
+-- `HkDecl`'s own `TabKey` (which already distinguishes an identity-bearing
+-- `TkIdent` from the flat path's `TkBare`), and refuse to key a rigid head at
+-- all.  §8 I6.1: a type PARAMETER is not a declaration; `matchCol0Type`'s
+-- `TkBare NsType n` for that case is a key no writer can ever have filled, so
+-- `None` here is the same miss without minting a forgery to reach it.
+ctorOracleKeyOf : Option HeadKey -> Option TabKey
+ctorOracleKeyOf None = None
+ctorOracleKeyOf (Some hk) = headKeyDecl hk
+
+firstCtorSiblingWithholding : String -> String -> List String -> Option String
+firstCtorSiblingWithholding _ _ [] = None
+firstCtorSiblingWithholding fname skey (k::rest)
+  | k == skey = firstCtorSiblingWithholding fname skey rest
+  | ctorSiblingWithholds fname k = Some k
+  | otherwise = firstCtorSiblingWithholding fname skey rest
+
+-- `oGetCtors` already scopes the candidate list to the receiver's own type
+-- (via the `TabKey` lookup above), so this no longer needs to re-check the
+-- head itself — only whether THIS constructor declares `fname`.  A name with
+-- no `RecordInfo` at all is a positional or nullary constructor: it declares
+-- no named field, so it unconditionally withholds `fname`.
+ctorSiblingWithholds : String -> String -> Bool
+ctorSiblingWithholds fname k = match lookupRecordByName k
+  Some ri => isNone (omLookup fname (recordFieldMap ri))
+  None => True
 
 -- Each owner key paired with its `RecordInfo`; a key with no entry is dropped
 -- rather than defaulted, so the filter above only ever sees real declarations.
@@ -14204,6 +14526,23 @@ inferLetGroup env binds body =
 
 -- ── data declarations → constructor schemes ───────────────────────────────
 registerData : TcEnv -> Decl -> TcEnv
+-- 🚨 #1228 / #1586: THE `DAttrib` UNWRAP, AND IT IS THE UNIFORM ONE.  Same shape as
+-- `dataEnvAddDecl`'s (`dataEnvAddDecl ord _ (DAttrib _ d) = dataEnvAddDecl ord True d
+-- acc`) and PR #1058's in `lowerDeclImpl`: unwrap and recurse, so nested wrappers
+-- (`DAttrib [a] (DAttrib [b] d)`) reduce.  Before this arm an attributed decl fell
+-- through the catch-all below and registered NOTHING — no constructor scheme (#1228),
+-- and, because `registerVariants` → `registerNamedFieldVariants` →
+-- `registerRecordInfoKeyed` is what writes `fieldOwnersRef`, no field-owner row
+-- either (#1586, where the missing row let a genuinely ambiguous `.field` resolve
+-- silently to the attributed record's unattributed rival).
+--
+-- ⚠️ THIS ARM CARRIES A SAME-DIFF OBLIGATION AND IT IS DISCHARGED: `aliasVisibleTo`'s
+-- `not ad.adAttrib` conjunct is GONE, per the 🚨 re-add condition on `dataEnvAddDecl`.
+-- An attributed `type` alias now expands both where it is DECLARED (this arm) and in
+-- IMPORTERS (`aliasUniverseAt`); leaving the read guard standing would have expanded
+-- it locally and kept it opaque cross-module, which is the mirror of the widening
+-- that guard was added to prevent.
+registerData env (DAttrib _ d) = registerData env d
 registerData env (DData { dataName = name, dataParams = params, dataCtors = variants, dataOrigin = o }) = registerVariants o env name params variants
 -- DECLARATION MINT (#1110/#1111 A-2.3): `tyAliasOrigin` is the alias's own
 -- identity, stamped by `stampDeclOrigins` at the module that declared it — the
@@ -29512,6 +29851,16 @@ typeErrorLines (e::rest) = "TYPE ERROR: " ++ e :: typeErrorLines rest
 export
 checkToLines : List Decl -> String
 checkToLines prog =
+  -- #1468 residual fix: `ctorSiblingWithholds` now reads the full ctor list off
+  -- `matchOracle` (via `oGetCtors`) instead of `recordByNameRef`, so this flat,
+  -- prelude-free entry point — the ONLY one of the `checkToLines`/`checkMatch-
+  -- ToLines` family that used to leave `matchOracle` at `resetState`'s empty
+  -- default — must seed it too, exactly as `checkMatchToLines` already does for
+  -- its own no-prelude path (`buildOracle prog`, unstamped: this path has no
+  -- prelude boundary to stamp). `resetState` clears `perRun`/`toggles` only, not
+  -- `driverState`, so seeding here is not wiped by the reset inside
+  -- `checkProgramSchemes`.
+  driverState.value.matchOracle := buildOracle prog
   let schemes = checkProgramSchemes [] prog
   let progCe = flatClassEnvOf prog
   let progIe = flatImplEnvOf prog
