@@ -135,6 +135,7 @@ import frontend.exhaust.{
   usefulWitness,
   renderWitness,
   desugarPat,
+  oGetCtors,
 }
 import support.char.{isUpper}
 import backend.private_mangle.{mangledName}
@@ -11098,26 +11099,39 @@ narrowingBlockedByCtorSibling rk fname survivorKey =
 -- The same walk, answering with the offending key rather than a bare `Bool` — #1468's
 -- diagnostic has to NAME the constructor, and the Bool above is now `isSome` of this
 -- so the two callers cannot drift about what "a sibling withholds it" means.
+--
+-- #1468 residual fix: the candidate list used to be sourced from
+-- `recordByNameRef`, which `registerRecordInfoKeyed` only ever populates for
+-- `ConNamed` variants — a positional (`ConPos`) or nullary sibling of the SAME
+-- type could never appear there, so it could never be found "withholding" the
+-- field even though it declares no named field at all.  Source the FULL
+-- constructor list of the receiver's type instead, from the compiler's own
+-- ctor oracle (`matchOracle`'s `typeCtors`, built from every `Variant` of every
+-- `data` decl regardless of shape) via `oGetCtors`, keyed by `TabKey` — not by
+-- bare name — and reachable from `rk : Option HeadKey` through `headTabOf`.
 ctorSiblingWithholdingName : Option HeadKey -> String -> String -> Option String
-ctorSiblingWithholdingName rk fname survivorKey =
-  firstCtorSiblingWithholding
-    rk
-    fname
-    survivorKey
-    (omKeys perRun.value.recordByNameRef.value)
+ctorSiblingWithholdingName rk fname survivorKey = match headTabOf rk
+  None => None
+  Some tk => match oGetCtors driverState.value.matchOracle.value tk
+    None => None
+    Some ctors => firstCtorSiblingWithholding fname survivorKey ctors
 
-firstCtorSiblingWithholding : Option HeadKey -> String -> String -> List String -> Option String
-firstCtorSiblingWithholding _ _ _ [] = None
-firstCtorSiblingWithholding rk fname skey (k::rest)
-  | k == skey = firstCtorSiblingWithholding rk fname skey rest
-  | ctorSiblingWithholds rk fname k = Some k
-  | otherwise = firstCtorSiblingWithholding rk fname skey rest
+firstCtorSiblingWithholding : String -> String -> List String -> Option String
+firstCtorSiblingWithholding _ _ [] = None
+firstCtorSiblingWithholding fname skey (k::rest)
+  | k == skey = firstCtorSiblingWithholding fname skey rest
+  | ctorSiblingWithholds fname k = Some k
+  | otherwise = firstCtorSiblingWithholding fname skey rest
 
-ctorSiblingWithholds : Option HeadKey -> String -> String -> Bool
-ctorSiblingWithholds rk fname k = match lookupRecordByName k
-  Some ri => rk == headTyconMono (recordResultMono ri)
-    && isNone (omLookup fname (recordFieldMap ri))
-  None => False
+-- `oGetCtors` already scopes the candidate list to the receiver's own type
+-- (via the `TabKey` lookup above), so this no longer needs to re-check the
+-- head itself — only whether THIS constructor declares `fname`.  A name with
+-- no `RecordInfo` at all is a positional or nullary constructor: it declares
+-- no named field, so it unconditionally withholds `fname`.
+ctorSiblingWithholds : String -> String -> Bool
+ctorSiblingWithholds fname k = match lookupRecordByName k
+  Some ri => isNone (omLookup fname (recordFieldMap ri))
+  None => True
 
 -- Each owner key paired with its `RecordInfo`; a key with no entry is dropped
 -- rather than defaulted, so the filter above only ever sees real declarations.
@@ -29909,6 +29923,16 @@ typeErrorLines (e::rest) = "TYPE ERROR: " ++ e :: typeErrorLines rest
 export
 checkToLines : List Decl -> String
 checkToLines prog =
+  -- #1468 residual fix: `ctorSiblingWithholds` now reads the full ctor list off
+  -- `matchOracle` (via `oGetCtors`) instead of `recordByNameRef`, so this flat,
+  -- prelude-free entry point — the ONLY one of the `checkToLines`/`checkMatch-
+  -- ToLines` family that used to leave `matchOracle` at `resetState`'s empty
+  -- default — must seed it too, exactly as `checkMatchToLines` already does for
+  -- its own no-prelude path (`buildOracle prog`, unstamped: this path has no
+  -- prelude boundary to stamp). `resetState` clears `perRun`/`toggles` only, not
+  -- `driverState`, so seeding here is not wiped by the reset inside
+  -- `checkProgramSchemes`.
+  driverState.value.matchOracle := buildOracle prog
   let schemes = checkProgramSchemes [] prog
   let progCe = flatClassEnvOf prog
   let progIe = flatImplEnvOf prog

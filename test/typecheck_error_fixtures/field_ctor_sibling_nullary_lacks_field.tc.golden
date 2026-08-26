@@ -1,0 +1,1 @@
+TYPE ERROR: Field 'y' is not declared by every constructor of 'T2': constructor 'Z' has no 'y'. A 'T2' value carries no constructor tag, so '.y' cannot be resolved; match on the constructor instead

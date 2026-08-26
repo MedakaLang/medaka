@@ -1,5 +1,5 @@
 # META
-source_lines=33962
+source_lines=33986
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -139,6 +139,7 @@ import frontend.exhaust.{
   usefulWitness,
   renderWitness,
   desugarPat,
+  oGetCtors,
 }
 import support.char.{isUpper}
 import backend.private_mangle.{mangledName}
@@ -11102,26 +11103,39 @@ narrowingBlockedByCtorSibling rk fname survivorKey =
 -- The same walk, answering with the offending key rather than a bare `Bool` — #1468's
 -- diagnostic has to NAME the constructor, and the Bool above is now `isSome` of this
 -- so the two callers cannot drift about what "a sibling withholds it" means.
+--
+-- #1468 residual fix: the candidate list used to be sourced from
+-- `recordByNameRef`, which `registerRecordInfoKeyed` only ever populates for
+-- `ConNamed` variants — a positional (`ConPos`) or nullary sibling of the SAME
+-- type could never appear there, so it could never be found "withholding" the
+-- field even though it declares no named field at all.  Source the FULL
+-- constructor list of the receiver's type instead, from the compiler's own
+-- ctor oracle (`matchOracle`'s `typeCtors`, built from every `Variant` of every
+-- `data` decl regardless of shape) via `oGetCtors`, keyed by `TabKey` — not by
+-- bare name — and reachable from `rk : Option HeadKey` through `headTabOf`.
 ctorSiblingWithholdingName : Option HeadKey -> String -> String -> Option String
-ctorSiblingWithholdingName rk fname survivorKey =
-  firstCtorSiblingWithholding
-    rk
-    fname
-    survivorKey
-    (omKeys perRun.value.recordByNameRef.value)
+ctorSiblingWithholdingName rk fname survivorKey = match headTabOf rk
+  None => None
+  Some tk => match oGetCtors driverState.value.matchOracle.value tk
+    None => None
+    Some ctors => firstCtorSiblingWithholding fname survivorKey ctors
 
-firstCtorSiblingWithholding : Option HeadKey -> String -> String -> List String -> Option String
-firstCtorSiblingWithholding _ _ _ [] = None
-firstCtorSiblingWithholding rk fname skey (k::rest)
-  | k == skey = firstCtorSiblingWithholding rk fname skey rest
-  | ctorSiblingWithholds rk fname k = Some k
-  | otherwise = firstCtorSiblingWithholding rk fname skey rest
+firstCtorSiblingWithholding : String -> String -> List String -> Option String
+firstCtorSiblingWithholding _ _ [] = None
+firstCtorSiblingWithholding fname skey (k::rest)
+  | k == skey = firstCtorSiblingWithholding fname skey rest
+  | ctorSiblingWithholds fname k = Some k
+  | otherwise = firstCtorSiblingWithholding fname skey rest
 
-ctorSiblingWithholds : Option HeadKey -> String -> String -> Bool
-ctorSiblingWithholds rk fname k = match lookupRecordByName k
-  Some ri => rk == headTyconMono (recordResultMono ri)
-    && isNone (omLookup fname (recordFieldMap ri))
-  None => False
+-- `oGetCtors` already scopes the candidate list to the receiver's own type
+-- (via the `TabKey` lookup above), so this no longer needs to re-check the
+-- head itself — only whether THIS constructor declares `fname`.  A name with
+-- no `RecordInfo` at all is a positional or nullary constructor: it declares
+-- no named field, so it unconditionally withholds `fname`.
+ctorSiblingWithholds : String -> String -> Bool
+ctorSiblingWithholds fname k = match lookupRecordByName k
+  Some ri => isNone (omLookup fname (recordFieldMap ri))
+  None => True
 
 -- Each owner key paired with its `RecordInfo`; a key with no entry is dropped
 -- rather than defaulted, so the filter above only ever sees real declarations.
@@ -29913,6 +29927,16 @@ typeErrorLines (e::rest) = "TYPE ERROR: " ++ e :: typeErrorLines rest
 export
 checkToLines : List Decl -> String
 checkToLines prog =
+  -- #1468 residual fix: `ctorSiblingWithholds` now reads the full ctor list off
+  -- `matchOracle` (via `oGetCtors`) instead of `recordByNameRef`, so this flat,
+  -- prelude-free entry point — the ONLY one of the `checkToLines`/`checkMatch-
+  -- ToLines` family that used to leave `matchOracle` at `resetState`'s empty
+  -- default — must seed it too, exactly as `checkMatchToLines` already does for
+  -- its own no-prelude path (`buildOracle prog`, unstamped: this path has no
+  -- prelude boundary to stamp). `resetState` clears `perRun`/`toggles` only, not
+  -- `driverState`, so seeding here is not wiped by the reset inside
+  -- `checkProgramSchemes`.
+  driverState.value.matchOracle := buildOracle prog
   let schemes = checkProgramSchemes [] prog
   let progCe = flatClassEnvOf prog
   let progIe = flatImplEnvOf prog
@@ -33970,7 +33994,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "stampBindingIds" false) (mem "stampGraphTyOrigins" false) (mem "stampFlatTyOrigins" false) (mem "stampDeclOrigins" false) (mem "stampTyOrigins" false) (mem "externTyOriginScope" false) (mem "noteOriginTrace" false))))
-(DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false) (mem "useful" false) (mem "patUnreachable" false) (mem "patHasRange" false) (mem "usefulWitness" false) (mem "renderWitness" false) (mem "desugarPat" false))))
+(DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false) (mem "useful" false) (mem "patUnreachable" false) (mem "patHasRange" false) (mem "usefulWitness" false) (mem "renderWitness" false) (mem "desugarPat" false) (mem "oGetCtors" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangledName" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
@@ -35717,12 +35741,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "narrowingBlockedByCtorSibling" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "narrowingBlockedByCtorSibling" ((PVar "rk") (PVar "fname") (PVar "survivorKey")) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "ctorSiblingWithholdingName") (EVar "rk")) (EVar "fname")) (EVar "survivorKey"))))
 (DTypeSig false "ctorSiblingWithholdingName" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "ctorSiblingWithholdingName" ((PVar "rk") (PVar "fname") (PVar "survivorKey")) (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "rk")) (EVar "fname")) (EVar "survivorKey")) (EApp (EVar "omKeys") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef") "value"))))
-(DTypeSig false "firstCtorSiblingWithholding" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "firstCtorSiblingWithholding" (PWild PWild PWild (PList)) (EVar "None"))
-(DFunDef false "firstCtorSiblingWithholding" ((PVar "rk") (PVar "fname") (PVar "skey") (PCons (PVar "k") (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "skey")) (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "rk")) (EVar "fname")) (EVar "skey")) (EVar "rest")) (EIf (EApp (EApp (EApp (EVar "ctorSiblingWithholds") (EVar "rk")) (EVar "fname")) (EVar "k")) (EApp (EVar "Some") (EVar "k")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "rk")) (EVar "fname")) (EVar "skey")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "ctorSiblingWithholds" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "ctorSiblingWithholds" ((PVar "rk") (PVar "fname") (PVar "k")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "k")) (arm (PCon "Some" (PVar "ri")) () (EBinOp "&&" (EBinOp "==" (EVar "rk") (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))) (EApp (EVar "isNone") (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ri")))))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "ctorSiblingWithholdingName" ((PVar "rk") (PVar "fname") (PVar "survivorKey")) (EMatch (EApp (EVar "headTabOf") (EVar "rk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "tk")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EVar "tk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ctors")) () (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "fname")) (EVar "survivorKey")) (EVar "ctors")))))))
+(DTypeSig false "firstCtorSiblingWithholding" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "firstCtorSiblingWithholding" (PWild PWild (PList)) (EVar "None"))
+(DFunDef false "firstCtorSiblingWithholding" ((PVar "fname") (PVar "skey") (PCons (PVar "k") (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "skey")) (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "fname")) (EVar "skey")) (EVar "rest")) (EIf (EApp (EApp (EVar "ctorSiblingWithholds") (EVar "fname")) (EVar "k")) (EApp (EVar "Some") (EVar "k")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "fname")) (EVar "skey")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "ctorSiblingWithholds" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "ctorSiblingWithholds" ((PVar "fname") (PVar "k")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "k")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "isNone") (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ri"))))) (arm (PCon "None") () (EVar "True"))))
 (DTypeSig false "ownerCandidates" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))
 (DFunDef false "ownerCandidates" ((PList)) (EListLit))
 (DFunDef false "ownerCandidates" ((PCons (PVar "key") (PVar "rest"))) (EMatch (EApp (EVar "lookupRecordByName") (EVar "key")) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "key") (EVar "ri")) (EApp (EVar "ownerCandidates") (EVar "rest")))) (arm (PCon "None") () (EApp (EVar "ownerCandidates") (EVar "rest")))))
@@ -38872,7 +38896,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "typeErrorLines" ((PList)) (EListLit))
 (DFunDef false "typeErrorLines" ((PCons (PVar "e") (PVar "rest"))) (EBinOp "::" (EBinOp "++" (ELit (LString "TYPE ERROR: ")) (EVar "e")) (EApp (EVar "typeErrorLines") (EVar "rest"))))
 (DTypeSig true "checkToLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
-(DFunDef false "checkToLines" ((PVar "prog")) (EBlock (DoLet false false (PVar "schemes") (EApp (EApp (EVar "checkProgramSchemes") (EListLit)) (EVar "prog"))) (DoLet false false (PVar "progCe") (EApp (EVar "flatClassEnvOf") (EVar "prog"))) (DoLet false false (PVar "progIe") (EApp (EVar "flatImplEnvOf") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "prog")) (EVar "prog")) (EVar "progCe")) (EVar "progCe")) (EVar "progIe")) (EVar "progIe")) (ELit (LInt 0))) (EVar "False"))) (DoLet false false (PVar "errs") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EApp (EVar "joinNl") (EApp (EVar "schemeLines") (EVar "schemes")))) (arm PWild () (EApp (EVar "joinNl") (EApp (EVar "typeErrorLines") (EApp (EApp (EVar "map") (EVar "tcMsg")) (EVar "errs")))))))))
+(DFunDef false "checkToLines" ((PVar "prog")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle")) (EApp (EVar "buildOracle") (EVar "prog")))) (DoLet false false (PVar "schemes") (EApp (EApp (EVar "checkProgramSchemes") (EListLit)) (EVar "prog"))) (DoLet false false (PVar "progCe") (EApp (EVar "flatClassEnvOf") (EVar "prog"))) (DoLet false false (PVar "progIe") (EApp (EVar "flatImplEnvOf") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "prog")) (EVar "prog")) (EVar "progCe")) (EVar "progCe")) (EVar "progIe")) (EVar "progIe")) (ELit (LInt 0))) (EVar "False"))) (DoLet false false (PVar "errs") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EApp (EVar "joinNl") (EApp (EVar "schemeLines") (EVar "schemes")))) (arm PWild () (EApp (EVar "joinNl") (EApp (EVar "typeErrorLines") (EApp (EApp (EVar "map") (EVar "tcMsg")) (EVar "errs")))))))))
 (DTypeSig false "seedCheckRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
 (DFunDef false "seedCheckRun" ((PVar "oracleDecls")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "implInferEnabled")) (EVar "False"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle")) (EApp (EVar "buildOracle") (EVar "oracleDecls"))))))
 (DTypeSig false "seedAndCheckSplit" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
@@ -39393,7 +39417,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "stampBindingIds" false) (mem "stampGraphTyOrigins" false) (mem "stampFlatTyOrigins" false) (mem "stampDeclOrigins" false) (mem "stampTyOrigins" false) (mem "externTyOriginScope" false) (mem "noteOriginTrace" false))))
-(DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false) (mem "useful" false) (mem "patUnreachable" false) (mem "patHasRange" false) (mem "usefulWitness" false) (mem "renderWitness" false) (mem "desugarPat" false))))
+(DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false) (mem "useful" false) (mem "patUnreachable" false) (mem "patHasRange" false) (mem "usefulWitness" false) (mem "renderWitness" false) (mem "desugarPat" false) (mem "oGetCtors" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangledName" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
@@ -41140,12 +41164,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "narrowingBlockedByCtorSibling" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "narrowingBlockedByCtorSibling" ((PVar "rk") (PVar "fname") (PVar "survivorKey")) (EApp (EVar "isSome") (EApp (EApp (EApp (EVar "ctorSiblingWithholdingName") (EVar "rk")) (EVar "fname")) (EVar "survivorKey"))))
 (DTypeSig false "ctorSiblingWithholdingName" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "ctorSiblingWithholdingName" ((PVar "rk") (PVar "fname") (PVar "survivorKey")) (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "rk")) (EVar "fname")) (EVar "survivorKey")) (EApp (EVar "omKeys") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "recordByNameRef") "value"))))
-(DTypeSig false "firstCtorSiblingWithholding" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "firstCtorSiblingWithholding" (PWild PWild PWild (PList)) (EVar "None"))
-(DFunDef false "firstCtorSiblingWithholding" ((PVar "rk") (PVar "fname") (PVar "skey") (PCons (PVar "k") (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "skey")) (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "rk")) (EVar "fname")) (EVar "skey")) (EVar "rest")) (EIf (EApp (EApp (EApp (EVar "ctorSiblingWithholds") (EVar "rk")) (EVar "fname")) (EVar "k")) (EApp (EVar "Some") (EVar "k")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "rk")) (EVar "fname")) (EVar "skey")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "ctorSiblingWithholds" (TyFun (TyApp (TyCon "Option") (TyCon "HeadKey")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "ctorSiblingWithholds" ((PVar "rk") (PVar "fname") (PVar "k")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "k")) (arm (PCon "Some" (PVar "ri")) () (EBinOp "&&" (EBinOp "==" (EVar "rk") (EApp (EVar "headTyconMono") (EApp (EVar "recordResultMono") (EVar "ri")))) (EApp (EVar "isNone") (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ri")))))) (arm (PCon "None") () (EVar "False"))))
+(DFunDef false "ctorSiblingWithholdingName" ((PVar "rk") (PVar "fname") (PVar "survivorKey")) (EMatch (EApp (EVar "headTabOf") (EVar "rk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "tk")) () (EMatch (EApp (EApp (EVar "oGetCtors") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle") "value")) (EVar "tk")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ctors")) () (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "fname")) (EVar "survivorKey")) (EVar "ctors")))))))
+(DTypeSig false "firstCtorSiblingWithholding" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "firstCtorSiblingWithholding" (PWild PWild (PList)) (EVar "None"))
+(DFunDef false "firstCtorSiblingWithholding" ((PVar "fname") (PVar "skey") (PCons (PVar "k") (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "skey")) (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "fname")) (EVar "skey")) (EVar "rest")) (EIf (EApp (EApp (EVar "ctorSiblingWithholds") (EVar "fname")) (EVar "k")) (EApp (EVar "Some") (EVar "k")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "firstCtorSiblingWithholding") (EVar "fname")) (EVar "skey")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "ctorSiblingWithholds" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "ctorSiblingWithholds" ((PVar "fname") (PVar "k")) (EMatch (EApp (EVar "lookupRecordByName") (EVar "k")) (arm (PCon "Some" (PVar "ri")) () (EApp (EVar "isNone") (EApp (EApp (EVar "omLookup") (EVar "fname")) (EApp (EVar "recordFieldMap") (EVar "ri"))))) (arm (PCon "None") () (EVar "True"))))
 (DTypeSig false "ownerCandidates" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "RecordInfo")))))
 (DFunDef false "ownerCandidates" ((PList)) (EListLit))
 (DFunDef false "ownerCandidates" ((PCons (PVar "key") (PVar "rest"))) (EMatch (EApp (EVar "lookupRecordByName") (EVar "key")) (arm (PCon "Some" (PVar "ri")) () (EBinOp "::" (ETuple (EVar "key") (EVar "ri")) (EApp (EVar "ownerCandidates") (EVar "rest")))) (arm (PCon "None") () (EApp (EVar "ownerCandidates") (EVar "rest")))))
@@ -44295,7 +44319,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "typeErrorLines" ((PList)) (EListLit))
 (DFunDef false "typeErrorLines" ((PCons (PVar "e") (PVar "rest"))) (EBinOp "::" (EBinOp "++" (ELit (LString "TYPE ERROR: ")) (EVar "e")) (EApp (EVar "typeErrorLines") (EVar "rest"))))
 (DTypeSig true "checkToLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
-(DFunDef false "checkToLines" ((PVar "prog")) (EBlock (DoLet false false (PVar "schemes") (EApp (EApp (EVar "checkProgramSchemes") (EListLit)) (EVar "prog"))) (DoLet false false (PVar "progCe") (EApp (EVar "flatClassEnvOf") (EVar "prog"))) (DoLet false false (PVar "progIe") (EApp (EVar "flatImplEnvOf") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "prog")) (EVar "prog")) (EVar "progCe")) (EVar "progCe")) (EVar "progIe")) (EVar "progIe")) (ELit (LInt 0))) (EVar "False"))) (DoLet false false (PVar "errs") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EApp (EVar "joinNl") (EApp (EVar "schemeLines") (EVar "schemes")))) (arm PWild () (EApp (EVar "joinNl") (EApp (EVar "typeErrorLines") (EApp (EApp (EMethodRef "map") (EVar "tcMsg")) (EVar "errs")))))))))
+(DFunDef false "checkToLines" ((PVar "prog")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle")) (EApp (EVar "buildOracle") (EVar "prog")))) (DoLet false false (PVar "schemes") (EApp (EApp (EVar "checkProgramSchemes") (EListLit)) (EVar "prog"))) (DoLet false false (PVar "progCe") (EApp (EVar "flatClassEnvOf") (EVar "prog"))) (DoLet false false (PVar "progIe") (EApp (EVar "flatImplEnvOf") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "prog")) (EVar "prog")) (EVar "progCe")) (EVar "progCe")) (EVar "progIe")) (EVar "progIe")) (ELit (LInt 0))) (EVar "False"))) (DoLet false false (PVar "errs") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EApp (EVar "joinNl") (EApp (EVar "schemeLines") (EVar "schemes")))) (arm PWild () (EApp (EVar "joinNl") (EApp (EVar "typeErrorLines") (EApp (EApp (EMethodRef "map") (EVar "tcMsg")) (EVar "errs")))))))))
 (DTypeSig false "seedCheckRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
 (DFunDef false "seedCheckRun" ((PVar "oracleDecls")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "implInferEnabled")) (EVar "False"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle")) (EApp (EVar "buildOracle") (EVar "oracleDecls"))))))
 (DTypeSig false "seedAndCheckSplit" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))

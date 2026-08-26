@@ -1,0 +1,10 @@
+-- #1468 residual — the SIBLING is NULLARY (`Z`, no fields at all), not `ConNamed`.
+-- `y` has exactly ONE named-field owner (`X`), so the owner ladder resolves it
+-- with full confidence — but `Z` is a nullary constructor of the SAME type `T2`
+-- and so withholds `y` unconditionally.  Before the fix, `Z` could never appear
+-- in the `recordByNameRef`-sourced walk (same reason as the `ConPos` sibling
+-- above), so this narrowing wrongly fired; the built binary segfaulted reading a
+-- field slot out of a value with no fields.
+data T2 = X { y : Int } | Z
+
+getY t = t.y

@@ -461,7 +461,7 @@ ctorIdentRow : String -> TyConOrigin -> String -> List (String, String, Ident)
 ctorSiblingWithholdingForHead : Option HeadKey -> Option HeadKey -> String -> String -> Option String
 ctorSiblingWithholdingHere : Mono -> String -> RecordInfo -> String -> Option String
 ctorSiblingWithholdingName : Option HeadKey -> String -> String -> Option String
-ctorSiblingWithholds : Option HeadKey -> String -> String -> Bool
+ctorSiblingWithholds : String -> String -> Bool
 currentDoOrigin : Ref (Option Loc)
 currentLoc : Ref (Option Loc)
 currentLocalSchemes : Unit -> List (String, Scheme)
@@ -749,7 +749,7 @@ findTupleCand : String -> List (Mono, String, Option (Loc, String)) -> Option (S
 findTvName : Int -> List (String, Mono) -> Option String
 findTvarInMono : Mono -> Int -> Option Mono
 findTvarN : Mono -> Int -> Option Mono
-firstCtorSiblingWithholding : Option HeadKey -> String -> String -> List String -> Option String
+firstCtorSiblingWithholding : String -> String -> List String -> Option String
 firstDictForEncl : Int -> String -> List (Int, String) -> Option String
 firstDispatchIdx : List String -> Int -> List Ty -> Option Int
 firstFieldName : List FieldAssign -> Option String

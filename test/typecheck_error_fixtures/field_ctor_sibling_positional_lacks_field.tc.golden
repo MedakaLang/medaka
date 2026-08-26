@@ -1,0 +1,1 @@
+TYPE ERROR: Field 'x' is not declared by every constructor of 'T': constructor 'B' has no 'x'. A 'T' value carries no constructor tag, so '.x' cannot be resolved; match on the constructor instead
