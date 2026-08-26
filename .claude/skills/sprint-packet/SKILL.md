@@ -74,6 +74,18 @@ had two backend/* slices; only one packet named it, and the gap on the other
 was caught post-hoc by the orchestrator after landing, not by the slice's own
 acceptance list.
 
+⚠️ **Touching a cross-module-observable check (siblings/oracles/reach tables,
+anything an `OrdMap`/`TabKey` keyed per-module or per-graph)? §6 must name at
+least one MULTI-MODULE acceptance check, not just single-file.** `record-
+field-floor`'s fix-round F1 shipped with single-file-only §6 checks and
+reintroduced a fail-open regression on the very issue it was fixing (#1468's
+own original cross-module repro, a `TkBare`-vs-`TkIdent` key mismatch that a
+flat single-file run cannot expose because unstamped decls happen to agree
+under either mint) — caught only by CI's full differential, costing a whole
+extra fix dispatch (F4) to repair. A packet that touches a table keyed by
+module identity and checks only a single-file program is checking the one
+case where a spelling-vs-identity key mismatch is invisible by construction.
+
 **"LEG A diff must be additive-only" allows one exception, stated up front if
 it applies: a verified pure signature change** (row count unchanged, the
 content diff is exactly the signature/comment move and nothing else) is a
