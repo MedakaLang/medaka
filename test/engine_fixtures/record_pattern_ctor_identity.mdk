@@ -1,0 +1,32 @@
+-- #1217 / #1462: a record pattern selects a match arm by CONSTRUCTOR first and by
+-- label set second, and `...` drops FIELD detail only -- never the constructor.
+-- Pre-fix the interpreter's `matchPat (PRec _ fields _) (VRecord _ recFields)` arm
+-- discarded BOTH constructors, so a sibling's value took the first arm whose labels
+-- it happened to carry, while native and wasm compared the tag: three engines, two
+-- answers, exit 0 everywhere.  #1462's body notes this corpus contained NO such
+-- input, which is why the divergence survived; this fixture is that input.
+--   row 1/2  -- #1217's shape: `{ ... }` arms over a multi-constructor type.
+--   row 3/4  -- #1462's shape: arms naming only a label BOTH constructors declare
+--              (`alpha`), so label-set selection and tag selection disagree.
+data Shape = Circle { r : Int } | Square { s : Int }
+
+area : Shape -> Int
+area sh = match sh
+  Circle { ... } => 1
+  Square { ... } => 2
+
+data Wrap =
+  | Cfg { alpha : Int, beta : Int }
+  | Dfg { beta : Int, alpha : Int }
+
+pick : Wrap -> String
+pick w = match w
+  Cfg { alpha = a } => "C" ++ intToString a
+  Dfg { alpha = a } => "D" ++ intToString a
+
+main =
+  ( area (Circle { r = 9 })
+  , area (Square { s = 2 })
+  , pick (Cfg { alpha = 1, beta = 2 })
+  , pick (Dfg { beta = 22, alpha = 11 })
+  )

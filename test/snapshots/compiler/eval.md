@@ -1,5 +1,5 @@
 # META
-source_lines=4197
+source_lines=4203
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, port of lib/eval.ml's tree-walking
@@ -926,8 +926,14 @@ matchPat (PList pats) (VList vals)
   | listLen pats == listLen vals = matchPats pats vals
   | otherwise = None
 matchPat (PAs x _ p) v = matchAs x p v
-matchPat (PRec _ fields _) (VRecord _ recFields) =
-  matchRecFields fields recFields
+-- #1462: the constructor is part of the pattern's identity, exactly as in the
+-- `VCon` arm below — a record pattern selects an arm by CONSTRUCTOR first and
+-- by label set second.  Binding the ctor to `_` here made an arm naming only
+-- labels a sibling constructor also declares fire on that sibling, diverging
+-- from the native binary (which compares the tag).
+matchPat (PRec ctor fields _) (VRecord ctor2 recFields)
+  | ctor == ctor2 = matchRecFields fields recFields
+  | otherwise = None
 matchPat (PRec ctor fields _) (VCon ctor2 vals)
   | ctor == ctor2 = match lookupAssoc ctor !ctorFieldOrdersRef
     Some order => matchRecFields fields (zipFieldOrder order vals)
@@ -4530,7 +4536,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "matchPat" ((PCon "PTuple" (PVar "pats")) (PCon "VTuple" (PVar "vals"))) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "listLen") (EVar "vals"))) (EApp (EApp (EVar "matchPats") (EVar "pats")) (EVar "vals")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "matchPat" ((PCon "PList" (PVar "pats")) (PCon "VList" (PVar "vals"))) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "listLen") (EVar "vals"))) (EApp (EApp (EVar "matchPats") (EVar "pats")) (EVar "vals")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "matchPat" ((PCon "PAs" (PVar "x") PWild (PVar "p")) (PVar "v")) (EApp (EApp (EApp (EVar "matchAs") (EVar "x")) (EVar "p")) (EVar "v")))
-(DFunDef false "matchPat" ((PCon "PRec" PWild (PVar "fields") PWild) (PCon "VRecord" PWild (PVar "recFields"))) (EApp (EApp (EVar "matchRecFields") (EVar "fields")) (EVar "recFields")))
+(DFunDef false "matchPat" ((PCon "PRec" (PVar "ctor") (PVar "fields") PWild) (PCon "VRecord" (PVar "ctor2") (PVar "recFields"))) (EIf (EBinOp "==" (EVar "ctor") (EVar "ctor2")) (EApp (EApp (EVar "matchRecFields") (EVar "fields")) (EVar "recFields")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "matchPat" ((PCon "PRec" (PVar "ctor") (PVar "fields") PWild) (PCon "VCon" (PVar "ctor2") (PVar "vals"))) (EIf (EBinOp "==" (EVar "ctor") (EVar "ctor2")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "ctor")) (EUnOp "!" (EVar "ctorFieldOrdersRef"))) (arm (PCon "Some" (PVar "order")) () (EApp (EApp (EVar "matchRecFields") (EVar "fields")) (EApp (EApp (EVar "zipFieldOrder") (EVar "order")) (EVar "vals")))) (arm (PCon "None") () (EVar "None"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LInt" (PVar "lo")) (PCon "LInt" (PVar "hi")) (PVar "incl")) (PCon "VInt" (PVar "v"))) (EIf (EApp (EApp (EApp (EApp (EVar "inIntRange") (EVar "v")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LChar" (PVar "lo")) (PCon "LChar" (PVar "hi")) (PVar "incl")) (PCon "VChar" (PVar "c"))) (EIf (EApp (EApp (EApp (EApp (EVar "inCharRange") (EVar "c")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
@@ -5988,7 +5994,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "matchPat" ((PCon "PTuple" (PVar "pats")) (PCon "VTuple" (PVar "vals"))) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "listLen") (EVar "vals"))) (EApp (EApp (EVar "matchPats") (EVar "pats")) (EVar "vals")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "matchPat" ((PCon "PList" (PVar "pats")) (PCon "VList" (PVar "vals"))) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "listLen") (EVar "vals"))) (EApp (EApp (EVar "matchPats") (EVar "pats")) (EVar "vals")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "matchPat" ((PCon "PAs" (PVar "x") PWild (PVar "p")) (PVar "v")) (EApp (EApp (EApp (EVar "matchAs") (EVar "x")) (EVar "p")) (EVar "v")))
-(DFunDef false "matchPat" ((PCon "PRec" PWild (PVar "fields") PWild) (PCon "VRecord" PWild (PVar "recFields"))) (EApp (EApp (EVar "matchRecFields") (EVar "fields")) (EVar "recFields")))
+(DFunDef false "matchPat" ((PCon "PRec" (PVar "ctor") (PVar "fields") PWild) (PCon "VRecord" (PVar "ctor2") (PVar "recFields"))) (EIf (EBinOp "==" (EVar "ctor") (EVar "ctor2")) (EApp (EApp (EVar "matchRecFields") (EVar "fields")) (EVar "recFields")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "matchPat" ((PCon "PRec" (PVar "ctor") (PVar "fields") PWild) (PCon "VCon" (PVar "ctor2") (PVar "vals"))) (EIf (EBinOp "==" (EVar "ctor") (EVar "ctor2")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "ctor")) (EUnOp "!" (EVar "ctorFieldOrdersRef"))) (arm (PCon "Some" (PVar "order")) () (EApp (EApp (EVar "matchRecFields") (EVar "fields")) (EApp (EApp (EVar "zipFieldOrder") (EVar "order")) (EVar "vals")))) (arm (PCon "None") () (EVar "None"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LInt" (PVar "lo")) (PCon "LInt" (PVar "hi")) (PVar "incl")) (PCon "VInt" (PVar "v"))) (EIf (EApp (EApp (EApp (EApp (EVar "inIntRange") (EVar "v")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "matchPat" ((PCon "PRng" (PCon "LChar" (PVar "lo")) (PCon "LChar" (PVar "hi")) (PVar "incl")) (PCon "VChar" (PVar "c"))) (EIf (EApp (EApp (EApp (EApp (EVar "inCharRange") (EVar "c")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Some") (EListLit)) (EApp (EVar "__fallthrough__") (ELit LUnit))))

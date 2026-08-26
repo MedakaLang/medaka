@@ -1,5 +1,5 @@
 # META
-source_lines=990
+source_lines=995
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted exhaust stage — Stage 4 port of `lib/exhaust.ml`'s standalone
@@ -289,9 +289,14 @@ desugarPat _ (PList []) = PCon "Nil" []
 desugarPat oracle (PList (h::rest)) =
   PCon "Cons" [desugarPat oracle h, desugarPat oracle (PList rest)]
 desugarPat oracle (PAs _ _ p) = desugarPat oracle p
-desugarPat _ (PRec _ _ True) = PWild
 desugarPat oracle (PRec name fields _) =
-  -- Lower a record pattern to a constructor-tagged row.
+  -- Lower a record pattern to a constructor-tagged row.  This arm handles the
+  -- `...` (open) form too: `...` means "and I don't care about the other
+  -- FIELDS", never "...the CONSTRUCTOR", and `lookupRecField` already yields
+  -- PWild for every declared field this pattern does not mention.  (#1217: an
+  -- earlier `PRec _ _ True => PWild` arm sat above this one and discarded the
+  -- constructor, making a one-arm `Circle { ... }` match look exhaustive over a
+  -- multi-constructor type.)
   -- For each declared field (in declaration order) use the sub-pattern if
   -- mentioned in this pattern, otherwise PWild.  Falls back to PWild if the
   -- constructor's field layout is unknown (e.g. builtins).
@@ -1071,7 +1076,6 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "desugarPat" (PWild (PCon "PList" (PList))) (EApp (EApp (EVar "PCon") (ELit (LString "Nil"))) (EListLit)))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PList" (PCons (PVar "h") (PVar "rest")))) (EApp (EApp (EVar "PCon") (ELit (LString "Cons"))) (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "h")) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EApp (EVar "PList") (EVar "rest"))))))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PAs" PWild PWild (PVar "p"))) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "p")))
-(DFunDef false "desugarPat" (PWild (PCon "PRec" PWild PWild (PCon "True"))) (EVar "PWild"))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EMatch (EApp (EApp (EVar "oGetCtorFields") (EVar "oracle")) (EVar "name")) (arm (PCon "None") () (EVar "PWild")) (arm (PCon "Some" (PVar "fieldOrder")) () (EApp (EApp (EVar "PCon") (EVar "name")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "lookupRecField") (EVar "oracle")) (EVar "fields"))) (EVar "fieldOrder"))))))
 (DFunDef false "desugarPat" (PWild (PCon "PRng" PWild PWild PWild)) (EVar "PWild"))
 (DTypeSig false "lookupRecField" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyFun (TyCon "String") (TyCon "Pat")))))
@@ -1453,7 +1457,6 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "desugarPat" (PWild (PCon "PList" (PList))) (EApp (EApp (EVar "PCon") (ELit (LString "Nil"))) (EListLit)))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PList" (PCons (PVar "h") (PVar "rest")))) (EApp (EApp (EVar "PCon") (ELit (LString "Cons"))) (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "h")) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EApp (EVar "PList") (EVar "rest"))))))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PAs" PWild PWild (PVar "p"))) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "p")))
-(DFunDef false "desugarPat" (PWild (PCon "PRec" PWild PWild (PCon "True"))) (EVar "PWild"))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EMatch (EApp (EApp (EVar "oGetCtorFields") (EVar "oracle")) (EVar "name")) (arm (PCon "None") () (EVar "PWild")) (arm (PCon "Some" (PVar "fieldOrder")) () (EApp (EApp (EVar "PCon") (EVar "name")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "lookupRecField") (EVar "oracle")) (EVar "fields"))) (EVar "fieldOrder"))))))
 (DFunDef false "desugarPat" (PWild (PCon "PRng" PWild PWild PWild)) (EVar "PWild"))
 (DTypeSig false "lookupRecField" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyFun (TyCon "String") (TyCon "Pat")))))

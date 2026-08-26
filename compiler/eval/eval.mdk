@@ -922,8 +922,14 @@ matchPat (PList pats) (VList vals)
   | listLen pats == listLen vals = matchPats pats vals
   | otherwise = None
 matchPat (PAs x _ p) v = matchAs x p v
-matchPat (PRec _ fields _) (VRecord _ recFields) =
-  matchRecFields fields recFields
+-- #1462: the constructor is part of the pattern's identity, exactly as in the
+-- `VCon` arm below — a record pattern selects an arm by CONSTRUCTOR first and
+-- by label set second.  Binding the ctor to `_` here made an arm naming only
+-- labels a sibling constructor also declares fire on that sibling, diverging
+-- from the native binary (which compares the tag).
+matchPat (PRec ctor fields _) (VRecord ctor2 recFields)
+  | ctor == ctor2 = matchRecFields fields recFields
+  | otherwise = None
 matchPat (PRec ctor fields _) (VCon ctor2 vals)
   | ctor == ctor2 = match lookupAssoc ctor !ctorFieldOrdersRef
     Some order => matchRecFields fields (zipFieldOrder order vals)
