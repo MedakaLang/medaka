@@ -25,7 +25,11 @@
 # what it did not run. Do not make it quiet.
 #
 # WHAT IT DELIBERATELY SKIPS (CI runs these):
-#   * diff_compiler_engines   — 346 fixtures × clang. The clang storm. ~2.5 min.
+#   * diff_compiler_engines   — the whole three-engine fixture corpus × clang. The clang
+#     storm, and the most expensive gate in the tree: minutes on a shared box. (Neither
+#     the fixture count nor the wall time is written down here on purpose — the gate
+#     derives and prints its own live count, and the time is whatever your box does
+#     today. Measure it; do not trust a cardinal in a comment.)
 #     ⚠️ That skip lives in ONE place — the LOCAL_SKIP block, which is BELOW the
 #     PREFLIGHT_DRY exit. It must never be expressed in the change→gate map: CI reads
 #     that map to narrow its PR run, so a "local" skip written there is not local. See
@@ -33,7 +37,11 @@
 #   * selfcompile_fixpoint    — minutes. Only forced locally on a BACKEND change,
 #                               because for the emitter it is the decisive gate and
 #                               finding out in CI is too late.
-#   * the full 82-gate suite  — CI shards it across 6 hosted runners for free.
+#   * the full diff_compiler_* suite — CI shards it across hosted runners for free.
+#     (How many gates that is: `ls test/diff_compiler_*.sh | wc -l`. How many gate
+#     scripts exist in the tree at all, shard coverage included:
+#     `sh test/diff_compiler_ci_shard_coverage.sh | grep TOTAL`. Both drift with every
+#     gate added, so this file names the derivation and never the number.)
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -174,8 +182,8 @@ add() { case " $pats " in *" $1 "*) ;; *) pats="$pats $1" ;; esac; }
 # ── fixture/golden directory → its ACTUAL consumers ──────────────────────────
 #
 # Naively, ANY change under a `*fixtures*`/`*goldens*` dir used to `add
-# 'diff_compiler_*'` — every gate, including `diff_compiler_engines` (346
-# fixtures × clang, the single most expensive gate in the tree). That is every
+# 'diff_compiler_*'` — every gate, including `diff_compiler_engines` (the whole
+# fixture corpus × clang, the single most expensive gate in the tree). That is every
 # well-behaved bug fix, since a regression fixture is required with every fix.
 #
 # Fix: derive the consuming gates from the gate SCRIPTS, same philosophy as the
@@ -213,7 +221,7 @@ add() { case " $pats " in *" $1 "*) ;; *) pats="$pats $1" ;; esac; }
 #     test/native_fixtures/run.sh (a SUBDIRECTORY of test/), the 22
 #     sqlite/test/*oracle.sh gates, or playground/e2e/run.sh — 24 real gates. A corpus
 #     consumed only by one of those derived ZERO consumers, hit the fallback, and ran
-#     the full 83-gate suite while proving nothing about what actually reads it.
+#     the full diff_compiler_* suite while proving nothing about what actually reads it.
 #   * _NONGATE was a SECOND, hand-maintained copy of the tools list, free to drift from
 #     test/CI-COVERAGE-TOOLS.txt — the file that already answers "is this a gate?" and
 #     that diff_compiler_ci_shard_coverage.sh treats as authoritative.
@@ -796,7 +804,7 @@ for f in $changed; do
         # that is not the "dead fixture or derivation gap" the warning below diagnoses,
         # and widening to the full suite over it is pure cost (#337). Same stale-`main`
         # trigger as the deleted-gate arm above: test/core_ir_sexp_fixtures, removed in
-        # b5170cab by the snapshot migration, dragged agents into the full 84-gate suite.
+        # b5170cab by the snapshot migration, dragged agents into the full gate suite.
         # `_fixture_dir_for` is purely lexical, so it happily names a dir that is gone.
         if [ ! -d "$ROOT/$_fdir" ]; then
           echo "preflight: note — fixture dir '$_fdir' is DELETED in this diff; nothing to run for it."
@@ -1084,10 +1092,20 @@ for pat in $pats; do
         [ -z "$(git -C "$ROOT" ls-files "$_no_floor_proj/test/*.sh" 2>/dev/null)" ]; }; then
       echo "  A project with a manifest and no floor gate cannot be enrolled:"
       echo "  a ci.yml shard pattern matching NO gate is a hard ::error::."
+      # ⚠️ The remedy DIFFERS between these two branches, and getting it wrong
+      # sends the reader to the wrong file. Here the map is CORRECT — the generic
+      # manifest-keyed arm rightly named '$_no_floor_proj/test/*'. What is missing
+      # is the gate itself plus its ci.yml shard glob, which is what
+      # diff_compiler_project_enrolment.sh's own FLOOR/CI failures already say.
+      echo "  Your change would have been tested by NOTHING. The map is right; the"
+      echo "  ENROLMENT is incomplete. Add a floor gate under $_no_floor_proj/test/,"
+      echo "  then a glob (e.g. '$_no_floor_proj/test/*') to a shard's pattern: in"
+      echo "  .github/workflows/ci.yml, chosen by measured cost (sh scripts/ci_shard_cost.sh)."
+      echo "  sh test/diff_compiler_project_enrolment.sh checks all three legs."
     else
       echo "  A gate was probably renamed or deleted (the snapshot migration does this)."
+      echo "  Your change would have been tested by NOTHING. Fix the map in $0."
     fi
-    echo "  Your change would have been tested by NOTHING. Fix the map in $0."
     exit 1
   fi
 done
@@ -1131,7 +1149,13 @@ if [ -n "${PREFLIGHT_DRY:-}" ]; then
   if [ "$full_suite" -eq 1 ]; then
     printf '── BLAST RADIUS: this diff touches something used everywhere ─────\n'
     for r in $full_reasons; do printf '  FULL      %s\n' "$r"; done
-    printf '  (locally that means the 85 diff_compiler_* gates; in CI it means the whole suite.)\n'
+    # DERIVED, never hand-written: this line is program OUTPUT, so a stale cardinal
+    # here is a lie told on every blast-radius run, not just to a comment reader.
+    # ⚠️ noglob (`set -f`) is ON from the pattern resolver to the end of this script,
+    # so the glob is expanded in a subshell that turns it back off — otherwise this
+    # counts `1`, the literal unexpanded pattern.
+    printf '  (locally that means all %s diff_compiler_* gates; in CI it means the whole suite.)\n' \
+      "$(set +f; ls "$ROOT"/test/diff_compiler_*.sh 2>/dev/null | grep -c .)"
   fi
   if [ -n "$inlang_run" ]; then
     # SURFACED IN DRY ON PURPOSE. AGENTS.md records that PREFLIGHT_DRY does NOT
@@ -1156,6 +1180,34 @@ fi
 # builds `$inlang_run` exists to close.
 [ -n "$pats" ] || [ -n "$inlang_run" ] || { echo "preflight: no gates map to these changes (docs/config only?) — nothing to run."; exit 0; }
 
+# ── UNMAPPED, on the REAL run path too — not just under PREFLIGHT_DRY ────────
+#
+# $unmapped is computed for every run but used to be PRINTED only inside the
+# PREFLIGHT_DRY block above. That was survivable only while a diff the map has no
+# opinion about ALSO derived no gate pattern and so fell into the "nothing to run"
+# exit directly above, which said so loudly.
+#
+# It no longer does. The coverage floor adds an unconditional
+# `add 'diff_compiler_source_bytes'` for ANY non-empty $changed, so $pats is never
+# empty when there IS a diff and that exit is unreachable for a real change. Without
+# this block a Makefile-only diff runs one whole-tree safety-net gate, prints a clean
+# green, and says NOTHING about the fact that not one per-file-targeted gate was
+# derived for it — the same "green while testing nothing" shape the header warns
+# about, reintroduced by a fix that was otherwise correct.
+#
+# ⚠️ DIAGNOSTIC ONLY. This block must never skip, exit, or drop a gate:
+# diff_compiler_source_bytes legitimately covers these paths and still runs below.
+# Do not turn this back into an exit-0 short-circuit.
+if [ -n "$unmapped" ]; then
+  printf '── %s path(s) the change→gate map has NO OPINION about ─────\n' \
+    "$(printf '%s\n' $unmapped | grep -c .)"
+  for u in $unmapped; do printf '  UNMAPPED  %s\n' "$u"; done
+  printf '  No per-file-targeted gate was derived for the path(s) above — only whole-tree\n'
+  printf '  gates (diff_compiler_source_bytes and friends) reach them. A green run below\n'
+  printf '  is NOT evidence that anything examined them. If they deserve targeted\n'
+  printf '  coverage, add a map arm in %s.\n' "$0"
+fi
+
 # ── LOCAL_SKIP: what THIS BOX declines to pay for. Not what the diff misses. ──
 #
 # ⚠️ THIS BLOCK IS BELOW THE PREFLIGHT_DRY EXIT ON PURPOSE. DO NOT MOVE IT UP. (#402)
@@ -1174,8 +1226,16 @@ fi
 # at the bottom of this file promised "CI runs these on the PR". Both halves were
 # reasonable; composing them made the suite lie.
 #
-# The cost is real and the local skip is deliberate: 346 fixtures × (medaka build +
-# clang), ~2.5 min, on a box several agents share. It just is not a claim about the diff.
+# The cost is real and the local skip is deliberate: the entire three-engine fixture
+# corpus × (medaka build + clang), minutes of wall time, on a box several agents share.
+# It just is not a claim about the diff.
+#
+# ⚠️ No fixture count and no wall-clock number is written down here, on purpose. The
+# gate itself says why (test/diff_compiler_engines.sh: "Corpus size is NOT hardcoded
+# here on purpose … a hand-maintained total rots the moment it does. The gate derives
+# and reports the live count itself; read it off a run."). A cardinal in this comment
+# rots the same way and is invisible when it does — the count written here before
+# 2026-08-26 had drifted by hundreds. Measure, don't quote.
 #
 # Only an EXACT pattern is dropped. A wildcard ('diff_compiler_*', a blast-radius diff)
 # that still matches the gate legitimately pulls it back in and it runs like any other —
@@ -1225,7 +1285,8 @@ fi
 #
 # `mark_full` adds the `diff_compiler_*` catch-all, so for a blast-radius path
 # (stdlib/core.mdk, compiler/support/*, compiler/entries/*, …) `make preflight` IS the
-# full 84-gate suite — the exact thing AGENTS.md tells agents never to run locally. The
+# full diff_compiler_* suite (`ls test/diff_compiler_*.sh | wc -l` — do not hand-write
+# the number here) — the exact thing AGENTS.md tells agents never to run locally. The
 # WIDENING IS CORRECT AND STAYS: a prelude change moves essentially every golden, and a
 # narrow preflight would report green having run lexer + snapshot + doctests.
 #
@@ -1321,8 +1382,8 @@ make -C "$ROOT" medaka >/dev/null 2>&1 || { echo "preflight: make medaka FAILED"
 rc=0
 
 # ⚠️ BOTH of these are guarded on `$pats` being NON-EMPTY, and that guard is not
-# defensive tidiness. `build_oracles.sh --for` with no pattern builds ALL 54 oracles
-# and `run_gates.sh` with no pattern runs ALL 84 gates — i.e. word-splitting an empty
+# defensive tidiness. `build_oracles.sh --for` with no pattern builds EVERY oracle
+# and `run_gates.sh` with no pattern runs EVERY gate — i.e. word-splitting an empty
 # `$pats` turns the narrowest possible diff into the two commands AGENTS.md most
 # explicitly forbids. That path became reachable the moment `$inlang_run` alone could
 # get us past the "nothing to run" exit above.
@@ -1411,7 +1472,7 @@ case " $gates $local_skipped " in
   *" $engines_gate "*)
     engines_line="  diff_compiler_engines      ran above (pulled in by a wildcard gate match) — not a skip" ;;
   *" diff_compiler_engines "*)
-    engines_line="  diff_compiler_engines      the 3-engine differential (346 fixtures × clang). This diff
+    engines_line="  diff_compiler_engines      the 3-engine differential (whole fixture corpus × clang). This diff
                              DOES touch it — skipped HERE for cost only; CI's PR run
                              derives it and RUNS it." ;;
   *)
