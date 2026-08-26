@@ -1540,7 +1540,11 @@ publishProjectDiagnostics runtimeSrc coreSrc uri docs =
   let projectDir = findProjectRootOrSelf (dirOfPath rootFile)
   let stdlibDir = lspMedakaRoot "." ++ "/stdlib"
   let read = path => docsGet (uriOfPath path) docs
-  let results = analyzeProject projectCache projectParseCache read rootFile [projectDir, stdlibDir] runtimeSrc coreSrc
+  -- #1362: the single-doc path (line ~223) uses the UNGUARDED `analyzeLocated`
+  -- (no internal-extern restriction, no `--allow-internal` concept in the
+  -- LSP); kept unguarded here too (`allowInternal = True`, `trustedMods = []`)
+  -- so a live-edit session never flags what a build-time `check` wouldn't.
+  let results = analyzeProject True [] projectCache projectParseCache read rootFile [projectDir, stdlibDir] runtimeSrc coreSrc
   publishEach results
 -- Module root = nearest ancestor with medaka.toml (NOT the file's own dir), so
 -- a nested module's imports (rooted at the project dir) resolve.  Falls back to

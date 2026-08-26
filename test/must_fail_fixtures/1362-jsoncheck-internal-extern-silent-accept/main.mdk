@@ -1,7 +1,0 @@
--- issue #1362: `medaka check` (human) correctly rejects this (dep.mdk's
--- arrayGetUnsafe use, exit 1). `medaka check --json` on this SAME
--- multi-module program silently accepts it: exit 0, empty diagnostics for
--- every file.
-import dep.{badFn}
-
-main = println (badFn (stringToChars "hi") 0)

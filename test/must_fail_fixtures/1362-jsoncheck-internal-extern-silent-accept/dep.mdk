@@ -1,5 +1,0 @@
--- issue #1362: `arrayGetUnsafe` is one of the five names in `internalExterns`
--- (compiler/frontend/resolve.mdk) -- restricted to stdlib-internal use without
--- `--allow-internal`. This module is not stdlib and does not pass the flag.
-export badFn : Array Char -> Int -> Char
-badFn arr i = arrayGetUnsafe i arr
