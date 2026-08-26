@@ -1,15 +1,22 @@
--- CONTROL for #1046: byte-identical to main.mdk except `impl Speak Dog` OVERRIDES
--- `speak` (`"woof"`) instead of inheriting the interface default. That is the ONE
--- flipped feature -- method-less (inherited-default) vs. explicit-override -- so this
--- must build-run clean and print `woof|meow`, proving the native arg-tag dispatch CAN
--- tell `Dog` and `Cat` apart once BOTH impls contribute an entry to the method's group.
+-- CONTROL for #1046 (re-verbed 2026-08-26, #1986 rung 2): byte-identical to main.mdk
+-- except the ONE shared local lambda is split into TWO locals, each used at exactly one
+-- receiver type.  That is the ONE flipped dimension -- shared two-type local vs. two
+-- single-type locals -- and it is precisely the dimension main.mdk's pinned rejection
+-- keys on.  `impl Speak Dog` is STILL METHOD-LESS here, so a green control proves the
+-- rejection is about the two-type merge and NOT about method-less impls or arg-tag
+-- dispatch in general.
+--
+-- ⚠️ WHAT THE HARNESS ACTUALLY ASSERTS HERE IS EXIT 0 AND NOTHING ELSE -- a control
+-- carries no stdout pin.  Measured by hand at the re-verb, not asserted by the gate:
+-- build-run exit 0, stdout `woof|meow` (the method-less `Dog` impl still reaches the
+-- inherited default once each local is monomorphic).
 import iface.{Speak(..), speak}
 data Dog = Dog
 data Cat = Cat
-impl Speak Dog where
-  speak _ = "woof"
+impl Speak Dog where              -- METHOD-LESS: inherits the default
 impl Speak Cat where
   speak _ = "meow"
 main =
   let f = v => speak v
-  println (f Dog ++ "|" ++ f Cat)
+  let g = w => speak w
+  println (f Dog ++ "|" ++ g Cat)

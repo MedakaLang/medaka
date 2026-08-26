@@ -1,9 +1,0 @@
--- Declared FIRST in loader order, so its `Box` wins the first-match lookup in the
--- program-global, bare-ctor-name-keyed `ctorToTypeRef`.  `main.mdk` imports this
--- module's TYPE only — never this `Box`.
-import c1292i.{Label, label}
-
-public export data TA = Box Int
-
-export impl Label TA where
-  label _ = "amod"

@@ -1,8 +1,0 @@
--- The CONTROL's module: identical to c1292b except the constructor spelling does
--- not collide with c1292a's.
-import c1292i.{Label, label}
-
-public export data TC = Crateee Int
-
-export impl Label TC where
-  label _ = "cmod"

@@ -20,7 +20,7 @@ stdout: aamod|aamod
 control: run control.mdk
 why-fixture: MULTI-MODULE PIN, sibling files in this directory -- `medaka run`
 why-fixture: resolves same-directory sibling imports with no medaka.toml (same
-why-fixture: idiom as 1292-xmod-ctor-name-argtag-wrong-impl/).
+why-fixture: idiom as the other multi-file rows here).
 why-control: control.mdk is main.mdk with ONE variable changed: it imports
 why-control: `zzmod_distinct` (type `Zeeb`, not `Thing`) instead of `zzmod`, so
 why-control: the same two-impl-of-Label-on-a-cross-module-type-named-once-per-module
