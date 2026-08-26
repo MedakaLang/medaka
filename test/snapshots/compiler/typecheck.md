@@ -1,5 +1,5 @@
 # META
-source_lines=34343
+source_lines=34379
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -25693,11 +25693,20 @@ checkUndeterminedObligations univ iface (a::rest) loc =
 -- If the var is a FORWARDED enclosing-fn dict (activeDictVarOf Some), it's resolved
 -- by dict-passing — fine.  Otherwise it is genuinely free, and the route must pick
 -- an impl with no type to guide it: ONE impl of [iface] → sole-impl default (no
--- error; routeUndeterminedTop stamps it concretely); TWO or more → genuinely
--- ambiguous → AmbiguousImpl (the deliberate divergence from the oracle's silent
--- first-wins).  Skip "Num" (its literal defaulting handles ambiguity) and ifaces
--- with no user impls (zero → existing no-impl path).  This runs on BOTH the check
--- path (checkModuleFullImpl) and the emit/eval path, so `check` rejects too.
+-- error); TWO or more → genuinely ambiguous → AmbiguousImpl (the deliberate
+-- divergence from the oracle's silent first-wins).  RULE 3b (#1180) is the second
+-- spelling of "two or more": one census-counted impl beside a HEADLESS one.  Skip
+-- "Num" (its literal defaulting handles ambiguity) and ifaces with no user impls
+-- (zero → existing no-impl path).  This runs on BOTH the check path
+-- (checkModuleFullImpl) and the emit/eval path, so `check` rejects too.
+--
+-- ⚠️ This block used to say the sole-impl case is one "routeUndeterminedTop stamps
+-- concretely".  MEASURED FALSE (sprint `dispatch-must-not-guess`, 1st attempt at
+-- #1180): `routeUndeterminedTop` is instrumented-unreached for this shape on every
+-- verb — a one-impl program compiles and runs without ever entering it, and the
+-- ambiguity reject the two-impl case produces comes from `pushTypeErrorOnceAt`
+-- below, not from `reportAmbiguousImpl`.  Both render `ambiguousImplMsg`, which is
+-- how the misattribution survived: the MESSAGE is not a witness for the PATH.
 checkUndeterminedObligation : ImplUniverse -> IfaceRef -> Mono -> Option Loc -> Unit
 checkUndeterminedObligation univ iface occ loc
   | iface.irName == "Num" = ()                                       -- RULE 4a: Num → literal defaulting, never ambiguity (a SPELLING test — see checkOneCallObligation)
@@ -25718,6 +25727,33 @@ checkUndeterminedObligation univ iface occ loc
   -- RULE 3: the var escaped its group anchored to NOTHING and the iface has >= 2 impls
   -- ⇒ genuinely ambiguous (the escaped-unanchored case registerDispatchMonos records).
   | implCountForIfaceU univ iface >= 2 =
+    pushTypeErrorOnceAt "T-AMBIGUOUS-INSTANCE" loc (ambiguousImplMsg iface.irName)
+  -- RULE 3b (#1180): the census bucket RULE 3 counts drops a HEADLESS impl
+  -- (`impl Sz a`) by design — `univHeadCountsInCensus` is `censusHeadNameTy`, which
+  -- answers `None` for a bare `TyVar` head — so a program with ONE concrete impl
+  -- beside a fully-general one counted 1 and this undetermined goal was silently
+  -- COMMITTED to the concrete impl (check clean, `run` a wrong value, `build` an
+  -- arg-tag E-PANIC).  Two instances match an unanchored `Sz ?a` and neither is
+  -- preferred over the other for a goal that is not closed, so DICT-SEMANTICS §6.2 T3
+  -- forbids `inst` firing at all: the verdict is the same `T-AMBIGUOUS-INSTANCE`.
+  --
+  -- 🚨 THIS READS A SIBLING BUCKET; IT DOES NOT WIDEN THE CENSUS.  #1617/#1618 gave
+  -- `headTyconTy` a `TyFun` arm and reached the tag set through the shared writer,
+  -- pushing the count 1 → 2 for `impl C Int` beside `impl C (Int -> Int)` and flipping
+  -- a program that never dispatches to the arrow from exit 0 to exit 1 — see
+  -- `univHeadCountsInCensus`' block.  Nothing here touches `univAddIfaceTag`,
+  -- `univHeadCountsInCensus`, or either writer, and an arrow- or tuple-headed impl is
+  -- NOT in `univHeadless` either (its writers file by `univReceiverTag`/`headTyconTy`,
+  -- which DOES have the `TyFun`/`TyTuple` arms), so #1617's two-arrow-impl program has
+  -- an EMPTY headless bucket, a census count of 0, and stays accepted by both guards.
+  -- The `>= 1` conjunct is what keeps it that way: a headless impl alone is a UNIQUE
+  -- instance and must still commit (that is `control.mdk`'s shape, one impl, no
+  -- ambiguity).
+  --
+  -- Both universe writers — `insertUnivImplAt` (Flat) and `ieInsertRowAt` (Module/`IE`)
+  -- — already populate `univHeadless` through the same `univReceiverTag None` arm, so
+  -- this needs no third writer and answers identically single-file and cross-module.
+  | implCountForIfaceU univ iface >= 1 && isNonEmptyL (univHeadless univ iface) =
     pushTypeErrorOnceAt "T-AMBIGUOUS-INSTANCE" loc (ambiguousImplMsg iface.irName)
   | otherwise = ()
 
@@ -38404,7 +38440,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkUndeterminedObligations" (PWild PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "checkUndeterminedObligations" ((PVar "univ") (PVar "iface") (PCons (PVar "a") (PVar "rest")) (PVar "loc")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligation") (EVar "univ")) (EVar "iface")) (EVar "a")) (EVar "loc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligations") (EVar "univ")) (EVar "iface")) (EVar "rest")) (EVar "loc")))))
 (DTypeSig false "checkUndeterminedObligation" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit"))))))
-(DFunDef false "checkUndeterminedObligation" ((PVar "univ") (PVar "iface") (PVar "occ") (PVar "loc")) (EIf (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (ELit LUnit) (EIf (EApp (EVar "isSome") (EApp (EVar "activeDictVarOf") (EVar "occ"))) (ELit LUnit) (EIf (EApp (EApp (EVar "anyIn") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "poisonedVars") "value")) (ELit LUnit) (EIf (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EApp (EApp (EVar "allList") (ELam ((PVar "i")) (EApp (EApp (EVar "containsI") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "deferrableVarIds") "value")))) (EApp (EVar "monoUnboundIds") (EVar "occ")))) (ELit LUnit) (EIf (EBinOp ">=" (EApp (EApp (EVar "implCountForIfaceU") (EVar "univ")) (EVar "iface")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EVar "iface") "irName"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DFunDef false "checkUndeterminedObligation" ((PVar "univ") (PVar "iface") (PVar "occ") (PVar "loc")) (EIf (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (ELit LUnit) (EIf (EApp (EVar "isSome") (EApp (EVar "activeDictVarOf") (EVar "occ"))) (ELit LUnit) (EIf (EApp (EApp (EVar "anyIn") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "poisonedVars") "value")) (ELit LUnit) (EIf (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EApp (EApp (EVar "allList") (ELam ((PVar "i")) (EApp (EApp (EVar "containsI") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "deferrableVarIds") "value")))) (EApp (EVar "monoUnboundIds") (EVar "occ")))) (ELit LUnit) (EIf (EBinOp ">=" (EApp (EApp (EVar "implCountForIfaceU") (EVar "univ")) (EVar "iface")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EVar "iface") "irName"))) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EApp (EVar "implCountForIfaceU") (EVar "univ")) (EVar "iface")) (ELit (LInt 1))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface")))) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EVar "iface") "irName"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "setNumlitFloats" (TyFun (TyCon "Unit") (TyCon "Unit")))
 (DFunDef false "setNumlitFloats" (PWild) (EApp (EVar "setNumlitFloatsGo") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitRefs") "value")))
 (DTypeSig false "setNumlitFloatsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")))) (TyCon "Unit")))
@@ -43916,7 +43952,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkUndeterminedObligations" (PWild PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "checkUndeterminedObligations" ((PVar "univ") (PVar "iface") (PCons (PVar "a") (PVar "rest")) (PVar "loc")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligation") (EVar "univ")) (EVar "iface")) (EVar "a")) (EVar "loc"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligations") (EVar "univ")) (EVar "iface")) (EVar "rest")) (EVar "loc")))))
 (DTypeSig false "checkUndeterminedObligation" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit"))))))
-(DFunDef false "checkUndeterminedObligation" ((PVar "univ") (PVar "iface") (PVar "occ") (PVar "loc")) (EIf (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (ELit LUnit) (EIf (EApp (EVar "isSome") (EApp (EVar "activeDictVarOf") (EVar "occ"))) (ELit LUnit) (EIf (EApp (EApp (EVar "anyIn") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "poisonedVars") "value")) (ELit LUnit) (EIf (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EApp (EApp (EVar "allList") (ELam ((PVar "i")) (EApp (EApp (EVar "containsI") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "deferrableVarIds") "value")))) (EApp (EVar "monoUnboundIds") (EVar "occ")))) (ELit LUnit) (EIf (EBinOp ">=" (EApp (EApp (EVar "implCountForIfaceU") (EVar "univ")) (EVar "iface")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EVar "iface") "irName"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DFunDef false "checkUndeterminedObligation" ((PVar "univ") (PVar "iface") (PVar "occ") (PVar "loc")) (EIf (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (ELit LUnit) (EIf (EApp (EVar "isSome") (EApp (EVar "activeDictVarOf") (EVar "occ"))) (ELit LUnit) (EIf (EApp (EApp (EVar "anyIn") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "poisonedVars") "value")) (ELit LUnit) (EIf (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EApp (EApp (EVar "allList") (ELam ((PVar "i")) (EApp (EApp (EVar "containsI") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "deferrableVarIds") "value")))) (EApp (EVar "monoUnboundIds") (EVar "occ")))) (ELit LUnit) (EIf (EBinOp ">=" (EApp (EApp (EVar "implCountForIfaceU") (EVar "univ")) (EVar "iface")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EVar "iface") "irName"))) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EApp (EVar "implCountForIfaceU") (EVar "univ")) (EVar "iface")) (ELit (LInt 1))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface")))) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EVar "iface") "irName"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
 (DTypeSig false "setNumlitFloats" (TyFun (TyCon "Unit") (TyCon "Unit")))
 (DFunDef false "setNumlitFloats" (PWild) (EApp (EVar "setNumlitFloatsGo") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "numlitRefs") "value")))
 (DTypeSig false "setNumlitFloatsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")))) (TyCon "Unit")))

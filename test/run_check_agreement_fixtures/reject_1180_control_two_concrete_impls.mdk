@@ -1,0 +1,26 @@
+-- #1180 POSITIVE CONTROL — the same undetermined goal with the fully-general
+-- `impl Sz a` replaced by a SECOND CONCRETE impl. Two instances match, so this is the
+-- verdict reject_1180_undetermined_headless_beside_concrete.mdk must also produce.
+-- It already rejected before the fix (two census-counted heads → RULE 3's `>= 2` guard),
+-- and it must keep rejecting after it: RULE 3b adds a second spelling of "two or more",
+-- it does not replace the first.
+interface Sz a where
+  szNew : Int -> a
+  szTag : a -> Int
+
+data Widget = Widget Int
+
+data Gadget = Gadget Int
+
+impl Sz Widget where
+  szNew n = Widget (n * 3)
+  szTag (Widget n) = n
+
+impl Sz Gadget where
+  szNew n = Gadget (n * 5)
+  szTag (Gadget n) = n
+
+roundtrip : Sz a => Int -> Int
+roundtrip n = szTag (szNew n)
+
+main = println (roundtrip 14)

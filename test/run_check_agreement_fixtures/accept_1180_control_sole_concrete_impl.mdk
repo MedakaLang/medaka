@@ -1,0 +1,26 @@
+-- #1180 NEGATIVE CONTROL — the same undetermined goal with the fully-general
+-- `impl Sz a` DELETED. Exactly one dimension flips against
+-- reject_1180_undetermined_headless_beside_concrete.mdk: the presence of the headless
+-- impl. One impl remains, so the constraint has a genuinely UNIQUE instance and
+-- committing to it is correct — this must stay ACCEPTED, and it is the `>= 1` conjunct
+-- in RULE 3b's guard that keeps it so. If this ever rejects, the widening became a
+-- sole-impl reject and #1180's fix over-fired.
+--
+-- The pinned `42` is `impl Sz Widget`'s body at n = 14 (`szNew 14` = `Widget 42`,
+-- `szTag` = 42), read off the source rather than captured: it is also the value the
+-- pre-fix bug printed from the ambiguous program, which is how the silently-selected
+-- impl was identified in the first place.
+interface Sz a where
+  szNew : Int -> a
+  szTag : a -> Int
+
+data Widget = Widget Int
+
+impl Sz Widget where
+  szNew n = Widget (n * 3)
+  szTag (Widget n) = n
+
+roundtrip : Sz a => Int -> Int
+roundtrip n = szTag (szNew n)
+
+main = println (roundtrip 14)
