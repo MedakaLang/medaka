@@ -1,5 +1,5 @@
 # META
-source_lines=11386
+source_lines=11382
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -7391,7 +7391,7 @@ ctorOrdinal e name = match ctorTypeOf e name
   -- is in `ty`'s bucket and therefore in the ordinal map — the map probe and the
   -- `indexOfStr` scan return the same Int.  RUN-EMIT-003: the scan path is retired.
   Some _ => match !e.ctorOrdinalMap
-    Some m => orZero (omLookup name m)
+    Some m => fromOption 0 (omLookup name m)
     None => panic "llvm: ctorOrdinalMap read before install (internal error)"
   None => if name == "Nil" then 1 else 0
 
@@ -7406,7 +7406,7 @@ ctorTypeId e name = match ctorTypeOf e name
   -- `indexOfStr` scan agree, and `omSize` is that list's length (nubStr ⇒ distinct).
   -- RUN-EMIT-003: both `distinctTypeNames`-scan paths are retired.
   Some ty => match !e.typeIdMap
-    Some m => orZero (omLookup ty m)
+    Some m => fromOption 0 (omLookup ty m)
     None => panic "llvm: typeIdMap read before install (internal error)"
   None => match !e.typeIdMap
     Some m => omSize m
@@ -7422,10 +7422,6 @@ ctorTypeId e name = match ctorTypeOf e name
 typeNamesOf : List (String, String) -> List String
 typeNamesOf [] = []
 typeNamesOf ((_, t)::rest) = t :: typeNamesOf rest
-
-orZero : Option Int -> Int
-orZero (Some i) = i
-orZero None = 0
 
 -- dedup a list of strings, preserving first-occurrence order.  #990: the seen-set is an
 -- OrdMap (membership O(log k)) instead of a `contains`-scanned list (O(k)) — so the nub
@@ -12685,15 +12681,12 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DTypeSig false "cellTag" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "cellTag" ((PVar "e") (PVar "name")) (EIf (EBinOp "==" (EVar "name") (ELit (LString "True"))) (ELit (LInt 1)) (EIf (EBinOp "==" (EVar "name") (ELit (LString "False"))) (ELit (LInt 0)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "$tuple")) (ELit (LString "$ref")) (ELit (LString "$closure")))) (EApp (EVar "hashName") (EVar "name")) (EMatch (EApp (EVar "reservedTag") (EVar "name")) (arm (PCon "Some" (PVar "t")) () (EVar "t")) (arm (PCon "None") () (EBinOp "+" (EBinOp "*" (EApp (EApp (EVar "ctorTypeId") (EVar "e")) (EVar "name")) (EVar "ctorTagShift")) (EApp (EApp (EVar "ctorOrdinal") (EVar "e")) (EVar "name")))))))))
 (DTypeSig false "ctorOrdinal" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "Int"))))
-(DFunDef false "ctorOrdinal" ((PVar "e") (PVar "name")) (EMatch (EApp (EApp (EVar "ctorTypeOf") (EVar "e")) (EVar "name")) (arm (PCon "Some" PWild) () (EMatch (EUnOp "!" (EFieldAccess (EVar "e") "ctorOrdinalMap")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "orZero") (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "m")))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "llvm: ctorOrdinalMap read before install (internal error)")))))) (arm (PCon "None") () (EIf (EBinOp "==" (EVar "name") (ELit (LString "Nil"))) (ELit (LInt 1)) (ELit (LInt 0))))))
+(DFunDef false "ctorOrdinal" ((PVar "e") (PVar "name")) (EMatch (EApp (EApp (EVar "ctorTypeOf") (EVar "e")) (EVar "name")) (arm (PCon "Some" PWild) () (EMatch (EUnOp "!" (EFieldAccess (EVar "e") "ctorOrdinalMap")) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EVar "fromOption") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "m")))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "llvm: ctorOrdinalMap read before install (internal error)")))))) (arm (PCon "None") () (EIf (EBinOp "==" (EVar "name") (ELit (LString "Nil"))) (ELit (LInt 1)) (ELit (LInt 0))))))
 (DTypeSig false "ctorTypeId" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "Int"))))
-(DFunDef false "ctorTypeId" ((PVar "e") (PVar "name")) (EMatch (EApp (EApp (EVar "ctorTypeOf") (EVar "e")) (EVar "name")) (arm (PCon "Some" (PVar "ty")) () (EMatch (EUnOp "!" (EFieldAccess (EVar "e") "typeIdMap")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "orZero") (EApp (EApp (EVar "omLookup") (EVar "ty")) (EVar "m")))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "llvm: typeIdMap read before install (internal error)")))))) (arm (PCon "None") () (EMatch (EUnOp "!" (EFieldAccess (EVar "e") "typeIdMap")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "omSize") (EVar "m"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "llvm: typeIdMap read before install (internal error)"))))))))
+(DFunDef false "ctorTypeId" ((PVar "e") (PVar "name")) (EMatch (EApp (EApp (EVar "ctorTypeOf") (EVar "e")) (EVar "name")) (arm (PCon "Some" (PVar "ty")) () (EMatch (EUnOp "!" (EFieldAccess (EVar "e") "typeIdMap")) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EVar "fromOption") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "ty")) (EVar "m")))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "llvm: typeIdMap read before install (internal error)")))))) (arm (PCon "None") () (EMatch (EUnOp "!" (EFieldAccess (EVar "e") "typeIdMap")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "omSize") (EVar "m"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "llvm: typeIdMap read before install (internal error)"))))))))
 (DTypeSig false "typeNamesOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "typeNamesOf" ((PList)) (EListLit))
 (DFunDef false "typeNamesOf" ((PCons (PTuple PWild (PVar "t")) (PVar "rest"))) (EBinOp "::" (EVar "t") (EApp (EVar "typeNamesOf") (EVar "rest"))))
-(DTypeSig false "orZero" (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyCon "Int")))
-(DFunDef false "orZero" ((PCon "Some" (PVar "i"))) (EVar "i"))
-(DFunDef false "orZero" ((PCon "None")) (ELit (LInt 0)))
 (DTypeSig false "nubStr" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "nubStr" ((PVar "xs")) (EApp (EApp (EVar "nubStrAcc") (EVar "xs")) (EVar "omEmpty")))
 (DTypeSig false "nubStrAcc" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -14877,15 +14870,12 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DTypeSig false "cellTag" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "cellTag" ((PVar "e") (PVar "name")) (EIf (EBinOp "==" (EVar "name") (ELit (LString "True"))) (ELit (LInt 1)) (EIf (EBinOp "==" (EVar "name") (ELit (LString "False"))) (ELit (LInt 0)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "$tuple")) (ELit (LString "$ref")) (ELit (LString "$closure")))) (EApp (EVar "hashName") (EVar "name")) (EMatch (EApp (EVar "reservedTag") (EVar "name")) (arm (PCon "Some" (PVar "t")) () (EVar "t")) (arm (PCon "None") () (EBinOp "+" (EBinOp "*" (EApp (EApp (EVar "ctorTypeId") (EVar "e")) (EVar "name")) (EVar "ctorTagShift")) (EApp (EApp (EVar "ctorOrdinal") (EVar "e")) (EVar "name")))))))))
 (DTypeSig false "ctorOrdinal" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "Int"))))
-(DFunDef false "ctorOrdinal" ((PVar "e") (PVar "name")) (EMatch (EApp (EApp (EVar "ctorTypeOf") (EVar "e")) (EVar "name")) (arm (PCon "Some" PWild) () (EMatch (EUnOp "!" (EFieldAccess (EVar "e") "ctorOrdinalMap")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "orZero") (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "m")))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "llvm: ctorOrdinalMap read before install (internal error)")))))) (arm (PCon "None") () (EIf (EBinOp "==" (EVar "name") (ELit (LString "Nil"))) (ELit (LInt 1)) (ELit (LInt 0))))))
+(DFunDef false "ctorOrdinal" ((PVar "e") (PVar "name")) (EMatch (EApp (EApp (EVar "ctorTypeOf") (EVar "e")) (EVar "name")) (arm (PCon "Some" PWild) () (EMatch (EUnOp "!" (EFieldAccess (EVar "e") "ctorOrdinalMap")) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EVar "fromOption") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "m")))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "llvm: ctorOrdinalMap read before install (internal error)")))))) (arm (PCon "None") () (EIf (EBinOp "==" (EVar "name") (ELit (LString "Nil"))) (ELit (LInt 1)) (ELit (LInt 0))))))
 (DTypeSig false "ctorTypeId" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "Int"))))
-(DFunDef false "ctorTypeId" ((PVar "e") (PVar "name")) (EMatch (EApp (EApp (EVar "ctorTypeOf") (EVar "e")) (EVar "name")) (arm (PCon "Some" (PVar "ty")) () (EMatch (EUnOp "!" (EFieldAccess (EVar "e") "typeIdMap")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "orZero") (EApp (EApp (EVar "omLookup") (EVar "ty")) (EVar "m")))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "llvm: typeIdMap read before install (internal error)")))))) (arm (PCon "None") () (EMatch (EUnOp "!" (EFieldAccess (EVar "e") "typeIdMap")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "omSize") (EVar "m"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "llvm: typeIdMap read before install (internal error)"))))))))
+(DFunDef false "ctorTypeId" ((PVar "e") (PVar "name")) (EMatch (EApp (EApp (EVar "ctorTypeOf") (EVar "e")) (EVar "name")) (arm (PCon "Some" (PVar "ty")) () (EMatch (EUnOp "!" (EFieldAccess (EVar "e") "typeIdMap")) (arm (PCon "Some" (PVar "m")) () (EApp (EApp (EVar "fromOption") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "ty")) (EVar "m")))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "llvm: typeIdMap read before install (internal error)")))))) (arm (PCon "None") () (EMatch (EUnOp "!" (EFieldAccess (EVar "e") "typeIdMap")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "omSize") (EVar "m"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "llvm: typeIdMap read before install (internal error)"))))))))
 (DTypeSig false "typeNamesOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "typeNamesOf" ((PList)) (EListLit))
 (DFunDef false "typeNamesOf" ((PCons (PTuple PWild (PVar "t")) (PVar "rest"))) (EBinOp "::" (EVar "t") (EApp (EVar "typeNamesOf") (EVar "rest"))))
-(DTypeSig false "orZero" (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyCon "Int")))
-(DFunDef false "orZero" ((PCon "Some" (PVar "i"))) (EVar "i"))
-(DFunDef false "orZero" ((PCon "None")) (ELit (LInt 0)))
 (DTypeSig false "nubStr" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "nubStr" ((PVar "xs")) (EApp (EApp (EVar "nubStrAcc") (EVar "xs")) (EVar "omEmpty")))
 (DTypeSig false "nubStrAcc" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "String")))))
