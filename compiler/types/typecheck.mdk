@@ -99,8 +99,9 @@ import frontend.ast.{
 -- #1111 Stage A-2 unit A-2.4: the INTERFACE-namespace re-key.
 -- `universeIfaceRequiredRef` becomes a `Registry` and `ifaceParamKindsRef` /
 -- `universeIfaceParamKinds` become `RegKey`-keyed assoc lists, both minted
--- through `ifaceTabKey` below.  `universeRegisteredIfacesRef` is deliberately
--- NOT re-keyed — see `ifaceRegistered`.
+-- through `ifaceTabKey` below.  `universeRegisteredIfacesRef` was deliberately
+-- NOT re-keyed and has since been retired entirely (#1569) — see
+-- `CrossRun.universeRegisteredIfacesRef`'s retirement note.
 import types.registry.{
   RegKey,
   Registry,
@@ -2378,14 +2379,11 @@ public export data PendingEntry =
 -- unchanged and still last-write-wins; a flat program has one user module, so its
 -- names cannot collide across modules (#1115 / E-1 is what would change that).
 
--- #147: cached SET of iface names with ≥1 method registered above, so
--- `ifaceRegistered` was an O(log n) membership test instead of a full linear scan
--- of the method table per operator/numeric-literal.  ⚠️ #1539 deleted that reader —
--- this set is WRITE-ONLY now; see the `ifaceRegistered` TOMBSTONE.  A separate key (iface name,
--- not method name) and NOT derived from the method map: two interfaces sharing a
--- method name collapse to one entry in the (name-keyed) map, but BOTH must stay
--- registered here — matching the old full-List scan.  Maintained in lockstep at
--- the two mutation sites (registerMethodIfaceParamsMethods and resetState).
+-- ⚠️ #147 minted `PerRun.registeredIfacesRef` HERE — a cached SET of iface names with
+-- ≥1 method registered above, so `ifaceRegistered` was an O(log n) membership test
+-- instead of a full linear scan of the method table per operator/numeric-literal.
+-- #1539 deleted that reader, leaving the set write-only; #1569 removed the field
+-- itself — see `PerRun.registeredIfacesRef`'s retirement note for the full history.
 
 -- C5 (TYPECHECK-AUDIT / Phase 112): names that are BOTH an interface method AND a
 -- cross-module-imported standalone top-level function (e.g. box's `toList`/`isEmpty`
@@ -2490,14 +2488,18 @@ routeLocalSym _ = ""
 --     which left both refs write-only, and B-2.1-d deleted them with the accumulator line.
 --     Do not re-add one: a cumulative topological PREFIX is the wrong universe for that
 --     test — `SHADOW-SEMANTICS.md:183-186`.)--   • interface name → its REQUIRED-method names (checkImplCompleteness' ifaceRequiredMethods).
---     Interface names are globally unique, so last-write-wins omInsert == first-match scan.-- #154 PR2 adds two more of the same shape (site #3 — registerMethodIfaceParamsAll's
+--     Interface names are globally unique, so last-write-wins omInsert == first-match scan.-- #154 PR2 adds one more of the same shape (site #3 — registerMethodIfaceParamsAll's
 -- per-module rebuild over `fullUniverse`).  Same lifecycle: survive `resetState`, cleared
 -- by `resetCrossModuleState`, seeded by the core pass, appended in `appendUniverseAccums`,
--- and — because they are the two refs registerMethodIfaceParamsAll writes — COPIED into
--- methodIfaceParamsRef / registeredIfacesRef in the Module arm (which resetState wiped),
+-- and — because it is the ref registerMethodIfaceParamsAll writes — COPIED into
+-- methodIfaceParamsRef in the Module arm (which resetState wiped),
 -- exactly as PR1 used to copy universeKeyBucketsRef into shadowKeyTableRef (both deleted by
--- ARCH B-2.1-d; the SHAPE described here is this pair's, not theirs).  The Flat path still
--- rebuilds those two refs over its whole `prog`, so it never touches these accumulators.
+-- ARCH B-2.1-d; the SHAPE described here is this ref's, not theirs).  The Flat path still
+-- rebuilds that ref over its whole `prog`, so it never touches this accumulator.
+-- ⚠️ #154 PR2 originally added a SECOND ref of the same shape here — the SET of
+-- interface names with ≥1 method registered (`universeRegisteredIfacesRef`).  It was
+-- read only by `ifaceRegistered`'s `omHasKey` existence check; #1539 deleted that
+-- reader and #1569 deleted the ref itself — see its retirement note in `CrossRun`.
 --   • interface-method NAME → (iface name, iface typarams, declared method Ty).  Method
 --     🚨 #1111 A-2.5 (#1092): this bullet used to read "Method names are globally unique
 --     (coherence), so last-write-wins omInsert accumulates to the same map the per-module
@@ -2513,9 +2515,7 @@ routeLocalSym _ = ""
 --     the Module arm OVERLAYS this map, for the (normally zero) COLLIDED names only, with
 --     what each name resolves to in THIS module's scope (applyMethodScopeOverrides); every
 --     other name still takes the shared map unchanged.  Spellings the overlay does not
---     reach are open and derived, not a closed set — #1272 / #1275 / #1276.--   • the SET of interface names with ≥1 method registered.  Was read only by
---     ifaceRegistered's omHasKey existence check (core's Num/Eq/Ord are seeded on both
---     paths, so identical); #1539 deleted that reader and the set is now WRITE-ONLY.
+--     reach are open and derived, not a closed set — #1272 / #1275 / #1276.
 -- #154 PR3 (sites #6/#7): the PERSISTENT keyed impl universe for the obligation
 -- checkers (checkImplObligations / checkCallObligations).  The Module arm used to
 -- REBUILD `implDeclsWithReqs fullUniverse` + `implHeadsOf fullUniverse` (two flatMaps
@@ -6483,7 +6483,14 @@ data CrossRun = CrossRun {
     universeMethodIfaceParamsRef : Ref (OrdMap (IfaceRef, List String, Ty, List (String, List Kind))),
     universeMethodIdentsRef : Ref (OrdMap (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))))),  -- #1111 A-2.5 (#1092): the identity-keyed COMPANION of the line above — see methodIdentOf
     universeMethodCollidedRef : Ref (List String),  -- #1111 A-2.5: the method NAMES the line above holds ≥2 distinct identities for (normally EMPTY)
-    universeRegisteredIfacesRef : Ref (OrdMap Unit),  -- #1111 A-2.4: DELIBERATELY still bare-name — a Unit-valued NAME-membership set, see ifaceRegistered
+    -- ⚠️ `universeRegisteredIfacesRef` was HERE and is RETIRED by #1569.  It was a
+    -- `Unit`-valued NAME-membership set (#1111 A-2.4: DELIBERATELY bare-name, never
+    -- re-keyed — the reasoning is preserved in the `ifaceRegistered` history at
+    -- `builtinClassPresent`), the sibling of `PerRun.registeredIfacesRef` grown by
+    -- `appendUniverseAccums` and copied into the per-run ref on the Module arm.
+    -- #1539 deleted `ifaceRegistered`, its only reader, leaving both refs
+    -- write-only; #1569 removes the write side too.  Do not re-add either half
+    -- without a reader.
     universeMethodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),  -- #1351: the interface dispatch-index universe, keyed ((IfaceRef, method name), Int).  Its bare-name-keyed predecessor `universeMethodDispatchIdxRef` was RETIRED by L5 (CONTRACT) once `dispatchIdxScoped` stopped falling back to it — read via `methodDispatchIdxByIdRef`.
     universeRecordByName : Ref (OrdMap RecordInfo),
     universeRecordIdentsRef : Ref (OrdMap (List (Ident, String, RecordInfo))),  -- #1111 A-2.12 (#1319 unit 2): the identity-keyed COMPANION of the line above — see insertRecordIdents
@@ -6614,7 +6621,6 @@ freshCrossRun env = CrossRun {
   universeMethodIfaceParamsRef = Ref omEmpty,
   universeMethodIdentsRef = Ref omEmpty,
   universeMethodCollidedRef = Ref [],
-  universeRegisteredIfacesRef = Ref omEmpty,
   universeMethodDispatchIdxByIdRef = Ref [],
   universeRecordByName = Ref omEmpty,
   universeRecordIdentsRef = Ref omEmpty,
@@ -7391,7 +7397,8 @@ data PerRun = PerRun {
     pendingUnopSites : Ref (List PendingEntry),
     pendingArithSites : Ref (List (Ref Route, Mono)),
     methodIfaceParamsRef : Ref (OrdMap (IfaceRef, List String, Ty, List (String, List Kind))),
-    registeredIfacesRef : Ref (OrdMap Unit),
+    -- ⚠️ `registeredIfacesRef` was HERE and is RETIRED by #1569 — see the sibling
+    -- `CrossRun.universeRegisteredIfacesRef`'s retirement note for the history.
     implObls : Windowed UObligation,  -- #841: pendingImplObligations/N, ported onto Windowed; #991: onto UObligation
     numlitRefs : Ref (List (Mono, Ref (Option Float), Int, Ref Route)),  -- #991 ask 3, RULED: the numeric-literal channel STAYS BESPOKE — it is Float-DEFAULTING machinery (`setNumlitFloats`), not obligation checking, so it is deliberately NOT ported onto `UObligation` like `implObls` above was
     poisonedVars : Ref (List Int),
@@ -7501,7 +7508,6 @@ freshPerRun _ = PerRun {
   pendingUnopSites = Ref [],
   pendingArithSites = Ref [],
   methodIfaceParamsRef = Ref omEmpty,
-  registeredIfacesRef = Ref omEmpty,
   implObls = wNew (),
   numlitRefs = Ref [],
   poisonedVars = Ref [],
@@ -11526,7 +11532,9 @@ appendOp lt rt =
 -- duplicate) a user's class would be the thing that TRIGGERS the operator's obligation.
 -- That is the capture I7 qualification 4 forbids, reached through the gate rather than
 -- through the payload, and it is the same reason the payload half already refuses to
--- read that table (see `ifaceRegistered`'s ledger).
+-- read that table (see the `§8 I7` section below, and `PerRun.registeredIfacesRef`'s
+-- retirement note — #1569 removed the table itself once `ifaceRegistered` had no
+-- callers left).
 recordIfaceObligation : BuiltinClass -> Mono -> Unit
 recordIfaceObligation c lt
   | builtinClassPresent c = pushPendingObl (builtinIfaceRef c) ["a"] (TyVar "a") lt POperator !currentLoc
@@ -11732,106 +11740,6 @@ seedBuiltinClasses (Module mid _ _) prog =
     crossRun.value.builtinClassesRef := builtinClassesOf prog
   else
     ()
-
--- ── TOMBSTONE: `ifaceRegistered`, the RETIRED I7 gate (#147 → #1539) ────────────
--- 🪦 THE FUNCTION IS GONE; THIS LEDGER IS NOT, because every reason below is a reason
--- about `registeredIfacesRef` — which still exists — and because the route it argues
--- against is the one a later reader will re-propose.  `ifaceRegistered iface = omHasKey
--- iface perRun.value.registeredIfacesRef.value` was True iff `iface` had ≥1 method
--- registered from the `DInterface` decls (present once core.mdk is loaded); #147 made it
--- an O(log n) membership test in place of a full linear scan of the method table per
--- operator / numeric literal.  Its only three callers were the I7 GATES, and #1539 moved
--- all three to `builtinClassPresent` (above), leaving it unreachable — `rule-dead-code`
--- says delete an unreachable private binding, so it is deleted rather than kept warm.
---
--- ⚠️ `registeredIfacesRef` / `universeRegisteredIfacesRef` are consequently WRITE-ONLY
--- as of #1539: `registerMethodIfaceParamsMethods` and `insertIfaceMethodsAcc` still
--- populate them, the Module arm still copies the universe one into the per-run one, and
--- NOTHING reads either.  Retiring the table is deliberately NOT in #1539's diff — that
--- edits the `PerRun`/`CrossRun` layout and the `insertMethodIfaceParams` accumulator
--- type, which two other in-flight `typecheck.mdk` branches sit on top of — and is filed
--- as its own atom, **#1569**.  Derive the claim rather than trusting this note:
---   grep -n 'registeredIfacesRef' compiler/types/typecheck.mdk
--- every hit should be a write, an init, a field declaration, or a comment.
---
--- 🚨 `registeredIfacesRef` / `universeRegisteredIfacesRef` STAY BARE-NAME-KEYED,
--- and this is a DERIVED refusal, not a gap for a later reader to "finish".  Two
--- units reached it independently — A-2.4, whose brief listed this table as its
--- third target, and A-2.2b, which re-derived it rather than inheriting it — and
--- their two write-ups are UNIONED here rather than left as two records of one
--- fact that can drift apart.  Three reasons, in the order that decided it:
---
---   1. THE VALUE IS `Unit`.  Two modules declaring `Same` collapse to one entry
---      today, and collapsing changes NOTHING OBSERVABLE — there is no row to
---      select and no payload to get wrong.  Every other table this arc re-keys
---      answers WHICH declaration; this one answers only WHETHER one exists.  It is
---      the `tabHasName` / `noImplHint` shape A-2.3 established: a name-membership
---      predicate, not a lookup.
---   2. NO CALLER HAS AN ORIGIN TO KEY WITH.  All three call sites pass a LITERAL
---      prelude interface name — `recordIfaceObligation` (above: "Num"/"Eq"/"Ord"/
---      "Semigroup", from the operator handlers), `inferNumLit` ("Num") and
---      `checkOneCallObligation` ("Num").  These are synthetic occurrences with no
---      `Ty` and no decl behind them, so there is no `TyConOrigin` to read; an
---      identity-keyed set would have to hardcode `OriginModule "core"`, which
---      invents the very ambient module id `stampFlatTyOrigins`' own doc-comment
---      forbids.  With a `TkBare "Num"` key instead, the lookup would MISS the
---      prelude's `TkIdent … core` entry and `ifaceRegistered` would answer False
---      everywhere — silently switching every operator's obligation OFF.  No golden
---      moves, because a check that stops firing moves no output: the
---      `loud → silent` transition `AGENTS.md` grades as a severity INCREASE.
---   3. THE QUESTION IT GATES IS NAME-KEYED DOWNSTREAM ANYWAY.  What it gates is
---      `pushPendingObl (iface, …)`, and the whole obligation channel — the three
---      `ImplUniverse` buckets, written by `insertUnivImplAt` and reached on the
---      Module path through `ieUniverseAt` and on the Flat path through
---      `buildImplUniverse` — still indexes its interface half under the bare NAME
---      as well as the identity one.  ⚠️ ANCHOR: this named the three
---      `obUnivConcreteRef`/`obUnivHeadlessRef`/`obUnivIfaceTagsRef` accumulators
---      until #1112 A-3.4 PR2 DELETED them; the buckets and the property survived
---      the carriers, so re-read this on the value, not on the retired refs.  ⚠️ A-2.4's own draft of this
---      reason said that channel is keyed `"<iface>|<tag>"`, and that "when A-2.2
---      lands, this gate is worth revisiting THEN".  BOTH are now out of date, and
---      by A-2.2b's own doing: the string splice is gone, replaced by a structured
---      `RegKey` whose iface half is nevertheless a bare `TkBare NsIface` for the
---      reason derived at `oblIfaceKey`.  So the payload did move — and the gate
---      still cannot follow it, because the payload did not become identity-keyed.
---      Identity-keying the GATE while the PAYLOAD stays name-keyed is still a
---      half-migration.
---
--- ✅ #1446 (P1) SUPPLIED THE MISSING IDENTITY — BUT NOT BY RE-VALUING THIS TABLE,
--- AND THAT DISTINCTION IS THE POINT.  The paragraph that used to stand here said the
--- blocker was "a resolved identity for a SYNTHETIC interface occurrence" and routed
--- the reader to #1115.  `Predicate` now carries one (`iface : IfaceRef`), and the
--- synthetic occurrences get theirs from `builtinClassesRef` — a CLOSED four-member
--- enum populated only from the prelude's own `DInterface` decls (DICT-SEMANTICS §8
--- I7, ratified 2026-08-10).
---
--- 🚨 RE-VALUING THIS TABLE TO `OrdMap TyConOrigin` WAS THE OBVIOUS ROUTE AND IT IS
--- THE WRONG ONE.  Its population is written by `registerMethodIfaceParamsMethods`
--- for EVERY interface, prelude or user, so an identity-bearing VALUE here would let
--- a user `interface Num` both satisfy the gate and SUPPLY the origin — I7
--- qualification 4's capture, reached through the gate.  A closed enum makes that
--- unrepresentable.  So reasons (1) and (2) above stay TRUE OF THIS TABLE, and
--- reason (3) is discharged elsewhere rather than retracted: the payload IS now
--- identity-keyed, and the six operator/literal payload sites no longer read this
--- table for their interface — they read `builtinIfaceRef`.  What this table still
--- answers, and answers correctly by a bare name, is the PRESENCE question ("is the
--- prelude loaded at all"), which is why it is not a half-migration.
--- ✅ #1539 DRAINED THE RESIDUAL, AND IT DID SO BY DELETING THE READER RATHER THAN
--- RE-KEYING THE TABLE.  All THREE gate sites (`recordIfaceObligation`, `inferNumLit`,
--- `checkOneCallObligation`) now ask `builtinClassPresent`.  The paragraph that stood
--- here said switching them is behaviour-preserving only if `builtinClassesRef`'s
--- population and this table's agree in every reachable configuration, "which #1446 did
--- not measure".  #1539 MEASURED it, two ways: (a) `builtinClassesGo` was made to mirror
--- this table's sole writer decl-for-decl on the seed list (`≥1 method` — see its own
--- note), and (b) a disagreement tripwire compiled into the checker reported ZERO
--- disagreements at any of the three sites across the whole gate corpus.
---
--- 🚨 DO NOT "RESTORE" A PRELUDE-PRESENCE READER OVER THIS TABLE.  Asking it "is the
--- prelude loaded" is the I7 qualification 4 mistake: it is a bare-NAME membership test
--- over a table `registerMethodIfaceParamsMethods` writes for EVERY interface, prelude or
--- user, so a user `interface Num` satisfies it.  The presence question has a closed,
--- prelude-only answer now — `builtinClassPresent`.
--- ────────────────────────────────────────────────────────────────────────────────
 
 -- G2: arithmetic `+ - * / %` carry a `Num` obligation on their (unified) operand
 -- type — mirrors the oracle's `No impl of Num for <T>` reject (lib/typecheck.ml).
@@ -18442,13 +18350,19 @@ implCompletenessMsgsOfMap _ _ _ = []
 -- Its DAttrib-unwrapping is preserved too: `classEnvDeclFact` unwraps `DAttrib` on the
 -- way into `CE`, so an attributed interface decl still contributes a row.
 --
--- #154 PR2 (site #3): fold [prog]'s interface decls into the pair of accumulators that
--- feed methodIfaceParamsRef / registeredIfacesRef.  A PURE mirror of
--- registerMethodIfaceParamsAll (DAttrib-unwrap → per-method `omInsert mname (iface,
--- typarams, mty)` into the params map + `omInsert iface ()` into the registered-iface
--- set), updating the two passed maps in lockstep instead of the global refs, so the copy
--- in checkBodyImpl's Module arm lands the identical maps the per-module rebuild produced.
-insertMethodIfaceParams : List Decl -> (OrdMap (IfaceRef, List String, Ty, List (String, List Kind)), OrdMap Unit) -> (OrdMap (IfaceRef, List String, Ty, List (String, List Kind)), OrdMap Unit)
+-- #154 PR2 (site #3): fold [prog]'s interface decls into the accumulator that feeds
+-- methodIfaceParamsRef.  A PURE mirror of registerMethodIfaceParamsAll (DAttrib-unwrap
+-- → per-method `omInsert mname (iface, typarams, mty)` into the params map), updating
+-- the passed map instead of the global ref, so the copy in checkBodyImpl's Module arm
+-- lands the identical map the per-module rebuild produced.
+-- ⚠️ #1569 collapsed this from a PAIR (params map, registered-iface set) down to the
+-- one map — the registered-iface set (`insertIfaceMethodsAcc`'s `ifs` half) was the
+-- sibling `insertMethodIfaceParams rest (insertIfaceMethodsAcc … acc)`-threaded
+-- companion of `registeredIfacesRef`, and `#1539` had already removed its only reader.
+-- The pair-threading signature was pinned by the selfproc LEG A scheme golden (see
+-- `insertMethodIdents`'s own note below) — that golden is re-captured as part of this
+-- retirement, not a reason to keep the pair.
+insertMethodIfaceParams : List Decl -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
 insertMethodIfaceParams [] acc = acc
 insertMethodIfaceParams ((DAttrib _ d)::rest) acc =
   insertMethodIfaceParams rest (insertMethodIfaceParams [d] acc)
@@ -18457,12 +18371,12 @@ insertMethodIfaceParams ((DAttrib _ d)::rest) acc =
 insertMethodIfaceParams ((DInterface { name, typarams, methods, ifaceOrigin, ... })::rest) acc = insertMethodIfaceParams rest (insertIfaceMethodsAcc IfaceRef { irName = name, irOrigin = ifaceOrigin } typarams (declGradedScope typarams methods) methods acc)
 insertMethodIfaceParams (_::rest) acc = insertMethodIfaceParams rest acc
 
-insertIfaceMethodsAcc : IfaceRef -> List String -> List (String, List Kind) -> List IfaceMethod -> (OrdMap (IfaceRef, List String, Ty, List (String, List Kind)), OrdMap Unit) -> (OrdMap (IfaceRef, List String, Ty, List (String, List Kind)), OrdMap Unit)
+insertIfaceMethodsAcc : IfaceRef -> List String -> List (String, List Kind) -> List IfaceMethod -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind)) -> OrdMap (IfaceRef, List String, Ty, List (String, List Kind))
 insertIfaceMethodsAcc _ _ _ [] acc = acc
 -- #822: the graded scope is stored ALONGSIDE (typarams, mty) rather than in a table of
 -- its own, so the two are ONE resolution result and cannot be resolved differently —
 -- see registerMethodIfaceParamsMethods for why that is the load-bearing invariant.
-insertIfaceMethodsAcc iface typarams scope ((IfaceMethod mname mty _)::rest) (mp, ifs) = insertIfaceMethodsAcc iface typarams scope rest (omInsert mname (iface, typarams, mty, scope) mp, omInsert iface.irName () ifs)
+insertIfaceMethodsAcc iface typarams scope ((IfaceMethod mname mty _)::rest) mp = insertIfaceMethodsAcc iface typarams scope rest (omInsert mname (iface, typarams, mty, scope) mp)
 
 -- ── #1111 Stage A-2 unit A-2.5 (#1092): the METHOD-namespace identity companion ──
 -- The map above is keyed by the BARE method name and is last-write-wins, so when two
@@ -18520,9 +18434,11 @@ insertIfaceMethodsAcc iface typarams scope ((IfaceMethod mname mty _)::rest) (mp
 -- #1182 (same one-file two-interface collision, decided by impl-block order at dispatch).
 --
 -- A SEPARATE decl walk from `insertMethodIfaceParams` rather than a widened accumulator:
--- the pair-threading signature above is pinned by the selfproc LEG A scheme golden, and
--- the two walks are called from ONE place (`appendUniverseAccums`), which is what the
--- "lockstep" the pair comment asks for actually needs.
+-- `insertMethodIfaceParams`'s own threading signature is pinned by the selfproc LEG A
+-- scheme golden (⚠️ #1569 changed it from a pair to a single map — see its own note —
+-- and re-captured that golden as part of the same PR), and the two walks are called
+-- from ONE place (`appendUniverseAccums`), which is what the "lockstep" the pair
+-- comment below asks for actually needs.
 insertMethodIdents : List Decl -> (OrdMap (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))), List String) -> (OrdMap (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))), List String)
 insertMethodIdents [] acc = acc
 insertMethodIdents ((DAttrib _ d)::rest) acc =
@@ -23830,13 +23746,15 @@ checkBodyImpl seed mode prog0 =
       let _ = setRef perRun.value.importedSchemeOblsRef
         (omFromPairs (reverseL (importedSchemeOblEntries prog crossRun.value.crossModuleSchemeOblsQualRef.value)) omEmpty)
       ()
-  -- #11 soundness: the interface-method→iface-param map (+ the registered-iface set).
-  -- #154 PR2 (site #3): FLAT rebuilds both refs over its whole `fullUniverse` (already
-  -- O(N)); the Module path COPIES the persistent accumulators — grown one module at a
+  -- #11 soundness: the interface-method→iface-param map.  (⚠️ #1569 retired the
+  -- registered-iface set this comment used to describe as its sibling — see
+  -- `PerRun.registeredIfacesRef`'s retirement note.)
+  -- #154 PR2 (site #3): FLAT rebuilds this ref over its whole `fullUniverse` (already
+  -- O(N)); the Module path COPIES the persistent accumulator — grown one module at a
   -- time by `appendUniverseAccums prog0` above (which ran BEFORE this) and seeded by the
-  -- core pass — into the two refs resetState just wiped, exactly as PR1 used to copy
+  -- core pass — into the ref resetState just wiped, exactly as PR1 used to copy
   -- universeKeyBucketsRef into shadowKeyTableRef (both deleted by ARCH B-2.1-d; the
-  -- SHAPE described here is this pair's, not theirs).
+  -- SHAPE described here is this ref's, not theirs).
   -- 🚨 #1111 A-2.5: this comment used to end "Method/interface names are globally unique,
   -- so the accumulated maps carry the same entries the per-module rebuild over
   -- `fullUniverse` (= accData ++ implDecls ++ prog0) did for every name this module
@@ -23851,7 +23769,6 @@ checkBodyImpl seed mode prog0 =
     Flat _ => registerMethodIfaceParamsAll fullUniverse
     Module _ _ _ =>
       perRun.value.methodIfaceParamsRef := (aliasQualifiedMethodEntries prog (applyMethodScopeOverrides prog crossRun.value.universeMethodIfaceParamsRef.value))
-      perRun.value.registeredIfacesRef := crossRun.value.universeRegisteredIfacesRef.value
   -- #154 PR-A: the dominant remaining O(N²) in the multi-module typecheck.  The Module arm
   -- used to `registerAllData initialEnv (accData ++ prog0)` — re-registering (and re-minting
   -- the tyvars of) EVERY earlier module's public data ONCE PER MODULE.  Now: COPY the seven
@@ -27430,7 +27347,6 @@ registerMethodIfaceParamsMethods : IfaceRef -> List String -> List (String, List
 registerMethodIfaceParamsMethods _ _ _ [] = ()
 registerMethodIfaceParamsMethods iface typarams scope ((IfaceMethod mname mty _)::rest) =
   perRun.value.methodIfaceParamsRef := omInsert mname (iface, typarams, mty, scope) perRun.value.methodIfaceParamsRef.value
-  perRun.value.registeredIfacesRef := omInsert iface.irName () perRun.value.registeredIfacesRef.value
   registerMethodIfaceParamsMethods iface typarams scope rest
 
 -- build each method's scheme AND register its method-level constraints (foldMap's
@@ -30282,11 +30198,10 @@ appendUniverseAccums : List Decl -> Unit
 appendUniverseAccums prog =
   crossRun.value.universeIfaceMethodsRef := (namesToSet (allIfaceMethodNames prog) crossRun.value.universeIfaceMethodsRef.value)
   crossRun.value.universeFunNamesRef := (namesToSet (map fst (funDefs prog)) crossRun.value.universeFunNamesRef.value)
-  -- #154 PR2 (site #3): grow the methodIfaceParams / registeredIfaces accumulators by
-  -- THIS module's interfaces, in lockstep (one decl walk).
-  let acc = insertMethodIfaceParams prog (crossRun.value.universeMethodIfaceParamsRef.value, crossRun.value.universeRegisteredIfacesRef.value)
-  crossRun.value.universeMethodIfaceParamsRef := (fst acc)
-  crossRun.value.universeRegisteredIfacesRef := (snd acc)
+  -- #154 PR2 (site #3): grow the methodIfaceParams accumulator by THIS module's
+  -- interfaces.  (⚠️ #1569 retired the sibling `registeredIfaces` accumulator this
+  -- used to grow in lockstep — see `insertMethodIfaceParams`'s retirement note.)
+  crossRun.value.universeMethodIfaceParamsRef := insertMethodIfaceParams prog crossRun.value.universeMethodIfaceParamsRef.value
   -- #1111 A-2.5 (#1092): the identity-keyed companion of the map above, grown in the
   -- SAME place so the two cannot see different universes.  See insertMethodIdents.
   let identAcc = insertMethodIdents prog (crossRun.value.universeMethodIdentsRef.value, crossRun.value.universeMethodCollidedRef.value)
