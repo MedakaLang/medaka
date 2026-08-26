@@ -4106,7 +4106,7 @@ implGroups : Prog -> List CImplEntry -> List ImplG
 implGroups prog entries =
   mapGatherGroups prog entries (distinctImplKeys entries)
 
--- map gatherImplGroup (a <Mut> fn — it reads the iface-arity table) over the keys.
+-- map gatherImplGroup (an effectful fn — it reads the iface-arity table) over the keys.
 mapGatherGroups : Prog -> List CImplEntry -> List (String, String) -> List ImplG
 mapGatherGroups _ _ [] = []
 mapGatherGroups prog entries (k::rest) =

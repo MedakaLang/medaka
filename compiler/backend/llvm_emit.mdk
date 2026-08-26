@@ -6628,8 +6628,8 @@ groupImpls : Emit -> List CImplEntry -> List ImplGroup
 groupImpls e entries =
   mapMut (gatherGroup e entries) (distinctImplKeys entries [])
 
--- map a <Mut> function over a list (map is pure; gatherGroup now reads the method
--- arity table to eta-expand point-free impls, so the walk must be <Mut>).
+-- map an effectful function over a list (map is pure; gatherGroup now reads the method
+-- arity table to eta-expand point-free impls, so the walk must be effectful).
 mapMut : (a -> b) -> List a -> List b
 mapMut _ [] = []
 mapMut f (x::rest) = f x :: mapMut f rest

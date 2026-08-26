@@ -38,7 +38,7 @@
 --     carries a runtime witness (the `CMethod`/`CDict` dict above); a `<e>`
 --     effect row carries NONE.  Dispatch is type-head directed, not effect
 --     directed, so erasure cannot perturb a `Route`.  (Verified by equivalence:
---     a combinator instantiated at `<Mut>` and at the pure row evaluates
+--     a combinator instantiated at an effectful row and at the pure row evaluates
 --     identically across tree-walker / Core IR / bytecode VM — fixture
 --     `test/eval_fixtures/effect_poly.mdk`; the Core IR dump carries 0 effect
 --     tokens.)

@@ -12,9 +12,9 @@
 -- Byte-identical output proves the self-hosted TYPED multi-module eval correctly
 -- EXECUTES the typechecker stage of the compiler's own source.
 --
--- Scope note: typecheck.mdk uses Ref-based union-find mutation (the `<Mut>`
--- effect) and a larger primitive surface than the lexer/parser, so this leg
--- stresses the self-hosted eval's extern / <Mut> kernel rather than its
+-- Scope note: typecheck.mdk uses Ref-based union-find mutation and a larger
+-- primitive surface than the lexer/parser, so this leg
+-- stresses the self-hosted eval's extern / mutation kernel rather than its
 -- dispatch.  Unlike the lexer (Leg B, no return-position dispatch), the
 -- typechecker also threads return-position dispatch through its monadic surface,
 -- so it runs through the typed path (Leg C/D), not the untyped eval_modules path.
@@ -26,7 +26,7 @@ import types.typecheck.{checkToLines}
 -- A SELF-CONTAINED (prelude-free) Medaka snippet — checkToLines seeds no
 -- prelude, so every free name must be bound in the snippet itself (like the
 -- test/typecheck_fixtures).  Covers a broad cross-section of the constructs HM
--- inference threads through, so the self-hosted eval's <Mut> kernel (Ref-based
+-- inference threads through, so the self-hosted eval's mutation kernel (Ref-based
 -- union-find, the tyvar-id counter, level enter/exit) gets a real workout:
 --   * data + record decls, constructor schemes, record create/update/access;
 --   * a signature (sigToScheme), multi-clause match + patterns (tuple, ctor);

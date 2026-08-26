@@ -4409,7 +4409,7 @@ parse src =
 -- Position-populating parse entry for B.10.2b (LSP).  Sets the loc-state refs
 -- (src + token offsets) so the ELoc wrappers carry REAL line/col, then parses.
 -- Separate from `parse` (which stays pure / placeholder-loc) because `setRef`
--- is <Mut> and `parse` is called from pure contexts across the pipeline; the
+-- is effectful and `parse` is called from pure contexts across the pipeline; the
 -- token stream is byte-identical (`tokenizeWithOffsets` vs `tokenize`).
 export
 parseLocated : String -> List Decl
