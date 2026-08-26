@@ -1284,6 +1284,9 @@ methodEffRetOccs : List (String, List Kind) -> Ty -> List (String, List Atom)
 methodLevelConstraintSlots : List String -> Ty -> List (String, IfaceRef)
 methodLevelConstraintVarNames : List String -> Ty -> List String
 methodMembersOf : List String -> Loc -> List UseMember
+methodOccArgIdPairs : UObligation -> List (Int, String)
+methodOccArgIdPairsAt : String -> List String -> Ty -> Mono -> List (Int, String)
+methodOccArgPairs : Unit -> List (Int, String)
 methodRet : Ty -> Ty
 methodSchemes : List (String, List Kind) -> List String -> List IfaceMethod -> List (String, Scheme)
 methodSchemesPure : List (String, List Kind) -> List IfaceMethod -> List (String, Scheme)
@@ -1945,6 +1948,7 @@ vecOblKey : VecObl -> String
 vecOblOfPred : List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
 vecOblsOfSlotVecs : List (CSlot, List Mono) -> List VecObl
 vectorGoal : String -> List Mono -> Option (Mono, List Mono)
+wAll : Windowed a -> List a
 wMark : Windowed a -> Int
 wNew : Unit -> Windowed a
 wPush : Windowed a -> a -> Unit

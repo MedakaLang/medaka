@@ -5944,6 +5944,13 @@ wMark w = !w.n
 wWindow : Windowed a -> Int -> List a
 wWindow w mark = takeFirst (!w.n - mark) !w.items
 
+-- the WHOLE channel, newest-first, with no copy — the unwindowed read `wWindow w 0`
+-- performs (takeFirst n items).  For a per-binding reader of a module-wide channel
+-- (methodOccArgPairs) that copy is a quadratic; this is the same list wWindow would
+-- have rebuilt.
+wAll : Windowed a -> List a
+wAll w = !w.items
+
 -- for an error-rollback window (inferUserImplBodies): capture both refs together.
 wSnapshot : Windowed a -> (List a, Int)
 wSnapshot w = (!w.items, !w.n)
@@ -15163,11 +15170,16 @@ processLetGroup env binds =
   -- (the diagnostic names the interface); the method half carries no interface and
   -- contributes ids only.
   let dictPairs = dictForwardedPairs callN0 dictN0
-  let pinned = methodConstrainedIds () ++ map fst dictPairs
+  -- #2026: the method half is the UNION of the emit-path arg-stamp channel and the
+  -- entry-point-neutral obligation channel (see methodOccArgPairs), so `check` and
+  -- `build` reach the same pin decision instead of `check` silently generalizing what
+  -- the emit path pins.
+  let methodOccPairs = methodOccArgPairs ()
+  let pinned = methodConstrainedIds () ++ map fst methodOccPairs ++ map fst dictPairs
   -- Notes come from BOTH channels (methodConstrainedPairs is note-only and cannot
   -- change [pinned]); a where-helper is frequently pinned by the METHOD channel, and
   -- passing only the dict half left every such binding with no explanation.
-  let notePairs = methodConstrainedPairs () ++ dictPairs
+  let notePairs = methodConstrainedPairs () ++ methodOccPairs ++ dictPairs
   let genv = generalizeGroup env pinned notePairs (zipL binds placeholders)
   -- Round-2 adversarial break "let-alias evasion" (#816): a LOCAL constrained
   -- binding (`let f = hh` re-generalizing `hh : Num x => x -> x`) previously
@@ -15249,6 +15261,58 @@ methodConstrainedPairs _ =
 argStampPairs : PendingEntry -> List (Int, String)
 argStampPairs (PendingEntry name _ am _ _ _) =
   map (id => (id, fromOption "" (ifaceOfMethodName name))) (monoUnboundIds am)
+
+-- #2026: the ENTRY-POINT-NEUTRAL half of the method pin channel, and the reason this
+-- file now has one.  `methodConstrainedIds`/`-Pairs` above read `pendingArgStamps`,
+-- which `inferMethodAt` fills — and `EMethodAt` nodes are minted only by the MARK pass
+-- reached from `elaborateModules`, i.e. only on the run/build path.  `check` routes the
+-- SAME occurrences through `inferVarPlainId`, so that channel is EMPTY there and
+-- `processLetGroup` pinned a where-helper on the emit path while generalizing it on the
+-- check path: `check` greened programs `build` then rejected with no located diagnostic
+-- (#1812 class).  That is exactly the hazard `dictForwardedPairs`' ⚠️ note below says it
+-- reads TWO channels to avoid; the method channel had no second channel to read.
+--
+-- This is it.  BOTH entry points record a method occurrence's impl obligation —
+-- `recordMethodObligationGuarded` is called by `inferMethodAt` (emit) AND
+-- `inferVarPlainId` (check) — and an `OpMethodOcc` obligation carries the same triple
+-- `recordArgStamp` was handed: the method's typarams, its DECLARED type, and THIS
+-- occurrence's instantiated mono.  So the arg-stamp channel's own key is reconstructible
+-- from it without the mark pass: take the method's dispatch-argument index exactly as
+-- `argDispatchOfMethod` does (`firstDispatchIdx (dispatchTyparams typarams)` over
+-- `methodArgs`), then `nthArgMono` that index out of the occurrence mono — which is
+-- `argStampMono`'s definition, term for term.
+--
+-- UNIONED with, not substituted for, `methodConstrainedIds`: a few emit-path arg stamps
+-- have no obligation behind them (a standalone shadow short-circuits
+-- `recordImplObligation`; `inferDefinerShadowApp` stamps directly), so replacing would
+-- silently narrow the emit-path pin.  Duplicated ids are free — `recordPinnedLocals`
+-- dedups by tyvar id.
+--
+-- Read UNWINDOWED, like `methodConstrainedIds` and for the same reason: a helper's pin
+-- must see dispatch sites anywhere in the module, not only inside its own group's
+-- inference.  Hence `wAll` (no per-binding copy of the channel).
+methodOccArgPairs : Unit -> List (Int, String)
+methodOccArgPairs _ = flatMap methodOccArgIdPairs (wAll perRun.value.implObls)
+
+methodOccArgIdPairs : UObligation -> List (Int, String)
+methodOccArgIdPairs o = match o.prov
+  PMethodOcc => match o.oblProj
+    OpMethodOcc typarams mty occ =>
+      methodOccArgIdPairsAt o.pred.iface.irName typarams mty occ
+    OpProjected => []
+  _ => []
+
+-- the arg-position dispatch mono of one method occurrence, in `argStampPairs` shape.
+-- None from either step (a return-position method — no argument mentions the interface
+-- param — or an occurrence whose mono does not have that many arrows yet) contributes
+-- nothing, so a return-position occurrence never widens the pin beyond what the
+-- arg-stamp channel would have recorded on the emit path.
+methodOccArgIdPairsAt : String -> List String -> Ty -> Mono -> List (Int, String)
+methodOccArgIdPairsAt iface typarams mty occ = match firstDispatchIdx (dispatchTyparams typarams) 0 (methodArgs mty)
+  None => []
+  Some idx => match nthArgMono idx occ
+    None => []
+    Some am => map (id => (id, iface)) (monoUnboundIds am)
 
 -- #866 — a SIBLING of methodConstrainedIds above, NOT the same pin.  Both decline a
 -- local generalization for the same underlying reason, and the two sets are unioned by

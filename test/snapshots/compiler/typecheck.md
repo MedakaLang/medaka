@@ -1,5 +1,5 @@
 # META
-source_lines=34152
+source_lines=34216
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -5947,6 +5947,13 @@ wMark w = !w.n
 -- `takeFirst` recovers them in push order).
 wWindow : Windowed a -> Int -> List a
 wWindow w mark = takeFirst (!w.n - mark) !w.items
+
+-- the WHOLE channel, newest-first, with no copy — the unwindowed read `wWindow w 0`
+-- performs (takeFirst n items).  For a per-binding reader of a module-wide channel
+-- (methodOccArgPairs) that copy is a quadratic; this is the same list wWindow would
+-- have rebuilt.
+wAll : Windowed a -> List a
+wAll w = !w.items
 
 -- for an error-rollback window (inferUserImplBodies): capture both refs together.
 wSnapshot : Windowed a -> (List a, Int)
@@ -15167,11 +15174,16 @@ processLetGroup env binds =
   -- (the diagnostic names the interface); the method half carries no interface and
   -- contributes ids only.
   let dictPairs = dictForwardedPairs callN0 dictN0
-  let pinned = methodConstrainedIds () ++ map fst dictPairs
+  -- #2026: the method half is the UNION of the emit-path arg-stamp channel and the
+  -- entry-point-neutral obligation channel (see methodOccArgPairs), so `check` and
+  -- `build` reach the same pin decision instead of `check` silently generalizing what
+  -- the emit path pins.
+  let methodOccPairs = methodOccArgPairs ()
+  let pinned = methodConstrainedIds () ++ map fst methodOccPairs ++ map fst dictPairs
   -- Notes come from BOTH channels (methodConstrainedPairs is note-only and cannot
   -- change [pinned]); a where-helper is frequently pinned by the METHOD channel, and
   -- passing only the dict half left every such binding with no explanation.
-  let notePairs = methodConstrainedPairs () ++ dictPairs
+  let notePairs = methodConstrainedPairs () ++ methodOccPairs ++ dictPairs
   let genv = generalizeGroup env pinned notePairs (zipL binds placeholders)
   -- Round-2 adversarial break "let-alias evasion" (#816): a LOCAL constrained
   -- binding (`let f = hh` re-generalizing `hh : Num x => x -> x`) previously
@@ -15253,6 +15265,58 @@ methodConstrainedPairs _ =
 argStampPairs : PendingEntry -> List (Int, String)
 argStampPairs (PendingEntry name _ am _ _ _) =
   map (id => (id, fromOption "" (ifaceOfMethodName name))) (monoUnboundIds am)
+
+-- #2026: the ENTRY-POINT-NEUTRAL half of the method pin channel, and the reason this
+-- file now has one.  `methodConstrainedIds`/`-Pairs` above read `pendingArgStamps`,
+-- which `inferMethodAt` fills — and `EMethodAt` nodes are minted only by the MARK pass
+-- reached from `elaborateModules`, i.e. only on the run/build path.  `check` routes the
+-- SAME occurrences through `inferVarPlainId`, so that channel is EMPTY there and
+-- `processLetGroup` pinned a where-helper on the emit path while generalizing it on the
+-- check path: `check` greened programs `build` then rejected with no located diagnostic
+-- (#1812 class).  That is exactly the hazard `dictForwardedPairs`' ⚠️ note below says it
+-- reads TWO channels to avoid; the method channel had no second channel to read.
+--
+-- This is it.  BOTH entry points record a method occurrence's impl obligation —
+-- `recordMethodObligationGuarded` is called by `inferMethodAt` (emit) AND
+-- `inferVarPlainId` (check) — and an `OpMethodOcc` obligation carries the same triple
+-- `recordArgStamp` was handed: the method's typarams, its DECLARED type, and THIS
+-- occurrence's instantiated mono.  So the arg-stamp channel's own key is reconstructible
+-- from it without the mark pass: take the method's dispatch-argument index exactly as
+-- `argDispatchOfMethod` does (`firstDispatchIdx (dispatchTyparams typarams)` over
+-- `methodArgs`), then `nthArgMono` that index out of the occurrence mono — which is
+-- `argStampMono`'s definition, term for term.
+--
+-- UNIONED with, not substituted for, `methodConstrainedIds`: a few emit-path arg stamps
+-- have no obligation behind them (a standalone shadow short-circuits
+-- `recordImplObligation`; `inferDefinerShadowApp` stamps directly), so replacing would
+-- silently narrow the emit-path pin.  Duplicated ids are free — `recordPinnedLocals`
+-- dedups by tyvar id.
+--
+-- Read UNWINDOWED, like `methodConstrainedIds` and for the same reason: a helper's pin
+-- must see dispatch sites anywhere in the module, not only inside its own group's
+-- inference.  Hence `wAll` (no per-binding copy of the channel).
+methodOccArgPairs : Unit -> List (Int, String)
+methodOccArgPairs _ = flatMap methodOccArgIdPairs (wAll perRun.value.implObls)
+
+methodOccArgIdPairs : UObligation -> List (Int, String)
+methodOccArgIdPairs o = match o.prov
+  PMethodOcc => match o.oblProj
+    OpMethodOcc typarams mty occ =>
+      methodOccArgIdPairsAt o.pred.iface.irName typarams mty occ
+    OpProjected => []
+  _ => []
+
+-- the arg-position dispatch mono of one method occurrence, in `argStampPairs` shape.
+-- None from either step (a return-position method — no argument mentions the interface
+-- param — or an occurrence whose mono does not have that many arrows yet) contributes
+-- nothing, so a return-position occurrence never widens the pin beyond what the
+-- arg-stamp channel would have recorded on the emit path.
+methodOccArgIdPairsAt : String -> List String -> Ty -> Mono -> List (Int, String)
+methodOccArgIdPairsAt iface typarams mty occ = match firstDispatchIdx (dispatchTyparams typarams) 0 (methodArgs mty)
+  None => []
+  Some idx => match nthArgMono idx occ
+    None => []
+    Some am => map (id => (id, iface)) (monoUnboundIds am)
 
 -- #866 — a SIBLING of methodConstrainedIds above, NOT the same pin.  Both decline a
 -- local generalization for the same underlying reason, and the two sets are unioned by
@@ -35034,6 +35098,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "wMark" ((PVar "w")) (EUnOp "!" (EFieldAccess (EVar "w") "n")))
 (DTypeSig false "wWindow" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "wWindow" ((PVar "w") (PVar "mark")) (EApp (EApp (EVar "takeFirst") (EBinOp "-" (EUnOp "!" (EFieldAccess (EVar "w") "n")) (EVar "mark"))) (EUnOp "!" (EFieldAccess (EVar "w") "items"))))
+(DTypeSig false "wAll" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
+(DFunDef false "wAll" ((PVar "w")) (EUnOp "!" (EFieldAccess (EVar "w") "items")))
 (DTypeSig false "wSnapshot" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int"))))
 (DFunDef false "wSnapshot" ((PVar "w")) (ETuple (EUnOp "!" (EFieldAccess (EVar "w") "items")) (EUnOp "!" (EFieldAccess (EVar "w") "n"))))
 (DTypeSig false "wRestore" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyFun (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int")) (TyCon "Unit"))))
@@ -36708,7 +36774,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "groupNames" ((PList) PWild) (EListLit))
 (DFunDef false "groupNames" ((PCons (PTuple (PVar "n") PWild) (PVar "rest")) (PVar "seen")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "seen")) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "groupNames") (EVar "rest")) (EVar "seen"))) (arm (PCon "None") () (EBinOp "::" (EVar "n") (EApp (EApp (EVar "groupNames") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "seen")))))))
 (DTypeSig false "processLetGroup" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyCon "TcEnv"))))
-(DFunDef false "processLetGroup" ((PVar "env") (PVar "binds")) (EBlock (DoLet false false PWild (EApp (EVar "enterLevel") (ELit LUnit))) (DoLet false false (PVar "oblN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))) (DoLet false false (PVar "callN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls"))) (DoLet false false (PVar "dictN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictApps"))) (DoLet false false (PVar "placeholders") (EApp (EApp (EVar "map") (EVar "letBindPlaceholder")) (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "extendLocalVars") (EVar "env")) (EVar "placeholders"))) (DoLet false false PWild (EApp (EApp (EVar "inferLetBinds") (EVar "env2")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false PWild (EApp (EVar "exitLevel") (ELit LUnit))) (DoLet false false (PVar "addedObls") (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (EVar "oblN0"))) (DoLet false false PWild (EApp (EApp (EVar "defaultGroupNum") (EVar "addedObls")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false PWild (EApp (EApp (EVar "registerAmbiguousConstraints") (EVar "addedObls")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false (PVar "dictPairs") (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))) (DoLet false false (PVar "pinned") (EBinOp "++" (EApp (EVar "methodConstrainedIds") (ELit LUnit)) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "dictPairs")))) (DoLet false false (PVar "notePairs") (EBinOp "++" (EApp (EVar "methodConstrainedPairs") (ELit LUnit)) (EVar "dictPairs"))) (DoLet false false (PVar "genv") (EApp (EApp (EApp (EApp (EVar "generalizeGroup") (EVar "env")) (EVar "pinned")) (EVar "notePairs")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false (PVar "callOblsDelta") (EApp (EVar "callOblsWindow") (EVar "callN0"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "registerSchemeObligations") (EVar "omEmpty")) (EListLit)) (EVar "callOblsDelta")) (EVar "addedObls")) (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "binds")))) (DoExpr (EVar "genv"))))
+(DFunDef false "processLetGroup" ((PVar "env") (PVar "binds")) (EBlock (DoLet false false PWild (EApp (EVar "enterLevel") (ELit LUnit))) (DoLet false false (PVar "oblN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))) (DoLet false false (PVar "callN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls"))) (DoLet false false (PVar "dictN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictApps"))) (DoLet false false (PVar "placeholders") (EApp (EApp (EVar "map") (EVar "letBindPlaceholder")) (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "extendLocalVars") (EVar "env")) (EVar "placeholders"))) (DoLet false false PWild (EApp (EApp (EVar "inferLetBinds") (EVar "env2")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false PWild (EApp (EVar "exitLevel") (ELit LUnit))) (DoLet false false (PVar "addedObls") (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (EVar "oblN0"))) (DoLet false false PWild (EApp (EApp (EVar "defaultGroupNum") (EVar "addedObls")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false PWild (EApp (EApp (EVar "registerAmbiguousConstraints") (EVar "addedObls")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false (PVar "dictPairs") (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))) (DoLet false false (PVar "methodOccPairs") (EApp (EVar "methodOccArgPairs") (ELit LUnit))) (DoLet false false (PVar "pinned") (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedIds") (ELit LUnit)) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "methodOccPairs"))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "dictPairs")))) (DoLet false false (PVar "notePairs") (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedPairs") (ELit LUnit)) (EVar "methodOccPairs")) (EVar "dictPairs"))) (DoLet false false (PVar "genv") (EApp (EApp (EApp (EApp (EVar "generalizeGroup") (EVar "env")) (EVar "pinned")) (EVar "notePairs")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false (PVar "callOblsDelta") (EApp (EVar "callOblsWindow") (EVar "callN0"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "registerSchemeObligations") (EVar "omEmpty")) (EListLit)) (EVar "callOblsDelta")) (EVar "addedObls")) (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "binds")))) (DoExpr (EVar "genv"))))
 (DTypeSig false "groupSchemesOf" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))
 (DFunDef false "groupSchemesOf" (PWild (PList)) (EListLit))
 (DFunDef false "groupSchemesOf" ((PVar "genv") (PCons (PCon "LetBind" (PVar "name") PWild) (PVar "rest"))) (EMatch (EApp (EApp (EVar "lookupVar") (EVar "genv")) (EVar "name")) (arm (PCon "Some" (PVar "sch")) () (EBinOp "::" (ETuple (EVar "name") (EVar "sch")) (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "rest")))))
@@ -36727,6 +36793,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "methodConstrainedPairs" (PWild) (EApp (EApp (EVar "flatMap") (EVar "argStampPairs")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingArgStamps") "value")))
 (DTypeSig false "argStampPairs" (TyFun (TyCon "PendingEntry") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
 (DFunDef false "argStampPairs" ((PCon "PendingEntry" (PVar "name") PWild (PVar "am") PWild PWild PWild)) (EApp (EApp (EVar "map") (ELam ((PVar "id")) (ETuple (EVar "id") (EApp (EApp (EVar "fromOption") (ELit (LString ""))) (EApp (EVar "ifaceOfMethodName") (EVar "name")))))) (EApp (EVar "monoUnboundIds") (EVar "am"))))
+(DTypeSig false "methodOccArgPairs" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
+(DFunDef false "methodOccArgPairs" (PWild) (EApp (EApp (EVar "flatMap") (EVar "methodOccArgIdPairs")) (EApp (EVar "wAll") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))))
+(DTypeSig false "methodOccArgIdPairs" (TyFun (TyCon "UObligation") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
+(DFunDef false "methodOccArgIdPairs" ((PVar "o")) (EMatch (EFieldAccess (EVar "o") "prov") (arm (PCon "PMethodOcc") () (EMatch (EFieldAccess (EVar "o") "oblProj") (arm (PCon "OpMethodOcc" (PVar "typarams") (PVar "mty") (PVar "occ")) () (EApp (EApp (EApp (EApp (EVar "methodOccArgIdPairsAt") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface") "irName")) (EVar "typarams")) (EVar "mty")) (EVar "occ"))) (arm (PCon "OpProjected") () (EListLit)))) (arm PWild () (EListLit))))
+(DTypeSig false "methodOccArgIdPairsAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))))))
+(DFunDef false "methodOccArgIdPairsAt" ((PVar "iface") (PVar "typarams") (PVar "mty") (PVar "occ")) (EMatch (EApp (EApp (EApp (EVar "firstDispatchIdx") (EApp (EVar "dispatchTyparams") (EVar "typarams"))) (ELit (LInt 0))) (EApp (EVar "methodArgs") (EVar "mty"))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "idx")) () (EMatch (EApp (EApp (EVar "nthArgMono") (EVar "idx")) (EVar "occ")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "am")) () (EApp (EApp (EVar "map") (ELam ((PVar "id")) (ETuple (EVar "id") (EVar "iface")))) (EApp (EVar "monoUnboundIds") (EVar "am"))))))))
 (DTypeSig false "dictForwardedPairs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "dictForwardedPairs" ((PVar "callN0") (PVar "dictN0")) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "dictAppMonoIds")) (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictApps")) (EVar "dictN0"))) (EApp (EApp (EVar "flatMap") (EVar "callOblMonoIds")) (EApp (EVar "callOblsWindow") (EVar "callN0")))))
 (DTypeSig false "dictAppMonoIds" (TyFun (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
@@ -40516,6 +40588,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "wMark" ((PVar "w")) (EUnOp "!" (EFieldAccess (EVar "w") "n")))
 (DTypeSig false "wWindow" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "wWindow" ((PVar "w") (PVar "mark")) (EApp (EApp (EVar "takeFirst") (EBinOp "-" (EUnOp "!" (EFieldAccess (EVar "w") "n")) (EVar "mark"))) (EUnOp "!" (EFieldAccess (EVar "w") "items"))))
+(DTypeSig false "wAll" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
+(DFunDef false "wAll" ((PVar "w")) (EUnOp "!" (EFieldAccess (EVar "w") "items")))
 (DTypeSig false "wSnapshot" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int"))))
 (DFunDef false "wSnapshot" ((PVar "w")) (ETuple (EUnOp "!" (EFieldAccess (EVar "w") "items")) (EUnOp "!" (EFieldAccess (EVar "w") "n"))))
 (DTypeSig false "wRestore" (TyFun (TyApp (TyCon "Windowed") (TyVar "a")) (TyFun (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int")) (TyCon "Unit"))))
@@ -42190,7 +42264,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "groupNames" ((PList) PWild) (EListLit))
 (DFunDef false "groupNames" ((PCons (PTuple (PVar "n") PWild) (PVar "rest")) (PVar "seen")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "seen")) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "groupNames") (EVar "rest")) (EVar "seen"))) (arm (PCon "None") () (EBinOp "::" (EVar "n") (EApp (EApp (EVar "groupNames") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "seen")))))))
 (DTypeSig false "processLetGroup" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyCon "TcEnv"))))
-(DFunDef false "processLetGroup" ((PVar "env") (PVar "binds")) (EBlock (DoLet false false PWild (EApp (EVar "enterLevel") (ELit LUnit))) (DoLet false false (PVar "oblN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))) (DoLet false false (PVar "callN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls"))) (DoLet false false (PVar "dictN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictApps"))) (DoLet false false (PVar "placeholders") (EApp (EApp (EMethodRef "map") (EVar "letBindPlaceholder")) (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "extendLocalVars") (EVar "env")) (EVar "placeholders"))) (DoLet false false PWild (EApp (EApp (EVar "inferLetBinds") (EVar "env2")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false PWild (EApp (EVar "exitLevel") (ELit LUnit))) (DoLet false false (PVar "addedObls") (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (EVar "oblN0"))) (DoLet false false PWild (EApp (EApp (EVar "defaultGroupNum") (EVar "addedObls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false PWild (EApp (EApp (EVar "registerAmbiguousConstraints") (EVar "addedObls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false (PVar "dictPairs") (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))) (DoLet false false (PVar "pinned") (EBinOp "++" (EApp (EVar "methodConstrainedIds") (ELit LUnit)) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "dictPairs")))) (DoLet false false (PVar "notePairs") (EBinOp "++" (EApp (EVar "methodConstrainedPairs") (ELit LUnit)) (EVar "dictPairs"))) (DoLet false false (PVar "genv") (EApp (EApp (EApp (EApp (EVar "generalizeGroup") (EVar "env")) (EVar "pinned")) (EVar "notePairs")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false (PVar "callOblsDelta") (EApp (EVar "callOblsWindow") (EVar "callN0"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "registerSchemeObligations") (EVar "omEmpty")) (EListLit)) (EVar "callOblsDelta")) (EVar "addedObls")) (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "binds")))) (DoExpr (EVar "genv"))))
+(DFunDef false "processLetGroup" ((PVar "env") (PVar "binds")) (EBlock (DoLet false false PWild (EApp (EVar "enterLevel") (ELit LUnit))) (DoLet false false (PVar "oblN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))) (DoLet false false (PVar "callN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls"))) (DoLet false false (PVar "dictN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictApps"))) (DoLet false false (PVar "placeholders") (EApp (EApp (EMethodRef "map") (EVar "letBindPlaceholder")) (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "extendLocalVars") (EVar "env")) (EVar "placeholders"))) (DoLet false false PWild (EApp (EApp (EVar "inferLetBinds") (EVar "env2")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false PWild (EApp (EVar "exitLevel") (ELit LUnit))) (DoLet false false (PVar "addedObls") (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (EVar "oblN0"))) (DoLet false false PWild (EApp (EApp (EVar "defaultGroupNum") (EVar "addedObls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false PWild (EApp (EApp (EVar "registerAmbiguousConstraints") (EVar "addedObls")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "schemeMono") (EApp (EVar "snd") (EVar "p"))))) (EVar "placeholders")))) (DoLet false false (PVar "dictPairs") (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))) (DoLet false false (PVar "methodOccPairs") (EApp (EVar "methodOccArgPairs") (ELit LUnit))) (DoLet false false (PVar "pinned") (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedIds") (ELit LUnit)) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "methodOccPairs"))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "dictPairs")))) (DoLet false false (PVar "notePairs") (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedPairs") (ELit LUnit)) (EVar "methodOccPairs")) (EVar "dictPairs"))) (DoLet false false (PVar "genv") (EApp (EApp (EApp (EApp (EVar "generalizeGroup") (EVar "env")) (EVar "pinned")) (EVar "notePairs")) (EApp (EApp (EVar "zipL") (EVar "binds")) (EVar "placeholders")))) (DoLet false false (PVar "callOblsDelta") (EApp (EVar "callOblsWindow") (EVar "callN0"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "registerSchemeObligations") (EVar "omEmpty")) (EListLit)) (EVar "callOblsDelta")) (EVar "addedObls")) (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "binds")))) (DoExpr (EVar "genv"))))
 (DTypeSig false "groupSchemesOf" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))
 (DFunDef false "groupSchemesOf" (PWild (PList)) (EListLit))
 (DFunDef false "groupSchemesOf" ((PVar "genv") (PCons (PCon "LetBind" (PVar "name") PWild) (PVar "rest"))) (EMatch (EApp (EApp (EVar "lookupVar") (EVar "genv")) (EVar "name")) (arm (PCon "Some" (PVar "sch")) () (EBinOp "::" (ETuple (EVar "name") (EVar "sch")) (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "groupSchemesOf") (EVar "genv")) (EVar "rest")))))
@@ -42209,6 +42283,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "methodConstrainedPairs" (PWild) (EApp (EApp (EDictApp "flatMap") (EVar "argStampPairs")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "pendingArgStamps") "value")))
 (DTypeSig false "argStampPairs" (TyFun (TyCon "PendingEntry") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
 (DFunDef false "argStampPairs" ((PCon "PendingEntry" (PVar "name") PWild (PVar "am") PWild PWild PWild)) (EApp (EApp (EMethodRef "map") (ELam ((PVar "id")) (ETuple (EVar "id") (EApp (EApp (EVar "fromOption") (ELit (LString ""))) (EApp (EVar "ifaceOfMethodName") (EVar "name")))))) (EApp (EVar "monoUnboundIds") (EVar "am"))))
+(DTypeSig false "methodOccArgPairs" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
+(DFunDef false "methodOccArgPairs" (PWild) (EApp (EApp (EDictApp "flatMap") (EVar "methodOccArgIdPairs")) (EApp (EVar "wAll") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))))
+(DTypeSig false "methodOccArgIdPairs" (TyFun (TyCon "UObligation") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
+(DFunDef false "methodOccArgIdPairs" ((PVar "o")) (EMatch (EFieldAccess (EVar "o") "prov") (arm (PCon "PMethodOcc") () (EMatch (EFieldAccess (EVar "o") "oblProj") (arm (PCon "OpMethodOcc" (PVar "typarams") (PVar "mty") (PVar "occ")) () (EApp (EApp (EApp (EApp (EVar "methodOccArgIdPairsAt") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface") "irName")) (EVar "typarams")) (EVar "mty")) (EVar "occ"))) (arm (PCon "OpProjected") () (EListLit)))) (arm PWild () (EListLit))))
+(DTypeSig false "methodOccArgIdPairsAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))))))
+(DFunDef false "methodOccArgIdPairsAt" ((PVar "iface") (PVar "typarams") (PVar "mty") (PVar "occ")) (EMatch (EApp (EApp (EApp (EVar "firstDispatchIdx") (EApp (EVar "dispatchTyparams") (EVar "typarams"))) (ELit (LInt 0))) (EApp (EVar "methodArgs") (EVar "mty"))) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "idx")) () (EMatch (EApp (EApp (EVar "nthArgMono") (EVar "idx")) (EVar "occ")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "am")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "id")) (ETuple (EVar "id") (EVar "iface")))) (EApp (EVar "monoUnboundIds") (EVar "am"))))))))
 (DTypeSig false "dictForwardedPairs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))))
 (DFunDef false "dictForwardedPairs" ((PVar "callN0") (PVar "dictN0")) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "dictAppMonoIds")) (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dictApps")) (EVar "dictN0"))) (EApp (EApp (EDictApp "flatMap") (EVar "callOblMonoIds")) (EApp (EVar "callOblsWindow") (EVar "callN0")))))
 (DTypeSig false "dictAppMonoIds" (TyFun (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
