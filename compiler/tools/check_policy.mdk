@@ -7,8 +7,8 @@
 --   1. parse + desugar the file;
 --   2. build a call graph (name → set of called top-level names) from the
 --      DESUGARED AST (conservative EVar collection, like collect_evars);
---   3. typecheck single-file (checkProgramSchemesWithRuntime, the same path
---      doc.mdk uses) for inferred schemes;
+--   3. typecheck single-module (checkOneScheme, the Module-arm analogue of the
+--      single-file path doc.mdk used to use) for inferred schemes;
 --   4. read each fn's inferred effect row → its concrete labels
 --      (effrowLabels/atomLabel — the native analog of OCaml's effrow_labels);
 --   5. policy compare: a label is forbidden iff it is NOT in the policy set
@@ -47,7 +47,7 @@ import types.typecheck.{
   EffRow(..),
   Atom(..),
   Param(..),
-  checkProgramSchemesWithRuntime,
+  checkOneScheme,
   normalize,
   tupleSpine,
   effrowLabels,
@@ -522,7 +522,12 @@ runCheckPolicy rtSrc coreSrc src allowStr fnName =
   let rtD = desugar (parse rtSrc)
   let coreD = desugar (parse coreSrc)
   let callGraph = buildCallGraph userD
-  let schemes = checkProgramSchemesWithRuntime rtD coreD userD
+  -- Per-name lookup only (fnEffectsTable -> lookupAssoc, restricted to names
+  -- buildCallGraph's `tops` already draws from userD) — never a full-
+  -- environment enumeration, so checkOneScheme's Module-arm omission of
+  -- prelude schemes (the lsp.mdk gap S-migrate-tool-consumers found) is inert
+  -- here (S-migrate-tool-consumers-remainder).
+  let schemes = checkOneScheme rtD coreD ("__user__", userD)
   let effTable = fnEffectsTable schemes
   let fnEffects = match lookupAssoc fnName effTable
     None => []
@@ -655,7 +660,12 @@ runManifest rtSrc coreSrc src fnName =
   let userD = desugar rawUser
   let rtD = desugar (parse rtSrc)
   let coreD = desugar (parse coreSrc)
-  let schemes = checkProgramSchemesWithRuntime rtD coreD userD
+  -- Per-name lookup only (fnEffectsTable -> lookupAssoc, restricted to names
+  -- buildCallGraph's `tops` already draws from userD) — never a full-
+  -- environment enumeration, so checkOneScheme's Module-arm omission of
+  -- prelude schemes (the lsp.mdk gap S-migrate-tool-consumers found) is inert
+  -- here (S-migrate-tool-consumers-remainder).
+  let schemes = checkOneScheme rtD coreD ("__user__", userD)
   let effTable = fnEffectsTable schemes
   let fnEffects = match lookupAssoc fnName effTable
     None => []
@@ -703,7 +713,12 @@ runManifestAtoms rtSrc coreSrc src fnName =
   let userD = desugar rawUser
   let rtD = desugar (parse rtSrc)
   let coreD = desugar (parse coreSrc)
-  let schemes = checkProgramSchemesWithRuntime rtD coreD userD
+  -- Per-name lookup only (fnEffectsTable -> lookupAssoc, restricted to names
+  -- buildCallGraph's `tops` already draws from userD) — never a full-
+  -- environment enumeration, so checkOneScheme's Module-arm omission of
+  -- prelude schemes (the lsp.mdk gap S-migrate-tool-consumers found) is inert
+  -- here (S-migrate-tool-consumers-remainder).
+  let schemes = checkOneScheme rtD coreD ("__user__", userD)
   let effTable = fnEffectsTable schemes
   let fnEffects = match lookupAssoc fnName effTable
     None => []
