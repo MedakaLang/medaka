@@ -1,5 +1,5 @@
 # META
-source_lines=34152
+source_lines=34187
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -33200,6 +33200,41 @@ checkModulesEntryHasErrors runtimeDecls coreDecls modules =
     [] => False
     _ => True
 
+-- ── ONE-MODULE Module-arm wrapper (S-check-one-wrapper, E-1 #1115) ─────────
+-- The scheme/diagnostic-tree analogue of `elaborateOne` (above): runs a SINGLE
+-- program through the `Module` arm as a degenerate one-entry module list, the
+-- same way `elaborateOne` runs it through `elaborateModules`.  `checkModulesEntryFull`
+-- is the Diags-returning whole-graph driver `elaborateModules` mirrors on the
+-- scheme/diagnostic tree (see the file-header "TWO DRIVERS" note and
+-- `checkModulesPreamble`'s per-entry doc) — it already performs BOTH halves of the
+-- two-part safety property a standalone `Module`-arm caller must uphold
+-- (`resetCrossModuleState` AND the unconditional `graphMethodExportsRef`/
+-- `graphIfaceMethodsRef`/`graphCtorExportsRef`/`mangledFunDefsPresentRef`/`declEnvsRef`
+-- overwrites — see `checkModuleFullDiags`'s header comment just above its `export`).
+-- Delegating to it (rather than hand-assembling a bare `checkModuleFullDiags` call
+-- with an invented module id / degenerate accData/implDecls) gets that property for
+-- free and needs no "empty module id" convention of its own — `foldModules`'s own
+-- singleton-list clause (`[(mid, prog)]`) already IS the degenerate one-entry case,
+-- run through the identical preamble every N-module call gets.  `rootId` names the
+-- program's own module id (analogous to `elaborateOne`'s `rootId`); `checkModulesEntryFull`
+-- has previously only been reached with 2+-module graphs (`checkModulesEntryReport`/
+-- `checkModulesEntryHasErrors`, both import-bearing-only per its own header comment) —
+-- this is its first 1-module caller.
+export
+checkOneScheme : List Decl -> List Decl -> (String, List Decl) -> List (String, Scheme)
+checkOneScheme runtimeDecls coreDecls (rootId, prog) =
+  let (schemes, _, _) = checkModulesEntryFull runtimeDecls coreDecls [(rootId, prog)]
+  schemes
+
+-- diagnostics-returning sibling of `checkOneScheme`, matching `checkProgramDiags`'s
+-- return shape (`(errs, warns)`) exactly, so a call site can swap targets with no
+-- shape change (this slice's own acceptance bar — see the packet).
+export
+checkOneDiags : List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
+checkOneDiags runtimeDecls coreDecls (rootId, prog) =
+  let (_, errs, warns) = checkModulesEntryFull runtimeDecls coreDecls [(rootId, prog)]
+  (errs, warns)
+
 -- run the multi-module front-end and render the ENTRY module's own bindings as
 -- `name : scheme` per line (the harness sorts) — diffs vs dev/tc_module_probe.
 export
@@ -39545,6 +39580,10 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkModulesEntryReport" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EApp (EVar "joinNl") (EBinOp "++" (EApp (EVar "schemeLines") (EVar "schemes")) (EApp (EApp (EVar "map") (EVar "tcMsg")) (EVar "warns"))))) (arm PWild () (EApp (EVar "joinNl") (EApp (EVar "typeErrorLines") (EApp (EApp (EVar "map") (EVar "tcMsg")) (EVar "errs")))))))))
 (DTypeSig true "checkModulesEntryHasErrors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))))
 (DFunDef false "checkModulesEntryHasErrors" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple PWild (PVar "errs") PWild) (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))))
+(DTypeSig true "checkOneScheme" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
+(DFunDef false "checkOneScheme" ((PVar "runtimeDecls") (PVar "coreDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EBlock (DoLet false false (PTuple (PVar "schemes") PWild PWild) (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog"))))) (DoExpr (EVar "schemes"))))
+(DTypeSig true "checkOneDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))
+(DFunDef false "checkOneDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EBlock (DoLet false false (PTuple PWild (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog"))))) (DoExpr (ETuple (EVar "errs") (EVar "warns")))))
 (DTypeSig true "checkModulesEntryLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
 (DFunDef false "checkModulesEntryLines" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EApp (EVar "joinNl") (EApp (EVar "schemeLines") (EApp (EVar "entryOwnSchemes") (EApp (EApp (EApp (EVar "checkModules") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))))))
 (DTypeSig true "checkModulesAllLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
@@ -45027,6 +45066,10 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkModulesEntryReport" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EApp (EVar "joinNl") (EBinOp "++" (EApp (EVar "schemeLines") (EVar "schemes")) (EApp (EApp (EMethodRef "map") (EVar "tcMsg")) (EVar "warns"))))) (arm PWild () (EApp (EVar "joinNl") (EApp (EVar "typeErrorLines") (EApp (EApp (EMethodRef "map") (EVar "tcMsg")) (EVar "errs")))))))))
 (DTypeSig true "checkModulesEntryHasErrors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))))
 (DFunDef false "checkModulesEntryHasErrors" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple PWild (PVar "errs") PWild) (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))))
+(DTypeSig true "checkOneScheme" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
+(DFunDef false "checkOneScheme" ((PVar "runtimeDecls") (PVar "coreDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EBlock (DoLet false false (PTuple (PVar "schemes") PWild PWild) (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog"))))) (DoExpr (EVar "schemes"))))
+(DTypeSig true "checkOneDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))
+(DFunDef false "checkOneDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EBlock (DoLet false false (PTuple PWild (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog"))))) (DoExpr (ETuple (EVar "errs") (EVar "warns")))))
 (DTypeSig true "checkModulesEntryLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
 (DFunDef false "checkModulesEntryLines" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EApp (EVar "joinNl") (EApp (EVar "schemeLines") (EApp (EVar "entryOwnSchemes") (EApp (EApp (EApp (EVar "checkModules") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))))))
 (DTypeSig true "checkModulesAllLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))

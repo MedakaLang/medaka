@@ -448,6 +448,82 @@ for case in cond_impl_third_module all_visible no_impl_anywhere user_iface_dispa
   fi
 done
 
+# ── THIRD ARM: the new scheme/diagnostic-tree one-module wrapper ─────────────
+# S-check-one-wrapper (E-1 #1115): `checkOneDiags` (compiler/types/typecheck.mdk)
+# is the Module-arm analogue of `elaborateOne` on the SCHEME/DIAGNOSTIC tree — it
+# has no CLI verb reaching it yet (this slice lands it unused), so it is exercised
+# here via a dedicated committed probe (`compiler/entries/check_one_diags_main.mdk`,
+# built as `test/bin/check_one_diags_main`). Unlike the MODULE arm's rows above,
+# this wrapper takes exactly ONE (rootId, prog) — no import graph — so it is graded
+# only against the FLAT arm's own SINGLE-FILE fixtures (the ones already written
+# into $WORK above), reusing their expected (verdict, code) columns rather than
+# introducing a second corpus. A genuinely single-file program has no cross-module
+# concept to diverge on (class (3)/(2) in the census don't apply — there is only
+# one module), so agreement with FLAT is the expected result on 8 of 9 rows.
+#
+# 🚨 MEASURED EXCEPTION, not silently papered over: `iface_default_requires_closure`
+# diverges even here (no file split at all) — `checkModulesEntryFull`'s `foldModules`
+# singleton clause calls its worker with `accAll` = the INITIAL value the caller
+# passed (`coreDecls` — see `checkModulesEntryFull`'s call), never `accAll ++ prog`;
+# that append only happens for the RECURSIVE (2+-module) clause. So even a true
+# 1-module graph's own `implDecls` (`checkModuleFullImpl`'s `Module _ _ implDecls`,
+# `groundUniverse` at :23549 — a census-classified BEHAVIORAL branch) excludes the
+# module's OWN decls, and `Fancy`'s own `requires Basic t` default-method-rigidity
+# closure can't see `Basic` — the exact false-reject the census found on the SPLIT
+# (`c6m/main.mdk`) case, now shown to be about `checkModulesEntryFull`'s own
+# implDecls plumbing, not specifically about file-splitting. Expected here as
+# REJECT/T-IMPL-TOO-SPECIFIC (the row below), matching the MODULE arm's own
+# already-CHAR'd verdict on this defect above — not graded against FLAT's ACCEPT.
+# Any OTHER row disagreeing is a finding this slice's packet did not anticipate.
+ONE_BIN="$ROOT/test/bin/check_one_diags_main"
+if [ ! -x "$ONE_BIN" ]; then
+  echo "build oracles first: FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one check_one_diags_main (missing $ONE_BIN)"
+  exit 2
+fi
+RTFILE="$ROOT/stdlib/runtime.mdk"
+COREFILE="$ROOT/stdlib/core.mdk"
+
+ONE_ROWS="
+cond_impl_third_module|flat_nest_first|c1fa/flat.mdk|ACCEPT|-
+cond_impl_third_module|flat_impl_first|c1fb/flat.mdk|ACCEPT|-
+all_visible|flat|c2f/flat.mdk|ACCEPT|-
+no_impl_anywhere|flat|c3f/flat.mdk|REJECT|T-NO-IMPL
+user_iface_dispatch|p1_concrete_hit|c4/p1.mdk|ACCEPT|-
+user_iface_dispatch|p3_no_impl|c4/p3.mdk|REJECT|T-NO-IMPL
+user_iface_undetermined|p5_two_impls|c5/p5.mdk|REJECT|T-AMBIGUOUS-INSTANCE
+user_iface_undetermined|p6_one_impl|c5/p6.mdk|ACCEPT|-
+iface_default_requires_closure|flat|c6f/flat.mdk|REJECT|T-IMPL-TOO-SPECIFIC
+"
+printf -- '--- ONE arm (checkOneDiags) vs the FLAT rows above -------------------------------------------------\n'
+printf '%-30s %-16s %-8s %s\n' CASE ROW VERDICT CODE
+IFS='
+'
+for row in $ONE_ROWS; do
+  [ -n "$row" ] || continue
+  case="$(printf '%s' "$row" | cut -d'|' -f1)"
+  label="$(printf '%s' "$row" | cut -d'|' -f2)"
+  rel="$(printf '%s' "$row" | cut -d'|' -f3)"
+  wantverdict="$(printf '%s' "$row" | cut -d'|' -f4)"
+  wantcode="$(printf '%s' "$row" | cut -d'|' -f5)"
+  f="$WORK/$rel"
+  checked=$((checked + 1))
+
+  out="$(run_t "$LIMIT" "$ONE_BIN" "$RTFILE" "$COREFILE" "$f" 2>"$WORK/.oneerr")"
+  gotverdict="$(printf '%s\n' "$out" | sed -n '1p')"
+  gotcode="$(printf '%s\n' "$out" | sed -n '2p')"
+
+  printf '%-30s %-16s %-8s %s\n' "$case" "$label" "$gotverdict" "$gotcode"
+
+  if [ "$gotverdict" != "$wantverdict" ]; then
+    printf '    FAIL: ONE arm diverges from FLAT — FLAT %s, ONE %s (case %s, row %s) — check the census (reports/S-flat-reacher-census.md) for whether this is a classified BEHAVIORAL branch before treating it as a bug\n' "$wantverdict" "$gotverdict" "$case" "$label"
+    fails=$((fails + 1))
+  elif [ "$gotcode" != "$wantcode" ]; then
+    printf '    FAIL: ONE arm agrees on verdict but not code — FLAT %s, ONE %s (case %s, row %s)\n' "$wantcode" "$gotcode" "$case" "$label"
+    fails=$((fails + 1))
+  fi
+done
+unset IFS
+
 # "this didn't run" must never look like "this passed".
 if [ "$checked" -eq 0 ]; then
   echo "FAIL: checked 0 rows"
