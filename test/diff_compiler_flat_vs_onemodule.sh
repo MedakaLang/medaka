@@ -252,6 +252,38 @@ printf '%s\n\npublic export data Other = Other Int\n\nmain = println (sizeOf (Ot
 printf '%s\n\n%s\n\nmain = println (sizeOf (make 3))\n' "$SIZER_MK" "$SIZER_MK_OTHER" > "$WORK/c5/p5.mdk"
 printf '%s\n\nmain = println (sizeOf (make 3))\n' "$SIZER_MK" > "$WORK/c5/p6.mdk"
 
+# ── case iface_default_requires_closure (S-flat-reacher-census finding) ──────
+# A superclass-default-method shape: `Fancy t requires Basic t` with a default
+# body for `describe` that calls the superclass method `label`.  The default
+# body's use of `label` is entailed by Fancy's OWN `requires Basic t` — no
+# method-level `=>` needed.  Discovered live (no source stub) while auditing
+# `groundUniverse`/class(1): on FLAT, the interface module's own decl universe
+# IS the whole `prog`, so the requires-closure lookup sees both interfaces; on
+# MODULE, a module declaring ONLY interfaces (no impl blocks) has
+# `implDecls = []`, and if the requires-closure derivation for default-method
+# rigidity is scoped to that empty universe, the closure comes back empty and
+# the (correct, self-entailed) default body is rejected as under-constrained.
+# Filed for triage by the orchestrator (no issue number yet — this census did
+# not file it, per this slice's site list).
+IFACE_DEFAULT_DECLS='public export data Box = Box Int
+
+export interface Basic t where
+  label : t -> String
+
+export interface Fancy t requires Basic t where
+  describe : t -> String
+  describe x = "fancy:\{label x}"'
+IFACE_DEFAULT_IMPL='export impl Basic Box where
+  label (Box n) = "box\{n}"
+
+export impl Fancy Box where'
+IFACE_DEFAULT_MAIN='main = println (describe (Box 7))'
+mkdir -p "$WORK/c6f" "$WORK/c6m"
+printf '%s\n\n%s\n\n%s\n' "$IFACE_DEFAULT_DECLS" "$IFACE_DEFAULT_IMPL" "$IFACE_DEFAULT_MAIN" > "$WORK/c6f/flat.mdk"
+printf '%s\n' "$IFACE_DEFAULT_DECLS" > "$WORK/c6m/iface.mdk"
+printf 'import iface.{Box, Basic, Fancy, label, describe}\n\n%s\n\n%s\n' \
+  "$IFACE_DEFAULT_IMPL" "$IFACE_DEFAULT_MAIN" > "$WORK/c6m/main.mdk"
+
 # ── the rows ──────────────────────────────────────────────────────────────────
 # case | label | path | arm | mode | correct | today | code | value
 #   mode PIN  : `correct` is asserted; `today` is ignored (written as the same).
@@ -260,6 +292,11 @@ printf '%s\n\nmain = println (sizeOf (make 3))\n' "$SIZER_MK" > "$WORK/c5/p6.mdk
 #               is named in the DRAIN NOTICE.
 #   value     : expected stdout of `medaka run` when the verdict is ACCEPT ('-'
 #               when the program is expected to be rejected).
+#   issue     : (10th column, optional) per-row issue handle for the DRAIN
+#               NOTICE / "still live" text — defaults to $CHAR_ISSUE when a row
+#               omits it (every pre-existing row cites #1564; a row added later
+#               for a DIFFERENT known defect names its own handle instead of
+#               overloading #1564's).
 ROWS="
 cond_impl_third_module|flat_nest_first|c1fa/flat.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|wrap(int)
 cond_impl_third_module|flat_impl_first|c1fb/flat.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|wrap(int)
@@ -274,6 +311,8 @@ user_iface_dispatch|p1_concrete_hit|c4/p1.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|7
 user_iface_dispatch|p3_no_impl|c4/p3.mdk|FLAT|PIN|REJECT|REJECT|T-NO-IMPL|-
 user_iface_undetermined|p5_two_impls|c5/p5.mdk|FLAT|PIN|REJECT|REJECT|T-AMBIGUOUS-INSTANCE|-
 user_iface_undetermined|p6_one_impl|c5/p6.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|3
+iface_default_requires_closure|flat|c6f/flat.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|fancy:box7
+iface_default_requires_closure|module|c6m/main.mdk|MODULE|CHAR|ACCEPT|REJECT|T-IMPL-TOO-SPECIFIC|fancy:box7|S-flat-reacher-census-finding-1(needs-issue)
 "
 CHAR_ISSUE=1564
 
@@ -301,6 +340,8 @@ for row in $ROWS; do
   today="$(printf '%s' "$row" | cut -d'|' -f7)"
   wantcode="$(printf '%s' "$row" | cut -d'|' -f8)"
   wantval="$(printf '%s' "$row" | cut -d'|' -f9)"
+  rowissue="$(printf '%s' "$row" | cut -d'|' -f10)"
+  [ -n "$rowissue" ] || rowissue="$CHAR_ISSUE"
   f="$WORK/$rel"
   checked=$((checked + 1))
 
@@ -360,7 +401,7 @@ for row in $ROWS; do
         note="FAIL: characterized as $today/$wantcode, got $today/$gotcode — a DIFFERENT defect, not the pinned one"
         fails=$((fails + 1))
       else
-        note="as characterized — issue #$CHAR_ISSUE still live on this row"
+        note="as characterized — issue #$rowissue still live on this row"
       fi
     elif [ "$verdict" = "$correct" ]; then
       # ⚠️ This message deliberately does NOT spell out the must-fail fixture's
@@ -371,7 +412,7 @@ for row in $ROWS; do
       # against, one axis over. diff_compiler_fixture_corpus_coverage.sh shares
       # the rule, so the edge would also let this gate wrongly certify that
       # corpus as covered. The header names the fixture; grep the issue number.
-      note="DRAIN NOTICE: this row now gives the CORRECT answer ($correct). Issue #$CHAR_ISSUE may be drained — re-derive it, and expect that issue's own must-fail pin (grep $CHAR_ISSUE under the must-fail fixture corpus) to go red: that suite owns the drain, this gate only reports it."
+      note="DRAIN NOTICE: this row now gives the CORRECT answer ($correct). Issue #$rowissue may be drained — re-derive it, and expect that issue's own must-fail pin (grep $rowissue under the must-fail fixture corpus) to go red: that suite owns the drain, this gate only reports it."
       drained=$((drained + 1))
     else
       note="FAIL: neither the correct answer ($correct) nor the characterized one ($today) — got $verdict"
@@ -392,7 +433,7 @@ unset IFS
 # True before AND after the #1564 fix; silent about WHETHER an arm accepts. This is
 # what catches an arm that accepts and miscompiles, which acceptance-agreement
 # would have graded green.
-for case in cond_impl_third_module all_visible no_impl_anywhere user_iface_dispatch user_iface_undetermined; do
+for case in cond_impl_third_module all_visible no_impl_anywhere user_iface_dispatch user_iface_undetermined iface_default_requires_closure; do
   # `grep -c` exits 1 on no match, so count through `wc -l` instead — a `|| echo 0`
   # fallback appends a SECOND line and the arithmetic below then reads "0\n0".
   n="$(grep "^$case=" "$VALFILE" | wc -l | tr -d ' ')"
