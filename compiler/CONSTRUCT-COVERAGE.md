@@ -76,7 +76,7 @@ that. A result is PASS iff `native_output == oracle_output ++ "\n()"`.
 | Right-to-left compose `<<` | PASS | `compose_right.mdk` |
 | Backtick infix `` `f` `` | GAP | see §Gaps below |
 | Operator sections `(+5)` `(2*_)` `(+)` | PASS | `section_right.mdk`, `section_left.mdk`, `section_bare.mdk` |
-| `?` short-circuit unwrap | PASS | `question_op.mdk` |
+| `?` short-circuit unwrap | PASS | (fixture missing from tree; untracked — see #653) |
 | Ord `compare` | PASS | `ord_int.mdk`, `ord_compare.mdk` |
 
 ### Ranges
@@ -134,7 +134,6 @@ that. A result is PASS iff `native_output == oracle_output ++ "\n()"`.
 | Top-level mutual recursion (separate clauses) | PASS | `toplevel_mutual_rec.mdk` |
 | `Ref` cell + `:=` reassignment (`x := x.value * 2`) | PASS | `let_mut_reassign.mdk` (beta: was `let mut`, removed 2026-07-09) |
 | `Ref e` create + `:=` write + `.value` read | PASS | `ref_let_mut.mdk` (beta: was `let mut`, removed 2026-07-09) |
-| `let Some x = opt else panic` | PASS | `let_else.mdk` |
 | `where` clause (indented block form) | PASS | `where_multi_defs.mdk` |
 | `where` clause (inline form `f x = e where g = ...`) | GAP | see §Gaps below |
 
@@ -277,7 +276,7 @@ that. A result is PASS iff `native_output == oracle_output ++ "\n()"`.
 | Cross-module import + entry-point build | PASS | (build_cmd.sh `multimodule`) |
 | `export fn` | PASS | `export_fn.mdk` |
 | `public export data` | PASS | `pub_export_debug.mdk` |
-| `import map.*` / stdlib module imports | PASS (Gap H CLOSED 2026-06-18 audit) | `stdlib_list.mdk`, `stdlib_array.mdk`, `stdlib_string.mdk`, `stdlib_io.mdk`, `stdlib_map.mdk`, `stdlib_set.mdk` |
+| `import map.*` / stdlib module imports | PASS (Gap H CLOSED 2026-06-18 audit) | `stdlib_list.mdk`, `stdlib_array.mdk`, `stdlib_string.mdk`, `stdlib_io.mdk` |
 
 ### IO and effects
 
@@ -394,7 +393,7 @@ statement (slice 1)`. Both gaps are now closed (EMIT-ONLY, deterministic).
 | # | Construct | Status |
 |---|-----------|--------|
 | B1 | `let mut x = e` + `x = e` reassignment in block | **PASS** (2026-06-10) — `let_mut_reassign.mdk` |
-| B2 | `let Some x = opt else panic "..."` (let-else) | **PASS** (2026-06-10) — `let_else.mdk` |
+| B2 | `let Some x = opt else panic "..."` (let-else) | **PASS** (2026-06-10) — fixture removed with `let-else` itself, 2026-07-09; see #653 |
 
 **B1 approach.** `let mut x = e` already lowers to `CSLet True (PVar x) e`, which
 the existing irrefutable `CSLet _ (PVar x)` arm handles (the mut flag carries no
@@ -743,49 +742,20 @@ Zebra))` → should be `False`; all three backends give `True`.
 
 ## Fixture directory
 
-All PASS fixtures: `test/construct_fixtures/*.mdk` (115 files)
+All PASS fixtures: `test/construct_fixtures/*.mdk`
 Gate script: `test/build_construct_coverage.sh`
 
+⚠️ This doc is hand-maintained (no generator writes it) and has drifted from the actual
+directory contents twice already (#639, #653). Don't trust a count or listing typed here —
+regenerate on demand instead of hand-copying, and don't hand-copy the answer back into this
+file either:
+
+```sh
+ls test/construct_fixtures/*.mdk | wc -l   # current file count
+ls test/construct_fixtures/*.mdk           # current full listing
 ```
-test/construct_fixtures/
-  adt_block_form.mdk        adt_float_ctor.mdk       adt_record_variant.mdk
-  annotated_let_in.mdk      array_copy.mdk           array_extern_ops.mdk
-  array_from_list.mdk       array_index.mdk          array_set_unsafe.mdk
-  array_slice_el.mdk        attr_inline.mdk          bare_io_block.mdk
-  bool_ops.mdk              char_from_code.mdk       char_ops.mdk
-  comparison_ops.mdk        compose_left.mdk         compose_right.mdk
-  cons_op.mdk               ctor_pat_lambda.mdk      debug_list_after_as.mdk
-  default_impl_override.mdk deriving_debug.mdk       deriving_eq.mdk
-  do_option.mdk             do_result_int.mdk        effect_decl.mdk
-  effect_var_sig.mdk        export_fn.mdk            float_arith.mdk
-  float_compute.mdk         float_to_int.mdk         float_to_int2.mdk
-  float_two_ctor.mdk        fn_clause_guards.mdk     fn_guard_with_pat.mdk
-  foldable_length_list.mdk  function_keyword.mdk     guard_chain_multi.mdk
-  hof_multi.mdk             if_else.mdk              if_else_expr.mdk
-  if_let.mdk                if_let_else.mdk          if_no_else.mdk
-  int_to_float.mdk          interface_impl.mdk       io_write_read.mdk
-  let_annot_inline.mdk      let_in.mdk               list_append.mdk
-  list_filter.mdk           lit_binary.mdk           lit_float.mdk
-  lit_hex.mdk               lit_octal.mdk            lit_underscores.mdk
-  map_option.mdk            match_arm_guard.mdk      match_as_pattern.mdk
-  match_cons_pat.mdk        match_ctor.mdk           match_explicit_list.mdk
-  match_indented.mdk        match_record_pat.mdk     match_string_pat.mdk
-  match_tuple_pat.mdk       multi_clause.mdk         multi_clause_fn.mdk
-  multi_param_iface.mdk     ord_compare.mdk          ord_int.mdk
-  partial_apply.mdk         pipe_op.mdk              prop_test.mdk
-  pub_export_debug.mdk      pure_option.mdk          put_str.mdk
-  question_op.mdk           range_half_open.mdk      range_inclusive.mdk
-  record_chain_access.mdk   record_construct.mdk     record_nested_update.mdk
-  record_pat_rest.mdk       record_pun.mdk           record_update.mdk
-  ref_let_mut.mdk           section_bare.mdk         section_left.mdk
-  section_right.mdk         str_compare.mdk          str_concat_list.mdk
-  str_index_of.mdk          str_interp.mdk           str_interp_multi.mdk
-  str_length.mdk            str_slice.mdk            str_to_chars.mdk
-  str_unicode_escape.mdk    str_upper_lower.mdk      superclass.mdk
-  toplevel_mutual_rec.mdk   triple_quoted.mdk        tuple_fst.mdk
-  tuple_pat_lambda.mdk      type_alias.mdk           type_annot_expr.mdk
-  ref_deref.mdk             unary_minus.mdk          where_multi_defs.mdk
-```
+
+(spot-checked 2026-08-26: 146 files)
 
 ### Dict-pass SIGSEGV cluster — ROOT-CAUSED 2026-06-10 (read-only investigation)
 
