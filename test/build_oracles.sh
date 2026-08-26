@@ -199,6 +199,7 @@ lex_main parse_main parse_result_main \
 resolve_main resolve_batch resolve_modules_main origin_agreement_main draft_semantic_main anf_identity_main \
 typecheck_main check_main check_batch \
 check_modules_main check_all_main check_match_main exhaust_main lint_main lint_fix_main \
+check_one_diags_main check_flat_diags_main \
 diagnostics_main diagnostics_project_main \
 fmt_main new_main test_main repl_main fuzz_gen_main \
  profile_main profile_modules_main profile_eval_main refindex_main"

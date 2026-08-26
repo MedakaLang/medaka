@@ -18,7 +18,6 @@ main =
   println (classify 3)
   println (abs (-7))
 # TYPES_USER
-abs : (Num b, Ord b) => a -> a
 classify : (Num a, Ord a) => a -> String
 abs : (Num a, Ord a) => a -> a
 main : Unit

@@ -52,7 +52,6 @@ composeL x = (addN 1 << addN 2) x
 
 main = println (arith 3 4)
 # TYPES_USER
-sub : a -> a -> a
 addN : Int -> Int -> Int
 arith : Int -> Int -> Int
 sub : Int -> Int -> Int

@@ -11,7 +11,7 @@
 --   desugar         lower surface sugar in the target AST
 --   resolve         name resolution (resolveToLines; raw prelude, desugared target)
 --   mark            method-reference marking (markWithPrelude; desugared core)
---   typecheck       HM type inference (checkToLinesWithRuntime; desugared runtime+core)
+--   typecheck       HM type inference (checkOneToLinesWithRuntime; desugared runtime+core)
 --   elaborate       install* dict-route table builders + elaborateDict (issue #882)
 --   dce             dead-code filter over the elaborated program (dceFilter; #882)
 --   mangle          universal per-module private-name de-collision (mangleUnits; #882)
@@ -39,7 +39,7 @@ import frontend.desugar.{desugar}
 import frontend.resolve.{resolveToLines}
 import frontend.marker.{markWithPrelude}
 import types.typecheck.{
-  checkToLinesWithRuntime,
+  checkOneToLinesWithRuntime,
   elaborateDict,
   constrainedSigNames,
   preludeReturnPosDictNames,
@@ -169,7 +169,10 @@ runStaged on targetPath rsrc csrc tsrc =
   let tT0 = now ()
   let aT0 = allocSnap ()
   let oT0 = opSnap ()
-  let _ = checkToLinesWithRuntime rDecls cDecls desugared
+  -- return value discarded (profiler only times the call) -- the Module-arm
+  -- swap is safe regardless of scheme-list-shape differences
+  -- (S-migrate-tool-consumers-remainder).
+  let _ = checkOneToLinesWithRuntime rDecls cDecls desugared
   let tT1 = now ()
   let _ = emitPhaseAO on "typecheck" (tT1 - tT0) (allocSnap () - aT0) declsOp (opSnap () - oT0)
   -- BACKEND. Until 2026-07-16 this profiler stopped at typecheck, so the O(n^2)
