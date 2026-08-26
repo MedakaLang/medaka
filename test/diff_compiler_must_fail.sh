@@ -250,6 +250,15 @@ claim_has() { grep -q "^$2:" "$1"; }
 #                                       location into the pin). No `--project` mode is
 #                                       reachable this way; single-file `medaka_references`/
 #                                       `medaka_definition` calls only.
+#   check-policy                      — (#2047) `medaka check-policy`: the capability-policy
+#                                       gate of docs/design/CAPABILITY-PLATFORM.md §3. The
+#                                       ONLY parameterised verb — its verdict depends on the
+#                                       `--allow` policy and the `--fn` entry point, so the
+#                                       `cmd:` line carries those flags after the filename.
+#                                       Grades check-policy's exit (0 accept / 1 reject) and
+#                                       its stdout verdict line. ⚠️ A control here must be an
+#                                       ACCEPT case: the suite requires every control to exit
+#                                       0, and a rejection exits 1.
 #
 # build / build-run need clang; the guard above fails loudly (exit 2) if it is absent.
 # The binary goes to "$_out.bin" — "$_out" is "$TMP/<name>.out" (main) or "$TMP/<name>.ctl"
@@ -292,6 +301,18 @@ run_verb() {
       return $_rc ;;
     mcp-call)
       ( cd "$ROOT" && bound "$MEDAKA" mcp <"$_dir/$_file" >"$_out" 2>"$_out.err" ); return $? ;;
+    check-policy)
+      # (#2047) `medaka check-policy` — the capability-policy gate. Unlike every verb
+      # above, this one is PARAMETERISED: the verdict depends on `--allow` and `--fn`,
+      # not on the file alone, so <file> here carries the plugin filename FOLLOWED BY
+      # the policy flags:
+      #   cmd: check-policy main.mdk --allow Cache,Log --fn transform
+      # Word-splitting $_pargs is deliberate and safe: every token is a fixture-authored
+      # literal (a label list, a function name), never data from outside this corpus.
+      _pf="${_file%% *}"; _pargs="${_file#* }"
+      [ "$_pargs" = "$_file" ] && _pargs=""
+      # shellcheck disable=SC2086
+      bound "$MEDAKA" check-policy "$_dir/$_pf" $_pargs >"$_out" 2>"$_out.err"; return $? ;;
     *) echo "unknown verb: $_verb" >"$_out"; return 127 ;;
   esac
 }
