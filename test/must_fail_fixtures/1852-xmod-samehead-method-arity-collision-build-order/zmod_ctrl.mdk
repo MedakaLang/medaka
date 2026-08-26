@@ -1,8 +1,0 @@
-export interface IZctrl b where
-  szZ : b -> Int -> Int  -- different name: no collision with amod's szK
-
-export impl IZctrl Int where
-  szZ s k = k + 7
-
-export viaZ : IZctrl b => b -> Int -> Int
-viaZ x k = szZ x k
