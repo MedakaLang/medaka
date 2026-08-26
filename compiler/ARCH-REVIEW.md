@@ -309,7 +309,12 @@ the `Emit` 10-field POSITIONAL record (cheap, high-value fix).
 2. **Mutable-state split (Emit vs ~18 module globals) is PRINCIPLED, not accidental.** The
    module globals (`returnsSelfTableRef`/`methodIfaceTableRef`/…, 181–486) are install-once
    read-only config pushed in by the entries from `core_ir_lower.mdk` BEFORE `emitProgram` —
-   a deliberate interface seam. The Emit record is per-emission threaded state. Correct
+   a deliberate interface seam. ⚠️ **Both symbol names are DEAD as of 2026-08-26** (`grep -rn
+   'returnsSelfTableRef\|methodIfaceTableRef' compiler/` → no hits): that seam was since
+   reified as the immutable `EmitInput` record (`compiler/backend/llvm_emit.mdk:775-806`,
+   built once by `makeEmitInput`), whose `returnsSelf`/`methodIfaces`/`methodIfaceIndex`/
+   `methodIfaceIdIndex` fields carry exactly the config this item is about. The finding
+   stands; only the names moved. The Emit record is per-emission threaded state. Correct
    split. The one genuinely-redundant bit: memoization refs (`knownFnMapRef`/`ctorMapRef`/
    `sigMapRef`, 680–700) shadow Emit fields for perf — justified, minor.
 3. **Emit dispatch core is CLEAN (cleaner than `infer`) — GOOD, preserve.** 25-arm

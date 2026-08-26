@@ -118,13 +118,3 @@
 # unledgered on the order-dependence axis; the still-open emitter-verdict axis
 # on this same case is tracked in test/EMITTER-VERDICT-LEDGER.txt.
 
-# ── #1810 (OPEN): rdict/filterTagged same-head collision drops interface identity
-# implsOf/filterTagged (compiler/backend/llvm_emit.mdk:1267-1274) filter the
-# runtime-dict dispatcher's candidate impls by METHOD NAME ALONE — the `iface`
-# field is bound in the pattern and never read. Two unrelated interfaces sharing
-# a spelling, with impls at the SAME head tycon, share one dispatcher symbol and
-# resolve to the FIRST arm the emitter happened to emit — import order decides
-# emission order, hence which impl BOTH components of the pair get. See
-# test/import_order_fixtures/1810-.../case.txt for how the two signatures below
-# were established.
-1810-rdict-samehead-filtertagged-collision | #1810 | check=0;codes=;schemes=main : Unit\n;run=0:(110, 110)\n;build=0/0:(110, 110)\n | check=0;codes=;schemes=main : Unit\n;run=0:(11, 11)\n;build=0/0:(11, 11)\n
