@@ -87,6 +87,10 @@ import frontend.ast.{
   -- `types/registry.mdk` and is still imported from there.
   TabKey(..),
   tabKeyOf,
+  -- #1647: the LOOKUP comparison, imported for `sameIfaceDecl` — the interface
+  -- method-signature lookup asks the same "which row does this key select?"
+  -- question `lookupTab` does, one key at a time rather than over a table.
+  tabKeyEq,
   tabKeyName,
   lookupTab,
   tabHasName,
@@ -26393,9 +26397,19 @@ inferImplBodies env allProg rpNames (d::rest) =
 inferOneImpl : TcEnv -> List Decl -> List String -> Decl -> Unit
 inferOneImpl env allProg rpNames (DAttrib _ d) =
   inferOneImpl env allProg rpNames d
-inferOneImpl env allProg rpNames (DImpl { iface, tys, reqs, methods, ... }) = match reqs
-  [] => inferPlainImpl env allProg iface tys methods
-  _ => inferRequiresImpl env allProg rpNames iface tys reqs methods
+-- #1647 (S1): [implOrigin] is bound here, NOT dropped by the `...`.  The impl-body
+-- signature lookup below (`ifaceMethodTyResolved`) used to receive the interface's
+-- bare SPELLING, so two modules each declaring an interface spelled `Speak` sent
+-- every impl body of either one to whichever `DInterface` the joint decl list
+-- happened to list FIRST — attributing module B's body to module A's declared
+-- method type, per import order.  DICT-SEMANTICS §8 I4: an interface is a
+-- (module, name) pair, so the lookup takes the IDENTITY the `impl` head already
+-- carries.  Same construction as `implDeclFact`, from the same two fields.
+inferOneImpl env allProg rpNames (DImpl { iface, tys, reqs, methods, implOrigin, ... }) =
+  let iref = IfaceRef { irName = iface, irOrigin = implOrigin }
+  match reqs
+    [] => inferPlainImpl env allProg iref tys methods
+    _ => inferRequiresImpl env allProg rpNames iref tys reqs methods
 inferOneImpl _ _ _ _ = ()
 
 -- D3a: a NON-`requires` impl body, inferred on every path (single elaboration mode)
@@ -26403,7 +26417,7 @@ inferOneImpl _ _ _ _ = ()
 -- `Display`/`Debug` impl — the 19 `display@String` sites) reach inferMethodAt and
 -- get stamped.  Mirrors inferRequiresImpl's head-mono substitution but with no
 -- requires to register (an unconstrained impl threads no element dict).
-inferPlainImpl : TcEnv -> List Decl -> String -> List Ty -> List ImplMethod -> Unit
+inferPlainImpl : TcEnv -> List Decl -> IfaceRef -> List Ty -> List ImplMethod -> Unit
 inferPlainImpl env allProg iface tys methods =
   let implTvMap = freshTvMap (dedup (flatMap tyVarNames tys))
   let headMonos = map (fromAstType implTvMap) tys
@@ -26414,20 +26428,20 @@ inferPlainImpl env allProg iface tys methods =
 -- inner method ref unifies its discriminating var to the head's `a`; infer each
 -- method body against the method type instantiated at the head; THEN register the
 -- requires' post-unification ids in activeDictVars keyed to `$dict_<method>_<slot>`.
-inferRequiresImpl : TcEnv -> List Decl -> List String -> String -> List Ty -> List Require -> List ImplMethod -> Unit
+inferRequiresImpl : TcEnv -> List Decl -> List String -> IfaceRef -> List Ty -> List Require -> List ImplMethod -> Unit
 inferRequiresImpl env allProg rpNames iface tys reqs methods =
   let implTvMap = freshTvMap (dedup (flatMap tyVarNames tys))
   let headMonos = map (fromAstType implTvMap) tys
   let _ = inferImplMethods env allProg iface implTvMap headMonos methods
   registerImplRequires implTvMap rpNames reqs methods
 
-inferImplMethods : TcEnv -> List Decl -> String -> List (String, Mono) -> List Mono -> List ImplMethod -> Unit
+inferImplMethods : TcEnv -> List Decl -> IfaceRef -> List (String, Mono) -> List Mono -> List ImplMethod -> Unit
 inferImplMethods _ _ _ _ _ [] = ()
 inferImplMethods env allProg iface implTvMap headMonos (m::rest) =
   let _ = inferImplMethod env allProg iface implTvMap headMonos m
   inferImplMethods env allProg iface implTvMap headMonos rest
 
-inferImplMethod : TcEnv -> List Decl -> String -> List (String, Mono) -> List Mono -> ImplMethod -> Unit
+inferImplMethod : TcEnv -> List Decl -> IfaceRef -> List (String, Mono) -> List Mono -> ImplMethod -> Unit
 inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats body) = match ifaceMethodTyResolved allProg iface mname
   None => ()
   Some (ifaceParams, mty, gscope) =>
@@ -26523,7 +26537,9 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     let launderFlagged = isNonEmptyL launderEsc
     let _ = match launderEsc
       [] => ()
-      escaping => pushTypeErrorOnceAt "T-EFFECT-LAUNDER" launderLoc (effectLaunderMsg iface mname escaping)
+      -- `.irName`: a DIAGNOSTIC wants the spelling, not the identity (#1446 P1's
+      -- rule — `irName` is kept alongside `irOrigin` for exactly this).
+      escaping => pushTypeErrorOnceAt "T-EFFECT-LAUNDER" launderLoc (effectLaunderMsg iface.irName mname escaping)
     -- #814 (S0): W3 method-scheme fidelity (DICT-SEMANTICS §3).  The method's
     -- non-head quantified variables — type AND effect — belong to the CALLER
     -- (every use site re-instantiates them freshly), so the body must be checked
@@ -26551,7 +26567,11 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     -- the survivor check never read, and `check` stayed green on a program whose
     -- built binary printed garbage.
     let addedCallObls = callOblsWindow callN0
-    let _ = checkImplMethodRigidity iface mname mty headMonos extraMap effMap addedObls addedCallObls launderFlagged gscope launderLoc
+    -- `.irName`: this checker's `iface` is a SPELLING channel end to end — it names
+    -- the subject in a diagnostic and is compared against `pred.iface.irName` in
+    -- `checkSurvivorDispatchMonos`.  Widening it to an identity is a separate
+    -- question from #1647's signature LOOKUP and is deliberately not this slice's.
+    let _ = checkImplMethodRigidity iface.irName mname mty headMonos extraMap effMap addedObls addedCallObls launderFlagged gscope launderLoc
     -- #518 (S0, silent wrongness): PLAN.md #11 Num defaulting NEVER RAN over an impl
     -- method body — this path is not a let-group, so nothing grounded its ambiguous
     -- Num vars.  A literal consumed entirely inside the body (`t _ = s [1, 2]`) left
@@ -27151,30 +27171,49 @@ removeAllS drop (x::xs)
 -- the method type without the scope that elaborates it.  On the slow path it comes from
 -- the very declaration this scan selected (free — same traversal); on the fast path it
 -- comes out of the same table entry as `(typarams, mty)`.
-ifaceMethodTyResolved : List Decl -> String -> String -> Option (List String, Ty, List (String, List Kind))
+ifaceMethodTyResolved : List Decl -> IfaceRef -> String -> Option (List String, Ty, List (String, List Kind))
 ifaceMethodTyResolved allProg iface mname
   | !useFastIfaceMethodTy = match omLookup mname perRun.value.methodIfaceParamsRef.value
     Some (ifn, typarams, mty, scope) =>
-      -- ⚠️ SPELLING comparison, deliberately: the caller supplies `iface` as a bare
-      -- name (from an `impl` head / a default-body subject), so making this an identity
-      -- test would need the caller re-keyed first.  #1446 P1 stops at the OBLIGATION
-      -- channel; this guard is unchanged in behaviour.
-      if ifn.irName == iface then
+      -- #1647: an IDENTITY comparison now — the caller was re-keyed (`inferOneImpl`
+      -- binds `DImpl.implOrigin` instead of dropping it), which is precisely the
+      -- prerequisite the previous spelling comparison named as missing.
+      if sameIfaceDecl ifn iface then
         Some (typarams, mty, scope)
       else
         None
     None => None
   | otherwise = ifaceMethodTy allProg iface mname
 
+-- #1647: the ONE comparison both arms of the method-signature lookup use.  This is a
+-- LOOKUP question (`tabKeyEq`'s half of the rule stated at `tyConIdsConflict`): a MISS
+-- is loud — no signature, the impl body is simply not inferred, the pre-existing
+-- behaviour for an unknown interface — while a false HIT reads the body under another
+-- module's declared method type, which is #1647 itself.  So it routes through the ONE
+-- total mint: two STAMPED occurrences match only on `(module, name)`, two UNSTAMPED
+-- ones (`TkBare`/`TkBare` — the flat/loader-less driver, whose own decls are stamped
+-- on NEITHER side, #1115/E-1) still match by spelling exactly as before, and stamped
+-- never matches unstamped.  A bare `ifaceIdMatches` on `ifaceIdentity` would have got
+-- the first two right and turned the third population into a total lookup MISS.
+sameIfaceDecl : IfaceRef -> IfaceRef -> Bool
+sameIfaceDecl a b = tabKeyEq (oblIfaceKey a) (oblIfaceKey b)
+
 -- the (interface typarams, declared method type, graded scope) of method [mname] in
 -- interface [iface], searched across [allProg]'s interface decls
-ifaceMethodTy : List Decl -> String -> String -> Option (List String, Ty, List (String, List Kind))
+ifaceMethodTy : List Decl -> IfaceRef -> String -> Option (List String, Ty, List (String, List Kind))
 ifaceMethodTy [] _ _ = None
 ifaceMethodTy ((DAttrib _ d)::rest) iface mname = match ifaceMethodTy [d] iface mname
   Some r => Some r
   None => ifaceMethodTy rest iface mname
-ifaceMethodTy ((DInterface { name, typarams, methods, ... })::rest) iface mname
-  | name == iface = match methodTyOf mname methods
+-- #1647: `ifaceOrigin` is bound, not dropped — this scan takes the FIRST decl matching
+-- the interface, and with a bare `name == iface` the joint multi-module decl list makes
+-- "first" mean "whichever module the loader happened to order first", which is how an
+-- impl body came to be read under a same-spelled OTHER module's method type.
+ifaceMethodTy ((DInterface { name, typarams, methods, ifaceOrigin, ... })::rest) iface mname
+  | sameIfaceDecl IfaceRef {
+    irName = name,
+    irOrigin = ifaceOrigin,
+  } iface = match methodTyOf mname methods
     Some ty => Some (typarams, ty, declGradedScope typarams methods)
     None => ifaceMethodTy rest iface mname
   | otherwise = ifaceMethodTy rest iface mname
