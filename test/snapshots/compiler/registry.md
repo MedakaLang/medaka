@@ -1,5 +1,5 @@
 # META
-source_lines=2037
+source_lines=2038
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -570,9 +570,10 @@ regKeyTabAt key slot = RegKey [key] [slot]
 -- not carry identity. `ImplUniverse`'s concrete bucket `(interface, receiver head)`
 -- pair is the first table that needs it: its interface half is bare by derivation
 -- (`Predicate` carries no origin — see `builtinClassPresent` in
--- `types/typecheck.mdk`, and the `ifaceRegistered` TOMBSTONE beside it: #1539
--- retired that gate, so cite the live name) while its head half is whatever `headTyconTy`
--- projected, so ONE key genuinely mixes the two populations.
+-- `types/typecheck.mdk`; #1539 retired the `ifaceRegistered` gate it replaced, and
+-- #1569 removed the write-only table behind it, so cite the live name) while its
+-- head half is whatever `headTyconTy` projected, so ONE key genuinely mixes the two
+-- populations.
 export
 regKeyNTab : List TabKey -> RegKey
 regKeyNTab keys = RegKey keys []
