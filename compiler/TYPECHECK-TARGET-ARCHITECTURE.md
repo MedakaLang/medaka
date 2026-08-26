@@ -1499,21 +1499,50 @@ orders merges, and the plan does not pretend otherwise.
 
 **Stage E — One driver (family D/I) — after A-3; the riskiest stage, now four moves**
 
-- **E-1. Flat-consumer migration.** One PR per consumer, each with its own
-  golden accounting: repl, LSP single-file env + hover fallback, playground,
-  single-file doctest path, `snapshot`/`check_policy`/`doc`, and the
-  `elaborateDict` gate entries (`llvm_emit_typed_main`, `core_ir_dict_pp_main`)
-  — each moved onto the 1-module Module path. The Flat-vs-Module divergences
-  are enumerated **as a set from the 20 `match mode` branches** (not sampled),
-  each getting a fixture before its consumer moves; a numlit-representation
-  flip on the single-file path is S0-shaped if unenumerated.
+- **E-1. Flat-consumer migration. ⚡ LANDED (front door + repl), RESIDUAL
+  tracked at #1115 (sprint `one-check-driver`, #2022).** The Flat-vs-Module
+  divergences were enumerated as a set from the 22 real `match mode` branches
+  (23 grep hits, one a header comment) — six named classes plus a seventh,
+  `populateEffectDomains` ("BREAK #3" per the source's own vocabulary),
+  judged inert for one/few-module comparisons — each behavioral class getting
+  a fixture in `test/diff_compiler_flat_vs_onemodule.sh` before any consumer
+  moved. **Migrated onto the Module arm** (`checkOneScheme`/`checkOneDiags`/
+  `checkOneToLinesWithRuntime`/`checkOneErrorsWithRuntime`, via
+  `checkModulesEntryFull`): `driver/diagnostics.mdk`, `driver/
+  main_autoprint.mdk`, `tools/check.mdk` (the front door), `tools/repl.mdk`,
+  `tools/doc.mdk`, `tools/snapshot.mdk` (its scheme-dump call sites only),
+  `entries/profile_main.mdk` (its typecheck-timing call only). **Accepted
+  behavior change** (Val's 2026-08-26 decision): the front door's displayed
+  scheme list narrows from Flat's folded prelude+user dump to the user's own
+  declarations only — not byte-identical, reblessed across 12 goldens.
+  **Parked on Flat**, all four sharing one root cause (`checkOneScheme`'s
+  Module-arm wrapper structurally returns only the terminal module's own
+  schemes, never the folded prelude — E-2's own named precondition, #1116):
+  `tools/lsp.mdk`'s completion path, `entries/playground_main.mdk`'s
+  completion path, `tools/check_policy.mdk` (reverted after a brief landing —
+  its `--fn <prelude-name>` lookups hit the identical gap), `entries/
+  check_batch.mdk` (a fourth instance of the same gap, initially misdiagnosed
+  as a state leak and filed as #2027 — refuted and closed). **Parked, separate
+  cause:** `entries/typecheck_main.mdk` (an obligation-universe drop, the same
+  class as #2024 but at much larger scale on `stdlib/core.mdk`'s own
+  interfaces — #2024 is now closed, and a post-closure spot check suggests
+  this consumer may already be unblocked, unconfirmed on its own exact call
+  shape). **Out of scope:** `entries/check_match_main.mdk` (no Module-arm
+  wrapper exists for its `checkMatchToLines` shape). **Deliberately
+  KEEP-PINNED, not a residual:** `entries/origin_agreement_main.mdk` (tests
+  the Flat driver itself). **Untouched by design, deferred whole to E-2/E-4:**
+  the `elaborateDict` family (`llvm_emit_typed_main`, `wasm_emit_typed_main`,
+  `core_ir_dict_pp_main`, plus the two `elaborateDict` call sites inside
+  `profile_main.mdk`/`snapshot.mdk`) — pinned RETAINED for the code-generating
+  emit path per its own header comment, categorically higher-risk than the
+  diagnostics-only wrapper family this stage targeted.
 - **E-2. `CheckMode` collapse.** With no Flat consumers left except the
   promotion fallback, collapse the mode branches and the second stamper order;
   the fallback is re-expressed against the Module path (this is where its
   behavior is pinned, not changed). Byte-identical on the Module path;
   enumerated sign-off per divergence fixture for the rest. #462's comment-truth
   item dies here with the single order table.
-- **E-3. Defaulting placement** per S-2(c) — **lands before E-4**, so the
+- **E-3 ⊕ (#2034). Defaulting placement** per S-2(c) — **lands before E-4**, so the
   scheduling change happens under an enforced representation rule rather than
   silently moving Int/Float choices (#563/#564 close against the rule).
 - **E-4. Scheduled marking.** Replace the promotion fixpoint + harvest-discard
@@ -1570,7 +1599,7 @@ orders merges, and the plan does not pretend otherwise.
 **Dependency spine:** S ⟶ A-1 ⟶ A-2 ⟶ A-3 ⟶ {B-2, E-1} ; (A-1a withdrawn —
 its decision is made in writing inside A-1, not as a separate node) ;
 B-1 ∥ C ∥ D (dependency-independent of A after S; landing interleaved) ;
-E-1 ⟶ E-2 ⟶ E-3 ⟶ E-4 ; B-3 anytime after S ; F-1 after C-1, E-2, and
+E-1 ⟶ E-2 ⟶ E-3 (#2034) ⟶ E-4 ; B-3 anytime after S ; F-1 after C-1, E-2, and
 S-2(f) ; ~~F-2~~/F-3 anytime after S (**F-2 WITHDRAWN**, see its §6 entry —
 this node no longer exists). The graded arc (#822→#823→#824) runs as a
 peer, coordinating at A-3 (kind machinery) and D-3 (coverage rules).
