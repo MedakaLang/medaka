@@ -1,4 +1,0 @@
-import ctlamod.{aValue}
-import ctlzmod.{zValue}
-
-main = println (aValue, zValue)

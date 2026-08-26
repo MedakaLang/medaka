@@ -1502,6 +1502,222 @@ else
   fail=$((fail+1)); printf 'FAIL A-2.10/1277-xmod-head-spelling-build (native build failed)\n'
 fi
 
+# ── #1810, DRAINED — re-pointed here rather than deleted ──────────────────────
+#
+# `test/must_fail_fixtures/1810-rdict-filtertagged-drops-iface-identity/` pinned
+# a same-spelling S0: two unrelated modules each declare an interface spelled
+# `Same` with a method spelled `sizeOf`, both with an impl at the SAME head
+# tycon (`Int`) but different bodies (+1 vs +100). The runtime-dict dispatcher
+# the emitter builds for `sizeOf` was shared by both interfaces' call sites, and
+# `implsOf`/`filterTagged` (compiler/backend/llvm_emit.mdk) filtered candidate
+# impls by method name alone, dropping the `iface` field — so whichever impl's
+# arm was emitted first (import-order-dependent) won regardless of which
+# interface the call site's dict actually denoted. It has since drained
+# (verified: `(11, 110)` under BOTH import orders, `run` and `build`+execute,
+# all exit 0) — a drained must-fail leaves no regression test behind, so its
+# assertion moves here, exactly as the #1277 leg above did.
+cat > "$TMP/x1810_amod.mdk" <<'EOF'
+export interface Same a where
+  sizeOf : a -> Int
+
+impl Same Int where
+  sizeOf n = n + 1
+
+aWrap : Same a => a -> Int
+aWrap x = sizeOf x
+
+export
+aValue : Int
+aValue = aWrap 10
+EOF
+cat > "$TMP/x1810_zmod.mdk" <<'EOF'
+export interface Same a where
+  sizeOf : a -> Int
+
+impl Same Int where
+  sizeOf n = n + 100
+
+zWrap : Same a => a -> Int
+zWrap x = sizeOf x
+
+export
+zValue : Int
+zValue = zWrap 10
+EOF
+cat > "$TMP/x1810_main.mdk" <<'EOF'
+import x1810_amod.{aValue}
+import x1810_zmod.{zValue}
+
+main = println (aValue, zValue)
+EOF
+cat > "$TMP/x1810_swapped.mdk" <<'EOF'
+import x1810_zmod.{zValue}
+import x1810_amod.{aValue}
+
+main = println (aValue, zValue)
+EOF
+x1810_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/x1810_main.mdk" 2>&1)"
+x1810_run_code=$?
+if [ "$x1810_run_code" -eq 0 ] && [ "$x1810_run" = "(11, 110)" ]; then
+  pass=$((pass+1)); printf 'ok   1810-rdict-filtertagged-run (right iface identity: (11, 110))\n'
+else
+  fail=$((fail+1)); printf 'FAIL 1810-rdict-filtertagged-run (exit %d, got [%s], want (11, 110))\n' "$x1810_run_code" "$x1810_run"
+fi
+if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/x1810_main.mdk" -o "$TMP/x1810.bin" >/dev/null 2>&1 && [ -x "$TMP/x1810.bin" ]; then
+  x1810_bld="$("$TMP/x1810.bin" 2>/dev/null | head -1)"
+  if [ "$x1810_bld" = "(11, 110)" ]; then pass=$((pass+1)); printf 'ok   1810-rdict-filtertagged-build (native agrees: (11, 110))\n'
+  else fail=$((fail+1)); printf 'FAIL 1810-rdict-filtertagged-build (got [%s], want (11, 110))\n' "$x1810_bld"; fi
+else
+  fail=$((fail+1)); printf 'FAIL 1810-rdict-filtertagged-build (native build failed)\n'
+fi
+x1810_run_sw="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/x1810_swapped.mdk" 2>&1)"
+x1810_run_sw_code=$?
+if [ "$x1810_run_sw_code" -eq 0 ] && [ "$x1810_run_sw" = "(11, 110)" ]; then
+  pass=$((pass+1)); printf 'ok   1810-rdict-filtertagged-swapped-run (right iface identity: (11, 110))\n'
+else
+  fail=$((fail+1)); printf 'FAIL 1810-rdict-filtertagged-swapped-run (exit %d, got [%s], want (11, 110))\n' "$x1810_run_sw_code" "$x1810_run_sw"
+fi
+if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/x1810_swapped.mdk" -o "$TMP/x1810_sw.bin" >/dev/null 2>&1 && [ -x "$TMP/x1810_sw.bin" ]; then
+  x1810_bld_sw="$("$TMP/x1810_sw.bin" 2>/dev/null | head -1)"
+  if [ "$x1810_bld_sw" = "(11, 110)" ]; then pass=$((pass+1)); printf 'ok   1810-rdict-filtertagged-swapped-build (native agrees: (11, 110))\n'
+  else fail=$((fail+1)); printf 'FAIL 1810-rdict-filtertagged-swapped-build (got [%s], want (11, 110))\n' "$x1810_bld_sw"; fi
+else
+  fail=$((fail+1)); printf 'FAIL 1810-rdict-filtertagged-swapped-build (native build failed)\n'
+fi
+
+# ── #1647, DRAINED BY S-emit-signature-identity — re-pointed here rather than
+#    deleted ─────────────────────────────────────────────────────────────────
+#
+# `test/must_fail_fixtures/1647-emit-path-reads-samespelled-iface-signature/`
+# pinned a same-spelling S1: two unrelated modules each declare an interface
+# spelled `Speak` with a method spelled `speak`, at DIFFERENT signatures
+# (`String -> x -> String` vs `x -> String -> String`). `medaka check` and
+# `medaka run` always agreed on the hand-derived correct answer (`A(x)` then
+# `B(y)`), but `medaka build` died in the emitter, reading the SECOND module's
+# impl body against the FIRST module's declared signature (a linear scan of
+# the joint decl list by bare spelling, dropping `implOrigin`) — so the exact
+# failure NAMED A DIFFERENT WRONG TYPE per import order. It has since drained
+# (verified: `A(x)` / `B(y)` at exit 0 under BOTH import orders, `run` and
+# `build`+execute) — a drained must-fail leaves no regression test behind, so
+# its assertion moves here, exactly as the #1277/#1810 legs above did.
+cat > "$TMP/x1647_a.mdk" <<'EOF'
+public export data DogA = DogA
+
+export interface Speak x where
+  speak : String -> x -> String
+
+impl Speak DogA where
+  speak s _ = "A(\{s})"
+
+export useA : String
+useA = speak "x" DogA
+EOF
+cat > "$TMP/x1647_b.mdk" <<'EOF'
+public export data DogB = DogB
+
+export interface Speak x where
+  speak : x -> String -> String
+
+impl Speak DogB where
+  speak _ s = "B(\{s})"
+
+export useB : String
+useB = speak DogB "y"
+EOF
+cat > "$TMP/x1647_main.mdk" <<'EOF'
+import x1647_a.{useA}
+import x1647_b.{useB}
+
+main =
+  let _ = println useA
+  println useB
+EOF
+cat > "$TMP/x1647_swapped.mdk" <<'EOF'
+import x1647_b.{useB}
+import x1647_a.{useA}
+
+main =
+  let _ = println useA
+  println useB
+EOF
+x1647_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/x1647_main.mdk" 2>/dev/null | tr '\n' ',')"
+if [ "$x1647_run" = "A(x),B(y)," ]; then
+  pass=$((pass+1)); printf 'ok   1647-emit-path-samespelled-iface-run (own-module signature: A(x),B(y))\n'
+else
+  fail=$((fail+1)); printf 'FAIL 1647-emit-path-samespelled-iface-run (got [%s], want [A(x),B(y),])\n' "$x1647_run"
+fi
+if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/x1647_main.mdk" -o "$TMP/x1647.bin" >/dev/null 2>&1 && [ -x "$TMP/x1647.bin" ]; then
+  x1647_bld="$("$TMP/x1647.bin" 2>/dev/null | head -2 | tr '\n' ',')"
+  if [ "$x1647_bld" = "A(x),B(y)," ]; then pass=$((pass+1)); printf 'ok   1647-emit-path-samespelled-iface-build (native agrees: A(x),B(y))\n'
+  else fail=$((fail+1)); printf 'FAIL 1647-emit-path-samespelled-iface-build (got [%s], want [A(x),B(y),])\n' "$x1647_bld"; fi
+else
+  fail=$((fail+1)); printf 'FAIL 1647-emit-path-samespelled-iface-build (native build failed)\n'
+fi
+x1647_run_sw="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/x1647_swapped.mdk" 2>/dev/null | tr '\n' ',')"
+if [ "$x1647_run_sw" = "A(x),B(y)," ]; then
+  pass=$((pass+1)); printf 'ok   1647-emit-path-samespelled-iface-swapped-run (own-module signature: A(x),B(y))\n'
+else
+  fail=$((fail+1)); printf 'FAIL 1647-emit-path-samespelled-iface-swapped-run (got [%s], want [A(x),B(y),])\n' "$x1647_run_sw"
+fi
+if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/x1647_swapped.mdk" -o "$TMP/x1647_sw.bin" >/dev/null 2>&1 && [ -x "$TMP/x1647_sw.bin" ]; then
+  x1647_bld_sw="$("$TMP/x1647_sw.bin" 2>/dev/null | head -2 | tr '\n' ',')"
+  if [ "$x1647_bld_sw" = "A(x),B(y)," ]; then pass=$((pass+1)); printf 'ok   1647-emit-path-samespelled-iface-swapped-build (native agrees: A(x),B(y))\n'
+  else fail=$((fail+1)); printf 'FAIL 1647-emit-path-samespelled-iface-swapped-build (got [%s], want [A(x),B(y),])\n' "$x1647_bld_sw"; fi
+else
+  fail=$((fail+1)); printf 'FAIL 1647-emit-path-samespelled-iface-swapped-build (native build failed)\n'
+fi
+
+# ── #1852 (az-ordering half ONLY), DRAINED — re-pointed here rather than
+#    deleted ─────────────────────────────────────────────────────────────────
+#
+# `test/must_fail_fixtures/1852-xmod-samehead-method-arity-collision-build-order/`
+# pins TWO cells: this one (import order amod-then-zmod, "az") and a second,
+# separately-tracked "za" cell (`raw-probe.mdk`, import order reversed) whose
+# output is a non-byte-stable heap address and stays UNPINNED — do not repoint
+# it here, #1852 stays OPEN for it. The az cell: two interfaces (`IA`, `IZ`)
+# in separate modules share one method name `szK` and one receiver head tycon
+# `Int` at DIFFERENT arity. `check` always accepted; the executed binary
+# az-ordering used to crash (`105` then a segfault, exit 139; historically
+# `105`/`105` silent-wrong at an earlier SHA). It has since drained on the az
+# cell (verified: `105` then `10` at exit 0, deterministic across repeats) —
+# a drained must-fail leaves no regression test behind, so ONLY this cell's
+# assertion moves here, exactly as the #1277/#1810 legs above did.
+cat > "$TMP/x1852_amod.mdk" <<'EOF'
+export interface IA a where
+  szK : a -> Int
+
+impl IA Int where
+  szK n = n + 100
+
+export viaA : IA a => a -> Int
+viaA x = szK x
+EOF
+cat > "$TMP/x1852_zmod.mdk" <<'EOF'
+export interface IZ b where
+  szK : b -> Int -> Int
+
+impl IZ Int where
+  szK s k = k + 7
+
+export viaZ : IZ b => b -> Int -> Int
+viaZ x k = szK x k
+EOF
+cat > "$TMP/x1852_main.mdk" <<'EOF'
+import x1852_amod.{viaA}
+import x1852_zmod.{viaZ}
+
+main =
+  let _ = println (viaA 5)
+  println (viaZ 5 3)
+EOF
+if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/x1852_main.mdk" -o "$TMP/x1852.bin" >/dev/null 2>&1 && [ -x "$TMP/x1852.bin" ]; then
+  x1852_bld="$("$TMP/x1852.bin" 2>/dev/null | tr '\n' ',')"
+  if [ "$x1852_bld" = "105,10," ]; then pass=$((pass+1)); printf 'ok   1852-xmod-samehead-arity-az-build-run (right interface by identity: 105,10)\n'
+  else fail=$((fail+1)); printf 'FAIL 1852-xmod-samehead-arity-az-build-run (got [%s], want [105,10,])\n' "$x1852_bld"; fi
+else
+  fail=$((fail+1)); printf 'FAIL 1852-xmod-samehead-arity-az-build-run (native build failed)\n'
+fi
+
 # ── #1280: EXTERN SIGNATURES CARRY IDENTITY (the SUPPLY half of Stage A-2) ────
 #
 # `externSchemes` (compiler/types/typecheck.mdk) used to turn each `DExtern`'s

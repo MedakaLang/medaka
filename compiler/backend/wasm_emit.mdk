@@ -3644,7 +3644,9 @@ emitMethodRef prog env d name (RScalar _) implRoutes methRoutes args =
 -- The chain runs inside a result block; each arm `br`s out with its value.
 emitMethodDispatchRef : Prog -> List String -> Int -> String -> String -> List CExpr -> List String
 emitMethodDispatchRef prog env d name dpar args =
-  let impls = methodImpls prog name
+  -- #1852 (LOCKSTEP with llvm_emit's `narrowImplsByArity`): drop the candidates whose
+  -- own declared arity is not the arity this bare-name dispatcher is supplying.
+  let impls = narrowImplsByArityW prog name (methodImpls prog name) (listLen args)
   let argInstrs = flatMap (a => emitRefExpr prog env d a) args
   -- the dict tag is read repeatedly; stash it in the scratch local for this depth.
   let tagRead = readDictParam prog env dpar
@@ -4504,6 +4506,23 @@ methodImplKey entries method (CImplEntry n _ (CImplTagged t k _ _ _ _)) =
   else
     []
 methodImplKey _ _ _ = []
+
+-- #1852, the wasm peer of llvm_emit's `narrowImplsByArity`.  Two unrelated interfaces
+-- declaring the same-spelled method at DIFFERENT arity on one receiver head put two
+-- candidates of different declared arity under one bare-name dispatcher; keep only the
+-- ones whose declared arity is the count this dispatcher actually pushes.  Each pair's
+-- routeKey identifies its entry (`implEntryRouteKeyW` hands back the RAW canonical key
+-- exactly when the head is NOT unique, which is precisely the colliding case), so
+-- `methodArityOfTagW` answers per-candidate here rather than first-wins.
+--
+-- Falls back to the whole list when nothing matches — all-or-nothing for a
+-- single-arity method (the whole tree), and unchanged for a genuine under-/over-
+-- application, so no collision-free module's instruction sequence moves.  The F10
+-- `armArityMismatchW` gap below stays as the loud floor for what this cannot narrow.
+narrowImplsByArityW : Prog -> String -> List (String, String) -> Int -> List (String, String)
+narrowImplsByArityW prog method impls nargs = match filterList (p => methodArityOfTagW prog method (snd p) == nargs) impls
+  [] => impls
+  narrowed => narrowed
 
 -- ── layer-15: defaulted-method emission (peer to llvm_emit's E19 default subsystem) ──
 -- A `Filterable List` provides `filterMap` as a CONCRETE impl but inherits `filter`

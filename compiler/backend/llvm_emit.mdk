@@ -1260,6 +1260,40 @@ filterTagged method ((CImplEntry n s (CImplTagged tag key iface ps pats body))::
   | otherwise = filterTagged method rest
 filterTagged method (_::rest) = filterTagged method rest
 
+-- #1852: keep only the candidates whose OWN declared arity is the arity this
+-- dispatcher was minted at.  The shared `@mdk_disp_<method>_<nmw>_<nargs>`
+-- dispatcher is keyed by the BARE method name, so when two unrelated interfaces
+-- declare the same-spelled method at DIFFERENT arity on the SAME receiver head
+-- (`impl IA Int` with `szK : a -> Int`, `impl IZ Int` with `szK : b -> Int -> Int`)
+-- both entries stamp the bare route word `"Int"` and both arms carry that same
+-- disjunct.  Whichever the loader saw first then won every dispatcher regardless of
+-- arity: the arity-2 dispatcher called the arity-1 impl, `inttoptr`'d its Int result
+-- as a closure and applied it — a segfault on a check-green program, decided by
+-- import order (#1852).
+--
+-- `nargs` is the ONE piece of identity the dispatcher does hold, and
+-- `methodArityOfEntry` reports each candidate's own DECLARED arity via
+-- `ifaceWordOfKey` (the route key's interface word), so the two are comparable
+-- without re-opening which declaration supplies the arity.
+--
+-- FALL BACK TO THE WHOLE LIST when nothing matches, and that is load-bearing in
+-- both directions:
+--   * every candidate shares one arity (the whole tree, and the SAME-arity
+--     cross-interface collision shape pinned by #1265 / #1619 / #1647 — none of
+--     which this may drain) ⇒ the filter is all-or-nothing ⇒ the list is
+--     unchanged ⇒ the IR is byte-identical and no same-arity pin moves;
+--   * a genuine UNDER-application (a method partially applied through a dispatcher
+--     minted at fewer args than declared — the residual-PAP arm) or OVER-application
+--     (an arity-1 method returning a closure, called with 2) ⇒ no candidate matches
+--     ⇒ the list is unchanged ⇒ emitDispatchArmBody's existing `emitKnownFnSat`
+--     saturation still handles it exactly as before.
+-- So this narrows in exactly one situation: candidates of MIXED declared arity, at
+-- least one of which is the arity actually being dispatched.
+narrowImplsByArity : Emit -> String -> List CImplEntry -> Int -> List CImplEntry
+narrowImplsByArity e method impls nargs = match filterList (ent => methodArityOfEntry e ent method == nargs) impls
+  [] => impls
+  narrowed => narrowed
+
 -- the single tagged impl an RKey route names: the CImplTagged of `method` whose
 -- type-head tag `t` OR canonical full-type key `k` equals `tag`.  The typechecker
 -- stamps the canonical key (TYPECHECK-AUDIT C7) when ≥2 impls share a head tycon
@@ -5228,7 +5262,8 @@ dispWordNames pre n i
 emitDispatchBody : Emit -> String -> String -> List String -> List String -> (String, LTy)
 emitDispatchBody e name dictPtr methWords argOps =
   let headTag = loadTag e dictPtr
-  let impls = implsOf e name
+  let allImpls = implsOf e name
+  let impls = narrowImplsByArity e name allImpls (lengthS argOps)
   -- #1818: mint this ONCE per dispatch body — same set `gatherGroup` built these
   -- impls' own defines from — and thread it to every arm below, so `armArity`
   -- there is a lookup into what was already minted, not a fresh `groupImpls`
@@ -5245,7 +5280,12 @@ emitDispatchBody e name dictPtr methWords argOps =
       -- MIXED default+impls: append default-synthesis arms for interface tags with no
       -- explicit impl (derived-Ord ADTs inheriting `max`/`min` from the default).
       Some entry =>
-        let covered = implEntryTags e impls
+        -- #1852: `covered` asks "which tags does the PROGRAM supply an impl for",
+        -- not "which arms is this dispatcher emitting", so it reads the UNNARROWED
+        -- set.  Reading the narrowed one would let an arity-narrowed-away entry's
+        -- tag reappear as `uncovered` and grow a spurious default-synthesis arm.
+        -- Collision-free ⇒ the two lists are equal ⇒ byte-identical.
+        let covered = implEntryTags e allImpls
         let uncovered = tagsMinus (ifaceTags e (methodIfaceOfInput e name)) covered
         match uncovered
           [] => emitDispatchChain e dictPtr headTag impls groups name methWords argOps slot endL
