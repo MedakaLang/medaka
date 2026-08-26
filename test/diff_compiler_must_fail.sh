@@ -211,6 +211,8 @@ claim_has() { grep -q "^$2:" "$1"; }
 #                                       medaka's exit + stdout.
 #   run                               — `medaka run`: the tree-walking interpreter. Grades
 #                                       its exit + stdout.
+#   test                               — `medaka test`: the doctest/property-test runner.
+#                                       Grades its exit + stdout.
 #   fmt-write                         — `medaka fmt --write` on a COPY; grades exit + the
 #                                       rewritten bytes (file-after).
 #   build                             — `medaka build` ITSELF: grades the EMITTER's exit +
@@ -261,6 +263,7 @@ run_verb() {
     check-json)  bound "$MEDAKA" check --json  "$_dir/$_file" >"$_out" 2>"$_out.err"; return $? ;;
     check-types) bound "$MEDAKA" check --types "$_dir/$_file" >"$_out" 2>"$_out.err"; return $? ;;
     run)        bound "$MEDAKA" run        "$_dir/$_file" >"$_out" 2>"$_out.err"; return $? ;;
+    test)       bound "$MEDAKA" test        "$_dir/$_file" >"$_out" 2>"$_out.err"; return $? ;;
     build)
       # Grade `medaka build` itself: its exit code AND its combined stdout+stderr (the
       # emitter's own failure output IS the pinned observation).
