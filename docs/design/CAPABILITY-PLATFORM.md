@@ -545,6 +545,82 @@ Until WS-1b lands, the demo can only say "this tool uses the network," not "this
 tool may reach exactly this host" — which is the differentiated half. Sequence
 accordingly.
 
+## 7f. Worked example E — the permissions classifier as harness (Level 1, and the `Exec` wall)
+
+A **permissions classifier** is the component in an agent harness that decides whether
+a proposed command may run. It is the §7d "runtime approval prompt" seen from the
+user's side rather than the security architect's, and it fails in both directions at
+once: it rejects commands that merely *look* complex, and it under-scrutinises opaque
+ones.
+
+⚠️ **Read the `Exec` objection at the bottom of this section before quoting any of
+this.** It is the reason this example is Level 1 and not Level 2, and it is fatal to
+the obvious version of the idea.
+
+**The observed failure, from this repo's own operational notes.** AGENTS.md's
+`[B-ISOLATION-COMPOUND]` (#1148, open) records that a bare, foreground, correct-cwd
+`make medaka` has been denied — while `sh test/build_native_medaka.sh`, *the literal
+body of that same make target*, succeeded first try in the same session. Both failure
+modes in one incident: the legible command refused, the strictly more opaque
+equivalent accepted. Nothing about the authority exercised changed between them; only
+inspectability did, and it moved the wrong way.
+
+Worse, the two modes are coupled. The standard workaround for over-rejection is to
+move the work into a script file and invoke that — which is precisely the
+under-scrutinised shape. The incentive gradient points from the legible form toward
+the opaque one.
+
+**What a manifest changes.** Syntactic complexity is a *proxy* for risk, and a poor
+one: it tracks how hard a string is to read, not what the string can reach. A
+compiler-derived row replaces the proxy with the quantity itself, and gives the
+classifier what it actually wants — a small, closed, ordered label set with
+parameters, i.e. a decision surface rather than a judgement call:
+
+```
+verdict surface:  <FileRead "repo/**", Exec "clang">      -- accept/reject on THIS
+not:              "4-stage pipeline, heredoc, two redirects"
+```
+
+It also inverts the polarity. A 200-line Medaka program whose row is empty is *more*
+trustworthy than a one-line `curl … | sh`, and the manifest says so — where a
+complexity heuristic says the opposite.
+
+| Classifier decision | complexity heuristic | manifest |
+|---|---|---|
+| `make medaka` vs. `sh test/build_native_medaka.sh` | opposite verdicts for identical work (#1148) | identical rows → identical verdict |
+| 200-line pure transform | rejected as complex | `<>` → accept |
+| `curl x \| sh` | short, accepted | `<Net _, Exec _>` → reject |
+| a script moved into a file to dodge a denial | becomes *less* suspicious | row is unchanged; the dodge buys nothing |
+
+### ⚠️ The `Exec` wall — why this is Level 1 only
+
+**`Exec` eats the lattice.** The commands a classifier actually adjudicates are
+`make`, `clang`, `git`, `gh`, `python3` — programs Medaka does not compile. An honest
+row for any wrapper that spawns one of them is `<Exec _>`: the top element, carrying
+exactly as much information as no manifest at all. Soundness *forces* this — α must
+be an over-approximation of the child's authority (EFFECTS-SEMANTICS.md §0), and the
+child is an arbitrary binary, so the over-approximation is ⊤ or the row is lying.
+
+The partial answer is the §7a proxy pattern: a parameterized `<Exec "clang">` plus a
+host-injected exec proxy that permits only that binary. That is a real gain — static,
+reviewable, compositional. **But note what it costs: the host is doing the containing,
+and the manifest has become the declaration of what the proxy should permit.** The
+type system supplies the *statement*, not the enforcement. Say this plainly; a
+technical audience arrives at `Exec` within a minute and a pitch that skipped it loses
+the room.
+
+### The honest near-term shape
+
+Not "write your shell in Medaka" — that applies §2's compile-from-source constraint to
+a string a user typed one second ago, a far larger ask than the §7d tool boundary
+where the artifact is already a compiled submission.
+
+What is true today, with no new architecture: **agent tooling that is already written
+in Medaka** — a hook, a lint rule, a codegen step, an MCP tool (`compiler/tools/mcp.mdk`)
+— can hand its classifier a derived manifest instead of a source string. That is §7d
+with the classifier in the harness role, and it is bounded by the same prerequisites
+listed in §10.
+
 ## 8. Honest boundaries / non-goals
 
 - **Capability effects cover *authority*, not *resources*.** A pure function can
@@ -562,6 +638,10 @@ accordingly.
   `<FileWrite "shared/*">` can do exactly the same thing here. Authority bounds are
   not an information-flow lattice; say so first, because this is the failure mode
   the public example is famous for.
+- **`Exec` is a ceiling, not a capability.** Any row that can spawn an arbitrary
+  binary must over-approximate to `<Exec _>` — top — or it is unsound (§7f). A
+  parameterized `<Exec "prog">` is only as good as the host proxy enforcing it, so
+  authority over child processes is the host's to contain, never the type system's.
 - **No FFI/`unsafe` escape hatch in submitted code.** Any escape punches through
   the guarantee. Submissions must forbid it (or its presence counts as
   max-capability). This constrains what language features are allowed in plugins.
