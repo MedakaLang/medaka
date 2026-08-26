@@ -781,6 +781,10 @@ for f in $changed; do
     # rather than a divergence — see its own header — but the masking path is
     # identical: a loose file under test/ that someone edits ALONE when the gate reds.
     test/CORE-IR-TYPED-LEDGER.txt) add 'diff_compiler_core_ir_typed_modules' ;;
+    # Fourth ledger, same structural blind spot: a loose file under test/ that
+    # `_fixture_dir_for` cannot see, and exactly what someone edits ALONE when
+    # the wrapper-callers gate reds (S-migrate-tool-consumers-remainder).
+    test/CHECK-WRAPPER-CALLERS.txt) add 'diff_compiler_check_wrapper_callers' ;;
 
     # #1315: engine value pins (`test/engine_value_pins/<corpus>/<name>.pin`, e.g.
     # `test/engine_value_pins/llvmM/foo.pin`) are the same structural blind spot as
