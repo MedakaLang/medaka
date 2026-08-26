@@ -3118,19 +3118,21 @@ isArithOp op = op == "+" || op == "-" || op == "*" || op == "/" || op == "%"
 -- round-trip of the same double.  No ABI change; only the statically-Float path
 -- (the polymorphic LTNum path is untouched).
 
+-- shared by `staticIsFloat` and `bodyFloatRet` below (#1201): a var is
+-- known-float when its recorded LTy is LTFloat/LTFloatU.
+varIsKnownFloat : List (String, (String, LTy)) -> String -> Bool
+varIsKnownFloat env x = match lookupAssoc x env
+  Some (_, LTFloat) => True
+  Some (_, LTFloatU) => True
+  _ => False
+
 -- Statically Float?  CONSERVATIVE (no false positives vs emitExpr's emitted LTy):
 -- a float literal; a local typed LTFloat; an arith node whose left operand is
 -- statically float (arith preserves operand type).  A false negative only loses
 -- the optimization (falls to the boxing path); it can never miscompile.
 staticIsFloat : List (String, (String, LTy)) -> CExpr -> Bool
 staticIsFloat env (CLit (LFloat _)) = True
--- Shares this `CVar` clause verbatim with `bodyFloatRet` below; NOT de-duplicated
--- here because this is a tooling-scoped PR and this is the emitter — see #1201.
--- lint-disable-next-line rule-duplicate-body
-staticIsFloat env (CVar x _) = match lookupAssoc x env
-  Some (_, LTFloat) => True
-  Some (_, LTFloatU) => True
-  _ => False
+staticIsFloat env (CVar x _) = varIsKnownFloat env x
 staticIsFloat env (CBinPrim op l _ _) = isArithOp op && staticIsFloat env l
 staticIsFloat env _ = False
 
@@ -3142,13 +3144,7 @@ staticIsFloat env _ = False
 -- makes it True, so it never false-positives a non-float body.
 bodyFloatRet : List (String, (String, LTy)) -> CExpr -> Bool
 bodyFloatRet env (CLit (LFloat _)) = True
--- Shares this `CVar` clause verbatim with `staticIsFloat` above; deferred
--- de-duplication — see #1201.
--- lint-disable-next-line rule-duplicate-body
-bodyFloatRet env (CVar x _) = match lookupAssoc x env
-  Some (_, LTFloat) => True
-  Some (_, LTFloatU) => True
-  _ => False
+bodyFloatRet env (CVar x _) = varIsKnownFloat env x
 bodyFloatRet env (CBinPrim op l r _) = isArithOp op
   && (bodyFloatRet env l || bodyFloatRet env r)
 bodyFloatRet env (CIf _ t f) = bodyFloatRet env t || bodyFloatRet env f
