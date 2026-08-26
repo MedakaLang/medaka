@@ -11770,7 +11770,7 @@ seedBuiltinClasses (Flat coreProg) prog =
 -- `TkIdent` impls: a false REJECT of the prelude, which is the #1112 prototype's
 -- 634-diagnostic signature.
 seedBuiltinClasses (Module mid _ _) prog =
-  if mid == "core" || mid == "" then
+  if isPreludeMid mid then
     crossRun.value.builtinClassesRef := builtinClassesOf prog
   else
     ()
@@ -23763,7 +23763,10 @@ checkBodyImpl seed mode prog0 =
     -- `moduleImplUniv` just below for what was measured and how it was shown
     -- fail-capable).  `appendUniverseAccums` no longer grows an impl universe either,
     -- so there is nothing left here for `IE` to be compared against.
-    Module _ _ _ => appendUniverseAccums prog0
+    -- #1499 clause (b) / S1-PRELUDE (a): `mid` is BOUND here now — `appendUniverseAccums`
+    -- must know whether this pass is the PRELUDE's, because the prelude contributes to
+    -- S1's INTERFACE operand but NOT to its STANDALONE one.  See its header.
+    Module mid _ _ => appendUniverseAccums mid prog0
   -- 🚨 #1112 A-3.4 PR2 — THE `IE` READER FLIP.  THIS IS THE ONE PRODUCTION READ OF
   -- STAGE K's `IE`, and it is what makes the registry real rather than shelf-ware.
   --
@@ -30496,6 +30499,16 @@ buildDefinerShadows implDecls prog =
 -- deleted by `S-keytable-payoff`.  Do not re-add a cumulative key-bucket accumulator here:
 -- impl EXISTENCE and impl SELECTION both read the graph-global `bodyImplEnvRef` now, and a
 -- prefix-keyed second population is the shape B-2.1-c/-f/-g each measured an S0 out of.
+-- BOTH SPELLINGS of the prelude's module id under `Module` mode, in one place.  The
+-- `graph*Exports` peers key the prelude under `"core"`, but the `mid` both Module-mode
+-- drivers actually PASS for the core pass is `""` (`checkModuleFull` →
+-- `checkModuleFullImpl ""`; `elabModuleStamp ""`).  A test of one spelling alone
+-- silently never fires on either driver.  Two callers — `seedBuiltinClasses` and
+-- `appendUniverseAccums` (below) — and they must not drift apart, since both ask the
+-- same question: "is the unit being folded the implicit prelude?"
+isPreludeMid : String -> Bool
+isPreludeMid mid = mid == "core" || mid == ""
+
 -- ⚠️ #1557 A-3.5a REMOVED THE COMPLETENESS LINE from this fold, with the
 -- `universeIfaceRequiredRef` cell and its `insertIfaceRequired` writer.  The ordering
 -- guarantee this comment records ("this module's own decls are visible at the read")
@@ -30504,10 +30517,30 @@ buildDefinerShadows implDecls prog =
 -- admits the reader's OWN row — the same 0..cur-inclusive prefix the accumulator held
 -- here.  Do not re-add a completeness accumulator to restore an ordering property that
 -- has moved onto the ordinal predicate.
-appendUniverseAccums : List Decl -> Unit
-appendUniverseAccums prog =
+appendUniverseAccums : String -> List Decl -> Unit
+appendUniverseAccums mid prog =
   crossRun.value.universeIfaceMethodsRef := (namesToSet (allIfaceMethodNames prog) crossRun.value.universeIfaceMethodsRef.value)
-  crossRun.value.universeFunNamesRef := (namesToSet (map fst (funDefs prog)) crossRun.value.universeFunNamesRef.value)
+  -- 🚨 SHADOW-SEMANTICS S1-PRELUDE (a), RULED 2026-08-10 (#1375 item 2, #1499 clause (b)):
+  -- THE PRELUDE IS NOT S1's LEFT (standalone) OPERAND.  The asymmetry with the line above
+  -- is DELIBERATE and is the ruling's own (`SHADOW-SEMANTICS.md:225`): S1's INTERFACE
+  -- operand is the wider "nameable in M", which INCLUDES the prelude, while its STANDALONE
+  -- operand is pinned by the definer/importer kind partition — and a standalone reaching M
+  -- only as an implicit prelude export is NEITHER kind, so it creates no shadow in M.
+  -- This ref's ONE reader is the `importerShadows` binding in `checkBodyImpl`
+  -- (`standaloneShadowsFromSet`'s `fnSet`), i.e. exactly that left operand; folding the
+  -- prelude's own funDefs in admitted every prelude standalone as an IMPORTER shadow —
+  -- the reading S1-PRELUDE names and REJECTS by consequence — so a user interface method
+  -- colliding with `isEven`/`count` fell back to the prelude function at any receiver head
+  -- carrying no impl, ACCEPTING at exit 0 where the ruling requires a located reject
+  -- (`test/shadow_fixtures/x1_prelude_standalone_not_left_operand.mdk`, x2, matrix rows
+  -- 46-48).  ⚠️ SUBTRACTING the prelude's names at the READ site instead would be WRONG:
+  -- a name the prelude AND a real user module both define IS imported into M by the user
+  -- module and DOES create a shadow there.  Not folding is what expresses "contributes
+  -- nothing"; the union still carries the name via whichever user module defines it.
+  let _ = if isPreludeMid mid then
+    ()
+  else
+    crossRun.value.universeFunNamesRef := (namesToSet (map fst (funDefs prog)) crossRun.value.universeFunNamesRef.value)
   -- #154 PR2 (site #3): grow the methodIfaceParams accumulator by THIS module's
   -- interfaces.  (⚠️ #1569 retired the sibling `registeredIfaces` accumulator this
   -- used to grow in lockstep — see `insertMethodIfaceParams`'s retirement note.)

@@ -106,7 +106,7 @@ appSpineArgCount : Expr -> Int
 appSpineName : Expr -> Option String
 appendDataUniverse : String -> List Decl -> Unit
 appendOp : Mono -> Mono -> Mono
-appendUniverseAccums : List Decl -> Unit
+appendUniverseAccums : String -> List Decl -> Unit
 applyCtorScopeOverrides : List Decl -> TcEnv -> TcEnv
 applyMethodScopeOverrides : List Decl -> Map String (IfaceRef, List String, Ty, List (String, List Kind)) -> Map String (IfaceRef, List String, Ty, List (String, List Kind))
 applyParams : Mono -> List Mono -> Mono
@@ -1168,6 +1168,7 @@ isMangledExportOfAny : List (String, List (String, Scheme)) -> String -> Bool
 isMangledFor : String -> String -> Bool
 isMonoScheme : Scheme -> Bool
 isNonexpansive : TcEnv -> Expr -> Bool
+isPreludeMid : String -> Bool
 isRowSlotArg : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Bool
 isShadowStandalone : String -> Bool
 isSubTop : Param -> Bool
