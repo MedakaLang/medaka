@@ -163,7 +163,7 @@ typecheck_ledger="\
 test_run_ported.mdk|CLEAN|
 test_eval_ported.mdk|CLEAN|
 test_eval_internal_prims_ported.mdk|CLEAN-INT|
-test_loader_ported.mdk|REJECT|1457
+test_loader_ported.mdk|CLEAN|
 test_eval_divergent_ported.mdk|REJECT|1461
 test_eval_letrec_toplevel_ported.mdk|REJECT|807"
 

@@ -106,7 +106,7 @@ appSpineArgCount : Expr -> Int
 appSpineName : Expr -> Option String
 appendDataUniverse : String -> List Decl -> Unit
 appendOp : Mono -> Mono -> Mono
-appendUniverseAccums : List Decl -> Unit
+appendUniverseAccums : String -> List Decl -> Unit
 applyCtorScopeOverrides : List Decl -> TcEnv -> TcEnv
 applyMethodScopeOverrides : List Decl -> Map String (IfaceRef, List String, Ty, List (String, List Kind)) -> Map String (IfaceRef, List String, Ty, List (String, List Kind))
 applyParams : Mono -> List Mono -> Mono
@@ -321,8 +321,12 @@ checkNestedReqs : ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> Unit
 checkOneAxis : String -> String -> Param -> Unit
 checkOneCallObligation : Bool -> ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> Unit
 checkOneCallObligationNoImpl : IfaceRef -> List Mono -> Option Loc -> Unit
+checkOneDiags : List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
 checkOneEffectParam : String -> String -> Unit
+checkOneErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
 checkOneIfaceCycle : ClassEnv -> Int -> Ref (Map String Unit) -> CeRow -> Unit
+checkOneScheme : List Decl -> List Decl -> (String, List Decl) -> List (String, Scheme)
+checkOneToLinesWithRuntime : List Decl -> List Decl -> List Decl -> String
 checkPhantomMethods : ClassEnv -> Int -> Unit
 checkProductAxes : String -> Param -> Unit
 checkProductAxesGo : String -> List (String, Param) -> Unit
@@ -376,6 +380,7 @@ cohEqR : Mono -> Mono -> Bool
 cohFreshTys : List Ty -> List Mono
 cohGo : Ref (List (Int, Mono)) -> Mono -> Mono -> Bool
 cohGoR : Ref (List (Int, Mono)) -> Mono -> Mono -> Bool
+cohHardInScope : CohSweep -> String -> String -> Bool
 cohHardMsg : CohImpl -> List Mono -> List Mono -> String -> String -> String
 cohImplIface : CohImpl -> IfaceRef
 cohImplIfaceName : CohImpl -> String
@@ -1163,6 +1168,7 @@ isMangledExportOfAny : List (String, List (String, Scheme)) -> String -> Bool
 isMangledFor : String -> String -> Bool
 isMonoScheme : Scheme -> Bool
 isNonexpansive : TcEnv -> Expr -> Bool
+isPreludeMid : String -> Bool
 isRowSlotArg : List (String, Ref Effvar) -> List (String, Mono) -> Ty -> Bool
 isShadowStandalone : String -> Bool
 isSubTop : Param -> Bool

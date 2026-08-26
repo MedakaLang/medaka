@@ -14,6 +14,6 @@ main =
   println (flip konst "ignored" 99)
 # TYPES_USER
 identity : a -> a
-flip : (a -> b -> c) -> b -> a -> c
 konst : a -> b -> a
+flip : (a -> b -> c) -> b -> a -> c
 main : Unit

@@ -10,13 +10,24 @@
 --
 -- Semantics per target are identical to check.mdk's runCheck; only the prelude
 -- parse is hoisted out of the per-target loop.
+--
+-- ⚠️ That identity claim is the WHOLE POINT of this entry, and it is what
+-- decides which typecheck wrapper is called here.  This file called the FLAT
+-- wrapper `checkToLinesWithRuntime` until 2026-08-26; `check.mdk`'s runCheck moved
+-- to the one-module wrapper in S-migrate-check-route (E-1 #1115) and this one did
+-- not, so the two silently diverged.  The divergence is not cosmetic: the FLAT arm
+-- checks `coreProg ++ userProg` as ONE decl list, so `groupClauses` (typecheck.mdk)
+-- merges a user standalone with a PRELUDE standalone of the same name into a single
+-- letrec group -- `test/diff_fixtures/higher_order.mdk`'s own `isEven` vanished from
+-- the scheme dump and the prelude's `isEven : Int -> Bool` stood in its place.
+-- Keep this on the one-module wrapper: it is what makes the claim above true.
 
 import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import frontend.resolve.{resolveToLines}
 import frontend.exhaust.{exhaustToLinesWith}
-import types.typecheck.{checkToLinesWithRuntime, setCoherenceUserDecls}
+import types.typecheck.{checkOneToLinesWithRuntime, setCoherenceUserDecls}
 import entries.entry_support.{driveParseSources}
 
 main = driveParseSources renderAll
@@ -48,7 +59,7 @@ cleanReport : List Decl -> List Decl -> List Decl -> List Decl -> String
 cleanReport runtimeP coreP raw desugared =
   let exWarns = exhaustToLinesWith (raw ++ runtimeP ++ coreP) raw
   let _ = setCoherenceUserDecls desugared
-  let schemes = checkToLinesWithRuntime (desugar runtimeP) (desugar coreP) desugared
+  let schemes = checkOneToLinesWithRuntime (desugar runtimeP) (desugar coreP) desugared
   joinNonEmpty exWarns schemes
 
 joinNonEmpty : String -> String -> String

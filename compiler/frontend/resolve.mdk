@@ -4363,8 +4363,16 @@ stampModulesGo coreTypes known ((mid, prog)::rest) =
       rest
 
 -- The FLAT (loader-less) analogue, for the entries that typecheck a program with
--- no module graph (`medaka check` on a no-import file, the LSP, `doc`,
--- `check-policy`, the playground buffer, the repl).
+-- no module graph.  ⚠️ THE CONSUMER LIST HERE MOVED, 2026-08-26: it used to read
+-- "`medaka check` on a no-import file, the LSP, `doc`, `check-policy`, the
+-- playground buffer, the repl".  E-1 (#1115) migrated `check`, `doc` and the repl
+-- onto the Module arm; what still reaches FLAT is the LSP's completion pass,
+-- `check-policy`/`manifest` (deliberately parked — `--fn <name>` is arbitrary user
+-- input looked up directly in the effect table, so it needs prelude schemes), the
+-- playground buffer, and the probe entries (`typecheck_main`, `check_batch`,
+-- `check_match_main`, `origin_agreement_main`, `selfproc_tc_probe`,
+-- `check_flat_diags_main`).  Do not trust this sentence over
+-- `test/CHECK-WRAPPER-CALLERS.txt`, which is the gated ledger.
 --
 -- 🚨 IT STAMPS ONLY WHAT A DRIVER WITH NO LOADER ACTUALLY KNOWS: builtin heads, and
 -- the PRELUDE's own types when the caller passed the prelude separately.  It does
@@ -4378,8 +4386,10 @@ stampModulesGo coreTypes known ((mid, prog)::rest) =
 -- imports (`flatMap (importedTypeOrigins known) (usePathsOf prog)`) — that machinery
 -- is exactly what is absent here, which is why flat's claims are a strict subset of
 -- graph's.  It matters because `checkProgramSchemesWithRuntime` serves the LSP,
--- `doc`, and the playground on buffers that may well have imports, so what this
--- function leaves unstamped reaches further than "the user's own declarations."
+-- `check-policy`/`manifest`, and the playground on buffers that may well have
+-- imports (`doc` moved OFF it 2026-08-26 — see the consumer note at the top of
+-- this comment), so what this function leaves unstamped reaches further than
+-- "the user's own declarations."
 --
 -- A module id is a fact about a FILE IN A PROJECT, produced by the loader.  These
 -- drivers do not have one — `runCheck` receives SOURCE TEXT, the playground has a

@@ -9,9 +9,9 @@ binary at merge-base of the branch, human `medaka check`, exit code read without
 The belief is mostly WRONG.  Of 23 diagnostics across the three gate targets, 7 were
 incidental, 4 were essential divergence, 12 were compiler bugs, and 0 were code defects.
 ⚠️ Don't trust that split — DERIVE it from the rows below, which are the actual record:
-  grep -cE '\((A|B|C|D)\)$' test/ported/TYPECHECK-TRIAGE.txt   # 23
+  grep -cE '\((A|B|C|D)\)$' test/ported/TYPECHECK-TRIAGE.txt   # 22 (one (D) row FIXED, see below)
   grep -c '(A)$' …   # 7      grep -c '(B)$' …   # 4
-  grep -c '(C)$' …   # 0      grep -c '(D)$' …   # 12
+  grep -c '(C)$' …   # 0      grep -c '(D)$' …   # 11
 This line has been WRONG TWICE.  It said 14/4/5 (submod.mdk's (D) counted outside the
 (D) column), then 13/4/6 (the helloI/helloW cluster still miscounted as incidental —
 review established it is #1460, a construct that CANNOT be written).  Both times the
@@ -19,6 +19,13 @@ per-diagnostic rows were correct and only this summary was not.  That is the who
 argument for deriving it.
 The 6 internal-primitive POLICY rows at the end are not part of that 23 — they are a
 flag question, not a triage bucket.
+
+⚠️ UPDATE 2026-08-26: the counts above are the ORIGINAL 2026-08-09 snapshot (23 total,
+12 (D)).  One (D) diagnostic — submod.mdk:28:15, `test_loader_ported.mdk`'s row below —
+is now FIXED (#1457, drained by `superDecls`'s Module-arm binding fix,
+`2324072983a84ab06cf41e98176d37bc98635925`).  The grep commands above now derive
+22/11 with the row's tag changed accordingly.  `test/diff_compiler_ported.sh`'s
+typecheck ledger, not this count, is the live authority per the note below.
 
 ⚠️ WHAT KEEPS THIS FILE HONEST.  Nothing here is self-verifying; it is prose.  The
 mechanism that stops it rotting is the TYPECHECK LEDGER in
@@ -59,14 +66,16 @@ test_run_ported.mdk — 1 diagnostic
 --------------------------------------------------------------------------------------------
 test_loader_ported.mdk — 4 diagnostics (1 of them in the sibling module submod.mdk)
 --------------------------------------------------------------------------------------------
-submod.mdk:28:15  Could not deduce 'Base m' from the signature of 'mkSub'                  (D)
+submod.mdk:28:15  Could not deduce 'Base m' from the signature of 'mkSub'          (D) — FIXED 2026-08-26 (#1457)
         `mkSub : Sub m => a -> m a`, and `interface Sub f requires Base f`, so `Base m` is a
         SUPERCLASS of a declared constraint.  Superclass entailment works — the identical
         code in ONE file checks clean (exit 0, `mkSub : Sub b => a -> b a`), and so does
-        `./medaka check test/ported/submod.mdk` on its own.  It fails only when the module is
-        reached through the multi-module path.  Minimal 2-module repro filed; NOT worked
-        around here, because adding `Base m =>` would mask a live false-reject that also
-        breaks `medaka run`.
+        `./medaka check test/ported/submod.mdk` on its own.  It failed only when the module was
+        reached through the multi-module path.  Root cause: `superDecls`'s Module-arm binding
+        (`Module _ _ implDecls => implDecls`) never contained the declaring module's own decls,
+        so `submod.mdk`'s own `requires Base f` was invisible to its own entailment check.
+        Fixed by `2324072983a84ab06cf41e98176d37bc98635925` (`prog ++ implDecls`); #1457 closed.
+        This module now typechecks clean through the multi-module path too.
 220:31  Ambiguous instance for `Ord`   (`maximum (fromL [3, 1, 2])`)                       (A)
 223:2   Ambiguous instance for `Debug` (`product (fromL [2, 3, 4])`)                       (A)
 223:2   Ambiguous instance for `Eq`    (same expression)                                   (A)
@@ -81,7 +90,8 @@ submod.mdk:28:15  Could not deduce 'Base m' from the signature of 'mkSub'       
         made this whole triage an iterative measurement (see the note under the eval rows).
         `sum` is the identical shape over the identical unannotated literal list; leaving it
         bare would have re-dirtied the file on the next round.  Verified by the ledger:
-        test_loader_ported.mdk's remaining rejection is the submod.mdk (D) alone.
+        test_loader_ported.mdk's only remaining rejection WAS the submod.mdk (D) alone —
+        now fixed too (#1457), so the whole file typechecks clean (ledger row CLEAN).
 
 --------------------------------------------------------------------------------------------
 test_eval_ported.mdk — 18 diagnostics under --allow-internal, + 6 policy rows without it
@@ -205,18 +215,20 @@ two ever disagree, the ledger is right.  Derive it:
   test_eval_letrec_toplevel_ported.mdk  (D) blocked on #807 (NOT #1449 — see the rows above).
                                             Delete-and-merge-back when that lands; the file
                                             has no other reason to exist.
-  test_loader_ported.mdk                (D) blocked on #1457, the multi-module superclass-
-                                            entailment false reject (submod.mdk:28).  Not
-                                            isolated — the offending decl is in a shared
-                                            sibling module, and the assertions using it are
-                                            correct.
+  test_loader_ported.mdk                FIXED 2026-08-26 — was (D) blocked on #1457, the
+                                            multi-module superclass-entailment false reject
+                                            (submod.mdk:28).  #1457 closed (superDecls fix,
+                                            `2324072983a84ab06cf41e98176d37bc98635925`); ledger
+                                            row promoted to CLEAN.
   test_eval_internal_prims_ported.mdk   NOT a typecheck residue.  `medaka check
                                             --allow-internal` is exit 0, and `medaka test`
                                             does not enforce the restriction at all today.
                                             Its real dependency is the open S0 #1362.
 
-  test_run_ported.mdk  and  test_eval_ported.mdk  now check clean at exit 0.
+  test_run_ported.mdk, test_eval_ported.mdk, and (as of 2026-08-26) test_loader_ported.mdk
+  now check clean at exit 0.
 
 So the by-design residue the #1445 follow-up must still grant an exemption to is ONE FILE
-(test_eval_divergent_ported.mdk).  Two more are debt with named issues (#807, #1457) that
-delete themselves when those land, and one is a #1362 dependency rather than an exemption.
+(test_eval_divergent_ported.mdk).  One more is debt with a named issue (#807) that deletes
+itself when it lands, one is a #1362 dependency rather than an exemption, and one
+(test_loader_ported.mdk, formerly #1457 debt) is now clean.

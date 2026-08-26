@@ -122,6 +122,33 @@ wrapPrintln body = EApp (EVar "println") body
 -- multi-module gate deliberately avoids, so it is skipped there (best-effort —
 -- the compiler graph never wraps, so this never affects the fixpoint).  Returns
 -- the type-error `TcDiag`s for the caller to render.
+--
+-- 🚨 THIS CALL MUST STAY ON THE `Flat` ARM — S-migrate-check-route (E-1 #1115)
+-- pointed it at `checkOneDiags` and that was an S0.  This is not an ordinary
+-- `check` front door: it is a re-check run BETWEEN the two emit elaborations of
+-- `runEmitWith` (`entries/entry_support.mdk`), whose result is discarded unless it
+-- errors — so whatever global state it leaves behind is read by the emit
+-- elaboration that follows it.  Routing it through the whole-graph `Module` driver
+-- makes that following elaboration lose the auto-print `Display` dict route.
+-- MEASURED, `medaka build` of a five-line file, the ONLY difference between the two
+-- builds being this call's target:
+--
+--     data A = A { p : Int, k : Int }
+--     main =
+--       let a = A { p = 10, k = 5 }
+--       a.k
+--
+--   checkProgramDiags : `@mdk_core__println(ptr @mdk_dc_0, %t)`   -> prints `5`
+--   checkOneDiags     : `@mdk_core__println(i64 0,        %t)`    -> SIGSEGV (139)
+--
+-- The emitted IR is otherwise BYTE-IDENTICAL — one dict word, null.  `a.k` types
+-- fine on both (instrumented `inferFieldAccess`: `rname=A te=A ft=Int`), so the
+-- loss is in the constrained-call ROUTE, not in inference; the exact ref the
+-- `Module` driver leaves behind is NOT yet isolated, and until it is, an
+-- emit-interleaved re-check has no business on that driver.  It cost five engine
+-- fixtures (`records`, `record_field_order_unscanned_ctor`,
+-- `record_literal_nested_out_of_order`, `wasm/w7_record_access`,
+-- `wasm/w7_record_update`) their whole native arm, silently, at exit 0.
 export
 underivedMainDiags : List Decl -> List Decl -> List (String, List Decl) -> List TcDiag
 underivedMainDiags runtimeDecls coreDecls [(_, entryDecls)] =

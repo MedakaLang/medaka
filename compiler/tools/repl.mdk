@@ -18,7 +18,7 @@
 --   2. Expression input wrapped as `__repl__ = <src>` so parse succeeds.
 --   3. Re-run pipeline (parse → desugar → resolve → typecheck → eval) on
 --      prelude ++ accumulated ++ new_input each time.
---   4. Resolve errors: safe list return.  Typecheck: checkProgramDiags.
+--   4. Resolve errors: safe list return.  Typecheck: checkOneDiags.
 --      Eval: can panic on runtime errors (same as OCaml REPL).
 --
 -- Known divergence from lib/repl.ml:
@@ -31,8 +31,8 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import frontend.resolve.{resolveProgram, ppResError}
 import types.typecheck.{
-  checkProgramDiags,
-  checkProgramSchemes,
+  checkOneDiags,
+  checkOneScheme,
   ppScheme,
   Scheme(..),
   tcMsg,
@@ -72,7 +72,7 @@ initSession : List Decl -> List Decl -> Unit
 initSession runtimeDecls preludeDecls =
   runtimeDeclsRef := runtimeDecls
   preludeDeclsRef := preludeDecls
-  let prelSchemes = checkProgramSchemes [] preludeDecls
+  let prelSchemes = checkOneScheme [] [] ("__user__", preludeDecls)
   let prelNames = map fst prelSchemes
   preludeNamesRef := prelNames
   knownNamesRef := prelNames
@@ -217,11 +217,11 @@ runPipeline combined =
   match resErrs
     e::_ => (map ppResError resErrs, [], [])
     [] =>
-      let (tcErrs, _) = checkProgramDiags runtimeDecls preludeDecls combined
+      let (tcErrs, _) = checkOneDiags runtimeDecls preludeDecls ("__user__", combined)
       match tcErrs
         e::_ => (map tcMsg tcErrs, [], [])
         [] =>
-          let allSchemes = checkProgramSchemes preludeDecls combined
+          let allSchemes = checkOneScheme [] preludeDecls ("__user__", combined)
           let bindings = evalOneRootEnvWith (testCapableExterns ()) preludeDecls ("__repl__", combined)
           ([], allSchemes, bindings)
 -- DRIVER-COLLAPSE Phase 3/4: eval via the 1-module wrapper (evalOneRootEnv
