@@ -80,10 +80,12 @@ env:
 jobs:
   # ── T-4b: docs-only fast path ───────────────────────────────────────────────
   # A change that touches ONLY prose (top-level *.md, docs/**, LICENSE) skips the
-  # heavy jobs' EXPENSIVE STEPS, never the jobs themselves. There are ELEVEN
-  # required status checks with ZERO approvals — the checks ARE the merge gate —
-  # so a job skipped by a job-level `if:`, or a workflow skipped by a
-  # `paths-ignore:` trigger filter, never posts a status; the PR sits at
+  # heavy jobs' EXPENSIVE STEPS, never the jobs themselves. The required status
+  # checks (derive them: `gh api repos/MedakaLang/medaka/rulesets/18885875 --jq
+  # '.rules[]|select(.type=="required_status_checks")|.parameters.required_status_checks[].context'`)
+  # are the merge gate, with ZERO approvals — so a job skipped by a job-level
+  # `if:`, or a workflow skipped by a `paths-ignore:` trigger filter, never
+  # posts a status; the PR sits at
   # "Expected — waiting for status" FOREVER and becomes permanently unmergeable.
   # ⚠️ Do NOT convert this into a job-level `if:`, and do NOT path-filter `on:`.
   # Every required job always RUNS and always REPORTS; only its STEPS are
@@ -400,7 +402,8 @@ jobs:
   # intra-run artifact transport at a fixed SHA, NOT a cache (see the file header's
   # #111 note) — no key, no cross-SHA restore.
   #
-  # ⚠️ NOT one of the eleven required contexts, and must not become one — that
+  # ⚠️ NOT one of the required contexts (derive them: `gh api …`, see the
+  # docs-only fast path note above), and must not become one — that
   # needs a ruleset edit, not atomic with a commit. ⚠️ `needs: detect` with a
   # CONDITIONAL STEP, never a conditional job — same shape and reason as every
   # heavy job below: a required consumer that `needs:` a skippable job can
@@ -604,16 +607,18 @@ jobs:
             # need before — cheap next to the marginal `setup-medaka` toolchain
             # cost of a second `wasm_arm` row, but not free; it's headroom this row
             # has, not headroom this row lacked before.
+            # ⚠️ Every shard-cost figure below is a HISTORICAL SNAPSHOT and has
+            # since rotted — do not plan against any of it. For the CURRENT
+            # per-shard cost, run `sh scripts/ci_shard_cost.sh`.
+            #
             # #1933 (S-project-floor): `mq/test/check`, `parsec/test/check`,
-            # `byteparser/test/check` added here by freshly measured cost — `tools`
-            # (336s) was the cheapest `gates (*)` shard at contract-authoring time,
-            # confirmed still cheapest by this slice's own `scripts/ci_shard_cost.sh`
-            # run. Each is a floor `./medaka check <project>/main.mdk` for a
-            # manifest-bearing project that previously ran in NO CI job.
+            # `byteparser/test/check` added here — `tools` was measured cheapest
+            # among `gates (*)` shards at the time this arm was placed. Each is a
+            # floor `./medaka check <project>/main.mdk` for a manifest-bearing
+            # project that previously ran in NO CI job.
             # #1934 (S-derived-enrolment): `diff_compiler_project_enrolment` added
-            # here by freshly measured cost — `tools` (336s) is still the cheapest
-            # `gates (*)` shard per this slice's own `scripts/ci_shard_cost.sh` run
-            # (pole: `gates (sqlite)`, 899s), and the gate itself measures 0.85s. It
+            # here — `tools` was measured cheapest among `gates (*)` shards at the
+            # time this arm was placed, and the gate itself was sub-second. It
             # belongs next to `diff_compiler_ci_shard_coverage`: both police the map
             # between what exists in the tree and what CI actually runs.
             # #1971 (S-guard-failsafe-gate): `diff_compiler_ci_guard_failsafe` added
@@ -623,9 +628,9 @@ jobs:
             # both added to this exact shard for the same reason), and this gate
             # is the same shape: one `python3` pass over `ci.yml`, no build, no
             # corpus, sub-second locally. Not independently re-measured via
-            # `scripts/ci_shard_cost.sh` — the marginal cost is negligible next to
-            # this shard's ~336s pole and its two nearest cousins already justified
-            # residence here on identical reasoning.
+            # `scripts/ci_shard_cost.sh` — the marginal cost was judged negligible
+            # next to this shard's pole and its two nearest cousins already
+            # justified residence here on identical reasoning.
             pattern: "'diff_compiler_lint*' 'diff_compiler_lsp*' 'diff_compiler_mcp' 'diff_compiler_codemod' 'diff_compiler_repl' 'diff_compiler_new' 'diff_compiler_test' 'diff_compiler_test_typecheck' 'diff_compiler_ported' 'diff_compiler_doc' 'diff_compiler_index' 'diff_compiler_references*' 'diff_compiler_capability_matrix' 'diff_compiler_internal_extern' 'diff_compiler_effect*' 'diff_compiler_os_entropy' 'diff_compiler_entry_exit_codes' 'diff_compiler_run_check_agreement' 'diff_compiler_run_stdout_flush' 'diff_compiler_run_entry_subdir' 'diff_compiler_ci_shard_coverage' 'diff_compiler_project_enrolment' 'diff_compiler_ci_guard_failsafe' 'diff_compiler_perf_stage_census' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_source_bytes' 'diff_compiler_fmt_write_safety' 'check_syntax_examples' 'check_build_oracles_for_consistency' 'cross_project_deps' 'cross_project_twonames' 'manifest_emit' 'lsp_harness' 'diff_net' 'pr_helper_test' 'pds/test/constant_time_*' 'mq/test/check' 'parsec/test/check' 'byteparser/test/check'"
             wasm_arm: "1"
     name: gates (${{ matrix.name }})
@@ -634,7 +639,8 @@ jobs:
 
       # ── WHAT DOES *THIS* SHARD ACTUALLY HAVE TO DO? ───────────────────────────────
       # ⚠️ THE STEPS BELOW ARE GUARDED; THE JOB IS NOT (except for cancellation) —
-      # there are ELEVEN required checks with ZERO approvals, and a job skipped by
+      # the required checks (derive them: `gh api …`, see the docs-only fast path
+      # note above) carry ZERO approvals, and a job skipped by
       # a job-level `if:` (or a workflow skipped by `paths-ignore:`) never posts a
       # status, leaving the PR permanently unmergeable. So this job RUNS and
       # REPORTS on every outcome except the whole run being cancelled (the guard

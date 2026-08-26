@@ -30,9 +30,11 @@
 #   intentional pattern (see `build`'s and `seed-health`'s bare `docs_only != 'true'`
 #   steps).
 #
-# Required JOBS (backing the twelve required contexts, derived from the ruleset —
-# see AGENTS.md [W-REQUIRED-CHECKS] for how to re-derive; trusted here per the
-# packet's §4 audit): gates, soundness, compiler-soundness, seed-health, inlang, wasm.
+# Required JOBS (backing the ruleset's required contexts — derive the live count,
+# never cite one: `gh api repos/MedakaLang/medaka/rulesets/18885875 --jq
+# '.rules[]|select(.type=="required_status_checks")|.parameters.required_status_checks[].context'`;
+# see AGENTS.md [W-REQUIRED-CHECKS] for the general recipe): gates, soundness,
+# compiler-soundness, seed-health, inlang, wasm.
 #
 # EXTRACTION (F2 hardening, review-round finding): step `if:` conditions are read via
 # PyYAML, not a raw-line regex — a YAML parser is indentation- and folding-invariant by
@@ -73,6 +75,15 @@ path = sys.argv[1]
 text = open(path, encoding='utf-8').read()
 lines = text.splitlines()
 
+# Hardcoded job-template names, not ruleset CONTEXTS: `gates` is one matrix job
+# template that expands to multiple required contexts (ruleset 18885875 — derive
+# the live counts, never cite one: `gh api repos/MedakaLang/medaka/rulesets/18885875
+# --jq '.rules[]|select(.type=="required_status_checks")|.parameters.required_status_checks[].context'`;
+# this set has 6 entries) — this list must be kept in sync with
+# that ruleset by hand. This gate does NOT verify that sync; it only verifies
+# the fail-safe `if:` shape (a positive-match disjunct on every step) for
+# whichever job templates it's told about here. A ruleset context renamed,
+# added, or removed without a matching edit here goes unnoticed by this gate.
 REQUIRED_JOBS = {"gates", "soundness", "compiler-soundness", "seed-health", "inlang", "wasm"}
 
 # Known-good floors — see header comment. A job not listed here has floor 0.
