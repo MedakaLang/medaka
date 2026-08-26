@@ -1,2 +1,0 @@
-export g : Int -> Int
-g x = x * 10

@@ -2784,6 +2784,7 @@ data DeclEnvs = DeclEnvs {
     deModules : List DeclEnvModule,  -- ordinal order, prelude first
     deOrdIndex : OrdMap Int,
     deDefiners : OrdMap (List (String, (String, String))),  -- RUN-XMOD-066: `graphPubDefiners`' answer, per module id — see `declEnvDefinerIndex`
+    deAmbigValues : OrdMap (List (String, List String)),  -- #1675: value names a module exports under ≥2 DISTINCT definitions, with those definers — see `ambiguousExportRows`
     deAllDecls : List Decl,
     deData : DataEnv,  -- A-3.2a (#1112) built it; A-3.2b residual 1 (#1512) made it LIVE — `aliasUniverseAt` reads `deAliases`
     deImpls : ImplEnv,
@@ -2800,6 +2801,7 @@ emptyDeclEnvs = DeclEnvs {
   deModules = [],
   deOrdIndex = omEmpty,
   deDefiners = omEmpty,
+  deAmbigValues = omEmpty,
   deAllDecls = [],
   deData = emptyDataEnv,
   deImpls = emptyImplEnv,
@@ -2822,10 +2824,16 @@ buildDeclEnvs coreDecls modules =
   -- `""` seeds mirror `declEnvOrdIndex`'s: the core pass arrives under that spelling
   -- and its seed is empty because nothing precedes ordinal 0.  See `declEnvSeedChain`.
   let seeds = declEnvSeedChain mods [] omEmpty (omInsert "" [] omEmpty) (omInsert "" omEmpty omEmpty)
+  -- #1675: BOTH definer projections come out of ONE fold.  They are derived from the
+  -- same uncollapsed row list — `deDefiners` keeps the first row per name, `deAmbigValues`
+  -- records the names where keeping the first was a CHOICE between two definitions — so
+  -- computing them apart would walk `modulePubDefiners` twice and let the two disagree.
+  let definers = declEnvDefinerIndex omEmpty omEmpty mods
   DeclEnvs {
     deModules = mods,
     deOrdIndex = declEnvOrdIndex (omInsert "" 0 omEmpty) mods,
-    deDefiners = declEnvDefinerIndex omEmpty mods,
+    deDefiners = fst definers,
+    deAmbigValues = snd definers,
     deAllDecls = allDecls,
     deData = buildDataEnv mods,
     -- #1112 A-3.4: `IE`, built here so it inherits this function's ordering and its
@@ -23231,6 +23239,12 @@ checkBodyImpl : List (String, Scheme) -> CheckMode -> List Decl -> List (String,
 -- lint-disable-next-line rule-prefer-assign-op
 checkBodyImpl seed mode prog0 =
   let _ = resetState ()
+  -- #1675: this module's own `import`/`export import` decls, checked for a name the
+  -- named dependency exports under two different definitions.  Here rather than in
+  -- `importSeed` because the seed is built BEFORE this `resetState ()` — see
+  -- `reportAmbiguousImports`.  Reads only `deAmbigValues`, so a driver with no graph
+  -- envelope (Flat, single-file) is a no-op.
+  let _ = reportAmbiguousImports prog0
   -- (#1) decl universes, derived from the mode.  On Flat, prog = coreProg ++ userProg
   -- and every universe collapses to it; on Module they fan out over accData/implDecls.
   let prog = match mode
@@ -31465,6 +31479,94 @@ memberAliasEntry mid qual m = match useMemberAlias m
 -- pick the imported names out of the named dependency's public schemes (held in
 -- depEnv, keyed by the dotted module id that usePathModuleId yields == the loader's
 -- mid).  `core` DUse decls are skipped — core is always seeded via baseSeed.
+-- ── #1675: reject an import that admits a name with more than one denotation ──────
+-- The hub `export import lib.pa.{g}` + `export import lib.pb.{g}` exports ONE spelling
+-- `g` standing for TWO definitions.  Downstream, `resolveMemberRows`' `lookupAssoc`
+-- took the first of them and every verb exited 0, so which function ran was decided by
+-- the ORDER OF TWO `export import` LINES — a semantically null edit moving the printed
+-- value from `2` to `10`.  This is the reject.
+--
+-- ⚠️ THE MECHANISM IS THE EXACT-KEY ARM, NOT THE `__<name>` SUFFIX FALLBACK, and the
+-- distinction decides where the check can live.  #1675's body cites the suffix `filter`
+-- ("cited, not instrumented", per its own pin's claim) — but `backend/private_mangle`
+-- runs ONLY in the emit drivers, so on `check`/`run` the hub's rows are keyed by the
+-- BARE name, `lookupAssoc origin` HITS, and the fallback is never reached.  A guard
+-- written on "the filter returned more than one candidate" is green on the whole repro.
+-- The ambiguity is a property of the DEPENDENCY'S EXPORT TABLE, which is where
+-- `deAmbigValues` records it, on both paths at once.
+--
+-- Reported at the IMPORT, not at the occurrence — the precedent `T-AMBIGUOUS-ALIAS-METHOD`
+-- sets for the same hazard one namespace over: at the import the ambiguity is
+-- unrepresentable rather than merely unreported, and the verdict stops depending on
+-- which definer came first.  Importing an ambiguous name is therefore rejected even if
+-- the program never uses it; the hub itself stays legal, which is what keeps this the
+-- USE-SITE model rather than #1070's superseded reject-at-declaration.
+--
+-- 🚨 CALLED FROM `checkBodyImpl`, AFTER ITS `resetState ()`, AND NOT FROM `importSeed`.
+-- `importSeed` is where the member resolution lives and was the first home for this, but
+-- the seed is computed in `foldModules` BEFORE the module's worker runs, and
+-- `checkBodyImpl` opens with `resetState ()` — which clears `typeErrors`.  MEASURED on
+-- that version: `run` exited 1 with the unlocated "detected during elaboration … see
+-- issue #1812" fallback (the sticky flag survives the reset, the diagnostic does not)
+-- and `check`/`check --json` were both still SILENT at exit 0 on the whole repro.  A
+-- diagnostic pushed while a seed is being built cannot be reported.  Everything this
+-- needs is on the module's own `DUse` decls plus the graph table, so nothing is lost by
+-- moving it inside the window; `checkBodyImpl` is the ONE body all four drivers share
+-- (`checkModuleFullImpl` and `elabModuleStamp` both route through it), which is what
+-- keeps `check` and the run/build elaboration pass answering alike.
+reportAmbiguousImports : List Decl -> Unit
+reportAmbiguousImports [] = ()
+reportAmbiguousImports ((DAttrib _ d)::rest) =
+  let _ = reportAmbiguousImports [d]
+  reportAmbiguousImports rest
+reportAmbiguousImports ((DUse _ path loc)::rest) =
+  let _ = reportAmbiguousImport (usePathModuleId path) path loc
+  reportAmbiguousImports rest
+reportAmbiguousImports (_::rest) = reportAmbiguousImports rest
+
+reportAmbiguousImport : String -> UsePath -> Loc -> Unit
+reportAmbiguousImport depId path loc = match graphAmbigValues depId
+  [] => ()
+  amb => pushAmbiguousImports depId loc (ambiguousAdmitted path amb)
+
+-- which of the dependency's ambiguous names THIS import form admits.  A whole-module
+-- alias (`import m as A`) binds every export under `A.name`, so it admits all of them —
+-- `importedBindings` answers `Some []` for it (it cannot enumerate a fixed member list)
+-- and must not be read as "admits nothing".  Every other form routes through
+-- `importedBindings` exactly as `importFormRows` does, so a form added there reaches
+-- this check by construction rather than by a case here.
+ambiguousAdmitted : UsePath -> List (String, List String) -> List (String, List String)
+ambiguousAdmitted (UseAlias _ _) amb = amb
+ambiguousAdmitted path amb = match importedBindings path
+  None => amb
+  Some bindings => filterList (r => anyList (b => fst b == fst r) bindings) amb
+
+pushAmbiguousImports : String -> Loc -> List (String, List String) -> Unit
+pushAmbiguousImports _ _ [] = ()
+pushAmbiguousImports depId loc ((n, mids)::rest) =
+  let _ = pushTypeErrorHelpFixAt "T-AMBIGUOUS-REEXPORT" (Some loc) (ambigReexportMsg n depId mids) (ambigReexportHelp n depId mids) None
+  pushAmbiguousImports depId loc rest
+
+-- wording mirrors `cohCrossModuleMsg`'s shape — name the thing, then name BOTH owners —
+-- without reusing its sentence, which is about a conflicting `impl` and would misname
+-- this cause.
+ambigReexportMsg : String -> String -> List String -> String
+ambigReexportMsg n depId mids =
+  "Ambiguous `\{n}` imported from `\{depId}`. Defined in \{andList mids}"
+
+ambigReexportHelp : String -> String -> List String -> String
+ambigReexportHelp n depId mids = "`\{depId}` re-exports more than one `\{n}`, so this import has no single meaning and which one it names is decided by the order of its `export import` lines; import the definition you mean directly (for example `import \{firstMid mids}.{\{n}}`), or drop one of `\{depId}`'s `export import` lines"
+
+firstMid : List String -> String
+firstMid (m::_) = m
+firstMid [] = "<module>"
+
+andList : List String -> String
+andList [] = ""
+andList [x] = x
+andList [x, y] = "\{x} and \{y}"
+andList (x::rest) = "\{x}, \{andList rest}"
+
 importSeed : List Decl -> List (String, List (String, Scheme)) -> List (String, Scheme)
 importSeed [] _ = []
 importSeed ((DAttrib _ d)::rest) depEnv = importSeed [d] depEnv
@@ -32010,6 +32112,15 @@ definersIn tbl mid = match omLookup mid tbl
   None => []
   Some rows => rows
 
+-- #1675: the `deAmbigValues` peer of `graphPubDefiners`.  A driver that never built an
+-- envelope (Flat / loader-less) reads the empty map and answers `[]`, so the ambiguity
+-- check FAILS OPEN there — the same discipline `memberDefinerRow`'s fallback takes for
+-- an absent graph, and the reason a single-file program can never trip this diagnostic.
+graphAmbigValues : String -> List (String, List String)
+graphAmbigValues mid = match omLookup mid driverState.value.declEnvsRef.value.deAmbigValues
+  None => []
+  Some rows => rows
+
 -- ── the per-graph derivation of `deDefiners`, built once by `buildDeclEnvs` ────────────
 --
 -- 🚨 NO RESET POINT IS NEEDED, AND THAT IS DELIBERATE (RUN-XMOD-066 (iii)).  The obvious
@@ -32038,15 +32149,69 @@ definersIn tbl mid = match omLookup mid tbl
 -- enforced upstream by the loader's topo-sort, not verified locally. A violation fails
 -- CLOSED: the not-yet-inserted dependency's `omLookup` misses, yielding a partial/missing
 -- row, never a crash or a wrong-but-plausible answer.
-declEnvDefinerIndex : OrdMap (List (String, (String, String))) -> List DeclEnvModule -> OrdMap (List (String, (String, String)))
-declEnvDefinerIndex acc [] = acc
-declEnvDefinerIndex acc (m::rest) =
+declEnvDefinerIndex : OrdMap (List (String, (String, String))) -> OrdMap (List (String, List String)) -> List DeclEnvModule -> (OrdMap (List (String, (String, String))), OrdMap (List (String, List String)))
+declEnvDefinerIndex acc amb [] = (acc, amb)
+declEnvDefinerIndex acc amb (m::rest) =
+  let rows = modulePubDefiners acc m.demId m.demDecls
   declEnvDefinerIndex
-    (omInsert
-      m.demId
-      (firstRowPerName omEmpty (modulePubDefiners acc m.demId m.demDecls))
-      acc)
+    (omInsert m.demId (firstRowPerName omEmpty rows) acc)
+    (omInsert m.demId (ambiguousExportRows m.demId rows) amb)
     rest
+
+-- ── #1675: which of a module's exported VALUE names have more than one denotation ──
+-- `firstRowPerName` above keeps the first row per name, and for a module's OWN
+-- declarations plus a single re-export that is a projection, not a choice.  For a
+-- re-export HUB — `export import lib.pa.{g}` and `export import lib.pb.{g}` in one
+-- module — the two rows name two DIFFERENT definitions, and keeping the first is a
+-- silent verdict decided by the order of two `export import` lines.  This records
+-- exactly those names so an IMPORTER of the hub can reject them (`reportAmbiguousImport`);
+-- nothing rejects the hub itself, which is the decided USE-SITE ambiguity model
+-- (#1070's reject-at-declaration remedy is superseded).
+--
+-- 🚨 IDENTITY, NOT MODULE ID, IS THE DISCRIMINATOR — the same rule
+-- `T-AMBIGUOUS-ALIAS-METHOD` states for methods.  The rows are deduped on the whole
+-- `(definer module, name at the definer)` pair, so a DIAMOND (one definition reached
+-- through two re-export hops) collapses to one denotation and is NOT ambiguous; only
+-- genuinely distinct definitions collide.
+--
+-- ⚠️ A module's OWN declaration SETTLES the name rather than participating in the
+-- ambiguity — `graphPubDefiners`' "declared names come first" and resolve's
+-- `ambiguousSet`/`keepAmbiguous` (which drops any name with a same-module top-level
+-- value shadow) already decide it that way, and a hub that both declares `g` and
+-- re-exports someone else's `g` must keep meaning its own.
+--
+-- Grouped through an `OrdMap` rather than a per-name rescan: `rows` is the UNCOLLAPSED
+-- list, which for a wildcard re-export is the whole of its dependency's export table,
+-- and RUN-XMOD-066 records what a quadratic over that costs on
+-- `diff_compiler_perf_scaling.sh`'s 400-module `modules` chain.
+ambiguousExportRows : String -> List (String, (String, String)) -> List (String, List String)
+ambiguousExportRows mid rows =
+  let grouped = groupDefinerPairs omEmpty rows
+  ambigRowsOf mid grouped (omKeys grouped)
+
+groupDefinerPairs : OrdMap (List (String, String)) -> List (String, (String, String)) -> OrdMap (List (String, String))
+groupDefinerPairs acc [] = acc
+groupDefinerPairs acc ((n, pair)::rest) = match omLookup n acc
+  None => groupDefinerPairs (omInsert n [pair] acc) rest
+  Some seen =>
+    if anyList (p => fst p == fst pair && snd p == snd pair) seen then
+      groupDefinerPairs acc rest
+    else
+      groupDefinerPairs (omInsert n (seen ++ [pair]) acc) rest
+
+ambigRowsOf : String -> OrdMap (List (String, String)) -> List String -> List (String, List String)
+ambigRowsOf _ _ [] = []
+ambigRowsOf mid grouped (n::rest) =
+  let pairs = definerPairsOf n grouped
+  if listLen pairs >= 2 && not (anyList (p => fst p == mid) pairs) then
+    (n, map fst pairs) :: ambigRowsOf mid grouped rest
+  else
+    ambigRowsOf mid grouped rest
+
+definerPairsOf : String -> OrdMap (List (String, String)) -> List (String, String)
+definerPairsOf n grouped = match omLookup n grouped
+  Some ps => ps
+  None => []
 
 -- keep the FIRST row per local spelling and drop the rest.  This is not a shortcut, it is
 -- what every reader of these rows already does: `resolveMemberRows` takes `lookupAssoc`'s
