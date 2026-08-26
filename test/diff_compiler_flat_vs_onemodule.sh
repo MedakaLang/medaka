@@ -283,24 +283,25 @@ printf '%s\n\nmain = println (sizeOf (make 3))\n' "$SIZER_MK" > "$WORK/c5/p6.mdk
 # A superclass-default-method shape: `Fancy t requires Basic t` with a default
 # body for `describe` that calls the superclass method `label`.  The default
 # body's use of `label` is entailed by Fancy's OWN `requires Basic t` — no
-# method-level `=>` needed.  Discovered live (no source stub) while auditing
-# `groundUniverse`/class(1): on FLAT, the interface module's own decl universe
-# IS the whole `prog`, so the requires-closure lookup sees both interfaces; on
-# MODULE, a module declaring ONLY interfaces (no impl blocks) has
-# `implDecls = []`, and if the requires-closure derivation for default-method
-# rigidity is scoped to that empty universe, the closure comes back empty and
-# the (correct, self-entailed) default body is rejected as under-constrained.
-# Filed for triage by the orchestrator (no issue number yet — this census did
-# not file it, per this slice's site list).
+# method-level `=>` needed.  Filed as #2024 (false-reject-split-default-method).
+#
+# DRAINED 2026-08-26: fixed by F1-fix-superdecls
+# (`2324072983a84ab06cf41e98176d37bc98635925`), the same `superDecls` binding
+# fix that drained #1457 at multi-module scale — `Module _ _ implDecls =>
+# implDecls` never contained the declaring module's OWN decls (`foldModules`
+# only grows the accumulator for LATER modules), so `iface.mdk`'s own `Fancy
+# requires Basic` clause was invisible to its own default-method rigidity
+# check. Now `prog ++ implDecls`. Re-verified directly (fresh gate run, this
+# worktree, post-fix): both FLAT and MODULE arms ACCEPT with the correct
+# runtime value `fancy:box7`. Both rows below are PIN, not CHAR — see #2024
+# for the closing comment.
 #
 # S-migrate-check-route (E-1 #1115): `medaka check` on a genuinely no-import file
 # now ALSO routes through `checkOneDiags` (the Module-arm one-module wrapper), not
-# the FLAT arm's own `checkProgramDiags` — so the `flat` row below now measures
-# the SAME false-reject the `module` row already characterized, not a distinct
-# FLAT-arm answer.  This was EXPECTED and reported (not silently absorbed): the
-# `flat` row's mode moved from PIN/ACCEPT to CHAR/ACCEPT/REJECT, mirroring the
-# `module` row exactly, per the packet's own §4/§6.6 instruction to check and
-# report this visibility change rather than let it pass unnoticed.
+# the FLAT arm's own `checkProgramDiags` — so the `flat` row below measures the
+# SAME code path the `module` row does, not a distinct FLAT-arm answer. Both
+# rows agree because both are correct, not because the visibility change
+# happened to make a defect converge.
 IFACE_DEFAULT_DECLS='public export data Box = Box Int
 
 export interface Basic t where
@@ -347,8 +348,8 @@ user_iface_dispatch|p1_concrete_hit|c4/p1.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|7
 user_iface_dispatch|p3_no_impl|c4/p3.mdk|FLAT|PIN|REJECT|REJECT|T-NO-IMPL|-
 user_iface_undetermined|p5_two_impls|c5/p5.mdk|FLAT|PIN|REJECT|REJECT|T-AMBIGUOUS-INSTANCE|-
 user_iface_undetermined|p6_one_impl|c5/p6.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|3
-iface_default_requires_closure|flat|c6f/flat.mdk|FLAT|CHAR|ACCEPT|REJECT|T-IMPL-TOO-SPECIFIC|fancy:box7|#2024-false-reject-split-default-method
-iface_default_requires_closure|module|c6m/main.mdk|MODULE|CHAR|ACCEPT|REJECT|T-IMPL-TOO-SPECIFIC|fancy:box7|#2024-false-reject-split-default-method
+iface_default_requires_closure|flat|c6f/flat.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|fancy:box7
+iface_default_requires_closure|module|c6m/main.mdk|MODULE|PIN|ACCEPT|ACCEPT|-|fancy:box7
 "
 CHAR_ISSUE=1564
 
@@ -526,10 +527,9 @@ done
 # ACCEPTs, and all three compute `fancy:box7`. The row below is set to the SPEC
 # answer (ACCEPT) — derived, not captured: the gate's own §"HOW THE EXPECTED VALUES
 # WERE DERIVED" reasoning always said ACCEPT was correct and REJECT was the defect.
-# The two CHAR rows above (`iface_default_requires_closure` FLAT/MODULE) still carry
-# the old characterization and now emit DRAIN NOTICEs — deliberately left for the
-# issue owner to re-derive and drain, since draining a CHAR row is the must-fail
-# suite's call, not this gate's.
+# The two CHAR rows above (`iface_default_requires_closure` FLAT/MODULE) have since
+# been re-derived and tightened to PIN/ACCEPT (2026-08-26, orchestrator, re-verified
+# by a fresh gate run) — #2024 closed as fixed by the same commit.
 #
 # So all 9 rows below now expect agreement with FLAT. Any row disagreeing is a
 # finding this gate's packet did not anticipate.
