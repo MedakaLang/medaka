@@ -207,7 +207,6 @@ import types.registry.{
   RegKey,
   regKeyOfTab,
   regKeyNTab,
-  regKeyNTabAt,
   regKeyRender,
   dispKeyRender,
   -- the three registry types the obligation impl universe is now built from.
@@ -24137,11 +24136,13 @@ checkBodyImpl seed mode prog0 =
     Flat _ =>
       -- #838 I4: impl obligations now go through the unified checkCallObligations
       -- (projected via implOblToU), same universe/order as before the checker swap.
-      -- Impl channel = (deferNonGround=True, dedup=False) — retired checkImplObligationsU
-      -- semantics: defer non-ground, and check EVERY obligation (no seen skip; S0 #863).
-      -- Call channel = (deferNonGround=False, dedup=True): RULE 2/3 + the seen dedup.
-      let _ = checkCallObligations True False fullUniverse perRun.value.implObls.items.value
-      let _ = checkCallObligations False True fullUniverse perRun.value.obls.items.value
+      -- Impl channel = (deferNonGround=True) — retired checkImplObligationsU semantics:
+      -- defer non-ground, and check EVERY obligation (no seen skip; S0 #863).
+      -- Call channel = (deferNonGround=False): RULE 2/3.  #1925: both channels used to
+      -- also thread a `dedup` flag; #1330 made every obligation checked regardless, so
+      -- the flag was dead and is removed.
+      let _ = checkCallObligations True fullUniverse perRun.value.implObls.items.value
+      let _ = checkCallObligations False fullUniverse perRun.value.obls.items.value
       let _ = setNumlitFloats ()   -- PLAN.md #11: stamp Float-typed int literals
       ()
     Module _ _ _ =>
@@ -24158,11 +24159,11 @@ checkBodyImpl seed mode prog0 =
       let _ = if not driverState.value.implInferEnabled.value then
                 -- #838 I4: unified checker, same `obUniv`, same `not implInferEnabled`
                 -- gate and same order relative to setNumlitFloats as the retired checker.
-                -- Impl channel = (deferNonGround=True, dedup=False); call channel = (False, True).
-                let _ = checkCallObligationsU True False obUniv [] perRun.value.implObls.items.value
+                -- Impl channel = (deferNonGround=True); call channel = (deferNonGround=False).
+                let _ = checkCallObligationsU True obUniv perRun.value.implObls.items.value
                 setNumlitFloats ()
               else ()
-      let _ = checkCallObligationsU False True obUniv [] perRun.value.obls.items.value
+      let _ = checkCallObligationsU False obUniv perRun.value.obls.items.value
       ()
   perRun.value.localSchemesOut := (mapLocalSchemes perRun.value.localBindRefs.value)
   perRun.value.seedSchemesOut := seed
@@ -25364,93 +25365,31 @@ univHeadless (ImplUniverse _ hl _) iface =
 -- deferrableVarIds instead is UNSOUND: it is shared with the call channel's RULE 2, and
 -- the RETPOS-registered ambiguous var must stay OUT of it or the genuine ambiguity would
 -- defer too.  So the disposition is per-channel, byte-identical to each retired checker.
--- #838 I4 (S0 fix, PR #863 review): [dedup] is the SECOND per-channel fact.  The CALL
--- channel dedups by (iface, every-arg-head-tycon) [seen] because the SAME call obligation
--- is recorded by more than one path (EVar + EDictAt).  The retired checkImplObligationsU
--- had NO seen — it checked EVERY element.  Sharing the CALL channel's seen with the impl
--- window SILENTLY DROPS a failing obligation whose key collides with a PASSING sibling:
+-- #838 I4 (S0 fix, PR #863 review): a CHECK-level [dedup] flag used to be the SECOND
+-- per-channel fact here — the CALL channel skipped a repeat of an already-checked
+-- (iface, every-arg-head-tycon) key, because the SAME call obligation is recorded by
+-- more than one path (EVar + EDictAt).  That CHECK-level skip was itself the #1330 S0:
 -- a tuple's head tycon is `__tuple2__` regardless of element types, so `Debug (Color,3)`
--- and `Debug (1,2)` share key `Debug,__tuple2__`; LIFO checks the passing one first, adds
--- the key to seen, and SKIPS the failing one — its checkNestedReqs (the `No impl Debug
--- Color` reject) never runs → check-green, run-CRASH (any parametric conditional instance:
--- tuple/List/Option).  So the IMPL channel passes dedup=False (check every obligation,
--- like the retired checker); the CALL channel keeps dedup=True.  This drops only the
--- check-level SKIP of a DIFFERENT-verdict same-key obligation; the EMISSION-level collapse
--- of two IDENTICAL rejects is unchanged (checkOneCallObligation's pushTypeErrorOnceAt).
-checkCallObligations : Bool -> Bool -> List Decl -> List UObligation -> Unit
-checkCallObligations deferNonGround dedup prog obligations =
-  checkCallObligationsU
-    deferNonGround
-    dedup
-    (buildImplUniverse prog)
-    []
-    obligations
+-- and `Debug (1,2)` shared a key, and skipping the second (a different-verdict sibling)
+-- meant its checkNestedReqs `No impl Debug Color` reject never ran → check-green,
+-- run-CRASH.  #1330 fixed it by running `checkOneCallObligation` on EVERY obligation on
+-- both channels — the flag, the `seen` accumulator threaded to carry it, and the
+-- `oblDedupKey` call that fed `seen` were left in place but unread (#1925: removed).
+-- The ONLY dedup left is at EMISSION: `checkOneCallObligation`'s `pushTypeErrorOnceAt`
+-- collapses two IDENTICAL rendered messages to one report — DICT-SEMANTICS §4.2 OD5.
+checkCallObligations : Bool -> List Decl -> List UObligation -> Unit
+checkCallObligations deferNonGround prog obligations =
+  checkCallObligationsU deferNonGround (buildImplUniverse prog) obligations
 
--- [seen] dedups by (iface, EVERY argument's concrete-head-tycon): the SAME
--- unsatisfiable obligation can be recorded by more than one path (a use marked both
--- EVar and, on the emit path, EDictAt) or by repeated call sites, but the oracle
--- raises ONE error per missing impl.  The key spans the WHOLE argument vector — a
--- head-of-arg-0-only key conflated `Ix Int Bool` with `Ix Int Char` and reported
--- only the first (#607).
--- ORDER of errors follows the OBLIGATION list (unchanged), never the impl universe.
--- A-2.2b (#1111): the dedup key, identity-keyed.  It used to be
--- `joinWith "," (iface :: map (headKeyNameOr "") heads)` — a positional string
--- whose components were BARE NAMES and whose absent positions were `""`.
---
--- 🚨 A POSITION HOLDS ONE OF THREE FACTS AND THE KEY MUST KEEP ALL THREE APART.
--- The bare-name form kept only two: it rendered a rigid parameter `a` and a type
--- CONSTRUCTOR named `a` identically, and it distinguished "absent" only by a
--- placeholder that any head could in principle have equalled.  The encoding
--- here is derived on `dispKeyRender` (`types/registry.mdk`) and doctested there
--- (blocks F3b/F3c):
---
---   DECLARATION  its `TabKey` joins the identity block; its POSITION joins the
---                ordinal block.  The interface key leads the identity block and
---                the vector's ARITY leads the ordinal block, so every position
---                is classifiable and #607 ("`Ix Int b0` and `Ix a0 Int` must
---                stay distinct keys") holds structurally rather than by a
---                placeholder that happens not to collide.
---   ABSENT       contributes nothing to either block; the arity plus the
---                position list say where it was.
---   RIGID        SHOULD ride in `dispKeyRender`'s separate `(position, name)`
---                residual group — §8 I6.1 says it is not an identity and must
---                not enter `RegKey`.  It does NOT here, and the reason is
---                answer-preservation: see `dispHeadTab`.  A rigid may legally
---                be spelled `__tupleN__`, and a rigid so spelled currently
---                shares a key with the tuple head, so separating the two
---                populations changes an answer.  The residual group exists and
---                is doctested (`types/registry.mdk`, block F3c); switching this
---                site onto it is one edit, and it belongs to the semantics unit
---                that retires the forgery, not to a re-key.
---
--- ⚠️ ANSWER-PRESERVING, and the claim is narrow enough to check.  The old key
--- was `joinWith ","` over `iface :: <one name or "" per position>`; two keys
--- were equal iff the interface and every position's rendering matched.  This
--- one is equal iff the interface key, the ARITY, the set of present positions
--- and each present position's spelling all match — a refinement that can only
--- SPLIT keys the old form merged, never merge keys it split, and the only pairs
--- it could split are ones the old form merged by a placeholder collision
--- (a head literally named `""`, which cannot be spelled).
-oblDedupKey : IfaceRef -> List Mono -> String
-oblDedupKey iface occs =
-  let heads = map headTyconMono occs
-  match oblKeyParts 0 heads
-    (decls, positions) => dispKeyRender (regKeyNTabAt (oblIfaceKey iface :: decls) (listLen heads :: positions)) []
-
--- ONE pass over the projected heads (Medaka is strict — two passes would be two
--- traversals and two allocations), yielding the PRESENT positions' head keys and
--- those positions' indices, both in ascending position order, which
--- `dispKeyRender`'s injectivity argument assumes.
-oblKeyParts : Int -> List (Option HeadKey) -> (List TabKey, List Int)
-oblKeyParts _ [] = ([], [])
-oblKeyParts i (h::rest) = match oblKeyParts (i + 1) rest
-  (ds, ps) => match h
-    Some hk => (dispHeadTab hk :: ds, i::ps)
-    None => (ds, ps)
-
-checkCallObligationsU : Bool -> Bool -> ImplUniverse -> List String -> List UObligation -> Unit
-checkCallObligationsU _ _ _ _ [] = ()
-checkCallObligationsU deferNonGround dedup univ seen (o::rest) =
+-- #1925: the CHECK-level dedup key that used to be minted here (`oblDedupKey`,
+-- A-2.2b #1111's identity-keyed encoding through `dispKeyRender`/`regKeyNTabAt`) fed
+-- only a `seen` accumulator that #1330 (above) left unread — every obligation is
+-- checked now, so there is nothing left to key.  Removed along with `oblKeyParts`
+-- (its sole helper).  `dispKeyRender`/`dispHeadTab`/`regKeyNTabAt` stay — they are
+-- general `types/registry.mdk` machinery with other callers.
+checkCallObligationsU : Bool -> ImplUniverse -> List UObligation -> Unit
+checkCallObligationsU _ _ [] = ()
+checkCallObligationsU deferNonGround univ (o::rest) =
   let iface = o.pred.iface
   -- `uOblArgs`, NOT `o.pred.args`: an impl-channel obligation carries an EMPTY
   -- `pred.args` and projects its dispatch vector at CHECK time (see `OblProjection`).
@@ -25462,18 +25401,8 @@ checkCallObligationsU deferNonGround dedup univ seen (o::rest) =
   -- differential was the only thing in the tree that caught it.
   let occs = uOblArgs o
   let loc = o.loc
-  let key = oblDedupKey iface occs
-  -- dedup=False (IMPL channel): never SKIP — check every obligation like the retired
-  -- checkImplObligationsU (S0 #863: a same-key different-verdict obligation must not be
-  -- dropped).  dedup=True (CALL channel) USED TO skip a repeat of an already-checked key —
-  -- that dropped the CHECK, not just the report, and `oblDedupKey` keys only on head
-  -- constructors (nothing below them in the `requires` chain), so two obligations with
-  -- different verdicts could collide and the second would never be checked at all (#1330,
-  -- S0).  DICT-SEMANTICS §4.2 OD5: dedup is admissible only at emission — every recorded
-  -- obligation is checked; `pushTypeErrorOnceAt` (`:6961`) dedups the emitted diagnostic by
-  -- exact message text, which is what actually keeps a genuinely duplicate report to one.
   let _ = checkOneCallObligation deferNonGround univ iface occs loc
-  checkCallObligationsU deferNonGround dedup univ (key::seen) rest
+  checkCallObligationsU deferNonGround univ rest
 
 -- [occs] is the predicate's whole argument vector.  At arity 1 the match test stays
 -- implMatchesReceiverU (byte-identical to the pre-#607 behaviour: for a 1-param

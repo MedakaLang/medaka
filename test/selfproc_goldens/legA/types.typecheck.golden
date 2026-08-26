@@ -266,8 +266,8 @@ checkAnnotTooGeneral : Ty -> List Mono -> Unit
 checkArgEffVarCoverage : String -> List (String, List Kind) -> String -> Ty -> Unit
 checkArgEffVars : String -> String -> Ty -> List (String, List Atom) -> List (String, List Atom) -> List String -> Unit
 checkBodyImpl : List (String, Scheme) -> CheckMode -> List Decl -> List (String, Scheme)
-checkCallObligations : Bool -> Bool -> List Decl -> List UObligation -> Unit
-checkCallObligationsU : Bool -> Bool -> ImplUniverse -> List String -> List UObligation -> Unit
+checkCallObligations : Bool -> List Decl -> List UObligation -> Unit
+checkCallObligationsU : Bool -> ImplUniverse -> List UObligation -> Unit
 checkClausesNonFunctionLocated : List String -> String -> List FunClause -> Unit
 checkCoherence : ImplEnv -> Int -> Bool -> Unit
 checkDefaultMethodRigidity : String -> List String -> String -> Ty -> List (String, Mono) -> List (Int, Mono) -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Option Loc -> Unit
@@ -1352,12 +1352,10 @@ numlitReframeLoc : Option Loc -> Bool
 oblArgKey : Mono -> String
 oblAsTuple : UObligation -> (IfaceRef, List Mono, Option Loc)
 oblCallVerdict : ImplUniverse -> IfaceRef -> List Mono -> Option Bool
-oblDedupKey : IfaceRef -> List Mono -> String
 oblDispatchMonos : UObligation -> List Mono
 oblDispatchMonosGo : String -> List String -> Ty -> Mono -> List Mono
 oblIfaceKey : IfaceRef -> TabKey
 oblIfaceKeys : IfaceRef -> List TabKey
-oblKeyParts : Int -> List (Option HeadKey) -> (List TabKey, List Int)
 oblPredOf : UObligation -> List (IfaceRef, List Mono, Option Loc)
 occurrenceCarriesMangledShadowSym : Ref Route -> Bool
 occursAdjust : Int -> Int -> Mono -> Unit
