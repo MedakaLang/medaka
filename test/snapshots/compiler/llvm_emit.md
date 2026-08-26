@@ -1,5 +1,5 @@
 # META
-source_lines=11390
+source_lines=11386
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -3122,19 +3122,21 @@ isArithOp op = op == "+" || op == "-" || op == "*" || op == "/" || op == "%"
 -- round-trip of the same double.  No ABI change; only the statically-Float path
 -- (the polymorphic LTNum path is untouched).
 
+-- shared by `staticIsFloat` and `bodyFloatRet` below (#1201): a var is
+-- known-float when its recorded LTy is LTFloat/LTFloatU.
+varIsKnownFloat : List (String, (String, LTy)) -> String -> Bool
+varIsKnownFloat env x = match lookupAssoc x env
+  Some (_, LTFloat) => True
+  Some (_, LTFloatU) => True
+  _ => False
+
 -- Statically Float?  CONSERVATIVE (no false positives vs emitExpr's emitted LTy):
 -- a float literal; a local typed LTFloat; an arith node whose left operand is
 -- statically float (arith preserves operand type).  A false negative only loses
 -- the optimization (falls to the boxing path); it can never miscompile.
 staticIsFloat : List (String, (String, LTy)) -> CExpr -> Bool
 staticIsFloat env (CLit (LFloat _)) = True
--- Shares this `CVar` clause verbatim with `bodyFloatRet` below; NOT de-duplicated
--- here because this is a tooling-scoped PR and this is the emitter — see #1201.
--- lint-disable-next-line rule-duplicate-body
-staticIsFloat env (CVar x _) = match lookupAssoc x env
-  Some (_, LTFloat) => True
-  Some (_, LTFloatU) => True
-  _ => False
+staticIsFloat env (CVar x _) = varIsKnownFloat env x
 staticIsFloat env (CBinPrim op l _ _) = isArithOp op && staticIsFloat env l
 staticIsFloat env _ = False
 
@@ -3146,13 +3148,7 @@ staticIsFloat env _ = False
 -- makes it True, so it never false-positives a non-float body.
 bodyFloatRet : List (String, (String, LTy)) -> CExpr -> Bool
 bodyFloatRet env (CLit (LFloat _)) = True
--- Shares this `CVar` clause verbatim with `staticIsFloat` above; deferred
--- de-duplication — see #1201.
--- lint-disable-next-line rule-duplicate-body
-bodyFloatRet env (CVar x _) = match lookupAssoc x env
-  Some (_, LTFloat) => True
-  Some (_, LTFloatU) => True
-  _ => False
+bodyFloatRet env (CVar x _) = varIsKnownFloat env x
 bodyFloatRet env (CBinPrim op l r _) = isArithOp op
   && (bodyFloatRet env l || bodyFloatRet env r)
 bodyFloatRet env (CIf _ t f) = bodyFloatRet env t || bodyFloatRet env f
@@ -11946,14 +11942,16 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "emitBin" ((PVar "e") (PVar "env") (PVar "op") (PVar "l") (PVar "r") (PVar "tag")) (EIf (EApp (EVar "isCmpOp") (EVar "op")) (EApp (EApp (EApp (EApp (EApp (EVar "emitCmp") (EVar "e")) (EVar "env")) (EVar "op")) (EVar "l")) (EVar "r")) (EIf (EApp (EVar "isArithOp") (EVar "op")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArith") (EVar "e")) (EVar "env")) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")) (EIf (EBinOp "==" (EVar "op") (ELit (LString "::"))) (EBlock (DoLet false false (PTuple (PVar "lv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "l"))) (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "r"))) (DoExpr (EApp (EApp (EApp (EVar "emitCtorAlloc") (EVar "e")) (ELit (LString "Cons"))) (EListLit (EVar "lv") (EVar "rv"))))) (EIf (EBinOp "==" (EVar "op") (ELit (LString "++"))) (EBlock (DoLet false false (PTuple (PVar "lv") (PVar "lty")) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "l"))) (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "r"))) (DoLet false false (PVar "r2") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EMatch (EVar "lty") (arm (PCon "LTStr") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r2"))) (ELit (LString " = call i64 @mdk_string_append(i64 "))) (EApp (EVar "display") (EVar "lv"))) (ELit (LString ", i64 "))) (EApp (EVar "display") (EVar "rv"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r2") (EVar "LTStr"))))) (arm (PCon "LTCon") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r2"))) (ELit (LString " = call i64 @mdk_list_append(i64 "))) (EApp (EVar "display") (EVar "lv"))) (ELit (LString ", i64 "))) (EApp (EVar "display") (EVar "rv"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r2") (EVar "LTCon"))))) (arm (PCon "LTUnknown") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r2"))) (ELit (LString " = call i64 @mdk_append(i64 "))) (EApp (EVar "display") (EVar "lv"))) (ELit (LString ", i64 "))) (EApp (EVar "display") (EVar "rv"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r2") (EVar "LTUnknown"))))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r2"))) (ELit (LString " = call i64 @mdk_append(i64 "))) (EApp (EVar "display") (EVar "lv"))) (ELit (LString ", i64 "))) (EApp (EVar "display") (EVar "rv"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r2") (EVar "LTUnknown")))))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "unsupported binary operator '")) (EVar "op")) (ELit (LString "'")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig false "isArithOp" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isArithOp" ((PVar "op")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "+"))) (EBinOp "==" (EVar "op") (ELit (LString "-")))) (EBinOp "==" (EVar "op") (ELit (LString "*")))) (EBinOp "==" (EVar "op") (ELit (LString "/")))) (EBinOp "==" (EVar "op") (ELit (LString "%")))))
+(DTypeSig false "varIsKnownFloat" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "LTy")))) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "varIsKnownFloat" ((PVar "env") (PVar "x")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple PWild (PCon "LTFloat"))) () (EVar "True")) (arm (PCon "Some" (PTuple PWild (PCon "LTFloatU"))) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "staticIsFloat" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "LTy")))) (TyFun (TyCon "CExpr") (TyCon "Bool"))))
 (DFunDef false "staticIsFloat" ((PVar "env") (PCon "CLit" (PCon "LFloat" PWild))) (EVar "True"))
-(DFunDef false "staticIsFloat" ((PVar "env") (PCon "CVar" (PVar "x") PWild)) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple PWild (PCon "LTFloat"))) () (EVar "True")) (arm (PCon "Some" (PTuple PWild (PCon "LTFloatU"))) () (EVar "True")) (arm PWild () (EVar "False"))))
+(DFunDef false "staticIsFloat" ((PVar "env") (PCon "CVar" (PVar "x") PWild)) (EApp (EApp (EVar "varIsKnownFloat") (EVar "env")) (EVar "x")))
 (DFunDef false "staticIsFloat" ((PVar "env") (PCon "CBinPrim" (PVar "op") (PVar "l") PWild PWild)) (EBinOp "&&" (EApp (EVar "isArithOp") (EVar "op")) (EApp (EApp (EVar "staticIsFloat") (EVar "env")) (EVar "l"))))
 (DFunDef false "staticIsFloat" ((PVar "env") PWild) (EVar "False"))
 (DTypeSig false "bodyFloatRet" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "LTy")))) (TyFun (TyCon "CExpr") (TyCon "Bool"))))
 (DFunDef false "bodyFloatRet" ((PVar "env") (PCon "CLit" (PCon "LFloat" PWild))) (EVar "True"))
-(DFunDef false "bodyFloatRet" ((PVar "env") (PCon "CVar" (PVar "x") PWild)) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple PWild (PCon "LTFloat"))) () (EVar "True")) (arm (PCon "Some" (PTuple PWild (PCon "LTFloatU"))) () (EVar "True")) (arm PWild () (EVar "False"))))
+(DFunDef false "bodyFloatRet" ((PVar "env") (PCon "CVar" (PVar "x") PWild)) (EApp (EApp (EVar "varIsKnownFloat") (EVar "env")) (EVar "x")))
 (DFunDef false "bodyFloatRet" ((PVar "env") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") PWild)) (EBinOp "&&" (EApp (EVar "isArithOp") (EVar "op")) (EBinOp "||" (EApp (EApp (EVar "bodyFloatRet") (EVar "env")) (EVar "l")) (EApp (EApp (EVar "bodyFloatRet") (EVar "env")) (EVar "r")))))
 (DFunDef false "bodyFloatRet" ((PVar "env") (PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBinOp "||" (EApp (EApp (EVar "bodyFloatRet") (EVar "env")) (EVar "t")) (EApp (EApp (EVar "bodyFloatRet") (EVar "env")) (EVar "f"))))
 (DFunDef false "bodyFloatRet" ((PVar "env") (PCon "CLet" PWild PWild PWild (PVar "b"))) (EApp (EApp (EVar "bodyFloatRet") (EVar "env")) (EVar "b")))
@@ -14136,14 +14134,16 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "emitBin" ((PVar "e") (PVar "env") (PVar "op") (PVar "l") (PVar "r") (PVar "tag")) (EIf (EApp (EVar "isCmpOp") (EVar "op")) (EApp (EApp (EApp (EApp (EApp (EVar "emitCmp") (EVar "e")) (EVar "env")) (EVar "op")) (EVar "l")) (EVar "r")) (EIf (EApp (EVar "isArithOp") (EVar "op")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArith") (EVar "e")) (EVar "env")) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")) (EIf (EBinOp "==" (EVar "op") (ELit (LString "::"))) (EBlock (DoLet false false (PTuple (PVar "lv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "l"))) (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "r"))) (DoExpr (EApp (EApp (EApp (EVar "emitCtorAlloc") (EVar "e")) (ELit (LString "Cons"))) (EListLit (EVar "lv") (EVar "rv"))))) (EIf (EBinOp "==" (EVar "op") (ELit (LString "++"))) (EBlock (DoLet false false (PTuple (PVar "lv") (PVar "lty")) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "l"))) (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "r"))) (DoLet false false (PVar "r2") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EMatch (EVar "lty") (arm (PCon "LTStr") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r2"))) (ELit (LString " = call i64 @mdk_string_append(i64 "))) (EApp (EMethodRef "display") (EVar "lv"))) (ELit (LString ", i64 "))) (EApp (EMethodRef "display") (EVar "rv"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r2") (EVar "LTStr"))))) (arm (PCon "LTCon") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r2"))) (ELit (LString " = call i64 @mdk_list_append(i64 "))) (EApp (EMethodRef "display") (EVar "lv"))) (ELit (LString ", i64 "))) (EApp (EMethodRef "display") (EVar "rv"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r2") (EVar "LTCon"))))) (arm (PCon "LTUnknown") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r2"))) (ELit (LString " = call i64 @mdk_append(i64 "))) (EApp (EMethodRef "display") (EVar "lv"))) (ELit (LString ", i64 "))) (EApp (EMethodRef "display") (EVar "rv"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r2") (EVar "LTUnknown"))))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r2"))) (ELit (LString " = call i64 @mdk_append(i64 "))) (EApp (EMethodRef "display") (EVar "lv"))) (ELit (LString ", i64 "))) (EApp (EMethodRef "display") (EVar "rv"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r2") (EVar "LTUnknown")))))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "unsupported binary operator '")) (EVar "op")) (ELit (LString "'")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig false "isArithOp" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isArithOp" ((PVar "op")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "+"))) (EBinOp "==" (EVar "op") (ELit (LString "-")))) (EBinOp "==" (EVar "op") (ELit (LString "*")))) (EBinOp "==" (EVar "op") (ELit (LString "/")))) (EBinOp "==" (EVar "op") (ELit (LString "%")))))
+(DTypeSig false "varIsKnownFloat" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "LTy")))) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "varIsKnownFloat" ((PVar "env") (PVar "x")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple PWild (PCon "LTFloat"))) () (EVar "True")) (arm (PCon "Some" (PTuple PWild (PCon "LTFloatU"))) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "staticIsFloat" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "LTy")))) (TyFun (TyCon "CExpr") (TyCon "Bool"))))
 (DFunDef false "staticIsFloat" ((PVar "env") (PCon "CLit" (PCon "LFloat" PWild))) (EVar "True"))
-(DFunDef false "staticIsFloat" ((PVar "env") (PCon "CVar" (PVar "x") PWild)) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple PWild (PCon "LTFloat"))) () (EVar "True")) (arm (PCon "Some" (PTuple PWild (PCon "LTFloatU"))) () (EVar "True")) (arm PWild () (EVar "False"))))
+(DFunDef false "staticIsFloat" ((PVar "env") (PCon "CVar" (PVar "x") PWild)) (EApp (EApp (EVar "varIsKnownFloat") (EVar "env")) (EVar "x")))
 (DFunDef false "staticIsFloat" ((PVar "env") (PCon "CBinPrim" (PVar "op") (PVar "l") PWild PWild)) (EBinOp "&&" (EApp (EVar "isArithOp") (EVar "op")) (EApp (EApp (EVar "staticIsFloat") (EVar "env")) (EVar "l"))))
 (DFunDef false "staticIsFloat" ((PVar "env") PWild) (EVar "False"))
 (DTypeSig false "bodyFloatRet" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "LTy")))) (TyFun (TyCon "CExpr") (TyCon "Bool"))))
 (DFunDef false "bodyFloatRet" ((PVar "env") (PCon "CLit" (PCon "LFloat" PWild))) (EVar "True"))
-(DFunDef false "bodyFloatRet" ((PVar "env") (PCon "CVar" (PVar "x") PWild)) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple PWild (PCon "LTFloat"))) () (EVar "True")) (arm (PCon "Some" (PTuple PWild (PCon "LTFloatU"))) () (EVar "True")) (arm PWild () (EVar "False"))))
+(DFunDef false "bodyFloatRet" ((PVar "env") (PCon "CVar" (PVar "x") PWild)) (EApp (EApp (EVar "varIsKnownFloat") (EVar "env")) (EVar "x")))
 (DFunDef false "bodyFloatRet" ((PVar "env") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") PWild)) (EBinOp "&&" (EApp (EVar "isArithOp") (EVar "op")) (EBinOp "||" (EApp (EApp (EVar "bodyFloatRet") (EVar "env")) (EVar "l")) (EApp (EApp (EVar "bodyFloatRet") (EVar "env")) (EVar "r")))))
 (DFunDef false "bodyFloatRet" ((PVar "env") (PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBinOp "||" (EApp (EApp (EVar "bodyFloatRet") (EVar "env")) (EVar "t")) (EApp (EApp (EVar "bodyFloatRet") (EVar "env")) (EVar "f"))))
 (DFunDef false "bodyFloatRet" ((PVar "env") (PCon "CLet" PWild PWild PWild (PVar "b"))) (EApp (EApp (EVar "bodyFloatRet") (EVar "env")) (EVar "b")))
