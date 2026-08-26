@@ -16,6 +16,12 @@ Observed by hand on a binary cold-built from the pre-change source at `main` @ `
 diagnostic either way. So this row was ALREADY invariant on baseline — it is not one of
 the rows that proves this gate can go red.
 
+(Later adjusted: `ACount` was originally positional and withheld `dx`, which #1468's
+field-owner-all-constructors rule now correctly rejects since `mkA.dx` is accessed on a
+value of type `RA`. Given a named-field form declaring `dx` too, so `RA` stays genuinely
+well-typed; this changes nothing this row tests — `dx`'s value/order plays no role here,
+only its NAME and cross-module sharing with `wmod`'s `Wrec`.)
+
 ⚠️ WHAT IT IS FOR, since a green-before-and-after row needs a stated purpose: the first cut
 of #1319 unit 2 narrowed `fieldOwnersRef` per module using constructor-witness predicates,
 and turned this exact program into `Type mismatch: RA vs Wrec` at exit 1 (measured; the

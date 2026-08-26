@@ -2,9 +2,8 @@
 -- sends `mkA.dx` down the field->owners fallback instead of the exact
 -- `lookupRecordByName <head tycon>` hit, and it is why this shape is not covered by any
 -- cell built out of short-form records.
-public export data RA =
-  | Dup { dx : Int }
-  | ACount Int
+public export data RA = Dup { dx : Int } | ACount { dx : Int }
 
-export mkA : RA
+export
+mkA : RA
 mkA = Dup { dx = 7 }
