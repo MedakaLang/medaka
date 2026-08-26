@@ -1,5 +1,5 @@
 # META
-source_lines=1462
+source_lines=1468
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -762,9 +762,15 @@ seedBucket f buckets = match lookupBucket f buckets
   Some _ => buckets
 
 -- Append a whole list of diagnostics to one file's bucket.
+-- #1019: folding `pushDiag` once per element re-did `existing ++ [d]` for
+-- EVERY diag (each `++` O(len existing so far)) — O(n^2) over an n-diag
+-- batch. One bulk `existing ++ ds` is a single O(len existing) traversal,
+-- same resulting order (existing diags, then the batch, in original order).
 pushDiags : String -> List Diag -> List (String, List Diag) -> List (String, List Diag)
 pushDiags _ [] buckets = buckets
-pushDiags f (d::ds) buckets = pushDiags f ds (pushDiag f d buckets)
+pushDiags f ds buckets = match lookupBucket f buckets
+  None => putBucket f ds buckets
+  Some existing => putBucket f (existing ++ ds) buckets
 
 -- ── last-good-source cache + wrapped read (mirror wrapped_read) ─────────────
 --
@@ -1569,7 +1575,7 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DFunDef false "seedBucket" ((PVar "f") (PVar "buckets")) (EMatch (EApp (EApp (EVar "lookupBucket") (EVar "f")) (EVar "buckets")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "putBucket") (EVar "f")) (EListLit)) (EVar "buckets"))) (arm (PCon "Some" PWild) () (EVar "buckets"))))
 (DTypeSig false "pushDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))
 (DFunDef false "pushDiags" (PWild (PList) (PVar "buckets")) (EVar "buckets"))
-(DFunDef false "pushDiags" ((PVar "f") (PCons (PVar "d") (PVar "ds")) (PVar "buckets")) (EApp (EApp (EApp (EVar "pushDiags") (EVar "f")) (EVar "ds")) (EApp (EApp (EApp (EVar "pushDiag") (EVar "f")) (EVar "d")) (EVar "buckets"))))
+(DFunDef false "pushDiags" ((PVar "f") (PVar "ds") (PVar "buckets")) (EMatch (EApp (EApp (EVar "lookupBucket") (EVar "f")) (EVar "buckets")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "putBucket") (EVar "f")) (EVar "ds")) (EVar "buckets"))) (arm (PCon "Some" (PVar "existing")) () (EApp (EApp (EApp (EVar "putBucket") (EVar "f")) (EBinOp "++" (EVar "existing") (EVar "ds"))) (EVar "buckets")))))
 (DTypeSig false "cachePut" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "cachePut" ((PVar "f") (PVar "v") (PVar "xs")) (EBinOp "::" (ETuple (EVar "f") (EVar "v")) (EApp (EApp (EVar "cacheRemove") (EVar "f")) (EVar "xs"))))
 (DTypeSig false "cacheRemove" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
@@ -1807,7 +1813,7 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DFunDef false "seedBucket" ((PVar "f") (PVar "buckets")) (EMatch (EApp (EApp (EVar "lookupBucket") (EVar "f")) (EVar "buckets")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "putBucket") (EVar "f")) (EListLit)) (EVar "buckets"))) (arm (PCon "Some" PWild) () (EVar "buckets"))))
 (DTypeSig false "pushDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))
 (DFunDef false "pushDiags" (PWild (PList) (PVar "buckets")) (EVar "buckets"))
-(DFunDef false "pushDiags" ((PVar "f") (PCons (PVar "d") (PVar "ds")) (PVar "buckets")) (EApp (EApp (EApp (EVar "pushDiags") (EVar "f")) (EVar "ds")) (EApp (EApp (EApp (EVar "pushDiag") (EVar "f")) (EVar "d")) (EVar "buckets"))))
+(DFunDef false "pushDiags" ((PVar "f") (PVar "ds") (PVar "buckets")) (EMatch (EApp (EApp (EVar "lookupBucket") (EVar "f")) (EVar "buckets")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "putBucket") (EVar "f")) (EVar "ds")) (EVar "buckets"))) (arm (PCon "Some" (PVar "existing")) () (EApp (EApp (EApp (EVar "putBucket") (EVar "f")) (EBinOp "++" (EVar "existing") (EVar "ds"))) (EVar "buckets")))))
 (DTypeSig false "cachePut" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "cachePut" ((PVar "f") (PVar "v") (PVar "xs")) (EBinOp "::" (ETuple (EVar "f") (EVar "v")) (EApp (EApp (EVar "cacheRemove") (EVar "f")) (EVar "xs"))))
 (DTypeSig false "cacheRemove" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))

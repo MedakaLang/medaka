@@ -211,6 +211,8 @@ import support.util.{
   fallthroughName,
   noneHeadTag,
   dedup,
+  dedupBy,
+  lenKey,
   isNonEmptyL,
 }
 import backend.llvm_preamble.{preambleLines}
@@ -1250,8 +1252,27 @@ methodEntries e method = match !e.implsByMethod
 
 -- the impls of a method, in program order — only the CImplTagged ones (an
 -- untagged CImplDefault is the arg-tag fallback, never a static-dispatch target).
+-- #126: a method's entries can carry literal duplicates (same tag, same key,
+-- same iface — e.g. one impl reachable via >1 re-export path), which
+-- `filterTagged` alone does not collapse; every duplicate widens the linear
+-- `icmp` dispatch chain `emitDispatchChain` builds from this list. Dedup
+-- mirrors `ifaceTags`'s `dedupS` (reverse, keeps-FIRST dedup, reverse — so
+-- the SURVIVING occurrence is the LAST one in program order, same contract).
 implsOf : Emit -> String -> List CImplEntry
-implsOf e method = filterTagged method (methodEntries e method)
+implsOf e method =
+  dedupImplEntries (filterTagged method (methodEntries e method))
+
+dedupImplEntries : List CImplEntry -> List CImplEntry
+dedupImplEntries xs = reverseL (dedupBy implEntryDedupKey (reverseL xs))
+
+-- injective per #242 (`lenKey`): (tag, key, iface) is exactly the routing
+-- identity a dispatch arm carries, so two entries collide here only when
+-- they are genuinely the same impl.
+implEntryDedupKey : CImplEntry -> String
+implEntryDedupKey (CImplEntry _ _ (CImplTagged tag key iface _ _ _)) = lenKey tag
+  ++ lenKey key
+  ++ iface
+implEntryDedupKey _ = ""
 
 filterTagged : String -> List CImplEntry -> List CImplEntry
 filterTagged _ [] = []

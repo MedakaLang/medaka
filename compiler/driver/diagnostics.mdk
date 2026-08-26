@@ -758,9 +758,15 @@ seedBucket f buckets = match lookupBucket f buckets
   Some _ => buckets
 
 -- Append a whole list of diagnostics to one file's bucket.
+-- #1019: folding `pushDiag` once per element re-did `existing ++ [d]` for
+-- EVERY diag (each `++` O(len existing so far)) — O(n^2) over an n-diag
+-- batch. One bulk `existing ++ ds` is a single O(len existing) traversal,
+-- same resulting order (existing diags, then the batch, in original order).
 pushDiags : String -> List Diag -> List (String, List Diag) -> List (String, List Diag)
 pushDiags _ [] buckets = buckets
-pushDiags f (d::ds) buckets = pushDiags f ds (pushDiag f d buckets)
+pushDiags f ds buckets = match lookupBucket f buckets
+  None => putBucket f ds buckets
+  Some existing => putBucket f (existing ++ ds) buckets
 
 -- ── last-good-source cache + wrapped read (mirror wrapped_read) ─────────────
 --

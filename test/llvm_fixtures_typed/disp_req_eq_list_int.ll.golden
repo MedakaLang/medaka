@@ -372,29 +372,9 @@ dispyes8:
   store i64 %t12, ptr %t2
   br label %dispend3
 dispnext8:
-  %t13 = icmp eq i64 %t1, 6952548912359
-  br i1 %t13, label %dispyes14, label %dispnext14
-dispyes14:
-  %t15 = inttoptr i64 %dict to ptr
-  %t16 = getelementptr i8, ptr %t15, i64 8
-  %t17 = load i64, ptr %t16
-  %t18 = call i64 @mdk_impl_MyList_eq(i64 %t17, i64 %arg0, i64 %arg1)
-  store i64 %t18, ptr %t2
-  br label %dispend3
-dispnext14:
-  %t19 = icmp eq i64 %t1, 6952548912359
-  br i1 %t19, label %dispyes20, label %dispnext20
-dispyes20:
-  %t21 = inttoptr i64 %dict to ptr
-  %t22 = getelementptr i8, ptr %t21, i64 8
-  %t23 = load i64, ptr %t22
-  %t24 = call i64 @mdk_impl_MyList_eq(i64 %t23, i64 %arg0, i64 %arg1)
-  store i64 %t24, ptr %t2
-  br label %dispend3
-dispnext20:
   call void @mdk_dispatch_no_impl()
   unreachable
 dispend3:
-  %t25 = load i64, ptr %t2
-  ret i64 %t25
+  %t13 = load i64, ptr %t2
+  ret i64 %t13
 }
