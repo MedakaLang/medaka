@@ -123,7 +123,7 @@ argHeadsAgree : List Mono -> List Mono -> Bool
 argImplDictRoutesFor : Map String (List ImplEntry) -> String -> String -> Mono -> List Route
 argImplDictRoutesForEncl : Map String (List ImplEntry) -> String -> String -> String -> Mono -> List Mono -> List Route
 argImplReqRoutes : Map String (List ImplEntry) -> String -> List (String, Mono) -> List Require -> Int -> Int -> List Route
-argImplRequiresRoutes : Map String (List ImplEntry) -> String -> String -> String -> Mono -> List Mono -> Int -> Int -> List Route
+argImplRequiresRoutes : Map String (List ImplEntry) -> IfaceRef -> String -> String -> Mono -> List Mono -> Int -> Int -> List Route
 argMentions : List String -> Ty -> Bool
 argOnlyEffVarMsg : String -> String -> String -> String
 argPerformableOccs : Bool -> Ty -> List (String, List Atom)
@@ -584,7 +584,7 @@ depReaches : List String -> String -> String -> List (String, List Decl) -> Bool
 depsOf : String -> Map String Unit -> Map String (List (List Pat, Expr)) -> List String
 derefOp : Mono -> Mono
 derivableIface : String -> Bool
-dictAppMonoIds : (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> List (Int, String)
+dictAppMonoIds : (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc) -> List (Int, String)
 dictArityOf : String -> Int
 dictForwardedPairs : Int -> Int -> List (Int, String)
 dictParamName : String -> Int -> String
@@ -940,7 +940,7 @@ ifaceDictPassMethod : IfaceMethod -> IfaceMethod
 ifaceForConstraintId : Int -> IfaceRef
 ifaceForConstraintIdGo : Int -> List UObligation -> IfaceRef
 ifaceForInferredId : String -> Int -> IfaceRef
-ifaceFromDictApps : Int -> List (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> String
+ifaceFromDictApps : Int -> List (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc) -> String
 ifaceMethodEVars : IfaceMethod -> List String
 ifaceMethodIdRow : IfaceRef -> IfaceMethod -> (IfaceRef, String)
 ifaceMethodIdentPair : TyConOrigin -> IfaceMethod -> List (String, Ident)
@@ -1364,7 +1364,7 @@ nthTy : Int -> List Ty -> Option Ty
 numArithOp : Mono -> Mono -> Mono
 numCallObls : List (IfaceRef, List Mono, Option Loc) -> List UObligation
 numConstrainedIds : List UObligation -> List Int
-numDictObls : List (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> List UObligation
+numDictObls : List (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc) -> List UObligation
 numObligIds : UObligation -> List Int
 numUnimplementableHead : Mono -> Bool
 numlitCtxKind : Option Loc -> Option String
@@ -1499,7 +1499,7 @@ publicValNames : List Decl -> List String
 pureRow : EffRow
 pushAmbiguousImports : String -> Loc -> List (String, List String) -> Unit
 pushCoherenceWarning : Option Loc -> String -> Unit
-pushDictApp : (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> Unit
+pushDictApp : (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc) -> Unit
 pushDiscardedValueError : Mono -> Expr -> Unit
 pushIncompleteImpl : (Option Loc, String) -> Unit
 pushNoImplError : String -> Option Loc -> List Mono -> Unit
@@ -1662,7 +1662,7 @@ resolveArgStamp : Map String (List ImplEntry) -> String -> Ref Route -> Ref (Lis
 resolveArgStamps : Map String (List ImplEntry) -> List PendingEntry -> Unit
 resolveArithSite : Ref Route -> Mono -> Unit
 resolveArithSites : List (Ref Route, Mono) -> Unit
-resolveDictApps : List Decl -> Map String (List ImplEntry) -> List (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> Unit
+resolveDictApps : List Decl -> Map String (List ImplEntry) -> List (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc) -> Unit
 resolveFieldAmbiguous : Mono -> String -> List String -> Option (String, RecordInfo)
 resolveFieldByOwners : Mono -> String -> Option (String, RecordInfo)
 resolveFieldOwnersNarrowed : Mono -> String -> List String -> Option (String, RecordInfo)
@@ -1671,7 +1671,7 @@ resolveMemberRows : (String, String) -> List (String, a) -> List (String, a)
 resolveMethodDicts : Map String (List ImplEntry) -> List (Ref (List Route), List Mono) -> Unit
 resolveOpSite : Bool -> Map String (List ImplEntry) -> String -> Ref Route -> Mono -> Bool -> String -> Unit
 resolveOpSites : Bool -> Map String (List ImplEntry) -> List PendingEntry -> Unit
-resolveRLocalSite : List Decl -> Map String (List ImplEntry) -> String -> Ref Route -> Mono -> String -> List Mono -> List String -> List (List Mono) -> Unit
+resolveRLocalSite : List Decl -> Map String (List ImplEntry) -> String -> Ref Route -> Mono -> String -> List Mono -> List IfaceRef -> List (List Mono) -> Unit
 resolveRLocalSites : List Decl -> Map String (List ImplEntry) -> List PendingEntry -> Unit
 resolveRecMono : String -> Mono -> Route
 resolveSite : Map String (List ImplEntry) -> List String -> String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> Unit
@@ -1697,13 +1697,13 @@ rewriteRPDictArg : List String -> List String -> List String -> Expr -> Expr
 rootIdOf : Mono -> Int
 rootVarId : Mono -> Int
 routeLocalSym : Route -> String
-routeOf : Map String (List ImplEntry) -> String -> String -> Undetermined -> Mono -> Route
-routeOfD : Map String (List ImplEntry) -> String -> String -> Undetermined -> Mono -> List Mono -> Int -> Int -> Route
+routeOf : Map String (List ImplEntry) -> IfaceRef -> String -> Undetermined -> Mono -> Route
+routeOfD : Map String (List ImplEntry) -> IfaceRef -> String -> Undetermined -> Mono -> List Mono -> Int -> Int -> Route
 routeRDictName : Route -> List String
 routeUndeterminedTop : List Decl -> Map String (List ImplEntry) -> String -> Route
 routesOfMonos : Map String (List ImplEntry) -> List Mono -> List Route
-routesOfMonosTop : List Decl -> Map String (List ImplEntry) -> List Mono -> List String -> List Route
-routesOfMonosTopV : List Decl -> Map String (List ImplEntry) -> List Mono -> List String -> List (List Mono) -> List Route
+routesOfMonosTop : List Decl -> Map String (List ImplEntry) -> List Mono -> List IfaceRef -> List Route
+routesOfMonosTopV : List Decl -> Map String (List ImplEntry) -> List Mono -> List IfaceRef -> List (List Mono) -> List Route
 rowArgNames : Ty -> List String
 rowArgNamesApp : List (String, List Kind) -> TyConOrigin -> String -> List Ty -> List String -> List String
 rowArgNamesIn : List (String, List Kind) -> Ty -> List String
@@ -1855,7 +1855,7 @@ tconFrom : TyConOrigin -> String -> Mono
 tconTupleHead : Int -> Mono
 tconUnresolved : String -> Mono
 toggles : Ref Toggles
-topRouteV : List Decl -> Map String (List ImplEntry) -> String -> Mono -> List Mono -> Route
+topRouteV : List Decl -> Map String (List ImplEntry) -> IfaceRef -> Mono -> List Mono -> Route
 transitiveImporterDecls : String -> List (String, List Decl) -> List Decl
 transitiveImporterIds : String -> List (String, List Decl) -> List String
 transitivelyImports : String -> String -> List (String, List Decl) -> Bool
@@ -1956,7 +1956,7 @@ variantNamed : String -> List Variant -> Bool
 vecOblKey : VecObl -> String
 vecOblOfPred : List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
 vecOblsOfSlotVecs : List (CSlot, List Mono) -> List VecObl
-vectorGoal : String -> List Mono -> Option (Mono, List Mono)
+vectorGoal : IfaceRef -> List Mono -> Option (Mono, List Mono)
 wAll : Windowed a -> List a
 wMark : Windowed a -> Int
 wNew : Unit -> Windowed a
