@@ -474,7 +474,16 @@ two need first-hand reproduction before A-2 can claim them.
 
 ---
 
-### issue 1150 — alias-qualified head defeats the value restriction · **DRAINED-BY A-1** (#1110), with an owed consumer clause (G-9)
+### issue 1150 — alias-qualified head defeats the value restriction · ✅ **FIXED 2026-08-26, ahead of A-1** (slice `S-ctor-head-identity`)
+
+> ⚠️ **This row's verdict was DRAINED-BY A-1 (#1110) and it is now obsolete: the defect
+> was closed directly, without A-1, by replacing the spelling test with
+> `isSome (lookupCtor env name)` and threading the `TcEnv` that requires.** The analysis
+> below is preserved as written because its mechanism section is still the best account
+> of the defect, and because its "**A-2's contribution is negative**" paragraph — which
+> argued the lookup route produces a *strictly worse* S0 — is the one part that was
+> **falsified in part** and is annotated inline where it appears. Read the ✅ closing
+> note at the end of the row before acting on anything in it.
 
 **This row is family A on L2's *headline*, not on its operative clause.** It is the only
 row in this ledger where identity is re-derived from spelling with **no table involved
@@ -503,8 +512,9 @@ application in the language is classified as a constructor application.** With
 generalizes a mutable hash table: `check` exit 0 with zero diagnostics, `run`
 `E-NOT-A-FUNCTION`, built binary **SIGSEGV** (exit 139). The one-token discriminator —
 `H.new ()` spelled `new ()` with `H.set`/`H.get` unchanged — is correctly rejected with
-`Type mismatch: Int -> Int vs Int`. Pinned at
-`test/must_fail_fixtures/1150-alias-qualified-head-value-restriction/`.
+`Type mismatch: Int -> Int vs Int`. Was pinned at
+`test/must_fail_fixtures/1150-alias-qualified-head-value-restriction/`, deleted when the
+pin drained on 2026-08-26.
 
 **Why the plan removes the cause.** The information the predicate is guessing at already
 exists one stage earlier and is thrown away. `resolve.mdk` maintains a **constructor
@@ -534,6 +544,28 @@ class the must-fail corpus already pins several times over — derive the set wi
 the first where the consequence is memory unsafety rather than a bad diagnostic.
 **Membership is not resolution**, and the ratchet is the mechanism that says so.
 
+> 🔬 **FALSIFIED IN PART, 2026-08-26 (slice `S-ctor-head-identity`).** The counter-repro
+> is real but it is a property of *dropping the `name /= "Ref"` exclusion*, which is what
+> `wip/1150-lookupctor-attempt` did — not of the lookup. The shipped fix is
+> `name /= "Ref" && ctorHeadIsUpper name && isSome (lookupCtor env name)`, and the
+> counter-repro built exactly as described here (`tagged.mdk` = `public export data
+> Tagged a = Ref a`; `victim.mdk` importing neither, doing `let r = Ref []` then writing
+> at `Int` and reading back at `Int -> Int`; `main.mdk` importing both) is **rejected**:
+> `victim.mdk:8:16: No impl of Num for (Int -> Int)`, exit 1 — the binding was not
+> generalized.
+>
+> The generalisation of the counter-repro beyond `Ref` is also not reachable today.
+> `isCtorAppSpine` only ever sees an uppercase-initial `EVar`, and there are exactly
+> three kinds: a constructor **in scope here** (resolve rejects one that is not —
+> measured: an unimported `MkBox` gives `Unbound variable: MkBox` / `Unknown
+> constructor: MkBox`, so the graph-wide map cannot be reached through an
+> out-of-scope name); an uppercase **extern** (audit clean, one hit, `Ref`, excluded by
+> name); and an **alias-qualified dotted name**, which is never a ctor-map key. So the
+> bare-name map is loose in principle and unreachable in practice, with the single
+> `Ref` collision closed by the retained exclusion. **A-1 still buys the principled
+> version of this** — resolved identity instead of a name plus two side conditions —
+> but it is no longer load-bearing for #1150.
+
 **GAP G-9 — the owed consumer clause.** A-1's stated collision surface (§6 A-1:
 *"parser, `resolve.mdk`, `ast.mdk`, printer/fmt, sexp, every golden family"*) does not
 name `typecheck.mdk`'s value restriction as a **consumer** of resolved identity, and L2's
@@ -543,8 +575,9 @@ can land the identity substrate whole and this defect survive untouched. This is
 #1128/G-6 shape (substrate lands, the incomplete consumer is not named, the bug is
 unaffected), which is why the verdict is **conditional**.
 
-**Falsifiable prediction.** When **A-1** lands *with the G-9 clause*,
-`test/must_fail_fixtures/1150-alias-qualified-head-value-restriction/main.mdk` must go
+**Falsifiable prediction — RESOLVED 2026-08-26, see the ✅ note that closes this row.**
+When **A-1** lands *with the G-9 clause*, the pinned
+`test/must_fail_fixtures/1150-alias-qualified-head-value-restriction/` `main.mdk` must go
 from `check` exit 0 printing exactly
 
 ```
@@ -576,6 +609,39 @@ mutable-cell extern becomes the sole remaining way to defeat the test the moment
 alias route is closed narrowly. A narrow repair therefore **drains this row without
 satisfying the prediction's second condition**, and must not be read as A-1 having
 landed.
+
+✅ **CLOSING NOTE — #1150 fixed 2026-08-26, slice `S-ctor-head-identity`, NOT by a narrow
+repair and NOT by A-1.** The head test now asks the environment:
+
+```
+isCtorAppSpine env (EVar   name)   = isDeclaredCtorHead env name
+isCtorAppSpine env (EVarId name _) = isDeclaredCtorHead env name
+
+isDeclaredCtorHead env name =
+  name /= "Ref" && ctorHeadIsUpper name && isSome (lookupCtor env name)
+```
+
+with `TcEnv` threaded through `isNonexpansive`, `isCtorAppSpine`,
+`clausesAreValue`/`clauseIsValue`, `memberClauseIsValue` and `sccSchemes`, and the four
+call sites (`blockLet`, `inferLetBody`, `generalizeGroup`, `processSCC`) passing their
+local env. `ctorHeadIsUpper` survives only as a fast path in front of the lookup — it can
+narrow, never widen.
+
+Against this row's own conditions: the repro flips exactly as predicted (`check`, `run`
+and `build` all now give `Type mismatch: Int -> Int vs Int` at `match getF m`, exit 1;
+`control.mdk` still exits 0 and prints `11`; `medaka build` emits no binary, so the
+SIGSEGV is unreachable). The `wip/1150-lookupctor-attempt` counter-repro is **also
+rejected** — see the 🔬 annotation above for the measurement and for why that branch's
+"strictly worse S0" was a property of dropping the `Ref` exclusion rather than of the
+lookup. The narrow-repair hazard is retired **by construction**, not by audit: an extern
+is never passed to `addCtor`, so no extern — uppercase or not — can pass the head test
+any more.
+
+✅ **The third condition is also done, by the same commit:** `docs/spec/DICT-SEMANTICS.md`
+§4.1 **G2**'s status row and G3-contingency prose were rewritten in `ea926c23` itself
+(🔴 HOLED → 🟡 **NO KNOWN HOLE**, #1150 marked CLOSED) — they do not still describe #1150
+as OPEN. G-9 above is also now moot for this row (A-1 no longer has a #1150 consumer
+clause to owe) but remains a live shape for other consumers.
 
 ---
 

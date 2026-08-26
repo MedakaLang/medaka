@@ -2791,6 +2791,7 @@ data DeclEnvs = DeclEnvs {
     deModules : List DeclEnvModule,  -- ordinal order, prelude first
     deOrdIndex : OrdMap Int,
     deDefiners : OrdMap (List (String, (String, String))),  -- RUN-XMOD-066: `graphPubDefiners`' answer, per module id — see `declEnvDefinerIndex`
+    deAmbigValues : OrdMap (List (String, List String)),  -- #1675: value names a module exports under ≥2 DISTINCT definitions, with those definers — see `ambiguousExportRows`
     deAllDecls : List Decl,
     deData : DataEnv,  -- A-3.2a (#1112) built it; A-3.2b residual 1 (#1512) made it LIVE — `aliasUniverseAt` reads `deAliases`
     deImpls : ImplEnv,
@@ -2809,6 +2810,7 @@ emptyDeclEnvs = DeclEnvs {
   deModules = [],
   deOrdIndex = omEmpty,
   deDefiners = omEmpty,
+  deAmbigValues = omEmpty,
   deAllDecls = [],
   deData = emptyDataEnv,
   deImpls = emptyImplEnv,
@@ -2833,10 +2835,16 @@ buildDeclEnvs coreDecls modules =
   -- `""` seeds mirror `declEnvOrdIndex`'s: the core pass arrives under that spelling
   -- and its seed is empty because nothing precedes ordinal 0.  See `declEnvSeedChain`.
   let seeds = declEnvSeedChain mods [] omEmpty (omInsert "" [] omEmpty) (omInsert "" omEmpty omEmpty)
+  -- #1675: BOTH definer projections come out of ONE fold.  They are derived from the
+  -- same uncollapsed row list — `deDefiners` keeps the first row per name, `deAmbigValues`
+  -- records the names where keeping the first was a CHOICE between two definitions — so
+  -- computing them apart would walk `modulePubDefiners` twice and let the two disagree.
+  let definers = declEnvDefinerIndex omEmpty omEmpty mods
   DeclEnvs {
     deModules = mods,
     deOrdIndex = declEnvOrdIndex (omInsert "" 0 omEmpty) mods,
-    deDefiners = declEnvDefinerIndex omEmpty mods,
+    deDefiners = fst definers,
+    deAmbigValues = snd definers,
     deAllDecls = allDecls,
     deData = buildDataEnv mods,
     -- #1112 A-3.4: `IE`, built here so it inherits this function's ordering and its
@@ -7981,96 +7989,96 @@ mapLocalSchemes ((n, m)::rest) = (n, generalize m) :: mapLocalSchemes rest
 -- `isCtorAppSpine` below: generalizing `Ref x` would be unsound (polymorphic
 -- reference: write at one type, read at another).
 --
--- 🚨 THE HEAD TEST IS A FIRST-CHARACTER HEURISTIC, NOT A CONSTRUCTOR LOOKUP,
--- AND IT IS DEFEATED TODAY — issue 1150 (OPEN, S0, verified, memory-safety).
--- `isCtorAppSpine`'s head arms accept any name whose first character is
--- uppercase (`ctorHeadIsUpper` below).  A MODULE ALIAS is REQUIRED to be
+-- 🔒 THE HEAD TEST IS AN ACTUAL CONSTRUCTOR LOOKUP, NOT A SPELLING TEST —
+-- issue 1150 (S0, memory-safety), fixed 2026-08-26.  `isCtorAppSpine`'s head
+-- arms ask `lookupCtor env name`, so the predicate now answers "is this name a
+-- REAL, DECLARED constructor?" instead of "does this name start with a capital
+-- letter?".  Threading the `TcEnv` this needs is why `isNonexpansive`,
+-- `isCtorAppSpine`, `clausesAreValue`/`clauseIsValue`,
+-- `memberClauseIsValue` and `sccSchemes` all take an env parameter.
+--
+-- What the old first-character heuristic (`ctorHeadIsUpper`, retained below
+-- only as a cheap pre-filter) got wrong: a MODULE ALIAS is REQUIRED to be
 -- uppercase (`aliasNameFor`, frontend/parser.mdk — lowercase is a hard parse
 -- error) and an alias-qualified value desugars to a FLAT `EVar` carrying the
 -- dotted name (`rewriteAliasQual`, frontend/desugar.mdk, via `qualifiedLocal`
--- in frontend/ast.mdk: `"\{alias}.\{n}"`).  So `ctorHeadIsUpper "H.new"` reads
--- `'H'` and says True: EVERY alias-qualified call in the language is
+-- in frontend/ast.mdk: `"\{alias}.\{n}"`).  So `ctorHeadIsUpper "H.new"` read
+-- `'H'` and said True: EVERY alias-qualified call in the language was
 -- CLASSIFIED as a constructor application.  Classification is not the whole
 -- test — `isCtorAppSpine (EApp f x) = isCtorAppSpine f && isNonexpansive x`
--- still rejects the spine if any argument is expansive, so `H.f (g 1)` is
--- classified but NOT generalized.  It is enough for the repro, whose argument
--- is a value: `let m = H.new ()` over `stdlib/hash_map.mdk` yields a
+-- still rejects the spine if any argument is expansive, so `H.f (g 1)` was
+-- classified but NOT generalized.  It was enough for the repro, whose argument
+-- is a value: `let m = H.new ()` over `stdlib/hash_map.mdk` yielded a
 -- polymorphic mutable table — `check` exit 0, `run` E-NOT-A-FUNCTION, built
--- binary SEGFAULT.
+-- binary SEGFAULT.  Under the lookup, `"H.new"` is absent from the ctor map and
+-- the binding is value-restricted: `check` REJECTS the program.
 --
--- ⚠️ The residual hole TODAY is not the "future uppercase mutable-cell extern"
--- this comment used to warn about: that audit (`grep '^extern [A-Z]'
--- stdlib/runtime.mdk`) is CLEAN — one hit, `Ref` — and the predicate is
--- defeated by the alias route anyway.  But that retirement is CONDITIONAL on
--- the alias hole staying open, because the GRAMMAR still permits the hazard:
--- `externNameFor (TUpper x) = emit x` (frontend/parser.mdk:2312) accepts an
--- uppercase extern NAME, whereas `identNameFor` (:251-253, same file) accepts
--- only `TIdent` for an ordinary identifier.  So the moment issue 1150 is closed
--- NARROWLY — e.g. by rejecting a dotted name in the head test, a one-line patch
--- that satisfies every sentence above — an uppercase mutable-cell extern
--- becomes the SOLE remaining way to defeat the head test.  The clause "the
--- predicate is defeated anyway" expires with that fix; the warning does not,
--- for as long as the head test is spelling-based.
+-- Why the lookup is sound (i.e. why "present in the ctor map" implies "really a
+-- constructor").  `lookupCtor` reads `TcEnv`'s 2nd `OrdMap`, and that map is
+-- written in exactly TWO places — `addCtor` (sole call site, inside
+-- `addVariants`, reached only from `registerVariants`, itself called only from
+-- `registerData`'s `DData` and `DNewtype` arms) and the two prelude ctors
+-- `True`/`False`, hand-seeded straight into the map by `initialEnv`, bypassing
+-- `addCtor` entirely.  Both writers are constructor-only.  ("Populated only by
+-- `addCtor`", which this comment asserted until 2026-07-31, was false — hence
+-- the second clause.)  Re-derive with
+-- `grep -n 'addCtor\|initialEnv' compiler/types/typecheck.mdk`.
 --
--- Note also that `Ref` is not a *constructor* at all: it is an extern FUNCTION
--- (`extern Ref : a -> Ref a`, stdlib/runtime.mdk), never passed to `addCtor`,
--- and calling it one is what made this heuristic look principled.  The
--- principled fix is to stop guessing from spelling and ask the environment:
--- `lookupCtor:4398` reads `TcEnv`'s 2nd `OrdMap`, and that map is written in
--- exactly TWO places — `addCtor:4425` (sole call site, inside `addVariants`,
--- at :8561, reached only from `registerVariants:8316`, itself called only from
--- `registerData`'s `DData` (:8239) and `DNewtype` (:8244) arms) and the two
--- prelude ctors `True`/`False`, hand-seeded straight into the map by
--- `initialEnv:15519`, bypassing `addCtor` entirely.  Both writers are
--- constructor-only, so the lookup is sound — but "populated only by
--- `addCtor`", which this comment asserted until 2026-07-31, was false.
--- Re-derive with `grep -n 'addCtor\|initialEnv' compiler/types/typecheck.mdk`.
---
--- ⚠️ That fix is NOT local, and the unstated cost is what makes the cheap
--- spelling patch attractive: `isNonexpansive:3567`, `isCtorAppSpine:3614`,
--- `clausesAreValue:9396`, `memberClauseIsValue:16063` and `sccSchemes:16054`
--- all take no `TcEnv` today, so threading one rewrites every one of them.
--- Paying that is exactly the branch on which the uppercase-extern warning
--- above starts to matter.
+-- The uppercase-mutable-cell-extern hazard this comment used to warn about is
+-- retired BY CONSTRUCTION rather than by audit: the grammar still permits an
+-- uppercase extern NAME (`externNameFor (TUpper x) = emit x`,
+-- frontend/parser.mdk, vs `identNameFor`, which accepts only `TIdent`), but an
+-- extern is never passed to `addCtor`, so no extern — uppercase or not — can
+-- pass the head test any more.  `Ref` (`extern Ref : a -> Ref a`,
+-- stdlib/runtime.mdk) is exactly such an extern; its by-name exclusion is kept
+-- below purely as defense-in-depth, since the lookup alone already rejects it.
 -- See issue 1150 and docs/spec/DICT-SEMANTICS.md §4.1 G2.
 --
 -- Record creates are non-expansive iff all field expressions are.
 -- Note: this ignores the `mut` flag (like the oracle), so `let mut x = []`
 -- generalizes — the separate `mut`-gen hole is a both-sides follow-up (T1b).
-isNonexpansive : Expr -> Bool
-isNonexpansive (ELoc _ e) = isNonexpansive e
-isNonexpansive (EDoOrigin _ e) = isNonexpansive e
-isNonexpansive (ELit _) = True
-isNonexpansive (EVar _) = True
-isNonexpansive (EVarId _ _) = True
-isNonexpansive (ELam _ _) = True
-isNonexpansive (EAnnot e _) = isNonexpansive e
-isNonexpansive (EHeadAnnot e _) = isNonexpansive e
-isNonexpansive (ETuple es) = allList isNonexpansive es
-isNonexpansive (EListLit es) = allList isNonexpansive es
--- Constructor application: non-expansive iff the spine head is an
--- uppercase-initial EVar — NOT an actual constructor lookup, so a module alias
--- passes it too; see the 🚨 above and issue 1150 — that is NOT `Ref`, and
--- every spine argument is itself non-expansive.  Partial ctor applications
--- (e.g. `MkTwo []`) are also non-expansive — they are closures, not mutable
--- cells.  `isCtorAppSpine` strips ELoc/EDoOrigin wrappers before testing.
-isNonexpansive (app@(EApp _ _)) = isCtorAppSpine app
+isNonexpansive : TcEnv -> Expr -> Bool
+isNonexpansive env (ELoc _ e) = isNonexpansive env e
+isNonexpansive env (EDoOrigin _ e) = isNonexpansive env e
+isNonexpansive _ (ELit _) = True
+isNonexpansive _ (EVar _) = True
+isNonexpansive _ (EVarId _ _) = True
+isNonexpansive _ (ELam _ _) = True
+isNonexpansive env (EAnnot e _) = isNonexpansive env e
+isNonexpansive env (EHeadAnnot e _) = isNonexpansive env e
+isNonexpansive env (ETuple es) = allList (isNonexpansive env) es
+isNonexpansive env (EListLit es) = allList (isNonexpansive env) es
+-- Constructor application: non-expansive iff the spine head is an EVar naming a
+-- REAL, DECLARED constructor (`lookupCtor env`, see the 🔒 above and issue
+-- 1150) — that is NOT `Ref`, and every spine argument is itself non-expansive.
+-- Partial ctor applications (e.g. `MkTwo []`) are also non-expansive — they are
+-- closures, not mutable cells.  `isCtorAppSpine` strips ELoc/EDoOrigin wrappers
+-- before testing.
+isNonexpansive env (app@(EApp _ _)) = isCtorAppSpine env app
 -- Record creation: non-expansive iff every field expression is non-expansive.
-isNonexpansive (ERecordCreate _ fs) = allList
+isNonexpansive env (ERecordCreate _ fs) = allList
   (fa => match fa
-    FieldAssign _ e => isNonexpansive e)
+    FieldAssign _ e => isNonexpansive env e)
   fs
-isNonexpansive _ = False
+isNonexpansive _ _ = False
 
 -- Walk the left spine of an application to its head, testing EVERY argument met
--- on the way, and finally test whether the head LOOKS LIKE a constructor that
--- is safe to generalize: an uppercase-initial EVar — **not** an actual
--- constructor lookup, so an uppercase module alias passes it (issue 1150, OPEN,
--- S0, memory-safety; see the 🚨 on `isNonexpansive` above, which this docblock
--- contradicted until 2026-07-31).  `Ref` is excluded by name because it is the
--- only uppercase extern that builds a mutable cell TODAY (`grep '^extern [A-Z]'
--- stdlib/runtime.mdk` — one hit); the grammar permits more, so that is an
--- audit, not an invariant.
+-- on the way, and finally test whether the head IS a constructor that is safe to
+-- generalize: an EVar naming a constructor DECLARED in this `TcEnv`, asked of
+-- the environment via `lookupCtor` rather than guessed from the name's spelling
+-- (issue 1150, fixed 2026-08-26 — see the 🔒 on `isNonexpansive` above for why
+-- the ctor map's two writers make the lookup sound).  `Ref` stays excluded by
+-- name as defense-in-depth: it is an extern FUNCTION, never passed to
+-- `addCtor`, so `lookupCtor` already rejects it on its own.
+--
+-- `ctorHeadIsUpper` is retained as a pure FAST PATH in front of the lookup: an
+-- ordinary function-application head — the overwhelmingly common `let` RHS —
+-- fails on a single character read instead of an `OrdMap` probe.  It can only
+-- ever narrow, never widen, and it narrows nothing today: every key in the ctor
+-- map is uppercase-initial, because the parser requires a constructor name to
+-- be `TUpper` and the two hand-seeded prelude ctors are `True`/`False`.  Were
+-- that ever to change, the pre-filter would cost a generalization, not
+-- soundness.
 --
 -- The arguments are tested HERE, on the single walk to the head, rather than by
 -- re-entering `isNonexpansive` at each `EApp` level: re-entering would re-walk
@@ -8084,13 +8092,22 @@ isNonexpansive _ = False
 -- immediately.  Testing the argument first would walk its whole subtree before
 -- discovering the spine was never a constructor application at all.  Both
 -- operands are pure `Bool`, so the order is semantically invisible.
-isCtorAppSpine : Expr -> Bool
-isCtorAppSpine (ELoc _ e) = isCtorAppSpine e
-isCtorAppSpine (EDoOrigin _ e) = isCtorAppSpine e
-isCtorAppSpine (EApp f x) = isCtorAppSpine f && isNonexpansive x
-isCtorAppSpine (EVar name) = name /= "Ref" && ctorHeadIsUpper name
-isCtorAppSpine (EVarId name _) = name /= "Ref" && ctorHeadIsUpper name
-isCtorAppSpine _ = False
+isCtorAppSpine : TcEnv -> Expr -> Bool
+isCtorAppSpine env (ELoc _ e) = isCtorAppSpine env e
+isCtorAppSpine env (EDoOrigin _ e) = isCtorAppSpine env e
+isCtorAppSpine env (EApp f x) = isCtorAppSpine env f && isNonexpansive env x
+isCtorAppSpine env (EVar name) = isDeclaredCtorHead env name
+isCtorAppSpine env (EVarId name _) = isDeclaredCtorHead env name
+isCtorAppSpine _ _ = False
+
+-- The head test itself: `name` is a real, declared constructor and is not the
+-- `Ref` extern.  See `isCtorAppSpine`'s docblock for why `lookupCtor` is the
+-- authority, why `ctorHeadIsUpper` is only a fast path in front of it, and why
+-- the `Ref` exclusion is redundant-but-kept.
+isDeclaredCtorHead : TcEnv -> String -> Bool
+isDeclaredCtorHead env name = name /= "Ref"
+  && ctorHeadIsUpper name
+  && isSome (lookupCtor env name)
 
 -- True iff the first character of a name is an ASCII uppercase letter,
 -- i.e. the name looks like a data constructor or type name.
@@ -10430,7 +10447,7 @@ blockLet env (PVar x xloc) e =
   let _ = defaultAmbiguousNum addedObls t   -- PLAN.md #11
   let _ = registerAmbiguousConstraints addedObls [t]   -- RETPOS soundness
   let _ = recordLocalBind x t   -- LSP hover (block let bypasses inferPat)
-  let sch = genRestricted (isNonexpansive e && not (pinLocalIfDictForwarded callN0 dictN0 x (Some xloc) t)) t  -- #866
+  let sch = genRestricted (isNonexpansive env e && not (pinLocalIfDictForwarded callN0 dictN0 x (Some xloc) t)) t  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   -- WS-2: α scope-seed — bindings are immutable, so the prefix is stable.
   seedAlphaLets (extendLocalVar env x sch) x e
@@ -14204,7 +14221,7 @@ inferLetSimple env pat e1 e2 =
 inferLetBody : TcEnv -> Pat -> Mono -> Expr -> Expr -> Int -> Int -> Int -> Mono
 inferLetBody env (PVar x xloc) t1 e1 e2 oblN0 callN0 dictN0 =
   let _ = recordLocalBind x t1  -- LSP hover (PVar let bypasses inferPat)
-  let sch = genRestricted (isNonexpansive e1 && not (pinLocalIfDictForwarded callN0 dictN0 x (Some xloc) t1)) t1  -- #866
+  let sch = genRestricted (isNonexpansive env e1 && not (pinLocalIfDictForwarded callN0 dictN0 x (Some xloc) t1)) t1  -- #866
   let _ = registerLocalScheme x sch oblN0 callN0 dictN0
   infer (seedAlphaLets (extendLocalVar env x sch) x e1) e2  -- WS-2: α scope-seed
 inferLetBody env pat t1 _ e2 _ _ _ =
@@ -15702,7 +15719,7 @@ generalizeGroup env constrained dictPairs (((LetBind name clauses), (_, sch))::r
     recordPinnedLocalsGeneric name (clausesLoc clauses) free constrained mono
   else
     False
-  let isVal = clausesAreValue clauses && not pinnedHere
+  let isVal = clausesAreValue env clauses && not pinnedHere
   -- WS-2: α scope-seed — single-clause zero-param bindings only (mirror α's
   -- alphaCollectBinds rule); a multi-clause / parameterized binding is not a
   -- known prefix.
@@ -15715,12 +15732,12 @@ generalizeGroup env constrained dictPairs (((LetBind name clauses), (_, sch))::r
 -- A where-clause binding is a value (generalizable) iff every clause has params
 -- (it's a function) or its zero-arg RHS is non-expansive.  Mirrors the oracle
 -- `ELetGroup` value test (lib/typecheck.ml:1715-1716).
-clausesAreValue : List FunClause -> Bool
-clausesAreValue clauses = allList clauseIsValue clauses
+clausesAreValue : TcEnv -> List FunClause -> Bool
+clausesAreValue env clauses = allList (clauseIsValue env) clauses
 
-clauseIsValue : FunClause -> Bool
-clauseIsValue (FunClause [] rhs) = isNonexpansive rhs
-clauseIsValue (FunClause _ _) = True
+clauseIsValue : TcEnv -> FunClause -> Bool
+clauseIsValue env (FunClause [] rhs) = isNonexpansive env rhs
+clauseIsValue _ (FunClause _ _) = True
 
 -- infer a clause group (multi-clause function), unifying all clauses to one type
 inferClauses : TcEnv -> List (List Pat, Expr) -> Mono
@@ -23477,6 +23494,12 @@ checkBodyImpl : List (String, Scheme) -> CheckMode -> List Decl -> List (String,
 -- lint-disable-next-line rule-prefer-assign-op
 checkBodyImpl seed mode prog0 =
   let _ = resetState ()
+  -- #1675: this module's own `import`/`export import` decls, checked for a name the
+  -- named dependency exports under two different definitions.  Here rather than in
+  -- `importSeed` because the seed is built BEFORE this `resetState ()` — see
+  -- `reportAmbiguousImports`.  Reads only `deAmbigValues`, so a driver with no graph
+  -- envelope (Flat, single-file) is a no-op.
+  let _ = reportAmbiguousImports prog0
   -- (#1) decl universes, derived from the mode.  On Flat, prog = coreProg ++ userProg
   -- and every universe collapses to it; on Module they fan out over accData/implDecls.
   let prog = match mode
@@ -27794,7 +27817,7 @@ processSCC env sigs grouped members =
   let _ = defaultGroupNum defaultObls (map snd placeholders)
   let _ = defaultEachMember defaultObls placeholders
   let _ = registerAmbiguousConstraints addedObls (map snd placeholders)   -- RETPOS soundness
-  let schemes = sccSchemes sigs grouped (isLetrecGroup members) placeholders
+  let schemes = sccSchemes env2 sigs grouped (isLetrecGroup members) placeholders
   -- #23 two-hop forward: also record constraints FORWARDED from a constrained
   -- callee (living on the call delta, never in addedObls) into schemeObligationsRef,
   -- so a caller of this group re-instantiates them and its own group can ground the
@@ -28258,18 +28281,18 @@ effectEscapeMsg name declared extras = "Function '\{name}' declared with <\{rend
 --   isVal    = plainVal || sigIsFun.
 -- A non-function expansive unsigned binding (`r = Ref []`) is value-restricted and
 -- stays monomorphic.  Mirrors oracle lib/typecheck.ml:2705-2710 + 2756.
-sccSchemes : List (String, Ty) -> OrdMap (List (List Pat, Expr)) -> Bool -> List (String, Mono) -> List (String, Scheme)
-sccSchemes _ _ _ [] = []
-sccSchemes sigs grouped isLetrec ((m, v)::rest) =
-  let plainVal = isLetrec || allList memberClauseIsValue (clausesOf m grouped)
+sccSchemes : TcEnv -> List (String, Ty) -> OrdMap (List (List Pat, Expr)) -> Bool -> List (String, Mono) -> List (String, Scheme)
+sccSchemes _ _ _ _ [] = []
+sccSchemes env sigs grouped isLetrec ((m, v)::rest) =
+  let plainVal = isLetrec || allList (memberClauseIsValue env) (clausesOf m grouped)
   let sigIsFun = memberSigIsFun sigs m v
   let isVal = plainVal || sigIsFun
-  (m, genRestricted isVal v) :: sccSchemes sigs grouped isLetrec rest
+  (m, genRestricted isVal v) :: sccSchemes env sigs grouped isLetrec rest
 
 -- a top-level clause is a value if it has params (function) or a non-expansive RHS
-memberClauseIsValue : (List Pat, Expr) -> Bool
-memberClauseIsValue ([], rhs) = isNonexpansive rhs
-memberClauseIsValue (_, _) = True
+memberClauseIsValue : TcEnv -> (List Pat, Expr) -> Bool
+memberClauseIsValue env ([], rhs) = isNonexpansive env rhs
+memberClauseIsValue _ (_, _) = True
 
 -- Phase 89: a signed binding whose (post-unify) type is an arrow is generalizable
 memberSigIsFun : List (String, Ty) -> String -> Mono -> Bool
@@ -31098,8 +31121,19 @@ aliasConstraintEntries ((DUse _ path _)::rest) qual = aliasEntriesFor (usePathMo
 aliasConstraintEntries (_::rest) qual = aliasConstraintEntries rest qual
 
 aliasEntriesFor : String -> UsePath -> List ((String, String), a) -> List (String, a)
--- `import m as A` → every constrained fn m defines is callable as `A.<name>`.
-aliasEntriesFor mid (UseAlias _ a) qual = flatMap (moduleAliasEntry mid a) qual
+-- `import m as A` → every constrained fn `m` defines is callable as `A.<name>`.
+-- #1427: resolve `m`'s exports via `graphPubDefiners` (chasing re-exports to their
+-- actual definer) instead of matching `qual`'s definer key against the SPELLED
+-- module.  Mirrors `memberDefinerRow`'s "resolve identity off the graph, not the
+-- spelling" shape.  A re-exporting `m` never itself DEFINES the name, so the old
+-- `defMid == mid` test (`moduleAliasEntry`, still used unchanged by
+-- `schemeOblEntriesFor`) was always false for it and the alias entry silently
+-- dropped — `R.f 1` on a constrained re-exported callee panicked at build.
+-- No direct-match fallback: like the wildcard tier of `useDefinerRows`, this arm
+-- can't enumerate without the graph — safe here because `aliasConstraintEntries`
+-- runs only in `Module` mode, where the envelope always exists.
+aliasEntriesFor mid (UseAlias _ a) qual =
+  flatMap (graphAliasEntry a qual) (graphPubDefiners mid)
 -- `import m.{x as y}` → `y` carries `x`'s dict arity.
 aliasEntriesFor mid (UseGroup _ ms) qual =
   flatMap (memberAliasEntry mid qual) ms
@@ -31716,10 +31750,175 @@ memberAliasEntry mid qual m = match useMemberAlias m
       (e => (local, snd e))
       (filter (e => fst (fst e) == mid && snd (fst e) == origin) qual)
 
+-- one row of `graphPubDefiners mid`: `(localName, (defMid, origin))` — a name `mid`
+-- exports and who actually DEFINES it, re-exports already chased.  Alias-qualify
+-- `localName` when `qual` carries an entry keyed by that SAME `(defMid, origin)`,
+-- not by `mid` itself — see `aliasEntriesFor`'s `UseAlias` arm (#1427).
+graphAliasEntry : String -> List ((String, String), a) -> (String, (String, String)) -> List (String, a)
+graphAliasEntry a qual (localName, (defMid, origin)) = map
+  (e => (qualifiedLocal a localName, snd e))
+  (filterList (e => fst (fst e) == defMid && snd (fst e) == origin) qual)
+
 -- build THIS module's import-scoped seed: walk its DUse decls, and for each one
 -- pick the imported names out of the named dependency's public schemes (held in
 -- depEnv, keyed by the dotted module id that usePathModuleId yields == the loader's
 -- mid).  `core` DUse decls are skipped — core is always seeded via baseSeed.
+-- ── #1675: reject an import that admits a name with more than one denotation ──────
+-- The hub `export import lib.pa.{g}` + `export import lib.pb.{g}` exports ONE spelling
+-- `g` standing for TWO definitions.  Downstream, `resolveMemberRows`' `lookupAssoc`
+-- took the first of them and every verb exited 0, so which function ran was decided by
+-- the ORDER OF TWO `export import` LINES — a semantically null edit moving the printed
+-- value from `2` to `10`.  This is the reject.
+--
+-- ⚠️ THE MECHANISM IS THE EXACT-KEY ARM, NOT THE `__<name>` SUFFIX FALLBACK, and the
+-- distinction decides where the check can live.  #1675's body cites the suffix `filter`
+-- ("cited, not instrumented", per its own pin's claim) — but `backend/private_mangle`
+-- runs ONLY in the emit drivers, so on `check`/`run` the hub's rows are keyed by the
+-- BARE name, `lookupAssoc origin` HITS, and the fallback is never reached.  A guard
+-- written on "the filter returned more than one candidate" is green on the whole repro.
+-- The ambiguity is a property of the DEPENDENCY'S EXPORT TABLE, which is where
+-- `deAmbigValues` records it, on both paths at once.
+--
+-- Reported at the IMPORT DECL (that is where the location points, and where the fix
+-- belongs), but keyed on an OCCURRENCE: a name is rejected only if this module actually
+-- WRITES it, in the spelling the form binds it under — bare for `import m.*` and for a
+-- selective `{g}`, alias-qualified (`A.g`) for `import m as A`.  A hub may re-export a
+-- hundred names under two denotations; an importer that never mentions any of them has
+-- no ambiguity to resolve and must not be rejected.  This is the USE-SITE model taken
+-- literally (#1070's reject-at-declaration stays superseded; the hub itself is still
+-- legal).  It also keeps the verdict from depending on which definer came first: the
+-- moment the name IS written, the import is rejected rather than silently resolved.
+--
+-- ⚠️ CORRECTED (sprint-review F2, from #1675's own landed behavior): the first cut
+-- rejected at ADMISSION — `import lib.hub.*` / `import lib.hub as H` failed even when
+-- the importer never mentioned the colliding name, while the selective form correctly
+-- did not.  The precedent cited for that, `T-AMBIGUOUS-ALIAS-METHOD`, is a DIFFERENT
+-- namespace: methods are dispatched by argument type, where "admitted into scope" and
+-- "used" are hard to pull apart because having the method callable is often the point.
+-- Whether the method side wants the same narrowing is a separate question, deliberately
+-- not answered here.
+--
+-- ⚠️ THE CHAIN IS NOT WEAKENED by narrowing to an occurrence.  `reexportDefiners` takes
+-- a wildcard `export import`'s rows WHOLESALE, so a module that re-exports an ambiguous
+-- hub without mentioning the name carries the ambiguity into its OWN export table, and
+-- the first module downstream that does write the name is rejected there.  Nothing is
+-- laundered clean by passing through a silent hop.
+--
+-- 🚨 CALLED FROM `checkBodyImpl`, AFTER ITS `resetState ()`, AND NOT FROM `importSeed`.
+-- `importSeed` is where the member resolution lives and was the first home for this, but
+-- the seed is computed in `foldModules` BEFORE the module's worker runs, and
+-- `checkBodyImpl` opens with `resetState ()` — which clears `typeErrors`.  MEASURED on
+-- that version: `run` exited 1 with the unlocated "detected during elaboration … see
+-- issue #1812" fallback (the sticky flag survives the reset, the diagnostic does not)
+-- and `check`/`check --json` were both still SILENT at exit 0 on the whole repro.  A
+-- diagnostic pushed while a seed is being built cannot be reported.  Everything this
+-- needs is on the module's own `DUse` decls plus the graph table, so nothing is lost by
+-- moving it inside the window; `checkBodyImpl` is the ONE body all four drivers share
+-- (`checkModuleFullImpl` and `elabModuleStamp` both route through it), which is what
+-- keeps `check` and the run/build elaboration pass answering alike.
+reportAmbiguousImports : List Decl -> Unit
+reportAmbiguousImports prog0 =
+  reportAmbiguousImportsIn (moduleRefNameSet prog0) prog0
+
+reportAmbiguousImportsIn : OrdMap Unit -> List Decl -> Unit
+reportAmbiguousImportsIn _ [] = ()
+reportAmbiguousImportsIn occ ((DAttrib _ d)::rest) =
+  let _ = reportAmbiguousImportsIn occ [d]
+  reportAmbiguousImportsIn occ rest
+reportAmbiguousImportsIn occ ((DUse _ path loc)::rest) =
+  let _ = reportAmbiguousImport occ (usePathModuleId path) path loc
+  reportAmbiguousImportsIn occ rest
+reportAmbiguousImportsIn occ (_::rest) = reportAmbiguousImportsIn occ rest
+
+reportAmbiguousImport : OrdMap Unit -> String -> UsePath -> Loc -> Unit
+reportAmbiguousImport occ depId path loc = match graphAmbigValues depId
+  [] => ()
+  amb => pushAmbiguousImports depId loc (ambiguousAdmitted occ path amb)
+
+-- which of the dependency's ambiguous names THIS import form makes this module actually
+-- ambiguous ABOUT.  Two independent filters, and both must hold:
+--
+--   (1) the form BINDS the name.  A selective `{g}` / `{g as h}` binds a fixed member
+--       list, which `importedBindings` enumerates; a wildcard (`None`) and a whole-module
+--       alias (`Some []` — it cannot enumerate a member list, and must not be read as
+--       "binds nothing") both bind every export.  Every form routes through
+--       `importedBindings` exactly as `importFormRows` does, so a form added there
+--       reaches this check by construction rather than by a case here.
+--
+--   (2) this module WRITES the name, in the spelling the form binds it under — `A.g` for
+--       `import m as A`, bare `g` for everything else.  `occ` is `moduleRefNameSet`'s
+--       set of every name occurring in the module's own decl bodies.
+--
+-- The selective arm needs no occurrence test: naming a member in the import list IS the
+-- write, and demanding a second one would let `import m.{g}` pass while `g` sits unused,
+-- which is not a narrowing anyone asked for.
+ambiguousAdmitted : OrdMap Unit -> UsePath -> List (String, List String) -> List (String, List String)
+ambiguousAdmitted occ (UseAlias _ a) amb =
+  filterList (r => omHasKey (qualifiedLocal a (fst r)) occ) amb
+ambiguousAdmitted occ path amb = match importedBindings path
+  None => filterList (r => omHasKey (fst r) occ) amb
+  Some bindings => filterList (r => anyList (b => fst b == fst r) bindings) amb
+
+-- every name this module's own decl bodies REFERENCE, as a set.  Mirrors `groupRefs`'
+-- `allEVars` collector one level up, at the decl layer: the top-level clause bodies plus
+-- the impl/default/prop/test/bench bodies, which is every place a user program can spell
+-- an imported value.  Alias-qualified references arrive here already flattened into a
+-- single dotted `EVar "A.g"` by desugar's `rewriteAliasQual` (via `qualifiedLocal`), so
+-- the alias spelling is a plain string lookup and needs no separate walk.
+--
+-- `allEVars` has no `EMethodRef` arm, and does not need one for this caller: the rows
+-- being filtered come from `ambiguousExportRows` → `modulePubDefiners` → `pubTopFnNames`,
+-- which is `declTopFnNames` INTERSECTED with the exported names — top-level FN
+-- definitions only.  An interface method name can never be in `amb`, so a call site the
+-- marker rewrote `EVar`→`EMethodRef` can never be the occurrence we are looking for.
+moduleRefNameSet : List Decl -> OrdMap Unit
+moduleRefNameSet decls = namesToSet (flatMap declRefNames decls) omEmpty
+
+declRefNames : Decl -> List String
+declRefNames (DAttrib _ d) = declRefNames d
+declRefNames (DFunDef _ _ _ body) = allEVars body
+declRefNames (DProp _ _ _ body) = allEVars body
+declRefNames (DTest _ _ body) = allEVars body
+declRefNames (DBench _ _ body) = allEVars body
+declRefNames (DLetGroup _ binds) = flatMap letBindEVars binds
+declRefNames (DImpl { methods, ... }) = flatMap implMethodEVars methods
+declRefNames (DInterface { methods, ... }) = flatMap ifaceMethodEVars methods
+declRefNames _ = []
+
+implMethodEVars : ImplMethod -> List String
+implMethodEVars (ImplMethod _ _ body) = allEVars body
+
+ifaceMethodEVars : IfaceMethod -> List String
+ifaceMethodEVars (IfaceMethod _ _ d) = match d
+  Some (MethodDefault _ body) => allEVars body
+  None => []
+
+pushAmbiguousImports : String -> Loc -> List (String, List String) -> Unit
+pushAmbiguousImports _ _ [] = ()
+pushAmbiguousImports depId loc ((n, mids)::rest) =
+  let _ = pushTypeErrorHelpFixAt "T-AMBIGUOUS-REEXPORT" (Some loc) (ambigReexportMsg n depId mids) (ambigReexportHelp n depId mids) None
+  pushAmbiguousImports depId loc rest
+
+-- wording mirrors `cohCrossModuleMsg`'s shape — name the thing, then name BOTH owners —
+-- without reusing its sentence, which is about a conflicting `impl` and would misname
+-- this cause.
+ambigReexportMsg : String -> String -> List String -> String
+ambigReexportMsg n depId mids =
+  "Ambiguous `\{n}` imported from `\{depId}`. Defined in \{andList mids}"
+
+ambigReexportHelp : String -> String -> List String -> String
+ambigReexportHelp n depId mids = "`\{depId}` re-exports more than one `\{n}`, so this import has no single meaning and which one it names is decided by the order of its `export import` lines; import the definition you mean directly (for example `import \{firstMid mids}.{\{n}}`), or drop one of `\{depId}`'s `export import` lines"
+
+firstMid : List String -> String
+firstMid (m::_) = m
+firstMid [] = "<module>"
+
+andList : List String -> String
+andList [] = ""
+andList [x] = x
+andList [x, y] = "\{x} and \{y}"
+andList (x::rest) = "\{x}, \{andList rest}"
+
 importSeed : List Decl -> List (String, List (String, Scheme)) -> List (String, Scheme)
 importSeed [] _ = []
 importSeed ((DAttrib _ d)::rest) depEnv = importSeed [d] depEnv
@@ -32265,6 +32464,15 @@ definersIn tbl mid = match omLookup mid tbl
   None => []
   Some rows => rows
 
+-- #1675: the `deAmbigValues` peer of `graphPubDefiners`.  A driver that never built an
+-- envelope (Flat / loader-less) reads the empty map and answers `[]`, so the ambiguity
+-- check FAILS OPEN there — the same discipline `memberDefinerRow`'s fallback takes for
+-- an absent graph, and the reason a single-file program can never trip this diagnostic.
+graphAmbigValues : String -> List (String, List String)
+graphAmbigValues mid = match omLookup mid driverState.value.declEnvsRef.value.deAmbigValues
+  None => []
+  Some rows => rows
+
 -- ── the per-graph derivation of `deDefiners`, built once by `buildDeclEnvs` ────────────
 --
 -- 🚨 NO RESET POINT IS NEEDED, AND THAT IS DELIBERATE (RUN-XMOD-066 (iii)).  The obvious
@@ -32293,15 +32501,69 @@ definersIn tbl mid = match omLookup mid tbl
 -- enforced upstream by the loader's topo-sort, not verified locally. A violation fails
 -- CLOSED: the not-yet-inserted dependency's `omLookup` misses, yielding a partial/missing
 -- row, never a crash or a wrong-but-plausible answer.
-declEnvDefinerIndex : OrdMap (List (String, (String, String))) -> List DeclEnvModule -> OrdMap (List (String, (String, String)))
-declEnvDefinerIndex acc [] = acc
-declEnvDefinerIndex acc (m::rest) =
+declEnvDefinerIndex : OrdMap (List (String, (String, String))) -> OrdMap (List (String, List String)) -> List DeclEnvModule -> (OrdMap (List (String, (String, String))), OrdMap (List (String, List String)))
+declEnvDefinerIndex acc amb [] = (acc, amb)
+declEnvDefinerIndex acc amb (m::rest) =
+  let rows = modulePubDefiners acc m.demId m.demDecls
   declEnvDefinerIndex
-    (omInsert
-      m.demId
-      (firstRowPerName omEmpty (modulePubDefiners acc m.demId m.demDecls))
-      acc)
+    (omInsert m.demId (firstRowPerName omEmpty rows) acc)
+    (omInsert m.demId (ambiguousExportRows m.demId rows) amb)
     rest
+
+-- ── #1675: which of a module's exported VALUE names have more than one denotation ──
+-- `firstRowPerName` above keeps the first row per name, and for a module's OWN
+-- declarations plus a single re-export that is a projection, not a choice.  For a
+-- re-export HUB — `export import lib.pa.{g}` and `export import lib.pb.{g}` in one
+-- module — the two rows name two DIFFERENT definitions, and keeping the first is a
+-- silent verdict decided by the order of two `export import` lines.  This records
+-- exactly those names so an IMPORTER of the hub can reject them (`reportAmbiguousImport`);
+-- nothing rejects the hub itself, which is the decided USE-SITE ambiguity model
+-- (#1070's reject-at-declaration remedy is superseded).
+--
+-- 🚨 IDENTITY, NOT MODULE ID, IS THE DISCRIMINATOR — the same rule
+-- `T-AMBIGUOUS-ALIAS-METHOD` states for methods.  The rows are deduped on the whole
+-- `(definer module, name at the definer)` pair, so a DIAMOND (one definition reached
+-- through two re-export hops) collapses to one denotation and is NOT ambiguous; only
+-- genuinely distinct definitions collide.
+--
+-- ⚠️ A module's OWN declaration SETTLES the name rather than participating in the
+-- ambiguity — `graphPubDefiners`' "declared names come first" and resolve's
+-- `ambiguousSet`/`keepAmbiguous` (which drops any name with a same-module top-level
+-- value shadow) already decide it that way, and a hub that both declares `g` and
+-- re-exports someone else's `g` must keep meaning its own.
+--
+-- Grouped through an `OrdMap` rather than a per-name rescan: `rows` is the UNCOLLAPSED
+-- list, which for a wildcard re-export is the whole of its dependency's export table,
+-- and RUN-XMOD-066 records what a quadratic over that costs on
+-- `diff_compiler_perf_scaling.sh`'s 400-module `modules` chain.
+ambiguousExportRows : String -> List (String, (String, String)) -> List (String, List String)
+ambiguousExportRows mid rows =
+  let grouped = groupDefinerPairs omEmpty rows
+  ambigRowsOf mid grouped (omKeys grouped)
+
+groupDefinerPairs : OrdMap (List (String, String)) -> List (String, (String, String)) -> OrdMap (List (String, String))
+groupDefinerPairs acc [] = acc
+groupDefinerPairs acc ((n, pair)::rest) = match omLookup n acc
+  None => groupDefinerPairs (omInsert n [pair] acc) rest
+  Some seen =>
+    if anyList (p => fst p == fst pair && snd p == snd pair) seen then
+      groupDefinerPairs acc rest
+    else
+      groupDefinerPairs (omInsert n (seen ++ [pair]) acc) rest
+
+ambigRowsOf : String -> OrdMap (List (String, String)) -> List String -> List (String, List String)
+ambigRowsOf _ _ [] = []
+ambigRowsOf mid grouped (n::rest) =
+  let pairs = definerPairsOf n grouped
+  if listLen pairs >= 2 && not (anyList (p => fst p == mid) pairs) then
+    (n, map fst pairs) :: ambigRowsOf mid grouped rest
+  else
+    ambigRowsOf mid grouped rest
+
+definerPairsOf : String -> OrdMap (List (String, String)) -> List (String, String)
+definerPairsOf n grouped = match omLookup n grouped
+  Some ps => ps
+  None => []
 
 -- keep the FIRST row per local spelling and drop the rest.  This is not a shortcut, it is
 -- what every reader of these rows already does: `resolveMemberRows` takes `lookupAssoc`'s

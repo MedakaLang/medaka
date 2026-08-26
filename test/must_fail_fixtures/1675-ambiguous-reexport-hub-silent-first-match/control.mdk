@@ -1,3 +1,0 @@
-import lib.pb.{g}
-
-main = println (g 1)

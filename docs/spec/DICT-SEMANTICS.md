@@ -130,9 +130,10 @@ target, not the tree.** Two of them license behaviour changes stated in the clau
 itself rather than left to a migration to discover — **I5** (whose consequences are
 *derived*, not enumerated, and only one of which is an acceptance widening) and
 **§6.2 T4** (which carries a normative "not before I5" constraint). And one, **§4.1
-G3**, is explicitly a valid argument about a value set the implementation does **not**
-have (#1150), so it may not be cited as discharged: it is F-1's (#1082) gate, and the
-gate is not open.
+G3**, is explicitly a valid argument about a value set the implementation has never
+been **shown** to have — #1150, the last known counterexample, was fixed 2026-08-26,
+but no hole is not the same as set equality — so it may not be cited as discharged: it
+is F-1's (#1082) gate, and the gate is not open.
 
 **Revision (2026-07-16): overlapping instances are specified.** Overlap with
 specialization — `impl Foo Int` alongside `impl Foo a`, the more specific
@@ -684,9 +685,9 @@ tracked as #1082, gated on this clause).
     `compiler/types/typecheck.mdk` — `grep -n 'isCtorAppSpine :' compiler/types/typecheck.mdk`),
     testing every argument met on the way to the head, so **"all parts" is now the
     words that arm has**.
-  - **#1150 (OPEN, S0, verified, memory-safety) — this is the hole that is live, and it
-    is strictly wider.** The *head* test is a first-character heuristic, not a
-    constructor lookup: `isCtorAppSpine (EVar name) = name /= "Ref" && ctorHeadIsUpper
+  - **#1150 (CLOSED, fixed 2026-08-26) — was strictly wider than #1139.** The *head*
+    test **was** a first-character heuristic, not a constructor lookup:
+    `isCtorAppSpine (EVar name) = name /= "Ref" && ctorHeadIsUpper
     name`. A module alias is **required** to be uppercase (`aliasNameFor`,
     `compiler/frontend/parser.mdk`) and an alias-qualified value desugars to a flat
     `EVar` carrying the dotted name (`rewriteAliasQual`, `compiler/frontend/desugar.mdk`,
@@ -703,11 +704,25 @@ tracked as #1082, gated on this clause).
     a selective import (`import hash_map.{new}` + `let m = new ()`) is the sole safe
     form, its head `EVar "new"` failing `ctorHeadIsUpper` and staying expansive.
 
-  So the implementation's predicate is **still not this clause's set**, for a different
-  reason than when this paragraph was first written. The three sibling arms (`ETuple`,
-  `EListLit`, `ERecordCreate`) fold with `allList isNonexpansive` and always did; what
-  the constructor arm now lacks is not the fold but a trustworthy notion of *what a
-  constructor is*.
+    **The fix** (slice `S-ctor-head-identity`) replaced the spelling test with an actual
+    lookup — `isDeclaredCtorHead env name = name /= "Ref" && ctorHeadIsUpper name &&
+    isSome (lookupCtor env name)`, with `TcEnv` threaded through `isNonexpansive`,
+    `isCtorAppSpine`, `clausesAreValue`/`clauseIsValue`, `memberClauseIsValue` and
+    `sccSchemes`. `ctorHeadIsUpper` remains only as a fast path in front of the lookup,
+    where it can narrow but never widen. The repro is now rejected identically by
+    `check`, `run` and `build`.
+
+  So the constructor arm now has a trustworthy notion of *what a constructor is*: it
+  asks `TcEnv`'s ctor map, whose only two writers (`addCtor`, reached solely from
+  `DData`/`DNewtype` registration, and the hand-seeded prelude `True`/`False`) are
+  constructor-only. The three sibling arms (`ETuple`, `EListLit`, `ERecordCreate`) fold
+  with `allList isNonexpansive` and always did.
+
+  ⚠️ **This paragraph does NOT assert that the implementation's predicate is now
+  exactly this clause's set, and G3 below is NOT thereby discharged.** Both #1139 and
+  #1150 were closed one hole at a time; establishing set equality is a separate
+  argument this document has not made, and its 🚨 has been wrong about "the hole that
+  is live" twice. What has changed is that no hole in the predicate is currently known.
 
 - **G3 — Evaluation-timing neutrality, and exactly what it is contingent on.**
   Wrapping a bound expression `e` as `λd̄. e` moves `e`'s evaluation from binding time
@@ -723,16 +738,20 @@ tracked as #1082, gated on this clause).
 
   🚨 **This is a valid argument about G2's set, NOT a discharged theorem about the
   tree, and the difference is load-bearing because this clause is F-1's (#1082)
-  gate.** The implementation's value predicate is **not** G2's set: by the 🚨 above it
-  classifies *every alias-qualified application* as a constructor application, so
-  `let m = H.new ()` over `stdlib/hash_map.mdk` is generalized into a polymorphic
-  mutable table today (#1150 — `check` clean, `run` `E-NOT-A-FUNCTION`, native
-  SEGFAULT). Wrapping *that* binding in `λd̄.` would additionally re-allocate the cell
-  per use, so neutrality does not hold for it either. **An implementation may not cite
-  G3 while its value predicate is holed:** either the predicate is repaired to G2's
-  set first, or the dict-abstraction of locals is restricted to a set that is
-  independently shown to satisfy G2. Landing F-1 on the current predicate would take
-  a live unsoundness and give it a second, calling-convention-shaped channel.
+  gate.** The implementation's value predicate has **not been shown equal** to G2's
+  set. It was demonstrably *unequal* until 2026-08-26: by the 🚨 above it classified
+  *every alias-qualified application* as a constructor application, so
+  `let m = H.new ()` over `stdlib/hash_map.mdk` generalized into a polymorphic mutable
+  table (#1150 — `check` clean, `run` `E-NOT-A-FUNCTION`, native SEGFAULT), and
+  wrapping *that* binding in `λd̄.` would additionally have re-allocated the cell per
+  use, so neutrality did not hold for it either. #1150 is now fixed and **no hole in
+  the predicate is currently known** — but that is the absence of a known
+  counterexample, not the equality proof this clause needs, and the 🚨 above has twice
+  had to be rewritten around a hole nobody had found yet. **An implementation may not
+  cite G3 until its value predicate is shown to be G2's set:** either that argument is
+  made, or the dict-abstraction of locals is restricted to a set independently shown
+  to satisfy G2. Landing F-1 on an unproven predicate risks giving any surviving
+  unsoundness a second, calling-convention-shaped channel.
 
   ⚠️ **Why the argument has to be made at a local binder at all** — the top-level case
   looks like it never needed it, and the reason is *not* established. A top-level
@@ -2483,7 +2502,7 @@ function rather than over the pass that was expected to call it.
 | §4 `gen-rec` | `processTopGroups:15568` → `processSCCs:15598` → `processSCC:15709` (`compiler/types/typecheck.mdk`) | one shared `λd̄.` prefix over a mutually-recursive group; recursive occurrences reuse it rather than re-entailing | — |
 | §4 `gen-sig` (#619) | `checkSigConstraintCoverage:16344`/`checkSigConstraintOne:16350` (`compiler/types/typecheck.mdk`) | `Q_sig ⊩ P'ᵢ` — inferred body context must be entailed by the declared one, not merged | — |
 | §4.1 **G1** (uniform dict abstraction at a local binder) | **UNIMPLEMENTED — confirmed absent TREE-WIDE, not just in `typecheck.mdk`.** `dictPassDecl:12377` has exactly four declaration arms — `DFunDef` (`:12378`), top-level `DLetGroup` (`:12388`), `DImpl` methods (`:12397`), `DInterface` default bodies (`:12403`) — then a catch-all `dictPassDecl _ _ d = d` (`:12407`); no arm descends into an expression. The stronger check is on the **name-minting** function: `dictParamName:12685` is the sole producer of a `$dict_<fn>_<slot>` binder, and tree-wide (`grep -rn dictParamName compiler/ --include='*.mdk'`) its only *pattern*-producing callers are `dictParamsGo:12671` and `dictParamsFrom:12680`, reachable only from those four arms — every other caller builds an `RDict` route or an `activeDictVars` entry, i.e. a **reference** to a param a declaration already bound. `llvm_emit.mdk`'s `dictParamNameE:6130` re-derives the same string for a method and creates nothing. And there is **no lambda-lifting pass** that could route a local through the `DFunDef` arm (`grep -rn 'lambdaLift\|hoistLocal\|liftLocal\|closureConv' compiler/` → 0 hits; `desugar.mdk` maps `ELetGroup` structurally at `:73`/`:120-121` and never hoists it) | — | so no `let`/`where` binding receives a `λd̄.` prefix at **any** stage — resolve, desugar, marker, typecheck, IR lowering, or either backend. Separately, even the implemented half has no per-binder key for G1 to extend: the arity a top-level binding gets is read by `dictArityOf:12662`, which is **bare-name** (see the I1 row). G1 additionally needs *local* binder identity — `(name, binding-id)` keying already exists for local scheme *obligations* (`registerLocalScheme:7866`, #837) and is the shape the arity table would need. ⚠️ **G1's absence is uniform across BOTH local spellings** — the `dictParamName` derivation above covers `let` and `where` alike — so an observed `let`-vs-`where` behavioural difference (e.g. #1052's two spellings printing `3` and `2`) is **not** explained by this row. It is explained by the G4 row below: the five sites do not share one pin predicate |
-| §4.1 **G2** (value-restriction gate) | 🔴 **HOLED — the gate exists and its predicate is not G2's set.** `genRestricted:3658` is gated on `isNonexpansive:3567` at all five local generalization sites (`blockRecLet:5241`, `blockLet:5261`, `inferRecLet:7871`, `inferLetBody:7953`, `generalizeGroup:9360` via `clausesAreValue:9396`) **and at the top-level site** (`sccSchemes:16054` via `memberClauseIsValue:16063`) — line numbers as of the issue-480 dedupe **and its prose follow-up**, which shifted everything below `isNonexpansive`'s header comment by +35; re-derive with `grep -n 'genRestricted\|isNonexpansive' compiler/types/typecheck.mdk` | a binding generalizes only at a syntactic value | 🔴 **#1150 (OPEN, S0, verified, memory-safety): the constructor-application arm's HEAD test is a first-character heuristic, not a constructor lookup.** `isCtorAppSpine (EVar name) = name /= "Ref" && ctorHeadIsUpper name` — and `ctorHeadIsUpper` inspects character 0 only. A module alias MUST be uppercase (`aliasNameFor`, `compiler/frontend/parser.mdk` — lowercase is a hard parse error) and an alias-qualified value desugars to a FLAT `EVar` carrying the dotted name (`rewriteAliasQual`, `compiler/frontend/desugar.mdk`, via `qualifiedLocal`, `compiler/frontend/ast.mdk`), so `ctorHeadIsUpper "H.new"` reads `'H'` and returns True: **every alias-qualified application in the language is classified as a constructor application**. Classification is not the whole test — `isCtorAppSpine (EApp f x) = isCtorAppSpine f && isNonexpansive x` still rejects a spine with an expansive argument, so `H.f (g 1)` is classified but NOT generalized — but the repro's argument is a value: `import hash_map as H` + `let m = H.new ()` yields a polymorphic mutable table: `check` exit 0 with zero diagnostics, `run` `E-NOT-A-FUNCTION`, built binary **SEGFAULT** (exit 139). The safe **alias** spelling (a lowercase one) is forbidden by the language; the selective-import control (`import hash_map.{new}` + `let m = new ()`, head `EVar "new"`) is correctly rejected, so the alias IS the discriminator. ⚠️ **This row's reason changed on 2026-07-31; its verdict did not.** It previously cited **#1139** (the arm folded over the spine's FINAL argument only). #1139 is CLOSED and fixed — `isCtorAppSpine` now tests every argument on its single walk to the head — but that repair does not touch `ctorHeadIsUpper`, and #1150 is strictly wider: #1139 needed a hand-written `data` type with a `Ref` field, #1150 needs one stdlib import. ⚠️ **The hazard TODAY is not the "future uppercase mutable-cell extern" the source comment used to warn about** — that audit (`grep '^extern [A-Z]' stdlib/runtime.mdk`) is clean, one hit, `Ref`, and the predicate is defeated by the alias route anyway. ⚠️ **But that retirement is CONDITIONAL, not permanent, because the GRAMMAR still admits the hazard**: `externNameFor (TUpper x) = emit x` (`compiler/frontend/parser.mdk`) accepts an uppercase extern NAME where `identNameFor` (same file) accepts only `TIdent` for an ordinary identifier. So the instant issue 1150 is repaired NARROWLY — by rejecting a dotted name rather than by asking the environment — an uppercase mutable-cell extern becomes the SOLE remaining way to defeat the head test, and the "defeated anyway" clause above expires with the repair while the warning does not. Asking the environment is not a local change, which is what makes the narrow patch attractive: `isNonexpansive`, `isCtorAppSpine`, `clausesAreValue`, `memberClauseIsValue` and `sccSchemes` all take no `TcEnv`. G3 may not be cited as discharged while this stands |
+| §4.1 **G2** (value-restriction gate) | 🟡 **NO KNOWN HOLE — the gate exists; its predicate has not been SHOWN equal to G2's set.** `genRestricted` is gated on `isNonexpansive` at all five local generalization sites (`blockRecLet`, `blockLet`, `inferRecLet`, `inferLetBody`, `generalizeGroup` via `clausesAreValue`) **and at the top-level site** (`sccSchemes` via `memberClauseIsValue`); all six now thread the `TcEnv` the head test needs — re-derive with `grep -n 'genRestricted\|isNonexpansive' compiler/types/typecheck.mdk` | a binding generalizes only at a syntactic value | 🟡 **#1150 (CLOSED, fixed 2026-08-26): the constructor-application arm's HEAD test is now an actual constructor lookup.** `isCtorAppSpine (EVar name) = isDeclaredCtorHead env name`, over `isDeclaredCtorHead env name = name /= "Ref" && ctorHeadIsUpper name && isSome (lookupCtor env name)`. The lookup is the authority and `ctorHeadIsUpper` survives only as a fast path in front of it, where it can narrow but never widen; `Ref` stays excluded by name as defense-in-depth (it is an extern, never passed to `addCtor`, so the lookup already rejects it). Soundness of the lookup rests on the ctor map having exactly two writers, both constructor-only: `addCtor` (sole call site inside `addVariants`, reached only from `registerVariants` under `registerData`'s `DData`/`DNewtype` arms) and the hand-seeded prelude `True`/`False` in `initialEnv`. **What #1150 was:** the head test read character 0 only, a module alias MUST be uppercase (`aliasNameFor`, `compiler/frontend/parser.mdk` — lowercase is a hard parse error), and an alias-qualified value desugars to a FLAT `EVar` carrying the dotted name (`rewriteAliasQual`, `compiler/frontend/desugar.mdk`, via `qualifiedLocal`, `compiler/frontend/ast.mdk`), so `ctorHeadIsUpper "H.new"` read `'H'` and returned True — **every alias-qualified application in the language was classified as a constructor application**, and `import hash_map as H` + `let m = H.new ()` yielded a polymorphic mutable table: `check` exit 0 with zero diagnostics, `run` `E-NOT-A-FUNCTION`, built binary **SEGFAULT** (exit 139). It is now rejected identically by `check`, `run` and `build`. ⚠️ **This row's reason has changed twice and its verdict once.** It cited **#1139** (the arm folded over the spine's FINAL argument only) until 2026-07-31, then **#1150**, and both are now CLOSED. The "future uppercase mutable-cell extern" hazard the source comment used to warn about is retired **by construction** rather than by audit: an extern is never passed to `addCtor`, so no extern — uppercase or not — can pass the head test. 🚨 **The verdict is 🟡, not 🟢, deliberately: two holes were found here one after the other, each invisible until someone constructed the program that exposed it. "No known counterexample" is not the set-equality argument this row would need to go green, and G3 may not be cited as discharged on it** |
 | §4.1 **G4** (predicate deferral; monomorphising is NOT an approximation) | 🔴 **DIVERGENT.** The five sites above conjoin the value test with `not (pinLocalIfDictForwarded:8947 …)` — the #866/#1021 all-or-nothing pin, which handles a dict-forwarding local by **declining to generalize** it, exactly the move G4 forbids | — | 🚨 **The five sites do NOT share one pin predicate, and this is where a `let`-vs-`where` divergence comes from.** The four `let`-shaped sites call `pinLocalIfDictForwarded:8947`, whose pin set is `dictForwardedPairs callN0 dictN0` (`:8928`) — the dict-app and call-obligation windows, and nothing else. The `where`/let-group site is different: `processLetGroup:8770` computes `pinned = methodConstrainedIds () ++ map fst dictPairs` (`:8791`) and hands it to `generalizeGroup:9310`, which pins on `anyIn free constrained` (`:9318`). So the `where` path pins on a **strictly larger** set — it consults the METHOD-constrained channel that the `let` path never reads. One judgment, two predicates, is an L1 fork, and it is the structural difference that would make #1052's `let` spelling generalize (unpinned ⇒ correct `3`) where its `where` spelling pins (⇒ the collapse to `2`). Stated as the mechanism the source supports; not probed here (no binary). 🔴 **#1052 (OPEN, S0)** is the clause's counterexample and is already filed as one: monomorphising a `where` helper merges two *distinct rigid signature* variables and drops a dictionary slot, printing `2` where G4 says `3`, on both engines, exit 0. #1082 is the migration vehicle; the pin is documented as an interim at `registerLocalScheme`'s `#866 NARROWED THE PREMISE` comment (`:7850-7865`), which states the trade in the same terms |
 | §4.2 **OD1** (a decidable predicate is discharged where it is recorded) | 🟡 **ENFORCED, AFTER A REFUTED FIRST ATTEMPT — read the history, it is the whole content of this row.** Two sites must agree: (a) the gate, `checkOneCallObligation`, whose arms reach a verdict on a function-typed vector (`anyListM monoIsFunction`) BEFORE its `allConcreteHeads` arm; (b) the rollback filter `uOblIsDecidableNow` (#1114), which decides what the parametric-impl-body window in `inferUserImplBodies` re-pushes. Re-derive with `grep -n 'allConcreteHeads\|monoIsFunction\|uOblIsDecidableNow' compiler/types/typecheck.mdk` | a predicate entailment can decide now is decided now, by no channel's leave | 🚨 **This row read `✅ ENFORCED` when #1114 first landed and that was WRONG, on a claim that (a) and (b) "share `allConcreteHeads` verbatim".** They did share it, and sharing it was the defect: `headTyconNameMono` enumerates `TCon`/`TRigid` only, so a **fully concrete `Debug (Int -> Int)`** is non-concrete to `allConcreteHeads` while the gate decides and rejects it one arm earlier. The window dropped it, OD4's exemption meant no ambiguity fired, and the predicate vanished with no verdict from any channel — #792's exact three-verdict signature, reached by changing one argument's type. Corrected by deriving the filter from the gate's decision structure and enumerating `Mono`'s heads (`TVar`/`TCon`/`TRigid`/`TFun`/`TEff` after `TApp`-peeling) to show the set is now closed. ⚠️ **The keying assumption is therefore a maintenance obligation, not a property:** any arm added to `checkOneCallObligation` above its `allConcreteHeads` test must be mirrored in `uOblIsDecidableNow`, and **no gate can catch the omission** — a dropped predicate produces silence, which every golden already records for an accepted program |
 | §4.2 **OD2** (a non-ground predicate defers to the binding that quantifies its variables) | ✅ **ENFORCED** on the constrained-binding channel: `checkUndeterminedObligation` RULE 2 defers when every free var of the predicate is in `deferrableVarIds`, which `registerSchemeObligations` fills from the POST-generalization `schemeIds` at each group close. The use-site half is `instantiateVarTrackedId`, which re-instantiates the binding's stored predicates through the call's substitution | a forwarded predicate is re-checked at each concrete use rather than at the definition | ⚠️ **The store consulted at the use site is chosen by whether the binding is same-module or cross-module, and the two are different tables.** Same-module: `schemeObligationsRef`, keyed `(name, binding-id)` (#837). Cross-module: `declaredCrossModuleObls`'s three lookups — `qualConstraintFor` (module-qualified), `qualSchemeOblsFor` (#1114 — read key is a BARE LOCAL NAME; what makes it safe is that its table is IMPORT-SCOPED, rebuilt per module from that module's own `DUse` decls, so a name is reachable only from a module whose own import names the module defining it. Calling this "module-qualified" — as this row first did — loses exactly the distinction #1326 turns on), `coreSchemeObligationsRef` (bare NAME, prelude-only). D2 holds identically across a module boundary only for as long as those stay in step; the third is bare-name and survives only because prelude names are deliberately excluded from `currentImportDefinersRef`, so nothing else can key it |
@@ -2599,18 +2618,21 @@ it); **§7.1 U1/U2** (`CheckMode` is live, with 20 `Flat` arms and a consumer se
 derived by the command in that row, against `compiler/DRIVER-COLLAPSE-PLAN.md`'s
 status line of IMPLEMENTED).
 
-🔴 **One row is HOLED rather than divergent, and it is the most serious finding in this
-table: §4.1 G2** (`isNonexpansive`'s constructor arm decides *what a constructor is*
-from the head name's **first character**, so every alias-qualified application —
-`import hash_map as H`, `let m = H.new ()` — is generalized as if it were a
-constructor application — **#1150**, OPEN, S0, memory-safety: `check` exit 0, native
-SEGFAULT). It matters beyond its own
-severity because it is the premise **§4.1 G3** rests on, and G3 is **F-1's (#1082)
-gate**: landing dict-abstracted locals on the current value predicate would give a
-live unsoundness a second, calling-convention-shaped channel. ⚠️ **The row's cited
-reason has already moved once without its verdict moving**: it first cited **#1139**
-(final-spine-argument only), which is now CLOSED and fixed — and the fix does not
-touch the head test, so the row stayed 🔴. A drained citation is not a drained hole.
+🟡 **One row was HOLED rather than divergent, and it was the most serious finding in
+this table: §4.1 G2** (`isNonexpansive`'s constructor arm decided *what a constructor
+is* from the head name's **first character**, so every alias-qualified application —
+`import hash_map as H`, `let m = H.new ()` — was generalized as if it were a
+constructor application — **#1150**, S0, memory-safety: `check` exit 0, native
+SEGFAULT). **#1150 was fixed on 2026-08-26** by replacing the spelling test with
+`isSome (lookupCtor env name)` and threading `TcEnv` through the six predicates, so
+the row is now 🟡 — no known hole — rather than 🔴. It is **not** 🟢: the predicate has
+still never been *shown* to be G2's set, and that distinction remains load-bearing
+because this is the premise **§4.1 G3** rests on and G3 is **F-1's (#1082) gate**.
+⚠️ **The row's cited reason has now moved twice**: it first cited **#1139**
+(final-spine-argument only), then **#1150**, and both are CLOSED. A drained citation
+was never a drained hole — and two holes surfaced here in succession, each invisible
+until someone wrote the program that exposed it, which is exactly why "no known
+counterexample" does not discharge G3.
 ⚠️ **This row asserted
 the opposite** in its first revision — *"`isNonexpansive`'s only allocating arms are
 … over non-expansive parts"* — a claim contradicted by the very lines it cited, and
