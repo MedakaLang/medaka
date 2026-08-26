@@ -1,5 +1,5 @@
 # META
-source_lines=1220
+source_lines=1213
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -615,9 +615,6 @@ coreImportEntries exportsPerUnit = match lookupExports "core" exportsPerUnit
   None => []
 
 coreEntry : (String, String) -> List (String, String)
--- Structural duplicate of `originEntryPair` below; NOT de-duplicated here because
--- this is a tooling-scoped PR and this is the emitter — tracked in #1201.
--- lint-disable-next-line rule-duplicate-body
 coreEntry (n, definer)
   | isExcludedName n = []
   | otherwise = [(n, mangledName definer n)]
@@ -678,11 +675,7 @@ originEntryAs exports origin local
 
 -- a wildcard import iterates the (name, definer) pairs directly.
 originEntryPair : (String, String) -> List (String, String)
--- Structural duplicate of `coreEntry` above; deferred de-duplication — see #1201.
--- lint-disable-next-line rule-duplicate-body
-originEntryPair (n, definer)
-  | isExcludedName n = []
-  | otherwise = [(n, mangledName definer n)]
+originEntryPair = coreEntry
 
 -- a module alias iterates the same pairs, keying each under `A.<name>`.
 aliasEntryPair : String -> (String, String) -> List (String, String)
@@ -1342,7 +1335,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DTypeSig false "originEntryAs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "originEntryAs" ((PVar "exports") (PVar "origin") (PVar "local")) (EIf (EApp (EVar "isExcludedName") (EVar "origin")) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "lookupDefiner") (EVar "origin")) (EVar "exports")) (arm (PCon "Some" (PVar "definer")) () (EListLit (ETuple (EVar "local") (EApp (EApp (EVar "mangledName") (EVar "definer")) (EVar "origin"))))) (arm (PCon "None") () (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "originEntryPair" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "originEntryPair" ((PTuple (PVar "n") (PVar "definer"))) (EIf (EApp (EVar "isExcludedName") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EListLit (ETuple (EVar "n") (EApp (EApp (EVar "mangledName") (EVar "definer")) (EVar "n")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "originEntryPair" () (EVar "coreEntry"))
 (DTypeSig false "aliasEntryPair" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "aliasEntryPair" ((PVar "a") (PTuple (PVar "n") (PVar "definer"))) (EIf (EApp (EVar "isExcludedName") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EListLit (ETuple (EApp (EApp (EVar "qualifiedLocal") (EVar "a")) (EVar "n")) (EApp (EApp (EVar "mangledName") (EVar "definer")) (EVar "n")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "useModIdU" (TyFun (TyCon "UsePath") (TyCon "String")))
@@ -1658,7 +1651,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DTypeSig false "originEntryAs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "originEntryAs" ((PVar "exports") (PVar "origin") (PVar "local")) (EIf (EApp (EVar "isExcludedName") (EVar "origin")) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "lookupDefiner") (EVar "origin")) (EVar "exports")) (arm (PCon "Some" (PVar "definer")) () (EListLit (ETuple (EVar "local") (EApp (EApp (EVar "mangledName") (EVar "definer")) (EVar "origin"))))) (arm (PCon "None") () (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "originEntryPair" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "originEntryPair" ((PTuple (PVar "n") (PVar "definer"))) (EIf (EApp (EVar "isExcludedName") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EListLit (ETuple (EVar "n") (EApp (EApp (EVar "mangledName") (EVar "definer")) (EVar "n")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "originEntryPair" () (EVar "coreEntry"))
 (DTypeSig false "aliasEntryPair" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "aliasEntryPair" ((PVar "a") (PTuple (PVar "n") (PVar "definer"))) (EIf (EApp (EVar "isExcludedName") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EListLit (ETuple (EApp (EApp (EVar "qualifiedLocal") (EVar "a")) (EVar "n")) (EApp (EApp (EVar "mangledName") (EVar "definer")) (EVar "n")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "useModIdU" (TyFun (TyCon "UsePath") (TyCon "String")))
