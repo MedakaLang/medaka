@@ -529,8 +529,9 @@ errTextOf (errText, _, _) = errText
 -- Medaka is STRICT, so `fst`-only callers — every `medaka check` of a multi-module
 -- project — evaluate it too.  An earlier revision returned RENDERED warning lines
 -- for the whole channel here, and multi-module `check` went 16.0–17.1 s → 38.9–40.6 s
--- with byte-identical stdout: `ppDiagCliSrc` → `nthLine` → `stringToChars`
--- materialises the file per warning, thousands of times, for output nobody reads.
+-- with byte-identical stdout: rendering a located diagnostic has to materialise the
+-- containing file's lines (`ppDiagCliSrc` → `srcLinesArr`), so a rendered channel
+-- pays that per file — thousands of times over a graph — for output nobody reads.
 -- Now it is a `filter isCoherenceWarn` over already-materialised `Diag`s (no source
 -- text touched), and rendering happens at the emit site — which also lets that site
 -- choose human text or `--json`.  KEEP IT UNRENDERED.
@@ -587,14 +588,27 @@ joinedOrNone : List String -> Option String
 joinedOrNone [] = None
 joinedOrNone ls = Some (joinNl ls)
 
+-- #2044: split the source ONCE, not once per diagnostic — and, per the strictness
+-- trap the 🚨 note on `locatedProjectDiags` above already spells out, not at all
+-- when there is nothing to render.  `map f xs` with `f = ppDiagCliLines
+-- (srcLinesArr src) path` builds that partial application from ALREADY-EVALUATED
+-- arguments, so a strict language splits the whole file before `map` ever looks at
+-- whether `xs` is empty — which made a clean multi-module project pay a full
+-- per-file `Array String` split on EVERY file for output that does not exist.
+-- The `[]` arm is what keeps the split off the zero-diagnostic path; keep it.
 renderTripleErrors : (String, String, List Diag) -> List String
 renderTripleErrors (path, src, diags) =
-  -- #2044: split the source ONCE, not once per diagnostic.
-  map (ppDiagCliLines (srcLinesArr src) path) (filter isDiagError diags)
+  let errs = filter isDiagError diags
+  match errs
+    [] => []
+    _ => map (ppDiagCliLines (srcLinesArr src) path) errs
 
 renderTripleWarnings : (String, String, List Diag) -> List String
 renderTripleWarnings (path, src, diags) =
-  map (ppDiagCliLines (srcLinesArr src) path) (filter isDiagWarn diags)
+  let ws = filter isDiagWarn diags
+  match ws
+    [] => []
+    _ => map (ppDiagCliLines (srcLinesArr src) path) ws
 
 -- For the run/build multi-module gates, whose SOUNDNESS predicate stays the
 -- looser `hadTypeErrors` (checkModulesHasErrors over-rejects valid code — see
@@ -911,8 +925,9 @@ isDiagWarn d = not (isDiagError d)
 --      Measured: `medaka build compiler/driver/medaka_cli.mdk` went 0 → 4896 stderr
 --      lines, 1249 of them demanding that phantom `Text _`; a 25-line three-module
 --      toy went 0 → 20, all false.  That makes `build` ~200× noisier than `check`.
---  (3) PERF.  Surfacing the channel means RENDERING it, and `ppDiagCliSrc` →
---      `nthLine` → `stringToChars` materialises the whole file per warning.
+--  (3) PERF.  Surfacing the channel means RENDERING it, and rendering a located
+--      diagnostic materialises the containing file's lines (`ppDiagCliSrc` →
+--      `srcLinesArr`) — a cost paid per file whose channel is non-empty.
 --      Interleaved A/B on a quiet box: multi-module `check` 16.0–17.1 s → 38.9–40.6 s
 --      with byte-identical stdout.  Narrowing to one code removes the render, which
 --      fixes that at its cause rather than optimising around it.

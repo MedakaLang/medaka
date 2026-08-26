@@ -1,5 +1,5 @@
 # META
-source_lines=3221
+source_lines=3236
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -533,8 +533,9 @@ errTextOf (errText, _, _) = errText
 -- Medaka is STRICT, so `fst`-only callers — every `medaka check` of a multi-module
 -- project — evaluate it too.  An earlier revision returned RENDERED warning lines
 -- for the whole channel here, and multi-module `check` went 16.0–17.1 s → 38.9–40.6 s
--- with byte-identical stdout: `ppDiagCliSrc` → `nthLine` → `stringToChars`
--- materialises the file per warning, thousands of times, for output nobody reads.
+-- with byte-identical stdout: rendering a located diagnostic has to materialise the
+-- containing file's lines (`ppDiagCliSrc` → `srcLinesArr`), so a rendered channel
+-- pays that per file — thousands of times over a graph — for output nobody reads.
 -- Now it is a `filter isCoherenceWarn` over already-materialised `Diag`s (no source
 -- text touched), and rendering happens at the emit site — which also lets that site
 -- choose human text or `--json`.  KEEP IT UNRENDERED.
@@ -591,14 +592,27 @@ joinedOrNone : List String -> Option String
 joinedOrNone [] = None
 joinedOrNone ls = Some (joinNl ls)
 
+-- #2044: split the source ONCE, not once per diagnostic — and, per the strictness
+-- trap the 🚨 note on `locatedProjectDiags` above already spells out, not at all
+-- when there is nothing to render.  `map f xs` with `f = ppDiagCliLines
+-- (srcLinesArr src) path` builds that partial application from ALREADY-EVALUATED
+-- arguments, so a strict language splits the whole file before `map` ever looks at
+-- whether `xs` is empty — which made a clean multi-module project pay a full
+-- per-file `Array String` split on EVERY file for output that does not exist.
+-- The `[]` arm is what keeps the split off the zero-diagnostic path; keep it.
 renderTripleErrors : (String, String, List Diag) -> List String
 renderTripleErrors (path, src, diags) =
-  -- #2044: split the source ONCE, not once per diagnostic.
-  map (ppDiagCliLines (srcLinesArr src) path) (filter isDiagError diags)
+  let errs = filter isDiagError diags
+  match errs
+    [] => []
+    _ => map (ppDiagCliLines (srcLinesArr src) path) errs
 
 renderTripleWarnings : (String, String, List Diag) -> List String
 renderTripleWarnings (path, src, diags) =
-  map (ppDiagCliLines (srcLinesArr src) path) (filter isDiagWarn diags)
+  let ws = filter isDiagWarn diags
+  match ws
+    [] => []
+    _ => map (ppDiagCliLines (srcLinesArr src) path) ws
 
 -- For the run/build multi-module gates, whose SOUNDNESS predicate stays the
 -- looser `hadTypeErrors` (checkModulesHasErrors over-rejects valid code — see
@@ -915,8 +929,9 @@ isDiagWarn d = not (isDiagError d)
 --      Measured: `medaka build compiler/driver/medaka_cli.mdk` went 0 → 4896 stderr
 --      lines, 1249 of them demanding that phantom `Text _`; a 25-line three-module
 --      toy went 0 → 20, all false.  That makes `build` ~200× noisier than `check`.
---  (3) PERF.  Surfacing the channel means RENDERING it, and `ppDiagCliSrc` →
---      `nthLine` → `stringToChars` materialises the whole file per warning.
+--  (3) PERF.  Surfacing the channel means RENDERING it, and rendering a located
+--      diagnostic materialises the containing file's lines (`ppDiagCliSrc` →
+--      `srcLinesArr`) — a cost paid per file whose channel is non-empty.
 --      Interleaved A/B on a quiet box: multi-module `check` 16.0–17.1 s → 38.9–40.6 s
 --      with byte-identical stdout.  Narrowing to one code removes the render, which
 --      fixes that at its cause rather than optimising around it.
@@ -3299,9 +3314,9 @@ runMcpServerFromEnv _ =
 (DFunDef false "joinedOrNone" ((PList)) (EVar "None"))
 (DFunDef false "joinedOrNone" ((PVar "ls")) (EApp (EVar "Some") (EApp (EVar "joinNl") (EVar "ls"))))
 (DTypeSig false "renderTripleErrors" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "renderTripleErrors" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "path"))) (EApp (EApp (EVar "filter") (EVar "isDiagError")) (EVar "diags"))))
+(DFunDef false "renderTripleErrors" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EVar "filter") (EVar "isDiagError")) (EVar "diags"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EListLit)) (arm PWild () (EApp (EApp (EVar "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "path"))) (EVar "errs")))))))
 (DTypeSig false "renderTripleWarnings" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "renderTripleWarnings" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "path"))) (EApp (EApp (EVar "filter") (EVar "isDiagWarn")) (EVar "diags"))))
+(DFunDef false "renderTripleWarnings" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EBlock (DoLet false false (PVar "ws") (EApp (EApp (EVar "filter") (EVar "isDiagWarn")) (EVar "diags"))) (DoExpr (EMatch (EVar "ws") (arm (PList) () (EListLit)) (arm PWild () (EApp (EApp (EVar "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "path"))) (EVar "ws")))))))
 (DTypeSig false "locatedOrGeneric" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))))))
 (DFunDef false "locatedOrGeneric" ((PVar "allowInternal") (PVar "trusted") (PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "locatedProjectErrors") (EVar "allowInternal")) (EVar "trusted")) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (arm (PCon "Some" (PVar "t")) () (EVar "t")) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: type error in ")) (EVar "target")) (ELit (LString ", detected during elaboration (the run/build type pass); no located"))) (ELit (LString " diagnostic is available for it, and `medaka check` may not report this"))) (ELit (LString " program at all — see issue #1812"))))))
 (DTypeSig false "checkRoute" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "Unit")))))))))))))
@@ -3736,9 +3751,9 @@ runMcpServerFromEnv _ =
 (DFunDef false "joinedOrNone" ((PList)) (EVar "None"))
 (DFunDef false "joinedOrNone" ((PVar "ls")) (EApp (EVar "Some") (EApp (EVar "joinNl") (EVar "ls"))))
 (DTypeSig false "renderTripleErrors" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "renderTripleErrors" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "path"))) (EApp (EApp (EMethodRef "filter") (EVar "isDiagError")) (EVar "diags"))))
+(DFunDef false "renderTripleErrors" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EBlock (DoLet false false (PVar "errs") (EApp (EApp (EMethodRef "filter") (EVar "isDiagError")) (EVar "diags"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EListLit)) (arm PWild () (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "path"))) (EVar "errs")))))))
 (DTypeSig false "renderTripleWarnings" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "renderTripleWarnings" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "path"))) (EApp (EApp (EMethodRef "filter") (EVar "isDiagWarn")) (EVar "diags"))))
+(DFunDef false "renderTripleWarnings" ((PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EBlock (DoLet false false (PVar "ws") (EApp (EApp (EMethodRef "filter") (EVar "isDiagWarn")) (EVar "diags"))) (DoExpr (EMatch (EVar "ws") (arm (PList) () (EListLit)) (arm PWild () (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "path"))) (EVar "ws")))))))
 (DTypeSig false "locatedOrGeneric" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String")))))))))
 (DFunDef false "locatedOrGeneric" ((PVar "allowInternal") (PVar "trusted") (PVar "target") (PVar "roots") (PVar "rsrc") (PVar "csrc")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "locatedProjectErrors") (EVar "allowInternal")) (EVar "trusted")) (EVar "target")) (EVar "roots")) (EVar "rsrc")) (EVar "csrc")) (arm (PCon "Some" (PVar "t")) () (EVar "t")) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: type error in ")) (EVar "target")) (ELit (LString ", detected during elaboration (the run/build type pass); no located"))) (ELit (LString " diagnostic is available for it, and `medaka check` may not report this"))) (ELit (LString " program at all — see issue #1812"))))))
 (DTypeSig false "checkRoute" (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "Unit")))))))))))))

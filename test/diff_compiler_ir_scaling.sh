@@ -3,12 +3,15 @@
 # `medaka check`, measured in Cachegrind INSTRUCTION COUNTS (`Ir`).
 #
 # This gate is the PRIMARY superlinearity signal for the `check` pipeline.
-# test/diff_compiler_perf_scaling.sh keeps its allocation and op-count arms (both
-# deterministic) and keeps its wall-clock arm, but wall-clock is now
-# INFORMATIONAL: it exists there to catch the one class allocation is blind to
-# (a pure O(n^2) scan that allocates nothing), and `Ir` catches that class
-# WITHOUT any of wall-clock's machinery — no min-of-K, no heap pinning, no
-# 200 ms floor, and no box-vs-CI disagreement (#1879 / G10).
+# ⚠️ It ADDS a deterministic signal; it does NOT demote anything.
+# test/diff_compiler_perf_scaling.sh is untouched by this gate's introduction:
+# its allocation and op-count arms stay, and its WALL-CLOCK arm remains a HARD
+# GATE there — `time_bad=1` still increments `fail` (grep `time_bad`). Ir does
+# cover wall-clock's distinguishing class (a pure O(n^2) scan that allocates
+# nothing) WITHOUT wall-clock's machinery — no min-of-K, no heap pinning, no
+# 200 ms floor, and no box-vs-CI disagreement (#1879 / G10) — so demoting that
+# arm is a plausible FUTURE change, but it is a separate, riskier one and has
+# not been made. Do not read this header as having made it.
 #
 # ── WHY Ir (issue #2045) ──────────────────────────────────────────────────────
 #
@@ -291,9 +294,13 @@ ir_of() {
 
 # ⚠️ A `medaka check` that ERRORS here is a broken fixture, not a finding: the
 # shape would silently change diagnostic regime (see the floor note in the
-# header) and its floor would stop being its floor. Assert 0 diagnostics on the
-# floor instance of every shape, which is cheap and catches a generator that has
-# drifted out of the accepted syntax.
+# header) and its floor would stop being its floor. Assert 0 diagnostics on
+# EVERY measured instance — floor AND each of N/2N/4N — not just the floor:
+# `ir_of` deliberately ignores `check`'s exit code, so a compiler that dies
+# partway through only the LARGER fixture reads a DEPRESSED Ir and can grade
+# GREEN while crashing. `MIN_NET_FRAC` catches a fully-erroring regime; it does
+# not catch a partial one. Both shipped shapes are 0-diagnostic by design, so
+# this is a pure tightening with nothing to opt out.
 assert_clean() {
   if ! "$MEDAKA" check "$1" >"$WORK/chk.out" 2>&1; then
     echo "FAIL: generated fixture does not typecheck — the shape has drifted:"
@@ -322,6 +329,7 @@ grade_shape() {
   nets=""
   for m in "$n1" "$n2" "$n4"; do
     "gen_$shape" "$m" "$WORK/${shape}_$m.mdk" || { fail=1; return 1; }
+    assert_clean "$WORK/${shape}_$m.mdk" || { fail=1; return 1; }
     raw="$(ir_of "$WORK/${shape}_$m.mdk")" || { fail=1; return 1; }
     net=$((raw - floor))
     printf '  N=%-6s raw=%-14s net=%s\n' "$m" "$raw" "$net"
