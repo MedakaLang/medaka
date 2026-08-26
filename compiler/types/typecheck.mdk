@@ -31779,12 +31779,30 @@ graphAliasEntry a qual (localName, (defMid, origin)) = map
 -- The ambiguity is a property of the DEPENDENCY'S EXPORT TABLE, which is where
 -- `deAmbigValues` records it, on both paths at once.
 --
--- Reported at the IMPORT, not at the occurrence — the precedent `T-AMBIGUOUS-ALIAS-METHOD`
--- sets for the same hazard one namespace over: at the import the ambiguity is
--- unrepresentable rather than merely unreported, and the verdict stops depending on
--- which definer came first.  Importing an ambiguous name is therefore rejected even if
--- the program never uses it; the hub itself stays legal, which is what keeps this the
--- USE-SITE model rather than #1070's superseded reject-at-declaration.
+-- Reported at the IMPORT DECL (that is where the location points, and where the fix
+-- belongs), but keyed on an OCCURRENCE: a name is rejected only if this module actually
+-- WRITES it, in the spelling the form binds it under — bare for `import m.*` and for a
+-- selective `{g}`, alias-qualified (`A.g`) for `import m as A`.  A hub may re-export a
+-- hundred names under two denotations; an importer that never mentions any of them has
+-- no ambiguity to resolve and must not be rejected.  This is the USE-SITE model taken
+-- literally (#1070's reject-at-declaration stays superseded; the hub itself is still
+-- legal).  It also keeps the verdict from depending on which definer came first: the
+-- moment the name IS written, the import is rejected rather than silently resolved.
+--
+-- ⚠️ CORRECTED (sprint-review F2, from #1675's own landed behavior): the first cut
+-- rejected at ADMISSION — `import lib.hub.*` / `import lib.hub as H` failed even when
+-- the importer never mentioned the colliding name, while the selective form correctly
+-- did not.  The precedent cited for that, `T-AMBIGUOUS-ALIAS-METHOD`, is a DIFFERENT
+-- namespace: methods are dispatched by argument type, where "admitted into scope" and
+-- "used" are hard to pull apart because having the method callable is often the point.
+-- Whether the method side wants the same narrowing is a separate question, deliberately
+-- not answered here.
+--
+-- ⚠️ THE CHAIN IS NOT WEAKENED by narrowing to an occurrence.  `reexportDefiners` takes
+-- a wildcard `export import`'s rows WHOLESALE, so a module that re-exports an ambiguous
+-- hub without mentioning the name carries the ambiguity into its OWN export table, and
+-- the first module downstream that does write the name is rejected there.  Nothing is
+-- laundered clean by passing through a silent hop.
 --
 -- 🚨 CALLED FROM `checkBodyImpl`, AFTER ITS `resetState ()`, AND NOT FROM `importSeed`.
 -- `importSeed` is where the member resolution lives and was the first home for this, but
@@ -31799,31 +31817,81 @@ graphAliasEntry a qual (localName, (defMid, origin)) = map
 -- (`checkModuleFullImpl` and `elabModuleStamp` both route through it), which is what
 -- keeps `check` and the run/build elaboration pass answering alike.
 reportAmbiguousImports : List Decl -> Unit
-reportAmbiguousImports [] = ()
-reportAmbiguousImports ((DAttrib _ d)::rest) =
-  let _ = reportAmbiguousImports [d]
-  reportAmbiguousImports rest
-reportAmbiguousImports ((DUse _ path loc)::rest) =
-  let _ = reportAmbiguousImport (usePathModuleId path) path loc
-  reportAmbiguousImports rest
-reportAmbiguousImports (_::rest) = reportAmbiguousImports rest
+reportAmbiguousImports prog0 =
+  reportAmbiguousImportsIn (moduleRefNameSet prog0) prog0
 
-reportAmbiguousImport : String -> UsePath -> Loc -> Unit
-reportAmbiguousImport depId path loc = match graphAmbigValues depId
+reportAmbiguousImportsIn : OrdMap Unit -> List Decl -> Unit
+reportAmbiguousImportsIn _ [] = ()
+reportAmbiguousImportsIn occ ((DAttrib _ d)::rest) =
+  let _ = reportAmbiguousImportsIn occ [d]
+  reportAmbiguousImportsIn occ rest
+reportAmbiguousImportsIn occ ((DUse _ path loc)::rest) =
+  let _ = reportAmbiguousImport occ (usePathModuleId path) path loc
+  reportAmbiguousImportsIn occ rest
+reportAmbiguousImportsIn occ (_::rest) = reportAmbiguousImportsIn occ rest
+
+reportAmbiguousImport : OrdMap Unit -> String -> UsePath -> Loc -> Unit
+reportAmbiguousImport occ depId path loc = match graphAmbigValues depId
   [] => ()
-  amb => pushAmbiguousImports depId loc (ambiguousAdmitted path amb)
+  amb => pushAmbiguousImports depId loc (ambiguousAdmitted occ path amb)
 
--- which of the dependency's ambiguous names THIS import form admits.  A whole-module
--- alias (`import m as A`) binds every export under `A.name`, so it admits all of them —
--- `importedBindings` answers `Some []` for it (it cannot enumerate a fixed member list)
--- and must not be read as "admits nothing".  Every other form routes through
--- `importedBindings` exactly as `importFormRows` does, so a form added there reaches
--- this check by construction rather than by a case here.
-ambiguousAdmitted : UsePath -> List (String, List String) -> List (String, List String)
-ambiguousAdmitted (UseAlias _ _) amb = amb
-ambiguousAdmitted path amb = match importedBindings path
-  None => amb
+-- which of the dependency's ambiguous names THIS import form makes this module actually
+-- ambiguous ABOUT.  Two independent filters, and both must hold:
+--
+--   (1) the form BINDS the name.  A selective `{g}` / `{g as h}` binds a fixed member
+--       list, which `importedBindings` enumerates; a wildcard (`None`) and a whole-module
+--       alias (`Some []` — it cannot enumerate a member list, and must not be read as
+--       "binds nothing") both bind every export.  Every form routes through
+--       `importedBindings` exactly as `importFormRows` does, so a form added there
+--       reaches this check by construction rather than by a case here.
+--
+--   (2) this module WRITES the name, in the spelling the form binds it under — `A.g` for
+--       `import m as A`, bare `g` for everything else.  `occ` is `moduleRefNameSet`'s
+--       set of every name occurring in the module's own decl bodies.
+--
+-- The selective arm needs no occurrence test: naming a member in the import list IS the
+-- write, and demanding a second one would let `import m.{g}` pass while `g` sits unused,
+-- which is not a narrowing anyone asked for.
+ambiguousAdmitted : OrdMap Unit -> UsePath -> List (String, List String) -> List (String, List String)
+ambiguousAdmitted occ (UseAlias _ a) amb =
+  filterList (r => omHasKey (qualifiedLocal a (fst r)) occ) amb
+ambiguousAdmitted occ path amb = match importedBindings path
+  None => filterList (r => omHasKey (fst r) occ) amb
   Some bindings => filterList (r => anyList (b => fst b == fst r) bindings) amb
+
+-- every name this module's own decl bodies REFERENCE, as a set.  Mirrors `groupRefs`'
+-- `allEVars` collector one level up, at the decl layer: the top-level clause bodies plus
+-- the impl/default/prop/test/bench bodies, which is every place a user program can spell
+-- an imported value.  Alias-qualified references arrive here already flattened into a
+-- single dotted `EVar "A.g"` by desugar's `rewriteAliasQual` (via `qualifiedLocal`), so
+-- the alias spelling is a plain string lookup and needs no separate walk.
+--
+-- `allEVars` has no `EMethodRef` arm, and does not need one for this caller: the rows
+-- being filtered come from `ambiguousExportRows` → `modulePubDefiners` → `pubTopFnNames`,
+-- which is `declTopFnNames` INTERSECTED with the exported names — top-level FN
+-- definitions only.  An interface method name can never be in `amb`, so a call site the
+-- marker rewrote `EVar`→`EMethodRef` can never be the occurrence we are looking for.
+moduleRefNameSet : List Decl -> OrdMap Unit
+moduleRefNameSet decls = namesToSet (flatMap declRefNames decls) omEmpty
+
+declRefNames : Decl -> List String
+declRefNames (DAttrib _ d) = declRefNames d
+declRefNames (DFunDef _ _ _ body) = allEVars body
+declRefNames (DProp _ _ _ body) = allEVars body
+declRefNames (DTest _ _ body) = allEVars body
+declRefNames (DBench _ _ body) = allEVars body
+declRefNames (DLetGroup _ binds) = flatMap letBindEVars binds
+declRefNames (DImpl { methods, ... }) = flatMap implMethodEVars methods
+declRefNames (DInterface { methods, ... }) = flatMap ifaceMethodEVars methods
+declRefNames _ = []
+
+implMethodEVars : ImplMethod -> List String
+implMethodEVars (ImplMethod _ _ body) = allEVars body
+
+ifaceMethodEVars : IfaceMethod -> List String
+ifaceMethodEVars (IfaceMethod _ _ d) = match d
+  Some (MethodDefault _ body) => allEVars body
+  None => []
 
 pushAmbiguousImports : String -> Loc -> List (String, List String) -> Unit
 pushAmbiguousImports _ _ [] = ()
