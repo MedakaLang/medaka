@@ -1502,6 +1502,89 @@ else
   fail=$((fail+1)); printf 'FAIL A-2.10/1277-xmod-head-spelling-build (native build failed)\n'
 fi
 
+# ── #1810, DRAINED — re-pointed here rather than deleted ──────────────────────
+#
+# `test/must_fail_fixtures/1810-rdict-filtertagged-drops-iface-identity/` pinned
+# a same-spelling S0: two unrelated modules each declare an interface spelled
+# `Same` with a method spelled `sizeOf`, both with an impl at the SAME head
+# tycon (`Int`) but different bodies (+1 vs +100). The runtime-dict dispatcher
+# the emitter builds for `sizeOf` was shared by both interfaces' call sites, and
+# `implsOf`/`filterTagged` (compiler/backend/llvm_emit.mdk) filtered candidate
+# impls by method name alone, dropping the `iface` field — so whichever impl's
+# arm was emitted first (import-order-dependent) won regardless of which
+# interface the call site's dict actually denoted. It has since drained
+# (verified: `(11, 110)` under BOTH import orders, `run` and `build`+execute,
+# all exit 0) — a drained must-fail leaves no regression test behind, so its
+# assertion moves here, exactly as the #1277 leg above did.
+cat > "$TMP/x1810_amod.mdk" <<'EOF'
+export interface Same a where
+  sizeOf : a -> Int
+
+impl Same Int where
+  sizeOf n = n + 1
+
+aWrap : Same a => a -> Int
+aWrap x = sizeOf x
+
+export
+aValue : Int
+aValue = aWrap 10
+EOF
+cat > "$TMP/x1810_zmod.mdk" <<'EOF'
+export interface Same a where
+  sizeOf : a -> Int
+
+impl Same Int where
+  sizeOf n = n + 100
+
+zWrap : Same a => a -> Int
+zWrap x = sizeOf x
+
+export
+zValue : Int
+zValue = zWrap 10
+EOF
+cat > "$TMP/x1810_main.mdk" <<'EOF'
+import x1810_amod.{aValue}
+import x1810_zmod.{zValue}
+
+main = println (aValue, zValue)
+EOF
+cat > "$TMP/x1810_swapped.mdk" <<'EOF'
+import x1810_zmod.{zValue}
+import x1810_amod.{aValue}
+
+main = println (aValue, zValue)
+EOF
+x1810_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/x1810_main.mdk" 2>&1)"
+x1810_run_code=$?
+if [ "$x1810_run_code" -eq 0 ] && [ "$x1810_run" = "(11, 110)" ]; then
+  pass=$((pass+1)); printf 'ok   1810-rdict-filtertagged-run (right iface identity: (11, 110))\n'
+else
+  fail=$((fail+1)); printf 'FAIL 1810-rdict-filtertagged-run (exit %d, got [%s], want (11, 110))\n' "$x1810_run_code" "$x1810_run"
+fi
+if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/x1810_main.mdk" -o "$TMP/x1810.bin" >/dev/null 2>&1 && [ -x "$TMP/x1810.bin" ]; then
+  x1810_bld="$("$TMP/x1810.bin" 2>/dev/null | head -1)"
+  if [ "$x1810_bld" = "(11, 110)" ]; then pass=$((pass+1)); printf 'ok   1810-rdict-filtertagged-build (native agrees: (11, 110))\n'
+  else fail=$((fail+1)); printf 'FAIL 1810-rdict-filtertagged-build (got [%s], want (11, 110))\n' "$x1810_bld"; fi
+else
+  fail=$((fail+1)); printf 'FAIL 1810-rdict-filtertagged-build (native build failed)\n'
+fi
+x1810_run_sw="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/x1810_swapped.mdk" 2>&1)"
+x1810_run_sw_code=$?
+if [ "$x1810_run_sw_code" -eq 0 ] && [ "$x1810_run_sw" = "(11, 110)" ]; then
+  pass=$((pass+1)); printf 'ok   1810-rdict-filtertagged-swapped-run (right iface identity: (11, 110))\n'
+else
+  fail=$((fail+1)); printf 'FAIL 1810-rdict-filtertagged-swapped-run (exit %d, got [%s], want (11, 110))\n' "$x1810_run_sw_code" "$x1810_run_sw"
+fi
+if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/x1810_swapped.mdk" -o "$TMP/x1810_sw.bin" >/dev/null 2>&1 && [ -x "$TMP/x1810_sw.bin" ]; then
+  x1810_bld_sw="$("$TMP/x1810_sw.bin" 2>/dev/null | head -1)"
+  if [ "$x1810_bld_sw" = "(11, 110)" ]; then pass=$((pass+1)); printf 'ok   1810-rdict-filtertagged-swapped-build (native agrees: (11, 110))\n'
+  else fail=$((fail+1)); printf 'FAIL 1810-rdict-filtertagged-swapped-build (got [%s], want (11, 110))\n' "$x1810_bld_sw"; fi
+else
+  fail=$((fail+1)); printf 'FAIL 1810-rdict-filtertagged-swapped-build (native build failed)\n'
+fi
+
 # ── #1280: EXTERN SIGNATURES CARRY IDENTITY (the SUPPLY half of Stage A-2) ────
 #
 # `externSchemes` (compiler/types/typecheck.mdk) used to turn each `DExtern`'s
