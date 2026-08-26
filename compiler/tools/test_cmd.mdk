@@ -101,6 +101,8 @@ import driver.diagnostics.{
   analyzeLocated,
   readDiagSrc,
   ppDiagCliSrc,
+  ppDiagCliLines,
+  srcLinesArr,
   parseErrDiag,
   Diag,
   diagIsError,
@@ -238,7 +240,7 @@ singleFileTypeErrors target tsrc rsrc csrc =
   let errs = filter diagIsError (analyzeLocated rsrc csrc tsrc)
   match errs
     [] => None
-    _ => Some (joinNl (map (ppDiagCliSrc tsrc target) errs))
+    _ => Some (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
 
 -- #1362: `singleFileTypeErrors` above uses the UNGUARDED `analyzeLocated` (no
 -- internal-extern restriction) so a stdlib module under test is never
@@ -258,7 +260,8 @@ projectTypeErrors target roots rsrc csrc =
 
 renderFileErrors : (String, String, List Diag) -> List String
 renderFileErrors (path, src, diags) =
-  map (ppDiagCliSrc src path) (filter diagIsError diags)
+  -- #2044: split the source ONCE, not once per diagnostic.
+  map (ppDiagCliLines (srcLinesArr src) path) (filter diagIsError diags)
 
 typecheckGateFail : String -> String -> String
 typecheckGateFail target errText = "type error in \{target} — `medaka test` requires it to `medaka check` first:\n\{errText}"

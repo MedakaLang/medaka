@@ -90,6 +90,8 @@ import driver.diagnostics.{
   analyzeLocatedG,
   ppDiagCli,
   ppDiagCliSrc,
+  ppDiagCliLines,
+  srcLinesArr,
   Diag(..),
   Severity(..),
   SevError,
@@ -587,11 +589,12 @@ joinedOrNone ls = Some (joinNl ls)
 
 renderTripleErrors : (String, String, List Diag) -> List String
 renderTripleErrors (path, src, diags) =
-  map (ppDiagCliSrc src path) (filter isDiagError diags)
+  -- #2044: split the source ONCE, not once per diagnostic.
+  map (ppDiagCliLines (srcLinesArr src) path) (filter isDiagError diags)
 
 renderTripleWarnings : (String, String, List Diag) -> List String
 renderTripleWarnings (path, src, diags) =
-  map (ppDiagCliSrc src path) (filter isDiagWarn diags)
+  map (ppDiagCliLines (srcLinesArr src) path) (filter isDiagWarn diags)
 
 -- For the run/build multi-module gates, whose SOUNDNESS predicate stays the
 -- looser `hadTypeErrors` (checkModulesHasErrors over-rejects valid code — see
@@ -675,7 +678,7 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decl
       let _ = emitLocatedWarnings tsrc target (warns ++ mainWarns)
       ()
     _ =>
-      let _ = ePutStrLn (joinNl (map (ppDiagCliSrc tsrc target) errs))
+      let _ = ePutStrLn (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
       exit 1
 checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target mods =
   let rtD = desugar (parse rsrc)
@@ -984,7 +987,7 @@ letBindName (LetBind n _) = n
 emitLocatedWarnings : String -> String -> List Diag -> <IO> Unit
 emitLocatedWarnings _ _ [] = ()
 emitLocatedWarnings src file ws =
-  ePutStrLn (joinNl (map (ppDiagCliSrc src file) ws))
+  ePutStrLn (joinNl (map (ppDiagCliLines (srcLinesArr src) file) ws))
 
 -- Emit warning lines that are ALREADY rendered.  `run`/`build`'s multi-module arms
 -- must render each warning against its OWN file (see `renderTripleWarnings`), which
@@ -1683,7 +1686,7 @@ typecheckGateRoute allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decls)
       let mainWarns = mainShapeWarnings (desugar (parse rsrc)) (desugar (parse csrc)) [(mid, desugar decls)] decls
       let allWarns = cohWarnTriples tsrc target diags ++ nonEmptyTriples [(target, tsrc, mainWarns)]
       TGOk (flatMap renderTripleWarnings allWarns)
-    _ => TGErr (joinNl (map (ppDiagCliSrc tsrc target) errs))
+    _ => TGErr (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
 typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc target mods =
   let rtD = desugar (parse rsrc)
   let coreD = desugar (parse csrc)
@@ -1993,7 +1996,7 @@ runRunCmd argv =
                         let _ = emitPhase perfOn "eval" (perfTEval - perfTCheck) target
                         emitTotal perfOn (perfTEval - perfT0)
                       _ =>
-                        let _ = ePutStrLn (joinNl (map (ppDiagCliSrc tsrc target) errs))
+                        let _ = ePutStrLn (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
                         exit 1
                   _ =>
                     -- Multi-module: gate on `locatedProjectErrors` — the SAME
@@ -2791,7 +2794,8 @@ lintOneFileReport multiFile disableNames onlyNames denyNames cacheCtx target = m
     -- them is where `entry` came from.
     let allFindings = applySuppressionsDirs entry.directives entry.findings
     let findings = applyFindingFilters disableNames onlyNames denyNames allFindings
-    let output = joinNl (map (f => ppDiagCliSrc src target (findingToDiag f)) findings)
+    let srcLines = srcLinesArr src
+    let output = joinNl (map (f => ppDiagCliLines srcLines target (findingToDiag f)) findings)
     let hasOutput = stringLength output > 0
     let _ = if multiFile && hasOutput then putStrLn (target ++ ":") else ()
     let _ = if hasOutput then putStrLn output else ()
