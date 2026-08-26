@@ -782,6 +782,28 @@ for f in $changed; do
     # identical: a loose file under test/ that someone edits ALONE when the gate reds.
     test/CORE-IR-TYPED-LEDGER.txt) add 'diff_compiler_core_ir_typed_modules' ;;
 
+    # #1315: engine value pins (`test/engine_value_pins/<corpus>/<name>.pin`, e.g.
+    # `test/engine_value_pins/llvmM/foo.pin`) are the same structural blind spot as
+    # the three ledgers above — a corpus `_fixture_dir_for` cannot see, since none
+    # of `engine_value_pins` or its corpus subdirs (`llvm`, `llvmT`, `llvmM`, `wasm`,
+    # `engine`) contain "fixtures" or "goldens" as a path substring. A pin-only diff
+    # therefore fell through to the catch-all and was reported UNMAPPED — locally
+    # invisible (green having graded nothing), even though CI's `detect` job
+    # correctly escalated the unmapped path to the full suite (confirmed on #1297).
+    # `diff_compiler_engines.sh` reads every `$PINDIR/$key.pin` on its PINFAIL path
+    # (PINDIR="$ROOT/test/engine_value_pins") regardless of corpus, so it is the one
+    # gate that reads the WHOLE tree unconditionally — map here.
+    #
+    # `diff_compiler_capability_matrix.sh` also touches pin paths, but only for
+    # BOUNDARY-listed keys under corpora its own `fixdir_of` recognizes (llvm,
+    # llvmT, wasm, wasmT) — `llvmM` is NOT one of them, so a `llvmM/*.pin` change is
+    # genuinely invisible to that gate today (verified by reading `fixdir_of`
+    # directly, not by trusting this claim). Not added here: mapping it would be
+    # over-broad for the common `llvmM` case and, for the reachable corpora, the
+    # gate only checks the pin's mere EXISTENCE (`[ ! -f "$pin" ]`), never its
+    # value — `diff_compiler_engines` is the gate that actually exercises content.
+    test/engine_value_pins/*)      add 'diff_compiler_engines' ;;
+
     # ── fixture/golden corpus change: run its ACTUAL consumers, not everything.
     # See _gates_for_fixture_dir above. A directory with zero discoverable
     # consumers is a real finding (dead corpus, or a gap in this derivation) —
