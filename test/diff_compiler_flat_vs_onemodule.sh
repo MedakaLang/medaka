@@ -312,7 +312,7 @@ user_iface_dispatch|p3_no_impl|c4/p3.mdk|FLAT|PIN|REJECT|REJECT|T-NO-IMPL|-
 user_iface_undetermined|p5_two_impls|c5/p5.mdk|FLAT|PIN|REJECT|REJECT|T-AMBIGUOUS-INSTANCE|-
 user_iface_undetermined|p6_one_impl|c5/p6.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|3
 iface_default_requires_closure|flat|c6f/flat.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|fancy:box7
-iface_default_requires_closure|module|c6m/main.mdk|MODULE|CHAR|ACCEPT|REJECT|T-IMPL-TOO-SPECIFIC|fancy:box7|S-flat-reacher-census-finding-1(needs-issue)
+iface_default_requires_closure|module|c6m/main.mdk|MODULE|CHAR|ACCEPT|REJECT|T-IMPL-TOO-SPECIFIC|fancy:box7|#2024-false-reject-split-default-method
 "
 CHAR_ISSUE=1564
 
