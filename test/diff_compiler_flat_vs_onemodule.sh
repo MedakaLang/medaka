@@ -265,6 +265,15 @@ printf '%s\n\nmain = println (sizeOf (make 3))\n' "$SIZER_MK" > "$WORK/c5/p6.mdk
 # the (correct, self-entailed) default body is rejected as under-constrained.
 # Filed for triage by the orchestrator (no issue number yet — this census did
 # not file it, per this slice's site list).
+#
+# S-migrate-check-route (E-1 #1115): `medaka check` on a genuinely no-import file
+# now ALSO routes through `checkOneDiags` (the Module-arm one-module wrapper), not
+# the FLAT arm's own `checkProgramDiags` — so the `flat` row below now measures
+# the SAME false-reject the `module` row already characterized, not a distinct
+# FLAT-arm answer.  This was EXPECTED and reported (not silently absorbed): the
+# `flat` row's mode moved from PIN/ACCEPT to CHAR/ACCEPT/REJECT, mirroring the
+# `module` row exactly, per the packet's own §4/§6.6 instruction to check and
+# report this visibility change rather than let it pass unnoticed.
 IFACE_DEFAULT_DECLS='public export data Box = Box Int
 
 export interface Basic t where
@@ -311,7 +320,7 @@ user_iface_dispatch|p1_concrete_hit|c4/p1.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|7
 user_iface_dispatch|p3_no_impl|c4/p3.mdk|FLAT|PIN|REJECT|REJECT|T-NO-IMPL|-
 user_iface_undetermined|p5_two_impls|c5/p5.mdk|FLAT|PIN|REJECT|REJECT|T-AMBIGUOUS-INSTANCE|-
 user_iface_undetermined|p6_one_impl|c5/p6.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|3
-iface_default_requires_closure|flat|c6f/flat.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|fancy:box7
+iface_default_requires_closure|flat|c6f/flat.mdk|FLAT|CHAR|ACCEPT|REJECT|T-IMPL-TOO-SPECIFIC|fancy:box7|#2024-false-reject-split-default-method
 iface_default_requires_closure|module|c6m/main.mdk|MODULE|CHAR|ACCEPT|REJECT|T-IMPL-TOO-SPECIFIC|fancy:box7|#2024-false-reject-split-default-method
 "
 CHAR_ISSUE=1564

@@ -33231,6 +33231,25 @@ checkOneDiags runtimeDecls coreDecls (rootId, prog) =
   let (_, errs, warns) = checkModulesEntryFull runtimeDecls coreDecls [(rootId, prog)]
   (errs, warns)
 
+-- S-migrate-check-route (E-1 #1115): thin ONE-MODULE String/Bool wrappers, matching
+-- `checkToLinesWithRuntime`'s / `checkErrorsWithRuntime`'s (runtimeDecls, coreProg,
+-- userProg) shape exactly, so `compiler/tools/check.mdk`'s two rendering/bool call
+-- sites can swap targets with no shape change.  Delegate to the EXISTING entry-report/
+-- -hasErrors functions above (already byte-identical in render logic to
+-- checkToLinesWithRuntime/checkErrorsWithRuntime — `joinNl (schemeLines ++ warns)` on
+-- success, `typeErrorLines` on error) over a singleton module list, rather than
+-- duplicating that rendering logic here.  `"__user__"` mirrors `elaborateOne`'s own
+-- rootId convention for a bare/no-import file (`entry_support.mdk`).
+export
+checkOneToLinesWithRuntime : List Decl -> List Decl -> List Decl -> String
+checkOneToLinesWithRuntime runtimeDecls coreProg userProg =
+  checkModulesEntryReport runtimeDecls coreProg [("__user__", userProg)]
+
+export
+checkOneErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
+checkOneErrorsWithRuntime runtimeDecls coreProg userProg =
+  checkModulesEntryHasErrors runtimeDecls coreProg [("__user__", userProg)]
+
 -- run the multi-module front-end and render the ENTRY module's own bindings as
 -- `name : scheme` per line (the harness sorts) — diffs vs dev/tc_module_probe.
 export
