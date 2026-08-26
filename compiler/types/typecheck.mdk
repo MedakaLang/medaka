@@ -33673,6 +33673,36 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- identity is minted means no later pass has to re-mint.
   let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 (renameAliasedMethods coreDecls0 modulesIn)
   driverState.value.mainSchemeRef := None
+  -- S-emit-interleave-leak (#2049): THE EMIT DRIVER OWNS ITS OWN (EMPTY) CTOR ORACLE.
+  -- `matchOracle` lives on `driverState`, which `resetState`/`resetCrossModuleState` do
+  -- NOT touch, and nothing in this driver ever seeds it (the seeding preamble is
+  -- `seedCheckRun`, reached only from `checkModuleFullDiags`/the flat check entries).  So
+  -- every `oGetCtors` reader this driver reaches — `ctorSiblingWithholdingName`,
+  -- `matchCol0Type` — read whatever the LAST CHECK RUN IN THIS PROCESS left behind.
+  --
+  -- That residue used to be unreachable by accident rather than absent: `typeCtors` is
+  -- keyed by DECLARATION IDENTITY (`tabKeyOf NsType <dataOrigin> <tyname>`), the flat
+  -- entries build it from UNSTAMPED decls (`TkBare` rows), and this driver's readers mint
+  -- `TkIdent` for a module-stamped head — so every lookup MISSED and every reader fell
+  -- through its fail-open `None` arm.  A `Module`-arm re-check interleaved between two
+  -- elaborations of THIS driver (`runEmitWith`'s `underivedMainDiags`) writes rows under
+  -- the entry module's OWN identity, i.e. under exactly the key this driver's readers mint
+  -- — so the lookups start HITTING, against rows built from the UN-MANGLED tree while this
+  -- driver walks the MANGLED one.  MEASURED: `ctorSiblingWithholdingName` then reads the
+  -- un-mangled ctor `A` as a sibling of the mangled survivor and false-rejects `a.k` with
+  -- `Field 'k' is not declared by every constructor of 'A'`; `Display` cannot ground, the
+  -- `println` route stays RNone, and the emitter writes a NULL dict word (`i64 0`) —
+  -- SILENTLY, because this driver's caller never reads `hadTypeErrors` (see the note on
+  -- that ref).  Clean exit 0, SIGSEGV at runtime.
+  --
+  -- Minting the empty oracle here restores today's behaviour DETERMINISTICALLY instead of
+  -- by luck: every reader misses no matter which arm (or none) ran before.  It does NOT
+  -- make this driver check exhaustiveness/narrowing — it never did, and `check` runs those
+  -- readers ahead of every `build`.  Seeding a CORRECT oracle from this driver's own
+  -- (mangled, stamped) decls is the strictly-better fix and is deliberately NOT done here:
+  -- it would newly ENABLE those readers on the emit path, on the compiler's own graph,
+  -- with no gate in this slice's acceptance set to catch a new fail-closed reject.
+  driverState.value.matchOracle := (buildOracle [])
   let _ = resetCrossModuleState ()
   -- #1111 A-2.5b: the graph's method-identity index — the identical line
   -- `checkModulesPreamble` carries, for the one Module-mode driver that does not use
