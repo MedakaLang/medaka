@@ -1191,6 +1191,19 @@ orders merges, and the plan does not pretend otherwise.
   body**: its priority-1 remedy (reject-at-decl) is superseded by the decided
   use-site-ambiguity model. *Drains #1047/#1069/#1092/#1090; #1070 umbrella
   closes when its audit rows are all drained or reclassified.*
+
+  ⚠️ **STATUS (2026-08-26, sprint `stage-a-closeout`, `S-stage-a-ledger`):
+  #1047/#1069/#1092/#1090 are all CLOSED.** #1070 itself stays OPEN — its
+  umbrella still carries live rows (`universeMethodIfaceParamsRef` → #1276,
+  the constructor rows → #1319, `universeMethodDispatchIdxRef`/
+  `universeIfaceMethodsRef` → #1354/#1351/#1353) not drained by this sprint.
+  This sprint's own drains (#1150, #1675, #1427) are a different mechanism
+  family (value-restriction misclassification, ambiguous-reexport resolution,
+  scheme-environment alias routing respectively) and do not correspond to any
+  row in #1070's audit table — cite 24, not 25, for `cross_allowed`'s current
+  row count (PR #2012 independently removed `universeRegisteredIfacesRef` on
+  `main`). **#1111 therefore does NOT close yet** (its own closure text
+  requires #1070's rows all drained/reclassified, which they are not).
 - **A-values #1337 (A-2 tail). Cross-module identity for the VALUE namespace — a
   SCOPING PASS, not an implementation plan.** Added 2026-08-05 with §2 R's
   correction: values were the one namespace this document exempted from Stage A,
@@ -1303,6 +1316,32 @@ orders merges, and the plan does not pretend otherwise.
   — loud → silent, a severity increase, and untestable from the diff by
   construction since every existing fixture for this channel covered the
   rejecting case. The fix that actually landed avoided that trap.*
+
+  ⚠️ **UPDATE 4 (2026-08-26, sprint `stage-a-closeout`, `S-stage-a-ledger`):
+  #1337 STAYS OPEN, confirmed against its own current retirement condition**
+  (its 2026-08-12 re-scope: drains only when BOTH #1425/U2's `UseWild`/
+  `UseAlias` read-key arms land AND the #1427/#1472 scheme-environment unit
+  lands). #1427 CLOSED this sprint (the build panic was fixed pre-sprint by
+  PR #1671, not by this sprint's slice 4 — see #1427's correction comment);
+  #1425 is unchanged, still fully OPEN. So one of #1337's two conjuncts is
+  met and the other is not — it stays open. A status comment to this effect
+  was posted on #1337 directly this sprint; not re-quoted here.
+
+- **A-ctors #1319 (A-2 tail, peer of A-values above).** RE-CUT 2026-08-26
+  (sprint `stage-a-closeout`, comment on #1319 + `S-stage-a-ledger`'s own
+  ledger comment): its four originally-filed members #1283/#1284/#1376/#1377
+  are all CLOSED, and the table-keying half of its scope (`universeDataEnv`'s
+  ctor entries, `universeRecordByName`'s non-short-form entries) is routed to
+  **#1593's re-cut, #2007** (the elaborated-trio unit), not owned here
+  anymore — running both units on the same tables from opposite ends was the
+  risk the re-cut heads off. #1319's surviving, still-OPEN scope is exactly
+  three issues: **#1373** (S1, named-field variant through `export import`),
+  **#1292** (S0, `ctorToTypeRef` runtime-tag collision, engine-side), and
+  **#733** (re-repro the #674 overlay residuals under the landed A-2.6
+  overlay — currently labelled `verified`/`S1: loud breakage`, **not**
+  `needs-repro` as its own stale title and a same-day #1319 comment both
+  still say; the label history shows the reclassification happened
+  2026-08-05, three weeks before this note).
 - **A-3. Whole-graph declaration analysis (K) — honest scope.** Build
   CE/IE/DataEnv once; the **Module path** reads K; the Flat fallback keeps a
   marshalling **shim** (the retirement of the universe-marshalling cells —
@@ -1323,6 +1362,15 @@ orders merges, and the plan does not pretend otherwise.
   read #1112's split header and its 2026-08-08 scoping comment before starting
   any of them.** A-3.1 (the ordinal-filtered envelope) has landed;
   **A-3.4's own unit design is §9 of this document**.
+
+  ⚠️ **STATUS (2026-08-26, sprint `stage-a-closeout`): #1112 STAYS OPEN.**
+  The sprint's slice 1 (`S-elaborated-trio`, #1593) ran as a SPIKE-FIRST and
+  took branch (b) — filed a re-cut (**#2007**, the identity-keyed elaboration
+  cache for the `universeRecordByName`/`universeDataEnv`/`universeCtorIdentsRef`
+  trio) rather than implementing a rewrite this sprint. Branch (a) did not
+  happen, so #1112 does not close on this sprint's work — confirmed against
+  #1112's own body, which the sprint left open, with a status comment posted
+  explaining the branch-(b) outcome.
 
 **Stage B — One selection discipline (families B, E, H)**
 
