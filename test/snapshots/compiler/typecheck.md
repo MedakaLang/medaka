@@ -1,5 +1,5 @@
 # META
-source_lines=35394
+source_lines=35497
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -3476,17 +3476,84 @@ declEnvPolarityChain (m::rest) pacc pm =
 -- accumulated so far, threaded so a wrapper composes with what it wraps.
 declEnvRowPolarityEntries : Int -> DeclEnvModule -> List (TabKey, List Polarity) -> List (TabKey, List Polarity)
 declEnvRowPolarityEntries cur m tab
-  | declEnvVisibleTo cur m.demOrd False = declEnvPolarityEntries tab m.demDecls
+  | declEnvVisibleTo cur m.demOrd False =
+    declEnvPolarityEntriesFix tab m.demDecls
   | declEnvVisibleTo cur m.demOrd True =
-    declEnvPolarityEntries tab (filterList kindPublicDataDecl m.demDecls)
+    declEnvPolarityEntriesFix tab (filterList kindPublicDataDecl m.demDecls)
   | otherwise = []
+
+-- ── S0-3: the TRANSITIVE FIXPOINT the single fold above cannot reach ──────
+-- `declEnvPolarityEntries` (below) is ONE in-order pass, so a wrapper declared
+-- ABOVE the type it wraps composes against the lenient `PCo` default and never
+-- tightens.  `data Outer a = MkOuter (Inner a)` written before `data Inner a =
+-- MkInner (a -> Int)` was ACCEPTED for a widening the very same program with
+-- the two `data` lines SWAPPED correctly rejected — a live, single-file,
+-- both-engine-agreeing false accept of the #1098/#1121 laundering shape D-2
+-- (#1119) exists to close, reachable by reordering two declarations.  Both the
+-- write-channel (`Ref`) and the contravariant-domain shapes reproduced it.
+--
+-- The fix: re-run the pass over its OWN previous output until nothing moves.
+-- Each round starts from `prev ++ base`, so every decl in [ds] reads the
+-- previous round's verdict for every OTHER decl in the same scope regardless of
+-- declaration order, while the in-pass prepend still lets the fresher in-round
+-- value win.  The motivating shapes settle on round two; the loop exits on the
+-- first stable round.
+--
+-- ⚠️ THE CAP IS A DEFENSIVE FALLBACK, NOT THE EXPECTED EXIT, AND THIS MUST NOT
+-- BE "SIMPLIFIED" INTO A JOIN.  `polMul` is a SIGN multiplication, not a
+-- monotone lattice map (`polMul PContra PContra = PCo`), so an entry may
+-- legitimately move DOWN between rounds — `data A x = MkA (B x -> Int)` over
+-- `data B y = MkB (y -> Int)` reads `x` as `PContra` on round one and `PCo` on
+-- round two, and `PCo` is the CORRECT answer (two flips: `x` really does occur
+-- covariantly in `(x -> Int) -> Int`).  Joining successive rounds would be
+-- trivially terminating and would call that `PInv` — a FALSE REJECT of an
+-- ordinary program.  A mutually-recursive flip-cycle can therefore in principle
+-- alternate instead of settling, so the iteration is capped at `listLen ds + 1`
+-- rounds; on the cap the last round's verdict stands, which is no worse than
+-- the single pass this replaces.
+declEnvPolarityEntriesFix : List (TabKey, List Polarity) -> List Decl -> List (TabKey, List Polarity)
+declEnvPolarityEntriesFix base ds =
+  declEnvPolarityFixGo base ds (listLen ds + 1) (declEnvPolarityEntries base ds)
+
+declEnvPolarityFixGo : List (TabKey, List Polarity) -> List Decl -> Int -> List (TabKey, List Polarity) -> List (TabKey, List Polarity)
+declEnvPolarityFixGo base ds fuel prev =
+  if fuel <= 0 then prev
+  else
+    let next = declEnvPolarityEntries (prev ++ base) ds
+    if polarityEntriesEq prev next then
+      prev
+    else
+      declEnvPolarityFixGo base ds (fuel - 1) next
+
+-- POSITIONAL, not keyed: the two lists are two rounds over the SAME [ds], so
+-- `declEnvPolarityEntries`' decl-order output puts the same declaration at the
+-- same index in both.  The key comparison is a cheap corroboration of that
+-- invariant, not a lookup.
+polarityEntriesEq : List (TabKey, List Polarity) -> List (TabKey, List Polarity) -> Bool
+polarityEntriesEq [] [] = True
+polarityEntriesEq ((k1, p1)::r1) ((k2, p2)::r2) = tabKeyEq k1 k2
+  && polaritiesEq p1 p2
+  && polarityEntriesEq r1 r2
+polarityEntriesEq _ _ = False
+
+polaritiesEq : List Polarity -> List Polarity -> Bool
+polaritiesEq [] [] = True
+polaritiesEq (q1::r1) (q2::r2) = polarityEq q1 q2 && polaritiesEq r1 r2
+polaritiesEq _ _ = False
+
+polarityEq : Polarity -> Polarity -> Bool
+polarityEq PCo PCo = True
+polarityEq PContra PContra = True
+polarityEq PInv PInv = True
+polarityEq _ _ = False
 
 -- The population half, mirroring `declEnvKindEntries` arm for arm — including
 -- its `DAttrib` unwrap.  ⚠️ It is a FOLD, not a `map`: each decl's entry is
 -- prepended to the table the NEXT decl composes against, so a wrapper declared
 -- after the type it wraps sees it.  A wrapper declared BEFORE reads the lenient
--- `PCo` default, exactly as `registerVariants`' in-order registration does —
--- the two paths under-tighten identically rather than disagreeing.
+-- `PCo` default — which is why NOTHING calls this directly any more:
+-- `declEnvPolarityEntriesFix` above iterates it to a fixpoint so that
+-- declaration ORDER stops being observable.
 declEnvPolarityEntries : List (TabKey, List Polarity) -> List Decl -> List (TabKey, List Polarity)
 declEnvPolarityEntries _ [] = []
 declEnvPolarityEntries tab ((DAttrib _ d)::rest) =
@@ -28500,9 +28567,45 @@ initialEnv =
     []
     omEmpty
 
+-- ⚠️ S0-3: THE POLARITY PRE-SEED RUNS HERE, ONCE PER CALL, AND THIS IS THE
+-- REASON THE FOLD MOVED INTO A `…Go` HELPER.  `registerData` →
+-- `registerVariants` → `recordParamPolarities` infers each decl's variance
+-- against `dataParamPolarityRef` AS IT STANDS AT THAT DECL, so a wrapper
+-- declared above the type it wraps read the lenient `PCo` default and never
+-- tightened (see `declEnvPolarityEntriesFix`).  Seeding the ref with the
+-- fixpoint over THIS CALL'S OWN decl list first makes the per-decl walk
+-- re-derive the already-correct value instead: a fixpoint is by definition
+-- stable under one more application of the same pass, and `lookupTab`'s
+-- first-match over the re-derived prepend then agrees with the seed row it
+-- shadows.
+--
+-- 🚨 THE FIXPOINT SCOPE IS EXACTLY THE REGISTRATION SCOPE — [ds], never `prog`
+-- reached from ambient state.  Two of this function's four call sites pass a
+-- SUBSET (`importedCtorTypeDeclsLastWins …` on the Module arm's `base`, and
+-- `publicDataDecls prog0` in `appendDataUniverse`), and seeding from a subset
+-- is SAFE but not complete: an entry whose head is outside [ds] still reads
+-- whatever the incoming table holds, exactly as it did before, so the pre-seed
+-- can only tighten relative to today and never invents a verdict from an
+-- incomplete list.  A forward reference from a public decl to a PRIVATE one
+-- therefore still under-tightens at `appendDataUniverse` — the same visibility
+-- filtering `declEnvRowPolarityEntries`' `kindPublicDataDecl` arm already
+-- applies, a pre-existing scope question and not this order-sensitivity fix.
 registerAllData : TcEnv -> List Decl -> TcEnv
-registerAllData env [] = env
-registerAllData env (d::rest) = registerAllData (registerData env d) rest
+registerAllData env ds =
+  let _ = seedParamPolarityFixpoint ds
+  registerAllDataGo env ds
+
+registerAllDataGo : TcEnv -> List Decl -> TcEnv
+registerAllDataGo env [] = env
+registerAllDataGo env (d::rest) = registerAllDataGo (registerData env d) rest
+
+-- Prepends, exactly as `recordParamPolarities` does, so the seed layers over
+-- whatever the universe/import ladder already put in the ref rather than
+-- replacing it.
+seedParamPolarityFixpoint : List Decl -> Unit
+seedParamPolarityFixpoint ds =
+  let cur = perRun.value.dataParamPolarityRef.value
+  perRun.value.dataParamPolarityRef := declEnvPolarityEntriesFix cur ds ++ cur
 
 -- ── dependency-ordered, SCC-merged letrec processing ──────────────────────
 -- The prelude has forward references and mutual recursion throughout, so groups
@@ -35937,7 +36040,24 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "declEnvPolarityChain" ((PList) PWild (PVar "pm")) (EVar "pm"))
 (DFunDef false "declEnvPolarityChain" ((PCons (PVar "m") (PVar "rest")) (PVar "pacc") (PVar "pm")) (EApp (EApp (EApp (EVar "declEnvPolarityChain") (EVar "rest")) (EBinOp "++" (EApp (EApp (EApp (EVar "declEnvRowPolarityEntries") (EBinOp "+" (EFieldAccess (EVar "m") "demOrd") (ELit (LInt 1)))) (EVar "m")) (EVar "pacc")) (EVar "pacc"))) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EVar "pacc")) (EVar "pm"))))
 (DTypeSig false "declEnvRowPolarityEntries" (TyFun (TyCon "Int") (TyFun (TyCon "DeclEnvModule") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity"))))))))
-(DFunDef false "declEnvRowPolarityEntries" ((PVar "cur") (PVar "m") (PVar "tab")) (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "False")) (EApp (EApp (EVar "declEnvPolarityEntries") (EVar "tab")) (EFieldAccess (EVar "m") "demDecls")) (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "True")) (EApp (EApp (EVar "declEnvPolarityEntries") (EVar "tab")) (EApp (EApp (EVar "filterList") (EVar "kindPublicDataDecl")) (EFieldAccess (EVar "m") "demDecls"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "declEnvRowPolarityEntries" ((PVar "cur") (PVar "m") (PVar "tab")) (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "False")) (EApp (EApp (EVar "declEnvPolarityEntriesFix") (EVar "tab")) (EFieldAccess (EVar "m") "demDecls")) (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "True")) (EApp (EApp (EVar "declEnvPolarityEntriesFix") (EVar "tab")) (EApp (EApp (EVar "filterList") (EVar "kindPublicDataDecl")) (EFieldAccess (EVar "m") "demDecls"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "declEnvPolarityEntriesFix" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))))))
+(DFunDef false "declEnvPolarityEntriesFix" ((PVar "base") (PVar "ds")) (EApp (EApp (EApp (EApp (EVar "declEnvPolarityFixGo") (EVar "base")) (EVar "ds")) (EBinOp "+" (EApp (EVar "listLen") (EVar "ds")) (ELit (LInt 1)))) (EApp (EApp (EVar "declEnvPolarityEntries") (EVar "base")) (EVar "ds"))))
+(DTypeSig false "declEnvPolarityFixGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))))))))
+(DFunDef false "declEnvPolarityFixGo" ((PVar "base") (PVar "ds") (PVar "fuel") (PVar "prev")) (EIf (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EVar "prev") (EBlock (DoLet false false (PVar "next") (EApp (EApp (EVar "declEnvPolarityEntries") (EBinOp "++" (EVar "prev") (EVar "base"))) (EVar "ds"))) (DoExpr (EIf (EApp (EApp (EVar "polarityEntriesEq") (EVar "prev")) (EVar "next")) (EVar "prev") (EApp (EApp (EApp (EApp (EVar "declEnvPolarityFixGo") (EVar "base")) (EVar "ds")) (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "next")))))))
+(DTypeSig false "polarityEntriesEq" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyCon "Bool"))))
+(DFunDef false "polarityEntriesEq" ((PList) (PList)) (EVar "True"))
+(DFunDef false "polarityEntriesEq" ((PCons (PTuple (PVar "k1") (PVar "p1")) (PVar "r1")) (PCons (PTuple (PVar "k2") (PVar "p2")) (PVar "r2"))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "tabKeyEq") (EVar "k1")) (EVar "k2")) (EApp (EApp (EVar "polaritiesEq") (EVar "p1")) (EVar "p2"))) (EApp (EApp (EVar "polarityEntriesEq") (EVar "r1")) (EVar "r2"))))
+(DFunDef false "polarityEntriesEq" (PWild PWild) (EVar "False"))
+(DTypeSig false "polaritiesEq" (TyFun (TyApp (TyCon "List") (TyCon "Polarity")) (TyFun (TyApp (TyCon "List") (TyCon "Polarity")) (TyCon "Bool"))))
+(DFunDef false "polaritiesEq" ((PList) (PList)) (EVar "True"))
+(DFunDef false "polaritiesEq" ((PCons (PVar "q1") (PVar "r1")) (PCons (PVar "q2") (PVar "r2"))) (EBinOp "&&" (EApp (EApp (EVar "polarityEq") (EVar "q1")) (EVar "q2")) (EApp (EApp (EVar "polaritiesEq") (EVar "r1")) (EVar "r2"))))
+(DFunDef false "polaritiesEq" (PWild PWild) (EVar "False"))
+(DTypeSig false "polarityEq" (TyFun (TyCon "Polarity") (TyFun (TyCon "Polarity") (TyCon "Bool"))))
+(DFunDef false "polarityEq" ((PCon "PCo") (PCon "PCo")) (EVar "True"))
+(DFunDef false "polarityEq" ((PCon "PContra") (PCon "PContra")) (EVar "True"))
+(DFunDef false "polarityEq" ((PCon "PInv") (PCon "PInv")) (EVar "True"))
+(DFunDef false "polarityEq" (PWild PWild) (EVar "False"))
 (DTypeSig false "declEnvPolarityEntries" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))))))
 (DFunDef false "declEnvPolarityEntries" (PWild (PList)) (EListLit))
 (DFunDef false "declEnvPolarityEntries" ((PVar "tab") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EApp (EVar "declEnvPolarityEntries") (EVar "tab")) (EBinOp "::" (EVar "d") (EVar "rest"))))
@@ -40029,8 +40149,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "initialEnv" (TyCon "TcEnv"))
 (DFunDef false "initialEnv" () (EApp (EApp (EApp (EApp (EVar "TcEnv") (EVar "omEmpty")) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "True"))) (EApp (EVar "monoScheme") (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "False"))) (EApp (EVar "monoScheme") (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (EVar "omEmpty")))) (EListLit)) (EVar "omEmpty")))
 (DTypeSig false "registerAllData" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv"))))
-(DFunDef false "registerAllData" ((PVar "env") (PList)) (EVar "env"))
-(DFunDef false "registerAllData" ((PVar "env") (PCons (PVar "d") (PVar "rest"))) (EApp (EApp (EVar "registerAllData") (EApp (EApp (EVar "registerData") (EVar "env")) (EVar "d"))) (EVar "rest")))
+(DFunDef false "registerAllData" ((PVar "env") (PVar "ds")) (EBlock (DoLet false false PWild (EApp (EVar "seedParamPolarityFixpoint") (EVar "ds"))) (DoExpr (EApp (EApp (EVar "registerAllDataGo") (EVar "env")) (EVar "ds")))))
+(DTypeSig false "registerAllDataGo" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv"))))
+(DFunDef false "registerAllDataGo" ((PVar "env") (PList)) (EVar "env"))
+(DFunDef false "registerAllDataGo" ((PVar "env") (PCons (PVar "d") (PVar "rest"))) (EApp (EApp (EVar "registerAllDataGo") (EApp (EApp (EVar "registerData") (EVar "env")) (EVar "d"))) (EVar "rest")))
+(DTypeSig false "seedParamPolarityFixpoint" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
+(DFunDef false "seedParamPolarityFixpoint" ((PVar "ds")) (EBlock (DoLet false false (PVar "cur") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef")) (EBinOp "++" (EApp (EApp (EVar "declEnvPolarityEntriesFix") (EVar "cur")) (EVar "ds")) (EVar "cur"))))))
 (DTypeSig false "depGraphMap" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "depGraphMap" ((PVar "names") (PVar "grouped")) (EApp (EApp (EApp (EApp (EVar "buildAdj") (EVar "names")) (EApp (EApp (EVar "namesToSet") (EVar "names")) (EVar "omEmpty"))) (EVar "grouped")) (EVar "omEmpty")))
 (DTypeSig false "namesToSet" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
@@ -41597,7 +41721,24 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "declEnvPolarityChain" ((PList) PWild (PVar "pm")) (EVar "pm"))
 (DFunDef false "declEnvPolarityChain" ((PCons (PVar "m") (PVar "rest")) (PVar "pacc") (PVar "pm")) (EApp (EApp (EApp (EVar "declEnvPolarityChain") (EVar "rest")) (EBinOp "++" (EApp (EApp (EApp (EVar "declEnvRowPolarityEntries") (EBinOp "+" (EFieldAccess (EVar "m") "demOrd") (ELit (LInt 1)))) (EVar "m")) (EVar "pacc")) (EVar "pacc"))) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EVar "pacc")) (EVar "pm"))))
 (DTypeSig false "declEnvRowPolarityEntries" (TyFun (TyCon "Int") (TyFun (TyCon "DeclEnvModule") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity"))))))))
-(DFunDef false "declEnvRowPolarityEntries" ((PVar "cur") (PVar "m") (PVar "tab")) (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "False")) (EApp (EApp (EVar "declEnvPolarityEntries") (EVar "tab")) (EFieldAccess (EVar "m") "demDecls")) (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "True")) (EApp (EApp (EVar "declEnvPolarityEntries") (EVar "tab")) (EApp (EApp (EVar "filterList") (EVar "kindPublicDataDecl")) (EFieldAccess (EVar "m") "demDecls"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "declEnvRowPolarityEntries" ((PVar "cur") (PVar "m") (PVar "tab")) (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "False")) (EApp (EApp (EVar "declEnvPolarityEntriesFix") (EVar "tab")) (EFieldAccess (EVar "m") "demDecls")) (EIf (EApp (EApp (EApp (EVar "declEnvVisibleTo") (EVar "cur")) (EFieldAccess (EVar "m") "demOrd")) (EVar "True")) (EApp (EApp (EVar "declEnvPolarityEntriesFix") (EVar "tab")) (EApp (EApp (EVar "filterList") (EVar "kindPublicDataDecl")) (EFieldAccess (EVar "m") "demDecls"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "declEnvPolarityEntriesFix" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))))))
+(DFunDef false "declEnvPolarityEntriesFix" ((PVar "base") (PVar "ds")) (EApp (EApp (EApp (EApp (EVar "declEnvPolarityFixGo") (EVar "base")) (EVar "ds")) (EBinOp "+" (EApp (EVar "listLen") (EVar "ds")) (ELit (LInt 1)))) (EApp (EApp (EVar "declEnvPolarityEntries") (EVar "base")) (EVar "ds"))))
+(DTypeSig false "declEnvPolarityFixGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))))))))
+(DFunDef false "declEnvPolarityFixGo" ((PVar "base") (PVar "ds") (PVar "fuel") (PVar "prev")) (EIf (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EVar "prev") (EBlock (DoLet false false (PVar "next") (EApp (EApp (EVar "declEnvPolarityEntries") (EBinOp "++" (EVar "prev") (EVar "base"))) (EVar "ds"))) (DoExpr (EIf (EApp (EApp (EVar "polarityEntriesEq") (EVar "prev")) (EVar "next")) (EVar "prev") (EApp (EApp (EApp (EApp (EVar "declEnvPolarityFixGo") (EVar "base")) (EVar "ds")) (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "next")))))))
+(DTypeSig false "polarityEntriesEq" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyCon "Bool"))))
+(DFunDef false "polarityEntriesEq" ((PList) (PList)) (EVar "True"))
+(DFunDef false "polarityEntriesEq" ((PCons (PTuple (PVar "k1") (PVar "p1")) (PVar "r1")) (PCons (PTuple (PVar "k2") (PVar "p2")) (PVar "r2"))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "tabKeyEq") (EVar "k1")) (EVar "k2")) (EApp (EApp (EVar "polaritiesEq") (EVar "p1")) (EVar "p2"))) (EApp (EApp (EVar "polarityEntriesEq") (EVar "r1")) (EVar "r2"))))
+(DFunDef false "polarityEntriesEq" (PWild PWild) (EVar "False"))
+(DTypeSig false "polaritiesEq" (TyFun (TyApp (TyCon "List") (TyCon "Polarity")) (TyFun (TyApp (TyCon "List") (TyCon "Polarity")) (TyCon "Bool"))))
+(DFunDef false "polaritiesEq" ((PList) (PList)) (EVar "True"))
+(DFunDef false "polaritiesEq" ((PCons (PVar "q1") (PVar "r1")) (PCons (PVar "q2") (PVar "r2"))) (EBinOp "&&" (EApp (EApp (EVar "polarityEq") (EVar "q1")) (EVar "q2")) (EApp (EApp (EVar "polaritiesEq") (EVar "r1")) (EVar "r2"))))
+(DFunDef false "polaritiesEq" (PWild PWild) (EVar "False"))
+(DTypeSig false "polarityEq" (TyFun (TyCon "Polarity") (TyFun (TyCon "Polarity") (TyCon "Bool"))))
+(DFunDef false "polarityEq" ((PCon "PCo") (PCon "PCo")) (EVar "True"))
+(DFunDef false "polarityEq" ((PCon "PContra") (PCon "PContra")) (EVar "True"))
+(DFunDef false "polarityEq" ((PCon "PInv") (PCon "PInv")) (EVar "True"))
+(DFunDef false "polarityEq" (PWild PWild) (EVar "False"))
 (DTypeSig false "declEnvPolarityEntries" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))))))
 (DFunDef false "declEnvPolarityEntries" (PWild (PList)) (EListLit))
 (DFunDef false "declEnvPolarityEntries" ((PVar "tab") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EApp (EVar "declEnvPolarityEntries") (EVar "tab")) (EBinOp "::" (EVar "d") (EVar "rest"))))
@@ -45689,8 +45830,12 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "initialEnv" (TyCon "TcEnv"))
 (DFunDef false "initialEnv" () (EApp (EApp (EApp (EApp (EVar "TcEnv") (EVar "omEmpty")) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "True"))) (EApp (EVar "monoScheme") (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "False"))) (EApp (EVar "monoScheme") (EApp (EVar "tconBuiltin") (ELit (LString "Bool"))))) (EVar "omEmpty")))) (EListLit)) (EVar "omEmpty")))
 (DTypeSig false "registerAllData" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv"))))
-(DFunDef false "registerAllData" ((PVar "env") (PList)) (EVar "env"))
-(DFunDef false "registerAllData" ((PVar "env") (PCons (PVar "d") (PVar "rest"))) (EApp (EApp (EVar "registerAllData") (EApp (EApp (EVar "registerData") (EVar "env")) (EVar "d"))) (EVar "rest")))
+(DFunDef false "registerAllData" ((PVar "env") (PVar "ds")) (EBlock (DoLet false false PWild (EApp (EVar "seedParamPolarityFixpoint") (EVar "ds"))) (DoExpr (EApp (EApp (EVar "registerAllDataGo") (EVar "env")) (EVar "ds")))))
+(DTypeSig false "registerAllDataGo" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "TcEnv"))))
+(DFunDef false "registerAllDataGo" ((PVar "env") (PList)) (EVar "env"))
+(DFunDef false "registerAllDataGo" ((PVar "env") (PCons (PVar "d") (PVar "rest"))) (EApp (EApp (EVar "registerAllDataGo") (EApp (EApp (EVar "registerData") (EVar "env")) (EVar "d"))) (EVar "rest")))
+(DTypeSig false "seedParamPolarityFixpoint" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
+(DFunDef false "seedParamPolarityFixpoint" ((PVar "ds")) (EBlock (DoLet false false (PVar "cur") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef")) (EBinOp "++" (EApp (EApp (EVar "declEnvPolarityEntriesFix") (EVar "cur")) (EVar "ds")) (EVar "cur"))))))
 (DTypeSig false "depGraphMap" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "depGraphMap" ((PVar "names") (PVar "grouped")) (EApp (EApp (EApp (EApp (EVar "buildAdj") (EVar "names")) (EApp (EApp (EVar "namesToSet") (EVar "names")) (EVar "omEmpty"))) (EVar "grouped")) (EVar "omEmpty")))
 (DTypeSig false "namesToSet" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))

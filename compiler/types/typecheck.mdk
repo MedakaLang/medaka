@@ -3472,17 +3472,84 @@ declEnvPolarityChain (m::rest) pacc pm =
 -- accumulated so far, threaded so a wrapper composes with what it wraps.
 declEnvRowPolarityEntries : Int -> DeclEnvModule -> List (TabKey, List Polarity) -> List (TabKey, List Polarity)
 declEnvRowPolarityEntries cur m tab
-  | declEnvVisibleTo cur m.demOrd False = declEnvPolarityEntries tab m.demDecls
+  | declEnvVisibleTo cur m.demOrd False =
+    declEnvPolarityEntriesFix tab m.demDecls
   | declEnvVisibleTo cur m.demOrd True =
-    declEnvPolarityEntries tab (filterList kindPublicDataDecl m.demDecls)
+    declEnvPolarityEntriesFix tab (filterList kindPublicDataDecl m.demDecls)
   | otherwise = []
+
+-- ── S0-3: the TRANSITIVE FIXPOINT the single fold above cannot reach ──────
+-- `declEnvPolarityEntries` (below) is ONE in-order pass, so a wrapper declared
+-- ABOVE the type it wraps composes against the lenient `PCo` default and never
+-- tightens.  `data Outer a = MkOuter (Inner a)` written before `data Inner a =
+-- MkInner (a -> Int)` was ACCEPTED for a widening the very same program with
+-- the two `data` lines SWAPPED correctly rejected — a live, single-file,
+-- both-engine-agreeing false accept of the #1098/#1121 laundering shape D-2
+-- (#1119) exists to close, reachable by reordering two declarations.  Both the
+-- write-channel (`Ref`) and the contravariant-domain shapes reproduced it.
+--
+-- The fix: re-run the pass over its OWN previous output until nothing moves.
+-- Each round starts from `prev ++ base`, so every decl in [ds] reads the
+-- previous round's verdict for every OTHER decl in the same scope regardless of
+-- declaration order, while the in-pass prepend still lets the fresher in-round
+-- value win.  The motivating shapes settle on round two; the loop exits on the
+-- first stable round.
+--
+-- ⚠️ THE CAP IS A DEFENSIVE FALLBACK, NOT THE EXPECTED EXIT, AND THIS MUST NOT
+-- BE "SIMPLIFIED" INTO A JOIN.  `polMul` is a SIGN multiplication, not a
+-- monotone lattice map (`polMul PContra PContra = PCo`), so an entry may
+-- legitimately move DOWN between rounds — `data A x = MkA (B x -> Int)` over
+-- `data B y = MkB (y -> Int)` reads `x` as `PContra` on round one and `PCo` on
+-- round two, and `PCo` is the CORRECT answer (two flips: `x` really does occur
+-- covariantly in `(x -> Int) -> Int`).  Joining successive rounds would be
+-- trivially terminating and would call that `PInv` — a FALSE REJECT of an
+-- ordinary program.  A mutually-recursive flip-cycle can therefore in principle
+-- alternate instead of settling, so the iteration is capped at `listLen ds + 1`
+-- rounds; on the cap the last round's verdict stands, which is no worse than
+-- the single pass this replaces.
+declEnvPolarityEntriesFix : List (TabKey, List Polarity) -> List Decl -> List (TabKey, List Polarity)
+declEnvPolarityEntriesFix base ds =
+  declEnvPolarityFixGo base ds (listLen ds + 1) (declEnvPolarityEntries base ds)
+
+declEnvPolarityFixGo : List (TabKey, List Polarity) -> List Decl -> Int -> List (TabKey, List Polarity) -> List (TabKey, List Polarity)
+declEnvPolarityFixGo base ds fuel prev =
+  if fuel <= 0 then prev
+  else
+    let next = declEnvPolarityEntries (prev ++ base) ds
+    if polarityEntriesEq prev next then
+      prev
+    else
+      declEnvPolarityFixGo base ds (fuel - 1) next
+
+-- POSITIONAL, not keyed: the two lists are two rounds over the SAME [ds], so
+-- `declEnvPolarityEntries`' decl-order output puts the same declaration at the
+-- same index in both.  The key comparison is a cheap corroboration of that
+-- invariant, not a lookup.
+polarityEntriesEq : List (TabKey, List Polarity) -> List (TabKey, List Polarity) -> Bool
+polarityEntriesEq [] [] = True
+polarityEntriesEq ((k1, p1)::r1) ((k2, p2)::r2) = tabKeyEq k1 k2
+  && polaritiesEq p1 p2
+  && polarityEntriesEq r1 r2
+polarityEntriesEq _ _ = False
+
+polaritiesEq : List Polarity -> List Polarity -> Bool
+polaritiesEq [] [] = True
+polaritiesEq (q1::r1) (q2::r2) = polarityEq q1 q2 && polaritiesEq r1 r2
+polaritiesEq _ _ = False
+
+polarityEq : Polarity -> Polarity -> Bool
+polarityEq PCo PCo = True
+polarityEq PContra PContra = True
+polarityEq PInv PInv = True
+polarityEq _ _ = False
 
 -- The population half, mirroring `declEnvKindEntries` arm for arm — including
 -- its `DAttrib` unwrap.  ⚠️ It is a FOLD, not a `map`: each decl's entry is
 -- prepended to the table the NEXT decl composes against, so a wrapper declared
 -- after the type it wraps sees it.  A wrapper declared BEFORE reads the lenient
--- `PCo` default, exactly as `registerVariants`' in-order registration does —
--- the two paths under-tighten identically rather than disagreeing.
+-- `PCo` default — which is why NOTHING calls this directly any more:
+-- `declEnvPolarityEntriesFix` above iterates it to a fixpoint so that
+-- declaration ORDER stops being observable.
 declEnvPolarityEntries : List (TabKey, List Polarity) -> List Decl -> List (TabKey, List Polarity)
 declEnvPolarityEntries _ [] = []
 declEnvPolarityEntries tab ((DAttrib _ d)::rest) =
@@ -28496,9 +28563,45 @@ initialEnv =
     []
     omEmpty
 
+-- ⚠️ S0-3: THE POLARITY PRE-SEED RUNS HERE, ONCE PER CALL, AND THIS IS THE
+-- REASON THE FOLD MOVED INTO A `…Go` HELPER.  `registerData` →
+-- `registerVariants` → `recordParamPolarities` infers each decl's variance
+-- against `dataParamPolarityRef` AS IT STANDS AT THAT DECL, so a wrapper
+-- declared above the type it wraps read the lenient `PCo` default and never
+-- tightened (see `declEnvPolarityEntriesFix`).  Seeding the ref with the
+-- fixpoint over THIS CALL'S OWN decl list first makes the per-decl walk
+-- re-derive the already-correct value instead: a fixpoint is by definition
+-- stable under one more application of the same pass, and `lookupTab`'s
+-- first-match over the re-derived prepend then agrees with the seed row it
+-- shadows.
+--
+-- 🚨 THE FIXPOINT SCOPE IS EXACTLY THE REGISTRATION SCOPE — [ds], never `prog`
+-- reached from ambient state.  Two of this function's four call sites pass a
+-- SUBSET (`importedCtorTypeDeclsLastWins …` on the Module arm's `base`, and
+-- `publicDataDecls prog0` in `appendDataUniverse`), and seeding from a subset
+-- is SAFE but not complete: an entry whose head is outside [ds] still reads
+-- whatever the incoming table holds, exactly as it did before, so the pre-seed
+-- can only tighten relative to today and never invents a verdict from an
+-- incomplete list.  A forward reference from a public decl to a PRIVATE one
+-- therefore still under-tightens at `appendDataUniverse` — the same visibility
+-- filtering `declEnvRowPolarityEntries`' `kindPublicDataDecl` arm already
+-- applies, a pre-existing scope question and not this order-sensitivity fix.
 registerAllData : TcEnv -> List Decl -> TcEnv
-registerAllData env [] = env
-registerAllData env (d::rest) = registerAllData (registerData env d) rest
+registerAllData env ds =
+  let _ = seedParamPolarityFixpoint ds
+  registerAllDataGo env ds
+
+registerAllDataGo : TcEnv -> List Decl -> TcEnv
+registerAllDataGo env [] = env
+registerAllDataGo env (d::rest) = registerAllDataGo (registerData env d) rest
+
+-- Prepends, exactly as `recordParamPolarities` does, so the seed layers over
+-- whatever the universe/import ladder already put in the ref rather than
+-- replacing it.
+seedParamPolarityFixpoint : List Decl -> Unit
+seedParamPolarityFixpoint ds =
+  let cur = perRun.value.dataParamPolarityRef.value
+  perRun.value.dataParamPolarityRef := declEnvPolarityEntriesFix cur ds ++ cur
 
 -- ── dependency-ordered, SCC-merged letrec processing ──────────────────────
 -- The prelude has forward references and mutual recursion throughout, so groups

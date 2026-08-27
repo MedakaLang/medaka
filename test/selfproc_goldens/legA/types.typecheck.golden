@@ -524,6 +524,8 @@ declEnvOrdIndex : Map String Int -> List DeclEnvModule -> Map String Int
 declEnvOwnerModules : List DeclEnvModule -> Map String (List String) -> Map String (List String)
 declEnvPolarityChain : List DeclEnvModule -> List (TabKey, List Polarity) -> Map String (List (TabKey, List Polarity)) -> Map String (List (TabKey, List Polarity))
 declEnvPolarityEntries : List (TabKey, List Polarity) -> List Decl -> List (TabKey, List Polarity)
+declEnvPolarityEntriesFix : List (TabKey, List Polarity) -> List Decl -> List (TabKey, List Polarity)
+declEnvPolarityFixGo : List (TabKey, List Polarity) -> List Decl -> Int -> List (TabKey, List Polarity) -> List (TabKey, List Polarity)
 declEnvReachFrom : Map String (List String) -> List String -> Map String Unit -> Map String Unit
 declEnvReachGo : Map String (List String) -> List DeclEnvModule -> Map String (Map String Unit) -> Map String (Map String Unit)
 declEnvReachIndex : List DeclEnvModule -> Map String (Map String Unit)
@@ -1477,8 +1479,11 @@ placeholderBinding : (String, Mono) -> (String, Scheme)
 poisonMismatchVars : Mono -> Mono -> Unit
 polJoin : Polarity -> Polarity -> Polarity
 polMul : Polarity -> Polarity -> Polarity
+polaritiesEq : List Polarity -> List Polarity -> Bool
 polarityAt : List Polarity -> Int -> Polarity
 polarityAtOr : Option (List Polarity) -> Int -> Polarity
+polarityEntriesEq : List (TabKey, List Polarity) -> List (TabKey, List Polarity) -> Bool
+polarityEq : Polarity -> Polarity -> Bool
 populateEffectDomains : List Decl -> Unit
 populateGo : List Decl -> Unit
 positionMatch : String -> List (Int, Mono) -> List (String, List Int) -> Option (List Int)
@@ -1625,6 +1630,7 @@ regIfaceMonosFor : String -> List (String, List (IfaceRef, List Mono), List (Lis
 regIfaceMonosOf : (String, List (IfaceRef, List Mono), List (List Mono)) -> List (IfaceRef, List Mono)
 registerActiveDictVars : String -> Int -> List Int -> Unit
 registerAllData : TcEnv -> List Decl -> TcEnv
+registerAllDataGo : TcEnv -> List Decl -> TcEnv
 registerAmbiguousConstraints : List UObligation -> List Mono -> Unit
 registerAmbiguousGo : List UObligation -> Int -> List Int -> List Int -> Unit
 registerConstraintRegs : List (String, List (IfaceRef, List Mono), List (List Mono)) -> Unit
@@ -1785,6 +1791,7 @@ seedAndCheckSplit : List Decl -> List Decl -> List Decl -> List (String, Scheme)
 seedBuiltinClasses : CheckMode -> List Decl -> Unit
 seedCheckRun : List Decl -> Unit
 seedEffectDomains : Unit -> Unit
+seedParamPolarityFixpoint : List Decl -> Unit
 selectIfaceRows : UsePath -> List (String, List String) -> List (String, List String)
 selectReqImpl : Map String (List ImplEntry) -> IfaceRef -> String -> Mono -> List Mono -> Option (Ty, List Ty, List Require)
 selfBinding : String -> (String, String)
