@@ -233,6 +233,20 @@ MANYIFACES_N="${IR_MANYIFACES_N:-100}"
 # pin would be a soft one. 400/800/1600 is where the pre-fix reading was
 # measured (r1 3.215 r2 3.574) and where the fix reads ~2.03/~2.03.
 ERRS_N="${IR_ERRS_N:-400}"
+# scoperefs: a deep local scope where the tail references EVERY bound name, most
+# of them non-innermost — the #1031 shape (resolve/typecheck/mangle/emit each
+# scan a List frame-list to answer "is this name bound"). The fix backs the scan
+# with an OrdMap (O(log n) per lookup, not O(1)), so its post-fix ratio creeps
+# toward the threshold rather than sitting flat at ~2.0 like the other shapes —
+# expected for a tree-backed set, not a regression. Measured on this box: the
+# pre-fix defect is invisible below ~N=2500 (both r1,r2 stay under 3.0 even with
+# the O(depth^2) scan still present — the fixed cost of a `check` on this shape's
+# giant expression dominates at smaller N) and only reads clearly red at N=3000:
+#     base (pre-fix)  r1=3.118 r2=3.308  FAIL (both doublings > 3.0)
+#     head (post-fix) r1=2.895 r2=3.159  ok   (r1 stays under; the "both doublings"
+#                                              rule is exactly what keeps this from
+#                                              flapping on the O(log n) creep)
+SCOPEREFS_N="${IR_SCOPEREFS_N:-3000}"
 
 # A netting-noise guard, and the `Ir` analogue of perf_scaling's TIME_FLOOR — but
 # justified differently. It is NOT about a stage being too fast to time: `Ir` has
@@ -293,6 +307,32 @@ gen_errs() {
       gi=$((gi + 1))
     done
     printf 'main = println 1\n'
+  } >> "$gf"
+}
+
+# The #1031 regression pin (local, per F3 — NOT shared with perf_scaling's
+# generators). One `main` with N sequential `let` bindings (a deep local scope,
+# each new binding one frame deeper than the last), whose tail expression sums
+# EVERY bound name — so almost all of the N lookups are non-innermost, and each
+# must walk back through the frames between its binding site and the tail. That
+# is exactly the shape the four #1031 sites scan a List to resolve.
+gen_scoperefs() {
+  gn=$1; gf=$2; : > "$gf"
+  {
+    printf 'main =\n'
+    gi=0
+    while [ "$gi" -lt "$gn" ]; do
+      printf '  let x%s = %s\n' "$gi" "$gi"
+      gi=$((gi + 1))
+    done
+    printf '  println ('
+    gi=0
+    while [ "$gi" -lt "$gn" ]; do
+      if [ "$gi" -gt 0 ]; then printf ' + '; fi
+      printf 'x%s' "$gi"
+      gi=$((gi + 1))
+    done
+    printf ')\n'
   } >> "$gf"
 }
 
@@ -435,6 +475,7 @@ valgrind --version
 grade_shape xref "$XREF_N" clean
 grade_shape manyifaces "$MANYIFACES_N" clean
 grade_shape errs "$ERRS_N" diags
+grade_shape scoperefs "$SCOPEREFS_N" clean
 
 echo
 # A gate that grades nothing must never report success — the invariant

@@ -29,7 +29,7 @@ run() { perl -e 'alarm 60; exec @ARGV' -- "$M" check "$1" 2>&1; }
 # expect ACCEPT: no "TYPE ERROR" / "parse error" line
 expect_ok() {
   out="$(run "$1")"
-  if echo "$out" | grep -qiE 'TYPE ERROR|parse error'; then
+  if echo "$out" | grep -qiE 'TYPE ERROR|parse error|^error:'; then
     echo "FAIL $2 (expected accept):"; echo "$out" | grep -iE 'error' | head -2; fail=$((fail+1))
   else echo "ok   $2"; pass=$((pass+1)); fi
 }
@@ -103,6 +103,24 @@ if echo "$tr" | grep -q '^rejected' && echo "$tr" | grep -q 'Env {"HOME", "PATH"
 else
   echo "FAIL ENV tightened reject: $tr"; fail=$((fail+1))
 fi
+
+# FFI (Prefix domain, #2071/#2070): FFI is NOT in ioAliasLabels, so an <IO>
+# bound must NOT subsume an <FFI>-performing body (control cell uses Exec,
+# which IS in ioAliasLabels, to prove the rejection isn't a broken
+# expandIoInBound).
+expect_reject "$FIX/ffi_io_reject.mdk"  'FFI io-non-subsumption reject (<IO> does not subsume <FFI>)' 'performs <FFI "libcurl\*">'
+expect_ok     "$FIX/exec_io_accept.mdk" 'EXEC io-subsumption accept control (<IO> subsumes <Exec>)'
+
+# ── R2 stamp-acceptance shapes (F1 fix packet N2): pin slice 3's report-only
+# Checks 1/2/4/5 probes as a real gate.  A user-declared extern's bare `<>`
+# bound is stamped `<FFI>` (Check 1); a caller at the ORIGINAL bare `<>` no
+# longer subsumes it (Check 2, composed with R1) ⇒ REJECT; naming `FFI`
+# explicitly ⇒ ACCEPT; a NARROWER declared param (`<Net "…">`) is stamped
+# `<FFI, Net "…">` (Checks 4/5, the join not a replace) and a caller bounded at
+# the joined row ⇒ ACCEPT.
+expect_reject "$FIX/ffi_stamp_bare_reject.mdk"   'FFI stamp bare reject (<> does not subsume stamped <FFI>)' 'performs <FFI>'
+expect_ok     "$FIX/ffi_stamp_bare_accept.mdk"   'FFI stamp bare accept (caller names FFI explicitly)'
+expect_ok     "$FIX/ffi_stamp_narrow_accept.mdk" 'FFI stamp narrow accept (stamp joins existing Net param)'
 
 echo "effect_builtin_param_domain: $pass/$fail"
 [ "$fail" -eq 0 ]

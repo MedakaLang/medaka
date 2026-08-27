@@ -11,10 +11,10 @@ effect Log
 
 extern kvGet : String -> <KV> String
 
-get : String -> <KV> String
+get : String -> <KV, FFI> String
 get k = kvGet k
 
-handler : String -> <KV, Log> String
+handler : String -> <KV, Log, FFI> String
 handler k = get k
 
 main : <IO> Unit
@@ -43,6 +43,8 @@ UPPER "String"
 ARROW
 LT
 UPPER "KV"
+COMMA
+UPPER "FFI"
 GT
 UPPER "String"
 NEWLINE
@@ -60,6 +62,8 @@ LT
 UPPER "KV"
 COMMA
 UPPER "Log"
+COMMA
+UPPER "FFI"
 GT
 UPPER "String"
 NEWLINE
@@ -87,9 +91,9 @@ EOF
 (DEffect false "KV" None)
 (DEffect false "Log" None)
 (DExtern false "kvGet" (TyFun (TyCon "String") (TyEffect ("KV") None (TyCon "String"))))
-(DTypeSig false "get" (TyFun (TyCon "String") (TyEffect ("KV") None (TyCon "String"))))
+(DTypeSig false "get" (TyFun (TyCon "String") (TyEffect ("KV" "FFI") None (TyCon "String"))))
 (DFunDef false "get" ((PVar "k")) (EApp (EVar "kvGet") (EVar "k")))
-(DTypeSig false "handler" (TyFun (TyCon "String") (TyEffect ("KV" "Log") None (TyCon "String"))))
+(DTypeSig false "handler" (TyFun (TyCon "String") (TyEffect ("KV" "Log" "FFI") None (TyCon "String"))))
 (DFunDef false "handler" ((PVar "k")) (EApp (EVar "get") (EVar "k")))
 (DTypeSig false "main" (TyEffect ("IO") None (TyCon "Unit")))
 (DFunDef false "main" () (EApp (EVar "println") (ELit (LString "effect labels ok"))))
@@ -97,9 +101,9 @@ EOF
 (DEffect false "KV" None)
 (DEffect false "Log" None)
 (DExtern false "kvGet" (TyFun (TyCon "String") (TyEffect ("KV") None (TyCon "String"))))
-(DTypeSig false "get" (TyFun (TyCon "String") (TyEffect ("KV") None (TyCon "String"))))
+(DTypeSig false "get" (TyFun (TyCon "String") (TyEffect ("KV" "FFI") None (TyCon "String"))))
 (DFunDef false "get" ((PVar "k")) (EApp (EVar "kvGet") (EVar "k")))
-(DTypeSig false "handler" (TyFun (TyCon "String") (TyEffect ("KV" "Log") None (TyCon "String"))))
+(DTypeSig false "handler" (TyFun (TyCon "String") (TyEffect ("KV" "Log" "FFI") None (TyCon "String"))))
 (DFunDef false "handler" ((PVar "k")) (EApp (EVar "get") (EVar "k")))
 (DTypeSig false "main" (TyEffect ("IO") None (TyCon "Unit")))
 (DFunDef false "main" () (EApp (EDictApp "println") (ELit (LString "effect labels ok"))))

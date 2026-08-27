@@ -645,6 +645,13 @@ listed in §10.
 - **No FFI/`unsafe` escape hatch in submitted code.** Any escape punches through
   the guarantee. Submissions must forbid it (or its presence counts as
   max-capability). This constrains what language features are allowed in plugins.
+- **`<FFI>` is authority-tracking, not a memory-safety boundary.** For an ordinary
+  (non-plugin) program, `<FFI>` ([#2071](https://github.com/MedakaLang/medaka/issues/2071))
+  says which code can transitively reach a foreign call — it does not mean the
+  call has been vetted, sandboxed, or made memory-safe. A foreign call can still
+  corrupt memory or crash regardless of how correctly the label propagates. That
+  is exactly why the bullet above bans FFI outright for submitted plugin code
+  rather than trying to gate on the label.
 - **Soundness is now a security property.** Any hole in effect inference is a
   security hole — raising the correctness bar on Phase 146 and reinforcing the
   differential-testing discipline. The coarse sandbox backstop limits the blast

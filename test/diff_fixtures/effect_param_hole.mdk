@@ -17,7 +17,7 @@ extern netGet : String -> <Net _> String
 -- `fetch` is a function (unforced closure) so the extern netGet is never
 -- actually evaluated — the fixture exercises the front-end (parse + α + subsume),
 -- not the runtime, exactly like effect_param.mdk.
-fetch : Unit -> <Net "a.com/*"> String
+fetch : Unit -> <Net "a.com/*", FFI> String
 fetch _ = netGet "a.com/foo"
 
 main : <IO> Unit

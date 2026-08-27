@@ -182,6 +182,8 @@ blockLet : TcEnv -> Pat -> Expr -> TcEnv
 blockRecLet : TcEnv -> String -> Option Loc -> Expr -> TcEnv
 bodyRDictNames : Expr -> List String
 boolOp : Mono -> Mono -> Mono
+boundInsert : List String -> Map String Unit -> Map String Unit
+boundOfList : List String -> Map String Unit
 boundTvarId : List Int -> Mono -> List Int
 boundTyvarIds : List Int -> List Mono -> Option (List Int)
 bucketAnyLonger : List (List Ty, List Require) -> Int -> Bool
@@ -723,6 +725,7 @@ eqStr : String -> String -> Bool
 erredDuring : (Unit -> a) -> (Bool, a)
 exemptInPlaceIndexMutHeads : List String
 exitLevel : Unit -> Unit
+expandAliasHeadTy : Ty -> Ty
 expandIoInBound : List Atom -> List Atom
 expandSupersCross : List Decl -> List (String, List Int) -> List (String, List IfaceRef) -> List (String, List (List Mono)) -> (List (String, List Int), List (String, List IfaceRef))
 expandSupersEntry : List Decl -> List (String, List IfaceRef) -> List (String, List (List Mono)) -> (String, List Int) -> (String, List Int)
@@ -742,7 +745,12 @@ extendVar : TcEnv -> String -> Scheme -> TcEnv
 extendVars : TcEnv -> List (String, Scheme) -> TcEnv
 externDecls : List Decl -> List Decl
 externSchemes : Map String TyConOrigin -> List Decl -> List (String, Scheme)
-externSchemesGo : List Decl -> List (String, Scheme)
+externSchemesGo : Bool -> List Decl -> List (String, Scheme)
+ffiAddAtom : List (String, Option String) -> List (String, Option String)
+ffiHasAtom : List (String, Option String) -> Bool
+ffiStampMode : CheckMode -> Bool
+ffiStampResultTy : Ty -> Ty
+ffiStampTy : Ty -> Ty
 fieldAssignDictSites : FieldAssign -> List (Ref (List Route))
 fieldAssignEVars : FieldAssign -> List String
 fieldAssignNamePair : FieldAssign -> (String, Unit)
@@ -1719,16 +1727,16 @@ returnPosMethod : List String -> IfaceMethod -> List String
 returnPosMethodNames : List Decl -> List String
 returnPosOfDecl : Decl -> List String
 revClauses : List (List Pat, Expr) -> List (List Pat, Expr) -> List (List Pat, Expr)
-rewriteArgArm : ArgRw -> List String -> Arm -> Arm
-rewriteArgField : ArgRw -> List String -> FieldAssign -> FieldAssign
-rewriteArgFunClause : ArgRw -> List String -> FunClause -> FunClause
-rewriteArgGuardArm : ArgRw -> List String -> GuardArm -> GuardArm
-rewriteArgGuards : ArgRw -> List String -> List Guard -> (List Guard, List String)
-rewriteArgInterp : ArgRw -> List String -> InterpPart -> InterpPart
-rewriteArgKv : ArgRw -> List String -> (Expr, Expr) -> (Expr, Expr)
-rewriteArgLetBind : ArgRw -> List String -> LetBind -> LetBind
-rewriteArgScoped : ArgRw -> List String -> Expr -> Expr
-rewriteArgStmts : ArgRw -> List String -> List DoStmt -> List DoStmt
+rewriteArgArm : ArgRw -> Map String Unit -> Arm -> Arm
+rewriteArgField : ArgRw -> Map String Unit -> FieldAssign -> FieldAssign
+rewriteArgFunClause : ArgRw -> Map String Unit -> FunClause -> FunClause
+rewriteArgGuardArm : ArgRw -> Map String Unit -> GuardArm -> GuardArm
+rewriteArgGuards : ArgRw -> Map String Unit -> List Guard -> (List Guard, Map String Unit)
+rewriteArgInterp : ArgRw -> Map String Unit -> InterpPart -> InterpPart
+rewriteArgKv : ArgRw -> Map String Unit -> (Expr, Expr) -> (Expr, Expr)
+rewriteArgLetBind : ArgRw -> Map String Unit -> LetBind -> LetBind
+rewriteArgScoped : ArgRw -> Map String Unit -> Expr -> Expr
+rewriteArgStmts : ArgRw -> Map String Unit -> List DoStmt -> List DoStmt
 rewriteBinopExpr : Expr -> Expr
 rewriteRPDict : List String -> List String -> Expr -> Expr
 rewriteRPDictArg : List String -> List String -> List String -> Expr -> Expr
@@ -1793,6 +1801,7 @@ setLocIfSome : Option Loc -> Unit
 setMethodConstraintEntry : String -> List Int -> List Int -> Unit
 setNumlitFloats : Unit -> Unit
 setNumlitFloatsGo : List (Mono, Ref (Option Float), Int, Ref Route) -> Unit
+setStdlibOwnership : Bool -> List String -> Unit
 shadowBareName : List (String, String) -> String -> String
 shadowDomainFor : TcEnv -> String -> String -> Option Mono
 shadowStandaloneDictSlots : List CSlot -> List (List Mono) -> List (Int, Mono) -> ShadowDicts
@@ -1985,6 +1994,7 @@ usePathBindsName : UsePath -> String -> Bool
 usePathModuleId : UsePath -> String
 usePathWitnesses : UsePath -> Bool -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
 usePathWitnessesCtor : UsePath -> String -> String -> Ident -> Bool
+userExternSchemes : CheckMode -> Map String TyConOrigin -> List Decl -> List (String, Scheme)
 usesImplDict : String -> Int -> Expr -> Bool
 varHeadApps : String -> Ty -> List (List Ty)
 varHeadHere : String -> Ty -> List Ty -> List (List Ty)

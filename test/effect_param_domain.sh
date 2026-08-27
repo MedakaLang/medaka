@@ -33,7 +33,7 @@ run() { perl -e 'alarm 60; exec @ARGV' -- "$M" check "$1" 2>&1; }
 # expect ACCEPT: no "TYPE ERROR" / "parse error" line
 expect_ok() {
   out="$(run "$1")"
-  if echo "$out" | grep -qiE 'TYPE ERROR|parse error'; then
+  if echo "$out" | grep -qiE 'TYPE ERROR|parse error|^error:'; then
     echo "FAIL $2 (expected accept):"; echo "$out" | grep -iE 'error' | head -2; fail=$((fail+1))
   else echo "ok   $2"; pass=$((pass+1)); fi
 }
@@ -47,13 +47,13 @@ expect_reject() {
 
 # ENV (Set domain): singleton fill + ∪ join
 expect_ok     "$FIX/env_hole_accept.mdk"  "ENV  hole-fill accept ({HOME} ⊆ {HOME,PATH})"
-expect_reject "$FIX/env_hole_reject.mdk"  "ENV  hole-fill reject ({HOME} ⊄ {PATH})"   'performs <Env {"HOME"}>'
+expect_reject "$FIX/env_hole_reject.mdk"  "ENV  hole-fill reject ({HOME} ⊄ {PATH})"   'performs <Env {"HOME"}, FFI>'
 expect_ok     "$FIX/env_join_accept.mdk"  "ENV  djoin ∪ accept ({A,B} ⊆ {A,B})"
-expect_reject "$FIX/env_join_reject.mdk"  "ENV  djoin ∪ reject ({A,B} ⊄ {A})"         'performs <Env {"A", "B"}>'
+expect_reject "$FIX/env_join_reject.mdk"  "ENV  djoin ∪ reject ({A,B} ⊄ {A})"         'performs <Env {"A", "B"}, FFI>'
 
 # EXEC (Prefix domain): prefix fill + prefix subsumption
 expect_ok     "$FIX/exec_hole_accept.mdk" 'EXEC hole-fill accept (/usr/bin/ls ⊑ /usr/bin/*)'
-expect_reject "$FIX/exec_hole_reject.mdk" 'EXEC hole-fill reject (/usr/bin/ls ⊄ /bin/*)' 'performs <Exec "/usr/bin/ls">'
+expect_reject "$FIX/exec_hole_reject.mdk" 'EXEC hole-fill reject (/usr/bin/ls ⊄ /bin/*)' 'performs <Exec "/usr/bin/ls", FFI>'
 
 echo "effect_param_domain: $pass/$fail"
 [ "$fail" -eq 0 ]

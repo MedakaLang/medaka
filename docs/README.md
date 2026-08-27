@@ -110,6 +110,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`EMITTER-TARGET-ARCHITECTURE.md`](../compiler/EMITTER-TARGET-ARCHITECTURE.md) | Emitter Target Architecture - one semantic plan, two physical lowerings | PROPOSAL - one semantic plan, separate LLVM/Wasm physical plans. |
 | [`EQ-DISPATCH-DESIGN.md`](../compiler/EQ-DISPATCH-DESIGN.md) | `==`/`/=` → `Eq` Dispatch (Option A) — Design + Blast-Radius Census | OPEN |
 | [`ERROR-QUALITY.md`](../compiler/ERROR-QUALITY.md) | ERROR-QUALITY.md | IMPLEMENTED |
+| [`FFI-ABI.md`](../compiler/FFI-ABI.md) | FFI ABI contract | — |
 | [`FMT-COMMENT-INTERLEAVING-DESIGN.md`](../compiler/FMT-COMMENT-INTERLEAVING-DESIGN.md) | FMT comment-interleaving design — fixing finding "L" | IMPLEMENTED |
 | [`HELPER-CENSUS.md`](../compiler/HELPER-CENSUS.md) | compiler/ generic-helper census | PARTIAL |
 | [`MESSAGE-AUDIT.md`](../compiler/MESSAGE-AUDIT.md) | MESSAGE-AUDIT.md | PARTIAL |

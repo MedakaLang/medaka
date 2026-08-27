@@ -949,7 +949,7 @@ renameDecl rm (DFunDef pub n ps e) =
     pub
     (renameDefName rm n)
     (renamePatsPM rm ps)
-    (renameScoped rm (patVarsListPM ps) e)
+    (renameScoped rm (boundOfListPM (patVarsListPM ps)) e)
 -- a top-level signature (`f : …` / `export f : …`) shares the function's name; it
 -- MUST be renamed in lockstep with its DFunDef so the typechecker keys f's scheme
 -- under the SAME mangled name the call sites + def now use (else dictPass /
@@ -960,9 +960,15 @@ renameDecl rm (d@(DInterface { methods, ... })) =
 renameDecl rm (d@(DImpl { methods, ... })) =
   DImpl { d | methods = map (renameImplMethod rm) methods }
 renameDecl rm (DProp pub name params body) =
-  DProp pub name params (renameScoped rm (propParamNamesPM params) body)
-renameDecl rm (DTest pub name body) = DTest pub name (renameScoped rm [] body)
-renameDecl rm (DBench pub name body) = DBench pub name (renameScoped rm [] body)
+  DProp
+    pub
+    name
+    params
+    (renameScoped rm (boundOfListPM (propParamNamesPM params)) body)
+renameDecl rm (DTest pub name body) =
+  DTest pub name (renameScoped rm omEmpty body)
+renameDecl rm (DBench pub name body) =
+  DBench pub name (renameScoped rm omEmpty body)
 renameDecl rm (DLetGroup pub binds) =
   DLetGroup pub (map (renameLetBindDef rm) binds)
 -- DATA / NEWTYPE definition sites: rename the constructor names (which the
@@ -988,7 +994,7 @@ renameVariant rm (Variant n payload) = Variant (renameDefName rm n) payload
 -- clause bodies.  The group's own names are in scope across all clauses.
 renameLetBindDef : OrdMap String -> LetBind -> LetBind
 renameLetBindDef rm (LetBind n clauses) =
-  LetBind (renameDefName rm n) (map (renameFunClause rm []) clauses)
+  LetBind (renameDefName rm n) (map (renameFunClause rm omEmpty) clauses)
 
 renameDefName : OrdMap String -> String -> String
 renameDefName rm n = match omLookup n rm
@@ -1003,11 +1009,14 @@ renameIfaceMethod rm (IfaceMethod n ty (Some (MethodDefault ps e))) =
     ty
     (Some (MethodDefault
       (renamePatsPM rm ps)
-      (renameScoped rm (patVarsListPM ps) e)))
+      (renameScoped rm (boundOfListPM (patVarsListPM ps)) e)))
 
 renameImplMethod : OrdMap String -> ImplMethod -> ImplMethod
 renameImplMethod rm (ImplMethod n ps e) =
-  ImplMethod n (renamePatsPM rm ps) (renameScoped rm (patVarsListPM ps) e)
+  ImplMethod
+    n
+    (renamePatsPM rm ps)
+    (renameScoped rm (boundOfListPM (patVarsListPM ps)) e)
 
 propParamNamesPM : List PropParam -> List String
 propParamNamesPM ps = map propParamNamePM ps
@@ -1015,36 +1024,49 @@ propParamNamesPM ps = map propParamNamePM ps
 propParamNamePM : PropParam -> String
 propParamNamePM (PropParam n _ _) = n
 
+-- #1031: `bound` is an OrdMap-backed SET (name -> ()), not a `List String`
+-- scanned by `contains` — see typecheck.mdk's `boundInsert`/`boundOfList`, which
+-- this mirrors exactly (a private copy, per this file's own PM-suffix naming
+-- convention for its scope helpers).
+boundInsertPM : List String -> OrdMap Unit -> OrdMap Unit
+boundInsertPM [] b = b
+boundInsertPM (n::rest) b = boundInsertPM rest (omInsert n () b)
+
+boundOfListPM : List String -> OrdMap Unit
+boundOfListPM ns = boundInsertPM ns omEmpty
+
 -- ── the scope-threaded reference rewrite ──────────────────────────────────────
 -- `bound` = names shadowed by a local binder at this node.  An EVar is renamed
 -- only when it is in the map AND NOT shadowed.  Binders extend `bound`.  Mirrors
 -- typecheck.mdk's rewriteArgScoped exactly.
-renameScoped : OrdMap String -> List String -> Expr -> Expr
+renameScoped : OrdMap String -> OrdMap Unit -> Expr -> Expr
 renameScoped rm bound (EVar n)
-  | not (contains n bound) = match omLookup n rm
+  | not (omHasKey n bound) = match omLookup n rm
     Some n2 => EVar n2
     None => EVar n
   | otherwise = EVar n
 -- #837: strip the resolve-only binding-id tag, renaming exactly as bare EVar.
 renameScoped rm bound (EVarId n _)
-  | not (contains n bound) = match omLookup n rm
+  | not (omHasKey n bound) = match omLookup n rm
     Some n2 => EVar n2
     None => EVar n
   | otherwise = EVar n
 -- binders
 renameScoped rm bound (ELam ps body) =
-  ELam (renamePatsPM rm ps) (renameScoped rm (patVarsListPM ps ++ bound) body)
+  ELam
+    (renamePatsPM rm ps)
+    (renameScoped rm (boundInsertPM (patVarsListPM ps) bound) body)
 renameScoped rm bound (ELet m r p e1 e2) =
   let pv = patVarsPM p
-  let b1 = if r then pv ++ bound else bound
+  let b1 = if r then boundInsertPM pv bound else bound
   ELet
     m
     r
     (renamePat rm p)
     (renameScoped rm b1 e1)
-    (renameScoped rm (pv ++ bound) e2)
+    (renameScoped rm (boundInsertPM pv bound) e2)
 renameScoped rm bound (ELetGroup binds e2) =
-  let bnd = letBindNamesPM binds ++ bound
+  let bnd = boundInsertPM (letBindNamesPM binds) bound
   ELetGroup (map (renameLetBind rm bnd) binds) (renameScoped rm bnd e2)
 renameScoped rm bound (EMatch e0 arms) =
   EMatch (renameScoped rm bound e0) (map (renameArm rm bound) arms)
@@ -1111,38 +1133,38 @@ renameScoped rm bound (EAsPat x sub) = EAsPat x (renameScoped rm bound sub)
 -- leaves (ELit / EMethodRef / EDictApp / EVarAt / EMethodAt / EDictAt / SecBare)
 renameScoped _ _ e = e
 
-renameField : OrdMap String -> List String -> FieldAssign -> FieldAssign
+renameField : OrdMap String -> OrdMap Unit -> FieldAssign -> FieldAssign
 renameField rm bound (FieldAssign n e) = FieldAssign n (renameScoped rm bound e)
 
-renameKv : OrdMap String -> List String -> (Expr, Expr) -> (Expr, Expr)
+renameKv : OrdMap String -> OrdMap Unit -> (Expr, Expr) -> (Expr, Expr)
 renameKv rm bound (k, v) = (renameScoped rm bound k, renameScoped rm bound v)
 
-renameInterp : OrdMap String -> List String -> InterpPart -> InterpPart
+renameInterp : OrdMap String -> OrdMap Unit -> InterpPart -> InterpPart
 renameInterp _ _ (InterpStr s) = InterpStr s
 renameInterp rm bound (InterpExpr e) = InterpExpr (renameScoped rm bound e)
 
-renameLetBind : OrdMap String -> List String -> LetBind -> LetBind
+renameLetBind : OrdMap String -> OrdMap Unit -> LetBind -> LetBind
 renameLetBind rm bound (LetBind n clauses) =
   LetBind (renameDefName rm n) (map (renameFunClause rm bound) clauses)
 
-renameFunClause : OrdMap String -> List String -> FunClause -> FunClause
+renameFunClause : OrdMap String -> OrdMap Unit -> FunClause -> FunClause
 renameFunClause rm bound (FunClause ps body) =
   FunClause
     (renamePatsPM rm ps)
-    (renameScoped rm (patVarsListPM ps ++ bound) body)
+    (renameScoped rm (boundInsertPM (patVarsListPM ps) bound) body)
 
-renameArm : OrdMap String -> List String -> Arm -> Arm
+renameArm : OrdMap String -> OrdMap Unit -> Arm -> Arm
 renameArm rm bound (Arm p gs body) =
-  let b0 = patVarsPM p ++ bound
+  let b0 = boundInsertPM (patVarsPM p) bound
   let (gs2, bnd) = renameGuards rm b0 gs
   Arm (renamePat rm p) gs2 (renameScoped rm bnd body)
 
-renameGuardArm : OrdMap String -> List String -> GuardArm -> GuardArm
+renameGuardArm : OrdMap String -> OrdMap Unit -> GuardArm -> GuardArm
 renameGuardArm rm bound (GuardArm gs body) =
   let (gs2, bnd) = renameGuards rm bound gs
   GuardArm gs2 (renameScoped rm bnd body)
 
-renameGuards : OrdMap String -> List String -> List Guard -> (List Guard, List String)
+renameGuards : OrdMap String -> OrdMap Unit -> List Guard -> (List Guard, OrdMap Unit)
 renameGuards _ bound [] = ([], bound)
 renameGuards rm bound ((GBool e)::rest) =
   let e2 = renameScoped rm bound e
@@ -1150,19 +1172,19 @@ renameGuards rm bound ((GBool e)::rest) =
   (GBool e2 :: rest2, bnd)
 renameGuards rm bound ((GBind p e)::rest) =
   let e2 = renameScoped rm bound e
-  let (rest2, bnd) = renameGuards rm (patVarsPM p ++ bound) rest
+  let (rest2, bnd) = renameGuards rm (boundInsertPM (patVarsPM p) bound) rest
   (GBind (renamePat rm p) e2 :: rest2, bnd)
 
-renameStmts : OrdMap String -> List String -> List DoStmt -> List DoStmt
+renameStmts : OrdMap String -> OrdMap Unit -> List DoStmt -> List DoStmt
 renameStmts _ _ [] = []
 renameStmts rm bound ((DoExpr e)::rest) =
   DoExpr (renameScoped rm bound e) :: renameStmts rm bound rest
 renameStmts rm bound ((DoBind p e)::rest) =
   DoBind (renamePat rm p) (renameScoped rm bound e) ::
-    renameStmts rm (patVarsPM p ++ bound) rest
+    renameStmts rm (boundInsertPM (patVarsPM p) bound) rest
 renameStmts rm bound ((DoLet m r p e)::rest) =
-  let b1 = if r then patVarsPM p ++ bound else bound
-  DoLet m r (renamePat rm p) (renameScoped rm b1 e) :: renameStmts rm (patVarsPM p ++ bound) rest
+  let b1 = if r then boundInsertPM (patVarsPM p) bound else bound
+  DoLet m r (renamePat rm p) (renameScoped rm b1 e) :: renameStmts rm (boundInsertPM (patVarsPM p) bound) rest
 renameStmts rm bound ((DoAssign x e)::rest) =
   DoAssign x (renameScoped rm bound e) :: renameStmts rm bound rest
 renameStmts rm bound ((DoFieldAssign x fs e)::rest) =

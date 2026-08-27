@@ -61,7 +61,7 @@ one_case() {
 }
 
 # Accept: good plugin, permissive policy.
-one_case "good-accept"        demo/plugin_good.mdk      "Cache,Log" transform ws1a_good_accept
+one_case "good-accept"        demo/plugin_good.mdk      "Cache,Log,FFI" transform ws1a_good_accept
 # Reject: good plugin, restrictive policy (drops Log) → chain via logEvent.
 one_case "good-reject"        demo/plugin_good.mdk      "Cache"     transform ws1a_good_reject
 # Reject: malicious plugin, the demo policy → chain four helpers deep to fetch.
@@ -113,11 +113,11 @@ param_case() {
 echo ""
 echo "-- WS-1b parameter-level compare (native-only) --"
 # inferred <Net "idp.example.com/api"> within policy wildcard idp.example.com/* => ACCEPT
-param_case "param-prefix-accept"  "Net=idp.example.com/*"  0 "accepted"
+param_case "param-prefix-accept"  "Net=idp.example.com/*,FFI"  0 "accepted"
 # inferred <Net "idp.example.com/api"> NOT within other.com/* => REJECT, names Net
 param_case "param-prefix-reject"  "Net=other.com/*"        1 "rejected"
 # bare Net => policy param top => dsub _ top = True => ACCEPT (WS-1a invariant)
-param_case "param-bare-accept"    "Net"                    0 "accepted"
+param_case "param-bare-accept"    "Net,FFI"                0 "accepted"
 
 # ── WS-2: α SCOPE-SEEDING (E3 precision, NATIVE-ONLY) ────────────────────────
 # Same fixture shape as WS-1b but the capability URL is bound by an OUTER-BODY
@@ -151,7 +151,7 @@ OUTER="test/check_policy_fixtures/net_param_outer_let.mdk"
 COMP="test/check_policy_fixtures/net_param_computed.mdk"
 HELP="test/check_policy_fixtures/net_param_helper.mdk"
 # A4/outer: outer-body let literal recovered ⇒ wildcard ADMITS ⇒ ACCEPT (was reject pre-WS-2)
-param_case_f "ws2-outer-accept"   "$OUTER" "Net=idp.example.com/*" 0 "accepted"
+param_case_f "ws2-outer-accept"   "$OUTER" "Net=idp.example.com/*,FFI" 0 "accepted"
 # A4/outer under a non-matching wildcard ⇒ REJECT, names the recovered prefix
 param_case_f "ws2-outer-reject"   "$OUTER" "Net=other.com/*"       1 "idp.example.com/api"
 # A3/computed: let RHS is a parameter ⇒ α = ⊤ ⇒ STAY REJECTED (soundness)

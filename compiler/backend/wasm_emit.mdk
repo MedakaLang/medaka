@@ -2160,7 +2160,7 @@ emitScalarInit emit fnNames valNames groups =
 
 emitScalarValInit : WasmEmit -> List String -> List String -> CBind -> List String
 emitScalarValInit emit fnNames valNames (CBind name [CClause [] body]) =
-  let (instrs, _) = emitScalarExpr emit fnNames valNames [] body
+  let (instrs, _) = emitScalarExpr emit fnNames valNames omEmpty body
   indent instrs ++ ["    global.set $" ++ gname name]
 emitScalarValInit emit _ _ _ =
   gapL emit "value binding must be a nullary clause"
@@ -2168,7 +2168,7 @@ emitScalarValInit emit _ _ _ =
 emitScalarMain : WasmEmit -> List String -> List String -> List CBind -> List String
 emitScalarMain emit fnNames valNames groups = match findMain emit groups
   Some body =>
-    let (instrs, ty) = emitScalarExpr emit fnNames valNames [] body
+    let (instrs, ty) = emitScalarExpr emit fnNames valNames omEmpty body
     indent instrs ++ printFor emit ty
   None => gapL emit "no `main` binding"
 
@@ -2199,7 +2199,7 @@ emitScalarFnBind emit fnNames valNames (CBind name [CClause pats body]) =
   let params = map (patName emit) pats
   let localsInBody = collectExprLocals body
   let extraLocals = filterList (notIn params) (dedupKeep localsInBody)
-  let env = params
+  let env = omFromNames params omEmpty
   let instrs = emitScalarTail emit fnNames valNames env body
   let sig = "  (func $\{gname name}\{joinWith "" (map paramDeclI32 params)} (result i64)"
   let localDecls = map localDeclI32 extraLocals
@@ -2216,7 +2216,7 @@ emitScalarFnBind emit _ _ (CBind name _) =
 -- tail → `return_call` (guaranteed constant-stack); any other tail leaf → its value +
 -- `return`.  This is what lets a deep scalar tail-recursion (the 5M `loop`) run in
 -- bounded stack.  Non-recursive / shallow fns are unaffected (still correct).
-emitScalarTail : WasmEmit -> List String -> List String -> List String -> CExpr -> List String
+emitScalarTail : WasmEmit -> List String -> List String -> OrdMap Unit -> CExpr -> List String
 emitScalarTail emit fnNames valNames env (CIf c t f) =
   let (ci, _) = emitScalarExpr emit fnNames valNames env c
   let ti = emitScalarTail emit fnNames valNames env t
@@ -2231,7 +2231,7 @@ emitScalarTail emit fnNames valNames env (CLet False (PVar x _) e1 e2) =
   let (i1, _) = emitScalarExpr emit fnNames valNames env e1
   i1
     ++ ["local.set $" ++ gname x]
-    ++ emitScalarTail emit fnNames valNames (x::env) e2
+    ++ emitScalarTail emit fnNames valNames (omInsert x () env) e2
 emitScalarTail emit fnNames valNames env (CLet False PWild e1 e2) =
   let (i1, _) = emitScalarExpr emit fnNames valNames env e1
   i1 ++ ["drop"] ++ emitScalarTail emit fnNames valNames env e2
@@ -2241,7 +2241,7 @@ emitScalarTail emit fnNames valNames env other =
   let (i, _) = emitScalarExpr emit fnNames valNames env other
   i ++ ["return"]
 
-emitScalarAppTail : WasmEmit -> List String -> List String -> List String -> CExpr -> List String
+emitScalarAppTail : WasmEmit -> List String -> List String -> OrdMap Unit -> CExpr -> List String
 emitScalarAppTail emit fnNames valNames env app =
   let (hd, args) = flattenApp app []
   match hd
@@ -2261,7 +2261,7 @@ paramDeclI32 p = " (param $" ++ gname p ++ " i64)"
 localDeclI32 : String -> String
 localDeclI32 l = "(local $" ++ gname l ++ " i64)"
 
-emitScalarExpr : WasmEmit -> List String -> List String -> List String -> CExpr -> (List String, WTy)
+emitScalarExpr : WasmEmit -> List String -> List String -> OrdMap Unit -> CExpr -> (List String, WTy)
 emitScalarExpr emit fnNames valNames env (CLit l) = emitLitI32 emit l
 emitScalarExpr emit fnNames valNames env (CVar x _) =
   emitVarI32 emit fnNames valNames env x
@@ -2295,9 +2295,9 @@ emitLitI32 emit (LString _) =
 emitLitI32 emit (LChar _) =
   gapLTy emit "Char literal is W6 (string/unicode slice)"
 
-emitVarI32 : WasmEmit -> List String -> List String -> List String -> String -> (List String, WTy)
+emitVarI32 : WasmEmit -> List String -> List String -> OrdMap Unit -> String -> (List String, WTy)
 emitVarI32 emit fnNames valNames env x =
-  if contains x env then
+  if omHasKey x env then
     (["local.get $" ++ gname x], WInt)
   else if contains x valNames then
     (["global.get $" ++ gname x], WInt)
@@ -2322,7 +2322,7 @@ normInt64 = ["i64.const 1", "i64.shl", "i64.const 1", "i64.shr_s"]
 scalarNeedsNorm : String -> Bool
 scalarNeedsNorm op = contains op ["+", "-", "*", "/"]
 
-emitBinI32 : WasmEmit -> List String -> List String -> List String -> String -> CExpr -> CExpr -> (List String, WTy)
+emitBinI32 : WasmEmit -> List String -> List String -> OrdMap Unit -> String -> CExpr -> CExpr -> (List String, WTy)
 emitBinI32 emit fnNames valNames env op l r =
   let (li, _) = emitScalarExpr emit fnNames valNames env l
   let (ri, _) = emitScalarExpr emit fnNames valNames env r
@@ -2337,7 +2337,7 @@ emitBinI32 emit fnNames valNames env op l r =
     (li ++ ri ++ emitDivZeroGuard emit op "$__sdivr" ++ [wasmBinOp64 emit op] ++ nrm, binOpTy op)
   else (li ++ ri ++ [wasmBinOp64 emit op] ++ nrm, binOpTy op)
 
-emitUnI32 : WasmEmit -> List String -> List String -> List String -> String -> CExpr -> (List String, WTy)
+emitUnI32 : WasmEmit -> List String -> List String -> OrdMap Unit -> String -> CExpr -> (List String, WTy)
 emitUnI32 emit fnNames valNames env "-" x =
   let (xi, _) = emitScalarExpr emit fnNames valNames env x
   -- N1: negation overflows at exactly -2^62 (0 - (-2^62) = +2^62), so it wraps too.
@@ -2345,7 +2345,7 @@ emitUnI32 emit fnNames valNames env "-" x =
 emitUnI32 emit _ _ _ op _ =
   gapLTy emit ("scalar-mode: unsupported unary op '" ++ op ++ "'")
 
-emitIfI32 : WasmEmit -> List String -> List String -> List String -> CExpr -> CExpr -> CExpr -> (List String, WTy)
+emitIfI32 : WasmEmit -> List String -> List String -> OrdMap Unit -> CExpr -> CExpr -> CExpr -> (List String, WTy)
 emitIfI32 emit fnNames valNames env c t f =
   let (ci, _) = emitScalarExpr emit fnNames valNames env c
   let (ti, tty) = emitScalarExpr emit fnNames valNames env t
@@ -2353,10 +2353,10 @@ emitIfI32 emit fnNames valNames env c t f =
   -- the condition is an i64 Bool; wasm `if` consumes i32, so test against zero.
   (ci ++ ["i64.const 0", "i64.ne", "if (result i64)"] ++ indent ti ++ ["else"] ++ indent fi ++ ["end"], tty)
 
-emitLetI32 : WasmEmit -> List String -> List String -> List String -> Bool -> Pat -> CExpr -> CExpr -> (List String, WTy)
+emitLetI32 : WasmEmit -> List String -> List String -> OrdMap Unit -> Bool -> Pat -> CExpr -> CExpr -> (List String, WTy)
 emitLetI32 emit fnNames valNames env False (PVar x _) e1 e2 =
   let (i1, _) = emitScalarExpr emit fnNames valNames env e1
-  let (i2, ty2) = emitScalarExpr emit fnNames valNames (x::env) e2
+  let (i2, ty2) = emitScalarExpr emit fnNames valNames (omInsert x () env) e2
   (i1 ++ ["local.set $" ++ gname x] ++ i2, ty2)
 emitLetI32 emit fnNames valNames env False PWild e1 e2 =
   let (i1, _) = emitScalarExpr emit fnNames valNames env e1
@@ -2365,7 +2365,7 @@ emitLetI32 emit fnNames valNames env False PWild e1 e2 =
 emitLetI32 emit _ _ _ _ _ _ _ =
   gapLTy emit "scalar-mode: only non-recursive `let x = e` / `let _ = e`"
 
-emitBlockI32 : WasmEmit -> List String -> List String -> List String -> List CStmt -> (List String, WTy)
+emitBlockI32 : WasmEmit -> List String -> List String -> OrdMap Unit -> List CStmt -> (List String, WTy)
 emitBlockI32 emit fnNames valNames env [CSExpr ex] =
   emitScalarExpr emit fnNames valNames env ex
 emitBlockI32 emit fnNames valNames env ((CSExpr ex)::rest) =
@@ -2374,7 +2374,7 @@ emitBlockI32 emit fnNames valNames env ((CSExpr ex)::rest) =
   (i1 ++ ["drop"] ++ i2, ty)
 emitBlockI32 emit fnNames valNames env ((CSLet _ (PVar x _) ex)::rest) =
   let (i1, _) = emitScalarExpr emit fnNames valNames env ex
-  let (i2, ty) = emitBlockI32 emit fnNames valNames (x::env) rest
+  let (i2, ty) = emitBlockI32 emit fnNames valNames (omInsert x () env) rest
   (i1 ++ ["local.set $" ++ gname x] ++ i2, ty)
 emitBlockI32 emit fnNames valNames env ((CSLet _ PWild ex)::rest) =
   let (i1, _) = emitScalarExpr emit fnNames valNames env ex
@@ -2391,7 +2391,7 @@ emitBlockI32 emit _ _ _ [] = gapLTy emit "scalar-mode: empty block"
 emitBlockI32 emit _ _ _ _ =
   gapLTy emit "scalar-mode: unsupported block statement"
 
-emitAppI32 : WasmEmit -> List String -> List String -> List String -> CExpr -> (List String, WTy)
+emitAppI32 : WasmEmit -> List String -> List String -> OrdMap Unit -> CExpr -> (List String, WTy)
 emitAppI32 emit fnNames valNames env app =
   let (hd, args) = flattenApp app []
   match hd

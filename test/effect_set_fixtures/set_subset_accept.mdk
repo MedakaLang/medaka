@@ -9,7 +9,7 @@ extern grant : String -> <Foo {"a", "b"}> String
 -- declared bound is the SUBSET {"a"}; body uses the SUPERSET-granting extern.
 -- inferred row carries Foo {"a","b"} which is NOT ⊆ {"a"} ⇒ this would REJECT.
 -- Instead bound it at the superset to show the accept direction:
-useWide : String -> <Foo {"a", "b"}> String
+useWide : String -> <Foo {"a", "b"}, FFI> String
 useWide x = grant x
 
 main : <IO> Unit

@@ -1,2 +1,7 @@
 [project]
 name = "compiler"
+
+# The compiler is a real internal-extern caller (#42), so it DECLARES the
+# privilege rather than inheriting it from merely having a manifest (#1713).
+# Read by projectTrustedMods in compiler/driver/loader.mdk.
+allow-internal = true

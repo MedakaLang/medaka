@@ -1,5 +1,5 @@
 # META
-source_lines=4201
+source_lines=4204
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, port of lib/eval.ml's tree-walking
@@ -67,6 +67,7 @@ import support.util.{
   joinDot,
   dedup,
 }
+import support.opcount.{opBump}
 -- Reused JSON diagnostic shaping for `medaka run --json` (RUNTIME-DIAGNOSTIC-
 -- CHANNEL-DESIGN.md Fork C). diagnostics.mdk sits above frontend/types in the
 -- pipeline and does not import eval.mdk (no cycle) — verified by grep before
@@ -768,11 +769,13 @@ force : Value e -> <e> Value e
 force (VThunk f) = f ()
 force v = v
 
+-- #1033: opBump makes the by-name scan's O(depth) cost visible to the perf
+-- gate's deterministic op-count arm (it never counted this scan before).
 lookupFrameCell : List (String, Ref (Value e)) -> String -> Option (Ref (Value e))
 lookupFrameCell [] _ = None
-lookupFrameCell ((n, cell)::rest) name
-  | n == name = Some cell
-  | otherwise = lookupFrameCell rest name
+lookupFrameCell ((n, cell)::rest) name =
+  let _ = opBump ()
+  if n == name then Some cell else lookupFrameCell rest name
 
 -- ── lexical-address lookup (consumes annotate.mdk's EVarAt; DORMANT, §2.0) ──
 -- AGlobal falls back to the by-name scan — identical semantics: it reaches a
@@ -4207,6 +4210,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "ifaceIdMatches" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "funHeadTag" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false))))
+(DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "cjAllToJson" false))))
 (DUse false (UseGroup ("bits64") ((mem "add64" false) (mem "sub64" false) (mem "mulLow64" false) (mem "xor64" false) (mem "shr64" false) (mem "mod64" false) (mem "ofInt" false) (mem "isZero" false) (mem "limbAt" false))))
 (DData Public "Value" ("e") ((variant "VInt" (ConPos (TyCon "Int"))) (variant "VFloat" (ConPos (TyCon "Float"))) (variant "VString" (ConPos (TyCon "String"))) (variant "VChar" (ConPos (TyCon "String"))) (variant "VBool" (ConPos (TyCon "Bool"))) (variant "VUnit" (ConPos)) (variant "VTuple" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VList" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VArray" (ConPos (TyApp (TyCon "Array") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VRef" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VClosure" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "VClosureF" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VPrim" (ConPos (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VMulti" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VThunk" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VFallthrough" (ConPos)) (variant "VTypedImpl" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e")))) (variant "VDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))) ())
@@ -4434,7 +4438,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "force" ((PVar "v")) (EVar "v"))
 (DTypeSig false "lookupFrameCell" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "lookupFrameCell" ((PList) PWild) (EVar "None"))
-(DFunDef false "lookupFrameCell" ((PCons (PTuple (PVar "n") (PVar "cell")) (PVar "rest")) (PVar "name")) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "cell")) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupFrameCell") (EVar "rest")) (EVar "name")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "lookupFrameCell" ((PCons (PTuple (PVar "n") (PVar "cell")) (PVar "rest")) (PVar "name")) (EBlock (DoLet false false PWild (EApp (EVar "opBump") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "cell")) (EApp (EApp (EVar "lookupFrameCell") (EVar "rest")) (EVar "name"))))))
 (DTypeSig false "lookupAtAddr" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "Addr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "lookupAtAddr" ((PVar "env") (PVar "name") (PCon "AGlobal")) (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "name")))
 (DFunDef false "lookupAtAddr" ((PCon "EvalEnv" (PVar "frames")) (PVar "name") (PCon "ALocal" (PVar "depth") (PVar "slot"))) (EApp (EApp (EVar "forceCell") (EApp (EApp (EApp (EVar "addrCell") (EApp (EApp (EApp (EVar "frameAtDepth") (EVar "frames")) (EVar "depth")) (EVar "name"))) (EVar "slot")) (EVar "name"))) (EVar "name")))
@@ -5668,6 +5672,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "ifaceIdMatches" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "funHeadTag" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false))))
+(DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "cjAllToJson" false))))
 (DUse false (UseGroup ("bits64") ((mem "add64" false) (mem "sub64" false) (mem "mulLow64" false) (mem "xor64" false) (mem "shr64" false) (mem "mod64" false) (mem "ofInt" false) (mem "isZero" false) (mem "limbAt" false))))
 (DData Public "Value" ("e") ((variant "VInt" (ConPos (TyCon "Int"))) (variant "VFloat" (ConPos (TyCon "Float"))) (variant "VString" (ConPos (TyCon "String"))) (variant "VChar" (ConPos (TyCon "String"))) (variant "VBool" (ConPos (TyCon "Bool"))) (variant "VUnit" (ConPos)) (variant "VTuple" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VList" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VArray" (ConPos (TyApp (TyCon "Array") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VRef" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VClosure" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (variant "VClosureF" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VPrim" (ConPos (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VMulti" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VThunk" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VFallthrough" (ConPos)) (variant "VTypedImpl" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e")))) (variant "VDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))) ())
@@ -5895,7 +5900,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "force" ((PVar "v")) (EVar "v"))
 (DTypeSig false "lookupFrameCell" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "lookupFrameCell" ((PList) PWild) (EVar "None"))
-(DFunDef false "lookupFrameCell" ((PCons (PTuple (PVar "n") (PVar "cell")) (PVar "rest")) (PVar "name")) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "cell")) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupFrameCell") (EVar "rest")) (EVar "name")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "lookupFrameCell" ((PCons (PTuple (PVar "n") (PVar "cell")) (PVar "rest")) (PVar "name")) (EBlock (DoLet false false PWild (EApp (EVar "opBump") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "cell")) (EApp (EApp (EVar "lookupFrameCell") (EVar "rest")) (EVar "name"))))))
 (DTypeSig false "lookupAtAddr" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "Addr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "lookupAtAddr" ((PVar "env") (PVar "name") (PCon "AGlobal")) (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "name")))
 (DFunDef false "lookupAtAddr" ((PCon "EvalEnv" (PVar "frames")) (PVar "name") (PCon "ALocal" (PVar "depth") (PVar "slot"))) (EApp (EApp (EVar "forceCell") (EApp (EApp (EApp (EVar "addrCell") (EApp (EApp (EApp (EVar "frameAtDepth") (EVar "frames")) (EVar "depth")) (EVar "name"))) (EVar "slot")) (EVar "name"))) (EVar "name")))

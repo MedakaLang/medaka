@@ -65,8 +65,8 @@ fi
 
 # 2. Native CLI must surface α's result: the extern renders ⊤ as the bare <Net>,
 #    and fetch keeps the declared wildcard row (which ADMITS the α-derived row).
-if printf '%s' "$nat_out" | grep -qF 'netGet : String -> <Net> String' \
-   && printf '%s' "$nat_out" | grep -qF 'fetch : Unit -> <Net "a.com/*"> String'; then
+if printf '%s' "$nat_out" | grep -qF 'netGet : String -> <FFI, Net> String' \
+   && printf '%s' "$nat_out" | grep -qF 'fetch : Unit -> <FFI, Net "a.com/*"> String'; then
   pass=$((pass+1)); note ok   'native-cli/check infers <Net> hole + the wildcard fetch row'
 else
   fail=$((fail+1)); note FAIL 'native-cli/check did not infer the hole/wildcard rows'
@@ -107,7 +107,7 @@ main : <IO> Unit
 main = println "x"
 EOF
 nat_types="$("$HOST" "$RT" "$CORE" "$WORK/ws2_outer.mdk" 2>/dev/null | strip_unit | LC_ALL=C sort)"
-if printf '%s' "$nat_types" | grep -qF 'fetch : a -> <Net "a.com/foo"> String'; then
+if printf '%s' "$nat_types" | grep -qF 'fetch : a -> <FFI, Net "a.com/foo"> String'; then
   pass=$((pass+1)); note ok   'WS-2: outer-let recovers <Net "a.com/foo"> (native-only check)'
 else
   fail=$((fail+1)); note FAIL 'WS-2: outer-let row not recovered'

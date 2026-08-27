@@ -18,7 +18,7 @@ effect Stdout
 
 extern netGet : String -> <Net "a.com/foo"> String
 
-fetch : String -> <Net "a.com/foo"> String
+fetch : String -> <Net "a.com/foo", FFI> String
 fetch path = netGet path
 
 data Async e a = Done a | Suspend (Unit -> <e> Async e a)
@@ -83,6 +83,8 @@ ARROW
 LT
 UPPER "Net"
 STRING "a.com/foo"
+COMMA
+UPPER "FFI"
 GT
 UPPER "String"
 NEWLINE
@@ -306,7 +308,7 @@ EOF
 (DEffect false "Net" (Some "Prefix"))
 (DEffect false "Stdout" None)
 (DExtern false "netGet" (TyFun (TyCon "String") (TyEffect ((atom "Net" "a.com/foo")) None (TyCon "String"))))
-(DTypeSig false "fetch" (TyFun (TyCon "String") (TyEffect ((atom "Net" "a.com/foo")) None (TyCon "String"))))
+(DTypeSig false "fetch" (TyFun (TyCon "String") (TyEffect ((atom "Net" "a.com/foo") "FFI") None (TyCon "String"))))
 (DFunDef false "fetch" ((PVar "path")) (EApp (EVar "netGet") (EVar "path")))
 (DData Private "Async" ("e" "a") ((variant "Done" (ConPos (TyVar "a"))) (variant "Suspend" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a"))))))) ())
 (DTypeSig false "runAsync" (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a")) (TyEffect () (Some "e") (TyVar "a"))))
@@ -326,7 +328,7 @@ EOF
 (DEffect false "Net" (Some "Prefix"))
 (DEffect false "Stdout" None)
 (DExtern false "netGet" (TyFun (TyCon "String") (TyEffect ((atom "Net" "a.com/foo")) None (TyCon "String"))))
-(DTypeSig false "fetch" (TyFun (TyCon "String") (TyEffect ((atom "Net" "a.com/foo")) None (TyCon "String"))))
+(DTypeSig false "fetch" (TyFun (TyCon "String") (TyEffect ((atom "Net" "a.com/foo") "FFI") None (TyCon "String"))))
 (DFunDef false "fetch" ((PVar "path")) (EApp (EVar "netGet") (EVar "path")))
 (DData Private "Async" ("e" "a") ((variant "Done" (ConPos (TyVar "a"))) (variant "Suspend" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a"))))))) ())
 (DTypeSig false "runAsync" (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a")) (TyEffect () (Some "e") (TyVar "a"))))

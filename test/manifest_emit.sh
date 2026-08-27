@@ -40,6 +40,7 @@ NET_FIX="$ROOT/test/check_policy_fixtures/net_param_plugin.mdk"
 if [ -f "$NET_FIX" ]; then
   got="$(perl -e 'alarm 90; exec @ARGV' "$NATIVE" manifest "$NET_FIX" --fn transform 2>&1)"
   expected='[package.capabilities]
+FFI = true
 Net = "idp.example.com/api"'
   if [ "$got" = "$expected" ]; then
     ok_case "net-golden (Prefix param renders as string)"
@@ -88,7 +89,7 @@ fi
 # This proves the manifest is the exact verified authority (self ⊑ self).
 if [ -f "$NET_FIX" ]; then
   rt_out="$(perl -e 'alarm 90; exec @ARGV' \
-      "$NATIVE" check-policy "$NET_FIX" --allow "Net=idp.example.com/api" --fn transform 2>&1)"
+      "$NATIVE" check-policy "$NET_FIX" --allow "FFI,Net=idp.example.com/api" --fn transform 2>&1)"
   rt_rc=$?
   if [ "$rt_rc" = "0" ] && printf '%s' "$rt_out" | grep -qF "accepted"; then
     ok_case "round-trip-accept (manifest → check-policy rc=0)"
@@ -103,7 +104,7 @@ fi
 # check-policy must REJECT (rc 1).
 if [ -f "$NET_FIX" ]; then
   tight_out="$(perl -e 'alarm 90; exec @ARGV' \
-      "$NATIVE" check-policy "$NET_FIX" --allow "Net=other.com/api" --fn transform 2>&1)"
+      "$NATIVE" check-policy "$NET_FIX" --allow "FFI,Net=other.com/api" --fn transform 2>&1)"
   tight_rc=$?
   if [ "$tight_rc" = "1" ] && printf '%s' "$tight_out" | grep -qF "rejected"; then
     ok_case "tightened-reject (narrowed param → check-policy rc=1)"

@@ -1,0 +1,10 @@
+-- N2 (F1 fix packet): companion accept to ffi_stamp_bare_reject.mdk — same
+-- extern, but the caller names `FFI` explicitly in its declared bound, which
+-- the stamped extern's row now satisfies ⇒ ACCEPT.
+extern ffiCall : Int -> <> Int
+
+wrapFFI : Int -> <FFI> Int
+wrapFFI x = ffiCall x
+
+main : <IO> Unit
+main = println "ffi stamp bare accept"

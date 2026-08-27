@@ -534,6 +534,7 @@ seedEffectDomains _ =
     ("FileWrite", PPrefix None),
     ("Env", PSet None),
     ("Exec", PPrefix None),
+    ("FFI", PPrefix None),
   ]
   driverState.value.effectDomains := builtins
 
@@ -841,6 +842,10 @@ ioAliasLabels = [
   "FileRead",
   "FileWrite",
 ]
+-- NOTE: `FFI` is deliberately NOT a member. #2071/#2070 (epic, Layer 1, R1):
+-- an `<IO>` bound must NOT subsume an `<FFI>`-performing body — FFI crosses a
+-- trust boundary the IO alias is not meant to paper over. Do not "complete"
+-- this list by adding FFI.
 
 -- expand a bound `IO` atom into the security-label alias before an escape
 -- check, so a NARROW inferred row is subsumed by an `<IO>` bound (narrow ⊑ IO
@@ -5953,6 +5958,8 @@ data DriverState =
       mangledFunDefsPresentRef : Ref Bool,
       userIfaceNamesRef : Ref (List String),
       coherenceUserDecls : Ref (List Decl),
+      stdlibOwnedModsRef : Ref (List String),
+      flatEntryIsStdlibRef : Ref Bool,
       superDeclsRef : Ref (List Decl),
       standaloneValuesRef : Ref (List String),
       methodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),
@@ -5983,6 +5990,8 @@ freshDriverState _ = DriverState {
   mangledFunDefsPresentRef = Ref False,
   userIfaceNamesRef = Ref [],
   coherenceUserDecls = Ref [],
+  stdlibOwnedModsRef = Ref [],
+  flatEntryIsStdlibRef = Ref False,
   superDeclsRef = Ref [],
   standaloneValuesRef = Ref [],
   methodDispatchIdxByIdRef = Ref [],
@@ -16879,17 +16888,21 @@ data ArgRw =
 -- visits.
 prePassDeclScoped : ArgRw -> Decl -> Decl
 prePassDeclScoped rw (DFunDef pub n ps e) =
-  DFunDef pub n ps (rewriteArgScoped rw (patVarsListTc ps) e)
+  DFunDef pub n ps (rewriteArgScoped rw (boundOfList (patVarsListTc ps)) e)
 prePassDeclScoped rw (d@(DInterface { methods, ... })) =
   DInterface { d | methods = map (prePassIfaceMethodScoped rw) methods }
 prePassDeclScoped rw (d@(DImpl { methods, ... })) =
   DImpl { d | methods = map (prePassImplMethodScoped rw) methods }
 prePassDeclScoped rw (DProp pub name params body) =
-  DProp pub name params (rewriteArgScoped rw (propParamNamesTc params) body)
+  DProp
+    pub
+    name
+    params
+    (rewriteArgScoped rw (boundOfList (propParamNamesTc params)) body)
 prePassDeclScoped rw (DTest pub name body) =
-  DTest pub name (rewriteArgScoped rw [] body)
+  DTest pub name (rewriteArgScoped rw omEmpty body)
 prePassDeclScoped rw (DBench pub name body) =
-  DBench pub name (rewriteArgScoped rw [] body)
+  DBench pub name (rewriteArgScoped rw omEmpty body)
 prePassDeclScoped rw (DAttrib attrs d) = DAttrib attrs (prePassDeclScoped rw d)
 -- Top-level `let rec … with …` (DLetGroup): mapDecl/the catch-all skip its bodies,
 -- so a constrained-fn occurrence inside a group body would never be rewritten to
@@ -16906,7 +16919,7 @@ prePassLetBindScoped rw (LetBind n clauses) =
 
 prePassFunClauseScoped : ArgRw -> FunClause -> FunClause
 prePassFunClauseScoped rw (FunClause ps e) =
-  FunClause ps (rewriteArgScoped rw (patVarsListTc ps) e)
+  FunClause ps (rewriteArgScoped rw (boundOfList (patVarsListTc ps)) e)
 
 prePassIfaceMethodScoped : ArgRw -> IfaceMethod -> IfaceMethod
 prePassIfaceMethodScoped _ (IfaceMethod n ty None) = IfaceMethod n ty None
@@ -16914,17 +16927,31 @@ prePassIfaceMethodScoped rw (IfaceMethod n ty (Some (MethodDefault ps e))) =
   IfaceMethod
     n
     ty
-    (Some (MethodDefault ps (rewriteArgScoped rw (patVarsListTc ps) e)))
+    (Some (MethodDefault
+      ps
+      (rewriteArgScoped rw (boundOfList (patVarsListTc ps)) e)))
 
 prePassImplMethodScoped : ArgRw -> ImplMethod -> ImplMethod
 prePassImplMethodScoped rw (ImplMethod n ps e) =
-  ImplMethod n ps (rewriteArgScoped rw (patVarsListTc ps) e)
+  ImplMethod n ps (rewriteArgScoped rw (boundOfList (patVarsListTc ps)) e)
 
 propParamNamesTc : List PropParam -> List String
 propParamNamesTc ps = map propParamName ps
 
 propParamName : PropParam -> String
 propParamName (PropParam n _ _) = n
+
+-- #1031: `bound` is an OrdMap-backed SET (name -> ()), not a `List String`
+-- scanned by `contains` — a deep local nesting (N sequential lets, a reference
+-- to an outer binding) made `contains n bound` an O(depth) scan per EVar,
+-- O(depth²) over the body (the `scoperefs` shape).  `boundInsert`/`boundOfList`
+-- extend it; membership is `omHasKey`.
+boundInsert : List String -> OrdMap Unit -> OrdMap Unit
+boundInsert [] b = b
+boundInsert (n::rest) b = boundInsert rest (omInsert n () b)
+
+boundOfList : List String -> OrdMap Unit
+boundOfList ns = boundInsert ns omEmpty
 
 -- the core scope-threaded rewrite.  `bound` is the set of names in scope as
 -- locals at this node.  At an EVar: the rp arm is scope-blind (unchanged); the
@@ -16933,31 +16960,36 @@ propParamName (PropParam n _ _) = n
 -- (ELam/ELet/ELetGroup/EMatch arms/EBlock/EDo + the where/do/guard
 -- binders) extend `bound`; every other node recurses into its children with the
 -- same `bound`.
-rewriteArgScoped : ArgRw -> List String -> Expr -> Expr
+rewriteArgScoped : ArgRw -> OrdMap Unit -> Expr -> Expr
 rewriteArgScoped (ArgRw rp dn an sm) bound (EVar n)
   -- P0-18: `n` is a MANGLED definer-shadow standalone (`<mid>__size`).  Mark it
   -- `EMethodAt` with the BARE dispatch name (so `implFor` finds the impl when the
   -- receiver has one) and seed the route's `RLocal <n>` fallback with the mangled
   -- symbol (so a no-impl receiver still reaches the standalone `@mdk_<mid>__size`).
-  | not (contains n bound) && isSome (lookupAssoc n sm) =
+  | not (omHasKey n bound) && isSome (lookupAssoc n sm) =
     match lookupAssoc n sm
       Some bare => EMethodAt bare (Ref (RLocal n [])) (Ref []) (Ref [])
       None => EVar n
-  | contains n rp && not (contains n bound) =
+  | contains n rp && not (omHasKey n bound) =
     EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | contains n an && not (contains n bound) =
+  | contains n an && not (omHasKey n bound) =
     EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | contains n dn && not (contains n bound) = EDictAt n (Ref [])
+  | contains n dn && not (omHasKey n bound) = EDictAt n (Ref [])
   | otherwise = EVar n
 -- binders
 rewriteArgScoped rw bound (ELam ps body) =
-  ELam ps (rewriteArgScoped rw (patVarsListTc ps ++ bound) body)
+  ELam ps (rewriteArgScoped rw (boundInsert (patVarsListTc ps) bound) body)
 rewriteArgScoped rw bound (ELet m r p e1 e2) =
   let pv = patVarsTc p
-  let b1 = if r then pv ++ bound else bound
-  ELet m r p (rewriteArgScoped rw b1 e1) (rewriteArgScoped rw (pv ++ bound) e2)
+  let b1 = if r then boundInsert pv bound else bound
+  ELet
+    m
+    r
+    p
+    (rewriteArgScoped rw b1 e1)
+    (rewriteArgScoped rw (boundInsert pv bound) e2)
 rewriteArgScoped rw bound (ELetGroup binds e2) =
-  let bnd = letBindNamesTc binds ++ bound
+  let bnd = boundInsert (letBindNamesTc binds) bound
   ELetGroup (map (rewriteArgLetBind rw bnd) binds) (rewriteArgScoped rw bnd e2)
 rewriteArgScoped rw bound (EMatch e0 arms) =
   EMatch (rewriteArgScoped rw bound e0) (map (rewriteArgArm rw bound) arms)
@@ -17035,41 +17067,41 @@ rewriteArgScoped rw bound (EAsPat x sub) =
 -- leaves (ELit / EMethodRef / EDictApp / EVarAt / EMethodAt / EDictAt / SecBare)
 rewriteArgScoped _ _ e = e
 
-rewriteArgField : ArgRw -> List String -> FieldAssign -> FieldAssign
+rewriteArgField : ArgRw -> OrdMap Unit -> FieldAssign -> FieldAssign
 rewriteArgField rw bound (FieldAssign n e) =
   FieldAssign n (rewriteArgScoped rw bound e)
 
-rewriteArgKv : ArgRw -> List String -> (Expr, Expr) -> (Expr, Expr)
+rewriteArgKv : ArgRw -> OrdMap Unit -> (Expr, Expr) -> (Expr, Expr)
 rewriteArgKv rw bound (k, v) =
   (rewriteArgScoped rw bound k, rewriteArgScoped rw bound v)
 
-rewriteArgInterp : ArgRw -> List String -> InterpPart -> InterpPart
+rewriteArgInterp : ArgRw -> OrdMap Unit -> InterpPart -> InterpPart
 rewriteArgInterp _ _ (InterpStr s) = InterpStr s
 rewriteArgInterp rw bound (InterpExpr e) =
   InterpExpr (rewriteArgScoped rw bound e)
 
-rewriteArgLetBind : ArgRw -> List String -> LetBind -> LetBind
+rewriteArgLetBind : ArgRw -> OrdMap Unit -> LetBind -> LetBind
 rewriteArgLetBind rw bound (LetBind n clauses) =
   LetBind n (map (rewriteArgFunClause rw bound) clauses)
 
-rewriteArgFunClause : ArgRw -> List String -> FunClause -> FunClause
+rewriteArgFunClause : ArgRw -> OrdMap Unit -> FunClause -> FunClause
 rewriteArgFunClause rw bound (FunClause ps body) =
-  FunClause ps (rewriteArgScoped rw (patVarsListTc ps ++ bound) body)
+  FunClause ps (rewriteArgScoped rw (boundInsert (patVarsListTc ps) bound) body)
 
 -- a match/function arm: the pattern binds for the guards + body; a `| p <- e`
 -- guard binds for later guards + the body (threaded left-to-right).
-rewriteArgArm : ArgRw -> List String -> Arm -> Arm
+rewriteArgArm : ArgRw -> OrdMap Unit -> Arm -> Arm
 rewriteArgArm rw bound (Arm p gs body) =
-  let b0 = patVarsTc p ++ bound
+  let b0 = boundInsert (patVarsTc p) bound
   let (gs2, bnd) = rewriteArgGuards rw b0 gs
   Arm p gs2 (rewriteArgScoped rw bnd body)
 
-rewriteArgGuardArm : ArgRw -> List String -> GuardArm -> GuardArm
+rewriteArgGuardArm : ArgRw -> OrdMap Unit -> GuardArm -> GuardArm
 rewriteArgGuardArm rw bound (GuardArm gs body) =
   let (gs2, bnd) = rewriteArgGuards rw bound gs
   GuardArm gs2 (rewriteArgScoped rw bnd body)
 
-rewriteArgGuards : ArgRw -> List String -> List Guard -> (List Guard, List String)
+rewriteArgGuards : ArgRw -> OrdMap Unit -> List Guard -> (List Guard, OrdMap Unit)
 rewriteArgGuards _ bound [] = ([], bound)
 rewriteArgGuards rw bound ((GBool e)::rest) =
   let e2 = rewriteArgScoped rw bound e
@@ -17077,21 +17109,21 @@ rewriteArgGuards rw bound ((GBool e)::rest) =
   (GBool e2 :: rest2, bnd)
 rewriteArgGuards rw bound ((GBind p e)::rest) =
   let e2 = rewriteArgScoped rw bound e
-  let (rest2, bnd) = rewriteArgGuards rw (patVarsTc p ++ bound) rest
+  let (rest2, bnd) = rewriteArgGuards rw (boundInsert (patVarsTc p) bound) rest
   (GBind p e2 :: rest2, bnd)
 
 -- do/block statements: a DoBind/DoLet pattern binds for SUBSEQUENT
 -- statements (a recursive DoLet also for its own RHS).
-rewriteArgStmts : ArgRw -> List String -> List DoStmt -> List DoStmt
+rewriteArgStmts : ArgRw -> OrdMap Unit -> List DoStmt -> List DoStmt
 rewriteArgStmts _ _ [] = []
 rewriteArgStmts rw bound ((DoExpr e)::rest) =
   DoExpr (rewriteArgScoped rw bound e) :: rewriteArgStmts rw bound rest
 rewriteArgStmts rw bound ((DoBind p e)::rest) =
   DoBind p (rewriteArgScoped rw bound e) ::
-    rewriteArgStmts rw (patVarsTc p ++ bound) rest
+    rewriteArgStmts rw (boundInsert (patVarsTc p) bound) rest
 rewriteArgStmts rw bound ((DoLet m r p e)::rest) =
-  let b1 = if r then patVarsTc p ++ bound else bound
-  DoLet m r p (rewriteArgScoped rw b1 e) :: rewriteArgStmts rw (patVarsTc p ++ bound) rest
+  let b1 = if r then boundInsert (patVarsTc p) bound else bound
+  DoLet m r p (rewriteArgScoped rw b1 e) :: rewriteArgStmts rw (boundInsert (patVarsTc p) bound) rest
 rewriteArgStmts rw bound ((DoAssign x e)::rest) =
   DoAssign x (rewriteArgScoped rw bound e) :: rewriteArgStmts rw bound rest
 rewriteArgStmts rw bound ((DoFieldAssign x fs e)::rest) =
@@ -20715,6 +20747,36 @@ globalCoherenceConflict env = match cohScan CohSweepGlobal (reverseL (map cohImp
 export
 setCoherenceUserDecls : List Decl -> Unit
 setCoherenceUserDecls ds = driverState.value.coherenceUserDecls := ds
+
+-- #2072 (extern FFI stamp): the LOADER's owning-root fact, published for the one
+-- reader that needs it — `ffiStampMode`, which decides whether an `extern`
+-- DECLARATION in the program under check is the stdlib's extern catalog (never
+-- stamped) or a user's FFI declaration (always stamped).
+--
+-- 🚨 TWO fields, not one, because the two `CheckMode` arms carry different amounts
+-- of identity.  `Module mid _ _` has a module id, so the Module arm can ask
+-- "is THIS module stdlib-owned" of the list.  `Flat _` has NO id at all — the flat
+-- driver has already flattened the program into one anonymous decl list — so the
+-- entry's ownership has to arrive as its own Bool.
+--
+-- 🚨 DEFAULTS ARE `(False, [])` = STAMP EVERYTHING, and that direction is the safe
+-- one on purpose.  A driver that never calls this suppresses nothing, so the worst
+-- an unwired entry point can do is render an `FFI` atom on the stdlib catalog when
+-- someone points it AT stdlib source.  The inverse default would leave #2072's hole
+-- (a user `extern f : Int -> <> Int` typing pure) open on every unwired path, which
+-- is a soundness hole rather than a cosmetic one.  Do not "helpfully" flip it.
+--
+-- ⚠️ NOT `projectTrustedMods` (`driver/loader.mdk`) — that predicate answers a
+-- DIFFERENT question (may module M *reference* an internal-only extern?) and is
+-- opt-in-able from any `medaka.toml` via `allow-internal` (#1713, slice 2).  Routing
+-- this through it would let a user exempt their OWN externs from the stamp by writing
+-- one manifest line: an effect-system escape hatch reachable from a manifest.
+-- Stdlib-root ownership alone, no project-level opt-out.
+export
+setStdlibOwnership : Bool -> List String -> Unit
+setStdlibOwnership flatEntry mods =
+  driverState.value.flatEntryIsStdlibRef := flatEntry
+  driverState.value.stdlibOwnedModsRef := mods
 
 -- ── instance-`requires` impl-dict routing (Phase 83/84 single-level) ────────
 -- One parametric impl that carries a `requires`: its head tag (the tycon eval
@@ -24648,7 +24710,10 @@ checkBodyImpl seed mode prog0 =
   -- `stampTyHead` is first-write-immune, so the builtins-only scope can only fill
   -- a head no driver could attribute — an `extern` written in a FLAT user file,
   -- where there is no module id and the primitive heads are all that is knowable.
-  let globalS = ifaceMethodSchemes prog ++ externSchemes (externTyOriginScope []) prog
+  -- #2072: `userExternSchemes`, not `externSchemes` — this is the extern
+  -- DECLARATION site (the program under check), so a user extern's row gets the
+  -- `FFI` stamp unless the loader owns this program to `stdlibRoot`.
+  let globalS = ifaceMethodSchemes prog ++ userExternSchemes mode (externTyOriginScope []) prog
   -- methodNames: FLAT's SECOND ifaceMethodSchemes call over prog — dedup-skipped by
   -- registerMethodConstraints so globalS's registered (first-call) ids stay authoritative.
   -- Module checks core in isolation and never needs it, so NO extra call there.
@@ -28040,7 +28105,122 @@ monoTyvarIds m = match normalize m
 -- rebuilding what you are about to throw away is never the cheaper branch.
 externSchemes : OrdMap TyConOrigin -> List Decl -> List (String, Scheme)
 externSchemes scope decls =
-  externSchemesGo (stampTyOrigins scope (externDecls decls))
+  externSchemesGo False (stampTyOrigins scope (externDecls decls))
+
+-- #2072 (epic #2070, R2): the DECLARATION-site sibling of `externSchemes`.
+--
+-- The eight `externSchemes … runtimeDecls` call sites above build the STDLIB EXTERN
+-- CATALOG's schemes: `stdlib/runtime.mdk`'s 138 `extern` lines (derived: `grep -c
+-- '^extern ' stdlib/runtime.mdk`), whose written rows ARE the effect vocabulary.
+-- They must stay byte-identical, so they keep calling `externSchemes` (stamp=False).
+--
+-- THIS one is the `checkBodyImpl` call, which processes whichever program is under
+-- check — normally a USER file, where an `extern f : Int -> <> Int` used to type as
+-- a pure `Int -> Int`: a one-line escape hatch through the whole effect system.
+-- Here a user extern's written row may NARROW the description but never REMOVE
+-- `FFI`.
+--
+-- 🚨 The SAME call site processes stdlib source when someone checks it directly
+-- (`medaka check --types stdlib/runtime.mdk` renders all 138 rows off THIS path,
+-- not off the seed), so the suppression cannot be keyed on "which call site" — it
+-- is keyed on the loader's owning-root fact, published by `setStdlibOwnership`.
+userExternSchemes : CheckMode -> OrdMap TyConOrigin -> List Decl -> List (String, Scheme)
+userExternSchemes mode scope decls =
+  externSchemesGo (ffiStampMode mode) (stampTyOrigins scope (externDecls decls))
+
+-- Stamp unless the program under check is stdlib-owned.  See `setStdlibOwnership`
+-- for why the two arms read two different fields and why the default is "stamp".
+ffiStampMode : CheckMode -> Bool
+ffiStampMode (Flat _) = not driverState.value.flatEntryIsStdlibRef.value
+-- 🚨 `"__user__"` IS THE FLAT ENTRY, NOT A LOADED MODULE, and this arm is what
+-- actually fires on `medaka check <file>`.  The single-file front door does not
+-- reach the `Flat` arm at all: `runCheck` → `checkOneToLinesWithRuntime` wraps the
+-- program as the ONE-module graph `[("__user__", userProg)]`, the same synthetic id
+-- ~10 drivers already use for "the single program under check".  Reading the flat
+-- Bool here is exact rather than approximate — that id means "the entry", and the
+-- Bool is the entry's ownership.  Dropping this clause silently reinstates the
+-- stamp on `medaka check stdlib/runtime.mdk` (measured: 132 rows gain `FFI`).
+ffiStampMode (Module "__user__" _ _) =
+  not driverState.value.flatEntryIsStdlibRef.value
+ffiStampMode (Module mid _ _) =
+  not (contains mid driverState.value.stdlibOwnedModsRef.value)
+
+-- Make an alias-NAMED arrow structurally visible, at the `Ty` (pre-`Mono`) level.
+--
+-- 🚨 `type CFn = Int -> <> Int; extern cCall : CFn` declares `cCall`'s `Ty` as a
+-- bare `TyCon "CFn"`, so `ffiStampTy`'s SYNTACTIC walk fell straight through its
+-- catch-all and the extern typed as a pure `Int -> Int` — no `FFI` anywhere, and
+-- any caller could reach the foreign call invisibly.  That is not the documented
+-- nullary residual below (there, no arrow exists at all); here the arrow exists
+-- and the walk just could not see through the name.
+--
+-- This is a straight `Ty`-level MIRROR of `fromAstTypeE`'s `TyCon` arm and
+-- `fromAstTypeApp` — same two `Some` branches, same `_ => unchanged` fallback —
+-- with one deliberate difference: NO arity diagnostic.  An unapplied parameterized
+-- alias or an arity mismatch falls through unchanged here, because the real
+-- `T-ALIAS-ARITY` error already fires once from the `fromAstTypeE` conversion that
+-- runs later on this same signature.  This helper's only job is to expose an arrow
+-- that is genuinely there; duplicating error reporting is not its business.
+--
+-- No cycle guard: `rejectCyclicAliases` has already removed every cyclic entry
+-- from `aliasTableRef` before `userExternSchemes` is ever reached, so the
+-- recursion terminates on the surviving table.
+expandAliasHeadTy : Ty -> Ty
+expandAliasHeadTy (t@(TyCon { tyConName = n, tyConOrigin = o })) = match lookupTab (tyTabKey o n) perRun.value.aliasTableRef.value
+  Some (params, rhs) if listLen params == 0 => expandAliasHeadTy rhs
+  _ => t
+expandAliasHeadTy (t@(TyApp _ _)) = match tyAppSpine t
+  (TyCon { tyConName = n, tyConOrigin = o }, args) => match lookupTab (tyTabKey o n) perRun.value.aliasTableRef.value
+    Some (params, rhs) if listLen params == listLen args =>
+      expandAliasHeadTy (substTyVars (zipL params args) rhs)
+    _ => t
+  _ => t
+expandAliasHeadTy t = t
+
+-- Add an `FFI` atom at the ⊤ param to a user extern's declared RESULT row.
+--
+-- ⚠️ Only a FUNCTION type is stamped.  A nullary `extern k : Int` is left alone
+-- because the effect system has nowhere to put the row: `extern q : <FFI> Int`
+-- already renders as a bare `Int` today (a value does not perform), so wrapping one
+-- would be a no-op dressed as a fix.  That is a REAL residual hole in the stamp —
+-- a nullary extern is still an unlabelled foreign value — and it is a property of
+-- where rows live in the type language, not something this rewrite can close.
+ffiStampTy : Ty -> Ty
+ffiStampTy (TyConstrained cs t) = TyConstrained cs (ffiStampTy t)
+ffiStampTy (TyFun a r) = TyFun a (ffiStampResultTy r)
+-- The catch-all is where an alias-named arrow lands.  Expand the head first: if
+-- an arrow was hiding behind the name, stamp it exactly as the clause above would
+-- have; otherwise keep the ORIGINAL `t`, not the expansion, so a non-arrow alias
+-- still elaborates through its own (already correct) `Mono`-level path.
+-- A CONSTRAINED alias RHS (`type CF a = Sh a => a -> <> a`) expands to a
+-- `TyConstrained`-wrapped arrow, which the `TyFun` arm alone cannot see; route it
+-- back through `ffiStampTy`, whose FIRST clause already unwraps `TyConstrained`
+-- and recurses.  That is exactly why the same signature written inline stamps
+-- correctly today.  This does NOT reopen the nullary residual above: a constrained
+-- NON-arrow alias recurses onto a bare `TyCon`, which finds no arrow behind its own
+-- expansion and falls through unstamped.
+ffiStampTy t = match expandAliasHeadTy t
+  TyFun a r => TyFun a (ffiStampResultTy r)
+  TyConstrained cs inner => TyConstrained cs (ffiStampTy inner)
+  _ => t
+
+-- The arrow's RESULT position: walk to the end of the arrow chain, then either
+-- widen the row that is written there or introduce one.  `Int -> Int -> <> Int`
+-- puts the row on the LAST result, so the recursion has to follow the spine.
+ffiStampResultTy : Ty -> Ty
+ffiStampResultTy (TyFun a r) = TyFun a (ffiStampResultTy r)
+ffiStampResultTy (TyEffect ls rv inner) = TyEffect (ffiAddAtom ls) rv inner
+ffiStampResultTy t = TyEffect [("FFI", None)] None t
+
+-- Idempotent by LABEL: a written `<FFI "libcurl*">` keeps its own param rather than
+-- being joined with a second ⊤ atom.  Position in the list is not observable: the
+-- renderer SORTS atoms, so `<Net "a.com/*">` prints as `<FFI, Net "a.com/*">`.
+ffiAddAtom : List (String, Option String) -> List (String, Option String)
+ffiAddAtom ls = if ffiHasAtom ls then ls else ls ++ [("FFI", None)]
+
+ffiHasAtom : List (String, Option String) -> Bool
+ffiHasAtom [] = False
+ffiHasAtom ((l, _)::rest) = l == "FFI" || ffiHasAtom rest
 
 -- The `DExtern` sublist, in order.  Its own clause rather than a `filter` with a
 -- lambda predicate: `Decl` has no cheap "is an extern" projection, so the pattern
@@ -28054,11 +28234,12 @@ externDecls (_::rest) = externDecls rest
 -- rather than folded into the clause above so that the recursion cannot re-enter
 -- the stamping walk on its own tail — the shape that turns a one-pass `map` into a
 -- quadratic, which is the defect class `compiler/AGENTS.md` opens with.
-externSchemesGo : List Decl -> List (String, Scheme)
-externSchemesGo [] = []
-externSchemesGo ((DExtern _ n ty)::rest) =
-  (n, sigToScheme ty) :: externSchemesGo rest
-externSchemesGo (_::rest) = externSchemesGo rest
+externSchemesGo : Bool -> List Decl -> List (String, Scheme)
+externSchemesGo _ [] = []
+externSchemesGo stamp ((DExtern _ n ty)::rest) =
+  (n, sigToScheme (if stamp then ffiStampTy ty else ty)) ::
+    externSchemesGo stamp rest
+externSchemesGo stamp (_::rest) = externSchemesGo stamp rest
 
 -- interface method schemes: each method's declared type, free tyvars (incl. the
 -- interface param) quantified — the bare scheme the === TYPES === output shows

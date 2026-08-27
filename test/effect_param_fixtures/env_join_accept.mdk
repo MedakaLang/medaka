@@ -6,7 +6,7 @@ effect Env Set
 
 extern getEnv : String -> <Env _> Option String
 
-both : Unit -> <Env {"A", "B"}> (Option String, Option String)
+both : Unit -> <Env {"A", "B"}, FFI> (Option String, Option String)
 both _ = (getEnv "A", getEnv "B")
 
 main : <IO> Unit
