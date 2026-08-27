@@ -1,5 +1,5 @@
 # META
-source_lines=34711
+source_lines=34825
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -1464,6 +1464,21 @@ checkUndeterminedRetEffVars (d::rest) =
 checkUndeterminedRetEffVarsDecl : Decl -> Unit
 checkUndeterminedRetEffVarsDecl (DInterface { name, typarams, methods, ... }) =
   checkIfaceMethodEffs name (declGradedScope typarams methods) methods
+-- #1103: the ARGUMENT-COVERAGE half of the rule is NOT method-only.  Its own
+-- comment (below) says post-unify inspection cannot catch these shapes because
+-- `unifyRowN`'s same-tail arm (`<e>` ~ `<Stdout | e>`) succeeds without
+-- recording the atom anywhere — and that arm is reached from an ORDINARY
+-- top-level arrow just as readily as from a method.  `launderArrow : (Unit ->
+-- <Stdout | e> Unit) -> (Unit -> <e> Unit)` was accepted, and applying it to an
+-- effectful callback produced a `Unit -> Unit` scheme that prints.  So the
+-- coverage check runs over plain `DTypeSig` signatures too, with an EMPTY graded
+-- scope (a non-interface signature has no graded typaram table — `scope` is the
+-- only channel by which an abstract head can be row-kinded, see `rowArgNamesIn`).
+-- ⚠️ Deliberately NOT widened alongside it: `undeterminedRetEffVars` (#784's
+-- RETURN-only rule) stays interface-scoped — a top-level return-only effect var
+-- is #797's separate territory, and the comment above says so.
+checkUndeterminedRetEffVarsDecl (DTypeSig _ n t) =
+  checkArgEffVarCoverage None [] n t
 checkUndeterminedRetEffVarsDecl (DAttrib _ d) =
   checkUndeterminedRetEffVarsDecl d
 checkUndeterminedRetEffVarsDecl _ = ()
@@ -1474,7 +1489,7 @@ checkIfaceMethodEffs iface scope ((IfaceMethod mname mty _)::rest) =
   let _ = match undeterminedRetEffVars scope mty
     [] => ()
     bad => pushTypeErrorOnceAt "T-EFFECT-UNDETERMINED" (firstTyLoc mty) (effectUndeterminedMsg iface mname bad)
-  let _ = checkArgEffVarCoverage iface scope mname mty
+  let _ = checkArgEffVarCoverage (Some iface) scope mname mty
   checkIfaceMethodEffs iface scope rest
 
 -- The DUAL of the #784 rule, closing the adversarial review's break 4 (and the
@@ -1495,25 +1510,62 @@ checkIfaceMethodEffs iface scope ((IfaceMethod mname mty _)::rest) =
 -- Post-unify inspection CANNOT catch these: the same-tail row-unification arm
 -- (`<e>` ~ `<Stdout | e>`) succeeds without recording the atom anywhere, so
 -- the declaration is the only seam with the information intact.
-checkArgEffVarCoverage : String -> List (String, List Kind) -> String -> Ty -> Unit
+-- [iface] is `Some` the enclosing interface for a method signature and `None`
+-- for an ordinary top-level `DTypeSig` (#1103); it selects the diagnostic's
+-- wording and nothing else — the RULE is identical either way.
+checkArgEffVarCoverage : Option String -> List (String, List Kind) -> String -> Ty -> Unit
 checkArgEffVarCoverage iface scope mname mty =
   checkArgEffVars
     iface
     mname
     mty
-    (methodEffArgOccs mty)
+    (methodEffArgOccs scope mty)
     (methodEffRetOccs scope mty)
-    (dedup (map fst (methodEffArgOccs mty)))
+    (dedup (map fst (methodEffArgOccs scope mty)))
 
-checkArgEffVars : String -> String -> Ty -> List (String, List Atom) -> List (String, List Atom) -> List String -> Unit
+-- 🚨 THE TWO ARMS HAVE DIFFERENT SCOPES, and [iface] is what selects between
+-- them.  Both arms apply to an interface method (`Some iface`); only the
+-- UNCOVERED-ATOMS arm applies to an ordinary top-level signature (`None`).
+--
+-- Why the ARGUMENT-ONLY arm is method-only.  Its hazard is "an impl uses the
+-- argument and performs <e> with no row charging it", and at an INTERFACE
+-- declaration the declaration really is the only seam — the impl arrives later,
+-- and #1100's `gtake : f e a -> a` launders for exactly that reason.  A
+-- DIRECT call to a top-level function does not get there: the CALL SITE rejects
+-- it.  MEASURED, both shapes, on this build — the reason is the call site, NOT
+-- the callee's body (a first pass at this comment claimed the body check caught
+-- it and that was falsified: `use : (Unit -> <e> Unit) -> Int` with a body that
+-- calls `f ()` checks CLEAN, reported as `use : (Unit -> Unit) -> Int`):
+--   * callback arg — `use : (Unit -> <e> Unit) -> Int`, body `let _ = f ()`,
+--     applied to an effectful `shout`: "Effectful value used where <> is
+--     allowed, but it performs <Stdout>", at `use shout`;
+--   * row-kinded ctor arg — `force : Box e a -> a` forcing its `Susp` thunk,
+--     applied to `Susp loud`: the same diagnostic, at `force (Susp loud)`.
+-- Applying the arm to top-level signatures anyway buys no soundness and rejects
+-- every honest INSPECTOR of a row-kinded value — also measured: 34 declarations
+-- in this compiler's own sources (`unInt : Value e -> Int`, `isPartial : Value e
+-- -> Bool`, … which pattern-match a `Value e` and never invoke the closure
+-- inside it) plus `stdlib/async.mdk`'s `isDone`/`forceVal`.  Nothing at a
+-- declaration tells an inspector from a forcer; for a method that uncertainty IS
+-- the hazard, for a directly-called function the call site settles it.
+--
+-- Why the UNCOVERED-ATOMS arm is NOT method-only (#1103).  Its hazard survives
+-- the body check: `launderArrow : (Unit -> <Stdout | e> Unit) -> (Unit -> <e>
+-- Unit)` with body `launderArrow f = f` type-checks, because `unifyRowN`'s
+-- same-tail arm accepts `<Stdout | e>` against `<e>` without recording <Stdout>
+-- anywhere (see this function's header comment).  Effect inference therefore
+-- CANNOT catch it, and the declaration is the only seam here too.
+checkArgEffVars : Option String -> String -> Ty -> List (String, List Atom) -> List (String, List Atom) -> List String -> Unit
 checkArgEffVars _ _ _ _ _ [] = ()
 checkArgEffVars iface mname mty argOccs retOccs (v::rest) =
   let vrets = filterList (o => fst o == v) retOccs
   let vatoms = flatMap snd (filterList (o => fst o == v) argOccs)
-  let _ = if isEmptyL vrets then pushTypeErrorOnceAt "T-EFFECT-ARG-UNCOVERED" (firstTyLoc mty) (argOnlyEffVarMsg iface mname v)
+  let _ = if isEmptyL vrets then match iface
+    Some i => pushTypeErrorOnceAt "T-EFFECT-ARG-UNCOVERED" (firstTyLoc mty) (argOnlyEffVarMsg i mname v)
+    None => ()
   else match retOccsEscape vatoms vrets
     [] => ()
-    esc => pushTypeErrorOnceAt "T-EFFECT-ARG-UNCOVERED" (firstTyLoc mty) (argAtomsUncoveredMsg iface mname v esc)
+    esc => pushTypeErrorOnceAt "T-EFFECT-ARG-UNCOVERED" (firstTyLoc mty) (argAtomsMsgFor iface mname v esc)
   checkArgEffVars iface mname mty argOccs retOccs rest
 
 -- first non-empty escape of the argument-side atoms against a non-argument
@@ -1535,40 +1587,55 @@ retOccsEscape vatoms ((_, declAtoms)::rest) =
 -- excluded: the impl cannot perform e there, and a malicious effectful supply
 -- pours its atoms into e's own cell where the post-unify atom check reads
 -- them.
-methodEffArgOccs : Ty -> List (String, List Atom)
-methodEffArgOccs (TyConstrained _ t) = methodEffArgOccs t
-methodEffArgOccs (TyEffect _ _ t) = methodEffArgOccs t
-methodEffArgOccs (TyFun a b) = argPerformableOccs True a ++ methodEffArgOccs b
-methodEffArgOccs _ = []
+-- [scope] mirrors `methodEffRetOccs`' parameter of the same name exactly: the
+-- graded typaram map of the interface whose method signature this type IS
+-- (`declGradedScope`), and `[]` for every non-method signature.  Before #1100 the
+-- ARGUMENT half took no scope at all, so an abstract head (`gtake : f e a -> a`)
+-- resolved no row-kinded slot and raised no obligation, while the RETURN half —
+-- which has had the scope channel since #822 — did.
+methodEffArgOccs : List (String, List Kind) -> Ty -> List (String, List Atom)
+methodEffArgOccs scope (TyConstrained _ t) = methodEffArgOccs scope t
+methodEffArgOccs scope (TyEffect _ _ t) = methodEffArgOccs scope t
+methodEffArgOccs scope (TyFun a b) = argPerformableOccs scope True a
+  ++ methodEffArgOccs scope b
+methodEffArgOccs _ _ = []
 
 -- rows in an argument subtree, collected only where [perf] (the impl can call
 -- or run the value at this position); each arrow-LHS descent flips it.
-argPerformableOccs : Bool -> Ty -> List (String, List Atom)
-argPerformableOccs perf (TyEffect labels (Some n) t) = (if perf then [(n, atomsOfWritten labels)] else [])
-  ++ argPerformableOccs perf t
-argPerformableOccs perf (TyEffect _ None t) = argPerformableOccs perf t
+argPerformableOccs : List (String, List Kind) -> Bool -> Ty -> List (String, List Atom)
+argPerformableOccs scope perf (TyEffect labels (Some n) t) = (if perf then [(n, atomsOfWritten labels)] else [])
+  ++ argPerformableOccs scope perf t
+argPerformableOccs scope perf (TyEffect _ None t) =
+  argPerformableOccs scope perf t
 -- A bare row atom (#997) carries its own tail var + labels directly (no
 -- wrapped type to recurse into) — same treatment as the `TyEffect` arms
 -- above.  Without this, a KRow ctor-arg written as `Box <Stdout | e> Int`
 -- (as opposed to a bare `Box e Int`) was invisible to this collector, which
 -- made the impl-body T-EFFECT-LAUNDER check over-fire on it (see
 -- `effVarOccAtoms` below, which shares this gap).
-argPerformableOccs perf (TyRow labels (Some n) _) =
+argPerformableOccs _ perf (TyRow labels (Some n) _) =
   if perf then
     [(n, atomsOfWritten labels)]
   else
     []
-argPerformableOccs perf (TyRow _ None _) = []
-argPerformableOccs perf (TyFun a b) = argPerformableOccs (not perf) a
-  ++ argPerformableOccs perf b
-argPerformableOccs perf (TyTuple ts) = flatMap (argPerformableOccs perf) ts
-argPerformableOccs perf (TyApp a b) = match tyAppSpine (TyApp a b)
+argPerformableOccs _ _ (TyRow _ None _) = []
+argPerformableOccs scope perf (TyFun a b) = argPerformableOccs scope (not perf) a
+  ++ argPerformableOccs scope perf b
+argPerformableOccs scope perf (TyTuple ts) =
+  flatMap (argPerformableOccs scope perf) ts
+argPerformableOccs scope perf (TyApp a b) = match tyAppSpine (TyApp a b)
   -- OCCURRENCE MINT (#1110/#1111 A-2.3): the head's acquired identity, read off
   -- the same record pattern as its name so the two cannot drift apart.
-  (TyCon { tyConName = n, tyConOrigin = o }, args) => krowSlotOccs perf o n args
-  _ => argPerformableOccs perf a ++ argPerformableOccs perf b
-argPerformableOccs perf (TyConstrained _ t) = argPerformableOccs perf t
-argPerformableOccs _ _ = []
+  (TyCon { tyConName = n, tyConOrigin = o }, args) => krowSlotOccs scope perf o n args
+  -- #1100, the abstract-head half — symmetric with `rowArgNamesVarApp` on the
+  -- RETURN side.  An interface typaram of graded kind, in scope, is row-kinded
+  -- in exactly the same way a registered ctor's KRow slot is; without this arm
+  -- `gtake : f e a -> a` collected NOTHING and the coverage rule never fired.
+  (TyVar h, args) => krowSlotVarOccs scope perf h args
+  _ => argPerformableOccs scope perf a ++ argPerformableOccs scope perf b
+argPerformableOccs scope perf (TyConstrained _ t) =
+  argPerformableOccs scope perf t
+argPerformableOccs _ _ _ = []
 
 -- ── #1111 A-2.3: the TYPE-namespace table key, and the MISS POLICY ────────
 -- The ONE place a key for `aliasTableRef` / `dataParamKindsRef` is minted, on
@@ -1753,23 +1820,70 @@ ifaceTabKey : TyConOrigin -> String -> TabKey
 ifaceTabKey o n = tabKeyOf NsIface o n
 
 -- one ctor node: its bare row-kinded slots (if performable) + recurse the args
-krowSlotOccs : Bool -> TyConOrigin -> String -> List Ty -> List (String, List Atom)
-krowSlotOccs perf o n args = match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
+krowSlotOccs : List (String, List Kind) -> Bool -> TyConOrigin -> String -> List Ty -> List (String, List Atom)
+krowSlotOccs scope perf o n args = match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
   Some kinds if listLen kinds == listLen args => (if perf then map (n2 => (n2, [])) (krowArgVarNames kinds args) else [])
-    ++ flatMap (argPerformableOccs perf) args
-  _ => flatMap (argPerformableOccs perf) args
+    ++ flatMap (argPerformableOccs scope perf) args
+  _ => flatMap (argPerformableOccs scope perf) args
+
+-- the ABSTRACT-HEAD sibling of `krowSlotOccs` (#1100): same shape, but the
+-- kinds come from the graded typaram [scope] instead of `dataParamKindsRef`.
+-- This is `rowArgNamesVarApp`'s counterpart on the argument side; a miss falls
+-- through to the args exactly as `krowSlotOccs`' miss does.
+krowSlotVarOccs : List (String, List Kind) -> Bool -> String -> List Ty -> List (String, List Atom)
+krowSlotVarOccs scope perf h args = match lookupAssoc h scope
+  Some kinds if listLen kinds == listLen args => (if perf then map (n2 => (n2, [])) (krowArgVarNames kinds args) else [])
+    ++ flatMap (argPerformableOccs scope perf) args
+  _ => flatMap (argPerformableOccs scope perf) args
 
 -- effect-var occurrences in NON-argument positions: each spine arrow's own row,
 -- plus every occurrence inside the final return type (nested rows and bare
 -- row-kinded ctor-arg slots).
+--
+-- 🚨 THE TWO TERMS OF THE LAST ARM CAN DESCRIBE THE SAME OCCURRENCE, and only
+-- one of them carries its atoms.  For a return `Box <Stdout | e> Unit`,
+-- `effVarOccAtoms` descends into the KRow slot's written row and reports
+-- `(e, [Stdout])`; `rowArgNamesIn` reports the NAME `e` only, which the `map`
+-- below pads to `(e, [])`.  `retOccsEscape` takes the FIRST NON-EMPTY escape
+-- over this list and does not dedupe, so the atom-less copy vetoes the faithful
+-- one and an HONESTLY CHARGED declaration is rejected:
+--   `widen : Box <Stdout | e> Unit -> Box <Stdout | e> Unit`
+-- covers <Stdout> on both sides and must be ACCEPTED — it is the named
+-- over-correction control in `test/typecheck_error_fixtures/
+-- effect_index_unrelated_ok.mdk` (its header, "rejecting those instead would be
+-- the obvious over-correction").  So a name `effVarOccAtoms` has already
+-- reported is DROPPED from the padded term rather than added beside it.
+-- ⚠️ This does NOT weaken any real rejection: the dropped entry is a strictly
+-- less informative record of an occurrence still in the list, never an
+-- occurrence the list would otherwise lose.  The rule stays "every non-argument
+-- occurrence of e covers the union of its argument-side atoms"; this only stops
+-- one occurrence from being counted twice, once with its labels erased.
+-- Latent since the padded term was introduced — it mis-rejected interface
+-- methods of this shape too, and #1103's widening to ordinary signatures is
+-- merely what made it reachable from `effect_index_unrelated_ok.mdk`.
 methodEffRetOccs : List (String, List Kind) -> Ty -> List (String, List Atom)
 methodEffRetOccs scope (TyConstrained _ t) = methodEffRetOccs scope t
 methodEffRetOccs scope (TyEffect labels (Some n) t) =
   (n, atomsOfWritten labels) :: methodEffRetOccs scope t
 methodEffRetOccs scope (TyEffect _ None t) = methodEffRetOccs scope t
 methodEffRetOccs scope (TyFun _ b) = methodEffRetOccs scope b
-methodEffRetOccs scope t = effVarOccAtoms t
-  ++ map (n => (n, [])) (rowArgNamesIn scope t)
+methodEffRetOccs scope t =
+  let occs = effVarOccAtoms t
+  occs
+    ++ map (n => (n, [])) (filterList (n => not (anyList (o => fst o == n) occs)) (rowArgNamesIn scope t))
+
+-- #1103: the UNCOVERED-ATOMS arm now covers ordinary top-level signatures as
+-- well as interface methods, and the two cases get DIFFERENT prose — a top-level
+-- function has no interface to name and no impl to blame.  The interface wording
+-- is byte-frozen (`test/typecheck_error_fixtures/iface_effvar_arg_*.tc.golden`
+-- pin it).  There is no `None` counterpart for `argOnlyEffVarMsg`: the
+-- argument-only arm is method-only, see `checkArgEffVars`.
+argAtomsMsgFor : Option String -> String -> String -> List Atom -> String
+argAtomsMsgFor (Some iface) mname v esc = argAtomsUncoveredMsg iface mname v esc
+argAtomsMsgFor None fname v esc = argAtomsUncoveredFnMsg fname v esc
+
+argAtomsUncoveredFnMsg : String -> String -> List Atom -> String
+argAtomsUncoveredFnMsg fname v esc = "Effect variable <\{v}> in function '\{fname}' carries <\{renderAtoms esc}> at an argument position, but a row carrying <\{v}> does not include it: a body that uses that argument performs <\{renderAtoms esc}> on a row a caller can instantiate to <>, laundering it. Declare <\{renderAtoms esc}> (or `<IO | \{v}>`) at every row where <\{v}> appears, or remove the concrete label from the argument's row."
 
 argOnlyEffVarMsg : String -> String -> String -> String
 argOnlyEffVarMsg iface mname v = "Argument-only effect variable <\{v}> in method '\{mname}' of interface '\{iface}': <\{v}> rides an argument (a callback or row-kinded value) but appears in none of the method's own effect rows, so an impl that uses that argument performs <\{v}> with no row charging it — a caller can pass an effectful callback to a method typed pure and it silently runs. Thread <\{v}> through the method's row (e.g. `-> <\{v}> …`), or drop it from the argument."
@@ -35045,46 +35159,54 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkUndeterminedRetEffVars" ((PCons (PVar "d") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "checkUndeterminedRetEffVarsDecl") (EVar "d"))) (DoExpr (EApp (EVar "checkUndeterminedRetEffVars") (EVar "rest")))))
 (DTypeSig false "checkUndeterminedRetEffVarsDecl" (TyFun (TyCon "Decl") (TyCon "Unit")))
 (DFunDef false "checkUndeterminedRetEffVarsDecl" ((PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "methods" None)) true)) (EApp (EApp (EApp (EVar "checkIfaceMethodEffs") (EVar "name")) (EApp (EApp (EVar "declGradedScope") (EVar "typarams")) (EVar "methods"))) (EVar "methods")))
+(DFunDef false "checkUndeterminedRetEffVarsDecl" ((PCon "DTypeSig" PWild (PVar "n") (PVar "t"))) (EApp (EApp (EApp (EApp (EVar "checkArgEffVarCoverage") (EVar "None")) (EListLit)) (EVar "n")) (EVar "t")))
 (DFunDef false "checkUndeterminedRetEffVarsDecl" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "checkUndeterminedRetEffVarsDecl") (EVar "d")))
 (DFunDef false "checkUndeterminedRetEffVarsDecl" (PWild) (ELit LUnit))
 (DTypeSig false "checkIfaceMethodEffs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Unit")))))
 (DFunDef false "checkIfaceMethodEffs" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "checkIfaceMethodEffs" ((PVar "iface") (PVar "scope") (PCons (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild) (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "undeterminedRetEffVars") (EVar "scope")) (EVar "mty")) (arm (PList) () (ELit LUnit)) (arm (PVar "bad") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-UNDETERMINED"))) (EApp (EVar "firstTyLoc") (EVar "mty"))) (EApp (EApp (EApp (EVar "effectUndeterminedMsg") (EVar "iface")) (EVar "mname")) (EVar "bad")))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "checkArgEffVarCoverage") (EVar "iface")) (EVar "scope")) (EVar "mname")) (EVar "mty"))) (DoExpr (EApp (EApp (EApp (EVar "checkIfaceMethodEffs") (EVar "iface")) (EVar "scope")) (EVar "rest")))))
-(DTypeSig false "checkArgEffVarCoverage" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyCon "Unit"))))))
-(DFunDef false "checkArgEffVarCoverage" ((PVar "iface") (PVar "scope") (PVar "mname") (PVar "mty")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkArgEffVars") (EVar "iface")) (EVar "mname")) (EVar "mty")) (EApp (EVar "methodEffArgOccs") (EVar "mty"))) (EApp (EApp (EVar "methodEffRetOccs") (EVar "scope")) (EVar "mty"))) (EApp (EVar "dedup") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "methodEffArgOccs") (EVar "mty"))))))
-(DTypeSig false "checkArgEffVars" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit"))))))))
+(DFunDef false "checkIfaceMethodEffs" ((PVar "iface") (PVar "scope") (PCons (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild) (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "undeterminedRetEffVars") (EVar "scope")) (EVar "mty")) (arm (PList) () (ELit LUnit)) (arm (PVar "bad") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-UNDETERMINED"))) (EApp (EVar "firstTyLoc") (EVar "mty"))) (EApp (EApp (EApp (EVar "effectUndeterminedMsg") (EVar "iface")) (EVar "mname")) (EVar "bad")))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "checkArgEffVarCoverage") (EApp (EVar "Some") (EVar "iface"))) (EVar "scope")) (EVar "mname")) (EVar "mty"))) (DoExpr (EApp (EApp (EApp (EVar "checkIfaceMethodEffs") (EVar "iface")) (EVar "scope")) (EVar "rest")))))
+(DTypeSig false "checkArgEffVarCoverage" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyCon "Unit"))))))
+(DFunDef false "checkArgEffVarCoverage" ((PVar "iface") (PVar "scope") (PVar "mname") (PVar "mty")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkArgEffVars") (EVar "iface")) (EVar "mname")) (EVar "mty")) (EApp (EApp (EVar "methodEffArgOccs") (EVar "scope")) (EVar "mty"))) (EApp (EApp (EVar "methodEffRetOccs") (EVar "scope")) (EVar "mty"))) (EApp (EVar "dedup") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "methodEffArgOccs") (EVar "scope")) (EVar "mty"))))))
+(DTypeSig false "checkArgEffVars" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit"))))))))
 (DFunDef false "checkArgEffVars" (PWild PWild PWild PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "checkArgEffVars" ((PVar "iface") (PVar "mname") (PVar "mty") (PVar "argOccs") (PVar "retOccs") (PCons (PVar "v") (PVar "rest"))) (EBlock (DoLet false false (PVar "vrets") (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EBinOp "==" (EApp (EVar "fst") (EVar "o")) (EVar "v")))) (EVar "retOccs"))) (DoLet false false (PVar "vatoms") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EBinOp "==" (EApp (EVar "fst") (EVar "o")) (EVar "v")))) (EVar "argOccs")))) (DoLet false false PWild (EIf (EApp (EVar "isEmptyL") (EVar "vrets")) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-ARG-UNCOVERED"))) (EApp (EVar "firstTyLoc") (EVar "mty"))) (EApp (EApp (EApp (EVar "argOnlyEffVarMsg") (EVar "iface")) (EVar "mname")) (EVar "v"))) (EMatch (EApp (EApp (EVar "retOccsEscape") (EVar "vatoms")) (EVar "vrets")) (arm (PList) () (ELit LUnit)) (arm (PVar "esc") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-ARG-UNCOVERED"))) (EApp (EVar "firstTyLoc") (EVar "mty"))) (EApp (EApp (EApp (EApp (EVar "argAtomsUncoveredMsg") (EVar "iface")) (EVar "mname")) (EVar "v")) (EVar "esc"))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkArgEffVars") (EVar "iface")) (EVar "mname")) (EVar "mty")) (EVar "argOccs")) (EVar "retOccs")) (EVar "rest")))))
+(DFunDef false "checkArgEffVars" ((PVar "iface") (PVar "mname") (PVar "mty") (PVar "argOccs") (PVar "retOccs") (PCons (PVar "v") (PVar "rest"))) (EBlock (DoLet false false (PVar "vrets") (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EBinOp "==" (EApp (EVar "fst") (EVar "o")) (EVar "v")))) (EVar "retOccs"))) (DoLet false false (PVar "vatoms") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EBinOp "==" (EApp (EVar "fst") (EVar "o")) (EVar "v")))) (EVar "argOccs")))) (DoLet false false PWild (EIf (EApp (EVar "isEmptyL") (EVar "vrets")) (EMatch (EVar "iface") (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-ARG-UNCOVERED"))) (EApp (EVar "firstTyLoc") (EVar "mty"))) (EApp (EApp (EApp (EVar "argOnlyEffVarMsg") (EVar "i")) (EVar "mname")) (EVar "v")))) (arm (PCon "None") () (ELit LUnit))) (EMatch (EApp (EApp (EVar "retOccsEscape") (EVar "vatoms")) (EVar "vrets")) (arm (PList) () (ELit LUnit)) (arm (PVar "esc") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-ARG-UNCOVERED"))) (EApp (EVar "firstTyLoc") (EVar "mty"))) (EApp (EApp (EApp (EApp (EVar "argAtomsMsgFor") (EVar "iface")) (EVar "mname")) (EVar "v")) (EVar "esc"))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkArgEffVars") (EVar "iface")) (EVar "mname")) (EVar "mty")) (EVar "argOccs")) (EVar "retOccs")) (EVar "rest")))))
 (DTypeSig false "retOccsEscape" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "retOccsEscape" (PWild (PList)) (EListLit))
 (DFunDef false "retOccsEscape" ((PVar "vatoms") (PCons (PTuple PWild (PVar "declAtoms")) (PVar "rest"))) (EIf (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "atomsEscape") (EVar "vatoms")) (EVar "declAtoms"))) (EApp (EApp (EVar "atomsEscape") (EVar "vatoms")) (EVar "declAtoms")) (EApp (EApp (EVar "retOccsEscape") (EVar "vatoms")) (EVar "rest"))))
-(DTypeSig false "methodEffArgOccs" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))
-(DFunDef false "methodEffArgOccs" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "methodEffArgOccs") (EVar "t")))
-(DFunDef false "methodEffArgOccs" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "methodEffArgOccs") (EVar "t")))
-(DFunDef false "methodEffArgOccs" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "argPerformableOccs") (EVar "True")) (EVar "a")) (EApp (EVar "methodEffArgOccs") (EVar "b"))))
-(DFunDef false "methodEffArgOccs" (PWild) (EListLit))
-(DTypeSig false "argPerformableOccs" (TyFun (TyCon "Bool") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
-(DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyEffect" (PVar "labels") (PCon "Some" (PVar "n")) (PVar "t"))) (EBinOp "++" (EIf (EVar "perf") (EListLit (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels")))) (EListLit)) (EApp (EApp (EVar "argPerformableOccs") (EVar "perf")) (EVar "t"))))
-(DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyEffect" PWild (PCon "None") (PVar "t"))) (EApp (EApp (EVar "argPerformableOccs") (EVar "perf")) (EVar "t")))
-(DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyRow" (PVar "labels") (PCon "Some" (PVar "n")) PWild)) (EIf (EVar "perf") (EListLit (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels")))) (EListLit)))
-(DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyRow" PWild (PCon "None") PWild)) (EListLit))
-(DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "argPerformableOccs") (EApp (EVar "not") (EVar "perf"))) (EVar "a")) (EApp (EApp (EVar "argPerformableOccs") (EVar "perf")) (EVar "b"))))
-(DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "argPerformableOccs") (EVar "perf"))) (EVar "ts")))
-(DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyApp" (PVar "a") (PVar "b"))) (EMatch (EApp (EVar "tyAppSpine") (EApp (EApp (EVar "TyApp") (EVar "a")) (EVar "b"))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EApp (EApp (EApp (EApp (EVar "krowSlotOccs") (EVar "perf")) (EVar "o")) (EVar "n")) (EVar "args"))) (arm PWild () (EBinOp "++" (EApp (EApp (EVar "argPerformableOccs") (EVar "perf")) (EVar "a")) (EApp (EApp (EVar "argPerformableOccs") (EVar "perf")) (EVar "b"))))))
-(DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "argPerformableOccs") (EVar "perf")) (EVar "t")))
-(DFunDef false "argPerformableOccs" (PWild PWild) (EListLit))
+(DTypeSig false "methodEffArgOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
+(DFunDef false "methodEffArgOccs" ((PVar "scope") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "methodEffArgOccs") (EVar "scope")) (EVar "t")))
+(DFunDef false "methodEffArgOccs" ((PVar "scope") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EVar "methodEffArgOccs") (EVar "scope")) (EVar "t")))
+(DFunDef false "methodEffArgOccs" ((PVar "scope") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "True")) (EVar "a")) (EApp (EApp (EVar "methodEffArgOccs") (EVar "scope")) (EVar "b"))))
+(DFunDef false "methodEffArgOccs" (PWild PWild) (EListLit))
+(DTypeSig false "argPerformableOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Bool") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))))
+(DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyEffect" (PVar "labels") (PCon "Some" (PVar "n")) (PVar "t"))) (EBinOp "++" (EIf (EVar "perf") (EListLit (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels")))) (EListLit)) (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "t"))))
+(DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyEffect" PWild (PCon "None") (PVar "t"))) (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "t")))
+(DFunDef false "argPerformableOccs" (PWild (PVar "perf") (PCon "TyRow" (PVar "labels") (PCon "Some" (PVar "n")) PWild)) (EIf (EVar "perf") (EListLit (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels")))) (EListLit)))
+(DFunDef false "argPerformableOccs" (PWild PWild (PCon "TyRow" PWild (PCon "None") PWild)) (EListLit))
+(DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EApp (EVar "not") (EVar "perf"))) (EVar "a")) (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "b"))))
+(DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf"))) (EVar "ts")))
+(DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyApp" (PVar "a") (PVar "b"))) (EMatch (EApp (EVar "tyAppSpine") (EApp (EApp (EVar "TyApp") (EVar "a")) (EVar "b"))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EApp (EApp (EApp (EApp (EApp (EVar "krowSlotOccs") (EVar "scope")) (EVar "perf")) (EVar "o")) (EVar "n")) (EVar "args"))) (arm (PTuple (PCon "TyVar" (PVar "h")) (PVar "args")) () (EApp (EApp (EApp (EApp (EVar "krowSlotVarOccs") (EVar "scope")) (EVar "perf")) (EVar "h")) (EVar "args"))) (arm PWild () (EBinOp "++" (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "a")) (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "b"))))))
+(DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "t")))
+(DFunDef false "argPerformableOccs" (PWild PWild PWild) (EListLit))
 (DTypeSig false "tyTabKey" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "TabKey"))))
 (DFunDef false "tyTabKey" ((PVar "o") (PVar "n")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "o")) (EVar "n")))
 (DTypeSig false "ifaceTabKey" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "TabKey"))))
 (DFunDef false "ifaceTabKey" ((PVar "o") (PVar "n")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsIface")) (EVar "o")) (EVar "n")))
-(DTypeSig false "krowSlotOccs" (TyFun (TyCon "Bool") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))))
-(DFunDef false "krowSlotOccs" ((PVar "perf") (PVar "o") (PVar "n") (PVar "args")) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef") "value")) (arm (PCon "Some" (PVar "kinds")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "kinds")) (EApp (EVar "listLen") (EVar "args"))))) (EBinOp "++" (EIf (EVar "perf") (EApp (EApp (EVar "map") (ELam ((PVar "n2")) (ETuple (EVar "n2") (EListLit)))) (EApp (EApp (EVar "krowArgVarNames") (EVar "kinds")) (EVar "args"))) (EListLit)) (EApp (EApp (EVar "flatMap") (EApp (EVar "argPerformableOccs") (EVar "perf"))) (EVar "args")))) (arm PWild () (EApp (EApp (EVar "flatMap") (EApp (EVar "argPerformableOccs") (EVar "perf"))) (EVar "args")))))
+(DTypeSig false "krowSlotOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Bool") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))))))
+(DFunDef false "krowSlotOccs" ((PVar "scope") (PVar "perf") (PVar "o") (PVar "n") (PVar "args")) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef") "value")) (arm (PCon "Some" (PVar "kinds")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "kinds")) (EApp (EVar "listLen") (EVar "args"))))) (EBinOp "++" (EIf (EVar "perf") (EApp (EApp (EVar "map") (ELam ((PVar "n2")) (ETuple (EVar "n2") (EListLit)))) (EApp (EApp (EVar "krowArgVarNames") (EVar "kinds")) (EVar "args"))) (EListLit)) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf"))) (EVar "args")))) (arm PWild () (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf"))) (EVar "args")))))
+(DTypeSig false "krowSlotVarOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))))
+(DFunDef false "krowSlotVarOccs" ((PVar "scope") (PVar "perf") (PVar "h") (PVar "args")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "h")) (EVar "scope")) (arm (PCon "Some" (PVar "kinds")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "kinds")) (EApp (EVar "listLen") (EVar "args"))))) (EBinOp "++" (EIf (EVar "perf") (EApp (EApp (EVar "map") (ELam ((PVar "n2")) (ETuple (EVar "n2") (EListLit)))) (EApp (EApp (EVar "krowArgVarNames") (EVar "kinds")) (EVar "args"))) (EListLit)) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf"))) (EVar "args")))) (arm PWild () (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf"))) (EVar "args")))))
 (DTypeSig false "methodEffRetOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
 (DFunDef false "methodEffRetOccs" ((PVar "scope") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "methodEffRetOccs") (EVar "scope")) (EVar "t")))
 (DFunDef false "methodEffRetOccs" ((PVar "scope") (PCon "TyEffect" (PVar "labels") (PCon "Some" (PVar "n")) (PVar "t"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels"))) (EApp (EApp (EVar "methodEffRetOccs") (EVar "scope")) (EVar "t"))))
 (DFunDef false "methodEffRetOccs" ((PVar "scope") (PCon "TyEffect" PWild (PCon "None") (PVar "t"))) (EApp (EApp (EVar "methodEffRetOccs") (EVar "scope")) (EVar "t")))
 (DFunDef false "methodEffRetOccs" ((PVar "scope") (PCon "TyFun" PWild (PVar "b"))) (EApp (EApp (EVar "methodEffRetOccs") (EVar "scope")) (EVar "b")))
-(DFunDef false "methodEffRetOccs" ((PVar "scope") (PVar "t")) (EBinOp "++" (EApp (EVar "effVarOccAtoms") (EVar "t")) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EListLit)))) (EApp (EApp (EVar "rowArgNamesIn") (EVar "scope")) (EVar "t")))))
+(DFunDef false "methodEffRetOccs" ((PVar "scope") (PVar "t")) (EBlock (DoLet false false (PVar "occs") (EApp (EVar "effVarOccAtoms") (EVar "t"))) (DoExpr (EBinOp "++" (EVar "occs") (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EListLit)))) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (ELam ((PVar "o")) (EBinOp "==" (EApp (EVar "fst") (EVar "o")) (EVar "n")))) (EVar "occs"))))) (EApp (EApp (EVar "rowArgNamesIn") (EVar "scope")) (EVar "t"))))))))
+(DTypeSig false "argAtomsMsgFor" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))))
+(DFunDef false "argAtomsMsgFor" ((PCon "Some" (PVar "iface")) (PVar "mname") (PVar "v") (PVar "esc")) (EApp (EApp (EApp (EApp (EVar "argAtomsUncoveredMsg") (EVar "iface")) (EVar "mname")) (EVar "v")) (EVar "esc")))
+(DFunDef false "argAtomsMsgFor" ((PCon "None") (PVar "fname") (PVar "v") (PVar "esc")) (EApp (EApp (EApp (EVar "argAtomsUncoveredFnMsg") (EVar "fname")) (EVar "v")) (EVar "esc")))
+(DTypeSig false "argAtomsUncoveredFnMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))))
+(DFunDef false "argAtomsUncoveredFnMsg" ((PVar "fname") (PVar "v") (PVar "esc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Effect variable <")) (EApp (EVar "display") (EVar "v"))) (ELit (LString "> in function '"))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' carries <"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "esc")))) (ELit (LString "> at an argument position, but a row carrying <"))) (EApp (EVar "display") (EVar "v"))) (ELit (LString "> does not include it: a body that uses that argument performs <"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "esc")))) (ELit (LString "> on a row a caller can instantiate to <>, laundering it. Declare <"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "esc")))) (ELit (LString "> (or `<IO | "))) (EApp (EVar "display") (EVar "v"))) (ELit (LString ">`) at every row where <"))) (EApp (EVar "display") (EVar "v"))) (ELit (LString "> appears, or remove the concrete label from the argument's row."))))
 (DTypeSig false "argOnlyEffVarMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "argOnlyEffVarMsg" ((PVar "iface") (PVar "mname") (PVar "v")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Argument-only effect variable <")) (EApp (EVar "display") (EVar "v"))) (ELit (LString "> in method '"))) (EApp (EVar "display") (EVar "mname"))) (ELit (LString "' of interface '"))) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "': <"))) (EApp (EVar "display") (EVar "v"))) (ELit (LString "> rides an argument (a callback or row-kinded value) but appears in none of the method's own effect rows, so an impl that uses that argument performs <"))) (EApp (EVar "display") (EVar "v"))) (ELit (LString "> with no row charging it — a caller can pass an effectful callback to a method typed pure and it silently runs. Thread <"))) (EApp (EVar "display") (EVar "v"))) (ELit (LString "> through the method's row (e.g. `-> <"))) (EApp (EVar "display") (EVar "v"))) (ELit (LString "> …`), or drop it from the argument."))))
 (DTypeSig false "argAtomsUncoveredMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))))
@@ -40577,46 +40699,54 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkUndeterminedRetEffVars" ((PCons (PVar "d") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "checkUndeterminedRetEffVarsDecl") (EVar "d"))) (DoExpr (EApp (EVar "checkUndeterminedRetEffVars") (EVar "rest")))))
 (DTypeSig false "checkUndeterminedRetEffVarsDecl" (TyFun (TyCon "Decl") (TyCon "Unit")))
 (DFunDef false "checkUndeterminedRetEffVarsDecl" ((PRec "DInterface" ((rf "name" None) (rf "typarams" None) (rf "methods" None)) true)) (EApp (EApp (EApp (EVar "checkIfaceMethodEffs") (EVar "name")) (EApp (EApp (EVar "declGradedScope") (EVar "typarams")) (EVar "methods"))) (EVar "methods")))
+(DFunDef false "checkUndeterminedRetEffVarsDecl" ((PCon "DTypeSig" PWild (PVar "n") (PVar "t"))) (EApp (EApp (EApp (EApp (EVar "checkArgEffVarCoverage") (EVar "None")) (EListLit)) (EVar "n")) (EVar "t")))
 (DFunDef false "checkUndeterminedRetEffVarsDecl" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "checkUndeterminedRetEffVarsDecl") (EVar "d")))
 (DFunDef false "checkUndeterminedRetEffVarsDecl" (PWild) (ELit LUnit))
 (DTypeSig false "checkIfaceMethodEffs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Unit")))))
 (DFunDef false "checkIfaceMethodEffs" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "checkIfaceMethodEffs" ((PVar "iface") (PVar "scope") (PCons (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild) (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "undeterminedRetEffVars") (EVar "scope")) (EVar "mty")) (arm (PList) () (ELit LUnit)) (arm (PVar "bad") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-UNDETERMINED"))) (EApp (EVar "firstTyLoc") (EVar "mty"))) (EApp (EApp (EApp (EVar "effectUndeterminedMsg") (EVar "iface")) (EVar "mname")) (EVar "bad")))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "checkArgEffVarCoverage") (EVar "iface")) (EVar "scope")) (EVar "mname")) (EVar "mty"))) (DoExpr (EApp (EApp (EApp (EVar "checkIfaceMethodEffs") (EVar "iface")) (EVar "scope")) (EVar "rest")))))
-(DTypeSig false "checkArgEffVarCoverage" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyCon "Unit"))))))
-(DFunDef false "checkArgEffVarCoverage" ((PVar "iface") (PVar "scope") (PVar "mname") (PVar "mty")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkArgEffVars") (EVar "iface")) (EVar "mname")) (EVar "mty")) (EApp (EVar "methodEffArgOccs") (EVar "mty"))) (EApp (EApp (EVar "methodEffRetOccs") (EVar "scope")) (EVar "mty"))) (EApp (EVar "dedup") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "methodEffArgOccs") (EVar "mty"))))))
-(DTypeSig false "checkArgEffVars" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit"))))))))
+(DFunDef false "checkIfaceMethodEffs" ((PVar "iface") (PVar "scope") (PCons (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild) (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "undeterminedRetEffVars") (EVar "scope")) (EVar "mty")) (arm (PList) () (ELit LUnit)) (arm (PVar "bad") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-UNDETERMINED"))) (EApp (EVar "firstTyLoc") (EVar "mty"))) (EApp (EApp (EApp (EVar "effectUndeterminedMsg") (EVar "iface")) (EVar "mname")) (EVar "bad")))))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "checkArgEffVarCoverage") (EApp (EVar "Some") (EVar "iface"))) (EVar "scope")) (EVar "mname")) (EVar "mty"))) (DoExpr (EApp (EApp (EApp (EVar "checkIfaceMethodEffs") (EVar "iface")) (EVar "scope")) (EVar "rest")))))
+(DTypeSig false "checkArgEffVarCoverage" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyCon "Unit"))))))
+(DFunDef false "checkArgEffVarCoverage" ((PVar "iface") (PVar "scope") (PVar "mname") (PVar "mty")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkArgEffVars") (EVar "iface")) (EVar "mname")) (EVar "mty")) (EApp (EApp (EVar "methodEffArgOccs") (EVar "scope")) (EVar "mty"))) (EApp (EApp (EVar "methodEffRetOccs") (EVar "scope")) (EVar "mty"))) (EApp (EVar "dedup") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "methodEffArgOccs") (EVar "scope")) (EVar "mty"))))))
+(DTypeSig false "checkArgEffVars" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit"))))))))
 (DFunDef false "checkArgEffVars" (PWild PWild PWild PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "checkArgEffVars" ((PVar "iface") (PVar "mname") (PVar "mty") (PVar "argOccs") (PVar "retOccs") (PCons (PVar "v") (PVar "rest"))) (EBlock (DoLet false false (PVar "vrets") (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EBinOp "==" (EApp (EVar "fst") (EVar "o")) (EVar "v")))) (EVar "retOccs"))) (DoLet false false (PVar "vatoms") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EBinOp "==" (EApp (EVar "fst") (EVar "o")) (EVar "v")))) (EVar "argOccs")))) (DoLet false false PWild (EIf (EApp (EVar "isEmptyL") (EVar "vrets")) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-ARG-UNCOVERED"))) (EApp (EVar "firstTyLoc") (EVar "mty"))) (EApp (EApp (EApp (EVar "argOnlyEffVarMsg") (EVar "iface")) (EVar "mname")) (EVar "v"))) (EMatch (EApp (EApp (EVar "retOccsEscape") (EVar "vatoms")) (EVar "vrets")) (arm (PList) () (ELit LUnit)) (arm (PVar "esc") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-ARG-UNCOVERED"))) (EApp (EVar "firstTyLoc") (EVar "mty"))) (EApp (EApp (EApp (EApp (EVar "argAtomsUncoveredMsg") (EVar "iface")) (EVar "mname")) (EVar "v")) (EVar "esc"))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkArgEffVars") (EVar "iface")) (EVar "mname")) (EVar "mty")) (EVar "argOccs")) (EVar "retOccs")) (EVar "rest")))))
+(DFunDef false "checkArgEffVars" ((PVar "iface") (PVar "mname") (PVar "mty") (PVar "argOccs") (PVar "retOccs") (PCons (PVar "v") (PVar "rest"))) (EBlock (DoLet false false (PVar "vrets") (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EBinOp "==" (EApp (EVar "fst") (EVar "o")) (EVar "v")))) (EVar "retOccs"))) (DoLet false false (PVar "vatoms") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EBinOp "==" (EApp (EVar "fst") (EVar "o")) (EVar "v")))) (EVar "argOccs")))) (DoLet false false PWild (EIf (EApp (EVar "isEmptyL") (EVar "vrets")) (EMatch (EVar "iface") (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-ARG-UNCOVERED"))) (EApp (EVar "firstTyLoc") (EVar "mty"))) (EApp (EApp (EApp (EVar "argOnlyEffVarMsg") (EVar "i")) (EVar "mname")) (EVar "v")))) (arm (PCon "None") () (ELit LUnit))) (EMatch (EApp (EApp (EVar "retOccsEscape") (EVar "vatoms")) (EVar "vrets")) (arm (PList) () (ELit LUnit)) (arm (PVar "esc") () (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-EFFECT-ARG-UNCOVERED"))) (EApp (EVar "firstTyLoc") (EVar "mty"))) (EApp (EApp (EApp (EApp (EVar "argAtomsMsgFor") (EVar "iface")) (EVar "mname")) (EVar "v")) (EVar "esc"))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkArgEffVars") (EVar "iface")) (EVar "mname")) (EVar "mty")) (EVar "argOccs")) (EVar "retOccs")) (EVar "rest")))))
 (DTypeSig false "retOccsEscape" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))) (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "retOccsEscape" (PWild (PList)) (EListLit))
 (DFunDef false "retOccsEscape" ((PVar "vatoms") (PCons (PTuple PWild (PVar "declAtoms")) (PVar "rest"))) (EIf (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "atomsEscape") (EVar "vatoms")) (EVar "declAtoms"))) (EApp (EApp (EVar "atomsEscape") (EVar "vatoms")) (EVar "declAtoms")) (EApp (EApp (EVar "retOccsEscape") (EVar "vatoms")) (EVar "rest"))))
-(DTypeSig false "methodEffArgOccs" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))
-(DFunDef false "methodEffArgOccs" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "methodEffArgOccs") (EVar "t")))
-(DFunDef false "methodEffArgOccs" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "methodEffArgOccs") (EVar "t")))
-(DFunDef false "methodEffArgOccs" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "argPerformableOccs") (EVar "True")) (EVar "a")) (EApp (EVar "methodEffArgOccs") (EVar "b"))))
-(DFunDef false "methodEffArgOccs" (PWild) (EListLit))
-(DTypeSig false "argPerformableOccs" (TyFun (TyCon "Bool") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
-(DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyEffect" (PVar "labels") (PCon "Some" (PVar "n")) (PVar "t"))) (EBinOp "++" (EIf (EVar "perf") (EListLit (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels")))) (EListLit)) (EApp (EApp (EVar "argPerformableOccs") (EVar "perf")) (EVar "t"))))
-(DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyEffect" PWild (PCon "None") (PVar "t"))) (EApp (EApp (EVar "argPerformableOccs") (EVar "perf")) (EVar "t")))
-(DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyRow" (PVar "labels") (PCon "Some" (PVar "n")) PWild)) (EIf (EVar "perf") (EListLit (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels")))) (EListLit)))
-(DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyRow" PWild (PCon "None") PWild)) (EListLit))
-(DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EVar "argPerformableOccs") (EApp (EVar "not") (EVar "perf"))) (EVar "a")) (EApp (EApp (EVar "argPerformableOccs") (EVar "perf")) (EVar "b"))))
-(DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "argPerformableOccs") (EVar "perf"))) (EVar "ts")))
-(DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyApp" (PVar "a") (PVar "b"))) (EMatch (EApp (EVar "tyAppSpine") (EApp (EApp (EVar "TyApp") (EVar "a")) (EVar "b"))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EApp (EApp (EApp (EApp (EVar "krowSlotOccs") (EVar "perf")) (EVar "o")) (EVar "n")) (EVar "args"))) (arm PWild () (EBinOp "++" (EApp (EApp (EVar "argPerformableOccs") (EVar "perf")) (EVar "a")) (EApp (EApp (EVar "argPerformableOccs") (EVar "perf")) (EVar "b"))))))
-(DFunDef false "argPerformableOccs" ((PVar "perf") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "argPerformableOccs") (EVar "perf")) (EVar "t")))
-(DFunDef false "argPerformableOccs" (PWild PWild) (EListLit))
+(DTypeSig false "methodEffArgOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
+(DFunDef false "methodEffArgOccs" ((PVar "scope") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "methodEffArgOccs") (EVar "scope")) (EVar "t")))
+(DFunDef false "methodEffArgOccs" ((PVar "scope") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EVar "methodEffArgOccs") (EVar "scope")) (EVar "t")))
+(DFunDef false "methodEffArgOccs" ((PVar "scope") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "True")) (EVar "a")) (EApp (EApp (EVar "methodEffArgOccs") (EVar "scope")) (EVar "b"))))
+(DFunDef false "methodEffArgOccs" (PWild PWild) (EListLit))
+(DTypeSig false "argPerformableOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Bool") (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))))
+(DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyEffect" (PVar "labels") (PCon "Some" (PVar "n")) (PVar "t"))) (EBinOp "++" (EIf (EVar "perf") (EListLit (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels")))) (EListLit)) (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "t"))))
+(DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyEffect" PWild (PCon "None") (PVar "t"))) (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "t")))
+(DFunDef false "argPerformableOccs" (PWild (PVar "perf") (PCon "TyRow" (PVar "labels") (PCon "Some" (PVar "n")) PWild)) (EIf (EVar "perf") (EListLit (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels")))) (EListLit)))
+(DFunDef false "argPerformableOccs" (PWild PWild (PCon "TyRow" PWild (PCon "None") PWild)) (EListLit))
+(DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EApp (EVar "not") (EVar "perf"))) (EVar "a")) (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "b"))))
+(DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf"))) (EVar "ts")))
+(DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyApp" (PVar "a") (PVar "b"))) (EMatch (EApp (EVar "tyAppSpine") (EApp (EApp (EVar "TyApp") (EVar "a")) (EVar "b"))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EApp (EApp (EApp (EApp (EApp (EVar "krowSlotOccs") (EVar "scope")) (EVar "perf")) (EVar "o")) (EVar "n")) (EVar "args"))) (arm (PTuple (PCon "TyVar" (PVar "h")) (PVar "args")) () (EApp (EApp (EApp (EApp (EVar "krowSlotVarOccs") (EVar "scope")) (EVar "perf")) (EVar "h")) (EVar "args"))) (arm PWild () (EBinOp "++" (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "a")) (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "b"))))))
+(DFunDef false "argPerformableOccs" ((PVar "scope") (PVar "perf") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf")) (EVar "t")))
+(DFunDef false "argPerformableOccs" (PWild PWild PWild) (EListLit))
 (DTypeSig false "tyTabKey" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "TabKey"))))
 (DFunDef false "tyTabKey" ((PVar "o") (PVar "n")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsType")) (EVar "o")) (EVar "n")))
 (DTypeSig false "ifaceTabKey" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "TabKey"))))
 (DFunDef false "ifaceTabKey" ((PVar "o") (PVar "n")) (EApp (EApp (EApp (EVar "tabKeyOf") (EVar "NsIface")) (EVar "o")) (EVar "n")))
-(DTypeSig false "krowSlotOccs" (TyFun (TyCon "Bool") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))))
-(DFunDef false "krowSlotOccs" ((PVar "perf") (PVar "o") (PVar "n") (PVar "args")) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef") "value")) (arm (PCon "Some" (PVar "kinds")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "kinds")) (EApp (EVar "listLen") (EVar "args"))))) (EBinOp "++" (EIf (EVar "perf") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n2")) (ETuple (EVar "n2") (EListLit)))) (EApp (EApp (EVar "krowArgVarNames") (EVar "kinds")) (EVar "args"))) (EListLit)) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "argPerformableOccs") (EVar "perf"))) (EVar "args")))) (arm PWild () (EApp (EApp (EDictApp "flatMap") (EApp (EVar "argPerformableOccs") (EVar "perf"))) (EVar "args")))))
+(DTypeSig false "krowSlotOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Bool") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom"))))))))))
+(DFunDef false "krowSlotOccs" ((PVar "scope") (PVar "perf") (PVar "o") (PVar "n") (PVar "args")) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef") "value")) (arm (PCon "Some" (PVar "kinds")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "kinds")) (EApp (EVar "listLen") (EVar "args"))))) (EBinOp "++" (EIf (EVar "perf") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n2")) (ETuple (EVar "n2") (EListLit)))) (EApp (EApp (EVar "krowArgVarNames") (EVar "kinds")) (EVar "args"))) (EListLit)) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf"))) (EVar "args")))) (arm PWild () (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf"))) (EVar "args")))))
+(DTypeSig false "krowSlotVarOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))))
+(DFunDef false "krowSlotVarOccs" ((PVar "scope") (PVar "perf") (PVar "h") (PVar "args")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "h")) (EVar "scope")) (arm (PCon "Some" (PVar "kinds")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "kinds")) (EApp (EVar "listLen") (EVar "args"))))) (EBinOp "++" (EIf (EVar "perf") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n2")) (ETuple (EVar "n2") (EListLit)))) (EApp (EApp (EVar "krowArgVarNames") (EVar "kinds")) (EVar "args"))) (EListLit)) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf"))) (EVar "args")))) (arm PWild () (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "argPerformableOccs") (EVar "scope")) (EVar "perf"))) (EVar "args")))))
 (DTypeSig false "methodEffRetOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Atom")))))))
 (DFunDef false "methodEffRetOccs" ((PVar "scope") (PCon "TyConstrained" PWild (PVar "t"))) (EApp (EApp (EVar "methodEffRetOccs") (EVar "scope")) (EVar "t")))
 (DFunDef false "methodEffRetOccs" ((PVar "scope") (PCon "TyEffect" (PVar "labels") (PCon "Some" (PVar "n")) (PVar "t"))) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "atomsOfWritten") (EVar "labels"))) (EApp (EApp (EVar "methodEffRetOccs") (EVar "scope")) (EVar "t"))))
 (DFunDef false "methodEffRetOccs" ((PVar "scope") (PCon "TyEffect" PWild (PCon "None") (PVar "t"))) (EApp (EApp (EVar "methodEffRetOccs") (EVar "scope")) (EVar "t")))
 (DFunDef false "methodEffRetOccs" ((PVar "scope") (PCon "TyFun" PWild (PVar "b"))) (EApp (EApp (EVar "methodEffRetOccs") (EVar "scope")) (EVar "b")))
-(DFunDef false "methodEffRetOccs" ((PVar "scope") (PVar "t")) (EBinOp "++" (EApp (EVar "effVarOccAtoms") (EVar "t")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EListLit)))) (EApp (EApp (EVar "rowArgNamesIn") (EVar "scope")) (EVar "t")))))
+(DFunDef false "methodEffRetOccs" ((PVar "scope") (PVar "t")) (EBlock (DoLet false false (PVar "occs") (EApp (EVar "effVarOccAtoms") (EVar "t"))) (DoExpr (EBinOp "++" (EVar "occs") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EListLit)))) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (ELam ((PVar "o")) (EBinOp "==" (EApp (EVar "fst") (EVar "o")) (EVar "n")))) (EVar "occs"))))) (EApp (EApp (EVar "rowArgNamesIn") (EVar "scope")) (EVar "t"))))))))
+(DTypeSig false "argAtomsMsgFor" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))))
+(DFunDef false "argAtomsMsgFor" ((PCon "Some" (PVar "iface")) (PVar "mname") (PVar "v") (PVar "esc")) (EApp (EApp (EApp (EApp (EVar "argAtomsUncoveredMsg") (EVar "iface")) (EVar "mname")) (EVar "v")) (EVar "esc")))
+(DFunDef false "argAtomsMsgFor" ((PCon "None") (PVar "fname") (PVar "v") (PVar "esc")) (EApp (EApp (EApp (EVar "argAtomsUncoveredFnMsg") (EVar "fname")) (EVar "v")) (EVar "esc")))
+(DTypeSig false "argAtomsUncoveredFnMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))))
+(DFunDef false "argAtomsUncoveredFnMsg" ((PVar "fname") (PVar "v") (PVar "esc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Effect variable <")) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "> in function '"))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' carries <"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "esc")))) (ELit (LString "> at an argument position, but a row carrying <"))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "> does not include it: a body that uses that argument performs <"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "esc")))) (ELit (LString "> on a row a caller can instantiate to <>, laundering it. Declare <"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "esc")))) (ELit (LString "> (or `<IO | "))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString ">`) at every row where <"))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "> appears, or remove the concrete label from the argument's row."))))
 (DTypeSig false "argOnlyEffVarMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "argOnlyEffVarMsg" ((PVar "iface") (PVar "mname") (PVar "v")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Argument-only effect variable <")) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "> in method '"))) (EApp (EMethodRef "display") (EVar "mname"))) (ELit (LString "' of interface '"))) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "': <"))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "> rides an argument (a callback or row-kinded value) but appears in none of the method's own effect rows, so an impl that uses that argument performs <"))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "> with no row charging it — a caller can pass an effectful callback to a method typed pure and it silently runs. Thread <"))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "> through the method's row (e.g. `-> <"))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "> …`), or drop it from the argument."))))
 (DTypeSig false "argAtomsUncoveredMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))))

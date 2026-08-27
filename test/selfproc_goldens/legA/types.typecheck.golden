@@ -111,6 +111,8 @@ applyCtorScopeOverrides : List Decl -> TcEnv -> TcEnv
 applyMethodScopeOverrides : List Decl -> Map String (IfaceRef, List String, Ty, List (String, List Kind)) -> Map String (IfaceRef, List String, Ty, List (String, List Kind))
 applyParams : Mono -> List Mono -> Mono
 applyRecordScopeOverrides : List Decl -> Unit
+argAtomsMsgFor : Option String -> String -> String -> List Atom -> String
+argAtomsUncoveredFnMsg : String -> String -> List Atom -> String
 argAtomsUncoveredMsg : String -> String -> String -> List Atom -> String
 argDispatchIndices : List Decl -> List (String, Int)
 argDispatchIndicesById : List Decl -> List ((IfaceRef, String), Int)
@@ -126,7 +128,7 @@ argImplReqRoutes : Map String (List ImplEntry) -> String -> List (String, Mono) 
 argImplRequiresRoutes : Map String (List ImplEntry) -> IfaceRef -> String -> String -> Mono -> List Mono -> Int -> Int -> List Route
 argMentions : List String -> Ty -> Bool
 argOnlyEffVarMsg : String -> String -> String -> String
-argPerformableOccs : Bool -> Ty -> List (String, List Atom)
+argPerformableOccs : List (String, List Kind) -> Bool -> Ty -> List (String, List Atom)
 argPosAgreeEncl : List Mono -> List Mono -> Bool
 argReqRoute : Map String (List ImplEntry) -> String -> String -> List (String, Mono) -> List Ty -> Int -> Int -> Route
 argStampMono : PendingEntry -> Mono
@@ -269,8 +271,8 @@ censusSuperCloseVecFix : List Decl -> List VecObl -> List VecObl -> List VecObl
 censusSuperSlotsOf : List Decl -> (String, Int) -> List (String, Int)
 censusSuperSlotsVecOf : List Decl -> VecObl -> List VecObl
 checkAnnotTooGeneral : Ty -> List Mono -> Unit
-checkArgEffVarCoverage : String -> List (String, List Kind) -> String -> Ty -> Unit
-checkArgEffVars : String -> String -> Ty -> List (String, List Atom) -> List (String, List Atom) -> List String -> Unit
+checkArgEffVarCoverage : Option String -> List (String, List Kind) -> String -> Ty -> Unit
+checkArgEffVars : Option String -> String -> Ty -> List (String, List Atom) -> List (String, List Atom) -> List String -> Unit
 checkBodyImpl : List (String, Scheme) -> CheckMode -> List Decl -> List (String, Scheme)
 checkCallObligations : Bool -> List Decl -> List UObligation -> Unit
 checkCallObligationsU : Bool -> ImplUniverse -> List UObligation -> Unit
@@ -1196,7 +1198,8 @@ kindsEq : List Kind -> List Kind -> Bool
 kpLcp : String -> String -> KP
 krowArgVarNames : List Kind -> List Ty -> List String
 krowEtbl : List String -> List Kind -> List Mono -> List (String, Ref Effvar)
-krowSlotOccs : Bool -> TyConOrigin -> String -> List Ty -> List (String, List Atom)
+krowSlotOccs : List (String, List Kind) -> Bool -> TyConOrigin -> String -> List Ty -> List (String, List Atom)
+krowSlotVarOccs : List (String, List Kind) -> Bool -> String -> List Ty -> List (String, List Atom)
 ktypeTvs : List String -> List Kind -> List Mono -> List (String, Mono)
 lamUnderLoc : Expr -> Option (Option Loc, List Pat, Expr)
 lastComponent : List String -> String
@@ -1289,7 +1292,7 @@ methodConstraintNamesOfDecl : Decl -> List String
 methodConstraintSlotIds : List String -> Ty -> List (String, Mono) -> List Int
 methodDictArityOf : String -> Int
 methodDispatchIdx : String -> Option Int
-methodEffArgOccs : Ty -> List (String, List Atom)
+methodEffArgOccs : List (String, List Kind) -> Ty -> List (String, List Atom)
 methodEffRetOccs : List (String, List Kind) -> Ty -> List (String, List Atom)
 methodLevelConstraintSlots : List String -> Ty -> List (String, IfaceRef)
 methodLevelConstraintVarNames : List String -> Ty -> List String

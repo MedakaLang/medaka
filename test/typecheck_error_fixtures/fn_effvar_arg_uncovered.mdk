@@ -1,0 +1,18 @@
+-- #1103: T-EFFECT-ARG-UNCOVERED is NOT method-only.  Its uncovered-atoms arm
+-- runs over ordinary top-level signatures too, because the hazard survives
+-- effect inference: `unifyRowN`'s same-tail arm accepts <Stdout | e> against
+-- <e> without recording <Stdout> anywhere, so a caller instantiating <e> to <>
+-- launders the atom (docs/spec/EFFECTS-SEMANTICS.md §5, no-laundering law).
+--
+-- This is DELIBERATELY neither #1103's nor #1100's shape: the atom rides a
+-- row-kinded CONSTRUCTOR slot written with labels (`Box <Stdout | e> a`, the
+-- #997 TyRow spelling), not a bare callback arrow (#1103), and the subject is a
+-- plain function, not an abstract-head interface method (#1100).  It pins that
+-- the widened seam generalizes over the collector rather than patching two
+-- exact repros.  The body never forces the thunk, so the binding-boundary
+-- escape check has nothing to say — the DECLARATION alone is the error.
+data Box e a = Done a | Susp (Unit -> <e> a)
+
+peek : Box <Stdout | e> a -> <e> Bool
+peek (Done _) = True
+peek (Susp _) = False
