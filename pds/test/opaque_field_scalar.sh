@@ -19,8 +19,9 @@ trap 'rm -rf "$WORK"' EXIT HUP INT TERM
 
 # A name ending in `ForTest` is an explicit test-only export.  Derive the
 # boundary from source on every run: production modules may not import one
-# selectively or acquire one through a wildcard, while test drivers must keep
-# at least one explicit route so this policy cannot pass vacuously.
+# selectively, acquire one through a wildcard, or alias its exporting module,
+# while test drivers must keep at least one explicit route so this policy
+# cannot pass vacuously.
 extract_test_exports() {
   export_file=$1
   export_module=$2
@@ -88,15 +89,22 @@ parse_imports() {
           return
         }
         marker = index(s, ".{")
-        if (marker == 0) return
-        module = trim(substr(s, 1, marker - 1))
-        body = substr(s, marker + 2)
-        sub(/}.*/, "", body)
-        gsub(/[[:space:]]/, "", body)
-        count = split(body, names, ",")
-        for (i = 1; i <= count; i++) {
-          name = names[i]
-          if (name != "") print consumer "\t" module "\t" name
+        if (marker > 0) {
+          module = trim(substr(s, 1, marker - 1))
+          body = substr(s, marker + 2)
+          sub(/}.*/, "", body)
+          gsub(/[[:space:]]/, "", body)
+          count = split(body, names, ",")
+          for (i = 1; i <= count; i++) {
+            name = names[i]
+            if (name != "") print consumer "\t" module "\t" name
+          }
+          return
+        }
+        if (s ~ /[[:space:]]+as[[:space:]]+/) {
+          module = s
+          sub(/[[:space:]]+as[[:space:]].*$/, "", module)
+          print consumer "\t" trim(module) "\t@alias"
         }
       }
       {
@@ -171,6 +179,10 @@ deployment_boundary_ok() {
       print $1 " imports test-only API wildcard from " $2
       exit 1
     }
+    $3 == "@alias" && ($2 in hook_module) {
+      print $1 " imports module with test-only APIs through alias from " $2
+      exit 1
+    }
     (($2 SUBSEP $3) in hook) {
       print $1 " imports test-only API " $3
       exit 1
@@ -203,6 +215,15 @@ deployment_boundary_ok() {
       }
       next
     }
+    $3 == "@alias" && ($2 in hook_module) {
+      edge = $1 SUBSEP $2 SUBSEP "@alias"
+      if (!(edge in seen)) {
+        seen[edge] = 1
+        count++
+        print "PASS: observed allowed test module alias consumer " $1 " -> " $2
+      }
+      next
+    }
     (($2 SUBSEP $3) in hook) {
       edge = $1 SUBSEP $2 SUBSEP $3
       if (!(edge in seen)) {
@@ -227,8 +248,9 @@ if ! deployment_boundary_ok "$ROOT"; then
   exit 1
 fi
 
-# The policy must reject both import forms directly, before compilation.  Run
-# the attacks in a disposable project copy so an interruption cannot dirty the
+# The policy must accept aliases of modules without test-only exports and
+# reject all three forbidden import forms directly, before compilation. Run
+# the probes in a disposable project copy so an interruption cannot dirty the
 # source checkout, then restore and compare the only mutated file byte-for-byte.
 MUTATION_ROOT="$WORK/mutation-root"
 mkdir -p "$MUTATION_ROOT/pds"
@@ -238,6 +260,18 @@ SIGN_MUTANT="$MUTATION_ROOT/pds/lib/sign.mdk"
 SIGN_BASELINE="$WORK/sign.mdk.baseline"
 cp "$SIGN_MUTANT" "$SIGN_BASELINE"
 
+{
+  printf '%s\n' 'import array as SafeArray'
+  cat "$SIGN_BASELINE"
+} > "$SIGN_MUTANT"
+if ! deployment_boundary_ok "$MUTATION_ROOT" > "$WORK/safe-alias-control.out" 2>&1; then
+  echo "FAIL: ordinary module alias control failed deployment policy"
+  cat "$WORK/safe-alias-control.out"
+  exit 1
+fi
+echo "PASS: ordinary module alias without test-only exports accepted"
+
+cp "$SIGN_BASELINE" "$SIGN_MUTANT"
 {
   printf '%s\n' 'import lib.secp256k1.{ecdsaSignDigestForTest}'
   cat "$SIGN_BASELINE"
@@ -272,6 +306,24 @@ if ! grep -F -x -q 'pds/lib/sign.mdk imports test-only API wildcard from lib.sec
 fi
 printf '%s' "PASS: wildcard test-only import mutation rejected directly — "
 cat "$WORK/wildcard-mutation.out"
+
+cp "$SIGN_BASELINE" "$SIGN_MUTANT"
+{
+  printf '%s\n' 'import lib.secp256k1 as Internal'
+  cat "$SIGN_BASELINE"
+} > "$SIGN_MUTANT"
+if deployment_boundary_ok "$MUTATION_ROOT" > "$WORK/alias-mutation.out" 2>&1; then
+  echo "FAIL: aliased test-only module import mutation passed deployment policy"
+  cat "$WORK/alias-mutation.out"
+  exit 1
+fi
+if ! grep -F -x -q 'pds/lib/sign.mdk imports module with test-only APIs through alias from lib.secp256k1' "$WORK/alias-mutation.out"; then
+  echo "FAIL: aliased module import mutation failed for an unexpected reason"
+  cat "$WORK/alias-mutation.out"
+  exit 1
+fi
+printf '%s' "PASS: aliased test-only module import mutation rejected directly — "
+cat "$WORK/alias-mutation.out"
 
 cp "$SIGN_BASELINE" "$SIGN_MUTANT"
 if ! cmp -s "$SIGN_BASELINE" "$SIGN_MUTANT"; then

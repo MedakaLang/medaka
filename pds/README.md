@@ -11,9 +11,10 @@ model is next; see `docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
   below).
 - `pds/lib/` — pure library modules. Production modules under this directory
   may not import exported identifiers
-  ending in `ForTest`, selectively or through `.*`; `opaque_field_scalar.sh`
-  derives and enforces that deployment boundary while observing the allowed
-  test-only consumers under `pds/test/`.
+  ending in `ForTest`, selectively or through `.*`, nor alias a module that
+  exports any such identifier; `opaque_field_scalar.sh` derives and enforces
+  that deployment boundary while observing the allowed test-only consumers
+  under `pds/test/`.
 - `pds/test/` — in-language `medaka test` suites (`*_test.mdk`) plus gate
   scripts that run them (`*.sh`). **Every `.sh` placed directly in `pds/test/`
   is auto-enrolled as a CI gate** — see the classification policy below.
@@ -349,9 +350,11 @@ base58btc multibase, and prepends the lower-case `did:key:` method. Decoding
 requires those exact layers and delegates SEC 1 validation to `lib.sign`.
 
 The 16-row answer key comes directly from the pinned official-PDS
-`Secp256k1Keypair.did()` implementation. The all-engine gate also rejects 14
-named malformed method, multibase, multicodec, length, and curve cases and
-proves five disposable behavior mutations turn it red.
+`Secp256k1Keypair.did()` implementation. Its offline checker binds each row to
+the same fixed private input and compressed public key already established by
+the official-PDS signing corpus. The all-engine gate also rejects 14 named
+malformed method, multibase, multicodec, length, and curve cases and proves
+five disposable behavior mutations turn it red.
 
 ```sh
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" MEDAKA_REQUIRE_WASM=1 \

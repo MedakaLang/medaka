@@ -20,6 +20,7 @@ PDS_PACKAGE_PATH = (
 )
 SIGNING_INPUTS_SHA = "94da19c323a5c96d5a7b41e99fc9806081c565deae7d69ef3390fad7418fa6b8"
 CORPUS_PATH = pathlib.Path("pds/test/vectors/pds_did_key_corpus.txt")
+SIGNING_CORPUS_PATH = pathlib.Path("pds/test/vectors/pds_message_signing_corpus.txt")
 ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
 
@@ -55,7 +56,7 @@ def base58_encode(data: bytes) -> str:
     return "1" * (len(data) - len(data.lstrip(b"\x00"))) + encoded
 
 
-def check_inputs(root: pathlib.Path) -> None:
+def check_inputs(root: pathlib.Path) -> list[tuple[int, str]]:
     path = root / "pds/tools/signing_inputs.txt"
     require(sha256(path) == SIGNING_INPUTS_SHA, "fixed input manifest digest drifted")
     rows = []
@@ -70,6 +71,40 @@ def check_inputs(root: pathlib.Path) -> None:
         "fixed key input syntax drifted",
     )
     require(len({row[1] for row in rows}) == 16, "fixed key inputs are not unique")
+    return rows
+
+
+def check_signing_mapping(
+    root: pathlib.Path, fixed_inputs: list[tuple[int, str]]
+) -> list[str]:
+    rows = []
+    for line in (root / SIGNING_CORPUS_PATH).read_text().splitlines():
+        fields = line.split()
+        if fields and fields[0] == "pds":
+            rows.append(fields)
+            if len(rows) == 16:
+                break
+    require(len(rows) == 16, "official-PDS signing corpus has fewer than 16 pds rows")
+
+    public_keys = []
+    for expected_id, fields in enumerate(rows):
+        require(len(fields) == 8, f"official-PDS signing row {expected_id} is malformed")
+        require(
+            fields[1] == str(expected_id),
+            f"official-PDS signing row IDs changed or reordered at {expected_id}",
+        )
+        require(
+            fields[2] == fixed_inputs[expected_id][1],
+            f"official-PDS signing row {expected_id} does not match fixed key input",
+        )
+        public_key = fields[5]
+        require(
+            re.fullmatch(r"(?:02|03)[0-9a-f]{64}", public_key) is not None,
+            f"official-PDS signing row {expected_id} has malformed compressed public key",
+        )
+        public_keys.append(public_key)
+    require(len(set(public_keys)) == 16, "official-PDS signing public keys are not unique")
+    return public_keys
 
 
 def check_authority_routes(root: pathlib.Path) -> None:
@@ -101,7 +136,7 @@ def check_authority_routes(root: pathlib.Path) -> None:
     require("console.log(`did-key ${id} ${key}" not in extractor, "extractor would persist private keys")
 
 
-def check_corpus(path: pathlib.Path) -> None:
+def check_corpus(path: pathlib.Path, expected_public_keys: list[str]) -> None:
     lines = path.read_text().splitlines()
     require(len(lines) == 16, f"corpus has {len(lines)} rows, expected 16")
     public_keys = set()
@@ -114,6 +149,10 @@ def check_corpus(path: pathlib.Path) -> None:
         require(
             re.fullmatch(r"(?:02|03)[0-9a-f]{64}", public_key) is not None,
             f"row {expected_id} has malformed compressed public key",
+        )
+        require(
+            public_key == expected_public_keys[expected_id],
+            f"row {expected_id} public key does not match fixed signing input",
         )
         require(did.startswith("did:key:z"), f"row {expected_id} has malformed did:key syntax")
         payload_text = did[len("did:key:z") :]
@@ -183,10 +222,11 @@ def check_provenance(root: pathlib.Path, corpus: pathlib.Path) -> None:
 
 
 def check_root(root: pathlib.Path, corpus_override: pathlib.Path | None = None) -> None:
-    check_inputs(root)
+    fixed_inputs = check_inputs(root)
+    expected_public_keys = check_signing_mapping(root, fixed_inputs)
     check_authority_routes(root)
     corpus = corpus_override or root / CORPUS_PATH
-    check_corpus(corpus)
+    check_corpus(corpus, expected_public_keys)
     if corpus_override is None:
         check_provenance(root, corpus)
 
@@ -197,6 +237,7 @@ def copy_fixture(root: pathlib.Path, destination: pathlib.Path) -> None:
         "pds/tools/gen_did_key_corpus.sh",
         "pds/tools/extract_pds_did_keys.mjs",
         "pds/test/vectors/pds_did_key_corpus.txt",
+        "pds/test/vectors/pds_message_signing_corpus.txt",
         "pds/test/VECTOR-PROVENANCE.txt",
     ]
     for relative in paths:
@@ -248,6 +289,7 @@ def self_test(root: pathlib.Path) -> None:
         root / "pds/tools/gen_did_key_corpus.sh",
         root / "pds/tools/extract_pds_did_keys.mjs",
         root / CORPUS_PATH,
+        root / SIGNING_CORPUS_PATH,
         root / "pds/test/VECTOR-PROVENANCE.txt",
     ]
     before = {path: sha256(path) for path in tracked}
@@ -274,6 +316,20 @@ def self_test(root: pathlib.Path) -> None:
         update_ledger_digest(fixture)
 
     expect_mutation_red(root, "changed DID", change_did, "DID payload does not match public key")
+
+    def swap_row_pairs(fixture: pathlib.Path) -> None:
+        path = fixture / CORPUS_PATH
+        rows = [line.split() for line in path.read_text().splitlines()]
+        rows[0][2:], rows[1][2:] = rows[1][2:], rows[0][2:]
+        path.write_text("\n".join(" ".join(row) for row in rows) + "\n")
+        update_ledger_digest(fixture)
+
+    expect_mutation_red(
+        root,
+        "swapped public-key/DID row pairs",
+        swap_row_pairs,
+        "row 0 public key does not match fixed signing input",
+    )
 
     def reorder_inputs(fixture: pathlib.Path) -> None:
         path = fixture / "pds/tools/signing_inputs.txt"
@@ -322,7 +378,7 @@ def self_test(root: pathlib.Path) -> None:
 
     after = {path: sha256(path) for path in tracked}
     require(before == after, "self-test did not restore tracked inputs byte-exactly")
-    print("did_key_corpus self-test: PASS — 7 direct-red mutations; tracked bytes restored")
+    print("did_key_corpus self-test: PASS — 8 direct-red mutations; tracked bytes restored")
 
 
 def main() -> None:
@@ -352,6 +408,7 @@ def main() -> None:
     label = "PROVENANCE PASS" if provenance else "PASS"
     print(
         f"did_key_corpus: {label} — 16 ordered unique secp256k1 rows; "
+        "fixed-input public keys match official-PDS signing rows; "
         "DIDs decode to 0xe7/0x01 + compressed public key"
     )
     print(
