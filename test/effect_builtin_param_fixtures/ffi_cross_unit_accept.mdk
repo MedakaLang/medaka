@@ -1,0 +1,8 @@
+-- #2074 crossable-set guard, CONTROL: `Unit` was added to FFI-ABI.md section 1
+-- / section 2.6 on 2026-08-27.  It has no runtime representation, so it crosses
+-- trivially -- a `Unit` return is a C `void` return, the single commonest
+-- foreign signature shape, which the original v1 cut made inexpressible.
+extern ffiLog : String -> <> Unit
+
+main : <IO> Unit
+main = println "ffi cross unit accept"

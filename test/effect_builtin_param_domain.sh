@@ -122,5 +122,46 @@ expect_reject "$FIX/ffi_stamp_bare_reject.mdk"   'FFI stamp bare reject (<> does
 expect_ok     "$FIX/ffi_stamp_bare_accept.mdk"   'FFI stamp bare accept (caller names FFI explicitly)'
 expect_ok     "$FIX/ffi_stamp_narrow_accept.mdk" 'FFI stamp narrow accept (stamp joins existing Net param)'
 
+
+# ── #2074 the FFI-ABI.md section 1 CROSSABLE SET, at check time ──────────────
+# A user-declared extern whose signature mentions a type outside section 1 is
+# rejected with a located diagnostic naming the offending type.  One reject
+# cell per non-crossable kind, one accept cell per crossable row.
+#
+# 🚨 The two cells that must be read TOGETHER are `ref_reject` and
+# `builtin_name_accept`.  The guard EXEMPTS an extern whose name is a real
+# `stdlib/runtime.mdk` catalog name, because `isAnyExtern`
+# (compiler/backend/llvm_emit.mdk) dispatches emitted calls by NAME against the
+# fixed `externCatalog` -- such a redeclaration is lowered as the builtin no
+# matter what its local row says, so its signature is not a foreign-call
+# contract.  `ref_reject` declares a NOVEL name (`ffiPeek`) carrying `Ref Int`
+# and must still REJECT: without it, an exemption that had silently swallowed
+# every declaration would still show all-green here.
+expect_reject "$FIX/ffi_cross_tuple_reject.mdk" 'FFI crossable reject: Tuple result' \
+  "Type '(Int, Int)' cannot cross the foreign-function boundary in extern 'ffiPair'"
+expect_reject "$FIX/ffi_cross_list_reject.mdk" 'FFI crossable reject: List param' \
+  "Type 'List Int' cannot cross the foreign-function boundary in extern 'ffiSum'"
+expect_reject "$FIX/ffi_cross_array_elem_reject.mdk" 'FFI crossable reject: Array with non-Int element' \
+  "Type 'Array String' cannot cross the foreign-function boundary in extern 'ffiWidths'"
+expect_reject "$FIX/ffi_cross_adt_reject.mdk" 'FFI crossable reject: user ADT' \
+  "Type 'Color' cannot cross the foreign-function boundary in extern 'ffiColorCode'"
+expect_reject "$FIX/ffi_cross_ref_reject.mdk" 'FFI crossable reject: Ref under a NOVEL extern name (guard still fires)' \
+  "Type 'Ref Int' cannot cross the foreign-function boundary in extern 'ffiPeek'"
+expect_reject "$FIX/ffi_cross_fnparam_reject.mdk" 'FFI crossable reject: function-typed param (closure cell)' \
+  "Type 'Int -> <> Int' cannot cross the foreign-function boundary in extern 'ffiApply'"
+# Polymorphic extern: no crossable type is polymorphic.  ALSO the location cell
+# -- a bare TyVar has no loc of its own, so this asserts the line, which is
+# `:1:0` unless ffiCheckExternSig's whole-signature fallback is applied.
+expect_reject "$FIX/ffi_cross_poly_reject.mdk" 'FFI crossable reject: polymorphic extern (located on its own line, not :1:0)' \
+  "ffi_cross_poly_reject.mdk:11:.*Type 'a' cannot cross the foreign-function boundary in extern 'ffiWrapAll'"
+
+expect_ok "$FIX/ffi_cross_int_accept.mdk"          'FFI crossable accept: Int'
+expect_ok "$FIX/ffi_cross_float_accept.mdk"        'FFI crossable accept: Float'
+expect_ok "$FIX/ffi_cross_bool_accept.mdk"         'FFI crossable accept: Bool'
+expect_ok "$FIX/ffi_cross_char_accept.mdk"         'FFI crossable accept: Char'
+expect_ok "$FIX/ffi_cross_string_accept.mdk"       'FFI crossable accept: String'
+expect_ok "$FIX/ffi_cross_arrayint_accept.mdk"     'FFI crossable accept: Array Int'
+expect_ok "$FIX/ffi_cross_unit_accept.mdk"         'FFI crossable accept: Unit return (C void)'
+expect_ok "$FIX/ffi_cross_builtin_name_accept.mdk" 'FFI crossable accept: builtin-name exemption (getEnv redeclared)'
 echo "effect_builtin_param_domain: $pass/$fail"
 [ "$fail" -eq 0 ]

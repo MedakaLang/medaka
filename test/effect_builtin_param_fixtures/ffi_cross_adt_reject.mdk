@@ -1,0 +1,8 @@
+-- #2074 crossable-set guard: a user ADT is not in FFI-ABI.md section 1.  The
+-- whitelist is CLOSED, so a type section 3 never enumerates is still rejected.
+data Color = Red | Green
+
+extern ffiColorCode : Color -> <> Int
+
+main : <IO> Unit
+main = println "ffi cross adt reject"

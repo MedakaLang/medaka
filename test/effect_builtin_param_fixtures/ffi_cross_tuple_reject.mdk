@@ -1,0 +1,7 @@
+-- #2074 crossable-set guard: `Tuple` is not in FFI-ABI.md section 1 (section 3
+-- explains why: a boxed cell with no length/type tag).  REJECT, and the caret
+-- must land on the offending type, not on the declaration head.
+extern ffiPair : Int -> <> (Int, Int)
+
+main : <IO> Unit
+main = println "ffi cross tuple reject"

@@ -745,11 +745,20 @@ extendLocalVars : TcEnv -> List (String, Scheme) -> TcEnv
 extendPropParams : TcEnv -> List PropParam -> TcEnv
 extendVar : TcEnv -> String -> Scheme -> TcEnv
 extendVars : TcEnv -> List (String, Scheme) -> TcEnv
+externDeclNames : List Decl -> List String
 externDecls : List Decl -> List Decl
 externSchemes : Map String TyConOrigin -> List Decl -> List (String, Scheme)
 externSchemesGo : Bool -> List Decl -> List (String, Scheme)
 ffiAddAtom : List (String, Option String) -> List (String, Option String)
+ffiCheckExternPos : String -> Option Loc -> Ty -> Unit
+ffiCheckExternSig : String -> Option Loc -> Ty -> Unit
+ffiCheckExternsCrossable : Bool -> List Decl -> Unit
+ffiCheckExternsGo : List Decl -> Unit
+ffiCrossableConName : String -> Bool
+ffiCrossableTy : Ty -> Bool
 ffiHasAtom : List (String, Option String) -> Bool
+ffiIsBuiltinExternName : String -> Bool
+ffiNonCrossableMsg : String -> Ty -> String
 ffiStampMode : CheckMode -> Bool
 ffiStampResultTy : Ty -> Ty
 ffiStampTy : Ty -> Ty
@@ -1385,6 +1394,7 @@ normalize : Mono -> Mono
 normalizeLink : Ref Tyvar -> Mono -> Mono
 notAFunctionHint : Option String -> String
 notAFunctionMsg : String -> String
+noteBuiltinExternNames : List Decl -> Unit
 noteHeadCtor : Pat -> Map String Unit -> Map String Unit
 noteNumlitCtx : Mono -> Mono -> String -> Unit
 noteTypeErrorDetected : Unit -> Unit

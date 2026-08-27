@@ -1,0 +1,6 @@
+-- #2074 crossable-set guard, CONTROL: `String` IS in FFI-ABI.md section 1, in
+-- both parameter and result position ⇒ ACCEPT.
+extern ffiIdString : String -> <> String
+
+main : <IO> Unit
+main = println "ffi cross string accept"

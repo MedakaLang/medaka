@@ -1,10 +1,8 @@
 strLen : String -> <FFI> Int
-toChars : String -> <FFI> List Char
-wrapL : a -> <FFI> List a
+charAt : String -> Int -> <FFI> Char
 emit : String -> <FFI, IO> Unit
 rng : Unit -> <FFI, Rand> Int
 useLen : String -> <FFI> Int
-charsOf : String -> <FFI> List Char
-boxIt : a -> <FFI> List a
+firstOf : String -> <FFI> Char
 combine : String -> String -> <FFI> Int
 shout : String -> <FFI, IO> Unit

@@ -6027,6 +6027,7 @@ data DriverState =
       coherenceUserDecls : Ref (List Decl),
       stdlibOwnedModsRef : Ref (List String),
       flatEntryIsStdlibRef : Ref Bool,
+      builtinExternNamesRef : Ref (OrdMap Unit),
       superDeclsRef : Ref (List Decl),
       standaloneValuesRef : Ref (List String),
       methodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),
@@ -6059,6 +6060,7 @@ freshDriverState _ = DriverState {
   coherenceUserDecls = Ref [],
   stdlibOwnedModsRef = Ref [],
   flatEntryIsStdlibRef = Ref False,
+  builtinExternNamesRef = Ref omEmpty,
   superDeclsRef = Ref [],
   standaloneValuesRef = Ref [],
   methodDispatchIdxByIdRef = Ref [],
@@ -24781,6 +24783,11 @@ checkBodyImpl seed mode prog0 =
   -- DECLARATION site (the program under check), so a user extern's row gets the
   -- `FFI` stamp unless the loader owns this program to `stdlibRoot`.
   let globalS = ifaceMethodSchemes prog ++ userExternSchemes mode (externTyOriginScope []) prog
+  -- #2074: the CROSSABLE-SET guard, on the same `ffiStampMode` Bool the line
+  -- above stamps by — a signature that is not stamped `<FFI>` is not a foreign
+  -- declaration this rule owns.  It runs AFTER `rejectCyclicAliases` above so
+  -- `expandAliasHeadTy` cannot recurse forever on a cyclic alias.
+  let _ = ffiCheckExternsCrossable (ffiStampMode mode) prog
   -- methodNames: FLAT's SECOND ifaceMethodSchemes call over prog — dedup-skipped by
   -- registerMethodConstraints so globalS's registered (first-call) ids stay authoritative.
   -- Module checks core in isolation and never needs it, so NO extra call there.
@@ -28172,7 +28179,30 @@ monoTyvarIds m = match normalize m
 -- rebuilding what you are about to throw away is never the cheaper branch.
 externSchemes : OrdMap TyConOrigin -> List Decl -> List (String, Scheme)
 externSchemes scope decls =
-  externSchemesGo False (stampTyOrigins scope (externDecls decls))
+  let ds = externDecls decls
+  -- #2074: THIS function is the stdlib extern CATALOG builder — its eight call
+  -- sites all pass `runtimeDecls`, and `userExternSchemes` (below) is the
+  -- declaration-site sibling that handles the program under check.  So this is
+  -- the one seam where the set of names the emitter's `isAnyExtern` ladder will
+  -- answer for is known, and it is recorded here rather than re-derived.  See
+  -- `ffiIsBuiltinExternName` for what reads it and why.
+  let _ = noteBuiltinExternNames ds
+  externSchemesGo False (stampTyOrigins scope ds)
+
+-- Union, never replace: a driver may build the catalog seed more than once per
+-- process (`medaka test` runs several engines), and a later call carrying a
+-- shorter list must not shrink the set a guard is reading.
+noteBuiltinExternNames : List Decl -> Unit
+noteBuiltinExternNames ds =
+  driverState.value.builtinExternNamesRef :=
+    namesToSet
+      (externDeclNames ds)
+      driverState.value.builtinExternNamesRef.value
+
+externDeclNames : List Decl -> List String
+externDeclNames [] = []
+externDeclNames ((DExtern _ n _)::rest) = n :: externDeclNames rest
+externDeclNames (_::rest) = externDeclNames rest
 
 -- #2072 (epic #2070, R2): the DECLARATION-site sibling of `externSchemes`.
 --
@@ -28288,6 +28318,124 @@ ffiAddAtom ls = if ffiHasAtom ls then ls else ls ++ [("FFI", None)]
 ffiHasAtom : List (String, Option String) -> Bool
 ffiHasAtom [] = False
 ffiHasAtom ((l, _)::rest) = l == "FFI" || ffiHasAtom rest
+
+-- ── the FFI-ABI.md §1 CROSSABLE SET ─────────────────────────────────────────
+--
+-- 🚨 THIS IS THE SINGLE DEFINITION of "may this value cross the C boundary".
+-- The lowering (#2074) consumes THIS predicate; it must not grow a second
+-- notion of crossable in `compiler/backend/`, because the two would drift and
+-- the drift is silent — an emitter that marshals a shape `check` rejected is
+-- dead code, and one that marshals a shape `check` accepted but the emitter
+-- does not know is a wrong-answer path.
+--
+-- The rows are `compiler/FFI-ABI.md` §1 verbatim: `Int`, `Float`, `Bool`,
+-- `Char`, `String`, `Array Int`, `Unit`.  (`Unit` was added to §1/§2.6 on
+-- 2026-08-27: it has NO runtime representation, so it crosses trivially — a
+-- `Unit` parameter marshals to nothing and a `Unit` return is a C `void`.
+-- Without it no void-returning C function, the commonest FFI shape, is
+-- expressible at all.)  §1's closing sentence makes the set CLOSED
+-- ("every other value kind … is explicitly not in the v1 crossable set"), so
+-- this predicate is a whitelist, not a blacklist of §3's enumeration — a type
+-- §3 forgot to name is still not crossable.
+ffiCrossableTy : Ty -> Bool
+ffiCrossableTy t = match expandAliasHeadTy t
+  TyCon { tyConName = n } => ffiCrossableConName n
+  -- `Array Int` and nothing else: §2.4 specifies only the all-immediate-element
+  -- case, so `Array String` / `Array (Array Int)` fall through to False.
+  TyApp a b => match (expandAliasHeadTy a, expandAliasHeadTy b)
+    (TyCon { tyConName = "Array" }, TyCon { tyConName = "Int" }) => True
+    _ => False
+  _ => False
+
+ffiCrossableConName : String -> Bool
+ffiCrossableConName n = n == "Int"
+  || n == "Float"
+  || n == "Bool"
+  || n == "Char"
+  || n == "String"
+  || n == "Unit"
+
+-- Reject a user extern that names a non-crossable type (#2074, acceptance
+-- bullet 2).  Gated on the SAME `ffiStampMode` Bool as the `<FFI>` stamp
+-- itself: a signature the stamp does not touch is not a foreign declaration
+-- this rule owns.  `stdlib/runtime.mdk`'s catalog and every compiler-internal
+-- extern are therefore untouched, by construction rather than by a second
+-- ownership test that could disagree with the first.
+ffiCheckExternsCrossable : Bool -> List Decl -> Unit
+ffiCheckExternsCrossable False _ = ()
+ffiCheckExternsCrossable True ds = ffiCheckExternsGo (externDecls ds)
+
+ffiCheckExternsGo : List Decl -> Unit
+ffiCheckExternsGo [] = ()
+ffiCheckExternsGo ((DExtern _ n ty)::rest) =
+  let _ = if ffiIsBuiltinExternName n then
+    ()
+  else
+    ffiCheckExternSig n (firstTyLoc ty) ty
+  ffiCheckExternsGo rest
+ffiCheckExternsGo (_::rest) = ffiCheckExternsGo rest
+
+-- 🚨 THE ONE EXEMPTION, AND IT IS A SEMANTIC FACT, NOT A TEST-CORPUS WORKAROUND.
+--
+-- A local `extern` whose name matches a `stdlib/runtime.mdk` catalog name is
+-- NEVER lowered as a new foreign call.  `isAnyExtern`
+-- (`compiler/backend/llvm_emit.mdk`), which feeds `emitApp`'s CVar-head ladder,
+-- dispatches purely by NAME against the fixed `externCatalog` — it has no
+-- awareness of which `DExtern` declared the name or what that declaration
+-- claims.  So the redeclared name is emitted through the BUILTIN's existing
+-- codegen regardless of the local signature.  MEASURED, twice:
+--
+--   extern bitAnd : Int -> Int -> <FFI> Int      -- deliberately narrow local row
+--   ⇒ ./out prints 240 for `bitAnd 255 240`      -- the real builtin ran
+--
+--   extern getEnv : String -> <Env "_"> Option String   -- non-crossable row
+--   ⇒ ./out prints the REAL environment variable        -- the real builtin ran,
+--                                                       -- not an unbound symbol
+--
+-- Checking such a signature against the crossable set would therefore be
+-- validating a claim that has no bearing on anything the compiler will ever do
+-- with the name, and would reject a redeclaration idiom the effect-domain
+-- fixtures use ON PURPOSE (`test/effect_param_fixtures/*`, whose gate's header
+-- calls out "per-program LOCAL extern redeclarations" as its design).
+--
+-- ⚠️ It is keyed on the name set the SEED was built from, recorded once by
+-- `externSchemes` — not on a hand-copied list here, which would rot the moment
+-- `stdlib/runtime.mdk` gains a row.
+ffiIsBuiltinExternName : String -> Bool
+ffiIsBuiltinExternName n =
+  omHasKey n driverState.value.builtinExternNamesRef.value
+
+-- Walk the arrow spine.  Every PARAM position and the final RESULT position is
+-- a value that actually crosses; the row wrappers and the constraint prefix are
+-- not values and are walked THROUGH, not checked.  `expandAliasHeadTy` at each
+-- step for the same reason `ffiStampTy` needs it: `type CFn = List Int -> <> Int`
+-- hides the offending type behind a name a syntactic walk falls through.
+-- `fb` is the WHOLE SIGNATURE's first located head, computed once at the decl and
+-- used only when the offending position itself carries no location.  That case is
+-- real, not theoretical: a bare `TyVar` has `firstTyLoc = None` (`ast.mdk`), so
+-- `extern wrapL : a -> List a` reported its `a` parameter at `:1:0` — a caret on
+-- line 1 of a file whose defect is on line 7, which ERROR-QUALITY §2.1 rules out.
+-- `DExtern` carries no `Loc` of its own (`DExtern Bool String Ty`), so the
+-- signature's own first `TyCon` is the nearest true anchor available.
+ffiCheckExternSig : String -> Option Loc -> Ty -> Unit
+ffiCheckExternSig n fb ty = match expandAliasHeadTy ty
+  TyConstrained _ inner => ffiCheckExternSig n fb inner
+  TyFun a r =>
+    let _ = ffiCheckExternPos n fb a
+    ffiCheckExternSig n fb r
+  TyEffect _ _ inner => ffiCheckExternSig n fb inner
+  t => ffiCheckExternPos n fb t
+
+-- A VALUE position.  A function type landing here is the closure cell §3 rules
+-- out, and it reaches this arm rather than `ffiCheckExternSig`'s `TyFun` arm
+-- because a parenthesised arrow is an ARGUMENT, not the spine.
+ffiCheckExternPos : String -> Option Loc -> Ty -> Unit
+ffiCheckExternPos n fb t
+  | ffiCrossableTy t = ()
+  | otherwise = pushTypeErrorAt "T-FFI-NONCROSSABLE" (orElseLoc (firstTyLoc t) fb) (ffiNonCrossableMsg n t)
+
+ffiNonCrossableMsg : String -> Ty -> String
+ffiNonCrossableMsg n t = "Type '\{ppTy t}' cannot cross the foreign-function boundary in extern '\{n}'. A foreign declaration may only mention Int, Float, Bool, Char, String, Unit, or Array Int (compiler/FFI-ABI.md section 1). Marshal '\{ppTy t}' into one of those on the Medaka side and declare the extern in terms of it"
 
 -- The `DExtern` sublist, in order.  Its own clause rather than a `filter` with a
 -- lambda predicate: `Decl` has no cheap "is an extern" projection, so the pattern

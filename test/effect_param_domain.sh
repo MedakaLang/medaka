@@ -19,6 +19,17 @@
 # Prefix`) and use LOCAL externs, so the shared stdlib/runtime.mdk is untouched —
 # this keeps the oracle-gated check-policy/typecheck diffs green.
 #
+# ⚠️ #2074: "LOCAL extern" here means a REDECLARATION of a real
+# stdlib/runtime.mdk catalog name (`getEnv`, `runCommand`), and that is now
+# load-bearing rather than incidental.  The FFI-ABI.md §1 crossable-set guard
+# (`ffiCheckExternsCrossable`, compiler/types/typecheck.mdk) rejects a user
+# extern mentioning a non-crossable type -- `Option String`, `List String` --
+# and EXEMPTS these fixtures only because the emitted call for a catalog name is
+# dispatched by NAME through `isAnyExtern` (compiler/backend/llvm_emit.mdk), so
+# the local signature is never a foreign-call contract.  Renaming these externs
+# to novel names would red this gate on the crossable rule, not on anything to
+# do with effect domains.
+#
 # Prereq: `make medaka` (native CLI).  Usage: sh test/effect_param_domain.sh
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

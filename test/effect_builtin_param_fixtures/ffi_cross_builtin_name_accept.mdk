@@ -1,0 +1,12 @@
+-- #2074 crossable-set guard, CONTROL for THE EXEMPTION.  `getEnv` is a real
+-- `stdlib/runtime.mdk` extern name, and `isAnyExtern`
+-- (compiler/backend/llvm_emit.mdk) dispatches the emitted call purely by NAME
+-- against the fixed `externCatalog` -- so this redeclaration is lowered as the
+-- REAL builtin no matter what the local row claims, and its signature is never
+-- a foreign-call contract.  `Option String` is non-crossable; this must still
+-- ACCEPT.  Its counterpart ffi_cross_ref_reject.mdk proves the exemption is
+-- keyed on the NAME and does not disable the guard wholesale.
+extern getEnv : String -> <Env "_"> Option String
+
+main : <IO> Unit
+main = println "ffi cross builtin name accept"
