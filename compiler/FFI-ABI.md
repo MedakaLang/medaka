@@ -27,6 +27,15 @@ boundary the runtime doesn't fully control.
 | `Char` | immediate, low-bit-1 (codepoint) | yes |
 | `String` | boxed `{header, byte_len, cp_count, bytes…}` | yes, copy-at-boundary |
 | `Array Int` | boxed `{header, len, Int elements…}` | yes, copy-at-boundary |
+| `Unit` | no representation (§8: zero-width) | yes, trivial |
+
+`Unit` was omitted from the original v1 cut, which made every void-returning C
+function — the single most common FFI shape — inexpressible. Added
+2026-08-27 (`ffi-lower-and-link`, S-crossable-guard re-cut) by orchestrator/Val
+ruling: `Unit` carries no runtime representation, so it crosses trivially in
+either position (a `Unit`-typed parameter marshals to nothing; a `Unit` return
+means the C function is called for effect only, mapping to a C `void` return)
+— see §2.6.
 
 Every other value kind (`Tuple`, `List`, other-element `Array`, ADT/`Record`,
 `Ref`, closures, thunks) is explicitly **not** in the v1 crossable set — see §3.
@@ -126,6 +135,19 @@ This is exactly why §2.3/§2.4 above default to copy-out on the C→Medaka
 direction and treat Medaka→C as borrow-for-the-call-only: **v1 has no
 mechanism for a foreign call to retain a Medaka-owned pointer across its own
 return.**
+
+### 2.6 `Unit`
+
+`Unit` has no runtime representation at all — not an immediate, not a boxed
+cell (§8). There is nothing to tag, untag, allocate, or free.
+
+- **Medaka → C:** a `Unit`-typed parameter marshals to nothing — it does not
+  appear in the C call's argument list. (In practice a v1 crossable signature
+  with a `Unit` parameter is degenerate; the common shape is `Unit` in RETURN
+  position, not argument position.)
+- **C → Medaka:** a `Unit`-returning declared extern maps to a C function
+  returning `void`; the call is made for effect only, and the Medaka side
+  produces the `Unit` value without reading any C return register.
 
 ## 3. Not crossable in v1 — and why, in ABI terms
 
