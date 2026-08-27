@@ -87,6 +87,10 @@ import frontend.ast.{
   -- `types/registry.mdk` and is still imported from there.
   TabKey(..),
   tabKeyOf,
+  -- #1647: the LOOKUP comparison, imported for `sameIfaceDecl` — the interface
+  -- method-signature lookup asks the same "which row does this key select?"
+  -- question `lookupTab` does, one key at a time rather than over a table.
+  tabKeyEq,
   tabKeyName,
   lookupTab,
   tabHasName,
@@ -2299,7 +2303,7 @@ public export data SiteKind =
   -- is no longer pinned to the scalar router, it routes on its own recorded argument.
   -- That is still byte-identical for a bare-tyvar constraint (the compiler's own), and
   -- deliberately not for a structured one — see `routesOfMonosTopV`'s header.
-  | SKRLocal String Bool (List Mono) (List String) (List (List Mono))
+  | SKRLocal String Bool (List Mono) (List IfaceRef) (List (List Mono))
 
 public export data PendingEntry =
   -- fields: name/method, route ref to stamp, primary mono, enclosing-fn name, kind,
@@ -6142,7 +6146,7 @@ data CDeclared =
 data ShadowDicts =
   | ShadowDicts {
       sdMonos : List Mono,
-      sdIfaces : List String,
+      sdIfaces : List IfaceRef,
       sdArgVecs : List (List Mono),
     }
 
@@ -6433,7 +6437,7 @@ uOblIsDecidableNow o =
 -- site, the same reason and the same shape as `PendingEntry`'s 6th field and
 -- `implObls`' 5th element — `resolveDictApps` runs post-HM, so the live `currentLoc`
 -- there is stale.  `resolveDictApps` republishes it into `goalSiteLoc`.
-pushDictApp : (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> Unit
+pushDictApp : (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc) -> Unit
 pushDictApp app = wPush perRun.value.dictApps app
 
 -- method-level-constraint dict-passing (the reference's res_method_dicts, Phase
@@ -7447,7 +7451,7 @@ data PerRun = PerRun {
     currentImportDefinersRef : Ref (List (String, String)),
     currentImportOriginsRef : Ref (List (String, String)),
     importedSchemeOblsRef : Ref (OrdMap (List VecObl)),  -- #1114/#845: this module's imported bindings' scheme contexts, keyed by LOCAL spelling (see importedSchemeOblEntries)
-    dictApps : Windowed (Ref (List Route), List Mono, List String, List (List Mono), Option Loc),  -- #841: pendingDictApps/N, ported onto Windowed
+    dictApps : Windowed (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc),  -- #841: pendingDictApps/N, ported onto Windowed
     obls : Windowed UObligation,  -- #838 I1: the call channel (pendingCallObligations/N), ported onto Windowed
     absorptions : Windowed AbsorptionEvent,  -- #839 2a: row-unifier atom-discard trail (write-only in 2a); windowed per body by the existing obls brackets
     schemeObligationsRef : Ref (List ((String, Int), List VecObl)),  -- #837: keyed by (binding-name, binding-id) — the id from resolve's
@@ -9822,7 +9826,7 @@ inferDictAtFound name routesRef inst =
     -- the ROUTING goal stays a spelling (`resolveDictApps` asks the SPELLING-keyed
     -- `KeyBuckets` a route-word question — see `dispHeadTab`); only the OBLIGATION goal
     -- below carries identity.
-    let _ = pushDictApp (routesRef, monos, map (s => s.csIface.irName) expanded, callArgVecsV expandedV (snd inst), !currentLoc)
+    let _ = pushDictApp (routesRef, monos, map (s => s.csIface) expanded, callArgVecsV expandedV (snd inst), !currentLoc)
     perRun.value.dictAppFns := (consSiteFn perRun.value.currentFn.value monos perRun.value.dictAppFns.value)
     -- #11 soundness: record this call's instantiated impl obligations (iface paired
     -- with the call's constraint mono), checked after inference by checkCallObligations.
@@ -13640,7 +13644,7 @@ shadowStandaloneDictSlots slots args subst =
     -- the invariant and the shared drop rule that preserves it).
     ShadowDicts {
       sdMonos = constraintMonosOf (map (sl => sl.csId) expanded) subst,
-      sdIfaces = map (sl => sl.csIface.irName) expanded,
+      sdIfaces = map (sl => sl.csIface) expanded,
       sdArgVecs = callArgVecsV expandedV subst,
     }
 
@@ -15378,9 +15382,12 @@ dictForwardedPairs : Int -> Int -> List (Int, String)
 dictForwardedPairs callN0 dictN0 = flatMap dictAppMonoIds (wWindow perRun.value.dictApps dictN0)
   ++ flatMap callOblMonoIds (callOblsWindow callN0)
 
-dictAppMonoIds : (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> List (Int, String)
+dictAppMonoIds : (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc) -> List (Int, String)
+-- B-4b-iii: the ROUTE carrier is now `IfaceRef`; this reader is a SPELLING consumer
+-- (its pairs key `dictForwardedPairs`' name-keyed forwarding test), so it projects
+-- `.irName` here and its answer is byte-identical to the pre-widening one.
 dictAppMonoIds (_, monos, ifaces, _, _) =
-  flatMap monoIdsWithIface (zipL monos ifaces)
+  flatMap monoIdsWithIface (zipL monos (map (i => i.irName) ifaces))
 
 callOblMonoIds : (IfaceRef, List Mono, Option Loc) -> List (Int, String)
 callOblMonoIds (iface, monos, _) =
@@ -16974,7 +16981,7 @@ resolveRLocalSites prog implTable ((PendingEntry name tagRef am _ kind loc)::res
 -- stamped the correct RKey<receiverHead> via resolveArgStamps.
 -- An ungrounded receiver (still a tyvar) → leave it.  Mirrors lib/typecheck.ml's
 -- RLocal-vs-ordinary-dispatch split (the oracle keys the genuine case off the receiver).
-resolveRLocalSite : List Decl -> ImplBuckets -> String -> Ref Route -> Mono -> String -> List Mono -> List String -> List (List Mono) -> Unit
+resolveRLocalSite : List Decl -> ImplBuckets -> String -> Ref Route -> Mono -> String -> List Mono -> List IfaceRef -> List (List Mono) -> Unit
 resolveRLocalSite prog implTable name tagRef am sym monos ifaces argVecs = match headTyconMono am
   -- S2 (THE INVERSION): route by SHADOW KIND first, receiver second.
   --   * DEFINER shadow (the name is this module's own top-level fn) → the standalone,
@@ -22101,7 +22108,7 @@ findImplEntryGo ((ImplEntry tag2 ms hty reqs itys ifn)::rest) iface tag m
 -- fill each constrained-fn call site's routes: one route per constraint mono.  A
 -- mono pinned to a concrete head → RKey; still a constraint variable (a nested
 -- constrained call) → RDict; otherwise RNone.
-resolveDictApps : List Decl -> ImplBuckets -> List (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> Unit
+resolveDictApps : List Decl -> ImplBuckets -> List (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc) -> Unit
 resolveDictApps _ _ [] = goalSiteLoc := None
 resolveDictApps prog implTable ((routesRef, monos, ifaces, argVecs, loc)::rest) =
   goalSiteLoc := loc
@@ -22153,7 +22160,7 @@ data EntailKind =
   -- drift.  `[]` at every caller with no vector to offer, which reproduces the
   -- pre-#1154 singleton exactly.  Same pattern as EKReturn/EKArg carrying the
   -- `fullMono` only THEY need.
-  | EKNestedTop String Undetermined Int Int (List Mono)
+  | EKNestedTop IfaceRef Undetermined Int Int (List Mono)
   -- #156 S3c: arg-position stamp (resolveArgStamp).  assum =
   -- activeDictVarOfEncl → RDict (never RDictFwd; arg-position); inst = same canonical
   -- RKey primary as EKReturn but element routes via argImplDictRoutesForEncl keyed on
@@ -22405,7 +22412,7 @@ entailInst implTable _ m encl tag (EKNestedTop iface _ prevSize spent rest) =
   -- The lesson for the next bite at this seam: a wrong answer downstream of an
   -- interface-spelling collision is NOT evidence that the interface-spelling seam caused
   -- it.  Vary the collision away and re-measure before attributing.
-  let routeKey = fromOption tag (keyForSiteByIface (ifaceRefBare iface) (m::rest))
+  let routeKey = fromOption tag (keyForSiteByIface iface (m::rest))
   (
     RKey routeKey (argImplRequiresRoutes implTable iface encl tag m rest prevSize spent),
     [],
@@ -22450,7 +22457,7 @@ entailFallback _ (EKOp _ _) = RNone
 -- [encl] == "" ⇒ global activeDictVarOf (activeDictVarForEncl short-circuits); else
 -- the enclosing method's own constraint-var dict.  [policy] decides the undetermined
 -- arm (see Undetermined).
-routeOf : ImplBuckets -> String -> String -> Undetermined -> Mono -> Route
+routeOf : ImplBuckets -> IfaceRef -> String -> Undetermined -> Mono -> Route
 routeOf implTable iface encl policy m =
   routeOfD implTable iface encl policy m [] 0 0
 
@@ -22461,7 +22468,7 @@ routeOf implTable iface encl policy m =
 -- diverging at route-resolution time.  Both are unchanged here; they are recomputed once
 -- per impl level in argImplRequiresRoutes, which owns the whole shrinking argument.
 -- #1154 (F-3a): [rest] carries the predicate's goal args past arg 0 (see EKNestedTop).
-routeOfD : ImplBuckets -> String -> String -> Undetermined -> Mono -> List Mono -> Int -> Int -> Route
+routeOfD : ImplBuckets -> IfaceRef -> String -> Undetermined -> Mono -> List Mono -> Int -> Int -> Route
 -- #156 S3b: a thin adapter over `entail` (EKNestedTop kind).  The nested/top ladder
 -- packs its `requires` into the primary RKey, so `snd` is empty and only `fst` is read —
 -- byte-identical to the pre-S3b arm-by-arm body.  The requires recursion still lands back
@@ -22517,13 +22524,13 @@ undeterminedRoute implTable (CountImpls prog iface) =
 -- Slot COUNT, slot ORDER and the number of Routes produced are unchanged either way,
 -- which is what still keeps this arity-neutral.  The self-compile fixpoint proves
 -- absence-of-regression, never correctness of the new path — as before.
-routesOfMonosTopV : List Decl -> ImplBuckets -> List Mono -> List String -> List (List Mono) -> List Route
+routesOfMonosTopV : List Decl -> ImplBuckets -> List Mono -> List IfaceRef -> List (List Mono) -> List Route
 -- no vectors at all (a caller with nothing to offer) ⇒ the scalar router, unchanged.
 routesOfMonosTopV prog implTable monos ifaces [] =
   routesOfMonosTop prog implTable monos ifaces
 routesOfMonosTopV _ _ [] _ _ = []
 routesOfMonosTopV prog implTable (m::rest) [] (_::vs) =
-  routeOf implTable "" "" (CountImpls prog "") m ::
+  routeOf implTable ifaceRefNone "" (CountImpls prog "") m ::
     routesOfMonosTopV prog implTable rest [] vs
 routesOfMonosTopV prog implTable (m::rest) (iface::ifacesRest) (v::vs) =
   topRouteV prog implTable iface m v ::
@@ -22538,10 +22545,11 @@ routesOfMonosTopV prog implTable (m::rest) (iface::ifacesRest) (v::vs) =
 -- slot the mono of `b`, while the predicate's arg 0 is `a`'s): both slots are evidence
 -- for the SAME predicate, so both must select on the same goal.  That is what
 -- `vectorGoal` returning the head separately encodes; the scalar arm keeps [m].
-topRouteV : List Decl -> ImplBuckets -> String -> Mono -> List Mono -> Route
+topRouteV : List Decl -> ImplBuckets -> IfaceRef -> Mono -> List Mono -> Route
 topRouteV prog implTable iface m goals = match vectorGoal iface goals
-  Some (g0, gs) => routeOfD implTable iface "" (CountImpls prog iface) g0 gs 0 0
-  None => routeOf implTable iface "" (CountImpls prog iface) m
+  Some (g0, gs) =>
+    routeOfD implTable iface "" (CountImpls prog iface.irName) g0 gs 0 0
+  None => routeOf implTable iface "" (CountImpls prog iface.irName) m
 
 -- `Some (arg0, tail)` exactly when the widening applies: a NON-EMPTY argument vector
 -- under a KNOWN interface.  Everything else is None ⇒ the scalar route.
@@ -22558,17 +22566,17 @@ topRouteV prog implTable iface m goals = match vectorGoal iface goals
 -- what keeps that function's soundness argument true now that this is its second
 -- non-empty-`rest` caller — see the re-derivation in its header.  Dropping the length-1
 -- clause does not touch that pin: it only widens WHICH non-empty vectors get past it.
-vectorGoal : String -> List Mono -> Option (Mono, List Mono)
+vectorGoal : IfaceRef -> List Mono -> Option (Mono, List Mono)
 vectorGoal _ [] = None
-vectorGoal iface (g0::gs) = if iface == "" then None else Some (g0, gs)
+vectorGoal iface (g0::gs) = if iface.irName == "" then None else Some (g0, gs)
 
-routesOfMonosTop : List Decl -> ImplBuckets -> List Mono -> List String -> List Route
+routesOfMonosTop : List Decl -> ImplBuckets -> List Mono -> List IfaceRef -> List Route
 routesOfMonosTop _ _ [] _ = []
 routesOfMonosTop prog implTable (m::rest) [] =
-  routeOf implTable "" "" (CountImpls prog "") m ::
+  routeOf implTable ifaceRefNone "" (CountImpls prog "") m ::
     routesOfMonosTop prog implTable rest []
 routesOfMonosTop prog implTable (m::rest) (iface::ifacesRest) =
-  routeOf implTable iface "" (CountImpls prog iface) m ::
+  routeOf implTable iface "" (CountImpls prog iface.irName) m ::
     routesOfMonosTop prog implTable rest ifacesRest
 
 -- the undetermined-constraint resolution: count impls of [iface] in [prog].
@@ -22583,7 +22591,7 @@ routeUndeterminedTop prog implTable iface
     -- one to invent.  `tconUnresolved`, not `tconBuiltin`: an impl head is not a
     -- builtin.  Recovering it means giving `implHeadTagsForIface` an
     -- origin-carrying return type; that is a consumer change, not this carrier's.
-    [tag] => RKey tag (argImplRequiresRoutes implTable iface "" tag (tconUnresolved tag) [] 0 0)
+    [tag] => RKey tag (argImplRequiresRoutes implTable (ifaceRefBare iface) "" tag (tconUnresolved tag) [] 0 0)
     _ => reportAmbiguousImpl iface
 
 reportAmbiguousImpl : String -> Route
@@ -22621,7 +22629,7 @@ ambiguousImplMsg iface = "Ambiguous instance for `"
 routesOfMonos : ImplBuckets -> List Mono -> List Route
 routesOfMonos _ [] = []
 routesOfMonos implTable (m::rest) =
-  routeOf implTable "" "" KeepNone m :: routesOfMonos implTable rest
+  routeOf implTable ifaceRefNone "" KeepNone m :: routesOfMonos implTable rest
 
 -- Native #54/#21 residual: the activeDictVar-AWARE requires recursion.  Recursing
 -- via routeOf (not the removed blind reqRoute) keeps every nesting level
@@ -22730,12 +22738,12 @@ routesOfMonos implTable (m::rest) =
 -- vector under a non-empty `iface`.  A caller that supplies a non-empty [rest] with
 -- `iface == ""` would be the shape to re-derive for; the `if iface == ""` pin below
 -- neutralizes even that.
-argImplRequiresRoutes : ImplBuckets -> String -> String -> String -> Mono -> List Mono -> Int -> Int -> List Route
+argImplRequiresRoutes : ImplBuckets -> IfaceRef -> String -> String -> Mono -> List Mono -> Int -> Int -> List Route
 argImplRequiresRoutes implTable iface encl tag m rest prevSize spent =
   -- #1576: the goal vector is bound BEFORE the fuse test now, because the fuse test
   -- reads it.  It is pure, so hoisting it costs a `monoSizes` walk on the limit-hit
   -- path and changes no answer.
-  let goals = if iface == "" then [m] else m::rest
+  let goals = if iface.irName == "" then [m] else m::rest
   let size = monoSizes goals
   -- SHRINKING ⇒ free.  No parent (`prevSize == 0`, a seed) ⇒ not shrinking, by
   -- definition rather than by measurement: there is nothing to have shrunk from.
@@ -22750,7 +22758,7 @@ argImplRequiresRoutes implTable iface encl tag m rest prevSize spent =
     -- one of these two without the other is the thing C2 forbids.  Its own `iface ==
     -- ""` pin in the `goals` binding above is the same sentinel `selectReqImpl`
     -- re-spells; both stay name-scoped.
-    match selectReqImpl implTable (ifaceRefBare iface) tag m goals
+    match selectReqImpl implTable iface tag m goals
       Some (headTy, itys, reqs) => match headSubstWithParams headTy itys m goals
         Some subst =>
           -- THIS level's goal size becomes the child's [prevSize] — that is the whole
@@ -22871,7 +22879,7 @@ argReqRoute _ _ _ _ [] _ _ = RNone
 argReqRoute implTable iface encl subst (arg::more) prevSize spent =
   routeOfD
     implTable
-    iface
+    (ifaceRefBare iface)
     encl
     KeepNone
     (fromAstType subst arg)
@@ -22922,7 +22930,7 @@ resolveRecMono encl m = match headTyconNameMono m
   Some tag => RKey tag []
   None => match enclSlot encl m
     Some slot => RDict (dictParamName encl slot)
-    None => routeOf omEmpty "" "" KeepNone m
+    None => routeOf omEmpty ifaceRefNone "" KeepNone m
 
 -- the dict-param slot at which [m]'s tyvar sits among the enclosing fn's
 -- constraint ids (its position in funConstraintsRef[encl] = the kept slot)
@@ -26449,9 +26457,19 @@ inferImplBodies env allProg rpNames (d::rest) =
 inferOneImpl : TcEnv -> List Decl -> List String -> Decl -> Unit
 inferOneImpl env allProg rpNames (DAttrib _ d) =
   inferOneImpl env allProg rpNames d
-inferOneImpl env allProg rpNames (DImpl { iface, tys, reqs, methods, ... }) = match reqs
-  [] => inferPlainImpl env allProg iface tys methods
-  _ => inferRequiresImpl env allProg rpNames iface tys reqs methods
+-- #1647 (S1): [implOrigin] is bound here, NOT dropped by the `...`.  The impl-body
+-- signature lookup below (`ifaceMethodTyResolved`) used to receive the interface's
+-- bare SPELLING, so two modules each declaring an interface spelled `Speak` sent
+-- every impl body of either one to whichever `DInterface` the joint decl list
+-- happened to list FIRST — attributing module B's body to module A's declared
+-- method type, per import order.  DICT-SEMANTICS §8 I4: an interface is a
+-- (module, name) pair, so the lookup takes the IDENTITY the `impl` head already
+-- carries.  Same construction as `implDeclFact`, from the same two fields.
+inferOneImpl env allProg rpNames (DImpl { iface, tys, reqs, methods, implOrigin, ... }) =
+  let iref = IfaceRef { irName = iface, irOrigin = implOrigin }
+  match reqs
+    [] => inferPlainImpl env allProg iref tys methods
+    _ => inferRequiresImpl env allProg rpNames iref tys reqs methods
 inferOneImpl _ _ _ _ = ()
 
 -- D3a: a NON-`requires` impl body, inferred on every path (single elaboration mode)
@@ -26459,7 +26477,7 @@ inferOneImpl _ _ _ _ = ()
 -- `Display`/`Debug` impl — the 19 `display@String` sites) reach inferMethodAt and
 -- get stamped.  Mirrors inferRequiresImpl's head-mono substitution but with no
 -- requires to register (an unconstrained impl threads no element dict).
-inferPlainImpl : TcEnv -> List Decl -> String -> List Ty -> List ImplMethod -> Unit
+inferPlainImpl : TcEnv -> List Decl -> IfaceRef -> List Ty -> List ImplMethod -> Unit
 inferPlainImpl env allProg iface tys methods =
   let implTvMap = freshTvMap (dedup (flatMap tyVarNames tys))
   let headMonos = map (fromAstType implTvMap) tys
@@ -26470,20 +26488,20 @@ inferPlainImpl env allProg iface tys methods =
 -- inner method ref unifies its discriminating var to the head's `a`; infer each
 -- method body against the method type instantiated at the head; THEN register the
 -- requires' post-unification ids in activeDictVars keyed to `$dict_<method>_<slot>`.
-inferRequiresImpl : TcEnv -> List Decl -> List String -> String -> List Ty -> List Require -> List ImplMethod -> Unit
+inferRequiresImpl : TcEnv -> List Decl -> List String -> IfaceRef -> List Ty -> List Require -> List ImplMethod -> Unit
 inferRequiresImpl env allProg rpNames iface tys reqs methods =
   let implTvMap = freshTvMap (dedup (flatMap tyVarNames tys))
   let headMonos = map (fromAstType implTvMap) tys
   let _ = inferImplMethods env allProg iface implTvMap headMonos methods
   registerImplRequires implTvMap rpNames reqs methods
 
-inferImplMethods : TcEnv -> List Decl -> String -> List (String, Mono) -> List Mono -> List ImplMethod -> Unit
+inferImplMethods : TcEnv -> List Decl -> IfaceRef -> List (String, Mono) -> List Mono -> List ImplMethod -> Unit
 inferImplMethods _ _ _ _ _ [] = ()
 inferImplMethods env allProg iface implTvMap headMonos (m::rest) =
   let _ = inferImplMethod env allProg iface implTvMap headMonos m
   inferImplMethods env allProg iface implTvMap headMonos rest
 
-inferImplMethod : TcEnv -> List Decl -> String -> List (String, Mono) -> List Mono -> ImplMethod -> Unit
+inferImplMethod : TcEnv -> List Decl -> IfaceRef -> List (String, Mono) -> List Mono -> ImplMethod -> Unit
 inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats body) = match ifaceMethodTyResolved allProg iface mname
   None => ()
   Some (ifaceParams, mty, gscope) =>
@@ -26579,7 +26597,9 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     let launderFlagged = isNonEmptyL launderEsc
     let _ = match launderEsc
       [] => ()
-      escaping => pushTypeErrorOnceAt "T-EFFECT-LAUNDER" launderLoc (effectLaunderMsg iface mname escaping)
+      -- `.irName`: a DIAGNOSTIC wants the spelling, not the identity (#1446 P1's
+      -- rule — `irName` is kept alongside `irOrigin` for exactly this).
+      escaping => pushTypeErrorOnceAt "T-EFFECT-LAUNDER" launderLoc (effectLaunderMsg iface.irName mname escaping)
     -- #814 (S0): W3 method-scheme fidelity (DICT-SEMANTICS §3).  The method's
     -- non-head quantified variables — type AND effect — belong to the CALLER
     -- (every use site re-instantiates them freshly), so the body must be checked
@@ -26607,7 +26627,11 @@ inferImplMethod env allProg iface implTvMap headMonos (ImplMethod mname pats bod
     -- the survivor check never read, and `check` stayed green on a program whose
     -- built binary printed garbage.
     let addedCallObls = callOblsWindow callN0
-    let _ = checkImplMethodRigidity iface mname mty headMonos extraMap effMap addedObls addedCallObls launderFlagged gscope launderLoc
+    -- `.irName`: this checker's `iface` is a SPELLING channel end to end — it names
+    -- the subject in a diagnostic and is compared against `pred.iface.irName` in
+    -- `checkSurvivorDispatchMonos`.  Widening it to an identity is a separate
+    -- question from #1647's signature LOOKUP and is deliberately not this slice's.
+    let _ = checkImplMethodRigidity iface.irName mname mty headMonos extraMap effMap addedObls addedCallObls launderFlagged gscope launderLoc
     -- #518 (S0, silent wrongness): PLAN.md #11 Num defaulting NEVER RAN over an impl
     -- method body — this path is not a let-group, so nothing grounded its ambiguous
     -- Num vars.  A literal consumed entirely inside the body (`t _ = s [1, 2]`) left
@@ -27207,30 +27231,49 @@ removeAllS drop (x::xs)
 -- the method type without the scope that elaborates it.  On the slow path it comes from
 -- the very declaration this scan selected (free — same traversal); on the fast path it
 -- comes out of the same table entry as `(typarams, mty)`.
-ifaceMethodTyResolved : List Decl -> String -> String -> Option (List String, Ty, List (String, List Kind))
+ifaceMethodTyResolved : List Decl -> IfaceRef -> String -> Option (List String, Ty, List (String, List Kind))
 ifaceMethodTyResolved allProg iface mname
   | !useFastIfaceMethodTy = match omLookup mname perRun.value.methodIfaceParamsRef.value
     Some (ifn, typarams, mty, scope) =>
-      -- ⚠️ SPELLING comparison, deliberately: the caller supplies `iface` as a bare
-      -- name (from an `impl` head / a default-body subject), so making this an identity
-      -- test would need the caller re-keyed first.  #1446 P1 stops at the OBLIGATION
-      -- channel; this guard is unchanged in behaviour.
-      if ifn.irName == iface then
+      -- #1647: an IDENTITY comparison now — the caller was re-keyed (`inferOneImpl`
+      -- binds `DImpl.implOrigin` instead of dropping it), which is precisely the
+      -- prerequisite the previous spelling comparison named as missing.
+      if sameIfaceDecl ifn iface then
         Some (typarams, mty, scope)
       else
         None
     None => None
   | otherwise = ifaceMethodTy allProg iface mname
 
+-- #1647: the ONE comparison both arms of the method-signature lookup use.  This is a
+-- LOOKUP question (`tabKeyEq`'s half of the rule stated at `tyConIdsConflict`): a MISS
+-- is loud — no signature, the impl body is simply not inferred, the pre-existing
+-- behaviour for an unknown interface — while a false HIT reads the body under another
+-- module's declared method type, which is #1647 itself.  So it routes through the ONE
+-- total mint: two STAMPED occurrences match only on `(module, name)`, two UNSTAMPED
+-- ones (`TkBare`/`TkBare` — the flat/loader-less driver, whose own decls are stamped
+-- on NEITHER side, #1115/E-1) still match by spelling exactly as before, and stamped
+-- never matches unstamped.  A bare `ifaceIdMatches` on `ifaceIdentity` would have got
+-- the first two right and turned the third population into a total lookup MISS.
+sameIfaceDecl : IfaceRef -> IfaceRef -> Bool
+sameIfaceDecl a b = tabKeyEq (oblIfaceKey a) (oblIfaceKey b)
+
 -- the (interface typarams, declared method type, graded scope) of method [mname] in
 -- interface [iface], searched across [allProg]'s interface decls
-ifaceMethodTy : List Decl -> String -> String -> Option (List String, Ty, List (String, List Kind))
+ifaceMethodTy : List Decl -> IfaceRef -> String -> Option (List String, Ty, List (String, List Kind))
 ifaceMethodTy [] _ _ = None
 ifaceMethodTy ((DAttrib _ d)::rest) iface mname = match ifaceMethodTy [d] iface mname
   Some r => Some r
   None => ifaceMethodTy rest iface mname
-ifaceMethodTy ((DInterface { name, typarams, methods, ... })::rest) iface mname
-  | name == iface = match methodTyOf mname methods
+-- #1647: `ifaceOrigin` is bound, not dropped — this scan takes the FIRST decl matching
+-- the interface, and with a bare `name == iface` the joint multi-module decl list makes
+-- "first" mean "whichever module the loader happened to order first", which is how an
+-- impl body came to be read under a same-spelled OTHER module's method type.
+ifaceMethodTy ((DInterface { name, typarams, methods, ifaceOrigin, ... })::rest) iface mname
+  | sameIfaceDecl IfaceRef {
+    irName = name,
+    irOrigin = ifaceOrigin,
+  } iface = match methodTyOf mname methods
     Some ty => Some (typarams, ty, declGradedScope typarams methods)
     None => ifaceMethodTy rest iface mname
   | otherwise = ifaceMethodTy rest iface mname
@@ -27890,7 +27933,7 @@ numCallObls ((iface, monos, loc)::rest) = match (iface.irName, monos)
   ("Num", [mono]) => mkMethodOccObl (builtinIfaceRef BNum) ["a"] (TyVar "a") mono PNumLit loc :: numCallObls rest
   _ => numCallObls rest
 
-numDictObls : List (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> List UObligation
+numDictObls : List (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc) -> List UObligation
 -- #1155: the loc comes from the ENTRY's own snapshot, not from the ambient
 -- `currentLoc`.  This runs at a generalized group close, well after inference left
 -- the call site, so `currentLoc` named whichever ELoc happened to be entered last.
@@ -27900,7 +27943,9 @@ numDictObls : List (Ref (List Route), List Mono, List String, List (List Mono), 
 -- of those readers destructures the 5th element as `_`.  Nothing renders it today;
 -- the point is that the tuple stops carrying a span it knows to be wrong.
 numDictObls [] = []
-numDictObls ((_, monos, ifaces, _, loc)::rest) = flatMap (p => if fst p == "Num" then [mkMethodOccObl (builtinIfaceRef BNum) ["a"] (TyVar "a") (snd p) PNumLit loc] else []) (zipL ifaces monos)
+-- B-4b-iii: SPELLING consumer of the widened route carrier — the `"Num"` test is a
+-- name test against the prelude spelling, unchanged, so `.irName` is projected here.
+numDictObls ((_, monos, ifaces, _, loc)::rest) = flatMap (p => if fst p == "Num" then [mkMethodOccObl (builtinIfaceRef BNum) ["a"] (TyVar "a") (snd p) PNumLit loc] else []) (zipL (map (i => i.irName) ifaces) monos)
   ++ numDictObls rest
 
 -- #23 (two-hop forward): the impl-obligation-shaped entries for EVERY iface (not
@@ -30082,9 +30127,11 @@ lookupIfaceById id (o::rest)
   | otherwise = lookupIfaceById id rest
 
 -- Scan pendingDictApps for [id] at a slot (bare-TVar mono) whose iface is non-empty.
-ifaceFromDictApps : Int -> List (Ref (List Route), List Mono, List String, List (List Mono), Option Loc) -> String
+-- B-4b-iii: SPELLING consumer of the widened route carrier — it RETURNS a bare name,
+-- so `.irName` is projected at the one read and `ifaceAtMonoId` keeps its `List String`.
+ifaceFromDictApps : Int -> List (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc) -> String
 ifaceFromDictApps _ [] = ""
-ifaceFromDictApps id ((_, monos, ifaces, _, _)::rest) = match ifaceAtMonoId id monos ifaces
+ifaceFromDictApps id ((_, monos, ifaces, _, _)::rest) = match ifaceAtMonoId id monos (map (i => i.irName) ifaces)
   Some s => s
   None => ifaceFromDictApps id rest
 

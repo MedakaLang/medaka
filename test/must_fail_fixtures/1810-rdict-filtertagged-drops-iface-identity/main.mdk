@@ -1,4 +1,0 @@
-import amod.{aValue}
-import zmod.{zValue}
-
-main = println (aValue, zValue)
