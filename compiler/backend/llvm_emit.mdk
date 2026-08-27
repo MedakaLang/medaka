@@ -9540,10 +9540,22 @@ paramEnv (PWild::rest) (_::tys) i = paramEnv rest tys (i + 1)
 paramEnv (PWild::rest) [] i = paramEnv rest [] (i + 1)
 paramEnv _ _ _ = panic "llvm: function parameters must be plain variables"
 
+-- #1101: is a tail-position call of `fname` with `n` flattened arguments SATURATED
+-- against the callee's EMITTED define arity?  The ruler is `defArityOf` (the
+-- replayed post-`etaSaturateMethodBody` param count of the actual `@mdk_<fn>`
+-- define), NEVER `fnArity` — the signature/clause arity diverges from the emitted
+-- one whenever eta-saturation fires (see installDefArityMap's note above).  `None`
+-- (name absent from the table) keeps the unconditional direct call, matching the
+-- behaviour that predated this guard for anything not in the table.
+tailCallSaturated : Emit -> String -> Int -> Bool
+tailCallSaturated e fname n = match defArityOf e fname
+  Some a => n == a
+  None => True
+
 -- emit a function body in TAIL position: every control path ends in a `ret`.
 -- An `if` recurses into both arms (each arm is itself in tail position and rets);
--- a tail call to a known function emits `[musttail] call` + `ret`; anything else
--- is computed as a value and returned.
+-- a SATURATED tail call to a known function emits `[musttail] call` + `ret`;
+-- anything else is computed as a value and returned.
 emitFnBody : Emit -> List (String, (String, LTy)) -> String -> CExpr -> Unit
 emitFnBody e env self (CIf c t f) =
   let (cv, _) = emitExpr e env c
@@ -9563,7 +9575,15 @@ emitFnBody e env self other =
   match hd
     CVar fname0 _ =>
       let fname = canonFnName e fname0
-      if isKnownFn e fname && hasArgs args then
+      -- #1101: an UNSATURATED (over- or under-applied) tail call must not be
+      -- emitted as a direct call — passing every flattened argument to a define
+      -- with fewer params silently dropped the surplus and never invoked the
+      -- returned closure.  Falling through to `emitValueRet` routes the node
+      -- through `emitApp` -> `emitKnownFnSat` -> `emitOverApp`/`emitPapClosure`,
+      -- the same correct shape an application in `main`'s own body already gets.
+      -- `emitArgs` is 1:1 with `args`, so `lengthS args` is the arg-word count
+      -- without emitting anything (the guard must not emit args it may discard).
+      if isKnownFn e fname && hasArgs args && tailCallSaturated e fname (lengthS args) then
         let argOps = emitArgs e env args
         let r = freshReg e
         let kw = if fname == self then "musttail call" else "call"
