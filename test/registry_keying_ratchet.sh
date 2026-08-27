@@ -266,6 +266,8 @@ mainSchemeRef -- the entry module inferred `main` scheme; last writer (dependenc
 sigNameSetRef -- signature NAME set, OrdMap membership mirror
 sigTyMapRef -- signature name -> Ty map
 implInferEnabled -- toggle: whether impl-body inference is active on this pass
+stdlibOwnedModsRef -- #2072/#2096 (FFI stamp): module ids owned by the stdlib root, read by ffiStampMode's Module arm to decide whether a checked program is exempt from the FFI stamp
+flatEntryIsStdlibRef -- #2072/#2096 (FFI stamp): whether the Flat-arm entry file is itself stdlib-owned, read by ffiStampMode's Flat arm for the same exemption decision
 ALLOWLIST_EOF
 )
 

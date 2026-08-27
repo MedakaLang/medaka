@@ -24,6 +24,8 @@ ARROW
 LT
 UPPER "Net"
 STRING "a.com/foo"
+COMMA
+UPPER "FFI"
 GT
 UPPER "String"
 NEWLINE

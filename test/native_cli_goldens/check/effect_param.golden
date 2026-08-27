@@ -1,8 +1,8 @@
-fetch : String -> <Net "a.com/foo"> String
+fetch : String -> <FFI, Net "a.com/foo"> String
 liftIO : (Unit -> a) -> Async b a
 liftIO2 : (Unit -> <IO> a) -> Async <IO | b> a
 main : Unit
-netGet : String -> <Net "a.com/foo"> String
+netGet : String -> <FFI, Net "a.com/foo"> String
 runAsync : Async a b -> b
 seqIO : Async a b -> (b -> Async a c) -> Async a c
 yld : Async a Unit
