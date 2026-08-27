@@ -717,6 +717,7 @@ eqStr : String -> String -> Bool
 erredDuring : (Unit -> a) -> (Bool, a)
 exemptInPlaceIndexMutHeads : List String
 exitLevel : Unit -> Unit
+expandAliasHeadTy : Ty -> Ty
 expandIoInBound : List Atom -> List Atom
 expandSupersCross : List Decl -> List (String, List Int) -> List (String, List IfaceRef) -> List (String, List (List Mono)) -> (List (String, List Int), List (String, List IfaceRef))
 expandSupersEntry : List Decl -> List (String, List IfaceRef) -> List (String, List (List Mono)) -> (String, List Int) -> (String, List Int)
@@ -736,7 +737,12 @@ extendVar : TcEnv -> String -> Scheme -> TcEnv
 extendVars : TcEnv -> List (String, Scheme) -> TcEnv
 externDecls : List Decl -> List Decl
 externSchemes : Map String TyConOrigin -> List Decl -> List (String, Scheme)
-externSchemesGo : List Decl -> List (String, Scheme)
+externSchemesGo : Bool -> List Decl -> List (String, Scheme)
+ffiAddAtom : List (String, Option String) -> List (String, Option String)
+ffiHasAtom : List (String, Option String) -> Bool
+ffiStampMode : CheckMode -> Bool
+ffiStampResultTy : Ty -> Ty
+ffiStampTy : Ty -> Ty
 fieldAssignDictSites : FieldAssign -> List (Ref (List Route))
 fieldAssignEVars : FieldAssign -> List String
 fieldAssignNamePair : FieldAssign -> (String, Unit)
@@ -1766,6 +1772,7 @@ setLocIfSome : Option Loc -> Unit
 setMethodConstraintEntry : String -> List Int -> List Int -> Unit
 setNumlitFloats : Unit -> Unit
 setNumlitFloatsGo : List (Mono, Ref (Option Float), Int, Ref Route) -> Unit
+setStdlibOwnership : Bool -> List String -> Unit
 shadowBareName : List (String, String) -> String -> String
 shadowDomainFor : TcEnv -> String -> String -> Option Mono
 shadowStandaloneDictSlots : List CSlot -> List (List Mono) -> List (Int, Mono) -> ShadowDicts
@@ -1958,6 +1965,7 @@ usePathBindsName : UsePath -> String -> Bool
 usePathModuleId : UsePath -> String
 usePathWitnesses : UsePath -> Bool -> String -> (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> Bool
 usePathWitnessesCtor : UsePath -> String -> String -> Ident -> Bool
+userExternSchemes : CheckMode -> Map String TyConOrigin -> List Decl -> List (String, Scheme)
 usesImplDict : String -> Int -> Expr -> Bool
 varHeadApps : String -> Ty -> List (List Ty)
 varHeadHere : String -> Ty -> List Ty -> List (List Ty)

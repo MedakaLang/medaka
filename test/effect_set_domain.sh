@@ -26,7 +26,7 @@ run() { perl -e 'alarm 60; exec @ARGV' -- "$M" check "$1" 2>&1; }
 # expect ACCEPT: no "TYPE ERROR" / "parse error" line
 expect_ok() {
   out="$(run "$1")"
-  if echo "$out" | grep -qiE 'TYPE ERROR|parse error'; then
+  if echo "$out" | grep -qiE 'TYPE ERROR|parse error|^error:'; then
     echo "FAIL $2 (expected accept):"; echo "$out" | grep -iE 'error' | head -2; fail=$((fail+1))
   else echo "ok   $2"; pass=$((pass+1)); fi
 }
@@ -40,9 +40,9 @@ expect_reject() {
 
 expect_ok     "$FIX/set_p4_parse_accept.mdk"      "P4  parse-accept"
 expect_ok     "$FIX/set_subset_accept.mdk"        "ACC subset-accept"
-expect_reject "$FIX/set_subset_reject.mdk"        "REJ subset-reject" 'performs <Foo {"a", "b"}>'
+expect_reject "$FIX/set_subset_reject.mdk"        "REJ subset-reject" 'performs <FFI, Foo {"a", "b"}>'
 expect_ok     "$FIX/set_cap_saturate.mdk"         "CAP saturate-accept (top<=top)"
-expect_reject "$FIX/set_cap_saturate_ctrl.mdk"    "CAP saturate-reject (top performs <Foo>)" 'performs <Foo>'
+expect_reject "$FIX/set_cap_saturate_ctrl.mdk"    "CAP saturate-reject (top performs <Foo>)" 'performs <FFI, Foo>'
 
 echo "effect_set_domain: $pass/$fail"
 [ "$fail" -eq 0 ]

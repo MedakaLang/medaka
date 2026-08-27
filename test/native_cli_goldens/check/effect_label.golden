@@ -1,4 +1,4 @@
-get : String -> <KV> String
-handler : String -> <KV, Log> String
-kvGet : String -> <KV> String
+get : String -> <FFI, KV> String
+handler : String -> <FFI, KV, Log> String
+kvGet : String -> <FFI, KV> String
 main : Unit

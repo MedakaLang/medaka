@@ -18,7 +18,7 @@ effect Stdout
 
 extern netGet : String -> <Net "a.com/foo"> String
 
-fetch : String -> <Net "a.com/foo"> String
+fetch : String -> <Net "a.com/foo", FFI> String
 fetch path = netGet path
 
 data Async e a = Done a | Suspend (Unit -> <e> Async e a)
@@ -57,8 +57,8 @@ main = runAsync (seqIO yld (_ => liftIO (u => println "effect param ok")))
 liftIO2 : (Unit -> <IO | e> a) -> Async <IO | e> a
 liftIO2 act = Suspend (u => Done (act u))
 # TYPES_USER
-netGet : String -> <Net "a.com/foo"> String
-fetch : String -> <Net "a.com/foo"> String
+netGet : String -> <FFI, Net "a.com/foo"> String
+fetch : String -> <FFI, Net "a.com/foo"> String
 runAsync : Async a b -> b
 liftIO : (Unit -> a) -> Async b a
 yld : Async a Unit

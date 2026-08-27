@@ -5,7 +5,7 @@ effect Foo Set
 
 extern grant : String -> <Foo {"a", "b"}> String
 
-use : String -> <Foo {"a", "b"}> String
+use : String -> <Foo {"a", "b"}, FFI> String
 use x = grant x
 
 main : <IO> Unit

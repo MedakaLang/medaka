@@ -164,3 +164,24 @@ alongside the eventual narrowing.
 **Workaround.** Same as the first entry — hoist the forwarding local to a
 top-level binding — or, if hoisting is undesirable, split the one local into
 two differently-named locals, one per use site.
+
+## `<FFI>` is a reachability label, not a memory-safety guarantee
+
+**What it is.** Calling a foreign function ends the compiler's memory-safety
+guarantee for that program. `<FFI>` ([#2071](https://github.com/MedakaLang/medaka/issues/2071))
+does **not** restore it. The label is a static, transitive statement of which
+code paths reach a foreign call at all — and nothing more.
+
+**Why this needs saying.** A foreign call can corrupt memory, crash, or
+violate any invariant Medaka's own type system enforces, and nothing in the
+effect system detects or prevents that — this is true even where `<FFI>`
+correctly and transitively appears in every caller's row. Seeing `<FFI>` in a
+signature tells you *which code can reach a foreign call*; it tells you
+nothing about whether that call is safe to make.
+
+**Workaround/caveat.** None — this is not a defect to work around, it is a
+scope boundary to know about. Treat `<FFI>` purely as a reachability marker
+when auditing a program, not as evidence the call has been checked for
+memory safety. *(Migration note: this entry belongs on the public capability
+release page once that page exists — [#2077](https://github.com/MedakaLang/medaka/issues/2077) —
+it is written here first because that page does not exist yet.)*

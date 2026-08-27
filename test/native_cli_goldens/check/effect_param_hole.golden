@@ -1,3 +1,3 @@
-fetch : Unit -> <Net "a.com/*"> String
+fetch : Unit -> <FFI, Net "a.com/*"> String
 main : Unit
-netGet : String -> <Net> String
+netGet : String -> <FFI, Net> String

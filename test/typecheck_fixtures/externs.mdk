@@ -11,5 +11,5 @@ useLen s = strLen s
 charsOf s = toChars s
 boxIt x = wrapL x
 combine a b = strLen a + strLen b
-shout : String -> <IO> Unit
+shout : String -> <IO, FFI> Unit
 shout s = emit s

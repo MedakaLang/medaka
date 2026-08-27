@@ -513,12 +513,14 @@ esac
 #     project must NOT require `--allow-internal`: the entry project's own modules
 #     are trusted exactly as stdlib is.  (Previously trusted ONLY stdlib, so this
 #     flagged `internal-only primitive` unless the flag was passed.)  The trust
-#     keys on the manifest — a `medaka.toml` marks this as a real project (a LOOSE
-#     no-manifest file stays untrusted; that leg lives in
-#     diff_compiler_internal_extern.sh).  Must ACCEPT (no internal-only error).
+#     keys on the manifest's CONTENT — `allow-internal = true` must be declared,
+#     not merely the presence of a `medaka.toml` (a LOOSE no-manifest file stays
+#     untrusted; that leg lives in diff_compiler_internal_extern.sh).  Must ACCEPT
+#     (no internal-only error).
 mkdir -p "$TMP/ownproj"
 cat > "$TMP/ownproj/medaka.toml" <<'EOF'
 name = "ownproj"
+allow-internal = true
 EOF
 cat > "$TMP/ownproj/kern.mdk" <<'EOF'
 export first : Array Int -> Int

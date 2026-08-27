@@ -4,7 +4,7 @@
 -- Also covered by the abstraction-leak canary; this is the explicit local case.
 extern fetch : String -> <Net "a.com/sub/*"> String
 
-call : Unit -> <Net "a.com/*"> String
+call : Unit -> <Net "a.com/*", FFI> String
 call _ = fetch "x"
 
 main : <IO> Unit
