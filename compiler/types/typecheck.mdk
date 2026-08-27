@@ -3470,13 +3470,55 @@ declEnvPolarityChain (m::rest) pacc pm =
 -- for the same reason its KIND does — #804/#1028: the importer can write the
 -- type even though it cannot see the constructors).  [tab] is what has been
 -- accumulated so far, threaded so a wrapper composes with what it wraps.
+--
+-- 🚨 #2112: THE FIXPOINT'S INPUT SET IS NOT ITS EXPORT SET.  The cross-module
+-- arm used to run the fixpoint over `filterList kindPublicDataDecl m.demDecls`
+-- — a PRE-filter — so a PUBLIC wrapper over a PRIVATE write/contra-bearing
+-- declaration composed against the lenient `PCo` default and never tightened:
+-- `data Inner a = MkInner (Ref a)` (private) under `export data Outer a =
+-- MkOuter (Inner a)` accepted the widening `Outer (Unit -> <> Unit)` ⇝ `Outer
+-- (Unit -> <Stdout> Unit)` through a module boundary while the identical
+-- one-file program correctly rejected it.  Visibility is a filter on what a
+-- row EXPORTS, not on what its own variance computation may SEE — the private
+-- decl is part of the public wrapper's meaning whether or not anyone can name
+-- it.  So the fixpoint now runs over the WHOLE row and the publicity filter
+-- moves to its OUTPUT, where it belongs.  (Filtering the output at all still
+-- matters: a private key is unnameable from outside, so publishing its row
+-- would be dead weight in a table every later row composes against.)
 declEnvRowPolarityEntries : Int -> DeclEnvModule -> List (TabKey, List Polarity) -> List (TabKey, List Polarity)
 declEnvRowPolarityEntries cur m tab
   | declEnvVisibleTo cur m.demOrd False =
     declEnvPolarityEntriesFix tab m.demDecls
-  | declEnvVisibleTo cur m.demOrd True =
-    declEnvPolarityEntriesFix tab (filterList kindPublicDataDecl m.demDecls)
+  | declEnvVisibleTo cur m.demOrd True = polarityEntriesPublicOnly m.demDecls (declEnvPolarityEntriesFix tab m.demDecls)
   | otherwise = []
+
+-- The OUTPUT half of #2112's split: keep only the entries whose declaration
+-- this row actually exports.  The predicate is `kindPublicDataDecl`'s reading
+-- of publicity plus the `DTypeAlias` arm `declEnvPolarityEntries` now records
+-- (#2108) — a peer projection rather than a widening of `kindPublicDataDecl`
+-- itself, because that predicate has readers (`declEnvKindEntries`,
+-- `declEnvSeedChain`) with no alias arm at all, and adding one there would
+-- move an acceptance table this slice is not scoped to touch.
+polarityEntriesPublicOnly : List Decl -> List (TabKey, List Polarity) -> List (TabKey, List Polarity)
+polarityEntriesPublicOnly decls entries =
+  let keys = polarityPublicKeys decls
+  filterList (e => tabKeyElem keys (fst e)) entries
+
+-- The keys of [decls] that leave the module.  Arm for arm with
+-- `kindPublicDataDecl`, plus `DTypeAlias`; `DAttrib` unwraps as everywhere else
+-- in this file.
+polarityPublicKeys : List Decl -> List TabKey
+polarityPublicKeys [] = []
+polarityPublicKeys ((DAttrib _ d)::rest) = polarityPublicKeys (d::rest)
+polarityPublicKeys ((DData { dataVis = VisPublic, dataName = n, dataOrigin = o })::rest) = tyTabKey o n :: polarityPublicKeys rest
+polarityPublicKeys ((DData { dataVis = VisAbstract, dataName = n, dataOrigin = o })::rest) = tyTabKey o n :: polarityPublicKeys rest
+polarityPublicKeys ((DNewtype { newtypePub = True, newtypeName = n, newtypeOrigin = o })::rest) = tyTabKey o n :: polarityPublicKeys rest
+polarityPublicKeys ((DTypeAlias { tyAliasPub = True, tyAliasName = n, tyAliasOrigin = o })::rest) = tyTabKey o n :: polarityPublicKeys rest
+polarityPublicKeys (_::rest) = polarityPublicKeys rest
+
+tabKeyElem : List TabKey -> TabKey -> Bool
+tabKeyElem [] _ = False
+tabKeyElem (k::rest) key = tabKeyEq k key || tabKeyElem rest key
 
 -- ── S0-3: the TRANSITIVE FIXPOINT the single fold above cannot reach ──────
 -- `declEnvPolarityEntries` (below) is ONE in-order pass, so a wrapper declared
@@ -3559,6 +3601,27 @@ declEnvPolarityEntries tab ((DData { dataName = n, dataParams = ps, dataCtors = 
   entry :: declEnvPolarityEntries (entry::tab) rest
 declEnvPolarityEntries tab ((DNewtype { newtypeName = n, newtypeParams = ps, newtypeCtor = con, newtypeFieldTy = fty, newtypeOrigin = o })::rest) =
   let entry = (tyTabKey o n, inferParamPolarities tab ps [Variant con (ConPos [fty])])
+  entry :: declEnvPolarityEntries (entry::tab) rest
+-- 🚨 #2108: A TYPE ALIAS IS TRANSPARENT, SO IT MUST CARRY THE CHANNEL IT NAMES.
+-- Falling through to the catch-all below left `type Cell a = Ref a` with no row
+-- at all, so `data Box a = MkBox (Cell a)` read `polarityAtOr None _ = PCo` and
+-- the whole write channel vanished behind one line of surface sugar: the
+-- widening `Box (Unit -> <> Unit)` ⇝ `Box (Unit -> <Stdout> Unit)` was ACCEPTED
+-- (and `callBox : Unit -> Unit` printed through the cell) where the alias-free
+-- `data Box a = MkBox (Ref a)` correctly rejected it.  Aliases are expanded by
+-- `fromAstType*` LATER than this table is built, so the expansion has to happen
+-- here: the RHS is exactly the alias's one "field", read against the same [tab]
+-- every other arm composes against, which is the alias expanded to whatever
+-- depth the fixpoint has already resolved (an alias over an alias settles on a
+-- later round, like any other wrapper).
+--
+-- The entry is recorded under the ALIAS's own key, not its RHS head's, so an
+-- occurrence `Cell a` resolves through `paramOccPolarities`' `TyApp` spine arm
+-- against `tyTabKey tyAliasOrigin "Cell"` — the same decl-borne identity
+-- `DData`/`DNewtype` use, so a same-named alias in another module cannot answer
+-- for this one.
+declEnvPolarityEntries tab ((DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasRhs = rhs, tyAliasOrigin = o })::rest) =
+  let entry = (tyTabKey o n, inferParamPolarities tab ps [Variant n (ConPos [rhs])])
   entry :: declEnvPolarityEntries (entry::tab) rest
 declEnvPolarityEntries tab (_::rest) = declEnvPolarityEntries tab rest
 
