@@ -27,8 +27,14 @@ this doc specifies are still NOT done, both deliberately:
   measured it (S1-6). Closing this needs a copy-BACK in §2.4, which v1 does not
   have; until then the working shapes are one element per call, or encoding the
   elements into a `String`.
-* **Linkage** — `medaka build` has no flag yet for linking a user object or
-  library; that is #2076's half of the sprint.
+* **Linkage** — landed (S-ffi-linkage, #2075). A `[foreign-libraries]` table in
+  `medaka.toml` (`readForeignLibs`/`libLinkFlags`, `compiler/driver/build_cmd.mdk`)
+  links a named library by searching its declared directory, falling back to the
+  linker's default search path; a missing library is a located
+  `B-FFI-LIB-NOT-FOUND` diagnostic naming the library, key, and manifest path —
+  not a raw `clang`/`ld` wall. No `[foreign-libraries]` table: the link line is
+  byte-identical to a project with none (verified by argv capture, not by
+  inspection).
 
 🚨 **The `FFI` label is WRITTEN by the author, never added by the compiler**
 (F1, epic #2070, 2026-08-27). A user-declared `extern`'s terminal effect row
