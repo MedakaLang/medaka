@@ -1,5 +1,5 @@
 # META
-source_lines=35645
+source_lines=35661
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -2202,6 +2202,22 @@ checkOneEffectParam l pat = match dtopFor l
   PPrefix None =>
     -- v2 Stage 2b: the inferred hole "_" carries no written pattern to validate.
     if isHoleStr pat then ()
+    -- #2103: the delimiter footgun guard (`prefixPatternOk`) exists because a
+    -- BARE host/path prefix is ambiguous — "example.com" would silently admit
+    -- "example.com.evil.net", and "/etc/pass" would admit "/etc/passwd", so a
+    -- written Net/FileRead/FileWrite/Exec pattern must say `*` or carry a `/`.
+    -- An FFI parameter names a LIBRARY, and library names have neither
+    -- delimiter structure nor a sibling-extension hazard: `<FFI "libcurl">`
+    -- read as a prefix is exactly what the author meant, and demanding
+    -- `<FFI "libcurl*">` was pure ceremony (the two are already the SAME set —
+    -- `prefixConcrete` strips a trailing `*`, so `dsub` cannot tell them
+    -- apart).  So FFI accepts any NON-EMPTY string verbatim; the empty pattern
+    -- is still rejected, since `<FFI "">` names no library and, being the
+    -- prefix of everything, would silently mean ⊤.
+    else if l == "FFI" then
+      if stringLength pat > 0 then ()
+      else pushTypeError "T-EFFECT-PARAM" (effectParamMsg l
+        "the library pattern is empty; name the library, e.g. <FFI \"curl\">")
     else if prefixPatternOk pat then ()
     else pushTypeError "T-EFFECT-PARAM" (effectParamMsg l (prefixPatternErrMsg "pattern" pat))
   PSet None =>
@@ -36088,7 +36104,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkEffectAtoms" ((PCons (PTuple PWild (PCon "None")) (PVar "rest"))) (EApp (EVar "checkEffectAtoms") (EVar "rest")))
 (DFunDef false "checkEffectAtoms" ((PCons (PTuple (PVar "l") (PCon "Some" (PVar "pat"))) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "checkOneEffectParam") (EVar "l")) (EVar "pat"))) (DoExpr (EApp (EVar "checkEffectAtoms") (EVar "rest")))))
 (DTypeSig false "checkOneEffectParam" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))
-(DFunDef false "checkOneEffectParam" ((PVar "l") (PVar "pat")) (EMatch (EApp (EVar "dtopFor") (EVar "l")) (arm (PCon "PPrefix" (PCon "None")) () (EIf (EApp (EVar "isHoleStr") (EVar "pat")) (ELit LUnit) (EIf (EApp (EVar "prefixPatternOk") (EVar "pat")) (ELit LUnit) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-PARAM"))) (EApp (EApp (EVar "effectParamMsg") (EVar "l")) (EApp (EApp (EVar "prefixPatternErrMsg") (ELit (LString "pattern"))) (EVar "pat"))))))) (arm (PCon "PSet" (PCon "None")) () (ELit LUnit)) (arm (PCon "PProduct" PWild) () (EApp (EApp (EVar "checkProductAxes") (EVar "l")) (EApp (EVar "decodeProductParam") (EVar "pat")))) (arm PWild () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-PARAM"))) (EApp (EApp (EVar "effectParamMsg") (EVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EVar "display") (EVar "l"))) (ELit (LString "' is atomic and takes no parameter (declare it `effect "))) (EApp (EVar "display") (EVar "l"))) (ELit (LString " Prefix` to parameterize)"))))))))
+(DFunDef false "checkOneEffectParam" ((PVar "l") (PVar "pat")) (EMatch (EApp (EVar "dtopFor") (EVar "l")) (arm (PCon "PPrefix" (PCon "None")) () (EIf (EApp (EVar "isHoleStr") (EVar "pat")) (ELit LUnit) (EIf (EBinOp "==" (EVar "l") (ELit (LString "FFI"))) (EIf (EBinOp ">" (EApp (EVar "stringLength") (EVar "pat")) (ELit (LInt 0))) (ELit LUnit) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-PARAM"))) (EApp (EApp (EVar "effectParamMsg") (EVar "l")) (ELit (LString "the library pattern is empty; name the library, e.g. <FFI \"curl\">"))))) (EIf (EApp (EVar "prefixPatternOk") (EVar "pat")) (ELit LUnit) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-PARAM"))) (EApp (EApp (EVar "effectParamMsg") (EVar "l")) (EApp (EApp (EVar "prefixPatternErrMsg") (ELit (LString "pattern"))) (EVar "pat")))))))) (arm (PCon "PSet" (PCon "None")) () (ELit LUnit)) (arm (PCon "PProduct" PWild) () (EApp (EApp (EVar "checkProductAxes") (EVar "l")) (EApp (EVar "decodeProductParam") (EVar "pat")))) (arm PWild () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-PARAM"))) (EApp (EApp (EVar "effectParamMsg") (EVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EVar "display") (EVar "l"))) (ELit (LString "' is atomic and takes no parameter (declare it `effect "))) (EApp (EVar "display") (EVar "l"))) (ELit (LString " Prefix` to parameterize)"))))))))
 (DTypeSig false "checkProductAxes" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyCon "Unit"))))
 (DFunDef false "checkProductAxes" ((PVar "l") (PCon "PProduct" (PVar "axes"))) (EApp (EApp (EVar "checkProductAxesGo") (EVar "l")) (EVar "axes")))
 (DFunDef false "checkProductAxes" (PWild PWild) (ELit LUnit))
@@ -41794,7 +41810,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkEffectAtoms" ((PCons (PTuple PWild (PCon "None")) (PVar "rest"))) (EApp (EVar "checkEffectAtoms") (EVar "rest")))
 (DFunDef false "checkEffectAtoms" ((PCons (PTuple (PVar "l") (PCon "Some" (PVar "pat"))) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "checkOneEffectParam") (EVar "l")) (EVar "pat"))) (DoExpr (EApp (EVar "checkEffectAtoms") (EVar "rest")))))
 (DTypeSig false "checkOneEffectParam" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))
-(DFunDef false "checkOneEffectParam" ((PVar "l") (PVar "pat")) (EMatch (EApp (EVar "dtopFor") (EVar "l")) (arm (PCon "PPrefix" (PCon "None")) () (EIf (EApp (EVar "isHoleStr") (EVar "pat")) (ELit LUnit) (EIf (EApp (EVar "prefixPatternOk") (EVar "pat")) (ELit LUnit) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-PARAM"))) (EApp (EApp (EVar "effectParamMsg") (EVar "l")) (EApp (EApp (EVar "prefixPatternErrMsg") (ELit (LString "pattern"))) (EVar "pat"))))))) (arm (PCon "PSet" (PCon "None")) () (ELit LUnit)) (arm (PCon "PProduct" PWild) () (EApp (EApp (EVar "checkProductAxes") (EVar "l")) (EApp (EVar "decodeProductParam") (EVar "pat")))) (arm PWild () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-PARAM"))) (EApp (EApp (EVar "effectParamMsg") (EVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString "' is atomic and takes no parameter (declare it `effect "))) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString " Prefix` to parameterize)"))))))))
+(DFunDef false "checkOneEffectParam" ((PVar "l") (PVar "pat")) (EMatch (EApp (EVar "dtopFor") (EVar "l")) (arm (PCon "PPrefix" (PCon "None")) () (EIf (EApp (EVar "isHoleStr") (EVar "pat")) (ELit LUnit) (EIf (EBinOp "==" (EVar "l") (ELit (LString "FFI"))) (EIf (EBinOp ">" (EApp (EVar "stringLength") (EVar "pat")) (ELit (LInt 0))) (ELit LUnit) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-PARAM"))) (EApp (EApp (EVar "effectParamMsg") (EVar "l")) (ELit (LString "the library pattern is empty; name the library, e.g. <FFI \"curl\">"))))) (EIf (EApp (EVar "prefixPatternOk") (EVar "pat")) (ELit LUnit) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-PARAM"))) (EApp (EApp (EVar "effectParamMsg") (EVar "l")) (EApp (EApp (EVar "prefixPatternErrMsg") (ELit (LString "pattern"))) (EVar "pat")))))))) (arm (PCon "PSet" (PCon "None")) () (ELit LUnit)) (arm (PCon "PProduct" PWild) () (EApp (EApp (EVar "checkProductAxes") (EVar "l")) (EApp (EVar "decodeProductParam") (EVar "pat")))) (arm PWild () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-PARAM"))) (EApp (EApp (EVar "effectParamMsg") (EVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "label '")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString "' is atomic and takes no parameter (declare it `effect "))) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString " Prefix` to parameterize)"))))))))
 (DTypeSig false "checkProductAxes" (TyFun (TyCon "String") (TyFun (TyCon "Param") (TyCon "Unit"))))
 (DFunDef false "checkProductAxes" ((PVar "l") (PCon "PProduct" (PVar "axes"))) (EApp (EApp (EVar "checkProductAxesGo") (EVar "l")) (EVar "axes")))
 (DFunDef false "checkProductAxes" (PWild PWild) (ELit LUnit))

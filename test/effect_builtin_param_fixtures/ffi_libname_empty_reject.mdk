@@ -1,0 +1,7 @@
+-- #2103: the carve-out must not degrade to "nothing is checked".  The EMPTY
+-- pattern names no library and, being a prefix of every string, would silently
+-- mean ⊤ (unrestricted FFI) while LOOKING confined — so it is still rejected.
+extern callLib : String -> <FFI ""> Int
+
+main : <IO> Unit
+main = println "should not typecheck"

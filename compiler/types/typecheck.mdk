@@ -2198,6 +2198,22 @@ checkOneEffectParam l pat = match dtopFor l
   PPrefix None =>
     -- v2 Stage 2b: the inferred hole "_" carries no written pattern to validate.
     if isHoleStr pat then ()
+    -- #2103: the delimiter footgun guard (`prefixPatternOk`) exists because a
+    -- BARE host/path prefix is ambiguous — "example.com" would silently admit
+    -- "example.com.evil.net", and "/etc/pass" would admit "/etc/passwd", so a
+    -- written Net/FileRead/FileWrite/Exec pattern must say `*` or carry a `/`.
+    -- An FFI parameter names a LIBRARY, and library names have neither
+    -- delimiter structure nor a sibling-extension hazard: `<FFI "libcurl">`
+    -- read as a prefix is exactly what the author meant, and demanding
+    -- `<FFI "libcurl*">` was pure ceremony (the two are already the SAME set —
+    -- `prefixConcrete` strips a trailing `*`, so `dsub` cannot tell them
+    -- apart).  So FFI accepts any NON-EMPTY string verbatim; the empty pattern
+    -- is still rejected, since `<FFI "">` names no library and, being the
+    -- prefix of everything, would silently mean ⊤.
+    else if l == "FFI" then
+      if stringLength pat > 0 then ()
+      else pushTypeError "T-EFFECT-PARAM" (effectParamMsg l
+        "the library pattern is empty; name the library, e.g. <FFI \"curl\">")
     else if prefixPatternOk pat then ()
     else pushTypeError "T-EFFECT-PARAM" (effectParamMsg l (prefixPatternErrMsg "pattern" pat))
   PSet None =>

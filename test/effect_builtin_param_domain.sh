@@ -163,5 +163,17 @@ expect_ok "$FIX/ffi_cross_string_accept.mdk"       'FFI crossable accept: String
 expect_ok "$FIX/ffi_cross_arrayint_accept.mdk"     'FFI crossable accept: Array Int'
 expect_ok "$FIX/ffi_cross_unit_accept.mdk"         'FFI crossable accept: Unit return (C void)'
 expect_ok "$FIX/ffi_cross_builtin_name_accept.mdk" 'FFI crossable accept: builtin-name exemption (getEnv redeclared)'
+
+# ── #2103 the FFI library-name carve-out ────────────────────────────────────
+# The Prefix delimiter guard (`prefixPatternOk`) is a HOST/PATH footgun guard;
+# an FFI param names a LIBRARY, which has no delimiter structure.  Bare and
+# wildcard spellings are both accepted AND denote the same set (prefixConcrete
+# strips a trailing `*`), so the accept cells cross the two spellings.  The
+# empty pattern is still rejected — the carve-out must not become "anything
+# goes", because "" is a prefix of everything and would silently mean ⊤.
+expect_ok     "$FIX/ffi_libname_bare_accept.mdk"     'FFI libname accept: bare "libcurl" (#2103)'
+expect_ok     "$FIX/ffi_libname_wildcard_accept.mdk" 'FFI libname accept: "libcurl*" extern vs bare-bounded caller (same set)'
+expect_reject "$FIX/ffi_libname_empty_reject.mdk"    'FFI libname reject: empty pattern still rejected' \
+  'the library pattern is empty'
 echo "effect_builtin_param_domain: $pass/$fail"
 [ "$fail" -eq 0 ]

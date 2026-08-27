@@ -25,7 +25,7 @@
 -- the emitter's own diagnostic surfaced.
 
 import support.util.{reverseL, stringTrim}
-import driver.loader.{entrySearchRoots}
+import driver.loader.{entrySearchRoots, findProjectRootOrSelf, readForeignLibs}
 import support.path.{dirOf, chopExt, joinPath}
 import frontend.parser.{parseResult}
 import driver.diagnostics.{parseErrDiag, ppDiagCliSrc}
@@ -467,7 +467,12 @@ runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots 
           -- the concurrency note on effectiveKeepIr for why builds to
           -- DISTINCT `-o` paths (the normal, sane usage) have NO such race at
           -- all.
-          let res = clangLink cc rtC llPath outPath inputAbs tmpDir
+          -- Foreign libraries declared by the PROJECT's medaka.toml (not `root`,
+          -- which is the medaka install root that supplies runtime.mdk/core.mdk):
+          -- the project root is found by walking up from the entry, exactly as
+          -- readDeps' callers in loader.mdk do.
+          let ffiRoot = findProjectRootOrSelf (dirOf inputAbs)
+          let res = clangLink cc rtC llPath outPath inputAbs tmpDir ffiRoot (readForeignLibs ffiRoot)
           let note = (if effectiveKeepIr keepIrCli then keepIrNote (outPath ++ ".ll") ir else "") ++ emitStderrNote emitErr
           appendNote note res
 
@@ -596,8 +601,90 @@ clangOptFlag =
   if optFlagRaw == "" then "-O2" else optFlagRaw
 
 -- STEP 2: clang the IR + C runtime + Boehm GC into a native binary.
-clangLink : String -> String -> String -> String -> String -> String -> <IO> BuildResult
-clangLink cc rtC llPath outPath inputAbs tmpDir = match detectGC cc tmpDir
+--
+-- FOREIGN LIBRARIES (medaka.toml `[foreign-libraries]`, loader.readForeignLibs).
+-- Declared libraries are PROBED first, then threaded onto the link as
+-- `-L<dir>`/`-l<name>` immediately after the object inputs (so they can resolve
+-- the objects' undefined symbols) and before the GC libs.  With NO declared
+-- libraries the flag list is `[]` and the probe is skipped outright, so the
+-- clang argv is byte-identical to the pre-FFI one.
+clangLink : String -> String -> String -> String -> String -> String -> String -> List (String, String) -> <IO> BuildResult
+clangLink cc rtC llPath outPath inputAbs tmpDir projRoot libs =
+  let libErr = foreignLibErr cc tmpDir projRoot libs
+  if libErr /= "" then
+    BuildErr libErr
+  else
+    clangLinkGo cc rtC llPath outPath inputAbs tmpDir (libLinkFlags libs)
+
+-- `-L<dir>`/`-l<name>` for each declared library, in declaration order.  A
+-- library with no search directory contributes `-l<name>` alone.
+libLinkFlags : List (String, String) -> List String
+libLinkFlags [] = []
+libLinkFlags ((name, dir)::rest) =
+  let here = if dir == "" then ["-l\{name}"] else ["-L\{dir}", "-l\{name}"]
+  here ++ libLinkFlags rest
+
+-- Pre-link existence probe for each declared foreign library; "" when all
+-- resolve.  WHY A PROBE AND NOT STDERR-SCRAPING: `ld: library not found for
+-- -lfoo` is one of several per-platform, per-linker spellings, and by the time
+-- it appears it is mixed into whatever else the real link reported — matching
+-- on it is a guess about someone else's wording.  WHY NOT AN fileExists SWEEP
+-- of a guessed `lib<name>.{so,dylib,a}` under a guessed set of directories: the
+-- linker's own search order (sysroot, -L, default dirs, per-distro multiarch
+-- paths) is not reconstructible from Medaka, so such a check would report
+-- "missing" for libraries that link fine.  Asking the ACTUAL linker to link an
+-- empty `main` against exactly this one library answers the exact question the
+-- real link will ask, deterministically, with no wording dependency — and the
+-- diagnostic below is then ours, not clang's.
+--
+-- Cost: one trivial clang invocation per DECLARED library.  A project with no
+-- `[foreign-libraries]` section pays nothing (the [] clause returns before the
+-- probe source is even written).
+foreignLibErr : String -> String -> String -> List (String, String) -> <IO> String
+foreignLibErr _ _ _ [] = ""
+foreignLibErr cc tmpDir projRoot libs =
+  let probeC = joinPath tmpDir "ffi_lib_probe.c"
+  match writeFile probeC "int main(void) { return 0; }\n"
+    Err e => "error: could not write the foreign-library probe source: \{e}"
+    Ok _ => foreignLibErrGo cc tmpDir projRoot probeC libs
+
+foreignLibErrGo : String -> String -> String -> String -> List (String, String) -> <IO> String
+foreignLibErrGo _ _ _ _ [] = ""
+foreignLibErrGo cc tmpDir projRoot probeC ((name, dir)::rest) =
+  let probeOut = joinPath tmpDir "ffi_lib_probe.out"
+  match runCommand cc ([probeC, "-o", probeOut] ++ libLinkFlags [(name, dir)])
+    Err e => "error: could not run clang (\{cc}) to check foreign library '\{name}': \{e}"
+    Ok (0, _, _) => foreignLibErrGo cc tmpDir projRoot probeC rest
+    Ok (_, _, _) => missingLibMsg projRoot name dir
+
+-- The missing-library diagnostic: names the library, the manifest KEY that
+-- declared it, the file that key lives in, where we looked, and the edit that
+-- fixes it — instead of clang's bare `ld: library not found for -lfoo`.
+missingLibMsg : String -> String -> String -> String
+missingLibMsg projRoot name dir =
+  let searched = if dir == "" then
+    "the linker's default search path"
+  else
+    "\{dir}, nor on the linker's default search path"
+  stringConcat
+    [
+      "error [B-FFI-LIB-NOT-FOUND]: foreign library '",
+      name,
+      "' was not found in ",
+      searched,
+      "\n",
+      "  declared by the key '",
+      name,
+      "' under [foreign-libraries] in ",
+      projRoot,
+      "/medaka.toml\n",
+      "  install the library, or point that key at the directory holding it: ",
+      name,
+      " = \"vendor/lib\"",
+    ]
+
+clangLinkGo : String -> String -> String -> String -> String -> String -> List String -> <IO> BuildResult
+clangLinkGo cc rtC llPath outPath inputAbs tmpDir libFlags = match detectGC cc tmpDir
   None => BuildErr "error: libgc (bdw-gc) not found — install bdw-gc (brew install bdw-gc) or set GC_PREFIX/pkg-config"
   Some (gcCflags, gcLibs) =>
     let optFlag = clangOptFlag
@@ -636,7 +723,7 @@ clangLink cc rtC llPath outPath inputAbs tmpDir = match detectGC cc tmpDir
     -- Mach-O-only `-Wl,-stack_size` link flag is needed on either platform.
     -- `-pthread` (thread runtime) and `-lm` (math externs) go on every link.
     let sectionsLink = gcSectionsLinkFlag ()
-    let clangArgs = [optFlag, "-pthread"] ++ gcSectionsCflags ++ gcCflags ++ objInputs ++ gcLibs ++ [sectionsLink, "-lm", "-o", outPath]
+    let clangArgs = [optFlag, "-pthread"] ++ gcSectionsCflags ++ gcCflags ++ objInputs ++ libFlags ++ gcLibs ++ [sectionsLink, "-lm", "-o", outPath]
     match runCommand cc clangArgs
       Err e => BuildErr "error: could not run clang (\{cc}): \{e}"
       Ok (0, _, _) => BuildOk "built \{inputAbs} -> \{outPath}"

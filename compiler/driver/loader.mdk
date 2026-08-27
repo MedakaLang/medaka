@@ -286,6 +286,62 @@ readDeps root =
     Ok src => collectDeps root (splitNl src)
   else []
 
+-- ── foreign libraries (medaka.toml [foreign-libraries]) ─────────────────────
+--
+-- A project's `medaka.toml` may declare the foreign (C) libraries its `<FFI>`
+-- externs need, so that `medaka build` can thread them onto the link line:
+--
+--     [foreign-libraries]
+--     m = ""
+--     mylib = "vendor/lib"
+--
+-- The KEY is the linker's library name — exactly the `<name>` of `-l<name>`,
+-- so `m` means libm, not the file name.  The VALUE is an optional search
+-- directory (`-L`), relative to the project root (the directory holding the
+-- medaka.toml) unless absolute; `""` means "wherever the linker already looks".
+--
+-- Shape choice: a `[section]` with one `key = "value"` entry per library, i.e.
+-- the `[dependencies]` shape (collectDeps above) rather than the bare top-level
+-- `allow-internal = true` shape — a library declaration is inherently a LIST of
+-- named entries each carrying a path, which is exactly what `[dependencies]`
+-- already models, and it reuses this file's existing line scanner verbatim.
+-- Same no-stdlib hand-rolled scanner style as its neighbour; not a TOML parser.
+--
+-- ⚠️ This list says what to LINK.  It is deliberately NOT cross-checked against
+-- any `<FFI "lib">` effect parameter in the program: those are author-written
+-- row documentation, a separate fact (sprint decision F8/Q3).
+collectLibs : String -> List String -> List (String, String)
+collectLibs root [] = []
+collectLibs root (line::rest) =
+  let t = stringTrim line
+  if t == "[foreign-libraries]" then
+    collectLibsIn root rest
+  else
+    collectLibs root rest
+
+collectLibsIn : String -> List String -> List (String, String)
+collectLibsIn root [] = []
+collectLibsIn root (line::rest) =
+  let t = stringTrim line
+  if startsWith "[" t then collectLibs root (line::rest)
+  else
+    let k = keyBeforeEq t
+    if k == "" then collectLibsIn root rest
+    else
+      let v = valAfterEq t
+      let dir = if v == "" then "" else joinPathL root v
+      (k, dir) :: collectLibsIn root rest
+
+-- read + parse `<root>/medaka.toml`'s [foreign-libraries]; [] if missing/none.
+-- Returns (libName, searchDir) with searchDir == "" when none was given.
+export
+readForeignLibs : String -> <IO> List (String, String)
+readForeignLibs root =
+  let tomlPath = stringConcat [root, "/medaka.toml"]
+  if fileExists tomlPath then match readFile tomlPath
+    Err _ => []
+    Ok src => collectLibs root (splitNl src)
+  else []
 -- if modId's first dotted segment names a declared dependency, resolve the
 -- REMAINING segments under that dep's root (existence-checked); else None so the
 -- caller falls through to the normal `roots` search.  Returns (path, depRoot) so

@@ -10,6 +10,8 @@ childDeps : List (String, String) -> String -> List String -> <IO> List (String,
 childRoots : String -> List String -> List String
 collectDeps : String -> List String -> List (String, String)
 collectDepsIn : String -> List String -> List (String, String)
+collectLibs : String -> List String -> List (String, String)
+collectLibsIn : String -> List String -> List (String, String)
 cycleChain : String -> List String -> List String
 directImports : List Decl -> List String
 dropKey : String -> List (String, List Decl) -> List (String, List Decl)
@@ -49,6 +51,7 @@ parseCachedLocated : Ref (List (String, List Decl)) -> String -> Result ParseErr
 parsedModule : (String -> Result ParseError (List Decl)) -> String -> String -> String -> Result LoadError (String, String, List Decl)
 projectTrustedMods : String -> List String -> String -> List (String, List Decl) -> <IO> List String
 readDeps : String -> <IO> List (String, String)
+readForeignLibs : String -> <IO> List (String, String)
 readModuleProgF : (String -> Result ParseError (List Decl)) -> (String -> Option String) -> List (String, String) -> List String -> String -> <IO> Result LoadError (String, String, List Decl)
 relUnderRoots : List String -> String -> String
 resolveDepFile : List (String, String) -> String -> <IO> Option (String, String)

@@ -27,14 +27,22 @@
 # ultimately an EMITTER ordering fact (`isAnyExtern` before the FFI arm), and it is
 # the arm this gate's own change could regress.
 #
-# LINKING.  User-object linkage is #2074's next slice; `medaka build` has no flag
-# for extra objects yet.  So the fixture's C half is merged into the runtime object
-# and linked through the existing MEDAKA_RT_OBJ fast path — a REAL `medaka build`
-# link, not a hand-rolled clang line, so the gate exercises the driver it is meant
-# to.  When the linkage slice lands, this should switch to whatever flag it adds.
+# LINKING.  Cells 1 and 2 predate library linkage: they merge the fixture's C half
+# into the runtime object and link it through the existing MEDAKA_RT_OBJ fast path
+# — a REAL `medaka build` link, not a hand-rolled clang line, so they exercise the
+# driver they are meant to.  They are KEPT as-is rather than rewritten, because
+# they isolate the LOWERING from the linkage: if cell 3 (below) goes red they say
+# whether the marshalling or only the link line broke.
+#
+# CELLS 3 AND 4 are the linkage slice (#2075): cell 3 reaches cell 1's exact nine
+# values through a genuine static library named ONLY by the project's
+# `[foreign-libraries]` manifest section (no MEDAKA_RT_OBJ anywhere), and cell 4
+# pins that a declared-but-absent library is a Medaka diagnostic naming the
+# library, its manifest key, and the manifest file — not clang's `ld: library not
+# found` wall.
 #
 # Usage:  sh test/diff_compiler_llvm_ffi.sh
-# Exit:   0 both cells produce their expected output;
+# Exit:   0 every cell produces its expected output;
 #         1 a build failed or the output differs;
 #         2 the native medaka/emitter is missing, no C compiler, no `ld -r`, or
 #           libgc is absent (opt-in skip, same discipline as the other LLVM gates).
@@ -136,6 +144,68 @@ else
     fail=$((fail+1))
     printf 'FAIL builtin_name_exemption  expected 240, got: %s\n' "$got2"
   fi
+fi
+
+# ── cell 3: REAL LIBRARY LINKAGE via medaka.toml [foreign-libraries] ─────────
+# The headline end-to-end property of the linkage slice (#2075): the same nine
+# crossable-shape values as cell 1, but reached WITHOUT the MEDAKA_RT_OBJ
+# partial-link workaround the header describes.  Here the C half is a genuine
+# static library and the ONLY thing that puts it on the link line is the
+# project's own manifest:
+#
+#     [foreign-libraries]
+#     ffiprobe = "vendor"
+#
+# The search directory is deliberately RELATIVE, so this also pins that
+# readForeignLibs resolves it against the PROJECT ROOT (the dir holding
+# medaka.toml) and not the cwd or the medaka install root.  Identical expected
+# output to cell 1 on purpose: the values prove the marshalling, the absence of
+# MEDAKA_RT_OBJ proves the linkage.
+P="$W/proj"
+mkdir -p "$P/vendor"
+cp "$FIXDIR/ffi_abi_probe.mdk" "$P/main.mdk"
+printf '[package]\nname = "ffi_link_probe"\n\n[foreign-libraries]\nffiprobe = "vendor"\n' > "$P/medaka.toml"
+if ! "$CC" -O2 -c "$FIXDIR/ffi_abi_probe.c" -o "$W/probe_lib.o" >"$W/cc3.log" 2>&1 \
+   || ! ar rcs "$P/vendor/libffiprobe.a" "$W/probe_lib.o" >>"$W/cc3.log" 2>&1; then
+  echo "could not build libffiprobe.a on this toolchain — skipping cell 3"; cat "$W/cc3.log"
+elif ! "$MEDAKA" build "$P/main.mdk" -o "$W/link.bin" >"$W/build3.log" 2>&1; then
+  echo "FAIL: declared-library project did not build/link"; cat "$W/build3.log"; fail=$((fail+1))
+else
+  checked=$((checked+1))
+  got3="$("$W/link.bin" 2>&1)"
+  if [ "$got3" = "$EXPECT_PROBE" ]; then
+    echo "ok   ffi_manifest_linkage   9/9 values via [foreign-libraries] -L/-l (no MEDAKA_RT_OBJ)"
+  else
+    fail=$((fail+1))
+    echo "FAIL ffi_manifest_linkage   output differs"
+    printf 'expected:\n%s\ngot:\n%s\n' "$EXPECT_PROBE" "$got3"
+  fi
+fi
+
+# ── cell 4: a DECLARED-BUT-ABSENT library is a Medaka diagnostic ─────────────
+# #2075's other half.  A library that cannot be found must NOT reach the user as
+# clang's `ld: library not found for -lfoo` wall: the driver probes each declared
+# library first and reports one message naming the LIBRARY, the manifest KEY, and
+# the medaka.toml it came from.  Asserted on all three, because a message that
+# named only the library would leave the reader hunting for where it was declared.
+# ⚠️ exit code read by REDIRECT, never through a pipe — AGENTS.md [D-BUILD-PIPE].
+B="$W/badproj"
+mkdir -p "$B"
+cp "$FIXDIR/ffi_abi_probe.mdk" "$B/main.mdk"
+printf '[package]\nname = "ffi_absent_lib"\n\n[foreign-libraries]\nnonexistent_ffi_test_lib_xyz = ""\n' > "$B/medaka.toml"
+"$MEDAKA" build "$B/main.mdk" -o "$W/bad.bin" >"$W/build4.log" 2>&1
+rc4=$?
+checked=$((checked+1))
+if [ "$rc4" -eq 0 ]; then
+  echo "FAIL ffi_absent_library     build succeeded despite an undeclarable library"; fail=$((fail+1))
+elif grep -q "B-FFI-LIB-NOT-FOUND" "$W/build4.log" \
+  && grep -q "nonexistent_ffi_test_lib_xyz" "$W/build4.log" \
+  && grep -q "\[foreign-libraries\]" "$W/build4.log" \
+  && grep -q "medaka.toml" "$W/build4.log" \
+  && ! grep -q "library not found for" "$W/build4.log"; then
+  echo "ok   ffi_absent_library      named the library, the key, and the manifest (not clang's wall)"
+else
+  echo "FAIL ffi_absent_library     wrong diagnostic:"; cat "$W/build4.log"; fail=$((fail+1))
 fi
 
 # ZERO-COMPARISON guard (docs/ops/TESTING-DESIGN.md §2.3): a gate that compared

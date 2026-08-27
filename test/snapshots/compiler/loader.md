@@ -1,5 +1,5 @@
 # META
-source_lines=1146
+source_lines=1202
 stages=DESUGAR,MARK
 # SOURCE
 -- Port of lib/loader.ml: parse a root .mdk file's transitive imports and return
@@ -290,6 +290,62 @@ readDeps root =
     Ok src => collectDeps root (splitNl src)
   else []
 
+-- ── foreign libraries (medaka.toml [foreign-libraries]) ─────────────────────
+--
+-- A project's `medaka.toml` may declare the foreign (C) libraries its `<FFI>`
+-- externs need, so that `medaka build` can thread them onto the link line:
+--
+--     [foreign-libraries]
+--     m = ""
+--     mylib = "vendor/lib"
+--
+-- The KEY is the linker's library name — exactly the `<name>` of `-l<name>`,
+-- so `m` means libm, not the file name.  The VALUE is an optional search
+-- directory (`-L`), relative to the project root (the directory holding the
+-- medaka.toml) unless absolute; `""` means "wherever the linker already looks".
+--
+-- Shape choice: a `[section]` with one `key = "value"` entry per library, i.e.
+-- the `[dependencies]` shape (collectDeps above) rather than the bare top-level
+-- `allow-internal = true` shape — a library declaration is inherently a LIST of
+-- named entries each carrying a path, which is exactly what `[dependencies]`
+-- already models, and it reuses this file's existing line scanner verbatim.
+-- Same no-stdlib hand-rolled scanner style as its neighbour; not a TOML parser.
+--
+-- ⚠️ This list says what to LINK.  It is deliberately NOT cross-checked against
+-- any `<FFI "lib">` effect parameter in the program: those are author-written
+-- row documentation, a separate fact (sprint decision F8/Q3).
+collectLibs : String -> List String -> List (String, String)
+collectLibs root [] = []
+collectLibs root (line::rest) =
+  let t = stringTrim line
+  if t == "[foreign-libraries]" then
+    collectLibsIn root rest
+  else
+    collectLibs root rest
+
+collectLibsIn : String -> List String -> List (String, String)
+collectLibsIn root [] = []
+collectLibsIn root (line::rest) =
+  let t = stringTrim line
+  if startsWith "[" t then collectLibs root (line::rest)
+  else
+    let k = keyBeforeEq t
+    if k == "" then collectLibsIn root rest
+    else
+      let v = valAfterEq t
+      let dir = if v == "" then "" else joinPathL root v
+      (k, dir) :: collectLibsIn root rest
+
+-- read + parse `<root>/medaka.toml`'s [foreign-libraries]; [] if missing/none.
+-- Returns (libName, searchDir) with searchDir == "" when none was given.
+export
+readForeignLibs : String -> <IO> List (String, String)
+readForeignLibs root =
+  let tomlPath = stringConcat [root, "/medaka.toml"]
+  if fileExists tomlPath then match readFile tomlPath
+    Err _ => []
+    Ok src => collectLibs root (splitNl src)
+  else []
 -- if modId's first dotted segment names a declared dependency, resolve the
 -- REMAINING segments under that dep's root (existence-checked); else None so the
 -- caller falls through to the normal `roots` search.  Returns (path, depRoot) so
@@ -1210,6 +1266,14 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "joinPathL" ((PVar "root") (PVar "p")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "p")) (EVar "p") (EIf (EBinOp "==" (EVar "root") (ELit (LString ""))) (EVar "p") (EApp (EVar "stringConcat") (EListLit (EVar "root") (ELit (LString "/")) (EVar "p"))))))
 (DTypeSig true "readDeps" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "readDeps" ((PVar "root")) (EBlock (DoLet false false (PVar "tomlPath") (EApp (EVar "stringConcat") (EListLit (EVar "root") (ELit (LString "/medaka.toml"))))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "tomlPath")) (EMatch (EApp (EVar "readFile") (EVar "tomlPath")) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "collectDeps") (EVar "root")) (EApp (EVar "splitNl") (EVar "src"))))) (EListLit)))))
+(DTypeSig false "collectLibs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
+(DFunDef false "collectLibs" ((PVar "root") (PList)) (EListLit))
+(DFunDef false "collectLibs" ((PVar "root") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoExpr (EIf (EBinOp "==" (EVar "t") (ELit (LString "[foreign-libraries]"))) (EApp (EApp (EVar "collectLibsIn") (EVar "root")) (EVar "rest")) (EApp (EApp (EVar "collectLibs") (EVar "root")) (EVar "rest"))))))
+(DTypeSig false "collectLibsIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
+(DFunDef false "collectLibsIn" ((PVar "root") (PList)) (EListLit))
+(DFunDef false "collectLibsIn" ((PVar "root") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "["))) (EVar "t")) (EApp (EApp (EVar "collectLibs") (EVar "root")) (EBinOp "::" (EVar "line") (EVar "rest"))) (EBlock (DoLet false false (PVar "k") (EApp (EVar "keyBeforeEq") (EVar "t"))) (DoExpr (EIf (EBinOp "==" (EVar "k") (ELit (LString ""))) (EApp (EApp (EVar "collectLibsIn") (EVar "root")) (EVar "rest")) (EBlock (DoLet false false (PVar "v") (EApp (EVar "valAfterEq") (EVar "t"))) (DoLet false false (PVar "dir") (EIf (EBinOp "==" (EVar "v") (ELit (LString ""))) (ELit (LString "")) (EApp (EApp (EVar "joinPathL") (EVar "root")) (EVar "v")))) (DoExpr (EBinOp "::" (ETuple (EVar "k") (EVar "dir")) (EApp (EApp (EVar "collectLibsIn") (EVar "root")) (EVar "rest"))))))))))))
+(DTypeSig true "readForeignLibs" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
+(DFunDef false "readForeignLibs" ((PVar "root")) (EBlock (DoLet false false (PVar "tomlPath") (EApp (EVar "stringConcat") (EListLit (EVar "root") (ELit (LString "/medaka.toml"))))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "tomlPath")) (EMatch (EApp (EVar "readFile") (EVar "tomlPath")) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "collectLibs") (EVar "root")) (EApp (EVar "splitNl") (EVar "src"))))) (EListLit)))))
 (DTypeSig false "resolveDepFile" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "resolveDepFile" ((PVar "deps") (PVar "modId")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LString "."))) (EVar "modId")) (arm (PList) () (EVar "None")) (arm (PCons (PVar "seg0") (PVar "restSegs")) () (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "seg0")) (EVar "deps")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "depRoot")) () (EMatch (EVar "restSegs") (arm (PList) () (EVar "None")) (arm PWild () (EBlock (DoLet false false (PVar "path") (EApp (EApp (EVar "fileOfModuleId") (EVar "depRoot")) (EApp (EVar "joinDot") (EVar "restSegs")))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "path")) (EApp (EVar "Some") (ETuple (EVar "path") (EVar "depRoot"))) (EVar "None")))))))))))
 (DTypeSig true "importModId" (TyFun (TyCon "UsePath") (TyCon "String")))
@@ -1402,6 +1466,14 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "joinPathL" ((PVar "root") (PVar "p")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "p")) (EVar "p") (EIf (EBinOp "==" (EVar "root") (ELit (LString ""))) (EVar "p") (EApp (EVar "stringConcat") (EListLit (EVar "root") (ELit (LString "/")) (EVar "p"))))))
 (DTypeSig true "readDeps" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "readDeps" ((PVar "root")) (EBlock (DoLet false false (PVar "tomlPath") (EApp (EVar "stringConcat") (EListLit (EVar "root") (ELit (LString "/medaka.toml"))))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "tomlPath")) (EMatch (EApp (EVar "readFile") (EVar "tomlPath")) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "collectDeps") (EVar "root")) (EApp (EVar "splitNl") (EVar "src"))))) (EListLit)))))
+(DTypeSig false "collectLibs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
+(DFunDef false "collectLibs" ((PVar "root") (PList)) (EListLit))
+(DFunDef false "collectLibs" ((PVar "root") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoExpr (EIf (EBinOp "==" (EVar "t") (ELit (LString "[foreign-libraries]"))) (EApp (EApp (EVar "collectLibsIn") (EVar "root")) (EVar "rest")) (EApp (EApp (EVar "collectLibs") (EVar "root")) (EVar "rest"))))))
+(DTypeSig false "collectLibsIn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
+(DFunDef false "collectLibsIn" ((PVar "root") (PList)) (EListLit))
+(DFunDef false "collectLibsIn" ((PVar "root") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "["))) (EVar "t")) (EApp (EApp (EVar "collectLibs") (EVar "root")) (EBinOp "::" (EVar "line") (EVar "rest"))) (EBlock (DoLet false false (PVar "k") (EApp (EVar "keyBeforeEq") (EVar "t"))) (DoExpr (EIf (EBinOp "==" (EVar "k") (ELit (LString ""))) (EApp (EApp (EVar "collectLibsIn") (EVar "root")) (EVar "rest")) (EBlock (DoLet false false (PVar "v") (EApp (EVar "valAfterEq") (EVar "t"))) (DoLet false false (PVar "dir") (EIf (EBinOp "==" (EVar "v") (ELit (LString ""))) (ELit (LString "")) (EApp (EApp (EVar "joinPathL") (EVar "root")) (EVar "v")))) (DoExpr (EBinOp "::" (ETuple (EVar "k") (EVar "dir")) (EApp (EApp (EVar "collectLibsIn") (EVar "root")) (EVar "rest"))))))))))))
+(DTypeSig true "readForeignLibs" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
+(DFunDef false "readForeignLibs" ((PVar "root")) (EBlock (DoLet false false (PVar "tomlPath") (EApp (EVar "stringConcat") (EListLit (EVar "root") (ELit (LString "/medaka.toml"))))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "tomlPath")) (EMatch (EApp (EVar "readFile") (EVar "tomlPath")) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "collectLibs") (EVar "root")) (EApp (EVar "splitNl") (EVar "src"))))) (EListLit)))))
 (DTypeSig false "resolveDepFile" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "resolveDepFile" ((PVar "deps") (PVar "modId")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LString "."))) (EVar "modId")) (arm (PList) () (EVar "None")) (arm (PCons (PVar "seg0") (PVar "restSegs")) () (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "seg0")) (EVar "deps")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "depRoot")) () (EMatch (EVar "restSegs") (arm (PList) () (EVar "None")) (arm PWild () (EBlock (DoLet false false (PVar "path") (EApp (EApp (EVar "fileOfModuleId") (EVar "depRoot")) (EApp (EVar "joinDot") (EVar "restSegs")))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "path")) (EApp (EVar "Some") (ETuple (EVar "path") (EVar "depRoot"))) (EVar "None")))))))))))
 (DTypeSig true "importModId" (TyFun (TyCon "UsePath") (TyCon "String")))
