@@ -15,6 +15,7 @@ directImports : List Decl -> List String
 dropKey : String -> List (String, List Decl) -> List (String, List Decl)
 dropPathTriple : (String, String, List Decl) -> (String, List Decl)
 dropPrefix : Int -> String -> String
+entryModIdOf : List (String, List Decl) -> String
 entrySearchRoots : String -> <IO> List String
 fileOfModuleId : String -> String -> String
 findImportLoc : String -> List Decl -> Option Loc
@@ -60,6 +61,8 @@ slashToDot : String -> String
 splitDot : String -> List String
 splitGo : String -> String -> Int -> Int -> String -> List String
 splitOnChar : String -> String -> List String
+stdlibOwnedMods : String -> List String -> String -> List (String, List Decl) -> <IO> List String
+stdlibOwnership : String -> List String -> String -> List (String, List Decl) -> <IO> (Bool, List String)
 stripSuffixStr : String -> String -> String
 takeFirst : Int -> List a -> List a
 takeTo : String -> List String -> List String

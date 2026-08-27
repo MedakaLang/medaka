@@ -1,5 +1,5 @@
 # META
-source_lines=1102
+source_lines=1146
 stages=DESUGAR,MARK
 # SOURCE
 -- Port of lib/loader.ml: parse a root .mdk file's transitive imports and return
@@ -888,6 +888,50 @@ projectTrustedMods entry roots stdlibRoot mods = match findProjectRoot (parentDi
     trustedModsGo deps roots trustedRoots (map fst mods)
   None => trustedModsGo [] roots [canonicalizePath stdlibRoot] (map fst mods)
 
+-- #2072 (epic #2070, R2): which of `mods` does the loader own to `stdlibRoot`?
+--
+-- 🚨 THIS IS NOT `projectTrustedMods` AND MUST NOT BE MERGED WITH IT, even though
+-- both walk `trustedModsGo`.  They answer different questions and have different
+-- opt-out surfaces:
+--   `projectTrustedMods` — "may module M REFERENCE an internal-only extern?"
+--     Trusts `stdlibRoot` AND, when the entry project's manifest says
+--     `allow-internal = true`, the entry project's own roots (#1713/#42).
+--   `stdlibOwnedMods`    — "did the STDLIB write this module's `extern`
+--     DECLARATIONS?"  `stdlibRoot` ONLY.  There is deliberately no project-level
+--     opt-out: routing this through the manifest key would let a user exempt their
+--     own externs from typecheck's `FFI` stamp by writing one line in their own
+--     `medaka.toml`, i.e. an effect-system escape hatch reachable from a manifest.
+--
+-- The #42 pressure that forced the entry-project arm for CALL SITES does not exist
+-- here: `compiler/` declares ZERO externs (derived: `grep -rn '^extern ' --include=*.mdk
+-- compiler/ | wc -l` → 0), so stdlib-root-only trust puts no error in front of anyone
+-- checking, building, or opening the compiler.
+--
+-- Same re-resolution and both-sides realpath canonicalization as
+-- `projectTrustedMods` above, for the same "two spellings, one physical dir" reason.
+export
+stdlibOwnedMods : String -> List String -> String -> List (String, List Decl) -> <IO> List String
+stdlibOwnedMods entry roots stdlibRoot mods = match findProjectRoot (parentDir entry)
+  Some projectRoot => trustedModsGo (readDeps projectRoot) roots [canonicalizePath stdlibRoot] (map fst mods)
+  None => trustedModsGo [] roots [canonicalizePath stdlibRoot] (map fst mods)
+
+-- The pair every typecheck driver needs from `stdlibOwnedMods`, in one call:
+-- (is the ENTRY module stdlib-owned?, the stdlib-owned modIds).  The first
+-- component exists because typecheck's FLAT arm carries no module id at all, so
+-- the entry's ownership has to travel separately from the per-module list — see
+-- `setStdlibOwnership` (`types/typecheck.mdk`).  `mods` is dependency-first with
+-- the ENTRY LAST, the order every `loadProgram*` returns.
+export
+stdlibOwnership : String -> List String -> String -> List (String, List Decl) -> <IO> (Bool, List String)
+stdlibOwnership entry roots stdlibRoot mods =
+  let owned = stdlibOwnedMods entry roots stdlibRoot mods
+  (contains (entryModIdOf mods) owned, owned)
+
+entryModIdOf : List (String, List Decl) -> String
+entryModIdOf [] = ""
+entryModIdOf [(m, _)] = m
+entryModIdOf (_::rest) = entryModIdOf rest
+
 -- Does the project rooted at `root` OPT IN to internal-only externs?  Reads
 -- `<root>/medaka.toml`; False when the file is missing or unreadable, so the
 -- absent-manifest and unreadable-manifest cases both fail CLOSED.
@@ -1251,6 +1295,14 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "childDeps" ((PVar "deps") (PVar "owningRoot") (PVar "roots")) (EIf (EApp (EApp (EVar "contains") (EVar "owningRoot")) (EVar "roots")) (EVar "deps") (EBinOp "++" (EVar "deps") (EApp (EVar "readDeps") (EVar "owningRoot")))))
 (DTypeSig true "projectTrustedMods" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "projectTrustedMods" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))) (arm (PCon "Some" (PVar "projectRoot")) () (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EVar "projectRoot"))) (DoLet false false (PVar "trustedRoots") (EIf (EApp (EVar "manifestAllowsInternal") (EVar "projectRoot")) (EApp (EApp (EVar "map") (EVar "canonicalizePath")) (EBinOp "::" (EVar "stdlibRoot") (EVar "roots"))) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "mods")))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EListLit)) (EVar "roots")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "mods"))))))
+(DTypeSig true "stdlibOwnedMods" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "stdlibOwnedMods" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))) (arm (PCon "Some" (PVar "projectRoot")) () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EApp (EVar "readDeps") (EVar "projectRoot"))) (EVar "roots")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "mods")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EListLit)) (EVar "roots")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "mods"))))))
+(DTypeSig true "stdlibOwnership" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")))))))))
+(DFunDef false "stdlibOwnership" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EBlock (DoLet false false (PVar "owned") (EApp (EApp (EApp (EApp (EVar "stdlibOwnedMods") (EVar "entry")) (EVar "roots")) (EVar "stdlibRoot")) (EVar "mods"))) (DoExpr (ETuple (EApp (EApp (EVar "contains") (EApp (EVar "entryModIdOf") (EVar "mods"))) (EVar "owned")) (EVar "owned")))))
+(DTypeSig false "entryModIdOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))
+(DFunDef false "entryModIdOf" ((PList)) (ELit (LString "")))
+(DFunDef false "entryModIdOf" ((PList (PTuple (PVar "m") PWild))) (EVar "m"))
+(DFunDef false "entryModIdOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "entryModIdOf") (EVar "rest")))
 (DTypeSig false "manifestAllowsInternal" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "manifestAllowsInternal" ((PVar "root")) (EBlock (DoLet false false (PVar "tomlPath") (EApp (EVar "stringConcat") (EListLit (EVar "root") (ELit (LString "/medaka.toml"))))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "tomlPath")) (EMatch (EApp (EVar "readFile") (EVar "tomlPath")) (arm (PCon "Err" PWild) () (EVar "False")) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "scanAllowInternal") (EVar "False")) (EApp (EVar "splitNl") (EVar "src"))))) (EVar "False")))))
 (DTypeSig false "scanAllowInternal" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
@@ -1435,6 +1487,14 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DFunDef false "childDeps" ((PVar "deps") (PVar "owningRoot") (PVar "roots")) (EIf (EApp (EApp (EVar "contains") (EVar "owningRoot")) (EVar "roots")) (EVar "deps") (EBinOp "++" (EVar "deps") (EApp (EVar "readDeps") (EVar "owningRoot")))))
 (DTypeSig true "projectTrustedMods" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "projectTrustedMods" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))) (arm (PCon "Some" (PVar "projectRoot")) () (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EVar "projectRoot"))) (DoLet false false (PVar "trustedRoots") (EIf (EApp (EVar "manifestAllowsInternal") (EVar "projectRoot")) (EApp (EApp (EMethodRef "map") (EVar "canonicalizePath")) (EBinOp "::" (EVar "stdlibRoot") (EVar "roots"))) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "mods")))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EListLit)) (EVar "roots")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "mods"))))))
+(DTypeSig true "stdlibOwnedMods" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "stdlibOwnedMods" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))) (arm (PCon "Some" (PVar "projectRoot")) () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EApp (EVar "readDeps") (EVar "projectRoot"))) (EVar "roots")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "mods")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EListLit)) (EVar "roots")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "mods"))))))
+(DTypeSig true "stdlibOwnership" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyTuple (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")))))))))
+(DFunDef false "stdlibOwnership" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EBlock (DoLet false false (PVar "owned") (EApp (EApp (EApp (EApp (EVar "stdlibOwnedMods") (EVar "entry")) (EVar "roots")) (EVar "stdlibRoot")) (EVar "mods"))) (DoExpr (ETuple (EApp (EApp (EVar "contains") (EApp (EVar "entryModIdOf") (EVar "mods"))) (EVar "owned")) (EVar "owned")))))
+(DTypeSig false "entryModIdOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))
+(DFunDef false "entryModIdOf" ((PList)) (ELit (LString "")))
+(DFunDef false "entryModIdOf" ((PList (PTuple (PVar "m") PWild))) (EVar "m"))
+(DFunDef false "entryModIdOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "entryModIdOf") (EVar "rest")))
 (DTypeSig false "manifestAllowsInternal" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
 (DFunDef false "manifestAllowsInternal" ((PVar "root")) (EBlock (DoLet false false (PVar "tomlPath") (EApp (EVar "stringConcat") (EListLit (EVar "root") (ELit (LString "/medaka.toml"))))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "tomlPath")) (EMatch (EApp (EVar "readFile") (EVar "tomlPath")) (arm (PCon "Err" PWild) () (EVar "False")) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "scanAllowInternal") (EVar "False")) (EApp (EVar "splitNl") (EVar "src"))))) (EVar "False")))))
 (DTypeSig false "scanAllowInternal" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))

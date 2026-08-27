@@ -5713,6 +5713,8 @@ data DriverState =
       mangledFunDefsPresentRef : Ref Bool,
       userIfaceNamesRef : Ref (List String),
       coherenceUserDecls : Ref (List Decl),
+      stdlibOwnedModsRef : Ref (List String),
+      flatEntryIsStdlibRef : Ref Bool,
       superDeclsRef : Ref (List Decl),
       standaloneValuesRef : Ref (List String),
       methodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),
@@ -5743,6 +5745,8 @@ freshDriverState _ = DriverState {
   mangledFunDefsPresentRef = Ref False,
   userIfaceNamesRef = Ref [],
   coherenceUserDecls = Ref [],
+  stdlibOwnedModsRef = Ref [],
+  flatEntryIsStdlibRef = Ref False,
   superDeclsRef = Ref [],
   standaloneValuesRef = Ref [],
   methodDispatchIdxByIdRef = Ref [],
@@ -20238,6 +20242,36 @@ export
 setCoherenceUserDecls : List Decl -> Unit
 setCoherenceUserDecls ds = driverState.value.coherenceUserDecls := ds
 
+-- #2072 (extern FFI stamp): the LOADER's owning-root fact, published for the one
+-- reader that needs it — `ffiStampMode`, which decides whether an `extern`
+-- DECLARATION in the program under check is the stdlib's extern catalog (never
+-- stamped) or a user's FFI declaration (always stamped).
+--
+-- 🚨 TWO fields, not one, because the two `CheckMode` arms carry different amounts
+-- of identity.  `Module mid _ _` has a module id, so the Module arm can ask
+-- "is THIS module stdlib-owned" of the list.  `Flat _` has NO id at all — the flat
+-- driver has already flattened the program into one anonymous decl list — so the
+-- entry's ownership has to arrive as its own Bool.
+--
+-- 🚨 DEFAULTS ARE `(False, [])` = STAMP EVERYTHING, and that direction is the safe
+-- one on purpose.  A driver that never calls this suppresses nothing, so the worst
+-- an unwired entry point can do is render an `FFI` atom on the stdlib catalog when
+-- someone points it AT stdlib source.  The inverse default would leave #2072's hole
+-- (a user `extern f : Int -> <> Int` typing pure) open on every unwired path, which
+-- is a soundness hole rather than a cosmetic one.  Do not "helpfully" flip it.
+--
+-- ⚠️ NOT `projectTrustedMods` (`driver/loader.mdk`) — that predicate answers a
+-- DIFFERENT question (may module M *reference* an internal-only extern?) and is
+-- opt-in-able from any `medaka.toml` via `allow-internal` (#1713, slice 2).  Routing
+-- this through it would let a user exempt their OWN externs from the stamp by writing
+-- one manifest line: an effect-system escape hatch reachable from a manifest.
+-- Stdlib-root ownership alone, no project-level opt-out.
+export
+setStdlibOwnership : Bool -> List String -> Unit
+setStdlibOwnership flatEntry mods =
+  driverState.value.flatEntryIsStdlibRef := flatEntry
+  driverState.value.stdlibOwnedModsRef := mods
+
 -- ── instance-`requires` impl-dict routing (Phase 83/84 single-level) ────────
 -- One parametric impl that carries a `requires`: its head tag (the tycon eval
 -- narrows by), the methods it defines (to disambiguate which impl a method site
@@ -24170,7 +24204,10 @@ checkBodyImpl seed mode prog0 =
   -- `stampTyHead` is first-write-immune, so the builtins-only scope can only fill
   -- a head no driver could attribute — an `extern` written in a FLAT user file,
   -- where there is no module id and the primitive heads are all that is knowable.
-  let globalS = ifaceMethodSchemes prog ++ externSchemes (externTyOriginScope []) prog
+  -- #2072: `userExternSchemes`, not `externSchemes` — this is the extern
+  -- DECLARATION site (the program under check), so a user extern's row gets the
+  -- `FFI` stamp unless the loader owns this program to `stdlibRoot`.
+  let globalS = ifaceMethodSchemes prog ++ userExternSchemes mode (externTyOriginScope []) prog
   -- methodNames: FLAT's SECOND ifaceMethodSchemes call over prog — dedup-skipped by
   -- registerMethodConstraints so globalS's registered (first-call) ids stay authoritative.
   -- Module checks core in isolation and never needs it, so NO extra call there.
@@ -27562,7 +27599,76 @@ monoTyvarIds m = match normalize m
 -- rebuilding what you are about to throw away is never the cheaper branch.
 externSchemes : OrdMap TyConOrigin -> List Decl -> List (String, Scheme)
 externSchemes scope decls =
-  externSchemesGo (stampTyOrigins scope (externDecls decls))
+  externSchemesGo False (stampTyOrigins scope (externDecls decls))
+
+-- #2072 (epic #2070, R2): the DECLARATION-site sibling of `externSchemes`.
+--
+-- The eight `externSchemes … runtimeDecls` call sites above build the STDLIB EXTERN
+-- CATALOG's schemes: `stdlib/runtime.mdk`'s 138 `extern` lines (derived: `grep -c
+-- '^extern ' stdlib/runtime.mdk`), whose written rows ARE the effect vocabulary.
+-- They must stay byte-identical, so they keep calling `externSchemes` (stamp=False).
+--
+-- THIS one is the `checkBodyImpl` call, which processes whichever program is under
+-- check — normally a USER file, where an `extern f : Int -> <> Int` used to type as
+-- a pure `Int -> Int`: a one-line escape hatch through the whole effect system.
+-- Here a user extern's written row may NARROW the description but never REMOVE
+-- `FFI`.
+--
+-- 🚨 The SAME call site processes stdlib source when someone checks it directly
+-- (`medaka check --types stdlib/runtime.mdk` renders all 138 rows off THIS path,
+-- not off the seed), so the suppression cannot be keyed on "which call site" — it
+-- is keyed on the loader's owning-root fact, published by `setStdlibOwnership`.
+userExternSchemes : CheckMode -> OrdMap TyConOrigin -> List Decl -> List (String, Scheme)
+userExternSchemes mode scope decls =
+  externSchemesGo (ffiStampMode mode) (stampTyOrigins scope (externDecls decls))
+
+-- Stamp unless the program under check is stdlib-owned.  See `setStdlibOwnership`
+-- for why the two arms read two different fields and why the default is "stamp".
+ffiStampMode : CheckMode -> Bool
+ffiStampMode (Flat _) = not driverState.value.flatEntryIsStdlibRef.value
+-- 🚨 `"__user__"` IS THE FLAT ENTRY, NOT A LOADED MODULE, and this arm is what
+-- actually fires on `medaka check <file>`.  The single-file front door does not
+-- reach the `Flat` arm at all: `runCheck` → `checkOneToLinesWithRuntime` wraps the
+-- program as the ONE-module graph `[("__user__", userProg)]`, the same synthetic id
+-- ~10 drivers already use for "the single program under check".  Reading the flat
+-- Bool here is exact rather than approximate — that id means "the entry", and the
+-- Bool is the entry's ownership.  Dropping this clause silently reinstates the
+-- stamp on `medaka check stdlib/runtime.mdk` (measured: 132 rows gain `FFI`).
+ffiStampMode (Module "__user__" _ _) =
+  not driverState.value.flatEntryIsStdlibRef.value
+ffiStampMode (Module mid _ _) =
+  not (contains mid driverState.value.stdlibOwnedModsRef.value)
+
+-- Add an `FFI` atom at the ⊤ param to a user extern's declared RESULT row.
+--
+-- ⚠️ Only a FUNCTION type is stamped.  A nullary `extern k : Int` is left alone
+-- because the effect system has nowhere to put the row: `extern q : <FFI> Int`
+-- already renders as a bare `Int` today (a value does not perform), so wrapping one
+-- would be a no-op dressed as a fix.  That is a REAL residual hole in the stamp —
+-- a nullary extern is still an unlabelled foreign value — and it is a property of
+-- where rows live in the type language, not something this rewrite can close.
+ffiStampTy : Ty -> Ty
+ffiStampTy (TyConstrained cs t) = TyConstrained cs (ffiStampTy t)
+ffiStampTy (TyFun a r) = TyFun a (ffiStampResultTy r)
+ffiStampTy t = t
+
+-- The arrow's RESULT position: walk to the end of the arrow chain, then either
+-- widen the row that is written there or introduce one.  `Int -> Int -> <> Int`
+-- puts the row on the LAST result, so the recursion has to follow the spine.
+ffiStampResultTy : Ty -> Ty
+ffiStampResultTy (TyFun a r) = TyFun a (ffiStampResultTy r)
+ffiStampResultTy (TyEffect ls rv inner) = TyEffect (ffiAddAtom ls) rv inner
+ffiStampResultTy t = TyEffect [("FFI", None)] None t
+
+-- Idempotent by LABEL: a written `<FFI "libcurl*">` keeps its own param rather than
+-- being joined with a second ⊤ atom.  Position in the list is not observable: the
+-- renderer SORTS atoms, so `<Net "a.com/*">` prints as `<FFI, Net "a.com/*">`.
+ffiAddAtom : List (String, Option String) -> List (String, Option String)
+ffiAddAtom ls = if ffiHasAtom ls then ls else ls ++ [("FFI", None)]
+
+ffiHasAtom : List (String, Option String) -> Bool
+ffiHasAtom [] = False
+ffiHasAtom ((l, _)::rest) = l == "FFI" || ffiHasAtom rest
 
 -- The `DExtern` sublist, in order.  Its own clause rather than a `filter` with a
 -- lambda predicate: `Decl` has no cheap "is an extern" projection, so the pattern
@@ -27576,11 +27682,12 @@ externDecls (_::rest) = externDecls rest
 -- rather than folded into the clause above so that the recursion cannot re-enter
 -- the stamping walk on its own tail — the shape that turns a one-pass `map` into a
 -- quadratic, which is the defect class `compiler/AGENTS.md` opens with.
-externSchemesGo : List Decl -> List (String, Scheme)
-externSchemesGo [] = []
-externSchemesGo ((DExtern _ n ty)::rest) =
-  (n, sigToScheme ty) :: externSchemesGo rest
-externSchemesGo (_::rest) = externSchemesGo rest
+externSchemesGo : Bool -> List Decl -> List (String, Scheme)
+externSchemesGo _ [] = []
+externSchemesGo stamp ((DExtern _ n ty)::rest) =
+  (n, sigToScheme (if stamp then ffiStampTy ty else ty)) ::
+    externSchemesGo stamp rest
+externSchemesGo stamp (_::rest) = externSchemesGo stamp rest
 
 -- interface method schemes: each method's declared type, free tyvars (incl. the
 -- interface param) quantified — the bare scheme the === TYPES === output shows

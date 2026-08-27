@@ -49,6 +49,7 @@ import types.typecheck.{
   entryOwnSchemes,
   Scheme(..),
   setCoherenceUserDecls,
+  setStdlibOwnership,
   TcDiag(..),
   tcMsg,
   elaborateModules,
@@ -62,6 +63,7 @@ import driver.loader.{
   loadProgramFilesLocatedCachedE,
   loadProgramE,
   projectTrustedMods,
+  stdlibOwnership,
   entrySearchRoots,
   findImportLoc,
   unknownModuleIdOf,
@@ -1430,6 +1432,11 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
       Ok mods => match mods
         [(mid, _)] =>
           let trusted = projectTrustedMods target roots stdlibDir mods
+          -- #2072: the FFI-stamp discriminator (stdlib-root ownership, NO
+          -- `allow-internal` opt-out) — see `stdlibOwnedMods` in loader.mdk for
+          -- why it is not `trusted` above.
+          let (flatStdlib, ownedStdlib) = stdlibOwnership target roots stdlibDir mods
+          let _ = setStdlibOwnership flatStdlib ownedStdlib
           checkJsonSingle
             (allowInternal || contains mid trusted)
             rsrc
@@ -1443,6 +1450,9 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
           -- passed none through, so the internal-extern guard was always
           -- empty (silent accept). Same trust computation, hoisted one level.
           let trusted = projectTrustedMods target roots stdlibDir mods
+          -- #2072: same discriminator as the single-module arm above.
+          let (flatStdlib, ownedStdlib) = stdlibOwnership target roots stdlibDir mods
+          let _ = setStdlibOwnership flatStdlib ownedStdlib
           let cacheRef = Ref []
           let parseCacheRef = Ref []
           let results = analyzeProject allowInternal trusted cacheRef parseCacheRef (_ => None) target roots rsrc csrc

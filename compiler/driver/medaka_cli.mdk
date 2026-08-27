@@ -79,6 +79,7 @@ import driver.loader.{
   findProjectRootOrSelf,
   entrySearchRoots,
   projectTrustedMods,
+  stdlibOwnership,
   unknownModuleIdOf,
   findImportLoc,
   availableModulesHint,
@@ -136,6 +137,7 @@ import types.typecheck.{
   hadTypeErrors,
   mainTypeIsAsync,
   mainTypeIsUnit,
+  setStdlibOwnership,
 }
 import eval.eval.{
   evalModulesOutputRun,
@@ -458,6 +460,11 @@ runCheckCmd argv =
                   let mods = map dropModPath modsWithPath
                   let pathMap = map modIdToPath modsWithPath
                   let trusted = projectTrustedMods target roots stdlibDir mods
+                  -- #2072: the FFI-stamp discriminator, published to typecheck alongside the
+                  -- #1713 reference-trust set above.  DIFFERENT predicate, deliberately: this
+                  -- one is stdlib-root ownership with NO `allow-internal` opt-out.
+                  let (flatStdlib, ownedStdlib) = stdlibOwnership target roots stdlibDir mods
+                  let _ = setStdlibOwnership flatStdlib ownedStdlib
                   let perfTLoad = now ()
                   let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
                   let _ = checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target mods
@@ -1647,6 +1654,11 @@ typecheckGate allowInternal root input =
               let mods = map dropModPath modsWithPath
               let pathMap = map modIdToPath modsWithPath
               let trusted = projectTrustedMods input roots stdlibDir mods
+              -- #2072: the FFI-stamp discriminator, published to typecheck alongside the
+              -- #1713 reference-trust set above.  DIFFERENT predicate, deliberately: this
+              -- one is stdlib-root ownership with NO `allow-internal` opt-out.
+              let (flatStdlib, ownedStdlib) = stdlibOwnership input roots stdlibDir mods
+              let _ = setStdlibOwnership flatStdlib ownedStdlib
               typecheckGateRoute allowInternal trusted pathMap roots rsrc csrc tsrc input mods
 
 -- Route by module count.  A single loaded module (no non-core imports) runs the
@@ -1982,6 +1994,11 @@ runRunCmd argv =
                 let coreD = desugar (parse csrc)
                 let modsD = map desugarPair mods
                 let trusted = projectTrustedMods target roots stdlibDir mods
+                -- #2072: the FFI-stamp discriminator, published to typecheck alongside the
+                -- #1713 reference-trust set above.  DIFFERENT predicate, deliberately: this
+                -- one is stdlib-root ownership with NO `allow-internal` opt-out.
+                let (flatStdlib, ownedStdlib) = stdlibOwnership target roots stdlibDir mods
+                let _ = setStdlibOwnership flatStdlib ownedStdlib
                 let perfTLoad = now ()
                 let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
                 -- Route by module count, mirroring `checkRoute` EXACTLY, so that
