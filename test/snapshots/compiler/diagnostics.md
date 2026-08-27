@@ -1,5 +1,5 @@
 # META
-source_lines=1433
+source_lines=1468
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -502,36 +502,65 @@ ppDiagCli file diag = ppDiagCliSrc "" file diag
 -- an advisory warning without tracking the exit code.
 export
 ppDiagCliSrc : String -> String -> Diag -> String
-ppDiagCliSrc src file (Diag sev _ msg (Some (Loc _ sl sc _ _)) _ _) =
+ppDiagCliSrc src file diag = ppDiagCliLines (srcLinesArr src) file diag
+
+-- #2044: the same renderer, taking the file's lines ALREADY SPLIT.  Rendering
+-- one file's N diagnostics through `ppDiagCliSrc` re-walked the whole source
+-- from byte 0 (a fresh `stringToChars src`) once per diagnostic — Θ(N·|src|),
+-- quadratic for a file whose size scales with its diagnostic count.  Callers
+-- that map a renderer over one file's diagnostics hoist `srcLinesArr` OUT of
+-- the map and call this; `ppDiagCliSrc` stays as the thin single-diagnostic
+-- wrapper.  Output is byte-identical by construction — this IS the old body,
+-- with `nthLine src sl` replaced by an index into the pre-split array.
+export
+ppDiagCliLines : Array String -> String -> Diag -> String
+ppDiagCliLines srcLines file (Diag sev _ msg (Some (Loc _ sl sc _ _)) _ _) =
   let header = "\{ppSeverity sev}: \{file}:\{intToString sl}:\{intToString sc}: \{msg}"
-  match nthLine src sl
+  match nthLineArr srcLines sl
     None => header
     Some lineText =>
       "\{header}\n  |\n\{intToString sl} | \{lineText}\n  | \{spaces sc}^"
-ppDiagCliSrc _ _ (Diag _ _ msg None _ _) = "<unknown location>: " ++ msg
+ppDiagCliLines _ _ (Diag _ _ msg None _ _) = "<unknown location>: " ++ msg
 
 -- `spaces n` = a string of n space characters (the oracle's `String.make col ' '`).
+-- One allocation, not n of them (the old `" " ++ spaces (n-1)` was O(col²) per
+-- rendered diagnostic — #2044's second rider).
 spaces : Int -> String
--- Intentional cross-file duplicate of the same helper in printer.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
 spaces n
   | n <= 0 = ""
-  | otherwise = " " ++ spaces (n - 1)
+  | otherwise = stringFromChars (arrayMake n ' ')
 
--- 1-based Nth line of `src` (`\n`-separated), or None if out of range — mirrors
--- the oracle's `List.split_on_char '\n' source` then `List.nth_opt (line-1)`.
-nthLine : String -> Int -> Option String
-nthLine src n = nthLineGo (stringToChars src) 0 (stringLength src) 1 n ""
+-- `src` split on `\n`, by index.  ONE `stringToChars` + one linear pass; each
+-- line is carved out of the char array directly (not accumulated with
+-- `acc ++ charToStr c`, which was O(L²) in line length — #2044's third rider).
+--
+-- Line/index contract, preserved EXACTLY from the retired `nthLine`: lines are
+-- 1-based, and the trailing fragment after the last `\n` always counts as a
+-- line (so `""` has one line, `"a\n"` has two: "a" and ""), which is what makes
+-- `ppDiagCli`'s empty-`src` path render as it always did.
+export
+srcLinesArr : String -> Array String
+srcLinesArr src =
+  let cs = stringToChars src
+  arrayFromList (srcLinesGo cs 0 0 (arrayLength cs))
 
-nthLineGo : Array Char -> Int -> Int -> Int -> Int -> String -> Option String
-nthLineGo cs i len cur target acc
-  | i >= len = if cur == target then Some acc else None
+srcLinesGo : Array Char -> Int -> Int -> Int -> List String
+srcLinesGo cs start i n
+  | i >= n = [charSlice cs start n]
   | arrayGetUnsafe i cs == '\n' =
-    if cur == target then
-      Some acc
-    else
-      nthLineGo cs (i + 1) len (cur + 1) target ""
-  | otherwise = nthLineGo cs (i + 1) len cur target (acc ++ charToStr (arrayGetUnsafe i cs))
+    charSlice cs start i :: srcLinesGo cs (i + 1) (i + 1) n
+  | otherwise = srcLinesGo cs start (i + 1) n
+
+-- `cs[lo, hi)` as a String.
+charSlice : Array Char -> Int -> Int -> String
+charSlice cs lo hi =
+  stringFromChars (arrayMakeWith (hi - lo) (j => arrayGetUnsafe (lo + j) cs))
+
+-- 1-based Nth line, or None if out of range.
+nthLineArr : Array String -> Int -> Option String
+nthLineArr srcLines n
+  | n < 1 || n > arrayLength srcLines = None
+  | otherwise = Some (arrayGetUnsafe (n - 1) srcLines)
 
 -- ── single-file analysis ───────────────────────────────────────────────────
 --
@@ -733,9 +762,15 @@ seedBucket f buckets = match lookupBucket f buckets
   Some _ => buckets
 
 -- Append a whole list of diagnostics to one file's bucket.
+-- #1019: folding `pushDiag` once per element re-did `existing ++ [d]` for
+-- EVERY diag (each `++` O(len existing so far)) — O(n^2) over an n-diag
+-- batch. One bulk `existing ++ ds` is a single O(len existing) traversal,
+-- same resulting order (existing diags, then the batch, in original order).
 pushDiags : String -> List Diag -> List (String, List Diag) -> List (String, List Diag)
 pushDiags _ [] buckets = buckets
-pushDiags f (d::ds) buckets = pushDiags f ds (pushDiag f d buckets)
+pushDiags f ds buckets = match lookupBucket f buckets
+  None => putBucket f ds buckets
+  Some existing => putBucket f (existing ++ ds) buckets
 
 -- ── last-good-source cache + wrapped read (mirror wrapped_read) ─────────────
 --
@@ -1490,14 +1525,20 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "ppDiagCli" (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "String"))))
 (DFunDef false "ppDiagCli" ((PVar "file") (PVar "diag")) (EApp (EApp (EApp (EVar "ppDiagCliSrc") (ELit (LString ""))) (EVar "file")) (EVar "diag")))
 (DTypeSig true "ppDiagCliSrc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "String")))))
-(DFunDef false "ppDiagCliSrc" ((PVar "src") (PVar "file") (PCon "Diag" (PVar "sev") PWild (PVar "msg") (PCon "Some" (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild)) PWild PWild)) (EBlock (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "ppSeverity") (EVar "sev")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString "")))) (DoExpr (EMatch (EApp (EApp (EVar "nthLine") (EVar "src")) (EVar "sl")) (arm (PCon "None") () (EVar "header")) (arm (PCon "Some" (PVar "lineText")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "header"))) (ELit (LString "\n  |\n"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString " | "))) (EApp (EVar "display") (EVar "lineText"))) (ELit (LString "\n  | "))) (EApp (EVar "display") (EApp (EVar "spaces") (EVar "sc")))) (ELit (LString "^"))))))))
-(DFunDef false "ppDiagCliSrc" (PWild PWild (PCon "Diag" PWild PWild (PVar "msg") (PCon "None") PWild PWild)) (EBinOp "++" (ELit (LString "<unknown location>: ")) (EVar "msg")))
+(DFunDef false "ppDiagCliSrc" ((PVar "src") (PVar "file") (PVar "diag")) (EApp (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "file")) (EVar "diag")))
+(DTypeSig true "ppDiagCliLines" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "String")))))
+(DFunDef false "ppDiagCliLines" ((PVar "srcLines") (PVar "file") (PCon "Diag" (PVar "sev") PWild (PVar "msg") (PCon "Some" (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild)) PWild PWild)) (EBlock (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "ppSeverity") (EVar "sev")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString "")))) (DoExpr (EMatch (EApp (EApp (EVar "nthLineArr") (EVar "srcLines")) (EVar "sl")) (arm (PCon "None") () (EVar "header")) (arm (PCon "Some" (PVar "lineText")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "header"))) (ELit (LString "\n  |\n"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString " | "))) (EApp (EVar "display") (EVar "lineText"))) (ELit (LString "\n  | "))) (EApp (EVar "display") (EApp (EVar "spaces") (EVar "sc")))) (ELit (LString "^"))))))))
+(DFunDef false "ppDiagCliLines" (PWild PWild (PCon "Diag" PWild PWild (PVar "msg") (PCon "None") PWild PWild)) (EBinOp "++" (ELit (LString "<unknown location>: ")) (EVar "msg")))
 (DTypeSig false "spaces" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "spaces" ((PVar "n")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (ELit (LString "")) (EIf (EVar "otherwise") (EBinOp "++" (ELit (LString " ")) (EApp (EVar "spaces") (EBinOp "-" (EVar "n") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "nthLine" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "nthLine" ((PVar "src") (PVar "n")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "nthLineGo") (EApp (EVar "stringToChars") (EVar "src"))) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "src"))) (ELit (LInt 1))) (EVar "n")) (ELit (LString ""))))
-(DTypeSig false "nthLineGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))))
-(DFunDef false "nthLineGo" ((PVar "cs") (PVar "i") (PVar "len") (PVar "cur") (PVar "target") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EIf (EBinOp "==" (EVar "cur") (EVar "target")) (EApp (EVar "Some") (EVar "acc")) (EVar "None")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\n"))) (EIf (EBinOp "==" (EVar "cur") (EVar "target")) (EApp (EVar "Some") (EVar "acc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "nthLineGo") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EBinOp "+" (EVar "cur") (ELit (LInt 1)))) (EVar "target")) (ELit (LString "")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "nthLineGo") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EVar "cur")) (EVar "target")) (EBinOp "++" (EVar "acc") (EApp (EVar "charToStr") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "spaces" ((PVar "n")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (ELit (LString "")) (EIf (EVar "otherwise") (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMake") (EVar "n")) (ELit (LChar " ")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "srcLinesArr" (TyFun (TyCon "String") (TyApp (TyCon "Array") (TyCon "String"))))
+(DFunDef false "srcLinesArr" ((PVar "src")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "src"))) (DoExpr (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EApp (EVar "srcLinesGo") (EVar "cs")) (ELit (LInt 0))) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "cs")))))))
+(DTypeSig false "srcLinesGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "srcLinesGo" ((PVar "cs") (PVar "start") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit (EApp (EApp (EApp (EVar "charSlice") (EVar "cs")) (EVar "start")) (EVar "n"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\n"))) (EBinOp "::" (EApp (EApp (EApp (EVar "charSlice") (EVar "cs")) (EVar "start")) (EVar "i")) (EApp (EApp (EApp (EApp (EVar "srcLinesGo") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "srcLinesGo") (EVar "cs")) (EVar "start")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "charSlice" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "charSlice" ((PVar "cs") (PVar "lo") (PVar "hi")) (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "j")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (EVar "j"))) (EVar "cs"))))))
+(DTypeSig false "nthLineArr" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "nthLineArr" ((PVar "srcLines") (PVar "n")) (EIf (EBinOp "||" (EBinOp "<" (EVar "n") (ELit (LInt 1))) (EBinOp ">" (EVar "n") (EApp (EVar "arrayLength") (EVar "srcLines")))) (EVar "None") (EIf (EVar "otherwise") (EApp (EVar "Some") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "srcLines"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "analyze" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
 (DFunDef false "analyze" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "progSrc")) (EApp (EApp (EApp (EApp (EVar "analyzeFrom") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "parse") (EVar "progSrc"))) (EListLit)))
 (DTypeSig true "analyzeLocated" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
@@ -1534,7 +1575,7 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DFunDef false "seedBucket" ((PVar "f") (PVar "buckets")) (EMatch (EApp (EApp (EVar "lookupBucket") (EVar "f")) (EVar "buckets")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "putBucket") (EVar "f")) (EListLit)) (EVar "buckets"))) (arm (PCon "Some" PWild) () (EVar "buckets"))))
 (DTypeSig false "pushDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))
 (DFunDef false "pushDiags" (PWild (PList) (PVar "buckets")) (EVar "buckets"))
-(DFunDef false "pushDiags" ((PVar "f") (PCons (PVar "d") (PVar "ds")) (PVar "buckets")) (EApp (EApp (EApp (EVar "pushDiags") (EVar "f")) (EVar "ds")) (EApp (EApp (EApp (EVar "pushDiag") (EVar "f")) (EVar "d")) (EVar "buckets"))))
+(DFunDef false "pushDiags" ((PVar "f") (PVar "ds") (PVar "buckets")) (EMatch (EApp (EApp (EVar "lookupBucket") (EVar "f")) (EVar "buckets")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "putBucket") (EVar "f")) (EVar "ds")) (EVar "buckets"))) (arm (PCon "Some" (PVar "existing")) () (EApp (EApp (EApp (EVar "putBucket") (EVar "f")) (EBinOp "++" (EVar "existing") (EVar "ds"))) (EVar "buckets")))))
 (DTypeSig false "cachePut" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "cachePut" ((PVar "f") (PVar "v") (PVar "xs")) (EBinOp "::" (ETuple (EVar "f") (EVar "v")) (EApp (EApp (EVar "cacheRemove") (EVar "f")) (EVar "xs"))))
 (DTypeSig false "cacheRemove" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
@@ -1722,14 +1763,20 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "ppDiagCli" (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "String"))))
 (DFunDef false "ppDiagCli" ((PVar "file") (PVar "diag")) (EApp (EApp (EApp (EVar "ppDiagCliSrc") (ELit (LString ""))) (EVar "file")) (EVar "diag")))
 (DTypeSig true "ppDiagCliSrc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "String")))))
-(DFunDef false "ppDiagCliSrc" ((PVar "src") (PVar "file") (PCon "Diag" (PVar "sev") PWild (PVar "msg") (PCon "Some" (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild)) PWild PWild)) (EBlock (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "ppSeverity") (EVar "sev")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString "")))) (DoExpr (EMatch (EApp (EApp (EVar "nthLine") (EVar "src")) (EVar "sl")) (arm (PCon "None") () (EVar "header")) (arm (PCon "Some" (PVar "lineText")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "header"))) (ELit (LString "\n  |\n"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EVar "lineText"))) (ELit (LString "\n  | "))) (EApp (EMethodRef "display") (EApp (EVar "spaces") (EVar "sc")))) (ELit (LString "^"))))))))
-(DFunDef false "ppDiagCliSrc" (PWild PWild (PCon "Diag" PWild PWild (PVar "msg") (PCon "None") PWild PWild)) (EBinOp "++" (ELit (LString "<unknown location>: ")) (EVar "msg")))
+(DFunDef false "ppDiagCliSrc" ((PVar "src") (PVar "file") (PVar "diag")) (EApp (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "src"))) (EVar "file")) (EVar "diag")))
+(DTypeSig true "ppDiagCliLines" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyCon "String")))))
+(DFunDef false "ppDiagCliLines" ((PVar "srcLines") (PVar "file") (PCon "Diag" (PVar "sev") PWild (PVar "msg") (PCon "Some" (PCon "Loc" PWild (PVar "sl") (PVar "sc") PWild PWild)) PWild PWild)) (EBlock (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "ppSeverity") (EVar "sev")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "file"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString "")))) (DoExpr (EMatch (EApp (EApp (EVar "nthLineArr") (EVar "srcLines")) (EVar "sl")) (arm (PCon "None") () (EVar "header")) (arm (PCon "Some" (PVar "lineText")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "header"))) (ELit (LString "\n  |\n"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sl")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EVar "lineText"))) (ELit (LString "\n  | "))) (EApp (EMethodRef "display") (EApp (EVar "spaces") (EVar "sc")))) (ELit (LString "^"))))))))
+(DFunDef false "ppDiagCliLines" (PWild PWild (PCon "Diag" PWild PWild (PVar "msg") (PCon "None") PWild PWild)) (EBinOp "++" (ELit (LString "<unknown location>: ")) (EVar "msg")))
 (DTypeSig false "spaces" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "spaces" ((PVar "n")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (ELit (LString "")) (EIf (EVar "otherwise") (EBinOp "++" (ELit (LString " ")) (EApp (EVar "spaces") (EBinOp "-" (EVar "n") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "nthLine" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "nthLine" ((PVar "src") (PVar "n")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "nthLineGo") (EApp (EVar "stringToChars") (EVar "src"))) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "src"))) (ELit (LInt 1))) (EVar "n")) (ELit (LString ""))))
-(DTypeSig false "nthLineGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))))
-(DFunDef false "nthLineGo" ((PVar "cs") (PVar "i") (PVar "len") (PVar "cur") (PVar "target") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EIf (EBinOp "==" (EVar "cur") (EVar "target")) (EApp (EVar "Some") (EVar "acc")) (EVar "None")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\n"))) (EIf (EBinOp "==" (EVar "cur") (EVar "target")) (EApp (EVar "Some") (EVar "acc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "nthLineGo") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EBinOp "+" (EVar "cur") (ELit (LInt 1)))) (EVar "target")) (ELit (LString "")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "nthLineGo") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EVar "cur")) (EVar "target")) (EBinOp "++" (EVar "acc") (EApp (EVar "charToStr") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "spaces" ((PVar "n")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (ELit (LString "")) (EIf (EVar "otherwise") (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMake") (EVar "n")) (ELit (LChar " ")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "srcLinesArr" (TyFun (TyCon "String") (TyApp (TyCon "Array") (TyCon "String"))))
+(DFunDef false "srcLinesArr" ((PVar "src")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "src"))) (DoExpr (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EApp (EVar "srcLinesGo") (EVar "cs")) (ELit (LInt 0))) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "cs")))))))
+(DTypeSig false "srcLinesGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "srcLinesGo" ((PVar "cs") (PVar "start") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit (EApp (EApp (EApp (EVar "charSlice") (EVar "cs")) (EVar "start")) (EVar "n"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\n"))) (EBinOp "::" (EApp (EApp (EApp (EVar "charSlice") (EVar "cs")) (EVar "start")) (EVar "i")) (EApp (EApp (EApp (EApp (EVar "srcLinesGo") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "srcLinesGo") (EVar "cs")) (EVar "start")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "charSlice" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "charSlice" ((PVar "cs") (PVar "lo") (PVar "hi")) (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "j")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (EVar "j"))) (EVar "cs"))))))
+(DTypeSig false "nthLineArr" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "nthLineArr" ((PVar "srcLines") (PVar "n")) (EIf (EBinOp "||" (EBinOp "<" (EVar "n") (ELit (LInt 1))) (EBinOp ">" (EVar "n") (EApp (EVar "arrayLength") (EVar "srcLines")))) (EVar "None") (EIf (EVar "otherwise") (EApp (EVar "Some") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "srcLines"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "analyze" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
 (DFunDef false "analyze" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "progSrc")) (EApp (EApp (EApp (EApp (EVar "analyzeFrom") (EVar "runtimeSrc")) (EVar "coreSrc")) (EApp (EVar "parse") (EVar "progSrc"))) (EListLit)))
 (DTypeSig true "analyzeLocated" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))
@@ -1766,7 +1813,7 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DFunDef false "seedBucket" ((PVar "f") (PVar "buckets")) (EMatch (EApp (EApp (EVar "lookupBucket") (EVar "f")) (EVar "buckets")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "putBucket") (EVar "f")) (EListLit)) (EVar "buckets"))) (arm (PCon "Some" PWild) () (EVar "buckets"))))
 (DTypeSig false "pushDiags" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))
 (DFunDef false "pushDiags" (PWild (PList) (PVar "buckets")) (EVar "buckets"))
-(DFunDef false "pushDiags" ((PVar "f") (PCons (PVar "d") (PVar "ds")) (PVar "buckets")) (EApp (EApp (EApp (EVar "pushDiags") (EVar "f")) (EVar "ds")) (EApp (EApp (EApp (EVar "pushDiag") (EVar "f")) (EVar "d")) (EVar "buckets"))))
+(DFunDef false "pushDiags" ((PVar "f") (PVar "ds") (PVar "buckets")) (EMatch (EApp (EApp (EVar "lookupBucket") (EVar "f")) (EVar "buckets")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "putBucket") (EVar "f")) (EVar "ds")) (EVar "buckets"))) (arm (PCon "Some" (PVar "existing")) () (EApp (EApp (EApp (EVar "putBucket") (EVar "f")) (EBinOp "++" (EVar "existing") (EVar "ds"))) (EVar "buckets")))))
 (DTypeSig false "cachePut" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "cachePut" ((PVar "f") (PVar "v") (PVar "xs")) (EBinOp "::" (ETuple (EVar "f") (EVar "v")) (EApp (EApp (EVar "cacheRemove") (EVar "f")) (EVar "xs"))))
 (DTypeSig false "cacheRemove" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))

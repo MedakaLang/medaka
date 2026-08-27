@@ -23,6 +23,18 @@ inputs:
       leaves this 'false'.
     required: false
     default: 'false'
+  valgrind:
+    description: >-
+      'true' to also install valgrind — the measurement tool for
+      test/diff_compiler_ir_scaling.sh, which grades `medaka check`
+      superlinearity on Cachegrind instruction counts. Installed by the `gates`
+      job on EVERY shard for the same reason sqlite3 is: shards are scheduled by
+      COST, not by theme, so a gate moved between shards must never silently lose
+      the tool it measures with. ⚠️ That gate SKIPS (exit 2, "not on PATH") rather
+      than failing when valgrind is absent, so dropping this input would not turn
+      anything red — it would quietly stop grading.
+    required: false
+    default: 'false'
   wasm:
     description: >-
       'true' to install the wasm arm toolchain: Node (wasm-node-version) via
@@ -71,12 +83,14 @@ runs:
     - name: Install toolchain
       shell: bash
       run: |
+        # if/then, NOT `[ … ] && pkgs=…`: Actions runs this with `bash -e`, where a
+        # false test as the last command of an `&&` list aborts the whole step.
+        pkgs="clang libgc-dev"
+        if [ "${{ inputs.sqlite }}" = "true" ]; then pkgs="$pkgs sqlite3"; fi
+        if [ "${{ inputs.valgrind }}" = "true" ]; then pkgs="$pkgs valgrind"; fi
         sudo apt-get update -qq
-        if [ "${{ inputs.sqlite }}" = "true" ]; then
-          sudo apt-get install -y clang libgc-dev sqlite3
-        else
-          sudo apt-get install -y clang libgc-dev
-        fi
+        # shellcheck disable=SC2086
+        sudo apt-get install -y $pkgs
 
     - name: Set up Node.js ${{ inputs.wasm-node-version }} (wasm arm)
       if: inputs.wasm == 'true'

@@ -1,0 +1,44 @@
+issue: 2047
+what: `medaka check-policy` ACCEPTS (exit 0) a plugin that does not define the
+what: entry point it was asked to check. `runCheckPolicy`
+what: (compiler/tools/check_policy.mdk) defaults a missing binding's effect row
+what: to the EMPTY row -- indistinguishable from a verified-pure function -- so
+what: `forbiddenLabels [] policy` is [] for every policy and control reaches
+what: `PolicyAccept` unconditionally. main.mdk is a malicious plugin (fetch,
+what: four helpers deep) whose real entry point is `handleRequest`; asking for
+what: `handleRequest` by name correctly REJECTS at exit 1. Asking for the name
+what: the platform's contract actually specifies -- `transform`, which this file
+what: does not define -- is ACCEPTED, with the reason "requires only pure": a
+what: property that was never checked. The absence IS noticed, but by
+what: `runPlugin`'s `lookupValue`, which runs AFTER the verdict and only
+what: decorates the run output ("   (no 'transform' binding in output)"); the
+what: decision never sees it. This is a security gate failing OPEN, and
+what: docs/design/CAPABILITY-PLATFORM.md §3 already specifies the missing check
+what: ("required plugin interface present?") as its FIRST verification bullet,
+what: so this is a spec divergence rather than a design gap. `medaka manifest`
+what: shares the default: an unknown --fn emits an empty [package.capabilities]
+what: block at exit 0.
+cmd: check-policy main.mdk --allow Cache,Log --fn transform
+exit: 0
+stdout-line: accepted. transform requires only pure
+control: check-policy main.mdk --allow Cache,Log --fn rewriteHeader
+why-fixture: The CONTROL flips exactly ONE feature -- whether the name passed to
+why-fixture: --fn exists in the file -- by pointing at `rewriteHeader`, a real
+why-fixture: and genuinely pure binding in the SAME file under the SAME policy.
+why-fixture: It must accept at exit 0. If check-policy stops working at all
+why-fixture: (parse, typecheck, prelude, or policy parsing), the control exits
+why-fixture: nonzero and this row reports CONTROL-BROKE rather than DRAINED, so
+why-fixture: a broken environment can never be read as "#2047 is fixed".
+why-fixture: A control that pointed --fn at the REAL entry point would be the
+why-fixture: more obvious choice and is WRONG here: that case rejects at exit 1,
+why-fixture: and this suite requires every control to exit 0.
+why-fixture: The pin is `exit: 0` plus the verdict line, and deliberately NOT the
+why-fixture: "(no 'transform' binding in output)" line, even though that line is
+why-fixture: the smoking gun. That line is prose from a different code path
+why-fixture: (runPlugin), so rewording it -- an event with no relation to this
+why-fixture: defect -- would drain the pin falsely. The DEFECT is the verdict:
+why-fixture: exit 0 and the word "accepted". When this is fixed, a missing entry
+why-fixture: point will be a loud refusal at nonzero exit and BOTH pins move.
+why-fixture: `stdout-line` (whole-line, not substring) rather than `stdout`: the
+why-fixture: accept path also runs the plugin and prints its output, which is not
+why-fixture: part of this claim.

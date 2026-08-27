@@ -1,5 +1,5 @@
 # META
-source_lines=2101
+source_lines=2099
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted pretty printer for Medaka — a port of lib/printer.ml, producing
@@ -266,8 +266,6 @@ fits w ((Item i m (Fill sf ds))::z) = fits w (Item i m (fillFlatDoc sf ds) :: z)
 
 -- `n` spaces.
 spaces : Int -> String
--- Intentional cross-file duplicate of the same helper in diagnostics.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
 spaces n
   | n <= 0 = ""
   | otherwise = " " ++ spaces (n - 1)
