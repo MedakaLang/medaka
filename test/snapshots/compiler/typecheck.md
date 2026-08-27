@@ -1,5 +1,5 @@
 # META
-source_lines=34604
+source_lines=34627
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -16368,17 +16368,21 @@ data ArgRw =
 -- visits.
 prePassDeclScoped : ArgRw -> Decl -> Decl
 prePassDeclScoped rw (DFunDef pub n ps e) =
-  DFunDef pub n ps (rewriteArgScoped rw (patVarsListTc ps) e)
+  DFunDef pub n ps (rewriteArgScoped rw (boundOfList (patVarsListTc ps)) e)
 prePassDeclScoped rw (d@(DInterface { methods, ... })) =
   DInterface { d | methods = map (prePassIfaceMethodScoped rw) methods }
 prePassDeclScoped rw (d@(DImpl { methods, ... })) =
   DImpl { d | methods = map (prePassImplMethodScoped rw) methods }
 prePassDeclScoped rw (DProp pub name params body) =
-  DProp pub name params (rewriteArgScoped rw (propParamNamesTc params) body)
+  DProp
+    pub
+    name
+    params
+    (rewriteArgScoped rw (boundOfList (propParamNamesTc params)) body)
 prePassDeclScoped rw (DTest pub name body) =
-  DTest pub name (rewriteArgScoped rw [] body)
+  DTest pub name (rewriteArgScoped rw omEmpty body)
 prePassDeclScoped rw (DBench pub name body) =
-  DBench pub name (rewriteArgScoped rw [] body)
+  DBench pub name (rewriteArgScoped rw omEmpty body)
 prePassDeclScoped rw (DAttrib attrs d) = DAttrib attrs (prePassDeclScoped rw d)
 -- Top-level `let rec … with …` (DLetGroup): mapDecl/the catch-all skip its bodies,
 -- so a constrained-fn occurrence inside a group body would never be rewritten to
@@ -16395,7 +16399,7 @@ prePassLetBindScoped rw (LetBind n clauses) =
 
 prePassFunClauseScoped : ArgRw -> FunClause -> FunClause
 prePassFunClauseScoped rw (FunClause ps e) =
-  FunClause ps (rewriteArgScoped rw (patVarsListTc ps) e)
+  FunClause ps (rewriteArgScoped rw (boundOfList (patVarsListTc ps)) e)
 
 prePassIfaceMethodScoped : ArgRw -> IfaceMethod -> IfaceMethod
 prePassIfaceMethodScoped _ (IfaceMethod n ty None) = IfaceMethod n ty None
@@ -16403,17 +16407,31 @@ prePassIfaceMethodScoped rw (IfaceMethod n ty (Some (MethodDefault ps e))) =
   IfaceMethod
     n
     ty
-    (Some (MethodDefault ps (rewriteArgScoped rw (patVarsListTc ps) e)))
+    (Some (MethodDefault
+      ps
+      (rewriteArgScoped rw (boundOfList (patVarsListTc ps)) e)))
 
 prePassImplMethodScoped : ArgRw -> ImplMethod -> ImplMethod
 prePassImplMethodScoped rw (ImplMethod n ps e) =
-  ImplMethod n ps (rewriteArgScoped rw (patVarsListTc ps) e)
+  ImplMethod n ps (rewriteArgScoped rw (boundOfList (patVarsListTc ps)) e)
 
 propParamNamesTc : List PropParam -> List String
 propParamNamesTc ps = map propParamName ps
 
 propParamName : PropParam -> String
 propParamName (PropParam n _ _) = n
+
+-- #1031: `bound` is an OrdMap-backed SET (name -> ()), not a `List String`
+-- scanned by `contains` — a deep local nesting (N sequential lets, a reference
+-- to an outer binding) made `contains n bound` an O(depth) scan per EVar,
+-- O(depth²) over the body (the `scoperefs` shape).  `boundInsert`/`boundOfList`
+-- extend it; membership is `omHasKey`.
+boundInsert : List String -> OrdMap Unit -> OrdMap Unit
+boundInsert [] b = b
+boundInsert (n::rest) b = boundInsert rest (omInsert n () b)
+
+boundOfList : List String -> OrdMap Unit
+boundOfList ns = boundInsert ns omEmpty
 
 -- the core scope-threaded rewrite.  `bound` is the set of names in scope as
 -- locals at this node.  At an EVar: the rp arm is scope-blind (unchanged); the
@@ -16422,31 +16440,36 @@ propParamName (PropParam n _ _) = n
 -- (ELam/ELet/ELetGroup/EMatch arms/EBlock/EDo + the where/do/guard
 -- binders) extend `bound`; every other node recurses into its children with the
 -- same `bound`.
-rewriteArgScoped : ArgRw -> List String -> Expr -> Expr
+rewriteArgScoped : ArgRw -> OrdMap Unit -> Expr -> Expr
 rewriteArgScoped (ArgRw rp dn an sm) bound (EVar n)
   -- P0-18: `n` is a MANGLED definer-shadow standalone (`<mid>__size`).  Mark it
   -- `EMethodAt` with the BARE dispatch name (so `implFor` finds the impl when the
   -- receiver has one) and seed the route's `RLocal <n>` fallback with the mangled
   -- symbol (so a no-impl receiver still reaches the standalone `@mdk_<mid>__size`).
-  | not (contains n bound) && isSome (lookupAssoc n sm) =
+  | not (omHasKey n bound) && isSome (lookupAssoc n sm) =
     match lookupAssoc n sm
       Some bare => EMethodAt bare (Ref (RLocal n [])) (Ref []) (Ref [])
       None => EVar n
-  | contains n rp && not (contains n bound) =
+  | contains n rp && not (omHasKey n bound) =
     EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | contains n an && not (contains n bound) =
+  | contains n an && not (omHasKey n bound) =
     EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | contains n dn && not (contains n bound) = EDictAt n (Ref [])
+  | contains n dn && not (omHasKey n bound) = EDictAt n (Ref [])
   | otherwise = EVar n
 -- binders
 rewriteArgScoped rw bound (ELam ps body) =
-  ELam ps (rewriteArgScoped rw (patVarsListTc ps ++ bound) body)
+  ELam ps (rewriteArgScoped rw (boundInsert (patVarsListTc ps) bound) body)
 rewriteArgScoped rw bound (ELet m r p e1 e2) =
   let pv = patVarsTc p
-  let b1 = if r then pv ++ bound else bound
-  ELet m r p (rewriteArgScoped rw b1 e1) (rewriteArgScoped rw (pv ++ bound) e2)
+  let b1 = if r then boundInsert pv bound else bound
+  ELet
+    m
+    r
+    p
+    (rewriteArgScoped rw b1 e1)
+    (rewriteArgScoped rw (boundInsert pv bound) e2)
 rewriteArgScoped rw bound (ELetGroup binds e2) =
-  let bnd = letBindNamesTc binds ++ bound
+  let bnd = boundInsert (letBindNamesTc binds) bound
   ELetGroup (map (rewriteArgLetBind rw bnd) binds) (rewriteArgScoped rw bnd e2)
 rewriteArgScoped rw bound (EMatch e0 arms) =
   EMatch (rewriteArgScoped rw bound e0) (map (rewriteArgArm rw bound) arms)
@@ -16524,41 +16547,41 @@ rewriteArgScoped rw bound (EAsPat x sub) =
 -- leaves (ELit / EMethodRef / EDictApp / EVarAt / EMethodAt / EDictAt / SecBare)
 rewriteArgScoped _ _ e = e
 
-rewriteArgField : ArgRw -> List String -> FieldAssign -> FieldAssign
+rewriteArgField : ArgRw -> OrdMap Unit -> FieldAssign -> FieldAssign
 rewriteArgField rw bound (FieldAssign n e) =
   FieldAssign n (rewriteArgScoped rw bound e)
 
-rewriteArgKv : ArgRw -> List String -> (Expr, Expr) -> (Expr, Expr)
+rewriteArgKv : ArgRw -> OrdMap Unit -> (Expr, Expr) -> (Expr, Expr)
 rewriteArgKv rw bound (k, v) =
   (rewriteArgScoped rw bound k, rewriteArgScoped rw bound v)
 
-rewriteArgInterp : ArgRw -> List String -> InterpPart -> InterpPart
+rewriteArgInterp : ArgRw -> OrdMap Unit -> InterpPart -> InterpPart
 rewriteArgInterp _ _ (InterpStr s) = InterpStr s
 rewriteArgInterp rw bound (InterpExpr e) =
   InterpExpr (rewriteArgScoped rw bound e)
 
-rewriteArgLetBind : ArgRw -> List String -> LetBind -> LetBind
+rewriteArgLetBind : ArgRw -> OrdMap Unit -> LetBind -> LetBind
 rewriteArgLetBind rw bound (LetBind n clauses) =
   LetBind n (map (rewriteArgFunClause rw bound) clauses)
 
-rewriteArgFunClause : ArgRw -> List String -> FunClause -> FunClause
+rewriteArgFunClause : ArgRw -> OrdMap Unit -> FunClause -> FunClause
 rewriteArgFunClause rw bound (FunClause ps body) =
-  FunClause ps (rewriteArgScoped rw (patVarsListTc ps ++ bound) body)
+  FunClause ps (rewriteArgScoped rw (boundInsert (patVarsListTc ps) bound) body)
 
 -- a match/function arm: the pattern binds for the guards + body; a `| p <- e`
 -- guard binds for later guards + the body (threaded left-to-right).
-rewriteArgArm : ArgRw -> List String -> Arm -> Arm
+rewriteArgArm : ArgRw -> OrdMap Unit -> Arm -> Arm
 rewriteArgArm rw bound (Arm p gs body) =
-  let b0 = patVarsTc p ++ bound
+  let b0 = boundInsert (patVarsTc p) bound
   let (gs2, bnd) = rewriteArgGuards rw b0 gs
   Arm p gs2 (rewriteArgScoped rw bnd body)
 
-rewriteArgGuardArm : ArgRw -> List String -> GuardArm -> GuardArm
+rewriteArgGuardArm : ArgRw -> OrdMap Unit -> GuardArm -> GuardArm
 rewriteArgGuardArm rw bound (GuardArm gs body) =
   let (gs2, bnd) = rewriteArgGuards rw bound gs
   GuardArm gs2 (rewriteArgScoped rw bnd body)
 
-rewriteArgGuards : ArgRw -> List String -> List Guard -> (List Guard, List String)
+rewriteArgGuards : ArgRw -> OrdMap Unit -> List Guard -> (List Guard, OrdMap Unit)
 rewriteArgGuards _ bound [] = ([], bound)
 rewriteArgGuards rw bound ((GBool e)::rest) =
   let e2 = rewriteArgScoped rw bound e
@@ -16566,21 +16589,21 @@ rewriteArgGuards rw bound ((GBool e)::rest) =
   (GBool e2 :: rest2, bnd)
 rewriteArgGuards rw bound ((GBind p e)::rest) =
   let e2 = rewriteArgScoped rw bound e
-  let (rest2, bnd) = rewriteArgGuards rw (patVarsTc p ++ bound) rest
+  let (rest2, bnd) = rewriteArgGuards rw (boundInsert (patVarsTc p) bound) rest
   (GBind p e2 :: rest2, bnd)
 
 -- do/block statements: a DoBind/DoLet pattern binds for SUBSEQUENT
 -- statements (a recursive DoLet also for its own RHS).
-rewriteArgStmts : ArgRw -> List String -> List DoStmt -> List DoStmt
+rewriteArgStmts : ArgRw -> OrdMap Unit -> List DoStmt -> List DoStmt
 rewriteArgStmts _ _ [] = []
 rewriteArgStmts rw bound ((DoExpr e)::rest) =
   DoExpr (rewriteArgScoped rw bound e) :: rewriteArgStmts rw bound rest
 rewriteArgStmts rw bound ((DoBind p e)::rest) =
   DoBind p (rewriteArgScoped rw bound e) ::
-    rewriteArgStmts rw (patVarsTc p ++ bound) rest
+    rewriteArgStmts rw (boundInsert (patVarsTc p) bound) rest
 rewriteArgStmts rw bound ((DoLet m r p e)::rest) =
-  let b1 = if r then patVarsTc p ++ bound else bound
-  DoLet m r p (rewriteArgScoped rw b1 e) :: rewriteArgStmts rw (patVarsTc p ++ bound) rest
+  let b1 = if r then boundInsert (patVarsTc p) bound else bound
+  DoLet m r p (rewriteArgScoped rw b1 e) :: rewriteArgStmts rw (boundInsert (patVarsTc p) bound) rest
 rewriteArgStmts rw bound ((DoAssign x e)::rest) =
   DoAssign x (rewriteArgScoped rw bound e) :: rewriteArgStmts rw bound rest
 rewriteArgStmts rw bound ((DoFieldAssign x fs e)::rest) =
@@ -37367,33 +37390,38 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "rewriteRPDictArg" (PWild PWild PWild (PVar "e")) (EVar "e"))
 (DData Private "ArgRw" () ((variant "ArgRw" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))) ())
 (DTypeSig false "prePassDeclScoped" (TyFun (TyCon "ArgRw") (TyFun (TyCon "Decl") (TyCon "Decl"))))
-(DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "patVarsListTc") (EVar "ps"))) (EVar "e"))))
+(DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "patVarsListTc") (EVar "ps")))) (EVar "e"))))
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EVar "prePassIfaceMethodScoped") (EVar "rw"))) (EVar "methods"))))))
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PAs "d" (PRec "DImpl" ((rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EVar "prePassImplMethodScoped") (EVar "rw"))) (EVar "methods"))))))
-(DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "propParamNamesTc") (EVar "params"))) (EVar "body"))))
-(DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EListLit)) (EVar "body"))))
-(DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DBench" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DBench") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EListLit)) (EVar "body"))))
+(DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "propParamNamesTc") (EVar "params")))) (EVar "body"))))
+(DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "omEmpty")) (EVar "body"))))
+(DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DBench" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DBench") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "omEmpty")) (EVar "body"))))
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "prePassDeclScoped") (EVar "rw")) (EVar "d"))))
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EVar "map") (EApp (EVar "prePassLetBindScoped") (EVar "rw"))) (EVar "binds"))))
 (DFunDef false "prePassDeclScoped" (PWild (PVar "d")) (EVar "d"))
 (DTypeSig false "prePassLetBindScoped" (TyFun (TyCon "ArgRw") (TyFun (TyCon "LetBind") (TyCon "LetBind"))))
 (DFunDef false "prePassLetBindScoped" ((PVar "rw") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "prePassFunClauseScoped") (EVar "rw"))) (EVar "clauses"))))
 (DTypeSig false "prePassFunClauseScoped" (TyFun (TyCon "ArgRw") (TyFun (TyCon "FunClause") (TyCon "FunClause"))))
-(DFunDef false "prePassFunClauseScoped" ((PVar "rw") (PCon "FunClause" (PVar "ps") (PVar "e"))) (EApp (EApp (EVar "FunClause") (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "patVarsListTc") (EVar "ps"))) (EVar "e"))))
+(DFunDef false "prePassFunClauseScoped" ((PVar "rw") (PCon "FunClause" (PVar "ps") (PVar "e"))) (EApp (EApp (EVar "FunClause") (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "patVarsListTc") (EVar "ps")))) (EVar "e"))))
 (DTypeSig false "prePassIfaceMethodScoped" (TyFun (TyCon "ArgRw") (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))
 (DFunDef false "prePassIfaceMethodScoped" (PWild (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "None"))) (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EVar "None")))
-(DFunDef false "prePassIfaceMethodScoped" ((PVar "rw") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "e"))))) (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "patVarsListTc") (EVar "ps"))) (EVar "e"))))))
+(DFunDef false "prePassIfaceMethodScoped" ((PVar "rw") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "e"))))) (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "patVarsListTc") (EVar "ps")))) (EVar "e"))))))
 (DTypeSig false "prePassImplMethodScoped" (TyFun (TyCon "ArgRw") (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod"))))
-(DFunDef false "prePassImplMethodScoped" ((PVar "rw") (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "patVarsListTc") (EVar "ps"))) (EVar "e"))))
+(DFunDef false "prePassImplMethodScoped" ((PVar "rw") (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "patVarsListTc") (EVar "ps")))) (EVar "e"))))
 (DTypeSig false "propParamNamesTc" (TyFun (TyApp (TyCon "List") (TyCon "PropParam")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "propParamNamesTc" ((PVar "ps")) (EApp (EApp (EVar "map") (EVar "propParamName")) (EVar "ps")))
 (DTypeSig false "propParamName" (TyFun (TyCon "PropParam") (TyCon "String")))
 (DFunDef false "propParamName" ((PCon "PropParam" (PVar "n") PWild PWild)) (EVar "n"))
-(DTypeSig false "rewriteArgScoped" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "rewriteArgScoped" ((PCon "ArgRw" (PVar "rp") (PVar "dn") (PVar "an") (PVar "sm")) (PVar "bound") (PCon "EVar" (PVar "n"))) (EIf (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bound"))) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "bare")) (EApp (EVar "Ref") (EApp (EApp (EVar "RLocal") (EVar "n")) (EListLit)))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit)))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "rp")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "an")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "dn")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bound")))) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EApp (EVar "Ref") (EListLit))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
-(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "ELam") (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EBinOp "++" (EApp (EVar "patVarsListTc") (EVar "ps")) (EVar "bound"))) (EVar "body"))))
-(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELet" (PVar "m") (PVar "r") (PVar "p") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "pv") (EApp (EVar "patVarsTc") (EVar "p"))) (DoLet false false (PVar "b1") (EIf (EVar "r") (EBinOp "++" (EVar "pv") (EVar "bound")) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EVar "p")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "b1")) (EVar "e1"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EBinOp "++" (EVar "pv") (EVar "bound"))) (EVar "e2"))))))
-(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELetGroup" (PVar "binds") (PVar "e2"))) (EBlock (DoLet false false (PVar "bnd") (EBinOp "++" (EApp (EVar "letBindNamesTc") (EVar "binds")) (EVar "bound"))) (DoExpr (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EVar "map") (EApp (EApp (EVar "rewriteArgLetBind") (EVar "rw")) (EVar "bnd"))) (EVar "binds"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bnd")) (EVar "e2"))))))
+(DTypeSig false "boundInsert" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
+(DFunDef false "boundInsert" ((PList) (PVar "b")) (EVar "b"))
+(DFunDef false "boundInsert" ((PCons (PVar "n") (PVar "rest")) (PVar "b")) (EApp (EApp (EVar "boundInsert") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "b"))))
+(DTypeSig false "boundOfList" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
+(DFunDef false "boundOfList" ((PVar "ns")) (EApp (EApp (EVar "boundInsert") (EVar "ns")) (EVar "omEmpty")))
+(DTypeSig false "rewriteArgScoped" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "rewriteArgScoped" ((PCon "ArgRw" (PVar "rp") (PVar "dn") (PVar "an") (PVar "sm")) (PVar "bound") (PCon "EVar" (PVar "n"))) (EIf (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound"))) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "bare")) (EApp (EVar "Ref") (EApp (EApp (EVar "RLocal") (EVar "n")) (EListLit)))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit)))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "rp")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "an")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "dn")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EApp (EVar "Ref") (EListLit))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
+(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "ELam") (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EApp (EVar "boundInsert") (EApp (EVar "patVarsListTc") (EVar "ps"))) (EVar "bound"))) (EVar "body"))))
+(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELet" (PVar "m") (PVar "r") (PVar "p") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "pv") (EApp (EVar "patVarsTc") (EVar "p"))) (DoLet false false (PVar "b1") (EIf (EVar "r") (EApp (EApp (EVar "boundInsert") (EVar "pv")) (EVar "bound")) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EVar "p")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "b1")) (EVar "e1"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EApp (EVar "boundInsert") (EVar "pv")) (EVar "bound"))) (EVar "e2"))))))
+(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELetGroup" (PVar "binds") (PVar "e2"))) (EBlock (DoLet false false (PVar "bnd") (EApp (EApp (EVar "boundInsert") (EApp (EVar "letBindNamesTc") (EVar "binds"))) (EVar "bound"))) (DoExpr (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EVar "map") (EApp (EApp (EVar "rewriteArgLetBind") (EVar "rw")) (EVar "bnd"))) (EVar "binds"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bnd")) (EVar "e2"))))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EMatch" (PVar "e0") (PVar "arms"))) (EApp (EApp (EVar "EMatch") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "rewriteArgArm") (EVar "rw")) (EVar "bound"))) (EVar "arms"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EApp (EVar "rewriteArgStmts") (EVar "rw")) (EVar "bound")) (EVar "stmts"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EDo" (PVar "stmts"))) (EApp (EVar "EDo") (EApp (EApp (EApp (EVar "rewriteArgStmts") (EVar "rw")) (EVar "bound")) (EVar "stmts"))))
@@ -37425,30 +37453,30 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EAsPat" (PVar "x") (PVar "sub"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "sub"))))
 (DFunDef false "rewriteArgScoped" (PWild PWild (PVar "e")) (EVar "e"))
-(DTypeSig false "rewriteArgField" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "FieldAssign") (TyCon "FieldAssign")))))
+(DTypeSig false "rewriteArgField" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "FieldAssign") (TyCon "FieldAssign")))))
 (DFunDef false "rewriteArgField" ((PVar "rw") (PVar "bound") (PCon "FieldAssign" (PVar "n") (PVar "e"))) (EApp (EApp (EVar "FieldAssign") (EVar "n")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))))
-(DTypeSig false "rewriteArgKv" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyCon "Expr"))))))
+(DTypeSig false "rewriteArgKv" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyCon "Expr"))))))
 (DFunDef false "rewriteArgKv" ((PVar "rw") (PVar "bound") (PTuple (PVar "k") (PVar "v"))) (ETuple (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "k")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "v"))))
-(DTypeSig false "rewriteArgInterp" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "InterpPart") (TyCon "InterpPart")))))
+(DTypeSig false "rewriteArgInterp" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "InterpPart") (TyCon "InterpPart")))))
 (DFunDef false "rewriteArgInterp" (PWild PWild (PCon "InterpStr" (PVar "s"))) (EApp (EVar "InterpStr") (EVar "s")))
 (DFunDef false "rewriteArgInterp" ((PVar "rw") (PVar "bound") (PCon "InterpExpr" (PVar "e"))) (EApp (EVar "InterpExpr") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))))
-(DTypeSig false "rewriteArgLetBind" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "LetBind") (TyCon "LetBind")))))
+(DTypeSig false "rewriteArgLetBind" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "LetBind") (TyCon "LetBind")))))
 (DFunDef false "rewriteArgLetBind" ((PVar "rw") (PVar "bound") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "rewriteArgFunClause") (EVar "rw")) (EVar "bound"))) (EVar "clauses"))))
-(DTypeSig false "rewriteArgFunClause" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "FunClause") (TyCon "FunClause")))))
-(DFunDef false "rewriteArgFunClause" ((PVar "rw") (PVar "bound") (PCon "FunClause" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "FunClause") (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EBinOp "++" (EApp (EVar "patVarsListTc") (EVar "ps")) (EVar "bound"))) (EVar "body"))))
-(DTypeSig false "rewriteArgArm" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Arm") (TyCon "Arm")))))
-(DFunDef false "rewriteArgArm" ((PVar "rw") (PVar "bound") (PCon "Arm" (PVar "p") (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PVar "b0") (EBinOp "++" (EApp (EVar "patVarsTc") (EVar "p")) (EVar "bound"))) (DoLet false false (PTuple (PVar "gs2") (PVar "bnd")) (EApp (EApp (EApp (EVar "rewriteArgGuards") (EVar "rw")) (EVar "b0")) (EVar "gs"))) (DoExpr (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EVar "gs2")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bnd")) (EVar "body"))))))
-(DTypeSig false "rewriteArgGuardArm" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "GuardArm") (TyCon "GuardArm")))))
+(DTypeSig false "rewriteArgFunClause" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "FunClause") (TyCon "FunClause")))))
+(DFunDef false "rewriteArgFunClause" ((PVar "rw") (PVar "bound") (PCon "FunClause" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "FunClause") (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EApp (EVar "boundInsert") (EApp (EVar "patVarsListTc") (EVar "ps"))) (EVar "bound"))) (EVar "body"))))
+(DTypeSig false "rewriteArgArm" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Arm") (TyCon "Arm")))))
+(DFunDef false "rewriteArgArm" ((PVar "rw") (PVar "bound") (PCon "Arm" (PVar "p") (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PVar "b0") (EApp (EApp (EVar "boundInsert") (EApp (EVar "patVarsTc") (EVar "p"))) (EVar "bound"))) (DoLet false false (PTuple (PVar "gs2") (PVar "bnd")) (EApp (EApp (EApp (EVar "rewriteArgGuards") (EVar "rw")) (EVar "b0")) (EVar "gs"))) (DoExpr (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EVar "gs2")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bnd")) (EVar "body"))))))
+(DTypeSig false "rewriteArgGuardArm" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GuardArm") (TyCon "GuardArm")))))
 (DFunDef false "rewriteArgGuardArm" ((PVar "rw") (PVar "bound") (PCon "GuardArm" (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "gs2") (PVar "bnd")) (EApp (EApp (EApp (EVar "rewriteArgGuards") (EVar "rw")) (EVar "bound")) (EVar "gs"))) (DoExpr (EApp (EApp (EVar "GuardArm") (EVar "gs2")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bnd")) (EVar "body"))))))
-(DTypeSig false "rewriteArgGuards" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyTuple (TyApp (TyCon "List") (TyCon "Guard")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DTypeSig false "rewriteArgGuards" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyTuple (TyApp (TyCon "List") (TyCon "Guard")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
 (DFunDef false "rewriteArgGuards" (PWild (PVar "bound") (PList)) (ETuple (EListLit) (EVar "bound")))
 (DFunDef false "rewriteArgGuards" ((PVar "rw") (PVar "bound") (PCons (PCon "GBool" (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "e2") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "bnd")) (EApp (EApp (EApp (EVar "rewriteArgGuards") (EVar "rw")) (EVar "bound")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EVar "GBool") (EVar "e2")) (EVar "rest2")) (EVar "bnd")))))
-(DFunDef false "rewriteArgGuards" ((PVar "rw") (PVar "bound") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "e2") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "bnd")) (EApp (EApp (EApp (EVar "rewriteArgGuards") (EVar "rw")) (EBinOp "++" (EApp (EVar "patVarsTc") (EVar "p")) (EVar "bound"))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p")) (EVar "e2")) (EVar "rest2")) (EVar "bnd")))))
-(DTypeSig false "rewriteArgStmts" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "DoStmt"))))))
+(DFunDef false "rewriteArgGuards" ((PVar "rw") (PVar "bound") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "e2") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "bnd")) (EApp (EApp (EApp (EVar "rewriteArgGuards") (EVar "rw")) (EApp (EApp (EVar "boundInsert") (EApp (EVar "patVarsTc") (EVar "p"))) (EVar "bound"))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p")) (EVar "e2")) (EVar "rest2")) (EVar "bnd")))))
+(DTypeSig false "rewriteArgStmts" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "DoStmt"))))))
 (DFunDef false "rewriteArgStmts" (PWild PWild (PList)) (EListLit))
 (DFunDef false "rewriteArgStmts" ((PVar "rw") (PVar "bound") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EVar "DoExpr") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))) (EApp (EApp (EApp (EVar "rewriteArgStmts") (EVar "rw")) (EVar "bound")) (EVar "rest"))))
-(DFunDef false "rewriteArgStmts" ((PVar "rw") (PVar "bound") (PCons (PCon "DoBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "DoBind") (EVar "p")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))) (EApp (EApp (EApp (EVar "rewriteArgStmts") (EVar "rw")) (EBinOp "++" (EApp (EVar "patVarsTc") (EVar "p")) (EVar "bound"))) (EVar "rest"))))
-(DFunDef false "rewriteArgStmts" ((PVar "rw") (PVar "bound") (PCons (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "b1") (EIf (EVar "r") (EBinOp "++" (EApp (EVar "patVarsTc") (EVar "p")) (EVar "bound")) (EVar "bound"))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EVar "p")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "b1")) (EVar "e"))) (EApp (EApp (EApp (EVar "rewriteArgStmts") (EVar "rw")) (EBinOp "++" (EApp (EVar "patVarsTc") (EVar "p")) (EVar "bound"))) (EVar "rest"))))))
+(DFunDef false "rewriteArgStmts" ((PVar "rw") (PVar "bound") (PCons (PCon "DoBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "DoBind") (EVar "p")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))) (EApp (EApp (EApp (EVar "rewriteArgStmts") (EVar "rw")) (EApp (EApp (EVar "boundInsert") (EApp (EVar "patVarsTc") (EVar "p"))) (EVar "bound"))) (EVar "rest"))))
+(DFunDef false "rewriteArgStmts" ((PVar "rw") (PVar "bound") (PCons (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "b1") (EIf (EVar "r") (EApp (EApp (EVar "boundInsert") (EApp (EVar "patVarsTc") (EVar "p"))) (EVar "bound")) (EVar "bound"))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EVar "p")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "b1")) (EVar "e"))) (EApp (EApp (EApp (EVar "rewriteArgStmts") (EVar "rw")) (EApp (EApp (EVar "boundInsert") (EApp (EVar "patVarsTc") (EVar "p"))) (EVar "bound"))) (EVar "rest"))))))
 (DFunDef false "rewriteArgStmts" ((PVar "rw") (PVar "bound") (PCons (PCon "DoAssign" (PVar "x") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "DoAssign") (EVar "x")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))) (EApp (EApp (EApp (EVar "rewriteArgStmts") (EVar "rw")) (EVar "bound")) (EVar "rest"))))
 (DFunDef false "rewriteArgStmts" ((PVar "rw") (PVar "bound") (PCons (PCon "DoFieldAssign" (PVar "x") (PVar "fs") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EVar "DoFieldAssign") (EVar "x")) (EVar "fs")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))) (EApp (EApp (EApp (EVar "rewriteArgStmts") (EVar "rw")) (EVar "bound")) (EVar "rest"))))
 (DTypeSig false "letBindNamesTc" (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -42893,33 +42921,38 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "rewriteRPDictArg" (PWild PWild PWild (PVar "e")) (EVar "e"))
 (DData Private "ArgRw" () ((variant "ArgRw" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))) ())
 (DTypeSig false "prePassDeclScoped" (TyFun (TyCon "ArgRw") (TyFun (TyCon "Decl") (TyCon "Decl"))))
-(DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "patVarsListTc") (EVar "ps"))) (EVar "e"))))
+(DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "patVarsListTc") (EVar "ps")))) (EVar "e"))))
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EVar "prePassIfaceMethodScoped") (EVar "rw"))) (EVar "methods"))))))
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PAs "d" (PRec "DImpl" ((rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EVar "prePassImplMethodScoped") (EVar "rw"))) (EVar "methods"))))))
-(DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "propParamNamesTc") (EVar "params"))) (EVar "body"))))
-(DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EListLit)) (EVar "body"))))
-(DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DBench" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DBench") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EListLit)) (EVar "body"))))
+(DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "propParamNamesTc") (EVar "params")))) (EVar "body"))))
+(DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "omEmpty")) (EVar "body"))))
+(DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DBench" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DBench") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "omEmpty")) (EVar "body"))))
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "prePassDeclScoped") (EVar "rw")) (EVar "d"))))
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EMethodRef "map") (EApp (EVar "prePassLetBindScoped") (EVar "rw"))) (EVar "binds"))))
 (DFunDef false "prePassDeclScoped" (PWild (PVar "d")) (EVar "d"))
 (DTypeSig false "prePassLetBindScoped" (TyFun (TyCon "ArgRw") (TyFun (TyCon "LetBind") (TyCon "LetBind"))))
 (DFunDef false "prePassLetBindScoped" ((PVar "rw") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "prePassFunClauseScoped") (EVar "rw"))) (EVar "clauses"))))
 (DTypeSig false "prePassFunClauseScoped" (TyFun (TyCon "ArgRw") (TyFun (TyCon "FunClause") (TyCon "FunClause"))))
-(DFunDef false "prePassFunClauseScoped" ((PVar "rw") (PCon "FunClause" (PVar "ps") (PVar "e"))) (EApp (EApp (EVar "FunClause") (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "patVarsListTc") (EVar "ps"))) (EVar "e"))))
+(DFunDef false "prePassFunClauseScoped" ((PVar "rw") (PCon "FunClause" (PVar "ps") (PVar "e"))) (EApp (EApp (EVar "FunClause") (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "patVarsListTc") (EVar "ps")))) (EVar "e"))))
 (DTypeSig false "prePassIfaceMethodScoped" (TyFun (TyCon "ArgRw") (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))
 (DFunDef false "prePassIfaceMethodScoped" (PWild (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "None"))) (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EVar "None")))
-(DFunDef false "prePassIfaceMethodScoped" ((PVar "rw") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "e"))))) (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "patVarsListTc") (EVar "ps"))) (EVar "e"))))))
+(DFunDef false "prePassIfaceMethodScoped" ((PVar "rw") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "e"))))) (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "patVarsListTc") (EVar "ps")))) (EVar "e"))))))
 (DTypeSig false "prePassImplMethodScoped" (TyFun (TyCon "ArgRw") (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod"))))
-(DFunDef false "prePassImplMethodScoped" ((PVar "rw") (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "patVarsListTc") (EVar "ps"))) (EVar "e"))))
+(DFunDef false "prePassImplMethodScoped" ((PVar "rw") (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "patVarsListTc") (EVar "ps")))) (EVar "e"))))
 (DTypeSig false "propParamNamesTc" (TyFun (TyApp (TyCon "List") (TyCon "PropParam")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "propParamNamesTc" ((PVar "ps")) (EApp (EApp (EMethodRef "map") (EVar "propParamName")) (EVar "ps")))
 (DTypeSig false "propParamName" (TyFun (TyCon "PropParam") (TyCon "String")))
 (DFunDef false "propParamName" ((PCon "PropParam" (PVar "n") PWild PWild)) (EVar "n"))
-(DTypeSig false "rewriteArgScoped" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "rewriteArgScoped" ((PCon "ArgRw" (PVar "rp") (PVar "dn") (PVar "an") (PVar "sm")) (PVar "bound") (PCon "EVar" (PVar "n"))) (EIf (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bound"))) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "bare")) (EApp (EVar "Ref") (EApp (EApp (EVar "RLocal") (EVar "n")) (EListLit)))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit)))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "rp")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "an")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "dn")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bound")))) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EApp (EVar "Ref") (EListLit))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
-(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "ELam") (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EBinOp "++" (EApp (EVar "patVarsListTc") (EVar "ps")) (EVar "bound"))) (EVar "body"))))
-(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELet" (PVar "m") (PVar "r") (PVar "p") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "pv") (EApp (EVar "patVarsTc") (EVar "p"))) (DoLet false false (PVar "b1") (EIf (EVar "r") (EBinOp "++" (EVar "pv") (EVar "bound")) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EVar "p")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "b1")) (EVar "e1"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EBinOp "++" (EVar "pv") (EVar "bound"))) (EVar "e2"))))))
-(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELetGroup" (PVar "binds") (PVar "e2"))) (EBlock (DoLet false false (PVar "bnd") (EBinOp "++" (EApp (EVar "letBindNamesTc") (EVar "binds")) (EVar "bound"))) (DoExpr (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "rewriteArgLetBind") (EVar "rw")) (EVar "bnd"))) (EVar "binds"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bnd")) (EVar "e2"))))))
+(DTypeSig false "boundInsert" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
+(DFunDef false "boundInsert" ((PList) (PVar "b")) (EVar "b"))
+(DFunDef false "boundInsert" ((PCons (PVar "n") (PVar "rest")) (PVar "b")) (EApp (EApp (EVar "boundInsert") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "b"))))
+(DTypeSig false "boundOfList" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
+(DFunDef false "boundOfList" ((PVar "ns")) (EApp (EApp (EVar "boundInsert") (EVar "ns")) (EVar "omEmpty")))
+(DTypeSig false "rewriteArgScoped" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "rewriteArgScoped" ((PCon "ArgRw" (PVar "rp") (PVar "dn") (PVar "an") (PVar "sm")) (PVar "bound") (PCon "EVar" (PVar "n"))) (EIf (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound"))) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "bare")) (EApp (EVar "Ref") (EApp (EApp (EVar "RLocal") (EVar "n")) (EListLit)))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit)))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "rp")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "an")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "dn")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EApp (EVar "Ref") (EListLit))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
+(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "ELam") (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EApp (EVar "boundInsert") (EApp (EVar "patVarsListTc") (EVar "ps"))) (EVar "bound"))) (EVar "body"))))
+(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELet" (PVar "m") (PVar "r") (PVar "p") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "pv") (EApp (EVar "patVarsTc") (EVar "p"))) (DoLet false false (PVar "b1") (EIf (EVar "r") (EApp (EApp (EVar "boundInsert") (EVar "pv")) (EVar "bound")) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EVar "p")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "b1")) (EVar "e1"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EApp (EVar "boundInsert") (EVar "pv")) (EVar "bound"))) (EVar "e2"))))))
+(DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELetGroup" (PVar "binds") (PVar "e2"))) (EBlock (DoLet false false (PVar "bnd") (EApp (EApp (EVar "boundInsert") (EApp (EVar "letBindNamesTc") (EVar "binds"))) (EVar "bound"))) (DoExpr (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "rewriteArgLetBind") (EVar "rw")) (EVar "bnd"))) (EVar "binds"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bnd")) (EVar "e2"))))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EMatch" (PVar "e0") (PVar "arms"))) (EApp (EApp (EVar "EMatch") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "rewriteArgArm") (EVar "rw")) (EVar "bound"))) (EVar "arms"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EApp (EVar "rewriteArgStmts") (EVar "rw")) (EVar "bound")) (EVar "stmts"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EDo" (PVar "stmts"))) (EApp (EVar "EDo") (EApp (EApp (EApp (EVar "rewriteArgStmts") (EVar "rw")) (EVar "bound")) (EVar "stmts"))))
@@ -42951,30 +42984,30 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "EAsPat" (PVar "x") (PVar "sub"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EMethodRef "sub"))))
 (DFunDef false "rewriteArgScoped" (PWild PWild (PVar "e")) (EVar "e"))
-(DTypeSig false "rewriteArgField" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "FieldAssign") (TyCon "FieldAssign")))))
+(DTypeSig false "rewriteArgField" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "FieldAssign") (TyCon "FieldAssign")))))
 (DFunDef false "rewriteArgField" ((PVar "rw") (PVar "bound") (PCon "FieldAssign" (PVar "n") (PVar "e"))) (EApp (EApp (EVar "FieldAssign") (EVar "n")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))))
-(DTypeSig false "rewriteArgKv" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyCon "Expr"))))))
+(DTypeSig false "rewriteArgKv" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyCon "Expr"))))))
 (DFunDef false "rewriteArgKv" ((PVar "rw") (PVar "bound") (PTuple (PVar "k") (PVar "v"))) (ETuple (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "k")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "v"))))
-(DTypeSig false "rewriteArgInterp" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "InterpPart") (TyCon "InterpPart")))))
+(DTypeSig false "rewriteArgInterp" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "InterpPart") (TyCon "InterpPart")))))
 (DFunDef false "rewriteArgInterp" (PWild PWild (PCon "InterpStr" (PVar "s"))) (EApp (EVar "InterpStr") (EVar "s")))
 (DFunDef false "rewriteArgInterp" ((PVar "rw") (PVar "bound") (PCon "InterpExpr" (PVar "e"))) (EApp (EVar "InterpExpr") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))))
-(DTypeSig false "rewriteArgLetBind" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "LetBind") (TyCon "LetBind")))))
+(DTypeSig false "rewriteArgLetBind" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "LetBind") (TyCon "LetBind")))))
 (DFunDef false "rewriteArgLetBind" ((PVar "rw") (PVar "bound") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "rewriteArgFunClause") (EVar "rw")) (EVar "bound"))) (EVar "clauses"))))
-(DTypeSig false "rewriteArgFunClause" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "FunClause") (TyCon "FunClause")))))
-(DFunDef false "rewriteArgFunClause" ((PVar "rw") (PVar "bound") (PCon "FunClause" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "FunClause") (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EBinOp "++" (EApp (EVar "patVarsListTc") (EVar "ps")) (EVar "bound"))) (EVar "body"))))
-(DTypeSig false "rewriteArgArm" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Arm") (TyCon "Arm")))))
-(DFunDef false "rewriteArgArm" ((PVar "rw") (PVar "bound") (PCon "Arm" (PVar "p") (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PVar "b0") (EBinOp "++" (EApp (EVar "patVarsTc") (EVar "p")) (EVar "bound"))) (DoLet false false (PTuple (PVar "gs2") (PVar "bnd")) (EApp (EApp (EApp (EVar "rewriteArgGuards") (EVar "rw")) (EVar "b0")) (EVar "gs"))) (DoExpr (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EVar "gs2")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bnd")) (EVar "body"))))))
-(DTypeSig false "rewriteArgGuardArm" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "GuardArm") (TyCon "GuardArm")))))
+(DTypeSig false "rewriteArgFunClause" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "FunClause") (TyCon "FunClause")))))
+(DFunDef false "rewriteArgFunClause" ((PVar "rw") (PVar "bound") (PCon "FunClause" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "FunClause") (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EApp (EVar "boundInsert") (EApp (EVar "patVarsListTc") (EVar "ps"))) (EVar "bound"))) (EVar "body"))))
+(DTypeSig false "rewriteArgArm" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Arm") (TyCon "Arm")))))
+(DFunDef false "rewriteArgArm" ((PVar "rw") (PVar "bound") (PCon "Arm" (PVar "p") (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PVar "b0") (EApp (EApp (EVar "boundInsert") (EApp (EVar "patVarsTc") (EVar "p"))) (EVar "bound"))) (DoLet false false (PTuple (PVar "gs2") (PVar "bnd")) (EApp (EApp (EApp (EVar "rewriteArgGuards") (EVar "rw")) (EVar "b0")) (EVar "gs"))) (DoExpr (EApp (EApp (EApp (EVar "Arm") (EVar "p")) (EVar "gs2")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bnd")) (EVar "body"))))))
+(DTypeSig false "rewriteArgGuardArm" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GuardArm") (TyCon "GuardArm")))))
 (DFunDef false "rewriteArgGuardArm" ((PVar "rw") (PVar "bound") (PCon "GuardArm" (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "gs2") (PVar "bnd")) (EApp (EApp (EApp (EVar "rewriteArgGuards") (EVar "rw")) (EVar "bound")) (EVar "gs"))) (DoExpr (EApp (EApp (EVar "GuardArm") (EVar "gs2")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bnd")) (EVar "body"))))))
-(DTypeSig false "rewriteArgGuards" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyTuple (TyApp (TyCon "List") (TyCon "Guard")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DTypeSig false "rewriteArgGuards" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyTuple (TyApp (TyCon "List") (TyCon "Guard")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
 (DFunDef false "rewriteArgGuards" (PWild (PVar "bound") (PList)) (ETuple (EListLit) (EVar "bound")))
 (DFunDef false "rewriteArgGuards" ((PVar "rw") (PVar "bound") (PCons (PCon "GBool" (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "e2") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "bnd")) (EApp (EApp (EApp (EVar "rewriteArgGuards") (EVar "rw")) (EVar "bound")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EVar "GBool") (EVar "e2")) (EVar "rest2")) (EVar "bnd")))))
-(DFunDef false "rewriteArgGuards" ((PVar "rw") (PVar "bound") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "e2") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "bnd")) (EApp (EApp (EApp (EVar "rewriteArgGuards") (EVar "rw")) (EBinOp "++" (EApp (EVar "patVarsTc") (EVar "p")) (EVar "bound"))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p")) (EVar "e2")) (EVar "rest2")) (EVar "bnd")))))
-(DTypeSig false "rewriteArgStmts" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "DoStmt"))))))
+(DFunDef false "rewriteArgGuards" ((PVar "rw") (PVar "bound") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "e2") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "bnd")) (EApp (EApp (EApp (EVar "rewriteArgGuards") (EVar "rw")) (EApp (EApp (EVar "boundInsert") (EApp (EVar "patVarsTc") (EVar "p"))) (EVar "bound"))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p")) (EVar "e2")) (EVar "rest2")) (EVar "bnd")))))
+(DTypeSig false "rewriteArgStmts" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "DoStmt"))))))
 (DFunDef false "rewriteArgStmts" (PWild PWild (PList)) (EListLit))
 (DFunDef false "rewriteArgStmts" ((PVar "rw") (PVar "bound") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EVar "DoExpr") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))) (EApp (EApp (EApp (EVar "rewriteArgStmts") (EVar "rw")) (EVar "bound")) (EVar "rest"))))
-(DFunDef false "rewriteArgStmts" ((PVar "rw") (PVar "bound") (PCons (PCon "DoBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "DoBind") (EVar "p")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))) (EApp (EApp (EApp (EVar "rewriteArgStmts") (EVar "rw")) (EBinOp "++" (EApp (EVar "patVarsTc") (EVar "p")) (EVar "bound"))) (EVar "rest"))))
-(DFunDef false "rewriteArgStmts" ((PVar "rw") (PVar "bound") (PCons (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "b1") (EIf (EVar "r") (EBinOp "++" (EApp (EVar "patVarsTc") (EVar "p")) (EVar "bound")) (EVar "bound"))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EVar "p")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "b1")) (EVar "e"))) (EApp (EApp (EApp (EVar "rewriteArgStmts") (EVar "rw")) (EBinOp "++" (EApp (EVar "patVarsTc") (EVar "p")) (EVar "bound"))) (EVar "rest"))))))
+(DFunDef false "rewriteArgStmts" ((PVar "rw") (PVar "bound") (PCons (PCon "DoBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "DoBind") (EVar "p")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))) (EApp (EApp (EApp (EVar "rewriteArgStmts") (EVar "rw")) (EApp (EApp (EVar "boundInsert") (EApp (EVar "patVarsTc") (EVar "p"))) (EVar "bound"))) (EVar "rest"))))
+(DFunDef false "rewriteArgStmts" ((PVar "rw") (PVar "bound") (PCons (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "b1") (EIf (EVar "r") (EApp (EApp (EVar "boundInsert") (EApp (EVar "patVarsTc") (EVar "p"))) (EVar "bound")) (EVar "bound"))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EVar "p")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "b1")) (EVar "e"))) (EApp (EApp (EApp (EVar "rewriteArgStmts") (EVar "rw")) (EApp (EApp (EVar "boundInsert") (EApp (EVar "patVarsTc") (EVar "p"))) (EVar "bound"))) (EVar "rest"))))))
 (DFunDef false "rewriteArgStmts" ((PVar "rw") (PVar "bound") (PCons (PCon "DoAssign" (PVar "x") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "DoAssign") (EVar "x")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))) (EApp (EApp (EApp (EVar "rewriteArgStmts") (EVar "rw")) (EVar "bound")) (EVar "rest"))))
 (DFunDef false "rewriteArgStmts" ((PVar "rw") (PVar "bound") (PCons (PCon "DoFieldAssign" (PVar "x") (PVar "fs") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EVar "DoFieldAssign") (EVar "x")) (EVar "fs")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bound")) (EVar "e"))) (EApp (EApp (EApp (EVar "rewriteArgStmts") (EVar "rw")) (EVar "bound")) (EVar "rest"))))
 (DTypeSig false "letBindNamesTc" (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "List") (TyCon "String"))))
