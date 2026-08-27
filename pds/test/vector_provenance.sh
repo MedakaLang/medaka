@@ -817,6 +817,7 @@ main() {
     exit 1
   fi
   python3 "$ROOT/pds/tools/signing_corpus_check.py" "$ROOT" --provenance
+  python3 "$ROOT/pds/tools/did_key_corpus_check.py" "$ROOT" --provenance
   echo "vector_provenance: PASS"
   exit 0
 }

@@ -133,6 +133,9 @@ pds/tools/gen_signing_corpus   regenerates the 80-row dual-oracle prehashed corp
                                242-row Wycheproof corpus from immutable authorities. Needs
                                network, C/Rust toolchains, and the pinned PDS Docker image;
                                pds/test/signing_corpus.sh grades the committed artifacts.
+pds/tools/gen_did_key_corpus   regenerates the 16-row secp256k1 did:key corpus by calling
+                               Secp256k1Keypair.did() in the pinned official-PDS Docker image;
+                               the offline checker and vector_provenance gate grade the artifact.
 
 # ── pds oracle (S-oracle-standup, #1707; docker re-cut fix-oracle-standup-docker — a
 #    local manual procedure, not a gate) ──
