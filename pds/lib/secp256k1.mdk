@@ -528,6 +528,15 @@ ecdsaSignFixed secret digestBytes =
   let signed1 = signCandidate secret digest candidate1
   selectSigningCandidates signed0 signed1
 
+-- | Production handoff to the consumer boundary. It exposes only the final
+--   aggregate validity bit and the opaque selected signature, never nonce or
+--   intermediate scalar observations.
+export
+ecdsaSignDigest : Sc -> Array Int -> (Int, EcdsaSignature)
+ecdsaSignDigest secret digest =
+  let (EcdsaSigningResult validBit _ r _ lowS _) = ecdsaSignFixed secret digest
+  (validBit, EcdsaSignature r lowS)
+
 -- | Gate observation of the production schedule's selected candidate. It
 --   returns fixed-width copies of k, raw r/s, normalized s, and compact bytes.
 export

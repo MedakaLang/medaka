@@ -1,0 +1,10 @@
+-- Negative opacity cell: `Signature(..)` must not expose the private wrapper.
+-- If it becomes `public export data`, this unwraps its internal representation.
+import lib.sign.{Signature(..)}
+
+consume : Signature -> Unit
+consume (Signature _) = ()
+
+main =
+  let _ = consume
+  println 0

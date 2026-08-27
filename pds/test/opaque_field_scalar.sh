@@ -18,10 +18,10 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
 
 # These are distinct permanent attack cells: two exact `Array.set` sentinel
-# mutations, two raw-array forgeries, and two constructor-import probes. Keep
+# mutations, two raw-array forgeries, and three constructor-import probes. Keep
 # this floor in sync with the lists.
-FAIL_FLOOR=6
-PASS_FLOOR=1
+FAIL_FLOOR=7
+PASS_FLOOR=2
 TYPE_MISMATCH_CELLS="
 pds/test/opaque_field_sentinel_attack.mdk
 pds/test/opaque_scalar_sentinel_attack.mdk
@@ -31,8 +31,12 @@ pds/test/opaque_scalar_raw_forgery.mdk
 ABSTRACT_EXPORT_CELLS="
 pds/test/opaque_field_constructor_import.mdk
 pds/test/opaque_scalar_constructor_import.mdk
+pds/test/opaque_signature_constructor_import.mdk
 "
-PASS_CELLS="pds/test/opaque_field_scalar_control.mdk"
+PASS_CELLS="
+pds/test/opaque_field_scalar_control.mdk
+pds/test/opaque_signature_control.mdk
+"
 
 fail_ran=0
 for rel in $TYPE_MISMATCH_CELLS; do
@@ -107,4 +111,4 @@ if [ "$pass_ran" -lt "$PASS_FLOOR" ]; then
   exit 1
 fi
 
-echo "PASS: field/scalar opacity — $fail_ran rejected attack cells, $pass_ran public control cells"
+echo "PASS: field/scalar/signature opacity — $fail_ran rejected attack cells, $pass_ran public control cells"

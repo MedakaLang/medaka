@@ -33,7 +33,7 @@ MEDAKA_STRICT=1 "$MEDAKA" build "$DRIVER" -o "$WORK/ecdsa-vectors" >"$WORK/build
   exit 1
 }
 
-grep -E '^(PROBE|WITNESS|signing:|exceptional probes:|Wycheproof:|Wycheproof classes:|TOTAL:)' "$WORK/run.out"
+grep -E '^(PROBE|WITNESS|PUBLIC|signing:|public signing:|exceptional probes:|Wycheproof:|public verification:|Wycheproof classes:|TOTAL:)' "$WORK/run.out"
 grep -F -q 'PROBE candidate-1-selection: PASS computations=2' "$WORK/run.out" || {
   echo 'FAIL: candidate-1 route did not expose both complete computations'
   exit 1
@@ -54,8 +54,24 @@ grep -F -q 'signing: 80/80 exact rows ok' "$WORK/run.out" || {
   echo 'FAIL: not all 80 signing rows were reproduced'
   exit 1
 }
+grep -F -q 'public signing: 80/80 exact rows; self-verify=80/80' "$WORK/run.out" || {
+  echo 'FAIL: public signing or public self-verification totals drifted'
+  exit 1
+}
+grep -F -q 'PUBLIC compact-boundary: PASS len63=reject len65=reject zero=reject range=reject high-S=reject' "$WORK/run.out" || {
+  echo 'FAIL: public compact boundary routes were not all observed'
+  exit 1
+}
+grep -F -q 'PUBLIC malformed-digest: PASS sign=4/4 reject verify=4/4 false' "$WORK/run.out" || {
+  echo 'FAIL: public malformed digest routes were not all observed'
+  exit 1
+}
 grep -F -q 'Wycheproof: 94 accepts / 148 rejects; 242 unique tcIds' "$WORK/run.out" || {
   echo 'FAIL: Wycheproof policy counts or tcId uniqueness drifted'
+  exit 1
+}
+grep -F -q 'public verification: 242/242 Wycheproof rows' "$WORK/run.out" || {
+  echo 'FAIL: public verification did not agree with all Wycheproof rows'
   exit 1
 }
 [ "$(tail -1 "$WORK/run.out")" = 'TOTAL: PASS' ] || {
@@ -63,4 +79,4 @@ grep -F -q 'Wycheproof: 94 accepts / 148 rejects; 242 unique tcIds' "$WORK/run.o
   exit 1
 }
 
-echo 'PASS: ECDSA 80/80 exact signing rows and Wycheproof 94/148 over 242 unique tcIds'
+echo 'PASS: ECDSA public/internal 80/80 signing rows and Wycheproof 94/148 over 242 unique tcIds'

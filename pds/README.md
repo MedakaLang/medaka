@@ -318,3 +318,20 @@ natively because the generic interpreter roster would put four complete
 ```sh
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/secp256k1_public_key.sh
 ```
+
+## secp256k1 signatures (S-signing-contract, #1700 step 4)
+
+`pds/lib/sign.mdk` now completes the eight-function consumer boundary with an
+opaque `Signature`, exact 64-byte P1363 compact parsing/serialization, fixed
+two-candidate RFC 6979 signing, and public verification. `signDigest` accepts
+only a 32-byte SHA-256 digest whose elements are in `0..255`; compact parsing
+rejects zero, out-of-range, and high-S components.
+
+Production receives only the fixed signer's aggregate validity bit and opaque
+selected signature. Nonce and intermediate scalar observations remain on the
+internal corpus-test routes in `lib.secp256k1`.
+
+```sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/ecdsa_vectors.sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/opaque_field_scalar.sh
+```
