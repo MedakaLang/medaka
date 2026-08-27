@@ -636,6 +636,9 @@ for f in $changed; do
       # was the two disagreeing. The permutation gate grades the `build` arm, so it
       # is the one differential that can see the mangler decide by clause order.
       add 'diff_compiler_import_order'
+      # S-arity-census: derives call/define arity skew from emitted LLVM IR —
+      # the exact instrument a backend change could silently defeat.
+      add 'diff_compiler_call_arity'
       need_fixpoint=1 ;;
 
     # #1131: driver/loader.mdk is a cited DICT-SEMANTICS site.
