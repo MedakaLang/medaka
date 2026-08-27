@@ -812,3 +812,15 @@ and Boehm appears in ~10 call sites inside `runtime/medaka_rt.c`'s wrappers.
 wall time quantified, not vibes; (c) the knob/atomic ladder above has been swept
 and logged in `compiler/PERF-RESULTS.md`. Until then, a custom GC is a solution
 ahead of its evidence.
+
+---
+
+## 10. FFI value-crossing ABI — see `compiler/FFI-ABI.md`
+
+The crossable type set, per-type/per-direction ownership rules, and the
+failure convention for values crossing the C FFI boundary are specified in a
+sibling document, `compiler/FFI-ABI.md`, rather than here — it is scoped,
+cross-referenced prose built on top of this doc's §8 (value representation)
+and §9 (GC strategy) decisions, not an amendment to either. #2071 already
+landed the effect-tracking half (`<FFI>` label); `FFI-ABI.md` is purely the
+value-crossing half.
