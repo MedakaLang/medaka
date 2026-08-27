@@ -10,11 +10,7 @@
 
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import types.typecheck.{
-  checkToLines,
-  checkToLinesWithRuntime,
-  setCoherenceUserDecls,
-}
+import types.typecheck.{checkToLines, checkOneToLinesWithRuntime}
 
 main = match args ()
   [targetPath] => withTarget targetPath
@@ -35,6 +31,5 @@ withRuntimeTarget : String -> String -> <IO> Unit
 withRuntimeTarget rsrc targetPath = match readFile targetPath
   Ok src =>
     let desugared = desugar (parse src)
-    let _ = setCoherenceUserDecls desugared
-    putStr (checkToLinesWithRuntime (desugar (parse rsrc)) [] desugared)
+    putStr (checkOneToLinesWithRuntime (desugar (parse rsrc)) [] desugared)
   Err msg => ePutStrLn msg

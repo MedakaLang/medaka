@@ -16,7 +16,7 @@ compiler/entries/origin_agreement_main.mdk : checkProgramSchemesWithRuntime
 compiler/entries/playground_main.mdk : checkOneSchemeFull
 compiler/entries/profile_main.mdk : checkOneToLinesWithRuntime
 compiler/entries/selfproc_tc_probe.mdk : checkToLines
-compiler/entries/typecheck_main.mdk : checkToLines,checkToLinesWithRuntime
+compiler/entries/typecheck_main.mdk : checkOneToLinesWithRuntime,checkToLines
 compiler/tools/check.mdk : checkOneErrorsWithRuntime,checkOneToLinesWithRuntime
 compiler/tools/check_policy.mdk : checkOneSchemeFull
 compiler/tools/doc.mdk : checkOneScheme
