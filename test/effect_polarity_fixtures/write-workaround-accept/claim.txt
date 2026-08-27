@@ -1,0 +1,30 @@
+slice: F4-fixture-coverage (regression coverage for #2109, ACCEPT half of the pair)
+issue: #2109 (invariance check has no direction to read, so it rejects the safe
+  write-side narrowing too), closed by this sprint's slice 4,
+  S-write-narrowing-direction, in its pre-authorized shape (b): the rejection
+  stands and the diagnostic now names this measured recovery.
+shape: write-side NARROWING via eta-expansion -- a slot declared to permit
+  `<Stdout>` initialized with a function that performs fewer effects, written
+  `Ref (s => noop s)` rather than `Ref noop`.
+spec: EFFECTS-SEMANTICS.md §5 -- narrowing (a value performing FEWER effects than
+  its slot permits) is the sub-effecting direction and is sound. What forces the
+  point-free form to be rejected is not the spec but the seam: `unify` is
+  symmetric and carries no expected/actual role, so `paramVarianceRow`'s
+  CLOSED~CLOSED arm cannot tell which side is the declaration.
+mechanism (measured by S-write-narrowing-direction, not assumed): the eta form is
+  accepted because a lambda's latent row is still an UNSOLVED VARIABLE, so
+  `paramVarianceRow`'s `EffRow l None`/`EffRow l None` arm abstains and ordinary
+  lenient `unifyRow` runs. The acceptance boundary is exactly
+  closed-row-vs-row-variable -- not a checking-mode effect.
+why this row exists: the compiler's own diagnostic now ADVERTISES this recovery.
+  A row that pins it means a future regression cannot silently make the advice
+  false. Its REJECT twin is write-launder-reject, which puts the unsafe direction
+  at the same argument site; the pair must not be swappable.
+bound (measured): eta-expanding in the UNSAFE direction still rejects
+  (`Ref (s => shouty s)` into a `<>` slot -> T-EFFECT-LEAK), so the recovery
+  cannot open a laundering hole.
+status: ACCEPT. Measured on the F4 binary at base 4eb1caf8.
+cmd: MEDAKA_STRICT=1 ./medaka check test/effect_polarity_fixtures/write-workaround-accept/main.mdk
+measured-exit: 0
+measured-stdout: ok (3 declaration(s) checked, 0 errors);
+  `handler : Ref (String -> <Stdout> Unit)`
