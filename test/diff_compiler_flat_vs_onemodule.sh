@@ -153,6 +153,12 @@
 #         also rejected, p5 would be evidence about the shape, not about the count).
 #     Each FLAT row's `value` column runs `medaka run`, i.e. the MODULE arm's 1-module
 #     wrapper, so every accepting row here is a two-arm observation on one file.
+#   * user_shadows_prelude_standalone / user_shadows_prelude_samesig — ACCEPT on
+#     every arm, with the USER's body executing (values `s3` and `True`). A
+#     user's own top-level binding always shadows a same-named prelude binding;
+#     see the fixture block for the full derivation, for why the same-signature
+#     variant is the severity-escalation probe, and for the out-of-band FLAT-arm
+#     value measurement that showed no silent divergence.
 #   * no_impl_anywhere — REJECT (`T-NO-IMPL`) on both arms. There is genuinely no
 #     `impl Tag (Wrap …)` in the program, so rejection is correct. This is the
 #     NEGATIVE control: it is what stops an always-accept regression from making
@@ -328,6 +334,59 @@ printf '%s\n' "$IFACE_DEFAULT_DECLS" > "$WORK/c6m/iface.mdk"
 printf 'import iface.{Box, Basic, Fancy, label, describe}\n\n%s\n\n%s\n' \
   "$IFACE_DEFAULT_IMPL" "$IFACE_DEFAULT_MAIN" > "$WORK/c6m/main.mdk"
 
+# ── cases user_shadows_prelude_standalone / user_shadows_prelude_samesig ─────
+# A user's OWN top-level standalone binding whose bare name collides with an
+# UNRELATED prelude standalone. `isEven : Int -> Bool` (stdlib/core.mdk:185) is
+# the collision partner — a real prelude standalone, not a hypothetical one, and
+# the exact name #2054 was filed against.
+#
+# SPEC-DERIVED, not captured (this gate's standing rule): a user's own top-level
+# binding ALWAYS shadows a same-named prelude binding. That is how every
+# name-binding form in the language works and it is #2054's own reported
+# expectation. So ACCEPT, with the USER's body executing, is `correct` on BOTH
+# arms in BOTH cases below — regardless of what any arm does today.
+#
+#   * user_shadows_prelude_standalone — the user's `isEven` returns a String, so
+#     its type is DIFFERENT from the prelude's. Correct: ACCEPT, value `s3`.
+#     The FLAT arm REJECTs it today with T-TYPE-MISMATCH — that is #2054, whose
+#     mechanism is the Flat arm's single flattened `core ++ user` decl list plus
+#     one bare-name top-level group table and one program-global `sigTyMapRef`:
+#     the user's clause is merged into the PRELUDE's `isEven` group and
+#     pre-unified against the prelude's signature. So that row is CHAR/#2054;
+#     every other row here is a PIN of an answer that is already correct.
+#
+#   * user_shadows_prelude_samesig — 🚨 THE SEVERITY-ESCALATION PROBE. If the
+#     user's binding shares the prelude's name AND its exact signature
+#     (`Int -> Bool`), the merge above cannot produce a loud type mismatch:
+#     pre-unification SUCCEEDS. The question that then matters is whether the
+#     merged group executes the PRELUDE's clause instead of the user's — an
+#     accepted program computing the wrong value, i.e. a SILENT value
+#     divergence, strictly worse than #2054's loud reject ([W-QUIETER]).
+#     The body is `n % 2 == 1`, the prelude's is `n % 2 == 0`, so on input 3 the
+#     user's answer is `True` and the prelude's is `False` — the two are
+#     DISCRIMINATED by the printed value, which is the whole point of choosing
+#     this body.
+#     MEASURED 2026-08-27 (F3, flat-exit-floor fix round): NO divergence. All
+#     three arms ACCEPT and all print `True`. The FLAT arm has no value column
+#     in this gate by construction (see "WHAT THIS GATE CANNOT SEE"), so the
+#     FLAT-arm value was taken OUT OF BAND for the investigation, via the
+#     `elaborateDict` Flat entry: `test/bin/llvm_emit_typed_main runtime.mdk
+#     core.mdk <file>` → clang with runtime/medaka_rt.c → the linked binary also
+#     printed `True`. Recorded here because that observation is not something
+#     these rows can re-derive; the rows below pin the parts this gate CAN see.
+SHADOW_HELPER='export three : Int
+three = 3'
+SHADOW_DIFF_DECL='isEven n = "s\{n}"'
+SHADOW_SAME_DECL='isEven : Int -> Bool
+isEven n = n % 2 == 1'
+mkdir -p "$WORK/c7f" "$WORK/c7m" "$WORK/c8f" "$WORK/c8m"
+printf '%s\n\nmain = println (isEven 3)\n' "$SHADOW_DIFF_DECL" > "$WORK/c7f/flat.mdk"
+printf '%s\n' "$SHADOW_HELPER" > "$WORK/c7m/helper.mdk"
+printf 'import helper.{three}\n\n%s\n\nmain = println (isEven three)\n' "$SHADOW_DIFF_DECL" > "$WORK/c7m/main.mdk"
+printf '%s\n\nmain = println (isEven 3)\n' "$SHADOW_SAME_DECL" > "$WORK/c8f/flat.mdk"
+printf '%s\n' "$SHADOW_HELPER" > "$WORK/c8m/helper.mdk"
+printf 'import helper.{three}\n\n%s\n\nmain = println (isEven three)\n' "$SHADOW_SAME_DECL" > "$WORK/c8m/main.mdk"
+
 # ── the rows ──────────────────────────────────────────────────────────────────
 # case | label | path | arm | mode | correct | today | code | value
 #   mode PIN  : `correct` is asserted; `today` is ignored (written as the same).
@@ -357,6 +416,12 @@ user_iface_undetermined|p5_two_impls|c5/p5.mdk|FLAT|PIN|REJECT|REJECT|T-AMBIGUOU
 user_iface_undetermined|p6_one_impl|c5/p6.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|3
 iface_default_requires_closure|flat|c6f/flat.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|fancy:box7
 iface_default_requires_closure|module|c6m/main.mdk|MODULE|PIN|ACCEPT|ACCEPT|-|fancy:box7
+user_shadows_prelude_standalone|flat|c7f/flat.mdk|FLAT|CHAR|ACCEPT|REJECT|T-TYPE-MISMATCH|s3|2054
+user_shadows_prelude_standalone|module_onefile|c7f/flat.mdk|MODULE|PIN|ACCEPT|ACCEPT|-|s3
+user_shadows_prelude_standalone|module_split|c7m/main.mdk|MODULE|PIN|ACCEPT|ACCEPT|-|s3
+user_shadows_prelude_samesig|flat|c8f/flat.mdk|FLAT|PIN|ACCEPT|ACCEPT|-|True
+user_shadows_prelude_samesig|module_onefile|c8f/flat.mdk|MODULE|PIN|ACCEPT|ACCEPT|-|True
+user_shadows_prelude_samesig|module_split|c8m/main.mdk|MODULE|PIN|ACCEPT|ACCEPT|-|True
 "
 CHAR_ISSUE=1564
 
@@ -492,7 +557,9 @@ unset IFS
 # True before AND after the #1564 fix; silent about WHETHER an arm accepts. This is
 # what catches an arm that accepts and miscompiles, which acceptance-agreement
 # would have graded green.
-for case in cond_impl_third_module all_visible no_impl_anywhere user_iface_dispatch user_iface_undetermined iface_default_requires_closure; do
+for case in cond_impl_third_module all_visible no_impl_anywhere user_iface_dispatch \
+           user_iface_undetermined iface_default_requires_closure \
+           user_shadows_prelude_standalone user_shadows_prelude_samesig; do
   # `grep -c` exits 1 on no match, so count through `wc -l` instead — a `|| echo 0`
   # fallback appends a SECOND line and the arithmetic below then reads "0\n0".
   n="$(grep "^$case=" "$VALFILE" | wc -l | tr -d ' ')"
@@ -538,8 +605,16 @@ done
 # been re-derived and tightened to PIN/ACCEPT (2026-08-26, orchestrator, re-verified
 # by a fresh gate run) — #2024 closed as fixed by the same commit.
 #
-# So all 9 rows below now expect agreement with FLAT. Any row disagreeing is a
-# finding this gate's packet did not anticipate.
+# So the nine ORIGINAL rows below expect agreement with FLAT. Any of them
+# disagreeing is a finding this gate's packet did not anticipate.
+#
+# ⚠️ ONE ROW BELOW IS A DELIBERATE, DOCUMENTED FLAT/ONE DISAGREEMENT, and it is
+# the only one: `user_shadows_prelude_standalone|flat`. The FLAT arm REJECTs that
+# program (T-TYPE-MISMATCH) and the ONE arm ACCEPTs it. That is #2054 — the Flat
+# arm's flattened-prelude group merge — not a ONE-arm defect, so the ONE row is
+# written ACCEPT (the SPEC answer) rather than mirrored off the FLAT row's CHAR
+# `today` value. When #2054 drains, the FLAT row above flips to the correct
+# answer and this row does not move.
 ONE_BIN="$ROOT/test/bin/check_one_diags_main"
 if [ ! -x "$ONE_BIN" ]; then
   echo "build oracles first: FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one check_one_diags_main (missing $ONE_BIN)"
@@ -556,6 +631,8 @@ user_iface_dispatch|p3_no_impl|c4/p3.mdk|REJECT|T-NO-IMPL
 user_iface_undetermined|p5_two_impls|c5/p5.mdk|REJECT|T-AMBIGUOUS-INSTANCE
 user_iface_undetermined|p6_one_impl|c5/p6.mdk|ACCEPT|-
 iface_default_requires_closure|flat|c6f/flat.mdk|ACCEPT|-
+user_shadows_prelude_standalone|flat|c7f/flat.mdk|ACCEPT|-
+user_shadows_prelude_samesig|flat|c8f/flat.mdk|ACCEPT|-
 "
 printf -- '--- ONE arm (checkOneDiags) vs the FLAT rows above -------------------------------------------------\n'
 printf '%-30s %-16s %-8s %s\n' CASE ROW VERDICT CODE
