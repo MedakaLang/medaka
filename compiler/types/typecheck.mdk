@@ -27686,8 +27686,16 @@ ffiStampTy (TyFun a r) = TyFun a (ffiStampResultTy r)
 -- an arrow was hiding behind the name, stamp it exactly as the clause above would
 -- have; otherwise keep the ORIGINAL `t`, not the expansion, so a non-arrow alias
 -- still elaborates through its own (already correct) `Mono`-level path.
+-- A CONSTRAINED alias RHS (`type CF a = Sh a => a -> <> a`) expands to a
+-- `TyConstrained`-wrapped arrow, which the `TyFun` arm alone cannot see; route it
+-- back through `ffiStampTy`, whose FIRST clause already unwraps `TyConstrained`
+-- and recurses.  That is exactly why the same signature written inline stamps
+-- correctly today.  This does NOT reopen the nullary residual above: a constrained
+-- NON-arrow alias recurses onto a bare `TyCon`, which finds no arrow behind its own
+-- expansion and falls through unstamped.
 ffiStampTy t = match expandAliasHeadTy t
   TyFun a r => TyFun a (ffiStampResultTy r)
+  TyConstrained cs inner => TyConstrained cs (ffiStampTy inner)
   _ => t
 
 -- The arrow's RESULT position: walk to the end of the arrow chain, then either

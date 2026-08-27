@@ -1,5 +1,5 @@
 # META
-source_lines=34861
+source_lines=34869
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -27690,8 +27690,16 @@ ffiStampTy (TyFun a r) = TyFun a (ffiStampResultTy r)
 -- an arrow was hiding behind the name, stamp it exactly as the clause above would
 -- have; otherwise keep the ORIGINAL `t`, not the expansion, so a non-arrow alias
 -- still elaborates through its own (already correct) `Mono`-level path.
+-- A CONSTRAINED alias RHS (`type CF a = Sh a => a -> <> a`) expands to a
+-- `TyConstrained`-wrapped arrow, which the `TyFun` arm alone cannot see; route it
+-- back through `ffiStampTy`, whose FIRST clause already unwraps `TyConstrained`
+-- and recurses.  That is exactly why the same signature written inline stamps
+-- correctly today.  This does NOT reopen the nullary residual above: a constrained
+-- NON-arrow alias recurses onto a bare `TyCon`, which finds no arrow behind its own
+-- expansion and falls through unstamped.
 ffiStampTy t = match expandAliasHeadTy t
   TyFun a r => TyFun a (ffiStampResultTy r)
+  TyConstrained cs inner => TyConstrained cs (ffiStampTy inner)
   _ => t
 
 -- The arrow's RESULT position: walk to the end of the arrow chain, then either
@@ -39273,7 +39281,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "ffiStampTy" (TyFun (TyCon "Ty") (TyCon "Ty")))
 (DFunDef false "ffiStampTy" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EApp (EApp (EVar "TyConstrained") (EVar "cs")) (EApp (EVar "ffiStampTy") (EVar "t"))))
 (DFunDef false "ffiStampTy" ((PCon "TyFun" (PVar "a") (PVar "r"))) (EApp (EApp (EVar "TyFun") (EVar "a")) (EApp (EVar "ffiStampResultTy") (EVar "r"))))
-(DFunDef false "ffiStampTy" ((PVar "t")) (EMatch (EApp (EVar "expandAliasHeadTy") (EVar "t")) (arm (PCon "TyFun" (PVar "a") (PVar "r")) () (EApp (EApp (EVar "TyFun") (EVar "a")) (EApp (EVar "ffiStampResultTy") (EVar "r")))) (arm PWild () (EVar "t"))))
+(DFunDef false "ffiStampTy" ((PVar "t")) (EMatch (EApp (EVar "expandAliasHeadTy") (EVar "t")) (arm (PCon "TyFun" (PVar "a") (PVar "r")) () (EApp (EApp (EVar "TyFun") (EVar "a")) (EApp (EVar "ffiStampResultTy") (EVar "r")))) (arm (PCon "TyConstrained" (PVar "cs") (PVar "inner")) () (EApp (EApp (EVar "TyConstrained") (EVar "cs")) (EApp (EVar "ffiStampTy") (EVar "inner")))) (arm PWild () (EVar "t"))))
 (DTypeSig false "ffiStampResultTy" (TyFun (TyCon "Ty") (TyCon "Ty")))
 (DFunDef false "ffiStampResultTy" ((PCon "TyFun" (PVar "a") (PVar "r"))) (EApp (EApp (EVar "TyFun") (EVar "a")) (EApp (EVar "ffiStampResultTy") (EVar "r"))))
 (DFunDef false "ffiStampResultTy" ((PCon "TyEffect" (PVar "ls") (PVar "rv") (PVar "inner"))) (EApp (EApp (EApp (EVar "TyEffect") (EApp (EVar "ffiAddAtom") (EVar "ls"))) (EVar "rv")) (EVar "inner")))
@@ -44830,7 +44838,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "ffiStampTy" (TyFun (TyCon "Ty") (TyCon "Ty")))
 (DFunDef false "ffiStampTy" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EApp (EApp (EVar "TyConstrained") (EVar "cs")) (EApp (EVar "ffiStampTy") (EVar "t"))))
 (DFunDef false "ffiStampTy" ((PCon "TyFun" (PVar "a") (PVar "r"))) (EApp (EApp (EVar "TyFun") (EVar "a")) (EApp (EVar "ffiStampResultTy") (EVar "r"))))
-(DFunDef false "ffiStampTy" ((PVar "t")) (EMatch (EApp (EVar "expandAliasHeadTy") (EVar "t")) (arm (PCon "TyFun" (PVar "a") (PVar "r")) () (EApp (EApp (EVar "TyFun") (EVar "a")) (EApp (EVar "ffiStampResultTy") (EVar "r")))) (arm PWild () (EVar "t"))))
+(DFunDef false "ffiStampTy" ((PVar "t")) (EMatch (EApp (EVar "expandAliasHeadTy") (EVar "t")) (arm (PCon "TyFun" (PVar "a") (PVar "r")) () (EApp (EApp (EVar "TyFun") (EVar "a")) (EApp (EVar "ffiStampResultTy") (EVar "r")))) (arm (PCon "TyConstrained" (PVar "cs") (PVar "inner")) () (EApp (EApp (EVar "TyConstrained") (EVar "cs")) (EApp (EVar "ffiStampTy") (EVar "inner")))) (arm PWild () (EVar "t"))))
 (DTypeSig false "ffiStampResultTy" (TyFun (TyCon "Ty") (TyCon "Ty")))
 (DFunDef false "ffiStampResultTy" ((PCon "TyFun" (PVar "a") (PVar "r"))) (EApp (EApp (EVar "TyFun") (EVar "a")) (EApp (EVar "ffiStampResultTy") (EVar "r"))))
 (DFunDef false "ffiStampResultTy" ((PCon "TyEffect" (PVar "ls") (PVar "rv") (PVar "inner"))) (EApp (EApp (EApp (EVar "TyEffect") (EApp (EVar "ffiAddAtom") (EVar "ls"))) (EVar "rv")) (EVar "inner")))
