@@ -1,5 +1,5 @@
 # META
-source_lines=34825
+source_lines=34886
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -2292,6 +2292,48 @@ declaredEffects (TyFun _ ret) = declaredEffects ret
 declaredEffects (TyEffect effs _ _) = atomsOfWritten effs
 declaredEffects (TyConstrained _ t) = declaredEffects t
 declaredEffects _ = []
+
+-- #797: the TAIL of that same first `<…>` — the field `declaredEffects` drops.
+-- `None` is a genuinely CLOSED row (`<>`, `<Stdout>`); `Some v` is an OPEN one
+-- (`<e>`, `<Stdout | e>`).  Arms mirror `declaredEffects` exactly, stopping at
+-- the same node, so the two always describe ONE row.
+declaredEffectTail : Ty -> Option String
+declaredEffectTail (TyFun _ ret) = declaredEffectTail ret
+declaredEffectTail (TyEffect _ tail _) = tail
+declaredEffectTail (TyConstrained _ t) = declaredEffectTail t
+declaredEffectTail _ = None
+
+-- #797: effect-tail names occurring in ARGUMENT positions of the signature,
+-- walking the same return spine `declaredEffects` walks and stopping at the same
+-- node.  A name here is one the CALLER also constrains, so the declared return
+-- row is not free even though it is syntactically open.
+--
+-- ⚠️ Deliberately BROADER than `methodEffArgOccs`: that collector answers "can
+-- the BODY perform this row" and so excludes an even-contravariant-depth
+-- occurrence (`((Unit -> <e> Unit) -> Int)`).  The question here is the
+-- different one "does the caller pin this var", for which ANY argument-side
+-- occurrence counts — an even-depth `e` is still unified with the caller's
+-- chosen row.  `effTailNames`' documented name-based over-counting (`List <e>`)
+-- is likewise conservative in the safe direction here: it can only make a row
+-- read as argument-carried, i.e. keep the pre-#797 rejection, never widen.
+declaredArgEffNames : Ty -> List String
+declaredArgEffNames (TyFun a ret) = effTailNames a
+  ++ rowArgNames a
+  ++ declaredArgEffNames ret
+declaredArgEffNames (TyConstrained _ t) = declaredArgEffNames t
+declaredArgEffNames _ = []
+
+-- #797: is the declared return row genuinely OPEN — a free tail var that appears
+-- NOWHERE on the argument side?  Such a var is chosen by nothing but the callee's
+-- own body: `f : Int -> <e> String` means "f performs whatever it performs", so a
+-- body performing <Stdout> is not an escape and must not be reported as one.
+-- An argument-carried var (`g : (Int -> <e> Int) -> <e> Int`) is NOT open in this
+-- sense — the caller instantiates it, so a body adding <Stdout> would launder,
+-- and the pre-existing escape rejection stands unchanged.
+declaredEffectsOpen : Ty -> Bool
+declaredEffectsOpen ty = match declaredEffectTail ty
+  None => False
+  Some v => not (contains v (declaredArgEffNames ty))
 
 -- record metadata: name → (quantified param ids, result mono, field types).  A
 -- global Ref (like the reference's record table) so field access / create /
@@ -28678,12 +28720,31 @@ peelOntoParams (Some src) patTypes pats =
 checkEffectEscape : List (String, Ty) -> String -> List Atom -> Unit
 checkEffectEscape sigs m effs = match omLookup m driverState.value.sigTyMapRef.value
   None => ()
-  Some ty => match atomsEscape effs (declaredEffects ty)
+  -- #797: a genuinely open declared row (free return-position tail var, no
+  -- argument-side occurrence) has nothing to escape FROM — the row admits
+  -- whatever the body performs, which is what a free tail var MEANS.  Skipping
+  -- here rather than widening `declaredEffects` keeps the CLOSED-row rejection
+  -- (and its wording) byte-identical.
+  Some ty => if declaredEffectsOpen ty then
+    ()
+  else match atomsEscape effs (declaredEffects ty)
     [] => ()
-    extras => pushTypeError "T-EFFECT-LEAK" (effectEscapeMsg m (declaredEffects ty) extras)
+    extras =>
+      pushTypeError
+        "T-EFFECT-LEAK"
+        (effectEscapeMsg m (declaredEffects ty) (declaredEffectTail ty) extras)
 
-effectEscapeMsg : String -> List Atom -> List Atom -> String
-effectEscapeMsg name declared extras = "Function '\{name}' declared with <\{renderAtoms declared}> but also performs <\{renderAtoms extras}>"
+-- #797: [tail] renders alongside the atoms so an argument-carried open row —
+-- the one shape that still reaches this message with a tail — reports the row
+-- that was actually written (`<e>`, `<Stdout | e>`) instead of the false `<>`.
+-- A closed row passes `None` and renders exactly as before.
+effectEscapeMsg : String -> List Atom -> Option String -> List Atom -> String
+effectEscapeMsg name declared tail extras = "Function '\{name}' declared with \{renderDeclaredRow declared tail} but also performs <\{renderAtoms extras}>"
+
+renderDeclaredRow : List Atom -> Option String -> String
+renderDeclaredRow declared None = "<\{renderAtoms declared}>"
+renderDeclaredRow [] (Some v) = "<\{v}>"
+renderDeclaredRow declared (Some v) = "<\{renderAtoms declared} | \{v}>"
 
 -- generalize each member's (sig-and-body-unified) placeholder.  A signature was
 -- already unified into the placeholder by preunifySigs, so generalizing the
@@ -35296,6 +35357,17 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "declaredEffects" ((PCon "TyEffect" (PVar "effs") PWild PWild)) (EApp (EVar "atomsOfWritten") (EVar "effs")))
 (DFunDef false "declaredEffects" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "declaredEffects") (EVar "t")))
 (DFunDef false "declaredEffects" (PWild) (EListLit))
+(DTypeSig false "declaredEffectTail" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "declaredEffectTail" ((PCon "TyFun" PWild (PVar "ret"))) (EApp (EVar "declaredEffectTail") (EVar "ret")))
+(DFunDef false "declaredEffectTail" ((PCon "TyEffect" PWild (PVar "tail") PWild)) (EVar "tail"))
+(DFunDef false "declaredEffectTail" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "declaredEffectTail") (EVar "t")))
+(DFunDef false "declaredEffectTail" (PWild) (EVar "None"))
+(DTypeSig false "declaredArgEffNames" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "declaredArgEffNames" ((PCon "TyFun" (PVar "a") (PVar "ret"))) (EBinOp "++" (EBinOp "++" (EApp (EVar "effTailNames") (EVar "a")) (EApp (EVar "rowArgNames") (EVar "a"))) (EApp (EVar "declaredArgEffNames") (EVar "ret"))))
+(DFunDef false "declaredArgEffNames" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "declaredArgEffNames") (EVar "t")))
+(DFunDef false "declaredArgEffNames" (PWild) (EListLit))
+(DTypeSig false "declaredEffectsOpen" (TyFun (TyCon "Ty") (TyCon "Bool")))
+(DFunDef false "declaredEffectsOpen" ((PVar "ty")) (EMatch (EApp (EVar "declaredEffectTail") (EVar "ty")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EApp (EVar "declaredArgEffNames") (EVar "ty")))))))
 (DData Public "RecordInfo" () ((variant "RecordInfo" (ConPos (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "OrdMap") (TyCon "Mono"))))) ())
 (DData Public "Kind" () ((variant "KType" (ConPos)) (variant "KRow" (ConPos))) ())
 (DTypeSig false "collectAbstractRecordTypes" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -39489,9 +39561,13 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "peelOntoParams" ((PCon "Some" PWild) PWild (PList)) (ELit LUnit))
 (DFunDef false "peelOntoParams" ((PCon "Some" (PVar "src")) (PVar "patTypes") (PVar "pats")) (EApp (EApp (EVar "zipUnify") (EVar "patTypes")) (EApp (EApp (EVar "peelArrows") (EApp (EVar "listLen") (EVar "pats"))) (EVar "src"))))
 (DTypeSig false "checkEffectEscape" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit")))))
-(DFunDef false "checkEffectEscape" ((PVar "sigs") (PVar "m") (PVar "effs")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigTyMapRef") "value")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "ty")) () (EMatch (EApp (EApp (EVar "atomsEscape") (EVar "effs")) (EApp (EVar "declaredEffects") (EVar "ty"))) (arm (PList) () (ELit LUnit)) (arm (PVar "extras") () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-LEAK"))) (EApp (EApp (EApp (EVar "effectEscapeMsg") (EVar "m")) (EApp (EVar "declaredEffects") (EVar "ty"))) (EVar "extras"))))))))
-(DTypeSig false "effectEscapeMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))))
-(DFunDef false "effectEscapeMsg" ((PVar "name") (PVar "declared") (PVar "extras")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Function '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' declared with <"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "declared")))) (ELit (LString "> but also performs <"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "extras")))) (ELit (LString ">"))))
+(DFunDef false "checkEffectEscape" ((PVar "sigs") (PVar "m") (PVar "effs")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigTyMapRef") "value")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "ty")) () (EIf (EApp (EVar "declaredEffectsOpen") (EVar "ty")) (ELit LUnit) (EMatch (EApp (EApp (EVar "atomsEscape") (EVar "effs")) (EApp (EVar "declaredEffects") (EVar "ty"))) (arm (PList) () (ELit LUnit)) (arm (PVar "extras") () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-LEAK"))) (EApp (EApp (EApp (EApp (EVar "effectEscapeMsg") (EVar "m")) (EApp (EVar "declaredEffects") (EVar "ty"))) (EApp (EVar "declaredEffectTail") (EVar "ty"))) (EVar "extras")))))))))
+(DTypeSig false "effectEscapeMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))))
+(DFunDef false "effectEscapeMsg" ((PVar "name") (PVar "declared") (PVar "tail") (PVar "extras")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Function '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' declared with "))) (EApp (EVar "display") (EApp (EApp (EVar "renderDeclaredRow") (EVar "declared")) (EVar "tail")))) (ELit (LString " but also performs <"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "extras")))) (ELit (LString ">"))))
+(DTypeSig false "renderDeclaredRow" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "renderDeclaredRow" ((PVar "declared") (PCon "None")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "declared")))) (ELit (LString ">"))))
+(DFunDef false "renderDeclaredRow" ((PList) (PCon "Some" (PVar "v"))) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EVar "v"))) (ELit (LString ">"))))
+(DFunDef false "renderDeclaredRow" ((PVar "declared") (PCon "Some" (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "declared")))) (ELit (LString " | "))) (EApp (EVar "display") (EVar "v"))) (ELit (LString ">"))))
 (DTypeSig false "sccSchemes" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))
 (DFunDef false "sccSchemes" (PWild PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "sccSchemes" ((PVar "env") (PVar "sigs") (PVar "grouped") (PVar "isLetrec") (PCons (PTuple (PVar "m") (PVar "v")) (PVar "rest"))) (EBlock (DoLet false false (PVar "plainVal") (EBinOp "||" (EVar "isLetrec") (EApp (EApp (EVar "allList") (EApp (EVar "memberClauseIsValue") (EVar "env"))) (EApp (EApp (EVar "clausesOf") (EVar "m")) (EVar "grouped"))))) (DoLet false false (PVar "sigIsFun") (EApp (EApp (EApp (EVar "memberSigIsFun") (EVar "sigs")) (EVar "m")) (EVar "v"))) (DoLet false false (PVar "isVal") (EBinOp "||" (EVar "plainVal") (EVar "sigIsFun"))) (DoExpr (EBinOp "::" (ETuple (EVar "m") (EApp (EApp (EVar "genRestricted") (EVar "isVal")) (EVar "v"))) (EApp (EApp (EApp (EApp (EApp (EVar "sccSchemes") (EVar "env")) (EVar "sigs")) (EVar "grouped")) (EVar "isLetrec")) (EVar "rest"))))))
@@ -40836,6 +40912,17 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "declaredEffects" ((PCon "TyEffect" (PVar "effs") PWild PWild)) (EApp (EVar "atomsOfWritten") (EVar "effs")))
 (DFunDef false "declaredEffects" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "declaredEffects") (EVar "t")))
 (DFunDef false "declaredEffects" (PWild) (EListLit))
+(DTypeSig false "declaredEffectTail" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "declaredEffectTail" ((PCon "TyFun" PWild (PVar "ret"))) (EApp (EVar "declaredEffectTail") (EVar "ret")))
+(DFunDef false "declaredEffectTail" ((PCon "TyEffect" PWild (PVar "tail") PWild)) (EVar "tail"))
+(DFunDef false "declaredEffectTail" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "declaredEffectTail") (EVar "t")))
+(DFunDef false "declaredEffectTail" (PWild) (EVar "None"))
+(DTypeSig false "declaredArgEffNames" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "declaredArgEffNames" ((PCon "TyFun" (PVar "a") (PVar "ret"))) (EBinOp "++" (EBinOp "++" (EApp (EVar "effTailNames") (EVar "a")) (EApp (EVar "rowArgNames") (EVar "a"))) (EApp (EVar "declaredArgEffNames") (EVar "ret"))))
+(DFunDef false "declaredArgEffNames" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "declaredArgEffNames") (EVar "t")))
+(DFunDef false "declaredArgEffNames" (PWild) (EListLit))
+(DTypeSig false "declaredEffectsOpen" (TyFun (TyCon "Ty") (TyCon "Bool")))
+(DFunDef false "declaredEffectsOpen" ((PVar "ty")) (EMatch (EApp (EVar "declaredEffectTail") (EVar "ty")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "v")) (EApp (EVar "declaredArgEffNames") (EVar "ty")))))))
 (DData Public "RecordInfo" () ((variant "RecordInfo" (ConPos (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "OrdMap") (TyCon "Mono"))))) ())
 (DData Public "Kind" () ((variant "KType" (ConPos)) (variant "KRow" (ConPos))) ())
 (DTypeSig false "collectAbstractRecordTypes" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -45029,9 +45116,13 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "peelOntoParams" ((PCon "Some" PWild) PWild (PList)) (ELit LUnit))
 (DFunDef false "peelOntoParams" ((PCon "Some" (PVar "src")) (PVar "patTypes") (PVar "pats")) (EApp (EApp (EVar "zipUnify") (EVar "patTypes")) (EApp (EApp (EVar "peelArrows") (EApp (EVar "listLen") (EVar "pats"))) (EVar "src"))))
 (DTypeSig false "checkEffectEscape" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "Unit")))))
-(DFunDef false "checkEffectEscape" ((PVar "sigs") (PVar "m") (PVar "effs")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigTyMapRef") "value")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "ty")) () (EMatch (EApp (EApp (EVar "atomsEscape") (EVar "effs")) (EApp (EVar "declaredEffects") (EVar "ty"))) (arm (PList) () (ELit LUnit)) (arm (PVar "extras") () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-LEAK"))) (EApp (EApp (EApp (EVar "effectEscapeMsg") (EVar "m")) (EApp (EVar "declaredEffects") (EVar "ty"))) (EVar "extras"))))))))
-(DTypeSig false "effectEscapeMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))))
-(DFunDef false "effectEscapeMsg" ((PVar "name") (PVar "declared") (PVar "extras")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Function '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' declared with <"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "declared")))) (ELit (LString "> but also performs <"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "extras")))) (ELit (LString ">"))))
+(DFunDef false "checkEffectEscape" ((PVar "sigs") (PVar "m") (PVar "effs")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "sigTyMapRef") "value")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "ty")) () (EIf (EApp (EVar "declaredEffectsOpen") (EVar "ty")) (ELit LUnit) (EMatch (EApp (EApp (EVar "atomsEscape") (EVar "effs")) (EApp (EVar "declaredEffects") (EVar "ty"))) (arm (PList) () (ELit LUnit)) (arm (PVar "extras") () (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-EFFECT-LEAK"))) (EApp (EApp (EApp (EApp (EVar "effectEscapeMsg") (EVar "m")) (EApp (EVar "declaredEffects") (EVar "ty"))) (EApp (EVar "declaredEffectTail") (EVar "ty"))) (EVar "extras")))))))))
+(DTypeSig false "effectEscapeMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))))
+(DFunDef false "effectEscapeMsg" ((PVar "name") (PVar "declared") (PVar "tail") (PVar "extras")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Function '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' declared with "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "renderDeclaredRow") (EVar "declared")) (EVar "tail")))) (ELit (LString " but also performs <"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "extras")))) (ELit (LString ">"))))
+(DTypeSig false "renderDeclaredRow" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "renderDeclaredRow" ((PVar "declared") (PCon "None")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "declared")))) (ELit (LString ">"))))
+(DFunDef false "renderDeclaredRow" ((PList) (PCon "Some" (PVar "v"))) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString ">"))))
+(DFunDef false "renderDeclaredRow" ((PVar "declared") (PCon "Some" (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "declared")))) (ELit (LString " | "))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString ">"))))
 (DTypeSig false "sccSchemes" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))
 (DFunDef false "sccSchemes" (PWild PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "sccSchemes" ((PVar "env") (PVar "sigs") (PVar "grouped") (PVar "isLetrec") (PCons (PTuple (PVar "m") (PVar "v")) (PVar "rest"))) (EBlock (DoLet false false (PVar "plainVal") (EBinOp "||" (EVar "isLetrec") (EApp (EApp (EVar "allList") (EApp (EVar "memberClauseIsValue") (EVar "env"))) (EApp (EApp (EVar "clausesOf") (EVar "m")) (EVar "grouped"))))) (DoLet false false (PVar "sigIsFun") (EApp (EApp (EApp (EVar "memberSigIsFun") (EVar "sigs")) (EVar "m")) (EVar "v"))) (DoLet false false (PVar "isVal") (EBinOp "||" (EVar "plainVal") (EVar "sigIsFun"))) (DoExpr (EBinOp "::" (ETuple (EVar "m") (EApp (EApp (EVar "genRestricted") (EVar "isVal")) (EVar "v"))) (EApp (EApp (EApp (EApp (EApp (EVar "sccSchemes") (EVar "env")) (EVar "sigs")) (EVar "grouped")) (EVar "isLetrec")) (EVar "rest"))))))

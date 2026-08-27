@@ -544,11 +544,14 @@ declMethodNamesOf : Decl -> List String
 declOwnedBy : String -> String -> TyConOrigin -> Bool
 declRefNames : Decl -> List String
 declTopFnNames : List Decl -> List String
+declaredArgEffNames : Ty -> List String
 declaredConstraintArgs : String -> List (List Mono)
 declaredConstraintFor : String -> CDeclared
 declaredConstraintIds : String -> List Int
 declaredCrossModuleObls : String -> Option (List VecObl)
+declaredEffectTail : Ty -> Option String
 declaredEffects : Ty -> List Atom
+declaredEffectsOpen : Ty -> Bool
 declaredIfacesOn : String -> Ty -> List String
 declaredOblArgId : List Int -> Mono -> List Int
 declaredOblArgOk : List Int -> Mono -> Bool
@@ -663,7 +666,7 @@ effVarLaunderMsg : String -> String -> List Atom -> String
 effVarOccAtoms : Ty -> List (String, List Atom)
 effVarOccEscape : String -> List Atom -> List (String, List Atom) -> List Atom
 effVarTailIds : List (String, Ref Effvar) -> List Int
-effectEscapeMsg : String -> List Atom -> List Atom -> String
+effectEscapeMsg : String -> List Atom -> Option String -> List Atom -> String
 effectLaunderMsg : String -> String -> List Atom -> String
 effectLeakCheck : List Atom -> List Atom -> Unit
 effectLeakMsg : List Atom -> List Atom -> String
@@ -1636,6 +1639,7 @@ renderAxisVal : Param -> String
 renderCallArg : Expr -> Option String
 renderCallArgs : List Expr -> Option (List String)
 renderConstraintCtx : Ref (List (Int, String)) -> Ref Int -> List VecObl -> List String
+renderDeclaredRow : List Atom -> Option String -> String
 renderEffTailVars : List String -> String
 renderKindArrow : List Kind -> String
 renderProductLit : List (String, Param) -> String

@@ -1,0 +1,24 @@
+-- #797 (S2) — the LOAD-BEARING NEGATIVE half of the #797 fix.  #797 said a
+-- top-level signature's declared free return-position effect var (`f : Int -> <e>
+-- String`) collapsed to the closed `<>` in the binding-boundary escape check
+-- (`declaredEffects` dropped `TyEffect`'s tail field), so an honest effectful body
+-- was rejected with a diagnostic that FALSELY read "declared with <>".  The fix
+-- makes that check skip a genuinely open row.
+--
+-- 🚨 "Genuinely open" is NOT "syntactically open".  `e` HERE also rides an
+-- ARGUMENT (`(Int -> <e> Int)`), so the CALLER — not the body — picks it, and a
+-- caller may pick `<>`.  A body adding <Stdout> to it therefore still LAUNDERS
+-- (the no-laundering law, docs/spec/EFFECTS-SEMANTICS.md §5), and must still be
+-- rejected.  Widening the escape check by tail-presence ALONE would have turned
+-- this program from REJECT into ACCEPT — loud to silent, a severity INCREASE — so
+-- this fixture, not the drained #797 pin, is what holds the fix to its scope.
+--
+-- The message must also stay honest in this surviving arm: it now reads
+-- "declared with <e>", the row actually written, not the false "<>".  Exit codes
+-- cannot see that; it is pinned by inspection, and by this file's existence.
+g : (Int -> <e> Int) -> <e> Int
+g k =
+  let _ = putStr "leak"
+  k 1
+
+main = println (g (x => x))

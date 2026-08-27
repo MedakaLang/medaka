@@ -2289,6 +2289,48 @@ declaredEffects (TyEffect effs _ _) = atomsOfWritten effs
 declaredEffects (TyConstrained _ t) = declaredEffects t
 declaredEffects _ = []
 
+-- #797: the TAIL of that same first `<…>` — the field `declaredEffects` drops.
+-- `None` is a genuinely CLOSED row (`<>`, `<Stdout>`); `Some v` is an OPEN one
+-- (`<e>`, `<Stdout | e>`).  Arms mirror `declaredEffects` exactly, stopping at
+-- the same node, so the two always describe ONE row.
+declaredEffectTail : Ty -> Option String
+declaredEffectTail (TyFun _ ret) = declaredEffectTail ret
+declaredEffectTail (TyEffect _ tail _) = tail
+declaredEffectTail (TyConstrained _ t) = declaredEffectTail t
+declaredEffectTail _ = None
+
+-- #797: effect-tail names occurring in ARGUMENT positions of the signature,
+-- walking the same return spine `declaredEffects` walks and stopping at the same
+-- node.  A name here is one the CALLER also constrains, so the declared return
+-- row is not free even though it is syntactically open.
+--
+-- ⚠️ Deliberately BROADER than `methodEffArgOccs`: that collector answers "can
+-- the BODY perform this row" and so excludes an even-contravariant-depth
+-- occurrence (`((Unit -> <e> Unit) -> Int)`).  The question here is the
+-- different one "does the caller pin this var", for which ANY argument-side
+-- occurrence counts — an even-depth `e` is still unified with the caller's
+-- chosen row.  `effTailNames`' documented name-based over-counting (`List <e>`)
+-- is likewise conservative in the safe direction here: it can only make a row
+-- read as argument-carried, i.e. keep the pre-#797 rejection, never widen.
+declaredArgEffNames : Ty -> List String
+declaredArgEffNames (TyFun a ret) = effTailNames a
+  ++ rowArgNames a
+  ++ declaredArgEffNames ret
+declaredArgEffNames (TyConstrained _ t) = declaredArgEffNames t
+declaredArgEffNames _ = []
+
+-- #797: is the declared return row genuinely OPEN — a free tail var that appears
+-- NOWHERE on the argument side?  Such a var is chosen by nothing but the callee's
+-- own body: `f : Int -> <e> String` means "f performs whatever it performs", so a
+-- body performing <Stdout> is not an escape and must not be reported as one.
+-- An argument-carried var (`g : (Int -> <e> Int) -> <e> Int`) is NOT open in this
+-- sense — the caller instantiates it, so a body adding <Stdout> would launder,
+-- and the pre-existing escape rejection stands unchanged.
+declaredEffectsOpen : Ty -> Bool
+declaredEffectsOpen ty = match declaredEffectTail ty
+  None => False
+  Some v => not (contains v (declaredArgEffNames ty))
+
 -- record metadata: name → (quantified param ids, result mono, field types).  A
 -- global Ref (like the reference's record table) so field access / create /
 -- update / patterns can look records up without threading an env field.
@@ -28674,12 +28716,31 @@ peelOntoParams (Some src) patTypes pats =
 checkEffectEscape : List (String, Ty) -> String -> List Atom -> Unit
 checkEffectEscape sigs m effs = match omLookup m driverState.value.sigTyMapRef.value
   None => ()
-  Some ty => match atomsEscape effs (declaredEffects ty)
+  -- #797: a genuinely open declared row (free return-position tail var, no
+  -- argument-side occurrence) has nothing to escape FROM — the row admits
+  -- whatever the body performs, which is what a free tail var MEANS.  Skipping
+  -- here rather than widening `declaredEffects` keeps the CLOSED-row rejection
+  -- (and its wording) byte-identical.
+  Some ty => if declaredEffectsOpen ty then
+    ()
+  else match atomsEscape effs (declaredEffects ty)
     [] => ()
-    extras => pushTypeError "T-EFFECT-LEAK" (effectEscapeMsg m (declaredEffects ty) extras)
+    extras =>
+      pushTypeError
+        "T-EFFECT-LEAK"
+        (effectEscapeMsg m (declaredEffects ty) (declaredEffectTail ty) extras)
 
-effectEscapeMsg : String -> List Atom -> List Atom -> String
-effectEscapeMsg name declared extras = "Function '\{name}' declared with <\{renderAtoms declared}> but also performs <\{renderAtoms extras}>"
+-- #797: [tail] renders alongside the atoms so an argument-carried open row —
+-- the one shape that still reaches this message with a tail — reports the row
+-- that was actually written (`<e>`, `<Stdout | e>`) instead of the false `<>`.
+-- A closed row passes `None` and renders exactly as before.
+effectEscapeMsg : String -> List Atom -> Option String -> List Atom -> String
+effectEscapeMsg name declared tail extras = "Function '\{name}' declared with \{renderDeclaredRow declared tail} but also performs <\{renderAtoms extras}>"
+
+renderDeclaredRow : List Atom -> Option String -> String
+renderDeclaredRow declared None = "<\{renderAtoms declared}>"
+renderDeclaredRow [] (Some v) = "<\{v}>"
+renderDeclaredRow declared (Some v) = "<\{renderAtoms declared} | \{v}>"
 
 -- generalize each member's (sig-and-body-unified) placeholder.  A signature was
 -- already unified into the placeholder by preunifySigs, so generalizing the
