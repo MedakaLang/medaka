@@ -5,7 +5,13 @@
 
 import test.{expectTrue}
 import array as A
-import lib.sign.{secretKeyFromBytes}
+import hex.{decode}
+import lib.sign.{
+  secretKeyFromBytes,
+  signatureFromCompact,
+  signatureCompact,
+  signDigest,
+}
 
 isOk : Result String a -> Bool
 isOk (Ok _) = True
@@ -14,6 +20,11 @@ isOk (Err _) = False
 isErr : Result String a -> Bool
 isErr (Ok _) = False
 isErr (Err _) = True
+
+bytes : String -> Array Int
+bytes value = match decode value
+  Ok decoded => decoded
+  Err message => panic "sign_key_test: malformed hex: \{message}"
 
 oneBytes : Array Int
 oneBytes = [|
@@ -27,6 +38,36 @@ nBytes = [|
   0xff, 0xff, 0xfe, 0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2,
   0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
 |]
+
+knownCompact : Array Int
+knownCompact =
+  bytes
+    "a0b37f8fba683cc68f6574cd43b39f0343a50008bf6ccea9d13231d9e7e2e1e411edc8d307254296264aebfc3dc76cd8b668373a072fd64665b50000e9fcce52"
+
+zeroRCompact : Array Int
+zeroRCompact =
+  bytes
+    "000000000000000000000000000000000000000000000000000000000000000011edc8d307254296264aebfc3dc76cd8b668373a072fd64665b50000e9fcce52"
+
+zeroSCompact : Array Int
+zeroSCompact =
+  bytes
+    "a0b37f8fba683cc68f6574cd43b39f0343a50008bf6ccea9d13231d9e7e2e1e40000000000000000000000000000000000000000000000000000000000000000"
+
+rangeRCompact : Array Int
+rangeRCompact =
+  bytes
+    "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd036414111edc8d307254296264aebfc3dc76cd8b668373a072fd64665b50000e9fcce52"
+
+rangeSCompact : Array Int
+rangeSCompact =
+  bytes
+    "a0b37f8fba683cc68f6574cd43b39f0343a50008bf6ccea9d13231d9e7e2e1e4fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"
+
+highSCompact : Array Int
+highSCompact =
+  bytes
+    "a0b37f8fba683cc68f6574cd43b39f0343a50008bf6ccea9d13231d9e7e2e1e4ee12372cf8dabd69d9b51403c23893260446a5aca818c9f55a1d5e8be63972ef"
 
 setAt : Int -> Int -> Array Int -> Array Int
 setAt i value bs =
@@ -65,3 +106,28 @@ test "secret key stores a scalar before caller input mutates" =
   let admitted = secretKeyFromBytes mutable
   let () = A.set 31 0 mutable
   expectTrue (isOk admitted && isErr (secretKeyFromBytes mutable))
+
+test "public compact signatures round trip as exactly 64 bytes" = match signatureFromCompact knownCompact
+  Err _ => expectTrue False
+  Ok signature =>
+    let compact = signatureCompact signature
+    expectTrue (arrayLength compact == 64 && compact == knownCompact)
+
+test "public compact parsing rejects 63-byte and 65-byte lengths" =
+  expectTrue
+    (isErr (signatureFromCompact (arrayMake 63 0)) && isErr (signatureFromCompact (arrayMake 65 0)))
+
+test "public compact parsing rejects non-byte elements" =
+  expectTrue
+    (isErr (signatureFromCompact (setAt 0 (-1) knownCompact)) && isErr (signatureFromCompact (setAt 63 256 knownCompact)))
+
+test "public compact parsing rejects zero range and high-S components" =
+  expectTrue
+    (isErr (signatureFromCompact zeroRCompact) && isErr (signatureFromCompact zeroSCompact) && isErr (signatureFromCompact rangeRCompact) && isErr (signatureFromCompact rangeSCompact) && isErr (signatureFromCompact highSCompact))
+
+test "public signing rejects malformed digests before production" = match secretKeyFromBytes oneBytes
+  Err _ => expectTrue False
+  Ok secret =>
+    let zeroDigest = arrayMake 32 0
+    expectTrue
+      (isErr (signDigest secret (arrayMake 31 0)) && isErr (signDigest secret (arrayMake 33 0)) && isErr (signDigest secret (setAt 0 (-1) zeroDigest)) && isErr (signDigest secret (setAt 31 256 zeroDigest)))

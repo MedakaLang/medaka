@@ -7,6 +7,11 @@
 import lib.scalar.{Sc, scSecretCandidate}
 import lib.secp256k1.{
   AffinePoint,
+  EcdsaSignature,
+  ecdsaSignDigest,
+  ecdsaSignatureCompact,
+  ecdsaSignatureFromCompact,
+  ecdsaVerifyDigest,
   pointFromCompressed,
   pointCompressed,
   publicPointForSecret,
@@ -18,6 +23,10 @@ export data SecretKey = SecretKey Sc
 -- | A parsed or derived secp256k1 public key. Its affine carrier and
 --   constructor stay private to this consumer boundary.
 export data PublicKey = PublicKey AffinePoint
+
+-- | A canonical low-S compact ECDSA signature. The internal signature and
+--   both constructors stay private to this consumer boundary.
+export data Signature = Signature EcdsaSignature
 
 -- | Admit exactly the scalars in `[1, n)`. Length is public; for a 32-element
 --   input the scalar module completes its full fixed-control scan before this
@@ -47,3 +56,43 @@ publicKeyCompressed (PublicKey point) = pointCompressed point
 export
 publicKeyForSecret : SecretKey -> PublicKey
 publicKeyForSecret (SecretKey scalar) = PublicKey (publicPointForSecret scalar)
+
+-- | Parse exactly 64 public bytes as canonical nonzero low-S P1363 `r || s`.
+export
+signatureFromCompact : Array Int -> Result String Signature
+signatureFromCompact compact = map Signature (ecdsaSignatureFromCompact compact)
+
+-- | Serialize a signature in its fixed 64-byte P1363 `r || s` form.
+export
+signatureCompact : Signature -> Array Int
+signatureCompact (Signature signature) = ecdsaSignatureCompact signature
+
+digestBytesOk : Array Int -> Int -> Bool
+digestBytesOk digest i =
+  if i >= arrayLength digest then True
+  else
+    let byte = digest[i]
+    if byte < 0 || byte > 255 then False else digestBytesOk digest (i + 1)
+
+-- | Sign exactly one public 32-byte SHA-256 digest. Public shape/domain errors
+--   are rejected before the fixed two-candidate producer begins; only its
+--   final aggregate validity bit is declassified here.
+export
+signDigest : SecretKey -> Array Int -> Result String Signature
+signDigest (SecretKey scalar) digest =
+  if arrayLength digest /= 32 then Err "sign.signDigest: expected 32 digest bytes"
+  else
+    if not (digestBytesOk digest 0) then Err "sign.signDigest: every digest element must be a byte in 0..255"
+    else
+      let (validBit, signature) = ecdsaSignDigest scalar digest
+      if validBit == 1 then
+        Ok (Signature signature)
+      else
+        Err "RFC 6979 retry bound exhausted"
+
+-- | Verify one canonical signature against a public key and 32-byte digest.
+--   Invalid digest shape/domain returns `False`.
+export
+verifyDigest : PublicKey -> Array Int -> Signature -> Bool
+verifyDigest (PublicKey publicPoint) digest (Signature signature) =
+  ecdsaVerifyDigest publicPoint digest signature
