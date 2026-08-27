@@ -38,9 +38,10 @@ import ir.core_ir_lower.{
   methodIfaceTable,
   declSigTypeNames,
   ctorFieldTypeNames,
+  ffiExternTypeNames,
 }
 import ir.dce.{dceFilter}
-import backend.wasm_emit.{emitProgram, makeWasmEmitInput}
+import backend.wasm_emit.{emitProgram, makeWasmEmitInputWithFfi}
 import entries.entry_support.{driveModules, runEmitWith}
 
 main : <IO> Unit
@@ -60,5 +61,5 @@ emitTail runtimeDecls coreD modules2 =
   let allDecls0 = coreD ++ flatMap snd modules2
   let allDecls = dceFilter allDecls0
   let _ = preludeReturnPosDictNames coreD allDecls ++ preludeArgPosDictNames coreD allDecls ++ constrainedSigNames allDecls
-  let input = makeWasmEmitInput (methodIfaceTable allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (ctorFieldTypeNames allDecls) (mainTypeIsFloat ()) (declaredRecordFieldOrders allDecls)
+  let input = makeWasmEmitInputWithFfi (methodIfaceTable allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (ctorFieldTypeNames allDecls) (mainTypeIsFloat ()) (declaredRecordFieldOrders allDecls) (ffiExternTypeNames runtimeDecls allDecls)
   putStr (emitProgram input (lowerProgramEmit allDecls))

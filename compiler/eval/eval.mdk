@@ -248,6 +248,28 @@ ctorTypeEntries (DNewtype { newtypeName = tyname, newtypeCtor = con }) =
 ctorTypeEntries (DAttrib _ d) = ctorTypeEntries d
 ctorTypeEntries _ = []
 
+-- #2076: a process-global set of USER-declared `extern` names (mirrors
+-- `ctorToTypeRef` immediately above) — evalModulesWith seeds it before any
+-- lookup, same as ctorToTypeRef.  Consulted ONLY by `lookupFrames`'s failure
+-- arm, to upgrade the generic "unbound identifier" panic into one that names
+-- the identifier as a declared FFI extern `medaka run` cannot call (no C-ABI
+-- capability under the tree-walking interpreter — that is the emitter's job,
+-- not eval's).  Intentional local duplicate of
+-- `ir.core_ir_lower.externDeclNamesOf` rather than an import: `core_ir_lower`
+-- already imports `eval.eval`, so the reverse import would cycle.
+export
+ffiExternNamesRef : Ref (List String)
+ffiExternNamesRef = Ref []
+
+export
+externDeclNamesOfDecls : List Decl -> List String
+externDeclNamesOfDecls [] = []
+externDeclNamesOfDecls ((DExtern _ n _)::rest) =
+  n :: externDeclNamesOfDecls rest
+externDeclNamesOfDecls ((DAttrib _ inner)::rest) = externDeclNamesOfDecls [inner]
+  ++ externDeclNamesOfDecls rest
+externDeclNamesOfDecls (_::rest) = externDeclNamesOfDecls rest
+
 variantName : Variant -> String
 variantName (Variant n _) = n
 
@@ -688,7 +710,11 @@ lookupFramesOpt (frame::rest) name = match lookupFrameCell frame name
   None => lookupFramesOpt rest name
 
 lookupFrames : List (List (String, Ref (Value e))) -> String -> <e> Value e
-lookupFrames [] name = panic ("unbound identifier: " ++ name)
+lookupFrames [] name =
+  if contains name !ffiExternNamesRef then
+    panic ("capability error: '" ++ name ++ "' is a user-declared FFI extern — `medaka run` has no FFI capability (the tree-walking interpreter cannot make a foreign C call). Build a native binary with `medaka build` instead.")
+  else
+    panic ("unbound identifier: " ++ name)
 lookupFrames (frame::rest) name = match lookupFrameCell frame name
   Some cell => forceCell cell name
   None => lookupFrames rest name
@@ -3402,6 +3428,7 @@ evalModulesWith extraExterns preludeDecls modules =
   let moduleDecls = flatMap snd modules
   let allDecls = preludeDecls ++ moduleDecls
   ctorToTypeRef := buildCtorToType allDecls
+  ffiExternNamesRef := externDeclNamesOfDecls allDecls
   let disp = installDispatchTables allDecls
   let ctors = collectCtors allDecls
   let preludeGroups = groupsOf preludeDecls
@@ -3528,6 +3555,7 @@ evalModulesRootEnvWith extraExterns preludeDecls modules =
   let moduleDecls = flatMap snd modules
   let allDecls = preludeDecls ++ moduleDecls
   ctorToTypeRef := buildCtorToType allDecls
+  ffiExternNamesRef := externDeclNamesOfDecls allDecls
   let disp = installDispatchTables allDecls
   let ctors = collectCtors allDecls
   let preludeGroups = groupsOf preludeDecls
