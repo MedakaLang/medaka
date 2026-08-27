@@ -3108,6 +3108,8 @@ fi
 #     mangle-ops    3246 ->    6496 ->   12996   r1=2.00 r2=2.00   LINEAR
 # The post-fix ratios are EXACTLY 2.00 (op counts are deterministic, not sampled), so
 # the 3.0 threshold has 50% headroom below and the pre-fix state 18-30% above.
+# (The `mangle-ops` figures above are HISTORY — that arm was retired; see the
+# RETIRED note below `grade_emittables_stage emit`. Only the `emit` arm still runs.)
 #
 # Not folded into OP_STAGES/SHAPES on purpose: `emit` is not an OP_STAGES entry (adding
 # it would grade every other shape's emit-op ratio too, which is a different change),
@@ -3161,7 +3163,39 @@ grade_emittables_stage() {
   fi
 }
 grade_emittables_stage emit
-grade_emittables_stage mangle
+# ── RETIRED 2026-08-27: `grade_emittables_stage mangle` ──────────────────────
+#
+# There used to be a second call here grading the MANGLE stage's net op ratio on
+# this same shape. It was retired because its counted-op total on `gen_emittables`
+# is now STRUCTURALLY ZERO at every N — not small-but-below-OP_FLOOR. Measured on
+# this box at sprint/depth-linearity b32b083f, with the gate's own gen_emittables
+# and profile_run: mangle net-ops = 0 at N=250, 500, 1000 AND 4000 (16x the default
+# band). No value of PERF_EMITTABLES_N can clear OP_FLOOR against an exact 0.
+#
+# WHY it went to zero, and why that is a MEASUREMENT gap and not a regression:
+# `[perf] mangle` is an opSnap() delta around mangleUnits (entries/profile_main.mdk),
+# and `opBump` (support/opcount.mdk) fires at exactly two primitives — util.contains
+# and util.lookupAssoc. private_mangle.mdk imports only frontend.ast, support.util
+# and support.ordmap; neither ast nor ordmap imports support.opcount at all, and
+# private_mangle imports `contains` but not `lookupAssoc`. #1031's slice
+# (54f54bef) converted renameScoped's `bound` accumulator from `List String` +
+# `contains n bound` to `OrdMap Unit` + `omHasKey n bound`, and omHasKey is
+# UNCOUNTED. That removed the only counted call the mangle stage made on this shape.
+# The one surviving `contains` in private_mangle (bareCtorMemberEntry) fires only on
+# `DUse` import decls naming constructors, and gen_emittables emits no imports.
+#
+# 🚨 THE TABLE THIS ROW WATCHED IS NOT UNFIXED. private_mangle's `pubFnNames` is
+# still OrdMap-indexed (omHasKey) — in fact it ALREADY was before #1031, which means
+# the pre-#1031 "mangle-ops 3246 -> 6496 -> 12996 LINEAR" reading was never measuring
+# pubFnNames either: the whole 3246 was renameScoped's per-function-params `contains`
+# scan (~13 counted steps per generated `sI`) that this row was incidentally
+# piggy-backing on. What is lost by retiring the row is a mangle-stage op grade that
+# never actually existed; what is NOT lost is any live coverage of a real quadratic.
+#
+# REPLACEMENT COVERAGE IS OWED, and is tracked as its own issue — a live mangle-stage
+# grade needs a counted primitive on the OrdMap path (support/ordmap.mdk has NO
+# opBump instrumentation today, so this is a compiler-source change, deliberately out
+# of scope for the gate-calibration fix that retired this row).
 
 # ── matchlits — EXHAUSTIVENESS over a wide LITERAL match (issue #988) ─────────
 # The literal sibling of the main-loop `match` shape. It grades the TYPECHECK-STAGE
