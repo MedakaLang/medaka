@@ -2,18 +2,35 @@
 # diff_compiler_effect_polarity.sh — the effect-row PARAMETER-POLARITY conformance
 # matrix (D-2 / #1119, closing the #1098 / #1121 launder family).
 #
-# Corpus: test/effect_polarity_fixtures/, 12 single-entry projects. Ten of them are
-# LAUNDER rows: a value whose type carries an effect row is widened through a type
-# PARAMETER that is not covariant — either a write channel (`Ref`-like, the `write-*`
-# rows) or a contravariant position (a function argument, the `contra-*` rows) — at
-# five wrapper depths each (direct / newtype / two-deep / record field / opaque
-# cross-module export). Per docs/spec/EFFECTS-SEMANTICS.md §9 ("no direction of
-# weakening is sound in general — only equality is") and §5 (the no-laundering law),
-# every one of those ten MUST be REJECTED. The remaining two are CONTROLS in the
+# Corpus: test/effect_polarity_fixtures/, 17 single-entry projects — do not trust that
+# count, derive it (`ls -d test/effect_polarity_fixtures/*/ | wc -l`); the
+# completeness check below is what actually keeps it honest.
+#
+# The original 12 (D-2 / #1119): ten LAUNDER rows — a value whose type carries an
+# effect row is widened through a type PARAMETER that is not covariant, either a write
+# channel (`Ref`-like, the `write-*` rows) or a contravariant position (a function
+# argument, the `contra-*` rows) — at five wrapper depths each (direct / newtype /
+# two-deep / record field / opaque cross-module export); plus two CONTROLS in the
 # `test/diff_compiler_must_fail.sh` sense: ordinary covariant programs (a plain
 # function parameter, a `List` shape) that isolate the one distinguishing feature the
 # launder rows have and the controls do not, and which MUST stay ACCEPTED — without
 # them, "reject everything" would score a perfect 12/12 here.
+#
+# The five added by sprint `polarity-whole-type` (fix round F4) answer the second half
+# of that question — not "how deep is the wrapper" but "how is the write channel
+# SPELLED". `hkt-direct` (#2107) reaches it through a higher-kinded field head,
+# `alias-direct` (#2108) through a type alias, `private-wrapper` (#2112) through a
+# PRIVATE declaration in a sibling module: three ways the declaration-time walk used
+# to lose sight of the channel and fall back on the lenient `PCo` default, all three
+# REJECT. `write-workaround-accept` / `write-launder-reject` (#2109) are a DIRECTION
+# PAIR at one site shape: the safe write-side narrowing the diagnostic now advertises
+# by name must stay ACCEPTED, and the #1098 laundering direction at the same argument
+# span must stay REJECTED. Slice 4 measured that those two reach the guard
+# indistinguishably, so the pair — not the engine — is what pins the distinction.
+#
+# Per docs/spec/EFFECTS-SEMANTICS.md §9 ("no direction of weakening is sound in
+# general — only equality is") and §5 (the no-laundering law), every launder row MUST
+# be REJECTED and every control MUST be ACCEPTED.
 #
 # ⚠️ POLARITY IS ORDINARY, NOT INVERTED. Unlike diff_compiler_must_fail.sh — whose
 # fixtures pin OPEN bugs, so that RED there is the healthy state — this is a plain
@@ -72,6 +89,24 @@ expected_verdict() {
     contra-2deep|contra-direct|contra-newtype|contra-opaque-export|contra-record-field) echo reject ;;
     write-2deep|write-direct|write-newtype|write-opaque-export|write-record-field)      echo reject ;;
     control-direct-function|control-list-shape)                                         echo accept ;;
+    # ── the three CONCEALMENT rows (sprint polarity-whole-type) ───────────────
+    # Same launder as the write-* rows above, reached through a type the
+    # declaration-time polarity walk could not see through and defaulted to the
+    # lenient PCo: a higher-kinded field head (#2107), a type alias (#2108), and
+    # a PRIVATE inner declaration filtered out of the fixpoint's input (#2112).
+    # §9's "only equality is sound" does not acquire an exception because the
+    # write channel is spelled indirectly.
+    hkt-direct|alias-direct|private-wrapper)                                            echo reject ;;
+    # ── the #2109 direction PAIR — these two must never swap ──────────────────
+    # accept: the write-side NARROWING recovery the T-EFFECT-PARAM-VARIANCE
+    #   diagnostic now advertises by name (`(s => f s)`); sound per §5's
+    #   sub-effecting direction, and it must keep working or the advice lies.
+    # reject: the #1098 laundering direction at the SAME argument-span site
+    #   shape. Slice 4 measured that the two reach paramVarianceGuard
+    #   indistinguishably — same Monos, same rendered rows, both carets on an
+    #   argument span — so nothing but these two rows separates them here.
+    write-workaround-accept)                                                            echo accept ;;
+    write-launder-reject)                                                               echo reject ;;
     *) echo unknown ;;
   esac
 }
