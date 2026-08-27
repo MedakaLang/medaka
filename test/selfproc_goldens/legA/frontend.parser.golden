@@ -432,6 +432,9 @@ parseParenExpr : Parser Expr
 parsePat : Parser Pat
 parsePatApp : Parser Pat
 parsePatAtom : Parser Pat
+parsePatAtomNestGo : Array Token -> Int -> PR Pat
+parsePatAtomNestRun : Array Token -> Int -> Int -> PR Pat
+parsePatAtomRaw : Parser Pat
 parsePatCons : Parser Pat
 parsePatList : Parser Pat
 parsePatParen : Parser Pat
@@ -453,6 +456,9 @@ parseTupleCtorTail : Int -> Parser Ty
 parseTy : Parser Ty
 parseTyApp : Parser Ty
 parseTyAtom : Parser Ty
+parseTyAtomNestGo : Array Token -> Int -> PR Ty
+parseTyAtomNestRun : Array Token -> Int -> Int -> PR Ty
+parseTyAtomRaw : Parser Ty
 parseTyFun : Parser Ty
 parseTyParen : Parser Ty
 parseTyParenBody : Token -> Parser Ty

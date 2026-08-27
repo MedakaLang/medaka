@@ -869,7 +869,10 @@ sliceHi e lo incl = do
 -- re-entry point for EVERY recursive expression form — parenthesised/tuple
 -- exprs, list literals, if/let/match/do, and (through the operand ladder)
 -- nested application — so bounding depth here bounds all of them, whichever
--- bracket or keyword does the nesting.
+-- bracket or keyword does the nesting. #77 F1: also shared by `parsePatAtom`
+-- and `parseTyAtom`'s own wrappers below, closing the pattern- and
+-- type-grammar gaps the end-of-sprint review found; an expr-only input still
+-- only ever increments here, so `parseAtom`'s own boundary does not move.
 nestDepthRef : Ref Int
 nestDepthRef = Ref 0
 
@@ -1743,8 +1746,35 @@ reservedOrPatFail t = match reservedIdentKeyword t
   Some name => fatalP (reservedKeywordMsg name)
   None => failP "expected pattern"
 
+-- #77 F1: shares `nestDepthRef`/`maxNestDepth` with `parseAtom` above — a
+-- pattern's own recursive re-entry (`parsePatParen`/`parsePatList` calling back
+-- into `parsePat` -> ... -> `parsePatAtom`) was NOT reached by the expression
+-- cap, so pathologically deep pattern nesting (e.g. `((((...(x)...))))` in a
+-- `match` arm) still exhausted the native stack with an unlocated exit 134.
+-- One counter shared across expr/pattern/type mirrors how a single adversarial
+-- input can nest through more than one grammar at once, and does not move
+-- `parseAtom`'s own already-verified boundary: an expr-only input still only
+-- ever increments at `parseAtom`.
 parsePatAtom : Parser Pat
-parsePatAtom = do
+parsePatAtom = Parser parsePatAtomNestGo
+
+parsePatAtomNestGo : Array Token -> Int -> PR Pat
+parsePatAtomNestGo toks pos =
+  let d = !nestDepthRef + 1
+  if d > maxNestDepth then
+    PFatal nestTooDeepMsg pos
+  else
+    parsePatAtomNestRun toks pos d
+
+parsePatAtomNestRun : Array Token -> Int -> Int -> PR Pat
+parsePatAtomNestRun toks pos d =
+  nestDepthRef := d
+  let r = runP parsePatAtomRaw toks pos
+  nestDepthRef := d - 1
+  r
+
+parsePatAtomRaw : Parser Pat
+parsePatAtomRaw = do
   t <- peekP
   match t
     TIdent x => do
@@ -2164,8 +2194,33 @@ tyApplyAll : Ty -> List Ty -> Ty
 tyApplyAll head [] = head
 tyApplyAll head (a::rest) = tyApplyAll (TyApp head a) rest
 
+-- #77 F1: shares `nestDepthRef`/`maxNestDepth` with `parseAtom` above — see
+-- the comment on `parsePatAtom`'s own wrapper for why a shared counter, and
+-- why it can't move `parseAtom`'s already-verified boundary. The type
+-- parser's own recursive re-entry (`parseTyParen` calling back into
+-- `parseTy` -> ... -> `parseTyAtom`) was NOT reached by the expression cap,
+-- so pathologically deep type nesting (e.g. `f : ((((Int)))) -> Int`) still
+-- exhausted the native stack with an unlocated exit 134.
 parseTyAtom : Parser Ty
-parseTyAtom = do
+parseTyAtom = Parser parseTyAtomNestGo
+
+parseTyAtomNestGo : Array Token -> Int -> PR Ty
+parseTyAtomNestGo toks pos =
+  let d = !nestDepthRef + 1
+  if d > maxNestDepth then
+    PFatal nestTooDeepMsg pos
+  else
+    parseTyAtomNestRun toks pos d
+
+parseTyAtomNestRun : Array Token -> Int -> Int -> PR Ty
+parseTyAtomNestRun toks pos d =
+  nestDepthRef := d
+  let r = runP parseTyAtomRaw toks pos
+  nestDepthRef := d - 1
+  r
+
+parseTyAtomRaw : Parser Ty
+parseTyAtomRaw = do
   t <- peekP
   match t
     TUpper c => do
