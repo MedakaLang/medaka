@@ -23,16 +23,23 @@
 # never a CLI verb. Do not re-point them at a verb.
 #
 # The AUTHORITATIVE current consumer list is test/CHECK-WRAPPER-CALLERS.txt (gated by
-# test/diff_compiler_check_wrapper_callers.sh), not this comment. As of 2026-08-26 the
-# Flat-family importers there are: tools/lsp.mdk, tools/check_policy.mdk (parked on
-# Flat deliberately — `--fn <name>` is arbitrary user input looked up directly in the
-# effect table, so it needs prelude schemes), entries/typecheck_main.mdk,
-# entries/check_match_main.mdk, entries/playground_main.mdk,
-# entries/origin_agreement_main.mdk, entries/selfproc_tc_probe.mdk, plus this gate's
-# own entries/check_flat_diags_main.mdk. The `llvm_emit_typed_main` /
-# `wasm_emit_typed_main` emit entries reach Flat via `elaborateDict`, outside that
-# wrapper family. MODULE is reached by every import-bearing `check`, by `medaka
-# check` on a no-import file since S-migrate-check-route, by `doc`/`repl`/`snapshot`,
+# test/diff_compiler_check_wrapper_callers.sh), not this comment. As of the
+# flat-exit-floor sprint (slices 3/4 migrated tools/lsp.mdk, tools/check_policy.mdk
+# and entries/playground_main.mdk off Flat onto `checkOneSchemeFull`, the Module-arm
+# full-environment entry — none of the three import any Flat-family name any more)
+# the Flat-family importers of the wrapper family are just: entries/check_match_main.mdk
+# (`checkMatchToLines`, migration declined on purpose — see S-e2-entry-ledger's report),
+# entries/selfproc_tc_probe.mdk (`checkToLines`, kept pinned by design — a
+# prelude-free/self-contained LEG D probe of the self-hosted eval's mutation kernel,
+# not multi-module machinery), entries/typecheck_main.mdk (`checkToLines`, but only
+# via its `withTarget` no-runtime half — its `checkOneToLinesWithRuntime` half is
+# already Module-arm), plus the two CONTROL probes this gate itself drives:
+# entries/check_flat_diags_main.mdk (`checkProgramDiags`) and
+# entries/origin_agreement_main.mdk (`checkProgramSchemesWithRuntime`). The
+# `llvm_emit_typed_main` / `wasm_emit_typed_main` emit entries reach Flat via
+# `elaborateDict`, outside that wrapper family. MODULE is reached by every
+# import-bearing `check`, by `medaka check` on a no-import file since
+# S-migrate-check-route, by `doc`/`repl`/`snapshot`/`lsp`/`check_policy`/`playground`,
 # and by `run` / `build` / `test` — including on a ONE-module program, through the
 # `elaborateOne` / `elaborateModules` 1-module wrapper.
 #
