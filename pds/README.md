@@ -16,6 +16,10 @@ gets classified for CI.
 - `pds/lib/` — library modules. `skeleton.mdk` is a placeholder proving the
   `pds/test/*.mdk` -> `pds/lib/*.mdk` import wiring; delete it once a real
   module lands (see its own header for the required three-part coupled edit).
+  Production modules under this directory may not import exported identifiers
+  ending in `ForTest`, selectively or through `.*`; `opaque_field_scalar.sh`
+  derives and enforces that deployment boundary while observing the allowed
+  test-only consumers under `pds/test/`.
 - `pds/test/` — in-language `medaka test` suites (`*_test.mdk`) plus gate
   scripts that run them (`*.sh`). **Every `.sh` placed directly in `pds/test/`
   is auto-enrolled as a CI gate** — see the classification policy below.
