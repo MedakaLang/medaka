@@ -161,7 +161,7 @@ run g = g ()
 
 Effect-label declarations (Phase 146 gap 2 — builtins are
 `IO, Rand, Stdout, Stderr, Stdin, Clock, Env, Exec, Net,
-FileRead, FileWrite`; declare more):
+FileRead, FileWrite, FFI`; declare more):
 
 ```medaka
 effect KV                  -- a user/platform effect label, usable as <KV> in rows
