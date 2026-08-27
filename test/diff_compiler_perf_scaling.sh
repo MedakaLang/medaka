@@ -2989,6 +2989,97 @@ else
     scoperefs "$scn1" "$scro1" "$scro2" "$OP_FLOOR" "$scn1" "$scn2"
 fi
 
+# ── SHAPE: scoperefs — the EMIT-STAGE scope-scan grade (#1031 residual, F2) ───
+#
+# 🚨 WHY THIS ROW EXISTS AT ALL. #1031 ("linearize deep-scope lookup") was closed on the
+# claim that all FOUR compile stages that answer "is this name bound in the local scope?"
+# — resolve, typecheck, mangle, emit — had been converted from a `List`-as-a-set scan to
+# an OrdMap. The pin it shipped with (`scoperefs` in test/diff_compiler_ir_scaling.sh)
+# grades `medaka check` only, and `mangle`/`emit` run under `medaka build`, so TWO of the
+# four claimed-fixed stages had NO grading arm anywhere and the closure rested on trust.
+# It was wrong: the emit stage stayed quadratic (1,457,967 ops at N=1200, doubling ratios
+# 3.57/3.88 — above threshold at BOTH doublings) because a FIFTH site,
+# `emit_support.eagerVars`' bound-name accumulator, was never converted. This row is that
+# stage's missing arm. A stage nobody grades is a stage whose fix nobody can check.
+#
+# The shape is the one already generated above (gen_scoperefs: an N-deep local scope, then
+# N references to the NON-local `base`). It drives `eagerVars` exactly the way it drives
+# resolve's scope test: every one of the N `base` refs misses in the local scope and so
+# scans it to completion. Pre-fix that is O(N^2) counted `contains` steps inside the
+# `emit` timer; post-fix `eagerVars` probes an OrdMap set (`omHasKey`, uncounted) and only
+# the LINEAR per-reference emitter work remains.
+#
+# Graded as a baseline-netted RATIO, not an absolute "< OP_FLOOR" assertion like the
+# resolve row above: emit's residual is genuinely linear-in-N (~127 counted ops per
+# reference), not drained to a constant, so there is no flat value to assert. The prelude
+# constant is subtracted for the reason the `emittables` block states — `emit` pays ~13.7k
+# counted ops rendering core.mdk before the fixture is looked at, and left in it drags
+# every ratio toward 1.0.
+#
+# SEEN RED — measured on this box at base ee59dec6, band N=300->600->1200, net of the
+# baseline (the state this row must fail in, and does):
+#     emit-ops net  218229 -> 796329 -> 3032529   r1=3.65 r2=3.81   ** QUADRATIC **
+# and with emit_support.eagerVars' accumulator backed by an OrdMap set:
+#     emit-ops net   38229 ->  76329 ->  152529   r1=2.00 r2=2.00   LINEAR
+# The post-fix ratios are EXACTLY 2.00 (op counts are deterministic, not sampled), so the
+# 3.0 threshold has 50% headroom below and the pre-fix state 22-27% above.
+# (The raw emit-op figures were 232596/810696/3046896 pre-fix against a 14367 prelude
+# baseline, and 51950/90050/166250 post-fix against a 13721 one — the baseline itself
+# moves slightly because the prelude's own bodies pay the same scan.)
+#
+# Cost: two extra profiler runs (the 4N size and the baseline); N/2N are the runs the
+# resolve row above already made.
+scn3=$((SCOPEREFS_N * 4))
+scd3="$WORK/scoperefs_$scn3.mdk"
+gen_scoperefs "$scn3" "$scd3"
+SCR3="$WORK/scoperefs_r3"; SCRB="$WORK/scoperefs_rb"
+profile_run "$scd3" > "$SCR3"
+profile_run "$BASE_FIX" > "$SCRB"
+sceb="$(awk -F'\t' '$1=="[perf] emit"{print $5; exit}' "$SCRB")"
+sce1="$(awk -F'\t' '$1=="[perf] emit"{print $5; exit}' "$SCR1")"
+sce2="$(awk -F'\t' '$1=="[perf] emit"{print $5; exit}' "$SCR2")"
+sce3="$(awk -F'\t' '$1=="[perf] emit"{print $5; exit}' "$SCR3")"
+sce_bad=0
+for _v in "$sceb" "$sce1" "$sce2" "$sce3"; do
+  case "$_v" in ''|*[!0-9]*) sce_bad=1 ;; esac
+done
+if [ "$sce_bad" = "1" ]; then
+  # A missing column is a HARNESS failure, never a silent pass.
+  fail=$((fail+1))
+  printf '%-12s %8s  ** NO EMIT-OP MEASUREMENT from the profiler (harness bug — base=%s N=%s 2N=%s 4N=%s) **\n' \
+    scoperefs "$scn1" "$sceb" "$sce1" "$sce2" "$sce3"
+else
+  sce_verdict="$(awk -v b="$sceb" -v o1="$sce1" -v o2="$sce2" -v o3="$sce3" -v th="$THRESH" -v fl="$OP_FLOOR" 'BEGIN{
+    d1=o1-b; d2=o2-b; d3=o3-b
+    if (d1 < fl) { printf "%d %d %d - - TOOSMALL", d1, d2, d3; exit }
+    r1=d2/d1; r2=d3/d2
+    printf "%d %d %d %.2f %.2f %s", d1, d2, d3, r1, r2, ((r1 > th && r2 > th) ? "QUADRATIC" : "ok") }')"
+  # cut, not `set --`: this block runs at TOP LEVEL (the emittables twin is inside a
+  # function), and `set --` here would clobber the script's own positional args.
+  scd1n="$(printf '%s' "$sce_verdict" | cut -d' ' -f1)"
+  scd2n="$(printf '%s' "$sce_verdict" | cut -d' ' -f2)"
+  scd3n="$(printf '%s' "$sce_verdict" | cut -d' ' -f3)"
+  scer1="$(printf '%s' "$sce_verdict" | cut -d' ' -f4)"
+  scer2="$(printf '%s' "$sce_verdict" | cut -d' ' -f5)"
+  sceword="$(printf '%s' "$sce_verdict" | cut -d' ' -f6)"
+  if [ "$sceword" = "TOOSMALL" ]; then
+    fail=$((fail+1))
+    printf '%-12s %8s  ** N TOO SMALL — raise PERF_SCOPEREFS_N (net emit-op %s < OP_FLOOR %s) **\n' \
+      scoperefs "$scn1" "$scd1n" "$OP_FLOOR"
+  elif [ "$sceword" = "QUADRATIC" ]; then
+    fail=$((fail+1))
+    printf '%-12s %8s  ** SUPERLINEAR (EMIT-OPS) ** net %s -> %s -> %s  r1=%s r2=%s (>= %s, band N=%s->%s->%s)\n' \
+      scoperefs "$scn1" "$scd1n" "$scd2n" "$scd3n" "$scer1" "$scer2" "$THRESH" "$scn1" "$scn2" "$scn3"
+    printf '             the EMIT-stage local-scope membership test went back to a List scan.\n'
+    printf '             See compiler/backend/emit_support.mdk eagerVars (the `b` accumulator must\n'
+    printf '             stay an OrdMap set) — the #1031 site the original fix missed.\n'
+  else
+    pass=$((pass+1))
+    printf '%-12s %8s  emit-ops net %s -> %s -> %s  r1=%s r2=%s  (LINEAR — #1031 emit scope set held; band N=%s->%s->%s)\n' \
+      scoperefs "$scn1" "$scd1n" "$scd2n" "$scd3n" "$scer1" "$scer2" "$scn1" "$scn2" "$scn3"
+  fi
+fi
+
 # ── emittables — the EMITTER-TABLE op grade (issue #352) ─────────────────────
 #
 # Five per-program tables in the LLVM emitter (+ one in private_mangle) were `List`s

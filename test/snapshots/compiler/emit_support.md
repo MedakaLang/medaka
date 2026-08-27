@@ -1,5 +1,5 @@
 # META
-source_lines=562
+source_lines=576
 stages=DESUGAR,MARK
 # SOURCE
 -- BACKEND-NEUTRAL EMIT SUPPORT — helpers shared verbatim by BOTH the LLVM
@@ -52,18 +52,32 @@ import support.scc.{tarjanSCCs}
 -- `CDict` head).  A `CMethod` head is interface DISPATCH — deliberately NOT
 -- followed (see `eagerReachMap`; resolving it to impl bodies is #553/#561).  Used
 -- by the value-init-order topo sort (via `eagerReachMap`) in both emitters.
+--
+-- ⚠️ `b` IS AN OrdMap SET, NOT A LIST — and that is load-bearing, not a style
+-- choice.  It answers exactly one question ("is this name bound in the enclosing
+-- local scope?"), which is the #1031 question, and it is asked once per variable
+-- occurrence while the scope grows one frame per `let`.  As a `List` that is
+-- O(depth) per occurrence = O(depth²) per body: on the `scoperefs` shape (N
+-- sequential lets whose tail references all N names) the `emit` stage measured
+-- 1,457,967 ops at N=1200 with doubling ratios 3.57/3.88 — quadratic, and ABOVE
+-- diff_compiler_ir_scaling.sh's 3.0 threshold.  #1031's fix converted the four
+-- scope scans it named (resolve.lookupBindId, typecheck.rewriteArgScoped,
+-- private_mangle.renameScoped, the emitters' local `env`) and MISSED this one,
+-- which is why `emit` stayed quadratic after that fix landed.  `eagerCalleesMap`
+-- below already carries the same warning about its own membership test; this
+-- accumulator is the other half of it.  Keep it a set.
 export
-eagerVars : List String -> CExpr -> List String
+eagerVars : OrdMap Unit -> CExpr -> List String
 eagerVars _ (CLam _ _) = []
-eagerVars b (CVar x _) = if contains x b then [] else [x]
+eagerVars b (CVar x _) = if omHasKey x b then [] else [x]
 eagerVars _ (CLit _) = []
 eagerVars b (CApp f a) = eagerVars b f ++ eagerVars b a
 eagerVars b (CLet recF pat e1 e2) =
-  let b2 = patVars pat ++ b
+  let b2 = omFromNames (patVars pat) b
   let fe1 = if recF then eagerVars b2 e1 else eagerVars b e1
   fe1 ++ eagerVars b2 e2
 eagerVars b (CLetGroup binds body) =
-  let b2 = bindNames binds ++ b
+  let b2 = omFromNames (bindNames binds) b
   eagerVarsBinds b2 binds ++ eagerVars b2 body
 eagerVars b (CBlock stmts) = eagerVarsStmts b stmts
 eagerVars b (CIf c t f) = eagerVars b c ++ eagerVars b t ++ eagerVars b f
@@ -96,16 +110,16 @@ eagerVars b (CSlice a lo hi _) = eagerVars b a
   ++ eagerVars b hi
 -- a `CDict` head is a saturated call to the named top-level function — an eager
 -- callee edge (the routes it carries hold no CExpr, so nothing to descend).
-eagerVars b (CDict name _) = if contains name b then [] else [name]
+eagerVars b (CDict name _) = if omHasKey name b then [] else [name]
 eagerVars _ _ = []
 
-eagerVarsList : List String -> List CExpr -> List String
+eagerVarsList : OrdMap Unit -> List CExpr -> List String
 eagerVarsList _ [] = []
 eagerVarsList b (e::rest) = eagerVars b e ++ eagerVarsList b rest
 
-eagerVarsArms : List String -> List CArm -> List String
+eagerVarsArms : OrdMap Unit -> List CArm -> List String
 eagerVarsArms _ [] = []
-eagerVarsArms b ((CArm pat gs body)::rest) = eagerVarsGuarded (patVars pat ++ b) gs body
+eagerVarsArms b ((CArm pat gs body)::rest) = eagerVarsGuarded (omFromNames (patVars pat) b) gs body
   ++ eagerVarsArms b rest
 
 -- an arm's guard chain + body.  A guard is EAGER — it runs when the arm is
@@ -114,28 +128,28 @@ eagerVarsArms b ((CArm pat gs body)::rest) = eagerVarsGuarded (patVars pat ++ b)
 -- before `lim` and silently take the wrong arm).  A `Pat <- e` guard binds to
 -- its RIGHT: its pattern vars scope over the later guards and the body, exactly
 -- as the arm's own pattern does, so thread them rather than scanning flat.
-eagerVarsGuarded : List String -> List CGuard -> CExpr -> List String
+eagerVarsGuarded : OrdMap Unit -> List CGuard -> CExpr -> List String
 eagerVarsGuarded b [] body = eagerVars b body
 eagerVarsGuarded b ((CGBool c)::rest) body = eagerVars b c
   ++ eagerVarsGuarded b rest body
 eagerVarsGuarded b ((CGBind pat e)::rest) body = eagerVars b e
-  ++ eagerVarsGuarded (patVars pat ++ b) rest body
+  ++ eagerVarsGuarded (omFromNames (patVars pat) b) rest body
 
-eagerVarsFields : List String -> List CField -> List String
+eagerVarsFields : OrdMap Unit -> List CField -> List String
 eagerVarsFields _ [] = []
 eagerVarsFields b ((CField _ ex)::rest) = eagerVars b ex
   ++ eagerVarsFields b rest
 
-eagerVarsStmts : List String -> List CStmt -> List String
+eagerVarsStmts : OrdMap Unit -> List CStmt -> List String
 eagerVarsStmts _ [] = []
 eagerVarsStmts b ((CSExpr ex)::rest) = eagerVars b ex ++ eagerVarsStmts b rest
 eagerVarsStmts b ((CSLet _ pat ex)::rest) = eagerVars b ex
-  ++ eagerVarsStmts (patVars pat ++ b) rest
+  ++ eagerVarsStmts (omFromNames (patVars pat) b) rest
 eagerVarsStmts b ((CSAssign _ ex)::rest) = eagerVars b ex
   ++ eagerVarsStmts b rest
 eagerVarsStmts b (_::rest) = eagerVarsStmts b rest
 
-eagerVarsBinds : List String -> List CBind -> List String
+eagerVarsBinds : OrdMap Unit -> List CBind -> List String
 eagerVarsBinds _ [] = []
 eagerVarsBinds b ((CBind _ [CClause [] rhs])::rest) = eagerVars b rhs
   ++ eagerVarsBinds b rest
@@ -175,7 +189,7 @@ bindEagerCallees (CBind _ clauses) = dedup (clauseEagerVars clauses)
 
 clauseEagerVars : List CClause -> List String
 clauseEagerVars [] = []
-clauseEagerVars ((CClause params body)::rest) = eagerVars (paramBound params) body
+clauseEagerVars ((CClause params body)::rest) = eagerVars (omFromNames (paramBound params) omEmpty) body
   ++ clauseEagerVars rest
 
 paramBound : List Pat -> List String
@@ -571,13 +585,13 @@ rngBound _ = 0
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "filterList" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
-(DTypeSig true "eagerVars" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig true "eagerVars" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVars" (PWild (PCon "CLam" PWild PWild)) (EListLit))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "b")) (EListLit) (EListLit (EVar "x"))))
+(DFunDef false "eagerVars" ((PVar "b") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "b")) (EListLit) (EListLit (EVar "x"))))
 (DFunDef false "eagerVars" (PWild (PCon "CLit" PWild)) (EListLit))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CApp" (PVar "f") (PVar "a"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "f")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a"))))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "b2") (EBinOp "++" (EApp (EVar "patVars") (EVar "pat")) (EVar "b"))) (DoLet false false (PVar "fe1") (EIf (EVar "recF") (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "e1")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "e1")))) (DoExpr (EBinOp "++" (EVar "fe1") (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "e2"))))))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "b2") (EBinOp "++" (EApp (EVar "bindNames") (EVar "binds")) (EVar "b"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "eagerVarsBinds") (EVar "b2")) (EVar "binds")) (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "body"))))))
+(DFunDef false "eagerVars" ((PVar "b") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (DoLet false false (PVar "fe1") (EIf (EVar "recF") (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "e1")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "e1")))) (DoExpr (EBinOp "++" (EVar "fe1") (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "e2"))))))
+(DFunDef false "eagerVars" ((PVar "b") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "bindNames") (EVar "binds"))) (EVar "b"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "eagerVarsBinds") (EVar "b2")) (EVar "binds")) (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "body"))))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "eagerVarsStmts") (EVar "b")) (EVar "stmts")))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "c")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "t"))) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "f"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild)) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "l")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "r"))))
@@ -599,28 +613,28 @@ rngBound _ = 0
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "i"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "hi"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "hi"))))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CDict" (PVar "name") PWild)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EVar "b")) (EListLit) (EListLit (EVar "name"))))
+(DFunDef false "eagerVars" ((PVar "b") (PCon "CDict" (PVar "name") PWild)) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "b")) (EListLit) (EListLit (EVar "name"))))
 (DFunDef false "eagerVars" (PWild PWild) (EListLit))
-(DTypeSig false "eagerVarsList" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "eagerVarsList" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVarsList" (PWild (PList)) (EListLit))
 (DFunDef false "eagerVarsList" ((PVar "b") (PCons (PVar "e") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "e")) (EApp (EApp (EVar "eagerVarsList") (EVar "b")) (EVar "rest"))))
-(DTypeSig false "eagerVarsArms" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "eagerVarsArms" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVarsArms" (PWild (PList)) (EListLit))
-(DFunDef false "eagerVarsArms" ((PVar "b") (PCons (PCon "CArm" (PVar "pat") (PVar "gs") (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "eagerVarsGuarded") (EBinOp "++" (EApp (EVar "patVars") (EVar "pat")) (EVar "b"))) (EVar "gs")) (EVar "body")) (EApp (EApp (EVar "eagerVarsArms") (EVar "b")) (EVar "rest"))))
-(DTypeSig false "eagerVarsGuarded" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "eagerVarsArms" ((PVar "b") (PCons (PCon "CArm" (PVar "pat") (PVar "gs") (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "eagerVarsGuarded") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (EVar "gs")) (EVar "body")) (EApp (EApp (EVar "eagerVarsArms") (EVar "b")) (EVar "rest"))))
+(DTypeSig false "eagerVarsGuarded" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "eagerVarsGuarded" ((PVar "b") (PList) (PVar "body")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "body")))
 (DFunDef false "eagerVarsGuarded" ((PVar "b") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest")) (PVar "body")) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "c")) (EApp (EApp (EApp (EVar "eagerVarsGuarded") (EVar "b")) (EVar "rest")) (EVar "body"))))
-(DFunDef false "eagerVarsGuarded" ((PVar "b") (PCons (PCon "CGBind" (PVar "pat") (PVar "e")) (PVar "rest")) (PVar "body")) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "e")) (EApp (EApp (EApp (EVar "eagerVarsGuarded") (EBinOp "++" (EApp (EVar "patVars") (EVar "pat")) (EVar "b"))) (EVar "rest")) (EVar "body"))))
-(DTypeSig false "eagerVarsFields" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "eagerVarsGuarded" ((PVar "b") (PCons (PCon "CGBind" (PVar "pat") (PVar "e")) (PVar "rest")) (PVar "body")) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "e")) (EApp (EApp (EApp (EVar "eagerVarsGuarded") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (EVar "rest")) (EVar "body"))))
+(DTypeSig false "eagerVarsFields" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVarsFields" (PWild (PList)) (EListLit))
 (DFunDef false "eagerVarsFields" ((PVar "b") (PCons (PCon "CField" PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "rest"))))
-(DTypeSig false "eagerVarsStmts" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "eagerVarsStmts" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVarsStmts" (PWild (PList)) (EListLit))
 (DFunDef false "eagerVarsStmts" ((PVar "b") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "eagerVarsStmts") (EVar "b")) (EVar "rest"))))
-(DFunDef false "eagerVarsStmts" ((PVar "b") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "eagerVarsStmts") (EBinOp "++" (EApp (EVar "patVars") (EVar "pat")) (EVar "b"))) (EVar "rest"))))
+(DFunDef false "eagerVarsStmts" ((PVar "b") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "eagerVarsStmts") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (EVar "rest"))))
 (DFunDef false "eagerVarsStmts" ((PVar "b") (PCons (PCon "CSAssign" PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "eagerVarsStmts") (EVar "b")) (EVar "rest"))))
 (DFunDef false "eagerVarsStmts" ((PVar "b") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "eagerVarsStmts") (EVar "b")) (EVar "rest")))
-(DTypeSig false "eagerVarsBinds" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "eagerVarsBinds" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVarsBinds" (PWild (PList)) (EListLit))
 (DFunDef false "eagerVarsBinds" ((PVar "b") (PCons (PCon "CBind" PWild (PList (PCon "CClause" (PList) (PVar "rhs")))) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "rhs")) (EApp (EApp (EVar "eagerVarsBinds") (EVar "b")) (EVar "rest"))))
 (DFunDef false "eagerVarsBinds" ((PVar "b") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "eagerVarsBinds") (EVar "b")) (EVar "rest")))
@@ -628,7 +642,7 @@ rngBound _ = 0
 (DFunDef false "bindEagerCallees" ((PCon "CBind" PWild (PVar "clauses"))) (EApp (EVar "dedup") (EApp (EVar "clauseEagerVars") (EVar "clauses"))))
 (DTypeSig false "clauseEagerVars" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "clauseEagerVars" ((PList)) (EListLit))
-(DFunDef false "clauseEagerVars" ((PCons (PCon "CClause" (PVar "params") (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EApp (EVar "paramBound") (EVar "params"))) (EVar "body")) (EApp (EVar "clauseEagerVars") (EVar "rest"))))
+(DFunDef false "clauseEagerVars" ((PCons (PCon "CClause" (PVar "params") (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EApp (EApp (EVar "omFromNames") (EApp (EVar "paramBound") (EVar "params"))) (EVar "omEmpty"))) (EVar "body")) (EApp (EVar "clauseEagerVars") (EVar "rest"))))
 (DTypeSig false "paramBound" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "paramBound" ((PList)) (EListLit))
 (DFunDef false "paramBound" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "++" (EApp (EVar "patVars") (EVar "p")) (EApp (EVar "paramBound") (EVar "rest"))))
@@ -775,13 +789,13 @@ rngBound _ = 0
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "filterList" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
-(DTypeSig true "eagerVars" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig true "eagerVars" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVars" (PWild (PCon "CLam" PWild PWild)) (EListLit))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "b")) (EListLit) (EListLit (EVar "x"))))
+(DFunDef false "eagerVars" ((PVar "b") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "b")) (EListLit) (EListLit (EVar "x"))))
 (DFunDef false "eagerVars" (PWild (PCon "CLit" PWild)) (EListLit))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CApp" (PVar "f") (PVar "a"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "f")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a"))))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "b2") (EBinOp "++" (EApp (EVar "patVars") (EVar "pat")) (EVar "b"))) (DoLet false false (PVar "fe1") (EIf (EVar "recF") (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "e1")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "e1")))) (DoExpr (EBinOp "++" (EVar "fe1") (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "e2"))))))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "b2") (EBinOp "++" (EApp (EVar "bindNames") (EVar "binds")) (EVar "b"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "eagerVarsBinds") (EVar "b2")) (EVar "binds")) (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "body"))))))
+(DFunDef false "eagerVars" ((PVar "b") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (DoLet false false (PVar "fe1") (EIf (EVar "recF") (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "e1")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "e1")))) (DoExpr (EBinOp "++" (EVar "fe1") (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "e2"))))))
+(DFunDef false "eagerVars" ((PVar "b") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "bindNames") (EVar "binds"))) (EVar "b"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "eagerVarsBinds") (EVar "b2")) (EVar "binds")) (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "body"))))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "eagerVarsStmts") (EVar "b")) (EVar "stmts")))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "c")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "t"))) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "f"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild)) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "l")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "r"))))
@@ -803,28 +817,28 @@ rngBound _ = 0
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "i"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "hi"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "hi"))))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CDict" (PVar "name") PWild)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EVar "b")) (EListLit) (EListLit (EVar "name"))))
+(DFunDef false "eagerVars" ((PVar "b") (PCon "CDict" (PVar "name") PWild)) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "b")) (EListLit) (EListLit (EVar "name"))))
 (DFunDef false "eagerVars" (PWild PWild) (EListLit))
-(DTypeSig false "eagerVarsList" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "eagerVarsList" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVarsList" (PWild (PList)) (EListLit))
 (DFunDef false "eagerVarsList" ((PVar "b") (PCons (PVar "e") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "e")) (EApp (EApp (EVar "eagerVarsList") (EVar "b")) (EVar "rest"))))
-(DTypeSig false "eagerVarsArms" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "eagerVarsArms" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVarsArms" (PWild (PList)) (EListLit))
-(DFunDef false "eagerVarsArms" ((PVar "b") (PCons (PCon "CArm" (PVar "pat") (PVar "gs") (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "eagerVarsGuarded") (EBinOp "++" (EApp (EVar "patVars") (EVar "pat")) (EVar "b"))) (EVar "gs")) (EVar "body")) (EApp (EApp (EVar "eagerVarsArms") (EVar "b")) (EVar "rest"))))
-(DTypeSig false "eagerVarsGuarded" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "eagerVarsArms" ((PVar "b") (PCons (PCon "CArm" (PVar "pat") (PVar "gs") (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "eagerVarsGuarded") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (EVar "gs")) (EVar "body")) (EApp (EApp (EVar "eagerVarsArms") (EVar "b")) (EVar "rest"))))
+(DTypeSig false "eagerVarsGuarded" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "eagerVarsGuarded" ((PVar "b") (PList) (PVar "body")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "body")))
 (DFunDef false "eagerVarsGuarded" ((PVar "b") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest")) (PVar "body")) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "c")) (EApp (EApp (EApp (EVar "eagerVarsGuarded") (EVar "b")) (EVar "rest")) (EVar "body"))))
-(DFunDef false "eagerVarsGuarded" ((PVar "b") (PCons (PCon "CGBind" (PVar "pat") (PVar "e")) (PVar "rest")) (PVar "body")) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "e")) (EApp (EApp (EApp (EVar "eagerVarsGuarded") (EBinOp "++" (EApp (EVar "patVars") (EVar "pat")) (EVar "b"))) (EVar "rest")) (EVar "body"))))
-(DTypeSig false "eagerVarsFields" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "eagerVarsGuarded" ((PVar "b") (PCons (PCon "CGBind" (PVar "pat") (PVar "e")) (PVar "rest")) (PVar "body")) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "e")) (EApp (EApp (EApp (EVar "eagerVarsGuarded") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (EVar "rest")) (EVar "body"))))
+(DTypeSig false "eagerVarsFields" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVarsFields" (PWild (PList)) (EListLit))
 (DFunDef false "eagerVarsFields" ((PVar "b") (PCons (PCon "CField" PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "rest"))))
-(DTypeSig false "eagerVarsStmts" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "eagerVarsStmts" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVarsStmts" (PWild (PList)) (EListLit))
 (DFunDef false "eagerVarsStmts" ((PVar "b") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "eagerVarsStmts") (EVar "b")) (EVar "rest"))))
-(DFunDef false "eagerVarsStmts" ((PVar "b") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "eagerVarsStmts") (EBinOp "++" (EApp (EVar "patVars") (EVar "pat")) (EVar "b"))) (EVar "rest"))))
+(DFunDef false "eagerVarsStmts" ((PVar "b") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "eagerVarsStmts") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (EVar "rest"))))
 (DFunDef false "eagerVarsStmts" ((PVar "b") (PCons (PCon "CSAssign" PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "eagerVarsStmts") (EVar "b")) (EVar "rest"))))
 (DFunDef false "eagerVarsStmts" ((PVar "b") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "eagerVarsStmts") (EVar "b")) (EVar "rest")))
-(DTypeSig false "eagerVarsBinds" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig false "eagerVarsBinds" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVarsBinds" (PWild (PList)) (EListLit))
 (DFunDef false "eagerVarsBinds" ((PVar "b") (PCons (PCon "CBind" PWild (PList (PCon "CClause" (PList) (PVar "rhs")))) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "rhs")) (EApp (EApp (EVar "eagerVarsBinds") (EVar "b")) (EVar "rest"))))
 (DFunDef false "eagerVarsBinds" ((PVar "b") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "eagerVarsBinds") (EVar "b")) (EVar "rest")))
@@ -832,7 +846,7 @@ rngBound _ = 0
 (DFunDef false "bindEagerCallees" ((PCon "CBind" PWild (PVar "clauses"))) (EApp (EVar "dedup") (EApp (EVar "clauseEagerVars") (EVar "clauses"))))
 (DTypeSig false "clauseEagerVars" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "clauseEagerVars" ((PList)) (EListLit))
-(DFunDef false "clauseEagerVars" ((PCons (PCon "CClause" (PVar "params") (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EApp (EVar "paramBound") (EVar "params"))) (EVar "body")) (EApp (EVar "clauseEagerVars") (EVar "rest"))))
+(DFunDef false "clauseEagerVars" ((PCons (PCon "CClause" (PVar "params") (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EApp (EApp (EVar "omFromNames") (EApp (EVar "paramBound") (EVar "params"))) (EVar "omEmpty"))) (EVar "body")) (EApp (EVar "clauseEagerVars") (EVar "rest"))))
 (DTypeSig false "paramBound" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "paramBound" ((PList)) (EListLit))
 (DFunDef false "paramBound" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "++" (EApp (EVar "patVars") (EVar "p")) (EApp (EVar "paramBound") (EVar "rest"))))
