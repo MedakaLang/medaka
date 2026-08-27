@@ -10,6 +10,15 @@ the runtime/platform that turns Medaka's effect-as-capability-manifest into
 automated trust for untrusted edge/plugin code. Read CAPABILITY-EFFECTS.md first —
 it defines the effect-tracking model this depends on.
 
+**Retargeted 2026-08-26 (§7d, §7e).** The original framing aimed at edge/plugin
+providers (Fastly / Cloudflare / Fermyon). The better-fitting first target is now
+the **agent tool boundary** — an LLM agent runtime invoking third-party tools —
+because it is the one host where §5's structured plugin interface is *already
+imposed by the protocol* rather than something the platform must invent and sell.
+The architecture below is unchanged; only the first target and the demo are. The
+edge-provider examples (§6, §7, §7b) remain valid and are still the clearest
+statements of Levels 1 and 2.
+
 This is the "Rails, not Ruby" artifact: the flagship that gives the wedge a reason
 to exist. It is a large, separate build and explicitly *not* near-term work; this
 doc exists so the architecture is on record while it's fresh.
@@ -27,11 +36,15 @@ doc exists so the architecture is on record while it's fresh.
 │  — compiles source, verifies effect bounds, provisions       │
 │    least-privilege deployments, owns plugin composition      │
 ├─────────────────────────────────────────────────────────────┤
-│  Edge provider: Fastly / Cloudflare / Fermyon / WASI host    │
+│  Host: agent runtime (§7d) | edge provider | WASI host       │
 │  — accepts Wasm, grants COARSE capabilities (net on/off, KV) │
 │  — memory sandbox + resource metering (CPU/mem/wall)         │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+The bottom layer is any host that runs Wasm and grants coarse capabilities. §6–§7b
+work it as an edge provider; §7d works it as an agent tool runtime. Nothing above
+that layer changes between the two.
 
 The edge provider already gives **memory sandboxing** and **coarse, per-instance
 capability control via host imports** (don't link `fetch` → the module can't make
@@ -397,6 +410,217 @@ build); (2) parameterized pinned domain (Phase 146b) — "allowed IdP passes,
 `evil.com` rejected"; (3) the segregation example (§7) — "reads cookies AND fetches,
 provably can't send cookies to the network."
 
+## 7d. Worked example D — the agent tool boundary (Level 2, interface supplied by the protocol)
+
+**Why this example was added (2026-08-26).** §9's first open question used to read
+"which edge provider to target first." That framing predates the target that now
+fits this architecture best. An **agent host** — an LLM agent runtime that invokes
+third-party *tools* on a user's behalf — has the same shape as the edge-plugin host
+of §6–§7b, with one decisive advantage: **the structured interface of §5 does not
+have to be invented or sold.** A tool is already a named function with a typed
+input, a typed output, invoked by a trusted harness (the runtime) that the tool
+author does not control. Everywhere else in this document the platform must impose
+the SDK model on an ecosystem that would rather ship a merged handler; here the
+protocol already imposes it, which makes **Level 2 available by default rather than
+by persuasion**.
+
+The status quo it displaces: a tool server is an ordinary process holding the
+ambient authority of the user who installed it, and the security model is that
+somebody read the README. Per-call approval prompts and path allowlists are the
+current mitigation — all dynamic, all per-call, none compositional, and none able
+to answer "what can this tool reach, *including through its dependencies*, before
+I run it."
+
+**Platform interface (one bound per tool; the runtime owns dispatch):**
+```
+-- Each tool is a separate required function with its OWN bound. The runtime --
+-- not the tool author -- owns dispatch, argument marshaling, and the transcript.
+readDoc   : DocRef  -> <FileRead "~/notes/**"> Text
+searchWeb : Query   -> <Net "api.searchvendor.com"> Results
+writeNote : NewNote -> <FileWrite "~/notes/**"> Unit
+```
+
+**What the types prove, automatically:**
+- `readDoc` has `FileRead` pinned to one subtree and **no `Net`** — it cannot
+  exfiltrate what it reads, whatever the model asks of it. This is the property
+  prompt-injection defenses currently chase at runtime and cannot guarantee.
+- `searchWeb` has `Net` pinned to one vendor and **no `FileRead`** — a compromised
+  search tool cannot reach the notes it sits beside.
+- `writeNote` can write only under the notes subtree — not `~/.bashrc`, not
+  `~/.ssh/authorized_keys`.
+- The deployment's *coarse* grant is the union `{FileRead, Net, FileWrite}`, yet no
+  single tool holds the **pair** that makes exfiltration possible. This is §7b(4)'s
+  "safely partition one coarse grant among mutually-untrusting tenants," applied to
+  tools instead of edge plugins.
+
+**Malicious submissions and the exact trip-point:**
+| Attempt | Trips on | Result |
+|---|---|---|
+| `readDoc` POSTs note contents to a paste site | needs `Net`; `{FileRead, Net} ⊄ {FileRead "~/notes/**"}` | **reject** |
+| `readDoc` reads `~/.aws/credentials` | prefix param: `FileRead "~/.aws/*" ⊄ FileRead "~/notes/**"` | **reject** |
+| `searchWeb` reads local files to "enrich" the query | needs `FileRead`; `⊄ {Net "api.searchvendor.com"}` | **reject** |
+| `searchWeb` calls an attacker-named host after an injected instruction | `Net "evil.com" ⊄ Net "api.searchvendor.com"` | **reject** |
+| `writeNote` appends to `~/.bashrc` for persistence | `FileWrite "~/.bashrc" ⊄ FileWrite "~/notes/**"` | **reject** |
+| any tool shells out to do the above indirectly | needs `Exec`; `⊄` all three bounds | **reject** |
+
+The fourth row is the one that carries the argument: **the bound is a property of
+the compiled artifact, not of the conversation.** No sequence of model tokens can
+widen it. A runtime approval prompt cannot make that promise, because at the moment
+it fires the authority is already ambient and the only question left is whether a
+human clicks yes.
+
+**What this does NOT cover — state it before a skeptic does.** The confused deputy
+survives: `readDoc` returns note text into a transcript, and `searchWeb` — a
+*different* tool, legitimately holding `Net` — sends it onward. Each tool did
+exactly what it was licensed to do; the leak is in the composition. That is a Level
+2 *harness* problem, identical in shape to §7's boundary types: the runtime owns
+what crosses between tools, so the runtime must decide it deliberately. Effect rows
+bound authority, not information flow (§8), and this is precisely where the agent
+host still has design work that types will not do for it. Claiming otherwise is the
+fastest way to lose a technical audience.
+
+## 7e. The dogfood demo (cheapest credible artifact, and it answers §9)
+
+§7c's demo is complete and runnable, but its plugin is a fictional edge transform.
+The agent-tool framing above has a strictly cheaper and more credible artifact
+available, because **the tree already contains an agent tool server written in
+Medaka**: `compiler/tools/mcp.mdk` (`medaka mcp`, 8 tools over stdio).
+
+The demo is therefore not a mock:
+1. `medaka manifest compiler/tools/mcp.mdk --fn <tool>` — emit the compiler-derived
+   capability manifest of a **real, in-use** tool server, per tool.
+2. Show the host refusing a capability the manifest does not claim.
+3. Show the manifest-widening gate: adding a dependency that quietly pulls in
+   `<Net _>` turns the committed manifest golden red, so widening is a reviewed
+   diff rather than a silent fact. (The emitter and gate harness exist —
+   `test/manifest_emit.sh`, WS-1c; the golden-diff gate does not yet.)
+
+This also settles §9's last open question ("whether the harness/SDK is itself
+written in Medaka") by construction, and it is the first artifact in this document
+whose subject is production code rather than a worked hypothetical.
+
+**Prerequisites this demo actually needs** (the same three as the platform's first
+real bound):
+| Piece | Status |
+|---|---|
+| Effect soundness/propagation + fine-grained labels | ✅ done |
+| `medaka manifest` TOML emission | ✅ done (WS-1c, `test/manifest_emit.sh`) |
+| Parameter-level policy compare (`--allow 'Net=host/*'`) | ❌ WS-1b — `check-policy` is still BARE-LABEL |
+| A `Net` host import in the wasm inventory (somewhere to cash the row in) | ❌ not present — the import surface is IO/file/env/args |
+| Manifest-widening golden gate | ❌ not built |
+
+**⚠️ Found while probing this demo (2026-08-26): the verification step fails open.**
+§3's pipeline lists *"required plugin interface present?"* as the first verify
+bullet. It is not implemented. `runCheckPolicy` defaults a missing entry point to
+the empty effect row (`compiler/tools/check_policy.mdk`, the `lookupAssoc fnName
+effTable` arm), which is indistinguishable from a verified-pure function, so the
+subsumption check passes and the plugin is **accepted**:
+
+```
+$ ./medaka check-policy demo/plugin_malicious.mdk --allow Cache,Log --fn transform
+rejected. transform requires <Cache, Fetch>. Not permitted by policy {Cache, Log}
+   reached via: transform → tagVisit → recordMetric → sendBeacon → fetch      # rc=1
+
+$ ./medaka check-policy demo/plugin_malicious.mdk --allow Cache,Log --fn zzzNoSuchFn
+accepted. zzzNoSuchFn requires only pure
+   (no 'zzzNoSuchFn' binding in output)                                       # rc=0
+```
+
+The absence *is* noticed — but by `runPlugin`'s `lookupValue`, which runs **after**
+the accept decision and only decorates the run output. The verdict never sees it.
+`medaka manifest` has the same default: an unknown `--fn` prints an empty
+`[package.capabilities]` block at rc 0, i.e. "this code holds no authority."
+
+Why it matters more here than anywhere else in this document: the checker is the
+single point where the whole architecture is cashed, and the direction of the bug
+is toward permission. A submission that omits, renames, or subtly misspells the
+required entry point passes verification; a platform pipeline that renames its
+entry point silently starts approving everything. Every guarantee in §4, §6, §7,
+§7b, and §7d is downstream of this one check, so it must reject on any "I cannot
+find what you asked me to check." Tracked as **#2047 (check-policy fail-open on a missing entry point)**, S0, pinned
+by `test/must_fail_fixtures/2047-check-policy-missing-entry-accepts/`. It is item 1
+of §10's revised first increment.
+
+Until WS-1b lands, the demo can only say "this tool uses the network," not "this
+tool may reach exactly this host" — which is the differentiated half. Sequence
+accordingly.
+
+## 7f. Worked example E — the permissions classifier as harness (Level 1, and the `Exec` wall)
+
+A **permissions classifier** is the component in an agent harness that decides whether
+a proposed command may run. It is the §7d "runtime approval prompt" seen from the
+user's side rather than the security architect's, and it fails in both directions at
+once: it rejects commands that merely *look* complex, and it under-scrutinises opaque
+ones.
+
+⚠️ **Read the `Exec` objection at the bottom of this section before quoting any of
+this.** It is the reason this example is Level 1 and not Level 2, and it is fatal to
+the obvious version of the idea.
+
+**The observed failure, from this repo's own operational notes.** AGENTS.md's
+`[B-ISOLATION-COMPOUND]` (#1148, open) records that a bare, foreground, correct-cwd
+`make medaka` has been denied — while `sh test/build_native_medaka.sh`, *the literal
+body of that same make target*, succeeded first try in the same session. Both failure
+modes in one incident: the legible command refused, the strictly more opaque
+equivalent accepted. Nothing about the authority exercised changed between them; only
+inspectability did, and it moved the wrong way.
+
+Worse, the two modes are coupled. The standard workaround for over-rejection is to
+move the work into a script file and invoke that — which is precisely the
+under-scrutinised shape. The incentive gradient points from the legible form toward
+the opaque one.
+
+**What a manifest changes.** Syntactic complexity is a *proxy* for risk, and a poor
+one: it tracks how hard a string is to read, not what the string can reach. A
+compiler-derived row replaces the proxy with the quantity itself, and gives the
+classifier what it actually wants — a small, closed, ordered label set with
+parameters, i.e. a decision surface rather than a judgement call:
+
+```
+verdict surface:  <FileRead "repo/**", Exec "clang">      -- accept/reject on THIS
+not:              "4-stage pipeline, heredoc, two redirects"
+```
+
+It also inverts the polarity. A 200-line Medaka program whose row is empty is *more*
+trustworthy than a one-line `curl … | sh`, and the manifest says so — where a
+complexity heuristic says the opposite.
+
+| Classifier decision | complexity heuristic | manifest |
+|---|---|---|
+| `make medaka` vs. `sh test/build_native_medaka.sh` | opposite verdicts for identical work (#1148) | identical rows → identical verdict |
+| 200-line pure transform | rejected as complex | `<>` → accept |
+| `curl x \| sh` | short, accepted | `<Net _, Exec _>` → reject |
+| a script moved into a file to dodge a denial | becomes *less* suspicious | row is unchanged; the dodge buys nothing |
+
+### ⚠️ The `Exec` wall — why this is Level 1 only
+
+**`Exec` eats the lattice.** The commands a classifier actually adjudicates are
+`make`, `clang`, `git`, `gh`, `python3` — programs Medaka does not compile. An honest
+row for any wrapper that spawns one of them is `<Exec _>`: the top element, carrying
+exactly as much information as no manifest at all. Soundness *forces* this — α must
+be an over-approximation of the child's authority (EFFECTS-SEMANTICS.md §0), and the
+child is an arbitrary binary, so the over-approximation is ⊤ or the row is lying.
+
+The partial answer is the §7a proxy pattern: a parameterized `<Exec "clang">` plus a
+host-injected exec proxy that permits only that binary. That is a real gain — static,
+reviewable, compositional. **But note what it costs: the host is doing the containing,
+and the manifest has become the declaration of what the proxy should permit.** The
+type system supplies the *statement*, not the enforcement. Say this plainly; a
+technical audience arrives at `Exec` within a minute and a pitch that skipped it loses
+the room.
+
+### The honest near-term shape
+
+Not "write your shell in Medaka" — that applies §2's compile-from-source constraint to
+a string a user typed one second ago, a far larger ask than the §7d tool boundary
+where the artifact is already a compiled submission.
+
+What is true today, with no new architecture: **agent tooling that is already written
+in Medaka** — a hook, a lint rule, a codegen step, an MCP tool (`compiler/tools/mcp.mdk`)
+— can hand its classifier a derived manifest instead of a source string. That is §7d
+with the classifier in the harness role, and it is bounded by the same prerequisites
+listed in §10.
+
 ## 8. Honest boundaries / non-goals
 
 - **Capability effects cover *authority*, not *resources*.** A pure function can
@@ -406,7 +630,18 @@ provably can't send cookies to the network."
   not a complete security story.
 - **Covert channels remain.** Even segregated code can leak via timing (e.g. the
   pattern of IdP calls). The guarantee is "no *direct authority* to exfiltrate,"
-  not "zero information leakage."
+  not "zero information leakage." Worked precedent, not a hypothetical: in the
+  July 2026 OpenAI/Hugging Face incident, agents holding only their *intended*
+  package-repository write access built a covert channel out of it — first as file
+  contents, later by encoding messages in directory names — with no vulnerability
+  involved at that step. Two modules each legitimately granted
+  `<FileWrite "shared/*">` can do exactly the same thing here. Authority bounds are
+  not an information-flow lattice; say so first, because this is the failure mode
+  the public example is famous for.
+- **`Exec` is a ceiling, not a capability.** Any row that can spawn an arbitrary
+  binary must over-approximate to `<Exec _>` — top — or it is unsound (§7f). A
+  parameterized `<Exec "prog">` is only as good as the host proxy enforcing it, so
+  authority over child processes is the host's to contain, never the type system's.
 - **No FFI/`unsafe` escape hatch in submitted code.** Any escape punches through
   the guarantee. Submissions must forbid it (or its presence counts as
   max-capability). This constrains what language features are allowed in plugins.
@@ -414,13 +649,33 @@ provably can't send cookies to the network."
   security hole — raising the correctness bar on Phase 146 and reinforcing the
   differential-testing discipline. The coarse sandbox backstop limits the blast
   radius of a soundness bug but is not an excuse for one.
+  ⚠️ **This collides with an existing repo convention.** `test/must_fail_fixtures/`
+  pins live soundness bugs on purpose, and RED is its healthy state — correct
+  discipline for a research compiler, and quotable against us the day this is
+  positioned publicly as a security property. Know the drain schedule of anything
+  effect-related in that corpus *before* the positioning, not after.
+- **Fail-open is the failure mode to hunt, and it is not hypothetical here.** A
+  verification step that cannot find what it was asked to check must REJECT. See
+  the `check-policy` missing-entry-point hole recorded in §7e (**#2047**) — the
+  checker is the single point where this architecture's whole guarantee is cashed,
+  so its default on any "I don't know" must be denial.
 - **This is a large, separate, long-horizon build** — downstream of a working
   WasmGC backend and Phase 146. Not near-term. Documented now only to preserve the
   architecture.
 
 ## 9. Open questions
 
-- Which edge provider to target first (Fastly / Cloudflare / Fermyon / raw WASI)?
+- ~~Which edge provider to target first (Fastly / Cloudflare / Fermyon / raw WASI)?~~
+  **Answered 2026-08-26: neither, first.** The first target is the **agent tool
+  boundary** (§7d) — the protocol supplies §5's structured interface for free, the
+  "platform compiles from source" constraint of §2 is a natural ask of a tool
+  registry and a hard sell to an edge provider, and the per-install-policy question
+  below is a live, badly-solved problem there today. Edge providers remain a valid
+  second target with the examples already written (§6, §7, §7b). ⚠️ **Adoption, not
+  architecture, is the binding constraint**: a capability manifest is worth most to
+  whoever runs a *marketplace* of code they did not write, which means the customer
+  is a platform rather than a developer, and one adopter is the entire outcome.
+  That is a high-variance bet and should be taken deliberately.
 - Integration with the **Wasm component model / WASI Preview 2** capability story —
   reuse vs. layer on top; don't reinvent what the component model already expresses.
 - **Per-install policy:** a customer installing a plugin may want to narrow its
@@ -434,8 +689,14 @@ provably can't send cookies to the network."
 - **Boundary-type design discipline:** guidance/tooling so SDK authors design
   declassification types (`Token`, `Decision`) narrowly.
 - Billing/quotas/observability for a multi-tenant plugin host.
-- Whether the harness/SDK is itself written in Medaka (dogfood) and how its trusted
-  status is established.
+- ~~Whether the harness/SDK is itself written in Medaka (dogfood)~~ — **settled by
+  §7e**: `compiler/tools/mcp.mdk` is an agent tool server written in Medaka and
+  already in the tree, so the dogfood demo's subject is production code. How its
+  *trusted* status is established is still open.
+- **Does the manifest survive the multi-module path?** `medaka manifest` reads a
+  single file. A real tool server is a project; whether a row inferred through the
+  single-file path agrees with the whole-project one is unverified, and it is a
+  soundness question, not an ergonomics one.
 
 ## 10. Sequencing
 
@@ -446,3 +707,47 @@ prerequisites are now DONE (capability-effects IMPLEMENTED; WasmGC backend shipp
 not on either prerequisite. The cheap early validation is still the *design* (worked
 plugin interfaces like §6–§7), pressure-tested on paper against real plugin categories
 before any runtime exists.
+
+### When this starts, and what has to be true first (decided 2026-08-26)
+
+**This work is sequenced AFTER the typechecker and emitter rearchitectures, and it
+is not pitched to anyone outside the project until the security posture is buttoned
+up.** That is a deliberate ordering, not a backlog accident, and the reason is §8's
+"soundness is now a security property": the moment this document's claim is made to
+an outside party, every effect-inference soundness bug becomes a security bug, and
+every open S0 becomes something a skeptic can quote. Getting the rearchitectures
+done first is what makes the claim survivable — so **the rearchitectures are the
+prerequisite, and this platform waits on them.**
+
+**The readiness test is derived, not asserted.** "Buttoned up" must mean a number
+somebody can re-derive on demand, or it will mean whatever the person saying it
+wants it to mean. The concrete gate: **no effect- or capability-related pin left in
+`test/must_fail_fixtures/`** — that corpus deliberately holds live soundness bugs
+(§8), so its effect-related subset draining to zero is exactly the statement
+"soundness is no longer knowingly broken where this claim depends on it." Derive
+the current subset; never trust a count written here:
+
+```sh
+for d in test/must_fail_fixtures/*/; do
+  grep -qiE 'laund|effect var|effvar|effect row|effect arrow|capabilit' "$d/claim.txt" &&
+    printf '%s\n' "$(basename "$d")"
+done
+```
+
+⚠️ That is a keyword sweep, not an adjudicated classification — it over-matches
+(a doctest-gate pin whose prose happens to say "effect") and can under-match a
+laundering bug described in other words. Read the hits; the load-bearing subset is
+the ones where **an effect escapes the row**, because that is exactly a manifest
+that under-reports authority. Those are the pins that must be zero before the
+claim in this document is made to anyone outside the project.
+
+**Then, and only then, the first increment.** Three items, none of which is a
+platform, which together are the smallest truthful version of the claim:
+1. **Fail-open fix in `check-policy`** — a missing entry point must reject
+   (§7e, **#2047**). The one exception to the sequencing above: this is a live S0
+   in shipped tooling, so it is worth fixing on its own schedule rather than
+   waiting for the platform. Every other guarantee here is downstream of it.
+2. **WS-1b parameter-level policy compare** (`--allow 'Net=host/*'`) — without it
+   the demo can only say "uses the network," which is the undifferentiated half.
+3. **A `Net` host import** in the wasm inventory, so a parameterized row has an
+   enforcement point to be cashed in at.
