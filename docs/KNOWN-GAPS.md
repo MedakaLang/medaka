@@ -15,7 +15,59 @@ it. The second entry below is different in kind: it is orchestrator-authored
 from a fix round's own first-hand measurement (sprint
 `dispatch-must-not-guess`, [#1986](https://github.com/MedakaLang/medaka/issues/1986)),
 not corpus-derived, and documents a deliberate, reviewed trade-off rather
-than seeding a future generator.
+than seeding a future generator. The third entry is the same kind of
+orchestrator-authored record, from sprint `depth-linearity`
+([#2069](https://github.com/MedakaLang/medaka/issues/2069)).
+
+## Nesting deeper than 20,000 is rejected, not crashed on
+
+**Rejected as:** `E-NEST-TOO-DEEP` (see `nestTooDeepMsg`,
+`compiler/frontend/parser.mdk`).
+
+**What triggers it.** An expression, pattern, or type whose recursive-descent
+parse nests more than 20,000 levels deep — parenthesized/bracketed
+expressions, `if`/`let`/`match`/`do`, nested application, and (as of this
+sprint) pattern nesting (`match` arms) and type nesting (`f : (((...))) ->
+Int`) all share one module-level depth counter
+(`nestDepthRef`/`maxNestDepth`) incremented and checked at each grammar's own
+recursive re-entry point:
+
+```
+f : ((((((((( ... 20,001 levels deep ... )))))))))  -> Int
+```
+
+```
+error: expression nesting too deep (limit 20000); split this expression into
+named intermediate bindings
+```
+
+**Why.** The parser is a plain recursive-descent implementation; before this
+cap existed, adversarially deep input in any of these three grammars
+recursed past the native stack limit and crashed with an **unlocated**
+`E-STACK-OVERFLOW` (`exit 134`, no diagnostic, no source location) — a
+release-blocker (issue #77) because "never crash on any input" was
+unmet. The cap trades an unreachable pathology (a program nobody could write
+by hand, only generate) for a bounded, located, recoverable diagnostic. The
+number 20,000 was chosen to sit comfortably below where the native stack
+actually overflows on the reference box, with headroom; it is not derived
+from any language-semantic limit and could move if the stack budget changes.
+
+**Workaround.** Split the deeply nested expression into named intermediate
+bindings — the diagnostic's own suggested fix; there is no legitimate
+program that needs 20,000 levels of raw nesting, so this is expected to
+never fire outside adversarial/generated input.
+
+**What this does NOT cover.** A single related issue, #164, found and fixed
+one super-linear (not crashing, but slow) parse-time cost inside the same
+nesting family (`leftSectionOrExpr`'s full `ELoc`-stack unwind, O(depth²)
+before the fix) but left a **second, independent** super-linear residual
+(dominant at large N, ~5-6x doubling under wall-clock, memory/cache-bound
+rather than instruction-bound) that is not yet isolated to a specific
+combinator — see #164's own tracking comment for the measured ladder and
+named candidate mechanism. The practical consequence: a *legitimate* program
+at or near the 20,000 cap parses correctly but slowly (~22s at N=20000 on
+the reference box) — the cap makes deep input **fail fast past the
+boundary**, it does not yet make deep input **fast within** the boundary.
 
 ## A local forwarded to a constrained method at two rigid types
 
