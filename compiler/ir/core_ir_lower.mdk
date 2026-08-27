@@ -2082,6 +2082,52 @@ declSigTypeEntries (DExtern _ name ty) =
 declSigTypeEntries (DAttrib _ inner) = declSigTypeEntries inner
 declSigTypeEntries _ = []
 
+-- ── user-declared FFI externs → the lowering's own table (#2074) ─────────────
+-- The emitter's `declSigIndex` (above) cannot answer "is this name a USER
+-- extern?": it is built from `runtimeDecls ++ allDecls` and holds ordinary
+-- annotated functions and the 138 `stdlib/runtime.mdk` builtins in the same
+-- flat keyspace.  So the FFI lowering gets its OWN index, minted here from the
+-- same two decl lists the emit drivers already hold, and carried to the emitter
+-- as `EmitInput.ffiExternIndex`.
+--
+-- 🚨 THE BUILTIN-NAME EXEMPTION, emitter side.  A local `extern` whose name is a
+-- `stdlib/runtime.mdk` catalog name is emitted through the BUILTIN's codegen
+-- (`isAnyExtern` in `emitApp`'s ladder dispatches by exact NAME), regardless of
+-- what the local row claims — that is the same fact `ffiIsBuiltinExternName`
+-- (`compiler/types/typecheck.mdk`) exempts from the crossable-set guard.  Here it
+-- is honoured by SUBTRACTING the runtime catalog's own extern names, so such a
+-- name never enters the FFI index at all and no foreign call can be minted for
+-- it.  (`emitApp` checks `isAnyExtern` BEFORE the FFI arm as well, so the
+-- exemption holds on both sides of the seam; this filter is what keeps it true
+-- for a runtime extern name that no `externCatalog` family predicate claims.)
+export
+ffiExternTypeNames : List Decl -> List Decl -> List (String, (List String, String))
+ffiExternTypeNames runtimeDecls userDecls =
+  ffiExternRows (externDeclNamesOf runtimeDecls) userDecls
+
+-- the `DExtern` names of a decl list, in order.
+externDeclNamesOf : List Decl -> List String
+externDeclNamesOf [] = []
+externDeclNamesOf ((DExtern _ n _)::rest) = n :: externDeclNamesOf rest
+externDeclNamesOf ((DAttrib _ inner)::rest) = externDeclNamesOf [inner]
+  ++ externDeclNamesOf rest
+externDeclNamesOf (_::rest) = externDeclNamesOf rest
+
+-- Same (param-head-names, return-head-name) shape as `declSigTypeEntries`, so
+-- the emitter reads one row type for both tables.  `tyHeadName` collapses
+-- `Array Int` to `Array`, which is unambiguous HERE and only here: slice 1's
+-- `ffiCrossableTy` guard rejects every non-crossable type — `Array` of anything
+-- but `Int` included — before a user extern's signature can reach the emitter,
+-- so `Array` in this table always means `Array Int`.
+ffiExternRows : List String -> List Decl -> List (String, (List String, String))
+ffiExternRows _ [] = []
+ffiExternRows builtins ((DExtern _ n ty)::rest)
+  | contains n builtins = ffiExternRows builtins rest
+  | otherwise = (n, (map tyHeadName (methodArgTys ty), tyHeadName (methodRetTy ty))) :: ffiExternRows builtins rest
+ffiExternRows builtins ((DAttrib _ inner)::rest) =
+  ffiExternRows builtins (inner::rest)
+ffiExternRows builtins (_::rest) = ffiExternRows builtins rest
+
 -- the RESULT type of a (possibly-constrained, possibly-effectful) function type
 -- (the `r` of `a -> b -> … -> r`); a non-function type is its own result.
 methodRetTy : Ty -> Ty

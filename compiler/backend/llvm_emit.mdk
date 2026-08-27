@@ -807,24 +807,30 @@ data LTy =
 -- All declaration-derived semantic facts required by LLVM emission.  Callers
 -- construct this immutable value for each program; LLVM never reads installed
 -- semantic state from a previous emission.
-data EmitInputData =
-  | EmitInputData {
-      returnsSelf : List ((String, String), Bool),
-      selfFnParams : List ((String, String), List Int),
-      methodIfaces : List (String, (String, Int)),
-      methodIfaceIndex : OrdMap (String, Int),
-      methodIfaceIdIndex : OrdMap Int,
-      methodConstraintIfaces : List (String, List String),
-      ctorFieldIndex : OrdMap (List String),
-      declSigIndex : OrdMap (List String, String),
-      recordFieldOrders : List (String, List String),
-      mainIsUnit : Bool,
-      mainIsFloat : Bool,
-      emitHalf : Int,
-      preludeBinds : List String,
-      preludeImpls : List (String, String),
-      srcName : String,
-    }
+data EmitInputData = EmitInputData {
+    returnsSelf : List ((String, String), Bool),
+    selfFnParams : List ((String, String), List Int),
+    methodIfaces : List (String, (String, Int)),
+    methodIfaceIndex : OrdMap (String, Int),
+    methodIfaceIdIndex : OrdMap Int,
+    methodConstraintIfaces : List (String, List String),
+    ctorFieldIndex : OrdMap (List String),
+    declSigIndex : OrdMap (List String, String),
+    -- #2074: the USER-declared externs only (the runtime catalog's own names are
+    -- subtracted at the mint, `ir.core_ir_lower.ffiExternTypeNames`), keyed name →
+    -- (declared param type-head names, declared return type-head name).  This is
+    -- the ONLY table that answers "is this name a foreign call?"; `declSigIndex`
+    -- cannot, because it mixes the 138 builtins and every annotated function into
+    -- one flat keyspace.
+    ffiExternIndex : OrdMap (List String, String),
+    recordFieldOrders : List (String, List String),
+    mainIsUnit : Bool,
+    mainIsFloat : Bool,
+    emitHalf : Int,
+    preludeBinds : List String,
+    preludeImpls : List (String, String),
+    srcName : String,
+  }
 
 -- The constructor is intentionally private: callers supply raw declaration facts
 -- once, and this boundary builds the first-match indexes exactly once per emission.
@@ -834,8 +840,8 @@ export type EmitInput = EmitInputData
 -- `List (String, List String)` too, so appending it where its neighbour is a String
 -- means a mis-ordered call site is a TYPE error rather than a silently swapped table.
 export
-makeEmitInput : List ((String, String), Bool) -> List ((String, String), List Int) -> List (String, (String, String, Int)) -> List (String, List String) -> List (String, List String) -> List (String, (List String, String)) -> Bool -> Bool -> Int -> List String -> List (String, String) -> String -> List (String, List String) -> EmitInput
-makeEmitInput returnsSelf selfFnParams methodIfaces methodConstraintIfaces ctorFieldTypes declSigTypes mainIsUnit mainIsFloat emitHalf preludeBinds preludeImpls srcName recordFieldOrders = EmitInputData { returnsSelf = returnsSelf, selfFnParams = selfFnParams, methodIfaces = map bareIfaceArityRow methodIfaces, methodIfaceIndex = omFromPairs (reverseL (map bareIfaceArityRow methodIfaces)) omEmpty, methodIfaceIdIndex = omFromPairs (reverseL (map ifaceIdArityRow methodIfaces)) omEmpty, methodConstraintIfaces = methodConstraintIfaces, ctorFieldIndex = omFromPairs (reverseL ctorFieldTypes) omEmpty, declSigIndex = omFromPairs (reverseL declSigTypes) omEmpty, mainIsUnit = mainIsUnit, mainIsFloat = mainIsFloat, emitHalf = emitHalf, preludeBinds = preludeBinds, preludeImpls = preludeImpls, srcName = srcName, recordFieldOrders = recordFieldOrders }
+makeEmitInput : List ((String, String), Bool) -> List ((String, String), List Int) -> List (String, (String, String, Int)) -> List (String, List String) -> List (String, List String) -> List (String, (List String, String)) -> Bool -> Bool -> Int -> List String -> List (String, String) -> String -> List (String, List String) -> List (String, (List String, String)) -> EmitInput
+makeEmitInput returnsSelf selfFnParams methodIfaces methodConstraintIfaces ctorFieldTypes declSigTypes mainIsUnit mainIsFloat emitHalf preludeBinds preludeImpls srcName recordFieldOrders ffiExternTypes = EmitInputData { returnsSelf = returnsSelf, selfFnParams = selfFnParams, methodIfaces = map bareIfaceArityRow methodIfaces, methodIfaceIndex = omFromPairs (reverseL (map bareIfaceArityRow methodIfaces)) omEmpty, methodIfaceIdIndex = omFromPairs (reverseL (map ifaceIdArityRow methodIfaces)) omEmpty, methodConstraintIfaces = methodConstraintIfaces, ctorFieldIndex = omFromPairs (reverseL ctorFieldTypes) omEmpty, declSigIndex = omFromPairs (reverseL declSigTypes) omEmpty, ffiExternIndex = omFromPairs (reverseL ffiExternTypes) omEmpty, mainIsUnit = mainIsUnit, mainIsFloat = mainIsFloat, emitHalf = emitHalf, preludeBinds = preludeBinds, preludeImpls = preludeImpls, srcName = srcName, recordFieldOrders = recordFieldOrders }
 
 -- #1450/#1668 -- the two PROJECTIONS of a `methodIfaceTable` row.
 --   * `bareIfaceArityRow` reproduces the row this table has always carried,
@@ -1928,6 +1934,8 @@ emitVar e env x =
     emitEtaClosure e (canonFnName e x)
   else if isAnyExtern x then
     emitExternEtaClosure e x
+  else if isFfiExtern e x then
+    emitFfiEtaClosure e x
   else if isImplMethod e x then
     emitMethodEtaClosure e x
   else
@@ -3141,6 +3149,229 @@ emitExternApplied e env fname args =
     Some fn => fn e env fname args
     None => gapE e ("unsupported extern " ++ fname)
 
+-- ── #2074: user-declared FFI externs — the C-ABI lowering ────────────────────
+--
+-- A USER `extern` is a different kind of thing from the 138 `stdlib/runtime.mdk`
+-- builtins above.  A builtin is an INTERNAL name whose codegen this file owns
+-- (`externCatalog`), often an intrinsic with no C symbol at all.  A user extern
+-- names a FOREIGN symbol this compiler has never seen: the declared name is the
+-- C symbol VERBATIM (`call @<name>`, NOT `@mdk_<name>`), and the only contract
+-- available is its declared Medaka signature, marshalled per `compiler/FFI-ABI.md`
+-- §2.  So it gets its own arm in `emitApp`'s CVar-head ladder — placed AFTER
+-- `isAnyExtern` and before `isCtor` — rather than a fourth row in the catalog.
+--
+-- 🚨 ORDER IS THE BUILTIN-NAME EXEMPTION.  `isAnyExtern` is consulted FIRST in
+-- both `emitApp` and `emitVar`, so a local `extern bitAnd : …` redeclaring a
+-- catalog name still runs the BUILTIN's codegen — the fact
+-- `ffiIsBuiltinExternName` (compiler/types/typecheck.mdk) exempts from slice 1's
+-- crossable-set guard.  The index itself is belt AND braces: the mint
+-- (`ir.core_ir_lower.ffiExternTypeNames`) subtracts `stdlib/runtime.mdk`'s own
+-- extern names, so a runtime extern name that NO `externCatalog` family predicate
+-- happens to claim still cannot become a foreign call here.
+--
+-- 🚨 THE CROSSABLE SET IS NOT REDEFINED HERE.  `ffiCrossableHead` below is the
+-- SET OF TYPE-HEAD NAMES that slice 1's `ffiCrossableTy`
+-- (compiler/types/typecheck.mdk) accepts — its `ffiCrossableConName` six plus its
+-- `Array Int` arm's head — restated in the only vocabulary this file has
+-- (`tyHeadName` strings from `declSigTypeNames`, not `Ty`).  It is a
+-- CONSISTENCY GUARD, not a second gate: every signature reaching here has already
+-- passed `ffiCrossableTy` at check time, so a head this predicate rejects is an
+-- internal inconsistency and reports as a loud gap, never a quiet skip.
+
+-- the declared (param type-head names, return type-head name) of a USER extern,
+-- or None when `name` is not one.
+ffiSigOf : Emit -> String -> Option (List String, String)
+ffiSigOf e name = omLookup name e.input.ffiExternIndex
+
+isFfiExtern : Emit -> String -> Bool
+isFfiExtern e name = match ffiSigOf e name
+  Some _ => True
+  None => False
+
+-- declared arity = the arrow count of the declared signature (`Unit` params
+-- included: they are real Medaka arguments, they just marshal to nothing).
+ffiExternArity : Emit -> String -> Int
+ffiExternArity e name = match ffiSigOf e name
+  Some (ptys, _) => lengthS ptys
+  None => 0
+
+-- The FFI-ABI.md §1 heads, by NAME.  `Array` means `Array Int` and only that:
+-- `tyHeadName` erases the element type, which is unambiguous here BECAUSE
+-- `ffiCrossableTy` already rejected `Array` of anything else before this
+-- signature could reach the emitter.
+ffiCrossableHead : String -> Bool
+ffiCrossableHead n = n == "Int"
+  || n == "Float"
+  || n == "Bool"
+  || n == "Char"
+  || n == "String"
+  || n == "Unit"
+  || n == "Array"
+
+-- ── the C types, per FFI-ABI.md §2 ──────────────────────────────────────────
+-- §2.1 immediates cross as plain `int64_t` (untagged); §2.2 `Float` crosses as an
+-- unboxed `double`, never as the cell pointer; §2.3/§2.4 `String`/`Array Int`
+-- cross as a `ptr`.  §2.6 `Unit` has no C type at all — see `ffiValueParams`.
+ffiCParamTy : String -> String
+ffiCParamTy "Float" = "double"
+ffiCParamTy "String" = "ptr"
+ffiCParamTy "Array" = "ptr"
+ffiCParamTy _ = "i64"
+
+ffiCRetTy : String -> String
+ffiCRetTy "Unit" = "void"
+ffiCRetTy "Float" = "double"
+ffiCRetTy "String" = "ptr"
+ffiCRetTy _ = "i64"
+
+-- §2.6: a `Unit` PARAMETER marshals to nothing — it does not appear in the C
+-- call's argument list.  Dropped from the `declare` and the call site alike, by
+-- this one function, so the two can never disagree about the C arity.
+ffiValueParams : List String -> List String
+ffiValueParams [] = []
+ffiValueParams ("Unit"::rest) = ffiValueParams rest
+ffiValueParams (t::rest) = t :: ffiValueParams rest
+
+ffiJoinComma : List String -> String
+ffiJoinComma [] = ""
+ffiJoinComma [x] = x
+ffiJoinComma (x::rest) = "\{x}, \{ffiJoinComma rest}"
+
+-- One `declare` per user extern, plus the two runtime marshalling helpers, right
+-- after the preamble.  ⚠️ EMPTY INDEX ⇒ NOTHING EMITTED: a program with no user
+-- extern (every program in the corpus, the compiler itself included) gets
+-- byte-identical IR to the pre-#2074 emitter, which is what the emitter gates
+-- pin.  Declares are emitted for EVERY declared user extern, called or not — an
+-- unused `declare` produces no relocation, so an uncalled extern still links.
+emitFfiDeclares : Emit -> Unit
+emitFfiDeclares e = match omKeys e.input.ffiExternIndex
+  [] => ()
+  names =>
+    let _ = emit e "declare ptr @mdk_ffi_array_int_out(i64)"
+    let _ = emit e "declare i64 @mdk_ffi_str_in(ptr)"
+    emitFfiDeclareEach e names
+
+emitFfiDeclareEach : Emit -> List String -> Unit
+emitFfiDeclareEach _ [] = ()
+emitFfiDeclareEach e (n::rest) =
+  let _ = match ffiSigOf e n
+    Some (ptys, rty) => emit e "declare \{ffiCRetTy rty} @\{n}(\{ffiJoinComma (map ffiCParamTy (ffiValueParams ptys))})"
+    None => ()
+  emitFfiDeclareEach e rest
+
+-- SATURATED foreign call.  Arguments emit left-to-right exactly as every other
+-- call shape does, then each is marshalled per its DECLARED type head — never per
+-- the inferred `LTy`, because the declared signature IS the ABI contract and the
+-- emitter's structural type guess is not.
+emitFfiCall : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
+emitFfiCall e env fname args = match ffiSigOf e fname
+  None => gapE e ("not a user-declared extern: " ++ fname)
+  Some (ptys, rty) =>
+    let argOps = emitArgs e env args
+    if lengthS argOps /= lengthS ptys then
+      -- Partial / over-application of a foreign symbol.  A C symbol has no arity
+      -- cell to curry through, so this is LOUD rather than silently mis-called.
+      gapE e "foreign call '\{fname}' applied to \{intToString (lengthS argOps)} argument(s) but declared with \{intToString (lengthS ptys)} — partial application of an FFI extern is not supported"
+    else
+      ffiEmitCall e fname rty (ffiJoinComma (ffiMarshalOut e ptys argOps))
+
+-- Medaka → C, per argument (FFI-ABI.md §2, outbound half).  Returns the rendered
+-- `<ctype> <operand>` list for the call instruction.
+ffiMarshalOut : Emit -> List String -> List String -> List String
+ffiMarshalOut _ [] _ = []
+ffiMarshalOut _ _ [] = []
+-- §2.6: marshals to nothing.  The argument EXPRESSION was already emitted (by
+-- `emitArgs`, above) so its effects still happen; only the operand is dropped.
+ffiMarshalOut e ("Unit"::ts) (_::rest) = ffiMarshalOut e ts rest
+-- §2.2: the C side receives the unboxed `double`, never the `{header, double}`
+-- cell pointer — boxing is a backend-internal representation choice that must not
+-- leak across an ABI whose other side has no concept of a Medaka heap cell.
+ffiMarshalOut e ("Float"::ts) (a::rest) =
+  "double " ++ unboxFloat e a :: ffiMarshalOut e ts rest
+ffiMarshalOut e ("String"::ts) (a::rest) =
+  "ptr " ++ ffiStrBytes e a :: ffiMarshalOut e ts rest
+ffiMarshalOut e ("Array"::ts) (a::rest) =
+  "ptr " ++ ffiArrayIntOut e a :: ffiMarshalOut e ts rest
+-- §2.1: `Int`/`Bool`/`Char` are immediates — `ashr 1` to the plain C scalar.
+ffiMarshalOut e (t::ts) (a::rest)
+  | ffiCrossableHead t = "i64 " ++ untagInt e a :: ffiMarshalOut e ts rest
+  | otherwise =
+    let _ = gapU e "non-crossable parameter type '\{t}' reached the FFI lowering (compiler/FFI-ABI.md section 1)"
+    ffiMarshalOut e ts rest
+
+-- §2.3 Medaka → C: a BORROWED `const char*` into the String cell's own inline
+-- payload — `{i64 tag, i64 byte_len, i64 cp_count, bytes…, '\0'}` (`mdk_str_lit`,
+-- runtime/medaka_rt.c), so the bytes start at offset 24 and are NUL-terminated.
+-- No copy, no allocation.  ⚠️ §2.5: valid FOR THE DURATION OF THE CALL ONLY —
+-- Boehm registers no root for a pointer the C side stashes past its own return.
+ffiStrBytes : Emit -> String -> String
+ffiStrBytes e v =
+  let p = freshReg e
+  let _ = emit e "  \{p} = inttoptr i64 \{v} to ptr"
+  let q = freshReg e
+  let _ = emit e "  \{q} = getelementptr i8, ptr \{p}, i64 24"
+  q
+
+-- §2.4 Medaka → C: a MANDATORY COPY, never the live cell.  The Medaka array cell
+-- is `{i64 count, tagged elem…}` (`mdk_array_make`, runtime/medaka_rt.c) — its
+-- elements are TAGGED words, so a raw `int64_t*` view of it would hand C every
+-- value doubled-plus-one.  `mdk_ffi_array_int_out` allocates a flat untagged
+-- buffer and copies.  The C side gets NO length channel here (§2.4 specifies a
+-- flat `int64_t*`); a C function that needs the length takes it as its own
+-- explicit `Int` parameter, author-written — see the report's Notes.
+ffiArrayIntOut : Emit -> String -> String
+ffiArrayIntOut e v =
+  let p = freshReg e
+  let _ = emit e "  \{p} = call ptr @mdk_ffi_array_int_out(i64 \{v})"
+  p
+
+-- C → Medaka (FFI-ABI.md §2, inbound half) + the call instruction itself.
+ffiEmitCall : Emit -> String -> String -> String -> (String, LTy)
+-- §2.6: called for effect only; nothing is read from the C return register.
+ffiEmitCall e fname "Unit" cargs =
+  let _ = emit e "  call void @\{fname}(\{cargs})"
+  ("1", LTUnit)
+-- §2.2: reboxed into a FRESH `{header, double}` cell on the Medaka side — C never
+-- allocates, sees, or owns a Float cell.
+ffiEmitCall e fname "Float" cargs =
+  let d = freshReg e
+  let _ = emit e "  \{d} = call double @\{fname}(\{cargs})"
+  (boxFloat e d, LTFloat)
+-- §2.3: the copy is MANDATORY, not an optimisation to skip later — Medaka never
+-- adopts a C-allocated buffer as a String cell.  `mdk_ffi_str_in` routes through
+-- `mdk_str_lit`, the same alloc+memcpy every String-returning builtin uses, and
+-- treats a NULL return as "".  Length comes from the NUL terminator, the only
+-- channel a single C return value has.
+ffiEmitCall e fname "String" cargs =
+  let p = freshReg e
+  let _ = emit e "  \{p} = call ptr @\{fname}(\{cargs})"
+  let r = freshReg e
+  let _ = emit e "  \{r} = call i64 @mdk_ffi_str_in(ptr \{p})"
+  (r, LTStr)
+-- 🚨 KNOWN GAP, and it is a hole in FFI-ABI.md §2.4 rather than in this code.
+-- §2.4's C → Medaka rule is "a C-side `int64_t*` PLUS LENGTH is copied into a
+-- fresh cell" — but a C-ABI return carries ONE value, so a plain `Array Int`
+-- return has no channel for the length, and copying an unknown number of words is
+-- not a thing that can be done correctly.  LOUD, not silent: the outbound
+-- direction (§2.4 Medaka → C) is fully implemented above.
+ffiEmitCall e fname "Array" _ =
+  gapE
+    e
+    "foreign call '\{fname}' returns 'Array Int', which has no length channel in a C return value (compiler/FFI-ABI.md section 2.4 specifies pointer PLUS length); pass a caller-allocated array as a parameter and have the C side fill it instead"
+-- §2.1: the returned C scalar is re-tagged `(x << 1) | 1`.  The `LTy` follows the
+-- DECLARED head so `Bool`/`Char` results print and branch as themselves.
+ffiEmitCall e fname rty cargs
+  | ffiCrossableHead rty =
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @\{fname}(\{cargs})"
+    (tagInt e r, ffiImmediateLTy rty)
+  | otherwise = gapE e "non-crossable return type '\{rty}' reached the FFI lowering (compiler/FFI-ABI.md section 1)"
+
+ffiImmediateLTy : String -> LTy
+ffiImmediateLTy "Bool" = LTBool
+ffiImmediateLTy "Char" = LTChar
+ffiImmediateLTy _ = LTInt
+
 emitBin : Emit -> OrdMap (String, LTy) -> String -> CExpr -> CExpr -> String -> (String, LTy)
 emitBin e env op l r tag
   | isCmpOp op = emitCmp e env op l r
@@ -4238,6 +4469,12 @@ emitApp e env app =
         -- isLocal-first priority for the same name in VALUE position.
         if isLocal env fname then emitIndirect e env hd args
         else if isAnyExtern fname && hasArgs args then emitExternApplied e env fname args
+        -- #2074: a USER-declared extern is a FOREIGN symbol, not a builtin, not a
+        -- ctor, and not a compiled top-level fn — without this arm the ladder falls
+        -- all the way through to `emitVar`'s bare-variable case and panics with
+        -- "unbound variable".  AFTER `isAnyExtern` on purpose: that ordering is the
+        -- builtin-name exemption (see `emitFfiCall`'s header).
+        else if isFfiExtern e fname && hasArgs args then emitFfiCall e env fname args
         else
           if isCtor e fname then
             let argOps = emitArgs e env args
@@ -7324,6 +7561,37 @@ emitExternEtaDefine e lamName name arity =
   let argEnv = etaArgEnv arity 0
   let synArgs = etaArgVars arity 0
   let (r, _) = emitExternApplied e argEnv name synArgs
+  let _ = emit e ("  ret i64 " ++ r)
+  let _ = emit e "}"
+  let _ = emit e ""
+  let lamLines = (bufRef e).value
+  lamsRef e := lamLines ++ (lamsRef e).value
+  let _ = endDefine e scope
+  bufRef e := saved
+
+-- #2074, VALUE position: a user-declared extern referenced as a first-class value
+-- (`f = myCFn`, or passed to a HOF).  Exactly the shape `emitExternEtaClosure`
+-- gives a builtin, and deliberately built the same way — a captureless static
+-- closure whose lifted body REPLAYS `emitFfiCall` on the incoming `%argK`
+-- operands.  Value/applied consistency is therefore by CONSTRUCTION: there is one
+-- marshalling implementation, not two that could drift.  Arity comes from the
+-- declared signature (`ffiExternArity`).
+emitFfiEtaClosure : Emit -> String -> (String, LTy)
+emitFfiEtaClosure e name =
+  let lamName = "mdk_eta_\{name}_\{intToString (freshId e)}"
+  let _ = emitFfiEtaDefine e lamName name (ffiExternArity e name)
+  emitClosureAlloc e lamName (ffiExternArity e name) []
+
+emitFfiEtaDefine : Emit -> String -> String -> Int -> Unit
+emitFfiEtaDefine e lamName name arity =
+  let saved = (bufRef e).value
+  bufRef e := []
+  let scope = beginDefine e
+  let _ = emit e "define i64 @\{lamName}(\{etaParamDecls arity}) {"
+  let _ = emit e "entry:"
+  let argEnv = etaArgEnv arity 0
+  let synArgs = etaArgVars arity 0
+  let (r, _) = emitFfiCall e argEnv name synArgs
   let _ = emit e ("  ret i64 " ++ r)
   let _ = emit e "}"
   let _ = emit e ""
@@ -11317,6 +11585,8 @@ emitProgramMode gapMode input (CProgram groups ctorArs ctorTypes implEntries) =
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries
   let _ = resetEmittedDefaults e
   let _ = emitPreamble e
+  -- #2074: the user-declared externs' `declare`s.  No user extern ⇒ no lines.
+  let _ = emitFfiDeclares e
   let _ = emitGlobalDecls e (valBinds groups)
   -- issue #118: the PRELUDE half is a LIBRARY — it has no entry point, and the
   -- program half's `@mdk_program_main` is the one that defines and initialises

@@ -1,12 +1,26 @@
 # FFI ABI contract
 
-**Status: decision, not implementation.** This document fixes the value-crossing
+**Status: decision, and now LOWERED.** This document fixes the value-crossing
 contract for the C FFI boundary the effect label `<FFI>` (#2071, `Prefix` domain)
-already tracks. **No lowering exists yet** — `emitFfiCall` and the calling
-convention that actually marshals a value across the boundary are #2074, next
-sprint, out of scope here. This doc answers a narrower question first: *which
-Medaka types may cross at all, and who owns the memory on each side* — so #2074
-has a contract to implement against instead of inventing one arm at a time.
+already tracks. It answers a narrower question than the whole FFI story: *which
+Medaka types may cross at all, and who owns the memory on each side* — so the
+lowering had a contract to implement against instead of inventing one arm at a
+time.
+
+⚠️ **The lowering exists as of 2026-08-27** (`ffi-lower-and-link`, S-ffi-lowering,
+#2074): `emitFfiCall` and friends in `compiler/backend/llvm_emit.mdk` implement §2
+below, and `ffiCrossableTy` (`compiler/types/typecheck.mdk`) rejects everything
+outside §1 at check time. Gated by `test/diff_compiler_llvm_ffi.sh`. Two things
+this doc specifies are still NOT done, both deliberately:
+
+* **`Array Int` in RETURN position** — §2.4 says "a C-side `int64_t*` PLUS
+  LENGTH is copied"; a C-ABI return carries ONE value, so there is no length
+  channel and no correct number of words to copy. The emitter reports a loud gap
+  naming that hole rather than guessing a length. §2.4's Medaka → C direction is
+  fully implemented. Passing a caller-allocated array as a PARAMETER for the C
+  side to fill is the shape that works today.
+* **Linkage** — `medaka build` has no flag yet for linking a user object or
+  library; that is #2076's half of the sprint.
 
 This doc is scoped to **value crossing**. It does not restate #2071's
 effect-tracking ground (that a foreign call is `<FFI>`-effectful and how that

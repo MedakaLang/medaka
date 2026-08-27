@@ -1,5 +1,5 @@
 # META
-source_lines=2157
+source_lines=2203
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -2086,6 +2086,52 @@ declSigTypeEntries (DExtern _ name ty) =
 declSigTypeEntries (DAttrib _ inner) = declSigTypeEntries inner
 declSigTypeEntries _ = []
 
+-- ── user-declared FFI externs → the lowering's own table (#2074) ─────────────
+-- The emitter's `declSigIndex` (above) cannot answer "is this name a USER
+-- extern?": it is built from `runtimeDecls ++ allDecls` and holds ordinary
+-- annotated functions and the 138 `stdlib/runtime.mdk` builtins in the same
+-- flat keyspace.  So the FFI lowering gets its OWN index, minted here from the
+-- same two decl lists the emit drivers already hold, and carried to the emitter
+-- as `EmitInput.ffiExternIndex`.
+--
+-- 🚨 THE BUILTIN-NAME EXEMPTION, emitter side.  A local `extern` whose name is a
+-- `stdlib/runtime.mdk` catalog name is emitted through the BUILTIN's codegen
+-- (`isAnyExtern` in `emitApp`'s ladder dispatches by exact NAME), regardless of
+-- what the local row claims — that is the same fact `ffiIsBuiltinExternName`
+-- (`compiler/types/typecheck.mdk`) exempts from the crossable-set guard.  Here it
+-- is honoured by SUBTRACTING the runtime catalog's own extern names, so such a
+-- name never enters the FFI index at all and no foreign call can be minted for
+-- it.  (`emitApp` checks `isAnyExtern` BEFORE the FFI arm as well, so the
+-- exemption holds on both sides of the seam; this filter is what keeps it true
+-- for a runtime extern name that no `externCatalog` family predicate claims.)
+export
+ffiExternTypeNames : List Decl -> List Decl -> List (String, (List String, String))
+ffiExternTypeNames runtimeDecls userDecls =
+  ffiExternRows (externDeclNamesOf runtimeDecls) userDecls
+
+-- the `DExtern` names of a decl list, in order.
+externDeclNamesOf : List Decl -> List String
+externDeclNamesOf [] = []
+externDeclNamesOf ((DExtern _ n _)::rest) = n :: externDeclNamesOf rest
+externDeclNamesOf ((DAttrib _ inner)::rest) = externDeclNamesOf [inner]
+  ++ externDeclNamesOf rest
+externDeclNamesOf (_::rest) = externDeclNamesOf rest
+
+-- Same (param-head-names, return-head-name) shape as `declSigTypeEntries`, so
+-- the emitter reads one row type for both tables.  `tyHeadName` collapses
+-- `Array Int` to `Array`, which is unambiguous HERE and only here: slice 1's
+-- `ffiCrossableTy` guard rejects every non-crossable type — `Array` of anything
+-- but `Int` included — before a user extern's signature can reach the emitter,
+-- so `Array` in this table always means `Array Int`.
+ffiExternRows : List String -> List Decl -> List (String, (List String, String))
+ffiExternRows _ [] = []
+ffiExternRows builtins ((DExtern _ n ty)::rest)
+  | contains n builtins = ffiExternRows builtins rest
+  | otherwise = (n, (map tyHeadName (methodArgTys ty), tyHeadName (methodRetTy ty))) :: ffiExternRows builtins rest
+ffiExternRows builtins ((DAttrib _ inner)::rest) =
+  ffiExternRows builtins (inner::rest)
+ffiExternRows builtins (_::rest) = ffiExternRows builtins rest
+
 -- the RESULT type of a (possibly-constrained, possibly-effectful) function type
 -- (the `r` of `a -> b -> … -> r`); a non-function type is its own result.
 methodRetTy : Ty -> Ty
@@ -2814,6 +2860,18 @@ nodeTag _ = "?"
 (DFunDef false "declSigTypeEntries" ((PCon "DExtern" PWild (PVar "name") (PVar "ty"))) (EListLit (ETuple (EVar "name") (ETuple (EApp (EApp (EVar "map") (EVar "tyHeadName")) (EApp (EVar "methodArgTys") (EVar "ty"))) (EApp (EVar "tyHeadName") (EApp (EVar "methodRetTy") (EVar "ty")))))))
 (DFunDef false "declSigTypeEntries" ((PCon "DAttrib" PWild (PVar "inner"))) (EApp (EVar "declSigTypeEntries") (EVar "inner")))
 (DFunDef false "declSigTypeEntries" (PWild) (EListLit))
+(DTypeSig true "ffiExternTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))))
+(DFunDef false "ffiExternTypeNames" ((PVar "runtimeDecls") (PVar "userDecls")) (EApp (EApp (EVar "ffiExternRows") (EApp (EVar "externDeclNamesOf") (EVar "runtimeDecls"))) (EVar "userDecls")))
+(DTypeSig false "externDeclNamesOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "externDeclNamesOf" ((PList)) (EListLit))
+(DFunDef false "externDeclNamesOf" ((PCons (PCon "DExtern" PWild (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "externDeclNamesOf") (EVar "rest"))))
+(DFunDef false "externDeclNamesOf" ((PCons (PCon "DAttrib" PWild (PVar "inner")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "externDeclNamesOf") (EListLit (EVar "inner"))) (EApp (EVar "externDeclNamesOf") (EVar "rest"))))
+(DFunDef false "externDeclNamesOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "externDeclNamesOf") (EVar "rest")))
+(DTypeSig false "ffiExternRows" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))))
+(DFunDef false "ffiExternRows" (PWild (PList)) (EListLit))
+(DFunDef false "ffiExternRows" ((PVar "builtins") (PCons (PCon "DExtern" PWild (PVar "n") (PVar "ty")) (PVar "rest"))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "builtins")) (EApp (EApp (EVar "ffiExternRows") (EVar "builtins")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "n") (ETuple (EApp (EApp (EVar "map") (EVar "tyHeadName")) (EApp (EVar "methodArgTys") (EVar "ty"))) (EApp (EVar "tyHeadName") (EApp (EVar "methodRetTy") (EVar "ty"))))) (EApp (EApp (EVar "ffiExternRows") (EVar "builtins")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "ffiExternRows" ((PVar "builtins") (PCons (PCon "DAttrib" PWild (PVar "inner")) (PVar "rest"))) (EApp (EApp (EVar "ffiExternRows") (EVar "builtins")) (EBinOp "::" (EVar "inner") (EVar "rest"))))
+(DFunDef false "ffiExternRows" ((PVar "builtins") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "ffiExternRows") (EVar "builtins")) (EVar "rest")))
 (DTypeSig false "methodRetTy" (TyFun (TyCon "Ty") (TyCon "Ty")))
 (DFunDef false "methodRetTy" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "methodRetTy") (EVar "t")))
 (DFunDef false "methodRetTy" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "methodRetTy") (EVar "t")))
@@ -3516,6 +3574,18 @@ nodeTag _ = "?"
 (DFunDef false "declSigTypeEntries" ((PCon "DExtern" PWild (PVar "name") (PVar "ty"))) (EListLit (ETuple (EVar "name") (ETuple (EApp (EApp (EMethodRef "map") (EVar "tyHeadName")) (EApp (EVar "methodArgTys") (EVar "ty"))) (EApp (EVar "tyHeadName") (EApp (EVar "methodRetTy") (EVar "ty")))))))
 (DFunDef false "declSigTypeEntries" ((PCon "DAttrib" PWild (PVar "inner"))) (EApp (EVar "declSigTypeEntries") (EVar "inner")))
 (DFunDef false "declSigTypeEntries" (PWild) (EListLit))
+(DTypeSig true "ffiExternTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))))
+(DFunDef false "ffiExternTypeNames" ((PVar "runtimeDecls") (PVar "userDecls")) (EApp (EApp (EVar "ffiExternRows") (EApp (EVar "externDeclNamesOf") (EVar "runtimeDecls"))) (EVar "userDecls")))
+(DTypeSig false "externDeclNamesOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "externDeclNamesOf" ((PList)) (EListLit))
+(DFunDef false "externDeclNamesOf" ((PCons (PCon "DExtern" PWild (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "externDeclNamesOf") (EVar "rest"))))
+(DFunDef false "externDeclNamesOf" ((PCons (PCon "DAttrib" PWild (PVar "inner")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "externDeclNamesOf") (EListLit (EVar "inner"))) (EApp (EVar "externDeclNamesOf") (EVar "rest"))))
+(DFunDef false "externDeclNamesOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "externDeclNamesOf") (EVar "rest")))
+(DTypeSig false "ffiExternRows" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))))
+(DFunDef false "ffiExternRows" (PWild (PList)) (EListLit))
+(DFunDef false "ffiExternRows" ((PVar "builtins") (PCons (PCon "DExtern" PWild (PVar "n") (PVar "ty")) (PVar "rest"))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "builtins")) (EApp (EApp (EVar "ffiExternRows") (EVar "builtins")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "n") (ETuple (EApp (EApp (EMethodRef "map") (EVar "tyHeadName")) (EApp (EVar "methodArgTys") (EVar "ty"))) (EApp (EVar "tyHeadName") (EApp (EVar "methodRetTy") (EVar "ty"))))) (EApp (EApp (EVar "ffiExternRows") (EVar "builtins")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "ffiExternRows" ((PVar "builtins") (PCons (PCon "DAttrib" PWild (PVar "inner")) (PVar "rest"))) (EApp (EApp (EVar "ffiExternRows") (EVar "builtins")) (EBinOp "::" (EVar "inner") (EVar "rest"))))
+(DFunDef false "ffiExternRows" ((PVar "builtins") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "ffiExternRows") (EVar "builtins")) (EVar "rest")))
 (DTypeSig false "methodRetTy" (TyFun (TyCon "Ty") (TyCon "Ty")))
 (DFunDef false "methodRetTy" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "methodRetTy") (EVar "t")))
 (DFunDef false "methodRetTy" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "methodRetTy") (EVar "t")))
