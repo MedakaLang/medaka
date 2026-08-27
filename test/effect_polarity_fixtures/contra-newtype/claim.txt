@@ -1,0 +1,20 @@
+slice: S-polarity-conformance-matrix (#1119/D-2)
+shape: contravariant-immutable x newtype wrapper (`data TakerBox a =
+       MkTakerBox (Taker a)`, one positional constructor layer around the
+       already-contravariant `Taker`)
+spec: same as contra-direct/claim.txt. Wrapping a contravariant occurrence
+      again does not change its polarity or hide the defect -- substMonoP's
+      TApp arm recurses uniformly through nested constructor applications
+      (packet §4 fact 2).
+status: FIXED by slice 4 (D-2, #1119) -- now correctly REJECTED with a
+  polarity diagnostic. The measurement below is HISTORICAL, from before
+  slice 4 landed.
+cmd (historical, pre-D-2): run main.mdk
+measured-exit (historical): 0
+measured-stdout (historical):
+  LAUNDERED
+  1
+derivation: `wide : TakerBox (Unit -> <IO> Unit) = pureTakerBox` was accepted;
+  pattern-matching `wide` to reach the inner `Taker` and applying it to
+  `shout` from `main`'s zero-row call site performed `<IO>`. Same launder as
+  contra-direct, one constructor deeper.

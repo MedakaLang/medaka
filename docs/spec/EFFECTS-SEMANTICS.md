@@ -1667,12 +1667,26 @@ the extern catalog is trusted, like any FFI boundary.
   ```
   Widening `pureSink : Sink <>` to `Sink <Stdout>` is exactly the `<> ≤ <Stdout>`
   step the old rule licensed, and it makes a binding typed `Int` — carrying no
-  effect row at all — print at runtime, on both engines. **Why not covariance:** a
-  parameter's polarity in `F` (co-, contra-, or non-variant) is not knowable
-  without a variance analysis, which Medaka does not have; the widening direction
-  that is safe for a covariant occurrence is exactly the direction that is unsafe
-  for a contravariant one, so no direction of weakening is sound in general — only
-  equality is. **Why invariance costs almost nothing:** with *inferred* indices,
+  effect row at all — print at runtime, on both engines. **Why not covariance:** at
+  the time this rule was established, a parameter's polarity in `F` (co-, contra-,
+  or non-variant) was not knowable without a variance analysis, and Medaka had
+  none; the widening direction that is safe for a covariant occurrence is exactly
+  the direction that is unsafe for a contravariant one, so no uniform direction of
+  weakening could be sound. **Update (D-2, #1119, this sprint):** Medaka now
+  computes a per-parameter polarity for ordinary first-order `data` declarations
+  (`dataParamPolarityRef`), enforced at non-covariant type-constructor ARGUMENTS
+  via `T-EFFECT-PARAM-VARIANCE` — closing the analogous #1098/#1121 launder family
+  for write channels (`Ref`/`Array`) and contravariant function arguments, and (F1,
+  this sprint) closing the transitive-fixpoint gap so a forward-declared type
+  constructor converges to the correct polarity regardless of declaration order.
+  That does not reopen THIS index slot to a polarity-gated `≤`, though:
+  `unifyIndexRow` treats an `Effect`-kinded type-constructor argument as invariant
+  unconditionally, by KIND rather than by a computed polarity — which stays the
+  correct and simpler rule for indices, since equality is what the argument above
+  establishes is needed even where the polarity happens to be knowable. The
+  per-parameter analysis does not yet cover higher-kinded type-constructor heads or
+  type aliases (open follow-ups #2107, #2108). **Why invariance costs almost
+  nothing:** with *inferred* indices,
   open-row unification already computes the join before invariance is ever asked
   to compare two closed rows — an `if` across two branches with different tails
   yields one joined row (`Async <Stdin, Stdout | a>`), not two concrete rows for

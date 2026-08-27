@@ -1,0 +1,36 @@
+-- WRITE-CHANNEL x 2-DEEP wrapper shape. Two positional wrapper layers
+-- (`Outer` around `Cell` around `Ref`) between the parametric widening site
+-- and the write channel. Tests that the laundering survives an extra layer
+-- of indirection -- substMonoP's `TApp` arm (packet §4 fact 2) recurses
+-- through EVERY type-constructor application with `pos` unchanged, so
+-- nesting depth should not matter to the defect (nor to a correct fix).
+-- EFFECTS-SEMANTICS.md §9. Fixed by slice 4 (D-2, #1119); this row is now
+-- correctly REJECTED.
+data Cell a = MkCell (Ref a)
+data Outer a = MkOuter (Cell a)
+
+shout : Unit -> <Stdout> Unit
+shout u =
+  let _ = putStr "SMUGGLED "
+  ()
+
+pureFn : Unit -> Unit
+pureFn u = ()
+
+box : Outer (Unit -> <> Unit)
+box = MkOuter (MkCell (Ref pureFn))
+
+alias : Outer (Unit -> <Stdout> Unit)
+alias = box
+
+writeIntoAlias : Unit -> Unit
+writeIntoAlias u = match alias
+  MkOuter (MkCell r) => r := shout
+
+callBox : Unit -> Unit
+callBox u = match box
+  MkOuter (MkCell r) => r.value ()
+
+main =
+  let _ = writeIntoAlias ()
+  println (callBox ())

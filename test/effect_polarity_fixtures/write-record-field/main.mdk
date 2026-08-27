@@ -1,0 +1,32 @@
+-- WRITE-CHANNEL x RECORD-FIELD wrapper shape. The `Ref` sits behind a named
+-- record field (`.cell`) instead of a positional constructor argument --
+-- exercising field-access desugaring rather than pattern-match extraction,
+-- in case the two paths differ in how they carry the type parameter's
+-- polarity. Same defect as write-direct/write-newtype otherwise.
+-- EFFECTS-SEMANTICS.md §9. Fixed by slice 4 (D-2, #1119); this row is now
+-- correctly REJECTED.
+data Holder a = { cell : Ref a }
+
+shout : Unit -> <Stdout> Unit
+shout u =
+  let _ = putStr "SMUGGLED "
+  ()
+
+pureFn : Unit -> Unit
+pureFn u = ()
+
+box : Holder (Unit -> <> Unit)
+box = Holder { cell = Ref pureFn }
+
+alias : Holder (Unit -> <Stdout> Unit)
+alias = box
+
+writeIntoAlias : Unit -> Unit
+writeIntoAlias u = alias.cell := shout
+
+callBox : Unit -> Unit
+callBox u = box.cell.value ()
+
+main =
+  let _ = writeIntoAlias ()
+  println (callBox ())

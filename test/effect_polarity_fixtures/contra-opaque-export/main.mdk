@@ -1,0 +1,21 @@
+-- CONTRAVARIANT-IMMUTABLE x OPAQUE-EXPORT wrapper shape. `Taker`/`TH` (see
+-- wrap.mdk) are exported abstractly -- this file never sees `MkTaker`/
+-- `MkTH` directly, only the smart constructors'/accessors' declared types.
+-- Same defect as the other contravariant rows, demonstrating the laundering
+-- survives module opacity. EFFECTS-SEMANTICS.md §9. Fixed by slice 4 (D-2,
+-- #1119); this row is now correctly REJECTED.
+import wrap.{Taker, TH, mkTaker, runTaker, mkTH, thTaker}
+
+pureTaker : Taker (Unit -> Unit)
+pureTaker = mkTaker (k => let _ = k () in 1)
+
+pureTH : TH (Unit -> Unit)
+pureTH = mkTH pureTaker
+
+wide : TH (Unit -> <IO> Unit)
+wide = pureTH
+
+shout : Unit -> <IO> Unit
+shout _ = println "LAUNDERED"
+
+main = println (runTaker (thTaker wide) shout)

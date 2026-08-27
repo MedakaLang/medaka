@@ -1,0 +1,33 @@
+slice: S-polarity-conformance-matrix (#1119/D-2)
+shape: contravariant-immutable x direct wrapper (`data Taker a = MkTaker (a
+       -> Int)`, no intermediate wrapper type -- `a` sits directly in the
+       stored function's domain)
+spec: EFFECTS-SEMANTICS.md §9 ("a parameter's polarity in F is not knowable
+      without a variance analysis ... no direction of weakening is sound in
+      general -- only equality is"). `Taker` is CONTRAVARIANT in `a`
+      (`a` occurs in the domain of the stored function); the widening
+      `Taker (Unit -> Unit)` -> `Taker (Unit -> <IO> Unit)` is exactly the
+      UNSAFE direction for a contravariant occurrence, distinct from #1098's
+      write-channel framing -- no `Ref`, no mutation, the unsoundness is
+      pure contravariance made observable by applying the widened-through
+      value to a genuinely effectful argument.
+status: FIXED by slice 4 (D-2, #1119) -- now correctly REJECTED with a
+  polarity diagnostic. The measurement below is HISTORICAL, from before
+  slice 4 landed.
+cmd (historical, pre-D-2): run main.mdk
+measured-exit (historical): 0
+measured-stdout (historical):
+  LAUNDERED
+  1
+derivation: `wide : Taker (Unit -> <IO> Unit) = pureTaker` was accepted with
+  zero diagnostics; `runTaker wide shout` from `main : Unit -> Unit`'s
+  zero-row call site applied `shout` (genuinely `<IO>`) through the widened
+  `Taker`, so `println "LAUNDERED"` ran and the caller's declared row (none)
+  was silently violated. Identical shape/mechanism to the shape originally
+  filed as #1121 (contravariant-domain-widening launders; closed via D-2,
+  see git history), other than using `<IO>` consistently with that fixture's
+  own `println`-based `shout` (an earlier draft of this row mistakenly typed
+  `shout` as `<Stdout>` while its body called `println`, which performs
+  `<IO>` not `<Stdout>` -- an ordinary, unrelated effect-escape mismatch
+  ("Function 'shout' declared with <Stdout> but also performs <IO>"), fixed
+  before recording this claim; not a slice-4 finding).

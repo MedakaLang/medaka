@@ -1,0 +1,36 @@
+-- WRITE-CHANNEL x DIRECT wrapper shape. Reused verbatim from the shape
+-- originally filed as #1098 (ref-widening launders through write; closed via
+-- D-2, see git history). `Ref (Unit -> <> Unit)`
+-- widens to `Ref (Unit -> <Stdout> Unit)` through NO wrapper at all -- the
+-- function sits directly inside the mutable cell. EFFECTS-SEMANTICS.md §9:
+-- a parameter's polarity is not knowable without a variance analysis Medaka
+-- does not have, so no direction of weakening is sound in general; `Ref`'s
+-- write-back operation makes the unsoundness OBSERVABLE here (§5 no-
+-- laundering law: eliminating the effectful value written into `alias` must
+-- flow its row into the ambient effect, but `callBox : Unit -> Unit` carries
+-- none). Fixed by slice 4 (D-2, #1119), which added a per-parameter
+-- polarity/invariance rule for `Ref`'s stored-value parameter; this row is
+-- now correctly REJECTED.
+shout : Unit -> <Stdout> Unit
+shout u =
+  let _ = putStr "SMUGGLED "
+  ()
+
+pureFn : Unit -> Unit
+pureFn u = ()
+
+box : Ref (Unit -> <> Unit)
+box = Ref pureFn
+
+alias : Ref (Unit -> <Stdout> Unit)
+alias = box
+
+writeIntoAlias : Unit -> Unit
+writeIntoAlias u = alias := shout
+
+callBox : Unit -> Unit
+callBox u = box.value ()
+
+main =
+  let _ = writeIntoAlias ()
+  println (callBox ())

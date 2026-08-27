@@ -1,0 +1,19 @@
+slice: S-polarity-conformance-matrix (#1119/D-2)
+shape: write-channel x record-field wrapper (`data Holder a = { cell : Ref
+       a }`, the `Ref` reached via named-field access `.cell` instead of
+       constructor pattern-match)
+spec: same as write-direct/claim.txt. Exercises field-access desugaring
+      rather than pattern-match extraction, in case the two code paths
+      differ in how they carry (or fail to carry) the type parameter's
+      polarity -- measured: they do not differ.
+status: FIXED by slice 4 (D-2, #1119) -- now correctly REJECTED with a
+  polarity diagnostic. The measurement below is HISTORICAL, from before
+  slice 4 landed.
+cmd (historical, pre-D-2): run main.mdk
+measured-exit (historical): 0
+measured-stdout (historical): SMUGGLED ()
+derivation: `box : Holder (Unit -> <> Unit)` widened to `alias : Holder (Unit
+  -> <Stdout> Unit)`; `alias.cell := shout` wrote through the field
+  accessor into the same `Ref` that `box.cell.value ()` reads from a
+  zero-row binding. Same launder as the positional-constructor rows, via
+  field access instead.

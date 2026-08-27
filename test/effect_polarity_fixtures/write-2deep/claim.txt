@@ -1,0 +1,16 @@
+slice: S-polarity-conformance-matrix (#1119/D-2)
+shape: write-channel x 2-deep wrapper (`Outer a = MkOuter (Cell a)`, `Cell a
+       = MkCell (Ref a)` -- two positional constructor layers)
+spec: same as write-direct/claim.txt. Depth of nesting is not expected to
+      matter to the defect (nor should it matter to a correct fix) since
+      substMonoP's TApp arm recurses uniformly.
+status: FIXED by slice 4 (D-2, #1119) -- now correctly REJECTED with a
+  polarity diagnostic. The measurement below is HISTORICAL, from before
+  slice 4 landed.
+cmd (historical, pre-D-2): run main.mdk
+measured-exit (historical): 0
+measured-stdout (historical): SMUGGLED ()
+derivation: `box : Outer (Unit -> <> Unit)` widened to `alias : Outer (Unit ->
+  <Stdout> Unit)`; nested pattern-match `MkOuter (MkCell r)` reaches the
+  innermost `Ref` for both the write and the read-back through the same
+  cell. Same launder as write-direct/write-newtype, two constructors deeper.

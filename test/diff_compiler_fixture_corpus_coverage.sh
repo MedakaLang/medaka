@@ -137,14 +137,28 @@ if not candidates:
     sys.exit(1)
 
 # ── 3. live (comments-stripped) reference + one-hop resolution ───────────────
-def strip_comments(text):
-    return '\n'.join(l for l in text.splitlines() if not re.match(r'^\s*#', l))
+# The comment syntax is per LANGUAGE, not per gate: content() is applied to the
+# one-hop `.mdk` targets of invokes_mdk() as well as to the `.sh` gates themselves.
+# Stripping only `#` lines credited a corpus that a Medaka `--` COMMENT merely NAMED
+# (measured: registry_keying_ratchet.sh one-hops into compiler/types/typecheck.mdk,
+# whose `--` prose mentioned test/effect_polarity_fixtures/, making an entirely
+# unwired corpus report as consumed). Keep this table in step with any new one-hop
+# target language; an unknown extension falls back to `#`, the shell/python form.
+_COMMENT_PREFIX = {
+    '.sh': r'^\s*#',
+    '.py': r'^\s*#',
+    '.mdk': r'^\s*--',
+}
+
+def strip_comments(text, f=''):
+    pat = _COMMENT_PREFIX.get(pathlib.PurePosixPath(f).suffix, r'^\s*#')
+    return '\n'.join(l for l in text.splitlines() if not re.match(pat, l))
 
 _cache = {}
 def content(f):
     if f not in _cache:
         try:
-            _cache[f] = strip_comments(pathlib.Path(root, f).read_text(errors='replace'))
+            _cache[f] = strip_comments(pathlib.Path(root, f).read_text(errors='replace'), f)
         except Exception:
             _cache[f] = ''
     return _cache[f]

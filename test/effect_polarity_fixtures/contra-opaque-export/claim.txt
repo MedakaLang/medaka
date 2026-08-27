@@ -1,0 +1,19 @@
+slice: S-polarity-conformance-matrix (#1119/D-2)
+shape: contravariant-immutable x opaque-export wrapper (`Taker`/`TH` exported
+       abstractly from sibling module wrap.mdk -- no `(..)`, no `public
+       export`; main.mdk only sees `mkTaker`/`runTaker`/`mkTH`/`thTaker`'s
+       declared types, never the constructors)
+spec: same as contra-direct/claim.txt. Demonstrates the laundering survives
+      module opacity for the contravariant channel too.
+status: FIXED by slice 4 (D-2, #1119) -- now correctly REJECTED with a
+  polarity diagnostic. The measurement below is HISTORICAL, from before
+  slice 4 landed.
+cmd (historical, pre-D-2): run main.mdk
+measured-exit (historical): 0
+measured-stdout (historical):
+  LAUNDERED
+  1
+derivation: `wide : TH (Unit -> <IO> Unit) = pureTH` was accepted; `runTaker
+  (thTaker wide) shout` from `main`'s zero-row call site applied the widened-
+  through `shout` and performed `<IO>`. Same launder as the other
+  contravariant rows, fully behind an opaque cross-module abstraction.

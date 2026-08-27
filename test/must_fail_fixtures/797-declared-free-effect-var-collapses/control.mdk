@@ -1,5 +1,0 @@
-f : Int -> <Stdout> String
-f x =
-  let _ = putStr "hi"
-  "ok"
-main = putStrLn (f 1)

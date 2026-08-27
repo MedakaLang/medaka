@@ -1,0 +1,26 @@
+-- CONTRAVARIANT-IMMUTABLE x DIRECT wrapper shape. Reused verbatim from the
+-- shape originally filed as #1121 (contravariant-domain-widening launders;
+-- closed via D-2, see git history). `Taker a = MkTaker (a ->
+-- Int)` puts `a` in the DOMAIN of the stored function, so `Taker` is
+-- CONTRAVARIANT in `a`. Widening `Taker (Unit -> Unit)` to `Taker (Unit ->
+-- <IO> Unit)` is accepted, yet that is the UNSAFE direction for a
+-- contravariant occurrence: no `Ref`, no mutation anywhere -- the
+-- unsoundness is pure contravariance, made observable by applying the
+-- (actually-effectful) argument through the widened type. EFFECTS-SEMANTICS
+-- .md §9. Fixed by slice 4 (D-2, #1119), which added the per-parameter
+-- polarity/variance analysis; this row is now correctly REJECTED.
+data Taker a = MkTaker (a -> Int)
+
+runTaker : Taker a -> a -> Int
+runTaker (MkTaker g) x = g x
+
+pureTaker : Taker (Unit -> Unit)
+pureTaker = MkTaker (k => let _ = k () in 1)
+
+wide : Taker (Unit -> <IO> Unit)
+wide = pureTaker
+
+shout : Unit -> <IO> Unit
+shout _ = println "LAUNDERED"
+
+main = println (runTaker wide shout)

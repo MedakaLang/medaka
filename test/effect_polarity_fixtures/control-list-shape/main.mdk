@@ -1,0 +1,27 @@
+-- CONTROL (list-shape, covariant-only): per S-polarity-conformance-matrix
+-- (#1119/D-2), reused verbatim in spirit from the `control.mdk` shape
+-- originally filed alongside #1121 (contravariant-domain-widening launders;
+-- closed via D-2, see git history). `a` sits ONLY in the CODOMAIN of the
+-- stored function (`Int -> a`), so `Giver`
+-- is COVARIANT-ONLY in `a`. `Giver` is IMMUTABLE -- no write-back operation at
+-- all -- so the closure installed at construction can never be swapped
+-- afterward: the widened type only ever describes the SAME, already-fixed
+-- `pureGiver` closure, which performs no IO regardless of what its declared
+-- type now claims it may. Accepting this widening is CORRECT and MUST STAY
+-- correct after slice 4 (EFFECTS-SEMANTICS.md §9: the covariant-widening
+-- defect this sprint targets lives at contravariant/invariant positions --
+-- see write-*/contra-* rows -- not at a genuinely covariant-only occurrence).
+data Giver a = MkGiver (Int -> a)
+
+runGiver : Giver a -> Int -> a
+runGiver (MkGiver g) x = g x
+
+pureGiver : Giver (Unit -> Unit)
+pureGiver = MkGiver (n => u => ())
+
+wideGiver : Giver (Unit -> <Stdout> Unit)
+wideGiver = pureGiver
+
+main =
+  let g = runGiver wideGiver 0
+  println (g ())

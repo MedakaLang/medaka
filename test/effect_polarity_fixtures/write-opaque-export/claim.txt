@@ -1,0 +1,22 @@
+slice: S-polarity-conformance-matrix (#1119/D-2)
+shape: write-channel x opaque-export wrapper (`Holder` exported abstractly
+       from sibling module wrap.mdk -- `export data Holder a = MkHolder (Ref
+       a)`, no `(..)`, no `public export`; main.mdk only sees `mkHolder` /
+       `holderRef`'s declared types, never the constructor or a bare `Ref`)
+spec: same as write-direct/claim.txt. Demonstrates the laundering survives
+      module opacity -- hiding the representation behind an abstract export
+      does not change substMonoP's TApp-arm treatment of `Holder`'s type
+      parameter, since the polarity computation (or its absence, packet §4
+      fact 3) happens at the type-constructor level, independent of what a
+      given module can pattern-match on.
+status: FIXED by slice 4 (D-2, #1119) -- now correctly REJECTED with a
+  polarity diagnostic. The measurement below is HISTORICAL, from before
+  slice 4 landed.
+cmd (historical, pre-D-2): run main.mdk
+measured-exit (historical): 0
+measured-stdout (historical): SMUGGLED ()
+derivation: `box : Holder (Unit -> <> Unit) = mkHolder pureFn` widened to
+  `alias : Holder (Unit -> <Stdout> Unit) = box`; `holderRef alias := shout`
+  wrote into the cell `holderRef box` reads back from a zero-row
+  binding. Same launder as the other write-channel rows, fully behind an
+  opaque cross-module abstraction.

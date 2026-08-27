@@ -1,0 +1,22 @@
+slice: S-polarity-conformance-matrix (#1119/D-2)
+shape: control, covariant-only wrapper (List-shape), no channel
+spec: EFFECTS-SEMANTICS.md §9 ("Index fidelity" bullet's variance discussion)
+      + the control's own structural argument: an IMMUTABLE, write-back-free
+      container whose parameter occurs ONLY covariantly can never have its
+      widened claim falsified, so accepting the widening is correct.
+status: GREEN (ACCEPTED) -- confirmed today and MUST STAY green after slice 4.
+cmd: run main.mdk
+measured-exit: 0
+measured-stdout: ()
+derivation: `Giver a = MkGiver (Int -> a)` -- `a` sits only in the codomain,
+  so `Giver` is covariant-only in `a`. `Giver` has no write-back operation,
+  so the closure installed at construction (`n => u => ()`, genuinely pure)
+  can never be swapped afterward; the widened type `Giver (Unit -> <IO> Unit)`
+  only ever describes that same pure closure. Nothing in the program can
+  make the widened claim observably false. A conservative D-2 fix COULD
+  legitimately choose invariance here too (per-parameter polarity that
+  cannot prove covariant-only defaults to invariant) -- if slice 4 does
+  that, this row's CONTROL-BROKE means "re-derive against the landed rule,"
+  not "the environment broke" (see the analogous note on the `control.mdk`
+  shape originally filed alongside #1121, closed via D-2, see git history,
+  which this row mirrors).
