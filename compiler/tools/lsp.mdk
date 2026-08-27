@@ -739,9 +739,9 @@ hoverFor runtimeSrc coreSrc uri src params docs = match (positionLine params, po
       None => JNull
       Some env => match hoverScheme name env
         None => JNull
-        Some sch =>
+        Some (sch, isLocal) =>
           let pfx = sigLeadingEff name (unwrapDecls (parseResult src))
-          jHover name (stringConcat [pfx, ppSchemeNamedFull name sch])
+          jHover name (stringConcat [pfx, ppHoverScheme isLocal name sch])
   _ => JNull
 
 -- Stateless type-at-point for the `medaka mcp` `medaka_type_at` tool (#251) — and
@@ -775,9 +775,9 @@ typeAtPoint runtimeSrc coreSrc filePath src line col = match identifierAt src li
       None => None
       Some env => match hoverScheme name env
         None => None
-        Some sch =>
+        Some (sch, isLocal) =>
           let pfx = sigLeadingEff name (unwrapDecls (parseResult src))
-          Some (stringConcat [name, " : ", pfx, ppSchemeNamedFull name sch])
+          Some (stringConcat [name, " : ", pfx, ppHoverScheme isLocal name sch])
 
 -- The hover lookup env for the buffer.  A buffer with a non-core sibling import
 -- goes through the multi-module project pipeline (loads the import graph; the
@@ -811,12 +811,44 @@ projectEntryEnv runtimeSrc coreSrc uri docs =
 -- Resolve a hovered name's scheme: the returned typecheck env (globals +
 -- top-level) first, then the hover-only side-channels — locals (let/param/match
 -- binders) and the seed (runtime.mdk externs) — neither of which the env carries.
-hoverScheme : String -> List (String, Scheme) -> Option Scheme
+-- The Bool is the LOCAL-TIER tag (F2, the #2054 family): True iff the hit came
+-- from `currentLocalSchemes ()`, i.e. it is a genuine local binder.  That tag is
+-- the only place in the pipeline that knows a name is local — the tiers are
+-- otherwise indistinguishable once collapsed to a bare `Option Scheme`, and
+-- throwing it away is what let a local's rendering reach `ppSchemeNamedFull`'s
+-- bare-name prelude store (see `ppHoverScheme`).
+hoverScheme : String -> List (String, Scheme) -> Option (Scheme, Bool)
 hoverScheme name env = match lookupSchemeL name env
-  Some s => Some s
+  Some s => Some (s, False)
   None => match lookupSchemeL name (currentLocalSchemes ())
-    Some s => Some s
-    None => lookupSchemeL name (currentSeedSchemes ())
+    Some s => Some (s, True)
+    None => map (s => (s, False)) (lookupSchemeL name (currentSeedSchemes ()))
+
+-- Render a display-surface scheme, choosing the render path by TIER.
+--
+-- 🚨 A GENUINE LOCAL MUST NOT REACH `ppSchemeNamedFull`'s THIRD ARM.  That arm
+-- is keyed by BARE NAME against `crossRun.coreSchemeObligationsRef` — the
+-- prelude's own obligation store — with no check that the `Scheme` in hand came
+-- from that prelude binding.  A local binder is in neither `schemeDefIdsRef`
+-- (top-level binders only) nor, in general, the module's own
+-- `schemeObligationsRef`, so it falls through to arm 3 every time; if its bare
+-- name collides with an unrelated prelude binding's, the surface renders the
+-- LOCAL's inferred type carrying the PRELUDE binding's constraint context —
+-- silently wrong, no error.  MEASURED on an import-bearing buffer whose entry
+-- module has `let count = 5`: `count : Foldable a => Int`, for `count : Int`.
+--
+-- Every NON-local tier keeps `ppSchemeNamedFull`: the env's own/prelude names and
+-- the import-scoped seed are exactly the names arm 3 is right for, and it is what
+-- makes a Module-arm `println` render `Display a => a -> <IO> Unit` at all
+-- (#1116, S-full-env-scheme-entry).  A local drops to `ppSchemeNamed`, which
+-- consults only the module last checked's own tables — where a local constrained
+-- binding does register its obligations (#816) — and never the prelude store.
+ppHoverScheme : Bool -> String -> Scheme -> String
+ppHoverScheme isLocal n s =
+  if isLocal then
+    ppSchemeNamed n s
+  else
+    ppSchemeNamedFull n s
 
 -- The leading effect annotation of NAME's top-level signature, rendered as a
 -- `<IO> ` prefix (trailing space), or "" if none.  `from_ast_type` drops a
@@ -929,10 +961,14 @@ startsWith p n =
 
 -- Filter env to names matching the prefix, deduplicating (first occurrence
 -- wins).  Mirror filter_completions.
-filterCompletions : String -> List String -> List (String, Scheme) -> List Json
+-- The third component is the LOCAL-TIER tag `completionEnvFor` stamped on each
+-- slice before concatenating them (see `ppHoverScheme` for why a local may not be
+-- rendered through `ppSchemeNamedFull`).  Tagging happens at the slice, not here,
+-- because by the time the slices are one flat list the tiers are indistinguishable.
+filterCompletions : String -> List String -> List (String, Scheme, Bool) -> List Json
 filterCompletions _ _ [] = []
-filterCompletions prefix seen ((n, s)::rest)
-  | startsWith prefix n && not (anyName seen n) = jCompletionItem n (ppSchemeNamedFull n s) :: filterCompletions prefix (n::seen) rest
+filterCompletions prefix seen ((n, s, isLocal)::rest)
+  | startsWith prefix n && not (anyName seen n) = jCompletionItem n (ppHoverScheme isLocal n s) :: filterCompletions prefix (n::seen) rest
   | otherwise = filterCompletions prefix seen rest
 
 -- One CompletionItem { label, kind, detail }.  kind 3 = Function (LSP spec).
@@ -954,10 +990,17 @@ completionFor runtimeSrc coreSrc uri src params docs = match (positionLine param
 -- entry's own schemes + its locals + its import-scoped seed (core + runtime +
 -- imported names).  A single-file buffer keeps `docSchemes` unchanged — adding
 -- the seed/locals there would change the single-file completion golden.
-completionEnvFor : String -> String -> String -> String -> Docs -> <IO> Option (List (String, Scheme))
+completionEnvFor : String -> String -> String -> String -> Docs -> <IO> Option (List (String, Scheme, Bool))
 completionEnvFor runtimeSrc coreSrc uri src docs
-  | bufferHasImports src = map (own => own ++ currentLocalSchemes () ++ currentSeedSchemes ()) (projectEntryEnv runtimeSrc coreSrc uri docs)
-  | otherwise = docSchemes runtimeSrc coreSrc src
+  | bufferHasImports src = map (own => tagTier False own ++ tagTier True (currentLocalSchemes ()) ++ tagTier False (currentSeedSchemes ())) (projectEntryEnv runtimeSrc coreSrc uri docs)
+  | otherwise = map (tagTier False) (docSchemes runtimeSrc coreSrc src)
+
+-- Stamp one completion-env slice with its tier (True = a genuine local binder).
+-- Order across the slices is unchanged, so `filterCompletions`' first-occurrence-
+-- wins dedup still resolves a shadowed name to exactly the entry it did before.
+tagTier : Bool -> List (String, Scheme) -> List (String, Scheme, Bool)
+tagTier _ [] = []
+tagTier isLocal ((n, s)::rest) = (n, s, isLocal) :: tagTier isLocal rest
 
 handleCompletion : String -> String -> Json -> Json -> Docs -> <IO> Unit
 handleCompletion runtimeSrc coreSrc idJson params docs =
