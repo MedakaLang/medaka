@@ -1,0 +1,41 @@
+{- | Strict secp256k1 `did:key` encoding and decoding.
+
+   The payload is the minimally encoded `secp256k1-pub` multicodec followed
+   by one exact compressed SEC 1 public key, wrapped in base58btc multibase.
+   Only the lower-case `did:key:` method spelling is accepted. -}
+
+import array.{drop}
+import string.{stripPrefix}
+import lib.multiformats.{
+  multibaseBase58btc,
+  multibaseBase58btcDecode,
+  multicodecPrefix,
+  multicodecSecp256k1Pub,
+  uvarintDecode,
+}
+import lib.sign.{PublicKey, publicKeyCompressed, publicKeyFromCompressed}
+
+secp256k1Prefix : Array Int
+secp256k1Prefix = multicodecPrefix multicodecSecp256k1Pub
+
+-- | Encode a secp256k1 public key as its canonical `did:key` identifier.
+export
+didKeyFromPublicKey : PublicKey -> String
+didKeyFromPublicKey publicKey =
+  let payload = secp256k1Prefix ++ publicKeyCompressed publicKey
+  "did:key:" ++ multibaseBase58btc payload
+
+-- | Decode exactly one lower-case secp256k1 `did:key` identifier.
+export
+publicKeyFromDidKey : String -> Result String PublicKey
+publicKeyFromDidKey did = match stripPrefix "did:key:" did
+  None =>
+    Err "did_key.publicKeyFromDidKey: expected lower-case 'did:key:' method"
+  Some multibase => match multibaseBase58btcDecode multibase
+    Err message => Err "did_key.publicKeyFromDidKey: \{message}"
+    Ok payload => match uvarintDecode payload
+      Err message => Err "did_key.publicKeyFromDidKey: \{message}"
+      Ok (codec, consumed) => if codec /= multicodecSecp256k1Pub then Err "did_key.publicKeyFromDidKey: expected secp256k1-pub multicodec"
+      else
+        let keyBytes = drop consumed payload
+        publicKeyFromCompressed keyBytes

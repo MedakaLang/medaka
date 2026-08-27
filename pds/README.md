@@ -1,21 +1,20 @@
 # pds/
 
-The self-hosted atproto PDS (Personal Data Server) written in Medaka. This is
-Phase 0 of the umbrella design (#1697) — the numeric substrate slices land
-first; see `docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
-
-This slice (`S-pds-skeleton`, #1705) does nothing atproto-specific: it makes
-`pds/` a real Medaka project with a working, fail-capable in-language gate
-harness, and settles how every tracked `.sh` this sprint adds under `pds/`
-gets classified for CI.
+The self-hosted atproto PDS (Personal Data Server) written in Medaka. Phase 0
+of the umbrella design (#1697) is complete in this tree: the pure, all-engine
+crypto core includes strict secp256k1 signing and `did:key`. Phase 1's data
+model is next; see `docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
 
 ## Layout
 
 - `pds/medaka.toml` — project root marker (`[package]` only; no `entry` — see
   below).
-- `pds/lib/` — library modules. `skeleton.mdk` is a placeholder proving the
-  `pds/test/*.mdk` -> `pds/lib/*.mdk` import wiring; delete it once a real
-  module lands (see its own header for the required three-part coupled edit).
+- `pds/lib/` — pure library modules. Production modules under this directory
+  may not import exported identifiers
+  ending in `ForTest`, selectively or through `.*`, nor alias a module that
+  exports any such identifier; `opaque_field_scalar.sh` derives and enforces
+  that deployment boundary while observing the allowed test-only consumers
+  under `pds/test/`.
 - `pds/test/` — in-language `medaka test` suites (`*_test.mdk`) plus gate
   scripts that run them (`*.sh`). **Every `.sh` placed directly in `pds/test/`
   is auto-enrolled as a CI gate** — see the classification policy below.
@@ -317,4 +316,47 @@ natively because the generic interpreter roster would put four complete
 
 ```sh
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/secp256k1_public_key.sh
+```
+
+## secp256k1 signatures (S-signing-contract, #1700 step 4)
+
+`pds/lib/sign.mdk` now completes the eight-function consumer boundary with an
+opaque `Signature`, exact 64-byte P1363 compact parsing/serialization, fixed
+two-candidate RFC 6979 signing, and public verification. `signDigest` accepts
+only a 32-byte SHA-256 digest whose elements are in `0..255`; compact parsing
+rejects zero, out-of-range, and high-S components.
+
+Production receives only the fixed signer's aggregate validity bit and opaque
+selected signature. Nonce and intermediate scalar observations remain on the
+internal corpus-test routes in `lib.secp256k1`.
+
+`constant_time_signing_public_main.mdk` imports only `lib.sign`, exercises all
+eight public APIs, and roots the native P15 audit at `signDigest` and
+`publicKeyForSecret`. The separate internal carrier remains only for injected
+candidate-1/exhaustion and raw negative evidence.
+
+```sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/ecdsa_vectors.sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/opaque_field_scalar.sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/constant_time_signing.sh
+```
+
+## secp256k1 did:key (#1701)
+
+`pds/lib/did_key.mdk` exposes only the public signing boundary's opaque
+`PublicKey`. Encoding prepends the minimal `secp256k1-pub` multicodec bytes
+`0xe7 0x01` to the exact 33-byte compressed SEC 1 key, encodes that payload as
+base58btc multibase, and prepends the lower-case `did:key:` method. Decoding
+requires those exact layers and delegates SEC 1 validation to `lib.sign`.
+
+The 16-row answer key comes directly from the pinned official-PDS
+`Secp256k1Keypair.did()` implementation. Its offline checker binds each row to
+the same fixed private input and compressed public key already established by
+the official-PDS signing corpus. The all-engine gate also rejects 14 named
+malformed method, multibase, multicodec, length, and curve cases and proves
+five disposable behavior mutations turn it red.
+
+```sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" MEDAKA_REQUIRE_WASM=1 \
+  sh pds/test/did_key_all_engines.sh
 ```

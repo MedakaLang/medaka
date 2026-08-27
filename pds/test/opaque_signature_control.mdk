@@ -1,0 +1,10 @@
+-- Positive opacity cell: the public compact ingress/egress remains usable
+-- without exposing the signature constructor or internal scalar carriers.
+import lib.sign.{Signature, signatureFromCompact, signatureCompact}
+
+consume : Signature -> Array Int
+consume signature = signatureCompact signature
+
+main = match signatureFromCompact (arrayMake 64 0)
+  Ok signature => println (arrayLength (consume signature))
+  Err _ => println 0
