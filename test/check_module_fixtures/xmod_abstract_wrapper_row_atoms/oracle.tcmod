@@ -1,0 +1,5 @@
+keep : (Unit -> Unit) -> Bare a
+main : Unit
+pureStash : Slot <>
+shout : Unit -> <Stdout> Unit
+stash : (Unit -> <Stdout> Unit) -> Slot a
