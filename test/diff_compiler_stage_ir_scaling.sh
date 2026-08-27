@@ -144,6 +144,14 @@
 # The lesson for the next reader: one red row can hide more than one defect, and
 # a stage that drops from 3.6 to 2.65 has not necessarily been made linear.
 #
+# ⚠️ SCOPE OF THE FIX: this confirms `lower` is linear on the shipped `gen_match`
+# shape (an N-arm match with NO wildcard arms — every arm tests a distinct
+# constructor). It does not close the quadratic class in general: both fixes
+# above are keyed off column-0's CONSTRUCTOR-row count, so a match whose
+# column-0 WILDCARD-row count itself scales as Theta(N) is still Theta(N^2).
+# That residual is untested by this gate and is tracked separately as #2125 —
+# do not read this row's green as covering it.
+#
 # ── THE LEDGER ───────────────────────────────────────────────────────────────
 #
 # The ledger (`KNOWN_SLOW`, below) is the same self-draining contract
@@ -277,7 +285,9 @@ trmc=mdk_backend_trmc_analysis__detectDispatchGroups"
 # gate: every graded row is held to the plain 3.0 threshold. `match:lower` was the
 # one entry (issue #408, ledgered at ceiling 4.00 / fixed 2.60 against a measured
 # r1 3.328 r2 3.640); it PROMOTED and was removed when the two `core_ir_lower.mdk`
-# quadratics behind it were fixed — see the block above. Re-adding a row means
+# quadratics behind it were fixed for the shipped `gen_match` shape — see the
+# block above (and its scope caveat: the wildcard-row-scaling case is #2125, not
+# fixed here). Re-adding a row means
 # re-adding its `KNOWN_CEIL_<shape>_<stage>` / `KNOWN_FIXED_<shape>_<stage>` pair
 # alongside it, and saying in a comment here what issue it pins and at what band
 # it was measured.

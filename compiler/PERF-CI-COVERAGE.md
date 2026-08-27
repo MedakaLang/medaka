@@ -173,8 +173,12 @@ N-statement `do` blocks. Parser op-chains are provably linear — `chainl1` is a
     wall-clock reading) but at this band the superlinearity is in **`lower`**, not `emit` —
     `match:lower` r1 3.328 r2 3.640 against `match:emit` r1 2.109 r2 2.157. `lower` is also
     invisible to both existing deterministic arms on that shape (its counted-op delta is a
-    CONSTANT 5591 at every N; its allocation is linear at x2.09). It ships LEDGERED, so the
-    gate is green today and fails demanding promotion the moment the quadratic is fixed.
+    CONSTANT 5591 at every N; its allocation is linear at x2.09). It shipped LEDGERED and was
+    **DRAINED by `S-match-emit` (#408 — ✅ CLOSED, landed `9e99b495`)**: the per-branch rescan
+    in `specializeCon`/`specializeLit` and `nthBool`'s O(i) lookup in `leafOrGuard` are fixed
+    for the shipped `gen_match` shape (no wildcard arms). The fix is not general — it remains
+    Θ(N²) when the column-0 wildcard-row count itself scales as Θ(N); that residual is tracked
+    separately as #2125.
 
     ⚠️ **What its THIRD shape found (S-emit-reach-set, #1030).** `match` and `xref` between them
     root ~one value global, so neither reaches the value-init reachability closure
