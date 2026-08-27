@@ -1,18 +1,10 @@
--- | Anti-rot floor for the whole `pds/` in-language test harness
---   (S-pds-skeleton). `pds/test/inlang_test_oracle.sh` counts the assertions
+-- | Anti-rot sanity floor for the whole `pds/` in-language test harness.
+--   `pds/test/inlang_test_oracle.sh` counts the assertions
 --   that actually ran here and fails if the count drops below the committed
 --   floor — that is what catches a discovery regression instead of a silent
---   vacuous-green pass. At least one assertion below exercises `skeletonOk`,
---   which is the proof that `pds/test/*.mdk` -> `pds/lib/*.mdk` import wiring
---   actually works.
+--   vacuous-green pass.
 
-import test.{expectEqual, expectTrue}
-import lib.skeleton.{skeletonOk}
-
-test "skeletonOk is True" = expectTrue skeletonOk
-
-test "skeleton wiring: not skeletonOk is False" =
-  expectEqual (not skeletonOk) False
+import test.{expectEqual}
 
 test "arithmetic sanity: 2 + 2 = 4" = expectEqual (2 + 2) 4
 

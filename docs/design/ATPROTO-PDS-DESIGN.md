@@ -1,8 +1,8 @@
 # A self-hosted atproto PDS in Medaka
 
-**Status:** DESIGN (2026-08-17, collaborative) — nothing built. Phases 0–2 are
-unblocked **today**; Phase 3 onward is gated on the Async v2 runtime arc (#500)
-and the graded-interfaces arc (#820). No tracking issues filed yet.
+**Status:** ACTIVE (2026-08-27) — Phase 0 is complete in the current tree and
+Phase 1 is next. Phase 2 remains unblocked; Phase 3 onward is gated on the
+Async v2 runtime arc (#500) and the graded-interfaces arc (#820).
 
 A Personal Data Server for the AT Protocol, written in Medaka, hosted on the
 dev box behind Caddy. This is simultaneously the most demanding Medaka program
@@ -319,7 +319,8 @@ more than any single item in the list.
 ## 6. Phases
 
 **Phase 0 — crypto core.** `field`, `scalar`, `sha256`, `secp256k1`, `base58`,
-`multiformats`. Gated by G1. *Unblocked today. All-engine.*
+`multiformats`, signing, and secp256k1 `did:key`. Gated by G1. *Complete in
+the current tree. All-engine.*
 
 **Phase 1 — data model.** `dagcbor` (deterministic encode/decode over
 `byteparser`/`bytebuilder`), `cid` (CIDv1: multibase, multicodec, SHA-256 multihash),
