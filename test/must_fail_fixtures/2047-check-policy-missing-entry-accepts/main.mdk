@@ -15,10 +15,10 @@ effect Fetch
 effect Cache
 effect Log
 
-extern fetch : String -> String -> <Fetch> String
-extern cacheGet : String -> <Cache> String
-extern cacheSet : String -> String -> <Cache> Unit
-extern logEvent : String -> <Log> Unit
+extern fetch : String -> String -> <FFI, Fetch> String
+extern cacheGet : String -> <FFI, Cache> String
+extern cacheSet : String -> String -> <FFI, Cache> Unit
+extern logEvent : String -> <FFI, Log> Unit
 
 -- The exfiltration path, buried, exactly as in demo/plugin_malicious.mdk.
 sessionCookie req = req

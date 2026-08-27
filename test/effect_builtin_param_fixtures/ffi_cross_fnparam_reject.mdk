@@ -2,7 +2,7 @@
 -- ruled out by FFI-ABI.md section 3.  It reaches the value-position arm rather
 -- than the spine arm because a parenthesised arrow is an argument, not the
 -- spine.
-extern ffiApply : (Int -> <> Int) -> Int -> <> Int
+extern ffiApply : (Int -> <> Int) -> Int -> <FFI> Int
 
 main : <IO> Unit
 main = println "ffi cross fnparam reject"

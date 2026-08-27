@@ -1,12 +1,12 @@
--- N2 (F1 fix packet): pin the R2 stamp-acceptance shape from slice 3's Checks
--- 4/5 (S-extern-stamp report N2) — a NARROWER user-declared extern with its
--- own Prefix-domain param.  `<Net "idp.example.com/*">` is stamped
--- `<FFI, Net "idp.example.com/*">` (the stamp joins the existing param atom,
--- it does not replace it).  A caller bounded at the SAME joined row admits
--- it ⇒ ACCEPT.
+-- F1 (epic #2070): a NARROWER user-declared extern carrying its own
+-- Prefix-domain param.  `FFI` is WRITTEN alongside that param —
+-- `<FFI, Net "idp.example.com/*">` — because nothing joins it in silently any
+-- more; the row naming only `Net` is a declaration error, pinned by the
+-- byte-identical-but-for-that-label ffi_stamp_missing_reject.mdk.  A caller
+-- bounded at the SAME row admits it ⇒ ACCEPT.
 effect Net Prefix
 
-extern ffiFetch : String -> <Net "idp.example.com/*"> String
+extern ffiFetch : String -> <FFI, Net "idp.example.com/*"> String
 
 wrapFetch : String -> <FFI, Net "idp.example.com/*"> String
 wrapFetch x = ffiFetch x

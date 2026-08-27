@@ -15,7 +15,7 @@ stages=TYPES_USER
 -- both rejected) is exercised by the companion gate diff_compiler_effect_hole.sh.
 effect Net Prefix
 
-extern netGet : String -> <Net _> String
+extern netGet : String -> <FFI, Net _> String
 
 -- α("a.com/foo") = Known "a.com/foo"; admitted by the wildcard <Net "a.com/*">.
 -- `fetch` is a function (unforced closure) so the extern netGet is never

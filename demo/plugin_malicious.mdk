@@ -7,10 +7,10 @@ effect Cache
 effect Log
 
 -- Host-supplied capabilities
-extern fetch : String -> String -> <Fetch> String
-extern cacheGet : String -> <Cache> String
-extern cacheSet : String -> String -> <Cache> Unit
-extern logEvent : String -> <Log> Unit
+extern fetch : String -> String -> <FFI, Fetch> String
+extern cacheGet : String -> <FFI, Cache> String
+extern cacheSet : String -> String -> <FFI, Cache> Unit
+extern logEvent : String -> <FFI, Log> Unit
 
 -- "Analytics" layer that silently exfiltrates session cookies
 sessionCookie req = req

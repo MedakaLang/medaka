@@ -111,16 +111,27 @@ fi
 expect_reject "$FIX/ffi_io_reject.mdk"  'FFI io-non-subsumption reject (<IO> does not subsume <FFI>)' 'performs <FFI "libcurl\*">'
 expect_ok     "$FIX/exec_io_accept.mdk" 'EXEC io-subsumption accept control (<IO> subsumes <Exec>)'
 
-# ── R2 stamp-acceptance shapes (F1 fix packet N2): pin slice 3's report-only
-# Checks 1/2/4/5 probes as a real gate.  A user-declared extern's bare `<>`
-# bound is stamped `<FFI>` (Check 1); a caller at the ORIGINAL bare `<>` no
-# longer subsumes it (Check 2, composed with R1) ⇒ REJECT; naming `FFI`
-# explicitly ⇒ ACCEPT; a NARROWER declared param (`<Net "…">`) is stamped
-# `<FFI, Net "…">` (Checks 4/5, the join not a replace) and a caller bounded at
-# the joined row ⇒ ACCEPT.
-expect_reject "$FIX/ffi_stamp_bare_reject.mdk"   'FFI stamp bare reject (<> does not subsume stamped <FFI>)' 'performs <FFI>'
-expect_ok     "$FIX/ffi_stamp_bare_accept.mdk"   'FFI stamp bare accept (caller names FFI explicitly)'
-expect_ok     "$FIX/ffi_stamp_narrow_accept.mdk" 'FFI stamp narrow accept (stamp joins existing Net param)'
+# ── the DECLARED-ROW HONESTY rule + the caller shapes it composes with ──────
+#
+# F1 (epic #2070) replaced a silent rewrite with a check: a user extern's
+# terminal row must ALREADY name `FFI`, whatever else it names, or the
+# declaration is a located type error.
+#
+# 🚨 THE CELL THAT DISCRIMINATES THE RULE FROM ITS NARROW MISREADING is
+# `ffi_stamp_missing_reject`, whose offending row is NOT empty.  The predecessor
+# rewrote `<Net "…">` to `<FFI, Net "…">` exactly as it rewrote `<>` to `<FFI>`,
+# so a bare-`<>` reject cell alone would show all-green against a fix that still
+# silently widened every written row.  Read it together with
+# `ffi_stamp_narrow_accept`: the two files differ only in the written `FFI`.
+#
+# The remaining two cells are about the CALLER, not the declaration: with `FFI`
+# excluded from `ioAliasLabels` (R1), a caller bounded at bare `<>` does not
+# subsume an `<FFI>`-performing body ⇒ REJECT, and naming `FFI` ⇒ ACCEPT.
+expect_reject "$FIX/ffi_stamp_missing_reject.mdk" 'FFI declared-row honesty reject (non-empty row missing the FFI label)' \
+  "Foreign declaration 'ffiFetch' does not name the 'FFI' effect in its result row"
+expect_reject "$FIX/ffi_stamp_bare_reject.mdk"   'FFI caller reject (<> does not subsume the declared <FFI>)' 'performs <FFI>'
+expect_ok     "$FIX/ffi_stamp_bare_accept.mdk"   'FFI caller accept (caller names FFI explicitly)'
+expect_ok     "$FIX/ffi_stamp_narrow_accept.mdk" 'FFI narrow accept (FFI written alongside the Net param)'
 
 
 # ── #2074 the FFI-ABI.md section 1 CROSSABLE SET, at check time ──────────────

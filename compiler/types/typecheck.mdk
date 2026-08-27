@@ -24796,14 +24796,17 @@ checkBodyImpl seed mode prog0 =
   -- a head no driver could attribute — an `extern` written in a FLAT user file,
   -- where there is no module id and the primitive heads are all that is knowable.
   -- #2072: `userExternSchemes`, not `externSchemes` — this is the extern
-  -- DECLARATION site (the program under check), so a user extern's row gets the
-  -- `FFI` stamp unless the loader owns this program to `stdlibRoot`.
+  -- DECLARATION site (the program under check).  It builds the declared type
+  -- verbatim; the two guards below are what hold a user extern to its row.
   let globalS = ifaceMethodSchemes prog ++ userExternSchemes mode (externTyOriginScope []) prog
-  -- #2074: the CROSSABLE-SET guard, on the same `ffiStampMode` Bool the line
-  -- above stamps by — a signature that is not stamped `<FFI>` is not a foreign
-  -- declaration this rule owns.  It runs AFTER `rejectCyclicAliases` above so
-  -- `expandAliasHeadTy` cannot recurse forever on a cyclic alias.
+  -- #2074 / F1 (epic #2070): the two USER-EXTERN DECLARATION guards, both gated on
+  -- the same `ffiStampMode` ownership Bool — a stdlib-owned program's externs ARE
+  -- the vocabulary and neither rule owns them.  They run AFTER
+  -- `rejectCyclicAliases` above so `expandAliasHeadTy` cannot recurse forever on a
+  -- cyclic alias.  Order between the two is not significant: diagnostics
+  -- accumulate ([T-ERRORS-ACCUM]) and a signature can honestly fail both.
   let _ = ffiCheckExternsCrossable (ffiStampMode mode) prog
+  let _ = ffiCheckExternsLabelled (ffiStampMode mode) prog
   -- methodNames: FLAT's SECOND ifaceMethodSchemes call over prog — dedup-skipped by
   -- registerMethodConstraints so globalS's registered (first-call) ids stay authoritative.
   -- Module checks core in isolation and never needs it, so NO extra call there.
@@ -28203,7 +28206,7 @@ externSchemes scope decls =
   -- answer for is known, and it is recorded here rather than re-derived.  See
   -- `ffiIsBuiltinExternName` for what reads it and why.
   let _ = noteBuiltinExternNames ds
-  externSchemesGo False (stampTyOrigins scope ds)
+  externSchemesGo (stampTyOrigins scope ds)
 
 -- Union, never replace: a driver may build the catalog seed more than once per
 -- process (`medaka test` runs several engines), and a later call carrying a
@@ -28225,24 +28228,32 @@ externDeclNames (_::rest) = externDeclNames rest
 -- The eight `externSchemes … runtimeDecls` call sites above build the STDLIB EXTERN
 -- CATALOG's schemes: `stdlib/runtime.mdk`'s 138 `extern` lines (derived: `grep -c
 -- '^extern ' stdlib/runtime.mdk`), whose written rows ARE the effect vocabulary.
--- They must stay byte-identical, so they keep calling `externSchemes` (stamp=False).
+-- They must stay byte-identical.
 --
 -- THIS one is the `checkBodyImpl` call, which processes whichever program is under
 -- check — normally a USER file, where an `extern f : Int -> <> Int` used to type as
 -- a pure `Int -> Int`: a one-line escape hatch through the whole effect system.
--- Here a user extern's written row may NARROW the description but never REMOVE
--- `FFI`.
 --
--- 🚨 The SAME call site processes stdlib source when someone checks it directly
--- (`medaka check --types stdlib/runtime.mdk` renders all 138 rows off THIS path,
--- not off the seed), so the suppression cannot be keyed on "which call site" — it
--- is keyed on the loader's owning-root fact, published by `setStdlibOwnership`.
+-- 🚨 THIS FUNCTION NO LONGER REWRITES A DECLARED ROW (F1, epic #2070).  Its
+-- predecessor STAMPED `FFI` into the terminal row whenever the label was absent,
+-- which meant the declared row was never checked against what is enforced —
+-- `<Net "a.com/*">` silently became `<FFI, Net "a.com/*">` exactly as `<>`
+-- silently became `<FFI>`.  A signature that says one thing and types as another
+-- is the defect, not the missing atom.  The honesty requirement is now a CHECK
+-- (`ffiCheckExternsLabelled`, run beside the crossable guard at the same
+-- `checkBodyImpl` seam): a user extern's terminal row must ALREADY name `FFI`,
+-- whatever else it names, or the declaration is a located type error.  The scheme
+-- built here is the declaration verbatim.
+--
+-- `mode` is still taken because every caller has one and the sibling guards read
+-- it; the ownership gate now lives entirely on those guards.
 userExternSchemes : CheckMode -> OrdMap TyConOrigin -> List Decl -> List (String, Scheme)
-userExternSchemes mode scope decls =
-  externSchemesGo (ffiStampMode mode) (stampTyOrigins scope (externDecls decls))
+userExternSchemes _ scope decls =
+  externSchemesGo (stampTyOrigins scope (externDecls decls))
 
--- Stamp unless the program under check is stdlib-owned.  See `setStdlibOwnership`
--- for why the two arms read two different fields and why the default is "stamp".
+-- Apply the two user-extern declaration rules unless the program under check is
+-- stdlib-owned.  See `setStdlibOwnership` for why the two arms read two different
+-- fields and why the default is "apply them".
 ffiStampMode : CheckMode -> Bool
 ffiStampMode (Flat _) = not driverState.value.flatEntryIsStdlibRef.value
 -- 🚨 `"__user__"` IS THE FLAT ENTRY, NOT A LOADED MODULE, and this arm is what
@@ -28251,8 +28262,10 @@ ffiStampMode (Flat _) = not driverState.value.flatEntryIsStdlibRef.value
 -- program as the ONE-module graph `[("__user__", userProg)]`, the same synthetic id
 -- ~10 drivers already use for "the single program under check".  Reading the flat
 -- Bool here is exact rather than approximate — that id means "the entry", and the
--- Bool is the entry's ownership.  Dropping this clause silently reinstates the
--- stamp on `medaka check stdlib/runtime.mdk` (measured: 132 rows gain `FFI`).
+-- Bool is the entry's ownership.  Dropping this clause turns
+-- `medaka check stdlib/runtime.mdk` into a wall of declaration errors — the 132
+-- catalog rows that do not name `FFI` (the same 132 that used to GAIN the atom
+-- here, back when this Bool gated a stamp) would each fail the label rule.
 ffiStampMode (Module "__user__" _ _) =
   not driverState.value.flatEntryIsStdlibRef.value
 ffiStampMode (Module mid _ _) =
@@ -28261,9 +28274,12 @@ ffiStampMode (Module mid _ _) =
 -- Make an alias-NAMED arrow structurally visible, at the `Ty` (pre-`Mono`) level.
 --
 -- 🚨 `type CFn = Int -> <> Int; extern cCall : CFn` declares `cCall`'s `Ty` as a
--- bare `TyCon "CFn"`, so `ffiStampTy`'s SYNTACTIC walk fell straight through its
--- catch-all and the extern typed as a pure `Int -> Int` — no `FFI` anywhere, and
--- any caller could reach the foreign call invisibly.  That is not the documented
+-- bare `TyCon "CFn"`, so the SYNTACTIC walk over the extern's declared `Ty`
+-- (`ffiRowHasFFITy` today, a stamping walk when this was first written) fell
+-- straight through its catch-all: the extern typed as a pure `Int -> Int` with no
+-- `FFI` anywhere, and any caller could reach the foreign call invisibly.  With the
+-- walk now READING rather than writing, the same blindness would silently EXEMPT
+-- the declaration from the label rule — same hole, quieter.  That is not the
 -- nullary residual below (there, no arrow exists at all); here the arrow exists
 -- and the walk just could not see through the name.
 --
@@ -28290,47 +28306,47 @@ expandAliasHeadTy (t@(TyApp _ _)) = match tyAppSpine t
   _ => t
 expandAliasHeadTy t = t
 
--- Add an `FFI` atom at the ⊤ param to a user extern's declared RESULT row.
+-- Does a user extern's DECLARED signature already name `FFI` in its terminal
+-- result row?  `None` = the rule does not apply to this signature at all.
 --
--- ⚠️ Only a FUNCTION type is stamped.  A nullary `extern k : Int` is left alone
--- because the effect system has nowhere to put the row: `extern q : <FFI> Int`
--- already renders as a bare `Int` today (a value does not perform), so wrapping one
--- would be a no-op dressed as a fix.  That is a REAL residual hole in the stamp —
--- a nullary extern is still an unlabelled foreign value — and it is a property of
--- where rows live in the type language, not something this rewrite can close.
-ffiStampTy : Ty -> Ty
-ffiStampTy (TyConstrained cs t) = TyConstrained cs (ffiStampTy t)
-ffiStampTy (TyFun a r) = TyFun a (ffiStampResultTy r)
--- The catch-all is where an alias-named arrow lands.  Expand the head first: if
--- an arrow was hiding behind the name, stamp it exactly as the clause above would
--- have; otherwise keep the ORIGINAL `t`, not the expansion, so a non-arrow alias
--- still elaborates through its own (already correct) `Mono`-level path.
--- A CONSTRAINED alias RHS (`type CF a = Sh a => a -> <> a`) expands to a
--- `TyConstrained`-wrapped arrow, which the `TyFun` arm alone cannot see; route it
--- back through `ffiStampTy`, whose FIRST clause already unwraps `TyConstrained`
--- and recurses.  That is exactly why the same signature written inline stamps
--- correctly today.  This does NOT reopen the nullary residual above: a constrained
--- NON-arrow alias recurses onto a bare `TyCon`, which finds no arrow behind its own
--- expansion and falls through unstamped.
-ffiStampTy t = match expandAliasHeadTy t
-  TyFun a r => TyFun a (ffiStampResultTy r)
-  TyConstrained cs inner => TyConstrained cs (ffiStampTy inner)
-  _ => t
+-- This is the former `ffiStampTy`'s walk, reading instead of writing: same three
+-- clauses, same alias expansion, same reason for each.  It answers `None` in
+-- exactly the shape the stamp used to leave alone — a NULLARY `extern k : Int`,
+-- where the effect system has nowhere to put a row (`extern q : <FFI> Int`
+-- renders as a bare `Int`; a value does not perform).  That is the REAL residual
+-- hole recorded as #2106: a nullary extern is still an unlabelled foreign value,
+-- a property of where rows live in the type language, and requiring a label there
+-- would be a demand no spelling can satisfy.
+ffiRowHasFFITy : Ty -> Option Bool
+ffiRowHasFFITy (TyConstrained _ t) = ffiRowHasFFITy t
+ffiRowHasFFITy (TyFun _ r) = Some (ffiResultRowHasFFI r)
+-- The catch-all is where an alias-named arrow lands.  Expand the head first: if an
+-- arrow was hiding behind the name, read it exactly as the clause above would have
+-- — `type CFn = Int -> <> Int; extern cCall : CFn` declares `cCall`'s `Ty` as a
+-- bare `TyCon "CFn"`, and a purely syntactic walk falls straight through it, which
+-- is how such a declaration used to escape the rule entirely.  A CONSTRAINED alias
+-- RHS (`type CF a = Sh a => a -> <> a`) expands to a `TyConstrained`-wrapped arrow
+-- the `TyFun` arm alone cannot see, so route it back through `ffiRowHasFFITy`,
+-- whose FIRST clause unwraps `TyConstrained` and recurses.  A constrained NON-arrow
+-- alias recurses onto a bare `TyCon`, finds no arrow, and answers `None` — the
+-- nullary residual above, not a silent pass.
+ffiRowHasFFITy t = match expandAliasHeadTy t
+  TyFun _ r => Some (ffiResultRowHasFFI r)
+  TyConstrained _ inner => ffiRowHasFFITy inner
+  _ => None
 
--- The arrow's RESULT position: walk to the end of the arrow chain, then either
--- widen the row that is written there or introduce one.  `Int -> Int -> <> Int`
--- puts the row on the LAST result, so the recursion has to follow the spine.
-ffiStampResultTy : Ty -> Ty
-ffiStampResultTy (TyFun a r) = TyFun a (ffiStampResultTy r)
-ffiStampResultTy (TyEffect ls rv inner) = TyEffect (ffiAddAtom ls) rv inner
-ffiStampResultTy t = TyEffect [("FFI", None)] None t
+-- The arrow's RESULT position: walk to the end of the arrow chain and read the row
+-- written there.  `Int -> Int -> <> Int` puts the row on the LAST result, so the
+-- recursion has to follow the spine.  No row at all (`extern f : Int -> Int`) is
+-- `False`, not exempt: an absent row is the loudest form of the missing label.
+ffiResultRowHasFFI : Ty -> Bool
+ffiResultRowHasFFI (TyFun _ r) = ffiResultRowHasFFI r
+ffiResultRowHasFFI (TyEffect ls _ _) = ffiHasAtom ls
+ffiResultRowHasFFI _ = False
 
--- Idempotent by LABEL: a written `<FFI "libcurl*">` keeps its own param rather than
--- being joined with a second ⊤ atom.  Position in the list is not observable: the
--- renderer SORTS atoms, so `<Net "a.com/*">` prints as `<FFI, Net "a.com/*">`.
-ffiAddAtom : List (String, Option String) -> List (String, Option String)
-ffiAddAtom ls = if ffiHasAtom ls then ls else ls ++ [("FFI", None)]
-
+-- By LABEL, not by atom: a written `<FFI "libcurl*">` satisfies the rule with its
+-- own param.  Position in the list is not observable — the renderer SORTS atoms,
+-- so `<Net "a.com/*", FFI>` prints as `<FFI, Net "a.com/*">`.
 ffiHasAtom : List (String, Option String) -> Bool
 ffiHasAtom [] = False
 ffiHasAtom ((l, _)::rest) = l == "FFI" || ffiHasAtom rest
@@ -28424,7 +28440,7 @@ ffiIsBuiltinExternName n =
 -- Walk the arrow spine.  Every PARAM position and the final RESULT position is
 -- a value that actually crosses; the row wrappers and the constraint prefix are
 -- not values and are walked THROUGH, not checked.  `expandAliasHeadTy` at each
--- step for the same reason `ffiStampTy` needs it: `type CFn = List Int -> <> Int`
+-- step for the same reason `ffiRowHasFFITy` needs it: `type CFn = List Int -> <> Int`
 -- hides the offending type behind a name a syntactic walk falls through.
 -- `fb` is the WHOLE SIGNATURE's first located head, computed once at the decl and
 -- used only when the offending position itself carries no location.  That case is
@@ -28453,6 +28469,55 @@ ffiCheckExternPos n fb t
 ffiNonCrossableMsg : String -> Ty -> String
 ffiNonCrossableMsg n t = "Type '\{ppTy t}' cannot cross the foreign-function boundary in extern '\{n}'. A foreign declaration may only mention Int, Float, Bool, Char, String, Unit, or Array Int (compiler/FFI-ABI.md section 1). Marshal '\{ppTy t}' into one of those on the Medaka side and declare the extern in terms of it"
 
+-- ── the DECLARED-ROW HONESTY rule (F1, epic #2070) ──────────────────────────
+--
+-- 🚨 THE RULE THIS REPLACES WAS A SILENT REWRITE, AND THAT IS WHY IT IS A CHECK.
+-- `userExternSchemes` used to ADD `FFI` to a user extern's terminal row whenever
+-- the label was absent, so the row a reader sees in the source and the row the
+-- effect system enforces were two different rows.  It fired on EVERY shape, not
+-- just the empty one: `<Net "a.com/*">` was rewritten to `<FFI, Net "a.com/*">`
+-- with no diagnostic, so a declaration could not even be WRITTEN honestly and be
+-- believed.  The rule now runs in the only direction that keeps the source and
+-- the type the same object: the author writes `FFI`, or the declaration fails.
+--
+-- Every user `extern` is a foreign call by construction (`compiler/FFI-ABI.md`;
+-- nothing in the language distinguishes "models a real foreign symbol" from "is
+-- effect-domain test furniture"), so there is no carve-out for a row that names
+-- some other domain — `<Net "a.com/*">` must be written `<FFI, Net "a.com/*">`.
+--
+-- Gated on the SAME `ffiStampMode` Bool as the crossable guard, and exempting the
+-- SAME builtin-name set: a redeclaration of a `stdlib/runtime.mdk` catalog name is
+-- lowered as the builtin regardless of what its local row claims
+-- (`ffiIsBuiltinExternName` carries that measurement), so its signature is not a
+-- foreign-call contract and this rule does not own it either.  Both guards keying
+-- on one Bool and one exemption is deliberate: two ownership tests could disagree.
+ffiCheckExternsLabelled : Bool -> List Decl -> Unit
+ffiCheckExternsLabelled False _ = ()
+ffiCheckExternsLabelled True ds = ffiCheckLabelsGo (externDecls ds)
+
+ffiCheckLabelsGo : List Decl -> Unit
+ffiCheckLabelsGo [] = ()
+ffiCheckLabelsGo ((DExtern _ n ty)::rest) =
+  let _ = if ffiIsBuiltinExternName n then
+    ()
+  else
+    ffiCheckExternLabel n (firstTyLoc ty) ty
+  ffiCheckLabelsGo rest
+ffiCheckLabelsGo (_::rest) = ffiCheckLabelsGo rest
+
+-- `DExtern` carries no `Loc` of its own (`DExtern Bool String Ty`), and the row
+-- the error is ABOUT may not exist at all (`extern f : Int -> Int`), so the
+-- anchor is the signature's own first located head — the same fallback
+-- `ffiCheckExternSig` computes, and for the same ERROR-QUALITY §2.1 reason: a
+-- caret on line 1 of a file whose defect is on line 7 is not a location.
+ffiCheckExternLabel : String -> Option Loc -> Ty -> Unit
+ffiCheckExternLabel n fb ty = match ffiRowHasFFITy ty
+  Some False => pushTypeErrorAt "T-FFI-UNLABELLED" fb (ffiUnlabelledMsg n)
+  _ => ()
+
+ffiUnlabelledMsg : String -> String
+ffiUnlabelledMsg n = "Foreign declaration '\{n}' does not name the 'FFI' effect in its result row. Every user-declared 'extern' is a foreign call, so its declared row must say so: write '<FFI>' (or '<FFI \"libname\">' to name the library), joined with whatever else the row already names — 'String -> <Net \"a.com/*\"> String' becomes 'String -> <FFI, Net \"a.com/*\"> String'. The compiler does not add the label for you: a row it rewrote would no longer be the row you read"
+
 -- The `DExtern` sublist, in order.  Its own clause rather than a `filter` with a
 -- lambda predicate: `Decl` has no cheap "is an extern" projection, so the pattern
 -- match IS the predicate.
@@ -28461,16 +28526,21 @@ externDecls [] = []
 externDecls ((d@(DExtern _ _ _))::rest) = d :: externDecls rest
 externDecls (_::rest) = externDecls rest
 
--- The pre-#1280 body, unchanged, over the ALREADY-STAMPED list.  It is split out
--- rather than folded into the clause above so that the recursion cannot re-enter
--- the stamping walk on its own tail — the shape that turns a one-pass `map` into a
--- quadratic, which is the defect class `compiler/AGENTS.md` opens with.
-externSchemesGo : Bool -> List Decl -> List (String, Scheme)
-externSchemesGo _ [] = []
-externSchemesGo stamp ((DExtern _ n ty)::rest) =
-  (n, sigToScheme (if stamp then ffiStampTy ty else ty)) ::
-    externSchemesGo stamp rest
-externSchemesGo stamp (_::rest) = externSchemesGo stamp rest
+-- The pre-#1280 body, unchanged, over the ORIGIN-STAMPED list.  It is split out
+-- rather than folded into `externSchemes` so that the recursion cannot re-enter
+-- the origin-stamping walk on its own tail — the shape that turns a one-pass `map`
+-- into a quadratic, which is the defect class `compiler/AGENTS.md` opens with.
+--
+-- It took a `stamp : Bool` until F1 (epic #2070), selecting whether to rewrite the
+-- declared type with an `FFI` atom.  Both call sites now pass the declaration
+-- through verbatim — the stdlib catalog always did, and the user-declaration site
+-- checks the row instead of rewriting it (`ffiCheckExternsLabelled`) — so the
+-- parameter is gone rather than left as a constant nobody may vary.
+externSchemesGo : List Decl -> List (String, Scheme)
+externSchemesGo [] = []
+externSchemesGo ((DExtern _ n ty)::rest) =
+  (n, sigToScheme ty) :: externSchemesGo rest
+externSchemesGo (_::rest) = externSchemesGo rest
 
 -- interface method schemes: each method's declared type, free tyvars (incl. the
 -- interface param) quantified — the bare scheme the === TYPES === output shows

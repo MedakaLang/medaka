@@ -19,16 +19,16 @@
 -- `ffiByteLen` is the same shape for §2.3 — a cell pointer would count the
 -- header bytes, not the payload.
 
-extern ffiAddInts : Int -> Int -> <> Int
-extern ffiNegate : Bool -> <> Bool
-extern ffiCharNext : Char -> <> Char
-extern ffiScale : Float -> Float -> <> Float
-extern ffiByteLen : String -> <> Int
-extern ffiEcho : String -> <> String
-extern ffiSumInts : Array Int -> Int -> <> Int
-extern ffiNote : String -> <> Unit
-extern ffiNotesLen : Unit -> <> Int
-extern ffiMix : Int -> Float -> String -> <> Float
+extern ffiAddInts : Int -> Int -> <FFI> Int
+extern ffiNegate : Bool -> <FFI> Bool
+extern ffiCharNext : Char -> <FFI> Char
+extern ffiScale : Float -> Float -> <FFI> Float
+extern ffiByteLen : String -> <FFI> Int
+extern ffiEcho : String -> <FFI> String
+extern ffiSumInts : Array Int -> Int -> <FFI> Int
+extern ffiNote : String -> <FFI> Unit
+extern ffiNotesLen : Unit -> <FFI> Int
+extern ffiMix : Int -> Float -> String -> <FFI> Float
 
 main : <IO, FFI> Unit
 main =

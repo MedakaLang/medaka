@@ -1,6 +1,6 @@
 -- #2074 crossable-set guard, CONTROL: `Int` IS in FFI-ABI.md section 1, in
 -- both parameter and result position ⇒ ACCEPT.
-extern ffiIdInt : Int -> <> Int
+extern ffiIdInt : Int -> <FFI> Int
 
 main : <IO> Unit
 main = println "ffi cross int accept"

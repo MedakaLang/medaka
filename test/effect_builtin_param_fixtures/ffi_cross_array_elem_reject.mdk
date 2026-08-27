@@ -2,7 +2,7 @@
 -- FFI-ABI.md section 2.4 specifies only the all-immediate-element case.  This
 -- is the cell that proves the predicate reads the ELEMENT type, not just the
 -- `Array` head.
-extern ffiWidths : Array String -> <> Int
+extern ffiWidths : Array String -> <FFI> Int
 
 main : <IO> Unit
 main = println "ffi cross array elem reject"

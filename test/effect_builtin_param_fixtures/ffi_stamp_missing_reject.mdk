@@ -1,0 +1,18 @@
+-- F1 (epic #2070): THE DECLARATION RULE ITSELF.  A user-declared extern whose
+-- terminal row does not name `FFI` is a located type error — and the row here is
+-- NOT empty, which is the whole point of this cell: its predecessor silently
+-- rewrote `<Net "idp.example.com/*">` to `<FFI, Net "idp.example.com/*">` with no
+-- diagnostic, exactly as it rewrote `<>` to `<FFI>`, so a signature could not be
+-- written honestly and believed.  A bare-`<>` twin would still pass under a
+-- narrower reading of the same rule; a NON-empty row that names some other domain
+-- discriminates the two.  Its accepting counterpart is ffi_stamp_narrow_accept.mdk,
+-- identical but for the written `FFI`.
+effect Net Prefix
+
+extern ffiFetch : String -> <Net "idp.example.com/*"> String
+
+wrapFetch : String -> <FFI, Net "idp.example.com/*"> String
+wrapFetch x = ffiFetch x
+
+main : <IO> Unit
+main = println "unreached"

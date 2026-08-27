@@ -12,6 +12,8 @@ COLON
 UPPER "String"
 ARROW
 LT
+UPPER "FFI"
+COMMA
 UPPER "Net"
 STRING "a.com/foo"
 GT

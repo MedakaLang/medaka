@@ -4,7 +4,7 @@
 -- foreign declaration and is not simply skipping everything through the
 -- builtin-name exemption (see ffi_cross_builtin_name_accept.mdk for the
 -- exemption's own cell).
-extern ffiPeek : Ref Int -> <> Int
+extern ffiPeek : Ref Int -> <FFI> Int
 
 main : <IO> Unit
 main = println "ffi cross ref reject"

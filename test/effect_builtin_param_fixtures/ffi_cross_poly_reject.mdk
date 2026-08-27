@@ -8,7 +8,7 @@
 -- of its own, so without `ffiCheckExternSig`'s whole-signature fallback the
 -- caret for the `a` PARAMETER lands on `:1:0` -- line 1 of a file whose defect
 -- is on line 12 -- instead of on this declaration's `Array` head.
-extern ffiWrapAll : a -> <> Array a
+extern ffiWrapAll : a -> <FFI> Array a
 
 main : <IO> Unit
 main = println "ffi cross poly reject"

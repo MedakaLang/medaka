@@ -3,7 +3,7 @@
 -- declared bound equals the extern's row, so the escape check is satisfied.
 effect Foo Set
 
-extern grant : String -> <Foo {"a", "b"}> String
+extern grant : String -> <FFI, Foo {"a", "b"}> String
 
 use : String -> <Foo {"a", "b"}, FFI> String
 use x = grant x

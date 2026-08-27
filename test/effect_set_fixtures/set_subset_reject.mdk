@@ -3,7 +3,7 @@
 -- is NOT ⊆ {"a"} ⇒ the escape check REJECTS (a TYPE ERROR).
 effect Foo Set
 
-extern grant : String -> <Foo {"a", "b"}> String
+extern grant : String -> <FFI, Foo {"a", "b"}> String
 
 tooTight : String -> <Foo {"a"}> String
 tooTight x = grant x

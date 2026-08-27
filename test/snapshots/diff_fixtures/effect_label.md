@@ -9,7 +9,7 @@ stages=TOKENS,DESUGAR,MARK
 effect KV
 effect Log
 
-extern kvGet : String -> <KV> String
+extern kvGet : String -> <FFI, KV> String
 
 get : String -> <KV, FFI> String
 get k = kvGet k
@@ -33,6 +33,8 @@ COLON
 UPPER "String"
 ARROW
 LT
+UPPER "FFI"
+COMMA
 UPPER "KV"
 GT
 UPPER "String"
@@ -90,7 +92,7 @@ EOF
 # DESUGAR
 (DEffect false "KV" None)
 (DEffect false "Log" None)
-(DExtern false "kvGet" (TyFun (TyCon "String") (TyEffect ("KV") None (TyCon "String"))))
+(DExtern false "kvGet" (TyFun (TyCon "String") (TyEffect ("FFI" "KV") None (TyCon "String"))))
 (DTypeSig false "get" (TyFun (TyCon "String") (TyEffect ("KV" "FFI") None (TyCon "String"))))
 (DFunDef false "get" ((PVar "k")) (EApp (EVar "kvGet") (EVar "k")))
 (DTypeSig false "handler" (TyFun (TyCon "String") (TyEffect ("KV" "Log" "FFI") None (TyCon "String"))))
@@ -100,7 +102,7 @@ EOF
 # MARK
 (DEffect false "KV" None)
 (DEffect false "Log" None)
-(DExtern false "kvGet" (TyFun (TyCon "String") (TyEffect ("KV") None (TyCon "String"))))
+(DExtern false "kvGet" (TyFun (TyCon "String") (TyEffect ("FFI" "KV") None (TyCon "String"))))
 (DTypeSig false "get" (TyFun (TyCon "String") (TyEffect ("KV" "FFI") None (TyCon "String"))))
 (DFunDef false "get" ((PVar "k")) (EApp (EVar "kvGet") (EVar "k")))
 (DTypeSig false "handler" (TyFun (TyCon "String") (TyEffect ("KV" "Log" "FFI") None (TyCon "String"))))

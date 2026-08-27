@@ -22,6 +22,22 @@ this doc specifies are still NOT done, both deliberately:
 * **Linkage** — `medaka build` has no flag yet for linking a user object or
   library; that is #2076's half of the sprint.
 
+🚨 **The `FFI` label is WRITTEN by the author, never added by the compiler**
+(F1, epic #2070, 2026-08-27). A user-declared `extern`'s terminal effect row
+must already name `FFI` — `<FFI>`, or `<FFI "libcurl">`, or joined with whatever
+else the row names (`<FFI, Net "a.com/*">`) — or the declaration is a located
+type error (`T-FFI-UNLABELLED`). Its predecessor STAMPED the atom in when it was
+missing, and did so for *every* row shape, not only the empty one: a declared
+`<Net "a.com/*">` silently typed as `<FFI, Net "a.com/*">`, so the row in the
+source and the row the effect system enforced were two different rows and no
+signature could be written honestly and believed. Two populations are exempt,
+both by the same test the crossable guard uses: a program the loader owns to
+`stdlibRoot` (`stdlib/runtime.mdk`'s catalog IS the effect vocabulary), and a
+local redeclaration of a catalog name (`ffiIsBuiltinExternName` — such a name is
+lowered as the builtin whatever its local row claims, so the row is not a
+foreign-call contract). One residual, #2106: a NULLARY `extern k : Int` carries
+no row anywhere in the type language, so the rule cannot reach it.
+
 This doc is scoped to **value crossing**. It does not restate #2071's
 effect-tracking ground (that a foreign call is `<FFI>`-effectful and how that
 propagates) — see #2071 for that.

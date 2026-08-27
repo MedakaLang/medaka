@@ -3,7 +3,7 @@
 -- `FFI`.  `Exec` IS a member of ioAliasLabels, so the `<IO>` bound DOES
 -- subsume it ⇒ ACCEPT.  Proves the FFI rejection above tests FFI's exclusion
 -- from ioAliasLabels, not a broken expandIoInBound.
-extern runIt : String -> <Exec "/usr/bin/*"> Int
+extern runIt : String -> <FFI, Exec "/usr/bin/*"> Int
 
 caller : Unit -> <IO, FFI> Int
 caller _ = runIt "/usr/bin/ls"

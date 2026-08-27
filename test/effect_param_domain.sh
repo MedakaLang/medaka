@@ -30,6 +30,16 @@
 # to novel names would red this gate on the crossable rule, not on anything to
 # do with effect domains.
 #
+# ⚠️ F1 (epic #2070): that SAME exemption is why the expected rows below carry no
+# `FFI` atom.  Between #2071 and F1 a user extern's row was silently STAMPED with
+# `FFI`, catalog redeclarations included, so these cells read
+# `performs <Env {"HOME"}, FFI>`.  F1 deleted the stamp outright — the author
+# writes the label or the declaration is rejected (`T-FFI-UNLABELLED`) — and
+# exempts catalog names from the requirement for the reason above.  A
+# redeclaration is therefore no longer claimed to be foreign at all, which is
+# what these rows now say.  If one of them regrows an `FFI` atom, a stamp has
+# come back somewhere; do not "fix" it by re-adding the atom here.
+#
 # Prereq: `make medaka` (native CLI).  Usage: sh test/effect_param_domain.sh
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -58,13 +68,13 @@ expect_reject() {
 
 # ENV (Set domain): singleton fill + ∪ join
 expect_ok     "$FIX/env_hole_accept.mdk"  "ENV  hole-fill accept ({HOME} ⊆ {HOME,PATH})"
-expect_reject "$FIX/env_hole_reject.mdk"  "ENV  hole-fill reject ({HOME} ⊄ {PATH})"   'performs <Env {"HOME"}, FFI>'
+expect_reject "$FIX/env_hole_reject.mdk"  "ENV  hole-fill reject ({HOME} ⊄ {PATH})"   'performs <Env {"HOME"}>'
 expect_ok     "$FIX/env_join_accept.mdk"  "ENV  djoin ∪ accept ({A,B} ⊆ {A,B})"
-expect_reject "$FIX/env_join_reject.mdk"  "ENV  djoin ∪ reject ({A,B} ⊄ {A})"         'performs <Env {"A", "B"}, FFI>'
+expect_reject "$FIX/env_join_reject.mdk"  "ENV  djoin ∪ reject ({A,B} ⊄ {A})"         'performs <Env {"A", "B"}>'
 
 # EXEC (Prefix domain): prefix fill + prefix subsumption
 expect_ok     "$FIX/exec_hole_accept.mdk" 'EXEC hole-fill accept (/usr/bin/ls ⊑ /usr/bin/*)'
-expect_reject "$FIX/exec_hole_reject.mdk" 'EXEC hole-fill reject (/usr/bin/ls ⊄ /bin/*)' 'performs <Exec "/usr/bin/ls", FFI>'
+expect_reject "$FIX/exec_hole_reject.mdk" 'EXEC hole-fill reject (/usr/bin/ls ⊄ /bin/*)' 'performs <Exec "/usr/bin/ls">'
 
 echo "effect_param_domain: $pass/$fail"
 [ "$fail" -eq 0 ]

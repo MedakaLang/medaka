@@ -16,10 +16,10 @@ stages=TYPES
 -- `ffi_cross_poly_reject.mdk`).  ⚠️ THE PROPERTY THIS FILE LOSES is wrapper
 -- generalization over a POLYMORPHIC extern scheme (the old `boxIt x = wrapL x`);
 -- what remains is the monomorphic half plus the multi-argument spine.
-extern strLen : String -> Int
-extern charAt : String -> Int -> Char
-extern emit : String -> <IO> Unit
-extern rng : Unit -> <Rand> Int
+extern strLen : String -> <FFI> Int
+extern charAt : String -> Int -> <FFI> Char
+extern emit : String -> <FFI, IO> Unit
+extern rng : Unit -> <FFI, Rand> Int
 useLen s = strLen s
 firstOf s = charAt s 0
 combine a b = strLen a + strLen b

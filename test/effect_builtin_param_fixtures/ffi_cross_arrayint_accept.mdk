@@ -1,7 +1,7 @@
 -- #2074 crossable-set guard, CONTROL: `Array Int` IS in FFI-ABI.md section 1
 -- (section 2.4, copy-at-boundary).  The companion reject cell is
 -- ffi_cross_array_elem_reject.mdk, which differs only in the element type.
-extern ffiArraySum : Array Int -> <> Int
+extern ffiArraySum : Array Int -> <FFI> Int
 
 main : <IO> Unit
 main = println "ffi cross array int accept"

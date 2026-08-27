@@ -2,7 +2,7 @@
 -- whitelist is CLOSED, so a type section 3 never enumerates is still rejected.
 data Color = Red | Green
 
-extern ffiColorCode : Color -> <> Int
+extern ffiColorCode : Color -> <FFI> Int
 
 main : <IO> Unit
 main = println "ffi cross adt reject"

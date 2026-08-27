@@ -4,7 +4,7 @@
 -- More directly: bound {"a"} ⊑ {"a","b"} — a tighter demand under a wider grant.
 effect Foo Set
 
-extern grant : String -> <Foo {"a", "b"}> String
+extern grant : String -> <FFI, Foo {"a", "b"}> String
 
 -- declared bound is the SUBSET {"a"}; body uses the SUPERSET-granting extern.
 -- inferred row carries Foo {"a","b"} which is NOT ⊆ {"a"} ⇒ this would REJECT.
