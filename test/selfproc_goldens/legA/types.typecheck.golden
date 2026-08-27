@@ -530,6 +530,9 @@ declEnvReachFrom : Map String (List String) -> List String -> Map String Unit ->
 declEnvReachGo : Map String (List String) -> List DeclEnvModule -> Map String (Map String Unit) -> Map String (Map String Unit)
 declEnvReachIndex : List DeclEnvModule -> Map String (Map String Unit)
 declEnvReachSeed : String -> Map String Unit
+declEnvRowAtomEntries : List Decl -> List (TabKey, List (List Atom))
+declEnvRowAtomsChain : List DeclEnvModule -> List (TabKey, List (List Atom)) -> Map String (List (TabKey, List (List Atom))) -> Map String (List (TabKey, List (List Atom)))
+declEnvRowAtomsEntries : Int -> DeclEnvModule -> List (TabKey, List (List Atom))
 declEnvRowKindEntries : Int -> DeclEnvModule -> List (TabKey, List Kind)
 declEnvRowPolarityEntries : Int -> DeclEnvModule -> List (TabKey, List Polarity) -> List (TabKey, List Polarity)
 declEnvRowVisible : Int -> DeclEnvModule -> List Decl

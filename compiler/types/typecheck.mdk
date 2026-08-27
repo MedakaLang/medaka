@@ -3499,9 +3499,10 @@ declEnvSeedChain (m::rest) kacc oacc km om =
 -- importer's per-run table has no row for them, `paramPolaritiesOf` misses, and
 -- `unifyN`'s gate abstains — the widening is rejected in a one-file program and
 -- accepted through a module boundary.  Measured on this slice's own fixtures:
--- with the eight single-file rows of `test/effect_polarity_fixtures/` flipping
--- to REJECT, `write-opaque-export` and `contra-opaque-export` stayed ACCEPT
--- until this chain existed.
+-- with the single-file rows of `test/effect_polarity_fixtures/` (do not trust a
+-- count here, derive it: `ls -d test/effect_polarity_fixtures/*/ | wc -l`)
+-- flipping to REJECT, `write-opaque-export` and `contra-opaque-export` stayed
+-- ACCEPT until this chain existed.
 declEnvPolarityChain : List DeclEnvModule -> List (TabKey, List Polarity) -> OrdMap (List (TabKey, List Polarity)) -> OrdMap (List (TabKey, List Polarity))
 declEnvPolarityChain [] _ pm = pm
 declEnvPolarityChain (m::rest) pacc pm =
