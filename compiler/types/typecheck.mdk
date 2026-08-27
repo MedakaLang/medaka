@@ -1821,9 +1821,36 @@ ifaceTabKey : TyConOrigin -> String -> TabKey
 ifaceTabKey o n = tabKeyOf NsIface o n
 
 -- one ctor node: its bare row-kinded slots (if performable) + recurse the args
+--
+-- 🚨 THE SLOT'S ATOMS COME FROM THE HEAD'S DECLARATION, not from the use site.
+-- This used to pad every performable KRow slot to `(e, [])` — "the impl can
+-- perform `e` here and nothing else is guaranteed" — the ARGUMENT-side twin of
+-- the blind pad #2110 removed from `methodEffRetOccs`.  On this side the pad is
+-- not an over-rejection but a LAUNDER: for
+--   `data Slot e = Slot (Unit -> <Stdout | e> Unit)`
+-- a `Slot e` ARGUMENT lets the callee run a field the declaration guarantees
+-- performs <Stdout> at EVERY instantiation, `Slot <>` included, so
+--   `unslot : Slot e -> (Unit -> <e> Unit)`
+-- under-claims: it hands back a function typed `<e>` that really performs
+-- <Stdout>, and at `e := <>` the caller gets a pure-typed printer (measured —
+-- `check` and `run` both exited 0 and the program printed).  Reading the
+-- guarantee out of `dataParamRowAtomsRef` through `krowArgVarAtoms` — the same
+-- table and the same walker the RETURN side already consults — makes those
+-- <Stdout> atoms argument-side evidence, and the coverage rule ("every
+-- non-argument occurrence of `e` covers the union of its argument-side atoms")
+-- then rejects `unslot` while still accepting `widen : Slot e -> Slot e`, whose
+-- return occurrence carries the same atoms.  Both halves are pinned:
+-- `test/typecheck_error_fixtures/effect_arg_slot_launder.mdk` and its
+-- `effect_arg_slot_unrelated_ok.mdk` accept-side twin.
+-- ⚠️ A written-row slot (`Slot <Log | e>`) has its WRITTEN labels reported
+-- twice — once here by `krowArgVarAtoms`, once by the `flatMap` below through
+-- `argPerformableOccs`' `TyRow` arm.  Harmless, and NOT the return side's
+-- double-count hazard: `checkArgEffVars` UNIONS the argument-side atoms
+-- (`flatMap snd`), where the return side takes a first-non-empty escape and so
+-- lets an atom-less copy veto a faithful one.
 krowSlotOccs : List (String, List Kind) -> Bool -> TyConOrigin -> String -> List Ty -> List (String, List Atom)
 krowSlotOccs scope perf o n args = match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
-  Some kinds if listLen kinds == listLen args => (if perf then map (n2 => (n2, [])) (krowArgVarNames kinds args) else [])
+  Some kinds if listLen kinds == listLen args => (if perf then krowArgVarAtoms kinds (fromOption [] (paramRowAtomsOf (tyTabKey o n))) args else [])
     ++ flatMap (argPerformableOccs scope perf) args
   _ => flatMap (argPerformableOccs scope perf) args
 
@@ -1831,9 +1858,15 @@ krowSlotOccs scope perf o n args = match lookupTab (tyTabKey o n) perRun.value.d
 -- kinds come from the graded typaram [scope] instead of `dataParamKindsRef`.
 -- This is `rowArgNamesVarApp`'s counterpart on the argument side; a miss falls
 -- through to the args exactly as `krowSlotOccs`' miss does.
+-- An abstract head has no declaration to read, so its guarantee list is `[]`
+-- and every slot still reports `(e, [])` — `krowArgVarAtoms kinds []` is the
+-- old blind pad, occurrence for occurrence.  It is written this way rather than
+-- left as the `map`, so the two arms stay ONE walker: the next atom fact an
+-- abstract head can offer (a graded typaram's declared row, #820) lands in one
+-- place instead of two.
 krowSlotVarOccs : List (String, List Kind) -> Bool -> String -> List Ty -> List (String, List Atom)
 krowSlotVarOccs scope perf h args = match lookupAssoc h scope
-  Some kinds if listLen kinds == listLen args => (if perf then map (n2 => (n2, [])) (krowArgVarNames kinds args) else [])
+  Some kinds if listLen kinds == listLen args => (if perf then krowArgVarAtoms kinds [] args else [])
     ++ flatMap (argPerformableOccs scope perf) args
   _ => flatMap (argPerformableOccs scope perf) args
 
@@ -2981,6 +3014,7 @@ data DeclEnvs = DeclEnvs {
     deIfaces : ClassEnv,  -- A-3.3 (#1519) built it; A-3.5c (#1557) made it LIVE — three readers, see the `CE` block
     deKindsBefore : OrdMap (List (TabKey, List Kind)),
     dePolaritiesBefore : OrdMap (List (TabKey, List Polarity)),  -- #1119 D-2: `deKindsBefore`'s VARIANCE twin — see `declEnvPolarityChain`
+    deAtomsBefore : OrdMap (List (TabKey, List (List Atom))),  -- #2110 S2-1: `deKindsBefore`'s ATOM-GUARANTEE twin — see `declEnvRowAtomsChain`
     deOwnersBefore : OrdMap (OrdMap (List String)),
     deOwnerModules : OrdMap (List String),  -- #1597: field-owner KEY → the module ids that declare it — see `declEnvOwnerModules`
     deReach : OrdMap (OrdMap Unit),  -- #1597: module id → its transitive `DUse` closure (itself + the prelude included) — see `declEnvReachIndex`
@@ -3001,6 +3035,7 @@ emptyDeclEnvs = DeclEnvs {
   deIfaces = emptyClassEnv,
   deKindsBefore = omEmpty,
   dePolaritiesBefore = omEmpty,
+  deAtomsBefore = omEmpty,
   deOwnersBefore = omEmpty,
   deOwnerModules = omEmpty,
   deReach = omEmpty,
@@ -3062,6 +3097,17 @@ buildDeclEnvs coreDecls modules =
     -- write-only, which is drift, not sharing.  Same ordinal-ascending walk,
     -- same "[m]'s seed is everything strictly before [m]" stamping.
     dePolaritiesBefore = declEnvPolarityChain mods [] (omInsert "" [] omEmpty),
+    -- #2110 S2-1: the ATOM-GUARANTEE seed, a third separate walk for a
+    -- DIFFERENT reason than the variance one above: `inferParamRowAtoms`
+    -- composes with NOTHING (see its 🚨 note — an occurrence reached through
+    -- another type's spine drives the intersection empty), so this chain needs
+    -- neither its own accumulator nor a fixpoint.  It stays out of
+    -- `declEnvSeedChain` only because folding a third accumulator into a
+    -- two-accumulator function whose result type is already a pair is drift,
+    -- not sharing.  Same ordinal-ascending walk, same "[m]'s seed is
+    -- everything strictly before [m]" stamping, same `""` seed for the core
+    -- pass.
+    deAtomsBefore = declEnvRowAtomsChain mods [] (omInsert "" [] omEmpty),
     deOwnersBefore = snd seeds,
     -- #1597: the two halves of the field-owner REACHABILITY filter.  Both are
     -- whole-graph and reader-independent (the reader is applied at the READ, in
@@ -3464,6 +3510,69 @@ declEnvPolarityChain (m::rest) pacc pm =
     (declEnvRowPolarityEntries (m.demOrd + 1) m pacc ++ pacc)
     (omInsert m.demId pacc pm)
 
+-- ── #2110 S2-1: the ATOM-GUARANTEE seed chain ────────────────────────────
+-- `declEnvPolarityChain`'s shape, one table over: the same ordinal-ascending
+-- walk, the same `declEnvVisibleTo`-routed row projection, the same "row [m]'s
+-- seed is every row strictly earlier than [m]" stamping under [m]'s module id.
+-- Read back by `declEnvSeedDataUniverse` in exactly one `omLookup`.
+--
+-- 🚨 WITHOUT THIS, #2110's FIX IS SINGLE-FILE-ONLY AND SILENTLY SO — the same
+-- failure `declEnvPolarityChain`'s own 🚨 records, MEASURED again on the
+-- row-atoms table: `export data Slot e = Slot (Unit -> <Stdout | e> Unit)`
+-- (ABSTRACT export, the ordinary way a library ships a wrapper) never reaches
+-- an importer's `registerVariants`, so `paramRowAtomsOf` missed there and
+-- `mkSlot f = Slot f` — accepted verbatim in `Slot`'s OWN module — was
+-- REJECTED through the module boundary.  The direction is over-rejection, so
+-- the gap was loud rather than a launder, but it made #2110 inapplicable to
+-- every abstractly-exported wrapper.
+declEnvRowAtomsChain : List DeclEnvModule -> List (TabKey, List (List Atom)) -> OrdMap (List (TabKey, List (List Atom))) -> OrdMap (List (TabKey, List (List Atom)))
+declEnvRowAtomsChain [] _ am = am
+declEnvRowAtomsChain (m::rest) aacc am =
+  declEnvRowAtomsChain
+    rest
+    (declEnvRowAtomsEntries (m.demOrd + 1) m ++ aacc)
+    (omInsert m.demId aacc am)
+
+-- The atom entries of row [m] a reader at ordinal [cur] may see — the peer of
+-- `declEnvRowKindEntries` and `declEnvRowPolarityEntries`, composed from the
+-- same two predicates rather than an open-coded `<=`, and using the same
+-- `kindPublicDataDecl` projection for the cross-module arm (a param's ATOM
+-- GUARANTEE travels with an abstract export for the same reason its KIND and
+-- its VARIANCE do — #804/#1028: the importer can write the type even though it
+-- cannot see the constructors).
+--
+-- ⚠️ THIS ONE MAY PRE-FILTER, AND #2112's SPLIT DOES NOT APPLY.  The variance
+-- peer had to move its publicity filter to the OUTPUT because a public
+-- wrapper's variance COMPOSES with a private declaration's row, so pre-filtering
+-- silently dropped the private half of the wrapper's meaning.  Atom guarantees
+-- compose with nothing: `inferParamRowAtoms` reads no table, and an occurrence
+-- of the parameter reached through ANOTHER type's application spine contributes
+-- the empty atom list by construction (see its 🚨).  Each entry is therefore a
+-- function of its own declaration alone, so filtering the input and filtering
+-- the output are the same set — and pre-filtering is what `declEnvRowKindEntries`
+-- does.  If this table ever grows a composing arm, this filter must move to the
+-- output the way #2112 moved the variance one.
+declEnvRowAtomsEntries : Int -> DeclEnvModule -> List (TabKey, List (List Atom))
+declEnvRowAtomsEntries cur m
+  | declEnvVisibleTo cur m.demOrd False = declEnvRowAtomEntries m.demDecls
+  | declEnvVisibleTo cur m.demOrd True =
+    declEnvRowAtomEntries (filterList kindPublicDataDecl m.demDecls)
+  | otherwise = []
+
+-- The population half, mirroring `declEnvKindEntries` ARM FOR ARM — including
+-- its `DAttrib` unwrap and its lack of a `DTypeAlias` arm.  That last omission
+-- is deliberate and matches the WRITER: `recordParamRowAtoms` is reached only
+-- through `registerVariants`, which `registerData` calls from its `DData` and
+-- `DNewtype` arms only (its alias arm writes `aliasTableRef` instead), so an
+-- alias has no per-run row either.  Adding one here would publish a
+-- cross-module entry with no single-file counterpart.
+declEnvRowAtomEntries : List Decl -> List (TabKey, List (List Atom))
+declEnvRowAtomEntries [] = []
+declEnvRowAtomEntries ((DAttrib _ d)::rest) = declEnvRowAtomEntries (d::rest)
+declEnvRowAtomEntries ((DData { dataName = n, dataParams = ps, dataCtors = vs, dataOrigin = o })::rest) = (tyTabKey o n, inferParamRowAtoms ps vs) :: declEnvRowAtomEntries rest
+declEnvRowAtomEntries ((DNewtype { newtypeName = n, newtypeParams = ps, newtypeCtor = con, newtypeFieldTy = fty, newtypeOrigin = o })::rest) = (tyTabKey o n, inferParamRowAtoms ps [Variant con (ConPos [fty])]) :: declEnvRowAtomEntries rest
+declEnvRowAtomEntries (_::rest) = declEnvRowAtomEntries rest
+
 -- The polarity entries of row [m] a reader at ordinal [cur] may see — the exact
 -- peer of `declEnvRowKindEntries`, composed from the same two predicates rather
 -- than an open-coded `<=`, and using the same `kindPublicDataDecl` projection
@@ -3802,6 +3911,12 @@ declEnvSeedDataUniverse mid envs =
   -- row makes `unifyN`'s variance gate abstain, i.e. today's leniency) — it can
   -- lose a rejection, never manufacture one.
   perRun.value.dataParamPolarityRef := fromOption [] (omLookup mid envs.dePolaritiesBefore)
+  -- #2110 S2-1: the ATOM-GUARANTEE half of the same seed, read under the same
+  -- key.  A MISS here is fail-LOUD, not fail-silent like the two above: an
+  -- absent row reads as "this declaration guarantees nothing", which is the
+  -- pre-#2110 behaviour, so it can only over-reject.  That is why the table
+  -- shipped without a seed at all and why the gap was recoverable.
+  perRun.value.dataParamRowAtomsRef := fromOption [] (omLookup mid envs.deAtomsBefore)
   perRun.value.fieldOwnersRef := fromOption omEmpty (omLookup mid envs.deOwnersBefore)
   perRun.value.fieldOwnerModulesRef := envs.deOwnerModules
   perRun.value.fieldOwnerReachRef := fromOption omEmpty (omLookup mid envs.deReach)
@@ -15371,14 +15486,20 @@ recordParamPolarities o name pols =
 -- swallows it (`data Bare e = Bare (Unit -> <e> Unit)`, where `Bare <>` hands
 -- back a pure-typed function that prints).
 --
--- ⚠️ NOT reset by `declEnvSeedDataUniverse` and therefore ACCUMULATING across
--- the modules of one run, unlike its two siblings, which take a per-module seed
--- there.  That is safe and deliberate: the key is identity-bearing
--- (`tyTabKey` carries the DECLARATION's `TyConOrigin` — #1111 A-2.3), so a
--- carried-over row can only ever answer for the very declaration that wrote it,
--- never for a same-spelled type in another module.  There is no `deAtomsBefore`
--- chain: a head this table MISSES reads as "no guarantee" (`[]`), which is the
--- pre-#2110 behaviour — an over-rejection, loud, never a launder.
+-- ⚠️ THIS COMMENT USED TO CLAIM THE TABLE "ACCUMULATES ACROSS THE MODULES OF
+-- ONE RUN" AND THEREFORE NEEDED NO SEED CHAIN.  The identity half of that
+-- argument holds — the key is identity-bearing (`tyTabKey` carries the
+-- DECLARATION's `TyConOrigin` — #1111 A-2.3), so a row can only ever answer for
+-- the very declaration that wrote it.  THE ACCUMULATION HALF WAS FALSE.  An
+-- entry written while checking one module is not visible to an importer, so
+-- #2110's fix was single-file-only for every ABSTRACTLY exported wrapper — the
+-- ordinary way a library ships one — because `publicDataDecls` drops
+-- `VisAbstract` before an importer's `registerVariants` ever sees the decl.
+-- The table is now seeded per module by `declEnvSeedDataUniverse` from
+-- `deAtomsBefore`, exactly like its two siblings; see `declEnvRowAtomsChain`.
+-- The failure was recoverable only because a MISS reads as "no guarantee"
+-- (`[]`), i.e. the pre-#2110 behaviour — an over-rejection, loud, never a
+-- launder.
 recordParamRowAtoms : TyConOrigin -> String -> List (List Atom) -> Unit
 recordParamRowAtoms o name atomss =
   let entry = (tyTabKey o name, atomss)
