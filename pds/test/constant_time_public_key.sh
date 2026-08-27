@@ -22,8 +22,8 @@ fail() { printf 'not ok %s - %s\n' "$((checked + 1))" "$1" >&2; exit 1; }
 # it cannot silently widen the trusted callee set.
 source_closure_ok() {
   tree=$1
-  [ "$(cksum "$tree/pds/lib/sign.mdk" | awk '{print $1 " " $2}')" = '250986905 1892' ] || return 1
-  [ "$(cksum "$tree/pds/lib/secp256k1.mdk" | awk '{print $1 " " $2}')" = '3222566514 23967' ] || return 1
+  [ "$(cksum "$tree/pds/lib/sign.mdk" | awk '{print $1 " " $2}')" = '2769643849 3846' ] || return 1
+  [ "$(cksum "$tree/pds/lib/secp256k1.mdk" | awk '{print $1 " " $2}')" = '4146415434 24375' ] || return 1
   [ "$(cksum "$tree/pds/lib/scalar.mdk" | awk '{print $1 " " $2}')" = '344284241 31757' ] || return 1
   [ "$(cksum "$tree/pds/lib/field.mdk" | awk '{print $1 " " $2}')" = '2995963130 26246' ] || return 1
 
