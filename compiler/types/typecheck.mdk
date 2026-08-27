@@ -534,6 +534,7 @@ seedEffectDomains _ =
     ("FileWrite", PPrefix None),
     ("Env", PSet None),
     ("Exec", PPrefix None),
+    ("FFI", PPrefix None),
   ]
   driverState.value.effectDomains := builtins
 
@@ -841,6 +842,10 @@ ioAliasLabels = [
   "FileRead",
   "FileWrite",
 ]
+-- NOTE: `FFI` is deliberately NOT a member. #2071/#2070 (epic, Layer 1, R1):
+-- an `<IO>` bound must NOT subsume an `<FFI>`-performing body — FFI crosses a
+-- trust boundary the IO alias is not meant to paper over. Do not "complete"
+-- this list by adding FFI.
 
 -- expand a bound `IO` atom into the security-label alias before an escape
 -- check, so a NARROW inferred row is subsumed by an `<IO>` bound (narrow ⊑ IO

@@ -432,6 +432,7 @@ builtInEffects = [
   "Net",
   "FileRead",
   "FileWrite",
+  "FFI",
 ]
 
 checkEffect : Option Loc -> Env -> String -> List ResError

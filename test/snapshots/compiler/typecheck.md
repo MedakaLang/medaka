@@ -1,5 +1,5 @@
 # META
-source_lines=34711
+source_lines=34716
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -538,6 +538,7 @@ seedEffectDomains _ =
     ("FileWrite", PPrefix None),
     ("Env", PSet None),
     ("Exec", PPrefix None),
+    ("FFI", PPrefix None),
   ]
   driverState.value.effectDomains := builtins
 
@@ -845,6 +846,10 @@ ioAliasLabels = [
   "FileRead",
   "FileWrite",
 ]
+-- NOTE: `FFI` is deliberately NOT a member. #2071/#2070 (epic, Layer 1, R1):
+-- an `<IO>` bound must NOT subsume an `<FFI>`-performing body — FFI crosses a
+-- trust boundary the IO alias is not meant to paper over. Do not "complete"
+-- this list by adding FFI.
 
 -- expand a bound `IO` atom into the security-label alias before an escape
 -- check, so a NARROW inferred row is subsumed by an `<IO>` bound (narrow ⊑ IO
@@ -34757,7 +34762,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig true "atomParam" (TyFun (TyCon "Atom") (TyCon "Param")))
 (DFunDef false "atomParam" ((PCon "Atom" PWild (PVar "p"))) (EVar "p"))
 (DTypeSig false "seedEffectDomains" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "seedEffectDomains" (PWild) (EBlock (DoLet false false (PVar "builtins") (EListLit (ETuple (ELit (LString "Net")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FileRead")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FileWrite")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "Env")) (EApp (EVar "PSet") (EVar "None"))) (ETuple (ELit (LString "Exec")) (EApp (EVar "PPrefix") (EVar "None"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "effectDomains")) (EVar "builtins")))))
+(DFunDef false "seedEffectDomains" (PWild) (EBlock (DoLet false false (PVar "builtins") (EListLit (ETuple (ELit (LString "Net")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FileRead")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FileWrite")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "Env")) (EApp (EVar "PSet") (EVar "None"))) (ETuple (ELit (LString "Exec")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FFI")) (EApp (EVar "PPrefix") (EVar "None"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "effectDomains")) (EVar "builtins")))))
 (DTypeSig false "registerEffectDomain" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Unit"))))
 (DFunDef false "registerEffectDomain" ((PVar "name") (PVar "domain")) (EBlock (DoLet false false (PVar "entry") (ETuple (EVar "name") (EApp (EVar "domainParam") (EVar "domain")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "effectDomains")) (EBinOp "::" (EVar "entry") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "effectDomains") "value"))))))
 (DTypeSig false "domainParam" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Param")))
@@ -40289,7 +40294,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig true "atomParam" (TyFun (TyCon "Atom") (TyCon "Param")))
 (DFunDef false "atomParam" ((PCon "Atom" PWild (PVar "p"))) (EVar "p"))
 (DTypeSig false "seedEffectDomains" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "seedEffectDomains" (PWild) (EBlock (DoLet false false (PVar "builtins") (EListLit (ETuple (ELit (LString "Net")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FileRead")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FileWrite")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "Env")) (EApp (EVar "PSet") (EVar "None"))) (ETuple (ELit (LString "Exec")) (EApp (EVar "PPrefix") (EVar "None"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "effectDomains")) (EVar "builtins")))))
+(DFunDef false "seedEffectDomains" (PWild) (EBlock (DoLet false false (PVar "builtins") (EListLit (ETuple (ELit (LString "Net")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FileRead")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FileWrite")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "Env")) (EApp (EVar "PSet") (EVar "None"))) (ETuple (ELit (LString "Exec")) (EApp (EVar "PPrefix") (EVar "None"))) (ETuple (ELit (LString "FFI")) (EApp (EVar "PPrefix") (EVar "None"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "effectDomains")) (EVar "builtins")))))
 (DTypeSig false "registerEffectDomain" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Unit"))))
 (DFunDef false "registerEffectDomain" ((PVar "name") (PVar "domain")) (EBlock (DoLet false false (PVar "entry") (ETuple (EVar "name") (EApp (EVar "domainParam") (EVar "domain")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "effectDomains")) (EBinOp "::" (EVar "entry") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "effectDomains") "value"))))))
 (DTypeSig false "domainParam" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Param")))

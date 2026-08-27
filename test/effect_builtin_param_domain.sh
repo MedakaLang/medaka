@@ -104,5 +104,12 @@ else
   echo "FAIL ENV tightened reject: $tr"; fail=$((fail+1))
 fi
 
+# FFI (Prefix domain, #2071/#2070): FFI is NOT in ioAliasLabels, so an <IO>
+# bound must NOT subsume an <FFI>-performing body (control cell uses Exec,
+# which IS in ioAliasLabels, to prove the rejection isn't a broken
+# expandIoInBound).
+expect_reject "$FIX/ffi_io_reject.mdk"  'FFI io-non-subsumption reject (<IO> does not subsume <FFI>)' 'performs <FFI "libcurl\*">'
+expect_ok     "$FIX/exec_io_accept.mdk" 'EXEC io-subsumption accept control (<IO> subsumes <Exec>)'
+
 echo "effect_builtin_param_domain: $pass/$fail"
 [ "$fail" -eq 0 ]

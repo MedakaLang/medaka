@@ -1,0 +1,12 @@
+-- Control cell for ffi_io_reject.mdk: same shape (extern with a Prefix-domain
+-- label, called from a `<IO>`-bounded caller), but with `Exec` instead of
+-- `FFI`.  `Exec` IS a member of ioAliasLabels, so the `<IO>` bound DOES
+-- subsume it ⇒ ACCEPT.  Proves the FFI rejection above tests FFI's exclusion
+-- from ioAliasLabels, not a broken expandIoInBound.
+extern runIt : String -> <Exec "/usr/bin/*"> Int
+
+caller : Unit -> <IO> Int
+caller _ = runIt "/usr/bin/ls"
+
+main : <IO> Unit
+main = println "exec io-subsumption accept"
