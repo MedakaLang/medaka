@@ -560,7 +560,22 @@ jobs:
             # `backend`/`tools` (they're not `constant_time_*` and don't end in
             # `_vectors`) land here by cost, cheapest destination with room after the
             # heavier chunks were placed — see `S-sqlite-rebalance`'s report.
-            pattern: "'diff_compiler_perf_scaling' 'diff_compiler_typecheck*' 'diff_compiler_check*' 'diff_compiler_exhaust' 'diff_compiler_diagnostics' 'diff_compiler_analyze_project' 'diff_compiler_shadow_semantics' 'effect_param_domain' 'effect_builtin_param_domain' 'effect_product_domain' 'effect_set_domain' 'gzip/test/*oracle' 'pds/test/opaque_field_scalar' 'pds/test/secp256k1_public_key' 'pds/test/signing_corpus' 'pds/test/trust_boundary_guards' 'pds/test/vector_provenance'"
+            #
+            # S-build-ir-arm: `diff_compiler_stage_ir_scaling` — the PER-STAGE
+            # Callgrind superlinearity gate for the BUILD path — lands here, and
+            # unusually for this matrix the placement is by cost AND by a real
+            # dependency. Cost: `sh scripts/ci_shard_cost.sh` over 5 green
+            # merge_group runs at the base of that slice read
+            #   backend 639s (pole) | frontend 572s | sqlite 508s | eval 475s
+            #   | engines 469s | tools 465s | types 403s (cheapest)
+            # and the gate costs 177s locally (8 sequential callgrind runs; single-
+            # threaded by design, no fan-out knob), landing `types` at ~580s — still
+            # under the pole. Dependency: it reads `test/bin/profile_main`, which
+            # `diff_compiler_perf_scaling` in THIS shard already builds, so its
+            # marginal oracle cost here is ZERO and would not be anywhere else.
+            # NOT merged into `diff_compiler_ir_scaling`'s row in `sqlite`: that
+            # gate is ~509s on its own, against a 600s foreground ceiling.
+            pattern: "'diff_compiler_perf_scaling' 'diff_compiler_stage_ir_scaling' 'diff_compiler_typecheck*' 'diff_compiler_check*' 'diff_compiler_exhaust' 'diff_compiler_diagnostics' 'diff_compiler_analyze_project' 'diff_compiler_shadow_semantics' 'effect_param_domain' 'effect_builtin_param_domain' 'effect_product_domain' 'effect_set_domain' 'gzip/test/*oracle' 'pds/test/opaque_field_scalar' 'pds/test/secp256k1_public_key' 'pds/test/signing_corpus' 'pds/test/trust_boundary_guards' 'pds/test/vector_provenance'"
           - name: eval
             # The 4 `bootstrap_*` stage gates are named individually, NOT globbed
             # as `bootstrap_*` — that glob also catches `bootstrap_from_seed.sh`,

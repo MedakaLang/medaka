@@ -52,11 +52,11 @@ the scan never fired). The audit below is organized by these three axes.
 
 | | |
 |---|---|
-| **Gates that actually gate** | `test/diff_compiler_perf_scaling.sh` (alloc + per-stage time; front end + both backends + a multi-module *typecheck* arm), `test/diff_compiler_references_scaling.sh` (refindex op-count + a flat-query invariant), `test/diff_compiler_tmc_parity.sh` (LLVM vs Wasm TMC the same fns) |
+| **Gates that actually gate** | `test/diff_compiler_perf_scaling.sh` (alloc + per-stage time; front end + both backends + a multi-module *typecheck* arm), `test/diff_compiler_ir_scaling.sh` (whole-process Cachegrind `Ir` for `medaka check`), `test/diff_compiler_stage_ir_scaling.sh` (PER-STAGE Callgrind `Ir` for the build path), `test/diff_compiler_references_scaling.sh` (refindex op-count + a flat-query invariant), `test/diff_compiler_tmc_parity.sh` (LLVM vs Wasm TMC the same fns) |
 | **Shapes** | bindings, match, listlit, nesting, xref, comments, manydefs, modules |
-| **Graded stages** | parse, exhaust-guards, desugar, resolve, mark, typecheck, fmt, lint, lower, emit, wasm-emit |
-| **Metrics** | GC allocation (deterministic), per-stage wall-time (min-of-K, heap-pinned), refindex op-count |
-| **Wiring** | per-PR QUICK in `gates (types)`; nightly DEEP (`PERF_DEEP=1`) restores the N=16000 `xref`/`manydefs` bands; references-scaling in `tools`, tmc-parity in `backend` |
+| **Graded stages** | parse, exhaust-guards, desugar, resolve, mark, typecheck, fmt, lint, lower, emit, wasm-emit, mangle, dce, trmc |
+| **Metrics** | GC allocation (deterministic), per-stage wall-time (min-of-K, heap-pinned), refindex op-count, whole-process `Ir`, per-stage `Ir` |
+| **Wiring** | per-PR QUICK in `gates (types)`; nightly DEEP (`PERF_DEEP=1`) restores the N=16000 `xref`/`manydefs` bands; references-scaling in `tools`, tmc-parity in `backend`, ir-scaling in `sqlite`, stage-ir-scaling in `types` |
 | **Reports but gates NOTHING** | `test/bench.sh` (unwired, macOS-only, prints RSS but never asserts) |
 
 That is genuinely strong. The holes are specific.
@@ -151,6 +151,30 @@ N-statement `do` blocks. Parser op-chains are provably linear — `chainl1` is a
     "9-line program → 32,896 lines of IR (271/272 fns prelude)" bloat class is guarded only by
     `test/diff_compiler_dispatch_shape.sh` (a *shape* pin), not a *size* bound. IR line count is
     deterministic ⇒ gateable as an absolute ceiling + a linear-in-live-program-size assertion.
+
+14b. **~~No deterministic metric can grade a BUILD-PATH stage.~~ CLOSED** by
+    `test/diff_compiler_stage_ir_scaling.sh` (S-build-ir-arm). The metric is the INCLUSIVE
+    Callgrind `Ir` of a stage's mangled entry symbol, read out of one `callgrind_annotate
+    --inclusive=yes` run of `test/bin/profile_main` per (shape, N) — so `lower`, `emit`,
+    `mangle`, `dce` and `trmc` are each graded on their OWN instruction count, netted against
+    the same generator at N=1 and compared against the same 3.0-per-doubling threshold the
+    other two scaling gates use.
+
+    🚨 **The obvious cheaper shape — whole-process `Ir` on `medaka build`, i.e. a `build` mode
+    on `ir_scaling.sh` — was built, measured, and REFUSED.** A build's fixed cost (typecheck +
+    the ~1.9 s prelude emit; profile_main's `emit` floor alone is 5.9e8 `Ir`, larger than the
+    whole shape-attributable cost at N=1000) dilutes any stage-local ratio to linear at every
+    affordable N. On `match` at #408's own band the whole-process arm reads r1 2.028 r2 2.026
+    while the stage-local arm reads r1 3.328 r2 3.640 — same defect, same tree. A synthetic
+    O(table) scan planted in `llvm_emit`'s `ctorTypeOf` moved the whole-process total by
+    ~6 000 `Ir` out of 5.8e9. Do not re-propose it.
+
+    ⚠️ **What this arm found on arrival:** #408 is titled `match:emit` (from a 2026-07-16
+    wall-clock reading) but at this band the superlinearity is in **`lower`**, not `emit` —
+    `match:lower` r1 3.328 r2 3.640 against `match:emit` r1 2.109 r2 2.157. `lower` is also
+    invisible to both existing deterministic arms on that shape (its counted-op delta is a
+    CONSTANT 5591 at every N; its allocation is linear at x2.09). It ships LEDGERED, so the
+    gate is green today and fails demanding promotion the moment the quadratic is fixed.
 
 15. **No self-compile-time tripwire and no peak-RSS gate.** `test/selfcompile_fixpoint.sh` is
     byte-identical correctness only — never timed. `test/bench.sh` prints RSS but asserts nothing
