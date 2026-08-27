@@ -335,7 +335,13 @@ Production receives only the fixed signer's aggregate validity bit and opaque
 selected signature. Nonce and intermediate scalar observations remain on the
 internal corpus-test routes in `lib.secp256k1`.
 
+`constant_time_signing_public_main.mdk` imports only `lib.sign`, exercises all
+eight public APIs, and roots the native P15 audit at `signDigest` and
+`publicKeyForSecret`. The separate internal carrier remains only for injected
+candidate-1/exhaustion and raw negative evidence.
+
 ```sh
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/ecdsa_vectors.sh
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/opaque_field_scalar.sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/constant_time_signing.sh
 ```
