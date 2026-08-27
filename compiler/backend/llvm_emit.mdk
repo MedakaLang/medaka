@@ -11170,15 +11170,25 @@ tableStats e = [
   ("sigMap", optOmSize !e.sigMap),
 ]
 
-prefixStats : String -> List (String, Int) -> List (String, Int)
-prefixStats _ [] = []
-prefixStats phase ((label, n)::rest) =
-  ("\{phase}.\{label}", n) :: prefixStats phase rest
+-- Shared per-program `EmitStateConfig` construction (F2-emit-stats-cleanup):
+-- `emitProgramMode` and `emitProgramWithStats` built byte-identical configs
+-- apart from `gapMode` — `emitProgramMode` threads its caller's mode through,
+-- `emitProgramWithStats` always runs Strict. Extracted to ONE function so a
+-- future edit to one caller's config can't silently diverge from the
+-- other's with no gate to catch it.
+programEmitConfig : GapMode -> EmitInput -> List CBind -> EmitStateConfig
+programEmitConfig gapMode input groups = EmitStateConfig {
+  counter0 = if input.emitHalf == emitHalfProgram then programHalfIdBase else 0,
+  globalsReg0 = if input.emitHalf == emitHalfPrelude then initGlobalsRegReady (valBinds groups) else initGlobalsReg (valBinds groups),
+  gapMode = gapMode,
+  lazyGlobalNames = lazyGlobalNames groups,
+  runDispatchAnalysis = True,
+}
 
 -- The Strict-mode emission body, factored out of `emitProgramMode` so
--- `emitProgramWithStats` can bracket it with two pure `tableStats` snapshots
--- (entry/exit) without duplicating the emit-step sequence. Byte-identical
--- to the inline body `emitProgramMode` ran before this refactor.
+-- `emitProgramWithStats` can share the exact emit-step sequence without
+-- duplicating it. Byte-identical to the inline body `emitProgramMode` ran
+-- before this refactor.
 runStrictEmission : Emit -> EmitInput -> List CBind -> List CImplEntry -> String
 runStrictEmission e input groups implEntries =
   let _ = resetEmittedDefaults e
@@ -11197,26 +11207,28 @@ runStrictEmission e input groups implEntries =
   let _ = preludeIdSpaceGuard e
   joinNl (reverseL !e.buf ++ reverseL !e.lams)
 
--- Same emission as `emitProgram`, plus a pure entry/exit table-cardinality
--- snapshot (see the block comment above `tableStats`). Never used by the
--- default `medaka build` path — only by the MEDAKA_STATS-aware call site in
+-- Same emission as `emitProgram`, plus a pure table-cardinality snapshot (see
+-- the block comment above `tableStats`). Never used by the default `medaka
+-- build` path — only by the MEDAKA_STATS-aware call site in
 -- `entries/llvm_emit_modules_main.mdk`, so an unset env var costs this
 -- function nothing (it is simply not called).
+--
+-- F2-emit-stats-cleanup: every counted table (`tableStats`) is fully
+-- populated inside `buildEmitState`, before this function's snapshot is
+-- taken, and none of the seven is mutated again anywhere in
+-- `runStrictEmission`'s call chain (confirmed by grepping every `:=` site
+-- for each table's Ref) — so a snapshot taken before emission and one taken
+-- after are identical by construction. One snapshot is therefore taken
+-- (post-`buildEmitState`, matching what a caller reading the printed line
+-- expects: "the table the emitter built"), not two.
 export
 emitProgramWithStats : EmitInput -> CProgram -> (String, List (String, Int))
 emitProgramWithStats input (CProgram groups ctorArs ctorTypes implEntries) =
-  let cfg = EmitStateConfig {
-    counter0 = if input.emitHalf == emitHalfProgram then programHalfIdBase else 0,
-    globalsReg0 = if input.emitHalf == emitHalfPrelude then initGlobalsRegReady (valBinds groups) else initGlobalsReg (valBinds groups),
-    gapMode = Strict,
-    lazyGlobalNames = lazyGlobalNames groups,
-    runDispatchAnalysis = True,
-  }
+  let cfg = programEmitConfig Strict input groups
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries
-  let entryStats = prefixStats "entry" (tableStats e)
+  let stats = tableStats e
   let text = runStrictEmission e input groups implEntries
-  let exitStats = prefixStats "exit" (tableStats e)
-  (text, entryStats ++ exitStats)
+  (text, stats)
 
 -- ── program ─────────────────────────────────────────────────────────────────
 -- Emit a whole CProgram as a textual LLVM module: the runtime declares, then one
@@ -11304,7 +11316,9 @@ installDispatchGroupsFull e groupsAll fnBindsList implEntries =
 
 -- ONE construction path (RUN-EMIT-002) for the per-emission derived state: the
 -- `Emit` record literal, the nine `install*` calls, and the post-install
--- dispatch/float-state block — shared by emitProgramMode and emitProgramGaps.
+-- dispatch/float-state block — shared by emitProgramMode, emitProgramGaps,
+-- and emitProgramWithStats (the last routes its config through the shared
+-- `programEmitConfig`, not a separate literal, per F2-emit-stats-cleanup).
 buildEmitState : EmitStateConfig -> EmitInput -> List CBind -> List (String, Int) -> List (String, String) -> List CImplEntry -> Emit
 buildEmitState cfg input groups ctorArs ctorTypes implEntries =
   let e = Emit {
@@ -11395,16 +11409,7 @@ emitProgramMode gapMode input (CProgram groups ctorArs ctorTypes implEntries) =
   -- the globals initialised as it computes them — so they start READY, exactly as
   -- the non-emitting gaps driver does (initGlobalsRegReady).  Without this every
   -- prelude body that loads a global would hit the forward-dependency gap.
-  let cfg = EmitStateConfig {
-    counter0 = if input.emitHalf == emitHalfProgram then programHalfIdBase else 0,
-    globalsReg0 = if input.emitHalf == emitHalfPrelude then
-      initGlobalsRegReady (valBinds groups)
-    else
-      initGlobalsReg (valBinds groups),
-    gapMode = gapMode,
-    lazyGlobalNames = lazyGlobalNames groups,
-    runDispatchAnalysis = True,
-  }
+  let cfg = programEmitConfig gapMode input groups
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries
   let text = runStrictEmission e input groups implEntries
   (text, reverseL !e.gapLog)
