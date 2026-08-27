@@ -256,7 +256,6 @@ import backend.trmc_analysis.{
   dispRootOf,
   dispMembersOf,
   dispGroupOf,
-  dispFindBind,
   detectDispatchGroups,
   dispSpineParts,
   dictUniformPairs,
@@ -874,6 +873,7 @@ data Emit =
       gDispCtx : Ref GDispCtx,
       gDispGroups : Ref (List DispGroup),
       gDispBinds : Ref (List CBind),
+      gDispBindMap : Ref (OrdMap CBind),
       gDispArs : Ref (List (String, Int)),
       gDispArMap : Ref (Option (OrdMap Int)),
       emittedDefaults : Ref (List String),
@@ -8967,7 +8967,7 @@ gDispMaxArity e (m::rest) acc =
 emitGDispMembers : Emit -> List CBind -> List String -> Unit
 emitGDispMembers _ _ [] = ()
 emitGDispMembers e binds (m::rest) =
-  let _ = match dispFindBind binds m
+  let _ = match omLookup m !e.gDispBindMap
     Some b => emitGDispMember e b
     None => gapU e ("(b') group member without a bind: " ++ m)
   emitGDispMembers e binds rest
@@ -9176,7 +9176,7 @@ gDispKeepEtaStable e binds (g::rest) =
 
 gDispMembersEtaStable : Emit -> List CBind -> List String -> Bool
 gDispMembersEtaStable _ _ [] = True
-gDispMembersEtaStable e binds (m::rest) = match dispFindBind binds m
+gDispMembersEtaStable e binds (m::rest) = match omLookup m !e.gDispBindMap
   Some (CBind name [CClause pats body]) => etaDeficit e name pats body (methodBodyDeficit e body) == 0
     && gDispMembersEtaStable e binds rest
   Some _ => gDispMembersEtaStable e binds rest
@@ -11287,6 +11287,11 @@ installDispatchGroupsFull e groupsAll fnBindsList implEntries =
   -- gDispFnArity is O(log fns) not O(fns) — reverseL ⇒ first-pair-wins = lookupAssoc.
   e.gDispArMap := (Some (omFromPairs (reverseL gDispArs) omEmpty))
   e.gDispBinds := fnBindsList
+  -- #1061: O(log P) member lookup for emitGDispMembers/gDispMembersEtaStable,
+  -- replacing dispFindBind's per-member O(P) linear scan over the whole
+  -- program's function binds. bindNameMap's leftmost-wins insert order
+  -- matches dispFindBind's first-match semantics exactly (emit_support.mdk).
+  e.gDispBindMap := bindNameMap fnBindsList
   let dispGroups0 = detectDispatchGroups
     (n => canonFnName e n)
     (n => gDispIsFn e n)
@@ -11322,6 +11327,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
     gDispCtx = Ref GDispOff,
     gDispGroups = Ref [],
     gDispBinds = Ref [],
+    gDispBindMap = Ref omEmpty,
     gDispArs = Ref [],
     gDispArMap = Ref None,
     emittedDefaults = Ref [],
