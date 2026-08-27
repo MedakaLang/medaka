@@ -1,0 +1,44 @@
+-- TYPE-ALIAS concealment x write channel. Regression row for #2108 (a type
+-- alias over `Ref`/`Array` hides the write channel from the polarity table),
+-- closed by this sprint's slice 1 (S-polarity-input-set).
+--
+-- `type Cell a = Ref a` is a `DTypeAlias`, and before slice 1
+-- `declEnvPolarityEntries` had no `DTypeAlias` arm at all: aliases fell into
+-- its catch-all and were silently dropped from the fixpoint's INPUT SET. The
+-- `TyCon`-head lookup for `Cell` then missed, and the lenient
+-- `polarityAtOr None _ = PCo` default supplied covariance for a parameter
+-- that sits behind a mutable cell.
+--
+-- Same observable as write-newtype, one concealment further in: the write
+-- channel is spelled `Cell a`, never `Ref a`, at the wrapper's field.
+-- EFFECTS-SEMANTICS.md §9 + §5 -- `callBox` declares an EMPTY row and
+-- performs `<Stdout>` if this widening is accepted, so it MUST be REJECTED.
+type Cell a = Ref a
+
+data Box a = MkBox (Cell a)
+
+shout : Unit -> <Stdout> Unit
+shout u =
+  let _ = putStr "SMUGGLED "
+  ()
+
+pureFn : Unit -> Unit
+pureFn u = ()
+
+box : Box (Unit -> <> Unit)
+box = MkBox (Ref pureFn)
+
+alias : Box (Unit -> <Stdout> Unit)
+alias = box
+
+writeIntoAlias : Unit -> Unit
+writeIntoAlias u = match alias
+  MkBox r => r := shout
+
+callBox : Unit -> Unit
+callBox u = match box
+  MkBox r => r.value ()
+
+main =
+  let _ = writeIntoAlias ()
+  println (callBox ())

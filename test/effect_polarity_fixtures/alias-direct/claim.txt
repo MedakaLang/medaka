@@ -1,0 +1,22 @@
+slice: F4-fixture-coverage (regression coverage for #2108)
+issue: #2108 (type alias over `Ref`/`Array` hides the write channel), closed by
+  this sprint's slice 1, S-polarity-input-set
+shape: type-alias concealment x write channel -- `type Cell a = Ref a` behind a
+  one-constructor wrapper `data Box a = MkBox (Cell a)`
+spec: EFFECTS-SEMANTICS.md §9 + §5. `Box`'s parameter reaches a write-capable
+  `Ref` through the alias, so it needs INVARIANCE, not the covariant treatment
+  the lenient default supplied.
+mechanism (from S-polarity-input-set): `declEnvPolarityEntries` had arms for
+  `DAttrib`/`DData`/`DNewtype` and a catch-all that silently DROPPED
+  `DTypeAlias` -- the alias was never in the fixpoint's input set. The
+  `TyCon`-head lookup for `Cell` then missed and `polarityAtOr None _ = PCo`
+  supplied covariance. Slice 1 added the `DTypeAlias` arm, recording the RHS
+  under the alias's own decl-borne `tyTabKey`.
+status: REJECT. Measured on the F4 binary at base 4eb1caf8.
+cmd: MEDAKA_STRICT=1 ./medaka check test/effect_polarity_fixtures/alias-direct/main.mdk
+measured-exit: 1
+measured-stderr: main.mdk:32:8: Effect row mismatch inside a non-covariant type
+  argument: <Stdout> vs <>. ... (caret on `box` in `alias = box`)
+historical (pre-slice-1, measured by S-polarity-input-set at base 746b6430 on the
+  same declaration shape): check/run/build all exit 0; `run` printed
+  `SMUGGLED ()`; `check --types` showed `callBox : Unit -> Unit`.

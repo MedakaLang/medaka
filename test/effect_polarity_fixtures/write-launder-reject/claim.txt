@@ -1,0 +1,25 @@
+slice: F4-fixture-coverage (regression coverage for #2109, REJECT half of the pair)
+issue: #2109 -- this row asserts the direction that must KEEP rejecting after
+  slice 4 (S-write-narrowing-direction) landed shape (b).
+shape: write-channel laundering at an ARGUMENT SITE -- an already-typed cell
+  `box : Ref (String -> <> Unit)` coerced through the identity
+  `idr : Ref a -> Ref a` to `alias : Ref (String -> <Stdout> Unit)`. This is
+  #1098's shape, relocated to the argument span that write-workaround-accept's
+  safe narrowing also occupies.
+spec: EFFECTS-SEMANTICS.md §5 (no-laundering law) + §9. Writing the effectful
+  `shouty` through `alias` mutates the SAME cell `box` reads from, so `callBox`
+  -- declared with an EMPTY row -- would perform `<Stdout>`.
+why this row exists (measured by S-write-narrowing-direction): the safe narrowing
+  and this laundering reach `paramVarianceGuard` INDISTINGUISHABLY -- same two
+  `Mono`s (`Ref (String -> <Stdout> Unit)` ~ `Ref (String -> <> Unit)`), same
+  rendered `<Stdout> vs <>` pair, and BOTH carrying a caret on an argument span.
+  That measurement is what falsified "argument position implies fresh
+  construction" and ruled out the cheap location-based special case for #2109.
+  This row keeps the falsifier live: it and write-workaround-accept must never be
+  swappable by a future regression.
+status: REJECT. Measured on the F4 binary at base 4eb1caf8.
+cmd: MEDAKA_STRICT=1 ./medaka check test/effect_polarity_fixtures/write-launder-reject/main.mdk
+measured-exit: 1
+measured-stderr: main.mdk:35:12: Effect row mismatch inside a non-covariant type
+  argument: <Stdout> vs <>. ... (caret on `box` in `alias = idr box` -- an
+  ARGUMENT span, the same span shape the accepted row uses)
