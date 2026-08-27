@@ -53,7 +53,7 @@ the scan never fired). The audit below is organized by these three axes.
 | | |
 |---|---|
 | **Gates that actually gate** | `test/diff_compiler_perf_scaling.sh` (alloc + per-stage time; front end + both backends + a multi-module *typecheck* arm), `test/diff_compiler_ir_scaling.sh` (whole-process Cachegrind `Ir` for `medaka check`), `test/diff_compiler_stage_ir_scaling.sh` (PER-STAGE Callgrind `Ir` for the build path), `test/diff_compiler_references_scaling.sh` (refindex op-count + a flat-query invariant), `test/diff_compiler_tmc_parity.sh` (LLVM vs Wasm TMC the same fns) |
-| **Shapes** | bindings, match, listlit, nesting, xref, comments, manydefs, modules |
+| **Shapes** | bindings, match, listlit, nesting, xref, comments, manydefs, modules; stage-ir-scaling adds `vchain` (value-global init chain, #1030) |
 | **Graded stages** | parse, exhaust-guards, desugar, resolve, mark, typecheck, fmt, lint, lower, emit, wasm-emit, mangle, dce, trmc |
 | **Metrics** | GC allocation (deterministic), per-stage wall-time (min-of-K, heap-pinned), refindex op-count, whole-process `Ir`, per-stage `Ir` |
 | **Wiring** | per-PR QUICK in `gates (types)`; nightly DEEP (`PERF_DEEP=1`) restores the N=16000 `xref`/`manydefs` bands; references-scaling in `tools`, tmc-parity in `backend`, ir-scaling in `sqlite`, stage-ir-scaling in `types` |
@@ -175,6 +175,17 @@ N-statement `do` blocks. Parser op-chains are provably linear — `chainl1` is a
     invisible to both existing deterministic arms on that shape (its counted-op delta is a
     CONSTANT 5591 at every N; its allocation is linear at x2.09). It ships LEDGERED, so the
     gate is green today and fails demanding promotion the moment the quadratic is fixed.
+
+    ⚠️ **What its THIRD shape found (S-emit-reach-set, #1030).** `match` and `xref` between them
+    root ~one value global, so neither reaches the value-init reachability closure
+    (`emit_support.eagerReachMap`) at all — the gate graded `emit` on two shapes that fold an
+    empty graph. `vchain` (N chained nullary value globals, `g_i = g_{i-1} + 1`, rooted by
+    `main`) was added to close that and was RED on arrival: `vchain:emit` r1 3.599 r2 3.978, of
+    which `foldReachSCCs` alone was 86% and scaled x4.69 x4.61 on its own. FIXED in
+    `compiler/backend/emit_support.mdk` — `vchain:emit` now r1 2.155 r2 2.150. The residual
+    Theta(V^2) is the reach TABLE's own size (Sum_v |reach(v)| is quadratic on a chain by
+    construction) and is NOT removable while the two topo sorts consume transitive reach; that
+    seam, not the fold, is the next move if this row ever reddens again.
 
 15. **No self-compile-time tripwire and no peak-RSS gate.** `test/selfcompile_fixpoint.sh` is
     byte-identical correctness only — never timed. `test/bench.sh` prints RSS but asserts nothing

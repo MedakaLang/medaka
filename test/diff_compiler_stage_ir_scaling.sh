@@ -90,6 +90,7 @@
 # MEASURED margins at the shipped bands, this box, on this tree:
 #     xref:lower   r1 2.095  r2 2.106      xref:emit   r1 2.128  r2 2.152
 #     match:lower  r1 2.302  r2 2.240      match:emit  r1 2.108  r2 2.156
+#     vchain:lower r1 2.109  r2 2.111      vchain:emit r1 2.155  r2 2.150
 #
 # ── THE SHAPES ───────────────────────────────────────────────────────────────
 #
@@ -103,6 +104,14 @@
 #   xref  — N chained functions, `main` calling the head. The DISCRIMINATOR: the
 #           same stages, the same machinery, a shape with no backend quadratic in
 #           it, so a gate that always fired would be caught here.
+#   vchain— N chained nullary VALUE globals (`g_i = g_{i-1} + 1`), rooted by `main`.
+#           Issue #1030's shape, and NEITHER of the two above reaches it: `match`
+#           roots one value global and `xref` roots none, so the value-init
+#           reachability closure (`emit_support.eagerReachMap`) folds an empty
+#           graph on both. Here reach(g_i) = {g_0..g_{i-1}}, so the reach sets grow
+#           linearly and the fold that builds them is the graded term.
+#           ⚠️ The GRADED stage for this shape is `emit` — `eagerReachMap` is called
+#           from `orderedValBinds` inside `emitProgram`, on BOTH backends.
 #
 # ── WHAT THIS GATE FOUND, AND THE #408 ATTRIBUTION CORRECTION ────────────────
 #
@@ -148,15 +157,42 @@
 #
 #     STAGE_IR_NO_LEDGER=1 sh test/diff_compiler_stage_ir_scaling.sh
 #
+# ── WHAT THIS GATE FOUND, ROUND 2: #1030, on `vchain` ────────────────────────
+#
+# `vchain` was added by S-emit-reach-set to grade #1030, and it was RED on arrival —
+# the first shape in this file to reach the value-init reachability closure at all.
+# Measured on this box, at the shipped band (125/250/500), BEFORE the fix:
+#
+#     vchain:emit   net 111 116 200 -> 399 931 105 -> 1 590 944 747  r1 3.599 r2 3.978
+#
+# with `emit_support.foldReachSCCs` alone accounting for 1 371 623 301 of the 1.59e9
+# (86%) and scaling x4.69 x4.61 on its own. The defect: the per-SCC union was
+# `dedup (dvals ++ unionLookup direct acc)`, which COPIES every callee's reach list
+# and rebuilds a fresh O(|reach|) `seen` tree over the copy, once per SCC.
+# FIXED in compiler/backend/emit_support.mdk by carrying each reach set as a
+# (list, OrdMap Unit) pair through the fold so the last callee's list can be SHARED
+# as the result's tail; after: `vchain:emit` r1 2.155 r2 2.150, and foldReachSCCs
+# net 3.26M -> 7.51M -> 17.00M (x2.31 x2.26). Element order is unchanged, so the
+# emitted IR is byte-identical.
+#
+# ⚠️ WHAT THE FIX DOES NOT DO: on this shape Sum_v |reach(v)| is Theta(V^2) BY
+# CONSTRUCTION (reach(g_i) has i members), so the reach TABLE cannot be built in
+# sub-quadratic SPACE while `eagerReachMap`'s published type is
+# `OrdMap (List String)`. What the fix removed is the log factor and the per-element
+# tree ALLOCATION — an ~80x constant at N=500 — not the Theta(V^2) term. Should this
+# row ever go red again at a larger band, the next move is the seam, not the fold:
+# the two topo sorts consume TRANSITIVE reach where per-node adjacency would do.
+#
 # ── COST ─────────────────────────────────────────────────────────────────────
 #
-# 8 callgrind invocations (2 shapes x (1 floor + 3 sizes)). Sequential on purpose —
+# 12 callgrind invocations (3 shapes x (1 floor + 3 sizes)). Sequential on purpose —
 # callgrind is single-threaded and a noisy neighbour would perturb nothing here, but
 # fanning out would buy nothing either. Measured wall on this box: see the report
 # for S-build-ir-arm; re-derive with `time sh test/diff_compiler_stage_ir_scaling.sh`.
 #
 # Usage:  sh test/diff_compiler_stage_ir_scaling.sh
 #         STAGE_IR_MATCH_N=250 sh test/diff_compiler_stage_ir_scaling.sh
+#         STAGE_IR_VCHAIN_N=250 sh test/diff_compiler_stage_ir_scaling.sh
 #         STAGE_IR_NO_LEDGER=1 sh test/diff_compiler_stage_ir_scaling.sh
 # Exit:   0 every graded stage scales sub-quadratically (ledgered rows excepted)
 #         1 a stage regressed, or a ledgered row must be promoted
@@ -197,6 +233,7 @@ IR_HEAP="${STAGE_IR_HEAP:-2147483648}"
 FLOOR_N="${STAGE_IR_FLOOR_N:-1}"
 MATCH_N="${STAGE_IR_MATCH_N:-125}"
 XREF_N="${STAGE_IR_XREF_N:-125}"
+VCHAIN_N="${STAGE_IR_VCHAIN_N:-125}"
 
 # The netting-noise guard, as a fraction of the STAGE's own floor. Unlike
 # ir_scaling's 5% this is 2%, and the difference is justified by measurement rather
@@ -278,6 +315,21 @@ gen_xref() {
   done >> "$gf"
   # Same rooting rule as gen_match, same reason.
   printf 'main = println (f%s 0)\n' "$((gn - 1))" >> "$gf"
+}
+
+# #1030's shape: a chain of N nullary VALUE globals, each reading the previous one,
+# rooted by `main`. Rooting is load-bearing twice over here — dceFilter prunes an
+# unrooted chain, AND a value global that is never read is not a node the init-order
+# sort has to place.
+gen_vchain() {
+  gn=$1; gf=$2; : > "$gf"
+  printf 'g0 : Int\ng0 = 1\n' >> "$gf"
+  gi=1
+  while [ "$gi" -lt "$gn" ]; do
+    printf 'g%s : Int\ng%s = g%s + 1\n' "$gi" "$gi" "$((gi - 1))"
+    gi=$((gi + 1))
+  done >> "$gf"
+  printf 'main = println g%s\n' "$((gn - 1))" >> "$gf"
 }
 
 # ── measurement ──────────────────────────────────────────────────────────────
@@ -406,6 +458,7 @@ echo
 
 grade_shape match "$MATCH_N"
 grade_shape xref "$XREF_N"
+grade_shape vchain "$VCHAIN_N"
 
 if [ "$graded" -eq 0 ]; then
   echo "FAIL: no stage was graded — this gate proved nothing."
