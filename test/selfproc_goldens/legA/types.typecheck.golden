@@ -715,6 +715,7 @@ eqStr : String -> String -> Bool
 erredDuring : (Unit -> a) -> (Bool, a)
 exemptInPlaceIndexMutHeads : List String
 exitLevel : Unit -> Unit
+expandAliasHeadTy : Ty -> Ty
 expandIoInBound : List Atom -> List Atom
 expandSupersCross : List Decl -> List (String, List Int) -> List (String, List IfaceRef) -> List (String, List (List Mono)) -> (List (String, List Int), List (String, List IfaceRef))
 expandSupersEntry : List Decl -> List (String, List IfaceRef) -> List (String, List (List Mono)) -> (String, List Int) -> (String, List Int)

@@ -27639,6 +27639,38 @@ ffiStampMode (Module "__user__" _ _) =
 ffiStampMode (Module mid _ _) =
   not (contains mid driverState.value.stdlibOwnedModsRef.value)
 
+-- Make an alias-NAMED arrow structurally visible, at the `Ty` (pre-`Mono`) level.
+--
+-- 🚨 `type CFn = Int -> <> Int; extern cCall : CFn` declares `cCall`'s `Ty` as a
+-- bare `TyCon "CFn"`, so `ffiStampTy`'s SYNTACTIC walk fell straight through its
+-- catch-all and the extern typed as a pure `Int -> Int` — no `FFI` anywhere, and
+-- any caller could reach the foreign call invisibly.  That is not the documented
+-- nullary residual below (there, no arrow exists at all); here the arrow exists
+-- and the walk just could not see through the name.
+--
+-- This is a straight `Ty`-level MIRROR of `fromAstTypeE`'s `TyCon` arm and
+-- `fromAstTypeApp` — same two `Some` branches, same `_ => unchanged` fallback —
+-- with one deliberate difference: NO arity diagnostic.  An unapplied parameterized
+-- alias or an arity mismatch falls through unchanged here, because the real
+-- `T-ALIAS-ARITY` error already fires once from the `fromAstTypeE` conversion that
+-- runs later on this same signature.  This helper's only job is to expose an arrow
+-- that is genuinely there; duplicating error reporting is not its business.
+--
+-- No cycle guard: `rejectCyclicAliases` has already removed every cyclic entry
+-- from `aliasTableRef` before `userExternSchemes` is ever reached, so the
+-- recursion terminates on the surviving table.
+expandAliasHeadTy : Ty -> Ty
+expandAliasHeadTy (t@(TyCon { tyConName = n, tyConOrigin = o })) = match lookupTab (tyTabKey o n) perRun.value.aliasTableRef.value
+  Some (params, rhs) if listLen params == 0 => expandAliasHeadTy rhs
+  _ => t
+expandAliasHeadTy (t@(TyApp _ _)) = match tyAppSpine t
+  (TyCon { tyConName = n, tyConOrigin = o }, args) => match lookupTab (tyTabKey o n) perRun.value.aliasTableRef.value
+    Some (params, rhs) if listLen params == listLen args =>
+      expandAliasHeadTy (substTyVars (zipL params args) rhs)
+    _ => t
+  _ => t
+expandAliasHeadTy t = t
+
 -- Add an `FFI` atom at the ⊤ param to a user extern's declared RESULT row.
 --
 -- ⚠️ Only a FUNCTION type is stamped.  A nullary `extern k : Int` is left alone
@@ -27650,7 +27682,13 @@ ffiStampMode (Module mid _ _) =
 ffiStampTy : Ty -> Ty
 ffiStampTy (TyConstrained cs t) = TyConstrained cs (ffiStampTy t)
 ffiStampTy (TyFun a r) = TyFun a (ffiStampResultTy r)
-ffiStampTy t = t
+-- The catch-all is where an alias-named arrow lands.  Expand the head first: if
+-- an arrow was hiding behind the name, stamp it exactly as the clause above would
+-- have; otherwise keep the ORIGINAL `t`, not the expansion, so a non-arrow alias
+-- still elaborates through its own (already correct) `Mono`-level path.
+ffiStampTy t = match expandAliasHeadTy t
+  TyFun a r => TyFun a (ffiStampResultTy r)
+  _ => t
 
 -- The arrow's RESULT position: walk to the end of the arrow chain, then either
 -- widen the row that is written there or introduce one.  `Int -> Int -> <> Int`

@@ -1,5 +1,5 @@
 # META
-source_lines=34823
+source_lines=34861
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -27643,6 +27643,38 @@ ffiStampMode (Module "__user__" _ _) =
 ffiStampMode (Module mid _ _) =
   not (contains mid driverState.value.stdlibOwnedModsRef.value)
 
+-- Make an alias-NAMED arrow structurally visible, at the `Ty` (pre-`Mono`) level.
+--
+-- 🚨 `type CFn = Int -> <> Int; extern cCall : CFn` declares `cCall`'s `Ty` as a
+-- bare `TyCon "CFn"`, so `ffiStampTy`'s SYNTACTIC walk fell straight through its
+-- catch-all and the extern typed as a pure `Int -> Int` — no `FFI` anywhere, and
+-- any caller could reach the foreign call invisibly.  That is not the documented
+-- nullary residual below (there, no arrow exists at all); here the arrow exists
+-- and the walk just could not see through the name.
+--
+-- This is a straight `Ty`-level MIRROR of `fromAstTypeE`'s `TyCon` arm and
+-- `fromAstTypeApp` — same two `Some` branches, same `_ => unchanged` fallback —
+-- with one deliberate difference: NO arity diagnostic.  An unapplied parameterized
+-- alias or an arity mismatch falls through unchanged here, because the real
+-- `T-ALIAS-ARITY` error already fires once from the `fromAstTypeE` conversion that
+-- runs later on this same signature.  This helper's only job is to expose an arrow
+-- that is genuinely there; duplicating error reporting is not its business.
+--
+-- No cycle guard: `rejectCyclicAliases` has already removed every cyclic entry
+-- from `aliasTableRef` before `userExternSchemes` is ever reached, so the
+-- recursion terminates on the surviving table.
+expandAliasHeadTy : Ty -> Ty
+expandAliasHeadTy (t@(TyCon { tyConName = n, tyConOrigin = o })) = match lookupTab (tyTabKey o n) perRun.value.aliasTableRef.value
+  Some (params, rhs) if listLen params == 0 => expandAliasHeadTy rhs
+  _ => t
+expandAliasHeadTy (t@(TyApp _ _)) = match tyAppSpine t
+  (TyCon { tyConName = n, tyConOrigin = o }, args) => match lookupTab (tyTabKey o n) perRun.value.aliasTableRef.value
+    Some (params, rhs) if listLen params == listLen args =>
+      expandAliasHeadTy (substTyVars (zipL params args) rhs)
+    _ => t
+  _ => t
+expandAliasHeadTy t = t
+
 -- Add an `FFI` atom at the ⊤ param to a user extern's declared RESULT row.
 --
 -- ⚠️ Only a FUNCTION type is stamped.  A nullary `extern k : Int` is left alone
@@ -27654,7 +27686,13 @@ ffiStampMode (Module mid _ _) =
 ffiStampTy : Ty -> Ty
 ffiStampTy (TyConstrained cs t) = TyConstrained cs (ffiStampTy t)
 ffiStampTy (TyFun a r) = TyFun a (ffiStampResultTy r)
-ffiStampTy t = t
+-- The catch-all is where an alias-named arrow lands.  Expand the head first: if
+-- an arrow was hiding behind the name, stamp it exactly as the clause above would
+-- have; otherwise keep the ORIGINAL `t`, not the expansion, so a non-arrow alias
+-- still elaborates through its own (already correct) `Mono`-level path.
+ffiStampTy t = match expandAliasHeadTy t
+  TyFun a r => TyFun a (ffiStampResultTy r)
+  _ => t
 
 -- The arrow's RESULT position: walk to the end of the arrow chain, then either
 -- widen the row that is written there or introduce one.  `Int -> Int -> <> Int`
@@ -39228,10 +39266,14 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ffiStampMode" ((PCon "Flat" PWild)) (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "flatEntryIsStdlibRef") "value")))
 (DFunDef false "ffiStampMode" ((PCon "Module" (PLit (LString "__user__")) PWild PWild)) (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "flatEntryIsStdlibRef") "value")))
 (DFunDef false "ffiStampMode" ((PCon "Module" (PVar "mid") PWild PWild)) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "stdlibOwnedModsRef") "value"))))
+(DTypeSig false "expandAliasHeadTy" (TyFun (TyCon "Ty") (TyCon "Ty")))
+(DFunDef false "expandAliasHeadTy" ((PAs "t" (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false))) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")) (arm (PCon "Some" (PTuple (PVar "params") (PVar "rhs"))) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (ELit (LInt 0))))) (EApp (EVar "expandAliasHeadTy") (EVar "rhs"))) (arm PWild () (EVar "t"))))
+(DFunDef false "expandAliasHeadTy" ((PAs "t" (PCon "TyApp" PWild PWild))) (EMatch (EApp (EVar "tyAppSpine") (EVar "t")) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")) (arm (PCon "Some" (PTuple (PVar "params") (PVar "rhs"))) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EVar "expandAliasHeadTy") (EApp (EApp (EVar "substTyVars") (EApp (EApp (EVar "zipL") (EVar "params")) (EVar "args"))) (EVar "rhs")))) (arm PWild () (EVar "t")))) (arm PWild () (EVar "t"))))
+(DFunDef false "expandAliasHeadTy" ((PVar "t")) (EVar "t"))
 (DTypeSig false "ffiStampTy" (TyFun (TyCon "Ty") (TyCon "Ty")))
 (DFunDef false "ffiStampTy" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EApp (EApp (EVar "TyConstrained") (EVar "cs")) (EApp (EVar "ffiStampTy") (EVar "t"))))
 (DFunDef false "ffiStampTy" ((PCon "TyFun" (PVar "a") (PVar "r"))) (EApp (EApp (EVar "TyFun") (EVar "a")) (EApp (EVar "ffiStampResultTy") (EVar "r"))))
-(DFunDef false "ffiStampTy" ((PVar "t")) (EVar "t"))
+(DFunDef false "ffiStampTy" ((PVar "t")) (EMatch (EApp (EVar "expandAliasHeadTy") (EVar "t")) (arm (PCon "TyFun" (PVar "a") (PVar "r")) () (EApp (EApp (EVar "TyFun") (EVar "a")) (EApp (EVar "ffiStampResultTy") (EVar "r")))) (arm PWild () (EVar "t"))))
 (DTypeSig false "ffiStampResultTy" (TyFun (TyCon "Ty") (TyCon "Ty")))
 (DFunDef false "ffiStampResultTy" ((PCon "TyFun" (PVar "a") (PVar "r"))) (EApp (EApp (EVar "TyFun") (EVar "a")) (EApp (EVar "ffiStampResultTy") (EVar "r"))))
 (DFunDef false "ffiStampResultTy" ((PCon "TyEffect" (PVar "ls") (PVar "rv") (PVar "inner"))) (EApp (EApp (EApp (EVar "TyEffect") (EApp (EVar "ffiAddAtom") (EVar "ls"))) (EVar "rv")) (EVar "inner")))
@@ -44781,10 +44823,14 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ffiStampMode" ((PCon "Flat" PWild)) (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "flatEntryIsStdlibRef") "value")))
 (DFunDef false "ffiStampMode" ((PCon "Module" (PLit (LString "__user__")) PWild PWild)) (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "flatEntryIsStdlibRef") "value")))
 (DFunDef false "ffiStampMode" ((PCon "Module" (PVar "mid") PWild PWild)) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "stdlibOwnedModsRef") "value"))))
+(DTypeSig false "expandAliasHeadTy" (TyFun (TyCon "Ty") (TyCon "Ty")))
+(DFunDef false "expandAliasHeadTy" ((PAs "t" (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false))) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")) (arm (PCon "Some" (PTuple (PVar "params") (PVar "rhs"))) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (ELit (LInt 0))))) (EApp (EVar "expandAliasHeadTy") (EVar "rhs"))) (arm PWild () (EVar "t"))))
+(DFunDef false "expandAliasHeadTy" ((PAs "t" (PCon "TyApp" PWild PWild))) (EMatch (EApp (EVar "tyAppSpine") (EVar "t")) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")) (arm (PCon "Some" (PTuple (PVar "params") (PVar "rhs"))) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EVar "expandAliasHeadTy") (EApp (EApp (EVar "substTyVars") (EApp (EApp (EVar "zipL") (EVar "params")) (EVar "args"))) (EVar "rhs")))) (arm PWild () (EVar "t")))) (arm PWild () (EVar "t"))))
+(DFunDef false "expandAliasHeadTy" ((PVar "t")) (EVar "t"))
 (DTypeSig false "ffiStampTy" (TyFun (TyCon "Ty") (TyCon "Ty")))
 (DFunDef false "ffiStampTy" ((PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EApp (EApp (EVar "TyConstrained") (EVar "cs")) (EApp (EVar "ffiStampTy") (EVar "t"))))
 (DFunDef false "ffiStampTy" ((PCon "TyFun" (PVar "a") (PVar "r"))) (EApp (EApp (EVar "TyFun") (EVar "a")) (EApp (EVar "ffiStampResultTy") (EVar "r"))))
-(DFunDef false "ffiStampTy" ((PVar "t")) (EVar "t"))
+(DFunDef false "ffiStampTy" ((PVar "t")) (EMatch (EApp (EVar "expandAliasHeadTy") (EVar "t")) (arm (PCon "TyFun" (PVar "a") (PVar "r")) () (EApp (EApp (EVar "TyFun") (EVar "a")) (EApp (EVar "ffiStampResultTy") (EVar "r")))) (arm PWild () (EVar "t"))))
 (DTypeSig false "ffiStampResultTy" (TyFun (TyCon "Ty") (TyCon "Ty")))
 (DFunDef false "ffiStampResultTy" ((PCon "TyFun" (PVar "a") (PVar "r"))) (EApp (EApp (EVar "TyFun") (EVar "a")) (EApp (EVar "ffiStampResultTy") (EVar "r"))))
 (DFunDef false "ffiStampResultTy" ((PCon "TyEffect" (PVar "ls") (PVar "rv") (PVar "inner"))) (EApp (EApp (EApp (EVar "TyEffect") (EApp (EVar "ffiAddAtom") (EVar "ls"))) (EVar "rv")) (EVar "inner")))
