@@ -29,11 +29,26 @@
 # likewise fixed and deleted; the report-only rows that named them are gone with
 # their paths.
 #
+# #2078 (S1, OPEN, deliberately unfixed this sprint): emitApp's known-fn arm uses
+# fnArity (signature arity) instead of defArityOf (emitted define arity), so an
+# eta-short point-free wrapper segfaults. This is exactly the shape this gate
+# flags. Its 9-line issue-body repro is scanned as a REPORT-ONLY row (no
+# pass/fail requirement, labeled "known, filed, not required to be clean") so
+# the headline site count is honest rather than reading as a stronger
+# conformance claim than the gate actually supports.
+#
+# R8: a corpus program that fails to BUILD is silently dropped from the scan
+# with no trace in the report (the failed-build message went to stderr only).
+# build_one now also appends the label to a build-failures tally, and the
+# summary prints an n_build_failures count. A build failure on either named
+# regression fixture (REG_1101_LABEL / REG_1648_LABEL) is a hard FAIL — a
+# regression fixture that didn't build is UNSCANNED, not "clean".
+#
 # Usage:  sh test/diff_compiler_call_arity.sh
 # Exit:   0 the regression fixtures are clean and present (and a nonzero corpus
-#           was scanned);
-#         1 a regression fixture WAS flagged or is missing, or the corpus was
-#           empty;
+#           was scanned, and neither regression fixture failed to build);
+#         1 a regression fixture WAS flagged, missing, or failed to build, or
+#           the corpus was empty;
 #         2 native medaka/emitter missing, no C compiler, or no python3.
 set -u
 
@@ -49,6 +64,9 @@ command -v python3 >/dev/null 2>&1 || { echo "no python3 on PATH — skipping"; 
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+
+BUILD_FAILURES_OUT="$WORK/build_failures.out"
+: > "$BUILD_FAILURES_OUT"
 
 # ── the arity scanner: reads one emitted .ll, prints one line per skew ────────
 scan() {
@@ -136,6 +154,7 @@ build_one() {
   if ! MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER" MEDAKA_STRICT=1 \
        "$MEDAKA" build "$src" -o "$bin" --keep-ir >"$WORK/$label.build.log" 2>&1; then
     echo "  [build FAILED: $label — $(tail -3 "$WORK/$label.build.log" | tr '\n' ' ')]" >&2
+    echo "$label" >> "$BUILD_FAILURES_OUT"
     return 0
   fi
   # --keep-ir writes the IR to outPath ++ ".ll" (build_cmd.mdk) — NOT
@@ -185,6 +204,31 @@ REG_1648_LABEL="corpus-impl_requires_dict_arity_conformance"
 REG_1648="$(grep "^$REG_1648_LABEL: " "$CORPUS_OUT" 2>/dev/null)"
 REG_1648_PRESENT="$(cd "$FIX" && ls -- impl_requires_dict_arity_conformance.mdk 2>/dev/null)"
 
+# ── #2078 (KNOWN, FILED, OPEN — deliberately unfixed this sprint) ─────────────
+#    emitApp's known-fn arm (compiler/backend/llvm_emit.mdk:4247) measures a
+#    call site's arity with fnArity (signature/clause arity) instead of
+#    defArityOf (emitted define arity). An eta-short point-free wrapper's
+#    define gets eta-saturated to a wider arity than its own signature, so the
+#    call site under-applies the actual define and the binary segfaults. This
+#    is exactly the shape this gate is built to flag. Scanned as a REPORT-ONLY
+#    row — no pass/fail requirement — so the gate's headline site count is
+#    honest about a known instance rather than reading as a stronger
+#    conformance claim than it supports.
+KNOWN_2078_SRC="$WORK/known_2078_eta_short_wrapper.mdk"
+cat > "$KNOWN_2078_SRC" <<'MDK'
+add : Int -> Int -> Int
+add a b = a + b
+
+mk : Int -> Int -> Int
+mk n = add n
+
+apply1 : (Int -> Int) -> Int -> Int
+apply1 f x = f x
+
+main = println (apply1 (mk 1) 2)
+MDK
+KNOWN_2078_OUT="$(build_one "known-2078" "$KNOWN_2078_SRC")"
+
 # ── the compiler's own emitted IR (self-compile output) ───────────────────────
 COMPILER_OUT="$(build_one "compiler-self" "$ROOT/compiler/driver/medaka_cli.mdk")"
 
@@ -192,18 +236,28 @@ COMPILER_OUT="$(build_one "compiler-self" "$ROOT/compiler/driver/medaka_cli.mdk"
 n_corpus="$(grep -c . "$CORPUS_OUT" 2>/dev/null)"; n_corpus="${n_corpus:-0}"
 n_compiler="$(printf '%s\n' "$COMPILER_OUT" | grep -c . 2>/dev/null)"; n_compiler="${n_compiler:-0}"
 [ -n "$COMPILER_OUT" ] || n_compiler=0
-n_total=$((n_corpus + n_compiler))
+n_known_2078="$(printf '%s\n' "$KNOWN_2078_OUT" | grep -c . 2>/dev/null)"; n_known_2078="${n_known_2078:-0}"
+[ -n "$KNOWN_2078_OUT" ] || n_known_2078=0
+n_total=$((n_corpus + n_compiler + n_known_2078))
 n_programs_scanned="$(printf '%s\n' "$PROGRAMS" | wc -l | tr -d ' ')"
+n_build_failures="$(grep -c . "$BUILD_FAILURES_OUT" 2>/dev/null)"; n_build_failures="${n_build_failures:-0}"
 
 echo "=== call/define arity-skew census (S-arity-census) ==="
 echo "corpus: test/build_diff_fixtures/*.mdk ($n_programs_scanned programs)"
-echo "$n_total sites, $n_corpus in corpus + $n_compiler in compiler's own IR"
+echo "$n_total sites, $n_corpus in corpus + $n_compiler in compiler's own IR + $n_known_2078 in #2078 report-only row"
+echo "n_build_failures: $n_build_failures"
 echo ""
 echo "-- corpus skews --"
 [ -s "$CORPUS_OUT" ] && cat "$CORPUS_OUT" || echo "  (none)"
 echo ""
 echo "-- compiler's own IR skews (compiler/driver/medaka_cli.mdk --keep-ir) --"
 [ -n "$COMPILER_OUT" ] && printf '%s\n' "$COMPILER_OUT" || echo "  (none)"
+echo ""
+echo "-- #2078 known/filed report-only row (NOT required to be clean — OPEN, deliberately unfixed this sprint) --"
+[ -n "$KNOWN_2078_OUT" ] && printf '%s\n' "$KNOWN_2078_OUT" || echo "  (none — unexpected; see #2078)"
+echo ""
+echo "-- build failures (R8: unscanned, not tallied as clean) --"
+[ -s "$BUILD_FAILURES_OUT" ] && cat "$BUILD_FAILURES_OUT" || echo "  (none)"
 echo ""
 echo "-- #1101 regression (tail-position call/define arity, FIXED) --"
 echo "1101 regression fixture : $([ -n "$REG_1101" ] && echo "FLAGGED  ($REG_1101)" || echo clean)"
@@ -245,8 +299,22 @@ if [ "$n_programs_scanned" -eq 0 ]; then
   fail=1
 fi
 
+# R8: a build failure on either named regression fixture means it was never
+# SCANNED — that is not "clean", and reporting it as clean would be a false pass.
+if grep -qx "$REG_1101_LABEL" "$BUILD_FAILURES_OUT" 2>/dev/null; then
+  echo "FAIL: #1101 regression fixture (tail_over_application_arity_conformance.mdk)"
+  echo "      FAILED TO BUILD — unscanned, not clean. See the build-failures list above."
+  fail=1
+fi
+if grep -qx "$REG_1648_LABEL" "$BUILD_FAILURES_OUT" 2>/dev/null; then
+  echo "FAIL: #1648 regression fixture (impl_requires_dict_arity_conformance.mdk)"
+  echo "      FAILED TO BUILD — unscanned, not clean. See the build-failures list above."
+  fail=1
+fi
+
 if [ "$fail" -eq 0 ]; then
   echo ""
-  echo "PASS: regression fixtures clean and present; $n_total sites recorded ($n_corpus corpus + $n_compiler compiler-self)."
+  echo "PASS: regression fixtures clean, present, and built; $n_total sites recorded"
+  echo "      ($n_corpus corpus + $n_compiler compiler-self + $n_known_2078 #2078 report-only); n_build_failures=$n_build_failures."
 fi
 exit "$fail"
