@@ -29,7 +29,7 @@ run() { perl -e 'alarm 60; exec @ARGV' -- "$M" check "$1" 2>&1; }
 # expect ACCEPT: no "TYPE ERROR" / "parse error" line
 expect_ok() {
   out="$(run "$1")"
-  if echo "$out" | grep -qiE 'TYPE ERROR|parse error'; then
+  if echo "$out" | grep -qiE 'TYPE ERROR|parse error|^error:'; then
     echo "FAIL $2 (expected accept):"; echo "$out" | grep -iE 'error' | head -2; fail=$((fail+1))
   else echo "ok   $2"; pass=$((pass+1)); fi
 }
