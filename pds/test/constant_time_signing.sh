@@ -1,11 +1,12 @@
 #!/bin/sh
 # Native structural closure and transactional contract controls for #1700
-# step 3. This is a source/IR/link audit, not a timing benchmark or Wasm claim.
+# step 4. This is a source/IR/link audit, not a timing benchmark or Wasm claim.
 set -eu
 
 ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
 MEDAKA=${MEDAKA:-"$ROOT/medaka"}
-SOURCE="$ROOT/pds/test/constant_time_signing_main.mdk"
+INTERNAL_SOURCE="$ROOT/pds/test/constant_time_signing_main.mdk"
+PUBLIC_SOURCE="$ROOT/pds/test/constant_time_signing_public_main.mdk"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/pds-ct-signing.XXXXXX")
 cleanup() {
   if [ "${KEEP_WORK:-0}" = 1 ]; then printf 'kept work directory: %s\n' "$WORK" >&2; else rm -rf "$WORK"; fi
@@ -17,7 +18,7 @@ pass() { checked=$((checked + 1)); printf 'ok %s - %s\n' "$checked" "$1"; }
 fail() { printf 'not ok %s - %s\n' "$((checked + 1))" "$1" >&2; exit 1; }
 blob_hash() { cksum "$1" | awk '{print $1 " " $2}'; }
 
-write_claimed_source_files() {
+write_internal_claimed_source_files() {
   for rel in \
     pds/lib/field.mdk \
     pds/lib/scalar.mdk \
@@ -30,6 +31,20 @@ write_claimed_source_files() {
   done
 }
 
+write_public_claimed_source_files() {
+  for rel in \
+    pds/lib/field.mdk \
+    pds/lib/scalar.mdk \
+    pds/lib/sha256.mdk \
+    pds/lib/hmac_sha256.mdk \
+    pds/lib/secp256k1.mdk \
+    pds/lib/sign.mdk \
+    pds/test/constant_time_signing_public_main.mdk
+  do
+    printf '%s\n' "$rel"
+  done
+}
+
 write_source_manifest() {
   tree=$1 claimed=$2
   while IFS= read -r rel; do
@@ -37,20 +52,32 @@ write_source_manifest() {
   done < "$claimed"
 }
 
-expected_source_manifest() {
+expected_internal_source_manifest() {
   cat <<'EOF'
 2995963130 26246  pds/lib/field.mdk
 344284241 31757  pds/lib/scalar.mdk
 3537888636 12958  pds/lib/sha256.mdk
 2659055724 1983  pds/lib/hmac_sha256.mdk
-3222566514 23967  pds/lib/secp256k1.mdk
+4146415434 24375  pds/lib/secp256k1.mdk
 1507350302 4544  pds/test/constant_time_signing_main.mdk
 EOF
 }
 
+expected_public_source_manifest() {
+  cat <<'EOF'
+2995963130 26246  pds/lib/field.mdk
+344284241 31757  pds/lib/scalar.mdk
+3537888636 12958  pds/lib/sha256.mdk
+2659055724 1983  pds/lib/hmac_sha256.mdk
+4146415434 24375  pds/lib/secp256k1.mdk
+2769643849 3846  pds/lib/sign.mdk
+1515542623 3110  pds/test/constant_time_signing_public_main.mdk
+EOF
+}
+
 derive_source_files() {
-  tree=$1 output=$2
-  printf '%s\n' pds/test/constant_time_signing_main.mdk > "$WORK/source-derived.current"
+  tree=$1 source=$2 output=$3
+  printf '%s\n' "$source" > "$WORK/source-derived.current"
   while :; do
     cp "$WORK/source-derived.current" "$WORK/source-derived.next"
     while IFS= read -r rel; do
@@ -64,21 +91,29 @@ derive_source_files() {
 }
 
 source_claim_matches_derived() {
-  tree=$1 claimed=$2
-  derive_source_files "$tree" "$WORK/source-derived.actual"
+  tree=$1 claimed=$2 source=$3
+  derive_source_files "$tree" "$source" "$WORK/source-derived.actual"
   LC_ALL=C sort -u "$claimed" > "$WORK/source-claimed.sorted"
   cmp "$WORK/source-claimed.sorted" "$WORK/source-derived.actual" >/dev/null
 }
 
-source_integrity_ok() {
+internal_source_integrity_ok() {
   tree=$1 claimed=$2
   write_source_manifest "$tree" "$claimed" > "$WORK/source.actual"
-  expected_source_manifest > "$WORK/source.expected"
+  expected_internal_source_manifest > "$WORK/source.expected"
   cmp "$WORK/source.expected" "$WORK/source.actual" >/dev/null || return 1
-  source_claim_matches_derived "$tree" "$claimed" || return 1
+  source_claim_matches_derived "$tree" "$claimed" pds/test/constant_time_signing_main.mdk || return 1
 }
 
-source_routes_ok() {
+public_source_integrity_ok() {
+  tree=$1 claimed=$2
+  write_source_manifest "$tree" "$claimed" > "$WORK/public-source.actual"
+  expected_public_source_manifest > "$WORK/public-source.expected"
+  cmp "$WORK/public-source.expected" "$WORK/public-source.actual" >/dev/null || return 1
+  source_claim_matches_derived "$tree" "$claimed" pds/test/constant_time_signing_public_main.mdk || return 1
+}
+
+internal_source_routes_ok() {
   tree=$1
   secp="$tree/pds/lib/secp256k1.mdk"
   scalar="$tree/pds/lib/scalar.mdk"
@@ -100,10 +135,36 @@ source_routes_ok() {
   return 0
 }
 
-source_closure_ok() {
+internal_source_closure_ok() {
   tree=$1 claimed=$2
-  source_integrity_ok "$tree" "$claimed" || return 1
-  source_routes_ok "$tree"
+  internal_source_integrity_ok "$tree" "$claimed" || return 1
+  internal_source_routes_ok "$tree"
+}
+
+public_source_routes_ok() {
+  tree=$1
+  sign="$tree/pds/lib/sign.mdk"
+  driver="$tree/pds/test/constant_time_signing_public_main.mdk"
+  [ "$(grep -c '^import ' "$driver" || true)" -eq 1 ] || return 1
+  grep -F -q 'import lib.sign.{' "$driver" || return 1
+  if grep -E -q '^import lib\.(scalar|secp256k1)' "$driver"; then return 1; fi
+  if grep -F -q 'ForTest' "$driver"; then return 1; fi
+  for wrapper in \
+    secretKeyFromBytes publicKeyFromCompressed publicKeyCompressed publicKeyForSecret \
+    signatureFromCompact signatureCompact signDigest verifyDigest
+  do
+    grep -F -q "$wrapper" "$driver" || return 1
+  done
+  grep -F -q 'publicKeyForSecret (SecretKey scalar) = PublicKey (publicPointForSecret scalar)' "$sign" || return 1
+  grep -F -q 'let (validBit, signature) = ecdsaSignDigest scalar digest' "$sign" || return 1
+  if grep -F -q 'ecdsaSignDigestForTest' "$sign"; then return 1; fi
+  return 0
+}
+
+public_source_closure_ok() {
+  tree=$1 claimed=$2
+  public_source_integrity_ok "$tree" "$claimed" || return 1
+  public_source_routes_ok "$tree"
 }
 
 restore_source_tree() {
@@ -118,7 +179,15 @@ restore_source_tree() {
     cp "$ROOT/$rel" "$WORK/$rel"
     cmp "$ROOT/$rel" "$WORK/$rel" >/dev/null
   done
-  source_closure_ok "$WORK" "$WORK/source.claimed" || fail 'restored signing source tree matches its exact manifest and derived closure'
+  internal_source_closure_ok "$WORK" "$WORK/internal-source.claimed" || fail 'restored signing source tree matches its exact manifest and derived closure'
+}
+
+restore_public_source_tree() {
+  cp "$ROOT/pds/lib/sign.mdk" "$WORK/pds/lib/sign.mdk"
+  cp "$ROOT/pds/test/constant_time_signing_public_main.mdk" "$WORK/pds/test/constant_time_signing_public_main.mdk"
+  cmp "$ROOT/pds/lib/sign.mdk" "$WORK/pds/lib/sign.mdk" >/dev/null
+  cmp "$ROOT/pds/test/constant_time_signing_public_main.mdk" "$WORK/pds/test/constant_time_signing_public_main.mdk" >/dev/null
+  public_source_closure_ok "$WORK" "$WORK/public-source.claimed" || fail 'restored public signing source tree matches its exact manifest, routes, and derived closure'
 }
 
 apply_mutation() {
@@ -133,9 +202,16 @@ apply_mutation() {
 
 expect_route_red() {
   id=$1
-  if source_routes_ok "$WORK"; then fail "$id unexpectedly green"; fi
+  if internal_source_routes_ok "$WORK"; then fail "$id unexpectedly green"; fi
   pass "$id is rejected by its route-specific source anchor"
   restore_source_tree
+}
+
+expect_public_route_red() {
+  id=$1
+  if public_source_routes_ok "$WORK"; then fail "$id unexpectedly green"; fi
+  pass "$id is rejected directly by the public-route audit"
+  restore_public_source_tree
 }
 
 expect_corpus_red() {
@@ -226,15 +302,39 @@ conditional_jumps() {
 }
 
 cp -R "$ROOT/pds" "$WORK/pds"
-write_claimed_source_files > "$WORK/source.claimed"
-source_closure_ok "$ROOT" "$WORK/source.claimed" || fail 'baseline signing source matches the exact manifest and independently derived closure'
-pass 'source closure includes field/scalar, SHA/HMAC, RFC 6979, both signing candidates, compact output, and carrier'
+write_internal_claimed_source_files > "$WORK/internal-source.claimed"
+write_public_claimed_source_files > "$WORK/public-source.claimed"
+internal_source_closure_ok "$ROOT" "$WORK/internal-source.claimed" || fail 'baseline internal signing source matches the exact manifest and independently derived closure'
+public_source_closure_ok "$ROOT" "$WORK/public-source.claimed" || fail 'baseline public signing source matches the exact manifest, public-only route, and independently derived closure'
+pass 'dual source claims separate internal injected evidence from the public field/scalar, SHA/HMAC, signing, key, and carrier closure'
 
 printf '\n-- integrity-only comment drift\n' >> "$WORK/pds/lib/secp256k1.mdk"
-if source_integrity_ok "$WORK" "$WORK/source.claimed"; then fail 'comment-only source drift unexpectedly preserves integrity'; fi
-source_routes_ok "$WORK" || fail 'comment-only source drift changed a semantic route anchor'
+if internal_source_integrity_ok "$WORK" "$WORK/internal-source.claimed"; then fail 'comment-only source drift unexpectedly preserves integrity'; fi
+internal_source_routes_ok "$WORK" || fail 'comment-only source drift changed a semantic route anchor'
 pass 'comment-only checksum drift is integrity evidence, not route-mutation evidence'
 restore_source_tree
+
+# Public-route controls are compile-coherent mutations of the deployment-shaped
+# graph. Each must turn the direct public audit red and restore byte-exactly.
+apply_mutation P01 "$WORK/pds/lib/sign.mdk" \
+  'let (validBit, signature) = ecdsaSignDigest scalar digest' \
+  's/let \(validBit, signature\) = ecdsaSignDigest scalar digest/let signature = match ecdsaSignatureFromCompact (arrayMake 64 1)\n        Ok fixed => fixed\n        Err message => panic message\n      let validBit = 1/'
+expect_public_route_red 'P01 public signDigest replaced by fixed compact parsing'
+
+apply_mutation P02 "$WORK/pds/lib/sign.mdk" \
+  'publicKeyForSecret (SecretKey scalar) = PublicKey (publicPointForSecret scalar)' \
+  's/publicKeyForSecret \(SecretKey scalar\) = PublicKey \(publicPointForSecret scalar\)/publicKeyForSecret (SecretKey _) = match pointFromCompressed (arrayMake 33 0)\n  Ok point => PublicKey point\n  Err message => panic message/'
+expect_public_route_red 'P02 public publicKeyForSecret replaced by fixed public-key parsing'
+
+apply_mutation P03 "$WORK/pds/test/constant_time_signing_public_main.mdk" \
+  'import lib.sign.{' \
+  's/import lib\.sign\.\{/import lib.secp256k1.{pointFromUncompressedForTest}\nimport lib.sign.{/; s/main =/main =\n  let _ = pointFromUncompressedForTest generatorCompressed/'
+expect_public_route_red 'P03 ForTest import/use injected into the public driver'
+
+apply_mutation P04 "$WORK/pds/lib/sign.mdk" \
+  '  ecdsaSignDigest,' \
+  's/  ecdsaSignDigest,/  ecdsaSignDigestForTest,/; s/let \(validBit, signature\) = ecdsaSignDigest scalar digest/let (validBit, _, _, _, _, compact) = ecdsaSignDigestForTest scalar digest\n      let signature = match ecdsaSignatureFromCompact compact\n        Ok parsed => parsed\n        Err message => panic message/'
+expect_public_route_red 'P04 production signing delegated through ecdsaSignDigestForTest'
 
 # Contract mutations 7--14 and 16. Mutation 15 remains independently owned by
 # constant_time_public_key.sh's parser aggregate controls.
@@ -350,11 +450,11 @@ expect_corpus_red 'M13-stale pre-existing oracle outputs retained for reuse'
 cp "$ROOT/pds/tools/gen_signing_corpus.sh" "$WORK/pds/tools/gen_signing_corpus.sh"
 cmp "$ROOT/pds/tools/gen_signing_corpus.sh" "$WORK/pds/tools/gen_signing_corpus.sh" >/dev/null
 
-cp "$WORK/source.claimed" "$WORK/manifest.baseline"
+cp "$WORK/internal-source.claimed" "$WORK/manifest.baseline"
 sed '/pds\/lib\/hmac_sha256.mdk/d' "$WORK/manifest.baseline" > "$WORK/manifest.mutated"
-if source_claim_matches_derived "$ROOT" "$WORK/manifest.mutated"; then fail 'M14 closure omission unexpectedly green'; fi
+if source_claim_matches_derived "$ROOT" "$WORK/manifest.mutated" pds/test/constant_time_signing_main.mdk; then fail 'M14 closure omission unexpectedly green'; fi
 pass 'M14 claimed HMAC wrapper omission is rejected by independently derived source closure'
-cmp "$WORK/manifest.baseline" "$WORK/source.claimed" >/dev/null || fail 'M14 claimed source manifest restores byte-exactly'
+cmp "$WORK/manifest.baseline" "$WORK/internal-source.claimed" >/dev/null || fail 'M14 claimed source manifest restores byte-exactly'
 
 apply_mutation M16 "$WORK/pds/lib/secp256k1.mdk" \
   'let signed1 = signCandidate secret digest (injectedCandidate bytes1 valid1)' \
@@ -371,15 +471,15 @@ cmp "$ROOT/pds/test/vectors/wycheproof_secp256k1_sha256_p1363.txt" "$WORK/pds/te
 cmp "$ROOT/pds/tools/gen_signing_corpus.sh" "$WORK/pds/tools/gen_signing_corpus.sh" >/dev/null
 pass 'all contract mutations restored task-owned blobs byte-exactly'
 
-MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$SOURCE" -o "$WORK/signing" --keep-ir > "$WORK/build.log" 2>&1 || {
-  cat "$WORK/build.log" >&2
-  fail 'native signing closure probe builds'
+MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$INTERNAL_SOURCE" -o "$WORK/signing-internal" --keep-ir > "$WORK/internal-build.log" 2>&1 || {
+  cat "$WORK/internal-build.log" >&2
+  fail 'native internal signing evidence probe builds'
 }
-BIN="$WORK/signing"
-IR="$WORK/signing.ll"
+BIN="$WORK/signing-internal"
+IR="$WORK/signing-internal.ll"
 "$BIN" > "$WORK/run.out" 2>&1 || { cat "$WORK/run.out" >&2; fail 'native signing closure carrier runs'; }
 [ "$(tail -1 "$WORK/run.out")" = 'PASS signing-value-carrier' ] || fail 'native signing closure carrier returns expected signature and witnesses'
-pass 'native signing carrier returns the exact signature plus candidate-1/exhaustion and public rejection witnesses'
+pass 'native internal carrier retains the exact signature plus candidate-1/exhaustion and raw rejection witnesses'
 
 collect_full_closure mdk_lib_secp256k1__ecdsaSignDigestForTest
 closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
@@ -456,7 +556,86 @@ for helper in mdk_bit_and mdk_bit_or mdk_bit_xor mdk_bit_not mdk_shift_left mdk_
 done
 pass 'all six linked runtime bit helpers exist and have no conditional jumps'
 
+MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$PUBLIC_SOURCE" -o "$WORK/signing-public" --keep-ir > "$WORK/public-build.log" 2>&1 || {
+  cat "$WORK/public-build.log" >&2
+  fail 'native public signing consumer builds'
+}
+BIN="$WORK/signing-public"
+IR="$WORK/signing-public.ll"
+"$BIN" > "$WORK/public-run.out" 2>&1 || { cat "$WORK/public-run.out" >&2; fail 'native public signing consumer runs'; }
+[ "$(tail -1 "$WORK/public-run.out")" = 'PASS public-signing-consumer' ] || fail 'public signing consumer returns its distinct PASS'
+pass 'public-only carrier exercises all eight APIs at compressed G, the RFC 6979 compact bytes, and self-verification'
+
+for symbol in \
+  mdk_lib_sign__secretKeyFromBytes \
+  mdk_lib_sign__publicKeyFromCompressed \
+  mdk_lib_sign__publicKeyCompressed \
+  mdk_lib_sign__publicKeyForSecret \
+  mdk_lib_sign__signatureFromCompact \
+  mdk_lib_sign__signatureCompact \
+  mdk_lib_sign__signDigest \
+  mdk_lib_sign__verifyDigest
+do
+  grep -F -q "define i64 @$symbol(" "$IR" || fail "public driver IR defines wrapper $symbol"
+done
+pass 'public driver IR defines all eight consumer wrappers'
+
+collect_full_closure mdk_lib_sign__signDigest
+cp "$WORK/full-closure.lst" "$WORK/public-signing-closure.lst"
+collect_full_closure mdk_lib_sign__publicKeyForSecret
+cp "$WORK/full-closure.lst" "$WORK/public-key-closure.lst"
+LC_ALL=C sort -u "$WORK/public-signing-closure.lst" "$WORK/public-key-closure.lst" > "$WORK/public-union-closure.lst"
+cp "$WORK/public-union-closure.lst" "$WORK/full-closure.lst"
+
+grep -F -x -q 'mdk_lib_sign__signDigest' "$WORK/full-closure.lst" || fail 'public union contains signDigest root'
+grep -F -x -q 'mdk_lib_sign__publicKeyForSecret' "$WORK/full-closure.lst" || fail 'public union contains publicKeyForSecret root'
+if grep -F -q 'ForTest' "$WORK/full-closure.lst"; then
+  fail 'public consumer closure reaches a ForTest symbol'
+fi
+for prefix in field scalar sha256 hmac_sha256 secp256k1 sign; do
+  grep -F -q "mdk_lib_${prefix}__" "$WORK/full-closure.lst" || fail "public union reaches $prefix"
+done
+for symbol in \
+  mdk_lib_secp256k1__ecdsaSignFixed \
+  mdk_lib_secp256k1__signCandidate \
+  mdk_lib_secp256k1__selectSigningCandidates \
+  mdk_lib_secp256k1__rfc6979NonceSchedule \
+  mdk_lib_hmac_sha256__hmacSha256FixedKey \
+  mdk_lib_sha256__sha256FixedBytes \
+  mdk_lib_sha256__sha256AssumeByteDomain \
+  mdk_lib_secp256k1__scalarLadder \
+  mdk_lib_secp256k1__pointAddComplete \
+  mdk_lib_secp256k1__pointDoubleComplete \
+  mdk_lib_scalar__scInverse \
+  mdk_lib_scalar__scSelect \
+  mdk_lib_scalar__scHighBit \
+  mdk_lib_scalar__scNegateCt
+do
+  grep -F -q "$symbol" "$WORK/full-closure.lst" || fail "public union manifest contains $symbol"
+done
+write_control_manifest > "$WORK/public-control.manifest"
+public_closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
+public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " " $2}')
+if [ "$public_closure_grade" != '3474219027 5043' ] || [ "$public_control_grade" != '3772875544 7548' ]; then
+  fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
+fi
+pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"
+
+for symbol in \
+  mdk_lib_secp256k1__signCandidate \
+  mdk_lib_secp256k1__rfc6979NonceSchedule \
+  mdk_lib_hmac_sha256__hmacSha256FixedKey \
+  mdk_lib_sha256__compressRounds \
+  mdk_lib_secp256k1__scalarLadder \
+  mdk_lib_secp256k1__pointAddComplete \
+  mdk_lib_secp256k1__pointDoubleComplete \
+  mdk_lib_scalar__scInverse \
+  mdk_lib_scalar__scSelect \
+  mdk_lib_scalar__scNegateCt
+do require_native_symbol "$symbol"; done
+pass 'linked public consumer retains the audited HMAC/SHA, signing, point, inverse, and arithmetic-selection leaves'
+
 printf 'receipt: target=%s %s\n' "$(uname -s)" "$(uname -m)"
 printf 'receipt: compiler=%s\n' "$(clang --version | sed -n '1p')"
-[ "$checked" -ge 20 ] || fail "assertion floor (expected at least 20, got $checked)"
+[ "$checked" -ge 25 ] || fail "assertion floor (expected at least 25, got $checked)"
 printf 'PASS: native signing constant-time closure — %s assertions\n' "$checked"

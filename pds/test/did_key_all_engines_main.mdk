@@ -1,0 +1,131 @@
+{- | Deterministic all-engine driver for the official-PDS secp256k1
+   `did:key` corpus and the public decoder's malformed-input boundary. -}
+
+import array as A
+import hex.{decode}
+import io.{readLines}
+import string.{split, stripPrefix, toInt, trim}
+import lib.did_key.{didKeyFromPublicKey, publicKeyFromDidKey}
+import lib.multiformats.{
+  multibaseBase58btc,
+  multibaseBase58btcDecode,
+  multicodecP256Pub,
+  multicodecPrefix,
+  multicodecSecp256k1Pub,
+  uvarintDecode,
+}
+import lib.sign.{publicKeyCompressed, publicKeyFromCompressed}
+
+mustHex : String -> Array Int
+mustHex text = match decode text
+  Ok bytes => bytes
+  Err message => panic "did_key_all_engines: malformed corpus hex: \{message}"
+
+mustInt : String -> Int
+mustInt text = match toInt text
+  Some value => value
+  None => panic "did_key_all_engines: malformed corpus row id: \{text}"
+
+mustStrip : String -> String -> String
+mustStrip prefix text = match stripPrefix prefix text
+  Some rest => rest
+  None => panic "did_key_all_engines: expected prefix \{prefix}"
+
+canonicalPayload : String -> Array Int -> Bool
+canonicalPayload did keyBytes =
+  let multibase = mustStrip "did:key:" did
+  match multibaseBase58btcDecode multibase
+    Err _ => False
+    Ok payload => match uvarintDecode payload
+      Err _ => False
+      Ok (codec, consumed) => codec == multicodecSecp256k1Pub
+        && consumed == arrayLength (multicodecPrefix multicodecSecp256k1Pub)
+        && payload == multicodecPrefix multicodecSecp256k1Pub ++ keyBytes
+
+runRow : Int -> String -> <IO> Unit
+runRow expectedId line = match split " " (trim line)
+  ["did-key", idText, keyHex, expectedDid] =>
+    let id = mustInt idText
+    if id /= expectedId then panic "did_key_all_engines: row id \{idText} out of order"
+    else
+      let keyBytes = mustHex keyHex
+      match publicKeyFromCompressed keyBytes
+        Err message => panic "did_key_all_engines: row \{idText} public key rejected: \{message}"
+        Ok publicKey =>
+          let encoded = didKeyFromPublicKey publicKey
+          match publicKeyFromDidKey expectedDid
+            Err message => panic "did_key_all_engines: row \{idText} DID rejected: \{message}"
+            Ok decoded =>
+              let recompressed = publicKeyCompressed decoded
+              let ok = encoded == expectedDid && recompressed == keyBytes && didKeyFromPublicKey decoded == expectedDid && canonicalPayload expectedDid keyBytes
+              if ok then
+                println "ROW \{idText} PASS encode decode recompress canonical-payload \{keyHex} \{expectedDid}"
+              else
+                panic "did_key_all_engines: row \{idText} value mismatch"
+  _ => panic "did_key_all_engines: malformed corpus row: \{line}"
+
+runRows : List String -> Int -> <IO> Int
+runRows [] count = count
+runRows (row::rest) count =
+  let () = runRow count row
+  runRows rest (count + 1)
+
+payloadDid : Array Int -> String
+payloadDid payload = "did:key:" ++ multibaseBase58btc payload
+
+reject : String -> String -> <IO> Int
+reject label did = match publicKeyFromDidKey did
+  Err _ =>
+    let () = println "MALFORMED \{label} PASS"
+    1
+  Ok _ =>
+    let () = println "MALFORMED \{label} FAIL accepted"
+    0
+
+runMalformed : Array Int -> String -> <IO> Int
+runMalformed keyBytes canonicalDid =
+  let didBody = mustStrip "did:key:" canonicalDid
+  let base58Body = mustStrip "z" didBody
+  let prefix = multicodecPrefix multicodecSecp256k1Pub
+  let invalidPrefix = arrayCopy keyBytes
+  let () = A.set 0 4 invalidPrefix
+  let xAtOrAboveP = arrayMake 33 255
+  let () = A.set 0 2 xAtOrAboveP
+  let nonsquareXZero = arrayMake 33 0
+  let () = A.set 0 2 nonsquareXZero
+  let r1 = reject "wrong-method" ("did:web:" ++ didBody)
+  let r2 = reject "wrong-method-case" ("DID:key:" ++ didBody)
+  let r3 = reject "missing-multibase" ("did:key:" ++ base58Body)
+  let r4 = reject "invalid-multibase" ("did:key:x" ++ base58Body)
+  let r5 = reject "invalid-base58" "did:key:z0"
+  let r6 = reject "wrong-codec" (payloadDid (multicodecPrefix multicodecP256Pub ++ keyBytes))
+  let r7 = reject "nonminimal-codec" (payloadDid ([|0xe7, 0x81, 0x00|] ++ keyBytes))
+  let r8 = reject "empty-payload" (payloadDid [||])
+  let r9 = reject "short-payload" (payloadDid (prefix ++ A.take 32 keyBytes))
+  let r10 = reject "long-payload" (payloadDid (prefix ++ arrayMake 34 0))
+  let r11 = reject "trailing-payload" (payloadDid (prefix ++ keyBytes ++ [|0|]))
+  let r12 = reject "invalid-sec1-prefix" (payloadDid (prefix ++ invalidPrefix))
+  let r13 = reject "invalid-sec1-x" (payloadDid (prefix ++ xAtOrAboveP))
+  let r14 = reject "invalid-sec1-nonsquare" (payloadDid (prefix ++ nonsquareXZero))
+  r1 + r2 + r3 + r4 + r5 + r6 + r7 + r8 + r9 + r10 + r11 + r12 + r13 + r14
+
+main : <IO, Env, FileRead "_"> Unit
+main = match args ()
+  [corpusPath] => match readLines corpusPath
+    Err message => panic "did_key_all_engines: cannot read corpus: \{message}"
+    Ok rows =>
+      let rowCount = runRows rows 0
+      if rowCount /= 16 then panic "did_key_all_engines: external row count expected 16, got \{intToString rowCount}"
+      else match rows
+        [] => panic "did_key_all_engines: corpus discovery returned zero rows"
+        first::_ => match split " " (trim first)
+          ["did-key", _, keyHex, canonicalDid] =>
+            let malformedCount = runMalformed (mustHex keyHex) canonicalDid
+            let () = println "external: \{intToString rowCount}/16 official-PDS rows"
+            let () = println "malformed: \{intToString malformedCount}/14 rejected"
+            if malformedCount == 14 then println "TOTAL: PASS"
+            else
+              let () = println "TOTAL: FAIL"
+              exit 1
+          _ => panic "did_key_all_engines: malformed first corpus row"
+  _ => panic "usage: did_key_all_engines_main <pds_did_key_corpus>"

@@ -372,7 +372,7 @@ repo:          https://github.com/bluesky-social/pds
 version:       0.4.5027 (@atproto/pds 0.5.27, @atproto/crypto 0.5.4)
 commit:        374cf1d4ba782d4391bbb73e4e2d3f320d4846d6
 retrieved:     2026-08-24
-notes:         official image ghcr.io/bluesky-social/pds@sha256:d95725b24dbe53af9d91dc69750556931ebed6c396f2cfa42b221434db642f12; corroborates the independent signing answer only and never supplies it by itself
+notes:         official image ghcr.io/bluesky-social/pds@sha256:d95725b24dbe53af9d91dc69750556931ebed6c396f2cfa42b221434db642f12; independently corroborates signing and directly supplies the did:key composition through @atproto/crypto@0.5.4 Secp256k1Keypair.did()
 
 [vector]
 file:          pds/test/vectors/prehashed_signing_corpus.txt
@@ -397,6 +397,17 @@ extraction:    pds/tools/gen_signing_corpus.sh runs the pinned image with node a
 retrieved:     2026-08-24
 consumer:      S3-A-corpora (#1700 official-PDS signing corroboration)
 notes:         16 exact raw-message rows; each committed SHA-256 digest is recomputed from its literal UTF-8 message by the offline gate; k256 is the second independent answer implementation in addition to the ledger's impl-secondary field, which has room for one handle
+
+[vector]
+file:          pds/test/vectors/pds_did_key_corpus.txt
+local-sha256:  cffe1141edc81248d5769f987e4b394377423970244945f1b7278382a8229e0c
+kind:          reference-impl
+impl:          official-pds
+source-url:    ghcr.io/bluesky-social/pds@sha256:d95725b24dbe53af9d91dc69750556931ebed6c396f2cfa42b221434db642f12
+extraction:    pds/tools/gen_did_key_corpus.sh runs the pinned image with node and the committed pds/tools/extract_pds_did_keys.mjs; that module imports the image's absolute @atproto/crypto@0.5.4 secp256k1 keypair module and calls pair.did() directly over the 16 fixed key rows; rerunning must reproduce this file byte-for-byte
+retrieved:     2026-08-27
+consumer:      P0C-D-did-key-oracle (#1701 did:key)
+notes:         stores only row ID, compressed public key, and DID; the private inputs remain solely in the already committed pds/tools/signing_inputs.txt
 
 [vector]
 file:          pds/test/vectors/wycheproof_secp256k1_sha256_p1363.txt
