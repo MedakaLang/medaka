@@ -4420,7 +4420,7 @@ emitMethod e env name route implRoutes methRoutes argOps
       emitMethodPap e env name route implRoutes methRoutes argOps (methodArityOfInput e name)
 emitMethod e env name (RKey tag _) implRoutes methRoutes argOps = match implFor e name tag
   Some entry =>
-    let dictWords = dictWordsOf e env (methRoutes ++ implRoutes)
+    let dictWords = dictWordsOf e env (methRoutes ++ implRoutesForDefine e name entry methRoutes implRoutes)
     -- [tag] is the stamped route tag — the bare head when the head is unique, the
     -- canonical key on a C7 collision.  For tagToLTy/returns-self use the matched
     -- entry's REAL head tag; the lifted-fn symbol uses implFnSymOf (head when
@@ -4732,7 +4732,7 @@ emitDefaultRKey e env name tag methRoutes implRoutes argOps = match defaultForAt
 emitGeneralRKey : Emit -> List (String, (String, LTy)) -> String -> String -> List Route -> List Route -> List String -> (String, LTy)
 emitGeneralRKey e env name tag methRoutes implRoutes argOps = match findByTag noneHeadTag (implsOf e name)
   Some entry =>
-    let dictWords = dictWordsOf e env (methRoutes ++ implRoutes)
+    let dictWords = dictWordsOf e env (methRoutes ++ implRoutesForDefine e name entry methRoutes implRoutes)
     let headTag = implEntryTag entry
     let resTy = if methodReturnsSelf e (implEntryIface entry) name then
       tagToLTy headTag
@@ -5459,6 +5459,45 @@ emitDefaultDispatchChain e dictPtr headTag (tag::rest) name entry argOps slot en
 -- (fields 1..count), so the chain loads exactly that many and prepends them.
 implReqCount : Emit -> String -> CImplEntry -> Int
 implReqCount e name ent = listLen (implPats ent) - methodArityOfEntry e ent name
+
+-- #1648: the impl-`requires` dict words a DIRECT (RKey) call to [ent]'s lifted fn is
+-- allowed to push — never more than that define actually BINDS.  dict_pass prepends an
+-- impl method's `$dict_<method>_<slot>` params only when the body READS one
+-- (typecheck.mdk's `usesImplDict` gate), while the CALL site stamps one route per
+-- DECLARED `requires` unconditionally.  The two disagree exactly when the body ignores
+-- its element dict: `impl Same (Box a) requires Eq a where bar (Box n) = n` is DEFINED
+-- `@mdk_impl_Box_bar(i64 %arg0)` and was CALLED `@mdk_impl_Box_bar(i64 0, i64 %t3)`, so
+-- the one surviving parameter bound positionally to the (null) DICT slot and the body
+-- read a dictionary pointer where its value belonged — SIGSEGV, or a silent wrong
+-- answer when nothing reads the mis-bound word.
+-- This is the SAME skew, from the SAME cause, that eval already closes in
+-- `implDictRoutes` (eval/eval.mdk, #413) and that the RUNTIME dispatch chain already
+-- closes in `emitDispatchArmBody`'s `cellCount` — both by sizing the call from the
+-- DEFINITION.  #413's comment claims "emit never had this bug"; that is true of the
+-- dispatch chain and false of this static RKey path, which is #1648.  Same formula, so
+-- the three now agree by construction: `implReqCount` is the entry's own clause pattern
+-- count less its value arity — exactly the leading dict params `gatherGroup` mints the
+-- define with (`nDicts = leadingDictPats (firstClausePats cls0)`) — of which the first
+-- `lengthS methRoutes` are the METHOD-level dicts, leaving this impl's own share.
+-- Clamped at zero for the eta-short case (#1816).  An impl method that DOES read its
+-- dict declares the param, so `implReqCount` covers every stamped route and the list is
+-- returned whole: byte-identical for every impl outside this exact skew.
+implRoutesForDefine : Emit -> String -> CImplEntry -> List Route -> List Route -> List Route
+implRoutesForDefine e name ent methRoutes implRoutes =
+  takeRoutes
+    (maxInt 0 (implReqCount e name ent - lengthS methRoutes))
+    implRoutes
+
+-- the first [n] routes ([] for n <= 0 or a shorter list) — the local `takeN` this
+-- module's truncating callers need, with no new import.  Exact peer of wasm_emit's
+-- `takeRoutesW`, which the wasm arm has used for the SAME truncation since #717
+-- (`emitMethodRef`'s RKey arm).  That arm's comment reads "Native gets away with it
+-- (LLVM cdecl silently ignores extra args)"; #1648 is the measurement that it does
+-- not — the surplus word shifts the value into the dict slot and the binary faults.
+takeRoutes : Int -> List Route -> List Route
+takeRoutes n (r::rest)
+  | n > 0 = r :: takeRoutes (n - 1) rest
+takeRoutes _ _ = []
 
 -- load `n` nested dict words from the boxed dict cell `dictPtr`.  The head tag is
 -- the cell header (offset 0); the nested req dicts are fields 0..n-1 (loadField i ⇒

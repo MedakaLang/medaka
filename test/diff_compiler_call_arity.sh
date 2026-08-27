@@ -5,26 +5,27 @@
 # TEXT IR, every direct `call @NAME(...)` whose argument count differs from the
 # `define @NAME(...)` for that same locally-defined function, over a corpus of
 # `.mdk` programs (test/build_diff_fixtures/*.mdk, reused — the existing native
-# `medaka build` fixture corpus) plus the two known-skew repro pins (#1101, #1648)
-# and their controls, plus the compiler's OWN emitted IR (building
+# `medaka build` fixture corpus) plus the known-skew repro pin (#1101) and its
+# control, plus the compiler's OWN emitted IR (building
 # compiler/driver/medaka_cli.mdk with --keep-ir — i.e. the self-compile output).
 #
 # This does NOT validate/reject anything at compile time — it is a census gate,
 # reporting a count. Zero is not required to pass; the gate FAILS only if it
-# stops flagging the two known-skew pins, or flags either control, or would
-# report a suspicious ZERO total (comparing nothing — see the "no vacuous pass"
-# discipline in docs/ops/TESTING-DESIGN.md §0.0).
+# stops flagging the known-skew pin, flags its control, flags the #1648
+# regression fixture, or would report a suspicious ZERO total (comparing nothing
+# — see the "no vacuous pass" discipline in docs/ops/TESTING-DESIGN.md §0.0).
 #
-# #1034 and #826 (open question per the packet, not a requirement either way):
-# both are PAP/closure-arity bugs (an under-applied interface method whose
-# result type is itself a function), not necessarily a direct call/define arity
-# mismatch in the SAME function's own IR — this gate reports, in its header,
-# whether it flags either program's emitted IR; it is not required to.
+# #1648 (impl-`requires` dict-param arity skew) is FIXED and its must-fail fixture
+# is drained and deleted, so its arm here is INVERTED: the replacement regression
+# fixture test/build_diff_fixtures/impl_requires_dict_arity_conformance.mdk must
+# stay CLEAN, and the gate proves that fixture still exists so the absence
+# assertion is not vacuous. #1034 and #826 were likewise fixed and deleted; the
+# report-only rows that named them are gone with their paths.
 #
 # Usage:  sh test/diff_compiler_call_arity.sh
 # Exit:   0 pins correctly discriminated (and a nonzero corpus was scanned);
-#         1 a known-skew pin was not flagged, a control WAS flagged, or the
-#           corpus was empty;
+#         1 a known-skew pin was not flagged, a control or the #1648 regression
+#           fixture WAS flagged, that fixture is missing, or the corpus was empty;
 #         2 native medaka/emitter missing, no C compiler, or no python3.
 set -u
 
@@ -148,21 +149,25 @@ for p in $PROGRAMS; do
   build_one "corpus-$p" "$FIX/$p.mdk" >> "$CORPUS_OUT"
 done
 
-# ── the two known-skew pins + their controls (not part of the corpus loop —
-#    graded explicitly below) ──────────────────────────────────────────────
+# ── the known-skew pin + its control (not part of the corpus loop — graded
+#    explicitly below) ───────────────────────────────────────────────────────
 F1101="$ROOT/test/must_fail_fixtures/1101-native-call-drops-arg-caf-closure"
-F1648="$ROOT/test/must_fail_fixtures/1648-impl-requires-unused-dict-arity-skew-segfault"
 PIN_1101_MAIN="$(build_one "pin-1101-main" "$F1101/main.mdk")"
 PIN_1101_CTRL="$(build_one "pin-1101-ctrl" "$F1101/control.mdk")"
-PIN_1648_MAIN="$(build_one "pin-1648-main" "$F1648/main.mdk")"
-PIN_1648_CTRL="$(build_one "pin-1648-ctrl" "$F1648/control.mdk")"
 
-# ── open question: does the census also flag #1034 / #826? (no requirement
-#    either way — report only) ─────────────────────────────────────────────
-F1034="$ROOT/test/must_fail_fixtures/1034-underapplied-iface-method-becomes-pap"
-F826="$ROOT/test/must_fail_fixtures/826-method-closure-wrapper-native-segfault"
-PIN_1034_MAIN="$(build_one "pin-1034-main" "$F1034/main.mdk")"
-PIN_826_MAIN="$(build_one "pin-826-main" "$F826/main.mdk")"
+# ── #1648 (FIXED, S-dict-param-arity): its must-fail fixture drained and was
+#    deleted, so this gate's #1648 arm INVERTED — from "the pin must be flagged"
+#    to "the regression fixture that replaced it must stay CLEAN". The fixture is
+#    test/build_diff_fixtures/impl_requires_dict_arity_conformance.mdk, already
+#    scanned by the corpus loop above (it is auto-enrolled by the *.mdk glob), so
+#    read the verdict out of that scan rather than paying a second build.
+#    #1034 and #826 were likewise fixed and their fixtures deleted (slice
+#    S-method-arity-lowering); the census rows that reported on them are gone with
+#    them — they were "report only, no requirement either way" and their paths no
+#    longer exist.
+REG_1648_LABEL="corpus-impl_requires_dict_arity_conformance"
+REG_1648="$(grep "^$REG_1648_LABEL: " "$CORPUS_OUT" 2>/dev/null)"
+REG_1648_PRESENT="$(cd "$FIX" && ls -- impl_requires_dict_arity_conformance.mdk 2>/dev/null)"
 
 # ── the compiler's own emitted IR (self-compile output) ───────────────────────
 COMPILER_OUT="$(build_one "compiler-self" "$ROOT/compiler/driver/medaka_cli.mdk")"
@@ -184,21 +189,28 @@ echo ""
 echo "-- compiler's own IR skews (compiler/driver/medaka_cli.mdk --keep-ir) --"
 [ -n "$COMPILER_OUT" ] && printf '%s\n' "$COMPILER_OUT" || echo "  (none)"
 echo ""
-echo "-- #1101 / #1648 pin discrimination --"
+echo "-- #1101 pin discrimination --"
 echo "1101 main : $([ -n "$PIN_1101_MAIN" ] && echo FLAGGED || echo clean)  ($PIN_1101_MAIN)"
 echo "1101 ctrl : $([ -n "$PIN_1101_CTRL" ] && echo FLAGGED || echo clean)"
-echo "1648 main : $([ -n "$PIN_1648_MAIN" ] && echo FLAGGED || echo clean)  ($PIN_1648_MAIN)"
-echo "1648 ctrl : $([ -n "$PIN_1648_CTRL" ] && echo FLAGGED || echo clean)"
 echo ""
-echo "-- #1034 / #826 (open question, not required either way) --"
-echo "1034 main : $([ -n "$PIN_1034_MAIN" ] && echo FLAGGED || echo "not flagged (PAP/closure-arity skew, not a same-function call/define skew)")"
-echo "826  main : $([ -n "$PIN_826_MAIN" ] && echo FLAGGED || echo "not flagged (PAP/closure-arity skew, not a same-function call/define skew)")"
+echo "-- #1648 regression (impl-\`requires\` dict-param arity, FIXED) --"
+echo "1648 regression fixture : $([ -n "$REG_1648" ] && echo "FLAGGED  ($REG_1648)" || echo clean)"
 
 fail=0
 if [ -z "$PIN_1101_MAIN" ]; then echo "FAIL: #1101 main.mdk not flagged"; fail=1; fi
 if [ -n "$PIN_1101_CTRL" ]; then echo "FAIL: #1101 control.mdk WAS flagged (should be clean)"; fail=1; fi
-if [ -z "$PIN_1648_MAIN" ]; then echo "FAIL: #1648 main.mdk not flagged"; fail=1; fi
-if [ -n "$PIN_1648_CTRL" ]; then echo "FAIL: #1648 control.mdk WAS flagged (should be clean)"; fail=1; fi
+if [ -n "$REG_1648" ]; then
+  echo "FAIL: #1648 REGRESSED — impl_requires_dict_arity_conformance.mdk has a call/define"
+  echo "      arity skew again. An impl-\`requires\` method whose body never reads its dict is"
+  echo "      being DEFINED without the leading dict param and CALLED with it (or vice versa)."
+  fail=1
+fi
+# The #1648 arm is an absence assertion, so it must prove it looked at something.
+if [ -z "$REG_1648_PRESENT" ]; then
+  echo "FAIL: the #1648 regression fixture (impl_requires_dict_arity_conformance.mdk) is"
+  echo "      MISSING from $FIX — its 'clean' verdict above asserted nothing."
+  fail=1
+fi
 
 # Never pass having scanned nothing (docs/ops/TESTING-DESIGN.md §0.0).
 if [ "$n_programs_scanned" -eq 0 ]; then
