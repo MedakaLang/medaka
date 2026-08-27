@@ -16,6 +16,10 @@
 #     whole-process `medaka build` Ir ....... r1=2.028  r2=2.026   — DEAD LINEAR
 #     stage-local `lower` Ir, same shape .... r1=3.328  r2=3.640   — RED
 #
+# (Those are the readings from the tree this gate was born on, BEFORE #408 was
+# fixed. They are kept verbatim because they are the measurement that justifies
+# the gate's shape; `lower` on `match` now reads r1 2.302 r2 2.240.)
+#
 # The defect is the same defect in both rows. One metric sees it; the other cannot.
 # A synthetic O(table) scan planted in llvm_emit's `ctorTypeOf` moved the
 # whole-process total by ~6 000 Ir out of 5.8e9 — i.e. the whole-process arm's
@@ -84,8 +88,8 @@
 # diff_compiler_perf_scaling.sh. Three gates, one number; do not invent a fourth.
 #     linear 2.0 | n log n ~2.1 | n^1.5 2.83 | QUADRATIC 4.0
 # MEASURED margins at the shipped bands, this box, on this tree:
-#     xref:lower   r1 2.097  r2 2.106      xref:emit   r1 2.127  r2 2.152
-#     match:lower  r1 3.328  r2 3.640      match:emit  r1 2.110  r2 2.156
+#     xref:lower   r1 2.095  r2 2.106      xref:emit   r1 2.128  r2 2.152
+#     match:lower  r1 2.302  r2 2.240      match:emit  r1 2.108  r2 2.156
 #
 # ── THE SHAPES ───────────────────────────────────────────────────────────────
 #
@@ -112,18 +116,35 @@
 # and `lower` is invisible to BOTH existing deterministic arms on this shape: its
 # counted-op delta is a CONSTANT 5591 at every N (it calls neither util.contains nor
 # util.lookupAssoc), and its allocation is linear (3.95 -> 8.27 -> 17.28 MB, x2.09
-# x2.09). Only instruction counts see it. Whoever fixes #408 should start in
-# compiler/ir/core_ir_lower.mdk, not in the emitter — and should re-read #408's own
-# wall-clock table knowing that profile_main's `emit` row at N=1 already costs more
-# than the whole shape-attributable cost at N=1000.
+# x2.09). Only instruction counts see it. Anyone re-reading #408's own wall-clock
+# table should know that profile_main's `emit` row at N=1 already costs more than
+# the whole shape-attributable cost at N=1000.
+#
+# FIXED, in compiler/ir/core_ir_lower.mdk — NOT in the emitter, exactly as the
+# attribution said. There were TWO independent alloc-free quadratics stacked on
+# this one row, and the ratio only came back to ~2.2 once both were gone:
+#   1. `buildConSwitch`/`buildLitSwitch` called `specializeCon`/`specializeLit`
+#      once per distinct head, each re-scanning the WHOLE row matrix. Replaced by
+#      one bucketing pass read once per branch. Alone: r1 2.560 r2 2.651 — better,
+#      but still over this gate's own promotion bar.
+#   2. `leafOrGuard` looked its arm's guard flag up in a `List Bool` BY INDEX
+#      (`nthBool`), O(i) per leaf and O(N^2) over N leaves. Measured on its own,
+#      inclusive Ir at 125/250/500: 1 256 062 -> 4 955 062 -> 19 759 312, i.e.
+#      x3.945 x3.988 — textbook quadratic, and after fix (1) it was ALL of the
+#      residual. Replaced by an `OrdMap Unit` index set built once per entry.
+# The lesson for the next reader: one red row can hide more than one defect, and
+# a stage that drops from 3.6 to 2.65 has not necessarily been made linear.
 #
 # ── THE LEDGER ───────────────────────────────────────────────────────────────
 #
-# `match:lower` is REAL, LIVE and UNFIXED at this tree, so this gate is born with a
-# red reading. It ships LEDGERED, not disabled — the same self-draining contract
-# perf_scaling's KNOWN_SLOW_OPS uses: green now, but FAILS if the ratio worsens past
-# its ceiling AND fails demanding promotion the moment a fix drops it back to
-# linear. To SEE the red this gate is pinning, run it with the ledger off:
+# The ledger (`KNOWN_SLOW`, below) is the same self-draining contract
+# perf_scaling's KNOWN_SLOW_OPS uses: a ledgered row is green now, but FAILS if the
+# ratio worsens past its ceiling AND fails demanding promotion the moment a fix
+# drops it back to linear. This gate was BORN with one row, `match:lower` (#408),
+# because that defect was real, live and unfixed at the tree the gate landed on;
+# the row DRAINED — the fix, the promotion and the removal all happened as the
+# contract intends. `KNOWN_SLOW` is empty today. `STAGE_IR_NO_LEDGER=1` turns the
+# ledger off entirely and is how you see what a ledgered row is hiding:
 #
 #     STAGE_IR_NO_LEDGER=1 sh test/diff_compiler_stage_ir_scaling.sh
 #
@@ -215,16 +236,15 @@ trmc=mdk_backend_trmc_analysis__detectDispatchGroups"
 # ratio: the gate stays green, but FAILS if the ratio worsens past its ceiling and
 # FAILS demanding promotion the instant a fix drops it back to linear.
 #
-#   match:lower — issue #408. MEASURED at this band on this tree: r1 3.328
-#         r2 3.640, climbing (the quadratic signature; the pure-quadratic asymptote
-#         is 4.0). Ceiling 4.00 leaves ~10% headroom and still breaks on a cubic
-#         regression; FIXED 2.60 promotes the row the moment the ratio returns to
-#         the ~2.1 every other stage/shape pair reads here. See the attribution
-#         block above — this is a `lower` defect, and #408's title says `emit`.
-KNOWN_SLOW="
-match:lower
-"
-KNOWN_CEIL_match_lower="4.00"; KNOWN_FIXED_match_lower="2.60"
+# THE LEDGER IS CURRENTLY EMPTY, and that is the drained end state, not a disabled
+# gate: every graded row is held to the plain 3.0 threshold. `match:lower` was the
+# one entry (issue #408, ledgered at ceiling 4.00 / fixed 2.60 against a measured
+# r1 3.328 r2 3.640); it PROMOTED and was removed when the two `core_ir_lower.mdk`
+# quadratics behind it were fixed — see the block above. Re-adding a row means
+# re-adding its `KNOWN_CEIL_<shape>_<stage>` / `KNOWN_FIXED_<shape>_<stage>` pair
+# alongside it, and saying in a comment here what issue it pins and at what band
+# it was measured.
+KNOWN_SLOW=""
 
 is_known() {
   [ -n "${STAGE_IR_NO_LEDGER:-}" ] && return 1
