@@ -545,6 +545,32 @@ stripLoc : Expr -> Expr
 stripLoc (ELoc _ e) = stripLoc e
 stripLoc e = e
 
+-- #164: a BOUNDED (single-layer) variant of `stripLoc`, for the one call site
+-- (`leftSectionOrExpr`) that used to pay for the full recursive unwind at every
+-- paren-nesting level.  `parseAtom = located parseAtomRaw` wraps EVERY atom
+-- production in exactly one fresh `ELoc`, including a parenthesised expr read
+-- back as an atom by its enclosing parens — so at nesting level k the content
+-- handed to `leftSectionOrExpr` already carries k accumulated `ELoc` layers,
+-- and the full `stripLoc` walked all k of them, on EVERY one of the N levels:
+-- O(N) work summed N times = O(N^2) (confirmed by `perf`: 44% self-time here).
+--
+-- A single-layer strip is sufficient here and nowhere else needs to change: an
+-- `EBinOp` node is NEVER itself wrapped in `ELoc` (binop levels stay unwrapped
+-- — see the comment on `parseAtom` below), so the only way `stripLoc1`'s single
+-- peel could miss a genuine left-section is if a real `EBinOp op lhs (EVar
+-- "_")` sat under 2+ ELoc layers here. It cannot: the FIRST paren level that
+-- ever sees that raw `EBinOp` directly (unwrapped, e.g. literally `(e op _)`)
+-- already runs `leftSectionOrExpr` on it right then and converts it to
+-- `ESection` before any further `ELoc` wrapping is ever applied — so a plain
+-- `EBinOp` can never survive to be re-discovered two-or-more parens further
+-- out. (Multiple PLAIN paren layers around a non-section value, e.g.
+-- `((((1))))`, is exactly the pathological case this fixes: one strip reveals
+-- another `ELoc`, correctly falls through to "not a section" every time,
+-- without walking the rest of the stack.)
+stripLoc1 : Expr -> Expr
+stripLoc1 (ELoc _ e) = e
+stripLoc1 e = e
+
 binOp : Token -> String -> Parser (Expr -> Expr -> Expr)
 binOp tk op = do
   expectTok tk
@@ -837,14 +863,61 @@ sliceHi e lo incl = do
   expectTok TRBracket
   postfixTail (ESlice e lo hi incl (Ref "Array"))
 
+-- #77: bound recursion depth so a pathologically deep input fails with a
+-- clean, located diagnostic instead of exhausting the native call stack (a
+-- hang or a SEGFAULT/exit 134). `parseAtom` (below) is the single shared
+-- re-entry point for EVERY recursive expression form — parenthesised/tuple
+-- exprs, list literals, if/let/match/do, and (through the operand ladder)
+-- nested application — so bounding depth here bounds all of them, whichever
+-- bracket or keyword does the nesting. #77 F1: also shared by `parsePatAtom`
+-- and `parseTyAtom`'s own wrappers below, closing the pattern- and
+-- type-grammar gaps the end-of-sprint review found; an expr-only input still
+-- only ever increments here, so `parseAtom`'s own boundary does not move.
+nestDepthRef : Ref Int
+nestDepthRef = Ref 0
+
+-- Comfortably above any depth a hand-written or generated program plausibly
+-- needs (this repo's own deepest perf-corpus shape nests a few thousand
+-- levels) while staying well inside the 256MB GC-worker stack every `medaka`
+-- invocation runs on (AGENTS.md [B-ENV]).
+maxNestDepth : Int
+maxNestDepth = 20000
+
+nestTooDeepMsg : String
+nestTooDeepMsg = "expression nesting too deep (limit \{intToString maxNestDepth}); split this expression into named intermediate bindings"
+
 -- Atom level (`expr_atom` + the statement-form productions in parser.mly).
 -- Wrapped in a transparent ELoc capturing the atom's token span, mirroring
 -- parser.mly where every atom and every let/if/match/function/do production is
 -- `ELoc (of_pos $startpos $endpos, …)`.  Binop/app/unary/postfix levels stay
 -- un-wrapped (exactly like parser.mly's `mkbin`/`EApp` rules), so their span is
 -- implicit from their wrapped leaf operands.
+--
+-- Depth tracking is written directly over the raw `Parser` representation
+-- (not `do`-notation) so the counter is restored on EVERY outcome — including
+-- a non-fatal `PErr` from a failed speculative atom attempt, routine under
+-- `orElse`/`chainl1` throughout this file. A `do`-sequenced decrement after
+-- `located parseAtomRaw` would never run on that path: `bindPR` short-circuits
+-- straight past subsequent binds on `PErr`/`PFatal`, which would leak an
+-- increment on every backtrack and eventually trip the cap on an ordinary
+-- (shallow) program.
 parseAtom : Parser Expr
-parseAtom = located parseAtomRaw
+parseAtom = Parser parseAtomNestGo
+
+parseAtomNestGo : Array Token -> Int -> PR Expr
+parseAtomNestGo toks pos =
+  let d = !nestDepthRef + 1
+  if d > maxNestDepth then
+    PFatal nestTooDeepMsg pos
+  else
+    parseAtomNestRun toks pos d
+
+parseAtomNestRun : Array Token -> Int -> Int -> PR Expr
+parseAtomNestRun toks pos d =
+  nestDepthRef := d
+  let r = runP (located parseAtomRaw) toks pos
+  nestDepthRef := d - 1
+  r
 
 parseAtomRaw : Parser Expr
 parseAtomRaw = do
@@ -1162,12 +1235,16 @@ parenResult es = ETuple es
 -- The `_` placeholder is a wrapped atom (`ELoc (EVar "_")`), so strip the RHS
 -- operand before matching (mirrors parser.mly's local `strip` in this rule).
 -- On no match we return the ORIGINAL expr untouched (keeping its wrappers).
+-- Both strips are the BOUNDED `stripLoc1` (see its comment) — `e` is where the
+-- O(N^2) lived (its `ELoc` depth grows with paren-nesting level); `rhs` is
+-- always the immediate right operand of a directly-unwrapped `EBinOp`, so its
+-- depth is O(1) regardless of N either way.
 leftSectionOrExpr : Expr -> Expr
-leftSectionOrExpr e = leftSectionGo e (stripLoc e)
+leftSectionOrExpr e = leftSectionGo e (stripLoc1 e)
 
 leftSectionGo : Expr -> Expr -> Expr
 leftSectionGo orig (EBinOp op lhs rhs _) =
-  leftSectionRhs orig op lhs (stripLoc rhs)
+  leftSectionRhs orig op lhs (stripLoc1 rhs)
 leftSectionGo orig _ = orig
 
 leftSectionRhs : Expr -> String -> Expr -> Expr -> Expr
@@ -1669,8 +1746,35 @@ reservedOrPatFail t = match reservedIdentKeyword t
   Some name => fatalP (reservedKeywordMsg name)
   None => failP "expected pattern"
 
+-- #77 F1: shares `nestDepthRef`/`maxNestDepth` with `parseAtom` above — a
+-- pattern's own recursive re-entry (`parsePatParen`/`parsePatList` calling back
+-- into `parsePat` -> ... -> `parsePatAtom`) was NOT reached by the expression
+-- cap, so pathologically deep pattern nesting (e.g. `((((...(x)...))))` in a
+-- `match` arm) still exhausted the native stack with an unlocated exit 134.
+-- One counter shared across expr/pattern/type mirrors how a single adversarial
+-- input can nest through more than one grammar at once, and does not move
+-- `parseAtom`'s own already-verified boundary: an expr-only input still only
+-- ever increments at `parseAtom`.
 parsePatAtom : Parser Pat
-parsePatAtom = do
+parsePatAtom = Parser parsePatAtomNestGo
+
+parsePatAtomNestGo : Array Token -> Int -> PR Pat
+parsePatAtomNestGo toks pos =
+  let d = !nestDepthRef + 1
+  if d > maxNestDepth then
+    PFatal nestTooDeepMsg pos
+  else
+    parsePatAtomNestRun toks pos d
+
+parsePatAtomNestRun : Array Token -> Int -> Int -> PR Pat
+parsePatAtomNestRun toks pos d =
+  nestDepthRef := d
+  let r = runP parsePatAtomRaw toks pos
+  nestDepthRef := d - 1
+  r
+
+parsePatAtomRaw : Parser Pat
+parsePatAtomRaw = do
   t <- peekP
   match t
     TIdent x => do
@@ -2090,8 +2194,33 @@ tyApplyAll : Ty -> List Ty -> Ty
 tyApplyAll head [] = head
 tyApplyAll head (a::rest) = tyApplyAll (TyApp head a) rest
 
+-- #77 F1: shares `nestDepthRef`/`maxNestDepth` with `parseAtom` above — see
+-- the comment on `parsePatAtom`'s own wrapper for why a shared counter, and
+-- why it can't move `parseAtom`'s already-verified boundary. The type
+-- parser's own recursive re-entry (`parseTyParen` calling back into
+-- `parseTy` -> ... -> `parseTyAtom`) was NOT reached by the expression cap,
+-- so pathologically deep type nesting (e.g. `f : ((((Int)))) -> Int`) still
+-- exhausted the native stack with an unlocated exit 134.
 parseTyAtom : Parser Ty
-parseTyAtom = do
+parseTyAtom = Parser parseTyAtomNestGo
+
+parseTyAtomNestGo : Array Token -> Int -> PR Ty
+parseTyAtomNestGo toks pos =
+  let d = !nestDepthRef + 1
+  if d > maxNestDepth then
+    PFatal nestTooDeepMsg pos
+  else
+    parseTyAtomNestRun toks pos d
+
+parseTyAtomNestRun : Array Token -> Int -> Int -> PR Ty
+parseTyAtomNestRun toks pos d =
+  nestDepthRef := d
+  let r = runP parseTyAtomRaw toks pos
+  nestDepthRef := d - 1
+  r
+
+parseTyAtomRaw : Parser Ty
+parseTyAtomRaw = do
   t <- peekP
   match t
     TUpper c => do

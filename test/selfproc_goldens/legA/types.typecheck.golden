@@ -180,6 +180,8 @@ blockLet : TcEnv -> Pat -> Expr -> TcEnv
 blockRecLet : TcEnv -> String -> Option Loc -> Expr -> TcEnv
 bodyRDictNames : Expr -> List String
 boolOp : Mono -> Mono -> Mono
+boundInsert : List String -> Map String Unit -> Map String Unit
+boundOfList : List String -> Map String Unit
 boundTvarId : List Int -> Mono -> List Int
 boundTyvarIds : List Int -> List Mono -> Option (List Int)
 bucketAnyLonger : List (List Ty, List Require) -> Int -> Bool
@@ -1696,16 +1698,16 @@ returnPosMethod : List String -> IfaceMethod -> List String
 returnPosMethodNames : List Decl -> List String
 returnPosOfDecl : Decl -> List String
 revClauses : List (List Pat, Expr) -> List (List Pat, Expr) -> List (List Pat, Expr)
-rewriteArgArm : ArgRw -> List String -> Arm -> Arm
-rewriteArgField : ArgRw -> List String -> FieldAssign -> FieldAssign
-rewriteArgFunClause : ArgRw -> List String -> FunClause -> FunClause
-rewriteArgGuardArm : ArgRw -> List String -> GuardArm -> GuardArm
-rewriteArgGuards : ArgRw -> List String -> List Guard -> (List Guard, List String)
-rewriteArgInterp : ArgRw -> List String -> InterpPart -> InterpPart
-rewriteArgKv : ArgRw -> List String -> (Expr, Expr) -> (Expr, Expr)
-rewriteArgLetBind : ArgRw -> List String -> LetBind -> LetBind
-rewriteArgScoped : ArgRw -> List String -> Expr -> Expr
-rewriteArgStmts : ArgRw -> List String -> List DoStmt -> List DoStmt
+rewriteArgArm : ArgRw -> Map String Unit -> Arm -> Arm
+rewriteArgField : ArgRw -> Map String Unit -> FieldAssign -> FieldAssign
+rewriteArgFunClause : ArgRw -> Map String Unit -> FunClause -> FunClause
+rewriteArgGuardArm : ArgRw -> Map String Unit -> GuardArm -> GuardArm
+rewriteArgGuards : ArgRw -> Map String Unit -> List Guard -> (List Guard, Map String Unit)
+rewriteArgInterp : ArgRw -> Map String Unit -> InterpPart -> InterpPart
+rewriteArgKv : ArgRw -> Map String Unit -> (Expr, Expr) -> (Expr, Expr)
+rewriteArgLetBind : ArgRw -> Map String Unit -> LetBind -> LetBind
+rewriteArgScoped : ArgRw -> Map String Unit -> Expr -> Expr
+rewriteArgStmts : ArgRw -> Map String Unit -> List DoStmt -> List DoStmt
 rewriteBinopExpr : Expr -> Expr
 rewriteRPDict : List String -> List String -> Expr -> Expr
 rewriteRPDictArg : List String -> List String -> List String -> Expr -> Expr

@@ -164,6 +164,8 @@ importedTyOrigin : (String, String) -> (String, TyConOrigin)
 importedTypeOrigins : Map String (List (String, String)) -> UsePath -> List (String, String)
 importedTypeOriginsFrom : UsePath -> List (String, String) -> List (String, String)
 indexOwners : List (String, String) -> Map String (List String) -> Map String (List String)
+insertParams : List Pat -> Map String Int -> Map String Int
+insertZero : List String -> Map String Int -> Map String Int
 interfaceList : List Decl -> List (String, List String)
 interfaceNamesOf : List Decl -> List String
 internalExterns : List String
@@ -191,7 +193,7 @@ letBindName : LetBind -> String
 locKey : Option Loc -> String
 localOfExpanded : (String, String, Loc) -> String
 localsExportedFrom : List String -> List (String, String) -> List String
-lookupBindId : List BScope -> String -> Int
+lookupBindId : Map String Int -> String -> Int
 lookupValue : Env -> Scope -> String -> Bool
 mapConstraintOcc : (String -> String -> TyConOrigin -> TyConOrigin) -> Constraint -> Constraint
 mapIfaceOccDeclLocal : (String -> String -> TyConOrigin -> TyConOrigin) -> Decl -> Decl
@@ -223,7 +225,6 @@ ownedFieldOwners : ModuleExports -> List (String, String) -> List (String, Strin
 ownersForTypes : List String -> List (String, String) -> List (String, String)
 ownersOf : String -> Map String (List String) -> List String
 ownsAnyField : String -> List (String, String) -> Bool
-paramZeroFrames : List Pat -> List BScope
 patBindings : Pat -> List String
 patGroupDupErrors : Option Loc -> String -> List Pat -> List ResError
 patsBindings : List Pat -> List String
@@ -296,31 +297,31 @@ scoreCand : SugQuery -> String -> Option (String, Int) -> Option (String, Int)
 selfBinding : String -> (String, String)
 setOriginTrace : Bool -> Unit
 singleFileImportErrors : List Decl -> List ResError
-stampArm : List BScope -> Arm -> Arm
+stampArm : Map String Int -> Arm -> Arm
 stampBindingIds : List Decl -> (List Decl, List (String, Int))
-stampClause : List BScope -> FunClause -> FunClause
+stampClause : Map String Int -> FunClause -> FunClause
 stampDecl : Map String Int -> Decl -> Decl
 stampDeclOrigin : String -> Decl -> Decl
 stampDeclOrigins : String -> List Decl -> List Decl
 stampDeclTyOrigins : Map String TyConOrigin -> Decl -> Decl
-stampExpr : List BScope -> Expr -> Expr
-stampFieldAssign : List BScope -> FieldAssign -> FieldAssign
+stampExpr : Map String Int -> Expr -> Expr
+stampFieldAssign : Map String Int -> FieldAssign -> FieldAssign
 stampFlatTyOrigins : List Decl -> List Decl -> List Decl
 stampGraphTyOrigins : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
-stampGuardArm : List BScope -> GuardArm -> GuardArm
-stampGuards : List BScope -> List Guard -> (List Guard, List BScope)
+stampGuardArm : Map String Int -> GuardArm -> GuardArm
+stampGuards : Map String Int -> List Guard -> (List Guard, Map String Int)
 stampHeadWith : Ty -> TyConOrigin -> (Ty, Bool)
 stampIfaceMethod : Map String Int -> IfaceMethod -> IfaceMethod
 stampImplMethod : Map String Int -> ImplMethod -> ImplMethod
-stampInterp : List BScope -> InterpPart -> InterpPart
-stampKv : List BScope -> (Expr, Expr) -> (Expr, Expr)
-stampLet : List BScope -> Bool -> Bool -> Pat -> Expr -> Expr -> Expr
-stampLetBind : List BScope -> LetBind -> LetBind
-stampLetGroup : List BScope -> List LetBind -> Expr -> Expr
+stampInterp : Map String Int -> InterpPart -> InterpPart
+stampKv : Map String Int -> (Expr, Expr) -> (Expr, Expr)
+stampLet : Map String Int -> Bool -> Bool -> Pat -> Expr -> Expr -> Expr
+stampLetBind : Map String Int -> LetBind -> LetBind
+stampLetGroup : Map String Int -> List LetBind -> Expr -> Expr
 stampModulesGo : List (String, String) -> Map String (List (String, String)) -> List (String, List Decl) -> List (String, List Decl)
 stampOneModule : List (String, String) -> Map String (List (String, String)) -> String -> List Decl -> List Decl
-stampSection : List BScope -> Section -> Section
-stampStmts : List BScope -> List DoStmt -> List DoStmt
+stampSection : Map String Int -> Section -> Section
+stampStmts : Map String Int -> List DoStmt -> List DoStmt
 stampTyHead : Map String TyConOrigin -> Ty -> (Ty, Bool)
 stampTyOrigins : Map String TyConOrigin -> List Decl -> List Decl
 startsUpper : String -> Bool
@@ -360,4 +361,3 @@ variantFieldOwners : Variant -> List (String, String)
 variantName : Variant -> String
 whenL : Bool -> List a -> List a
 withResErrorLoc : Loc -> ResError -> ResError
-zeroFrame : List String -> BScope

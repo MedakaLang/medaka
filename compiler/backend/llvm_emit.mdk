@@ -226,6 +226,7 @@ import support.ordmap.{
   omMapValues,
   omSize,
   omEmpty,
+  omKeys,
 }
 -- backend-agnostic TRMC eligibility analysis (lifted out per WASMGC-TRMC-DESIGN §5/§7-Stage-0;
 -- also consumed by wasm_emit.mdk from Stage 1).  The structural CExpr helpers (freeVars/
@@ -692,7 +693,7 @@ gapU e reason = match e.gapMode
   Strict => panic reason
 
 -- gap that returns the unchanged emit env (the bindPattern accumulator).
-gapEnv : Emit -> String -> List (String, (String, LTy)) -> List (String, (String, LTy))
+gapEnv : Emit -> String -> OrdMap (String, LTy) -> OrdMap (String, LTy)
 gapEnv e reason env = match e.gapMode
   Record => let _ = noteGap e reason in env
   Strict => panic reason
@@ -1849,7 +1850,7 @@ unboxFloat e v =
   d
 
 -- ── expressions ─────────────────────────────────────────────────────────────
-emitExpr : Emit -> List (String, (String, LTy)) -> CExpr -> (String, LTy)
+emitExpr : Emit -> OrdMap (String, LTy) -> CExpr -> (String, LTy)
 emitExpr e _ (CLit l) = emitLit e l
 emitExpr e env (CVar x _) = emitVar e env x
 emitExpr e env (CBinPrim op l r tag) = emitBin e env op l r tag
@@ -1897,7 +1898,7 @@ emitExpr e _ other = gapE e ("unsupported Core IR node " ++ ctag other)
 -- This matters for real code: the self-hosted lexer uses `e` as a parameter name
 -- pervasively (`let e = identEnd …`); intercepting it as Euler's number wrecked
 -- every `substr … e` call (B1 bootstrap bug).
-emitVar : Emit -> List (String, (String, LTy)) -> String -> (String, LTy)
+emitVar : Emit -> OrdMap (String, LTy) -> String -> (String, LTy)
 emitVar e env x =
   if x == "True" then
     ("3", LTBool)
@@ -1934,8 +1935,8 @@ emitVar e env x =
 
 -- is `x` a local (let/param) binding in the current emit env?  Used to let a local
 -- shadow the prelude math/bound constants (pi/e/intMaxBound/…) above.
-isLocal : List (String, (String, LTy)) -> String -> Bool
-isLocal env x = match lookupAssoc x env
+isLocal : OrdMap (String, LTy) -> String -> Bool
+isLocal env x = match omLookup x env
   Some _ => True
   None => False
 
@@ -1947,8 +1948,8 @@ isLocal env x = match lookupAssoc x env
 -- rather than loading an uninitialised 0.  When gap-recording is on, a genuinely
 -- unbound variable records a gap and returns a placeholder instead of aborting (the
 -- dict/internal callers keep the pure `lookupVar` panic).
-lookupVarG : Emit -> List (String, (String, LTy)) -> String -> (String, LTy)
-lookupVarG e env x = match lookupAssoc x env
+lookupVarG : Emit -> OrdMap (String, LTy) -> String -> (String, LTy)
+lookupVarG e env x = match omLookup x env
   Some (reg, LTFloatU) => (boxFloat e reg, LTFloat)
   Some vt => vt
   -- #561 PR-A: a LAZY value global (dispatch-reaching or cyclic) is forced on first
@@ -2101,7 +2102,7 @@ hexDigit d
 isStrExtern : String -> Bool
 isStrExtern name = contains name ["intToString", "stringConcat", "stringLength"]
 
-emitStrExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+emitStrExtern : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 emitStrExtern e env "intToString" args = match emitArgs e env args
   [a] =>
     let r = freshReg e
@@ -2176,7 +2177,7 @@ isMathUnary name = contains
 isMathBinary : String -> Bool
 isMathBinary name = contains name ["pow", "atan2", "hypot"]
 
-emitNumExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+emitNumExtern : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 emitNumExtern e env "intToFloat" args = match emitArgs e env args
   [a] =>
     let i = untagInt e a
@@ -2294,7 +2295,7 @@ isIoExtern name = contains
     "enableRunStdoutFlush",
   ]
 
-emitIoExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+emitIoExtern : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 emitIoExtern e env "putStr" args = match emitArgs e env args
   [s] =>
     let _ = emit e ("  call void @mdk_putstr(i64 " ++ s ++ ")")
@@ -2345,7 +2346,7 @@ isAbortExtern : String -> Bool
 isAbortExtern name =
   contains name ["panic", "exit", "indexError", "indexErrorAt", "sliceError"]
 
-emitAbortExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+emitAbortExtern : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 emitAbortExtern e env name args = match emitArgs e env args
   [a] =>
     if name == "indexError" then
@@ -2388,7 +2389,7 @@ isArrIntrinsic : String -> Bool
 isArrIntrinsic name =
   contains name ["arrayLength", "arrayGetUnsafe", "arraySetUnsafe"]
 
-emitArrIntrinsic : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+emitArrIntrinsic : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 emitArrIntrinsic e env "arrayLength" args = match emitArgs e env args
   [arr] => (tagInt e (loadTag e arr), LTInt)
   _ => panic "llvm: arrayLength takes one argument"
@@ -2415,7 +2416,7 @@ isArrLeafExtern name = contains
   name
   ["arrayMake", "arrayCopy", "arrayBlit", "arrayFill", "arrayFromList"]
 
-emitArrLeafExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+emitArrLeafExtern : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 emitArrLeafExtern e env "arrayMake" args = match emitArgs e env args
   [n, x] =>
     let r = freshReg e
@@ -2453,7 +2454,7 @@ emitArrLeafExtern e _ name _ = gapE e ("unsupported array leaf extern " ++ name)
 isCharExtern : String -> Bool
 isCharExtern name = contains name ["charCode", "charToStr"]
 
-emitCharExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+emitCharExtern : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 emitCharExtern e env "charCode" args = match emitArgs e env args
   [a] => (a, LTInt)
   _ => panic "llvm: charCode takes one argument"
@@ -2477,7 +2478,7 @@ isStrCharExtern name = contains
     "stringFromUtf8Bytes",
   ]
 
-emitStrCharExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+emitStrCharExtern : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 emitStrCharExtern e env "stringToChars" args = match emitArgs e env args
   [s] =>
     let r = freshReg e
@@ -2530,7 +2531,7 @@ isUnicodeExtern name = contains
     "stringToLower",
   ]
 
-emitUnicodeExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+emitUnicodeExtern : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 emitUnicodeExtern e env "charIsAlpha" args = match emitArgs e env args
   [a] =>
     let r = freshReg e
@@ -2598,7 +2599,7 @@ isAdtExtern name = contains
   name
   ["charFromCode", "stringToFloat", "stringIndexOf", "stringCompare"]
 
-emitAdtExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+emitAdtExtern : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 emitAdtExtern e env "charFromCode" args = match emitArgs e env args
   [a] =>
     let r = freshReg e
@@ -2630,7 +2631,7 @@ emitAdtExtern e _ name _ = gapE e ("unsupported adt extern " ++ name)
 isEnvExtern : String -> Bool
 isEnvExtern name = contains name ["args", "getEnv"]
 
-emitEnvExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+emitEnvExtern : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 emitEnvExtern e env "args" args = match emitArgs e env args
   [u] =>
     let r = freshReg e
@@ -2675,7 +2676,7 @@ isFileExtern name = contains
     "buildFingerprint",
   ]
 
-emitFileExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+emitFileExtern : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 emitFileExtern e env "readFile" args = match emitArgs e env args
   [p] =>
     let r = freshReg e
@@ -2820,7 +2821,7 @@ isNetExtern name = contains
     "netSetTimeout",
   ]
 
-emitNetExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+emitNetExtern : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 emitNetExtern e env "netResolve" args = match emitArgs e env args
   [h] =>
     let r = freshReg e
@@ -2899,7 +2900,7 @@ isRngExtern name = contains
     "osEntropyBytes",
   ]
 
-emitRngExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+emitRngExtern : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 emitRngExtern e env "randomInt" args = match emitArgs e env args
   [lo, hi] =>
     let r = freshReg e
@@ -2943,7 +2944,7 @@ isPerfExtern : String -> Bool
 isPerfExtern name =
   contains name ["wallTimeSec", "monotonicSec", "sleepMs", "allocBytes"]
 
-emitPerfExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+emitPerfExtern : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 emitPerfExtern e env "wallTimeSec" args = match emitArgs e env args
   [u] =>
     let r = freshReg e
@@ -2983,7 +2984,7 @@ isBitExtern name = contains
   name
   ["bitAnd", "bitOr", "bitXor", "shiftLeft", "shiftRight", "bitNot"]
 
-emitBitBin : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+emitBitBin : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 emitBitBin e env sym args = match emitArgs e env args
   [a, b] =>
     let x = untagInt e a
@@ -2993,7 +2994,7 @@ emitBitBin e env sym args = match emitArgs e env args
     (tagInt e r, LTInt)
   _ => panic ("llvm: " ++ sym ++ " takes two arguments")
 
-emitBitExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+emitBitExtern : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 emitBitExtern e env "bitAnd" args = emitBitBin e env "mdk_bit_and" args
 emitBitExtern e env "bitOr" args = emitBitBin e env "mdk_bit_or" args
 emitBitExtern e env "bitXor" args = emitBitBin e env "mdk_bit_xor" args
@@ -3012,7 +3013,7 @@ isHashExtern : String -> Bool
 isHashExtern name =
   contains name ["hashInt", "hashChar", "hashBool", "hashFloat", "hashString"]
 
-emitHashExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+emitHashExtern : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 emitHashExtern e env "hashInt" args = match emitArgs e env args
   [a] =>
     let i = untagInt e a
@@ -3055,7 +3056,7 @@ emitHashExtern e _ name _ = gapE e ("unsupported hash extern " ++ name)
 isDebugLitExtern : String -> Bool
 isDebugLitExtern name = contains name ["debugStringLit", "debugCharLit"]
 
-emitDebugLitExtern : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+emitDebugLitExtern : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 emitDebugLitExtern e env "debugStringLit" args = match emitArgs e env args
   [a] =>
     let r = freshReg e
@@ -3081,7 +3082,7 @@ emitDebugLitExtern e _ name _ = gapE e ("unsupported debug-lit extern " ++ name)
 -- if-chain pair.  `arrayMakeWith` has no `isXxx` predicate (exact-name
 -- dispatch, its `:10564` signature omits the name param) so it stays a
 -- literal pre-check ahead of the table on both sides, exactly as before.
-type ExternEmitter = Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+type ExternEmitter = Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 
 externCatalog : List (String -> Bool, ExternEmitter)
 externCatalog = [
@@ -3133,14 +3134,14 @@ isAnyExtern name = name == "arrayMakeWith"
 -- debugLit's own wildcard clause (RUN-EMIT-006 §5 property 5: debugLit is an
 -- ordinary keyed entry now, and the table-lookup miss carries the fallthrough
 -- role). Caller guards `hasArgs args`.
-emitExternApplied : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> (String, LTy)
+emitExternApplied : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 emitExternApplied e env fname args =
   if fname == "arrayMakeWith" then emitArrayMakeWith e env args
   else match findExternFamily fname externCatalog
     Some fn => fn e env fname args
     None => gapE e ("unsupported extern " ++ fname)
 
-emitBin : Emit -> List (String, (String, LTy)) -> String -> CExpr -> CExpr -> String -> (String, LTy)
+emitBin : Emit -> OrdMap (String, LTy) -> String -> CExpr -> CExpr -> String -> (String, LTy)
 emitBin e env op l r tag
   | isCmpOp op = emitCmp e env op l r
   | isArithOp op = emitArith e env op l r tag
@@ -3205,8 +3206,8 @@ isArithOp op = op == "+" || op == "-" || op == "*" || op == "/" || op == "%"
 
 -- shared by `staticIsFloat` and `bodyFloatRet` below (#1201): a var is
 -- known-float when its recorded LTy is LTFloat/LTFloatU.
-varIsKnownFloat : List (String, (String, LTy)) -> String -> Bool
-varIsKnownFloat env x = match lookupAssoc x env
+varIsKnownFloat : OrdMap (String, LTy) -> String -> Bool
+varIsKnownFloat env x = match omLookup x env
   Some (_, LTFloat) => True
   Some (_, LTFloatU) => True
   _ => False
@@ -3215,7 +3216,7 @@ varIsKnownFloat env x = match lookupAssoc x env
 -- a float literal; a local typed LTFloat; an arith node whose left operand is
 -- statically float (arith preserves operand type).  A false negative only loses
 -- the optimization (falls to the boxing path); it can never miscompile.
-staticIsFloat : List (String, (String, LTy)) -> CExpr -> Bool
+staticIsFloat : OrdMap (String, LTy) -> CExpr -> Bool
 staticIsFloat env (CLit (LFloat _)) = True
 staticIsFloat env (CVar x _) = varIsKnownFloat env x
 staticIsFloat env (CBinPrim op l _ _) = isArithOp op && staticIsFloat env l
@@ -3227,7 +3228,7 @@ staticIsFloat env _ = False
 -- float on EITHER side ⇒ the homogeneous `+`/`-`/`*`/`/` result is float) and
 -- descends if/let/block tails.  Only a float LITERAL or a known-float var (capture)
 -- makes it True, so it never false-positives a non-float body.
-bodyFloatRet : List (String, (String, LTy)) -> CExpr -> Bool
+bodyFloatRet : OrdMap (String, LTy) -> CExpr -> Bool
 bodyFloatRet env (CLit (LFloat _)) = True
 bodyFloatRet env (CVar x _) = varIsKnownFloat env x
 bodyFloatRet env (CBinPrim op l r _) = isArithOp op
@@ -3238,7 +3239,7 @@ bodyFloatRet env (CBlock stmts) = blockFloatRet env stmts
 bodyFloatRet env _ = False
 
 -- a block evaluates to its LAST statement's value (a trailing CSLet yields Unit).
-blockFloatRet : List (String, (String, LTy)) -> List CStmt -> Bool
+blockFloatRet : OrdMap (String, LTy) -> List CStmt -> Bool
 blockFloatRet _ [] = False
 blockFloatRet env [CSExpr e] = bodyFloatRet env e
 blockFloatRet _ [_] = False
@@ -3246,7 +3247,7 @@ blockFloatRet env (_::rest) = blockFloatRet env rest
 
 -- record a closure word's return type as LTFloat when its body evidently returns a
 -- Float (so a saturated indirect call to it types its result LTFloat).
-recordFloatRet : Emit -> List (String, (String, LTy)) -> String -> CExpr -> Unit
+recordFloatRet : Emit -> OrdMap (String, LTy) -> String -> CExpr -> Unit
 recordFloatRet e env w body =
   if bodyFloatRet env body then
     e.closureRetTy := (w, LTFloat) :: !e.closureRetTy
@@ -3360,7 +3361,7 @@ bytesHexBE arr i =
 -- arith nodes; a non-arith leaf is emitted normally to a word then unboxed once
 -- (matching emitArith's existing LTFloat branch, which already unboxes operands on
 -- the strength of the left's type).  Only called in statically-Float context.
-emitFloatD : Emit -> List (String, (String, LTy)) -> CExpr -> String
+emitFloatD : Emit -> OrdMap (String, LTy) -> CExpr -> String
 emitFloatD e env (CLit (LFloat f)) = ensureFloatDot (floatToString f)
 emitFloatD e env (ex@(CBinPrim op l r _)) =
   if isArithOp op then
@@ -3378,7 +3379,7 @@ emitFloatD e env (ex@(CBinPrim op l r _)) =
   else emitFloatLeaf e env ex
 emitFloatD e env ex = emitFloatLeaf e env ex
 
-emitFloatLeaf : Emit -> List (String, (String, LTy)) -> CExpr -> String
+emitFloatLeaf : Emit -> OrdMap (String, LTy) -> CExpr -> String
 emitFloatLeaf e env ex = match floatFromIntArg ex
   Some a =>
     let (aw, _) = emitExpr e env a
@@ -3390,7 +3391,7 @@ emitFloatLeaf e env ex = match floatFromIntArg ex
 
 -- a saturated call to a float-fw fn → call its `$fw` (double-ABI) directly (float-pos
 -- args as doubles, others i64) and use the returned double — no box/unbox round-trip.
-emitFloatLeafN : Emit -> List (String, (String, LTy)) -> CExpr -> String
+emitFloatLeafN : Emit -> OrdMap (String, LTy) -> CExpr -> String
 emitFloatLeafN e env ex = match flattenApp ex []
   (CVar f _, args) => match floatFwHas e f (lengthS args) && not (isLocal env f)
     True =>
@@ -3401,7 +3402,7 @@ emitFloatLeafN e env ex = match flattenApp ex []
     False => emitFloatLeafVar e env ex
   _ => emitFloatLeafVar e env ex
 
-emitFloatLeafVar : Emit -> List (String, (String, LTy)) -> CExpr -> String
+emitFloatLeafVar : Emit -> OrdMap (String, LTy) -> CExpr -> String
 emitFloatLeafVar e env ex = match floatVarReg env ex
   Some reg => reg
   None =>
@@ -3438,8 +3439,8 @@ headNameIs _ _ = False
 
 -- the unboxed-double register for an LTFloatU let-bound CVar (a float-let kept
 -- unboxed in the env), else None — then emitFloatLeaf unboxes the boxed word.
-floatVarReg : List (String, (String, LTy)) -> CExpr -> Option String
-floatVarReg env (CVar x _) = match lookupAssoc x env
+floatVarReg : OrdMap (String, LTy) -> CExpr -> Option String
+floatVarReg env (CVar x _) = match omLookup x env
   Some (reg, LTFloatU) => Some reg
   _ => None
 floatVarReg _ _ = None
@@ -3456,7 +3457,7 @@ scalarTagIsFloat tag = match fieldNameToLTy tag
   Some LTFloat => True
   _ => False
 
-emitArith : Emit -> List (String, (String, LTy)) -> String -> CExpr -> CExpr -> String -> (String, LTy)
+emitArith : Emit -> OrdMap (String, LTy) -> String -> CExpr -> CExpr -> String -> (String, LTy)
 emitArith e env op l r tag =
   if scalarTagIsFloat tag || staticIsFloat env l || isFloatFieldAccess e l || isFloatFieldAccess e r then
     emitFloatArith e env op l r
@@ -3501,7 +3502,7 @@ floatFieldRecord e recName label =
 
 -- fused statically-Float arithmetic: both operands as unboxed doubles, one float
 -- op, box ONCE (replaces N intermediate boxes with 1).
-emitFloatArith : Emit -> List (String, (String, LTy)) -> String -> CExpr -> CExpr -> (String, LTy)
+emitFloatArith : Emit -> OrdMap (String, LTy) -> String -> CExpr -> CExpr -> (String, LTy)
 emitFloatArith e env op l r = match constNanFold op l r
   -- #672: box the host's exact NaN bits so clang keeps −NaN (matches runtime/eval on
   -- this box) rather than folding `fdiv 0.0,0.0` to its canonical +NaN.
@@ -3517,7 +3518,7 @@ emitFloatArith e env op l r = match constNanFold op l r
 -- the boxing fallback path (left operand not statically float): unchanged from the
 -- original emitArith.  Still reached for float values the static check misses (e.g.
 -- a float-returning CALL on the left) — its LTFloat branch boxes as before.
-emitArithW : Emit -> List (String, (String, LTy)) -> String -> CExpr -> CExpr -> (String, LTy)
+emitArithW : Emit -> OrdMap (String, LTy) -> String -> CExpr -> CExpr -> (String, LTy)
 emitArithW e env op l r =
   let (lv, lty) = emitExpr e env l
   let (rv, rty) = emitExpr e env r
@@ -3586,7 +3587,7 @@ emitIntDivZeroChecked e op li ri =
 -- propagates (the other operand shares the type by well-typing).
 
 -- comparison always yields a Bool word; dispatch the compare on operand type.
-emitCmp : Emit -> List (String, (String, LTy)) -> String -> CExpr -> CExpr -> (String, LTy)
+emitCmp : Emit -> OrdMap (String, LTy) -> String -> CExpr -> CExpr -> (String, LTy)
 emitCmp e env op l r =
   if staticIsFloat env l then
     emitFloatCmp e env op l r
@@ -3594,7 +3595,7 @@ emitCmp e env op l r =
     emitCmpW e env op l r
 
 -- fused statically-Float comparison: operands as unboxed doubles, fcmp, NO box.
-emitFloatCmp : Emit -> List (String, (String, LTy)) -> String -> CExpr -> CExpr -> (String, LTy)
+emitFloatCmp : Emit -> OrdMap (String, LTy) -> String -> CExpr -> CExpr -> (String, LTy)
 emitFloatCmp e env op l r =
   let ld = emitFloatD e env l
   let rd = emitFloatD e env r
@@ -3602,7 +3603,7 @@ emitFloatCmp e env op l r =
   let _ = emit e "  \{c} = fcmp \{floatPred op} double \{ld}, \{rd}"
   boolFromI1 e c
 
-emitCmpW : Emit -> List (String, (String, LTy)) -> String -> CExpr -> CExpr -> (String, LTy)
+emitCmpW : Emit -> OrdMap (String, LTy) -> String -> CExpr -> CExpr -> (String, LTy)
 emitCmpW e env op l r =
   let (lv, lty) = emitExpr e env l
   let (rv, rty) = emitExpr e env r
@@ -3750,7 +3751,7 @@ boolFromI1 e c =
   let _ = emit e "  \{z} = zext i1 \{c} to i64"
   (tagInt e z, LTBool)
 
-emitUn : Emit -> List (String, (String, LTy)) -> String -> CExpr -> (String, LTy)
+emitUn : Emit -> OrdMap (String, LTy) -> String -> CExpr -> (String, LTy)
 emitUn e env "-" x =
   let (v, ty) = emitExpr e env x
   match ty
@@ -3770,7 +3771,7 @@ emitUn e _ op _ = gapE e ("unsupported unary op " ++ op)
 -- control flow never has to be threaded into a phi's incoming-block list — the
 -- simplest correct lowering for a spike (clang -O0 keeps the alloca; mem2reg
 -- would promote it under -O).  Both arms share a type; report the then-arm's.
-emitIf : Emit -> List (String, (String, LTy)) -> CExpr -> CExpr -> CExpr -> (String, LTy)
+emitIf : Emit -> OrdMap (String, LTy) -> CExpr -> CExpr -> CExpr -> (String, LTy)
 emitIf e env c t f =
   let (cv, _) = emitExpr e env c
   let ci = untagInt e cv
@@ -3796,14 +3797,14 @@ emitIf e env c t f =
   let _ = emit e "  \{r} = load i64, ptr \{slot}"
   (r, tty)
 
-emitLet : Emit -> List (String, (String, LTy)) -> Bool -> Pat -> CExpr -> CExpr -> (String, LTy)
+emitLet : Emit -> OrdMap (String, LTy) -> Bool -> Pat -> CExpr -> CExpr -> (String, LTy)
 emitLet e env False (PVar x _) e1 e2 =
   if staticIsFloat env e1 then
     let d = emitFloatD e env e1
-    emitExpr e ((x, (d, LTFloatU))::env) e2
+    emitExpr e (omInsert x (d, LTFloatU) env) e2
   else
     let (v, ty) = emitExpr e env e1
-    emitExpr e ((x, (v, ty))::env) e2
+    emitExpr e (omInsert x (v, ty) env) e2
 emitLet e env False PWild e1 e2 =
   let _ = emitExpr e env e1
   emitExpr e env e2
@@ -3819,7 +3820,7 @@ emitLet e env False (PTuple ps) e1 e2 =
 -- function-lets take the same path harmlessly (`f` simply never appears free).
 emitLet e env True (PVar f _) (CLam pats body) e2 =
   let (w, ty) = emitRecLam e env f pats body
-  emitExpr e ((f, (w, ty))::env) e2
+  emitExpr e (omInsert f (w, ty) env) e2
 -- P0-2c: general expression-level `let pat = e1 in e2` for a non-recursive,
 -- non-(var/wild/tuple) pattern (PCon/PCons/PList/PAs) — the expression-position
 -- analog of emitBlock's general CSLet arms.  Mirrors them: an irrefutable head
@@ -3861,22 +3862,22 @@ emitLet e _ _ _ _ _ =
 -- binding interleaved INSIDE such a run (a mutual ref crossing a non-function
 -- sibling) is the residue this scheme doesn't cover — it is rejected precisely
 -- (`gapE`) rather than miscompiled.
-emitLetGroup : Emit -> List (String, (String, LTy)) -> List CBind -> CExpr -> (String, LTy)
+emitLetGroup : Emit -> OrdMap (String, LTy) -> List CBind -> CExpr -> (String, LTy)
 emitLetGroup e env [] body = emitExpr e env body
 emitLetGroup e env ((CBind name [CClause [] rhs])::rest) body =
   let (v, ty) = emitExpr e env rhs
-  emitLetGroup e ((name, (v, ty))::env) rest body
+  emitLetGroup e (omInsert name (v, ty) env) rest body
 emitLetGroup e env ((CBind name clauses)::rest) body
   | refsLater name clauses (bindNames rest) =
     emitKnotRun e env (CBind name clauses :: rest) body
   | otherwise =
     let (w, ty) = emitGroupBind e env (CBind name clauses)
-    emitLetGroup e ((name, (w, ty))::env) rest body
+    emitLetGroup e (omInsert name (w, ty) env) rest body
 
 -- knot-tie the maximal leading run of function bindings of `binds`, then continue
 -- the group with the remainder.  A forward/mutual ref crossing into a LATER value
 -- binding (outside the run) is the uncovered residue — rejected precisely.
-emitKnotRun : Emit -> List (String, (String, LTy)) -> List CBind -> CExpr -> (String, LTy)
+emitKnotRun : Emit -> OrdMap (String, LTy) -> List CBind -> CExpr -> (String, LTy)
 emitKnotRun e env binds body =
   let run = takeFnRun binds
   let after = dropS (lengthS run) binds
@@ -3932,7 +3933,7 @@ anyInList (x::xs) ys = if contains x ys then True else anyInList xs ys
 -- itself, bound to `%clos` inside the lift — a self-call re-enters the same cell).
 -- The lifted body reuses the E1a decision-tree path (`emitClauseTree`), so a
 -- multi-clause worker or a patterned param lowers exactly as a top-level fn does.
-emitGroupBind : Emit -> List (String, (String, LTy)) -> CBind -> (String, LTy)
+emitGroupBind : Emit -> OrdMap (String, LTy) -> CBind -> (String, LTy)
 emitGroupBind e env (CBind name clauses) =
   let lamName = "mdk_lam" ++ intToString (freshId e)
   let arity = clauseArity (clauseList clauses)
@@ -3946,7 +3947,7 @@ emitGroupBind e env (CBind name clauses) =
 -- `%clos` fields 1.., the self name binds to `%clos` (recursive self-call
 -- re-enters the same cell), and `emitClauseTree` lowers the clauses over the
 -- `%argK` words (arity ≥1 here — nullary values take the fast path above).
-emitGroupBindDefine : Emit -> List (String, (String, LTy)) -> String -> String -> Int -> List CClause -> List String -> Unit
+emitGroupBindDefine : Emit -> OrdMap (String, LTy) -> String -> String -> Int -> List CClause -> List String -> Unit
 emitGroupBindDefine e env lamName name arity clauses captured =
   let saved = (bufRef e).value
   bufRef e := []
@@ -3954,7 +3955,7 @@ emitGroupBindDefine e env lamName name arity clauses captured =
   let _ = emit e "define i64 @\{lamName}(i64 %clos, \{implParamDecls arity 0}) {"
   let _ = emit e "entry:"
   let cenv = loadCaptures e env captured 0
-  let _ = emitClauseTree e (((name, ("%clos", LTClosure))::cenv) ++ implParamEnv arity 0) arity (clauseList clauses) ""
+  let _ = emitClauseTree e (envMergeL (omInsert name ("%clos", LTClosure) cenv) (implParamEnv arity 0)) arity (clauseList clauses) ""
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
@@ -3989,20 +3990,21 @@ clauseList ((CClause pats body)::rest) = (pats, body) :: clauseList rest
 -- The capture-NAME list per binding is computed against a sibling env (so a sibling
 -- ref is kept by `keepInEnv` and indexed correctly), and must MATCH the field order
 -- the lifted define's `loadCaptures` reads — both walk the same `captured` list.
-emitLetGroupKnot : Emit -> List (String, (String, LTy)) -> List CBind -> List String -> List (String, (String, LTy))
+emitLetGroupKnot : Emit -> OrdMap (String, LTy) -> List CBind -> List String -> OrdMap (String, LTy)
 emitLetGroupKnot e env run runNames =
-  let sibEnv = sibPlaceholderEnv runNames
-  let cellEnv = sibEnv ++ env
+  let cellEnv = sibPlaceholderEnv runNames env
   let (cells, env2) = knotAlloc e env cellEnv run
   let _ = knotPatch e env2 cells
   env2
 -- pass 2: back-patch each cell's capture fields with real words from env2.
 
--- a placeholder env entry per run name (word "0", LTClosure) for capture-name
--- computation only.
-sibPlaceholderEnv : List String -> List (String, (String, LTy))
-sibPlaceholderEnv [] = []
-sibPlaceholderEnv (n::rest) = (n, ("0", LTClosure)) :: sibPlaceholderEnv rest
+-- shadow-insert a placeholder env entry per run name (word "0", LTClosure) over
+-- `env`, for capture-name computation only — siblings shadow the same name in the
+-- enclosing scope, matching the old `sibEnv ++ env` first-match-wins concat.
+sibPlaceholderEnv : List String -> OrdMap (String, LTy) -> OrdMap (String, LTy)
+sibPlaceholderEnv [] env = env
+sibPlaceholderEnv (n::rest) env =
+  sibPlaceholderEnv rest (omInsert n ("0", LTClosure) env)
 
 -- a knot cell records the binding name, its allocated cell POINTER (for stores),
 -- and its ordered capture-name list (matching the lifted define's field layout).
@@ -4011,7 +4013,7 @@ data KnotCell = KnotCell String String (List String)
 -- pass 1: for each fn binding, lift it and alloc its closure cell with placeholder
 -- captures; thread the env binding each cell word.  `cellEnv` (siblings + outer)
 -- is used to compute the capture NAME set so a sibling ref is kept and indexed.
-knotAlloc : Emit -> List (String, (String, LTy)) -> List (String, (String, LTy)) -> List CBind -> (List KnotCell, List (String, (String, LTy)))
+knotAlloc : Emit -> OrdMap (String, LTy) -> OrdMap (String, LTy) -> List CBind -> (List KnotCell, OrdMap (String, LTy))
 knotAlloc _ env _ [] = ([], env)
 knotAlloc e env cellEnv ((CBind name clauses)::rest) =
   let lamName = "mdk_lam" ++ intToString (freshId e)
@@ -4019,13 +4021,13 @@ knotAlloc e env cellEnv ((CBind name clauses)::rest) =
   let captured = keepInEnv cellEnv (removeStr name (dedupS (clausesFreeVars name clauses)))
   let _ = emitGroupBindDefine e cellEnv lamName name arity clauses captured
   let (cellPtr, cellWord) = emitClosureAllocPatch e lamName arity (lengthS captured)
-  let (cells, env2) = knotAlloc e ((name, (cellWord, LTClosure))::env) cellEnv rest
+  let (cells, env2) = knotAlloc e (omInsert name (cellWord, LTClosure) env) cellEnv rest
   (KnotCell name cellPtr captured :: cells, env2)
 knotAlloc e env cellEnv (_::rest) = knotAlloc e env cellEnv rest
 
 -- pass 2: store each cell's real capture words (from the fully-bound env) into its
 -- capture fields (offset 8*(i+1), field 0 holds the code pointer).
-knotPatch : Emit -> List (String, (String, LTy)) -> List KnotCell -> Unit
+knotPatch : Emit -> OrdMap (String, LTy) -> List KnotCell -> Unit
 knotPatch _ _ [] = ()
 knotPatch e env ((KnotCell _ cellPtr captureNames)::rest) =
   let words = capWords e env captureNames
@@ -4053,7 +4055,7 @@ emitClosureAllocPatch e lamName callArity nCap =
 zeroWords : Int -> List String
 zeroWords n = if n <= 0 then [] else "0" :: zeroWords (n - 1)
 
-emitBlock : Emit -> List (String, (String, LTy)) -> List CStmt -> (String, LTy)
+emitBlock : Emit -> OrdMap (String, LTy) -> List CStmt -> (String, LTy)
 emitBlock e env [CSExpr ex] = emitExpr e env ex
 emitBlock e env ((CSExpr ex)::rest) =
   let _ = emitExpr e env ex
@@ -4087,14 +4089,14 @@ emitBlock e env [CSLet _ pat ex] =
 -- free, so it is simply not captured).
 emitBlock e env ((CSLet _ (PVar x _) (CLam pats body))::rest) =
   let (w, ty) = emitRecLam e env x pats body
-  emitBlock e ((x, (w, ty))::env) rest
+  emitBlock e (omInsert x (w, ty) env) rest
 emitBlock e env ((CSLet _ (PVar x _) ex)::rest) =
   if staticIsFloat env ex then
     let d = emitFloatD e env ex
-    emitBlock e ((x, (d, LTFloatU))::env) rest
+    emitBlock e (omInsert x (d, LTFloatU) env) rest
   else
     let (v, ty) = emitExpr e env ex
-    emitBlock e ((x, (v, ty))::env) rest
+    emitBlock e (omInsert x (v, ty) env) rest
 emitBlock e env ((CSLet _ PWild ex)::rest) =
   let _ = emitExpr e env ex
   emitBlock e env rest
@@ -4131,7 +4133,7 @@ emitBlock e env ((CSLet _ pat ex)::rest) =
 -- real mutable slot — no Ref cell needed.
 emitBlock e env ((CSAssign x ex)::rest) =
   let (v, ty) = emitExpr e env ex
-  emitBlock e ((x, (v, ty))::env) rest
+  emitBlock e (omInsert x (v, ty) env) rest
 -- the tail statement of a block may be a bare assignment (`x = e`): evaluate for
 -- effect, the block yields Unit.
 emitBlock e env [CSAssign _ ex] =
@@ -4141,7 +4143,7 @@ emitBlock e _ [] = gapE e "empty block"
 emitBlock e _ _ = gapE e "unsupported block statement"
 
 -- bind a list of field patterns to a parallel list of loaded field words.
-bindFieldList : Emit -> List (String, (String, LTy)) -> List Pat -> List String -> List (String, (String, LTy))
+bindFieldList : Emit -> OrdMap (String, LTy) -> List Pat -> List String -> OrdMap (String, LTy)
 bindFieldList _ env [] _ = env
 bindFieldList _ env _ [] = env
 bindFieldList e env (p::ps) (v::vs) =
@@ -4186,7 +4188,7 @@ ctorHasSiblings e c = match ctorTypeOf e c
 -- caller continues emission in the `ok` block.  A non-constructor-head refutable
 -- pattern (letElseHead None — e.g. a bare Nil `let [] = …`) falls back to the old
 -- unchecked bindPattern behaviour (no regression).
-emitRefutableCsLet : Emit -> List (String, (String, LTy)) -> Pat -> String -> List (String, (String, LTy))
+emitRefutableCsLet : Emit -> OrdMap (String, LTy) -> Pat -> String -> OrdMap (String, LTy)
 emitRefutableCsLet e env pat sv = match letElseHead pat
   Some (c, a, fieldPats) =>
     let tag = loadDiscriminant e sv
@@ -4216,7 +4218,7 @@ emitRefutableCsLet e env pat sv = match letElseHead pat
 --     relies on controlled fixtures applying a closure with exactly its arity in
 --     one spine.  Partial application (under-application → a residual closure) and
 --     over-application are OUT (the real backend will carry arity in the cell).
-emitApp : Emit -> List (String, (String, LTy)) -> CExpr -> (String, LTy)
+emitApp : Emit -> OrdMap (String, LTy) -> CExpr -> (String, LTy)
 emitApp e env app =
   let (hd, args) = flattenApp app []
   match hd
@@ -4269,7 +4271,7 @@ emitApp e env app =
 -- default Int — EXCEPT (native backend) when the head is a self-returning function
 -- PARAM of the impl currently being emitted (`andThen`'s `f` in `f x`): that
 -- callback yields the container, so type the result as `tagToLTy <curImplTag>`.
-emitIndirect : Emit -> List (String, (String, LTy)) -> CExpr -> List CExpr -> (String, LTy)
+emitIndirect : Emit -> OrdMap (String, LTy) -> CExpr -> List CExpr -> (String, LTy)
 emitIndirect e env hd args =
   let (cw, _) = emitExpr e env hd
   let argOps = emitArgs e env args
@@ -4326,7 +4328,7 @@ hasArgs [] = False
 hasArgs _ = True
 
 -- emit each argument expression (left-to-right); collect the i64 operand words.
-emitArgs : Emit -> List (String, (String, LTy)) -> List CExpr -> List String
+emitArgs : Emit -> OrdMap (String, LTy) -> List CExpr -> List String
 emitArgs _ _ [] = []
 emitArgs e env (a::rest) =
   let (v, _) = emitExpr e env a
@@ -4404,7 +4406,7 @@ argDecls (x::rest) = "i64 \{x}, \{argDecls rest}"
 -- Option A) — the former `ensureNoReqs reqs` guard is gone.  This site's leading
 -- dicts come from the call-site routes (methRoutes ++ implRoutes); each such
 -- route's nested reqs are materialized recursively inside dictWordOfRoute.
-emitMethod : Emit -> List (String, (String, LTy)) -> String -> Route -> List Route -> List Route -> List String -> (String, LTy)
+emitMethod : Emit -> OrdMap (String, LTy) -> String -> Route -> List Route -> List Route -> List String -> (String, LTy)
 emitMethod e env name route implRoutes methRoutes argOps
   -- UNDER-APPLICATION of a runtime-dict-routed method (E22).  A partially-applied
   -- method whose dispatch reads a forwarded `$dict_<method>_<slot>` param (RDict/
@@ -4496,7 +4498,7 @@ emitMethod e env name (RLocal sym dicts) implRoutes methRoutes argOps =
 -- `emitApplyAny`, which reads an arity out of the "cell header" of an integer ⇒ SEGFAULT.
 -- Fix: the arity is now ROUTE-derived (`methValArity`), not name-derived — the RLocal arm
 -- below already knew the truth via `fnArity e target`.
-emitMethodValue : Emit -> List (String, (String, LTy)) -> String -> Route -> List Route -> List Route -> (String, LTy)
+emitMethodValue : Emit -> OrdMap (String, LTy) -> String -> Route -> List Route -> List Route -> (String, LTy)
 emitMethodValue e env name route implRoutes methRoutes =
   let arity = methValArity e name route
   if arity <= 0 then emitMethod e env name route implRoutes methRoutes []
@@ -4551,14 +4553,14 @@ methValDictNames (RLocal _ dicts) = routeDictNames [] dicts
 methValDictNames _ = []
 
 -- the operand words for each captured dict name, looked up in the current emit env.
-capDictWords : Emit -> List (String, (String, LTy)) -> List String -> List String
+capDictWords : Emit -> OrdMap (String, LTy) -> List String -> List String
 capDictWords _ _ [] = []
 capDictWords e env (d::rest) = dictOperand e env d :: capDictWords e env rest
 
 -- emit the lifted method-value forwarder.  Captures (the dict words) load from
 -- `%clos` fields 1.. and rebind the route's dict name(s); the body re-emits the
 -- SATURATED method dispatch over the `%argK` value operands.
-emitMethodValDefine : Emit -> List (String, (String, LTy)) -> String -> String -> Route -> List Route -> List Route -> Int -> List String -> Unit
+emitMethodValDefine : Emit -> OrdMap (String, LTy) -> String -> String -> Route -> List Route -> List Route -> Int -> List String -> Unit
 emitMethodValDefine e env lamName name route implRoutes methRoutes arity capNames =
   let saved = (bufRef e).value
   bufRef e := []
@@ -4590,7 +4592,7 @@ emitMethodValDefine e env lamName name route implRoutes methRoutes arity capName
 -- The forwarder body is a DIRECT `@mdk_<name>` call (vs emitMethodValue's dispatch).
 -- A nullary value arity (the constrained fn takes no value args) degenerates to the
 -- plain saturated dict call.
-emitDictValue : Emit -> List (String, (String, LTy)) -> String -> List Route -> (String, LTy)
+emitDictValue : Emit -> OrdMap (String, LTy) -> String -> List Route -> (String, LTy)
 emitDictValue e env name routes =
   if isKnownFn e name then
     let valArity = fnArity e name - listLen routes
@@ -4644,7 +4646,7 @@ dictRoutedUnderApplied _ _ _ _ = False
 -- the remaining args arrive.  Mirrors emitMethodValue (Gap #50, the zero-supplied
 -- case) generalised to N supplied args.  Recorded arity is the RESIDUAL value
 -- arity so a later over-application of the PAP also splits correctly.
-emitMethodPap : Emit -> List (String, (String, LTy)) -> String -> Route -> List Route -> List Route -> List String -> Int -> (String, LTy)
+emitMethodPap : Emit -> OrdMap (String, LTy) -> String -> Route -> List Route -> List Route -> List String -> Int -> (String, LTy)
 emitMethodPap e env name route implRoutes methRoutes argOps arity =
   let capNames = dedupS (routeDictNames [] (route :: implRoutes ++ methRoutes))
   let dictWords = capDictWords e env capNames
@@ -4659,7 +4661,7 @@ emitMethodPap e env name route implRoutes methRoutes argOps arity =
 -- fresh `%argK` params; its body rebinds the dict names from fields 1..K, reloads
 -- the supplied args from fields K+1.., then re-emits the saturated dispatch over
 -- (supplied ++ fresh) under the method's own route.
-emitMethodPapDefine : Emit -> List (String, (String, LTy)) -> String -> String -> Route -> List Route -> List Route -> Int -> List String -> Int -> Unit
+emitMethodPapDefine : Emit -> OrdMap (String, LTy) -> String -> String -> Route -> List Route -> List Route -> Int -> List String -> Int -> Unit
 emitMethodPapDefine e env lamName name route implRoutes methRoutes arity capNames supplied =
   let saved = (bufRef e).value
   bufRef e := []
@@ -4698,7 +4700,7 @@ emitMethodPapDefine e env lamName name route implRoutes methRoutes arity capName
 -- (the dict-passing param) and dispatch the right impl at run time.  The define is
 -- still shared across monoids: only the runtime dict word differs per call, so one
 -- `@mdk_default_foldMap_List` serves both a List- and a String-monoid fold.
-emitDefaultRKey : Emit -> List (String, (String, LTy)) -> String -> String -> List Route -> List Route -> List String -> (String, LTy)
+emitDefaultRKey : Emit -> OrdMap (String, LTy) -> String -> String -> List Route -> List Route -> List String -> (String, LTy)
 -- #1047: `defaultForAt`, not `defaultFor` — the tag is what the narrowing keys on,
 -- and this is the site that emits the body.  ⚠️ The trigger is a METHOD-name
 -- collision, not an interface-name one (the interfaces' own names are irrelevant),
@@ -4729,7 +4731,7 @@ emitDefaultRKey e env name tag methRoutes implRoutes argOps = match defaultForAt
 -- or left no noneHeadTag entry (cross-module), so this order never shadows a
 -- legitimate default.  Concrete impls still win: emitMethod's implFor consults the
 -- concrete tag first, so this fires only on a concrete miss.
-emitGeneralRKey : Emit -> List (String, (String, LTy)) -> String -> String -> List Route -> List Route -> List String -> (String, LTy)
+emitGeneralRKey : Emit -> OrdMap (String, LTy) -> String -> String -> List Route -> List Route -> List String -> (String, LTy)
 emitGeneralRKey e env name tag methRoutes implRoutes argOps = match findByTag noneHeadTag (implsOf e name)
   Some entry =>
     let dictWords = dictWordsOf e env (methRoutes ++ implRoutesForDefine e name entry methRoutes implRoutes)
@@ -4988,7 +4990,7 @@ implEntryIface (CImplEntry _ _ (CImplDefault _ _ _)) = ""
 -- 1..n, PREPEND them to argOps (the impl fn's leading element-dict params), call
 -- that impl's lifted fn into a result slot and branch to the end; an exhausted
 -- chain is `unreachable`.
-emitMethodDispatch : Emit -> List (String, (String, LTy)) -> String -> String -> List Route -> List String -> (String, LTy)
+emitMethodDispatch : Emit -> OrdMap (String, LTy) -> String -> String -> List Route -> List String -> (String, LTy)
 emitMethodDispatch e env name d methRoutes argOps = match soleImplDirectSite e name
   Some ent =>
     -- WS-1b: the method has exactly ONE impl with no `requires` element dicts, so a
@@ -5213,7 +5215,7 @@ declareOfDefine l =
 --
 -- Both counts are baked into the dispatcher's NAME, so a site that somehow disagreed
 -- on either would get its own dispatcher rather than a silently mis-arity'd call.
-emitMethodDispatchChain : Emit -> List (String, (String, LTy)) -> String -> String -> List Route -> List String -> (String, LTy)
+emitMethodDispatchChain : Emit -> OrdMap (String, LTy) -> String -> String -> List Route -> List String -> (String, LTy)
 emitMethodDispatchChain e env name d methRoutes argOps =
   let dictPtr = dictOperand e env d
   let methWords = dictWordsOf e env methRoutes
@@ -5961,7 +5963,7 @@ nthStr [] _ = panic "llvm: discriminating arg index out of range"
 -- this call site.  Lower to a direct call passing the dict words FOLLOWED by the
 -- real argument words — the same order applyDicts prepends them at run time and
 -- the order emitFn bound `name`'s leading dict params.
-emitDictApp : Emit -> List (String, (String, LTy)) -> String -> List Route -> List String -> (String, LTy)
+emitDictApp : Emit -> OrdMap (String, LTy) -> String -> List Route -> List String -> (String, LTy)
 emitDictApp e env name routes argOps =
   if isKnownFn e name then
     let dictWords = dictWordsOf e env routes
@@ -5991,7 +5993,7 @@ emitDictAppDirect e name allWords =
   (r, fnRetTy e name)
 
 -- the dict witness words for a constrained-function call's routes (note (j)).
-dictWordsOf : Emit -> List (String, (String, LTy)) -> List Route -> List String
+dictWordsOf : Emit -> OrdMap (String, LTy) -> List Route -> List String
 dictWordsOf _ _ [] = []
 dictWordsOf e env (r::rest) = dictWordOfRoute e env r :: dictWordsOf e env rest
 
@@ -6008,7 +6010,7 @@ dictWordsOf e env (r::rest) = dictWordOfRoute e env r :: dictWordsOf e env rest
 -- loads field 0 for the icmp and prepends fields 1..n as the matched impl's leading
 -- element-dict args.  RDict/RDictFwd forward the enclosing dict parameter's word
 -- (already a boxed-cell pointer); RNone is the 0 dict (no cell).
-dictWordOfRoute : Emit -> List (String, (String, LTy)) -> Route -> String
+dictWordOfRoute : Emit -> OrdMap (String, LTy) -> Route -> String
 dictWordOfRoute e env (RKey key reqs) =
   let reqWords = dictWordsOf e env reqs
   if allConstWords reqWords then
@@ -6075,8 +6077,8 @@ emitConstDictCell e headTag reqWords =
       "ptrtoint (ptr @" ++ gname ++ " to i64)"
 
 -- the operand word a dict parameter name is bound to in the emit env.
-dictOperand : Emit -> List (String, (String, LTy)) -> String -> String
-dictOperand e env d = match lookupAssoc d env
+dictOperand : Emit -> OrdMap (String, LTy) -> String -> String
+dictOperand e env d = match omLookup d env
   Some (op, _) => op
   None => gapStr e ("unbound dict witness '" ++ d ++ "' in emit env (dict not threaded to this site)")
 
@@ -6575,10 +6577,10 @@ implParamDecls n i
 
 -- bind each positional param to its `%argK` operand under a synthetic name aK
 -- (the names the synthetic scrutinee CVars reference).
-implParamEnv : Int -> Int -> List (String, (String, LTy))
+implParamEnv : Int -> Int -> OrdMap (String, LTy)
 implParamEnv n i
-  | i >= n = []
-  | otherwise = ("a" ++ intToString i, ("%arg" ++ intToString i, LTInt)) :: implParamEnv n (i + 1)
+  | i >= n = omEmpty
+  | otherwise = omInsert ("a" ++ intToString i) ("%arg" ++ intToString i, LTInt) (implParamEnv n (i + 1))
 
 -- map an impl head tag name to its static LTy for use in param typing.
 -- Known primitives → their type; everything else (ADT, List, Array, tuples, …) → LTCon.
@@ -6595,12 +6597,15 @@ tagToLTy _ = LTCon
 -- This lets `append xs ys = xs ++ ys` in impl Semigroup (List a) emit xs/ys as
 -- LTCon → mdk_list_append, and in impl Semigroup String emit them as LTStr →
 -- mdk_string_append — without touching emitBin.
-implParamEnvByPos : String -> List Int -> Int -> Int -> List (String, (String, LTy))
+implParamEnvByPos : String -> List Int -> Int -> Int -> OrdMap (String, LTy)
 implParamEnvByPos _ _ n i
-  | i >= n = []
+  | i >= n = omEmpty
 implParamEnvByPos tag positions n i =
   let ty = if listContains positions i then tagToLTy tag else LTInt
-  ("a" ++ intToString i, ("%arg" ++ intToString i, ty)) :: implParamEnvByPos tag positions n (i + 1)
+  omInsert
+    ("a" ++ intToString i)
+    ("%arg" ++ intToString i, ty)
+    (implParamEnvByPos tag positions n (i + 1))
 
 listContains : List Int -> Int -> Bool
 listContains [] _ = False
@@ -6609,7 +6614,7 @@ listContains (x::rest) v
   | otherwise = listContains rest v
 
 emitGroupBody : Emit -> String -> String -> List Int -> Int -> List (List Pat, CExpr) -> Unit
-emitGroupBody e fname _ _ 0 [([], body)] = emitFnBody e [] fname body
+emitGroupBody e fname _ _ 0 [([], body)] = emitFnBody e omEmpty fname body
 emitGroupBody e fname _ _ 0 _ =
   gapU e "nullary impl group with more than one clause"
 -- Fast path: single-clause all-PVar impl (e.g. `append xs ys = xs ++ ys`).
@@ -6644,13 +6649,13 @@ patPosTys tag positions n i =
   ty :: patPosTys tag positions n (i + 1)
 
 -- bind PVar params to their %argK operands at the given LTy list.
-paramEnvByPos : List Pat -> List LTy -> Int -> List (String, (String, LTy))
-paramEnvByPos [] _ _ = []
+paramEnvByPos : List Pat -> List LTy -> Int -> OrdMap (String, LTy)
+paramEnvByPos [] _ _ = omEmpty
 paramEnvByPos ((PVar x _)::rest) (ty::tys) i =
-  (x, ("%arg" ++ intToString i, ty)) :: paramEnvByPos rest tys (i + 1)
+  omInsert x ("%arg" ++ intToString i, ty) (paramEnvByPos rest tys (i + 1))
 paramEnvByPos ((PVar x _)::rest) [] i =
-  (x, ("%arg" ++ intToString i, LTInt)) :: paramEnvByPos rest [] (i + 1)
-paramEnvByPos _ _ _ = []
+  omInsert x ("%arg" ++ intToString i, LTInt) (paramEnvByPos rest [] (i + 1))
+paramEnvByPos _ _ _ = omEmpty
 
 -- the shared decision-tree body for a coalesced multi-clause group (impl methods
 -- AND top-level fns, slice 2/E1a).  `env` binds the synthetic `aK` scrutinee
@@ -6677,7 +6682,7 @@ paramEnvByPos _ _ _ = []
 -- either opens a fresh `define` — where inheriting a parent function's block label
 -- would emit invalid cross-function LLVM, issue #53 — or sits at top level), so
 -- making it explicit costs one argument and buys a call-site-local answer.
-emitClauseTree : Emit -> List (String, (String, LTy)) -> Int -> List (List Pat, CExpr) -> String -> Unit
+emitClauseTree : Emit -> OrdMap (String, LTy) -> Int -> List (List Pat, CExpr) -> String -> Unit
 emitClauseTree e env arity clauses outer =
   let roots = emitArgs e env (implScrutVars arity 0)
   let slot = freshReg e
@@ -6703,7 +6708,7 @@ emitClauseTree e env arity clauses outer =
 -- guarded clause body inherits the enclosing clause's next-clause label).  A
 -- single-clause function degenerates to `outer` directly, preserving the historical
 -- single-tree behaviour.
-emitClauseChain : Emit -> List (String, (String, LTy)) -> Int -> List (List Pat, CExpr) -> List String -> String -> String -> Ref LTy -> String -> Unit
+emitClauseChain : Emit -> OrdMap (String, LTy) -> Int -> List (List Pat, CExpr) -> List String -> String -> String -> Ref LTy -> String -> Unit
 emitClauseChain _ _ _ [] _ _ _ _ _ = ()
 emitClauseChain e env arity (c::rest) roots slot endL rty outer =
   let nextL = chainNextLabel e rest outer
@@ -6959,14 +6964,14 @@ emitClosureAllocA e lamName arity captureWords =
 -- `paramEnv`.  Capture computation is identical — `patVarNames` already collects
 -- nested pattern vars, so the patterned param vars are correctly excluded from the
 -- captured set.  Closes the lambda half of EMITTER-GAPS #5.
-emitLam : Emit -> List (String, (String, LTy)) -> List Pat -> CExpr -> (String, LTy)
+emitLam : Emit -> OrdMap (String, LTy) -> List Pat -> CExpr -> (String, LTy)
 emitLam e env pats body =
   if allPVar pats then
     emitLamGo e env pats body
   else
     emitLamPat e env pats body
 
-emitLamGo : Emit -> List (String, (String, LTy)) -> List Pat -> CExpr -> (String, LTy)
+emitLamGo : Emit -> OrdMap (String, LTy) -> List Pat -> CExpr -> (String, LTy)
 emitLamGo e env pats body =
   let lamName = "mdk_lam" ++ intToString (freshId e)
   let pnames = patVarNames pats
@@ -6977,13 +6982,13 @@ emitLamGo e env pats body =
   let _ = recordFloatRet e env cw body
   (cw, clty)
 
-emitLamPat : Emit -> List (String, (String, LTy)) -> List Pat -> CExpr -> (String, LTy)
+emitLamPat : Emit -> OrdMap (String, LTy) -> List Pat -> CExpr -> (String, LTy)
 emitLamPat e env pats body =
   let lamName = "mdk_lam" ++ intToString (freshId e)
   let pnames = patVarNames pats
   let captured = keepInEnv env (dedupS (freeVars pnames body))
   let captureWords = capWords e env captured
-  let _ = emitPatLamDefine e env lamName [] pats captured body
+  let _ = emitPatLamDefine e env lamName omEmpty pats captured body
   let (cw, clty) = emitClosureAllocA e lamName (listLen pats) captureWords
   let _ = recordFloatRet e env cw body
   (cw, clty)
@@ -6992,14 +6997,14 @@ emitLamPat e env pats body =
 -- emitLam, but EXCLUDE the binding's own name `f` from the captured set (it is the
 -- closure cell itself, not an external free variable) and, inside the lifted body,
 -- bind `f` to `%clos` so a self-call re-enters the same code with the same cell.
-emitRecLam : Emit -> List (String, (String, LTy)) -> String -> List Pat -> CExpr -> (String, LTy)
+emitRecLam : Emit -> OrdMap (String, LTy) -> String -> List Pat -> CExpr -> (String, LTy)
 emitRecLam e env f pats body =
   if allPVar pats then
     emitRecLamGo e env f pats body
   else
     emitRecLamPat e env f pats body
 
-emitRecLamGo : Emit -> List (String, (String, LTy)) -> String -> List Pat -> CExpr -> (String, LTy)
+emitRecLamGo : Emit -> OrdMap (String, LTy) -> String -> List Pat -> CExpr -> (String, LTy)
 emitRecLamGo e env f pats body =
   let lamName = "mdk_lam" ++ intToString (freshId e)
   let pnames = patVarNames pats
@@ -7014,13 +7019,13 @@ emitRecLamGo e env f pats body =
 -- as `emitLamPat`, but binds `f -> %clos` ahead of captures so a self-call
 -- re-enters the same code with the same cell (mirrors `emitRecLamGo` vs
 -- `emitLamGo`).  `f` is removed from the free set before computing captures.
-emitRecLamPat : Emit -> List (String, (String, LTy)) -> String -> List Pat -> CExpr -> (String, LTy)
+emitRecLamPat : Emit -> OrdMap (String, LTy) -> String -> List Pat -> CExpr -> (String, LTy)
 emitRecLamPat e env f pats body =
   let lamName = "mdk_lam" ++ intToString (freshId e)
   let pnames = patVarNames pats
   let captured = keepInEnv env (removeStr f (dedupS (freeVars pnames body)))
   let captureWords = capWords e env captured
-  let _ = emitPatLamDefine e env lamName [(f, ("%clos", LTClosure))] pats captured body
+  let _ = emitPatLamDefine e env lamName (omInsert f ("%clos", LTClosure) omEmpty) pats captured body
   let (cw, clty) = emitClosureAllocA e lamName (listLen pats) captureWords
   let _ = recordFloatRet e env cw body
   (cw, clty)
@@ -7030,7 +7035,7 @@ emitRecLamPat e env f pats body =
 -- (Gap E3: lambda params are per-param inferred from the body via `inferParamTys`/
 -- `paramUseTy`, so a Float-param lambda gets float instruction selection; params
 -- `paramUseTy` can't resolve default to LTInt as before.)
-emitRecLamDefine : Emit -> List (String, (String, LTy)) -> String -> String -> List Pat -> List String -> CExpr -> Unit
+emitRecLamDefine : Emit -> OrdMap (String, LTy) -> String -> String -> List Pat -> List String -> CExpr -> Unit
 emitRecLamDefine e env lamName f pats captured body =
   let saved = (bufRef e).value
   bufRef e := []
@@ -7039,7 +7044,7 @@ emitRecLamDefine e env lamName f pats captured body =
   let _ = emit e "entry:"
   let cenv = loadCaptures e env captured 0
   let penv = paramEnv pats (inferParamTys (sigMapOf e) pats body) 0
-  let _ = emitFnBody e (((f, ("%clos", LTClosure))::cenv) ++ penv) lamName body
+  let _ = emitFnBody e (envMergeL (omInsert f ("%clos", LTClosure) cenv) penv) lamName body
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
@@ -7057,7 +7062,7 @@ emitRecLamDefine e env lamName f pats captured body =
 -- (`f -> %clos`); the non-recursive case passes `[]`.  Lambda params/captures
 -- default to Int (`implParamEnv`) — the documented slice-4 scope limit, identical
 -- to emitLamDefine's `paramEnv … (allInt pats)`.
-emitPatLamDefine : Emit -> List (String, (String, LTy)) -> String -> List (String, (String, LTy)) -> List Pat -> List String -> CExpr -> Unit
+emitPatLamDefine : Emit -> OrdMap (String, LTy) -> String -> OrdMap (String, LTy) -> List Pat -> List String -> CExpr -> Unit
 emitPatLamDefine e env lamName extra pats captured body =
   let saved = (bufRef e).value
   bufRef e := []
@@ -7066,7 +7071,7 @@ emitPatLamDefine e env lamName extra pats captured body =
   let _ = emit e "define i64 @\{lamName}(i64 %clos, \{implParamDecls arity 0}) {"
   let _ = emit e "entry:"
   let cenv = loadCaptures e env captured 0
-  let _ = emitClauseTree e (extra ++ cenv ++ implParamEnv arity 0) arity [(pats, body)] ""
+  let _ = emitClauseTree e (envMergeL extra (envMergeL cenv (implParamEnv arity 0))) arity [(pats, body)] ""
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
@@ -7207,7 +7212,7 @@ emitCtorEtaDefine e lamName name arity =
 -- 1.., params bind to `%argK`; the body is emitted in TAIL position (it `ret`s).
 -- (Gap E3: param types are per-param inferred from the body via `inferParamTys`/
 -- `paramUseTy` — a Float-param lambda gets float ops; unresolved params → LTInt.)
-emitLamDefine : Emit -> List (String, (String, LTy)) -> String -> List Pat -> List String -> CExpr -> Unit
+emitLamDefine : Emit -> OrdMap (String, LTy) -> String -> List Pat -> List String -> CExpr -> Unit
 emitLamDefine e env lamName pats captured body =
   let saved = (bufRef e).value
   bufRef e := []
@@ -7216,7 +7221,7 @@ emitLamDefine e env lamName pats captured body =
   let _ = emit e "entry:"
   let cenv = loadCaptures e env captured 0
   let penv = paramEnv pats (inferParamTys (sigMapOf e) pats body) 0
-  let _ = emitFnBody e (cenv ++ penv) lamName body
+  let _ = emitFnBody e (envMergeL cenv penv) lamName body
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
@@ -7329,12 +7334,12 @@ emitExternEtaDefine e lamName name arity =
 
 -- env binding `__eta_argK__ -> (%argK, LTInt)` for K in [i, arity) — so the
 -- replayed applied-form emitter resolves each synthetic arg to its `%argK` reg.
-etaArgEnv : Int -> Int -> List (String, (String, LTy))
+etaArgEnv : Int -> Int -> OrdMap (String, LTy)
 etaArgEnv n i =
   if i >= n then
-    []
+    omEmpty
   else
-    ("__eta_arg" ++ intToString i ++ "__", ("%arg" ++ intToString i, LTInt)) :: etaArgEnv n (i + 1)
+    omInsert ("__eta_arg" ++ intToString i ++ "__") ("%arg" ++ intToString i, LTInt) (etaArgEnv n (i + 1))
 
 -- the synthetic argument exprs `CVar "__eta_argK__" AGlobal` for K in [i, arity).
 etaArgVars : Int -> Int -> List CExpr
@@ -7378,11 +7383,11 @@ argNames n i =
     "%arg" ++ intToString i :: argNames n (i + 1)
 
 -- bind each captured variable by loading `%clos` field i+1 (field 0 is code_ptr).
-loadCaptures : Emit -> List (String, (String, LTy)) -> List String -> Int -> List (String, (String, LTy))
-loadCaptures _ _ [] _ = []
+loadCaptures : Emit -> OrdMap (String, LTy) -> List String -> Int -> OrdMap (String, LTy)
+loadCaptures _ _ [] _ = omEmpty
 loadCaptures e env (c::rest) i =
   let r = loadField e "%clos" (i + 1)
-  (c, (r, capTypeOf env c)) :: loadCaptures e env rest (i + 1)
+  omInsert c (r, capTypeOf env c) (loadCaptures e env rest (i + 1))
 
 -- a captured FLOAT is stored BOXED in the closure cell (capWords/lookupVarG boxes
 -- an unboxed LTFloatU on escape), so bind it LTFloat inside the lifted body —
@@ -7392,8 +7397,8 @@ loadCaptures e env (c::rest) i =
 -- regression surface.  Fixes the closure-float-capture arith soundness bug
 -- (`map (x => x * scale)` with a captured float `scale`, `(z => z + k)` etc., which
 -- previously did INTEGER arith on boxed-float pointers → garbage).
-capTypeOf : List (String, (String, LTy)) -> String -> LTy
-capTypeOf env c = match lookupAssoc c env
+capTypeOf : OrdMap (String, LTy) -> String -> LTy
+capTypeOf env c = match omLookup c env
   Some (_, LTFloat) => LTFloat
   Some (_, LTFloatU) => LTFloat
   _ => LTInt
@@ -7402,7 +7407,7 @@ capTypeOf env c = match lookupAssoc c env
 -- Routed through lookupVarG (Mut) so an LTFloatU let-bound float is BOXED to an
 -- i64 word before being stored into a closure capture slot (escape coercion) —
 -- the closure ABI is uniform i64, and loadCaptures reads captures back as words.
-capWords : Emit -> List (String, (String, LTy)) -> List String -> List String
+capWords : Emit -> OrdMap (String, LTy) -> List String -> List String
 capWords _ _ [] = []
 capWords e env (c::rest) =
   let (op, _) = lookupVarG e env c
@@ -7410,7 +7415,7 @@ capWords e env (c::rest) =
 
 -- keep only the names present as keys in the emit env (the capturable locals);
 -- drop free names that resolve to top-level globals (known fns / ctors).
-keepInEnv : List (String, (String, LTy)) -> List String -> List String
+keepInEnv : OrdMap (String, LTy) -> List String -> List String
 keepInEnv _ [] = []
 keepInEnv env (k::rest) =
   if envHasKey env k then
@@ -7418,9 +7423,21 @@ keepInEnv env (k::rest) =
   else
     keepInEnv env rest
 
-envHasKey : List (String, (String, LTy)) -> String -> Bool
-envHasKey [] _ = False
-envHasKey ((n, _)::rest) k = if n == k then True else envHasKey rest k
+envHasKey : OrdMap (String, LTy) -> String -> Bool
+envHasKey env k = omHasKey k env
+
+-- left-biased env union — `left`'s bindings win a same-name collision.  Mirrors
+-- the old `left ++ right` first-match-wins list concat (used to compose a
+-- closure's captures/self-ref/params into one starting env), but O(|left| log n)
+-- instead of a linear scan per later lookup.
+envMergeL : OrdMap (String, LTy) -> OrdMap (String, LTy) -> OrdMap (String, LTy)
+envMergeL left right = envMergeLKeys (omKeys left) left right
+
+envMergeLKeys : List String -> OrdMap (String, LTy) -> OrdMap (String, LTy) -> OrdMap (String, LTy)
+envMergeLKeys [] _ right = right
+envMergeLKeys (k::rest) left right = match omLookup k left
+  Some v => omInsert k v (envMergeLKeys rest left right)
+  None => envMergeLKeys rest left right
 
 -- #242/#623: order-preserving dedup keeping the LAST occurrence of each name —
 -- NOT the same function as `support.util.dedup`, which keeps the FIRST (#623's
@@ -7701,7 +7718,7 @@ loadFields e foc a i
 -- and branches to the end label), then a load of the slot in the end block.  The
 -- arm's static result type is captured into `rty` as the arm body is emitted (all
 -- arms agree — well-typed match).
-emitDecision : Emit -> List (String, (String, LTy)) -> CExpr -> List CArm -> CTree -> (String, LTy)
+emitDecision : Emit -> OrdMap (String, LTy) -> CExpr -> List CArm -> CTree -> (String, LTy)
 emitDecision e env scrut arms tree =
   let (sv, _) = emitExpr e env scrut
   let slot = freshReg e
@@ -7739,7 +7756,7 @@ emitDecision e env scrut arms tree =
 -- [root] and expanding into a constructor's fields as the tree descends.  Every
 -- path terminates its current block (a `br` to `endL` after storing, a `br` into
 -- a sibling test block, or `unreachable` for CTFail).
-emitTree : Emit -> List (String, (String, LTy)) -> List String -> List CArm -> List String -> String -> String -> String -> Ref LTy -> CTree -> Unit
+emitTree : Emit -> OrdMap (String, LTy) -> List String -> List CArm -> List String -> String -> String -> String -> Ref LTy -> CTree -> Unit
 -- CTFail: the matrix path matched no row.  In a CHAINED single-clause tree
 -- (emitClauseChain) this is "this clause's pattern didn't match" → resume the next
 -- clause via `ftL`, the fallthrough label THREADED IN by the caller; with no next
@@ -7792,7 +7809,7 @@ emitTree e env roots arms occs slot endL ftL rty (CTSwitch branches dft) =
 -- root word(s) — `roots` (the tree path guarantees it matches) to bind its
 -- variables — emitting getelementptr loads for each field a `PVar` deconstructs —
 -- then emit the body, store the result, and branch to the end block.
-emitLeaf : Emit -> List (String, (String, LTy)) -> List String -> List CArm -> Int -> String -> String -> Ref LTy -> Unit
+emitLeaf : Emit -> OrdMap (String, LTy) -> List String -> List CArm -> Int -> String -> String -> Ref LTy -> Unit
 emitLeaf e env roots arms i slot endL rty = match nthArm arms i
   Some (CArm pat _ body) =>
     let env2 = bindArm e env pat roots body
@@ -7820,7 +7837,7 @@ emitLeaf e env roots arms i slot endL rty = match nthArm arms i
 -- plain-`if`-guard case), run the guards (branching to `failL` on any failure),
 -- and on all-pass eval the body into `slot`; then emit `failL` and the `fail`
 -- subtree (resumes the match at the same column context `occs`).
-emitGuardedArm : Emit -> List (String, (String, LTy)) -> List String -> List CArm -> List String -> Pat -> List CGuard -> CExpr -> CTree -> String -> String -> String -> Ref LTy -> Unit
+emitGuardedArm : Emit -> OrdMap (String, LTy) -> List String -> List CArm -> List String -> Pat -> List CGuard -> CExpr -> CTree -> String -> String -> String -> Ref LTy -> Unit
 emitGuardedArm e env roots arms occs pat guards body fail slot endL ftL rty =
   let failL = "guardfail" ++ intToString (freshLocal e)
   let env2 = emitRefutArm e env pat roots body failL
@@ -7851,7 +7868,7 @@ emitGuardedArm e env roots arms occs pat guards body fail slot endL ftL rty =
 -- `Just x <- e` tests the discriminant and branches to `failL` on no-match — G5).
 -- Returns the env extended by any `CGBind` bindings (visible to later guards +
 -- the body).
-emitGuardChain : Emit -> List (String, (String, LTy)) -> List CGuard -> CExpr -> String -> List (String, (String, LTy))
+emitGuardChain : Emit -> OrdMap (String, LTy) -> List CGuard -> CExpr -> String -> OrdMap (String, LTy)
 emitGuardChain _ env [] _ _ = env
 emitGuardChain e env ((CGBool g)::rest) body failL =
   let (bw, _) = emitExpr e env g
@@ -7883,7 +7900,7 @@ allGuardsEmittable ((CGBind _ _)::rest) = allGuardsEmittable rest
 -- synthetic `PTuple` only because `CArm` carries a single `Pat` — there is NO
 -- tuple cell at runtime.  So bind element-wise: pattern i against param word i.
 -- This is what retires the per-call argument-tuple `@mdk_alloc`.
-bindArm : Emit -> List (String, (String, LTy)) -> Pat -> List String -> CExpr -> List (String, (String, LTy))
+bindArm : Emit -> OrdMap (String, LTy) -> Pat -> List String -> CExpr -> OrdMap (String, LTy)
 bindArm e env pat [v] body = bindPattern e env pat v body
 bindArm e env (PTuple ps) roots body = bindEach e env ps roots body
 bindArm e env pat (v::_) body = bindPattern e env pat v body
@@ -7891,7 +7908,7 @@ bindArm _ env _ [] _ = env
 
 -- bind each pattern against its OWN word — no cell, hence no `loadField`.  The
 -- multi-root counterpart of `bindFields` (which loads field i out of one cell).
-bindEach : Emit -> List (String, (String, LTy)) -> List Pat -> List String -> CExpr -> List (String, (String, LTy))
+bindEach : Emit -> OrdMap (String, LTy) -> List Pat -> List String -> CExpr -> OrdMap (String, LTy)
 bindEach e env (p::ps) (v::vs) body =
   let env2 = bindPattern e env p v body
   bindEach e env2 ps vs body
@@ -7899,14 +7916,14 @@ bindEach _ env _ _ _ = env
 
 -- the refutable counterpart of `bindArm` (guarded / range-pattern clause): test +
 -- bind each param pattern against its own word, branching to `failL` on a miss.
-emitRefutArm : Emit -> List (String, (String, LTy)) -> Pat -> List String -> CExpr -> String -> List (String, (String, LTy))
+emitRefutArm : Emit -> OrdMap (String, LTy) -> Pat -> List String -> CExpr -> String -> OrdMap (String, LTy)
 emitRefutArm e env pat [v] body failL = emitRefutMatch e env pat v body failL
 emitRefutArm e env (PTuple ps) roots body failL =
   emitRefutEach e env ps roots body failL
 emitRefutArm e env pat (v::_) body failL = emitRefutMatch e env pat v body failL
 emitRefutArm _ env _ [] _ _ = env
 
-emitRefutEach : Emit -> List (String, (String, LTy)) -> List Pat -> List String -> CExpr -> String -> List (String, (String, LTy))
+emitRefutEach : Emit -> OrdMap (String, LTy) -> List Pat -> List String -> CExpr -> String -> OrdMap (String, LTy)
 emitRefutEach e env (p::ps) (v::vs) body failL =
   let env2 = emitRefutMatch e env p v body failL
   emitRefutEach e env2 ps vs body failL
@@ -7918,7 +7935,7 @@ emitRefutEach _ env _ _ _ _ = env
 -- A `PVar`'s static type is recovered from its first typed use in the arm body
 -- (reusing the slice-2b `paramUseTy`); pointer-typed fields default to Int, which
 -- is harmless — they only ever flow on as LTy-agnostic call args.
-bindPattern : Emit -> List (String, (String, LTy)) -> Pat -> String -> CExpr -> List (String, (String, LTy))
+bindPattern : Emit -> OrdMap (String, LTy) -> Pat -> String -> CExpr -> OrdMap (String, LTy)
 bindPattern _ env PWild _ _ = env
 bindPattern _ env (PLit _) _ _ = env
 bindPattern e env (PVar x _) v body = bindVarTy e env x v body ""
@@ -7954,16 +7971,16 @@ bindPattern e env p _ _ =
 -- bind variable `x` to word `v`.  Its LTy is the DECLARED field type-head name
 -- `declName` when that is a known scalar (Gap E2), else the paramUseTy guess from
 -- the arm body, else LTInt — so the declared-type override is additive.
-bindVarTy : Emit -> List (String, (String, LTy)) -> String -> String -> CExpr -> String -> List (String, (String, LTy))
+bindVarTy : Emit -> OrdMap (String, LTy) -> String -> String -> CExpr -> String -> OrdMap (String, LTy)
 bindVarTy e env x v body declName =
   let ty = match fieldNameToLTy declName
     Some t => t
     None => match paramUseTy (sigMapOf e) [] x body
       Some t => t
       None => LTInt
-  (x, (v, ty))::env
+  omInsert x (v, ty) env
 
-bindFields : Emit -> List (String, (String, LTy)) -> List Pat -> String -> CExpr -> Int -> List (String, (String, LTy))
+bindFields : Emit -> OrdMap (String, LTy) -> List Pat -> String -> CExpr -> Int -> OrdMap (String, LTy)
 bindFields _ env [] _ _ _ = env
 bindFields e env (p::rest) v body i =
   let f = loadField e v i
@@ -7974,7 +7991,7 @@ bindFields e env (p::rest) v body i =
 -- field type-head name (Gap E2).  A bare PVar/PAs field uses the declared scalar
 -- type when known; everything else (nested patterns, unknown/non-scalar fields,
 -- missing declared names) falls through to the paramUseTy guess.
-bindFieldsDecl : Emit -> List (String, (String, LTy)) -> List Pat -> List String -> String -> CExpr -> Int -> List (String, (String, LTy))
+bindFieldsDecl : Emit -> OrdMap (String, LTy) -> List Pat -> List String -> String -> CExpr -> Int -> OrdMap (String, LTy)
 bindFieldsDecl _ env [] _ _ _ _ = env
 bindFieldsDecl e env (p::rest) declNames v body i =
   let f = loadField e v i
@@ -7984,7 +8001,7 @@ bindFieldsDecl e env (p::rest) declNames v body i =
 
 -- bind one constructor field: a bare PVar/PAs uses its declared scalar type, any
 -- other pattern recurses through bindPattern (no scalar to apply at the top).
-bindFieldDecl : Emit -> List (String, (String, LTy)) -> Pat -> String -> String -> CExpr -> List (String, (String, LTy))
+bindFieldDecl : Emit -> OrdMap (String, LTy) -> Pat -> String -> String -> CExpr -> OrdMap (String, LTy)
 bindFieldDecl e env (PVar x _) declName f body =
   bindVarTy e env x f body declName
 bindFieldDecl e env (PAs x _ p) declName f body =
@@ -8006,7 +8023,7 @@ bindFieldDecl e env p _ f body = bindPattern e env p f body
 -- bindPattern's extraction); refutable ones (PLit/PRng/PCon/PCons/PList) emit a
 -- discriminant/range/equality test + a `br … failL`.  An unsupported shape is a
 -- gap (records, nested-refutable beyond this set).
-emitRefutMatch : Emit -> List (String, (String, LTy)) -> Pat -> String -> CExpr -> String -> List (String, (String, LTy))
+emitRefutMatch : Emit -> OrdMap (String, LTy) -> Pat -> String -> CExpr -> String -> OrdMap (String, LTy)
 -- irrefutable: no test, just bind (delegates to bindPattern's extraction).
 emitRefutMatch e env PWild v body _ = bindPattern e env PWild v body
 emitRefutMatch e env (PVar x l) v body _ = bindPattern e env (PVar x l) v body
@@ -8076,7 +8093,7 @@ emitRefutMatch e env p _ _ _ =
     env
 
 -- recurse a refutable test over a cell's leading fields (loadField per index).
-emitRefutFields : Emit -> List (String, (String, LTy)) -> List Pat -> String -> CExpr -> String -> Int -> List (String, (String, LTy))
+emitRefutFields : Emit -> OrdMap (String, LTy) -> List Pat -> String -> CExpr -> String -> Int -> OrdMap (String, LTy)
 emitRefutFields _ env [] _ _ _ _ = env
 emitRefutFields e env (p::rest) v body failL i =
   let f = loadField e v i
@@ -8133,7 +8150,7 @@ nthOr (x::rest) i dflt
 -- branch's head selects the test kind.  HCons/HNil/HTuple map to the same tag the
 -- alloc site stamps (`cellTag` of "Cons"/"Nil"/"$tuple"), so a constructor
 -- test reaches them with no special case beyond the name/arity (see conHeadInfo).
-emitSwitch : Emit -> List (String, (String, LTy)) -> List String -> List CArm -> List String -> List CTBranch -> CTree -> String -> String -> String -> Ref LTy -> Unit
+emitSwitch : Emit -> OrdMap (String, LTy) -> List String -> List CArm -> List String -> List CTBranch -> CTree -> String -> String -> String -> Ref LTy -> Unit
 emitSwitch e env roots arms [] branches dft slot endL ftL rty =
   emitTree e env roots arms [] slot endL ftL rty dft
 emitSwitch e env roots arms (foc::rest) [] dft slot endL ftL rty =
@@ -8180,7 +8197,7 @@ conHeadInfo _ = None
 -- (`cellTag`); on a match, descend with the matched
 -- cell's fields as the new leading columns; on exhausting the branches, take the
 -- default (focus dropped).
-emitConChain : Emit -> List (String, (String, LTy)) -> List String -> List CArm -> String -> List String -> String -> List CTBranch -> CTree -> String -> String -> String -> Ref LTy -> Unit
+emitConChain : Emit -> OrdMap (String, LTy) -> List String -> List CArm -> String -> List String -> String -> List CTBranch -> CTree -> String -> String -> String -> Ref LTy -> Unit
 emitConChain e env roots arms _ rest _ [] dft slot endL ftL rty =
   emitTree e env roots arms rest slot endL ftL rty dft
 emitConChain e env roots arms foc rest tagReg ((CTBranch h sub)::more) dft slot endL ftL rty = match conHeadInfo h
@@ -8204,7 +8221,7 @@ emitConChain e env roots arms foc rest tagReg ((CTBranch h sub)::more) dft slot 
 -- the literal-switch test chain: compare the focus immediate against each branch's
 -- tagged-int constant; a literal head has arity 0, so a match descends with the
 -- focus simply dropped (no field columns).
-emitLitChain : Emit -> List (String, (String, LTy)) -> List String -> List CArm -> String -> List String -> List CTBranch -> CTree -> String -> String -> String -> Ref LTy -> Unit
+emitLitChain : Emit -> OrdMap (String, LTy) -> List String -> List CArm -> String -> List String -> List CTBranch -> CTree -> String -> String -> String -> Ref LTy -> Unit
 emitLitChain e env roots arms _ rest [] dft slot endL ftL rty =
   emitTree e env roots arms rest slot endL ftL rty dft
 emitLitChain e env roots arms foc rest ((CTBranch (HLit (LInt k)) sub)::more) dft slot endL ftL rty =
@@ -8651,7 +8668,12 @@ trmcEmitParamSlots e arity i
 
 -- reload each param slot into a fresh reg at the loop head, binding the synthetic
 -- `aK` scrutinee name (the name emitClauseTree's scrutinee tuple uses) to the
--- loaded word at the fn's inferred param type.
+-- loaded word at the fn's inferred param type.  #1031: returns a plain POSITIONAL
+-- list (index 0..arity-1, in order) — NOT the main OrdMap env — because
+-- `trmcRenameEnv` below matches it against `singlePats` by POSITION, and an
+-- OrdMap's key order ("a10" < "a2" lexicographically) does not preserve that.
+-- `trmcEmitDispatch`'s non-single arm folds it into a real OrdMap via
+-- `omFromPairs` at the point it is used as `emitClauseTree`'s (by-name) env.
 trmcReloadParams : Emit -> List String -> List LTy -> Int -> List (String, (String, LTy))
 trmcReloadParams _ [] _ _ = []
 trmcReloadParams e (slot::rest) tys i =
@@ -8675,23 +8697,25 @@ trmcEmitDispatch e reloaded arity clauses single singlePats aenv singleBody =
   if single then
     let env = trmcRenameEnv singlePats aenv
     emitTrmcBody e env singleBody
-  else emitClauseTree e reloaded arity clauses ""
+  else emitClauseTree e (omFromPairs reloaded omEmpty) arity clauses ""
 
 -- bind the clause's PVar param names to the reloaded `aK` operand words (single
 -- clause, all-PVar params — the slice-2 ABI requirement also holds for TRMC).
-trmcRenameEnv : List Pat -> List (String, (String, LTy)) -> List (String, (String, LTy))
-trmcRenameEnv [] _ = []
+-- `aenv` is the plain POSITIONAL list from `trmcReloadParams`; this is the
+-- boundary where it becomes a real by-name OrdMap env.
+trmcRenameEnv : List Pat -> List (String, (String, LTy)) -> OrdMap (String, LTy)
+trmcRenameEnv [] _ = omEmpty
 trmcRenameEnv ((PVar x _)::ps) ((_, op)::rest) =
-  (x, op) :: trmcRenameEnv ps rest
+  omInsert x op (trmcRenameEnv ps rest)
 trmcRenameEnv (_::ps) (_::rest) = trmcRenameEnv ps rest
-trmcRenameEnv _ [] = []
+trmcRenameEnv _ [] = omEmpty
 
 -- single-clause TRMC body in TAIL position: descend CIf/CLet/CLetGroup wrappers,
 -- emit each leaf via the TRMC context (cons leaf or base leaf).  Mirrors
 -- emitFnBody's CIf descent but redirects the value leaves.  CLet/CLetGroup descend
 -- only their (self-free, verified by trmcBodyOk) simple value-binding shapes; any
 -- richer let is emitted whole as a base leaf (no self-call inside ⇒ no stack risk).
-emitTrmcBody : Emit -> List (String, (String, LTy)) -> CExpr -> Unit
+emitTrmcBody : Emit -> OrdMap (String, LTy) -> CExpr -> Unit
 emitTrmcBody e env (CIf c t f) =
   let (cv, _) = emitExpr e env c
   let ci = untagInt e cv
@@ -8707,7 +8731,7 @@ emitTrmcBody e env (CIf c t f) =
   emitTrmcBody e env f
 emitTrmcBody e env (CLet False (PVar x _) rhs b) =
   let (v, ty) = emitExpr e env rhs
-  emitTrmcBody e ((x, (v, ty))::env) b
+  emitTrmcBody e (omInsert x (v, ty) env) b
 emitTrmcBody e env (CLetGroup binds b) =
   if allNullaryBinds binds then
     let env2 = trmcBindNullaryGroup e env binds
@@ -8753,18 +8777,18 @@ allNullaryBinds _ = False
 
 -- emit each nullary value binding left-to-right, threading the env (mirrors
 -- emitLetGroup's value-binding arm).
-trmcBindNullaryGroup : Emit -> List (String, (String, LTy)) -> List CBind -> List (String, (String, LTy))
+trmcBindNullaryGroup : Emit -> OrdMap (String, LTy) -> List CBind -> OrdMap (String, LTy)
 trmcBindNullaryGroup _ env [] = env
 trmcBindNullaryGroup e env ((CBind name [CClause [] rhs])::rest) =
   let (v, ty) = emitExpr e env rhs
-  trmcBindNullaryGroup e ((name, (v, ty))::env) rest
+  trmcBindNullaryGroup e (omInsert name (v, ty) env) rest
 trmcBindNullaryGroup _ env (_::rest) = env
 
 -- a TRMC tail leaf: an eligible ctor-tail conses into the destination + loops; a
 -- bare plain-tail self-call (F3 — `None => self …`, no enclosing cons/ctor)
 -- recomputes its args + loops with NO cell alloc + NO dest store (iterate on a
 -- shorter list); any other leaf stores its value into the destination + exits.
-emitTrmcLeaf : Emit -> List (String, (String, LTy)) -> CExpr -> Unit
+emitTrmcLeaf : Emit -> OrdMap (String, LTy) -> CExpr -> Unit
 emitTrmcLeaf e env ex = match !e.trmcCtx
   TrmcOff => emitValueRet e env ex
   TrmcOn self arity destSlot loopL exitL pslots =>
@@ -8784,7 +8808,7 @@ emitTrmcLeaf e env ex = match !e.trmcCtx
 -- list cell), so the next iteration fills the same destination slot — exactly the
 -- "drop this element" semantics of `filter`/`filterMap`.  The self-call is NOT
 -- emitted as a `call` (that is what removes the stack-growing recursion).
-emitTrmcTailCall : Emit -> List (String, (String, LTy)) -> CExpr -> String -> List String -> Unit
+emitTrmcTailCall : Emit -> OrdMap (String, LTy) -> CExpr -> String -> List String -> Unit
 emitTrmcTailCall e env ex loopL pslots =
   let args = match flattenApp ex []
     (_, as_) => as_
@@ -8807,7 +8831,7 @@ emitTrmcTailCall e env ex loopL pslots =
 -- For `::`/Cons this is arity 2, selfIdx 1 (offset 16) — the Phase-1 cons shape.
 -- F1(b) SEAM: the dest-offset is COMPUTED from `selfIdx`, not hardcoded "last", so a
 -- future self-call-in-any-field is a detection-only patch (this emit is unchanged).
-emitTrmcCtor : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> List CExpr -> Int -> String -> String -> List String -> Unit
+emitTrmcCtor : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> List CExpr -> Int -> String -> String -> List String -> Unit
 emitTrmcCtor e env ctor leadFields args selfIdx destSlot loopL pslots =
   let arity = lengthS leadFields + 1
   let leadVals = emitArgs e env leadFields
@@ -8849,7 +8873,7 @@ trmcStoreParamSlots e (slot::slots) (op::ops) =
   trmcStoreParamSlots e slots ops
 
 -- base/other leaf: store the value into the current destination, branch to exit.
-emitTrmcBase : Emit -> List (String, (String, LTy)) -> CExpr -> String -> String -> Unit
+emitTrmcBase : Emit -> OrdMap (String, LTy) -> CExpr -> String -> String -> Unit
 emitTrmcBase e env ex destSlot exitL =
   let (v, _) = emitExpr e env ex
   let d = freshReg e
@@ -8971,8 +8995,8 @@ emitGDispMember e (CBind name clauses) = match !e.gDispCtx
         if allPVar pats then
           emitGDispBody e (trmcRenameEnv pats reloaded) body
         else
-          emitClauseTree e reloaded arity pairs ""
-      _ => emitClauseTree e reloaded arity pairs ""
+          emitClauseTree e (omFromPairs reloaded omEmpty) arity pairs ""
+      _ => emitClauseTree e (omFromPairs reloaded omEmpty) arity pairs ""
 
 gDispTake : Int -> List a -> List a
 gDispTake n _
@@ -8985,7 +9009,7 @@ gDispTake n (x::rest) = x :: gDispTake (n - 1) rest
 -- emit redirects precisely the leaves the detection sanctioned.  A CLetGroup is
 -- deliberately NOT descended (the detection treats it as a leaf: base if
 -- member-free, else the group was rejected).
-emitGDispBody : Emit -> List (String, (String, LTy)) -> CExpr -> Unit
+emitGDispBody : Emit -> OrdMap (String, LTy) -> CExpr -> Unit
 emitGDispBody e env (CIf c t f) =
   let (cv, _) = emitExpr e env c
   let ci = untagInt e cv
@@ -9001,7 +9025,7 @@ emitGDispBody e env (CIf c t f) =
   emitGDispBody e env f
 emitGDispBody e env (CLet False (PVar x _) rhs b) =
   let (v, ty) = emitExpr e env rhs
-  emitGDispBody e ((x, (v, ty))::env) b
+  emitGDispBody e (omInsert x (v, ty) env) b
 emitGDispBody e env (CLet False PWild rhs b) =
   let _ = emitExpr e env rhs
   emitGDispBody e env b
@@ -9030,14 +9054,14 @@ emitGDispBody e env ex = emitGDispLeaf e env ex
 -- detection only sanctions blocks whose LAST statement is a CSExpr
 -- (lastStmtExpr); any other tail form falls to the base leaf (member-free by
 -- detection, so emitting it whole as a value is sound).
-emitGDispBlock : Emit -> List (String, (String, LTy)) -> List CStmt -> Unit
+emitGDispBlock : Emit -> OrdMap (String, LTy) -> List CStmt -> Unit
 emitGDispBlock e env [CSExpr ex] = emitGDispBody e env ex
 emitGDispBlock e env ((CSExpr ex)::rest) =
   let _ = emitExpr e env ex
   emitGDispBlock e env rest
 emitGDispBlock e env ((CSLet _ (PVar x _) ex)::rest) =
   let (v, ty) = emitExpr e env ex
-  emitGDispBlock e ((x, (v, ty))::env) rest
+  emitGDispBlock e (omInsert x (v, ty) env) rest
 emitGDispBlock e env ((CSLet _ PWild ex)::rest) =
   let _ = emitExpr e env ex
   emitGDispBlock e env rest
@@ -9051,7 +9075,7 @@ emitGDispBlock e env ((CSLet _ pat ex)::rest) =
     emitGDispBlock e env2 rest
 emitGDispBlock e env ((CSAssign x ex)::rest) =
   let (v, ty) = emitExpr e env ex
-  emitGDispBlock e ((x, (v, ty))::env) rest
+  emitGDispBlock e (omInsert x (v, ty) env) rest
 emitGDispBlock e env stmts = emitGDispLeaf e env (CBlock stmts)
 
 -- a group TAIL leaf.  Three classes, matching the detection's dispLeafOk:
@@ -9061,7 +9085,7 @@ emitGDispBlock e env stmts = emitGDispLeaf e env (CBlock stmts)
 --   • anything else — a base value: close the dest + exit (emitTrmcBase; the
 --     detection guarantees it references no member, so no member symbol — which
 --     does not exist — can be emitted).
-emitGDispLeaf : Emit -> List (String, (String, LTy)) -> CExpr -> Unit
+emitGDispLeaf : Emit -> OrdMap (String, LTy) -> CExpr -> Unit
 emitGDispLeaf e env ex = match !e.gDispCtx
   GDispOff => emitValueRet e env ex
   GDispOn _ members uslots destSlot exitL => match gDispSpine e members ex
@@ -9093,7 +9117,7 @@ gDispSpine e members ex = dispSpineParts
 -- *dest → advance dest to THIS cell's tail slot (+16).  The tail word stays
 -- zeroed (GC_malloc) until the next cell/base fills it — the Stage-1 GC-safety
 -- argument verbatim.
-emitGDispCells : Emit -> List (String, (String, LTy)) -> List CExpr -> String -> Unit
+emitGDispCells : Emit -> OrdMap (String, LTy) -> List CExpr -> String -> Unit
 emitGDispCells _ _ [] _ = ()
 emitGDispCells e env (h::rest) destSlot =
   let hv = emitArgs e env [h]
@@ -9115,7 +9139,7 @@ emitGDispCells e env (h::rest) destSlot =
 -- arg may read the current member's params), store them into the shared slots
 -- (positional, first arity_f slots), branch to the callee's entry block.  NO
 -- call — the branch IS the loop edge.
-emitGDispEdge : Emit -> List (String, (String, LTy)) -> String -> List CExpr -> List String -> Unit
+emitGDispEdge : Emit -> OrdMap (String, LTy) -> String -> List CExpr -> List String -> Unit
 emitGDispEdge e env f args uslots =
   let argOps = emitArgs e env args
   let _ = trmcStoreParamSlots e uslots argOps
@@ -9171,15 +9195,17 @@ gDispDropMembers e ((n, v)::rest) =
 -- like implParamEnv, but types each synthetic `aK` scrutinee param from the fn's
 -- inferred signature param types (FnSig ts) instead of defaulting to LTInt.
 -- Params past the signature length (or with no sig) fall back to LTInt.
-implParamEnvTyped : Int -> List LTy -> Int -> List (String, (String, LTy))
+implParamEnvTyped : Int -> List LTy -> Int -> OrdMap (String, LTy)
 implParamEnvTyped n _ i
-  | i >= n = []
-implParamEnvTyped n (ty::tys) i =
-  ("a" ++ intToString i, ("%arg" ++ intToString i, ty)) ::
-    implParamEnvTyped n tys (i + 1)
-implParamEnvTyped n [] i =
-  ("a" ++ intToString i, ("%arg" ++ intToString i, LTInt)) ::
-    implParamEnvTyped n [] (i + 1)
+  | i >= n = omEmpty
+implParamEnvTyped n (ty::tys) i = omInsert
+  ("a" ++ intToString i)
+  ("%arg" ++ intToString i, ty)
+  (implParamEnvTyped n tys (i + 1))
+implParamEnvTyped n [] i = omInsert
+  ("a" ++ intToString i)
+  ("%arg" ++ intToString i, LTInt)
+  (implParamEnvTyped n [] (i + 1))
 
 -- emit one variable-pattern function clause (the slice-2 path).
 -- ── worker-wrapper float-param unboxing (perf/float-param-unbox) ─────────────
@@ -9364,18 +9390,18 @@ paramDeclsD _ _ _ = panic "llvm: float-worker params must be plain variables"
 
 -- env for the worker: float params are unboxed doubles (LTFloatU → %argN holds a
 -- double); other params keep their LTy.
-paramEnvD : List Pat -> List LTy -> List Int -> Int -> List (String, (String, LTy))
-paramEnvD [] _ _ _ = []
+paramEnvD : List Pat -> List LTy -> List Int -> Int -> OrdMap (String, LTy)
+paramEnvD [] _ _ _ = omEmpty
 paramEnvD ((PVar x _)::rest) (ty::tys) fp i =
   let lty = if elemInt i fp then LTFloatU else ty
-  (x, ("%arg" ++ intToString i, lty)) :: paramEnvD rest tys fp (i + 1)
+  omInsert x ("%arg" ++ intToString i, lty) (paramEnvD rest tys fp (i + 1))
 paramEnvD ((PVar x _)::rest) [] fp i =
-  (x, ("%arg" ++ intToString i, LTInt)) :: paramEnvD rest [] fp (i + 1)
+  omInsert x ("%arg" ++ intToString i, LTInt) (paramEnvD rest [] fp (i + 1))
 paramEnvD _ _ _ _ = panic "llvm: float-worker params must be plain variables"
 
 -- a self-call's argument operands: `double <d>` at float positions, `i64 <w>` else,
 -- emitted left-to-right.
-emitWorkerArgs : Emit -> List (String, (String, LTy)) -> List Int -> Int -> List CExpr -> String
+emitWorkerArgs : Emit -> OrdMap (String, LTy) -> List Int -> Int -> List CExpr -> String
 emitWorkerArgs _ _ _ _ [] = ""
 emitWorkerArgs e env fp i (a::rest) =
   let op = match elemInt i fp
@@ -9390,7 +9416,7 @@ emitWorkerArgs e env fp i (a::rest) =
 
 -- the worker body in tail position: CIf recurses; a full-arity tail self-call
 -- musttails into the worker (NO box); any other (self-free) value rets a double.
-emitFnBodyD : Emit -> List (String, (String, LTy)) -> String -> String -> List Int -> Int -> CExpr -> Unit
+emitFnBodyD : Emit -> OrdMap (String, LTy) -> String -> String -> List Int -> Int -> CExpr -> Unit
 emitFnBodyD e env self worker fp arity (CIf c t f) =
   let (cv, _) = emitExpr e env c
   let ci = untagInt e cv
@@ -9417,22 +9443,22 @@ emitFnBodyD e env self worker fp arity other =
 -- emit a worker-mode let-block: bind each leading CSLet (float RHS → unboxed double
 -- LTFloatU, same as emitBlock; else normal), then emit the final CSExpr in tail
 -- (double-return) mode. Gated by floatWorkerBlockOk, so the shape is guaranteed.
-emitFnBodyDBlock : Emit -> List (String, (String, LTy)) -> String -> String -> List Int -> Int -> List CStmt -> Unit
+emitFnBodyDBlock : Emit -> OrdMap (String, LTy) -> String -> String -> List Int -> Int -> List CStmt -> Unit
 emitFnBodyDBlock e env self worker fp arity ((CSExpr ex)::[]) =
   emitFnBodyD e env self worker fp arity ex
 emitFnBodyDBlock e env self worker fp arity ((CSLet _ (PVar x _) rhs)::rest) =
   if staticIsFloat env rhs then
     let d = emitFloatD e env rhs
-    emitFnBodyDBlock e ((x, (d, LTFloatU))::env) self worker fp arity rest
+    emitFnBodyDBlock e (omInsert x (d, LTFloatU) env) self worker fp arity rest
   else
     let (v, ty) = emitExpr e env rhs
-    emitFnBodyDBlock e ((x, (v, ty))::env) self worker fp arity rest
+    emitFnBodyDBlock e (omInsert x (v, ty) env) self worker fp arity rest
 emitFnBodyDBlock e env _ _ _ _ _ =
   gapU
     e
     "float-worker block: unexpected statement shape (should be gated by floatWorkerBlockOk)"
 
-emitTailLeafD : Emit -> List (String, (String, LTy)) -> String -> String -> List Int -> Int -> CExpr -> (CExpr, List CExpr) -> Unit
+emitTailLeafD : Emit -> OrdMap (String, LTy) -> String -> String -> List Int -> Int -> CExpr -> (CExpr, List CExpr) -> Unit
 emitTailLeafD e env self worker fp arity _ (CVar f0 _, args)
   | f0 == self && lengthS args == arity =
     let ops = emitWorkerArgs e env fp 0 args
@@ -9553,12 +9579,12 @@ paramDecls _ _ = panic "llvm: function parameters must be plain variables"
 
 -- bind each parameter to %argN at its inferred static type (every param is an i64
 -- word at the ABI; the type only drives int-vs-float instruction selection).
-paramEnv : List Pat -> List LTy -> Int -> List (String, (String, LTy))
-paramEnv [] _ _ = []
+paramEnv : List Pat -> List LTy -> Int -> OrdMap (String, LTy)
+paramEnv [] _ _ = omEmpty
 paramEnv ((PVar x _)::rest) (ty::tys) i =
-  (x, ("%arg" ++ intToString i, ty)) :: paramEnv rest tys (i + 1)
+  omInsert x ("%arg" ++ intToString i, ty) (paramEnv rest tys (i + 1))
 paramEnv ((PVar x _)::rest) [] i =
-  (x, ("%arg" ++ intToString i, LTInt)) :: paramEnv rest [] (i + 1)
+  omInsert x ("%arg" ++ intToString i, LTInt) (paramEnv rest [] (i + 1))
 -- A `PWild` param binds no name: contribute NO env entry, but still consume its
 -- type slot and advance the %argN index so later `PVar` params keep their positions
 -- (#671 — a wildcard outer param on a closure-returning fn reached here through
@@ -9583,7 +9609,7 @@ tailCallSaturated e fname n = match defArityOf e fname
 -- An `if` recurses into both arms (each arm is itself in tail position and rets);
 -- a SATURATED tail call to a known function emits `[musttail] call` + `ret`;
 -- anything else is computed as a value and returned.
-emitFnBody : Emit -> List (String, (String, LTy)) -> String -> CExpr -> Unit
+emitFnBody : Emit -> OrdMap (String, LTy) -> String -> CExpr -> Unit
 emitFnBody e env self (CIf c t f) =
   let (cv, _) = emitExpr e env c
   let ci = untagInt e cv
@@ -9619,7 +9645,7 @@ emitFnBody e env self other =
       else emitValueRet e env other
     _ => emitValueRet e env other
 
-emitValueRet : Emit -> List (String, (String, LTy)) -> CExpr -> Unit
+emitValueRet : Emit -> OrdMap (String, LTy) -> CExpr -> Unit
 emitValueRet e env ex =
   let (v, _) = emitExpr e env ex
   emit e ("  ret i64 " ++ v)
@@ -10358,7 +10384,7 @@ isCmpOp op = op == "=="
 
 -- ── records, tuples, and mutable refs ────────────────────────────
 
-emitTuple : Emit -> List (String, (String, LTy)) -> List CExpr -> (String, LTy)
+emitTuple : Emit -> OrdMap (String, LTy) -> List CExpr -> (String, LTy)
 emitTuple e env es =
   let words = emitArgs e env es
   if allConstWords words then
@@ -10366,7 +10392,7 @@ emitTuple e env es =
   else
     emitCtorAlloc e "$tuple" words
 
-emitRecordCreate : Emit -> List (String, (String, LTy)) -> String -> List CField -> (String, LTy)
+emitRecordCreate : Emit -> OrdMap (String, LTy) -> String -> List CField -> (String, LTy)
 emitRecordCreate e env name fields =
   let words = emitFieldExprs e env fields
   if allConstWords words then
@@ -10374,7 +10400,7 @@ emitRecordCreate e env name fields =
   else
     emitCtorAlloc e name words
 
-emitFieldAccess : Emit -> List (String, (String, LTy)) -> CExpr -> String -> String -> (String, LTy)
+emitFieldAccess : Emit -> OrdMap (String, LTy) -> CExpr -> String -> String -> (String, LTy)
 emitFieldAccess e env ex label recName =
   let (w, _) = emitExpr e env ex
   if label == "value" then
@@ -10401,7 +10427,7 @@ fieldIdxByName e recName label =
       None => findFieldIdx e label
     None => findFieldIdx e label
 
-emitRecordUpdate : Emit -> List (String, (String, LTy)) -> String -> CExpr -> List CField -> (String, LTy)
+emitRecordUpdate : Emit -> OrdMap (String, LTy) -> String -> CExpr -> List CField -> (String, LTy)
 emitRecordUpdate e env recName base updates =
   let (bw, _) = emitExpr e env base
   let firstLabel = cFieldFirstLabel updates
@@ -10428,7 +10454,7 @@ recordByName e recName label =
       None => findRecordByLabel e label
     None => findRecordByLabel e label
 
-emitVariantUpdate : Emit -> List (String, (String, LTy)) -> String -> CExpr -> List CField -> (String, LTy)
+emitVariantUpdate : Emit -> OrdMap (String, LTy) -> String -> CExpr -> List CField -> (String, LTy)
 emitVariantUpdate e env con base updates =
   let (bw, _) = emitExpr e env base
   match recFieldsOfName e con
@@ -10438,13 +10464,13 @@ emitVariantUpdate e env con base updates =
       let words = buildUpdateWords e bw labels updatePairs 0
       emitCtorAlloc e con words
 
-emitRefAlloc : Emit -> List (String, (String, LTy)) -> List CExpr -> (String, LTy)
+emitRefAlloc : Emit -> OrdMap (String, LTy) -> List CExpr -> (String, LTy)
 emitRefAlloc e env [x] =
   let (xw, _) = emitExpr e env x
   emitCtorAlloc e "$ref" [xw]
 emitRefAlloc e env _ = gapE e "Ref expects exactly 1 argument"
 
-emitSetRef : Emit -> List (String, (String, LTy)) -> List CExpr -> (String, LTy)
+emitSetRef : Emit -> OrdMap (String, LTy) -> List CExpr -> (String, LTy)
 emitSetRef e env [r, x] =
   let (rw, _) = emitExpr e env r
   let (xw, _) = emitExpr e env x
@@ -10456,13 +10482,13 @@ emitSetRef e env [r, x] =
   ("1", LTInt)
 emitSetRef e env _ = gapE e "setRef expects exactly 2 arguments"
 
-emitFieldExprs : Emit -> List (String, (String, LTy)) -> List CField -> List String
+emitFieldExprs : Emit -> OrdMap (String, LTy) -> List CField -> List String
 emitFieldExprs _ _ [] = []
 emitFieldExprs e env ((CField _ ex)::rest) =
   let (w, _) = emitExpr e env ex
   w :: emitFieldExprs e env rest
 
-emitUpdatePairs : Emit -> List (String, (String, LTy)) -> List CField -> List (String, String)
+emitUpdatePairs : Emit -> OrdMap (String, LTy) -> List CField -> List (String, String)
 emitUpdatePairs _ _ [] = []
 emitUpdatePairs e env ((CField k ex)::rest) =
   let (w, _) = emitExpr e env ex
@@ -10651,7 +10677,7 @@ emitArrayDynAlloc e len_raw =
 
 -- CArray [e0, e1, …]: allocate a static-size array cell, emit each element,
 -- store them as fields, return the cell pointer word.
-emitArrayCreate : Emit -> List (String, (String, LTy)) -> List CExpr -> (String, LTy)
+emitArrayCreate : Emit -> OrdMap (String, LTy) -> List CExpr -> (String, LTy)
 emitArrayCreate e env es =
   let words = emitArgs e env es
   emitArrayAlloc e (lengthS words) words
@@ -10688,7 +10714,7 @@ storeFieldDyn e ptrWord idxRaw val =
   ()
 
 -- CIndex arr i: bounds-check, then load element at dynamic offset.
-emitArrayIndex : Emit -> List (String, (String, LTy)) -> CExpr -> CExpr -> (String, LTy)
+emitArrayIndex : Emit -> OrdMap (String, LTy) -> CExpr -> CExpr -> (String, LTy)
 emitArrayIndex e env a i =
   let (arr_w, _) = emitExpr e env a
   let (idx_w, _) = emitExpr e env i
@@ -10712,7 +10738,7 @@ emitArrayIndex e env a i =
   (r, LTInt)
 
 -- CRangeArray lo hi incl: compute count, alloc, fill with alloca-counter loop.
-emitRangeArray : Emit -> List (String, (String, LTy)) -> CExpr -> CExpr -> Bool -> (String, LTy)
+emitRangeArray : Emit -> OrdMap (String, LTy) -> CExpr -> CExpr -> Bool -> (String, LTy)
 emitRangeArray e env lo hi incl =
   let (lo_w, _) = emitExpr e env lo
   let (hi_w, _) = emitExpr e env hi
@@ -10781,7 +10807,7 @@ emitRangeArray e env lo hi incl =
 -- `[|1,2,3|].[0..=2]` (end 3 == len 3) is legal while `.[0..=3]` (end 4 > 3) aborts.
 -- mdk_slice_oob wants the INCLUSIVE upper bound for its message, so it is handed
 -- `end_raw - 1`, matching the interpreter's `hiX - 1` text in both forms.
-emitArraySlice : Emit -> List (String, (String, LTy)) -> CExpr -> CExpr -> CExpr -> Bool -> (String, LTy)
+emitArraySlice : Emit -> OrdMap (String, LTy) -> CExpr -> CExpr -> CExpr -> Bool -> (String, LTy)
 emitArraySlice e env a lo hi incl =
   let (arr_w, _) = emitExpr e env a
   let (lo_w, _) = emitExpr e env lo
@@ -10857,7 +10883,7 @@ emitArraySlice e env a lo hi incl =
 -- already a Char immediate (cp<<1)|1, header = codepoint count), bounds-check the
 -- codepoint index against that count, then load element i.  Result LTy = LTChar.
 -- Bounds violation calls @mdk_oob (matching the interpreter's index-OOB panic).
-emitStringIndex : Emit -> List (String, (String, LTy)) -> CExpr -> CExpr -> (String, LTy)
+emitStringIndex : Emit -> OrdMap (String, LTy) -> CExpr -> CExpr -> (String, LTy)
 emitStringIndex e env a i =
   let (str_w, _) = emitExpr e env a
   let (idx_w, _) = emitExpr e env i
@@ -10887,7 +10913,7 @@ emitStringIndex e env a i =
 -- to [0, cp_count] (no OOB panic, unlike the array slice).  Reuse the
 -- @mdk_string_slice extern (it >>1-untags the tagged Int bounds internally); for
 -- the inclusive form hi+1 in value space is +2 on the tagged word (tag = n*2+1).
-emitStringSlice : Emit -> List (String, (String, LTy)) -> CExpr -> CExpr -> CExpr -> Bool -> (String, LTy)
+emitStringSlice : Emit -> OrdMap (String, LTy) -> CExpr -> CExpr -> CExpr -> Bool -> (String, LTy)
 emitStringSlice e env a lo hi incl =
   let (str_w, _) = emitExpr e env a
   let (lo_w, _) = emitExpr e env lo
@@ -10907,7 +10933,7 @@ emitStringSlice e env a lo hi incl =
 -- (i decrementing) returning the head once i<=0, panic (@mdk_oob) on running off
 -- the end.  @mdk_list_index does the walk in C (>>1-untags the tagged index).
 -- Result word is the stored head (same shape as an array load → LTInt).
-emitListIndex : Emit -> List (String, (String, LTy)) -> CExpr -> CExpr -> (String, LTy)
+emitListIndex : Emit -> OrdMap (String, LTy) -> CExpr -> CExpr -> (String, LTy)
 emitListIndex e env a i =
   let (lst_w, _) = emitExpr e env a
   let (idx_w, _) = emitExpr e env i
@@ -10921,7 +10947,7 @@ emitListIndex e env a i =
 -- end-of-list.  @mdk_list_slice does the walk + rebuild in C (>>1-untags lo/hi);
 -- for the inclusive form hi+1 in value space is +2 on the tagged word (tag n*2+1).
 -- Result is a boxed Cons/Nil list → LTCon (same as the array slice).
-emitListSlice : Emit -> List (String, (String, LTy)) -> CExpr -> CExpr -> CExpr -> Bool -> (String, LTy)
+emitListSlice : Emit -> OrdMap (String, LTy) -> CExpr -> CExpr -> CExpr -> Bool -> (String, LTy)
 emitListSlice e env a lo hi incl =
   let (lst_w, _) = emitExpr e env a
   let (lo_w, _) = emitExpr e env lo
@@ -10939,7 +10965,7 @@ emitListSlice e env a lo hi incl =
 -- fills element i by calling the Medaka closure `f` with the tagged index `i`.
 -- Shape mirrors emitRangeArray (alloca-counter loop) + emitIndirect (closure call).
 -- No C extern; the closure is called directly from the emitted loop body.
-emitArrayMakeWith : Emit -> List (String, (String, LTy)) -> List CExpr -> (String, LTy)
+emitArrayMakeWith : Emit -> OrdMap (String, LTy) -> List CExpr -> (String, LTy)
 emitArrayMakeWith e env [nExpr, fExpr] =
   let (n_w, _) = emitExpr e env nExpr
   let (fw, _) = emitExpr e env fExpr
@@ -11012,7 +11038,7 @@ emitArrayMakeWith e env _ = gapE e "arrayMakeWith takes two arguments"
 --       matches the slice-8 loop pattern and avoids stack overflow on large ranges.
 
 -- CList [e0, e1, …, en]: right-fold to Cons cells, innermost first.
-emitList : Emit -> List (String, (String, LTy)) -> List CExpr -> (String, LTy)
+emitList : Emit -> OrdMap (String, LTy) -> List CExpr -> (String, LTy)
 emitList e _ [] = emitCtorAlloc e "Nil" []
 emitList e env xs =
   let words = emitListWords e env xs
@@ -11020,7 +11046,7 @@ emitList e env xs =
 
 -- emit every element to its operand word, head-to-tail (same order as the original
 -- recursive emitList's element emission).
-emitListWords : Emit -> List (String, (String, LTy)) -> List CExpr -> List String
+emitListWords : Emit -> OrdMap (String, LTy) -> List CExpr -> List String
 emitListWords _ _ [] = []
 emitListWords e env (x::xs) =
   let (w, _) = emitExpr e env x
@@ -11054,7 +11080,7 @@ emitConstListGo e consTag (w::rest) tl =
 -- CRangeList lo hi incl: build an ascending list [lo…hi] (or [lo…<hi]) via a
 -- back-to-front alloca-counter loop.  An alloca i64 `acc` holds the current
 -- head pointer; a second alloca i64 `ic` holds the loop counter (count-1 downto 0).
-emitRangeList : Emit -> List (String, (String, LTy)) -> CExpr -> CExpr -> Bool -> (String, LTy)
+emitRangeList : Emit -> OrdMap (String, LTy) -> CExpr -> CExpr -> Bool -> (String, LTy)
 emitRangeList e env lo hi incl =
   let (lo_w, _) = emitExpr e env lo
   let (hi_w, _) = emitExpr e env hi
@@ -11330,7 +11356,7 @@ emitProgramMain e groups =
   -- taint is downward-closed over reads), so this prologue never calls a force fn.
   -- LAZY globals are initialised on first use by their @mdk_force_<x> defines below.
   let _ = emitTopGlobals e (orderedValBinds groups (safeValBinds e (valBinds groups)))
-  let (mv, mty) = emitExpr e [] mainRhs
+  let (mv, mty) = emitExpr e omEmpty mainRhs
   -- A Unit-returning `main` produces output ONLY through explicit print calls (or
   -- a panic); never auto-print its `()` result.  Detected by the DECLARED return
   -- type (`declSigOf "main"` → "Unit", robust even when the body LTy is
@@ -11391,7 +11417,7 @@ emitLines e (line::rest) =
 emitTopGlobals : Emit -> List CBind -> Unit
 emitTopGlobals _ [] = ()
 emitTopGlobals e ((CBind name [CClause [] body])::rest) =
-  let (v, ty) = emitExpr e [] body
+  let (v, ty) = emitExpr e omEmpty body
   let _ = emit e "  store i64 \{v}, ptr @mdk_g_\{name}"
   let _ = markGlobalInit e name ty
   emitTopGlobals e rest
@@ -11450,7 +11476,7 @@ emitForceFn e name body =
   let _ = emit e "  unreachable"
   let _ = emit e "lz_unforced:"
   let _ = emit e "  store i8 1, ptr @mdk_gs_\{name}"
-  let (v, _ty) = emitExpr e [] body
+  let (v, _ty) = emitExpr e omEmpty body
   let _ = emit e "  store i64 \{v}, ptr @mdk_g_\{name}"
   let _ = emit e "  store i8 2, ptr @mdk_gs_\{name}"
   let _ = emit e "  ret i64 \{v}"
@@ -11569,7 +11595,7 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes implEntries) =
   let _ = emitPreamble e
   let _ = emitFnsGaps e (fnBinds groups)
   let _ = emitImplsGaps e implEntries
-  let _ = emitTopBindsGaps e [] (valBinds groups)
+  let _ = emitTopBindsGaps e omEmpty (valBinds groups)
   reverseL !e.gapLog
 
 emitFnsGaps : Emit -> List CBind -> Unit
@@ -11589,12 +11615,12 @@ emitGroupsGaps e (g::rest) =
   let _ = emitGroup e g
   emitGroupsGaps e rest
 
-emitTopBindsGaps : Emit -> List (String, (String, LTy)) -> List CBind -> Unit
+emitTopBindsGaps : Emit -> OrdMap (String, LTy) -> List CBind -> Unit
 emitTopBindsGaps _ _ [] = ()
 emitTopBindsGaps e env ((CBind name [CClause [] body])::rest) =
   let _ = setGapBind e ("val " ++ name)
   let (v, ty) = emitExpr e env body
-  emitTopBindsGaps e ((name, (v, ty))::env) rest
+  emitTopBindsGaps e (omInsert name (v, ty) env) rest
 emitTopBindsGaps e env ((CBind name _)::rest) =
   let _ = setGapBind e ("val " ++ name)
   let _ = gapU e "non-nullary / multi-clause value binding"
