@@ -7,8 +7,8 @@
 --   1. parse + desugar the file;
 --   2. build a call graph (name → set of called top-level names) from the
 --      DESUGARED AST (conservative EVar collection, like collect_evars);
---   3. typecheck single-file (checkProgramSchemesWithRuntime, the Flat wrapper
---      family) for inferred schemes -- `--fn <name>` is arbitrary user input
+--   3. typecheck single-file (checkOneSchemeFull, the Module-arm full-environment
+--      entry) for inferred schemes -- `--fn <name>` is arbitrary user input
 --      looked up DIRECTLY in the effect table, so the schemes must include
 --      prelude names too (see the call-site comments below);
 --   4. read each fn's inferred effect row → its concrete labels
@@ -49,7 +49,7 @@ import types.typecheck.{
   EffRow(..),
   Atom(..),
   Param(..),
-  checkProgramSchemesWithRuntime,
+  checkOneSchemeFull,
   normalize,
   tupleSpine,
   effrowLabels,
@@ -524,13 +524,17 @@ runCheckPolicy rtSrc coreSrc src allowStr fnName =
   let rtD = desugar (parse rtSrc)
   let coreD = desugar (parse coreSrc)
   let callGraph = buildCallGraph userD
-  -- Flat wrapper, deliberately NOT migrated to checkOneScheme: `--fn <name>` is
-  -- arbitrary CLI input looked up DIRECTLY in effTable (lookupAssoc fnName), never
-  -- routed through buildCallGraph's userD-restricted traversal. checkOneScheme
-  -- omits prelude schemes (the lsp.mdk gap), so `--fn println` would miss the
-  -- table entirely and the policy check would silently ACCEPT an <IO> function as
-  -- pure. Parked as a Flat-arm consumer alongside tools/lsp.mdk (#1116).
-  let schemes = checkProgramSchemesWithRuntime rtD coreD userD
+  -- Module arm, via the full-environment entry (S-full-env-scheme-entry, #1116).
+  -- `--fn <name>` is arbitrary CLI input looked up DIRECTLY in effTable
+  -- (lookupAssoc fnName), never routed through buildCallGraph's userD-restricted
+  -- traversal, so the schemes MUST include prelude names: `--fn println` missing
+  -- from the table would make the policy check silently ACCEPT an <IO> function as
+  -- pure. `checkOneScheme` alone returns only the terminal module's OWN schemes,
+  -- which is why this site was parked on the Flat wrapper until #1116 grew
+  -- `checkOneSchemeFull`. OWN FIRST: `lookupAssoc` is a first-match scan, so a
+  -- plugin that redefines a prelude name must win its own lookup.
+  let (preludeSchemes, ownSchemes) = checkOneSchemeFull rtD coreD ("__user__", userD)
+  let schemes = ownSchemes ++ preludeSchemes
   let effTable = fnEffectsTable schemes
   let fnEffects = match lookupAssoc fnName effTable
     None => []
@@ -663,13 +667,17 @@ runManifest rtSrc coreSrc src fnName =
   let userD = desugar rawUser
   let rtD = desugar (parse rtSrc)
   let coreD = desugar (parse coreSrc)
-  -- Flat wrapper, deliberately NOT migrated to checkOneScheme: `--fn <name>` is
-  -- arbitrary CLI input looked up DIRECTLY in effTable (lookupAssoc fnName), never
-  -- routed through buildCallGraph's userD-restricted traversal. checkOneScheme
-  -- omits prelude schemes (the lsp.mdk gap), so `--fn println` would miss the
-  -- table entirely and the policy check would silently ACCEPT an <IO> function as
-  -- pure. Parked as a Flat-arm consumer alongside tools/lsp.mdk (#1116).
-  let schemes = checkProgramSchemesWithRuntime rtD coreD userD
+  -- Module arm, via the full-environment entry (S-full-env-scheme-entry, #1116).
+  -- `--fn <name>` is arbitrary CLI input looked up DIRECTLY in effTable
+  -- (lookupAssoc fnName), never routed through buildCallGraph's userD-restricted
+  -- traversal, so the schemes MUST include prelude names: `--fn println` missing
+  -- from the table would make the policy check silently ACCEPT an <IO> function as
+  -- pure. `checkOneScheme` alone returns only the terminal module's OWN schemes,
+  -- which is why this site was parked on the Flat wrapper until #1116 grew
+  -- `checkOneSchemeFull`. OWN FIRST: `lookupAssoc` is a first-match scan, so a
+  -- plugin that redefines a prelude name must win its own lookup.
+  let (preludeSchemes, ownSchemes) = checkOneSchemeFull rtD coreD ("__user__", userD)
+  let schemes = ownSchemes ++ preludeSchemes
   let effTable = fnEffectsTable schemes
   let fnEffects = match lookupAssoc fnName effTable
     None => []
@@ -717,13 +725,17 @@ runManifestAtoms rtSrc coreSrc src fnName =
   let userD = desugar rawUser
   let rtD = desugar (parse rtSrc)
   let coreD = desugar (parse coreSrc)
-  -- Flat wrapper, deliberately NOT migrated to checkOneScheme: `--fn <name>` is
-  -- arbitrary CLI input looked up DIRECTLY in effTable (lookupAssoc fnName), never
-  -- routed through buildCallGraph's userD-restricted traversal. checkOneScheme
-  -- omits prelude schemes (the lsp.mdk gap), so `--fn println` would miss the
-  -- table entirely and the policy check would silently ACCEPT an <IO> function as
-  -- pure. Parked as a Flat-arm consumer alongside tools/lsp.mdk (#1116).
-  let schemes = checkProgramSchemesWithRuntime rtD coreD userD
+  -- Module arm, via the full-environment entry (S-full-env-scheme-entry, #1116).
+  -- `--fn <name>` is arbitrary CLI input looked up DIRECTLY in effTable
+  -- (lookupAssoc fnName), never routed through buildCallGraph's userD-restricted
+  -- traversal, so the schemes MUST include prelude names: `--fn println` missing
+  -- from the table would make the policy check silently ACCEPT an <IO> function as
+  -- pure. `checkOneScheme` alone returns only the terminal module's OWN schemes,
+  -- which is why this site was parked on the Flat wrapper until #1116 grew
+  -- `checkOneSchemeFull`. OWN FIRST: `lookupAssoc` is a first-match scan, so a
+  -- plugin that redefines a prelude name must win its own lookup.
+  let (preludeSchemes, ownSchemes) = checkOneSchemeFull rtD coreD ("__user__", userD)
+  let schemes = ownSchemes ++ preludeSchemes
   let effTable = fnEffectsTable schemes
   let fnEffects = match lookupAssoc fnName effTable
     None => []
