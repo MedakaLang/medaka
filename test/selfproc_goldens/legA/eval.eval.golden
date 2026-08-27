@@ -123,7 +123,9 @@ evalValueField : Value a -> Value a
 evalVariantUpdate : String -> Value a -> List (String, Value a) -> Value a
 extendEnv : EvalEnv (Value a) -> List (String, Value a) -> EvalEnv (Value a)
 externBindings : Unit -> List (String, Value a)
+externDeclNamesOfDecls : List Decl -> List String
 fallthroughToNone : Value a -> Option (Value a)
+ffiExternNamesRef : Ref (List String)
 fieldListEq : List (String, Value a) -> List (String, Value a) -> Bool
 fieldName : Field -> String
 fieldOr : List (String, Value a) -> String -> Value a
