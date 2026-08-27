@@ -11133,6 +11133,91 @@ emitRangeList e env lo hi incl =
 
 -- Counter starts at count-1 (back-to-front).
 
+-- ── observability: table-cardinality dump (issue #542) ───────────────────────
+-- Reports the SIZE of each emitter table the emitter itself built — never a
+-- source-text grep, which #542's worked examples show can undercount a real
+-- dispatch/impl table by 20x-59x. `globalsReg`'s count IS the value-global
+-- count (it is keyed one entry per top-level value binding) — slice 5 cites
+-- it by this name.
+--
+-- ⚠️ DEVIATION from the packet's literal ask: this reads `Emit`'s internal
+-- Refs and returns the counts as a PLAIN pure value (`List (String, Int)`),
+-- rather than printing to stderr from inside the emitter. `emitProgram` /
+-- `emitProgramMode` / `emitProgramRecord` are effect-polymorphic PURE
+-- functions (declared `<>`) reused by callers that are themselves pure
+-- (`llvm_emit_typed_main.mdk`'s `runEmit`, `snapshot.mdk`'s `llvmOf`) —
+-- printing here (a real `<IO>` — `getEnv`+`ePutStrLn`) would force `<IO>`
+-- onto `emitProgram` itself and ripple through every one of those pure
+-- callers. `emitProgramWithStats` below keeps the whole emitter pure; the
+-- ONE real build driver (`entries/llvm_emit_modules_main.mdk`, already
+-- `<IO>`) is where MEDAKA_STATS is read and the dump is actually printed
+-- (support/timer.mdk's `emitStats`). Read-only Ref derefs are NOT an <IO>
+-- effect here (contained/local state, same as every other `!e.xxx` read in
+-- this file) — only `getEnv`/`ePutStrLn` are, which is why keeping this
+-- function print-free keeps it byte-identical-safe and ripple-free.
+optOmSize : Option (OrdMap a) -> Int
+optOmSize (Some m) = omSize m
+optOmSize None = 0
+
+tableStats : Emit -> List (String, Int)
+tableStats e = [
+  ("implEntries", listLen !e.implEntries),
+  ("globalsReg", listLen !e.globalsReg),
+  ("recFields", listLen !e.recFields),
+  ("ctorType", optOmSize !e.ctorTypeMap),
+  ("declSig", omSize e.input.declSigIndex),
+  ("knownFnMap", optOmSize !e.knownFnMap),
+  ("sigMap", optOmSize !e.sigMap),
+]
+
+prefixStats : String -> List (String, Int) -> List (String, Int)
+prefixStats _ [] = []
+prefixStats phase ((label, n)::rest) =
+  ("\{phase}.\{label}", n) :: prefixStats phase rest
+
+-- The Strict-mode emission body, factored out of `emitProgramMode` so
+-- `emitProgramWithStats` can bracket it with two pure `tableStats` snapshots
+-- (entry/exit) without duplicating the emit-step sequence. Byte-identical
+-- to the inline body `emitProgramMode` ran before this refactor.
+runStrictEmission : Emit -> EmitInput -> List CBind -> List CImplEntry -> String
+runStrictEmission e input groups implEntries =
+  let _ = resetEmittedDefaults e
+  let _ = emitPreamble e
+  let _ = emitGlobalDecls e (valBinds groups)
+  -- issue #118: the PRELUDE half is a LIBRARY — it has no entry point, and the
+  -- program half's `@mdk_program_main` is the one that defines and initialises
+  -- every `@mdk_g_*` (the prelude's included).
+  let _ = if input.emitHalf == emitHalfPrelude then () else emitProgramMain e groups
+  -- #561 PR-A: LAZY value globals' @mdk_force_<x> defines live with the init logic
+  -- (@mdk_program_main), i.e. the program/whole half; the prelude half only declares
+  -- them (emitGlobalDecls).  In whole mode with no lazy global this emits nothing.
+  let _ = if input.emitHalf == emitHalfPrelude then () else emitLazyForces e (valBinds groups)
+  let _ = emitFns e (fnBinds groups)
+  let _ = emitImpls e implEntries
+  let _ = preludeIdSpaceGuard e
+  joinNl (reverseL !e.buf ++ reverseL !e.lams)
+
+-- Same emission as `emitProgram`, plus a pure entry/exit table-cardinality
+-- snapshot (see the block comment above `tableStats`). Never used by the
+-- default `medaka build` path — only by the MEDAKA_STATS-aware call site in
+-- `entries/llvm_emit_modules_main.mdk`, so an unset env var costs this
+-- function nothing (it is simply not called).
+export
+emitProgramWithStats : EmitInput -> CProgram -> (String, List (String, Int))
+emitProgramWithStats input (CProgram groups ctorArs ctorTypes implEntries) =
+  let cfg = EmitStateConfig {
+    counter0 = if input.emitHalf == emitHalfProgram then programHalfIdBase else 0,
+    globalsReg0 = if input.emitHalf == emitHalfPrelude then initGlobalsRegReady (valBinds groups) else initGlobalsReg (valBinds groups),
+    gapMode = Strict,
+    lazyGlobalNames = lazyGlobalNames groups,
+    runDispatchAnalysis = True,
+  }
+  let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries
+  let entryStats = prefixStats "entry" (tableStats e)
+  let text = runStrictEmission e input groups implEntries
+  let exitStats = prefixStats "exit" (tableStats e)
+  (text, entryStats ++ exitStats)
+
 -- ── program ─────────────────────────────────────────────────────────────────
 -- Emit a whole CProgram as a textual LLVM module: the runtime declares, then one
 -- LLVM function per top-level `name p… = …` binding, then a single
@@ -11315,21 +11400,8 @@ emitProgramMode gapMode input (CProgram groups ctorArs ctorTypes implEntries) =
     runDispatchAnalysis = True,
   }
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries
-  let _ = resetEmittedDefaults e
-  let _ = emitPreamble e
-  let _ = emitGlobalDecls e (valBinds groups)
-  -- issue #118: the PRELUDE half is a LIBRARY — it has no entry point, and the
-  -- program half's `@mdk_program_main` is the one that defines and initialises
-  -- every `@mdk_g_*` (the prelude's included).
-  let _ = if input.emitHalf == emitHalfPrelude then () else emitProgramMain e groups
-  -- #561 PR-A: LAZY value globals' @mdk_force_<x> defines live with the init logic
-  -- (@mdk_program_main), i.e. the program/whole half; the prelude half only declares
-  -- them (emitGlobalDecls).  In whole mode with no lazy global this emits nothing.
-  let _ = if input.emitHalf == emitHalfPrelude then () else emitLazyForces e (valBinds groups)
-  let _ = emitFns e (fnBinds groups)
-  let _ = emitImpls e implEntries
-  let _ = preludeIdSpaceGuard e
-  (joinNl (reverseL !e.buf ++ reverseL !e.lams), reverseL !e.gapLog)
+  let text = runStrictEmission e input groups implEntries
+  (text, reverseL !e.gapLog)
 
 -- `@mdk_program_main`: the init prologue (every top-level value binding's rhs, in
 -- source order) followed by `main`'s own body and the type-directed print.

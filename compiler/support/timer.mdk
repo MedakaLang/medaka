@@ -21,6 +21,38 @@ perfEnabled () = match getEnv "MEDAKA_PERF"
   Some _ => True
   None => False
 
+-- True when MEDAKA_STATS is set to any value in the environment.
+--
+-- Gates the emitter's table-cardinality dump (llvm_emit.mdk's `emitProgram`
+-- entry/exit) — issue #542: a source grep for a dispatch/impl table can
+-- undercount the real table by 20x-59x, so this reports the number the
+-- emitter itself built rather than one reconstructed from source text.
+-- SEPARATE from MEDAKA_PERF (timing) and MEDAKA_PERF_WASM (wasm work-gating)
+-- — same "set to any value" rule as `perfEnabled`, not `perfWasmEnabled`'s
+-- empty-string exception, because this only gates PRINTING, never work.
+export
+statsEnabled : Unit -> <IO> Bool
+statsEnabled () = match getEnv "MEDAKA_STATS"
+  Some _ => True
+  None => False
+
+-- Emit one named table cardinality to stderr. No-op when on = False.
+-- Format: [stats] <label>\t<count>
+export
+emitStat : Bool -> String -> Int -> <IO> Unit
+emitStat False _ _ = ()
+emitStat True label count = ePutStrLn "[stats] \{label}\t\{intToString count}"
+
+-- Emit a whole list of (label, count) pairs — the call shape
+-- `llvm_emit.mdk`'s `emitProgramWithStats` returns. No-op (per element) when
+-- on = False.
+export
+emitStats : Bool -> List (String, Int) -> <IO> Unit
+emitStats _ [] = ()
+emitStats on ((label, count)::rest) =
+  let _ = emitStat on label count
+  emitStats on rest
+
 -- True when MEDAKA_PERF_WASM is set to any value in the environment.
 --
 -- SEPARATE from perfEnabled, and it gates WORK rather than OUTPUT — that is the
