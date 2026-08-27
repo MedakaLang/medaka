@@ -1,5 +1,5 @@
 # META
-source_lines=11460
+source_lines=11481
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -215,6 +215,8 @@ import support.util.{
   fallthroughName,
   noneHeadTag,
   dedup,
+  dedupBy,
+  lenKey,
   isNonEmptyL,
 }
 import backend.llvm_preamble.{preambleLines}
@@ -1284,8 +1286,27 @@ methodEntries e method = match !e.implsByMethod
 
 -- the impls of a method, in program order — only the CImplTagged ones (an
 -- untagged CImplDefault is the arg-tag fallback, never a static-dispatch target).
+-- #126: a method's entries can carry literal duplicates (same tag, same key,
+-- same iface — e.g. one impl reachable via >1 re-export path), which
+-- `filterTagged` alone does not collapse; every duplicate widens the linear
+-- `icmp` dispatch chain `emitDispatchChain` builds from this list. Dedup
+-- mirrors `ifaceTags`'s `dedupS` (reverse, keeps-FIRST dedup, reverse — so
+-- the SURVIVING occurrence is the LAST one in program order, same contract).
 implsOf : Emit -> String -> List CImplEntry
-implsOf e method = filterTagged method (methodEntries e method)
+implsOf e method =
+  dedupImplEntries (filterTagged method (methodEntries e method))
+
+dedupImplEntries : List CImplEntry -> List CImplEntry
+dedupImplEntries xs = reverseL (dedupBy implEntryDedupKey (reverseL xs))
+
+-- injective per #242 (`lenKey`): (tag, key, iface) is exactly the routing
+-- identity a dispatch arm carries, so two entries collide here only when
+-- they are genuinely the same impl.
+implEntryDedupKey : CImplEntry -> String
+implEntryDedupKey (CImplEntry _ _ (CImplTagged tag key iface _ _ _)) = lenKey tag
+  ++ lenKey key
+  ++ iface
+implEntryDedupKey _ = ""
 
 filterTagged : String -> List CImplEntry -> List CImplEntry
 filterTagged _ [] = []
@@ -11466,7 +11487,7 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "ifaceIdMatches" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CProgram" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "compileTree" false) (mem "canonPat" false) (mem "ifaceImplRouteKeys" false) (mem "ifaceDeclHeadUnique" false) (mem "ifaceIdsAtTag" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false))))
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "dedup" false) (mem "isNonEmptyL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "isNonEmptyL" false))))
 (DUse false (UseGroup ("backend" "llvm_preamble") ((mem "preambleLines" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omSize" false) (mem "omEmpty" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "flattenApp" false) (mem "lengthS" false) (mem "freeVars" false) (mem "routeDictNames" false) (mem "bindName" false) (mem "bindNames" false) (mem "patVars" false) (mem "patVarsList" false) (mem "patVarNames" false) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "splitLastF" false) (mem "selfFree" false) (mem "mentionsSelfMethod" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispFindBind" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dictUniformPairs" false) (mem "dropFirstN" false) (mem "clauseArityOf" false))))
@@ -11649,7 +11670,12 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DTypeSig false "methodEntries" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "CImplEntry")))))
 (DFunDef false "methodEntries" ((PVar "e") (PVar "method")) (EMatch (EUnOp "!" (EFieldAccess (EVar "e") "implsByMethod")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "orEmptyEntries") (EApp (EApp (EVar "omLookup") (EVar "method")) (EVar "m")))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "llvm: implsByMethod read before install (internal error)"))))))
 (DTypeSig false "implsOf" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "CImplEntry")))))
-(DFunDef false "implsOf" ((PVar "e") (PVar "method")) (EApp (EApp (EVar "filterTagged") (EVar "method")) (EApp (EApp (EVar "methodEntries") (EVar "e")) (EVar "method"))))
+(DFunDef false "implsOf" ((PVar "e") (PVar "method")) (EApp (EVar "dedupImplEntries") (EApp (EApp (EVar "filterTagged") (EVar "method")) (EApp (EApp (EVar "methodEntries") (EVar "e")) (EVar "method")))))
+(DTypeSig false "dedupImplEntries" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyCon "CImplEntry"))))
+(DFunDef false "dedupImplEntries" ((PVar "xs")) (EApp (EVar "reverseL") (EApp (EApp (EVar "dedupBy") (EVar "implEntryDedupKey")) (EApp (EVar "reverseL") (EVar "xs")))))
+(DTypeSig false "implEntryDedupKey" (TyFun (TyCon "CImplEntry") (TyCon "String")))
+(DFunDef false "implEntryDedupKey" ((PCon "CImplEntry" PWild PWild (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") PWild PWild PWild))) (EBinOp "++" (EBinOp "++" (EApp (EVar "lenKey") (EVar "tag")) (EApp (EVar "lenKey") (EVar "key"))) (EVar "iface")))
+(DFunDef false "implEntryDedupKey" (PWild) (ELit (LString "")))
 (DTypeSig false "filterTagged" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyCon "CImplEntry")))))
 (DFunDef false "filterTagged" (PWild (PList)) (EListLit))
 (DFunDef false "filterTagged" ((PVar "method") (PCons (PCon "CImplEntry" (PVar "n") (PVar "s") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "ps") (PVar "pats") (PVar "body"))) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "method")) (EBinOp "::" (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "ps")) (EVar "pats")) (EVar "body"))) (EApp (EApp (EVar "filterTagged") (EVar "method")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "filterTagged") (EVar "method")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -13660,7 +13686,7 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "ifaceIdMatches" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CProgram" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "compileTree" false) (mem "canonPat" false) (mem "ifaceImplRouteKeys" false) (mem "ifaceDeclHeadUnique" false) (mem "ifaceIdsAtTag" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false))))
-(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "dedup" false) (mem "isNonEmptyL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "isNonEmptyL" false))))
 (DUse false (UseGroup ("backend" "llvm_preamble") ((mem "preambleLines" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omSize" false) (mem "omEmpty" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "flattenApp" false) (mem "lengthS" false) (mem "freeVars" false) (mem "routeDictNames" false) (mem "bindName" false) (mem "bindNames" false) (mem "patVars" false) (mem "patVarsList" false) (mem "patVarNames" false) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "splitLastF" false) (mem "selfFree" false) (mem "mentionsSelfMethod" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "dispFindBind" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dictUniformPairs" false) (mem "dropFirstN" false) (mem "clauseArityOf" false))))
@@ -13843,7 +13869,12 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DTypeSig false "methodEntries" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "CImplEntry")))))
 (DFunDef false "methodEntries" ((PVar "e") (PVar "method")) (EMatch (EUnOp "!" (EFieldAccess (EVar "e") "implsByMethod")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "orEmptyEntries") (EApp (EApp (EVar "omLookup") (EVar "method")) (EVar "m")))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "llvm: implsByMethod read before install (internal error)"))))))
 (DTypeSig false "implsOf" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "CImplEntry")))))
-(DFunDef false "implsOf" ((PVar "e") (PVar "method")) (EApp (EApp (EVar "filterTagged") (EVar "method")) (EApp (EApp (EVar "methodEntries") (EVar "e")) (EVar "method"))))
+(DFunDef false "implsOf" ((PVar "e") (PVar "method")) (EApp (EVar "dedupImplEntries") (EApp (EApp (EVar "filterTagged") (EVar "method")) (EApp (EApp (EVar "methodEntries") (EVar "e")) (EVar "method")))))
+(DTypeSig false "dedupImplEntries" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyCon "CImplEntry"))))
+(DFunDef false "dedupImplEntries" ((PVar "xs")) (EApp (EVar "reverseL") (EApp (EApp (EVar "dedupBy") (EVar "implEntryDedupKey")) (EApp (EVar "reverseL") (EVar "xs")))))
+(DTypeSig false "implEntryDedupKey" (TyFun (TyCon "CImplEntry") (TyCon "String")))
+(DFunDef false "implEntryDedupKey" ((PCon "CImplEntry" PWild PWild (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") PWild PWild PWild))) (EBinOp "++" (EBinOp "++" (EApp (EVar "lenKey") (EVar "tag")) (EApp (EVar "lenKey") (EVar "key"))) (EVar "iface")))
+(DFunDef false "implEntryDedupKey" (PWild) (ELit (LString "")))
 (DTypeSig false "filterTagged" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyCon "CImplEntry")))))
 (DFunDef false "filterTagged" (PWild (PList)) (EListLit))
 (DFunDef false "filterTagged" ((PVar "method") (PCons (PCon "CImplEntry" (PVar "n") (PVar "s") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "ps") (PVar "pats") (PVar "body"))) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "method")) (EBinOp "::" (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "ps")) (EVar "pats")) (EVar "body"))) (EApp (EApp (EVar "filterTagged") (EVar "method")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "filterTagged") (EVar "method")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

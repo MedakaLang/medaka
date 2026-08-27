@@ -522,7 +522,22 @@ jobs:
             # any more; kept here rather than renamed because a lone gate this heavy
             # needs its own row headroom and this row already had none of its own.
             # `wasm_arm` dropped — this gate doesn't read the Wasm oracle.
-            pattern: "'pds/test/inlang_test_oracle'"
+            #
+            # #2045 (S-ir-metric): `diff_compiler_ir_scaling` — the Cachegrind
+            # instruction-count superlinearity gate for `medaka check` — lands
+            # HERE, not next to its thematic sibling `diff_compiler_perf_scaling`
+            # in `types`. Placed by measured cost, as this matrix requires:
+            # `sh scripts/ci_shard_cost.sh` over 5 green merge_group runs at the
+            # base of that slice read
+            #   backend 527s (pole) | frontend 512s | tools 468s | eval 468s
+            #   | engines 446s | types 426s | sqlite 381s (cheapest)
+            # and the gate costs ~90 s locally (8 sequential cachegrind runs at
+            # ~20x native; single-threaded by design, no fan-out knob). Putting it
+            # in `types` would make that shard ~516s and put it within noise of the
+            # pole; here it lands ~470s, still comfortably under `backend`. It
+            # reads NO oracle (`build_oracles.sh --for` reports "needs no
+            # oracles"), so the shard's oracle build is unaffected.
+            pattern: "'pds/test/inlang_test_oracle' 'diff_compiler_ir_scaling'"
           - name: frontend
             # `native_fixtures/run` (T8) sits one directory below `test/`, so even
             # the coverage gate's `test/*.sh` glob could not see it — it ran
@@ -751,11 +766,18 @@ jobs:
       # of the `wasm:` job's own call to this action, same toolchain pin. The
       # BINARY is downloaded from `build` (#1928); the toolchain install stays,
       # since clang still compiles this shard's oracles.
+      #
+      # valgrind is the same story one gate over: it is the MEASUREMENT TOOL for
+      # `diff_compiler_ir_scaling` (#2045), and that gate SKIPS rather than fails
+      # without it — so an uninstalled valgrind would read as a quiet
+      # non-measurement, not as a red. Installed on every shard for the same
+      # cost-not-theme reason as sqlite3 above.
       - name: Setup medaka (toolchain + wasm arm + downloaded binary)
         if: steps.plan.outputs.has_work == 'true'
         uses: ./.github/actions/setup-medaka
         with:
           sqlite: 'true'
+          valgrind: 'true'
           wasm: ${{ matrix.wasm_arm != '' }}
           binary: artifact
 
