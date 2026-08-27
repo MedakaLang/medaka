@@ -1,0 +1,18 @@
+-- S0-2 (review round of `ffi-lower-and-link`): a NULLARY user extern is
+-- rejected.  A signature with no arrow has nowhere to write the required `FFI`
+-- label -- an effect row lives on an arrow's RESULT -- so `ffiRowHasFFITy`
+-- answers `None` here, which the label rule USED to treat as "not applicable,
+-- pass".  While it did, the #2074 emitter still lowered the name as a foreign
+-- call (`emitVar`'s `isFfiExtern` arm -> `emitFfiEtaClosure`), so this program
+-- printed an eta CLOSURE POINTER where an `Int` was expected, at exit 0.  Before
+-- that lowering it died loudly with `unbound variable`, so the pass here is what
+-- made a loud failure silent ([W-QUIETER]).
+--
+-- 🚨 Read together with `ffi_stamp_narrow_accept.mdk`: the difference is only
+-- whether an ARROW exists, so a fix that rejected every extern would show green
+-- here and red there.  #2106 -- how a nullary extern WOULD spell a label -- is a
+-- separate, still-open design question; this cell pins only the refusal.
+extern gNullary : Int
+
+main : <IO> Unit
+main = println (gNullary + 1)

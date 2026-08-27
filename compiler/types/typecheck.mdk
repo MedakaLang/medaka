@@ -6043,7 +6043,7 @@ data DriverState =
       coherenceUserDecls : Ref (List Decl),
       stdlibOwnedModsRef : Ref (List String),
       flatEntryIsStdlibRef : Ref Bool,
-      builtinExternNamesRef : Ref (OrdMap Unit),
+      builtinExternNamesRef : Ref (OrdMap String),
       superDeclsRef : Ref (List Decl),
       standaloneValuesRef : Ref (List String),
       methodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),
@@ -24799,14 +24799,22 @@ checkBodyImpl seed mode prog0 =
   -- DECLARATION site (the program under check).  It builds the declared type
   -- verbatim; the two guards below are what hold a user extern to its row.
   let globalS = ifaceMethodSchemes prog ++ userExternSchemes mode (externTyOriginScope []) prog
-  -- #2074 / F1 (epic #2070): the two USER-EXTERN DECLARATION guards, both gated on
+  -- #2074 / F1 (epic #2070): the USER-EXTERN DECLARATION guards, all gated on
   -- the same `ffiStampMode` ownership Bool — a stdlib-owned program's externs ARE
-  -- the vocabulary and neither rule owns them.  They run AFTER
+  -- the vocabulary and none of these rules owns them.  They run AFTER
   -- `rejectCyclicAliases` above so `expandAliasHeadTy` cannot recurse forever on a
-  -- cyclic alias.  Order between the two is not significant: diagnostics
-  -- accumulate ([T-ERRORS-ACCUM]) and a signature can honestly fail both.
+  -- cyclic alias.  Order between them is not significant: diagnostics
+  -- accumulate ([T-ERRORS-ACCUM]) and a signature can honestly fail more than one.
+  --
+  -- Four sibling loops, one rule each, rather than four arms inside one walk: each
+  -- rule has its own exemption discipline (the first two exempt a catalog-name
+  -- redeclaration, the third IS that exemption's admission test, the fourth exempts
+  -- nothing at all), and folding them together would force one `if` to speak for
+  -- four different notions of "this declaration is not mine".
   let _ = ffiCheckExternsCrossable (ffiStampMode mode) prog
   let _ = ffiCheckExternsLabelled (ffiStampMode mode) prog
+  let _ = ffiCheckExternsShadow (ffiStampMode mode) prog
+  let _ = ffiCheckExternsReserved (ffiStampMode mode) prog
   -- methodNames: FLAT's SECOND ifaceMethodSchemes call over prog — dedup-skipped by
   -- registerMethodConstraints so globalS's registered (first-call) ids stay authoritative.
   -- Module checks core in isolation and never needs it, so NO extra call there.
@@ -28211,17 +28219,24 @@ externSchemes scope decls =
 -- Union, never replace: a driver may build the catalog seed more than once per
 -- process (`medaka test` runs several engines), and a later call carrying a
 -- shorter list must not shrink the set a guard is reading.
+--
+-- Each row records the catalog signature's TYPE-HEAD SHAPE KEY as its value, so
+-- that `ffiCheckExternsShadow` can ask not only "is this a catalog name" but "does
+-- this local declaration claim the catalog row's shape".  Union means a re-seed
+-- REWRITES an existing row rather than skipping it — the two seeds are the same
+-- `runtimeDecls` list, so the value is the same string either way, and preferring
+-- the later write keeps the map's contents a function of the last seed rather than
+-- of call order.
 noteBuiltinExternNames : List Decl -> Unit
 noteBuiltinExternNames ds =
   driverState.value.builtinExternNamesRef :=
-    namesToSet
-      (externDeclNames ds)
-      driverState.value.builtinExternNamesRef.value
+    externSigsToMap ds driverState.value.builtinExternNamesRef.value
 
-externDeclNames : List Decl -> List String
-externDeclNames [] = []
-externDeclNames ((DExtern _ n _)::rest) = n :: externDeclNames rest
-externDeclNames (_::rest) = externDeclNames rest
+externSigsToMap : List Decl -> OrdMap String -> OrdMap String
+externSigsToMap [] m = m
+externSigsToMap ((DExtern _ n ty)::rest) m =
+  externSigsToMap rest (omInsert n (ffiSigShapeKey ty) m)
+externSigsToMap (_::rest) m = externSigsToMap rest m
 
 -- #2072 (epic #2070, R2): the DECLARATION-site sibling of `externSchemes`.
 --
@@ -28307,16 +28322,22 @@ expandAliasHeadTy (t@(TyApp _ _)) = match tyAppSpine t
 expandAliasHeadTy t = t
 
 -- Does a user extern's DECLARED signature already name `FFI` in its terminal
--- result row?  `None` = the rule does not apply to this signature at all.
+-- result row?  `None` = there is no arrow in the signature, so the question cannot
+-- be ASKED of it — which its caller now treats as a rejection, not a pass.
 --
 -- This is the former `ffiStampTy`'s walk, reading instead of writing: same three
 -- clauses, same alias expansion, same reason for each.  It answers `None` in
 -- exactly the shape the stamp used to leave alone — a NULLARY `extern k : Int`,
 -- where the effect system has nowhere to put a row (`extern q : <FFI> Int`
--- renders as a bare `Int`; a value does not perform).  That is the REAL residual
--- hole recorded as #2106: a nullary extern is still an unlabelled foreign value,
--- a property of where rows live in the type language, and requiring a label there
--- would be a demand no spelling can satisfy.
+-- renders as a bare `Int`; a value does not perform).
+--
+-- ⚠️ `None` IS STILL "THE LABEL RULE CANNOT REACH THIS", AND THAT IS STILL #2106's
+-- QUESTION.  What changed is what the caller does with the answer: it used to fall
+-- through to a pass, which let the emitter lower an unlabellable declaration as a
+-- foreign call anyway (S0-2).  `ffiCheckExternLabel` below now reports it instead.
+-- The distinction this function draws is unchanged; do not fold `None` into `Some
+-- False`, because the two need different messages — one is a missing label, the
+-- other is a signature with nowhere to put one.
 ffiRowHasFFITy : Ty -> Option Bool
 ffiRowHasFFITy (TyConstrained _ t) = ffiRowHasFFITy t
 ffiRowHasFFITy (TyFun _ r) = Some (ffiResultRowHasFFI r)
@@ -28432,10 +28453,168 @@ ffiCheckExternsGo (_::rest) = ffiCheckExternsGo rest
 --
 -- ⚠️ It is keyed on the name set the SEED was built from, recorded once by
 -- `externSchemes` — not on a hand-copied list here, which would rot the moment
--- `stdlib/runtime.mdk` gains a row.
+-- `stdlib/runtime.mdk` gains a row.  `builtinExternNamesRef` maps each catalog
+-- name to that row's TYPE-HEAD SHAPE KEY (`ffiSigShapeKey`) rather than to `Unit`:
+-- THIS predicate reads only the key set, but `ffiCheckExternsShadow` below needs
+-- the catalog's own signature to compare a redeclaration against, and a second
+-- table keyed the same way could fall out of step with this one.  (The field
+-- carries no comment of its own — `DriverState`'s header forbids one, #829 /
+-- [T-PERRUN-COMMENTS] — so its prose lives here, on its reader.)
+--
+-- 🚨 AND THE MEASUREMENT ABOVE ONLY EVER COVERED A *COMPATIBLE* REDECLARATION.
+-- Both measured rows (`bitAnd`, `getEnv`) claim the catalog row's own type-head
+-- shape, so "the real builtin ran" is the right answer for them.  A redeclaration
+-- that claims a DIFFERENT shape gets the same name-only exemption and the same
+-- builtin codegen, which is then the WRONG answer, silently: `extern log : String
+-- -> <FFI "mylog"> Unit` compiles to `call double @mdk_log(double <String cell
+-- pointer>)` at exit 0, and the user's own C `log` is never called or even
+-- declared.  So a bare name match is not enough to say "this declaration is not a
+-- foreign-call contract" — the SHAPE has to agree too, which is
+-- `ffiCheckExternsShadow` below.  Callers of this predicate are still exempting on
+-- the name alone, and that is correct BECAUSE the shadow rule has already made a
+-- shape-incompatible name match a hard error: the exemption never has to reason
+-- about a declaration that survived.
 ffiIsBuiltinExternName : String -> Bool
 ffiIsBuiltinExternName n =
   omHasKey n driverState.value.builtinExternNamesRef.value
+
+-- ── the CATALOG-SHADOW rule (S0-3, review round of `ffi-lower-and-link`) ─────
+--
+-- 🚨 THE ADMISSION TEST FOR THE EXEMPTION ABOVE, AND IT HAS TO BE A REJECTION.
+--
+-- The obvious lighter fix — "on a shape mismatch, stop exempting and route the
+-- declaration through the crossable and label guards instead" — DOES NOT CLOSE THE
+-- HOLE, and that was measured, not assumed.  `extern log : String -> <FFI "mylog">
+-- Unit` PASSES both of those guards on its own terms (`String` and `Unit` are both
+-- in the §1 crossable set; the row names `FFI`), so routing it through them changes
+-- nothing at all and the program still emits `call double @mdk_log`.  The reason is
+-- that the emitter's half of the exemption is a SEPARATE, NAME-ONLY mechanism that
+-- no typecheck verdict reaches: `ffiExternRows` (`compiler/ir/core_ir_lower.mdk`)
+-- subtracts the runtime catalog's names from the FFI index outright, and
+-- `emitApp`'s ladder tests `isAnyExtern` BEFORE the FFI arm.  A catalog name is
+-- lowered as the builtin no matter what typecheck concluded about it.
+--
+-- So a shape-incompatible redeclaration of a catalog name is a declaration the
+-- compiler can never honour in either reading: it will not become a foreign call
+-- (the emitter routes it to the builtin), and it does not describe the builtin (the
+-- shapes differ).  There is no verdict other than "reject" that leaves the source
+-- and the emitted program describing the same thing.
+--
+-- ⚠️ Deliberately NOT the `mdk_*` ban's mechanism (`ffiCheckExternsReserved`).
+-- That one is unconditional, because no user extern may claim a runtime-internal
+-- name at any signature.  This one admits the compatible redeclaration idiom the
+-- effect-domain fixtures use on purpose, and rejects only the contradiction.
+--
+-- Granularity is the type-head shape — argument heads plus the return head, with
+-- effect rows and constraint prefixes walked THROUGH — the same granularity
+-- `ffiExternRows` records for the emitter and the same one `FFI-ABI.md` documents
+-- as this mechanism's resolution.  `Array Int` and `Array String` are one shape
+-- here; §1's crossable guard is what separates them.
+ffiCheckExternsShadow : Bool -> List Decl -> Unit
+ffiCheckExternsShadow False _ = ()
+ffiCheckExternsShadow True ds = ffiCheckShadowGo (externDecls ds)
+
+ffiCheckShadowGo : List Decl -> Unit
+ffiCheckShadowGo [] = ()
+ffiCheckShadowGo ((DExtern _ n ty)::rest) =
+  let _ = match omLookup n driverState.value.builtinExternNamesRef.value
+    Some k if k /= ffiSigShapeKey ty => pushTypeErrorAt "T-FFI-BUILTIN-SHADOW" (firstTyLoc ty) (ffiShadowMsg n k (ffiSigShapeKey ty))
+    _ => ()
+  ffiCheckShadowGo rest
+ffiCheckShadowGo (_::rest) = ffiCheckShadowGo rest
+
+ffiShadowMsg : String -> String -> String -> String
+ffiShadowMsg n want got = "Foreign declaration '\{n}' redeclares a built-in runtime name with an incompatible signature: the built-in is '\{want}', this declaration claims '\{got}' (type heads only; effect rows are not compared). A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, whatever the local signature says — so this declaration would silently call '\{n}' with the wrong argument and result representations rather than a foreign symbol of your own. Rename the extern to a name the runtime does not already define, or declare it with the built-in's own signature"
+
+-- ── the RESERVED-NAMESPACE rule (S0-4, review round of `ffi-lower-and-link`) ─
+--
+-- 🚨 UNCONDITIONAL, AND THAT IS THE POINT.  A user extern's declared name is used
+-- VERBATIM as the C symbol (`FFI-ABI.md`; `emitFfiDeclares` emits `declare … @<the
+-- declared name>`), and `mdk_*` is the compiler runtime's own C symbol namespace
+-- (`runtime/medaka_rt.c`).  Nothing in the pipeline noticed the overlap, so
+-- `extern mdk_nil : Unit -> <FFI> Int` linked straight onto the runtime's internal
+-- `mdk_nil` and printed its Nil constructor word at exit 0.
+--
+-- No signature test here, unlike `ffiCheckExternsShadow` above.  A MISMATCHED
+-- signature is merely the loud half of this bug (clang rejects the conflicting
+-- `declare`); the silent half is the MATCHING one, and for an allocator- or
+-- cell-shaped internal a matching signature means the foreign call is handed the
+-- runtime's own heap machinery with Medaka's tagging applied around it.  There is
+-- no signature at which claiming a runtime-internal symbol is a thing the author
+-- meant, so there is nothing to test.
+--
+-- No builtin-name exemption either: `stdlib/runtime.mdk`'s catalog contains no
+-- `mdk_`-prefixed row (derived: `grep -c '^extern mdk_' stdlib/runtime.mdk` is 0 —
+-- the catalog's names are the Medaka-level spellings, and `mdk_*` is what the
+-- runtime calls itself underneath), so the two rules cannot collide.
+ffiCheckExternsReserved : Bool -> List Decl -> Unit
+ffiCheckExternsReserved False _ = ()
+ffiCheckExternsReserved True ds = ffiCheckReservedGo (externDecls ds)
+
+ffiCheckReservedGo : List Decl -> Unit
+ffiCheckReservedGo [] = ()
+ffiCheckReservedGo ((DExtern _ n ty)::rest) =
+  let _ = if startsWith "mdk_" n then
+    pushTypeErrorAt "T-FFI-RESERVED-NAME" (firstTyLoc ty) (ffiReservedMsg n)
+  else
+    ()
+  ffiCheckReservedGo rest
+ffiCheckReservedGo (_::rest) = ffiCheckReservedGo rest
+
+ffiReservedMsg : String -> String
+ffiReservedMsg n = "Foreign declaration '\{n}' claims a reserved name: the 'mdk_' prefix is the Medaka runtime's own C symbol namespace (runtime/medaka_rt.c), and a foreign declaration's name is used verbatim as the C symbol it links to. Declaring '\{n}' would bind your calls to a compiler-internal function rather than to a symbol of your own. Rename the extern; if the C symbol you actually need is named '\{n}', it cannot be reached from Medaka in v1"
+
+-- ── SIGNATURE SHAPE, at TYPE-HEAD granularity ───────────────────────────────
+--
+-- The `(argument heads, return head)` projection of a signature, rendered as one
+-- comparable string.  It is the SAME granularity `ffiExternRows`
+-- (`compiler/ir/core_ir_lower.mdk`) records for the emitter's FFI index, on
+-- purpose: a rule about what the emitter will do with a declaration must not read
+-- the signature at a finer grain than the emitter itself does, or it would reject
+-- declarations the emitter treats as identical.
+--
+-- ⚠️ A TYPE VARIABLE IS NORMALISED TO `_`, not spelled.  `a -> Array a -> Unit` and
+-- `x -> Array x -> Unit` are the same declaration; comparing the letters would
+-- reject a catalog redeclaration for renaming its own type parameter, which is not
+-- a contradiction about anything.  The cost is that `a -> a` and `a -> b` are one
+-- shape here — at TYPE-HEAD granularity they already are (`Array Int` and `Array
+-- String` are one shape too), so this loses nothing the projection had.
+--
+-- `expandAliasHeadTy` at each step for the reason `ffiCheckExternSig` needs it: an
+-- alias-named arrow is invisible to a purely syntactic walk.  Cycles cannot recur
+-- here — `rejectCyclicAliases` has emptied the table of them before the check seam,
+-- and the ONLY other caller (`noteBuiltinExternNames`, which may run at seed time
+-- before that) walks `stdlib/runtime.mdk`'s catalog, whose rows name primitive
+-- heads literally and so never take an alias-table hit at all.
+ffiSigShapeKey : Ty -> String
+ffiSigShapeKey ty = "\{joinWith "," (ffiSigArgHeads ty)} -> \{ffiSigRetHead ty}"
+
+ffiSigArgHeads : Ty -> List String
+ffiSigArgHeads ty = match expandAliasHeadTy ty
+  TyConstrained _ inner => ffiSigArgHeads inner
+  TyEffect _ _ inner => ffiSigArgHeads inner
+  TyFun a r => ffiTyHeadName a :: ffiSigArgHeads r
+  _ => []
+
+ffiSigRetHead : Ty -> String
+ffiSigRetHead ty = match expandAliasHeadTy ty
+  TyConstrained _ inner => ffiSigRetHead inner
+  TyEffect _ _ inner => ffiSigRetHead inner
+  TyFun _ r => ffiSigRetHead r
+  t => ffiTyHeadName t
+
+ffiTyHeadName : Ty -> String
+ffiTyHeadName ty = match expandAliasHeadTy ty
+  TyCon { tyConName = n } => n
+  TyApp a _ => ffiTyHeadName a
+  TyVar _ => "_"
+  TyConstrained _ t => ffiTyHeadName t
+  TyEffect _ _ t => ffiTyHeadName t
+  -- A parenthesised arrow in a VALUE position (a function-typed parameter).  It
+  -- gets its own token rather than falling into the catch-all so that two
+  -- unrelated exotic shapes do not compare equal and re-open the exemption.
+  TyFun _ _ => "->"
+  _ => "?"
 
 -- Walk the arrow spine.  Every PARAM position and the final RESULT position is
 -- a value that actually crosses; the row wrappers and the constraint prefix are
@@ -28510,10 +28689,32 @@ ffiCheckLabelsGo (_::rest) = ffiCheckLabelsGo rest
 -- anchor is the signature's own first located head — the same fallback
 -- `ffiCheckExternSig` computes, and for the same ERROR-QUALITY §2.1 reason: a
 -- caret on line 1 of a file whose defect is on line 7 is not a location.
+--
+-- 🚨 THE `None` CASE IS A REJECTION, NOT A PASS (S0-2, review round of
+-- `ffi-lower-and-link`).  `None` means the signature has no arrow anywhere, i.e. a
+-- NULLARY `extern k : Int`.  While this arm read `_ => ()` the declaration sailed
+-- through both guards and the EMITTER still lowered the name as a foreign call
+-- (`emitVar`'s `isFfiExtern` arm mints `emitFfiEtaClosure`), so an `Int`-typed name
+-- evaluated to an eta CLOSURE POINTER: `println (gNullary + 1)` printed
+-- 70094058403825 at exit 0.  Before the #2074 lowering the same program died at
+-- build with `unbound variable 'gNullary'` — the pass here is what turned a loud
+-- failure into a silent wrong value ([W-QUIETER]), so it is the pass that has to go.
+--
+-- ⚠️ This does NOT answer #2106, and is not meant to.  #2106 asks how a nullary
+-- extern would SPELL its `FFI` label given that a value performs no effect and the
+-- type language has nowhere to put a row on it; that is a design question and it
+-- stays open.  This rule only refuses to lower what it cannot label — every user
+-- `extern` is a foreign declaration by construction, so a nullary one is a foreign
+-- declaration whose honesty cannot be checked, and emitting it anyway is the one
+-- option that is definitely wrong.
 ffiCheckExternLabel : String -> Option Loc -> Ty -> Unit
 ffiCheckExternLabel n fb ty = match ffiRowHasFFITy ty
   Some False => pushTypeErrorAt "T-FFI-UNLABELLED" fb (ffiUnlabelledMsg n)
-  _ => ()
+  Some True => ()
+  None => pushTypeErrorAt "T-FFI-NULLARY" fb (ffiNullaryMsg n)
+
+ffiNullaryMsg : String -> String
+ffiNullaryMsg n = "Foreign declaration '\{n}' has no arrow in its signature, so it declares a foreign VALUE rather than a foreign call. Medaka cannot express that: an effect row lives on an arrow's result, so there is nowhere to write the required '<FFI>' label, and the emitter has no lowering for a foreign value — it would hand you a function pointer where a value is expected. Declare it as a call instead: 'extern \{n} : Unit -> <FFI> T', invoked as '\{n} ()'"
 
 ffiUnlabelledMsg : String -> String
 ffiUnlabelledMsg n = "Foreign declaration '\{n}' does not name the 'FFI' effect in its result row. Every user-declared 'extern' is a foreign call, so its declared row must say so: write '<FFI>' (or '<FFI \"libname\">' to name the library), joined with whatever else the row already names — 'String -> <Net \"a.com/*\"> String' becomes 'String -> <FFI, Net \"a.com/*\"> String'. The compiler does not add the label for you: a row it rewrote would no longer be the row you read"

@@ -208,6 +208,106 @@ else
   echo "FAIL ffi_absent_library     wrong diagnostic:"; cat "$W/build4.log"; fail=$((fail+1))
 fi
 
+# ── cell 5: ONE C SYMBOL, ONE SIGNATURE (review round S0-1) ─────────────────
+# The FFI index is BARE-NAME KEYED across the WHOLE PROGRAM (`ffiExternRows` ->
+# `EmitInputData.ffiExternIndex`, minted with `omFromPairs (reverseL …)` =
+# first-match-wins), and the declared name IS the C symbol -- so two modules that
+# each declare `cDouble` with DIFFERENT signatures name ONE C function and only
+# one of the two rows reaches codegen.  Before the refusal, `useY 4.0` against an
+# `Int -> Int` row printed 139888567046080 at exit 0, and the `Float -> Float`
+# variant of the same collision segfaulted (exit 139).  Both passed `medaka check`.
+#
+# 🚨 THE CONTROL IS LOAD-BEARING, NOT DECORATION.  Two modules declaring the same
+# name with the SAME signature is LEGITIMATE SHARING and must keep building -- a
+# guard that banned every duplicate name would satisfy the reject half alone.
+# The control asserts the VALUE (2*21=42, 2*5=10) rather than exit 0, because a
+# collision guard that broke marshalling would still exit 0.
+#
+# No C symbol is needed for the reject half: the refusal happens at Core IR
+# lowering, before any link.  The control half does need one, so it goes through
+# the same MEDAKA_RT_OBJ combined object cells 1 and 2 use.
+# ⚠️ exit code read by REDIRECT, never through a pipe -- AGENTS.md [D-BUILD-PIPE].
+D="$W/dupproj"
+mkdir -p "$D"
+printf '[package]\nname = "ffi_dup_extern"\n' > "$D/medaka.toml"
+cat > "$D/libx.mdk" <<'DUPX'
+export
+extern cDouble : Int -> <FFI> Int
+export
+useX : Int -> <FFI> Int
+useX x = cDouble x
+DUPX
+cat > "$D/liby.mdk" <<'DUPY'
+export
+extern cDouble : Float -> <FFI> Int
+export
+useY : Float -> <FFI> Int
+useY x = cDouble x
+DUPY
+cat > "$D/main.mdk" <<'DUPM'
+import libx.{useX}
+import liby.{useY}
+
+main : <IO, FFI> Unit
+main =
+  let _ = println (useX 21)
+  println (useY 4.0)
+DUPM
+MEDAKA_RT_OBJ="$W/combined.o" "$MEDAKA" build "$D/main.mdk" -o "$W/dup.bin" >"$W/build5.log" 2>&1
+rc5=$?
+checked=$((checked+1))
+if [ "$rc5" -eq 0 ]; then
+  echo "FAIL ffi_extern_collision   built despite two contradictory declarations of one C symbol"; fail=$((fail+1))
+elif grep -q "foreign declaration collision" "$W/build5.log" \
+  && grep -qxF "colliding symbol: cDouble" "$W/build5.log" \
+  && grep -qxF "declaration 1: Int -> Int" "$W/build5.log" \
+  && grep -qxF "declaration 2: Float -> Int" "$W/build5.log"; then
+  echo "ok   ffi_extern_collision    refused, naming the symbol and both signatures"
+else
+  echo "FAIL ffi_extern_collision   wrong diagnostic:"; cat "$W/build5.log"; fail=$((fail+1))
+fi
+
+# ── cell 6: the CONTROL for cell 5 — identical signatures still share ────────
+S="$W/shareproj"
+mkdir -p "$S"
+printf '[package]\nname = "ffi_share_extern"\n' > "$S/medaka.toml"
+cat > "$S/libp.mdk" <<'SHP'
+export
+extern ffiCharNext : Int -> <FFI> Int
+export
+useP : Int -> <FFI> Int
+useP x = ffiCharNext x
+SHP
+cat > "$S/libq.mdk" <<'SHQ'
+export
+extern ffiCharNext : Int -> <FFI> Int
+export
+useQ : Int -> <FFI> Int
+useQ x = ffiCharNext x
+SHQ
+cat > "$S/main.mdk" <<'SHM'
+import libp.{useP}
+import libq.{useQ}
+
+main : <IO, FFI> Unit
+main =
+  let _ = println (useP 21)
+  println (useQ 5)
+SHM
+if ! MEDAKA_RT_OBJ="$W/combined.o" "$MEDAKA" build "$S/main.mdk" -o "$W/share.bin" >"$W/build6.log" 2>&1; then
+  echo "FAIL: identical cross-module redeclaration did not build"; cat "$W/build6.log"; fail=$((fail+1))
+else
+  checked=$((checked+1))
+  got6="$("$W/share.bin" 2>&1)"
+  if [ "$got6" = "22
+6" ]; then
+    echo "ok   ffi_extern_shared       identical signatures in two modules still share one symbol (22/6)"
+  else
+    fail=$((fail+1))
+    printf 'FAIL ffi_extern_shared      expected 22 then 6, got: %s\n' "$got6"
+  fi
+fi
+
 # ZERO-COMPARISON guard (docs/ops/TESTING-DESIGN.md §2.3): a gate that compared
 # nothing has proven nothing.
 [ "$checked" -gt 0 ] || { echo "no cell ran — the gate proved nothing"; exit 2; }

@@ -3,9 +3,9 @@
 -- ⇒ REJECT (performs <Exec "/usr/bin/ls">).
 effect Exec Prefix
 
-extern runCommand : String -> List String -> <Exec _> Int
+extern runCommand : String -> List String -> <Exec _> Result String (Int, String, String)
 
-runLs : Unit -> <Exec "/bin/*"> Int
+runLs : Unit -> <Exec "/bin/*"> Result String (Int, String, String)
 runLs _ = runCommand "/usr/bin/ls" []
 
 main : <IO> Unit

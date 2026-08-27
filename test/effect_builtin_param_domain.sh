@@ -186,5 +186,35 @@ expect_ok     "$FIX/ffi_libname_bare_accept.mdk"     'FFI libname accept: bare "
 expect_ok     "$FIX/ffi_libname_wildcard_accept.mdk" 'FFI libname accept: "libcurl*" extern vs bare-bounded caller (same set)'
 expect_reject "$FIX/ffi_libname_empty_reject.mdk"    'FFI libname reject: empty pattern still rejected' \
   'the library pattern is empty'
+
+# ── the three DECLARATION-NAME rules (review round of `ffi-lower-and-link`) ──
+#
+# Each one turned a SILENT WRONG VALUE at exit 0 into a located refusal, and each
+# has an accept cell above that a blunter fix would break -- read them in pairs:
+#
+#   ffi_nullary_reject          <-> ffi_stamp_narrow_accept
+#       differ only in whether an ARROW exists.  While the label rule's `None`
+#       arm passed, the emitter lowered a nullary extern as an eta CLOSURE
+#       POINTER where the declared value was expected.  #2106 (how a nullary
+#       extern WOULD spell a label) stays open; this pins only the refusal.
+#
+#   ffi_builtin_shadow_reject   <-> ffi_cross_builtin_name_accept
+#       differ only in whether the local type-head shape AGREES with the catalog
+#       row's.  The builtin-name exemption was keyed on the bare name, and its
+#       justification was measured only on COMPATIBLE redeclarations; an
+#       incompatible one got the same free pass and reached the real builtin with
+#       reinterpreted argument bits.  Deleting the exemption instead of gating it
+#       would show green here and red there.
+#
+#   ffi_reserved_prefix_reject  -- no pair; the ban is unconditional.
+#       Its signature MATCHES the runtime internal deliberately: a mismatched one
+#       was already loud (clang rejects the conflicting `declare`), so only the
+#       matching case discriminates.
+expect_reject "$FIX/ffi_nullary_reject.mdk" 'FFI nullary reject (no arrow: nowhere to write the FFI label, and the emitter lowered it anyway)' \
+  "Foreign declaration 'gNullary' has no arrow in its signature"
+expect_reject "$FIX/ffi_builtin_shadow_reject.mdk" 'FFI builtin-shadow reject (catalog name redeclared with an INCOMPATIBLE signature)' \
+  "Foreign declaration 'log' redeclares a built-in runtime name with an incompatible signature"
+expect_reject "$FIX/ffi_reserved_prefix_reject.mdk" 'FFI reserved-prefix reject (mdk_ is the runtime C symbol namespace)' \
+  "Foreign declaration 'mdk_nil' claims a reserved name"
 echo "effect_builtin_param_domain: $pass/$fail"
 [ "$fail" -eq 0 ]
