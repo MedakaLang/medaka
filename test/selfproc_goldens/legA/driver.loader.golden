@@ -38,6 +38,7 @@ loadProgramFilesE : (String -> Option String) -> String -> List String -> <IO> R
 loadProgramFilesLocatedCached : Ref (List (String, List Decl)) -> (String -> Option String) -> String -> List String -> <IO> Result String (List (String, String, List Decl))
 loadProgramFilesLocatedCachedE : Ref (List (String, List Decl)) -> (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
 loadProgramFilesLocatedE : (String -> Option String) -> String -> List String -> <IO> Result LoadError (List (String, String, List Decl))
+manifestAllowsInternal : String -> <IO> Bool
 mdkBaseName : String -> Option String
 moduleIdOfPath : List String -> String -> String
 parentDir : String -> String
@@ -54,6 +55,7 @@ revLookupRoot : String -> List (String, String) -> <IO> Option String
 rewriteDecl : List (String, String) -> List String -> Decl -> <IO> Decl
 rewriteDecls : List (String, String) -> List String -> List Decl -> <IO> List Decl
 rewriteUsePath : String -> UsePath -> UsePath
+scanAllowInternal : Bool -> List String -> Bool
 slashToDot : String -> String
 splitDot : String -> List String
 splitGo : String -> String -> Int -> Int -> String -> List String

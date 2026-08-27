@@ -1,5 +1,5 @@
 # META
-source_lines=1052
+source_lines=1102
 stages=DESUGAR,MARK
 # SOURCE
 -- Port of lib/loader.ml: parse a root .mdk file's transitive imports and return
@@ -838,22 +838,36 @@ childDeps deps owningRoot roots =
 -- (arrayGetUnsafe, …).  `stdlibRoot` (where core.mdk/runtime.mdk live) is ALWAYS
 -- trusted.  Additionally, when the entry belongs to a REAL PROJECT — i.e.
 -- `findProjectRoot (parentDir entry)` returns `Some`, distinct from `None`
--- ("no medaka.toml found, gave up") — every module owned by one of the entry's OWN search `roots`
--- (the entry dir + that project root, per `entrySearchRoots`) is trusted: it is
--- part of the entry project.  A DECLARED DEPENDENCY resolves to a root OUTSIDE
--- `roots` (via `resolveDepFile`/`childRoots`, added only after we cross into the
--- dep package), so it stays UNTRUSTED.
+-- ("no medaka.toml found, gave up") — AND that project's manifest carries the
+-- `allow-internal = true` opt-in, every module owned by one of the entry's OWN
+-- search `roots` (the entry dir + that project root, per `entrySearchRoots`) is
+-- trusted: it is part of an entry project that asked for the privilege.  A
+-- DECLARED DEPENDENCY resolves to a root OUTSIDE `roots` (via
+-- `resolveDepFile`/`childRoots`, added only after we cross into the dep
+-- package), so it stays UNTRUSTED whatever its own manifest says.
 --
--- This is the principled boundary the guard wants: your OWN project (as declared
--- by its `medaka.toml`) + the stdlib may call unsafe array kernels; a third-party
--- dep you imported may not, and a LOOSE single file with no `medaka.toml` may not
--- (pass `--allow-internal` to override either).  Gating on manifest presence is
--- what keeps a bare `medaka check foo.mdk` on a loose user file that calls
--- `arrayGetUnsafe` REJECTED (whose fallback project root == its own dir would
--- otherwise self-trust) while letting a self-hosting compiler-PROJECT file check
--- itself without `--allow-internal`.  [Previously trusted ONLY `stdlibRoot`, so
--- checking/building a compiler-project file flagged its own sibling modules'
--- legitimate kernel calls as errors unless the flag was passed every time — #42.]
+-- The boundary is therefore DECLARED, not inferred: the stdlib, plus a project
+-- that wrote down that it wants unsafe array kernels.  A third-party dep may
+-- not, and a LOOSE single file with no `medaka.toml` may not (pass
+-- `--allow-internal` to override either).
+--
+-- [#42] Trusting ONLY `stdlibRoot` is not available: checking or building a
+-- compiler-project file would flag its own sibling modules' legitimate kernel
+-- calls as errors unless the flag was passed every time.  `compiler/` alone has
+-- ~176 real internal-extern references across 25 files, `compiler/support/util.mdk`
+-- 11 of them.  Hence the opt-in rather than a removal — `compiler/medaka.toml`
+-- carries `allow-internal = true`, and cell 5 of #1713's probe (a bare
+-- `medaka check compiler/support/util.mdk`) stays green.
+--
+-- [#1713] Trusting the entry project UNCONDITIONALLY — i.e. keying on manifest
+-- PRESENCE — is also not available: it fails OPEN.  Every real user project has
+-- a `medaka.toml`, so the guard evaporated exactly when a scratch file graduated
+-- into a project, and `--allow-internal` was a documented no-op on that entire
+-- path (the flag had nothing left to override).  Requiring the manifest to SAY
+-- so keeps the privilege explicit, auditable, and reviewable in a checked-in
+-- file, and restores the flag's meaning.  Note this is a declaration, not a
+-- security boundary: a user who wants the kernels can write the key, exactly as
+-- they can pass the flag.  The point is that they must do so on purpose.
 --
 -- Re-resolves each modId's file via the same deps/roots the load used and
 -- compares the owning root against the trusted set — robust where the modId is
@@ -867,9 +881,45 @@ projectTrustedMods : String -> List String -> String -> List (String, List Decl)
 projectTrustedMods entry roots stdlibRoot mods = match findProjectRoot (parentDir entry)
   Some projectRoot =>
     let deps = readDeps projectRoot
-    let trustedRoots = map canonicalizePath (stdlibRoot::roots)
+    let trustedRoots = if manifestAllowsInternal projectRoot then
+      map canonicalizePath (stdlibRoot::roots)
+    else
+      [canonicalizePath stdlibRoot]
     trustedModsGo deps roots trustedRoots (map fst mods)
   None => trustedModsGo [] roots [canonicalizePath stdlibRoot] (map fst mods)
+
+-- Does the project rooted at `root` OPT IN to internal-only externs?  Reads
+-- `<root>/medaka.toml`; False when the file is missing or unreadable, so the
+-- absent-manifest and unreadable-manifest cases both fail CLOSED.
+manifestAllowsInternal : String -> <IO> Bool
+manifestAllowsInternal root =
+  let tomlPath = stringConcat [root, "/medaka.toml"]
+  if fileExists tomlPath then match readFile tomlPath
+    Err _ => False
+    Ok src => scanAllowInternal False (splitNl src)
+  else False
+
+-- Scan a medaka.toml's lines for `allow-internal = true`.  `inDeps` tracks
+-- whether we are currently inside `[dependencies]`, whose entries are SKIPPED: a
+-- dep line is `name = "path"`, so a package literally named `allow-internal`
+-- must not read as the opt-in.  Every OTHER section is accepted rather than one
+-- named header, because the tree is inconsistent about which one a manifest
+-- uses — `compiler/medaka.toml` writes `[project]` while `medaka new` and every
+-- other in-tree manifest write `[package]` — and keying on either would silently
+-- ignore the key in the other.  A key written with any value but `true` reads as
+-- "declined", not "keep looking".
+scanAllowInternal : Bool -> List String -> Bool
+scanAllowInternal _ [] = False
+scanAllowInternal inDeps (line::rest) =
+  let t = stringTrim line
+  if startsWith "[" t then
+    scanAllowInternal (t == "[dependencies]") rest
+  else if inDeps then
+    scanAllowInternal inDeps rest
+  else if keyBeforeEq t == "allow-internal" then
+    valAfterEq t == "true"
+  else
+    scanAllowInternal inDeps rest
 
 trustedModsGo : List (String, String) -> List String -> List String -> List String -> <IO> List String
 trustedModsGo _ _ _ [] = []
@@ -1200,7 +1250,12 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig false "childDeps" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "childDeps" ((PVar "deps") (PVar "owningRoot") (PVar "roots")) (EIf (EApp (EApp (EVar "contains") (EVar "owningRoot")) (EVar "roots")) (EVar "deps") (EBinOp "++" (EVar "deps") (EApp (EVar "readDeps") (EVar "owningRoot")))))
 (DTypeSig true "projectTrustedMods" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "projectTrustedMods" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))) (arm (PCon "Some" (PVar "projectRoot")) () (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EVar "projectRoot"))) (DoLet false false (PVar "trustedRoots") (EApp (EApp (EVar "map") (EVar "canonicalizePath")) (EBinOp "::" (EVar "stdlibRoot") (EVar "roots")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "mods")))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EListLit)) (EVar "roots")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "mods"))))))
+(DFunDef false "projectTrustedMods" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))) (arm (PCon "Some" (PVar "projectRoot")) () (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EVar "projectRoot"))) (DoLet false false (PVar "trustedRoots") (EIf (EApp (EVar "manifestAllowsInternal") (EVar "projectRoot")) (EApp (EApp (EVar "map") (EVar "canonicalizePath")) (EBinOp "::" (EVar "stdlibRoot") (EVar "roots"))) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "mods")))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EListLit)) (EVar "roots")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "mods"))))))
+(DTypeSig false "manifestAllowsInternal" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
+(DFunDef false "manifestAllowsInternal" ((PVar "root")) (EBlock (DoLet false false (PVar "tomlPath") (EApp (EVar "stringConcat") (EListLit (EVar "root") (ELit (LString "/medaka.toml"))))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "tomlPath")) (EMatch (EApp (EVar "readFile") (EVar "tomlPath")) (arm (PCon "Err" PWild) () (EVar "False")) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "scanAllowInternal") (EVar "False")) (EApp (EVar "splitNl") (EVar "src"))))) (EVar "False")))))
+(DTypeSig false "scanAllowInternal" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "scanAllowInternal" (PWild (PList)) (EVar "False"))
+(DFunDef false "scanAllowInternal" ((PVar "inDeps") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "["))) (EVar "t")) (EApp (EApp (EVar "scanAllowInternal") (EBinOp "==" (EVar "t") (ELit (LString "[dependencies]")))) (EVar "rest")) (EIf (EVar "inDeps") (EApp (EApp (EVar "scanAllowInternal") (EVar "inDeps")) (EVar "rest")) (EIf (EBinOp "==" (EApp (EVar "keyBeforeEq") (EVar "t")) (ELit (LString "allow-internal"))) (EBinOp "==" (EApp (EVar "valAfterEq") (EVar "t")) (ELit (LString "true"))) (EApp (EApp (EVar "scanAllowInternal") (EVar "inDeps")) (EVar "rest"))))))))
 (DTypeSig false "trustedModsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "trustedModsGo" (PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "trustedModsGo" ((PVar "deps") (PVar "roots") (PVar "trustedRoots") (PCons (PVar "m") (PVar "ms"))) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "owningRoot"))) () (EIf (EApp (EApp (EVar "contains") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (EVar "trustedRoots")) (EBinOp "::" (EVar "m") (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms"))) (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms")))))
@@ -1379,7 +1434,12 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig false "childDeps" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "childDeps" ((PVar "deps") (PVar "owningRoot") (PVar "roots")) (EIf (EApp (EApp (EVar "contains") (EVar "owningRoot")) (EVar "roots")) (EVar "deps") (EBinOp "++" (EVar "deps") (EApp (EVar "readDeps") (EVar "owningRoot")))))
 (DTypeSig true "projectTrustedMods" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "projectTrustedMods" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))) (arm (PCon "Some" (PVar "projectRoot")) () (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EVar "projectRoot"))) (DoLet false false (PVar "trustedRoots") (EApp (EApp (EMethodRef "map") (EVar "canonicalizePath")) (EBinOp "::" (EVar "stdlibRoot") (EVar "roots")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "mods")))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EListLit)) (EVar "roots")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "mods"))))))
+(DFunDef false "projectTrustedMods" ((PVar "entry") (PVar "roots") (PVar "stdlibRoot") (PVar "mods")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "parentDir") (EVar "entry"))) (arm (PCon "Some" (PVar "projectRoot")) () (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EVar "projectRoot"))) (DoLet false false (PVar "trustedRoots") (EIf (EApp (EVar "manifestAllowsInternal") (EVar "projectRoot")) (EApp (EApp (EMethodRef "map") (EVar "canonicalizePath")) (EBinOp "::" (EVar "stdlibRoot") (EVar "roots"))) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "mods")))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EListLit)) (EVar "roots")) (EListLit (EApp (EVar "canonicalizePath") (EVar "stdlibRoot")))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "mods"))))))
+(DTypeSig false "manifestAllowsInternal" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
+(DFunDef false "manifestAllowsInternal" ((PVar "root")) (EBlock (DoLet false false (PVar "tomlPath") (EApp (EVar "stringConcat") (EListLit (EVar "root") (ELit (LString "/medaka.toml"))))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "tomlPath")) (EMatch (EApp (EVar "readFile") (EVar "tomlPath")) (arm (PCon "Err" PWild) () (EVar "False")) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "scanAllowInternal") (EVar "False")) (EApp (EVar "splitNl") (EVar "src"))))) (EVar "False")))))
+(DTypeSig false "scanAllowInternal" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "scanAllowInternal" (PWild (PList)) (EVar "False"))
+(DFunDef false "scanAllowInternal" ((PVar "inDeps") (PCons (PVar "line") (PVar "rest"))) (EBlock (DoLet false false (PVar "t") (EApp (EVar "stringTrim") (EVar "line"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "["))) (EVar "t")) (EApp (EApp (EVar "scanAllowInternal") (EBinOp "==" (EVar "t") (ELit (LString "[dependencies]")))) (EVar "rest")) (EIf (EVar "inDeps") (EApp (EApp (EVar "scanAllowInternal") (EVar "inDeps")) (EVar "rest")) (EIf (EBinOp "==" (EApp (EVar "keyBeforeEq") (EVar "t")) (ELit (LString "allow-internal"))) (EBinOp "==" (EApp (EVar "valAfterEq") (EVar "t")) (ELit (LString "true"))) (EApp (EApp (EVar "scanAllowInternal") (EVar "inDeps")) (EVar "rest"))))))))
 (DTypeSig false "trustedModsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "trustedModsGo" (PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "trustedModsGo" ((PVar "deps") (PVar "roots") (PVar "trustedRoots") (PCons (PVar "m") (PVar "ms"))) (EMatch (EApp (EApp (EApp (EVar "findModuleFile") (EVar "deps")) (EVar "roots")) (EVar "m")) (arm (PCon "Some" (PTuple PWild (PVar "owningRoot"))) () (EIf (EApp (EApp (EVar "contains") (EApp (EVar "canonicalizePath") (EVar "owningRoot"))) (EVar "trustedRoots")) (EBinOp "::" (EVar "m") (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms"))) (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "trustedModsGo") (EVar "deps")) (EVar "roots")) (EVar "trustedRoots")) (EVar "ms")))))
