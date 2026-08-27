@@ -8324,8 +8324,38 @@ paramVarianceEqCheck _ _ l1 l2 =
 -- happens to SIT in one, and its remedy is different — write the same row, or
 -- move the value, not "make the type row-polymorphic").  Symmetric phrasing,
 -- because `unify` has no expected/actual role to name one side the culprit.
+--
+-- #2109 (over-reject at the safe direction): the second sentence names the
+-- ETA-EXPANSION recovery, because the guard's `⚠️ THIS DOES NARROW ACCEPTANCE
+-- IN THE SOUND DIRECTION TOO` caveat above is otherwise INVISIBLE to the person
+-- who hit it.  `handler : Ref (String -> <Stdout> Unit); handler = Ref noop` is
+-- REJECTED while `handler = Ref (s => noop s)` is ACCEPTED — MEASURED, both at
+-- this commit.  The two programs have identical semantics; the second is
+-- accepted only because a lambda's latent row is still an unsolved variable, so
+-- `paramVarianceRow`'s CLOSED~CLOSED arm abstains.  That accident is now stated
+-- as the remedy rather than left for the reader to rediscover.
+--
+-- 🚨 THE RECOVERY IS NOT A LAUNDERING HOLE, AND THAT IS MEASURED, NOT ASSUMED.
+-- Eta-expanding in the UNSAFE direction still rejects: `handler : Ref (String ->
+-- <> Unit); handler = Ref (s => shouty s)` fails with T-EFFECT-LEAK
+-- (`Effectful value used where <> is allowed, but it performs <Stdout>`),
+-- byte-identical to the un-expanded `Ref shouty`.  The open row the lambda
+-- restores is still bounded by the slot, so eta-expansion buys back exactly the
+-- narrowing direction and nothing else — which is why naming it here is safe.
+--
+-- Why the message and not a fix: no rule keyed on TYPES can separate the two
+-- directions at this seam.  `handler = Ref noop` (safe narrowing, #2109) and
+-- `alias = idr box` (the #1098 laundering) reach `paramVarianceGuard` with the
+-- SAME two Monos — `Ref (String -> <Stdout> Unit)` against `Ref (String -> <>
+-- Unit)` — render the SAME row pair `<Stdout> vs <>`, and both carry a caret on
+-- an ARGUMENT span, so neither the types nor the location discriminates.  What
+-- separates them is expression-level provenance (is the argument a value flowing
+-- INTO a cell being built here, or an already-typed cell being coerced?), which
+-- would need an expected/actual role on `unify` or a checking mode for
+-- constructor applications — the larger unifier-direction change this seam
+-- deliberately does not have.
 paramVarianceMismatchMsg : List Atom -> List Atom -> String
-paramVarianceMismatchMsg l1 l2 = "Effect row mismatch inside a non-covariant type argument: <\{renderAtoms l1}> vs <\{renderAtoms l2}>. This type parameter is used contravariantly, or behind a mutable cell, so the two rows must be EQUAL — weakening one to the other would let an effectful value be reached through a type that no longer mentions its effects. Write the same effect row on both sides."
+paramVarianceMismatchMsg l1 l2 = "Effect row mismatch inside a non-covariant type argument: <\{renderAtoms l1}> vs <\{renderAtoms l2}>. This type parameter is used contravariantly, or behind a mutable cell, so the two rows must be EQUAL — weakening one to the other would let an effectful value be reached through a type that no longer mentions its effects. Write the same effect row on both sides. If the value here performs FEWER effects than the slot permits, that narrowing is safe but is still rejected, because unification is symmetric here and cannot tell which side is the declaration; eta-expand the function to recover — write `(s => f s)` in place of `f`. A value that performs MORE effects than the slot permits is rejected either way, so this recovery cannot widen a row."
 
 unifyVars : Ref Tyvar -> Ref Tyvar -> Unit
 unifyVars c1 c2 = if tyvarId c1 == tyvarId c2 then () else bindVar c1 (TVar c2)
