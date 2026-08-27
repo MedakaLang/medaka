@@ -2,8 +2,8 @@
 -- `Taker` sits behind a named record field (`.taker`) instead of a
 -- positional constructor argument -- exercising field-access desugaring
 -- rather than pattern-match extraction. Same defect as contra-direct/
--- contra-newtype otherwise. EFFECTS-SEMANTICS.md §9. EXPECTED-RED until
--- slice 4 (D-2, #1119).
+-- contra-newtype otherwise. EFFECTS-SEMANTICS.md §9. Fixed by slice 4 (D-2,
+-- #1119); this row is now correctly REJECTED.
 data Taker a = MkTaker (a -> Int)
 data TakerHolder a = { taker : Taker a }
 

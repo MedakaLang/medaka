@@ -1,6 +1,6 @@
--- WRITE-CHANNEL x DIRECT wrapper shape. Reused verbatim from
--- test/must_fail_fixtures/1098-ref-widening-launders-through-write/main.mdk
--- (the seed shape named in the packet's §4 fact 5). `Ref (Unit -> <> Unit)`
+-- WRITE-CHANNEL x DIRECT wrapper shape. Reused verbatim from the shape
+-- originally filed as #1098 (ref-widening launders through write; closed via
+-- D-2, see git history). `Ref (Unit -> <> Unit)`
 -- widens to `Ref (Unit -> <Stdout> Unit)` through NO wrapper at all -- the
 -- function sits directly inside the mutable cell. EFFECTS-SEMANTICS.md §9:
 -- a parameter's polarity is not knowable without a variance analysis Medaka
@@ -8,8 +8,9 @@
 -- write-back operation makes the unsoundness OBSERVABLE here (§5 no-
 -- laundering law: eliminating the effectful value written into `alias` must
 -- flow its row into the ambient effect, but `callBox : Unit -> Unit` carries
--- none). EXPECTED-RED until slice 4 (D-2, #1119) lands a per-parameter
--- polarity/invariance rule for `Ref`'s stored-value parameter.
+-- none). Fixed by slice 4 (D-2, #1119), which added a per-parameter
+-- polarity/invariance rule for `Ref`'s stored-value parameter; this row is
+-- now correctly REJECTED.
 shout : Unit -> <Stdout> Unit
 shout u =
   let _ = putStr "SMUGGLED "

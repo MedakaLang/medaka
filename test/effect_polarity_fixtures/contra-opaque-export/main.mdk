@@ -2,8 +2,8 @@
 -- wrap.mdk) are exported abstractly -- this file never sees `MkTaker`/
 -- `MkTH` directly, only the smart constructors'/accessors' declared types.
 -- Same defect as the other contravariant rows, demonstrating the laundering
--- survives module opacity. EFFECTS-SEMANTICS.md §9. EXPECTED-RED until
--- slice 4 (D-2, #1119).
+-- survives module opacity. EFFECTS-SEMANTICS.md §9. Fixed by slice 4 (D-2,
+-- #1119); this row is now correctly REJECTED.
 import wrap.{Taker, TH, mkTaker, runTaker, mkTH, thTaker}
 
 pureTaker : Taker (Unit -> Unit)

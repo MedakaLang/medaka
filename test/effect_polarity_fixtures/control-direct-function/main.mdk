@@ -1,9 +1,10 @@
 -- CONTROL (direct function-position, covariant re-open): per
 -- S-polarity-conformance-matrix (#1119/D-2).
 --
--- DEVIATION FROM PACKET: the packet named the `quiet2` shape from
--- test/must_fail_fixtures/1103-sametail-arm-launders-effect-arrow/control.mdk
--- as the shape to reuse/re-derive. Measured on this slice's base
+-- DEVIATION FROM PACKET: the packet named the `quiet2` shape from the
+-- `control.mdk` originally filed alongside #1103 (sametail-arm-launders-
+-- effect-arrow; closed via D-2, see git history) as the shape to
+-- reuse/re-derive. Measured on this slice's base
 -- (ad754e32, after D-1/#1118 already landed): that exact shape --
 -- `launderArrow : (Unit -> <Stdout | e> Unit) -> (Unit -> <e> Unit)` -- is
 -- now REJECTED AT DECLARATION TIME regardless of what is passed to it,

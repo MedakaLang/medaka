@@ -4,8 +4,8 @@
 -- constructor of indirection further out -- substMonoP's `TApp` arm (packet
 -- §4 fact 2) propagates `pos` unchanged through EVERY nested application,
 -- so wrapping the already-contravariant `Taker` again should not "fix" or
--- "hide" the defect. EFFECTS-SEMANTICS.md §9. EXPECTED-RED until slice 4
--- (D-2, #1119).
+-- "hide" the defect. EFFECTS-SEMANTICS.md §9. Fixed by slice 4 (D-2,
+-- #1119); this row is now correctly REJECTED.
 data Taker a = MkTaker (a -> Int)
 data TakerBox a = MkTakerBox (Taker a)
 

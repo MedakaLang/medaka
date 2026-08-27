@@ -8,17 +8,18 @@ spec: EFFECTS-SEMANTICS.md §9 ("no direction of weakening is sound in
       treatment as everything else (packet §4 facts 2-3: substMonoP's TApp
       arm propagates `pos` unchanged, no per-parameter polarity exists
       anywhere).
-status: RED (WRONGLY ACCEPTED, launder observable) -- EXPECTED-RED until
-  slice 4 (D-2) lands. A row unexpectedly passing before then is a finding,
-  not success.
-cmd: run main.mdk
-measured-exit: 0
-measured-stdout: SMUGGLED ()
-derivation: `box : Ref (Unit -> <> Unit) = Ref pureFn` widens through
+status: FIXED by slice 4 (D-2, #1119) -- now correctly REJECTED with a
+  polarity diagnostic. The measurement below is HISTORICAL: it records the
+  wrongly-accepted behavior observed before slice 4 landed the per-parameter
+  polarity/invariance rule for `Ref`'s stored-value parameter.
+cmd (historical, pre-D-2): run main.mdk
+measured-exit (historical): 0
+measured-stdout (historical): SMUGGLED ()
+derivation: `box : Ref (Unit -> <> Unit) = Ref pureFn` widened through
   `alias : Ref (Unit -> <Stdout> Unit) = box` with zero diagnostics. Writing
   the genuinely effectful `shout` through `alias` (`alias := shout`)
   mutates the SAME cell `box` reads from; calling `box.value ()` from
   `callBox : Unit -> Unit` -- a binding whose OWN declared row is empty --
-  performs `<Stdout>`, in violation of the no-laundering law. Identical
-  mechanism/shape to test/must_fail_fixtures/1098-ref-widening-launders-
-  through-write (packet §4 fact 5's named seed).
+  performed `<Stdout>`, in violation of the no-laundering law. Identical
+  mechanism/shape to the shape originally filed as #1098 (ref-widening
+  launders through write; closed via D-2, see git history).

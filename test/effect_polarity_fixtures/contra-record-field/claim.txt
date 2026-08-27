@@ -4,14 +4,15 @@ shape: contravariant-immutable x record-field wrapper (`data TakerHolder a =
        field access `.taker` instead of constructor pattern-match)
 spec: same as contra-direct/claim.txt. Exercises field-access desugaring
       rather than pattern-match extraction.
-status: RED (WRONGLY ACCEPTED, launder observable) -- EXPECTED-RED until
-  slice 4 (D-2) lands.
-cmd: run main.mdk
-measured-exit: 0
-measured-stdout:
+status: FIXED by slice 4 (D-2, #1119) -- now correctly REJECTED with a
+  polarity diagnostic. The measurement below is HISTORICAL, from before
+  slice 4 landed.
+cmd (historical, pre-D-2): run main.mdk
+measured-exit (historical): 0
+measured-stdout (historical):
   LAUNDERED
   1
-derivation: `wide : TakerHolder (Unit -> <IO> Unit) = pureTH` accepted;
-  `runTaker wide.taker shout` from `main`'s zero-row call site applies the
-  widened-through `shout` and performs `<IO>`. Same launder as the
+derivation: `wide : TakerHolder (Unit -> <IO> Unit) = pureTH` was accepted;
+  `runTaker wide.taker shout` from `main`'s zero-row call site applied the
+  widened-through `shout` and performed `<IO>`. Same launder as the
   positional-constructor rows, via field access instead.

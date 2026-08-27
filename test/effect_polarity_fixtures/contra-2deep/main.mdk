@@ -2,7 +2,8 @@
 -- layers (`TakerBox2` around `TakerBox` around `Taker`) between the
 -- parametric widening site and the contravariant occurrence. Tests that the
 -- laundering survives an extra layer of indirection, same as write-2deep.
--- EFFECTS-SEMANTICS.md §9. EXPECTED-RED until slice 4 (D-2, #1119).
+-- EFFECTS-SEMANTICS.md §9. Fixed by slice 4 (D-2, #1119); this row is now
+-- correctly REJECTED.
 data Taker a = MkTaker (a -> Int)
 data TakerBox a = MkTakerBox (Taker a)
 data TakerBox2 a = MkTakerBox2 (TakerBox a)

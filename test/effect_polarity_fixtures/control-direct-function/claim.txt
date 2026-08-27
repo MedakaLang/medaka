@@ -9,9 +9,10 @@ status: GREEN (ACCEPTED) -- confirmed today and MUST STAY green after slice 4.
 cmd: run main.mdk
 measured-exit: 0
 measured-stdout: ()
-deviation-from-packet: the packet named the `quiet2` shape from
-  test/must_fail_fixtures/1103-sametail-arm-launders-effect-arrow/control.mdk
-  as the reuse target. Measured directly: at this slice's base (ad754e32),
+deviation-from-packet: the packet named the `quiet2` shape from the
+  `control.mdk` originally filed alongside #1103 (sametail-arm-launders-
+  effect-arrow; closed via D-2, see git history) as the reuse target.
+  Measured directly: at this slice's base (ad754e32),
   that exact `launderArrow : (Unit -> <Stdout | e> Unit) -> (Unit -> <e>
   Unit)` declaration is now REJECTED AT DECLARATION TIME (independent of
   what's passed to it) --

@@ -6,7 +6,8 @@
 -- EFFECTS-SEMANTICS.md §9: polarity is not knowable without a variance
 -- analysis Medaka does not have, and this datatype's parameter is used
 -- inside a write-capable `Ref`, so it needs INVARIANCE, not the covariant
--- treatment it gets today. EXPECTED-RED until slice 4 (D-2, #1119).
+-- treatment it gets today. Fixed by slice 4 (D-2, #1119); this row is now
+-- correctly REJECTED.
 data Cell a = MkCell (Ref a)
 
 shout : Unit -> <Stdout> Unit

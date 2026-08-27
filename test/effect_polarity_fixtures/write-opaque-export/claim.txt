@@ -9,13 +9,14 @@ spec: same as write-direct/claim.txt. Demonstrates the laundering survives
       parameter, since the polarity computation (or its absence, packet §4
       fact 3) happens at the type-constructor level, independent of what a
       given module can pattern-match on.
-status: RED (WRONGLY ACCEPTED, launder observable) -- EXPECTED-RED until
-  slice 4 (D-2) lands.
-cmd: run main.mdk
-measured-exit: 0
-measured-stdout: SMUGGLED ()
-derivation: `box : Holder (Unit -> <> Unit) = mkHolder pureFn` widens to
+status: FIXED by slice 4 (D-2, #1119) -- now correctly REJECTED with a
+  polarity diagnostic. The measurement below is HISTORICAL, from before
+  slice 4 landed.
+cmd (historical, pre-D-2): run main.mdk
+measured-exit (historical): 0
+measured-stdout (historical): SMUGGLED ()
+derivation: `box : Holder (Unit -> <> Unit) = mkHolder pureFn` widened to
   `alias : Holder (Unit -> <Stdout> Unit) = box`; `holderRef alias := shout`
-  writes into the cell `holderRef box` reads back from a zero-row
+  wrote into the cell `holderRef box` reads back from a zero-row
   binding. Same launder as the other write-channel rows, fully behind an
   opaque cross-module abstraction.

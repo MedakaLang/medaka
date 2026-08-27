@@ -3,7 +3,8 @@
 -- exercising field-access desugaring rather than pattern-match extraction,
 -- in case the two paths differ in how they carry the type parameter's
 -- polarity. Same defect as write-direct/write-newtype otherwise.
--- EFFECTS-SEMANTICS.md §9. EXPECTED-RED until slice 4 (D-2, #1119).
+-- EFFECTS-SEMANTICS.md §9. Fixed by slice 4 (D-2, #1119); this row is now
+-- correctly REJECTED.
 data Holder a = { cell : Ref a }
 
 shout : Unit -> <Stdout> Unit
