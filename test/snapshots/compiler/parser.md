@@ -1,5 +1,5 @@
 # META
-source_lines=5114
+source_lines=5188
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser — Stage 1 port of `lib/parser.mly`.  A monadic
@@ -549,6 +549,32 @@ stripLoc : Expr -> Expr
 stripLoc (ELoc _ e) = stripLoc e
 stripLoc e = e
 
+-- #164: a BOUNDED (single-layer) variant of `stripLoc`, for the one call site
+-- (`leftSectionOrExpr`) that used to pay for the full recursive unwind at every
+-- paren-nesting level.  `parseAtom = located parseAtomRaw` wraps EVERY atom
+-- production in exactly one fresh `ELoc`, including a parenthesised expr read
+-- back as an atom by its enclosing parens — so at nesting level k the content
+-- handed to `leftSectionOrExpr` already carries k accumulated `ELoc` layers,
+-- and the full `stripLoc` walked all k of them, on EVERY one of the N levels:
+-- O(N) work summed N times = O(N^2) (confirmed by `perf`: 44% self-time here).
+--
+-- A single-layer strip is sufficient here and nowhere else needs to change: an
+-- `EBinOp` node is NEVER itself wrapped in `ELoc` (binop levels stay unwrapped
+-- — see the comment on `parseAtom` below), so the only way `stripLoc1`'s single
+-- peel could miss a genuine left-section is if a real `EBinOp op lhs (EVar
+-- "_")` sat under 2+ ELoc layers here. It cannot: the FIRST paren level that
+-- ever sees that raw `EBinOp` directly (unwrapped, e.g. literally `(e op _)`)
+-- already runs `leftSectionOrExpr` on it right then and converts it to
+-- `ESection` before any further `ELoc` wrapping is ever applied — so a plain
+-- `EBinOp` can never survive to be re-discovered two-or-more parens further
+-- out. (Multiple PLAIN paren layers around a non-section value, e.g.
+-- `((((1))))`, is exactly the pathological case this fixes: one strip reveals
+-- another `ELoc`, correctly falls through to "not a section" every time,
+-- without walking the rest of the stack.)
+stripLoc1 : Expr -> Expr
+stripLoc1 (ELoc _ e) = e
+stripLoc1 e = e
+
 binOp : Token -> String -> Parser (Expr -> Expr -> Expr)
 binOp tk op = do
   expectTok tk
@@ -841,14 +867,58 @@ sliceHi e lo incl = do
   expectTok TRBracket
   postfixTail (ESlice e lo hi incl (Ref "Array"))
 
+-- #77: bound recursion depth so a pathologically deep input fails with a
+-- clean, located diagnostic instead of exhausting the native call stack (a
+-- hang or a SEGFAULT/exit 134). `parseAtom` (below) is the single shared
+-- re-entry point for EVERY recursive expression form — parenthesised/tuple
+-- exprs, list literals, if/let/match/do, and (through the operand ladder)
+-- nested application — so bounding depth here bounds all of them, whichever
+-- bracket or keyword does the nesting.
+nestDepthRef : Ref Int
+nestDepthRef = Ref 0
+
+-- Comfortably above any depth a hand-written or generated program plausibly
+-- needs (this repo's own deepest perf-corpus shape nests a few thousand
+-- levels) while staying well inside the 256MB GC-worker stack every `medaka`
+-- invocation runs on (AGENTS.md [B-ENV]).
+maxNestDepth : Int
+maxNestDepth = 20000
+
+nestTooDeepMsg : String
+nestTooDeepMsg = "expression nesting too deep (limit \{intToString maxNestDepth}); split this expression into named intermediate bindings"
+
 -- Atom level (`expr_atom` + the statement-form productions in parser.mly).
 -- Wrapped in a transparent ELoc capturing the atom's token span, mirroring
 -- parser.mly where every atom and every let/if/match/function/do production is
 -- `ELoc (of_pos $startpos $endpos, …)`.  Binop/app/unary/postfix levels stay
 -- un-wrapped (exactly like parser.mly's `mkbin`/`EApp` rules), so their span is
 -- implicit from their wrapped leaf operands.
+--
+-- Depth tracking is written directly over the raw `Parser` representation
+-- (not `do`-notation) so the counter is restored on EVERY outcome — including
+-- a non-fatal `PErr` from a failed speculative atom attempt, routine under
+-- `orElse`/`chainl1` throughout this file. A `do`-sequenced decrement after
+-- `located parseAtomRaw` would never run on that path: `bindPR` short-circuits
+-- straight past subsequent binds on `PErr`/`PFatal`, which would leak an
+-- increment on every backtrack and eventually trip the cap on an ordinary
+-- (shallow) program.
 parseAtom : Parser Expr
-parseAtom = located parseAtomRaw
+parseAtom = Parser parseAtomNestGo
+
+parseAtomNestGo : Array Token -> Int -> PR Expr
+parseAtomNestGo toks pos =
+  let d = !nestDepthRef + 1
+  if d > maxNestDepth then
+    PFatal nestTooDeepMsg pos
+  else
+    parseAtomNestRun toks pos d
+
+parseAtomNestRun : Array Token -> Int -> Int -> PR Expr
+parseAtomNestRun toks pos d =
+  nestDepthRef := d
+  let r = runP (located parseAtomRaw) toks pos
+  nestDepthRef := d - 1
+  r
 
 parseAtomRaw : Parser Expr
 parseAtomRaw = do
@@ -1166,12 +1236,16 @@ parenResult es = ETuple es
 -- The `_` placeholder is a wrapped atom (`ELoc (EVar "_")`), so strip the RHS
 -- operand before matching (mirrors parser.mly's local `strip` in this rule).
 -- On no match we return the ORIGINAL expr untouched (keeping its wrappers).
+-- Both strips are the BOUNDED `stripLoc1` (see its comment) — `e` is where the
+-- O(N^2) lived (its `ELoc` depth grows with paren-nesting level); `rhs` is
+-- always the immediate right operand of a directly-unwrapped `EBinOp`, so its
+-- depth is O(1) regardless of N either way.
 leftSectionOrExpr : Expr -> Expr
-leftSectionOrExpr e = leftSectionGo e (stripLoc e)
+leftSectionOrExpr e = leftSectionGo e (stripLoc1 e)
 
 leftSectionGo : Expr -> Expr -> Expr
 leftSectionGo orig (EBinOp op lhs rhs _) =
-  leftSectionRhs orig op lhs (stripLoc rhs)
+  leftSectionRhs orig op lhs (stripLoc1 rhs)
 leftSectionGo orig _ = orig
 
 leftSectionRhs : Expr -> String -> Expr -> Expr -> Expr
@@ -5295,6 +5369,9 @@ parseResultWith src tokList offList =
 (DTypeSig false "stripLoc" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "stripLoc" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "stripLoc") (EVar "e")))
 (DFunDef false "stripLoc" ((PVar "e")) (EVar "e"))
+(DTypeSig false "stripLoc1" (TyFun (TyCon "Expr") (TyCon "Expr")))
+(DFunDef false "stripLoc1" ((PCon "ELoc" PWild (PVar "e"))) (EVar "e"))
+(DFunDef false "stripLoc1" ((PVar "e")) (EVar "e"))
 (DTypeSig false "binOp" (TyFun (TyCon "Token") (TyFun (TyCon "String") (TyApp (TyCon "Parser") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))))
 (DFunDef false "binOp" ((PVar "tk") (PVar "op")) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "tk"))) (ELam (PWild) (EApp (EVar "pure") (ELam ((PVar "l") (PVar "r")) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EApp (EVar "Ref") (EVar "RNone"))))))))
 (DTypeSig false "parseOr" (TyApp (TyCon "Parser") (TyCon "Expr")))
@@ -5393,8 +5470,18 @@ parseResultWith src tokList offList =
 (DFunDef false "indexOrSliceRest" (PWild PWild PWild) (EApp (EVar "failP") (ELit (LString "expected .. ..= or ] in index/slice"))))
 (DTypeSig false "sliceHi" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Expr"))))))
 (DFunDef false "sliceHi" ((PVar "e") (PVar "lo") (PVar "incl")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "parseExpr")) (ELam ((PVar "hi")) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TRBracket"))) (ELam (PWild) (EApp (EVar "postfixTail") (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EVar "e")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Ref") (ELit (LString "Array"))))))))))))
+(DTypeSig false "nestDepthRef" (TyApp (TyCon "Ref") (TyCon "Int")))
+(DFunDef false "nestDepthRef" () (EApp (EVar "Ref") (ELit (LInt 0))))
+(DTypeSig false "maxNestDepth" (TyCon "Int"))
+(DFunDef false "maxNestDepth" () (ELit (LInt 20000)))
+(DTypeSig false "nestTooDeepMsg" (TyCon "String"))
+(DFunDef false "nestTooDeepMsg" () (EBinOp "++" (EBinOp "++" (ELit (LString "expression nesting too deep (limit ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "maxNestDepth")))) (ELit (LString "); split this expression into named intermediate bindings"))))
 (DTypeSig false "parseAtom" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseAtom" () (EApp (EVar "located") (EVar "parseAtomRaw")))
+(DFunDef false "parseAtom" () (EApp (EVar "Parser") (EVar "parseAtomNestGo")))
+(DTypeSig false "parseAtomNestGo" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyApp (TyCon "PR") (TyCon "Expr")))))
+(DFunDef false "parseAtomNestGo" ((PVar "toks") (PVar "pos")) (EBlock (DoLet false false (PVar "d") (EBinOp "+" (EUnOp "!" (EVar "nestDepthRef")) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp ">" (EVar "d") (EVar "maxNestDepth")) (EApp (EApp (EVar "PFatal") (EVar "nestTooDeepMsg")) (EVar "pos")) (EApp (EApp (EApp (EVar "parseAtomNestRun") (EVar "toks")) (EVar "pos")) (EVar "d"))))))
+(DTypeSig false "parseAtomNestRun" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "PR") (TyCon "Expr"))))))
+(DFunDef false "parseAtomNestRun" ((PVar "toks") (PVar "pos") (PVar "d")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "nestDepthRef")) (EVar "d"))) (DoLet false false (PVar "r") (EApp (EApp (EApp (EVar "runP") (EApp (EVar "located") (EVar "parseAtomRaw"))) (EVar "toks")) (EVar "pos"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "nestDepthRef")) (EBinOp "-" (EVar "d") (ELit (LInt 1))))) (DoExpr (EVar "r"))))
 (DTypeSig false "parseAtomRaw" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseAtomRaw" () (EApp (EApp (EVar "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EMatch (EVar "t") (arm (PCon "TInt" (PVar "n") PWild) ((GBool (EApp (EVar "isIntMinLit") (EVar "n")))) (EApp (EVar "fatalP") (EVar "intLitTooBigMsg"))) (arm (PCon "TInt" (PVar "n") (PVar "lx")) () (EApp (EVar "emit") (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EVar "Ref") (EVar "None"))) (EApp (EVar "Ref") (EVar "RNone"))) (EVar "lx")))) (arm (PCon "TFloat" (PVar "f")) () (EApp (EVar "emit") (EApp (EVar "ELit") (EApp (EVar "LFloat") (EVar "f"))))) (arm (PCon "TString" (PVar "s")) () (EApp (EVar "emit") (EApp (EVar "ELit") (EApp (EVar "LString") (EVar "s"))))) (arm (PCon "TChar" (PVar "s")) () (EApp (EVar "emit") (EApp (EVar "ELit") (EApp (EVar "LChar") (EVar "s"))))) (arm (PCon "TIdent" (PVar "x")) () (EApp (EVar "emit") (EApp (EVar "EVar") (EVar "x")))) (arm (PCon "TUpper" (PVar "x")) () (EApp (EVar "parseUpperAtom") (EVar "x"))) (arm (PCon "TUnderscore") () (EApp (EVar "emit") (EApp (EVar "EVar") (ELit (LString "_"))))) (arm (PCon "TLParen") () (EVar "parseParen")) (arm (PCon "TLBracket") () (EVar "parseListE")) (arm (PCon "TLArray") () (EVar "parseArray")) (arm (PCon "TLBrace") () (EVar "parseRecordUpdate")) (arm (PCon "TIf") () (EVar "parseIf")) (arm (PCon "TLet") () (EVar "parseLet")) (arm (PCon "TMatch") () (EVar "parseMatch")) (arm (PCon "TDo") () (EVar "parseDo")) (arm (PCon "TInterpOpen" PWild) () (EVar "parseInterp")) (arm PWild () (EApp (EVar "failP") (ELit (LString "expected atom"))))))))
 (DTypeSig false "parseUpperAtom" (TyFun (TyCon "String") (TyApp (TyCon "Parser") (TyCon "Expr"))))
@@ -5507,9 +5594,9 @@ parseResultWith src tokList offList =
 (DFunDef false "parenResult" ((PList (PVar "e"))) (EApp (EVar "leftSectionOrExpr") (EVar "e")))
 (DFunDef false "parenResult" ((PVar "es")) (EApp (EVar "ETuple") (EVar "es")))
 (DTypeSig false "leftSectionOrExpr" (TyFun (TyCon "Expr") (TyCon "Expr")))
-(DFunDef false "leftSectionOrExpr" ((PVar "e")) (EApp (EApp (EVar "leftSectionGo") (EVar "e")) (EApp (EVar "stripLoc") (EVar "e"))))
+(DFunDef false "leftSectionOrExpr" ((PVar "e")) (EApp (EApp (EVar "leftSectionGo") (EVar "e")) (EApp (EVar "stripLoc1") (EVar "e"))))
 (DTypeSig false "leftSectionGo" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "leftSectionGo" ((PVar "orig") (PCon "EBinOp" (PVar "op") (PVar "lhs") (PVar "rhs") PWild)) (EApp (EApp (EApp (EApp (EVar "leftSectionRhs") (EVar "orig")) (EVar "op")) (EVar "lhs")) (EApp (EVar "stripLoc") (EVar "rhs"))))
+(DFunDef false "leftSectionGo" ((PVar "orig") (PCon "EBinOp" (PVar "op") (PVar "lhs") (PVar "rhs") PWild)) (EApp (EApp (EApp (EApp (EVar "leftSectionRhs") (EVar "orig")) (EVar "op")) (EVar "lhs")) (EApp (EVar "stripLoc1") (EVar "rhs"))))
 (DFunDef false "leftSectionGo" ((PVar "orig") PWild) (EVar "orig"))
 (DTypeSig false "leftSectionRhs" (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr"))))))
 (DFunDef false "leftSectionRhs" (PWild (PVar "op") (PVar "lhs") (PCon "EVar" (PLit (LString "_")))) (EApp (EVar "ESection") (EApp (EApp (EVar "SecLeft") (EVar "lhs")) (EVar "op"))))
@@ -6839,6 +6926,9 @@ parseResultWith src tokList offList =
 (DTypeSig false "stripLoc" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "stripLoc" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "stripLoc") (EVar "e")))
 (DFunDef false "stripLoc" ((PVar "e")) (EVar "e"))
+(DTypeSig false "stripLoc1" (TyFun (TyCon "Expr") (TyCon "Expr")))
+(DFunDef false "stripLoc1" ((PCon "ELoc" PWild (PVar "e"))) (EVar "e"))
+(DFunDef false "stripLoc1" ((PVar "e")) (EVar "e"))
 (DTypeSig false "binOp" (TyFun (TyCon "Token") (TyFun (TyCon "String") (TyApp (TyCon "Parser") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))))
 (DFunDef false "binOp" ((PVar "tk") (PVar "op")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "tk"))) (ELam (PWild) (EApp (EMethodRef "pure") (ELam ((PVar "l") (PVar "r")) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EApp (EVar "Ref") (EVar "RNone"))))))))
 (DTypeSig false "parseOr" (TyApp (TyCon "Parser") (TyCon "Expr")))
@@ -6937,8 +7027,18 @@ parseResultWith src tokList offList =
 (DFunDef false "indexOrSliceRest" (PWild PWild PWild) (EApp (EVar "failP") (ELit (LString "expected .. ..= or ] in index/slice"))))
 (DTypeSig false "sliceHi" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Expr"))))))
 (DFunDef false "sliceHi" ((PVar "e") (PVar "lo") (PVar "incl")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "parseExpr")) (ELam ((PVar "hi")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TRBracket"))) (ELam (PWild) (EApp (EVar "postfixTail") (EApp (EApp (EApp (EApp (EApp (EVar "ESlice") (EVar "e")) (EVar "lo")) (EVar "hi")) (EVar "incl")) (EApp (EVar "Ref") (ELit (LString "Array"))))))))))))
+(DTypeSig false "nestDepthRef" (TyApp (TyCon "Ref") (TyCon "Int")))
+(DFunDef false "nestDepthRef" () (EApp (EVar "Ref") (ELit (LInt 0))))
+(DTypeSig false "maxNestDepth" (TyCon "Int"))
+(DFunDef false "maxNestDepth" () (ELit (LInt 20000)))
+(DTypeSig false "nestTooDeepMsg" (TyCon "String"))
+(DFunDef false "nestTooDeepMsg" () (EBinOp "++" (EBinOp "++" (ELit (LString "expression nesting too deep (limit ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "maxNestDepth")))) (ELit (LString "); split this expression into named intermediate bindings"))))
 (DTypeSig false "parseAtom" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseAtom" () (EApp (EVar "located") (EVar "parseAtomRaw")))
+(DFunDef false "parseAtom" () (EApp (EVar "Parser") (EVar "parseAtomNestGo")))
+(DTypeSig false "parseAtomNestGo" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyApp (TyCon "PR") (TyCon "Expr")))))
+(DFunDef false "parseAtomNestGo" ((PVar "toks") (PVar "pos")) (EBlock (DoLet false false (PVar "d") (EBinOp "+" (EUnOp "!" (EVar "nestDepthRef")) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp ">" (EVar "d") (EVar "maxNestDepth")) (EApp (EApp (EVar "PFatal") (EVar "nestTooDeepMsg")) (EVar "pos")) (EApp (EApp (EApp (EVar "parseAtomNestRun") (EVar "toks")) (EVar "pos")) (EVar "d"))))))
+(DTypeSig false "parseAtomNestRun" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "PR") (TyCon "Expr"))))))
+(DFunDef false "parseAtomNestRun" ((PVar "toks") (PVar "pos") (PVar "d")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "nestDepthRef")) (EVar "d"))) (DoLet false false (PVar "r") (EApp (EApp (EApp (EVar "runP") (EApp (EVar "located") (EVar "parseAtomRaw"))) (EVar "toks")) (EVar "pos"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "nestDepthRef")) (EBinOp "-" (EVar "d") (ELit (LInt 1))))) (DoExpr (EVar "r"))))
 (DTypeSig false "parseAtomRaw" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseAtomRaw" () (EApp (EApp (EMethodRef "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EMatch (EVar "t") (arm (PCon "TInt" (PVar "n") PWild) ((GBool (EApp (EVar "isIntMinLit") (EVar "n")))) (EApp (EVar "fatalP") (EVar "intLitTooBigMsg"))) (arm (PCon "TInt" (PVar "n") (PVar "lx")) () (EApp (EVar "emit") (EApp (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EVar "Ref") (EVar "None"))) (EApp (EVar "Ref") (EVar "RNone"))) (EVar "lx")))) (arm (PCon "TFloat" (PVar "f")) () (EApp (EVar "emit") (EApp (EVar "ELit") (EApp (EVar "LFloat") (EVar "f"))))) (arm (PCon "TString" (PVar "s")) () (EApp (EVar "emit") (EApp (EVar "ELit") (EApp (EVar "LString") (EVar "s"))))) (arm (PCon "TChar" (PVar "s")) () (EApp (EVar "emit") (EApp (EVar "ELit") (EApp (EVar "LChar") (EVar "s"))))) (arm (PCon "TIdent" (PVar "x")) () (EApp (EVar "emit") (EApp (EVar "EVar") (EVar "x")))) (arm (PCon "TUpper" (PVar "x")) () (EApp (EVar "parseUpperAtom") (EVar "x"))) (arm (PCon "TUnderscore") () (EApp (EVar "emit") (EApp (EVar "EVar") (ELit (LString "_"))))) (arm (PCon "TLParen") () (EVar "parseParen")) (arm (PCon "TLBracket") () (EVar "parseListE")) (arm (PCon "TLArray") () (EVar "parseArray")) (arm (PCon "TLBrace") () (EVar "parseRecordUpdate")) (arm (PCon "TIf") () (EVar "parseIf")) (arm (PCon "TLet") () (EVar "parseLet")) (arm (PCon "TMatch") () (EVar "parseMatch")) (arm (PCon "TDo") () (EVar "parseDo")) (arm (PCon "TInterpOpen" PWild) () (EVar "parseInterp")) (arm PWild () (EApp (EVar "failP") (ELit (LString "expected atom"))))))))
 (DTypeSig false "parseUpperAtom" (TyFun (TyCon "String") (TyApp (TyCon "Parser") (TyCon "Expr"))))
@@ -7051,9 +7151,9 @@ parseResultWith src tokList offList =
 (DFunDef false "parenResult" ((PList (PVar "e"))) (EApp (EVar "leftSectionOrExpr") (EVar "e")))
 (DFunDef false "parenResult" ((PVar "es")) (EApp (EVar "ETuple") (EVar "es")))
 (DTypeSig false "leftSectionOrExpr" (TyFun (TyCon "Expr") (TyCon "Expr")))
-(DFunDef false "leftSectionOrExpr" ((PVar "e")) (EApp (EApp (EVar "leftSectionGo") (EVar "e")) (EApp (EVar "stripLoc") (EVar "e"))))
+(DFunDef false "leftSectionOrExpr" ((PVar "e")) (EApp (EApp (EVar "leftSectionGo") (EVar "e")) (EApp (EVar "stripLoc1") (EVar "e"))))
 (DTypeSig false "leftSectionGo" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr"))))
-(DFunDef false "leftSectionGo" ((PVar "orig") (PCon "EBinOp" (PVar "op") (PVar "lhs") (PVar "rhs") PWild)) (EApp (EApp (EApp (EApp (EVar "leftSectionRhs") (EVar "orig")) (EVar "op")) (EVar "lhs")) (EApp (EVar "stripLoc") (EVar "rhs"))))
+(DFunDef false "leftSectionGo" ((PVar "orig") (PCon "EBinOp" (PVar "op") (PVar "lhs") (PVar "rhs") PWild)) (EApp (EApp (EApp (EApp (EVar "leftSectionRhs") (EVar "orig")) (EVar "op")) (EVar "lhs")) (EApp (EVar "stripLoc1") (EVar "rhs"))))
 (DFunDef false "leftSectionGo" ((PVar "orig") PWild) (EVar "orig"))
 (DTypeSig false "leftSectionRhs" (TyFun (TyCon "Expr") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr"))))))
 (DFunDef false "leftSectionRhs" (PWild (PVar "op") (PVar "lhs") (PCon "EVar" (PLit (LString "_")))) (EApp (EVar "ESection") (EApp (EApp (EVar "SecLeft") (EVar "lhs")) (EVar "op"))))

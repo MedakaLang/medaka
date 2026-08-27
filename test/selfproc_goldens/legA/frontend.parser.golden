@@ -311,6 +311,7 @@ manyGo : Parser a -> Array Token -> Int -> List a -> PR (List a)
 manyStep : Parser a -> Array Token -> Int -> Int -> List a -> a -> PR (List a)
 mapPR : (a -> b) -> PR a -> PR b
 matchArmBarGuardMsg : String
+maxNestDepth : Int
 memberAliasFor : Int -> String -> Bool -> Token -> Parser UseMember
 memberAliasName : Parser String
 memberAliasNameFor : Token -> Parser String
@@ -332,6 +333,8 @@ negLitArg : Bool -> Parser Expr
 negLitArgFor : Token -> Token -> Parser Expr
 negUnary : Parser Expr
 negUnaryFor : Token -> Parser Expr
+nestDepthRef : Ref Int
+nestTooDeepMsg : String
 nextSigIsPipe : Array Token -> Int -> Int -> Bool
 noExportedAlias : Bool -> UsePath -> Parser Unit
 noMemberAlias : String -> Parser Unit
@@ -366,6 +369,8 @@ parseAspatAt : Parser Expr
 parseAspatAtRaw : Parser Expr
 parseAssign : Parser Expr
 parseAtom : Parser Expr
+parseAtomNestGo : Array Token -> Int -> PR Expr
+parseAtomNestRun : Array Token -> Int -> Int -> PR Expr
 parseAtomRaw : Parser Expr
 parseAttrib : Parser Decl
 parseBareEffectAtom : Parser Ty
@@ -529,6 +534,7 @@ stmtsLoop : Parser (List DoStmt)
 stringLitFor : Token -> Parser String
 stringLitP : Parser String
 stripLoc : Expr -> Expr
+stripLoc1 : Expr -> Expr
 tokEndOffsetAt : Int -> Int
 tokEndOffsetAtArr : Array (Int, Int) -> Int -> Int
 tokIdxOrNone : Array Token -> Int -> Option Int
