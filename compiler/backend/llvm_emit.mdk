@@ -526,9 +526,39 @@ implEntryIfaceWord (CImplEntry _ _ (CImplTagged _ key _ _ _ _)) =
   ifaceWordOfKey key
 implEntryIfaceWord (CImplEntry _ _ (CImplDefault ifaceId _ _)) = ifaceId
 
+-- #1034: the SOURCE value arity of a TAGGED impl's method clause -- its pattern
+-- count less the leading `$dict_*` witnesses dict_pass prepended.  `methodArgTys`
+-- walks the method type's WHOLE arrow spine, so `act : a -> (Unit -> Unit)` reports
+-- arity 2 against a source arity of 1, and the true arity is NOT recoverable from
+-- the type (`a -> (Unit -> Unit)` and `a -> Unit -> Unit` are the same `Ty`).  The
+-- impl clause's own `List Pat` -- the very field eval's `implMethodValue` reads to
+-- build `VClosure env pats body`, which is WHY eval is right on #1034 -- carries it.
+-- An interface DEFAULT (`CImplDefault`) answers 0: its clause is the interface's own
+-- generic body, whose point-free shape is legitimately eta-short, so it keeps the
+-- declared answer and its existing eta-expansion (see the report's `Not covered`).
+implSrcValueArity : CImplEntry -> Int
+implSrcValueArity (CImplEntry _ _ (CImplTagged _ _ _ _ pats _)) =
+  listLen pats - leadingDictPats pats
+implSrcValueArity _ = 0
+
+-- #1034, THE CALL-SITE ARITY.  The declared arity is the answer EXCEPT when the
+-- impl's own clause proves a SHORTER source arity; then the clause wins.  This only
+-- ever LOWERS -- a clause at or beyond the declared arity, or one with no value
+-- pattern at all (`act = someFn`, which carries no arity evidence), keeps the
+-- declared answer byte-identically.  Lowering makes a saturated source call (`act
+-- Dog`, 1 arg) classify as SATURATED instead of under-applied, so the impl body's
+-- strict prefix runs where the source says it does rather than being deferred into a
+-- PAP; Medaka is strict and eval already behaves this way.  A call site that passes
+-- MORE than the lowered arity is an over-application against the impl's returned
+-- closure, which `emitImplCallSat`/`emitKnownFnSat` already lower via `emitOverApp` --
+-- the same shape the eta-expansion used to hard-code into the define.
+-- `gatherGroup`'s define-arity site applies the SAME rule, so define and call sites
+-- keep agreeing (that agreement is #1450/#1668 and must not be broken here).
 methodArityOfEntry : Emit -> CImplEntry -> String -> Int
 methodArityOfEntry e ent method =
-  methodArityOfIface e (implEntryIfaceWord ent) method
+  let declared = methodArityOfIface e (implEntryIfaceWord ent) method
+  let src = implSrcValueArity ent
+  if src > 0 && src < declared then src else declared
 
 -- the declared arity of [method] at the impl registered under [tag] -- the same
 -- answer `methodArityOfEntry` gives, for the sites that hold a tag rather than the
@@ -4390,7 +4420,7 @@ emitMethod e env name route implRoutes methRoutes argOps
       emitMethodPap e env name route implRoutes methRoutes argOps (methodArityOfInput e name)
 emitMethod e env name (RKey tag _) implRoutes methRoutes argOps = match implFor e name tag
   Some entry =>
-    let dictWords = dictWordsOf e env (methRoutes ++ implRoutes)
+    let dictWords = dictWordsOf e env (methRoutes ++ implRoutesForDefine e name entry methRoutes implRoutes)
     -- [tag] is the stamped route tag — the bare head when the head is unique, the
     -- canonical key on a C7 collision.  For tagToLTy/returns-self use the matched
     -- entry's REAL head tag; the lifted-fn symbol uses implFnSymOf (head when
@@ -4702,7 +4732,7 @@ emitDefaultRKey e env name tag methRoutes implRoutes argOps = match defaultForAt
 emitGeneralRKey : Emit -> List (String, (String, LTy)) -> String -> String -> List Route -> List Route -> List String -> (String, LTy)
 emitGeneralRKey e env name tag methRoutes implRoutes argOps = match findByTag noneHeadTag (implsOf e name)
   Some entry =>
-    let dictWords = dictWordsOf e env (methRoutes ++ implRoutes)
+    let dictWords = dictWordsOf e env (methRoutes ++ implRoutesForDefine e name entry methRoutes implRoutes)
     let headTag = implEntryTag entry
     let resTy = if methodReturnsSelf e (implEntryIface entry) name then
       tagToLTy headTag
@@ -5423,12 +5453,74 @@ emitDefaultDispatchChain e dictPtr headTag (tag::rest) name entry argOps slot en
 -- fields 0..nReq-1, exactly like emitDispatchChain loads an impl's own requires —
 -- load + PREPEND them.  Concrete tag ⇒ nReq=0 ⇒ unchanged (`maximum [Int]`).
 
--- the count of leading element-dict params a matched impl's lifted fn expects: its
--- full clause arity (number of patterns) minus the method's interface arity.  This
--- equals the number of per-instance `requires` dicts stored in the boxed dict cell
--- (fields 1..count), so the chain loads exactly that many and prepends them.
+-- the count of leading element-dict params a matched impl's lifted fn expects:
+-- `leadingDictPats` applied to THIS entry's own clause — a DIRECT count of the
+-- `$dict_*`-named patterns dict_pass prepended, never a subtraction.  That is the
+-- identical ruler `gatherGroup` sizes the define with (`nDicts = leadingDictPats
+-- (firstClausePats cls0)`), so caller and callee agree by construction rather than
+-- by coincidence.  Exact peer of wasm_emit's `implLeadingDictCountW`, which made
+-- this same choice for #717 and states in its own comment that it deliberately does
+-- NOT use the subtraction-shaped `implReqDictCount`.
+--
+-- ⚠️ The old body was `listLen (implPats ent) - methodArityOfEntry e ent name`.
+-- That agrees with the direct count only when the clause's VALUE-pattern count
+-- equals `methodArityOfEntry`, which a POINT-FREE (eta-short) impl clause breaks:
+-- `impl DictUser (Live a) requires Eq a where dictUser = selfEq` has
+-- `pats = [$dict_dictUser_0]`, so `implSrcValueArity` reads `1 - 1 = 0`,
+-- `methodArityOfEntry`'s `src > 0` guard never fires and it stays at the declared 1,
+-- and the subtraction answered 0 leading dicts against a define that binds 1.  The
+-- value argument then landed positionally in the dict slot — SIGSEGV.  The direct
+-- count cannot skew that way.
+--
+-- The result is also the number of per-instance `requires` dicts stored in the boxed
+-- dict cell (fields 1..count), so the runtime chain loads exactly that many and
+-- prepends them.  Never negative.
 implReqCount : Emit -> String -> CImplEntry -> Int
-implReqCount e name ent = listLen (implPats ent) - methodArityOfEntry e ent name
+implReqCount _e _name ent = leadingDictPats (implPats ent)
+
+-- #1648: the impl-`requires` dict words a DIRECT (RKey) call to [ent]'s lifted fn is
+-- allowed to push — never more than that define actually BINDS.  dict_pass prepends an
+-- impl method's `$dict_<method>_<slot>` params only when the body READS one
+-- (typecheck.mdk's `usesImplDict` gate), while the CALL site stamps one route per
+-- DECLARED `requires` unconditionally.  The two disagree exactly when the body ignores
+-- its element dict: `impl Same (Box a) requires Eq a where bar (Box n) = n` is DEFINED
+-- `@mdk_impl_Box_bar(i64 %arg0)` and was CALLED `@mdk_impl_Box_bar(i64 0, i64 %t3)`, so
+-- the one surviving parameter bound positionally to the (null) DICT slot and the body
+-- read a dictionary pointer where its value belonged — SIGSEGV, or a silent wrong
+-- answer when nothing reads the mis-bound word.
+-- This is the SAME skew, from the SAME cause, that eval already closes in
+-- `implDictRoutes` (eval/eval.mdk, #413) and that the RUNTIME dispatch chain already
+-- closes in `emitDispatchArmBody`'s `cellCount` — both by sizing the call from the
+-- DEFINITION.  #413's comment claims "emit never had this bug"; that is true of the
+-- dispatch chain and false of this static RKey path, which is #1648.  Same formula, so
+-- the three now agree by construction: `implReqCount` counts the entry's own leading
+-- `$dict_*` patterns DIRECTLY (`leadingDictPats (implPats ent)`) — the very ruler
+-- `gatherGroup` mints the define with (`nDicts = leadingDictPats (firstClausePats
+-- cls0)`) — of which the first `lengthS methRoutes` are the METHOD-level dicts,
+-- leaving this impl's own share.  (It was briefly a SUBTRACTION — clause pattern count
+-- less value arity — which is a DIFFERENT quantity for a POINT-FREE clause and reopened
+-- #1648 for exactly that shape; see `implReqCount`'s own comment.)  The `maxInt 0`
+-- below is vacuous for the count itself (a direct dict count is never negative) and
+-- now only guards the `- lengthS methRoutes` subtraction.
+-- An impl method that DOES read its
+-- dict declares the param, so `implReqCount` covers every stamped route and the list is
+-- returned whole: byte-identical for every impl outside this exact skew.
+implRoutesForDefine : Emit -> String -> CImplEntry -> List Route -> List Route -> List Route
+implRoutesForDefine e name ent methRoutes implRoutes =
+  takeRoutes
+    (maxInt 0 (implReqCount e name ent - lengthS methRoutes))
+    implRoutes
+
+-- the first [n] routes ([] for n <= 0 or a shorter list) — the local `takeN` this
+-- module's truncating callers need, with no new import.  Exact peer of wasm_emit's
+-- `takeRoutesW`, which the wasm arm has used for the SAME truncation since #717
+-- (`emitMethodRef`'s RKey arm).  That arm's comment reads "Native gets away with it
+-- (LLVM cdecl silently ignores extra args)"; #1648 is the measurement that it does
+-- not — the surplus word shifts the value into the dict slot and the binary faults.
+takeRoutes : Int -> List Route -> List Route
+takeRoutes n (r::rest)
+  | n > 0 = r :: takeRoutes (n - 1) rest
+takeRoutes _ _ = []
 
 -- load `n` nested dict words from the boxed dict cell `dictPtr`.  The head tag is
 -- the cell header (offset 0); the nested req dicts are fields 0..n-1 (loadField i ⇒
@@ -5546,19 +5638,23 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
     let _ = emit e "  store i64 \{rv}, ptr \{slot}"
     emit e ("  br label %" ++ endL)
   else
-    -- #1816: CLAMP AT ZERO.  `implReqCount` is `listLen (implPats ent) - declared
-    -- arity`, which goes NEGATIVE for an ETA-SHORT clause -- exactly what an
-    -- interface DEFAULT specialized into an impl is (`mapFirst f = bimap f identity`
-    -- binds 1 of `mapFirst`'s 2 declared params).  `loadReqDicts` already treated a
-    -- negative as zero, so the operand list was always right; but F10's `armArity`
-    -- below ADDS this number back, and a negative there cancelled the declared arity
-    -- straight down to `listLen (implPats ent)` -- under-applying the define
-    -- `gatherGroup` mints at `maxInt (clauseArity) (declared + nDicts)`.  The arm then
-    -- called an arity-2 define with 1 operand and re-applied the rest to whatever came
-    -- back, which is the E-NONEXHAUSTIVE-MATCH of #1816.  A dict COUNT is never
-    -- negative; clamping restores `armArity == the define's arity` for the eta-short
-    -- case and is byte-identical everywhere else (the clamp only fires where
-    -- `loadReqDicts` already emitted nothing).
+    -- #1816: CLAMP AT ZERO.  ⚠️ HISTORICAL, now VACUOUS for `implReqCount` itself.
+    -- `implReqCount` USED TO be `listLen (implPats ent) - declared arity`, which went
+    -- NEGATIVE for an ETA-SHORT clause -- exactly what an interface DEFAULT
+    -- specialized into an impl is (`mapFirst f = bimap f identity` binds 1 of
+    -- `mapFirst`'s 2 declared params).  `loadReqDicts` already treated a negative as
+    -- zero, so the operand list was always right; but F10's `armArity` below ADDS this
+    -- number back, and a negative there cancelled the declared arity straight down to
+    -- `listLen (implPats ent)` -- under-applying the define `gatherGroup` mints at
+    -- `maxInt (clauseArity) (declared + nDicts)`.  The arm then called an arity-2
+    -- define with 1 operand and re-applied the rest to whatever came back, which is
+    -- the E-NONEXHAUSTIVE-MATCH of #1816.
+    -- `implReqCount` is now a DIRECT `leadingDictPats` count, which is never negative
+    -- by construction, so it can no longer supply the negative #1816 described; the
+    -- clamp is kept because the `- lengthS methWords` subtraction here is still a
+    -- subtraction, and because #1818's `armArity` is read off the group rather than
+    -- recomputed from `cellCount`.  Byte-identical either way for every shape the
+    -- clamp used to fire on.
     let cellCount = maxInt 0 (implReqCount e name ent - lengthS methWords)
     let cellDicts = loadReqDicts e dictPtr cellCount 0
     -- F10 (#1450/#1668 follow-on): SATURATE AGAINST THIS ARM'S OWN DECLARED ARITY.
@@ -6747,7 +6843,15 @@ gatherGroup e entries (method, key) =
   -- `methodReturnsSelf` read it as a ROUTE WORD -- re-keying it in place is PR
   -- #1346's E4 result and re-opens CLOSED S0 #1277.  A miss falls back to the bare
   -- table, so a collision-free program emits byte-identically to before.
-  let arity = maxInt (clauseArity cls0) (methodArityOfIface e (ifaceWordOfKey key) method + nDicts)
+  -- #1034, THE DEFINE-ARITY MIRROR of `methodArityOfEntry`'s lowering rule.  A clause
+  -- that binds at least one VALUE pattern but fewer than the declared spine proves a
+  -- SHORTER source arity than the type can express, and eta-expanding it to the
+  -- declared arity is what defers the body's strict prefix past the source's call.
+  -- Such a clause is emitted at its own arity; every other shape keeps the previous
+  -- `maxInt (clauseArity) (declared + nDicts)` answer exactly.
+  let declaredTotal = methodArityOfIface e (ifaceWordOfKey key) method + nDicts
+  let srcTotal = clauseArity cls0
+  let arity = if srcTotal > nDicts && srcTotal < declaredTotal then srcTotal else maxInt srcTotal declaredTotal
   let cls = map (etaExpandClause arity) cls0
   ImplGroup method tag symTag positions arity cls
 
@@ -9463,10 +9567,22 @@ paramEnv (PWild::rest) (_::tys) i = paramEnv rest tys (i + 1)
 paramEnv (PWild::rest) [] i = paramEnv rest [] (i + 1)
 paramEnv _ _ _ = panic "llvm: function parameters must be plain variables"
 
+-- #1101: is a tail-position call of `fname` with `n` flattened arguments SATURATED
+-- against the callee's EMITTED define arity?  The ruler is `defArityOf` (the
+-- replayed post-`etaSaturateMethodBody` param count of the actual `@mdk_<fn>`
+-- define), NEVER `fnArity` — the signature/clause arity diverges from the emitted
+-- one whenever eta-saturation fires (see installDefArityMap's note above).  `None`
+-- (name absent from the table) keeps the unconditional direct call, matching the
+-- behaviour that predated this guard for anything not in the table.
+tailCallSaturated : Emit -> String -> Int -> Bool
+tailCallSaturated e fname n = match defArityOf e fname
+  Some a => n == a
+  None => True
+
 -- emit a function body in TAIL position: every control path ends in a `ret`.
 -- An `if` recurses into both arms (each arm is itself in tail position and rets);
--- a tail call to a known function emits `[musttail] call` + `ret`; anything else
--- is computed as a value and returned.
+-- a SATURATED tail call to a known function emits `[musttail] call` + `ret`;
+-- anything else is computed as a value and returned.
 emitFnBody : Emit -> List (String, (String, LTy)) -> String -> CExpr -> Unit
 emitFnBody e env self (CIf c t f) =
   let (cv, _) = emitExpr e env c
@@ -9486,7 +9602,15 @@ emitFnBody e env self other =
   match hd
     CVar fname0 _ =>
       let fname = canonFnName e fname0
-      if isKnownFn e fname && hasArgs args then
+      -- #1101: an UNSATURATED (over- or under-applied) tail call must not be
+      -- emitted as a direct call — passing every flattened argument to a define
+      -- with fewer params silently dropped the surplus and never invoked the
+      -- returned closure.  Falling through to `emitValueRet` routes the node
+      -- through `emitApp` -> `emitKnownFnSat` -> `emitOverApp`/`emitPapClosure`,
+      -- the same correct shape an application in `main`'s own body already gets.
+      -- `emitArgs` is 1:1 with `args`, so `lengthS args` is the arg-word count
+      -- without emitting anything (the guard must not emit args it may discard).
+      if isKnownFn e fname && hasArgs args && tailCallSaturated e fname (lengthS args) then
         let argOps = emitArgs e env args
         let r = freshReg e
         let kw = if fname == self then "musttail call" else "call"
@@ -9837,6 +9961,9 @@ paramUseTy sigs env p (CLet _ _ e1 e2) =
 -- in a block passes its continuation here as `CBlock rest` so the bound var's type
 -- can be inferred from later uses, not a dummy `0`).
 paramUseTy sigs env p (CBlock stmts) = paramUseStmts sigs env p stmts
+paramUseTy sigs env p (CDecision scrut arms _tree) =
+  firstSome (paramUseTy sigs env p scrut) (paramUseArms sigs env p arms)
+paramUseTy sigs env p (CLam _ body) = paramUseTy sigs env p body
 paramUseTy sigs env p app =
   let (hd, args) = flattenApp app []
   match hd
@@ -9882,6 +10009,21 @@ paramUseStmts sigs env p ((CSExpr ex)::rest) =
 paramUseStmts sigs env p ((CSLet _ _ ex)::rest) =
   firstSome (paramUseTy sigs env p ex) (paramUseStmts sigs env p rest)
 paramUseStmts sigs env p (_::rest) = paramUseStmts sigs env p rest
+
+-- scan a CDecision's arms for a determining use of `p` in a guard or the arm body.
+paramUseArms : OrdMap FnSig -> List (String, LTy) -> String -> List CArm -> Option LTy
+paramUseArms _ _ _ [] = None
+paramUseArms sigs env p ((CArm _ guards body)::rest) =
+  firstSome
+    (firstSome (paramUseGuards sigs env p guards) (paramUseTy sigs env p body))
+    (paramUseArms sigs env p rest)
+
+paramUseGuards : OrdMap FnSig -> List (String, LTy) -> String -> List CGuard -> Option LTy
+paramUseGuards _ _ _ [] = None
+paramUseGuards sigs env p ((CGBool e)::rest) =
+  firstSome (paramUseTy sigs env p e) (paramUseGuards sigs env p rest)
+paramUseGuards sigs env p ((CGBind _ e)::rest) =
+  firstSome (paramUseTy sigs env p e) (paramUseGuards sigs env p rest)
 
 isVarNamed : String -> CExpr -> Bool
 isVarNamed p (CVar x _) = p == x
@@ -10106,6 +10248,9 @@ paramUsedInArith p (CIf c t f) = paramUsedInArith p c
 paramUsedInArith p (CUnOp _ x) = paramUsedInArith p x
 paramUsedInArith p (CLet _ _ e1 e2) = paramUsedInArith p e1
   || paramUsedInArith p e2
+paramUsedInArith p (CDecision scrut arms _tree) = paramUsedInArith p scrut
+  || anyArithArm p arms
+paramUsedInArith p (CLam _ body) = paramUsedInArith p body
 paramUsedInArith p app =
   let (_, args) = flattenApp app []
   anyArithArg p args
@@ -10114,6 +10259,19 @@ paramUsedInArith _ _ = False
 anyArithArg : String -> List CExpr -> Bool
 anyArithArg _ [] = False
 anyArithArg p (a::rest) = paramUsedInArith p a || anyArithArg p rest
+
+anyArithArm : String -> List CArm -> Bool
+anyArithArm _ [] = False
+anyArithArm p ((CArm _ guards body)::rest) = paramUsedInArith p body
+  || anyArithGuard p guards
+  || anyArithArm p rest
+
+anyArithGuard : String -> List CGuard -> Bool
+anyArithGuard _ [] = False
+anyArithGuard p ((CGBool e)::rest) = paramUsedInArith p e
+  || anyArithGuard p rest
+anyArithGuard p ((CGBind _ e)::rest) = paramUsedInArith p e
+  || anyArithGuard p rest
 
 zipParamEnv : List Pat -> List LTy -> List (String, LTy)
 zipParamEnv ((PVar x _)::ps) (t::ts) = (x, t) :: zipParamEnv ps ts

@@ -565,7 +565,11 @@ for f in $changed; do
       # typecheck.mdk-owned — that regression went undetected by every gate this
       # arm already listed. Listed in ci.yml's `types` shard pattern, so it runs at
       # the merge queue; missing here it ran neither locally nor on the PR check.
-      add 'diff_compiler_analyze_project' ;;
+      add 'diff_compiler_analyze_project'
+      # S-arity-census: derives call/define arity skew from emitted LLVM IR —
+      # typecheck.mdk's usesImplDict decides whether a dict param exists at all
+      # (the #1648 half), so a types/* change can move it without touching backend/*.
+      add 'diff_compiler_call_arity' ;;
 
     # ── THE THREE ENGINES ─────────────────────────────────────────────────────
     #
@@ -616,7 +620,11 @@ for f in $changed; do
       add 'diff_compiler_draft_semantic'
       add 'diff_compiler_anf_identity'
       add 'diff_compiler_engines'
-      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics' ;;
+      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'
+      # S-arity-census: derives call/define arity skew from emitted LLVM IR —
+      # core_ir_lower.mdk's methodArgTys decides declared arity for the #1034 half,
+      # so an ir/* change can move it without touching backend/*.
+      add 'diff_compiler_call_arity' ;;
 
     # ── backend: the FIXPOINT is the decisive gate; do not defer it to CI ──
     #
@@ -636,6 +644,9 @@ for f in $changed; do
       # was the two disagreeing. The permutation gate grades the `build` arm, so it
       # is the one differential that can see the mangler decide by clause order.
       add 'diff_compiler_import_order'
+      # S-arity-census: derives call/define arity skew from emitted LLVM IR —
+      # the exact instrument a backend change could silently defeat.
+      add 'diff_compiler_call_arity'
       need_fixpoint=1 ;;
 
     # #1131: driver/loader.mdk is a cited DICT-SEMANTICS site.
