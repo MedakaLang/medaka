@@ -63,6 +63,7 @@ import support.util.{
   joinDot,
   dedup,
 }
+import support.opcount.{opBump}
 -- Reused JSON diagnostic shaping for `medaka run --json` (RUNTIME-DIAGNOSTIC-
 -- CHANNEL-DESIGN.md Fork C). diagnostics.mdk sits above frontend/types in the
 -- pipeline and does not import eval.mdk (no cycle) — verified by grep before
@@ -764,11 +765,13 @@ force : Value e -> <e> Value e
 force (VThunk f) = f ()
 force v = v
 
+-- #1033: opBump makes the by-name scan's O(depth) cost visible to the perf
+-- gate's deterministic op-count arm (it never counted this scan before).
 lookupFrameCell : List (String, Ref (Value e)) -> String -> Option (Ref (Value e))
 lookupFrameCell [] _ = None
-lookupFrameCell ((n, cell)::rest) name
-  | n == name = Some cell
-  | otherwise = lookupFrameCell rest name
+lookupFrameCell ((n, cell)::rest) name =
+  let _ = opBump ()
+  if n == name then Some cell else lookupFrameCell rest name
 
 -- ── lexical-address lookup (consumes annotate.mdk's EVarAt; DORMANT, §2.0) ──
 -- AGlobal falls back to the by-name scan — identical semantics: it reaches a
