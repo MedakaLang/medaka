@@ -1,5 +1,5 @@
 # META
-source_lines=11574
+source_lines=11601
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -5457,12 +5457,30 @@ emitDefaultDispatchChain e dictPtr headTag (tag::rest) name entry argOps slot en
 -- fields 0..nReq-1, exactly like emitDispatchChain loads an impl's own requires —
 -- load + PREPEND them.  Concrete tag ⇒ nReq=0 ⇒ unchanged (`maximum [Int]`).
 
--- the count of leading element-dict params a matched impl's lifted fn expects: its
--- full clause arity (number of patterns) minus the method's interface arity.  This
--- equals the number of per-instance `requires` dicts stored in the boxed dict cell
--- (fields 1..count), so the chain loads exactly that many and prepends them.
+-- the count of leading element-dict params a matched impl's lifted fn expects:
+-- `leadingDictPats` applied to THIS entry's own clause — a DIRECT count of the
+-- `$dict_*`-named patterns dict_pass prepended, never a subtraction.  That is the
+-- identical ruler `gatherGroup` sizes the define with (`nDicts = leadingDictPats
+-- (firstClausePats cls0)`), so caller and callee agree by construction rather than
+-- by coincidence.  Exact peer of wasm_emit's `implLeadingDictCountW`, which made
+-- this same choice for #717 and states in its own comment that it deliberately does
+-- NOT use the subtraction-shaped `implReqDictCount`.
+--
+-- ⚠️ The old body was `listLen (implPats ent) - methodArityOfEntry e ent name`.
+-- That agrees with the direct count only when the clause's VALUE-pattern count
+-- equals `methodArityOfEntry`, which a POINT-FREE (eta-short) impl clause breaks:
+-- `impl DictUser (Live a) requires Eq a where dictUser = selfEq` has
+-- `pats = [$dict_dictUser_0]`, so `implSrcValueArity` reads `1 - 1 = 0`,
+-- `methodArityOfEntry`'s `src > 0` guard never fires and it stays at the declared 1,
+-- and the subtraction answered 0 leading dicts against a define that binds 1.  The
+-- value argument then landed positionally in the dict slot — SIGSEGV.  The direct
+-- count cannot skew that way.
+--
+-- The result is also the number of per-instance `requires` dicts stored in the boxed
+-- dict cell (fields 1..count), so the runtime chain loads exactly that many and
+-- prepends them.  Never negative.
 implReqCount : Emit -> String -> CImplEntry -> Int
-implReqCount e name ent = listLen (implPats ent) - methodArityOfEntry e ent name
+implReqCount _e _name ent = leadingDictPats (implPats ent)
 
 -- #1648: the impl-`requires` dict words a DIRECT (RKey) call to [ent]'s lifted fn is
 -- allowed to push — never more than that define actually BINDS.  dict_pass prepends an
@@ -5479,11 +5497,16 @@ implReqCount e name ent = listLen (implPats ent) - methodArityOfEntry e ent name
 -- closes in `emitDispatchArmBody`'s `cellCount` — both by sizing the call from the
 -- DEFINITION.  #413's comment claims "emit never had this bug"; that is true of the
 -- dispatch chain and false of this static RKey path, which is #1648.  Same formula, so
--- the three now agree by construction: `implReqCount` is the entry's own clause pattern
--- count less its value arity — exactly the leading dict params `gatherGroup` mints the
--- define with (`nDicts = leadingDictPats (firstClausePats cls0)`) — of which the first
--- `lengthS methRoutes` are the METHOD-level dicts, leaving this impl's own share.
--- Clamped at zero for the eta-short case (#1816).  An impl method that DOES read its
+-- the three now agree by construction: `implReqCount` counts the entry's own leading
+-- `$dict_*` patterns DIRECTLY (`leadingDictPats (implPats ent)`) — the very ruler
+-- `gatherGroup` mints the define with (`nDicts = leadingDictPats (firstClausePats
+-- cls0)`) — of which the first `lengthS methRoutes` are the METHOD-level dicts,
+-- leaving this impl's own share.  (It was briefly a SUBTRACTION — clause pattern count
+-- less value arity — which is a DIFFERENT quantity for a POINT-FREE clause and reopened
+-- #1648 for exactly that shape; see `implReqCount`'s own comment.)  The `maxInt 0`
+-- below is vacuous for the count itself (a direct dict count is never negative) and
+-- now only guards the `- lengthS methRoutes` subtraction.
+-- An impl method that DOES read its
 -- dict declares the param, so `implReqCount` covers every stamped route and the list is
 -- returned whole: byte-identical for every impl outside this exact skew.
 implRoutesForDefine : Emit -> String -> CImplEntry -> List Route -> List Route -> List Route
@@ -5619,19 +5642,23 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
     let _ = emit e "  store i64 \{rv}, ptr \{slot}"
     emit e ("  br label %" ++ endL)
   else
-    -- #1816: CLAMP AT ZERO.  `implReqCount` is `listLen (implPats ent) - declared
-    -- arity`, which goes NEGATIVE for an ETA-SHORT clause -- exactly what an
-    -- interface DEFAULT specialized into an impl is (`mapFirst f = bimap f identity`
-    -- binds 1 of `mapFirst`'s 2 declared params).  `loadReqDicts` already treated a
-    -- negative as zero, so the operand list was always right; but F10's `armArity`
-    -- below ADDS this number back, and a negative there cancelled the declared arity
-    -- straight down to `listLen (implPats ent)` -- under-applying the define
-    -- `gatherGroup` mints at `maxInt (clauseArity) (declared + nDicts)`.  The arm then
-    -- called an arity-2 define with 1 operand and re-applied the rest to whatever came
-    -- back, which is the E-NONEXHAUSTIVE-MATCH of #1816.  A dict COUNT is never
-    -- negative; clamping restores `armArity == the define's arity` for the eta-short
-    -- case and is byte-identical everywhere else (the clamp only fires where
-    -- `loadReqDicts` already emitted nothing).
+    -- #1816: CLAMP AT ZERO.  ⚠️ HISTORICAL, now VACUOUS for `implReqCount` itself.
+    -- `implReqCount` USED TO be `listLen (implPats ent) - declared arity`, which went
+    -- NEGATIVE for an ETA-SHORT clause -- exactly what an interface DEFAULT
+    -- specialized into an impl is (`mapFirst f = bimap f identity` binds 1 of
+    -- `mapFirst`'s 2 declared params).  `loadReqDicts` already treated a negative as
+    -- zero, so the operand list was always right; but F10's `armArity` below ADDS this
+    -- number back, and a negative there cancelled the declared arity straight down to
+    -- `listLen (implPats ent)` -- under-applying the define `gatherGroup` mints at
+    -- `maxInt (clauseArity) (declared + nDicts)`.  The arm then called an arity-2
+    -- define with 1 operand and re-applied the rest to whatever came back, which is
+    -- the E-NONEXHAUSTIVE-MATCH of #1816.
+    -- `implReqCount` is now a DIRECT `leadingDictPats` count, which is never negative
+    -- by construction, so it can no longer supply the negative #1816 described; the
+    -- clamp is kept because the `- lengthS methWords` subtraction here is still a
+    -- subtraction, and because #1818's `armArity` is read off the group rather than
+    -- recomputed from `cellCount`.  Byte-identical either way for every shape the
+    -- clamp used to fire on.
     let cellCount = maxInt 0 (implReqCount e name ent - lengthS methWords)
     let cellDicts = loadReqDicts e dictPtr cellCount 0
     -- F10 (#1450/#1668 follow-on): SATURATE AGAINST THIS ARM'S OWN DECLARED ARITY.
@@ -12493,7 +12520,7 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "emitDefaultDispatchChain" ((PVar "e") PWild PWild (PList) PWild PWild PWild PWild PWild) (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  call void @mdk_dispatch_no_impl()")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  unreachable"))))))
 (DFunDef false "emitDefaultDispatchChain" ((PVar "e") (PVar "dictPtr") (PVar "headTag") (PCons (PVar "tag") (PVar "rest")) (PVar "name") (PVar "entry") (PVar "argOps") (PVar "slot") (PVar "endL")) (EBlock (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "display") (EVar "headTag"))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "hashName") (EVar "tag"))))) (ELit (LString ""))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "ddispyes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "ddispnext")) (EVar "n"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "display") (EVar "next"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoLet false false (PVar "fname") (EApp (EApp (EVar "defaultFnName") (EVar "tag")) (EVar "name"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "ensureDefaultEmitted") (EVar "e")) (EVar "fname")) (EVar "tag")) (EVar "name")) (EApp (EApp (EApp (EApp (EVar "defaultAtOr") (EVar "entry")) (EVar "e")) (EVar "name")) (EVar "tag")))) (DoLet false false (PVar "reqCount") (EApp (EApp (EApp (EVar "innerDefaultReqCount") (EVar "e")) (EVar "name")) (EVar "tag"))) (DoLet false false (PVar "reqDicts") (EApp (EApp (EApp (EApp (EVar "loadReqDicts") (EVar "e")) (EVar "dictPtr")) (EVar "reqCount")) (ELit (LInt 0)))) (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EApp (EVar "emitImplCall") (EVar "e")) (EVar "fname")) (EBinOp "++" (EVar "reqDicts") (EVar "argOps"))) (EVar "LTInt"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EVar "display") (EVar "slot"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL")))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDefaultDispatchChain") (EVar "e")) (EVar "dictPtr")) (EVar "headTag")) (EVar "rest")) (EVar "name")) (EVar "entry")) (EVar "argOps")) (EVar "slot")) (EVar "endL")))))
 (DTypeSig false "implReqCount" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyCon "Int")))))
-(DFunDef false "implReqCount" ((PVar "e") (PVar "name") (PVar "ent")) (EBinOp "-" (EApp (EVar "listLen") (EApp (EVar "implPats") (EVar "ent"))) (EApp (EApp (EApp (EVar "methodArityOfEntry") (EVar "e")) (EVar "ent")) (EVar "name"))))
+(DFunDef false "implReqCount" ((PVar "_e") (PVar "_name") (PVar "ent")) (EApp (EVar "leadingDictPats") (EApp (EVar "implPats") (EVar "ent"))))
 (DTypeSig false "implRoutesForDefine" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))))))
 (DFunDef false "implRoutesForDefine" ((PVar "e") (PVar "name") (PVar "ent") (PVar "methRoutes") (PVar "implRoutes")) (EApp (EApp (EVar "takeRoutes") (EApp (EApp (EVar "maxInt") (ELit (LInt 0))) (EBinOp "-" (EApp (EApp (EApp (EVar "implReqCount") (EVar "e")) (EVar "name")) (EVar "ent")) (EApp (EVar "lengthS") (EVar "methRoutes"))))) (EVar "implRoutes")))
 (DTypeSig false "takeRoutes" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))
@@ -14717,7 +14744,7 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "emitDefaultDispatchChain" ((PVar "e") PWild PWild (PList) PWild PWild PWild PWild PWild) (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  call void @mdk_dispatch_no_impl()")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  unreachable"))))))
 (DFunDef false "emitDefaultDispatchChain" ((PVar "e") (PVar "dictPtr") (PVar "headTag") (PCons (PVar "tag") (PVar "rest")) (PVar "name") (PVar "entry") (PVar "argOps") (PVar "slot") (PVar "endL")) (EBlock (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EMethodRef "display") (EVar "headTag"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "hashName") (EVar "tag"))))) (ELit (LString ""))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "ddispyes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "ddispnext")) (EVar "n"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EMethodRef "display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EMethodRef "display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EMethodRef "display") (EVar "next"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoLet false false (PVar "fname") (EApp (EApp (EVar "defaultFnName") (EVar "tag")) (EVar "name"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "ensureDefaultEmitted") (EVar "e")) (EVar "fname")) (EVar "tag")) (EVar "name")) (EApp (EApp (EApp (EApp (EVar "defaultAtOr") (EVar "entry")) (EVar "e")) (EVar "name")) (EVar "tag")))) (DoLet false false (PVar "reqCount") (EApp (EApp (EApp (EVar "innerDefaultReqCount") (EVar "e")) (EVar "name")) (EVar "tag"))) (DoLet false false (PVar "reqDicts") (EApp (EApp (EApp (EApp (EVar "loadReqDicts") (EVar "e")) (EVar "dictPtr")) (EVar "reqCount")) (ELit (LInt 0)))) (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EApp (EVar "emitImplCall") (EVar "e")) (EVar "fname")) (EBinOp "++" (EVar "reqDicts") (EVar "argOps"))) (EVar "LTInt"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EMethodRef "display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EMethodRef "display") (EVar "slot"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL")))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDefaultDispatchChain") (EVar "e")) (EVar "dictPtr")) (EVar "headTag")) (EVar "rest")) (EVar "name")) (EVar "entry")) (EVar "argOps")) (EVar "slot")) (EVar "endL")))))
 (DTypeSig false "implReqCount" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyCon "Int")))))
-(DFunDef false "implReqCount" ((PVar "e") (PVar "name") (PVar "ent")) (EBinOp "-" (EApp (EVar "listLen") (EApp (EVar "implPats") (EVar "ent"))) (EApp (EApp (EApp (EVar "methodArityOfEntry") (EVar "e")) (EVar "ent")) (EVar "name"))))
+(DFunDef false "implReqCount" ((PVar "_e") (PVar "_name") (PVar "ent")) (EApp (EVar "leadingDictPats") (EApp (EVar "implPats") (EVar "ent"))))
 (DTypeSig false "implRoutesForDefine" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))))))
 (DFunDef false "implRoutesForDefine" ((PVar "e") (PVar "name") (PVar "ent") (PVar "methRoutes") (PVar "implRoutes")) (EApp (EApp (EVar "takeRoutes") (EApp (EApp (EVar "maxInt") (ELit (LInt 0))) (EBinOp "-" (EApp (EApp (EApp (EVar "implReqCount") (EVar "e")) (EVar "name")) (EVar "ent")) (EApp (EVar "lengthS") (EVar "methRoutes"))))) (EVar "implRoutes")))
 (DTypeSig false "takeRoutes" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))

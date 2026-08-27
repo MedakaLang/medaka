@@ -2,9 +2,12 @@
 --
 -- The regression guard that replaces `test/must_fail_fixtures/1648-impl-requires-
 -- unused-dict-arity-skew-segfault/`, drained and deleted when #1648 was fixed.  It
--- keeps all THREE cells of the issue's varied dimension -- does the impl method's
+-- keeps all cells of the issue's varied dimension -- does the impl method's
 -- body READ the element dict its `requires` clause obligates? -- in one program, so
--- a regression cannot hide in the cell that has no observable.
+-- a regression cannot hide in the cell that has no observable.  CELL 4 adds the
+-- second dimension the first three do not vary: is the reading body written
+-- POINT-FREE (eta-short), so the clause carries the dict pattern but NO value
+-- pattern at all?
 --
 -- The expected stdout in `impl_requires_dict_arity_conformance.build.golden` is
 -- HAND-DERIVED from the language semantics, written down before either engine was
@@ -15,6 +18,8 @@
 --   valOnly  = 7   `Phantom`'s only field holds 7 and the arm is `Phantom n => n`.
 --   noRead   = 22  the body is the literal 22; it reads neither dict nor value.
 --   dictUser = 42  `if 1 == 1 then 41 + 1 else 0`.
+--   dictUserPF = 55  `dictUserPF = selfEqPF`, so `selfEqPF (LivePF 2 54)`, which is
+--                    `if 2 == 2 then 54 + 1 else 0`.
 --
 -- WHY IT CATCHES #1648.  dict_pass prepends an impl method's `$dict_<method>_<slot>`
 -- param only when the body actually READS it (typecheck.mdk's `usesImplDict`), while
@@ -63,6 +68,28 @@ interface DictUser a where
 impl DictUser (Live a) requires Eq a where
   dictUser (Live x n) = if x == x then n + 1 else 0
 
+-- CELL 4: the POINT-FREE (eta-short) spelling of cell 3.  The body still reads the
+-- dict -- `selfEqPF` forces `Eq a` internally -- so dict_pass DOES prepend the
+-- `$dict_dictUserPF_0` param, but the clause carries NO value pattern, so its
+-- pattern list is `[$dict_dictUserPF_0]` and `listLen pats - methodArity` reads
+-- `1 - 1 = 0` leading dicts against a define that binds ONE.  The single value
+-- argument then lands positionally in the dict slot -> SIGSEGV, exit 139, nothing
+-- printed.  That is a DIFFERENT skew from cells 1-2 (there the define was short and
+-- the CALL long; here the call is short and the DEFINE long), which is why cell 3
+-- alone does not cover it: cell 3's clause has a value pattern and the subtraction
+-- happens to agree there.  `implReqCount` counts the leading `$dict_*` patterns
+-- directly now, so define and call agree for both spellings.
+data LivePF a = LivePF a Int
+
+interface DictUserPF a where
+  dictUserPF : a -> Int
+
+selfEqPF : Eq a => LivePF a -> Int
+selfEqPF (LivePF x n) = if x == x then n + 1 else 0
+
+impl DictUserPF (LivePF a) requires Eq a where
+  dictUserPF = selfEqPF
+
 main =
   println
-    "valOnly=\{debug (valOnly (Phantom 7))} noRead=\{debug (noRead (Blind 7))} dictUser=\{debug (dictUser (Live 1 41))}"
+    "valOnly=\{debug (valOnly (Phantom 7))} noRead=\{debug (noRead (Blind 7))} dictUser=\{debug (dictUser (Live 1 41))} dictUserPF=\{debug (dictUserPF (LivePF 2 54))}"
