@@ -3405,7 +3405,7 @@ ppResErrorLocatedF fallbackFile e = match resErrorLoc e
 -- instead of the bare name — retiring the body-scoped snapshot/restore windows.
 --
 -- INCREMENT 1 mints only top-level binders.  Local / lambda / pattern / where
--- binders are pushed into scope as a frame of (name, 0) so SHADOWING is correct
+-- binders are inserted into scope at the sentinel id 0 so SHADOWING is correct
 -- (an inner `g` still hides a top-level `g`), but their occurrences carry the
 -- sentinel id 0 and typecheck reads those through the bare-name fallback (exactly
 -- today's behaviour).  `bodyLocalSchemesRef` / `isBodyLocalScheme` were retired
@@ -3416,36 +3416,36 @@ ppResErrorLocatedF fallbackFile e = match resErrorLoc e
 --
 -- Runs AFTER mark, BEFORE typecheck.  The walk is a pure deterministic
 -- left-to-right traversal, so ids are stable run-to-run and NEVER reach the
--- emitter (the EVarId node is stripped by core_ir_lower).  Frame model mirrors
--- annotate.mdk's `List (List String)` stack, carrying (name, id): the OUTERMOST
--- frame is the top-level binders (real ids); inner frames are locals (id 0).
+-- emitter (the EVarId node is stripped by core_ir_lower).  See #907/#1031 below
+-- for how top-level ids and local sentinel-0 shadowing are actually represented.
 
--- #907: a scope frame.  Inner (param/let/match/where) frames are SMALL, so a list
--- assoc-scan is fine; the OUTERMOST top-level frame carries every top-level binder
--- (grows O(decls)) and MUST be an OrdMap — a list scan of it per EVar occurrence made
--- stampBindingIds O(decls²) (it runs inside typecheck's checkBodyImpl, so the cost
--- landed on the `typecheck` stage; the xref shape's N references × N binders).
-data BScope =
-  | SLocal (List (String, Int))  -- a body-local frame; every name at sentinel id 0
-  | STop (OrdMap Int)  -- the top-level binder frame, name → minted id
-
--- innermost frame first; first match wins (shadowing).  0 = unminted local.
-lookupBindId : List BScope -> String -> Int
-lookupBindId [] _ = 0
-lookupBindId ((SLocal frame)::rest) n = match lookupAssoc n frame
+-- #907/#1031: the scope env is a SINGLE threaded OrdMap (name -> id), extended by
+-- shadow-INSERT (never a cons'd frame list).  A local binder inserts its names at
+-- the sentinel id 0, overwriting whatever `lookupBindId` would otherwise find —
+-- exactly the same shadowing outcome as the old innermost-frame-first list walk,
+-- but a lookup is O(log n) regardless of how many scopes deep the reference sits.
+-- The old `List BScope` (SLocal frame :: ... :: STop top) made a DEEP local
+-- nesting (N sequential lets, references to an outer binding) an O(depth) walk
+-- per EVar — O(depth²) over the body (the `scoperefs` shape, #1031).
+lookupBindId : OrdMap Int -> String -> Int
+lookupBindId env n = match omLookup n env
   Some id => id
-  None => lookupBindId rest n
-lookupBindId ((STop m)::rest) n = match omLookup n m
-  Some id => id
-  None => lookupBindId rest n
+  None => 0
 
--- a local (param/let/match/where) scope frame: every name at the sentinel id 0.
-zeroFrame : List String -> BScope
-zeroFrame names = SLocal (map (n => (n, 0)) names)
+-- shadow-insert every name in `names` at sentinel id 0 (a local binder).  Names
+-- are inserted left-to-right so a later name in the same list wins a same-name
+-- collision — matches the old zeroFrame's within-frame first-match for the
+-- (non-duplicate) names every real pattern binds.
+insertZero : List String -> OrdMap Int -> OrdMap Int
+insertZero [] env = env
+insertZero (n::rest) env = insertZero rest (omInsert n 0 env)
 
--- per-parameter frames (applyClosure pushes one frame per param, innermost last).
-paramZeroFrames : List Pat -> List BScope
-paramZeroFrames pats = reverseL (map (p => zeroFrame (patBindings p)) pats)
+-- per-parameter shadow-insert, in signature order — a LATER param's name wins a
+-- same-name collision, matching the old paramZeroFrames' reverseL (innermost =
+-- last param).
+insertParams : List Pat -> OrdMap Int -> OrdMap Int
+insertParams [] env = env
+insertParams (p::rest) env = insertParams rest (insertZero (patBindings p) env)
 
 -- top-level value binder names, in decl order (DFunDef + DLetGroup members).
 topBinderNames : List Decl -> List String
@@ -3462,7 +3462,7 @@ numberFrom _ [] = []
 numberFrom i (n::rest) = (n, i) :: numberFrom (i + 1) rest
 
 -- ── the walk ────────────────────────────────────────────────────────────────
-stampExpr : List BScope -> Expr -> Expr
+stampExpr : OrdMap Int -> Expr -> Expr
 stampExpr _ (ELit l) = ELit l
 stampExpr _ (ENumLit n r d lx) = ENumLit n r d lx
 stampExpr _ (EMethodRef m) = EMethodRef m
@@ -3476,7 +3476,7 @@ stampExpr env (EVar n)
   | otherwise = EVarId n (lookupBindId env n)
 stampExpr env (EApp f x) = EApp (stampExpr env f) (stampExpr env x)
 stampExpr env (ELam pats body) =
-  ELam pats (stampExpr (paramZeroFrames pats ++ env) body)
+  ELam pats (stampExpr (insertParams pats env) body)
 stampExpr env (ELet m isRec pat e1 e2) = stampLet env m isRec pat e1 e2
 stampExpr env (ELetGroup binds body) = stampLetGroup env binds body
 stampExpr env (EMatch e0 arms) =
@@ -3518,9 +3518,9 @@ stampExpr env (ESection s) = ESection (stampSection env s)
 stampExpr env (ELoc l e) = ELoc l (stampExpr env e)
 stampExpr env (EDoOrigin l e) = EDoOrigin l (stampExpr env e)
 
-stampLet : List BScope -> Bool -> Bool -> Pat -> Expr -> Expr -> Expr
+stampLet : OrdMap Int -> Bool -> Bool -> Pat -> Expr -> Expr -> Expr
 stampLet env m True (PVar f fl) e1 e2 =
-  let inner = zeroFrame [f] :: env
+  let inner = insertZero [f] env
   ELet m True (PVar f fl) (stampExpr inner e1) (stampExpr inner e2)
 stampLet env m isRec pat e1 e2 =
   ELet
@@ -3528,87 +3528,82 @@ stampLet env m isRec pat e1 e2 =
     isRec
     pat
     (stampExpr env e1)
-    (stampExpr (zeroFrame (patBindings pat) :: env) e2)
+    (stampExpr (insertZero (patBindings pat) env) e2)
 
-stampLetGroup : List BScope -> List LetBind -> Expr -> Expr
+stampLetGroup : OrdMap Int -> List LetBind -> Expr -> Expr
 stampLetGroup env binds body =
-  let groupScope = zeroFrame (map letBindName binds) :: env
+  let groupScope = insertZero (map letBindName binds) env
   ELetGroup (map (stampLetBind groupScope) binds) (stampExpr groupScope body)
 
-stampLetBind : List BScope -> LetBind -> LetBind
+stampLetBind : OrdMap Int -> LetBind -> LetBind
 stampLetBind groupScope (LetBind name clauses) =
   LetBind name (map (stampClause groupScope) clauses)
 
-stampClause : List BScope -> FunClause -> FunClause
+stampClause : OrdMap Int -> FunClause -> FunClause
 stampClause groupScope (FunClause pats body) =
-  FunClause pats (stampExpr (paramZeroFrames pats ++ groupScope) body)
+  FunClause pats (stampExpr (insertParams pats groupScope) body)
 
-stampArm : List BScope -> Arm -> Arm
+stampArm : OrdMap Int -> Arm -> Arm
 stampArm env (Arm pat gs body) =
-  let scope0 = zeroFrame (patBindings pat) :: env
+  let scope0 = insertZero (patBindings pat) env
   let (gs2, scope2) = stampGuards scope0 gs
   Arm pat gs2 (stampExpr scope2 body)
 
-stampGuards : List BScope -> List Guard -> (List Guard, List BScope)
+stampGuards : OrdMap Int -> List Guard -> (List Guard, OrdMap Int)
 stampGuards scope [] = ([], scope)
 stampGuards scope ((GBool e)::rest) =
   let (rest2, scope2) = stampGuards scope rest
   (GBool (stampExpr scope e) :: rest2, scope2)
 stampGuards scope ((GBind p e)::rest) =
   let e2 = stampExpr scope e
-  let (rest2, scope2) = stampGuards (zeroFrame (patBindings p) :: scope) rest
+  let (rest2, scope2) = stampGuards (insertZero (patBindings p) scope) rest
   (GBind p e2 :: rest2, scope2)
 
-stampGuardArm : List BScope -> GuardArm -> GuardArm
+stampGuardArm : OrdMap Int -> GuardArm -> GuardArm
 stampGuardArm env (GuardArm gs body) =
   let (gs2, scope2) = stampGuards env gs
   GuardArm gs2 (stampExpr scope2 body)
 
-stampStmts : List BScope -> List DoStmt -> List DoStmt
+stampStmts : OrdMap Int -> List DoStmt -> List DoStmt
 stampStmts _ [] = []
 stampStmts env ((DoExpr e)::rest) =
   DoExpr (stampExpr env e) :: stampStmts env rest
 stampStmts env ((DoLet m r p e)::rest) =
   DoLet m r p (stampExpr env e) ::
-    stampStmts (zeroFrame (patBindings p) :: env) rest
+    stampStmts (insertZero (patBindings p) env) rest
 stampStmts env ((DoBind p e)::rest) =
-  DoBind p (stampExpr env e) ::
-    stampStmts (zeroFrame (patBindings p) :: env) rest
+  DoBind p (stampExpr env e) :: stampStmts (insertZero (patBindings p) env) rest
 stampStmts env ((DoAssign x e)::rest) =
-  DoAssign x (stampExpr env e) :: stampStmts (zeroFrame [x] :: env) rest
+  DoAssign x (stampExpr env e) :: stampStmts (insertZero [x] env) rest
 stampStmts env ((DoFieldAssign x fs e)::rest) =
   DoFieldAssign x fs (stampExpr env e) :: stampStmts env rest
 
-stampInterp : List BScope -> InterpPart -> InterpPart
+stampInterp : OrdMap Int -> InterpPart -> InterpPart
 stampInterp _ (InterpStr s) = InterpStr s
 stampInterp env (InterpExpr e) = InterpExpr (stampExpr env e)
 
-stampFieldAssign : List BScope -> FieldAssign -> FieldAssign
+stampFieldAssign : OrdMap Int -> FieldAssign -> FieldAssign
 stampFieldAssign env (FieldAssign n e) = FieldAssign n (stampExpr env e)
 
-stampKv : List BScope -> (Expr, Expr) -> (Expr, Expr)
+stampKv : OrdMap Int -> (Expr, Expr) -> (Expr, Expr)
 stampKv env (k, v) = (stampExpr env k, stampExpr env v)
 
-stampSection : List BScope -> Section -> Section
+stampSection : OrdMap Int -> Section -> Section
 stampSection _ (SecBare op) = SecBare op
 stampSection env (SecRight op e) = SecRight op (stampExpr env e)
 stampSection env (SecLeft e op) = SecLeft (stampExpr env e) op
 
 -- ── decl-level walk ─────────────────────────────────────────────────────────
--- Each top-level fn's params become per-parameter (id-0) frames over the top
--- frame; sibling top-level names resolve through `top` to their minted id.
+-- Each top-level fn's params shadow-insert (id 0) over `top`; sibling top-level
+-- names resolve through `top` to their minted id.
 stampDecl : OrdMap Int -> Decl -> Decl
 stampDecl top (DFunDef p n pats body) =
-  DFunDef p n pats (stampExpr (paramZeroFrames pats ++ [STop top]) body)
-stampDecl top (DProp p n params body) = DProp
-  p
-  n
-  params
-  (stampExpr [zeroFrame (map propParamName params), STop top] body)
-stampDecl top (DTest p n body) = DTest p n (stampExpr [STop top] body)
-stampDecl top (DBench p n body) = DBench p n (stampExpr [STop top] body)
-stampDecl top (DLetGroup p binds) =
-  DLetGroup p (map (stampLetBind [STop top]) binds)
+  DFunDef p n pats (stampExpr (insertParams pats top) body)
+stampDecl top (DProp p n params body) =
+  DProp p n params (stampExpr (insertZero (map propParamName params) top) body)
+stampDecl top (DTest p n body) = DTest p n (stampExpr top body)
+stampDecl top (DBench p n body) = DBench p n (stampExpr top body)
+stampDecl top (DLetGroup p binds) = DLetGroup p (map (stampLetBind top) binds)
 stampDecl top (d@(DInterface { methods, ... })) =
   DInterface { d | methods = map (stampIfaceMethod top) methods }
 stampDecl top (d@(DImpl { methods, ... })) =
@@ -3622,20 +3617,19 @@ stampIfaceMethod top (IfaceMethod nm ty (Some (MethodDefault pats body))) =
   IfaceMethod
     nm
     ty
-    (Some (MethodDefault
-      pats
-      (stampExpr (paramZeroFrames pats ++ [STop top]) body)))
+    (Some (MethodDefault pats (stampExpr (insertParams pats top) body)))
 
 stampImplMethod : OrdMap Int -> ImplMethod -> ImplMethod
 stampImplMethod top (ImplMethod nm pats body) =
-  ImplMethod nm pats (stampExpr (paramZeroFrames pats ++ [STop top]) body)
+  ImplMethod nm pats (stampExpr (insertParams pats top) body)
 
 -- Mint per-top-level-binder ids and stamp all occurrences.  Returns the stamped
 -- program AND `defIds` (each minted top-level binder → its id), which typecheck's
 -- `registerSchemeObligations` reads to key a top-level member's obligations.
--- #907: the walk indexes `top` into an OrdMap (STop) so lookupBindId is O(log n),
--- not an O(decls) list scan per EVar; `top` (deduped) is still RETURNED as the pair
--- list its typecheck consumers expect.
+-- #907/#1031: the whole scope env — top-level AND every local nesting depth — is
+-- ONE threaded OrdMap, so `lookupBindId` is O(log n) regardless of decl count OR
+-- local-scope depth; `top` (deduped) is still RETURNED as the pair list its
+-- typecheck consumers expect.
 export
 stampBindingIds : List Decl -> (List Decl, List (String, Int))
 stampBindingIds decls =

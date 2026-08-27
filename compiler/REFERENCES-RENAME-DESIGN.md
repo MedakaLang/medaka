@@ -86,7 +86,7 @@ Four disqualifiers for cross-file references, each proven:
 1. **Module-local ids.** `numberFrom 1` restarts at 1 every call (`resolve.mdk:2618-2621`).
    `(name, id)` therefore **collides across modules** — id 3 in module A ≠ id 3 in module B.
 2. **Only top-level values.** `topBinderNames` walks `DFunDef` / `DLetGroup` members only
-   (`resolve.mdk:2610-2616`). Locals → id 0 (`zeroFrame`, `resolve.mdk:2602-2607`). Types,
+   (`resolve.mdk:2610-2616`). Locals → id 0 (`insertZero`, `resolve.mdk:3439-3441`). Types,
    constructors, record fields, interface methods are never minted.
 3. **Discarded AST.** The only caller is `checkBodyImpl` (`typecheck.mdk:11741`): `progS`
    is a `let`-local fed to inference; the function returns `List (String, Scheme)`. The

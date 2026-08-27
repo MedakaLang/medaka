@@ -1,5 +1,5 @@
 # META
-source_lines=1213
+source_lines=1235
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -953,7 +953,7 @@ renameDecl rm (DFunDef pub n ps e) =
     pub
     (renameDefName rm n)
     (renamePatsPM rm ps)
-    (renameScoped rm (patVarsListPM ps) e)
+    (renameScoped rm (boundOfListPM (patVarsListPM ps)) e)
 -- a top-level signature (`f : …` / `export f : …`) shares the function's name; it
 -- MUST be renamed in lockstep with its DFunDef so the typechecker keys f's scheme
 -- under the SAME mangled name the call sites + def now use (else dictPass /
@@ -964,9 +964,15 @@ renameDecl rm (d@(DInterface { methods, ... })) =
 renameDecl rm (d@(DImpl { methods, ... })) =
   DImpl { d | methods = map (renameImplMethod rm) methods }
 renameDecl rm (DProp pub name params body) =
-  DProp pub name params (renameScoped rm (propParamNamesPM params) body)
-renameDecl rm (DTest pub name body) = DTest pub name (renameScoped rm [] body)
-renameDecl rm (DBench pub name body) = DBench pub name (renameScoped rm [] body)
+  DProp
+    pub
+    name
+    params
+    (renameScoped rm (boundOfListPM (propParamNamesPM params)) body)
+renameDecl rm (DTest pub name body) =
+  DTest pub name (renameScoped rm omEmpty body)
+renameDecl rm (DBench pub name body) =
+  DBench pub name (renameScoped rm omEmpty body)
 renameDecl rm (DLetGroup pub binds) =
   DLetGroup pub (map (renameLetBindDef rm) binds)
 -- DATA / NEWTYPE definition sites: rename the constructor names (which the
@@ -992,7 +998,7 @@ renameVariant rm (Variant n payload) = Variant (renameDefName rm n) payload
 -- clause bodies.  The group's own names are in scope across all clauses.
 renameLetBindDef : OrdMap String -> LetBind -> LetBind
 renameLetBindDef rm (LetBind n clauses) =
-  LetBind (renameDefName rm n) (map (renameFunClause rm []) clauses)
+  LetBind (renameDefName rm n) (map (renameFunClause rm omEmpty) clauses)
 
 renameDefName : OrdMap String -> String -> String
 renameDefName rm n = match omLookup n rm
@@ -1007,11 +1013,14 @@ renameIfaceMethod rm (IfaceMethod n ty (Some (MethodDefault ps e))) =
     ty
     (Some (MethodDefault
       (renamePatsPM rm ps)
-      (renameScoped rm (patVarsListPM ps) e)))
+      (renameScoped rm (boundOfListPM (patVarsListPM ps)) e)))
 
 renameImplMethod : OrdMap String -> ImplMethod -> ImplMethod
 renameImplMethod rm (ImplMethod n ps e) =
-  ImplMethod n (renamePatsPM rm ps) (renameScoped rm (patVarsListPM ps) e)
+  ImplMethod
+    n
+    (renamePatsPM rm ps)
+    (renameScoped rm (boundOfListPM (patVarsListPM ps)) e)
 
 propParamNamesPM : List PropParam -> List String
 propParamNamesPM ps = map propParamNamePM ps
@@ -1019,36 +1028,49 @@ propParamNamesPM ps = map propParamNamePM ps
 propParamNamePM : PropParam -> String
 propParamNamePM (PropParam n _ _) = n
 
+-- #1031: `bound` is an OrdMap-backed SET (name -> ()), not a `List String`
+-- scanned by `contains` — see typecheck.mdk's `boundInsert`/`boundOfList`, which
+-- this mirrors exactly (a private copy, per this file's own PM-suffix naming
+-- convention for its scope helpers).
+boundInsertPM : List String -> OrdMap Unit -> OrdMap Unit
+boundInsertPM [] b = b
+boundInsertPM (n::rest) b = boundInsertPM rest (omInsert n () b)
+
+boundOfListPM : List String -> OrdMap Unit
+boundOfListPM ns = boundInsertPM ns omEmpty
+
 -- ── the scope-threaded reference rewrite ──────────────────────────────────────
 -- `bound` = names shadowed by a local binder at this node.  An EVar is renamed
 -- only when it is in the map AND NOT shadowed.  Binders extend `bound`.  Mirrors
 -- typecheck.mdk's rewriteArgScoped exactly.
-renameScoped : OrdMap String -> List String -> Expr -> Expr
+renameScoped : OrdMap String -> OrdMap Unit -> Expr -> Expr
 renameScoped rm bound (EVar n)
-  | not (contains n bound) = match omLookup n rm
+  | not (omHasKey n bound) = match omLookup n rm
     Some n2 => EVar n2
     None => EVar n
   | otherwise = EVar n
 -- #837: strip the resolve-only binding-id tag, renaming exactly as bare EVar.
 renameScoped rm bound (EVarId n _)
-  | not (contains n bound) = match omLookup n rm
+  | not (omHasKey n bound) = match omLookup n rm
     Some n2 => EVar n2
     None => EVar n
   | otherwise = EVar n
 -- binders
 renameScoped rm bound (ELam ps body) =
-  ELam (renamePatsPM rm ps) (renameScoped rm (patVarsListPM ps ++ bound) body)
+  ELam
+    (renamePatsPM rm ps)
+    (renameScoped rm (boundInsertPM (patVarsListPM ps) bound) body)
 renameScoped rm bound (ELet m r p e1 e2) =
   let pv = patVarsPM p
-  let b1 = if r then pv ++ bound else bound
+  let b1 = if r then boundInsertPM pv bound else bound
   ELet
     m
     r
     (renamePat rm p)
     (renameScoped rm b1 e1)
-    (renameScoped rm (pv ++ bound) e2)
+    (renameScoped rm (boundInsertPM pv bound) e2)
 renameScoped rm bound (ELetGroup binds e2) =
-  let bnd = letBindNamesPM binds ++ bound
+  let bnd = boundInsertPM (letBindNamesPM binds) bound
   ELetGroup (map (renameLetBind rm bnd) binds) (renameScoped rm bnd e2)
 renameScoped rm bound (EMatch e0 arms) =
   EMatch (renameScoped rm bound e0) (map (renameArm rm bound) arms)
@@ -1115,38 +1137,38 @@ renameScoped rm bound (EAsPat x sub) = EAsPat x (renameScoped rm bound sub)
 -- leaves (ELit / EMethodRef / EDictApp / EVarAt / EMethodAt / EDictAt / SecBare)
 renameScoped _ _ e = e
 
-renameField : OrdMap String -> List String -> FieldAssign -> FieldAssign
+renameField : OrdMap String -> OrdMap Unit -> FieldAssign -> FieldAssign
 renameField rm bound (FieldAssign n e) = FieldAssign n (renameScoped rm bound e)
 
-renameKv : OrdMap String -> List String -> (Expr, Expr) -> (Expr, Expr)
+renameKv : OrdMap String -> OrdMap Unit -> (Expr, Expr) -> (Expr, Expr)
 renameKv rm bound (k, v) = (renameScoped rm bound k, renameScoped rm bound v)
 
-renameInterp : OrdMap String -> List String -> InterpPart -> InterpPart
+renameInterp : OrdMap String -> OrdMap Unit -> InterpPart -> InterpPart
 renameInterp _ _ (InterpStr s) = InterpStr s
 renameInterp rm bound (InterpExpr e) = InterpExpr (renameScoped rm bound e)
 
-renameLetBind : OrdMap String -> List String -> LetBind -> LetBind
+renameLetBind : OrdMap String -> OrdMap Unit -> LetBind -> LetBind
 renameLetBind rm bound (LetBind n clauses) =
   LetBind (renameDefName rm n) (map (renameFunClause rm bound) clauses)
 
-renameFunClause : OrdMap String -> List String -> FunClause -> FunClause
+renameFunClause : OrdMap String -> OrdMap Unit -> FunClause -> FunClause
 renameFunClause rm bound (FunClause ps body) =
   FunClause
     (renamePatsPM rm ps)
-    (renameScoped rm (patVarsListPM ps ++ bound) body)
+    (renameScoped rm (boundInsertPM (patVarsListPM ps) bound) body)
 
-renameArm : OrdMap String -> List String -> Arm -> Arm
+renameArm : OrdMap String -> OrdMap Unit -> Arm -> Arm
 renameArm rm bound (Arm p gs body) =
-  let b0 = patVarsPM p ++ bound
+  let b0 = boundInsertPM (patVarsPM p) bound
   let (gs2, bnd) = renameGuards rm b0 gs
   Arm (renamePat rm p) gs2 (renameScoped rm bnd body)
 
-renameGuardArm : OrdMap String -> List String -> GuardArm -> GuardArm
+renameGuardArm : OrdMap String -> OrdMap Unit -> GuardArm -> GuardArm
 renameGuardArm rm bound (GuardArm gs body) =
   let (gs2, bnd) = renameGuards rm bound gs
   GuardArm gs2 (renameScoped rm bnd body)
 
-renameGuards : OrdMap String -> List String -> List Guard -> (List Guard, List String)
+renameGuards : OrdMap String -> OrdMap Unit -> List Guard -> (List Guard, OrdMap Unit)
 renameGuards _ bound [] = ([], bound)
 renameGuards rm bound ((GBool e)::rest) =
   let e2 = renameScoped rm bound e
@@ -1154,19 +1176,19 @@ renameGuards rm bound ((GBool e)::rest) =
   (GBool e2 :: rest2, bnd)
 renameGuards rm bound ((GBind p e)::rest) =
   let e2 = renameScoped rm bound e
-  let (rest2, bnd) = renameGuards rm (patVarsPM p ++ bound) rest
+  let (rest2, bnd) = renameGuards rm (boundInsertPM (patVarsPM p) bound) rest
   (GBind (renamePat rm p) e2 :: rest2, bnd)
 
-renameStmts : OrdMap String -> List String -> List DoStmt -> List DoStmt
+renameStmts : OrdMap String -> OrdMap Unit -> List DoStmt -> List DoStmt
 renameStmts _ _ [] = []
 renameStmts rm bound ((DoExpr e)::rest) =
   DoExpr (renameScoped rm bound e) :: renameStmts rm bound rest
 renameStmts rm bound ((DoBind p e)::rest) =
   DoBind (renamePat rm p) (renameScoped rm bound e) ::
-    renameStmts rm (patVarsPM p ++ bound) rest
+    renameStmts rm (boundInsertPM (patVarsPM p) bound) rest
 renameStmts rm bound ((DoLet m r p e)::rest) =
-  let b1 = if r then patVarsPM p ++ bound else bound
-  DoLet m r (renamePat rm p) (renameScoped rm b1 e) :: renameStmts rm (patVarsPM p ++ bound) rest
+  let b1 = if r then boundInsertPM (patVarsPM p) bound else bound
+  DoLet m r (renamePat rm p) (renameScoped rm b1 e) :: renameStmts rm (boundInsertPM (patVarsPM p) bound) rest
 renameStmts rm bound ((DoAssign x e)::rest) =
   DoAssign x (renameScoped rm bound e) :: renameStmts rm bound rest
 renameStmts rm bound ((DoFieldAssign x fs e)::rest) =
@@ -1412,13 +1434,13 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DTypeSig true "posMod" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "posMod" ((PVar "n") (PVar "m")) (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (EVar "m")) (EVar "m")) (EVar "m")))
 (DTypeSig false "renameDecl" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
-(DFunDef false "renameDecl" ((PVar "rm") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "patVarsListPM") (EVar "ps"))) (EVar "e"))))
+(DFunDef false "renameDecl" ((PVar "rm") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "boundOfListPM") (EApp (EVar "patVarsListPM") (EVar "ps")))) (EVar "e"))))
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "ty"))) (EApp (EApp (EApp (EVar "DTypeSig") (EVar "pub")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EVar "ty")))
 (DFunDef false "renameDecl" ((PVar "rm") (PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EVar "renameIfaceMethod") (EVar "rm"))) (EVar "methods"))))))
 (DFunDef false "renameDecl" ((PVar "rm") (PAs "d" (PRec "DImpl" ((rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EVar "renameImplMethod") (EVar "rm"))) (EVar "methods"))))))
-(DFunDef false "renameDecl" ((PVar "rm") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "propParamNamesPM") (EVar "params"))) (EVar "body"))))
-(DFunDef false "renameDecl" ((PVar "rm") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EListLit)) (EVar "body"))))
-(DFunDef false "renameDecl" ((PVar "rm") (PCon "DBench" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DBench") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EListLit)) (EVar "body"))))
+(DFunDef false "renameDecl" ((PVar "rm") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "boundOfListPM") (EApp (EVar "propParamNamesPM") (EVar "params")))) (EVar "body"))))
+(DFunDef false "renameDecl" ((PVar "rm") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "omEmpty")) (EVar "body"))))
+(DFunDef false "renameDecl" ((PVar "rm") (PCon "DBench" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DBench") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "omEmpty")) (EVar "body"))))
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EVar "map") (EApp (EVar "renameLetBindDef") (EVar "rm"))) (EVar "binds"))))
 (DFunDef false "renameDecl" ((PVar "rm") (PAs "d" (PRec "DData" ((rf "dataCtors" (PVar "variants"))) false))) (EVariantUpdate "DData" (EVar "d") ((fa "dataCtors" (EApp (EApp (EVar "map") (EApp (EVar "renameVariant") (EVar "rm"))) (EVar "variants"))))))
 (DFunDef false "renameDecl" ((PVar "rm") (PAs "d" (PRec "DNewtype" ((rf "newtypeCtor" (PVar "con"))) false))) (EVariantUpdate "DNewtype" (EVar "d") ((fa "newtypeCtor" (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "con"))))))
@@ -1427,24 +1449,29 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DTypeSig false "renameVariant" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Variant") (TyCon "Variant"))))
 (DFunDef false "renameVariant" ((PVar "rm") (PCon "Variant" (PVar "n") (PVar "payload"))) (EApp (EApp (EVar "Variant") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EVar "payload")))
 (DTypeSig false "renameLetBindDef" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "LetBind") (TyCon "LetBind"))))
-(DFunDef false "renameLetBindDef" ((PVar "rm") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "LetBind") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameFunClause") (EVar "rm")) (EListLit))) (EVar "clauses"))))
+(DFunDef false "renameLetBindDef" ((PVar "rm") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "LetBind") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameFunClause") (EVar "rm")) (EVar "omEmpty"))) (EVar "clauses"))))
 (DTypeSig false "renameDefName" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "renameDefName" ((PVar "rm") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "rm")) (arm (PCon "Some" (PVar "n2")) () (EVar "n2")) (arm (PCon "None") () (EVar "n"))))
 (DTypeSig false "renameIfaceMethod" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))
 (DFunDef false "renameIfaceMethod" (PWild (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "None"))) (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EVar "None")))
-(DFunDef false "renameIfaceMethod" ((PVar "rm") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "e"))))) (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "patVarsListPM") (EVar "ps"))) (EVar "e"))))))
+(DFunDef false "renameIfaceMethod" ((PVar "rm") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "e"))))) (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "boundOfListPM") (EApp (EVar "patVarsListPM") (EVar "ps")))) (EVar "e"))))))
 (DTypeSig false "renameImplMethod" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod"))))
-(DFunDef false "renameImplMethod" ((PVar "rm") (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "patVarsListPM") (EVar "ps"))) (EVar "e"))))
+(DFunDef false "renameImplMethod" ((PVar "rm") (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "boundOfListPM") (EApp (EVar "patVarsListPM") (EVar "ps")))) (EVar "e"))))
 (DTypeSig false "propParamNamesPM" (TyFun (TyApp (TyCon "List") (TyCon "PropParam")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "propParamNamesPM" ((PVar "ps")) (EApp (EApp (EVar "map") (EVar "propParamNamePM")) (EVar "ps")))
 (DTypeSig false "propParamNamePM" (TyFun (TyCon "PropParam") (TyCon "String")))
 (DFunDef false "propParamNamePM" ((PCon "PropParam" (PVar "n") PWild PWild)) (EVar "n"))
-(DTypeSig false "renameScoped" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EVar" (PVar "n"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bound"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "rm")) (arm (PCon "Some" (PVar "n2")) () (EApp (EVar "EVar") (EVar "n2"))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EVarId" (PVar "n") PWild)) (EIf (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bound"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "rm")) (arm (PCon "Some" (PVar "n2")) () (EApp (EVar "EVar") (EVar "n2"))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ELam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "ELam") (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EBinOp "++" (EApp (EVar "patVarsListPM") (EVar "ps")) (EVar "bound"))) (EVar "body"))))
-(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ELet" (PVar "m") (PVar "r") (PVar "p") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "pv") (EApp (EVar "patVarsPM") (EVar "p"))) (DoLet false false (PVar "b1") (EIf (EVar "r") (EBinOp "++" (EVar "pv") (EVar "bound")) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "b1")) (EVar "e1"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EBinOp "++" (EVar "pv") (EVar "bound"))) (EVar "e2"))))))
-(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ELetGroup" (PVar "binds") (PVar "e2"))) (EBlock (DoLet false false (PVar "bnd") (EBinOp "++" (EApp (EVar "letBindNamesPM") (EVar "binds")) (EVar "bound"))) (DoExpr (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameLetBind") (EVar "rm")) (EVar "bnd"))) (EVar "binds"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bnd")) (EVar "e2"))))))
+(DTypeSig false "boundInsertPM" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
+(DFunDef false "boundInsertPM" ((PList) (PVar "b")) (EVar "b"))
+(DFunDef false "boundInsertPM" ((PCons (PVar "n") (PVar "rest")) (PVar "b")) (EApp (EApp (EVar "boundInsertPM") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "b"))))
+(DTypeSig false "boundOfListPM" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
+(DFunDef false "boundOfListPM" ((PVar "ns")) (EApp (EApp (EVar "boundInsertPM") (EVar "ns")) (EVar "omEmpty")))
+(DTypeSig false "renameScoped" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EVar" (PVar "n"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "rm")) (arm (PCon "Some" (PVar "n2")) () (EApp (EVar "EVar") (EVar "n2"))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EVarId" (PVar "n") PWild)) (EIf (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "rm")) (arm (PCon "Some" (PVar "n2")) () (EApp (EVar "EVar") (EVar "n2"))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ELam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "ELam") (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EApp (EVar "boundInsertPM") (EApp (EVar "patVarsListPM") (EVar "ps"))) (EVar "bound"))) (EVar "body"))))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ELet" (PVar "m") (PVar "r") (PVar "p") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "pv") (EApp (EVar "patVarsPM") (EVar "p"))) (DoLet false false (PVar "b1") (EIf (EVar "r") (EApp (EApp (EVar "boundInsertPM") (EVar "pv")) (EVar "bound")) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "b1")) (EVar "e1"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EApp (EVar "boundInsertPM") (EVar "pv")) (EVar "bound"))) (EVar "e2"))))))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ELetGroup" (PVar "binds") (PVar "e2"))) (EBlock (DoLet false false (PVar "bnd") (EApp (EApp (EVar "boundInsertPM") (EApp (EVar "letBindNamesPM") (EVar "binds"))) (EVar "bound"))) (DoExpr (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameLetBind") (EVar "rm")) (EVar "bnd"))) (EVar "binds"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bnd")) (EVar "e2"))))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EMatch" (PVar "e0") (PVar "arms"))) (EApp (EApp (EVar "EMatch") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameArm") (EVar "rm")) (EVar "bound"))) (EVar "arms"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EApp (EVar "renameStmts") (EVar "rm")) (EVar "bound")) (EVar "stmts"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EDo" (PVar "stmts"))) (EApp (EVar "EDo") (EApp (EApp (EApp (EVar "renameStmts") (EVar "rm")) (EVar "bound")) (EVar "stmts"))))
@@ -1476,30 +1503,30 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EAsPat" (PVar "x") (PVar "sub"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "sub"))))
 (DFunDef false "renameScoped" (PWild PWild (PVar "e")) (EVar "e"))
-(DTypeSig false "renameField" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "FieldAssign") (TyCon "FieldAssign")))))
+(DTypeSig false "renameField" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "FieldAssign") (TyCon "FieldAssign")))))
 (DFunDef false "renameField" ((PVar "rm") (PVar "bound") (PCon "FieldAssign" (PVar "n") (PVar "e"))) (EApp (EApp (EVar "FieldAssign") (EVar "n")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))))
-(DTypeSig false "renameKv" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyCon "Expr"))))))
+(DTypeSig false "renameKv" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyCon "Expr"))))))
 (DFunDef false "renameKv" ((PVar "rm") (PVar "bound") (PTuple (PVar "k") (PVar "v"))) (ETuple (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "k")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "v"))))
-(DTypeSig false "renameInterp" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "InterpPart") (TyCon "InterpPart")))))
+(DTypeSig false "renameInterp" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "InterpPart") (TyCon "InterpPart")))))
 (DFunDef false "renameInterp" (PWild PWild (PCon "InterpStr" (PVar "s"))) (EApp (EVar "InterpStr") (EVar "s")))
 (DFunDef false "renameInterp" ((PVar "rm") (PVar "bound") (PCon "InterpExpr" (PVar "e"))) (EApp (EVar "InterpExpr") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))))
-(DTypeSig false "renameLetBind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "LetBind") (TyCon "LetBind")))))
+(DTypeSig false "renameLetBind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "LetBind") (TyCon "LetBind")))))
 (DFunDef false "renameLetBind" ((PVar "rm") (PVar "bound") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "LetBind") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "renameFunClause") (EVar "rm")) (EVar "bound"))) (EVar "clauses"))))
-(DTypeSig false "renameFunClause" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "FunClause") (TyCon "FunClause")))))
-(DFunDef false "renameFunClause" ((PVar "rm") (PVar "bound") (PCon "FunClause" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "FunClause") (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EBinOp "++" (EApp (EVar "patVarsListPM") (EVar "ps")) (EVar "bound"))) (EVar "body"))))
-(DTypeSig false "renameArm" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Arm") (TyCon "Arm")))))
-(DFunDef false "renameArm" ((PVar "rm") (PVar "bound") (PCon "Arm" (PVar "p") (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PVar "b0") (EBinOp "++" (EApp (EVar "patVarsPM") (EVar "p")) (EVar "bound"))) (DoLet false false (PTuple (PVar "gs2") (PVar "bnd")) (EApp (EApp (EApp (EVar "renameGuards") (EVar "rm")) (EVar "b0")) (EVar "gs"))) (DoExpr (EApp (EApp (EApp (EVar "Arm") (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))) (EVar "gs2")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bnd")) (EVar "body"))))))
-(DTypeSig false "renameGuardArm" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "GuardArm") (TyCon "GuardArm")))))
+(DTypeSig false "renameFunClause" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "FunClause") (TyCon "FunClause")))))
+(DFunDef false "renameFunClause" ((PVar "rm") (PVar "bound") (PCon "FunClause" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "FunClause") (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EApp (EVar "boundInsertPM") (EApp (EVar "patVarsListPM") (EVar "ps"))) (EVar "bound"))) (EVar "body"))))
+(DTypeSig false "renameArm" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Arm") (TyCon "Arm")))))
+(DFunDef false "renameArm" ((PVar "rm") (PVar "bound") (PCon "Arm" (PVar "p") (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PVar "b0") (EApp (EApp (EVar "boundInsertPM") (EApp (EVar "patVarsPM") (EVar "p"))) (EVar "bound"))) (DoLet false false (PTuple (PVar "gs2") (PVar "bnd")) (EApp (EApp (EApp (EVar "renameGuards") (EVar "rm")) (EVar "b0")) (EVar "gs"))) (DoExpr (EApp (EApp (EApp (EVar "Arm") (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))) (EVar "gs2")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bnd")) (EVar "body"))))))
+(DTypeSig false "renameGuardArm" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GuardArm") (TyCon "GuardArm")))))
 (DFunDef false "renameGuardArm" ((PVar "rm") (PVar "bound") (PCon "GuardArm" (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "gs2") (PVar "bnd")) (EApp (EApp (EApp (EVar "renameGuards") (EVar "rm")) (EVar "bound")) (EVar "gs"))) (DoExpr (EApp (EApp (EVar "GuardArm") (EVar "gs2")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bnd")) (EVar "body"))))))
-(DTypeSig false "renameGuards" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyTuple (TyApp (TyCon "List") (TyCon "Guard")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DTypeSig false "renameGuards" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyTuple (TyApp (TyCon "List") (TyCon "Guard")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
 (DFunDef false "renameGuards" (PWild (PVar "bound") (PList)) (ETuple (EListLit) (EVar "bound")))
 (DFunDef false "renameGuards" ((PVar "rm") (PVar "bound") (PCons (PCon "GBool" (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "e2") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "bnd")) (EApp (EApp (EApp (EVar "renameGuards") (EVar "rm")) (EVar "bound")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EVar "GBool") (EVar "e2")) (EVar "rest2")) (EVar "bnd")))))
-(DFunDef false "renameGuards" ((PVar "rm") (PVar "bound") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "e2") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "bnd")) (EApp (EApp (EApp (EVar "renameGuards") (EVar "rm")) (EBinOp "++" (EApp (EVar "patVarsPM") (EVar "p")) (EVar "bound"))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "GBind") (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))) (EVar "e2")) (EVar "rest2")) (EVar "bnd")))))
-(DTypeSig false "renameStmts" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "DoStmt"))))))
+(DFunDef false "renameGuards" ((PVar "rm") (PVar "bound") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "e2") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "bnd")) (EApp (EApp (EApp (EVar "renameGuards") (EVar "rm")) (EApp (EApp (EVar "boundInsertPM") (EApp (EVar "patVarsPM") (EVar "p"))) (EVar "bound"))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "GBind") (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))) (EVar "e2")) (EVar "rest2")) (EVar "bnd")))))
+(DTypeSig false "renameStmts" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "DoStmt"))))))
 (DFunDef false "renameStmts" (PWild PWild (PList)) (EListLit))
 (DFunDef false "renameStmts" ((PVar "rm") (PVar "bound") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EVar "DoExpr") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))) (EApp (EApp (EApp (EVar "renameStmts") (EVar "rm")) (EVar "bound")) (EVar "rest"))))
-(DFunDef false "renameStmts" ((PVar "rm") (PVar "bound") (PCons (PCon "DoBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "DoBind") (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))) (EApp (EApp (EApp (EVar "renameStmts") (EVar "rm")) (EBinOp "++" (EApp (EVar "patVarsPM") (EVar "p")) (EVar "bound"))) (EVar "rest"))))
-(DFunDef false "renameStmts" ((PVar "rm") (PVar "bound") (PCons (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "b1") (EIf (EVar "r") (EBinOp "++" (EApp (EVar "patVarsPM") (EVar "p")) (EVar "bound")) (EVar "bound"))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "b1")) (EVar "e"))) (EApp (EApp (EApp (EVar "renameStmts") (EVar "rm")) (EBinOp "++" (EApp (EVar "patVarsPM") (EVar "p")) (EVar "bound"))) (EVar "rest"))))))
+(DFunDef false "renameStmts" ((PVar "rm") (PVar "bound") (PCons (PCon "DoBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "DoBind") (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))) (EApp (EApp (EApp (EVar "renameStmts") (EVar "rm")) (EApp (EApp (EVar "boundInsertPM") (EApp (EVar "patVarsPM") (EVar "p"))) (EVar "bound"))) (EVar "rest"))))
+(DFunDef false "renameStmts" ((PVar "rm") (PVar "bound") (PCons (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "b1") (EIf (EVar "r") (EApp (EApp (EVar "boundInsertPM") (EApp (EVar "patVarsPM") (EVar "p"))) (EVar "bound")) (EVar "bound"))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "b1")) (EVar "e"))) (EApp (EApp (EApp (EVar "renameStmts") (EVar "rm")) (EApp (EApp (EVar "boundInsertPM") (EApp (EVar "patVarsPM") (EVar "p"))) (EVar "bound"))) (EVar "rest"))))))
 (DFunDef false "renameStmts" ((PVar "rm") (PVar "bound") (PCons (PCon "DoAssign" (PVar "x") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "DoAssign") (EVar "x")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))) (EApp (EApp (EApp (EVar "renameStmts") (EVar "rm")) (EVar "bound")) (EVar "rest"))))
 (DFunDef false "renameStmts" ((PVar "rm") (PVar "bound") (PCons (PCon "DoFieldAssign" (PVar "x") (PVar "fs") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EVar "DoFieldAssign") (EVar "x")) (EVar "fs")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))) (EApp (EApp (EApp (EVar "renameStmts") (EVar "rm")) (EVar "bound")) (EVar "rest"))))
 (DTypeSig false "letBindNamesPM" (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -1728,13 +1755,13 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DTypeSig true "posMod" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "posMod" ((PVar "n") (PVar "m")) (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (EVar "m")) (EVar "m")) (EVar "m")))
 (DTypeSig false "renameDecl" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
-(DFunDef false "renameDecl" ((PVar "rm") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "patVarsListPM") (EVar "ps"))) (EVar "e"))))
+(DFunDef false "renameDecl" ((PVar "rm") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "boundOfListPM") (EApp (EVar "patVarsListPM") (EVar "ps")))) (EVar "e"))))
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DTypeSig" (PVar "pub") (PVar "n") (PVar "ty"))) (EApp (EApp (EApp (EVar "DTypeSig") (EVar "pub")) (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EVar "ty")))
 (DFunDef false "renameDecl" ((PVar "rm") (PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EVar "renameIfaceMethod") (EVar "rm"))) (EVar "methods"))))))
 (DFunDef false "renameDecl" ((PVar "rm") (PAs "d" (PRec "DImpl" ((rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EVar "renameImplMethod") (EVar "rm"))) (EVar "methods"))))))
-(DFunDef false "renameDecl" ((PVar "rm") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "propParamNamesPM") (EVar "params"))) (EVar "body"))))
-(DFunDef false "renameDecl" ((PVar "rm") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EListLit)) (EVar "body"))))
-(DFunDef false "renameDecl" ((PVar "rm") (PCon "DBench" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DBench") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EListLit)) (EVar "body"))))
+(DFunDef false "renameDecl" ((PVar "rm") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "boundOfListPM") (EApp (EVar "propParamNamesPM") (EVar "params")))) (EVar "body"))))
+(DFunDef false "renameDecl" ((PVar "rm") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "omEmpty")) (EVar "body"))))
+(DFunDef false "renameDecl" ((PVar "rm") (PCon "DBench" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DBench") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "omEmpty")) (EVar "body"))))
 (DFunDef false "renameDecl" ((PVar "rm") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EMethodRef "map") (EApp (EVar "renameLetBindDef") (EVar "rm"))) (EVar "binds"))))
 (DFunDef false "renameDecl" ((PVar "rm") (PAs "d" (PRec "DData" ((rf "dataCtors" (PVar "variants"))) false))) (EVariantUpdate "DData" (EVar "d") ((fa "dataCtors" (EApp (EApp (EMethodRef "map") (EApp (EVar "renameVariant") (EVar "rm"))) (EVar "variants"))))))
 (DFunDef false "renameDecl" ((PVar "rm") (PAs "d" (PRec "DNewtype" ((rf "newtypeCtor" (PVar "con"))) false))) (EVariantUpdate "DNewtype" (EVar "d") ((fa "newtypeCtor" (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "con"))))))
@@ -1743,24 +1770,29 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DTypeSig false "renameVariant" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Variant") (TyCon "Variant"))))
 (DFunDef false "renameVariant" ((PVar "rm") (PCon "Variant" (PVar "n") (PVar "payload"))) (EApp (EApp (EVar "Variant") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EVar "payload")))
 (DTypeSig false "renameLetBindDef" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "LetBind") (TyCon "LetBind"))))
-(DFunDef false "renameLetBindDef" ((PVar "rm") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "LetBind") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameFunClause") (EVar "rm")) (EListLit))) (EVar "clauses"))))
+(DFunDef false "renameLetBindDef" ((PVar "rm") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "LetBind") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameFunClause") (EVar "rm")) (EVar "omEmpty"))) (EVar "clauses"))))
 (DTypeSig false "renameDefName" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "renameDefName" ((PVar "rm") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "rm")) (arm (PCon "Some" (PVar "n2")) () (EVar "n2")) (arm (PCon "None") () (EVar "n"))))
 (DTypeSig false "renameIfaceMethod" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))
 (DFunDef false "renameIfaceMethod" (PWild (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "None"))) (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EVar "None")))
-(DFunDef false "renameIfaceMethod" ((PVar "rm") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "e"))))) (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "patVarsListPM") (EVar "ps"))) (EVar "e"))))))
+(DFunDef false "renameIfaceMethod" ((PVar "rm") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "e"))))) (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "boundOfListPM") (EApp (EVar "patVarsListPM") (EVar "ps")))) (EVar "e"))))))
 (DTypeSig false "renameImplMethod" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod"))))
-(DFunDef false "renameImplMethod" ((PVar "rm") (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "patVarsListPM") (EVar "ps"))) (EVar "e"))))
+(DFunDef false "renameImplMethod" ((PVar "rm") (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "boundOfListPM") (EApp (EVar "patVarsListPM") (EVar "ps")))) (EVar "e"))))
 (DTypeSig false "propParamNamesPM" (TyFun (TyApp (TyCon "List") (TyCon "PropParam")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "propParamNamesPM" ((PVar "ps")) (EApp (EApp (EMethodRef "map") (EVar "propParamNamePM")) (EVar "ps")))
 (DTypeSig false "propParamNamePM" (TyFun (TyCon "PropParam") (TyCon "String")))
 (DFunDef false "propParamNamePM" ((PCon "PropParam" (PVar "n") PWild PWild)) (EVar "n"))
-(DTypeSig false "renameScoped" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EVar" (PVar "n"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bound"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "rm")) (arm (PCon "Some" (PVar "n2")) () (EApp (EVar "EVar") (EVar "n2"))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EVarId" (PVar "n") PWild)) (EIf (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "n")) (EVar "bound"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "rm")) (arm (PCon "Some" (PVar "n2")) () (EApp (EVar "EVar") (EVar "n2"))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ELam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "ELam") (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EBinOp "++" (EApp (EVar "patVarsListPM") (EVar "ps")) (EVar "bound"))) (EVar "body"))))
-(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ELet" (PVar "m") (PVar "r") (PVar "p") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "pv") (EApp (EVar "patVarsPM") (EVar "p"))) (DoLet false false (PVar "b1") (EIf (EVar "r") (EBinOp "++" (EVar "pv") (EVar "bound")) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "b1")) (EVar "e1"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EBinOp "++" (EVar "pv") (EVar "bound"))) (EVar "e2"))))))
-(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ELetGroup" (PVar "binds") (PVar "e2"))) (EBlock (DoLet false false (PVar "bnd") (EBinOp "++" (EApp (EVar "letBindNamesPM") (EVar "binds")) (EVar "bound"))) (DoExpr (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameLetBind") (EVar "rm")) (EVar "bnd"))) (EVar "binds"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bnd")) (EVar "e2"))))))
+(DTypeSig false "boundInsertPM" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
+(DFunDef false "boundInsertPM" ((PList) (PVar "b")) (EVar "b"))
+(DFunDef false "boundInsertPM" ((PCons (PVar "n") (PVar "rest")) (PVar "b")) (EApp (EApp (EVar "boundInsertPM") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "b"))))
+(DTypeSig false "boundOfListPM" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
+(DFunDef false "boundOfListPM" ((PVar "ns")) (EApp (EApp (EVar "boundInsertPM") (EVar "ns")) (EVar "omEmpty")))
+(DTypeSig false "renameScoped" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EVar" (PVar "n"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "rm")) (arm (PCon "Some" (PVar "n2")) () (EApp (EVar "EVar") (EVar "n2"))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EVarId" (PVar "n") PWild)) (EIf (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "rm")) (arm (PCon "Some" (PVar "n2")) () (EApp (EVar "EVar") (EVar "n2"))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ELam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "ELam") (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EApp (EVar "boundInsertPM") (EApp (EVar "patVarsListPM") (EVar "ps"))) (EVar "bound"))) (EVar "body"))))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ELet" (PVar "m") (PVar "r") (PVar "p") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "pv") (EApp (EVar "patVarsPM") (EVar "p"))) (DoLet false false (PVar "b1") (EIf (EVar "r") (EApp (EApp (EVar "boundInsertPM") (EVar "pv")) (EVar "bound")) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "b1")) (EVar "e1"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EApp (EVar "boundInsertPM") (EVar "pv")) (EVar "bound"))) (EVar "e2"))))))
+(DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ELetGroup" (PVar "binds") (PVar "e2"))) (EBlock (DoLet false false (PVar "bnd") (EApp (EApp (EVar "boundInsertPM") (EApp (EVar "letBindNamesPM") (EVar "binds"))) (EVar "bound"))) (DoExpr (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameLetBind") (EVar "rm")) (EVar "bnd"))) (EVar "binds"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bnd")) (EVar "e2"))))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EMatch" (PVar "e0") (PVar "arms"))) (EApp (EApp (EVar "EMatch") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e0"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameArm") (EVar "rm")) (EVar "bound"))) (EVar "arms"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EBlock" (PVar "stmts"))) (EApp (EVar "EBlock") (EApp (EApp (EApp (EVar "renameStmts") (EVar "rm")) (EVar "bound")) (EVar "stmts"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EDo" (PVar "stmts"))) (EApp (EVar "EDo") (EApp (EApp (EApp (EVar "renameStmts") (EVar "rm")) (EVar "bound")) (EVar "stmts"))))
@@ -1792,30 +1824,30 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "ESetLit" (PVar "n") (PVar "es"))) (EApp (EApp (EVar "ESetLit") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "renameScoped" ((PVar "rm") (PVar "bound") (PCon "EAsPat" (PVar "x") (PVar "sub"))) (EApp (EApp (EVar "EAsPat") (EVar "x")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EMethodRef "sub"))))
 (DFunDef false "renameScoped" (PWild PWild (PVar "e")) (EVar "e"))
-(DTypeSig false "renameField" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "FieldAssign") (TyCon "FieldAssign")))))
+(DTypeSig false "renameField" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "FieldAssign") (TyCon "FieldAssign")))))
 (DFunDef false "renameField" ((PVar "rm") (PVar "bound") (PCon "FieldAssign" (PVar "n") (PVar "e"))) (EApp (EApp (EVar "FieldAssign") (EVar "n")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))))
-(DTypeSig false "renameKv" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyCon "Expr"))))))
+(DTypeSig false "renameKv" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyCon "Expr"))))))
 (DFunDef false "renameKv" ((PVar "rm") (PVar "bound") (PTuple (PVar "k") (PVar "v"))) (ETuple (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "k")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "v"))))
-(DTypeSig false "renameInterp" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "InterpPart") (TyCon "InterpPart")))))
+(DTypeSig false "renameInterp" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "InterpPart") (TyCon "InterpPart")))))
 (DFunDef false "renameInterp" (PWild PWild (PCon "InterpStr" (PVar "s"))) (EApp (EVar "InterpStr") (EVar "s")))
 (DFunDef false "renameInterp" ((PVar "rm") (PVar "bound") (PCon "InterpExpr" (PVar "e"))) (EApp (EVar "InterpExpr") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))))
-(DTypeSig false "renameLetBind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "LetBind") (TyCon "LetBind")))))
+(DTypeSig false "renameLetBind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "LetBind") (TyCon "LetBind")))))
 (DFunDef false "renameLetBind" ((PVar "rm") (PVar "bound") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EApp (EApp (EVar "LetBind") (EApp (EApp (EVar "renameDefName") (EVar "rm")) (EVar "n"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renameFunClause") (EVar "rm")) (EVar "bound"))) (EVar "clauses"))))
-(DTypeSig false "renameFunClause" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "FunClause") (TyCon "FunClause")))))
-(DFunDef false "renameFunClause" ((PVar "rm") (PVar "bound") (PCon "FunClause" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "FunClause") (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EBinOp "++" (EApp (EVar "patVarsListPM") (EVar "ps")) (EVar "bound"))) (EVar "body"))))
-(DTypeSig false "renameArm" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Arm") (TyCon "Arm")))))
-(DFunDef false "renameArm" ((PVar "rm") (PVar "bound") (PCon "Arm" (PVar "p") (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PVar "b0") (EBinOp "++" (EApp (EVar "patVarsPM") (EVar "p")) (EVar "bound"))) (DoLet false false (PTuple (PVar "gs2") (PVar "bnd")) (EApp (EApp (EApp (EVar "renameGuards") (EVar "rm")) (EVar "b0")) (EVar "gs"))) (DoExpr (EApp (EApp (EApp (EVar "Arm") (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))) (EVar "gs2")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bnd")) (EVar "body"))))))
-(DTypeSig false "renameGuardArm" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "GuardArm") (TyCon "GuardArm")))))
+(DTypeSig false "renameFunClause" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "FunClause") (TyCon "FunClause")))))
+(DFunDef false "renameFunClause" ((PVar "rm") (PVar "bound") (PCon "FunClause" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "FunClause") (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EApp (EVar "boundInsertPM") (EApp (EVar "patVarsListPM") (EVar "ps"))) (EVar "bound"))) (EVar "body"))))
+(DTypeSig false "renameArm" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Arm") (TyCon "Arm")))))
+(DFunDef false "renameArm" ((PVar "rm") (PVar "bound") (PCon "Arm" (PVar "p") (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PVar "b0") (EApp (EApp (EVar "boundInsertPM") (EApp (EVar "patVarsPM") (EVar "p"))) (EVar "bound"))) (DoLet false false (PTuple (PVar "gs2") (PVar "bnd")) (EApp (EApp (EApp (EVar "renameGuards") (EVar "rm")) (EVar "b0")) (EVar "gs"))) (DoExpr (EApp (EApp (EApp (EVar "Arm") (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))) (EVar "gs2")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bnd")) (EVar "body"))))))
+(DTypeSig false "renameGuardArm" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GuardArm") (TyCon "GuardArm")))))
 (DFunDef false "renameGuardArm" ((PVar "rm") (PVar "bound") (PCon "GuardArm" (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "gs2") (PVar "bnd")) (EApp (EApp (EApp (EVar "renameGuards") (EVar "rm")) (EVar "bound")) (EVar "gs"))) (DoExpr (EApp (EApp (EVar "GuardArm") (EVar "gs2")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bnd")) (EVar "body"))))))
-(DTypeSig false "renameGuards" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyTuple (TyApp (TyCon "List") (TyCon "Guard")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DTypeSig false "renameGuards" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyTuple (TyApp (TyCon "List") (TyCon "Guard")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
 (DFunDef false "renameGuards" (PWild (PVar "bound") (PList)) (ETuple (EListLit) (EVar "bound")))
 (DFunDef false "renameGuards" ((PVar "rm") (PVar "bound") (PCons (PCon "GBool" (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "e2") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "bnd")) (EApp (EApp (EApp (EVar "renameGuards") (EVar "rm")) (EVar "bound")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EVar "GBool") (EVar "e2")) (EVar "rest2")) (EVar "bnd")))))
-(DFunDef false "renameGuards" ((PVar "rm") (PVar "bound") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "e2") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "bnd")) (EApp (EApp (EApp (EVar "renameGuards") (EVar "rm")) (EBinOp "++" (EApp (EVar "patVarsPM") (EVar "p")) (EVar "bound"))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "GBind") (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))) (EVar "e2")) (EVar "rest2")) (EVar "bnd")))))
-(DTypeSig false "renameStmts" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "DoStmt"))))))
+(DFunDef false "renameGuards" ((PVar "rm") (PVar "bound") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "e2") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "bnd")) (EApp (EApp (EApp (EVar "renameGuards") (EVar "rm")) (EApp (EApp (EVar "boundInsertPM") (EApp (EVar "patVarsPM") (EVar "p"))) (EVar "bound"))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "GBind") (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))) (EVar "e2")) (EVar "rest2")) (EVar "bnd")))))
+(DTypeSig false "renameStmts" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "DoStmt"))))))
 (DFunDef false "renameStmts" (PWild PWild (PList)) (EListLit))
 (DFunDef false "renameStmts" ((PVar "rm") (PVar "bound") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EVar "DoExpr") (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))) (EApp (EApp (EApp (EVar "renameStmts") (EVar "rm")) (EVar "bound")) (EVar "rest"))))
-(DFunDef false "renameStmts" ((PVar "rm") (PVar "bound") (PCons (PCon "DoBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "DoBind") (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))) (EApp (EApp (EApp (EVar "renameStmts") (EVar "rm")) (EBinOp "++" (EApp (EVar "patVarsPM") (EVar "p")) (EVar "bound"))) (EVar "rest"))))
-(DFunDef false "renameStmts" ((PVar "rm") (PVar "bound") (PCons (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "b1") (EIf (EVar "r") (EBinOp "++" (EApp (EVar "patVarsPM") (EVar "p")) (EVar "bound")) (EVar "bound"))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "b1")) (EVar "e"))) (EApp (EApp (EApp (EVar "renameStmts") (EVar "rm")) (EBinOp "++" (EApp (EVar "patVarsPM") (EVar "p")) (EVar "bound"))) (EVar "rest"))))))
+(DFunDef false "renameStmts" ((PVar "rm") (PVar "bound") (PCons (PCon "DoBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "DoBind") (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))) (EApp (EApp (EApp (EVar "renameStmts") (EVar "rm")) (EApp (EApp (EVar "boundInsertPM") (EApp (EVar "patVarsPM") (EVar "p"))) (EVar "bound"))) (EVar "rest"))))
+(DFunDef false "renameStmts" ((PVar "rm") (PVar "bound") (PCons (PCon "DoLet" (PVar "m") (PVar "r") (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "b1") (EIf (EVar "r") (EApp (EApp (EVar "boundInsertPM") (EApp (EVar "patVarsPM") (EVar "p"))) (EVar "bound")) (EVar "bound"))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "DoLet") (EVar "m")) (EVar "r")) (EApp (EApp (EVar "renamePat") (EVar "rm")) (EVar "p"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "b1")) (EVar "e"))) (EApp (EApp (EApp (EVar "renameStmts") (EVar "rm")) (EApp (EApp (EVar "boundInsertPM") (EApp (EVar "patVarsPM") (EVar "p"))) (EVar "bound"))) (EVar "rest"))))))
 (DFunDef false "renameStmts" ((PVar "rm") (PVar "bound") (PCons (PCon "DoAssign" (PVar "x") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "DoAssign") (EVar "x")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))) (EApp (EApp (EApp (EVar "renameStmts") (EVar "rm")) (EVar "bound")) (EVar "rest"))))
 (DFunDef false "renameStmts" ((PVar "rm") (PVar "bound") (PCons (PCon "DoFieldAssign" (PVar "x") (PVar "fs") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EVar "DoFieldAssign") (EVar "x")) (EVar "fs")) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EVar "bound")) (EVar "e"))) (EApp (EApp (EApp (EVar "renameStmts") (EVar "rm")) (EVar "bound")) (EVar "rest"))))
 (DTypeSig false "letBindNamesPM" (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "List") (TyCon "String"))))
