@@ -315,6 +315,7 @@ checkModules : List Decl -> List Decl -> List (String, List Decl) -> List (Strin
 checkModulesAllLines : List Decl -> List Decl -> List (String, List Decl) -> String
 checkModulesDiags : List Decl -> List Decl -> List (String, List Decl) -> List (String, (List TcDiag, List TcDiag))
 checkModulesEntryFull : List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List TcDiag, List TcDiag)
+checkModulesEntryFullSplit : List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List (String, Scheme), List TcDiag, List TcDiag)
 checkModulesEntryHasErrors : List Decl -> List Decl -> List (String, List Decl) -> Bool
 checkModulesEntryLines : List Decl -> List Decl -> List (String, List Decl) -> String
 checkModulesEntryReport : List Decl -> List Decl -> List (String, List Decl) -> String
@@ -328,6 +329,7 @@ checkOneEffectParam : String -> String -> Unit
 checkOneErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
 checkOneIfaceCycle : ClassEnv -> Int -> Ref (Map String Unit) -> CeRow -> Unit
 checkOneScheme : List Decl -> List Decl -> (String, List Decl) -> List (String, Scheme)
+checkOneSchemeFull : List Decl -> List Decl -> (String, List Decl) -> (List (String, Scheme), List (String, Scheme))
 checkOneToLinesWithRuntime : List Decl -> List Decl -> List Decl -> String
 checkPhantomMethods : ClassEnv -> Int -> Unit
 checkProductAxes : String -> Param -> Unit
@@ -1465,6 +1467,7 @@ ppPredArgsShared : List Mono -> String
 ppScheme : Scheme -> String
 ppSchemeCon : List VecObl -> Scheme -> String
 ppSchemeNamed : String -> Scheme -> String
+ppSchemeNamedFull : String -> Scheme -> String
 ppTy : Ty -> String
 ppTyAtom : Ty -> String
 ppTyFunArg : Ty -> String

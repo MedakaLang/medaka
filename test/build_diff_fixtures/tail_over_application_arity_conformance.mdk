@@ -1,0 +1,93 @@
+-- TAIL-POSITION CALL/DEFINE ARITY CONFORMANCE (#1101 S0).
+--
+-- The regression guard that replaces `test/must_fail_fixtures/1101-native-call-
+-- drops-arg-caf-closure/`, drained and deleted when #1101 was fixed.
+--
+-- THE DEFECT.  `emitFnBody`'s tail-position known-fn arm (llvm_emit.mdk) emitted an
+-- UNCONDITIONAL direct `[musttail] call @mdk_<fn>(<every flattened argument>)` — it
+-- never consulted the callee's arity at all, unlike `emitApp`'s known-fn arm, which
+-- routes through the arity-disciplined `emitKnownFnSat`.  LLVM's opaque-pointer call
+-- model does not cross-check a direct call's argument count against the callee's
+-- `define`, so an over-applied tail call was legal-but-wrong IR: it linked, it ran,
+-- the surplus arguments landed in unread registers, and the RETURNED CLOSURE WAS
+-- NEVER INVOKED.  check/run/build all reported success; only the executed binary
+-- was wrong, silently (#1101's own repro printed nothing at exit 0 where the
+-- interpreter printed `CALLED`).
+--
+-- WHY THIS FIXTURE IS WIDER THAN #1101'S PROSE.  The issue (and its must-fail
+-- claim.txt) asserted the repro needed BOTH a top-level lazy nullary (CAF) AND a
+-- separate top-level caller.  The CAF half is FALSE — measured during the
+-- S-caf-closure-apply spike.  The TRUE minimal isolation is two conditions, neither
+-- of them the CAF:
+--   (1) a NON-SATURATED application of a known top-level function, and
+--   (2) that application sitting in TAIL position of a non-`main` top-level binding
+--       (i.e. reached by `emitFnBody`, never by `emitApp`).
+-- `MyBox`/`Ref`/the lazy global are incidental.  A fixture built only from #1101's
+-- CAF-flavoured shape would under-pin the fix, so all four cells live here in one
+-- program behind ONE golden line: a fix that re-breaks any single cell reds this
+-- gate rather than passing quietly.
+--
+-- The expected stdout in `tail_over_application_arity_conformance.build.golden` is
+-- HAND-DERIVED from the language semantics, written down before either engine was
+-- consulted ([WT-GOLDEN-ENSHRINES]) — the interpreter agreed on every cell both
+-- before AND during the defect, so a capture would have proven nothing.
+--
+-- The derivation, straight off the source:
+--   plainTail = 15   `mk 10` is `x => 10 + x`; applied to 5.
+--   cafTail   = 42   the boxed closure is `n => n * 3`; applied to 14.
+--   pap       = 6    `add3 1` is a 2-of-3 PAP; applied to 2 and 3 -> 1 + 2 + 3.
+--   inline    = 107  `(mk 100) 7` -> 100 + 7, in `main`'s own body.
+--   loop      = 15   0+5+4+3+2+1.
+
+-- CELL 1: OVER-APPLICATION in tail position of a non-`main` top-level fn, with no
+-- CAF, no `Ref` and no `data` declaration anywhere in sight.  This is the widened
+-- shape the spike measured; it is the cell #1101's own fixture never contained.
+-- Pre-fix this emitted `call @mdk_mk(i64 %n, i64 %x)` against `define @mdk_mk(i64
+-- %arg0)` and returned the un-invoked closure word as if it were the Int result.
+mk : Int -> Int -> Int
+mk n = x => n + x
+
+plainTail : Unit -> Int
+plainTail u = (mk 10) 5
+
+-- CELL 2: #1101's OWN shape, kept verbatim in spirit — the closure reached through
+-- a top-level lazy nullary (CAF) holding a `Ref` inside a constructor.  Same emitter
+-- arm, same skew; retained so the originally-pinned program stays covered even
+-- though its CAF is not what made it fail.
+data MyBox a = MyBox (Ref a)
+
+getBox : MyBox a -> a
+getBox (MyBox r) = r.value
+
+box : MyBox (Int -> Int)
+box = MyBox (Ref (n => n * 3))
+
+cafTail : Unit -> Int
+cafTail u = (getBox box) 14
+
+-- CELL 3: the OTHER side of the same missing check — UNDER-application in tail
+-- position.  The new guard is a saturation test, not an over-application test, so a
+-- fix that special-cased only `nargs > arity` would leave this emitting
+-- `call @mdk_add3(i64 1)` against a three-param define, reading two garbage words.
+-- Correct lowering builds a partial-application closure (`emitPapClosure`).
+add3 : Int -> Int -> Int -> Int
+add3 a b c = a + b + c
+
+mkAdder : Unit -> (Int -> Int -> Int)
+mkAdder u = add3 1
+
+-- CELL 4: the arm that must NOT move — a SATURATED self-recursive tail call, which
+-- is exactly the common case the guard is designed to leave byte-identical
+-- (`musttail call` + `ret`).  If the guard ever mis-measures the saturated case,
+-- this loop stops being a tail call and the emitted IR churns.
+sumTo : Int -> Int -> Int
+sumTo acc n = if n == 0 then acc else sumTo (acc + n) (n - 1)
+
+loop : Unit -> Int
+loop u = sumTo 0 5
+
+-- `inline=` is the control cell: the SAME over-application, but in `main`'s own
+-- body, which reaches `emitApp` instead of `emitFnBody` and was correct all along.
+main =
+  println
+    "plainTail=\{debug (plainTail ())} cafTail=\{debug (cafTail ())} pap=\{debug (mkAdder () 2 3)} inline=\{debug ((mk 100) 7)} loop=\{debug (loop ())}"

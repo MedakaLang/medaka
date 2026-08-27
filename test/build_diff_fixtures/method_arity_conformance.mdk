@@ -1,0 +1,69 @@
+-- METHOD ARITY CONFORMANCE (#1034 S0, #826 S1).
+--
+-- The expected stdout in `method_arity_conformance.build.golden` is HAND-DERIVED
+-- from the language semantics, written down BEFORE either engine was consulted --
+-- it is deliberately NOT a capture ([WT-GOLDEN-ENSHRINES]).  The moment #1034 is
+-- fixed the interpreter and the native backend read the SAME arity, so the engine
+-- disagreement that made this bug findable disappears; only a written-down
+-- EXPECTATION can still catch a regression.
+--
+-- The derivation.  Medaka is strict.  The impl clause `act d = <strict prefix>;
+-- (u => ())` binds exactly ONE source parameter, so `act Dog` is a SATURATED
+-- application and its strict prefix must run AT THAT POINT -- even though the
+-- method's DECLARED type `a -> (Unit -> Unit)` has a two-arrow spine and
+-- `a -> (Unit -> Unit)` is the SAME `Ty` as `a -> Unit -> Unit`, so the source
+-- arity is not recoverable from the type at all.  Deriving the emitted arity from
+-- the whole spine makes `act Dog` look UNDER-applied, lowers it to a PAP, and
+-- defers the increment past the point the source performs it (#1034); the same
+-- over-count under an unconstrained wrapper faulted outright (#826).
+--
+-- Each `seen` below is the counter read at that program point.  Reading straight
+-- off the source, with no engine in the loop:
+--   seen1 = 1  `act Dog` ran the increment; invoking the returned thunk later
+--              cannot move it, because the thunk's body is `()`.
+--   seen2 = 1  invoking the returned thunk adds nothing.
+--   seen3 = 2  `act Dog ()` is an OVER-application of the arity-1 clause: the
+--              increment runs once, then the returned closure takes the `()`.
+--   seen4 = 3  the unconstrained wrapper's body is one more saturated `act Dog`.
+--   two   = 42 the arity-UNCHANGED control: `two : a -> Int -> Int` with a clause
+--              binding both parameters is not eta-short, so its emitted arity is
+--              the declared 2 exactly as before, and `two Dog 41` = 41 + 1.
+
+counter : Ref Int
+counter = Ref 0
+
+interface Act a where
+  act : a -> Unit -> Unit
+
+-- the arity-UNCHANGED control: declared arity 2, clause arity 2.
+interface Two a where
+  two : a -> Int -> Int
+
+data Dog = Dog
+
+impl Act Dog where
+  act d =
+    counter := counter.value + 1
+    u => ()
+
+impl Two Dog where
+  two d n = n + 1
+
+-- #826's shape: a top-level UNCONSTRAINED monomorphic wrapper whose body is a
+-- method call on a hardcoded receiver, returning the method's returned closure.
+wrap : Unit -> Unit -> Unit
+wrap v = act Dog
+
+main =
+  let thunk = act Dog
+  let seen1 = counter.value
+  let _ = thunk ()
+  let seen2 = counter.value
+  let _ = act Dog ()
+  let seen3 = counter.value
+  let t2 = wrap ()
+  let seen4 = counter.value
+  let _ = t2 ()
+  let k = two Dog 41
+  println
+    "seen1=\{debug seen1} seen2=\{debug seen2} seen3=\{debug seen3} seen4=\{debug seen4} two=\{debug k}"

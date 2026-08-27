@@ -1,0 +1,10 @@
+-- Regression for #1789 (paramUsedInArith/paramUseTy traversal gap): a
+-- type-var Float param used arithmetically only inside a match arm (a
+-- CDecision, what `match` lowers to), not directly in the enclosing
+-- function body. Sibling shape to numpoly_traversal_lambda_arg.mdk (CLam)
+-- -- this is the issue's own original repro, minimized to the `match` shape.
+double x = match True
+  True => x + x
+  False => x
+
+main = println (double 2.5)
