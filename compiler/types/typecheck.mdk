@@ -1821,9 +1821,36 @@ ifaceTabKey : TyConOrigin -> String -> TabKey
 ifaceTabKey o n = tabKeyOf NsIface o n
 
 -- one ctor node: its bare row-kinded slots (if performable) + recurse the args
+--
+-- 🚨 THE SLOT'S ATOMS COME FROM THE HEAD'S DECLARATION, not from the use site.
+-- This used to pad every performable KRow slot to `(e, [])` — "the impl can
+-- perform `e` here and nothing else is guaranteed" — the ARGUMENT-side twin of
+-- the blind pad #2110 removed from `methodEffRetOccs`.  On this side the pad is
+-- not an over-rejection but a LAUNDER: for
+--   `data Slot e = Slot (Unit -> <Stdout | e> Unit)`
+-- a `Slot e` ARGUMENT lets the callee run a field the declaration guarantees
+-- performs <Stdout> at EVERY instantiation, `Slot <>` included, so
+--   `unslot : Slot e -> (Unit -> <e> Unit)`
+-- under-claims: it hands back a function typed `<e>` that really performs
+-- <Stdout>, and at `e := <>` the caller gets a pure-typed printer (measured —
+-- `check` and `run` both exited 0 and the program printed).  Reading the
+-- guarantee out of `dataParamRowAtomsRef` through `krowArgVarAtoms` — the same
+-- table and the same walker the RETURN side already consults — makes those
+-- <Stdout> atoms argument-side evidence, and the coverage rule ("every
+-- non-argument occurrence of `e` covers the union of its argument-side atoms")
+-- then rejects `unslot` while still accepting `widen : Slot e -> Slot e`, whose
+-- return occurrence carries the same atoms.  Both halves are pinned:
+-- `test/typecheck_error_fixtures/effect_arg_slot_launder.mdk` and its
+-- `effect_arg_slot_unrelated_ok.mdk` accept-side twin.
+-- ⚠️ A written-row slot (`Slot <Log | e>`) has its WRITTEN labels reported
+-- twice — once here by `krowArgVarAtoms`, once by the `flatMap` below through
+-- `argPerformableOccs`' `TyRow` arm.  Harmless, and NOT the return side's
+-- double-count hazard: `checkArgEffVars` UNIONS the argument-side atoms
+-- (`flatMap snd`), where the return side takes a first-non-empty escape and so
+-- lets an atom-less copy veto a faithful one.
 krowSlotOccs : List (String, List Kind) -> Bool -> TyConOrigin -> String -> List Ty -> List (String, List Atom)
 krowSlotOccs scope perf o n args = match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
-  Some kinds if listLen kinds == listLen args => (if perf then map (n2 => (n2, [])) (krowArgVarNames kinds args) else [])
+  Some kinds if listLen kinds == listLen args => (if perf then krowArgVarAtoms kinds (fromOption [] (paramRowAtomsOf (tyTabKey o n))) args else [])
     ++ flatMap (argPerformableOccs scope perf) args
   _ => flatMap (argPerformableOccs scope perf) args
 
@@ -1831,9 +1858,15 @@ krowSlotOccs scope perf o n args = match lookupTab (tyTabKey o n) perRun.value.d
 -- kinds come from the graded typaram [scope] instead of `dataParamKindsRef`.
 -- This is `rowArgNamesVarApp`'s counterpart on the argument side; a miss falls
 -- through to the args exactly as `krowSlotOccs`' miss does.
+-- An abstract head has no declaration to read, so its guarantee list is `[]`
+-- and every slot still reports `(e, [])` — `krowArgVarAtoms kinds []` is the
+-- old blind pad, occurrence for occurrence.  It is written this way rather than
+-- left as the `map`, so the two arms stay ONE walker: the next atom fact an
+-- abstract head can offer (a graded typaram's declared row, #820) lands in one
+-- place instead of two.
 krowSlotVarOccs : List (String, List Kind) -> Bool -> String -> List Ty -> List (String, List Atom)
 krowSlotVarOccs scope perf h args = match lookupAssoc h scope
-  Some kinds if listLen kinds == listLen args => (if perf then map (n2 => (n2, [])) (krowArgVarNames kinds args) else [])
+  Some kinds if listLen kinds == listLen args => (if perf then krowArgVarAtoms kinds [] args else [])
     ++ flatMap (argPerformableOccs scope perf) args
   _ => flatMap (argPerformableOccs scope perf) args
 

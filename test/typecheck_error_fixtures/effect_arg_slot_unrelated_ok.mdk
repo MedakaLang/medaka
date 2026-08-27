@@ -1,0 +1,69 @@
+-- #2110 / review finding S0-1: the ACCEPT half of `effect_arg_slot_launder.mdk`,
+-- and this sprint's "feature + UNRELATED code still behaves" fixture
+-- ([T-GLOBAL-TABLE]).  Everything below must check clean.
+--
+-- Two OVER-CORRECTION controls, both one edit away from the reject next door:
+--
+--   1. `unbare : Bare e -> (Unit -> <e> Unit)`.  Character-for-character the
+--      signature shape that rejects for `Slot`; the only difference is that
+--      `Bare`'s field row is `<e>` and `Slot`'s is `<Stdout | e>`.  `Bare`
+--      guarantees no atoms, so the field is charged exactly what it performs
+--      and the declaration is honest.  This is what pins the guarantee to the
+--      DECLARATION rather than to "an argument of wrapper shape": a fix that
+--      charged every row-kinded argument, or that read the atoms off the use
+--      site, reddens here and nowhere else.
+--   2. `widen : Slot e -> Slot e` and `rewrap : Slot e -> Slot e`.  The atoms
+--      `Slot e` carries at the argument are carried right back out at the
+--      return occurrence, so nothing escapes and the coverage rule is
+--      satisfied.  A fix that counted argument-side atoms without checking
+--      whether a return occurrence covers them reddens these two.
+--   3. `inspect : Slot e -> Int` — an INSPECTOR that never runs the field.  It
+--      has no non-argument occurrence of `e` at all, which is the
+--      argument-only shape; that arm is interface-method-only by design (see
+--      `checkArgEffVars`), so an ordinary top-level inspector must stay clean.
+--      This is the shape the coverage rule would break most widely if the
+--      argument-only arm ever escaped to top-level signatures: 34 declarations
+--      in the compiler's own sources have it.
+--
+-- The tail half — `Pair`, `firstOf`, `sndOf`, `idString`, `constUnit` — declares
+-- no row-kinded parameter, mentions no effect row, and never touches
+-- `Slot`/`Bare`, yet its inferred schemes are in this fixture's golden.  A
+-- change that perturbs ordinary elaboration while teaching the coverage walkers
+-- about the per-parameter atom table shows up here even though none of that
+-- code goes near a wrapper.
+data Slot e = Slot (Unit -> <Stdout | e> Unit)
+
+data Bare e = Bare (Unit -> <e> Unit)
+
+-- (1) the same signature shape that rejects for `Slot`, over a wrapper that
+-- guarantees nothing
+unbare : Bare e -> (Unit -> <e> Unit)
+unbare b = match b
+  Bare f => f
+
+-- (2) the atoms go straight back out at the return occurrence
+widen : Slot e -> Slot e
+widen s = s
+
+rewrap : Slot e -> Slot e
+rewrap s = match s
+  Slot f => Slot f
+
+-- (3) an inspector that never runs the field: no non-argument occurrence of `e`
+inspect : Slot e -> Int
+inspect s = 7
+
+-- ── unrelated: no row-kinded parameter, no effect row, no wrapper ────────────
+data Pair a b = MkPair a b
+
+firstOf : Pair a b -> a
+firstOf (MkPair a _) = a
+
+sndOf : Pair a b -> b
+sndOf (MkPair _ b) = b
+
+idString : String -> String
+idString s = s
+
+constUnit : a -> Unit
+constUnit x = ()
