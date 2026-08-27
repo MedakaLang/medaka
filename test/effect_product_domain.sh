@@ -43,13 +43,13 @@ expect_reject() {
 
 # ── Independent host+method confinement (the WS-4 headline) ──────────────────
 expect_ok     "$FIX/prod_accept.mdk"        "PROD accept (host in-prefix AND method in-set)"
-expect_reject "$FIX/prod_reject_host.mdk"   "PROD reject HOST out-of-prefix"   'performs <Net Host="other.com/api" Method={"GET"}>'
-expect_reject "$FIX/prod_reject_method.mdk" "PROD reject METHOD out-of-set"    'performs <Net Host="idp.example.com/api" Method={"POST"}>'
+expect_reject "$FIX/prod_reject_host.mdk"   "PROD reject HOST out-of-prefix"   'performs <FFI, Net Host="other.com/api" Method={"GET"}>'
+expect_reject "$FIX/prod_reject_method.mdk" "PROD reject METHOD out-of-set"    'performs <FFI, Net Host="idp.example.com/api" Method={"POST"}>'
 
 # ── Soundness: inferred omits Method (=> TOP on Method), bound confines Method.
 # A buggy axis-defaulting dsubN (skip missing inferred axes) would ACCEPT; the
 # sound one looks the missing axis up against the bound axis sub-TOP and REJECTS.
-expect_reject "$FIX/prod_soundness.mdk"     "PROD soundness (TOP-method !<= confined-method)" 'performs <Net Host="idp.example.com/api">'
+expect_reject "$FIX/prod_soundness.mdk"     "PROD soundness (TOP-method !<= confined-method)" 'performs <FFI, Net Host="idp.example.com/api">'
 
 # ── Host-axis lift: a bare `<Net "…">` under a Product Net = Host-only, Method=TOP.
 expect_ok     "$FIX/prod_host_lift.mdk"     "PROD host-axis lift (bare host literal under product Net)"
@@ -62,7 +62,7 @@ expect_ok     "$FIX/prod_compat_prefix.mdk" "PROD backward-compat (Prefix Net un
 # (';'-separated axes; the brace-aware comma split keeps `{…}` intact).
 PLUG="$FIX/prod_policy_plugin.mdk"
 cp_accept_out="$(perl -e 'alarm 90; exec @ARGV' -- "$M" check-policy "$PLUG" \
-  --allow 'Net=Host="idp.example.com/*";Method={GET,POST}' --fn transform 2>&1)"
+  --allow 'Net=Host="idp.example.com/*";Method={GET,POST},FFI' --fn transform 2>&1)"
 if echo "$cp_accept_out" | grep -q '^accepted'; then
   echo "ok   PROD check-policy accept (policy product admits)"; pass=$((pass+1))
 else

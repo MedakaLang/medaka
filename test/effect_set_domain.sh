@@ -40,9 +40,9 @@ expect_reject() {
 
 expect_ok     "$FIX/set_p4_parse_accept.mdk"      "P4  parse-accept"
 expect_ok     "$FIX/set_subset_accept.mdk"        "ACC subset-accept"
-expect_reject "$FIX/set_subset_reject.mdk"        "REJ subset-reject" 'performs <Foo {"a", "b"}>'
+expect_reject "$FIX/set_subset_reject.mdk"        "REJ subset-reject" 'performs <FFI, Foo {"a", "b"}>'
 expect_ok     "$FIX/set_cap_saturate.mdk"         "CAP saturate-accept (top<=top)"
-expect_reject "$FIX/set_cap_saturate_ctrl.mdk"    "CAP saturate-reject (top performs <Foo>)" 'performs <Foo>'
+expect_reject "$FIX/set_cap_saturate_ctrl.mdk"    "CAP saturate-reject (top performs <Foo>)" 'performs <FFI, Foo>'
 
 echo "effect_set_domain: $pass/$fail"
 [ "$fail" -eq 0 ]

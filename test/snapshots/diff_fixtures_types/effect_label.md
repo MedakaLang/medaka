@@ -11,16 +11,16 @@ effect Log
 
 extern kvGet : String -> <KV> String
 
-get : String -> <KV> String
+get : String -> <KV, FFI> String
 get k = kvGet k
 
-handler : String -> <KV, Log> String
+handler : String -> <KV, Log, FFI> String
 handler k = get k
 
 main : <IO> Unit
 main = println "effect labels ok"
 # TYPES_USER
-kvGet : String -> <KV> String
-get : String -> <KV> String
-handler : String -> <KV, Log> String
+kvGet : String -> <FFI, KV> String
+get : String -> <FFI, KV> String
+handler : String -> <FFI, KV, Log> String
 main : Unit

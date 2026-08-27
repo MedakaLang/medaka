@@ -5,7 +5,7 @@
 -- from ioAliasLabels, not a broken expandIoInBound.
 extern runIt : String -> <Exec "/usr/bin/*"> Int
 
-caller : Unit -> <IO> Int
+caller : Unit -> <IO, FFI> Int
 caller _ = runIt "/usr/bin/ls"
 
 main : <IO> Unit

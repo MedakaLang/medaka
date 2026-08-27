@@ -7,7 +7,7 @@ effect Net Product
 
 extern fetch : String -> <Net "idp.example.com/api/*"> String
 
-call : Unit -> <Net Host="idp.example.com/*"> String
+call : Unit -> <Net Host="idp.example.com/*", FFI> String
 call _ = fetch "x"
 
 main : <IO> Unit

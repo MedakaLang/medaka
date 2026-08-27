@@ -1,0 +1,13 @@
+-- N2 (F1 fix packet): pin the R2 stamp-acceptance shape from slice 3's Checks
+-- 1+2 as a real gate (S-extern-stamp report N2 — previously only an ad-hoc
+-- probe).  A user-declared extern written with a bare `<>` bound is stamped
+-- `<FFI>` (Check 1); composed with R1 (`FFI` excluded from `ioAliasLabels`),
+-- a caller declared at the ORIGINAL bare `<>` no longer subsumes it (Check 2)
+-- ⇒ REJECT.
+extern ffiCall : Int -> <> Int
+
+pureWrap : Int -> <> Int
+pureWrap x = ffiCall x
+
+main : <IO> Unit
+main = println "unreached"

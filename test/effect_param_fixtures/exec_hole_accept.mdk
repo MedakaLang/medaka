@@ -7,7 +7,7 @@ effect Exec Prefix
 
 extern runCommand : String -> List String -> <Exec _> Int
 
-runLs : Unit -> <Exec "/usr/bin/*"> Int
+runLs : Unit -> <Exec "/usr/bin/*", FFI> Int
 runLs _ = runCommand "/usr/bin/ls" []
 
 main : <IO> Unit

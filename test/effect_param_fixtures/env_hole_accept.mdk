@@ -7,7 +7,7 @@ effect Env Set
 
 extern getEnv : String -> <Env _> Option String
 
-readHome : Unit -> <Env {"HOME", "PATH"}> Option String
+readHome : Unit -> <Env {"HOME", "PATH"}, FFI> Option String
 readHome _ = getEnv "HOME"
 
 main : <IO> Unit

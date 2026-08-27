@@ -63,8 +63,8 @@ else
 fi
 
 # 2. Native CLI must SURFACE the Prefix-parameterized row in the inferred sigs.
-if printf '%s' "$nat_out" | grep -qF 'fetch : String -> <Net "a.com/foo"> String' \
-   && printf '%s' "$nat_out" | grep -qF 'netGet : String -> <Net "a.com/foo"> String'; then
+if printf '%s' "$nat_out" | grep -qF 'fetch : String -> <FFI, Net "a.com/foo"> String' \
+   && printf '%s' "$nat_out" | grep -qF 'netGet : String -> <FFI, Net "a.com/foo"> String'; then
   pass=$((pass+1)); note ok   'native-cli/check infers <Net "a.com/foo"> rows'
 else
   fail=$((fail+1)); note FAIL 'native-cli/check did not infer the <Net ...> rows'

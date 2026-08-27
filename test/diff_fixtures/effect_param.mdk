@@ -14,7 +14,7 @@ effect Stdout
 
 extern netGet : String -> <Net "a.com/foo"> String
 
-fetch : String -> <Net "a.com/foo"> String
+fetch : String -> <Net "a.com/foo", FFI> String
 fetch path = netGet path
 
 data Async e a = Done a | Suspend (Unit -> <e> Async e a)

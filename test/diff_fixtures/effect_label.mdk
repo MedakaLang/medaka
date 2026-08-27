@@ -7,10 +7,10 @@ effect Log
 
 extern kvGet : String -> <KV> String
 
-get : String -> <KV> String
+get : String -> <KV, FFI> String
 get k = kvGet k
 
-handler : String -> <KV, Log> String
+handler : String -> <KV, Log, FFI> String
 handler k = get k
 
 main : <IO> Unit
