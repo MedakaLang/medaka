@@ -15258,11 +15258,19 @@ recordParamPolarities o name pols =
 -- ⚠️ ORDER-SENSITIVE BY CONSTRUCTION, AND IT UNDER-TIGHTENS ON A MISS.  A
 -- `TyApp` spine composes the occurrence's own polarity with the HEAD type's
 -- recorded polarity at that slot, so `data Cell a = MkCell (Ref a)` needs
--- `Ref`'s row to already be visible.  A head that is not yet registered — a
--- forward reference, or the type itself, as in `data List a = Nil | Cons a
--- (List a)` — reads `PCo`, which is exactly today's (fully lenient) behaviour:
--- it can only fail to tighten, never reject something that used to be accepted.
--- That default is what makes the self-recursive `List` come out `PCo`.
+-- `Ref`'s row to already be visible.  A CONCRETE head that is not yet
+-- registered — a forward reference, or the type itself, as in `data List a =
+-- Nil | Cons a (List a)` — reads `PCo` (`polarityAtOr None`), which is exactly
+-- today's (fully lenient) behaviour: it can only fail to tighten, never reject
+-- something that used to be accepted.  That default is what makes the
+-- self-recursive `List` come out `PCo`, and `declEnvPolarityEntriesFix`
+-- iterates it away for everything but genuine self-recursion.
+-- 🚨 THAT PARAGRAPH SCOPES TO THE UNREGISTERED-*TyCon*-HEAD MISS ONLY, AND IS
+-- NOT THE ABSTRACT-HEAD ARM (#2107).  The two were one sentence until #2107
+-- separated them: a head that is a type *parameter* (`data W f a = MkW (f a)`)
+-- can never become registered by iterating, because its polarity is not a fact
+-- about this declaration at all — it depends on what `f` is instantiated to at
+-- each use.  See that arm's own note in `paramOccPolarities` below.
 -- ⚠️ THE TABLE IT COMPOSES AGAINST IS AN ARGUMENT, NOT `perRun`, and that is
 -- load-bearing: `declEnvPolarityChain` runs this over the WHOLE import graph
 -- while building the cross-module seed, at a point where the per-run ref holds
@@ -15302,9 +15310,34 @@ paramOccPolarities tab p pol (TyApp a b) = match tyAppSpine (TyApp a b)
   -- its acquired identity must be read off one pattern so they cannot drift.
   (TyCon { tyConName = n, tyConOrigin = o }, args) =>
     paramOccPolaritiesArgs tab p pol (paramPolaritiesIn tab (tyTabKey o n)) 0 args
-  -- An abstract head (an interface typaram, a rigid) records nothing anywhere,
-  -- so every slot reads the lenient `PCo` default — see the ⚠️ above.
-  _ => paramOccPolarities tab p pol a ++ paramOccPolarities tab p pol b
+  -- ── #2107: ABSTRACT HEAD ⇒ INVARIANT, not the lenient `PCo` default ──────
+  -- An abstract head — a type PARAMETER of this very declaration, as `f` is in
+  -- `data W f a = MkW (f a)` — records nothing anywhere, and unlike an
+  -- unregistered `TyCon` head it never will: `f`'s slot polarity is not a
+  -- property of `W` at all, it is whatever the head gets INSTANTIATED to at
+  -- each use.  `W Ref` needs `PInv`; `W List` would be sound at `PCo`.  The
+  -- declaration cannot tell them apart, so it takes the sound side and reports
+  -- every occurrence reached through such a head as `PInv`.
+  --
+  -- 🚨 THIS IS A DELIBERATE, MEASURED ACCEPTANCE NARROWING — the one place in
+  -- this function that can reject a program that used to be accepted.  It is
+  -- the same trade `paramVarianceGuard`'s own "⚠️ THIS DOES NARROW ACCEPTANCE
+  -- IN THE SOUND DIRECTION TOO" note already documents: equality is the only
+  -- symmetric sound rule available without direction, and here invariance is
+  -- the only sound verdict available without knowing `f`.  Cost, measured:
+  -- `data W f a = MkW (f a)` at `f := List` (immutable, covariant) can no
+  -- longer widen a closed effect row at `a`, though doing so would be sound.
+  -- Benefit: at `f := Ref` it no longer LAUNDERS one (#2107 — a `Unit -> Unit`
+  -- reader of a cell someone wrote a `<Stdout>` closure into, silently).
+  -- Recovering the sound half needs a DEPENDENT polarity (`f`'s slot resolved
+  -- against the mono argument actually applied at that index, at
+  -- `paramVarianceGuard`) — a new `Polarity` constructor and a resolution step,
+  -- not a change to this arm.
+  --
+  -- The count is preserved rather than fabricated: `map` over the occurrences
+  -- the two sides actually report, so a parameter that does not occur here
+  -- still contributes nothing.
+  _ => map (q => polMul PInv q) (paramOccPolarities tab p pol a ++ paramOccPolarities tab p pol b)
 
 paramOccPolaritiesArgs : List (TabKey, List Polarity) -> String -> Polarity -> Option (List Polarity) -> Int -> List Ty -> List Polarity
 paramOccPolaritiesArgs _ _ _ _ _ [] = []
