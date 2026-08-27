@@ -524,9 +524,39 @@ implEntryIfaceWord (CImplEntry _ _ (CImplTagged _ key _ _ _ _)) =
   ifaceWordOfKey key
 implEntryIfaceWord (CImplEntry _ _ (CImplDefault ifaceId _ _)) = ifaceId
 
+-- #1034: the SOURCE value arity of a TAGGED impl's method clause -- its pattern
+-- count less the leading `$dict_*` witnesses dict_pass prepended.  `methodArgTys`
+-- walks the method type's WHOLE arrow spine, so `act : a -> (Unit -> Unit)` reports
+-- arity 2 against a source arity of 1, and the true arity is NOT recoverable from
+-- the type (`a -> (Unit -> Unit)` and `a -> Unit -> Unit` are the same `Ty`).  The
+-- impl clause's own `List Pat` -- the very field eval's `implMethodValue` reads to
+-- build `VClosure env pats body`, which is WHY eval is right on #1034 -- carries it.
+-- An interface DEFAULT (`CImplDefault`) answers 0: its clause is the interface's own
+-- generic body, whose point-free shape is legitimately eta-short, so it keeps the
+-- declared answer and its existing eta-expansion (see the report's `Not covered`).
+implSrcValueArity : CImplEntry -> Int
+implSrcValueArity (CImplEntry _ _ (CImplTagged _ _ _ _ pats _)) =
+  listLen pats - leadingDictPats pats
+implSrcValueArity _ = 0
+
+-- #1034, THE CALL-SITE ARITY.  The declared arity is the answer EXCEPT when the
+-- impl's own clause proves a SHORTER source arity; then the clause wins.  This only
+-- ever LOWERS -- a clause at or beyond the declared arity, or one with no value
+-- pattern at all (`act = someFn`, which carries no arity evidence), keeps the
+-- declared answer byte-identically.  Lowering makes a saturated source call (`act
+-- Dog`, 1 arg) classify as SATURATED instead of under-applied, so the impl body's
+-- strict prefix runs where the source says it does rather than being deferred into a
+-- PAP; Medaka is strict and eval already behaves this way.  A call site that passes
+-- MORE than the lowered arity is an over-application against the impl's returned
+-- closure, which `emitImplCallSat`/`emitKnownFnSat` already lower via `emitOverApp` --
+-- the same shape the eta-expansion used to hard-code into the define.
+-- `gatherGroup`'s define-arity site applies the SAME rule, so define and call sites
+-- keep agreeing (that agreement is #1450/#1668 and must not be broken here).
 methodArityOfEntry : Emit -> CImplEntry -> String -> Int
 methodArityOfEntry e ent method =
-  methodArityOfIface e (implEntryIfaceWord ent) method
+  let declared = methodArityOfIface e (implEntryIfaceWord ent) method
+  let src = implSrcValueArity ent
+  if src > 0 && src < declared then src else declared
 
 -- the declared arity of [method] at the impl registered under [tag] -- the same
 -- answer `methodArityOfEntry` gives, for the sites that hold a tag rather than the
@@ -6726,7 +6756,15 @@ gatherGroup e entries (method, key) =
   -- `methodReturnsSelf` read it as a ROUTE WORD -- re-keying it in place is PR
   -- #1346's E4 result and re-opens CLOSED S0 #1277.  A miss falls back to the bare
   -- table, so a collision-free program emits byte-identically to before.
-  let arity = maxInt (clauseArity cls0) (methodArityOfIface e (ifaceWordOfKey key) method + nDicts)
+  -- #1034, THE DEFINE-ARITY MIRROR of `methodArityOfEntry`'s lowering rule.  A clause
+  -- that binds at least one VALUE pattern but fewer than the declared spine proves a
+  -- SHORTER source arity than the type can express, and eta-expanding it to the
+  -- declared arity is what defers the body's strict prefix past the source's call.
+  -- Such a clause is emitted at its own arity; every other shape keeps the previous
+  -- `maxInt (clauseArity) (declared + nDicts)` answer exactly.
+  let declaredTotal = methodArityOfIface e (ifaceWordOfKey key) method + nDicts
+  let srcTotal = clauseArity cls0
+  let arity = if srcTotal > nDicts && srcTotal < declaredTotal then srcTotal else maxInt srcTotal declaredTotal
   let cls = map (etaExpandClause arity) cls0
   ImplGroup method tag symTag positions arity cls
 

@@ -1,5 +1,5 @@
 # META
-source_lines=11422
+source_lines=11460
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -528,9 +528,39 @@ implEntryIfaceWord (CImplEntry _ _ (CImplTagged _ key _ _ _ _)) =
   ifaceWordOfKey key
 implEntryIfaceWord (CImplEntry _ _ (CImplDefault ifaceId _ _)) = ifaceId
 
+-- #1034: the SOURCE value arity of a TAGGED impl's method clause -- its pattern
+-- count less the leading `$dict_*` witnesses dict_pass prepended.  `methodArgTys`
+-- walks the method type's WHOLE arrow spine, so `act : a -> (Unit -> Unit)` reports
+-- arity 2 against a source arity of 1, and the true arity is NOT recoverable from
+-- the type (`a -> (Unit -> Unit)` and `a -> Unit -> Unit` are the same `Ty`).  The
+-- impl clause's own `List Pat` -- the very field eval's `implMethodValue` reads to
+-- build `VClosure env pats body`, which is WHY eval is right on #1034 -- carries it.
+-- An interface DEFAULT (`CImplDefault`) answers 0: its clause is the interface's own
+-- generic body, whose point-free shape is legitimately eta-short, so it keeps the
+-- declared answer and its existing eta-expansion (see the report's `Not covered`).
+implSrcValueArity : CImplEntry -> Int
+implSrcValueArity (CImplEntry _ _ (CImplTagged _ _ _ _ pats _)) =
+  listLen pats - leadingDictPats pats
+implSrcValueArity _ = 0
+
+-- #1034, THE CALL-SITE ARITY.  The declared arity is the answer EXCEPT when the
+-- impl's own clause proves a SHORTER source arity; then the clause wins.  This only
+-- ever LOWERS -- a clause at or beyond the declared arity, or one with no value
+-- pattern at all (`act = someFn`, which carries no arity evidence), keeps the
+-- declared answer byte-identically.  Lowering makes a saturated source call (`act
+-- Dog`, 1 arg) classify as SATURATED instead of under-applied, so the impl body's
+-- strict prefix runs where the source says it does rather than being deferred into a
+-- PAP; Medaka is strict and eval already behaves this way.  A call site that passes
+-- MORE than the lowered arity is an over-application against the impl's returned
+-- closure, which `emitImplCallSat`/`emitKnownFnSat` already lower via `emitOverApp` --
+-- the same shape the eta-expansion used to hard-code into the define.
+-- `gatherGroup`'s define-arity site applies the SAME rule, so define and call sites
+-- keep agreeing (that agreement is #1450/#1668 and must not be broken here).
 methodArityOfEntry : Emit -> CImplEntry -> String -> Int
 methodArityOfEntry e ent method =
-  methodArityOfIface e (implEntryIfaceWord ent) method
+  let declared = methodArityOfIface e (implEntryIfaceWord ent) method
+  let src = implSrcValueArity ent
+  if src > 0 && src < declared then src else declared
 
 -- the declared arity of [method] at the impl registered under [tag] -- the same
 -- answer `methodArityOfEntry` gives, for the sites that hold a tag rather than the
@@ -6730,7 +6760,15 @@ gatherGroup e entries (method, key) =
   -- `methodReturnsSelf` read it as a ROUTE WORD -- re-keying it in place is PR
   -- #1346's E4 result and re-opens CLOSED S0 #1277.  A miss falls back to the bare
   -- table, so a collision-free program emits byte-identically to before.
-  let arity = maxInt (clauseArity cls0) (methodArityOfIface e (ifaceWordOfKey key) method + nDicts)
+  -- #1034, THE DEFINE-ARITY MIRROR of `methodArityOfEntry`'s lowering rule.  A clause
+  -- that binds at least one VALUE pattern but fewer than the declared spine proves a
+  -- SHORTER source arity than the type can express, and eta-expanding it to the
+  -- declared arity is what defers the body's strict prefix past the source's call.
+  -- Such a clause is emitted at its own arity; every other shape keeps the previous
+  -- `maxInt (clauseArity) (declared + nDicts)` answer exactly.
+  let declaredTotal = methodArityOfIface e (ifaceWordOfKey key) method + nDicts
+  let srcTotal = clauseArity cls0
+  let arity = if srcTotal > nDicts && srcTotal < declaredTotal then srcTotal else maxInt srcTotal declaredTotal
   let cls = map (etaExpandClause arity) cls0
   ImplGroup method tag symTag positions arity cls
 
@@ -11470,8 +11508,11 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DTypeSig false "implEntryIfaceWord" (TyFun (TyCon "CImplEntry") (TyCon "String")))
 (DFunDef false "implEntryIfaceWord" ((PCon "CImplEntry" PWild PWild (PCon "CImplTagged" PWild (PVar "key") PWild PWild PWild PWild))) (EApp (EVar "ifaceWordOfKey") (EVar "key")))
 (DFunDef false "implEntryIfaceWord" ((PCon "CImplEntry" PWild PWild (PCon "CImplDefault" (PVar "ifaceId") PWild PWild))) (EVar "ifaceId"))
+(DTypeSig false "implSrcValueArity" (TyFun (TyCon "CImplEntry") (TyCon "Int")))
+(DFunDef false "implSrcValueArity" ((PCon "CImplEntry" PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild (PVar "pats") PWild))) (EBinOp "-" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "leadingDictPats") (EVar "pats"))))
+(DFunDef false "implSrcValueArity" (PWild) (ELit (LInt 0)))
 (DTypeSig false "methodArityOfEntry" (TyFun (TyCon "Emit") (TyFun (TyCon "CImplEntry") (TyFun (TyCon "String") (TyCon "Int")))))
-(DFunDef false "methodArityOfEntry" ((PVar "e") (PVar "ent") (PVar "method")) (EApp (EApp (EApp (EVar "methodArityOfIface") (EVar "e")) (EApp (EVar "implEntryIfaceWord") (EVar "ent"))) (EVar "method")))
+(DFunDef false "methodArityOfEntry" ((PVar "e") (PVar "ent") (PVar "method")) (EBlock (DoLet false false (PVar "declared") (EApp (EApp (EApp (EVar "methodArityOfIface") (EVar "e")) (EApp (EVar "implEntryIfaceWord") (EVar "ent"))) (EVar "method"))) (DoLet false false (PVar "src") (EApp (EVar "implSrcValueArity") (EVar "ent"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">" (EVar "src") (ELit (LInt 0))) (EBinOp "<" (EVar "src") (EVar "declared"))) (EVar "src") (EVar "declared")))))
 (DTypeSig false "methodArityOfTag" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Int")))))
 (DFunDef false "methodArityOfTag" ((PVar "e") (PVar "method") (PVar "tag")) (EMatch (EApp (EApp (EApp (EVar "implFor") (EVar "e")) (EVar "method")) (EVar "tag")) (arm (PCon "Some" (PVar "ent")) () (EApp (EApp (EApp (EVar "methodArityOfEntry") (EVar "e")) (EVar "ent")) (EVar "method"))) (arm (PCon "None") () (EApp (EApp (EVar "methodArityOfInput") (EVar "e")) (EVar "method")))))
 (DTypeSig false "methodArityOfRoute" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyCon "Int")))))
@@ -12607,7 +12648,7 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "keySeen" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "keySeen" ((PVar "m") (PVar "t") (PCons (PTuple (PVar "m2") (PVar "t2")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "m2")) (EBinOp "==" (EVar "t") (EVar "t2"))) (EVar "True") (EApp (EApp (EApp (EVar "keySeen") (EVar "m")) (EVar "t")) (EVar "rest"))))
 (DTypeSig false "gatherGroup" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "ImplGroup")))))
-(DFunDef false "gatherGroup" ((PVar "e") (PVar "entries") (PTuple (PVar "method") (PVar "key"))) (EBlock (DoLet false false (PVar "tag") (EApp (EApp (EApp (EVar "headTagForKey") (EVar "method")) (EVar "key")) (EVar "entries"))) (DoLet false false (PVar "symTag") (EApp (EApp (EApp (EApp (EVar "implFnSymTag") (EVar "entries")) (EVar "method")) (EVar "tag")) (EVar "key"))) (DoLet false false (PVar "cls0") (EApp (EApp (EApp (EVar "gatherClauses") (EVar "method")) (EVar "key")) (EVar "entries"))) (DoLet false false (PVar "positions") (EApp (EApp (EApp (EVar "groupPositions") (EVar "method")) (EVar "key")) (EVar "entries"))) (DoLet false false (PVar "nDicts") (EApp (EVar "leadingDictPats") (EApp (EVar "firstClausePats") (EVar "cls0")))) (DoLet false false (PVar "arity") (EApp (EApp (EVar "maxInt") (EApp (EVar "clauseArity") (EVar "cls0"))) (EBinOp "+" (EApp (EApp (EApp (EVar "methodArityOfIface") (EVar "e")) (EApp (EVar "ifaceWordOfKey") (EVar "key"))) (EVar "method")) (EVar "nDicts")))) (DoLet false false (PVar "cls") (EApp (EApp (EVar "map") (EApp (EVar "etaExpandClause") (EVar "arity"))) (EVar "cls0"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ImplGroup") (EVar "method")) (EVar "tag")) (EVar "symTag")) (EVar "positions")) (EVar "arity")) (EVar "cls")))))
+(DFunDef false "gatherGroup" ((PVar "e") (PVar "entries") (PTuple (PVar "method") (PVar "key"))) (EBlock (DoLet false false (PVar "tag") (EApp (EApp (EApp (EVar "headTagForKey") (EVar "method")) (EVar "key")) (EVar "entries"))) (DoLet false false (PVar "symTag") (EApp (EApp (EApp (EApp (EVar "implFnSymTag") (EVar "entries")) (EVar "method")) (EVar "tag")) (EVar "key"))) (DoLet false false (PVar "cls0") (EApp (EApp (EApp (EVar "gatherClauses") (EVar "method")) (EVar "key")) (EVar "entries"))) (DoLet false false (PVar "positions") (EApp (EApp (EApp (EVar "groupPositions") (EVar "method")) (EVar "key")) (EVar "entries"))) (DoLet false false (PVar "nDicts") (EApp (EVar "leadingDictPats") (EApp (EVar "firstClausePats") (EVar "cls0")))) (DoLet false false (PVar "declaredTotal") (EBinOp "+" (EApp (EApp (EApp (EVar "methodArityOfIface") (EVar "e")) (EApp (EVar "ifaceWordOfKey") (EVar "key"))) (EVar "method")) (EVar "nDicts"))) (DoLet false false (PVar "srcTotal") (EApp (EVar "clauseArity") (EVar "cls0"))) (DoLet false false (PVar "arity") (EIf (EBinOp "&&" (EBinOp ">" (EVar "srcTotal") (EVar "nDicts")) (EBinOp "<" (EVar "srcTotal") (EVar "declaredTotal"))) (EVar "srcTotal") (EApp (EApp (EVar "maxInt") (EVar "srcTotal")) (EVar "declaredTotal")))) (DoLet false false (PVar "cls") (EApp (EApp (EVar "map") (EApp (EVar "etaExpandClause") (EVar "arity"))) (EVar "cls0"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ImplGroup") (EVar "method")) (EVar "tag")) (EVar "symTag")) (EVar "positions")) (EVar "arity")) (EVar "cls")))))
 (DTypeSig false "headTagForKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyCon "String")))))
 (DFunDef false "headTagForKey" (PWild PWild (PList)) (ELit (LString "")))
 (DFunDef false "headTagForKey" ((PVar "method") (PVar "key") (PCons (PCon "CImplEntry" (PVar "m") PWild (PCon "CImplTagged" (PVar "t") (PVar "k") PWild PWild PWild PWild)) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "method")) (EBinOp "==" (EVar "k") (EVar "key"))) (EVar "t") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "headTagForKey") (EVar "method")) (EVar "key")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -13661,8 +13702,11 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DTypeSig false "implEntryIfaceWord" (TyFun (TyCon "CImplEntry") (TyCon "String")))
 (DFunDef false "implEntryIfaceWord" ((PCon "CImplEntry" PWild PWild (PCon "CImplTagged" PWild (PVar "key") PWild PWild PWild PWild))) (EApp (EVar "ifaceWordOfKey") (EVar "key")))
 (DFunDef false "implEntryIfaceWord" ((PCon "CImplEntry" PWild PWild (PCon "CImplDefault" (PVar "ifaceId") PWild PWild))) (EVar "ifaceId"))
+(DTypeSig false "implSrcValueArity" (TyFun (TyCon "CImplEntry") (TyCon "Int")))
+(DFunDef false "implSrcValueArity" ((PCon "CImplEntry" PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild (PVar "pats") PWild))) (EBinOp "-" (EApp (EVar "listLen") (EVar "pats")) (EApp (EVar "leadingDictPats") (EVar "pats"))))
+(DFunDef false "implSrcValueArity" (PWild) (ELit (LInt 0)))
 (DTypeSig false "methodArityOfEntry" (TyFun (TyCon "Emit") (TyFun (TyCon "CImplEntry") (TyFun (TyCon "String") (TyCon "Int")))))
-(DFunDef false "methodArityOfEntry" ((PVar "e") (PVar "ent") (PVar "method")) (EApp (EApp (EApp (EVar "methodArityOfIface") (EVar "e")) (EApp (EVar "implEntryIfaceWord") (EVar "ent"))) (EVar "method")))
+(DFunDef false "methodArityOfEntry" ((PVar "e") (PVar "ent") (PVar "method")) (EBlock (DoLet false false (PVar "declared") (EApp (EApp (EApp (EVar "methodArityOfIface") (EVar "e")) (EApp (EVar "implEntryIfaceWord") (EVar "ent"))) (EVar "method"))) (DoLet false false (PVar "src") (EApp (EVar "implSrcValueArity") (EVar "ent"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">" (EVar "src") (ELit (LInt 0))) (EBinOp "<" (EVar "src") (EVar "declared"))) (EVar "src") (EVar "declared")))))
 (DTypeSig false "methodArityOfTag" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Int")))))
 (DFunDef false "methodArityOfTag" ((PVar "e") (PVar "method") (PVar "tag")) (EMatch (EApp (EApp (EApp (EVar "implFor") (EVar "e")) (EVar "method")) (EVar "tag")) (arm (PCon "Some" (PVar "ent")) () (EApp (EApp (EApp (EVar "methodArityOfEntry") (EVar "e")) (EVar "ent")) (EVar "method"))) (arm (PCon "None") () (EApp (EApp (EVar "methodArityOfInput") (EVar "e")) (EVar "method")))))
 (DTypeSig false "methodArityOfRoute" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyCon "Int")))))
@@ -14798,7 +14842,7 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "keySeen" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "keySeen" ((PVar "m") (PVar "t") (PCons (PTuple (PVar "m2") (PVar "t2")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "m2")) (EBinOp "==" (EVar "t") (EVar "t2"))) (EVar "True") (EApp (EApp (EApp (EVar "keySeen") (EVar "m")) (EVar "t")) (EVar "rest"))))
 (DTypeSig false "gatherGroup" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "ImplGroup")))))
-(DFunDef false "gatherGroup" ((PVar "e") (PVar "entries") (PTuple (PVar "method") (PVar "key"))) (EBlock (DoLet false false (PVar "tag") (EApp (EApp (EApp (EVar "headTagForKey") (EVar "method")) (EVar "key")) (EVar "entries"))) (DoLet false false (PVar "symTag") (EApp (EApp (EApp (EApp (EVar "implFnSymTag") (EVar "entries")) (EVar "method")) (EVar "tag")) (EVar "key"))) (DoLet false false (PVar "cls0") (EApp (EApp (EApp (EVar "gatherClauses") (EVar "method")) (EVar "key")) (EVar "entries"))) (DoLet false false (PVar "positions") (EApp (EApp (EApp (EVar "groupPositions") (EVar "method")) (EVar "key")) (EVar "entries"))) (DoLet false false (PVar "nDicts") (EApp (EVar "leadingDictPats") (EApp (EVar "firstClausePats") (EVar "cls0")))) (DoLet false false (PVar "arity") (EApp (EApp (EVar "maxInt") (EApp (EVar "clauseArity") (EVar "cls0"))) (EBinOp "+" (EApp (EApp (EApp (EVar "methodArityOfIface") (EVar "e")) (EApp (EVar "ifaceWordOfKey") (EVar "key"))) (EVar "method")) (EVar "nDicts")))) (DoLet false false (PVar "cls") (EApp (EApp (EMethodRef "map") (EApp (EVar "etaExpandClause") (EVar "arity"))) (EVar "cls0"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ImplGroup") (EVar "method")) (EVar "tag")) (EVar "symTag")) (EVar "positions")) (EVar "arity")) (EVar "cls")))))
+(DFunDef false "gatherGroup" ((PVar "e") (PVar "entries") (PTuple (PVar "method") (PVar "key"))) (EBlock (DoLet false false (PVar "tag") (EApp (EApp (EApp (EVar "headTagForKey") (EVar "method")) (EVar "key")) (EVar "entries"))) (DoLet false false (PVar "symTag") (EApp (EApp (EApp (EApp (EVar "implFnSymTag") (EVar "entries")) (EVar "method")) (EVar "tag")) (EVar "key"))) (DoLet false false (PVar "cls0") (EApp (EApp (EApp (EVar "gatherClauses") (EVar "method")) (EVar "key")) (EVar "entries"))) (DoLet false false (PVar "positions") (EApp (EApp (EApp (EVar "groupPositions") (EVar "method")) (EVar "key")) (EVar "entries"))) (DoLet false false (PVar "nDicts") (EApp (EVar "leadingDictPats") (EApp (EVar "firstClausePats") (EVar "cls0")))) (DoLet false false (PVar "declaredTotal") (EBinOp "+" (EApp (EApp (EApp (EVar "methodArityOfIface") (EVar "e")) (EApp (EVar "ifaceWordOfKey") (EVar "key"))) (EVar "method")) (EVar "nDicts"))) (DoLet false false (PVar "srcTotal") (EApp (EVar "clauseArity") (EVar "cls0"))) (DoLet false false (PVar "arity") (EIf (EBinOp "&&" (EBinOp ">" (EVar "srcTotal") (EVar "nDicts")) (EBinOp "<" (EVar "srcTotal") (EVar "declaredTotal"))) (EVar "srcTotal") (EApp (EApp (EVar "maxInt") (EVar "srcTotal")) (EVar "declaredTotal")))) (DoLet false false (PVar "cls") (EApp (EApp (EMethodRef "map") (EApp (EVar "etaExpandClause") (EVar "arity"))) (EVar "cls0"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ImplGroup") (EVar "method")) (EVar "tag")) (EVar "symTag")) (EVar "positions")) (EVar "arity")) (EVar "cls")))))
 (DTypeSig false "headTagForKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyCon "String")))))
 (DFunDef false "headTagForKey" (PWild PWild (PList)) (ELit (LString "")))
 (DFunDef false "headTagForKey" ((PVar "method") (PVar "key") (PCons (PCon "CImplEntry" (PVar "m") PWild (PCon "CImplTagged" (PVar "t") (PVar "k") PWild PWild PWild PWild)) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "method")) (EBinOp "==" (EVar "k") (EVar "key"))) (EVar "t") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "headTagForKey") (EVar "method")) (EVar "key")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
