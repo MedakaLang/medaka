@@ -1,5 +1,5 @@
 # META
-source_lines=34634
+source_lines=34709
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -8315,6 +8315,38 @@ ppSchemeNamed n s =
   ppSchemeCon
     (fromOption [] (lookupSchemeObls n id perRun.value.schemeObligationsRef.value))
     s
+
+-- S-full-env-scheme-entry (#1116): `ppSchemeNamed` for a display surface whose env
+-- spans MORE THAN THE MODULE LAST CHECKED — the LSP / playground hover+completion
+-- envs built by `checkOneSchemeFull`, which are the buffer's own schemes PLUS the
+-- prelude's.
+--
+-- 🚨 The gap this closes is in the OBLIGATION SIDE-CHANNEL, not in the scheme list.
+-- A `Scheme` is `Forall _ _ Mono` — it carries no context — so every `=>` on every
+-- display surface comes from `perRun.schemeObligationsRef`, which holds the
+-- obligations of the ONE module last checked.  On the FLAT arm that module is
+-- `prelude ++ buffer`, so `println` renders `Display a => a -> <IO> Unit`.  On the
+-- MODULE arm each module gets its own `resetState`, and the prelude's obligations
+-- are snapshotted out to `crossRun.coreSchemeObligationsRef` by
+-- `checkModulesPreamble` — the same name-keyed store `declaredCrossModuleObls`
+-- lookup (2) already treats as the source-exact home of a prelude name's context.
+-- Rendering a Module-arm prelude scheme through plain `ppSchemeNamed` therefore
+-- DROPS the context (MEASURED: 34 of the 125 empty-prefix completions on a bare
+-- buffer, `println :: a -> <IO> Unit` for `Display a => a -> <IO> Unit`).
+--
+-- The three-step order is what keeps a shadowing user binding safe: a name the
+-- module last checked BINDS renders exactly as `ppSchemeNamed` renders it, context
+-- or none, and never reaches the prelude store — so a buffer's own `isEven x = "s"`
+-- cannot pick up the prelude `isEven`'s context (#2054's shape).  The prelude store
+-- is consulted ONLY for a name this module does not bind and the per-run table has
+-- no entry for at all.
+export
+ppSchemeNamedFull : String -> Scheme -> String
+ppSchemeNamedFull n s = match omLookup n perRun.value.schemeDefIdsRef.value
+  Some _ => ppSchemeNamed n s
+  None => match lookupSchemeObls n 0 perRun.value.schemeObligationsRef.value
+    Some obs => ppSchemeCon obs s
+    None => ppSchemeCon (fromOption [] (omLookup n crossRun.value.coreSchemeObligationsRef.value)) s
 
 ppMono : Mono -> String
 ppMono t =
@@ -33496,7 +33528,30 @@ entryOwnSchemes (_::rest) = entryOwnSchemes rest
 -- user-reachable path (it is where #2024's `accAll` = initial-value defect lives),
 -- and so is the whole-graph coherence prepend at the bottom.
 checkModulesEntryFull : List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List TcDiag, List TcDiag)
-checkModulesEntryFull runtimeDecls coreDecls0 modules0 =
+checkModulesEntryFull runtimeDecls coreDecls modules =
+  let (_, schemes, errs, warns) = checkModulesEntryFullSplit runtimeDecls coreDecls modules
+  (schemes, errs, warns)
+
+-- S-full-env-scheme-entry (#1116): the SAME driver, but ALSO returning the
+-- prelude's own schemes — the `coreSchemes` `checkModulesPreamble` already
+-- computes and this function has always had in scope but dropped on the floor.
+-- Nothing else changes: `checkModulesEntryFull` above is this minus the first
+-- component, so every existing caller is byte-identical.
+--
+-- 🚨 The two lists are returned SEPARATE, and in this order — `(coreSchemes,
+-- entryOwnSchemes, …)` — precisely so a caller CANNOT accidentally get #2054's
+-- shape.  A consumer that wants one flat env for a first-match lookup
+-- (`lookupSchemeL`, `lookupAssoc`) must concat OWN FIRST: `own ++ core`.  With
+-- the prelude first, a user top-level binding that shadows a prelude name
+-- (`isEven x = "s"`) would lose the linear-scan race to the prelude's
+-- `Int -> Bool`, which is exactly the class of defect #2054 pins on the Flat
+-- arm.  The Module arm's own fold is NOT affected — `cmEntryCollect`'s isLast
+-- clause still returns only the terminal module's own schemes, and no
+-- re-checking or re-unification against `coreSchemes` happens here: the
+-- prelude list is carried out for LOOKUP only, alongside (never merged with)
+-- the module's own entry for the same bare name.
+checkModulesEntryFullSplit : List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), List (String, Scheme), List TcDiag, List TcDiag)
+checkModulesEntryFullSplit runtimeDecls coreDecls0 modules0 =
   -- #1110: acquire type-constructor identity over the whole graph before anything
   -- typechecks; the rebind shadows the raw params so no line below can read the
   -- unstamped tree.  See `checkModulesPreamble` for why it is here and not there.
@@ -33525,7 +33580,7 @@ checkModulesEntryFull runtimeDecls coreDecls0 modules0 =
   -- #1559 A-3.7: the whole-graph `IE` the preamble built above; `cohRowsOf True` is
   -- what excludes the prelude, replacing "walk the user `modules` list".
   match globalCoherenceConflict driverState.value.declEnvsRef.value.deImpls
-    (hard, soft) => (schemes, prependDiagOpt "T-CONFLICTING-IMPL" 1 None hard errs, prependDiagOpt "W-INCOMPARABLE-IMPLS" 2 (Some cohIncomparableHelp) soft warns)
+    (hard, soft) => (coreSchemes, schemes, prependDiagOpt "T-CONFLICTING-IMPL" 1 None hard errs, prependDiagOpt "W-INCOMPARABLE-IMPLS" 2 (Some cohIncomparableHelp) soft warns)
 
 -- prepend an optional bare-message diagnostic (code, severity, help) to a TcDiag list.
 prependDiagOpt : String -> Int -> Option String -> Option String -> List TcDiag -> List TcDiag
@@ -33623,6 +33678,26 @@ checkOneScheme : List Decl -> List Decl -> (String, List Decl) -> List (String, 
 checkOneScheme runtimeDecls coreDecls (rootId, prog) =
   let (schemes, _, _) = checkModulesEntryFull runtimeDecls coreDecls [(rootId, prog)]
   schemes
+
+-- FULL-ENVIRONMENT sibling of `checkOneScheme` (S-full-env-scheme-entry, #1116):
+-- `(preludeSchemes, ownSchemes)` for a ONE-MODULE program, the Module-arm
+-- replacement for the Flat `checkProgramSchemesWithRuntime` env that the
+-- introspection consumers (LSP hover/completion/inlayHint, the playground's
+-- hover/complete query, `check-policy --fn <name>`) need: they look names up by
+-- BARE NAME with no idea whether the name is the user's or the prelude's, so
+-- `checkOneScheme`'s terminal-module-own-only answer is not enough for them.
+--
+-- The two halves are handed back SEPARATE, not pre-concatenated, so the caller
+-- states the precedence it wants explicitly.  Every current consumer wants
+-- `own ++ prelude` (first match wins ⇒ a user redefinition shadows the prelude's
+-- binding of the same name) — see `checkModulesEntryFullSplit`'s 🚨 note.  This
+-- is NOT a widening of the `medaka check` front door, whose narrowed
+-- own-schemes-only report is deliberate and unchanged.
+export
+checkOneSchemeFull : List Decl -> List Decl -> (String, List Decl) -> (List (String, Scheme), List (String, Scheme))
+checkOneSchemeFull runtimeDecls coreDecls (rootId, prog) =
+  let (coreSchemes, schemes, _, _) = checkModulesEntryFullSplit runtimeDecls coreDecls [(rootId, prog)]
+  (coreSchemes, schemes)
 
 -- diagnostics-returning sibling of `checkOneScheme`, matching `checkProgramDiags`'s
 -- return shape (`(errs, warns)`) exactly, so a call site can swap targets with no
@@ -35821,6 +35896,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "renderConstraintCtx" ((PVar "ctx") (PVar "cnt") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false (PVar "s") (EIf (EApp (EVar "isEmptyL") (EFieldAccess (EVar "o") "voArgs")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (EFieldAccess (EFieldAccess (EVar "o") "voIface") "irName") (EApp (EApp (EVar "map") (ELam ((PVar "id")) (EApp (EApp (EApp (EVar "nameOf") (EVar "ctx")) (EVar "cnt")) (EVar "id")))) (EFieldAccess (EVar "o") "voIds")))) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (EFieldAccess (EFieldAccess (EVar "o") "voIface") "irName") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 3)))) (EFieldAccess (EVar "o") "voArgs")))))) (DoExpr (EBinOp "::" (EVar "s") (EApp (EApp (EApp (EVar "renderConstraintCtx") (EVar "ctx")) (EVar "cnt")) (EVar "rest"))))))
 (DTypeSig true "ppSchemeNamed" (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyCon "String"))))
 (DFunDef false "ppSchemeNamed" ((PVar "n") (PVar "s")) (EBlock (DoLet false false (PVar "id") (EApp (EApp (EVar "fromOption") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeDefIdsRef") "value")))) (DoExpr (EApp (EApp (EVar "ppSchemeCon") (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EApp (EVar "lookupSchemeObls") (EVar "n")) (EVar "id")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value")))) (EVar "s")))))
+(DTypeSig true "ppSchemeNamedFull" (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyCon "String"))))
+(DFunDef false "ppSchemeNamedFull" ((PVar "n") (PVar "s")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeDefIdsRef") "value")) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "ppSchemeNamed") (EVar "n")) (EVar "s"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "lookupSchemeObls") (EVar "n")) (ELit (LInt 0))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value")) (arm (PCon "Some" (PVar "obs")) () (EApp (EApp (EVar "ppSchemeCon") (EVar "obs")) (EVar "s"))) (arm (PCon "None") () (EApp (EApp (EVar "ppSchemeCon") (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "coreSchemeObligationsRef") "value")))) (EVar "s")))))))
 (DTypeSig false "ppMono" (TyFun (TyCon "Mono") (TyCon "String")))
 (DFunDef false "ppMono" ((PVar "t")) (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "cnt") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 0))) (EVar "t")))))
 (DTypeSig false "letters" (TyCon "String"))
@@ -40051,7 +40128,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "entryOwnSchemes" ((PList (PTuple PWild (PVar "ss")))) (EVar "ss"))
 (DFunDef false "entryOwnSchemes" ((PCons PWild (PVar "rest"))) (EApp (EVar "entryOwnSchemes") (EVar "rest")))
 (DTypeSig false "checkModulesEntryFull" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))
-(DFunDef false "checkModulesEntryFull" ((PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EVar "checkModulesPreamble") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "True")) (EVar "True")) (EVar "cmEntryWorker")) (EVar "cmEntryCollect")) (ETuple (EListLit) (EListLit) (EListLit))) (EBinOp "++" (EVar "runtimeSeed") (EVar "coreSchemes"))) (EVar "coreSchemes")) (EListLit)) (EApp (EVar "publicDataDecls") (EVar "coreDecls"))) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EMatch (EApp (EVar "globalCoherenceConflict") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deImpls")) (arm (PTuple (PVar "hard") (PVar "soft")) () (ETuple (EVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "prependDiagOpt") (ELit (LString "T-CONFLICTING-IMPL"))) (ELit (LInt 1))) (EVar "None")) (EVar "hard")) (EVar "errs")) (EApp (EApp (EApp (EApp (EApp (EVar "prependDiagOpt") (ELit (LString "W-INCOMPARABLE-IMPLS"))) (ELit (LInt 2))) (EApp (EVar "Some") (EVar "cohIncomparableHelp"))) (EVar "soft")) (EVar "warns"))))))))
+(DFunDef false "checkModulesEntryFull" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple PWild (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EVar "checkModulesEntryFullSplit") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (ETuple (EVar "schemes") (EVar "errs") (EVar "warns")))))
+(DTypeSig false "checkModulesEntryFullSplit" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))
+(DFunDef false "checkModulesEntryFullSplit" ((PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EVar "checkModulesPreamble") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "True")) (EVar "True")) (EVar "cmEntryWorker")) (EVar "cmEntryCollect")) (ETuple (EListLit) (EListLit) (EListLit))) (EBinOp "++" (EVar "runtimeSeed") (EVar "coreSchemes"))) (EVar "coreSchemes")) (EListLit)) (EApp (EVar "publicDataDecls") (EVar "coreDecls"))) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EMatch (EApp (EVar "globalCoherenceConflict") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deImpls")) (arm (PTuple (PVar "hard") (PVar "soft")) () (ETuple (EVar "coreSchemes") (EVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "prependDiagOpt") (ELit (LString "T-CONFLICTING-IMPL"))) (ELit (LInt 1))) (EVar "None")) (EVar "hard")) (EVar "errs")) (EApp (EApp (EApp (EApp (EApp (EVar "prependDiagOpt") (ELit (LString "W-INCOMPARABLE-IMPLS"))) (ELit (LInt 2))) (EApp (EVar "Some") (EVar "cohIncomparableHelp"))) (EVar "soft")) (EVar "warns"))))))))
 (DTypeSig false "prependDiagOpt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
 (DFunDef false "prependDiagOpt" (PWild PWild PWild (PCon "None") (PVar "ds")) (EVar "ds"))
 (DFunDef false "prependDiagOpt" ((PVar "code") (PVar "sev") (PVar "help") (PCon "Some" (PVar "msg")) (PVar "ds")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "None")) (EVar "msg")) (EVar "help")) (EVar "None")) (EVar "ds")))
@@ -40065,6 +40144,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkModulesEntryHasErrors" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple PWild (PVar "errs") PWild) (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))))
 (DTypeSig true "checkOneScheme" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
 (DFunDef false "checkOneScheme" ((PVar "runtimeDecls") (PVar "coreDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EBlock (DoLet false false (PTuple (PVar "schemes") PWild PWild) (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog"))))) (DoExpr (EVar "schemes"))))
+(DTypeSig true "checkOneSchemeFull" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))
+(DFunDef false "checkOneSchemeFull" ((PVar "runtimeDecls") (PVar "coreDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EBlock (DoLet false false (PTuple (PVar "coreSchemes") (PVar "schemes") PWild PWild) (EApp (EApp (EApp (EVar "checkModulesEntryFullSplit") (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog"))))) (DoExpr (ETuple (EVar "coreSchemes") (EVar "schemes")))))
 (DTypeSig true "checkOneDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))
 (DFunDef false "checkOneDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EBlock (DoLet false false (PTuple PWild (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog"))))) (DoExpr (ETuple (EVar "errs") (EVar "warns")))))
 (DTypeSig true "checkOneToLinesWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))))
@@ -41347,6 +41428,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "renderConstraintCtx" ((PVar "ctx") (PVar "cnt") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false (PVar "s") (EIf (EApp (EVar "isEmptyL") (EFieldAccess (EVar "o") "voArgs")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (EFieldAccess (EFieldAccess (EVar "o") "voIface") "irName") (EApp (EApp (EMethodRef "map") (ELam ((PVar "id")) (EApp (EApp (EApp (EVar "nameOf") (EVar "ctx")) (EVar "cnt")) (EVar "id")))) (EFieldAccess (EVar "o") "voIds")))) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (EFieldAccess (EFieldAccess (EVar "o") "voIface") "irName") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 3)))) (EFieldAccess (EVar "o") "voArgs")))))) (DoExpr (EBinOp "::" (EVar "s") (EApp (EApp (EApp (EVar "renderConstraintCtx") (EVar "ctx")) (EVar "cnt")) (EVar "rest"))))))
 (DTypeSig true "ppSchemeNamed" (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyCon "String"))))
 (DFunDef false "ppSchemeNamed" ((PVar "n") (PVar "s")) (EBlock (DoLet false false (PVar "id") (EApp (EApp (EVar "fromOption") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeDefIdsRef") "value")))) (DoExpr (EApp (EApp (EVar "ppSchemeCon") (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EApp (EVar "lookupSchemeObls") (EVar "n")) (EVar "id")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value")))) (EVar "s")))))
+(DTypeSig true "ppSchemeNamedFull" (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyCon "String"))))
+(DFunDef false "ppSchemeNamedFull" ((PVar "n") (PVar "s")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeDefIdsRef") "value")) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "ppSchemeNamed") (EVar "n")) (EVar "s"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "lookupSchemeObls") (EVar "n")) (ELit (LInt 0))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value")) (arm (PCon "Some" (PVar "obs")) () (EApp (EApp (EVar "ppSchemeCon") (EVar "obs")) (EVar "s"))) (arm (PCon "None") () (EApp (EApp (EVar "ppSchemeCon") (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "coreSchemeObligationsRef") "value")))) (EVar "s")))))))
 (DTypeSig false "ppMono" (TyFun (TyCon "Mono") (TyCon "String")))
 (DFunDef false "ppMono" ((PVar "t")) (EBlock (DoLet false false (PVar "ctx") (EApp (EVar "Ref") (EListLit))) (DoLet false false (PVar "cnt") (EApp (EVar "Ref") (ELit (LInt 0)))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ppGo") (EVar "ctx")) (EVar "cnt")) (ELit (LInt 0))) (EVar "t")))))
 (DTypeSig false "letters" (TyCon "String"))
@@ -45577,7 +45660,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "entryOwnSchemes" ((PList (PTuple PWild (PVar "ss")))) (EVar "ss"))
 (DFunDef false "entryOwnSchemes" ((PCons PWild (PVar "rest"))) (EApp (EVar "entryOwnSchemes") (EVar "rest")))
 (DTypeSig false "checkModulesEntryFull" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))
-(DFunDef false "checkModulesEntryFull" ((PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EVar "checkModulesPreamble") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "True")) (EVar "True")) (EVar "cmEntryWorker")) (EVar "cmEntryCollect")) (ETuple (EListLit) (EListLit) (EListLit))) (EBinOp "++" (EVar "runtimeSeed") (EVar "coreSchemes"))) (EVar "coreSchemes")) (EListLit)) (EApp (EVar "publicDataDecls") (EVar "coreDecls"))) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EMatch (EApp (EVar "globalCoherenceConflict") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deImpls")) (arm (PTuple (PVar "hard") (PVar "soft")) () (ETuple (EVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "prependDiagOpt") (ELit (LString "T-CONFLICTING-IMPL"))) (ELit (LInt 1))) (EVar "None")) (EVar "hard")) (EVar "errs")) (EApp (EApp (EApp (EApp (EApp (EVar "prependDiagOpt") (ELit (LString "W-INCOMPARABLE-IMPLS"))) (ELit (LInt 2))) (EApp (EVar "Some") (EVar "cohIncomparableHelp"))) (EVar "soft")) (EVar "warns"))))))))
+(DFunDef false "checkModulesEntryFull" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple PWild (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EVar "checkModulesEntryFullSplit") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (ETuple (EVar "schemes") (EVar "errs") (EVar "warns")))))
+(DTypeSig false "checkModulesEntryFullSplit" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))
+(DFunDef false "checkModulesEntryFullSplit" ((PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EVar "checkModulesPreamble") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "True")) (EVar "True")) (EVar "cmEntryWorker")) (EVar "cmEntryCollect")) (ETuple (EListLit) (EListLit) (EListLit))) (EBinOp "++" (EVar "runtimeSeed") (EVar "coreSchemes"))) (EVar "coreSchemes")) (EListLit)) (EApp (EVar "publicDataDecls") (EVar "coreDecls"))) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EMatch (EApp (EVar "globalCoherenceConflict") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deImpls")) (arm (PTuple (PVar "hard") (PVar "soft")) () (ETuple (EVar "coreSchemes") (EVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "prependDiagOpt") (ELit (LString "T-CONFLICTING-IMPL"))) (ELit (LInt 1))) (EVar "None")) (EVar "hard")) (EVar "errs")) (EApp (EApp (EApp (EApp (EApp (EVar "prependDiagOpt") (ELit (LString "W-INCOMPARABLE-IMPLS"))) (ELit (LInt 2))) (EApp (EVar "Some") (EVar "cohIncomparableHelp"))) (EVar "soft")) (EVar "warns"))))))))
 (DTypeSig false "prependDiagOpt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
 (DFunDef false "prependDiagOpt" (PWild PWild PWild (PCon "None") (PVar "ds")) (EVar "ds"))
 (DFunDef false "prependDiagOpt" ((PVar "code") (PVar "sev") (PVar "help") (PCon "Some" (PVar "msg")) (PVar "ds")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (EVar "sev")) (EVar "None")) (EVar "msg")) (EVar "help")) (EVar "None")) (EVar "ds")))
@@ -45591,6 +45676,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkModulesEntryHasErrors" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple PWild (PVar "errs") PWild) (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))))
 (DTypeSig true "checkOneScheme" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
 (DFunDef false "checkOneScheme" ((PVar "runtimeDecls") (PVar "coreDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EBlock (DoLet false false (PTuple (PVar "schemes") PWild PWild) (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog"))))) (DoExpr (EVar "schemes"))))
+(DTypeSig true "checkOneSchemeFull" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))
+(DFunDef false "checkOneSchemeFull" ((PVar "runtimeDecls") (PVar "coreDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EBlock (DoLet false false (PTuple (PVar "coreSchemes") (PVar "schemes") PWild PWild) (EApp (EApp (EApp (EVar "checkModulesEntryFullSplit") (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog"))))) (DoExpr (ETuple (EVar "coreSchemes") (EVar "schemes")))))
 (DTypeSig true "checkOneDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))
 (DFunDef false "checkOneDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EBlock (DoLet false false (PTuple PWild (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog"))))) (DoExpr (ETuple (EVar "errs") (EVar "warns")))))
 (DTypeSig true "checkOneToLinesWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))))

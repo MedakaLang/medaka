@@ -104,8 +104,8 @@ import types.typecheck.{
   mainTypeIsFloat,
   mainTypeIsUnit,
   Scheme,
-  ppSchemeNamed,
-  checkProgramSchemesWithRuntime,
+  ppSchemeNamedFull,
+  checkOneSchemeFull,
 }
 import ir.core_ir_lower.{
   lowerProgramEmit,
@@ -123,7 +123,7 @@ import backend.wasm_emit.{emitProgram, makeWasmEmitInput}
 --   hover    <runtime> <core> <entry> <line> <col>     → __MEDAKA_HOVER__ + Hover JSON
 --   complete <runtime> <core> <entry> <line> <col>     → __MEDAKA_COMPLETE__ + CompletionItem[]
 -- line/col are 0-based (LSP position convention).  hover/complete run a fresh
--- single-file typecheck (checkProgramSchemesWithRuntime — the same env the LSP's
+-- single-file typecheck (checkOneSchemeFull — the same env the LSP's
 -- hoverFor/completionFor use on a no-import buffer) and look up the identifier /
 -- prefix at the cursor.  ONE playground.wasm serves all three (the typecheck deps
 -- are already linked for `compile`).
@@ -372,7 +372,7 @@ isDiagError _ = False
 -- ── hover / completion (stateless single-file language queries) ───────────────
 -- These reuse the LSP's already-pure approach (compiler/tools/lsp.mdk hoverFor /
 -- completionFor on a no-import buffer) WITHOUT importing lsp.mdk: they call the
--- typecheck env builder (`checkProgramSchemesWithRuntime`, the same function the
+-- typecheck env builder (`checkOneSchemeFull`, the same function the
 -- LSP's single-file `docSchemes` path calls) and the pure identifier/prefix
 -- helpers below (ported verbatim from lsp.mdk).  The playground buffer is a single
 -- file (prelude only), so no project graph is ever needed.
@@ -403,7 +403,11 @@ queryResult isHover rsrc csrc tsrc line col = match parseResult tsrc
   Ok userRaw =>
     let runtimeDecls = desugar (unwrapDecls (parseResult rsrc))
     let coreDecls = desugar (unwrapDecls (parseResult csrc))
-    let env = checkProgramSchemesWithRuntime runtimeDecls coreDecls (desugar userRaw)
+    -- S-full-env-scheme-entry (#1116): Module arm, own schemes FIRST — kept in
+    -- lockstep with `docSchemes` in tools/lsp.mdk, whose comment carries the
+    -- shadowing rationale (`lookupSchemeL`/`hoverResult` are first-match scans).
+    let (preludeSchemes, ownSchemes) = checkOneSchemeFull runtimeDecls coreDecls ("__user__", desugar userRaw)
+    let env = ownSchemes ++ preludeSchemes
     if isHover then
       hoverResult tsrc line col env
     else
@@ -414,7 +418,7 @@ hoverResult src line col env = match identifierAt src line col
   None => JNull
   Some name => match lookupSchemeL name env
     None => JNull
-    Some sch => jHover name (ppSchemeNamed name sch)
+    Some sch => jHover name (ppSchemeNamedFull name sch)
 
 -- core.mdk / runtime.mdk always parse; unwrap defensively (None → []).
 unwrapDecls : Result ParseError (List Decl) -> List Decl
@@ -524,7 +528,7 @@ anyName (x::xs) name = x == name || anyName xs name
 filterCompletions : String -> List String -> List (String, Scheme) -> List Json
 filterCompletions _ _ [] = []
 filterCompletions prefix seen ((n, s)::rest)
-  | startsWith prefix n && not (anyName seen n) = jCompletionItem n (ppSchemeNamed n s) :: filterCompletions prefix (n::seen) rest
+  | startsWith prefix n && not (anyName seen n) = jCompletionItem n (ppSchemeNamedFull n s) :: filterCompletions prefix (n::seen) rest
   | otherwise = filterCompletions prefix seen rest
 
 jCompletionItem : String -> String -> Json

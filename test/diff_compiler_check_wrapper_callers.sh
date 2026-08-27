@@ -18,7 +18,7 @@
 #   1. DERIVES the current caller set: for every `.mdk` file under `compiler/` (other
 #      than `compiler/types/typecheck.mdk` itself, the family's home), parse its
 #      `import types.typecheck.{ ... }` block (which may span multiple lines) and
-#      record which of the 13 wrapper-family names it imports. A name mentioned only
+#      record which of the 14 wrapper-family names it imports. A name mentioned only
 #      in a comment (not imported) is NOT a caller — this gate is keyed on the import,
 #      matching how S-migrate-tool-consumers-remainder's own investigation avoided
 #      false positives from stale prose mentioning an old function name.
@@ -53,6 +53,15 @@ WRAP_NAMES = [
     "checkToLinesWithRuntime", "checkErrorsWithRuntime",
     "checkMatchToLines", "checkProgramDiags",
     "checkOneScheme", "checkOneDiags",
+    # `checkOneSchemeFull` (the Module-arm FULL-ENVIRONMENT entry: prelude schemes
+    # + the terminal module's own) joined the family 2026-08-27 with
+    # S-full-env-scheme-entry (#1116), which migrated tools/lsp.mdk,
+    # entries/playground_main.mdk and tools/check_policy.mdk off
+    # `checkProgramSchemesWithRuntime` onto it. Listing it here is the point of
+    # the gate: without the row those three files would census as ZERO-wrapper
+    # callers and the audit trail for the family's newest member would be blind,
+    # exactly as it was for `checkToLines` below until 2026-08-26.
+    "checkOneSchemeFull",
     "checkOneToLinesWithRuntime", "checkOneErrorsWithRuntime",
     # `checkToLines` (the prelude-free Flat entry) was MISSING from this list until
     # 2026-08-26, which made the gate demonstrably blind: a new caller importing it
