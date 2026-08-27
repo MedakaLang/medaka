@@ -27,11 +27,6 @@
 # (native rejects the type, wasm panics on CRecord), i.e. the two backends do NOT reject
 # for the same reason, so they stay in the engines ledger, not this identical-rejection set.
 
-llvm/adt_list_fold
-llvm/adt_option
-llvm/clo_adt
-llvm/list_filter
-llvm/list_sum
 llvmT/dict_clamp
 llvmT/dict_debug_list
 llvmT/dict_hash_list
@@ -49,7 +44,5 @@ llvmT/disp_ord_default_lt
 llvmT/disp_ord_default_lte
 llvmT/disp_req_compare_list_int
 llvmT/disp_req_eq_list_int
-llvmT/impl_andthen_list
-llvmT/impl_ap_list
 llvmT/impl_append_list
 llvmT/impl_append_str
