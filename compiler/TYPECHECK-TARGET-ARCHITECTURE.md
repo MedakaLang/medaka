@@ -1548,7 +1548,7 @@ orders merges, and the plan does not pretend otherwise.
   this stage targeted, and OUTSIDE the wrapper family this row/ledger tracks.
 - **E-2. `CheckMode` collapse. Entry condition DERIVED 2026-08-27 (#1116,
   comment posted by the `flat-exit-floor` orchestrator, not this row).** The
-  wrapper-family reacher set is now exactly the six rows E-1 lists as
+  wrapper-family reacher set is now exactly the five rows E-1 lists as
   KEEP-PINNED above (two controls, one declined-migration, two prelude-free
   dev probes) plus the `elaborateDict` family (out of this wrapper's scope
   entirely, tracked separately). Collapsing `Flat` means: (i) deleting the two

@@ -1,5 +1,5 @@
 # META
-source_lines=34709
+source_lines=34711
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -33818,8 +33818,10 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- un-mangled ctor `A` as a sibling of the mangled survivor and false-rejects `a.k` with
   -- `Field 'k' is not declared by every constructor of 'A'`; `Display` cannot ground, the
   -- `println` route stays RNone, and the emitter writes a NULL dict word (`i64 0`) —
-  -- SILENTLY, because this driver's caller never reads `hadTypeErrors` (see the note on
-  -- that ref).  Clean exit 0, SIGSEGV at runtime.
+  -- SILENTLY on `runEmitWith`'s own path (`entries/entry_support.mdk`), which never reads
+  -- `hadTypeErrors` after this call (two OTHER callers of this driver,
+  -- `driver/medaka_cli.mdk:1729,2006`, DO read it — this leak is only silent through
+  -- `runEmitWith`).  Clean exit 0, SIGSEGV at runtime.
   --
   -- Minting the empty oracle here restores today's behaviour DETERMINISTICALLY instead of
   -- by luck: every reader misses no matter which arm (or none) ran before.  It does NOT

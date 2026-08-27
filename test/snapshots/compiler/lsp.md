@@ -1,5 +1,5 @@
 # META
-source_lines=1941
+source_lines=1945
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-duplicate-body
@@ -1039,6 +1039,10 @@ inlayNamePos src p = match declPosNameLoc p
   None => map (col => (declPosLine p - 1, col)) (columnAfterName src (declPosLine p - 1))
 
 -- decls passed twice: `allDecls` for the has-explicit-sig scan, `ds` walked.
+-- Deliberately `ppSchemeNamed`, not `ppSchemeNamedFull`: `name` always comes from
+-- `declBindingName d`, i.e. the BUFFER's own top-level binder, so it is always a HIT in
+-- `perRun.schemeDefIdsRef` and `ppSchemeNamedFull` would take the same arm 1 anyway — the
+-- prelude-obligation fallback the "Full" variant adds can never fire here.
 inlayZip : String -> List Decl -> List Decl -> List DeclPos -> List (String, Scheme) -> List Json
 inlayZip src allDecls (d::ds) (p::ps) env = match declBindingName d
   None => inlayZip src allDecls ds ps env
