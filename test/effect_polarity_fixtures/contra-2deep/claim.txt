@@ -1,0 +1,18 @@
+slice: S-polarity-conformance-matrix (#1119/D-2)
+shape: contravariant-immutable x 2-deep wrapper (`TakerBox2 a = MkTakerBox2
+       (TakerBox a)`, `TakerBox a = MkTakerBox (Taker a)` -- two positional
+       constructor layers around the contravariant `Taker`)
+spec: same as contra-direct/claim.txt. Depth of nesting does not change the
+      verdict.
+status: RED (WRONGLY ACCEPTED, launder observable) -- EXPECTED-RED until
+  slice 4 (D-2) lands.
+cmd: run main.mdk
+measured-exit: 0
+measured-stdout:
+  LAUNDERED
+  1
+derivation: `wide : TakerBox2 (Unit -> <IO> Unit) = pureTakerBox2` accepted;
+  nested pattern-match `MkTakerBox2 (MkTakerBox t)` reaches the innermost
+  contravariant `Taker`; applying it to `shout` from `main`'s zero-row call
+  site performs `<IO>`. Same launder as contra-direct/contra-newtype, two
+  constructors deeper.

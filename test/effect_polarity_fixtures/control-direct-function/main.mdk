@@ -1,0 +1,35 @@
+-- CONTROL (direct function-position, covariant re-open): per
+-- S-polarity-conformance-matrix (#1119/D-2).
+--
+-- DEVIATION FROM PACKET: the packet named the `quiet2` shape from
+-- test/must_fail_fixtures/1103-sametail-arm-launders-effect-arrow/control.mdk
+-- as the shape to reuse/re-derive. Measured on this slice's base
+-- (ad754e32, after D-1/#1118 already landed): that exact shape --
+-- `launderArrow : (Unit -> <Stdout | e> Unit) -> (Unit -> <e> Unit)` -- is
+-- now REJECTED AT DECLARATION TIME regardless of what is passed to it,
+-- because D-1 extended `checkArgEffVarCoverage` to ordinary function arrows
+-- (exactly the fix 1103's own why-note anticipated, and exactly why 1100/
+-- 1103/797 were deleted merging into this slice's base). The premise "stays
+-- ACCEPTED where it already is today" is FALSIFIED for that literal shape --
+-- see Notes in the report for the measured error text. This is not a slice-4
+-- regression; D-1 (a different, already-landed stage) changed this
+-- shape's verdict.
+--
+-- Per the packet's own escape hatch ("or author an equivalent probe"), this
+-- file instead tests the same underlying claim -- an ordinary, non-wrapped,
+-- covariant-only effect-row widening on a bare function value stays sound
+-- and ACCEPTED -- with a shape that does not trip D-1's new coverage check:
+-- `pureFn`'s row is simply re-typed wider (`Unit -> Unit` assigned where
+-- `Unit -> <Stdout> Unit` is declared) with no polymorphic effect variable
+-- and no interior mismatch for `checkArgEffVarCoverage` to flag. `pureFn`
+-- performs no IO, so declaring the unused `<Stdout>` capability is sound.
+-- MUST stay ACCEPTED (exit 0) both now and after slice 4 (D-2, #1119) lands
+-- -- a per-parameter polarity fix for WRAPPED positions must not regress
+-- ordinary, non-wrapped arrow covariance.
+pureFn : Unit -> Unit
+pureFn u = ()
+
+wide : Unit -> <Stdout> Unit
+wide = pureFn
+
+main = println (wide ())

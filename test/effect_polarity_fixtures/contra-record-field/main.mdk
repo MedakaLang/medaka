@@ -1,0 +1,25 @@
+-- CONTRAVARIANT-IMMUTABLE x RECORD-FIELD wrapper shape. The contravariant
+-- `Taker` sits behind a named record field (`.taker`) instead of a
+-- positional constructor argument -- exercising field-access desugaring
+-- rather than pattern-match extraction. Same defect as contra-direct/
+-- contra-newtype otherwise. EFFECTS-SEMANTICS.md §9. EXPECTED-RED until
+-- slice 4 (D-2, #1119).
+data Taker a = MkTaker (a -> Int)
+data TakerHolder a = { taker : Taker a }
+
+runTaker : Taker a -> a -> Int
+runTaker (MkTaker g) x = g x
+
+pureTaker : Taker (Unit -> Unit)
+pureTaker = MkTaker (k => let _ = k () in 1)
+
+pureTH : TakerHolder (Unit -> Unit)
+pureTH = TakerHolder { taker = pureTaker }
+
+wide : TakerHolder (Unit -> <IO> Unit)
+wide = pureTH
+
+shout : Unit -> <IO> Unit
+shout _ = println "LAUNDERED"
+
+main = println (runTaker wide.taker shout)

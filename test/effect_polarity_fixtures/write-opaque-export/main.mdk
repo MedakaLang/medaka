@@ -1,0 +1,32 @@
+-- WRITE-CHANNEL x OPAQUE-EXPORT wrapper shape. `Holder` (see wrap.mdk) is
+-- exported abstractly -- this file never sees `MkHolder` or `Ref` directly,
+-- only `mkHolder`/`holderRef`'s declared types. Same defect as the other
+-- write-channel rows, but demonstrates the laundering survives module
+-- opacity: nothing about hiding the representation changes substMonoP's
+-- unchanged `pos` propagation through `Holder`'s type parameter (packet §4
+-- fact 2). EFFECTS-SEMANTICS.md §9. EXPECTED-RED until slice 4 (D-2, #1119).
+import wrap.{Holder, mkHolder, holderRef}
+
+shout : Unit -> <Stdout> Unit
+shout u =
+  let _ = putStr "SMUGGLED "
+  ()
+
+pureFn : Unit -> Unit
+pureFn u = ()
+
+box : Holder (Unit -> <> Unit)
+box = mkHolder pureFn
+
+alias : Holder (Unit -> <Stdout> Unit)
+alias = box
+
+writeIntoAlias : Unit -> Unit
+writeIntoAlias u = holderRef alias := shout
+
+callBox : Unit -> Unit
+callBox u = (holderRef box).value ()
+
+main =
+  let _ = writeIntoAlias ()
+  println (callBox ())

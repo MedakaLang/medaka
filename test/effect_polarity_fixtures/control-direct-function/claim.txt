@@ -1,0 +1,33 @@
+slice: S-polarity-conformance-matrix (#1119/D-2)
+shape: control, direct function-position (ordinary arrow, no wrapper type),
+       covariant re-open
+spec: EFFECTS-SEMANTICS.md §5 ("the covariant-position re-open discipline...
+      is what lets equality unification still enforce the subset (≤)
+      direction"). Declaring an unused capability and never performing it is
+      sound.
+status: GREEN (ACCEPTED) -- confirmed today and MUST STAY green after slice 4.
+cmd: run main.mdk
+measured-exit: 0
+measured-stdout: ()
+deviation-from-packet: the packet named the `quiet2` shape from
+  test/must_fail_fixtures/1103-sametail-arm-launders-effect-arrow/control.mdk
+  as the reuse target. Measured directly: at this slice's base (ad754e32),
+  that exact `launderArrow : (Unit -> <Stdout | e> Unit) -> (Unit -> <e>
+  Unit)` declaration is now REJECTED AT DECLARATION TIME (independent of
+  what's passed to it) --
+    error: ...:14:16: Effect variable <e> in function 'launderArrow' carries
+    <Stdout> at an argument position, but a row carrying <e> does not
+    include it: ... Declare <Stdout> ... at every row where <e> appears, or
+    remove the concrete label from the argument's row.
+  D-1 (#1118, already landed before this slice's base per the merge diff
+  deleting must_fail_fixtures/{797,1100,1103}) extended
+  `checkArgEffVarCoverage` to ordinary function arrows -- exactly what
+  1103's own why-note anticipated as the eventual fix. This falsifies §4
+  fact 4's "stays ACCEPTED where it already is today" for that literal
+  shape; it is NOT a slice-4 (D-2) regression, D-1 changed the verdict.
+  Per the packet's own escape hatch ("author an equivalent probe"), this
+  file instead uses a simpler shape with no polymorphic effect variable at
+  all: `pureFn : Unit -> Unit` re-typed to `wide : Unit -> <Stdout> Unit`.
+  This does not trip D-1's coverage check (no `e` in sight)
+  and isolates the same underlying claim: an ordinary, non-wrapped,
+  covariant-only widening of a bare function value stays sound.

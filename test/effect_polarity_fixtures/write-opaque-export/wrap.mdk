@@ -1,0 +1,15 @@
+-- Sibling module for write-opaque-export: exports `Holder` ABSTRACTLY (no
+-- `(..)`, no `public export`) -- callers get only the smart constructor and
+-- accessor below, never the constructor pattern. This is the strongest form
+-- of the write-channel probe: the wrapper's write channel (`Ref`) is not
+-- even syntactically visible at the use site, only reachable through the
+-- accessor's declared type.
+export data Holder a = MkHolder (Ref a)
+
+export
+mkHolder : a -> Holder a
+mkHolder x = MkHolder (Ref x)
+
+export
+holderRef : Holder a -> Ref a
+holderRef (MkHolder r) = r

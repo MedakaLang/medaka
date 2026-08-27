@@ -1,0 +1,24 @@
+-- Sibling module for contra-opaque-export: exports `Taker` and `TH`
+-- ABSTRACTLY (no `(..)`, no `public export`) -- callers get only the smart
+-- constructors/accessors below, never the constructor patterns. This is the
+-- strongest form of the contravariant probe: the contravariant occurrence is
+-- not even syntactically visible at the use site, only reachable through the
+-- accessors' declared types.
+export data Taker a = MkTaker (a -> Int)
+export data TH a = MkTH (Taker a)
+
+export
+mkTaker : (a -> Int) -> Taker a
+mkTaker f = MkTaker f
+
+export
+runTaker : Taker a -> a -> Int
+runTaker (MkTaker g) x = g x
+
+export
+mkTH : Taker a -> TH a
+mkTH t = MkTH t
+
+export
+thTaker : TH a -> Taker a
+thTaker (MkTH t) = t

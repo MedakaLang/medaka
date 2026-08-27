@@ -1,0 +1,26 @@
+-- CONTRAVARIANT-IMMUTABLE x 2-DEEP wrapper shape. Two positional wrapper
+-- layers (`TakerBox2` around `TakerBox` around `Taker`) between the
+-- parametric widening site and the contravariant occurrence. Tests that the
+-- laundering survives an extra layer of indirection, same as write-2deep.
+-- EFFECTS-SEMANTICS.md §9. EXPECTED-RED until slice 4 (D-2, #1119).
+data Taker a = MkTaker (a -> Int)
+data TakerBox a = MkTakerBox (Taker a)
+data TakerBox2 a = MkTakerBox2 (TakerBox a)
+
+runTaker : Taker a -> a -> Int
+runTaker (MkTaker g) x = g x
+
+pureTaker : Taker (Unit -> Unit)
+pureTaker = MkTaker (k => let _ = k () in 1)
+
+pureTakerBox2 : TakerBox2 (Unit -> Unit)
+pureTakerBox2 = MkTakerBox2 (MkTakerBox pureTaker)
+
+wide : TakerBox2 (Unit -> <IO> Unit)
+wide = pureTakerBox2
+
+shout : Unit -> <IO> Unit
+shout _ = println "LAUNDERED"
+
+main = match wide
+  MkTakerBox2 (MkTakerBox t) => println (runTaker t shout)

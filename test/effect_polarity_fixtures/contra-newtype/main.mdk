@@ -1,0 +1,28 @@
+-- CONTRAVARIANT-IMMUTABLE x NEWTYPE wrapper shape. One positional single-
+-- constructor wrapper (`TakerBox`) sits between the parametric widening and
+-- the contravariant `Taker`. Same mechanism as contra-direct, one
+-- constructor of indirection further out -- substMonoP's `TApp` arm (packet
+-- §4 fact 2) propagates `pos` unchanged through EVERY nested application,
+-- so wrapping the already-contravariant `Taker` again should not "fix" or
+-- "hide" the defect. EFFECTS-SEMANTICS.md §9. EXPECTED-RED until slice 4
+-- (D-2, #1119).
+data Taker a = MkTaker (a -> Int)
+data TakerBox a = MkTakerBox (Taker a)
+
+runTaker : Taker a -> a -> Int
+runTaker (MkTaker g) x = g x
+
+pureTaker : Taker (Unit -> Unit)
+pureTaker = MkTaker (k => let _ = k () in 1)
+
+pureTakerBox : TakerBox (Unit -> Unit)
+pureTakerBox = MkTakerBox pureTaker
+
+wide : TakerBox (Unit -> <IO> Unit)
+wide = pureTakerBox
+
+shout : Unit -> <IO> Unit
+shout _ = println "LAUNDERED"
+
+main = match wide
+  MkTakerBox t => println (runTaker t shout)
