@@ -9934,6 +9934,9 @@ paramUseTy sigs env p (CLet _ _ e1 e2) =
 -- in a block passes its continuation here as `CBlock rest` so the bound var's type
 -- can be inferred from later uses, not a dummy `0`).
 paramUseTy sigs env p (CBlock stmts) = paramUseStmts sigs env p stmts
+paramUseTy sigs env p (CDecision scrut arms _tree) =
+  firstSome (paramUseTy sigs env p scrut) (paramUseArms sigs env p arms)
+paramUseTy sigs env p (CLam _ body) = paramUseTy sigs env p body
 paramUseTy sigs env p app =
   let (hd, args) = flattenApp app []
   match hd
@@ -9979,6 +9982,21 @@ paramUseStmts sigs env p ((CSExpr ex)::rest) =
 paramUseStmts sigs env p ((CSLet _ _ ex)::rest) =
   firstSome (paramUseTy sigs env p ex) (paramUseStmts sigs env p rest)
 paramUseStmts sigs env p (_::rest) = paramUseStmts sigs env p rest
+
+-- scan a CDecision's arms for a determining use of `p` in a guard or the arm body.
+paramUseArms : OrdMap FnSig -> List (String, LTy) -> String -> List CArm -> Option LTy
+paramUseArms _ _ _ [] = None
+paramUseArms sigs env p ((CArm _ guards body)::rest) =
+  firstSome
+    (firstSome (paramUseGuards sigs env p guards) (paramUseTy sigs env p body))
+    (paramUseArms sigs env p rest)
+
+paramUseGuards : OrdMap FnSig -> List (String, LTy) -> String -> List CGuard -> Option LTy
+paramUseGuards _ _ _ [] = None
+paramUseGuards sigs env p ((CGBool e)::rest) =
+  firstSome (paramUseTy sigs env p e) (paramUseGuards sigs env p rest)
+paramUseGuards sigs env p ((CGBind _ e)::rest) =
+  firstSome (paramUseTy sigs env p e) (paramUseGuards sigs env p rest)
 
 isVarNamed : String -> CExpr -> Bool
 isVarNamed p (CVar x _) = p == x
@@ -10203,6 +10221,9 @@ paramUsedInArith p (CIf c t f) = paramUsedInArith p c
 paramUsedInArith p (CUnOp _ x) = paramUsedInArith p x
 paramUsedInArith p (CLet _ _ e1 e2) = paramUsedInArith p e1
   || paramUsedInArith p e2
+paramUsedInArith p (CDecision scrut arms _tree) = paramUsedInArith p scrut
+  || anyArithArm p arms
+paramUsedInArith p (CLam _ body) = paramUsedInArith p body
 paramUsedInArith p app =
   let (_, args) = flattenApp app []
   anyArithArg p args
@@ -10211,6 +10232,19 @@ paramUsedInArith _ _ = False
 anyArithArg : String -> List CExpr -> Bool
 anyArithArg _ [] = False
 anyArithArg p (a::rest) = paramUsedInArith p a || anyArithArg p rest
+
+anyArithArm : String -> List CArm -> Bool
+anyArithArm _ [] = False
+anyArithArm p ((CArm _ guards body)::rest) = paramUsedInArith p body
+  || anyArithGuard p guards
+  || anyArithArm p rest
+
+anyArithGuard : String -> List CGuard -> Bool
+anyArithGuard _ [] = False
+anyArithGuard p ((CGBool e)::rest) = paramUsedInArith p e
+  || anyArithGuard p rest
+anyArithGuard p ((CGBind _ e)::rest) = paramUsedInArith p e
+  || anyArithGuard p rest
 
 zipParamEnv : List Pat -> List LTy -> List (String, LTy)
 zipParamEnv ((PVar x _)::ps) (t::ts) = (x, t) :: zipParamEnv ps ts

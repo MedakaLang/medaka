@@ -1,5 +1,0 @@
-double x = match True
-  True => x + x
-  False => x
-
-main = println (double 2.5)

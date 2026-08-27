@@ -1,0 +1,8 @@
+-- Regression for #1789 (paramUsedInArith/paramUseTy traversal gap): a
+-- type-var Float param used arithmetically only inside a CLam body (reached
+-- via a higher-order call), not directly in the enclosing function body.
+apply f y = f y
+
+addTo x = apply (y => x + y) 2.5
+
+main = println (addTo 1.5)
