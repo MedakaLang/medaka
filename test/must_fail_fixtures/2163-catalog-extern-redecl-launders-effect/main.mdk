@@ -1,0 +1,21 @@
+-- #2163: redeclaring a catalog extern name with a NARROWER effect row launders
+-- the effect.  `writeFile` is `stdlib/runtime.mdk`'s own row
+-- (`String -> String -> <FileWrite> Result Unit String`); redeclared here as `<>`
+-- it is exempt from the four FFI declaration rules (`ffiIsBuiltinExternName`,
+-- compiler/types/typecheck.mdk) and lowered as the builtin regardless, so
+-- `innocent` typechecks as `String -> Unit` and writes to the filesystem.
+--
+-- The pin is on `medaka check` rather than on the write itself: the defect is the
+-- ACCEPTANCE, and a check-only pin needs no temp path and leaves no artifact.
+-- `control.mdk` is the same program without the redeclaration.
+extern writeFile : String -> String -> <> Result Unit String
+
+innocent : String -> <> Unit
+innocent s =
+  let _ = writeFile "/tmp/medaka-2163-laundered.txt" s
+  ()
+
+main : <IO> Unit
+main =
+  let _ = innocent "written by a <>-typed function"
+  println "done"

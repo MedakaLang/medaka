@@ -723,12 +723,78 @@ Import a type with `import m.{T(..)}`.
 
 ## Externs (primitive declarations — see stdlib/runtime.mdk)
 
+An `extern` you declare in your own code is a **foreign C call**. Its declared
+effect row must name `FFI` — the compiler does not add the label for you, because a
+row it rewrote would no longer be the row you read.
+
 ```medaka
 extern foo : Int -> <FFI> String
 extern add2 : Int -> Int -> <FFI> Int
+extern cCurlVersion : Unit -> <FFI "libcurl"> String
+```
+
+The optional string parameter names the library, exactly as `<Exec "clang">` names a
+binary. It is a **statement about where the call goes, not an enforcement** — the
+linker decides what actually resolves.
+
+Rules, each a located error when broken:
+
+- The row must name `FFI`, joined with whatever else it names
+  (`String -> <FFI, Net "a.com/*"> String` is fine). Omitting it is
+  `T-FFI-UNLABELLED`.
+- Only the types in `compiler/FFI-ABI.md` §1 may cross: `Int`, `Float`, `Bool`,
+  `Char`, `String`, `Array Int`, `Unit`. Anything else is `T-FFI-NONCROSSABLE`.
+- A **nullary** `extern k : Int` is refused (`T-FFI-NULLARY`) — an effect row lives
+  on an arrow's result, so a signature with no arrow has nowhere to write `FFI`.
+  Write `extern k : Unit -> <FFI> Int` and call it as `k ()`.
+- Names beginning `mdk_` are reserved for the runtime's own C symbols
+  (`T-FFI-RESERVED-NAME`).
+- One C symbol has one signature program-wide; two modules declaring the same name
+  with different shapes is refused.
+
+`<FFI>` is **not** an `<IO>` alias member, deliberately: an `<IO>` bound does not
+admit `<FFI>`, so a boundary has to say `FFI` literally to let a foreign call
+through.
+
+The externs in `stdlib/runtime.mdk` are the compiler's own catalog and are exempt —
+they are the effect vocabulary rather than foreign declarations. That is why the two
+below are legal without an `FFI` label: both names are catalog rows.
+
+```medaka
 extern putStrLn : String -> <IO> Unit
 extern pi : Float
 ```
+
+⚠️ Redeclaring a catalog name is **not** a way to bind your own C function — such a
+name is always lowered as the builtin, whatever your local row says. See #2163: a
+redeclaration with a narrower row currently launders the builtin's effect and is
+accepted.
+
+### Linking a C library
+
+A foreign call needs its library on the link line. Declare it in the project's
+`medaka.toml`, keyed by library name, valued by the directory to search (omit the
+value to use the linker's default search path):
+
+```toml
+[foreign-libraries]
+mylib = "vendor/lib"
+curl = ""
+```
+
+`mylib = "vendor/lib"` becomes `-Lvendor/lib -lmylib`. Directories are resolved
+relative to the project root. A declared library that does not resolve is a
+`B-FFI-LIB-NOT-FOUND` diagnostic naming the library, the manifest key, and the
+manifest path — not a raw linker wall. A project with no `[foreign-libraries]`
+section links exactly as before.
+
+FFI is **native-build only**. `medaka run` (the tree-walking interpreter) and
+`build --target wasm` both reject a program with a user FFI extern, with a
+capability message — neither can make a foreign C call.
+
+⚠️ `<FFI>` tracks **authority, not memory safety**. A foreign function shares the
+address space and the GC heap; nothing in the effect system detects or prevents a
+bad pointer. See `docs/KNOWN-GAPS.md`.
 
 ## Tests (declaration forms)
 
