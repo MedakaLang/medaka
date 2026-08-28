@@ -77,28 +77,33 @@ constrainedAdd _ _ acc = acc
 -- `methods` is an `OrdMap Unit` membership set (built ONCE per file in
 -- `markWith`, below) rather than a `List String` — every var/op node in the
 -- program does a `methods` lookup, so with a flat list of ALL interface-method
--- names that was an O(sites x pool) List-as-set scan (#953). `constrained` stays
--- a list: it is small (only user functions with a constrained signature) and is
--- also consulted via `keepIn`/`keepNotIn` elsewhere, where a list is the right shape.
-markNode : OrdMap Unit -> List String -> Expr -> Expr
+-- names that was an O(sites x pool) List-as-set scan (#953). `constrained` is
+-- ALSO an `OrdMap Unit` membership set (#1017 — mirrors #953: markVar/markInfix
+-- run per var/op node, so a `List String` scan was the same shape). It is
+-- built ONCE, at the end of `markWith` below, from a `List String` — every
+-- OTHER consultation site in this file (`keepIn`/`keepNotIn`, at `shadowRenames`
+-- and the 78a droppable-fn computation) operates on the LIST form used to build
+-- `constrained`, never on `constrained` itself, so those sites are untouched by
+-- this conversion and a list remains the right shape for them.
+markNode : OrdMap Unit -> OrdMap Unit -> Expr -> Expr
 markNode methods constrained (EVar x) = markVar methods constrained x
 markNode methods constrained (EInfix op l r) =
   markInfix methods constrained op l r
 markNode _ _ e = e
 
-markVar : OrdMap Unit -> List String -> String -> Expr
+markVar : OrdMap Unit -> OrdMap Unit -> String -> Expr
 markVar methods constrained x
   | omHasKey x methods = EMethodRef x
-  | contains x constrained = EDictApp x
+  | omHasKey x constrained = EDictApp x
   | otherwise = EVar x
 
-markInfix : OrdMap Unit -> List String -> String -> Expr -> Expr -> Expr
+markInfix : OrdMap Unit -> OrdMap Unit -> String -> Expr -> Expr -> Expr
 markInfix methods constrained op l r
   | omHasKey op methods = EApp (EApp (EMethodRef op) l) r
-  | contains op constrained = EApp (EApp (EDictApp op) l) r
+  | omHasKey op constrained = EApp (EApp (EDictApp op) l) r
   | otherwise = EInfix op l r
 
-markProgram : OrdMap Unit -> List String -> List Decl -> List Decl
+markProgram : OrdMap Unit -> OrdMap Unit -> List Decl -> List Decl
 markProgram methods constrained prog = map (markDecl methods constrained) prog
 
 -- desugar.mapDecl's catch-all SKIPS DLetGroup (and DBench) bodies, so a
@@ -107,7 +112,7 @@ markProgram methods constrained prog = map (markDecl methods constrained) prog
 -- dict route → the dict-passed callee is under-applied.  Mirror lib/method_marker.ml's
 -- dedicated mark_decl: handle DLetGroup/DAttrib here, delegate everything else to
 -- mapDecl (whose expr recursion is complete).
-markDecl : OrdMap Unit -> List String -> Decl -> Decl
+markDecl : OrdMap Unit -> OrdMap Unit -> Decl -> Decl
 markDecl methods constrained (DLetGroup pub binds) =
   let f = markNode methods constrained
   DLetGroup pub (map (markLetBind f) binds)
@@ -548,7 +553,8 @@ markWith preludeMethods preludeDroppable preludeConstrained prog =
   let userConstrained = constrainedFnNames prog2
   let toRemove = keepNotIn userConstrained shadowed
   let constrained = keepNotIn toRemove (preludeConstrained ++ userConstrained)
-  markProgram methodSet constrained prog2
+  let constrainedSet = omFromNames constrained omEmpty
+  markProgram methodSet constrainedSet prog2
 
 export
 markWithPrelude : List Decl -> List Decl -> List Decl

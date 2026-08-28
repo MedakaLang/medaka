@@ -21,7 +21,6 @@ concatLeft : Expr -> List Expr -> Expr
 concatLists : List (List a) -> List a
 concatMapDecl : (Decl -> List Decl) -> List Decl -> List Decl
 concatStrings : List Expr -> Expr
-containsMethod : String -> List IfaceMethod -> Bool
 dataDerivers : String -> List String -> List Variant -> List (String, Unit -> Decl)
 declDeriveErrors : Decl -> List (String, Option Loc)
 deriveEqData : String -> List Variant -> Decl
@@ -46,7 +45,7 @@ fallthrough : Expr
 fillImplDecl : List Decl -> Decl -> Decl
 fillImplDefaults : List Decl -> List Decl
 firstDoStmtLoc : List DoStmt -> Option Loc
-foldlMethods : List IfaceMethod -> List IfaceMethod -> List IfaceMethod
+foldlMethods : (Map String IfaceMethod, List String) -> List IfaceMethod -> (Map String IfaceMethod, List String)
 genVars : String -> Int -> List String
 genVarsGo : String -> Int -> Int -> List String
 genericArm : Variant -> Arm
@@ -61,7 +60,7 @@ ifaceMethodHasDefault : IfaceMethod -> Bool
 implDefines : String -> List ImplMethod -> Bool
 implMethodNamed : String -> ImplMethod -> Bool
 indexFrom : Int -> List a -> List (Int, a)
-insertMethod : List IfaceMethod -> IfaceMethod -> List IfaceMethod
+insertMethod : (Map String IfaceMethod, List String) -> IfaceMethod -> (Map String IfaceMethod, List String)
 intLit : Int -> Expr
 interpPartToExpr : InterpPart -> Expr
 interpToCore : List InterpPart -> Expr
@@ -90,11 +89,11 @@ mapProg : (Expr -> Expr) -> List Decl -> List Decl
 mergeIfaceDecl : Decl -> Decl
 mergeIfaceDefaults : List Decl -> List Decl
 mergeIfaceMethods : List IfaceMethod -> List IfaceMethod
-mergeInto : List IfaceMethod -> IfaceMethod -> List IfaceMethod
 mergeTwo : IfaceMethod -> IfaceMethod -> IfaceMethod
 mergedDefault : Option MethodDefault -> Option MethodDefault -> Option MethodDefault
 mergedLoc : Option Loc -> Option Loc -> Option Loc
 mergedType : Ty -> Ty -> Ty
+methodAt : Map String IfaceMethod -> String -> IfaceMethod
 methodName : IfaceMethod -> String
 moduleAliases : List Decl -> List String
 newtypeDerivers : String -> List String -> String -> Ty -> List (String, Unit -> Decl)

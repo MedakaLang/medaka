@@ -1,7 +1,16 @@
 #!/bin/sh
 # diff_compiler_stage_ir_scaling.sh — the DETERMINISTIC superlinearity detector for
-# the BUILD-PATH stages (lower / emit / mangle / dce / trmc), measured in
-# PER-STAGE Callgrind INSTRUCTION COUNTS.
+# the BUILD-PATH stages (lower / emit / mangle / dce / trmc), the single-file
+# FRONTEND stages (parse / exhaust / desugar / resolve / mark / typecheck), and the
+# MULTI-MODULE frontend stages (parse / load / desugar / resolve / mark /
+# typecheck), measured in PER-STAGE Callgrind INSTRUCTION COUNTS.
+#
+# The single-file frontend rows ride the SAME runs the backend rows already pay for
+# — see "THE FRONTEND STAGES, AND WHY THEY ARE FREE" below before adding a frontend
+# SHAPE. The multi-module rows do NOT: they are a second DRIVER
+# (profile_modules_main) over a directory corpus and cost 4 more callgrind runs —
+# see "THE MULTI-MODULE ARM", which also carries a silent-false-pass trap on the
+# multi-module `parse` symbol that a future editor must not undo.
 #
 # ⚠️ READ THIS FIRST: WHY THIS IS NOT diff_compiler_ir_scaling.sh WITH A `build` ARM.
 #
@@ -113,6 +122,15 @@
 #           ⚠️ The GRADED stage for this shape is `emit` — `eagerReachMap` is called
 #           from `orderedValBinds` inside `emitProgram`, on BOTH backends.
 #
+#   modules — N import-chained MODULE FILES (m0 <- ... <- m{N-1} <- entry), K=8
+#           `Widget` impls + 4x4 records per module, driven by the MULTI-MODULE
+#           profiler. The ONLY shape here that is not a single file and not
+#           profile_main: it is the second DRIVER, not a fourth shape on the
+#           first one. Its band is 25/50/100 with a 2-module floor, not 125/250/500
+#           — a module is a file, so it prices differently. See "THE MULTI-MODULE
+#           ARM" by MOD_SYMS for what it covers, what it costs, and the
+#           `parse`-vs-`parseResult` silent-false-pass trap it carries.
+#
 # ── WHAT THIS GATE FOUND, AND THE #408 ATTRIBUTION CORRECTION ────────────────
 #
 # #408 records `match:emit` at r1 3.71 r2 3.73 (N=1000/2000/4000), measured
@@ -193,7 +211,13 @@
 #
 # ── COST ─────────────────────────────────────────────────────────────────────
 #
-# 12 callgrind invocations (3 shapes x (1 floor + 3 sizes)). Sequential on purpose —
+# 16 callgrind invocations: 12 single-file (3 shapes x (1 floor + 3 sizes)) plus 4
+# multi-module (1 floor + 3 sizes). The multi-module four are the ONLY additional
+# machine time this gate's frontend coverage costs — the six single-file frontend
+# rows are free (they ride annotate listings the backend rows already paid for);
+# the multi-module six are not, because they are a second driver over a second
+# corpus. Measured on this box: ~75 s wall for the four, against ~276 s for the
+# twelve. Sequential on purpose —
 # callgrind is single-threaded and a noisy neighbour would perturb nothing here, but
 # fanning out would buy nothing either. Measured wall on this box: see the report
 # for S-build-ir-arm; re-derive with `time sh test/diff_compiler_stage_ir_scaling.sh`.
@@ -201,6 +225,7 @@
 # Usage:  sh test/diff_compiler_stage_ir_scaling.sh
 #         STAGE_IR_MATCH_N=250 sh test/diff_compiler_stage_ir_scaling.sh
 #         STAGE_IR_VCHAIN_N=250 sh test/diff_compiler_stage_ir_scaling.sh
+#         STAGE_IR_MOD_N=50 sh test/diff_compiler_stage_ir_scaling.sh
 #         STAGE_IR_NO_LEDGER=1 sh test/diff_compiler_stage_ir_scaling.sh
 # Exit:   0 every graded stage scales sub-quadratically (ledgered rows excepted)
 #         1 a stage regressed, or a ledgered row must be promoted
@@ -209,6 +234,12 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROFILE="$ROOT/test/bin/profile_main"
+# The MULTI-MODULE profiler, for the `modules` shape below. Same [perf] protocol as
+# PROFILE, same netting, same annotate read — but a DIFFERENT DRIVER
+# (loadProgram -> desugar -> resolveModulesToLines -> markModules -> checkModules)
+# over a DIRECTORY of modules rather than one file, so it exercises stage entry
+# points PROFILE never calls. See "THE MULTI-MODULE ARM" below.
+PROFILE_MODULES="$ROOT/test/bin/profile_modules_main"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"
 
@@ -219,6 +250,12 @@ CORE="$ROOT/stdlib/core.mdk"
 if [ ! -x "$PROFILE" ]; then
   echo "build oracles first — missing $PROFILE"
   echo "  FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one profile_main"
+  exit 2
+fi
+
+if [ ! -x "$PROFILE_MODULES" ]; then
+  echo "build oracles first — missing $PROFILE_MODULES"
+  echo "  FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one profile_modules_main"
   exit 2
 fi
 
@@ -242,6 +279,41 @@ FLOOR_N="${STAGE_IR_FLOOR_N:-1}"
 MATCH_N="${STAGE_IR_MATCH_N:-125}"
 XREF_N="${STAGE_IR_XREF_N:-125}"
 VCHAIN_N="${STAGE_IR_VCHAIN_N:-125}"
+CONSTR_N="${STAGE_IR_CONSTR_N:-300}"
+WIDEIFACE_N="${STAGE_IR_WIDEIFACE_N:-125}"
+
+# ── the multi-module band ────────────────────────────────────────────────────
+#
+# 25/50/100 modules with a 2-module floor, K=8 impls per module. DELIBERATELY an
+# order of magnitude below the three single-file bands, and below
+# perf_scaling's own MOD_N=100/200/400, because a module here is a FILE: the
+# driver parses, loads, resolves, marks and typechecks all N of them, so cost
+# grows with N far faster per unit than a single file with N decls in it. At
+# 25/50/100 the four callgrind runs cost ~75 s wall on this box (measured; see
+# the COST block at the end of the header) against a `types` shard ci.yml already
+# documents as the CI pole. A band big enough to reach the #153/#154
+# module-count family (perf_scaling's 100/200/400) costs several times that and
+# does NOT belong here — perf_scaling already grades that band on TIME/ALLOC/OPS
+# for a fraction of the machine time.
+#
+# ⚠️ AND THE SMALL BAND IS STILL ENOUGH TO PIN #1879 — do not raise MOD_N to "see it
+# better". The `modules:typecheck` KNOWN_SLOW row below is graded at THIS default
+# band, where the live O(modules^2) term shows as r2=2.217 against its siblings'
+# 2.04. That 8% signal is usable only because Ir is DETERMINISTIC; the same 8% on
+# perf_scaling's TIME arm is what flaps. Raising the band would buy a bigger ratio
+# for several times the machine time and would invalidate the row's measured
+# ceiling/fixed pair, which are stated for 25/50/100.
+MOD_N="${STAGE_IR_MOD_N:-25}"
+MOD_FLOOR_N="${STAGE_IR_MOD_FLOOR_N:-2}"
+# K, R and F are the per-module CONSTANTS, transcribed with their values from
+# test/diff_compiler_perf_scaling.sh's gen_modules block. Read that block before
+# changing any of them: K>1 and impls (not plain bindings) are what populate the
+# accumulated decl universe at all, and MOD_R x MOD_F = 4x4 is the field-owner
+# multiplier a 1x1 cut was measured to be too weak for. This gate scales the
+# MODULE COUNT against those fixed constants — issue #153's fix shape.
+MOD_K="${STAGE_IR_MOD_K:-8}"
+MOD_R=4
+MOD_F=4
 
 # The netting-noise guard, as a fraction of the STAGE's own floor. Unlike
 # ir_scaling's 5% this is 2%, and the difference is justified by measurement rather
@@ -254,8 +326,9 @@ VCHAIN_N="${STAGE_IR_VCHAIN_N:-125}"
 # ⚠️ Under-the-guard is a printed SKIP here, not a FAIL as in ir_scaling. That is
 # forced by the shape of the arm: ir_scaling grades ONE number per shape, so a
 # too-small net means the band is mis-sized and saying so is the whole point. This
-# gate grades FIVE stages off one run, and a shape legitimately leaves some of them
-# untouched (nothing scales `dce` on `xref`). A blanket FAIL would make it
+# gate grades ELEVEN stages off one run, and a shape legitimately leaves some of them
+# untouched (nothing scales `dce` on `xref`; `mark` nets under the guard on `match`).
+# A blanket FAIL would make it
 # impossible to grade any stage without sizing the band for the smallest. The
 # no-silent-green invariant is preserved instead by `graded`: a shape that grades
 # ZERO stages is a hard FAIL, and so is a whole run that grades nothing.
@@ -265,15 +338,160 @@ MIN_NET_FRAC="${STAGE_IR_MIN_NET_FRAC:-0.02}"
 #
 # One `<stage>=<mangled symbol>` pair per word. The names on the left are the same
 # names profile_main's own `[perf]` rows use, deliberately, so a reader can line the
-# two up. `trmc` is `detectDispatchGroups`, which runs INSIDE emitProgram — its
-# inclusive count is therefore a SUBSET of `emit`'s, not a sibling of it. That is
-# intentional and it is why it is listed separately: #1029's cubic lived there and a
-# 5% slice of emit is invisible in emit's own ratio.
-STAGE_SYMS="lower=mdk_ir_core_ir_lower__lowerProgramEmit \
+# two up (one deliberate exception: `exhaust`, whose `[perf]` row is spelled
+# `exhaust-guards`; the short name is used here because it is also a ledger key and
+# `<shape>:exhaust-guards` reads badly in one). `trmc` is `detectDispatchGroups`,
+# which runs INSIDE emitProgram — its inclusive count is therefore a SUBSET of
+# `emit`'s, not a sibling of it. That is intentional and it is why it is listed
+# separately: #1029's cubic lived there and a 5% slice of emit is invisible in emit's
+# own ratio. The same containment holds across the frontend rows below: `exhaust`
+# runs INSIDE typecheck ([P-EXHAUST-IN-TYPECHECK]), so its count is a subset of
+# `typecheck`'s, for the same reason and to the same purpose.
+#
+# ── THE FRONTEND STAGES, AND WHY THEY ARE FREE ───────────────────────────────
+#
+# The six frontend rows (`parse`..`typecheck`) were added by S-frontend-ir-arm.
+# They cost ZERO additional callgrind invocations and ZERO additional seconds: ONE
+# annotate listing per (shape, N) already carries every symbol in the process, so
+# reading six more out of the listings the backend rows already paid for is free.
+# That is the whole reason they are here rather than on a shape of their own — a
+# `conlocal`-style frontend shape sized to redden costs 415-1204 s of callgrind on a
+# shard ci.yml already documents as the CI pole, and the same defect grades on
+# diff_compiler_perf_scaling.sh's deterministic OP arm for ~13 s of native runtime
+# (see the `conlocal` block there). Read that trade before adding a frontend SHAPE.
+#
+# MEASURED margins at the shipped bands, this box, on the tree this arm landed on
+# (netted per the rule above; N=125/250/500 with the N=1 floor):
+#     xref :  parse 2.014/2.007   exhaust 2.230/2.179   desugar 2.019/2.007
+#             resolve 2.222/2.164 mark    2.006/2.004   typecheck 2.131/2.116
+#     match:  parse 2.015/2.007   exhaust 2.128/2.226   desugar 2.029/2.014
+#             resolve 2.229/2.189 mark    (SKIP)        typecheck 2.082/2.080
+#     vchain: parse 2.013/2.006   exhaust 2.254/2.192   desugar 2.007/2.009
+#             resolve 2.220/2.210 mark    2.007/2.006   typecheck 2.148/2.126
+#
+# Every one of those seventeen graded rows is 2.0-2.26 — dead linear with 25%+ of
+# headroom under the 3.0 threshold — so no frontend row is ledgered (see KNOWN_SLOW).
+#
+# ⚠️ `mark` SKIPs ON `match`, BY DESIGN — it is not breakage. Its netted delta there
+# is 1.45% of its own floor, UNDER the 2% MIN_NET_FRAC guard, so the row prints SKIP
+# rather than a ratio (the analogue of `dce` never being scaled by `xref`; see the
+# MIN_NET_FRAC block above for why under-the-guard is a SKIP here and not a FAIL).
+# `mark` grades fine on `xref` at 20.6% of floor, so the stage is covered. The next
+# narrowest row is `desugar` on `match` at 5.88%.
+#
+# ⚠️ `parse`'s inclusive count is NOT polluted by the profiler's `fmt`/`lint` stages,
+# which also parse. Checked first-hand rather than assumed: both go through
+# `parseWithPositions`, which callgrind reports as its own separate symbol
+# (`mdk_frontend_parser__parseWithPositions`, 775 797 037 Ir at xref N=500, alongside
+# `parse`'s 681 584 196). A future refactor that routes fmt/lint back through `parse`
+# would silently fold a second linear term into this row — re-derive with
+# `nm $PROFILE | grep parse` if this row's margins ever move without a source cause.
+STAGE_SYMS="parse=mdk_frontend_parser__parse \
+exhaust=mdk_frontend_exhaust__checkGuardExhaustivenessWith \
+desugar=mdk_frontend_desugar__desugar \
+resolve=mdk_frontend_resolve__resolveToLines \
+mark=mdk_frontend_marker__markWithPrelude \
+typecheck=mdk_types_typecheck__checkOneToLinesWithRuntime \
+lower=mdk_ir_core_ir_lower__lowerProgramEmit \
 emit=mdk_backend_llvm_emit__emitProgram \
 mangle=mdk_backend_private_mangle__mangleUnits \
 dce=mdk_ir_dce__dceFilter \
 trmc=mdk_backend_trmc_analysis__detectDispatchGroups"
+
+# ── THE MULTI-MODULE ARM ─────────────────────────────────────────────────────
+#
+# Added by S-frontend-ir-arm part 1b. Everything above this line runs ONE driver
+# (profile_main) over ONE file. The frontend stage entry points a multi-module
+# compile actually calls are DIFFERENT FUNCTIONS — `resolveModulesToLines` not
+# `resolveToLines`, `checkModules` not `checkOneToLinesWithRuntime`, `markModules`
+# not `markWithPrelude` — and `loadProgram` has no single-file counterpart at all.
+# So the single-file rows above are not "the frontend, covered": they are one of
+# two drivers, and the O(modules^2) family (#153/#154) lands on stages ONLY this
+# arm can name.
+#
+# ⚠️ THE PARENTHETICAL THAT USED TO NAME THE SITES — "checkModuleFullImpl's
+# per-module rescan, elabModuleStamp's buildKeyTable over the accumulated universe" —
+# IS REFUTED BY MEASUREMENT, not merely unverified. Callgrind per-symbol attribution
+# at N=200 -> N=800 (see the `modules:typecheck` KNOWN_SLOW entry below for the full
+# table) puts the residual quadratic in `declEnvReachIndex`, `buildDataEnv`'s
+# `addFieldOwnerIdents`, the `importedCtorTypeDeclsLastWins` -> `overlayScanRows`
+# chain, and `ieAddRows` — three of which are whole-graph PREAMBLE work
+# (`checkModulesPreamble` -> `buildDeclEnvs`, reading 8.87x/9.89x against a linear
+# 4.00x) that did not exist when #153/#154 were written. `checkModuleFullImpl` itself
+# reads 5.02x, i.e. it CONTAINS the overlay term but is not itself the rescan the old
+# parenthetical describes, and `elabModuleStamp`/`buildKeyTable` do not appear on this
+# driver's profile at all (`checkModules`, not `elaborateModules`, is what runs here).
+#
+# Unlike the frontend rows above, this arm is NOT free: it is a second driver over
+# a second corpus, so it costs 4 additional callgrind runs. See the MOD_N block
+# for why the band is small.
+#
+# 🚨 `parse` HERE IS `parseResult`, NOT `parse`, AND THE DIFFERENCE IS A SILENT
+#    FALSE PASS — NOT A TYPO.
+#
+# `mdk_frontend_parser__parse` RESOLVES in profile_modules_main, so the hard-fail
+# guard in `stage_ir` does NOT catch it. But under this driver it covers only the
+# profiler's own two PRELUDE parses (runtime.mdk, core.mdk) and nothing else:
+# measured at 394 045 616 Ir at N=25, at N=50 and at N=100 — BIT-IDENTICAL, netting
+# to exactly 0. A `parse=mdk_frontend_parser__parse` row would therefore print SKIP
+# under MIN_NET_FRAC at every N forever, while `graded` stayed nonzero from the
+# other five rows — i.e. the arm would report a cheerful PASS with its parse row
+# proving nothing, which is the exact failure mode `stage_ir`'s hard-fail exists to
+# prevent, arriving through the one door that guard does not watch.
+#
+# The per-module parse work is under `parseResult`: loadProgram parses each module
+# through `parseResult`/`parseLocatedResult` (compiler/driver/loader.mdk:1043,1063,
+# 1102), which callgrind reports as its own symbol. That row is kept SEPARATE from
+# `load` even though loadProgram contains it, for the same reason `trmc` is listed
+# separately from `emit` and `exhaust` separately from `typecheck`: a contained
+# stage's own ratio is invisible inside its container's.
+# If this row's margins ever move without a source cause, re-derive with
+#   nm $PROFILE_MODULES | grep parse
+#
+# Second correction, benign but equally easy to get wrong: the multi-module mark
+# symbol lives in types.typecheck, NOT frontend.marker — profile_modules_main
+# imports `markModules` from `types.typecheck`.
+#
+# MEASURED margins at the shipped band, this box, on the tree this arm landed on
+# (N=25/50/100, K=8, netted against the same generator at N=2):
+#     modules: parse   2.088/2.042   load    2.089/2.044   desugar 2.087/2.041
+#              resolve 2.089/2.043   mark    2.086/2.044   typecheck 2.190/2.217
+#
+# Every one of those six rows GRADES — none falls under the netting guard, and the
+# narrowest margin is `desugar`'s at 46% of its own floor, i.e. 23x the 2% guard.
+# (Contrast the `parse` row a `mdk_frontend_parser__parse` symbol would have
+# produced: net 0, SKIP, forever. The corrected row nets 3.0e8 at N=25.)
+#
+# ⚠️ "Dead linear at this band, as expected: there is no known multi-module defect
+# that reddens at 25/50/100 ... This arm is a REGRESSION GUARD and a DRIVER-PARITY
+# claim, not a live pin" USED TO STAND HERE AND IS RETIRED. `typecheck`'s 2.190/2.217
+# above is NOT its five siblings' 2.04-2.09; it is the visible tail of a live
+# O(modules^2) term (#1879), and this arm is now that defect's LIVE PIN — see the
+# `modules:typecheck` entry in KNOWN_SLOW below for the four attributed sites and the
+# ceiling/fixed pair. The other five MOD_SYMS rows remain a regression guard and a
+# driver-parity claim, as written.
+#
+# DELIBERATE RED — negative control, or lack of one (F-fixround-3, §7.1): NO
+# pre-fix-red-then-fixed observation exists for the multi-module driver itself.
+# When this arm landed (S-frontend-ir-arm part 1b), all six MOD_SYMS rows read
+# "ok" and dead-linear on first measurement — see that slice's report §6.1,
+# which nets byte-identical to the "MEASURED margins" table above. The driver
+# was never seen red and then fixed; it has only ever been observed passing.
+# The one live non-linear reading this arm carries — `modules:typecheck`
+# 2.190/2.217 above #1879 — is NOT a pre-fix-red-then-fixed case either: it is
+# a currently OPEN, accepted-under-ceiling defect (see KNOWN_SLOW below), not a
+# closed one, so it cannot stand in as this arm's deliberate-red record. No
+# fresh negative-control shape was constructed here (constructing one cheap and
+# honest would mean re-breaking a known-fixed multi-module quadratic on
+# purpose, which risks miscalibrating the ceiling/threshold this arm now
+# relies on) — this paragraph is the honest statement of the gap, not a fix
+# for it.
+MOD_SYMS="parse=mdk_frontend_parser__parseResult \
+load=mdk_driver_loader__loadProgram \
+desugar=mdk_frontend_desugar__desugar \
+resolve=mdk_frontend_resolve__resolveModulesToLines \
+mark=mdk_types_typecheck__markModules \
+typecheck=mdk_types_typecheck__checkModules"
 
 # ── KNOWN SLOW — a self-draining ledger, NOT a skip list ────────────────────
 #
@@ -281,17 +499,86 @@ trmc=mdk_backend_trmc_analysis__detectDispatchGroups"
 # ratio: the gate stays green, but FAILS if the ratio worsens past its ceiling and
 # FAILS demanding promotion the instant a fix drops it back to linear.
 #
-# THE LEDGER IS CURRENTLY EMPTY, and that is the drained end state, not a disabled
-# gate: every graded row is held to the plain 3.0 threshold. `match:lower` was the
-# one entry (issue #408, ledgered at ceiling 4.00 / fixed 2.60 against a measured
-# r1 3.328 r2 3.640); it PROMOTED and was removed when the two `core_ir_lower.mdk`
-# quadratics behind it were fixed for the shipped `gen_match` shape — see the
-# block above (and its scope caveat: the wildcard-row-scaling case is #2125, not
-# fixed here). Re-adding a row means
+# THE LEDGER HOLDS EXACTLY ONE ROW: `modules:typecheck` (#1879). `match:lower` was
+# the previous entry (issue #408, ledgered at ceiling 4.00 / fixed 2.60 against a
+# measured r1 3.328 r2 3.640); it PROMOTED and was removed when the two
+# `core_ir_lower.mdk` quadratics behind it were fixed for the shipped `gen_match`
+# shape — see the block above (and its scope caveat: the wildcard-row-scaling case
+# is #2125, not fixed here). Re-adding a row means
 # re-adding its `KNOWN_CEIL_<shape>_<stage>` / `KNOWN_FIXED_<shape>_<stage>` pair
 # alongside it, and saying in a comment here what issue it pins and at what band
 # it was measured.
-KNOWN_SLOW=""
+#
+# NO FRONTEND ROW IS LEDGERED EITHER, and that is a measurement, not an omission:
+# none of the six frontend stages reddens on `xref`, `match` or `vchain` at the
+# shipped bands (margins in the STAGE_SYMS block above). The frontend quadratic this
+# arm was scoped around (#2030, `localPinPairs`) needs a shape none of the three
+# carries; it is pinned on diff_compiler_perf_scaling.sh's OP arm instead
+# (`conlocal:typecheck` / `conlocal:mark`), for 33x less machine time on the same
+# band. Do not add it here without re-reading the cost note in STAGE_SYMS.
+#
+# ── modules:typecheck — #1879, LEDGERED 2026-08-28. THE ARM OF RECORD FOR IT. ──
+#
+# ⚠️ THIS BLOCK USED TO SAY "NO MULTI-MODULE ROW IS LEDGERED, and that too is a
+# measurement: every stage in MOD_SYMS reads 2.0-2.22 ... The module-count quadratic
+# family (#153/#154) does not reach at that band". The first clause is still true as a
+# reading and FALSE as a conclusion, and that gap is the whole of #1879: `typecheck`'s
+# 2.190/2.217 is not the same shape as its five siblings' 2.04-2.09 in the SAME run.
+# It is a real, LIVE O(modules^2) term whose LINEAR part still dominates at this band,
+# so the ratio-of-ratios detector is structurally mis-shaped for it rather than merely
+# mis-tuned: a mixed a*N + b*N^2 curve creeps toward r2=4 asymptotically and may cross
+# `r2 > r1*1.15 && r2 > 2.45` only in a narrow window of N, if ever.
+#
+# THE MEASUREMENT (this box, this tree, deterministic Ir, N=25/50/100 K=8):
+#     typecheck net 398091174 -> 871828884 -> 1932587912    r1=2.190 r2=2.217
+#     every other MOD_SYMS stage in the same run: r1 2.086-2.089, r2 2.041-2.044
+#
+# THE ATTRIBUTION, which is why this is a LEDGER and not a fix. Callgrind inclusive Ir
+# per symbol, module count x4 (N=200 -> N=800, same generator, K=8; LINEAR reads 4.00,
+# QUADRATIC reads 16.00). `checkModules` itself reads 6.93, and its quadratic EXCESS
+# over linear (33.399e9 - 4x4.821e9 = 14.115e9 Ir) decomposes into FOUR INDEPENDENT
+# sites, none a majority:
+#
+#   declEnvReachIndex               23.47x   4.606e9 excess  33%  compiler/types/typecheck.mdk
+#   buildDataEnv/addFieldOwnerIdents 16.11x  4.027e9 excess  29%
+#   importedCtorTypeDeclsLastWins    15.47x  3.652e9 excess  26%   -> findOverlayDecl -> overlayScanRows
+#   ieAddRows (in buildImplEnv)       7.39x  2.746e9 excess  19%
+#
+# Cross-validated on an INDEPENDENT channel (invocation counts out of the callgrind
+# `calls=` records), which discriminates two distinct mechanisms rather than merely
+# re-reading the first: `overlayScan` and the `declEnvReach*` walk have QUADRATIC CALL
+# COUNTS (15.85x / 15.82x) — a per-module scan of a whole-graph list; while
+# `addFieldOwnerIdents` (4.00x calls) and `ieInsertRow` (3.80x calls) have LINEAR call
+# counts and quadratic COST PER CALL — the house `existing ++ [new]` append onto a list
+# that grows with the module count.
+#
+# Two of the four are one-line fixes their own headers already record as OWED
+# (`ieInsertRow`'s header names the remedy verbatim: "cons and `reverseL` once in
+# `buildImplEnv`"), and two are quadratic BY CONSTRUCTION on an import chain
+# (`declEnvReachIndex`'s own header: "the index's own SIZE is already quadratic on a
+# chain ... so no build can be cheaper"; `findOverlayDecl`'s: "`pool` is the WHOLE
+# accumulated universe and this runs once per UseGroup member of every module"). So no
+# single fix drops this row's slope, which is exactly why it is ledgered rather than
+# left as a threshold to be widened later.
+#
+# CEILING 2.45 clears the measured r2=2.217 by ~10%, the same margin convention
+# `match:lower` used (4.00 against 3.640). Ir is deterministic, so the margin absorbs
+# source drift, not run noise. FIXED 2.10 sits above the 2.041-2.044 the five sibling
+# stages read in the SAME run — i.e. above where a genuinely linear `typecheck` lands —
+# and clearly below the observed 2.217, so it can neither false-promote nor fail to
+# promote a real fix.
+#
+# 🚦 THIS ROW REPLACES `test/diff_compiler_perf_scaling.sh`'s `modules` typecheck TIME
+# verdict as the arm of record for #1879. That arm sees the SAME curve (r1=2.21 r2=2.43
+# one run, r1~2.1 r2~2.67 the next) but sits on its climbing clause's trip point, so it
+# FLAPS; and that file's `modules` shape is outside the SHAPES loop and has no ledger
+# arm at all, so the only things available to it are widening or flooring, both of which
+# [W-QUIETER] forbids. It stays live and unwidened as a coarse second opinion; a red
+# there is diagnosed against THIS row.
+KNOWN_SLOW="
+modules:typecheck
+"
+KNOWN_CEIL_modules_typecheck="2.45";  KNOWN_FIXED_modules_typecheck="2.10"
 
 is_known() {
   [ -n "${STAGE_IR_NO_LEDGER:-}" ] && return 1
@@ -342,6 +629,146 @@ gen_vchain() {
   printf 'main = println g%s\n' "$((gn - 1))" >> "$gf"
 }
 
+# gen_constrained — #1017's own shape, new for this slice. `markVar`/`markInfix`
+# fall through to `contains x constrained`, a List-as-set scan against the pool of
+# constrained-signature function names (`Eq a => …`). N constrained functions,
+# each a EVar reference to the previous one (a chain, mirroring gen_xref), forces
+# a full `constrained`-pool scan at each of N call sites: pool grows with N AND
+# site count grows with N => O(N^2) pre-fix, O(N) (OrdMap membership) post-fix.
+# `x == x` in f0's body also exercises the (already OrdMap-backed, #953) `methods`
+# scan — inert here, kept only so f0 typechecks against `Eq`.
+#
+# DELIBERATE RED, observed pre-fix (S-frontend-list-as-set report §6.1, this
+# generator, this band): `mark` at N=300/600/1200 read
+# `** SUPERLINEAR (stage Ir) ** r1=3.337 r2=3.558 (threshold 3.0, both doublings)` —
+# i.e. this shape genuinely failed the gate before the fix. Fixed by commit
+# `6df20241` (S-frontend-list-as-set: converted marker's `constrained` from a
+# List-as-set scan to an `OrdMap Unit` membership set), after which the row reads
+# linear (see the S-frontend-list-as-set report's §6.2 post-fix table).
+gen_constrained() {
+  gn=$1; gf=$2; : > "$gf"
+  printf 'f0 : Eq a => a -> Bool\nf0 x = x == x\n' >> "$gf"
+  gi=1
+  while [ "$gi" -lt "$gn" ]; do
+    printf 'f%s : Eq a => a -> Bool\nf%s x = f%s x\n' "$gi" "$gi" "$((gi - 1))"
+    gi=$((gi + 1))
+  done >> "$gf"
+  printf 'main = println (if f%s 0 then 1 else 0)\n' "$((gn - 1))" >> "$gf"
+}
+
+# gen_wideiface — #1018's own shape, new for this slice. ONE interface with N
+# methods, each written as the parser's SPLIT entry pair (a signature line, `f :
+# T`, then a separate default-clause line, `f p = body`) — the exact shape
+# `mergeIfaceDefaults`/`mergeIfaceMethods`/`foldlMethods` coalesce back into one
+# `IfaceMethod` per name. Pre-fix, `insertMethod`'s `containsMethod` linear scan
+# (a miss on the signature-line insert, a hit-then-`mergeInto`-scan on the
+# default-line insert) is O(current acc size) per insert => O(N^2) over N
+# methods. This is DELIBERATELY not `gen_marksweep` (signature-only methods, no
+# split/default lines — never exercises `mergeInto`) — see the packet's own
+# note that `gen_marksweep` triple-blinds #1018 on the OLD (TIME/ALLOC/OP) arms
+# without ever reaching this merge path with a duplicate-name insert.
+#
+# DELIBERATE RED, observed pre-fix (S-frontend-list-as-set report §6.1, this
+# generator, this band): `desugar` at N=125/250/500 read
+# `** SUPERLINEAR (stage Ir) ** r1=3.680 r2=3.973 (threshold 3.0, both doublings)` —
+# this shape genuinely failed the gate before the fix. Fixed by commit `6df20241`
+# (S-frontend-list-as-set: converted `mergeIfaceDefaults`/`mergeIfaceMethods`'s
+# `insertMethod`/`containsMethod` linear scan off List-as-set), after which the
+# row reads linear (see the S-frontend-list-as-set report's §6.2 post-fix table).
+gen_wideiface() {
+  gn=$1; gf=$2; : > "$gf"
+  printf 'interface Wide a where\n' >> "$gf"
+  gi=0
+  while [ "$gi" -lt "$gn" ]; do
+    printf '  m%s : a -> a\n  m%s x = x\n' "$gi" "$gi"
+    gi=$((gi + 1))
+  done >> "$gf"
+  printf 'main = println 1\n' >> "$gf"
+}
+
+# gen_modules / gen_mod_records — the DIRECTORY-shaped shape, transcribed verbatim
+# from test/diff_compiler_perf_scaling.sh (same [T-SHARED-CORPUS] rule as the three
+# above: a gate's generators live in the gate, never in a shared fixture dir, and
+# never `source`d out of another gate). N modules chained by `export import`
+# (m0 <- m1 <- ... <- m{N-1} <- entry), each declaring MOD_K data types + MOD_K
+# impls of a re-exported interface `Widget`, MOD_R short-form records over MOD_F
+# SHARED field names, and exercising every one of its impls in a local `use` value.
+#
+# ⚠️ THE FIXTURE MUST RESOLVE 0-DIAGNOSTIC, or this arm measures a different
+# mechanism. markModules/checkModules do not run frontend.resolve's result, so a
+# resolve-BROKEN corpus still grows with N — but that growth can be the compiler
+# re-failing to bind the same unresolved names once per module, NOT the accumulated-
+# universe rescan. Three properties are load-bearing and were each reproduced with
+# `medaka check` when perf_scaling's copy was written: `export import` (a plain
+# import does not re-export), `public export data` (a plain `export data` is
+# abstract, so the CONSTRUCTOR is not exported), and importing the interface METHOD
+# `wval` so dispatch has something to dispatch on. Change any of them and re-verify
+# 0 diagnostics before trusting a single ratio below.
+#
+# Why K>1 and why IMPLS: a plain function chain scales LINEARLY here — the
+# accumulated universe these passes rescan is impl/interface/data decls, not plain
+# bindings. Why MOD_R x MOD_F: every module sharing FIELD NAMES is what makes
+# fieldOwnersRef[f<j>] grow to N*MOD_R owners; without records that whole path
+# short-circuits on an empty list and a real 5.6x defect reads as `ok`.
+gen_mod_records() {
+  _i=$1
+  _j=0
+  while [ "$_j" -lt "$MOD_R" ]; do
+    printf 'public export data R%s_%s = {' "$_i" "$_j"
+    _f=0
+    while [ "$_f" -lt "$MOD_F" ]; do
+      [ "$_f" -gt 0 ] && printf ','
+      printf ' f%s : Int' "$_f"
+      _f=$((_f+1))
+    done
+    printf ' }\n'
+    _j=$((_j+1))
+  done
+  printf 'export mkr%s : R%s_0\nmkr%s = R%s_0 {' "$_i" "$_i" "$_i" "$_i"
+  _f=0
+  while [ "$_f" -lt "$MOD_F" ]; do
+    [ "$_f" -gt 0 ] && printf ','
+    printf ' f%s = 0' "$_f"
+    _f=$((_f+1))
+  done
+  printf ' }\nexport rv%s : Int\nrv%s = mkr%s.f0\n' "$_i" "$_i" "$_i"
+}
+
+gen_modules() {
+  n=$1; dir=$2; k=$3
+  rm -rf "$dir"; mkdir -p "$dir"
+  {
+    printf 'export interface Widget a where\n  wval : a -> Int\n\n'
+    j=0; while [ "$j" -lt "$k" ]; do
+      printf 'public export data T0_%s = T0_%s\nexport impl Widget T0_%s where\n  wval _ = %s\n' "$j" "$j" "$j" "$j"
+      j=$((j+1))
+    done
+    gen_mod_records 0
+    printf 'export use0 : Int\nuse0 = '
+    j=0; while [ "$j" -lt "$k" ]; do [ "$j" -gt 0 ] && printf ' + '; printf 'wval T0_%s' "$j"; j=$((j+1)); done
+    printf '\n'
+  } > "$dir/m0.mdk"
+  i=1
+  while [ "$i" -lt "$n" ]; do
+    prev=$((i - 1))
+    {
+      printf 'export import m%s.{Widget(..), wval}\n' "$prev"
+      j=0; while [ "$j" -lt "$k" ]; do
+        printf 'public export data T%s_%s = T%s_%s\nexport impl Widget T%s_%s where\n  wval _ = %s\n' \
+          "$i" "$j" "$i" "$j" "$i" "$j" "$j"
+        j=$((j+1))
+      done
+      gen_mod_records "$i"
+      printf 'export use%s : Int\nuse%s = ' "$i" "$i"
+      j=0; while [ "$j" -lt "$k" ]; do [ "$j" -gt 0 ] && printf ' + '; printf 'wval T%s_%s' "$i" "$j"; j=$((j+1)); done
+      printf '\n'
+    } > "$dir/m$i.mdk"
+    i=$((i+1))
+  done
+  top=$((n - 1))
+  printf 'import m%s.{Widget(..), wval, T%s_0(..)}\nmain = println (wval T%s_0)\n' "$top" "$top" "$top" > "$dir/entry.mdk"
+}
+
 # ── measurement ──────────────────────────────────────────────────────────────
 
 # Run the profiler once under callgrind and cache the annotate output for this
@@ -364,6 +791,38 @@ run_profile() {
   # receipt: it is emitted last, after every stage.
   if [ "$_rc" -ne 0 ] || ! grep -q '^\[perf\] total' "$WORK/prof.err"; then
     echo "FAIL: profile_main did not complete on $2 (exit $_rc, no [perf] total row)."
+    sed 's/^/  /' "$WORK/prof.err" | tail -20
+    return 1
+  fi
+  callgrind_annotate --inclusive=yes --threshold=100 "$_out" > "$WORK/ann_$1.txt" 2>/dev/null || {
+    echo "FAIL: callgrind_annotate produced nothing for $2."
+    return 1
+  }
+  return 0
+}
+
+# The DIRECTORY-shaped sibling of run_profile. It is a sibling and not a flag on
+# run_profile deliberately: profile_modules_main takes FOUR positional arguments
+# (runtime, core, ENTRY FILE, ROOT DIR) where profile_main takes three, and the
+# whole `gen_$shape N FILE` / `run_profile TAG FILE` calling convention above is
+# file-shaped. Parameterising it would mean a driver-dispatch refactor of
+# grade_shape for one caller; two small functions that each say what they do are
+# cheaper to read and cannot silently pass a directory where a file was meant.
+# The argv shape is the same one diff_compiler_perf_scaling.sh:1183,1289 already
+# uses. Everything else — the heap pin, the unset MEDAKA_PERF_WASM, the
+# `[perf] total` completion receipt, the annotate invocation — is IDENTICAL to
+# run_profile and must stay that way; see those blocks for why each is there.
+run_profile_modules() {
+  _out="$WORK/cg_$1.out"
+  unset MEDAKA_PERF_WASM
+  MEDAKA_PERF=1 GC_INITIAL_HEAP_SIZE="$IR_HEAP" \
+  valgrind --tool=callgrind --cache-sim=no --branch-sim=no \
+    --callgrind-out-file="$_out" \
+    "$PROFILE_MODULES" "$RUNTIME" "$CORE" "$2/entry.mdk" "$2" \
+    >"$WORK/prof.out" 2>"$WORK/prof.err"
+  _rc=$?
+  if [ "$_rc" -ne 0 ] || ! grep -q '^\[perf\] total' "$WORK/prof.err"; then
+    echo "FAIL: profile_modules_main did not complete on $2 (exit $_rc, no [perf] total row)."
     sed 's/^/  /' "$WORK/prof.err" | tail -20
     return 1
   fi
@@ -416,7 +875,7 @@ grade_shape() {
     d1=$((v1 - f0)); d2=$((v2 - f0)); d3=$((v3 - f0))
     min_net="$(awk -v f="$f0" -v p="$MIN_NET_FRAC" 'BEGIN{printf "%d", f*p}')"
     if [ "$d1" -le "$min_net" ]; then
-      printf '  %-7s SKIP — net at N=%s (%s) under the netting guard (%s of floor %s)\n' \
+      printf '  %-9s SKIP — net at N=%s (%s) under the netting guard (%s of floor %s)\n' \
         "$st" "$n1" "$d1" "$min_net" "$f0"
       continue
     fi
@@ -424,7 +883,7 @@ grade_shape() {
     r1="$(awk -v a="$d1" -v b="$d2" 'BEGIN{printf "%.3f", b/a}')"
     r2="$(awk -v a="$d2" -v b="$d3" 'BEGIN{printf "%.3f", b/a}')"
     over="$(awk -v x="$r1" -v y="$r2" -v t="$THRESH" 'BEGIN{print (x>t && y>t) ? "yes" : "no"}')"
-    printf '  %-7s net %s -> %s -> %s\n' "$st" "$d1" "$d2" "$d3"
+    printf '  %-9s net %s -> %s -> %s\n' "$st" "$d1" "$d2" "$d3"
     if is_known "${shape}:${st}"; then
       lk="$(printf '%s_%s' "$shape" "$st" | tr -c 'a-zA-Z0-9_' '_')"
       eval "ceil=\${KNOWN_CEIL_$lk}"
@@ -432,22 +891,22 @@ grade_shape() {
       worse="$(awk -v r="$r2" -v c="$ceil" 'BEGIN{print (r > c) ? 1 : 0}')"
       better="$(awk -v r="$r2" -v f="$fixed" 'BEGIN{print (r < f) ? 1 : 0}')"
       if [ "$worse" = "1" ]; then
-        printf '  %-7s ** KNOWN-SLOW, AND GOT WORSE ** r1=%s r2=%s (ceiling %s)\n' "$st" "$r1" "$r2" "$ceil"
+        printf '  %-9s ** KNOWN-SLOW, AND GOT WORSE ** r1=%s r2=%s (ceiling %s)\n' "$st" "$r1" "$r2" "$ceil"
         fail=$((fail + 1))
       elif [ "$better" = "1" ]; then
-        printf '  %-7s ** PROMOTE: now scales LINEARLY ** r2=%s (< %s)\n' "$st" "$r2" "$fixed"
+        printf '  %-9s ** PROMOTE: now scales LINEARLY ** r2=%s (< %s)\n' "$st" "$r2" "$fixed"
         printf '          Remove "%s:%s" from KNOWN_SLOW — the quadratic is FIXED.\n' "$shape" "$st"
         fail=$((fail + 1))
       else
-        printf '  %-7s known-slow r1=%s r2=%s (ceiling %s) — ledgered, see the header\n' "$st" "$r1" "$r2" "$ceil"
+        printf '  %-9s known-slow r1=%s r2=%s (ceiling %s) — ledgered, see the header\n' "$st" "$r1" "$r2" "$ceil"
         known=$((known + 1))
       fi
     elif [ "$over" = "yes" ]; then
-      printf '  %-7s ** SUPERLINEAR (stage Ir) ** r1=%s r2=%s (threshold %s, both doublings)\n' \
+      printf '  %-9s ** SUPERLINEAR (stage Ir) ** r1=%s r2=%s (threshold %s, both doublings)\n' \
         "$st" "$r1" "$r2" "$THRESH"
       fail=$((fail + 1))
     else
-      printf '  %-7s ok   r1=%s r2=%s (threshold %s)\n' "$st" "$r1" "$r2" "$THRESH"
+      printf '  %-9s ok   r1=%s r2=%s (threshold %s)\n' "$st" "$r1" "$r2" "$THRESH"
     fi
   done
 
@@ -461,14 +920,86 @@ grade_shape() {
   return 0
 }
 
+# grade_modules — grade_shape's multi-module twin. Same netting rule, same
+# MIN_NET_FRAC guard, same 3.0 threshold, same ledger, same `graded`/`fail`
+# counters, same zero-graded hard FAIL. It is a separate function rather than a
+# mode on grade_shape because the two calling conventions genuinely differ (see
+# run_profile_modules) — NOT because the grading differs. If you change the
+# grading rule in one, change it in the other; they are a lockstep pair.
+grade_modules() {
+  mdn1="$MOD_N"; mdn2=$((MOD_N * 2)); mdn4=$((MOD_N * 4))
+  mod_graded=0
+
+  echo "── modules (N=$MOD_FLOOR_N floor, $mdn1/$mdn2/$mdn4 modules, K=$MOD_K impls each) ──"
+  for mdm in "$MOD_FLOOR_N" "$mdn1" "$mdn2" "$mdn4"; do
+    gen_modules "$mdm" "$WORK/modules_$mdm" "$MOD_K" || { fail=$((fail + 1)); return 1; }
+    run_profile_modules "modules_$mdm" "$WORK/modules_$mdm" || { fail=$((fail + 1)); return 1; }
+  done
+
+  for mdpair in $MOD_SYMS; do
+    mdst="${mdpair%%=*}"; mdsym="${mdpair#*=}"
+    mdf0="$(stage_ir "modules_$MOD_FLOOR_N" "$mdsym")" || { fail=$((fail + 1)); return 1; }
+    mdv1="$(stage_ir "modules_$mdn1" "$mdsym")" || { fail=$((fail + 1)); return 1; }
+    mdv2="$(stage_ir "modules_$mdn2" "$mdsym")" || { fail=$((fail + 1)); return 1; }
+    mdv3="$(stage_ir "modules_$mdn4" "$mdsym")" || { fail=$((fail + 1)); return 1; }
+    mdd1=$((mdv1 - mdf0)); mdd2=$((mdv2 - mdf0)); mdd3=$((mdv3 - mdf0))
+    mdmin="$(awk -v f="$mdf0" -v p="$MIN_NET_FRAC" 'BEGIN{printf "%d", f*p}')"
+    if [ "$mdd1" -le "$mdmin" ]; then
+      printf '  %-9s SKIP — net at N=%s (%s) under the netting guard (%s of floor %s)\n' \
+        "$mdst" "$mdn1" "$mdd1" "$mdmin" "$mdf0"
+      continue
+    fi
+    mod_graded=$((mod_graded + 1)); graded=$((graded + 1))
+    mdr1="$(awk -v a="$mdd1" -v b="$mdd2" 'BEGIN{printf "%.3f", b/a}')"
+    mdr2="$(awk -v a="$mdd2" -v b="$mdd3" 'BEGIN{printf "%.3f", b/a}')"
+    mdover="$(awk -v x="$mdr1" -v y="$mdr2" -v t="$THRESH" 'BEGIN{print (x>t && y>t) ? "yes" : "no"}')"
+    printf '  %-9s net %s -> %s -> %s\n' "$mdst" "$mdd1" "$mdd2" "$mdd3"
+    if is_known "modules:${mdst}"; then
+      mdlk="$(printf 'modules_%s' "$mdst" | tr -c 'a-zA-Z0-9_' '_')"
+      eval "ceil=\${KNOWN_CEIL_$mdlk}"
+      eval "fixed=\${KNOWN_FIXED_$mdlk}"
+      mdworse="$(awk -v r="$mdr2" -v c="$ceil" 'BEGIN{print (r > c) ? 1 : 0}')"
+      mdbetter="$(awk -v r="$mdr2" -v f="$fixed" 'BEGIN{print (r < f) ? 1 : 0}')"
+      if [ "$mdworse" = "1" ]; then
+        printf '  %-9s ** KNOWN-SLOW, AND GOT WORSE ** r1=%s r2=%s (ceiling %s)\n' "$mdst" "$mdr1" "$mdr2" "$ceil"
+        fail=$((fail + 1))
+      elif [ "$mdbetter" = "1" ]; then
+        printf '  %-9s ** PROMOTE: now scales LINEARLY ** r2=%s (< %s)\n' "$mdst" "$mdr2" "$fixed"
+        printf '          Remove "modules:%s" from KNOWN_SLOW — the quadratic is FIXED.\n' "$mdst"
+        fail=$((fail + 1))
+      else
+        printf '  %-9s known-slow r1=%s r2=%s (ceiling %s) — ledgered, see the header\n' "$mdst" "$mdr1" "$mdr2" "$ceil"
+        known=$((known + 1))
+      fi
+    elif [ "$mdover" = "yes" ]; then
+      printf '  %-9s ** SUPERLINEAR (stage Ir) ** r1=%s r2=%s (threshold %s, both doublings)\n' \
+        "$mdst" "$mdr1" "$mdr2" "$THRESH"
+      fail=$((fail + 1))
+    else
+      printf '  %-9s ok   r1=%s r2=%s (threshold %s)\n' "$mdst" "$mdr1" "$mdr2" "$THRESH"
+    fi
+  done
+
+  if [ "$mod_graded" -eq 0 ]; then
+    printf 'FAIL modules: graded ZERO stages — the band is mis-sized and this shape proved nothing.\n'
+    fail=$((fail + 1))
+  fi
+  echo
+  return 0
+}
+
 echo "── per-stage Ir scaling (Callgrind, inclusive, net of a per-shape floor) ──"
 echo "profiler: $PROFILE"
+echo "profiler (multi-module): $PROFILE_MODULES"
 valgrind --version
 echo
 
 grade_shape match "$MATCH_N"
 grade_shape xref "$XREF_N"
 grade_shape vchain "$VCHAIN_N"
+grade_shape constrained "$CONSTR_N"
+grade_shape wideiface "$WIDEIFACE_N"
+grade_modules
 
 if [ "$graded" -eq 0 ]; then
   echo "FAIL: no stage was graded — this gate proved nothing."
