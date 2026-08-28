@@ -259,16 +259,33 @@ if [ ! -x "$PROFILE_MODULES" ]; then
   exit 2
 fi
 
-if ! command -v valgrind >/dev/null 2>&1; then
-  echo "SKIP: valgrind not on PATH — this gate measures Callgrind instruction counts."
+# ── #2065: A TOOLCHAIN SKIP IS ONLY LEGITIMATE OFF CI. ──────────────────────
+# Identical in force to the guard in test/diff_compiler_ir_scaling.sh — read the long
+# note there. In short: the setup action installs valgrind, so reaching this branch on a
+# runner means the install stopped happening, and the SKIP would be laundered into an
+# opt-in skip by run_gates.sh's LEGIT_SKIP_RE, greening a shard that graded nothing.
+# exit 1 (not 2) so no skip classifier can reinterpret the verdict.
+# OBSERVED RED, 2026-08-28, both arms, via a PATH stripped of valgrind — the full recipe
+# and the verbatim outputs are recorded once, in diff_compiler_ir_scaling.sh's copy of
+# this guard. Here: CI unset -> exit 2 SKIP; CI=true -> exit 1 FAIL, for BOTH valgrind
+# and callgrind_annotate.
+need_valgrind() {   # $1 = tool name, $2 = what it measures
+  command -v "$1" >/dev/null 2>&1 && return 0
+  if [ -n "${CI:-}" ]; then
+    echo "FAIL: $1 is not on PATH, and this is CI."
+    echo "  This gate measures $2; without $1 it grades NOTHING. On a dev box that is a"
+    echo "  legitimate skip; on a runner it means the valgrind install in"
+    echo "  .github/actions/setup-medaka stopped happening and this arm has silently gone"
+    echo "  dark (#2065). Fix the install, not this check."
+    exit 1
+  fi
+  echo "SKIP: $1 not on PATH — this gate measures $2."
+  echo "  (A skip is only legitimate OFF CI — see the #2065 note in this file.)"
   echo "  Debian/Ubuntu: sudo apt-get install -y valgrind"
   exit 2
-fi
-if ! command -v callgrind_annotate >/dev/null 2>&1; then
-  echo "SKIP: callgrind_annotate not on PATH — it ships with valgrind."
-  echo "  Debian/Ubuntu: sudo apt-get install -y valgrind"
-  exit 2
-fi
+}
+need_valgrind valgrind "Callgrind instruction counts"
+need_valgrind callgrind_annotate "Callgrind instruction counts (it ships with valgrind)"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -580,9 +597,57 @@ modules:typecheck
 "
 KNOWN_CEIL_modules_typecheck="2.45";  KNOWN_FIXED_modules_typecheck="2.10"
 
+# ── OBSERVED RED (#2160 rule 1) ──────────────────────────────────────────────
+#
+# #2150's defect here: a LEDGERED row that falls under the netting guard used to
+# print `SKIP` and `continue` BEFORE the ledger was consulted, so a ledger row
+# whose quadratic had been fixed drained in silence behind a green gate. The
+# ledger check now runs first in BOTH grade_shape and grade_modules (they are a
+# lockstep pair — see grade_modules' header).
+#
+# Driven red on this box, 2026-08-28, via the add-only STAGE_IR_LEDGER_EXTRA seam
+# plus a netting guard raised until a real row falls under it. Verbatim:
+#
+#   $ STAGE_IR_MIN_NET_FRAC=0.99 STAGE_IR_LEDGER_EXTRA="xref:emit" \
+#       sh test/diff_compiler_stage_ir_scaling.sh
+#   ## LEDGER INJECTION ACTIVE (+[xref:emit]) — this run's verdicts …
+#   emit  ** PROMOTE: ledgered, but now under the netting guard ** \
+#         net 56368320 at N=125 (<= 584439189 of floor 590342616)
+#   FAIL: 13 stage-ratio(s) graded, 2 over the line.
+#   injected exit=1
+#
+# Before the fix the same row printed
+#   emit  SKIP — net at N=125 (56368320) under the netting guard (…)
+# and contributed nothing to the exit code.
+#
+# ⚠️ HONEST LIMIT OF THAT RECORD: it exercises grade_shape. The grade_modules
+# twin was NOT observed red — at STAGE_IR_MIN_NET_FRAC=0.99 the only ledgered
+# modules row (modules:typecheck, net 392697537 at N=25) still cleared its own
+# guard and graded normally (`known-slow r1=2.192 r2=2.219`), so the branch was
+# never entered. The two functions carry byte-identical guard logic and the
+# header above requires they be changed together, but "identical to an arm that
+# was observed" is weaker evidence than an observation. Reaching it needs a frac
+# above ~1.0 against that row's own floor; left for phase 2's sweep rather than
+# spent on another ~615 s run here.
+
+# STAGE_IR_LEDGER_EXTRA: the add-only DELIBERATE-RED SEAM (#2150), the mirror of the
+# existing STAGE_IR_NO_LEDGER. The netting-guard PROMOTE branches below only run when a
+# row is BOTH ledgered AND under the guard, and KNOWN_SLOW holds exactly one row — in
+# grade_modules, none in the SHAPES loop — so grade_shape's half is otherwise
+# unobservable. Add-only (it cannot silence a real row), default-empty, set nowhere in
+# this tree (derive: `grep -rn STAGE_IR_LEDGER_EXTRA .github test Makefile`), and
+# announced loudly on any run that uses it.
+STAGE_IR_LEDGER_EXTRA="${STAGE_IR_LEDGER_EXTRA:-}"
+if [ -n "$STAGE_IR_LEDGER_EXTRA" ]; then
+  echo "############################################################################"
+  echo "## LEDGER INJECTION ACTIVE (+[$STAGE_IR_LEDGER_EXTRA]) — this run's verdicts"
+  echo "## are NOT a grading result. Only for observing the ledger branches red.   ##"
+  echo "############################################################################"
+fi
+
 is_known() {
   [ -n "${STAGE_IR_NO_LEDGER:-}" ] && return 1
-  for _k in $KNOWN_SLOW; do [ "$_k" = "$1" ] && return 0; done
+  for _k in $KNOWN_SLOW $STAGE_IR_LEDGER_EXTRA; do [ "$_k" = "$1" ] && return 0; done
   return 1
 }
 
@@ -875,6 +940,20 @@ grade_shape() {
     d1=$((v1 - f0)); d2=$((v2 - f0)); d3=$((v3 - f0))
     min_net="$(awk -v f="$f0" -v p="$MIN_NET_FRAC" 'BEGIN{printf "%d", f*p}')"
     if [ "$d1" -le "$min_net" ]; then
+      # ⚠️ A LEDGERED ROW MAY NOT SKIP HERE (#2150). For an unledgered row the netting
+      # guard is right: the shape is doing too little work at this N to yield a ratio, so
+      # decline. But a KNOWN_SLOW entry ASSERTS this row is superlinear, and "too small to
+      # net" contradicts that assertion — the likeliest cause is the ledgered quadratic
+      # having been fixed. Skipping silently means nobody is ever told to drain the row,
+      # so it rots in the ledger forever behind a green gate. Loud, or it is a skip-list.
+      if is_known "${shape}:${st}"; then
+        printf '  %-9s ** PROMOTE: ledgered, but now under the netting guard ** net %s at N=%s (<= %s of floor %s)\n' \
+          "$st" "$d1" "$n1" "$min_net" "$f0"
+        printf '          Remove "%s:%s" from KNOWN_SLOW — the quadratic is FIXED — or raise the band.\n' "$shape" "$st"
+        printf '          It may NOT stay ledgered AND ungraded.\n'
+        fail=$((fail + 1))
+        continue
+      fi
       printf '  %-9s SKIP — net at N=%s (%s) under the netting guard (%s of floor %s)\n' \
         "$st" "$n1" "$d1" "$min_net" "$f0"
       continue
@@ -886,8 +965,13 @@ grade_shape() {
     printf '  %-9s net %s -> %s -> %s\n' "$st" "$d1" "$d2" "$d3"
     if is_known "${shape}:${st}"; then
       lk="$(printf '%s_%s' "$shape" "$st" | tr -c 'a-zA-Z0-9_' '_')"
-      eval "ceil=\${KNOWN_CEIL_$lk}"
-      eval "fixed=\${KNOWN_FIXED_$lk}"
+      eval "ceil=\${KNOWN_CEIL_$lk:-}"
+      eval "fixed=\${KNOWN_FIXED_$lk:-}"
+      if [ -z "$ceil" ] || [ -z "$fixed" ]; then
+        printf '  %-9s ** MALFORMED LEDGER ROW ** "%s" has no KNOWN_CEIL/KNOWN_FIXED pair.\n' "$st" "${shape}:${st}"
+        echo "          A ledger row without both halves cannot drain itself — that is a skip-list, not a pin."
+        fail=$((fail + 1)); continue
+      fi
       worse="$(awk -v r="$r2" -v c="$ceil" 'BEGIN{print (r > c) ? 1 : 0}')"
       better="$(awk -v r="$r2" -v f="$fixed" 'BEGIN{print (r < f) ? 1 : 0}')"
       if [ "$worse" = "1" ]; then
@@ -945,6 +1029,18 @@ grade_modules() {
     mdd1=$((mdv1 - mdf0)); mdd2=$((mdv2 - mdf0)); mdd3=$((mdv3 - mdf0))
     mdmin="$(awk -v f="$mdf0" -v p="$MIN_NET_FRAC" 'BEGIN{printf "%d", f*p}')"
     if [ "$mdd1" -le "$mdmin" ]; then
+      # LOCKSTEP with grade_shape's netting guard above — see the #2150 note there.
+      # A ledgered row that falls under the guard is a DRAIN CLAIM, not an absence of
+      # signal, and must be loud. These two functions are a lockstep pair by contract
+      # (see grade_modules' header): change the rule in one, change it in the other.
+      if is_known "modules:${mdst}"; then
+        printf '  %-9s ** PROMOTE: ledgered, but now under the netting guard ** net %s at N=%s (<= %s of floor %s)\n' \
+          "$mdst" "$mdd1" "$mdn1" "$mdmin" "$mdf0"
+        printf '          Remove "modules:%s" from KNOWN_SLOW — the quadratic is FIXED — or raise the band.\n' "$mdst"
+        printf '          It may NOT stay ledgered AND ungraded.\n'
+        fail=$((fail + 1))
+        continue
+      fi
       printf '  %-9s SKIP — net at N=%s (%s) under the netting guard (%s of floor %s)\n' \
         "$mdst" "$mdn1" "$mdd1" "$mdmin" "$mdf0"
       continue
@@ -956,8 +1052,13 @@ grade_modules() {
     printf '  %-9s net %s -> %s -> %s\n' "$mdst" "$mdd1" "$mdd2" "$mdd3"
     if is_known "modules:${mdst}"; then
       mdlk="$(printf 'modules_%s' "$mdst" | tr -c 'a-zA-Z0-9_' '_')"
-      eval "ceil=\${KNOWN_CEIL_$mdlk}"
-      eval "fixed=\${KNOWN_FIXED_$mdlk}"
+      eval "ceil=\${KNOWN_CEIL_$mdlk:-}"
+      eval "fixed=\${KNOWN_FIXED_$mdlk:-}"
+      if [ -z "$ceil" ] || [ -z "$fixed" ]; then
+        printf '  %-9s ** MALFORMED LEDGER ROW ** "%s" has no KNOWN_CEIL/KNOWN_FIXED pair.\n' "$mdst" "modules:${mdst}"
+        echo "          A ledger row without both halves cannot drain itself — that is a skip-list, not a pin."
+        fail=$((fail + 1)); continue
+      fi
       mdworse="$(awk -v r="$mdr2" -v c="$ceil" 'BEGIN{print (r > c) ? 1 : 0}')"
       mdbetter="$(awk -v r="$mdr2" -v f="$fixed" 'BEGIN{print (r < f) ? 1 : 0}')"
       if [ "$mdworse" = "1" ]; then

@@ -796,10 +796,22 @@ jobs:
       # since clang still compiles this shard's oracles.
       #
       # valgrind is the same story one gate over: it is the MEASUREMENT TOOL for
-      # `diff_compiler_ir_scaling` (#2045), and that gate SKIPS rather than fails
-      # without it — so an uninstalled valgrind would read as a quiet
-      # non-measurement, not as a red. Installed on every shard for the same
-      # cost-not-theme reason as sqlite3 above.
+      # `diff_compiler_ir_scaling` (#2045) and `diff_compiler_stage_ir_scaling`.
+      # Installed on every shard for the same cost-not-theme reason as sqlite3
+      # above. ⚠️ This used to add "and that gate SKIPS rather than fails without
+      # it — so an uninstalled valgrind would read as a quiet non-measurement, not
+      # as a red." That WAS true and WAS the hole (#2065): the skip text matched
+      # run_gates.sh's LEGIT_SKIP_RE, so a shard that graded no `Ir` at all went
+      # green. Both gates now HARD FAIL (exit 1) when valgrind is missing AND `CI`
+      # is set, and skip only off CI. So dropping this input no longer goes quiet —
+      # it reddens the shard that runs either gate, which is the point. Keep it
+      # installed everywhere anyway. ⚠️ "reddens EVERY gates shard" would be
+      # wrong, and wrong in the direction this PR is about: only the shards whose
+      # `pattern:` actually matches one of the two gates can go red. Today that is
+      # `sqlite` (diff_compiler_ir_scaling, :540) and `types`
+      # (diff_compiler_stage_ir_scaling, :595) — DERIVE it, do not trust this
+      # sentence, because [W-SHARD-COST] moves gates between shards by cost:
+      #   grep -n 'ir_scaling' .github/workflows/ci.yml
       - name: Setup medaka (toolchain + wasm arm + downloaded binary)
         if: steps.plan.outputs.has_work == 'true'
         uses: ./.github/actions/setup-medaka

@@ -52,6 +52,15 @@ trap 'rm -rf "$RESULTDIR"' EXIT
 # genuinely-absent piece of the platform toolchain. Every other exit-2 (a
 # missing test/bin/* oracle, a missing ./medaka, a missing golden/fixture) means
 # the gate never actually compared anything — reclassified as FAIL below.
+#
+# ⚠️ THIS REGEX IS A LAUNDERER, and a gate must not rely on it alone (#2065). It matches
+# on a MESSAGE STRING, so any gate whose toolchain vanishes IN CI gets its silence
+# blessed here: `diff_compiler_ir_scaling` did exactly that — valgrind absent, "not on
+# PATH" printed, exit 2 reclassified to a legitimate SKIP, shard green, `Ir` scaling
+# ungraded, no red anywhere. The repair is at the GATE, not here: both Ir gates now
+# exit 1 (which no classifier can reinterpret) when their tool is missing and `CI` is
+# set, and skip only off CI. Any new gate guarding on a toolchain owes the same split —
+# a skip is a dev-box convenience, never a CI verdict.
 LEGIT_SKIP_RE='no C compiler|libgc \(bdw-gc\)|not on PATH'
 
 # ── A gate is identified by its PATH, not its basename ────────────────────────
