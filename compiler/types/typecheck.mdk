@@ -35865,12 +35865,16 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- the separate `medaka_emitter` process share, so an extern head stamped here
   -- and not there would be a fresh check≠build divergence.
   let runtimeSeed = externSchemes (externTyOriginScope coreDecls) runtimeDecls
+  -- #2153: core's own prepass takes the shadow map filtered to what is nameable IN CORE —
+  -- the prelude unit's copy of the per-module filter `prePassModulePairArg` applies to
+  -- every other unit.  See `coreShadowMapFor`.
+  let coreShadowMap = coreShadowMapFor coreDecls driverState.value.mangledShadowMapRef.value
   -- FIRST SWEEP (bare-dict): the real per-module elaboration, harvesting each module's
   -- direct promotions (registerInferredConstraints → promotedRef, unioned per module by
   -- elabHarvestWorker).  On a program that promotes NOTHING — every compiler self-compile
   -- and any promotion-free program — the harvest is empty and this sweep's stamped trees
   -- are already correct, saving the whole discovery typecheck (the ~20% front-end win).
-  let core2a = prePassDictArg markRpNames dictNames0 argNames driverState.value.mangledShadowMapRef.value coreDecls
+  let core2a = prePassDictArg markRpNames dictNames0 argNames coreShadowMap coreDecls
   let modules2a = map (prePassModulePairArg markSharedNames graphShadowNames dictNames0 argNames driverState.value.mangledShadowMapRef.value) modules
   driverState.value.promotionHarvestRef := []
   let coreSchemesA = elabModuleStamp "" runtimeSeed [] core2a core2a
@@ -35918,7 +35922,7 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
       -- `run` dies downstream with a type-confused value (the Phase-134 shape).
       let dictNames = dedup (bareDictNames
         ++ aliasDictNames bareDictNames (("core", coreDecls)::modules) modules)
-      let core2 = prePassDictArg markRpNames dictNames argNames driverState.value.mangledShadowMapRef.value coreDecls
+      let core2 = prePassDictArg markRpNames dictNames argNames coreShadowMap coreDecls
       let modules2 = map (prePassModulePairArg markSharedNames graphShadowNames dictNames argNames driverState.value.mangledShadowMapRef.value) modules
       let coreSchemes = elabModuleStamp "" runtimeSeed [] core2 core2
       -- #154 PR-C: same as the bare sweep above — elabWorker reads accAll (impl universe,
@@ -36540,6 +36544,38 @@ prePassModulePairArg rpNames shadowNames dictNames argNames shadowMap (mid, prog
           shadowMap)
         prog,
     )
+
+-- ── #2153: S1's `nameable in M` for the PRELUDE unit ─────────────────────────
+-- `prePassModulePairArg` (above) filters the definer-shadow map at the CONSUMING module.
+-- `core` is the one unit that never goes through it: `elaborateModules` prepasses
+-- `coreDecls` with `prePassDictArg` directly, handing it the RAW graph-wide map.  That is
+-- fine for `rpNames`/`argNames` — they are BARE method names, and core's references to its
+-- own standalones are all mangled `core__<n>` by the time this runs, so neither set can
+-- match one (the P0-21 argument `elaborateModules` states at `markRpNames`).  It is NOT
+-- fine for the shadow map, which is keyed by exactly those mangled symbols.
+--
+-- 🚨 MEASURED (#2153): `computeMangledShadowMap` walks `("core", coreDecls)` against the
+-- GRAPH-WIDE method-name list, so a USER module declaring `interface Ifc c where not : …`
+-- mints `core__not ↦ not`.  `rewriteArgScoped`'s `sm` arm then rewrote CORE's OWN
+-- `core__not` occurrence (in `neq`, `notElem`, a core prop, …) to `EMethodAt "not"`, and
+-- core's env has no `not` — so `medaka build` died `E-PANIC: unbound method: not` on a
+-- program `check` and `run` both accept, and even on one that never mentions the method.
+-- That is the whole 22-name FAIL_BUILD class in `test/prelude_shadow_census.ledger`: a
+-- prelude standalone reaches this arm only when ANOTHER prelude decl references it, which
+-- is the very split `frontend/marker.mdk`'s `droppablePreludeFns` names (`clamp` yes,
+-- `count`/`find` no) — and it is why the fix `backend/private_mangle.mdk` landed for the
+-- module's OWN occurrences could not reach these: the surviving occurrence is core's.
+--
+-- The rule applied is S1's own: an interface method declared in a USER module is not
+-- nameable in `core`, so no `core.mdk` occurrence can be its shadow.  Same predicate and
+-- same fail-OPEN guard as the per-module filter above — sited beside it so the two stay
+-- auditable as a SET rather than as two independent answers to one question.
+coreShadowMapFor : List Decl -> List (String, String) -> List (String, String)
+coreShadowMapFor coreProg shadowMap
+  | omSize driverState.value.graphIfaceMethodsRef.value == 0 = shadowMap
+  | otherwise =
+    let nameable = nameableIfaceMethodSet coreProg
+    filterList (e => omHasKey (snd e) nameable) shadowMap
 
 -- ── #1684: S1's STANDALONE operand, at the OCCURRENCE spelling ───────────────
 -- The two filters above answer S1's INTERFACE operand (`nameable in M`) and nothing

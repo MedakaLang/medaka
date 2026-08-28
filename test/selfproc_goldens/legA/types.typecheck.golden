@@ -470,6 +470,7 @@ containsI : Int -> List Int -> Bool
 containsPair : (String, Int) -> List (String, Int) -> Bool
 containsRowKey : String -> List CeRow -> Bool
 containsVecObl : VecObl -> List VecObl -> Bool
+coreShadowMapFor : List Decl -> List (String, String) -> List (String, String)
 countInSubst : List Int -> List (Int, Mono) -> Int
 crossRun : Ref CrossRun
 cslotKey : CSlot -> String
