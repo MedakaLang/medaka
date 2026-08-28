@@ -86,7 +86,17 @@ expect_mutation_red() {
   new=$4
   witness=$5
   replace_once "$file" "$old" "$new"
-  if MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" run "$WORK/mutation-tree/pds/test/did_key_all_engines_main.mdk" "$CORPUS" > "$WORK/$id.out" 2>&1; then
+  # Native, not eval: these mutations are value/boolean-condition edits only,
+  # never type-changing, so a build failure would itself be the finding. Using
+  # the compiled binary instead of the tree-walking interpreter cuts each
+  # full-corpus secp256k1 mutation check from ~4 minutes to ~4 seconds
+  # (measured) — run/build share the typechecker and differ only in engine
+  # ([D-RUN-VS-BUILD]), so this witnesses the same panic just as validly.
+  MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/mutation-tree/pds/test/did_key_all_engines_main.mdk" -o "$WORK/$id.bin" > "$WORK/$id-build.log" 2>&1 || {
+    cat "$WORK/$id-build.log" >&2
+    fail "$id failed to build (mutation should only change runtime behavior)"
+  }
+  if "$WORK/$id.bin" "$CORPUS" > "$WORK/$id.out" 2>&1; then
     fail "$id unexpectedly passed"
   fi
   grep -F -q "$witness" "$WORK/$id.out" || {
