@@ -1,0 +1,44 @@
+-- HIGHER-KINDED HEAD concealment x write channel. Regression row for #2107
+-- (higher-kinded field head defaults PCo), closed by this sprint's slice 2
+-- (S-abstract-head-polarity).
+--
+-- The write channel is reached through a type parameter that is itself
+-- APPLIED: `data W f a = MkW (f a)` instantiated at `f = Ref`. The field type
+-- is `TyApp (TyVar "f") (TyVar "a")`, whose spine head is a `TyVar`, not a
+-- `TyCon` -- so before slice 2 the declaration-time polarity walk fell into
+-- its catch-all arm, walked both sides at UNCHANGED polarity, and recorded
+-- `W` as `[PCo, PCo]`. The outer `TApp` guard then read `PCo` at slot 1 and
+-- abstained, laundering the row exactly as the first-order `data Box a =
+-- MkBox (Ref a)` shape did before D-2.
+--
+-- EFFECTS-SEMANTICS.md §9 ("no direction of weakening is sound in general --
+-- only equality is") + §5 (no-laundering law). `callBox` below declares an
+-- EMPTY row and performs `<Stdout>` if this widening is accepted, so the row
+-- MUST be REJECTED.
+data W f a = MkW (f a)
+
+shout : Unit -> <Stdout> Unit
+shout u =
+  let _ = putStr "SMUGGLED "
+  ()
+
+pureFn : Unit -> Unit
+pureFn u = ()
+
+box : W Ref (Unit -> <> Unit)
+box = MkW (Ref pureFn)
+
+alias : W Ref (Unit -> <Stdout> Unit)
+alias = box
+
+writeIntoAlias : Unit -> Unit
+writeIntoAlias u = match alias
+  MkW r => r := shout
+
+callBox : Unit -> Unit
+callBox u = match box
+  MkW r => r.value ()
+
+main =
+  let _ = writeIntoAlias ()
+  println (callBox ())

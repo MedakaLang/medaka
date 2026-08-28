@@ -1,0 +1,45 @@
+-- WRITE-CHANNEL laundering at an ARGUMENT SITE. The REJECT twin of
+-- write-workaround-accept, and the reason #2109's fix could not be a
+-- location-based special case.
+--
+-- Slice 4 (S-write-narrowing-direction) measured that the safe narrowing
+-- (`Ref noop` into a `<Stdout>` slot) and the genuine #1098-shaped
+-- laundering (`idr box`, coercing an ALREADY-TYPED cell) reach
+-- `paramVarianceGuard` indistinguishably: the same two `Mono`s, the same
+-- rendered `<Stdout> vs <>` pair, and BOTH with the caret on an argument
+-- span. "Argument position implies fresh construction" is therefore false,
+-- and this row is the falsifier, kept live.
+--
+-- Here the widening runs in the LAUNDERING direction: `box` is a real cell
+-- typed `Ref (String -> <> Unit)`, coerced through the identity `idr` to a
+-- type claiming `<Stdout>`. Writing the genuinely effectful `shouty` through
+-- `alias` mutates the SAME cell `box` reads from, so `callBox` -- declared
+-- with an EMPTY row -- performs `<Stdout>`. EFFECTS-SEMANTICS.md §5 (no
+-- laundering) and §9: this MUST be REJECTED, at the same argument site shape
+-- where write-workaround-accept must be ACCEPTED.
+idr : Ref a -> Ref a
+idr r = r
+
+noop : String -> Unit
+noop s = ()
+
+shouty : String -> <Stdout> Unit
+shouty s =
+  let _ = putStr "SMUGGLED "
+  ()
+
+box : Ref (String -> <> Unit)
+box = Ref noop
+
+alias : Ref (String -> <Stdout> Unit)
+alias = idr box
+
+writeIntoAlias : Unit -> Unit
+writeIntoAlias u = alias := shouty
+
+callBox : Unit -> Unit
+callBox u = box.value "hi"
+
+main =
+  let _ = writeIntoAlias ()
+  println (callBox ())

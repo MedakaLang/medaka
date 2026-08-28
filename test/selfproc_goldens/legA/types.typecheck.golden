@@ -530,6 +530,9 @@ declEnvReachFrom : Map String (List String) -> List String -> Map String Unit ->
 declEnvReachGo : Map String (List String) -> List DeclEnvModule -> Map String (Map String Unit) -> Map String (Map String Unit)
 declEnvReachIndex : List DeclEnvModule -> Map String (Map String Unit)
 declEnvReachSeed : String -> Map String Unit
+declEnvRowAtomEntries : List Decl -> List (TabKey, List (List Atom))
+declEnvRowAtomsChain : List DeclEnvModule -> List (TabKey, List (List Atom)) -> Map String (List (TabKey, List (List Atom))) -> Map String (List (TabKey, List (List Atom)))
+declEnvRowAtomsEntries : Int -> DeclEnvModule -> List (TabKey, List (List Atom))
 declEnvRowKindEntries : Int -> DeclEnvModule -> List (TabKey, List Kind)
 declEnvRowPolarityEntries : Int -> DeclEnvModule -> List (TabKey, List Polarity) -> List (TabKey, List Polarity)
 declEnvRowVisible : Int -> DeclEnvModule -> List Decl
@@ -902,6 +905,7 @@ hasImportDefiner : String -> Bool
 hasKeySL2 : String -> List (String, List Int) -> Bool
 hasMethodLevelConstraint : List String -> Ty -> Bool
 headAnnotTy : Ty -> Mono
+headAtomsOr : List (List Atom) -> List Atom
 headBucketKey : Option HeadKey -> RegKey
 headKeyNameOr : String -> Option HeadKey -> String
 headL : List String -> String
@@ -1130,6 +1134,7 @@ inferOneIfaceDefaults : TcEnv -> Decl -> Unit
 inferOneImpl : TcEnv -> List Decl -> List String -> Decl -> Unit
 inferParamKinds : List String -> List Variant -> List Kind
 inferParamPolarities : List (TabKey, List Polarity) -> List String -> List Variant -> List Polarity
+inferParamRowAtoms : List String -> List Variant -> List (List Atom)
 inferPat : TcEnv -> Pat -> (Mono, List (String, Scheme))
 inferPatAs : TcEnv -> String -> Pat -> (Mono, List (String, Scheme))
 inferPatCon : TcEnv -> String -> List Pat -> (Mono, List (String, Scheme))
@@ -1195,6 +1200,7 @@ instantiateSigTracked : Ty -> (Mono, List (String, Mono))
 instantiateTracked : Scheme -> (Mono, List (Int, Mono))
 instantiateVarTrackedId : String -> Int -> Scheme -> Mono
 intercalateComma : List String -> String
+intersectDeclAtoms : List (List Atom) -> List Atom
 ioAliasLabels : List String
 isArithBinop : String -> Bool
 isBareTyvarMono : Mono -> Bool
@@ -1239,6 +1245,7 @@ kindName : Kind -> String
 kindPublicDataDecl : Decl -> Bool
 kindsEq : List Kind -> List Kind -> Bool
 kpLcp : String -> String -> KP
+krowArgVarAtoms : List Kind -> List (List Atom) -> List Ty -> List (String, List Atom)
 krowArgVarNames : List Kind -> List Ty -> List String
 krowEtbl : List String -> List Kind -> List Mono -> List (String, Ref Effvar)
 krowSlotOccs : List (String, List Kind) -> Bool -> TyConOrigin -> String -> List Ty -> List (String, List Atom)
@@ -1469,6 +1476,8 @@ paramOccPolarities : List (TabKey, List Polarity) -> String -> Polarity -> Ty ->
 paramOccPolaritiesArgs : List (TabKey, List Polarity) -> String -> Polarity -> Option (List Polarity) -> Int -> List Ty -> List Polarity
 paramPolaritiesIn : List (TabKey, List Polarity) -> TabKey -> Option (List Polarity)
 paramPolaritiesOf : TabKey -> Option (List Polarity)
+paramRowAtomOccs : String -> Ty -> List (List Atom)
+paramRowAtomsOf : TabKey -> Option (List (List Atom))
 paramVarianceCheck : Mono -> Mono -> Unit
 paramVarianceCheckN : Mono -> Mono -> Unit
 paramVarianceEqCheck : List Atom -> List Atom -> List Atom -> List Atom -> Unit
@@ -1508,7 +1517,9 @@ polaritiesEq : List Polarity -> List Polarity -> Bool
 polarityAt : List Polarity -> Int -> Polarity
 polarityAtOr : Option (List Polarity) -> Int -> Polarity
 polarityEntriesEq : List (TabKey, List Polarity) -> List (TabKey, List Polarity) -> Bool
+polarityEntriesPublicOnly : List Decl -> List (TabKey, List Polarity) -> List (TabKey, List Polarity)
 polarityEq : Polarity -> Polarity -> Bool
+polarityPublicKeys : List Decl -> List TabKey
 populateEffectDomains : List Decl -> Unit
 populateGo : List Decl -> Unit
 positionMatch : String -> List (Int, Mono) -> List (String, List Int) -> Option (List Int)
@@ -1627,6 +1638,7 @@ recordNumlitLoc : Mono -> Unit
 recordObl : Predicate -> Int -> Provenance -> Option Loc -> Unit
 recordParamKinds : TyConOrigin -> String -> List Kind -> Unit
 recordParamPolarities : TyConOrigin -> String -> List Polarity -> Unit
+recordParamRowAtoms : TyConOrigin -> String -> List (List Atom) -> Unit
 recordPinnedLocals : String -> Option Loc -> List Int -> List (Int, String) -> Mono -> Bool
 recordPinnedLocalsGeneric : String -> Option Loc -> List Int -> List Int -> Mono -> Bool
 recordRLocalSite : TcEnv -> String -> Ref Route -> Mono -> Unit
@@ -1753,6 +1765,7 @@ resolveRLocalSites : List Decl -> Map String (List ImplEntry) -> List PendingEnt
 resolveRecMono : String -> Mono -> Route
 resolveSite : Map String (List ImplEntry) -> List String -> String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> Unit
 resolveSites : Map String (List ImplEntry) -> List String -> List PendingEntry -> Unit
+restAtoms : List (List Atom) -> List (List Atom)
 retOccsEscape : List Atom -> List (String, List Atom) -> List Atom
 returnPosMethod : List String -> IfaceMethod -> List String
 returnPosMethodNames : List Decl -> List String
@@ -1781,6 +1794,9 @@ routeUndeterminedTop : List Decl -> Map String (List ImplEntry) -> String -> Rou
 routesOfMonos : Map String (List ImplEntry) -> List Mono -> List Route
 routesOfMonosTop : List Decl -> Map String (List ImplEntry) -> List Mono -> List IfaceRef -> List Route
 routesOfMonosTopV : List Decl -> Map String (List ImplEntry) -> List Mono -> List IfaceRef -> List (List Mono) -> List Route
+rowArgAtomsApp : List (String, List Kind) -> TyConOrigin -> String -> List Ty -> List (String, List Atom) -> List (String, List Atom)
+rowArgAtomsIn : List (String, List Kind) -> Ty -> List (String, List Atom)
+rowArgAtomsVarApp : List (String, List Kind) -> String -> List Ty -> List (String, List Atom) -> List (String, List Atom)
 rowArgNames : Ty -> List String
 rowArgNamesApp : List (String, List Kind) -> TyConOrigin -> String -> List Ty -> List String -> List String
 rowArgNamesIn : List (String, List Kind) -> Ty -> List String
@@ -1915,6 +1931,7 @@ supersFix : List String -> List String -> List String
 survivorNameOf : Mono -> List (String, Mono) -> Option String
 survivorNameOfId : Int -> List (String, Mono) -> Option String
 survivorObligationEntailed : String -> List String -> String -> String -> Ty -> Bool
+tabKeyElem : List TabKey -> TabKey -> Bool
 tagAllLitLocs : Mono -> String -> Unit
 tagLitLocsWithRoot : Int -> String -> List (Mono, Loc) -> Unit
 tagNumlitCtxIf : Mono -> Mono -> String -> Unit

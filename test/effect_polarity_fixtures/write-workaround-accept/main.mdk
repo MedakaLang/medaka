@@ -1,0 +1,29 @@
+-- CONTROL (write-side narrowing, eta-expanded). Regression row for #2109
+-- (the invariance check has no direction to read, so it rejected the SAFE
+-- write-side narrowing too), closed by this sprint's slice 4
+-- (S-write-narrowing-direction) in its pre-authorized shape (b): the
+-- rejection stands, and the diagnostic now names this measured recovery.
+--
+-- This row pins the RECOVERY the diagnostic advertises. A slot declared to
+-- PERMIT `<Stdout>` is initialized with a function that performs FEWER
+-- effects. Written point-free (`Ref noop`) that is rejected, because
+-- `paramVarianceRow`'s CLOSED~CLOSED arm sees `<Stdout>` vs `<>` and
+-- unification is symmetric -- it cannot tell which side is the declaration.
+-- Eta-expanded, the lambda's latent row is still an unsolved variable, the
+-- CLOSED~CLOSED arm abstains, and ordinary lenient `unifyRow` runs. The
+-- acceptance boundary is exactly closed-row-vs-row-variable.
+--
+-- This MUST STAY ACCEPTED: a diagnostic that names a recovery which does not
+-- work is worse than no advice at all. Its REJECT twin is
+-- write-launder-reject, which puts the UNSAFE direction at the same argument
+-- site -- the pair exists so a future regression cannot silently swap the two
+-- verdicts on this one shape.
+noop : String -> Unit
+noop s = ()
+
+handler : Ref (String -> <Stdout> Unit)
+handler = Ref (s => noop s)
+
+main =
+  let _ = handler.value "hi"
+  println "ok"
