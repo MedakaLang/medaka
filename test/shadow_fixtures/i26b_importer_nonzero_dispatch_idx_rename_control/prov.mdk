@@ -1,0 +1,4 @@
+-- I26b (#2154) rename control: same standalone, exported under a NON-colliding name
+-- so importing it creates no shadow at all.
+export mthx : Int -> Int -> Int
+mthx n m = n * m

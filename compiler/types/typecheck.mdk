@@ -13568,36 +13568,44 @@ inferAppExpr env f x = match lamUnderLoc x
       let lamExpected = funDomain (normalize ft)
       let xt = inferLamChecked env (expectedParamTypes lamExpected (listLen pats)) pats body
       inferApp (envAlphaLets env) (EApp f x) ft xt
-    None => match shadowStandaloneHead env f
-      Some (mname, tagRefs) => inferShadowApp env mname tagRefs f x
-      -- #1815: the SPINE arms come FIRST, and they are the same two definer-shadow arms
-      -- one node further out.  A definer shadow whose interface dispatches on argument
-      -- k > 0 (`mth : Int -> b -> Int`) reaches its dispatch argument at the OUTER node
-      -- of `EApp (EApp mth n) x` — the inner node supplies argument 0, which is not the
-      -- receiver at all.  Without these arms the inner node fired the index-0 arms, asked
-      -- the dispatch question about argument 0, and imposed the standalone's whole
-      -- declared type on the enclosing annotated function.  They decline at k == 0 (a
-      -- bare head has no applied nodes), so the index-0 path below is byte-unchanged.
-      None => match definerShadowSpineArgAt f
-       Some (dname, dtagRef, dimplRef, dhd, dnodes) => inferDefinerShadowAppAt env dname dtagRef dimplRef dhd dnodes f x
-       None => match definerShadowSpineVarAt f
-        Some (dname, dhd, dnodes) => inferDefinerShadowVarAppAt env dname dhd dnodes f x
-        None => match definerShadowArgHead f
-         Some (dname, dtagRef, dimplRef) => inferDefinerShadowApp env dname dtagRef dimplRef f x
-         None => match definerShadowVarHead f
-          Some dname => inferDefinerShadowVarApp env dname f x
-          None =>
-           let ft = infer env f
-           let xt = infer env x
-           -- P0-16: detect `f(1, 2)` on the PRISTINE ft (before inferApp unifies
-           -- its domain with the tuple), then record the residual result so a
-           -- downstream no-impl / mismatch can surface the tailored hint.
-           let pend = tupleCallShapeHint f x ft
-           let res = inferApp (envAlphaLets env) (EApp f x) ft xt
-           let _ = match pend
-             Some (help, fix) => (perRun.value.tupleCallCandidates := ((res, help, fix)::perRun.value.tupleCallCandidates.value))
-             None => ()
-           res
+    None => match shadowStandaloneSpineHeadAt env f
+      -- #2154: the IMPORTER-side spine arm, mirroring #1815's definer spine arms — it
+      -- must run BEFORE the bare-head shadowStandaloneHead/inferShadowApp arm below for
+      -- the same reason: an importer shadow whose interface dispatches at index k > 0
+      -- has its receiver at the OUTER spine node, not the inner node the bare-head arm
+      -- would otherwise ask about.  Declines (None) at k == 0, so the bare-head arm
+      -- stays byte-identical.
+      Some (mname, tagRefs, hd, nodes) => inferShadowAppAt env mname tagRefs hd nodes f x
+      None => match shadowStandaloneHead env f
+       Some (mname, tagRefs) => inferShadowApp env mname tagRefs f x
+       -- #1815: the SPINE arms come FIRST, and they are the same two definer-shadow arms
+       -- one node further out.  A definer shadow whose interface dispatches on argument
+       -- k > 0 (`mth : Int -> b -> Int`) reaches its dispatch argument at the OUTER node
+       -- of `EApp (EApp mth n) x` — the inner node supplies argument 0, which is not the
+       -- receiver at all.  Without these arms the inner node fired the index-0 arms, asked
+       -- the dispatch question about argument 0, and imposed the standalone's whole
+       -- declared type on the enclosing annotated function.  They decline at k == 0 (a
+       -- bare head has no applied nodes), so the index-0 path below is byte-unchanged.
+       None => match definerShadowSpineArgAt f
+        Some (dname, dtagRef, dimplRef, dhd, dnodes) => inferDefinerShadowAppAt env dname dtagRef dimplRef dhd dnodes f x
+        None => match definerShadowSpineVarAt f
+         Some (dname, dhd, dnodes) => inferDefinerShadowVarAppAt env dname dhd dnodes f x
+         None => match definerShadowArgHead f
+          Some (dname, dtagRef, dimplRef) => inferDefinerShadowApp env dname dtagRef dimplRef f x
+          None => match definerShadowVarHead f
+           Some dname => inferDefinerShadowVarApp env dname f x
+           None =>
+            let ft = infer env f
+            let xt = infer env x
+            -- P0-16: detect `f(1, 2)` on the PRISTINE ft (before inferApp unifies
+            -- its domain with the tuple), then record the residual result so a
+            -- downstream no-impl / mismatch can surface the tailored hint.
+            let pend = tupleCallShapeHint f x ft
+            let res = inferApp (envAlphaLets env) (EApp f x) ft xt
+            let _ = match pend
+              Some (help, fix) => (perRun.value.tupleCallCandidates := ((res, help, fix)::perRun.value.tupleCallCandidates.value))
+              None => ()
+            res
 
 -- @Impl: if [x] is an `@Name` disambiguation hint (a bare `EVar "@Name"`, possibly
 -- under an ELoc wrapper), return the name with the leading `@` stripped.  Mirrors
@@ -13624,6 +13632,19 @@ shadowStandaloneHead env (EVarId name _)
   | isShadowStandalone name = Some (name, [])
   | otherwise = None
 shadowStandaloneHead _ _ = None
+
+-- #2154: the IMPORTER-side spine arm — the peer of definerShadowSpineArgAt /
+-- definerShadowSpineVarAt for an imported standalone shadowing a method whose
+-- interface dispatches at argument k > 0.  Peels the spine's ultimate head with the
+-- SAME test shadowStandaloneHead already applies to a bare head (so a marked
+-- EMethodAt receiver and an unmarked EVar/EVarId receiver both fire, exactly as
+-- shadowStandaloneHead's own two arms do), then gates on `shadowSpineNodesAt`, which
+-- declines (`None`) for a bare head (k == 0, nodes == []) — the existing
+-- shadowStandaloneHead / inferShadowApp path stays byte-identical.
+shadowStandaloneSpineHeadAt : TcEnv -> Expr -> Option (String, List (Ref Route), Expr, List Expr)
+shadowStandaloneSpineHeadAt env f = match shadowStandaloneHead env (appSpineHead f)
+  None => None
+  Some (name, tagRefs) => map (nodes => (name, tagRefs, appSpineHead f, nodes)) (shadowSpineNodesAt name f)
 
 -- a name that is BOTH a registered importer shadow (standaloneValuesRef), has a
 -- stashed standalone scheme, and names a single-TYPARAM interface's method.
@@ -13752,6 +13773,33 @@ inferShadowAppHead env f =
   toggles.value.shadowHeadCtxRef := saved
   ft
 
+-- #2154: the spine-generalized twin of inferShadowApp — the peer of
+-- inferDefinerShadowAppAt for the IMPORTER path.  [hd] is the spine's ultimate head
+-- ([f] itself at index 0, unreachable here since shadowStandaloneSpineHeadAt declines
+-- at k == 0) and [nodes] the application nodes already applied to it; [pre] is those
+-- nodes' inferred (node, mono) pairs in source order, exactly as inferDefinerShadowAppAt
+-- computes them.  Performs the SAME S2 impl-exists-vs-standalone-scheme branch
+-- inferShadowApp does, at the outer node, folding inferApp/unification over the whole
+-- applied prefix via inferSpineArgs/inferAppNodes/unifySpineResult.
+inferShadowAppAt : TcEnv -> String -> List (Ref Route) -> Expr -> List Expr -> Expr -> Expr -> Mono
+inferShadowAppAt env mname tagRefs hd nodes f x =
+  let dloc = !currentLoc
+  let pre = inferSpineArgs env nodes
+  let k = listLen pre
+  let tx = infer env x
+  let _ = groundShadowReceiver (importerShadowDomainAt mname k) tx (definerReceiverIsDictVar mname tx) dloc
+  match headTyconMono tx
+    Some head => if ieImplExistsForHead perRun.value.bodyImplEnvRef.value mname head then inferAppNodes (envAlphaLets env) (inferShadowAppHead env hd) (pre ++ [(EApp f x, tx)])
+    else match lookupAssoc mname perRun.value.shadowStandaloneSchemesRef.value
+      Some sscheme =>
+        let smono = instantiate sscheme
+        let r = unifySpineResult smono (map snd pre ++ [tx])
+        let _ = stampRoutes tagRefs
+        let _ = recordImporterShadowDictsAt env mname tagRefs (map snd pre ++ [tx]) tx
+        r
+      None => inferAppNodes (envAlphaLets env) (inferShadowAppHead env hd) (pre ++ [(EApp f x, tx)])
+    None => inferAppNodes (envAlphaLets env) (inferShadowAppHead env hd) (pre ++ [(EApp f x, tx)])
+
 -- S1-RESIDUAL-B: the IMPORTED standalone's declared domain — the first arrow domain of the
 -- scheme stashed in shadowStandaloneSchemesRef (the concrete-head pick made per module by
 -- checkModuleFullImpl).  The importer peer of shadowDomainFor's mangled arm, and it must NOT
@@ -13768,6 +13816,15 @@ importerShadowDomain mname = match lookupAssoc mname perRun.value.shadowStandalo
   Some s => match normalize (instantiate s)
     TFun a _ _ => Some a
     _ => None
+
+-- #2154: as importerShadowDomain, but the standalone's k-th declared parameter — the
+-- one the receiver occupies when the interface dispatches at argument k > 0.  Peer of
+-- shadowDomainForAt / standaloneShadowDomainAt (#1815).  `k = 0` is importerShadowDomain
+-- verbatim (nthFunDomain 0 on a TFun matches its first arm exactly).
+importerShadowDomainAt : String -> Int -> Option Mono
+importerShadowDomainAt mname k = match lookupAssoc mname perRun.value.shadowStandaloneSchemesRef.value
+  None => None
+  Some s => nthFunDomain k (instantiate s)
 
 -- S-1 (importer half): re-record each of the importer shadow's route refs as an
 -- RLocalSite carrying the imported standalone's own constraint dicts, so
@@ -13790,6 +13847,20 @@ recordImporterShadowDicts env mname (r::rest) tx =
     (PendingEntry mname r tx "" (SKRLocal (routeLocalSym !r) True dicts.sdMonos dicts.sdIfaces dicts.sdArgVecs) !currentLoc
       ::perRun.value.pendingRLocalSites.value)
   recordImporterShadowDicts env mname rest tx
+
+-- #2154: as recordImporterShadowDicts, but at dispatch index k > 0 — [ats] is the
+-- applied prefix up to and including the receiver (mirrors shadowStandaloneDictsSp /
+-- recordStandaloneSigObligationsSp's #1815 [ats] parameter), while [tx] stays the
+-- receiver's own mono for the PendingEntry (the site's TYPE, same as inferShadowApp's
+-- k == 0 arm records).
+recordImporterShadowDictsAt : TcEnv -> String -> List (Ref Route) -> List Mono -> Mono -> Unit
+recordImporterShadowDictsAt _ _ [] _ _ = ()
+-- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
+-- lint-disable-next-line rule-prefer-assign-op
+recordImporterShadowDictsAt env mname (r::rest) ats tx =
+  let dicts = shadowStandaloneDictsWithSp (lookupAssoc mname perRun.value.shadowStandaloneSchemesRef.value) mname (routeLocalSym !r) ats
+  let _ = setRef perRun.value.pendingRLocalSites (PendingEntry mname r tx "" (SKRLocal (routeLocalSym !r) True dicts.sdMonos dicts.sdIfaces dicts.sdArgVecs) !currentLoc :: perRun.value.pendingRLocalSites.value)
+  recordImporterShadowDictsAt env mname rest ats tx
 
 -- P0-18: peel a single-argument application's head to a DEFINER-shadow interface-
 -- method occurrence (the user's OWN top-level fn reuses a single-param interface

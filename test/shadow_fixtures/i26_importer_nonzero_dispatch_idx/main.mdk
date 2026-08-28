@@ -1,0 +1,33 @@
+-- I26 (#2154) IMPORTER shadow of a method whose interface dispatches at ARGUMENT 1 --
+-- the importer-position mirror of D26 (#1815).  `mth` is IMPORTED from prov (not
+-- defined here); this module defines the interface, the receiver type, and the impl.
+-- Every prior importer cell in this corpus dispatched on argument 0 -- the axis the
+-- importer arms (shadowStandaloneHead / inferShadowApp) were blind to, because they
+-- peel a BARE head, the node supplying argument 0. Two denotations, both pinned by
+-- value:
+--   `mth 3 4`             -- receiver 4 (Int, grounded from an ungrounded literal) has
+--                            NO impl IZ Int, so it takes the imported standalone:
+--                            3 * 4 = 12
+--   `viaDict 3 (Box 4)`   -- receiver is the enclosing `IZ b =>` dict var, the Fork-2
+--                            carve-out, so it DISPATCHES: 700 + 3 + 4 = 707
+-- Values hand-derived, not captured.  Before the #2154 fix `viaDict`'s written
+-- signature was silently replaced by the imported standalone's whole declared type
+-- (`Int -> Int -> Int`), so this file did not compile at all:
+-- `Type mismatch: Int vs Box` at the `viaDict` CALL SITE below, not at the shadowed
+-- declaration.
+import prov.{mth}
+
+interface IZ b where
+  mth : Int -> b -> Int
+
+data Box = Box Int
+
+impl IZ Box where
+  mth n (Box m) = 700 + n + m
+
+viaDict : IZ b => Int -> b -> Int
+viaDict n x = mth n x
+
+main =
+  println (mth 3 4)
+  println (viaDict 3 (Box 4))

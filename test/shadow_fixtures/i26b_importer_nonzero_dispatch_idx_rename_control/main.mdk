@@ -1,0 +1,24 @@
+-- I26b (#2154) rename control for I26: `mthx` (imported) does NOT collide with IZ's
+-- `mth` method, so there is no shadow at all -- `mth` inside `viaDict` resolves purely
+-- to the interface method at every occurrence, including the OUTER spine node
+-- (dispatch index 1) the new importer spine arm targets. This is the "no shadow, same
+-- shape" control: if the new arm mis-fired on an ordinary (non-shadow) call at
+-- nonzero dispatch index it would show up here.
+--   `mthx 3 4`            -- ordinary call, unrelated to any shadow machinery: 12
+--   `viaDict 3 (Box 4)`   -- ordinary interface dispatch, no shadow in scope: 707
+import prov.{mthx}
+
+interface IZ b where
+  mth : Int -> b -> Int
+
+data Box = Box Int
+
+impl IZ Box where
+  mth n (Box m) = 700 + n + m
+
+viaDict : IZ b => Int -> b -> Int
+viaDict n x = mth n x
+
+main =
+  println (mthx 3 4)
+  println (viaDict 3 (Box 4))

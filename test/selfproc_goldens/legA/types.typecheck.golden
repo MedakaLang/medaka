@@ -1076,6 +1076,7 @@ importedMethodEntry : List Decl -> String -> List (Ident, (IfaceRef, List String
 importedRecordEntry : List Decl -> String -> List (Ident, String, RecordInfo) -> Option RecordInfo
 importedSchemeOblEntries : List Decl -> List ((String, String), List VecObl) -> List (String, List VecObl)
 importerShadowDomain : String -> Option Mono
+importerShadowDomainAt : String -> Int -> Option Mono
 importerShadowOnEmitPath : String -> Ref Route -> Bool
 importerStandaloneValueScheme : String -> Option Mono
 indefiniteArticle : String -> String
@@ -1173,6 +1174,7 @@ inferRecordUpdatePicked : String -> Mono -> TcEnv -> List FieldAssign -> RecordI
 inferRecordUpdateWith : TcEnv -> String -> Expr -> List FieldAssign -> RecordInfo -> Mono
 inferRequiresImpl : TcEnv -> List Decl -> List String -> IfaceRef -> List Ty -> List Require -> List ImplMethod -> Unit
 inferShadowApp : TcEnv -> String -> List (Ref Route) -> Expr -> Expr -> Mono
+inferShadowAppAt : TcEnv -> String -> List (Ref Route) -> Expr -> List Expr -> Expr -> Expr -> Mono
 inferShadowAppHead : TcEnv -> Expr -> Mono
 inferSpineArgs : TcEnv -> List Expr -> List (Expr, Mono)
 inferStmt : TcEnv -> DoStmt -> TcEnv
@@ -1645,6 +1647,7 @@ recordForReceiverIdent : Mono -> String -> Option RecordInfo
 recordIfaceObligation : BuiltinClass -> Mono -> Unit
 recordImplObligation : String -> Mono -> Mono
 recordImporterShadowDicts : TcEnv -> String -> List (Ref Route) -> Mono -> Unit
+recordImporterShadowDictsAt : TcEnv -> String -> List (Ref Route) -> List Mono -> Mono -> Unit
 recordLocalBind : String -> Mono -> Unit
 recordMethodDicts : String -> Ref (List Route) -> List (Int, Mono) -> Unit
 recordMethodLevelObls : List String -> Ty -> Mono -> Unit
@@ -1877,6 +1880,7 @@ shadowStandaloneDictsSp : TcEnv -> String -> String -> List Mono -> ShadowDicts
 shadowStandaloneDictsWith : Option Scheme -> String -> String -> Mono -> ShadowDicts
 shadowStandaloneDictsWithSp : Option Scheme -> String -> String -> List Mono -> ShadowDicts
 shadowStandaloneHead : TcEnv -> Expr -> Option (String, List (Ref Route))
+shadowStandaloneSpineHeadAt : TcEnv -> Expr -> Option (String, List (Ref Route), Expr, List Expr)
 shadowSymSpelledBare : List Decl -> List (String, String) -> String -> Bool
 shadowVarHeadMethodScheme : TcEnv -> String -> Expr -> Mono
 sigCollapsedPair : List (String, Int) -> Option (Int, String, String)
