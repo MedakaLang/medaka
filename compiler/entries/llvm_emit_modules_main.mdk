@@ -44,9 +44,10 @@ import ir.core_ir_lower.{
   declSigTypeNames,
   ffiExternTypeNames,
 }
-import backend.llvm_emit.{emitProgram, makeEmitInput}
+import backend.llvm_emit.{emitProgram, emitProgramWithStats, makeEmitInput}
 import ir.dce.{dceFilter}
 import entries.entry_support.{driveModules, runEmitWith}
+import support.timer.{statsEnabled, emitStats}
 
 -- The entry-module path is argv[2] (`<runtime> <core> <entry> [root ...]`); hand it
 -- to the emitter so a main-less program's diagnostic names the file (issue #397).
@@ -119,7 +120,13 @@ emitTail runtimeDecls coreD modules2 =
     (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
     (mainTypeIsUnit ()) (mainTypeIsFloat ()) half preludeBinds preludeImpls (srcNameFromArgs (args ())) (declaredRecordFieldOrders allDecls)
     (ffiExternTypeNames runtimeDecls allDecls)
-  putStr (emitProgram input (lowerProgramEmit allDecls))
+  let statsOn = statsEnabled ()
+  if statsOn then
+    let (text, stats) = emitProgramWithStats input (lowerProgramEmit allDecls)
+    let _ = emitStats statsOn stats
+    putStr text
+  else
+    putStr (emitProgram input (lowerProgramEmit allDecls))
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides
 -- across units, BEFORE elaborateModules flattens the boundaries away (same
 -- flat-emit @mdk_<name> collision risk the bootstrap driver fixes).  The gate

@@ -1,5 +1,5 @@
 # META
-source_lines=2245
+source_lines=2325
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -271,45 +271,86 @@ initialRows ((Arm pat _ _)::rest) i =
 -- impl method's clauses into a decision tree via this same Maranget compiler —
 -- the backend-neutral transform Axis-1 designates as shared by both backends
 -- (only leaf emission differs: bytecode SWITCH vs LLVM switch/br).
+-- The `List Bool` is indexed BY ARM INDEX, and the recursion looks a leaf's arm
+-- up in it — which, as a list, cost O(i) per leaf and O(N²) over an N-arm match
+-- (`nthBool`; the second half of #408, see `guardSet`).  The exported entry
+-- keeps the caller-facing `List Bool` and converts it ONCE, at the top, into the
+-- membership set the recursion actually threads.
 export
 compileTree : List Bool -> List (List Pat, Int) -> CTree
-compileTree _ [] = CTFail
-compileTree guards (row::rest) = compileRows guards row rest (row::rest)
+compileTree guards rows = compileTreeG (guardSet 0 guards omEmpty) rows
 
-compileRows : List Bool -> (List Pat, Int) -> List (List Pat, Int) -> List (List Pat, Int) -> CTree
+-- Guarded ARM INDICES as an `OrdMap Unit` membership set: O(log N) per leaf
+-- lookup where the `List Bool` walk was O(arm index).  Built once per
+-- `compileTree` entry (twice per match at most — see `compileArms`), never
+-- inside the recursion.  `nthBool guards i` was `False` for any `i` past the
+-- list's end, so an index absent from the set reads exactly as it did.
+guardSet : Int -> List Bool -> OrdMap Unit -> OrdMap Unit
+guardSet _ [] acc = acc
+guardSet i (True::rest) acc =
+  guardSet (i + 1) rest (omInsert (intToString i) () acc)
+guardSet i (False::rest) acc = guardSet (i + 1) rest acc
+
+compileTreeG : OrdMap Unit -> List (List Pat, Int) -> CTree
+compileTreeG _ [] = CTFail
+compileTreeG guards (row::rest) = compileRows guards row rest (row::rest)
+
+compileRows : OrdMap Unit -> (List Pat, Int) -> List (List Pat, Int) -> List (List Pat, Int) -> CTree
 compileRows guards (pats, i) rest rows
   | allWild pats = leafOrGuard guards i rest
   | anyList rowHasCon rows = buildConSwitch guards rows
   | anyList rowHasLit rows = buildLitSwitch guards rows
-  | otherwise = CTDrop (compileTree guards (map dropHead rows))
+  | otherwise = CTDrop (compileTreeG guards (map dropHead rows))
 
 -- the first (highest-priority still-viable) row matches everything reaching
 -- here: a guarded clause becomes a CTGuard whose failure resumes at `rest`; an
 -- unguarded one terminates (later rows are unreachable, exactly as ordered).
-leafOrGuard : List Bool -> Int -> List (List Pat, Int) -> CTree
+leafOrGuard : OrdMap Unit -> Int -> List (List Pat, Int) -> CTree
 leafOrGuard guards i rest
-  | nthBool guards i = CTGuard i (compileTree guards rest)
+  | omHasKey (intToString i) guards = CTGuard i (compileTreeG guards rest)
   | otherwise = CTLeaf i
 
-buildConSwitch : List Bool -> List (List Pat, Int) -> CTree
+-- #408: the switch's rows are bucketed by head in ONE pass and each branch is
+-- handed its OWN rows, rather than every branch re-filtering the whole matrix.
+-- The old shape called `specializeCon c a rows` once per distinct head, and each
+-- of those calls scanned all N rows — O(N²) for an N-arm match over an N-ctor
+-- type.  That cost was pure instruction count (each miss is an alloc-free
+-- `c2 == c`), so it was invisible to both the op arm and the alloc arm of
+-- perf_scaling and only surfaced once diff_compiler_stage_ir_scaling.sh graded
+-- per-stage Callgrind Ir.  See `conBuckets` for the wildcard/ordering argument.
+buildConSwitch : OrdMap Unit -> List (List Pat, Int) -> CTree
 buildConSwitch guards rows =
+  let buckets = conBuckets 0 rows omEmpty
+  let wilds = wildTailRows 0 rows
   CTSwitch
-    (map (conBranch guards rows) (distinctConHeads rows))
-    (compileTree guards (defaultMatrix rows))
+    (map (conBranch guards buckets wilds) (distinctConHeads rows))
+    (compileTreeG guards (defaultMatrix rows))
 
-conBranch : List Bool -> List (List Pat, Int) -> (String, Int) -> CTBranch
-conBranch guards rows (c, a) =
-  CTBranch (decodeHead c a) (compileTree guards (specializeCon c a rows))
+conBranch : OrdMap Unit -> OrdMap (List (Int, (List Pat, Int))) -> List (Int, (List Pat, Int)) -> (String, Int) -> CTBranch
+conBranch guards buckets wilds (c, a) =
+  CTBranch
+    (decodeHead c a)
+    (compileTreeG
+      guards
+      (mergeByOrd (reverseL (bucketRows c buckets)) (map (padWildRow a) wilds)))
 
-buildLitSwitch : List Bool -> List (List Pat, Int) -> CTree
+buildLitSwitch : OrdMap Unit -> List (List Pat, Int) -> CTree
 buildLitSwitch guards rows =
+  let buckets = litBuckets 0 rows omEmpty
+  let wilds = wildTailRows 0 rows
   CTSwitch
-    (map (litBranch guards rows) (distinctLits rows))
-    (compileTree guards (defaultMatrix rows))
+    (map (litBranch guards buckets wilds) (distinctLits rows))
+    (compileTreeG guards (defaultMatrix rows))
 
-litBranch : List Bool -> List (List Pat, Int) -> Lit -> CTBranch
-litBranch guards rows l =
-  CTBranch (HLit l) (compileTree guards (specializeLit l rows))
+-- Literal heads have arity 0, so a wildcard row contributes its tail unpadded —
+-- exactly what the old `specLitRow _ (PWild::rest, i) = Some (rest, i)` did.
+litBranch : OrdMap Unit -> OrdMap (List (Int, (List Pat, Int))) -> List (Int, (List Pat, Int)) -> Lit -> CTBranch
+litBranch guards buckets wilds l =
+  CTBranch
+    (HLit l)
+    (compileTreeG
+      guards
+      (mergeByOrd (reverseL (bucketRows (litKey l) buckets)) wilds))
 
 -- map a canonical constructor name + arity to the runtime head the evaluator
 -- tests with (the synthetic list/tuple/unit names canonPat introduced map back
@@ -466,45 +507,89 @@ filterMapRows f (r::rest) = match f r
   Some r2 => r2 :: filterMapRows f rest
   None => filterMapRows f rest
 
--- specialize on constructor c (arity): a matching head expands to its fields
--- ++ the rest; a wildcard head spreads `arity` wildcards; anything else drops.
-specializeCon : String -> Int -> List (List Pat, Int) -> List (List Pat, Int)
-specializeCon c arity rows = filterMapRows (specConRow c arity) rows
+-- ── one-pass matrix bucketing, replacing the per-branch rescan (#408) ───────
+--
+-- `specializeCon c a rows` used to be a `filterMapRows` over the WHOLE matrix,
+-- called once per distinct head by `buildConSwitch`; `specializeLit` mirrored it
+-- for literal switches.  Both are replaced by a single bucketing pass whose
+-- result is read once per branch, so lowering an N-arm switch is O(N log N)
+-- instead of O(N²).
+--
+-- THE ORDERING/WILDCARD ARGUMENT.  `specializeCon c a` kept, IN MATRIX ROW
+-- ORDER: (1) each `PCon c` row, head replaced by its fields; (2) each `PWild`
+-- row, head replaced by `a` wildcards.  Pattern priority is positional, so that
+-- relative order is observable — it decides which arm a value selects, and the
+-- emitted `CTSwitch` is graded byte-identical.  A wildcard row belongs to EVERY
+-- branch, so buckets alone cannot reproduce it (this is the same subtlety
+-- `exhaust.mdk`'s `usefulCovered` documents, where it is handled by falling back
+-- to the rescan).  Here it is handled instead, because a trailing `_ =>` arm on
+-- a wide match is common enough that a fallback would leave the quadratic in
+-- place for it: every row is tagged with its ORDINAL in the matrix on the way
+-- into its bucket, wildcard tails are collected once in the same numbering, and
+-- a branch re-interleaves its bucket with the (padded) wildcard rows by ordinal.
+-- The merge therefore reproduces the filter's order exactly, by construction,
+-- and costs O(bucket + wildcards) per branch — proportional to the rows that
+-- branch actually receives.
+--
+-- Branch ORDER is untouched: `distinctConHeads`/`distinctLits` still mint it,
+-- unchanged, in first-seen row order.
 
-specConRow : String -> Int -> (List Pat, Int) -> Option (List Pat, Int)
-specConRow c _ ((PCon c2 args)::rest, i) =
-  if c2 == c then
-    Some (args ++ rest, i)
+-- A bucket's rows, or none.  Buckets are built by prepending, so a bucket reads
+-- back in reverse row order and is `reverseL`'d at the branch (as in
+-- `exhaust.mdk`'s `headBuckets`).
+bucketRows : String -> OrdMap (List (Int, (List Pat, Int))) -> List (Int, (List Pat, Int))
+bucketRows k m = fromOption [] (omLookup k m)
+
+pushBucket : String -> (Int, (List Pat, Int)) -> OrdMap (List (Int, (List Pat, Int))) -> OrdMap (List (Int, (List Pat, Int)))
+pushBucket k r m = omInsert k (r :: bucketRows k m) m
+
+-- Rows grouped by column-0 constructor, head stripped to `args ++ rest` — i.e.
+-- exactly the rows `specializeCon c` kept, for every `c` at once.  Non-`PCon`
+-- rows (wildcards, literals, empty) still consume an ordinal so the numbering
+-- stays aligned with `wildTailRows`.
+conBuckets : Int -> List (List Pat, Int) -> OrdMap (List (Int, (List Pat, Int))) -> OrdMap (List (Int, (List Pat, Int)))
+conBuckets _ [] acc = acc
+conBuckets k (((PCon c args)::rest, i)::more) acc =
+  conBuckets (k + 1) more (pushBucket c (k, (args ++ rest, i)) acc)
+conBuckets k (_::more) acc = conBuckets (k + 1) more acc
+
+-- The literal mirror.  Keyed by `litKey`, which is injective and `Eq`-exact, so
+-- two literals share a bucket exactly when the old `litEq` compare accepted them
+-- (`distinctLits` already deduped its heads by the same key).  That also retires
+-- `litEq`: #970's O(arms²) allocating compares are gone with the rescan itself,
+-- since a row is now keyed ONCE rather than compared once per distinct literal.
+litBuckets : Int -> List (List Pat, Int) -> OrdMap (List (Int, (List Pat, Int))) -> OrdMap (List (Int, (List Pat, Int)))
+litBuckets _ [] acc = acc
+litBuckets k (((PLit l)::rest, i)::more) acc =
+  litBuckets (k + 1) more (pushBucket (litKey l) (k, (rest, i)) acc)
+litBuckets k (_::more) acc = litBuckets (k + 1) more acc
+
+-- Column-0 wildcard rows, head stripped, tagged with the same ordinals
+-- `conBuckets`/`litBuckets` assign.  The head's replacement wildcards are added
+-- per branch by `padWildRow`, since the count is the branch's own arity.
+wildTailRows : Int -> List (List Pat, Int) -> List (Int, (List Pat, Int))
+wildTailRows _ [] = []
+wildTailRows k ((PWild::rest, i)::more) =
+  (k, (rest, i)) :: wildTailRows (k + 1) more
+wildTailRows k (_::more) = wildTailRows (k + 1) more
+
+padWildRow : Int -> (Int, (List Pat, Int)) -> (Int, (List Pat, Int))
+padWildRow arity (k, (ps, i)) = (k, (replicate arity PWild ++ ps, i))
+
+-- Interleave a branch's own rows with the wildcard rows by ordinal, restoring
+-- matrix row order and dropping the tags.  Ordinals are unique (one per matrix
+-- row) and both inputs are ascending, so this is a total, order-exact merge.
+mergeByOrd : List (Int, (List Pat, Int)) -> List (Int, (List Pat, Int)) -> List (List Pat, Int)
+mergeByOrd [] ys = map untagRow ys
+mergeByOrd xs [] = map untagRow xs
+mergeByOrd ((ka, ra)::xs) ((kb, rb)::ys) =
+  if ka < kb then
+    ra :: mergeByOrd xs ((kb, rb)::ys)
   else
-    None
-specConRow _ arity (PWild::rest, i) = Some (replicate arity PWild ++ rest, i)
-specConRow _ _ _ = None
+    rb :: mergeByOrd ((ka, ra)::xs) ys
 
--- specialize on a literal: a matching/​wildcard head drops (arity 0), else drop.
-specializeLit : Lit -> List (List Pat, Int) -> List (List Pat, Int)
-specializeLit l rows = filterMapRows (specLitRow l) rows
-
-specLitRow : Lit -> (List Pat, Int) -> Option (List Pat, Int)
-specLitRow l ((PLit l2)::rest, i) = if litEq l2 l then Some (rest, i) else None
-specLitRow _ (PWild::rest, i) = Some (rest, i)
-specLitRow _ _ = None
-
--- Alloc-free structural equality on literals, identical in result to the derived
--- `Eq Lit`.  `specLitRow` compares a literal ONCE PER (row × distinct-literal)
--- while lowering a literal switch, i.e. O(arms^2) compares on an N-arm match; the
--- derived `Eq Lit` (`mdk_impl_Lit_eq`) allocates on every call (verified by
--- profiling — GC_malloc_kind ← mdk_alloc ← mdk_impl_Lit_eq dominated the lowering
--- of a wide literal match), so those O(arms^2) compares allocated O(arms^2) too.
--- Comparing the primitive fields directly allocates nothing — exactly why the
--- constructor path (`specConRow`, a `String ==`) is already alloc-linear (#970).
-litEq : Lit -> Lit -> Bool
-litEq (LInt a) (LInt b) = a == b
-litEq (LFloat a) (LFloat b) = a == b
-litEq (LString a) (LString b) = a == b
-litEq (LChar a) (LChar b) = a == b
-litEq (LBool a) (LBool b) = a == b
-litEq LUnit LUnit = True
-litEq _ _ = False
+untagRow : (Int, (List Pat, Int)) -> (List Pat, Int)
+untagRow (_, r) = r
 
 -- the default matrix: rows whose head is a wildcard (head dropped); used for the
 -- switch's default branch and (when column 0 is all wildcards) CTDrop.
@@ -516,11 +601,6 @@ defRow (PWild::rest, i) = Some (rest, i)
 defRow _ = None
 
 -- ── small local helpers ────────────────────────────────────────────────────
-
-nthBool : List Bool -> Int -> Bool
-nthBool (b::_) 0 = b
-nthBool (_::rest) n = nthBool rest (n - 1)
-nthBool [] _ = False
 
 lowerField : FieldAssign -> CField
 lowerField (FieldAssign k e) = CField k (lower e)
@@ -2343,20 +2423,26 @@ nodeTag _ = "?"
 (DFunDef false "initialRows" ((PList) PWild) (EListLit))
 (DFunDef false "initialRows" ((PCons (PCon "Arm" (PVar "pat") PWild PWild) (PVar "rest")) (PVar "i")) (EBinOp "::" (ETuple (EListLit (EApp (EVar "canonPat") (EVar "pat"))) (EVar "i")) (EApp (EApp (EVar "initialRows") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
 (DTypeSig true "compileTree" (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree"))))
-(DFunDef false "compileTree" (PWild (PList)) (EVar "CTFail"))
-(DFunDef false "compileTree" ((PVar "guards") (PCons (PVar "row") (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "compileRows") (EVar "guards")) (EVar "row")) (EVar "rest")) (EBinOp "::" (EVar "row") (EVar "rest"))))
-(DTypeSig false "compileRows" (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree"))))))
-(DFunDef false "compileRows" ((PVar "guards") (PTuple (PVar "pats") (PVar "i")) (PVar "rest") (PVar "rows")) (EIf (EApp (EVar "allWild") (EVar "pats")) (EApp (EApp (EApp (EVar "leafOrGuard") (EVar "guards")) (EVar "i")) (EVar "rest")) (EIf (EApp (EApp (EVar "anyList") (EVar "rowHasCon")) (EVar "rows")) (EApp (EApp (EVar "buildConSwitch") (EVar "guards")) (EVar "rows")) (EIf (EApp (EApp (EVar "anyList") (EVar "rowHasLit")) (EVar "rows")) (EApp (EApp (EVar "buildLitSwitch") (EVar "guards")) (EVar "rows")) (EIf (EVar "otherwise") (EApp (EVar "CTDrop") (EApp (EApp (EVar "compileTree") (EVar "guards")) (EApp (EApp (EVar "map") (EVar "dropHead")) (EVar "rows")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
-(DTypeSig false "leafOrGuard" (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree")))))
-(DFunDef false "leafOrGuard" ((PVar "guards") (PVar "i") (PVar "rest")) (EIf (EApp (EApp (EVar "nthBool") (EVar "guards")) (EVar "i")) (EApp (EApp (EVar "CTGuard") (EVar "i")) (EApp (EApp (EVar "compileTree") (EVar "guards")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EVar "CTLeaf") (EVar "i")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "buildConSwitch" (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree"))))
-(DFunDef false "buildConSwitch" ((PVar "guards") (PVar "rows")) (EApp (EApp (EVar "CTSwitch") (EApp (EApp (EVar "map") (EApp (EApp (EVar "conBranch") (EVar "guards")) (EVar "rows"))) (EApp (EVar "distinctConHeads") (EVar "rows")))) (EApp (EApp (EVar "compileTree") (EVar "guards")) (EApp (EVar "defaultMatrix") (EVar "rows")))))
-(DTypeSig false "conBranch" (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyCon "CTBranch")))))
-(DFunDef false "conBranch" ((PVar "guards") (PVar "rows") (PTuple (PVar "c") (PVar "a"))) (EApp (EApp (EVar "CTBranch") (EApp (EApp (EVar "decodeHead") (EVar "c")) (EVar "a"))) (EApp (EApp (EVar "compileTree") (EVar "guards")) (EApp (EApp (EApp (EVar "specializeCon") (EVar "c")) (EVar "a")) (EVar "rows")))))
-(DTypeSig false "buildLitSwitch" (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree"))))
-(DFunDef false "buildLitSwitch" ((PVar "guards") (PVar "rows")) (EApp (EApp (EVar "CTSwitch") (EApp (EApp (EVar "map") (EApp (EApp (EVar "litBranch") (EVar "guards")) (EVar "rows"))) (EApp (EVar "distinctLits") (EVar "rows")))) (EApp (EApp (EVar "compileTree") (EVar "guards")) (EApp (EVar "defaultMatrix") (EVar "rows")))))
-(DTypeSig false "litBranch" (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyFun (TyCon "Lit") (TyCon "CTBranch")))))
-(DFunDef false "litBranch" ((PVar "guards") (PVar "rows") (PVar "l")) (EApp (EApp (EVar "CTBranch") (EApp (EVar "HLit") (EVar "l"))) (EApp (EApp (EVar "compileTree") (EVar "guards")) (EApp (EApp (EVar "specializeLit") (EVar "l")) (EVar "rows")))))
+(DFunDef false "compileTree" ((PVar "guards") (PVar "rows")) (EApp (EApp (EVar "compileTreeG") (EApp (EApp (EApp (EVar "guardSet") (ELit (LInt 0))) (EVar "guards")) (EVar "omEmpty"))) (EVar "rows")))
+(DTypeSig false "guardSet" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DFunDef false "guardSet" (PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "guardSet" ((PVar "i") (PCons (PCon "True") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "guardSet") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EVar "i"))) (ELit LUnit)) (EVar "acc"))))
+(DFunDef false "guardSet" ((PVar "i") (PCons (PCon "False") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "guardSet") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "acc")))
+(DTypeSig false "compileTreeG" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree"))))
+(DFunDef false "compileTreeG" (PWild (PList)) (EVar "CTFail"))
+(DFunDef false "compileTreeG" ((PVar "guards") (PCons (PVar "row") (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "compileRows") (EVar "guards")) (EVar "row")) (EVar "rest")) (EBinOp "::" (EVar "row") (EVar "rest"))))
+(DTypeSig false "compileRows" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree"))))))
+(DFunDef false "compileRows" ((PVar "guards") (PTuple (PVar "pats") (PVar "i")) (PVar "rest") (PVar "rows")) (EIf (EApp (EVar "allWild") (EVar "pats")) (EApp (EApp (EApp (EVar "leafOrGuard") (EVar "guards")) (EVar "i")) (EVar "rest")) (EIf (EApp (EApp (EVar "anyList") (EVar "rowHasCon")) (EVar "rows")) (EApp (EApp (EVar "buildConSwitch") (EVar "guards")) (EVar "rows")) (EIf (EApp (EApp (EVar "anyList") (EVar "rowHasLit")) (EVar "rows")) (EApp (EApp (EVar "buildLitSwitch") (EVar "guards")) (EVar "rows")) (EIf (EVar "otherwise") (EApp (EVar "CTDrop") (EApp (EApp (EVar "compileTreeG") (EVar "guards")) (EApp (EApp (EVar "map") (EVar "dropHead")) (EVar "rows")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DTypeSig false "leafOrGuard" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree")))))
+(DFunDef false "leafOrGuard" ((PVar "guards") (PVar "i") (PVar "rest")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EVar "i"))) (EVar "guards")) (EApp (EApp (EVar "CTGuard") (EVar "i")) (EApp (EApp (EVar "compileTreeG") (EVar "guards")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EVar "CTLeaf") (EVar "i")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "buildConSwitch" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree"))))
+(DFunDef false "buildConSwitch" ((PVar "guards") (PVar "rows")) (EBlock (DoLet false false (PVar "buckets") (EApp (EApp (EApp (EVar "conBuckets") (ELit (LInt 0))) (EVar "rows")) (EVar "omEmpty"))) (DoLet false false (PVar "wilds") (EApp (EApp (EVar "wildTailRows") (ELit (LInt 0))) (EVar "rows"))) (DoExpr (EApp (EApp (EVar "CTSwitch") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "conBranch") (EVar "guards")) (EVar "buckets")) (EVar "wilds"))) (EApp (EVar "distinctConHeads") (EVar "rows")))) (EApp (EApp (EVar "compileTreeG") (EVar "guards")) (EApp (EVar "defaultMatrix") (EVar "rows")))))))
+(DTypeSig false "conBranch" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))) (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyCon "CTBranch"))))))
+(DFunDef false "conBranch" ((PVar "guards") (PVar "buckets") (PVar "wilds") (PTuple (PVar "c") (PVar "a"))) (EApp (EApp (EVar "CTBranch") (EApp (EApp (EVar "decodeHead") (EVar "c")) (EVar "a"))) (EApp (EApp (EVar "compileTreeG") (EVar "guards")) (EApp (EApp (EVar "mergeByOrd") (EApp (EVar "reverseL") (EApp (EApp (EVar "bucketRows") (EVar "c")) (EVar "buckets")))) (EApp (EApp (EVar "map") (EApp (EVar "padWildRow") (EVar "a"))) (EVar "wilds"))))))
+(DTypeSig false "buildLitSwitch" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree"))))
+(DFunDef false "buildLitSwitch" ((PVar "guards") (PVar "rows")) (EBlock (DoLet false false (PVar "buckets") (EApp (EApp (EApp (EVar "litBuckets") (ELit (LInt 0))) (EVar "rows")) (EVar "omEmpty"))) (DoLet false false (PVar "wilds") (EApp (EApp (EVar "wildTailRows") (ELit (LInt 0))) (EVar "rows"))) (DoExpr (EApp (EApp (EVar "CTSwitch") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "litBranch") (EVar "guards")) (EVar "buckets")) (EVar "wilds"))) (EApp (EVar "distinctLits") (EVar "rows")))) (EApp (EApp (EVar "compileTreeG") (EVar "guards")) (EApp (EVar "defaultMatrix") (EVar "rows")))))))
+(DTypeSig false "litBranch" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))) (TyFun (TyCon "Lit") (TyCon "CTBranch"))))))
+(DFunDef false "litBranch" ((PVar "guards") (PVar "buckets") (PVar "wilds") (PVar "l")) (EApp (EApp (EVar "CTBranch") (EApp (EVar "HLit") (EVar "l"))) (EApp (EApp (EVar "compileTreeG") (EVar "guards")) (EApp (EApp (EVar "mergeByOrd") (EApp (EVar "reverseL") (EApp (EApp (EVar "bucketRows") (EApp (EVar "litKey") (EVar "l"))) (EVar "buckets")))) (EVar "wilds")))))
 (DTypeSig false "decodeHead" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "CHead"))))
 (DFunDef false "decodeHead" ((PLit (LString "__cons__")) PWild) (EVar "HCons"))
 (DFunDef false "decodeHead" ((PLit (LString "__nil__")) PWild) (EVar "HNil"))
@@ -2431,35 +2517,35 @@ nodeTag _ = "?"
 (DTypeSig false "filterMapRows" (TyFun (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))))
 (DFunDef false "filterMapRows" (PWild (PList)) (EListLit))
 (DFunDef false "filterMapRows" ((PVar "f") (PCons (PVar "r") (PVar "rest"))) (EMatch (EApp (EVar "f") (EVar "r")) (arm (PCon "Some" (PVar "r2")) () (EBinOp "::" (EVar "r2") (EApp (EApp (EVar "filterMapRows") (EVar "f")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "filterMapRows") (EVar "f")) (EVar "rest")))))
-(DTypeSig false "specializeCon" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))))))
-(DFunDef false "specializeCon" ((PVar "c") (PVar "arity") (PVar "rows")) (EApp (EApp (EVar "filterMapRows") (EApp (EApp (EVar "specConRow") (EVar "c")) (EVar "arity"))) (EVar "rows")))
-(DTypeSig false "specConRow" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))))))
-(DFunDef false "specConRow" ((PVar "c") PWild (PTuple (PCons (PCon "PCon" (PVar "c2") (PVar "args")) (PVar "rest")) (PVar "i"))) (EIf (EBinOp "==" (EVar "c2") (EVar "c")) (EApp (EVar "Some") (ETuple (EBinOp "++" (EVar "args") (EVar "rest")) (EVar "i"))) (EVar "None")))
-(DFunDef false "specConRow" (PWild (PVar "arity") (PTuple (PCons (PCon "PWild") (PVar "rest")) (PVar "i"))) (EApp (EVar "Some") (ETuple (EBinOp "++" (EApp (EApp (EVar "replicate") (EVar "arity")) (EVar "PWild")) (EVar "rest")) (EVar "i"))))
-(DFunDef false "specConRow" (PWild PWild PWild) (EVar "None"))
-(DTypeSig false "specializeLit" (TyFun (TyCon "Lit") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))))
-(DFunDef false "specializeLit" ((PVar "l") (PVar "rows")) (EApp (EApp (EVar "filterMapRows") (EApp (EVar "specLitRow") (EVar "l"))) (EVar "rows")))
-(DTypeSig false "specLitRow" (TyFun (TyCon "Lit") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))))
-(DFunDef false "specLitRow" ((PVar "l") (PTuple (PCons (PCon "PLit" (PVar "l2")) (PVar "rest")) (PVar "i"))) (EIf (EApp (EApp (EVar "litEq") (EVar "l2")) (EVar "l")) (EApp (EVar "Some") (ETuple (EVar "rest") (EVar "i"))) (EVar "None")))
-(DFunDef false "specLitRow" (PWild (PTuple (PCons (PCon "PWild") (PVar "rest")) (PVar "i"))) (EApp (EVar "Some") (ETuple (EVar "rest") (EVar "i"))))
-(DFunDef false "specLitRow" (PWild PWild) (EVar "None"))
-(DTypeSig false "litEq" (TyFun (TyCon "Lit") (TyFun (TyCon "Lit") (TyCon "Bool"))))
-(DFunDef false "litEq" ((PCon "LInt" (PVar "a")) (PCon "LInt" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
-(DFunDef false "litEq" ((PCon "LFloat" (PVar "a")) (PCon "LFloat" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
-(DFunDef false "litEq" ((PCon "LString" (PVar "a")) (PCon "LString" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
-(DFunDef false "litEq" ((PCon "LChar" (PVar "a")) (PCon "LChar" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
-(DFunDef false "litEq" ((PCon "LBool" (PVar "a")) (PCon "LBool" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
-(DFunDef false "litEq" ((PCon "LUnit") (PCon "LUnit")) (EVar "True"))
-(DFunDef false "litEq" (PWild PWild) (EVar "False"))
+(DTypeSig false "bucketRows" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))))))
+(DFunDef false "bucketRows" ((PVar "k") (PVar "m")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "m"))))
+(DTypeSig false "pushBucket" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))))))))
+(DFunDef false "pushBucket" ((PVar "k") (PVar "r") (PVar "m")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (EBinOp "::" (EVar "r") (EApp (EApp (EVar "bucketRows") (EVar "k")) (EVar "m")))) (EVar "m")))
+(DTypeSig false "conBuckets" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))))))))
+(DFunDef false "conBuckets" (PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "conBuckets" ((PVar "k") (PCons (PTuple (PCons (PCon "PCon" (PVar "c") (PVar "args")) (PVar "rest")) (PVar "i")) (PVar "more")) (PVar "acc")) (EApp (EApp (EApp (EVar "conBuckets") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "more")) (EApp (EApp (EApp (EVar "pushBucket") (EVar "c")) (ETuple (EVar "k") (ETuple (EBinOp "++" (EVar "args") (EVar "rest")) (EVar "i")))) (EVar "acc"))))
+(DFunDef false "conBuckets" ((PVar "k") (PCons PWild (PVar "more")) (PVar "acc")) (EApp (EApp (EApp (EVar "conBuckets") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "more")) (EVar "acc")))
+(DTypeSig false "litBuckets" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))))))))
+(DFunDef false "litBuckets" (PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "litBuckets" ((PVar "k") (PCons (PTuple (PCons (PCon "PLit" (PVar "l")) (PVar "rest")) (PVar "i")) (PVar "more")) (PVar "acc")) (EApp (EApp (EApp (EVar "litBuckets") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "more")) (EApp (EApp (EApp (EVar "pushBucket") (EApp (EVar "litKey") (EVar "l"))) (ETuple (EVar "k") (ETuple (EVar "rest") (EVar "i")))) (EVar "acc"))))
+(DFunDef false "litBuckets" ((PVar "k") (PCons PWild (PVar "more")) (PVar "acc")) (EApp (EApp (EApp (EVar "litBuckets") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "more")) (EVar "acc")))
+(DTypeSig false "wildTailRows" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))))))
+(DFunDef false "wildTailRows" (PWild (PList)) (EListLit))
+(DFunDef false "wildTailRows" ((PVar "k") (PCons (PTuple (PCons (PCon "PWild") (PVar "rest")) (PVar "i")) (PVar "more"))) (EBinOp "::" (ETuple (EVar "k") (ETuple (EVar "rest") (EVar "i"))) (EApp (EApp (EVar "wildTailRows") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "more"))))
+(DFunDef false "wildTailRows" ((PVar "k") (PCons PWild (PVar "more"))) (EApp (EApp (EVar "wildTailRows") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "more")))
+(DTypeSig false "padWildRow" (TyFun (TyCon "Int") (TyFun (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))))
+(DFunDef false "padWildRow" ((PVar "arity") (PTuple (PVar "k") (PTuple (PVar "ps") (PVar "i")))) (ETuple (EVar "k") (ETuple (EBinOp "++" (EApp (EApp (EVar "replicate") (EVar "arity")) (EVar "PWild")) (EVar "ps")) (EVar "i"))))
+(DTypeSig false "mergeByOrd" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))))
+(DFunDef false "mergeByOrd" ((PList) (PVar "ys")) (EApp (EApp (EVar "map") (EVar "untagRow")) (EVar "ys")))
+(DFunDef false "mergeByOrd" ((PVar "xs") (PList)) (EApp (EApp (EVar "map") (EVar "untagRow")) (EVar "xs")))
+(DFunDef false "mergeByOrd" ((PCons (PTuple (PVar "ka") (PVar "ra")) (PVar "xs")) (PCons (PTuple (PVar "kb") (PVar "rb")) (PVar "ys"))) (EIf (EBinOp "<" (EVar "ka") (EVar "kb")) (EBinOp "::" (EVar "ra") (EApp (EApp (EVar "mergeByOrd") (EVar "xs")) (EBinOp "::" (ETuple (EVar "kb") (EVar "rb")) (EVar "ys")))) (EBinOp "::" (EVar "rb") (EApp (EApp (EVar "mergeByOrd") (EBinOp "::" (ETuple (EVar "ka") (EVar "ra")) (EVar "xs"))) (EVar "ys")))))
+(DTypeSig false "untagRow" (TyFun (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))
+(DFunDef false "untagRow" ((PTuple PWild (PVar "r"))) (EVar "r"))
 (DTypeSig false "defaultMatrix" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))))
 (DFunDef false "defaultMatrix" ((PVar "rows")) (EApp (EApp (EVar "filterMapRows") (EVar "defRow")) (EVar "rows")))
 (DTypeSig false "defRow" (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))))
 (DFunDef false "defRow" ((PTuple (PCons (PCon "PWild") (PVar "rest")) (PVar "i"))) (EApp (EVar "Some") (ETuple (EVar "rest") (EVar "i"))))
 (DFunDef false "defRow" (PWild) (EVar "None"))
-(DTypeSig false "nthBool" (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyCon "Int") (TyCon "Bool"))))
-(DFunDef false "nthBool" ((PCons (PVar "b") PWild) (PLit (LInt 0))) (EVar "b"))
-(DFunDef false "nthBool" ((PCons PWild (PVar "rest")) (PVar "n")) (EApp (EApp (EVar "nthBool") (EVar "rest")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))))
-(DFunDef false "nthBool" ((PList) PWild) (EVar "False"))
 (DTypeSig false "lowerField" (TyFun (TyCon "FieldAssign") (TyCon "CField")))
 (DFunDef false "lowerField" ((PCon "FieldAssign" (PVar "k") (PVar "e"))) (EApp (EApp (EVar "CField") (EVar "k")) (EApp (EVar "lower") (EVar "e"))))
 (DTypeSig false "lowerBind" (TyFun (TyCon "LetBind") (TyCon "CBind")))
@@ -3062,20 +3148,26 @@ nodeTag _ = "?"
 (DFunDef false "initialRows" ((PList) PWild) (EListLit))
 (DFunDef false "initialRows" ((PCons (PCon "Arm" (PVar "pat") PWild PWild) (PVar "rest")) (PVar "i")) (EBinOp "::" (ETuple (EListLit (EApp (EVar "canonPat") (EVar "pat"))) (EVar "i")) (EApp (EApp (EVar "initialRows") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
 (DTypeSig true "compileTree" (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree"))))
-(DFunDef false "compileTree" (PWild (PList)) (EVar "CTFail"))
-(DFunDef false "compileTree" ((PVar "guards") (PCons (PVar "row") (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "compileRows") (EVar "guards")) (EVar "row")) (EVar "rest")) (EBinOp "::" (EVar "row") (EVar "rest"))))
-(DTypeSig false "compileRows" (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree"))))))
-(DFunDef false "compileRows" ((PVar "guards") (PTuple (PVar "pats") (PVar "i")) (PVar "rest") (PVar "rows")) (EIf (EApp (EVar "allWild") (EVar "pats")) (EApp (EApp (EApp (EVar "leafOrGuard") (EVar "guards")) (EVar "i")) (EVar "rest")) (EIf (EApp (EApp (EVar "anyList") (EVar "rowHasCon")) (EVar "rows")) (EApp (EApp (EVar "buildConSwitch") (EVar "guards")) (EVar "rows")) (EIf (EApp (EApp (EVar "anyList") (EVar "rowHasLit")) (EVar "rows")) (EApp (EApp (EVar "buildLitSwitch") (EVar "guards")) (EVar "rows")) (EIf (EVar "otherwise") (EApp (EVar "CTDrop") (EApp (EApp (EVar "compileTree") (EVar "guards")) (EApp (EApp (EMethodRef "map") (EVar "dropHead")) (EVar "rows")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
-(DTypeSig false "leafOrGuard" (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree")))))
-(DFunDef false "leafOrGuard" ((PVar "guards") (PVar "i") (PVar "rest")) (EIf (EApp (EApp (EVar "nthBool") (EVar "guards")) (EVar "i")) (EApp (EApp (EVar "CTGuard") (EVar "i")) (EApp (EApp (EVar "compileTree") (EVar "guards")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EVar "CTLeaf") (EVar "i")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "buildConSwitch" (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree"))))
-(DFunDef false "buildConSwitch" ((PVar "guards") (PVar "rows")) (EApp (EApp (EVar "CTSwitch") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "conBranch") (EVar "guards")) (EVar "rows"))) (EApp (EVar "distinctConHeads") (EVar "rows")))) (EApp (EApp (EVar "compileTree") (EVar "guards")) (EApp (EVar "defaultMatrix") (EVar "rows")))))
-(DTypeSig false "conBranch" (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyCon "CTBranch")))))
-(DFunDef false "conBranch" ((PVar "guards") (PVar "rows") (PTuple (PVar "c") (PVar "a"))) (EApp (EApp (EVar "CTBranch") (EApp (EApp (EVar "decodeHead") (EVar "c")) (EVar "a"))) (EApp (EApp (EVar "compileTree") (EVar "guards")) (EApp (EApp (EApp (EVar "specializeCon") (EVar "c")) (EVar "a")) (EVar "rows")))))
-(DTypeSig false "buildLitSwitch" (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree"))))
-(DFunDef false "buildLitSwitch" ((PVar "guards") (PVar "rows")) (EApp (EApp (EVar "CTSwitch") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "litBranch") (EVar "guards")) (EVar "rows"))) (EApp (EVar "distinctLits") (EVar "rows")))) (EApp (EApp (EVar "compileTree") (EVar "guards")) (EApp (EVar "defaultMatrix") (EVar "rows")))))
-(DTypeSig false "litBranch" (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyFun (TyCon "Lit") (TyCon "CTBranch")))))
-(DFunDef false "litBranch" ((PVar "guards") (PVar "rows") (PVar "l")) (EApp (EApp (EVar "CTBranch") (EApp (EVar "HLit") (EVar "l"))) (EApp (EApp (EVar "compileTree") (EVar "guards")) (EApp (EApp (EVar "specializeLit") (EVar "l")) (EVar "rows")))))
+(DFunDef false "compileTree" ((PVar "guards") (PVar "rows")) (EApp (EApp (EVar "compileTreeG") (EApp (EApp (EApp (EVar "guardSet") (ELit (LInt 0))) (EVar "guards")) (EVar "omEmpty"))) (EVar "rows")))
+(DTypeSig false "guardSet" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DFunDef false "guardSet" (PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "guardSet" ((PVar "i") (PCons (PCon "True") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "guardSet") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EVar "i"))) (ELit LUnit)) (EVar "acc"))))
+(DFunDef false "guardSet" ((PVar "i") (PCons (PCon "False") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "guardSet") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "acc")))
+(DTypeSig false "compileTreeG" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree"))))
+(DFunDef false "compileTreeG" (PWild (PList)) (EVar "CTFail"))
+(DFunDef false "compileTreeG" ((PVar "guards") (PCons (PVar "row") (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "compileRows") (EVar "guards")) (EVar "row")) (EVar "rest")) (EBinOp "::" (EVar "row") (EVar "rest"))))
+(DTypeSig false "compileRows" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree"))))))
+(DFunDef false "compileRows" ((PVar "guards") (PTuple (PVar "pats") (PVar "i")) (PVar "rest") (PVar "rows")) (EIf (EApp (EVar "allWild") (EVar "pats")) (EApp (EApp (EApp (EVar "leafOrGuard") (EVar "guards")) (EVar "i")) (EVar "rest")) (EIf (EApp (EApp (EVar "anyList") (EVar "rowHasCon")) (EVar "rows")) (EApp (EApp (EVar "buildConSwitch") (EVar "guards")) (EVar "rows")) (EIf (EApp (EApp (EVar "anyList") (EVar "rowHasLit")) (EVar "rows")) (EApp (EApp (EVar "buildLitSwitch") (EVar "guards")) (EVar "rows")) (EIf (EVar "otherwise") (EApp (EVar "CTDrop") (EApp (EApp (EVar "compileTreeG") (EVar "guards")) (EApp (EApp (EMethodRef "map") (EVar "dropHead")) (EVar "rows")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DTypeSig false "leafOrGuard" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree")))))
+(DFunDef false "leafOrGuard" ((PVar "guards") (PVar "i") (PVar "rest")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EVar "i"))) (EVar "guards")) (EApp (EApp (EVar "CTGuard") (EVar "i")) (EApp (EApp (EVar "compileTreeG") (EVar "guards")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EVar "CTLeaf") (EVar "i")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "buildConSwitch" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree"))))
+(DFunDef false "buildConSwitch" ((PVar "guards") (PVar "rows")) (EBlock (DoLet false false (PVar "buckets") (EApp (EApp (EApp (EVar "conBuckets") (ELit (LInt 0))) (EVar "rows")) (EVar "omEmpty"))) (DoLet false false (PVar "wilds") (EApp (EApp (EVar "wildTailRows") (ELit (LInt 0))) (EVar "rows"))) (DoExpr (EApp (EApp (EVar "CTSwitch") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "conBranch") (EVar "guards")) (EVar "buckets")) (EVar "wilds"))) (EApp (EVar "distinctConHeads") (EVar "rows")))) (EApp (EApp (EVar "compileTreeG") (EVar "guards")) (EApp (EVar "defaultMatrix") (EVar "rows")))))))
+(DTypeSig false "conBranch" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))) (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyCon "CTBranch"))))))
+(DFunDef false "conBranch" ((PVar "guards") (PVar "buckets") (PVar "wilds") (PTuple (PVar "c") (PVar "a"))) (EApp (EApp (EVar "CTBranch") (EApp (EApp (EVar "decodeHead") (EVar "c")) (EVar "a"))) (EApp (EApp (EVar "compileTreeG") (EVar "guards")) (EApp (EApp (EVar "mergeByOrd") (EApp (EVar "reverseL") (EApp (EApp (EVar "bucketRows") (EVar "c")) (EVar "buckets")))) (EApp (EApp (EMethodRef "map") (EApp (EVar "padWildRow") (EVar "a"))) (EVar "wilds"))))))
+(DTypeSig false "buildLitSwitch" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyCon "CTree"))))
+(DFunDef false "buildLitSwitch" ((PVar "guards") (PVar "rows")) (EBlock (DoLet false false (PVar "buckets") (EApp (EApp (EApp (EVar "litBuckets") (ELit (LInt 0))) (EVar "rows")) (EVar "omEmpty"))) (DoLet false false (PVar "wilds") (EApp (EApp (EVar "wildTailRows") (ELit (LInt 0))) (EVar "rows"))) (DoExpr (EApp (EApp (EVar "CTSwitch") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "litBranch") (EVar "guards")) (EVar "buckets")) (EVar "wilds"))) (EApp (EVar "distinctLits") (EVar "rows")))) (EApp (EApp (EVar "compileTreeG") (EVar "guards")) (EApp (EVar "defaultMatrix") (EVar "rows")))))))
+(DTypeSig false "litBranch" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))) (TyFun (TyCon "Lit") (TyCon "CTBranch"))))))
+(DFunDef false "litBranch" ((PVar "guards") (PVar "buckets") (PVar "wilds") (PVar "l")) (EApp (EApp (EVar "CTBranch") (EApp (EVar "HLit") (EVar "l"))) (EApp (EApp (EVar "compileTreeG") (EVar "guards")) (EApp (EApp (EVar "mergeByOrd") (EApp (EVar "reverseL") (EApp (EApp (EVar "bucketRows") (EApp (EVar "litKey") (EVar "l"))) (EVar "buckets")))) (EVar "wilds")))))
 (DTypeSig false "decodeHead" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "CHead"))))
 (DFunDef false "decodeHead" ((PLit (LString "__cons__")) PWild) (EVar "HCons"))
 (DFunDef false "decodeHead" ((PLit (LString "__nil__")) PWild) (EVar "HNil"))
@@ -3150,35 +3242,35 @@ nodeTag _ = "?"
 (DTypeSig false "filterMapRows" (TyFun (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))))
 (DFunDef false "filterMapRows" (PWild (PList)) (EListLit))
 (DFunDef false "filterMapRows" ((PVar "f") (PCons (PVar "r") (PVar "rest"))) (EMatch (EApp (EVar "f") (EVar "r")) (arm (PCon "Some" (PVar "r2")) () (EBinOp "::" (EVar "r2") (EApp (EApp (EVar "filterMapRows") (EVar "f")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "filterMapRows") (EVar "f")) (EVar "rest")))))
-(DTypeSig false "specializeCon" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))))))
-(DFunDef false "specializeCon" ((PVar "c") (PVar "arity") (PVar "rows")) (EApp (EApp (EVar "filterMapRows") (EApp (EApp (EVar "specConRow") (EVar "c")) (EVar "arity"))) (EVar "rows")))
-(DTypeSig false "specConRow" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))))))
-(DFunDef false "specConRow" ((PVar "c") PWild (PTuple (PCons (PCon "PCon" (PVar "c2") (PVar "args")) (PVar "rest")) (PVar "i"))) (EIf (EBinOp "==" (EVar "c2") (EVar "c")) (EApp (EVar "Some") (ETuple (EBinOp "++" (EVar "args") (EVar "rest")) (EVar "i"))) (EVar "None")))
-(DFunDef false "specConRow" (PWild (PVar "arity") (PTuple (PCons (PCon "PWild") (PVar "rest")) (PVar "i"))) (EApp (EVar "Some") (ETuple (EBinOp "++" (EApp (EApp (EVar "replicate") (EVar "arity")) (EVar "PWild")) (EVar "rest")) (EVar "i"))))
-(DFunDef false "specConRow" (PWild PWild PWild) (EVar "None"))
-(DTypeSig false "specializeLit" (TyFun (TyCon "Lit") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))))
-(DFunDef false "specializeLit" ((PVar "l") (PVar "rows")) (EApp (EApp (EVar "filterMapRows") (EApp (EVar "specLitRow") (EVar "l"))) (EVar "rows")))
-(DTypeSig false "specLitRow" (TyFun (TyCon "Lit") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))))
-(DFunDef false "specLitRow" ((PVar "l") (PTuple (PCons (PCon "PLit" (PVar "l2")) (PVar "rest")) (PVar "i"))) (EIf (EApp (EApp (EVar "litEq") (EVar "l2")) (EVar "l")) (EApp (EVar "Some") (ETuple (EVar "rest") (EVar "i"))) (EVar "None")))
-(DFunDef false "specLitRow" (PWild (PTuple (PCons (PCon "PWild") (PVar "rest")) (PVar "i"))) (EApp (EVar "Some") (ETuple (EVar "rest") (EVar "i"))))
-(DFunDef false "specLitRow" (PWild PWild) (EVar "None"))
-(DTypeSig false "litEq" (TyFun (TyCon "Lit") (TyFun (TyCon "Lit") (TyCon "Bool"))))
-(DFunDef false "litEq" ((PCon "LInt" (PVar "a")) (PCon "LInt" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
-(DFunDef false "litEq" ((PCon "LFloat" (PVar "a")) (PCon "LFloat" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
-(DFunDef false "litEq" ((PCon "LString" (PVar "a")) (PCon "LString" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
-(DFunDef false "litEq" ((PCon "LChar" (PVar "a")) (PCon "LChar" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
-(DFunDef false "litEq" ((PCon "LBool" (PVar "a")) (PCon "LBool" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
-(DFunDef false "litEq" ((PCon "LUnit") (PCon "LUnit")) (EVar "True"))
-(DFunDef false "litEq" (PWild PWild) (EVar "False"))
+(DTypeSig false "bucketRows" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))))))
+(DFunDef false "bucketRows" ((PVar "k") (PVar "m")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "m"))))
+(DTypeSig false "pushBucket" (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))))))))
+(DFunDef false "pushBucket" ((PVar "k") (PVar "r") (PVar "m")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (EBinOp "::" (EVar "r") (EApp (EApp (EVar "bucketRows") (EVar "k")) (EVar "m")))) (EVar "m")))
+(DTypeSig false "conBuckets" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))))))))
+(DFunDef false "conBuckets" (PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "conBuckets" ((PVar "k") (PCons (PTuple (PCons (PCon "PCon" (PVar "c") (PVar "args")) (PVar "rest")) (PVar "i")) (PVar "more")) (PVar "acc")) (EApp (EApp (EApp (EVar "conBuckets") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "more")) (EApp (EApp (EApp (EVar "pushBucket") (EVar "c")) (ETuple (EVar "k") (ETuple (EBinOp "++" (EVar "args") (EVar "rest")) (EVar "i")))) (EVar "acc"))))
+(DFunDef false "conBuckets" ((PVar "k") (PCons PWild (PVar "more")) (PVar "acc")) (EApp (EApp (EApp (EVar "conBuckets") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "more")) (EVar "acc")))
+(DTypeSig false "litBuckets" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))))))))
+(DFunDef false "litBuckets" (PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "litBuckets" ((PVar "k") (PCons (PTuple (PCons (PCon "PLit" (PVar "l")) (PVar "rest")) (PVar "i")) (PVar "more")) (PVar "acc")) (EApp (EApp (EApp (EVar "litBuckets") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "more")) (EApp (EApp (EApp (EVar "pushBucket") (EApp (EVar "litKey") (EVar "l"))) (ETuple (EVar "k") (ETuple (EVar "rest") (EVar "i")))) (EVar "acc"))))
+(DFunDef false "litBuckets" ((PVar "k") (PCons PWild (PVar "more")) (PVar "acc")) (EApp (EApp (EApp (EVar "litBuckets") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "more")) (EVar "acc")))
+(DTypeSig false "wildTailRows" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))))))
+(DFunDef false "wildTailRows" (PWild (PList)) (EListLit))
+(DFunDef false "wildTailRows" ((PVar "k") (PCons (PTuple (PCons (PCon "PWild") (PVar "rest")) (PVar "i")) (PVar "more"))) (EBinOp "::" (ETuple (EVar "k") (ETuple (EVar "rest") (EVar "i"))) (EApp (EApp (EVar "wildTailRows") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "more"))))
+(DFunDef false "wildTailRows" ((PVar "k") (PCons PWild (PVar "more"))) (EApp (EApp (EVar "wildTailRows") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "more")))
+(DTypeSig false "padWildRow" (TyFun (TyCon "Int") (TyFun (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))))
+(DFunDef false "padWildRow" ((PVar "arity") (PTuple (PVar "k") (PTuple (PVar "ps") (PVar "i")))) (ETuple (EVar "k") (ETuple (EBinOp "++" (EApp (EApp (EVar "replicate") (EVar "arity")) (EVar "PWild")) (EVar "ps")) (EVar "i"))))
+(DTypeSig false "mergeByOrd" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))))
+(DFunDef false "mergeByOrd" ((PList) (PVar "ys")) (EApp (EApp (EMethodRef "map") (EVar "untagRow")) (EVar "ys")))
+(DFunDef false "mergeByOrd" ((PVar "xs") (PList)) (EApp (EApp (EMethodRef "map") (EVar "untagRow")) (EVar "xs")))
+(DFunDef false "mergeByOrd" ((PCons (PTuple (PVar "ka") (PVar "ra")) (PVar "xs")) (PCons (PTuple (PVar "kb") (PVar "rb")) (PVar "ys"))) (EIf (EBinOp "<" (EVar "ka") (EVar "kb")) (EBinOp "::" (EVar "ra") (EApp (EApp (EVar "mergeByOrd") (EVar "xs")) (EBinOp "::" (ETuple (EVar "kb") (EVar "rb")) (EVar "ys")))) (EBinOp "::" (EVar "rb") (EApp (EApp (EVar "mergeByOrd") (EBinOp "::" (ETuple (EVar "ka") (EVar "ra")) (EVar "xs"))) (EVar "ys")))))
+(DTypeSig false "untagRow" (TyFun (TyTuple (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))))
+(DFunDef false "untagRow" ((PTuple PWild (PVar "r"))) (EVar "r"))
 (DTypeSig false "defaultMatrix" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))))
 (DFunDef false "defaultMatrix" ((PVar "rows")) (EApp (EApp (EVar "filterMapRows") (EVar "defRow")) (EVar "rows")))
 (DTypeSig false "defRow" (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))))
 (DFunDef false "defRow" ((PTuple (PCons (PCon "PWild") (PVar "rest")) (PVar "i"))) (EApp (EVar "Some") (ETuple (EVar "rest") (EVar "i"))))
 (DFunDef false "defRow" (PWild) (EVar "None"))
-(DTypeSig false "nthBool" (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyCon "Int") (TyCon "Bool"))))
-(DFunDef false "nthBool" ((PCons (PVar "b") PWild) (PLit (LInt 0))) (EVar "b"))
-(DFunDef false "nthBool" ((PCons PWild (PVar "rest")) (PVar "n")) (EApp (EApp (EVar "nthBool") (EVar "rest")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))))
-(DFunDef false "nthBool" ((PList) PWild) (EVar "False"))
 (DTypeSig false "lowerField" (TyFun (TyCon "FieldAssign") (TyCon "CField")))
 (DFunDef false "lowerField" ((PCon "FieldAssign" (PVar "k") (PVar "e"))) (EApp (EApp (EVar "CField") (EVar "k")) (EApp (EVar "lower") (EVar "e"))))
 (DTypeSig false "lowerBind" (TyFun (TyCon "LetBind") (TyCon "CBind")))
