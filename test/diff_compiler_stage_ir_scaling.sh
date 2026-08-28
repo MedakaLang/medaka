@@ -651,6 +651,38 @@ is_known() {
   return 1
 }
 
+# ── STAGE_IR_ONLY: run ONE shape of this gate (#2160 phase 2) ────────────────
+#
+# This gate is the most expensive of the three scaling gates — every shape costs
+# 4 Callgrind profiles, and a whole run is ~10 min. Driving a single arm red
+# should not cost a whole run, and until this knob it did. Same shape as
+# ir_scaling's IR_ONLY and perf_scaling's PERF_ONLY.
+#
+# Values are the shape names passed to grade_shape below, plus `modules` for the
+# multi-module twin. Derive the set, do not trust this comment:
+#
+#   grep -n '^grade_shape \|^grade_modules$' test/diff_compiler_stage_ir_scaling.sh
+#
+# Space-separated list. Empty (the default, and the only value in CI — derive
+# with `grep -rn STAGE_IR_ONLY .github test Makefile`) runs everything and behaves
+# exactly as before, so this knob cannot make a real run quieter ([W-QUIETER]).
+# 🚨 A narrowed run is NOT a verdict: the `graded == 0` guard below asserts SCOPE,
+# not health, so under STAGE_IR_ONLY it is skipped and the skip is printed.
+STAGE_IR_ONLY="${STAGE_IR_ONLY:-}"
+if [ -n "$STAGE_IR_ONLY" ]; then
+  echo "############################################################################"
+  echo "## STAGE_IR_ONLY=[$STAGE_IR_ONLY] — NARROWED RUN, NOT a grading result.   ##"
+  echo "## Unnamed shapes did not run; the zero-graded coverage guard is off.     ##"
+  echo "############################################################################"
+fi
+
+# want <shape> — the ONLY reader of STAGE_IR_ONLY.
+want() {
+  [ -z "$STAGE_IR_ONLY" ] && return 0
+  for _w in $STAGE_IR_ONLY; do [ "$_w" = "$1" ] && return 0; done
+  return 1
+}
+
 # ── the shapes (verbatim from test/diff_compiler_perf_scaling.sh) ────────────
 
 gen_match() {
@@ -922,6 +954,7 @@ graded=0
 
 grade_shape() {
   shape="$1"; base_n="$2"
+  want "$shape" || return 0
   n1="$base_n"; n2=$((base_n * 2)); n4=$((base_n * 4))
   shape_graded=0
 
@@ -1011,6 +1044,7 @@ grade_shape() {
 # run_profile_modules) — NOT because the grading differs. If you change the
 # grading rule in one, change it in the other; they are a lockstep pair.
 grade_modules() {
+  want modules || return 0
   mdn1="$MOD_N"; mdn2=$((MOD_N * 2)); mdn4=$((MOD_N * 4))
   mod_graded=0
 
@@ -1102,7 +1136,12 @@ grade_shape constrained "$CONSTR_N"
 grade_shape wideiface "$WIDEIFACE_N"
 grade_modules
 
-if [ "$graded" -eq 0 ]; then
+if [ "$graded" -eq 0 ] && [ -n "$STAGE_IR_ONLY" ]; then
+  # SCOPE, not health — see the STAGE_IR_ONLY note. With the knob unset this is
+  # the same hard failure it has always been.
+  echo "NOTE: STAGE_IR_ONLY=[$STAGE_IR_ONLY] graded no stage; the zero-graded guard is"
+  echo "      SKIPPED because the narrowing was deliberate. Check the shape name."
+elif [ "$graded" -eq 0 ]; then
   echo "FAIL: no stage was graded — this gate proved nothing."
   exit 1
 fi

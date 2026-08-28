@@ -109,11 +109,19 @@
 #
 # ── THE THRESHOLD ────────────────────────────────────────────────────────────
 #
-# IR_THRESH = 3.0 per doubling, and a shape FAILS only when BOTH doublings clear
-# it (a sustained signal, never one reading). Same number and same rule as
-# diff_compiler_perf_scaling.sh, deliberately — the two gates grade the same
-# question on different metrics and a reader should not have to hold two
-# thresholds in their head.
+# IR_THRESH = 3.0 per doubling, and a shape FAILS when r2 — the SECOND doubling,
+# the one that carries the asymptote — clears it. Same NUMBER as
+# diff_compiler_perf_scaling.sh; not the same RULE, and the difference is
+# deliberate. See THE VERDICT RULE in grade_shape: the both-doublings conjunct
+# was imported from the wall-clock arm, where two noisy samples make a sustained
+# signal worth demanding, and it is inverted on a deterministic instrument, where
+# r1 < t < r2 is the signature of the superlinear term rather than of noise
+# (#2063, #2100).
+#
+# ⚠️ THIS PARAGRAPH SAID "BOTH DOUBLINGS" UNTIL 2026-08-28 (#2160 phase 2), i.e.
+# for the whole life of the r2-alone rule PR #2171 shipped: the header described
+# the rule the code no longer ran, and it was the paragraph a reader was pointed
+# at as "this gate's public contract". Found by phase 2's sweep of this file.
 #
 #     linear 2.0  |  n log n ~2.1  |  n^1.5 2.83  |  QUADRATIC 4.0
 #
@@ -127,8 +135,10 @@
 # see the floor block) reads r1 3.261 r2 3.603 at 400/800/1600. Roughly 32% below
 # the line and 9% above it. NB the ERR arm's ratios CLIMB with N (2.920/3.261 at
 # 200/400/800, 3.261/3.603 at 400/800/1600) — that climb is the signature that
-# separates a quadratic from a one-off step, and it is why the rule below wants
-# BOTH doublings rather than the larger of the two.
+# separates a quadratic from a one-off step, and it is exactly why the rule below
+# grades r2 alone: on a climbing shape r1 is the reading that has not caught up
+# yet, so requiring it too would excuse the shape at the very N where the term
+# first becomes visible.
 #
 # 🚨 THE THRESHOLD AND THE NETTING METHOD ABOVE ARE THIS GATE'S PUBLIC CONTRACT.
 # Cite them; do not invent a second set. If a future shape needs a different

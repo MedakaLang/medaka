@@ -399,6 +399,61 @@ is_known() {
   return 1
 }
 
+# ── PERF_ONLY: run ONE unit of this gate (#2160 phase 2) ─────────────────────
+#
+# This gate has no per-unit selector, and that cost phase 1 real time: every
+# observed-red record it kept had to be produced by a WHOLE run (~7 min QUICK),
+# because there was no way to say "just the bindings shape" or "just the
+# emittables row". test/diff_compiler_ir_scaling.sh has had IR_ONLY since it was
+# written and the difference in per-arm cost is the reason this exists.
+#
+# A UNIT is either a shape name from $SHAPES or one of the standalone row blocks
+# that follow the shapes loop. Derive the full set — never trust a list in a
+# comment:
+#
+#   sh test/diff_compiler_perf_scaling.sh --list-units
+#
+# PERF_ONLY takes a SPACE-SEPARATED list, so a sweep can drive two related units
+# in one run. Empty (the default, and the only value in CI: derive with
+# `grep -rn PERF_ONLY .github test Makefile`) runs everything and behaves exactly
+# as before — `want` is the only thing that reads it.
+#
+# 🚨 A NARROWED RUN IS NOT A VERDICT, and this gate has three end-of-run guards
+# whose whole job is to notice that an arm graded nothing (ops_graded==0,
+# backend_graded==0, and the measured-nothing check). Under PERF_ONLY those
+# guards would fire on scope rather than on breakage, so they are SKIPPED and the
+# skip is printed. That is safe in exactly one direction: with PERF_ONLY unset
+# they are untouched, so this knob can never make a real run quieter
+# ([W-QUIETER]). The banner says the same thing at the top of the output.
+PERF_ONLY="${PERF_ONLY:-}"
+if [ -n "$PERF_ONLY" ]; then
+  echo "############################################################################"
+  echo "## PERF_ONLY=[$PERF_ONLY] — NARROWED RUN. This is NOT a grading result:  ##"
+  echo "## unnamed units did not run, and the end-of-run coverage guards are off.  ##"
+  echo "############################################################################"
+fi
+
+# want <unit> — true when the unit should run. The ONLY reader of PERF_ONLY.
+want() {
+  [ -z "$PERF_ONLY" ] && return 0
+  for _w in $PERF_ONLY; do [ "$_w" = "$1" ] && return 0; done
+  return 1
+}
+
+# --list-units DERIVES the unit set from this file (#2160 rule 5) rather than
+# restating it in a header comment, which is the form that rots. Two sources,
+# because there are two kinds of unit: the shapes-loop entries live in the SHAPES
+# assignments, and each standalone row carries its own `if want ...` marker.
+if [ "${1:-}" = "--list-units" ]; then
+  echo "shape units (entries of the SHAPES loop; the DEEP-only ones are marked there):"
+  grep -n 'SHAPES=' "$0" | grep -v 'PERF_ONLY' | sed 's/^/  /'
+  echo "row units (the standalone blocks that follow the loop):"
+  grep -o '^if want [a-z-]*' "$0" | awk '{print "  " $3}'
+  echo
+  echo "PERF_ONLY takes a space-separated list of the names above."
+  exit 0
+fi
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -2455,6 +2510,7 @@ else
 fi
 
 for shape in $SHAPES; do
+  want "$shape" || continue   # PERF_ONLY unit: one per shape
   case "$shape" in
     xref)       base_n="$XREF_N" ;;
     comments)   base_n="$COMMENTS_N" ;;
@@ -2825,6 +2881,7 @@ wasm_emit_line_of() {
 alloc_of_wline() { printf '%s\n' "$1" | awk '{ gsub(/MB/,"",$4); print $4 }'; }
 ops_of_wline()   { printf '%s\n' "$1" | awk -F'\t' '{ print $5 }'; }
 
+if want wasm-listlit; then   # PERF_ONLY unit: wasm-listlit
 # Own baseline: the wasm-emit stage's FIXED prelude-emit cost (main = println 1, no list).
 WLBASE_ALLOC="$(wasm_emit_alloc_of "$BASE_FIX")"
 wla1="$(wasm_emit_alloc_of "$wlf1")"
@@ -2868,6 +2925,7 @@ case "$WLBASE_ALLOC$wla1$wla2$wla3" in
     fi ;;
 esac
 
+fi   # end PERF_ONLY unit: wasm-listlit
 # ── ROW: wasm-dispatch — WASM-EMIT ALLOCATION over a dispatch-heavy program (#382) ──
 #
 # THE HOLE THIS CLOSES: wasm_emit inlines a typeclass dispatch chain PER call site (the
@@ -2922,6 +2980,7 @@ gen_wasm_dispatch "$wdn3" "$wdf3"
 # Own baseline: reuse the wasm-emit stage's FIXED prelude-emit cost (main = println 1).
 # ONE wasm-ON run per size (captured whole), then the ALLOC arm (#382, field 4) and the
 # OP-COUNT arm (#986, tab field 5) both read it — the op coverage costs no extra run.
+if want wasm-dispatch; then   # PERF_ONLY unit: wasm-dispatch
 WDBASE_LINE="$(wasm_emit_line_of "$BASE_FIX")"
 wdln1="$(wasm_emit_line_of "$wdf1")"
 wdln2="$(wasm_emit_line_of "$wdf2")"
@@ -3036,6 +3095,7 @@ case "$WDBASE_OPS$wdo1$wdo2$wdo3" in
     fi ;;
 esac
 
+fi   # end PERF_ONLY unit: wasm-dispatch
 # ── ROW: llvm-dispatch (OP-COUNT) — the LLVM `emit` residual scan (#990) ──────────
 #
 # THE HOLE THIS CLOSES: the #986 wasm-disp/op row above deliberately gated wasm-emit and
@@ -3065,6 +3125,7 @@ esac
 #              this row is PROVEN RED on the regression it guards, GREEN with the fix, both at
 #              the cheap per-PR band. Self-drains the instant a per-site LLVM emit scan regresses.
 LD_THRESH="${PERF_LLVM_DISPATCH_THRESH:-2.5}"
+if want llvm-dispatch; then   # PERF_ONLY unit: llvm-dispatch
 LDBASE_OP="$(profile_run "$BASE_FIX" | awk -F'\t' '$1=="[perf] emit"{print $5; exit}')"
 ldo1="$(profile_run "$wdf1" | awk -F'\t' '$1=="[perf] emit"{print $5; exit}')"
 ldo2="$(profile_run "$wdf2" | awk -F'\t' '$1=="[perf] emit"{print $5; exit}')"
@@ -3106,6 +3167,7 @@ case "$LDBASE_OP$ldo1$ldo2$ldo3" in
     fi ;;
 esac
 
+fi   # end PERF_ONLY unit: llvm-dispatch
 # ── SHAPE: modules — the O(modules^2) family (issue #153) ─────────────────────
 #
 # This is the WHOLE POINT of #153: the five shapes above are single-file, so they
@@ -3135,6 +3197,7 @@ gen_modules "$mn1" "$md1" "$MOD_K"
 gen_modules "$mn2" "$md2" "$MOD_K"
 gen_modules "$mn3" "$md3" "$MOD_K"
 
+if want modules; then   # PERF_ONLY unit: modules
 # Own baseline: this driver's fixed prelude cost differs from the single-file one.
 MBASE_DIR="$WORK/modules_base"; mkdir -p "$MBASE_DIR"
 printf 'main = println 1\n' > "$MBASE_DIR/entry.mdk"
@@ -3267,6 +3330,8 @@ case "$MBASE_ALLOC$ma1$ma2$ma3" in
     fi ;;
 esac
 
+fi   # end PERF_ONLY unit: modules
+if want starimports; then   # PERF_ONLY unit: starimports
 # ── SHAPES: starimports / reexports — multi-module RESOLVE (issue #881) ────────
 #
 # THE HOLE #881 CLOSES: until now the multi-module driver (profile_modules_main) ran
@@ -3400,6 +3465,8 @@ for rshape in starimports reexports; do
   fi
 done
 
+fi   # end PERF_ONLY unit: starimports
+if want scoperefs; then   # PERF_ONLY unit: scoperefs
 # ── SHAPE: scoperefs — single-file RESOLVE scope-scan regression assertion (#78 P-1) ──
 #
 # Same "drained to ~0" contract as `reexports` above, for the residual #78 quadratic: the
@@ -3536,6 +3603,8 @@ else
   fi
 fi
 
+fi   # end PERF_ONLY unit: scoperefs
+if want emittables; then   # PERF_ONLY unit: emittables
 # ── emittables — the EMITTER-TABLE op grade (issue #352) ─────────────────────
 #
 # Five per-program tables in the LLVM emitter (+ one in private_mangle) were `List`s
@@ -3697,6 +3766,8 @@ grade_emittables_stage emit
 # op row accordingly; `support/util.mdk`'s own `dedupBy` comment says the same thing
 # from the other side.
 
+fi   # end PERF_ONLY unit: emittables
+if want matchlits; then   # PERF_ONLY unit: matchlits
 # ── matchlits — EXHAUSTIVENESS over a wide LITERAL match (issue #988) ─────────
 # The literal sibling of the main-loop `match` shape. It grades the TYPECHECK-STAGE
 # net allocation, NOT the total-alloc arm: exhaust's literal-pattern-matrix rescan
@@ -3766,6 +3837,7 @@ else
   echo "NOTE: QUICK mode — matchlits SKIPPED (DEEP-only, #988 exhaust literal-matrix alloc detector). Runs in nightly.yml."
 fi
 
+fi   # end PERF_ONLY unit: matchlits
 printf -- '---------------------------------------------------------------------\n'
 printf '%d ok, %d known-superlinear (ledgered), %d regressed (threshold %sx per doubling)\n' "$pass" "$known" "$fail" "$THRESH"
 
@@ -3779,6 +3851,17 @@ printf 'backend TIME arm (issue #359): wasm graded via the xref:wasm-emit ledger
 printf 'OP-COUNT arm (issue #884): %d per-stage op-ratios graded (deterministic, no floor)\n' "$ops_graded"
 
 # Never exit 0 having measured nothing.
+#
+# ⚠️ THE NEXT THREE GUARDS ASSERT SCOPE, NOT HEALTH. Each says "an arm graded
+# nothing, therefore it is dead" — true for a whole run, false for a run that was
+# deliberately narrowed, where an ungraded arm is the point. Under PERF_ONLY they
+# would report breakage on a scope decision the operator just made, so they are
+# skipped and the skip is printed. PERF_ONLY unset leaves all three exactly as
+# they were, so the knob cannot make a real run quieter ([W-QUIETER]).
+if [ -n "$PERF_ONLY" ]; then
+  echo "NOTE: PERF_ONLY=[$PERF_ONLY] — the measured-nothing / op-arm-dead / backend-arm-dead"
+  echo "      coverage guards were SKIPPED. This run graded only the named units."
+else
 [ $((pass + known + fail)) -gt 0 ] || { echo "FAIL: the gate measured no shapes at all"; exit 1; }
 
 # Never exit 0 having graded no OP stage — the #884 analogue of the backend guard. If
@@ -3805,6 +3888,7 @@ if [ "$backend_graded" -eq 0 ]; then
   echo "      Do NOT 'fix' this by lowering the floor: raise N until the stage is timeable."
   exit 1
 fi
+fi   # end of the PERF_ONLY coverage-guard skip
 
 if [ "$fail" -gt 0 ]; then
   cat <<EOF
