@@ -1,0 +1,91 @@
+{- | Structural tests for canonical DAG-CBOR/DRISL, CID, and base32.
+   Published expected bytes and CIDs stay in the provenance-ledgered corpus;
+   these tests assert round-trips, determinism, isolation, and rejection. -}
+
+import array as A
+import string.{contains, toLower}
+import test.{expectEqual, expectTrue}
+import lib.base32.{base32Decode, base32Encode}
+import lib.cid.{
+  cidDigest,
+  cidEqual,
+  cidForDagCbor,
+  cidForRaw,
+  cidFromBytes,
+  cidFromString,
+  cidToBytes,
+  cidToString,
+}
+import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
+
+isErr : Result e a -> Bool
+isErr (Err _) = True
+isErr (Ok _) = False
+
+roundTrip : DagCbor -> Bool
+roundTrip value = match dagCborEncode value
+  Err _ => False
+  Ok encoded => match dagCborDecode encoded
+    Err _ => False
+    Ok decoded => dagCborEncode decoded == Ok encoded
+
+test "base32 round-trips empty and partial groups" =
+  let samples = [[||], [|0|], [|0, 1|], [|0, 1, 2|], [|0, 1, 2, 3|], [|0, 1, 2, 3, 4|]]
+  expectTrue (all
+    (bytes => base32Decode (base32Encode bytes) == Ok bytes)
+    samples)
+
+test "base32 encoder is lowercase and unpadded" =
+  let encoded = base32Encode [|255, 238, 221, 204, 187, 170|]
+  expectTrue (encoded == toLower encoded && not (contains "=" encoded))
+
+test "base32 rejects padding uppercase and alien alphabet" =
+  expectTrue
+    (isErr (base32Decode "aa======") && isErr (base32Decode "AA") && isErr (base32Decode "a1"))
+
+test "CID binary and string forms round-trip" =
+  let cid = cidForDagCbor [|1, 2, 3, 4|]
+  match cidFromBytes (cidToBytes cid)
+    Err _ => expectTrue False
+    Ok binary => match cidFromString (cidToString cid)
+      Err _ => expectTrue False
+      Ok text => expectTrue (cidEqual cid binary && cidEqual cid text)
+
+test "CID codec changes the identity for identical content" =
+  expectTrue (not (cidEqual (cidForDagCbor [|1|]) (cidForRaw [|1|])))
+
+test "CID digest access is a defensive copy" =
+  let cid = cidForDagCbor [|9, 8, 7|]
+  let before = cidToBytes cid
+  let exposed = cidDigest cid
+  let () = A.set 0 (bitXor exposed[0] 255) exposed
+  expectEqual (cidToBytes cid) before
+
+test "DAG-CBOR round-trips every admitted value kind" =
+  let link = cidForDagCbor [|1, 2, 3|]
+  let value = DcMap [
+    ("link", DcLink link),
+    ("array", DcArray [DcNull, DcBool False, DcBool True, DcInt (-25)]),
+    ("bytes", DcBytes [|0, 255|]),
+    ("text", DcString "水"),
+  ]
+  expectTrue (roundTrip value)
+
+test "DAG-CBOR map encoding is insertion-order independent" =
+  let a = DcMap [("bbb", DcInt 3), ("a", DcInt 1), ("cc", DcInt 2)]
+  let b = DcMap [("cc", DcInt 2), ("bbb", DcInt 3), ("a", DcInt 1)]
+  expectEqual (dagCborEncode a) (dagCborEncode b)
+
+test "DAG-CBOR encoder rejects duplicate map keys" =
+  expectTrue (isErr (dagCborEncode (DcMap [("x", DcInt 1), ("x", DcInt 2)])))
+
+test "DAG-CBOR encoder rejects non-byte array elements" =
+  expectTrue (isErr (dagCborEncode (DcBytes [|0, 256|])))
+
+test "DAG-CBOR decoder rejects non-shortest and trailing encodings" =
+  expectTrue
+    (isErr (dagCborDecode [|0x18, 0x17|]) && isErr (dagCborDecode [|0xf6, 0|]))
+
+test "DAG-CBOR decoder rejects unordered and duplicate map keys" =
+  expectTrue
+    (isErr (dagCborDecode [|0xa2, 0x61, 0x62, 1, 0x61, 0x61, 2|]) && isErr (dagCborDecode [|0xa2, 0x61, 0x61, 1, 0x61, 0x61, 2|]))

@@ -420,3 +420,15 @@ extraction:    pds/tools/gen_signing_corpus.sh verifies the artifact digest and 
 retrieved:     2026-08-24
 consumer:      S3-A-corpora (#1700 secp256k1 compact verification)
 notes:         242 unique tcIds; upstream 163 valid and 79 invalid; valid rows partition into 69 high-S and 94 low-S; project policy accepts 94 and rejects 148
+
+[vector]
+file:          pds/test/vectors/dagcbor_cid_ipld_vectors.txt
+local-sha256:  fb2ade7dc8d534ee2a92f1a5d743c5b01aca083ccfd3029b27840f7c77259171
+kind:          published-artifact
+source:        IPLD DAG-CBOR cross-codec fixtures, atproto-compatible no-float subset
+source-url:    https://ipld.io/specs/codecs/dag-cbor/fixtures/cross-codec/
+source-sha256: UNAVAILABLE
+source-note:   The authority publishes this generated fixture as an HTML page rather than a stable downloadable artifact, so there is no source-file digest to record. Retrieved after atproto renamed its deterministic profile DRISL: the selected rows contain no floats or non-atproto CID forms, and current atproto/DASL specifications retain these exact shortest-encoding, encoded-key ordering, tag-42 identity-byte, codec-0x71, and SHA-256 wire rules.
+extraction:    Hand-transcribed the fixture name, canonical Bytes hex, and dag-cbor CID for 17 named rows (array-2, array-255, array-500, array-65536, array-9007199254740991, array-empty, bytes-a1, bytes-empty, map-1_pair, map-empty, map-keysort, map-nested, null, string-Hello__world!, string-水, true, and cid-bafyreidj5idub6mapiupjwjsyyxhyhedxycv4vihfsicm2vt46o7morwlm); each triplet read back twice against the authority page.
+retrieved:     2026-08-28
+consumer:      P1-A-CBOR-CID (#2136 canonical DAG-CBOR/DRISL and CID foundation)
