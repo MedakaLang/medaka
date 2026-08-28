@@ -4,7 +4,7 @@ import array as A
 import hex.{decode}
 import io.{readLines}
 import string.{contains, join, repeat, split, startsWith, toInt, toUtf8}
-import lib.blockstore.{blockStoreEmpty}
+import lib.blockstore.{BlockStore, blockStoreEmpty, blockStorePut}
 import lib.cid.{Cid, cidEqual, cidForDagCbor, cidFromString, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
 import lib.repo.{
@@ -213,6 +213,48 @@ setField name value ((key, old)::rest) =
   else
     (key, old) :: setField name value rest
 
+mustPut : Cid -> Array Int -> BlockStore -> BlockStore
+mustPut cid bytes store = match blockStorePut cid bytes store
+  Ok next => next
+  Err message => panic "repo_vectors: test block insertion failed: \{message}"
+
+testCommitFields : String -> Cid -> List (String, DagCbor)
+testCommitFields did dataCid = [
+  ("did", DcString did),
+  ("rev", DcString "3ke6kg3wk222b"),
+  (
+    "sig",
+    DcBytes (mustHex "aaa6e79c2c161c48050d7439ae42a57637ccc38395614cfcd1a32d2836a5f6f32cb486409b88623d294c92f4557e1b92332957d4efd8cba967f79f4231f85aaa"),
+  ),
+  ("data", DcLink dataCid),
+  ("prev", DcNull),
+  ("version", DcInt 3),
+]
+
+malformedBoundExport : Result String (List (Cid, Array Int), Array Int)
+malformedBoundExport =
+  let recordBytes = mustEncode (DcMap [])
+  let recordCid = cidForDagCbor recordBytes
+  let rootBytes = mustEncode (DcMap [
+    ("l", DcNull),
+    (
+      "e",
+      DcArray [
+        DcMap [
+          ("p", DcInt 0),
+          ("k", DcBytes [||]),
+          ("v", DcLink recordCid),
+          ("t", DcNull),
+        ]
+      ],
+    ),
+  ])
+  let rootCid = cidForDagCbor rootBytes
+  let commitBytes = mustEncode (DcMap (testCommitFields "did:x1:a" rootCid))
+  let commitCid = cidForDagCbor commitBytes
+  let store = mustPut commitCid commitBytes (mustPut rootCid rootBytes (mustPut recordCid recordBytes blockStoreEmpty))
+  repoExportGraph commitCid commitBytes rootCid store
+
 removeField : String -> List (String, DagCbor) -> List (String, DagCbor)
 removeField _ [] = []
 removeField name ((key, value)::rest) =
@@ -244,7 +286,7 @@ runHostile did secret repo path presentRecord =
   let missingPrev = mustEncode (DcMap (removeField "prev" fields))
   let badVersion = mustEncode (DcMap (setField "version" (DcInt 2) fields))
   let badSig = mustEncode (DcMap (setField "sig" (DcBytes (arrayMake 64 0)) fields))
-  let tampered = 
+  let tampered =
     let bytes = arrayCopy signed
     let () = A.set (arrayLength bytes - 1) (bitXor bytes[arrayLength bytes - 1] 1) bytes
     bytes
@@ -278,6 +320,7 @@ main : <IO, Env, FileRead "_"> Unit
 main = runMain (args ())
 
 runMain : List String -> <IO, Env, FileRead "_"> Unit
+runMain ["--final-review"] = runFinalReview
 runMain [corpusPath] = runRead (readLines corpusPath)
 runMain [corpusPath, "--representative"] =
   runRepresentativeRead (readLines corpusPath)
@@ -300,6 +343,29 @@ runRepresentativeRows [meta, t0, t1, _, _, _, initLine, op1, c1, createOrder, cr
 runRepresentativeRows _ =
   panic "repo_vectors: unexpected representative corpus shape"
 
+runFinalReview : <IO> Unit
+runFinalReview =
+  let actualData = cidForDagCbor [|0|]
+  let expectedData = cidForDagCbor [|1|]
+  let rev = mustTid "3ke6kg3wk222b"
+  let signed = mustEncode (DcMap (testCommitFields "did:x1:a" actualData))
+  let controls = sum [
+    acceptLaterFailure "did-method-digit" "data mismatch" (repoValidateCommit "did:x1:a" expectedData rev signed)
+  ]
+  let rejected = sum [
+    rejectContains "did-method-empty" "invalid DID" (repoValidateCommit "did::a" expectedData rev signed),
+    rejectContains "did-method-uppercase" "invalid DID" (repoValidateCommit "did:X1:a" expectedData rev signed),
+    rejectContains "did-method-hyphen" "invalid DID" (repoValidateCommit "did:x-1:a" expectedData rev signed),
+  ]
+  let malformed = rejectContains "malformed-bound-mst" "empty key" malformedBoundExport
+  let () = println "final-review-controls: \{intToString controls}/1 valid route"
+  let () = println "final-review-rejected: \{intToString rejected}/3 neighboring invalid routes"
+  let () = println "final-review-export: \{intToString malformed}/1 malformed bound MST route"
+  if controls == 1 && rejected == 3 && malformed == 1 then println "FINAL-REVIEW: PASS"
+  else
+    let () = println "FINAL-REVIEW: FAIL"
+    exit 1
+
 runRepresentative : String -> SecretKey -> String -> String -> String -> String -> String -> String -> String -> <IO> Unit
 runRepresentative did secret t0 t1 initLine op1 c1 createOrder createCar =
   let tids = gradeTid t0 + gradeTid t1
@@ -319,12 +385,12 @@ runRepresentative did secret t0 t1 initLine op1 c1 createOrder createCar =
   let newCommit = repoLatestCommit changed
   let mismatchData = cidForDagCbor [|1|]
   let rejected = sum [
-    rejectContains "did-fragment" "invalid DID" (repoInit "did:x:a#b" secret initialTid),
-    rejectContains "did-query" "invalid DID" (repoInit "did:x:a?b" secret initialTid),
+    rejectContains "did-fragment" "invalid DID" (repoInit "did:x1:a#b" secret initialTid),
+    rejectContains "did-query" "invalid DID" (repoInit "did:x1:a?b" secret initialTid),
     rejectContains "did-path" "invalid DID" (repoInit "did:x:a/b" secret initialTid),
     rejectContains "did-control" "invalid DID" (repoInit "did:x:a\nb" secret initialTid),
     rejectContains "did-non-ascii" "invalid DID" (repoInit "did:x:é" secret initialTid),
-    rejectContains "did-method-digit" "invalid DID" (repoInit "did:x1:a" secret initialTid),
+    rejectContains "did-method-uppercase" "invalid DID" (repoInit "did:X1:a" secret initialTid),
     rejectContains "did-empty-identifier" "invalid DID" (repoInit "did:x:" secret initialTid),
     rejectContains "did-trailing-colon" "invalid DID" (repoInit "did:x:a:" secret initialTid),
     rejectContains "did-bad-percent" "invalid DID" (repoInit "did:x:a%zz" secret initialTid),
@@ -348,7 +414,7 @@ runRepresentative did secret t0 t1 initLine op1 c1 createOrder createCar =
     rejectContains "commit-data-root" "commit data mismatch" (repoExportGraph (repoCommitCid oldCommit) (repoCommitSignedBytes oldCommit) (repoRootCid changed) (repoStore changed)),
   ]
   let controls = sum [
-    acceptLaterFailure "did-generic" "data mismatch" (repoValidateCommit "did:x:a" mismatchData (repoCommitTid oldCommit) (repoCommitSignedBytes oldCommit)),
+    acceptLaterFailure "did-method-digit" "data mismatch" (repoValidateCommit "did:x1:a" mismatchData (repoCommitTid oldCommit) (repoCommitSignedBytes oldCommit)),
     acceptLaterFailure "did-colon-segments" "data mismatch" (repoValidateCommit "did:method:val:two" mismatchData (repoCommitTid oldCommit) (repoCommitSignedBytes oldCommit)),
     acceptLaterFailure "did-percent" "data mismatch" (repoValidateCommit "did:x:a%20b" mismatchData (repoCommitTid oldCommit) (repoCommitSignedBytes oldCommit)),
     acceptResult "rkey-min" (repoLookup (pathPrefix ++ toUtf8 "a") initial),
@@ -357,9 +423,11 @@ runRepresentative did secret t0 t1 initLine op1 c1 createOrder createCar =
     acceptResult "rkey-colon" (repoLookup (pathPrefix ++ toUtf8 "pre:fix") initial),
     acceptResult "commit-data-root" (repoExportGraph (repoCommitCid newCommit) (repoCommitSignedBytes newCommit) (repoRootCid changed) (repoStore changed)),
   ]
+  let malformed = rejectContains "malformed-bound-mst" "empty key" malformedBoundExport
   let () = println "focused-rejected: \{intToString rejected}/27 named routes"
   let () = println "focused-controls: \{intToString controls}/8 valid routes"
-  if external == 6 && rejected == 27 && controls == 8 then println "REPRESENTATIVE: PASS"
+  let () = println "focused-export-boundary: \{intToString malformed}/1 malformed bound MST route"
+  if external == 6 && rejected == 27 && controls == 8 && malformed == 1 then println "REPRESENTATIVE: PASS"
   else
     let () = println "REPRESENTATIVE: FAIL"
     exit 1

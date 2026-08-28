@@ -24,6 +24,7 @@ import lib.resource_limits.{
   checkMstNodeBytes,
   checkMstNodeEntries,
   checkMstTraversalDepth,
+  maxMstTraversalDepth,
 }
 import lib.sha256.{sha256}
 
@@ -431,31 +432,31 @@ entriesWithinBounds ((DecodedEntry key _ _)::rest) lower upper = keyAboveLower k
   && keyBelowUpper key upper
   && entriesWithinBounds rest lower upper
 
-walkOptionalChild : Option Cid -> Int -> Option (Array Int) -> Option (Array Int) -> Map String (Array Int) -> Map String Unit -> Map String Unit -> Int -> Result String (Map String Unit)
-walkOptionalChild None _ _ _ _ _ visited _ = Ok visited
-walkOptionalChild (Some child) expected lower upper blocks active visited traversal = walkBlock child (Some expected) False lower upper blocks active visited traversal
+walkOptionalChild : Option Cid -> Int -> Option (Array Int) -> Option (Array Int) -> Map String (Array Int) -> Map String Unit -> Map String Unit -> Int -> Int -> Result String (Map String Unit)
+walkOptionalChild None _ _ _ _ _ visited _ _ = Ok visited
+walkOptionalChild (Some child) expected lower upper blocks active visited traversal limit = walkBlock child (Some expected) False lower upper blocks active visited traversal limit
 
-walkEntryChildren : List DecodedEntry -> Int -> Option (Array Int) -> Map String (Array Int) -> Map String Unit -> Map String Unit -> Int -> Result String (Map String Unit)
-walkEntryChildren [] _ _ _ _ visited _ = Ok visited
-walkEntryChildren (entry::rest) expected upper blocks active visited traversal =
+walkEntryChildren : List DecodedEntry -> Int -> Option (Array Int) -> Map String (Array Int) -> Map String Unit -> Map String Unit -> Int -> Int -> Result String (Map String Unit)
+walkEntryChildren [] _ _ _ _ visited _ _ = Ok visited
+walkEntryChildren (entry::rest) expected upper blocks active visited traversal limit =
   let childUpper = match rest
     [] => upper
     next::_ => Some (entryKey next)
-  match walkOptionalChild (entryChild entry) expected (Some (entryKey entry)) childUpper blocks active visited traversal
+  match walkOptionalChild (entryChild entry) expected (Some (entryKey entry)) childUpper blocks active visited traversal limit
     Err message => Err message
-    Ok nextVisited => walkEntryChildren rest expected upper blocks active nextVisited traversal
+    Ok nextVisited => walkEntryChildren rest expected upper blocks active nextVisited traversal limit
 
-walkNodeChildren : DecodedNode -> Int -> Option (Array Int) -> Option (Array Int) -> Map String (Array Int) -> Map String Unit -> Map String Unit -> Int -> Result String (Map String Unit)
-walkNodeChildren (DecodedNode left entries) expected lower upper blocks active visited traversal =
+walkNodeChildren : DecodedNode -> Int -> Option (Array Int) -> Option (Array Int) -> Map String (Array Int) -> Map String Unit -> Map String Unit -> Int -> Int -> Result String (Map String Unit)
+walkNodeChildren (DecodedNode left entries) expected lower upper blocks active visited traversal limit =
   let leftUpper = match entries
     [] => upper
     entry::_ => Some (entryKey entry)
-  match walkOptionalChild left expected lower leftUpper blocks active visited traversal
+  match walkOptionalChild left expected lower leftUpper blocks active visited traversal limit
     Err message => Err message
-    Ok nextVisited => walkEntryChildren entries expected upper blocks active nextVisited traversal
+    Ok nextVisited => walkEntryChildren entries expected upper blocks active nextVisited traversal limit
 
-walkKnownBlock : Array Int -> Option Int -> Bool -> Option (Array Int) -> Option (Array Int) -> Map String (Array Int) -> Map String Unit -> Map String Unit -> String -> Int -> Result String (Map String Unit)
-walkKnownBlock bytes expected isRoot lower upper blocks active visited key traversal = do
+walkKnownBlock : Array Int -> Option Int -> Bool -> Option (Array Int) -> Option (Array Int) -> Map String (Array Int) -> Map String Unit -> Map String Unit -> String -> Int -> Int -> Result String (Map String Unit)
+walkKnownBlock bytes expected isRoot lower upper blocks active visited key traversal limit = do
   _ <- checkMstNodeBytes (arrayLength bytes)
   node <- decodeNode bytes
   _ <- validateNodeEntries node
@@ -468,10 +469,19 @@ walkKnownBlock bytes expected isRoot lower upper blocks active visited key trave
       if not (entriesWithinBounds entries lower upper) then
         Err "mst: subtree key falls outside its lexical range"
       else
-        walkNodeChildren node (depth - 1) lower upper blocks (set key () active) (set key () visited) (traversal + 1)
+        walkNodeChildren node (depth - 1) lower upper blocks (set key () active) (set key () visited) (traversal + 1) limit
 
-walkBlock : Cid -> Option Int -> Bool -> Option (Array Int) -> Option (Array Int) -> Map String (Array Int) -> Map String Unit -> Map String Unit -> Int -> Result String (Map String Unit)
-walkBlock cid expected isRoot lower upper blocks active visited traversal = match checkMstTraversalDepth traversal
+checkTraversalDepth : Int -> Int -> Result String Unit
+checkTraversalDepth limit traversal =
+  if limit == maxMstTraversalDepth then
+    checkMstTraversalDepth traversal
+  else if traversal > limit then
+    Err "mst: traversal depth exceeds configured resource limit"
+  else
+    Ok ()
+
+walkBlock : Cid -> Option Int -> Bool -> Option (Array Int) -> Option (Array Int) -> Map String (Array Int) -> Map String Unit -> Map String Unit -> Int -> Int -> Result String (Map String Unit)
+walkBlock cid expected isRoot lower upper blocks active visited traversal limit = match checkTraversalDepth limit traversal
   Err message => Err message
   Ok () =>
     let key = cidKey cid
@@ -480,16 +490,34 @@ walkBlock cid expected isRoot lower upper blocks active visited traversal = matc
       if has key visited then Err "mst: invalid node form; subtree block is referenced more than once"
       else match get key blocks
         None => Err "mst: missing reachable node block"
-        Some bytes => walkKnownBlock bytes expected isRoot lower upper blocks active visited key traversal
+        Some bytes => walkKnownBlock bytes expected isRoot lower upper blocks active visited key traversal limit
 
--- | Validate content binding and prove every supplied node block is reachable.
-export
-mstValidateBlocks : Cid -> List (Cid, Array Int) -> Result String Unit
-mstValidateBlocks root blocks = do
+validateBlocksWithTraversalLimit : Int -> Cid -> List (Cid, Array Int) -> Result String Unit
+validateBlocksWithTraversalLimit limit root blocks = do
+  if limit < 0 then
+    Err "mst: traversal depth limit must be non-negative"
+  else if limit > maxMstTraversalDepth then
+    Err "mst: traversal depth limit exceeds the production maximum"
+  else
+    Ok ()
   _ <- checkMstBlocks (length blocks)
   index <- validateBlockRows blocks Tip
-  visited <- walkBlock root None True None None index Tip Tip 0
+  visited <- walkBlock root None True None None index Tip Tip 0 limit
   if size visited /= size index then
     Err "mst: unreachable node block supplied"
   else
     Ok ()
+
+{- | Strict validation with an explicit traversal limit. Production callers
+   should use `mstValidateBlocks`; this boundary exists so the real recursive
+   walk can be tested at constructible depths. -}
+export
+mstValidateBlocksWithTraversalLimit : Int -> Cid -> List (Cid, Array Int) -> Result String Unit
+mstValidateBlocksWithTraversalLimit limit root blocks =
+  validateBlocksWithTraversalLimit limit root blocks
+
+-- | Validate content binding and prove every supplied node block is reachable.
+export
+mstValidateBlocks : Cid -> List (Cid, Array Int) -> Result String Unit
+mstValidateBlocks root blocks =
+  validateBlocksWithTraversalLimit maxMstTraversalDepth root blocks

@@ -25,7 +25,9 @@ import lib.mst.{
   mstNodeBlocks,
   mstReplace,
   mstRootCid,
+  mstValidateBlocks,
 }
+import lib.resource_limits.{checkMstBlocks, checkMstTraversalDepth}
 import lib.sha256.{sha256}
 import lib.sign.{
   PublicKey,
@@ -83,7 +85,7 @@ didMethodEnd bytes i =
     None
   else if bytes[i] == 58 then
     Some i
-  else if lowerByte bytes[i] then
+  else if lowerByte bytes[i] || digitByte bytes[i] then
     didMethodEnd bytes (i + 1)
   else
     None
@@ -499,12 +501,15 @@ nodeLinks bytes = match dagCborDecode bytes
       Ok trees => entryLinks entries trees []
   Ok _ => Err "repo: tampered graph node form"
 
-walkNodes : List Cid -> BlockStore -> List (Cid, Array Int) -> List Cid -> Result String (List (Cid, Array Int), List Cid)
-walkNodes [] _ blocks leaves = Ok (blocks, leaves)
-walkNodes frontier store blocks leaves = match walkLayer frontier store [] leaves blocks
-  Err message => Err message
-  Ok (next, nextLeaves, nextBlocks) =>
-    walkNodes next store nextBlocks nextLeaves
+walkNodes : List Cid -> BlockStore -> List (Cid, Array Int) -> List Cid -> Int -> Result String (List (Cid, Array Int), List Cid)
+walkNodes [] _ blocks leaves _ = Ok (blocks, leaves)
+walkNodes frontier store blocks leaves traversal = do
+  _ <- checkMstTraversalDepth traversal
+  _ <- checkMstBlocks (length blocks + length frontier)
+  match walkLayer frontier store [] leaves blocks
+    Err message => Err message
+    Ok (next, nextLeaves, nextBlocks) =>
+      walkNodes next store nextBlocks nextLeaves (traversal + 1)
 
 walkLayer : List Cid -> BlockStore -> List Cid -> List Cid -> List (Cid, Array Int) -> Result String (List Cid, List Cid, List (Cid, Array Int))
 walkLayer [] _ next leaves blocks = Ok (next, leaves, blocks)
@@ -538,15 +543,17 @@ repoExportGraph commitCid commitBytes dataRoot store = match blockStoreGet commi
   else match decodeSignedCommit commitBytes
     Err message => Err "repo: invalid graph commit: {message}"
     Ok (_, commitData, _, _) => if not (cidEqual commitData dataRoot) then Err "repo: commit data mismatch"
-    else match walkNodes [dataRoot] store [] []
+    else match walkNodes [dataRoot] store [] [] 0
       Err message => Err message
-      Ok (nodes, leaves) => match recordBlocks leaves store []
-        Err message => Err message
-        Ok records =>
-          let blocks = (commitCid, arrayCopy commitBytes) :: nodes ++ records
-          match carEncode [commitCid] blocks
-            Err message => Err "repo: CAR export failed: {message}"
-            Ok bytes => Ok (blocks, bytes)
+      Ok (nodes, leaves) => match mstValidateBlocks dataRoot nodes
+        Err message => Err "repo: invalid graph MST: \{message}"
+        Ok () => match recordBlocks leaves store []
+          Err message => Err message
+          Ok records =>
+            let blocks = (commitCid, arrayCopy commitBytes) :: nodes ++ records
+            match carEncode [commitCid] blocks
+              Err message => Err "repo: CAR export failed: {message}"
+              Ok bytes => Ok (blocks, bytes)
 
 -- | Deterministic full repository CAR bytes.
 export

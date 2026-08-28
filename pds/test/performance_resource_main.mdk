@@ -10,6 +10,7 @@ import lib.mst.{
   mstRootBytes,
   mstRootCid,
   mstValidateBlocks,
+  mstValidateBlocksWithTraversalLimit,
   mstValidateNodeBytes,
 }
 import lib.multiformats.{uvarintEncode}
@@ -130,6 +131,41 @@ framedHeader root =
   let header = mustBytes (dagCborEncode (DcMap [("roots", DcArray [DcLink root]), ("version", DcInt 1)]))
   uvarintEncode (arrayLength header) ++ header
 
+depthNode : Array Int -> Cid -> Option Cid -> (Cid, Array Int)
+depthNode key value child =
+  let left = match child
+    None => DcNull
+    Some cid => DcLink cid
+  let bytes = mustBytes (dagCborEncode (DcMap [
+    ("l", left),
+    (
+      "e",
+      DcArray [
+        DcMap [("p", DcInt 0), ("k", DcBytes key), ("v", DcLink value), ("t", DcNull)]
+      ],
+    ),
+  ]))
+  (cidForDagCbor bytes, bytes)
+
+depthCid : (Cid, Array Int) -> Cid
+depthCid (cid, _) = cid
+
+depthRouteControls : Cid -> <IO> (Int, Int)
+depthRouteControls value =
+  let leaf = depthNode [|0x00, 0x01|] value None
+  let depth1 = depthNode [|0x00, 0x07|] value (Some (depthCid leaf))
+  let depth2 = depthNode [|0x00, 0x16|] value (Some (depthCid depth1))
+  let depth3 = depthNode [|0x00, 0x61|] value (Some (depthCid depth2))
+  let atRows = [depth2, depth1, leaf]
+  let overRows = [depth3, depth2, depth1, leaf]
+  let controls = sum [
+    accept "mst-public-depth-at" (mstValidateBlocksWithTraversalLimit 2 (depthCid depth2) atRows),
+    accept "mst-production-depth-control" (mstValidateBlocks (depthCid depth3) overRows),
+  ]
+  let hostile = reject "mst-public-depth-over" "traversal depth exceeds" (mstValidateBlocksWithTraversalLimit 2 (depthCid depth3) overRows)
+  let () = println "public-depth: \{intToString controls}/2 adjacent controls; \{intToString hostile}/1 hostile route"
+  (controls, hostile)
+
 runLimits : <IO> Unit
 runLimits =
   let root = mstRootCid mstEmpty
@@ -158,8 +194,9 @@ runLimits =
     reject "mst-entries-over" "node entry count exceeds" (mstValidateNodeBytes 0 True tooManyEntries),
     reject "mst-depth-over" "traversal depth exceeds" (checkMstTraversalDepth (maxMstTraversalDepth + 1)),
   ]
+  let (publicControls, publicHostile) = depthRouteControls root
   let () = println "limits: \{intToString controls}/7 adjacent controls; \{intToString hostile}/7 hostile routes"
-  if controls == 7 && hostile == 7 then println "LIMITS: PASS"
+  if controls == 7 && hostile == 7 && publicControls == 2 && publicHostile == 1 then println "LIMITS: PASS"
   else
     let () = println "LIMITS: FAIL"
     exit 1
