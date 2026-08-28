@@ -1,0 +1,23 @@
+-- X9 (#2157): a user interface whose method is spelled `fromInt` — the PRELUDE
+-- `Num`'s own method name — with a live impl, and numeric literals both INSIDE
+-- that impl's body and outside it.  Every literal here must be an ordinary `Num`
+-- literal: `n + 1000` at Int inside the impl body, `1 + 2` at Int in main.
+--
+-- The user method is also CALLED (`fromInt 5` at an annotated `Tag`), so the row
+-- pins both denotations at once: the annotated occurrence takes `Buildable`, and
+-- the bare literals take `Num`.  1005 = Tag (5 + 1000) unwrapped; 3 = 1 + 2.
+interface Buildable c where
+  fromInt : Int -> c
+
+data Tag = Tag Int
+
+impl Buildable Tag where
+  fromInt n = Tag (n + 1000)
+
+unTag : Tag -> Int
+unTag (Tag n) = n
+
+main =
+  let t : Tag = fromInt 5
+  println (unTag t)
+  println (1 + 2)

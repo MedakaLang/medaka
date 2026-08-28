@@ -7953,6 +7953,7 @@ data PerRun = PerRun {
     shadowStandaloneSchemesRef : Ref (List (String, Scheme)),
     ifaceMethodSchemesByIdRef : Ref (List ((IfaceRef, String), Scheme)),  -- #1351 L1 EXPAND: the Module arm's interface-method schemes under an identity key — the substrate leaf L2 migrates `pickSchemes` onto.  No reader yet.
     numLitFromIntSchemeRef : Ref (Option Scheme),  -- #259 / DICT §8 I7 (literals): the PRELUDE `Num`'s own `fromInt` scheme, selected ONCE per pass by interface IDENTITY — see seedNumLitFromIntScheme.  `inferNumLit`'s anchor; it reads NO term scope.
+    numLitFromIntParamsRef : Ref (Option (IfaceRef, List String, Ty, List (String, List Kind))),  -- #2157: the IDENTITY-selected companion of the line above — the PRELUDE `Num`'s own `fromInt` obligation row (iface, typarams, declared Ty, graded scope), seeded from the SAME decl list by the SAME `sameIfaceDecl` test.  `inferNumLitMethod`'s obligation anchor; it never consults the bare-name `methodIfaceParamsRef`.
     definerShadowNamesRef : Ref (List String),
     definerShadowSigsRef : Ref (List (String, Ty)),
     bodyImplEnvRef : Ref ImplEnv,
@@ -8068,6 +8069,7 @@ freshPerRun _ = PerRun {
   shadowStandaloneSchemesRef = Ref [],
   ifaceMethodSchemesByIdRef = Ref [],
   numLitFromIntSchemeRef = Ref None,
+  numLitFromIntParamsRef = Ref None,
   definerShadowNamesRef = Ref [],
   definerShadowSigsRef = Ref [],
   bodyImplEnvRef = Ref emptyImplEnv,
@@ -12695,16 +12697,22 @@ inferNumLit env n fref dref
 --   • `argDispatchOf` — `fromInt` is return-position (no dispatch argument), so this answered
 --     `None` and fell to `recordSite` on every path already.
 --
--- KEPT as-is: `recordMethodObligationGuarded`.  ⚠️ Its `lookupLocalFlag env name` half is a
--- term-scope read that survives here — a residual, reported with #259 rather than changed
--- under this fix, because its effect is to SUPPRESS a `Num` obligation (a missed reject),
--- never to re-type the literal, and touching it would move behaviour on programs that have
--- no shadow at all.
+-- KEPT, in substance: the obligation-recording guard.  ⚠️ Its `lookupLocalFlag env name`
+-- half is a term-scope read that survives here — a residual, reported with #259 rather
+-- than changed under this fix, because its effect is to SUPPRESS a `Num` obligation (a
+-- missed reject), never to re-type the literal, and touching it would move behaviour on
+-- programs that have no shadow at all.
+--
+-- #2157 REPLACED the callee, not the guard: `recordMethodObligationGuarded` →
+-- `recordNumLitObligationGuarded`, which applies the SAME two suppressions (term-scope
+-- local, mono scheme) and the SAME two standalone-shadow suppressions, then records the
+-- obligation against the PRELUDE `Num`'s identity-selected row instead of re-deriving the
+-- interface from the spelling `"fromInt"` in the bare-name `methodIfaceParamsRef`.
 inferNumLitMethod : TcEnv -> Scheme -> Ref Route -> Mono
 inferNumLitMethod env s tagRef =
   let inst = instantiateTracked s
   let _ = recordMethodDicts "fromInt" (Ref []) (snd inst)
-  let _ = recordMethodObligationGuarded env "fromInt" s (fst inst)
+  let _ = recordNumLitObligationGuarded env s (fst inst)
   recordSite "fromInt" tagRef (Ref []) (fst inst)
 
 -- no-prelude fallback: a fresh var, no route (dref untouched ⇒ stays RNone ⇒ Int).
@@ -13431,6 +13439,38 @@ recordMethodObligationGuarded env name s mono =
     mono
   else
     recordImplObligation name mono
+
+-- #2157: the numeric literal's own obligation recorder — `recordMethodObligationGuarded`
+-- + `recordImplObligation` with the bare-name `omLookup` REPLACED by the identity-selected
+-- `Num` row `seedNumLitFromIntParams` put in `numLitFromIntParamsRef`.  Every other arm is
+-- preserved verbatim so a program without a same-named user interface behaves identically:
+--   • `lookupLocalFlag` / `isMonoScheme` — the #816/#818 local-shadow guard;
+--   • `definerShadowNamesRef` / `standaloneValuesRef` — the P0-18 standalone-shadow guard
+--     (a top-level `fromInt` binding legitimately has no impl obligation);
+--   • `pushPendingObl … PMethodOcc` + `recordMethodLevelObls` — the two writes.
+-- The ONLY behavioural difference is WHICH interface the goal names, and only on a program
+-- where the bare-name table holds a non-`Num` row under `"fromInt"` — i.e. exactly #2157.
+--
+-- A literal is not an identifier occurrence, so unlike `recordImplObligation`'s other
+-- caller (`inferVarPlainId`, where the bare name genuinely DENOTES whichever interface
+-- declares it) there is no sense in which a literal could mean the user's interface.
+-- `recordImplObligation` itself is UNCHANGED and keeps its bare-name path for that caller.
+recordNumLitObligationGuarded : TcEnv -> Scheme -> Mono -> Mono
+recordNumLitObligationGuarded env s mono =
+  if lookupLocalFlag env "fromInt" || isMonoScheme s then
+    mono
+  else
+    recordNumLitImplObligation mono
+
+recordNumLitImplObligation : Mono -> Mono
+recordNumLitImplObligation mono
+  | contains "fromInt" perRun.value.definerShadowNamesRef.value || contains "fromInt" driverState.value.standaloneValuesRef.value = mono
+  | otherwise = match perRun.value.numLitFromIntParamsRef.value
+    None => mono
+    Some (iface, typarams, mty, _) =>
+      let _ = pushPendingObl iface typarams mty mono PMethodOcc !currentLoc
+      let _ = recordMethodLevelObls typarams mty mono
+      mono
 
 -- #818 (#838 I3): record one PMethodLevel obligation per method-level `=>` constraint
 -- slot of a method occurrence.  [mty] is the method's DECLARED type (with its `=>`);
@@ -25567,6 +25607,8 @@ checkBodyImpl seed mode prog0 =
       -- appends come after, and `zipIfaceMethodSchemeIds` truncates at the key list), so
       -- this reuses the schemes already minted above rather than eliciting new ids.
       let _ = seedNumLitFromIntScheme (ifaceMethodSchemeIds prog) globalS
+      -- #2157: the obligation half of the same anchor, off the SAME decl list.
+      let _ = seedNumLitFromIntParams prog
       []
     Module _ _ implDecls =>
       -- #1351 L1 EXPAND.  `ifaceMethodSchemes implDecls` is hoisted into a binding so it
@@ -25578,6 +25620,7 @@ checkBodyImpl seed mode prog0 =
       perRun.value.ifaceMethodSchemesByIdRef := (zipIfaceMethodSchemeIds (ifaceMethodSchemeIds implDecls) ifaceSchemes)
       -- #259: same anchor on the Module arm, off the same already-minted list.
       let _ = seedNumLitFromIntScheme (ifaceMethodSchemeIds implDecls) ifaceSchemes
+      let _ = seedNumLitFromIntParams implDecls
       -- #1351 L2 MIGRATE.  The importer-shadow layer now binds each shadowed method
       -- name to the scheme of the declaration THIS module's import scope admits
       -- (`applyMethodScopeOverrides`), not to `lookupAssoc`'s decl-walk first match.
@@ -29603,6 +29646,60 @@ pickIfaceMethodSchemeById _ _ [] = None
 pickIfaceMethodSchemeById iface mname (((ifn, n), s)::rest)
   | n == mname && sameIfaceDecl ifn iface = Some s
   | otherwise = pickIfaceMethodSchemeById iface mname rest
+
+-- ── #2157: the OBLIGATION half of the same anchor ───────────────────────────────
+--
+-- #259 (above) fixed WHICH SCHEME a numeric literal instantiates — by interface
+-- identity, out of the prelude `Num` declaration.  It did not fix which INTERFACE the
+-- literal's impl-coverage obligation is recorded against: `inferNumLitMethod` routed
+-- that through `recordImplObligation`, whose `omLookup x methodIfaceParamsRef` is a
+-- bare method-NAME lookup with no interface-identity input at all.  A user module
+-- declaring `interface Buildable c where fromInt : Int -> c` registers a SECOND row
+-- under the key `"fromInt"`, last-write-wins, and every numeric literal in that module
+-- then demanded `Buildable` instead of `Num` — `No impl of Buildable for Int` on
+-- `println (1 + 2)`, on a program with no shadow of any kind (#2157).
+--
+-- ⚠️ The defect's true scope is the whole MODULE, not the same-named method's own impl
+-- body: the table is per-module and the literal path reads it at every literal, so the
+-- misfire needs only the `interface` DECLARATION, no `impl` and no occurrence of the
+-- user's own method.  See `test/shadow_fixtures/x9_*` / `x10_*`.
+--
+-- The remedy mirrors #259's exactly: select the row by the SAME `sameIfaceDecl` test
+-- against `builtinIfaceRef BNum`, out of the SAME decl list, seeded at the SAME point.
+-- Because both seeds read one list, `inferNumLitMethod` (reached only when the scheme
+-- seed hit) can never find this one empty — a miss here would be a MISSED reject, the
+-- quiet direction, and the lockstep seeding is what rules it out.
+seedNumLitFromIntParams : List Decl -> Unit
+seedNumLitFromIntParams prog =
+  perRun.value.numLitFromIntParamsRef := numLitFromIntParamsOf prog
+
+numLitFromIntParamsOf : List Decl -> Option (IfaceRef, List String, Ty, List (String, List Kind))
+numLitFromIntParamsOf [] = None
+numLitFromIntParamsOf (d::rest) = match numLitFromIntParamsDecl d
+  Some e => Some e
+  None => numLitFromIntParamsOf rest
+
+-- DAttrib-unwrapping arm-for-arm with `registerMethodIfaceParamsDecl`, so the row this
+-- produces is the very row that table would have held for the prelude `Num` — same
+-- `IfaceRef`, same typarams, same declared `Ty`, same `declGradedScope`.
+numLitFromIntParamsDecl : Decl -> Option (IfaceRef, List String, Ty, List (String, List Kind))
+numLitFromIntParamsDecl (DAttrib _ d) = numLitFromIntParamsDecl d
+numLitFromIntParamsDecl (DInterface { name, typarams, methods, ifaceOrigin, ... })
+  | sameIfaceDecl IfaceRef {
+    irName = name,
+    irOrigin = ifaceOrigin,
+  } (builtinIfaceRef BNum) = pickIfaceMethodParams IfaceRef {
+    irName = name,
+    irOrigin = ifaceOrigin,
+  } typarams (declGradedScope typarams methods) "fromInt" methods
+  | otherwise = None
+numLitFromIntParamsDecl _ = None
+
+pickIfaceMethodParams : IfaceRef -> List String -> List (String, List Kind) -> String -> List IfaceMethod -> Option (IfaceRef, List String, Ty, List (String, List Kind))
+pickIfaceMethodParams _ _ _ _ [] = None
+pickIfaceMethodParams iface typarams scope want ((IfaceMethod mname mty _ _)::rest)
+  | mname == want = Some (iface, typarams, mty, scope)
+  | otherwise = pickIfaceMethodParams iface typarams scope want rest
 
 -- Error-path B4: register each interface method → (iface, typarams, declared Ty)
 -- so checkImplObligations can recover its dispatch (iface-param) types at a call

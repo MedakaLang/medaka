@@ -1445,6 +1445,8 @@ numArithOp : Mono -> Mono -> Mono
 numCallObls : List (IfaceRef, List Mono, Option Loc) -> List UObligation
 numConstrainedIds : List UObligation -> List Int
 numDictObls : List (Ref (List Route), List Mono, List IfaceRef, List (List Mono), Option Loc) -> List UObligation
+numLitFromIntParamsDecl : Decl -> Option (IfaceRef, List String, Ty, List (String, List Kind))
+numLitFromIntParamsOf : List Decl -> Option (IfaceRef, List String, Ty, List (String, List Kind))
 numObligIds : UObligation -> List Int
 numUnimplementableHead : Mono -> Bool
 numlitCtxKind : Option Loc -> Option String
@@ -1512,6 +1514,7 @@ performEffect : Ref EffRow -> EffRow -> Unit
 performLink : Ref Effvar -> Ref Effvar -> Unit
 phantomMethodMsg : String -> List String -> (String, Ty, List (String, List Kind)) -> List String
 phantomMethodMsgs : CeRow -> List String
+pickIfaceMethodParams : IfaceRef -> List String -> List (String, List Kind) -> String -> List IfaceMethod -> Option (IfaceRef, List String, Ty, List (String, List Kind))
 pickIfaceMethodSchemeById : IfaceRef -> String -> List ((IfaceRef, String), Scheme) -> Option Scheme
 pickMostSpecificEntry : List Mono -> List KeyEntry -> Option KeyEntry
 pickSchemes : List String -> List (String, Scheme) -> List (String, Scheme)
@@ -1653,6 +1656,8 @@ recordMethodDicts : String -> Ref (List Route) -> List (Int, Mono) -> Unit
 recordMethodLevelObls : List String -> Ty -> Mono -> Unit
 recordMethodLevelSlotObls : List (String, IfaceRef) -> List (String, Mono) -> Unit
 recordMethodObligationGuarded : TcEnv -> String -> Scheme -> Mono -> Mono
+recordNumLitImplObligation : Mono -> Mono
+recordNumLitObligationGuarded : TcEnv -> Scheme -> Mono -> Mono
 recordNumlitLoc : Mono -> Unit
 recordObl : Predicate -> Int -> Provenance -> Option Loc -> Unit
 recordParamKinds : TyConOrigin -> String -> List Kind -> Unit
@@ -1851,6 +1856,7 @@ seedAndCheckSplit : List Decl -> List Decl -> List Decl -> List (String, Scheme)
 seedBuiltinClasses : CheckMode -> List Decl -> Unit
 seedCheckRun : List Decl -> Unit
 seedEffectDomains : Unit -> Unit
+seedNumLitFromIntParams : List Decl -> Unit
 seedNumLitFromIntScheme : List (IfaceRef, String) -> List (String, Scheme) -> Unit
 seedParamPolarityFixpoint : List Decl -> Unit
 selectIfaceRows : UsePath -> List (String, List String) -> List (String, List String)
