@@ -387,9 +387,9 @@ trap 'rm -rf "$WORK"' EXIT
 #              TIME_STAGES), so this shape is graded on lint TIME.
 #   manyifaces — CO-SCALED interfaces x call sites (issue #883). N interface decls
 #              (methods pool ~N) AND N reference sites, growing TOGETHER, so mark's
-#              `contains x methods` List-as-set reads O(N^2). OP-ONLY (mark is under the
-#              TIME floor); ledgers manyifaces:mark (the target) + manyifaces:resolve (a
-#              second, interface-count quadratic the shape surfaces). See gen_manyifaces.
+#              `contains x methods` List-as-set read O(N^2). OP-ONLY (mark is under the
+#              TIME floor); FIXED both quadratics it surfaced (manyifaces:mark #953,
+#              manyifaces:resolve #954) — no longer ledgered. See gen_manyifaces.
 #   widerecords — the RECORD shape (issue #883). One record type with N fields + N tiny
 #              accessor/updater decls. Exercises resolve's ownersOf/lookupRecordByName —
 #              but those are HAND-ROLLED (uncounted), so op reads LINEAR: an `ok` guard,
@@ -401,8 +401,10 @@ trap 'rm -rf "$WORK"' EXIT
 #              bindings), which no other shape does: `bindings`/`xref` have no
 #              constraints at all, `manyifaces` grows the METHOD POOL against a fixed
 #              site count, and `marksweep` does the same. OP-ONLY. Ledgers
-#              conlocal:typecheck (#2030, mechanism known: localPinPairs) AND
-#              conlocal:mark (#2143, mechanism NOT known). See gen_conlocal.
+#              conlocal:typecheck (#2030, mechanism known: localPinPairs).
+#              conlocal:mark (#2143) was a second quadratic this shape surfaced —
+#              FIXED as a side effect of slice 5's #1017 marker.mdk fix; de-ledgered.
+#              See gen_conlocal.
 #   consfam  — the BACKEND shape (issue #1029). N mutually cons-tail-recursive fns — the
 #              only thing in this corpus that reaches trmc_analysis's dispatch-TMC group
 #              GROWTH WALK, which runs unconditionally in both backends' emitProgram.
@@ -1762,14 +1764,12 @@ OP_FLOOR="${PERF_OP_FLOOR:-1000}"
 #
 # CURRENT ENTRIES (measured on this box, deterministic single run):
 #
-#   match:resolve — resolve is O(N^2) in the CONSTRUCTOR count on the `match` shape (a
-#         data decl with N ctors + an N-arm match). Its per-ctor membership scan
-#         (util.contains / util.lookupAssoc over a table that grows with the ctor
-#         universe) is walked once per ctor reference. TIME never grades resolve on
-#         `match` (that shape's N is sized for typecheck, and resolve sits far under
-#         the floor), and allocation is blind to a pure scan — so ONLY the op arm sees
-#         it. MEASURED N=250/500/1000: 35644 -> 133769 -> 517519, r1=3.75 r2=3.87
-#         (climbing toward the pure-quadratic 4.0).
+#   match:resolve — FIXED (#906, #969). Was resolve's `findDups ctorSeed (ctorNames
+#         prog)` — O(N^2) in the CONSTRUCTOR count on the `match` shape (a data decl
+#         with N ctors + an N-arm match), run once per ctor reference. MEASURED (pre-fix)
+#         N=250/500/1000: 35644 -> 133769 -> 517519, r1=3.75 r2=3.87 (climbing toward the
+#         pure-quadratic 4.0). `findDups` keyed into an OrdMap (op r2 -> 1.00, effectively
+#         constant). De-ledgered.
 #
 #   xref:typecheck — FIXED (#907). Was typecheck's O(decls^2) assoc-list bookkeeping: the
 #         binding-id stamp (stampBindingIds/lookupBindId, run in typecheck's checkBodyImpl)
@@ -1805,35 +1805,30 @@ OP_FLOOR="${PERF_OP_FLOOR:-1000}"
 #         "elaborateDict reference-walking dict-routing" attribution was wrong; the cost was
 #         stampBindingIds). Indexing the top frame drained it: op r1/r2 ~1.9 at both the
 #         QUICK (2000/4000/8000) and DEEP (4000/8000/16000) bands. De-ledgered.
-#   manyifaces:mark — THE HEADLINE #883 FIND. mark's `contains x methods`
-#         (marker.mdk markVar/markInfix — a List-as-set walked for EVERY var/op node,
-#         `methods` = every interface-method name) is O(sites x pool). No shape stressed
-#         it: `marksweep` (#884) grows only the pool with FIXED sites, so it reads LINEAR
-#         on purpose; `modules` has ONE interface with ONE method. `manyifaces` co-scales
-#         N interfaces AND N reference sites (§5's "co-scale the two multiplying
-#         dimensions" rule), so the scan reads O(N^2). MEASURED (this box, deterministic
-#         single run, R=8, N=250/500/1000): 818999 -> 2512749 -> 8900249, r1=3.07 r2=3.54.
-#         TIME never grades mark (it is ~40-200 ms here, under the 200ms floor on EVERY
-#         shape) and allocation is blind to a pure scan — so ONLY the op arm sees it.
-#         Ledgered (not shipped red) because it is a PRE-EXISTING, currently-unfixed
-#         quadratic surfaced by #883's shape, out of scope for the gate-only wiring — a
-#         candidate #880 follow-up, filed as #953. Op-count is the arm graded (one run,
-#         no floor); it self-drains — promote it out the moment `methods` becomes a set
-#         (OrdSet) and the op-ratio drops under OFIXED (linear).
+#   manyifaces:mark — FIXED (#953, #975). Was THE HEADLINE #883 FIND: mark's
+#         `contains x methods` (marker.mdk markVar/markInfix — a List-as-set walked for
+#         EVERY var/op node, `methods` = every interface-method name) was O(sites x
+#         pool). No other shape stressed it: `marksweep` (#884) grows only the pool
+#         with FIXED sites, so it reads LINEAR on purpose; `modules` has ONE interface
+#         with ONE method. `manyifaces` co-scales N interfaces AND N reference sites
+#         (§5's "co-scale the two multiplying dimensions" rule), so the scan read
+#         O(N^2). MEASURED (pre-fix, this box, deterministic single run, R=8,
+#         N=250/500/1000): 818999 -> 2512749 -> 8900249, r1=3.07 r2=3.54. `methods`
+#         indexed to a set — op-ratio drops to linear. De-ledgered.
 #
-#   manyifaces:resolve — A SECOND, INDEPENDENT quadratic the same shape surfaces, and a
-#         DIFFERENT mechanism from match:resolve (which is O(ctors^2)). Here resolve is
-#         O(interfaces^2) INDEPENDENT of the reference-site count R (the op-count is
-#         identical at R=4 and R=8) — the cost is interface-method registration /
-#         duplicate-checking scanning the growing ifaceMethods/interfaces lists once per
-#         interface (resolve.mdk; localize precisely — filed as #954). It is
-#         invisible to TIME (resolve ~8-40 ms here, under the floor) and to allocation.
-#         MEASURED N=250/500/1000: 37126 -> 136751 -> 523501, r1=3.68 r2=3.83 (climbing
-#         toward the pure-quadratic 4.0). Ledgered self-drainingly; promotes out when the
-#         interface-method scan is indexed. (typecheck r1=2.65 r2=3.09 and elaborate
-#         r1=2.52 r2=2.99 also climb on this shape — the #907/#882 decl-count classes —
-#         but stay r1<3 at this band, so the sustained-both-doublings rule reads them `ok`
-#         and they are NOT ledgered; WATCH, per the comments:typecheck note.)
+#   manyifaces:resolve — FIXED (#954, #969). Was a SECOND, INDEPENDENT quadratic the
+#         same shape surfaced, a DIFFERENT mechanism from match:resolve (O(ctors^2)):
+#         resolve's `findDups ifaceSeed (interfaceList prog)` was O(interfaces^2)
+#         INDEPENDENT of the reference-site count R (the op-count was identical at R=4
+#         and R=8) — interface-method duplicate-checking scanning the growing
+#         interfaceList once per interface (resolve.mdk `findDups`). MEASURED (pre-fix)
+#         N=250/500/1000: 37126 -> 136751 -> 523501, r1=3.68 r2=3.83 (climbing toward
+#         the pure-quadratic 4.0). `findDups` keyed into an OrdMap (same fix as
+#         match:resolve, one function, both rows drained together). De-ledgered.
+#         (typecheck r1=2.65 r2=3.09 and elaborate r1=2.52 r2=2.99 also climb on this
+#         shape — the #907/#882 decl-count classes — but stay r1<3 at this band, so the
+#         sustained-both-doublings rule reads them `ok` and they are NOT ledgered;
+#         WATCH, per the comments:typecheck note.)
 #   conlocal:typecheck — issue #2030, and the MECHANISM IS KNOWN: `localPinPairs`
 #         (compiler/types/typecheck.mdk) is O(constrained top-level bindings x locals),
 #         so a program of N constrained fns each holding one local walks it O(N^2)
@@ -1854,18 +1849,16 @@ OP_FLOOR="${PERF_OP_FLOOR:-1000}"
 #         here. That is why this pin lives on this gate and not that one. Do not
 #         "improve coverage" by duplicating it there.
 #
-#   conlocal:mark — issue #2143, and the mechanism is NOT known: #2030 attributes
-#         everything to typecheck's `localPinPairs` and says nothing about the marker,
-#         but `markWithPrelude` reddens on the same shape at the same band. MEASURED
-#         N=400/800/1600: 685 805 -> 2 207 005 -> 8 129 405, r1=3.22 r2=3.68. It is
-#         corroborated on two further metrics (TIME 0.020/0.053/0.163 s, x2.68 x3.09;
-#         netted callgrind inclusive Ir x3.74 x3.86 at 800/1600/3200), so it is a real
-#         second quadratic and not an attribution artifact of the first. It is NOT
-#         covered by `manyifaces` (which co-scales the method pool against fixed sites)
-#         nor by `marksweep` (pool growth, fixed sites) — `conlocal` is the opposite
-#         axis: a fixed pool against N growing constrained sites. Ledgered alongside
-#         its sibling rather than left ungraded, so a fix to #2030 that leaves this one
-#         standing is still visible. Self-drains independently of #2030.
+#   conlocal:mark — FIXED (#2143). Was NOT attributed to #2030's `localPinPairs`
+#         (that term is typecheck-only and says nothing about the marker), but
+#         `markWithPrelude` reddened on the same shape at the same band via a
+#         DIFFERENT mechanism: marker's own `contains x constrained` List-as-set
+#         scan — the same site `frontend-breadth` slice 5's #1017 fix (marker.mdk's
+#         `constrained` List->OrdMap) indexed, draining this row as a side effect
+#         since both bugs were the same site. MEASURED (pre-fix) N=400/800/1600:
+#         685 805 -> 2 207 005 -> 8 129 405, r1=3.22 r2=3.68; MEASURED (post-fix,
+#         this row's promotion) 164 961 -> 205 361 -> 286 161, r1=1.245 r2=1.393 —
+#         linear. De-ledgered.
 #
 # NOT LEDGERED on this shape, but WATCH (the same call the `comments:typecheck` note
 # above makes): `conlocal:elaborate` reads 3 162 359 -> 8 788 559 -> 28 200 959,
@@ -1881,18 +1874,16 @@ OP_FLOOR="${PERF_OP_FLOOR:-1000}"
 # (see #880 follow-up; the var is word-split by `for k in $VAR`, newlines are IFS).
 KNOWN_SLOW_OPS="
 conlocal:typecheck
-conlocal:mark
 "
 # Ceilings follow this file's op-arm convention (the drained manyifaces:mark /
-# match:resolve / manydefs:typecheck entries all used the same pair): OCEIL 4.3 —
-# ~14% over the measured r2 of 3.78 and above the pure-quadratic asymptote of 4.0, so
-# unrelated compiler-source drift cannot flap it while a CUBIC regression (r2 ~8) trips
-# it immediately; OFIXED 2.60 — the file-wide "this is linear again, promote me" mark,
-# 1.2 under the measured band, so no drift can false-PROMOTE either row. Op counts are
-# DETERMINISTIC, so these absorb source drift only, never runner noise. BOTH pairs are
-# tied to CONLOCAL_N=400 — see that knob before moving the band.
+# match:resolve / manydefs:typecheck / conlocal:mark entries all used the same pair):
+# OCEIL 4.3 — ~14% over the measured r2 of 3.78 and above the pure-quadratic asymptote
+# of 4.0, so unrelated compiler-source drift cannot flap it while a CUBIC regression
+# (r2 ~8) trips it immediately; OFIXED 2.60 — the file-wide "this is linear again,
+# promote me" mark, 1.2 under the measured band, so no drift can false-PROMOTE either
+# row. Op counts are DETERMINISTIC, so these absorb source drift only, never runner
+# noise. Tied to CONLOCAL_N=400 — see that knob before moving the band.
 KNOWN_OCEIL_conlocal_typecheck="4.3"; KNOWN_OFIXED_conlocal_typecheck="2.60"
-KNOWN_OCEIL_conlocal_mark="4.3";      KNOWN_OFIXED_conlocal_mark="2.60"
 # reexports:resolve was HERE (op ceiling 8.9) — the cubic (r2=7.92) counted `util.contains`
 # scans over a re-export export list that grows with depth. #925/#926 FIXED it: the three
 # scans are OrdMap-set membership now (uncounted) and `findExports`/provenance are Maps, so
@@ -2235,17 +2226,18 @@ printf -- '---------------------------------------------------------------------
 # is the standing proof that TIME grades `mark` nowhere.
 # `manyifaces` / `widerecords` (issue #883) are OP-ONLY single-file shapes, run at the
 # default N band. `manyifaces` co-scales N interfaces AND N reference sites to catch
-# mark's `contains x methods` List-as-set quadratic (ledgered manyifaces:mark, and the
-# independent manyifaces:resolve it surfaces); `widerecords` is the record shape — a
-# LINEAR resolve-op regression guard whose `ownersOf` target is now COUNTED and O(log N)
-# indexed (#984), so a reintroduced per-mention scan turns it superlinear (see
-# gen_widerecords).
+# mark's `contains x methods` List-as-set quadratic (manyifaces:mark #953) and the
+# independent manyifaces:resolve (#954) it surfaced — both FIXED, no longer ledgered;
+# `widerecords` is the record shape — a LINEAR resolve-op regression guard whose
+# `ownersOf` target is now COUNTED and O(log N) indexed (#984), so a reintroduced
+# per-mention scan turns it superlinear (see gen_widerecords).
 # `conlocal` (issue #2030 / #2143) is the third OP-ONLY single-file shape, at its OWN
-# band (400/1600 — see CONLOCAL_N), and it is the op arm's other money-shot: the two
-# stages it pins, `typecheck` and `mark`, are graded by NO other arm at an affordable
-# band on this shape (TIME reads 2.56/2.78 on typecheck and cannot floor-grade mark at
-# all; total alloc reads 2.57/2.89). Its ~13 s is the whole reason #2030's pin is here
-# and not on the callgrind Ir gate, which needs 415 s for the same verdict.
+# band (400/1600 — see CONLOCAL_N). It remains the op arm's money-shot for `typecheck`
+# (#2030, still open — graded by NO other arm at an affordable band on this shape: TIME
+# reads 2.56/2.78 and total alloc reads 2.57/2.89). `mark` (#2143) was ALSO pinned here
+# until this same slice's #1017 marker.mdk fix drained it as a side effect (now watch-
+# only, reads linear). Its ~13 s is the whole reason #2030's pin is here and not on the
+# callgrind Ir gate, which needs 415 s for the same verdict.
 SHAPES="bindings match listlit nesting xref comments marksweep manyifaces widerecords typos consfam conlocal"
 if [ "$PERF_DEEP" = "1" ]; then
   SHAPES="$SHAPES manydefs"
