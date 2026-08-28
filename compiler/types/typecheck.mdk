@@ -1486,7 +1486,7 @@ checkUndeterminedRetEffVarsDecl _ = ()
 
 checkIfaceMethodEffs : String -> List (String, List Kind) -> List IfaceMethod -> Unit
 checkIfaceMethodEffs _ _ [] = ()
-checkIfaceMethodEffs iface scope ((IfaceMethod mname mty _)::rest) =
+checkIfaceMethodEffs iface scope ((IfaceMethod mname mty _ _)::rest) =
   let _ = match undeterminedRetEffVars scope mty
     [] => ()
     bad => pushTypeErrorOnceAt "T-EFFECT-UNDETERMINED" (firstTyLoc mty) (effectUndeterminedMsg iface mname bad)
@@ -5775,7 +5775,7 @@ classEnvRowsOf ord ((name, typarams, methods, supers, o)::rest) =
   row :: classEnvRowsOf ord rest
 
 ceMethodOf : List (String, List Kind) -> IfaceMethod -> (String, Ty, List (String, List Kind))
-ceMethodOf scope (IfaceMethod n ty _) = (n, ty, scope)
+ceMethodOf scope (IfaceMethod n ty _ _) = (n, ty, scope)
 
 ceAddRows : List CeRow -> ClassEnv -> ClassEnv
 ceAddRows [] env = env
@@ -5880,11 +5880,11 @@ nthKindList i (k::rest)
 -- content.  Every assertion here is fail-capable in that direction.
 ceMethodFoo : IfaceMethod
 ceMethodFoo =
-  IfaceMethod "foo" (TyFun (TyVar "a") (tyConBuiltin "Int" None)) None
+  IfaceMethod "foo" (TyFun (TyVar "a") (tyConBuiltin "Int" None)) None None
 
 ceMethodBar : IfaceMethod
 ceMethodBar =
-  IfaceMethod "bar" (TyFun (TyVar "a") (tyConBuiltin "String" None)) None
+  IfaceMethod "bar" (TyFun (TyVar "a") (tyConBuiltin "String" None)) None None
 
 ceSuperEq : Super
 ceSuperEq = Super {
@@ -6105,6 +6105,7 @@ ceGradedMethod =
       (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "a"))
       (TyEffect [] (Some "e") (TyVar "a")))
     None
+    None
 
 ceGradedIface : Decl
 ceGradedIface = DInterface {
@@ -6144,6 +6145,7 @@ ceFunctorMethod =
   IfaceMethod
     "fmap"
     (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyApp (TyVar "f") (TyVar "a")))
+    None
     None
 
 ceFunctorIface : Decl
@@ -7305,7 +7307,7 @@ argDispatchOfDecl (DInterface { typarams, methods, ... }) =
 argDispatchOfDecl _ = []
 
 argDispatchOfMethod : List String -> IfaceMethod -> List (String, Int)
-argDispatchOfMethod typarams (IfaceMethod mname mty _) = match firstDispatchIdx (dispatchTyparams typarams) 0 (methodArgs mty)
+argDispatchOfMethod typarams (IfaceMethod mname mty _ _) = match firstDispatchIdx (dispatchTyparams typarams) 0 (methodArgs mty)
   Some i => [(mname, i)]
   None => []
 
@@ -7337,7 +7339,7 @@ argDispatchOfDeclById (DInterface { name, typarams, methods, ifaceOrigin, ... })
 argDispatchOfDeclById _ = []
 
 argDispatchOfMethodById : IfaceRef -> List String -> IfaceMethod -> List ((IfaceRef, String), Int)
-argDispatchOfMethodById iface typarams (IfaceMethod mname mty _) = match firstDispatchIdx (dispatchTyparams typarams) 0 (methodArgs mty)
+argDispatchOfMethodById iface typarams (IfaceMethod mname mty _ _) = match firstDispatchIdx (dispatchTyparams typarams) 0 (methodArgs mty)
   Some i => [((iface, mname), i)]
   None => []
 
@@ -7932,6 +7934,7 @@ data PerRun = PerRun {
     pendingRLocalSites : Ref (List PendingEntry),
     shadowStandaloneSchemesRef : Ref (List (String, Scheme)),
     ifaceMethodSchemesByIdRef : Ref (List ((IfaceRef, String), Scheme)),  -- #1351 L1 EXPAND: the Module arm's interface-method schemes under an identity key — the substrate leaf L2 migrates `pickSchemes` onto.  No reader yet.
+    numLitFromIntSchemeRef : Ref (Option Scheme),  -- #259 / DICT §8 I7 (literals): the PRELUDE `Num`'s own `fromInt` scheme, selected ONCE per pass by interface IDENTITY — see seedNumLitFromIntScheme.  `inferNumLit`'s anchor; it reads NO term scope.
     definerShadowNamesRef : Ref (List String),
     definerShadowSigsRef : Ref (List (String, Ty)),
     bodyImplEnvRef : Ref ImplEnv,
@@ -8046,6 +8049,7 @@ freshPerRun _ = PerRun {
   pendingRLocalSites = Ref [],
   shadowStandaloneSchemesRef = Ref [],
   ifaceMethodSchemesByIdRef = Ref [],
+  numLitFromIntSchemeRef = Ref None,
   definerShadowNamesRef = Ref [],
   definerShadowSigsRef = Ref [],
   bodyImplEnvRef = Ref emptyImplEnv,
@@ -10059,7 +10063,23 @@ inferIntRange env lo hi container =
 -- NOT a pendingSites/methodSiteFns return-position site.
 inferMethodAt : TcEnv -> String -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Mono
 inferMethodAt env name tagRef implRef methodRef = match lookupVar env name
-  None => panic ("unbound method: " ++ name)
+  -- #1430 (S2, row 39, EMIT path): a definer shadow of a method whose interface is
+  -- NAMEABLE in this module but whose METHOD NAME was never imported (`import
+  -- smod.{Zed, sf}` names the interface, not `zed`) has no `zed` binding in this
+  -- module's env at all.  The mangler has already renamed the module's own standalone
+  -- to `<mid>__zed` and the mark pass rewrote the occurrence to `EMethodAt "zed"` with
+  -- `RLocal <mid>__zed` seeded on its route, so the bare lookup below misses and this
+  -- panicked `unbound method: zed` — `medaka build` exit 1 on a program `check` and
+  -- `run` both accept.  The route already names the standalone that IS in scope, so
+  -- recover through the same emit-path value-position accessor the `Some` arm consults
+  -- (`maybeStandaloneValueMonoEmit`), and stamp the route it was pinned to.  An APP head
+  -- (shadowHeadCtxRef True) and a route with no mangled symbol both decline there, so
+  -- every occurrence that genuinely has no denotation still panics as before.
+  None => match maybeStandaloneValueMonoEmit env name tagRef
+    Some m =>
+      tagRef := RLocal (routeLocalSym !tagRef) []
+      m
+    None => panic ("unbound method: " ++ name)
   Some s =>
     let inst = instantiateTracked s
     let _ = recordMethodDicts name methodRef (snd inst)
@@ -10126,6 +10146,25 @@ inferMethodAt env name tagRef implRef methodRef = match lookupVar env name
 recordRLocalSite : TcEnv -> String -> Ref Route -> Mono -> Unit
 recordRLocalSite env name tagRef inst
   | toggles.value.suppressRLocalRecord.value = ()
+  -- #1430 (S2, row 39): a RETURN-POSITION method has NO dispatch argument, so
+  -- `methodDispatchIdx` answers None and every arm below declined — no pending site, no
+  -- route stamp, and the occurrence kept the method's dispatching route while
+  -- `maybeStandaloneValueMono` had already pinned its TYPE to the standalone.  That is
+  -- exactly the invariant `standaloneValuePinned`'s header states in bold ("⭐ THE ROUTE
+  -- MUST FOLLOW THE ARM"), violated at the one cell the dispatch-index gate hides.
+  -- Measured at the parent commit on a two-verb split that cannot be read any other way:
+  -- for `interface Zed a where zed : a` + `impl Zed Int` + a module-local `zed : Bool`,
+  -- `check --types` reported `zed : Bool` (the standalone — the TYPE arm) at exit 0 while
+  -- `run` E-PANICked `no matching impl for dispatch` (the ROUTE arm asked `Zed Bool`).
+  -- With `zed : Int` the same split is SILENT: `run` printed the impl's 777.
+  -- forceLocal (`True`) rather than a receiver query: under S4 there is no receiver to
+  -- dispatch on, which is the same argument `standaloneValuePinned` already makes for the
+  -- arg-position value cell.  Empty dict slots: `shadowStandaloneDictSlotsAt` resolves a
+  -- constrained standalone's slots by unifying its scheme against `TFun receiver …`, and a
+  -- return-position value standalone has no such arrow to match — an unconstrained one
+  -- (the whole cell #1430 pins) short-circuits to `emptyShadowDicts` there anyway.
+  | isNone (methodDispatchIdx name) && standaloneValuePinned name =
+    perRun.value.pendingRLocalSites := PendingEntry name tagRef inst "" (SKRLocal (routeLocalSym !tagRef) True [] [] []) !currentLoc :: perRun.value.pendingRLocalSites.value
   | not (contains name driverState.value.standaloneValuesRef.value) = ()
   | otherwise = match methodDispatchIdx name
     None => ()
@@ -12602,23 +12641,53 @@ numArithOp lt rt =
 -- present — `builtinClassPresent BNum` since #1539, was `ifaceRegistered "Num"` — AND
 -- `fromInt` bound): with no prelude (bare-HM oracle) fall back to a plain fresh
 -- Num-obligated var, leaving [dref] RNone (⇒ a static Int literal at rewrite time).
--- ⚠️ #1539 converts the GATE only.  The `lookupVar env "fromInt"` on the next line is
--- the OTHER, larger I7 divergence (§11's "I7 (literals)" row): the literal's method is
--- still anchored by a bare name in the USER's term scope, so a user binding spelled
--- `fromInt` still re-anchors every literal in the module.  That is untouched here.
+-- ⚠️ #1539 converted the GATE; #259 converts the ANCHOR, which was the larger half of
+-- the same I7 divergence (§11's "I7 (literals)" row).  Both halves now ask the PRELUDE
+-- and nothing else: the gate is `builtinClassPresent BNum`, the method is the scheme
+-- `seedNumLitFromIntScheme` selected out of the prelude `Num` DECLARATION by identity.
+-- A binding spelled `fromInt` in the user's term scope is no longer consulted, so it can
+-- no longer re-anchor the literals around it (#259: `fromInt : Int -> Float` made
+-- `println (7 / 2)` print `3.5` under `run` and `3` from the built binary, exit 0).
 inferNumLit : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
 inferNumLit env n fref dref
-  | builtinClassPresent BNum = match lookupVar env "fromInt"
+  | builtinClassPresent BNum = match perRun.value.numLitFromIntSchemeRef.value
     None => inferNumLitBare n fref
-    Some _ =>
-      -- inferMethodAt records the Num impl obligation + a pendingSite on [dref].
-      let fromIntTy = inferMethodAt env "fromInt" dref (Ref []) (Ref [])
+    Some s =>
+      -- records the Num impl obligation + a pendingSite on [dref].
+      let fromIntTy = inferNumLitMethod env s dref
       let a = freshVar ()
       let _ = unify fromIntTy (TFun (tconBuiltin "Int") (openRow ()) a)
       perRun.value.numlitRefs := ((a, fref, n, dref) :: perRun.value.numlitRefs.value)
       let _ = recordNumlitLoc a  -- Chunk D: literal provenance for Num mis-framing
       a
   | otherwise = inferNumLitBare n fref
+
+-- #259: the literal's own occurrence recorder — `inferMethodAt`'s `Some` arm MINUS every
+-- shadow arm, because a numeric literal is not a shadow occurrence and cannot be one:
+-- `1 + 1` mentions no identifier, so nothing about it can denote a user standalone.
+--
+-- Dropped, deliberately, and each is INERT on a program with no `fromInt` shadow (so this
+-- is byte-identical to the old route everywhere the defect was absent):
+--   • `recordRLocalSite` — gated on `standaloneValuesRef` membership / `standaloneValuePinned`,
+--     both empty for an unshadowed `fromInt`.  Under a shadow it stamped the literal's route
+--     RLocal at the user's binding.
+--   • `maybeStandaloneValueMono` / `maybeStandaloneValueMonoEmit` — the value-position pins,
+--     keyed on `definerShadowNamesRef` / the route sym; both `None` unshadowed.  These are
+--     what re-typed the literal to the user binding's own scheme on the emit path.
+--   • `argDispatchOf` — `fromInt` is return-position (no dispatch argument), so this answered
+--     `None` and fell to `recordSite` on every path already.
+--
+-- KEPT as-is: `recordMethodObligationGuarded`.  ⚠️ Its `lookupLocalFlag env name` half is a
+-- term-scope read that survives here — a residual, reported with #259 rather than changed
+-- under this fix, because its effect is to SUPPRESS a `Num` obligation (a missed reject),
+-- never to re-type the literal, and touching it would move behaviour on programs that have
+-- no shadow at all.
+inferNumLitMethod : TcEnv -> Scheme -> Ref Route -> Mono
+inferNumLitMethod env s tagRef =
+  let inst = instantiateTracked s
+  let _ = recordMethodDicts "fromInt" (Ref []) (snd inst)
+  let _ = recordMethodObligationGuarded env "fromInt" s (fst inst)
+  recordSite "fromInt" tagRef (Ref []) (fst inst)
 
 -- no-prelude fallback: a fresh var, no route (dref untouched ⇒ stays RNone ⇒ Int).
 -- PLAN.md #11 (locked §0.2): a numeric literal is ALWAYS a `fromInt n` occurrence,
@@ -13401,6 +13470,76 @@ appArgLoc (ELoc _ e) = appArgLoc e
 appArgLoc (EApp _ x) = exprLoc x
 appArgLoc _ = None
 
+-- ── #1815: application spines ───────────────────────────────────────────────
+-- The ultimate head of an application spine, ELoc wrappers peeled.  A non-application
+-- expression is its own head (so `appSpineNodes` below answers [] for it, which is what
+-- makes every spine-keyed predicate decline at dispatch index 0 and leave the existing
+-- bare-head paths byte-unchanged).
+appSpineHead : Expr -> Expr
+appSpineHead (ELoc _ e) = appSpineHead e
+appSpineHead (EApp f _) = appSpineHead f
+appSpineHead e = e
+
+-- The `EApp` nodes of a spine in APPLICATION ORDER — node i is the one supplying
+-- argument i.  ELoc wrappers are peeled off the nodes themselves (the argument keeps
+-- its own, which is what `appArgLoc` reads for the error span).
+appSpineNodes : Expr -> List Expr
+appSpineNodes (ELoc _ e) = appSpineNodes e
+appSpineNodes (EApp f x) = appSpineNodes f ++ [EApp f x]
+appSpineNodes _ = []
+
+-- the argument an application node supplies.  Total only over nodes `appSpineNodes`
+-- returned; anything else has no argument and yields itself, which cannot happen.
+appNodeArg : Expr -> Expr
+appNodeArg (ELoc _ e) = appNodeArg e
+appNodeArg (EApp _ x) = x
+appNodeArg e = e
+
+-- infer a spine's already-applied arguments, LEFT TO RIGHT (source order — the same
+-- order the recursive `infer env f` walk used to visit them), pairing each with the
+-- node that supplies it so `inferApp` can still localize its own error span.
+inferSpineArgs : TcEnv -> List Expr -> List (Expr, Mono)
+inferSpineArgs _ [] = []
+inferSpineArgs env (n::rest) =
+  let t = infer env (appNodeArg n)
+  (n, t) :: inferSpineArgs env rest
+
+-- fold `inferApp` over a spine's (node, argument-type) pairs, left to right.  One
+-- pair is exactly the single `inferApp` call the bare-head paths make.
+inferAppNodes : List (String, Expr) -> Mono -> List (Expr, Mono) -> Mono
+inferAppNodes _ ft [] = ft
+inferAppNodes lets ft ((node, at)::rest) =
+  inferAppNodes lets (inferApp lets node ft at) rest
+
+-- the k-th domain of a (possibly curried) function type — `nthFunDomain 0` is the
+-- receiver of an index-0 dispatch, which is what every pre-#1815 caller asked for.
+nthFunDomain : Int -> Mono -> Option Mono
+nthFunDomain k m = match normalize m
+  TFun a _ r => if k == 0 then Some a else nthFunDomain (k - 1) r
+  _ => None
+
+-- unify [ft] against `a0 -> a1 -> … -> r` for the applied argument monos [ats] and
+-- return the residual result `r`.  `[]` is the identity; `[xt]` is exactly the
+-- `unify ft (TFun xt eff r)` the index-0 arms wrote by hand.
+unifySpineResult : Mono -> List Mono -> Mono
+unifySpineResult ft [] = ft
+unifySpineResult ft (a::rest) =
+  let r = freshVar ()
+  let eff = openRow ()
+  let _ = unify ft (TFun a eff r)
+  let _ = performEffect perRun.value.curEffect eff
+  unifySpineResult r rest
+
+-- as `unifySpineResult`, but a PROBE: it performs no effect and discards the result.
+-- The dict-slot and obligation recoveries below unify only to populate a substitution.
+unifySpineProbe : Mono -> List Mono -> Unit
+unifySpineProbe _ [] = ()
+unifySpineProbe ft (a::rest) =
+  let r = freshVar ()
+  let eff = openRow ()
+  let _ = unify ft (TFun a eff r)
+  unifySpineProbe r rest
+
 inferAppExpr : TcEnv -> Expr -> Expr -> Mono
 inferAppExpr env f x = match lamUnderLoc x
     Some (loc, pats, body) =>
@@ -13413,22 +13552,34 @@ inferAppExpr env f x = match lamUnderLoc x
       inferApp (envAlphaLets env) (EApp f x) ft xt
     None => match shadowStandaloneHead env f
       Some (mname, tagRefs) => inferShadowApp env mname tagRefs f x
-      None => match definerShadowArgHead f
-       Some (dname, dtagRef, dimplRef) => inferDefinerShadowApp env dname dtagRef dimplRef f x
-       None => match definerShadowVarHead f
-        Some dname => inferDefinerShadowVarApp env dname f x
-        None =>
-         let ft = infer env f
-         let xt = infer env x
-         -- P0-16: detect `f(1, 2)` on the PRISTINE ft (before inferApp unifies
-         -- its domain with the tuple), then record the residual result so a
-         -- downstream no-impl / mismatch can surface the tailored hint.
-         let pend = tupleCallShapeHint f x ft
-         let res = inferApp (envAlphaLets env) (EApp f x) ft xt
-         let _ = match pend
-           Some (help, fix) => (perRun.value.tupleCallCandidates := ((res, help, fix)::perRun.value.tupleCallCandidates.value))
-           None => ()
-         res
+      -- #1815: the SPINE arms come FIRST, and they are the same two definer-shadow arms
+      -- one node further out.  A definer shadow whose interface dispatches on argument
+      -- k > 0 (`mth : Int -> b -> Int`) reaches its dispatch argument at the OUTER node
+      -- of `EApp (EApp mth n) x` — the inner node supplies argument 0, which is not the
+      -- receiver at all.  Without these arms the inner node fired the index-0 arms, asked
+      -- the dispatch question about argument 0, and imposed the standalone's whole
+      -- declared type on the enclosing annotated function.  They decline at k == 0 (a
+      -- bare head has no applied nodes), so the index-0 path below is byte-unchanged.
+      None => match definerShadowSpineArgAt f
+       Some (dname, dtagRef, dimplRef, dhd, dnodes) => inferDefinerShadowAppAt env dname dtagRef dimplRef dhd dnodes f x
+       None => match definerShadowSpineVarAt f
+        Some (dname, dhd, dnodes) => inferDefinerShadowVarAppAt env dname dhd dnodes f x
+        None => match definerShadowArgHead f
+         Some (dname, dtagRef, dimplRef) => inferDefinerShadowApp env dname dtagRef dimplRef f x
+         None => match definerShadowVarHead f
+          Some dname => inferDefinerShadowVarApp env dname f x
+          None =>
+           let ft = infer env f
+           let xt = infer env x
+           -- P0-16: detect `f(1, 2)` on the PRISTINE ft (before inferApp unifies
+           -- its domain with the tuple), then record the residual result so a
+           -- downstream no-impl / mismatch can surface the tailored hint.
+           let pend = tupleCallShapeHint f x ft
+           let res = inferApp (envAlphaLets env) (EApp f x) ft xt
+           let _ = match pend
+             Some (help, fix) => (perRun.value.tupleCallCandidates := ((res, help, fix)::perRun.value.tupleCallCandidates.value))
+             None => ()
+           res
 
 -- @Impl: if [x] is an `@Name` disambiguation hint (a bare `EVar "@Name"`, possibly
 -- under an ELoc wrapper), return the name with the leading `@` stripped.  Mirrors
@@ -13725,10 +13876,24 @@ importerShadowOnEmitPath name tagRef = singleTyparamIfaceMethod name
 -- ALSO pushing the standalone's declared domain (which would mis-route `Box`→`Int`).
 inferDefinerShadowApp : TcEnv -> String -> Ref Route -> Ref (List Route) -> Expr -> Expr -> Mono
 inferDefinerShadowApp env name tagRef implRef f x =
+  inferDefinerShadowAppAt env name tagRef implRef f [] f x
+
+-- #1815: the marked twin at an arbitrary dispatch index — the peer of
+-- inferDefinerShadowVarAppAt, and the two must still agree cell-for-cell (S7).  [hd] is
+-- the spine's ultimate head ([f] itself at index 0) and [nodes] the application nodes
+-- already applied to it.  BOTH decision layers move together here: the TYPE arm reads
+-- the receiver at index k, and the ROUTE stamps (pendingRLocalSites / pendingArgStamps)
+-- are pushed at THIS node with THAT receiver — "the route must follow the arm".
+inferDefinerShadowAppAt : TcEnv -> String -> Ref Route -> Ref (List Route) -> Expr -> List Expr -> Expr -> Expr -> Mono
+inferDefinerShadowAppAt env name tagRef implRef hd nodes f x =
   let sym = routeLocalSym !tagRef
   -- P0-19: capture the application's location BEFORE inferring the argument (which
   -- moves currentLoc), so a standalone-domain mismatch reports at the call site.
   let dloc = !currentLoc
+  -- #1815: the arguments the spine already applied, inferred in source order (exactly
+  -- the order the recursive walk visited them in before).
+  let pre = inferSpineArgs env nodes
+  let k = listLen pre
   -- P0-19 d8 (S2/S6): infer the argument FIRST so the head scheme is chosen PER
   -- RECEIVER.  A receiver with a VISIBLE impl of the shadowed interface (impl universe
   -- is GRAPH-GLOBAL: ARCH B-2.1-g reads `bodyImplEnvRef` via `ieImplExistsForHead`)
@@ -13753,7 +13918,7 @@ inferDefinerShadowApp env name tagRef implRef f x =
   -- P0-20: ground an ungrounded receiver to the standalone's declared domain BEFORE the
   -- dispatch decision, so typecheck asks the impl question about the SAME head the
   -- post-inference route resolver will.  See groundShadowReceiver.
-  let _ = groundShadowReceiver (shadowDomainFor env name sym) xt isDictVar dloc
+  let _ = groundShadowReceiver (shadowDomainForAt env name sym k) xt isDictVar dloc
   let dispatches = definerReceiverDispatches name xt
   -- #158 PR4: SAVE/RESTORE the three toggles around the head computation (restore to the
   -- saved value, NOT unconditional False) so a nested definer-shadow head re-entering this
@@ -13782,7 +13947,7 @@ inferDefinerShadowApp env name tagRef implRef f x =
   -- standalone (`Int -> Int`), so inferMethodAt's lookupVar would hand back `Int -> Int`
   -- and reject a live-impl receiver (`Box`).  STANDALONE arm: the standalone scheme
   -- (mangled sym on the emit path preserves the concrete result type).
-  let ft = if dispatches then shadowVarHeadMethodScheme env name f else definerShadowHeadType env sym f
+  let ft = if dispatches then shadowVarHeadMethodScheme env name hd else definerShadowHeadType env sym hd
   toggles.value.shadowHeadCtxRef := savedShadowHead
   toggles.value.suppressRLocalRecord := savedRLocal
   toggles.value.suppressArgStamp := savedArgStamp
@@ -13792,7 +13957,7 @@ inferDefinerShadowApp env name tagRef implRef f x =
   -- there would be meaningless.  A dict-var receiver dispatches through its dict and is
   -- likewise not the standalone.  ([], []) for an unconstrained standalone.
   let dicts = if dispatches || isDictVar then emptyShadowDicts
-    else shadowStandaloneDicts env name sym xt
+    else shadowStandaloneDictsSp env name sym (map snd pre ++ [xt])
   -- Route by the ACTUAL argument type on BOTH the eval path (pendingRLocalSites,
   -- read by resolveRLocalSites) and the emit path (pendingArgStamps, read by
   -- resolveArgStamps — only recorded when this method arg-dispatches, i.e. on the
@@ -13832,8 +13997,8 @@ inferDefinerShadowApp env name tagRef implRef f x =
   -- an impl still dispatches (no enforcement) — that arm is untouched.  On the mangled
   -- emit path (sym /= "") `ft` is already the standalone scheme (definerShadowHeadType),
   -- which enforces the domain itself, so this stays inert there.
-  let _ = if sym == "" then enforceStandaloneDomain env name xt dloc else ()
-  inferApp (envAlphaLets env) (EApp f x) ft xt
+  let _ = if sym == "" then enforceStandaloneDomainAt env name xt dloc k else ()
+  inferAppNodes (envAlphaLets env) ft (pre ++ [(EApp f x, xt)])
 
 -- S1/S2 (THE INVERSION, 2026-07-14): is [name] a DEFINER shadow — a top-level fn defined in
 -- THIS module that reuses a single-param interface method's name?  This is the exact
@@ -13964,8 +14129,11 @@ superIfaceName (Super { superHead = n }) = n
 -- `Eq.eq` while the user's `eq : List Int -> List Int -> Bool` was discarded.  The only
 -- surviving exemption is the Fork-2 dict-var carve-out: imposing a concrete domain on the
 -- enclosing group's `=>`-constraint var would monomorphise its written signature.
-enforceStandaloneDomain : TcEnv -> String -> Mono -> Option Loc -> Unit
-enforceStandaloneDomain _ name xt dloc = match standaloneShadowDomain name
+-- #1815: [k] is the interface's dispatch index, so the domain imposed on the receiver is
+-- the standalone's k-th parameter.  `k = 0` is the pre-#1815 behavior verbatim (the
+-- bare-head arms pass it, and both of this function's callers now name the index).
+enforceStandaloneDomainAt : TcEnv -> String -> Mono -> Option Loc -> Int -> Unit
+enforceStandaloneDomainAt _ name xt dloc k = match standaloneShadowDomainAt name k
   None => ()
   Some dom =>
     if definerReceiverIsDictVar name xt then
@@ -14014,13 +14182,12 @@ groundShadowReceiver dom xt isDictVar dloc
 -- Mangled emit (sym /= ""): private_mangle renamed the standalone to `<mid>__name`, so
 -- definerShadowSigsRef has no `name` entry — take the domain off the env binding for the
 -- mangled symbol, which is the very scheme definerShadowHeadType types this site against.
-shadowDomainFor : TcEnv -> String -> String -> Option Mono
-shadowDomainFor _ name "" = standaloneShadowDomain name
-shadowDomainFor env _ sym = match lookupVar env sym
+-- #1815: [k] is the interface's dispatch index; `k = 0` is the pre-#1815 behavior.
+shadowDomainForAt : TcEnv -> String -> String -> Int -> Option Mono
+shadowDomainForAt _ name "" k = standaloneShadowDomainAt name k
+shadowDomainForAt env _ sym k = match lookupVar env sym
   None => None
-  Some s => match normalize (instantiate s)
-    TFun a _ _ => Some a
-    _ => None
+  Some s => nthFunDomain k (instantiate s)
 
 -- unify the standalone domain against the argument at the call's location.
 unifyStandaloneDomain : Mono -> Mono -> Option Loc -> Unit
@@ -14031,12 +14198,12 @@ unifyStandaloneDomain dom xt dloc =
 -- a definer-shadow standalone's declared parameter type, freshly instantiated (so a
 -- polymorphic standalone domain does not leak vars across sites).  None when there is
 -- no top-level signature, or the signature is not a function type.
-standaloneShadowDomain : String -> Option Mono
-standaloneShadowDomain name = match lookupAssoc name perRun.value.definerShadowSigsRef.value
+-- #1815: [k] is the interface's dispatch index — the standalone's k-th declared
+-- parameter is the one the receiver occupies.  `k = 0` is the pre-#1815 behavior.
+standaloneShadowDomainAt : String -> Int -> Option Mono
+standaloneShadowDomainAt name k = match lookupAssoc name perRun.value.definerShadowSigsRef.value
   None => None
-  Some ty => match normalize (instantiate (sigToScheme ty))
-    TFun a _ _ => Some a
-    _ => None
+  Some ty => nthFunDomain k (instantiate (sigToScheme ty))
 
 -- P0-19 d4b (S4): a definer-shadow occurrence in bare VALUE position (NOT the head of
 -- its own application — shadowHeadCtxRef is False) denotes the STANDALONE.  Returns the
@@ -14209,6 +14376,40 @@ definerShadowVarHead (EVarId name _)
   | otherwise = None
 definerShadowVarHead _ = None
 
+-- ── #1815: the dispatch argument is not always argument 0 ───────────────────
+-- The two predicates above peel a BARE head, so they only ever fire on the node that
+-- supplies argument 0.  For an interface that dispatches at index k > 0 that node is
+-- not the dispatch site: `mth n x` is `EApp (EApp mth n) x`, and the receiver is `x`,
+-- one node further out.  These two answer the SAME question as their bare-head peers —
+-- "is this node a definer shadow's dispatch site?" — for k > 0.
+--
+-- `shadowSpineNodesAt` is the whole discriminator, and it declines in two ways that
+-- keep the pre-existing behavior byte-identical: `[]` nodes (a bare head, k == 0 —
+-- the peers below handle it), and a spine whose depth is not the interface's dispatch
+-- index (over-applied `mth n x y`, whose OWN inner node is the dispatch site and fires
+-- there; or under-applied `mth n` at k == 1, which has no receiver to decide on at all
+-- and is left exactly as it is today).
+shadowSpineNodesAt : String -> Expr -> Option (List Expr)
+shadowSpineNodesAt name f =
+  let nodes = appSpineNodes f
+  if isEmptyL nodes then None
+  else match methodDispatchIdx name
+    Some k => if k == listLen nodes then Some nodes else None
+    None => None
+
+-- the MARKED (run/build) spine arm — peer of definerShadowArgHead.
+definerShadowSpineArgAt : Expr -> Option (String, Ref Route, Ref (List Route), Expr, List Expr)
+definerShadowSpineArgAt f = match definerShadowArgHead (appSpineHead f)
+  None => None
+  Some (name, tagRef, implRef) => map (nodes => (name, tagRef, implRef, appSpineHead f, nodes)) (shadowSpineNodesAt name f)
+
+-- the UNMARKED (`check`) spine arm — peer of definerShadowVarHead.
+definerShadowSpineVarAt : Expr -> Option (String, Expr, List Expr)
+definerShadowSpineVarAt f = match definerShadowVarHead (appSpineHead f)
+  None => None
+  Some name =>
+    map (nodes => (name, appSpineHead f, nodes)) (shadowSpineNodesAt name f)
+
 -- S2 (THE INVERSION): type an un-marked (check-path) definer-shadow application against
 -- the module's OWN standalone, unconditionally.  Peer of inferDefinerShadowApp (the marked
 -- run/build path); the two must agree cell-for-cell or `check` and the binary diverge (S7),
@@ -14222,18 +14423,30 @@ definerShadowVarHead _ = None
 -- dispatch that erases the user's function.
 inferDefinerShadowVarApp : TcEnv -> String -> Expr -> Expr -> Mono
 inferDefinerShadowVarApp env name f x =
+  inferDefinerShadowVarAppAt env name f [] f x
+
+-- #1815: the same arm at an arbitrary dispatch index.  [hd] is the spine's ultimate head
+-- (which is [f] itself at index 0) and [nodes] the application nodes already applied to
+-- it, so `nodes ++ [this node]` is every argument up to and including the receiver.  The
+-- head is typed ONCE, here, against the chosen scheme and `inferApp` is folded over the
+-- whole prefix — deliberately NOT `infer env f`, which would walk back into the inner
+-- node and re-ask the dispatch question about argument 0.
+inferDefinerShadowVarAppAt : TcEnv -> String -> Expr -> List Expr -> Expr -> Expr -> Mono
+inferDefinerShadowVarAppAt env name hd nodes f x =
   let dloc = !currentLoc
+  let pre = inferSpineArgs env nodes
   let xt = infer env x
   let isDictVar = definerReceiverIsDictVar name xt
   -- P0-20: ground an ungrounded receiver to the standalone's declared domain BEFORE the
   -- dispatch decision (see groundShadowReceiver).  Still load-bearing under the inversion:
   -- it is what gives a bare `Num` literal receiver (`eq 1 2`) the standalone's domain
   -- rather than leaving it open for Num-defaulting to ground LATER, behind typecheck's back.
-  let _ = groundShadowReceiver (standaloneShadowDomain name) xt isDictVar dloc
+  -- #1815: the DECLARED DOMAIN THE RECEIVER GROUNDS TO IS THE k-TH ONE, not the first.
+  let _ = groundShadowReceiver (standaloneShadowDomainAt name (listLen pre)) xt isDictVar dloc
   if isDictVar then
-    inferApp (envAlphaLets env) (EApp f x) (shadowVarHeadMethodScheme env name f) xt
+    inferAppNodes (envAlphaLets env) (shadowVarHeadMethodScheme env name hd) (pre ++ [(EApp f x, xt)])
   else
-    inferDefinerStandaloneVarApp env name f x xt dloc
+    inferDefinerStandaloneVarAppAt env name hd pre f x xt dloc
 
 -- P0-19 (d8 dispatch arm): the interface METHOD scheme for [name], from
 -- methodIfaceParamsRef (which spans imported interfaces) so per-receiver dispatch works
@@ -14262,14 +14475,17 @@ shadowVarHeadMethodScheme env name f = match omLookup name perRun.value.methodIf
 -- generalized over the shadow receiver then called at a foreign type localizes to the
 -- call [dloc].  No declared signature ⇒ fall back to the permissive method-scheme head
 -- + enforceStandaloneDomain (the pre-P0-19 permissive behavior, unchanged).
-inferDefinerStandaloneVarApp : TcEnv -> String -> Expr -> Expr -> Mono -> Option Loc -> Mono
-inferDefinerStandaloneVarApp env name f x xt dloc = match standaloneShadowScheme name
+-- #1815: [pre] is the spine's already-applied (node, type) prefix — `[]` at dispatch
+-- index 0, where every line below reduces to the single-argument form it had before.
+inferDefinerStandaloneVarAppAt : TcEnv -> String -> Expr -> List (Expr, Mono) -> Expr -> Expr -> Mono -> Option Loc -> Mono
+inferDefinerStandaloneVarAppAt env name hd pre f x xt dloc = match standaloneShadowScheme name
   Some smono =>
-    let r = freshVar ()
-    let eff = openRow ()
     currentLoc := dloc
-    let _ = unify smono (TFun xt eff r)
-    let _ = performEffect perRun.value.curEffect eff
+    -- #1815: consume the WHOLE applied prefix, not just the receiver.  Unifying the
+    -- standalone's declared type against `TFun xt … r` when the receiver is argument 1
+    -- is what equated `Int -> Int -> Int` (the standalone) with `b -> r` (the annotated
+    -- `wrap`'s second parameter) and monomorphised the user's written signature.
+    let r = unifySpineResult smono (map snd pre ++ [xt])
     -- S-1 (REJECT direction).  standaloneShadowScheme instantiates the DECLARED SIG via
     -- sigToScheme, which DROPS the `=>` constraints entirely — so `Num String` was never
     -- asked and `check` ACCEPTED `size "hi"` against `size : Num a => a -> a`.  Re-read
@@ -14277,16 +14493,16 @@ inferDefinerStandaloneVarApp env name f x xt dloc = match standaloneShadowScheme
     -- receiver, which makes it a located reject.  (This arm has a signature by
     -- construction; the no-signature arm below goes through `infer env f` → inferVarPlain
     -- → instantiateVarTracked, the ordinary obligation path.)
-    let _ = recordStandaloneSigObligations name "" xt
+    let _ = recordStandaloneSigObligationsSp name "" (map snd pre ++ [xt])
     r
   None =>
     -- #158 PR4: save/restore, not set-False (see inferDefinerShadowApp's bracket).
     let saved = toggles.value.shadowHeadCtxRef.value
     toggles.value.shadowHeadCtxRef := True
-    let ft = infer env f
+    let ft = infer env hd
     toggles.value.shadowHeadCtxRef := saved
-    let _ = enforceStandaloneDomain env name xt dloc
-    inferApp (envAlphaLets env) (EApp f x) ft xt
+    let _ = enforceStandaloneDomainAt env name xt dloc (listLen pre)
+    inferAppNodes (envAlphaLets env) ft (pre ++ [(EApp f x, xt)])
 
 -- P0-18: the type of a definer-shadow application HEAD.  With a mangled symbol (the
 -- emit path), instantiate the standalone's own scheme (bound under `<mid>__name`) so
@@ -14342,13 +14558,18 @@ stampRoutes (r::rest) =
 -- independent hole in this same arm.  ([] , []) for an unconstrained standalone, which
 -- SHORT-CIRCUITS BEFORE THE UNIFY, so an unconstrained shadow (all 5 of the compiler's
 -- own) does not even perturb the substitution — the fixpoint provably cannot move.
-shadowStandaloneDicts : TcEnv -> String -> String -> Mono -> ShadowDicts
-shadowStandaloneDicts env name sym xt =
+-- #1815: [ats] is the call's applied argument monos up to AND INCLUDING the receiver —
+-- `[xt]` when the interface dispatches at argument 0, which is every pre-#1815 caller.
+-- The unify below has to consume the WHOLE prefix, because at dispatch index k the
+-- standalone's constraint variable sits behind k earlier parameters and unifying its
+-- scheme against `TFun receiver …` asks about the wrong one (packet residual (a)).
+shadowStandaloneDictsSp : TcEnv -> String -> String -> List Mono -> ShadowDicts
+shadowStandaloneDictsSp env name sym ats =
   -- P0-20's sym-awareness lesson, mirrored: on the mangled emit path the standalone is
   -- bound under `<mid>__name`, so a BARE-name lookup here would be silently inert and
   -- `build` would emit the un-dicted call while run/check dicted correctly — the same
   -- bug, mirrored.  shadowDomainFor exists for exactly this reason.
-  shadowStandaloneDictsWith (lookupVar env (if sym == "" then name else sym)) name sym xt
+  shadowStandaloneDictsWithSp (lookupVar env (if sym == "" then name else sym)) name sym ats
 
 -- as shadowStandaloneDicts, but with the standalone's scheme supplied explicitly.
 -- The IMPORTER shadow needs this: in the importing module `env1` deliberately rebinds the
@@ -14360,8 +14581,12 @@ shadowStandaloneDicts env name sym xt =
 -- MANGLED symbol) and still under-applied on `run`.
 shadowStandaloneDictsWith : Option Scheme -> String -> String -> Mono -> ShadowDicts
 shadowStandaloneDictsWith mscheme name sym xt =
-  let _ = recordStandaloneSigObligations name sym xt
-  shadowStandaloneDictSlotsAt mscheme (if sym == "" then name else sym) xt
+  shadowStandaloneDictsWithSp mscheme name sym [xt]
+
+shadowStandaloneDictsWithSp : Option Scheme -> String -> String -> List Mono -> ShadowDicts
+shadowStandaloneDictsWithSp mscheme name sym ats =
+  let _ = recordStandaloneSigObligationsSp name sym ats
+  shadowStandaloneDictSlotsSp mscheme (if sym == "" then name else sym) ats
 
 -- the dict slots ONLY — no call obligations.
 -- recordRLocalSite needs this: it fires for EVERY shadow method occurrence, at a point
@@ -14372,6 +14597,10 @@ shadowStandaloneDictsWith mscheme name sym xt =
 -- slots and the route dispatches as before.
 shadowStandaloneDictSlotsAt : Option Scheme -> String -> Mono -> ShadowDicts
 shadowStandaloneDictSlotsAt mscheme key xt =
+  shadowStandaloneDictSlotsSp mscheme key [xt]
+
+shadowStandaloneDictSlotsSp : Option Scheme -> String -> List Mono -> ShadowDicts
+shadowStandaloneDictSlotsSp mscheme key ats =
   -- FIX-shadow-arity-skew: ONE resolution, two projections — the slots AND the argument
   -- vectors must come from the same entry decision, exactly as `inferDictAtFound` does.
   let dc = declaredConstraintFor key
@@ -14395,9 +14624,7 @@ shadowStandaloneDictSlotsAt mscheme key xt =
     None => emptyShadowDicts
     Some s =>
       let inst = instantiateTracked s
-      let r = freshVar ()
-      let eff = openRow ()
-      let _ = unify (fst inst) (TFun xt eff r)
+      let _ = unifySpineProbe (fst inst) ats
       shadowStandaloneDictSlots slots dc.cdArgs (snd inst)
 
 -- the standalone's dict ROUTE slots for this call: its declared constraint ids mapped
@@ -14456,18 +14683,20 @@ shadowStandaloneDictSlots slots args subst =
 --
 -- Keyed by the BARE name on the un-mangled run/check path and by the MANGLED symbol on
 -- the emit path (sigsOf runs over the already-renamed decls there) — try both, exactly as
--- shadowDomainFor has to.
-recordStandaloneSigObligations : String -> String -> Mono -> Unit
-recordStandaloneSigObligations name sym xt = match standaloneShadowSigTy name sym
+-- shadowDomainForAt has to.
+--
+-- #1815: [ats] is the applied prefix up to and including the receiver (`[xt]` at
+-- dispatch index 0).  Same reason as `shadowStandaloneDictsSp`: the constraint variable
+-- the obligation is about is only reachable through the whole prefix.
+recordStandaloneSigObligationsSp : String -> String -> List Mono -> Unit
+recordStandaloneSigObligationsSp name sym ats = match standaloneShadowSigTy name sym
   None => ()
   Some ty => match sigConstraintsOf ty
     [] => ()
     cs =>
       let pr = sigToSchemeTvs ty
       let inst = instantiateTracked (fst pr)
-      let r = freshVar ()
-      let eff = openRow ()
-      let _ = unify (fst inst) (TFun xt eff r)
+      let _ = unifySpineProbe (fst inst) ats
       recordSigConstraintObls cs (snd pr) (snd inst)
 
 -- the standalone's declared signature Ty, under whichever key this path stores it.
@@ -15815,7 +16044,7 @@ ifaceParamKindsOf p methods = match flatMap (ifaceMethodVarApps p) methods
 -- every application of [p] in one method signature, paired with that signature's
 -- effect-tail names (the "same signature" side of the KRow rule).
 ifaceMethodVarApps : String -> IfaceMethod -> List (List Ty, List String)
-ifaceMethodVarApps p (IfaceMethod _ mty _) =
+ifaceMethodVarApps p (IfaceMethod _ mty _ _) =
   let tails = dedup (effTailNames mty)
   map (args => (args, tails)) (varHeadApps p mty)
 
@@ -17290,7 +17519,7 @@ returnPosOfDecl (DInterface { typarams, methods, ... }) =
 returnPosOfDecl _ = []
 
 returnPosMethod : List String -> IfaceMethod -> List String
-returnPosMethod typarams (IfaceMethod mname mty _)
+returnPosMethod typarams (IfaceMethod mname mty _ _)
   | not (anyArgMentions (dispatchTyparams typarams) (methodArgs mty)) = [mname]
   | otherwise = []
 
@@ -17423,14 +17652,9 @@ prePassFunClauseScoped rw (FunClause ps e) =
   FunClause ps (rewriteArgScoped rw (boundOfList (patVarsListTc ps)) e)
 
 prePassIfaceMethodScoped : ArgRw -> IfaceMethod -> IfaceMethod
-prePassIfaceMethodScoped _ (IfaceMethod n ty None) = IfaceMethod n ty None
-prePassIfaceMethodScoped rw (IfaceMethod n ty (Some (MethodDefault ps e))) =
-  IfaceMethod
-    n
-    ty
-    (Some (MethodDefault
-      ps
-      (rewriteArgScoped rw (boundOfList (patVarsListTc ps)) e)))
+prePassIfaceMethodScoped _ (IfaceMethod n ty None mloc) =
+  IfaceMethod n ty None mloc
+prePassIfaceMethodScoped rw (IfaceMethod n ty (Some (MethodDefault ps e)) mloc) = IfaceMethod n ty (Some (MethodDefault ps (rewriteArgScoped rw (boundOfList (patVarsListTc ps)) e))) mloc
 
 prePassImplMethodScoped : ArgRw -> ImplMethod -> ImplMethod
 prePassImplMethodScoped rw (ImplMethod n ps e) =
@@ -17670,7 +17894,7 @@ methodConstraintNamesOfDecl (DInterface { typarams, methods, ... }) =
 methodConstraintNamesOfDecl _ = []
 
 methodConstraintNameOf : List String -> IfaceMethod -> List String
-methodConstraintNameOf typarams (IfaceMethod mname mty _)
+methodConstraintNameOf typarams (IfaceMethod mname mty _ _)
   | hasMethodLevelConstraint typarams mty = [mname]
   | otherwise = []
 
@@ -19514,9 +19738,9 @@ firstImplMethodLoc ((ImplMethod _ _ body)::_) =
 -- the same pure computation the retired `insertIfaceRequired` writer stored.
 requiredMethodNames : List IfaceMethod -> List String
 requiredMethodNames [] = []
-requiredMethodNames ((IfaceMethod n _ None)::rest) =
+requiredMethodNames ((IfaceMethod n _ None _)::rest) =
   n :: requiredMethodNames rest
-requiredMethodNames ((IfaceMethod _ _ (Some _))::rest) =
+requiredMethodNames ((IfaceMethod _ _ (Some _) _)::rest) =
   requiredMethodNames rest
 
 -- ⚠️ THE `Map` SUFFIX IS HISTORICAL and is kept deliberately: it named the
@@ -19621,7 +19845,7 @@ insertIfaceMethodsAcc _ _ _ [] acc = acc
 -- #822: the graded scope is stored ALONGSIDE (typarams, mty) rather than in a table of
 -- its own, so the two are ONE resolution result and cannot be resolved differently —
 -- see registerMethodIfaceParamsMethods for why that is the load-bearing invariant.
-insertIfaceMethodsAcc iface typarams scope ((IfaceMethod mname mty _)::rest) mp = insertIfaceMethodsAcc iface typarams scope rest (omInsert mname (iface, typarams, mty, scope) mp)
+insertIfaceMethodsAcc iface typarams scope ((IfaceMethod mname mty _ _)::rest) mp = insertIfaceMethodsAcc iface typarams scope rest (omInsert mname (iface, typarams, mty, scope) mp)
 
 -- ── #1111 Stage A-2 unit A-2.5 (#1092): the METHOD-namespace identity companion ──
 -- The map above is keyed by the BARE method name and is last-write-wins, so when two
@@ -19693,7 +19917,7 @@ insertMethodIdents (_::rest) acc = insertMethodIdents rest acc
 
 insertIfaceMethodIdents : String -> List String -> List (String, List Kind) -> TyConOrigin -> List IfaceMethod -> (OrdMap (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))), List String) -> (OrdMap (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))), List String)
 insertIfaceMethodIdents _ _ _ _ [] acc = acc
-insertIfaceMethodIdents iface typarams scope origin ((IfaceMethod mname mty _)::rest) acc =
+insertIfaceMethodIdents iface typarams scope origin ((IfaceMethod mname mty _ _)::rest) acc =
   let acc2 = match mkIdent NsMethod origin mname
     -- honest absence: no module id for this declaration, so it contributes NO identity
     -- rather than a constant one every unstamped declaration would collide on (§8 I6.3).
@@ -24197,15 +24421,15 @@ prependDictClause n k (FunClause pats body) =
   FunClause (dictParams n k ++ pats) body
 
 ifaceDictPassMethod : IfaceMethod -> IfaceMethod
-ifaceDictPassMethod (IfaceMethod n ty (Some (MethodDefault pats body))) =
-  ifaceDictPassDefault n ty pats body (methodDictArityOf n)
+ifaceDictPassMethod (IfaceMethod n ty (Some (MethodDefault pats body)) mloc) =
+  ifaceDictPassDefault n ty pats body mloc (methodDictArityOf n)
 ifaceDictPassMethod m = m
 
-ifaceDictPassDefault : String -> Ty -> List Pat -> Expr -> Int -> IfaceMethod
-ifaceDictPassDefault n ty pats body k
+ifaceDictPassDefault : String -> Ty -> List Pat -> Expr -> Option Loc -> Int -> IfaceMethod
+ifaceDictPassDefault n ty pats body mloc k
   | k > 0 =
-    IfaceMethod n ty (Some (MethodDefault (dictParams n k ++ pats) body))
-  | otherwise = IfaceMethod n ty (Some (MethodDefault pats body))
+    IfaceMethod n ty (Some (MethodDefault (dictParams n k ++ pats) body)) mloc
+  | otherwise = IfaceMethod n ty (Some (MethodDefault pats body)) mloc
 
 methodDictArityOf : String -> Int
 methodDictArityOf n =
@@ -25233,6 +25457,11 @@ checkBodyImpl seed mode prog0 =
   let shadowLayer = match mode
     Flat _ =>
       perRun.value.methodShadowNamesRef := methodNames
+      -- #259: anchor the numeric literal's `fromInt` to the PRELUDE `Num` DECLARATION.
+      -- `globalS`'s interface-method prefix IS `ifaceMethodSchemes prog` (the externs it
+      -- appends come after, and `zipIfaceMethodSchemeIds` truncates at the key list), so
+      -- this reuses the schemes already minted above rather than eliciting new ids.
+      let _ = seedNumLitFromIntScheme (ifaceMethodSchemeIds prog) globalS
       []
     Module _ _ implDecls =>
       -- #1351 L1 EXPAND.  `ifaceMethodSchemes implDecls` is hoisted into a binding so it
@@ -25242,6 +25471,8 @@ checkBodyImpl seed mode prog0 =
       -- effect relative to the `methodConstraintsRef` write below.
       let ifaceSchemes = ifaceMethodSchemes implDecls
       perRun.value.ifaceMethodSchemesByIdRef := (zipIfaceMethodSchemeIds (ifaceMethodSchemeIds implDecls) ifaceSchemes)
+      -- #259: same anchor on the Module arm, off the same already-minted list.
+      let _ = seedNumLitFromIntScheme (ifaceMethodSchemeIds implDecls) ifaceSchemes
       -- #1351 L2 MIGRATE.  The importer-shadow layer now binds each shadowed method
       -- name to the scheme of the declaration THIS module's import scope admits
       -- (`applyMethodScopeOverrides`), not to `lookupAssoc`'s decl-walk first match.
@@ -25763,7 +25994,7 @@ inferDefaultMethods env iface dscope typarams (m::rest) =
 -- The judgment is read off `perRun.errorsDetected` via `erredDuring`, never off the
 -- diagnostic list (issue 1146).
 inferDefaultMethod : TcEnv -> String -> List (String, List Kind) -> List String -> IfaceMethod -> Unit
-inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (MethodDefault pats body))) =
+inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (MethodDefault pats body)) _) =
   -- #822: [dscope] is the same declaration-derived graded scope the method's own
   -- scheme was built under (inferOneIfaceDefaults → methodSchemesPure) — a DEFAULT
   -- body of a graded method must see its Row slots as rows, not as tyvars.
@@ -28362,7 +28593,7 @@ ifaceMethodTy (_::rest) iface mname = ifaceMethodTy rest iface mname
 
 methodTyOf : String -> List IfaceMethod -> Option Ty
 methodTyOf _ [] = None
-methodTyOf mname ((IfaceMethod n ty _)::rest)
+methodTyOf mname ((IfaceMethod n ty _ _)::rest)
   | n == mname = Some ty
   | otherwise = methodTyOf mname rest
 
@@ -28786,7 +29017,7 @@ declIfaceMethodIds (DInterface { name, methods, ifaceOrigin, ... }) = map
 declIfaceMethodIds _ = []
 
 ifaceMethodIdRow : IfaceRef -> IfaceMethod -> (IfaceRef, String)
-ifaceMethodIdRow iface (IfaceMethod mname _ _) = (iface, mname)
+ifaceMethodIdRow iface (IfaceMethod mname _ _ _) = (iface, mname)
 
 -- Pair `ifaceMethodSchemeIds`' keys against `ifaceMethodSchemes`' own output,
 -- positionally: the two walks visit the same decls in the same order and emit exactly one
@@ -28799,6 +29030,48 @@ zipIfaceMethodSchemeIds [] _ = []
 zipIfaceMethodSchemeIds _ [] = []
 zipIfaceMethodSchemeIds (k::ks) ((_, s)::ss) =
   (k, s) :: zipIfaceMethodSchemeIds ks ss
+
+-- ── #259 / DICT §8 I7 (literals): the numeric literal's anchor ──────────────────
+--
+-- I7 fixes the class a numeric LITERAL demands to the PRELUDE's `Num`, and therefore
+-- fixes the method it is modelled through to that interface's own `fromInt`.  Before
+-- this, `inferNumLit` asked `lookupVar env "fromInt"` — a bare-name lookup in the USER's
+-- TERM scope — so ANY binding spelled `fromInt` (top level, `let`, or a parameter), never
+-- called, re-anchored every literal in its lexical scope to that binding's type.  #259:
+-- `fromInt : Int -> Float` + `println (7 / 2)` printed `3.5` under `run` and `3` from the
+-- built binary, exit 0, empty stderr, on a program `check` accepts.
+--
+-- The successor asks the interface question and takes the interface answer: pick the
+-- scheme whose key is (an interface DECL-identical to `builtinIfaceRef BNum`, `fromInt`)
+-- out of the very rows env setup already built.  A user term binding contributes no row
+-- to that list at all, so no spelling can reach it — this removes the read, it does not
+-- special-case the name.
+--
+-- 🚨 SELECTED FROM THE ALREADY-MINTED SCHEMES, NEVER RE-ELABORATED.  `methodSchemes`
+-- mints tyvar ids off `PerRun.tyvarCounter` AND registers `methodConstraintsRef` keyed by
+-- those ids.  A second `sigToSchemeTvsIn` here would hand `recordMethodDicts` a scheme
+-- whose ids no constraint row is keyed by (silently: it aligns nothing and records no
+-- dict), besides shifting every downstream id.  Hence the zip against the caller's own
+-- list rather than a fresh lookup — the same reasoning `ifaceMethodSchemeIds` states.
+--
+-- Identity, not spelling: `sameIfaceDecl` (the one total mint, #1647) — two STAMPED
+-- occurrences match on `(module, name)`, two UNSTAMPED ones by spelling, stamped never
+-- matches unstamped.  A MISS is loud in the honest direction: `inferNumLit` falls to
+-- `inferNumLitBare`, which is exactly the no-prelude arm (a fresh `Num`-obligated var,
+-- route RNone ⇒ Int), never a user binding's type.
+seedNumLitFromIntScheme : List (IfaceRef, String) -> List (String, Scheme) -> Unit
+seedNumLitFromIntScheme keys schemes =
+  perRun.value.numLitFromIntSchemeRef :=
+    pickIfaceMethodSchemeById
+      (builtinIfaceRef BNum)
+      "fromInt"
+      (zipIfaceMethodSchemeIds keys schemes)
+
+pickIfaceMethodSchemeById : IfaceRef -> String -> List ((IfaceRef, String), Scheme) -> Option Scheme
+pickIfaceMethodSchemeById _ _ [] = None
+pickIfaceMethodSchemeById iface mname (((ifn, n), s)::rest)
+  | n == mname && sameIfaceDecl ifn iface = Some s
+  | otherwise = pickIfaceMethodSchemeById iface mname rest
 
 -- Error-path B4: register each interface method → (iface, typarams, declared Ty)
 -- so checkImplObligations can recover its dispatch (iface-param) types at a call
@@ -28831,7 +29104,7 @@ registerMethodIfaceParamsDecl _ = ()
 -- underlying bare-name interface identity is #1047's territory, upstream of #822.
 registerMethodIfaceParamsMethods : IfaceRef -> List String -> List (String, List Kind) -> List IfaceMethod -> Unit
 registerMethodIfaceParamsMethods _ _ _ [] = ()
-registerMethodIfaceParamsMethods iface typarams scope ((IfaceMethod mname mty _)::rest) =
+registerMethodIfaceParamsMethods iface typarams scope ((IfaceMethod mname mty _ _)::rest) =
   perRun.value.methodIfaceParamsRef := omInsert mname (iface, typarams, mty, scope) perRun.value.methodIfaceParamsRef.value
   registerMethodIfaceParamsMethods iface typarams scope rest
 
@@ -28840,7 +29113,7 @@ registerMethodIfaceParamsMethods iface typarams scope ((IfaceMethod mname mty _)
 -- (from the same tvs map), so a call-site instantiation can route the dict.
 methodSchemes : List (String, List Kind) -> List String -> List IfaceMethod -> List (String, Scheme)
 methodSchemes _ _ [] = []
-methodSchemes scope typarams ((IfaceMethod mname mty _)::rest) =
+methodSchemes scope typarams ((IfaceMethod mname mty _ _)::rest) =
   let st = sigToSchemeTvsIn scope mty
   let _ = registerMethodConstraints typarams mname mty (snd st) (schemeIds (fst st))
   (mname, fst st) :: methodSchemes scope typarams rest
@@ -28851,7 +29124,7 @@ methodSchemes scope typarams ((IfaceMethod mname mty _)::rest) =
 -- registered once during ifaceMethodSchemes at env setup).
 methodSchemesPure : List (String, List Kind) -> List IfaceMethod -> List (String, Scheme)
 methodSchemesPure _ [] = []
-methodSchemesPure scope ((IfaceMethod mname mty _)::rest) =
+methodSchemesPure scope ((IfaceMethod mname mty _ _)::rest) =
   (mname, fst (sigToSchemeTvsIn scope mty)) :: methodSchemesPure scope rest
 
 -- the method-level-constraint slot ids of [mname]: one id per `=>` constraint over
@@ -31734,7 +32007,7 @@ publicValNames (_::rest) = publicValNames rest
 
 ifaceMethodNames : List IfaceMethod -> List String
 ifaceMethodNames [] = []
-ifaceMethodNames ((IfaceMethod n _ _)::rest) = n :: ifaceMethodNames rest
+ifaceMethodNames ((IfaceMethod n _ _ _)::rest) = n :: ifaceMethodNames rest
 
 -- C5: every interface method name declared anywhere in [decls] (unwrapping DAttrib).
 allIfaceMethodNames : List Decl -> List String
@@ -32928,7 +33201,7 @@ declMethodIdentsOf (DInterface { methods, ifaceOrigin, ... }) =
 declMethodIdentsOf _ = []
 
 ifaceMethodIdentPair : TyConOrigin -> IfaceMethod -> List (String, Ident)
-ifaceMethodIdentPair origin (IfaceMethod mname _ _) = match mkIdent NsMethod origin mname
+ifaceMethodIdentPair origin (IfaceMethod mname _ _ _) = match mkIdent NsMethod origin mname
   None => []
   Some i => [(mname, i)]
 
@@ -33508,7 +33781,7 @@ implMethodEVars : ImplMethod -> List String
 implMethodEVars (ImplMethod _ _ body) = allEVars body
 
 ifaceMethodEVars : IfaceMethod -> List String
-ifaceMethodEVars (IfaceMethod _ _ d) = match d
+ifaceMethodEVars (IfaceMethod _ _ d _) = match d
   Some (MethodDefault _ body) => allEVars body
   None => []
 
@@ -35795,12 +36068,94 @@ prePassModulePairArg rpNames shadowNames dictNames argNames shadowMap (mid, prog
       mid,
       prePassDictArg
         (dedup (filterList keep rpNames
-          ++ filterList (n => omHasKey (shadowBareName shadowMap n) nameable) shadowNames))
+          ++ filterList
+            (n => omHasKey (shadowBareName shadowMap n) nameable
+              && shadowSymSpelledBare prog shadowMap n)
+            shadowNames))
         dictNames
         (filterList keep argNames)
-        (filterList (e => omHasKey (snd e) nameable) shadowMap)
+        (filterList
+          (e => omHasKey (snd e) nameable
+            && moduleSpellsShadowBare prog (fst e) (snd e))
+          shadowMap)
         prog,
     )
+
+-- ── #1684: S1's STANDALONE operand, at the OCCURRENCE spelling ───────────────
+-- The two filters above answer S1's INTERFACE operand (`nameable in M`) and nothing
+-- else.  That is sufficient on the un-mangled check/run path, where an occurrence
+-- carries the spelling the author wrote — but NOT on the emit path, where
+-- `backend/private_mangle.mdk` has already collapsed BOTH spellings of an imported
+-- standalone onto ONE symbol:
+--
+--   import amod.{shrink}  → `shrink`    ⎫
+--   import amod as A      → `A.shrink`  ⎭ → both become `EVar "amod__shrink"`
+--
+-- `computeMangledShadowMap` then recovers `amod__shrink ↦ shrink` from the DEFINING
+-- module's funDefs and `rewriteArgScoped`'s `sm` arm rewrites EVERY occurrence of that
+-- symbol to `EMethodAt "shrink"` — including the alias-qualified one, which was never
+-- an S1 occurrence at all.  §1.0's standalone-operand row is *"defined in `M` or
+-- imported into `M`"*, and `import amod as A` imports the standalone into `M` under the
+-- local name `A.shrink`; bare `shrink` is bound by no import form there, so it names
+-- nothing in `M` and can shadow nothing in `M`.
+--
+-- MEASURED (#1684, S0): a two-file program whose only interface is the PRELUDE's
+-- `Arbitrary` — no `impl` and no `interface` written anywhere in it — had `A.shrink 5`
+-- emitted as a call to `@mdk_impl_Int_shrink`, so the built binary printed
+-- `Arbitrary.shrink`'s list default `[0, 2]` while `run` printed the standalone's `6`.
+-- Both at exit 0, no diagnostic on any channel.
+--
+-- So the emit path must reconstruct what the mangle erased: admit a mangled shadow
+-- symbol only where `M` actually spells its BARE name.  Two admitting cases, and the
+-- test is over IMPORT FORMS rather than over the symbol's origin module, so a name
+-- reaching `M` through a re-export chain (whose `usePathModuleId` is the re-exporter,
+-- not the definer) is admitted exactly as it is today:
+--   * `M` DEFINES the symbol itself — the definer shadow (P0-18), unchanged.
+--   * some import form in `M` binds the LOCAL name `bare`: a member list naming it, or
+--     a wildcard.  A module alias (`Some []`) and a member alias (`{size as sz}`, whose
+--     local is `sz`) bind it under a different spelling, so neither admits it — and
+--     both then agree with what the un-mangled path already does with that spelling.
+-- Empty shadowMap ⇒ `lookupAssoc` misses ⇒ True ⇒ the check/run path is untouched.
+shadowSymSpelledBare : List Decl -> List (String, String) -> String -> Bool
+shadowSymSpelledBare prog sm n = match lookupAssoc n sm
+  None => True
+  Some bare => moduleSpellsShadowBare prog n bare
+
+moduleSpellsShadowBare : List Decl -> String -> String -> Bool
+moduleSpellsShadowBare prog sym bare = contains sym (declTopFnNames prog)
+  || sym == mangledName "core" bare
+  || declsBindBareLocal prog bare
+
+-- ⚠️ THE IMPLICIT-PRELUDE ARM ABOVE IS LOAD-BEARING, AND ITS ABSENCE WAS MEASURED.
+-- The prelude is in scope in EVERY module under BARE names and contributes NO `DUse`
+-- decl, so a `declsBindBareLocal` walk over the module's imports cannot see it: a
+-- prelude standalone shadowed by a USER interface method (S1-PRELUDE (a), the
+-- `x4_prelude_standalone_live_impl_receiver` / `x5_prelude_constrained_standalone_live_impl`
+-- cells) mangles to `core__isEven` with no import form naming `isEven`, so without this
+-- arm the entry was dropped and both cells went `DIFF`/FAIL — the prelude standalone's
+-- `False` where the ruling requires the interface method's `True`. The prelude is also
+-- the one module that CANNOT be alias-imported (`import core as C` → `Unbound variable:
+-- C.eq`, SHADOW-SEMANTICS.md §1.1's table), so bare is its only spelling and this arm
+-- admits nothing the alias case could have written differently.
+
+declsBindBareLocal : List Decl -> String -> Bool
+declsBindBareLocal [] _ = False
+declsBindBareLocal ((DAttrib _ d)::rest) bare = declsBindBareLocal [d] bare
+  || declsBindBareLocal rest bare
+declsBindBareLocal ((DUse _ path _)::rest) bare =
+  if importFormBindsBare path bare then
+    True
+  else
+    declsBindBareLocal rest bare
+declsBindBareLocal (_::rest) bare = declsBindBareLocal rest bare
+
+-- `None` is the wildcard `import m.*`, which binds every export of `m` under its own
+-- name — over-inclusive only in that it does not re-check `m`'s export list, which is
+-- exactly the (status-quo) answer the unfiltered map gave.
+importFormBindsBare : UsePath -> String -> Bool
+importFormBindsBare path bare = match importedBindings path
+  None => True
+  Some bindings => anyList (b => snd b == bare) bindings
 
 -- the BARE interface-method name a (possibly mangled) standalone-shadow symbol stands for.
 -- Identity on the un-mangled run/check path, where the map is empty.

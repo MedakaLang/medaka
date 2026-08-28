@@ -1866,8 +1866,8 @@ lowerImplMethod disp o ifaceName typeArgs (ImplMethod mname pats body) =
     (CImplTagged tag key ifaceName positions pats (lower body))
 
 lowerDefault : String -> List String -> IfaceMethod -> List CImplEntry
-lowerDefault _ _ (IfaceMethod _ _ None) = []
-lowerDefault ifaceId typeParams (IfaceMethod mname _ (Some (MethodDefault pats body))) = [CImplEntry mname (listLen typeParams) (CImplDefault ifaceId pats (lower body))]
+lowerDefault _ _ (IfaceMethod _ _ None _) = []
+lowerDefault ifaceId typeParams (IfaceMethod mname _ (Some (MethodDefault pats body)) _) = [CImplEntry mname (listLen typeParams) (CImplDefault ifaceId pats (lower body))]
 
 -- ── returns-self table (native backend: method-call RESULT-type inference) ───
 -- Per (interface, method): does the method's RESULT type mention an interface
@@ -1892,7 +1892,7 @@ ifaceReturnsSelfEntries (DInterface { name = ifaceName, typarams = typeParams, m
 ifaceReturnsSelfEntries _ = []
 
 ifaceReturnsSelfEntry : String -> List String -> IfaceMethod -> ((String, String), Bool)
-ifaceReturnsSelfEntry ifaceName typeParams (IfaceMethod mname mty _) = (
+ifaceReturnsSelfEntry ifaceName typeParams (IfaceMethod mname mty _ _) = (
   (ifaceName, mname),
   tyMentionsParams (methodResultTy mty) (headParamOnly typeParams),
 )
@@ -1963,7 +1963,7 @@ ifaceSelfFnParamEntries (DInterface { name = ifaceName, typarams = typeParams, m
 ifaceSelfFnParamEntries _ = []
 
 ifaceSelfFnParamEntry : String -> List String -> IfaceMethod -> ((String, String), List Int)
-ifaceSelfFnParamEntry ifaceName typeParams (IfaceMethod mname mty _) =
+ifaceSelfFnParamEntry ifaceName typeParams (IfaceMethod mname mty _ _) =
   ((ifaceName, mname), selfFnPositions 0 (methodArgTys mty) typeParams)
 
 -- the argument types of a method type (the a's of `a -> a -> … -> r`).
@@ -2005,7 +2005,7 @@ ifaceMethodArityEntries (DInterface { name = ifaceName, ifaceOrigin = o, methods
 ifaceMethodArityEntries _ = []
 
 ifaceMethodArityEntry : String -> String -> IfaceMethod -> (String, (String, String, Int))
-ifaceMethodArityEntry ifaceWord ifaceName (IfaceMethod mname mty _) =
+ifaceMethodArityEntry ifaceWord ifaceName (IfaceMethod mname mty _ _) =
   (mname, (ifaceName, ifaceWord, listLen (methodArgTys mty)))
 
 -- The identity-keyed lookup word for the ARITY leg (#1450, #1668): the interface's
@@ -2051,7 +2051,7 @@ methodConstraintIfaceEntries (DInterface { typarams, methods, ... }) =
 methodConstraintIfaceEntries _ = []
 
 methodConstraintIfaceEntry : List String -> IfaceMethod -> List (String, List String)
-methodConstraintIfaceEntry typarams (IfaceMethod mname mty _) =
+methodConstraintIfaceEntry typarams (IfaceMethod mname mty _ _) =
   let ifaces = methodLevelConstraintIfaces typarams mty
   if isEmptyL ifaces then [] else [(mname, ifaces)]
 

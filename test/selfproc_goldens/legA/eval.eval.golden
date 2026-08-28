@@ -146,7 +146,10 @@ funDefs : List Decl -> List (String, (List Pat, Expr))
 funGroupNames : List (String, (List Pat, Expr)) -> List String -> List String
 funNamesOf : List Decl -> List String
 getByte64 : Int -> Array (Value a) -> Int -> Int
+globalFramesWith : List (String, Ref (Value a)) -> List (String, Ref (Value a)) -> List (List (String, Ref (Value a)))
 groupValue : EvalEnv (Value a) -> List (List Pat, Expr) -> Value a
+groupsNamedIn : List String -> List (String, List (List Pat, Expr)) -> List (String, List (List Pat, Expr))
+groupsNotNamedIn : List String -> List (String, List (List Pat, Expr)) -> List (String, List (List Pat, Expr))
 groupsOf : List Decl -> List (String, List (List Pat, Expr))
 hasTag : String -> Value a -> Bool
 headTycon : Ty -> Option String
@@ -375,6 +378,7 @@ positionsByName : String -> String -> List ((String, String, String), List Int) 
 ppField : (String, Value a) -> String
 ppValue : Value a -> String
 ppValueAtom : Value a -> String
+preludeShadowNames : List Decl -> List String
 prim1 : (Value a -> Value a) -> Value a
 prim1M : (Value a -> Value a) -> Value a
 prim2 : (Value a -> Value a -> Value a) -> Value a

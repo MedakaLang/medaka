@@ -42,7 +42,7 @@ import ir.core_ir.{
   CHead(..),
 }
 import ir.core_ir_lower.{lowerGroups, lowerImplsWith}
-import support.util.{isEmptyL, dedup}
+import support.util.{isEmptyL, dedup, contains, filterList}
 import eval.eval.{
   Value(..),
   EvalEnv(..),
@@ -96,6 +96,8 @@ import eval.eval.{
   methodAtNarrow,
   applyValues,
   defaultCellName,
+  preludeShadowNames,
+  globalFramesWith,
 }
 
 -- ── the evaluator ─────────────────────────────────────────────────────────
@@ -540,16 +542,24 @@ cevalModules preludeDecls modules =
   let ctors = collectCtors allDecls
   let preludeGroups = lowerGroups preludeDecls
   let preludeImpls = lowerImplsWith disp preludeDecls
-  let globalNames = map fst boolSeeds ++ map fst (externBindings ()) ++ map fst ctors ++ implMethodNames allDecls ++ map cBindName preludeGroups
+  -- S1-PRELUDE (a), #1497/#1492 — the Core-IR half of the evalModules/cevalModules
+  -- lockstep pair; the mechanism and the frame-count caveat are written out once, on
+  -- eval.mdk's `preludeShadowNames`.
+  let shadowNames = preludeShadowNames moduleDecls
+  let preludeShared = filterList (b => not (contains (cBindName b) shadowNames)) preludeGroups
+  let preludePrivate = filterList (b => contains (cBindName b) shadowNames) preludeGroups
+  let globalNames = map fst boolSeeds ++ map fst (externBindings ()) ++ map fst ctors ++ implMethodNames allDecls ++ map cBindName preludeShared
   let globalCells = map (n => (n, Ref VUnit)) globalNames
-  let globalEnv = EvalEnv [globalCells]
+  let privateCells = map (n => (n, Ref VUnit)) (map cBindName preludePrivate)
+  let globalEnv = EvalEnv (globalFramesWith privateCells globalCells)
   let mods = cBuildModInfos disp (ModExports globalCells (ctorsByTypeOf preludeDecls)) [] modules
   let implEntries = flatMap (cImplEntryValues globalEnv) preludeImpls ++ flatMap cModImplValues mods
   let _ = installConsts globalCells boolSeeds
   let _ = installConsts globalCells (externBindings ())
   let _ = installConsts globalCells ctors
   let _ = installConsts globalCells (coalesceImpls implEntries)
-  let _ = cInstallTopGroups globalEnv globalCells preludeGroups
+  let _ = cInstallTopGroups globalEnv globalCells preludeShared
+  let _ = cInstallTopGroups globalEnv privateCells preludePrivate
   let _ = cInstallModGroups mods
   cRootLocals mods
 

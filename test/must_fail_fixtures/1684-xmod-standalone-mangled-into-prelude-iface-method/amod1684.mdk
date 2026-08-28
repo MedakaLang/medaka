@@ -1,7 +1,0 @@
--- #1684. `shrink` is a PLAIN top-level standalone here -- this module declares no
--- interface and no impl. Its name collides by bare spelling with the prelude
--- interface method `Arbitrary.shrink` (stdlib/core.mdk), and that collision alone is
--- what the pin turns on: see bmod1684.mdk, which is this file with the
--- name changed and nothing else.
-export shrink : Int -> Int
-shrink n = n + 1

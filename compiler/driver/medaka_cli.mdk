@@ -667,7 +667,7 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decl
   -- arm) flagged its OWN legitimate internal-extern calls as errors unless
   -- the flag was passed every time, even with MEDAKA_ROOT correctly set.
   -- Honour `trusted` here too, matching the multi-module arm below.
-  let diags = analyzeLocatedG (allowInternal || contains mid trusted) rsrc csrc tsrc
+  let diags = analyzeLocatedG mid (allowInternal || contains mid trusted) rsrc csrc tsrc
   let errs = filter isDiagError diags
   match errs
     [] =>
@@ -733,9 +733,10 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
           let _ = putStrLn (runCheckModules allowInternal trusted rtD coreD modsD)
           -- F-3d: an IMPORTED module's ⊑-incomparable pair, LOCATED against that
           -- module's own file.  The line above reaches the ENTRY's diagnostics only,
-          -- which is why `dropEntryTriple` (not the whole list) is right here — see
-          -- its note for the four graph positions this was silent in.
-          let _ = emitWarningLines (flatMap renderTripleWarnings (dropEntryTriple projWarns))
+          -- which is why the entry triple is special-cased here (not the whole list)
+          -- — see `trimEntryTriple` for the four graph positions this was silent in,
+          -- and for why the entry is TRIMMED BY CODE rather than dropped whole.
+          let _ = emitWarningLines (flatMap renderTripleWarnings (trimEntryTriple projWarns))
           -- #1719: a non-entry module can carry OTHER warnings (chiefly
           -- non-exhaustive-match) that the line above does not surface — human
           -- `check` used to just drop these with no trace, reading as a clean
@@ -944,8 +945,20 @@ isDiagWarn d = not (isDiagError d)
 coherenceWarnCode : String
 coherenceWarnCode = "W-INCOMPARABLE-IMPLS"
 
+-- #1499 / D1.  The predicate above is now a MEMBERSHIP TEST over a short
+-- allowlist, not a single-literal test — and the three measured objections
+-- recorded above do NOT reach the second member.  `W-PRELUDE-METHOD-SHADOW` has
+-- no oracle at all (a pure name-set intersection, so it cannot be false), fires
+-- at most ONCE PER COLLIDING INTERFACE-METHOD DECLARATION, and measures zero
+-- occurrences across compiler/, stdlib/ and sqlite/ — so both the (2) spew and
+-- (3) render costs are bounded by the collision count rather than by the module
+-- graph.  This list is the decision, taken deliberately; it is not a place to
+-- park codes, and every addition owes the same three measurements.
+runBuildWarnCodes : List String
+runBuildWarnCodes = [coherenceWarnCode, "W-PRELUDE-METHOD-SHADOW"]
+
 isCoherenceWarn : Diag -> Bool
-isCoherenceWarn (Diag SevWarning c _ _ _ _) = c == coherenceWarnCode
+isCoherenceWarn (Diag SevWarning c _ _ _ _) = contains c runBuildWarnCodes
 isCoherenceWarn _ = False
 
 -- Drop the loc-free "Warning: …" lines runCheck bundles into its scheme dump, so
@@ -1075,6 +1088,29 @@ dropEntryTriple : List (String, String, List Diag) -> List (String, String, List
 dropEntryTriple [] = []
 dropEntryTriple [_] = []
 dropEntryTriple (t::rest) = t :: dropEntryTriple rest
+
+-- #1499: the human multi-module `check` EMIT site trims the entry triple instead
+-- of dropping it, and the difference is one measured cell.  `dropEntryTriple`
+-- exists because `runCheckModules` — printed immediately above that emit — already
+-- carries the ENTRY module's `W-INCOMPARABLE-IMPLS` on the typecheck warning
+-- channel, so re-rendering the entry triple would print it TWICE.
+-- `W-PRELUDE-METHOD-SHADOW` is NOT on that channel (it is an `analyzeProject`-side
+-- Diag from `preludeStandaloneShadows`), so dropping the entry triple whole left it
+-- silent in exactly one cell: multi-module human `check` with the collision in the
+-- ENTRY module — while `check --json`, `run`, `build` and the imported-module
+-- position all reported it (all five measured on this diff).  Trimming BY CODE
+-- keeps the de-duplication that motivated `dropEntryTriple` and gives every other
+-- allowlisted code exactly one channel.  A code added to `runBuildWarnCodes` that
+-- `runCheckModules` DOES print must be added to `onTypecheckWarnChannel` too, or
+-- human `check` will double-report it on the entry.
+trimEntryTriple : List (String, String, List Diag) -> List (String, String, List Diag)
+trimEntryTriple [] = []
+trimEntryTriple [(p, s, ds)] =
+  [(p, s, filter (d => not (onTypecheckWarnChannel d)) ds)]
+trimEntryTriple (t::rest) = t :: trimEntryTriple rest
+
+onTypecheckWarnChannel : Diag -> Bool
+onTypecheckWarnChannel (Diag _ c _ _ _ _) = c == coherenceWarnCode
 
 tripleHasDiags : (String, String, List Diag) -> Bool
 tripleHasDiags (_, _, []) = False
@@ -1701,7 +1737,7 @@ typecheckGateRoute : Bool -> List String -> List (String, String) -> List String
 typecheckGateRoute allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decls)] =
   -- Same fix as checkRoute's single-module arm: honour the caller-computed
   -- `trusted` (owning-root) signal here too, not just `--allow-internal`.
-  let diags = analyzeLocatedG (allowInternal || contains mid trusted) rsrc csrc tsrc
+  let diags = analyzeLocatedG mid (allowInternal || contains mid trusted) rsrc csrc tsrc
   let errs = filter isDiagError diags
   match errs
     [] =>
@@ -2009,13 +2045,13 @@ runRunCmd argv =
                 -- (so run silently executed ill-typed programs) AND spuriously
                 -- fired on some check-clean programs (standalone-fn-shadows-iface).
                 match modsD
-                  [_] =>
+                  [(runMid, _)] =>
                     -- Single-file: gate on the SAME located analysis `check`
                     -- uses (analyzeLocatedG → checkImplObligations et al.) and
                     -- render byte-identical caret diagnostics via ppDiagCliSrc,
                     -- instead of the opaque "type error in <file>" message (P1-8).
                     let tsrc = readFileSafe target
-                    let diags = analyzeLocatedG allowInternal rsrc csrc tsrc
+                    let diags = analyzeLocatedG runMid allowInternal rsrc csrc tsrc
                     let errs = filter isDiagError diags
                     match errs
                       [] =>

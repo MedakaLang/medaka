@@ -1,5 +1,5 @@
 # META
-source_lines=1908
+source_lines=1914
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka AST — mirror of lib/ast.ml's surface (pre-desugar) nodes,
@@ -1162,7 +1162,13 @@ public export data PropParam = PropParam String Loc Ty
 
 -- interface / impl pieces
 public export data MethodDefault = MethodDefault (List Pat) Expr
-public export data IfaceMethod = IfaceMethod String Ty (Option MethodDefault)
+-- The 4th field is the METHOD NAME's own source span (#1499 / D2-L2): a
+-- declaration-site diagnostic about an interface method (e.g.
+-- `W-PRELUDE-METHOD-SHADOW`) must land on the name token, and no `Decl`
+-- constructor and no `Ty` carries a loc.  `None` where the node is synthesized
+-- rather than parsed.
+public export data IfaceMethod =
+  | IfaceMethod String Ty (Option MethodDefault) (Option Loc)
 -- `interface Sub … : Sup a` — a SUPERINTERFACE occurrence.  `superOrigin` is the
 -- #1110 interface-occurrence identity of `Sup`; `superParams` are the subject
 -- interface's own type-parameter NAMES the superinterface is applied to (not
@@ -1647,13 +1653,13 @@ mapIfaceMethodsB f (m::ms) =
   (m2::ms2, c1 || c2)
 
 mapIfaceMethodB : (Ty -> (Ty, Bool)) -> IfaceMethod -> (IfaceMethod, Bool)
-mapIfaceMethodB f (IfaceMethod n ty None) =
+mapIfaceMethodB f (IfaceMethod n ty None mloc) =
   let (ty2, c) = mapTyFull f ty
-  (IfaceMethod n ty2 None, c)
-mapIfaceMethodB f (IfaceMethod n ty (Some (MethodDefault ps e))) =
+  (IfaceMethod n ty2 None mloc, c)
+mapIfaceMethodB f (IfaceMethod n ty (Some (MethodDefault ps e)) mloc) =
   let (ty2, c1) = mapTyFull f ty
   let (e2, c2) = mapTyInExpr f e
-  (IfaceMethod n ty2 (Some (MethodDefault ps e2)), c1 || c2)
+  (IfaceMethod n ty2 (Some (MethodDefault ps e2)) mloc, c1 || c2)
 
 mapRequiresB : (Ty -> (Ty, Bool)) -> List Require -> (List Require, Bool)
 mapRequiresB _ [] = ([], False)
@@ -2016,7 +2022,7 @@ mapKvsB f ((k, v)::rest) =
 (DFunDef false "qualifiedLocal" ((PVar "alias") (PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "alias"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "n"))) (ELit (LString ""))))
 (DData Public "PropParam" () ((variant "PropParam" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "Ty")))) ())
 (DData Public "MethodDefault" () ((variant "MethodDefault" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) ())
-(DData Public "IfaceMethod" () ((variant "IfaceMethod" (ConPos (TyCon "String") (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "MethodDefault"))))) ())
+(DData Public "IfaceMethod" () ((variant "IfaceMethod" (ConPos (TyCon "String") (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "MethodDefault")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DData Public "Super" () ((variant "Super" (ConNamed (field "superHead" (TyCon "String")) (field "superParams" (TyApp (TyCon "List") (TyCon "String"))) (field "superOrigin" (TyCon "TyConOrigin"))))) ())
 (DData Public "Require" () ((variant "Require" (ConNamed (field "requireHead" (TyCon "String")) (field "requireArgs" (TyApp (TyCon "List") (TyCon "Ty"))) (field "requireOrigin" (TyCon "TyConOrigin"))))) ())
 (DTypeSig true "superUnresolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Super"))))
@@ -2092,8 +2098,8 @@ mapKvsB f ((k, v)::rest) =
 (DFunDef false "mapIfaceMethodsB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
 (DFunDef false "mapIfaceMethodsB" ((PVar "f") (PCons (PVar "m") (PVar "ms"))) (EBlock (DoLet false false (PTuple (PVar "m2") (PVar "c1")) (EApp (EApp (EVar "mapIfaceMethodB") (EVar "f")) (EVar "m"))) (DoLet false false (PTuple (PVar "ms2") (PVar "c2")) (EApp (EApp (EVar "mapIfaceMethodsB") (EVar "f")) (EVar "ms"))) (DoExpr (ETuple (EBinOp "::" (EVar "m2") (EVar "ms2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapIfaceMethodB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "IfaceMethod") (TyTuple (TyCon "IfaceMethod") (TyCon "Bool")))))
-(DFunDef false "mapIfaceMethodB" ((PVar "f") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "None"))) (EBlock (DoLet false false (PTuple (PVar "ty2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "ty"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty2")) (EVar "None")) (EVar "c")))))
-(DFunDef false "mapIfaceMethodB" ((PVar "f") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "e"))))) (EBlock (DoLet false false (PTuple (PVar "ty2") (PVar "c1")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "ty"))) (DoLet false false (PTuple (PVar "e2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty2")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "ps")) (EVar "e2")))) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
+(DFunDef false "mapIfaceMethodB" ((PVar "f") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "None") (PVar "mloc"))) (EBlock (DoLet false false (PTuple (PVar "ty2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "ty"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty2")) (EVar "None")) (EVar "mloc")) (EVar "c")))))
+(DFunDef false "mapIfaceMethodB" ((PVar "f") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "e"))) (PVar "mloc"))) (EBlock (DoLet false false (PTuple (PVar "ty2") (PVar "c1")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "ty"))) (DoLet false false (PTuple (PVar "e2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty2")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "ps")) (EVar "e2")))) (EVar "mloc")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapRequiresB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyTuple (TyApp (TyCon "List") (TyCon "Require")) (TyCon "Bool")))))
 (DFunDef false "mapRequiresB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
 (DFunDef false "mapRequiresB" ((PVar "f") (PCons (PAs "r" (PRec "Require" ((rf "requireArgs" (PVar "tys"))) false)) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "tys2") (PVar "c1")) (EApp (EApp (EVar "mapTyListB") (EVar "f")) (EVar "tys"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapRequiresB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EVariantUpdate "Require" (EVar "r") ((fa "requireArgs" (EVar "tys2")))) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
@@ -2288,7 +2294,7 @@ mapKvsB f ((k, v)::rest) =
 (DFunDef false "qualifiedLocal" ((PVar "alias") (PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "alias"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ""))))
 (DData Public "PropParam" () ((variant "PropParam" (ConPos (TyCon "String") (TyCon "Loc") (TyCon "Ty")))) ())
 (DData Public "MethodDefault" () ((variant "MethodDefault" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) ())
-(DData Public "IfaceMethod" () ((variant "IfaceMethod" (ConPos (TyCon "String") (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "MethodDefault"))))) ())
+(DData Public "IfaceMethod" () ((variant "IfaceMethod" (ConPos (TyCon "String") (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "MethodDefault")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DData Public "Super" () ((variant "Super" (ConNamed (field "superHead" (TyCon "String")) (field "superParams" (TyApp (TyCon "List") (TyCon "String"))) (field "superOrigin" (TyCon "TyConOrigin"))))) ())
 (DData Public "Require" () ((variant "Require" (ConNamed (field "requireHead" (TyCon "String")) (field "requireArgs" (TyApp (TyCon "List") (TyCon "Ty"))) (field "requireOrigin" (TyCon "TyConOrigin"))))) ())
 (DTypeSig true "superUnresolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Super"))))
@@ -2364,8 +2370,8 @@ mapKvsB f ((k, v)::rest) =
 (DFunDef false "mapIfaceMethodsB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
 (DFunDef false "mapIfaceMethodsB" ((PVar "f") (PCons (PVar "m") (PVar "ms"))) (EBlock (DoLet false false (PTuple (PVar "m2") (PVar "c1")) (EApp (EApp (EVar "mapIfaceMethodB") (EVar "f")) (EVar "m"))) (DoLet false false (PTuple (PVar "ms2") (PVar "c2")) (EApp (EApp (EVar "mapIfaceMethodsB") (EVar "f")) (EVar "ms"))) (DoExpr (ETuple (EBinOp "::" (EVar "m2") (EVar "ms2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapIfaceMethodB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyCon "IfaceMethod") (TyTuple (TyCon "IfaceMethod") (TyCon "Bool")))))
-(DFunDef false "mapIfaceMethodB" ((PVar "f") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "None"))) (EBlock (DoLet false false (PTuple (PVar "ty2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "ty"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty2")) (EVar "None")) (EVar "c")))))
-(DFunDef false "mapIfaceMethodB" ((PVar "f") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "e"))))) (EBlock (DoLet false false (PTuple (PVar "ty2") (PVar "c1")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "ty"))) (DoLet false false (PTuple (PVar "e2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty2")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "ps")) (EVar "e2")))) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
+(DFunDef false "mapIfaceMethodB" ((PVar "f") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "None") (PVar "mloc"))) (EBlock (DoLet false false (PTuple (PVar "ty2") (PVar "c")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "ty"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty2")) (EVar "None")) (EVar "mloc")) (EVar "c")))))
+(DFunDef false "mapIfaceMethodB" ((PVar "f") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "e"))) (PVar "mloc"))) (EBlock (DoLet false false (PTuple (PVar "ty2") (PVar "c1")) (EApp (EApp (EVar "mapTyFull") (EVar "f")) (EVar "ty"))) (DoLet false false (PTuple (PVar "e2") (PVar "c2")) (EApp (EApp (EVar "mapTyInExpr") (EVar "f")) (EVar "e"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty2")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "ps")) (EVar "e2")))) (EVar "mloc")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))
 (DTypeSig false "mapRequiresB" (TyFun (TyFun (TyCon "Ty") (TyTuple (TyCon "Ty") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyTuple (TyApp (TyCon "List") (TyCon "Require")) (TyCon "Bool")))))
 (DFunDef false "mapRequiresB" (PWild (PList)) (ETuple (EListLit) (EVar "False")))
 (DFunDef false "mapRequiresB" ((PVar "f") (PCons (PAs "r" (PRec "Require" ((rf "requireArgs" (PVar "tys"))) false)) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "tys2") (PVar "c1")) (EApp (EApp (EVar "mapTyListB") (EVar "f")) (EVar "tys"))) (DoLet false false (PTuple (PVar "rest2") (PVar "c2")) (EApp (EApp (EVar "mapRequiresB") (EVar "f")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EVariantUpdate "Require" (EVar "r") ((fa "requireArgs" (EVar "tys2")))) (EVar "rest2")) (EBinOp "||" (EVar "c1") (EVar "c2"))))))

@@ -1,0 +1,39 @@
+-- X4 (SHADOW-SEMANTICS S1-PRELUDE (a), matrix row 49) -- THE ACCEPTING HALF of the
+-- prelude left-operand cell, and until this fixture the corpus deliberately had none.
+--
+-- x1/x2/x3 all put the receiver OUTSIDE the interface's impl universe, so every one of
+-- them is a REJECT and the corpus graded S1-PRELUDE (a) only where the ruling makes the
+-- program die.  A rule that is only ever exercised on its rejecting side is not pinned:
+-- an implementation that took the PRELUDE STANDALONE's denotation whenever the standalone
+-- happened to be well-typed at the receiver would satisfy x1/x2/x3 unchanged and still be
+-- non-conformant.  This cell is exactly that hole -- the receiver lies in BOTH
+-- denotations' domains (`7` is an `Int`, the prelude's `isEven : Int -> Bool` accepts it,
+-- AND `impl Parity Int` sits at its head), so both readings produce a well-typed,
+-- exit-0 program and only the VALUE tells them apart:
+--
+--   RULED (S1-PRELUDE (a)): the implicit prelude is in NEITHER half of S1's left-operand
+--     kind partition, so a prelude standalone creates no shadow here.  The bare `isEven`
+--     is an ordinary INTERFACE-METHOD occurrence, `impl Parity Int` is at the receiver's
+--     head, and it dispatches to the impl => `True`.  <== what this fixture pins.
+--   REJECTED reading (the prelude standalone takes the name): `isEven 7` is the prelude's
+--     parity test on 7 => `False`, exit 0, no diagnostic.
+--
+-- EXPECTED VALUE HAND-DERIVED FROM THE RULING, NOT CAPTURED, and this cell is the reason
+-- that discipline exists in this corpus: at the time it was written the two execution arms
+-- DISAGREED here (#1497 -- `medaka run` printed `False`, the built binary printed `True`,
+-- both exit 0, `check` clean), so capturing from either engine would have enshrined one of
+-- the two readings as correct by accident.  ALL_EXACT is therefore doing two jobs at once:
+-- the S7 run-vs-build agreement, and the ground-truth pin that says WHICH answer they must
+-- agree on.
+--
+-- RECEIVER PROVENANCE is the axis this gate's header calls out, and it is chosen here on
+-- purpose: `7` is a bare numeric literal, i.e. `Num a => a`, UNGROUNDED at the moment the
+-- name's denotation is decided and only unified to `Int` afterwards.  x5 is the grounded-
+-- receiver twin.
+interface Parity c where
+  isEven : c -> Bool
+
+impl Parity Int where
+  isEven n = True
+
+main = println (isEven 7)

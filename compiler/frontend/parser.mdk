@@ -2925,23 +2925,31 @@ ifaceMembersCons = do
   pure (m::rest)
 
 -- a method signature `name : ty`, or a default method `name pats = body`
+-- #1499 / D2: the [s, q) token span brackets the method NAME alone, so a
+-- declaration-site diagnostic about the method (`W-PRELUDE-METHOD-SHADOW`)
+-- lands on the name token rather than on the enclosing `interface` header.
+-- Like `located`, this reads the loc side-channel: under the plain `parse`
+-- entry points (no `setLocState`) it degrades to a zero span, exactly as every
+-- `ELoc` on that path does.
 ifaceMember : Parser IfaceMethod
 ifaceMember = do
+  s <- getPos
   name <- identNameP
+  q <- getPos
   pats <- many parseParamPat
   t <- peekP
-  ifaceMemberRest name pats t
+  ifaceMemberRest name (Some (locOfSpan s q)) pats t
 
-ifaceMemberRest : String -> List Pat -> Token -> Parser IfaceMethod
-ifaceMemberRest name _ TColon = do
+ifaceMemberRest : String -> Option Loc -> List Pat -> Token -> Parser IfaceMethod
+ifaceMemberRest name nameLoc _ TColon = do
   advance
   ty <- parseTy
-  pure (IfaceMethod name ty None)
-ifaceMemberRest name pats TEqual = do
+  pure (IfaceMethod name ty None nameLoc)
+ifaceMemberRest name nameLoc pats TEqual = do
   advance
   body <- parseBody
-  pure (IfaceMethod name (TyVar "_") (Some (MethodDefault pats body)))
-ifaceMemberRest _ _ _ = failP "expected : or = in interface member"
+  pure (IfaceMethod name (TyVar "_") (Some (MethodDefault pats body)) nameLoc)
+ifaceMemberRest _ _ _ _ = failP "expected : or = in interface member"
 
 -- ── impl declarations ────────────────────────────────────────────────────
 parseImpl : Bool -> Parser Decl

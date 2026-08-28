@@ -1998,9 +1998,9 @@ oneSuper (Super { superHead = n, superParams = ps }) =
   Cat (text n) (concatD (map (p => Cat (text " ") (text p)) ps))
 
 ifaceMethodDoc : IfaceMethod -> Doc
-ifaceMethodDoc (IfaceMethod n ty None) =
+ifaceMethodDoc (IfaceMethod n ty None _) =
   Cat (text n) (Cat (text " : ") (printType ty))
-ifaceMethodDoc (IfaceMethod n _ (Some (MethodDefault pats body))) = Cat
+ifaceMethodDoc (IfaceMethod n _ (Some (MethodDefault pats body)) _) = Cat
   (text n)
   (Cat
     (concatD (map (p => Cat (text " ") (printPatAtom p)) pats))
@@ -2799,8 +2799,8 @@ declLine d = render (printDecl d) ++ "\n"
 (DTypeSig false "oneSuper" (TyFun (TyCon "Super") (TyCon "Doc")))
 (DFunDef false "oneSuper" ((PRec "Super" ((rf "superHead" (PVar "n")) (rf "superParams" (PVar "ps"))) false)) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EVar "concatD") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "text") (EVar "p"))))) (EVar "ps")))))
 (DTypeSig false "ifaceMethodDoc" (TyFun (TyCon "IfaceMethod") (TyCon "Doc")))
-(DFunDef false "ifaceMethodDoc" ((PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "None"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EVar "printType") (EVar "ty")))))
-(DFunDef false "ifaceMethodDoc" ((PCon "IfaceMethod" (PVar "n") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "concatD") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printPatAtom") (EVar "p"))))) (EVar "pats")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EVar "printExprBody") (EVar "body"))))))
+(DFunDef false "ifaceMethodDoc" ((PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "None") PWild)) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EVar "printType") (EVar "ty")))))
+(DFunDef false "ifaceMethodDoc" ((PCon "IfaceMethod" (PVar "n") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) PWild)) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "concatD") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printPatAtom") (EVar "p"))))) (EVar "pats")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EVar "printExprBody") (EVar "body"))))))
 (DTypeSig false "implHead" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Doc"))))
 (DFunDef false "implHead" ((PVar "iface") (PVar "tys")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "iface"))) (EApp (EVar "concatD") (EApp (EApp (EVar "map") (ELam ((PVar "t")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printTypeAtom") (EVar "t"))))) (EVar "tys")))))
 (DTypeSig false "reqsDoc" (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyCon "Doc")))
@@ -3542,8 +3542,8 @@ declLine d = render (printDecl d) ++ "\n"
 (DTypeSig false "oneSuper" (TyFun (TyCon "Super") (TyCon "Doc")))
 (DFunDef false "oneSuper" ((PRec "Super" ((rf "superHead" (PVar "n")) (rf "superParams" (PVar "ps"))) false)) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "text") (EVar "p"))))) (EVar "ps")))))
 (DTypeSig false "ifaceMethodDoc" (TyFun (TyCon "IfaceMethod") (TyCon "Doc")))
-(DFunDef false "ifaceMethodDoc" ((PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "None"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EVar "printType") (EVar "ty")))))
-(DFunDef false "ifaceMethodDoc" ((PCon "IfaceMethod" (PVar "n") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printPatAtom") (EVar "p"))))) (EVar "pats")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EVar "printExprBody") (EVar "body"))))))
+(DFunDef false "ifaceMethodDoc" ((PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "None") PWild)) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " : ")))) (EApp (EVar "printType") (EVar "ty")))))
+(DFunDef false "ifaceMethodDoc" ((PCon "IfaceMethod" (PVar "n") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) PWild)) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "n"))) (EApp (EApp (EVar "Cat") (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printPatAtom") (EVar "p"))))) (EVar "pats")))) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " = ")))) (EApp (EVar "printExprBody") (EVar "body"))))))
 (DTypeSig false "implHead" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Doc"))))
 (DFunDef false "implHead" ((PVar "iface") (PVar "tys")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (EVar "iface"))) (EApp (EVar "concatD") (EApp (EApp (EMethodRef "map") (ELam ((PVar "t")) (EApp (EApp (EVar "Cat") (EApp (EVar "text") (ELit (LString " ")))) (EApp (EVar "printTypeAtom") (EVar "t"))))) (EVar "tys")))))
 (DTypeSig false "reqsDoc" (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyCon "Doc")))

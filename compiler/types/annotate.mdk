@@ -292,12 +292,13 @@ annotateDecl (DAttrib attrs inner) = DAttrib attrs (annotateDecl inner)
 annotateDecl d = d
 
 annotateIfaceMethod : IfaceMethod -> IfaceMethod
-annotateIfaceMethod (IfaceMethod nm ty None) = IfaceMethod nm ty None
-annotateIfaceMethod (IfaceMethod nm ty (Some (MethodDefault pats body))) =
+annotateIfaceMethod (IfaceMethod nm ty None mloc) = IfaceMethod nm ty None mloc
+annotateIfaceMethod (IfaceMethod nm ty (Some (MethodDefault pats body)) mloc) =
   IfaceMethod
     nm
     ty
     (Some (MethodDefault pats (annotateExpr (paramFrames pats) body)))
+    mloc
 
 annotateImplMethod : ImplMethod -> ImplMethod
 annotateImplMethod (ImplMethod nm pats body) =

@@ -1,5 +1,5 @@
 # META
-source_lines=5243
+source_lines=5251
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser — Stage 1 port of `lib/parser.mly`.  A monadic
@@ -2929,23 +2929,31 @@ ifaceMembersCons = do
   pure (m::rest)
 
 -- a method signature `name : ty`, or a default method `name pats = body`
+-- #1499 / D2: the [s, q) token span brackets the method NAME alone, so a
+-- declaration-site diagnostic about the method (`W-PRELUDE-METHOD-SHADOW`)
+-- lands on the name token rather than on the enclosing `interface` header.
+-- Like `located`, this reads the loc side-channel: under the plain `parse`
+-- entry points (no `setLocState`) it degrades to a zero span, exactly as every
+-- `ELoc` on that path does.
 ifaceMember : Parser IfaceMethod
 ifaceMember = do
+  s <- getPos
   name <- identNameP
+  q <- getPos
   pats <- many parseParamPat
   t <- peekP
-  ifaceMemberRest name pats t
+  ifaceMemberRest name (Some (locOfSpan s q)) pats t
 
-ifaceMemberRest : String -> List Pat -> Token -> Parser IfaceMethod
-ifaceMemberRest name _ TColon = do
+ifaceMemberRest : String -> Option Loc -> List Pat -> Token -> Parser IfaceMethod
+ifaceMemberRest name nameLoc _ TColon = do
   advance
   ty <- parseTy
-  pure (IfaceMethod name ty None)
-ifaceMemberRest name pats TEqual = do
+  pure (IfaceMethod name ty None nameLoc)
+ifaceMemberRest name nameLoc pats TEqual = do
   advance
   body <- parseBody
-  pure (IfaceMethod name (TyVar "_") (Some (MethodDefault pats body)))
-ifaceMemberRest _ _ _ = failP "expected : or = in interface member"
+  pure (IfaceMethod name (TyVar "_") (Some (MethodDefault pats body)) nameLoc)
+ifaceMemberRest _ _ _ _ = failP "expected : or = in interface member"
 
 -- ── impl declarations ────────────────────────────────────────────────────
 parseImpl : Bool -> Parser Decl
@@ -6190,11 +6198,11 @@ parseResultWith src tokList offList =
 (DTypeSig false "ifaceMembersCons" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "IfaceMethod"))))
 (DFunDef false "ifaceMembersCons" () (EApp (EApp (EVar "andThen") (EVar "ifaceMember")) (ELam ((PVar "m")) (EApp (EApp (EVar "andThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "ifaceMembersLoop")) (ELam ((PVar "rest")) (EApp (EVar "pure") (EBinOp "::" (EVar "m") (EVar "rest"))))))))))
 (DTypeSig false "ifaceMember" (TyApp (TyCon "Parser") (TyCon "IfaceMethod")))
-(DFunDef false "ifaceMember" () (EApp (EApp (EVar "andThen") (EVar "identNameP")) (ELam ((PVar "name")) (EApp (EApp (EVar "andThen") (EApp (EVar "many") (EVar "parseParamPat"))) (ELam ((PVar "pats")) (EApp (EApp (EVar "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EApp (EVar "ifaceMemberRest") (EVar "name")) (EVar "pats")) (EVar "t")))))))))
-(DTypeSig false "ifaceMemberRest" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "IfaceMethod"))))))
-(DFunDef false "ifaceMemberRest" ((PVar "name") PWild (PCon "TColon")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "parseTy")) (ELam ((PVar "ty")) (EApp (EVar "pure") (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "name")) (EVar "ty")) (EVar "None"))))))))
-(DFunDef false "ifaceMemberRest" ((PVar "name") (PVar "pats") (PCon "TEqual")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "parseBody")) (ELam ((PVar "body")) (EApp (EVar "pure") (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "name")) (EApp (EVar "TyVar") (ELit (LString "_")))) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "pats")) (EVar "body"))))))))))
-(DFunDef false "ifaceMemberRest" (PWild PWild PWild) (EApp (EVar "failP") (ELit (LString "expected : or = in interface member"))))
+(DFunDef false "ifaceMember" () (EApp (EApp (EVar "andThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EVar "andThen") (EVar "identNameP")) (ELam ((PVar "name")) (EApp (EApp (EVar "andThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EApp (EVar "andThen") (EApp (EVar "many") (EVar "parseParamPat"))) (ELam ((PVar "pats")) (EApp (EApp (EVar "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EApp (EApp (EVar "ifaceMemberRest") (EVar "name")) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q")))) (EVar "pats")) (EVar "t")))))))))))))
+(DTypeSig false "ifaceMemberRest" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "IfaceMethod")))))))
+(DFunDef false "ifaceMemberRest" ((PVar "name") (PVar "nameLoc") PWild (PCon "TColon")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "parseTy")) (ELam ((PVar "ty")) (EApp (EVar "pure") (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "name")) (EVar "ty")) (EVar "None")) (EVar "nameLoc"))))))))
+(DFunDef false "ifaceMemberRest" ((PVar "name") (PVar "nameLoc") (PVar "pats") (PCon "TEqual")) (EApp (EApp (EVar "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "parseBody")) (ELam ((PVar "body")) (EApp (EVar "pure") (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "name")) (EApp (EVar "TyVar") (ELit (LString "_")))) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "pats")) (EVar "body")))) (EVar "nameLoc"))))))))
+(DFunDef false "ifaceMemberRest" (PWild PWild PWild PWild) (EApp (EVar "failP") (ELit (LString "expected : or = in interface member"))))
 (DTypeSig false "parseImpl" (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Decl"))))
 (DFunDef false "parseImpl" ((PVar "pub")) (EApp (EApp (EVar "andThen") (EVar "getPos")) (ELam ((PVar "kw")) (EApp (EApp (EVar "andThen") (EApp (EVar "expectTok") (EVar "TImpl"))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EApp (EVar "implHead") (EVar "pub")) (EVar "kw")) (EVar "t")))))))))
 (DTypeSig false "implHead" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Decl"))))))
@@ -7759,11 +7767,11 @@ parseResultWith src tokList offList =
 (DTypeSig false "ifaceMembersCons" (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyCon "IfaceMethod"))))
 (DFunDef false "ifaceMembersCons" () (EApp (EApp (EMethodRef "andThen") (EVar "ifaceMember")) (ELam ((PVar "m")) (EApp (EApp (EMethodRef "andThen") (EVar "skipNewlines")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "ifaceMembersLoop")) (ELam ((PVar "rest")) (EApp (EMethodRef "pure") (EBinOp "::" (EVar "m") (EVar "rest"))))))))))
 (DTypeSig false "ifaceMember" (TyApp (TyCon "Parser") (TyCon "IfaceMethod")))
-(DFunDef false "ifaceMember" () (EApp (EApp (EMethodRef "andThen") (EVar "identNameP")) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "many") (EVar "parseParamPat"))) (ELam ((PVar "pats")) (EApp (EApp (EMethodRef "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EApp (EVar "ifaceMemberRest") (EVar "name")) (EVar "pats")) (EVar "t")))))))))
-(DTypeSig false "ifaceMemberRest" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "IfaceMethod"))))))
-(DFunDef false "ifaceMemberRest" ((PVar "name") PWild (PCon "TColon")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "parseTy")) (ELam ((PVar "ty")) (EApp (EMethodRef "pure") (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "name")) (EVar "ty")) (EVar "None"))))))))
-(DFunDef false "ifaceMemberRest" ((PVar "name") (PVar "pats") (PCon "TEqual")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "parseBody")) (ELam ((PVar "body")) (EApp (EMethodRef "pure") (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "name")) (EApp (EVar "TyVar") (ELit (LString "_")))) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "pats")) (EVar "body"))))))))))
-(DFunDef false "ifaceMemberRest" (PWild PWild PWild) (EApp (EVar "failP") (ELit (LString "expected : or = in interface member"))))
+(DFunDef false "ifaceMember" () (EApp (EApp (EMethodRef "andThen") (EVar "getPos")) (ELam ((PVar "s")) (EApp (EApp (EMethodRef "andThen") (EVar "identNameP")) (ELam ((PVar "name")) (EApp (EApp (EMethodRef "andThen") (EVar "getPos")) (ELam ((PVar "q")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "many") (EVar "parseParamPat"))) (ELam ((PVar "pats")) (EApp (EApp (EMethodRef "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EApp (EApp (EVar "ifaceMemberRest") (EVar "name")) (EApp (EVar "Some") (EApp (EApp (EVar "locOfSpan") (EVar "s")) (EVar "q")))) (EVar "pats")) (EVar "t")))))))))))))
+(DTypeSig false "ifaceMemberRest" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "IfaceMethod")))))))
+(DFunDef false "ifaceMemberRest" ((PVar "name") (PVar "nameLoc") PWild (PCon "TColon")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "parseTy")) (ELam ((PVar "ty")) (EApp (EMethodRef "pure") (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "name")) (EVar "ty")) (EVar "None")) (EVar "nameLoc"))))))))
+(DFunDef false "ifaceMemberRest" ((PVar "name") (PVar "nameLoc") (PVar "pats") (PCon "TEqual")) (EApp (EApp (EMethodRef "andThen") (EVar "advance")) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "parseBody")) (ELam ((PVar "body")) (EApp (EMethodRef "pure") (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "name")) (EApp (EVar "TyVar") (ELit (LString "_")))) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "pats")) (EVar "body")))) (EVar "nameLoc"))))))))
+(DFunDef false "ifaceMemberRest" (PWild PWild PWild PWild) (EApp (EVar "failP") (ELit (LString "expected : or = in interface member"))))
 (DTypeSig false "parseImpl" (TyFun (TyCon "Bool") (TyApp (TyCon "Parser") (TyCon "Decl"))))
 (DFunDef false "parseImpl" ((PVar "pub")) (EApp (EApp (EMethodRef "andThen") (EVar "getPos")) (ELam ((PVar "kw")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "expectTok") (EVar "TImpl"))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EApp (EApp (EVar "implHead") (EVar "pub")) (EVar "kw")) (EVar "t")))))))))
 (DTypeSig false "implHead" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Decl"))))))

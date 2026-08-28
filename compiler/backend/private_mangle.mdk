@@ -582,6 +582,53 @@ buildUnitRenameMap mid exportsPerUnit decls =
   localEntries ++ importEntries
 -- local first ⇒ shadows any imported entry with the same key under lookupAssoc.
 
+-- ── a locally declared interface method un-claims its IMPLICIT-PRELUDE entry ──
+-- S1-PRELUDE (a) (`docs/spec/SHADOW-SEMANTICS.md`, fixtures `x4_*`/`x5_*`): the
+-- implicit prelude is in NEITHER half of S1's left-operand kind partition, so a
+-- prelude STANDALONE creates no shadow — when a module declares an interface method
+-- of the same name (e.g. `print`, `count`, `isEven`), a bare occurrence of that name
+-- denotes the METHOD, and the prelude function is no longer reachable by its bare
+-- name anywhere in the module (exactly what W-PRELUDE-METHOD-SHADOW says).
+-- `frontend/marker.mdk`'s `markWith` implements that by building its method set as
+-- `preludeMethods ++ interfaceMethodNames prog` and rewriting `EVar n` → `EMethodRef n`.
+--
+-- This pass runs BEFORE marking on the emit path, and an interface method is not a
+-- `DFunDef`/`DLetGroup` binder, so it is absent from `unitDefNames` and rule 1 does
+-- not fire for it.  Rule 3 (implicit prelude) then claimed the reference and rewrote
+-- it to `core__<n>` — by the time the marker ran, the occurrence no longer SPELLED
+-- the method's name, so it was never marked, and the emitted binary called the
+-- PRELUDE while `check`/`run` called the method.  Measured: `main = println (print 1)`
+-- against a local `interface Ifc c where print : c -> Int` emitted
+-- `call @mdk_core__print` and printed `1()`, where `run` printed `1` — a silent
+-- run/binary disagreement with no diagnostic on either side.
+--
+-- SCOPE — the core half ONLY.  An EXPLICIT sibling import (`import prov.{size}`) that
+-- collides with a local interface method is the DIFFERENT, ruled I1/I2 cell
+-- (`test/shadow_fixtures/i1_importer_local_iface/`): there the standalone stays
+-- reachable and a no-impl receiver FALLS BACK to it, so its `prov__size` entry must
+-- survive or the fallback call site loses its symbol.  Dropping both halves reds six
+-- importer assertions in `diff_compiler_shadow_semantics.sh` (measured).
+--
+-- The entry is DROPPED, not redirected: per rule 4 at the top of this file, method
+-- names have their own emitter naming (impl keys), and this pass must leave the
+-- occurrence unchanged so the marker sees the method's own spelling.
+notIfaceMethodKey : OrdMap Unit -> (String, String) -> Bool
+notIfaceMethodKey methods (n, _) = not (omHasKey n methods)
+
+-- names of the methods of every `interface` DECLARED in this unit.  Mirrors
+-- `frontend/marker.mdk`'s `interfaceMethodNames`, plus the `DAttrib` unwrap that
+-- `declDefNames` here already does.
+unitIfaceMethodNames : List Decl -> List String
+unitIfaceMethodNames [] = []
+unitIfaceMethodNames ((DInterface { methods, ... })::rest) = map ifaceMethodNameM methods
+  ++ unitIfaceMethodNames rest
+unitIfaceMethodNames ((DAttrib _ d)::rest) = unitIfaceMethodNames [d]
+  ++ unitIfaceMethodNames rest
+unitIfaceMethodNames (_::rest) = unitIfaceMethodNames rest
+
+ifaceMethodNameM : IfaceMethod -> String
+ifaceMethodNameM (IfaceMethod n _ _ _) = n
+
 -- a local top-level fn → its module-qualified symbol, UNLESS excluded (`main`).
 localRenameEntry : String -> String -> List (String, String)
 localRenameEntry mid n
@@ -599,9 +646,11 @@ isExcludedName n = n == "main"
 -- ordering; an explicit import of the same name from a sibling shadows core via
 -- import-entry ordering below).
 -- explicit sibling imports first (they shadow the implicit prelude), prelude last.
+-- The prelude half is filtered by the unit's own interface-method names — see
+-- `notIfaceMethodKey` above for why, and why the explicit half is NOT filtered.
 importRenameEntries : String -> List (String, List (String, String)) -> List Decl -> List (String, String)
 importRenameEntries _ exportsPerUnit decls = flatMap (declImportEntries exportsPerUnit) decls
-  ++ coreImportEntries exportsPerUnit
+  ++ filterList (notIfaceMethodKey (omFromNames (unitIfaceMethodNames decls) omEmpty)) (coreImportEntries exportsPerUnit)
 
 -- core's exports as implicit-prelude entries (`name → core__name`), excluding
 -- `main` (core has none, but be safe).
@@ -1002,14 +1051,15 @@ renameDefName rm n = match omLookup n rm
   None => n
 
 renameIfaceMethod : OrdMap String -> IfaceMethod -> IfaceMethod
-renameIfaceMethod _ (IfaceMethod n ty None) = IfaceMethod n ty None
-renameIfaceMethod rm (IfaceMethod n ty (Some (MethodDefault ps e))) =
+renameIfaceMethod _ (IfaceMethod n ty None mloc) = IfaceMethod n ty None mloc
+renameIfaceMethod rm (IfaceMethod n ty (Some (MethodDefault ps e)) mloc) =
   IfaceMethod
     n
     ty
     (Some (MethodDefault
       (renamePatsPM rm ps)
       (renameScoped rm (boundOfListPM (patVarsListPM ps)) e)))
+    mloc
 
 renameImplMethod : OrdMap String -> ImplMethod -> ImplMethod
 renameImplMethod rm (ImplMethod n ps e) =

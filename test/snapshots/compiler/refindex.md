@@ -740,7 +740,7 @@ ppNameLoc : PropParam -> (String, Loc)
 ppNameLoc (PropParam n l _) = (n, l)
 
 ifName : IfaceMethod -> String
-ifName (IfaceMethod n _ _) = n
+ifName (IfaceMethod n _ _ _) = n
 
 -- ── def collection (top-level binders, with real #331 name Locs) ─────────────
 -- a def entry: (namespace, name, key, defLoc, isPub).
@@ -1035,7 +1035,7 @@ walkFieldTys w loc ((Field _ ty)::rest) =
 
 walkIfaceMethods : W -> Loc -> List IfaceMethod -> Unit
 walkIfaceMethods _ _ [] = ()
-walkIfaceMethods w loc ((IfaceMethod _ ty mdef)::rest) =
+walkIfaceMethods w loc ((IfaceMethod _ ty mdef _)::rest) =
   let _ = walkTy w loc ty
   let _ = walkMethodDefault w loc mdef
   walkIfaceMethods w loc rest
@@ -1871,7 +1871,7 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DTypeSig false "ppNameLoc" (TyFun (TyCon "PropParam") (TyTuple (TyCon "String") (TyCon "Loc"))))
 (DFunDef false "ppNameLoc" ((PCon "PropParam" (PVar "n") (PVar "l") PWild)) (ETuple (EVar "n") (EVar "l")))
 (DTypeSig false "ifName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
-(DFunDef false "ifName" ((PCon "IfaceMethod" (PVar "n") PWild PWild)) (EVar "n"))
+(DFunDef false "ifName" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DData Private "DefEntry" () ((variant "DefEntry" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Loc") (TyCon "Bool")))) ())
 (DTypeSig false "collectDefs" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyApp (TyCon "List") (TyCon "DefEntry"))))))))
 (DFunDef false "collectDefs" (PWild PWild PWild PWild (PList)) (EListLit))
@@ -1976,7 +1976,7 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DFunDef false "walkFieldTys" ((PVar "w") (PVar "loc") (PCons (PCon "Field" PWild (PVar "ty")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "loc")) (EVar "ty"))) (DoExpr (EApp (EApp (EApp (EVar "walkFieldTys") (EVar "w")) (EVar "loc")) (EVar "rest")))))
 (DTypeSig false "walkIfaceMethods" (TyFun (TyCon "W") (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Unit")))))
 (DFunDef false "walkIfaceMethods" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "walkIfaceMethods" ((PVar "w") (PVar "loc") (PCons (PCon "IfaceMethod" PWild (PVar "ty") (PVar "mdef")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "loc")) (EVar "ty"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "walkMethodDefault") (EVar "w")) (EVar "loc")) (EVar "mdef"))) (DoExpr (EApp (EApp (EApp (EVar "walkIfaceMethods") (EVar "w")) (EVar "loc")) (EVar "rest")))))
+(DFunDef false "walkIfaceMethods" ((PVar "w") (PVar "loc") (PCons (PCon "IfaceMethod" PWild (PVar "ty") (PVar "mdef") PWild) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "loc")) (EVar "ty"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "walkMethodDefault") (EVar "w")) (EVar "loc")) (EVar "mdef"))) (DoExpr (EApp (EApp (EApp (EVar "walkIfaceMethods") (EVar "w")) (EVar "loc")) (EVar "rest")))))
 (DTypeSig false "walkMethodDefault" (TyFun (TyCon "W") (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "Option") (TyCon "MethodDefault")) (TyCon "Unit")))))
 (DFunDef false "walkMethodDefault" (PWild PWild (PCon "None")) (ELit LUnit))
 (DFunDef false "walkMethodDefault" ((PVar "w") (PVar "loc") (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body")))) (EBlock (DoLet false false (PVar "frame") (EApp (EApp (EVar "mkNamedFrame") (EVar "w")) (EApp (EApp (EVar "flatMap") (EApp (EVar "patBinders") (EVar "loc"))) (EVar "pats")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EListLit (EVar "frame"))) (EVar "loc")) (EVar "body")))))
@@ -2371,7 +2371,7 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DTypeSig false "ppNameLoc" (TyFun (TyCon "PropParam") (TyTuple (TyCon "String") (TyCon "Loc"))))
 (DFunDef false "ppNameLoc" ((PCon "PropParam" (PVar "n") (PVar "l") PWild)) (ETuple (EVar "n") (EVar "l")))
 (DTypeSig false "ifName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
-(DFunDef false "ifName" ((PCon "IfaceMethod" (PVar "n") PWild PWild)) (EVar "n"))
+(DFunDef false "ifName" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DData Private "DefEntry" () ((variant "DefEntry" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "Loc") (TyCon "Bool")))) ())
 (DTypeSig false "collectDefs" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyApp (TyCon "List") (TyCon "DefEntry"))))))))
 (DFunDef false "collectDefs" (PWild PWild PWild PWild (PList)) (EListLit))
@@ -2476,7 +2476,7 @@ splitLastL (x::rest) = map ((pre, last) => (x::pre, last)) (splitLastL rest)
 (DFunDef false "walkFieldTys" ((PVar "w") (PVar "loc") (PCons (PCon "Field" PWild (PVar "ty")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "loc")) (EVar "ty"))) (DoExpr (EApp (EApp (EApp (EVar "walkFieldTys") (EVar "w")) (EVar "loc")) (EVar "rest")))))
 (DTypeSig false "walkIfaceMethods" (TyFun (TyCon "W") (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Unit")))))
 (DFunDef false "walkIfaceMethods" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "walkIfaceMethods" ((PVar "w") (PVar "loc") (PCons (PCon "IfaceMethod" PWild (PVar "ty") (PVar "mdef")) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "loc")) (EVar "ty"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "walkMethodDefault") (EVar "w")) (EVar "loc")) (EVar "mdef"))) (DoExpr (EApp (EApp (EApp (EVar "walkIfaceMethods") (EVar "w")) (EVar "loc")) (EVar "rest")))))
+(DFunDef false "walkIfaceMethods" ((PVar "w") (PVar "loc") (PCons (PCon "IfaceMethod" PWild (PVar "ty") (PVar "mdef") PWild) (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "walkTy") (EVar "w")) (EVar "loc")) (EVar "ty"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "walkMethodDefault") (EVar "w")) (EVar "loc")) (EVar "mdef"))) (DoExpr (EApp (EApp (EApp (EVar "walkIfaceMethods") (EVar "w")) (EVar "loc")) (EVar "rest")))))
 (DTypeSig false "walkMethodDefault" (TyFun (TyCon "W") (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "Option") (TyCon "MethodDefault")) (TyCon "Unit")))))
 (DFunDef false "walkMethodDefault" (PWild PWild (PCon "None")) (ELit LUnit))
 (DFunDef false "walkMethodDefault" ((PVar "w") (PVar "loc") (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body")))) (EBlock (DoLet false false (PVar "frame") (EApp (EApp (EVar "mkNamedFrame") (EVar "w")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "patBinders") (EVar "loc"))) (EVar "pats")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "w")) (EListLit (EVar "frame"))) (EVar "loc")) (EVar "body")))))

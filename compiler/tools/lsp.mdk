@@ -445,7 +445,7 @@ zipKids fb kind (l::ls) (nm::nms) =
   jChildLoc nm kind fb l :: zipKids fb kind ls nms
 
 ifaceMethodName : IfaceMethod -> String
-ifaceMethodName (IfaceMethod n _ _) = n
+ifaceMethodName (IfaceMethod n _ _ _) = n
 
 implMethodName : ImplMethod -> String
 implMethodName (ImplMethod n _ _) = n

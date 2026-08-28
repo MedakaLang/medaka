@@ -297,7 +297,7 @@ methodDefaultSexp (Some (MethodDefault pats body)) =
   node "mdef" [slist (map patSexp pats), exprSexp body]
 
 ifaceMethodSexp : IfaceMethod -> String
-ifaceMethodSexp (IfaceMethod name ty def) =
+ifaceMethodSexp (IfaceMethod name ty def _) =
   node "imethod" [escStr name, tySexp ty, methodDefaultSexp def]
 
 superSexp : Super -> String

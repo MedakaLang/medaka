@@ -1,0 +1,29 @@
+-- D26 (#1815) DEFINER shadow of a method whose interface dispatches at ARGUMENT 1.
+-- Every other definer cell in this corpus dispatches at argument 0, so the whole
+-- corpus was blind to the axis: the application-head arms peel a BARE head, which is
+-- the node supplying argument 0, and at index 1 that node is not the dispatch site at
+-- all.  Both denotations are pinned by VALUE here:
+--   `mth 3 4`             -- receiver 4 (Int) has NO impl IZ; S2 inversion gives the
+--                            module's own standalone: 3 * 4 = 12
+--   `viaDict 3 (Box 4)`   -- receiver is the enclosing `IZ b =>` dict var, the S5 /
+--                            Fork-2 carve-out, so it DISPATCHES: 700 + 3 + 4 = 707
+-- Values hand-derived from S2/S5, not captured.  Before the fix `viaDict`'s written
+-- signature was silently replaced by `Int -> Int -> Int` (the standalone's whole
+-- declared type), so this file did not compile at all: `Type mismatch: Int vs Box`.
+interface IZ b where
+  mth : Int -> b -> Int
+
+data Box = Box Int
+
+impl IZ Box where
+  mth n (Box m) = 700 + n + m
+
+mth : Int -> Int -> Int
+mth n m = n * m
+
+viaDict : IZ b => Int -> b -> Int
+viaDict n x = mth n x
+
+main =
+  println (mth 3 4)
+  println (viaDict 3 (Box 4))

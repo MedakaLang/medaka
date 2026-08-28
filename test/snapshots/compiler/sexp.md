@@ -301,7 +301,7 @@ methodDefaultSexp (Some (MethodDefault pats body)) =
   node "mdef" [slist (map patSexp pats), exprSexp body]
 
 ifaceMethodSexp : IfaceMethod -> String
-ifaceMethodSexp (IfaceMethod name ty def) =
+ifaceMethodSexp (IfaceMethod name ty def _) =
   node "imethod" [escStr name, tySexp ty, methodDefaultSexp def]
 
 superSexp : Super -> String
@@ -494,7 +494,7 @@ programToSexp prog = joinNl (map declSexp prog)
 (DFunDef false "methodDefaultSexp" ((PCon "None")) (ELit (LString "None")))
 (DFunDef false "methodDefaultSexp" ((PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body")))) (EApp (EApp (EVar "node") (ELit (LString "mdef"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "patSexp")) (EVar "pats"))) (EApp (EVar "exprSexp") (EVar "body")))))
 (DTypeSig false "ifaceMethodSexp" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
-(DFunDef false "ifaceMethodSexp" ((PCon "IfaceMethod" (PVar "name") (PVar "ty") (PVar "def"))) (EApp (EApp (EVar "node") (ELit (LString "imethod"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "tySexp") (EVar "ty")) (EApp (EVar "methodDefaultSexp") (EVar "def")))))
+(DFunDef false "ifaceMethodSexp" ((PCon "IfaceMethod" (PVar "name") (PVar "ty") (PVar "def") PWild)) (EApp (EApp (EVar "node") (ELit (LString "imethod"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "tySexp") (EVar "ty")) (EApp (EVar "methodDefaultSexp") (EVar "def")))))
 (DTypeSig false "superSexp" (TyFun (TyCon "Super") (TyCon "String")))
 (DFunDef false "superSexp" ((PRec "Super" ((rf "superHead" (PVar "iface")) (rf "superParams" (PVar "params"))) false)) (EApp (EApp (EVar "node") (ELit (LString "super"))) (EListLit (EApp (EVar "escStr") (EVar "iface")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "escStr")) (EVar "params"))))))
 (DTypeSig false "requireSexp" (TyFun (TyCon "Require") (TyCon "String")))
@@ -668,7 +668,7 @@ programToSexp prog = joinNl (map declSexp prog)
 (DFunDef false "methodDefaultSexp" ((PCon "None")) (ELit (LString "None")))
 (DFunDef false "methodDefaultSexp" ((PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body")))) (EApp (EApp (EVar "node") (ELit (LString "mdef"))) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "patSexp")) (EVar "pats"))) (EApp (EVar "exprSexp") (EVar "body")))))
 (DTypeSig false "ifaceMethodSexp" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
-(DFunDef false "ifaceMethodSexp" ((PCon "IfaceMethod" (PVar "name") (PVar "ty") (PVar "def"))) (EApp (EApp (EVar "node") (ELit (LString "imethod"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "tySexp") (EVar "ty")) (EApp (EVar "methodDefaultSexp") (EVar "def")))))
+(DFunDef false "ifaceMethodSexp" ((PCon "IfaceMethod" (PVar "name") (PVar "ty") (PVar "def") PWild)) (EApp (EApp (EVar "node") (ELit (LString "imethod"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "tySexp") (EVar "ty")) (EApp (EVar "methodDefaultSexp") (EVar "def")))))
 (DTypeSig false "superSexp" (TyFun (TyCon "Super") (TyCon "String")))
 (DFunDef false "superSexp" ((PRec "Super" ((rf "superHead" (PVar "iface")) (rf "superParams" (PVar "params"))) false)) (EApp (EApp (EVar "node") (ELit (LString "super"))) (EListLit (EApp (EVar "escStr") (EVar "iface")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "escStr")) (EVar "params"))))))
 (DTypeSig false "requireSexp" (TyFun (TyCon "Require") (TyCon "String")))

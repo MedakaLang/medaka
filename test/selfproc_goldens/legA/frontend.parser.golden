@@ -189,7 +189,7 @@ ifPlain : Parser Expr
 ifaceBody : Int -> Parser (List IfaceMethod)
 ifaceBodyFor : Int -> Token -> Parser (List IfaceMethod)
 ifaceMember : Parser IfaceMethod
-ifaceMemberRest : String -> List Pat -> Token -> Parser IfaceMethod
+ifaceMemberRest : String -> Option Loc -> List Pat -> Token -> Parser IfaceMethod
 ifaceMembers : Parser (List IfaceMethod)
 ifaceMembersCons : Parser (List IfaceMethod)
 ifaceMembersLoop : Parser (List IfaceMethod)

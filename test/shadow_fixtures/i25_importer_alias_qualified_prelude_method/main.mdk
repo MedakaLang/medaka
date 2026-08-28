@@ -1,0 +1,24 @@
+-- I25 (#1684, S1's STANDALONE operand at the OCCURRENCE spelling) — MULTI-MODULE,
+-- and graded on the BUILT BINARY as much as on `run`, because the built binary is the
+-- only channel the defect ever appeared on.
+--
+-- THE ANSWER IS 6, DERIVED BY HAND BEFORE ANYTHING WAS RUN. `A.shrink` is
+-- alias-qualified to amod's own standalone (`n + 1`), applied to 5. `[0, 2]` would be
+-- `Arbitrary.shrink`'s list-shaped prelude default — a method of an interface this
+-- program declares no impl for and never mentions, and one no alias-qualified name can
+-- reach: SHADOW-SEMANTICS.md §1.0 scopes S1's standalone operand to what is "defined in
+-- `M` or imported into `M`", and `import amod as A` imports the standalone into this
+-- module under the local name `A.shrink`. Bare `shrink` is bound by no import form
+-- here, so it names nothing in this module and can shadow nothing in it.
+--
+-- MEASURED BEFORE THE FIX (#1684, S0): `check` clean at exit 0, `run` 0 printing 6, and
+-- the BUILT BINARY 0 printing `[0, 2]` — run and the binary disagreeing about one
+-- occurrence, with no diagnostic on any channel. `backend/private_mangle.mdk` collapses
+-- BOTH spellings of the import (`shrink` and `A.shrink`) onto the one symbol
+-- `amod__shrink`, `computeMangledShadowMap` recovered `amod__shrink ↦ shrink` from
+-- amod's funDefs, and `rewriteArgScoped`'s shadow-map arm then rewrote the
+-- alias-qualified occurrence as if it had been written bare. See bare.mdk, which is the
+-- spelling that IS an S1 occurrence and must NOT move.
+import amod as A
+
+main = println (A.shrink 5)
