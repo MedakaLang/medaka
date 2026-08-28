@@ -3462,11 +3462,11 @@ evalModules preludeDecls modules = evalModulesWith [] preludeDecls modules
 -- (`isMethodBinding`) — so it steps over the private prelude closure and lands on the
 -- user's dispatcher in `globalCells`.  The reachable instance is a CONSTRAINED prelude
 -- standalone that another prelude body calls (`elem`, called by `notElem`): a user
--- interface method of that name makes `medaka build` fail `unbound method: elem` at
--- base AND after this change, so the shape is already loudly broken on the emit arm and
--- is out of this slice's scope — reported, not patched around.  Both arms stay LOUD
--- (exit 1) either way; this change strictly moves `run` forward, from panicking on the
--- user's own occurrence to answering it correctly and then failing on the prelude's.
+-- interface method of that name is a build-arm gap out of this slice's scope —
+-- reported, not patched around.  `S-mangle-unclaim-residual` (@fc301229) closed the
+-- build-arm gap for this case: `medaka build` now succeeds and the binary prints `6`.
+-- This change strictly moves `run` forward, from panicking on the user's own
+-- occurrence to answering it correctly, matching the build arm.
 --
 -- ⚠️ The private frame is added ONLY when the collision set is non-empty.  An
 -- unconditional extra frame would shift every `ALocal depth` lexical address

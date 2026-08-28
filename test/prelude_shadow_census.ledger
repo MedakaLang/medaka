@@ -19,14 +19,18 @@
 #                          exits 1: `runtime error [E-PANIC]: unbound method:
 #                          <name>` -- #2153's class, the gate this slice ships
 #                          to make objectively measurable.
-#   SPECIAL_RUN_REJECT   -- `println` only: the probe template itself calls
-#                          `println (...)`, so shadowing `println` makes the
-#                          OUTER call resolve through the shadow too, and
-#                          `run` rejects while `build` still accepts and
-#                          prints `1`. Not part of the #2153 family; kept as
-#                          its own bucket rather than folded into either of
-#                          the other two, per the packet's own note that
-#                          `println` is special-cased.
+#   SPECIAL_RUN_REJECT   -- `println` only: shadowing `println` changes what
+#                          type `main` infers to, and `run` rejects with the
+#                          ORDINARY non-Unit-main W-MAIN-SHAPE exit (byte-
+#                          identical to `main = 7` with no interface anywhere)
+#                          -- not a shadow-resolution artifact. `build` still
+#                          accepts and prints `1`, but that `1` is itself a
+#                          live, filed bug (#2185: the compiler's own
+#                          auto-print wrap resolving to the user's shadowing
+#                          method), not a benign or expected accept. Not part
+#                          of the #2153 family; kept as its own bucket rather
+#                          than folded into either of the other two, per the
+#                          packet's own note that `println` is special-cased.
 #
 # THIS LEDGER IS THE RATCHET: a PASS row that regresses to anything else is a
 # gate failure, full stop -- see the gate's own header for how a name moving
