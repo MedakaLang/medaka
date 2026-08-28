@@ -1,0 +1,16 @@
+-- #2163 CATALOG-ROW rule, the REJECT half of the pair whose ACCEPT half is
+-- ffi_cross_builtin_name_accept.mdk.  The two differ in ONE thing: whether the
+-- redeclared catalog row still COVERS the catalog's own row.  There `getEnv` is
+-- redeclared with the catalog's own `<Env "_">` and must accept; here it is
+-- redeclared with `<>`, dropping `Env` outright.
+--
+-- A catalog name is lowered as the REAL builtin whatever the local signature says
+-- (`isAnyExtern`, compiler/backend/llvm_emit.mdk, dispatches by NAME), so the
+-- narrower row is a lie the emitter never honours -- R2's escape-hatch sentence.
+extern getEnv : String -> <> Option String
+
+readHome : Unit -> <> Option String
+readHome _ = getEnv "HOME"
+
+main : <IO> Unit
+main = println "ffi catalog narrow reject"

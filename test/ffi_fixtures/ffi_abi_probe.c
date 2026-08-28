@@ -76,3 +76,52 @@ long long ffiNotesLen(void) { return ffiNotes; }
 double ffiMix(long long i, double f, const char *s) {
   return (double)i + f + (double)strlen(s);
 }
+
+/* ── #2128: inbound Bool/Char that a REAL C library is free to return ────────
+ *
+ * The functions above are all well-behaved: ffiNegate returns exactly 0 or 1,
+ * ffiCharNext is only ever handed a valid codepoint.  That is the easy half.
+ * These six are the honest half — a C library is under NO obligation to return
+ * a value inside Medaka's `Bool`/`Char` subsets (FFI-ABI.md §2.1), and before
+ * the inbound normalisation `cTruthy`'s 42 became an immediate word that was
+ * neither True (3) nor False (1): `if` read it as true and `match` fell off the
+ * end into E-NONEXHAUSTIVE-MATCH, in the same program.  They are NOT pathological
+ * fixtures — `return 42` is what every C predicate written as `return flags &
+ * MASK;` does. */
+
+/* Bool, out of the 0/1 range but true by C's own rule. */
+long long cTruthy(void) { return 42; }
+/* Bool, in-range regression floor: these two must keep behaving exactly as before. */
+long long cFalsy(void) { return 0; }
+long long cOne(void) { return 1; }
+
+/* Char, in range: 65 = 'A'. */
+long long cCharA(void) { return 65; }
+/* Char, above charMaxBound (1114111). */
+long long cCharBig(void) { return 1200000; }
+/* Char, negative — a distinct arm because it reads as a HUGE unsigned, so it
+ * pins that the range check is unsigned rather than a signed `<=` that a
+ * negative would sail through. */
+long long cCharNeg(void) { return -1; }
+/* Char, INSIDE the bounds but still not a Char: 0xD800 is the low end of the
+ * UTF-16 surrogate window, which is excluded from the Unicode scalar values
+ * (runtime/medaka_rt.c `mdk_char_from_code`, and the lexer, and `charFromCode`,
+ * all agree).  The third arm, and the one a BOUNDS-only check cannot catch — it
+ * is exactly what the check was before the ffi-boundary-honesty review round
+ * (S0-1): `icmp ult i64 %r, 1114112` alone accepted this and `println` emitted
+ * malformed UTF-8 at exit 0. */
+long long cCharSurrogate(void) { return 0xD800; }
+
+/* ── #2164: §2.4 COPY-BACK — a C function that FILLS a caller-allocated array ──
+ *
+ * The mirror of ffiSumInts.  That one only READS the buffer, so it passes even
+ * with the copy-back missing; this one WRITES, which is the half that was
+ * silently discarded before #2164 (the C side filled the throwaway §2.4 copy and
+ * the Medaka array came back unchanged, at exit 0).
+ *
+ * Deliberately writes a CONSTANT rather than a function of the input, so the
+ * expected sum is hand-computable without reference to what was in the array
+ * before: 99 * 3 = 297, versus 1 + 2 + 3 = 6 for the untouched array. */
+void ffiFill99(long long *xs, long long n) {
+  for (long long i = 0; i < n; i++) xs[i] = 99;
+}

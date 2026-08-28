@@ -41,6 +41,23 @@
 # library, its manifest key, and the manifest file — not clang's `ld: library not
 # found` wall.
 #
+# CELLS 7, 8 AND 9 are the INBOUND-SCALAR honesty slice (#2128).  Cells 1 and 3
+# only ever see a C half that stays inside Medaka's `Bool`/`Char` subsets, which
+# is the easy half of §2.1 and the half a real C library does not promise.  These
+# three assert what happens when it does not: an out-of-range C bool must read
+# the SAME under `if` and under `match` (it used not to — see cell 7), and an
+# out-of-range C codepoint must fail LOUDLY rather than print replacement
+# garbage at exit 0 (cell 9).  Their in-range companions are the regression
+# floor, not padding: a normalisation that mangled 0/1 or trapped on a valid
+# codepoint would satisfy the headline half alone.
+#
+# CELL 10 is the §2.4 COPY-BACK slice (#2164).  Cells 1 and 3 pass an array to a C
+# function that only READS it, which is the half that worked; cell 10 passes one
+# to a C function that WRITES it, which silently did nothing before #2164 — the C
+# side filled §2.4'''s throwaway copy and the Medaka array came back unchanged, at
+# exit 0.  Its read-only lines are the regression floor for the copy-back being
+# unconditional: it now also runs after every array call C never wrote to.
+#
 # Usage:  sh test/diff_compiler_llvm_ffi.sh
 # Exit:   0 every cell produces its expected output;
 #         1 a build failed or the output differs;
@@ -305,6 +322,226 @@ else
   else
     fail=$((fail+1))
     printf 'FAIL ffi_extern_shared      expected 22 then 6, got: %s\n' "$got6"
+  fi
+fi
+
+# ── cell 7: INBOUND Bool — `if` and `match` must agree (#2128) ──────────────
+# The S1 this cell exists for: FFI-ABI.md §2.1's inbound rule used to be a bare
+# re-tag of whatever `long long` C returned, so `cTruthy`'s 42 became the
+# immediate word 85 — neither True (3) nor False (1).  `if` untags and tests
+# `!= 0` (emitIf), so it took the TRUE branch; `match` compares the word against
+# 3/1 exactly (emitRefutMatch), so it fell off the end into
+# E-NONEXHAUSTIVE-MATCH.  Same program, same runtime value, two answers, and the
+# `if` half at exit 0.
+#
+# 🚨 THE IN-RANGE LINES ARE THE REGRESSION FLOOR, NOT PADDING.  A "fix" that
+# normalised by MASKING the low bit, or that mapped every nonzero to False,
+# would satisfy the agreement half alone.  0 must still be False and 1 must
+# still be True, which is what `cFalsy`/`cOne` assert.
+#
+# Expected output is hand-computed from FFI-ABI.md §2.1's stated rule (C's own
+# truthiness: 0 is false, every other bit pattern is true) applied to the C
+# source, NOT captured: 42 -> True, 0 -> False, 1 -> True, and the `if` and
+# `match` readings of each are the SAME word.
+cat > "$W/ffi_bool_in.mdk" <<'CELL7'
+extern cTruthy : Unit -> <FFI> Bool
+extern cFalsy : Unit -> <FFI> Bool
+extern cOne : Unit -> <FFI> Bool
+
+viaMatch : Bool -> String
+viaMatch b = match b
+  True => "match:True"
+  False => "match:False"
+
+main : <IO, FFI> Unit
+main =
+  let _ = println (if cTruthy () then "if:True" else "if:False")
+  let _ = println (viaMatch (cTruthy ()))
+  let _ = println (cTruthy ())
+  let _ = println (if cFalsy () then "if:True" else "if:False")
+  let _ = println (viaMatch (cFalsy ()))
+  let _ = println (if cOne () then "if:True" else "if:False")
+  println (viaMatch (cOne ()))
+CELL7
+
+EXPECT_BOOL_IN='if:True
+match:True
+True
+if:False
+match:False
+if:True
+match:True'
+
+if ! MEDAKA_RT_OBJ="$W/combined.o" "$MEDAKA" build "$W/ffi_bool_in.mdk" \
+     -o "$W/bool_in.bin" >"$W/build7.log" 2>&1; then
+  echo "FAIL: inbound-Bool program did not build"; cat "$W/build7.log"; fail=$((fail+1))
+else
+  checked=$((checked+1))
+  got7="$("$W/bool_in.bin" 2>&1)"
+  if [ "$got7" = "$EXPECT_BOOL_IN" ]; then
+    echo "ok   ffi_inbound_bool       'if' and 'match' agree on an out-of-range C bool (42 -> True), 0/1 unchanged"
+  else
+    fail=$((fail+1))
+    echo "FAIL ffi_inbound_bool       output differs"
+    printf 'expected:\n%s\ngot:\n%s\n' "$EXPECT_BOOL_IN" "$got7"
+  fi
+fi
+
+# ── cell 8: INBOUND Char in range — round-trips through if/match/println ─────
+# The other half of #2128's regression floor.  65 IS a valid codepoint, so the
+# §2.1 range check must be transparent here: 'A' through an equality test, a
+# literal match arm, and Show alike.  A validation arm that trapped on a valid
+# codepoint, or that clamped every value, would redden exactly this cell.
+cat > "$W/ffi_char_in.mdk" <<'CELL8'
+extern cCharA : Unit -> <FFI> Char
+
+viaMatch : Char -> String
+viaMatch c = match c
+  'A' => "match:A"
+  _ => "match:other"
+
+main : <IO, FFI> Unit
+main =
+  let _ = println (if cCharA () == 'A' then "if:A" else "if:other")
+  let _ = println (viaMatch (cCharA ()))
+  println (cCharA ())
+CELL8
+
+EXPECT_CHAR_IN='if:A
+match:A
+A'
+
+if ! MEDAKA_RT_OBJ="$W/combined.o" "$MEDAKA" build "$W/ffi_char_in.mdk" \
+     -o "$W/char_in.bin" >"$W/build8.log" 2>&1; then
+  echo "FAIL: inbound-Char program did not build"; cat "$W/build8.log"; fail=$((fail+1))
+else
+  checked=$((checked+1))
+  got8="$("$W/char_in.bin" 2>&1)"
+  if [ "$got8" = "$EXPECT_CHAR_IN" ]; then
+    echo "ok   ffi_inbound_char       in-range codepoint 65 round-trips as 'A' through if/match/println"
+  else
+    fail=$((fail+1))
+    echo "FAIL ffi_inbound_char       output differs"
+    printf 'expected:\n%s\ngot:\n%s\n' "$EXPECT_CHAR_IN" "$got8"
+  fi
+fi
+
+# ── cell 9: INBOUND Char out of range — LOUD, never replacement garbage ──────
+# FFI-ABI.md §2.1's Char totality decision, pinned as behaviour: an out-of-range
+# codepoint TRAPS.  There is no honest value to substitute — clamping or masking
+# would invent a codepoint C never returned and print it at exit 0, which is the
+# silent wrongness the whole slice exists to remove (AGENTS.md [W-QUIETER]).
+# Before the fix, 1200000 was tagged as-is and `println` emitted replacement
+# garbage at exit 0.
+#
+# THREE values, not one, and they fail for three DIFFERENT reasons: 1200000 is
+# above charMaxBound; -1 reads as a HUGE unsigned — a signed `<=` bound check
+# would let the negative sail straight through, so that arm pins the check as
+# unsigned; and 0xD800 is INSIDE the bounds but is a UTF-16 surrogate, not a
+# Unicode scalar, so it is not a Char either.  The surrogate arm is the one a
+# BOUNDS-only check cannot catch, and until the ffi-boundary-honesty review round
+# (S0-1) the check WAS bounds-only: `icmp ult i64 %r, 1114112` accepted 55296 and
+# `println` emitted malformed UTF-8 at exit 0.  Every other Char-producing path in
+# the language already rejected it (the lexer, `charFromCode`, and the runtime's
+# own `mdk_char_from_code`), so the FFI boundary was the single door it fitted
+# through.  Asserted on BOTH a nonzero exit and the message text: a segfault would
+# also exit nonzero.
+# ⚠️ exit code read by REDIRECT, never through a pipe — AGENTS.md [D-BUILD-PIPE].
+for cfn in cCharBig cCharNeg cCharSurrogate; do
+  cat > "$W/ffi_char_oob_$cfn.mdk" <<CELL9
+extern $cfn : Unit -> <FFI> Char
+
+main : <IO, FFI> Unit
+main = println ($cfn ())
+CELL9
+  if ! MEDAKA_RT_OBJ="$W/combined.o" "$MEDAKA" build "$W/ffi_char_oob_$cfn.mdk" \
+       -o "$W/oob_$cfn.bin" >"$W/build9_$cfn.log" 2>&1; then
+    echo "FAIL: out-of-range-Char program ($cfn) did not build"; cat "$W/build9_$cfn.log"; fail=$((fail+1))
+    continue
+  fi
+  checked=$((checked+1))
+  "$W/oob_$cfn.bin" >"$W/oob_$cfn.out" 2>"$W/oob_$cfn.err"
+  rc9=$?
+  if [ "$rc9" -eq 0 ]; then
+    printf 'FAIL ffi_inbound_char_oob   %s: exited 0 with stdout: %s\n' "$cfn" "$(cat "$W/oob_$cfn.err" "$W/oob_$cfn.out")"
+    fail=$((fail+1))
+  elif grep -q "runtime error" "$W/oob_$cfn.err" \
+    && grep -q "not a valid Char" "$W/oob_$cfn.err" \
+    && grep -q "0..1114111 excluding the UTF-16 surrogates 55296..57343" "$W/oob_$cfn.err" \
+    && grep -q "$cfn" "$W/oob_$cfn.err" \
+    && [ ! -s "$W/oob_$cfn.out" ]; then
+    printf 'ok   ffi_inbound_char_oob   %s: trapped loudly (exit %d), naming the call and the validity predicate\n' "$cfn" "$rc9"
+  else
+    printf 'FAIL ffi_inbound_char_oob   %s: exit %d, wrong failure:\n' "$cfn" "$rc9"; fail=$((fail+1))
+    cat "$W/oob_$cfn.out" "$W/oob_$cfn.err"
+  fi
+done
+
+# ── cell 10: §2.4 COPY-BACK — a C function that FILLS a caller's array (#2164) ─
+# The S0 this cell exists for.  §2.4's outbound rule hands C a COPY of the array,
+# never the live cell, and until #2164 nothing ever copied that buffer back — so a
+# C function filling a caller-allocated `Array Int` filled a throwaway buffer and
+# the Medaka array was SILENTLY unchanged, at exit 0, with no diagnostic.  Cell 1's
+# `ffiSumInts` cannot catch it: that C half only READS the buffer, so it passes
+# with the copy-back absent.
+#
+# 🚨 THE FIRST THREE LINES ARE THE REGRESSION FLOOR, NOT PADDING.  The copy-back
+# is UNCONDITIONAL (a Medaka FFI signature has no "in" vs "out" parameter
+# distinction), so it also runs after every READ-ONLY array call — and a copy-back
+# that re-tagged wrongly, or read the count from the buffer instead of the live
+# cell, would corrupt an array that C never touched.  Line 1 sums the untouched
+# array, line 2 reads element 0 back IN MEDAKA, line 3 sums it AGAIN: a copy-back
+# that mangled the cell would redden one of those three, and a "fix" that skipped
+# the copy-back for arguments it guessed were read-only would redden line 4.
+#
+# Line 2 and line 4 go through `array.get`, i.e. PURE MEDAKA indexing of the live
+# cell — not another FFI call.  That distinction is the assertion: `ffiSumInts`
+# alone could be satisfied by a buffer that round-trips without the live cell ever
+# changing, whereas `get 0 a` reads the tagged word the copy-back wrote.
+#
+# Expected output hand-computed from ffiFill99 in ffi_abi_probe.c (it writes the
+# constant 99, chosen so the answer does not depend on what was in the array
+# before), NOT captured: 1+2+3 = 6, element 0 = 1, 6 again, then 99 and 99*3 = 297.
+cat > "$W/ffi_array_copyback.mdk" <<'CELL10'
+import array.{get}
+
+extern ffiFill99 : Array Int -> Int -> <FFI> Unit
+extern ffiSumInts : Array Int -> Int -> <FFI> Int
+
+show0 : Array Int -> String
+show0 a = match get 0 a
+  Some v => intToString v
+  None => "none"
+
+main : <IO, FFI> Unit
+main =
+  let a = [|1, 2, 3|]
+  let _ = println (ffiSumInts a 3)
+  let _ = println (show0 a)
+  let _ = println (ffiSumInts a 3)
+  let _ = ffiFill99 a 3
+  let _ = println (show0 a)
+  println (ffiSumInts a 3)
+CELL10
+
+EXPECT_COPYBACK='6
+1
+6
+99
+297'
+
+if ! MEDAKA_RT_OBJ="$W/combined.o" "$MEDAKA" build "$W/ffi_array_copyback.mdk" \
+     -o "$W/copyback.bin" >"$W/build10.log" 2>&1; then
+  echo "FAIL: array copy-back program did not build"; cat "$W/build10.log"; fail=$((fail+1))
+else
+  checked=$((checked+1))
+  got10="$("$W/copyback.bin" 2>&1)"
+  if [ "$got10" = "$EXPECT_COPYBACK" ]; then
+    echo "ok   ffi_array_copyback     C writes to the caller's array are visible in Medaka (99/297), read-only calls unchanged (6/1/6)"
+  else
+    fail=$((fail+1))
+    echo "FAIL ffi_array_copyback     output differs"
+    printf 'expected:\n%s\ngot:\n%s\n' "$EXPECT_COPYBACK" "$got10"
   fi
 fi
 

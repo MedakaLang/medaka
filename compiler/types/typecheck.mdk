@@ -6227,7 +6227,7 @@ data DriverState =
       coherenceUserDecls : Ref (List Decl),
       stdlibOwnedModsRef : Ref (List String),
       flatEntryIsStdlibRef : Ref Bool,
-      builtinExternNamesRef : Ref (OrdMap String),
+      builtinExternNamesRef : Ref (OrdMap (String, List (String, Option String))),
       superDeclsRef : Ref (List Decl),
       standaloneValuesRef : Ref (List String),
       methodDispatchIdxByIdRef : Ref (List ((IfaceRef, String), Int)),
@@ -25575,15 +25575,17 @@ checkBodyImpl seed mode prog0 =
   -- cyclic alias.  Order between them is not significant: diagnostics
   -- accumulate ([T-ERRORS-ACCUM]) and a signature can honestly fail more than one.
   --
-  -- Four sibling loops, one rule each, rather than four arms inside one walk: each
+  -- Five sibling loops, one rule each, rather than five arms inside one walk: each
   -- rule has its own exemption discipline (the first two exempt a catalog-name
   -- redeclaration, the third IS that exemption's admission test, the fourth exempts
-  -- nothing at all), and folding them together would force one `if` to speak for
-  -- four different notions of "this declaration is not mine".
+  -- nothing at all, and the fifth fires ONLY on a catalog name), and folding them
+  -- together would force one `if` to speak for five different notions of "this
+  -- declaration is not mine".
   let _ = ffiCheckExternsCrossable (ffiStampMode mode) prog
   let _ = ffiCheckExternsLabelled (ffiStampMode mode) prog
   let _ = ffiCheckExternsShadow (ffiStampMode mode) prog
   let _ = ffiCheckExternsReserved (ffiStampMode mode) prog
+  let _ = ffiCheckExternsCatalogRow (ffiStampMode mode) prog
   -- methodNames: FLAT's SECOND ifaceMethodSchemes call over prog — dedup-skipped by
   -- registerMethodConstraints so globalS's registered (first-call) ids stay authoritative.
   -- Module checks core in isolation and never needs it, so NO extra call there.
@@ -28999,22 +29001,41 @@ externSchemes scope decls =
 -- process (`medaka test` runs several engines), and a later call carrying a
 -- shorter list must not shrink the set a guard is reading.
 --
--- Each row records the catalog signature's TYPE-HEAD SHAPE KEY as its value, so
--- that `ffiCheckExternsShadow` can ask not only "is this a catalog name" but "does
--- this local declaration claim the catalog row's shape".  Union means a re-seed
--- REWRITES an existing row rather than skipping it — the two seeds are the same
--- `runtimeDecls` list, so the value is the same string either way, and preferring
--- the later write keeps the map's contents a function of the last seed rather than
--- of call order.
+-- Each row records TWO projections of the catalog signature, as a pair:
+--
+--   fst — its TYPE-HEAD SHAPE KEY (`ffiSigShapeKey`), so that
+--         `ffiCheckExternsShadow` can ask not only "is this a catalog name" but
+--         "does this local declaration claim the catalog row's shape".
+--   snd — its WRITTEN TERMINAL EFFECT ROW (`ffiWrittenRow`), the labels as the
+--         author spelled them, so that `ffiCheckExternsCatalogRow` can ask
+--         whether a redeclaration's row still covers what the builtin performs
+--         (#2163).
+--
+-- ONE map with a widened value rather than a sibling map keyed the same way: the
+-- two projections are read by two rules about the same declaration, and two
+-- tables could fall out of step (the reader-prose on `ffiIsBuiltinExternName`
+-- below says the same thing about the shape key).
+--
+-- ⚠️ The ROW is stored as WRITTEN LABELS, not as `List Atom`.  `atomsOfWritten`
+-- resolves each bare label against `driverState.effectDomains`, and this seam can
+-- run BEFORE that registry is populated — so lifting the catalog row to atoms here
+-- and the declared row to atoms at the check seam would compare two atom sets
+-- built under different domain knowledge.  Both sides are lifted at the CHECK
+-- seam instead, where the registry is the same for both.
+--
+-- Union means a re-seed REWRITES an existing row rather than skipping it — the two
+-- seeds are the same `runtimeDecls` list, so the value is the same pair either
+-- way, and preferring the later write keeps the map's contents a function of the
+-- last seed rather than of call order.
 noteBuiltinExternNames : List Decl -> Unit
 noteBuiltinExternNames ds =
   driverState.value.builtinExternNamesRef :=
     externSigsToMap ds driverState.value.builtinExternNamesRef.value
 
-externSigsToMap : List Decl -> OrdMap String -> OrdMap String
+externSigsToMap : List Decl -> OrdMap (String, List (String, Option String)) -> OrdMap (String, List (String, Option String))
 externSigsToMap [] m = m
 externSigsToMap ((DExtern _ n ty)::rest) m =
-  externSigsToMap rest (omInsert n (ffiSigShapeKey ty) m)
+  externSigsToMap rest (omInsert n (ffiSigShapeKey ty, ffiWrittenRow ty) m)
 externSigsToMap (_::rest) m = externSigsToMap rest m
 
 -- #2072 (epic #2070, R2): the DECLARATION-site sibling of `externSchemes`.
@@ -29135,10 +29156,12 @@ expandAliasHeadTy t = t
 -- where the effect system has nowhere to put a row (`extern q : <FFI> Int`
 -- renders as a bare `Int`; a value does not perform).
 --
--- ⚠️ `None` IS STILL "THE LABEL RULE CANNOT REACH THIS", AND THAT IS STILL #2106's
--- QUESTION.  What changed is what the caller does with the answer: it used to fall
--- through to a pass, which let the emitter lower an unlabellable declaration as a
--- foreign call anyway (S0-2).  `ffiCheckExternLabel` below now reports it instead.
+-- ⚠️ `None` IS STILL "THE LABEL RULE CANNOT REACH THIS" — that was #2106's
+-- question, and #2106 is now CLOSED by refusal rather than by a spelling (see
+-- `ffiCheckExternLabel`).  What changed is what the caller does with the answer:
+-- it used to fall through to a pass, which let the emitter lower an unlabellable
+-- declaration as a foreign call anyway (S0-2).  `ffiCheckExternLabel` below now
+-- reports it instead.
 -- The distinction this function draws is unchanged; do not fold `None` into `Some
 -- False`, because the two need different messages — one is a missing label, the
 -- other is a signature with nowhere to put one.
@@ -29258,9 +29281,11 @@ ffiCheckExternsGo (_::rest) = ffiCheckExternsGo rest
 -- ⚠️ It is keyed on the name set the SEED was built from, recorded once by
 -- `externSchemes` — not on a hand-copied list here, which would rot the moment
 -- `stdlib/runtime.mdk` gains a row.  `builtinExternNamesRef` maps each catalog
--- name to that row's TYPE-HEAD SHAPE KEY (`ffiSigShapeKey`) rather than to `Unit`:
--- THIS predicate reads only the key set, but `ffiCheckExternsShadow` below needs
--- the catalog's own signature to compare a redeclaration against, and a second
+-- name to the PAIR (that row's TYPE-HEAD SHAPE KEY `ffiSigShapeKey`, that row's
+-- WRITTEN TERMINAL EFFECT ROW `ffiWrittenRow`) rather than to `Unit`: THIS
+-- predicate reads only the key set, but `ffiCheckExternsShadow` below needs the
+-- catalog's own signature shape to compare a redeclaration against, and
+-- `ffiCheckExternsCatalogRow` (#2163) needs its EFFECT ROW; a second or third
 -- table keyed the same way could fall out of step with this one.  (The field
 -- carries no comment of its own — `DriverState`'s header forbids one, #829 /
 -- [T-PERRUN-COMMENTS] — so its prose lives here, on its reader.)
@@ -29322,13 +29347,134 @@ ffiCheckShadowGo : List Decl -> Unit
 ffiCheckShadowGo [] = ()
 ffiCheckShadowGo ((DExtern _ n ty)::rest) =
   let _ = match omLookup n driverState.value.builtinExternNamesRef.value
-    Some k if k /= ffiSigShapeKey ty => pushTypeErrorAt "T-FFI-BUILTIN-SHADOW" (firstTyLoc ty) (ffiShadowMsg n k (ffiSigShapeKey ty))
+    Some (k, _) if k /= ffiSigShapeKey ty => pushTypeErrorAt "T-FFI-BUILTIN-SHADOW" (firstTyLoc ty) (ffiShadowMsg n k (ffiSigShapeKey ty))
     _ => ()
   ffiCheckShadowGo rest
 ffiCheckShadowGo (_::rest) = ffiCheckShadowGo rest
 
 ffiShadowMsg : String -> String -> String -> String
 ffiShadowMsg n want got = "Foreign declaration '\{n}' redeclares a built-in runtime name with an incompatible signature: the built-in is '\{want}', this declaration claims '\{got}' (type heads only; effect rows are not compared). A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, whatever the local signature says — so this declaration would silently call '\{n}' with the wrong argument and result representations rather than a foreign symbol of your own. Rename the extern to a name the runtime does not already define, or declare it with the built-in's own signature"
+
+-- ── the CATALOG-ROW rule (#2163, epic #2070 R2) ─────────────────────────────
+--
+-- 🚨 THE FIFTH DECLARATION RULE, AND IT IS ABOUT THE EFFECT ROW, NOT THE SHAPE.
+--
+-- `ffiCheckExternsShadow` above compares TYPE HEADS and walks THROUGH effect rows
+-- on purpose, so `<>` and `<FileWrite "_">` are one shape to it.  That left R2's
+-- own escape-hatch sentence live for all 138 catalog names: a local
+--
+--   extern writeFile : String -> String -> <> Result Unit String
+--
+-- matches the catalog's heads, passes every rule above, and types a caller as
+-- `String -> Unit` — while the emitter, which is name-keyed and never sees a
+-- typecheck verdict (`isAnyExtern`/`ffiExternRows`), lowers the call to the REAL
+-- `writeFile` and the file is really written.  `medaka check` printed
+-- `innocent : String -> Unit` for a function that writes to disk, at exit 0.
+--
+-- THE RULE IS SUBSUMPTION, NOT EQUALITY, AND NOT A BAN.  The declared row must
+-- COVER the catalog's own row (declared ⊇ catalog); it may be wider.  Two reasons
+-- it is not the blunter "refuse catalog redeclaration outright":
+--
+--   * the compatible-redeclaration idiom is load-bearing in the tree, DERIVED not
+--     assumed — cross-referencing every `^extern ` line under `test/`, `demo/`,
+--     `playground/`, `compiler/`, `sqlite/` and `pds/` against the 138 catalog
+--     names finds live users in `test/wasm/fixtures/stagea_extern_probe.mdk` and
+--     `stageb_float_reinterpret.mdk`, `test/effect_param_fixtures/{env,exec}_*.mdk`,
+--     `test/effect_builtin_param_fixtures/ffi_cross_builtin_name_accept.mdk`,
+--     `test/parse_fixtures/imports.mdk`, `test/typecheck_error_fixtures/
+--     value_restriction_ref*.mdk` and `test/diff_compiler_llvm_ffi.sh`, plus the
+--     `extern putStrLn : String -> <IO> Unit` example in `docs/spec/SYNTAX.md`;
+--   * a WIDER row is not a lie.  It over-declares what the caller must permit,
+--     which is the safe direction — the same direction a declared bound already
+--     stands in to an inferred body row everywhere else in this file.
+--
+-- ⚠️ `atomsEscape`, not bare `atomsDiff`: the catalog row is the "inferred" side
+-- (what is really performed) and the DECLARED row is the BOUND, so the bound's
+-- `IO` must be widened to its security-label alias first (`expandIoInBound`).
+-- Without that widening `extern putStrLn : String -> <IO> Unit` — the spelling
+-- `docs/spec/SYNTAX.md` teaches, and `test/parse_fixtures/imports.mdk` uses —
+-- would be rejected against the catalog's `<Stdout>`, which is strictly narrower.
+-- `atomsEscape` IS `atomsDiff` with that one widening; it is not a second subset
+-- predicate.
+--
+-- ⚠️ Both rows are lifted to atoms HERE, at the check seam, never at the seed seam
+-- — see `noteBuiltinExternNames` for why (the effect-domain registry).
+--
+-- A catalog row with no written effects at all (`bitAnd`, `arrayBlit`, the 100-odd
+-- pure rows) yields the empty atom set, which every declared row covers, so this
+-- rule is silent for them by construction rather than by an exemption list.
+ffiCheckExternsCatalogRow : Bool -> List Decl -> Unit
+ffiCheckExternsCatalogRow False _ = ()
+ffiCheckExternsCatalogRow True ds = ffiCheckCatalogRowGo (externDecls ds)
+
+ffiCheckCatalogRowGo : List Decl -> Unit
+ffiCheckCatalogRowGo [] = ()
+ffiCheckCatalogRowGo ((DExtern _ n ty)::rest) =
+  let _ = match omLookup n driverState.value.builtinExternNamesRef.value
+    Some (_, catRow) => ffiCheckCatalogRowOne n ty catRow
+    _ => ()
+  ffiCheckCatalogRowGo rest
+ffiCheckCatalogRowGo (_::rest) = ffiCheckCatalogRowGo rest
+
+ffiCheckCatalogRowOne : String -> Ty -> List (String, Option String) -> Unit
+ffiCheckCatalogRowOne n ty catRow =
+  let catAtoms = atomsOfWritten catRow
+  let declAtoms = atomsOfWritten (ffiWrittenRow ty)
+  match atomsEscape catAtoms declAtoms
+    [] => ()
+    missing => pushTypeErrorAt "T-FFI-CATALOG-NARROW" (firstTyLoc ty) (ffiCatalogNarrowMsg n catAtoms declAtoms missing)
+
+ffiCatalogNarrowMsg : String -> List Atom -> List Atom -> List Atom -> String
+ffiCatalogNarrowMsg n cat decl missing = "Foreign declaration '\{n}' redeclares a built-in runtime name with a NARROWER effect row: the built-in performs <\{renderAtoms cat}>, this declaration claims <\{renderAtoms decl}>, which does not cover <\{renderAtoms missing}>. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, whatever the local signature says — so '\{n}' really does perform <\{renderAtoms missing}>, and every caller typechecked against this declaration would be told it does not.\{ffiCatalogTopNote missing} Declare the built-in's own row `<\{renderAtoms cat}>` (a WIDER row such as `<IO>` is also accepted — over-declaring is safe), or rename the extern to a name the runtime does not already define"
+
+-- S3-1 (`ffi-boundary-honesty` review round): a parameterised label whose param is
+-- ⊤ renders as the BARE LABEL — `drenderN (PPrefix None)` is "" by design, and a
+-- surviving `"_"` hole normalises to ⊤ first, so the catalog's `<FileWrite "_">`
+-- prints as `<FileWrite>`.  Against a declaration that narrows by a CONCRETE
+-- parameter (`<FileWrite "/tmp/allowed/*">`) that reads BACKWARDS: the widest
+-- possible row is rendered as the barest possible text, and a reader takes
+-- "does not cover <FileWrite>" for "the built-in touches no file at all" rather
+-- than "the built-in may touch ANY file."  The verdict and the general-case
+-- wording are both correct; only this rendering is ambiguous.
+--
+-- ⚠️ Fixed HERE, in this one message, and NOT in `renderAtoms`/`renderAtom`/
+-- `drenderN` — those are shared by many other diagnostics and several blessed
+-- goldens, where ⊤-renders-empty is the intended, byte-compatible surface.
+--
+-- ⚠️ `PUnit` is deliberately NOT ⊤ for this purpose.  A domainless label
+-- (`Stdout`, `Env`'s peers with no written param) has no parameter that could be
+-- unconstrained, so its bare rendering is already exact and the note would be
+-- noise — which is why the plain `<>`-vs-`<Stdout>` case is untouched.
+ffiCatalogTopNote : List Atom -> String
+ffiCatalogTopNote missing = match map atomLabel (filterList atomParamIsTop (atomsNorm missing))
+  [] => ""
+  ls => " Read \{joinWith "/" ls} there as ANY value, not none: the built-in's catalog row leaves that label's parameter UNCONSTRAINED (⊤), and an unconstrained parameter renders as the bare label."
+
+-- ⊤ in a PARAMETERISED domain (see `ffiCatalogTopNote`): `PUnit` is excluded on
+-- purpose — it is "no parameter", not "any value".
+atomParamIsTop : Atom -> Bool
+atomParamIsTop a = paramIsTopDomain (normHole (atomParam a))
+
+paramIsTopDomain : Param -> Bool
+paramIsTopDomain (PPrefix None) = True
+paramIsTopDomain (PSet None) = True
+paramIsTopDomain (PProduct []) = True
+paramIsTopDomain _ = False
+
+-- The WRITTEN terminal effect row of a signature: walk the arrow spine to the
+-- result position and read the labels the author spelled there.  A mirror of
+-- `ffiResultRowHasFFI`'s walk (same spine, same stopping point) rather than a new
+-- one — `Int -> Int -> <> Int` puts the row on the LAST result, so the recursion
+-- has to follow the spine, and a signature with no row at all is the EMPTY row,
+-- which is the honest reading (`extern f : Int -> Int` performs nothing).
+-- `expandAliasHeadTy` at each step for `ffiSigShapeKey`'s reason: an alias-named
+-- arrow is invisible to a purely syntactic walk.
+ffiWrittenRow : Ty -> List (String, Option String)
+ffiWrittenRow ty = match expandAliasHeadTy ty
+  TyConstrained _ inner => ffiWrittenRow inner
+  TyFun _ r => ffiWrittenRow r
+  TyEffect ls _ _ => ls
+  _ => []
 
 -- ── the RESERVED-NAMESPACE rule (S0-4, review round of `ffi-lower-and-link`) ─
 --
@@ -29504,10 +29650,14 @@ ffiCheckLabelsGo (_::rest) = ffiCheckLabelsGo rest
 -- build with `unbound variable 'gNullary'` — the pass here is what turned a loud
 -- failure into a silent wrong value ([W-QUIETER]), so it is the pass that has to go.
 --
--- ⚠️ This does NOT answer #2106, and is not meant to.  #2106 asks how a nullary
--- extern would SPELL its `FFI` label given that a value performs no effect and the
--- type language has nowhere to put a row on it; that is a design question and it
--- stays open.  This rule only refuses to lower what it cannot label — every user
+-- ⚠️ This CLOSES #2106, by refusal rather than by a spelling.  #2106 asked how a
+-- nullary extern would SPELL its `FFI` label given that a value performs no effect
+-- and the type language has nowhere to put a row on it; the answer is that it does
+-- not, and need not — the arrow spelling is the whole answer.  The alias-wrapped
+-- shapes the rule was thought to miss (`type A = Int; extern k : A` and `type A a =
+-- Sh a => Int; extern k : A Int`) reach this same rejection byte-identically,
+-- because `expandAliasHeadTy` unwraps both to a bare `TyCon` before `ffiRowHasFFITy`
+-- matches.  This rule refuses to lower what it cannot label — every user
 -- `extern` is a foreign declaration by construction, so a nullary one is a foreign
 -- declaration whose honesty cannot be checked, and emitting it anyway is the one
 -- option that is definitely wrong.

@@ -1,0 +1,17 @@
+-- #2106: the CONSTRAINED-alias sibling of ffi_nullary_alias_direct_reject.mdk.
+-- `type A a = Sh a => Int` is applied at `A Int` (a well-formed, fully-applied
+-- alias use, not the arity-mismatched bare `A` the design question first
+-- floated) -- `expandAliasHeadTy`'s `TyApp` clause substitutes and expands to
+-- `TyConstrained (Sh Int) (TyCon "Int")`, and `ffiRowHasFFITy`'s
+-- `TyConstrained` clause recurses through the constraint onto the same bare
+-- `TyCon "Int"` the direct alias produces.  Measured: same T-FFI-NULLARY
+-- rejection, same message, naming 'k'.
+interface Sh a where
+  sh : a -> String
+
+type A a = Sh a => Int
+
+extern k : A Int
+
+main : <IO> Unit
+main = println (k + 1)
