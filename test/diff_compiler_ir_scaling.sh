@@ -247,6 +247,12 @@ ERRS_N="${IR_ERRS_N:-400}"
 #                                              rule is exactly what keeps this from
 #                                              flapping on the O(log n) creep)
 SCOPEREFS_N="${IR_SCOPEREFS_N:-3000}"
+# diagbucket: #1019's regression pin — see gen_diagbucket below for the shape.
+# Deliberately smaller than errs's band: #1019 (unlike #2044) is a single bulk
+# `++` per module, not a per-render rescan, so there is no expectation of a
+# climbing ratio to chase; the point is confirming the now-fixed bulk-append
+# stays linear, not finding its weakest N.
+DIAGBUCKET_N="${IR_DIAGBUCKET_N:-300}"
 
 # A netting-noise guard, and the `Ir` analogue of perf_scaling's TIME_FLOOR — but
 # justified differently. It is NOT about a stage being too fast to time: `Ir` has
@@ -334,6 +340,33 @@ gen_scoperefs() {
     done
     printf ')\n'
   } >> "$gf"
+}
+
+# The #1019 regression pin. `pushDiags` (compiler/driver/diagnostics.mdk) is
+# reached only on a MULTI-MODULE project (`checkRoute`'s analyzeProject arm —
+# a single-module `check` never calls it), so this shape is a two-file
+# project: a HELPER module of N `eK : Int` / `eK = "s"` bindings (same
+# one-Type-mismatch-per-binding shape as `errs`) and a trivial ENTRY module
+# that imports one name from it. The helper's whole N-diagnostic batch lands
+# in ONE `pushDiags` call (from the typecheck pass), which is exactly the
+# call the pre-`51eb8807` code folded `pushDiag` over per element (each fold
+# step an O(current-bucket-size) `existing ++ [d]` — O(n^2) over the batch).
+# The now-fixed code does one bulk `existing ++ ds` instead — this shape
+# confirms that reads linear.
+gen_diagbucket() {
+  gn=$1; gf=$2
+  hbase="$(basename "$gf" .mdk)_h"
+  hfile="$(dirname "$gf")/$hbase.mdk"
+  : > "$hfile"
+  {
+    gi=0
+    while [ "$gi" -lt "$gn" ]; do
+      printf 'export e%s : Int\ne%s = "s"\n' "$gi" "$gi"
+      gi=$((gi + 1))
+    done
+  } >> "$hfile"
+  : > "$gf"
+  printf 'import %s.{e0}\n\nmain = println e0\n' "$hbase" >> "$gf"
 }
 
 # ── measurement ──────────────────────────────────────────────────────────────
@@ -476,6 +509,7 @@ grade_shape xref "$XREF_N" clean
 grade_shape manyifaces "$MANYIFACES_N" clean
 grade_shape errs "$ERRS_N" diags
 grade_shape scoperefs "$SCOPEREFS_N" clean
+grade_shape diagbucket "$DIAGBUCKET_N" diags
 
 echo
 # A gate that grades nothing must never report success — the invariant
