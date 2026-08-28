@@ -224,6 +224,22 @@ WIDERECORDS_N="${PERF_WIDERECORDS_N:-$N}"
 # other shapes' 1000. See gen_consfam.
 CONSFAM_N="${PERF_CONSFAM_N:-200}"
 
+# `conlocal` (issue #2030) samples at 400/800/1600, NOT the default 250/500/1000, and
+# the band is FORCED by the defect's own curve rather than by a floor. MEASURED op
+# counts for typecheck on this box (deterministic, single run):
+#     100/200/400    20 491 ->   37 741 ->   102 241   r1 1.84 r2 2.71  — MISSES it
+#     400/800/1600  102 241 ->  351 241 -> 1 329 241   r1 3.44 r2 3.78  — RED
+# i.e. at the default band the sustained-both-doublings rule would (correctly) read
+# `ok` and this shape would pin nothing. 400 is the SMALLEST base that reddens both
+# doublings, and it is chosen deliberately over 800 (which reads 3.78/3.92) because
+# cost scales with the band: 400/800/1600 costs ~13 s of native profiler time here
+# (1.4 + 3.0 + 9.1 s), 800/1600/3200 costs ~55 s. Do not raise it without re-pricing.
+#
+# ⚠️ THE CEILINGS BELOW ARE BAND-SPECIFIC. A ratio measured at 400/800/1600 does not
+# transfer — moving this knob invalidates KNOWN_OCEIL_conlocal_typecheck /
+# KNOWN_OCEIL_conlocal_mark and both must be re-derived, not scaled.
+CONLOCAL_N="${PERF_CONLOCAL_N:-400}"
+
 # `xref` samples the WASM arm at its OWN, SMALLER band — 2000/4000/8000 rather than
 # the shape's 4000/8000/16000. This is a COST fix and it is the reason this gate is
 # not the CI critical path. The band is deliberate — a ratio measured here does not
@@ -379,6 +395,14 @@ trap 'rm -rf "$WORK"' EXIT
 #              but those are HAND-ROLLED (uncounted), so op reads LINEAR: an `ok` guard,
 #              not an ownersOf detector (the real O(N^2) is TIME-only, N>=~4000). OP-ONLY.
 #              See gen_widerecords.
+#   conlocal — the CONSTRAINED-BINDING shape (issue #2030). N constrained top-level fns,
+#              each with exactly ONE local. Co-scales the two dimensions typecheck's
+#              local-pin bookkeeping multiplies (constrained top-level bindings x local
+#              bindings), which no other shape does: `bindings`/`xref` have no
+#              constraints at all, `manyifaces` grows the METHOD POOL against a fixed
+#              site count, and `marksweep` does the same. OP-ONLY. Ledgers
+#              conlocal:typecheck (#2030, mechanism known: localPinPairs) AND
+#              conlocal:mark (#2143, mechanism NOT known). See gen_conlocal.
 #   consfam  — the BACKEND shape (issue #1029). N mutually cons-tail-recursive fns — the
 #              only thing in this corpus that reaches trmc_analysis's dispatch-TMC group
 #              GROWTH WALK, which runs unconditionally in both backends' emitProgram.
@@ -858,6 +882,45 @@ gen_consfam() {
     # actually runs the detection over it (a dead family is pruned before emit).
     printf 'main = println (length (c%s 3))\n' "$((n-1))"
   } >> "$f"
+}
+
+# gen_conlocal — THE CONSTRAINED-BINDING SHAPE (issue #2030). N constrained top-level
+# functions, each with exactly ONE local:
+#
+#     f0 : Display a => a -> String
+#     f0 x =
+#       let d v = display v
+#       d x
+#     ... (N of them)
+#     main = println (f0 1)
+#
+# WHY NO OTHER SHAPE SEES IT, and why that is a property of the SHAPE, not the band:
+# the cost is in typecheck's local-pin bookkeeping (`localPinPairs`), which multiplies
+# CONSTRAINED TOP-LEVEL BINDINGS by LOCAL BINDINGS. Nothing else in this corpus
+# co-scales those two. `bindings`/`xref` generate N top-level fns with NO constraint
+# and no local, so the pin table stays empty; `manyifaces` and `marksweep` grow the
+# METHOD POOL against a FIXED number of sites — the opposite axis. One constraint per
+# fn plus one local per fn is the minimum shape that grows both together.
+#
+# ⚠️ IT IS 0-DIAGNOSTIC, and that is load-bearing. A resolve-broken fixture measures a
+# different mechanism entirely (the same trap gen_modules and gen_typos carry). The
+# `Display a =>` constraint and the `display v` body must both stay: drop the
+# constraint and the binding is unconstrained, so the pin table it stresses is never
+# populated. Re-derive with:
+#     ./medaka check /tmp/conlocal.mdk    # must print "N declaration(s) checked, 0 errors"
+#
+# GRADED BY THE OP ARM, on the shared deterministic runs — this shape adds NO profiler
+# invocation beyond the three every shape makes, and it is OP-ONLY (the TIME min-of-K
+# arm is skipped; see the OP-ONLY case in the shapes loop). Its band is its own,
+# CONLOCAL_N=400 -> 1600; see that knob for why the default band misses the defect.
+gen_conlocal() {
+  n=$1; f=$2; : > "$f"
+  i=0; while [ "$i" -lt "$n" ]; do
+    printf 'f%s : Display a => a -> String\nf%s x =\n  let d v = display v\n  d x\n' "$i" "$i"
+    i=$((i+1))
+  done >> "$f"
+  # `main` CALLS f0 — same rooting rule as every other shape here, same reason.
+  printf 'main = println (f0 1)\n' >> "$f"
 }
 
 # gen_modules — the only multi-module generator that declares any DATA TYPE (issue #153).
@@ -1759,10 +1822,65 @@ OP_FLOOR="${PERF_OP_FLOOR:-1000}"
 #         r1=2.52 r2=2.99 also climb on this shape — the #907/#882 decl-count classes —
 #         but stay r1<3 at this band, so the sustained-both-doublings rule reads them `ok`
 #         and they are NOT ledgered; WATCH, per the comments:typecheck note.)
+#   conlocal:typecheck — issue #2030, and the MECHANISM IS KNOWN: `localPinPairs`
+#         (compiler/types/typecheck.mdk) is O(constrained top-level bindings x locals),
+#         so a program of N constrained fns each holding one local walks it O(N^2)
+#         times. The `conlocal` shape co-scales exactly those two dimensions — see
+#         gen_conlocal for why nothing else in this corpus does. MEASURED on this box
+#         (deterministic single run, N=400/800/1600): 102 241 -> 351 241 -> 1 329 241,
+#         r1=3.44 r2=3.78, both doublings over the 3.0 threshold. TIME does grade
+#         typecheck on this shape (0.20/0.52/1.45 s) but reads r1 2.56 r2 2.78 — UNDER
+#         threshold, because the band is sized for the op curve, not the time curve;
+#         and total ALLOC reads r1 2.57 r2 2.89, also under. So the op arm is the only
+#         arm that pins this at an affordable band. Ledgered (not shipped red) because
+#         #2030 is OPEN and unfixed; it self-drains — the row PROMOTES and fails
+#         demanding removal the moment the pin bookkeeping is indexed and r2 drops
+#         under 2.60.
+#         ⚠️ The Ir arm (diff_compiler_stage_ir_scaling.sh) reddens on the identical
+#         shape at the identical band — and costs 415 s of callgrind to do it, on the
+#         shard ci.yml already names as the CI pole, against ~13 s of native runtime
+#         here. That is why this pin lives on this gate and not that one. Do not
+#         "improve coverage" by duplicating it there.
+#
+#   conlocal:mark — issue #2143, and the mechanism is NOT known: #2030 attributes
+#         everything to typecheck's `localPinPairs` and says nothing about the marker,
+#         but `markWithPrelude` reddens on the same shape at the same band. MEASURED
+#         N=400/800/1600: 685 805 -> 2 207 005 -> 8 129 405, r1=3.22 r2=3.68. It is
+#         corroborated on two further metrics (TIME 0.020/0.053/0.163 s, x2.68 x3.09;
+#         netted callgrind inclusive Ir x3.74 x3.86 at 800/1600/3200), so it is a real
+#         second quadratic and not an attribution artifact of the first. It is NOT
+#         covered by `manyifaces` (which co-scales the method pool against fixed sites)
+#         nor by `marksweep` (pool growth, fixed sites) — `conlocal` is the opposite
+#         axis: a fixed pool against N growing constrained sites. Ledgered alongside
+#         its sibling rather than left ungraded, so a fix to #2030 that leaves this one
+#         standing is still visible. Self-drains independently of #2030.
+#
+# NOT LEDGERED on this shape, but WATCH (the same call the `comments:typecheck` note
+# above makes): `conlocal:elaborate` reads 3 162 359 -> 8 788 559 -> 28 200 959,
+# r1=2.78 r2=3.21 — climbing, and r2 is over 3.0, but r1 is not, so the
+# sustained-both-doublings rule correctly calls it `ok`. elaborate re-checks the
+# program through checkProgramSeeded, so it plausibly rides the SAME localPinPairs
+# term as conlocal:typecheck and would drain with it; a ledger entry asserts a row is
+# ALREADY over threshold on both doublings, and this one is not. Total ALLOC on this
+# shape is the other near-miss: r1 2.57 r2 2.89 against a 3.0 ceiling (and against the
+# `climbing` heuristic's 2.96 trip point), which is why the shape is not additionally
+# ledgered on the alloc arm — it is under, deterministically, at this band.
 # One entry per line so draining a single row is a conflict-free one-line deletion
 # (see #880 follow-up; the var is word-split by `for k in $VAR`, newlines are IFS).
 KNOWN_SLOW_OPS="
+conlocal:typecheck
+conlocal:mark
 "
+# Ceilings follow this file's op-arm convention (the drained manyifaces:mark /
+# match:resolve / manydefs:typecheck entries all used the same pair): OCEIL 4.3 —
+# ~14% over the measured r2 of 3.78 and above the pure-quadratic asymptote of 4.0, so
+# unrelated compiler-source drift cannot flap it while a CUBIC regression (r2 ~8) trips
+# it immediately; OFIXED 2.60 — the file-wide "this is linear again, promote me" mark,
+# 1.2 under the measured band, so no drift can false-PROMOTE either row. Op counts are
+# DETERMINISTIC, so these absorb source drift only, never runner noise. BOTH pairs are
+# tied to CONLOCAL_N=400 — see that knob before moving the band.
+KNOWN_OCEIL_conlocal_typecheck="4.3"; KNOWN_OFIXED_conlocal_typecheck="2.60"
+KNOWN_OCEIL_conlocal_mark="4.3";      KNOWN_OFIXED_conlocal_mark="2.60"
 # reexports:resolve was HERE (op ceiling 8.9) — the cubic (r2=7.92) counted `util.contains`
 # scans over a re-export export list that grows with depth. #925/#926 FIXED it: the three
 # scans are OrdMap-set membership now (uncounted) and `findExports`/provenance are Maps, so
@@ -2110,7 +2228,13 @@ printf -- '---------------------------------------------------------------------
 # LINEAR resolve-op regression guard whose `ownersOf` target is now COUNTED and O(log N)
 # indexed (#984), so a reintroduced per-mention scan turns it superlinear (see
 # gen_widerecords).
-SHAPES="bindings match listlit nesting xref comments marksweep manyifaces widerecords typos consfam"
+# `conlocal` (issue #2030 / #2143) is the third OP-ONLY single-file shape, at its OWN
+# band (400/1600 — see CONLOCAL_N), and it is the op arm's other money-shot: the two
+# stages it pins, `typecheck` and `mark`, are graded by NO other arm at an affordable
+# band on this shape (TIME reads 2.56/2.78 on typecheck and cannot floor-grade mark at
+# all; total alloc reads 2.57/2.89). Its ~13 s is the whole reason #2030's pin is here
+# and not on the callgrind Ir gate, which needs 415 s for the same verdict.
+SHAPES="bindings match listlit nesting xref comments marksweep manyifaces widerecords typos consfam conlocal"
 if [ "$PERF_DEEP" = "1" ]; then
   SHAPES="$SHAPES manydefs"
 else
@@ -2130,6 +2254,7 @@ for shape in $SHAPES; do
     manyifaces) base_n="$MANYIFACES_N" ;;
     widerecords) base_n="$WIDERECORDS_N" ;;
     consfam)    base_n="$CONSFAM_N" ;;
+    conlocal)   base_n="$CONLOCAL_N" ;;
     *)          base_n="$N" ;;
   esac
   n1="$base_n"; n2=$((base_n * 2)); n3=$((base_n * 4))
@@ -2164,9 +2289,21 @@ for shape in $SHAPES; do
   # while paying ~K timing runs per size. Their op grading rides the 3 shared
   # deterministic runs above, so each costs 3 runs, not 3 + 3*K. Every OTHER shape still
   # runs the full TIME arm.
+  #
+  # ⚠️ `conlocal` (#2030) is OP-ONLY for a DIFFERENT reason, and the difference matters
+  # if anyone reconsiders it: one of its two pinned stages (`mark`) is under the floor
+  # as usual, but the other (`typecheck`) is comfortably OVER it — 1.45 s at N=1600 —
+  # and TIME still grades it 2.56/2.78, i.e. UNDER threshold. So the TIME arm here would
+  # not be blind, it would be WRONG-BANDED: it would cost ~13 s x K and certify as `ok`
+  # the very row the op arm ledgers. Sizing the band for TIME instead means N>=3200,
+  # where one profiler run alone is 43 s. OP-ONLY is the cheap AND the correct answer.
   case "$shape" in
     marksweep|manyifaces|widerecords|typos)
     time_lines="           time: (OP-ONLY shape — TIME min-of-K arm skipped, #883/#884 cost fix. its graded stage is under the ${TIME_FLOOR}s floor at this band, so TIME grades it nowhere; the op arm below is its coverage.)
+"
+    ;;
+    conlocal)
+    time_lines="           time: (OP-ONLY shape — TIME min-of-K arm skipped, #2030. \`mark\` is under the ${TIME_FLOOR}s floor as usual; \`typecheck\` is OVER it here yet still reads r1 2.56 r2 2.78 at this band, i.e. TIME would certify as ok the row the op arm ledgers. The op arm below is this shape's only correct arm.)
 "
     ;;
     *)

@@ -1,7 +1,11 @@
 #!/bin/sh
 # diff_compiler_stage_ir_scaling.sh — the DETERMINISTIC superlinearity detector for
-# the BUILD-PATH stages (lower / emit / mangle / dce / trmc), measured in
-# PER-STAGE Callgrind INSTRUCTION COUNTS.
+# the BUILD-PATH stages (lower / emit / mangle / dce / trmc) AND the single-file
+# FRONTEND stages (parse / exhaust / desugar / resolve / mark / typecheck), measured
+# in PER-STAGE Callgrind INSTRUCTION COUNTS.
+#
+# The frontend rows ride the SAME runs the backend rows already pay for — see "THE
+# FRONTEND STAGES, AND WHY THEY ARE FREE" below before adding a frontend SHAPE.
 #
 # ⚠️ READ THIS FIRST: WHY THIS IS NOT diff_compiler_ir_scaling.sh WITH A `build` ARM.
 #
@@ -254,8 +258,9 @@ VCHAIN_N="${STAGE_IR_VCHAIN_N:-125}"
 # ⚠️ Under-the-guard is a printed SKIP here, not a FAIL as in ir_scaling. That is
 # forced by the shape of the arm: ir_scaling grades ONE number per shape, so a
 # too-small net means the band is mis-sized and saying so is the whole point. This
-# gate grades FIVE stages off one run, and a shape legitimately leaves some of them
-# untouched (nothing scales `dce` on `xref`). A blanket FAIL would make it
+# gate grades ELEVEN stages off one run, and a shape legitimately leaves some of them
+# untouched (nothing scales `dce` on `xref`; `mark` nets under the guard on `match`).
+# A blanket FAIL would make it
 # impossible to grade any stage without sizing the band for the smallest. The
 # no-silent-green invariant is preserved instead by `graded`: a shape that grades
 # ZERO stages is a hard FAIL, and so is a whole run that grades nothing.
@@ -265,11 +270,61 @@ MIN_NET_FRAC="${STAGE_IR_MIN_NET_FRAC:-0.02}"
 #
 # One `<stage>=<mangled symbol>` pair per word. The names on the left are the same
 # names profile_main's own `[perf]` rows use, deliberately, so a reader can line the
-# two up. `trmc` is `detectDispatchGroups`, which runs INSIDE emitProgram — its
-# inclusive count is therefore a SUBSET of `emit`'s, not a sibling of it. That is
-# intentional and it is why it is listed separately: #1029's cubic lived there and a
-# 5% slice of emit is invisible in emit's own ratio.
-STAGE_SYMS="lower=mdk_ir_core_ir_lower__lowerProgramEmit \
+# two up (one deliberate exception: `exhaust`, whose `[perf]` row is spelled
+# `exhaust-guards`; the short name is used here because it is also a ledger key and
+# `<shape>:exhaust-guards` reads badly in one). `trmc` is `detectDispatchGroups`,
+# which runs INSIDE emitProgram — its inclusive count is therefore a SUBSET of
+# `emit`'s, not a sibling of it. That is intentional and it is why it is listed
+# separately: #1029's cubic lived there and a 5% slice of emit is invisible in emit's
+# own ratio. The same containment holds across the frontend rows below: `exhaust`
+# runs INSIDE typecheck ([P-EXHAUST-IN-TYPECHECK]), so its count is a subset of
+# `typecheck`'s, for the same reason and to the same purpose.
+#
+# ── THE FRONTEND STAGES, AND WHY THEY ARE FREE ───────────────────────────────
+#
+# The six frontend rows (`parse`..`typecheck`) were added by S-frontend-ir-arm.
+# They cost ZERO additional callgrind invocations and ZERO additional seconds: ONE
+# annotate listing per (shape, N) already carries every symbol in the process, so
+# reading six more out of the listings the backend rows already paid for is free.
+# That is the whole reason they are here rather than on a shape of their own — a
+# `conlocal`-style frontend shape sized to redden costs 415-1204 s of callgrind on a
+# shard ci.yml already documents as the CI pole, and the same defect grades on
+# diff_compiler_perf_scaling.sh's deterministic OP arm for ~13 s of native runtime
+# (see the `conlocal` block there). Read that trade before adding a frontend SHAPE.
+#
+# MEASURED margins at the shipped bands, this box, on the tree this arm landed on
+# (netted per the rule above; N=125/250/500 with the N=1 floor):
+#     xref :  parse 2.014/2.007   exhaust 2.230/2.179   desugar 2.019/2.007
+#             resolve 2.222/2.164 mark    2.006/2.004   typecheck 2.131/2.116
+#     match:  parse 2.015/2.007   exhaust 2.128/2.226   desugar 2.029/2.014
+#             resolve 2.229/2.189 mark    (SKIP)        typecheck 2.082/2.080
+#     vchain: parse 2.013/2.006   exhaust 2.254/2.192   desugar 2.007/2.009
+#             resolve 2.220/2.210 mark    2.007/2.006   typecheck 2.148/2.126
+#
+# Every one of those seventeen graded rows is 2.0-2.26 — dead linear with 25%+ of
+# headroom under the 3.0 threshold — so no frontend row is ledgered (see KNOWN_SLOW).
+#
+# ⚠️ `mark` SKIPs ON `match`, BY DESIGN — it is not breakage. Its netted delta there
+# is 1.45% of its own floor, UNDER the 2% MIN_NET_FRAC guard, so the row prints SKIP
+# rather than a ratio (the analogue of `dce` never being scaled by `xref`; see the
+# MIN_NET_FRAC block above for why under-the-guard is a SKIP here and not a FAIL).
+# `mark` grades fine on `xref` at 20.6% of floor, so the stage is covered. The next
+# narrowest row is `desugar` on `match` at 5.88%.
+#
+# ⚠️ `parse`'s inclusive count is NOT polluted by the profiler's `fmt`/`lint` stages,
+# which also parse. Checked first-hand rather than assumed: both go through
+# `parseWithPositions`, which callgrind reports as its own separate symbol
+# (`mdk_frontend_parser__parseWithPositions`, 775 797 037 Ir at xref N=500, alongside
+# `parse`'s 681 584 196). A future refactor that routes fmt/lint back through `parse`
+# would silently fold a second linear term into this row — re-derive with
+# `nm $PROFILE | grep parse` if this row's margins ever move without a source cause.
+STAGE_SYMS="parse=mdk_frontend_parser__parse \
+exhaust=mdk_frontend_exhaust__checkGuardExhaustivenessWith \
+desugar=mdk_frontend_desugar__desugar \
+resolve=mdk_frontend_resolve__resolveToLines \
+mark=mdk_frontend_marker__markWithPrelude \
+typecheck=mdk_types_typecheck__checkOneToLinesWithRuntime \
+lower=mdk_ir_core_ir_lower__lowerProgramEmit \
 emit=mdk_backend_llvm_emit__emitProgram \
 mangle=mdk_backend_private_mangle__mangleUnits \
 dce=mdk_ir_dce__dceFilter \
@@ -291,6 +346,14 @@ trmc=mdk_backend_trmc_analysis__detectDispatchGroups"
 # re-adding its `KNOWN_CEIL_<shape>_<stage>` / `KNOWN_FIXED_<shape>_<stage>` pair
 # alongside it, and saying in a comment here what issue it pins and at what band
 # it was measured.
+#
+# NO FRONTEND ROW IS LEDGERED EITHER, and that is a measurement, not an omission:
+# none of the six frontend stages reddens on `xref`, `match` or `vchain` at the
+# shipped bands (margins in the STAGE_SYMS block above). The frontend quadratic this
+# arm was scoped around (#2030, `localPinPairs`) needs a shape none of the three
+# carries; it is pinned on diff_compiler_perf_scaling.sh's OP arm instead
+# (`conlocal:typecheck` / `conlocal:mark`), for 33x less machine time on the same
+# band. Do not add it here without re-reading the cost note in STAGE_SYMS.
 KNOWN_SLOW=""
 
 is_known() {
@@ -416,7 +479,7 @@ grade_shape() {
     d1=$((v1 - f0)); d2=$((v2 - f0)); d3=$((v3 - f0))
     min_net="$(awk -v f="$f0" -v p="$MIN_NET_FRAC" 'BEGIN{printf "%d", f*p}')"
     if [ "$d1" -le "$min_net" ]; then
-      printf '  %-7s SKIP — net at N=%s (%s) under the netting guard (%s of floor %s)\n' \
+      printf '  %-9s SKIP — net at N=%s (%s) under the netting guard (%s of floor %s)\n' \
         "$st" "$n1" "$d1" "$min_net" "$f0"
       continue
     fi
@@ -424,7 +487,7 @@ grade_shape() {
     r1="$(awk -v a="$d1" -v b="$d2" 'BEGIN{printf "%.3f", b/a}')"
     r2="$(awk -v a="$d2" -v b="$d3" 'BEGIN{printf "%.3f", b/a}')"
     over="$(awk -v x="$r1" -v y="$r2" -v t="$THRESH" 'BEGIN{print (x>t && y>t) ? "yes" : "no"}')"
-    printf '  %-7s net %s -> %s -> %s\n' "$st" "$d1" "$d2" "$d3"
+    printf '  %-9s net %s -> %s -> %s\n' "$st" "$d1" "$d2" "$d3"
     if is_known "${shape}:${st}"; then
       lk="$(printf '%s_%s' "$shape" "$st" | tr -c 'a-zA-Z0-9_' '_')"
       eval "ceil=\${KNOWN_CEIL_$lk}"
@@ -432,22 +495,22 @@ grade_shape() {
       worse="$(awk -v r="$r2" -v c="$ceil" 'BEGIN{print (r > c) ? 1 : 0}')"
       better="$(awk -v r="$r2" -v f="$fixed" 'BEGIN{print (r < f) ? 1 : 0}')"
       if [ "$worse" = "1" ]; then
-        printf '  %-7s ** KNOWN-SLOW, AND GOT WORSE ** r1=%s r2=%s (ceiling %s)\n' "$st" "$r1" "$r2" "$ceil"
+        printf '  %-9s ** KNOWN-SLOW, AND GOT WORSE ** r1=%s r2=%s (ceiling %s)\n' "$st" "$r1" "$r2" "$ceil"
         fail=$((fail + 1))
       elif [ "$better" = "1" ]; then
-        printf '  %-7s ** PROMOTE: now scales LINEARLY ** r2=%s (< %s)\n' "$st" "$r2" "$fixed"
+        printf '  %-9s ** PROMOTE: now scales LINEARLY ** r2=%s (< %s)\n' "$st" "$r2" "$fixed"
         printf '          Remove "%s:%s" from KNOWN_SLOW — the quadratic is FIXED.\n' "$shape" "$st"
         fail=$((fail + 1))
       else
-        printf '  %-7s known-slow r1=%s r2=%s (ceiling %s) — ledgered, see the header\n' "$st" "$r1" "$r2" "$ceil"
+        printf '  %-9s known-slow r1=%s r2=%s (ceiling %s) — ledgered, see the header\n' "$st" "$r1" "$r2" "$ceil"
         known=$((known + 1))
       fi
     elif [ "$over" = "yes" ]; then
-      printf '  %-7s ** SUPERLINEAR (stage Ir) ** r1=%s r2=%s (threshold %s, both doublings)\n' \
+      printf '  %-9s ** SUPERLINEAR (stage Ir) ** r1=%s r2=%s (threshold %s, both doublings)\n' \
         "$st" "$r1" "$r2" "$THRESH"
       fail=$((fail + 1))
     else
-      printf '  %-7s ok   r1=%s r2=%s (threshold %s)\n' "$st" "$r1" "$r2" "$THRESH"
+      printf '  %-9s ok   r1=%s r2=%s (threshold %s)\n' "$st" "$r1" "$r2" "$THRESH"
     fi
   done
 
