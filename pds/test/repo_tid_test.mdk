@@ -1,0 +1,69 @@
+{- | Structural TID and pre-sign repository admission tests.
+   Protocol answer bytes remain only in the provenance-ledgered corpus. -}
+
+import string.{contains}
+import test.{expectEqual, expectTrue}
+import lib.repo.{repoInitFromKeyBytes}
+import lib.tid.{
+  tidClockId,
+  tidCompare,
+  tidEncode,
+  tidMicros,
+  tidNext,
+  tidParse,
+  tidToString,
+}
+
+isErr : Result String a -> Bool
+isErr (Err _) = True
+isErr (Ok _) = False
+
+errContains : String -> Result String a -> Bool
+errContains witness (Err message) = contains witness message
+errContains _ (Ok _) = False
+
+mustTid : Int -> Int -> Tid
+mustTid micros clockId = match tidEncode micros clockId
+  Ok tid => tid
+  Err message => panic "repo_tid_test: setup failed: \{message}"
+
+test "TID encode and parse preserve timestamp clock and spelling" =
+  let tid = mustTid 1700000000000000 7
+  match tidParse (tidToString tid)
+    Err _ => expectTrue False
+    Ok parsed => expectTrue (tidMicros parsed == 1700000000000000 && tidClockId parsed == 7 && tidCompare tid parsed == Eq)
+
+test "TID lexical order follows microsecond order" =
+  expectTrue
+    (tidCompare (mustTid 1700000000000000 0) (mustTid 1700000000000001 0) == Lt)
+
+test "TID monotonic next advances a backwards proposal" =
+  let prior = mustTid 1700000000000000 7
+  match tidNext prior 1699999999999999 9
+    Err _ => expectTrue False
+    Ok next =>
+      expectTrue (tidMicros next == 1700000000000001 && tidClockId next == 9)
+
+test "TID monotonic next preserves a newer proposal" =
+  let prior = mustTid 1700000000000000 7
+  expectEqual
+    (map tidToString (tidNext prior 1700000000000100 11))
+    (map tidToString (tidEncode 1700000000000100 11))
+
+test "TID parser rejects length alphabet high bit and range" =
+  expectTrue
+    (errContains "13" (tidParse "3ke6kg3wk222") && errContains "alphabet" (tidParse "3ke6kg3wk2220") && errContains "high bit" (tidParse "k222222222222") && errContains "53-bit" (tidParse "c222222222222"))
+
+test "TID encoder rejects timestamp and clock ranges" =
+  expectTrue
+    (isErr (tidEncode (-1) 0) && isErr (tidEncode 9007199254740992 0) && isErr (tidEncode 0 (-1)) && isErr (tidEncode 0 1024))
+
+test "repository rejects invalid DID before signing" =
+  expectTrue (errContains
+    "invalid DID"
+    (repoInitFromKeyBytes "not-a-did" (arrayMake 32 1) (mustTid 1 0)))
+
+test "repository rejects invalid signing key before commit construction" =
+  expectTrue (errContains
+    "bad signing key"
+    (repoInitFromKeyBytes "did:plc:medaka" (arrayMake 32 0) (mustTid 1 0)))
