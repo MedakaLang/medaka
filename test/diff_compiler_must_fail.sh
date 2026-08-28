@@ -680,7 +680,16 @@ for dir in "$FIXDIR"/*/; do
       cout="$TMP/$name.ctl"
       run_verb "$cverb" "$dir" "$cfile" "$cout"
       crc=$?
-      [ "$crc" = 0 ] || ctl_broke="control '$ctl' exited $crc, expected 0"
+      # The control runs under the SAME fuse as the pin, so it can time out too.
+      # Naming that case is not cosmetic: "exited 142, expected 0" reads like the
+      # control program is broken, when in fact nothing was measured at all and
+      # the honest verdict is INDETERMINATE. Same rc, same constant, as the pin
+      # arm at :552 — one definition, so raising MUST_FAIL_ALARM moves both.
+      if [ "$crc" = "$MUST_FAIL_TIMEOUT_RC" ]; then
+        ctl_broke="control '$ctl' TIMED OUT (rc $MUST_FAIL_TIMEOUT_RC = fuse at ${MUST_FAIL_ALARM}s) — nothing was measured; raise MUST_FAIL_ALARM"
+      else
+        [ "$crc" = 0 ] || ctl_broke="control '$ctl' exited $crc, expected 0"
+      fi
       if [ -z "$ctl_broke" ] && [ "$cverb" = "check-json" ]; then
         render_diags "$cout" > "$TMP/$name.ctldiags"
         [ -s "$TMP/$name.ctldiags" ] && \

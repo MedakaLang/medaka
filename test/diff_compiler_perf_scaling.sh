@@ -114,6 +114,28 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # gen_manyifaces (#2066). Every other generator in this file is single-consumer and
 # stays here. Read perf_shapes.sh's header before editing one — a change there moves
 # every band and ledger ceiling in BOTH gates at once.
+# `.` is a POSIX SPECIAL BUILTIN: a missing file terminates this script on the
+# spot with nothing of ours on stdout, and run_gates.sh reads a gate that printed
+# nothing as a skip candidate rather than a failure. Sharing these generators
+# (#2066) therefore ADDED a green-by-silence path; this closes it.
+#
+# OBSERVED RED, 2026-08-28, this box (#2160 rule 1). The library was moved aside
+# and BOTH gates were run whole:
+#
+#   $ mv test/perf_shapes.sh /tmp/hidden
+#   $ sh test/diff_compiler_ir_scaling.sh;   echo "exit=$?"   -> exit=1
+#   $ sh test/diff_compiler_perf_scaling.sh; echo "exit=$?"   -> exit=1
+#   FAIL: cannot read <root>/test/perf_shapes.sh — the shared shape library (#2066) is missing.
+#     Both scaling gates source it; without it neither can generate a single shape.
+#
+# Without the guard both instead die inside the `.` builtin, printing only dash's
+# own "can't open" on stderr and exiting 2 — which run_gates.sh weighs against
+# LEGIT_SKIP_RE rather than counting as a failure.
+[ -r "$ROOT/test/perf_shapes.sh" ] || {
+  echo "FAIL: cannot read $ROOT/test/perf_shapes.sh — the shared shape library (#2066) is missing."
+  echo "  Both scaling gates source it; without it neither can generate a single shape."
+  exit 1
+}
 . "$ROOT/test/perf_shapes.sh"
 
 PROFILE="$ROOT/test/bin/profile_main"
@@ -2013,8 +2035,34 @@ grade_time_stage() {
 
   if is_known_time "${shape}:${st}"; then
     lk="$(printf '%s_%s' "$shape" "$st" | tr -c 'a-zA-Z0-9_' '_')"
-    eval "tceil=\${KNOWN_TCEIL_$lk}"
-    eval "tfixed=\${KNOWN_TFIXED_$lk}"
+    # `:-` under `set -u` (:109) — see the ALLOC arm's note. Without it an unset
+    # ceiling KILLS THE GATE mid-run with exit 2 and nothing this file wrote, and
+    # exit 2 is run_gates.sh's skip candidate. PERF_LEDGER_EXTRA_TIME routes
+    # straight into this branch, so the hazard is live, not theoretical.
+    #
+    # OBSERVED RED, 2026-08-28, this box, verbatim (#2160 rule 1 — an arm nobody
+    # has watched fail is not a pin). First the hazard the `:-` removes:
+    #
+    #   $ /bin/sh -c 'set -u; eval "x=${KNOWN_OCEIL_foo_bar}"; echo unreachable'
+    #   /bin/sh: 1: KNOWN_OCEIL_foo_bar: parameter not set
+    #   exit=2                      <- no output of ours, and 2 is the skip code
+    #
+    # then this branch, reached through the add-only injection seam:
+    #
+    #   $ PERF_LEDGER_EXTRA_TIME="xref:typecheck" sh test/diff_compiler_perf_scaling.sh
+    #   ## LEDGER INJECTION ACTIVE — this run's verdicts are NOT a grading result. ##
+    #              time typecheck: ** MALFORMED LEDGER ROW ** no KNOWN_TCEIL_xref_typecheck / KNOWN_TFIXED_xref_typecheck pair.
+    #              A ledger row without both halves cannot drain itself — that is a skip-list, not a pin.
+    #   exit=1
+    eval "tceil=\${KNOWN_TCEIL_$lk:-}"
+    eval "tfixed=\${KNOWN_TFIXED_$lk:-}"
+    if [ -z "$tceil" ] || [ -z "$tfixed" ]; then
+      fail=$((fail+1))
+      time_lines="${time_lines}           time ${st}: ** MALFORMED LEDGER ROW ** no KNOWN_TCEIL_${lk} / KNOWN_TFIXED_${lk} pair.
+           A ledger row without both halves cannot drain itself — that is a skip-list, not a pin.
+"
+      return
+    fi
     tworse="$(awk -v r="$tr2" -v c="$tceil" 'BEGIN{print (r > c) ? 1 : 0}')"
     tbetter="$(awk -v r="$tr2" -v f="$tfixed" 'BEGIN{print (r < f) ? 1 : 0}')"
     if [ "$tworse" = "1" ]; then
@@ -2118,12 +2166,49 @@ grade_op_stage() {
 
   or1="$(awk -v a="$o1" -v b="$o2" 'BEGIN{printf "%.2f", b/a}')"
   or2="$(awk -v a="$o2" -v b="$o3" 'BEGIN{printf "%.2f", b/a}')"
+  # ⚠️ KNOWN-WEAK RULE, TRACKED: #2173. This is the SAME `r1 && r2` conjunct that
+  # #2100 reported against the Cachegrind gate, and it is wrong here for the same
+  # reason: op counts are DETERMINISTIC (opBump at two primitives, a pure function
+  # of the program), so one over-threshold doubling is a fact, not a sample. The
+  # TIME arm at :2012 keeps the conjunct legitimately — wall-clock is the one arm
+  # where a lone high ratio really can be noise; do not "unify" the two.
+  #
+  # NOT changed in #2160 phase 1, deliberately. Flipping it is a verdict widening
+  # across every op and emittables row in this file, and there is no way to know
+  # which rows it reddens without a full run plus a measured band for each — and a
+  # band derived under time pressure to reach green is [W-QUIETER]'s exact trap.
+  # #2173 carries the enumeration a fix has to do first.
   bad="$(awk -v r1="$or1" -v r2="$or2" -v th="$THRESH" 'BEGIN{print (r1 > th && r2 > th) ? 1 : 0}')"
 
   if is_known_ops "${shape}:${st}"; then
     lk="$(printf '%s_%s' "$shape" "$st" | tr -c 'a-zA-Z0-9_' '_')"
-    eval "oceil=\${KNOWN_OCEIL_$lk}"
-    eval "ofixed=\${KNOWN_OFIXED_$lk}"
+    # `:-` under `set -u` (:109) — same hazard as the TIME arm above, reached by
+    # PERF_LEDGER_EXTRA_OPS and by the ordinary mistake of adding a
+    # KNOWN_SLOW_OPS row without its ceiling pair.
+    #
+    # OBSERVED RED, 2026-08-28, this box, verbatim (#2160 rule 1):
+    #
+    #   $ PERF_LEDGER_EXTRA_OPS="xref:typecheck" sh test/diff_compiler_perf_scaling.sh
+    #   ## LEDGER INJECTION ACTIVE — this run's verdicts are NOT a grading result. ##
+    #              ops  typecheck: ** MALFORMED LEDGER ROW ** no KNOWN_OCEIL_xref_typecheck / KNOWN_OFIXED_xref_typecheck pair.
+    #              A ledger row without both halves cannot drain itself — that is a skip-list, not a pin.
+    #   exit=1
+    #
+    # ⚠️ These two branches were UNGUARDED in the first draft of this PR, whose
+    # commit message claimed "all eval sites now use `:-`". They were found by an
+    # independent review, not by me, and not by CI — CI was 15/15 green with the
+    # hole open, because nothing in the tree sets the injection seams. That is the
+    # argument for rule 1 in miniature: a green suite says nothing about an arm no
+    # one has driven.
+    eval "oceil=\${KNOWN_OCEIL_$lk:-}"
+    eval "ofixed=\${KNOWN_OFIXED_$lk:-}"
+    if [ -z "$oceil" ] || [ -z "$ofixed" ]; then
+      fail=$((fail+1))
+      op_lines="${op_lines}           ops  ${st}: ** MALFORMED LEDGER ROW ** no KNOWN_OCEIL_${lk} / KNOWN_OFIXED_${lk} pair.
+           A ledger row without both halves cannot drain itself — that is a skip-list, not a pin.
+"
+      return
+    fi
     oworse="$(awk -v r="$or2" -v c="$oceil" 'BEGIN{print (r > c) ? 1 : 0}')"
     obetter="$(awk -v r="$or2" -v f="$ofixed" 'BEGIN{print (r < f) ? 1 : 0}')"
     if [ "$oworse" = "1" ]; then
@@ -3579,13 +3664,31 @@ grade_emittables_stage emit
 #   wideiface   mangle  net  1480470 ->  3331209 ->   7325993   r1=2.250 r2=2.199
 #   PASS: 60 stage-ratio(s) graded (1 ledgered) ...
 #
+# ⚠️ Those RAW NETS are readings, not constants. Callgrind is deterministic PER
+# BINARY, not across builds: any unrelated compiler change shifts every net by a
+# constant factor, and re-deriving this table after a rebuild will not reproduce
+# the digits. The RATIOS are what is stable (they held to 3 decimals across three
+# back-to-back runs on one binary). Compare ratios; treat a net that moved as
+# expected unless its ratio moved with it.
+#
 # Callgrind counts EVERY instruction the stage executes, so it does not care whether
 # the scan runs through a counted `util.contains` or an uncounted `omHasKey` — which
-# is precisely the failure mode that killed the op row. A `pubFnNames` or
-# `renameScoped` revert to a List-as-a-set would show up there as a ratio, with no
-# `opBump` in `support/ordmap.mdk` required. That compiler-source change is therefore
-# NOT owed for coverage; it would only be worth doing to give the OP arm back a
-# general ability it has structurally lost.
+# is precisely the failure mode that killed the op row. A `pubFnNames` revert to a
+# List-as-a-set would show up there as a ratio, with no `opBump`
+# in `support/ordmap.mdk` required. That compiler-source change is therefore NOT owed for
+# coverage OF THAT TABLE; it would only be worth doing to give the OP arm back a general
+# ability it has structurally lost.
+#
+# ⚠️ THE CLAIM STOPS AT `pubFnNames`, AND THE REMAINDER IS A REAL HOLE. It holds because
+# `pubFnNames` is keyed on the number of EXPORTED FUNCTIONS, which is exactly the quantity
+# all five stage_ir shapes scale. It does NOT extend to `renameScoped`'s per-scope `bound`
+# scan: those five shapes scale TOP-LEVEL DECLARATIONS with 0-1 locals apiece, so that scan
+# is O(1) per function however large N grows, and a List revert there reads LINEAR. The one
+# shape that scales a single scope's depth is `scoperefs` — and it lives in
+# diff_compiler_ir_scaling.sh, which measures `medaka check`, a verb that never runs mangle.
+# So `renameScoped`'s deep-scope path has NO mangle-stage grade on ANY shape either gate
+# runs. Smaller than #2099's headline (which said the whole stage was ungraded), but not
+# nothing: do not read a green mangle row as covering it.
 #
 # ⚠️ WHAT REMAINS TRUE IN #2099, and is a property of the op arm rather than of this
 # row: `opBump` fires at exactly two primitives, so the op arm counts List-scan steps

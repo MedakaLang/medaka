@@ -35,7 +35,11 @@ inputs:
       is absent, so dropping this input would not turn anything red — it would
       quietly stop grading." That was accurate and it was the bug (#2065). Both
       gates now hard-fail (exit 1) when valgrind is absent AND `CI` is set, so
-      dropping this input DOES turn every gates shard red.
+      dropping this input DOES turn a shard red rather than quietly stopping the
+      measurement. Precisely: the shards whose `pattern:` matches one of the two
+      gates — `sqlite` and `types` as ci.yml stands today — not "every gates
+      shard". Derive it (`grep -n ir_scaling .github/workflows/ci.yml`); shards
+      are scheduled by cost, so that mapping moves.
     required: false
     default: 'false'
   wasm:

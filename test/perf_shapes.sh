@@ -1,9 +1,11 @@
 # test/perf_shapes.sh — SHAPE GENERATORS SHARED BY THE SCALING GATES (#2066)
 #
 # NOT A GATE. This file is `.`-sourced; it runs nothing and exits nothing. It is listed
-# in test/CI-COVERAGE-EXCEPTIONS.txt for exactly that reason (every `.sh` in the tree is
-# enumerated by test/diff_compiler_ci_shard_coverage.sh, which cannot tell a library from
-# a gate by looking at it).
+# in test/CI-COVERAGE-TOOLS.txt — the "sourced libraries" ledger — for exactly that reason
+# (every `.sh` in the tree is enumerated by test/diff_compiler_ci_shard_coverage.sh, which
+# cannot tell a library from a gate by looking at it). It is NOT in
+# test/CI-COVERAGE-EXCEPTIONS.txt: that file is for GATES deliberately kept out of CI,
+# which is a different claim and would be the wrong one to make about a library.
 #
 # ── WHY THIS FILE EXISTS ─────────────────────────────────────────────────────
 #

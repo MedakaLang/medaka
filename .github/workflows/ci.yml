@@ -804,7 +804,14 @@ jobs:
       # run_gates.sh's LEGIT_SKIP_RE, so a shard that graded no `Ir` at all went
       # green. Both gates now HARD FAIL (exit 1) when valgrind is missing AND `CI`
       # is set, and skip only off CI. So dropping this input no longer goes quiet —
-      # it reddens every gates shard, which is the point. Keep it installed anyway.
+      # it reddens the shard that runs either gate, which is the point. Keep it
+      # installed everywhere anyway. ⚠️ "reddens EVERY gates shard" would be
+      # wrong, and wrong in the direction this PR is about: only the shards whose
+      # `pattern:` actually matches one of the two gates can go red. Today that is
+      # `sqlite` (diff_compiler_ir_scaling, :540) and `types`
+      # (diff_compiler_stage_ir_scaling, :595) — DERIVE it, do not trust this
+      # sentence, because [W-SHARD-COST] moves gates between shards by cost:
+      #   grep -n 'ir_scaling' .github/workflows/ci.yml
       - name: Setup medaka (toolchain + wasm arm + downloaded binary)
         if: steps.plan.outputs.has_work == 'true'
         uses: ./.github/actions/setup-medaka

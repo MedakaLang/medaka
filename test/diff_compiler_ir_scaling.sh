@@ -288,11 +288,36 @@ THRESH="${IR_THRESH:-3.0}"
 # the defect and the shape is never graded again.
 KNOWN_SUPERLINEAR="scoperefs"
 
-# scoperefs — #1031's fix backs a frame-list scan with an OrdMap, so the shape is
-# O(n log n) BY CONSTRUCTION and its per-doubling ratio legitimately creeps above
-# 2.0 and keeps creeping with N. It is not linear and it is not the quadratic;
-# there is no band at which it reads flat, so it cannot be graded by the plain
-# threshold and must be ledgered or retired.
+# scoperefs — LEDGERED BECAUSE IT IS A LIVE, UNFIXED QUADRATIC: #2172.
+#
+# 🚨 Read this before touching the band. THIS ROW EXCUSES AN OPEN DEFECT; it
+# does NOT excuse a cost that is correct by construction. An earlier version of
+# this comment claimed the opposite — that #1031's OrdMap-backed scan made the
+# shape "O(n log n) BY CONSTRUCTION", so the creeping ratio was expected. That
+# justification is FALSE and it would have told the next reader there was
+# nothing here to investigate. It was refuted by measuring a fourth point:
+#
+#   N =  3000   net 1.20103e10
+#   N =  6000   net 3.48573e10    r = 2.903
+#   N = 12000   net 1.10136e11    r = 3.159    <- this gate's shipped r2
+#   N = 24000   net 3.78602e11    r = 3.438    (IR_SCOPEREFS_N=6000)
+#
+# A clean n*log n gives 2*ln(2n)/ln(n) = 2.173 -> 2.159 -> 2.147 over that band:
+# just above 2, and FALLING. Measured is 2.903 -> 3.159 -> 3.438: RISING, with
+# an implied exponent log2(r) of 1.537 -> 1.660 -> 1.782, climbing toward 2.
+# Fitting net = a*N + b*N^2 to the top two points gives a/b ~= 4695 and predicts
+# the fourth ratio at 3.467 vs 3.438 measured (0.8% error); the n*log n model is
+# off by ~60% on the same data. On that fit the N^2 term is already ~72% of net
+# Ir at this gate's own N=12000. The residual is NOT the OrdMap probe — a
+# quadratic term dominates the band. Tracked as #2172, which also carries the
+# first discriminator to run (the shape emits its tail as ONE source line of
+# ~7*N chars, i.e. it may be the #2044 line-rescan family and not #1031 at all).
+#
+# ⚠️ CEIL IS A PER-BAND NUMBER, valid only at this gate's SCOPEREFS_N=3000. At
+# IR_SCOPEREFS_N=6000 the SAME tree reads r2=3.438 and this row correctly
+# reports "** KNOWN-SUPERLINEAR, AND GOT WORSE **". That is the band moving, not
+# a regression — unavoidable for a shape whose ratio climbs with N. Move the N
+# and you must re-derive the ceiling.
 #
 # The band is derived from MEASURED VARIANCE, not from the value it bounds
 # (#2160 rule 3). Three back-to-back full runs of this gate on this box against
@@ -308,12 +333,12 @@ KNOWN_SUPERLINEAR="scoperefs"
 # shapes' r2 in the same runs (2.056 / 2.061 / 2.065 / 2.073 / 2.119 — 3.1%
 # end to end). CEIL is set one such drift-width above the observed 3.159:
 #
-#   3.159 * 1.045 = 3.301  ->  3.30
+#   3.159 * 1.031 = 3.257  ->  3.26
 #
 # which still fails #2063's partial-#2044 reading (r2=3.392) and every reading
 # worse than it. FIXED sits between the flat shapes' ~2.07 and the ledgered
 # 3.159, far enough above the former that ordinary drift cannot trip it:
-KNOWN_CEIL_scoperefs="${KNOWN_CEIL_scoperefs:-3.30}";  KNOWN_FIXED_scoperefs="${KNOWN_FIXED_scoperefs:-2.60}"
+KNOWN_CEIL_scoperefs="${KNOWN_CEIL_scoperefs:-3.26}";  KNOWN_FIXED_scoperefs="${KNOWN_FIXED_scoperefs:-2.60}"
 
 # Add-only deliberate-red seam. Default empty, set NOWHERE in the tree, and it
 # can only ADD rows — it can never suppress a real one. It exists so the ledger
@@ -396,7 +421,7 @@ IR_ONLY="${IR_ONLY:-}"
 #   5. and the real row, unmodified, reading as a DECLARED row rather than a
 #      silent pass — which is the whole of #2100:
 #      $ IR_ONLY=scoperefs sh test/diff_compiler_ir_scaling.sh
-#      known scoperefs: r1=2.900 r2=3.159 (ledgered, ceiling 3.30) — see KNOWN_SUPERLINEAR
+#      known scoperefs: r1=2.900 r2=3.159 (ledgered, ceiling 3.26) — see KNOWN_SUPERLINEAR
 #      exit=0
 #
 # KNOWN_CEIL_scoperefs / KNOWN_FIXED_scoperefs are `:-`-defaulted for exactly arms
@@ -420,10 +445,16 @@ MANYIFACES_N="${IR_MANYIFACES_N:-100}"
 ERRS_N="${IR_ERRS_N:-400}"
 # scoperefs: a deep local scope where the tail references EVERY bound name, most
 # of them non-innermost — the #1031 shape (resolve/typecheck/mangle/emit each
-# scan a List frame-list to answer "is this name bound"). The fix backs the scan
-# with an OrdMap (O(log n) per lookup, not O(1)), so its post-fix ratio creeps
-# toward the threshold rather than sitting flat at ~2.0 like the other shapes —
-# expected for a tree-backed set, not a regression. Measured on this box: the
+# scan a List frame-list to answer "is this name bound"). #1031's fix backed the
+# scan with an OrdMap, and the ratio still creeps with N.
+#
+# ⚠️ DO NOT read that creep as the tree probe. This comment used to explain it as
+# "expected for a tree-backed set, not a regression"; that is FALSE — a fourth
+# measured point shows a quadratic term dominating the band (#2172, and the full
+# derivation at KNOWN_CEIL_scoperefs above). The shape is ledgered against a
+# measured ceiling because the defect is LIVE, not because the cost is correct.
+#
+# Band choice, which is a separate question. Measured on this box: the
 # pre-fix defect is invisible below ~N=2500 (both r1,r2 stay under 3.0 even with
 # the O(depth^2) scan still present — the fixed cost of a `check` on this shape's
 # giant expression dominates at smaller N) and only reads clearly red at N=3000:
@@ -550,6 +581,29 @@ MIN_NET_FRAC="${IR_MIN_NET_FRAC:-0.05}"
 # have drifted into measuring different shapes while both stayed green and their ratios
 # went on being quoted side by side. Read the header of perf_shapes.sh before editing a
 # generator — a change there moves every band and ledger ceiling in BOTH gates.
+# `.` is a POSIX SPECIAL BUILTIN: if the file is missing, dash terminates this
+# script on the spot with no line of ours on stdout — and run_gates.sh reads a
+# gate that printed nothing as a skip candidate, not as a failure. A sharing
+# change that moved or renamed the library would therefore go GREEN-BY-SILENCE,
+# which is the exact bug class this PR exists to close. Check first.
+#
+# OBSERVED RED, 2026-08-28, this box (#2160 rule 1). The library was moved aside
+# and BOTH gates were run whole:
+#
+#   $ mv test/perf_shapes.sh /tmp/hidden
+#   $ sh test/diff_compiler_ir_scaling.sh;   echo "exit=$?"   -> exit=1
+#   $ sh test/diff_compiler_perf_scaling.sh; echo "exit=$?"   -> exit=1
+#   FAIL: cannot read <root>/test/perf_shapes.sh — the shared shape library (#2066) is missing.
+#     Both scaling gates source it; without it neither can generate a single shape.
+#
+# Without the guard both instead die inside the `.` builtin, printing only dash's
+# own "can't open" on stderr and exiting 2 — which run_gates.sh weighs against
+# LEGIT_SKIP_RE rather than counting as a failure.
+[ -r "$ROOT/test/perf_shapes.sh" ] || {
+  echo "FAIL: cannot read $ROOT/test/perf_shapes.sh — the shared shape library (#2066) is missing."
+  echo "  Both scaling gates source it; without it neither can generate a single shape."
+  exit 1
+}
 . "$ROOT/test/perf_shapes.sh"
 
 # The #2044 regression pin. Each binding is annotated `Int` and bound to a
@@ -815,8 +869,8 @@ grade_shape() {
   # (every reading the old rule failed, this one also fails), which is the only
   # direction [W-QUIETER] permits.
   #
-  # ⚠️ The one shape this newly reddens is `scoperefs`, whose climb is real,
-  # documented and accepted (O(n log n) by construction — see SCOPEREFS_N). It
+  # ⚠️ The one shape this newly reddens is `scoperefs`, whose climb is real and
+  # documented — an OPEN quadratic, #2172; see KNOWN_CEIL_scoperefs. It
   # is not silenced by softening the rule; it is declared in KNOWN_SUPERLINEAR
   # above, where it is graded against its own measured ceiling AND must drain
   # itself if it is ever fixed.
