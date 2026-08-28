@@ -102,8 +102,11 @@ anyUsePathBinds : List Decl -> Bool -> String -> (Ident, (IfaceRef, List String,
 anyUsePathBindsCtor : List Decl -> String -> String -> Ident -> Bool
 appArgLoc : Expr -> Option Loc
 appFallback : List (String, Ref Effvar) -> List (String, Mono) -> TyConOrigin -> String -> List Ty -> Mono
+appNodeArg : Expr -> Expr
 appSpineArgCount : Expr -> Int
+appSpineHead : Expr -> Expr
 appSpineName : Expr -> Option String
+appSpineNodes : Expr -> List Expr
 appendDataUniverse : String -> List Decl -> Unit
 appendOp : Mono -> Mono -> Mono
 appendUniverseAccums : String -> List Decl -> Unit
@@ -571,6 +574,7 @@ declaredPairOne : (IfaceRef, List Mono) -> List (String, Int)
 declaredPairsFor : String -> List (String, List (IfaceRef, List Mono), List (List Mono)) -> List (String, Int)
 declaredSchemeOblsFor : List (String, Ty, List (String, Mono)) -> String -> List Int -> List VecObl
 declaresCtorNamed : List Decl -> String -> Bool
+declsBindBareLocal : List Decl -> String -> Bool
 declsNonEmpty : List Decl -> Bool
 decodeAxis : String -> (String, Param)
 decodeAxisVal : String -> Param
@@ -596,6 +600,8 @@ definerReceiverIsDictVar : String -> Mono -> Bool
 definerRowsOf : List (String, (String, String)) -> List (String, String)
 definerShadowArgHead : Expr -> Option (String, Ref Route, Ref (List Route))
 definerShadowHeadType : TcEnv -> String -> Expr -> Mono
+definerShadowSpineArgAt : Expr -> Option (String, Ref Route, Ref (List Route), Expr, List Expr)
+definerShadowSpineVarAt : Expr -> Option (String, Expr, List Expr)
 definerShadowVarHead : Expr -> Option String
 definerShadowsFromSet : Map String Unit -> List Decl -> List String
 definersIn : Map String (List (String, (String, String))) -> String -> List (String, (String, String))
@@ -709,7 +715,7 @@ enclSlot : String -> Mono -> Option Int
 enclSlotIds : String -> List Int
 enclSlotIndex : Option Predicate -> Int -> String -> Option Int
 endsWithStr : String -> String -> Bool
-enforceStandaloneDomain : TcEnv -> String -> Mono -> Option Loc -> Unit
+enforceStandaloneDomainAt : TcEnv -> String -> Mono -> Option Loc -> Int -> Unit
 entail : Map String (List ImplEntry) -> String -> Mono -> String -> EntailKind -> (Route, List Route)
 entailAssum : Mono -> String -> String -> EntailKind -> Option String
 entailAssumRoute : String -> EntailKind -> Route
@@ -964,7 +970,7 @@ ifaceAtMonoId : Int -> List Mono -> List String -> Option String
 ifaceDfsCycle : ClassEnv -> Int -> Ref (Map String Unit) -> List CeRow -> CeRow -> List String
 ifaceDfsCycleOneSuper : ClassEnv -> Int -> Ref (Map String Unit) -> List CeRow -> TyConOrigin -> String -> List String
 ifaceDfsCycleSupers : ClassEnv -> Int -> Ref (Map String Unit) -> List CeRow -> List Super -> List String
-ifaceDictPassDefault : String -> Ty -> List Pat -> Expr -> Int -> IfaceMethod
+ifaceDictPassDefault : String -> Ty -> List Pat -> Expr -> Option Loc -> Int -> IfaceMethod
 ifaceDictPassMethod : IfaceMethod -> IfaceMethod
 ifaceForConstraintId : Int -> IfaceRef
 ifaceForConstraintIdGo : Int -> List UObligation -> IfaceRef
@@ -1032,6 +1038,7 @@ implSubject : String -> String -> String
 implTupleHeadKindMsg : String -> Int -> List Kind -> String
 implTysIfMatch : String -> String -> Decl -> List (List Ty)
 importDefinersOf : List Decl -> List (String, (String, String))
+importFormBindsBare : UsePath -> String -> Bool
 importFormRows : UsePath -> List (String, a) -> List (String, a)
 importFormSchemes : List (String, List (String, Scheme)) -> UsePath -> List (String, Scheme) -> List (String, Scheme)
 importOverlayDecls : Bool -> Int -> List DeclEnvModule -> Decl -> List Decl
@@ -1059,6 +1066,7 @@ infer : TcEnv -> Expr -> Mono
 inferAnnot : TcEnv -> Expr -> Ty -> Mono
 inferApp : List (String, Expr) -> Expr -> Mono -> Mono -> Mono
 inferAppExpr : TcEnv -> Expr -> Expr -> Mono
+inferAppNodes : List (String, Expr) -> Mono -> List (Expr, Mono) -> Mono
 inferAppNotFunction : Expr -> Mono -> Mono -> Mono
 inferArm : TcEnv -> Mono -> Mono -> Pat -> List Guard -> Expr -> Unit
 inferArmGuards : TcEnv -> List Guard -> TcEnv
@@ -1075,8 +1083,10 @@ inferDefaultMethod : TcEnv -> String -> List (String, List Kind) -> List String 
 inferDefaultMethodBody : String -> String -> Option Loc -> TcEnv -> Mono -> List Pat -> Expr -> Mono
 inferDefaultMethods : TcEnv -> String -> List (String, List Kind) -> List String -> List IfaceMethod -> Unit
 inferDefinerShadowApp : TcEnv -> String -> Ref Route -> Ref (List Route) -> Expr -> Expr -> Mono
+inferDefinerShadowAppAt : TcEnv -> String -> Ref Route -> Ref (List Route) -> Expr -> List Expr -> Expr -> Expr -> Mono
 inferDefinerShadowVarApp : TcEnv -> String -> Expr -> Expr -> Mono
-inferDefinerStandaloneVarApp : TcEnv -> String -> Expr -> Expr -> Mono -> Option Loc -> Mono
+inferDefinerShadowVarAppAt : TcEnv -> String -> Expr -> List Expr -> Expr -> Expr -> Mono
+inferDefinerStandaloneVarAppAt : TcEnv -> String -> Expr -> List (Expr, Mono) -> Expr -> Expr -> Mono -> Option Loc -> Mono
 inferDictAt : TcEnv -> String -> Ref (List Route) -> Mono
 inferDictAtFound : String -> Ref (List Route) -> (Mono, List (Int, Mono)) -> Mono
 inferEach : TcEnv -> List Expr -> List Mono
@@ -1106,6 +1116,7 @@ inferMethodAt : TcEnv -> String -> Ref Route -> Ref (List Route) -> Ref (List Ro
 inferModuleImplBodiesIfEnabled : TcEnv -> List Decl -> List Decl -> Unit
 inferNumLit : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
 inferNumLitBare : Int -> Ref (Option Float) -> Mono
+inferNumLitMethod : TcEnv -> Scheme -> Ref Route -> Mono
 inferOneIfaceDefaults : TcEnv -> Decl -> Unit
 inferOneImpl : TcEnv -> List Decl -> List String -> Decl -> Unit
 inferParamKinds : List String -> List Variant -> List Kind
@@ -1138,6 +1149,7 @@ inferRecordUpdateWith : TcEnv -> String -> Expr -> List FieldAssign -> RecordInf
 inferRequiresImpl : TcEnv -> List Decl -> List String -> IfaceRef -> List Ty -> List Require -> List ImplMethod -> Unit
 inferShadowApp : TcEnv -> String -> List (Ref Route) -> Expr -> Expr -> Mono
 inferShadowAppHead : TcEnv -> Expr -> Mono
+inferSpineArgs : TcEnv -> List Expr -> List (Expr, Mono)
 inferStmt : TcEnv -> DoStmt -> TcEnv
 inferTestBodies : TcEnv -> List Decl -> Unit
 inferUnop : String -> Mono -> Mono
@@ -1343,6 +1355,7 @@ moduleAliasEntry : String -> String -> ((String, String), a) -> List (String, a)
 moduleDictNames : List Decl -> List Decl -> List (String, List Decl) -> List String
 modulePubDefiners : Map String (List (String, (String, String))) -> String -> List Decl -> List (String, (String, String))
 moduleRefNameSet : List Decl -> Map String Unit
+moduleSpellsShadowBare : List Decl -> String -> String -> Bool
 moduleUserFnNames : List (String, List Decl) -> List String
 monoArgUnboundIds : Mono -> List Int
 monoClosed : Mono -> Bool
@@ -1396,6 +1409,7 @@ noteHeadCtor : Pat -> Map String Unit -> Map String Unit
 noteNumlitCtx : Mono -> Mono -> String -> Unit
 noteTypeErrorDetected : Unit -> Unit
 nthArgMono : Int -> Mono -> Option Mono
+nthFunDomain : Int -> Mono -> Option Mono
 nthInt : Int -> List Int -> Int
 nthKindList : Int -> List (List Kind) -> Option (List Kind)
 nthTy : Int -> List Ty -> Option Ty
@@ -1470,6 +1484,7 @@ performEffect : Ref EffRow -> EffRow -> Unit
 performLink : Ref Effvar -> Ref Effvar -> Unit
 phantomMethodMsg : String -> List String -> (String, Ty, List (String, List Kind)) -> List String
 phantomMethodMsgs : CeRow -> List String
+pickIfaceMethodSchemeById : IfaceRef -> String -> List ((IfaceRef, String), Scheme) -> Option Scheme
 pickMostSpecificEntry : List Mono -> List KeyEntry -> Option KeyEntry
 pickSchemes : List String -> List (String, Scheme) -> List (String, Scheme)
 pickSchemesByDecl : List String -> List (String, Scheme) -> List ((IfaceRef, String), Scheme) -> List (String, Scheme)
@@ -1622,7 +1637,7 @@ recordSchemeCallObligations : Int -> List VecObl -> List (Int, Mono) -> Unit
 recordSigConstraintArgs : List Ty -> List (String, Mono) -> List (Int, Mono) -> Option (List Mono)
 recordSigConstraintObls : List Constraint -> List (String, Mono) -> List (Int, Mono) -> Unit
 recordSite : String -> Ref Route -> Ref (List Route) -> Mono -> Mono
-recordStandaloneSigObligations : String -> String -> Mono -> Unit
+recordStandaloneSigObligationsSp : String -> String -> List Mono -> Unit
 recordTypeError : TcDiag -> Unit
 recordUnopSite : String -> Ref Route -> Mono -> Unit
 reexportCtorMember : UseMember -> List (String, String, Ident) -> List (String, String, Ident)
@@ -1807,6 +1822,7 @@ seedAndCheckSplit : List Decl -> List Decl -> List Decl -> List (String, Scheme)
 seedBuiltinClasses : CheckMode -> List Decl -> Unit
 seedCheckRun : List Decl -> Unit
 seedEffectDomains : Unit -> Unit
+seedNumLitFromIntScheme : List (IfaceRef, String) -> List (String, Scheme) -> Unit
 seedParamPolarityFixpoint : List Decl -> Unit
 selectIfaceRows : UsePath -> List (String, List String) -> List (String, List String)
 selectReqImpl : Map String (List ImplEntry) -> IfaceRef -> String -> Mono -> List Mono -> Option (Ty, List Ty, List Require)
@@ -1826,12 +1842,16 @@ setNumlitFloats : Unit -> Unit
 setNumlitFloatsGo : List (Mono, Ref (Option Float), Int, Ref Route) -> Unit
 setStdlibOwnership : Bool -> List String -> Unit
 shadowBareName : List (String, String) -> String -> String
-shadowDomainFor : TcEnv -> String -> String -> Option Mono
+shadowDomainForAt : TcEnv -> String -> String -> Int -> Option Mono
+shadowSpineNodesAt : String -> Expr -> Option (List Expr)
 shadowStandaloneDictSlots : List CSlot -> List (List Mono) -> List (Int, Mono) -> ShadowDicts
 shadowStandaloneDictSlotsAt : Option Scheme -> String -> Mono -> ShadowDicts
-shadowStandaloneDicts : TcEnv -> String -> String -> Mono -> ShadowDicts
+shadowStandaloneDictSlotsSp : Option Scheme -> String -> List Mono -> ShadowDicts
+shadowStandaloneDictsSp : TcEnv -> String -> String -> List Mono -> ShadowDicts
 shadowStandaloneDictsWith : Option Scheme -> String -> String -> Mono -> ShadowDicts
+shadowStandaloneDictsWithSp : Option Scheme -> String -> String -> List Mono -> ShadowDicts
 shadowStandaloneHead : TcEnv -> Expr -> Option (String, List (Ref Route))
+shadowSymSpelledBare : List Decl -> List (String, String) -> String -> Bool
 shadowVarHeadMethodScheme : TcEnv -> String -> Expr -> Mono
 sigCollapsedPair : List (String, Int) -> Option (Int, String, String)
 sigCollapsedWith : Int -> List (String, Int) -> Option String
@@ -1866,7 +1886,7 @@ stampOpRouteVal : Bool -> Map String (List ImplEntry) -> String -> Mono -> Strin
 stampRLocalOrFallback : Bool -> Ref Route -> String -> List Route -> Unit
 stampRoutes : List (Ref Route) -> Unit
 standaloneSchemeFor : TcEnv -> String -> String -> Option Scheme
-standaloneShadowDomain : String -> Option Mono
+standaloneShadowDomainAt : String -> Int -> Option Mono
 standaloneShadowScheme : String -> Option Mono
 standaloneShadowSigTy : String -> String -> Option Ty
 standaloneShadowsFromSet : Map String Unit -> Map String Unit -> List Decl -> List String
@@ -1988,6 +2008,8 @@ unifyN : Mono -> Mono -> Unit
 unifyParamsExpected : List Mono -> List Mono -> Unit
 unifyRow : EffRow -> EffRow -> Unit
 unifyRowN : EffRow -> EffRow -> Unit
+unifySpineProbe : Mono -> List Mono -> Unit
+unifySpineResult : Mono -> List Mono -> Mono
 unifyStandaloneDomain : Mono -> Mono -> Option Loc -> Unit
 unifyVars : Ref Tyvar -> Ref Tyvar -> Unit
 uniqueImplTysFor : List Decl -> String -> String -> Option (List Ty)

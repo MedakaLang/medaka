@@ -1,5 +1,5 @@
 # META
-source_lines=1235
+source_lines=1285
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -586,6 +586,53 @@ buildUnitRenameMap mid exportsPerUnit decls =
   localEntries ++ importEntries
 -- local first ⇒ shadows any imported entry with the same key under lookupAssoc.
 
+-- ── a locally declared interface method un-claims its IMPLICIT-PRELUDE entry ──
+-- S1-PRELUDE (a) (`docs/spec/SHADOW-SEMANTICS.md`, fixtures `x4_*`/`x5_*`): the
+-- implicit prelude is in NEITHER half of S1's left-operand kind partition, so a
+-- prelude STANDALONE creates no shadow — when a module declares an interface method
+-- of the same name (e.g. `print`, `count`, `isEven`), a bare occurrence of that name
+-- denotes the METHOD, and the prelude function is no longer reachable by its bare
+-- name anywhere in the module (exactly what W-PRELUDE-METHOD-SHADOW says).
+-- `frontend/marker.mdk`'s `markWith` implements that by building its method set as
+-- `preludeMethods ++ interfaceMethodNames prog` and rewriting `EVar n` → `EMethodRef n`.
+--
+-- This pass runs BEFORE marking on the emit path, and an interface method is not a
+-- `DFunDef`/`DLetGroup` binder, so it is absent from `unitDefNames` and rule 1 does
+-- not fire for it.  Rule 3 (implicit prelude) then claimed the reference and rewrote
+-- it to `core__<n>` — by the time the marker ran, the occurrence no longer SPELLED
+-- the method's name, so it was never marked, and the emitted binary called the
+-- PRELUDE while `check`/`run` called the method.  Measured: `main = println (print 1)`
+-- against a local `interface Ifc c where print : c -> Int` emitted
+-- `call @mdk_core__print` and printed `1()`, where `run` printed `1` — a silent
+-- run/binary disagreement with no diagnostic on either side.
+--
+-- SCOPE — the core half ONLY.  An EXPLICIT sibling import (`import prov.{size}`) that
+-- collides with a local interface method is the DIFFERENT, ruled I1/I2 cell
+-- (`test/shadow_fixtures/i1_importer_local_iface/`): there the standalone stays
+-- reachable and a no-impl receiver FALLS BACK to it, so its `prov__size` entry must
+-- survive or the fallback call site loses its symbol.  Dropping both halves reds six
+-- importer assertions in `diff_compiler_shadow_semantics.sh` (measured).
+--
+-- The entry is DROPPED, not redirected: per rule 4 at the top of this file, method
+-- names have their own emitter naming (impl keys), and this pass must leave the
+-- occurrence unchanged so the marker sees the method's own spelling.
+notIfaceMethodKey : OrdMap Unit -> (String, String) -> Bool
+notIfaceMethodKey methods (n, _) = not (omHasKey n methods)
+
+-- names of the methods of every `interface` DECLARED in this unit.  Mirrors
+-- `frontend/marker.mdk`'s `interfaceMethodNames`, plus the `DAttrib` unwrap that
+-- `declDefNames` here already does.
+unitIfaceMethodNames : List Decl -> List String
+unitIfaceMethodNames [] = []
+unitIfaceMethodNames ((DInterface { methods, ... })::rest) = map ifaceMethodNameM methods
+  ++ unitIfaceMethodNames rest
+unitIfaceMethodNames ((DAttrib _ d)::rest) = unitIfaceMethodNames [d]
+  ++ unitIfaceMethodNames rest
+unitIfaceMethodNames (_::rest) = unitIfaceMethodNames rest
+
+ifaceMethodNameM : IfaceMethod -> String
+ifaceMethodNameM (IfaceMethod n _ _ _) = n
+
 -- a local top-level fn → its module-qualified symbol, UNLESS excluded (`main`).
 localRenameEntry : String -> String -> List (String, String)
 localRenameEntry mid n
@@ -603,9 +650,11 @@ isExcludedName n = n == "main"
 -- ordering; an explicit import of the same name from a sibling shadows core via
 -- import-entry ordering below).
 -- explicit sibling imports first (they shadow the implicit prelude), prelude last.
+-- The prelude half is filtered by the unit's own interface-method names — see
+-- `notIfaceMethodKey` above for why, and why the explicit half is NOT filtered.
 importRenameEntries : String -> List (String, List (String, String)) -> List Decl -> List (String, String)
 importRenameEntries _ exportsPerUnit decls = flatMap (declImportEntries exportsPerUnit) decls
-  ++ coreImportEntries exportsPerUnit
+  ++ filterList (notIfaceMethodKey (omFromNames (unitIfaceMethodNames decls) omEmpty)) (coreImportEntries exportsPerUnit)
 
 -- core's exports as implicit-prelude entries (`name → core__name`), excluding
 -- `main` (core has none, but be safe).
@@ -1006,14 +1055,15 @@ renameDefName rm n = match omLookup n rm
   None => n
 
 renameIfaceMethod : OrdMap String -> IfaceMethod -> IfaceMethod
-renameIfaceMethod _ (IfaceMethod n ty None) = IfaceMethod n ty None
-renameIfaceMethod rm (IfaceMethod n ty (Some (MethodDefault ps e))) =
+renameIfaceMethod _ (IfaceMethod n ty None mloc) = IfaceMethod n ty None mloc
+renameIfaceMethod rm (IfaceMethod n ty (Some (MethodDefault ps e)) mloc) =
   IfaceMethod
     n
     ty
     (Some (MethodDefault
       (renamePatsPM rm ps)
       (renameScoped rm (boundOfListPM (patVarsListPM ps)) e)))
+    mloc
 
 renameImplMethod : OrdMap String -> ImplMethod -> ImplMethod
 renameImplMethod rm (ImplMethod n ps e) =
@@ -1334,12 +1384,21 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "mangleUnitU" ((PVar "exportsPerUnit") (PVar "ctorExportsPerUnit") (PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "rmFn") (EApp (EApp (EApp (EVar "buildUnitRenameMap") (EVar "mid")) (EVar "exportsPerUnit")) (EVar "decls"))) (DoLet false false (PVar "rmCtor") (EApp (EApp (EApp (EVar "buildUnitCtorRenameMap") (EVar "mid")) (EVar "ctorExportsPerUnit")) (EVar "decls"))) (DoLet false false (PVar "rmList") (EBinOp "++" (EVar "rmFn") (EVar "rmCtor"))) (DoLet false false (PVar "rm") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "rmList"))) (EVar "omEmpty"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "rmList")) (EVar "decls") (EApp (EApp (EVar "map") (EApp (EVar "renameDecl") (EVar "rm"))) (EVar "decls"))))))
 (DTypeSig false "buildUnitRenameMap" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "buildUnitRenameMap" ((PVar "mid") (PVar "exportsPerUnit") (PVar "decls")) (EBlock (DoLet false false (PVar "localFns") (EApp (EVar "dedup") (EApp (EVar "unitDefNames") (ETuple (EVar "mid") (EVar "decls"))))) (DoLet false false (PVar "localEntries") (EApp (EApp (EVar "flatMap") (EApp (EVar "localRenameEntry") (EVar "mid"))) (EVar "localFns"))) (DoLet false false (PVar "importEntries") (EApp (EApp (EApp (EVar "importRenameEntries") (EVar "mid")) (EVar "exportsPerUnit")) (EVar "decls"))) (DoExpr (EBinOp "++" (EVar "localEntries") (EVar "importEntries")))))
+(DTypeSig false "notIfaceMethodKey" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "notIfaceMethodKey" ((PVar "methods") (PTuple (PVar "n") PWild)) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "methods"))))
+(DTypeSig false "unitIfaceMethodNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "unitIfaceMethodNames" ((PList)) (EListLit))
+(DFunDef false "unitIfaceMethodNames" ((PCons (PRec "DInterface" ((rf "methods" None)) true) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "ifaceMethodNameM")) (EVar "methods")) (EApp (EVar "unitIfaceMethodNames") (EVar "rest"))))
+(DFunDef false "unitIfaceMethodNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "unitIfaceMethodNames") (EListLit (EVar "d"))) (EApp (EVar "unitIfaceMethodNames") (EVar "rest"))))
+(DFunDef false "unitIfaceMethodNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "unitIfaceMethodNames") (EVar "rest")))
+(DTypeSig false "ifaceMethodNameM" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
+(DFunDef false "ifaceMethodNameM" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "localRenameEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "localRenameEntry" ((PVar "mid") (PVar "n")) (EIf (EApp (EVar "isExcludedName") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EListLit (ETuple (EVar "n") (EApp (EApp (EVar "mangledName") (EVar "mid")) (EVar "n")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isExcludedName" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isExcludedName" ((PVar "n")) (EBinOp "==" (EVar "n") (ELit (LString "main"))))
 (DTypeSig false "importRenameEntries" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
-(DFunDef false "importRenameEntries" (PWild (PVar "exportsPerUnit") (PVar "decls")) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "declImportEntries") (EVar "exportsPerUnit"))) (EVar "decls")) (EApp (EVar "coreImportEntries") (EVar "exportsPerUnit"))))
+(DFunDef false "importRenameEntries" (PWild (PVar "exportsPerUnit") (PVar "decls")) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "declImportEntries") (EVar "exportsPerUnit"))) (EVar "decls")) (EApp (EApp (EVar "filterList") (EApp (EVar "notIfaceMethodKey") (EApp (EApp (EVar "omFromNames") (EApp (EVar "unitIfaceMethodNames") (EVar "decls"))) (EVar "omEmpty")))) (EApp (EVar "coreImportEntries") (EVar "exportsPerUnit")))))
 (DTypeSig false "coreImportEntries" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "coreImportEntries" ((PVar "exportsPerUnit")) (EMatch (EApp (EApp (EVar "lookupExports") (ELit (LString "core"))) (EVar "exportsPerUnit")) (arm (PCon "Some" (PVar "names")) () (EApp (EApp (EVar "flatMap") (EVar "coreEntry")) (EVar "names"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "coreEntry" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
@@ -1453,8 +1512,8 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DTypeSig false "renameDefName" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "renameDefName" ((PVar "rm") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "rm")) (arm (PCon "Some" (PVar "n2")) () (EVar "n2")) (arm (PCon "None") () (EVar "n"))))
 (DTypeSig false "renameIfaceMethod" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))
-(DFunDef false "renameIfaceMethod" (PWild (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "None"))) (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EVar "None")))
-(DFunDef false "renameIfaceMethod" ((PVar "rm") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "e"))))) (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "boundOfListPM") (EApp (EVar "patVarsListPM") (EVar "ps")))) (EVar "e"))))))
+(DFunDef false "renameIfaceMethod" (PWild (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "None") (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EVar "None")) (EVar "mloc")))
+(DFunDef false "renameIfaceMethod" ((PVar "rm") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "e"))) (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "boundOfListPM") (EApp (EVar "patVarsListPM") (EVar "ps")))) (EVar "e"))))) (EVar "mloc")))
 (DTypeSig false "renameImplMethod" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod"))))
 (DFunDef false "renameImplMethod" ((PVar "rm") (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "boundOfListPM") (EApp (EVar "patVarsListPM") (EVar "ps")))) (EVar "e"))))
 (DTypeSig false "propParamNamesPM" (TyFun (TyApp (TyCon "List") (TyCon "PropParam")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -1655,12 +1714,21 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "mangleUnitU" ((PVar "exportsPerUnit") (PVar "ctorExportsPerUnit") (PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "rmFn") (EApp (EApp (EApp (EVar "buildUnitRenameMap") (EVar "mid")) (EVar "exportsPerUnit")) (EVar "decls"))) (DoLet false false (PVar "rmCtor") (EApp (EApp (EApp (EVar "buildUnitCtorRenameMap") (EVar "mid")) (EVar "ctorExportsPerUnit")) (EVar "decls"))) (DoLet false false (PVar "rmList") (EBinOp "++" (EVar "rmFn") (EVar "rmCtor"))) (DoLet false false (PVar "rm") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "rmList"))) (EVar "omEmpty"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "rmList")) (EVar "decls") (EApp (EApp (EMethodRef "map") (EApp (EVar "renameDecl") (EVar "rm"))) (EVar "decls"))))))
 (DTypeSig false "buildUnitRenameMap" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "buildUnitRenameMap" ((PVar "mid") (PVar "exportsPerUnit") (PVar "decls")) (EBlock (DoLet false false (PVar "localFns") (EApp (EVar "dedup") (EApp (EVar "unitDefNames") (ETuple (EVar "mid") (EVar "decls"))))) (DoLet false false (PVar "localEntries") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "localRenameEntry") (EVar "mid"))) (EVar "localFns"))) (DoLet false false (PVar "importEntries") (EApp (EApp (EApp (EVar "importRenameEntries") (EVar "mid")) (EVar "exportsPerUnit")) (EVar "decls"))) (DoExpr (EBinOp "++" (EVar "localEntries") (EVar "importEntries")))))
+(DTypeSig false "notIfaceMethodKey" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "notIfaceMethodKey" ((PVar "methods") (PTuple (PVar "n") PWild)) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "methods"))))
+(DTypeSig false "unitIfaceMethodNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "unitIfaceMethodNames" ((PList)) (EListLit))
+(DFunDef false "unitIfaceMethodNames" ((PCons (PRec "DInterface" ((rf "methods" None)) true) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "ifaceMethodNameM")) (EVar "methods")) (EApp (EVar "unitIfaceMethodNames") (EVar "rest"))))
+(DFunDef false "unitIfaceMethodNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "unitIfaceMethodNames") (EListLit (EVar "d"))) (EApp (EVar "unitIfaceMethodNames") (EVar "rest"))))
+(DFunDef false "unitIfaceMethodNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "unitIfaceMethodNames") (EVar "rest")))
+(DTypeSig false "ifaceMethodNameM" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
+(DFunDef false "ifaceMethodNameM" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "localRenameEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "localRenameEntry" ((PVar "mid") (PVar "n")) (EIf (EApp (EVar "isExcludedName") (EVar "n")) (EListLit) (EIf (EVar "otherwise") (EListLit (ETuple (EVar "n") (EApp (EApp (EVar "mangledName") (EVar "mid")) (EVar "n")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isExcludedName" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isExcludedName" ((PVar "n")) (EBinOp "==" (EVar "n") (ELit (LString "main"))))
 (DTypeSig false "importRenameEntries" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
-(DFunDef false "importRenameEntries" (PWild (PVar "exportsPerUnit") (PVar "decls")) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "declImportEntries") (EVar "exportsPerUnit"))) (EVar "decls")) (EApp (EVar "coreImportEntries") (EVar "exportsPerUnit"))))
+(DFunDef false "importRenameEntries" (PWild (PVar "exportsPerUnit") (PVar "decls")) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "declImportEntries") (EVar "exportsPerUnit"))) (EVar "decls")) (EApp (EApp (EVar "filterList") (EApp (EVar "notIfaceMethodKey") (EApp (EApp (EVar "omFromNames") (EApp (EVar "unitIfaceMethodNames") (EVar "decls"))) (EVar "omEmpty")))) (EApp (EVar "coreImportEntries") (EVar "exportsPerUnit")))))
 (DTypeSig false "coreImportEntries" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "coreImportEntries" ((PVar "exportsPerUnit")) (EMatch (EApp (EApp (EVar "lookupExports") (ELit (LString "core"))) (EVar "exportsPerUnit")) (arm (PCon "Some" (PVar "names")) () (EApp (EApp (EDictApp "flatMap") (EVar "coreEntry")) (EVar "names"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "coreEntry" (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
@@ -1774,8 +1842,8 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DTypeSig false "renameDefName" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "renameDefName" ((PVar "rm") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "rm")) (arm (PCon "Some" (PVar "n2")) () (EVar "n2")) (arm (PCon "None") () (EVar "n"))))
 (DTypeSig false "renameIfaceMethod" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))
-(DFunDef false "renameIfaceMethod" (PWild (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "None"))) (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EVar "None")))
-(DFunDef false "renameIfaceMethod" ((PVar "rm") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "e"))))) (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "boundOfListPM") (EApp (EVar "patVarsListPM") (EVar "ps")))) (EVar "e"))))))
+(DFunDef false "renameIfaceMethod" (PWild (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "None") (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EVar "None")) (EVar "mloc")))
+(DFunDef false "renameIfaceMethod" ((PVar "rm") (PCon "IfaceMethod" (PVar "n") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "ps") (PVar "e"))) (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "boundOfListPM") (EApp (EVar "patVarsListPM") (EVar "ps")))) (EVar "e"))))) (EVar "mloc")))
 (DTypeSig false "renameImplMethod" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod"))))
 (DFunDef false "renameImplMethod" ((PVar "rm") (PCon "ImplMethod" (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "n")) (EApp (EApp (EVar "renamePatsPM") (EVar "rm")) (EVar "ps"))) (EApp (EApp (EApp (EVar "renameScoped") (EVar "rm")) (EApp (EVar "boundOfListPM") (EApp (EVar "patVarsListPM") (EVar "ps")))) (EVar "e"))))
 (DTypeSig false "propParamNamesPM" (TyFun (TyApp (TyCon "List") (TyCon "PropParam")) (TyApp (TyCon "List") (TyCon "String"))))

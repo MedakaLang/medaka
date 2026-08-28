@@ -51,11 +51,15 @@ markWithPrelude : List Decl -> List Decl -> List Decl
 markerFor : List Decl -> List Decl -> List Decl
 patBindings : Pat -> List String
 preludePlainFnNames : List Decl -> List String
+preludeStandaloneSet : List Decl -> Map String Unit
+preludeStandaloneShadows : List Decl -> List Decl -> List (String, String, Option Loc)
+preludeStandaloneShadowsWith : Map String Unit -> List Decl -> List (String, String, Option Loc)
 recFieldBindings : RecPatField -> List String
 renameDecl : List String -> Decl -> Decl
 renameVar : List String -> Expr -> Expr
 routeExtraRefs : Route -> List String
 shadowRename : List String -> List Decl -> List Decl
 shadowRenames : List String -> List Decl -> List String
+shadowedMethodsOf : Map String Unit -> String -> List IfaceMethod -> List (String, String, Option Loc)
 subName : List String -> String -> String
 userValueNames : List Decl -> List String

@@ -93,6 +93,7 @@ mergeIfaceMethods : List IfaceMethod -> List IfaceMethod
 mergeInto : List IfaceMethod -> IfaceMethod -> List IfaceMethod
 mergeTwo : IfaceMethod -> IfaceMethod -> IfaceMethod
 mergedDefault : Option MethodDefault -> Option MethodDefault -> Option MethodDefault
+mergedLoc : Option Loc -> Option Loc -> Option Loc
 mergedType : Ty -> Ty -> Ty
 methodName : IfaceMethod -> String
 moduleAliases : List Decl -> List String

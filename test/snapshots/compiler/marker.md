@@ -1,5 +1,5 @@
 # META
-source_lines=523
+source_lines=573
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted method_marker stage — Stage 1 port of `lib/method_marker.ml`.
@@ -37,6 +37,7 @@ import frontend.ast.{
   Expr(..),
   UseMember(..),
   UsePath(..),
+  Loc,
   PropParam(..),
   MethodDefault(..),
   IfaceMethod(..),
@@ -62,7 +63,7 @@ interfaceMethodNames ((DInterface { methods, ... })::rest) = map ifaceMethodName
 interfaceMethodNames (_::rest) = interfaceMethodNames rest
 
 ifaceMethodName : IfaceMethod -> String
-ifaceMethodName (IfaceMethod n _ _) = n
+ifaceMethodName (IfaceMethod n _ _ _) = n
 
 -- Names of functions whose declared signature carries a constraint (`Foo a =>`).
 constrainedFnNames : List Decl -> List String
@@ -200,6 +201,55 @@ keepNotIn pool (x::xs)
   | contains x pool = keepNotIn pool xs
   | otherwise = x :: keepNotIn pool xs
 
+-- ── #1375 clause (b): interface method shadows a prelude standalone ───────
+-- The INVERSE direction of Phase 78b's `shadowRename` rule above.  78b is about
+-- a user *standalone* colliding with a prelude *interface method*; this is a
+-- user *interface method* colliding with a prelude *standalone* (`count`,
+-- `find`, …).  Under #1375's adopted clause (a) the bare name then denotes the
+-- INTERFACE METHOD, so the prelude function is no longer reachable by its bare
+-- name anywhere in the module — well-defined, but silent until now.  Clause (b)
+-- says it must not be silent; the diagnostic is wired in
+-- `compiler/driver/diagnostics.mdk` (`W-PRELUDE-METHOD-SHADOW`).
+--
+-- Both directions live in this file on purpose: they are auditable as a SET
+-- only if they sit together.
+--
+-- There is NO table here.  This is a pure function of two decl lists, evaluated
+-- per (module, prelude) pair and consumed immediately, so there is no key to
+-- mis-scope.  The prelude side is an `OrdMap` membership set (`omHasKey`), never
+-- a `contains` over a `List` — every quadratic found in this tree so far was a
+-- `List` used as a set.
+--
+-- Yields (interfaceName, methodName, methodNameLoc) per collision, in
+-- declaration order.  A module with no collision yields `[]`, so its output is
+-- byte-identical to before.
+export
+preludeStandaloneShadows : List Decl -> List Decl -> List (String, String, Option Loc)
+preludeStandaloneShadows prelude prog =
+  preludeStandaloneShadowsWith (preludeStandaloneSet prelude) prog
+
+-- The prelude operand, hoisted: a caller folding over MANY modules against ONE
+-- prelude (`foldModuleTc`) builds this once instead of rescanning the prelude
+-- per module.
+export
+preludeStandaloneSet : List Decl -> OrdMap Unit
+preludeStandaloneSet prelude = omFromNames (preludePlainFnNames prelude) omEmpty
+
+export
+preludeStandaloneShadowsWith : OrdMap Unit -> List Decl -> List (String, String, Option Loc)
+preludeStandaloneShadowsWith _ [] = []
+preludeStandaloneShadowsWith pool ((DInterface { name, methods, ... })::rest) = shadowedMethodsOf pool name methods ++ preludeStandaloneShadowsWith pool rest
+preludeStandaloneShadowsWith pool ((DAttrib _ d)::rest) = preludeStandaloneShadowsWith pool [d]
+  ++ preludeStandaloneShadowsWith pool rest
+preludeStandaloneShadowsWith pool (_::rest) =
+  preludeStandaloneShadowsWith pool rest
+
+shadowedMethodsOf : OrdMap Unit -> String -> List IfaceMethod -> List (String, String, Option Loc)
+shadowedMethodsOf _ _ [] = []
+shadowedMethodsOf pool iface ((IfaceMethod n _ _ mloc)::rest)
+  | omHasKey n pool = (iface, n, mloc) :: shadowedMethodsOf pool iface rest
+  | otherwise = shadowedMethodsOf pool iface rest
+
 -- A prelude plain fn is *droppable* only if no OTHER prelude decl references it
 -- (dropping one the prelude uses internally — e.g. `clamp`, used in a core prop —
 -- would silently rebind those uses).  droppable = plain fns − externally-referenced.
@@ -254,8 +304,8 @@ implMethodBody : ImplMethod -> Expr
 implMethodBody (ImplMethod _ _ body) = body
 
 ifaceMethodBodies : IfaceMethod -> List Expr
-ifaceMethodBodies (IfaceMethod _ _ (Some (MethodDefault _ body))) = [body]
-ifaceMethodBodies (IfaceMethod _ _ None) = []
+ifaceMethodBodies (IfaceMethod _ _ (Some (MethodDefault _ body)) _) = [body]
+ifaceMethodBodies (IfaceMethod _ _ None _) = []
 
 -- all referenced names (EVar/EMethodRef/EDictApp) in an expr tree
 collectVars : Expr -> List String
@@ -526,7 +576,7 @@ markerFor preludeProg =
   let preludeConstrained = constrainedFnNames preludeProg
   prog => markWith preludeMethods preludeDroppable preludeConstrained prog
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Route" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Route" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Loc" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false) (mem "mapExpr" false) (mem "mapDecl" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omEmpty" false))))
@@ -535,7 +585,7 @@ markerFor preludeProg =
 (DFunDef false "interfaceMethodNames" ((PCons (PRec "DInterface" ((rf "methods" None)) true) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "ifaceMethodName")) (EVar "methods")) (EApp (EVar "interfaceMethodNames") (EVar "rest"))))
 (DFunDef false "interfaceMethodNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "interfaceMethodNames") (EVar "rest")))
 (DTypeSig false "ifaceMethodName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
-(DFunDef false "ifaceMethodName" ((PCon "IfaceMethod" (PVar "n") PWild PWild)) (EVar "n"))
+(DFunDef false "ifaceMethodName" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "constrainedFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "constrainedFnNames" ((PList)) (EListLit))
 (DFunDef false "constrainedFnNames" ((PCons (PCon "DTypeSig" PWild (PVar "name") (PVar "ty")) (PVar "rest"))) (EApp (EApp (EApp (EVar "constrainedAdd") (EVar "name")) (EVar "ty")) (EApp (EVar "constrainedFnNames") (EVar "rest"))))
@@ -595,6 +645,18 @@ markerFor preludeProg =
 (DTypeSig false "keepNotIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "keepNotIn" (PWild (PList)) (EListLit))
 (DFunDef false "keepNotIn" ((PVar "pool") (PCons (PVar "x") (PVar "xs"))) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "pool")) (EApp (EApp (EVar "keepNotIn") (EVar "pool")) (EVar "xs")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "x") (EApp (EApp (EVar "keepNotIn") (EVar "pool")) (EVar "xs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "preludeStandaloneShadows" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DFunDef false "preludeStandaloneShadows" ((PVar "prelude") (PVar "prog")) (EApp (EApp (EVar "preludeStandaloneShadowsWith") (EApp (EVar "preludeStandaloneSet") (EVar "prelude"))) (EVar "prog")))
+(DTypeSig true "preludeStandaloneSet" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
+(DFunDef false "preludeStandaloneSet" ((PVar "prelude")) (EApp (EApp (EVar "omFromNames") (EApp (EVar "preludePlainFnNames") (EVar "prelude"))) (EVar "omEmpty")))
+(DTypeSig true "preludeStandaloneShadowsWith" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DFunDef false "preludeStandaloneShadowsWith" (PWild (PList)) (EListLit))
+(DFunDef false "preludeStandaloneShadowsWith" ((PVar "pool") (PCons (PRec "DInterface" ((rf "name" None) (rf "methods" None)) true) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "shadowedMethodsOf") (EVar "pool")) (EVar "name")) (EVar "methods")) (EApp (EApp (EVar "preludeStandaloneShadowsWith") (EVar "pool")) (EVar "rest"))))
+(DFunDef false "preludeStandaloneShadowsWith" ((PVar "pool") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "preludeStandaloneShadowsWith") (EVar "pool")) (EListLit (EVar "d"))) (EApp (EApp (EVar "preludeStandaloneShadowsWith") (EVar "pool")) (EVar "rest"))))
+(DFunDef false "preludeStandaloneShadowsWith" ((PVar "pool") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "preludeStandaloneShadowsWith") (EVar "pool")) (EVar "rest")))
+(DTypeSig false "shadowedMethodsOf" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))))
+(DFunDef false "shadowedMethodsOf" (PWild PWild (PList)) (EListLit))
+(DFunDef false "shadowedMethodsOf" ((PVar "pool") (PVar "iface") (PCons (PCon "IfaceMethod" (PVar "n") PWild PWild (PVar "mloc")) (PVar "rest"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "pool")) (EBinOp "::" (ETuple (EVar "iface") (EVar "n") (EVar "mloc")) (EApp (EApp (EApp (EVar "shadowedMethodsOf") (EVar "pool")) (EVar "iface")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "shadowedMethodsOf") (EVar "pool")) (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "droppablePreludeFns" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "droppablePreludeFns" ((PVar "prelude")) (EApp (EApp (EVar "keepNotIn") (EApp (EVar "externalRefs") (EVar "prelude"))) (EApp (EVar "preludePlainFnNames") (EVar "prelude"))))
 (DTypeSig false "externalRefs" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -627,8 +689,8 @@ markerFor preludeProg =
 (DTypeSig false "implMethodBody" (TyFun (TyCon "ImplMethod") (TyCon "Expr")))
 (DFunDef false "implMethodBody" ((PCon "ImplMethod" PWild PWild (PVar "body"))) (EVar "body"))
 (DTypeSig false "ifaceMethodBodies" (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "ifaceMethodBodies" ((PCon "IfaceMethod" PWild PWild (PCon "Some" (PCon "MethodDefault" PWild (PVar "body"))))) (EListLit (EVar "body")))
-(DFunDef false "ifaceMethodBodies" ((PCon "IfaceMethod" PWild PWild (PCon "None"))) (EListLit))
+(DFunDef false "ifaceMethodBodies" ((PCon "IfaceMethod" PWild PWild (PCon "Some" (PCon "MethodDefault" PWild (PVar "body"))) PWild)) (EListLit (EVar "body")))
+(DFunDef false "ifaceMethodBodies" ((PCon "IfaceMethod" PWild PWild (PCon "None") PWild)) (EListLit))
 (DTypeSig false "collectVars" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectVars" ((PCon "EVar" (PVar "x"))) (EListLit (EVar "x")))
 (DFunDef false "collectVars" ((PCon "EMethodRef" (PVar "x"))) (EListLit (EVar "x")))
@@ -783,7 +845,7 @@ markerFor preludeProg =
 (DTypeSig true "markerFor" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "markerFor" ((PVar "preludeProg")) (EBlock (DoLet false false (PVar "preludeMethods") (EApp (EVar "interfaceMethodNames") (EVar "preludeProg"))) (DoLet false false (PVar "preludeDroppable") (EApp (EVar "droppablePreludeFns") (EVar "preludeProg"))) (DoLet false false (PVar "preludeConstrained") (EApp (EVar "constrainedFnNames") (EVar "preludeProg"))) (DoExpr (ELam ((PVar "prog")) (EApp (EApp (EApp (EApp (EVar "markWith") (EVar "preludeMethods")) (EVar "preludeDroppable")) (EVar "preludeConstrained")) (EVar "prog"))))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Route" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Route" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "Loc" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false) (mem "mapExpr" false) (mem "mapDecl" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omEmpty" false))))
@@ -792,7 +854,7 @@ markerFor preludeProg =
 (DFunDef false "interfaceMethodNames" ((PCons (PRec "DInterface" ((rf "methods" None)) true) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "ifaceMethodName")) (EVar "methods")) (EApp (EVar "interfaceMethodNames") (EVar "rest"))))
 (DFunDef false "interfaceMethodNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "interfaceMethodNames") (EVar "rest")))
 (DTypeSig false "ifaceMethodName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
-(DFunDef false "ifaceMethodName" ((PCon "IfaceMethod" (PVar "n") PWild PWild)) (EVar "n"))
+(DFunDef false "ifaceMethodName" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "constrainedFnNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "constrainedFnNames" ((PList)) (EListLit))
 (DFunDef false "constrainedFnNames" ((PCons (PCon "DTypeSig" PWild (PVar "name") (PVar "ty")) (PVar "rest"))) (EApp (EApp (EApp (EVar "constrainedAdd") (EVar "name")) (EVar "ty")) (EApp (EVar "constrainedFnNames") (EVar "rest"))))
@@ -852,6 +914,18 @@ markerFor preludeProg =
 (DTypeSig false "keepNotIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "keepNotIn" (PWild (PList)) (EListLit))
 (DFunDef false "keepNotIn" ((PVar "pool") (PCons (PVar "x") (PVar "xs"))) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "pool")) (EApp (EApp (EVar "keepNotIn") (EVar "pool")) (EVar "xs")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "x") (EApp (EApp (EVar "keepNotIn") (EVar "pool")) (EVar "xs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "preludeStandaloneShadows" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DFunDef false "preludeStandaloneShadows" ((PVar "prelude") (PVar "prog")) (EApp (EApp (EVar "preludeStandaloneShadowsWith") (EApp (EVar "preludeStandaloneSet") (EVar "prelude"))) (EVar "prog")))
+(DTypeSig true "preludeStandaloneSet" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
+(DFunDef false "preludeStandaloneSet" ((PVar "prelude")) (EApp (EApp (EVar "omFromNames") (EApp (EVar "preludePlainFnNames") (EVar "prelude"))) (EVar "omEmpty")))
+(DTypeSig true "preludeStandaloneShadowsWith" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DFunDef false "preludeStandaloneShadowsWith" (PWild (PList)) (EListLit))
+(DFunDef false "preludeStandaloneShadowsWith" ((PVar "pool") (PCons (PRec "DInterface" ((rf "name" None) (rf "methods" None)) true) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "shadowedMethodsOf") (EVar "pool")) (EVar "name")) (EVar "methods")) (EApp (EApp (EVar "preludeStandaloneShadowsWith") (EVar "pool")) (EVar "rest"))))
+(DFunDef false "preludeStandaloneShadowsWith" ((PVar "pool") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "preludeStandaloneShadowsWith") (EVar "pool")) (EListLit (EVar "d"))) (EApp (EApp (EVar "preludeStandaloneShadowsWith") (EVar "pool")) (EVar "rest"))))
+(DFunDef false "preludeStandaloneShadowsWith" ((PVar "pool") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "preludeStandaloneShadowsWith") (EVar "pool")) (EVar "rest")))
+(DTypeSig false "shadowedMethodsOf" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))))
+(DFunDef false "shadowedMethodsOf" (PWild PWild (PList)) (EListLit))
+(DFunDef false "shadowedMethodsOf" ((PVar "pool") (PVar "iface") (PCons (PCon "IfaceMethod" (PVar "n") PWild PWild (PVar "mloc")) (PVar "rest"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "pool")) (EBinOp "::" (ETuple (EVar "iface") (EVar "n") (EVar "mloc")) (EApp (EApp (EApp (EVar "shadowedMethodsOf") (EVar "pool")) (EVar "iface")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "shadowedMethodsOf") (EVar "pool")) (EVar "iface")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "droppablePreludeFns" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "droppablePreludeFns" ((PVar "prelude")) (EApp (EApp (EVar "keepNotIn") (EApp (EVar "externalRefs") (EVar "prelude"))) (EApp (EVar "preludePlainFnNames") (EVar "prelude"))))
 (DTypeSig false "externalRefs" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -884,8 +958,8 @@ markerFor preludeProg =
 (DTypeSig false "implMethodBody" (TyFun (TyCon "ImplMethod") (TyCon "Expr")))
 (DFunDef false "implMethodBody" ((PCon "ImplMethod" PWild PWild (PVar "body"))) (EVar "body"))
 (DTypeSig false "ifaceMethodBodies" (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyCon "Expr"))))
-(DFunDef false "ifaceMethodBodies" ((PCon "IfaceMethod" PWild PWild (PCon "Some" (PCon "MethodDefault" PWild (PVar "body"))))) (EListLit (EVar "body")))
-(DFunDef false "ifaceMethodBodies" ((PCon "IfaceMethod" PWild PWild (PCon "None"))) (EListLit))
+(DFunDef false "ifaceMethodBodies" ((PCon "IfaceMethod" PWild PWild (PCon "Some" (PCon "MethodDefault" PWild (PVar "body"))) PWild)) (EListLit (EVar "body")))
+(DFunDef false "ifaceMethodBodies" ((PCon "IfaceMethod" PWild PWild (PCon "None") PWild)) (EListLit))
 (DTypeSig false "collectVars" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectVars" ((PCon "EVar" (PVar "x"))) (EListLit (EVar "x")))
 (DFunDef false "collectVars" ((PCon "EMethodRef" (PVar "x"))) (EListLit (EVar "x")))

@@ -1,5 +1,5 @@
 # META
-source_lines=4568
+source_lines=4564
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage — Stage 2 port of `lib/resolve.ml` (single-file
@@ -1413,8 +1413,8 @@ checkSuper env (Super { superHead = iface }) =
     [UnknownInterface iface None]
 
 checkIfaceMethod : Env -> IfaceMethod -> List ResError
-checkIfaceMethod env (IfaceMethod _ t None) = checkType None env t
-checkIfaceMethod env (IfaceMethod _ t (Some (MethodDefault pats body))) = checkType None env t
+checkIfaceMethod env (IfaceMethod _ t None _) = checkType None env t
+checkIfaceMethod env (IfaceMethod _ t (Some (MethodDefault pats body)) _) = checkType None env t
   ++ flatMap (checkPat (firstExprLoc body) env) pats
   ++ checkExpr None env (mkScope (patsBindings pats)) body
 
@@ -1521,7 +1521,7 @@ variantName : Variant -> String
 variantName (Variant n _) = n
 
 ifaceMethodNm : IfaceMethod -> String
-ifaceMethodNm (IfaceMethod n _ _) = n
+ifaceMethodNm (IfaceMethod n _ _ _) = n
 
 implMethodNm : ImplMethod -> String
 implMethodNm (ImplMethod n _ _) = n
@@ -3617,12 +3617,8 @@ stampDecl top (DAttrib attrs inner) = DAttrib attrs (stampDecl top inner)
 stampDecl _ d = d
 
 stampIfaceMethod : OrdMap Int -> IfaceMethod -> IfaceMethod
-stampIfaceMethod _ (IfaceMethod nm ty None) = IfaceMethod nm ty None
-stampIfaceMethod top (IfaceMethod nm ty (Some (MethodDefault pats body))) =
-  IfaceMethod
-    nm
-    ty
-    (Some (MethodDefault pats (stampExpr (insertParams pats top) body)))
+stampIfaceMethod _ (IfaceMethod nm ty None mloc) = IfaceMethod nm ty None mloc
+stampIfaceMethod top (IfaceMethod nm ty (Some (MethodDefault pats body)) mloc) = IfaceMethod nm ty (Some (MethodDefault pats (stampExpr (insertParams pats top) body))) mloc
 
 stampImplMethod : OrdMap Int -> ImplMethod -> ImplMethod
 stampImplMethod top (ImplMethod nm pats body) =
@@ -4939,8 +4935,8 @@ takeOriginTrace _ =
 (DTypeSig false "checkSuper" (TyFun (TyCon "Env") (TyFun (TyCon "Super") (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "checkSuper" ((PVar "env") (PRec "Super" ((rf "superHead" (PVar "iface"))) false)) (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EFieldAccess (EVar "env") "interfaces")) (EApp (EApp (EApp (EVar "ambiguousIfaceErrors") (EVar "env")) (EVar "iface")) (EVar "None")) (EListLit (EApp (EApp (EVar "UnknownInterface") (EVar "iface")) (EVar "None")))))
 (DTypeSig false "checkIfaceMethod" (TyFun (TyCon "Env") (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyCon "ResError")))))
-(DFunDef false "checkIfaceMethod" ((PVar "env") (PCon "IfaceMethod" PWild (PVar "t") (PCon "None"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
-(DFunDef false "checkIfaceMethod" ((PVar "env") (PCon "IfaceMethod" PWild (PVar "t") (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkPat") (EApp (EVar "firstExprLoc") (EVar "body"))) (EVar "env"))) (EVar "pats"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EVar "patsBindings") (EVar "pats")))) (EVar "body"))))
+(DFunDef false "checkIfaceMethod" ((PVar "env") (PCon "IfaceMethod" PWild (PVar "t") (PCon "None") PWild)) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
+(DFunDef false "checkIfaceMethod" ((PVar "env") (PCon "IfaceMethod" PWild (PVar "t") (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkPat") (EApp (EVar "firstExprLoc") (EVar "body"))) (EVar "env"))) (EVar "pats"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EVar "patsBindings") (EVar "pats")))) (EVar "body"))))
 (DTypeSig false "checkImplDecl" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyApp (TyCon "List") (TyCon "ResError"))))))))
 (DFunDef false "checkImplDecl" ((PVar "env") (PVar "iface") (PVar "tyargs") (PVar "reqs") (PVar "methods")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env"))) (EVar "tyargs")) (EApp (EApp (EVar "flatMap") (EApp (EVar "checkRequire") (EVar "env"))) (EVar "reqs"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "checkImplMethod") (EVar "env"))) (EVar "methods"))) (EApp (EApp (EApp (EVar "checkImplIface") (EVar "env")) (EVar "iface")) (EVar "methods"))) (EApp (EApp (EApp (EVar "ambiguousIfaceErrors") (EVar "env")) (EVar "iface")) (EApp (EVar "firstTyLocList") (EVar "tyargs")))))
 (DTypeSig false "checkRequire" (TyFun (TyCon "Env") (TyFun (TyCon "Require") (TyApp (TyCon "List") (TyCon "ResError")))))
@@ -4987,7 +4983,7 @@ takeOriginTrace _ =
 (DTypeSig false "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
 (DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig false "ifaceMethodNm" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
-(DFunDef false "ifaceMethodNm" ((PCon "IfaceMethod" (PVar "n") PWild PWild)) (EVar "n"))
+(DFunDef false "ifaceMethodNm" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "implMethodNm" (TyFun (TyCon "ImplMethod") (TyCon "String")))
 (DFunDef false "implMethodNm" ((PCon "ImplMethod" (PVar "n") PWild PWild)) (EVar "n"))
 (DTypeSig false "interfaceList" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -5691,8 +5687,8 @@ takeOriginTrace _ =
 (DFunDef false "stampDecl" ((PVar "top") (PCon "DAttrib" (PVar "attrs") (PVar "inner"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "stampDecl") (EVar "top")) (EVar "inner"))))
 (DFunDef false "stampDecl" (PWild (PVar "d")) (EVar "d"))
 (DTypeSig false "stampIfaceMethod" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))
-(DFunDef false "stampIfaceMethod" (PWild (PCon "IfaceMethod" (PVar "nm") (PVar "ty") (PCon "None"))) (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "nm")) (EVar "ty")) (EVar "None")))
-(DFunDef false "stampIfaceMethod" ((PVar "top") (PCon "IfaceMethod" (PVar "nm") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))))) (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "nm")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "pats")) (EApp (EApp (EVar "stampExpr") (EApp (EApp (EVar "insertParams") (EVar "pats")) (EVar "top"))) (EVar "body"))))))
+(DFunDef false "stampIfaceMethod" (PWild (PCon "IfaceMethod" (PVar "nm") (PVar "ty") (PCon "None") (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "nm")) (EVar "ty")) (EVar "None")) (EVar "mloc")))
+(DFunDef false "stampIfaceMethod" ((PVar "top") (PCon "IfaceMethod" (PVar "nm") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "nm")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "pats")) (EApp (EApp (EVar "stampExpr") (EApp (EApp (EVar "insertParams") (EVar "pats")) (EVar "top"))) (EVar "body"))))) (EVar "mloc")))
 (DTypeSig false "stampImplMethod" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod"))))
 (DFunDef false "stampImplMethod" ((PVar "top") (PCon "ImplMethod" (PVar "nm") (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "nm")) (EVar "pats")) (EApp (EApp (EVar "stampExpr") (EApp (EApp (EVar "insertParams") (EVar "pats")) (EVar "top"))) (EVar "body"))))
 (DTypeSig true "stampBindingIds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
@@ -6174,8 +6170,8 @@ takeOriginTrace _ =
 (DTypeSig false "checkSuper" (TyFun (TyCon "Env") (TyFun (TyCon "Super") (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "checkSuper" ((PVar "env") (PRec "Super" ((rf "superHead" (PVar "iface"))) false)) (EIf (EApp (EApp (EVar "contains") (EVar "iface")) (EFieldAccess (EVar "env") "interfaces")) (EApp (EApp (EApp (EVar "ambiguousIfaceErrors") (EVar "env")) (EVar "iface")) (EVar "None")) (EListLit (EApp (EApp (EVar "UnknownInterface") (EVar "iface")) (EVar "None")))))
 (DTypeSig false "checkIfaceMethod" (TyFun (TyCon "Env") (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyCon "ResError")))))
-(DFunDef false "checkIfaceMethod" ((PVar "env") (PCon "IfaceMethod" PWild (PVar "t") (PCon "None"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
-(DFunDef false "checkIfaceMethod" ((PVar "env") (PCon "IfaceMethod" PWild (PVar "t") (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkPat") (EApp (EVar "firstExprLoc") (EVar "body"))) (EVar "env"))) (EVar "pats"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EVar "patsBindings") (EVar "pats")))) (EVar "body"))))
+(DFunDef false "checkIfaceMethod" ((PVar "env") (PCon "IfaceMethod" PWild (PVar "t") (PCon "None") PWild)) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
+(DFunDef false "checkIfaceMethod" ((PVar "env") (PCon "IfaceMethod" PWild (PVar "t") (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkPat") (EApp (EVar "firstExprLoc") (EVar "body"))) (EVar "env"))) (EVar "pats"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EVar "patsBindings") (EVar "pats")))) (EVar "body"))))
 (DTypeSig false "checkImplDecl" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyFun (TyApp (TyCon "List") (TyCon "ImplMethod")) (TyApp (TyCon "List") (TyCon "ResError"))))))))
 (DFunDef false "checkImplDecl" ((PVar "env") (PVar "iface") (PVar "tyargs") (PVar "reqs") (PVar "methods")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env"))) (EVar "tyargs")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkRequire") (EVar "env"))) (EVar "reqs"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkImplMethod") (EVar "env"))) (EVar "methods"))) (EApp (EApp (EApp (EVar "checkImplIface") (EVar "env")) (EVar "iface")) (EVar "methods"))) (EApp (EApp (EApp (EVar "ambiguousIfaceErrors") (EVar "env")) (EVar "iface")) (EApp (EVar "firstTyLocList") (EVar "tyargs")))))
 (DTypeSig false "checkRequire" (TyFun (TyCon "Env") (TyFun (TyCon "Require") (TyApp (TyCon "List") (TyCon "ResError")))))
@@ -6222,7 +6218,7 @@ takeOriginTrace _ =
 (DTypeSig false "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
 (DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig false "ifaceMethodNm" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
-(DFunDef false "ifaceMethodNm" ((PCon "IfaceMethod" (PVar "n") PWild PWild)) (EVar "n"))
+(DFunDef false "ifaceMethodNm" ((PCon "IfaceMethod" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "implMethodNm" (TyFun (TyCon "ImplMethod") (TyCon "String")))
 (DFunDef false "implMethodNm" ((PCon "ImplMethod" (PVar "n") PWild PWild)) (EVar "n"))
 (DTypeSig false "interfaceList" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -6926,8 +6922,8 @@ takeOriginTrace _ =
 (DFunDef false "stampDecl" ((PVar "top") (PCon "DAttrib" (PVar "attrs") (PVar "inner"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EVar "stampDecl") (EVar "top")) (EVar "inner"))))
 (DFunDef false "stampDecl" (PWild (PVar "d")) (EVar "d"))
 (DTypeSig false "stampIfaceMethod" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))
-(DFunDef false "stampIfaceMethod" (PWild (PCon "IfaceMethod" (PVar "nm") (PVar "ty") (PCon "None"))) (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "nm")) (EVar "ty")) (EVar "None")))
-(DFunDef false "stampIfaceMethod" ((PVar "top") (PCon "IfaceMethod" (PVar "nm") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))))) (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "nm")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "pats")) (EApp (EApp (EVar "stampExpr") (EApp (EApp (EVar "insertParams") (EVar "pats")) (EVar "top"))) (EVar "body"))))))
+(DFunDef false "stampIfaceMethod" (PWild (PCon "IfaceMethod" (PVar "nm") (PVar "ty") (PCon "None") (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "nm")) (EVar "ty")) (EVar "None")) (EVar "mloc")))
+(DFunDef false "stampIfaceMethod" ((PVar "top") (PCon "IfaceMethod" (PVar "nm") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "nm")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "pats")) (EApp (EApp (EVar "stampExpr") (EApp (EApp (EVar "insertParams") (EVar "pats")) (EVar "top"))) (EVar "body"))))) (EVar "mloc")))
 (DTypeSig false "stampImplMethod" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "ImplMethod") (TyCon "ImplMethod"))))
 (DFunDef false "stampImplMethod" ((PVar "top") (PCon "ImplMethod" (PVar "nm") (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "nm")) (EVar "pats")) (EApp (EApp (EVar "stampExpr") (EApp (EApp (EVar "insertParams") (EVar "pats")) (EVar "top"))) (EVar "body"))))
 (DTypeSig true "stampBindingIds" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))
