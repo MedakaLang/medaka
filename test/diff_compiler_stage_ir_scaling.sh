@@ -470,6 +470,22 @@ trmc=mdk_backend_trmc_analysis__detectDispatchGroups"
 # `modules:typecheck` entry in KNOWN_SLOW below for the four attributed sites and the
 # ceiling/fixed pair. The other five MOD_SYMS rows remain a regression guard and a
 # driver-parity claim, as written.
+#
+# DELIBERATE RED — negative control, or lack of one (F-fixround-3, §7.1): NO
+# pre-fix-red-then-fixed observation exists for the multi-module driver itself.
+# When this arm landed (S-frontend-ir-arm part 1b), all six MOD_SYMS rows read
+# "ok" and dead-linear on first measurement — see that slice's report §6.1,
+# which nets byte-identical to the "MEASURED margins" table above. The driver
+# was never seen red and then fixed; it has only ever been observed passing.
+# The one live non-linear reading this arm carries — `modules:typecheck`
+# 2.190/2.217 above #1879 — is NOT a pre-fix-red-then-fixed case either: it is
+# a currently OPEN, accepted-under-ceiling defect (see KNOWN_SLOW below), not a
+# closed one, so it cannot stand in as this arm's deliberate-red record. No
+# fresh negative-control shape was constructed here (constructing one cheap and
+# honest would mean re-breaking a known-fixed multi-module quadratic on
+# purpose, which risks miscalibrating the ceiling/threshold this arm now
+# relies on) — this paragraph is the honest statement of the gap, not a fix
+# for it.
 MOD_SYMS="parse=mdk_frontend_parser__parseResult \
 load=mdk_driver_loader__loadProgram \
 desugar=mdk_frontend_desugar__desugar \
@@ -621,6 +637,14 @@ gen_vchain() {
 # site count grows with N => O(N^2) pre-fix, O(N) (OrdMap membership) post-fix.
 # `x == x` in f0's body also exercises the (already OrdMap-backed, #953) `methods`
 # scan — inert here, kept only so f0 typechecks against `Eq`.
+#
+# DELIBERATE RED, observed pre-fix (S-frontend-list-as-set report §6.1, this
+# generator, this band): `mark` at N=300/600/1200 read
+# `** SUPERLINEAR (stage Ir) ** r1=3.337 r2=3.558 (threshold 3.0, both doublings)` —
+# i.e. this shape genuinely failed the gate before the fix. Fixed by commit
+# `6df20241` (S-frontend-list-as-set: converted marker's `constrained` from a
+# List-as-set scan to an `OrdMap Unit` membership set), after which the row reads
+# linear (see the S-frontend-list-as-set report's §6.2 post-fix table).
 gen_constrained() {
   gn=$1; gf=$2; : > "$gf"
   printf 'f0 : Eq a => a -> Bool\nf0 x = x == x\n' >> "$gf"
@@ -643,6 +667,14 @@ gen_constrained() {
 # split/default lines — never exercises `mergeInto`) — see the packet's own
 # note that `gen_marksweep` triple-blinds #1018 on the OLD (TIME/ALLOC/OP) arms
 # without ever reaching this merge path with a duplicate-name insert.
+#
+# DELIBERATE RED, observed pre-fix (S-frontend-list-as-set report §6.1, this
+# generator, this band): `desugar` at N=125/250/500 read
+# `** SUPERLINEAR (stage Ir) ** r1=3.680 r2=3.973 (threshold 3.0, both doublings)` —
+# this shape genuinely failed the gate before the fix. Fixed by commit `6df20241`
+# (S-frontend-list-as-set: converted `mergeIfaceDefaults`/`mergeIfaceMethods`'s
+# `insertMethod`/`containsMethod` linear scan off List-as-set), after which the
+# row reads linear (see the S-frontend-list-as-set report's §6.2 post-fix table).
 gen_wideiface() {
   gn=$1; gf=$2; : > "$gf"
   printf 'interface Wide a where\n' >> "$gf"
