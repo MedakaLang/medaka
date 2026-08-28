@@ -26,13 +26,20 @@ inputs:
   valgrind:
     description: >-
       'true' to also install valgrind — the measurement tool for
-      test/diff_compiler_ir_scaling.sh, which grades `medaka check`
-      superlinearity on Cachegrind instruction counts. Installed by the `gates`
-      job on EVERY shard for the same reason sqlite3 is: shards are scheduled by
-      COST, not by theme, so a gate moved between shards must never silently lose
-      the tool it measures with. ⚠️ That gate SKIPS (exit 2, "not on PATH") rather
-      than failing when valgrind is absent, so dropping this input would not turn
-      anything red — it would quietly stop grading.
+      test/diff_compiler_ir_scaling.sh (Cachegrind, `medaka check`) and
+      test/diff_compiler_stage_ir_scaling.sh (Callgrind, per-stage). Installed by
+      the `gates` job on EVERY shard for the same reason sqlite3 is: shards are
+      scheduled by COST, not by theme, so a gate moved between shards must never
+      silently lose the tool it measures with. ⚠️ This description used to end
+      "That gate SKIPS (exit 2, 'not on PATH') rather than failing when valgrind
+      is absent, so dropping this input would not turn anything red — it would
+      quietly stop grading." That was accurate and it was the bug (#2065). Both
+      gates now hard-fail (exit 1) when valgrind is absent AND `CI` is set, so
+      dropping this input DOES turn a shard red rather than quietly stopping the
+      measurement. Precisely: the shards whose `pattern:` matches one of the two
+      gates — `sqlite` and `types` as ci.yml stands today — not "every gates
+      shard". Derive it (`grep -n ir_scaling .github/workflows/ci.yml`); shards
+      are scheduled by cost, so that mapping moves.
     required: false
     default: 'false'
   wasm:

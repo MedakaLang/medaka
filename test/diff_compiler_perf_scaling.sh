@@ -109,6 +109,35 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Shape generators SHARED with test/diff_compiler_ir_scaling.sh: gen_xref,
+# gen_manyifaces (#2066). Every other generator in this file is single-consumer and
+# stays here. Read perf_shapes.sh's header before editing one — a change there moves
+# every band and ledger ceiling in BOTH gates at once.
+# `.` is a POSIX SPECIAL BUILTIN: a missing file terminates this script on the
+# spot with nothing of ours on stdout, and run_gates.sh reads a gate that printed
+# nothing as a skip candidate rather than a failure. Sharing these generators
+# (#2066) therefore ADDED a green-by-silence path; this closes it.
+#
+# OBSERVED RED, 2026-08-28, this box (#2160 rule 1). The library was moved aside
+# and BOTH gates were run whole:
+#
+#   $ mv test/perf_shapes.sh /tmp/hidden
+#   $ sh test/diff_compiler_ir_scaling.sh;   echo "exit=$?"   -> exit=1
+#   $ sh test/diff_compiler_perf_scaling.sh; echo "exit=$?"   -> exit=1
+#   FAIL: cannot read <root>/test/perf_shapes.sh — the shared shape library (#2066) is missing.
+#     Both scaling gates source it; without it neither can generate a single shape.
+#
+# Without the guard both instead die inside the `.` builtin, printing only dash's
+# own "can't open" on stderr and exiting 2 — which run_gates.sh weighs against
+# LEGIT_SKIP_RE rather than counting as a failure.
+[ -r "$ROOT/test/perf_shapes.sh" ] || {
+  echo "FAIL: cannot read $ROOT/test/perf_shapes.sh — the shared shape library (#2066) is missing."
+  echo "  Both scaling gates source it; without it neither can generate a single shape."
+  exit 1
+}
+. "$ROOT/test/perf_shapes.sh"
+
 PROFILE="$ROOT/test/bin/profile_main"
 # The MULTI-MODULE profiler (issue #153). The single-file PROFILE above cannot see
 # the O(modules^2) family (checkModuleFullImpl / elabModuleStamp) because it never
@@ -338,8 +367,35 @@ TIME_HEAP="${PERF_TIME_HEAP:-2147483648}"
 # stays (a future regression can re-ledger a shape without re-adding the plumbing).
 KNOWN_SUPERLINEAR=""
 
+# ── PERF_LEDGER_EXTRA: the DELIBERATE-RED SEAM for the ledger branches (#2150) ──
+#
+# The ledger branches are the hardest code in this file to observe red, because they
+# only run when a row is BOTH ledgered AND doing something the ledger did not predict —
+# and KNOWN_SUPERLINEAR is currently EMPTY (every entry drained). An unobservable branch
+# is exactly what #2160 exists to stop shipping, so there has to be a way in.
+#
+# These three variables APPEND to the three ledgers. They are:
+#   * ADD-ONLY — nothing can remove a real ledger entry through them, so they cannot be
+#     used to quiet a live row;
+#   * default-empty, and never set by CI or by any script in this tree (derive:
+#     `grep -rn PERF_LEDGER_EXTRA .github test Makefile`);
+#   * announced with a LOUD BANNER on every run that sets one (below), so a run under an
+#     injected ledger can never be mistaken for a graded one.
+# They exist for the observe-red record kept beside each branch, and for the next person
+# who has to re-observe it.
+PERF_LEDGER_EXTRA="${PERF_LEDGER_EXTRA:-}"
+PERF_LEDGER_EXTRA_TIME="${PERF_LEDGER_EXTRA_TIME:-}"
+PERF_LEDGER_EXTRA_OPS="${PERF_LEDGER_EXTRA_OPS:-}"
+if [ -n "$PERF_LEDGER_EXTRA$PERF_LEDGER_EXTRA_TIME$PERF_LEDGER_EXTRA_OPS" ]; then
+  echo "############################################################################"
+  echo "## LEDGER INJECTION ACTIVE — this run's verdicts are NOT a grading result. ##"
+  echo "##   alloc += [$PERF_LEDGER_EXTRA]  time += [$PERF_LEDGER_EXTRA_TIME]  ops += [$PERF_LEDGER_EXTRA_OPS]"
+  echo "## Only for observing the ledger branches red. Never set this in CI.       ##"
+  echo "############################################################################"
+fi
+
 is_known() {
-  for k in $KNOWN_SUPERLINEAR; do [ "$k" = "$1" ] && return 0; done
+  for k in $KNOWN_SUPERLINEAR $PERF_LEDGER_EXTRA; do [ "$k" = "$1" ] && return 0; done
   return 1
 }
 
@@ -589,36 +645,11 @@ gen_comments() {
   printf 'main = println 1\n' >> "$f"
 }
 
-gen_xref() {
-  n=$1; f=$2; : > "$f"
-  # N top-level functions, each REFERENCING the previous one (f0 is the base
-  # case). This is the shape #78's resolve quadratic actually needed: every
-  # `fN x = f(N-1) x + N` forces `lookupValue` to fall through the local-scope
-  # check and walk the top-level env for `f(N-1)` — the scan `bindings` above
-  # never triggers.
-  printf 'f0 : Int -> Int\nf0 x = x + 1\n' >> "$f"
-  i=1; while [ "$i" -lt "$n" ]; do
-    prev=$((i - 1))
-    printf 'f%s : Int -> Int\nf%s x = f%s x + %s\n' "$i" "$i" "$prev" "$i"
-    i=$((i+1))
-  done >> "$f"
-  # ⚠️ `main` CALLS THE HEAD OF THE CHAIN, and that is load-bearing — do not
-  # "simplify" it to `println 1`.
-  #
-  # An emit-able program must have a `main` at all (emitProgram panics "no `main`
-  # binding" without one). But a `main` that reaches NOTHING is worse than useless
-  # here: profile_main runs `dceFilter` exactly as the real build driver does, whose
-  # roots are `main` + impl/interface bodies. With `main = println 1` every f0..fN is
-  # DEAD, gets pruned before lowering, and the backend stages would time the prelude
-  # and nothing else -- a ratio describing a scenario no real build performs.
-  #
-  # f%s calls f%s-1, so calling the LAST one transitively retains the WHOLE chain
-  # through DCE. This is what makes the `xref:emit` quadratic a claim about
-  # `medaka build` rather than about an artifact of the harness.
-  # NB: f$((n-1)), not $prev — $prev leaves the loop at n-2, which would strand the
-  # last function as the one dead decl.
-  printf 'main = println (f%s 0)\n' "$((n - 1))" >> "$f"
-}
+# gen_xref lives in test/perf_shapes.sh, SHARED with test/diff_compiler_ir_scaling.sh
+# (sourced at the top of this file). It was transcribed into that gate by hand until
+# #2066; two copies of a shape whose ratios the two gates quote against each other is a
+# drift hazard neither gate can see. Its full rationale — the #78 lookupValue scan, and
+# why `main` must call the head of the chain — moved there with it.
 
 # gen_scoperefs — THE #78 P-1 resolve SCOPE-scan detector. `xref` above no longer
 # catches #78: its quadratic was the env.values LIST scan, and env.values became an
@@ -734,27 +765,8 @@ gen_marksweep() {
 # elaborate (op r1=2.71 r2=3.21) still CLIMBs but stays r1<3, so it reads `ok` and is NOT
 # ledgered (WATCH: a future source change lifting r1 over 3 will correctly fail and force a
 # ledger decision then, exactly as the comments:typecheck note warns).
-gen_manyifaces() {
-  n=$1; f=$2; : > "$f"
-  r=8
-  {
-    i=0; while [ "$i" -lt "$n" ]; do
-      printf 'interface P%s a where\n  m%s : a -> Int\n' "$i" "$i"
-      i=$((i+1))
-    done
-    printf 'base : Int\nbase = 1\n'
-    i=0; while [ "$i" -lt "$n" ]; do
-      printf 'h%s : Int\nh%s = base' "$i" "$i"
-      j=1; while [ "$j" -lt "$r" ]; do printf ' + base'; j=$((j+1)); done
-      printf '\n'
-      i=$((i+1))
-    done
-    # mark/resolve/typecheck run BEFORE DCE and see every decl; `main` reaches only
-    # h0 (the rest are pruned before the backend, which this front-end shape does not
-    # grade — xref carries backend).
-    printf 'main = println h0\n'
-  } >> "$f"
-}
+# gen_manyifaces lives in test/perf_shapes.sh, SHARED with
+# test/diff_compiler_ir_scaling.sh — same #2066 reasoning as gen_xref above.
 
 # gen_widerecords — THE WIDE-RECORD SHAPE (issue #883, §5 hole 9). The ONLY shape that
 # declares a record: a data decl with N fields, plus N tiny accessor decls (`gI r =
@@ -1721,7 +1733,8 @@ KNOWN_TCEIL_manydefs_lint="4.3";      KNOWN_TFIXED_manydefs_lint="2.60"
 KNOWN_TCEIL_xref_emit="5.6";          KNOWN_TFIXED_xref_emit="2.60"
 
 is_known_time() {
-  for k in $KNOWN_SLOW_TIME; do [ "$k" = "$1" ] && return 0; done
+  # PERF_LEDGER_EXTRA_TIME: add-only deliberate-red seam — see PERF_LEDGER_EXTRA.
+  for k in $KNOWN_SLOW_TIME $PERF_LEDGER_EXTRA_TIME; do [ "$k" = "$1" ] && return 0; done
   return 1
 }
 
@@ -1918,7 +1931,8 @@ KNOWN_ACEIL_reexports_resolve="4.0"; KNOWN_AFIXED_reexports_resolve="2.30"
 # source). Row drained; the widerecords shape still runs as a linear regression guard.
 
 is_known_ops() {
-  for k in $KNOWN_SLOW_OPS; do [ "$k" = "$1" ] && return 0; done
+  # PERF_LEDGER_EXTRA_OPS: add-only deliberate-red seam — see PERF_LEDGER_EXTRA.
+  for k in $KNOWN_SLOW_OPS $PERF_LEDGER_EXTRA_OPS; do [ "$k" = "$1" ] && return 0; done
   return 1
 }
 
@@ -2021,8 +2035,34 @@ grade_time_stage() {
 
   if is_known_time "${shape}:${st}"; then
     lk="$(printf '%s_%s' "$shape" "$st" | tr -c 'a-zA-Z0-9_' '_')"
-    eval "tceil=\${KNOWN_TCEIL_$lk}"
-    eval "tfixed=\${KNOWN_TFIXED_$lk}"
+    # `:-` under `set -u` (:109) — see the ALLOC arm's note. Without it an unset
+    # ceiling KILLS THE GATE mid-run with exit 2 and nothing this file wrote, and
+    # exit 2 is run_gates.sh's skip candidate. PERF_LEDGER_EXTRA_TIME routes
+    # straight into this branch, so the hazard is live, not theoretical.
+    #
+    # OBSERVED RED, 2026-08-28, this box, verbatim (#2160 rule 1 — an arm nobody
+    # has watched fail is not a pin). First the hazard the `:-` removes:
+    #
+    #   $ /bin/sh -c 'set -u; eval "x=${KNOWN_OCEIL_foo_bar}"; echo unreachable'
+    #   /bin/sh: 1: KNOWN_OCEIL_foo_bar: parameter not set
+    #   exit=2                      <- no output of ours, and 2 is the skip code
+    #
+    # then this branch, reached through the add-only injection seam:
+    #
+    #   $ PERF_LEDGER_EXTRA_TIME="xref:typecheck" sh test/diff_compiler_perf_scaling.sh
+    #   ## LEDGER INJECTION ACTIVE — this run's verdicts are NOT a grading result. ##
+    #              time typecheck: ** MALFORMED LEDGER ROW ** no KNOWN_TCEIL_xref_typecheck / KNOWN_TFIXED_xref_typecheck pair.
+    #              A ledger row without both halves cannot drain itself — that is a skip-list, not a pin.
+    #   exit=1
+    eval "tceil=\${KNOWN_TCEIL_$lk:-}"
+    eval "tfixed=\${KNOWN_TFIXED_$lk:-}"
+    if [ -z "$tceil" ] || [ -z "$tfixed" ]; then
+      fail=$((fail+1))
+      time_lines="${time_lines}           time ${st}: ** MALFORMED LEDGER ROW ** no KNOWN_TCEIL_${lk} / KNOWN_TFIXED_${lk} pair.
+           A ledger row without both halves cannot drain itself — that is a skip-list, not a pin.
+"
+      return
+    fi
     tworse="$(awk -v r="$tr2" -v c="$tceil" 'BEGIN{print (r > c) ? 1 : 0}')"
     tbetter="$(awk -v r="$tr2" -v f="$tfixed" 'BEGIN{print (r < f) ? 1 : 0}')"
     if [ "$tworse" = "1" ]; then
@@ -2078,6 +2118,43 @@ grade_op_stage() {
   # a constant handful (marksweep's resolve = 64) also lands here.
   small="$(awk -v v="$o1" -v f="$OP_FLOOR" 'BEGIN{print (v + 0 < f + 0) ? 1 : 0}')"
   if [ "$small" = "1" ]; then
+    # ⚠️ BUT A LEDGERED STAGE MAY NOT SKIP (#2150). Identical in force to the rule
+    # grade_time_stage already applies at its own floor, and it was MISSING here.
+    # Dropping under OP_FLOOR is not an absence of signal for a KNOWN_SLOW_OPS entry —
+    # it IS the signal, and the strongest form of it: the ledger asserts this row is
+    # superlinear, so "too little counted work to grade" CONTRADICTS the ledger. The
+    # commonest way to get here is the ledgered bug being FIXED — every #1031/#352/#242-
+    # class fix converts a counted `List` scan into an uncounted OrdMap probe and drives
+    # the count toward ZERO by construction — and a silent SKIP means nobody is ever told
+    # to drain the row. It then sits in the ledger forever, unfalsifiable, behind a green
+    # gate: a ledger that cannot notice its own bug is fixed is a skip-list, which is the
+    # one thing this ratchet must not become. Caught as a NEAR-MISS in `frontend-breadth`:
+    # #1017 cut `conlocal:mark` far enough to trip PROMOTE, and a slightly larger cut
+    # would have landed under the floor and drained in silence instead.
+    #
+    # OBSERVED RED, 2026-08-28, this box, verbatim (an arm nobody has seen fail is
+    # not a pin — #2160 rule 1). The ledgered row `conlocal:typecheck` was forced
+    # under the floor by raising the floor, which is the only knob that reaches
+    # this branch without editing the ledger:
+    #
+    #   $ PERF_OP_FLOOR=999999999 sh test/diff_compiler_perf_scaling.sh
+    #   exit=1
+    #              ops  typecheck: ** PROMOTE: now too FEW ops to grade ** 1329241 \
+    #                  at N=1600 (< 999999999, N=400->800->1600)
+    #              Remove "conlocal:typecheck" from KNOWN_SLOW_OPS — the counted scan is GONE.
+    #
+    # Before this branch existed the same run printed
+    #   ops typecheck: SKIP — too few ops to grade: ...
+    # and the gate exited 0.
+    if is_known_ops "${shape}:${st}"; then
+      fail=$((fail+1))
+      op_lines="${op_lines}           ops  ${st}: ** PROMOTE: now too FEW ops to grade ** ${o3} at N=${gn3} (< ${OP_FLOOR}, ${band})
+           Remove \"${shape}:${st}\" from KNOWN_SLOW_OPS — the counted scan is GONE.
+           (If the scan merely moved to an UNCOUNTED primitive, the row must move to a
+            different arm, not stay ledgered here where nothing can grade it.)
+"
+      return
+    fi
     op_lines="${op_lines}           ops  ${st}: SKIP — too few ops to grade: ${o3} at N=${gn3} (< ${OP_FLOOR})
 "
     return
@@ -2089,12 +2166,49 @@ grade_op_stage() {
 
   or1="$(awk -v a="$o1" -v b="$o2" 'BEGIN{printf "%.2f", b/a}')"
   or2="$(awk -v a="$o2" -v b="$o3" 'BEGIN{printf "%.2f", b/a}')"
+  # ⚠️ KNOWN-WEAK RULE, TRACKED: #2173. This is the SAME `r1 && r2` conjunct that
+  # #2100 reported against the Cachegrind gate, and it is wrong here for the same
+  # reason: op counts are DETERMINISTIC (opBump at two primitives, a pure function
+  # of the program), so one over-threshold doubling is a fact, not a sample. The
+  # TIME arm at :2012 keeps the conjunct legitimately — wall-clock is the one arm
+  # where a lone high ratio really can be noise; do not "unify" the two.
+  #
+  # NOT changed in #2160 phase 1, deliberately. Flipping it is a verdict widening
+  # across every op and emittables row in this file, and there is no way to know
+  # which rows it reddens without a full run plus a measured band for each — and a
+  # band derived under time pressure to reach green is [W-QUIETER]'s exact trap.
+  # #2173 carries the enumeration a fix has to do first.
   bad="$(awk -v r1="$or1" -v r2="$or2" -v th="$THRESH" 'BEGIN{print (r1 > th && r2 > th) ? 1 : 0}')"
 
   if is_known_ops "${shape}:${st}"; then
     lk="$(printf '%s_%s' "$shape" "$st" | tr -c 'a-zA-Z0-9_' '_')"
-    eval "oceil=\${KNOWN_OCEIL_$lk}"
-    eval "ofixed=\${KNOWN_OFIXED_$lk}"
+    # `:-` under `set -u` (:109) — same hazard as the TIME arm above, reached by
+    # PERF_LEDGER_EXTRA_OPS and by the ordinary mistake of adding a
+    # KNOWN_SLOW_OPS row without its ceiling pair.
+    #
+    # OBSERVED RED, 2026-08-28, this box, verbatim (#2160 rule 1):
+    #
+    #   $ PERF_LEDGER_EXTRA_OPS="xref:typecheck" sh test/diff_compiler_perf_scaling.sh
+    #   ## LEDGER INJECTION ACTIVE — this run's verdicts are NOT a grading result. ##
+    #              ops  typecheck: ** MALFORMED LEDGER ROW ** no KNOWN_OCEIL_xref_typecheck / KNOWN_OFIXED_xref_typecheck pair.
+    #              A ledger row without both halves cannot drain itself — that is a skip-list, not a pin.
+    #   exit=1
+    #
+    # ⚠️ These two branches were UNGUARDED in the first draft of this PR, whose
+    # commit message claimed "all eval sites now use `:-`". They were found by an
+    # independent review, not by me, and not by CI — CI was 15/15 green with the
+    # hole open, because nothing in the tree sets the injection seams. That is the
+    # argument for rule 1 in miniature: a green suite says nothing about an arm no
+    # one has driven.
+    eval "oceil=\${KNOWN_OCEIL_$lk:-}"
+    eval "ofixed=\${KNOWN_OFIXED_$lk:-}"
+    if [ -z "$oceil" ] || [ -z "$ofixed" ]; then
+      fail=$((fail+1))
+      op_lines="${op_lines}           ops  ${st}: ** MALFORMED LEDGER ROW ** no KNOWN_OCEIL_${lk} / KNOWN_OFIXED_${lk} pair.
+           A ledger row without both halves cannot drain itself — that is a skip-list, not a pin.
+"
+      return
+    fi
     oworse="$(awk -v r="$or2" -v c="$oceil" 'BEGIN{print (r > c) ? 1 : 0}')"
     obetter="$(awk -v r="$or2" -v f="$ofixed" 'BEGIN{print (r < f) ? 1 : 0}')"
     if [ "$oworse" = "1" ]; then
@@ -2214,6 +2328,96 @@ printf -- '---------------------------------------------------------------------
 # contaminated by the constant term. Also flag a CLIMBING trend (r2 meaningfully above
 # r1) even when r2 is still under the ceiling, because that is a quadratic caught early,
 # while it is small.
+#
+# ── clause_of: NAME THE CLAUSE THAT FIRED (#1879 -> #2151) ────────────────────
+#
+# Every `QUADRATIC` verdict in this file is the SAME DISJUNCTION — `r2 > THRESH` OR
+# `climbing` — so the failure text must say which half tripped or it is a label rather
+# than a measurement. #1879 failed on the CLIMBING clause at r1~2.1 r2~2.67, comfortably
+# BELOW 3.0, and the message told its reader it had exceeded 3.0x; they went looking for
+# a 3x regression that did not exist. Two sites were corrected in place by #1879's own
+# sprint and SIX carried the bare message until #2151; this helper exists so there is ONE
+# copy of the wording and the next site cannot drift from it.
+#
+# Every awk verdict below emits a trailing `why` field ("threshold" / "climbing" / "-");
+# this maps it to the human clause. It is deliberately total: an unrecognised why (only
+# reachable if a verdict block forgets the field) reads as the climbing clause's text
+# rather than crashing, and the ratios printed alongside always disambiguate.
+#
+# Args: <why> [threshold]. The threshold defaults to $THRESH but MUST be passed at the
+# rows that grade against their own ceiling (WD_THRESH, LD_THRESH) — printing the shared
+# 3.0 next to a row graded at 2.6 would be the same lie in a new place.
+clause_of() {
+  if [ "${1:-}" = "threshold" ]; then
+    printf 'r2 > %sx' "${2:-$THRESH}"
+  else
+    printf 'climbing: r2 > r1 x 1.15 AND r2 > 2.45'
+  fi
+}
+
+# ── SELF-CHECK, and why the CLIMBING arm needs one ────────────────────────────
+#
+# The threshold arm is observable end-to-end from outside: drop PERF_THRESH and every
+# shape trips it (the record below).
+#
+# The CLIMBING arm has no such knob — it fires only when `r2 > r1*1.15 AND r2 > 2.45
+# AND r2 <= THRESH`, and no environment variable moves the two hard-coded constants,
+# so it cannot be DRIVEN. This self-check exists for that reason: it costs microseconds
+# and cannot rot, and a future edit that loses either clause's text fails the gate at
+# startup rather than at some unknown later red.
+#
+# ⚠️ AN EARLIER DRAFT OF THIS COMMENT SAID THE CLIMBING ARM WAS UNREACHABLE AND
+# THEREFORE UNGRADED — "a hole reported". THAT WAS WRONG, and the correction came from
+# running the gate rather than reading it. It cannot be driven ON DEMAND; it is reached
+# in normal operation, by the `modules` shape's per-stage TIME arm, whose wall-clock
+# ratios are not pinned to ~2.0 the way the deterministic arms are. Observed here
+# 2026-08-28 in an ordinary `make preflight`, verbatim:
+#
+#   time typecheck: ** SUPERLINEAR (TIME) ** 0.272676944732666s -> 0.5733699798583984s
+#       -> 1.5150041580200195s  r1=2.10 r2=2.64 (climbing: r2 > r1 x 1.15 AND r2 > 2.45)
+#
+# That IS #2151, closed on its own terms and by the exact case that motivated it: this
+# row is #1879, and before this change the same failure printed a bare "** SUPERLINEAR
+# (TIME) **" whose reader was left to infer a 3.0x threshold breach that never happened
+# (r2 = 2.64). The clause is now named in the line that reports it.
+#
+# 🚨 DO NOT TREAT #1879 AS A REGRESSION IF YOU SEE THAT ROW RED. It is OPEN, `verified`,
+# and is a property of this box: perf_scaling's modules typecheck TIME arm is
+# superlinear here while CI passes on the same commit. Re-run or re-enqueue; the fix is
+# #1879's, not yours.
+_cc_t="$(clause_of threshold 3.0)"; _cc_c="$(clause_of climbing)"
+case "$_cc_t" in
+  *'r2 > 3.0x'*) ;;
+  *) echo "FAIL: clause_of lost the THRESHOLD clause wording — got [$_cc_t]"; exit 1 ;;
+esac
+case "$_cc_c" in
+  *climbing*1.15*2.45*) ;;
+  *) echo "FAIL: clause_of lost the CLIMBING clause wording — got [$_cc_c]"; exit 1 ;;
+esac
+[ "$_cc_t" != "$_cc_c" ] || { echo "FAIL: clause_of returns the same text for both clauses"; exit 1; }
+unset _cc_t _cc_c
+
+# ── OBSERVED RED, 2026-08-28, this box (#2160 rule 1) ────────────────────────
+#
+# The threshold clause, end to end, through every one of the six printfs that
+# previously emitted a bare "** SUPERLINEAR **" with no clause. Verbatim excerpt:
+#
+#   $ PERF_THRESH=1.2 sh test/diff_compiler_perf_scaling.sh
+#   exit=1
+#   bindings  250  121.0 MB  245.0 MB  495.6 MB  2.03  2.02  ** SUPERLINEAR (ALLOC) ** (r2 > 1.2x)
+#              time elaborate: ** SUPERLINEAR (TIME) ** 0.145…s -> 0.195…s -> 0.294…s \
+#                  r1=1.34 r2=1.50 (> 1.2x, N=250->500->1000)
+#              ops  elaborate: ** SUPERLINEAR (OPS) ** 349274 -> 442524 -> 629024 \
+#                  r1=1.27 r2=1.42 (> 1.2x, N=250->500->1000)
+#   match     250   69.9 MB  144.5 MB  307.1 MB  2.07  2.13  ** SUPERLINEAR (ALLOC) ** (r2 > 1.2x)
+#   xref     2000 1182.4 MB 2408.1 MB 4901.0 MB  2.04  2.04  ** SUPERLINEAR (ALLOC) ** (r2 > 1.2x)
+#
+# Before this change every one of those lines ended at "** SUPERLINEAR (ALLOC) **"
+# and the reader had to re-derive which half of the disjunction had fired.
+#
+# ⚠️ THE CLIMBING CLAUSE HAS NO SUCH RECORD, AND CANNOT HAVE ONE HERE. See the
+# self-check above: no knob reaches it. Its wording is guarded at startup instead,
+# and the arm itself remains ungraded — reported as a hole, not papered over.
 # `manydefs` is DEEP-only: its band exists solely to lift `lint` over the floor (0.62 s
 # at 16000), and nothing else in the shape needs 16000. QUICK announces the omission
 # rather than quietly running a smaller set — a gate that narrows its own scope in
@@ -2439,17 +2643,51 @@ for shape in $SHAPES; do
     # Gate on r2 (least constant-factor contamination). Also catch a CLIMBING ratio
     # even below the ceiling — that is a quadratic showing itself early.
     climbing = (r2 > r1 * 1.15 && r2 > 2.45)
-    printf "%.2f %.2f %s", r1, r2, ((r2 > th || climbing) ? "QUADRATIC" : "ok")
+    # 4th field = WHICH CLAUSE FIRED (#2151). The verdict is a DISJUNCTION, so a bare
+    # "** SUPERLINEAR (ALLOC) **" leaves the reader to guess which half tripped — and
+    # the modules TIME twin used to guess WRONG IN PRINT (#1879 tripped the climbing
+    # clause at r2~2.67 and was told it had exceeded 3.0x).
+    why = (r2 > th) ? "threshold" : (climbing ? "climbing" : "-")
+    printf "%.2f %.2f %s %s", r1, r2, ((r2 > th || climbing) ? "QUADRATIC" : "ok"), why
   }')"
   r1="$(echo "$verdict" | cut -d' ' -f1)"
   ratio="$(echo "$verdict" | cut -d' ' -f2)"
   word="$(echo "$verdict" | cut -d' ' -f3)"
+  why="$(echo "$verdict" | cut -d' ' -f4)"
+  clause="$(clause_of "$why")"
 
   d1="$(awk -v a="$a1" -v b="$BASE_ALLOC" 'BEGIN{printf "%.1f", a-b}')"
   d2="$(awk -v a="$a2" -v b="$BASE_ALLOC" 'BEGIN{printf "%.1f", a-b}')"
   d3="$(awk -v a="$a3" -v b="$BASE_ALLOC" 'BEGIN{printf "%.1f", a-b}')"
 
-  if [ "$word" = "TOOSMALL" ]; then
+  if [ "$word" = "TOOSMALL" ] && is_known "$shape"; then
+    # A LEDGERED shape under the floor is not "raise PERF_N" — it is a DRAIN CLAIM, and
+    # the reader must be told the right thing to do (#2150). The generic branch below is
+    # already loud, so this is not a silent-skip repair; it is a WRONG-INSTRUCTION one.
+    # A KNOWN_SUPERLINEAR entry asserts this shape allocates quadratically; if its net
+    # allocation has collapsed under the noise floor, the far likelier reading is that
+    # the bug is fixed, and "raise PERF_N" sends the reader to enlarge a band instead of
+    # draining a stale ledger row.
+    #
+    # OBSERVED RED, 2026-08-28, this box, verbatim (#2160 rule 1) — the add-only
+    # PERF_LEDGER_EXTRA seam puts a real shape in the ledger, PERF_N drives it
+    # under the 1.0 MB floor:
+    #
+    #   $ PERF_LEDGER_EXTRA=bindings PERF_N=2 sh test/diff_compiler_perf_scaling.sh
+    #   exit=1
+    #   ## LEDGER INJECTION ACTIVE — this run's verdicts are NOT a grading result. ##
+    #   bindings   2   0.9 MB   1.8 MB   3.7 MB   -   -  ** PROMOTE: ledgered, but now too SMALL to grade **
+    #
+    # Before this branch existed the same run reached the generic arm below and
+    # told the reader to "raise PERF_N" — loud, and pointing the wrong way.
+    fail=$((fail+1))
+    printf '%-10s %8s %7s MB %7s MB %7s MB  %6s %6s  ** PROMOTE: ledgered, but now too SMALL to grade **\n' \
+      "$shape" "$n1" "$d1" "$d2" "$d3" "-" "-"
+    printf '           Net alloc fell under the 1.0 MB floor. Either the quadratic is FIXED —\n'
+    printf '           then remove "%s" from KNOWN_SUPERLINEAR — or the band shrank; raise PERF_N.\n' "$shape"
+    printf '           It may NOT stay ledgered AND ungraded.\n'
+
+  elif [ "$word" = "TOOSMALL" ]; then
     # NOT a pass. An unmeasurable shape is a harness problem, and silently counting
     # it as fine is exactly how a suite starts lying about what it covers.
     fail=$((fail+1))
@@ -2458,8 +2696,22 @@ for shape in $SHAPES; do
 
   elif is_known "$shape"; then
     # A KNOWN-superlinear shape. Two ways this must still fail:
-    eval "ceil=\${KNOWN_CEIL_$shape}"
-    eval "fixed=\${KNOWN_FIXED_$shape}"
+    # `:-` is load-bearing under `set -u` (:109): without it an unset ceiling
+    # ABORTS the whole gate mid-run instead of reporting the malformed row, and
+    # the abort exits 2 — which run_gates.sh reads as a skip candidate, not a
+    # failure. Observed first-hand on ir_scaling's twin of this block while
+    # driving its ledger arms red on 2026-08-28. The explicit check below is the
+    # report; the `:-` only stops the shell dying before it can be made.
+    eval "ceil=\${KNOWN_CEIL_$shape:-}"
+    eval "fixed=\${KNOWN_FIXED_$shape:-}"
+    if [ -z "$ceil" ] || [ -z "$fixed" ]; then
+      fail=$((fail+1))
+      printf '%-10s ** MALFORMED LEDGER ROW ** no KNOWN_CEIL_%s / KNOWN_FIXED_%s pair.\n' \
+        "$shape" "$shape" "$shape"
+      printf '           A ledger row without both halves cannot drain itself — that is a\n'
+      printf '           skip-list, not a pin.\n'
+      continue
+    fi
     worse="$(awk -v r="$ratio" -v c="$ceil" 'BEGIN{print (r > c) ? "1" : "0"}')"
     better="$(awk -v r="$ratio" -v f="$fixed" 'BEGIN{print (r < f) ? "1" : "0"}')"
     if [ "$worse" = "1" ]; then
@@ -2482,8 +2734,8 @@ for shape in $SHAPES; do
 
   elif [ "$word" = "QUADRATIC" ]; then
     fail=$((fail+1))
-    printf '%-10s %8s %7s MB %7s MB %7s MB  %6s %6s  ** SUPERLINEAR (ALLOC) **\n' \
-      "$shape" "$n1" "$d1" "$d2" "$d3" "$r1" "$ratio"
+    printf '%-10s %8s %7s MB %7s MB %7s MB  %6s %6s  ** SUPERLINEAR (ALLOC) ** (%s)\n' \
+      "$shape" "$n1" "$d1" "$d2" "$d3" "$r1" "$ratio" "$clause"
     printf '%s' "$time_lines"
     printf '%s' "$op_lines"
 
@@ -2594,19 +2846,21 @@ case "$WLBASE_ALLOC$wla1$wla2$wla3" in
       if (n1 + 0 < 1.0) { printf "0 0 TOOSMALL"; exit }
       r1 = n2 / n1; r2 = n3 / n2
       climbing = (r2 > r1 * 1.15 && r2 > 2.45)
-      printf "%.2f %.2f %s", r1, r2, ((r2 > th || climbing) ? "QUADRATIC" : "ok")
+      why = (r2 > th) ? "threshold" : (climbing ? "climbing" : "-")
+      printf "%.2f %.2f %s %s", r1, r2, ((r2 > th || climbing) ? "QUADRATIC" : "ok"), why
     }')"
     wlr1="$(echo "$wlverdict" | cut -d' ' -f1)"
     wlr2="$(echo "$wlverdict" | cut -d' ' -f2)"
     wlword="$(echo "$wlverdict" | cut -d' ' -f3)"
+    wlclause="$(clause_of "$(echo "$wlverdict" | cut -d' ' -f4)")"
     if [ "$wlword" = "TOOSMALL" ]; then
       fail=$((fail+1))
       printf '%-12s %8s %8s MB %8s MB %8s MB  %6s %6s  ** N TOO SMALL — raise PERF_WASM_LISTLIT_N **\n' \
         "wasm-listlit" "$wln1" "$wlnet1" "$wlnet2" "$wlnet3" "-" "-"
     elif [ "$wlword" = "QUADRATIC" ]; then
       fail=$((fail+1))
-      printf '%-12s %8s %8s MB %8s MB %8s MB  %6s %6s  ** SUPERLINEAR (WASM-EMIT ALLOC) — emitListRef, #522/#382 **\n' \
-        "wasm-listlit" "$wln1" "$wlnet1" "$wlnet2" "$wlnet3" "$wlr1" "$wlr2"
+      printf '%-12s %8s %8s MB %8s MB %8s MB  %6s %6s  ** SUPERLINEAR (WASM-EMIT ALLOC) — emitListRef, #522/#382 ** (%s)\n' \
+        "wasm-listlit" "$wln1" "$wlnet1" "$wlnet2" "$wlnet3" "$wlr1" "$wlr2" "$wlclause"
     else
       pass=$((pass+1))
       printf '%-12s %8s %8s MB %8s MB %8s MB  %6s %6s  ok  (wasm-emit stage alloc)\n' \
@@ -2693,19 +2947,21 @@ case "$WDBASE_ALLOC$wda1$wda2$wda3" in
       if (n1 + 0 < 1.0) { printf "0 0 TOOSMALL"; exit }
       r1 = n2 / n1; r2 = n3 / n2
       climbing = (r2 > r1 * 1.15 && r2 > 2.45)
-      printf "%.2f %.2f %s", r1, r2, ((r2 > th || climbing) ? "QUADRATIC" : "ok")
+      why = (r2 > th) ? "threshold" : (climbing ? "climbing" : "-")
+      printf "%.2f %.2f %s %s", r1, r2, ((r2 > th || climbing) ? "QUADRATIC" : "ok"), why
     }')"
     wdr1="$(echo "$wdverdict" | cut -d' ' -f1)"
     wdr2="$(echo "$wdverdict" | cut -d' ' -f2)"
     wdword="$(echo "$wdverdict" | cut -d' ' -f3)"
+    wdclause="$(clause_of "$(echo "$wdverdict" | cut -d' ' -f4)" "$WD_THRESH")"
     if [ "$wdword" = "TOOSMALL" ]; then
       fail=$((fail+1))
       printf '%-12s %8s %8s MB %8s MB %8s MB  %6s %6s  ** N TOO SMALL — raise PERF_WASM_DISPATCH_N **\n' \
         "wasm-dispatch" "$wdn1" "$wdnet1" "$wdnet2" "$wdnet3" "-" "-"
     elif [ "$wdword" = "QUADRATIC" ]; then
       fail=$((fail+1))
-      printf '%-12s %8s %8s MB %8s MB %8s MB  %6s %6s  ** SUPERLINEAR (WASM-EMIT ALLOC) — per-site impl scan, #382 **\n' \
-        "wasm-dispatch" "$wdn1" "$wdnet1" "$wdnet2" "$wdnet3" "$wdr1" "$wdr2"
+      printf '%-12s %8s %8s MB %8s MB %8s MB  %6s %6s  ** SUPERLINEAR (WASM-EMIT ALLOC) — per-site impl scan, #382 ** (%s)\n' \
+        "wasm-dispatch" "$wdn1" "$wdnet1" "$wdnet2" "$wdnet3" "$wdr1" "$wdr2" "$wdclause"
     else
       pass=$((pass+1))
       printf '%-12s %8s %8s MB %8s MB %8s MB  %6s %6s  ok  (wasm-emit stage alloc)\n' \
@@ -2756,11 +3012,13 @@ case "$WDBASE_OPS$wdo1$wdo2$wdo3" in
       if (n1 + 0 < fl + 0) { printf "0 0 TOOSMALL"; exit }
       r1 = n2 / n1; r2 = n3 / n2
       climbing = (r2 > r1 * 1.15 && r2 > 2.45)
-      printf "%.2f %.2f %s", r1, r2, ((r2 > th || climbing) ? "QUADRATIC" : "ok")
+      why = (r2 > th) ? "threshold" : (climbing ? "climbing" : "-")
+      printf "%.2f %.2f %s %s", r1, r2, ((r2 > th || climbing) ? "QUADRATIC" : "ok"), why
     }')"
     wdor1="$(echo "$wdoverdict" | cut -d' ' -f1)"
     wdor2="$(echo "$wdoverdict" | cut -d' ' -f2)"
     wdoword="$(echo "$wdoverdict" | cut -d' ' -f3)"
+    wdoclause="$(clause_of "$(echo "$wdoverdict" | cut -d' ' -f4)" "$WD_THRESH")"
     if [ "$wdoword" = "TOOSMALL" ]; then
       fail=$((fail+1))
       printf '%-12s %8s %8s op %8s op %8s op  %6s %6s  ** N TOO SMALL — raise PERF_WASM_DISPATCH_N **\n' \
@@ -2768,8 +3026,8 @@ case "$WDBASE_OPS$wdo1$wdo2$wdo3" in
     elif [ "$wdoword" = "QUADRATIC" ]; then
       ops_graded=$((ops_graded+1))
       fail=$((fail+1))
-      printf '%-12s %8s %8s op %8s op %8s op  %6s %6s  ** SUPERLINEAR (WASM-EMIT OPS) — methodArityOf/methodIfaceOf iface scan, #986 **\n' \
-        "wasm-disp/op" "$wdn1" "$wdonet1" "$wdonet2" "$wdonet3" "$wdor1" "$wdor2"
+      printf '%-12s %8s %8s op %8s op %8s op  %6s %6s  ** SUPERLINEAR (WASM-EMIT OPS) — methodArityOf/methodIfaceOf iface scan, #986 ** (%s)\n' \
+        "wasm-disp/op" "$wdn1" "$wdonet1" "$wdonet2" "$wdonet3" "$wdor1" "$wdor2" "$wdoclause"
     else
       ops_graded=$((ops_graded+1))
       pass=$((pass+1))
@@ -2824,11 +3082,13 @@ case "$LDBASE_OP$ldo1$ldo2$ldo3" in
       if (n1 + 0 < fl + 0) { printf "0 0 TOOSMALL"; exit }
       r1 = n2 / n1; r2 = n3 / n2
       climbing = (r2 > r1 * 1.15 && r2 > 2.45)
-      printf "%.2f %.2f %s", r1, r2, ((r2 > th || climbing) ? "QUADRATIC" : "ok")
+      why = (r2 > th) ? "threshold" : (climbing ? "climbing" : "-")
+      printf "%.2f %.2f %s %s", r1, r2, ((r2 > th || climbing) ? "QUADRATIC" : "ok"), why
     }')"
     ldor1="$(echo "$ldoverdict" | cut -d' ' -f1)"
     ldor2="$(echo "$ldoverdict" | cut -d' ' -f2)"
     ldoword="$(echo "$ldoverdict" | cut -d' ' -f3)"
+    ldoclause="$(clause_of "$(echo "$ldoverdict" | cut -d' ' -f4)" "$LD_THRESH")"
     if [ "$ldoword" = "TOOSMALL" ]; then
       fail=$((fail+1))
       printf '%-12s %8s %8s op %8s op %8s op  %6s %6s  ** N TOO SMALL — raise PERF_WASM_DISPATCH_N **\n' \
@@ -2836,8 +3096,8 @@ case "$LDBASE_OP$ldo1$ldo2$ldo3" in
     elif [ "$ldoword" = "QUADRATIC" ]; then
       ops_graded=$((ops_graded+1))
       fail=$((fail+1))
-      printf '%-12s %8s %8s op %8s op %8s op  %6s %6s  ** SUPERLINEAR (LLVM-EMIT OPS) — impl/ctor/nub scan, #990 **\n' \
-        "llvm-disp/op" "$wdn1" "$ldonet1" "$ldonet2" "$ldonet3" "$ldor1" "$ldor2"
+      printf '%-12s %8s %8s op %8s op %8s op  %6s %6s  ** SUPERLINEAR (LLVM-EMIT OPS) — impl/ctor/nub scan, #990 ** (%s)\n' \
+        "llvm-disp/op" "$wdn1" "$ldonet1" "$ldonet2" "$ldonet3" "$ldor1" "$ldor2" "$ldoclause"
     else
       ops_graded=$((ops_graded+1))
       pass=$((pass+1))
@@ -2933,11 +3193,7 @@ case "$MBASE_ALLOC$ma1$ma2$ma3" in
     mar2="$(echo "$averdict" | cut -d' ' -f2)"
     aword="$(echo "$averdict" | cut -d' ' -f3)"
     awhy="$(echo "$averdict" | cut -d' ' -f4)"
-    if [ "$awhy" = "threshold" ]; then
-      aclause="r2 > ${THRESH}x"
-    else
-      aclause="climbing: r2 > r1 x 1.15 AND r2 > 2.45"
-    fi
+    aclause="$(clause_of "$awhy")"
     if [ "$aword" = "TOOSMALL" ]; then
       fail=$((fail+1))
       printf '%-10s %8s %7s MB %7s MB %7s MB  %6s %6s  ** N TOO SMALL — raise PERF_MOD_N **\n' \
@@ -2998,11 +3254,7 @@ case "$MBASE_ALLOC$ma1$ma2$ma3" in
         }')"
         tbad="$(echo "$tverdict" | cut -d' ' -f1)"
         twhy="$(echo "$tverdict" | cut -d' ' -f2)"
-        if [ "$twhy" = "threshold" ]; then
-          tclause="r2 > ${THRESH}x"
-        else
-          tclause="climbing: r2 > r1 x 1.15 AND r2 > 2.45"
-        fi
+        tclause="$(clause_of "$twhy")"
         if [ "$tbad" = "1" ]; then
           fail=$((fail+1))
           printf '           time typecheck: ** SUPERLINEAR (TIME) ** %ss -> %ss -> %ss  r1=%s r2=%s (%s)\n' \
@@ -3396,10 +3648,54 @@ grade_emittables_stage emit
 # piggy-backing on. What is lost by retiring the row is a mangle-stage op grade that
 # never actually existed; what is NOT lost is any live coverage of a real quadratic.
 #
-# REPLACEMENT COVERAGE IS OWED, and is tracked as its own issue — a live mangle-stage
-# grade needs a counted primitive on the OrdMap path (support/ordmap.mdk has NO
-# opBump instrumentation today, so this is a compiler-source change, deliberately out
-# of scope for the gate-calibration fix that retired this row).
+# REPLACEMENT COVERAGE WAS OWED WHEN THIS WAS WRITTEN. IT HAS SINCE LANDED, in a
+# different gate and on a different instrument — #2099's headline ("the mangle stage
+# is now graded by nothing") is TRUE OF THIS FILE and FALSE OF THE TREE, and the tree
+# wins. `test/diff_compiler_stage_ir_scaling.sh` grades
+# `mangle=mdk_backend_private_mangle__mangleUnits` as a first-class row in STAGE_SYMS
+# (added by sprint backend-breadth, slice S-build-ir-arm, 7d644eff). Re-derived on
+# this box 2026-08-28 by running that gate whole — it grades mangle on EVERY
+# single-module shape, with real net Ir, not a SKIP under its netting guard:
+#
+#   match       mangle  net  8431969 -> 18587297 ->  40424584   r1=2.204 r2=2.175
+#   xref        mangle  net 11067307 -> 24316786 ->  52531899   r1=2.197 r2=2.160
+#   vchain      mangle  net 10754970 -> 23595360 ->  51072163   r1=2.194 r2=2.165
+#   constrained mangle  net 29643478 -> 63853290 -> 136927375   r1=2.154 r2=2.144
+#   wideiface   mangle  net  1480470 ->  3331209 ->   7325993   r1=2.250 r2=2.199
+#   PASS: 60 stage-ratio(s) graded (1 ledgered) ...
+#
+# ⚠️ Those RAW NETS are readings, not constants. Callgrind is deterministic PER
+# BINARY, not across builds: any unrelated compiler change shifts every net by a
+# constant factor, and re-deriving this table after a rebuild will not reproduce
+# the digits. The RATIOS are what is stable (they held to 3 decimals across three
+# back-to-back runs on one binary). Compare ratios; treat a net that moved as
+# expected unless its ratio moved with it.
+#
+# Callgrind counts EVERY instruction the stage executes, so it does not care whether
+# the scan runs through a counted `util.contains` or an uncounted `omHasKey` — which
+# is precisely the failure mode that killed the op row. A `pubFnNames` revert to a
+# List-as-a-set would show up there as a ratio, with no `opBump`
+# in `support/ordmap.mdk` required. That compiler-source change is therefore NOT owed for
+# coverage OF THAT TABLE; it would only be worth doing to give the OP arm back a general
+# ability it has structurally lost.
+#
+# ⚠️ THE CLAIM STOPS AT `pubFnNames`, AND THE REMAINDER IS A REAL HOLE. It holds because
+# `pubFnNames` is keyed on the number of EXPORTED FUNCTIONS, which is exactly the quantity
+# all five stage_ir shapes scale. It does NOT extend to `renameScoped`'s per-scope `bound`
+# scan: those five shapes scale TOP-LEVEL DECLARATIONS with 0-1 locals apiece, so that scan
+# is O(1) per function however large N grows, and a List revert there reads LINEAR. The one
+# shape that scales a single scope's depth is `scoperefs` — and it lives in
+# diff_compiler_ir_scaling.sh, which measures `medaka check`, a verb that never runs mangle.
+# So `renameScoped`'s deep-scope path has NO mangle-stage grade on ANY shape either gate
+# runs. Smaller than #2099's headline (which said the whole stage was ungraded), but not
+# nothing: do not read a green mangle row as covering it.
+#
+# ⚠️ WHAT REMAINS TRUE IN #2099, and is a property of the op arm rather than of this
+# row: `opBump` fires at exactly two primitives, so the op arm counts List-scan steps
+# and only those, and EVERY #1031/#352/#242-class fix drives its count toward zero.
+# The op arm's coverage of a path dies exactly when that path is fixed. Read a green
+# op row accordingly; `support/util.mdk`'s own `dedupBy` comment says the same thing
+# from the other side.
 
 # ── matchlits — EXHAUSTIVENESS over a wide LITERAL match (issue #988) ─────────
 # The literal sibling of the main-loop `match` shape. It grades the TYPECHECK-STAGE
@@ -3447,17 +3743,19 @@ if [ "$PERF_DEEP" = "1" ]; then
       if (d1 < 1.0) { printf "%.1f %.1f %.1f - - TOOSMALL", d1, d2, d3; exit }
       r1=d2/d1; r2=d3/d2
       climbing=(r2 > r1 * 1.15 && r2 > 2.45)
-      printf "%.1f %.1f %.1f %.2f %.2f %s", d1, d2, d3, r1, r2, ((r2 > th || climbing) ? "QUADRATIC" : "ok") }')"
+      why = (r2 > th) ? "threshold" : (climbing ? "climbing" : "-")
+      printf "%.1f %.1f %.1f %.2f %.2f %s %s", d1, d2, d3, r1, r2, ((r2 > th || climbing) ? "QUADRATIC" : "ok"), why }')"
     md1="$(printf '%s' "$ml_verdict" | cut -d' ' -f1)"; md2="$(printf '%s' "$ml_verdict" | cut -d' ' -f2)"
     md3="$(printf '%s' "$ml_verdict" | cut -d' ' -f3)"; mr1="$(printf '%s' "$ml_verdict" | cut -d' ' -f4)"
     mr2="$(printf '%s' "$ml_verdict" | cut -d' ' -f5)"; mword="$(printf '%s' "$ml_verdict" | cut -d' ' -f6)"
+    mlclause="$(clause_of "$(printf '%s' "$ml_verdict" | cut -d' ' -f7)")"
     if [ "$mword" = "TOOSMALL" ]; then
       fail=$((fail+1))
       printf '%-12s %8s  ** N TOO SMALL — raise PERF_MATCHLITS_N (net typecheck-alloc %s MB < 1.0) **\n' matchlits "$mln1" "$md1"
     elif [ "$mword" = "QUADRATIC" ]; then
       fail=$((fail+1))
-      printf '%-12s %8s  ** SUPERLINEAR (typecheck-alloc) ** net %s -> %s -> %s MB  r1=%s r2=%s (>= %s) — exhaust literal-matrix quadratic (specLitRow `Eq Lit`? see #988)\n' \
-        matchlits "$mln1" "$md1" "$md2" "$md3" "$mr1" "$mr2" "$THRESH"
+      printf '%-12s %8s  ** SUPERLINEAR (typecheck-alloc) ** net %s -> %s -> %s MB  r1=%s r2=%s (%s) — exhaust literal-matrix quadratic (specLitRow `Eq Lit`? see #988)\n' \
+        matchlits "$mln1" "$md1" "$md2" "$md3" "$mr1" "$mr2" "$mlclause"
     else
       pass=$((pass+1))
       printf '%-12s %8s  typecheck-alloc net %s -> %s -> %s MB  r1=%s r2=%s  (LINEAR — exhaust litEq alloc-free, #988; band N=%s->%s->%s)\n' \

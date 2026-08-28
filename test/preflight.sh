@@ -779,6 +779,16 @@ for f in $changed; do
     # ledger is precisely the file someone edits ALONE when this gate goes red, and
     # a preflight that derives NOTHING from a ledger edit is the masking path the
     # ledger's own header warns about.
+    # ── #2066: the shared shape library, which no other arm can see ───────────
+    # test/perf_shapes.sh is `.`-sourced (not `sh`-invoked) by two gates, so neither the
+    # gate-script arm above nor `_gates_for_path`'s one-hop `_invokes` scrape — which is
+    # anchored on the `sh "$ROOT/test/…` idiom, deliberately — can reach it. Left
+    # unmapped it is not merely under-run: an UNMAPPED non-prose path widens the whole PR
+    # run back to the full suite ([W-THIRD-CONSUMER]), so the gap costs the most expensive
+    # possible answer while proving nothing about the two gates that actually read it.
+    # Derive the consumer set before editing this arm: `grep -rln perf_shapes.sh test/`.
+    test/perf_shapes.sh)           add 'diff_compiler_perf_scaling'
+                                   add 'diff_compiler_ir_scaling' ;;
     test/IMPORT-ORDER-LEDGER.txt)  add 'diff_compiler_import_order' ;;
     # Same argument again: the sidecar emitter-verdict ledger is also a loose file
     # under test/ that `_fixture_dir_for` cannot see, and it feeds the SAME gate
