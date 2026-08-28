@@ -1,5 +1,5 @@
 # META
-source_lines=576
+source_lines=641
 stages=DESUGAR,MARK
 # SOURCE
 -- BACKEND-NEUTRAL EMIT SUPPORT — helpers shared verbatim by BOTH the LLVM
@@ -39,6 +39,7 @@ import support.ordmap.{
   omHasKey,
   omFromNames,
   omFromPairs,
+  omMapValues,
 }
 import support.scc.{tarjanSCCs}
 
@@ -227,24 +228,88 @@ eagerReachMap binds =
   let nameSet = omFromNames allNames omEmpty
   let valSet = omFromNames (valGlobalNames binds) omEmpty
   let adj = eagerCalleesMap nameSet binds
-  foldReachSCCs valSet adj (tarjanSCCs allNames adj) omEmpty
+  omMapValues fst (foldReachSCCs valSet adj (tarjanSCCs allNames adj) omEmpty)
 
 -- reach(scc) = (its members' direct value-global callees) ∪ (⋃ reach(callee)).
 -- Successor SCCs are already folded and their reach is ⊆ valSet by induction, so
 -- the union stays ⊆ valSet — bounding every set to the value-global count.
-foldReachSCCs : OrdMap Unit -> OrdMap (List String) -> List (List String) -> OrdMap (List String) -> OrdMap (List String)
+--
+-- #1030: the fold's WORKING accumulator carries each reach set as a PAIR — the
+-- first-occurrence-ordered `List String` the emitters consume, AND the `OrdMap
+-- Unit` of the same names.  `eagerReachMap` projects the list back out, so the
+-- published contract (`OrdMap (List String)`) and every list's element order are
+-- unchanged — this is a bookkeeping change, not a semantic one.
+--
+-- ⚠️ WHY THE PAIR: the old form recomputed the union as
+-- `dedup (dvals ++ unionLookup direct acc)`, which COPIES every callee's reach
+-- list and then rebuilds a fresh `seen` tree of that size, once per SCC —
+-- O(|reach| · log |reach|) tree-node ALLOCATIONS per SCC, so O(V² log V) over a
+-- long eager value-global chain (V = the value-global count).  Carrying the set
+-- alongside lets `mergeReach` SHARE the last callee's list as the result's tail
+-- whenever nothing has to be deleted from it, which is the whole cost on a chain:
+-- `reach(gᵢ) = gᵢ₋₁ :: reach(gᵢ₋₁)`, O(log V) per SCC instead of O(V log V).
+-- Measured on a rooted chain of N value globals (Callgrind inclusive Ir of this
+-- function, netted against the same shape at N=1, N=125/250/500): before
+-- 63.4M → 297.5M → 1371.6M (×4.69, ×4.61); after 3.3M → 7.5M → 17.0M
+-- (×2.31, ×2.26).  `emit` as a whole went ×3.60/×3.98 → ×2.16/×2.15 on the
+-- same ladder — that is the `vchain` shape in test/diff_compiler_stage_ir_scaling.sh.
+--
+-- ⚠️ This does NOT make the reach TABLE sub-quadratic, and cannot: on that chain
+-- Σᵥ|reach(v)| is Θ(V²) by construction, so materializing it as one list per name
+-- is Θ(V²) cons cells no matter how it is computed.  What is removed is the
+-- log factor and the per-element TREE allocation — the term that dominated.
+foldReachSCCs : OrdMap Unit -> OrdMap (List String) -> List (List String) -> OrdMap (List String, OrdMap Unit) -> OrdMap (List String, OrdMap Unit)
 foldReachSCCs _ _ [] acc = acc
 foldReachSCCs valSet adj (scc::rest) acc =
   let direct = dedup (unionLookup scc adj)
-  let reached = dedup (filterList (n => omHasKey n valSet) direct ++ unionLookup direct acc)
+  -- sources, in the order the old `dedup (… ++ …)` saw them: this SCC's own
+  -- direct value-global callees, then each callee's reach list.  The LAST
+  -- callee's list is held back as the shareable tail; everything before it is
+  -- concatenated and deduped as `earlier`.
+  let earlier = dedup (filterList (n => omHasKey n valSet) direct ++ initReach direct acc)
+  let reached = mergeReach earlier (lastReach direct acc)
   foldReachSCCs valSet adj rest (insertReach scc reached acc)
+
+-- `dedup (earlier ++ tailList)` where `earlier` is already deduped, i.e.
+-- `earlier ++ (tailList \ earlier)`, paired with its own membership set.
+-- ⚠️ The `overlap` test is what buys the sharing: when no name of `earlier` is in
+-- the tail's set, NOTHING is deleted from `tailList` and it is reused verbatim as
+-- the result's tail instead of being filtered into a fresh copy.
+mergeReach : List String -> (List String, OrdMap Unit) -> (List String, OrdMap Unit)
+mergeReach earlier (tailList, tailSet) =
+  let earlierSet = omFromNames earlier omEmpty
+  let overlap = anyMember earlier tailSet
+  let kept = if overlap then
+    filterList (n => not (omHasKey n earlierSet)) tailList
+  else
+    tailList
+  (earlier ++ kept, omFromNames earlier tailSet)
+
+anyMember : List String -> OrdMap Unit -> Bool
+anyMember [] _ = False
+anyMember (n::rest) s = if omHasKey n s then True else anyMember rest s
+
+-- the reach lists of every key BUT THE LAST, concatenated in key order.
+initReach : List String -> OrdMap (List String, OrdMap Unit) -> List String
+initReach [] _ = []
+initReach [_] _ = []
+initReach (n::rest) m = reachListOf n m ++ initReach rest m
+
+-- the LAST key's reach pair — the one `mergeReach` may share.
+lastReach : List String -> OrdMap (List String, OrdMap Unit) -> (List String, OrdMap Unit)
+lastReach [] _ = ([], omEmpty)
+lastReach [n] m = fromOption ([], omEmpty) (omLookup n m)
+lastReach (_::rest) m = lastReach rest m
+
+reachListOf : String -> OrdMap (List String, OrdMap Unit) -> List String
+reachListOf n m = fst (fromOption ([], omEmpty) (omLookup n m))
 
 -- concat (default []) of the OrdMap lookups over a list of keys.
 unionLookup : List String -> OrdMap (List String) -> List String
 unionLookup [] _ = []
 unionLookup (n::rest) m = fromOption [] (omLookup n m) ++ unionLookup rest m
 
-insertReach : List String -> List String -> OrdMap (List String) -> OrdMap (List String)
+insertReach : List String -> (List String, OrdMap Unit) -> OrdMap (List String, OrdMap Unit) -> OrdMap (List String, OrdMap Unit)
 insertReach [] _ acc = acc
 insertReach (n::rest) reached acc =
   insertReach rest reached (omInsert n reached acc)
@@ -583,7 +648,7 @@ rngBound _ = 0
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "patVars" false) (mem "bindNames" false) (mem "bindName" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "filterList" false) (mem "reverseL" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DTypeSig true "eagerVars" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVars" (PWild (PCon "CLam" PWild PWild)) (EListLit))
@@ -654,14 +719,29 @@ rngBound _ = 0
 (DFunDef false "eagerCalleesMap" (PWild (PList)) (EVar "omEmpty"))
 (DFunDef false "eagerCalleesMap" ((PVar "nameSet") (PCons (PVar "b") (PVar "rest"))) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "nameSet")))) (EApp (EVar "bindEagerCallees") (EVar "b")))) (EApp (EApp (EVar "eagerCalleesMap") (EVar "nameSet")) (EVar "rest"))))
 (DTypeSig true "eagerReachMap" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "eagerReachMap" ((PVar "binds")) (EBlock (DoLet false false (PVar "allNames") (EApp (EVar "bindNames") (EVar "binds"))) (DoLet false false (PVar "nameSet") (EApp (EApp (EVar "omFromNames") (EVar "allNames")) (EVar "omEmpty"))) (DoLet false false (PVar "valSet") (EApp (EApp (EVar "omFromNames") (EApp (EVar "valGlobalNames") (EVar "binds"))) (EVar "omEmpty"))) (DoLet false false (PVar "adj") (EApp (EApp (EVar "eagerCalleesMap") (EVar "nameSet")) (EVar "binds"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldReachSCCs") (EVar "valSet")) (EVar "adj")) (EApp (EApp (EVar "tarjanSCCs") (EVar "allNames")) (EVar "adj"))) (EVar "omEmpty")))))
-(DTypeSig false "foldReachSCCs" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "eagerReachMap" ((PVar "binds")) (EBlock (DoLet false false (PVar "allNames") (EApp (EVar "bindNames") (EVar "binds"))) (DoLet false false (PVar "nameSet") (EApp (EApp (EVar "omFromNames") (EVar "allNames")) (EVar "omEmpty"))) (DoLet false false (PVar "valSet") (EApp (EApp (EVar "omFromNames") (EApp (EVar "valGlobalNames") (EVar "binds"))) (EVar "omEmpty"))) (DoLet false false (PVar "adj") (EApp (EApp (EVar "eagerCalleesMap") (EVar "nameSet")) (EVar "binds"))) (DoExpr (EApp (EApp (EVar "omMapValues") (EVar "fst")) (EApp (EApp (EApp (EApp (EVar "foldReachSCCs") (EVar "valSet")) (EVar "adj")) (EApp (EApp (EVar "tarjanSCCs") (EVar "allNames")) (EVar "adj"))) (EVar "omEmpty"))))))
+(DTypeSig false "foldReachSCCs" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))))
 (DFunDef false "foldReachSCCs" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "foldReachSCCs" ((PVar "valSet") (PVar "adj") (PCons (PVar "scc") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "direct") (EApp (EVar "dedup") (EApp (EApp (EVar "unionLookup") (EVar "scc")) (EVar "adj")))) (DoLet false false (PVar "reached") (EApp (EVar "dedup") (EBinOp "++" (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "valSet")))) (EVar "direct")) (EApp (EApp (EVar "unionLookup") (EVar "direct")) (EVar "acc"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldReachSCCs") (EVar "valSet")) (EVar "adj")) (EVar "rest")) (EApp (EApp (EApp (EVar "insertReach") (EVar "scc")) (EVar "reached")) (EVar "acc"))))))
+(DFunDef false "foldReachSCCs" ((PVar "valSet") (PVar "adj") (PCons (PVar "scc") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "direct") (EApp (EVar "dedup") (EApp (EApp (EVar "unionLookup") (EVar "scc")) (EVar "adj")))) (DoLet false false (PVar "earlier") (EApp (EVar "dedup") (EBinOp "++" (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "valSet")))) (EVar "direct")) (EApp (EApp (EVar "initReach") (EVar "direct")) (EVar "acc"))))) (DoLet false false (PVar "reached") (EApp (EApp (EVar "mergeReach") (EVar "earlier")) (EApp (EApp (EVar "lastReach") (EVar "direct")) (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldReachSCCs") (EVar "valSet")) (EVar "adj")) (EVar "rest")) (EApp (EApp (EApp (EVar "insertReach") (EVar "scc")) (EVar "reached")) (EVar "acc"))))))
+(DTypeSig false "mergeReach" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DFunDef false "mergeReach" ((PVar "earlier") (PTuple (PVar "tailList") (PVar "tailSet"))) (EBlock (DoLet false false (PVar "earlierSet") (EApp (EApp (EVar "omFromNames") (EVar "earlier")) (EVar "omEmpty"))) (DoLet false false (PVar "overlap") (EApp (EApp (EVar "anyMember") (EVar "earlier")) (EVar "tailSet"))) (DoLet false false (PVar "kept") (EIf (EVar "overlap") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "earlierSet"))))) (EVar "tailList")) (EVar "tailList"))) (DoExpr (ETuple (EBinOp "++" (EVar "earlier") (EVar "kept")) (EApp (EApp (EVar "omFromNames") (EVar "earlier")) (EVar "tailSet"))))))
+(DTypeSig false "anyMember" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyCon "Bool"))))
+(DFunDef false "anyMember" ((PList) PWild) (EVar "False"))
+(DFunDef false "anyMember" ((PCons (PVar "n") (PVar "rest")) (PVar "s")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "s")) (EVar "True") (EApp (EApp (EVar "anyMember") (EVar "rest")) (EVar "s"))))
+(DTypeSig false "initReach" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "initReach" ((PList) PWild) (EListLit))
+(DFunDef false "initReach" ((PList PWild) PWild) (EListLit))
+(DFunDef false "initReach" ((PCons (PVar "n") (PVar "rest")) (PVar "m")) (EBinOp "++" (EApp (EApp (EVar "reachListOf") (EVar "n")) (EVar "m")) (EApp (EApp (EVar "initReach") (EVar "rest")) (EVar "m"))))
+(DTypeSig false "lastReach" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DFunDef false "lastReach" ((PList) PWild) (ETuple (EListLit) (EVar "omEmpty")))
+(DFunDef false "lastReach" ((PList (PVar "n")) (PVar "m")) (EApp (EApp (EVar "fromOption") (ETuple (EListLit) (EVar "omEmpty"))) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m"))))
+(DFunDef false "lastReach" ((PCons PWild (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "lastReach") (EVar "rest")) (EVar "m")))
+(DTypeSig false "reachListOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "reachListOf" ((PVar "n") (PVar "m")) (EApp (EVar "fst") (EApp (EApp (EVar "fromOption") (ETuple (EListLit) (EVar "omEmpty"))) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m")))))
 (DTypeSig false "unionLookup" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "unionLookup" ((PList) PWild) (EListLit))
 (DFunDef false "unionLookup" ((PCons (PVar "n") (PVar "rest")) (PVar "m")) (EBinOp "++" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m"))) (EApp (EApp (EVar "unionLookup") (EVar "rest")) (EVar "m"))))
-(DTypeSig false "insertReach" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))))
+(DTypeSig false "insertReach" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))))
 (DFunDef false "insertReach" ((PList) PWild (PVar "acc")) (EVar "acc"))
 (DFunDef false "insertReach" ((PCons (PVar "n") (PVar "rest")) (PVar "reached") (PVar "acc")) (EApp (EApp (EApp (EVar "insertReach") (EVar "rest")) (EVar "reached")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "reached")) (EVar "acc"))))
 (DTypeSig true "bindEagerReach" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String")))))
@@ -787,7 +867,7 @@ rngBound _ = 0
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "patVars" false) (mem "bindNames" false) (mem "bindName" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "filterList" false) (mem "reverseL" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DTypeSig true "eagerVars" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVars" (PWild (PCon "CLam" PWild PWild)) (EListLit))
@@ -858,14 +938,29 @@ rngBound _ = 0
 (DFunDef false "eagerCalleesMap" (PWild (PList)) (EVar "omEmpty"))
 (DFunDef false "eagerCalleesMap" ((PVar "nameSet") (PCons (PVar "b") (PVar "rest"))) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "nameSet")))) (EApp (EVar "bindEagerCallees") (EVar "b")))) (EApp (EApp (EVar "eagerCalleesMap") (EVar "nameSet")) (EVar "rest"))))
 (DTypeSig true "eagerReachMap" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "eagerReachMap" ((PVar "binds")) (EBlock (DoLet false false (PVar "allNames") (EApp (EVar "bindNames") (EVar "binds"))) (DoLet false false (PVar "nameSet") (EApp (EApp (EVar "omFromNames") (EVar "allNames")) (EVar "omEmpty"))) (DoLet false false (PVar "valSet") (EApp (EApp (EVar "omFromNames") (EApp (EVar "valGlobalNames") (EVar "binds"))) (EVar "omEmpty"))) (DoLet false false (PVar "adj") (EApp (EApp (EVar "eagerCalleesMap") (EVar "nameSet")) (EVar "binds"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldReachSCCs") (EVar "valSet")) (EVar "adj")) (EApp (EApp (EVar "tarjanSCCs") (EVar "allNames")) (EVar "adj"))) (EVar "omEmpty")))))
-(DTypeSig false "foldReachSCCs" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "eagerReachMap" ((PVar "binds")) (EBlock (DoLet false false (PVar "allNames") (EApp (EVar "bindNames") (EVar "binds"))) (DoLet false false (PVar "nameSet") (EApp (EApp (EVar "omFromNames") (EVar "allNames")) (EVar "omEmpty"))) (DoLet false false (PVar "valSet") (EApp (EApp (EVar "omFromNames") (EApp (EVar "valGlobalNames") (EVar "binds"))) (EVar "omEmpty"))) (DoLet false false (PVar "adj") (EApp (EApp (EVar "eagerCalleesMap") (EVar "nameSet")) (EVar "binds"))) (DoExpr (EApp (EApp (EVar "omMapValues") (EVar "fst")) (EApp (EApp (EApp (EApp (EVar "foldReachSCCs") (EVar "valSet")) (EVar "adj")) (EApp (EApp (EVar "tarjanSCCs") (EVar "allNames")) (EVar "adj"))) (EVar "omEmpty"))))))
+(DTypeSig false "foldReachSCCs" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))))
 (DFunDef false "foldReachSCCs" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "foldReachSCCs" ((PVar "valSet") (PVar "adj") (PCons (PVar "scc") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "direct") (EApp (EVar "dedup") (EApp (EApp (EVar "unionLookup") (EVar "scc")) (EVar "adj")))) (DoLet false false (PVar "reached") (EApp (EVar "dedup") (EBinOp "++" (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "valSet")))) (EVar "direct")) (EApp (EApp (EVar "unionLookup") (EVar "direct")) (EVar "acc"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldReachSCCs") (EVar "valSet")) (EVar "adj")) (EVar "rest")) (EApp (EApp (EApp (EVar "insertReach") (EVar "scc")) (EVar "reached")) (EVar "acc"))))))
+(DFunDef false "foldReachSCCs" ((PVar "valSet") (PVar "adj") (PCons (PVar "scc") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "direct") (EApp (EVar "dedup") (EApp (EApp (EVar "unionLookup") (EVar "scc")) (EVar "adj")))) (DoLet false false (PVar "earlier") (EApp (EVar "dedup") (EBinOp "++" (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "valSet")))) (EVar "direct")) (EApp (EApp (EVar "initReach") (EVar "direct")) (EVar "acc"))))) (DoLet false false (PVar "reached") (EApp (EApp (EVar "mergeReach") (EVar "earlier")) (EApp (EApp (EVar "lastReach") (EVar "direct")) (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "foldReachSCCs") (EVar "valSet")) (EVar "adj")) (EVar "rest")) (EApp (EApp (EApp (EVar "insertReach") (EVar "scc")) (EVar "reached")) (EVar "acc"))))))
+(DTypeSig false "mergeReach" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DFunDef false "mergeReach" ((PVar "earlier") (PTuple (PVar "tailList") (PVar "tailSet"))) (EBlock (DoLet false false (PVar "earlierSet") (EApp (EApp (EVar "omFromNames") (EVar "earlier")) (EVar "omEmpty"))) (DoLet false false (PVar "overlap") (EApp (EApp (EVar "anyMember") (EVar "earlier")) (EVar "tailSet"))) (DoLet false false (PVar "kept") (EIf (EVar "overlap") (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "earlierSet"))))) (EVar "tailList")) (EVar "tailList"))) (DoExpr (ETuple (EBinOp "++" (EVar "earlier") (EVar "kept")) (EApp (EApp (EVar "omFromNames") (EVar "earlier")) (EVar "tailSet"))))))
+(DTypeSig false "anyMember" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyCon "Bool"))))
+(DFunDef false "anyMember" ((PList) PWild) (EVar "False"))
+(DFunDef false "anyMember" ((PCons (PVar "n") (PVar "rest")) (PVar "s")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "s")) (EVar "True") (EApp (EApp (EVar "anyMember") (EVar "rest")) (EVar "s"))))
+(DTypeSig false "initReach" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "initReach" ((PList) PWild) (EListLit))
+(DFunDef false "initReach" ((PList PWild) PWild) (EListLit))
+(DFunDef false "initReach" ((PCons (PVar "n") (PVar "rest")) (PVar "m")) (EBinOp "++" (EApp (EApp (EVar "reachListOf") (EVar "n")) (EVar "m")) (EApp (EApp (EVar "initReach") (EVar "rest")) (EVar "m"))))
+(DTypeSig false "lastReach" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DFunDef false "lastReach" ((PList) PWild) (ETuple (EListLit) (EVar "omEmpty")))
+(DFunDef false "lastReach" ((PList (PVar "n")) (PVar "m")) (EApp (EApp (EVar "fromOption") (ETuple (EListLit) (EVar "omEmpty"))) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m"))))
+(DFunDef false "lastReach" ((PCons PWild (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "lastReach") (EVar "rest")) (EVar "m")))
+(DTypeSig false "reachListOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "reachListOf" ((PVar "n") (PVar "m")) (EApp (EVar "fst") (EApp (EApp (EVar "fromOption") (ETuple (EListLit) (EVar "omEmpty"))) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m")))))
 (DTypeSig false "unionLookup" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "unionLookup" ((PList) PWild) (EListLit))
 (DFunDef false "unionLookup" ((PCons (PVar "n") (PVar "rest")) (PVar "m")) (EBinOp "++" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m"))) (EApp (EApp (EVar "unionLookup") (EVar "rest")) (EVar "m"))))
-(DTypeSig false "insertReach" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))))
+(DTypeSig false "insertReach" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))))
 (DFunDef false "insertReach" ((PList) PWild (PVar "acc")) (EVar "acc"))
 (DFunDef false "insertReach" ((PCons (PVar "n") (PVar "rest")) (PVar "reached") (PVar "acc")) (EApp (EApp (EApp (EVar "insertReach") (EVar "rest")) (EVar "reached")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "reached")) (EVar "acc"))))
 (DTypeSig true "bindEagerReach" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String")))))

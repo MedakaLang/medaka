@@ -266,45 +266,86 @@ initialRows ((Arm pat _ _)::rest) i =
 -- impl method's clauses into a decision tree via this same Maranget compiler —
 -- the backend-neutral transform Axis-1 designates as shared by both backends
 -- (only leaf emission differs: bytecode SWITCH vs LLVM switch/br).
+-- The `List Bool` is indexed BY ARM INDEX, and the recursion looks a leaf's arm
+-- up in it — which, as a list, cost O(i) per leaf and O(N²) over an N-arm match
+-- (`nthBool`; the second half of #408, see `guardSet`).  The exported entry
+-- keeps the caller-facing `List Bool` and converts it ONCE, at the top, into the
+-- membership set the recursion actually threads.
 export
 compileTree : List Bool -> List (List Pat, Int) -> CTree
-compileTree _ [] = CTFail
-compileTree guards (row::rest) = compileRows guards row rest (row::rest)
+compileTree guards rows = compileTreeG (guardSet 0 guards omEmpty) rows
 
-compileRows : List Bool -> (List Pat, Int) -> List (List Pat, Int) -> List (List Pat, Int) -> CTree
+-- Guarded ARM INDICES as an `OrdMap Unit` membership set: O(log N) per leaf
+-- lookup where the `List Bool` walk was O(arm index).  Built once per
+-- `compileTree` entry (twice per match at most — see `compileArms`), never
+-- inside the recursion.  `nthBool guards i` was `False` for any `i` past the
+-- list's end, so an index absent from the set reads exactly as it did.
+guardSet : Int -> List Bool -> OrdMap Unit -> OrdMap Unit
+guardSet _ [] acc = acc
+guardSet i (True::rest) acc =
+  guardSet (i + 1) rest (omInsert (intToString i) () acc)
+guardSet i (False::rest) acc = guardSet (i + 1) rest acc
+
+compileTreeG : OrdMap Unit -> List (List Pat, Int) -> CTree
+compileTreeG _ [] = CTFail
+compileTreeG guards (row::rest) = compileRows guards row rest (row::rest)
+
+compileRows : OrdMap Unit -> (List Pat, Int) -> List (List Pat, Int) -> List (List Pat, Int) -> CTree
 compileRows guards (pats, i) rest rows
   | allWild pats = leafOrGuard guards i rest
   | anyList rowHasCon rows = buildConSwitch guards rows
   | anyList rowHasLit rows = buildLitSwitch guards rows
-  | otherwise = CTDrop (compileTree guards (map dropHead rows))
+  | otherwise = CTDrop (compileTreeG guards (map dropHead rows))
 
 -- the first (highest-priority still-viable) row matches everything reaching
 -- here: a guarded clause becomes a CTGuard whose failure resumes at `rest`; an
 -- unguarded one terminates (later rows are unreachable, exactly as ordered).
-leafOrGuard : List Bool -> Int -> List (List Pat, Int) -> CTree
+leafOrGuard : OrdMap Unit -> Int -> List (List Pat, Int) -> CTree
 leafOrGuard guards i rest
-  | nthBool guards i = CTGuard i (compileTree guards rest)
+  | omHasKey (intToString i) guards = CTGuard i (compileTreeG guards rest)
   | otherwise = CTLeaf i
 
-buildConSwitch : List Bool -> List (List Pat, Int) -> CTree
+-- #408: the switch's rows are bucketed by head in ONE pass and each branch is
+-- handed its OWN rows, rather than every branch re-filtering the whole matrix.
+-- The old shape called `specializeCon c a rows` once per distinct head, and each
+-- of those calls scanned all N rows — O(N²) for an N-arm match over an N-ctor
+-- type.  That cost was pure instruction count (each miss is an alloc-free
+-- `c2 == c`), so it was invisible to both the op arm and the alloc arm of
+-- perf_scaling and only surfaced once diff_compiler_stage_ir_scaling.sh graded
+-- per-stage Callgrind Ir.  See `conBuckets` for the wildcard/ordering argument.
+buildConSwitch : OrdMap Unit -> List (List Pat, Int) -> CTree
 buildConSwitch guards rows =
+  let buckets = conBuckets 0 rows omEmpty
+  let wilds = wildTailRows 0 rows
   CTSwitch
-    (map (conBranch guards rows) (distinctConHeads rows))
-    (compileTree guards (defaultMatrix rows))
+    (map (conBranch guards buckets wilds) (distinctConHeads rows))
+    (compileTreeG guards (defaultMatrix rows))
 
-conBranch : List Bool -> List (List Pat, Int) -> (String, Int) -> CTBranch
-conBranch guards rows (c, a) =
-  CTBranch (decodeHead c a) (compileTree guards (specializeCon c a rows))
+conBranch : OrdMap Unit -> OrdMap (List (Int, (List Pat, Int))) -> List (Int, (List Pat, Int)) -> (String, Int) -> CTBranch
+conBranch guards buckets wilds (c, a) =
+  CTBranch
+    (decodeHead c a)
+    (compileTreeG
+      guards
+      (mergeByOrd (reverseL (bucketRows c buckets)) (map (padWildRow a) wilds)))
 
-buildLitSwitch : List Bool -> List (List Pat, Int) -> CTree
+buildLitSwitch : OrdMap Unit -> List (List Pat, Int) -> CTree
 buildLitSwitch guards rows =
+  let buckets = litBuckets 0 rows omEmpty
+  let wilds = wildTailRows 0 rows
   CTSwitch
-    (map (litBranch guards rows) (distinctLits rows))
-    (compileTree guards (defaultMatrix rows))
+    (map (litBranch guards buckets wilds) (distinctLits rows))
+    (compileTreeG guards (defaultMatrix rows))
 
-litBranch : List Bool -> List (List Pat, Int) -> Lit -> CTBranch
-litBranch guards rows l =
-  CTBranch (HLit l) (compileTree guards (specializeLit l rows))
+-- Literal heads have arity 0, so a wildcard row contributes its tail unpadded —
+-- exactly what the old `specLitRow _ (PWild::rest, i) = Some (rest, i)` did.
+litBranch : OrdMap Unit -> OrdMap (List (Int, (List Pat, Int))) -> List (Int, (List Pat, Int)) -> Lit -> CTBranch
+litBranch guards buckets wilds l =
+  CTBranch
+    (HLit l)
+    (compileTreeG
+      guards
+      (mergeByOrd (reverseL (bucketRows (litKey l) buckets)) wilds))
 
 -- map a canonical constructor name + arity to the runtime head the evaluator
 -- tests with (the synthetic list/tuple/unit names canonPat introduced map back
@@ -461,45 +502,89 @@ filterMapRows f (r::rest) = match f r
   Some r2 => r2 :: filterMapRows f rest
   None => filterMapRows f rest
 
--- specialize on constructor c (arity): a matching head expands to its fields
--- ++ the rest; a wildcard head spreads `arity` wildcards; anything else drops.
-specializeCon : String -> Int -> List (List Pat, Int) -> List (List Pat, Int)
-specializeCon c arity rows = filterMapRows (specConRow c arity) rows
+-- ── one-pass matrix bucketing, replacing the per-branch rescan (#408) ───────
+--
+-- `specializeCon c a rows` used to be a `filterMapRows` over the WHOLE matrix,
+-- called once per distinct head by `buildConSwitch`; `specializeLit` mirrored it
+-- for literal switches.  Both are replaced by a single bucketing pass whose
+-- result is read once per branch, so lowering an N-arm switch is O(N log N)
+-- instead of O(N²).
+--
+-- THE ORDERING/WILDCARD ARGUMENT.  `specializeCon c a` kept, IN MATRIX ROW
+-- ORDER: (1) each `PCon c` row, head replaced by its fields; (2) each `PWild`
+-- row, head replaced by `a` wildcards.  Pattern priority is positional, so that
+-- relative order is observable — it decides which arm a value selects, and the
+-- emitted `CTSwitch` is graded byte-identical.  A wildcard row belongs to EVERY
+-- branch, so buckets alone cannot reproduce it (this is the same subtlety
+-- `exhaust.mdk`'s `usefulCovered` documents, where it is handled by falling back
+-- to the rescan).  Here it is handled instead, because a trailing `_ =>` arm on
+-- a wide match is common enough that a fallback would leave the quadratic in
+-- place for it: every row is tagged with its ORDINAL in the matrix on the way
+-- into its bucket, wildcard tails are collected once in the same numbering, and
+-- a branch re-interleaves its bucket with the (padded) wildcard rows by ordinal.
+-- The merge therefore reproduces the filter's order exactly, by construction,
+-- and costs O(bucket + wildcards) per branch — proportional to the rows that
+-- branch actually receives.
+--
+-- Branch ORDER is untouched: `distinctConHeads`/`distinctLits` still mint it,
+-- unchanged, in first-seen row order.
 
-specConRow : String -> Int -> (List Pat, Int) -> Option (List Pat, Int)
-specConRow c _ ((PCon c2 args)::rest, i) =
-  if c2 == c then
-    Some (args ++ rest, i)
+-- A bucket's rows, or none.  Buckets are built by prepending, so a bucket reads
+-- back in reverse row order and is `reverseL`'d at the branch (as in
+-- `exhaust.mdk`'s `headBuckets`).
+bucketRows : String -> OrdMap (List (Int, (List Pat, Int))) -> List (Int, (List Pat, Int))
+bucketRows k m = fromOption [] (omLookup k m)
+
+pushBucket : String -> (Int, (List Pat, Int)) -> OrdMap (List (Int, (List Pat, Int))) -> OrdMap (List (Int, (List Pat, Int)))
+pushBucket k r m = omInsert k (r :: bucketRows k m) m
+
+-- Rows grouped by column-0 constructor, head stripped to `args ++ rest` — i.e.
+-- exactly the rows `specializeCon c` kept, for every `c` at once.  Non-`PCon`
+-- rows (wildcards, literals, empty) still consume an ordinal so the numbering
+-- stays aligned with `wildTailRows`.
+conBuckets : Int -> List (List Pat, Int) -> OrdMap (List (Int, (List Pat, Int))) -> OrdMap (List (Int, (List Pat, Int)))
+conBuckets _ [] acc = acc
+conBuckets k (((PCon c args)::rest, i)::more) acc =
+  conBuckets (k + 1) more (pushBucket c (k, (args ++ rest, i)) acc)
+conBuckets k (_::more) acc = conBuckets (k + 1) more acc
+
+-- The literal mirror.  Keyed by `litKey`, which is injective and `Eq`-exact, so
+-- two literals share a bucket exactly when the old `litEq` compare accepted them
+-- (`distinctLits` already deduped its heads by the same key).  That also retires
+-- `litEq`: #970's O(arms²) allocating compares are gone with the rescan itself,
+-- since a row is now keyed ONCE rather than compared once per distinct literal.
+litBuckets : Int -> List (List Pat, Int) -> OrdMap (List (Int, (List Pat, Int))) -> OrdMap (List (Int, (List Pat, Int)))
+litBuckets _ [] acc = acc
+litBuckets k (((PLit l)::rest, i)::more) acc =
+  litBuckets (k + 1) more (pushBucket (litKey l) (k, (rest, i)) acc)
+litBuckets k (_::more) acc = litBuckets (k + 1) more acc
+
+-- Column-0 wildcard rows, head stripped, tagged with the same ordinals
+-- `conBuckets`/`litBuckets` assign.  The head's replacement wildcards are added
+-- per branch by `padWildRow`, since the count is the branch's own arity.
+wildTailRows : Int -> List (List Pat, Int) -> List (Int, (List Pat, Int))
+wildTailRows _ [] = []
+wildTailRows k ((PWild::rest, i)::more) =
+  (k, (rest, i)) :: wildTailRows (k + 1) more
+wildTailRows k (_::more) = wildTailRows (k + 1) more
+
+padWildRow : Int -> (Int, (List Pat, Int)) -> (Int, (List Pat, Int))
+padWildRow arity (k, (ps, i)) = (k, (replicate arity PWild ++ ps, i))
+
+-- Interleave a branch's own rows with the wildcard rows by ordinal, restoring
+-- matrix row order and dropping the tags.  Ordinals are unique (one per matrix
+-- row) and both inputs are ascending, so this is a total, order-exact merge.
+mergeByOrd : List (Int, (List Pat, Int)) -> List (Int, (List Pat, Int)) -> List (List Pat, Int)
+mergeByOrd [] ys = map untagRow ys
+mergeByOrd xs [] = map untagRow xs
+mergeByOrd ((ka, ra)::xs) ((kb, rb)::ys) =
+  if ka < kb then
+    ra :: mergeByOrd xs ((kb, rb)::ys)
   else
-    None
-specConRow _ arity (PWild::rest, i) = Some (replicate arity PWild ++ rest, i)
-specConRow _ _ _ = None
+    rb :: mergeByOrd ((ka, ra)::xs) ys
 
--- specialize on a literal: a matching/​wildcard head drops (arity 0), else drop.
-specializeLit : Lit -> List (List Pat, Int) -> List (List Pat, Int)
-specializeLit l rows = filterMapRows (specLitRow l) rows
-
-specLitRow : Lit -> (List Pat, Int) -> Option (List Pat, Int)
-specLitRow l ((PLit l2)::rest, i) = if litEq l2 l then Some (rest, i) else None
-specLitRow _ (PWild::rest, i) = Some (rest, i)
-specLitRow _ _ = None
-
--- Alloc-free structural equality on literals, identical in result to the derived
--- `Eq Lit`.  `specLitRow` compares a literal ONCE PER (row × distinct-literal)
--- while lowering a literal switch, i.e. O(arms^2) compares on an N-arm match; the
--- derived `Eq Lit` (`mdk_impl_Lit_eq`) allocates on every call (verified by
--- profiling — GC_malloc_kind ← mdk_alloc ← mdk_impl_Lit_eq dominated the lowering
--- of a wide literal match), so those O(arms^2) compares allocated O(arms^2) too.
--- Comparing the primitive fields directly allocates nothing — exactly why the
--- constructor path (`specConRow`, a `String ==`) is already alloc-linear (#970).
-litEq : Lit -> Lit -> Bool
-litEq (LInt a) (LInt b) = a == b
-litEq (LFloat a) (LFloat b) = a == b
-litEq (LString a) (LString b) = a == b
-litEq (LChar a) (LChar b) = a == b
-litEq (LBool a) (LBool b) = a == b
-litEq LUnit LUnit = True
-litEq _ _ = False
+untagRow : (Int, (List Pat, Int)) -> (List Pat, Int)
+untagRow (_, r) = r
 
 -- the default matrix: rows whose head is a wildcard (head dropped); used for the
 -- switch's default branch and (when column 0 is all wildcards) CTDrop.
@@ -511,11 +596,6 @@ defRow (PWild::rest, i) = Some (rest, i)
 defRow _ = None
 
 -- ── small local helpers ────────────────────────────────────────────────────
-
-nthBool : List Bool -> Int -> Bool
-nthBool (b::_) 0 = b
-nthBool (_::rest) n = nthBool rest (n - 1)
-nthBool [] _ = False
 
 lowerField : FieldAssign -> CField
 lowerField (FieldAssign k e) = CField k (lower e)
