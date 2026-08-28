@@ -1,0 +1,102 @@
+# Ledger for test/diff_compiler_prelude_shadow_census.sh (#2153, S-shadow-census-gate).
+#
+# One row per top-level standalone function exported from stdlib/core.mdk,
+# `name|verdict`, where verdict is the CURRENT MEASURED outcome of the probe:
+#
+#   interface Ifc c where
+#     <name> : c -> Int
+#   impl Ifc Int where
+#     <name> v = v
+#   main = println (<name> 1)
+#
+# driven through `check`, `run`, and `build` (+ executing the built binary).
+#
+#   PASS                -- check/run/build all ACCEPT and both run's stdout
+#                          and the built binary's stdout print exactly `1`
+#                          (S1-PRELUDE (a): the interface method wins and the
+#                          program builds, docs/spec/SHADOW-SEMANTICS.md).
+#   FAIL_BUILD           -- check and run ACCEPT (run prints `1`), but build
+#                          exits 1: `runtime error [E-PANIC]: unbound method:
+#                          <name>` -- #2153's class, the gate this slice ships
+#                          to make objectively measurable.
+#   SPECIAL_RUN_REJECT   -- `println` only: the probe template itself calls
+#                          `println (...)`, so shadowing `println` makes the
+#                          OUTER call resolve through the shadow too, and
+#                          `run` rejects while `build` still accepts and
+#                          prints `1`. Not part of the #2153 family; kept as
+#                          its own bucket rather than folded into either of
+#                          the other two, per the packet's own note that
+#                          `println` is special-cased.
+#
+# THIS LEDGER IS THE RATCHET: a PASS row that regresses to anything else is a
+# gate failure, full stop -- see the gate's own header for how a name moving
+# the OTHER direction (e.g. a slice 2-5 fix flipping FAIL_BUILD -> PASS) is
+# handled (re-pin this row, on purpose, in that slice's own diff).
+#
+# Names are derived from stdlib/core.mdk at gate-run time (never hand-copied
+# from #2153's issue body) -- the gate's own coverage self-audit fails loudly
+# if a name here has vanished from core.mdk, or a core.mdk standalone is
+# missing from this ledger (a NEW prelude function ships with no ledger row).
+#
+# Measured 2026-08-28, cold-built binary, this worktree: 57 standalone names,
+# 34 PASS / 22 FAIL_BUILD / 1 SPECIAL_RUN_REJECT. #2153's issue body claims
+# "33 pass / 23 fail / println special" -- this ledger's numbers are the
+# derived truth, one name off in each direction from the issue's prose
+# count; see the sprint report for which name moved.
+all|FAIL_BUILD
+and|PASS
+any|FAIL_BUILD
+apply|PASS
+arbitraryList|PASS
+arbitraryString|FAIL_BUILD
+clamp|FAIL_BUILD
+compose|PASS
+const|PASS
+count|PASS
+curry|PASS
+discard|FAIL_BUILD
+elem|FAIL_BUILD
+filterThen|FAIL_BUILD
+find|PASS
+flatMap|PASS
+flat|PASS
+flip|PASS
+foldThen|FAIL_BUILD
+forEach|FAIL_BUILD
+fromOption|FAIL_BUILD
+fromResult|FAIL_BUILD
+fromResultOr|PASS
+fst|PASS
+guard|PASS
+identity|FAIL_BUILD
+isErr|PASS
+isEven|PASS
+isNone|PASS
+isOdd|PASS
+isOk|PASS
+isSome|PASS
+map2|FAIL_BUILD
+map3|FAIL_BUILD
+mapErr|FAIL_BUILD
+maximum|PASS
+minimum|PASS
+neq|FAIL_BUILD
+notElem|PASS
+not|FAIL_BUILD
+on|FAIL_BUILD
+or|PASS
+otherwise|FAIL_BUILD
+pipe|PASS
+println|SPECIAL_RUN_REJECT
+print|PASS
+product|PASS
+repeatThen|FAIL_BUILD
+replaceWith|PASS
+runEach|FAIL_BUILD
+snd|PASS
+sum|PASS
+toResult|FAIL_BUILD
+uncurry|PASS
+unless|PASS
+when|PASS
+xor|PASS
