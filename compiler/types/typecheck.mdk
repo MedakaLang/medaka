@@ -7912,6 +7912,7 @@ data PerRun = PerRun {
     pendingRLocalSites : Ref (List PendingEntry),
     shadowStandaloneSchemesRef : Ref (List (String, Scheme)),
     ifaceMethodSchemesByIdRef : Ref (List ((IfaceRef, String), Scheme)),  -- #1351 L1 EXPAND: the Module arm's interface-method schemes under an identity key — the substrate leaf L2 migrates `pickSchemes` onto.  No reader yet.
+    numLitFromIntSchemeRef : Ref (Option Scheme),  -- #259 / DICT §8 I7 (literals): the PRELUDE `Num`'s own `fromInt` scheme, selected ONCE per pass by interface IDENTITY — see seedNumLitFromIntScheme.  `inferNumLit`'s anchor; it reads NO term scope.
     definerShadowNamesRef : Ref (List String),
     definerShadowSigsRef : Ref (List (String, Ty)),
     bodyImplEnvRef : Ref ImplEnv,
@@ -8025,6 +8026,7 @@ freshPerRun _ = PerRun {
   pendingRLocalSites = Ref [],
   shadowStandaloneSchemesRef = Ref [],
   ifaceMethodSchemesByIdRef = Ref [],
+  numLitFromIntSchemeRef = Ref None,
   definerShadowNamesRef = Ref [],
   definerShadowSigsRef = Ref [],
   bodyImplEnvRef = Ref emptyImplEnv,
@@ -12615,23 +12617,53 @@ numArithOp lt rt =
 -- present — `builtinClassPresent BNum` since #1539, was `ifaceRegistered "Num"` — AND
 -- `fromInt` bound): with no prelude (bare-HM oracle) fall back to a plain fresh
 -- Num-obligated var, leaving [dref] RNone (⇒ a static Int literal at rewrite time).
--- ⚠️ #1539 converts the GATE only.  The `lookupVar env "fromInt"` on the next line is
--- the OTHER, larger I7 divergence (§11's "I7 (literals)" row): the literal's method is
--- still anchored by a bare name in the USER's term scope, so a user binding spelled
--- `fromInt` still re-anchors every literal in the module.  That is untouched here.
+-- ⚠️ #1539 converted the GATE; #259 converts the ANCHOR, which was the larger half of
+-- the same I7 divergence (§11's "I7 (literals)" row).  Both halves now ask the PRELUDE
+-- and nothing else: the gate is `builtinClassPresent BNum`, the method is the scheme
+-- `seedNumLitFromIntScheme` selected out of the prelude `Num` DECLARATION by identity.
+-- A binding spelled `fromInt` in the user's term scope is no longer consulted, so it can
+-- no longer re-anchor the literals around it (#259: `fromInt : Int -> Float` made
+-- `println (7 / 2)` print `3.5` under `run` and `3` from the built binary, exit 0).
 inferNumLit : TcEnv -> Int -> Ref (Option Float) -> Ref Route -> Mono
 inferNumLit env n fref dref
-  | builtinClassPresent BNum = match lookupVar env "fromInt"
+  | builtinClassPresent BNum = match perRun.value.numLitFromIntSchemeRef.value
     None => inferNumLitBare n fref
-    Some _ =>
-      -- inferMethodAt records the Num impl obligation + a pendingSite on [dref].
-      let fromIntTy = inferMethodAt env "fromInt" dref (Ref []) (Ref [])
+    Some s =>
+      -- records the Num impl obligation + a pendingSite on [dref].
+      let fromIntTy = inferNumLitMethod env s dref
       let a = freshVar ()
       let _ = unify fromIntTy (TFun (tconBuiltin "Int") (openRow ()) a)
       perRun.value.numlitRefs := ((a, fref, n, dref) :: perRun.value.numlitRefs.value)
       let _ = recordNumlitLoc a  -- Chunk D: literal provenance for Num mis-framing
       a
   | otherwise = inferNumLitBare n fref
+
+-- #259: the literal's own occurrence recorder — `inferMethodAt`'s `Some` arm MINUS every
+-- shadow arm, because a numeric literal is not a shadow occurrence and cannot be one:
+-- `1 + 1` mentions no identifier, so nothing about it can denote a user standalone.
+--
+-- Dropped, deliberately, and each is INERT on a program with no `fromInt` shadow (so this
+-- is byte-identical to the old route everywhere the defect was absent):
+--   • `recordRLocalSite` — gated on `standaloneValuesRef` membership / `standaloneValuePinned`,
+--     both empty for an unshadowed `fromInt`.  Under a shadow it stamped the literal's route
+--     RLocal at the user's binding.
+--   • `maybeStandaloneValueMono` / `maybeStandaloneValueMonoEmit` — the value-position pins,
+--     keyed on `definerShadowNamesRef` / the route sym; both `None` unshadowed.  These are
+--     what re-typed the literal to the user binding's own scheme on the emit path.
+--   • `argDispatchOf` — `fromInt` is return-position (no dispatch argument), so this answered
+--     `None` and fell to `recordSite` on every path already.
+--
+-- KEPT as-is: `recordMethodObligationGuarded`.  ⚠️ Its `lookupLocalFlag env name` half is a
+-- term-scope read that survives here — a residual, reported with #259 rather than changed
+-- under this fix, because its effect is to SUPPRESS a `Num` obligation (a missed reject),
+-- never to re-type the literal, and touching it would move behaviour on programs that have
+-- no shadow at all.
+inferNumLitMethod : TcEnv -> Scheme -> Ref Route -> Mono
+inferNumLitMethod env s tagRef =
+  let inst = instantiateTracked s
+  let _ = recordMethodDicts "fromInt" (Ref []) (snd inst)
+  let _ = recordMethodObligationGuarded env "fromInt" s (fst inst)
+  recordSite "fromInt" tagRef (Ref []) (fst inst)
 
 -- no-prelude fallback: a fresh var, no route (dref untouched ⇒ stays RNone ⇒ Int).
 -- PLAN.md #11 (locked §0.2): a numeric literal is ALWAYS a `fromInt n` occurrence,
@@ -25397,6 +25429,11 @@ checkBodyImpl seed mode prog0 =
   let shadowLayer = match mode
     Flat _ =>
       perRun.value.methodShadowNamesRef := methodNames
+      -- #259: anchor the numeric literal's `fromInt` to the PRELUDE `Num` DECLARATION.
+      -- `globalS`'s interface-method prefix IS `ifaceMethodSchemes prog` (the externs it
+      -- appends come after, and `zipIfaceMethodSchemeIds` truncates at the key list), so
+      -- this reuses the schemes already minted above rather than eliciting new ids.
+      let _ = seedNumLitFromIntScheme (ifaceMethodSchemeIds prog) globalS
       []
     Module _ _ implDecls =>
       -- #1351 L1 EXPAND.  `ifaceMethodSchemes implDecls` is hoisted into a binding so it
@@ -25406,6 +25443,8 @@ checkBodyImpl seed mode prog0 =
       -- effect relative to the `methodConstraintsRef` write below.
       let ifaceSchemes = ifaceMethodSchemes implDecls
       perRun.value.ifaceMethodSchemesByIdRef := (zipIfaceMethodSchemeIds (ifaceMethodSchemeIds implDecls) ifaceSchemes)
+      -- #259: same anchor on the Module arm, off the same already-minted list.
+      let _ = seedNumLitFromIntScheme (ifaceMethodSchemeIds implDecls) ifaceSchemes
       -- #1351 L2 MIGRATE.  The importer-shadow layer now binds each shadowed method
       -- name to the scheme of the declaration THIS module's import scope admits
       -- (`applyMethodScopeOverrides`), not to `lookupAssoc`'s decl-walk first match.
@@ -28963,6 +29002,48 @@ zipIfaceMethodSchemeIds [] _ = []
 zipIfaceMethodSchemeIds _ [] = []
 zipIfaceMethodSchemeIds (k::ks) ((_, s)::ss) =
   (k, s) :: zipIfaceMethodSchemeIds ks ss
+
+-- ── #259 / DICT §8 I7 (literals): the numeric literal's anchor ──────────────────
+--
+-- I7 fixes the class a numeric LITERAL demands to the PRELUDE's `Num`, and therefore
+-- fixes the method it is modelled through to that interface's own `fromInt`.  Before
+-- this, `inferNumLit` asked `lookupVar env "fromInt"` — a bare-name lookup in the USER's
+-- TERM scope — so ANY binding spelled `fromInt` (top level, `let`, or a parameter), never
+-- called, re-anchored every literal in its lexical scope to that binding's type.  #259:
+-- `fromInt : Int -> Float` + `println (7 / 2)` printed `3.5` under `run` and `3` from the
+-- built binary, exit 0, empty stderr, on a program `check` accepts.
+--
+-- The successor asks the interface question and takes the interface answer: pick the
+-- scheme whose key is (an interface DECL-identical to `builtinIfaceRef BNum`, `fromInt`)
+-- out of the very rows env setup already built.  A user term binding contributes no row
+-- to that list at all, so no spelling can reach it — this removes the read, it does not
+-- special-case the name.
+--
+-- 🚨 SELECTED FROM THE ALREADY-MINTED SCHEMES, NEVER RE-ELABORATED.  `methodSchemes`
+-- mints tyvar ids off `PerRun.tyvarCounter` AND registers `methodConstraintsRef` keyed by
+-- those ids.  A second `sigToSchemeTvsIn` here would hand `recordMethodDicts` a scheme
+-- whose ids no constraint row is keyed by (silently: it aligns nothing and records no
+-- dict), besides shifting every downstream id.  Hence the zip against the caller's own
+-- list rather than a fresh lookup — the same reasoning `ifaceMethodSchemeIds` states.
+--
+-- Identity, not spelling: `sameIfaceDecl` (the one total mint, #1647) — two STAMPED
+-- occurrences match on `(module, name)`, two UNSTAMPED ones by spelling, stamped never
+-- matches unstamped.  A MISS is loud in the honest direction: `inferNumLit` falls to
+-- `inferNumLitBare`, which is exactly the no-prelude arm (a fresh `Num`-obligated var,
+-- route RNone ⇒ Int), never a user binding's type.
+seedNumLitFromIntScheme : List (IfaceRef, String) -> List (String, Scheme) -> Unit
+seedNumLitFromIntScheme keys schemes =
+  perRun.value.numLitFromIntSchemeRef :=
+    pickIfaceMethodSchemeById
+      (builtinIfaceRef BNum)
+      "fromInt"
+      (zipIfaceMethodSchemeIds keys schemes)
+
+pickIfaceMethodSchemeById : IfaceRef -> String -> List ((IfaceRef, String), Scheme) -> Option Scheme
+pickIfaceMethodSchemeById _ _ [] = None
+pickIfaceMethodSchemeById iface mname (((ifn, n), s)::rest)
+  | n == mname && sameIfaceDecl ifn iface = Some s
+  | otherwise = pickIfaceMethodSchemeById iface mname rest
 
 -- Error-path B4: register each interface method → (iface, typarams, declared Ty)
 -- so checkImplObligations can recover its dispatch (iface-param) types at a call
