@@ -5,6 +5,7 @@ set -eu
 ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
 MEDAKA=${MEDAKA:-"$ROOT/medaka"}
 DRIVER="$ROOT/pds/test/car_vectors_main.mdk"
+PERF_DRIVER="$ROOT/pds/test/performance_resource_main.mdk"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/pds-car.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
 
@@ -56,5 +57,34 @@ fi
 "$WORK/native" "$CORPUS" > "$WORK/native.out" 2> "$WORK/native.err"
 require_empty "$WORK/native.err" native
 cmp "$WORK/eval.out" "$WORK/native.out" || fail 'eval and native normalized output differ'
+
+if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$PERF_DRIVER" -o "$WORK/perf-native" > "$WORK/perf-build.log" 2>&1; then
+  cat "$WORK/perf-build.log" >&2
+  fail 'CAR scaling/resource driver build failed'
+fi
+
+"$WORK/perf-native" limits > "$WORK/limits.out"
+grep -F -q 'limits: 7/7 adjacent controls; 7/7 hostile routes' "$WORK/limits.out" || fail 'resource ceiling controls incomplete'
+[ "$(tail -1 "$WORK/limits.out")" = 'LIMITS: PASS' ] || fail 'resource ceiling controls failed'
+
+measure_car() {
+  label=$1
+  size=$2
+  start=$(perl -MTime::HiRes=time -e 'printf "%.6f", time')
+  "$WORK/perf-native" car "$size" > "$WORK/$label.out"
+  finish=$(perl -MTime::HiRes=time -e 'printf "%.6f", time')
+  grep -F -q "CAR $size " "$WORK/$label.out" || fail "CAR scaling route failed at $size blocks"
+  awk -v start="$start" -v finish="$finish" 'BEGIN { printf "%.6f", finish - start }'
+}
+
+CAR_SMALL=$(measure_car car-1000 1000)
+CAR_LARGE=$(measure_car car-2000 2000)
+if ! awk -v small="$CAR_SMALL" -v large="$CAR_LARGE" 'BEGIN {
+  ratio = large / small
+  exit ! (large <= 12.0 && ratio <= 3.2)
+}'; then
+  fail "CAR scaling exceeded bounds: 1000=$CAR_SMALL s 2000=$CAR_LARGE s"
+fi
+echo "CAR scaling: 1000=$CAR_SMALL s 2000=$CAR_LARGE s"
 
 echo 'PASS: CAR — 1 official-atproto fixture; 4 success routes; 12 hostile routes; eval == native'

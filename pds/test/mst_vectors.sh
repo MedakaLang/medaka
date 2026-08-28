@@ -6,6 +6,7 @@ set -eu
 ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
 MEDAKA=${MEDAKA:-"$ROOT/medaka"}
 DRIVER="$ROOT/pds/test/mst_vectors_main.mdk"
+PERF_DRIVER="$ROOT/pds/test/performance_resource_main.mdk"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/pds-mst.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
 
@@ -66,5 +67,30 @@ fi
 "$WORK/native" "$CORPUS" > "$WORK/native.out" 2> "$WORK/native.err"
 require_empty "$WORK/native.err" native
 cmp "$WORK/eval.out" "$WORK/native.out" || fail 'eval and native normalized output differ'
+
+if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$PERF_DRIVER" -o "$WORK/perf-native" > "$WORK/perf-build.log" 2>&1; then
+  cat "$WORK/perf-build.log" >&2
+  fail 'MST scaling driver build failed'
+fi
+
+measure_mst() {
+  label=$1
+  size=$2
+  start=$(perl -MTime::HiRes=time -e 'printf "%.6f", time')
+  "$WORK/perf-native" mst "$size" > "$WORK/$label.out"
+  finish=$(perl -MTime::HiRes=time -e 'printf "%.6f", time')
+  grep -F -q "MST $size UNREACHABLE" "$WORK/$label.out" || fail "MST scaling route failed at $size rows"
+  awk -v start="$start" -v finish="$finish" 'BEGIN { printf "%.6f", finish - start }'
+}
+
+MST_SMALL=$(measure_mst mst-1000 1000)
+MST_LARGE=$(measure_mst mst-2000 2000)
+if ! awk -v small="$MST_SMALL" -v large="$MST_LARGE" 'BEGIN {
+  ratio = large / small
+  exit ! (large <= 3.5 && ratio <= 3.2)
+}'; then
+  fail "MST scaling exceeded bounds: 1000=$MST_SMALL s 2000=$MST_LARGE s"
+fi
+echo "MST scaling: 1000=$MST_SMALL s 2000=$MST_LARGE s"
 
 echo 'PASS: MST — 11 official-reference cases; 14 hostile routes; 3 lexical controls; eval == native'

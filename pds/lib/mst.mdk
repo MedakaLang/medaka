@@ -10,10 +10,21 @@
    canonical node bytes and a complete reachable node-block graph. Constructing
    an editable tree from imported blocks is intentionally outside this slice. -}
 
+-- The byte-range validator is intentionally local at each untrusted boundary.
+-- lint-disable-file rule-duplicate-body
+
 import array.{drop, take}
+import hex.{encode}
 import list.{reverse, sortBy}
-import lib.cid.{Cid, cidEqual, cidForDagCbor}
+import map.{Map(..), get, has, set, size}
+import lib.cid.{Cid, cidEqual, cidForDagCbor, cidToBytes}
 import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
+import lib.resource_limits.{
+  checkMstBlocks,
+  checkMstNodeBytes,
+  checkMstNodeEntries,
+  checkMstTraversalDepth,
+}
 import lib.sha256.{sha256}
 
 data MstEntry = MstEntry (Array Int) Cid Int
@@ -373,34 +384,32 @@ validateDecoded expected isRoot (DecodedNode left entries) =
       else
         Ok ()
 
+validateNodeEntries : DecodedNode -> Result String Unit
+validateNodeEntries (DecodedNode _ entries) =
+  checkMstNodeEntries (length entries)
+
 -- | Strictly decode and validate one canonical node at a known depth.
 export
 mstValidateNodeBytes : Int -> Bool -> Array Int -> Result String Unit
-mstValidateNodeBytes expected isRoot bytes = match decodeNode bytes
-  Err message => Err message
-  Ok node => validateDecoded expected isRoot node
+mstValidateNodeBytes expected isRoot bytes = do
+  _ <- checkMstNodeBytes (arrayLength bytes)
+  node <- decodeNode bytes
+  _ <- validateNodeEntries node
+  validateDecoded expected isRoot node
 
-cidMember : Cid -> List Cid -> Bool
-cidMember _ [] = False
-cidMember cid (candidate::rest) = cidEqual cid candidate || cidMember cid rest
+cidKey : Cid -> String
+cidKey cid = encode (cidToBytes cid)
 
-findBlock : Cid -> List (Cid, Array Int) -> Option (Array Int)
-findBlock _ [] = None
-findBlock cid ((candidate, bytes)::rest) =
-  if cidEqual cid candidate then
-    Some bytes
-  else
-    findBlock cid rest
-
-validateBlockRows : List (Cid, Array Int) -> List Cid -> Result String Unit
-validateBlockRows [] _ = Ok ()
-validateBlockRows ((cid, bytes)::rest) seen =
-  if cidMember cid seen then
+validateBlockRows : List (Cid, Array Int) -> Map String (Array Int) -> Result String (Map String (Array Int))
+validateBlockRows [] index = Ok index
+validateBlockRows ((cid, bytes)::rest) index =
+  let key = cidKey cid
+  if has key index then
     Err "mst: duplicate node block CID"
   else if not (cidEqual cid (cidForDagCbor bytes)) then
     Err "mst: node block CID does not match bytes"
   else
-    validateBlockRows rest (cid::seen)
+    validateBlockRows rest (set key bytes index)
 
 nodeDepth : DecodedNode -> Int
 nodeDepth (DecodedNode _ []) = 0
@@ -422,63 +431,65 @@ entriesWithinBounds ((DecodedEntry key _ _)::rest) lower upper = keyAboveLower k
   && keyBelowUpper key upper
   && entriesWithinBounds rest lower upper
 
-walkOptionalChild : Option Cid -> Int -> Option (Array Int) -> Option (Array Int) -> List (Cid, Array Int) -> List Cid -> List Cid -> Result String (List Cid)
-walkOptionalChild None _ _ _ _ _ visited = Ok visited
-walkOptionalChild (Some child) expected lower upper blocks active visited =
-  walkBlock child (Some expected) False lower upper blocks active visited
+walkOptionalChild : Option Cid -> Int -> Option (Array Int) -> Option (Array Int) -> Map String (Array Int) -> Map String Unit -> Map String Unit -> Int -> Result String (Map String Unit)
+walkOptionalChild None _ _ _ _ _ visited _ = Ok visited
+walkOptionalChild (Some child) expected lower upper blocks active visited traversal = walkBlock child (Some expected) False lower upper blocks active visited traversal
 
-walkEntryChildren : List DecodedEntry -> Int -> Option (Array Int) -> List (Cid, Array Int) -> List Cid -> List Cid -> Result String (List Cid)
-walkEntryChildren [] _ _ _ _ visited = Ok visited
-walkEntryChildren (entry::rest) expected upper blocks active visited =
+walkEntryChildren : List DecodedEntry -> Int -> Option (Array Int) -> Map String (Array Int) -> Map String Unit -> Map String Unit -> Int -> Result String (Map String Unit)
+walkEntryChildren [] _ _ _ _ visited _ = Ok visited
+walkEntryChildren (entry::rest) expected upper blocks active visited traversal =
   let childUpper = match rest
     [] => upper
     next::_ => Some (entryKey next)
-  match walkOptionalChild (entryChild entry) expected (Some (entryKey entry)) childUpper blocks active visited
+  match walkOptionalChild (entryChild entry) expected (Some (entryKey entry)) childUpper blocks active visited traversal
     Err message => Err message
-    Ok nextVisited =>
-      walkEntryChildren rest expected upper blocks active nextVisited
+    Ok nextVisited => walkEntryChildren rest expected upper blocks active nextVisited traversal
 
-walkNodeChildren : DecodedNode -> Int -> Option (Array Int) -> Option (Array Int) -> List (Cid, Array Int) -> List Cid -> List Cid -> Result String (List Cid)
-walkNodeChildren (DecodedNode left entries) expected lower upper blocks active visited =
+walkNodeChildren : DecodedNode -> Int -> Option (Array Int) -> Option (Array Int) -> Map String (Array Int) -> Map String Unit -> Map String Unit -> Int -> Result String (Map String Unit)
+walkNodeChildren (DecodedNode left entries) expected lower upper blocks active visited traversal =
   let leftUpper = match entries
     [] => upper
     entry::_ => Some (entryKey entry)
-  match walkOptionalChild left expected lower leftUpper blocks active visited
+  match walkOptionalChild left expected lower leftUpper blocks active visited traversal
     Err message => Err message
-    Ok nextVisited =>
-      walkEntryChildren entries expected upper blocks active nextVisited
+    Ok nextVisited => walkEntryChildren entries expected upper blocks active nextVisited traversal
 
-walkBlock : Cid -> Option Int -> Bool -> Option (Array Int) -> Option (Array Int) -> List (Cid, Array Int) -> List Cid -> List Cid -> Result String (List Cid)
-walkBlock cid expected isRoot lower upper blocks active visited =
-  if cidMember cid active then Err "mst: invalid node form; subtree link cycle"
-  else
-    if cidMember cid visited then Err "mst: invalid node form; subtree block is referenced more than once"
-    else match findBlock cid blocks
-      None => Err "mst: missing reachable node block"
-      Some bytes => match decodeNode bytes
-        Err message => Err message
-        Ok node =>
-          let depth = match expected
-            Some value => value
-            None => nodeDepth node
-          match validateDecoded depth isRoot node
-            Err message => Err message
-            Ok () => match node
-              DecodedNode _ entries =>
-                if not (entriesWithinBounds entries lower upper) then
-                  Err "mst: subtree key falls outside its lexical range"
-                else
-                  walkNodeChildren node (depth - 1) lower upper blocks (cid::active) (cid::visited)
+walkKnownBlock : Array Int -> Option Int -> Bool -> Option (Array Int) -> Option (Array Int) -> Map String (Array Int) -> Map String Unit -> Map String Unit -> String -> Int -> Result String (Map String Unit)
+walkKnownBlock bytes expected isRoot lower upper blocks active visited key traversal = do
+  _ <- checkMstNodeBytes (arrayLength bytes)
+  node <- decodeNode bytes
+  _ <- validateNodeEntries node
+  let depth = match expected
+    Some value => value
+    None => nodeDepth node
+  _ <- validateDecoded depth isRoot node
+  match node
+    DecodedNode _ entries =>
+      if not (entriesWithinBounds entries lower upper) then
+        Err "mst: subtree key falls outside its lexical range"
+      else
+        walkNodeChildren node (depth - 1) lower upper blocks (set key () active) (set key () visited) (traversal + 1)
+
+walkBlock : Cid -> Option Int -> Bool -> Option (Array Int) -> Option (Array Int) -> Map String (Array Int) -> Map String Unit -> Map String Unit -> Int -> Result String (Map String Unit)
+walkBlock cid expected isRoot lower upper blocks active visited traversal = match checkMstTraversalDepth traversal
+  Err message => Err message
+  Ok () =>
+    let key = cidKey cid
+    if has key active then Err "mst: invalid node form; subtree link cycle"
+    else
+      if has key visited then Err "mst: invalid node form; subtree block is referenced more than once"
+      else match get key blocks
+        None => Err "mst: missing reachable node block"
+        Some bytes => walkKnownBlock bytes expected isRoot lower upper blocks active visited key traversal
 
 -- | Validate content binding and prove every supplied node block is reachable.
 export
 mstValidateBlocks : Cid -> List (Cid, Array Int) -> Result String Unit
-mstValidateBlocks root blocks = match validateBlockRows blocks []
-  Err message => Err message
-  Ok () => match walkBlock root None True None None blocks [] []
-    Err message => Err message
-    Ok visited =>
-      if length visited /= length blocks then
-        Err "mst: unreachable node block supplied"
-      else
-        Ok ()
+mstValidateBlocks root blocks = do
+  _ <- checkMstBlocks (length blocks)
+  index <- validateBlockRows blocks Tip
+  visited <- walkBlock root None True None None index Tip Tip 0
+  if size visited /= size index then
+    Err "mst: unreachable node block supplied"
+  else
+    Ok ()
