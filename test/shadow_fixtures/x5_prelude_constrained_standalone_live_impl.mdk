@@ -1,0 +1,34 @@
+-- X5 (SHADOW-SEMANTICS S1-PRELUDE (a), matrix row 49) -- x4's CONSTRAINED twin.
+--
+-- x4 collides with an UNCONSTRAINED prelude standalone (`isEven : Int -> Bool`).  This one
+-- collides with a CONSTRAINED one: `count` is `stdlib/core.mdk`'s
+-- `export count : Foldable t => (a -> <e> Bool) -> t a -> <e> Int`.  The distinction is
+-- load-bearing rather than decorative, because elaboration PREPENDS a `$dict` parameter to
+-- a `=>`-constrained prelude function -- so the two cells stress the same rule against
+-- callee shapes that differ by one argument, and an implementation that gets the name's
+-- denotation wrong fails them in two different ways (a silently wrong exit-0 value at x4's
+-- shape, an under-applied callee at this one).  Pinning only the unconstrained cell would
+-- leave the arity-shifted path ungraded.
+--
+--   RULED (S1-PRELUDE (a)): the implicit prelude is in neither half of S1's left-operand
+--     kind partition, so the prelude `count` creates no shadow.  The bare `count` is the
+--     INTERFACE METHOD, `impl Sized Box` is at the receiver's head, and the impl body
+--     returns the payload => `7`.  <== what this fixture pins.
+--   REJECTED reading (the prelude standalone takes the name): the call routes to a
+--     two-parameter, dict-carrying callee with one argument.
+--
+-- EXPECTED VALUE HAND-DERIVED FROM THE RULING, NOT CAPTURED (see x4's header for why this
+-- corpus does not capture here).  At the time this was written the arms disagreed: #1492 --
+-- `check` clean, built binary `7`, `medaka run` E-PANIC `intToString: not an Int`.
+--
+-- RECEIVER PROVENANCE: `Box 7` is a GROUNDED constructor application, the complement of
+-- x4's ungrounded numeric literal.  Same rule, both provenances.
+interface Sized c where
+  count : c -> Int
+
+data Box = Box Int
+
+impl Sized Box where
+  count (Box n) = n
+
+main = println (count (Box 7))
