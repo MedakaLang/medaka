@@ -749,6 +749,9 @@ Rules, each a located error when broken:
   Write `extern k : Unit -> <FFI> Int` and call it as `k ()`.
 - Names beginning `mdk_` are reserved for the runtime's own C symbols
   (`T-FFI-RESERVED-NAME`).
+- Redeclaring a `stdlib/runtime.mdk` catalog name may not **narrow** its effect
+  row (`T-FFI-CATALOG-NARROW`). The declared row must cover the catalog's own;
+  wider is fine, equal is fine, missing an atom the catalog names is not.
 - One C symbol has one signature program-wide; two modules declaring the same name
   with different shapes is refused.
 
@@ -766,9 +769,14 @@ extern pi : Float
 ```
 
 ⚠️ Redeclaring a catalog name is **not** a way to bind your own C function — such a
-name is always lowered as the builtin, whatever your local row says. See #2163: a
-redeclaration with a narrower row currently launders the builtin's effect and is
-accepted.
+name is always lowered as the builtin, whatever your local row says. Because of
+that, the redeclaration must not **narrow** what the builtin performs
+(`T-FFI-CATALOG-NARROW`, #2163): `extern writeFile : String -> String -> <> Result
+Unit String` used to typecheck its callers as pure while the emitter still wrote
+to disk. A row that COVERS the catalog's own is accepted, and it may be wider —
+`extern putStrLn : String -> <IO> Unit` above is legal against the catalog's
+narrower `<Stdout>`, because over-declaring what a caller must permit is the safe
+direction.
 
 ### Linking a C library
 
