@@ -1,9 +1,11 @@
 # pds/
 
-The self-hosted atproto PDS (Personal Data Server) written in Medaka. Phase 0
-of the umbrella design (#1697) is complete in this tree: the pure, all-engine
-crypto core includes strict secp256k1 signing and `did:key`. Phase 1's data
-model is next; see `docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
+The self-hosted atproto PDS (Personal Data Server) written in Medaka. Phases 0
+and 1 of the umbrella design (#1697) are complete in this tree: the pure core
+now covers strict secp256k1 signing and `did:key`, canonical DAG-CBOR/CIDs, the
+atproto MST, verified CAR/block storage, and signed repository transitions.
+Phase 2's pure protocol layer is next; see
+`docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
 
 ## Layout
 
@@ -207,10 +209,30 @@ MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/inlang_test_oracle.sh
 
 ## Oracle (S-oracle-standup, #1707)
 
-`pds/oracle/` runs the **official Bluesky PDS container image, pinned by digest**, as the
-Phase 0/1 cross-check oracle, with a documented no-Docker fallback for boxes without Docker.
-The full procedure lives in `docs/ops/PDS-ORACLE.md` — this is a **local manual procedure, not
-a gate; no CI job provisions it**.
+Phase 1 uses two reproducible **library** routes. The committed lockfile under
+`pds/tools/atproto_reference/` pins the complete npm graph used by the corpus
+generators (`@atproto/repo@0.10.12` and `@atproto/crypto@0.5.4`), while
+`pds/tools/check_pds_phase1_image.sh` regenerates the MST, CAR, and repo corpora
+with the image-installed `@atproto/repo@0.10.10` and `@atproto/crypto@0.5.4` inside the
+**official Bluesky PDS image pinned by digest**. The latter starts Node only: it
+does not start the service or perform XRPC.
+
+`pds/oracle/` is the separate live-service harness, with a documented no-Docker
+fallback. Its safety guard deliberately disables account creation against the
+public PLC directory because that would make a permanent `did:plc` write. A
+true live-service repo transcript is therefore not claimed by Phase 1. The full
+manual procedure and limitation live in `docs/ops/PDS-ORACLE.md`; no CI job
+provisions it.
+
+## Phase 1 data model (#2136)
+
+The four Phase 1 vector gates grade external answer corpora on all production
+engines. DAG-CBOR/CID, MST, and CAR run the same full checks on eval, native,
+and Wasm. Repository signing is intentionally split to fit required CI: eval
+grades an exact initialization plus first CREATE transition—including commit
+and CAR bytes—and all semantic boundary controls; native and Wasm grade the
+complete five-operation official-reference transcript. The dedicated `pds` CI
+row requires its Wasm prerequisites, so a missing third engine is a failure.
 
 ## secp256k1 scalar arithmetic (S-scalar, #1700)
 

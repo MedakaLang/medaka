@@ -1,7 +1,0 @@
--- Support module for the #1499 pin. It declares NO interface, so it is the module
--- position where the prelude's own `count` is still reachable by its bare name. It is
--- deliberately trivial: its only job is to make the program MULTI-MODULE, so main.mdk
--- routes through `analyzeProject`/`foldModuleTc` (the per-module wiring site clause (b)
--- would use) rather than the flat single-file path.
-export threeItems : List Int
-threeItems = [1, 2, 3]

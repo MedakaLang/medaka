@@ -1,0 +1,125 @@
+{- | Opaque atproto CIDv1 values.
+
+   Atproto blesses exactly CIDv1 with `raw` or `dag-cbor`/DRISL codec,
+   SHA-256 multihash, and a 32-byte digest. Text form is lowercase unpadded
+   base32 multibase (`b...`). The constructor is private so callers cannot
+   fabricate a CID that violates those invariants. -}
+
+import array.{drop, take}
+import lib.base32.{multibaseBase32Lower, multibaseBase32LowerDecode}
+import lib.multiformats.{
+  multicodecDagCbor,
+  multicodecRaw,
+  multicodecSha2_256,
+  uvarintDecode,
+  uvarintEncode,
+}
+import lib.sha256.{sha256}
+
+-- | An admitted atproto CID. Its constructor is private to this module.
+export data Cid = Cid Int (Array Int)
+
+validByte : Int -> Bool
+validByte byte = byte >= 0 && byte <= 255
+
+validBytes : Array Int -> Int -> Bool
+validBytes bytes i =
+  if i >= arrayLength bytes then
+    True
+  else
+    validByte bytes[i] && validBytes bytes (i + 1)
+
+validCodec : Int -> Bool
+validCodec codec = codec == multicodecRaw || codec == multicodecDagCbor
+
+{- | Construct an admitted CID from a codec and SHA-256 digest. -}
+export
+cidFromDigest : Int -> Array Int -> Result String Cid
+cidFromDigest codec digest =
+  if not (validCodec codec) then
+    Err "cid: codec must be raw (0x55) or dag-cbor/DRISL (0x71)"
+  else if arrayLength digest /= 32 then
+    Err "cid: SHA-256 digest length must be 32 bytes"
+  else if not (validBytes digest 0) then
+    Err "cid: digest element outside byte range 0..255"
+  else
+    Ok (Cid codec (arrayCopy digest))
+
+-- | Content-address a structured DAG-CBOR/DRISL block.
+export
+cidForDagCbor : Array Int -> Cid
+cidForDagCbor content = Cid multicodecDagCbor (sha256 content)
+
+-- | Content-address a raw blob.
+export
+cidForRaw : Array Int -> Cid
+cidForRaw content = Cid multicodecRaw (sha256 content)
+
+-- | The admitted codec code.
+export
+cidCodec : Cid -> Int
+cidCodec (Cid codec _) = codec
+
+-- | A defensive copy of the 32-byte digest.
+export
+cidDigest : Cid -> Array Int
+cidDigest (Cid _ digest) = arrayCopy digest
+
+-- | Canonical binary CIDv1 serialization.
+export
+cidToBytes : Cid -> Array Int
+cidToBytes (Cid codec digest) = uvarintEncode 1
+  ++ uvarintEncode codec
+  ++ uvarintEncode multicodecSha2_256
+  ++ uvarintEncode 32
+  ++ digest
+
+decodeAt : String -> Array Int -> Int -> Result String (Int, Int)
+decodeAt label bytes offset =
+  if offset >= arrayLength bytes then Err "cid: truncated before \{label}"
+  else match uvarintDecode (drop offset bytes)
+    Err message => Err "cid: \{label}: \{message}"
+    Ok (value, consumed) => Ok (value, offset + consumed)
+
+{- | Parse and validate one complete binary atproto CID. -}
+export
+cidFromBytes : Array Int -> Result String Cid
+cidFromBytes bytes =
+  if not (validBytes bytes 0) then Err "cid: input element outside byte range 0..255"
+  else match decodeAt "version" bytes 0
+    Err message => Err message
+    Ok (version, p1) => if version /= 1 then Err "cid: version must be 1"
+    else match decodeAt "codec" bytes p1
+      Err message => Err message
+      Ok (codec, p2) => if not (validCodec codec) then Err "cid: codec must be raw (0x55) or dag-cbor/DRISL (0x71)"
+      else match decodeAt "hash code" bytes p2
+        Err message => Err message
+        Ok (hashCode, p3) => if hashCode /= multicodecSha2_256 then Err "cid: hash code must be sha2-256 (0x12)"
+        else match decodeAt "hash length" bytes p3
+          Err message => Err message
+          Ok (hashLength, p4) =>
+            if hashLength /= 32 then
+              Err "cid: SHA-256 digest length must be 32 bytes"
+            else if arrayLength bytes - p4 < 32 then
+              Err "cid: truncated SHA-256 digest"
+            else if arrayLength bytes - p4 > 32 then
+              Err "cid: trailing bytes after SHA-256 digest"
+            else
+              cidFromDigest codec (take 32 (drop p4 bytes))
+
+-- | Canonical lowercase unpadded base32 CID string.
+export
+cidToString : Cid -> String
+cidToString cid = multibaseBase32Lower (cidToBytes cid)
+
+-- | Parse one canonical atproto CID string.
+export
+cidFromString : String -> Result String Cid
+cidFromString text = match multibaseBase32LowerDecode text
+  Err message => Err "cid: \{message}"
+  Ok bytes => cidFromBytes bytes
+
+-- | Constant-shape value equality (not a timing claim).
+export
+cidEqual : Cid -> Cid -> Bool
+cidEqual left right = cidToBytes left == cidToBytes right

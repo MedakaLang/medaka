@@ -1,0 +1,33 @@
+-- SHADOW-SEMANTICS cell D25 (S2 definer arm, RETURN-POSITION, matrix row 39 / #1430): this
+-- module DEFINES its own `zed : Int` AND imports `Zed` BY NAME, so the interface is
+-- unambiguously nameable here and `zed` IS a definer shadow. S2's inversion is
+-- unconditional -- the impl universe is not consulted -- so the module's own binding
+-- answers: 42 + 0 = 42, on every verb.
+--
+-- 🚨 D25 IS THE DISCRIMINATING TWIN OF D24, AND THE CORPUS HAD ONLY THE D24 SIDE.
+-- d24_definer_return_pos_not_nameable and i21_importer_return_pos_not_nameable are the
+-- only two return-position cells in this corpus, and BOTH are NOT-NAMEABLE: they pass
+-- because S1 DECLINES TO CLASSIFY, so neither of them ever reaches S2's inversion at all.
+-- The nameable cell -- the one that does reach it -- had no fixture here; it lived only
+-- as a self-draining must-fail pin, which this gate cannot see. Row 39 states the
+-- consequence directly: "This is why row 38 must not be read as covering return position".
+--
+-- MEASURED AT THE PARENT COMMIT, MEDAKA_STRICT=1, every command redirected to a file with
+-- $? read separately: `check` exit 0 with zero diagnostics, `run` exit 0 printing **777**
+-- (the impl body -- the S0 half, a wrong value with no diagnostic on any verb before it),
+-- `build` exit 1 with `runtime error [E-PANIC]: unbound method: zed`. Three verbs, three
+-- answers. All three now answer 42, which is why this cell is graded ALL_EXACT rather than
+-- on an ACCEPT/REJECT column: every column was already ACCEPT on the `check` arm while the
+-- value was wrong, so a status-only assertion could not have seen this.
+--
+-- 🚨 DO NOT "SIMPLIFY" `zed : a` INTO A METHOD WITH AN ARGUMENT. The load-bearing axis is
+-- RETURN-POSITION-NESS, not the nameability that rows 33-38 vary. Give the method an
+-- argument mentioning the typaram and the inversion already fired correctly before this
+-- fix -- the cell would then be green vacuously and pin nothing. Likewise keep `sf` in the
+-- import list: it is what puts `smod` in the module graph at all.
+import smod.{Zed, sf}
+
+zed : Int
+zed = 42
+
+main = println (zed + sf 0)

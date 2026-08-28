@@ -113,7 +113,7 @@ scripts/sprint-report-check    sprint-orchestration intake tool: presence check 
 test/fixtures/pr_mock_gh       mock `gh` used ONLY by test/pr_helper_test.sh (which is in the
                                `tools` shard); running it directly proves nothing.
 
-# ── pds corpus extraction (the GATES are pds/test/*.sh — those are in the `sqlite` shard) ──
+# ── pds corpus extraction (the GATES are pds/test/*.sh, placed in CI by cost) ──
 pds/tools/gen_field_corpus     regenerates pds/test/vectors/field_reference_corpus.txt from
                                libsecp256k1 at the pinned commit (S-field, #1699 field
                                10x2^26 limbs). Needs network + a C compiler; asserts nothing
@@ -136,6 +136,20 @@ pds/tools/gen_signing_corpus   regenerates the 80-row dual-oracle prehashed corp
 pds/tools/gen_did_key_corpus   regenerates the 16-row secp256k1 did:key corpus by calling
                                Secp256k1Keypair.did() in the pinned official-PDS Docker image;
                                the offline checker and vector_provenance gate grade the artifact.
+pds/tools/gen_mst_corpus       regenerates the P1-B deterministic MST roots and canonical node
+                               blocks with npm ci from the committed exact atproto lock graph; the
+                               offline mst_vectors and vector_provenance gates grade the artifact.
+pds/tools/gen_car_corpus       regenerates the P1-C canonical CARv1 fixture with the pinned
+                               official writer/reader from that same exact lock graph; the offline
+                               car_vectors and vector_provenance gates grade the artifact.
+pds/tools/gen_repo_corpus      regenerates the P1-D fixed signed repository transcript and
+                               full-repo CAR with those locked official repo/crypto packages; the
+                               offline repo_vectors and provenance gates grade it.
+pds/tools/check_pds_phase1_image
+                               recreates and byte-compares the MST/CAR/repo corpora with the exact
+                               repo/crypto libraries installed inside the pinned official-PDS image.
+                               It never starts the service or performs XRPC; Docker is a manual
+                               provenance prerequisite, so the offline gates grade the artifacts.
 
 # ── pds oracle (S-oracle-standup, #1707; docker re-cut fix-oracle-standup-docker — a
 #    local manual procedure, not a gate) ──

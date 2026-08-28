@@ -1,7 +1,7 @@
 # A self-hosted atproto PDS in Medaka
 
-**Status:** ACTIVE (2026-08-27) — Phase 0 is complete in the current tree and
-Phase 1 is next. Phase 2 remains unblocked; Phase 3 onward is gated on the
+**Status:** ACTIVE (2026-08-28) — Phases 0 and 1 are complete in the current
+tree and Phase 2 is next. Phase 3 onward is gated on the
 Async v2 runtime arc (#500) and the graded-interfaces arc (#820).
 
 A Personal Data Server for the AT Protocol, written in Medaka, hosted on the
@@ -23,7 +23,7 @@ a real social identity, so the correctness bar is higher than the compiler's.
 | **P5** | **TLS is never implemented in Medaka. Caddy terminates.** | Caddy obtains and renews the Let's Encrypt certificate automatically and reverse-proxies plaintext HTTP to the Medaka process on localhost — which is what the official self-hosting guidance recommends regardless of implementation language. Cost to us: approximately zero. Writing TLS would be a larger and far more dangerous project than the entire rest of this document. |
 | **P6** | **Do NOT build a bespoke event loop. The PDS is a *consumer* of the #500 arc, not a fork of it.** | `docs/design/ASYNC-RUNTIME-DESIGN.md` already specifies the reactor, and its A2 extern set (`ioPoll` over `poll(2)`, `netSetNonblock`, `netTry{Accept,Recv,Send}`) is exactly and only what a server needs. Duplicating it inside `pds/` would produce a second scheduler with none of the guarantees G1–G9 that design carries, and would make the PDS the reason the real one can never land. |
 | **P7** | **Block store is flat sharded files on disk**, CID → bytes, not `sqlite/`. | A block store is a pure key/value map with content-addressed immutable keys — the one workload where a filesystem is already the right database. Pressing the in-tree SQLite engine into service would add a large dependency, a write-path risk, and a schema, in exchange for nothing. |
-| **P8** | **The official `bluesky-social/pds` runs alongside as an ORACLE.** Every CID, every CAR byte, every signature is diffed against it. | This is the repo's own differential-gate methodology applied to a protocol instead of a compiler. It is also the only defence that works against the failure mode that actually matters here (§5). |
+| **P8** | **Pinned official atproto/PDS code is the oracle; library reproduction and live-service evidence are distinct.** Every CID, CAR byte, and signature is diffed against exact official repo/crypto libraries. | Phase 1 pins the complete npm graph and independently reproduces the corpora with libraries installed in the digest-pinned official image. That applies the repo's differential methodology without starting a service. A live XRPC transcript is a separate manual tier: account creation stays disabled unless an isolated PLC endpoint is chosen, because the public default makes an irreversible identity write (§5). |
 | **P9** | **The running server is native-only**; the pure core stays all-engine **by design, not by luck**. | The interpreter implements zero net externs (the T7 family in `test/CAPABILITY-EXCEPTIONS.txt`) and wasm rejects net as PERMANENT. ⚠️ **The same is true of every file extern** — `stdlib/fs.mdk` says so in its own header: *"Scope: NATIVE/LLVM … not the tree-walking interpreter."* So effectful storage code is native-bound exactly like sockets, and a core that *performed* its own I/O would not be portable or doctestable at all. P14 is the structural response; without it, this row's "costs less than it sounds" would be unsupported. |
 | **P14** | **The pure core performs NO I/O. Storage is injected, never called.** `handle` takes a `Store` of plain functions and returns a response; `blockstore` is a pure `CID -> Bytes` map. | This is what makes P9's claim true rather than aspirational. Both file and net externs are native-only, so any module that touches storage directly is native-bound and undoctestable. Threading storage in as values keeps every byte of protocol logic — DAG-CBOR, MST, CAR, commits, HTTP parsing, routing — genuinely effect-free, all-engine, and gradeable without a filesystem. The shell above supplies the real reader/writer; a test supplies an in-memory map. The seam is `handle : Store -> Request -> Response`, with **no effect row at all**. |
 | **P10** | **Field arithmetic uses `libsecp256k1`'s 32-bit field layout: 10 limbs in base 2^26, limbs 0–8 holding 26 bits and limb 9 holding 22.** | Resolved from §7 Q2. Decided on *cross-checkability against an audited implementation of the same representation*, not on speed. ⚠️ Note the limit of that: the reference's **overflow proof does not transfer** — `fe_mul_inner` assumes magnitude ≤ 8 and its accumulator reaches a full 64 bits, which does not fit Medaka's 62-bit non-negative range. Eager normalization (§4) is what makes it fit, and the magnitude-1 bounds must be derived by us. What the reference buys is a diffable oracle for element-level outputs and the shape of the reduction — not a transplantable safety argument. ~2.5× fewer partial products than a 16-bit layout, ~6 bits of headroom under 2^62. |
@@ -298,21 +298,20 @@ more than any single item in the list.
   golden is not weak evidence but *anti*-evidence, since it converts a bug into the
   defended expected output.
 
-> 🚨 **G1–G5 are disciplines with no mechanical enforcement, and G5 has none at all.**
-> This document elsewhere insists on the distinction between a property that is *gated*
-> and one that is merely *asserted*; honesty requires applying it here. A self-captured
-> golden is byte-identical in form to an externally-derived one, and this repo has no
-> provenance channel for goldens — nothing can look at a `.golden` and tell where its
-> expected value came from. G3 and G4 additionally require the official
-> `bluesky-social/pds` running as an oracle (P8), which is a Docker/Node dependency no
-> CI job provisions, so as specified they are **local manual procedures, not gates**.
+> G5 is now mechanically represented by `pds/test/VECTOR-PROVENANCE.txt` and
+> its offline gate: every corpus has an attributed row and a checked local
+> digest. Phase 1 adds two stronger but distinct reproduction routes. The exact
+> lockfile-v3 makes `npm ci` verify the complete registry dependency graph used
+> by the generators; the digest-pinned PDS image check runs those generators
+> against its installed official repo/crypto libraries and byte-compares all
+> MST/CAR/repo corpora. Neither route starts the PDS service or performs XRPC.
 >
-> The cheapest real mechanism, and the one to build alongside Phase 0 rather than after
-> it: require every vector file to carry a committed **provenance URL and digest**, and
-> add a gate that fails on any vector file lacking one. That converts G5 from an
-> instruction an implementer can forget into a ledger that self-drains, in the style of
-> `test/EXTERN-DOMAIN-LEDGER.txt`. Until that exists, G5 is a promise, and it should be
-> read as one.
+> That distinction is load-bearing. The live-service harness intentionally
+> refuses an unset or empty PLC endpoint: account creation would otherwise hit
+> the public PLC directory and perform an irreversible `did:plc` write. Phase 1
+> therefore claims pinned package and image-library reproduction, not a live
+> account transcript. A future live-service check needs an explicitly isolated
+> PLC service and separate authority.
 
 ---
 
@@ -330,8 +329,11 @@ the current tree. All-engine.*
 that backs it lives in the Phase 3 shell, not here), `repo` (commit objects — `did`,
 `version: 3`, `data`, `rev` as TID, `prev`, `sig`; TID generation and monotonicity;
 note `prev` is required-but-virtually-always-null in version 3, present in the CBOR
-rather than omitted). Gated by G2–G5. *Unblocked today. All-engine. The highest-risk
-phase in the project.*
+rather than omitted). Gated by G2–G5. *Complete in the current tree.* The
+required CI route runs DAG-CBOR/CID, MST, and CAR fully on eval/native/Wasm.
+The repo gate runs a pinned initialization+first-CREATE signed transition and
+semantic boundaries on eval, with the complete five-operation transcript on
+native/Wasm, keeping the pure core all-engine while bounding required-CI time.
 
 **Phase 2 — protocol logic, still pure.** HTTP/1.1 request parse and response
 serialize (request line, headers, chunked transfer, keep-alive semantics as data,

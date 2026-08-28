@@ -979,8 +979,8 @@ implMethodBodyWarnings oracle (ImplMethod _ _ body) =
   letGroupWarnings oracle body
 
 ifaceMethodWarnings : Oracle -> IfaceMethod -> List (String, Option Loc)
-ifaceMethodWarnings _ (IfaceMethod _ _ None) = []
-ifaceMethodWarnings oracle (IfaceMethod _ _ (Some (MethodDefault _ body))) =
+ifaceMethodWarnings _ (IfaceMethod _ _ None _) = []
+ifaceMethodWarnings oracle (IfaceMethod _ _ (Some (MethodDefault _ body)) _) =
   letGroupWarnings oracle body
 
 -- one warning per line (the harness sorts); oracle built from a superset of decls

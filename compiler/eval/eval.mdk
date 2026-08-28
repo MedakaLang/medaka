@@ -456,7 +456,7 @@ methodDeclArities (DInterface { methods, ... }) = map ifaceMethodArity methods
 methodDeclArities _ = []
 
 ifaceMethodArity : IfaceMethod -> (String, Int)
-ifaceMethodArity (IfaceMethod mname mty _) = (mname, listLen (argsOfTy mty))
+ifaceMethodArity (IfaceMethod mname mty _ _) = (mname, listLen (argsOfTy mty))
 
 -- one ((method, tag), reqCount) per impl method; reqCount = impl pats - declared arity.
 implMethodReqCounts : List (String, Int) -> Decl -> List ((String, String), Int)
@@ -2102,7 +2102,7 @@ ifaceDispatchEntries (DInterface { name = ifaceName, ifaceOrigin = o, typarams =
 ifaceDispatchEntries _ = []
 
 ifaceMethodEntry : String -> String -> List String -> IfaceMethod -> ((String, String, String), List Int)
-ifaceMethodEntry ifaceId ifaceName typeParams (IfaceMethod mname mty _) = (
+ifaceMethodEntry ifaceId ifaceName typeParams (IfaceMethod mname mty _ _) = (
   (ifaceId, ifaceName, mname),
   dispatchPositionsOf mty (receiverParam typeParams),
 )
@@ -2299,8 +2299,8 @@ headTyconHead (t::_) = headTycon t
 -- unchanged and still the one every collision-free program dispatches through; the
 -- qualified one is a SECOND binding of the SAME value, never a replacement.
 defaultEntry : EvalEnv (Value e) -> String -> List String -> IfaceMethod -> List (String, (Int, Value e))
-defaultEntry _ _ _ (IfaceMethod _ _ None) = []
-defaultEntry env ifaceId typeParams (IfaceMethod mname _ (Some (MethodDefault pats body))) =
+defaultEntry _ _ _ (IfaceMethod _ _ None _) = []
+defaultEntry env ifaceId typeParams (IfaceMethod mname _ (Some (MethodDefault pats body)) _) =
   let scored = (listLen typeParams, implMethodValue env [] pats body)
   (mname, scored) :: qualifiedDefaultEntry ifaceId mname scored
 
@@ -2364,9 +2364,9 @@ implMethodName (ImplMethod n _ _) = n
 -- entry there is a dead cell holding `VUnit`, and an entry there with no name here
 -- panics `findCell: missing …`.
 defaultNamesOf : String -> IfaceMethod -> List String
-defaultNamesOf ifaceId (IfaceMethod n _ (Some _)) =
+defaultNamesOf ifaceId (IfaceMethod n _ (Some _) _) =
   n :: qualifiedDefaultName ifaceId n
-defaultNamesOf _ (IfaceMethod _ _ None) = []
+defaultNamesOf _ (IfaceMethod _ _ None _) = []
 
 qualifiedDefaultName : String -> String -> List String
 qualifiedDefaultName "" _ = []
@@ -3417,6 +3417,74 @@ export
 evalModules : List Decl -> List (String, List Decl) -> <e> List (String, Value e)
 evalModules preludeDecls modules = evalModulesWith [] preludeDecls modules
 
+-- ── S1-PRELUDE (a): a prelude standalone never shadows a user interface method ──
+-- docs/spec/SHADOW-SEMANTICS.md rows 46-49.  A bare occurrence whose name equals a
+-- PRELUDE STANDALONE, in a module that also declares a same-named INTERFACE METHOD,
+-- denotes the interface METHOD — the implicit prelude is in neither half of S1's
+-- left-operand kind partition, so it creates no shadow.
+--
+-- 🚨 THE DEFECT THIS REPAIRS WAS A CELL COLLISION, NOT A LOOKUP ORDER (#1497 / #1492).
+-- `globalNames` allocates a cell per name in list order, so a colliding name gets TWO
+-- cells: an earlier one from `implMethodNames allDecls` (the coalesced impl
+-- dispatcher) and a later one from the prelude's own groups.  But BOTH
+-- `installConsts`' and `installGroups`' `findCell` return the FIRST cell of that name,
+-- so `installGroups … preludeGroups` — which runs LAST — OVERWROTE the method
+-- dispatcher with the prelude standalone's closure and left the second cell VUnit.
+-- `lookupMethod`'s walk-past-a-shadow logic could not help: it walks FRAMES, and there
+-- was only ever one surviving binding to find.  Consequences, both measured on the
+-- pre-fix binary and both invisible to `check` and to the compiled binary (which
+-- mangles the prelude to `core__<name>` before elaboration, so it never collides):
+--   * UNCONSTRAINED standalone (`isEven : Int -> Bool`) — the call is saturated, so
+--     `run` silently printed the PRELUDE's answer (`False`) where the binary printed
+--     the method's (`True`), both exit 0, no diagnostic.  #1497, S0.
+--   * CONSTRAINED standalone (`count : Foldable t => …`) — elaboration prepends a
+--     `$dict` param, so the same routed call is UNDER-APPLIED BY EXACTLY ONE and `run`
+--     died `E-PANIC intToString: not an Int`.  #1492, S1.  This is why the symptom is
+--     arity-insensitive: the shift comes from the dict param, not from the arity.
+--
+-- The repair keeps ONE denotation per name per scope, the way the emit path's
+-- `mangleUnits` does: a prelude group whose name a USER module declares as an
+-- interface/impl method is installed into a PRIVATE prelude frame instead of the
+-- shared global cell, and is dropped from `globalNames` so the method dispatcher owns
+-- the global cell outright.  The prelude's own bodies close over `globalEnv`, which
+-- carries that private frame FIRST, so an ordinary `lookupEnv` from a prelude body
+-- calling its own standalone still reaches the standalone (dropping the group outright
+-- would have re-pointed every prelude-internal call at the user's method — trading one
+-- wrong answer for another).
+--
+-- ⚠️ MEASURED LIMIT, not a claim of completeness: the private frame does NOT cover a
+-- prelude-internal occurrence that elaboration turned into a METHOD site, because
+-- `lookupMethod` deliberately walks PAST any frame whose binding is not a dispatcher
+-- (`isMethodBinding`) — so it steps over the private prelude closure and lands on the
+-- user's dispatcher in `globalCells`.  The reachable instance is a CONSTRAINED prelude
+-- standalone that another prelude body calls (`elem`, called by `notElem`): a user
+-- interface method of that name makes `medaka build` fail `unbound method: elem` at
+-- base AND after this change, so the shape is already loudly broken on the emit arm and
+-- is out of this slice's scope — reported, not patched around.  Both arms stay LOUD
+-- (exit 1) either way; this change strictly moves `run` forward, from panicking on the
+-- user's own occurrence to answering it correctly and then failing on the prelude's.
+--
+-- ⚠️ The private frame is added ONLY when the collision set is non-empty.  An
+-- unconditional extra frame would shift every `ALocal depth` lexical address
+-- (`lookupAtAddr`/`frameAtDepth`) by one, so a collision-free program must see the
+-- byte-identical frame stack it saw before.
+export
+preludeShadowNames : List Decl -> List String
+preludeShadowNames moduleDecls = implMethodNames moduleDecls
+
+groupsNamedIn : List String -> List (String, List (List Pat, Expr)) -> List (String, List (List Pat, Expr))
+groupsNamedIn names gs = filterList (g => contains (fst g) names) gs
+
+groupsNotNamedIn : List String -> List (String, List (List Pat, Expr)) -> List (String, List (List Pat, Expr))
+groupsNotNamedIn names gs = filterList (g => not (contains (fst g) names)) gs
+
+-- the frame list `globalEnv` is built from: the private prelude frame first when it is
+-- non-empty, and NOTHING extra when it is empty (see the lexical-address note above).
+export
+globalFramesWith : List (String, Ref (Value e)) -> List (String, Ref (Value e)) -> List (List (String, Ref (Value e)))
+globalFramesWith [] globalCells = [globalCells]
+globalFramesWith privateCells globalCells = [privateCells, globalCells]
+
 -- B2 (RUN-EFFECTS): evalModules with EXTRA extern bindings installed alongside
 -- externBindings — the seam `medaka run` uses to install real-I/O prims
 -- (ioExternBindings) without them ever reaching the differential-oracle
@@ -3432,16 +3500,22 @@ evalModulesWith extraExterns preludeDecls modules =
   let disp = installDispatchTables allDecls
   let ctors = collectCtors allDecls
   let preludeGroups = groupsOf preludeDecls
-  let globalNames = map fst boolSeeds ++ map fst externs ++ map fst ctors ++ implMethodNames allDecls ++ map fst preludeGroups
+  -- S1-PRELUDE (a), #1497/#1492 — see `preludeShadowNames` for the full mechanism.
+  let shadowNames = preludeShadowNames moduleDecls
+  let preludeShared = groupsNotNamedIn shadowNames preludeGroups
+  let preludePrivate = groupsNamedIn shadowNames preludeGroups
+  let globalNames = map fst boolSeeds ++ map fst externs ++ map fst ctors ++ implMethodNames allDecls ++ map fst preludeShared
   let globalCells = map (n => (n, Ref VUnit)) globalNames
-  let globalEnv = EvalEnv [globalCells]
+  let privateCells = map (n => (n, Ref VUnit)) (map fst preludePrivate)
+  let globalEnv = EvalEnv (globalFramesWith privateCells globalCells)
   let mods = buildModInfos (ModExports globalCells (ctorsByTypeOf preludeDecls)) [] modules
   let implEntries = flatMap (declImplEntries globalEnv disp) preludeDecls ++ flatMap (modImplEntries disp) mods
   let _ = installConsts globalCells boolSeeds
   let _ = installConsts globalCells externs
   let _ = installConsts globalCells ctors
   let _ = installConsts globalCells (coalesceImpls implEntries)
-  let _ = installGroups globalEnv globalCells preludeGroups
+  let _ = installGroups globalEnv globalCells preludeShared
+  let _ = installGroups globalEnv privateCells preludePrivate
   let _ = installModGroups mods
   rootLocals mods
 
@@ -3507,7 +3581,7 @@ moduleMethodNamesOf (DAttrib _ d) = moduleMethodNamesOf d
 moduleMethodNamesOf _ = []
 
 ifaceMethodNmE : IfaceMethod -> String
-ifaceMethodNmE (IfaceMethod n _ _) = n
+ifaceMethodNmE (IfaceMethod n _ _ _) = n
 
 -- pass 2: install each module's funDef groups into its own cells (its env)
 installModGroups : List (ModInfo (Value e)) -> <e> Unit
@@ -3559,16 +3633,22 @@ evalModulesRootEnvWith extraExterns preludeDecls modules =
   let disp = installDispatchTables allDecls
   let ctors = collectCtors allDecls
   let preludeGroups = groupsOf preludeDecls
-  let globalNames = map fst boolSeeds ++ map fst externs ++ map fst ctors ++ implMethodNames allDecls ++ map fst preludeGroups
+  -- S1-PRELUDE (a), #1497/#1492 — see `preludeShadowNames` for the full mechanism.
+  let shadowNames = preludeShadowNames moduleDecls
+  let preludeShared = groupsNotNamedIn shadowNames preludeGroups
+  let preludePrivate = groupsNamedIn shadowNames preludeGroups
+  let globalNames = map fst boolSeeds ++ map fst externs ++ map fst ctors ++ implMethodNames allDecls ++ map fst preludeShared
   let globalCells = map (n => (n, Ref VUnit)) globalNames
-  let globalEnv = EvalEnv [globalCells]
+  let privateCells = map (n => (n, Ref VUnit)) (map fst preludePrivate)
+  let globalEnv = EvalEnv (globalFramesWith privateCells globalCells)
   let mods = buildModInfos (ModExports globalCells (ctorsByTypeOf preludeDecls)) [] modules
   let implEntries = flatMap (declImplEntries globalEnv disp) preludeDecls ++ flatMap (modImplEntries disp) mods
   let _ = installConsts globalCells boolSeeds
   let _ = installConsts globalCells externs
   let _ = installConsts globalCells ctors
   let _ = installConsts globalCells (coalesceImpls implEntries)
-  let _ = installGroups globalEnv globalCells preludeGroups
+  let _ = installGroups globalEnv globalCells preludeShared
+  let _ = installGroups globalEnv privateCells preludePrivate
   let _ = installModGroups mods
   rootFullEnv mods globalCells
 

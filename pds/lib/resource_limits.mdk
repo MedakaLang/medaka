@@ -1,0 +1,90 @@
+{- | Central resource ceilings for untrusted Phase 1 repository data.
+
+   The pure in-memory Phase 1 implementation deliberately rejects containers
+   beyond these bounds instead of allowing attacker-controlled allocation or
+   traversal. The exported checks make both sides of every boundary directly
+   testable without constructing a maximum-sized valid repository. -}
+
+export
+maxCarBytes : Int
+maxCarBytes = 67108864
+
+export
+maxCarSectionBytes : Int
+maxCarSectionBytes = 4194304
+
+export
+maxCarBlocks : Int
+maxCarBlocks = 100000
+
+export
+maxMstBlocks : Int
+maxMstBlocks = 100000
+
+export
+maxMstNodeBytes : Int
+maxMstNodeBytes = 4194304
+
+export
+maxMstNodeEntries : Int
+maxMstNodeEntries = 256
+
+export
+maxMstTraversalDepth : Int
+maxMstTraversalDepth = 128
+
+export
+checkCarBytes : Int -> Result String Unit
+checkCarBytes size =
+  if size > maxCarBytes then
+    Err "car: container exceeds 67108864-byte resource limit"
+  else
+    Ok ()
+
+export
+checkCarSectionBytes : Int -> Result String Unit
+checkCarSectionBytes size =
+  if size > maxCarSectionBytes then
+    Err "car: section exceeds 4194304-byte resource limit"
+  else
+    Ok ()
+
+export
+checkCarBlocks : Int -> Result String Unit
+checkCarBlocks count =
+  if count > maxCarBlocks then
+    Err "car: block count exceeds 100000 resource limit"
+  else
+    Ok ()
+
+export
+checkMstBlocks : Int -> Result String Unit
+checkMstBlocks count =
+  if count > maxMstBlocks then
+    Err "mst: node block count exceeds 100000 resource limit"
+  else
+    Ok ()
+
+export
+checkMstNodeBytes : Int -> Result String Unit
+checkMstNodeBytes size =
+  if size > maxMstNodeBytes then
+    Err "mst: node exceeds 4194304-byte resource limit"
+  else
+    Ok ()
+
+export
+checkMstNodeEntries : Int -> Result String Unit
+checkMstNodeEntries count =
+  if count > maxMstNodeEntries then
+    Err "mst: node entry count exceeds 256 resource limit"
+  else
+    Ok ()
+
+export
+checkMstTraversalDepth : Int -> Result String Unit
+checkMstTraversalDepth depth =
+  if depth > maxMstTraversalDepth then
+    Err "mst: traversal depth exceeds 128 resource limit"
+  else
+    Ok ()

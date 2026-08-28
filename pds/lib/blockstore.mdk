@@ -1,0 +1,109 @@
+{- | Pure immutable content-addressed block storage.
+
+   Every insertion recomputes the blessed atproto CID from the supplied bytes.
+   Views return defensive copies, and entries are exposed in canonical binary-CID
+   order so callers never inherit mutation or insertion-order state. -}
+
+-- The byte-range validator is intentionally local at each untrusted boundary.
+-- lint-disable-file rule-duplicate-body
+
+import hex.{encode}
+import map.{Map(..), get, set, size, toList}
+import lib.cid.{Cid, cidCodec, cidEqual, cidForDagCbor, cidForRaw, cidToBytes}
+import lib.multiformats.{multicodecDagCbor}
+
+-- | An immutable verified CID-to-bytes map. Its representation is private.
+export data BlockStore = BlockStore (Map String (Cid, Array Int))
+
+validBytes : Array Int -> Int -> Bool
+validBytes bytes i =
+  if i >= arrayLength bytes then
+    True
+  else
+    bytes[i] >= 0 && bytes[i] <= 255 && validBytes bytes (i + 1)
+
+cidKey : Cid -> String
+cidKey cid = encode (cidToBytes cid)
+
+expectedCid : Cid -> Array Int -> Cid
+expectedCid cid bytes =
+  if cidCodec cid == multicodecDagCbor then
+    cidForDagCbor bytes
+  else
+    cidForRaw bytes
+
+findBytes : Cid -> Map String (Cid, Array Int) -> Option (Array Int)
+findBytes cid entries = map ((_, bytes) => bytes) (get (cidKey cid) entries)
+
+-- | The empty store.
+export
+blockStoreEmpty : BlockStore
+blockStoreEmpty = BlockStore Tip
+
+-- | Number of distinct verified CIDs.
+export
+blockStoreSize : BlockStore -> Int
+blockStoreSize (BlockStore entries) = size entries
+
+-- | Test whether a CID is present.
+export
+blockStoreHas : Cid -> BlockStore -> Bool
+blockStoreHas cid (BlockStore entries) = match findBytes cid entries
+  Some _ => True
+  None => False
+
+-- | Look up a block, returning a defensive copy.
+export
+blockStoreGet : Cid -> BlockStore -> Option (Array Int)
+blockStoreGet cid (BlockStore entries) = map arrayCopy (findBytes cid entries)
+
+{- | Verify and immutably insert one block. An identical duplicate is
+   idempotent; a CID collision with different bytes fails loudly. -}
+export
+blockStorePut : Cid -> Array Int -> BlockStore -> Result String BlockStore
+blockStorePut cid bytes (BlockStore entries) =
+  if not (validBytes bytes 0) then Err "blockstore: block element outside byte range 0..255"
+  else
+    if not (cidEqual cid (expectedCid cid bytes)) then Err "blockstore: block content does not match CID"
+    else match get (cidKey cid) entries
+      Some (_, prior) =>
+        if prior == bytes then
+          Ok (BlockStore entries)
+        else
+          Err "blockstore: duplicate CID has different bytes"
+      None => Ok (BlockStore (set (cidKey cid) (cid, arrayCopy bytes) entries))
+
+addRows : List (Cid, Array Int) -> BlockStore -> Result String BlockStore
+addRows [] store = Ok store
+addRows ((cid, bytes)::rest) store = match blockStorePut cid bytes store
+  Err message => Err message
+  Ok next => addRows rest next
+
+-- | Verify and insert every row without mutating the input store.
+export
+blockStoreAddMany : List (Cid, Array Int) -> BlockStore -> Result String BlockStore
+blockStoreAddMany rows store = addRows rows store
+
+-- | Construct a verified immutable store from arbitrary input order.
+export
+blockStoreFromBlocks : List (Cid, Array Int) -> Result String BlockStore
+blockStoreFromBlocks rows = addRows rows blockStoreEmpty
+
+copyEntries : List (Cid, Array Int) -> List (Cid, Array Int)
+copyEntries [] = []
+copyEntries ((cid, bytes)::rest) = (cid, arrayCopy bytes) :: copyEntries rest
+
+entryValues : List (String, (Cid, Array Int)) -> List (Cid, Array Int)
+entryValues [] = []
+entryValues ((_, entry)::rest) = entry :: entryValues rest
+
+-- | Canonical CID-sorted defensive entry view.
+export
+blockStoreEntries : BlockStore -> List (Cid, Array Int)
+blockStoreEntries (BlockStore entries) =
+  copyEntries (entryValues (toList entries))
+
+-- | Verify and immutably merge every entry from the right-hand store.
+export
+blockStoreMerge : BlockStore -> BlockStore -> Result String BlockStore
+blockStoreMerge left right = blockStoreAddMany (blockStoreEntries right) left

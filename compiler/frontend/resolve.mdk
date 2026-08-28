@@ -1409,8 +1409,8 @@ checkSuper env (Super { superHead = iface }) =
     [UnknownInterface iface None]
 
 checkIfaceMethod : Env -> IfaceMethod -> List ResError
-checkIfaceMethod env (IfaceMethod _ t None) = checkType None env t
-checkIfaceMethod env (IfaceMethod _ t (Some (MethodDefault pats body))) = checkType None env t
+checkIfaceMethod env (IfaceMethod _ t None _) = checkType None env t
+checkIfaceMethod env (IfaceMethod _ t (Some (MethodDefault pats body)) _) = checkType None env t
   ++ flatMap (checkPat (firstExprLoc body) env) pats
   ++ checkExpr None env (mkScope (patsBindings pats)) body
 
@@ -1517,7 +1517,7 @@ variantName : Variant -> String
 variantName (Variant n _) = n
 
 ifaceMethodNm : IfaceMethod -> String
-ifaceMethodNm (IfaceMethod n _ _) = n
+ifaceMethodNm (IfaceMethod n _ _ _) = n
 
 implMethodNm : ImplMethod -> String
 implMethodNm (ImplMethod n _ _) = n
@@ -3613,12 +3613,8 @@ stampDecl top (DAttrib attrs inner) = DAttrib attrs (stampDecl top inner)
 stampDecl _ d = d
 
 stampIfaceMethod : OrdMap Int -> IfaceMethod -> IfaceMethod
-stampIfaceMethod _ (IfaceMethod nm ty None) = IfaceMethod nm ty None
-stampIfaceMethod top (IfaceMethod nm ty (Some (MethodDefault pats body))) =
-  IfaceMethod
-    nm
-    ty
-    (Some (MethodDefault pats (stampExpr (insertParams pats top) body)))
+stampIfaceMethod _ (IfaceMethod nm ty None mloc) = IfaceMethod nm ty None mloc
+stampIfaceMethod top (IfaceMethod nm ty (Some (MethodDefault pats body)) mloc) = IfaceMethod nm ty (Some (MethodDefault pats (stampExpr (insertParams pats top) body))) mloc
 
 stampImplMethod : OrdMap Int -> ImplMethod -> ImplMethod
 stampImplMethod top (ImplMethod nm pats body) =

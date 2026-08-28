@@ -1994,9 +1994,9 @@ oneSuper (Super { superHead = n, superParams = ps }) =
   Cat (text n) (concatD (map (p => Cat (text " ") (text p)) ps))
 
 ifaceMethodDoc : IfaceMethod -> Doc
-ifaceMethodDoc (IfaceMethod n ty None) =
+ifaceMethodDoc (IfaceMethod n ty None _) =
   Cat (text n) (Cat (text " : ") (printType ty))
-ifaceMethodDoc (IfaceMethod n _ (Some (MethodDefault pats body))) = Cat
+ifaceMethodDoc (IfaceMethod n _ (Some (MethodDefault pats body)) _) = Cat
   (text n)
   (Cat
     (concatD (map (p => Cat (text " ") (printPatAtom p)) pats))

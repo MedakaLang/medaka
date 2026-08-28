@@ -1,0 +1,513 @@
+{- | P1-D official repository transcript and named rejection driver. -}
+
+import array as A
+import hex.{decode}
+import io.{readLines}
+import string.{contains, join, repeat, split, startsWith, toInt, toUtf8}
+import lib.blockstore.{BlockStore, blockStoreEmpty, blockStorePut}
+import lib.cid.{Cid, cidEqual, cidForDagCbor, cidFromString, cidToString}
+import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
+import lib.repo.{
+  Repo,
+  RepoCommit,
+  RepoMutation,
+  repoCommitCid,
+  repoCommitDataCid,
+  repoCommitSignature,
+  repoCommitSignedBytes,
+  repoCommitTid,
+  repoCommitUnsignedBytes,
+  repoCreate,
+  repoDelete,
+  repoExportBlocks,
+  repoExportCar,
+  repoExportGraph,
+  repoInit,
+  repoInitFromKeyBytes,
+  repoLatestCommit,
+  repoList,
+  repoLookup,
+  repoMutationState,
+  repoPublicKey,
+  repoRootCid,
+  repoStore,
+  repoUpdate,
+  repoValidateCommit,
+  repoVerifyCommit,
+}
+import lib.sign.{PublicKey, SecretKey, secretKeyFromBytes, signatureCompact}
+import lib.tid.{
+  Tid,
+  tidClockId,
+  tidEncode,
+  tidMicros,
+  tidNext,
+  tidParse,
+  tidToString,
+}
+
+mustHex : String -> Array Int
+mustHex text = match decode text
+  Ok bytes => bytes
+  Err message => panic "repo_vectors: malformed hex: \{message}"
+
+mustCid : String -> Cid
+mustCid text = match cidFromString text
+  Ok cid => cid
+  Err message => panic "repo_vectors: malformed CID: \{message}"
+
+mustInt : String -> Int
+mustInt text = match toInt text
+  Some value => value
+  None => panic "repo_vectors: malformed integer"
+
+mustTid : String -> Tid
+mustTid text = match tidParse text
+  Ok tid => tid
+  Err message => panic "repo_vectors: malformed TID: \{message}"
+
+mustSecret : String -> SecretKey
+mustSecret text = match secretKeyFromBytes (mustHex text)
+  Ok key => key
+  Err message => panic "repo_vectors: malformed secret: \{message}"
+
+mustRecord : String -> DagCbor
+mustRecord text = match dagCborDecode (mustHex text)
+  Ok value => value
+  Err message => panic "repo_vectors: malformed record: \{message}"
+
+mustEncode : DagCbor -> Array Int
+mustEncode value = match dagCborEncode value
+  Ok bytes => bytes
+  Err message => panic "repo_vectors: test encoding failed: \{message}"
+
+mustRepo : Result String Repo -> Repo
+mustRepo (Ok repo) = repo
+mustRepo (Err message) = panic "repo_vectors: init failed: \{message}"
+
+mustMutation : Result String RepoMutation -> RepoMutation
+mustMutation (Ok mutation) = mutation
+mustMutation (Err message) = panic "repo_vectors: mutation failed: \{message}"
+
+gradeTid : String -> <IO> Int
+gradeTid line = match split "\t" line
+  ["TID", microsText, clockText, expected] =>
+    let micros = mustInt microsText
+    let clockId = mustInt clockText
+    match tidEncode micros clockId
+      Err message =>
+        let () = println "TID FAIL encode=\{message}"
+        0
+      Ok encoded => match tidParse expected
+        Err message =>
+          let () = println "TID FAIL parse=\{message}"
+          0
+        Ok parsed =>
+          let ok = tidToString encoded == expected && tidToString parsed == expected && tidMicros parsed == micros && tidClockId parsed == clockId
+          let nextOk = match tidNext parsed (micros - 1) clockId
+            Ok next => tidMicros next == micros + 1
+            Err _ => False
+          if ok && nextOk then
+            let () = println "TID PASS \{expected}"
+            1
+          else
+            let () = println "TID FAIL \{expected}"
+            0
+  _ => panic "repo_vectors: malformed TID row"
+
+gradeCommit : String -> String -> PublicKey -> RepoCommit -> <IO> Int
+gradeCommit _ line _ commit = match split "\t" line
+  [_, rootText, unsignedHex, signedHex, commitText, signatureHex] =>
+    let root = mustCid rootText
+    let commitCid = mustCid commitText
+    let ok = cidEqual root (repoCommitDataCid commit) && cidEqual commitCid (repoCommitCid commit) && repoCommitUnsignedBytes commit == mustHex unsignedHex && repoCommitSignedBytes commit == mustHex signedHex && signatureCompact (repoCommitSignature commit) == mustHex signatureHex
+    if ok then
+      let () = println "COMMIT PASS rev=\{tidToString (repoCommitTid commit)} cid=\{commitText}"
+      1
+    else
+      let () = println "COMMIT FAIL rev=\{tidToString (repoCommitTid commit)}"
+      0
+  _ => panic "repo_vectors: malformed commit row"
+
+applyOperation : String -> Repo -> RepoMutation
+applyOperation line repo = match split "\t" line
+  ["OP", "CREATE", pathHex, recordHex, _, revText] => mustMutation (repoCreate (mustHex pathHex) (mustRecord recordHex) (mustTid revText) repo)
+  ["OP", "UPDATE", pathHex, recordHex, _, revText] => mustMutation (repoUpdate (mustHex pathHex) (mustRecord recordHex) (mustTid revText) repo)
+  ["OP", "DELETE", pathHex, "-", "-", revText] =>
+    mustMutation (repoDelete (mustHex pathHex) (mustTid revText) repo)
+  _ => panic "repo_vectors: malformed operation row"
+
+gradeOperation : String -> Repo -> <IO> Int
+gradeOperation line repo = gradeOperationParts (split "\t" line) repo
+
+observedRecord : Array Int -> Repo -> Option (Cid, Array Int)
+observedRecord path repo = match repoLookup path repo
+  Ok (Some value) => match dagCborEncode value
+    Ok bytes => Some (cidForDagCbor bytes, bytes)
+    Err _ => None
+  Ok None => None
+  Err _ => None
+
+recordMatches : Option Cid -> Option (Cid, Array Int) -> String -> Bool
+recordMatches None None _ = True
+recordMatches (Some expected) (Some (actual, bytes)) recordHex = cidEqual expected actual
+  && bytes == mustHex recordHex
+recordMatches _ _ _ = False
+
+gradeOperationParts : List String -> Repo -> <IO> Int
+gradeOperationParts ["OP", opKind, pathHex, recordHex, cidText, _] repo =
+  let path = mustHex pathHex
+  let expected = if cidText == "-" then None else Some (mustCid cidText)
+  let actual = observedRecord path repo
+  let ok = recordMatches expected actual recordHex
+  if ok then
+    let () = println "OP \{opKind} PASS"
+    1
+  else
+    let () = println "OP \{opKind} FAIL"
+    0
+gradeOperationParts _ _ = panic "repo_vectors: malformed operation grade row"
+
+blockOrder : Repo -> String
+blockOrder repo = match repoExportBlocks repo
+  Err message => panic "repo_vectors: export blocks failed: \{message}"
+  Ok blocks => join "," (map ((cid, _) => cidToString cid) blocks)
+
+rejectContains : String -> String -> Result String a -> <IO> Int
+rejectContains label witness (Err message) =
+  if contains witness message then
+    let () = println "HOSTILE \{label} PASS route=\{witness}"
+    1
+  else
+    let () = println "HOSTILE \{label} FAIL wrong-route=\{message}"
+    0
+rejectContains label _ (Ok _) =
+  let () = println "HOSTILE \{label} FAIL accepted"
+  0
+
+acceptResult : String -> Result String a -> <IO> Int
+acceptResult label (Ok _) =
+  let () = println "CONTROL \{label} PASS"
+  1
+acceptResult label (Err message) =
+  let () = println "CONTROL \{label} FAIL rejected=\{message}"
+  0
+
+acceptLaterFailure : String -> String -> Result String a -> <IO> Int
+acceptLaterFailure label witness (Err message) =
+  if contains witness message then
+    let () = println "CONTROL \{label} PASS"
+    1
+  else
+    let () = println "CONTROL \{label} FAIL wrong-route=\{message}"
+    0
+acceptLaterFailure label _ (Ok _) =
+  let () = println "CONTROL \{label} FAIL missing-later-rejection"
+  0
+
+setField : String -> DagCbor -> List (String, DagCbor) -> List (String, DagCbor)
+setField _ _ [] = []
+setField name value ((key, old)::rest) =
+  if key == name then
+    (key, value)::rest
+  else
+    (key, old) :: setField name value rest
+
+mustPut : Cid -> Array Int -> BlockStore -> BlockStore
+mustPut cid bytes store = match blockStorePut cid bytes store
+  Ok next => next
+  Err message => panic "repo_vectors: test block insertion failed: \{message}"
+
+testCommitFields : String -> Cid -> List (String, DagCbor)
+testCommitFields did dataCid = [
+  ("did", DcString did),
+  ("rev", DcString "3ke6kg3wk222b"),
+  (
+    "sig",
+    DcBytes (mustHex "aaa6e79c2c161c48050d7439ae42a57637ccc38395614cfcd1a32d2836a5f6f32cb486409b88623d294c92f4557e1b92332957d4efd8cba967f79f4231f85aaa"),
+  ),
+  ("data", DcLink dataCid),
+  ("prev", DcNull),
+  ("version", DcInt 3),
+]
+
+malformedBoundExport : Result String (List (Cid, Array Int), Array Int)
+malformedBoundExport =
+  let recordBytes = mustEncode (DcMap [])
+  let recordCid = cidForDagCbor recordBytes
+  let rootBytes = mustEncode (DcMap [
+    ("l", DcNull),
+    (
+      "e",
+      DcArray [
+        DcMap [
+          ("p", DcInt 0),
+          ("k", DcBytes [||]),
+          ("v", DcLink recordCid),
+          ("t", DcNull),
+        ]
+      ],
+    ),
+  ])
+  let rootCid = cidForDagCbor rootBytes
+  let commitBytes = mustEncode (DcMap (testCommitFields "did:x1:a" rootCid))
+  let commitCid = cidForDagCbor commitBytes
+  let store = mustPut commitCid commitBytes (mustPut rootCid rootBytes (mustPut recordCid recordBytes blockStoreEmpty))
+  repoExportGraph commitCid commitBytes rootCid store
+
+removeField : String -> List (String, DagCbor) -> List (String, DagCbor)
+removeField _ [] = []
+removeField name ((key, value)::rest) =
+  if key == name then
+    rest
+  else
+    (key, value) :: removeField name rest
+
+commitFields : RepoCommit -> List (String, DagCbor)
+commitFields commit = match dagCborDecode (repoCommitSignedBytes commit)
+  Ok (DcMap fields) => fields
+  _ => panic "repo_vectors: latest commit did not decode"
+
+futureTid : RepoCommit -> Int -> Tid
+futureTid commit offset =
+  let prior = repoCommitTid commit
+  match tidEncode (tidMicros prior + offset) (tidClockId prior)
+    Ok value => value
+    Err message => panic "repo_vectors: future TID failed: \{message}"
+
+runHostile : String -> SecretKey -> Repo -> Array Int -> DagCbor -> <IO> Int
+runHostile did secret repo path presentRecord =
+  let commit = repoLatestCommit repo
+  let publicKey = repoPublicKey repo
+  let next = futureTid commit 1
+  let missingPath = mustHex "6170702e62736b792e666565642e706f73742f6d697373696e67"
+  let fields = commitFields commit
+  let signed = repoCommitSignedBytes commit
+  let missingPrev = mustEncode (DcMap (removeField "prev" fields))
+  let badVersion = mustEncode (DcMap (setField "version" (DcInt 2) fields))
+  let badSig = mustEncode (DcMap (setField "sig" (DcBytes (arrayMake 64 0)) fields))
+  let tampered =
+    let bytes = arrayCopy signed
+    let () = A.set (arrayLength bytes - 1) (bitXor bytes[arrayLength bytes - 1] 1) bytes
+    bytes
+  sum
+    [
+      rejectContains "tid-alphabet" "alphabet" (tidParse "3ke6kg3wk2220"),
+      rejectContains "tid-length" "13" (tidParse "3ke6kg3wk222"),
+      rejectContains "tid-high-bit" "high bit" (tidParse "k222222222222"),
+      rejectContains "tid-range" "53-bit" (tidParse "c222222222222"),
+      rejectContains "tid-nonmonotonic" "monotonic" (repoCreate missingPath presentRecord (repoCommitTid commit) repo),
+      rejectContains "duplicate-create" "duplicate create" (repoCreate path presentRecord next repo),
+      rejectContains "missing-update" "missing update" (repoUpdate missingPath presentRecord next repo),
+      rejectContains "missing-delete" "missing delete" (repoDelete missingPath next repo),
+      rejectContains "invalid-did" "invalid DID" (repoInit "not-a-did" secret next),
+      rejectContains "invalid-path" "non-empty" (repoCreate [||] presentRecord next repo),
+      rejectContains "invalid-record" "record must" (repoCreate missingPath (DcInt 1) next repo),
+      rejectContains "bad-key" "bad signing key" (repoInitFromKeyBytes did (arrayMake 32 0) next),
+      rejectContains "bad-sign" "compact signature" (repoValidateCommit did (repoCommitDataCid commit) (repoCommitTid commit) badSig),
+      rejectContains "required-prev" "required prev" (repoValidateCommit did (repoCommitDataCid commit) (repoCommitTid commit) missingPrev),
+      rejectContains "commit-version" "version mismatch" (repoValidateCommit did (repoCommitDataCid commit) (repoCommitTid commit) badVersion),
+      rejectContains "commit-data" "data mismatch" (repoValidateCommit did (cidForDagCbor [|1|]) (repoCommitTid commit) signed),
+      rejectContains "commit-rev" "rev mismatch" (repoValidateCommit did (repoCommitDataCid commit) next signed),
+      rejectContains "missing-graph" "missing graph commit" (repoExportGraph (repoCommitCid commit) signed (repoRootCid repo) blockStoreEmpty),
+      rejectContains "tampered-graph" "tampered graph commit" (repoExportGraph (repoCommitCid commit) tampered (repoRootCid repo) (repoStore repo)),
+    ]
+
+meaningful : String -> Bool
+meaningful line = line /= "" && not (startsWith "#" line)
+
+main : <IO, Env, FileRead "_"> Unit
+main = runMain (args ())
+
+runMain : List String -> <IO, Env, FileRead "_"> Unit
+runMain ["--final-review"] = runFinalReview
+runMain [corpusPath] = runRead (readLines corpusPath)
+runMain [corpusPath, "--representative"] =
+  runRepresentativeRead (readLines corpusPath)
+runMain _ =
+  panic "usage: repo_vectors_main <ledger-owned-corpus> [--representative]"
+
+runRead : Result String (List String) -> <IO, Env, FileRead "_"> Unit
+runRead (Err message) = panic "repo_vectors: cannot read corpus: \{message}"
+runRead (Ok raw) = runRows (filter meaningful raw)
+
+runRepresentativeRead : Result String (List String) -> <IO> Unit
+runRepresentativeRead (Err message) =
+  panic "repo_vectors: cannot read corpus: \{message}"
+runRepresentativeRead (Ok raw) = runRepresentativeRows (filter meaningful raw)
+
+runRepresentativeRows : List String -> <IO> Unit
+runRepresentativeRows [meta, t0, t1, _, _, _, initLine, op1, c1, createOrder, createCar, _, _, _, _, _, _, _, _, "END"] = match split "\t" meta
+  ["META", did, secretHex] => runRepresentative did (mustSecret secretHex) t0 t1 initLine op1 c1 createOrder createCar
+  _ => panic "repo_vectors: malformed representative META row"
+runRepresentativeRows _ =
+  panic "repo_vectors: unexpected representative corpus shape"
+
+runFinalReview : <IO> Unit
+runFinalReview =
+  let actualData = cidForDagCbor [|0|]
+  let expectedData = cidForDagCbor [|1|]
+  let rev = mustTid "3ke6kg3wk222b"
+  let signed = mustEncode (DcMap (testCommitFields "did:x1:a" actualData))
+  let controls = sum [
+    acceptLaterFailure "did-method-digit" "data mismatch" (repoValidateCommit "did:x1:a" expectedData rev signed)
+  ]
+  let rejected = sum [
+    rejectContains "did-method-empty" "invalid DID" (repoValidateCommit "did::a" expectedData rev signed),
+    rejectContains "did-method-uppercase" "invalid DID" (repoValidateCommit "did:X1:a" expectedData rev signed),
+    rejectContains "did-method-hyphen" "invalid DID" (repoValidateCommit "did:x-1:a" expectedData rev signed),
+  ]
+  let malformed = rejectContains "malformed-bound-mst" "empty key" malformedBoundExport
+  let () = println "final-review-controls: \{intToString controls}/1 valid route"
+  let () = println "final-review-rejected: \{intToString rejected}/3 neighboring invalid routes"
+  let () = println "final-review-export: \{intToString malformed}/1 malformed bound MST route"
+  if controls == 1 && rejected == 3 && malformed == 1 then println "FINAL-REVIEW: PASS"
+  else
+    let () = println "FINAL-REVIEW: FAIL"
+    exit 1
+
+runRepresentative : String -> SecretKey -> String -> String -> String -> String -> String -> String -> String -> <IO> Unit
+runRepresentative did secret t0 t1 initLine op1 c1 createOrder createCar =
+  let tids = gradeTid t0 + gradeTid t1
+  let initialTid = initialTidFrom t0
+  let initial = mustRepo (repoInit did secret initialTid)
+  let c0ok = gradeCommit did initLine (repoPublicKey initial) (repoLatestCommit initial)
+  let changed = repoMutationState (applyOperation op1 initial)
+  let o1 = gradeOperation op1 changed
+  let c1ok = gradeCommit did c1 (repoPublicKey changed) (repoLatestCommit changed)
+  let carOk = createCarOrderMatches createOrder changed && createCarMatches createCar changed && singleRecord changed
+  let carStatus = if carOk then "PASS" else "FAIL"
+  let () = println "CREATE CAR \{carStatus} order=\{blockOrder changed}"
+  let external = tids + c0ok + o1 + c1ok + (if carOk then 1 else 0)
+  let () = println "representative-external: \{intToString external}/6 official-atproto initialization/create/CAR checks"
+  let pathPrefix = toUtf8 "app.bsky.feed.post/"
+  let oldCommit = repoLatestCommit initial
+  let newCommit = repoLatestCommit changed
+  let mismatchData = cidForDagCbor [|1|]
+  let rejected = sum [
+    rejectContains "did-fragment" "invalid DID" (repoInit "did:x1:a#b" secret initialTid),
+    rejectContains "did-query" "invalid DID" (repoInit "did:x1:a?b" secret initialTid),
+    rejectContains "did-path" "invalid DID" (repoInit "did:x:a/b" secret initialTid),
+    rejectContains "did-control" "invalid DID" (repoInit "did:x:a\nb" secret initialTid),
+    rejectContains "did-non-ascii" "invalid DID" (repoInit "did:x:é" secret initialTid),
+    rejectContains "did-method-uppercase" "invalid DID" (repoInit "did:X1:a" secret initialTid),
+    rejectContains "did-empty-identifier" "invalid DID" (repoInit "did:x:" secret initialTid),
+    rejectContains "did-trailing-colon" "invalid DID" (repoInit "did:x:a:" secret initialTid),
+    rejectContains "did-bad-percent" "invalid DID" (repoInit "did:x:a%zz" secret initialTid),
+    rejectContains "did-too-long" "maximum length" (repoInit ("did:x:" ++ repeat 2043 "a") secret initialTid),
+    rejectContains "nsid-too-short" "collection" (repoLookup (toUtf8 "com.example/r") initial),
+    rejectContains "nsid-uppercase-authority" "normalized" (repoLookup (toUtf8 "Com.example.post/r") initial),
+    rejectContains "nsid-empty-segment" "segment length" (repoLookup (toUtf8 "com..post/r") initial),
+    rejectContains "nsid-leading-hyphen" "hyphen" (repoLookup (toUtf8 "com.-example.post/r") initial),
+    rejectContains "nsid-numeric-tld" "top-level" (repoLookup (toUtf8 "1com.example.post/r") initial),
+    rejectContains "nsid-digit-name" "name start" (repoLookup (toUtf8 "com.example.3/r") initial),
+    rejectContains "nsid-hyphen-name" "name characters" (repoLookup (toUtf8 "com.example.foo-bar/r") initial),
+    rejectContains "rkey-question" "record key" (repoLookup (pathPrefix ++ toUtf8 "?") initial),
+    rejectContains "rkey-dot" "must not" (repoLookup (pathPrefix ++ toUtf8 ".") initial),
+    rejectContains "rkey-dotdot" "must not" (repoLookup (pathPrefix ++ toUtf8 "..") initial),
+    rejectContains "rkey-empty" "collection/rkey" (repoLookup pathPrefix initial),
+    rejectContains "path-extra-segment" "exactly one slash" (repoLookup (pathPrefix ++ toUtf8 "a/b") initial),
+    rejectContains "path-empty-collection" "collection/rkey" (repoLookup (toUtf8 "/a") initial),
+    rejectContains "rkey-too-long" "1..512" (repoLookup (pathPrefix ++ arrayMake 513 97) initial),
+    rejectContains "rkey-control" "record key" (repoLookup (pathPrefix ++ [|10|]) initial),
+    rejectContains "rkey-non-ascii" "record key" (repoLookup (pathPrefix ++ [|0xc3, 0xa9|]) initial),
+    rejectContains "commit-data-root" "commit data mismatch" (repoExportGraph (repoCommitCid oldCommit) (repoCommitSignedBytes oldCommit) (repoRootCid changed) (repoStore changed)),
+  ]
+  let controls = sum [
+    acceptLaterFailure "did-method-digit" "data mismatch" (repoValidateCommit "did:x1:a" mismatchData (repoCommitTid oldCommit) (repoCommitSignedBytes oldCommit)),
+    acceptLaterFailure "did-colon-segments" "data mismatch" (repoValidateCommit "did:method:val:two" mismatchData (repoCommitTid oldCommit) (repoCommitSignedBytes oldCommit)),
+    acceptLaterFailure "did-percent" "data mismatch" (repoValidateCommit "did:x:a%20b" mismatchData (repoCommitTid oldCommit) (repoCommitSignedBytes oldCommit)),
+    acceptResult "rkey-min" (repoLookup (pathPrefix ++ toUtf8 "a") initial),
+    acceptResult "rkey-max" (repoLookup (pathPrefix ++ arrayMake 512 97) initial),
+    acceptResult "rkey-punctuation" (repoLookup (pathPrefix ++ toUtf8 "~1.2-3_") initial),
+    acceptResult "rkey-colon" (repoLookup (pathPrefix ++ toUtf8 "pre:fix") initial),
+    acceptResult "commit-data-root" (repoExportGraph (repoCommitCid newCommit) (repoCommitSignedBytes newCommit) (repoRootCid changed) (repoStore changed)),
+  ]
+  let malformed = rejectContains "malformed-bound-mst" "empty key" malformedBoundExport
+  let () = println "focused-rejected: \{intToString rejected}/27 named routes"
+  let () = println "focused-controls: \{intToString controls}/8 valid routes"
+  let () = println "focused-export-boundary: \{intToString malformed}/1 malformed bound MST route"
+  if external == 6 && rejected == 27 && controls == 8 && malformed == 1 then println "REPRESENTATIVE: PASS"
+  else
+    let () = println "REPRESENTATIVE: FAIL"
+    exit 1
+
+initialTidFrom : String -> Tid
+initialTidFrom line = match split "\t" line
+  ["TID", _, _, text] => mustTid text
+  _ => panic "repo_vectors: malformed initial TID"
+
+carOrderMatches : String -> Repo -> Bool
+carOrderMatches line repo = match split "\t" line
+  ["CARORDER", expected] => blockOrder repo == expected
+  _ => False
+
+carMatches : String -> Repo -> Bool
+carMatches line repo = match split "\t" line
+  ["CAR", expected] => repoExportCar repo == Ok (mustHex expected)
+  _ => False
+
+createCarOrderMatches : String -> Repo -> Bool
+createCarOrderMatches line repo = match split "\t" line
+  ["CREATECARORDER", expected] => blockOrder repo == expected
+  _ => False
+
+createCarMatches : String -> Repo -> Bool
+createCarMatches line repo = match split "\t" line
+  ["CREATECAR", expected] => repoExportCar repo == Ok (mustHex expected)
+  _ => False
+
+singleRecord : Repo -> Bool
+singleRecord repo = match repoList repo
+  Ok [(_, _, _)] => True
+  _ => False
+
+recordFromOp : String -> DagCbor
+recordFromOp line = match split "\t" line
+  ["OP", _, _, recordHex, _, _] => mustRecord recordHex
+  _ => panic "repo_vectors: malformed surviving record"
+
+pathFromOp : String -> Array Int
+pathFromOp line = match split "\t" line
+  ["OP", _, pathHex, _, _, _] => mustHex pathHex
+  _ => panic "repo_vectors: malformed surviving path"
+
+firstTidRow : List String -> String
+firstTidRow (row::_) = row
+firstTidRow [] = panic "repo_vectors: missing TID rows"
+
+runRows : List String -> <IO, Env, FileRead "_"> Unit
+runRows [meta, t0, t1, t2, t3, t4, initLine, op1, c1, _, _, op2, c2, op3, c3, op4, c4, orderLine, carLine, "END"] = runTranscript (split "\t" meta) [t0, t1, t2, t3, t4] initLine op1 c1 op2 c2 op3 c3 op4 c4 orderLine carLine
+runRows _ = panic "repo_vectors: unexpected corpus shape"
+
+runTranscript : List String -> List String -> String -> String -> String -> String -> String -> String -> String -> String -> String -> String -> String -> <IO, Env, FileRead "_"> Unit
+runTranscript ["META", did, secretHex] tidsRows initLine op1 c1 op2 c2 op3 c3 op4 c4 orderLine carLine =
+  let tids = sum (map gradeTid tidsRows)
+  let secret = mustSecret secretHex
+  let initial = mustRepo (repoInit did secret (initialTidFrom (firstTidRow tidsRows)))
+  let c0ok = gradeCommit did initLine (repoPublicKey initial) (repoLatestCommit initial)
+  let r1 = repoMutationState (applyOperation op1 initial)
+  let o1 = gradeOperation op1 r1
+  let c1ok = gradeCommit did c1 (repoPublicKey r1) (repoLatestCommit r1)
+  let r2 = repoMutationState (applyOperation op2 r1)
+  let o2 = gradeOperation op2 r2
+  let c2ok = gradeCommit did c2 (repoPublicKey r2) (repoLatestCommit r2)
+  let r3 = repoMutationState (applyOperation op3 r2)
+  let o3 = gradeOperation op3 r3
+  let c3ok = gradeCommit did c3 (repoPublicKey r3) (repoLatestCommit r3)
+  let finalRepo = repoMutationState (applyOperation op4 r3)
+  let o4 = gradeOperation op4 finalRepo
+  let c4ok = gradeCommit did c4 (repoPublicKey finalRepo) (repoLatestCommit finalRepo)
+  let carOk = carOrderMatches orderLine finalRepo && carMatches carLine finalRepo && singleRecord finalRepo && repoVerifyCommit did (repoPublicKey finalRepo) (repoLatestCommit finalRepo)
+  let carStatus = if carOk then "PASS" else "FAIL"
+  let () = println "CAR \{carStatus} order=\{blockOrder finalRepo}"
+  let external = tids + c0ok + o1 + c1ok + o2 + c2ok + o3 + c3ok + o4 + c4ok + (if carOk then 1 else 0)
+  let hostile = runHostile did secret finalRepo (pathFromOp op3) (recordFromOp op3)
+  let () = println "external: \{intToString external}/15 official-atproto transcript checks"
+  let () = println "hostile: \{intToString hostile}/19 rejected on named routes"
+  if external == 15 && hostile == 19 then println "TOTAL: PASS"
+  else
+    let () = println "TOTAL: FAIL"
+    exit 1
+runTranscript _ _ _ _ _ _ _ _ _ _ _ _ _ =
+  panic "repo_vectors: malformed META row"

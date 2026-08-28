@@ -1,0 +1,28 @@
+-- D26b (#1815) the SILENT half of D26, and not a duplicate of it.  D26's two receivers
+-- have DIFFERENT heads, so a lost carve-out or a lost inversion is a located reject --
+-- loud.  Here the live impl sits at `Int`, which is also the standalone's declared
+-- domain at argument 1, so BOTH denotations are well-typed at BOTH call sites and every
+-- verb exits 0 whichever way the decision goes.  Only the pinned value discriminates:
+--   `mth 3 4`        -- S2 inversion: the module's own standalone, 3 * 4 = 12
+--                       (777 is the impl body -- the silent-wrongness answer)
+--   `viaDict 3 4`    -- the enclosing `IZ b =>` dict var IS the receiver at argument 1,
+--                       so S5's carve-out dispatches: 777 (12 would be the wrong one)
+-- The two lines are the same interface, the same method name and the same receiver
+-- TYPE, differing only in the receiver's provenance (grounded literal vs dict-bound) --
+-- the axis this gate's own ⭐ rule names, at the dispatch index the corpus lacked.
+-- Values hand-derived from S2/S5, not captured.
+interface IZ b where
+  mth : Int -> b -> Int
+
+impl IZ Int where
+  mth n m = 777
+
+mth : Int -> Int -> Int
+mth n m = n * m
+
+viaDict : IZ b => Int -> b -> Int
+viaDict n x = mth n x
+
+main =
+  println (mth 3 4)
+  println (viaDict 3 4)

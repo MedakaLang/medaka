@@ -872,41 +872,63 @@ Given an occurrence of bare name `N` in module `M`:
   >   separately and **deliberately NOT fixed here** — this note is their
   >   **oracle**, not their patch. In each, under (a) the answer that agrees with
   >   the interface method is the correct one.
-  >   - **LOUD —** [#1492](https://github.com/MedakaLang/medaka/issues/1492) (S1,
-  >     verified): `check` exit 0 clean, **`medaka run` exit 1 `E-PANIC
-  >     intToString: not an Int`**, `build` exit 0 and the executed binary prints
-  >     the **correct** value. An **S7** path-agreement violation: two verbs accept
-  >     and answer correctly, one dies. Pinned at
-  >     `test/must_fail_fixtures/1492-*`.
-  >   - **SILENT —** [#1497](https://github.com/MedakaLang/medaka/issues/1497) (S0,
-  >     verified) — **row 49, and it is the one (a) most needs to be an oracle for.**
-  >     Make the two denotations *both* well-typed **at the same receiver** (an
+  >   - **LOUD (WAS) —** [#1492](https://github.com/MedakaLang/medaka/issues/1492)
+  >     (S1; still OPEN on the tracker, but its own repro no longer reproduces): at
+  >     filing, `check` exit 0 clean, **`medaka run` exit 1 `E-PANIC
+  >     intToString: not an Int`**, `build` exit 0 and the executed binary printed
+  >     the **correct** value — an **S7** path-agreement violation. **Re-measured
+  >     2026-08-28 on this tree** (post `S-prelude-cell-agreement` `89268878`),
+  >     using #1492's own repro verbatim (`interface Sized c where count : c ->
+  >     Int`, `impl Sized Box`, `println (count (Box 7))`, the same program as
+  >     row 49's `x5_prelude_constrained_standalone_live_impl.mdk`): `check` 0,
+  >     `run` **`7`**, `build` 0, binary `7` — all four now agree, no panic.
+  >     The must-fail pin is **DRAINED**: `ls test/must_fail_fixtures/ | grep
+  >     1492` returns empty, so there is no `test/must_fail_fixtures/1492-*` path
+  >     left to cite.
+  >   - **SILENT (WAS) —** [#1497](https://github.com/MedakaLang/medaka/issues/1497)
+  >     (S0; still OPEN on the tracker, but its own repro no longer reproduces) —
+  >     **row 49, and it is the one (a) most needs to be an oracle for.** At filing:
+  >     make the two denotations *both* well-typed **at the same receiver** (an
   >     `impl` of the colliding interface at the receiver's head, so the interface
   >     method applies exactly where the prelude standalone also would): `check`
-  >     exits 0 clean, **`run` prints the prelude standalone's answer** and the
-  >     **built binary prints the interface method's answer** — two values, exit 0
-  >     both ways, no diagnostic on any verb. That is the `eq [1] [2]` erasure shape
-  >     reaching the *prelude* boundary. It is **not** #1492's shape (which is
-  >     loud) and **not** #1493's (which rejects on all three): #1492's own
-  >     negative S0 hunt varied **arity** and **result consumption**, whereas the
-  >     axis that produces silence is the receiver lying in **both** denotations'
-  >     domains. ⚠️ **That axis is NECESSARY BUT NOT SUFFICIENT — corrected
-  >     2026-08-10 on the independent repro that filed #1497, measured over four
-  >     cells on one binary:** the prelude standalone must ALSO be
-  >     **UNCONSTRAINED**. Unconstrained `isEven`/`isOdd` (arity 1) and `xor`
-  >     (arity 2) are all silent (`run` `False` / binary `True`, exit 0 both), while
-  >     the **constrained** `sum : (Foldable t, Num a) => t a -> a` in the *same*
-  >     both-domains shape is #1492's **loud** cell instead (`run` E-PANIC exit 1,
-  >     binary `777` exit 0). So arity is irrelevant on both sides and
-  >     constrainedness is what separates silent from loud. Pinned at
-  >     `test/must_fail_fixtures/1497-*`.
-  >   - **PRELUDE-INTERNAL —** [#1493](https://github.com/MedakaLang/medaka/issues/1493)
-  >     (S1, verified): where the prelude's own bodies **call** the standalone, the
-  >     collision makes `stdlib/core.mdk` itself ill-typed and a legal program is
-  >     rejected on all three verbs with diagnostics about prelude internals.
-  >     **⚠️ That is the OPPOSITE DIRECTION from this ruling and S1-PRELUDE does
-  >     NOT decide it** — see the missing-arm note below. Pinned at
-  >     `test/must_fail_fixtures/1493-*`.
+  >     exited 0 clean, **`run` printed the prelude standalone's answer** and the
+  >     **built binary printed the interface method's answer** — two values, exit 0
+  >     both ways, no diagnostic on any verb. That was the `eq [1] [2]` erasure shape
+  >     reaching the *prelude* boundary — distinct from #1492's shape (loud) and
+  >     #1493's (rejects on all three). At filing, the axis that produced silence
+  >     was an UNCONSTRAINED colliding standalone at a receiver lying in both
+  >     denotations' domains; a CONSTRAINED standalone (`sum`) in the same shape
+  >     fell into #1492's loud cell instead.
+  >
+  >     **Re-measured 2026-08-28 on this tree** (post `S-prelude-cell-agreement`
+  >     `89268878` + `F1` `abf203ba`), on the exact unconstrained shape (`interface
+  >     Parity c where isEven : c -> Bool`, `impl Parity Int`, `println (isEven
+  >     7)`, i.e. row 49's `x4_prelude_standalone_live_impl_receiver.mdk`): `check`
+  >     0, `run` **`True`**, `build` 0, binary **`True`** — `run` and the built
+  >     binary now AGREE, both giving the interface method's answer, matching (a).
+  >     Sampled further, beyond the pinned shape (interface method colliding with a
+  >     prelude standalone/method of the same name, at a live-impl receiver):
+  >     `length`, `abs`, `compare`, `sum` (all definer/same-module), plus a
+  >     cross-module **importer** variant of `abs` — every sample agreed between
+  >     `run` and the built binary, matching (a). **This is a representative
+  >     sample, not a re-run of the review round's full 55-name census** — see the
+  >     row 49 status cell below for what that does and does not license saying.
+  >     The must-fail pin is **DRAINED**: `ls test/must_fail_fixtures/ | grep 1497`
+  >     returns empty, so there is no `test/must_fail_fixtures/1497-*` path left to
+  >     cite.
+  >   - **PRELUDE-INTERNAL (WAS) —** [#1493](https://github.com/MedakaLang/medaka/issues/1493)
+  >     (S1; **CLOSED** on the tracker, and its own repro no longer reproduces):
+  >     where the prelude's own bodies **call** the standalone, the collision used
+  >     to make `stdlib/core.mdk` itself ill-typed and a legal program was rejected
+  >     on all three verbs with diagnostics about prelude internals. **Re-measured
+  >     2026-08-28 on this tree** with #1493's own `identity` repro (`interface Idn
+  >     c where identity : c -> Int`, `impl Idn Box`, `println (identity (Box
+  >     7))`): `check` exits **0** clean (was exit 1, five diagnostics including
+  >     `No impl of Idn for Int`) — the collision no longer reaches `core.mdk`'s
+  >     internals. **⚠️ That was the OPPOSITE DIRECTION from this ruling and
+  >     S1-PRELUDE does NOT decide it** — see the missing-arm note below; whatever
+  >     fixed it is not attributed to (a) or (b) here. The must-fail pin is gone
+  >     (`test/must_fail_fixtures/1493-*` does not exist) — no path to cite.
   >
   >   ⚠️ **No mechanism is asserted for any of the three.** A candidate account —
   >   *"the occurrence routes to the prelude standalone, yielding a partial
@@ -1565,7 +1587,7 @@ three of run / build / check. Fixtures in `test/shadow_fixtures/`.
 | 36 | **importer** · interface reached **only by naming a SIBLING method** (`import ifc.{tag}`) · standalone's domain **covers** the live-impl head — the SILENT cell | S1-NS (a), per-**method** | `size` is admitted by **no** arm → not a shadow → the imported standalone → `42` | `i19_importer_sibling_method_silent/` | 42 | 42 | accept | **OK** — measurably per-method: writing `size x` on the strength of `import ifc.{tag}` is `Unbound variable: size`. Admitting the whole interface row because *one* member is named would make a **different** name dispatch-eligible on evidence that says nothing about it. Pre-ruling this printed `777`, the impl body; `777 → 42` is S1-SCOPE's acceptance narrowing reaching its **silent** half, which is the cost that clause charges itself |
 | 37 | **definer** twin of row 36 — the module defines its own `size` and reaches the interface only by naming a sibling method | S1-NS (a) + S2 (definer arm) | not a shadow → the module's **own** top-level binding → `42` | `d23_definer_sibling_method_silent/` | 42 | 42 | accept | **OK** — paired with row 36 because **S2 states its rule per KIND**, so a fix repairing one arm leaves the other silent (the `d18`/`i6b`, `d22`/`i7` shape). ⚠️ **Baseline note, so this row is not over-read:** the merge base already answers `42` here — it guards a regression the S1-NS unit could have introduced, not one it inherited |
 | 38 | **RETURN-POSITION** method (`zed : a` — the interface typaram appears **only** in the result) · interface admitted by **no** arm · DEFINER and IMPORTER graded separately | S1-NS (a) + S1-NS (b) | not a shadow → the module's own / the imported `zed` → `42` in both | `d24_definer_return_pos_not_nameable/`, `i21_importer_return_pos_not_nameable/` | 42 / 42 | 42 / 42 | accept | **OK** — the axis the corpus was wholly missing: **every** interface method in rows 3–32 mentions its typaram in an ARGUMENT. That one axis selects a different mark-pass input, which was concatenated **raw** while the arg-position inputs were filtered — making dispatch-eligibility a strict **superset** of shadow-hood, i.e. S1-NS (b)'s closure invariant violated, with the whole corpus green over it. Measured before the fix: `run` `777` vs **built binary** `42`, both exit 0 |
-| 39 | **RETURN-POSITION** method · **interface IS nameable** (`import smod.{Zed, sf}`) · DEFINER — the discriminating control for row 38 | S2 (definer arm) + S7 | `zed` **is** a definer shadow → the standalone, unconditionally → `42` | — (`test/must_fail_fixtures/1430-return-pos-definer-skips-s2-inversion/`) | **777** | **E-PANIC** `unbound method: zed`, exit 1 | accept, 0 diagnostics | 🔴 **BUG — [#1430](https://github.com/MedakaLang/medaka/issues/1430), OPEN S0.** Three verbs, three answers; the S0 half is `run`'s silently wrong value. **This is why row 38 must not be read as covering return position** — row 38 passes *because S1 declines to classify*, so it never reaches S2's inversion at all. The load-bearing axis is return-position-ness, **not** the nameability that rows 33–38 vary: give the method an argument mentioning the typaram and the inversion fires correctly. Pinned in the must-fail suite (self-draining), **not** in `test/shadow_fixtures/` — so `diff_compiler_shadow_semantics` is green over it |
+| 39 | **RETURN-POSITION** method · **interface IS nameable** (`import smod.{Zed, sf}`) · DEFINER — the discriminating control for row 38 | S2 (definer arm) + S7 | `zed` **is** a definer shadow → the standalone, unconditionally → `42` | `42` (`test/shadow_fixtures/d25_definer_return_pos_nameable/`) | `42` | `42` | accept, 0 diagnostics | ✅ **OK — [#1430](https://github.com/MedakaLang/medaka/issues/1430) FIXED.** It was three verbs, three answers (`check` accept, `run` **777**, `build` **E-PANIC** `unbound method: zed`), and the S0 half was `run`'s silently wrong value. **The defect was a TYPE/ROUTE split, not a classification miss:** `maybeStandaloneValueMono` had already pinned the occurrence's TYPE to the standalone, while `recordRLocalSite` pushed no route site at all — it matches on `methodDispatchIdx name`, and a return-position method has no dispatch argument, so that answered `None` and every arm declined. That is exactly the invariant `standaloneValuePinned`'s own header states ("⭐ THE ROUTE MUST FOLLOW THE ARM"), violated at the one cell the dispatch-index gate hides. The `build` half was a second, independent site: a nullary top-level binding is a value GLOBAL, so `emitMethod`'s `RLocal` arm emitting `call i64 @mdk_<sym>()` named a define that does not exist. **This is why row 38 must not be read as covering return position** — row 38 passes *because S1 declines to classify*, so it never reaches S2's inversion at all. The load-bearing axis is return-position-ness, **not** the nameability that rows 33–38 vary: give the method an argument mentioning the typaram and the inversion always fired correctly. Now gated in `test/shadow_fixtures/` as **D25**, the discriminating twin of D24 — until this fix the corpus's only two return-position cells (D24, I21) were both NOT-nameable, i.e. both green for the reason that they never reach S2 |
 | 40 | **importer** · the METHOD arrives through a **re-export chain that names the method, not the interface** (`export import ifc.{size, Box}`) · no standalone of that name anywhere | S1-NS (a)(ii) + (b) | S1's **left** operand is empty → not a shadow → **ordinary dispatch** → `impl Sizeable Int` → `50` | `i20_importer_method_reexport_chain/` | 50 | 50 | accept | **OK** — graded on **`build`**, the only verb that could see it: an implementation whose re-export arm matches interface names only leaves `size` out of the dispatch-eligible set, the mark pass leaves a plain `EVar`, and emit falls into arg-tag dispatch — `check` exits 0 and `run` prints the right answer while `build` **E-PANICs**. S1-NS enumerates that asymmetry as non-conformant (item 4). The `impl Sizeable Int` is load-bearing: a **primitive** receiver carries no cell tag, which is what turns the missing mark into a panic |
 | 41 | **importer** · interface reached **only through a MODULE ALIAS** (`import smod as S`) | S1-NS (a)(ii) | the alias arm admits `size` (*"a module alias … since `A.n` is a legal call"*) → `size` **is** a shadow → S2's importer arm, live `impl Sizeable String` → **dispatch** → `7` | `i18_importer_alias_not_nameable/` (`main.mdk` + `both.mdk`) | 7 / 7,7 | 7 / 7,7 | accept | **OK against the clause as written** — ⚠️ **and the fixture's own header says the opposite.** That header argues from the TYPE arm alone (an alias cannot put `Sizeable` in type position, so `impl Sizeable Blob` is rejected) and concludes the answer *"should"* be `99`. **S1-NS (a) is a UNION, and either arm suffices**; `i15_importer_iface_one_hop_unbound/bare.mdk`'s own note says the alias *"MUST admit the whole row"* and cites #1277 for it. The pinned values are conformant; **the disagreement is between two fixture comments and this clause, and it is a comment-truth defect, not a behaviour one** — see the ⚠️ under the tally |
 | 42 | **importer** · method reached **only under a MEMBER ALIAS** (`import ifc.{size as sz}`), with a bare-`import` sibling as the discriminator | S1-NS (a)(ii) | the only callable spelling this import admits is **`sz`**; `size` is admitted by no arm → not a shadow → the imported standalone → `99` (both spellings) | `i22_importer_member_alias_not_nameable/` (`main.mdk` + `bare.mdk`) | **7** / 99 | **7** / 99 | accept | ❌ **KNOWN-BAD (main.mdk), self-draining — re-grade to `99` the day it is fixed.** `bare.mdk` is the proof the correct value is reachable rather than hypothetical: two spellings that admit the *same* amount of the interface (nothing writable) give different answers, and both cannot be right. ⚠️ **The obvious fix is INERT and this row says so** — `renameAliasedMethods` rewrites `{size as sz}` to `{size}` before `selectIfaceRows` ever runs, so re-keying that call on the local spelling cannot move this cell. A real fix spans both, and is a design question no ruling covers |
@@ -1576,7 +1598,7 @@ three of run / build / check. Fixtures in `test/shadow_fixtures/`.
 | 46 | **PRELUDE standalone** as the candidate left operand · interface declared in `M` · receiver at a head with **no impl** of that interface but **inside** the prelude standalone's domain — the LOUD, discriminating cell | S1-PRELUDE (a) | the prelude is **not** in S1's left operand → **not a shadow** → the bare name is the **interface method** → ordinary dispatch finds no impl → **located REJECT** | `x1_prelude_standalone_not_left_operand.mdk` | reject | reject | reject | **OK** — the cell #1375 item 2 left open and **the corpus had none**: every other unit puts the standalone in `M` or imports it explicitly, so this axis graded nowhere. The **rejected** reading (admit a prelude standalone as an *importer* shadow) ACCEPTS the same source and prints `False`, because S2's importer arm falls back to the standalone when no impl sits at the head — that difference is what makes this cell discriminating. ⚠️ Value **hand-derived from the ruling, not captured**: `eval` is a known-wrong oracle on this collision (see row 49) |
 | 47 | row 46 with **ZERO impls** of the colliding interface | S1-PRELUDE (a) | same → **located REJECT** | `x2_prelude_standalone_zeroimpls.mdk` | reject | reject | reject | **OK** — the `d1b`/`d19` move applied to the prelude cell, and it closes a *different* escape hatch: an implementation that consulted the impl universe **before** deciding the name would answer row 46 correctly for the wrong reason. With no impl to consult, only the interface method having taken the name outright can produce this reject — which is (a)'s actual content (*"no S2 arm applies; the impl universe is never consulted to decide the name"*) |
 | 48 | row 46 at **ARITY-DIFFERING** width — prelude `count`'s two arguments against an interface `count`'s one | S1-PRELUDE (a) + S8 | same → **located REJECT** (over-application **and** no impl at the function argument's head) | `x3_prelude_standalone_arity_differ.mdk` | reject | reject | reject | **OK** — rows 46/47 both collide with an arity-**matching** standalone, so a reader could conclude the rule is gated on the signatures lining up. It is not. Under the rejected reading this ACCEPTS and prints `3` |
-| 49 | **PRELUDE standalone** collision where **BOTH denotations are well-typed at the SAME receiver** (an `impl` of the colliding interface at the receiver's head, so the interface method applies exactly where the prelude standalone also would) | S1-PRELUDE (a) + **S7** | (a) gives the **interface method**; `check`, `run` and the built binary must agree on it | — (**deliberately NOT in `test/shadow_fixtures/`**; [#1497](https://github.com/MedakaLang/medaka/issues/1497), pinned at `test/must_fail_fixtures/1497-*`) | **the PRELUDE standalone's answer** | **the INTERFACE METHOD's answer** | accept, **0 diagnostics** | 🔴 **BUG — S0, silent.** Two different values, **exit 0 both ways**, no diagnostic on any verb: the `eq [1] [2]` erasure shape reaching the **prelude** boundary and splitting *between execution arms*. Under (a) the **built binary is right** and **`medaka run` is wrong**; before the 2026-08-10 ruling neither could be called wrong, which is what ruling it buys. **Measured with a rename control** (only the method's *name* differs; the control agrees on both arms). ⚠️ **Distinct from both filed siblings:** [#1492](https://github.com/MedakaLang/medaka/issues/1492) is the LOUD arm (`run` E-PANIC, binary correct) and [#1493](https://github.com/MedakaLang/medaka/issues/1493) rejects on all three verbs — #1492's own negative S0 hunt varied **arity** and **result consumption**, but the axis that produces *silence* is the receiver lying in **both** domains, which it did not vary — ⚠️ **and that axis alone is not sufficient: the prelude standalone must ALSO be UNCONSTRAINED** (measured over four cells 2026-08-10 when #1497 was filed; the constrained `sum` in this same both-domains shape lands in #1492's loud cell instead, and arity is irrelevant on both sides — see the SILENT bullet under S1-PRELUDE's Conformance). **No mechanism asserted** (see the ⚠️ under S1-PRELUDE's Conformance: the partial-application account is measured false). 🚨 **NOT capturable** — per this document's own corpus rule a golden here would enshrine one arm's wrong answer, so it is a matrix row plus a must-fail pin, never a `shadow_fixtures` value |
+| 49 | **PRELUDE standalone** collision where **BOTH denotations are well-typed at the SAME receiver** (an `impl` of the colliding interface at the receiver's head, so the interface method applies exactly where the prelude standalone also would) | S1-PRELUDE (a) + **S7** | (a) gives the **interface method**; `check`, `run` and the built binary must agree on it | `test/shadow_fixtures/x4_prelude_standalone_live_impl_receiver.mdk` (unconstrained), `x5_prelude_constrained_standalone_live_impl.mdk` (constrained) — added by the `prelude-shadow-agreement` sprint; [#1497](https://github.com/MedakaLang/medaka/issues/1497)'s must-fail pin is DRAINED (`test/must_fail_fixtures/1497-*` no longer exists) | **the PRELUDE standalone's answer** | **the INTERFACE METHOD's answer** | accept, **0 diagnostics** | ✅ **CONFORMANT, measured 2026-08-28 on this tree** (post `S-prelude-cell-agreement` `89268878` + `F1` `abf203ba`, sprint `prelude-shadow-agreement`). `check`/`run`/`build`+binary all agree on the **INTERFACE METHOD's** answer, matching (a) — both on the two gated fixtures (x4: `True`/`True`/`True`; x5: `7`/`7`/`7`, all `ACCEPT ACCEPT ACCEPT`, `diff_compiler_shadow_semantics.sh`) and on a further hand-run sample (`length`, `abs`, `compare`, `sum`, plus a cross-module importer variant of `abs`) — see the LOUD/SILENT/PRELUDE-INTERNAL bullets under S1-PRELUDE's Conformance for the individual re-measurements. **This sample is not a re-run of the review round's original 55-name census**, so this row does not claim conformance for every prelude name, only for what was re-measured. Issues [#1492](https://github.com/MedakaLang/medaka/issues/1492) and #1497 remain **OPEN** on the tracker (closing them is not this doc edit's call), but neither issue's own repro, nor this row's own fixtures, reproduce a run/build divergence on this tree any more; [#1493](https://github.com/MedakaLang/medaka/issues/1493) (the PRELUDE-INTERNAL sibling) is **CLOSED**. **No mechanism is asserted** for why the prior divergence closed (see the ⚠️ under S1-PRELUDE's Conformance: the partial-application account was already measured false, and no replacement account is offered here). 🚨 **STILL NOT CAPTURABLE as an engine-recorded golden** — even though the arms currently agree, per this document's own corpus rule (`WT-GOLDEN-ENSHRINES`) a captured golden records what an engine DID, and this cell's own history (a silent divergence existed once, unnoticed, until #1497 was filed) is the argument against ever letting one arm's output alone stand as this cell's ground truth. It is graded by `x4`/`x5`'s hand-derived `ALL_EXACT` run+build-agreement assertions instead, never a capture |
 
 **Tally — DERIVE IT, do not read it.** The status distribution moves with every
 row added, and the figure this line used to carry
@@ -1616,6 +1638,16 @@ recorded as a dated observation, not as a number this page maintains.
 > `test/must_fail_fixtures/`, not in `test/shadow_fixtures/`, so the gate that
 > enforces **this** table is green over it. **A cell with no row in this matrix
 > is not a cell this matrix grades**, whatever its tally says.
+>
+> ⚠️ **UPDATE 2026-08-28 — #1430 is FIXED and row 39 now reads OK, so the tally
+> above is stale in the OTHER direction; it is left as its dated observation.**
+> The lesson does not change: the cell had no row in `test/shadow_fixtures/` for as long
+> as it was broken, so the gate that enforces this table could not see it either
+> way. It now has one — **D25**
+> (`test/shadow_fixtures/d25_definer_return_pos_nameable/`), the discriminating
+> twin of D24. Before it, the corpus's ONLY two return-position cells (D24, I21)
+> were both NOT-nameable, i.e. both green because S1 declines to classify and S2
+> is never reached. Re-run the command above rather than trusting either number.
 
 > ⚠️ **Row 41 is a live disagreement between this clause set and two fixture
 > headers, and it is recorded rather than harmonised.** `i18`'s header asserts

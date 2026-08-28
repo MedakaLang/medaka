@@ -1871,8 +1871,8 @@ lowerImplMethod disp o ifaceName typeArgs (ImplMethod mname pats body) =
     (CImplTagged tag key ifaceName positions pats (lower body))
 
 lowerDefault : String -> List String -> IfaceMethod -> List CImplEntry
-lowerDefault _ _ (IfaceMethod _ _ None) = []
-lowerDefault ifaceId typeParams (IfaceMethod mname _ (Some (MethodDefault pats body))) = [CImplEntry mname (listLen typeParams) (CImplDefault ifaceId pats (lower body))]
+lowerDefault _ _ (IfaceMethod _ _ None _) = []
+lowerDefault ifaceId typeParams (IfaceMethod mname _ (Some (MethodDefault pats body)) _) = [CImplEntry mname (listLen typeParams) (CImplDefault ifaceId pats (lower body))]
 
 -- ── returns-self table (native backend: method-call RESULT-type inference) ───
 -- Per (interface, method): does the method's RESULT type mention an interface
@@ -1897,7 +1897,7 @@ ifaceReturnsSelfEntries (DInterface { name = ifaceName, typarams = typeParams, m
 ifaceReturnsSelfEntries _ = []
 
 ifaceReturnsSelfEntry : String -> List String -> IfaceMethod -> ((String, String), Bool)
-ifaceReturnsSelfEntry ifaceName typeParams (IfaceMethod mname mty _) = (
+ifaceReturnsSelfEntry ifaceName typeParams (IfaceMethod mname mty _ _) = (
   (ifaceName, mname),
   tyMentionsParams (methodResultTy mty) (headParamOnly typeParams),
 )
@@ -1968,7 +1968,7 @@ ifaceSelfFnParamEntries (DInterface { name = ifaceName, typarams = typeParams, m
 ifaceSelfFnParamEntries _ = []
 
 ifaceSelfFnParamEntry : String -> List String -> IfaceMethod -> ((String, String), List Int)
-ifaceSelfFnParamEntry ifaceName typeParams (IfaceMethod mname mty _) =
+ifaceSelfFnParamEntry ifaceName typeParams (IfaceMethod mname mty _ _) =
   ((ifaceName, mname), selfFnPositions 0 (methodArgTys mty) typeParams)
 
 -- the argument types of a method type (the a's of `a -> a -> … -> r`).
@@ -2010,7 +2010,7 @@ ifaceMethodArityEntries (DInterface { name = ifaceName, ifaceOrigin = o, methods
 ifaceMethodArityEntries _ = []
 
 ifaceMethodArityEntry : String -> String -> IfaceMethod -> (String, (String, String, Int))
-ifaceMethodArityEntry ifaceWord ifaceName (IfaceMethod mname mty _) =
+ifaceMethodArityEntry ifaceWord ifaceName (IfaceMethod mname mty _ _) =
   (mname, (ifaceName, ifaceWord, listLen (methodArgTys mty)))
 
 -- The identity-keyed lookup word for the ARITY leg (#1450, #1668): the interface's
@@ -2056,7 +2056,7 @@ methodConstraintIfaceEntries (DInterface { typarams, methods, ... }) =
 methodConstraintIfaceEntries _ = []
 
 methodConstraintIfaceEntry : List String -> IfaceMethod -> List (String, List String)
-methodConstraintIfaceEntry typarams (IfaceMethod mname mty _) =
+methodConstraintIfaceEntry typarams (IfaceMethod mname mty _ _) =
   let ifaces = methodLevelConstraintIfaces typarams mty
   if isEmptyL ifaces then [] else [(mname, ifaces)]
 
@@ -2885,8 +2885,8 @@ nodeTag _ = "?"
 (DTypeSig false "lowerImplMethod" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyCon "ImplMethod") (TyCon "CImplEntry")))))))
 (DFunDef false "lowerImplMethod" ((PVar "disp") (PVar "o") (PVar "ifaceName") (PVar "typeArgs") (PCon "ImplMethod" (PVar "mname") (PVar "pats") (PVar "body"))) (EBlock (DoLet false false (PVar "tag") (EApp (EApp (EVar "fromOption") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EVar "typeArgs")))) (DoLet false false (PVar "key") (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "ifaceName")) (EVar "typeArgs")) (EVar "None"))) (DoLet false false (PVar "positions") (EApp (EApp (EApp (EApp (EVar "lookupPositions") (EApp (EApp (EVar "ifaceIdentity") (EVar "o")) (EVar "ifaceName"))) (EVar "ifaceName")) (EVar "mname")) (EVar "disp"))) (DoExpr (EApp (EApp (EApp (EVar "CImplEntry") (EVar "mname")) (EApp (EVar "tyvarsInArgs") (EVar "typeArgs"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "ifaceName")) (EVar "positions")) (EVar "pats")) (EApp (EVar "lower") (EVar "body")))))))
 (DTypeSig false "lowerDefault" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyCon "CImplEntry"))))))
-(DFunDef false "lowerDefault" (PWild PWild (PCon "IfaceMethod" PWild PWild (PCon "None"))) (EListLit))
-(DFunDef false "lowerDefault" ((PVar "ifaceId") (PVar "typeParams") (PCon "IfaceMethod" (PVar "mname") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))))) (EListLit (EApp (EApp (EApp (EVar "CImplEntry") (EVar "mname")) (EApp (EVar "listLen") (EVar "typeParams"))) (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceId")) (EVar "pats")) (EApp (EVar "lower") (EVar "body"))))))
+(DFunDef false "lowerDefault" (PWild PWild (PCon "IfaceMethod" PWild PWild (PCon "None") PWild)) (EListLit))
+(DFunDef false "lowerDefault" ((PVar "ifaceId") (PVar "typeParams") (PCon "IfaceMethod" (PVar "mname") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) PWild)) (EListLit (EApp (EApp (EApp (EVar "CImplEntry") (EVar "mname")) (EApp (EVar "listLen") (EVar "typeParams"))) (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceId")) (EVar "pats")) (EApp (EVar "lower") (EVar "body"))))))
 (DTypeSig true "returnsSelfTable" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Bool")))))
 (DFunDef false "returnsSelfTable" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "ifaceReturnsSelfEntries")) (EVar "prog")))
 (DTypeSig false "ifaceReturnsSelfEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Bool")))))
@@ -2894,7 +2894,7 @@ nodeTag _ = "?"
 (DFunDef false "ifaceReturnsSelfEntries" ((PRec "DInterface" ((rf "name" (PVar "ifaceName")) (rf "typarams" (PVar "typeParams")) (rf "methods" None)) true)) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EApp (EApp (EApp (EVar "ifaceReturnsSelfEntry") (EVar "ifaceName")) (EVar "typeParams")) (EVar "m")))) (EVar "methods")))
 (DFunDef false "ifaceReturnsSelfEntries" (PWild) (EListLit))
 (DTypeSig false "ifaceReturnsSelfEntry" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Bool"))))))
-(DFunDef false "ifaceReturnsSelfEntry" ((PVar "ifaceName") (PVar "typeParams") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild)) (ETuple (ETuple (EVar "ifaceName") (EVar "mname")) (EApp (EApp (EVar "tyMentionsParams") (EApp (EVar "methodResultTy") (EVar "mty"))) (EApp (EVar "headParamOnly") (EVar "typeParams")))))
+(DFunDef false "ifaceReturnsSelfEntry" ((PVar "ifaceName") (PVar "typeParams") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild)) (ETuple (ETuple (EVar "ifaceName") (EVar "mname")) (EApp (EApp (EVar "tyMentionsParams") (EApp (EVar "methodResultTy") (EVar "mty"))) (EApp (EVar "headParamOnly") (EVar "typeParams")))))
 (DTypeSig false "headParamOnly" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "headParamOnly" ((PList)) (EListLit))
 (DFunDef false "headParamOnly" ((PCons (PVar "p") PWild)) (EListLit (EVar "p")))
@@ -2919,7 +2919,7 @@ nodeTag _ = "?"
 (DFunDef false "ifaceSelfFnParamEntries" ((PRec "DInterface" ((rf "name" (PVar "ifaceName")) (rf "typarams" (PVar "typeParams")) (rf "methods" None)) true)) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EApp (EApp (EApp (EVar "ifaceSelfFnParamEntry") (EVar "ifaceName")) (EVar "typeParams")) (EVar "m")))) (EVar "methods")))
 (DFunDef false "ifaceSelfFnParamEntries" (PWild) (EListLit))
 (DTypeSig false "ifaceSelfFnParamEntry" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))))
-(DFunDef false "ifaceSelfFnParamEntry" ((PVar "ifaceName") (PVar "typeParams") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild)) (ETuple (ETuple (EVar "ifaceName") (EVar "mname")) (EApp (EApp (EApp (EVar "selfFnPositions") (ELit (LInt 0))) (EApp (EVar "methodArgTys") (EVar "mty"))) (EVar "typeParams"))))
+(DFunDef false "ifaceSelfFnParamEntry" ((PVar "ifaceName") (PVar "typeParams") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild)) (ETuple (ETuple (EVar "ifaceName") (EVar "mname")) (EApp (EApp (EApp (EVar "selfFnPositions") (ELit (LInt 0))) (EApp (EVar "methodArgTys") (EVar "mty"))) (EVar "typeParams"))))
 (DTypeSig false "methodArgTys" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Ty"))))
 (DFunDef false "methodArgTys" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "methodArgTys") (EVar "t")))
 (DFunDef false "methodArgTys" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "methodArgTys") (EVar "t")))
@@ -2932,7 +2932,7 @@ nodeTag _ = "?"
 (DFunDef false "ifaceMethodArityEntries" ((PRec "DInterface" ((rf "name" (PVar "ifaceName")) (rf "ifaceOrigin" (PVar "o")) (rf "methods" None)) true)) (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EApp (EApp (EApp (EVar "ifaceMethodArityEntry") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "ifaceName"))) (EVar "ifaceName")) (EVar "m")))) (EVar "methods")))
 (DFunDef false "ifaceMethodArityEntries" (PWild) (EListLit))
 (DTypeSig false "ifaceMethodArityEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "IfaceMethod") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))))))
-(DFunDef false "ifaceMethodArityEntry" ((PVar "ifaceWord") (PVar "ifaceName") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild)) (ETuple (EVar "mname") (ETuple (EVar "ifaceName") (EVar "ifaceWord") (EApp (EVar "listLen") (EApp (EVar "methodArgTys") (EVar "mty"))))))
+(DFunDef false "ifaceMethodArityEntry" ((PVar "ifaceWord") (PVar "ifaceName") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild)) (ETuple (EVar "mname") (ETuple (EVar "ifaceName") (EVar "ifaceWord") (EApp (EVar "listLen") (EApp (EVar "methodArgTys") (EVar "mty"))))))
 (DTypeSig true "ifaceMethodArityKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "ifaceMethodArityKey" ((PVar "ifaceWord") (PVar "mname")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "ifaceWord"))) (ELit (LString "#"))) (EApp (EVar "display") (EVar "mname"))) (ELit (LString ""))))
 (DTypeSig true "ifaceWordOfKey" (TyFun (TyCon "String") (TyCon "String")))
@@ -2944,7 +2944,7 @@ nodeTag _ = "?"
 (DFunDef false "methodConstraintIfaceEntries" ((PRec "DInterface" ((rf "typarams" None) (rf "methods" None)) true)) (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "methodConstraintIfaceEntry") (EVar "typarams")) (EVar "m")))) (EVar "methods")))
 (DFunDef false "methodConstraintIfaceEntries" (PWild) (EListLit))
 (DTypeSig false "methodConstraintIfaceEntry" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "methodConstraintIfaceEntry" ((PVar "typarams") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild)) (EBlock (DoLet false false (PVar "ifaces") (EApp (EApp (EVar "methodLevelConstraintIfaces") (EVar "typarams")) (EVar "mty"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "ifaces")) (EListLit) (EListLit (ETuple (EVar "mname") (EVar "ifaces")))))))
+(DFunDef false "methodConstraintIfaceEntry" ((PVar "typarams") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild)) (EBlock (DoLet false false (PVar "ifaces") (EApp (EApp (EVar "methodLevelConstraintIfaces") (EVar "typarams")) (EVar "mty"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "ifaces")) (EListLit) (EListLit (ETuple (EVar "mname") (EVar "ifaces")))))))
 (DTypeSig false "methodLevelConstraintIfaces" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "methodLevelConstraintIfaces" ((PVar "typarams") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "c")) (EApp (EApp (EVar "constraintIfaceIfMethodLevel") (EVar "typarams")) (EVar "c")))) (EVar "cs")) (EApp (EApp (EVar "methodLevelConstraintIfaces") (EVar "typarams")) (EVar "t"))))
 (DFunDef false "methodLevelConstraintIfaces" ((PVar "typarams") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EVar "methodLevelConstraintIfaces") (EVar "typarams")) (EVar "t")))
@@ -3610,8 +3610,8 @@ nodeTag _ = "?"
 (DTypeSig false "lowerImplMethod" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyCon "ImplMethod") (TyCon "CImplEntry")))))))
 (DFunDef false "lowerImplMethod" ((PVar "disp") (PVar "o") (PVar "ifaceName") (PVar "typeArgs") (PCon "ImplMethod" (PVar "mname") (PVar "pats") (PVar "body"))) (EBlock (DoLet false false (PVar "tag") (EApp (EApp (EVar "fromOption") (EVar "noneHeadTag")) (EApp (EVar "headTyconHead") (EVar "typeArgs")))) (DoLet false false (PVar "key") (EApp (EApp (EApp (EApp (EVar "implRouteKeyWord") (EVar "o")) (EVar "ifaceName")) (EVar "typeArgs")) (EVar "None"))) (DoLet false false (PVar "positions") (EApp (EApp (EApp (EApp (EVar "lookupPositions") (EApp (EApp (EVar "ifaceIdentity") (EVar "o")) (EVar "ifaceName"))) (EVar "ifaceName")) (EVar "mname")) (EVar "disp"))) (DoExpr (EApp (EApp (EApp (EVar "CImplEntry") (EVar "mname")) (EApp (EVar "tyvarsInArgs") (EVar "typeArgs"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "ifaceName")) (EVar "positions")) (EVar "pats")) (EApp (EVar "lower") (EVar "body")))))))
 (DTypeSig false "lowerDefault" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyCon "CImplEntry"))))))
-(DFunDef false "lowerDefault" (PWild PWild (PCon "IfaceMethod" PWild PWild (PCon "None"))) (EListLit))
-(DFunDef false "lowerDefault" ((PVar "ifaceId") (PVar "typeParams") (PCon "IfaceMethod" (PVar "mname") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))))) (EListLit (EApp (EApp (EApp (EVar "CImplEntry") (EVar "mname")) (EApp (EVar "listLen") (EVar "typeParams"))) (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceId")) (EVar "pats")) (EApp (EVar "lower") (EVar "body"))))))
+(DFunDef false "lowerDefault" (PWild PWild (PCon "IfaceMethod" PWild PWild (PCon "None") PWild)) (EListLit))
+(DFunDef false "lowerDefault" ((PVar "ifaceId") (PVar "typeParams") (PCon "IfaceMethod" (PVar "mname") PWild (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) PWild)) (EListLit (EApp (EApp (EApp (EVar "CImplEntry") (EVar "mname")) (EApp (EVar "listLen") (EVar "typeParams"))) (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceId")) (EVar "pats")) (EApp (EVar "lower") (EVar "body"))))))
 (DTypeSig true "returnsSelfTable" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Bool")))))
 (DFunDef false "returnsSelfTable" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "ifaceReturnsSelfEntries")) (EVar "prog")))
 (DTypeSig false "ifaceReturnsSelfEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Bool")))))
@@ -3619,7 +3619,7 @@ nodeTag _ = "?"
 (DFunDef false "ifaceReturnsSelfEntries" ((PRec "DInterface" ((rf "name" (PVar "ifaceName")) (rf "typarams" (PVar "typeParams")) (rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EApp (EApp (EApp (EVar "ifaceReturnsSelfEntry") (EVar "ifaceName")) (EVar "typeParams")) (EVar "m")))) (EVar "methods")))
 (DFunDef false "ifaceReturnsSelfEntries" (PWild) (EListLit))
 (DTypeSig false "ifaceReturnsSelfEntry" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Bool"))))))
-(DFunDef false "ifaceReturnsSelfEntry" ((PVar "ifaceName") (PVar "typeParams") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild)) (ETuple (ETuple (EVar "ifaceName") (EVar "mname")) (EApp (EApp (EVar "tyMentionsParams") (EApp (EVar "methodResultTy") (EVar "mty"))) (EApp (EVar "headParamOnly") (EVar "typeParams")))))
+(DFunDef false "ifaceReturnsSelfEntry" ((PVar "ifaceName") (PVar "typeParams") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild)) (ETuple (ETuple (EVar "ifaceName") (EVar "mname")) (EApp (EApp (EVar "tyMentionsParams") (EApp (EVar "methodResultTy") (EVar "mty"))) (EApp (EVar "headParamOnly") (EVar "typeParams")))))
 (DTypeSig false "headParamOnly" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "headParamOnly" ((PList)) (EListLit))
 (DFunDef false "headParamOnly" ((PCons (PVar "p") PWild)) (EListLit (EVar "p")))
@@ -3644,7 +3644,7 @@ nodeTag _ = "?"
 (DFunDef false "ifaceSelfFnParamEntries" ((PRec "DInterface" ((rf "name" (PVar "ifaceName")) (rf "typarams" (PVar "typeParams")) (rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EApp (EApp (EApp (EVar "ifaceSelfFnParamEntry") (EVar "ifaceName")) (EVar "typeParams")) (EVar "m")))) (EVar "methods")))
 (DFunDef false "ifaceSelfFnParamEntries" (PWild) (EListLit))
 (DTypeSig false "ifaceSelfFnParamEntry" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))))))
-(DFunDef false "ifaceSelfFnParamEntry" ((PVar "ifaceName") (PVar "typeParams") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild)) (ETuple (ETuple (EVar "ifaceName") (EVar "mname")) (EApp (EApp (EApp (EVar "selfFnPositions") (ELit (LInt 0))) (EApp (EVar "methodArgTys") (EVar "mty"))) (EVar "typeParams"))))
+(DFunDef false "ifaceSelfFnParamEntry" ((PVar "ifaceName") (PVar "typeParams") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild)) (ETuple (ETuple (EVar "ifaceName") (EVar "mname")) (EApp (EApp (EApp (EVar "selfFnPositions") (ELit (LInt 0))) (EApp (EVar "methodArgTys") (EVar "mty"))) (EVar "typeParams"))))
 (DTypeSig false "methodArgTys" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "Ty"))))
 (DFunDef false "methodArgTys" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "methodArgTys") (EVar "t")))
 (DFunDef false "methodArgTys" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "methodArgTys") (EVar "t")))
@@ -3657,7 +3657,7 @@ nodeTag _ = "?"
 (DFunDef false "ifaceMethodArityEntries" ((PRec "DInterface" ((rf "name" (PVar "ifaceName")) (rf "ifaceOrigin" (PVar "o")) (rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EApp (EApp (EApp (EVar "ifaceMethodArityEntry") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "ifaceName"))) (EVar "ifaceName")) (EVar "m")))) (EVar "methods")))
 (DFunDef false "ifaceMethodArityEntries" (PWild) (EListLit))
 (DTypeSig false "ifaceMethodArityEntry" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "IfaceMethod") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String") (TyCon "Int")))))))
-(DFunDef false "ifaceMethodArityEntry" ((PVar "ifaceWord") (PVar "ifaceName") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild)) (ETuple (EVar "mname") (ETuple (EVar "ifaceName") (EVar "ifaceWord") (EApp (EVar "listLen") (EApp (EVar "methodArgTys") (EVar "mty"))))))
+(DFunDef false "ifaceMethodArityEntry" ((PVar "ifaceWord") (PVar "ifaceName") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild)) (ETuple (EVar "mname") (ETuple (EVar "ifaceName") (EVar "ifaceWord") (EApp (EVar "listLen") (EApp (EVar "methodArgTys") (EVar "mty"))))))
 (DTypeSig true "ifaceMethodArityKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "ifaceMethodArityKey" ((PVar "ifaceWord") (PVar "mname")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "ifaceWord"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EVar "mname"))) (ELit (LString ""))))
 (DTypeSig true "ifaceWordOfKey" (TyFun (TyCon "String") (TyCon "String")))
@@ -3669,7 +3669,7 @@ nodeTag _ = "?"
 (DFunDef false "methodConstraintIfaceEntries" ((PRec "DInterface" ((rf "typarams" None) (rf "methods" None)) true)) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EVar "methodConstraintIfaceEntry") (EVar "typarams")) (EVar "m")))) (EVar "methods")))
 (DFunDef false "methodConstraintIfaceEntries" (PWild) (EListLit))
 (DTypeSig false "methodConstraintIfaceEntry" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "methodConstraintIfaceEntry" ((PVar "typarams") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild)) (EBlock (DoLet false false (PVar "ifaces") (EApp (EApp (EVar "methodLevelConstraintIfaces") (EVar "typarams")) (EVar "mty"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "ifaces")) (EListLit) (EListLit (ETuple (EVar "mname") (EVar "ifaces")))))))
+(DFunDef false "methodConstraintIfaceEntry" ((PVar "typarams") (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild)) (EBlock (DoLet false false (PVar "ifaces") (EApp (EApp (EVar "methodLevelConstraintIfaces") (EVar "typarams")) (EVar "mty"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "ifaces")) (EListLit) (EListLit (ETuple (EVar "mname") (EVar "ifaces")))))))
 (DTypeSig false "methodLevelConstraintIfaces" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "methodLevelConstraintIfaces" ((PVar "typarams") (PCon "TyConstrained" (PVar "cs") (PVar "t"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "c")) (EApp (EApp (EVar "constraintIfaceIfMethodLevel") (EVar "typarams")) (EVar "c")))) (EVar "cs")) (EApp (EApp (EVar "methodLevelConstraintIfaces") (EVar "typarams")) (EVar "t"))))
 (DFunDef false "methodLevelConstraintIfaces" ((PVar "typarams") (PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EApp (EVar "methodLevelConstraintIfaces") (EVar "typarams")) (EVar "t")))

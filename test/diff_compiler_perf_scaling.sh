@@ -224,6 +224,22 @@ WIDERECORDS_N="${PERF_WIDERECORDS_N:-$N}"
 # other shapes' 1000. See gen_consfam.
 CONSFAM_N="${PERF_CONSFAM_N:-200}"
 
+# `conlocal` (issue #2030) samples at 400/800/1600, NOT the default 250/500/1000, and
+# the band is FORCED by the defect's own curve rather than by a floor. MEASURED op
+# counts for typecheck on this box (deterministic, single run):
+#     100/200/400    20 491 ->   37 741 ->   102 241   r1 1.84 r2 2.71  — MISSES it
+#     400/800/1600  102 241 ->  351 241 -> 1 329 241   r1 3.44 r2 3.78  — RED
+# i.e. at the default band the sustained-both-doublings rule would (correctly) read
+# `ok` and this shape would pin nothing. 400 is the SMALLEST base that reddens both
+# doublings, and it is chosen deliberately over 800 (which reads 3.78/3.92) because
+# cost scales with the band: 400/800/1600 costs ~13 s of native profiler time here
+# (1.4 + 3.0 + 9.1 s), 800/1600/3200 costs ~55 s. Do not raise it without re-pricing.
+#
+# ⚠️ THE CEILINGS BELOW ARE BAND-SPECIFIC. A ratio measured at 400/800/1600 does not
+# transfer — moving this knob invalidates KNOWN_OCEIL_conlocal_typecheck /
+# KNOWN_OCEIL_conlocal_mark and both must be re-derived, not scaled.
+CONLOCAL_N="${PERF_CONLOCAL_N:-400}"
+
 # `xref` samples the WASM arm at its OWN, SMALLER band — 2000/4000/8000 rather than
 # the shape's 4000/8000/16000. This is a COST fix and it is the reason this gate is
 # not the CI critical path. The band is deliberate — a ratio measured here does not
@@ -371,14 +387,24 @@ trap 'rm -rf "$WORK"' EXIT
 #              TIME_STAGES), so this shape is graded on lint TIME.
 #   manyifaces — CO-SCALED interfaces x call sites (issue #883). N interface decls
 #              (methods pool ~N) AND N reference sites, growing TOGETHER, so mark's
-#              `contains x methods` List-as-set reads O(N^2). OP-ONLY (mark is under the
-#              TIME floor); ledgers manyifaces:mark (the target) + manyifaces:resolve (a
-#              second, interface-count quadratic the shape surfaces). See gen_manyifaces.
+#              `contains x methods` List-as-set read O(N^2). OP-ONLY (mark is under the
+#              TIME floor); FIXED both quadratics it surfaced (manyifaces:mark #953,
+#              manyifaces:resolve #954) — no longer ledgered. See gen_manyifaces.
 #   widerecords — the RECORD shape (issue #883). One record type with N fields + N tiny
 #              accessor/updater decls. Exercises resolve's ownersOf/lookupRecordByName —
 #              but those are HAND-ROLLED (uncounted), so op reads LINEAR: an `ok` guard,
 #              not an ownersOf detector (the real O(N^2) is TIME-only, N>=~4000). OP-ONLY.
 #              See gen_widerecords.
+#   conlocal — the CONSTRAINED-BINDING shape (issue #2030). N constrained top-level fns,
+#              each with exactly ONE local. Co-scales the two dimensions typecheck's
+#              local-pin bookkeeping multiplies (constrained top-level bindings x local
+#              bindings), which no other shape does: `bindings`/`xref` have no
+#              constraints at all, `manyifaces` grows the METHOD POOL against a fixed
+#              site count, and `marksweep` does the same. OP-ONLY. Ledgers
+#              conlocal:typecheck (#2030, mechanism known: localPinPairs).
+#              conlocal:mark (#2143) was a second quadratic this shape surfaced —
+#              FIXED as a side effect of slice 5's #1017 marker.mdk fix; de-ledgered.
+#              See gen_conlocal.
 #   consfam  — the BACKEND shape (issue #1029). N mutually cons-tail-recursive fns — the
 #              only thing in this corpus that reaches trmc_analysis's dispatch-TMC group
 #              GROWTH WALK, which runs unconditionally in both backends' emitProgram.
@@ -858,6 +884,45 @@ gen_consfam() {
     # actually runs the detection over it (a dead family is pruned before emit).
     printf 'main = println (length (c%s 3))\n' "$((n-1))"
   } >> "$f"
+}
+
+# gen_conlocal — THE CONSTRAINED-BINDING SHAPE (issue #2030). N constrained top-level
+# functions, each with exactly ONE local:
+#
+#     f0 : Display a => a -> String
+#     f0 x =
+#       let d v = display v
+#       d x
+#     ... (N of them)
+#     main = println (f0 1)
+#
+# WHY NO OTHER SHAPE SEES IT, and why that is a property of the SHAPE, not the band:
+# the cost is in typecheck's local-pin bookkeeping (`localPinPairs`), which multiplies
+# CONSTRAINED TOP-LEVEL BINDINGS by LOCAL BINDINGS. Nothing else in this corpus
+# co-scales those two. `bindings`/`xref` generate N top-level fns with NO constraint
+# and no local, so the pin table stays empty; `manyifaces` and `marksweep` grow the
+# METHOD POOL against a FIXED number of sites — the opposite axis. One constraint per
+# fn plus one local per fn is the minimum shape that grows both together.
+#
+# ⚠️ IT IS 0-DIAGNOSTIC, and that is load-bearing. A resolve-broken fixture measures a
+# different mechanism entirely (the same trap gen_modules and gen_typos carry). The
+# `Display a =>` constraint and the `display v` body must both stay: drop the
+# constraint and the binding is unconstrained, so the pin table it stresses is never
+# populated. Re-derive with:
+#     ./medaka check /tmp/conlocal.mdk    # must print "N declaration(s) checked, 0 errors"
+#
+# GRADED BY THE OP ARM, on the shared deterministic runs — this shape adds NO profiler
+# invocation beyond the three every shape makes, and it is OP-ONLY (the TIME min-of-K
+# arm is skipped; see the OP-ONLY case in the shapes loop). Its band is its own,
+# CONLOCAL_N=400 -> 1600; see that knob for why the default band misses the defect.
+gen_conlocal() {
+  n=$1; f=$2; : > "$f"
+  i=0; while [ "$i" -lt "$n" ]; do
+    printf 'f%s : Display a => a -> String\nf%s x =\n  let d v = display v\n  d x\n' "$i" "$i"
+    i=$((i+1))
+  done >> "$f"
+  # `main` CALLS f0 — same rooting rule as every other shape here, same reason.
+  printf 'main = println (f0 1)\n' >> "$f"
 }
 
 # gen_modules — the only multi-module generator that declares any DATA TYPE (issue #153).
@@ -1460,15 +1525,27 @@ TIME_STAGES="parse exhaust-guards desugar resolve mark typecheck elaborate dce m
 # fix drops typecheck under the 200ms floor at the largest N, tripping the "too FAST
 # to time-gate" promotion branch).
 # #154 PR-A/PR-B/PR-C drained modules:typecheck: PR-C removed the last foldModules-concat
-# O(N^2) (see KNOWN_SUPERLINEAR note), and typecheck TIME fell UNDER the 200ms floor at the
-# gate's N (190ms @ N=400) — the same "too fast to time-gate" outcome as match/listlit under
-# #115 (match 6.0s->0.11s, listlit 5.3s->0.06s). PROMOTED OUT 2026-07-16; the modules block
-# now SKIPS the typecheck TIME below the floor (unledgered rule-4 behavior) and hard-gates it
-# as SUPERLINEAR if it ever climbs back over. ⚠️ Re-decided EVERY run from the live
-# measurement (see the `below` check ~15 lines into the `modules` case below), not a
-# one-time fact pinned by the 190ms @ N=400 sample above — a run under enough concurrent
-# box load to push mt3 back over TIME_FLOOR takes the hard-gate branch instead of the skip,
-# which reads as a regression rather than noise (issue #2018).
+# O(N^2) (see KNOWN_SUPERLINEAR note) and the row was PROMOTED OUT 2026-07-16.
+#
+# 🚨 THE REST OF THIS ENTRY AS IT STOOD IS FALSIFIED, AND BOTH HALVES OF IT ARE. It claimed
+# typecheck TIME "fell UNDER the 200ms floor at the gate's N (190ms @ N=400)", so that the
+# modules block would SKIP the TIME grade; and it hedged that a run "under enough concurrent
+# box load" could push mt3 back over the floor and take the hard-gate branch, reading as a
+# regression rather than noise (#2018). MEASURED on this tree, min-of-5, heap pinned, N=400:
+# **1942 ms** — 10.2x the 190 ms sample and 9.7x the floor. The SKIP branch has not been
+# reachable at this band; every run takes the GRADING branch, which is what #1879 saw. And
+# the load hedge is falsified with it: box load does not multiply a min-of-5 heap-pinned
+# reading by ten, so the 190 ms sample was stale or mis-taken, not a scheduling artefact.
+# (Its neighbour at the SKIP message's own parenthetical — "linear since #154 PR-C" — is
+# falsified too; see the TIME verdict block below for what actually replaced it.)
+#
+# 🚦 TIME IS NO LONGER THE ARM OF RECORD FOR THIS ISSUE. #1879's flap is a REAL
+# sub-threshold O(modules^2) term measured on three independent channels, and the arm that
+# pins it is now the DETERMINISTIC one: `test/diff_compiler_stage_ir_scaling.sh`'s
+# `modules:typecheck` KNOWN_SLOW row (see its KNOWN_SLOW block for the ceiling/fixed pair and
+# the four attributed sites). This TIME grade STAYS LIVE as a coarse second opinion — it is
+# not widened, retired, or floored away, because making a loud defect quieter is a severity
+# increase — but a red here is now read against that Ir row, not treated as a novel finding.
 #   xref:emit — ✅ PROMOTED OUT 2026-07-17 (PR #554). The gate FOUND this quadratic
 #     the moment it could see the backend (2026-07-16, issue #359) and has now
 #     watched it DIE: r2=1.98 (< 2.60) — the emit stage scales LINEARLY. The row is
@@ -1687,14 +1764,12 @@ OP_FLOOR="${PERF_OP_FLOOR:-1000}"
 #
 # CURRENT ENTRIES (measured on this box, deterministic single run):
 #
-#   match:resolve — resolve is O(N^2) in the CONSTRUCTOR count on the `match` shape (a
-#         data decl with N ctors + an N-arm match). Its per-ctor membership scan
-#         (util.contains / util.lookupAssoc over a table that grows with the ctor
-#         universe) is walked once per ctor reference. TIME never grades resolve on
-#         `match` (that shape's N is sized for typecheck, and resolve sits far under
-#         the floor), and allocation is blind to a pure scan — so ONLY the op arm sees
-#         it. MEASURED N=250/500/1000: 35644 -> 133769 -> 517519, r1=3.75 r2=3.87
-#         (climbing toward the pure-quadratic 4.0).
+#   match:resolve — FIXED (#906, #969). Was resolve's `findDups ctorSeed (ctorNames
+#         prog)` — O(N^2) in the CONSTRUCTOR count on the `match` shape (a data decl
+#         with N ctors + an N-arm match), run once per ctor reference. MEASURED (pre-fix)
+#         N=250/500/1000: 35644 -> 133769 -> 517519, r1=3.75 r2=3.87 (climbing toward the
+#         pure-quadratic 4.0). `findDups` keyed into an OrdMap (op r2 -> 1.00, effectively
+#         constant). De-ledgered.
 #
 #   xref:typecheck — FIXED (#907). Was typecheck's O(decls^2) assoc-list bookkeeping: the
 #         binding-id stamp (stampBindingIds/lookupBindId, run in typecheck's checkBodyImpl)
@@ -1730,39 +1805,85 @@ OP_FLOOR="${PERF_OP_FLOOR:-1000}"
 #         "elaborateDict reference-walking dict-routing" attribution was wrong; the cost was
 #         stampBindingIds). Indexing the top frame drained it: op r1/r2 ~1.9 at both the
 #         QUICK (2000/4000/8000) and DEEP (4000/8000/16000) bands. De-ledgered.
-#   manyifaces:mark — THE HEADLINE #883 FIND. mark's `contains x methods`
-#         (marker.mdk markVar/markInfix — a List-as-set walked for EVERY var/op node,
-#         `methods` = every interface-method name) is O(sites x pool). No shape stressed
-#         it: `marksweep` (#884) grows only the pool with FIXED sites, so it reads LINEAR
-#         on purpose; `modules` has ONE interface with ONE method. `manyifaces` co-scales
-#         N interfaces AND N reference sites (§5's "co-scale the two multiplying
-#         dimensions" rule), so the scan reads O(N^2). MEASURED (this box, deterministic
-#         single run, R=8, N=250/500/1000): 818999 -> 2512749 -> 8900249, r1=3.07 r2=3.54.
-#         TIME never grades mark (it is ~40-200 ms here, under the 200ms floor on EVERY
-#         shape) and allocation is blind to a pure scan — so ONLY the op arm sees it.
-#         Ledgered (not shipped red) because it is a PRE-EXISTING, currently-unfixed
-#         quadratic surfaced by #883's shape, out of scope for the gate-only wiring — a
-#         candidate #880 follow-up, filed as #953. Op-count is the arm graded (one run,
-#         no floor); it self-drains — promote it out the moment `methods` becomes a set
-#         (OrdSet) and the op-ratio drops under OFIXED (linear).
+#   manyifaces:mark — FIXED (#953, #975). Was THE HEADLINE #883 FIND: mark's
+#         `contains x methods` (marker.mdk markVar/markInfix — a List-as-set walked for
+#         EVERY var/op node, `methods` = every interface-method name) was O(sites x
+#         pool). No other shape stressed it: `marksweep` (#884) grows only the pool
+#         with FIXED sites, so it reads LINEAR on purpose; `modules` has ONE interface
+#         with ONE method. `manyifaces` co-scales N interfaces AND N reference sites
+#         (§5's "co-scale the two multiplying dimensions" rule), so the scan read
+#         O(N^2). MEASURED (pre-fix, this box, deterministic single run, R=8,
+#         N=250/500/1000): 818999 -> 2512749 -> 8900249, r1=3.07 r2=3.54. `methods`
+#         indexed to a set — op-ratio drops to linear. De-ledgered.
 #
-#   manyifaces:resolve — A SECOND, INDEPENDENT quadratic the same shape surfaces, and a
-#         DIFFERENT mechanism from match:resolve (which is O(ctors^2)). Here resolve is
-#         O(interfaces^2) INDEPENDENT of the reference-site count R (the op-count is
-#         identical at R=4 and R=8) — the cost is interface-method registration /
-#         duplicate-checking scanning the growing ifaceMethods/interfaces lists once per
-#         interface (resolve.mdk; localize precisely — filed as #954). It is
-#         invisible to TIME (resolve ~8-40 ms here, under the floor) and to allocation.
-#         MEASURED N=250/500/1000: 37126 -> 136751 -> 523501, r1=3.68 r2=3.83 (climbing
-#         toward the pure-quadratic 4.0). Ledgered self-drainingly; promotes out when the
-#         interface-method scan is indexed. (typecheck r1=2.65 r2=3.09 and elaborate
-#         r1=2.52 r2=2.99 also climb on this shape — the #907/#882 decl-count classes —
-#         but stay r1<3 at this band, so the sustained-both-doublings rule reads them `ok`
-#         and they are NOT ledgered; WATCH, per the comments:typecheck note.)
+#   manyifaces:resolve — FIXED (#954, #969). Was a SECOND, INDEPENDENT quadratic the
+#         same shape surfaced, a DIFFERENT mechanism from match:resolve (O(ctors^2)):
+#         resolve's `findDups ifaceSeed (interfaceList prog)` was O(interfaces^2)
+#         INDEPENDENT of the reference-site count R (the op-count was identical at R=4
+#         and R=8) — interface-method duplicate-checking scanning the growing
+#         interfaceList once per interface (resolve.mdk `findDups`). MEASURED (pre-fix)
+#         N=250/500/1000: 37126 -> 136751 -> 523501, r1=3.68 r2=3.83 (climbing toward
+#         the pure-quadratic 4.0). `findDups` keyed into an OrdMap (same fix as
+#         match:resolve, one function, both rows drained together). De-ledgered.
+#         (typecheck r1=2.65 r2=3.09 and elaborate r1=2.52 r2=2.99 also climb on this
+#         shape — the #907/#882 decl-count classes — but stay r1<3 at this band, so the
+#         sustained-both-doublings rule reads them `ok` and they are NOT ledgered;
+#         WATCH, per the comments:typecheck note.)
+#   conlocal:typecheck — issue #2030, and the MECHANISM IS KNOWN: `localPinPairs`
+#         (compiler/types/typecheck.mdk) is O(constrained top-level bindings x locals),
+#         so a program of N constrained fns each holding one local walks it O(N^2)
+#         times. The `conlocal` shape co-scales exactly those two dimensions — see
+#         gen_conlocal for why nothing else in this corpus does. MEASURED on this box
+#         (deterministic single run, N=400/800/1600): 102 241 -> 351 241 -> 1 329 241,
+#         r1=3.44 r2=3.78, both doublings over the 3.0 threshold. TIME does grade
+#         typecheck on this shape (0.20/0.52/1.45 s) but reads r1 2.56 r2 2.78 — UNDER
+#         threshold, because the band is sized for the op curve, not the time curve;
+#         and total ALLOC reads r1 2.57 r2 2.89, also under. So the op arm is the only
+#         arm that pins this at an affordable band. Ledgered (not shipped red) because
+#         #2030 is OPEN and unfixed; it self-drains — the row PROMOTES and fails
+#         demanding removal the moment the pin bookkeeping is indexed and r2 drops
+#         under 2.60.
+#         ⚠️ The Ir arm (diff_compiler_stage_ir_scaling.sh) reddens on the identical
+#         shape at the identical band — and costs 415 s of callgrind to do it, on the
+#         shard ci.yml already names as the CI pole, against ~13 s of native runtime
+#         here. That is why this pin lives on this gate and not that one. Do not
+#         "improve coverage" by duplicating it there.
+#
+#   conlocal:mark — FIXED (#2143). Was NOT attributed to #2030's `localPinPairs`
+#         (that term is typecheck-only and says nothing about the marker), but
+#         `markWithPrelude` reddened on the same shape at the same band via a
+#         DIFFERENT mechanism: marker's own `contains x constrained` List-as-set
+#         scan — the same site `frontend-breadth` slice 5's #1017 fix (marker.mdk's
+#         `constrained` List->OrdMap) indexed, draining this row as a side effect
+#         since both bugs were the same site. MEASURED (pre-fix) N=400/800/1600:
+#         685 805 -> 2 207 005 -> 8 129 405, r1=3.22 r2=3.68; MEASURED (post-fix,
+#         this row's promotion) 164 961 -> 205 361 -> 286 161, r1=1.245 r2=1.393 —
+#         linear. De-ledgered.
+#
+# NOT LEDGERED on this shape, but WATCH (the same call the `comments:typecheck` note
+# above makes): `conlocal:elaborate` reads 3 162 359 -> 8 788 559 -> 28 200 959,
+# r1=2.78 r2=3.21 — climbing, and r2 is over 3.0, but r1 is not, so the
+# sustained-both-doublings rule correctly calls it `ok`. elaborate re-checks the
+# program through checkProgramSeeded, so it plausibly rides the SAME localPinPairs
+# term as conlocal:typecheck and would drain with it; a ledger entry asserts a row is
+# ALREADY over threshold on both doublings, and this one is not. Total ALLOC on this
+# shape is the other near-miss: r1 2.57 r2 2.89 against a 3.0 ceiling (and against the
+# `climbing` heuristic's 2.96 trip point), which is why the shape is not additionally
+# ledgered on the alloc arm — it is under, deterministically, at this band.
 # One entry per line so draining a single row is a conflict-free one-line deletion
 # (see #880 follow-up; the var is word-split by `for k in $VAR`, newlines are IFS).
 KNOWN_SLOW_OPS="
+conlocal:typecheck
 "
+# Ceilings follow this file's op-arm convention (the drained manyifaces:mark /
+# match:resolve / manydefs:typecheck / conlocal:mark entries all used the same pair):
+# OCEIL 4.3 — ~14% over the measured r2 of 3.78 and above the pure-quadratic asymptote
+# of 4.0, so unrelated compiler-source drift cannot flap it while a CUBIC regression
+# (r2 ~8) trips it immediately; OFIXED 2.60 — the file-wide "this is linear again,
+# promote me" mark, 1.2 under the measured band, so no drift can false-PROMOTE either
+# row. Op counts are DETERMINISTIC, so these absorb source drift only, never runner
+# noise. Tied to CONLOCAL_N=400 — see that knob before moving the band.
+KNOWN_OCEIL_conlocal_typecheck="4.3"; KNOWN_OFIXED_conlocal_typecheck="2.60"
 # reexports:resolve was HERE (op ceiling 8.9) — the cubic (r2=7.92) counted `util.contains`
 # scans over a re-export export list that grows with depth. #925/#926 FIXED it: the three
 # scans are OrdMap-set membership now (uncounted) and `findExports`/provenance are Maps, so
@@ -2105,12 +2226,19 @@ printf -- '---------------------------------------------------------------------
 # is the standing proof that TIME grades `mark` nowhere.
 # `manyifaces` / `widerecords` (issue #883) are OP-ONLY single-file shapes, run at the
 # default N band. `manyifaces` co-scales N interfaces AND N reference sites to catch
-# mark's `contains x methods` List-as-set quadratic (ledgered manyifaces:mark, and the
-# independent manyifaces:resolve it surfaces); `widerecords` is the record shape — a
-# LINEAR resolve-op regression guard whose `ownersOf` target is now COUNTED and O(log N)
-# indexed (#984), so a reintroduced per-mention scan turns it superlinear (see
-# gen_widerecords).
-SHAPES="bindings match listlit nesting xref comments marksweep manyifaces widerecords typos consfam"
+# mark's `contains x methods` List-as-set quadratic (manyifaces:mark #953) and the
+# independent manyifaces:resolve (#954) it surfaced — both FIXED, no longer ledgered;
+# `widerecords` is the record shape — a LINEAR resolve-op regression guard whose
+# `ownersOf` target is now COUNTED and O(log N) indexed (#984), so a reintroduced
+# per-mention scan turns it superlinear (see gen_widerecords).
+# `conlocal` (issue #2030 / #2143) is the third OP-ONLY single-file shape, at its OWN
+# band (400/1600 — see CONLOCAL_N). It remains the op arm's money-shot for `typecheck`
+# (#2030, still open — graded by NO other arm at an affordable band on this shape: TIME
+# reads 2.56/2.78 and total alloc reads 2.57/2.89). `mark` (#2143) was ALSO pinned here
+# until this same slice's #1017 marker.mdk fix drained it as a side effect (now watch-
+# only, reads linear). Its ~13 s is the whole reason #2030's pin is here and not on the
+# callgrind Ir gate, which needs 415 s for the same verdict.
+SHAPES="bindings match listlit nesting xref comments marksweep manyifaces widerecords typos consfam conlocal"
 if [ "$PERF_DEEP" = "1" ]; then
   SHAPES="$SHAPES manydefs"
 else
@@ -2130,6 +2258,7 @@ for shape in $SHAPES; do
     manyifaces) base_n="$MANYIFACES_N" ;;
     widerecords) base_n="$WIDERECORDS_N" ;;
     consfam)    base_n="$CONSFAM_N" ;;
+    conlocal)   base_n="$CONLOCAL_N" ;;
     *)          base_n="$N" ;;
   esac
   n1="$base_n"; n2=$((base_n * 2)); n3=$((base_n * 4))
@@ -2164,9 +2293,21 @@ for shape in $SHAPES; do
   # while paying ~K timing runs per size. Their op grading rides the 3 shared
   # deterministic runs above, so each costs 3 runs, not 3 + 3*K. Every OTHER shape still
   # runs the full TIME arm.
+  #
+  # ⚠️ `conlocal` (#2030) is OP-ONLY for a DIFFERENT reason, and the difference matters
+  # if anyone reconsiders it: one of its two pinned stages (`mark`) is under the floor
+  # as usual, but the other (`typecheck`) is comfortably OVER it — 1.45 s at N=1600 —
+  # and TIME still grades it 2.56/2.78, i.e. UNDER threshold. So the TIME arm here would
+  # not be blind, it would be WRONG-BANDED: it would cost ~13 s x K and certify as `ok`
+  # the very row the op arm ledgers. Sizing the band for TIME instead means N>=3200,
+  # where one profiler run alone is 43 s. OP-ONLY is the cheap AND the correct answer.
   case "$shape" in
     marksweep|manyifaces|widerecords|typos)
     time_lines="           time: (OP-ONLY shape — TIME min-of-K arm skipped, #883/#884 cost fix. its graded stage is under the ${TIME_FLOOR}s floor at this band, so TIME grades it nowhere; the op arm below is its coverage.)
+"
+    ;;
+    conlocal)
+    time_lines="           time: (OP-ONLY shape — TIME min-of-K arm skipped, #2030. \`mark\` is under the ${TIME_FLOOR}s floor as usual; \`typecheck\` is OVER it here yet still reads r1 2.56 r2 2.78 at this band, i.e. TIME would certify as ok the row the op arm ledgers. The op arm below is this shape's only correct arm.)
 "
     ;;
     *)
@@ -2714,10 +2855,18 @@ esac
 # loadProgram -> markModules -> checkModules) over N import-chained modules so the
 # accumulated-decl rescans actually execute. It is graded on BOTH net-total
 # allocation (its own baseline, subtracted like the single-file shapes) AND, since
-# the scan-heavy part is time-dominant, the per-stage `typecheck` TIME. It is a
-# LEDGERED entry (KNOWN_SUPERLINEAR + KNOWN_SLOW_TIME): a real, currently-UNFIXED
-# quadratic (#154/#150), recorded so the gate is green now yet self-drains the
-# instant those fixes land. See both ledger blocks above for the contract.
+# the scan-heavy part is time-dominant, the per-stage `typecheck` TIME.
+#
+# ⚠️ IT IS NOT A LEDGERED ENTRY, and this header used to say it was ("a LEDGERED entry
+# (KNOWN_SUPERLINEAR + KNOWN_SLOW_TIME)"). #154 PR-C drained both rows in 2026-07-16 and
+# neither was re-added. It could not be re-added here anyway: this shape is NOT in the
+# SHAPES loop, so `is_known`/`is_known_time` are never consulted for it — its ALLOC and
+# TIME verdicts below are open-coded, with no ledger arm at all. That is precisely why
+# the pin for the LIVE sub-threshold quadratic this shape carries (#1879) lives on
+# `test/diff_compiler_stage_ir_scaling.sh`'s `modules:typecheck` KNOWN_SLOW row instead:
+# that arm HAS a self-draining ledger and a deterministic measure, and this one has
+# neither. Do not "fix" a red here by widening a threshold or flooring the stage out —
+# see the TIME verdict block below.
 MOD_N="${PERF_MOD_N:-100}"
 MOD_K="${PERF_MOD_K:-8}"
 mn1="$MOD_N"; mn2=$((MOD_N * 2)); mn3=$((MOD_N * 4))
@@ -2755,37 +2904,73 @@ case "$MBASE_ALLOC$ma1$ma2$ma3" in
     mnet3="$(awk -v a="$ma3" -v b="$MBASE_ALLOC" 'BEGIN{printf "%.1f", a-b}')"
 
     # ── ALLOC verdict: HARD LINEAR GATE (#154 PR-C promoted `modules` OUT of the ledger
-    # 2026-07-16).  The foldModules-concat O(modules^2) is gone; net-alloc r2 is FLAT ~2.0
-    # to N=1600.  Graded exactly like the single-file shapes: r2 > THRESH (or a CLIMBING
-    # ratio) FAILS as SUPERLINEAR; a too-small measurement is a harness failure, never a
-    # silent pass. ──
+    # 2026-07-16).  The foldModules-concat O(modules^2) is gone.  Graded exactly like the
+    # single-file shapes: r2 > THRESH (or a CLIMBING ratio) FAILS as SUPERLINEAR; a
+    # too-small measurement is a harness failure, never a silent pass. ──
+    #
+    # ⚠️ "net-alloc r2 is FLAT ~2.0 to N=1600" USED TO STAND HERE AND IS NOT TRUE.  Measured
+    # at N=100/200/400, K=8, heap pinned: 399.1 / 857.6 / 1951.6 MB, r1=2.15 r2=2.28 — which
+    # fits the same a*N + b*N^2 model the Ir and TIME arms fit, with a quadratic term worth
+    # 24.3% of the N=400 total.  ALLOC is not FLAT here, it is SUB-THRESHOLD: it sees the
+    # least of the same defect the other two arms see.  Do not cite this arm's green as
+    # evidence that a `modules:typecheck` regression "costs time without costing allocation";
+    # it costs both, just under both gates' thresholds.  The pin is stage_ir_scaling's
+    # `modules:typecheck` KNOWN_SLOW row.
+    # ⚠️ THE FOURTH FIELD IS THE CLAUSE THAT FIRED, AND IT IS NOT COSMETIC.  The
+    # verdict is a DISJUNCTION (`r2 > th` OR `climbing`), so a bare "** SUPERLINEAR
+    # (ALLOC) **" leaves the reader to guess which half tripped — and the TIME twin
+    # below used to guess WRONG IN PRINT, telling #1879 it had exceeded 3.0x when it
+    # had actually tripped the climbing clause at r2≈2.67.  Naming the clause is what
+    # makes the failure text a measurement rather than a label.
     averdict="$(awk -v n1="$mnet1" -v n2="$mnet2" -v n3="$mnet3" -v th="$THRESH" 'BEGIN {
-      if (n1 + 0 < 1.0) { printf "0 0 TOOSMALL"; exit }
+      if (n1 + 0 < 1.0) { printf "0 0 TOOSMALL -"; exit }
       r1 = n2 / n1; r2 = n3 / n2
       climbing = (r2 > r1 * 1.15 && r2 > 2.45)
-      printf "%.2f %.2f %s", r1, r2, ((r2 > th || climbing) ? "QUADRATIC" : "ok")
+      why = (r2 > th) ? "threshold" : (climbing ? "climbing" : "-")
+      printf "%.2f %.2f %s %s", r1, r2, ((r2 > th || climbing) ? "QUADRATIC" : "ok"), why
     }')"
     mar1="$(echo "$averdict" | cut -d' ' -f1)"
     mar2="$(echo "$averdict" | cut -d' ' -f2)"
     aword="$(echo "$averdict" | cut -d' ' -f3)"
+    awhy="$(echo "$averdict" | cut -d' ' -f4)"
+    if [ "$awhy" = "threshold" ]; then
+      aclause="r2 > ${THRESH}x"
+    else
+      aclause="climbing: r2 > r1 x 1.15 AND r2 > 2.45"
+    fi
     if [ "$aword" = "TOOSMALL" ]; then
       fail=$((fail+1))
       printf '%-10s %8s %7s MB %7s MB %7s MB  %6s %6s  ** N TOO SMALL — raise PERF_MOD_N **\n' \
         "modules" "$mn1" "$mnet1" "$mnet2" "$mnet3" "-" "-"
     elif [ "$aword" = "QUADRATIC" ]; then
       fail=$((fail+1))
-      printf '%-10s %8s %7s MB %7s MB %7s MB  %6s %6s  ** SUPERLINEAR (ALLOC) **\n' \
-        "modules" "$mn1" "$mnet1" "$mnet2" "$mnet3" "$mar1" "$mar2"
+      printf '%-10s %8s %7s MB %7s MB %7s MB  %6s %6s  ** SUPERLINEAR (ALLOC) ** (%s)\n' \
+        "modules" "$mn1" "$mnet1" "$mnet2" "$mnet3" "$mar1" "$mar2" "$aclause"
     else
       pass=$((pass+1))
       printf '%-10s %8s %7s MB %7s MB %7s MB  %6s %6s  ok\n' \
         "modules" "$mn1" "$mnet1" "$mnet2" "$mnet3" "$mar1" "$mar2"
     fi
 
-    # ── TIME verdict: no longer ledgered (#154 PR-C).  typecheck TIME is now UNDER the
-    # 200ms floor at the gate's N (the fix dropped it there), so it SKIPS loudly — the same
-    # rule-4 floor behavior the single-file loop applies to an UN-ledgered stage.  If it
-    # ever climbs back over the floor it is hard-gated: r2 > THRESH (or climbing) = SUPERLINEAR. ──
+    # ── TIME verdict: no longer ledgered (#154 PR-C), hard-gated like any un-ledgered stage:
+    # r2 > THRESH (or climbing) = SUPERLINEAR, with a rule-4 SKIP below TIME_FLOOR. ──
+    #
+    # 🚨 THE SKIP BRANCH IS NOT REACHED AT THIS BAND, and the comment that used to stand here
+    # said it was ("typecheck TIME is now UNDER the 200ms floor at the gate's N").  MEASURED,
+    # min-of-5, heap pinned, N=400: 1942 ms — 9.7x the floor.  The `below` check stays because
+    # it is re-decided every run from the live number, but do not read it as a description of
+    # what happens: every run at PERF_MOD_N=100 grades.
+    #
+    # 🚦 THE ARM OF RECORD FOR #1879 IS NO LONGER THIS ONE.  What this grade sees is real —
+    # a live O(modules^2) term, confirmed on three independent channels (Ir, heap-pinned
+    # ALLOC, min-of-5 TIME) — but it sits so close to the climbing clause's trip point that
+    # the verdict FLAPS run to run (r2=2.43 passing by 0.02 one run, 2.67 failing the next).
+    # A flapping verdict on a real defect is the worst of both.  The pin is now
+    # `test/diff_compiler_stage_ir_scaling.sh`'s `modules:typecheck` KNOWN_SLOW row: same
+    # curve, deterministic instruction counts, a ceiling that fails on worsening and a fixed
+    # point that fails demanding promotion.  This TIME grade is deliberately LEFT LIVE and
+    # UNWIDENED — quieting a loud defect is a severity increase ([W-QUIETER]) — but a red
+    # here is now diagnosed against that Ir row rather than filed as a new finding.
     if [ -z "$mt1" ] || [ -z "$mt2" ] || [ -z "$mt3" ]; then
       echo "           time typecheck: NO MEASUREMENT from the profiler (harness bug)"
       fail=$((fail+1))
@@ -2794,15 +2979,34 @@ case "$MBASE_ALLOC$ma1$ma2$ma3" in
       if [ "$below" = "1" ]; then
         ms3="$(awk -v v="$mt3" 'BEGIN{printf "%.0f", v*1000}')"
         msf="$(awk -v f="$TIME_FLOOR" 'BEGIN{printf "%.0f", f*1000}')"
-        printf '           time typecheck: SKIP — too small to time-gate: %s ms at N=%s < %s ms floor (linear since #154 PR-C)\n' "$ms3" "$mn3" "$msf"
+        # ⚠️ NOT "(linear since #154 PR-C)", which is what this line used to assert: the Ir
+        # arm measures a live quadratic term here (stage_ir_scaling's `modules:typecheck`
+        # KNOWN_SLOW row).  Below the floor this arm declines to grade; it does not certify.
+        printf '           time typecheck: SKIP — too small to time-gate: %s ms at N=%s < %s ms floor (NOT a linearity claim — see stage_ir_scaling modules:typecheck)\n' "$ms3" "$mn3" "$msf"
       else
         mtr1="$(awk -v a="$mt1" -v b="$mt2" 'BEGIN{printf "%.2f", b/a}')"
         mtr2="$(awk -v a="$mt2" -v b="$mt3" 'BEGIN{printf "%.2f", b/a}')"
-        tbad="$(awk -v r1="$mtr1" -v r2="$mtr2" -v th="$THRESH" 'BEGIN{print (r2 > th || (r2 > r1 * 1.15 && r2 > 2.45)) ? 1 : 0}')"
+        # 🚨 THE FAILURE TEXT MUST NAME THE CLAUSE THAT FIRED.  It used to print
+        # "(> ${THRESH}x)" unconditionally, so #1879 — which failed on the CLIMBING
+        # clause at r1≈2.1 r2≈2.67, comfortably BELOW 3.0 — was told it had exceeded
+        # 3.0x.  Anyone reading that line went looking for a 3x regression that did not
+        # exist.  Same disjunction, same two clauses, as the ALLOC arm above.
+        tverdict="$(awk -v r1="$mtr1" -v r2="$mtr2" -v th="$THRESH" 'BEGIN{
+          climbing = (r2 > r1 * 1.15 && r2 > 2.45)
+          bad = (r2 > th || climbing)
+          printf "%d %s", bad, ((r2 > th) ? "threshold" : (climbing ? "climbing" : "-"))
+        }')"
+        tbad="$(echo "$tverdict" | cut -d' ' -f1)"
+        twhy="$(echo "$tverdict" | cut -d' ' -f2)"
+        if [ "$twhy" = "threshold" ]; then
+          tclause="r2 > ${THRESH}x"
+        else
+          tclause="climbing: r2 > r1 x 1.15 AND r2 > 2.45"
+        fi
         if [ "$tbad" = "1" ]; then
           fail=$((fail+1))
-          printf '           time typecheck: ** SUPERLINEAR (TIME) ** %ss -> %ss -> %ss  r1=%s r2=%s (> %sx)\n' \
-            "$mt1" "$mt2" "$mt3" "$mtr1" "$mtr2" "$THRESH"
+          printf '           time typecheck: ** SUPERLINEAR (TIME) ** %ss -> %ss -> %ss  r1=%s r2=%s (%s)\n' \
+            "$mt1" "$mt2" "$mt3" "$mtr1" "$mtr2" "$tclause"
         else
           printf '           time typecheck: ok  %ss -> %ss -> %ss  r1=%s r2=%s (min-of-%s, heap pinned)\n' \
             "$mt1" "$mt2" "$mt3" "$mtr1" "$mtr2" "$PERF_K"

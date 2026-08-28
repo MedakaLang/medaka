@@ -1,0 +1,18 @@
+-- I25-bare: main.mdk with ONE variable changed — the import form. The standalone, the
+-- prelude interface it collides with, the receiver and the call are all identical; only
+-- the spelling the occurrence is written under differs.
+--
+-- `import amod.{shrink}` DOES bind bare `shrink` in this module, so `shrink 5` IS an S1
+-- importer-shadow occurrence, S2's importer arm finds the live prelude `impl Arbitrary
+-- Int` at the receiver's head, and dispatch is what conformance requires: `[0, 2]`,
+-- `Arbitrary.shrink`'s prelude default at 5. This is the FORK-1 control for main.mdk —
+-- a fix that gave the alias-qualified occurrence back to the standalone by widening the
+-- rule to every spelling would move this cell too, and the everyday `import map`
+-- pattern with it. IT MUST NOT MOVE.
+--
+-- Measured UNCHANGED across #1684's fix: run and the built binary both printed `[0, 2]`
+-- before it and both print `[0, 2]` after. That the two engines already AGREED here is
+-- exactly why this row's value is derived from the clause rather than captured.
+import amod.{shrink}
+
+main = println (shrink 5)

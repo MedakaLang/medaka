@@ -1,0 +1,213 @@
+{- | Native scaling and resource-limit probe for the Phase 1 MST/CAR gates. -}
+
+import array.{drop}
+import lib.car.{carDecode, carEncode}
+import lib.cid.{Cid, cidForDagCbor, cidForRaw}
+import lib.dagcbor.{DagCbor(..), dagCborEncode}
+import lib.mst.{
+  mstEmpty,
+  mstNodeBlocks,
+  mstRootBytes,
+  mstRootCid,
+  mstValidateBlocks,
+  mstValidateBlocksWithTraversalLimit,
+  mstValidateNodeBytes,
+}
+import lib.multiformats.{uvarintEncode}
+import lib.resource_limits.{
+  checkCarBlocks,
+  checkCarBytes,
+  checkCarSectionBytes,
+  checkMstBlocks,
+  checkMstNodeBytes,
+  checkMstNodeEntries,
+  checkMstTraversalDepth,
+  maxCarBlocks,
+  maxCarBytes,
+  maxCarSectionBytes,
+  maxMstBlocks,
+  maxMstNodeBytes,
+  maxMstNodeEntries,
+  maxMstTraversalDepth,
+}
+import list.{reverse}
+import string.{contains, toInt}
+
+mustBytes : Result String (Array Int) -> Array Int
+mustBytes (Ok bytes) = bytes
+mustBytes (Err message) =
+  panic "performance_resource: encoding failed: \{message}"
+
+intBytes : Int -> Array Int
+intBytes n =
+  [|bitAnd (shiftRight n 16) 255, bitAnd (shiftRight n 8) 255, bitAnd n 255|]
+
+carRows : Int -> Int -> List (Cid, Array Int) -> List (Cid, Array Int)
+carRows n i acc =
+  if i >= n then reverse acc
+  else
+    let bytes = intBytes i
+    carRows n (i + 1) ((cidForRaw bytes, bytes)::acc)
+
+mstRows : Int -> Int -> List (Cid, Array Int) -> List (Cid, Array Int)
+mstRows n i acc =
+  if i >= n then reverse acc
+  else
+    let bytes = mustBytes (dagCborEncode (DcInt i))
+    mstRows n (i + 1) ((cidForDagCbor bytes, bytes)::acc)
+
+runCar : Int -> <IO> Unit
+runCar n = match carRows n 0 []
+  [] => panic "performance_resource: CAR size must be positive"
+  rows@((root, _)::_) => match carEncode [root] rows
+    Ok bytes =>
+      println "CAR \{intToString n} \{intToString (arrayLength bytes)}"
+    Err message => panic "performance_resource: CAR scaling failed: \{message}"
+
+runMst : Int -> <IO> Unit
+runMst n =
+  let root = mstRootCid mstEmpty
+  let rows = mstNodeBlocks mstEmpty ++ mstRows n 0 []
+  match mstValidateBlocks root rows
+    Err message =>
+      if contains "unreachable" message then
+        println "MST \{intToString n} UNREACHABLE"
+      else
+        panic "performance_resource: MST scaling wrong route: \{message}"
+    Ok () => panic "performance_resource: MST hostile rows were accepted"
+
+accept : String -> Result String Unit -> <IO> Int
+accept label (Ok ()) =
+  let () = println "LIMIT CONTROL \{label} PASS"
+  1
+accept label (Err message) =
+  let () = println "LIMIT CONTROL \{label} FAIL rejected=\{message}"
+  0
+
+reject : String -> String -> Result String a -> <IO> Int
+reject label witness (Err message) =
+  if contains witness message then
+    let () = println "LIMIT HOSTILE \{label} PASS route=\{witness}"
+    1
+  else
+    let () = println "LIMIT HOSTILE \{label} FAIL wrong-route=\{message}"
+    0
+reject label _ (Ok _) =
+  let () = println "LIMIT HOSTILE \{label} FAIL accepted"
+  0
+
+repeatRows : Int -> (Cid, Array Int) -> List (Cid, Array Int) -> List (Cid, Array Int)
+repeatRows n row acc = if n <= 0 then acc else repeatRows (n - 1) row (row::acc)
+
+prefix3 : Array Int -> Array Int -> Int
+prefix3 prior key =
+  if prior[0] /= key[0] then
+    0
+  else if prior[1] /= key[1] then
+    1
+  else if prior[2] /= key[2] then
+    2
+  else
+    3
+
+nodeEntries : Int -> Int -> Option (Array Int) -> Cid -> List DagCbor -> List DagCbor
+nodeEntries n i prior value acc =
+  if i >= n then reverse acc
+  else
+    let key = intBytes i
+    let prefix = match prior
+      None => 0
+      Some previous => prefix3 previous key
+    let entry = DcMap [
+      ("p", DcInt prefix),
+      ("k", DcBytes (drop prefix key)),
+      ("v", DcLink value),
+      ("t", DcNull),
+    ]
+    nodeEntries n (i + 1) (Some key) value (entry::acc)
+
+framedHeader : Cid -> Array Int
+framedHeader root =
+  let header = mustBytes (dagCborEncode (DcMap [("roots", DcArray [DcLink root]), ("version", DcInt 1)]))
+  uvarintEncode (arrayLength header) ++ header
+
+depthNode : Array Int -> Cid -> Option Cid -> (Cid, Array Int)
+depthNode key value child =
+  let left = match child
+    None => DcNull
+    Some cid => DcLink cid
+  let bytes = mustBytes (dagCborEncode (DcMap [
+    ("l", left),
+    (
+      "e",
+      DcArray [
+        DcMap [("p", DcInt 0), ("k", DcBytes key), ("v", DcLink value), ("t", DcNull)]
+      ],
+    ),
+  ]))
+  (cidForDagCbor bytes, bytes)
+
+depthCid : (Cid, Array Int) -> Cid
+depthCid (cid, _) = cid
+
+depthRouteControls : Cid -> <IO> (Int, Int)
+depthRouteControls value =
+  let leaf = depthNode [|0x00, 0x01|] value None
+  let depth1 = depthNode [|0x00, 0x07|] value (Some (depthCid leaf))
+  let depth2 = depthNode [|0x00, 0x16|] value (Some (depthCid depth1))
+  let depth3 = depthNode [|0x00, 0x61|] value (Some (depthCid depth2))
+  let atRows = [depth2, depth1, leaf]
+  let overRows = [depth3, depth2, depth1, leaf]
+  let controls = sum [
+    accept "mst-public-depth-at" (mstValidateBlocksWithTraversalLimit 2 (depthCid depth2) atRows),
+    accept "mst-production-depth-control" (mstValidateBlocks (depthCid depth3) overRows),
+  ]
+  let hostile = reject "mst-public-depth-over" "traversal depth exceeds" (mstValidateBlocksWithTraversalLimit 2 (depthCid depth3) overRows)
+  let () = println "public-depth: \{intToString controls}/2 adjacent controls; \{intToString hostile}/1 hostile route"
+  (controls, hostile)
+
+runLimits : <IO> Unit
+runLimits =
+  let root = mstRootCid mstEmpty
+  let rootBytes = mstRootBytes mstEmpty
+  let tooManyCar = repeatRows (maxCarBlocks + 1) (root, rootBytes) []
+  let tooManyMst = repeatRows (maxMstBlocks + 1) (root, rootBytes) []
+  let tooManyEntries = mustBytes (dagCborEncode (DcMap [
+    ("l", DcNull),
+    ("e", DcArray (nodeEntries (maxMstNodeEntries + 1) 0 None root [])),
+  ]))
+  let controls = sum [
+    accept "car-container-at" (checkCarBytes maxCarBytes),
+    accept "car-section-at" (checkCarSectionBytes maxCarSectionBytes),
+    accept "car-blocks-at" (checkCarBlocks maxCarBlocks),
+    accept "mst-blocks-at" (checkMstBlocks maxMstBlocks),
+    accept "mst-node-bytes-at" (checkMstNodeBytes maxMstNodeBytes),
+    accept "mst-entries-at" (checkMstNodeEntries maxMstNodeEntries),
+    accept "mst-depth-at" (checkMstTraversalDepth maxMstTraversalDepth),
+  ]
+  let hostile = sum [
+    reject "car-container-over" "container exceeds" (carDecode (arrayMake (maxCarBytes + 1) 0)),
+    reject "car-section-over" "section exceeds" (carDecode (framedHeader root ++ uvarintEncode (maxCarSectionBytes + 1))),
+    reject "car-blocks-over" "block count exceeds" (carEncode [root] tooManyCar),
+    reject "mst-blocks-over" "node block count exceeds" (mstValidateBlocks root tooManyMst),
+    reject "mst-node-bytes-over" "node exceeds" (mstValidateNodeBytes 0 True (arrayMake (maxMstNodeBytes + 1) 0)),
+    reject "mst-entries-over" "node entry count exceeds" (mstValidateNodeBytes 0 True tooManyEntries),
+    reject "mst-depth-over" "traversal depth exceeds" (checkMstTraversalDepth (maxMstTraversalDepth + 1)),
+  ]
+  let (publicControls, publicHostile) = depthRouteControls root
+  let () = println "limits: \{intToString controls}/7 adjacent controls; \{intToString hostile}/7 hostile routes"
+  if controls == 7 && hostile == 7 && publicControls == 2 && publicHostile == 1 then println "LIMITS: PASS"
+  else
+    let () = println "LIMITS: FAIL"
+    exit 1
+
+main : <IO, Env> Unit
+main = match args ()
+  ["car", nText] => match toInt nText
+    Some n => runCar n
+    None => panic "performance_resource: invalid CAR size"
+  ["mst", nText] => match toInt nText
+    Some n => runMst n
+    None => panic "performance_resource: invalid MST size"
+  ["limits"] => runLimits
+  _ => panic "usage: performance_resource_main (car|mst) <size> | limits"

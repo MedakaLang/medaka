@@ -156,16 +156,24 @@
 #                -count quadratic fixed by S-diag-count): the emitter's
 #                per-diagnostic source-line lookup rescanned the whole file, so
 #                rendering N diagnostics read O(N x file). See the regime note.
+#   noimpl     — N DISTINCT `No impl of P for List T_k` diagnostics, all routed
+#                through the deduping `pushTypeErrorOnceAt`. The measurement
+#                shape for #2068 (the `pushTypeErrorOnce*` dedup scan). Distinct
+#                messages are the whole point: the scan only grows when no
+#                earlier message matches. See gen_noimpl.
 #
-# xref and manyifaces are 0-DIAGNOSTIC by construction; errs is N-DIAGNOSTIC by
-# construction. Either is a valid regime — what matters is that a shape's floor
+# xref and manyifaces are 0-DIAGNOSTIC by construction; errs, diagbucket and
+# noimpl are N-DIAGNOSTIC by construction. Either is a valid regime — what
+# matters is that a shape's floor
 # comes from the SAME generator and therefore the SAME regime (see the floor
 # block above), and that the regime is ASSERTED at every measured N so a shape
 # cannot silently drift out of it. `grade_shape`'s third argument names it.
 #
 # ── COST ─────────────────────────────────────────────────────────────────────
 #
-# 12 cachegrind invocations (3 shapes x (1 floor + 3 sizes)), ~2 min on this box.
+# 4 cachegrind invocations per shape (1 floor + 3 sizes); derive the shape count
+# from the `grade_shape` lines at the bottom of this file rather than trusting a
+# number here.
 # There is no fan-out knob: cachegrind is single-threaded and the runs are
 # sequential on purpose, so the numbers cannot be perturbed by a noisy neighbour.
 # The bands are sized for cost, not for a floor — `Ir` has no floor to clear.
@@ -247,6 +255,44 @@ ERRS_N="${IR_ERRS_N:-400}"
 #                                              rule is exactly what keeps this from
 #                                              flapping on the O(log n) creep)
 SCOPEREFS_N="${IR_SCOPEREFS_N:-3000}"
+# diagbucket: #1019's regression pin — see gen_diagbucket below for the shape.
+# Deliberately smaller than errs's band: #1019 (unlike #2044) is a single bulk
+# `++` per module, not a per-render rescan, so there is no expectation of a
+# climbing ratio to chase; the point is confirming the now-fixed bulk-append
+# stays linear, not finding its weakest N.
+DIAGBUCKET_N="${IR_DIAGBUCKET_N:-300}"
+# noimpl: #2068's shape — see gen_noimpl below.
+#
+# 🚨 READ THIS BEFORE TREATING A GREEN `noimpl` AS PROOF OF ANYTHING. This band
+# CANNOT go red on #2068, pre-fix or post-fix, and that is a deliberate, measured
+# choice rather than an oversight. The pre-fix defect is a genuine O(N^2) with a
+# SMALL quadratic coefficient: measured on this box, heap-pinned, on the pre-fix
+# binary, net Ir was 5.287e9 / 1.179e10 / 2.850e10 / 7.462e10 at N =
+# 1600/3200/6400/12800, i.e. per-doubling ratios 2.230 / 2.418 / 2.618 —
+# monotonically climbing, and fitting net(N) = a*N + b*N^2 over 1600->6400 gives
+# a = 2.92e6 Ir per diagnostic against b = 239 Ir per message pair. Since
+# ratio(N) = (2a+4bN)/(a+bN), it only reaches this gate's 3.0 threshold at
+# N = a/b ~= 12 000 DISTINCT diagnostics in one run, so a threshold-red band would
+# need 4N ~= 50 000 bindings — hours under cachegrind, not the ~2 min this whole
+# gate costs. The disposition on #2068 rests on that N^2 FIT, not on a red reading
+# here. Post-fix the same fit reads a = 2.95e6, b = 165: the linear term is
+# untouched (the OrdMap index costs nothing measurable) and 74 Ir per message pair
+# — one String comparison — is gone.
+#
+# ⚠️ THE RESIDUAL b = 165 IS A SECOND, DIFFERENT QUADRATIC, NOT #2068 LEFTOVER.
+# `noImplHintFor` calls `tabHasName` (compiler/frontend/ast.mdk:464), a linear
+# List scan over `dataParamKindsRef`, once per no-impl DETECTION — O(data-types x
+# no-impl-errors), and THIS shape scales both axes together. Discriminated by
+# measurement: the same route with ONE data type and N interfaces (so
+# `dataParamKindsRef` stays size 1) fits b = 79 instead of 165. Filed separately.
+# If that one is fixed, the numbers above move; re-derive rather than trusting them.
+#
+# What this band IS for: keeping a deterministic ladder on the plain
+# `pushTypeErrorOnceAt` route (the route #2068's first, invalid measurement never
+# entered — see gen_noimpl), so a future regression with a LARGER constant is
+# caught, and so the next agent measures this family on a shape that reaches it.
+# Re-derive the settling ladder with IR_NOIMPL_N=1600 (or 3200) if you need it.
+NOIMPL_N="${IR_NOIMPL_N:-400}"
 
 # A netting-noise guard, and the `Ir` analogue of perf_scaling's TIME_FLOOR — but
 # justified differently. It is NOT about a stage being too fast to time: `Ir` has
@@ -336,6 +382,78 @@ gen_scoperefs() {
   } >> "$gf"
 }
 
+# The #1019 regression pin. `pushDiags` (compiler/driver/diagnostics.mdk) is
+# reached only on a MULTI-MODULE project (`checkRoute`'s analyzeProject arm —
+# a single-module `check` never calls it), so this shape is a two-file
+# project: a HELPER module of N `eK : Int` / `eK = "s"` bindings (same
+# one-Type-mismatch-per-binding shape as `errs`) and a trivial ENTRY module
+# that imports one name from it. The helper's whole N-diagnostic batch lands
+# in ONE `pushDiags` call (from the typecheck pass), which is exactly the
+# call the pre-`51eb8807` code folded `pushDiag` over per element (each fold
+# step an O(current-bucket-size) `existing ++ [d]` — O(n^2) over the batch).
+# The now-fixed code does one bulk `existing ++ ds` instead — this shape
+# confirms that reads linear.
+gen_diagbucket() {
+  gn=$1; gf=$2
+  hbase="$(basename "$gf" .mdk)_h"
+  hfile="$(dirname "$gf")/$hbase.mdk"
+  : > "$hfile"
+  {
+    gi=0
+    while [ "$gi" -lt "$gn" ]; do
+      printf 'export e%s : Int\ne%s = "s"\n' "$gi" "$gi"
+      gi=$((gi + 1))
+    done
+  } >> "$hfile"
+  : > "$gf"
+  printf 'import %s.{e0}\n\nmain = println e0\n' "$hbase" >> "$gf"
+}
+
+# The #2068 shape: N DISTINCT diagnostic MESSAGES, all pushed through the
+# deduping `pushTypeErrorOnceAt` (compiler/types/typecheck.mdk), whose dedup test
+# is `anyList (e => tcMsg e == msg) perRun.value.typeErrors.items.value` — a
+# linear scan of everything accumulated so far. That scan is O(N^2) only if the
+# messages are DISTINCT: with a repeated message the scan short-circuits on the
+# first element and the list never grows past 1.
+#
+# 🚨 THAT IS WHY `errs` IS THE WRONG SHAPE FOR #2068 AND THIS ONE IS NOT.
+# `errs` produces N BYTE-IDENTICAL `Type mismatch: Int vs String` messages, and
+# they do not even reach a `*Once*` function — `typeMismatchReportRest`'s plain
+# arm calls the non-deduping `pushTypeError`. A #2068 measurement taken on `errs`
+# grades code that never runs (see #2068's corrected comment).
+#
+# The shape: one interface `P` with NO impls, N distinct data types, and N
+# bindings each demanding `P (List T_k)`. Two properties are load-bearing:
+#
+#   * `List T_k` rather than a bare `T_k`. `noImplHint` offers "write an 'impl P
+#     T_k'" advice only when the single argument's head tycon is a user-declared
+#     data type (a `dataParamKindsRef` hit); `List` is not, so the hint is None
+#     and `pushNoImplError` takes its `None` arm — the plain
+#     `pushTypeErrorOnceAt` at typecheck.mdk:27300. A bare `T_k` diverts onto the
+#     HINTED arm (`pushTypeErrorHelpFixAt`), which carries the same scan but is a
+#     different function; keeping the two arms distinguishable is the point.
+#     Verified by eye on a 2-type program: `No impl of P for T1; write an 'impl P
+#     T1'.` (hinted) vs `No impl of P for List T1` (plain).
+#   * the `T_k` index rides INSIDE the message, so the N messages are pairwise
+#     distinct and the scan actually grows.
+gen_noimpl() {
+  gn=$1; gf=$2; : > "$gf"
+  {
+    printf 'interface P a where\n  m : a -> Int\n'
+    gi=0
+    while [ "$gi" -lt "$gn" ]; do
+      printf 'data T%s = T%s\n' "$gi" "$gi"
+      gi=$((gi + 1))
+    done
+    gi=0
+    while [ "$gi" -lt "$gn" ]; do
+      printf 'u%s : Int\nu%s = m [T%s]\n' "$gi" "$gi" "$gi"
+      gi=$((gi + 1))
+    done
+    printf 'main = println 1\n'
+  } >> "$gf"
+}
+
 # ── measurement ──────────────────────────────────────────────────────────────
 #
 # The `Ir` total is read from cachegrind's own stderr summary ("I refs:"), not
@@ -390,13 +508,13 @@ assert_clean() {
 assert_diags() {
   af="$1"; an="$2"
   if "$MEDAKA" check "$af" >"$WORK/chk.out" 2>&1; then
-    echo "FAIL: generated fixture typechecks CLEANLY — the errs shape has drifted:"
+    echo "FAIL: generated fixture typechecks CLEANLY — an N-diagnostic shape has drifted:"
     echo "  expected $an diagnostics, got a clean check."
     return 1
   fi
   got="$(grep -c '^error: ' "$WORK/chk.out")"
   if [ "$got" -ne "$an" ]; then
-    echo "FAIL: errs fixture produced $got diagnostics, expected exactly $an —"
+    echo "FAIL: fixture produced $got diagnostics, expected exactly $an —"
     echo "  the shape has drifted out of its diagnostic regime and its floor no"
     echo "  longer nets against the same regime."
     sed 's/^/  /' "$WORK/chk.out" | head -20
@@ -476,6 +594,8 @@ grade_shape xref "$XREF_N" clean
 grade_shape manyifaces "$MANYIFACES_N" clean
 grade_shape errs "$ERRS_N" diags
 grade_shape scoperefs "$SCOPEREFS_N" clean
+grade_shape diagbucket "$DIAGBUCKET_N" diags
+grade_shape noimpl "$NOIMPL_N" diags
 
 echo
 # A gate that grades nothing must never report success — the invariant

@@ -1,0 +1,6 @@
+-- I25's dependency (#1684). `shrink` is a PLAIN top-level standalone: this module
+-- declares no interface and no impl, and neither does any other file in this cell.
+-- Its bare name collides with the PRELUDE interface method `Arbitrary.shrink`
+-- (stdlib/core.mdk), and that collision alone is what both entry files turn on.
+export shrink : Int -> Int
+shrink n = n + 1
