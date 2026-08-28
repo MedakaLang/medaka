@@ -1,5 +1,5 @@
 # META
-source_lines=35932
+source_lines=35957
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -28270,11 +28270,36 @@ userExternSchemes : CheckMode -> OrdMap TyConOrigin -> List Decl -> List (String
 userExternSchemes _ scope decls =
   externSchemesGo (stampTyOrigins scope (externDecls decls))
 
--- Apply the two user-extern declaration rules unless the program under check is
--- stdlib-owned.  See `setStdlibOwnership` for why the two arms read two different
--- fields and why the default is "apply them".
+-- Apply the four user-extern declaration rules unless the program under check is
+-- stdlib-owned, OR the run has no builtin-extern catalog at all.
+--
+-- 🚨 THE SECOND CONJUNCT IS NOT AN OWNERSHIP TEST — it is a "does this run know
+-- what a foreign declaration IS" test.  `builtinExternNamesRef` is seeded ONLY by
+-- `noteBuiltinExternNames`, inside `externSchemes … runtimeDecls`; the eight call
+-- sites that build the catalog all pass `runtimeDecls` (138 rows), so for every
+-- REAL entry point — `medaka check`/`build`/`test`/`lint`/`mcp`, the LSP, and
+-- every multi-module driver — this map is non-empty and the guards fire exactly
+-- as before.  It is empty only on the compiler-internal, explicitly documented
+-- PRELUDE-FREE path: `checkToLines` (`checkProgramSchemes [] prog`, which takes
+-- no runtime argument at all), reached by `compiler/entries/typecheck_main.mdk`
+-- and `compiler/entries/selfproc_tc_probe.mdk`.  There, `ffiIsBuiltinExternName`
+-- reads an empty map, so the catalog exemption the other three rules depend on
+-- cannot engage, and a bare HM fixture writing the catalog's own `extern Ref : a
+-- -> Ref a` (`stdlib/runtime.mdk`'s real row, borrowed by
+-- `test/typecheck_error_fixtures/value_restriction_ref.mdk` purely because
+-- `extern` is the one syntax that introduces a non-generalizing name) was judged
+-- an honest, non-exempt foreign declaration and failed both the label and the
+-- crossable rule.  Exempting the whole no-catalog run restores that driver to its
+-- pre-FFI behaviour — it accepted every `extern` — rather than half-applying a
+-- rule whose exemption test is structurally blind on that path.
 ffiStampMode : CheckMode -> Bool
-ffiStampMode (Flat _) = not driverState.value.flatEntryIsStdlibRef.value
+ffiStampMode mode = omSize driverState.value.builtinExternNamesRef.value > 0
+  && ffiStampModeOwned mode
+
+-- The ownership half, unchanged.  See `setStdlibOwnership` for why the two arms
+-- read two different fields and why the default is "apply them".
+ffiStampModeOwned : CheckMode -> Bool
+ffiStampModeOwned (Flat _) = not driverState.value.flatEntryIsStdlibRef.value
 -- 🚨 `"__user__"` IS THE FLAT ENTRY, NOT A LOADED MODULE, and this arm is what
 -- actually fires on `medaka check <file>`.  The single-file front door does not
 -- reach the `Flat` arm at all: `runCheck` → `checkOneToLinesWithRuntime` wraps the
@@ -28285,9 +28310,9 @@ ffiStampMode (Flat _) = not driverState.value.flatEntryIsStdlibRef.value
 -- `medaka check stdlib/runtime.mdk` into a wall of declaration errors — the 132
 -- catalog rows that do not name `FFI` (the same 132 that used to GAIN the atom
 -- here, back when this Bool gated a stamp) would each fail the label rule.
-ffiStampMode (Module "__user__" _ _) =
+ffiStampModeOwned (Module "__user__" _ _) =
   not driverState.value.flatEntryIsStdlibRef.value
-ffiStampMode (Module mid _ _) =
+ffiStampModeOwned (Module mid _ _) =
   not (contains mid driverState.value.stdlibOwnedModsRef.value)
 
 -- Make an alias-NAMED arrow structurally visible, at the `Ty` (pre-`Mono`) level.
@@ -40456,9 +40481,11 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "userExternSchemes" (TyFun (TyCon "CheckMode") (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
 (DFunDef false "userExternSchemes" (PWild (PVar "scope") (PVar "decls")) (EApp (EVar "externSchemesGo") (EApp (EApp (EVar "stampTyOrigins") (EVar "scope")) (EApp (EVar "externDecls") (EVar "decls")))))
 (DTypeSig false "ffiStampMode" (TyFun (TyCon "CheckMode") (TyCon "Bool")))
-(DFunDef false "ffiStampMode" ((PCon "Flat" PWild)) (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "flatEntryIsStdlibRef") "value")))
-(DFunDef false "ffiStampMode" ((PCon "Module" (PLit (LString "__user__")) PWild PWild)) (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "flatEntryIsStdlibRef") "value")))
-(DFunDef false "ffiStampMode" ((PCon "Module" (PVar "mid") PWild PWild)) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "stdlibOwnedModsRef") "value"))))
+(DFunDef false "ffiStampMode" ((PVar "mode")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "builtinExternNamesRef") "value")) (ELit (LInt 0))) (EApp (EVar "ffiStampModeOwned") (EVar "mode"))))
+(DTypeSig false "ffiStampModeOwned" (TyFun (TyCon "CheckMode") (TyCon "Bool")))
+(DFunDef false "ffiStampModeOwned" ((PCon "Flat" PWild)) (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "flatEntryIsStdlibRef") "value")))
+(DFunDef false "ffiStampModeOwned" ((PCon "Module" (PLit (LString "__user__")) PWild PWild)) (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "flatEntryIsStdlibRef") "value")))
+(DFunDef false "ffiStampModeOwned" ((PCon "Module" (PVar "mid") PWild PWild)) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "stdlibOwnedModsRef") "value"))))
 (DTypeSig false "expandAliasHeadTy" (TyFun (TyCon "Ty") (TyCon "Ty")))
 (DFunDef false "expandAliasHeadTy" ((PAs "t" (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false))) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")) (arm (PCon "Some" (PTuple (PVar "params") (PVar "rhs"))) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (ELit (LInt 0))))) (EApp (EVar "expandAliasHeadTy") (EVar "rhs"))) (arm PWild () (EVar "t"))))
 (DFunDef false "expandAliasHeadTy" ((PAs "t" (PCon "TyApp" PWild PWild))) (EMatch (EApp (EVar "tyAppSpine") (EVar "t")) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")) (arm (PCon "Some" (PTuple (PVar "params") (PVar "rhs"))) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EVar "expandAliasHeadTy") (EApp (EApp (EVar "substTyVars") (EApp (EApp (EVar "zipL") (EVar "params")) (EVar "args"))) (EVar "rhs")))) (arm PWild () (EVar "t")))) (arm PWild () (EVar "t"))))
@@ -46199,9 +46226,11 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "userExternSchemes" (TyFun (TyCon "CheckMode") (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
 (DFunDef false "userExternSchemes" (PWild (PVar "scope") (PVar "decls")) (EApp (EVar "externSchemesGo") (EApp (EApp (EVar "stampTyOrigins") (EVar "scope")) (EApp (EVar "externDecls") (EVar "decls")))))
 (DTypeSig false "ffiStampMode" (TyFun (TyCon "CheckMode") (TyCon "Bool")))
-(DFunDef false "ffiStampMode" ((PCon "Flat" PWild)) (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "flatEntryIsStdlibRef") "value")))
-(DFunDef false "ffiStampMode" ((PCon "Module" (PLit (LString "__user__")) PWild PWild)) (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "flatEntryIsStdlibRef") "value")))
-(DFunDef false "ffiStampMode" ((PCon "Module" (PVar "mid") PWild PWild)) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "stdlibOwnedModsRef") "value"))))
+(DFunDef false "ffiStampMode" ((PVar "mode")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "builtinExternNamesRef") "value")) (ELit (LInt 0))) (EApp (EVar "ffiStampModeOwned") (EVar "mode"))))
+(DTypeSig false "ffiStampModeOwned" (TyFun (TyCon "CheckMode") (TyCon "Bool")))
+(DFunDef false "ffiStampModeOwned" ((PCon "Flat" PWild)) (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "flatEntryIsStdlibRef") "value")))
+(DFunDef false "ffiStampModeOwned" ((PCon "Module" (PLit (LString "__user__")) PWild PWild)) (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "flatEntryIsStdlibRef") "value")))
+(DFunDef false "ffiStampModeOwned" ((PCon "Module" (PVar "mid") PWild PWild)) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "stdlibOwnedModsRef") "value"))))
 (DTypeSig false "expandAliasHeadTy" (TyFun (TyCon "Ty") (TyCon "Ty")))
 (DFunDef false "expandAliasHeadTy" ((PAs "t" (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false))) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")) (arm (PCon "Some" (PTuple (PVar "params") (PVar "rhs"))) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (ELit (LInt 0))))) (EApp (EVar "expandAliasHeadTy") (EVar "rhs"))) (arm PWild () (EVar "t"))))
 (DFunDef false "expandAliasHeadTy" ((PAs "t" (PCon "TyApp" PWild PWild))) (EMatch (EApp (EVar "tyAppSpine") (EVar "t")) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")) (arm (PCon "Some" (PTuple (PVar "params") (PVar "rhs"))) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EVar "expandAliasHeadTy") (EApp (EApp (EVar "substTyVars") (EApp (EApp (EVar "zipL") (EVar "params")) (EVar "args"))) (EVar "rhs")))) (arm PWild () (EVar "t")))) (arm PWild () (EVar "t"))))

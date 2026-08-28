@@ -774,6 +774,7 @@ ffiSigArgHeads : Ty -> List String
 ffiSigRetHead : Ty -> String
 ffiSigShapeKey : Ty -> String
 ffiStampMode : CheckMode -> Bool
+ffiStampModeOwned : CheckMode -> Bool
 ffiTyHeadName : Ty -> String
 ffiUnlabelledMsg : String -> String
 fieldAssignDictSites : FieldAssign -> List (Ref (List Route))
