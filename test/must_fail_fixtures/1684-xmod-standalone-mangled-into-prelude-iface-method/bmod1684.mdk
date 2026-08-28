@@ -1,4 +1,0 @@
--- The rename twin's module. Byte-identical to amod1684.mdk except `shrink` is spelled
--- `shrinkz`, which collides with nothing in the prelude.
-export shrinkz : Int -> Int
-shrinkz n = n + 1

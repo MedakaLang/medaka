@@ -1,8 +1,0 @@
--- CONTROL. Byte-identical to main.mdk except it imports the rename twin, so the
--- standalone's spelling no longer collides with a prelude interface method. Everything
--- else -- the alias-qualified import, the multi-module loader path, the arithmetic --
--- is unchanged. MEASURED: run 6, built binary 6, both at exit 0. That isolates the
--- observation to the bare NAME, not to alias imports, not to multi-module programs.
-import bmod1684 as A
-
-main = println (A.shrinkz 5)

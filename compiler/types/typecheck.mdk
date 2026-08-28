@@ -35959,12 +35959,94 @@ prePassModulePairArg rpNames shadowNames dictNames argNames shadowMap (mid, prog
       mid,
       prePassDictArg
         (dedup (filterList keep rpNames
-          ++ filterList (n => omHasKey (shadowBareName shadowMap n) nameable) shadowNames))
+          ++ filterList
+            (n => omHasKey (shadowBareName shadowMap n) nameable
+              && shadowSymSpelledBare prog shadowMap n)
+            shadowNames))
         dictNames
         (filterList keep argNames)
-        (filterList (e => omHasKey (snd e) nameable) shadowMap)
+        (filterList
+          (e => omHasKey (snd e) nameable
+            && moduleSpellsShadowBare prog (fst e) (snd e))
+          shadowMap)
         prog,
     )
+
+-- ── #1684: S1's STANDALONE operand, at the OCCURRENCE spelling ───────────────
+-- The two filters above answer S1's INTERFACE operand (`nameable in M`) and nothing
+-- else.  That is sufficient on the un-mangled check/run path, where an occurrence
+-- carries the spelling the author wrote — but NOT on the emit path, where
+-- `backend/private_mangle.mdk` has already collapsed BOTH spellings of an imported
+-- standalone onto ONE symbol:
+--
+--   import amod.{shrink}  → `shrink`    ⎫
+--   import amod as A      → `A.shrink`  ⎭ → both become `EVar "amod__shrink"`
+--
+-- `computeMangledShadowMap` then recovers `amod__shrink ↦ shrink` from the DEFINING
+-- module's funDefs and `rewriteArgScoped`'s `sm` arm rewrites EVERY occurrence of that
+-- symbol to `EMethodAt "shrink"` — including the alias-qualified one, which was never
+-- an S1 occurrence at all.  §1.0's standalone-operand row is *"defined in `M` or
+-- imported into `M`"*, and `import amod as A` imports the standalone into `M` under the
+-- local name `A.shrink`; bare `shrink` is bound by no import form there, so it names
+-- nothing in `M` and can shadow nothing in `M`.
+--
+-- MEASURED (#1684, S0): a two-file program whose only interface is the PRELUDE's
+-- `Arbitrary` — no `impl` and no `interface` written anywhere in it — had `A.shrink 5`
+-- emitted as a call to `@mdk_impl_Int_shrink`, so the built binary printed
+-- `Arbitrary.shrink`'s list default `[0, 2]` while `run` printed the standalone's `6`.
+-- Both at exit 0, no diagnostic on any channel.
+--
+-- So the emit path must reconstruct what the mangle erased: admit a mangled shadow
+-- symbol only where `M` actually spells its BARE name.  Two admitting cases, and the
+-- test is over IMPORT FORMS rather than over the symbol's origin module, so a name
+-- reaching `M` through a re-export chain (whose `usePathModuleId` is the re-exporter,
+-- not the definer) is admitted exactly as it is today:
+--   * `M` DEFINES the symbol itself — the definer shadow (P0-18), unchanged.
+--   * some import form in `M` binds the LOCAL name `bare`: a member list naming it, or
+--     a wildcard.  A module alias (`Some []`) and a member alias (`{size as sz}`, whose
+--     local is `sz`) bind it under a different spelling, so neither admits it — and
+--     both then agree with what the un-mangled path already does with that spelling.
+-- Empty shadowMap ⇒ `lookupAssoc` misses ⇒ True ⇒ the check/run path is untouched.
+shadowSymSpelledBare : List Decl -> List (String, String) -> String -> Bool
+shadowSymSpelledBare prog sm n = match lookupAssoc n sm
+  None => True
+  Some bare => moduleSpellsShadowBare prog n bare
+
+moduleSpellsShadowBare : List Decl -> String -> String -> Bool
+moduleSpellsShadowBare prog sym bare = contains sym (declTopFnNames prog)
+  || sym == mangledName "core" bare
+  || declsBindBareLocal prog bare
+
+-- ⚠️ THE IMPLICIT-PRELUDE ARM ABOVE IS LOAD-BEARING, AND ITS ABSENCE WAS MEASURED.
+-- The prelude is in scope in EVERY module under BARE names and contributes NO `DUse`
+-- decl, so a `declsBindBareLocal` walk over the module's imports cannot see it: a
+-- prelude standalone shadowed by a USER interface method (S1-PRELUDE (a), the
+-- `x4_prelude_standalone_live_impl_receiver` / `x5_prelude_constrained_standalone_live_impl`
+-- cells) mangles to `core__isEven` with no import form naming `isEven`, so without this
+-- arm the entry was dropped and both cells went `DIFF`/FAIL — the prelude standalone's
+-- `False` where the ruling requires the interface method's `True`. The prelude is also
+-- the one module that CANNOT be alias-imported (`import core as C` → `Unbound variable:
+-- C.eq`, SHADOW-SEMANTICS.md §1.1's table), so bare is its only spelling and this arm
+-- admits nothing the alias case could have written differently.
+
+declsBindBareLocal : List Decl -> String -> Bool
+declsBindBareLocal [] _ = False
+declsBindBareLocal ((DAttrib _ d)::rest) bare = declsBindBareLocal [d] bare
+  || declsBindBareLocal rest bare
+declsBindBareLocal ((DUse _ path _)::rest) bare =
+  if importFormBindsBare path bare then
+    True
+  else
+    declsBindBareLocal rest bare
+declsBindBareLocal (_::rest) bare = declsBindBareLocal rest bare
+
+-- `None` is the wildcard `import m.*`, which binds every export of `m` under its own
+-- name — over-inclusive only in that it does not re-check `m`'s export list, which is
+-- exactly the (status-quo) answer the unfiltered map gave.
+importFormBindsBare : UsePath -> String -> Bool
+importFormBindsBare path bare = match importedBindings path
+  None => True
+  Some bindings => anyList (b => snd b == bare) bindings
 
 -- the BARE interface-method name a (possibly mangled) standalone-shadow symbol stands for.
 -- Identity on the un-mangled run/check path, where the map is empty.
