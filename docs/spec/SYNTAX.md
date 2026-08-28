@@ -151,8 +151,10 @@ p2 = let y : Int = 5 in y + 1        -- annotated let
 Effect rows in signatures (see Effects):
 
 ```medaka
-extern readFile : String -> <IO> String
-extern fetch    : String -> <Clock, IO> String
+readFile : String -> <IO> String                -- single effect label
+readFile _ = "stub"
+fetch    : String -> <Clock, IO> String         -- multiple effect labels
+fetch _ = "stub"
 applyTo : (a -> <e> b) -> a -> b               -- effect variable
 applyTo g v = g v
 run      : (Unit -> <IO | e> a) -> <IO | e> a  -- open tail row
@@ -722,8 +724,8 @@ Import a type with `import m.{T(..)}`.
 ## Externs (primitive declarations — see stdlib/runtime.mdk)
 
 ```medaka
-extern foo : Int -> String
-extern id : a -> a
+extern foo : Int -> <FFI> String
+extern add2 : Int -> Int -> <FFI> Int
 extern putStrLn : String -> <IO> Unit
 extern pi : Float
 ```
