@@ -432,3 +432,22 @@ source-note:   The authority publishes this generated fixture as an HTML page ra
 extraction:    Hand-transcribed the fixture name, canonical Bytes hex, and dag-cbor CID for 17 named rows (array-2, array-255, array-500, array-65536, array-9007199254740991, array-empty, bytes-a1, bytes-empty, map-1_pair, map-empty, map-keysort, map-nested, null, string-Hello__world!, string-水, true, and cid-bafyreidj5idub6mapiupjwjsyyxhyhedxycv4vihfsicm2vt46o7morwlm); each triplet read back twice against the authority page.
 retrieved:     2026-08-28
 consumer:      P1-A-CBOR-CID (#2136 canonical DAG-CBOR/DRISL and CID foundation)
+
+[impl]
+id:            official-atproto-repo
+repo:          https://github.com/bluesky-social/atproto
+version:       @atproto/repo 0.10.12
+commit:        4d2097ff37e0a7872444b845740f7cdcf2ace7f4
+retrieved:     2026-08-28
+notes:         official TypeScript repository/MST implementation; annotated release tag @atproto/repo@0.10.12 (tag object d54cb070b5df2baa91ada47e3b6e13c2485d7337) peeled to this commit; npm integrity sha512-SnDSoFi1bRAfN0IcDjSPFcefknDCIIjKgJXgFsd5jvktCkopmzml8BpQEP5t2/mcZ7NvEn5onQ0kaWkXhgL+5g==
+
+[vector]
+file:          pds/test/vectors/mst_reference_corpus.txt
+local-sha256:  eecc38d39bd17230aeac36b1e901040ef0cad238407d7c3ffd27dfb67f624204
+kind:          reference-impl
+impl:          official-atproto-repo
+source-url:    https://registry.npmjs.org/@atproto/repo/-/repo-0.10.12.tgz
+extraction:    pds/tools/gen_mst_corpus.sh installs exactly @atproto/repo@0.10.12 outside the source tree, verifies its published npm integrity literal, and runs the committed gen_mst_corpus.mjs. The generator uses MemoryBlockstore plus MST.create/add/update/delete/getUnstoredBlocks, independently mines valid repo-path keys at exact depths 0/1/2/3 using Node SHA-256 and requires @atproto/repo's leadingZerosOnHash to agree, then emits every operation, root CID, and complete canonical node block set. Re-running must reproduce this file byte-for-byte.
+retrieved:     2026-08-28
+consumer:      P1-B-MST (#2136 deterministic atproto Merkle Search Tree)
+notes:         11 cases cover empty, 0/2/4/6 leading-zero-bit layer boundaries, per-node shared-prefix compression, forward/reverse insertion permutations, replacement, deletion, and delete-to-empty. Schema and edge behavior were confirmed first-hand on 2026-08-28 against https://atproto.com/specs/repository (fields l/e and p/k/v/t; lexical order; mandatory prefix compression; SHA-256 depth; empty root) and the pinned reference source. The official CC0 interop fixtures at bluesky-social/atproto-interop-tests commit 056e5741bb330757205d6b16db5266fffcae937b independently corroborated key-height and common-prefix rules; expected root/node bytes come only from @atproto/repo, never Medaka.

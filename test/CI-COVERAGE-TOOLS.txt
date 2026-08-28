@@ -136,6 +136,9 @@ pds/tools/gen_signing_corpus   regenerates the 80-row dual-oracle prehashed corp
 pds/tools/gen_did_key_corpus   regenerates the 16-row secp256k1 did:key corpus by calling
                                Secp256k1Keypair.did() in the pinned official-PDS Docker image;
                                the offline checker and vector_provenance gate grade the artifact.
+pds/tools/gen_mst_corpus       regenerates the P1-B deterministic MST roots and canonical node
+                               blocks with the pinned official @atproto/repo npm package; the
+                               offline mst_vectors and vector_provenance gates grade the artifact.
 
 # ── pds oracle (S-oracle-standup, #1707; docker re-cut fix-oracle-standup-docker — a
 #    local manual procedure, not a gate) ──

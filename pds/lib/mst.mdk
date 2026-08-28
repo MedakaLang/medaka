@@ -1,0 +1,457 @@
+{- | Pure persistent atproto Merkle Search Trees.
+
+   Keys are arbitrary non-empty byte arrays. The authoritative sorted entry
+   map is rebuilt after each mutation, which keeps the implementation simple
+   while preserving the protocol's history-independent root and node bytes.
+   Node constructors remain private so depth, ordering, prefix compression,
+   and link invariants cannot be bypassed.
+
+   `mstValidateNodeBytes` and `mstValidateBlocks` provide strict validation of
+   canonical node bytes and a complete reachable node-block graph. Constructing
+   an editable tree from imported blocks is intentionally outside this slice. -}
+
+import array.{drop, take}
+import list.{reverse, sortBy}
+import lib.cid.{Cid, cidEqual, cidForDagCbor}
+import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
+import lib.sha256.{sha256}
+
+data MstEntry = MstEntry (Array Int) Cid Int
+
+-- | An immutable MST with cached canonical root and reachable node blocks.
+export data Mst = Mst (List MstEntry) Cid (Array Int) (List (Cid, Array Int))
+
+data BuiltNode = BuiltNode Cid (Array Int) (List (Cid, Array Int))
+
+data LayerSplit = LayerSplit (List MstEntry) (Option (MstEntry, List MstEntry))
+
+data BuiltEntries = BuiltEntries (List DagCbor) (List (Cid, Array Int))
+
+data DecodedEntry = DecodedEntry (Array Int) Cid (Option Cid)
+
+data DecodedNode = DecodedNode (Option Cid) (List DecodedEntry)
+
+validBytes : Array Int -> Int -> Bool
+validBytes bytes i =
+  if i >= arrayLength bytes then
+    True
+  else
+    bytes[i] >= 0 && bytes[i] <= 255 && validBytes bytes (i + 1)
+
+bytesCompare : Array Int -> Array Int -> Ordering
+bytesCompare left right = bytesCompareAt left right 0
+
+bytesCompareAt : Array Int -> Array Int -> Int -> Ordering
+bytesCompareAt left right i =
+  if i >= arrayLength left then if i >= arrayLength right then Eq else Lt
+  else
+    if i >= arrayLength right then Gt
+    else match compare left[i] right[i]
+      Eq => bytesCompareAt left right (i + 1)
+      order => order
+
+commonPrefix : Array Int -> Array Int -> Int
+commonPrefix left right = commonPrefixAt left right 0
+
+commonPrefixAt : Array Int -> Array Int -> Int -> Int
+commonPrefixAt left right i =
+  if i >= arrayLength left || i >= arrayLength right || left[i] /= right[i] then
+    i
+  else
+    commonPrefixAt left right (i + 1)
+
+leadingZeroByte : Int -> Int
+leadingZeroByte byte =
+  if bitAnd byte 0x80 /= 0 then
+    0
+  else if bitAnd byte 0x40 /= 0 then
+    1
+  else if bitAnd byte 0x20 /= 0 then
+    2
+  else if bitAnd byte 0x10 /= 0 then
+    3
+  else if bitAnd byte 0x08 /= 0 then
+    4
+  else if bitAnd byte 0x04 /= 0 then
+    5
+  else if bitAnd byte 0x02 /= 0 then
+    6
+  else if bitAnd byte 0x01 /= 0 then
+    7
+  else
+    8
+
+leadingZeroBits : Array Int -> Int -> Int
+leadingZeroBits digest i =
+  if i >= arrayLength digest then arrayLength digest * 8
+  else
+    let zeros = leadingZeroByte digest[i]
+    if zeros == 8 then 8 + leadingZeroBits digest (i + 1) else zeros
+
+-- | Compute the mandatory SHA-256 MST depth for one non-empty byte key.
+export
+mstKeyDepth : Array Int -> Result String Int
+mstKeyDepth key =
+  if arrayLength key == 0 then
+    Err "mst: empty key is not allowed"
+  else if not (validBytes key 0) then
+    Err "mst: key element outside byte range 0..255"
+  else
+    Ok (leadingZeroBits (sha256 key) 0 / 2)
+
+entryCompare : MstEntry -> MstEntry -> Ordering
+entryCompare (MstEntry left _ _) (MstEntry right _ _) = bytesCompare left right
+
+prepareEntries : List (Array Int, Cid) -> Result String (List MstEntry)
+prepareEntries entries = match prepareEntriesGo entries []
+  Err message => Err message
+  Ok prepared =>
+    let sorted = sortBy entryCompare prepared
+    match duplicateKey sorted None
+      Some _ => Err "mst: duplicate key is not allowed"
+      None => Ok sorted
+
+prepareEntriesGo : List (Array Int, Cid) -> List MstEntry -> Result String (List MstEntry)
+prepareEntriesGo [] acc = Ok (reverse acc)
+prepareEntriesGo ((key, value)::rest) acc = match mstKeyDepth key
+  Err message => Err message
+  Ok depth =>
+    prepareEntriesGo rest (MstEntry (arrayCopy key) value depth :: acc)
+
+duplicateKey : List MstEntry -> Option (Array Int) -> Option (Array Int)
+duplicateKey [] _ = None
+duplicateKey ((MstEntry key _ _)::rest) None = duplicateKey rest (Some key)
+duplicateKey ((MstEntry key _ _)::rest) (Some previous) =
+  if bytesCompare previous key == Eq then
+    Some key
+  else
+    duplicateKey rest (Some key)
+
+maximumDepth : List MstEntry -> Int -> Int
+maximumDepth [] current = current
+maximumDepth ((MstEntry _ _ depth)::rest) current =
+  maximumDepth rest (max depth current)
+
+splitLayer : List MstEntry -> Int -> LayerSplit
+splitLayer [] _ = LayerSplit [] None
+splitLayer ((entry@(MstEntry _ _ depth))::rest) layer =
+  if depth == layer then LayerSplit [] (Some (entry, rest))
+  else match splitLayer rest layer
+    LayerSplit prefix found => LayerSplit (entry::prefix) found
+
+mustEncodeNode : DagCbor -> Array Int
+mustEncodeNode value = match dagCborEncode value
+  Ok bytes => bytes
+  Err message => panic "mst: internal node encoding failed: \{message}"
+
+childFor : List MstEntry -> Int -> Option BuiltNode
+childFor [] _ = None
+childFor entries layer =
+  if layer < 0 then
+    panic "mst: internal entry fell below depth zero"
+  else
+    Some (buildNode entries layer)
+
+childValue : Option BuiltNode -> DagCbor
+childValue None = DcNull
+childValue (Some (BuiltNode cid _ _)) = DcLink cid
+
+childBlocks : Option BuiltNode -> List (Cid, Array Int)
+childBlocks None = []
+childBlocks (Some (BuiltNode _ _ blocks)) = blocks
+
+buildNode : List MstEntry -> Int -> BuiltNode
+buildNode entries layer =
+  let (LayerSplit before first) = splitLayer entries layer
+  let left = childFor before (layer - 1)
+  let (BuiltEntries wireEntries rightBlocks) = buildWireEntries first layer None
+  let bytes = mustEncodeNode (DcMap [("l", childValue left), ("e", DcArray wireEntries)])
+  let cid = cidForDagCbor bytes
+  BuiltNode cid bytes ((cid, bytes) :: childBlocks left ++ rightBlocks)
+
+buildWireEntries : Option (MstEntry, List MstEntry) -> Int -> Option (Array Int) -> BuiltEntries
+buildWireEntries None _ _ = BuiltEntries [] []
+buildWireEntries (Some (MstEntry key value _, rest)) layer previous =
+  let (LayerSplit between next) = splitLayer rest layer
+  let right = childFor between (layer - 1)
+  let prefix = match previous
+    None => 0
+    Some prior => commonPrefix prior key
+  let wire = DcMap [
+    ("p", DcInt prefix),
+    ("k", DcBytes (drop prefix key)),
+    ("v", DcLink value),
+    ("t", childValue right),
+  ]
+  let (BuiltEntries later laterBlocks) = buildWireEntries next layer (Some key)
+  BuiltEntries (wire::later) (childBlocks right ++ laterBlocks)
+
+buildMst : List MstEntry -> Mst
+buildMst entries =
+  let layer = if length entries == 0 then 0 else maximumDepth entries 0
+  let (BuiltNode root bytes blocks) = buildNode entries layer
+  Mst entries root bytes blocks
+
+-- | The one canonical empty repository tree.
+export
+mstEmpty : Mst
+mstEmpty = buildMst []
+
+-- | Construct a canonical tree from an entry map in any input order.
+export
+mstFromEntries : List (Array Int, Cid) -> Result String Mst
+mstFromEntries entries = map buildMst (prepareEntries entries)
+
+lookupEntry : Array Int -> List MstEntry -> Option Cid
+lookupEntry _ [] = None
+lookupEntry key ((MstEntry candidate value _)::rest) = match bytesCompare key candidate
+  Lt => None
+  Eq => Some value
+  Gt => lookupEntry key rest
+
+-- | Look up one exact byte key.
+export
+mstLookup : Array Int -> Mst -> Option Cid
+mstLookup key (Mst entries _ _ _) = lookupEntry key entries
+
+copyEntries : List MstEntry -> List (Array Int, Cid)
+copyEntries [] = []
+copyEntries ((MstEntry key value _)::rest) =
+  (arrayCopy key, value) :: copyEntries rest
+
+-- | Return the authoritative entries in lexical byte order.
+export
+mstEntries : Mst -> List (Array Int, Cid)
+mstEntries (Mst entries _ _ _) = copyEntries entries
+
+-- | Insert a previously absent key.
+export
+mstInsert : Array Int -> Cid -> Mst -> Result String Mst
+mstInsert key value tree = match mstKeyDepth key
+  Err message => Err message
+  Ok _ => match mstLookup key tree
+    Some _ => Err "mst: duplicate key is not allowed"
+    None => mstFromEntries ((key, value) :: mstEntries tree)
+
+replaceEntry : Array Int -> Cid -> List (Array Int, Cid) -> List (Array Int, Cid)
+replaceEntry _ _ [] = []
+replaceEntry key value ((candidate, old)::rest) =
+  if bytesCompare key candidate == Eq then
+    (candidate, value)::rest
+  else
+    (candidate, old) :: replaceEntry key value rest
+
+-- | Replace the value at an existing key.
+export
+mstReplace : Array Int -> Cid -> Mst -> Result String Mst
+mstReplace key value tree = match mstKeyDepth key
+  Err message => Err message
+  Ok _ => match mstLookup key tree
+    None => Err "mst: replace key was not found"
+    Some _ => mstFromEntries (replaceEntry key value (mstEntries tree))
+
+deleteEntry : Array Int -> List (Array Int, Cid) -> List (Array Int, Cid)
+deleteEntry _ [] = []
+deleteEntry key ((candidate, value)::rest) =
+  if bytesCompare key candidate == Eq then
+    rest
+  else
+    (candidate, value) :: deleteEntry key rest
+
+-- | Delete an existing key, pruning the root back to the canonical empty node.
+export
+mstDelete : Array Int -> Mst -> Result String Mst
+mstDelete key tree = match mstKeyDepth key
+  Err message => Err message
+  Ok _ => match mstLookup key tree
+    None => Err "mst: delete key was not found"
+    Some _ => mstFromEntries (deleteEntry key (mstEntries tree))
+
+-- | Root node CID.
+export
+mstRootCid : Mst -> Cid
+mstRootCid (Mst _ root _ _) = root
+
+-- | Defensive copy of the canonical root node bytes.
+export
+mstRootBytes : Mst -> Array Int
+mstRootBytes (Mst _ _ bytes _) = arrayCopy bytes
+
+copyBlocks : List (Cid, Array Int) -> List (Cid, Array Int)
+copyBlocks [] = []
+copyBlocks ((cid, bytes)::rest) = (cid, arrayCopy bytes) :: copyBlocks rest
+
+-- | Complete root-first reachable set of canonical MST node blocks.
+export
+mstNodeBlocks : Mst -> List (Cid, Array Int)
+mstNodeBlocks (Mst _ _ _ blocks) = copyBlocks blocks
+
+decodeOptionalLink : String -> DagCbor -> Result String (Option Cid)
+decodeOptionalLink _ DcNull = Ok None
+decodeOptionalLink _ (DcLink cid) = Ok (Some cid)
+decodeOptionalLink label _ = Err "mst: \{label} must be a CID link or null"
+
+decodeEntries : List DagCbor -> Option (Array Int) -> List DecodedEntry -> Result String (List DecodedEntry)
+decodeEntries [] _ acc = Ok (reverse acc)
+decodeEntries (value::rest) previous acc = match value
+  DcMap [("k", DcBytes suffix), ("p", DcInt prefix), ("t", tree), ("v", DcLink leaf)] => if prefix < 0 then Err "mst: prefix length must be non-negative"
+  else match previous
+    None => if prefix /= 0 then Err "mst: first entry prefix length must be zero"
+    else
+      if arrayLength suffix == 0 then Err "mst: empty key is not allowed"
+      else match decodeOptionalLink "entry tree" tree
+        Err message => Err message
+        Ok child => decodeEntries rest (Some suffix) (DecodedEntry suffix leaf child :: acc)
+    Some prior => if prefix > arrayLength prior then Err "mst: prefix length exceeds previous key"
+    else
+      let key = take prefix prior ++ suffix
+      if arrayLength suffix == 0 then Err "mst: prefix compression produced an empty suffix"
+      else match bytesCompare prior key
+        Lt => match decodeOptionalLink "entry tree" tree
+          Err message => Err message
+          Ok child =>
+            decodeEntries rest (Some key) (DecodedEntry key leaf child :: acc)
+        _ => Err "mst: entry order is not strictly lexical"
+  _ => Err "mst: invalid node entry form"
+
+decodeNode : Array Int -> Result String DecodedNode
+decodeNode bytes = match dagCborDecode bytes
+  Err message => Err "mst: \{message}"
+  Ok value => match value
+    DcMap [("e", DcArray entries), ("l", left)] => match decodeOptionalLink "left subtree" left
+      Err message => Err message
+      Ok leftLink => map (DecodedNode leftLink) (decodeEntries entries None [])
+    _ => Err "mst: invalid node form; expected exactly fields e and l"
+
+entryKey : DecodedEntry -> Array Int
+entryKey (DecodedEntry key _ _) = key
+
+entryChild : DecodedEntry -> Option Cid
+entryChild (DecodedEntry _ _ child) = child
+
+allEntryDepth : List DecodedEntry -> Int -> Bool
+allEntryDepth [] _ = True
+allEntryDepth ((DecodedEntry key _ _)::rest) expected = match mstKeyDepth key
+  Err _ => False
+  Ok actual => actual == expected && allEntryDepth rest expected
+
+hasEntryChild : List DecodedEntry -> Bool
+hasEntryChild [] = False
+hasEntryChild (entry::rest) = match entryChild entry
+  Some _ => True
+  None => hasEntryChild rest
+
+hasOptionalCid : Option Cid -> Bool
+hasOptionalCid None = False
+hasOptionalCid (Some _) = True
+
+validateDecoded : Int -> Bool -> DecodedNode -> Result String Unit
+validateDecoded expected isRoot (DecodedNode left entries) =
+  if expected < 0 then Err "mst: node depth is below zero"
+  else match entries
+    [] => if isRoot then match left
+      Some _ =>
+        Err "mst: invalid node form; empty root points only to a subtree"
+      None =>
+        if expected == 0 then
+          Ok ()
+        else
+          Err "mst: empty root depth must be zero"
+    else match left
+      None => Err "mst: invalid node form; empty non-root leaf"
+      Some _ =>
+        if expected == 0 then
+          Err "mst: depth-zero node cannot link to a subtree"
+        else
+          Ok ()
+    _ =>
+      if not (allEntryDepth entries expected) then
+        Err "mst: entry depth does not match node depth"
+      else if expected == 0 && (hasOptionalCid left || hasEntryChild entries) then
+        Err "mst: depth-zero node cannot link to a subtree"
+      else
+        Ok ()
+
+-- | Strictly decode and validate one canonical node at a known depth.
+export
+mstValidateNodeBytes : Int -> Bool -> Array Int -> Result String Unit
+mstValidateNodeBytes expected isRoot bytes = match decodeNode bytes
+  Err message => Err message
+  Ok node => validateDecoded expected isRoot node
+
+cidMember : Cid -> List Cid -> Bool
+cidMember _ [] = False
+cidMember cid (candidate::rest) = cidEqual cid candidate || cidMember cid rest
+
+findBlock : Cid -> List (Cid, Array Int) -> Option (Array Int)
+findBlock _ [] = None
+findBlock cid ((candidate, bytes)::rest) =
+  if cidEqual cid candidate then
+    Some bytes
+  else
+    findBlock cid rest
+
+validateBlockRows : List (Cid, Array Int) -> List Cid -> Result String Unit
+validateBlockRows [] _ = Ok ()
+validateBlockRows ((cid, bytes)::rest) seen =
+  if cidMember cid seen then
+    Err "mst: duplicate node block CID"
+  else if not (cidEqual cid (cidForDagCbor bytes)) then
+    Err "mst: node block CID does not match bytes"
+  else
+    validateBlockRows rest (cid::seen)
+
+nodeChildren : DecodedNode -> List Cid
+nodeChildren (DecodedNode left entries) = optionalCid left
+  ++ entryChildren entries
+
+optionalCid : Option Cid -> List Cid
+optionalCid None = []
+optionalCid (Some cid) = [cid]
+
+entryChildren : List DecodedEntry -> List Cid
+entryChildren [] = []
+entryChildren (entry::rest) = optionalCid (entryChild entry)
+  ++ entryChildren rest
+
+nodeDepth : DecodedNode -> Int
+nodeDepth (DecodedNode _ []) = 0
+nodeDepth (DecodedNode _ (entry::_)) = match mstKeyDepth (entryKey entry)
+  Ok depth => depth
+  Err message => panic "mst: decoded key depth failed: \{message}"
+
+walkChildren : List Cid -> Int -> List (Cid, Array Int) -> List Cid -> List Cid -> Result String (List Cid)
+walkChildren [] _ _ _ visited = Ok visited
+walkChildren (child::rest) expected blocks active visited = match walkBlock child (Some expected) False blocks active visited
+  Err message => Err message
+  Ok nextVisited => walkChildren rest expected blocks active nextVisited
+
+walkBlock : Cid -> Option Int -> Bool -> List (Cid, Array Int) -> List Cid -> List Cid -> Result String (List Cid)
+walkBlock cid expected isRoot blocks active visited =
+  if cidMember cid active then Err "mst: invalid node form; subtree link cycle"
+  else
+    if cidMember cid visited then Err "mst: invalid node form; subtree block is referenced more than once"
+    else match findBlock cid blocks
+      None => Err "mst: missing reachable node block"
+      Some bytes => match decodeNode bytes
+        Err message => Err message
+        Ok node =>
+          let depth = match expected
+            Some value => value
+            None => nodeDepth node
+          match validateDecoded depth isRoot node
+            Err message => Err message
+            Ok () => walkChildren (nodeChildren node) (depth - 1) blocks (cid::active) (cid::visited)
+
+-- | Validate content binding and prove every supplied node block is reachable.
+export
+mstValidateBlocks : Cid -> List (Cid, Array Int) -> Result String Unit
+mstValidateBlocks root blocks = match validateBlockRows blocks []
+  Err message => Err message
+  Ok () => match walkBlock root None True blocks [] []
+    Err message => Err message
+    Ok visited =>
+      if length visited /= length blocks then
+        Err "mst: unreachable node block supplied"
+      else
+        Ok ()
