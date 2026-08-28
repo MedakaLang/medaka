@@ -76,3 +76,30 @@ long long ffiNotesLen(void) { return ffiNotes; }
 double ffiMix(long long i, double f, const char *s) {
   return (double)i + f + (double)strlen(s);
 }
+
+/* ── #2128: inbound Bool/Char that a REAL C library is free to return ────────
+ *
+ * The functions above are all well-behaved: ffiNegate returns exactly 0 or 1,
+ * ffiCharNext is only ever handed a valid codepoint.  That is the easy half.
+ * These six are the honest half — a C library is under NO obligation to return
+ * a value inside Medaka's `Bool`/`Char` subsets (FFI-ABI.md §2.1), and before
+ * the inbound normalisation `cTruthy`'s 42 became an immediate word that was
+ * neither True (3) nor False (1): `if` read it as true and `match` fell off the
+ * end into E-NONEXHAUSTIVE-MATCH, in the same program.  They are NOT pathological
+ * fixtures — `return 42` is what every C predicate written as `return flags &
+ * MASK;` does. */
+
+/* Bool, out of the 0/1 range but true by C's own rule. */
+long long cTruthy(void) { return 42; }
+/* Bool, in-range regression floor: these two must keep behaving exactly as before. */
+long long cFalsy(void) { return 0; }
+long long cOne(void) { return 1; }
+
+/* Char, in range: 65 = 'A'. */
+long long cCharA(void) { return 65; }
+/* Char, above charMaxBound (1114111). */
+long long cCharBig(void) { return 1200000; }
+/* Char, negative — a distinct arm because it reads as a HUGE unsigned, so it
+ * pins that the range check is unsigned rather than a signed `<=` that a
+ * negative would sail through. */
+long long cCharNeg(void) { return -1; }

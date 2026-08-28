@@ -1,5 +1,5 @@
 # META
-source_lines=12009
+source_lines=12085
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -3374,14 +3374,90 @@ ffiEmitCall e fname "Array" _ =
   gapE
     e
     "foreign call '\{fname}' returns 'Array Int', which has no length channel in a C return value (compiler/FFI-ABI.md section 2.4 specifies pointer PLUS length). There is currently NO working shape for returning array data from a C call in v1: an out-parameter does not work either, because an outbound 'Array Int' is COPIED to a fresh buffer for the call (section 2.4) and writes the C side makes to it are discarded. Return the elements one at a time through separate calls, or encode them into a String, until section 2.4 gains a copy-back"
--- §2.1: the returned C scalar is re-tagged `(x << 1) | 1`.  The `LTy` follows the
--- DECLARED head so `Bool`/`Char` results print and branch as themselves.
+-- §2.1 immediates, C → Medaka.  The returned C scalar is re-tagged
+-- `(x << 1) | 1`, and the `LTy` follows the DECLARED head so `Bool`/`Char`
+-- results print and branch as themselves.
+--
+-- 🚨 TAGGING ALONE IS NOT ENOUGH FOR `Bool`/`Char` (#2128).  `tagInt` is a
+-- faithful re-tag of WHATEVER 63-bit payload C handed back, and for `Int` that
+-- is exactly right — every `i64` is a valid `Int`.  `Bool` and `Char` are not
+-- like that: their native reps are SUBSETS of the immediate space (§8.1), and a
+-- user's C function is under no obligation to stay inside them.  The stdlib
+-- predicate externs elsewhere in this file also `tagInt` a raw `r`, but they
+-- call OUR OWN C in `runtime/medaka_rt.c`, written to return exactly 0 or 1; a
+-- foreign library was never told that contract.  Before this arm normalised,
+-- `long long cTruthy(void){ return 42; }` behind `extern cTruthy : Unit ->
+-- <FFI "…"> Bool` produced the word 85, which is NEITHER `3` (True) nor `1`
+-- (False) — and the two constructs that read a Bool DISAGREED on it: `if`
+-- untags and tests `!= 0` (emitIf), so it took the True branch, while `match`
+-- compares the immediate word against 3/1 exactly (emitRefutMatch), so it fell
+-- off the end into E-NONEXHAUSTIVE-MATCH.  Same program, same value, two
+-- answers.  So:
+--
+--   * `Bool` is NORMALISED, not merely tagged — C's own truthiness rule (0 is
+--     false, every other bit pattern is true) is applied at the boundary, which
+--     is the convention every C caller already writes to, and the result is one
+--     of the exactly two words `if` and `match` both agree about.
+--   * `Char` is VALIDATED and TRAPS — see ffiNormalizeChar.
 ffiEmitCall e fname rty cargs
   | ffiCrossableHead rty =
     let r = freshReg e
     let _ = emit e "  \{r} = call i64 @\{fname}(\{cargs})"
-    (tagInt e r, ffiImmediateLTy rty)
+    if rty == "Bool" then
+      (ffiNormalizeBool e r, LTBool)
+    else if rty == "Char" then
+      (ffiNormalizeChar e fname r, LTChar)
+    else
+      (tagInt e r, ffiImmediateLTy rty)
   | otherwise = gapE e "non-crossable return type '\{rty}' reached the FFI lowering (compiler/FFI-ABI.md section 1)"
+
+-- Inbound `Bool`: collapse an arbitrary C `long long` onto the two words the
+-- rest of the backend recognises, using C's own truthiness rule.  `icmp ne 0` →
+-- `zext` → `tagInt` yields `1` for 0 and `3` for anything else, so `if`'s
+-- untag-and-test-nonzero and `match`'s exact-word compare can no longer
+-- disagree.  In-range 0/1 round-trips unchanged, so this is a widening of what
+-- is handled correctly, never a change to what already worked.
+ffiNormalizeBool : Emit -> String -> String
+ffiNormalizeBool e r =
+  let b = freshReg e
+  let _ = emit e "  \{b} = icmp ne i64 \{r}, 0"
+  let z = freshReg e
+  let _ = emit e "  \{z} = zext i1 \{b} to i64"
+  tagInt e z
+
+-- Inbound `Char`: TRAP on an out-of-range codepoint rather than tag it.
+--
+-- The decision (FFI-ABI.md §2.1, recorded there and not only here): a `Char` has
+-- no C-side truthiness convention to normalise onto the way a `Bool` does, and
+-- there is no defensible value to substitute — clamping to `charMaxBound` or
+-- masking the low bits would invent a codepoint the C function never returned
+-- and hand it on at exit 0, which is exactly the silent-wrongness this arm
+-- exists to remove (AGENTS.md [W-QUIETER]: making a defect quieter is a severity
+-- INCREASE).  FFI-ABI.md §4's "a foreign call cannot fail into Medaka" governs
+-- the C function SIGNALLING failure through the effect system; it does not ask
+-- the ABI to launder data C has already got wrong, and an abort is not a value
+-- threaded back to a caller.
+--
+-- Valid range is the emitter's own `charMinBound`/`charMaxBound` (emitVar, words
+-- "1"/"2228223" = untagged 0 and 1114111, the Unicode scalar max).  ONE unsigned
+-- compare covers both ends: a negative `long long` reads as a huge unsigned and
+-- fails the same test.  The abort reuses @mdk_panic (already in the preamble),
+-- so no new runtime entry point is needed; it prints
+-- `runtime error [E-PANIC]: <msg>` and exits 1.
+ffiNormalizeChar : Emit -> String -> String -> String
+ffiNormalizeChar e fname r =
+  let n = intToString (freshLocal e)
+  let okL = "ffichar_ok" ++ n
+  let badL = "ffichar_bad" ++ n
+  let c = freshReg e
+  let _ = emit e "  \{c} = icmp ult i64 \{r}, 1114112"
+  let _ = emit e "  br i1 \{c}, label %\{okL}, label %\{badL}"
+  let _ = emit e (badL ++ ":")
+  let (msg, _) = emitLit e (LString "foreign call '\{fname}' returned a value outside the Char range 0..1114111 (compiler/FFI-ABI.md section 2.1); the C function must return a valid Unicode scalar for a 'Char' result")
+  let _ = emit e "  call void @mdk_panic(i64 \{msg})"
+  let _ = emit e "  unreachable"
+  let _ = emit e (okL ++ ":")
+  tagInt e r
 
 ffiImmediateLTy : String -> LTy
 ffiImmediateLTy "Bool" = LTBool
@@ -12621,7 +12697,11 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "ffiEmitCall" ((PVar "e") (PVar "fname") (PLit (LString "Float")) (PVar "cargs")) (EBlock (DoLet false false (PVar "d") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "d"))) (ELit (LString " = call double @"))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "("))) (EApp (EVar "display") (EVar "cargs"))) (ELit (LString ")"))))) (DoExpr (ETuple (EApp (EApp (EVar "boxFloat") (EVar "e")) (EVar "d")) (EVar "LTFloat")))))
 (DFunDef false "ffiEmitCall" ((PVar "e") (PVar "fname") (PLit (LString "String")) (PVar "cargs")) (EBlock (DoLet false false (PVar "p") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "p"))) (ELit (LString " = call ptr @"))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "("))) (EApp (EVar "display") (EVar "cargs"))) (ELit (LString ")"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r"))) (ELit (LString " = call i64 @mdk_ffi_str_in(ptr "))) (EApp (EVar "display") (EVar "p"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r") (EVar "LTStr")))))
 (DFunDef false "ffiEmitCall" ((PVar "e") (PVar "fname") (PLit (LString "Array")) PWild) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "foreign call '")) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' returns 'Array Int', which has no length channel in a C return value (compiler/FFI-ABI.md section 2.4 specifies pointer PLUS length). There is currently NO working shape for returning array data from a C call in v1: an out-parameter does not work either, because an outbound 'Array Int' is COPIED to a fresh buffer for the call (section 2.4) and writes the C side makes to it are discarded. Return the elements one at a time through separate calls, or encode them into a String, until section 2.4 gains a copy-back")))))
-(DFunDef false "ffiEmitCall" ((PVar "e") (PVar "fname") (PVar "rty") (PVar "cargs")) (EIf (EApp (EVar "ffiCrossableHead") (EVar "rty")) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r"))) (ELit (LString " = call i64 @"))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "("))) (EApp (EVar "display") (EVar "cargs"))) (ELit (LString ")"))))) (DoExpr (ETuple (EApp (EApp (EVar "tagInt") (EVar "e")) (EVar "r")) (EApp (EVar "ffiImmediateLTy") (EVar "rty"))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "non-crossable return type '")) (EApp (EVar "display") (EVar "rty"))) (ELit (LString "' reached the FFI lowering (compiler/FFI-ABI.md section 1)")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "ffiEmitCall" ((PVar "e") (PVar "fname") (PVar "rty") (PVar "cargs")) (EIf (EApp (EVar "ffiCrossableHead") (EVar "rty")) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r"))) (ELit (LString " = call i64 @"))) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "("))) (EApp (EVar "display") (EVar "cargs"))) (ELit (LString ")"))))) (DoExpr (EIf (EBinOp "==" (EVar "rty") (ELit (LString "Bool"))) (ETuple (EApp (EApp (EVar "ffiNormalizeBool") (EVar "e")) (EVar "r")) (EVar "LTBool")) (EIf (EBinOp "==" (EVar "rty") (ELit (LString "Char"))) (ETuple (EApp (EApp (EApp (EVar "ffiNormalizeChar") (EVar "e")) (EVar "fname")) (EVar "r")) (EVar "LTChar")) (ETuple (EApp (EApp (EVar "tagInt") (EVar "e")) (EVar "r")) (EApp (EVar "ffiImmediateLTy") (EVar "rty"))))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "non-crossable return type '")) (EApp (EVar "display") (EVar "rty"))) (ELit (LString "' reached the FFI lowering (compiler/FFI-ABI.md section 1)")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ffiNormalizeBool" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "ffiNormalizeBool" ((PVar "e") (PVar "r")) (EBlock (DoLet false false (PVar "b") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "b"))) (ELit (LString " = icmp ne i64 "))) (EApp (EVar "display") (EVar "r"))) (ELit (LString ", 0"))))) (DoLet false false (PVar "z") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "z"))) (ELit (LString " = zext i1 "))) (EApp (EVar "display") (EVar "b"))) (ELit (LString " to i64"))))) (DoExpr (EApp (EApp (EVar "tagInt") (EVar "e")) (EVar "z")))))
+(DTypeSig false "ffiNormalizeChar" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "ffiNormalizeChar" ((PVar "e") (PVar "fname") (PVar "r")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "okL") (EBinOp "++" (ELit (LString "ffichar_ok")) (EVar "n"))) (DoLet false false (PVar "badL") (EBinOp "++" (ELit (LString "ffichar_bad")) (EVar "n"))) (DoLet false false (PVar "c") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "c"))) (ELit (LString " = icmp ult i64 "))) (EApp (EVar "display") (EVar "r"))) (ELit (LString ", 1114112"))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "display") (EVar "c"))) (ELit (LString ", label %"))) (EApp (EVar "display") (EVar "okL"))) (ELit (LString ", label %"))) (EApp (EVar "display") (EVar "badL"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "badL") (ELit (LString ":"))))) (DoLet false false (PTuple (PVar "msg") PWild) (EApp (EApp (EVar "emitLit") (EVar "e")) (EApp (EVar "LString") (EBinOp "++" (EBinOp "++" (ELit (LString "foreign call '")) (EApp (EVar "display") (EVar "fname"))) (ELit (LString "' returned a value outside the Char range 0..1114111 (compiler/FFI-ABI.md section 2.1); the C function must return a valid Unicode scalar for a 'Char' result")))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  call void @mdk_panic(i64 ")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ")"))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  unreachable")))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "okL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EVar "tagInt") (EVar "e")) (EVar "r")))))
 (DTypeSig false "ffiImmediateLTy" (TyFun (TyCon "String") (TyCon "LTy")))
 (DFunDef false "ffiImmediateLTy" ((PLit (LString "Bool"))) (EVar "LTBool"))
 (DFunDef false "ffiImmediateLTy" ((PLit (LString "Char"))) (EVar "LTChar"))
@@ -14919,7 +14999,11 @@ emitTopBindsGaps e env ((CBind name _)::rest) =
 (DFunDef false "ffiEmitCall" ((PVar "e") (PVar "fname") (PLit (LString "Float")) (PVar "cargs")) (EBlock (DoLet false false (PVar "d") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "d"))) (ELit (LString " = call double @"))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "("))) (EApp (EMethodRef "display") (EVar "cargs"))) (ELit (LString ")"))))) (DoExpr (ETuple (EApp (EApp (EVar "boxFloat") (EVar "e")) (EVar "d")) (EVar "LTFloat")))))
 (DFunDef false "ffiEmitCall" ((PVar "e") (PVar "fname") (PLit (LString "String")) (PVar "cargs")) (EBlock (DoLet false false (PVar "p") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString " = call ptr @"))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "("))) (EApp (EMethodRef "display") (EVar "cargs"))) (ELit (LString ")"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString " = call i64 @mdk_ffi_str_in(ptr "))) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r") (EVar "LTStr")))))
 (DFunDef false "ffiEmitCall" ((PVar "e") (PVar "fname") (PLit (LString "Array")) PWild) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "foreign call '")) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' returns 'Array Int', which has no length channel in a C return value (compiler/FFI-ABI.md section 2.4 specifies pointer PLUS length). There is currently NO working shape for returning array data from a C call in v1: an out-parameter does not work either, because an outbound 'Array Int' is COPIED to a fresh buffer for the call (section 2.4) and writes the C side makes to it are discarded. Return the elements one at a time through separate calls, or encode them into a String, until section 2.4 gains a copy-back")))))
-(DFunDef false "ffiEmitCall" ((PVar "e") (PVar "fname") (PVar "rty") (PVar "cargs")) (EIf (EApp (EVar "ffiCrossableHead") (EVar "rty")) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString " = call i64 @"))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "("))) (EApp (EMethodRef "display") (EVar "cargs"))) (ELit (LString ")"))))) (DoExpr (ETuple (EApp (EApp (EVar "tagInt") (EVar "e")) (EVar "r")) (EApp (EVar "ffiImmediateLTy") (EVar "rty"))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "non-crossable return type '")) (EApp (EMethodRef "display") (EVar "rty"))) (ELit (LString "' reached the FFI lowering (compiler/FFI-ABI.md section 1)")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "ffiEmitCall" ((PVar "e") (PVar "fname") (PVar "rty") (PVar "cargs")) (EIf (EApp (EVar "ffiCrossableHead") (EVar "rty")) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString " = call i64 @"))) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "("))) (EApp (EMethodRef "display") (EVar "cargs"))) (ELit (LString ")"))))) (DoExpr (EIf (EBinOp "==" (EVar "rty") (ELit (LString "Bool"))) (ETuple (EApp (EApp (EVar "ffiNormalizeBool") (EVar "e")) (EVar "r")) (EVar "LTBool")) (EIf (EBinOp "==" (EVar "rty") (ELit (LString "Char"))) (ETuple (EApp (EApp (EApp (EVar "ffiNormalizeChar") (EVar "e")) (EVar "fname")) (EVar "r")) (EVar "LTChar")) (ETuple (EApp (EApp (EVar "tagInt") (EVar "e")) (EVar "r")) (EApp (EVar "ffiImmediateLTy") (EVar "rty"))))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "non-crossable return type '")) (EApp (EMethodRef "display") (EVar "rty"))) (ELit (LString "' reached the FFI lowering (compiler/FFI-ABI.md section 1)")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ffiNormalizeBool" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "ffiNormalizeBool" ((PVar "e") (PVar "r")) (EBlock (DoLet false false (PVar "b") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString " = icmp ne i64 "))) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString ", 0"))))) (DoLet false false (PVar "z") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "z"))) (ELit (LString " = zext i1 "))) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString " to i64"))))) (DoExpr (EApp (EApp (EVar "tagInt") (EVar "e")) (EVar "z")))))
+(DTypeSig false "ffiNormalizeChar" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "ffiNormalizeChar" ((PVar "e") (PVar "fname") (PVar "r")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "okL") (EBinOp "++" (ELit (LString "ffichar_ok")) (EVar "n"))) (DoLet false false (PVar "badL") (EBinOp "++" (ELit (LString "ffichar_bad")) (EVar "n"))) (DoLet false false (PVar "c") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "c"))) (ELit (LString " = icmp ult i64 "))) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString ", 1114112"))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EMethodRef "display") (EVar "c"))) (ELit (LString ", label %"))) (EApp (EMethodRef "display") (EVar "okL"))) (ELit (LString ", label %"))) (EApp (EMethodRef "display") (EVar "badL"))) (ELit (LString ""))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "badL") (ELit (LString ":"))))) (DoLet false false (PTuple (PVar "msg") PWild) (EApp (EApp (EVar "emitLit") (EVar "e")) (EApp (EVar "LString") (EBinOp "++" (EBinOp "++" (ELit (LString "foreign call '")) (EApp (EMethodRef "display") (EVar "fname"))) (ELit (LString "' returned a value outside the Char range 0..1114111 (compiler/FFI-ABI.md section 2.1); the C function must return a valid Unicode scalar for a 'Char' result")))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  call void @mdk_panic(i64 ")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ")"))))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  unreachable")))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "okL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EVar "tagInt") (EVar "e")) (EVar "r")))))
 (DTypeSig false "ffiImmediateLTy" (TyFun (TyCon "String") (TyCon "LTy")))
 (DFunDef false "ffiImmediateLTy" ((PLit (LString "Bool"))) (EVar "LTBool"))
 (DFunDef false "ffiImmediateLTy" ((PLit (LString "Char"))) (EVar "LTChar"))

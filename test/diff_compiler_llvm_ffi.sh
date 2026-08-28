@@ -41,6 +41,16 @@
 # library, its manifest key, and the manifest file — not clang's `ld: library not
 # found` wall.
 #
+# CELLS 7, 8 AND 9 are the INBOUND-SCALAR honesty slice (#2128).  Cells 1 and 3
+# only ever see a C half that stays inside Medaka's `Bool`/`Char` subsets, which
+# is the easy half of §2.1 and the half a real C library does not promise.  These
+# three assert what happens when it does not: an out-of-range C bool must read
+# the SAME under `if` and under `match` (it used not to — see cell 7), and an
+# out-of-range C codepoint must fail LOUDLY rather than print replacement
+# garbage at exit 0 (cell 9).  Their in-range companions are the regression
+# floor, not padding: a normalisation that mangled 0/1 or trapped on a valid
+# codepoint would satisfy the headline half alone.
+#
 # Usage:  sh test/diff_compiler_llvm_ffi.sh
 # Exit:   0 every cell produces its expected output;
 #         1 a build failed or the output differs;
@@ -307,6 +317,149 @@ else
     printf 'FAIL ffi_extern_shared      expected 22 then 6, got: %s\n' "$got6"
   fi
 fi
+
+# ── cell 7: INBOUND Bool — `if` and `match` must agree (#2128) ──────────────
+# The S1 this cell exists for: FFI-ABI.md §2.1's inbound rule used to be a bare
+# re-tag of whatever `long long` C returned, so `cTruthy`'s 42 became the
+# immediate word 85 — neither True (3) nor False (1).  `if` untags and tests
+# `!= 0` (emitIf), so it took the TRUE branch; `match` compares the word against
+# 3/1 exactly (emitRefutMatch), so it fell off the end into
+# E-NONEXHAUSTIVE-MATCH.  Same program, same runtime value, two answers, and the
+# `if` half at exit 0.
+#
+# 🚨 THE IN-RANGE LINES ARE THE REGRESSION FLOOR, NOT PADDING.  A "fix" that
+# normalised by MASKING the low bit, or that mapped every nonzero to False,
+# would satisfy the agreement half alone.  0 must still be False and 1 must
+# still be True, which is what `cFalsy`/`cOne` assert.
+#
+# Expected output is hand-computed from FFI-ABI.md §2.1's stated rule (C's own
+# truthiness: 0 is false, every other bit pattern is true) applied to the C
+# source, NOT captured: 42 -> True, 0 -> False, 1 -> True, and the `if` and
+# `match` readings of each are the SAME word.
+cat > "$W/ffi_bool_in.mdk" <<'CELL7'
+extern cTruthy : Unit -> <FFI> Bool
+extern cFalsy : Unit -> <FFI> Bool
+extern cOne : Unit -> <FFI> Bool
+
+viaMatch : Bool -> String
+viaMatch b = match b
+  True => "match:True"
+  False => "match:False"
+
+main : <IO, FFI> Unit
+main =
+  let _ = println (if cTruthy () then "if:True" else "if:False")
+  let _ = println (viaMatch (cTruthy ()))
+  let _ = println (cTruthy ())
+  let _ = println (if cFalsy () then "if:True" else "if:False")
+  let _ = println (viaMatch (cFalsy ()))
+  let _ = println (if cOne () then "if:True" else "if:False")
+  println (viaMatch (cOne ()))
+CELL7
+
+EXPECT_BOOL_IN='if:True
+match:True
+True
+if:False
+match:False
+if:True
+match:True'
+
+if ! MEDAKA_RT_OBJ="$W/combined.o" "$MEDAKA" build "$W/ffi_bool_in.mdk" \
+     -o "$W/bool_in.bin" >"$W/build7.log" 2>&1; then
+  echo "FAIL: inbound-Bool program did not build"; cat "$W/build7.log"; fail=$((fail+1))
+else
+  checked=$((checked+1))
+  got7="$("$W/bool_in.bin" 2>&1)"
+  if [ "$got7" = "$EXPECT_BOOL_IN" ]; then
+    echo "ok   ffi_inbound_bool       'if' and 'match' agree on an out-of-range C bool (42 -> True), 0/1 unchanged"
+  else
+    fail=$((fail+1))
+    echo "FAIL ffi_inbound_bool       output differs"
+    printf 'expected:\n%s\ngot:\n%s\n' "$EXPECT_BOOL_IN" "$got7"
+  fi
+fi
+
+# ── cell 8: INBOUND Char in range — round-trips through if/match/println ─────
+# The other half of #2128's regression floor.  65 IS a valid codepoint, so the
+# §2.1 range check must be transparent here: 'A' through an equality test, a
+# literal match arm, and Show alike.  A validation arm that trapped on a valid
+# codepoint, or that clamped every value, would redden exactly this cell.
+cat > "$W/ffi_char_in.mdk" <<'CELL8'
+extern cCharA : Unit -> <FFI> Char
+
+viaMatch : Char -> String
+viaMatch c = match c
+  'A' => "match:A"
+  _ => "match:other"
+
+main : <IO, FFI> Unit
+main =
+  let _ = println (if cCharA () == 'A' then "if:A" else "if:other")
+  let _ = println (viaMatch (cCharA ()))
+  println (cCharA ())
+CELL8
+
+EXPECT_CHAR_IN='if:A
+match:A
+A'
+
+if ! MEDAKA_RT_OBJ="$W/combined.o" "$MEDAKA" build "$W/ffi_char_in.mdk" \
+     -o "$W/char_in.bin" >"$W/build8.log" 2>&1; then
+  echo "FAIL: inbound-Char program did not build"; cat "$W/build8.log"; fail=$((fail+1))
+else
+  checked=$((checked+1))
+  got8="$("$W/char_in.bin" 2>&1)"
+  if [ "$got8" = "$EXPECT_CHAR_IN" ]; then
+    echo "ok   ffi_inbound_char       in-range codepoint 65 round-trips as 'A' through if/match/println"
+  else
+    fail=$((fail+1))
+    echo "FAIL ffi_inbound_char       output differs"
+    printf 'expected:\n%s\ngot:\n%s\n' "$EXPECT_CHAR_IN" "$got8"
+  fi
+fi
+
+# ── cell 9: INBOUND Char out of range — LOUD, never replacement garbage ──────
+# FFI-ABI.md §2.1's Char totality decision, pinned as behaviour: an out-of-range
+# codepoint TRAPS.  There is no honest value to substitute — clamping or masking
+# would invent a codepoint C never returned and print it at exit 0, which is the
+# silent wrongness the whole slice exists to remove (AGENTS.md [W-QUIETER]).
+# Before the fix, 1200000 was tagged as-is and `println` emitted replacement
+# garbage at exit 0.
+#
+# TWO values, not one: 1200000 is above charMaxBound, and -1 reads as a HUGE
+# unsigned — a signed `<=` bound check would let the negative sail straight
+# through, so the negative arm is what pins the check as unsigned.  Asserted on
+# BOTH a nonzero exit and the message text: a segfault would also exit nonzero.
+# ⚠️ exit code read by REDIRECT, never through a pipe — AGENTS.md [D-BUILD-PIPE].
+for cfn in cCharBig cCharNeg; do
+  cat > "$W/ffi_char_oob_$cfn.mdk" <<CELL9
+extern $cfn : Unit -> <FFI> Char
+
+main : <IO, FFI> Unit
+main = println ($cfn ())
+CELL9
+  if ! MEDAKA_RT_OBJ="$W/combined.o" "$MEDAKA" build "$W/ffi_char_oob_$cfn.mdk" \
+       -o "$W/oob_$cfn.bin" >"$W/build9_$cfn.log" 2>&1; then
+    echo "FAIL: out-of-range-Char program ($cfn) did not build"; cat "$W/build9_$cfn.log"; fail=$((fail+1))
+    continue
+  fi
+  checked=$((checked+1))
+  "$W/oob_$cfn.bin" >"$W/oob_$cfn.out" 2>"$W/oob_$cfn.err"
+  rc9=$?
+  if [ "$rc9" -eq 0 ]; then
+    printf 'FAIL ffi_inbound_char_oob   %s: exited 0 with stdout: %s\n' "$cfn" "$(cat "$W/oob_$cfn.err" "$W/oob_$cfn.out")"
+    fail=$((fail+1))
+  elif grep -q "runtime error" "$W/oob_$cfn.err" \
+    && grep -q "outside the Char range 0..1114111" "$W/oob_$cfn.err" \
+    && grep -q "$cfn" "$W/oob_$cfn.err" \
+    && [ ! -s "$W/oob_$cfn.out" ]; then
+    printf 'ok   ffi_inbound_char_oob   %s: trapped loudly (exit %d), naming the call and the range\n' "$cfn" "$rc9"
+  else
+    printf 'FAIL ffi_inbound_char_oob   %s: exit %d, wrong failure:\n' "$cfn" "$rc9"; fail=$((fail+1))
+    cat "$W/oob_$cfn.out" "$W/oob_$cfn.err"
+  fi
+done
 
 # ZERO-COMPARISON guard (docs/ops/TESTING-DESIGN.md §2.3): a gate that compared
 # nothing has proven nothing.

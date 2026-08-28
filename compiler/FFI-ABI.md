@@ -141,6 +141,65 @@ There is nothing to allocate and nothing to free on either side.
 - **C → Medaka:** the returned C scalar is tagged (`(x << 1) | 1`) on the way
   back in. Same non-issue: nothing was allocated, nothing to free.
 
+#### 2.1a Inbound `Bool` and `Char` are NORMALISED, not merely tagged
+
+The tagging rule above is the whole story for `Int` — every `int64_t` is a valid
+`Int`. It is **not** the whole story for `Bool` and `Char`, whose native reps are
+**subsets** of the immediate space (§8.1): `False` is exactly the word `1`, `True`
+exactly `3`, and a `Char` exactly `cp * 2 + 1` for `0 ≤ cp ≤ 1114111`
+(`charMinBound`/`charMaxBound`). A C function is under no obligation to stay
+inside either subset, and this ABI is the only place that can say what happens
+when it does not.
+
+**This was a live S1 (#2128), not a hypothetical.** Until 2026-08-28 the inbound
+arm re-tagged whatever it got, so `long long cTruthy(void){ return 42; }` behind
+`extern cTruthy : Unit -> <FFI "…"> Bool` produced the word `85` — neither `1`
+nor `3`. The two constructs that read a `Bool` then **disagreed on the same
+runtime value in the same program**: `if` untags and tests `!= 0`, so it took the
+`True` branch at exit 0, while `match` compares the immediate word against `3`/`1`
+exactly, so it died with `E-NONEXHAUSTIVE-MATCH`. An out-of-range `Char` was worse
+still: tagged as if valid, it printed replacement garbage at exit 0.
+
+- **`Bool` — normalised, by C's own rule.** The returned scalar is collapsed to
+  the two legal words before anything else sees it: `0` becomes `False`, every
+  other bit pattern becomes `True`. That is exactly the truthiness convention
+  every C caller already writes to (`return flags & MASK;` is idiomatic, not
+  sloppy), so it converts the commonest honest C idiom into the right Medaka
+  value rather than rejecting it — and, being one of exactly two words, `if` and
+  `match` can no longer disagree about it. `0` and `1` round-trip unchanged, so
+  nothing that already worked changes.
+
+- **`Char` — validated, and an out-of-range value TRAPS.** A codepoint has no
+  C-side convention to normalise onto the way a bool does, and there is no
+  defensible value to substitute: clamping to `charMaxBound`, masking the low
+  bits, or substituting U+FFFD would all invent a codepoint the C function never
+  returned and hand it onward at exit 0 — which is precisely the silent wrongness
+  this rule exists to remove (`AGENTS.md` [W-QUIETER]: making a defect quieter is
+  a severity *increase*). So the boundary range-checks `0 ≤ r ≤ 1114111` with a
+  single unsigned compare (a negative `long long` reads as a huge unsigned and
+  fails the same test) and aborts with a coded runtime error naming the foreign
+  call and the range when it fails. Cost is one compare and a never-taken branch
+  on a path that has just made a C call.
+
+  **Why this is not a violation of §4.** §4 says a foreign call cannot fail *into*
+  Medaka — meaning the C function has no channel for signalling *its own* failure
+  as a Medaka error, and must encode that in its return value instead. That
+  governs C-side failure signalling. It does not oblige the ABI to accept, and
+  pass on, data that C has already got wrong: an abort is not a value threaded
+  back to a Medaka caller, it is the same class of event as `E-INDEX-OOB`. The
+  alternative reading — "the ABI must always produce *some* `Char`" — is the
+  reading that makes `println` print garbage at exit 0.
+
+  A C function that legitimately has "no character" to return should say so in
+  its Medaka signature (return an `Int` codepoint the caller validates, or a
+  status code), exactly as §4 already directs for every other kind of C-side
+  failure.
+
+Gated by cells 7–9 of `test/diff_compiler_llvm_ffi.sh`, against the `cTruthy`/
+`cFalsy`/`cOne`/`cCharA`/`cCharBig`/`cCharNeg` functions in
+`test/ffi_fixtures/ffi_abi_probe.c`; implemented by `ffiNormalizeBool` /
+`ffiNormalizeChar` in `compiler/backend/llvm_emit.mdk`.
+
 ### 2.2 `Float`
 
 `Float` boxes (§8.4: boxed-first, `{i64 header, double}`), so unlike the other
@@ -294,6 +353,14 @@ machinery threading back across the boundary. A C function that itself
 crashes (segfault, abort) is outside any contract this document can make —
 that is native undefined behavior, not a Medaka-level failure this ABI is
 responsible for converting into anything.
+
+⚠️ **This convention is about the C side SIGNALLING failure; it does not license
+the ABI to launder malformed data.** §2.1a's `Char` range check aborts when C
+returns something that is not a Unicode scalar, and that is not a violation of
+the rule above: nothing is threaded back to a Medaka caller as a value, and no
+effect-system machinery crosses the boundary. It is the same class of event as
+`E-INDEX-OOB` — the alternative, producing *some* `Char` unconditionally, is a
+wrong answer at exit 0.
 
 ## 5. See also
 
