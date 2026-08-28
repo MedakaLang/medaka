@@ -293,6 +293,14 @@ VCHAIN_N="${STAGE_IR_VCHAIN_N:-125}"
 # module-count family (perf_scaling's 100/200/400) costs several times that and
 # does NOT belong here — perf_scaling already grades that band on TIME/ALLOC/OPS
 # for a fraction of the machine time.
+#
+# ⚠️ AND THE SMALL BAND IS STILL ENOUGH TO PIN #1879 — do not raise MOD_N to "see it
+# better". The `modules:typecheck` KNOWN_SLOW row below is graded at THIS default
+# band, where the live O(modules^2) term shows as r2=2.217 against its siblings'
+# 2.04. That 8% signal is usable only because Ir is DETERMINISTIC; the same 8% on
+# perf_scaling's TIME arm is what flaps. Raising the band would buy a bigger ratio
+# for several times the machine time and would invalidate the row's measured
+# ceiling/fixed pair, which are stated for 25/50/100.
 MOD_N="${STAGE_IR_MOD_N:-25}"
 MOD_FLOOR_N="${STAGE_IR_MOD_FLOOR_N:-2}"
 # K, R and F are the per-module CONSTANTS, transcribed with their values from
@@ -396,9 +404,21 @@ trmc=mdk_backend_trmc_analysis__detectDispatchGroups"
 # `resolveToLines`, `checkModules` not `checkOneToLinesWithRuntime`, `markModules`
 # not `markWithPrelude` — and `loadProgram` has no single-file counterpart at all.
 # So the single-file rows above are not "the frontend, covered": they are one of
-# two drivers, and the O(modules^2) family (#153/#154: checkModuleFullImpl's
-# per-module rescan, elabModuleStamp's buildKeyTable over the accumulated
-# universe) lands on stages ONLY this arm can name.
+# two drivers, and the O(modules^2) family (#153/#154) lands on stages ONLY this
+# arm can name.
+#
+# ⚠️ THE PARENTHETICAL THAT USED TO NAME THE SITES — "checkModuleFullImpl's
+# per-module rescan, elabModuleStamp's buildKeyTable over the accumulated universe" —
+# IS REFUTED BY MEASUREMENT, not merely unverified. Callgrind per-symbol attribution
+# at N=200 -> N=800 (see the `modules:typecheck` KNOWN_SLOW entry below for the full
+# table) puts the residual quadratic in `declEnvReachIndex`, `buildDataEnv`'s
+# `addFieldOwnerIdents`, the `importedCtorTypeDeclsLastWins` -> `overlayScanRows`
+# chain, and `ieAddRows` — three of which are whole-graph PREAMBLE work
+# (`checkModulesPreamble` -> `buildDeclEnvs`, reading 8.87x/9.89x against a linear
+# 4.00x) that did not exist when #153/#154 were written. `checkModuleFullImpl` itself
+# reads 5.02x, i.e. it CONTAINS the overlay term but is not itself the rescan the old
+# parenthetical describes, and `elabModuleStamp`/`buildKeyTable` do not appear on this
+# driver's profile at all (`checkModules`, not `elaborateModules`, is what runs here).
 #
 # Unlike the frontend rows above, this arm is NOT free: it is a second driver over
 # a second corpus, so it costs 4 additional callgrind runs. See the MOD_N block
@@ -440,10 +460,14 @@ trmc=mdk_backend_trmc_analysis__detectDispatchGroups"
 # (Contrast the `parse` row a `mdk_frontend_parser__parse` symbol would have
 # produced: net 0, SKIP, forever. The corrected row nets 3.0e8 at N=25.)
 #
-# Dead linear at this band, as expected: there is no known multi-module defect that
-# reddens at 25/50/100. This arm is a REGRESSION GUARD and a DRIVER-PARITY claim,
-# not a live pin — the module-count quadratic family is graded at 100/200/400 by
-# diff_compiler_perf_scaling.sh's TIME/ALLOC arms, which can afford that band.
+# ⚠️ "Dead linear at this band, as expected: there is no known multi-module defect
+# that reddens at 25/50/100 ... This arm is a REGRESSION GUARD and a DRIVER-PARITY
+# claim, not a live pin" USED TO STAND HERE AND IS RETIRED. `typecheck`'s 2.190/2.217
+# above is NOT its five siblings' 2.04-2.09; it is the visible tail of a live
+# O(modules^2) term (#1879), and this arm is now that defect's LIVE PIN — see the
+# `modules:typecheck` entry in KNOWN_SLOW below for the four attributed sites and the
+# ceiling/fixed pair. The other five MOD_SYMS rows remain a regression guard and a
+# driver-parity claim, as written.
 MOD_SYMS="parse=mdk_frontend_parser__parseResult \
 load=mdk_driver_loader__loadProgram \
 desugar=mdk_frontend_desugar__desugar \
@@ -457,13 +481,12 @@ typecheck=mdk_types_typecheck__checkModules"
 # ratio: the gate stays green, but FAILS if the ratio worsens past its ceiling and
 # FAILS demanding promotion the instant a fix drops it back to linear.
 #
-# THE LEDGER IS CURRENTLY EMPTY, and that is the drained end state, not a disabled
-# gate: every graded row is held to the plain 3.0 threshold. `match:lower` was the
-# one entry (issue #408, ledgered at ceiling 4.00 / fixed 2.60 against a measured
-# r1 3.328 r2 3.640); it PROMOTED and was removed when the two `core_ir_lower.mdk`
-# quadratics behind it were fixed for the shipped `gen_match` shape — see the
-# block above (and its scope caveat: the wildcard-row-scaling case is #2125, not
-# fixed here). Re-adding a row means
+# THE LEDGER HOLDS EXACTLY ONE ROW: `modules:typecheck` (#1879). `match:lower` was
+# the previous entry (issue #408, ledgered at ceiling 4.00 / fixed 2.60 against a
+# measured r1 3.328 r2 3.640); it PROMOTED and was removed when the two
+# `core_ir_lower.mdk` quadratics behind it were fixed for the shipped `gen_match`
+# shape — see the block above (and its scope caveat: the wildcard-row-scaling case
+# is #2125, not fixed here). Re-adding a row means
 # re-adding its `KNOWN_CEIL_<shape>_<stage>` / `KNOWN_FIXED_<shape>_<stage>` pair
 # alongside it, and saying in a comment here what issue it pins and at what band
 # it was measured.
@@ -476,12 +499,68 @@ typecheck=mdk_types_typecheck__checkModules"
 # (`conlocal:typecheck` / `conlocal:mark`), for 33x less machine time on the same
 # band. Do not add it here without re-reading the cost note in STAGE_SYMS.
 #
-# NO MULTI-MODULE ROW IS LEDGERED, and that too is a measurement: every stage in
-# MOD_SYMS reads 2.0-2.22 at the shipped 25/50/100 band. The module-count quadratic
-# family (#153/#154) does not reach at that band and is graded at 100/200/400 by
-# perf_scaling's TIME/ALLOC arms; a `modules:` ledger row here would need its own
-# KNOWN_CEIL_modules_<stage> / KNOWN_FIXED_modules_<stage> pair, exactly as above.
-KNOWN_SLOW=""
+# ── modules:typecheck — #1879, LEDGERED 2026-08-28. THE ARM OF RECORD FOR IT. ──
+#
+# ⚠️ THIS BLOCK USED TO SAY "NO MULTI-MODULE ROW IS LEDGERED, and that too is a
+# measurement: every stage in MOD_SYMS reads 2.0-2.22 ... The module-count quadratic
+# family (#153/#154) does not reach at that band". The first clause is still true as a
+# reading and FALSE as a conclusion, and that gap is the whole of #1879: `typecheck`'s
+# 2.190/2.217 is not the same shape as its five siblings' 2.04-2.09 in the SAME run.
+# It is a real, LIVE O(modules^2) term whose LINEAR part still dominates at this band,
+# so the ratio-of-ratios detector is structurally mis-shaped for it rather than merely
+# mis-tuned: a mixed a*N + b*N^2 curve creeps toward r2=4 asymptotically and may cross
+# `r2 > r1*1.15 && r2 > 2.45` only in a narrow window of N, if ever.
+#
+# THE MEASUREMENT (this box, this tree, deterministic Ir, N=25/50/100 K=8):
+#     typecheck net 398091174 -> 871828884 -> 1932587912    r1=2.190 r2=2.217
+#     every other MOD_SYMS stage in the same run: r1 2.086-2.089, r2 2.041-2.044
+#
+# THE ATTRIBUTION, which is why this is a LEDGER and not a fix. Callgrind inclusive Ir
+# per symbol, module count x4 (N=200 -> N=800, same generator, K=8; LINEAR reads 4.00,
+# QUADRATIC reads 16.00). `checkModules` itself reads 6.93, and its quadratic EXCESS
+# over linear (33.399e9 - 4x4.821e9 = 14.115e9 Ir) decomposes into FOUR INDEPENDENT
+# sites, none a majority:
+#
+#   declEnvReachIndex               23.47x   4.606e9 excess  33%  compiler/types/typecheck.mdk
+#   buildDataEnv/addFieldOwnerIdents 16.11x  4.027e9 excess  29%
+#   importedCtorTypeDeclsLastWins    15.47x  3.652e9 excess  26%   -> findOverlayDecl -> overlayScanRows
+#   ieAddRows (in buildImplEnv)       7.39x  2.746e9 excess  19%
+#
+# Cross-validated on an INDEPENDENT channel (invocation counts out of the callgrind
+# `calls=` records), which discriminates two distinct mechanisms rather than merely
+# re-reading the first: `overlayScan` and the `declEnvReach*` walk have QUADRATIC CALL
+# COUNTS (15.85x / 15.82x) — a per-module scan of a whole-graph list; while
+# `addFieldOwnerIdents` (4.00x calls) and `ieInsertRow` (3.80x calls) have LINEAR call
+# counts and quadratic COST PER CALL — the house `existing ++ [new]` append onto a list
+# that grows with the module count.
+#
+# Two of the four are one-line fixes their own headers already record as OWED
+# (`ieInsertRow`'s header names the remedy verbatim: "cons and `reverseL` once in
+# `buildImplEnv`"), and two are quadratic BY CONSTRUCTION on an import chain
+# (`declEnvReachIndex`'s own header: "the index's own SIZE is already quadratic on a
+# chain ... so no build can be cheaper"; `findOverlayDecl`'s: "`pool` is the WHOLE
+# accumulated universe and this runs once per UseGroup member of every module"). So no
+# single fix drops this row's slope, which is exactly why it is ledgered rather than
+# left as a threshold to be widened later.
+#
+# CEILING 2.45 clears the measured r2=2.217 by ~10%, the same margin convention
+# `match:lower` used (4.00 against 3.640). Ir is deterministic, so the margin absorbs
+# source drift, not run noise. FIXED 2.10 sits above the 2.041-2.044 the five sibling
+# stages read in the SAME run — i.e. above where a genuinely linear `typecheck` lands —
+# and clearly below the observed 2.217, so it can neither false-promote nor fail to
+# promote a real fix.
+#
+# 🚦 THIS ROW REPLACES `test/diff_compiler_perf_scaling.sh`'s `modules` typecheck TIME
+# verdict as the arm of record for #1879. That arm sees the SAME curve (r1=2.21 r2=2.43
+# one run, r1~2.1 r2~2.67 the next) but sits on its climbing clause's trip point, so it
+# FLAPS; and that file's `modules` shape is outside the SHAPES loop and has no ledger
+# arm at all, so the only things available to it are widening or flooring, both of which
+# [W-QUIETER] forbids. It stays live and unwidened as a coarse second opinion; a red
+# there is diagnosed against THIS row.
+KNOWN_SLOW="
+modules:typecheck
+"
+KNOWN_CEIL_modules_typecheck="2.45";  KNOWN_FIXED_modules_typecheck="2.10"
 
 is_known() {
   [ -n "${STAGE_IR_NO_LEDGER:-}" ] && return 1

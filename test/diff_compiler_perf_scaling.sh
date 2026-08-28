@@ -1523,15 +1523,27 @@ TIME_STAGES="parse exhaust-guards desugar resolve mark typecheck elaborate dce m
 # fix drops typecheck under the 200ms floor at the largest N, tripping the "too FAST
 # to time-gate" promotion branch).
 # #154 PR-A/PR-B/PR-C drained modules:typecheck: PR-C removed the last foldModules-concat
-# O(N^2) (see KNOWN_SUPERLINEAR note), and typecheck TIME fell UNDER the 200ms floor at the
-# gate's N (190ms @ N=400) — the same "too fast to time-gate" outcome as match/listlit under
-# #115 (match 6.0s->0.11s, listlit 5.3s->0.06s). PROMOTED OUT 2026-07-16; the modules block
-# now SKIPS the typecheck TIME below the floor (unledgered rule-4 behavior) and hard-gates it
-# as SUPERLINEAR if it ever climbs back over. ⚠️ Re-decided EVERY run from the live
-# measurement (see the `below` check ~15 lines into the `modules` case below), not a
-# one-time fact pinned by the 190ms @ N=400 sample above — a run under enough concurrent
-# box load to push mt3 back over TIME_FLOOR takes the hard-gate branch instead of the skip,
-# which reads as a regression rather than noise (issue #2018).
+# O(N^2) (see KNOWN_SUPERLINEAR note) and the row was PROMOTED OUT 2026-07-16.
+#
+# 🚨 THE REST OF THIS ENTRY AS IT STOOD IS FALSIFIED, AND BOTH HALVES OF IT ARE. It claimed
+# typecheck TIME "fell UNDER the 200ms floor at the gate's N (190ms @ N=400)", so that the
+# modules block would SKIP the TIME grade; and it hedged that a run "under enough concurrent
+# box load" could push mt3 back over the floor and take the hard-gate branch, reading as a
+# regression rather than noise (#2018). MEASURED on this tree, min-of-5, heap pinned, N=400:
+# **1942 ms** — 10.2x the 190 ms sample and 9.7x the floor. The SKIP branch has not been
+# reachable at this band; every run takes the GRADING branch, which is what #1879 saw. And
+# the load hedge is falsified with it: box load does not multiply a min-of-5 heap-pinned
+# reading by ten, so the 190 ms sample was stale or mis-taken, not a scheduling artefact.
+# (Its neighbour at the SKIP message's own parenthetical — "linear since #154 PR-C" — is
+# falsified too; see the TIME verdict block below for what actually replaced it.)
+#
+# 🚦 TIME IS NO LONGER THE ARM OF RECORD FOR THIS ISSUE. #1879's flap is a REAL
+# sub-threshold O(modules^2) term measured on three independent channels, and the arm that
+# pins it is now the DETERMINISTIC one: `test/diff_compiler_stage_ir_scaling.sh`'s
+# `modules:typecheck` KNOWN_SLOW row (see its KNOWN_SLOW block for the ceiling/fixed pair and
+# the four attributed sites). This TIME grade STAYS LIVE as a coarse second opinion — it is
+# not widened, retired, or floored away, because making a loud defect quieter is a severity
+# increase — but a red here is now read against that Ir row, not treated as a novel finding.
 #   xref:emit — ✅ PROMOTED OUT 2026-07-17 (PR #554). The gate FOUND this quadratic
 #     the moment it could see the backend (2026-07-16, issue #359) and has now
 #     watched it DIE: r2=1.98 (< 2.60) — the emit stage scales LINEARLY. The row is
@@ -2851,10 +2863,18 @@ esac
 # loadProgram -> markModules -> checkModules) over N import-chained modules so the
 # accumulated-decl rescans actually execute. It is graded on BOTH net-total
 # allocation (its own baseline, subtracted like the single-file shapes) AND, since
-# the scan-heavy part is time-dominant, the per-stage `typecheck` TIME. It is a
-# LEDGERED entry (KNOWN_SUPERLINEAR + KNOWN_SLOW_TIME): a real, currently-UNFIXED
-# quadratic (#154/#150), recorded so the gate is green now yet self-drains the
-# instant those fixes land. See both ledger blocks above for the contract.
+# the scan-heavy part is time-dominant, the per-stage `typecheck` TIME.
+#
+# ⚠️ IT IS NOT A LEDGERED ENTRY, and this header used to say it was ("a LEDGERED entry
+# (KNOWN_SUPERLINEAR + KNOWN_SLOW_TIME)"). #154 PR-C drained both rows in 2026-07-16 and
+# neither was re-added. It could not be re-added here anyway: this shape is NOT in the
+# SHAPES loop, so `is_known`/`is_known_time` are never consulted for it — its ALLOC and
+# TIME verdicts below are open-coded, with no ledger arm at all. That is precisely why
+# the pin for the LIVE sub-threshold quadratic this shape carries (#1879) lives on
+# `test/diff_compiler_stage_ir_scaling.sh`'s `modules:typecheck` KNOWN_SLOW row instead:
+# that arm HAS a self-draining ledger and a deterministic measure, and this one has
+# neither. Do not "fix" a red here by widening a threshold or flooring the stage out —
+# see the TIME verdict block below.
 MOD_N="${PERF_MOD_N:-100}"
 MOD_K="${PERF_MOD_K:-8}"
 mn1="$MOD_N"; mn2=$((MOD_N * 2)); mn3=$((MOD_N * 4))
@@ -2892,37 +2912,73 @@ case "$MBASE_ALLOC$ma1$ma2$ma3" in
     mnet3="$(awk -v a="$ma3" -v b="$MBASE_ALLOC" 'BEGIN{printf "%.1f", a-b}')"
 
     # ── ALLOC verdict: HARD LINEAR GATE (#154 PR-C promoted `modules` OUT of the ledger
-    # 2026-07-16).  The foldModules-concat O(modules^2) is gone; net-alloc r2 is FLAT ~2.0
-    # to N=1600.  Graded exactly like the single-file shapes: r2 > THRESH (or a CLIMBING
-    # ratio) FAILS as SUPERLINEAR; a too-small measurement is a harness failure, never a
-    # silent pass. ──
+    # 2026-07-16).  The foldModules-concat O(modules^2) is gone.  Graded exactly like the
+    # single-file shapes: r2 > THRESH (or a CLIMBING ratio) FAILS as SUPERLINEAR; a
+    # too-small measurement is a harness failure, never a silent pass. ──
+    #
+    # ⚠️ "net-alloc r2 is FLAT ~2.0 to N=1600" USED TO STAND HERE AND IS NOT TRUE.  Measured
+    # at N=100/200/400, K=8, heap pinned: 399.1 / 857.6 / 1951.6 MB, r1=2.15 r2=2.28 — which
+    # fits the same a*N + b*N^2 model the Ir and TIME arms fit, with a quadratic term worth
+    # 24.3% of the N=400 total.  ALLOC is not FLAT here, it is SUB-THRESHOLD: it sees the
+    # least of the same defect the other two arms see.  Do not cite this arm's green as
+    # evidence that a `modules:typecheck` regression "costs time without costing allocation";
+    # it costs both, just under both gates' thresholds.  The pin is stage_ir_scaling's
+    # `modules:typecheck` KNOWN_SLOW row.
+    # ⚠️ THE FOURTH FIELD IS THE CLAUSE THAT FIRED, AND IT IS NOT COSMETIC.  The
+    # verdict is a DISJUNCTION (`r2 > th` OR `climbing`), so a bare "** SUPERLINEAR
+    # (ALLOC) **" leaves the reader to guess which half tripped — and the TIME twin
+    # below used to guess WRONG IN PRINT, telling #1879 it had exceeded 3.0x when it
+    # had actually tripped the climbing clause at r2≈2.67.  Naming the clause is what
+    # makes the failure text a measurement rather than a label.
     averdict="$(awk -v n1="$mnet1" -v n2="$mnet2" -v n3="$mnet3" -v th="$THRESH" 'BEGIN {
-      if (n1 + 0 < 1.0) { printf "0 0 TOOSMALL"; exit }
+      if (n1 + 0 < 1.0) { printf "0 0 TOOSMALL -"; exit }
       r1 = n2 / n1; r2 = n3 / n2
       climbing = (r2 > r1 * 1.15 && r2 > 2.45)
-      printf "%.2f %.2f %s", r1, r2, ((r2 > th || climbing) ? "QUADRATIC" : "ok")
+      why = (r2 > th) ? "threshold" : (climbing ? "climbing" : "-")
+      printf "%.2f %.2f %s %s", r1, r2, ((r2 > th || climbing) ? "QUADRATIC" : "ok"), why
     }')"
     mar1="$(echo "$averdict" | cut -d' ' -f1)"
     mar2="$(echo "$averdict" | cut -d' ' -f2)"
     aword="$(echo "$averdict" | cut -d' ' -f3)"
+    awhy="$(echo "$averdict" | cut -d' ' -f4)"
+    if [ "$awhy" = "threshold" ]; then
+      aclause="r2 > ${THRESH}x"
+    else
+      aclause="climbing: r2 > r1 x 1.15 AND r2 > 2.45"
+    fi
     if [ "$aword" = "TOOSMALL" ]; then
       fail=$((fail+1))
       printf '%-10s %8s %7s MB %7s MB %7s MB  %6s %6s  ** N TOO SMALL — raise PERF_MOD_N **\n' \
         "modules" "$mn1" "$mnet1" "$mnet2" "$mnet3" "-" "-"
     elif [ "$aword" = "QUADRATIC" ]; then
       fail=$((fail+1))
-      printf '%-10s %8s %7s MB %7s MB %7s MB  %6s %6s  ** SUPERLINEAR (ALLOC) **\n' \
-        "modules" "$mn1" "$mnet1" "$mnet2" "$mnet3" "$mar1" "$mar2"
+      printf '%-10s %8s %7s MB %7s MB %7s MB  %6s %6s  ** SUPERLINEAR (ALLOC) ** (%s)\n' \
+        "modules" "$mn1" "$mnet1" "$mnet2" "$mnet3" "$mar1" "$mar2" "$aclause"
     else
       pass=$((pass+1))
       printf '%-10s %8s %7s MB %7s MB %7s MB  %6s %6s  ok\n' \
         "modules" "$mn1" "$mnet1" "$mnet2" "$mnet3" "$mar1" "$mar2"
     fi
 
-    # ── TIME verdict: no longer ledgered (#154 PR-C).  typecheck TIME is now UNDER the
-    # 200ms floor at the gate's N (the fix dropped it there), so it SKIPS loudly — the same
-    # rule-4 floor behavior the single-file loop applies to an UN-ledgered stage.  If it
-    # ever climbs back over the floor it is hard-gated: r2 > THRESH (or climbing) = SUPERLINEAR. ──
+    # ── TIME verdict: no longer ledgered (#154 PR-C), hard-gated like any un-ledgered stage:
+    # r2 > THRESH (or climbing) = SUPERLINEAR, with a rule-4 SKIP below TIME_FLOOR. ──
+    #
+    # 🚨 THE SKIP BRANCH IS NOT REACHED AT THIS BAND, and the comment that used to stand here
+    # said it was ("typecheck TIME is now UNDER the 200ms floor at the gate's N").  MEASURED,
+    # min-of-5, heap pinned, N=400: 1942 ms — 9.7x the floor.  The `below` check stays because
+    # it is re-decided every run from the live number, but do not read it as a description of
+    # what happens: every run at PERF_MOD_N=100 grades.
+    #
+    # 🚦 THE ARM OF RECORD FOR #1879 IS NO LONGER THIS ONE.  What this grade sees is real —
+    # a live O(modules^2) term, confirmed on three independent channels (Ir, heap-pinned
+    # ALLOC, min-of-5 TIME) — but it sits so close to the climbing clause's trip point that
+    # the verdict FLAPS run to run (r2=2.43 passing by 0.02 one run, 2.67 failing the next).
+    # A flapping verdict on a real defect is the worst of both.  The pin is now
+    # `test/diff_compiler_stage_ir_scaling.sh`'s `modules:typecheck` KNOWN_SLOW row: same
+    # curve, deterministic instruction counts, a ceiling that fails on worsening and a fixed
+    # point that fails demanding promotion.  This TIME grade is deliberately LEFT LIVE and
+    # UNWIDENED — quieting a loud defect is a severity increase ([W-QUIETER]) — but a red
+    # here is now diagnosed against that Ir row rather than filed as a new finding.
     if [ -z "$mt1" ] || [ -z "$mt2" ] || [ -z "$mt3" ]; then
       echo "           time typecheck: NO MEASUREMENT from the profiler (harness bug)"
       fail=$((fail+1))
@@ -2931,15 +2987,34 @@ case "$MBASE_ALLOC$ma1$ma2$ma3" in
       if [ "$below" = "1" ]; then
         ms3="$(awk -v v="$mt3" 'BEGIN{printf "%.0f", v*1000}')"
         msf="$(awk -v f="$TIME_FLOOR" 'BEGIN{printf "%.0f", f*1000}')"
-        printf '           time typecheck: SKIP — too small to time-gate: %s ms at N=%s < %s ms floor (linear since #154 PR-C)\n' "$ms3" "$mn3" "$msf"
+        # ⚠️ NOT "(linear since #154 PR-C)", which is what this line used to assert: the Ir
+        # arm measures a live quadratic term here (stage_ir_scaling's `modules:typecheck`
+        # KNOWN_SLOW row).  Below the floor this arm declines to grade; it does not certify.
+        printf '           time typecheck: SKIP — too small to time-gate: %s ms at N=%s < %s ms floor (NOT a linearity claim — see stage_ir_scaling modules:typecheck)\n' "$ms3" "$mn3" "$msf"
       else
         mtr1="$(awk -v a="$mt1" -v b="$mt2" 'BEGIN{printf "%.2f", b/a}')"
         mtr2="$(awk -v a="$mt2" -v b="$mt3" 'BEGIN{printf "%.2f", b/a}')"
-        tbad="$(awk -v r1="$mtr1" -v r2="$mtr2" -v th="$THRESH" 'BEGIN{print (r2 > th || (r2 > r1 * 1.15 && r2 > 2.45)) ? 1 : 0}')"
+        # 🚨 THE FAILURE TEXT MUST NAME THE CLAUSE THAT FIRED.  It used to print
+        # "(> ${THRESH}x)" unconditionally, so #1879 — which failed on the CLIMBING
+        # clause at r1≈2.1 r2≈2.67, comfortably BELOW 3.0 — was told it had exceeded
+        # 3.0x.  Anyone reading that line went looking for a 3x regression that did not
+        # exist.  Same disjunction, same two clauses, as the ALLOC arm above.
+        tverdict="$(awk -v r1="$mtr1" -v r2="$mtr2" -v th="$THRESH" 'BEGIN{
+          climbing = (r2 > r1 * 1.15 && r2 > 2.45)
+          bad = (r2 > th || climbing)
+          printf "%d %s", bad, ((r2 > th) ? "threshold" : (climbing ? "climbing" : "-"))
+        }')"
+        tbad="$(echo "$tverdict" | cut -d' ' -f1)"
+        twhy="$(echo "$tverdict" | cut -d' ' -f2)"
+        if [ "$twhy" = "threshold" ]; then
+          tclause="r2 > ${THRESH}x"
+        else
+          tclause="climbing: r2 > r1 x 1.15 AND r2 > 2.45"
+        fi
         if [ "$tbad" = "1" ]; then
           fail=$((fail+1))
-          printf '           time typecheck: ** SUPERLINEAR (TIME) ** %ss -> %ss -> %ss  r1=%s r2=%s (> %sx)\n' \
-            "$mt1" "$mt2" "$mt3" "$mtr1" "$mtr2" "$THRESH"
+          printf '           time typecheck: ** SUPERLINEAR (TIME) ** %ss -> %ss -> %ss  r1=%s r2=%s (%s)\n' \
+            "$mt1" "$mt2" "$mt3" "$mtr1" "$mtr2" "$tclause"
         else
           printf '           time typecheck: ok  %ss -> %ss -> %ss  r1=%s r2=%s (min-of-%s, heap pinned)\n' \
             "$mt1" "$mt2" "$mt3" "$mtr1" "$mtr2" "$PERF_K"
