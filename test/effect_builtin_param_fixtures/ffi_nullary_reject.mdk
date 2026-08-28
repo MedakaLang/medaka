@@ -10,8 +10,8 @@
 --
 -- 🚨 Read together with `ffi_stamp_narrow_accept.mdk`: the difference is only
 -- whether an ARROW exists, so a fix that rejected every extern would show green
--- here and red there.  #2106 -- how a nullary extern WOULD spell a label -- is a
--- separate, still-open design question; this cell pins only the refusal.
+-- here and red there.  #2106 -- how a nullary extern WOULD spell a label -- is
+-- CLOSED by this refusal (there is no spelling, and none is needed).
 extern gNullary : Int
 
 main : <IO> Unit

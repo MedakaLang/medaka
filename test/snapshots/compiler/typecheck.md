@@ -1,5 +1,5 @@
 # META
-source_lines=36856
+source_lines=36896
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -29046,10 +29046,12 @@ expandAliasHeadTy t = t
 -- where the effect system has nowhere to put a row (`extern q : <FFI> Int`
 -- renders as a bare `Int`; a value does not perform).
 --
--- ⚠️ `None` IS STILL "THE LABEL RULE CANNOT REACH THIS", AND THAT IS STILL #2106's
--- QUESTION.  What changed is what the caller does with the answer: it used to fall
--- through to a pass, which let the emitter lower an unlabellable declaration as a
--- foreign call anyway (S0-2).  `ffiCheckExternLabel` below now reports it instead.
+-- ⚠️ `None` IS STILL "THE LABEL RULE CANNOT REACH THIS" — that was #2106's
+-- question, and #2106 is now CLOSED by refusal rather than by a spelling (see
+-- `ffiCheckExternLabel`).  What changed is what the caller does with the answer:
+-- it used to fall through to a pass, which let the emitter lower an unlabellable
+-- declaration as a foreign call anyway (S0-2).  `ffiCheckExternLabel` below now
+-- reports it instead.
 -- The distinction this function draws is unchanged; do not fold `None` into `Some
 -- False`, because the two need different messages — one is a missing label, the
 -- other is a signature with nowhere to put one.
@@ -29313,7 +29315,41 @@ ffiCheckCatalogRowOne n ty catRow =
     missing => pushTypeErrorAt "T-FFI-CATALOG-NARROW" (firstTyLoc ty) (ffiCatalogNarrowMsg n catAtoms declAtoms missing)
 
 ffiCatalogNarrowMsg : String -> List Atom -> List Atom -> List Atom -> String
-ffiCatalogNarrowMsg n cat decl missing = "Foreign declaration '\{n}' redeclares a built-in runtime name with a NARROWER effect row: the built-in performs <\{renderAtoms cat}>, this declaration claims <\{renderAtoms decl}>, which does not cover <\{renderAtoms missing}>. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, whatever the local signature says — so '\{n}' really does perform <\{renderAtoms missing}>, and every caller typechecked against this declaration would be told it does not. Declare the built-in's own row `<\{renderAtoms cat}>` (a WIDER row such as `<IO>` is also accepted — over-declaring is safe), or rename the extern to a name the runtime does not already define"
+ffiCatalogNarrowMsg n cat decl missing = "Foreign declaration '\{n}' redeclares a built-in runtime name with a NARROWER effect row: the built-in performs <\{renderAtoms cat}>, this declaration claims <\{renderAtoms decl}>, which does not cover <\{renderAtoms missing}>. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, whatever the local signature says — so '\{n}' really does perform <\{renderAtoms missing}>, and every caller typechecked against this declaration would be told it does not.\{ffiCatalogTopNote missing} Declare the built-in's own row `<\{renderAtoms cat}>` (a WIDER row such as `<IO>` is also accepted — over-declaring is safe), or rename the extern to a name the runtime does not already define"
+
+-- S3-1 (`ffi-boundary-honesty` review round): a parameterised label whose param is
+-- ⊤ renders as the BARE LABEL — `drenderN (PPrefix None)` is "" by design, and a
+-- surviving `"_"` hole normalises to ⊤ first, so the catalog's `<FileWrite "_">`
+-- prints as `<FileWrite>`.  Against a declaration that narrows by a CONCRETE
+-- parameter (`<FileWrite "/tmp/allowed/*">`) that reads BACKWARDS: the widest
+-- possible row is rendered as the barest possible text, and a reader takes
+-- "does not cover <FileWrite>" for "the built-in touches no file at all" rather
+-- than "the built-in may touch ANY file."  The verdict and the general-case
+-- wording are both correct; only this rendering is ambiguous.
+--
+-- ⚠️ Fixed HERE, in this one message, and NOT in `renderAtoms`/`renderAtom`/
+-- `drenderN` — those are shared by many other diagnostics and several blessed
+-- goldens, where ⊤-renders-empty is the intended, byte-compatible surface.
+--
+-- ⚠️ `PUnit` is deliberately NOT ⊤ for this purpose.  A domainless label
+-- (`Stdout`, `Env`'s peers with no written param) has no parameter that could be
+-- unconstrained, so its bare rendering is already exact and the note would be
+-- noise — which is why the plain `<>`-vs-`<Stdout>` case is untouched.
+ffiCatalogTopNote : List Atom -> String
+ffiCatalogTopNote missing = match map atomLabel (filterList atomParamIsTop (atomsNorm missing))
+  [] => ""
+  ls => " Read \{joinWith "/" ls} there as ANY value, not none: the built-in's catalog row leaves that label's parameter UNCONSTRAINED (⊤), and an unconstrained parameter renders as the bare label."
+
+-- ⊤ in a PARAMETERISED domain (see `ffiCatalogTopNote`): `PUnit` is excluded on
+-- purpose — it is "no parameter", not "any value".
+atomParamIsTop : Atom -> Bool
+atomParamIsTop a = paramIsTopDomain (normHole (atomParam a))
+
+paramIsTopDomain : Param -> Bool
+paramIsTopDomain (PPrefix None) = True
+paramIsTopDomain (PSet None) = True
+paramIsTopDomain (PProduct []) = True
+paramIsTopDomain _ = False
 
 -- The WRITTEN terminal effect row of a signature: walk the arrow spine to the
 -- result position and read the labels the author spelled there.  A mirror of
@@ -29504,10 +29540,14 @@ ffiCheckLabelsGo (_::rest) = ffiCheckLabelsGo rest
 -- build with `unbound variable 'gNullary'` — the pass here is what turned a loud
 -- failure into a silent wrong value ([W-QUIETER]), so it is the pass that has to go.
 --
--- ⚠️ This does NOT answer #2106, and is not meant to.  #2106 asks how a nullary
--- extern would SPELL its `FFI` label given that a value performs no effect and the
--- type language has nowhere to put a row on it; that is a design question and it
--- stays open.  This rule only refuses to lower what it cannot label — every user
+-- ⚠️ This CLOSES #2106, by refusal rather than by a spelling.  #2106 asked how a
+-- nullary extern would SPELL its `FFI` label given that a value performs no effect
+-- and the type language has nowhere to put a row on it; the answer is that it does
+-- not, and need not — the arrow spelling is the whole answer.  The alias-wrapped
+-- shapes the rule was thought to miss (`type A = Int; extern k : A` and `type A a =
+-- Sh a => Int; extern k : A Int`) reach this same rejection byte-identically,
+-- because `expandAliasHeadTy` unwraps both to a bare `TyCon` before `ffiRowHasFFITy`
+-- matches.  This rule refuses to lower what it cannot label — every user
 -- `extern` is a foreign declaration by construction, so a nullary one is a foreign
 -- declaration whose honesty cannot be checked, and emitting it anyway is the one
 -- option that is definitely wrong.
@@ -41543,7 +41583,16 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "ffiCheckCatalogRowOne" (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyCon "Unit")))))
 (DFunDef false "ffiCheckCatalogRowOne" ((PVar "n") (PVar "ty") (PVar "catRow")) (EBlock (DoLet false false (PVar "catAtoms") (EApp (EVar "atomsOfWritten") (EVar "catRow"))) (DoLet false false (PVar "declAtoms") (EApp (EVar "atomsOfWritten") (EApp (EVar "ffiWrittenRow") (EVar "ty")))) (DoExpr (EMatch (EApp (EApp (EVar "atomsEscape") (EVar "catAtoms")) (EVar "declAtoms")) (arm (PList) () (ELit LUnit)) (arm (PVar "missing") () (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-FFI-CATALOG-NARROW"))) (EApp (EVar "firstTyLoc") (EVar "ty"))) (EApp (EApp (EApp (EApp (EVar "ffiCatalogNarrowMsg") (EVar "n")) (EVar "catAtoms")) (EVar "declAtoms")) (EVar "missing"))))))))
 (DTypeSig false "ffiCatalogNarrowMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))))
-(DFunDef false "ffiCatalogNarrowMsg" ((PVar "n") (PVar "cat") (PVar "decl") (PVar "missing")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Foreign declaration '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' redeclares a built-in runtime name with a NARROWER effect row: the built-in performs <"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "cat")))) (ELit (LString ">, this declaration claims <"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "decl")))) (ELit (LString ">, which does not cover <"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "missing")))) (ELit (LString ">. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, whatever the local signature says — so '"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' really does perform <"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "missing")))) (ELit (LString ">, and every caller typechecked against this declaration would be told it does not. Declare the built-in's own row `<"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "cat")))) (ELit (LString ">` (a WIDER row such as `<IO>` is also accepted — over-declaring is safe), or rename the extern to a name the runtime does not already define"))))
+(DFunDef false "ffiCatalogNarrowMsg" ((PVar "n") (PVar "cat") (PVar "decl") (PVar "missing")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Foreign declaration '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' redeclares a built-in runtime name with a NARROWER effect row: the built-in performs <"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "cat")))) (ELit (LString ">, this declaration claims <"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "decl")))) (ELit (LString ">, which does not cover <"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "missing")))) (ELit (LString ">. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, whatever the local signature says — so '"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' really does perform <"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "missing")))) (ELit (LString ">, and every caller typechecked against this declaration would be told it does not."))) (EApp (EVar "display") (EApp (EVar "ffiCatalogTopNote") (EVar "missing")))) (ELit (LString " Declare the built-in's own row `<"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "cat")))) (ELit (LString ">` (a WIDER row such as `<IO>` is also accepted — over-declaring is safe), or rename the extern to a name the runtime does not already define"))))
+(DTypeSig false "ffiCatalogTopNote" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
+(DFunDef false "ffiCatalogTopNote" ((PVar "missing")) (EMatch (EApp (EApp (EVar "map") (EVar "atomLabel")) (EApp (EApp (EVar "filterList") (EVar "atomParamIsTop")) (EApp (EVar "atomsNorm") (EVar "missing")))) (arm (PList) () (ELit (LString ""))) (arm (PVar "ls") () (EBinOp "++" (EBinOp "++" (ELit (LString " Read ")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString "/"))) (EVar "ls")))) (ELit (LString " there as ANY value, not none: the built-in's catalog row leaves that label's parameter UNCONSTRAINED (⊤), and an unconstrained parameter renders as the bare label."))))))
+(DTypeSig false "atomParamIsTop" (TyFun (TyCon "Atom") (TyCon "Bool")))
+(DFunDef false "atomParamIsTop" ((PVar "a")) (EApp (EVar "paramIsTopDomain") (EApp (EVar "normHole") (EApp (EVar "atomParam") (EVar "a")))))
+(DTypeSig false "paramIsTopDomain" (TyFun (TyCon "Param") (TyCon "Bool")))
+(DFunDef false "paramIsTopDomain" ((PCon "PPrefix" (PCon "None"))) (EVar "True"))
+(DFunDef false "paramIsTopDomain" ((PCon "PSet" (PCon "None"))) (EVar "True"))
+(DFunDef false "paramIsTopDomain" ((PCon "PProduct" (PList))) (EVar "True"))
+(DFunDef false "paramIsTopDomain" (PWild) (EVar "False"))
 (DTypeSig false "ffiWrittenRow" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "ffiWrittenRow" ((PVar "ty")) (EMatch (EApp (EVar "expandAliasHeadTy") (EVar "ty")) (arm (PCon "TyConstrained" PWild (PVar "inner")) () (EApp (EVar "ffiWrittenRow") (EVar "inner"))) (arm (PCon "TyFun" PWild (PVar "r")) () (EApp (EVar "ffiWrittenRow") (EVar "r"))) (arm (PCon "TyEffect" (PVar "ls") PWild PWild) () (EVar "ls")) (arm PWild () (EListLit))))
 (DTypeSig false "ffiCheckExternsReserved" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
@@ -47428,7 +47477,16 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "ffiCheckCatalogRowOne" (TyFun (TyCon "String") (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyCon "Unit")))))
 (DFunDef false "ffiCheckCatalogRowOne" ((PVar "n") (PVar "ty") (PVar "catRow")) (EBlock (DoLet false false (PVar "catAtoms") (EApp (EVar "atomsOfWritten") (EVar "catRow"))) (DoLet false false (PVar "declAtoms") (EApp (EVar "atomsOfWritten") (EApp (EVar "ffiWrittenRow") (EVar "ty")))) (DoExpr (EMatch (EApp (EApp (EVar "atomsEscape") (EVar "catAtoms")) (EVar "declAtoms")) (arm (PList) () (ELit LUnit)) (arm (PVar "missing") () (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-FFI-CATALOG-NARROW"))) (EApp (EVar "firstTyLoc") (EVar "ty"))) (EApp (EApp (EApp (EApp (EVar "ffiCatalogNarrowMsg") (EVar "n")) (EVar "catAtoms")) (EVar "declAtoms")) (EVar "missing"))))))))
 (DTypeSig false "ffiCatalogNarrowMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))))
-(DFunDef false "ffiCatalogNarrowMsg" ((PVar "n") (PVar "cat") (PVar "decl") (PVar "missing")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Foreign declaration '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' redeclares a built-in runtime name with a NARROWER effect row: the built-in performs <"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "cat")))) (ELit (LString ">, this declaration claims <"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "decl")))) (ELit (LString ">, which does not cover <"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "missing")))) (ELit (LString ">. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, whatever the local signature says — so '"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' really does perform <"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "missing")))) (ELit (LString ">, and every caller typechecked against this declaration would be told it does not. Declare the built-in's own row `<"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "cat")))) (ELit (LString ">` (a WIDER row such as `<IO>` is also accepted — over-declaring is safe), or rename the extern to a name the runtime does not already define"))))
+(DFunDef false "ffiCatalogNarrowMsg" ((PVar "n") (PVar "cat") (PVar "decl") (PVar "missing")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Foreign declaration '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' redeclares a built-in runtime name with a NARROWER effect row: the built-in performs <"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "cat")))) (ELit (LString ">, this declaration claims <"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "decl")))) (ELit (LString ">, which does not cover <"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "missing")))) (ELit (LString ">. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, whatever the local signature says — so '"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' really does perform <"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "missing")))) (ELit (LString ">, and every caller typechecked against this declaration would be told it does not."))) (EApp (EMethodRef "display") (EApp (EVar "ffiCatalogTopNote") (EVar "missing")))) (ELit (LString " Declare the built-in's own row `<"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "cat")))) (ELit (LString ">` (a WIDER row such as `<IO>` is also accepted — over-declaring is safe), or rename the extern to a name the runtime does not already define"))))
+(DTypeSig false "ffiCatalogTopNote" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
+(DFunDef false "ffiCatalogTopNote" ((PVar "missing")) (EMatch (EApp (EApp (EMethodRef "map") (EVar "atomLabel")) (EApp (EApp (EVar "filterList") (EVar "atomParamIsTop")) (EApp (EVar "atomsNorm") (EVar "missing")))) (arm (PList) () (ELit (LString ""))) (arm (PVar "ls") () (EBinOp "++" (EBinOp "++" (ELit (LString " Read ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString "/"))) (EVar "ls")))) (ELit (LString " there as ANY value, not none: the built-in's catalog row leaves that label's parameter UNCONSTRAINED (⊤), and an unconstrained parameter renders as the bare label."))))))
+(DTypeSig false "atomParamIsTop" (TyFun (TyCon "Atom") (TyCon "Bool")))
+(DFunDef false "atomParamIsTop" ((PVar "a")) (EApp (EVar "paramIsTopDomain") (EApp (EVar "normHole") (EApp (EVar "atomParam") (EVar "a")))))
+(DTypeSig false "paramIsTopDomain" (TyFun (TyCon "Param") (TyCon "Bool")))
+(DFunDef false "paramIsTopDomain" ((PCon "PPrefix" (PCon "None"))) (EVar "True"))
+(DFunDef false "paramIsTopDomain" ((PCon "PSet" (PCon "None"))) (EVar "True"))
+(DFunDef false "paramIsTopDomain" ((PCon "PProduct" (PList))) (EVar "True"))
+(DFunDef false "paramIsTopDomain" (PWild) (EVar "False"))
 (DTypeSig false "ffiWrittenRow" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "ffiWrittenRow" ((PVar "ty")) (EMatch (EApp (EVar "expandAliasHeadTy") (EVar "ty")) (arm (PCon "TyConstrained" PWild (PVar "inner")) () (EApp (EVar "ffiWrittenRow") (EVar "inner"))) (arm (PCon "TyFun" PWild (PVar "r")) () (EApp (EVar "ffiWrittenRow") (EVar "r"))) (arm (PCon "TyEffect" (PVar "ls") PWild PWild) () (EVar "ls")) (arm PWild () (EListLit))))
 (DTypeSig false "ffiCheckExternsReserved" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))

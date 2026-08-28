@@ -99,9 +99,15 @@ nowhere to write `FFI` — but the emitter lowered such a name as a foreign call
 anyway (`emitVar`'s `isFfiExtern` arm → `emitFfiEtaClosure`), handing back an eta
 closure pointer where the declared value was expected: garbage at exit 0, where
 before the #2074 lowering the same program died loudly with `unbound variable`.
-Write `extern k : Unit -> <FFI> T` and call it as `k ()`. **This does not close
-#2106**, which asks how a nullary extern *would* spell its label; it refuses to
-lower what it cannot label, and that design question stays open.
+Write `extern k : Unit -> <FFI> T` and call it as `k ()`. **This CLOSES #2106**,
+which asked how a nullary extern *would* spell its label: it does not, and it
+need not. The `ffi-boundary-honesty` sprint measured the alias-wrapped spellings
+the rule was thought to miss — `type A = Int; extern k : A` and `type A a = Sh a
+=> Int; extern k : A Int` — and both produce the byte-identical `T-FFI-NULLARY`
+diagnostic the plain `extern k : Int` spelling gets, because `expandAliasHeadTy`
+unwraps either alias shape to a bare `TyCon` before the label rule ever matches.
+An effect row lives on an arrow's result, so a nullary foreign declaration is
+refused rather than labelled, and the arrow spelling is the whole answer.
 
 🚨 **The `mdk_` prefix is reserved** (`T-FFI-RESERVED-NAME`, same review round,
 S0-4). A foreign declaration's name is used verbatim as the C symbol, and `mdk_*`
@@ -172,10 +178,17 @@ There is nothing to allocate and nothing to free on either side.
 The tagging rule above is the whole story for `Int` — every `int64_t` is a valid
 `Int`. It is **not** the whole story for `Bool` and `Char`, whose native reps are
 **subsets** of the immediate space (§8.1): `False` is exactly the word `1`, `True`
-exactly `3`, and a `Char` exactly `cp * 2 + 1` for `0 ≤ cp ≤ 1114111`
-(`charMinBound`/`charMaxBound`). A C function is under no obligation to stay
-inside either subset, and this ABI is the only place that can say what happens
-when it does not.
+exactly `3`, and a `Char` exactly `cp * 2 + 1` for every `cp` that is a Unicode
+**scalar value** — `0 ≤ cp ≤ 1114111` (`charMinBound`/`charMaxBound`) **and**
+`cp` outside the UTF-16 surrogate window `0xD800 ≤ cp ≤ 0xDFFF`
+(`55296 ≤ cp ≤ 57343`). The bounds alone are **not** the validity predicate: the
+surrogate window sits inside them and is nonetheless not a `Char`. The one
+authority is the runtime's `mdk_char_from_code` (`runtime/medaka_rt.c`), whose
+condition is verbatim `n >= 0 && n <= 0x10FFFF && !(n >= 0xD800 && n <= 0xDFFF)`;
+every other `Char`-producing path in the language already agrees with it (the
+lexer rejects a surrogate literal outright, and `charFromCode 55296` is `None`).
+A C function is under no obligation to stay inside either subset, and this ABI is
+the only place that can say what happens when it does not.
 
 **This was a live S1 (#2128), not a hypothetical.** Until 2026-08-28 the inbound
 arm re-tagged whatever it got, so `long long cTruthy(void){ return 42; }` behind
@@ -201,11 +214,21 @@ still: tagged as if valid, it printed replacement garbage at exit 0.
   bits, or substituting U+FFFD would all invent a codepoint the C function never
   returned and hand it onward at exit 0 — which is precisely the silent wrongness
   this rule exists to remove (`AGENTS.md` [W-QUIETER]: making a defect quieter is
-  a severity *increase*). So the boundary range-checks `0 ≤ r ≤ 1114111` with a
-  single unsigned compare (a negative `long long` reads as a huge unsigned and
-  fails the same test) and aborts with a coded runtime error naming the foreign
-  call and the range when it fails. Cost is one compare and a never-taken branch
-  on a path that has just made a C call.
+  a severity *increase*). So the boundary checks the full validity predicate
+  stated above — `0 ≤ r ≤ 1114111` **and** `r` outside `55296..57343` — and aborts
+  with a coded runtime error naming the foreign call and the predicate when it
+  fails. Three unsigned compares: `ult 1114112` for the bounds (a negative
+  `long long` reads as a huge unsigned and fails it at the same time, so the low
+  end needs no compare of its own), plus `ult 55296` / `ugt 57343` `or`-ed
+  together for the surrogate exclusion. Cost is three compares and a never-taken
+  branch on a path that has just made a C call.
+
+  ⚠️ Checking only the *bounds* here would leave the FFI boundary the single door
+  in the language through which an invalid `Char` reaches `println` as malformed
+  UTF-8 at exit 0. That is not hypothetical — it was the shipped behaviour until
+  2026-08-28 (review finding S0-1): `long long cCharSurrogate(void){ return
+  0xD800; }` behind `extern cCharSurrogate : Unit -> <FFI> Char` produced an
+  invalid `Char` at exit 0.
 
   **Why this is not a violation of §4.** §4 says a foreign call cannot fail *into*
   Medaka — meaning the C function has no channel for signalling *its own* failure
@@ -222,7 +245,7 @@ still: tagged as if valid, it printed replacement garbage at exit 0.
   failure.
 
 Gated by cells 7–9 of `test/diff_compiler_llvm_ffi.sh`, against the `cTruthy`/
-`cFalsy`/`cOne`/`cCharA`/`cCharBig`/`cCharNeg` functions in
+`cFalsy`/`cOne`/`cCharA`/`cCharBig`/`cCharNeg`/`cCharSurrogate` functions in
 `test/ffi_fixtures/ffi_abi_probe.c`; implemented by `ffiNormalizeBool` /
 `ffiNormalizeChar` in `compiler/backend/llvm_emit.mdk`.
 

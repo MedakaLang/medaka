@@ -103,6 +103,14 @@ long long cCharBig(void) { return 1200000; }
  * pins that the range check is unsigned rather than a signed `<=` that a
  * negative would sail through. */
 long long cCharNeg(void) { return -1; }
+/* Char, INSIDE the bounds but still not a Char: 0xD800 is the low end of the
+ * UTF-16 surrogate window, which is excluded from the Unicode scalar values
+ * (runtime/medaka_rt.c `mdk_char_from_code`, and the lexer, and `charFromCode`,
+ * all agree).  The third arm, and the one a BOUNDS-only check cannot catch — it
+ * is exactly what the check was before the ffi-boundary-honesty review round
+ * (S0-1): `icmp ult i64 %r, 1114112` alone accepted this and `println` emitted
+ * malformed UTF-8 at exit 0. */
+long long cCharSurrogate(void) { return 0xD800; }
 
 /* ── #2164: §2.4 COPY-BACK — a C function that FILLS a caller-allocated array ──
  *

@@ -434,12 +434,20 @@ fi
 # Before the fix, 1200000 was tagged as-is and `println` emitted replacement
 # garbage at exit 0.
 #
-# TWO values, not one: 1200000 is above charMaxBound, and -1 reads as a HUGE
-# unsigned — a signed `<=` bound check would let the negative sail straight
-# through, so the negative arm is what pins the check as unsigned.  Asserted on
-# BOTH a nonzero exit and the message text: a segfault would also exit nonzero.
+# THREE values, not one, and they fail for three DIFFERENT reasons: 1200000 is
+# above charMaxBound; -1 reads as a HUGE unsigned — a signed `<=` bound check
+# would let the negative sail straight through, so that arm pins the check as
+# unsigned; and 0xD800 is INSIDE the bounds but is a UTF-16 surrogate, not a
+# Unicode scalar, so it is not a Char either.  The surrogate arm is the one a
+# BOUNDS-only check cannot catch, and until the ffi-boundary-honesty review round
+# (S0-1) the check WAS bounds-only: `icmp ult i64 %r, 1114112` accepted 55296 and
+# `println` emitted malformed UTF-8 at exit 0.  Every other Char-producing path in
+# the language already rejected it (the lexer, `charFromCode`, and the runtime's
+# own `mdk_char_from_code`), so the FFI boundary was the single door it fitted
+# through.  Asserted on BOTH a nonzero exit and the message text: a segfault would
+# also exit nonzero.
 # ⚠️ exit code read by REDIRECT, never through a pipe — AGENTS.md [D-BUILD-PIPE].
-for cfn in cCharBig cCharNeg; do
+for cfn in cCharBig cCharNeg cCharSurrogate; do
   cat > "$W/ffi_char_oob_$cfn.mdk" <<CELL9
 extern $cfn : Unit -> <FFI> Char
 
@@ -458,10 +466,11 @@ CELL9
     printf 'FAIL ffi_inbound_char_oob   %s: exited 0 with stdout: %s\n' "$cfn" "$(cat "$W/oob_$cfn.err" "$W/oob_$cfn.out")"
     fail=$((fail+1))
   elif grep -q "runtime error" "$W/oob_$cfn.err" \
-    && grep -q "outside the Char range 0..1114111" "$W/oob_$cfn.err" \
+    && grep -q "not a valid Char" "$W/oob_$cfn.err" \
+    && grep -q "0..1114111 excluding the UTF-16 surrogates 55296..57343" "$W/oob_$cfn.err" \
     && grep -q "$cfn" "$W/oob_$cfn.err" \
     && [ ! -s "$W/oob_$cfn.out" ]; then
-    printf 'ok   ffi_inbound_char_oob   %s: trapped loudly (exit %d), naming the call and the range\n' "$cfn" "$rc9"
+    printf 'ok   ffi_inbound_char_oob   %s: trapped loudly (exit %d), naming the call and the validity predicate\n' "$cfn" "$rc9"
   else
     printf 'FAIL ffi_inbound_char_oob   %s: exit %d, wrong failure:\n' "$cfn" "$rc9"; fail=$((fail+1))
     cat "$W/oob_$cfn.out" "$W/oob_$cfn.err"

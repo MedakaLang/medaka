@@ -150,6 +150,7 @@ atomLabel : Atom -> String
 atomOfLabel : String -> Atom
 atomOfWritten : (String, Option String) -> Atom
 atomParam : Atom -> Param
+atomParamIsTop : Atom -> Bool
 atomsAbsorbedInto : Int -> List AbsorptionEvent -> List Atom
 atomsDiff : List Atom -> List Atom -> List Atom
 atomsEscape : List Atom -> List Atom -> List Atom
@@ -759,6 +760,7 @@ externSchemes : Map String TyConOrigin -> List Decl -> List (String, Scheme)
 externSchemesGo : List Decl -> List (String, Scheme)
 externSigsToMap : List Decl -> Map String (String, List (String, Option String)) -> Map String (String, List (String, Option String))
 ffiCatalogNarrowMsg : String -> List Atom -> List Atom -> List Atom -> String
+ffiCatalogTopNote : List Atom -> String
 ffiCheckCatalogRowGo : List Decl -> Unit
 ffiCheckCatalogRowOne : String -> Ty -> List (String, Option String) -> Unit
 ffiCheckExternLabel : String -> Option Loc -> Ty -> Unit
@@ -1490,6 +1492,7 @@ pairIface : String -> Int -> List (String, Int)
 pairRecordByName : String -> Option (String, RecordInfo)
 pairSlots : List Int -> List IfaceRef -> List CSlot
 pairsOfVecObls : List VecObl -> List (String, Int)
+paramIsTopDomain : Param -> Bool
 paramMonoOf : List (String, Mono) -> String -> Mono
 paramOccPolarities : List (TabKey, List Polarity) -> String -> Polarity -> Ty -> List Polarity
 paramOccPolaritiesArgs : List (TabKey, List Polarity) -> String -> Polarity -> Option (List Polarity) -> Int -> List Ty -> List Polarity

@@ -196,7 +196,8 @@ expect_reject "$FIX/ffi_libname_empty_reject.mdk"    'FFI libname reject: empty 
 #       differ only in whether an ARROW exists.  While the label rule's `None`
 #       arm passed, the emitter lowered a nullary extern as an eta CLOSURE
 #       POINTER where the declared value was expected.  #2106 (how a nullary
-#       extern WOULD spell a label) stays open; this pins only the refusal.
+#       extern WOULD spell a label) is CLOSED by this refusal -- see the
+#       alias-shape cells below, which measured it.
 #
 #   ffi_builtin_shadow_reject   <-> ffi_cross_builtin_name_accept
 #       differ only in whether the local type-head shape AGREES with the catalog

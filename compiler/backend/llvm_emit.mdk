@@ -3482,22 +3482,42 @@ ffiNormalizeBool e r =
 -- the ABI to launder data C has already got wrong, and an abort is not a value
 -- threaded back to a caller.
 --
--- Valid range is the emitter's own `charMinBound`/`charMaxBound` (emitVar, words
--- "1"/"2228223" = untagged 0 and 1114111, the Unicode scalar max).  ONE unsigned
--- compare covers both ends: a negative `long long` reads as a huge unsigned and
--- fails the same test.  The abort reuses @mdk_panic (already in the preamble),
--- so no new runtime entry point is needed; it prints
+-- The predicate is VALIDITY, not merely bounds — the two are not the same set,
+-- and reading `charMinBound`/`charMaxBound` as the whole story is what let a
+-- surrogate through at exit 0 (review S0-1).  The ONE authority is the runtime's
+-- own `mdk_char_from_code` (runtime/medaka_rt.c): valid iff
+-- `n >= 0 && n <= 0x10FFFF && !(n >= 0xD800 && n <= 0xDFFF)` — i.e. a Unicode
+-- SCALAR value, so the UTF-16 surrogate window 0xD800..0xDFFF (55296..57343) is
+-- EXCLUDED even though it sits inside the bounds.  Every other `Char`-producing
+-- path in the language agrees (the lexer rejects a surrogate literal;
+-- `charFromCode 55296` is `None`), so accepting one here would have made the FFI
+-- boundary the single door in the language through which an invalid `Char`
+-- reaches `println` as malformed UTF-8, silently.
+--
+-- Lowered as three unsigned compares combined with `or`/`and` (this emitter is
+-- phi-free by design): the low end needs no compare of its own because a
+-- negative `long long` reads as a huge unsigned and fails `ult 1114112` the same
+-- way an above-max value does.  The abort reuses @mdk_panic (already in the
+-- preamble), so no new runtime entry point is needed; it prints
 -- `runtime error [E-PANIC]: <msg>` and exits 1.
 ffiNormalizeChar : Emit -> String -> String -> String
 ffiNormalizeChar e fname r =
   let n = intToString (freshLocal e)
   let okL = "ffichar_ok" ++ n
   let badL = "ffichar_bad" ++ n
+  let inRange = freshReg e
+  let belowSurr = freshReg e
+  let aboveSurr = freshReg e
+  let notSurr = freshReg e
   let c = freshReg e
-  let _ = emit e "  \{c} = icmp ult i64 \{r}, 1114112"
+  let _ = emit e "  \{inRange} = icmp ult i64 \{r}, 1114112"
+  let _ = emit e "  \{belowSurr} = icmp ult i64 \{r}, 55296"
+  let _ = emit e "  \{aboveSurr} = icmp ugt i64 \{r}, 57343"
+  let _ = emit e "  \{notSurr} = or i1 \{belowSurr}, \{aboveSurr}"
+  let _ = emit e "  \{c} = and i1 \{inRange}, \{notSurr}"
   let _ = emit e "  br i1 \{c}, label %\{okL}, label %\{badL}"
   let _ = emit e (badL ++ ":")
-  let (msg, _) = emitLit e (LString "foreign call '\{fname}' returned a value outside the Char range 0..1114111 (compiler/FFI-ABI.md section 2.1); the C function must return a valid Unicode scalar for a 'Char' result")
+  let (msg, _) = emitLit e (LString "foreign call '\{fname}' returned a value that is not a valid Char: a Char must be a Unicode scalar, i.e. in 0..1114111 excluding the UTF-16 surrogates 55296..57343 (compiler/FFI-ABI.md section 2.1); the C function must return a valid Unicode scalar for a 'Char' result")
   let _ = emit e "  call void @mdk_panic(i64 \{msg})"
   let _ = emit e "  unreachable"
   let _ = emit e (okL ++ ":")
