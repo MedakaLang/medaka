@@ -4454,7 +4454,19 @@ emitMethod e env name RNone implRoutes methRoutes argOps =
 -- fixpoint cannot move.
 emitMethod e env name (RLocal sym dicts) implRoutes methRoutes argOps =
   let target = if sym == "" then name else sym
-  if isEmpty dicts then
+  -- #1430 (S2, row 39): a RETURN-POSITION method (`zed : a`) shadowed by a module-local
+  -- standalone routes RLocal to a NULLARY top-level binding, and a nullary binding is a
+  -- value GLOBAL, never an `@mdk_<sym>` define — it is read through `@mdk_force_<sym>()`
+  -- (LAZY) or `@mdk_g_<sym>` (eager).  `emitKnownFnSat` below emits `call i64
+  -- @mdk_<sym>()` unconditionally, which clang rejected with `use of undefined value
+  -- '@mdk_main__zed'` — `medaka build` exit 1 on a program `check` and `run` both accept.
+  -- `lookupVarG` is the SAME accessor `emitVar` uses for any other reference to that
+  -- binding, so the two spellings of "read this global" cannot drift.  Gated on
+  -- `isKnownFn` so every arg-position shadow (whose target IS a function) keeps the
+  -- byte-identical direct call — the compiler's own five definer shadows included.
+  if isEmpty argOps && not (isKnownFn e target) then
+    lookupVarG e env target
+  else if isEmpty dicts then
     emitKnownFnSat e ("mdk_" ++ target) argOps (fnArity e target) (fnRetTy e target)
   else
     emitDictApp e env target dicts argOps

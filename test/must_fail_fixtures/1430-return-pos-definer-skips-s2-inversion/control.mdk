@@ -1,6 +1,0 @@
-import smod.{sf}
-
-zed : Int
-zed = 42
-
-main = println (zed + sf 0)

@@ -10037,7 +10037,23 @@ inferIntRange env lo hi container =
 -- NOT a pendingSites/methodSiteFns return-position site.
 inferMethodAt : TcEnv -> String -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Mono
 inferMethodAt env name tagRef implRef methodRef = match lookupVar env name
-  None => panic ("unbound method: " ++ name)
+  -- #1430 (S2, row 39, EMIT path): a definer shadow of a method whose interface is
+  -- NAMEABLE in this module but whose METHOD NAME was never imported (`import
+  -- smod.{Zed, sf}` names the interface, not `zed`) has no `zed` binding in this
+  -- module's env at all.  The mangler has already renamed the module's own standalone
+  -- to `<mid>__zed` and the mark pass rewrote the occurrence to `EMethodAt "zed"` with
+  -- `RLocal <mid>__zed` seeded on its route, so the bare lookup below misses and this
+  -- panicked `unbound method: zed` — `medaka build` exit 1 on a program `check` and
+  -- `run` both accept.  The route already names the standalone that IS in scope, so
+  -- recover through the same emit-path value-position accessor the `Some` arm consults
+  -- (`maybeStandaloneValueMonoEmit`), and stamp the route it was pinned to.  An APP head
+  -- (shadowHeadCtxRef True) and a route with no mangled symbol both decline there, so
+  -- every occurrence that genuinely has no denotation still panics as before.
+  None => match maybeStandaloneValueMonoEmit env name tagRef
+    Some m =>
+      tagRef := RLocal (routeLocalSym !tagRef) []
+      m
+    None => panic ("unbound method: " ++ name)
   Some s =>
     let inst = instantiateTracked s
     let _ = recordMethodDicts name methodRef (snd inst)
@@ -10104,6 +10120,25 @@ inferMethodAt env name tagRef implRef methodRef = match lookupVar env name
 recordRLocalSite : TcEnv -> String -> Ref Route -> Mono -> Unit
 recordRLocalSite env name tagRef inst
   | toggles.value.suppressRLocalRecord.value = ()
+  -- #1430 (S2, row 39): a RETURN-POSITION method has NO dispatch argument, so
+  -- `methodDispatchIdx` answers None and every arm below declined — no pending site, no
+  -- route stamp, and the occurrence kept the method's dispatching route while
+  -- `maybeStandaloneValueMono` had already pinned its TYPE to the standalone.  That is
+  -- exactly the invariant `standaloneValuePinned`'s header states in bold ("⭐ THE ROUTE
+  -- MUST FOLLOW THE ARM"), violated at the one cell the dispatch-index gate hides.
+  -- Measured at the parent commit on a two-verb split that cannot be read any other way:
+  -- for `interface Zed a where zed : a` + `impl Zed Int` + a module-local `zed : Bool`,
+  -- `check --types` reported `zed : Bool` (the standalone — the TYPE arm) at exit 0 while
+  -- `run` E-PANICked `no matching impl for dispatch` (the ROUTE arm asked `Zed Bool`).
+  -- With `zed : Int` the same split is SILENT: `run` printed the impl's 777.
+  -- forceLocal (`True`) rather than a receiver query: under S4 there is no receiver to
+  -- dispatch on, which is the same argument `standaloneValuePinned` already makes for the
+  -- arg-position value cell.  Empty dict slots: `shadowStandaloneDictSlotsAt` resolves a
+  -- constrained standalone's slots by unifying its scheme against `TFun receiver …`, and a
+  -- return-position value standalone has no such arrow to match — an unconstrained one
+  -- (the whole cell #1430 pins) short-circuits to `emptyShadowDicts` there anyway.
+  | isNone (methodDispatchIdx name) && standaloneValuePinned name =
+    perRun.value.pendingRLocalSites := PendingEntry name tagRef inst "" (SKRLocal (routeLocalSym !tagRef) True [] [] []) !currentLoc :: perRun.value.pendingRLocalSites.value
   | not (contains name driverState.value.standaloneValuesRef.value) = ()
   | otherwise = match methodDispatchIdx name
     None => ()
