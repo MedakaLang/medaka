@@ -1283,6 +1283,7 @@ jobs:
           bash test/wasm/diff_wasm_typed.sh    || rc=1
           bash test/wasm/diff_playground_input.sh || rc=1
           bash test/wasm/diff_wasm_modules.sh  || rc=1
+          bash test/wasm/diff_wasm_ffi_wall.sh || rc=1
           bash test/wasm/diff_sqlite.sh        || rc=1
           bash test/wasm/diff_gzip.sh          || rc=1
           bash test/build_wasm_cmd.sh          || rc=1

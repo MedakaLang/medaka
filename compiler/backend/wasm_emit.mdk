@@ -5164,6 +5164,12 @@ emitVarRefPlain prog env d x =
   -- build an eta closure wrapping a lifted `$mdk_ext_<name>` that calls the extern
   -- (peer of the LLVM emitExternEtaClosure).  env = [] (externs capture nothing).
   else if isWasmEtaExtern x then emitExternEtaClosure prog x
+  -- #2129: an FFI extern referenced in VALUE position (passed to a HOF, or a bare
+  -- nullary top-level reference) must get the same located capability-gap message
+  -- the saturated-call arms (emitAppRef/emitAppTail) already give, not the generic
+  -- unbound-variable fallback below — wasm still can't call it either way, but the
+  -- diagnostic should say "exists but unsupported here", not "no such thing".
+  else if isFfiExternW prog x then gapLP prog ("wasm: FFI extern '" ++ x ++ "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")
   else gapUnboundLP prog "unbound variable '\{x}' (not a local, global value, constructor, or known function) [in \{currentBindingOfW (progEmit prog)}]"
 
 -- W9: lift `$mdk_ext_<name>` (a $codety) that unpacks its $args into synthetic CVar
