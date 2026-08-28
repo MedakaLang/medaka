@@ -1,0 +1,27 @@
+-- S0-3 (review round of `ffi-lower-and-link`): the builtin-name exemption
+-- requires a SIGNATURE match, not just a name match.
+--
+-- `log` is a real `stdlib/runtime.mdk` catalog name (`Float -> Float`, the
+-- natural logarithm), and a catalog name is lowered as the BUILTIN whatever the
+-- local row claims -- `ffiExternRows` (compiler/ir/core_ir_lower.mdk) subtracts
+-- the catalog from the FFI index outright and `emitApp` tests `isAnyExtern`
+-- before the FFI arm, neither of which reads any typecheck verdict.  While the
+-- exemption was keyed on the bare name alone, this declaration compiled to
+-- `call double @mdk_log(double <String cell pointer>)` at exit 0 and the
+-- author's own C `log` was never called or even declared.
+--
+-- 🚨 THE CELL THIS MUST BE READ WITH IS `ffi_cross_builtin_name_accept.mdk`
+-- (`getEnv` redeclared COMPATIBLY, still accepted).  The two differ only in
+-- whether the local type-head shape agrees with the catalog row's, so a fix that
+-- simply deleted the exemption would show green here and red there.
+--
+-- ⚠️ Note what this signature does NOT fail: `String` and `Unit` are both in the
+-- FFI-ABI.md section 1 crossable set and the row names `FFI`, so routing this
+-- declaration through the crossable and label guards instead of rejecting it
+-- would change nothing at all.  That is why this is its own rule.
+extern log : String -> <FFI "mylog"> Unit
+
+main : <IO, FFI "mylog"> Unit
+main =
+  let _ = log "hello from my C logger"
+  println "done"

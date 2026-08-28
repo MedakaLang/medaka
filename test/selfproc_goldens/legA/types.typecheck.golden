@@ -756,12 +756,36 @@ extendVar : TcEnv -> String -> Scheme -> TcEnv
 extendVars : TcEnv -> List (String, Scheme) -> TcEnv
 externDecls : List Decl -> List Decl
 externSchemes : Map String TyConOrigin -> List Decl -> List (String, Scheme)
-externSchemesGo : Bool -> List Decl -> List (String, Scheme)
-ffiAddAtom : List (String, Option String) -> List (String, Option String)
+externSchemesGo : List Decl -> List (String, Scheme)
+externSigsToMap : List Decl -> Map String String -> Map String String
+ffiCheckExternLabel : String -> Option Loc -> Ty -> Unit
+ffiCheckExternPos : String -> Option Loc -> Ty -> Unit
+ffiCheckExternSig : String -> Option Loc -> Ty -> Unit
+ffiCheckExternsCrossable : Bool -> List Decl -> Unit
+ffiCheckExternsGo : List Decl -> Unit
+ffiCheckExternsLabelled : Bool -> List Decl -> Unit
+ffiCheckExternsReserved : Bool -> List Decl -> Unit
+ffiCheckExternsShadow : Bool -> List Decl -> Unit
+ffiCheckLabelsGo : List Decl -> Unit
+ffiCheckReservedGo : List Decl -> Unit
+ffiCheckShadowGo : List Decl -> Unit
+ffiCrossableConName : String -> Bool
+ffiCrossableTy : Ty -> Bool
 ffiHasAtom : List (String, Option String) -> Bool
+ffiIsBuiltinExternName : String -> Bool
+ffiNonCrossableMsg : String -> Ty -> String
+ffiNullaryMsg : String -> String
+ffiReservedMsg : String -> String
+ffiResultRowHasFFI : Ty -> Bool
+ffiRowHasFFITy : Ty -> Option Bool
+ffiShadowMsg : String -> String -> String -> String
+ffiSigArgHeads : Ty -> List String
+ffiSigRetHead : Ty -> String
+ffiSigShapeKey : Ty -> String
 ffiStampMode : CheckMode -> Bool
-ffiStampResultTy : Ty -> Ty
-ffiStampTy : Ty -> Ty
+ffiStampModeOwned : CheckMode -> Bool
+ffiTyHeadName : Ty -> String
+ffiUnlabelledMsg : String -> String
 fieldAssignDictSites : FieldAssign -> List (Ref (List Route))
 fieldAssignEVars : FieldAssign -> List String
 fieldAssignNamePair : FieldAssign -> (String, Unit)
@@ -1405,6 +1429,7 @@ normalize : Mono -> Mono
 normalizeLink : Ref Tyvar -> Mono -> Mono
 notAFunctionHint : Option String -> String
 notAFunctionMsg : String -> String
+noteBuiltinExternNames : List Decl -> Unit
 noteHeadCtor : Pat -> Map String Unit -> Map String Unit
 noteNumlitCtx : Mono -> Mono -> String -> Unit
 noteTypeErrorDetected : Unit -> Unit

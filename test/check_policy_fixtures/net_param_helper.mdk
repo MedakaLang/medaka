@@ -7,7 +7,7 @@
 -- only; a literal laundered across a call boundary is intended ⊤.
 effect Net Prefix
 
-extern netGet : String -> <Net _> String
+extern netGet : String -> <FFI, Net _> String
 
 mkUrl x = "idp.example.com/api"
 

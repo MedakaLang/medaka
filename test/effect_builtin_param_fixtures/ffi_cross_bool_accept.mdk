@@ -1,0 +1,6 @@
+-- #2074 crossable-set guard, CONTROL: `Bool` IS in FFI-ABI.md section 1, in
+-- both parameter and result position ⇒ ACCEPT.
+extern ffiIdBool : Bool -> <FFI> Bool
+
+main : <IO> Unit
+main = println "ffi cross bool accept"

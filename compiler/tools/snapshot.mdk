@@ -175,6 +175,7 @@ import ir.core_ir_lower.{
   methodConstraintIfaces,
   ctorFieldTypeNames,
   declSigTypeNames,
+  ffiExternTypeNames,
 }
 import ir.core_ir_sexp.{cprogramToSexp}
 import types.annotate.{annotateProgram}
@@ -628,7 +629,7 @@ emitBoth root sel runtimeDecls userDecls =
 
 llvmOf : List Decl -> List Decl -> CProgram -> String
 llvmOf runtimeDecls allDecls cp =
-  let input = makeEmitInput (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls) (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] "" (declaredRecordFieldOrders allDecls)
+  let input = makeEmitInput (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls) (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] "" (declaredRecordFieldOrders allDecls) (ffiExternTypeNames runtimeDecls allDecls)
   let (text, gaps) = emitProgramRecord input cp
   withGaps ";" text gaps
 

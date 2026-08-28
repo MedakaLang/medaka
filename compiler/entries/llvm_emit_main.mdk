@@ -52,5 +52,10 @@ emitTarget decls =
       []
       []
       ""
-      (declaredRecordFieldOrders decls))
+      (declaredRecordFieldOrders decls)
+      -- #2074: this spike driver is PRELUDE- AND RUNTIME-FREE (it parses one
+      -- scalar file and nothing else), so it holds no `stdlib/runtime.mdk`
+      -- catalog to subtract the builtin-name exemption against.  An empty FFI
+      -- index keeps its behaviour exactly what it was.
+      [])
     (lowerProgramEmit decls))

@@ -12,7 +12,7 @@ export type Alias = Int
 
 export effect Net
 
-extern jsPeek : Int -> Int
+extern jsPeek : Int -> <FFI> Int
 
 let rec spin n = spin n
 

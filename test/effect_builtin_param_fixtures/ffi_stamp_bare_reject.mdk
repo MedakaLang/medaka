@@ -1,10 +1,10 @@
--- N2 (F1 fix packet): pin the R2 stamp-acceptance shape from slice 3's Checks
--- 1+2 as a real gate (S-extern-stamp report N2 — previously only an ad-hoc
--- probe).  A user-declared extern written with a bare `<>` bound is stamped
--- `<FFI>` (Check 1); composed with R1 (`FFI` excluded from `ioAliasLabels`),
--- a caller declared at the ORIGINAL bare `<>` no longer subsumes it (Check 2)
--- ⇒ REJECT.
-extern ffiCall : Int -> <> Int
+-- F1 (epic #2070): the CALLER half.  The extern names `FFI` in its own row
+-- because the compiler no longer stamps one in (ffi_stamp_missing_reject.mdk
+-- pins that rejection); this cell is about what the row then costs a caller.
+-- Composed with R1 (`FFI` excluded from `ioAliasLabels`), a caller declared at
+-- a bare `<>` does not subsume the extern's `<FFI>` ⇒ REJECT.  Its counterpart
+-- ffi_stamp_bare_accept.mdk flips only the caller's bound.
+extern ffiCall : Int -> <FFI> Int
 
 pureWrap : Int -> <> Int
 pureWrap x = ffiCall x

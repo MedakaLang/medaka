@@ -1,12 +1,99 @@
 # FFI ABI contract
 
-**Status: decision, not implementation.** This document fixes the value-crossing
+**Status: decision, and now LOWERED.** This document fixes the value-crossing
 contract for the C FFI boundary the effect label `<FFI>` (#2071, `Prefix` domain)
-already tracks. **No lowering exists yet** — `emitFfiCall` and the calling
-convention that actually marshals a value across the boundary are #2074, next
-sprint, out of scope here. This doc answers a narrower question first: *which
-Medaka types may cross at all, and who owns the memory on each side* — so #2074
-has a contract to implement against instead of inventing one arm at a time.
+already tracks. It answers a narrower question than the whole FFI story: *which
+Medaka types may cross at all, and who owns the memory on each side* — so the
+lowering had a contract to implement against instead of inventing one arm at a
+time.
+
+⚠️ **The lowering exists as of 2026-08-27** (`ffi-lower-and-link`, S-ffi-lowering,
+#2074): `emitFfiCall` and friends in `compiler/backend/llvm_emit.mdk` implement §2
+below, and `ffiCrossableTy` (`compiler/types/typecheck.mdk`) rejects everything
+outside §1 at check time. Gated by `test/diff_compiler_llvm_ffi.sh`. Two things
+this doc specifies are still NOT done, both deliberately:
+
+* **Getting array data OUT of a C call — no shape works in v1.** `Array Int` in
+  RETURN position is refused: §2.4 says "a C-side `int64_t*` PLUS LENGTH is
+  copied", a C-ABI return carries ONE value, so there is no length channel and no
+  correct number of words to copy, and the emitter reports a loud gap naming that
+  hole rather than guessing a length. 🚨 **The out-parameter shape is NOT the
+  workaround, and this block used to say it was.** §2.4's Medaka → C direction is
+  fully implemented *as a copy* — it copies `len` words into a fresh buffer before
+  the call and never hands C the live GC pointer — so a C function that fills a
+  caller-allocated array fills the throwaway buffer and the Medaka array is
+  unchanged, silently, at exit 0. Both the doc line and the emitter's gap
+  diagnostic recommended that shape until the `ffi-lower-and-link` review round
+  measured it (S1-6). Closing this needs a copy-BACK in §2.4, which v1 does not
+  have; until then the working shapes are one element per call, or encoding the
+  elements into a `String`.
+* **Linkage** — landed (S-ffi-linkage, #2075). A `[foreign-libraries]` table in
+  `medaka.toml` (`readForeignLibs`/`libLinkFlags`, `compiler/driver/build_cmd.mdk`)
+  links a named library by searching its declared directory, falling back to the
+  linker's default search path; a missing library is a located
+  `B-FFI-LIB-NOT-FOUND` diagnostic naming the library, key, and manifest path —
+  not a raw `clang`/`ld` wall. No `[foreign-libraries]` table: the link line is
+  byte-identical to a project with none (verified by argv capture, not by
+  inspection).
+
+🚨 **The `FFI` label is WRITTEN by the author, never added by the compiler**
+(F1, epic #2070, 2026-08-27). A user-declared `extern`'s terminal effect row
+must already name `FFI` — `<FFI>`, or `<FFI "libcurl">`, or joined with whatever
+else the row names (`<FFI, Net "a.com/*">`) — or the declaration is a located
+type error (`T-FFI-UNLABELLED`). Its predecessor STAMPED the atom in when it was
+missing, and did so for *every* row shape, not only the empty one: a declared
+`<Net "a.com/*">` silently typed as `<FFI, Net "a.com/*">`, so the row in the
+source and the row the effect system enforced were two different rows and no
+signature could be written honestly and believed. Two populations are exempt,
+both by the same test the crossable guard uses: a program the loader owns to
+`stdlibRoot` (`stdlib/runtime.mdk`'s catalog IS the effect vocabulary), and a
+local redeclaration of a catalog name (`ffiIsBuiltinExternName` — such a name is
+lowered as the builtin whatever its local row claims, so the row is not a
+foreign-call contract).
+
+⚠️ **The catalog-name exemption requires a SIGNATURE match, not just a name
+match** (`T-FFI-BUILTIN-SHADOW`, added by the `ffi-lower-and-link` review round,
+S0-3). The name-only exemption was measured on *compatible* redeclarations only
+(`bitAnd`, `getEnv`); an incompatible one got the same free pass and the same
+builtin codegen, so `extern log : String -> <FFI "mylog"> Unit` compiled to `call
+double @mdk_log(double <String cell pointer>)` at exit 0 and the author's own C
+`log` was never called. Such a declaration is now a located type error: the
+emitter routes a catalog name to the builtin regardless of typecheck's verdict
+(`ffiExternRows` subtracts the catalog outright; `emitApp` tests `isAnyExtern`
+before the FFI arm), so a shape-incompatible redeclaration is a claim no lowering
+can honour in either reading. Comparison is at **type-head granularity** —
+argument heads plus return head, effect rows and constraint prefixes walked
+through, type variables normalised — the same projection the emitter's FFI index
+stores. The compatible-redeclaration idiom the effect-domain fixtures rely on is
+untouched.
+
+⚠️ **A NULLARY `extern k : Int` is rejected** (`T-FFI-NULLARY`, same review round,
+S0-2). An effect row lives on an arrow's result, so a signature with no arrow has
+nowhere to write `FFI` — but the emitter lowered such a name as a foreign call
+anyway (`emitVar`'s `isFfiExtern` arm → `emitFfiEtaClosure`), handing back an eta
+closure pointer where the declared value was expected: garbage at exit 0, where
+before the #2074 lowering the same program died loudly with `unbound variable`.
+Write `extern k : Unit -> <FFI> T` and call it as `k ()`. **This does not close
+#2106**, which asks how a nullary extern *would* spell its label; it refuses to
+lower what it cannot label, and that design question stays open.
+
+🚨 **The `mdk_` prefix is reserved** (`T-FFI-RESERVED-NAME`, same review round,
+S0-4). A foreign declaration's name is used verbatim as the C symbol, and `mdk_*`
+is the runtime's own C symbol namespace (`runtime/medaka_rt.c`), so `extern
+mdk_nil : Unit -> <FFI> Int` linked onto the runtime internal and printed its Nil
+constructor word at exit 0. Any user extern whose name starts with `mdk_` is
+refused, at any signature and with no catalog-name exemption — a *mismatched*
+signature was already loud (clang rejects the conflicting `declare`); the silent
+half is the matching one.
+
+🚨 **One C symbol, one signature, program-wide.** Two modules that each declare a
+name with *different* type-head shapes is refused at Core IR lowering time (the
+`foreign declaration collision` panic in `ffiExternTypeNames`,
+`compiler/ir/core_ir_lower.mdk`). The FFI index is bare-name keyed across the
+whole program, so before this the first declaration won and the other module's
+calls were marshalled through it — a wrong value at exit 0, or a segfault. Two
+modules declaring the *same* name with the *same* signature is legitimate sharing
+and stays legal.
 
 This doc is scoped to **value crossing**. It does not restate #2071's
 effect-tracking ground (that a foreign call is `<FFI>`-effectful and how that
@@ -27,6 +114,15 @@ boundary the runtime doesn't fully control.
 | `Char` | immediate, low-bit-1 (codepoint) | yes |
 | `String` | boxed `{header, byte_len, cp_count, bytes…}` | yes, copy-at-boundary |
 | `Array Int` | boxed `{header, len, Int elements…}` | yes, copy-at-boundary |
+| `Unit` | no representation (§8: zero-width) | yes, trivial |
+
+`Unit` was omitted from the original v1 cut, which made every void-returning C
+function — the single most common FFI shape — inexpressible. Added
+2026-08-27 (`ffi-lower-and-link`, S-crossable-guard re-cut) by orchestrator/Val
+ruling: `Unit` carries no runtime representation, so it crosses trivially in
+either position (a `Unit`-typed parameter marshals to nothing; a `Unit` return
+means the C function is called for effect only, mapping to a C `void` return)
+— see §2.6.
 
 Every other value kind (`Tuple`, `List`, other-element `Array`, ADT/`Record`,
 `Ref`, closures, thunks) is explicitly **not** in the v1 crossable set — see §3.
@@ -126,6 +222,19 @@ This is exactly why §2.3/§2.4 above default to copy-out on the C→Medaka
 direction and treat Medaka→C as borrow-for-the-call-only: **v1 has no
 mechanism for a foreign call to retain a Medaka-owned pointer across its own
 return.**
+
+### 2.6 `Unit`
+
+`Unit` has no runtime representation at all — not an immediate, not a boxed
+cell (§8). There is nothing to tag, untag, allocate, or free.
+
+- **Medaka → C:** a `Unit`-typed parameter marshals to nothing — it does not
+  appear in the C call's argument list. (In practice a v1 crossable signature
+  with a `Unit` parameter is degenerate; the common shape is `Unit` in RETURN
+  position, not argument position.)
+- **C → Medaka:** a `Unit`-returning declared extern maps to a C function
+  returning `void`; the call is made for effect only, and the Medaka side
+  produces the `Unit` value without reading any C return register.
 
 ## 3. Not crossable in v1 — and why, in ABI terms
 

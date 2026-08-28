@@ -5,9 +5,9 @@ effect Cache
 effect Log
 
 -- Host-supplied capabilities (platform implements these)
-extern cacheGet : String -> <Cache> String
-extern cacheSet : String -> String -> <Cache> Unit
-extern logEvent : String -> <Log> Unit
+extern cacheGet : String -> <FFI, Cache> String
+extern cacheSet : String -> String -> <FFI, Cache> Unit
+extern logEvent : String -> <FFI, Log> Unit
 
 -- Rewrite a request header
 rewriteHeader req = req ++ " [processed-v2]"

@@ -16,7 +16,7 @@ stages=TYPES_USER
 effect Net Prefix
 effect Stdout
 
-extern netGet : String -> <Net "a.com/foo"> String
+extern netGet : String -> <FFI, Net "a.com/foo"> String
 
 fetch : String -> <Net "a.com/foo", FFI> String
 fetch path = netGet path

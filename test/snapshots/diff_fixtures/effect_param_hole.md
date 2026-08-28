@@ -15,7 +15,7 @@ stages=TOKENS,DESUGAR,MARK
 -- both rejected) is exercised by the companion gate diff_compiler_effect_hole.sh.
 effect Net Prefix
 
-extern netGet : String -> <Net _> String
+extern netGet : String -> <FFI, Net _> String
 
 -- α("a.com/foo") = Known "a.com/foo"; admitted by the wildcard <Net "a.com/*">.
 -- `fetch` is a function (unforced closure) so the extern netGet is never
@@ -38,6 +38,8 @@ COLON
 UPPER "String"
 ARROW
 LT
+UPPER "FFI"
+COMMA
 UPPER "Net"
 UNDERSCORE
 GT
@@ -77,14 +79,14 @@ NEWLINE
 EOF
 # DESUGAR
 (DEffect false "Net" (Some "Prefix"))
-(DExtern false "netGet" (TyFun (TyCon "String") (TyEffect ((hole "Net")) None (TyCon "String"))))
+(DExtern false "netGet" (TyFun (TyCon "String") (TyEffect ("FFI" (hole "Net")) None (TyCon "String"))))
 (DTypeSig false "fetch" (TyFun (TyCon "Unit") (TyEffect ((atom "Net" "a.com/*") "FFI") None (TyCon "String"))))
 (DFunDef false "fetch" (PWild) (EApp (EVar "netGet") (ELit (LString "a.com/foo"))))
 (DTypeSig false "main" (TyEffect ("IO") None (TyCon "Unit")))
 (DFunDef false "main" () (EApp (EVar "println") (ELit (LString "effect hole ok"))))
 # MARK
 (DEffect false "Net" (Some "Prefix"))
-(DExtern false "netGet" (TyFun (TyCon "String") (TyEffect ((hole "Net")) None (TyCon "String"))))
+(DExtern false "netGet" (TyFun (TyCon "String") (TyEffect ("FFI" (hole "Net")) None (TyCon "String"))))
 (DTypeSig false "fetch" (TyFun (TyCon "Unit") (TyEffect ((atom "Net" "a.com/*") "FFI") None (TyCon "String"))))
 (DFunDef false "fetch" (PWild) (EApp (EVar "netGet") (ELit (LString "a.com/foo"))))
 (DTypeSig false "main" (TyEffect ("IO") None (TyCon "Unit")))

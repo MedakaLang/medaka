@@ -57,6 +57,7 @@ import ir.core_ir_lower.{
   methodConstraintIfaces,
   ctorFieldTypeNames,
   declSigTypeNames,
+  ffiExternTypeNames,
 }
 import ir.dce.{dceFilter}
 import backend.private_mangle.{mangleUnits}
@@ -228,6 +229,7 @@ runStaged on targetPath rsrc csrc tsrc =
     (methodConstraintIfaces combined) (ctorFieldTypeNames combined)
     (declSigTypeNames rDecls ++ declSigTypeNames combined)
     (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] targetPath (declaredRecordFieldOrders combined)
+    (ffiExternTypeNames rDecls combined)
   let elaborated = elaborateDict rDecls dictNames userNames combined
   let tEl1 = now ()
   let _ = emitPhaseAO on "elaborate" (tEl1 - tEl0) (allocSnap () - aEl0) declsOp (opSnap () - oEl0)

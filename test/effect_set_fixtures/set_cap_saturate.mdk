@@ -5,8 +5,8 @@
 -- Bounding the function at bare `<Foo>` (⊤) ACCEPTS (saturated demand ⊑ ⊤).
 effect Foo Set
 
-extern g1 : String -> <Foo {"a","b","c","d","e","f","g","h","i"}> String
-extern g2 : String -> <Foo {"j","k","l","m","n","o","p","q","r"}> String
+extern g1 : String -> <FFI, Foo {"a","b","c","d","e","f","g","h","i"}> String
+extern g2 : String -> <FFI, Foo {"j","k","l","m","n","o","p","q","r"}> String
 
 both : String -> <Foo, FFI> String
 both x =

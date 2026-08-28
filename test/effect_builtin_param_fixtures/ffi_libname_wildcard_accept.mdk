@@ -1,0 +1,12 @@
+-- #2103, the other half of ffi_libname_bare_accept.mdk: the WILDCARD spelling
+-- keeps working, and is the SAME set as the bare one.  The `caller` here is
+-- bounded at the BARE spelling while the extern is declared with the wildcard,
+-- so this cell also pins the mutual-subsumption claim: if the carve-out had
+-- made the two spellings mean different things, one direction would reject.
+extern callLib : String -> <FFI "libcurl*"> Int
+
+caller : Unit -> <FFI "libcurl"> Int
+caller _ = callLib "GET /"
+
+main : <IO> Unit
+main = println "ffi wildcard library name accept"

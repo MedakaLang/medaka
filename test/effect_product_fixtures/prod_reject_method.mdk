@@ -4,7 +4,7 @@
 -- (Host is fine here; only Method escapes).
 effect Net Product
 
-extern fetch : String -> <Net Host="idp.example.com/api" Method={"POST"}> String
+extern fetch : String -> <FFI, Net Host="idp.example.com/api" Method={"POST"}> String
 
 call : Unit -> <Net Host="idp.example.com/*" Method={"GET"}> String
 call _ = fetch "x"

@@ -11,7 +11,7 @@
 effect Net Product
 
 -- bare host-only product (Method = TOP)
-extern fetch : String -> <Net Host="idp.example.com/api"> String
+extern fetch : String -> <FFI, Net Host="idp.example.com/api"> String
 
 call : Unit -> <Net Host="idp.example.com/*" Method={"GET"}> String
 call _ = fetch "x"

@@ -16,7 +16,7 @@ stages=TOKENS,DESUGAR,MARK
 effect Net Prefix
 effect Stdout
 
-extern netGet : String -> <Net "a.com/foo"> String
+extern netGet : String -> <FFI, Net "a.com/foo"> String
 
 fetch : String -> <Net "a.com/foo", FFI> String
 fetch path = netGet path
@@ -71,6 +71,8 @@ COLON
 UPPER "String"
 ARROW
 LT
+UPPER "FFI"
+COMMA
 UPPER "Net"
 STRING "a.com/foo"
 GT
@@ -307,7 +309,7 @@ EOF
 # DESUGAR
 (DEffect false "Net" (Some "Prefix"))
 (DEffect false "Stdout" None)
-(DExtern false "netGet" (TyFun (TyCon "String") (TyEffect ((atom "Net" "a.com/foo")) None (TyCon "String"))))
+(DExtern false "netGet" (TyFun (TyCon "String") (TyEffect ("FFI" (atom "Net" "a.com/foo")) None (TyCon "String"))))
 (DTypeSig false "fetch" (TyFun (TyCon "String") (TyEffect ((atom "Net" "a.com/foo") "FFI") None (TyCon "String"))))
 (DFunDef false "fetch" ((PVar "path")) (EApp (EVar "netGet") (EVar "path")))
 (DData Private "Async" ("e" "a") ((variant "Done" (ConPos (TyVar "a"))) (variant "Suspend" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a"))))))) ())
@@ -327,7 +329,7 @@ EOF
 # MARK
 (DEffect false "Net" (Some "Prefix"))
 (DEffect false "Stdout" None)
-(DExtern false "netGet" (TyFun (TyCon "String") (TyEffect ((atom "Net" "a.com/foo")) None (TyCon "String"))))
+(DExtern false "netGet" (TyFun (TyCon "String") (TyEffect ("FFI" (atom "Net" "a.com/foo")) None (TyCon "String"))))
 (DTypeSig false "fetch" (TyFun (TyCon "String") (TyEffect ((atom "Net" "a.com/foo") "FFI") None (TyCon "String"))))
 (DFunDef false "fetch" ((PVar "path")) (EApp (EVar "netGet") (EVar "path")))
 (DData Private "Async" ("e" "a") ((variant "Done" (ConPos (TyVar "a"))) (variant "Suspend" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyVar "a"))))))) ())

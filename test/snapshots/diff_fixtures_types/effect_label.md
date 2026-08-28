@@ -9,7 +9,7 @@ stages=TYPES_USER
 effect KV
 effect Log
 
-extern kvGet : String -> <KV> String
+extern kvGet : String -> <FFI, KV> String
 
 get : String -> <KV, FFI> String
 get k = kvGet k

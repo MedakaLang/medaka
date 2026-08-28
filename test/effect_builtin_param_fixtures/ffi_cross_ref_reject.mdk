@@ -1,0 +1,10 @@
+-- #2074 crossable-set guard: `Ref` is not crossable.  🚨 THE EXTERN IS NAMED
+-- `ffiPeek`, NOT `Ref` -- deliberately a name `stdlib/runtime.mdk` does NOT
+-- declare, so this cell proves the guard still fires on a genuine novel
+-- foreign declaration and is not simply skipping everything through the
+-- builtin-name exemption (see ffi_cross_builtin_name_accept.mdk for the
+-- exemption's own cell).
+extern ffiPeek : Ref Int -> <FFI> Int
+
+main : <IO> Unit
+main = println "ffi cross ref reject"

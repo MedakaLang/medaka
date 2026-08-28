@@ -3,7 +3,7 @@
 -- admitting that product ACCEPTS; a narrower product policy REJECTS.
 effect Net Product
 
-extern fetch : String -> <Net Host="idp.example.com/api" Method={"GET"}> String
+extern fetch : String -> <FFI, Net Host="idp.example.com/api" Method={"GET"}> String
 
 transform : String -> <Net Host="idp.example.com/*" Method={"GET", "POST"}, FFI> String
 transform req = fetch req

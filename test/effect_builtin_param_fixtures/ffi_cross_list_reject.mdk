@@ -1,0 +1,7 @@
+-- #2074 crossable-set guard: `List` is not in FFI-ABI.md section 1.  A
+-- PARAMETER position, to prove the spine walk checks arguments and not only
+-- the result.
+extern ffiSum : List Int -> <FFI> Int
+
+main : <IO> Unit
+main = println "ffi cross list reject"

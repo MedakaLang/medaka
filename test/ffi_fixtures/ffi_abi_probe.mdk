@@ -1,0 +1,44 @@
+-- #2074 FFI lowering: one call per crossable shape in compiler/FFI-ABI.md §1,
+-- against the real C functions in ffi_abi_probe.c.
+--
+-- EXPECTED OUTPUT, hand-computed from the C source, NOT captured from a run:
+--
+--   42            ffiAddInts 20 22
+--   False         ffiNegate True
+--   b             ffiCharNext 'a'  ('a' = 97 -> 98 = 'b')
+--   6.0           ffiScale 1.5 4.0
+--   6             ffiByteLen "hello" plus one 2-byte 'é' = 6 BYTES (5 codepoints)
+--   round-trip!   ffiEcho "round-trip", C appends '!'
+--   10            ffiSumInts [|1, 2, 3, 4|] 4
+--   7             ffiNotesLen () after ffiNote "note ok" (7 bytes)
+--   5.5           ffiMix 2 0.5 "abc"  =  2 + 0.5 + 3
+--
+-- ⚠️ `ffiSumInts` is the one that would still EXIT 0 while printing a wrong
+-- number if the array crossed as the live Medaka cell (tagged elements, count in
+-- word 0) instead of the mandatory §2.4 copy: 3 + 5 + 7 + 9 = 24, not 10.
+-- `ffiByteLen` is the same shape for §2.3 — a cell pointer would count the
+-- header bytes, not the payload.
+
+extern ffiAddInts : Int -> Int -> <FFI> Int
+extern ffiNegate : Bool -> <FFI> Bool
+extern ffiCharNext : Char -> <FFI> Char
+extern ffiScale : Float -> Float -> <FFI> Float
+extern ffiByteLen : String -> <FFI> Int
+extern ffiEcho : String -> <FFI> String
+extern ffiSumInts : Array Int -> Int -> <FFI> Int
+extern ffiNote : String -> <FFI> Unit
+extern ffiNotesLen : Unit -> <FFI> Int
+extern ffiMix : Int -> Float -> String -> <FFI> Float
+
+main : <IO, FFI> Unit
+main =
+  let _ = println (ffiAddInts 20 22)
+  let _ = println (ffiNegate True)
+  let _ = println (ffiCharNext 'a')
+  let _ = println (ffiScale 1.5 4.0)
+  let _ = println (ffiByteLen "héllo")
+  let _ = println (ffiEcho "round-trip")
+  let _ = println (ffiSumInts [|1, 2, 3, 4|] 4)
+  let _ = ffiNote "note ok"
+  let _ = println (ffiNotesLen ())
+  println (ffiMix 2 0.5 "abc")

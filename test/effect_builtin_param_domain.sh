@@ -111,16 +111,110 @@ fi
 expect_reject "$FIX/ffi_io_reject.mdk"  'FFI io-non-subsumption reject (<IO> does not subsume <FFI>)' 'performs <FFI "libcurl\*">'
 expect_ok     "$FIX/exec_io_accept.mdk" 'EXEC io-subsumption accept control (<IO> subsumes <Exec>)'
 
-# ── R2 stamp-acceptance shapes (F1 fix packet N2): pin slice 3's report-only
-# Checks 1/2/4/5 probes as a real gate.  A user-declared extern's bare `<>`
-# bound is stamped `<FFI>` (Check 1); a caller at the ORIGINAL bare `<>` no
-# longer subsumes it (Check 2, composed with R1) ⇒ REJECT; naming `FFI`
-# explicitly ⇒ ACCEPT; a NARROWER declared param (`<Net "…">`) is stamped
-# `<FFI, Net "…">` (Checks 4/5, the join not a replace) and a caller bounded at
-# the joined row ⇒ ACCEPT.
-expect_reject "$FIX/ffi_stamp_bare_reject.mdk"   'FFI stamp bare reject (<> does not subsume stamped <FFI>)' 'performs <FFI>'
-expect_ok     "$FIX/ffi_stamp_bare_accept.mdk"   'FFI stamp bare accept (caller names FFI explicitly)'
-expect_ok     "$FIX/ffi_stamp_narrow_accept.mdk" 'FFI stamp narrow accept (stamp joins existing Net param)'
+# ── the DECLARED-ROW HONESTY rule + the caller shapes it composes with ──────
+#
+# F1 (epic #2070) replaced a silent rewrite with a check: a user extern's
+# terminal row must ALREADY name `FFI`, whatever else it names, or the
+# declaration is a located type error.
+#
+# 🚨 THE CELL THAT DISCRIMINATES THE RULE FROM ITS NARROW MISREADING is
+# `ffi_stamp_missing_reject`, whose offending row is NOT empty.  The predecessor
+# rewrote `<Net "…">` to `<FFI, Net "…">` exactly as it rewrote `<>` to `<FFI>`,
+# so a bare-`<>` reject cell alone would show all-green against a fix that still
+# silently widened every written row.  Read it together with
+# `ffi_stamp_narrow_accept`: the two files differ only in the written `FFI`.
+#
+# The remaining two cells are about the CALLER, not the declaration: with `FFI`
+# excluded from `ioAliasLabels` (R1), a caller bounded at bare `<>` does not
+# subsume an `<FFI>`-performing body ⇒ REJECT, and naming `FFI` ⇒ ACCEPT.
+expect_reject "$FIX/ffi_stamp_missing_reject.mdk" 'FFI declared-row honesty reject (non-empty row missing the FFI label)' \
+  "Foreign declaration 'ffiFetch' does not name the 'FFI' effect in its result row"
+expect_reject "$FIX/ffi_stamp_bare_reject.mdk"   'FFI caller reject (<> does not subsume the declared <FFI>)' 'performs <FFI>'
+expect_ok     "$FIX/ffi_stamp_bare_accept.mdk"   'FFI caller accept (caller names FFI explicitly)'
+expect_ok     "$FIX/ffi_stamp_narrow_accept.mdk" 'FFI narrow accept (FFI written alongside the Net param)'
 
+
+# ── #2074 the FFI-ABI.md section 1 CROSSABLE SET, at check time ──────────────
+# A user-declared extern whose signature mentions a type outside section 1 is
+# rejected with a located diagnostic naming the offending type.  One reject
+# cell per non-crossable kind, one accept cell per crossable row.
+#
+# 🚨 The two cells that must be read TOGETHER are `ref_reject` and
+# `builtin_name_accept`.  The guard EXEMPTS an extern whose name is a real
+# `stdlib/runtime.mdk` catalog name, because `isAnyExtern`
+# (compiler/backend/llvm_emit.mdk) dispatches emitted calls by NAME against the
+# fixed `externCatalog` -- such a redeclaration is lowered as the builtin no
+# matter what its local row says, so its signature is not a foreign-call
+# contract.  `ref_reject` declares a NOVEL name (`ffiPeek`) carrying `Ref Int`
+# and must still REJECT: without it, an exemption that had silently swallowed
+# every declaration would still show all-green here.
+expect_reject "$FIX/ffi_cross_tuple_reject.mdk" 'FFI crossable reject: Tuple result' \
+  "Type '(Int, Int)' cannot cross the foreign-function boundary in extern 'ffiPair'"
+expect_reject "$FIX/ffi_cross_list_reject.mdk" 'FFI crossable reject: List param' \
+  "Type 'List Int' cannot cross the foreign-function boundary in extern 'ffiSum'"
+expect_reject "$FIX/ffi_cross_array_elem_reject.mdk" 'FFI crossable reject: Array with non-Int element' \
+  "Type 'Array String' cannot cross the foreign-function boundary in extern 'ffiWidths'"
+expect_reject "$FIX/ffi_cross_adt_reject.mdk" 'FFI crossable reject: user ADT' \
+  "Type 'Color' cannot cross the foreign-function boundary in extern 'ffiColorCode'"
+expect_reject "$FIX/ffi_cross_ref_reject.mdk" 'FFI crossable reject: Ref under a NOVEL extern name (guard still fires)' \
+  "Type 'Ref Int' cannot cross the foreign-function boundary in extern 'ffiPeek'"
+expect_reject "$FIX/ffi_cross_fnparam_reject.mdk" 'FFI crossable reject: function-typed param (closure cell)' \
+  "Type 'Int -> <> Int' cannot cross the foreign-function boundary in extern 'ffiApply'"
+# Polymorphic extern: no crossable type is polymorphic.  ALSO the location cell
+# -- a bare TyVar has no loc of its own, so this asserts the line, which is
+# `:1:0` unless ffiCheckExternSig's whole-signature fallback is applied.
+expect_reject "$FIX/ffi_cross_poly_reject.mdk" 'FFI crossable reject: polymorphic extern (located on its own line, not :1:0)' \
+  "ffi_cross_poly_reject.mdk:11:.*Type 'a' cannot cross the foreign-function boundary in extern 'ffiWrapAll'"
+
+expect_ok "$FIX/ffi_cross_int_accept.mdk"          'FFI crossable accept: Int'
+expect_ok "$FIX/ffi_cross_float_accept.mdk"        'FFI crossable accept: Float'
+expect_ok "$FIX/ffi_cross_bool_accept.mdk"         'FFI crossable accept: Bool'
+expect_ok "$FIX/ffi_cross_char_accept.mdk"         'FFI crossable accept: Char'
+expect_ok "$FIX/ffi_cross_string_accept.mdk"       'FFI crossable accept: String'
+expect_ok "$FIX/ffi_cross_arrayint_accept.mdk"     'FFI crossable accept: Array Int'
+expect_ok "$FIX/ffi_cross_unit_accept.mdk"         'FFI crossable accept: Unit return (C void)'
+expect_ok "$FIX/ffi_cross_builtin_name_accept.mdk" 'FFI crossable accept: builtin-name exemption (getEnv redeclared)'
+
+# ── #2103 the FFI library-name carve-out ────────────────────────────────────
+# The Prefix delimiter guard (`prefixPatternOk`) is a HOST/PATH footgun guard;
+# an FFI param names a LIBRARY, which has no delimiter structure.  Bare and
+# wildcard spellings are both accepted AND denote the same set (prefixConcrete
+# strips a trailing `*`), so the accept cells cross the two spellings.  The
+# empty pattern is still rejected — the carve-out must not become "anything
+# goes", because "" is a prefix of everything and would silently mean ⊤.
+expect_ok     "$FIX/ffi_libname_bare_accept.mdk"     'FFI libname accept: bare "libcurl" (#2103)'
+expect_ok     "$FIX/ffi_libname_wildcard_accept.mdk" 'FFI libname accept: "libcurl*" extern vs bare-bounded caller (same set)'
+expect_reject "$FIX/ffi_libname_empty_reject.mdk"    'FFI libname reject: empty pattern still rejected' \
+  'the library pattern is empty'
+
+# ── the three DECLARATION-NAME rules (review round of `ffi-lower-and-link`) ──
+#
+# Each one turned a SILENT WRONG VALUE at exit 0 into a located refusal, and each
+# has an accept cell above that a blunter fix would break -- read them in pairs:
+#
+#   ffi_nullary_reject          <-> ffi_stamp_narrow_accept
+#       differ only in whether an ARROW exists.  While the label rule's `None`
+#       arm passed, the emitter lowered a nullary extern as an eta CLOSURE
+#       POINTER where the declared value was expected.  #2106 (how a nullary
+#       extern WOULD spell a label) stays open; this pins only the refusal.
+#
+#   ffi_builtin_shadow_reject   <-> ffi_cross_builtin_name_accept
+#       differ only in whether the local type-head shape AGREES with the catalog
+#       row's.  The builtin-name exemption was keyed on the bare name, and its
+#       justification was measured only on COMPATIBLE redeclarations; an
+#       incompatible one got the same free pass and reached the real builtin with
+#       reinterpreted argument bits.  Deleting the exemption instead of gating it
+#       would show green here and red there.
+#
+#   ffi_reserved_prefix_reject  -- no pair; the ban is unconditional.
+#       Its signature MATCHES the runtime internal deliberately: a mismatched one
+#       was already loud (clang rejects the conflicting `declare`), so only the
+#       matching case discriminates.
+expect_reject "$FIX/ffi_nullary_reject.mdk" 'FFI nullary reject (no arrow: nowhere to write the FFI label, and the emitter lowered it anyway)' \
+  "Foreign declaration 'gNullary' has no arrow in its signature"
+expect_reject "$FIX/ffi_builtin_shadow_reject.mdk" 'FFI builtin-shadow reject (catalog name redeclared with an INCOMPATIBLE signature)' \
+  "Foreign declaration 'log' redeclares a built-in runtime name with an incompatible signature"
+expect_reject "$FIX/ffi_reserved_prefix_reject.mdk" 'FFI reserved-prefix reject (mdk_ is the runtime C symbol namespace)' \
+  "Foreign declaration 'mdk_nil' claims a reserved name"
 echo "effect_builtin_param_domain: $pass/$fail"
 [ "$fail" -eq 0 ]

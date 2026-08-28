@@ -1,0 +1,21 @@
+-- S0-4 (review round of `ffi-lower-and-link`): the `mdk_` prefix is the Medaka
+-- runtime's own C symbol namespace (`runtime/medaka_rt.c`), and a foreign
+-- declaration's name is used VERBATIM as the C symbol it links to.  With no
+-- reserved-prefix check, this declaration linked onto the runtime's real
+-- internal `mdk_nil` and printed its Nil constructor word (562949953421315) at
+-- exit 0.
+--
+-- 🚨 THE SIGNATURE HERE MATCHES the internal ON PURPOSE, because that is the
+-- SILENT half.  A mismatched one was already loud (clang rejects the conflicting
+-- `declare`), so a cell built on a mismatch would have passed against the broken
+-- compiler too.
+--
+-- ⚠️ Not the same rule as `ffi_builtin_shadow_reject.mdk`.  That one is about
+-- INCOMPATIBILITY with a legitimate catalog builtin and admits the compatible
+-- case; this one is an unconditional namespace ban, with no signature test and
+-- no catalog-name exemption -- the catalog holds no `mdk_`-prefixed row, so the
+-- two rules cannot collide.
+extern mdk_nil : Unit -> <FFI> Int
+
+main : <IO, FFI> Unit
+main = println (mdk_nil ())

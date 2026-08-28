@@ -8,7 +8,7 @@
 -- reverse.
 effect Net Prefix
 
-extern netGet : String -> <Net _> String
+extern netGet : String -> <FFI, Net _> String
 
 transform userInput =
   let dest = userInput

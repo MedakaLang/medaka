@@ -78,6 +78,7 @@ import support.util.{
   noneHeadTag,
   isEmptyL,
   isNonEmptyL,
+  joinWith,
   reverseL,
   startsWith,
   dedupBy,
@@ -2161,6 +2162,93 @@ declSigTypeEntries (DExtern _ name ty) =
   [(name, (map tyHeadName (methodArgTys ty), tyHeadName (methodRetTy ty)))]
 declSigTypeEntries (DAttrib _ inner) = declSigTypeEntries inner
 declSigTypeEntries _ = []
+
+-- ── user-declared FFI externs → the lowering's own table (#2074) ─────────────
+-- The emitter's `declSigIndex` (above) cannot answer "is this name a USER
+-- extern?": it is built from `runtimeDecls ++ allDecls` and holds ordinary
+-- annotated functions and the 138 `stdlib/runtime.mdk` builtins in the same
+-- flat keyspace.  So the FFI lowering gets its OWN index, minted here from the
+-- same two decl lists the emit drivers already hold, and carried to the emitter
+-- as `EmitInput.ffiExternIndex`.
+--
+-- 🚨 THE BUILTIN-NAME EXEMPTION, emitter side.  A local `extern` whose name is a
+-- `stdlib/runtime.mdk` catalog name is emitted through the BUILTIN's codegen
+-- (`isAnyExtern` in `emitApp`'s ladder dispatches by exact NAME), regardless of
+-- what the local row claims — that is the same fact `ffiIsBuiltinExternName`
+-- (`compiler/types/typecheck.mdk`) exempts from the crossable-set guard.  Here it
+-- is honoured by SUBTRACTING the runtime catalog's own extern names, so such a
+-- name never enters the FFI index at all and no foreign call can be minted for
+-- it.  (`emitApp` checks `isAnyExtern` BEFORE the FFI arm as well, so the
+-- exemption holds on both sides of the seam; this filter is what keeps it true
+-- for a runtime extern name that no `externCatalog` family predicate claims.)
+export
+ffiExternTypeNames : List Decl -> List Decl -> List (String, (List String, String))
+ffiExternTypeNames runtimeDecls userDecls =
+  let rows = ffiExternRows (externDeclNamesOf runtimeDecls) userDecls
+  -- 🚨 THE INDEX IS BARE-NAME KEYED ACROSS THE WHOLE PROGRAM, so a name declared
+  -- twice with two different signatures is a contradiction the index cannot hold
+  -- ([T-GLOBAL-TABLE]).  Guard it HERE, in the wrapper, and not inside
+  -- `ffiExternRows`: the property is about the FINISHED list, and `ffiExternRows`
+  -- is a self-recursive walk that would have to re-scan its own tail at every step
+  -- to ask it — the exact list-as-a-set shape `compiler/AGENTS.md` opens with.
+  let _ = ffiCheckExternRowsDistinct omEmpty rows
+  rows
+
+-- Two modules may each declare `extern cDouble`, and the declared name IS the C
+-- symbol (`compiler/FFI-ABI.md`), so both calls link to ONE C function.  If the two
+-- declarations agree, that is legitimate sharing and this walk is silent.  If they
+-- DISAGREE, `omFromPairs (reverseL …)` in `EmitInputData` keeps the first row and
+-- marshals the other module's calls through it: `useY 4.0` against an
+-- `Int -> Int` row printed 139888567046080 at exit 0, and the `Float -> Float`
+-- variant of the same collision segfaulted.  Neither has any channel to reach the
+-- author, so the contradiction is refused here rather than emitted.
+--
+-- A PANIC, not a located diagnostic, and that is the stage's own limit rather than
+-- a choice: Core IR lowering runs post-typecheck, where [T-ERRORS-ACCUM]'s
+-- accumulating pipeline is no longer available, and this is the same shape the two
+-- existing whole-program injectivity guards in this file use
+-- (`checkImplSymbolsInjective`, `dictWitnessTagGuard`) for the same reason.
+--
+-- ⚠️ The three data lines are UNINDENTED on purpose, matching
+-- `checkImplSymbolsInjective`: they are CONTENT-derived, so a `stdout-line` pin can
+-- match them with `grep -qxF` without false-draining on a rewording of the prose.
+ffiCheckExternRowsDistinct : OrdMap String -> List (String, (List String, String)) -> Unit
+ffiCheckExternRowsDistinct _ [] = ()
+ffiCheckExternRowsDistinct seen ((n, sh)::rest) =
+  let k = ffiRowShapeKey sh
+  match omLookup n seen
+    None => ffiCheckExternRowsDistinct (omInsert n k seen) rest
+    Some prev if prev == k => ffiCheckExternRowsDistinct seen rest
+    Some prev => panic "foreign declaration collision: the C symbol `\{n}` is declared twice with different signatures.\ncolliding symbol: \{n}\ndeclaration 1: \{prev}\ndeclaration 2: \{k}\nA foreign declaration's name IS the C symbol it links to, so both declarations name ONE C function and only one of these two signatures can describe it. The other module's calls would be marshalled through the wrong signature -- a wrong value at exit 0, or a memory fault. Give the two declarations the same signature, or declare the differing one against a differently-named C symbol."
+
+-- The rendered `(argument heads, return head)` row, for the collision message and
+-- the comparison behind it.  Same projection the index itself stores, so the guard
+-- cannot be stricter or looser than the table it is protecting.
+ffiRowShapeKey : (List String, String) -> String
+ffiRowShapeKey (args, ret) = "\{joinWith "," args} -> \{ret}"
+
+-- the `DExtern` names of a decl list, in order.
+externDeclNamesOf : List Decl -> List String
+externDeclNamesOf [] = []
+externDeclNamesOf ((DExtern _ n _)::rest) = n :: externDeclNamesOf rest
+externDeclNamesOf ((DAttrib _ inner)::rest) = externDeclNamesOf [inner]
+  ++ externDeclNamesOf rest
+externDeclNamesOf (_::rest) = externDeclNamesOf rest
+
+-- Same (param-head-names, return-head-name) shape as `declSigTypeEntries`, so
+-- the emitter reads one row type for both tables.  `tyHeadName` collapses
+-- `Array Int` to `Array`, which is unambiguous HERE and only here: slice 1's
+-- `ffiCrossableTy` guard rejects every non-crossable type — `Array` of anything
+-- but `Int` included — before a user extern's signature can reach the emitter,
+-- so `Array` in this table always means `Array Int`.
+ffiExternRows : List String -> List Decl -> List (String, (List String, String))
+ffiExternRows _ [] = []
+ffiExternRows builtins ((DExtern _ n ty)::rest)
+  | contains n builtins = ffiExternRows builtins rest
+  | otherwise = (n, (map tyHeadName (methodArgTys ty), tyHeadName (methodRetTy ty))) :: ffiExternRows builtins rest
+ffiExternRows builtins ((DAttrib _ inner)::rest) =
+  ffiExternRows builtins (inner::rest)
+ffiExternRows builtins (_::rest) = ffiExternRows builtins rest
 
 -- the RESULT type of a (possibly-constrained, possibly-effectful) function type
 -- (the `r` of `a -> b -> … -> r`); a non-function type is its own result.

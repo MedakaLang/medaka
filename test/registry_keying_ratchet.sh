@@ -266,8 +266,9 @@ mainSchemeRef -- the entry module inferred `main` scheme; last writer (dependenc
 sigNameSetRef -- signature NAME set, OrdMap membership mirror
 sigTyMapRef -- signature name -> Ty map
 implInferEnabled -- toggle: whether impl-body inference is active on this pass
-stdlibOwnedModsRef -- #2072/#2096 (FFI stamp): module ids owned by the stdlib root, read by ffiStampMode's Module arm to decide whether a checked program is exempt from the FFI stamp
-flatEntryIsStdlibRef -- #2072/#2096 (FFI stamp): whether the Flat-arm entry file is itself stdlib-owned, read by ffiStampMode's Flat arm for the same exemption decision
+stdlibOwnedModsRef -- #2072/#2096 (FFI declaration rules): module ids owned by the stdlib root, read by ffiStampMode's Module arm to decide whether a checked program is exempt from the two user-extern declaration guards (the FFI-label rule and the crossable-set rule). Named for the FFI STAMP it originally gated; F1 (epic #2070) deleted that stamp and the Bool now gates the checks that replaced it
+flatEntryIsStdlibRef -- #2072/#2096 (FFI declaration rules; the field is named for the deleted stamp): whether the Flat-arm entry file is itself stdlib-owned, read by ffiStampMode's Flat arm for the same exemption decision
+builtinExternNamesRef -- #2074 (FFI crossable-set guard, S-crossable-guard): the set of stdlib/runtime.mdk extern NAMES, recorded once by externSchemes (the catalog builder, whose eight call sites all pass runtimeDecls) and read by ffiIsBuiltinExternName. Not a bare-name-keyed CROSS-MODULE table in the sense this ratchet pins: it is a flat name SET over one fixed file's catalog, never a per-module map, and its only question is "does the emitter's isAnyExtern ladder already own this exact name?" -- which is itself keyed on the bare name by construction (externCatalog dispatches by exact name, with no notion of which module declared it), so keying the mirror any other way would answer a DIFFERENT question than the one the emitter asks. Union-not-replace on write, so a driver that seeds the catalog more than once per process (medaka test runs several engines) cannot shrink the set a guard is reading. NOTE: this entry was owed by S-crossable-guard and is added here by S-ffi-lowering, which found the ratchet red on the sprint branch.
 ALLOWLIST_EOF
 )
 

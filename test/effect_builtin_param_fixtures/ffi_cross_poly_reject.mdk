@@ -1,0 +1,14 @@
+-- #2074 crossable-set guard: a POLYMORPHIC extern.  No type in FFI-ABI.md
+-- section 1 is polymorphic, so a generic foreign declaration is genuinely
+-- unrepresentable at a C ABI -- there is no width, no tag, and no marshalling
+-- rule to pick.  Inherited from `test/typecheck_fixtures/externs.mdk`'s old
+-- `wrapL : a -> List a` cell, which this rule made unacceptable.
+--
+-- Also the cell for the LOCATION fallback: a bare `TyVar` carries no source loc
+-- of its own, so without `ffiCheckExternSig`'s whole-signature fallback the
+-- caret for the `a` PARAMETER lands on `:1:0` -- line 1 of a file whose defect
+-- is on line 12 -- instead of on this declaration's `Array` head.
+extern ffiWrapAll : a -> <FFI> Array a
+
+main : <IO> Unit
+main = println "ffi cross poly reject"

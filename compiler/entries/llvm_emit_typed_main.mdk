@@ -32,6 +32,7 @@ import ir.core_ir_lower.{
   methodConstraintIfaces,
   ctorFieldTypeNames,
   declSigTypeNames,
+  ffiExternTypeNames,
 }
 import ir.core_ir.{CProgram(..), CBind(..), CClause(..), CExpr(..)}
 import backend.llvm_emit.{emitProgram, emitProgramRecord, makeEmitInput}
@@ -73,7 +74,7 @@ emitIsolation runtimePath pPath pPlusUPath = match readFile runtimePath
 -- both, so an ambient Record mode leak changes the second observation to exit 0.
 emitGapIsolation : <IO> Unit
 emitGapIsolation =
-  let input = makeEmitInput [] [] [] [] [] [] False False 0 [] [] "" []
+  let input = makeEmitInput [] [] [] [] [] [] False False 0 [] [] "" [] []
   let cp = CProgram [CBind "main" [CClause [] (CMatch (CLit (LInt 0)) [])]] [] [] []
   let (_, gaps) = emitProgramRecord input cp
   if contains "?\tunsupported Core IR node CMatch" gaps then
@@ -93,7 +94,7 @@ runEmit runtimeDecls preludeDecls userDecls =
   let livePrelude = dropShadowedExp userNames preludeDecls
   let combined = livePrelude ++ userDecls
   let dictNames = preludeReturnPosDictNames livePrelude combined ++ preludeArgPosDictNames livePrelude combined ++ constrainedSigNames userDecls
-  let input = makeEmitInput (returnsSelfTable combined) (selfFnParamTable combined) (methodIfaceTable combined) (methodConstraintIfaces combined) (ctorFieldTypeNames combined) (declSigTypeNames runtimeDecls ++ declSigTypeNames combined) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] "" (declaredRecordFieldOrders combined)
+  let input = makeEmitInput (returnsSelfTable combined) (selfFnParamTable combined) (methodIfaceTable combined) (methodConstraintIfaces combined) (ctorFieldTypeNames combined) (declSigTypeNames runtimeDecls ++ declSigTypeNames combined) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] "" (declaredRecordFieldOrders combined) (ffiExternTypeNames runtimeDecls combined)
   emitProgram
     input
     (lowerProgramEmit (elaborateDict runtimeDecls dictNames userNames combined))

@@ -1,0 +1,22 @@
+-- #2103 (FFI lib pattern rejected by the Prefix delimiter guard): a BARE
+-- library name is now accepted.  Before this, `<FFI "libcurl">` was rejected
+-- with *pattern "libcurl" must end in '*' or contain a '/' delimiter* — a
+-- guard written for HOST/PATH prefixes ("example.com" would silently admit
+-- "example.com.evil.net") and meaningless for a library name.
+--
+-- WHAT THE PARAM STILL VALIDATES after the carve-out: only that the string is
+-- NON-EMPTY (see ffi_libname_empty_reject.mdk).  Nothing checks that the
+-- library exists, and nothing cross-checks it against the `[foreign-libraries]`
+-- manifest section — those are two independent facts by design (sprint Q3).
+--
+-- WHAT BARE vs WILDCARD MEAN: the same thing.  Prefix subsumption compares
+-- `prefixConcrete` values and `prefixConcrete` STRIPS a trailing `*`, so
+-- `<FFI "libcurl">` and `<FFI "libcurl*">` are one and the same set — every
+-- library name beginning with "libcurl".  See ffi_libname_wildcard_accept.mdk.
+extern callLib : String -> <FFI "libcurl"> Int
+
+caller : Unit -> <FFI "libcurl"> Int
+caller _ = callLib "GET /"
+
+main : <IO> Unit
+main = println "ffi bare library name accept"

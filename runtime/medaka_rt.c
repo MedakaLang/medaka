@@ -884,6 +884,47 @@ long long mdk_array_from_list(long long list) {
   return (long long)cell;
 }
 
+
+/* ── FFI boundary marshalling (#2074, compiler/FFI-ABI.md §2) ───────────────
+ * The two crossings the emitter cannot express as a couple of inline LLVM
+ * instructions.  Everything else in §2 is inline codegen: immediates are an
+ * `ashr`/`shl`, a Float is the emitter's existing box/unbox, and a String going
+ * OUT is just the cell pointer plus 24.
+ *
+ * NOT reachable from any Medaka program that declares no `extern` of its own —
+ * the emitter emits their `declare`s only when the FFI index is non-empty. */
+
+/* §2.4, Medaka → C.  MANDATORY COPY.  The Medaka array cell is
+ * `{i64 count, TAGGED elem…}` (mdk_array_make above), so a raw `int64_t*` view of
+ * it would hand the C side `2*v+1` for every element and a bogus leading count.
+ * Copy `count` UNTAGGED words into a fresh pointer-free buffer and hand that over.
+ *
+ * The buffer is GC-allocated (atomic: it holds no pointers), not malloc'd, so
+ * nothing has to free it — Boehm reclaims it once the call returns and the
+ * caller's frame stops referencing it.  Per §2.5 the C side must not retain it
+ * past its own return. */
+void *mdk_ffi_array_int_out(long long arr) {
+  const long long *a = (const long long *)arr;
+  long long n = a[0];
+  long long *buf = (long long *)mdk_alloc_atomic(8 * (n > 0 ? n : 1));
+  for (long long i = 0; i < n; i++) buf[i] = a[i + 1] >> 1;
+  return (void *)buf;
+}
+
+/* §2.3, C → Medaka.  MANDATORY COPY — Medaka never adopts a C-allocated buffer
+ * as a String cell, so this routes through mdk_str_lit (alloc + memcpy), exactly
+ * as every String-returning builtin already does.  If the C side malloc'd `s`,
+ * freeing it stays the C side's job; this copy is independent.
+ *
+ * Length comes from the NUL terminator: a C-ABI return carries one value, so
+ * there is no second channel for a byte count.  A NULL return becomes "" rather
+ * than a segfault — a C function signalling failure with NULL is common, and §4
+ * says a foreign call cannot fail INTO Medaka. */
+long long mdk_ffi_str_in(const char *s) {
+  if (s == NULL) return mdk_str_lit("", 0);
+  return mdk_str_lit(s, (long long)strlen(s));
+}
+
 /* Char scalar externs (native extern catalog slice 8).
  * Char = immediate codepoint word: word = (codepoint << 1) | 1 (same tag as Int).
  * charCode is INTRINSIC (identity re-type) — no C helper needed.

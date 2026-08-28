@@ -99,7 +99,7 @@ fi
 # the native host recovers the precise <Net "a.com/foo"> row (not the bare <Net>).
 cat > "$WORK/ws2_outer.mdk" <<'EOF'
 effect Net Prefix
-extern netGet : String -> <Net _> String
+extern netGet : String -> <FFI, Net _> String
 fetch _ =
   let dest = "a.com/foo"
   netGet dest
@@ -120,8 +120,8 @@ fi
 # admit a sibling host (the '/' delimiter guards against prefix-as-substring).
 cat > "$WORK/reject_sibling.mdk" <<'EOF'
 effect Net Prefix
-extern netGet : String -> <Net _> String
-fetch : Unit -> <Net "a.com/*"> String
+extern netGet : String -> <FFI, Net _> String
+fetch : Unit -> <FFI, Net "a.com/*"> String
 fetch _ = netGet "a.com.evil.com/x"
 main : <IO> Unit
 main = println "x"
@@ -131,8 +131,8 @@ EOF
 # which the bounded <Net "a.com/*"> must NOT admit (the no-exfiltration rule).
 cat > "$WORK/reject_computed.mdk" <<'EOF'
 effect Net Prefix
-extern netGet : String -> <Net _> String
-fetch : String -> <Net "a.com/*"> String
+extern netGet : String -> <FFI, Net _> String
+fetch : String -> <FFI, Net "a.com/*"> String
 fetch url = netGet url
 main : <IO> Unit
 main = println "x"
@@ -143,8 +143,8 @@ EOF
 # prove one.  `let dest = url` then `netGet dest` ⇒ α(dest) = α(url) = Unknown.
 cat > "$WORK/reject_outer_computed.mdk" <<'EOF'
 effect Net Prefix
-extern netGet : String -> <Net _> String
-fetch : String -> <Net "a.com/*"> String
+extern netGet : String -> <FFI, Net _> String
+fetch : String -> <FFI, Net "a.com/*"> String
 fetch url =
   let dest = url
   netGet dest
