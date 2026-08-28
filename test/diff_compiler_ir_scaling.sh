@@ -110,13 +110,15 @@
 # ── THE THRESHOLD ────────────────────────────────────────────────────────────
 #
 # IR_THRESH = 3.0 per doubling, and a shape FAILS when r2 — the SECOND doubling,
-# the one that carries the asymptote — clears it. Same NUMBER as
-# diff_compiler_perf_scaling.sh; not the same RULE, and the difference is
-# deliberate. See THE VERDICT RULE in grade_shape: the both-doublings conjunct
-# was imported from the wall-clock arm, where two noisy samples make a sustained
-# signal worth demanding, and it is inverted on a deterministic instrument, where
-# r1 < t < r2 is the signature of the superlinear term rather than of noise
-# (#2063, #2100).
+# the one that carries the asymptote — clears it. Same NUMBER and, since #2173,
+# the same RULE as every DETERMINISTIC arm of diff_compiler_perf_scaling.sh and
+# both drivers of diff_compiler_stage_ir_scaling.sh. The one arm anywhere that
+# still demands both doublings is perf_scaling's WALL-CLOCK `grade_time_stage`,
+# and that is deliberate: two noisy samples make a sustained signal worth
+# demanding, whereas on a deterministic instrument r1 < t < r2 is the signature
+# of the superlinear term rather than of noise (#2063, #2100, #2173). See THE
+# VERDICT RULE in grade_shape. Derive the exception rather than trusting this
+# line:  grep -n "^[^#]*r1 > th && r2 > th" test/diff_compiler_perf_scaling.sh
 #
 # ⚠️ THIS PARAGRAPH SAID "BOTH DOUBLINGS" UNTIL 2026-08-28 (#2160 phase 2), i.e.
 # for the whole life of the r2-alone rule PR #2171 shipped: the header described
@@ -839,6 +841,24 @@ assert_diags() {
     return 1
   fi
   got="$(grep -c '^error: ' "$WORK/chk.out")"
+  # ── HOLE, reported not papered over (#2160 phase 2) — the COUNT-MISMATCH branch.
+  # It is distinct from the two regime asserts above: it fires when the fixture
+  # still typechecks in the right REGIME but stops producing the expected NUMBER of
+  # diagnostics. `an` is the shape's own N (see the assert_regime call sites), and
+  # the `errs` generator emits exactly one error per binding, so `got` tracks `an`
+  # identically for every value IR_ERRS_N can take — there is no add-only knob that
+  # separates them.
+  #
+  # The one route that could have separated them was a diagnostic CAP in the
+  # compiler (emit N errors, print the first K). TESTED, 2026-08-29, and there is
+  # no cap — so this branch stays undriven:
+  #
+  #   $ ./medaka check /tmp/cap.mdk        # 5000 bindings, one type error each
+  #   $ grep -c '^error: ' out             # 5000
+  #
+  # It is left in place: it costs one comparison and it is correct the day the
+  # generator, the compiler's error dedup, or a cap changes underneath the shape —
+  # which is precisely the drift the assert exists for.
   if [ "$got" -ne "$an" ]; then
     echo "FAIL: fixture produced $got diagnostics, expected exactly $an —"
     echo "  the shape has drifted out of its diagnostic regime and its floor no"
@@ -854,6 +874,13 @@ assert_regime() {
   case "$1" in
     clean) assert_clean "$2" ;;
     diags) assert_diags "$2" "$3" ;;
+    # ⚠️ HOLE, reported not papered over (#2160 phase 2). This arm fires only on a
+    # regime string that no call site passes — `grade_shape`'s 3rd argument is
+    # written at six literal call sites and defaults to `clean`. There is no
+    # add-only knob that reaches it, and adding one would mean a way to feed this
+    # gate an unknown regime, which is a capability, not a test. It stays as a
+    # structural assertion: cheap, and correct the day a seventh call site
+    # mistypes its regime.
     *) echo "FAIL: unknown regime '$1' — expected 'clean' or 'diags'."; return 1 ;;
   esac
 }
@@ -1003,7 +1030,6 @@ echo
 #   FAIL: no shape was graded — this gate proved nothing.
 #   exit=1
 if [ "$graded" -eq 0 ]; then
-  echo "FAIL: no shape was graded — this gate proved nothing."
   echo "FAIL: no shape was graded — this gate proved nothing."
   exit 1
 fi

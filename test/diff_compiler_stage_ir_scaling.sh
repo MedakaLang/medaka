@@ -706,6 +706,9 @@ is_known() {
 # exactly as before, so this knob cannot make a real run quieter ([W-QUIETER]).
 # 🚨 A narrowed run is NOT a verdict: the `graded == 0` guard below asserts SCOPE,
 # not health, so under STAGE_IR_ONLY it is skipped and the skip is printed.
+# ⚠️ ONE EXCEPTION, and it is not a scope question: a narrowing that grades NOTHING
+# AT ALL is a typo or a dead unit name, and it FAILS. See the guard at the foot of
+# this file for why that changed.
 STAGE_IR_ONLY="${STAGE_IR_ONLY:-}"
 if [ -n "$STAGE_IR_ONLY" ]; then
   echo "############################################################################"
@@ -1293,11 +1296,25 @@ grade_shape constrained "$CONSTR_N"
 grade_shape wideiface "$WIDEIFACE_N"
 grade_modules
 
+# ⚠️ ZERO GRADED IS A FAILURE UNDER NARROWING TOO. This guard USED TO be SKIPPED
+# when STAGE_IR_ONLY was set, on the reasoning that grading nothing is "scope, not
+# health" when the narrowing was deliberate. That was wrong in the one direction
+# this gate cannot afford: it let `STAGE_IR_ONLY=<typo>` print the word PASS and
+# exit 0 having measured nothing at all. A green that proved nothing is exactly the
+# failure mode #2160 exists to remove, and the sibling knob in
+# test/diff_compiler_ir_scaling.sh (IR_ONLY) had it right all along — it fails.
+# There is no legitimate use for a narrowed run that matches no unit: the name is
+# either a typo or a unit that no longer exists, and both deserve a red.
+#
+# OBSERVED RED (#2160 phase 2, this box):
+#   $ STAGE_IR_ONLY=bogus sh test/diff_compiler_stage_ir_scaling.sh
+#   FAIL: STAGE_IR_ONLY=[bogus] matched no unit — this run graded nothing.
+#   exit=1
 if [ "$graded" -eq 0 ] && [ -n "$STAGE_IR_ONLY" ]; then
-  # SCOPE, not health — see the STAGE_IR_ONLY note. With the knob unset this is
-  # the same hard failure it has always been.
-  echo "NOTE: STAGE_IR_ONLY=[$STAGE_IR_ONLY] graded no stage; the zero-graded guard is"
-  echo "      SKIPPED because the narrowing was deliberate. Check the shape name."
+  echo "FAIL: STAGE_IR_ONLY=[$STAGE_IR_ONLY] matched no unit — this run graded nothing."
+  echo "      Valid units: match xref vchain constrained wideiface modules"
+  echo "      (derive:  grep -n '^grade_shape \\|^grade_modules$' $0 )"
+  exit 1
 elif [ "$graded" -eq 0 ]; then
   echo "FAIL: no stage was graded — this gate proved nothing."
   exit 1
@@ -1308,5 +1325,9 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
-echo "PASS: $graded stage-ratio(s) graded ($known ledgered), all sub-quadratic in stage Ir (threshold $THRESH)."
+if [ -n "$STAGE_IR_ONLY" ]; then
+  echo "NARROWED OK (NOT a gate result): $graded stage-ratio(s) graded ($known ledgered) under STAGE_IR_ONLY=[$STAGE_IR_ONLY]."
+else
+  echo "PASS: $graded stage-ratio(s) graded ($known ledgered), all sub-quadratic in stage Ir (threshold $THRESH)."
+fi
 exit 0

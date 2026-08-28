@@ -76,7 +76,21 @@
 #      pass. This is what disqualifies desugar/exhaust-guards/mark (10-70ms):
 #      they are exactly where the borderline readings came from.
 #
-# Fail only on a SUSTAINED signal: BOTH doublings (r1 AND r2) over threshold.
+# The verdict rule is NOT uniform across this file's arms, and saying so here is
+# the point of this paragraph — a stale statement of the rule in the file that
+# defines it is worse than no statement (#2173, applied 2026-08-28):
+#
+#   * WALL-CLOCK TIME arm  -> SUSTAINED signal: BOTH doublings (r1 AND r2) over
+#     threshold. A noisy instrument, where a second confirming sample is what
+#     separates a trend from a spike. `grade_time_stage` is the ONLY conjunct
+#     left in this file; derive, don't trust this line:
+#       grep -n "^[^#]*r1 > th && r2 > th" test/diff_compiler_perf_scaling.sh
+#
+#   * DETERMINISTIC arms (op counts, and the netted ALLOC verdicts) -> r2 ALONE.
+#     An op count is a pure function of the program; there is no noise for a
+#     second doubling to filter, and the reading the conjunct rejects
+#     (r1 < T < r2) is a CLIMBING ratio — the signature of a superlinear term,
+#     not of a sample. See the full argument at grade_op_stage.
 #
 # The timing verdict can ONLY make a shape FAIL that allocation called "ok" — it
 # is an added detector, not a replacement. It never overrides or downgrades an
@@ -90,8 +104,9 @@
 # stages: `mark` (and desugar/exhaust-guards) sit under the floor on EVERY shape, so
 # the TIME arm grades them NOWHERE, while OP grades them from a single run — in fact
 # from the SAME deterministic wasm-off run the alloc arm already makes each size, so it
-# adds ZERO profiler invocations (see profile_run/ops_from). Same sustained-both-
-# doublings rule; same promote-an-alloc-ok-to-fail-never-downgrade discipline (the
+# adds ZERO profiler invocations (see profile_run/ops_from). Graded on r2 ALONE
+# (#2173 — this arm is deterministic; see the header and grade_op_stage) but the
+# same promote-an-alloc-ok-to-fail-never-downgrade discipline (the
 # SUPERLINEAR (OPS) branch sits after the alloc and time failures). See grade_op_stage,
 # ops_from, OP_STAGES, the KNOWN_SLOW_OPS ledger, and the `marksweep` money-shot (an
 # OP-ONLY shape — its TIME min-of-K arm is skipped).
@@ -109,6 +124,27 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# --list-units DERIVES the unit set from this file (#2160 rule 5) rather than
+# restating it in a header comment, which is the form that rots. Two sources,
+# because there are two kinds of unit: the shapes-loop entries live in the SHAPES
+# assignments, and each standalone row carries its own `if want ...` marker.
+#
+# ⚠️ IT MUST STAY ABOVE THE ORACLE-PRESENCE CHECK BELOW. It reads only `$0`, but
+# it USED TO sit after that check, so on a fresh worktree the one command that
+# tells you what PERF_ONLY accepts answered "build oracles first" and exited 2 —
+# which run_gates.sh reads as a skip candidate. A derive-don't-encode entry point
+# that needs a 30-minute build first is one nobody uses.
+if [ "${1:-}" = "--list-units" ]; then
+  echo "shape units (entries of the SHAPES loop; the DEEP-only ones are marked there):"
+  grep -n 'SHAPES=' "$0" | grep -v 'PERF_ONLY' | sed 's/^/  /'
+  echo "row units (the standalone blocks that follow the loop):"
+  grep -o '^if want [a-z-]*' "$0" | awk '{print "  " $3}'
+  echo
+  echo "PERF_ONLY takes a space-separated list of the names above."
+  exit 0
+fi
+
 
 # Shape generators SHARED with test/diff_compiler_ir_scaling.sh: gen_xref,
 # gen_manyifaces (#2066). Every other generator in this file is single-consumer and
@@ -305,9 +341,12 @@ CONSFAM_N="${PERF_CONSFAM_N:-200}"
 # counts for typecheck on this box (deterministic, single run):
 #     100/200/400    20 491 ->   37 741 ->   102 241   r1 1.84 r2 2.71  — MISSES it
 #     400/800/1600  102 241 ->  351 241 -> 1 329 241   r1 3.44 r2 3.78  — RED
-# i.e. at the default band the sustained-both-doublings rule would (correctly) read
-# `ok` and this shape would pin nothing. 400 is the SMALLEST base that reddens both
-# doublings, and it is chosen deliberately over 800 (which reads 3.78/3.92) because
+# i.e. at the default band the rule in force when this band was chosen
+# (both doublings) would have read `ok` and this shape would pin nothing. Since
+# #2173 the op arm grades r2 alone, so 100/200/400's r2=2.71 would STILL read `ok`
+# and the band choice below is unchanged by the flip — it is now the smallest base
+# that reddens r2 with margin rather than the smallest that reddens both. 400 is
+# chosen deliberately over 800 (which reads 3.78/3.92) because
 # cost scales with the band: 400/800/1600 costs ~13 s of native profiler time here
 # (1.4 + 3.0 + 9.1 s), 800/1600/3200 costs ~55 s. Do not raise it without re-pricing.
 #
@@ -539,20 +578,6 @@ want() {
   for _w in $PERF_ONLY; do [ "$_w" = "$1" ] && return 0; done
   return 1
 }
-
-# --list-units DERIVES the unit set from this file (#2160 rule 5) rather than
-# restating it in a header comment, which is the form that rots. Two sources,
-# because there are two kinds of unit: the shapes-loop entries live in the SHAPES
-# assignments, and each standalone row carries its own `if want ...` marker.
-if [ "${1:-}" = "--list-units" ]; then
-  echo "shape units (entries of the SHAPES loop; the DEEP-only ones are marked there):"
-  grep -n 'SHAPES=' "$0" | grep -v 'PERF_ONLY' | sed 's/^/  /'
-  echo "row units (the standalone blocks that follow the loop):"
-  grep -o '^if want [a-z-]*' "$0" | awk '{print "  " $3}'
-  echo
-  echo "PERF_ONLY takes a space-separated list of the names above."
-  exit 0
-fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -1253,10 +1278,15 @@ gen_modules() {
 # findExports scan WAS O(N^2) (#926) but is now a Map lookup (O(N log N)); it never
 # reached the OP counter anyway (a hand-rolled scan, now `omLookup` — both uncounted),
 # and its alloc is dwarfed by the ~linear buildEnvMM term. The op-count this shape DOES
-# read is ~3*N — `isPubExp`'s `contains` per resolved `import m.{v}` member (it was 5*N
+# read is ~6*N — `isPubExp`'s `contains` per resolved `import m.{v}` member. ⚠️ THIS
+# SAID ~3*N until 2026-08-29 and was wrong by a factor of two; the gate's own
+# transcript reads 2400 at N=400. The conclusion is unaffected (6*N clears the floor
+# by more, not less) but the constant is load-bearing for the STAR_N choice below,
+# so it is corrected rather than left. (it was 5*N
 # before #925 turned realImport/importValueNames' membership into OrdMap sets). Linear, so
 # this shape is a LINEAR regression guard on the counted import-membership path, NOT a
-# quadratic detector; it reads `ok`. STAR_N=400 keeps op1 = 3*400 = 1200 over OP_FLOOR.
+# quadratic detector; it reads `ok`. STAR_N=400 keeps op1 = 6*400 = 2400 over OP_FLOOR
+# (1000) with 2.4x of headroom — measured, not derived from the constant.
 gen_starimports() {
   n=$1; dir=$2
   rm -rf "$dir"; mkdir -p "$dir"
@@ -1944,12 +1974,18 @@ OP_FLOOR="${PERF_OP_FLOOR:-1000}"
 #         scanned the O(decls) top-level frame once per EVar. Now an OrdMap (op r1/r2 ~1.95
 #         at N=2000/4000/8000; TIME also promoted linear, r2=2.11). De-ledgered on both arms.
 #
-# NOT LEDGERED, but WATCH: `comments:typecheck` reads r1=2.62 r2=3.00 at N=1000/2000/4000
-# — genuinely climbing, but r1 is under the 3.0 threshold so the sustained-both-doublings
-# rule (below) correctly calls it "ok". It is deterministic, so it will not flap on this
-# compiler; a future source change that pushes r1 over 3.0 will (correctly) fail and force
-# a ledger decision then. Left un-ledgered on purpose: a ledger entry asserts a stage is
-# ALREADY over-threshold, and this one is not.
+# NOT LEDGERED: `comments:typecheck`. ⚠️ THIS NOTE USED TO READ "r1=2.62 r2=3.00 at
+# N=1000/2000/4000 — genuinely climbing", and it was WRONG — badly enough to matter,
+# because a claimed r2 of exactly 3.00 sits one tick under the threshold and looked
+# like a counterexample to the #2173 enumeration below. RE-MEASURED 2026-08-29 on
+# this box at the shipped band:
+#
+#   $ PERF_ONLY=comments sh test/diff_compiler_perf_scaling.sh
+#   ops typecheck: ok  r1=1.50 r2=1.66
+#
+# Not climbing, not near anything. The row is un-ledgered because it is LINEAR, not
+# because a rule excused it. A ledger entry asserts a stage is ALREADY over
+# threshold; this one is nowhere near.
 #
 #   reexports:resolve — FIXED (#925/#926). It WAS a clean 2^3 op cubic: on an N-deep
 #         `export import m.*` chain, resolve re-checked an export set that GROWS with depth
@@ -1993,10 +2029,11 @@ OP_FLOOR="${PERF_OP_FLOOR:-1000}"
 #         N=250/500/1000: 37126 -> 136751 -> 523501, r1=3.68 r2=3.83 (climbing toward
 #         the pure-quadratic 4.0). `findDups` keyed into an OrdMap (same fix as
 #         match:resolve, one function, both rows drained together). De-ledgered.
-#         (typecheck r1=2.65 r2=3.09 and elaborate r1=2.52 r2=2.99 also climb on this
-#         shape — the #907/#882 decl-count classes — but stay r1<3 at this band, so the
-#         sustained-both-doublings rule reads them `ok` and they are NOT ledgered;
-#         WATCH, per the comments:typecheck note.)
+#         (typecheck r1=2.65 r2=3.09 and elaborate r1=2.52 r2=3.04 also climb on this
+#         shape — the #907/#882 decl-count classes. Both were read `ok` by the
+#         both-doublings rule because r1 < 3; since #2173 flipped this arm to r2
+#         alone, `manyifaces:elaborate` is over the line and IS now ledgered —
+#         KNOWN_SLOW_OPS below, issue #2189. This is what the flip was for.)
 #   conlocal:typecheck — issue #2030, and the MECHANISM IS KNOWN: `localPinPairs`
 #         (compiler/types/typecheck.mdk) is O(constrained top-level bindings x locals),
 #         so a program of N constrained fns each holding one local walks it O(N^2)
@@ -2028,13 +2065,17 @@ OP_FLOOR="${PERF_OP_FLOOR:-1000}"
 #         this row's promotion) 164 961 -> 205 361 -> 286 161, r1=1.245 r2=1.393 —
 #         linear. De-ledgered.
 #
-# NOT LEDGERED on this shape, but WATCH (the same call the `comments:typecheck` note
-# above makes): `conlocal:elaborate` reads 3 162 359 -> 8 788 559 -> 28 200 959,
-# r1=2.78 r2=3.21 — climbing, and r2 is over 3.0, but r1 is not, so the
-# sustained-both-doublings rule correctly calls it `ok`. elaborate re-checks the
-# program through checkProgramSeeded, so it plausibly rides the SAME localPinPairs
-# term as conlocal:typecheck and would drain with it; a ledger entry asserts a row is
-# ALREADY over threshold on both doublings, and this one is not. Total ALLOC on this
+#   conlocal:elaborate — issue #2189, and it is LEDGERED, in KNOWN_SLOW_OPS below.
+#         ⚠️ THIS NOTE USED TO SAY THE OPPOSITE — "NOT LEDGERED, but WATCH … a ledger
+#         entry asserts a row is ALREADY over threshold on both doublings, and this
+#         one is not" — which was a live instruction to DELETE the row that now sits
+#         a few lines below, and would have turned a real quadratic silent again.
+#         The reading is unchanged (3 162 359 -> 8 788 559 -> 28 200 959, r1=2.78
+#         r2=3.21); what changed is the rule. Since #2173 this arm grades r2 alone,
+#         r2=3.21 is over the 3.0 threshold, and the row is ledgered on that basis.
+#         elaborate re-checks the program through checkProgramSeeded, so it
+#         plausibly rides the SAME localPinPairs term as conlocal:typecheck and may
+#         drain with it. Total ALLOC on this
 # shape is the other near-miss: r1 2.57 r2 2.89 against a 3.0 ceiling (and against the
 # `climbing` heuristic's 2.96 trip point), which is why the shape is not additionally
 # ledgered on the alloc arm — it is under, deterministically, at this band.
@@ -2090,9 +2131,19 @@ KNOWN_OCEIL_conlocal_typecheck="4.3"; KNOWN_OFIXED_conlocal_typecheck="2.60"
 # pushes r2 over a candidate ceiling:
 #
 #   manyifaces (a=3424, b=7.488, from N=500/1000):
-#       k=1.00 -> r2=3.045   k=1.25 -> 3.155   k=1.50 -> 3.242   k=2 -> 3.372
+#       k=0.50 -> r2=2.707   k=1.00 -> 3.045   k=1.25 -> 3.155
+#       k=1.50 -> 3.242      k=2.00 -> 3.372
 #   conlocal   (a=4345.8, b=8.2999, from N=800/1600):
-#       k=1.00 -> r2=3.209   k=1.25 -> 3.313   k=1.50 -> 3.392   k=2 -> 3.489
+#       k=0.50 -> r2=2.866   k=1.00 -> 3.209   k=1.25 -> 3.313
+#       k=1.50 -> 3.392      k=2.00 -> 3.507
+#
+# Recompute rather than trusting the table (the k=0.5 and conlocal k=2 cells were
+# WRONG in the first version of this block — 2.82/2.95/3.489 against a true
+# 2.707/2.866/3.507 — and an independent review of the PR caught it; the adopted
+# k=1.25 cells were correct, so the ceilings below never moved):
+#
+#   python3 -c 'f=lambda a,b,k,N: a*N+k*b*N*N; \
+#     print(f(3424,7.488,1.25,1000)/f(3424,7.488,1.25,500))'
 #
 # The policy adopted: FAIL once the quadratic coefficient grows by a quarter.
 # That gives OCEIL 3.15 (manyifaces, trips at k >= ~1.24) and OCEIL 3.31
@@ -2105,8 +2156,12 @@ KNOWN_OCEIL_conlocal_typecheck="4.3"; KNOWN_OFIXED_conlocal_typecheck="2.60"
 #
 # OFIXED 2.60 on both, the file-wide promote mark. Check it discriminates: a
 # real fix drives r2 -> 2.0 and PROMOTEs (correct); merely halving b gives
-# k=0.5 -> r2=2.82 (manyifaces) / 2.95 (conlocal), which stays ledgered
-# (correct — a half-fix is not a fix).
+# k=0.5 -> r2=2.707 (manyifaces) / 2.866 (conlocal), which stays ledgered
+# (correct — a half-fix is not a fix). ⚠️ Note how THIN that is on manyifaces:
+# 0.107 above the 2.60 promote mark, not the ~0.22 the earlier miscomputed 2.82
+# suggested. A fix worth about 55% of b would trip PROMOTE and demand a drain on
+# a row that is still quadratic. That is the discrimination this mark actually
+# buys — state it, rather than implying a comfort margin that is not there.
 #
 # 🚨 BOTH CEILINGS ARE PER-BAND. They are derived at MANYIFACES_N=250 and
 # CONLOCAL_N=400 and are meaningless at any other N — r2 itself is a function of
@@ -2347,7 +2402,8 @@ grade_time_stage() {
 #     the op analogue of the alloc arm's d1<1.0. A stage under it is doing too little
 #     counted work to grade (not "too noisy to grade").
 #
-# Grades on the SAME sustained signal as TIME: both doublings over threshold. Sets the
+# Grades on r2 ALONE — NOT the sustained both-doublings signal TIME uses (#2173;
+# the argument is in the block inside this function). Sets the
 # caller's fail/known/ops_graded/op_bad/op_lines. Must be called DIRECTLY, never in a
 # subshell/pipe, or the counters vanish (same rule as grade_time_stage).
 grade_op_stage() {
@@ -3576,12 +3632,25 @@ gen_modules "$mn3" "$md3" "$MOD_K"
 #              time typecheck: NO MEASUREMENT from the profiler (harness bug)
 #   exit=1
 #
-# ⚠️ The ALLOC guard's `*[!0-9.]*|""` case did NOT fire on this wrapper and is
-# still unobserved: a silent profiler yields the STRING "0", which is numeric, so
-# the run falls through to the netting and lands on the NEGATIVE arm instead. The
-# case arm is reachable only by a profiler that emits non-numeric junk; nothing
-# add-only in this file produces that, so it is recorded here as a HOLE. It is
-# left in place — it is the cheaper guard and removing it would widen nothing.
+# ⚠️ The ALLOC guard's `*[!0-9.]*|""` case does NOT fire on the wrapper above — a
+# SILENT profiler yields the string "0", which is numeric, so the run falls through
+# to the netting and lands on the NEGATIVE arm instead. THIS NOTE BRIEFLY RECORDED
+# THAT AS A HOLE ("nothing add-only in this file produces non-numeric junk"), and
+# that was wrong: an independent review of this PR pointed out that the very seam
+# eleven lines up is such a knob, and the arm takes a THREE-LINE wrapper. Do not
+# repeat the mistake of declaring a hole one variable short of the answer.
+#
+#   $ cat /tmp/junkmod.sh
+#   #!/bin/sh
+#   printf '[perf] total\t0.1s\t0.1s\tNaNMB\t0\n'
+#   exit 0
+#   $ PERF_PROFILE_MODULES=/tmp/junkmod.sh PERF_MOD_N=2 PERF_ONLY=modules \
+#       sh test/diff_compiler_perf_scaling.sh
+#   FAIL modules: profiler produced no allocation figure (harness bug)
+#   exit=1
+#
+# So BOTH the dead-instrument arms of this row are observed: a silent profiler
+# lands on NEGATIVE, a junk-emitting one lands here.
 
 if want modules; then   # PERF_ONLY unit: modules
 # Own baseline: this driver's fixed prelude cost differs from the single-file one.
@@ -3758,13 +3827,27 @@ fi   # end PERF_ONLY unit: modules
 #   $ PERF_ONLY=starimports PERF_THRESH=1.2 \
 #       sh test/diff_compiler_perf_scaling.sh
 #   ## PERF_ONLY=[starimports] — NARROWED RUN, NOT a grading result. ##
+#   starimports    400  resolve-ops 2400 -> 4800 -> 9600  (band N=400->800->1600)
 #              ops  resolve: ** SUPERLINEAR (OPS) ** 2400 -> 4800 -> 9600  r1=2.00 r2=2.00 (> 1.2x, N=400->800->1600)
+#   reexports      100  known-quadratic (ALLOC, intrinsic O(N^2) output) resolve-alloc
+#                       103.685 MB -> 277.792 MB -> 851.383 MB  r1=2.68 r2=3.06
+#                       (ceiling 4.0, band N=100->200->400) — op held at 0 (fixed)
 #   exit=1
 #
 # The threshold is LOWERED, never the measurement changed: the shape's real
 # ratios are the ~2.0 shown, and the run is red only because the bar was put
 # under them. That is what proves the arm can report; it says nothing about
 # this shape's scaling, and the shipped threshold is unchanged.
+#
+# ⚠️ THE FULL OUTPUT IS QUOTED ABOVE ON PURPOSE, AND THE `reexports` LINE IS WHY.
+# This `if want starimports` block wraps `for rshape in starimports reexports`, so
+# the unit named `starimports` grades TWO shapes and `reexports` has no name of its
+# own: it is absent from --list-units and `PERF_ONLY=reexports` matches nothing
+# (which is now a hard FAIL rather than a silent exit 0 — see the narrowing guard
+# at the foot of this file). An earlier version of this record quoted only the
+# middle line, which read as though the unit graded one shape. A transcript that
+# elides the surprising line is worse than no transcript; if you re-record this,
+# paste the whole thing.
 
 if want starimports; then   # PERF_ONLY unit: starimports
 # ── SHAPES: starimports / reexports — multi-module RESOLVE (issue #881) ────────
@@ -3781,11 +3864,12 @@ if want starimports; then   # PERF_ONLY unit: starimports
 # TWO shapes, graded on DIFFERENT metrics — and the split is the whole #925/#926 story:
 #
 #   starimports  — GRADED ON OP-COUNT (deterministic, one run per size, no floor/min-of-K).
-#         Its resolve op-count is ~3*N (`isPubExp`'s contains per `import m.{v}` member;
+#         Its resolve op-count is ~6*N (`isPubExp`'s contains per `import m.{v}` member;
 #         it was 5*N before #925 converted realImport/importValueNames' membership to
 #         OrdMap sets). Linear regression guard on the counted import-membership path; its
 #         real findExports cost is now O(N log N) after #926's Map (was O(N^2), uncounted).
-#         STAR_N=400 so op1 = 3*400 = 1200 clears the OP_FLOOR (1000) with headroom.
+#         STAR_N=400 so op1 = 6*400 = 2400 clears the OP_FLOOR (1000) with 2.4x of
+#         headroom (measured; this read "3*N ... 1200" until 2026-08-29).
 #
 #   reexports    — GRADED ON ALLOCATION, plus a cheap OP-REGRESSION ASSERTION. WHY NOT OP:
 #         #925/#926 drained this shape's counted op to a deterministic 0 (the three cubic
@@ -4083,7 +4167,10 @@ if want emittables; then   # PERF_ONLY unit: emittables
 # baseline all along. Concretely for these two stages: `emit` pays ~20k counted ops
 # rendering core.mdk before the fixture is looked at, so at N=250 that constant pulls
 # THIS shape's genuine 3.5x down to 3.43 and its 3.9x down to 3.36 — raw, r1 would sit
-# UNDER the 3.0 threshold and the sustained-both-doublings rule would read the bug "ok".
+# UNDER the 3.0 threshold. Under the both-doublings rule in force when this was
+# written that alone read the bug "ok"; since #2173 the arm grades r2, so netting
+# now matters for keeping r2 itself honest rather than for rescuing r1 — the
+# constant depresses BOTH ratios, so the reason to subtract it is unchanged.
 # (A statement about THIS shape's constant only; it says nothing about the calibration
 # of any other shape or row.)
 #
@@ -4336,6 +4423,23 @@ printf 'OP-COUNT arm (issue #884): %d per-stage op-ratios graded (deterministic,
 # skipped and the skip is printed. PERF_ONLY unset leaves all three exactly as
 # they were, so the knob cannot make a real run quieter ([W-QUIETER]).
 if [ -n "$PERF_ONLY" ]; then
+  # ⚠️ THE THREE SCOPE GUARDS ARE SKIPPED UNDER NARROWING, BUT "GRADED NOTHING AT
+  # ALL" IS NOT A SCOPE DECISION — it is a typo, or a unit that no longer exists,
+  # and it USED TO EXIT 0. `PERF_ONLY=bogus` printed "0 ok, 0 known-superlinear, 0
+  # regressed" and returned success, which is a green that proved nothing: the
+  # exact failure mode this gate's own #2160 sweep exists to remove. The sibling
+  # knob in test/diff_compiler_ir_scaling.sh (IR_ONLY) has always failed here and
+  # is the correct model. There is no legitimate narrowed run that matches no unit.
+  #
+  # OBSERVED RED (#2160 phase 2, this box):
+  #   $ PERF_ONLY=bogus sh test/diff_compiler_perf_scaling.sh
+  #   FAIL: PERF_ONLY=[bogus] matched no unit — this run graded nothing.
+  #   exit=1
+  if [ $((pass + known + fail)) -eq 0 ]; then
+    echo "FAIL: PERF_ONLY=[$PERF_ONLY] matched no unit — this run graded nothing."
+    echo "      Check the names against: sh $0 --list-units"
+    exit 1
+  fi
   echo "NOTE: PERF_ONLY=[$PERF_ONLY] — the measured-nothing / op-arm-dead / backend-arm-dead"
   echo "      coverage guards were SKIPPED. This run graded only the named units."
 else
