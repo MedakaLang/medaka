@@ -571,14 +571,22 @@ jobs:
             # S-build-ir-arm: `diff_compiler_stage_ir_scaling` — the PER-STAGE
             # Callgrind superlinearity gate for the BUILD path — lands here, and
             # unusually for this matrix the placement is by cost AND by a real
-            # dependency. Cost: `sh scripts/ci_shard_cost.sh` over 5 green
+            # dependency. Baseline cost: `sh scripts/ci_shard_cost.sh` over 5 green
             # merge_group runs at the base of that slice read
             #   backend 639s (pole) | frontend 572s | sqlite 508s | eval 475s
             #   | engines 469s | tools 465s | types 403s (cheapest)
-            # and the gate costs 276s locally (8 sequential callgrind runs; single-
-            # threaded by design, no fan-out knob), landing `types` at ~679s — now
-            # ABOVE backend's 639s, making `types` the new pole (still well under
-            # this job's 40-minute timeout). Dependency: it reads
+            # RE-TIMED 2026-08-28 (F-fixround-3), this box:
+            # `time sh test/diff_compiler_stage_ir_scaling.sh` -> 614.71s real (up
+            # from 276s when this note was written — slice 1b added the
+            # multi-module driver, +75s at landing, and slice 5 added the
+            # `gen_constrained`/`gen_wideiface` shapes, never re-timed until now;
+            # the gate is 6 shapes / 60 stage-ratios today, still single-threaded,
+            # no fan-out knob). Landing `types` at ~403s + 615s = **~1018s (~17
+            # min)** — now well ABOVE backend's 639s pole, by a wide margin
+            # (+59%), making `types` decisively the new pole. Still comfortably
+            # under this job's 40-minute (2400s) timeout, so no shard
+            # rearrangement is made here — this is a documentation update, not a
+            # rebalance. Dependency: it reads
             # `test/bin/profile_main`, which
             # `diff_compiler_perf_scaling` in THIS shard already builds, so its
             # marginal oracle cost here is ZERO and would not be anywhere else.
