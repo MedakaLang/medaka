@@ -1,0 +1,26 @@
+-- X6 (S1-PRELUDE (a), #2155) — the interface method named `println` is DECLARED
+-- and never called, and `main` is an ordinary Unit IO action.  Nothing in this
+-- source mentions `println` at a call site at all, so by S1-PRELUDE (a) it must
+-- behave exactly as it would if the method were named `printX`: two warnings
+-- (the prelude shadow) and a program that prints `hi`.
+--
+-- What it pins: the driver's composite-main AUTO-PRINT wrap (`main = <e>` →
+-- `main = println <e>`, driver/main_autoprint.mdk) must NOT fire on a Unit main.
+-- Its gate `shouldAutoPrintMain` reads `mainTypeIsUnit ()`, which reads
+-- `mainSchemeRef` — and on the `check`/LSP/playground path (diagnostics.mdk's
+-- `analyzeFrom`) that ref was filled by NOBODY, because only the EMIT driver's
+-- `elaborateModules` ever wrote it.  So `mainTypeIsUnit ()` answered False for
+-- every main, the wrap fired here, and the synthesized `println` — which in THIS
+-- module denotes the interface method, exactly as S1-PRELUDE (a) says it must —
+-- demanded `Ifc Unit`.  `medaka check` reported `No impl of Ifc for Unit` AT NO
+-- LOCATION (rendered as 1:0, the interface decl it has nothing to do with) on a
+-- program with no error in it.  The wrap being invisible on an unshadowed
+-- `println` (`Display Unit` exists, so its obligation is discharged silently) is
+-- why this cell needs the shadow to see the defect at all.
+interface Ifc c where
+  println : c -> Int
+
+impl Ifc Int where
+  println v = v
+
+main = putStr "hi\n"

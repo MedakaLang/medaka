@@ -35521,6 +35521,29 @@ checkModulesEntryFullSplit runtimeDecls coreDecls0 modules0 =
     (publicDataDecls coreDecls)
     coreDecls
     modules
+  -- #2155: RECORD THE ENTRY MODULE'S `main` SCHEME, exactly as the emit driver's
+  -- `elabWorker` does for `elaborateModules`.  `mainSchemeRef` is the ONLY input to
+  -- `mainTypeIsUnit`/`mainTypeIsAsync`/`mainTypeIsFloat`, and until now
+  -- `elaborateModules` was its only producer — so a caller that reaches inference
+  -- through THIS driver alone read a ref that no run had ever filled.  That is
+  -- `analyzeFrom` (driver/diagnostics.mdk — the shared body behind `check`, the LSP
+  -- and the playground): its auto-print obligation re-check is gated on
+  -- `shouldAutoPrintMain`, whose own comment says it "needs the elaborate above to
+  -- have set main's type" — but the elaborate above is `checkOneDiags`, i.e. this
+  -- function, which never set it.  `mainTypeIsUnit ()` therefore answered False for
+  -- EVERY main, firing the `main = <e>` → `main = println <e>` wrap on the Unit and
+  -- Async mains it must never touch.  Invisible while `println` denotes the prelude's
+  -- (`Display Unit` exists, so the synthetic obligation is discharged and nothing is
+  -- reported), it surfaces the instant that name means something else in the module:
+  -- #2155's `interface Ifc c where println : c -> Int` made plain `medaka check` of
+  -- `main = putStr "hi"` report `No impl of Ifc for Unit` at no location, and a
+  -- top-level `println : Int -> Int` redefinition reported `Type mismatch: Int vs
+  -- Unit` — both on programs that never write `println` at all.
+  -- SET-OR-CLEAR in one write (never leave a previous run's `main` behind, the reset
+  -- `elaborateModules` spends a separate statement on), from `schemes` — the entry
+  -- module's OWN bindings, which is the same last-wins entry-module rule `elabWorker`
+  -- applies module-by-module.
+  driverState.value.mainSchemeRef := lookupAssoc "main" schemes
   -- D3 / WS-2 part-2: cross-module coherence over the USER modules only (prelude
   -- excluded — it is checked separately and a user impl may override a prelude one).
   -- Prepend any conflict (dependency-first, ahead of the entry's own errors).
