@@ -1,0 +1,23 @@
+slice: F4-fixture-coverage (regression coverage for #2107)
+issue: #2107 (higher-kinded field head defaults PCo), closed by this sprint's
+  slice 2, S-abstract-head-polarity
+shape: higher-kinded head concealment x write channel -- `data W f a = MkW (f a)`
+  instantiated at `f = Ref`, no intermediate wrapper type
+spec: EFFECTS-SEMANTICS.md §9 ("no direction of weakening is sound in general --
+  only equality is") + §5 (no-laundering law: every elimination of an effectful
+  value flows its row into the ambient effect). The parameter `a` is reached
+  through a write-capable `Ref`, so it needs INVARIANCE.
+mechanism (from S-abstract-head-polarity's first-hand trace): the field type is
+  `TyApp (TyVar "f") (TyVar "a")`; `tyAppSpine`'s head is a `TyVar`, not a
+  `TyCon`, so `paramOccPolarities`' catch-all `_ =>` arm fired and walked both
+  sides at UNCHANGED polarity, recording `W` as `[PCo, PCo]`. The outer `TApp`
+  guard read `polarityAt pols 1 = PCo` and abstained.
+status: REJECT. Measured on the F4 binary at base 4eb1caf8.
+cmd: MEDAKA_STRICT=1 ./medaka check test/effect_polarity_fixtures/hkt-direct/main.mdk
+measured-exit: 1
+measured-stderr: main.mdk:32:8: Effect row mismatch inside a non-covariant type
+  argument: <Stdout> vs <>. ... (caret on `box` in `alias = box`)
+historical (pre-slice-2, measured by S-abstract-head-polarity at base 4a578ebc):
+  check/run/build all exit 0; `run` printed `SMUGGLED ()`; `check --types` showed
+  `callBox : Unit -> Unit` -- a signature declared PURE reaching a cell whose row
+  had been widened to `<Stdout>`.

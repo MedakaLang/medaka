@@ -1,0 +1,28 @@
+-- #2110 / review finding S0-1: the ARGUMENT-side half of the wrapper coverage
+-- rule, the REJECT half.  `krowSlotOccs`/`krowSlotVarOccs` used to pad every
+-- performable KRow slot to `(e, [])` — "the callee can perform `e` here and
+-- nothing else is guaranteed" — the argument-side twin of the blind pad
+-- `methodEffRetOccs` dropped when `dataParamRowAtomsRef` landed.  On the RETURN
+-- side that pad over-rejected; on the ARGUMENT side it LAUNDERED, silently.
+--
+-- `Slot`'s own declaration re-supplies <Stdout> at EVERY instantiation, `Slot
+-- <>` included, so the field `unslot` hands back really performs <Stdout> while
+-- being typed `<e>`.  At `e := <>` that is a pure-typed printer.  MEASURED
+-- before the fix, with the full program (`pureSlot : Slot <>` built from an
+-- effectful `shout`, `callPure : Unit -> Unit` applying it): `check` and `run`
+-- both exited 0 and the program printed.
+--
+-- 🚨 THE REJECT DEPENDS ONLY ON THE DECLARATION, and nothing at the use site
+-- tells it from the accepts.  `effect_arg_slot_unrelated_ok.mdk` is the other
+-- half: `unbare : Bare e -> (Unit -> <e> Unit)` — the SAME signature shape over
+-- a wrapper that guarantees no atoms — must keep checking clean, as must
+-- `widen : Slot e -> Slot e`, which carries the atoms straight back out.  Read
+-- the two files together; either one alone can be satisfied by a wrong fix.
+--
+-- Prelude-independent on purpose (no literal, no prelude call, the error is at
+-- the DECLARATION), so both drivers run it and neither needs a PRELUDE_DEP row.
+data Slot e = Slot (Unit -> <Stdout | e> Unit)
+
+unslot : Slot e -> (Unit -> <e> Unit)
+unslot s = match s
+  Slot f => f

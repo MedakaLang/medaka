@@ -1,0 +1,38 @@
+-- #2110 (row-atom guarantee) fix-round S2-1 — THE CROSS-MODULE CONTROL FOR THE
+-- ATOM-GUARANTEE SEED (`deAtomsBefore` / `declEnvRowAtomsChain`).
+--
+-- 🚨 THIS IS THE DIRECTION A SINGLE-FILE FIXTURE CANNOT SEE.  #2110 shipped with
+-- `dataParamRowAtomsRef` and no seed chain, on a comment claiming the table
+-- "accumulates across the modules of one run".  It does not: an entry written while
+-- checking `w.mdk` is not visible while checking this module, so `paramRowAtomsOf`
+-- missed on `Slot` here and `stash` below — the SAME declaration `w.mdk`'s own
+-- `mkSlot` accepts verbatim — was REJECTED with the argument-position laundering
+-- diagnostic.  Every one of `test/effect_polarity_fixtures/`'s rows is single-file
+-- and all twelve stayed green through that gap.
+--
+-- `Slot`/`Bare` are exported ABSTRACTLY, so their constructors never reach this
+-- module's `registerVariants` and the ONLY way `stash` can be accepted is the
+-- cross-module seed.  Losing the seed is LOUD here (over-rejection, exit 1, no
+-- schemes printed at all), which is what a positive control should be.
+--
+-- `keep` is the other half of the same claim: `Bare` SWALLOWS its parameter's row,
+-- so the seed must publish `Bare`'s (empty) guarantee too rather than publishing
+-- "everything is guaranteed".  Its scheme stays row-polymorphic; the REJECT leg for
+-- a laundering relay into `Bare` is pinned by `test/typecheck_error_fixtures/` and by
+-- this slice's report, because this harness diffs only the entry's SCHEMES and an
+-- erroring entry prints none.
+import w.{Slot, Bare, mkSlot, mkBare}
+
+stash : (Unit -> <Stdout | e> Unit) -> Slot e
+stash f = mkSlot f
+
+keep : (Unit -> <e> Unit) -> Bare e
+keep f = mkBare f
+
+shout : Unit -> <Stdout> Unit
+shout _ = putStrLn "hi"
+
+pureStash : Slot <>
+pureStash = stash shout
+
+main = println 1

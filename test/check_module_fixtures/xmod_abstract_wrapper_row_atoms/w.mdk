@@ -1,0 +1,23 @@
+-- The DEFINING module.  Two wrappers, both exported ABSTRACTLY (plain `export`,
+-- constructors PRIVATE) — the ordinary way a library ships a wrapper type, and the
+-- shape that made #2110's fix invisible across a module boundary before the
+-- `deAtomsBefore` seed chain existed.
+--
+--   * `Slot` RE-SUPPLIES the atom: every occurrence of `e` in its fields sits under
+--     a row that already carries <Stdout>, so `Slot <>` still unfolds to a
+--     <Stdout>-performing field and a relay INTO it is honest.
+--   * `Bare` SWALLOWS it: `e` occurs alone, so `Bare <>` hands back a pure-typed
+--     function that prints.  A relay into it is the laundering shape.
+--
+-- The discriminator is per-DECLARATION, so both must cross the boundary or neither
+-- proves anything: a seed that published nothing would reject BOTH in the entry,
+-- and a seed that published everything unconditionally would accept both.
+export data Slot e = Slot (Unit -> <Stdout | e> Unit)
+
+export data Bare e = Bare (Unit -> <e> Unit)
+
+export mkSlot : (Unit -> <Stdout | e> Unit) -> Slot e
+mkSlot f = Slot f
+
+export mkBare : (Unit -> <e> Unit) -> Bare e
+mkBare f = Bare f

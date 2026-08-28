@@ -1,0 +1,8 @@
+constUnit : a -> Unit
+firstOf : Pair a b -> a
+idString : String -> String
+inspect : Slot a -> Int
+rewrap : Slot a -> Slot a
+sndOf : Pair a b -> b
+unbare : Bare a -> Unit -> Unit
+widen : Slot a -> Slot a

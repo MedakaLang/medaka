@@ -1,0 +1,27 @@
+slice: F4-fixture-coverage (regression coverage for #2112)
+issue: #2112 (public wrapper over a PRIVATE write/contravariant type), closed by
+  this sprint's slice 1, S-polarity-input-set
+shape: visibility concealment x write channel, CROSS-MODULE. `wrap.mdk` declares
+  a PRIVATE `data Inner a = MkInner (Ref a)` under a public-but-abstract
+  `export data Outer a = MkOuter (Inner a)`; the entry module can spell only
+  `Outer`/`mkOuter`/`outerRef`.
+spec: EFFECTS-SEMANTICS.md §9 + §5. `Outer`'s parameter reaches a write-capable
+  `Ref` through a declaration the caller cannot name; unnameable is not the same
+  as absent.
+mechanism (from S-polarity-input-set): the cross-module chain ran
+  `declEnvPolarityEntriesFix tab (filterList kindPublicDataDecl m.demDecls)`, so
+  `Inner` was filtered out of the fixpoint's INPUT before it ran; `Outer`
+  composed against a missing entry and inherited `PCo`. Slice 1 moved the
+  publicity filter to the OUTPUT (`polarityEntriesPublicOnly`): the fixpoint's
+  input set is not its export set.
+why this row and not write-opaque-export: that row's inner type is EXPORTED
+  abstractly, so it survived the pre-filter. This one is genuinely private and is
+  the only row in the corpus that exercises the Module path's filtered seed.
+status: REJECT. Measured on the F4 binary at base 4eb1caf8.
+cmd: MEDAKA_STRICT=1 ./medaka check test/effect_polarity_fixtures/private-wrapper/main.mdk
+measured-exit: 1
+measured-stderr: main.mdk:29:8: Effect row mismatch inside a non-covariant type
+  argument: <Stdout> vs <>. ... (caret on `box` in `alias = box`)
+historical (pre-slice-1, measured by S-polarity-input-set on the same shape):
+  check/run/build all exit 0; `run` printed `SMUGGLED ()`; `check --types` showed
+  `callBox : Unit -> Unit`.
