@@ -1,0 +1,150 @@
+{- | Strict pure CARv1 for the atproto repository profile.
+
+   The wire format follows final IPLD CARv1: an unsigned-LEB128 length and
+   canonical DAG-CBOR header, followed by length-prefixed CID+block sections.
+   The atproto profile admits only blessed CIDs and requires at least one root
+   whose block is present. Section order is preserved; identical duplicates and
+   unrelated blocks are accepted, while every block crosses the verified
+   blockstore trust boundary. -}
+
+import array.{drop, take}
+import list.{reverse}
+import lib.blockstore.{BlockStore, blockStoreFromBlocks, blockStoreHas}
+import lib.cid.{Cid, cidFromBytes, cidToBytes}
+import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
+import lib.multiformats.{uvarintDecode, uvarintEncode}
+
+-- | A decoded CAR preserving section order plus its verified unique store.
+export data Car = Car (List Cid) (List (Cid, Array Int)) BlockStore
+
+validBytes : Array Int -> Int -> Bool
+validBytes bytes i =
+  if i >= arrayLength bytes then
+    True
+  else
+    bytes[i] >= 0 && bytes[i] <= 255 && validBytes bytes (i + 1)
+
+copyBlocks : List (Cid, Array Int) -> List (Cid, Array Int)
+copyBlocks [] = []
+copyBlocks ((cid, bytes)::rest) = (cid, arrayCopy bytes) :: copyBlocks rest
+
+-- | Header roots in their declared order.
+export
+carRoots : Car -> List Cid
+carRoots (Car roots _ _) = roots
+
+-- | Blocks in their original section order, including identical duplicates.
+export
+carBlocks : Car -> List (Cid, Array Int)
+carBlocks (Car _ blocks _) = copyBlocks blocks
+
+-- | Verified unique block store.
+export
+carStore : Car -> BlockStore
+carStore (Car _ _ store) = store
+
+headerValue : List Cid -> Int -> DagCbor
+headerValue roots version =
+  DcMap [("roots", DcArray (map DcLink roots)), ("version", DcInt version)]
+
+decodeRoots : List DagCbor -> List Cid -> Result String (List Cid)
+decodeRoots [] acc = Ok (reverse acc)
+decodeRoots ((DcLink cid)::rest) acc = decodeRoots rest (cid::acc)
+decodeRoots _ _ = Err "car: header roots must contain only CID links"
+
+decodeHeader : Array Int -> Result String (List Cid)
+decodeHeader bytes = match dagCborDecode bytes
+  Err message => Err "car: invalid header: \{message}"
+  Ok (DcMap [("roots", DcArray values), ("version", DcInt version)]) => if version /= 1 then Err "car: header version must be 1"
+  else match decodeRoots values []
+    Err message => Err message
+    Ok [] => Err "car: atproto profile requires at least one root"
+    Ok roots => Ok roots
+  Ok _ => Err "car: header must be exactly {roots, version}"
+
+readVarintAt : String -> Array Int -> Int -> Result String (Int, Int)
+readVarintAt label input pos =
+  if pos >= arrayLength input then Err "car: truncated \{label} varint"
+  else match uvarintDecode (drop pos input)
+    Err message => Err "car: \{label}: \{message}"
+    Ok (value, consumed) => Ok (value, pos + consumed)
+
+parseCidPrefix : Array Int -> Result String (Cid, Int)
+parseCidPrefix section = do
+  (_, p1) <- readVarintAt "CID version" section 0
+  (_, p2) <- readVarintAt "CID codec" section p1
+  (_, p3) <- readVarintAt "CID hash code" section p2
+  (digestLength, p4) <- readVarintAt "CID hash length" section p3
+  let cidLength = p4 + digestLength
+  if digestLength < 0 || cidLength > arrayLength section then Err "car: truncated CID digest"
+  else match cidFromBytes (take cidLength section)
+    Err message => Err "car: malformed or non-blessed CID: \{message}"
+    Ok cid => Ok (cid, cidLength)
+
+decodeSections : Array Int -> Int -> List (Cid, Array Int) -> Result String (List (Cid, Array Int))
+decodeSections input pos acc =
+  if pos == arrayLength input then Ok (reverse acc)
+  else match readVarintAt "trailing corruption in section length" input pos
+    Err message => Err message
+    Ok (sectionLength, payloadPos) => if sectionLength == 0 then Err "car: zero-length section"
+    else
+      if sectionLength > arrayLength input - payloadPos then Err "car: truncated or overlong section length exceeds remaining bytes"
+      else
+        let section = take sectionLength (drop payloadPos input)
+        match parseCidPrefix section
+          Err message => Err message
+          Ok (cid, cidLength) =>
+            let block = drop cidLength section
+            decodeSections
+              input
+              (payloadPos + sectionLength)
+              ((cid, block)::acc)
+
+rootsPresent : List Cid -> BlockStore -> Result String Unit
+rootsPresent [] _ = Ok ()
+rootsPresent (root::rest) store =
+  if blockStoreHas root store then
+    rootsPresent rest store
+  else
+    Err "car: atproto profile root block is missing"
+
+makeCar : List Cid -> List (Cid, Array Int) -> Result String Car
+makeCar [] _ = Err "car: atproto profile requires at least one root"
+makeCar roots blocks = match blockStoreFromBlocks blocks
+  Err message => Err "car: \{message}"
+  Ok store =>
+    map (() => Car roots (copyBlocks blocks) store) (rootsPresent roots store)
+
+encodeSections : List (Cid, Array Int) -> Array Int
+encodeSections [] = [||]
+encodeSections ((cid, block)::rest) =
+  let payload = cidToBytes cid ++ block
+  uvarintEncode (arrayLength payload) ++ payload ++ encodeSections rest
+
+{- | Canonically encode the header and preserve the caller's explicit block
+   order. Every row is verified before any bytes are returned. -}
+export
+carEncode : List Cid -> List (Cid, Array Int) -> Result String (Array Int)
+carEncode roots blocks = match makeCar roots blocks
+  Err message => Err message
+  Ok _ => match dagCborEncode (headerValue roots 1)
+    Err message => Err "car: header encoding failed: \{message}"
+    Ok header => Ok (uvarintEncode (arrayLength header) ++ header ++ encodeSections blocks)
+
+-- | Strictly decode one complete CARv1 byte array.
+export
+carDecode : Array Int -> Result String Car
+carDecode input =
+  if not (validBytes input 0) then Err "car: input element outside byte range 0..255"
+  else match readVarintAt "header length" input 0
+    Err message => Err message
+    Ok (headerLength, headerPos) => if headerLength == 0 then Err "car: zero-length header section"
+    else
+      if headerLength > arrayLength input - headerPos then Err "car: truncated header section"
+      else
+        let header = take headerLength (drop headerPos input)
+        match decodeHeader header
+          Err message => Err message
+          Ok roots => match decodeSections input (headerPos + headerLength) []
+            Err message => Err message
+            Ok blocks => makeCar roots blocks

@@ -451,3 +451,14 @@ extraction:    pds/tools/gen_mst_corpus.sh installs exactly @atproto/repo@0.10.1
 retrieved:     2026-08-28
 consumer:      P1-B-MST (#2136 deterministic atproto Merkle Search Tree)
 notes:         11 cases cover empty, 0/2/4/6 leading-zero-bit layer boundaries, per-node shared-prefix compression, forward/reverse insertion permutations, replacement, deletion, and delete-to-empty. Schema and edge behavior were confirmed first-hand on 2026-08-28 against https://atproto.com/specs/repository (fields l/e and p/k/v/t; lexical order; mandatory prefix compression; SHA-256 depth; empty root) and the pinned reference source. The official CC0 interop fixtures at bluesky-social/atproto-interop-tests commit 056e5741bb330757205d6b16db5266fffcae937b independently corroborated key-height and common-prefix rules; expected root/node bytes come only from @atproto/repo, never Medaka.
+
+[vector]
+file:          pds/test/vectors/car_reference_corpus.txt
+local-sha256:  4506279564fc3288973dd27f05f57f64c91f93830fe19c0e1670e5411859a60a
+kind:          reference-impl
+impl:          official-atproto-repo
+source-url:    https://registry.npmjs.org/@atproto/repo/-/repo-0.10.12.tgz
+extraction:    pds/tools/gen_car_corpus.sh installs exactly @atproto/repo@0.10.12 outside the source tree, verifies its published npm integrity literal, and runs the committed gen_car_corpus.mjs. The generator calls the official writeCarStream over one dag-cbor root block and one unrelated raw block, then requires the official CID-verifying readCarWithRoot to recover the same root and two blocks before emitting their CIDs, bytes, and exact CAR bytes. Re-running must reproduce this file byte-for-byte.
+retrieved:     2026-08-28
+consumer:      P1-C-CAR-STORE (#2136 pure verified blockstore and strict CARv1)
+notes:         Final IPLD CARv1 and current atproto repository serialization were confirmed first-hand on 2026-08-28 at https://ipld.io/specs/transport/car/carv1/ and https://atproto.com/specs/repository: unsigned-LEB128 header/section lengths, canonical DAG-CBOR {roots,version:1}, CID+block sections, nonempty atproto commit-root profile, arbitrary block order, unrelated blocks, and robustness to duplicate blocks. The committed artifact is produced only by the pinned official writer and is never captured from Medaka.
