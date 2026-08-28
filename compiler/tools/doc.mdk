@@ -233,7 +233,7 @@ lookupSchemeGo name ((n, s)::rest) acc =
 
 -- A rendered interface method line: `  name : ty`.
 ppIfaceMethod : IfaceMethod -> String
-ppIfaceMethod (IfaceMethod mname mty _) = "  \{mname} : \{ppTyDoc mty}"
+ppIfaceMethod (IfaceMethod mname mty _ _) = "  \{mname} : \{ppTyDoc mty}"
 
 -- Compute (name, sig) for a public decl, or None to skip it.  Mirror render_sig.
 renderSig : Decl -> List (String, Scheme) -> Option (String, String)

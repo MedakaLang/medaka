@@ -1002,14 +1002,15 @@ renameDefName rm n = match omLookup n rm
   None => n
 
 renameIfaceMethod : OrdMap String -> IfaceMethod -> IfaceMethod
-renameIfaceMethod _ (IfaceMethod n ty None) = IfaceMethod n ty None
-renameIfaceMethod rm (IfaceMethod n ty (Some (MethodDefault ps e))) =
+renameIfaceMethod _ (IfaceMethod n ty None mloc) = IfaceMethod n ty None mloc
+renameIfaceMethod rm (IfaceMethod n ty (Some (MethodDefault ps e)) mloc) =
   IfaceMethod
     n
     ty
     (Some (MethodDefault
       (renamePatsPM rm ps)
       (renameScoped rm (boundOfListPM (patVarsListPM ps)) e)))
+    mloc
 
 renameImplMethod : OrdMap String -> ImplMethod -> ImplMethod
 renameImplMethod rm (ImplMethod n ps e) =

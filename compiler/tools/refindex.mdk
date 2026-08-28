@@ -736,7 +736,7 @@ ppNameLoc : PropParam -> (String, Loc)
 ppNameLoc (PropParam n l _) = (n, l)
 
 ifName : IfaceMethod -> String
-ifName (IfaceMethod n _ _) = n
+ifName (IfaceMethod n _ _ _) = n
 
 -- ── def collection (top-level binders, with real #331 name Locs) ─────────────
 -- a def entry: (namespace, name, key, defLoc, isPub).
@@ -1031,7 +1031,7 @@ walkFieldTys w loc ((Field _ ty)::rest) =
 
 walkIfaceMethods : W -> Loc -> List IfaceMethod -> Unit
 walkIfaceMethods _ _ [] = ()
-walkIfaceMethods w loc ((IfaceMethod _ ty mdef)::rest) =
+walkIfaceMethods w loc ((IfaceMethod _ ty mdef _)::rest) =
   let _ = walkTy w loc ty
   let _ = walkMethodDefault w loc mdef
   walkIfaceMethods w loc rest

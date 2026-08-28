@@ -434,7 +434,7 @@ methodDeclArities (DInterface { methods, ... }) = map ifaceMethodArity methods
 methodDeclArities _ = []
 
 ifaceMethodArity : IfaceMethod -> (String, Int)
-ifaceMethodArity (IfaceMethod mname mty _) = (mname, listLen (argsOfTy mty))
+ifaceMethodArity (IfaceMethod mname mty _ _) = (mname, listLen (argsOfTy mty))
 
 -- one ((method, tag), reqCount) per impl method; reqCount = impl pats - declared arity.
 implMethodReqCounts : List (String, Int) -> Decl -> List ((String, String), Int)
@@ -2076,7 +2076,7 @@ ifaceDispatchEntries (DInterface { name = ifaceName, ifaceOrigin = o, typarams =
 ifaceDispatchEntries _ = []
 
 ifaceMethodEntry : String -> String -> List String -> IfaceMethod -> ((String, String, String), List Int)
-ifaceMethodEntry ifaceId ifaceName typeParams (IfaceMethod mname mty _) = (
+ifaceMethodEntry ifaceId ifaceName typeParams (IfaceMethod mname mty _ _) = (
   (ifaceId, ifaceName, mname),
   dispatchPositionsOf mty (receiverParam typeParams),
 )
@@ -2273,8 +2273,8 @@ headTyconHead (t::_) = headTycon t
 -- unchanged and still the one every collision-free program dispatches through; the
 -- qualified one is a SECOND binding of the SAME value, never a replacement.
 defaultEntry : EvalEnv (Value e) -> String -> List String -> IfaceMethod -> List (String, (Int, Value e))
-defaultEntry _ _ _ (IfaceMethod _ _ None) = []
-defaultEntry env ifaceId typeParams (IfaceMethod mname _ (Some (MethodDefault pats body))) =
+defaultEntry _ _ _ (IfaceMethod _ _ None _) = []
+defaultEntry env ifaceId typeParams (IfaceMethod mname _ (Some (MethodDefault pats body)) _) =
   let scored = (listLen typeParams, implMethodValue env [] pats body)
   (mname, scored) :: qualifiedDefaultEntry ifaceId mname scored
 
@@ -2338,9 +2338,9 @@ implMethodName (ImplMethod n _ _) = n
 -- entry there is a dead cell holding `VUnit`, and an entry there with no name here
 -- panics `findCell: missing …`.
 defaultNamesOf : String -> IfaceMethod -> List String
-defaultNamesOf ifaceId (IfaceMethod n _ (Some _)) =
+defaultNamesOf ifaceId (IfaceMethod n _ (Some _) _) =
   n :: qualifiedDefaultName ifaceId n
-defaultNamesOf _ (IfaceMethod _ _ None) = []
+defaultNamesOf _ (IfaceMethod _ _ None _) = []
 
 qualifiedDefaultName : String -> String -> List String
 qualifiedDefaultName "" _ = []
@@ -3554,7 +3554,7 @@ moduleMethodNamesOf (DAttrib _ d) = moduleMethodNamesOf d
 moduleMethodNamesOf _ = []
 
 ifaceMethodNmE : IfaceMethod -> String
-ifaceMethodNmE (IfaceMethod n _ _) = n
+ifaceMethodNmE (IfaceMethod n _ _ _) = n
 
 -- pass 2: install each module's funDef groups into its own cells (its env)
 installModGroups : List (ModInfo (Value e)) -> <e> Unit

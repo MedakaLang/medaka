@@ -1486,7 +1486,7 @@ checkUndeterminedRetEffVarsDecl _ = ()
 
 checkIfaceMethodEffs : String -> List (String, List Kind) -> List IfaceMethod -> Unit
 checkIfaceMethodEffs _ _ [] = ()
-checkIfaceMethodEffs iface scope ((IfaceMethod mname mty _)::rest) =
+checkIfaceMethodEffs iface scope ((IfaceMethod mname mty _ _)::rest) =
   let _ = match undeterminedRetEffVars scope mty
     [] => ()
     bad => pushTypeErrorOnceAt "T-EFFECT-UNDETERMINED" (firstTyLoc mty) (effectUndeterminedMsg iface mname bad)
@@ -5773,7 +5773,7 @@ classEnvRowsOf ord ((name, typarams, methods, supers, o)::rest) =
   row :: classEnvRowsOf ord rest
 
 ceMethodOf : List (String, List Kind) -> IfaceMethod -> (String, Ty, List (String, List Kind))
-ceMethodOf scope (IfaceMethod n ty _) = (n, ty, scope)
+ceMethodOf scope (IfaceMethod n ty _ _) = (n, ty, scope)
 
 ceAddRows : List CeRow -> ClassEnv -> ClassEnv
 ceAddRows [] env = env
@@ -5878,11 +5878,11 @@ nthKindList i (k::rest)
 -- content.  Every assertion here is fail-capable in that direction.
 ceMethodFoo : IfaceMethod
 ceMethodFoo =
-  IfaceMethod "foo" (TyFun (TyVar "a") (tyConBuiltin "Int" None)) None
+  IfaceMethod "foo" (TyFun (TyVar "a") (tyConBuiltin "Int" None)) None None
 
 ceMethodBar : IfaceMethod
 ceMethodBar =
-  IfaceMethod "bar" (TyFun (TyVar "a") (tyConBuiltin "String" None)) None
+  IfaceMethod "bar" (TyFun (TyVar "a") (tyConBuiltin "String" None)) None None
 
 ceSuperEq : Super
 ceSuperEq = Super {
@@ -6103,6 +6103,7 @@ ceGradedMethod =
       (TyApp (TyApp (TyVar "f") (TyVar "e")) (TyVar "a"))
       (TyEffect [] (Some "e") (TyVar "a")))
     None
+    None
 
 ceGradedIface : Decl
 ceGradedIface = DInterface {
@@ -6142,6 +6143,7 @@ ceFunctorMethod =
   IfaceMethod
     "fmap"
     (TyFun (TyApp (TyVar "f") (TyVar "a")) (TyApp (TyVar "f") (TyVar "a")))
+    None
     None
 
 ceFunctorIface : Decl
@@ -7303,7 +7305,7 @@ argDispatchOfDecl (DInterface { typarams, methods, ... }) =
 argDispatchOfDecl _ = []
 
 argDispatchOfMethod : List String -> IfaceMethod -> List (String, Int)
-argDispatchOfMethod typarams (IfaceMethod mname mty _) = match firstDispatchIdx (dispatchTyparams typarams) 0 (methodArgs mty)
+argDispatchOfMethod typarams (IfaceMethod mname mty _ _) = match firstDispatchIdx (dispatchTyparams typarams) 0 (methodArgs mty)
   Some i => [(mname, i)]
   None => []
 
@@ -7335,7 +7337,7 @@ argDispatchOfDeclById (DInterface { name, typarams, methods, ifaceOrigin, ... })
 argDispatchOfDeclById _ = []
 
 argDispatchOfMethodById : IfaceRef -> List String -> IfaceMethod -> List ((IfaceRef, String), Int)
-argDispatchOfMethodById iface typarams (IfaceMethod mname mty _) = match firstDispatchIdx (dispatchTyparams typarams) 0 (methodArgs mty)
+argDispatchOfMethodById iface typarams (IfaceMethod mname mty _ _) = match firstDispatchIdx (dispatchTyparams typarams) 0 (methodArgs mty)
   Some i => [((iface, mname), i)]
   None => []
 
@@ -16020,7 +16022,7 @@ ifaceParamKindsOf p methods = match flatMap (ifaceMethodVarApps p) methods
 -- every application of [p] in one method signature, paired with that signature's
 -- effect-tail names (the "same signature" side of the KRow rule).
 ifaceMethodVarApps : String -> IfaceMethod -> List (List Ty, List String)
-ifaceMethodVarApps p (IfaceMethod _ mty _) =
+ifaceMethodVarApps p (IfaceMethod _ mty _ _) =
   let tails = dedup (effTailNames mty)
   map (args => (args, tails)) (varHeadApps p mty)
 
@@ -17486,7 +17488,7 @@ returnPosOfDecl (DInterface { typarams, methods, ... }) =
 returnPosOfDecl _ = []
 
 returnPosMethod : List String -> IfaceMethod -> List String
-returnPosMethod typarams (IfaceMethod mname mty _)
+returnPosMethod typarams (IfaceMethod mname mty _ _)
   | not (anyArgMentions (dispatchTyparams typarams) (methodArgs mty)) = [mname]
   | otherwise = []
 
@@ -17619,14 +17621,9 @@ prePassFunClauseScoped rw (FunClause ps e) =
   FunClause ps (rewriteArgScoped rw (boundOfList (patVarsListTc ps)) e)
 
 prePassIfaceMethodScoped : ArgRw -> IfaceMethod -> IfaceMethod
-prePassIfaceMethodScoped _ (IfaceMethod n ty None) = IfaceMethod n ty None
-prePassIfaceMethodScoped rw (IfaceMethod n ty (Some (MethodDefault ps e))) =
-  IfaceMethod
-    n
-    ty
-    (Some (MethodDefault
-      ps
-      (rewriteArgScoped rw (boundOfList (patVarsListTc ps)) e)))
+prePassIfaceMethodScoped _ (IfaceMethod n ty None mloc) =
+  IfaceMethod n ty None mloc
+prePassIfaceMethodScoped rw (IfaceMethod n ty (Some (MethodDefault ps e)) mloc) = IfaceMethod n ty (Some (MethodDefault ps (rewriteArgScoped rw (boundOfList (patVarsListTc ps)) e))) mloc
 
 prePassImplMethodScoped : ArgRw -> ImplMethod -> ImplMethod
 prePassImplMethodScoped rw (ImplMethod n ps e) =
@@ -17866,7 +17863,7 @@ methodConstraintNamesOfDecl (DInterface { typarams, methods, ... }) =
 methodConstraintNamesOfDecl _ = []
 
 methodConstraintNameOf : List String -> IfaceMethod -> List String
-methodConstraintNameOf typarams (IfaceMethod mname mty _)
+methodConstraintNameOf typarams (IfaceMethod mname mty _ _)
   | hasMethodLevelConstraint typarams mty = [mname]
   | otherwise = []
 
@@ -19710,9 +19707,9 @@ firstImplMethodLoc ((ImplMethod _ _ body)::_) =
 -- the same pure computation the retired `insertIfaceRequired` writer stored.
 requiredMethodNames : List IfaceMethod -> List String
 requiredMethodNames [] = []
-requiredMethodNames ((IfaceMethod n _ None)::rest) =
+requiredMethodNames ((IfaceMethod n _ None _)::rest) =
   n :: requiredMethodNames rest
-requiredMethodNames ((IfaceMethod _ _ (Some _))::rest) =
+requiredMethodNames ((IfaceMethod _ _ (Some _) _)::rest) =
   requiredMethodNames rest
 
 -- ⚠️ THE `Map` SUFFIX IS HISTORICAL and is kept deliberately: it named the
@@ -19817,7 +19814,7 @@ insertIfaceMethodsAcc _ _ _ [] acc = acc
 -- #822: the graded scope is stored ALONGSIDE (typarams, mty) rather than in a table of
 -- its own, so the two are ONE resolution result and cannot be resolved differently —
 -- see registerMethodIfaceParamsMethods for why that is the load-bearing invariant.
-insertIfaceMethodsAcc iface typarams scope ((IfaceMethod mname mty _)::rest) mp = insertIfaceMethodsAcc iface typarams scope rest (omInsert mname (iface, typarams, mty, scope) mp)
+insertIfaceMethodsAcc iface typarams scope ((IfaceMethod mname mty _ _)::rest) mp = insertIfaceMethodsAcc iface typarams scope rest (omInsert mname (iface, typarams, mty, scope) mp)
 
 -- ── #1111 Stage A-2 unit A-2.5 (#1092): the METHOD-namespace identity companion ──
 -- The map above is keyed by the BARE method name and is last-write-wins, so when two
@@ -19889,7 +19886,7 @@ insertMethodIdents (_::rest) acc = insertMethodIdents rest acc
 
 insertIfaceMethodIdents : String -> List String -> List (String, List Kind) -> TyConOrigin -> List IfaceMethod -> (OrdMap (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))), List String) -> (OrdMap (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))), List String)
 insertIfaceMethodIdents _ _ _ _ [] acc = acc
-insertIfaceMethodIdents iface typarams scope origin ((IfaceMethod mname mty _)::rest) acc =
+insertIfaceMethodIdents iface typarams scope origin ((IfaceMethod mname mty _ _)::rest) acc =
   let acc2 = match mkIdent NsMethod origin mname
     -- honest absence: no module id for this declaration, so it contributes NO identity
     -- rather than a constant one every unstamped declaration would collide on (§8 I6.3).
@@ -24393,15 +24390,15 @@ prependDictClause n k (FunClause pats body) =
   FunClause (dictParams n k ++ pats) body
 
 ifaceDictPassMethod : IfaceMethod -> IfaceMethod
-ifaceDictPassMethod (IfaceMethod n ty (Some (MethodDefault pats body))) =
-  ifaceDictPassDefault n ty pats body (methodDictArityOf n)
+ifaceDictPassMethod (IfaceMethod n ty (Some (MethodDefault pats body)) mloc) =
+  ifaceDictPassDefault n ty pats body mloc (methodDictArityOf n)
 ifaceDictPassMethod m = m
 
-ifaceDictPassDefault : String -> Ty -> List Pat -> Expr -> Int -> IfaceMethod
-ifaceDictPassDefault n ty pats body k
+ifaceDictPassDefault : String -> Ty -> List Pat -> Expr -> Option Loc -> Int -> IfaceMethod
+ifaceDictPassDefault n ty pats body mloc k
   | k > 0 =
-    IfaceMethod n ty (Some (MethodDefault (dictParams n k ++ pats) body))
-  | otherwise = IfaceMethod n ty (Some (MethodDefault pats body))
+    IfaceMethod n ty (Some (MethodDefault (dictParams n k ++ pats) body)) mloc
+  | otherwise = IfaceMethod n ty (Some (MethodDefault pats body)) mloc
 
 methodDictArityOf : String -> Int
 methodDictArityOf n =
@@ -25966,7 +25963,7 @@ inferDefaultMethods env iface dscope typarams (m::rest) =
 -- The judgment is read off `perRun.errorsDetected` via `erredDuring`, never off the
 -- diagnostic list (issue 1146).
 inferDefaultMethod : TcEnv -> String -> List (String, List Kind) -> List String -> IfaceMethod -> Unit
-inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (MethodDefault pats body))) =
+inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (MethodDefault pats body)) _) =
   -- #822: [dscope] is the same declaration-derived graded scope the method's own
   -- scheme was built under (inferOneIfaceDefaults → methodSchemesPure) — a DEFAULT
   -- body of a graded method must see its Row slots as rows, not as tyvars.
@@ -28565,7 +28562,7 @@ ifaceMethodTy (_::rest) iface mname = ifaceMethodTy rest iface mname
 
 methodTyOf : String -> List IfaceMethod -> Option Ty
 methodTyOf _ [] = None
-methodTyOf mname ((IfaceMethod n ty _)::rest)
+methodTyOf mname ((IfaceMethod n ty _ _)::rest)
   | n == mname = Some ty
   | otherwise = methodTyOf mname rest
 
@@ -28989,7 +28986,7 @@ declIfaceMethodIds (DInterface { name, methods, ifaceOrigin, ... }) = map
 declIfaceMethodIds _ = []
 
 ifaceMethodIdRow : IfaceRef -> IfaceMethod -> (IfaceRef, String)
-ifaceMethodIdRow iface (IfaceMethod mname _ _) = (iface, mname)
+ifaceMethodIdRow iface (IfaceMethod mname _ _ _) = (iface, mname)
 
 -- Pair `ifaceMethodSchemeIds`' keys against `ifaceMethodSchemes`' own output,
 -- positionally: the two walks visit the same decls in the same order and emit exactly one
@@ -29076,7 +29073,7 @@ registerMethodIfaceParamsDecl _ = ()
 -- underlying bare-name interface identity is #1047's territory, upstream of #822.
 registerMethodIfaceParamsMethods : IfaceRef -> List String -> List (String, List Kind) -> List IfaceMethod -> Unit
 registerMethodIfaceParamsMethods _ _ _ [] = ()
-registerMethodIfaceParamsMethods iface typarams scope ((IfaceMethod mname mty _)::rest) =
+registerMethodIfaceParamsMethods iface typarams scope ((IfaceMethod mname mty _ _)::rest) =
   perRun.value.methodIfaceParamsRef := omInsert mname (iface, typarams, mty, scope) perRun.value.methodIfaceParamsRef.value
   registerMethodIfaceParamsMethods iface typarams scope rest
 
@@ -29085,7 +29082,7 @@ registerMethodIfaceParamsMethods iface typarams scope ((IfaceMethod mname mty _)
 -- (from the same tvs map), so a call-site instantiation can route the dict.
 methodSchemes : List (String, List Kind) -> List String -> List IfaceMethod -> List (String, Scheme)
 methodSchemes _ _ [] = []
-methodSchemes scope typarams ((IfaceMethod mname mty _)::rest) =
+methodSchemes scope typarams ((IfaceMethod mname mty _ _)::rest) =
   let st = sigToSchemeTvsIn scope mty
   let _ = registerMethodConstraints typarams mname mty (snd st) (schemeIds (fst st))
   (mname, fst st) :: methodSchemes scope typarams rest
@@ -29096,7 +29093,7 @@ methodSchemes scope typarams ((IfaceMethod mname mty _)::rest) =
 -- registered once during ifaceMethodSchemes at env setup).
 methodSchemesPure : List (String, List Kind) -> List IfaceMethod -> List (String, Scheme)
 methodSchemesPure _ [] = []
-methodSchemesPure scope ((IfaceMethod mname mty _)::rest) =
+methodSchemesPure scope ((IfaceMethod mname mty _ _)::rest) =
   (mname, fst (sigToSchemeTvsIn scope mty)) :: methodSchemesPure scope rest
 
 -- the method-level-constraint slot ids of [mname]: one id per `=>` constraint over
@@ -31979,7 +31976,7 @@ publicValNames (_::rest) = publicValNames rest
 
 ifaceMethodNames : List IfaceMethod -> List String
 ifaceMethodNames [] = []
-ifaceMethodNames ((IfaceMethod n _ _)::rest) = n :: ifaceMethodNames rest
+ifaceMethodNames ((IfaceMethod n _ _ _)::rest) = n :: ifaceMethodNames rest
 
 -- C5: every interface method name declared anywhere in [decls] (unwrapping DAttrib).
 allIfaceMethodNames : List Decl -> List String
@@ -33173,7 +33170,7 @@ declMethodIdentsOf (DInterface { methods, ifaceOrigin, ... }) =
 declMethodIdentsOf _ = []
 
 ifaceMethodIdentPair : TyConOrigin -> IfaceMethod -> List (String, Ident)
-ifaceMethodIdentPair origin (IfaceMethod mname _ _) = match mkIdent NsMethod origin mname
+ifaceMethodIdentPair origin (IfaceMethod mname _ _ _) = match mkIdent NsMethod origin mname
   None => []
   Some i => [(mname, i)]
 
@@ -33753,7 +33750,7 @@ implMethodEVars : ImplMethod -> List String
 implMethodEVars (ImplMethod _ _ body) = allEVars body
 
 ifaceMethodEVars : IfaceMethod -> List String
-ifaceMethodEVars (IfaceMethod _ _ d) = match d
+ifaceMethodEVars (IfaceMethod _ _ d _) = match d
   Some (MethodDefault _ body) => allEVars body
   None => []
 

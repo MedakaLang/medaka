@@ -33,6 +33,7 @@ import frontend.ast.{
   Expr(..),
   UseMember(..),
   UsePath(..),
+  Loc,
   PropParam(..),
   MethodDefault(..),
   IfaceMethod(..),
@@ -58,7 +59,7 @@ interfaceMethodNames ((DInterface { methods, ... })::rest) = map ifaceMethodName
 interfaceMethodNames (_::rest) = interfaceMethodNames rest
 
 ifaceMethodName : IfaceMethod -> String
-ifaceMethodName (IfaceMethod n _ _) = n
+ifaceMethodName (IfaceMethod n _ _ _) = n
 
 -- Names of functions whose declared signature carries a constraint (`Foo a =>`).
 constrainedFnNames : List Decl -> List String
@@ -196,6 +197,55 @@ keepNotIn pool (x::xs)
   | contains x pool = keepNotIn pool xs
   | otherwise = x :: keepNotIn pool xs
 
+-- ── #1375 clause (b): interface method shadows a prelude standalone ───────
+-- The INVERSE direction of Phase 78b's `shadowRename` rule above.  78b is about
+-- a user *standalone* colliding with a prelude *interface method*; this is a
+-- user *interface method* colliding with a prelude *standalone* (`count`,
+-- `find`, …).  Under #1375's adopted clause (a) the bare name then denotes the
+-- INTERFACE METHOD, so the prelude function is no longer reachable by its bare
+-- name anywhere in the module — well-defined, but silent until now.  Clause (b)
+-- says it must not be silent; the diagnostic is wired in
+-- `compiler/driver/diagnostics.mdk` (`W-PRELUDE-METHOD-SHADOW`).
+--
+-- Both directions live in this file on purpose: they are auditable as a SET
+-- only if they sit together.
+--
+-- There is NO table here.  This is a pure function of two decl lists, evaluated
+-- per (module, prelude) pair and consumed immediately, so there is no key to
+-- mis-scope.  The prelude side is an `OrdMap` membership set (`omHasKey`), never
+-- a `contains` over a `List` — every quadratic found in this tree so far was a
+-- `List` used as a set.
+--
+-- Yields (interfaceName, methodName, methodNameLoc) per collision, in
+-- declaration order.  A module with no collision yields `[]`, so its output is
+-- byte-identical to before.
+export
+preludeStandaloneShadows : List Decl -> List Decl -> List (String, String, Option Loc)
+preludeStandaloneShadows prelude prog =
+  preludeStandaloneShadowsWith (preludeStandaloneSet prelude) prog
+
+-- The prelude operand, hoisted: a caller folding over MANY modules against ONE
+-- prelude (`foldModuleTc`) builds this once instead of rescanning the prelude
+-- per module.
+export
+preludeStandaloneSet : List Decl -> OrdMap Unit
+preludeStandaloneSet prelude = omFromNames (preludePlainFnNames prelude) omEmpty
+
+export
+preludeStandaloneShadowsWith : OrdMap Unit -> List Decl -> List (String, String, Option Loc)
+preludeStandaloneShadowsWith _ [] = []
+preludeStandaloneShadowsWith pool ((DInterface { name, methods, ... })::rest) = shadowedMethodsOf pool name methods ++ preludeStandaloneShadowsWith pool rest
+preludeStandaloneShadowsWith pool ((DAttrib _ d)::rest) = preludeStandaloneShadowsWith pool [d]
+  ++ preludeStandaloneShadowsWith pool rest
+preludeStandaloneShadowsWith pool (_::rest) =
+  preludeStandaloneShadowsWith pool rest
+
+shadowedMethodsOf : OrdMap Unit -> String -> List IfaceMethod -> List (String, String, Option Loc)
+shadowedMethodsOf _ _ [] = []
+shadowedMethodsOf pool iface ((IfaceMethod n _ _ mloc)::rest)
+  | omHasKey n pool = (iface, n, mloc) :: shadowedMethodsOf pool iface rest
+  | otherwise = shadowedMethodsOf pool iface rest
+
 -- A prelude plain fn is *droppable* only if no OTHER prelude decl references it
 -- (dropping one the prelude uses internally — e.g. `clamp`, used in a core prop —
 -- would silently rebind those uses).  droppable = plain fns − externally-referenced.
@@ -250,8 +300,8 @@ implMethodBody : ImplMethod -> Expr
 implMethodBody (ImplMethod _ _ body) = body
 
 ifaceMethodBodies : IfaceMethod -> List Expr
-ifaceMethodBodies (IfaceMethod _ _ (Some (MethodDefault _ body))) = [body]
-ifaceMethodBodies (IfaceMethod _ _ None) = []
+ifaceMethodBodies (IfaceMethod _ _ (Some (MethodDefault _ body)) _) = [body]
+ifaceMethodBodies (IfaceMethod _ _ None _) = []
 
 -- all referenced names (EVar/EMethodRef/EDictApp) in an expr tree
 collectVars : Expr -> List String
