@@ -57,8 +57,25 @@ validBytes bytes i =
   else
     bytes[i] >= 0 && bytes[i] <= 255 && validBytes bytes (i + 1)
 
-methodByte : Int -> Bool
-methodByte byte = byte >= 97 && byte <= 122 || byte >= 48 && byte <= 57
+lowerByte : Int -> Bool
+lowerByte byte = byte >= 97 && byte <= 122
+
+upperByte : Int -> Bool
+upperByte byte = byte >= 65 && byte <= 90
+
+digitByte : Int -> Bool
+digitByte byte = byte >= 48 && byte <= 57
+
+alphaByte : Int -> Bool
+alphaByte byte = lowerByte byte || upperByte byte
+
+alphaNumericByte : Int -> Bool
+alphaNumericByte byte = alphaByte byte || digitByte byte
+
+hexByte : Int -> Bool
+hexByte byte = digitByte byte
+  || byte >= 65 && byte <= 70
+  || byte >= 97 && byte <= 102
 
 didMethodEnd : Array Int -> Int -> Option Int
 didMethodEnd bytes i =
@@ -66,50 +83,172 @@ didMethodEnd bytes i =
     None
   else if bytes[i] == 58 then
     Some i
-  else if methodByte bytes[i] then
+  else if lowerByte bytes[i] then
     didMethodEnd bytes (i + 1)
   else
     None
 
-validDidTail : Array Int -> Int -> Bool
-validDidTail bytes i =
+didIdentifierByte : Int -> Bool
+didIdentifierByte byte = alphaNumericByte byte
+  || byte == 46
+  || byte == 95
+  || byte == 58
+  || byte == 37
+  || byte == 45
+
+validDidIdentifier : Array Int -> Int -> Bool
+validDidIdentifier bytes i =
   if i >= arrayLength bytes then
     True
+  else if bytes[i] == 37 then
+    i + 2 < arrayLength bytes && hexByte bytes[i + 1] && hexByte bytes[i + 2] && validDidIdentifier bytes (i + 3)
   else
-    bytes[i] >= 0x21 && bytes[i] <= 0x7e && validDidTail bytes (i + 1)
+    didIdentifierByte bytes[i] && validDidIdentifier bytes (i + 1)
+
+validDidLastByte : Int -> Bool
+validDidLastByte byte = alphaNumericByte byte
+  || byte == 46
+  || byte == 95
+  || byte == 45
 
 validateDid : String -> Result String Unit
 validateDid did =
   let bytes = toUtf8 did
   if not (startsWith "did:" did) then Err "repo: invalid DID; expected did:<method>:<identifier>"
-  else match didMethodEnd bytes 4
-    None => Err "repo: invalid DID method"
-    Some end =>
-      if end == 4 || end + 1 >= arrayLength bytes || not (validDidTail bytes (end + 1)) then
-        Err "repo: invalid DID identifier"
-      else
-        Ok ()
+  else
+    if arrayLength bytes > 2048 then Err "repo: invalid DID; maximum length is 2048 characters"
+    else match didMethodEnd bytes 4
+      None => Err "repo: invalid DID method"
+      Some end =>
+        if end == 4 || end + 1 >= arrayLength bytes || not (validDidIdentifier bytes (end + 1)) || not (validDidLastByte bytes[arrayLength bytes - 1]) then
+          Err "repo: invalid DID identifier"
+        else
+          Ok ()
+
+findPathSlash : Array Int -> Int -> Int -> Result String Int
+findPathSlash path i slash =
+  if i >= arrayLength path then
+    if slash < 0 then Err "repo: path must contain exactly one slash" else Ok slash
+  else if path[i] == 47 then
+    if slash >= 0 then Err "repo: path must contain exactly one slash" else findPathSlash path (i + 1) i
+  else
+    findPathSlash path (i + 1) slash
+
+validAuthorityBytes : Array Int -> Int -> Int -> Bool
+validAuthorityBytes path i end =
+  if i >= end then
+    True
+  else
+    (lowerByte path[i] || digitByte path[i] || path[i] == 45) && validAuthorityBytes path (i + 1) end
+
+validateAuthoritySegment : Array Int -> Int -> Int -> Bool -> Result String Unit
+validateAuthoritySegment path start end first =
+  let size = end - start
+  if size < 1 || size > 63 then
+    Err "repo: invalid collection NSID authority segment length"
+  else if path[start] == 45 || path[end - 1] == 45 then
+    Err "repo: invalid collection NSID authority segment hyphen"
+  else if first && digitByte path[start] then
+    Err "repo: invalid collection NSID top-level segment"
+  else if not (validAuthorityBytes path start end) then
+    Err "repo: collection NSID authority must be normalized lowercase ASCII"
+  else
+    Ok ()
+
+validateAuthority : Array Int -> Int -> Int -> Int -> Int -> Result String Int
+validateAuthority path i end segmentStart segments =
+  if i >= end then do
+    () <- validateAuthoritySegment path segmentStart end (segments == 0)
+    Ok (segments + 1)
+  else
+    if path[i] == 46 then do
+      () <- validateAuthoritySegment path segmentStart i (segments == 0)
+      validateAuthority path (i + 1) end (i + 1) (segments + 1)
+    else validateAuthority path (i + 1) end segmentStart segments
+
+lastDotBefore : Array Int -> Int -> Int -> Int -> Int
+lastDotBefore path i end last =
+  if i >= end then
+    last
+  else if path[i] == 46 then
+    lastDotBefore path (i + 1) end i
+  else
+    lastDotBefore path (i + 1) end last
+
+validNameBytes : Array Int -> Int -> Int -> Bool
+validNameBytes path i end =
+  if i >= end then
+    True
+  else
+    alphaNumericByte path[i] && validNameBytes path (i + 1) end
+
+validateCollectionName : Array Int -> Int -> Int -> Result String Unit
+validateCollectionName path start end =
+  let size = end - start
+  if size < 1 || size > 63 then
+    Err "repo: invalid collection NSID name length"
+  else if digitByte path[start] || not (alphaByte path[start]) then
+    Err "repo: invalid collection NSID name start"
+  else if not (validNameBytes path start end) then
+    Err "repo: invalid collection NSID name characters"
+  else
+    Ok ()
+
+validateCollection : Array Int -> Int -> Result String Unit
+validateCollection path end =
+  if end > 317 then Err "repo: collection NSID exceeds 317 characters"
+  else
+    let lastDot = lastDotBefore path 0 end (-1)
+    if lastDot <= 0 || lastDot >= end - 1 then Err "repo: collection must be a valid normalized NSID"
+    else
+      if lastDot > 253 then Err "repo: collection NSID authority exceeds 253 characters"
+      else do
+        segments <- validateAuthority path 0 lastDot 0 0
+        if segments < 2 then
+          Err "repo: collection NSID authority needs at least two segments"
+        else
+          validateCollectionName path (lastDot + 1) end
+
+rkeyByte : Int -> Bool
+rkeyByte byte = alphaNumericByte byte
+  || byte == 46
+  || byte == 45
+  || byte == 95
+  || byte == 58
+  || byte == 126
+
+validRkeyBytes : Array Int -> Int -> Bool
+validRkeyBytes path i =
+  if i >= arrayLength path then
+    True
+  else
+    rkeyByte path[i] && validRkeyBytes path (i + 1)
+
+validateRkey : Array Int -> Int -> Result String Unit
+validateRkey path start =
+  let size = arrayLength path - start
+  if size < 1 || size > 512 then
+    Err "repo: record key length must be 1..512 characters"
+  else if size == 1 && path[start] == 46 then
+    Err "repo: record key must not be . or .."
+  else if size == 2 && path[start] == 46 && path[start + 1] == 46 then
+    Err "repo: record key must not be . or .."
+  else if not (validRkeyBytes path start) then
+    Err "repo: invalid record key characters"
+  else
+    Ok ()
 
 validatePath : Array Int -> Result String Unit
 validatePath path =
-  if arrayLength path == 0 then
-    Err "repo: path must be non-empty"
-  else if not (validBytes path 0) then
-    Err "repo: path element outside byte range 0..255"
+  if arrayLength path == 0 then Err "repo: path must be non-empty"
   else
-    validatePathGo path 0 (-1)
-
-validatePathGo : Array Int -> Int -> Int -> Result String Unit
-validatePathGo path i slash =
-  if i >= arrayLength path then if slash <= 0 || slash >= arrayLength path - 1 then Err "repo: path must be collection/rkey" else Ok ()
-  else
-    let byte = path[i]
-    if byte == 47 then
-      if slash >= 0 then Err "repo: path must contain exactly one slash" else validatePathGo path (i + 1) i
-    else if byte < 0x21 || byte > 0x7e then
-      Err "repo: path must contain printable ASCII without spaces"
-    else
-      validatePathGo path (i + 1) slash
+    if not (validBytes path 0) then Err "repo: path element outside byte range 0..255"
+    else do
+      slash <- findPathSlash path 0 (-1)
+      if slash <= 0 || slash >= arrayLength path - 1 then Err "repo: path must be collection/rkey"
+      else do
+        () <- validateCollection path slash
+        validateRkey path (slash + 1)
 
 validateRecord : DagCbor -> Result String Unit
 validateRecord (DcMap _) = Ok ()
@@ -396,15 +535,18 @@ repoExportGraph : Cid -> Array Int -> Cid -> BlockStore -> Result String (List (
 repoExportGraph commitCid commitBytes dataRoot store = match blockStoreGet commitCid store
   None => Err "repo: missing graph commit block"
   Some storedCommit => if storedCommit /= commitBytes || not (cidEqual commitCid (cidForDagCbor commitBytes)) then Err "repo: tampered graph commit block"
-  else match walkNodes [dataRoot] store [] []
-    Err message => Err message
-    Ok (nodes, leaves) => match recordBlocks leaves store []
+  else match decodeSignedCommit commitBytes
+    Err message => Err "repo: invalid graph commit: {message}"
+    Ok (_, commitData, _, _) => if not (cidEqual commitData dataRoot) then Err "repo: commit data mismatch"
+    else match walkNodes [dataRoot] store [] []
       Err message => Err message
-      Ok records =>
-        let blocks = (commitCid, arrayCopy commitBytes) :: nodes ++ records
-        match carEncode [commitCid] blocks
-          Err message => Err "repo: CAR export failed: {message}"
-          Ok bytes => Ok (blocks, bytes)
+      Ok (nodes, leaves) => match recordBlocks leaves store []
+        Err message => Err message
+        Ok records =>
+          let blocks = (commitCid, arrayCopy commitBytes) :: nodes ++ records
+          match carEncode [commitCid] blocks
+            Err message => Err "repo: CAR export failed: {message}"
+            Ok bytes => Ok (blocks, bytes)
 
 -- | Deterministic full repository CAR bytes.
 export
@@ -421,28 +563,39 @@ hasField : String -> List (String, DagCbor) -> Bool
 hasField _ [] = False
 hasField name ((key, _)::rest) = name == key || hasField name rest
 
-{- | Strictly validate signed v3 commit bytes against expected state and
-   return the admitted compact signature. -}
-export
-repoValidateCommit : String -> Cid -> Tid -> Array Int -> Result String Signature
-repoValidateCommit expectedDid expectedData expectedRev bytes = match dagCborDecode bytes
+decodeSignedCommit : Array Int -> Result String (String, Cid, Tid, Signature)
+decodeSignedCommit bytes = match dagCborDecode bytes
   Err message => Err "repo: invalid commit CBOR: {message}"
   Ok (DcMap fields) => if not (hasField "prev" fields) then Err "repo: required prev field is missing"
   else match fields
     [("did", DcString did), ("rev", DcString revText), ("sig", DcBytes compact), ("data", DcLink dataCid), ("prev", DcNull), ("version", DcInt version)] => if version /= 3 then Err "repo: commit version mismatch"
-    else
-      if not (cidEqual dataCid expectedData) then Err "repo: commit data mismatch"
-      else
-        if revText /= tidToString expectedRev then Err "repo: commit rev mismatch"
-        else
-          if did /= expectedDid then Err "repo: commit DID mismatch"
-          else match tidParse revText
-            Err message => Err "repo: invalid commit TID: {message}"
-            Ok _ => match signatureFromCompact compact
-              Err message => Err "repo: invalid compact signature: {message}"
-              Ok signature => Ok signature
+    else do
+      () <- validateDid did
+      rev <- match tidParse revText
+        Err message => Err "repo: invalid commit TID: {message}"
+        Ok value => Ok value
+      signature <- match signatureFromCompact compact
+        Err message => Err "repo: invalid compact signature: {message}"
+        Ok value => Ok value
+      Ok (did, dataCid, rev, signature)
     _ => Err "repo: commit must contain exactly did, rev, sig, data, prev, version"
   Ok _ => Err "repo: commit must be a map"
+
+{- | Strictly validate signed v3 commit bytes against expected state and
+   return the admitted compact signature. -}
+export
+repoValidateCommit : String -> Cid -> Tid -> Array Int -> Result String Signature
+repoValidateCommit expectedDid expectedData expectedRev bytes = do
+  () <- validateDid expectedDid
+  (did, dataCid, rev, signature) <- decodeSignedCommit bytes
+  if not (cidEqual dataCid expectedData) then
+    Err "repo: commit data mismatch"
+  else if tidToString rev /= tidToString expectedRev then
+    Err "repo: commit rev mismatch"
+  else if did /= expectedDid then
+    Err "repo: commit DID mismatch"
+  else
+    Ok signature
 
 -- | Verify the canonical unsigned bytes and compact signature of metadata.
 export

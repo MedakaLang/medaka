@@ -1,9 +1,10 @@
 {- | P1-B external MST corpus and hostile-structure driver. -}
 
+import array.{drop}
 import hex.{decode}
 import io.{readLines}
-import string.{contains, split, startsWith, toInt}
-import lib.cid.{Cid, cidEqual, cidFromString, cidToString}
+import string.{contains, split, startsWith, toInt, toUtf8}
+import lib.cid.{Cid, cidEqual, cidForDagCbor, cidFromString, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborEncode}
 import lib.mst.{
   Mst,
@@ -115,23 +116,60 @@ mustNode value = match dagCborEncode value
   Ok bytes => bytes
   Err message => panic "mst_vectors: hostile node encoding failed: \{message}"
 
+entryValueWithTree : Array Int -> Int -> Cid -> DagCbor -> DagCbor
+entryValueWithTree key prefix value tree = DcMap
+  [("p", DcInt prefix), ("k", DcBytes key), ("v", DcLink value), ("t", tree)]
+
 entryValue : Array Int -> Int -> Cid -> DagCbor
-entryValue key prefix value = DcMap
-  [("p", DcInt prefix), ("k", DcBytes key), ("v", DcLink value), ("t", DcNull)]
+entryValue key prefix value = entryValueWithTree key prefix value DcNull
+
+nodeBytes : DagCbor -> List DagCbor -> Array Int
+nodeBytes left entries = mustNode (DcMap [("l", left), ("e", DcArray entries)])
+
+nodeBlock : Array Int -> (Cid, Array Int)
+nodeBlock bytes = (cidForDagCbor bytes, bytes)
+
+nodeCid : Array Int -> Cid
+nodeCid bytes = cidForDagCbor bytes
+
+accepts : String -> Result String Unit -> <IO> Int
+accepts label (Ok ()) =
+  let () = println "MST CONTROL \{label} PASS"
+  1
+accepts label (Err message) =
+  let () = println "MST CONTROL \{label} FAIL rejected=\{message}"
+  0
 
 runHostile : <IO> Int
 runHostile =
   let keyA = mustHex "6170702e62736b792e666565642e706f73742f7072656669782d612d31"
   let keyB = mustHex "6170702e62736b792e666565642e706f73742f7072656669782d622d30"
+  let rootLow = toUtf8 "app.bsky.feed.post/range-2"
+  let rootHigh = toUtf8 "app.bsky.feed.post/range-3"
+  let leftKey = toUtf8 "app.bsky.feed.post/range-1"
+  let betweenKey = toUtf8 "app.bsky.feed.post/range-20"
+  let rightKey = toUtf8 "app.bsky.feed.post/range-4"
+  let depthTwo = toUtf8 "app.bsky.feed.post/medaka-depth-2-31"
+  let depthOne = toUtf8 "app.bsky.feed.post/medaka-depth-1-5"
   let value = mustCid "bafyreifqadjijwueiii3uzghmdqx4u7zbodkcyfyjvgpaalgp4ck32rmfa"
   let validTree = mustTree (mstInsert keyA value mstEmpty)
   let emptyRoot = mstRootCid mstEmpty
-  let badOrder = mustNode (DcMap [
-    ("l", DcNull),
-    ("e", DcArray [entryValue keyB 0 value, entryValue keyA 0 value]),
-  ])
-  let badPrefix = mustNode (DcMap [("l", DcNull), ("e", DcArray [entryValue keyA 1 value])])
-  let invalidTop = mustNode (DcMap [("l", DcLink emptyRoot), ("e", DcArray [])])
+  let badOrder = nodeBytes DcNull [entryValue keyB 0 value, entryValue (drop 26 keyA) 26 value]
+  let badPrefix = nodeBytes DcNull [entryValue keyA 1 value]
+  let undercompressed = nodeBytes DcNull [entryValue keyA 0 value, entryValue keyB 0 value]
+  let invalidTop = nodeBytes (DcLink emptyRoot) []
+  let misplacedLeftChild = nodeBytes DcNull [entryValue rightKey 0 value]
+  let misplacedLeftRoot = nodeBytes (DcLink (nodeCid misplacedLeftChild)) [entryValue rootLow 0 value]
+  let misplacedBetweenChild = nodeBytes DcNull [entryValue rightKey 0 value]
+  let misplacedBetweenRoot = nodeBytes DcNull [
+    entryValueWithTree rootLow 0 value (DcLink (nodeCid misplacedBetweenChild)),
+    entryValue (drop 25 rootHigh) 25 value,
+  ]
+  let misplacedRightChild = nodeBytes DcNull [entryValue leftKey 0 value]
+  let misplacedRightRoot = nodeBytes DcNull [entryValueWithTree rootLow 0 value (DcLink (nodeCid misplacedRightChild))]
+  let transitiveGrandchild = nodeBytes DcNull [entryValue rightKey 0 value]
+  let transitiveMiddle = nodeBytes DcNull [entryValueWithTree depthOne 0 value (DcLink (nodeCid transitiveGrandchild))]
+  let transitiveRoot = nodeBytes (DcLink (nodeCid transitiveMiddle)) [entryValue depthTwo 0 value]
   sum
     [
       rejectContains "empty-key" "empty key" (mstInsert [||] value mstEmpty),
@@ -139,10 +177,39 @@ runHostile =
       rejectContains "depth" "depth" (mstValidateNodeBytes 1 True (mstRootBytes validTree)),
       rejectContains "order" "order" (mstValidateNodeBytes 0 True badOrder),
       rejectContains "prefix" "prefix" (mstValidateNodeBytes 0 True badPrefix),
+      rejectContains "undercompressed" "not maximal" (mstValidateNodeBytes 0 True undercompressed),
+      rejectContains "misplaced-left" "lexical range" (mstValidateBlocks (nodeCid misplacedLeftRoot) [nodeBlock misplacedLeftRoot, nodeBlock misplacedLeftChild]),
+      rejectContains "misplaced-between" "lexical range" (mstValidateBlocks (nodeCid misplacedBetweenRoot) [nodeBlock misplacedBetweenRoot, nodeBlock misplacedBetweenChild]),
+      rejectContains "misplaced-right" "lexical range" (mstValidateBlocks (nodeCid misplacedRightRoot) [nodeBlock misplacedRightRoot, nodeBlock misplacedRightChild]),
+      rejectContains "misplaced-transitive" "lexical range" (mstValidateBlocks (nodeCid transitiveRoot) [nodeBlock transitiveRoot, nodeBlock transitiveMiddle, nodeBlock transitiveGrandchild]),
       rejectContains "malformed-links" "identity byte" (mstValidateNodeBytes 1 True (mustHex "a2616580616cd82a4101")),
       rejectContains "truncation" "truncated" (mstValidateNodeBytes 0 True [|0xa2|]),
       rejectContains "unreachable" "unreachable" (mstValidateBlocks (mstRootCid validTree) (mstNodeBlocks validTree ++ mstNodeBlocks mstEmpty)),
       rejectContains "invalid-node" "invalid node form" (mstValidateNodeBytes 1 True invalidTop),
+    ]
+
+runControls : <IO> Int
+runControls =
+  let rootLow = toUtf8 "app.bsky.feed.post/range-2"
+  let rootHigh = toUtf8 "app.bsky.feed.post/range-3"
+  let leftKey = toUtf8 "app.bsky.feed.post/range-1"
+  let betweenKey = toUtf8 "app.bsky.feed.post/range-20"
+  let rightKey = toUtf8 "app.bsky.feed.post/range-4"
+  let value = mustCid "bafyreifqadjijwueiii3uzghmdqx4u7zbodkcyfyjvgpaalgp4ck32rmfa"
+  let leftChild = nodeBytes DcNull [entryValue leftKey 0 value]
+  let leftRoot = nodeBytes (DcLink (nodeCid leftChild)) [entryValue rootLow 0 value]
+  let betweenChild = nodeBytes DcNull [entryValue betweenKey 0 value]
+  let betweenRoot = nodeBytes DcNull [
+    entryValueWithTree rootLow 0 value (DcLink (nodeCid betweenChild)),
+    entryValue (drop 25 rootHigh) 25 value,
+  ]
+  let rightChild = nodeBytes DcNull [entryValue rightKey 0 value]
+  let rightRoot = nodeBytes DcNull [entryValueWithTree rootHigh 0 value (DcLink (nodeCid rightChild))]
+  sum
+    [
+      accepts "left-neighbor" (mstValidateBlocks (nodeCid leftRoot) [nodeBlock leftRoot, nodeBlock leftChild]),
+      accepts "between-neighbor" (mstValidateBlocks (nodeCid betweenRoot) [nodeBlock betweenRoot, nodeBlock betweenChild]),
+      accepts "right-neighbor" (mstValidateBlocks (nodeCid rightRoot) [nodeBlock rightRoot, nodeBlock rightChild]),
     ]
 
 main : <IO, Env, FileRead "_"> Unit
@@ -152,9 +219,11 @@ main = match args ()
     Ok rows =>
       let (external, total) = runCorpus rows None 0 0
       let hostile = runHostile
+      let controls = runControls
       let () = println "external: \{intToString external}/\{intToString total} official-reference cases"
-      let () = println "hostile: \{intToString hostile}/9 rejected on named routes"
-      if external == 11 && total == 11 && hostile == 9 then println "TOTAL: PASS"
+      let () = println "hostile: \{intToString hostile}/14 rejected on named routes"
+      let () = println "controls: \{intToString controls}/3 valid lexical neighbors"
+      if external == 11 && total == 11 && hostile == 14 && controls == 3 then println "TOTAL: PASS"
       else
         let () = println "TOTAL: FAIL"
         exit 1

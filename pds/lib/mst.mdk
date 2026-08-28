@@ -306,12 +306,13 @@ decodeEntries (value::rest) previous acc = match value
     else
       let key = take prefix prior ++ suffix
       if arrayLength suffix == 0 then Err "mst: prefix compression produced an empty suffix"
-      else match bytesCompare prior key
-        Lt => match decodeOptionalLink "entry tree" tree
-          Err message => Err message
-          Ok child =>
-            decodeEntries rest (Some key) (DecodedEntry key leaf child :: acc)
-        _ => Err "mst: entry order is not strictly lexical"
+      else
+        if prefix /= commonPrefix prior key then Err "mst: prefix compression is not maximal"
+        else match bytesCompare prior key
+          Lt => match decodeOptionalLink "entry tree" tree
+            Err message => Err message
+            Ok child => decodeEntries rest (Some key) (DecodedEntry key leaf child :: acc)
+          _ => Err "mst: entry order is not strictly lexical"
   _ => Err "mst: invalid node entry form"
 
 decodeNode : Array Int -> Result String DecodedNode
@@ -401,33 +402,54 @@ validateBlockRows ((cid, bytes)::rest) seen =
   else
     validateBlockRows rest (cid::seen)
 
-nodeChildren : DecodedNode -> List Cid
-nodeChildren (DecodedNode left entries) = optionalCid left
-  ++ entryChildren entries
-
-optionalCid : Option Cid -> List Cid
-optionalCid None = []
-optionalCid (Some cid) = [cid]
-
-entryChildren : List DecodedEntry -> List Cid
-entryChildren [] = []
-entryChildren (entry::rest) = optionalCid (entryChild entry)
-  ++ entryChildren rest
-
 nodeDepth : DecodedNode -> Int
 nodeDepth (DecodedNode _ []) = 0
 nodeDepth (DecodedNode _ (entry::_)) = match mstKeyDepth (entryKey entry)
   Ok depth => depth
   Err message => panic "mst: decoded key depth failed: \{message}"
 
-walkChildren : List Cid -> Int -> List (Cid, Array Int) -> List Cid -> List Cid -> Result String (List Cid)
-walkChildren [] _ _ _ visited = Ok visited
-walkChildren (child::rest) expected blocks active visited = match walkBlock child (Some expected) False blocks active visited
-  Err message => Err message
-  Ok nextVisited => walkChildren rest expected blocks active nextVisited
+keyAboveLower : Array Int -> Option (Array Int) -> Bool
+keyAboveLower _ None = True
+keyAboveLower key (Some lower) = bytesCompare lower key == Lt
 
-walkBlock : Cid -> Option Int -> Bool -> List (Cid, Array Int) -> List Cid -> List Cid -> Result String (List Cid)
-walkBlock cid expected isRoot blocks active visited =
+keyBelowUpper : Array Int -> Option (Array Int) -> Bool
+keyBelowUpper _ None = True
+keyBelowUpper key (Some upper) = bytesCompare key upper == Lt
+
+entriesWithinBounds : List DecodedEntry -> Option (Array Int) -> Option (Array Int) -> Bool
+entriesWithinBounds [] _ _ = True
+entriesWithinBounds ((DecodedEntry key _ _)::rest) lower upper = keyAboveLower key lower
+  && keyBelowUpper key upper
+  && entriesWithinBounds rest lower upper
+
+walkOptionalChild : Option Cid -> Int -> Option (Array Int) -> Option (Array Int) -> List (Cid, Array Int) -> List Cid -> List Cid -> Result String (List Cid)
+walkOptionalChild None _ _ _ _ _ visited = Ok visited
+walkOptionalChild (Some child) expected lower upper blocks active visited =
+  walkBlock child (Some expected) False lower upper blocks active visited
+
+walkEntryChildren : List DecodedEntry -> Int -> Option (Array Int) -> List (Cid, Array Int) -> List Cid -> List Cid -> Result String (List Cid)
+walkEntryChildren [] _ _ _ _ visited = Ok visited
+walkEntryChildren (entry::rest) expected upper blocks active visited =
+  let childUpper = match rest
+    [] => upper
+    next::_ => Some (entryKey next)
+  match walkOptionalChild (entryChild entry) expected (Some (entryKey entry)) childUpper blocks active visited
+    Err message => Err message
+    Ok nextVisited =>
+      walkEntryChildren rest expected upper blocks active nextVisited
+
+walkNodeChildren : DecodedNode -> Int -> Option (Array Int) -> Option (Array Int) -> List (Cid, Array Int) -> List Cid -> List Cid -> Result String (List Cid)
+walkNodeChildren (DecodedNode left entries) expected lower upper blocks active visited =
+  let leftUpper = match entries
+    [] => upper
+    entry::_ => Some (entryKey entry)
+  match walkOptionalChild left expected lower leftUpper blocks active visited
+    Err message => Err message
+    Ok nextVisited =>
+      walkEntryChildren entries expected upper blocks active nextVisited
+
+walkBlock : Cid -> Option Int -> Bool -> Option (Array Int) -> Option (Array Int) -> List (Cid, Array Int) -> List Cid -> List Cid -> Result String (List Cid)
+walkBlock cid expected isRoot lower upper blocks active visited =
   if cidMember cid active then Err "mst: invalid node form; subtree link cycle"
   else
     if cidMember cid visited then Err "mst: invalid node form; subtree block is referenced more than once"
@@ -441,14 +463,19 @@ walkBlock cid expected isRoot blocks active visited =
             None => nodeDepth node
           match validateDecoded depth isRoot node
             Err message => Err message
-            Ok () => walkChildren (nodeChildren node) (depth - 1) blocks (cid::active) (cid::visited)
+            Ok () => match node
+              DecodedNode _ entries =>
+                if not (entriesWithinBounds entries lower upper) then
+                  Err "mst: subtree key falls outside its lexical range"
+                else
+                  walkNodeChildren node (depth - 1) lower upper blocks (cid::active) (cid::visited)
 
 -- | Validate content binding and prove every supplied node block is reachable.
 export
 mstValidateBlocks : Cid -> List (Cid, Array Int) -> Result String Unit
 mstValidateBlocks root blocks = match validateBlockRows blocks []
   Err message => Err message
-  Ok () => match walkBlock root None True blocks [] []
+  Ok () => match walkBlock root None True None None blocks [] []
     Err message => Err message
     Ok visited =>
       if length visited /= length blocks then

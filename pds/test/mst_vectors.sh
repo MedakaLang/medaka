@@ -35,7 +35,8 @@ if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" run "$DRIVER" "$CORPUS" > "$W
 fi
 require_empty "$WORK/eval.err" eval
 grep -F -q 'external: 11/11 official-reference cases' "$WORK/eval.out" || fail 'eval did not grade all external cases'
-grep -F -q 'hostile: 9/9 rejected on named routes' "$WORK/eval.out" || fail 'eval hostile route count is incomplete'
+grep -F -q 'hostile: 14/14 rejected on named routes' "$WORK/eval.out" || fail 'eval hostile route count is incomplete'
+grep -F -q 'controls: 3/3 valid lexical neighbors' "$WORK/eval.out" || fail 'eval lexical controls are incomplete'
 [ "$(tail -1 "$WORK/eval.out")" = 'TOTAL: PASS' ] || fail 'eval did not end in TOTAL: PASS'
 
 for name in \
@@ -46,9 +47,16 @@ do
   grep -F -q "CASE $name PASS " "$WORK/eval.out" || fail "eval missed external case $name"
 done
 
-for label in empty-key duplicates depth order prefix malformed-links truncation unreachable invalid-node
+for label in empty-key duplicates depth order prefix undercompressed misplaced-left \
+  misplaced-between misplaced-right misplaced-transitive malformed-links truncation \
+  unreachable invalid-node
 do
   grep -F -q "HOSTILE $label PASS route=" "$WORK/eval.out" || fail "eval missed exceptional route $label"
+done
+
+for label in left-neighbor between-neighbor right-neighbor
+do
+  grep -F -q "MST CONTROL $label PASS" "$WORK/eval.out" || fail "eval missed lexical control $label"
 done
 
 if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$DRIVER" -o "$WORK/native" > "$WORK/native-build.log" 2>&1; then
@@ -59,4 +67,4 @@ fi
 require_empty "$WORK/native.err" native
 cmp "$WORK/eval.out" "$WORK/native.out" || fail 'eval and native normalized output differ'
 
-echo 'PASS: MST — 11 official-reference cases; 9 hostile routes; eval == native'
+echo 'PASS: MST — 11 official-reference cases; 14 hostile routes; 3 lexical controls; eval == native'
