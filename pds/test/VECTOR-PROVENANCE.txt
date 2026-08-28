@@ -462,3 +462,15 @@ extraction:    pds/tools/gen_car_corpus.sh installs exactly @atproto/repo@0.10.1
 retrieved:     2026-08-28
 consumer:      P1-C-CAR-STORE (#2136 pure verified blockstore and strict CARv1)
 notes:         Final IPLD CARv1 and current atproto repository serialization were confirmed first-hand on 2026-08-28 at https://ipld.io/specs/transport/car/carv1/ and https://atproto.com/specs/repository: unsigned-LEB128 header/section lengths, canonical DAG-CBOR {roots,version:1}, CID+block sections, nonempty atproto commit-root profile, arbitrary block order, unrelated blocks, and robustness to duplicate blocks. The committed artifact is produced only by the pinned official writer and is never captured from Medaka.
+
+[vector]
+file:          pds/test/vectors/repo_reference_corpus.txt
+local-sha256:  64c92f5b00aa38de9371098eb9aff7e5ab53c9ab049f951333dd4c8bde95d007
+kind:          reference-impl
+impl:          official-atproto-repo
+impl-secondary: official-pds
+source-url:    https://registry.npmjs.org/@atproto/repo/-/repo-0.10.12.tgz
+extraction:    pds/tools/gen_repo_corpus.sh installs exact @atproto/repo@0.10.12 and @atproto/crypto@0.5.4 packages outside the tree, verifies both npm integrity literals, then the committed generator drives official TID.fromTime, MST create/add/update/delete, deterministic lex-cbor, signCommit, Secp256k1Keypair compact low-S signing, getFullRepo, and readCarWithRoot over a fixed key/DID/time transcript. Re-running must reproduce this file byte-for-byte.
+retrieved:     2026-08-28
+consumer:      P1-D-REPO (#2136 TID and signed version-3 repository commits)
+notes:         Five fixed TIDs plus empty init and create/update/create/delete commits pin record/MST/unsigned/signed/commit bytes and CIDs. Final CAR section order comes directly from official getFullRepo: signed commit, breadth-first MST nodes, then reachable record leaves. The official-pds secondary pin supplies the exact @atproto/crypto@0.5.4 signing implementation and image-level provenance already used by Phase 0.
