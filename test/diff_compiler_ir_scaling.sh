@@ -136,10 +136,12 @@
 #
 # ── THE SHAPES ───────────────────────────────────────────────────────────────
 #
-# This gate is a NEW METRIC OVER EXISTING SHAPES. Both generators below are
-# transcribed verbatim from test/diff_compiler_perf_scaling.sh (gen_xref,
-# gen_manyifaces) — same programs, same structure, graded on `Ir` instead of on
-# time/alloc/ops. Deliberately NOT a new fixture corpus: a fixture DIRECTORY is
+# This gate is a NEW METRIC OVER EXISTING SHAPES. `gen_xref` and `gen_manyifaces` are
+# SHARED with test/diff_compiler_perf_scaling.sh via test/perf_shapes.sh — same programs,
+# same structure, graded on `Ir` instead of on time/alloc/ops. (They were transcribed
+# verbatim until #2066; two hand-kept copies of a shape two gates quote against each
+# other is a drift hazard neither gate can see.) Deliberately NOT a new fixture corpus:
+# a fixture DIRECTORY is
 # shared, and adding a file to one enrols this gate in others it never named
 # (AGENTS.md [T-SHARED-CORPUS]). Keep new shapes as generators in this file.
 #
@@ -200,7 +202,52 @@ if [ ! -x "$MEDAKA" ]; then
 fi
 
 if ! command -v valgrind >/dev/null 2>&1; then
+  # ── #2065: A SKIP IS ONLY LEGITIMATE OFF CI. ────────────────────────────────
+  #
+  # The paragraph above is still right about a dev box: not everyone has valgrind, and a
+  # gate that hard-failed there would be noise. But it was ALSO true in CI, and that is
+  # the hole. `.github/actions/setup-medaka` installs valgrind explicitly, so the only
+  # way to reach this branch on a runner is that the install silently stopped happening —
+  # a runner image change, an apt failure, a moved step. And on that day this gate would
+  # have gone on printing a tidy SKIP line inside a large gate run, run_gates.sh would
+  # have matched "not on PATH" against its LEGIT_SKIP_RE and recorded an opt-in skip, the
+  # shard would have gone green, and `Ir` scaling would have stopped being graded with no
+  # red anywhere. "A gate never observed red is indistinguishable from one that cannot go
+  # red" (#880 §8) — and a gate that silently stops running is the same claim, worse.
+  #
+  # So: SKIP off CI, HARD FAIL on it. exit 1, not 2, so no skip-classifier anywhere can
+  # reinterpret it — the verdict does not depend on run_gates.sh's regex agreeing with a
+  # message string, which is the coupling that produced this hole in the first place.
+  #
+  # ── OBSERVED RED, 2026-08-28. Valgrind 3.24.0 IS installed on this box, so the
+  #    absence had to be MANUFACTURED — a branch you cannot reach is a branch you cannot
+  #    claim. Build a directory of symlinks to the tools the gate needs, omitting
+  #    valgrind, and run with PATH pointed at it:
+  #      mkdir -p /tmp/nopath
+  #      for t in sh awk sed grep cut head sort tr find cmp mktemp rm cp mv cat \
+  #               basename dirname date git python3 clang perl nm; do
+  #        ln -sf "$(command -v $t)" /tmp/nopath/$t; done
+  #      env -u CI PATH=/tmp/nopath sh test/diff_compiler_ir_scaling.sh   # dev box
+  #      CI=true  PATH=/tmp/nopath sh test/diff_compiler_ir_scaling.sh   # a runner
+  #
+  #    CI UNSET  -> exit 2, "SKIP: valgrind not on PATH — …"
+  #    CI=true   -> exit 1, "FAIL: valgrind is not on PATH, and this is CI."
+  #    And the laundering that made this a bug, confirmed on the same run:
+  #      the exit-2 message MATCHES run_gates.sh's LEGIT_SKIP_RE, so pre-fix that
+  #      verdict was recorded as an opt-in SKIP (st=2) and the shard stayed GREEN
+  #      having graded no `Ir` at all. exit 1 is outside that classifier entirely.
+  #    (Same recipe, same two verdicts, for diff_compiler_stage_ir_scaling.sh.)
+  if [ -n "${CI:-}" ]; then
+    echo "FAIL: valgrind is not on PATH, and this is CI."
+    echo "  This gate measures Cachegrind instruction counts; without valgrind it grades"
+    echo "  NOTHING. On a dev box that is a legitimate skip. On a runner it means the"
+    echo "  valgrind install in .github/actions/setup-medaka stopped happening, and the"
+    echo "  Ir-scaling arm has silently gone dark (#2065). Fix the install, not this check."
+    exit 1
+  fi
   echo "SKIP: valgrind not on PATH — this gate measures Cachegrind instruction counts."
+  echo "  (A skip is only legitimate OFF CI — see the #2065 note in this file. On CI this"
+  echo "   is a hard failure.)"
   echo "  Debian/Ubuntu: sudo apt-get install -y valgrind"
   exit 2
 fi
@@ -224,6 +271,136 @@ if ! MEDAKA_STRICT=1 "$MEDAKA" check "$WORK/freshness.mdk" >/dev/null 2>"$WORK/f
 fi
 
 THRESH="${IR_THRESH:-3.0}"
+
+# ── THE LEDGER: shapes with a DECLARED, measured, non-flat cost (#2100) ───────
+#
+# This gate had no ledger at all until 2026-08-28, which is why `scoperefs` was
+# carried as a silent pass instead of a declared exception (#2100). It now has
+# the same self-draining mechanism as test/diff_compiler_stage_ir_scaling.sh,
+# deliberately in the same shape so the two read alike:
+#
+#   KNOWN_CEIL_<shape>   fail if r2 goes ABOVE it   — it got worse
+#   KNOWN_FIXED_<shape>  fail if r2 goes BELOW it   — it got FIXED, demanding a
+#                                                     PROMOTE out of the ledger
+#
+# Both halves are required. A ledger with only a ceiling is a skip-list: it can
+# never notice that the thing it excuses has been repaired, so the row outlives
+# the defect and the shape is never graded again.
+KNOWN_SUPERLINEAR="scoperefs"
+
+# scoperefs — #1031's fix backs a frame-list scan with an OrdMap, so the shape is
+# O(n log n) BY CONSTRUCTION and its per-doubling ratio legitimately creeps above
+# 2.0 and keeps creeping with N. It is not linear and it is not the quadratic;
+# there is no band at which it reads flat, so it cannot be graded by the plain
+# threshold and must be ledgered or retired.
+#
+# The band is derived from MEASURED VARIANCE, not from the value it bounds
+# (#2160 rule 3). Three back-to-back full runs of this gate on this box against
+# one binary, 2026-08-28:
+#
+#   scoperefs net Ir at N=12000: 110133423361 / 110133008756 / 110133139932
+#     -> relative spread 3.8e-6, and every r1/r2 the gate printed was identical
+#        to all 3 printed decimals across all three runs (r1=2.900 r2=3.159).
+#
+# Run-to-run variance on this instrument is therefore ~0 and cannot set a useful
+# margin on its own. The real drift source is a constant-factor shift from an
+# unrelated compiler change; its scale is visible in the spread of the five FLAT
+# shapes' r2 in the same runs (2.056 / 2.061 / 2.065 / 2.073 / 2.119 — 3.1%
+# end to end). CEIL is set one such drift-width above the observed 3.159:
+#
+#   3.159 * 1.045 = 3.301  ->  3.30
+#
+# which still fails #2063's partial-#2044 reading (r2=3.392) and every reading
+# worse than it. FIXED sits between the flat shapes' ~2.07 and the ledgered
+# 3.159, far enough above the former that ordinary drift cannot trip it:
+KNOWN_CEIL_scoperefs="${KNOWN_CEIL_scoperefs:-3.30}";  KNOWN_FIXED_scoperefs="${KNOWN_FIXED_scoperefs:-2.60}"
+
+# Add-only deliberate-red seam. Default empty, set NOWHERE in the tree, and it
+# can only ADD rows — it can never suppress a real one. It exists so the ledger
+# arms above can be driven red on demand without editing this file (#2160 rule
+# 1: an arm nobody has ever seen fail is not a pin). A banner is printed when it
+# is used, so a run that used it can never be mistaken for a clean one.
+if [ -n "${IR_LEDGER_EXTRA:-}" ]; then
+  echo "!! LEDGER INJECTION ACTIVE: IR_LEDGER_EXTRA=$IR_LEDGER_EXTRA — this run is NOT a clean verdict."
+fi
+is_known() {
+  for _k in $KNOWN_SUPERLINEAR ${IR_LEDGER_EXTRA:-}; do
+    [ "$_k" = "$1" ] && return 0
+  done
+  return 1
+}
+
+# Run one shape only (cost control, and how the observed-red records below were
+# captured). Empty = all of them; never set in CI.
+IR_ONLY="${IR_ONLY:-}"
+
+# ── OBSERVED RED (#2160 rule 1) ──────────────────────────────────────────────
+#
+# An arm nobody has watched fail is not a pin. Every arm added or changed here on
+# 2026-08-28 was driven red first-hand on this box, on the CHEAPEST shape (xref,
+# r1=2.067 r2=2.065) so the five ladders cost minutes rather than scoperefs' one.
+# Verbatim, in the order the arms appear in grade_shape:
+#
+#   1. the plain threshold arm, now firing on r2 ALONE (#2063's rule change):
+#      $ IR_ONLY=xref IR_THRESH=2.0 sh test/diff_compiler_ir_scaling.sh
+#      FAIL xref: SUPERLINEAR (Ir) r1=2.067 r2=2.065  (threshold 2.0 on r2, the second doubling)
+#      exit=1
+
+#   1b. AND THE REAL ONE — #2063's own defect, reproduced on a reverted compiler
+#      rather than argued from the issue's numbers. The PARTIAL #2044 revert the
+#      issue names (medaka_cli.mdk:702, the single-file check arm, from
+#      `ppDiagCliLines (srcLinesArr tsrc) target` back to `ppDiagCliSrc tsrc
+#      target`; `spaces` and `nthLineGo` left FIXED), built and measured here
+#      2026-08-28 at the SHIPPED 400/800/1600 band:
+#
+#        errs: floor(N=1) = 908974087 Ir  (net must exceed 45448704)
+#          N=400    raw=2259572817     net=1350598730
+#          N=800    raw=4890235382     net=3981261295
+#          N=1600   raw=14296545279    net=13387571192
+#        FAIL errs: SUPERLINEAR (Ir) r1=2.948 r2=3.363  (threshold 3.0 on r2, the second doubling)
+#
+#      #2063 reported 2.967 / 3.392 for this same revert; reproduced here within
+#      0.7% on a different build. r1 = 2.948 is UNDER 3.0, so the old
+#      both-doublings rule called this `ok` on a compiler that had genuinely
+#      reintroduced #2044's dominant rider. That is the whole issue, and it is
+#      fixed by the RULE — IR_ERRS_N is untouched, IR_THRESH is untouched. The
+#      issue's own suggested lever (raise the N band, "the cheap lever is the N
+#      band, not the threshold") turns out not to be needed at all, which also
+#      spares this gate the Cachegrind cost of a wider errs band.
+#
+#   2. a ledger row with no ceiling/fixed pair — a skip-list caught as malformed:
+#      $ IR_ONLY=xref IR_LEDGER_EXTRA=xref sh test/diff_compiler_ir_scaling.sh
+#      !! LEDGER INJECTION ACTIVE: IR_LEDGER_EXTRA=xref — this run is NOT a clean verdict.
+#      FAIL xref: ledgered in KNOWN_SUPERLINEAR but has no KNOWN_CEIL_xref / KNOWN_FIXED_xref pair.
+#        A ledger row without both halves cannot drain itself — that is a skip-list, not a pin.
+#      exit=1
+#      🚨 ON THE FIRST ATTEMPT THIS ARM PRINTED NOTHING AND EXITED 2. `set -u` (:188)
+#      killed the shell on `eval "ceil=\${KNOWN_CEIL_xref}"` before the check below
+#      could report anything — and exit 2 is run_gates.sh's SKIP candidate, not a
+#      failure. That is why both evals carry `:-`. The same latent abort was found
+#      and fixed in diff_compiler_stage_ir_scaling.sh and diff_compiler_perf_scaling.sh,
+#      which had copied the unguarded form.
+#
+#   3. ledgered AND GOT WORSE (r2 above the row's own ceiling):
+#      $ IR_ONLY=xref IR_LEDGER_EXTRA=xref KNOWN_CEIL_xref=1.50 KNOWN_FIXED_xref=1.00 …
+#      FAIL xref: ** KNOWN-SUPERLINEAR, AND GOT WORSE ** r1=2.067 r2=2.065 (ceiling 1.50)
+#      exit=1
+#
+#   4. PROMOTE — the ledger draining itself when the declared cost is gone:
+#      $ IR_ONLY=xref IR_LEDGER_EXTRA=xref KNOWN_CEIL_xref=9.00 KNOWN_FIXED_xref=3.00 …
+#      FAIL xref: ** PROMOTE: now scales within the band ** r2=2.065 (< 3.00)
+#        Remove "xref" from KNOWN_SUPERLINEAR — the declared cost is GONE.
+#        It may NOT stay ledgered AND ungraded.
+#      exit=1
+#
+#   5. and the real row, unmodified, reading as a DECLARED row rather than a
+#      silent pass — which is the whole of #2100:
+#      $ IR_ONLY=scoperefs sh test/diff_compiler_ir_scaling.sh
+#      known scoperefs: r1=2.900 r2=3.159 (ledgered, ceiling 3.30) — see KNOWN_SUPERLINEAR
+#      exit=0
+#
+# KNOWN_CEIL_scoperefs / KNOWN_FIXED_scoperefs are `:-`-defaulted for exactly arms
+# 3 and 4: a band nobody can drive past is a band nobody has tested.
 
 # The GC heap pin applied to every measured run (header, determinism block).
 IR_HEAP="${IR_HEAP:-2147483648}"
@@ -250,16 +427,78 @@ ERRS_N="${IR_ERRS_N:-400}"
 # pre-fix defect is invisible below ~N=2500 (both r1,r2 stay under 3.0 even with
 # the O(depth^2) scan still present — the fixed cost of a `check` on this shape's
 # giant expression dominates at smaller N) and only reads clearly red at N=3000:
-#     base (pre-fix)  r1=3.118 r2=3.308  FAIL (both doublings > 3.0)
-#     head (post-fix) r1=2.895 r2=3.159  ok   (r1 stays under; the "both doublings"
-#                                              rule is exactly what keeps this from
-#                                              flapping on the O(log n) creep)
+#     base (pre-fix)  r1=3.118 r2=3.308  FAIL
+#     head (post-fix) r1=2.895 r2=3.159
+#
+# ⚠️ THAT SECOND LINE WAS RECORDED HERE AS "ok", AND IT IS NOT ok ANY MORE.
+# It read green only because the verdict rule then in force required BOTH
+# doublings over threshold, and this comment argued that conjunct was "exactly
+# what keeps this from flapping on the O(log n) creep". #2100 is that argument
+# arriving as a defect report: r2=3.159 is already OVER this gate's own 3.0
+# threshold, and the row was passing on the letter of a rule imported from a
+# wall-clock gate. The rule is now r2 alone (see grade_shape) and this shape is
+# a DECLARED ledger row in KNOWN_SUPERLINEAR, graded against its own measured
+# ceiling. Re-measured on this box 2026-08-28, three runs: r1=2.900 r2=3.159,
+# identical to 3 decimals every time.
 SCOPEREFS_N="${IR_SCOPEREFS_N:-3000}"
-# diagbucket: #1019's regression pin — see gen_diagbucket below for the shape.
-# Deliberately smaller than errs's band: #1019 (unlike #2044) is a single bulk
-# `++` per module, not a per-render rescan, so there is no expectation of a
-# climbing ratio to chase; the point is confirming the now-fixed bulk-append
-# stays linear, not finding its weakest N.
+# diagbucket — see gen_diagbucket below for the shape.
+#
+# 🚨 THIS ROW IS A LINEARITY LADDER, NOT A REGRESSION PIN. It was added as #1019's
+# pin and it cannot do that job at any affordable N. #2152 reported it; this is the
+# measurement that settles it. DO NOT read a green `diagbucket` as evidence that
+# #1019 has not been reintroduced — it is not evidence either way.
+#
+# MEASURED 2026-08-28, this box, on a compiler with #1019 DELIBERATELY REVERTED
+# (pushDiags's bulk `existing ++ ds` replaced by the per-element recursion, which is
+# the pre-51eb8807 O(n^2) shape). Four bands, each the gate's own 1x/2x/4x ladder:
+#
+#     band N            r1      r2     verdict   wall clock
+#      300/600/1200    2.104   2.138    ok       (#2152's reading, not re-run here)
+#     1200/2400/4800   2.215   2.370    ok         48 s
+#     2400/4800/9600   2.370   2.593    ok         94 s
+#     5500/11000/22000 2.668   2.851    ok        291 s
+#
+# The ratio climbs, so the quadratic IS there and IS being measured — it is simply
+# swamped. Fitting net(N) = a*N + b*N^2 to the last band (ratio(N) = (2a+4bN)/(a+bN),
+# r2 = 2.851 at the 11000->22000 doubling) gives b*11000 = 0.7407a, i.e.
+#
+#     a/b ~= 14 850    (the linear cost of ONE diagnostic is ~14 850x the cost of one
+#                       cons-copy step, ~97 Ir, that the reverted fold adds per pair)
+#
+# ratio hits this gate's 3.0 threshold only at x = b*N/a = 1, i.e. a MIDDLE N of
+# ~14 850 — band 7400/14850/29700, and that is the MARGINAL reading r2 = 3.000. A
+# decisive red (r2 >= 3.2) needs x = 1.5, i.e. band ~11000/22000/44500. Cost scales
+# with Ir, and Ir at 22000 was already 8.26e10 for the 291 s band; the 44500 point
+# alone is ~4x that, putting the decisive band near 20 MINUTES for ONE SHAPE.
+#
+# BOTH remedies #2152 offered are therefore declined, with numbers rather than by
+# judgement, and rule 4 of #2160 phase 1 (state the cost, place explicitly) is why:
+#   (a) "raise N until it reads red" — ~20 min. This gate is ~509 s total against a
+#       600 s foreground ceiling (ci.yml, `sqlite` row), so it does not fit the PR
+#       shard. It would fit `nightly.yml`, which already carries `perf_scaling DEEP
+#       (the N=16000 bands ci.yml cannot afford)` — but 20 min of Cachegrind to pin
+#       ONE already-fixed, confirmed-linear bulk append is not a trade worth making,
+#       and saying so out loud is better than spending it quietly.
+#   (b) "redesign the shape so the quadratic dominates sooner" — cannot work here.
+#       Dominance is governed by a/b, and `a` is the cost of TYPECHECKING AND
+#       CONSTRUCTING a diagnostic (~1.4e6 Ir each), not the cost of the 2 source
+#       lines gen_diagbucket emits per diagnostic. Making the source denser moves
+#       parse cost, which is not the term in the denominator. There is no
+#       diagnostic-producing shape an order of magnitude cheaper per diagnostic, so
+#       no redesign moves a/b enough to matter.
+#
+# WHAT THE ROW IS STILL WORTH KEEPING FOR, at its cheap shipped band: it is the only
+# deterministic ladder over the multi-module `pushDiags` path at all, so a FUTURE
+# regression with a LARGER constant (an O(n^2) with a coefficient 100x this one, or
+# an accidental O(n^2) in the diagnostic CONSTRUCTION rather than the append) does
+# show up here. That is a real, if narrow, use — it is just not #1019's pin.
+#
+# ⚠️ AND THE GENERAL FACT, which outlives this row: a per-element `++` fold over a
+# diagnostic batch is NOT DETECTABLE by an Ir ladder at any reachable N, because
+# producing a diagnostic costs ~15 000x what the fold's extra copy costs. #1019's
+# real protection is the shape of the code and the comment above pushDiags, not a
+# gate. Any future "we pinned it" claim about that function should be read against
+# this paragraph.
 DIAGBUCKET_N="${IR_DIAGBUCKET_N:-300}"
 # noimpl: #2068's shape — see gen_noimpl below.
 #
@@ -303,42 +542,15 @@ NOIMPL_N="${IR_NOIMPL_N:-400}"
 # is the point. Printed, never silent.
 MIN_NET_FRAC="${IR_MIN_NET_FRAC:-0.05}"
 
-# ── the shapes (verbatim from test/diff_compiler_perf_scaling.sh) ────────────
-
-gen_xref() {
-  gn=$1; gf=$2; : > "$gf"
-  printf 'f0 : Int -> Int\nf0 x = x + 1\n' >> "$gf"
-  gi=1
-  while [ "$gi" -lt "$gn" ]; do
-    printf 'f%s : Int -> Int\nf%s x = f%s x + %s\n' "$gi" "$gi" "$((gi - 1))" "$gi"
-    gi=$((gi + 1))
-  done >> "$gf"
-  # `main` CALLS THE HEAD OF THE CHAIN — load-bearing. `main = println 1` roots
-  # nothing, so every fN is dead and the measurement describes the prelude.
-  printf 'main = println (f%s 0)\n' "$((gn - 1))" >> "$gf"
-}
-
-gen_manyifaces() {
-  gn=$1; gf=$2; : > "$gf"
-  gr=8
-  {
-    gi=0
-    while [ "$gi" -lt "$gn" ]; do
-      printf 'interface P%s a where\n  m%s : a -> Int\n' "$gi" "$gi"
-      gi=$((gi + 1))
-    done
-    printf 'base : Int\nbase = 1\n'
-    gi=0
-    while [ "$gi" -lt "$gn" ]; do
-      printf 'h%s : Int\nh%s = base' "$gi" "$gi"
-      gj=1
-      while [ "$gj" -lt "$gr" ]; do printf ' + base'; gj=$((gj + 1)); done
-      printf '\n'
-      gi=$((gi + 1))
-    done
-    printf 'main = println h0\n'
-  } >> "$gf"
-}
+# ── the shapes ───────────────────────────────────────────────────────────────
+#
+# gen_xref / gen_manyifaces are SHARED with test/diff_compiler_perf_scaling.sh, sourced
+# from test/perf_shapes.sh. They used to be TRANSCRIBED here (#2066): two byte-different
+# copies of the same two programs, with nothing comparing them, so the two gates could
+# have drifted into measuring different shapes while both stayed green and their ratios
+# went on being quoted side by side. Read the header of perf_shapes.sh before editing a
+# generator — a change there moves every band and ledger ceiling in BOTH gates.
+. "$ROOT/test/perf_shapes.sh"
 
 # The #2044 regression pin. Each binding is annotated `Int` and bound to a
 # String, which is exactly one `Type mismatch` diagnostic per binding and
@@ -537,6 +749,7 @@ graded=0
 
 grade_shape() {
   shape="$1"; base_n="$2"; regime="${3:-clean}"
+  if [ -n "$IR_ONLY" ] && [ "$IR_ONLY" != "$shape" ]; then return 0; fi
 
   # The floor comes from THIS shape's generator, in THIS shape's diagnostic
   # regime. See the header — a shared baseline is measurably wrong.
@@ -571,17 +784,76 @@ grade_shape() {
   r2="$(awk -v a="$3" -v b="$2" 'BEGIN{printf "%.3f", a/b}')"
   graded=$((graded + 1))
 
-  # SUSTAINED signal only: BOTH doublings over the threshold. One reading over is
-  # a step, not a growth rate — the same rule perf_scaling uses, for the same
-  # reason.
-  over="$(awk -v x="$r1" -v y="$r2" -v t="$THRESH" \
-    'BEGIN{print (x>t && y>t) ? "yes" : "no"}')"
-  if [ "$over" = "yes" ]; then
-    printf 'FAIL %s: SUPERLINEAR (Ir) r1=%s r2=%s  (threshold %s, both doublings)\n' \
+  # ── THE VERDICT RULE (#2063, #2100) ─────────────────────────────────────────
+  #
+  # WAS, until 2026-08-28:
+  #
+  #   over = (r1 > THRESH && r2 > THRESH)
+  #   # SUSTAINED signal only: BOTH doublings over the threshold. One reading
+  #   # over is a step, not a growth rate — the same rule perf_scaling uses,
+  #   # for the same reason.
+  #
+  # The reason it cites is real, and it is perf_scaling's, not this gate's.
+  # perf_scaling grades a WALL-CLOCK arm on a shared box, where a single
+  # elevated ratio genuinely can be a scheduling step and the conjunct buys
+  # noise rejection. This gate is Cachegrind. Measured here, three back-to-back
+  # full runs against one binary (2026-08-28): relative spread on the largest
+  # net was 3.8e-6, and every r1/r2 this gate printed was identical to all three
+  # printed decimals across all three runs. There is no noise to reject.
+  #
+  # What the conjunct rejects instead is the reading r1 < t < r2 — a ratio that
+  # CLIMBS across the two doublings. That is the signature of a superlinear
+  # term, not of noise; a linear shape holds its ratio flat. So the imported
+  # rule is not merely unnecessary here, it is inverted: it is most likely to
+  # excuse exactly the shape it exists to catch. #2063 records the consequence
+  # first-hand — a genuine PARTIAL revert of #2044 (the `checkRoute` call site
+  # alone) reads r1=2.967 r2=3.392, and the gate calls it ok.
+  #
+  # The rule is now r2 alone: the later, larger-N doubling, the one that carries
+  # the asymptote. NO THRESHOLD MOVED — IR_THRESH is still 3.0, and the band for
+  # every shape is unchanged. This is strictly LOUDER than what it replaces
+  # (every reading the old rule failed, this one also fails), which is the only
+  # direction [W-QUIETER] permits.
+  #
+  # ⚠️ The one shape this newly reddens is `scoperefs`, whose climb is real,
+  # documented and accepted (O(n log n) by construction — see SCOPEREFS_N). It
+  # is not silenced by softening the rule; it is declared in KNOWN_SUPERLINEAR
+  # above, where it is graded against its own measured ceiling AND must drain
+  # itself if it is ever fixed.
+  over="$(awk -v y="$r2" -v t="$THRESH" 'BEGIN{print (y>t) ? "yes" : "no"}')"
+
+  if is_known "$shape"; then
+    eval "ceil=\${KNOWN_CEIL_$shape:-}"
+    eval "fixed=\${KNOWN_FIXED_$shape:-}"
+    if [ -z "${ceil:-}" ] || [ -z "${fixed:-}" ]; then
+      printf 'FAIL %s: ledgered in KNOWN_SUPERLINEAR but has no KNOWN_CEIL_%s / KNOWN_FIXED_%s pair.\n' \
+        "$shape" "$shape" "$shape"
+      echo "  A ledger row without both halves cannot drain itself — that is a skip-list, not a pin."
+      fail=1
+      return 0
+    fi
+    worse="$(awk -v r="$r2" -v c="$ceil" 'BEGIN{print (r > c) ? 1 : 0}')"
+    better="$(awk -v r="$r2" -v f="$fixed" 'BEGIN{print (r < f) ? 1 : 0}')"
+    if [ "$worse" = "1" ]; then
+      printf 'FAIL %s: ** KNOWN-SUPERLINEAR, AND GOT WORSE ** r1=%s r2=%s (ceiling %s)\n' \
+        "$shape" "$r1" "$r2" "$ceil"
+      fail=1
+    elif [ "$better" = "1" ]; then
+      printf 'FAIL %s: ** PROMOTE: now scales within the band ** r2=%s (< %s)\n' \
+        "$shape" "$r2" "$fixed"
+      printf '  Remove "%s" from KNOWN_SUPERLINEAR — the declared cost is GONE.\n' "$shape"
+      echo "  It may NOT stay ledgered AND ungraded."
+      fail=1
+    else
+      printf 'known %s: r1=%s r2=%s (ledgered, ceiling %s) — see KNOWN_SUPERLINEAR\n' \
+        "$shape" "$r1" "$r2" "$ceil"
+    fi
+  elif [ "$over" = "yes" ]; then
+    printf 'FAIL %s: SUPERLINEAR (Ir) r1=%s r2=%s  (threshold %s on r2, the second doubling)\n' \
       "$shape" "$r1" "$r2" "$THRESH"
     fail=1
   else
-    printf 'ok   %s: r1=%s r2=%s  (threshold %s)\n' "$shape" "$r1" "$r2" "$THRESH"
+    printf 'ok   %s: r1=%s r2=%s  (threshold %s on r2)\n' "$shape" "$r1" "$r2" "$THRESH"
   fi
   return 0
 }

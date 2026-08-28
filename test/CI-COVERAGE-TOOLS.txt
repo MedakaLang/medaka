@@ -172,3 +172,13 @@ test/lib_stale_warning         shell library, not a script (#482): sourced by th
                                opaque `differing sections: CRASH`. Defines functions only; running
                                it does nothing observable. Its behavior IS asserted — by those five
                                gates, which are each in a shard.
+test/perf_shapes               shell library, not a script (#2066): sourced by
+                               diff_compiler_perf_scaling and diff_compiler_ir_scaling for the two
+                               shape generators they share (gen_xref, gen_manyifaces). Defines
+                               functions only; running it does nothing observable, so there is
+                               nothing for a shard to assert. Its behavior IS asserted — by both
+                               consumers, which are each in a shard (`sqlite` and `types` today;
+                               derive, don't trust that: `grep -n 'ir_scaling\|perf_scaling'
+                               .github/workflows/ci.yml`). The generators lived in BOTH gates as
+                               hand-kept copies until #2066, which is the drift this file's
+                               existence now prevents rather than merely records.

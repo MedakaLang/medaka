@@ -168,7 +168,42 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-bound() { perl -e 'alarm 60; exec @ARGV' "$@"; }
+# ── bound: the RUNAWAY fuse, and NOT a grading input (#2149) ──────────────────
+#
+# `perl -e alarm` kills with SIGALRM, so a fuse-kill surfaces as exit 142 (128+14).
+# 142 is not any fixture's pinned exit — derive, do not trust this sentence:
+#   grep -h '^exit:' test/must_fail_fixtures/*/claim.txt | sort -u   # -> 0 1 134 139
+# so an expected-vs-got comparison reads a fuse-kill as "the pinned exit no longer
+# holds" and prints "✅ ISSUE #N APPEARS FIXED", instructing the reader to close a live
+# bug and `git rm` its pin. That is the [G-MUST-FAIL] false-DRAIN class, arrived at from
+# the harness side rather than from a malformed claim, and it BIT: #2149 caught
+# `1575-self-naming-requires-aborts-compiler` doing exactly this, intermittently.
+#
+# TWO INDEPENDENT REPAIRS, because either alone still leaves a silent edge:
+#
+#   1. A fuse-kill is INDETERMINATE, never a drain. Enforced at the verdict site below
+#      (search MUST_FAIL_TIMEOUT_RC) — the gate FAILS, loudly, saying it could not
+#      decide. This is the load-bearing half: it holds no matter how the timing moves,
+#      on a slower runner, under `make gates` fan-out, or on a future fixture.
+#
+#   2. Enough headroom that the fuse does not fire in normal operation. 60 s was NOT
+#      enough and was never derived from a measurement. What the numbers say, all on
+#      the #1575 fixture (the slowest in the corpus by an order of magnitude — every
+#      other fixture completes in well under a second):
+#        * this box, unloaded, 5 direct runs: 42.39 / 41.74 / 42.84 / 43.98 / 42.27 s
+#        * as measured and reported in #2149:  55.3 - 61.7 s
+#      The spread across those two environments alone is 1.5x, and the slower one was
+#      already OVER the old fuse. A fuse must sit above the SLOWEST plausible run, not
+#      above the fastest; 300 s is ~4.9x the slowest observation on record, which is
+#      headroom for a loaded CI runner and still a decisive fuse against a genuine
+#      non-termination (the thing the fuse is actually for — nothing here should take
+#      minutes, and something that takes five is hung).
+#      🚨 This is NOT a widened threshold ([W-QUIETER]): the fuse grades nothing. It
+#      bounds a hang. The GRADING thresholds — every fixture's `exit:` and `stdout:` —
+#      are untouched, and repair 1 makes the fuse strictly LOUDER than it was.
+MUST_FAIL_ALARM="${MUST_FAIL_ALARM:-300}"
+MUST_FAIL_TIMEOUT_RC=142
+bound() { perl -e 'alarm shift; exec @ARGV' "$MUST_FAIL_ALARM" "$@"; }
 
 # Render `check --json` to one stable line per diagnostic: CODE sl:sc-el:ec message
 render_diags() {
@@ -478,6 +513,54 @@ for dir in "$FIXDIR"/*/; do
   #    Distinct from the "no claim.txt" MALFORMED case above: this one names the issue and
   #    the reason, and is counted here rather than falling through to the DRAINED branch
   #    below (which would misreport "ISSUE #N APPEARS FIXED" for a broken pin, not a fix).
+  # ── the RUNAWAY FUSE fired (142 = 128+SIGALRM): INDETERMINATE, never a DRAIN (#2149).
+  #    The run was killed mid-flight, so nothing was observed — not the exit code, not
+  #    the stdout, not the diagnostics. Falling through would compare a pinned 134
+  #    against 142 and print "✅ ISSUE #N APPEARS FIXED", telling the reader to close a
+  #    live bug and delete its pin. Counted as MALFORMED so the gate exits NONZERO: an
+  #    undecidable run must be loud, because the alternative is a verdict nobody earned.
+  #    Suppressed only if a fixture ever legitimately PINS 142 (none does today).
+  #
+  # ── OBSERVED RED, 2026-08-28, BOTH ARMS. #2160 phase 1 rule 1: a branch nobody has
+  #    watched fail is not a branch. Recipe, reproducible in ~2 minutes:
+  #      git show HEAD:test/diff_compiler_must_fail.sh > test/_prefix_mf.sh
+  #      sed -i 's/alarm 60;/alarm 5;/' test/_prefix_mf.sh   # forces the fuse on #1575
+  #      sh test/_prefix_mf.sh                               # ARM A: pre-fix
+  #      MUST_FAIL_ALARM=5 sh test/diff_compiler_must_fail.sh   # ARM B: this file
+  #    (The 5 s fuse hits ONLY #1575 — ~42 s here — every other fixture finishes in well
+  #    under a second, so exactly one row changes verdict. It must live under test/ or
+  #    the gate's own ROOT walk-up lands outside the tree and exits 2. Leave it UNTRACKED
+  #    and delete it after: diff_compiler_ci_shard_coverage enumerates via `git ls-files`,
+  #    so an untracked scratch file is invisible to it but a `git add -A` would redden it.)
+  #
+  #    ARM A — pre-fix, exit 1, VERBATIM:
+  #      DRAINED    1575-self-naming-requires-aborts-compiler      (issue #1575)
+  #        ✅ ISSUE #1575 APPEARS FIXED — this is a GOOD failure, probably not your bug.
+  #           1. gh issue close 1575 --comment "fixed by <sha>; must-fail fixture drained"
+  #           2. git rm -r test/must_fail_fixtures/1575-self-naming-requires-aborts-compiler
+  #      checked 50 fixtures: 49 still reproduce, 1 DRAINED, 0 control-broke, 0 malformed
+  #      ⭐ The tracker just drained itself.
+  #    ⇒ The gate instructed its reader to close a LIVE S0 and delete its pin, on a run
+  #      where the bug reproduced perfectly and was merely interrupted. #2149, exactly.
+  #
+  #    ARM B — this file, exit 1, VERBATIM:
+  #      TIMED-OUT  1575-self-naming-requires-aborts-compiler      (issue #1575)
+  #           Do NOT close #1575 and do NOT delete this fixture on the strength of this run.
+  #      checked 50 fixtures: 49 still reproduce, 0 DRAINED, 0 control-broke, 1 malformed
+  #    ⇒ Still nonzero — an undecidable run stays loud — but DRAINED is 0 and the
+  #      close-the-issue instruction is gone.
+  if [ "$got_exit" = "$MUST_FAIL_TIMEOUT_RC" ] && [ "$exp_exit" != "$MUST_FAIL_TIMEOUT_RC" ]; then
+    printf 'TIMED-OUT  %-46s (issue #%s)\n' "$name" "$issue"
+    printf '  ⏱  The %s s runaway fuse fired — this is NOT a drain and NOT a repro.\n' "$MUST_FAIL_ALARM"
+    printf '     Do NOT close #%s and do NOT delete this fixture on the strength of this run.\n' "$issue"
+    printf '     The verdict is INDETERMINATE: the run was killed before it could be graded.\n'
+    printf '     Re-run on a quieter box, or raise the fuse: MUST_FAIL_ALARM=<seconds>\n'
+    printf '     If it fires reliably, the fixture became slow or genuinely hangs — fix the\n'
+    printf '     FIXTURE, never the pin ([G-MUST-FAIL]: RED is the healthy state here).\n'
+    echo
+    malformed=$((malformed+1)); continue
+  fi
+
   if [ "$verb" = "build-run" ] && [ "$got_exit" = "126" ]; then
     printf 'MALFORMED  %-46s build-run: '\''medaka build'\'' itself failed (issue #%s)\n' "$name" "$issue"
     printf '           cannot grade an executed binary that never built — see %s\n' "$out"
