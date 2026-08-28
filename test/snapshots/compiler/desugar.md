@@ -1,5 +1,5 @@
 # META
-source_lines=1052
+source_lines=1063
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage — Stage 1 port of `lib/desugar.ml`.  Lowers surface
@@ -60,7 +60,9 @@ import support.util.{
   fallthroughName,
   filterList,
   anyList,
+  reverseL,
 }
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
 
 -- ── Bottom-up traversal engine (mirror of map_expr / map_decl) ────────────
 -- `mapExpr f e` rewrites every subexpression of `e` with `f`, post-order: the
@@ -822,23 +824,36 @@ mergeIfaceDecl (d@(DInterface { methods, ... })) =
 mergeIfaceDecl (DAttrib attrs d) = DAttrib attrs (mergeIfaceDecl d)
 mergeIfaceDecl d = d
 
+-- #1018: the original shape did an O(k) `containsMethod` linear scan plus an
+-- `acc ++ [m]` copy per method inside `foldlMethods` — O(n^2) in the widest
+-- interface's method count.  Widest interface in the tree is `Num` at 8
+-- methods, so this was always bounded, but the fix mirrors #953/#1017: an
+-- `OrdMap IfaceMethod` gives O(log n) merge-lookup instead of the list scan.
+-- `OrdMap` iterates key-sorted, not insertion order, so "first-seen position"
+-- is preserved separately via `order` (a reversed name list, one cons per
+-- first-seen method, no per-step copy) and reconstructed at the end by
+-- looking each name back up in the map — never by iterating the map itself.
 mergeIfaceMethods : List IfaceMethod -> List IfaceMethod
-mergeIfaceMethods methods = foldlMethods [] methods
+mergeIfaceMethods methods =
+  let (byName, orderRev) = foldlMethods (omEmpty, []) methods
+  map (methodAt byName) (reverseL orderRev)
 
-foldlMethods : List IfaceMethod -> List IfaceMethod -> List IfaceMethod
+methodAt : OrdMap IfaceMethod -> String -> IfaceMethod
+methodAt byName n = match omLookup n byName
+  Some m => m
+  None => panic "mergeIfaceMethods: unreachable — name inserted but missing"
+
+foldlMethods : (OrdMap IfaceMethod, List String) -> List IfaceMethod -> (OrdMap IfaceMethod, List String)
 foldlMethods acc [] = acc
 foldlMethods acc (m::rest) = foldlMethods (insertMethod acc m) rest
 
-insertMethod : List IfaceMethod -> IfaceMethod -> List IfaceMethod
-insertMethod acc m
-  | containsMethod (methodName m) acc = mergeInto acc m
-  | otherwise = acc ++ [m]
-
-mergeInto : List IfaceMethod -> IfaceMethod -> List IfaceMethod
-mergeInto [] m = [m]
-mergeInto (x::xs) m
-  | methodName x == methodName m = mergeTwo x m :: xs
-  | otherwise = x :: mergeInto xs m
+insertMethod : (OrdMap IfaceMethod, List String) -> IfaceMethod -> (OrdMap IfaceMethod, List String)
+insertMethod (byName, order) m
+  | omHasKey (methodName m) byName = (
+    omInsert (methodName m) (mergeTwo (methodAt byName (methodName m)) m) byName,
+    order,
+  )
+  | otherwise = (omInsert (methodName m) m byName, methodName m :: order)
 
 mergeTwo : IfaceMethod -> IfaceMethod -> IfaceMethod
 mergeTwo (IfaceMethod n prevTy prevDef) (IfaceMethod _ mTy mDef) =
@@ -851,10 +866,6 @@ mergedType prevTy _ = prevTy
 mergedDefault : Option MethodDefault -> Option MethodDefault -> Option MethodDefault
 mergedDefault (Some d) _ = Some d
 mergedDefault None mDef = mDef
-
-containsMethod : String -> List IfaceMethod -> Bool
-containsMethod _ [] = False
-containsMethod name (x::xs) = methodName x == name || containsMethod name xs
 
 methodName : IfaceMethod -> String
 methodName (IfaceMethod n _ _) = n
@@ -1056,7 +1067,8 @@ desugar prog = qualifyAliasRefs prog
   |> mapProg rewriteSugar
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DTypeSig true "mapExpr" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "mapExpr" ((PVar "f") (PVar "e")) (EApp (EVar "f") (EApp (EApp (EVar "mapKids") (EVar "f")) (EVar "e"))))
 (DTypeSig false "mapKids" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
@@ -1378,15 +1390,14 @@ desugar prog = qualifyAliasRefs prog
 (DFunDef false "mergeIfaceDecl" ((PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EVar "mergeIfaceDecl") (EVar "d"))))
 (DFunDef false "mergeIfaceDecl" ((PVar "d")) (EVar "d"))
 (DTypeSig false "mergeIfaceMethods" (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "IfaceMethod"))))
-(DFunDef false "mergeIfaceMethods" ((PVar "methods")) (EApp (EApp (EVar "foldlMethods") (EListLit)) (EVar "methods")))
-(DTypeSig false "foldlMethods" (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "IfaceMethod")))))
+(DFunDef false "mergeIfaceMethods" ((PVar "methods")) (EBlock (DoLet false false (PTuple (PVar "byName") (PVar "orderRev")) (EApp (EApp (EVar "foldlMethods") (ETuple (EVar "omEmpty") (EListLit))) (EVar "methods"))) (DoExpr (EApp (EApp (EVar "map") (EApp (EVar "methodAt") (EVar "byName"))) (EApp (EVar "reverseL") (EVar "orderRev"))))))
+(DTypeSig false "methodAt" (TyFun (TyApp (TyCon "OrdMap") (TyCon "IfaceMethod")) (TyFun (TyCon "String") (TyCon "IfaceMethod"))))
+(DFunDef false "methodAt" ((PVar "byName") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "byName")) (arm (PCon "Some" (PVar "m")) () (EVar "m")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "mergeIfaceMethods: unreachable — name inserted but missing"))))))
+(DTypeSig false "foldlMethods" (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyTuple (TyApp (TyCon "OrdMap") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "foldlMethods" ((PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "foldlMethods" ((PVar "acc") (PCons (PVar "m") (PVar "rest"))) (EApp (EApp (EVar "foldlMethods") (EApp (EApp (EVar "insertMethod") (EVar "acc")) (EVar "m"))) (EVar "rest")))
-(DTypeSig false "insertMethod" (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyCon "IfaceMethod")))))
-(DFunDef false "insertMethod" ((PVar "acc") (PVar "m")) (EIf (EApp (EApp (EVar "containsMethod") (EApp (EVar "methodName") (EVar "m"))) (EVar "acc")) (EApp (EApp (EVar "mergeInto") (EVar "acc")) (EVar "m")) (EIf (EVar "otherwise") (EBinOp "++" (EVar "acc") (EListLit (EVar "m"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "mergeInto" (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyCon "IfaceMethod")))))
-(DFunDef false "mergeInto" ((PList) (PVar "m")) (EListLit (EVar "m")))
-(DFunDef false "mergeInto" ((PCons (PVar "x") (PVar "xs")) (PVar "m")) (EIf (EBinOp "==" (EApp (EVar "methodName") (EVar "x")) (EApp (EVar "methodName") (EVar "m"))) (EBinOp "::" (EApp (EApp (EVar "mergeTwo") (EVar "x")) (EVar "m")) (EVar "xs")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "x") (EApp (EApp (EVar "mergeInto") (EVar "xs")) (EVar "m"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "insertMethod" (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "IfaceMethod") (TyTuple (TyApp (TyCon "OrdMap") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "insertMethod" ((PTuple (PVar "byName") (PVar "order")) (PVar "m")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "methodName") (EVar "m"))) (EVar "byName")) (ETuple (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "methodName") (EVar "m"))) (EApp (EApp (EVar "mergeTwo") (EApp (EApp (EVar "methodAt") (EVar "byName")) (EApp (EVar "methodName") (EVar "m")))) (EVar "m"))) (EVar "byName")) (EVar "order")) (EIf (EVar "otherwise") (ETuple (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "methodName") (EVar "m"))) (EVar "m")) (EVar "byName")) (EBinOp "::" (EApp (EVar "methodName") (EVar "m")) (EVar "order"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "mergeTwo" (TyFun (TyCon "IfaceMethod") (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))
 (DFunDef false "mergeTwo" ((PCon "IfaceMethod" (PVar "n") (PVar "prevTy") (PVar "prevDef")) (PCon "IfaceMethod" PWild (PVar "mTy") (PVar "mDef"))) (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EApp (EApp (EVar "mergedType") (EVar "prevTy")) (EVar "mTy"))) (EApp (EApp (EVar "mergedDefault") (EVar "prevDef")) (EVar "mDef"))))
 (DTypeSig false "mergedType" (TyFun (TyCon "Ty") (TyFun (TyCon "Ty") (TyCon "Ty"))))
@@ -1395,9 +1406,6 @@ desugar prog = qualifyAliasRefs prog
 (DTypeSig false "mergedDefault" (TyFun (TyApp (TyCon "Option") (TyCon "MethodDefault")) (TyFun (TyApp (TyCon "Option") (TyCon "MethodDefault")) (TyApp (TyCon "Option") (TyCon "MethodDefault")))))
 (DFunDef false "mergedDefault" ((PCon "Some" (PVar "d")) PWild) (EApp (EVar "Some") (EVar "d")))
 (DFunDef false "mergedDefault" ((PCon "None") (PVar "mDef")) (EVar "mDef"))
-(DTypeSig false "containsMethod" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Bool"))))
-(DFunDef false "containsMethod" (PWild (PList)) (EVar "False"))
-(DFunDef false "containsMethod" ((PVar "name") (PCons (PVar "x") (PVar "xs"))) (EBinOp "||" (EBinOp "==" (EApp (EVar "methodName") (EVar "x")) (EVar "name")) (EApp (EApp (EVar "containsMethod") (EVar "name")) (EVar "xs"))))
 (DTypeSig false "methodName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
 (DFunDef false "methodName" ((PCon "IfaceMethod" (PVar "n") PWild PWild)) (EVar "n"))
 (DTypeSig false "fillImplDefaults" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
@@ -1480,7 +1488,8 @@ desugar prog = qualifyAliasRefs prog
 (DFunDef false "desugar" ((PVar "prog")) (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "qualifyAliasRefs") (EVar "prog")) (EVar "mergeIfaceDefaults")) (EVar "fillImplDefaults")) (EApp (EVar "concatMapDecl") (EVar "expandDecl"))) (EVar "desugarRecordPuns")) (EVar "lowerContainerLiterals")) (EApp (EVar "mapProg") (EVar "rewriteDo"))) (EApp (EVar "mapProg") (EVar "rewriteAssignIndex"))) (EApp (EVar "mapProg") (EVar "rewriteSugar"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Loc" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "qualifiedLocal" false) (mem "tyConUnresolved" false) (mem "dImplUnresolved" false) (mem "requireUnresolved" false) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Attr" false) (mem "Decl" true) (mem "DeriveRef" true) (mem "deriveRefName" false) (mem "Route" true))))
-(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false))))
+(DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinWith" false) (mem "contains" false) (mem "allList" false) (mem "fallthroughName" false) (mem "filterList" false) (mem "anyList" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DTypeSig true "mapExpr" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "mapExpr" ((PVar "f") (PVar "e")) (EApp (EVar "f") (EApp (EApp (EVar "mapKids") (EVar "f")) (EVar "e"))))
 (DTypeSig false "mapKids" (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
@@ -1802,15 +1811,14 @@ desugar prog = qualifyAliasRefs prog
 (DFunDef false "mergeIfaceDecl" ((PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EVar "mergeIfaceDecl") (EVar "d"))))
 (DFunDef false "mergeIfaceDecl" ((PVar "d")) (EVar "d"))
 (DTypeSig false "mergeIfaceMethods" (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "IfaceMethod"))))
-(DFunDef false "mergeIfaceMethods" ((PVar "methods")) (EApp (EApp (EVar "foldlMethods") (EListLit)) (EVar "methods")))
-(DTypeSig false "foldlMethods" (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "IfaceMethod")))))
+(DFunDef false "mergeIfaceMethods" ((PVar "methods")) (EBlock (DoLet false false (PTuple (PVar "byName") (PVar "orderRev")) (EApp (EApp (EVar "foldlMethods") (ETuple (EVar "omEmpty") (EListLit))) (EVar "methods"))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EVar "methodAt") (EVar "byName"))) (EApp (EVar "reverseL") (EVar "orderRev"))))))
+(DTypeSig false "methodAt" (TyFun (TyApp (TyCon "OrdMap") (TyCon "IfaceMethod")) (TyFun (TyCon "String") (TyCon "IfaceMethod"))))
+(DFunDef false "methodAt" ((PVar "byName") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "byName")) (arm (PCon "Some" (PVar "m")) () (EVar "m")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "mergeIfaceMethods: unreachable — name inserted but missing"))))))
+(DTypeSig false "foldlMethods" (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyTuple (TyApp (TyCon "OrdMap") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "foldlMethods" ((PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "foldlMethods" ((PVar "acc") (PCons (PVar "m") (PVar "rest"))) (EApp (EApp (EVar "foldlMethods") (EApp (EApp (EVar "insertMethod") (EVar "acc")) (EVar "m"))) (EVar "rest")))
-(DTypeSig false "insertMethod" (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyCon "IfaceMethod")))))
-(DFunDef false "insertMethod" ((PVar "acc") (PVar "m")) (EIf (EApp (EApp (EVar "containsMethod") (EApp (EVar "methodName") (EVar "m"))) (EVar "acc")) (EApp (EApp (EVar "mergeInto") (EVar "acc")) (EVar "m")) (EIf (EVar "otherwise") (EBinOp "++" (EVar "acc") (EListLit (EVar "m"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "mergeInto" (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyFun (TyCon "IfaceMethod") (TyApp (TyCon "List") (TyCon "IfaceMethod")))))
-(DFunDef false "mergeInto" ((PList) (PVar "m")) (EListLit (EVar "m")))
-(DFunDef false "mergeInto" ((PCons (PVar "x") (PVar "xs")) (PVar "m")) (EIf (EBinOp "==" (EApp (EVar "methodName") (EVar "x")) (EApp (EVar "methodName") (EVar "m"))) (EBinOp "::" (EApp (EApp (EVar "mergeTwo") (EVar "x")) (EVar "m")) (EVar "xs")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "x") (EApp (EApp (EVar "mergeInto") (EVar "xs")) (EVar "m"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "insertMethod" (TyFun (TyTuple (TyApp (TyCon "OrdMap") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "IfaceMethod") (TyTuple (TyApp (TyCon "OrdMap") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "insertMethod" ((PTuple (PVar "byName") (PVar "order")) (PVar "m")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "methodName") (EVar "m"))) (EVar "byName")) (ETuple (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "methodName") (EVar "m"))) (EApp (EApp (EVar "mergeTwo") (EApp (EApp (EVar "methodAt") (EVar "byName")) (EApp (EVar "methodName") (EVar "m")))) (EVar "m"))) (EVar "byName")) (EVar "order")) (EIf (EVar "otherwise") (ETuple (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "methodName") (EVar "m"))) (EVar "m")) (EVar "byName")) (EBinOp "::" (EApp (EVar "methodName") (EVar "m")) (EVar "order"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "mergeTwo" (TyFun (TyCon "IfaceMethod") (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod"))))
 (DFunDef false "mergeTwo" ((PCon "IfaceMethod" (PVar "n") (PVar "prevTy") (PVar "prevDef")) (PCon "IfaceMethod" PWild (PVar "mTy") (PVar "mDef"))) (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "n")) (EApp (EApp (EVar "mergedType") (EVar "prevTy")) (EVar "mTy"))) (EApp (EApp (EVar "mergedDefault") (EVar "prevDef")) (EVar "mDef"))))
 (DTypeSig false "mergedType" (TyFun (TyCon "Ty") (TyFun (TyCon "Ty") (TyCon "Ty"))))
@@ -1819,9 +1827,6 @@ desugar prog = qualifyAliasRefs prog
 (DTypeSig false "mergedDefault" (TyFun (TyApp (TyCon "Option") (TyCon "MethodDefault")) (TyFun (TyApp (TyCon "Option") (TyCon "MethodDefault")) (TyApp (TyCon "Option") (TyCon "MethodDefault")))))
 (DFunDef false "mergedDefault" ((PCon "Some" (PVar "d")) PWild) (EApp (EVar "Some") (EVar "d")))
 (DFunDef false "mergedDefault" ((PCon "None") (PVar "mDef")) (EVar "mDef"))
-(DTypeSig false "containsMethod" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyCon "Bool"))))
-(DFunDef false "containsMethod" (PWild (PList)) (EVar "False"))
-(DFunDef false "containsMethod" ((PVar "name") (PCons (PVar "x") (PVar "xs"))) (EBinOp "||" (EBinOp "==" (EApp (EVar "methodName") (EVar "x")) (EVar "name")) (EApp (EApp (EVar "containsMethod") (EVar "name")) (EVar "xs"))))
 (DTypeSig false "methodName" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
 (DFunDef false "methodName" ((PCon "IfaceMethod" (PVar "n") PWild PWild)) (EVar "n"))
 (DTypeSig false "fillImplDefaults" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
