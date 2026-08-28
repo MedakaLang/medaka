@@ -1,0 +1,21 @@
+-- #2163 CATALOG-ROW rule, the ACCEPT floor for the WRITEFILE pair.  Rehomed here
+-- from test/must_fail_fixtures/2163-catalog-extern-redecl-launders-effect/
+-- control.mdk when that pin drained; it is the CONTROL, not the pin, so it did not
+-- go away with the directory.
+--
+-- Flips exactly ONE feature against ffi_catalog_writefile_narrow_reject.mdk:
+-- whether the catalog name is locally redeclared at all.  Here it is not, so
+-- `writeFile` carries stdlib/runtime.mdk's real `<FileWrite "_">` row and
+-- `innocent` declares that row honestly.  Must check clean at exit 0.
+--
+-- If the prelude, the extern catalog, or check's scheme printing breaks, THIS
+-- exits nonzero -- so a broken environment can never be read as "#2163 is fixed".
+innocent : String -> <FileWrite> Unit
+innocent s =
+  let _ = writeFile "/tmp/medaka-2163-laundered.txt" s
+  ()
+
+main : <IO> Unit
+main =
+  let _ = innocent "written by a <FileWrite>-typed function"
+  println "done"

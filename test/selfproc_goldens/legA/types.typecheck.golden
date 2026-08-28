@@ -757,10 +757,14 @@ extendVars : TcEnv -> List (String, Scheme) -> TcEnv
 externDecls : List Decl -> List Decl
 externSchemes : Map String TyConOrigin -> List Decl -> List (String, Scheme)
 externSchemesGo : List Decl -> List (String, Scheme)
-externSigsToMap : List Decl -> Map String String -> Map String String
+externSigsToMap : List Decl -> Map String (String, List (String, Option String)) -> Map String (String, List (String, Option String))
+ffiCatalogNarrowMsg : String -> List Atom -> List Atom -> List Atom -> String
+ffiCheckCatalogRowGo : List Decl -> Unit
+ffiCheckCatalogRowOne : String -> Ty -> List (String, Option String) -> Unit
 ffiCheckExternLabel : String -> Option Loc -> Ty -> Unit
 ffiCheckExternPos : String -> Option Loc -> Ty -> Unit
 ffiCheckExternSig : String -> Option Loc -> Ty -> Unit
+ffiCheckExternsCatalogRow : Bool -> List Decl -> Unit
 ffiCheckExternsCrossable : Bool -> List Decl -> Unit
 ffiCheckExternsGo : List Decl -> Unit
 ffiCheckExternsLabelled : Bool -> List Decl -> Unit
@@ -786,6 +790,7 @@ ffiStampMode : CheckMode -> Bool
 ffiStampModeOwned : CheckMode -> Bool
 ffiTyHeadName : Ty -> String
 ffiUnlabelledMsg : String -> String
+ffiWrittenRow : Ty -> List (String, Option String)
 fieldAssignDictSites : FieldAssign -> List (Ref (List Route))
 fieldAssignEVars : FieldAssign -> List String
 fieldAssignNamePair : FieldAssign -> (String, Unit)

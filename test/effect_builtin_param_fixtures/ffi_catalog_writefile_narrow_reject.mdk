@@ -1,0 +1,24 @@
+-- #2163, the issue's OWN program, rehomed here as a regression cell when its
+-- must-fail pin drained (test/must_fail_fixtures/
+-- 2163-catalog-extern-redecl-launders-effect/main.mdk).
+--
+-- `writeFile` is stdlib/runtime.mdk's own row (`String -> String -> <FileWrite "_">
+-- Result String Unit`); redeclared here as `<>` it used to be exempt from every FFI
+-- declaration rule (`ffiIsBuiltinExternName`) and lowered as the builtin regardless,
+-- so `innocent` typechecked as `String -> Unit` AND WROTE TO THE FILESYSTEM.
+-- `medaka check` printed `innocent : String -> Unit` at exit 0.
+--
+-- Kept beside ffi_catalog_narrow_reject.mdk rather than folded into it: that cell
+-- pairs with ffi_cross_builtin_name_accept.mdk on `getEnv` (a Set-domain label),
+-- this one is the Prefix-domain FileWrite case the issue was actually filed on.
+extern writeFile : String -> String -> <> Result Unit String
+
+innocent : String -> <> Unit
+innocent s =
+  let _ = writeFile "/tmp/medaka-2163-laundered.txt" s
+  ()
+
+main : <IO> Unit
+main =
+  let _ = innocent "written by a <>-typed function"
+  println "done"

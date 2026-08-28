@@ -50,7 +50,10 @@ both by the same test the crossable guard uses: a program the loader owns to
 `stdlibRoot` (`stdlib/runtime.mdk`'s catalog IS the effect vocabulary), and a
 local redeclaration of a catalog name (`ffiIsBuiltinExternName` — such a name is
 lowered as the builtin whatever its local row claims, so the row is not a
-foreign-call contract).
+foreign-call contract). **That second exemption is bounded by two rules of its
+own**: the redeclared signature must match the catalog row's *shape*
+(`T-FFI-BUILTIN-SHADOW`, below) and must not *narrow* its effect row
+(`T-FFI-CATALOG-NARROW`, below).
 
 ⚠️ **The catalog-name exemption requires a SIGNATURE match, not just a name
 match** (`T-FFI-BUILTIN-SHADOW`, added by the `ffi-lower-and-link` review round,
@@ -67,6 +70,28 @@ argument heads plus return head, effect rows and constraint prefixes walked
 through, type variables normalised — the same projection the emitter's FFI index
 stores. The compatible-redeclaration idiom the effect-domain fixtures rely on is
 untouched.
+
+🚨 **A catalog redeclaration may not NARROW the catalog's effect row**
+(`T-FFI-CATALOG-NARROW`, #2163, the `ffi-boundary-honesty` sprint). The
+shape rule above walks *through* effect rows on purpose, so `<>` and
+`<FileWrite "_">` are one shape to it — which left epic #2070's own R2 escape
+hatch open for all 138 catalog names. `extern writeFile : String -> String -> <>
+Result Unit String` matched the catalog's heads, passed every rule above, typed
+its caller as `String -> Unit`, and the emitter (name-keyed, and never reached by
+a typecheck verdict) still lowered the call to the real `writeFile`: `medaka
+check` printed `innocent : String -> Unit` at exit 0 for a function that writes
+to disk.
+
+The rule is **subsumption, not equality, and not a ban**: the declared row must
+COVER the catalog's own row, and may be wider. A wider row over-declares what the
+caller must permit, which is the safe direction — so `extern putStrLn : String ->
+<IO> Unit` stays legal against the catalog's narrower `<Stdout>` (the bound's
+`IO` is widened to its security-label alias before the comparison, exactly as an
+`<IO>`-bounded body row is). The compatible- and wider-redeclaration idioms the
+fixture corpora rely on are untouched; only the *narrowing* case is refused, and
+the ~100 catalog rows that write no effect row at all (`bitAnd`, `arrayBlit`, the
+math family) are silent under it by construction, since the empty row is covered
+by everything.
 
 ⚠️ **A NULLARY `extern k : Int` is rejected** (`T-FFI-NULLARY`, same review round,
 S0-2). An effect row lives on an arrow's result, so a signature with no arrow has

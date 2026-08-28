@@ -210,11 +210,28 @@ expect_reject "$FIX/ffi_libname_empty_reject.mdk"    'FFI libname reject: empty 
 #       Its signature MATCHES the runtime internal deliberately: a mismatched one
 #       was already loud (clang rejects the conflicting `declare`), so only the
 #       matching case discriminates.
+#
+# -- the FIFTH rule: the CATALOG ROW (#2163, epic #2070 R2) -------------------
+#
+#   ffi_catalog_narrow_reject   <-> ffi_cross_builtin_name_accept
+#       differ only in whether the redeclared row still COVERS the catalog's own
+#       row.  Both redeclare `getEnv`; the accept cell writes the catalog's own
+#       `<Env "_">`, this one writes `<>`.  The shape rule above cannot see the
+#       difference -- it walks THROUGH effect rows by design -- so `<>` typechecked
+#       a caller as pure while the emitter lowered the call to the real builtin.
+#       Subsumption, not equality: a WIDER row (e.g. `<IO>`) still accepts, which
+#       is what keeps `docs/spec/SYNTAX.md`'s `extern putStrLn : String -> <IO>
+#       Unit` spelling legal against the catalog's narrower `<Stdout>`.
 expect_reject "$FIX/ffi_nullary_reject.mdk" 'FFI nullary reject (no arrow: nowhere to write the FFI label, and the emitter lowered it anyway)' \
   "Foreign declaration 'gNullary' has no arrow in its signature"
 expect_reject "$FIX/ffi_builtin_shadow_reject.mdk" 'FFI builtin-shadow reject (catalog name redeclared with an INCOMPATIBLE signature)' \
   "Foreign declaration 'log' redeclares a built-in runtime name with an incompatible signature"
 expect_reject "$FIX/ffi_reserved_prefix_reject.mdk" 'FFI reserved-prefix reject (mdk_ is the runtime C symbol namespace)' \
   "Foreign declaration 'mdk_nil' claims a reserved name"
+expect_reject "$FIX/ffi_catalog_narrow_reject.mdk" 'FFI catalog-row reject (catalog name redeclared with a NARROWER effect row -- #2163)' \
+  "Foreign declaration 'getEnv' redeclares a built-in runtime name with a NARROWER effect row"
+expect_reject "$FIX/ffi_catalog_writefile_narrow_reject.mdk" "FFI catalog-row reject: #2163's own program (writeFile redeclared <>)" \
+  "Foreign declaration 'writeFile' redeclares a built-in runtime name with a NARROWER effect row"
+expect_ok "$FIX/ffi_catalog_honest_accept.mdk" 'FFI catalog-row accept: the honest row, no redeclaration (#2163 CONTROL)'
 echo "effect_builtin_param_domain: $pass/$fail"
 [ "$fail" -eq 0 ]
