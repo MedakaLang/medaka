@@ -51,6 +51,13 @@
 # floor, not padding: a normalisation that mangled 0/1 or trapped on a valid
 # codepoint would satisfy the headline half alone.
 #
+# CELL 10 is the §2.4 COPY-BACK slice (#2164).  Cells 1 and 3 pass an array to a C
+# function that only READS it, which is the half that worked; cell 10 passes one
+# to a C function that WRITES it, which silently did nothing before #2164 — the C
+# side filled §2.4'''s throwaway copy and the Medaka array came back unchanged, at
+# exit 0.  Its read-only lines are the regression floor for the copy-back being
+# unconditional: it now also runs after every array call C never wrote to.
+#
 # Usage:  sh test/diff_compiler_llvm_ffi.sh
 # Exit:   0 every cell produces its expected output;
 #         1 a build failed or the output differs;
@@ -460,6 +467,74 @@ CELL9
     cat "$W/oob_$cfn.out" "$W/oob_$cfn.err"
   fi
 done
+
+# ── cell 10: §2.4 COPY-BACK — a C function that FILLS a caller's array (#2164) ─
+# The S0 this cell exists for.  §2.4's outbound rule hands C a COPY of the array,
+# never the live cell, and until #2164 nothing ever copied that buffer back — so a
+# C function filling a caller-allocated `Array Int` filled a throwaway buffer and
+# the Medaka array was SILENTLY unchanged, at exit 0, with no diagnostic.  Cell 1's
+# `ffiSumInts` cannot catch it: that C half only READS the buffer, so it passes
+# with the copy-back absent.
+#
+# 🚨 THE FIRST THREE LINES ARE THE REGRESSION FLOOR, NOT PADDING.  The copy-back
+# is UNCONDITIONAL (a Medaka FFI signature has no "in" vs "out" parameter
+# distinction), so it also runs after every READ-ONLY array call — and a copy-back
+# that re-tagged wrongly, or read the count from the buffer instead of the live
+# cell, would corrupt an array that C never touched.  Line 1 sums the untouched
+# array, line 2 reads element 0 back IN MEDAKA, line 3 sums it AGAIN: a copy-back
+# that mangled the cell would redden one of those three, and a "fix" that skipped
+# the copy-back for arguments it guessed were read-only would redden line 4.
+#
+# Line 2 and line 4 go through `array.get`, i.e. PURE MEDAKA indexing of the live
+# cell — not another FFI call.  That distinction is the assertion: `ffiSumInts`
+# alone could be satisfied by a buffer that round-trips without the live cell ever
+# changing, whereas `get 0 a` reads the tagged word the copy-back wrote.
+#
+# Expected output hand-computed from ffiFill99 in ffi_abi_probe.c (it writes the
+# constant 99, chosen so the answer does not depend on what was in the array
+# before), NOT captured: 1+2+3 = 6, element 0 = 1, 6 again, then 99 and 99*3 = 297.
+cat > "$W/ffi_array_copyback.mdk" <<'CELL10'
+import array.{get}
+
+extern ffiFill99 : Array Int -> Int -> <FFI> Unit
+extern ffiSumInts : Array Int -> Int -> <FFI> Int
+
+show0 : Array Int -> String
+show0 a = match get 0 a
+  Some v => intToString v
+  None => "none"
+
+main : <IO, FFI> Unit
+main =
+  let a = [|1, 2, 3|]
+  let _ = println (ffiSumInts a 3)
+  let _ = println (show0 a)
+  let _ = println (ffiSumInts a 3)
+  let _ = ffiFill99 a 3
+  let _ = println (show0 a)
+  println (ffiSumInts a 3)
+CELL10
+
+EXPECT_COPYBACK='6
+1
+6
+99
+297'
+
+if ! MEDAKA_RT_OBJ="$W/combined.o" "$MEDAKA" build "$W/ffi_array_copyback.mdk" \
+     -o "$W/copyback.bin" >"$W/build10.log" 2>&1; then
+  echo "FAIL: array copy-back program did not build"; cat "$W/build10.log"; fail=$((fail+1))
+else
+  checked=$((checked+1))
+  got10="$("$W/copyback.bin" 2>&1)"
+  if [ "$got10" = "$EXPECT_COPYBACK" ]; then
+    echo "ok   ffi_array_copyback     C writes to the caller's array are visible in Medaka (99/297), read-only calls unchanged (6/1/6)"
+  else
+    fail=$((fail+1))
+    echo "FAIL ffi_array_copyback     output differs"
+    printf 'expected:\n%s\ngot:\n%s\n' "$EXPECT_COPYBACK" "$got10"
+  fi
+fi
 
 # ZERO-COMPARISON guard (docs/ops/TESTING-DESIGN.md §2.3): a gate that compared
 # nothing has proven nothing.

@@ -3248,6 +3248,7 @@ emitFfiDeclares e = match omKeys e.input.ffiExternIndex
   [] => ()
   names =>
     let _ = emit e "declare ptr @mdk_ffi_array_int_out(i64)"
+    let _ = emit e "declare void @mdk_ffi_array_int_in(i64, ptr)"
     let _ = emit e "declare i64 @mdk_ffi_str_in(ptr)"
     emitFfiDeclareEach e names
 
@@ -3273,13 +3274,30 @@ emitFfiCall e env fname args = match ffiSigOf e fname
       -- cell to curry through, so this is LOUD rather than silently mis-called.
       gapE e "foreign call '\{fname}' applied to \{intToString (lengthS argOps)} argument(s) but declared with \{intToString (lengthS ptys)} — partial application of an FFI extern is not supported"
     else
-      ffiEmitCall e fname rty (ffiJoinComma (ffiMarshalOut e ptys argOps))
+      -- Marshal, call, THEN copy back (§2.4, #2164), then hand the result on.
+      -- The order is the whole point: a copy-back emitted before the call would
+      -- restore the pre-call words over whatever C wrote.
+      let (cargs, abufs) = ffiMarshalOut e ptys argOps
+      let r = ffiEmitCall e fname rty (ffiJoinComma cargs)
+      let _ = ffiArrayCopyBack e abufs
+      r
 
 -- Medaka → C, per argument (FFI-ABI.md §2, outbound half).  Returns the rendered
--- `<ctype> <operand>` list for the call instruction.
-ffiMarshalOut : Emit -> List String -> List String -> List String
-ffiMarshalOut _ [] _ = []
-ffiMarshalOut _ _ [] = []
+-- `<ctype> <operand>` list for the call instruction, PLUS the §2.4 copy-back
+-- worklist: one `(live Medaka array cell operand, outbound buffer pointer)` pair
+-- per `Array` parameter, in argument order.
+--
+-- The pairs are RETURNED rather than recomputed by a second pass, because
+-- `ffiArrayIntOut` does not merely name the buffer — it EMITS the out-copy call
+-- that creates it, so a parallel pass would emit a second copy per argument.
+--
+-- ⚠️ EVERY ARM EMITS ITS OWN ARGUMENT BEFORE RECURSING.  The `let`s below are
+-- ordered, not incidental: these helpers write instructions into `e` as a side
+-- effect, so binding the recursive result first would emit the later arguments'
+-- setup ahead of the earlier ones'.
+ffiMarshalOut : Emit -> List String -> List String -> (List String, List (String, String))
+ffiMarshalOut _ [] _ = ([], [])
+ffiMarshalOut _ _ [] = ([], [])
 -- §2.6: marshals to nothing.  The argument EXPRESSION was already emitted (by
 -- `emitArgs`, above) so its effects still happen; only the operand is dropped.
 ffiMarshalOut e ("Unit"::ts) (_::rest) = ffiMarshalOut e ts rest
@@ -3287,14 +3305,25 @@ ffiMarshalOut e ("Unit"::ts) (_::rest) = ffiMarshalOut e ts rest
 -- cell pointer — boxing is a backend-internal representation choice that must not
 -- leak across an ABI whose other side has no concept of a Medaka heap cell.
 ffiMarshalOut e ("Float"::ts) (a::rest) =
-  "double " ++ unboxFloat e a :: ffiMarshalOut e ts rest
+  let c = "double " ++ unboxFloat e a
+  let (cs, bufs) = ffiMarshalOut e ts rest
+  (c::cs, bufs)
 ffiMarshalOut e ("String"::ts) (a::rest) =
-  "ptr " ++ ffiStrBytes e a :: ffiMarshalOut e ts rest
+  let c = "ptr " ++ ffiStrBytes e a
+  let (cs, bufs) = ffiMarshalOut e ts rest
+  (c::cs, bufs)
+-- §2.4: the outbound copy, and the buffer it allocated joins the copy-back
+-- worklist paired with the LIVE cell it was copied from.
 ffiMarshalOut e ("Array"::ts) (a::rest) =
-  "ptr " ++ ffiArrayIntOut e a :: ffiMarshalOut e ts rest
+  let buf = ffiArrayIntOut e a
+  let (cs, bufs) = ffiMarshalOut e ts rest
+  ("ptr " ++ buf :: cs, (a, buf)::bufs)
 -- §2.1: `Int`/`Bool`/`Char` are immediates — `ashr 1` to the plain C scalar.
 ffiMarshalOut e (t::ts) (a::rest)
-  | ffiCrossableHead t = "i64 " ++ untagInt e a :: ffiMarshalOut e ts rest
+  | ffiCrossableHead t =
+    let c = "i64 " ++ untagInt e a
+    let (cs, bufs) = ffiMarshalOut e ts rest
+    (c::cs, bufs)
   | otherwise =
     let _ = gapU e "non-crossable parameter type '\{t}' reached the FFI lowering (compiler/FFI-ABI.md section 1)"
     ffiMarshalOut e ts rest
@@ -3324,6 +3353,25 @@ ffiArrayIntOut e v =
   let p = freshReg e
   let _ = emit e "  \{p} = call ptr @mdk_ffi_array_int_out(i64 \{v})"
   p
+
+-- §2.4 C → Medaka, the COPY-BACK (#2164).  Emitted AFTER the call instruction,
+-- once per `Array` parameter, in argument order.
+--
+-- 🚨 UNCONDITIONAL, and that is the design, not an oversight.  A Medaka FFI
+-- signature has no "in" vs "out" parameter distinction — §2.4 does not
+-- distinguish them — so there is nothing to detect: an argument C never wrote to
+-- copies back the identical words, a correctness no-op.  Skipping it for
+-- arguments that "look" read-only would need the compiler to know a C function's
+-- body, which it never does.
+--
+-- Without this, a C function that fills a caller-allocated array fills the §2.4
+-- throwaway buffer and the Medaka array is silently unchanged, at exit 0 — the
+-- worst shape of wrong (AGENTS.md [W-QUIETER]).
+ffiArrayCopyBack : Emit -> List (String, String) -> Unit
+ffiArrayCopyBack _ [] = ()
+ffiArrayCopyBack e ((a, buf)::rest) =
+  let _ = emit e "  call void @mdk_ffi_array_int_in(i64 \{a}, ptr \{buf})"
+  ffiArrayCopyBack e rest
 
 -- C → Medaka (FFI-ABI.md §2, inbound half) + the call instruction itself.
 ffiEmitCall : Emit -> String -> String -> String -> (String, LTy)
@@ -3355,21 +3403,21 @@ ffiEmitCall e fname "String" cargs =
 -- not a thing that can be done correctly.  LOUD, not silent: the outbound
 -- direction (§2.4 Medaka → C) is fully implemented above.
 --
--- 🚨 DO NOT RECOMMEND THE OUT-PARAMETER SHAPE HERE.  This message used to end
--- "pass a caller-allocated array as a parameter and have the C side fill it
--- instead", and that instruction is FALSE (S1-6, review round of
--- `ffi-lower-and-link`): §2.4's outbound rule COPIES `len` words out before the
--- call and never hands C the live cell, so a C function that fills the caller's
--- array fills a throwaway buffer and the Medaka array is unchanged, at exit 0.
--- Following the printed advice traded this loud gap for a silent wrong answer,
--- which is the worse of the two ([W-QUIETER] in reverse).  Until §2.4 grows a
--- copy-BACK, there is no working shape for getting array data out of a C call, and
--- this message says so rather than sending the reader to the one that looks like
--- one.
+-- 🚨 THE OUT-PARAMETER SHAPE IS NOW THE ANSWER, AND THIS MESSAGE SAYS SO.  Its
+-- history is worth keeping: it originally recommended the out-parameter, that
+-- advice was FALSE (S1-6, review round of `ffi-lower-and-link`) because §2.4's
+-- outbound copy discarded every write the C side made, and the recommendation
+-- was then removed rather than repaired — trading a loud gap for a silent wrong
+-- answer is the worse of the two ([W-QUIETER] in reverse), so while the
+-- copy-back was missing the honest message was "there is no working shape".
+-- #2164 landed the copy-back (`mdk_ffi_array_int_in`, above), so the shape works
+-- and the message points at it again.  ⚠️ If the copy-back is ever removed, this
+-- sentence must go back to naming NO shape — never leave it recommending one
+-- that silently drops the data.
 ffiEmitCall e fname "Array" _ =
   gapE
     e
-    "foreign call '\{fname}' returns 'Array Int', which has no length channel in a C return value (compiler/FFI-ABI.md section 2.4 specifies pointer PLUS length). There is currently NO working shape for returning array data from a C call in v1: an out-parameter does not work either, because an outbound 'Array Int' is COPIED to a fresh buffer for the call (section 2.4) and writes the C side makes to it are discarded. Return the elements one at a time through separate calls, or encode them into a String, until section 2.4 gains a copy-back"
+    "foreign call '\{fname}' returns 'Array Int', which has no length channel in a C return value (compiler/FFI-ABI.md section 2.4 specifies pointer PLUS length). Use an OUT-PARAMETER instead: declare the array as a parameter, allocate it on the Medaka side, and have the C side fill it in place — section 2.4 copies the buffer back into your array after the call returns"
 -- §2.1 immediates, C → Medaka.  The returned C scalar is re-tagged
 -- `(x << 1) | 1`, and the `LTy` follows the DECLARED head so `Bool`/`Char`
 -- results print and branch as themselves.

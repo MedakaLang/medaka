@@ -10,23 +10,24 @@ time.
 ⚠️ **The lowering exists as of 2026-08-27** (`ffi-lower-and-link`, S-ffi-lowering,
 #2074): `emitFfiCall` and friends in `compiler/backend/llvm_emit.mdk` implement §2
 below, and `ffiCrossableTy` (`compiler/types/typecheck.mdk`) rejects everything
-outside §1 at check time. Gated by `test/diff_compiler_llvm_ffi.sh`. Two things
-this doc specifies are still NOT done, both deliberately:
+outside §1 at check time. Gated by `test/diff_compiler_llvm_ffi.sh`. One thing
+this doc specifies is still NOT done, deliberately:
 
-* **Getting array data OUT of a C call — no shape works in v1.** `Array Int` in
-  RETURN position is refused: §2.4 says "a C-side `int64_t*` PLUS LENGTH is
-  copied", a C-ABI return carries ONE value, so there is no length channel and no
-  correct number of words to copy, and the emitter reports a loud gap naming that
-  hole rather than guessing a length. 🚨 **The out-parameter shape is NOT the
-  workaround, and this block used to say it was.** §2.4's Medaka → C direction is
-  fully implemented *as a copy* — it copies `len` words into a fresh buffer before
-  the call and never hands C the live GC pointer — so a C function that fills a
-  caller-allocated array fills the throwaway buffer and the Medaka array is
-  unchanged, silently, at exit 0. Both the doc line and the emitter's gap
-  diagnostic recommended that shape until the `ffi-lower-and-link` review round
-  measured it (S1-6). Closing this needs a copy-BACK in §2.4, which v1 does not
-  have; until then the working shapes are one element per call, or encoding the
-  elements into a `String`.
+* **`Array Int` in RETURN position is refused.** §2.4 says "a C-side `int64_t*`
+  PLUS LENGTH is copied", a C-ABI return carries ONE value, so there is no length
+  channel and no correct number of words to copy; the emitter reports a loud gap
+  naming that hole rather than guessing a length. **The out-parameter shape IS the
+  answer, and now genuinely works** — declare the array as a *parameter*, allocate
+  it on the Medaka side, and let C fill it in place. ⚠️ That shape's history is
+  worth knowing, because this block twice said the opposite: it was recommended
+  first, then measured as FALSE by the `ffi-lower-and-link` review round (S1-6) —
+  §2.4's outbound copy meant C filled a throwaway buffer and the Medaka array was
+  silently unchanged at exit 0 — and this block was then rewritten to name NO
+  working shape, which was the honest state while the copy-back was missing.
+  §2.4 grew the copy-back in `ffi-boundary-honesty` (S-ffi-array-copyback, #2164),
+  so the shape works for real. 🚨 **If the copy-back is ever removed, this bullet
+  goes back to naming NO shape — never leave it recommending one that silently
+  drops the data ([W-QUIETER]).**
 * **Linkage** — landed (S-ffi-linkage, #2075). A `[foreign-libraries]` table in
   `medaka.toml` (`readForeignLibs`/`libLinkFlags`, `compiler/driver/build_cmd.mdk`)
   links a named library by searching its declared directory, falling back to the
@@ -258,6 +259,28 @@ element would need its own crossing rule).
   `int32_t*`, requiring a narrowing copy) the calling convention copies
   `len` words out before the call, never hands the live GC pointer to a C
   function that might store it.
+- **Medaka → C, the COPY-BACK half** (#2164): after the call returns, the
+  boundary copies the buffer's `len` words back into the caller's live cell,
+  re-tagging each (`(w << 1) | 1`, exactly inverting the outbound `>> 1`). The
+  count comes from the LIVE cell, the same `len` the out-copy used — C is given
+  no length channel and so cannot have grown the buffer. Without this half, the
+  outbound copy alone makes a C function that fills a caller-allocated array a
+  silent no-op on the Medaka side.
+
+  🚨 **The copy-back is UNCONDITIONAL — there is no "in" vs "out" parameter
+  concept in a Medaka FFI signature, and this section does not introduce one.**
+  Every `Array` argument is copied back whether or not C wrote to it; an
+  untouched buffer restores the identical words, a correctness no-op. Detecting
+  which arguments a C function writes would require knowing its body, which the
+  compiler never does.
+
+  Lowering: `mdk_ffi_array_int_out` / `mdk_ffi_array_int_in`
+  (`runtime/medaka_rt.c`), emitted by `ffiMarshalOut` / `ffiArrayCopyBack`
+  (`compiler/backend/llvm_emit.mdk`). The buffer pointer stays live across the
+  call in an ordinary SSA register, which Boehm's conservative stack scan covers
+  like any other local referenced after a call — no new rooting mechanism, and
+  none of §2.5's retain-past-return hazard, since the copy-back happens before
+  the calling frame is gone.
 - **C → Medaka:** a C-side `int64_t*` + length is copied into a fresh
   `{header, len, elements…}` cell via `mdk_alloc` (mirrors `mdk_alloc(8 * (n +
   1))` sites already in `runtime/medaka_rt.c`, e.g. array-construction

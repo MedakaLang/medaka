@@ -911,6 +911,32 @@ void *mdk_ffi_array_int_out(long long arr) {
   return (void *)buf;
 }
 
+/* §2.4, C → Medaka: the COPY-BACK (#2164).  The mirror of mdk_ffi_array_int_out
+ * above, emitted unconditionally after the call for every `Array` parameter.
+ *
+ * WHY IT MUST EXIST.  §2.4 hands C a COPY, never the live cell, so without this
+ * a C function that fills a caller-allocated array fills a throwaway buffer and
+ * the Medaka array is silently unchanged at exit 0 (#2164).  A Medaka FFI
+ * signature has no "in" vs "out" parameter distinction, so this runs for every
+ * Array argument whether or not C wrote anything — copying back an unmodified
+ * buffer restores the identical words, a no-op rather than a case to detect.
+ *
+ * `n` is read from the LIVE cell (`a[0]`), the same count the out-copy used, so
+ * this can never write past the cell however the C side mangled its own view of
+ * the buffer — C was given no length channel and cannot have grown it.  Each
+ * word is re-tagged `(w << 1) | 1` on the way in, exactly inverting the
+ * `>> 1` the out-copy applied.
+ *
+ * The buffer is still live here: the emitter keeps its pointer in an SSA
+ * register across the `call`, which Boehm's conservative stack scan covers the
+ * same way it covers any local referenced after a call. */
+void mdk_ffi_array_int_in(long long arr, const void *buf) {
+  long long *a = (long long *)arr;
+  const long long *b = (const long long *)buf;
+  long long n = a[0];
+  for (long long i = 0; i < n; i++) a[i + 1] = (b[i] << 1) | 1;
+}
+
 /* §2.3, C → Medaka.  MANDATORY COPY — Medaka never adopts a C-allocated buffer
  * as a String cell, so this routes through mdk_str_lit (alloc + memcpy), exactly
  * as every String-returning builtin already does.  If the C side malloc'd `s`,

@@ -103,3 +103,17 @@ long long cCharBig(void) { return 1200000; }
  * pins that the range check is unsigned rather than a signed `<=` that a
  * negative would sail through. */
 long long cCharNeg(void) { return -1; }
+
+/* ── #2164: §2.4 COPY-BACK — a C function that FILLS a caller-allocated array ──
+ *
+ * The mirror of ffiSumInts.  That one only READS the buffer, so it passes even
+ * with the copy-back missing; this one WRITES, which is the half that was
+ * silently discarded before #2164 (the C side filled the throwaway §2.4 copy and
+ * the Medaka array came back unchanged, at exit 0).
+ *
+ * Deliberately writes a CONSTANT rather than a function of the input, so the
+ * expected sum is hand-computable without reference to what was in the array
+ * before: 99 * 3 = 297, versus 1 + 2 + 3 = 6 for the untouched array. */
+void ffiFill99(long long *xs, long long n) {
+  for (long long i = 0; i < n; i++) xs[i] = 99;
+}
