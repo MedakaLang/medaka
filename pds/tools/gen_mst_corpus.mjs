@@ -97,7 +97,7 @@ const cases = [
 
 const lines = [
   '# Generated only by pds/tools/gen_mst_corpus.sh.',
-  '# @atproto/repo 0.10.12; independent expected roots and node bytes.',
+  '# Official atproto repository reference; exact package routes are in VECTOR-PROVENANCE.txt.',
 ]
 
 for (const [name, operations] of cases) {

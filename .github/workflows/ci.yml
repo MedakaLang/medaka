@@ -538,6 +538,13 @@ jobs:
             # reads NO oracle (`build_oracles.sh --for` reports "needs no
             # oracles"), so the shard's oracle build is unaffected.
             pattern: "'pds/test/inlang_test_oracle' 'diff_compiler_ir_scaling'"
+          - name: pds
+            # Phase 1 data-model gates are isolated here because each has a
+            # required Wasm arm and the repo gate carries a bounded interpreter
+            # discriminator. Keep this list explicit: later PDS phases must be
+            # placed from measured cost, not inherited through a broad glob.
+            pattern: "'pds/test/dagcbor_cid_vectors' 'pds/test/mst_vectors' 'pds/test/car_vectors' 'pds/test/repo_vectors'"
+            wasm_arm: "1"
           - name: frontend
             # `native_fixtures/run` (T8) sits one directory below `test/`, so even
             # the coverage gate's `test/*.sh` glob could not see it — it ran
@@ -611,15 +618,11 @@ jobs:
             # instead because the cost ranking has inverted more than once —
             # re-derive with `scripts/ci_shard_cost.sh` before moving either.
             #
-            # #1929: `pds/test/*_vectors` (the 7 pds gates whose basename ends
-            # `_vectors` — ecdsa/encodings/field/rfc6979/scalar/sha256/
-            # secp256k1_point, incl. the Wasm-vector-free ones only) moved here by
-            # cost — see `S-sqlite-rebalance`'s report. Deliberately a glob, not a
-            # name list, so a future `pds/test/*_vectors.sh` gate auto-enrolls here
-            # without a `ci.yml` edit — same intent as the old `pds/test/*`
-            # catch-all, now split by naming convention because no single row had
-            # spare room for the whole pds/ family at once.
-            pattern: "'diff_compiler_llvm*' 'diff_compiler_build' 'diff_compiler_call_arity' 'diff_compiler_rt_obj' 'diff_compiler_selfproc' 'diff_compiler_stack_overflow' 'diff_compiler_let_refute' 'diff_compiler_index_oob' 'diff_compiler_tmc_parity' 'selfcompile_lex' 'selfcompile_emit' 'selfcompile_build_fixpoint' 'diff_native_cli' 'diff_native_stack' 'build_cmd' 'pds/test/*_vectors'"
+            # Legacy PDS vector gates remain here by cost. They are named
+            # explicitly so Phase 1's required-Wasm gates belong only to the
+            # dedicated `pds` row above; coverage classification fails closed
+            # when a future gate has no deliberate placement.
+            pattern: "'diff_compiler_llvm*' 'diff_compiler_build' 'diff_compiler_call_arity' 'diff_compiler_rt_obj' 'diff_compiler_selfproc' 'diff_compiler_stack_overflow' 'diff_compiler_let_refute' 'diff_compiler_index_oob' 'diff_compiler_tmc_parity' 'selfcompile_lex' 'selfcompile_emit' 'selfcompile_build_fixpoint' 'diff_native_cli' 'diff_native_stack' 'build_cmd' 'pds/test/ecdsa_vectors' 'pds/test/encodings_vectors' 'pds/test/field_vectors' 'pds/test/rfc6979_vectors' 'pds/test/scalar_vectors' 'pds/test/secp256k1_point_vectors' 'pds/test/sha256_vectors'"
           - name: tools
             # `diff_compiler_mcp` (#253) and `diff_compiler_entry_exit_codes`
             # (#440) are parked here by cost — both read no oracle and are a

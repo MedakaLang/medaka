@@ -48,7 +48,7 @@ const recordB = {
 
 const lines = [
   '# Generated only by pds/tools/gen_repo_corpus.sh.',
-  '# @atproto/repo 0.10.12 + @atproto/crypto 0.5.4.',
+  '# Official atproto repository/crypto reference; exact package routes are in VECTOR-PROVENANCE.txt.',
   `META\t${did}\t${secretHex}`,
   ...tids.map((tid) => `TID\t${tid.micros}\t${tid.clock}\t${tid.text}`),
 ]
@@ -62,6 +62,20 @@ const commit = async (tag, rev) => {
   const commitCid = await lexData.cidForCbor(signedBytes)
   lines.push(`${tag}\t${root}\t${hex(unsignedBytes)}\t${hex(signedBytes)}\t${commitCid}\t${hex(signed.sig)}`)
   return { root, blocks, signedBytes, commitCid }
+}
+
+const exportCar = async (tag, metadata) => {
+  await storage.putMany(metadata.blocks)
+  for (const record of records.values()) await storage.putBlock(record.cid, record.bytes)
+  await storage.putBlock(metadata.commitCid, metadata.signedBytes)
+
+  const chunks = []
+  for await (const chunk of provider.getFullRepo(storage, metadata.commitCid)) chunks.push(chunk)
+  const carBytes = repoUtil.concatBytes(chunks)
+  const decoded = await repo.readCarWithRoot(carBytes)
+  const order = decoded.blocks.entries().map(({ cid }) => cid.toString()).join(',')
+  lines.push(`${tag}CARORDER\t${order}`)
+  lines.push(`${tag}CAR\t${hex(carBytes)}`)
 }
 
 await commit('INIT', tids[0].text)
@@ -82,22 +96,13 @@ const mutate = async (action, path, record, tid) => {
   return meta
 }
 
-await mutate('CREATE', pathA, recordA, tids[1])
+const first = await mutate('CREATE', pathA, recordA, tids[1])
+await exportCar('CREATE', first)
 await mutate('UPDATE', pathA, recordA2, tids[2])
 await mutate('CREATE', pathB, recordB, tids[3])
 const final = await mutate('DELETE', pathA, null, tids[4])
 
-await storage.putMany(final.blocks)
-for (const record of records.values()) await storage.putBlock(record.cid, record.bytes)
-await storage.putBlock(final.commitCid, final.signedBytes)
-
-const chunks = []
-for await (const chunk of provider.getFullRepo(storage, final.commitCid)) chunks.push(chunk)
-const carBytes = repoUtil.concatBytes(chunks)
-const decoded = await repo.readCarWithRoot(carBytes)
-const order = decoded.blocks.entries().map(({ cid }) => cid.toString()).join(',')
-lines.push(`CARORDER\t${order}`)
-lines.push(`CAR\t${hex(carBytes)}`)
+await exportCar('', final)
 lines.push('END')
 
 await writeFile(output, `${lines.join('\n')}\n`)

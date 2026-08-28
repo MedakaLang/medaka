@@ -1,5 +1,5 @@
 # Generated only by pds/tools/gen_mst_corpus.sh.
-# @atproto/repo 0.10.12; independent expected roots and node bytes.
+# Official atproto repository reference; exact package routes are in VECTOR-PROVENANCE.txt.
 CASE	empty
 ROOT	bafyreie5737gdxlw5i64vzichcalba3z2v5n6icifvx5xytvske7mr3hpm
 BLOCK	bafyreie5737gdxlw5i64vzichcalba3z2v5n6icifvx5xytvske7mr3hpm	a2616580616cf6

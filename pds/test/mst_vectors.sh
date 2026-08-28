@@ -1,12 +1,13 @@
 #!/bin/sh
 # P1-B deterministic atproto MST: official-reference roots/node bytes and
-# strict hostile validation on eval and native.
+# strict hostile validation on eval, native, and Wasm.
 set -eu
 
 ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
 MEDAKA=${MEDAKA:-"$ROOT/medaka"}
 DRIVER="$ROOT/pds/test/mst_vectors_main.mdk"
 PERF_DRIVER="$ROOT/pds/test/performance_resource_main.mdk"
+WASM_EMITTER=${MEDAKA_WASM_EMITTER:-"$ROOT/test/bin/wasm_emit_modules_main"}
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/pds-mst.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
 
@@ -68,6 +69,22 @@ fi
 require_empty "$WORK/native.err" native
 cmp "$WORK/eval.out" "$WORK/native.out" || fail 'eval and native normalized output differ'
 
+if [ ! -x "$WASM_EMITTER" ] || ! command -v node >/dev/null 2>&1 || ! command -v wasm-tools >/dev/null 2>&1; then
+  [ "${MEDAKA_REQUIRE_WASM:-0}" != 1 ] || fail 'Wasm is required but emitter/node/wasm-tools is unavailable'
+  ENGINE_GRADE='eval == native; Wasm unavailable'
+else
+  if ! MEDAKA_ROOT="$ROOT" MEDAKA_WASM_EMITTER="$WASM_EMITTER" MEDAKA_STRICT=1 "$MEDAKA" build --target wasm "$DRIVER" -o "$WORK/driver.wasm" > "$WORK/wasm-build.log" 2>&1; then
+    cat "$WORK/wasm-build.log" >&2
+    fail 'Wasm driver build failed'
+  fi
+  MDK_ARGS="$CORPUS" node "$ROOT/test/wasm/run.js" "$WORK/driver.wasm" > "$WORK/wasm-raw.out" 2> "$WORK/wasm.err"
+  require_empty "$WORK/wasm.err" wasm
+  [ "$(tail -1 "$WORK/wasm-raw.out")" = 0 ] || fail 'Wasm runner result was not zero'
+  sed '$d' "$WORK/wasm-raw.out" > "$WORK/wasm.out"
+  cmp "$WORK/native.out" "$WORK/wasm.out" || fail 'native and Wasm normalized output differ'
+  ENGINE_GRADE='eval == native == Wasm'
+fi
+
 if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$PERF_DRIVER" -o "$WORK/perf-native" > "$WORK/perf-build.log" 2>&1; then
   cat "$WORK/perf-build.log" >&2
   fail 'MST scaling driver build failed'
@@ -93,4 +110,4 @@ if ! awk -v small="$MST_SMALL" -v large="$MST_LARGE" 'BEGIN {
 fi
 echo "MST scaling: 1000=$MST_SMALL s 2000=$MST_LARGE s"
 
-echo 'PASS: MST — 11 official-reference cases; 14 hostile routes; 3 lexical controls; eval == native'
+echo "PASS: MST — 11 official-reference cases; 14 hostile routes; 3 lexical controls; $ENGINE_GRADE"

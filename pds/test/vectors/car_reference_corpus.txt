@@ -1,5 +1,5 @@
 # Generated only by pds/tools/gen_car_corpus.sh.
-# @atproto/repo 0.10.12 writeCarStream/readCarWithRoot.
+# Official atproto repository reference; exact package routes are in VECTOR-PROVENANCE.txt.
 CASE	official-atproto-basic
 ROOT	bafyreigfqy7j4pd2mndwscktqcj5ktaahdujpwrnxjupjbsehji3mgrtx4
 BLOCK	bafyreigfqy7j4pd2mndwscktqcj5ktaahdujpwrnxjupjbsehji3mgrtx4	a1616e01

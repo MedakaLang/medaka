@@ -1,0 +1,9 @@
+{
+  "name": "medaka-pds-atproto-reference",
+  "version": "0.0.0",
+  "private": true,
+  "dependencies": {
+    "@atproto/crypto": "0.5.4",
+    "@atproto/repo": "0.10.12"
+  }
+}

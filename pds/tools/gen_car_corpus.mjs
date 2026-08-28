@@ -44,7 +44,7 @@ if (!decoded.root.equals(root) || decoded.blocks.size !== 2) {
 const hex = (value) => Buffer.from(value).toString('hex')
 const lines = [
   '# Generated only by pds/tools/gen_car_corpus.sh.',
-  '# @atproto/repo 0.10.12 writeCarStream/readCarWithRoot.',
+  '# Official atproto repository reference; exact package routes are in VECTOR-PROVENANCE.txt.',
   'CASE\tofficial-atproto-basic',
   `ROOT\t${root.toString()}`,
   ...blocks.map((block) => `BLOCK\t${block.cid.toString()}\t${hex(block.bytes)}`),

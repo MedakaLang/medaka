@@ -528,7 +528,7 @@ recordBlocks (cid::rest) store acc = match blockStoreGet cid store
   None => Err "repo: missing graph record block"
   Some bytes => recordBlocks rest store (acc ++ [(cid, bytes)])
 
-{- | Validate a commit root and export the official full-repo order:
+{- | Validate a commit root and export this implementation's deterministic order:
    commit, breadth-first MST nodes, then reachable record leaves. -}
 export
 repoExportGraph : Cid -> Array Int -> Cid -> BlockStore -> Result String (List (Cid, Array Int), Array Int)

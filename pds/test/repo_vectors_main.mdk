@@ -193,6 +193,18 @@ acceptResult label (Err message) =
   let () = println "CONTROL \{label} FAIL rejected=\{message}"
   0
 
+acceptLaterFailure : String -> String -> Result String a -> <IO> Int
+acceptLaterFailure label witness (Err message) =
+  if contains witness message then
+    let () = println "CONTROL \{label} PASS"
+    1
+  else
+    let () = println "CONTROL \{label} FAIL wrong-route=\{message}"
+    0
+acceptLaterFailure label _ (Ok _) =
+  let () = println "CONTROL \{label} FAIL missing-later-rejection"
+  0
+
 setField : String -> DagCbor -> List (String, DagCbor) -> List (String, DagCbor)
 setField _ _ [] = []
 setField name value ((key, old)::rest) =
@@ -267,34 +279,45 @@ main = runMain (args ())
 
 runMain : List String -> <IO, Env, FileRead "_"> Unit
 runMain [corpusPath] = runRead (readLines corpusPath)
-runMain [corpusPath, "--focused"] = runFocusedRead (readLines corpusPath)
-runMain _ = panic "usage: repo_vectors_main <ledger-owned-corpus> [--focused]"
+runMain [corpusPath, "--representative"] =
+  runRepresentativeRead (readLines corpusPath)
+runMain _ =
+  panic "usage: repo_vectors_main <ledger-owned-corpus> [--representative]"
 
 runRead : Result String (List String) -> <IO, Env, FileRead "_"> Unit
 runRead (Err message) = panic "repo_vectors: cannot read corpus: \{message}"
 runRead (Ok raw) = runRows (filter meaningful raw)
 
-runFocusedRead : Result String (List String) -> <IO> Unit
-runFocusedRead (Err message) =
+runRepresentativeRead : Result String (List String) -> <IO> Unit
+runRepresentativeRead (Err message) =
   panic "repo_vectors: cannot read corpus: \{message}"
-runFocusedRead (Ok raw) = runFocusedRows (filter meaningful raw)
+runRepresentativeRead (Ok raw) = runRepresentativeRows (filter meaningful raw)
 
-runFocusedRows : List String -> <IO> Unit
-runFocusedRows [meta, t0, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, "END"] = match split "\t" meta
-  ["META", did, secretHex] =>
-    runFocused did (mustSecret secretHex) (initialTidFrom t0)
-  _ => panic "repo_vectors: malformed focused META row"
-runFocusedRows _ = panic "repo_vectors: unexpected focused corpus shape"
+runRepresentativeRows : List String -> <IO> Unit
+runRepresentativeRows [meta, t0, t1, _, _, _, initLine, op1, c1, createOrder, createCar, _, _, _, _, _, _, _, _, "END"] = match split "\t" meta
+  ["META", did, secretHex] => runRepresentative did (mustSecret secretHex) t0 t1 initLine op1 c1 createOrder createCar
+  _ => panic "repo_vectors: malformed representative META row"
+runRepresentativeRows _ =
+  panic "repo_vectors: unexpected representative corpus shape"
 
-runFocused : String -> SecretKey -> Tid -> <IO> Unit
-runFocused did secret initialTid =
+runRepresentative : String -> SecretKey -> String -> String -> String -> String -> String -> String -> String -> <IO> Unit
+runRepresentative did secret t0 t1 initLine op1 c1 createOrder createCar =
+  let tids = gradeTid t0 + gradeTid t1
+  let initialTid = initialTidFrom t0
   let initial = mustRepo (repoInit did secret initialTid)
+  let c0ok = gradeCommit did initLine (repoPublicKey initial) (repoLatestCommit initial)
+  let changed = repoMutationState (applyOperation op1 initial)
+  let o1 = gradeOperation op1 changed
+  let c1ok = gradeCommit did c1 (repoPublicKey changed) (repoLatestCommit changed)
+  let carOk = createCarOrderMatches createOrder changed && createCarMatches createCar changed && singleRecord changed
+  let carStatus = if carOk then "PASS" else "FAIL"
+  let () = println "CREATE CAR \{carStatus} order=\{blockOrder changed}"
+  let external = tids + c0ok + o1 + c1ok + (if carOk then 1 else 0)
+  let () = println "representative-external: \{intToString external}/6 official-atproto initialization/create/CAR checks"
   let pathPrefix = toUtf8 "app.bsky.feed.post/"
-  let validRecord = DcMap [("$type", DcString "app.bsky.feed.post"), ("text", DcString "focused")]
-  let next = futureTid (repoLatestCommit initial) 1
-  let changed = repoMutationState (mustMutation (repoCreate (pathPrefix ++ toUtf8 "focused") validRecord next initial))
   let oldCommit = repoLatestCommit initial
   let newCommit = repoLatestCommit changed
+  let mismatchData = cidForDagCbor [|1|]
   let rejected = sum [
     rejectContains "did-fragment" "invalid DID" (repoInit "did:x:a#b" secret initialTid),
     rejectContains "did-query" "invalid DID" (repoInit "did:x:a?b" secret initialTid),
@@ -325,9 +348,9 @@ runFocused did secret initialTid =
     rejectContains "commit-data-root" "commit data mismatch" (repoExportGraph (repoCommitCid oldCommit) (repoCommitSignedBytes oldCommit) (repoRootCid changed) (repoStore changed)),
   ]
   let controls = sum [
-    acceptResult "did-generic" (repoInit "did:x:a" secret initialTid),
-    acceptResult "did-colon-segments" (repoInit "did:method:val:two" secret initialTid),
-    acceptResult "did-percent" (repoInit "did:x:a%20b" secret initialTid),
+    acceptLaterFailure "did-generic" "data mismatch" (repoValidateCommit "did:x:a" mismatchData (repoCommitTid oldCommit) (repoCommitSignedBytes oldCommit)),
+    acceptLaterFailure "did-colon-segments" "data mismatch" (repoValidateCommit "did:method:val:two" mismatchData (repoCommitTid oldCommit) (repoCommitSignedBytes oldCommit)),
+    acceptLaterFailure "did-percent" "data mismatch" (repoValidateCommit "did:x:a%20b" mismatchData (repoCommitTid oldCommit) (repoCommitSignedBytes oldCommit)),
     acceptResult "rkey-min" (repoLookup (pathPrefix ++ toUtf8 "a") initial),
     acceptResult "rkey-max" (repoLookup (pathPrefix ++ arrayMake 512 97) initial),
     acceptResult "rkey-punctuation" (repoLookup (pathPrefix ++ toUtf8 "~1.2-3_") initial),
@@ -336,9 +359,9 @@ runFocused did secret initialTid =
   ]
   let () = println "focused-rejected: \{intToString rejected}/27 named routes"
   let () = println "focused-controls: \{intToString controls}/8 valid routes"
-  if rejected == 27 && controls == 8 then println "FOCUSED: PASS"
+  if external == 6 && rejected == 27 && controls == 8 then println "REPRESENTATIVE: PASS"
   else
-    let () = println "FOCUSED: FAIL"
+    let () = println "REPRESENTATIVE: FAIL"
     exit 1
 
 initialTidFrom : String -> Tid
@@ -354,6 +377,16 @@ carOrderMatches line repo = match split "\t" line
 carMatches : String -> Repo -> Bool
 carMatches line repo = match split "\t" line
   ["CAR", expected] => repoExportCar repo == Ok (mustHex expected)
+  _ => False
+
+createCarOrderMatches : String -> Repo -> Bool
+createCarOrderMatches line repo = match split "\t" line
+  ["CREATECARORDER", expected] => blockOrder repo == expected
+  _ => False
+
+createCarMatches : String -> Repo -> Bool
+createCarMatches line repo = match split "\t" line
+  ["CREATECAR", expected] => repoExportCar repo == Ok (mustHex expected)
   _ => False
 
 singleRecord : Repo -> Bool
@@ -376,7 +409,7 @@ firstTidRow (row::_) = row
 firstTidRow [] = panic "repo_vectors: missing TID rows"
 
 runRows : List String -> <IO, Env, FileRead "_"> Unit
-runRows [meta, t0, t1, t2, t3, t4, initLine, op1, c1, op2, c2, op3, c3, op4, c4, orderLine, carLine, "END"] = runTranscript (split "\t" meta) [t0, t1, t2, t3, t4] initLine op1 c1 op2 c2 op3 c3 op4 c4 orderLine carLine
+runRows [meta, t0, t1, t2, t3, t4, initLine, op1, c1, _, _, op2, c2, op3, c3, op4, c4, orderLine, carLine, "END"] = runTranscript (split "\t" meta) [t0, t1, t2, t3, t4] initLine op1 c1 op2 c2 op3 c3 op4 c4 orderLine carLine
 runRows _ = panic "repo_vectors: unexpected corpus shape"
 
 runTranscript : List String -> List String -> String -> String -> String -> String -> String -> String -> String -> String -> String -> String -> String -> <IO, Env, FileRead "_"> Unit
