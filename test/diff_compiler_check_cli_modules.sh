@@ -2821,5 +2821,38 @@ case "$no1597_out" in
   *) fail=$((fail+1)); printf 'FAIL 1597/imported-still-votes (over-suppressed a REAL ambiguity: [%s])\n' "$no1597_out" ;;
 esac
 
+# 18. #2137: the FFI declaration-honesty checks (T-FFI-UNLABELLED / NONCROSSABLE /
+#     BUILTIN-SHADOW / RESERVED-NAME / NULLARY / CATALOG-NARROW, epic #2070) were
+#     pinned only on the FLAT single-file path (test/effect_builtin_param_fixtures/)
+#     — never through `check`/`build`'s multi-module loader.  This leg proves the
+#     rule fires identically cross-module: an IMPORTED module declares an extern
+#     violating T-FFI-NONCROSSABLE (`List Int` crossing the FFI boundary), and the
+#     consumer merely imports and calls it.  `check` must reject with a LOCATED
+#     error naming the DEFINING module's own file (ffimod.mdk), not the importer's
+#     — and `build` must agree (exit 1, no binary), the same shape as leg 4's
+#     agreement check.
+cat > "$TMP/ffimod.mdk" <<'EOF'
+export extern bad : List Int -> <FFI> Int
+EOF
+cat > "$TMP/ffiuse.mdk" <<'EOF'
+import ffimod.{bad}
+main = println (bad [1, 2, 3])
+EOF
+ffi_chk="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/ffiuse.mdk" 2>&1)"
+ffi_chk_code=$?
+case "$ffi_chk" in
+  *ffimod.mdk:*:*:*"cannot cross the foreign-function boundary"*)
+    if [ "$ffi_chk_code" -eq 1 ]; then pass=$((pass+1)); printf 'ok   ffi-xmod/check (#2137: imported T-FFI-NONCROSSABLE located at defining module, exit 1)\n'
+    else fail=$((fail+1)); printf 'FAIL ffi-xmod/check (located but exit %d)\n' "$ffi_chk_code"; fi ;;
+  *) fail=$((fail+1)); printf 'FAIL ffi-xmod/check (#2137: imported FFI violation not located: [%s])\n' "$ffi_chk" ;;
+esac
+MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/ffiuse.mdk" -o "$TMP/ffiuse.out" >/dev/null 2>&1
+ffi_bld_code=$?
+if [ "$ffi_bld_code" -ne 0 ] && [ ! -x "$TMP/ffiuse.out" ]; then
+  pass=$((pass+1)); printf 'ok   ffi-xmod/build (#2137: build agrees, no binary)\n'
+else
+  fail=$((fail+1)); printf 'FAIL ffi-xmod/build (build exit %d, binary present=%s)\n' "$ffi_bld_code" "$([ -x "$TMP/ffiuse.out" ] && echo yes || echo no)"
+fi
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

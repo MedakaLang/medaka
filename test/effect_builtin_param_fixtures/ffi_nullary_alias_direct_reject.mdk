@@ -1,0 +1,13 @@
+-- #2106: does the SAME T-FFI-NULLARY rejection the plain nullary spelling gets
+-- (`ffi_nullary_reject.mdk`) also cover a nullary extern spelled through a
+-- DIRECT (unconstrained) type alias?  `type A = Int` is a zero-param alias, so
+-- `expandAliasHeadTy`'s `TyCon` clause unwraps it before `ffiRowHasFFITy`
+-- pattern-matches -- the alias is transparent to the rule, not a bypass.
+-- Measured: yes, same rule, same message, naming the ALIASED extern's own name
+-- ('k'), not the alias 'A'.
+type A = Int
+
+extern k : A
+
+main : <IO> Unit
+main = println (k + 1)

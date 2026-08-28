@@ -233,5 +233,16 @@ expect_reject "$FIX/ffi_catalog_narrow_reject.mdk" 'FFI catalog-row reject (cata
 expect_reject "$FIX/ffi_catalog_writefile_narrow_reject.mdk" "FFI catalog-row reject: #2163's own program (writeFile redeclared <>)" \
   "Foreign declaration 'writeFile' redeclares a built-in runtime name with a NARROWER effect row"
 expect_ok "$FIX/ffi_catalog_honest_accept.mdk" 'FFI catalog-row accept: the honest row, no redeclaration (#2163 CONTROL)'
+
+# #2106: does the alias-wrapped nullary spelling get the SAME T-FFI-NULLARY
+# rejection as the plain form (ffi_nullary_reject.mdk above)?  Measured, not
+# assumed: `expandAliasHeadTy` unwraps both a direct zero-param alias and a
+# constrained alias applied at its own head before `ffiRowHasFFITy` ever sees
+# them, so both land on the identical bare-TyCon `None` case and the identical
+# message naming the extern 'k'.  #2106 CLOSES on this measurement.
+expect_reject "$FIX/ffi_nullary_alias_direct_reject.mdk" 'FFI nullary reject: DIRECT alias (#2106, type A = Int; extern k : A)' \
+  "Foreign declaration 'k' has no arrow in its signature"
+expect_reject "$FIX/ffi_nullary_alias_constrained_reject.mdk" 'FFI nullary reject: CONSTRAINED alias (#2106, type A a = Sh a => Int; extern k : A Int)' \
+  "Foreign declaration 'k' has no arrow in its signature"
 echo "effect_builtin_param_domain: $pass/$fail"
 [ "$fail" -eq 0 ]
