@@ -35,6 +35,7 @@ import support.ordmap.{
   omHasKey,
   omFromNames,
   omFromPairs,
+  omMapValues,
 }
 import support.scc.{tarjanSCCs}
 
@@ -223,24 +224,88 @@ eagerReachMap binds =
   let nameSet = omFromNames allNames omEmpty
   let valSet = omFromNames (valGlobalNames binds) omEmpty
   let adj = eagerCalleesMap nameSet binds
-  foldReachSCCs valSet adj (tarjanSCCs allNames adj) omEmpty
+  omMapValues fst (foldReachSCCs valSet adj (tarjanSCCs allNames adj) omEmpty)
 
 -- reach(scc) = (its members' direct value-global callees) ∪ (⋃ reach(callee)).
 -- Successor SCCs are already folded and their reach is ⊆ valSet by induction, so
 -- the union stays ⊆ valSet — bounding every set to the value-global count.
-foldReachSCCs : OrdMap Unit -> OrdMap (List String) -> List (List String) -> OrdMap (List String) -> OrdMap (List String)
+--
+-- #1030: the fold's WORKING accumulator carries each reach set as a PAIR — the
+-- first-occurrence-ordered `List String` the emitters consume, AND the `OrdMap
+-- Unit` of the same names.  `eagerReachMap` projects the list back out, so the
+-- published contract (`OrdMap (List String)`) and every list's element order are
+-- unchanged — this is a bookkeeping change, not a semantic one.
+--
+-- ⚠️ WHY THE PAIR: the old form recomputed the union as
+-- `dedup (dvals ++ unionLookup direct acc)`, which COPIES every callee's reach
+-- list and then rebuilds a fresh `seen` tree of that size, once per SCC —
+-- O(|reach| · log |reach|) tree-node ALLOCATIONS per SCC, so O(V² log V) over a
+-- long eager value-global chain (V = the value-global count).  Carrying the set
+-- alongside lets `mergeReach` SHARE the last callee's list as the result's tail
+-- whenever nothing has to be deleted from it, which is the whole cost on a chain:
+-- `reach(gᵢ) = gᵢ₋₁ :: reach(gᵢ₋₁)`, O(log V) per SCC instead of O(V log V).
+-- Measured on a rooted chain of N value globals (Callgrind inclusive Ir of this
+-- function, netted against the same shape at N=1, N=125/250/500): before
+-- 63.4M → 297.5M → 1371.6M (×4.69, ×4.61); after 3.3M → 7.5M → 17.0M
+-- (×2.31, ×2.26).  `emit` as a whole went ×3.60/×3.98 → ×2.16/×2.15 on the
+-- same ladder — that is the `vchain` shape in test/diff_compiler_stage_ir_scaling.sh.
+--
+-- ⚠️ This does NOT make the reach TABLE sub-quadratic, and cannot: on that chain
+-- Σᵥ|reach(v)| is Θ(V²) by construction, so materializing it as one list per name
+-- is Θ(V²) cons cells no matter how it is computed.  What is removed is the
+-- log factor and the per-element TREE allocation — the term that dominated.
+foldReachSCCs : OrdMap Unit -> OrdMap (List String) -> List (List String) -> OrdMap (List String, OrdMap Unit) -> OrdMap (List String, OrdMap Unit)
 foldReachSCCs _ _ [] acc = acc
 foldReachSCCs valSet adj (scc::rest) acc =
   let direct = dedup (unionLookup scc adj)
-  let reached = dedup (filterList (n => omHasKey n valSet) direct ++ unionLookup direct acc)
+  -- sources, in the order the old `dedup (… ++ …)` saw them: this SCC's own
+  -- direct value-global callees, then each callee's reach list.  The LAST
+  -- callee's list is held back as the shareable tail; everything before it is
+  -- concatenated and deduped as `earlier`.
+  let earlier = dedup (filterList (n => omHasKey n valSet) direct ++ initReach direct acc)
+  let reached = mergeReach earlier (lastReach direct acc)
   foldReachSCCs valSet adj rest (insertReach scc reached acc)
+
+-- `dedup (earlier ++ tailList)` where `earlier` is already deduped, i.e.
+-- `earlier ++ (tailList \ earlier)`, paired with its own membership set.
+-- ⚠️ The `overlap` test is what buys the sharing: when no name of `earlier` is in
+-- the tail's set, NOTHING is deleted from `tailList` and it is reused verbatim as
+-- the result's tail instead of being filtered into a fresh copy.
+mergeReach : List String -> (List String, OrdMap Unit) -> (List String, OrdMap Unit)
+mergeReach earlier (tailList, tailSet) =
+  let earlierSet = omFromNames earlier omEmpty
+  let overlap = anyMember earlier tailSet
+  let kept = if overlap then
+    filterList (n => not (omHasKey n earlierSet)) tailList
+  else
+    tailList
+  (earlier ++ kept, omFromNames earlier tailSet)
+
+anyMember : List String -> OrdMap Unit -> Bool
+anyMember [] _ = False
+anyMember (n::rest) s = if omHasKey n s then True else anyMember rest s
+
+-- the reach lists of every key BUT THE LAST, concatenated in key order.
+initReach : List String -> OrdMap (List String, OrdMap Unit) -> List String
+initReach [] _ = []
+initReach [_] _ = []
+initReach (n::rest) m = reachListOf n m ++ initReach rest m
+
+-- the LAST key's reach pair — the one `mergeReach` may share.
+lastReach : List String -> OrdMap (List String, OrdMap Unit) -> (List String, OrdMap Unit)
+lastReach [] _ = ([], omEmpty)
+lastReach [n] m = fromOption ([], omEmpty) (omLookup n m)
+lastReach (_::rest) m = lastReach rest m
+
+reachListOf : String -> OrdMap (List String, OrdMap Unit) -> List String
+reachListOf n m = fst (fromOption ([], omEmpty) (omLookup n m))
 
 -- concat (default []) of the OrdMap lookups over a list of keys.
 unionLookup : List String -> OrdMap (List String) -> List String
 unionLookup [] _ = []
 unionLookup (n::rest) m = fromOption [] (omLookup n m) ++ unionLookup rest m
 
-insertReach : List String -> List String -> OrdMap (List String) -> OrdMap (List String)
+insertReach : List String -> (List String, OrdMap Unit) -> OrdMap (List String, OrdMap Unit) -> OrdMap (List String, OrdMap Unit)
 insertReach [] _ acc = acc
 insertReach (n::rest) reached acc =
   insertReach rest reached (omInsert n reached acc)
