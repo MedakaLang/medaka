@@ -279,6 +279,8 @@ FLOOR_N="${STAGE_IR_FLOOR_N:-1}"
 MATCH_N="${STAGE_IR_MATCH_N:-125}"
 XREF_N="${STAGE_IR_XREF_N:-125}"
 VCHAIN_N="${STAGE_IR_VCHAIN_N:-125}"
+CONSTR_N="${STAGE_IR_CONSTR_N:-300}"
+WIDEIFACE_N="${STAGE_IR_WIDEIFACE_N:-125}"
 
 # ── the multi-module band ────────────────────────────────────────────────────
 #
@@ -611,6 +613,47 @@ gen_vchain() {
   printf 'main = println g%s\n' "$((gn - 1))" >> "$gf"
 }
 
+# gen_constrained — #1017's own shape, new for this slice. `markVar`/`markInfix`
+# fall through to `contains x constrained`, a List-as-set scan against the pool of
+# constrained-signature function names (`Eq a => …`). N constrained functions,
+# each a EVar reference to the previous one (a chain, mirroring gen_xref), forces
+# a full `constrained`-pool scan at each of N call sites: pool grows with N AND
+# site count grows with N => O(N^2) pre-fix, O(N) (OrdMap membership) post-fix.
+# `x == x` in f0's body also exercises the (already OrdMap-backed, #953) `methods`
+# scan — inert here, kept only so f0 typechecks against `Eq`.
+gen_constrained() {
+  gn=$1; gf=$2; : > "$gf"
+  printf 'f0 : Eq a => a -> Bool\nf0 x = x == x\n' >> "$gf"
+  gi=1
+  while [ "$gi" -lt "$gn" ]; do
+    printf 'f%s : Eq a => a -> Bool\nf%s x = f%s x\n' "$gi" "$gi" "$((gi - 1))"
+    gi=$((gi + 1))
+  done >> "$gf"
+  printf 'main = println (if f%s 0 then 1 else 0)\n' "$((gn - 1))" >> "$gf"
+}
+
+# gen_wideiface — #1018's own shape, new for this slice. ONE interface with N
+# methods, each written as the parser's SPLIT entry pair (a signature line, `f :
+# T`, then a separate default-clause line, `f p = body`) — the exact shape
+# `mergeIfaceDefaults`/`mergeIfaceMethods`/`foldlMethods` coalesce back into one
+# `IfaceMethod` per name. Pre-fix, `insertMethod`'s `containsMethod` linear scan
+# (a miss on the signature-line insert, a hit-then-`mergeInto`-scan on the
+# default-line insert) is O(current acc size) per insert => O(N^2) over N
+# methods. This is DELIBERATELY not `gen_marksweep` (signature-only methods, no
+# split/default lines — never exercises `mergeInto`) — see the packet's own
+# note that `gen_marksweep` triple-blinds #1018 on the OLD (TIME/ALLOC/OP) arms
+# without ever reaching this merge path with a duplicate-name insert.
+gen_wideiface() {
+  gn=$1; gf=$2; : > "$gf"
+  printf 'interface Wide a where\n' >> "$gf"
+  gi=0
+  while [ "$gi" -lt "$gn" ]; do
+    printf '  m%s : a -> a\n  m%s x = x\n' "$gi" "$gi"
+    gi=$((gi + 1))
+  done >> "$gf"
+  printf 'main = println 1\n' >> "$gf"
+}
+
 # gen_modules / gen_mod_records — the DIRECTORY-shaped shape, transcribed verbatim
 # from test/diff_compiler_perf_scaling.sh (same [T-SHARED-CORPUS] rule as the three
 # above: a gate's generators live in the gate, never in a shared fixture dir, and
@@ -922,6 +965,8 @@ echo
 grade_shape match "$MATCH_N"
 grade_shape xref "$XREF_N"
 grade_shape vchain "$VCHAIN_N"
+grade_shape constrained "$CONSTR_N"
+grade_shape wideiface "$WIDEIFACE_N"
 grade_modules
 
 if [ "$graded" -eq 0 ]; then

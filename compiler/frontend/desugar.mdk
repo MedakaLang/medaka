@@ -56,7 +56,9 @@ import support.util.{
   fallthroughName,
   filterList,
   anyList,
+  reverseL,
 }
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
 
 -- ── Bottom-up traversal engine (mirror of map_expr / map_decl) ────────────
 -- `mapExpr f e` rewrites every subexpression of `e` with `f`, post-order: the
@@ -818,23 +820,36 @@ mergeIfaceDecl (d@(DInterface { methods, ... })) =
 mergeIfaceDecl (DAttrib attrs d) = DAttrib attrs (mergeIfaceDecl d)
 mergeIfaceDecl d = d
 
+-- #1018: the original shape did an O(k) `containsMethod` linear scan plus an
+-- `acc ++ [m]` copy per method inside `foldlMethods` — O(n^2) in the widest
+-- interface's method count.  Widest interface in the tree is `Num` at 8
+-- methods, so this was always bounded, but the fix mirrors #953/#1017: an
+-- `OrdMap IfaceMethod` gives O(log n) merge-lookup instead of the list scan.
+-- `OrdMap` iterates key-sorted, not insertion order, so "first-seen position"
+-- is preserved separately via `order` (a reversed name list, one cons per
+-- first-seen method, no per-step copy) and reconstructed at the end by
+-- looking each name back up in the map — never by iterating the map itself.
 mergeIfaceMethods : List IfaceMethod -> List IfaceMethod
-mergeIfaceMethods methods = foldlMethods [] methods
+mergeIfaceMethods methods =
+  let (byName, orderRev) = foldlMethods (omEmpty, []) methods
+  map (methodAt byName) (reverseL orderRev)
 
-foldlMethods : List IfaceMethod -> List IfaceMethod -> List IfaceMethod
+methodAt : OrdMap IfaceMethod -> String -> IfaceMethod
+methodAt byName n = match omLookup n byName
+  Some m => m
+  None => panic "mergeIfaceMethods: unreachable — name inserted but missing"
+
+foldlMethods : (OrdMap IfaceMethod, List String) -> List IfaceMethod -> (OrdMap IfaceMethod, List String)
 foldlMethods acc [] = acc
 foldlMethods acc (m::rest) = foldlMethods (insertMethod acc m) rest
 
-insertMethod : List IfaceMethod -> IfaceMethod -> List IfaceMethod
-insertMethod acc m
-  | containsMethod (methodName m) acc = mergeInto acc m
-  | otherwise = acc ++ [m]
-
-mergeInto : List IfaceMethod -> IfaceMethod -> List IfaceMethod
-mergeInto [] m = [m]
-mergeInto (x::xs) m
-  | methodName x == methodName m = mergeTwo x m :: xs
-  | otherwise = x :: mergeInto xs m
+insertMethod : (OrdMap IfaceMethod, List String) -> IfaceMethod -> (OrdMap IfaceMethod, List String)
+insertMethod (byName, order) m
+  | omHasKey (methodName m) byName = (
+    omInsert (methodName m) (mergeTwo (methodAt byName (methodName m)) m) byName,
+    order,
+  )
+  | otherwise = (omInsert (methodName m) m byName, methodName m :: order)
 
 mergeTwo : IfaceMethod -> IfaceMethod -> IfaceMethod
 mergeTwo (IfaceMethod n prevTy prevDef) (IfaceMethod _ mTy mDef) =
@@ -847,10 +862,6 @@ mergedType prevTy _ = prevTy
 mergedDefault : Option MethodDefault -> Option MethodDefault -> Option MethodDefault
 mergedDefault (Some d) _ = Some d
 mergedDefault None mDef = mDef
-
-containsMethod : String -> List IfaceMethod -> Bool
-containsMethod _ [] = False
-containsMethod name (x::xs) = methodName x == name || containsMethod name xs
 
 methodName : IfaceMethod -> String
 methodName (IfaceMethod n _ _) = n
