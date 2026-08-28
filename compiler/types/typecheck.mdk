@@ -4131,8 +4131,10 @@ deSeedChainProbe =
 --       re-derived at this line; treat as the first thing to check, not as
 --       established.  `fromAstTypeE` EMITS type errors: `T-ALIAS-ARITY` and
 --       `T-ROW-KIND-MISMATCH`, both through `pushTypeErrorOnce`/`…At`, whose
---       `Once` dedupe reads `perRun.typeErrors` — a bundle `resetState`
---       re-mints per module.  Elaborating in the preamble would MERGE that
+--       `Once` dedupe reads `perRun.typeErrorMsgSetRef` (#2068: a membership
+--       index over the same channel; it was a scan of `perRun.typeErrors`
+--       itself) — a bundle `resetState` re-mints per module.  Elaborating in the
+--       preamble would MERGE that
 --       dedupe scope across the whole module graph (one diagnostic per compile
 --       where there is one per importing module today) and RELOCATE the push
 --       outside any module's harvest window.  Both directions are strictly
@@ -7567,10 +7569,18 @@ hadTypeErrors _ = !typeErrorsSticky
 -- named helpers: `recordDoMonadError` open-codes its own cons + sticky set.  A
 -- hand-placed bump at "the five helpers" would have left that one silent, and the
 -- counter would then have UNDER-counted exactly on the `do`-requires-a-monad path.
+-- ⚠️ #2068: it is also the sole writer of `typeErrorMsgSetRef`, the membership
+-- INDEX the three `pushTypeErrorOnce*` helpers test instead of re-scanning the
+-- channel.  Keeping the insert HERE — inside the one funnel — is what makes the
+-- index unable to disagree with the channel: there is no second push site to
+-- forget.  The one place the channel is rolled BACK (`discoverPromotedModules`)
+-- rolls the index back with it, the same standing obligation the counter states
+-- above.
 recordTypeError : TcDiag -> Unit
 recordTypeError d =
   typeErrorsSticky := True
   let _ = noteTypeErrorDetected ()
+  perRun.value.typeErrorMsgSetRef := omInsert (tcMsg d) () perRun.value.typeErrorMsgSetRef.value
   wPush perRun.value.typeErrors d
 
 -- issue 1146 PR2 — the counter's ONLY incrementing statement, so "an error was
@@ -7632,9 +7642,19 @@ pushTypeErrorAt code loc msg =
 -- the short-circuit still calls `noteTypeErrorDetected`.  Dedup is a presentation
 -- judgment keyed on rendered text; letting it also decide "did an error occur here"
 -- is what made a message-rendering change able to flip an inference branch.
+--
+-- #2068: the membership test is an OrdMap lookup on `typeErrorMsgSetRef`, not the
+-- `anyList (e => tcMsg e == msg) perRun.value.typeErrors.items.value` scan it used
+-- to be.  The scan was O(accumulated) per push, hence O(N^2) over a program whose
+-- N diagnostics are pairwise DISTINCT — which is the common case for this family
+-- (`pushNoImplError` renders the interface AND the type into every message).  It
+-- read linear only on a corpus of REPEATED messages, where the first comparison
+-- always matched and the list never grew.  The index answers the identical
+-- question: `recordTypeError` is the sole writer of both, so a key is present iff
+-- a diagnostic with that rendered message is in the channel.
 pushTypeErrorOnce : String -> String -> Unit
 pushTypeErrorOnce code msg =
-  if anyList (e => tcMsg e == msg) perRun.value.typeErrors.items.value then
+  if omHasKey msg perRun.value.typeErrorMsgSetRef.value then
     noteTypeErrorDetected ()
   else
     pushTypeError code msg
@@ -7648,7 +7668,7 @@ pushTypeErrorOnce code msg =
 -- occurrence counter (see `pushTypeErrorOnce`) — dedup suppresses the REPORT only.
 pushTypeErrorOnceAt : String -> Option Loc -> String -> Unit
 pushTypeErrorOnceAt code loc msg =
-  if anyList (e => tcMsg e == msg) perRun.value.typeErrors.items.value then
+  if omHasKey msg perRun.value.typeErrorMsgSetRef.value then
     noteTypeErrorDetected ()
   else
     recordTypeError (TcDiag code 1 (orElseLoc loc !currentLoc) msg None None)
@@ -7663,7 +7683,7 @@ pushTypeErrorOnceAt code loc msg =
 -- `pushTypeErrorOnce`) — dedup suppresses the REPORT only.
 pushTypeErrorHelpFixAt : String -> Option Loc -> String -> String -> Option (Loc, String) -> Unit
 pushTypeErrorHelpFixAt code loc msg help fix =
-  if anyList (e => tcMsg e == msg) perRun.value.typeErrors.items.value then
+  if omHasKey msg perRun.value.typeErrorMsgSetRef.value then
     noteTypeErrorDetected ()
   else
     recordTypeError (TcDiag code 1 (orElseLoc loc !currentLoc) msg (Some help) fix)
@@ -7977,6 +7997,7 @@ data PerRun = PerRun {
     fieldOwnerModulesRef : Ref (OrdMap (List String)),  -- #1597: field-owner KEY → declaring module ids, graph-global — see fieldOwnerReachable
     fieldOwnerReachRef : Ref (OrdMap Unit),  -- #1597: the module ids THIS module can reach through DUse — see declEnvSeedDataUniverse
     typeErrors : Windowed TcDiag,  -- issue 1146: the diagnostic OUTPUT channel, on the Windowed discipline
+    typeErrorMsgSetRef : Ref (OrdMap Unit),  -- #2068: membership INDEX over typeErrors' rendered messages — see recordTypeError
     errorsDetected : Ref Int,  -- issue 1146: the CONTROL signal split out of it — see recordTypeError / erredDuring
     occursCheckFailed : Ref Bool,
     currentLevel : Ref Int,
@@ -8078,6 +8099,7 @@ freshPerRun _ = PerRun {
   fieldOwnerModulesRef = Ref omEmpty,
   fieldOwnerReachRef = Ref omEmpty,
   typeErrors = wNew (),
+  typeErrorMsgSetRef = Ref omEmpty,
   errorsDetected = Ref 0,
   occursCheckFailed = Ref False,
   currentLevel = Ref 0,
@@ -17062,6 +17084,14 @@ discoverPromotedModules runtimeDecls coreDecls modules rpNames argNames =
   -- WIDENS a hazard the pre-1146 `listLen` keying had identically rather than
   -- introducing one.  Full statement: compiler/ERROR-QUALITY.md §6.
   let savedErrSnap = wSnapshot perRun.value.typeErrors
+  -- #2068: the message-membership INDEX is part of the channel and rolls back WITH
+  -- it, for the same reason the counter does — a message pushed inside the
+  -- speculative window is truncated out of `typeErrors` by the wRestore below, and
+  -- an index still carrying it would make a later, REAL push of that same message
+  -- short-circuit into a detection with no diagnostic behind it.  (`resetState`
+  -- re-mints `perRun`, so this restore lands on a fresh empty cell, exactly like
+  -- the two beside it.)
+  let savedMsgSet = perRun.value.typeErrorMsgSetRef.value
   let savedDetected = perRun.value.errorsDetected.value
   -- Drop the prelude/core defs AND signatures shadowed by a same-named user-module
   -- fn before the SCRATCH joint typecheck.  The joint flatten is bare-name, so a
@@ -17099,6 +17129,7 @@ discoverPromotedModules runtimeDecls coreDecls modules rpNames argNames =
   let _ = resetState ()
   typeErrorsSticky := savedSticky
   let _ = wRestore perRun.value.typeErrors savedErrSnap
+  perRun.value.typeErrorMsgSetRef := savedMsgSet
   perRun.value.errorsDetected := savedDetected
   let _ = setCrossFunConstraintTables expandedPair
   crossRun.value.crossModuleFunConstraintDeclaredRef := snapshotDeclared
