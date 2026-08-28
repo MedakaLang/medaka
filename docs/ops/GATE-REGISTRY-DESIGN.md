@@ -27,18 +27,18 @@ the **single source of truth** for every gate in the repo. Every current consume
 
 ```toml
 [[gate]]
-name        = "diff_compiler_parse_golden"      # unique; today's script basename
+name        = "diff_compiler_parse_result"      # unique; today's script basename
 area        = "frontend"       # semantic identity: frontend|types|eval|backend|tools|
                                #   engines|wasm|soundness|infra|docs
 project     = "compiler"       # compiler | sqlite | gzip | pds | mq | parsec | byteparser
 tier        = "merge"          # merge | nightly | ondemand
 cost        = "cheap"          # cheap(<10s) | medium(<60s) | heavy(<300s) | budgeted(explicit)
 kind        = "exec"           # exec (wrap a script) | native (a medaka gate module)
-run         = "test/diff_compiler_parse_golden.sh"   # exec: the script; native: module path
-oracles     = ["parse_main"]   # test/bin/* names this gate reads (drives oracle builds)
+run         = "test/diff_compiler_parse_result.sh"   # exec: the script; native: module path
+oracles     = ["parse_result_main"]   # test/bin/* names this gate reads (drives oracle builds)
 sources     = ["compiler/frontend/parser.mdk"]       # what SELECTS this gate (preflight/queue
                                                      #   scoping); globs allowed
-corpus      = ["test/parse_fixtures/"]               # fixture dirs read — ALSO reverse edges:
+corpus      = ["test/parse_error_fixtures/"]         # fixture dirs read — ALSO reverse edges:
                                                      #   a project dir here binds that project
                                                      #   to this gate for queue scoping (#2179)
 toolchain   = []               # e.g. ["clang"] ["wasm-tools","node>=24"] ["sqlite3"] ["valgrind"]
