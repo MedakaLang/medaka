@@ -137,9 +137,34 @@ findPathSlash path i slash =
   else
     findPathSlash path (i + 1) slash
 
+lastDotBefore : Array Int -> Int -> Int -> Int -> Int
+lastDotBefore bytes i end last =
+  if i >= end then
+    last
+  else if bytes[i] == 46 then
+    lastDotBefore bytes (i + 1) end i
+  else
+    lastDotBefore bytes (i + 1) end last
+
+normalizedAuthority : Array Int -> Int -> Bool
+normalizedAuthority path end =
+  let authorityEnd = lastDotBefore path 0 end (-1)
+  normalizedAuthorityBytes path 0 authorityEnd
+
+normalizedAuthorityBytes : Array Int -> Int -> Int -> Bool
+normalizedAuthorityBytes path i end =
+  if i >= end then
+    True
+  else
+    not (upperByte path[i]) && normalizedAuthorityBytes path (i + 1) end
+
 validateCollection : Array Int -> Int -> Result String Unit
 validateCollection path end = match validateNsidPrefix path end
-  Ok () => Ok ()
+  Ok () =>
+    if normalizedAuthority path end then
+      Ok ()
+    else
+      Err "repo: collection NSID authority must be normalized lowercase ASCII"
   Err cause => Err "repo: \{nsidErrorMessage cause}"
 
 rkeyByte : Int -> Bool

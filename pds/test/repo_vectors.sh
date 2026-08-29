@@ -35,8 +35,8 @@ fi
 require_empty "$WORK/eval.err" eval
 
 grep -F -q 'representative-external: 6/6 official-atproto initialization/create/CAR checks' "$WORK/eval.out" || fail 'eval representative external count is incomplete'
-grep -F -q 'focused-rejected: 26/26 named routes' "$WORK/eval.out" || fail 'eval F1 rejection count is incomplete'
-grep -F -q 'focused-controls: 9/9 valid routes' "$WORK/eval.out" || fail 'eval F1 boundary controls are incomplete'
+grep -F -q 'focused-rejected: 27/27 named routes' "$WORK/eval.out" || fail 'eval F1 rejection count is incomplete'
+grep -F -q 'focused-controls: 8/8 valid routes' "$WORK/eval.out" || fail 'eval F1 boundary controls are incomplete'
 grep -F -q 'OP CREATE PASS' "$WORK/eval.out" || fail 'eval missed the representative CREATE'
 grep -F -q 'CREATE CAR PASS order=' "$WORK/eval.out" || fail 'eval missed representative exact CAR bytes/order'
 [ "$(tail -1 "$WORK/eval.out")" = 'REPRESENTATIVE: PASS' ] || fail 'eval did not end in REPRESENTATIVE: PASS'
@@ -50,6 +50,8 @@ require_empty "$WORK/native.err" native
 
 grep -F -q 'external: 15/15 official-atproto transcript checks' "$WORK/native.out" || fail 'native transcript count is incomplete'
 grep -F -q 'hostile: 19/19 rejected on named routes' "$WORK/native.out" || fail 'native hostile count is incomplete'
+grep -F -q 'REPO-IDENTITY PASS mixed lookup/create rejected state=unchanged' "$WORK/native.out" || fail 'native missed normalized repository identity control'
+grep -F -q 'repository-identity: 1/1 normalized key control' "$WORK/native.out" || fail 'native repository identity count is incomplete'
 [ "$(tail -1 "$WORK/native.out")" = 'TOTAL: PASS' ] || fail 'native did not end in TOTAL: PASS'
 
 if [ ! -x "$WASM_EMITTER" ] || ! command -v node >/dev/null 2>&1 || ! command -v wasm-tools >/dev/null 2>&1; then

@@ -309,6 +309,10 @@ test "Host requires a syntactically valid authority" =
   expectTrue
     (rejects "valid authority" (toUtf8 "GET / HTTP/1.1\r\nHost: bad host\r\n\r\n") && rejects "valid authority" (toUtf8 "GET / HTTP/1.1\r\nHost: pds.example:not-a-port\r\n\r\n") && isOk (parseRequest (toUtf8 "GET / HTTP/1.1\r\nHost: [2001:db8::1]:2583\r\n\r\n")))
 
+test "Host accepts explicit empty reg-name and IP-literal ports" =
+  expectTrue
+    (isOk (parseRequest (toUtf8 "GET / HTTP/1.1\r\nHost: example.com:\r\n\r\n")) && isOk (parseRequest (toUtf8 "GET / HTTP/1.1\r\nHost: [::1]:\r\n\r\n")))
+
 test "malformed Connection token list is rejected" =
   expectTrue (rejects
     "Connection"

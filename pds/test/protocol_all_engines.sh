@@ -34,6 +34,8 @@ CELL raw-opaque PASS media=application/octet-stream bytes=exact state=unchanged
 CELL procedure-params PASS repeated=true empty=true order=preserved state=unchanged
 CELL uppercase-authority-lookup PASS returned=Com.Example.query.caseFixed state=unchanged
 CELL authority-duplicate-identity PASS folded-authority=true method-case=distinct
+CELL host-empty-reg-port PASS status=200 state=unchanged
+CELL host-empty-ip-port PASS status=200 state=unchanged
 CELL unknown-unchanged PASS status=404 state=unchanged
 CELL resource-unchanged PASS status=413 state=unchanged
 TOTAL: PASS
@@ -54,6 +56,8 @@ check_cells() {
   grep -F -q 'CELL procedure-params PASS repeated=true empty=true order=preserved state=unchanged' "$output" || fail "$label missed procedure-params cell"
   grep -F -q 'CELL uppercase-authority-lookup PASS returned=Com.Example.query.caseFixed state=unchanged' "$output" || fail "$label missed uppercase-authority lookup cell"
   grep -F -q 'CELL authority-duplicate-identity PASS folded-authority=true method-case=distinct' "$output" || fail "$label missed authority identity cell"
+  grep -F -q 'CELL host-empty-reg-port PASS status=200 state=unchanged' "$output" || fail "$label missed empty reg-name port cell"
+  grep -F -q 'CELL host-empty-ip-port PASS status=200 state=unchanged' "$output" || fail "$label missed empty IP-literal port cell"
   grep -F -q 'CELL unknown-unchanged PASS status=404 state=unchanged' "$output" || fail "$label missed unknown-route cell"
   grep -F -q 'CELL resource-unchanged PASS status=413 state=unchanged' "$output" || fail "$label missed resource cell"
   cmp "$WORK/expected.out" "$output" || fail "$label output differs from hand-authored cells"
@@ -89,8 +93,8 @@ import pathlib
 import sys
 
 path = pathlib.Path(sys.argv[1])
-old = 'response == expectedTextResponse 200 "OK" "raw-text"'
-new = 'response == expectedTextResponse 200 "OK" "raw-text-mutated"'
+old = 'if response == expectedTextResponse 200 "OK" "fixed" && storeSize next == 1'
+new = 'if response == expectedTextResponse 201 "Created" "fixed" && storeSize next == 1'
 text = path.read_text()
 if text.count(old) != 1:
     raise SystemExit(f'mutation anchor count is {text.count(old)}, expected 1')
@@ -102,15 +106,15 @@ MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/mutation-tree/pds/tes
   fail 'state-update mutation failed to build'
 }
 if "$WORK/mutated-native" > "$WORK/mutated.out" 2>&1; then
-  fail 'repaired raw-input mutation unexpectedly passed'
+  fail 'empty-port mutation unexpectedly passed'
 fi
-grep -F -q 'protocol_all_engines: raw-text mismatch' "$WORK/mutated.out" || {
+grep -F -q 'protocol_all_engines: empty reg-name port mismatch' "$WORK/mutated.out" || {
   cat "$WORK/mutated.out" >&2
-  fail 'repaired raw-input mutation failed for an unrelated reason'
+  fail 'empty-port mutation failed for an unrelated reason'
 }
 
 cp "$ROOT/pds/test/protocol_all_engines_main.mdk" "$WORK/mutation-tree/pds/test/protocol_all_engines_main.mdk"
 cmp "$ROOT/pds/test/protocol_all_engines_main.mdk" "$WORK/mutation-tree/pds/test/protocol_all_engines_main.mdk"
 
-echo 'MUTATION repaired-raw-assertion PASS direct-red'
-echo 'PASS: PDS protocol core — 14/14 named cells; eval == native == Wasm; direct-red mutation; bytes restored'
+echo 'MUTATION empty-port-assertion PASS direct-red'
+echo 'PASS: PDS protocol core — 16/16 named cells; eval == native == Wasm; direct-red mutation; bytes restored'
