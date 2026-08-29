@@ -23,16 +23,35 @@
 #
 # `shard` is the ci.yml `gates` job-matrix ROW this gate runs in, and
 # `[[shard]]` (at the bottom of this file) is that row's runner options and
-# placement rationale. Together they are the scheduling facts the hand-written
-# matrix at `.github/workflows/ci.yml:471-696` holds today and this registry
-# did not: which row, with what options, and why.
+# provenance. Together they are the scheduling facts the hand-written matrix in
+# `.github/workflows/ci.yml` used to hold and this registry did not: which row,
+# with what options, and why.
 #
-# ⚠️ HAND-ASSIGNED DATA, NOT A DERIVED OUTPUT. Every value here was DERIVED
-# FROM the current matrix (each row's `pattern:` list resolved through
-# run_gates.sh's own two-glob rule) and is set-equal to it, row by row — it
-# reproduces today's placement, it does not choose one. The balancer (#2178)
-# is what will eventually CHOOSE these values; until then nothing computes
-# them and they must be edited by hand alongside ci.yml.
+# ⚠️ DERIVED OUTPUT, NOT HAND-ASSIGNED DATA (S-4, #2178). DO NOT EDIT A
+# `shard` VALUE BY HAND. Every one of them is chosen by
+#
+#     medaka gate balance          # packs gates onto rows from measured cost
+#     make gen-ci                  # regenerates ci.yml's matrix to match
+#
+# from the per-gate costs in test/gate_cost_baseline.json, subject to each
+# row's toolchain (`wasm_arm`) and closure (`full_cores`) flags, and to an
+# enforced pole/median budget. Run those two commands, in that order, and
+# commit both files together — committing one without the other reds the
+# required test/diff_compiler_ci_shard_coverage.sh by construction.
+#
+# A hand edit REDS A REQUIRED CHECK. `test/diff_compiler_ci_gen_drift.sh` (the
+# required `ci-gen-drift` context) runs BOTH halves: `medaka gate ci --check`
+# proves ci.yml agrees with this file, and `medaka gate balance --check` proves
+# this file agrees with the cost baseline. The first alone is satisfied by a
+# self-consistent hand edit — edit `shard`, run `make gen-ci`, and the registry
+# and the workflow agree with each other about a row nothing derived. The
+# second is what closes that.
+#
+# A NEW `[[gate]]` still needs SOME `shard` value — the schema requires the
+# field and it cannot be omitted pending the next balancer run. Write the row
+# you would guess (or `other-job` if some job outside the matrix runs it); the
+# balancer, not you, decides where it actually lands, and the required check
+# above will tell you before CI does.
 #
 # `shard` is REQUIRED on every entry and is one of the eight row names —
 # `engines sqlite pds frontend types eval backend tools` (these are also
@@ -54,14 +73,19 @@
 #   full_cores  the row's `full_cores: "1"` matrix key (absent in ci.yml when
 #               false — a bool here, emitted as the key only when true)
 #   wasm_arm    likewise the row's `wasm_arm: "1"` key
-#   rationale   PATH to a plain-text file holding that row's placement prose,
-#               verbatim, one line per line: test/gate_shards/<name>.txt
+#   rationale   PATH to a plain-text file describing that ROW — what
+#               `full_cores`/`wasm_arm` mean for it and which gates it can
+#               legally take: test/gate_shards/<name>.txt. Emitted verbatim as
+#               the row's comment block in ci.yml, one line per line.
+#               ⚠️ It describes the ROW, never a gate's placement — placement
+#               is the balancer's output and changes whenever the baseline
+#               does, so prose narrating it would rot on every re-ingest.
 #
 # The prose lives in a file rather than in this TOML because the reader's TOML
 # subset has no multi-line string (a `"""` is a hard parse error, by design),
-# and rather than staying a hand-edited region of ci.yml because ci.yml is
-# about to become a GENERATED file — a generated artifact with hand-edited
-# islands is the hybrid this epic exists to remove. `.txt`, not `.md`, keeps
+# and rather than staying a hand-edited region of ci.yml because ci.yml is now
+# a GENERATED file — a generated artifact with hand-edited islands is the
+# hybrid this epic exists to remove. `.txt`, not `.md`, keeps
 # it out of the markdown link/symbol gates, which would police prose that is
 # deliberately a verbatim copy of shell/YAML commentary.
 #

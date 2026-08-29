@@ -107,15 +107,40 @@ A gate matching `test/diff_compiler_*.sh` but not enrolled in `test/gates.toml` 
 `shard` field) SILENTLY NEVER RUNS — `medaka gate verify` (via
 `test/diff_compiler_gate_registry.sh`) catches it; it owns ENROLMENT, while
 `diff_compiler_ci_shard_coverage.sh` owns CI REACHABILITY of what is already enrolled. Enrol
-it in `test/gates.toml`, then run `make gen-ci` to regenerate `ci.yml`'s shard matrix. 🚨 That
-check's input is the TREE, not `test/`, so a `.sh` you add ANYWHERE trips it. If a script
-isn't a gate, add a `test/CI-COVERAGE-EXCEPTIONS.txt` row with a reason, not a rename.
+it in `test/gates.toml`, then run `medaka gate balance` and `make gen-ci` and commit both
+files together. 🚨 That check's input is the TREE, not `test/`, so a `.sh` you add ANYWHERE
+trips it. If a script isn't a gate, add a `test/CI-COVERAGE-EXCEPTIONS.txt` row with a
+reason, not a rename.
 
-**[W-SHARD-COST]** Shards are scheduled by cost, not theme — put a new gate's `shard` field
-where there is room. 🚨 Never trust a shard-cost ranking; derive it, every time:
+🚨 **[W-SHARD-COST] `shard` is a DERIVED OUTPUT — you do not choose it, and a hand edit
+reds a REQUIRED check** (#2178). Rows are filled by measured cost, never by theme, and the
+thing doing the filling is `medaka gate balance`: it packs every schedulable gate onto the
+open rows from the per-gate costs in `test/gate_cost_baseline.json`, honouring each row's
+`wasm_arm` toolchain constraint and `full_cores` closure and an enforced pole/median budget.
+
+A new `[[gate]]` still needs SOME `shard` string — the schema requires the field and it
+cannot be left pending. **Write any row name you like (or `other-job` if a job outside the
+`gates` matrix runs it), then let the tool place it:**
+```sh
+medaka gate balance      # rewrites every `shard` value from measured cost
+make gen-ci              # regenerates ci.yml's matrix to match
+```
+Commit both files in ONE commit — committing either alone reds the required
+`diff_compiler_ci_shard_coverage.sh` by construction.
+
+⚠️ **Running `make gen-ci` after a hand edit does NOT make it legitimate.** That only makes
+the registry and the workflow agree with each other about a row nothing derived, which
+`medaka gate ci --check` is happy with. The required `ci-gen-drift` context also runs
+`medaka gate balance --check`, which compares the committed assignment against the one the
+baseline derives — that is what catches it, and its message names the offending gate.
+
+🚨 Never trust a shard-cost ranking in prose; derive it, every time:
 ```sh
 gh run view <id> --json jobs --jq '.jobs[]|select(.name|startswith("gates"))|{name,s:((.completedAt|fromdate)-(.startedAt|fromdate))}'
 ```
+The registry's own view of the same question, with no network:
+`medaka gate balance --check` prints the projected per-row totals, the pole, the median and
+the enforced target.
 
 Incident narrative for every `[G-*]` and `[WT-*]` item above: `.claude/dossier/gates.md`
 and `.claude/dossier/traps.md`.

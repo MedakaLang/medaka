@@ -306,18 +306,35 @@ own place in the bootstrap, for no gain — §5's circularity is unchanged eithe
 
 ### Still open
 
-- **`shard` is HAND-ASSIGNED DATA AWAITING THE BALANCER, not a derived output.**
-  S-1 of #2177 transcribed the eight row memberships and their `full_cores`/
-  `wasm_arm` options out of ci.yml's hand-written matrix and proved them set-equal
-  to it, row by row, with no sampling; it did not choose a single placement.
-  #2178 is what will CHOOSE these values, and when it does it becomes this field's
-  writer — until then the field must be hand-edited in step with ci.yml, and
-  nothing may read it as if a balancer had produced it. Two consequences worth
-  naming: (a) until S-2 generates ci.yml, the per-row prose exists TWICE — in
-  `test/gate_shards/*.txt` and still as comments in ci.yml — and can drift; (b) no
-  gate enforces the row-membership set-equality yet, it was proved once by
-  measurement in S-1's report. Both close when S-2's generated ci.yml makes the
-  registry the only copy.
+- ~~**`shard` is HAND-ASSIGNED DATA AWAITING THE BALANCER, not a derived output.**~~
+  **CLOSED (S-4-S-derived-assignment, #2178)** — `shard` is now a DERIVED OUTPUT.
+  `medaka gate balance` (`compiler/tools/gate_cmd.mdk`) packs every schedulable
+  gate onto the open rows from the per-gate costs in
+  `test/gate_cost_baseline.json`, subject to each row's `wasm_arm` toolchain
+  constraint and `full_cores` closure and to an enforced pole/median budget, and
+  writes the `shard` values back; `make gen-ci` (`medaka gate ci`) then
+  regenerates ci.yml's matrix from them. The landed rebalance moved 164 of 202
+  gates and took the pole from 1143.6s to 948.9s (pole/median 1.26 -> 1.073);
+  948.9s is the pole FLOOR, since gates are indivisible and one gate alone costs
+  that.
+
+  The three loose ends named here all close with it. (a) The per-row prose exists
+  ONCE, in `test/gate_shards/*.txt`, emitted verbatim into the generated region —
+  and it now describes the ROW (its options, its constraint) rather than any
+  gate's placement, because placement is an output that moves whenever the
+  baseline does. (b) Row membership is enforced, not proved once: the required
+  `ci-gen-drift` context runs `medaka gate ci --check` (ci.yml == f(registry))
+  AND `medaka gate balance --check` (registry == g(baseline)). (c) A hand edit
+  reds. ⚠️ The first check ALONE does not catch one — edit `shard`, run
+  `make gen-ci`, and the registry and the workflow agree with each other about a
+  row nothing derived; the second is what closes that, and it is why S-3's
+  hysteresis band no longer decides what is written (a band that keeps a
+  divergent-but-close assignment makes "the derived assignment" a set, and a
+  check can only police a value).
+
+  A new `[[gate]]` still needs SOME `shard` value — the schema requires the field.
+  Write the row you would guess, or `other-job`; the balancer decides the real
+  placement on its next run, and the required check says so before CI does.
 - ~~`medaka gate verify` does NOT check that a `shard` value is one of the eight row
   names or `other-job`.~~ **CLOSED (S-4, #2177)** — but in the coverage gate, not in
   `verify`: `test/diff_compiler_ci_shard_coverage.sh` reds on a `shard` that is

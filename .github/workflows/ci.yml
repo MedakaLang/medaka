@@ -522,203 +522,143 @@ jobs:
           # resolves to through run_gates.sh's two-glob rule is unchanged.
           # GENERATED:BEGIN gates-matrix — `make gen-ci` (medaka gate ci) from test/gates.toml. DO NOT EDIT BY HAND.
           - name: engines
-            # `diff_compiler_engines` is the single most expensive gate in the
-            # suite and irreducible — every fixture pays a full `medaka build` +
-            # clang, on THREE engines. `full_cores` gives it the whole box rather than the
-            # gate's own ENGINE_JOBS=NCPU/2 hedge (right when sharing a runner,
-            # wasteful when not — it doesn't, here). `wasm_arm` (#597) installs
-            # wasm-tools + Node and builds the Wasm oracle so this gate's T2/T3
-            # tiers actually run; MEDAKA_REQUIRE_WASM=1 makes a degraded run a hard
-            # fail so the wiring cannot silently rot back. diff_compiler_rejection_parity
-            # (#709) and Phase 2's focused PDS protocol gate ride along here,
-            # needing the same toolchain. The protocol gate was placed after
-            # re-deriving the available `wasm_arm` rows with the cost tool; its
-            # local timing is recorded in the sprint report.
-            # Re-derive current cost/critical-path: `sh scripts/ci_shard_cost.sh`.
+            # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
+            # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
+            # regenerated into this matrix by `make gen-ci`; it changes whenever the
+            # baseline does, so nothing below names a gate. What this row is:
+            #
+            # full_cores = true  -> the whole runner, and CLOSED TO THE PACKER. Gates
+            # whose `shard` says `engines` stay here; the balancer never moves one in
+            # or out. That is deliberate: `diff_compiler_engines` is irreducible (every
+            # fixture pays a full `medaka build` + clang, on THREE engines) and wants
+            # the box rather than its own ENGINE_JOBS=NCPU/2 hedge. The cost is that
+            # this row runs below the median row load by construction — re-examine the
+            # closure if that gap ever stops being worth it.
+            #
+            # wasm_arm = true  -> installs wasm-tools + Node and builds the Wasm
+            # oracle, so this row's T2/T3 tiers actually run; MEDAKA_REQUIRE_WASM=1
+            # makes a degraded run a hard fail rather than a quiet skip.
+            #
+            # The row NAME is a required status-check context (`gates (engines)`), so
+            # renaming it is a ruleset change, not an edit here.
             pattern: "'pds/test/protocol_all_engines' 'diff_compiler_engines' 'diff_compiler_rejection_parity'"
             full_cores: "1"
             wasm_arm: "1"
           - name: sqlite
-            # #1929: this row used to carry ALL 43 sqlite/gzip/pds oracle+vector gates
-            # and was the CI pole, well above `wasm`, the next-slowest job — see the
-            # spike report for `S-sqlite-rebalance`. That whole family is now
-            # SPLIT across the other five non-`engines` `gates` rows, each placed by
-            # measured per-gate cost (local `time`, not a per-gate CI breakdown — see
-            # `S-sqlite-rebalance`'s report for the full table and the packing math),
-            # never by theme — same principle as every other row in this matrix.
-            # REPURPOSED (F-5: the job NAME must not vanish) to carry just the single
-            # heaviest gate of the lot: `pds/test/inlang_test_oracle.sh`, dwarfing
-            # every other individual sqlite/gzip/pds gate. No thematic tie to SQLite
-            # any more; kept here rather than renamed because a lone gate this heavy
-            # needs its own row headroom and this row already had none of its own.
-            # `wasm_arm` dropped — this gate doesn't read the Wasm oracle.
+            # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
+            # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
+            # regenerated into this matrix by `make gen-ci`; it changes whenever the
+            # baseline does, so nothing below names a gate. What this row is:
             #
-            # #2045 (S-ir-metric): `diff_compiler_ir_scaling` — the Cachegrind
-            # instruction-count superlinearity gate for `medaka check` — lands
-            # HERE, not next to its thematic sibling `diff_compiler_perf_scaling`
-            # in `types`. Placed by measured cost, as this matrix requires:
-            # `sh scripts/ci_shard_cost.sh` over 5 green merge_group runs at the
-            # base of that slice read
-            #   backend 527s (pole) | frontend 512s | tools 468s | eval 468s
-            #   | engines 446s | types 426s | sqlite 381s (cheapest)
-            # and the gate costs ~90 s locally (8 sequential cachegrind runs at
-            # ~20x native; single-threaded by design, no fan-out knob). Putting it
-            # in `types` would make that shard ~516s and put it within noise of the
-            # pole; here it lands ~470s, still comfortably under `backend`. It
-            # reads NO oracle (`build_oracles.sh --for` reports "needs no
-            # oracles"), so the shard's oracle build is unaffected.
+            # full_cores = false, wasm_arm = false -> an ordinary shared runner with
+            # no extra toolchain, fully open to the packer. It can take any gate that
+            # does not require the Wasm toolchain, and the balancer fills it to the
+            # same target load as every other open row.
+            #
+            # The row NAME is a required status-check context (`gates (sqlite)`), so
+            # renaming it is a ruleset change, not an edit here — and it carries no
+            # thematic meaning: rows are filled by measured cost, never by theme.
             pattern: "'diff_compiler_ci_shard_coverage' 'lsp_harness' 'pds/test/ecdsa_vectors' 'pds/test/trust_boundary_guards' 'sqlite/test/dml_oracle' 'sqlite/test/index_write_oracle' 'sqlite/test/writer_oracle' 'check_build_oracles_for_consistency' 'diff_compiler_check_cli_modules' 'diff_compiler_check_match' 'diff_compiler_core_ir_roundtrip' 'diff_compiler_core_ir' 'diff_compiler_dict_semantics' 'diff_compiler_dispatch_shape' 'diff_compiler_draft_semantic' 'diff_compiler_eval_prelude' 'diff_compiler_eval_run' 'diff_compiler_eval_typed_modules' 'diff_compiler_flat_vs_onemodule' 'diff_compiler_fmt_write_safety' 'diff_compiler_lint_cache' 'diff_compiler_new' 'diff_compiler_os_entropy' 'diff_compiler_perf_stage_census' 'diff_compiler_project_enrolment' 'diff_compiler_references_scaling' 'diff_compiler_repl' 'diff_compiler_run_stdout_flush' 'diff_compiler_shadow_semantics' 'diff_compiler_snapshot_frontend' 'diff_compiler_snapshot_prelude' 'effect_param_domain' 'selfcompile_build_fixpoint' 'selfcompile_emit'"
           - name: pds
-            # Phase 1 data-model gates are isolated here because each has a
-            # required Wasm arm and the repo gate carries a bounded interpreter
-            # discriminator. Keep this list explicit: later PDS phases must be
-            # placed from measured cost, not inherited through a broad glob.
+            # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
+            # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
+            # regenerated into this matrix by `make gen-ci`; it changes whenever the
+            # baseline does, so nothing below names a gate. What this row is:
+            #
+            # wasm_arm = true  -> installs wasm-tools + Node and builds the Wasm
+            # oracle. This is one of only two OPEN rows that carry it (the other is
+            # `tools`), so it is one of only two rows a wasm-constrained gate can
+            # legally land on — the balancer treats that as a hard constraint, never
+            # as a cost, and refuses to pack rather than schedule such a gate where
+            # its toolchain is absent.
+            #
+            # full_cores = false, so the row shares a runner and the balancer may put
+            # any number of gates here. In practice it often holds very few: the
+            # single most expensive gate in the suite has to sit somewhere, and a row
+            # already at the pole cannot take another gate without raising it.
+            #
+            # The row NAME is a required status-check context (`gates (pds)`), so
+            # renaming it is a ruleset change, not an edit here — and it no longer
+            # implies a thematic tie to the PDS project.
             pattern: "'pds/test/repo_vectors'"
             wasm_arm: "1"
           - name: frontend
-            # `native_fixtures/run` (T8) sits one directory below `test/`, so even
-            # the coverage gate's `test/*.sh` glob could not see it — it ran
-            # nowhere. `build_construct_coverage` (T-3, a BACKEND gate) and
-            # `diff_compiler_wasm_shim_parity` (#370, a WASM gate) and
-            # `diff_compiler_preflight_base` (#560, pure git) and
-            # `diff_compiler_dict_semantics` (#616, a TYPES gate) are all parked
-            # here by cost, not theme — each noted at length in dossier `ci.md`;
-            # the short version is this shard has the room and each of them is
-            # free-to-cheap wherever it lands.
+            # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
+            # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
+            # regenerated into this matrix by `make gen-ci`; it changes whenever the
+            # baseline does, so nothing below names a gate. What this row is:
+            #
+            # full_cores = false, wasm_arm = false -> an ordinary shared runner with
+            # no extra toolchain, fully open to the packer. It can take any gate that
+            # does not require the Wasm toolchain, and the balancer fills it to the
+            # same target load as every other open row.
+            #
+            # The row NAME is a required status-check context (`gates (frontend)`), so
+            # renaming it is a ruleset change, not an edit here — and it carries no
+            # thematic meaning: rows are filled by measured cost, never by theme.
             pattern: "'build_cmd' 'byteparser/test/check' 'pds/test/constant_time_public_key' 'pds/test/constant_time_signing' 'pds/test/rfc6979_vectors' 'pds/test/sha256_vectors' 'pds/test/signing_corpus' 'sqlite/test/groupby_oracle' 'sqlite/test/multitable_write_oracle' 'sqlite/test/projection_oracle' 'sqlite/test/sql_oracle' 'bootstrap_eval' 'bootstrap_resolve' 'diff_compiler_anf_identity' 'diff_compiler_check_policy' 'diff_compiler_core_ir_run' 'diff_compiler_doc' 'diff_compiler_eval_list' 'diff_compiler_eval_scaling' 'diff_compiler_iface_order' 'diff_compiler_ir_scaling' 'diff_compiler_lint_fix' 'diff_compiler_lint_multi' 'diff_compiler_lint' 'diff_compiler_llvm' 'diff_compiler_llvm_typed' 'diff_compiler_lsp' 'diff_compiler_parse_error_loc' 'diff_compiler_prelude_obj' 'diff_compiler_run_entry_subdir' 'diff_compiler_snapshot_bless' 'diff_compiler_tmc_parity' 'effect_builtin_param_domain' 'diff_compiler_gate_registry'"
           - name: types
-            # `diff_compiler_shadow_semantics` (the SHADOW-SEMANTICS.md decision
-            # matrix) lives here, not in `tools` beside its closest sibling
-            # `diff_compiler_run_check_agreement`, because every stage it exercises
-            # is in `compiler/types/typecheck.mdk`. Reads no oracle.
+            # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
+            # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
+            # regenerated into this matrix by `make gen-ci`; it changes whenever the
+            # baseline does, so nothing below names a gate. What this row is:
             #
-            # #1929: `gzip/test/*oracle` (both gates) plus five pds/ vector-corpus
-            # gates that fit neither of the two pds glob buckets moved to
-            # `backend`/`tools` (they're not `constant_time_*` and don't end in
-            # `_vectors`) land here by cost, cheapest destination with room after the
-            # heavier chunks were placed — see `S-sqlite-rebalance`'s report.
+            # full_cores = false, wasm_arm = false -> an ordinary shared runner with
+            # no extra toolchain, fully open to the packer. It can take any gate that
+            # does not require the Wasm toolchain, and the balancer fills it to the
+            # same target load as every other open row.
             #
-            # S-build-ir-arm: `diff_compiler_stage_ir_scaling` — the PER-STAGE
-            # Callgrind superlinearity gate for the BUILD path — lands here, and
-            # unusually for this matrix the placement is by cost AND by a real
-            # dependency. Baseline cost: `sh scripts/ci_shard_cost.sh` over 5 green
-            # merge_group runs at the base of that slice read
-            #   backend 639s (pole) | frontend 572s | sqlite 508s | eval 475s
-            #   | engines 469s | tools 465s | types 403s (cheapest)
-            # RE-TIMED 2026-08-28 (F-fixround-3), this box:
-            # `time sh test/diff_compiler_stage_ir_scaling.sh` -> 614.71s real (up
-            # from 276s when this note was written — slice 1b added the
-            # multi-module driver, +75s at landing, and slice 5 added the
-            # `gen_constrained`/`gen_wideiface` shapes, never re-timed until now;
-            # the gate is 6 shapes / 60 stage-ratios today, still single-threaded,
-            # no fan-out knob). Landing `types` at ~403s + 615s = **~1018s (~17
-            # min)** — now well ABOVE backend's 639s pole, by a wide margin
-            # (+59%), making `types` decisively the new pole. Still comfortably
-            # under this job's 40-minute (2400s) timeout, so no shard
-            # rearrangement is made here — this is a documentation update, not a
-            # rebalance. Dependency: it reads
-            # `test/bin/profile_main`, which
-            # `diff_compiler_perf_scaling` in THIS shard already builds, so its
-            # marginal oracle cost here is ZERO and would not be anywhere else.
-            # NOT merged into `diff_compiler_ir_scaling`'s row in `sqlite`: that
-            # gate is ~509s on its own, against a 600s foreground ceiling.
+            # The row NAME is a required status-check context (`gates (types)`), so
+            # renaming it is a ruleset change, not an edit here — and it carries no
+            # thematic meaning: rows are filled by measured cost, never by theme.
             pattern: "'diff_compiler_eval_modules' 'sqlite/test/select_oracle' 'gzip/test/deflate_oracle' 'pds/test/inlang_test_oracle' 'sqlite/test/aggregate_oracle' 'sqlite/test/delete_oracle' 'sqlite/test/multipage_write_oracle' 'sqlite/test/update_expr_oracle' 'bootstrap_lex' 'check_syntax_examples' 'cross_project_twonames' 'diff_compiler_analyze_project' 'diff_compiler_build' 'diff_compiler_check_modules' 'diff_compiler_ci_guard_failsafe' 'diff_compiler_core_ir_modules' 'diff_compiler_core_ir_prelude' 'diff_compiler_core_ir_typed_modules' 'diff_compiler_core_ir_typed' 'diff_compiler_diagnostics' 'diff_compiler_effect_param' 'diff_compiler_effect_polarity' 'diff_compiler_eval_typed_batch' 'diff_compiler_exhaust' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_fmt_roundtrip' 'diff_compiler_import_order' 'diff_compiler_lex_files' 'diff_compiler_lint_crossfile' 'diff_compiler_mcp' 'diff_compiler_snapshot_core_ir' 'diff_compiler_stack_overflow' 'diff_compiler_test_native' 'diff_compiler_test_typecheck'"
           - name: eval
-            # The 4 `bootstrap_*` stage gates are named individually, NOT globbed
-            # as `bootstrap_*` — that glob also catches `bootstrap_from_seed.sh`,
-            # which `seed-health` already owns. Everything else in this shard's
-            # pattern beyond the `diff_compiler_eval*`/`core_ir*` families
-            # (dispatch_shape, prelude_obj, slice_oob, ir_size, origin_agreement,
-            # draft_semantic, anf_identity, import_order, test_native,
-            # flat_vs_onemodule) is a BACKEND/FRONTEND/TYPES gate parked here by
-            # cost, not theme, each measured and re-measured over many merge_group
-            # runs — full placement history in dossier `ci.md`. Several share
-            # oracle overlap with `core_ir_modules`/`eval_modules`, which this
-            # shard already builds, so their true marginal cost is smaller than a
-            # fresh oracle build elsewhere would be.
+            # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
+            # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
+            # regenerated into this matrix by `make gen-ci`; it changes whenever the
+            # baseline does, so nothing below names a gate. What this row is:
             #
-            # #1929: `sqlite/test/*oracle` (the 24 SQLite differential gates diffing
-            # against the real sqlite3 CLI) moved here by cost — see
-            # `S-sqlite-rebalance`'s report. NOTE the glob is `'*oracle'`, not
-            # `'*_oracle'`: one gate is plain `oracle.sh`, not `<name>_oracle.sh` — the
-            # narrower glob silently drops it.
+            # full_cores = false, wasm_arm = false -> an ordinary shared runner with
+            # no extra toolchain, fully open to the packer. It can take any gate that
+            # does not require the Wasm toolchain, and the balancer fills it to the
+            # same target load as every other open row.
+            #
+            # The row NAME is a required status-check context (`gates (eval)`), so
+            # renaming it is a ruleset change, not an edit here — and it carries no
+            # thematic meaning: rows are filled by measured cost, never by theme.
             pattern: "'diff_compiler_parse_result' 'diff_compiler_prose_classifier' 'pds/test/scalar_vectors' 'pds/test/vector_provenance' 'sqlite/test/distinct_oracle' 'sqlite/test/left_join_oracle' 'sqlite/test/oracle' 'sqlite/test/rowid_roundtrip_oracle' 'sqlite/test/typed_oracle' 'sqlite/test/update_oracle' 'sqlite/test/writer_api_oracle' 'cross_project_deps' 'diff_compiler_capability_matrix' 'diff_compiler_eval_dict_batch' 'diff_compiler_eval_json' 'diff_compiler_eval_run_batch' 'diff_compiler_fmt' 'diff_compiler_index_oob' 'diff_compiler_lint_multi_dir' 'diff_compiler_llvm_ffi' 'diff_compiler_parse_errors' 'diff_compiler_ported' 'diff_compiler_preflight_base' 'diff_compiler_references_tool' 'diff_compiler_rt_obj' 'diff_compiler_run_check_agreement' 'diff_compiler_snapshot_types' 'diff_compiler_stage_ir_scaling' 'diff_compiler_test' 'diff_compiler_typecheck_errors' 'diff_native_cli' 'effect_product_domain' 'native_fixtures/run'"
           - name: backend
-            # `build_cmd` (T8) is the end-to-end gate for the SHIPPING `medaka
-            # build` CLI — 14 real programs, stdout diffed against a committed
-            # golden. It was once misfiled as a "build helper" in
-            # CI-COVERAGE-TOOLS.txt (a false claim that running it proves nothing
-            # about the compiler), which made the coverage gate subtract it from
-            # its own scope and certify full coverage while nothing invoked it —
-            # see dossier `ci.md` for the incident it would have caught.
-            # `diff_compiler_index_oob` (#1787) is parked here by cost, its nearest
-            # sibling by shape (`diff_compiler_slice_oob`) sitting in `eval`
-            # instead because the cost ranking has inverted more than once —
-            # re-derive with `scripts/ci_shard_cost.sh` before moving either.
+            # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
+            # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
+            # regenerated into this matrix by `make gen-ci`; it changes whenever the
+            # baseline does, so nothing below names a gate. What this row is:
             #
-            # Legacy PDS vector gates remain here by cost. They are named
-            # explicitly so Phase 1's required-Wasm gates belong only to the
-            # dedicated `pds` row above; coverage classification fails closed
-            # when a future gate has no deliberate placement.
+            # full_cores = false, wasm_arm = false -> an ordinary shared runner with
+            # no extra toolchain, fully open to the packer. It can take any gate that
+            # does not require the Wasm toolchain, and the balancer fills it to the
+            # same target load as every other open row.
+            #
+            # The row NAME is a required status-check context (`gates (backend)`), so
+            # renaming it is a ruleset change, not an edit here — and it carries no
+            # thematic meaning: rows are filled by measured cost, never by theme.
             pattern: "'mq/test/check' 'pds/test/encodings_vectors' 'pds/test/field_vectors' 'pds/test/opaque_field_scalar' 'pds/test/secp256k1_point_vectors' 'pds/test/secp256k1_public_key' 'sqlite/test/delete_negative_oracle' 'sqlite/test/inlang_test_oracle' 'sqlite/test/join_oracle' 'sqlite/test/multipage_oracle' 'sqlite/test/overflow_oracle' 'bootstrap_typecheck' 'build_construct_coverage' 'diff_compiler_eval_prelude_batch' 'diff_compiler_eval' 'diff_compiler_index' 'diff_compiler_internal_extern' 'diff_compiler_ir_size' 'diff_compiler_let_refute' 'diff_compiler_llvm_modules' 'diff_compiler_lsp_b3' 'diff_compiler_lsp_b4' 'diff_compiler_origin_agreement' 'diff_compiler_perf_scaling' 'diff_compiler_prelude_shadow_census' 'diff_compiler_references_correctness' 'diff_compiler_resolve' 'diff_compiler_selfproc' 'diff_compiler_slice_oob' 'diff_compiler_snapshot_eval_errors' 'diff_compiler_snapshot_types_user' 'diff_compiler_wasm_shim_parity' 'manifest_emit' 'selfcompile_lex'"
           - name: tools
-            # `diff_compiler_mcp` (#253) and `diff_compiler_entry_exit_codes`
-            # (#440) are parked here by cost — both read no oracle and are a
-            # handful of cheap invocations, while `engines`/`backend` (the two
-            # heaviest shards) have no room to spare.
-            # `diff_compiler_test_typecheck` (#1229) is named EXPLICITLY, not
-            # globbed: its neighbour `diff_compiler_test` is an exact name, not a
-            # glob, so a new sibling would silently never run — the exact hazard
-            # `diff_compiler_ci_shard_coverage` exists to catch.
+            # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
+            # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
+            # regenerated into this matrix by `make gen-ci`; it changes whenever the
+            # baseline does, so nothing below names a gate. What this row is:
             #
-            # #1929: `pds/test/constant_time_*` (the 4 constant-time gates) moved
-            # here by cost — see `S-sqlite-rebalance`'s report.
-            # `wasm_arm` added: `constant_time_parity.sh`/`constant_time_reductions.sh`
-            # read the Wasm oracle (`MEDAKA_REQUIRE_WASM`), previously covered by the
-            # old `sqlite` row's arm. This also pulls in a wasm-oracle-build step
-            # (`sh test/wasm/build_wasm_oracle.sh --modules-only`) this row did not
-            # need before — cheap next to the marginal `setup-medaka` toolchain
-            # cost of a second `wasm_arm` row, but not free; it's headroom this row
-            # has, not headroom this row lacked before.
-            # ⚠️ Every shard-cost figure below is a HISTORICAL SNAPSHOT and has
-            # since rotted — do not plan against any of it. For the CURRENT
-            # per-shard cost, run `sh scripts/ci_shard_cost.sh`.
+            # wasm_arm = true  -> installs wasm-tools + Node and builds the Wasm
+            # oracle (`sh test/wasm/build_wasm_oracle.sh --modules-only`). This is one
+            # of only two OPEN rows that carry it (the other is `pds`), so it is one
+            # of only two rows a wasm-constrained gate can legally land on — the
+            # balancer treats that as a hard constraint, never as a cost.
             #
-            # #1933 (S-project-floor): `mq/test/check`, `parsec/test/check`,
-            # `byteparser/test/check` added here — `tools` was measured cheapest
-            # among `gates (*)` shards at the time this arm was placed. Each is a
-            # floor `./medaka check <project>/main.mdk` for a manifest-bearing
-            # project that previously ran in NO CI job.
-            # #1934 (S-derived-enrolment): `diff_compiler_project_enrolment` added
-            # here — `tools` was measured cheapest among `gates (*)` shards at the
-            # time this arm was placed, and the gate itself was sub-second. It
-            # belongs next to `diff_compiler_ci_shard_coverage`: both police the map
-            # between what exists in the tree and what CI actually runs.
-            # #1971 (S-guard-failsafe-gate): `diff_compiler_ci_guard_failsafe` added
-            # here — `tools` is the established home for this whole family of
-            # cheap, single-YAML-file-parsing meta-gates (it already holds
-            # `diff_compiler_ci_shard_coverage` and `diff_compiler_project_enrolment`,
-            # both added to this exact shard for the same reason), and this gate
-            # is the same shape: one `python3` pass over `ci.yml`, no build, no
-            # corpus, sub-second locally. Not independently re-measured via
-            # `scripts/ci_shard_cost.sh` — the marginal cost was judged negligible
-            # next to this shard's pole and its two nearest cousins already
-            # justified residence here on identical reasoning.
-            # S-shadow-census-gate (#2153): diff_compiler_prelude_shadow_census
-            # added here by measured cost -- `tools` was the cheapest `gates (*)`
-            # shard by the placement notes above at the time this arm was
-            # placed (the established home for this cheap-meta-gate family
-            # already includes ci_shard_coverage/project_enrolment/
-            # ci_guard_failsafe). Measured locally: ~90s, single-threaded, no
-            # fan-out knob (full 57-name check+run+build census). Not `types`:
-            # that shard is already documented as "decisively the new pole"
-            # at ~1018s (ci.yml's own `types` row comment).
-            # S-4-gate-verify (#2176/#2191): diff_compiler_gate_registry added
-            # here — same family as ci_shard_coverage/project_enrolment/
-            # ci_guard_failsafe/prelude_shadow_census (a cheap, single-pass
-            # meta-gate policing a map, not compiler output), and `tools` is
-            # that family's established home. Text-only, no build beyond the
-            # already-built `./medaka`; measured sub-second locally.
+            # full_cores = false: an ordinary shared runner, open to the packer.
+            #
+            # The row NAME is a required status-check context (`gates (tools)`), so
+            # renaming it is a ruleset change, not an edit here — and it no longer
+            # implies a thematic tie to the tooling gates.
             pattern: "'gzip/test/inflate_oracle' 'parsec/test/check' 'pds/test/car_vectors' 'pds/test/constant_time_parity' 'pds/test/constant_time_reductions' 'pds/test/dagcbor_cid_vectors' 'pds/test/did_key_all_engines' 'pds/test/mst_vectors' 'diff_compiler_call_arity' 'diff_compiler_check_batch' 'diff_compiler_check_json' 'diff_compiler_check' 'diff_compiler_check_wrapper_callers' 'diff_compiler_codemod' 'diff_compiler_core_ir_list' 'diff_compiler_effect_hole' 'diff_compiler_entry_exit_codes' 'diff_compiler_eval_list_batch' 'diff_compiler_llvm_symbol_collision' 'diff_compiler_llvm_typed_ir' 'diff_compiler_resolve_batch' 'diff_compiler_resolve_modules' 'diff_compiler_snapshot_eval' 'diff_compiler_snapshot_wasm_input' 'diff_compiler_source_bytes' 'diff_native_stack' 'diff_net' 'effect_set_domain' 'pr_helper_test'"
             wasm_arm: "1"
           # GENERATED:END gates-matrix

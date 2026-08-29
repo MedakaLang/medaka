@@ -191,7 +191,14 @@ suite) to avoid narrowing an unrelated ci.yml hand-edit's coverage.
   from per-gate timings recorded by the driver on green merge_group runs. Executor
   names go neutral (`gates-1`…`gates-N`) so no name can lie about contents.
 - Assignments are **committed** (generated), not computed per-run — a rebalance is a
-  reviewable diff; the balancer has hysteresis so timing noise doesn't churn it.
+  reviewable diff. ⚠️ **AS BUILT, the hysteresis band annotates rather than decides**
+  (S-4-S-derived-assignment, #2178): the emitted assignment is always the balancer's
+  target, a pure function of (rows, costs, toolchains). A band that KEEPS a committed
+  assignment differing from the target by less than its margin makes "the derived
+  assignment" a set rather than a value, and a drift check can only police a value —
+  measured, a one-gate hand edit moved the pole by 0s and `--check` called it balanced.
+  The cost of dropping it is that a cost re-ingest whose noise moves a gate now moves
+  that gate in `test/gates.toml` too; the repair is two mechanical commands.
 - The required-context rename is a 3-step ruleset migration (add new contexts → swap →
   delete old); a ruleset edit is not atomic with a commit — plan it as its own PR
   pair. Oracle-cache keys keep the derive-from-pattern property or re-key
@@ -288,8 +295,11 @@ same slice as an enrolment change.
   everything. Mitigation: the drift + enrolment gates are independent text-only
   checks; fail-open is enumerated per mechanism, and fault-injection tests (a
   deliberately broken selector must produce a FULL run) are acceptance criteria.
-- **Balancer churn**: committed assignments + hysteresis; a rebalance is a reviewed
-  diff, not ambient motion.
+- **Balancer churn**: committed assignments; a rebalance is a reviewed diff, not
+  ambient motion. ⚠️ Hysteresis was NOT the mitigation that survived — see §3.3: it
+  is the churn damper that a hand-edit check cannot coexist with. What bounds churn
+  instead is that the cost baseline is a committed file re-ingested deliberately, so
+  a reshuffle only ever arrives inside a commit someone chose to make.
 - **Ruleset migrations** (neutral names, any new required context): never atomic with
   a commit; always add → swap → delete, and read the ruleset back after every edit
   ([W-GH-WRITE-VERIFY]).

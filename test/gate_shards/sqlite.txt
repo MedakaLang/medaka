@@ -1,28 +1,13 @@
-#1929: this row used to carry ALL 43 sqlite/gzip/pds oracle+vector gates
-and was the CI pole, well above `wasm`, the next-slowest job — see the
-spike report for `S-sqlite-rebalance`. That whole family is now
-SPLIT across the other five non-`engines` `gates` rows, each placed by
-measured per-gate cost (local `time`, not a per-gate CI breakdown — see
-`S-sqlite-rebalance`'s report for the full table and the packing math),
-never by theme — same principle as every other row in this matrix.
-REPURPOSED (F-5: the job NAME must not vanish) to carry just the single
-heaviest gate of the lot: `pds/test/inlang_test_oracle.sh`, dwarfing
-every other individual sqlite/gzip/pds gate. No thematic tie to SQLite
-any more; kept here rather than renamed because a lone gate this heavy
-needs its own row headroom and this row already had none of its own.
-`wasm_arm` dropped — this gate doesn't read the Wasm oracle.
+ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
+(`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
+regenerated into this matrix by `make gen-ci`; it changes whenever the
+baseline does, so nothing below names a gate. What this row is:
 
-#2045 (S-ir-metric): `diff_compiler_ir_scaling` — the Cachegrind
-instruction-count superlinearity gate for `medaka check` — lands
-HERE, not next to its thematic sibling `diff_compiler_perf_scaling`
-in `types`. Placed by measured cost, as this matrix requires:
-`sh scripts/ci_shard_cost.sh` over 5 green merge_group runs at the
-base of that slice read
-  backend 527s (pole) | frontend 512s | tools 468s | eval 468s
-  | engines 446s | types 426s | sqlite 381s (cheapest)
-and the gate costs ~90 s locally (8 sequential cachegrind runs at
-~20x native; single-threaded by design, no fan-out knob). Putting it
-in `types` would make that shard ~516s and put it within noise of the
-pole; here it lands ~470s, still comfortably under `backend`. It
-reads NO oracle (`build_oracles.sh --for` reports "needs no
-oracles"), so the shard's oracle build is unaffected.
+full_cores = false, wasm_arm = false -> an ordinary shared runner with
+no extra toolchain, fully open to the packer. It can take any gate that
+does not require the Wasm toolchain, and the balancer fills it to the
+same target load as every other open row.
+
+The row NAME is a required status-check context (`gates (sqlite)`), so
+renaming it is a ruleset change, not an edit here — and it carries no
+thematic meaning: rows are filled by measured cost, never by theme.

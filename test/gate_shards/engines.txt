@@ -1,13 +1,19 @@
-`diff_compiler_engines` is the single most expensive gate in the
-suite and irreducible — every fixture pays a full `medaka build` +
-clang, on THREE engines. `full_cores` gives it the whole box rather than the
-gate's own ENGINE_JOBS=NCPU/2 hedge (right when sharing a runner,
-wasteful when not — it doesn't, here). `wasm_arm` (#597) installs
-wasm-tools + Node and builds the Wasm oracle so this gate's T2/T3
-tiers actually run; MEDAKA_REQUIRE_WASM=1 makes a degraded run a hard
-fail so the wiring cannot silently rot back. diff_compiler_rejection_parity
-(#709) and Phase 2's focused PDS protocol gate ride along here,
-needing the same toolchain. The protocol gate was placed after
-re-deriving the available `wasm_arm` rows with the cost tool; its
-local timing is recorded in the sprint report.
-Re-derive current cost/critical-path: `sh scripts/ci_shard_cost.sh`.
+ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
+(`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
+regenerated into this matrix by `make gen-ci`; it changes whenever the
+baseline does, so nothing below names a gate. What this row is:
+
+full_cores = true  -> the whole runner, and CLOSED TO THE PACKER. Gates
+whose `shard` says `engines` stay here; the balancer never moves one in
+or out. That is deliberate: `diff_compiler_engines` is irreducible (every
+fixture pays a full `medaka build` + clang, on THREE engines) and wants
+the box rather than its own ENGINE_JOBS=NCPU/2 hedge. The cost is that
+this row runs below the median row load by construction — re-examine the
+closure if that gap ever stops being worth it.
+
+wasm_arm = true  -> installs wasm-tools + Node and builds the Wasm
+oracle, so this row's T2/T3 tiers actually run; MEDAKA_REQUIRE_WASM=1
+makes a degraded run a hard fail rather than a quiet skip.
+
+The row NAME is a required status-check context (`gates (engines)`), so
+renaming it is a ruleset change, not an edit here.
