@@ -174,3 +174,5 @@ REF	test/diff_compiler_eval_typed.sh	migrated into the snapshot # EVAL section i
 
 # ── REF: pds/ — #1722 widened the bare-path matcher to include pds/… ────────
 REF	pds/main.mdk	pds/README.md documents the intentional ABSENCE of pds/main.mdk — pds/medaka.toml has no `entry` key on purpose, so this citation is deliberately naming a file that must not exist
+
+REF	test/README.md	GATE-REGISTRY-DESIGN.md §9 (S-4, #2200) cites this as one of `diff_compiler_prose_classifier.sh`'s 26 probe paths, deliberately naming a file that does not exist to exercise the classifier's NONDOC-vs-PROSE boundary next to `testfile.md` — not a real doc citation
