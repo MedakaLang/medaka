@@ -119,13 +119,24 @@ open rows from the per-gate costs in `test/gate_cost_baseline.json`, honouring e
 `wasm_arm` toolchain constraint and `full_cores` closure and an enforced pole/median budget.
 
 A new `[[gate]]` still needs SOME `shard` string — the schema requires the field and it
-cannot be left pending. **Write any row name you like (or `other-job` if a job outside the
-`gates` matrix runs it), then let the tool place it:**
-```sh
-medaka gate balance      # rewrites every `shard` value from measured cost
-make gen-ci              # regenerates ci.yml's matrix to match
-```
-Commit both files in ONE commit — committing either alone reds the required
+cannot be left pending. Write any row name you like (or `other-job` if a job outside the
+`gates` matrix runs it) — but 🚨 **`medaka gate balance` HARD-REFUSES (exit 1) on a
+brand-new gate**, because it has no row yet in `test/gate_cost_baseline.json`: a
+schedulable gate with no measured cost is "refusing to pack: a missing cost is not a
+cheap gate, it is an unknown one." A brand-new gate is *always* in that state until an
+unnarrowed CI run measures it — `medaka gate balance` cannot be run successfully in the
+same commit that adds the gate.
+
+The intended flow (matches what S-4 built: costs arrive only from `workflow_dispatch
+merge_group push schedule` events, folded in by `test/gate_cost_ingest.sh`, including the
+daily scheduled run in `ci.yml`): **(a) enrol the gate with a guessed `shard`, commit, and
+accept that the required `ci-gen-drift` context reds on this PR** — `medaka gate balance
+--check` will report the new gate uncosted — **until the next baseline re-ingest folds it
+in, then run `medaka gate balance && make gen-ci` as a small follow-up commit.** If you
+need a real placement before merging instead, **(b)** trigger `gh workflow run ci.yml
+--ref <branch>` on the new gate's own branch first to get an admissible-event sample, then
+re-ingest and rebalance before merging. Either way, `medaka gate balance` and `make gen-ci`
+are committed together — committing either alone reds the required
 `diff_compiler_ci_shard_coverage.sh` by construction.
 
 ⚠️ **Running `make gen-ci` after a hand edit does NOT make it legitimate.** That only makes

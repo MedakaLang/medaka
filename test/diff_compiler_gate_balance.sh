@@ -109,13 +109,13 @@ done
 # uncommitted hand-edit before the check could see it, and report green having
 # destroyed the very edit it existed to catch.
 #
-# ⚠️ NOT "the committed registry equals the balancer's output". It does not, on
-# purpose: test/gates.toml still carries S-1's HAND assignment, because the
-# derived assignment and the ci.yml matrix generated FROM it have to land in
-# one commit (test/diff_compiler_ci_shard_coverage.sh compares the two), and
-# ci.yml belongs to the next slice. That equality is S-4's check to add, once
-# it can regenerate the matrix in the same breath. What is asserted here is the
-# part that is S-3's: `--check` reads, reports and writes nothing.
+# The committed registry now IS the balancer's output (S-4, #2178): `shard` is
+# a derived field, and this run below asserts exactly that — `--check` exits 0
+# against the checked-in test/gates.toml and $ROOT/test/gate_cost_baseline.json.
+# What this block asserts is narrower than that equality alone, though:
+# `--check` reads, reports and writes nothing (S-3's non-mutating property),
+# which the byte-identical comparison right below checks independently of
+# whether the assignment itself agrees with the baseline.
 out="$TMP/real.txt"
 cp "$ROOT/test/gates.toml" "$TMP/real_before.toml"
 MEDAKA_ROOT="$ROOT" "$MEDAKA" gate balance --check >"$out" 2>&1

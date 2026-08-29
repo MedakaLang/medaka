@@ -142,14 +142,18 @@ done
 not enrolled in `test/gates.toml` (with a `shard` field) SILENTLY NEVER RUNS — caught by
 `medaka gate verify` (via `test/diff_compiler_gate_registry.sh`), which owns ENROLMENT;
 `diff_compiler_ci_shard_coverage.sh` owns CI REACHABILITY of what is already enrolled. Enrol
-it in `test/gates.toml`, then run `medaka gate balance` and `make gen-ci` and commit both
-files. ⚠️ **[W-SHARD-DERIVED] `shard` is a DERIVED OUTPUT, not a value you choose** (#2178):
-the new entry needs SOME `shard` string because the schema requires one, but `medaka gate
-balance` — not you — decides where it lands, from the measured costs in
+it in `test/gates.toml`. ⚠️ **[W-SHARD-DERIVED] `shard` is a DERIVED OUTPUT, not a value you
+choose** (#2178): the new entry needs SOME `shard` string because the schema requires one,
+but `medaka gate balance` — not you — decides where it lands, from the measured costs in
 `test/gate_cost_baseline.json`. A hand-edited `shard` reds the REQUIRED `ci-gen-drift`
 context, and it reds even if you also ran `make gen-ci` to keep `ci.yml` consistent with it.
-Registration rules, the `test/CI-COVERAGE-EXCEPTIONS.txt` escape hatch, and `[W-SHARD-COST]`
-(shards are filled by cost, never by theme): the `gates` skill.
+🚨 A brand-new gate has NO row yet in the cost baseline, so `medaka gate balance` HARD-
+REFUSES to run in the same commit that adds it — enrol with a guessed `shard`, accept that
+`ci-gen-drift` reds until the next baseline re-ingest, then run `medaka gate balance && make
+gen-ci` as a follow-up commit (or trigger `gh workflow run ci.yml --ref <branch>` first to
+get a real sample before merging). Registration rules, the `test/CI-COVERAGE-EXCEPTIONS.txt`
+escape hatch, and `[W-SHARD-COST]` (shards are filled by cost, never by theme): the `gates`
+skill.
 
 ⚠️ **[W-THIRD-CONSUMER] `ci.yml` shard patterns are TWO classifications, not the whole
 list.** `test/preflight.sh` independently derives its own gate set from the diff (its

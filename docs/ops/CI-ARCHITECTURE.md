@@ -163,19 +163,21 @@ that downloads the already-built binary artifact (`setup-medaka`, `binary: artif
 same as `gates`/`compiler-soundness`/`wasm`), or (b) a text-only reimplementation
 outside the binary. **This slice takes (a)** — (b) would be a second TOML/generator
 implementation to keep in sync with the one in `compiler/tools/gate_cmd.mdk`, which
-contract §4.4/§4.6 rule out. The job (`ci-gen-drift` in `ci.yml`) is **ADVISORY ONLY**:
-it is not in the required-status-checks ruleset, because adding a required context is a
-`gh api` ruleset edit that is not atomic with a commit ([W-GH-WRITE-VERIFY]) — see this
-slice's report for the exact command to promote it once Val is ready.
+contract §4.4/§4.6 rule out. **At this slice, S-3**, the job (`ci-gen-drift` in `ci.yml`)
+was ADVISORY ONLY: it was not in the required-status-checks ruleset, because adding a
+required context is a `gh api` ruleset edit that is not atomic with a commit
+([W-GH-WRITE-VERIFY]). ⚠️ **`ci-gen-drift` is now one of the 14 required status-check
+contexts** — Val performed the ruleset edit; derive the current list rather than trust
+this paragraph (AGENTS.md [W-REQUIRED-CHECKS]).
 
-**Required-tier backstop (F-1).** Because that job is advisory, the review found a
-hand-edit dropping gates from a matrix row passed every REQUIRED check: after S-4's
-repoint, `test/diff_compiler_ci_shard_coverage.sh` reads shard membership from the
-registry and no longer looks at ci.yml's matrix at all. That gate — which IS required —
-now makes the same `medaka gate ci --check` assertion itself, as a plain shell step
-before its `python3` block, so matrix-vs-registry agreement is proven at the required
-tier without a ruleset edit. One mechanism, two callers; the advisory job stays for the
-faster, standalone signal.
+**Required-tier backstop (F-1), still live even though the promotion landed.** Because
+that job was advisory at F-1 time, the review found a hand-edit dropping gates from a
+matrix row passed every REQUIRED check: after S-4's repoint, `test/diff_compiler_ci_shard_coverage.sh`
+reads shard membership from the registry and no longer looks at ci.yml's matrix at all.
+That gate — which IS required — makes the same `medaka gate ci --check` assertion itself,
+as a plain shell step before its `python3` block, so matrix-vs-registry agreement is
+proven at the required tier independently of `ci-gen-drift`'s own tier. One mechanism, two
+callers, now both required.
 
 Enrolled as `diff_compiler_ci_gen_drift` in `test/gates.toml` (`shard = "other-job"`,
 its own job, not a `gates` matrix row) and in `test/preflight.sh` (the `test/gates.toml)`

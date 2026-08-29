@@ -10,7 +10,7 @@
 # record: `medaka gate list`/`verify`/`explain` read it directly, and
 # `ci.yml`'s `gates` job-matrix is GENERATED from it by `make gen-ci` (S-2) —
 # hand-editing that matrix is stale practice a drift check now catches
-# (`medaka gate ci --check`, run by the advisory `diff_compiler_ci_gen_drift.sh`
+# (`medaka gate ci --check`, run by the required `diff_compiler_ci_gen_drift.sh`
 # and by the required `diff_compiler_ci_shard_coverage.sh`). test/preflight.sh and
 # test/build_oracles.sh do not read this file yet; that migration is ordered
 # and tracked as separate, later changes (GATE-REGISTRY-DESIGN.md §6).
@@ -49,9 +49,15 @@
 #
 # A NEW `[[gate]]` still needs SOME `shard` value — the schema requires the
 # field and it cannot be omitted pending the next balancer run. Write the row
-# you would guess (or `other-job` if some job outside the matrix runs it); the
-# balancer, not you, decides where it actually lands, and the required check
-# above will tell you before CI does.
+# you would guess (or `other-job` if some job outside the matrix runs it).
+# 🚨 `medaka gate balance` HARD-REFUSES on a gate with no row in the cost
+# baseline — which every brand-new gate is, by construction, until an
+# unnarrowed CI run measures it. So this commit CANNOT also run the balancer.
+# Expect `ci-gen-drift` to red on this PR until the next baseline re-ingest
+# (workflow_dispatch/merge_group/push/schedule) folds the new gate in, then
+# run `medaka gate balance && make gen-ci` as a small follow-up commit — or,
+# to get a real placement before merging, `gh workflow run ci.yml --ref
+# <branch>` on this gate's own branch first.
 #
 # `shard` is REQUIRED on every entry and is one of the eight row names —
 # `engines sqlite pds frontend types eval backend tools` (these are also
@@ -61,7 +67,7 @@
 #   `other-job`  This gate is not scheduled by the `gates` matrix at all.
 #                It runs, but some OTHER workflow job runs it (`soundness`,
 #                `seed-health`, `wasm`, the docs jobs, `nightly`, the
-#                playground job). 27 entries today (derive: `grep -c '^shard =
+#                playground job). 29 entries today (derive: `grep -c '^shard =
 #                "other-job"$' test/gates.toml` — this count rots on every
 #                enrolment/removal, so re-derive rather than trust it). It does NOT mean
 #                "unscheduled" — which job is a fact this slice deliberately
@@ -3384,8 +3390,11 @@ toolchain = []
 # uncommitted hand-edit inside the region before a diff could see it). Not
 # binary-free (same accepted gap as diff_compiler_gate_registry above);
 # shard="other-job" because it has its own CI job (ci-gen-drift), not a `gates`
-# matrix row. This gate is ADVISORY; the same `--check` call also runs inside
-# the REQUIRED diff_compiler_ci_shard_coverage.
+# matrix row. This gate is itself REQUIRED (`ci-gen-drift` is one of the
+# ruleset's required contexts — derive, don't trust this comment,
+# AGENTS.md [W-REQUIRED-CHECKS]); the same `--check` call also runs inside
+# the REQUIRED diff_compiler_ci_shard_coverage, as an independent proof that
+# does not depend on this gate's own tier.
 [[gate]]
 name = "diff_compiler_ci_gen_drift"
 area = "infra"
@@ -3443,10 +3452,8 @@ toolchain = []
 # the thing it grades: a balancer bug that mis-packs the matrix would move this
 # gate too, and a check cannot be a member of the set it certifies.
 #
-# ⚠️ NOT YET RUN BY ANY CI JOB. S-1's sibling (diff_compiler_gate_cost) has a
-# `gate-cost:` job in ci.yml; this one has none, because S-3's packet puts every
-# ci.yml edit in S-4. Enrolled now so the registry is honest about it and
-# `medaka gate verify` can see it; S-4 owes it a job (or a matrix row).
+# Runs as the `gate-balance:` job in ci.yml (added by S-4, alongside
+# `diff_compiler_gate_cost`'s `gate-cost:` job).
 [[gate]]
 name = "diff_compiler_gate_balance"
 area = "infra"

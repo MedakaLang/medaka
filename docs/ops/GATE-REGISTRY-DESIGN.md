@@ -427,8 +427,10 @@ own place in the bootstrap, for no gain — §5's circularity is unchanged eithe
     halves are graded by `test/diff_compiler_gate_cost.sh`, which also pins the median
     arithmetic, ingest idempotence, the "a failing gate contributes no sample" rule, and
     the committed baseline's agreement with its own samples.
-  * **Nothing consumes the baseline yet** — the balancer is #2178's later slice. This
-    bullet closes the transport question only.
+  * **The balancer (S-4) now consumes this baseline** — `medaka gate balance` packs every
+    schedulable gate onto its derived row from these per-gate costs. This bullet closes
+    the transport question only; the consumer is described in the `shard` DERIVED OUTPUT
+    section above.
 - Whether preflight survives as a thin `medaka gate`-calling shim (agents' muscle
   memory, `make preflight`) — probably yes, indefinitely.
 - `medaka gate run`'s worker pool: today it is sequential by construction (no
@@ -481,9 +483,11 @@ why the script survives.
 **The registry-read is only sound if the matrix agrees (F-1).** Reading shard
 membership from the registry says nothing about what CI runs unless ci.yml's matrix
 still equals what the registry generates. `test/diff_compiler_ci_gen_drift.sh` asserts
-that, but is ADVISORY — so a hand-edit dropping gates from a matrix row passed every
-REQUIRED gate. This script therefore runs `medaka gate ci --check` itself, as a plain
-shell step ahead of its `python3` block, before it certifies anything. One mechanism
+that, and is itself REQUIRED (`ci-gen-drift` is one of the ruleset's required contexts —
+derive, don't trust a list, AGENTS.md [W-REQUIRED-CHECKS]); at F-1 time it was still
+advisory, so this script also runs `medaka gate ci --check` itself, as a plain
+shell step ahead of its `python3` block, before it certifies anything — independent
+proof at the required tier that does not depend on `ci-gen-drift`'s own tier. One mechanism
 (`gate ci --check`), two callers — not a second mechanism.
 
 **Why not retire it into `verify`.** The half nothing else in the tree can do is the
@@ -500,7 +504,7 @@ works.
 |---|---|
 | Is every `.sh` in the tree enrolled, or listed as a non-gate tool? | `medaka gate verify` (`test/diff_compiler_gate_registry.sh`) |
 | Which shard runs a gate? | `test/gates.toml`'s `shard` field |
-| Does ci.yml's matrix still equal what the registry generates? | `medaka gate ci --check` — called by `test/diff_compiler_ci_gen_drift.sh` (advisory) AND by `test/diff_compiler_ci_shard_coverage.sh` (required) |
+| Does ci.yml's matrix still equal what the registry generates? | `medaka gate ci --check` — called by `test/diff_compiler_ci_gen_drift.sh` (required) AND by `test/diff_compiler_ci_shard_coverage.sh` (required) |
 | Is every registry entry actually reachable in CI? | `test/diff_compiler_ci_shard_coverage.sh` |
 | Does a workflow `run:` step name a script no one enrolled? | `test/diff_compiler_ci_shard_coverage.sh` |
 | Do ci.yml's and `gate_cmd.mdk`'s prose allowlists agree? | `test/diff_compiler_prose_classifier.sh` (#2200) |

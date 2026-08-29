@@ -1,5 +1,5 @@
 # META
-source_lines=3026
+source_lines=3034
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -2248,8 +2248,10 @@ ciCmdBody argv = match parseCiArgs argv CiArgs { registry = None, workflow = Non
 --
 -- ── Costs are RELATIVE, not predicted wall-clock ────────────────────────────
 --
--- S-1's `ms` samples were measured under the shard concurrency CI actually
--- uses (`JOBS=7` inside each shard), so a row's projected total here is a sum
+-- S-1's `ms` samples were measured under whatever shard concurrency CI
+-- actually used for that run (`run_gates.sh` derives `JOBS` from the runner's
+-- core count — `(NCPU*3+2)/5`, e.g. 2 on a 4-vCPU `ubuntu-latest` runner — so
+-- it is not one fixed number), so a row's projected total here is a sum
 -- of per-gate medians that were themselves measured while sharing a runner.
 -- That sum is NOT what CI will print for the row.  It is the right RELATIVE
 -- signal for packing — which is all the objective needs — and every number
@@ -2279,9 +2281,11 @@ data Row =
 data Place = Place { pname : String, pfrom : String, pto : String }
 
 {- | The sentinel `shard` value for a gate some other workflow job schedules.
-   These never enter the packing: 28 entries carry it, they never go through
-   `test/run_gates.sh`, and so they structurally cannot appear in the cost
-   baseline either.  `diff_compiler_must_fail` is one of them — its INVERTED
+   These never enter the packing (derive the current count, don't trust one
+   pinned here: `grep -c '^shard = "other-job"$' test/gates.toml` — it rots on
+   every enrolment/removal): they never go through `test/run_gates.sh`, and so
+   they structurally cannot appear in the cost baseline either.
+   `diff_compiler_must_fail` is one of them — its INVERTED
    polarity ([G-MUST-FAIL]) is `compiler-soundness`'s business, and a matrix
    balancer must never so much as see it. -}
 export
@@ -2292,10 +2296,13 @@ balOtherJob = "other-job"
 balTargetMilli : Int
 balTargetMilli = 1250
 
--- Hysteresis: the projected pole must improve by MORE than this percentage
--- before any gate moves.  Without it, a one-millisecond drift in one gate's
--- median re-shuffles the matrix and every downstream `gates (<row>)` check
--- churns for nothing.
+-- Hysteresis threshold, as a percentage of the pole. 🚨 It no longer decides
+-- WHETHER a gate moves (S-4, #2178, see `balBandNote` below) — the emitted
+-- assignment is always the derived target. It survives only as the REPORT's
+-- account of whether a move was worth its churn: a projected pole gain of
+-- this percentage or less is annotated "not reached" rather than "TAKEN",
+-- so a one-millisecond drift in one gate's median is visibly noise, not a
+-- claimed improvement, even though the target still moves it.
 balMarginPct : Int
 balMarginPct = 5
 
@@ -2372,7 +2379,7 @@ balCands base (g::gs)
 -- constraints, costs) and therefore a FIXED POINT: closing the row on the
 -- `full_cores` flag rather than on "whatever is there now" means re-running
 -- the balancer on its own output derives the same pin set, hence the same
--- target.  See `balDecide`.
+-- target.  See `balTarget`.
 balRows : List Shard -> List Row
 balRows [] = []
 balRows (s::ss) =
@@ -2594,7 +2601,8 @@ balOpenCands (c::cs) rs
    ⚠️ A PURE FUNCTION OF (rows, costs, toolchains) — it does not read the
    `shard` of any gate on an OPEN row.  That is what makes re-running the
    balancer on its own output produce the identical target, which is the
-   hysteresis proof's real backing (`balDecide`). -}
+   hysteresis proof's real backing — the property `balMarginPct`/`balBandNote`
+   report on, now that the band only annotates and never decides. -}
 balTarget : List Cand -> List Row -> Result String (List Place, List Row)
 balTarget cs rows0 = match balSeedClosed cs rows0 []
   Err m => Err m
@@ -2727,7 +2735,7 @@ balReport : String -> List Cand -> List Row -> List Place -> String
 balReport label cs rs ps = stringConcat
   [
     "  \{label}: \{intToString (listLen cs)} schedulable gates over \{intToString (listLen rs)} rows\n",
-    "  projected row totals (sum of per-gate baseline medians, JOBS=7):\n",
+    "  projected row totals (sum of per-gate baseline medians, as measured — concurrency varies by run):\n",
     joinNl (balRowLines rs),
     "\n  pole \{balSecs (balPole rs)} (\{balPoleRow rs})   median \{balSecs (balMedian rs)}   pole/median \{balMilli (balFactorMilli rs)}\n",
     "  gates whose row changes: \{intToString (balMoved ps)}\n",
@@ -3677,7 +3685,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "balMoved" ((PList)) (ELit (LInt 0)))
 (DFunDef false "balMoved" ((PCons (PVar "p") (PVar "ps"))) (EIf (EBinOp "/=" (EFieldAccess (EVar "p") "pfrom") (EFieldAccess (EVar "p") "pto")) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "balMoved") (EVar "ps"))) (EIf (EVar "otherwise") (EApp (EVar "balMoved") (EVar "ps")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "balReport" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyFun (TyApp (TyCon "List") (TyCon "Place")) (TyCon "String"))))))
-(DFunDef false "balReport" ((PVar "label") (PVar "cs") (PVar "rs") (PVar "ps")) (EApp (EVar "stringConcat") (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "cs"))))) (ELit (LString " schedulable gates over "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "rs"))))) (ELit (LString " rows\n"))) (ELit (LString "  projected row totals (sum of per-gate baseline medians, JOBS=7):\n")) (EApp (EVar "joinNl") (EApp (EVar "balRowLines") (EVar "rs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "\n  pole ")) (EApp (EVar "display") (EApp (EVar "balSecs") (EApp (EVar "balPole") (EVar "rs"))))) (ELit (LString " ("))) (EApp (EVar "display") (EApp (EVar "balPoleRow") (EVar "rs")))) (ELit (LString ")   median "))) (EApp (EVar "display") (EApp (EVar "balSecs") (EApp (EVar "balMedian") (EVar "rs"))))) (ELit (LString "   pole/median "))) (EApp (EVar "display") (EApp (EVar "balMilli") (EApp (EVar "balFactorMilli") (EVar "rs"))))) (ELit (LString "\n"))) (EBinOp "++" (EBinOp "++" (ELit (LString "  gates whose row changes: ")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "balMoved") (EVar "ps"))))) (ELit (LString "\n"))))))
+(DFunDef false "balReport" ((PVar "label") (PVar "cs") (PVar "rs") (PVar "ps")) (EApp (EVar "stringConcat") (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "label"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "cs"))))) (ELit (LString " schedulable gates over "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "rs"))))) (ELit (LString " rows\n"))) (ELit (LString "  projected row totals (sum of per-gate baseline medians, as measured — concurrency varies by run):\n")) (EApp (EVar "joinNl") (EApp (EVar "balRowLines") (EVar "rs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "\n  pole ")) (EApp (EVar "display") (EApp (EVar "balSecs") (EApp (EVar "balPole") (EVar "rs"))))) (ELit (LString " ("))) (EApp (EVar "display") (EApp (EVar "balPoleRow") (EVar "rs")))) (ELit (LString ")   median "))) (EApp (EVar "display") (EApp (EVar "balSecs") (EApp (EVar "balMedian") (EVar "rs"))))) (ELit (LString "   pole/median "))) (EApp (EVar "display") (EApp (EVar "balMilli") (EApp (EVar "balFactorMilli") (EVar "rs"))))) (ELit (LString "\n"))) (EBinOp "++" (EBinOp "++" (ELit (LString "  gates whose row changes: ")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "balMoved") (EVar "ps"))))) (ELit (LString "\n"))))))
 (DTypeSig false "balCurrentLegal" (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyCon "Bool"))))
 (DFunDef false "balCurrentLegal" ((PList) PWild) (EVar "True"))
 (DFunDef false "balCurrentLegal" ((PCons (PVar "c") (PVar "cs")) (PVar "rs")) (EIf (EBinOp "&&" (EFieldAccess (EVar "c") "needsWasm") (EApp (EVar "not") (EApp (EApp (EVar "balRowIsWasm") (EFieldAccess (EVar "c") "curRow")) (EVar "rs")))) (EVar "False") (EIf (EVar "otherwise") (EApp (EApp (EVar "balCurrentLegal") (EVar "cs")) (EVar "rs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -4383,7 +4391,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "balMoved" ((PList)) (ELit (LInt 0)))
 (DFunDef false "balMoved" ((PCons (PVar "p") (PVar "ps"))) (EIf (EBinOp "/=" (EFieldAccess (EVar "p") "pfrom") (EFieldAccess (EVar "p") "pto")) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "balMoved") (EVar "ps"))) (EIf (EVar "otherwise") (EApp (EVar "balMoved") (EVar "ps")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "balReport" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyFun (TyApp (TyCon "List") (TyCon "Place")) (TyCon "String"))))))
-(DFunDef false "balReport" ((PVar "label") (PVar "cs") (PVar "rs") (PVar "ps")) (EApp (EVar "stringConcat") (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "cs"))))) (ELit (LString " schedulable gates over "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "rs"))))) (ELit (LString " rows\n"))) (ELit (LString "  projected row totals (sum of per-gate baseline medians, JOBS=7):\n")) (EApp (EVar "joinNl") (EApp (EVar "balRowLines") (EVar "rs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "\n  pole ")) (EApp (EMethodRef "display") (EApp (EVar "balSecs") (EApp (EVar "balPole") (EVar "rs"))))) (ELit (LString " ("))) (EApp (EMethodRef "display") (EApp (EVar "balPoleRow") (EVar "rs")))) (ELit (LString ")   median "))) (EApp (EMethodRef "display") (EApp (EVar "balSecs") (EApp (EVar "balMedian") (EVar "rs"))))) (ELit (LString "   pole/median "))) (EApp (EMethodRef "display") (EApp (EVar "balMilli") (EApp (EVar "balFactorMilli") (EVar "rs"))))) (ELit (LString "\n"))) (EBinOp "++" (EBinOp "++" (ELit (LString "  gates whose row changes: ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "balMoved") (EVar "ps"))))) (ELit (LString "\n"))))))
+(DFunDef false "balReport" ((PVar "label") (PVar "cs") (PVar "rs") (PVar "ps")) (EApp (EVar "stringConcat") (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "cs"))))) (ELit (LString " schedulable gates over "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "rs"))))) (ELit (LString " rows\n"))) (ELit (LString "  projected row totals (sum of per-gate baseline medians, as measured — concurrency varies by run):\n")) (EApp (EVar "joinNl") (EApp (EVar "balRowLines") (EVar "rs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "\n  pole ")) (EApp (EMethodRef "display") (EApp (EVar "balSecs") (EApp (EVar "balPole") (EVar "rs"))))) (ELit (LString " ("))) (EApp (EMethodRef "display") (EApp (EVar "balPoleRow") (EVar "rs")))) (ELit (LString ")   median "))) (EApp (EMethodRef "display") (EApp (EVar "balSecs") (EApp (EVar "balMedian") (EVar "rs"))))) (ELit (LString "   pole/median "))) (EApp (EMethodRef "display") (EApp (EVar "balMilli") (EApp (EVar "balFactorMilli") (EVar "rs"))))) (ELit (LString "\n"))) (EBinOp "++" (EBinOp "++" (ELit (LString "  gates whose row changes: ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "balMoved") (EVar "ps"))))) (ELit (LString "\n"))))))
 (DTypeSig false "balCurrentLegal" (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyCon "Bool"))))
 (DFunDef false "balCurrentLegal" ((PList) PWild) (EVar "True"))
 (DFunDef false "balCurrentLegal" ((PCons (PVar "c") (PVar "cs")) (PVar "rs")) (EIf (EBinOp "&&" (EFieldAccess (EVar "c") "needsWasm") (EApp (EVar "not") (EApp (EApp (EVar "balRowIsWasm") (EFieldAccess (EVar "c") "curRow")) (EVar "rs")))) (EVar "False") (EIf (EVar "otherwise") (EApp (EApp (EVar "balCurrentLegal") (EVar "cs")) (EVar "rs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
