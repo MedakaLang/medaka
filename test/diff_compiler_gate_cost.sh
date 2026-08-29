@@ -10,8 +10,11 @@
 #      its per-gate times are not a baseline sample and its shard wall-clock is
 #      meaningless for balancing.
 #   2. The CONSUMER refuses. `test/gate_cost_ingest.sh` rejects any report whose
-#      recorded event is not on its allowlist, and rejects a document that is not
-#      a `gate-cost/1` report at all. This half is what stops a hand-carried,
+#      recorded event is not on its allowlist, rejects one whose runId/
+#      runAttempt/sha/ref provenance is empty (both conditions required — the
+#      event string alone does not stop a locally-produced report that merely
+#      claims an admissible event), and rejects a document that is not a
+#      `gate-cost/1` report at all. This half is what stops a hand-carried,
 #      downloaded, or replayed artifact reaching the committed baseline even
 #      though the producer would never have made one — and it is what stops a
 #      future ci.yml edit from quietly re-opening the path. "The workflow does
@@ -148,6 +151,26 @@ else
   grep -q "is not a 'gate-cost/1' report" "$TMP/junk.out" \
     && ok "ingest refuses a non-report document" \
     || bad "ingest refused a non-report, but not for that reason"
+fi
+
+# A locally-fabricated report hand-tagged with a LEGITIMATE event string but
+# empty runId/runAttempt/sha/ref (nothing outside Actions sets those) must
+# still be refused — the event allowlist alone does not stop this artifact.
+sed -e 's/"runId": "4242"/"runId": ""/' -e 's/"runAttempt": "1"/"runAttempt": ""/' \
+    -e 's/"sha": "cafebabe"/"sha": ""/' -e 's/"ref": "refs\/heads\/testing-arc"/"ref": ""/' \
+    "$TMP/wd.json" >"$TMP/emptyprov.json"
+if sh "$INGEST" --dry-run --baseline "$TMP/none.json" "$TMP/emptyprov.json" >"$TMP/emptyprov.out" 2>&1; then
+  bad "ingest ACCEPTED a 'workflow_dispatch'-tagged report with empty provenance"
+  cat "$TMP/emptyprov.out"
+else
+  if grep -q 'missing provenance field' "$TMP/emptyprov.out" \
+     && grep -q 'runId' "$TMP/emptyprov.out" && grep -q 'runAttempt' "$TMP/emptyprov.out" \
+     && grep -q 'sha' "$TMP/emptyprov.out" && grep -q 'ref' "$TMP/emptyprov.out"; then
+    ok "ingest refuses a legitimate-event report with empty runId/runAttempt/sha/ref, naming them"
+  else
+    bad "ingest exited nonzero but did not name the missing provenance fields"
+    cat "$TMP/emptyprov.out"
+  fi
 fi
 
 # ── 4. the arithmetic: LOWER median over retained raw samples ─────────────────

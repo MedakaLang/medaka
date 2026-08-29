@@ -34,11 +34,16 @@
 # (`detect`'s `plan` step), so a pull_request run measures a SUBSET of each
 # shard and its numbers are not a baseline sample. `run_gates.sh` already
 # refuses to PRODUCE a report on that event; this tool independently refuses to
-# ADMIT one whose recorded event is not on the allowlist. Neither half is
+# ADMIT one whose recorded event is not on the allowlist, AND refuses to admit
+# one whose runId/runAttempt/sha/ref provenance is empty — both conditions must
+# hold. The event allowlist alone does not stop a locally-produced report that
+# merely claims an admissible event string (e.g. hand-setting
+# GITHUB_EVENT_NAME=push for a local run); the provenance check closes that gap,
+# since only a real Actions run has those env vars set. Neither half is
 # decoration: the producer's guard is what stops the artifact existing, and this
-# guard is what stops a hand-carried or replayed artifact — from a downloaded
-# workflow run, from a local run, from a future ci.yml edit — reaching the
-# committed file. It is exercised by test/diff_compiler_gate_cost.sh.
+# guard is what stops a hand-carried, downloaded, or replayed artifact — or a
+# future ci.yml edit — reaching the committed file. It is exercised by
+# test/diff_compiler_gate_cost.sh.
 #
 # A FAILING gate contributes no sample: its `ms` is the cost of failing, which
 # is not the cost of running, and a red gate is often red because it stopped
@@ -120,6 +125,27 @@ for r in $reports; do
   sha="$(_prov "$r" sha)"
   ref="$(_prov "$r" ref)"
   dat="$(_prov "$r" date)"
+
+  # The event-string allowlist alone does not stop a locally-produced report
+  # that merely CLAIMS a real CI event: nothing stops hand-setting
+  # GITHUB_EVENT_NAME=push for a local run. A real workflow_dispatch/
+  # merge_group/push/schedule run always has GITHUB_RUN_ID/GITHUB_RUN_ATTEMPT/
+  # GITHUB_SHA/GITHUB_REF set by Actions; nothing outside Actions sets them, so
+  # a local run is empty here by construction. Require all four non-empty as
+  # an ADDITIONAL admission condition, alongside (not instead of) the event
+  # allowlist above.
+  missing=""
+  [ -n "$rid" ] || missing="$missing runId"
+  [ -n "$att" ] || missing="$missing runAttempt"
+  [ -n "$sha" ] || missing="$missing sha"
+  [ -n "$ref" ] || missing="$missing ref"
+  if [ -n "$missing" ]; then
+    echo "gate_cost_ingest: REFUSED — $r has a '$ev' event but missing provenance field(s):$missing"
+    echo "  A real CI run of this event always sets these (github.run_id/run_attempt/"
+    echo "  sha/ref in the workflow env). A locally-produced report — even one that"
+    echo "  hand-tags an admissible event string — cannot have real values here."
+    exit 1
+  fi
   key="$rid:$att:$shd"
   ngates="$(grep -c '^    {"name": ' "$r" || true)"
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \

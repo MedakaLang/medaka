@@ -414,11 +414,19 @@ own place in the bootstrap, for no gain — §5's circularity is unchanged eithe
     over a gate SUBSET and are not a baseline sample. `run_gates.sh` refuses to *produce*
     a report on that event at all, whatever ci.yml passes it; `gate_cost_ingest.sh`
     independently refuses to *admit* one whose recorded event is off its allowlist
-    (`workflow_dispatch merge_group push schedule`), which is what stops a hand-carried,
-    downloaded, or replayed artifact — or a future ci.yml edit — reaching the committed
-    file. Both halves are graded by `test/diff_compiler_gate_cost.sh`, which also pins
-    the median arithmetic, ingest idempotence, the "a failing gate contributes no
-    sample" rule, and the committed baseline's agreement with its own samples.
+    (`workflow_dispatch merge_group push schedule`) OR whose `runId`/`runAttempt`/
+    `sha`/`ref` provenance fields are empty — both conditions must hold. The event
+    allowlist alone stops a report tagged with a narrowed or unrecognized event string;
+    it does not, by itself, stop a locally-produced report that merely CLAIMS an
+    admissible event (e.g. hand-setting `GITHUB_EVENT_NAME=push` for a local run). The
+    non-empty provenance check closes that gap: a real CI run of an admissible event
+    always has `github.run_id`/`run_attempt`/`sha`/`ref` set by Actions, and nothing
+    outside Actions sets them, so a locally-produced or replayed artifact is empty here
+    by construction. Together the two checks are what stop a hand-carried, downloaded,
+    or replayed artifact — or a future ci.yml edit — reaching the committed file. Both
+    halves are graded by `test/diff_compiler_gate_cost.sh`, which also pins the median
+    arithmetic, ingest idempotence, the "a failing gate contributes no sample" rule, and
+    the committed baseline's agreement with its own samples.
   * **Nothing consumes the baseline yet** — the balancer is #2178's later slice. This
     bullet closes the transport question only.
 - Whether preflight survives as a thin `medaka gate`-calling shim (agents' muscle
