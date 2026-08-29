@@ -1,5 +1,5 @@
 # META
-source_lines=37181
+source_lines=37482
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -3033,6 +3033,7 @@ data DeclEnvs = DeclEnvs {
     deImpls : ImplEnv,
     deIfaces : ClassEnv,  -- A-3.3 (#1519) built it; A-3.5c (#1557) made it LIVE — three readers, see the `CE` block
     deKindsBefore : OrdMap (List (TabKey, List Kind)),
+    deNameIndexBefore : OrdMap (OrdMap Unit),  -- #2158: `deKindsBefore`'s BARE-NAME twin, the SAME rows' `tabKeyName`s as a membership set — see `declEnvSeedChain`
     dePolaritiesBefore : OrdMap (List (TabKey, List Polarity)),  -- #1119 D-2: `deKindsBefore`'s VARIANCE twin — see `declEnvPolarityChain`
     deAtomsBefore : OrdMap (List (TabKey, List (List Atom))),  -- #2110 S2-1: `deKindsBefore`'s ATOM-GUARANTEE twin — see `declEnvRowAtomsChain`
     deOwnersBefore : OrdMap (OrdMap (List String)),
@@ -3054,6 +3055,7 @@ emptyDeclEnvs = DeclEnvs {
   deImpls = emptyImplEnv,
   deIfaces = emptyClassEnv,
   deKindsBefore = omEmpty,
+  deNameIndexBefore = omEmpty,
   dePolaritiesBefore = omEmpty,
   deAtomsBefore = omEmpty,
   deOwnersBefore = omEmpty,
@@ -3074,7 +3076,8 @@ buildDeclEnvs coreDecls modules =
   -- whole graph so the per-module read is one `omLookup` and allocates nothing.  The
   -- `""` seeds mirror `declEnvOrdIndex`'s: the core pass arrives under that spelling
   -- and its seed is empty because nothing precedes ordinal 0.  See `declEnvSeedChain`.
-  let seeds = declEnvSeedChain mods [] omEmpty (omInsert "" [] omEmpty) (omInsert "" omEmpty omEmpty)
+  let (seedKinds, seedOwners, seedNames) =
+    declEnvSeedChain mods [] omEmpty omEmpty (omInsert "" [] omEmpty) (omInsert "" omEmpty omEmpty) (omInsert "" omEmpty omEmpty)
   -- #1675: BOTH definer projections come out of ONE fold.  They are derived from the
   -- same uncollapsed row list — `deDefiners` keeps the first row per name, `deAmbigValues`
   -- records the names where keeping the first was a CHOICE between two definitions — so
@@ -3106,7 +3109,11 @@ buildDeclEnvs coreDecls modules =
     -- over the SAME `mods` (per-module rows, ordinal-tagged), composing rather
     -- than interacting with the other two initialisers for the identical reason.
     deIfaces = buildClassEnv mods,
-    deKindsBefore = fst seeds,
+    deKindsBefore = seedKinds,
+    -- #2158: the BARE-NAME seed, out of the SAME fold and the same `kacc` rows —
+    -- see `declEnvSeedChain`'s third-accumulator note for why it is folded in
+    -- there rather than walked separately like the two chains below.
+    deNameIndexBefore = seedNames,
     -- #1119 D-2: the VARIANCE seed.  It is a SEPARATE walk rather than a third
     -- accumulator threaded through `declEnvSeedChain` because it is the only one
     -- of the three that has to READ ITS OWN ACCUMULATOR while building it —
@@ -3128,7 +3135,7 @@ buildDeclEnvs coreDecls modules =
     -- everything strictly before [m]" stamping, same `""` seed for the core
     -- pass.
     deAtomsBefore = declEnvRowAtomsChain mods [] (omInsert "" [] omEmpty),
-    deOwnersBefore = snd seeds,
+    deOwnersBefore = seedOwners,
     -- #1597: the two halves of the field-owner REACHABILITY filter.  Both are
     -- whole-graph and reader-independent (the reader is applied at the READ, in
     -- `fieldOwnerNames`), so they are built here once alongside the seeds.
@@ -3497,15 +3504,42 @@ declEnvKindEntries (_::rest) = declEnvKindEntries rest
 -- payload is always a synthesised `ConPos`), which is why there is no arm for it,
 -- and `DAttrib` unwraps and recurses, mirroring `registerData` (#1228/#1586 — see
 -- the note on `declEnvKindEntries`, including which reader actually reaches it).
-declEnvSeedChain : List DeclEnvModule -> List (TabKey, List Kind) -> OrdMap (List String) -> OrdMap (List (TabKey, List Kind)) -> OrdMap (OrdMap (List String)) -> (OrdMap (List (TabKey, List Kind)), OrdMap (OrdMap (List String)))
-declEnvSeedChain [] _ _ km om = (km, om)
-declEnvSeedChain (m::rest) kacc oacc km om =
+-- ── #2158: THE BARE-NAME ACCUMULATOR, A THIRD ONE IN *THIS* FOLD ─────────
+-- `nacc`/`nm` is `kacc`/`km`'s membership-set shadow: the `tabKeyName` of every
+-- key `kacc` holds, as an `OrdMap Unit`, stamped under the same module id at the
+-- same point in the walk.  `noImplHintFor` asks a bare-name MEMBERSHIP question
+-- of `dataParamKindsRef` and nothing else does, so answering it needs a set, not
+-- the list.
+--
+-- 🚨 IT IS FOLDED IN HERE RATHER THAN GIVEN ITS OWN WALK, AND THE DIFFERENCE IS
+-- MEASURED, NOT STYLISTIC.  #2158 first shipped as a per-module REBUILD in
+-- `declEnvSeedDataUniverse` (`omFromNames (map … dataParamKindsRef.value)`), and
+-- that list is `deKindsBefore[mid]`, whose length grows with the module ordinal —
+-- an O(M² log M) term paid unconditionally on every compile.  `stage_ir_scaling`'s
+-- `modules:typecheck` row went 2.219 → 2.500 (ceiling 2.45) on that one line.  The
+-- accumulator below pays O(entries log entries) for the WHOLE graph instead, and
+-- the read is one `omLookup`.
+--
+-- ⚠️ NOT `declEnvPolarityChain`'s SEPARATE-WALK SHAPE, and that is the
+-- discriminator to check before adding a fourth: the polarity chain needs its own
+-- walk because `declEnvRowPolarityEntries` READS `pacc` while building it.  This
+-- accumulator is WRITE-ONLY — insert and forget, exactly like `oacc` — so it
+-- composes into the existing fold with no new read edge.  It also shares `kents`
+-- with the kind half rather than re-deriving the projection, which is what keeps
+-- the two provably the same rows: the name set is `kacc`'s key set by
+-- construction, not by a parallel definition that could drift.
+declEnvSeedChain : List DeclEnvModule -> List (TabKey, List Kind) -> OrdMap (List String) -> OrdMap Unit -> OrdMap (List (TabKey, List Kind)) -> OrdMap (OrdMap (List String)) -> OrdMap (OrdMap Unit) -> (OrdMap (List (TabKey, List Kind)), OrdMap (OrdMap (List String)), OrdMap (OrdMap Unit))
+declEnvSeedChain [] _ _ _ km om nm = (km, om, nm)
+declEnvSeedChain (m::rest) kacc oacc nacc km om nm =
+  let kents = declEnvRowKindEntries (m.demOrd + 1) m
   declEnvSeedChain
     rest
-    (declEnvRowKindEntries (m.demOrd + 1) m ++ kacc)
+    (kents ++ kacc)
     (declEnvDeclFieldOwners (declEnvRowVisible (m.demOrd + 1) m) oacc)
+    (omFromNames (map (p => tabKeyName (fst p)) kents) nacc)
     (omInsert m.demId kacc km)
     (omInsert m.demId oacc om)
+    (omInsert m.demId nacc nm)
 
 -- ── #1119 D-2: the VARIANCE seed chain (#1098, #1121) ────────────────────
 -- `declEnvSeedChain`'s kind half, one table over: the same ordinal-ascending
@@ -3927,11 +3961,19 @@ declEnvDirectImports edges mid = fromOption [] (omLookup mid edges)
 declEnvSeedDataUniverse : String -> DeclEnvs -> Unit
 declEnvSeedDataUniverse mid envs =
   perRun.value.dataParamKindsRef := fromOption [] (omLookup mid envs.deKindsBefore)
-  -- #2158: rebuild the name-only index in lockstep with the table it mirrors —
-  -- this is a whole-list REPLACE (like the line above), not a prepend, so the
-  -- index is rebuilt from scratch here rather than incrementally updated.
-  perRun.value.dataParamNameIndexRef :=
-    omFromNames (map (p => tabKeyName (fst p)) perRun.value.dataParamKindsRef.value) omEmpty
+  -- #2158: the BARE-NAME half of the same seed, read under the same key and from
+  -- the same fold (`declEnvSeedChain`'s third accumulator), so it holds exactly
+  -- the `tabKeyName`s of the line above's keys by construction.
+  -- 🚨 THIS USED TO REBUILD THE INDEX HERE — `omFromNames (map … kindsRef.value)`
+  -- — and that was an O(M² log M) term, since the list it folded is
+  -- `deKindsBefore[mid]`, whose length grows with the module ordinal.  Do not
+  -- restore it: a rebuild off a per-module prefix list is quadratic by
+  -- construction, and `stage_ir_scaling`'s `modules:typecheck` row is what
+  -- catches it (2.219 → 2.500 against a 2.45 ceiling when it last landed).
+  -- A MISS is fail-SILENT and STRICTLY BENIGN, unlike the kind half's: an empty
+  -- index makes `noImplHintFor` withhold the "add deriving / write an impl"
+  -- hint, so the reject still happens with its unhinted message.
+  perRun.value.dataParamNameIndexRef := fromOption omEmpty (omLookup mid envs.deNameIndexBefore)
   -- #1119 D-2: the VARIANCE half of the same seed, read under the same key.  A
   -- MISS here is fail-SILENT in the same direction the kind half is (an absent
   -- row makes `unifyN`'s variance gate abstain, i.e. today's leniency) — it can
@@ -4050,14 +4092,37 @@ deKindRow1 = declEnvModule 1 "m" deKindFixtureDecls
 --   * A ONE-row chain could not discriminate any of that (prefix and final
 --     accumulator coincide at the only row), which is why the probe carries two
 --     rows with DISTINCT ids rather than reusing `deKindRow0`/`deKindRow1`.
--- > listLen (fromOption [] (omLookup "m" (fst deSeedChainProbe)))
+-- > listLen (fromOption [] (omLookup "m" deSeedChainKinds))
 -- 0
--- > fromOption [] (omLookup "x" (fromOption omEmpty (omLookup "m" (snd deSeedChainProbe))))
+-- > fromOption [] (omLookup "x" (fromOption omEmpty (omLookup "m" deSeedChainOwners)))
 -- []
--- > listLen (fromOption [] (omLookup "n" (fst deSeedChainProbe)))
+-- > listLen (fromOption [] (omLookup "n" deSeedChainKinds))
 -- 3
--- > fromOption [] (omLookup "x" (fromOption omEmpty (omLookup "n" (snd deSeedChainProbe))))
+-- > fromOption [] (omLookup "x" (fromOption omEmpty (omLookup "n" deSeedChainOwners)))
 -- ["Pt"]
+
+-- #2158: the THIRD accumulator, on the SAME probe, so the own-row exclusion is
+-- asserted on it too — row "m" is first, so its name index is EMPTY even though
+-- "m" itself declares `Pt`/`Opq`/`Wrap`; row "n" sees exactly "m"'s three
+-- kind-public names and NOT its own identical copies.  (`Priv` is absent from
+-- both for the separate reason `declEnvRowKindEntries`' cross-module arm drops
+-- a private decl — see the kind-count doctests above.)
+-- > omKeys (fromOption omEmpty (omLookup "m" deSeedChainNames))
+-- []
+-- > omKeys (fromOption omEmpty (omLookup "n" deSeedChainNames))
+-- ["Opq", "Pt", "Wrap"]
+
+-- 🚨 THE PARITY ASSERTION, AND IT IS THE ONE THAT PINS THE FIX.  #2158 first
+-- shipped the name index as a per-module REBUILD in `declEnvSeedDataUniverse`
+-- (`omFromNames (map (p => tabKeyName (fst p)) kindsRef.value) omEmpty`), which
+-- was quadratic in the module count.  The accumulator replaced it, so what must
+-- stay true is that the accumulated set and the rebuilt set AGREE on every row.
+-- This states that as an equation over the probe rather than as prose, so a
+-- future edit to either half that breaks the agreement is loud here.
+-- > deSeedNameParity "m"
+-- True
+-- > deSeedNameParity "n"
+-- True
 
 -- Row "n" carries the SAME decls as `deKindRow0` at ordinal 1 under a DIFFERENT
 -- module id.  Same decls is deliberate: it makes the own-row contribution and the
@@ -4066,9 +4131,164 @@ deKindRow1 = declEnvModule 1 "m" deKindFixtureDecls
 deSeedRowN : DeclEnvModule
 deSeedRowN = declEnvModule 1 "n" deKindFixtureDecls
 
-deSeedChainProbe : (OrdMap (List (TabKey, List Kind)), OrdMap (OrdMap (List String)))
-deSeedChainProbe =
-  declEnvSeedChain [deKindRow0, deSeedRowN] [] omEmpty omEmpty omEmpty
+deSeedChainProbe : (OrdMap (List (TabKey, List Kind)), OrdMap (OrdMap (List String)), OrdMap (OrdMap Unit))
+deSeedChainProbe = declEnvSeedChain
+  [deKindRow0, deSeedRowN]
+  []
+  omEmpty
+  omEmpty
+  omEmpty
+  omEmpty
+  omEmpty
+
+deSeedChainKinds : OrdMap (List (TabKey, List Kind))
+deSeedChainKinds =
+  let (km, _, _) = deSeedChainProbe
+  km
+
+deSeedChainOwners : OrdMap (OrdMap (List String))
+deSeedChainOwners =
+  let (_, om, _) = deSeedChainProbe
+  om
+
+deSeedChainNames : OrdMap (OrdMap Unit)
+deSeedChainNames =
+  let (_, _, nm) = deSeedChainProbe
+  nm
+
+-- The accumulated name set for [mid] vs. the retired rebuild, computed here off
+-- the SAME row's kind seed.  `omKeys` is sorted ascending, so this compares KEY
+-- SETS and is blind to tree shape and to insertion order — which is exactly the
+-- equivalence class the only reader (`noImplHintFor`'s `omHasKey`) can observe.
+deSeedNameParity : String -> Bool
+deSeedNameParity mid =
+  let accumulated = omKeys (fromOption omEmpty (omLookup mid deSeedChainNames))
+  let rebuilt = omKeys (omFromNames (map (p => tabKeyName (fst p)) (fromOption [] (omLookup mid deSeedChainKinds))) omEmpty)
+  accumulated == rebuilt
+
+-- ── #2158 F7: THE NAME INDEX AS A PROGRAM-GLOBAL TABLE (T-GLOBAL-TABLE) ──────
+-- `deNameIndexBefore` is a new whole-graph table, so `compiler/AGENTS.md`'s
+-- T-GLOBAL-TABLE bar applies: the fixture that matters is not "the feature
+-- works", it is "the feature is present and code that never touches it is
+-- unaffected".  The four rows below are built for that shape specifically —
+-- `deSeedChainProbe` above cannot state it, because both of its rows declare the
+-- same data types, so nothing there distinguishes "row X contributed" from "row X
+-- was skipped".
+--
+--   * `modA` declares `Alpha` and `Shared`.
+--   * `modB` declares `Beta` and its OWN `Shared` — same declared NAME, different
+--     module.  That pair is deliberate: the index is bare-name by construction
+--     (`tabKeyName`, matching the `tabHasName` scan it replaced — see the
+--     `PerRun` field's comment), so the two `Shared` declarations must collapse
+--     to ONE key.  A future edit that made the index identity-keyed would show up
+--     as two entries here, which is the point of asserting the key LIST rather
+--     than a membership Bool.
+--   * `modC` and `modD` declare NO data type at all — just a value binding.  They
+--     are the "unrelated code" half: their presence must leave every other row's
+--     index untouched, and they must contribute nothing to any later row's.
+deNameIdxAlpha : Decl
+deNameIdxAlpha = DData {
+  dataVis = VisPublic,
+  dataName = "Alpha",
+  dataParams = [],
+  dataCtors = [Variant "MkAlpha" (ConPos [tyConBuiltin "Int" None])],
+  dataDerives = [],
+  dataOrigin = OriginModule "modA",
+}
+
+deNameIdxSharedA : Decl
+deNameIdxSharedA = DData {
+  dataVis = VisPublic,
+  dataName = "Shared",
+  dataParams = [],
+  dataCtors = [Variant "MkSharedA" (ConPos [tyConBuiltin "Int" None])],
+  dataDerives = [],
+  dataOrigin = OriginModule "modA",
+}
+
+deNameIdxBeta : Decl
+deNameIdxBeta = DData {
+  dataVis = VisPublic,
+  dataName = "Beta",
+  dataParams = [],
+  dataCtors = [Variant "MkBeta" (ConPos [tyConBuiltin "Int" None])],
+  dataDerives = [],
+  dataOrigin = OriginModule "modB",
+}
+
+deNameIdxSharedB : Decl
+deNameIdxSharedB = DData {
+  dataVis = VisPublic,
+  dataName = "Shared",
+  dataParams = [],
+  dataCtors = [Variant "MkSharedB" (ConPos [tyConBuiltin "Int" None])],
+  dataDerives = [],
+  dataOrigin = OriginModule "modB",
+}
+
+deNameIdxModA : DeclEnvModule
+deNameIdxModA = declEnvModule 0 "modA" [deNameIdxAlpha, deNameIdxSharedA]
+
+deNameIdxModB : DeclEnvModule
+deNameIdxModB = declEnvModule 1 "modB" [deNameIdxBeta, deNameIdxSharedB]
+
+-- No data declaration anywhere in these two — a plain value binding, the
+-- "unrelated code" T-GLOBAL-TABLE asks for.
+deNameIdxModC : DeclEnvModule
+deNameIdxModC =
+  declEnvModule 2 "modC" [DFunDef True "modCHelper" [] (ELit (LInt 1))]
+
+deNameIdxModD : DeclEnvModule
+deNameIdxModD =
+  declEnvModule 3 "modD" [DFunDef True "modDHelper" [] (ELit (LInt 2))]
+
+deNameIdxChain : OrdMap (OrdMap Unit)
+deNameIdxChain =
+  let (_, _, nm) = declEnvSeedChain [deNameIdxModA, deNameIdxModB, deNameIdxModC, deNameIdxModD] [] omEmpty omEmpty omEmpty omEmpty omEmpty
+  nm
+
+-- The SAME chain with the two data-free rows removed.  Comparing against this is
+-- what turns "unrelated code is unaffected" into an assertion rather than a hope.
+deNameIdxChainNoUnrelated : OrdMap (OrdMap Unit)
+deNameIdxChainNoUnrelated =
+  let (_, _, nm) = declEnvSeedChain [deNameIdxModA, deNameIdxModB] [] omEmpty omEmpty omEmpty omEmpty omEmpty
+  nm
+
+deNameIdxAt : OrdMap (OrdMap Unit) -> String -> List String
+deNameIdxAt nm mid = omKeys (fromOption omEmpty (omLookup mid nm))
+
+-- ── doctests ─────────────────────────────────────────────────────────────
+-- (a) A name declared in an EARLIER module is visible at a later module's seed.
+--     `modB` sees `modA`'s two names and no others.
+-- > deNameIdxAt deNameIdxChain "modB"
+-- ["Alpha", "Shared"]
+
+-- (b) A name declared in the SAME module is NOT — own registrations go on TOP of
+--     the universe later, via `recordParamKinds` under `registerAllData … prog0`.
+--     `modB` declares `Beta`; `Beta` is absent from `modB`'s own seed and present
+--     one row later.
+-- > omHasKey "Beta" (fromOption omEmpty (omLookup "modB" deNameIdxChain))
+-- False
+-- > omHasKey "Beta" (fromOption omEmpty (omLookup "modC" deNameIdxChain))
+-- True
+
+--     …and the first row's seed is empty, own-row exclusion at the boundary.
+-- > deNameIdxAt deNameIdxChain "modA"
+-- []
+
+-- (c) Unrelated code — `modC`/`modD` declare no data type at all.  They
+--     contribute NOTHING (the two rows' indexes are equal, so the row between
+--     them added no name), and their presence perturbs NOTHING (`modA`/`modB`
+--     read identically in a chain that does not contain them at all).
+--     `Shared` appears ONCE across both declaring modules: bare-name by design.
+-- > deNameIdxAt deNameIdxChain "modC"
+-- ["Alpha", "Beta", "Shared"]
+-- > deNameIdxAt deNameIdxChain "modD" == deNameIdxAt deNameIdxChain "modC"
+-- True
+-- > deNameIdxAt deNameIdxChainNoUnrelated "modA" == deNameIdxAt deNameIdxChain "modA"
+-- True
+-- > deNameIdxAt deNameIdxChainNoUnrelated "modB" == deNameIdxAt deNameIdxChain "modB"
+-- True
 
 -- ── A-3.2a (#1112): the `DataEnv` slice ─────────────────────────────────────
 -- ⚠️ This banner read "CONSTRUCTION ONLY, NOT LIVE" and that lapsed with A-3.2b
@@ -4650,6 +4870,52 @@ distinctIdentsIn2 : List (Ident, String) -> Bool
 distinctIdentsIn2 [(i1, _), (i2, _)] = i1 /= i2
 distinctIdentsIn2 _ = False
 
+-- ── #2147 residual: `deRecordIdents`' BUCKET ORDER, NOW PINNED ───────────────
+-- `deFieldOwnerIdents` has had an ORDERED assertion since A-3.2a (the `["Pt",
+-- "Vec"]` doctest below states a list, not a length).  `deRecordIdents` — its
+-- sibling under the same `omMapValues reverseL` finalisation in `buildDataEnv`,
+-- rewritten from `++ [x]` to cons-and-reverse by #2147 — had only its VALUES
+-- covered, never its ORDER.  So the one property #2147 had to preserve was the
+-- one nothing asserted: drop `deRecordIdents`' half of that `omMapValues
+-- reverseL` and every existing assertion in this file still passes.
+--
+-- The fixture needs 2+ entries under ONE key, and `deRecordIdents` is keyed by
+-- CONSTRUCTOR name, so it takes two records sharing a ctor name under different
+-- TYPE names — which is also what makes the assertion discriminating, since the
+-- type name is then the thing that distinguishes first from second.
+deRecordOrderFixtureA : Decl
+deRecordOrderFixtureA = DData {
+  dataVis = VisPublic,
+  dataName = "P1",
+  dataParams = [],
+  dataCtors = [Variant "Pt" (ConNamed [Field "x" (tyConBuiltin "Int" None)] False)],
+  dataDerives = [],
+  dataOrigin = OriginModule "m",
+}
+
+deRecordOrderFixtureB : Decl
+deRecordOrderFixtureB = DData {
+  dataVis = VisPublic,
+  dataName = "P2",
+  dataParams = [],
+  dataCtors = [Variant "Pt" (ConNamed [Field "y" (tyConBuiltin "Int" None)] False)],
+  dataDerives = [],
+  dataOrigin = OriginModule "n",
+}
+
+-- Two modules in ORDINAL order, so "P1" is declared strictly before "P2".
+deRecordOrderEnv : DataEnv
+deRecordOrderEnv = buildDataEnv
+  [
+    declEnvModule 0 "m" [deRecordOrderFixtureA],
+    declEnvModule 1 "n" [deRecordOrderFixtureB],
+  ]
+
+deRecordIdentTyNames : List (Ident, String, List Field) -> List String
+deRecordIdentTyNames [] = []
+deRecordIdentTyNames ((_, tyName, _)::rest) =
+  tyName :: deRecordIdentTyNames rest
+
 -- ── doctests ─────────────────────────────────────────────────────────────
 -- > map snd (fromOption [] (omLookup "x" deFieldOwnerCollisionEnv.deFieldOwnerIdents))
 -- ["Pt", "Vec"]
@@ -4664,6 +4930,16 @@ distinctIdentsIn2 _ = False
 -- ["Pt", "Pt"]
 -- > distinctIdentsIn2 (fromOption [] (omLookup "x" deFieldOwnerSameNameEnv.deFieldOwnerIdents))
 -- True
+
+-- #2147's order half, on `deRecordIdents` rather than `deFieldOwnerIdents`:
+-- DECLARATION order within the bucket, "P1" (module ordinal 0) before "P2"
+-- (ordinal 1).  Remove `deRecordIdents`' `omMapValues reverseL` in
+-- `buildDataEnv` and this reads `["P2", "P1"]`; the length assertion beside it
+-- does not move, which is precisely why a length was never enough.
+-- > deRecordIdentTyNames (fromOption [] (omLookup "Pt" deRecordOrderEnv.deRecordIdents))
+-- ["P1", "P2"]
+-- > listLen (fromOption [] (omLookup "Pt" deRecordOrderEnv.deRecordIdents))
+-- 2
 
 -- 🚨 THE BLANK LINE ABOVE IS LOAD-BEARING — DO NOT CLOSE THE GAP.  A doctest's
 -- EXPECTED OUTPUT runs to the end of the contiguous comment run, so without it
@@ -4915,18 +5191,23 @@ buildImplEnvGo (m::rest) seq env =
 -- ("derive a NAME from (module id, interface identity, head) — content, not
 -- position"), one path further.
 --
--- 🚨 LINEAR BY DESIGN, AND THAT IS WHY IT DOES NOT CALL `ieAddRows`.  `ieInsertRow`
--- does `env.ieRows ++ [r]` per row — O(rows²) over the build, self-documented as
--- OWED at `ieInsertRow` — and `compiler/AGENTS.md` forbids importing a known
--- quadratic into a new path ("thirteen quadratics, all the same shape").  The rows
--- are already in hand as one forward-ordered list here, so `ieRows` is SET once and
+-- 🚨 LINEAR BY DESIGN, AND THAT IS WHY IT DOES NOT CALL `ieAddRows`.  The rows are
+-- already in hand as one forward-ordered list here, so `ieRows` is SET once and
 -- only the three index buckets are folded, through the SAME `ieInsertRowKeys` /
--- `ieInsertRowAt` the Module arm uses.  `ieInsertRow` is left exactly as it is: it
--- is the Module arm's shared path, and RUN-B-007's declaration-index ruling depends
--- on `ieRows` and every bucket being ASCENDING by `instRefSeq`, so a cons+reverse
--- rewrite of that function would put a load-bearing order on the line for no gain
--- here.  This construction yields the same value `ieAddRows rows emptyImplEnv`
--- would: appending left-to-right produces `rows`, and the bucket writer is
+-- `ieInsertRowAt` the Module arm uses — no per-row `ieRows` write at all, and
+-- therefore no reverse to owe.
+--
+-- ⚠️ THIS PARAGRAPH USED TO ARGUE AGAINST A CONS+REVERSE REWRITE OF
+-- `ieInsertRow` ("would put a load-bearing order on the line for no gain here"),
+-- ON THE PREMISE THAT `ieInsertRow` APPENDED (`env.ieRows ++ [r]`, O(rows²)).
+-- #2146 did that rewrite: `ieInsertRow` now conses and `buildImplEnv` does one
+-- `reverseL` at the end.  RUN-B-007's declaration-index ruling still depends on
+-- `ieRows` and every bucket being ASCENDING by `instRefSeq` — that is unchanged
+-- and still load-bearing — but it is now `buildImplEnv`'s final `reverseL` that
+-- discharges it on the Module arm, not the shape of `ieInsertRow`.  See
+-- `ieAddRows`'s 🚨 for what a caller inserting into a BUILT `ImplEnv` owes as a
+-- result.  This construction still yields the same value `ieAddRows rows
+-- emptyImplEnv` (followed by that reverse) would, and the bucket writer is
 -- unchanged and still `mregAppendK` (forward order within a bucket).
 --
 -- ⚠️ `ieUnivSnaps` IS RE-DERIVED, per `ieAddRows`'s 🚨: it is a second
@@ -5032,6 +5313,22 @@ implRowsOf mid ord seq ((iface, tys, reqs, ms)::rest) =
 -- So: if you need to insert into a built `ImplEnv`, RE-DERIVE the snapshots
 -- (`ieUnivSnaps = ieBuildSnaps env.ieRows`) once at the end of your fold, exactly as
 -- `buildImplEnv` does. Do not add a second maintainer, and do not insert without one.
+--
+-- 🚨 AND SINCE #2146 THAT IS TWO STEPS, NOT ONE — `REVERSE FIRST`.  `ieInsertRow`
+-- now PREPENDS (`r :: env.ieRows`), so a fold over it leaves `ieRows` in reverse
+-- build order; `buildImplEnv` restores it with one `reverseL` and only then calls
+-- `ieBuildSnaps`.  A caller that re-derives off the un-reversed rows builds
+-- snapshots whose per-ordinal prefixes are the SUFFIXES — silently wrong in
+-- exactly the direction this whole note is about, and worse than not re-deriving
+-- at all.  The full sequence, mirroring `buildImplEnv` line for line:
+--
+--     let env2 = ImplEnv { env | ieRows = reverseL env.ieRows }
+--     ImplEnv { env2 | ieUnivSnaps = ieBuildSnaps env2.ieRows }
+--
+-- INERT TODAY (this function still has exactly one caller, `buildImplEnvGo`,
+-- which is inside `buildImplEnv` and does both steps) — written down anyway,
+-- because it is the instruction the NEXT caller reads, and the reverse is the
+-- half a reader of the old two-line version would not know to add.
 ieAddRows : List ImplRow -> ImplEnv -> ImplEnv
 ieAddRows [] env = env
 ieAddRows (r::rest) env = ieAddRows rest (ieInsertRow r env)
@@ -15856,9 +16153,12 @@ recordParamKinds : TyConOrigin -> String -> List Kind -> Unit
 recordParamKinds o name kinds =
   let entry = (tyTabKey o name, kinds)
   perRun.value.dataParamKindsRef := entry::perRun.value.dataParamKindsRef.value
-  -- #2158: keep the name-only index in lockstep — an incremental insert here
-  -- (unlike declEnvSeedDataUniverse's rebuild) because this call only ADDS one
-  -- key; a duplicate name insert is a harmless no-op (Set/Map semantics).
+  -- #2158: keep the name-only index in lockstep — an insert here because this
+  -- call only ADDS one key, where `declEnvSeedDataUniverse` REPLACES the whole
+  -- table (it reads its module's whole prefix out of `deNameIndexBefore` in one
+  -- `omLookup`).  A duplicate name insert is a harmless no-op (Set semantics),
+  -- which is what makes "own registrations on TOP of the universe" work here
+  -- without the index needing the list's ordering.
   perRun.value.dataParamNameIndexRef := omInsert name () perRun.value.dataParamNameIndexRef.value
 
 -- A data param is KRow iff its name appears in a field's effect-tail position
@@ -27709,10 +28009,11 @@ noImplFoundMsg iface args = "No impl of \{iface} for \{ppPredArgsShared args}"
 -- Stage A-2 ledger counts.
 -- That costs nothing real: the question this asks is "is a type by this name
 -- user-declared anywhere?", used ONLY to decide whether `add 'deriving X'` is
--- applicable advice rather than a dead end for a builtin.  `tabHasName`
--- returns no value, so it cannot select the wrong module's row; the worst a
--- collision can do is offer applicable advice for the right reason under the
--- wrong module's declaration.
+-- applicable advice rather than a dead end for a builtin.  `omHasKey` (over
+-- `dataParamNameIndexRef`, which #2158 put in front of the old `tabHasName`
+-- scan — same bare-name question, same answer) returns no value, so it cannot
+-- select the wrong module's row; the worst a collision can do is offer
+-- applicable advice for the right reason under the wrong module's declaration.
 noImplHint : String -> List Mono -> Option String
 noImplHint iface [arg] = match headTyconNameMono arg
   Some n => noImplHintFor iface n
@@ -37683,11 +37984,11 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "toggles" (TyApp (TyCon "Ref") (TyCon "Toggles")))
 (DFunDef false "toggles" () (EApp (EVar "Ref") (EApp (EVar "freshToggles") (ELit LUnit))))
 (DData Private "DeclEnvModule" () ((variant "DeclEnvModule" (ConNamed (field "demOrd" (TyCon "Int")) (field "demId" (TyCon "String")) (field "demDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "demPubDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "demKindEntries" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))))) ())
-(DData Private "DeclEnvs" () ((variant "DeclEnvs" (ConNamed (field "deModules" (TyApp (TyCon "List") (TyCon "DeclEnvModule"))) (field "deOrdIndex" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "deDefiners" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))) (field "deAmbigValues" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (field "deAllDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "deData" (TyCon "DataEnv")) (field "deImpls" (TyCon "ImplEnv")) (field "deIfaces" (TyCon "ClassEnv")) (field "deKindsBefore" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "dePolaritiesBefore" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))))) (field "deAtomsBefore" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))))))) (field "deOwnersBefore" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))) (field "deOwnerModules" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "deReach" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))) ())
+(DData Private "DeclEnvs" () ((variant "DeclEnvs" (ConNamed (field "deModules" (TyApp (TyCon "List") (TyCon "DeclEnvModule"))) (field "deOrdIndex" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "deDefiners" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))) (field "deAmbigValues" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (field "deAllDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "deData" (TyCon "DataEnv")) (field "deImpls" (TyCon "ImplEnv")) (field "deIfaces" (TyCon "ClassEnv")) (field "deKindsBefore" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "deNameIndexBefore" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "dePolaritiesBefore" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))))) (field "deAtomsBefore" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))))))) (field "deOwnersBefore" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))) (field "deOwnerModules" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "deReach" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))) ())
 (DTypeSig false "emptyDeclEnvs" (TyCon "DeclEnvs"))
-(DFunDef false "emptyDeclEnvs" () (ERecordCreate "DeclEnvs" ((fa "deModules" (EListLit)) (fa "deOrdIndex" (EVar "omEmpty")) (fa "deDefiners" (EVar "omEmpty")) (fa "deAmbigValues" (EVar "omEmpty")) (fa "deAllDecls" (EListLit)) (fa "deData" (EVar "emptyDataEnv")) (fa "deImpls" (EVar "emptyImplEnv")) (fa "deIfaces" (EVar "emptyClassEnv")) (fa "deKindsBefore" (EVar "omEmpty")) (fa "dePolaritiesBefore" (EVar "omEmpty")) (fa "deAtomsBefore" (EVar "omEmpty")) (fa "deOwnersBefore" (EVar "omEmpty")) (fa "deOwnerModules" (EVar "omEmpty")) (fa "deReach" (EVar "omEmpty")))))
+(DFunDef false "emptyDeclEnvs" () (ERecordCreate "DeclEnvs" ((fa "deModules" (EListLit)) (fa "deOrdIndex" (EVar "omEmpty")) (fa "deDefiners" (EVar "omEmpty")) (fa "deAmbigValues" (EVar "omEmpty")) (fa "deAllDecls" (EListLit)) (fa "deData" (EVar "emptyDataEnv")) (fa "deImpls" (EVar "emptyImplEnv")) (fa "deIfaces" (EVar "emptyClassEnv")) (fa "deKindsBefore" (EVar "omEmpty")) (fa "deNameIndexBefore" (EVar "omEmpty")) (fa "dePolaritiesBefore" (EVar "omEmpty")) (fa "deAtomsBefore" (EVar "omEmpty")) (fa "deOwnersBefore" (EVar "omEmpty")) (fa "deOwnerModules" (EVar "omEmpty")) (fa "deReach" (EVar "omEmpty")))))
 (DTypeSig false "buildDeclEnvs" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "DeclEnvs"))))
-(DFunDef false "buildDeclEnvs" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "mods") (EApp (EApp (EVar "declEnvModulesFrom") (ELit (LInt 0))) (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules")))) (DoLet false false (PVar "allDecls") (EApp (EVar "declEnvDeclsOf") (EVar "mods"))) (DoLet false false (PVar "seeds") (EApp (EApp (EApp (EApp (EApp (EVar "declEnvSeedChain") (EVar "mods")) (EListLit)) (EVar "omEmpty")) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EListLit)) (EVar "omEmpty"))) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EVar "omEmpty")) (EVar "omEmpty")))) (DoLet false false (PVar "definers") (EApp (EApp (EApp (EVar "declEnvDefinerIndex") (EVar "omEmpty")) (EVar "omEmpty")) (EVar "mods"))) (DoExpr (ERecordCreate "DeclEnvs" ((fa "deModules" (EVar "mods")) (fa "deOrdIndex" (EApp (EApp (EVar "declEnvOrdIndex") (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (ELit (LInt 0))) (EVar "omEmpty"))) (EVar "mods"))) (fa "deDefiners" (EApp (EVar "fst") (EVar "definers"))) (fa "deAmbigValues" (EApp (EVar "snd") (EVar "definers"))) (fa "deAllDecls" (EVar "allDecls")) (fa "deData" (EApp (EVar "buildDataEnv") (EVar "mods"))) (fa "deImpls" (EApp (EVar "buildImplEnv") (EVar "mods"))) (fa "deIfaces" (EApp (EVar "buildClassEnv") (EVar "mods"))) (fa "deKindsBefore" (EApp (EVar "fst") (EVar "seeds"))) (fa "dePolaritiesBefore" (EApp (EApp (EApp (EVar "declEnvPolarityChain") (EVar "mods")) (EListLit)) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EListLit)) (EVar "omEmpty")))) (fa "deAtomsBefore" (EApp (EApp (EApp (EVar "declEnvRowAtomsChain") (EVar "mods")) (EListLit)) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EListLit)) (EVar "omEmpty")))) (fa "deOwnersBefore" (EApp (EVar "snd") (EVar "seeds"))) (fa "deOwnerModules" (EApp (EApp (EVar "declEnvOwnerModules") (EVar "mods")) (EVar "omEmpty"))) (fa "deReach" (EApp (EVar "declEnvReachIndex") (EVar "mods"))))))))
+(DFunDef false "buildDeclEnvs" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "mods") (EApp (EApp (EVar "declEnvModulesFrom") (ELit (LInt 0))) (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules")))) (DoLet false false (PVar "allDecls") (EApp (EVar "declEnvDeclsOf") (EVar "mods"))) (DoLet false false (PTuple (PVar "seedKinds") (PVar "seedOwners") (PVar "seedNames")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "declEnvSeedChain") (EVar "mods")) (EListLit)) (EVar "omEmpty")) (EVar "omEmpty")) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EListLit)) (EVar "omEmpty"))) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EVar "omEmpty")) (EVar "omEmpty"))) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EVar "omEmpty")) (EVar "omEmpty")))) (DoLet false false (PVar "definers") (EApp (EApp (EApp (EVar "declEnvDefinerIndex") (EVar "omEmpty")) (EVar "omEmpty")) (EVar "mods"))) (DoExpr (ERecordCreate "DeclEnvs" ((fa "deModules" (EVar "mods")) (fa "deOrdIndex" (EApp (EApp (EVar "declEnvOrdIndex") (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (ELit (LInt 0))) (EVar "omEmpty"))) (EVar "mods"))) (fa "deDefiners" (EApp (EVar "fst") (EVar "definers"))) (fa "deAmbigValues" (EApp (EVar "snd") (EVar "definers"))) (fa "deAllDecls" (EVar "allDecls")) (fa "deData" (EApp (EVar "buildDataEnv") (EVar "mods"))) (fa "deImpls" (EApp (EVar "buildImplEnv") (EVar "mods"))) (fa "deIfaces" (EApp (EVar "buildClassEnv") (EVar "mods"))) (fa "deKindsBefore" (EVar "seedKinds")) (fa "deNameIndexBefore" (EVar "seedNames")) (fa "dePolaritiesBefore" (EApp (EApp (EApp (EVar "declEnvPolarityChain") (EVar "mods")) (EListLit)) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EListLit)) (EVar "omEmpty")))) (fa "deAtomsBefore" (EApp (EApp (EApp (EVar "declEnvRowAtomsChain") (EVar "mods")) (EListLit)) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EListLit)) (EVar "omEmpty")))) (fa "deOwnersBefore" (EVar "seedOwners")) (fa "deOwnerModules" (EApp (EApp (EVar "declEnvOwnerModules") (EVar "mods")) (EVar "omEmpty"))) (fa "deReach" (EApp (EVar "declEnvReachIndex") (EVar "mods"))))))))
 (DTypeSig false "declEnvModulesFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "DeclEnvModule")))))
 (DFunDef false "declEnvModulesFrom" (PWild (PList)) (EListLit))
 (DFunDef false "declEnvModulesFrom" ((PVar "k") (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EVar "declEnvModule") (EVar "k")) (EVar "mid")) (EVar "decls")) (EApp (EApp (EVar "declEnvModulesFrom") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest"))))
@@ -37717,9 +38018,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "declEnvKindEntries" ((PCons (PRec "DData" ((rf "dataName" (PVar "n")) (rf "dataParams" (PVar "ps")) (rf "dataCtors" (PVar "vs")) (rf "dataOrigin" (PVar "o"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EApp (EApp (EVar "inferParamKinds") (EVar "ps")) (EVar "vs"))) (EApp (EVar "declEnvKindEntries") (EVar "rest"))))
 (DFunDef false "declEnvKindEntries" ((PCons (PRec "DNewtype" ((rf "newtypeName" (PVar "n")) (rf "newtypeParams" (PVar "ps")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty")) (rf "newtypeOrigin" (PVar "o"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EApp (EApp (EVar "inferParamKinds") (EVar "ps")) (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty"))))))) (EApp (EVar "declEnvKindEntries") (EVar "rest"))))
 (DFunDef false "declEnvKindEntries" ((PCons PWild (PVar "rest"))) (EApp (EVar "declEnvKindEntries") (EVar "rest")))
-(DTypeSig false "declEnvSeedChain" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))))))))
-(DFunDef false "declEnvSeedChain" ((PList) PWild PWild (PVar "km") (PVar "om")) (ETuple (EVar "km") (EVar "om")))
-(DFunDef false "declEnvSeedChain" ((PCons (PVar "m") (PVar "rest")) (PVar "kacc") (PVar "oacc") (PVar "km") (PVar "om")) (EApp (EApp (EApp (EApp (EApp (EVar "declEnvSeedChain") (EVar "rest")) (EBinOp "++" (EApp (EApp (EVar "declEnvRowKindEntries") (EBinOp "+" (EFieldAccess (EVar "m") "demOrd") (ELit (LInt 1)))) (EVar "m")) (EVar "kacc"))) (EApp (EApp (EVar "declEnvDeclFieldOwners") (EApp (EApp (EVar "declEnvRowVisible") (EBinOp "+" (EFieldAccess (EVar "m") "demOrd") (ELit (LInt 1)))) (EVar "m"))) (EVar "oacc"))) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EVar "kacc")) (EVar "km"))) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EVar "oacc")) (EVar "om"))))
+(DTypeSig false "declEnvSeedChain" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))))))))
+(DFunDef false "declEnvSeedChain" ((PList) PWild PWild PWild (PVar "km") (PVar "om") (PVar "nm")) (ETuple (EVar "km") (EVar "om") (EVar "nm")))
+(DFunDef false "declEnvSeedChain" ((PCons (PVar "m") (PVar "rest")) (PVar "kacc") (PVar "oacc") (PVar "nacc") (PVar "km") (PVar "om") (PVar "nm")) (EBlock (DoLet false false (PVar "kents") (EApp (EApp (EVar "declEnvRowKindEntries") (EBinOp "+" (EFieldAccess (EVar "m") "demOrd") (ELit (LInt 1)))) (EVar "m"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "declEnvSeedChain") (EVar "rest")) (EBinOp "++" (EVar "kents") (EVar "kacc"))) (EApp (EApp (EVar "declEnvDeclFieldOwners") (EApp (EApp (EVar "declEnvRowVisible") (EBinOp "+" (EFieldAccess (EVar "m") "demOrd") (ELit (LInt 1)))) (EVar "m"))) (EVar "oacc"))) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "tabKeyName") (EApp (EVar "fst") (EVar "p"))))) (EVar "kents"))) (EVar "nacc"))) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EVar "kacc")) (EVar "km"))) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EVar "oacc")) (EVar "om"))) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EVar "nacc")) (EVar "nm"))))))
 (DTypeSig false "declEnvPolarityChain" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity"))))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))))))))
 (DFunDef false "declEnvPolarityChain" ((PList) PWild (PVar "pm")) (EVar "pm"))
 (DFunDef false "declEnvPolarityChain" ((PCons (PVar "m") (PVar "rest")) (PVar "pacc") (PVar "pm")) (EApp (EApp (EApp (EVar "declEnvPolarityChain") (EVar "rest")) (EBinOp "++" (EApp (EApp (EApp (EVar "declEnvRowPolarityEntries") (EBinOp "+" (EFieldAccess (EVar "m") "demOrd") (ELit (LInt 1)))) (EVar "m")) (EVar "pacc")) (EVar "pacc"))) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EVar "pacc")) (EVar "pm"))))
@@ -37815,7 +38116,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "declEnvDirectImports" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "declEnvDirectImports" ((PVar "edges") (PVar "mid")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "edges"))))
 (DTypeSig false "declEnvSeedDataUniverse" (TyFun (TyCon "String") (TyFun (TyCon "DeclEnvs") (TyCon "Unit"))))
-(DFunDef false "declEnvSeedDataUniverse" ((PVar "mid") (PVar "envs")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deKindsBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamNameIndexRef")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "tabKeyName") (EApp (EVar "fst") (EVar "p"))))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef") "value"))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "dePolaritiesBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamRowAtomsRef")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deAtomsBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef")) (EApp (EApp (EVar "fromOption") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deOwnersBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerModulesRef")) (EFieldAccess (EVar "envs") "deOwnerModules"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerReachRef")) (EApp (EApp (EVar "fromOption") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deReach")))))))
+(DFunDef false "declEnvSeedDataUniverse" ((PVar "mid") (PVar "envs")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deKindsBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamNameIndexRef")) (EApp (EApp (EVar "fromOption") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deNameIndexBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "dePolaritiesBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamRowAtomsRef")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deAtomsBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef")) (EApp (EApp (EVar "fromOption") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deOwnersBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerModulesRef")) (EFieldAccess (EVar "envs") "deOwnerModules"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerReachRef")) (EApp (EApp (EVar "fromOption") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deReach")))))))
 (DTypeSig false "deKindAbstractFixture" (TyCon "Decl"))
 (DFunDef false "deKindAbstractFixture" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisAbstract")) (fa "dataName" (ELit (LString "Opq"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkOpq"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))))))
 (DTypeSig false "deKindPrivateFixture" (TyCon "Decl"))
@@ -37830,8 +38131,38 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "deKindRow1" () (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 1))) (ELit (LString "m"))) (EVar "deKindFixtureDecls")))
 (DTypeSig false "deSeedRowN" (TyCon "DeclEnvModule"))
 (DFunDef false "deSeedRowN" () (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 1))) (ELit (LString "n"))) (EVar "deKindFixtureDecls")))
-(DTypeSig false "deSeedChainProbe" (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "deSeedChainProbe" () (EApp (EApp (EApp (EApp (EApp (EVar "declEnvSeedChain") (EListLit (EVar "deKindRow0") (EVar "deSeedRowN"))) (EListLit)) (EVar "omEmpty")) (EVar "omEmpty")) (EVar "omEmpty")))
+(DTypeSig false "deSeedChainProbe" (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
+(DFunDef false "deSeedChainProbe" () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "declEnvSeedChain") (EListLit (EVar "deKindRow0") (EVar "deSeedRowN"))) (EListLit)) (EVar "omEmpty")) (EVar "omEmpty")) (EVar "omEmpty")) (EVar "omEmpty")) (EVar "omEmpty")))
+(DTypeSig false "deSeedChainKinds" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))))
+(DFunDef false "deSeedChainKinds" () (EBlock (DoLet false false (PTuple (PVar "km") PWild PWild) (EVar "deSeedChainProbe")) (DoExpr (EVar "km"))))
+(DTypeSig false "deSeedChainOwners" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "deSeedChainOwners" () (EBlock (DoLet false false (PTuple PWild (PVar "om") PWild) (EVar "deSeedChainProbe")) (DoExpr (EVar "om"))))
+(DTypeSig false "deSeedChainNames" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
+(DFunDef false "deSeedChainNames" () (EBlock (DoLet false false (PTuple PWild PWild (PVar "nm")) (EVar "deSeedChainProbe")) (DoExpr (EVar "nm"))))
+(DTypeSig false "deSeedNameParity" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "deSeedNameParity" ((PVar "mid")) (EBlock (DoLet false false (PVar "accumulated") (EApp (EVar "omKeys") (EApp (EApp (EVar "fromOption") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "deSeedChainNames"))))) (DoLet false false (PVar "rebuilt") (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "tabKeyName") (EApp (EVar "fst") (EVar "p"))))) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "deSeedChainKinds"))))) (EVar "omEmpty")))) (DoExpr (EBinOp "==" (EVar "accumulated") (EVar "rebuilt")))))
+(DTypeSig false "deNameIdxAlpha" (TyCon "Decl"))
+(DFunDef false "deNameIdxAlpha" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Alpha"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkAlpha"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modA")))))))
+(DTypeSig false "deNameIdxSharedA" (TyCon "Decl"))
+(DFunDef false "deNameIdxSharedA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Shared"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkSharedA"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modA")))))))
+(DTypeSig false "deNameIdxBeta" (TyCon "Decl"))
+(DFunDef false "deNameIdxBeta" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Beta"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkBeta"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modB")))))))
+(DTypeSig false "deNameIdxSharedB" (TyCon "Decl"))
+(DFunDef false "deNameIdxSharedB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Shared"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkSharedB"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modB")))))))
+(DTypeSig false "deNameIdxModA" (TyCon "DeclEnvModule"))
+(DFunDef false "deNameIdxModA" () (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "modA"))) (EListLit (EVar "deNameIdxAlpha") (EVar "deNameIdxSharedA"))))
+(DTypeSig false "deNameIdxModB" (TyCon "DeclEnvModule"))
+(DFunDef false "deNameIdxModB" () (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 1))) (ELit (LString "modB"))) (EListLit (EVar "deNameIdxBeta") (EVar "deNameIdxSharedB"))))
+(DTypeSig false "deNameIdxModC" (TyCon "DeclEnvModule"))
+(DFunDef false "deNameIdxModC" () (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 2))) (ELit (LString "modC"))) (EListLit (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "True")) (ELit (LString "modCHelper"))) (EListLit)) (EApp (EVar "ELit") (EApp (EVar "LInt") (ELit (LInt 1))))))))
+(DTypeSig false "deNameIdxModD" (TyCon "DeclEnvModule"))
+(DFunDef false "deNameIdxModD" () (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 3))) (ELit (LString "modD"))) (EListLit (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "True")) (ELit (LString "modDHelper"))) (EListLit)) (EApp (EVar "ELit") (EApp (EVar "LInt") (ELit (LInt 2))))))))
+(DTypeSig false "deNameIdxChain" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
+(DFunDef false "deNameIdxChain" () (EBlock (DoLet false false (PTuple PWild PWild (PVar "nm")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "declEnvSeedChain") (EListLit (EVar "deNameIdxModA") (EVar "deNameIdxModB") (EVar "deNameIdxModC") (EVar "deNameIdxModD"))) (EListLit)) (EVar "omEmpty")) (EVar "omEmpty")) (EVar "omEmpty")) (EVar "omEmpty")) (EVar "omEmpty"))) (DoExpr (EVar "nm"))))
+(DTypeSig false "deNameIdxChainNoUnrelated" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
+(DFunDef false "deNameIdxChainNoUnrelated" () (EBlock (DoLet false false (PTuple PWild PWild (PVar "nm")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "declEnvSeedChain") (EListLit (EVar "deNameIdxModA") (EVar "deNameIdxModB"))) (EListLit)) (EVar "omEmpty")) (EVar "omEmpty")) (EVar "omEmpty")) (EVar "omEmpty")) (EVar "omEmpty"))) (DoExpr (EVar "nm"))))
+(DTypeSig false "deNameIdxAt" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "deNameIdxAt" ((PVar "nm") (PVar "mid")) (EApp (EVar "omKeys") (EApp (EApp (EVar "fromOption") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "nm")))))
 (DData Private "DataTypeDecl" () ((variant "DataTypeDecl" (ConNamed (field "dtKey" (TyCon "TabKey")) (field "dtName" (TyCon "String")) (field "dtOrigin" (TyCon "TyConOrigin")) (field "dtParams" (TyApp (TyCon "List") (TyCon "String"))) (field "dtVariants" (TyApp (TyCon "List") (TyCon "Variant")))))) ())
 (DData Private "AliasDecl" () ((variant "AliasDecl" (ConNamed (field "adKey" (TyCon "TabKey")) (field "adName" (TyCon "String")) (field "adParams" (TyApp (TyCon "List") (TyCon "String"))) (field "adRhs" (TyCon "Ty")) (field "adOrd" (TyCon "Int")) (field "adPub" (TyCon "Bool")) (field "adAttrib" (TyCon "Bool"))))) ())
 (DData Private "DataEnv" () ((variant "DataEnv" (ConNamed (field "deTypes" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "DataTypeDecl")))) (field "deCtorIdents" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Variant"))))) (field "deRecordIdents" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyApp (TyCon "List") (TyCon "Field")))))) (field "deFieldOwnerIdents" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String"))))) (field "deAliases" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl"))))))) ())
@@ -37897,6 +38228,15 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "distinctIdentsIn2" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String"))) (TyCon "Bool")))
 (DFunDef false "distinctIdentsIn2" ((PList (PTuple (PVar "i1") PWild) (PTuple (PVar "i2") PWild))) (EBinOp "/=" (EVar "i1") (EVar "i2")))
 (DFunDef false "distinctIdentsIn2" (PWild) (EVar "False"))
+(DTypeSig false "deRecordOrderFixtureA" (TyCon "Decl"))
+(DFunDef false "deRecordOrderFixtureA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "P1"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))))))
+(DTypeSig false "deRecordOrderFixtureB" (TyCon "Decl"))
+(DFunDef false "deRecordOrderFixtureB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "P2"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "y"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))))))
+(DTypeSig false "deRecordOrderEnv" (TyCon "DataEnv"))
+(DFunDef false "deRecordOrderEnv" () (EApp (EVar "buildDataEnv") (EListLit (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "m"))) (EListLit (EVar "deRecordOrderFixtureA"))) (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 1))) (ELit (LString "n"))) (EListLit (EVar "deRecordOrderFixtureB"))))))
+(DTypeSig false "deRecordIdentTyNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyApp (TyCon "List") (TyCon "Field")))) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "deRecordIdentTyNames" ((PList)) (EListLit))
+(DFunDef false "deRecordIdentTyNames" ((PCons (PTuple PWild (PVar "tyName") PWild) (PVar "rest"))) (EBinOp "::" (EVar "tyName") (EApp (EVar "deRecordIdentTyNames") (EVar "rest"))))
 (DData Private "InstRef" () ((variant "InstRef" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int")))) ())
 (DTypeSig false "instRefMid" (TyFun (TyCon "InstRef") (TyCon "String")))
 (DFunDef false "instRefMid" ((PCon "InstRef" (PVar "m") PWild PWild)) (EVar "m"))
@@ -43604,11 +43944,11 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "toggles" (TyApp (TyCon "Ref") (TyCon "Toggles")))
 (DFunDef false "toggles" () (EApp (EVar "Ref") (EApp (EVar "freshToggles") (ELit LUnit))))
 (DData Private "DeclEnvModule" () ((variant "DeclEnvModule" (ConNamed (field "demOrd" (TyCon "Int")) (field "demId" (TyCon "String")) (field "demDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "demPubDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "demKindEntries" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))))) ())
-(DData Private "DeclEnvs" () ((variant "DeclEnvs" (ConNamed (field "deModules" (TyApp (TyCon "List") (TyCon "DeclEnvModule"))) (field "deOrdIndex" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "deDefiners" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))) (field "deAmbigValues" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (field "deAllDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "deData" (TyCon "DataEnv")) (field "deImpls" (TyCon "ImplEnv")) (field "deIfaces" (TyCon "ClassEnv")) (field "deKindsBefore" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "dePolaritiesBefore" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))))) (field "deAtomsBefore" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))))))) (field "deOwnersBefore" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))) (field "deOwnerModules" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "deReach" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))) ())
+(DData Private "DeclEnvs" () ((variant "DeclEnvs" (ConNamed (field "deModules" (TyApp (TyCon "List") (TyCon "DeclEnvModule"))) (field "deOrdIndex" (TyApp (TyCon "OrdMap") (TyCon "Int"))) (field "deDefiners" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))))) (field "deAmbigValues" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (field "deAllDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "deData" (TyCon "DataEnv")) (field "deImpls" (TyCon "ImplEnv")) (field "deIfaces" (TyCon "ClassEnv")) (field "deKindsBefore" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))))) (field "deNameIndexBefore" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit")))) (field "dePolaritiesBefore" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))))) (field "deAtomsBefore" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))))))) (field "deOwnersBefore" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))) (field "deOwnerModules" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "deReach" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))) ())
 (DTypeSig false "emptyDeclEnvs" (TyCon "DeclEnvs"))
-(DFunDef false "emptyDeclEnvs" () (ERecordCreate "DeclEnvs" ((fa "deModules" (EListLit)) (fa "deOrdIndex" (EVar "omEmpty")) (fa "deDefiners" (EVar "omEmpty")) (fa "deAmbigValues" (EVar "omEmpty")) (fa "deAllDecls" (EListLit)) (fa "deData" (EVar "emptyDataEnv")) (fa "deImpls" (EVar "emptyImplEnv")) (fa "deIfaces" (EVar "emptyClassEnv")) (fa "deKindsBefore" (EVar "omEmpty")) (fa "dePolaritiesBefore" (EVar "omEmpty")) (fa "deAtomsBefore" (EVar "omEmpty")) (fa "deOwnersBefore" (EVar "omEmpty")) (fa "deOwnerModules" (EVar "omEmpty")) (fa "deReach" (EVar "omEmpty")))))
+(DFunDef false "emptyDeclEnvs" () (ERecordCreate "DeclEnvs" ((fa "deModules" (EListLit)) (fa "deOrdIndex" (EVar "omEmpty")) (fa "deDefiners" (EVar "omEmpty")) (fa "deAmbigValues" (EVar "omEmpty")) (fa "deAllDecls" (EListLit)) (fa "deData" (EVar "emptyDataEnv")) (fa "deImpls" (EVar "emptyImplEnv")) (fa "deIfaces" (EVar "emptyClassEnv")) (fa "deKindsBefore" (EVar "omEmpty")) (fa "deNameIndexBefore" (EVar "omEmpty")) (fa "dePolaritiesBefore" (EVar "omEmpty")) (fa "deAtomsBefore" (EVar "omEmpty")) (fa "deOwnersBefore" (EVar "omEmpty")) (fa "deOwnerModules" (EVar "omEmpty")) (fa "deReach" (EVar "omEmpty")))))
 (DTypeSig false "buildDeclEnvs" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "DeclEnvs"))))
-(DFunDef false "buildDeclEnvs" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "mods") (EApp (EApp (EVar "declEnvModulesFrom") (ELit (LInt 0))) (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules")))) (DoLet false false (PVar "allDecls") (EApp (EVar "declEnvDeclsOf") (EVar "mods"))) (DoLet false false (PVar "seeds") (EApp (EApp (EApp (EApp (EApp (EVar "declEnvSeedChain") (EVar "mods")) (EListLit)) (EVar "omEmpty")) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EListLit)) (EVar "omEmpty"))) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EVar "omEmpty")) (EVar "omEmpty")))) (DoLet false false (PVar "definers") (EApp (EApp (EApp (EVar "declEnvDefinerIndex") (EVar "omEmpty")) (EVar "omEmpty")) (EVar "mods"))) (DoExpr (ERecordCreate "DeclEnvs" ((fa "deModules" (EVar "mods")) (fa "deOrdIndex" (EApp (EApp (EVar "declEnvOrdIndex") (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (ELit (LInt 0))) (EVar "omEmpty"))) (EVar "mods"))) (fa "deDefiners" (EApp (EVar "fst") (EVar "definers"))) (fa "deAmbigValues" (EApp (EVar "snd") (EVar "definers"))) (fa "deAllDecls" (EVar "allDecls")) (fa "deData" (EApp (EVar "buildDataEnv") (EVar "mods"))) (fa "deImpls" (EApp (EVar "buildImplEnv") (EVar "mods"))) (fa "deIfaces" (EApp (EVar "buildClassEnv") (EVar "mods"))) (fa "deKindsBefore" (EApp (EVar "fst") (EVar "seeds"))) (fa "dePolaritiesBefore" (EApp (EApp (EApp (EVar "declEnvPolarityChain") (EVar "mods")) (EListLit)) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EListLit)) (EVar "omEmpty")))) (fa "deAtomsBefore" (EApp (EApp (EApp (EVar "declEnvRowAtomsChain") (EVar "mods")) (EListLit)) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EListLit)) (EVar "omEmpty")))) (fa "deOwnersBefore" (EApp (EVar "snd") (EVar "seeds"))) (fa "deOwnerModules" (EApp (EApp (EVar "declEnvOwnerModules") (EVar "mods")) (EVar "omEmpty"))) (fa "deReach" (EApp (EVar "declEnvReachIndex") (EVar "mods"))))))))
+(DFunDef false "buildDeclEnvs" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "mods") (EApp (EApp (EVar "declEnvModulesFrom") (ELit (LInt 0))) (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules")))) (DoLet false false (PVar "allDecls") (EApp (EVar "declEnvDeclsOf") (EVar "mods"))) (DoLet false false (PTuple (PVar "seedKinds") (PVar "seedOwners") (PVar "seedNames")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "declEnvSeedChain") (EVar "mods")) (EListLit)) (EVar "omEmpty")) (EVar "omEmpty")) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EListLit)) (EVar "omEmpty"))) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EVar "omEmpty")) (EVar "omEmpty"))) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EVar "omEmpty")) (EVar "omEmpty")))) (DoLet false false (PVar "definers") (EApp (EApp (EApp (EVar "declEnvDefinerIndex") (EVar "omEmpty")) (EVar "omEmpty")) (EVar "mods"))) (DoExpr (ERecordCreate "DeclEnvs" ((fa "deModules" (EVar "mods")) (fa "deOrdIndex" (EApp (EApp (EVar "declEnvOrdIndex") (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (ELit (LInt 0))) (EVar "omEmpty"))) (EVar "mods"))) (fa "deDefiners" (EApp (EVar "fst") (EVar "definers"))) (fa "deAmbigValues" (EApp (EVar "snd") (EVar "definers"))) (fa "deAllDecls" (EVar "allDecls")) (fa "deData" (EApp (EVar "buildDataEnv") (EVar "mods"))) (fa "deImpls" (EApp (EVar "buildImplEnv") (EVar "mods"))) (fa "deIfaces" (EApp (EVar "buildClassEnv") (EVar "mods"))) (fa "deKindsBefore" (EVar "seedKinds")) (fa "deNameIndexBefore" (EVar "seedNames")) (fa "dePolaritiesBefore" (EApp (EApp (EApp (EVar "declEnvPolarityChain") (EVar "mods")) (EListLit)) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EListLit)) (EVar "omEmpty")))) (fa "deAtomsBefore" (EApp (EApp (EApp (EVar "declEnvRowAtomsChain") (EVar "mods")) (EListLit)) (EApp (EApp (EApp (EVar "omInsert") (ELit (LString ""))) (EListLit)) (EVar "omEmpty")))) (fa "deOwnersBefore" (EVar "seedOwners")) (fa "deOwnerModules" (EApp (EApp (EVar "declEnvOwnerModules") (EVar "mods")) (EVar "omEmpty"))) (fa "deReach" (EApp (EVar "declEnvReachIndex") (EVar "mods"))))))))
 (DTypeSig false "declEnvModulesFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "DeclEnvModule")))))
 (DFunDef false "declEnvModulesFrom" (PWild (PList)) (EListLit))
 (DFunDef false "declEnvModulesFrom" ((PVar "k") (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EVar "declEnvModule") (EVar "k")) (EVar "mid")) (EVar "decls")) (EApp (EApp (EVar "declEnvModulesFrom") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest"))))
@@ -43638,9 +43978,9 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "declEnvKindEntries" ((PCons (PRec "DData" ((rf "dataName" (PVar "n")) (rf "dataParams" (PVar "ps")) (rf "dataCtors" (PVar "vs")) (rf "dataOrigin" (PVar "o"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EApp (EApp (EVar "inferParamKinds") (EVar "ps")) (EVar "vs"))) (EApp (EVar "declEnvKindEntries") (EVar "rest"))))
 (DFunDef false "declEnvKindEntries" ((PCons (PRec "DNewtype" ((rf "newtypeName" (PVar "n")) (rf "newtypeParams" (PVar "ps")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty")) (rf "newtypeOrigin" (PVar "o"))) false) (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n")) (EApp (EApp (EVar "inferParamKinds") (EVar "ps")) (EListLit (EApp (EApp (EVar "Variant") (EVar "con")) (EApp (EVar "ConPos") (EListLit (EVar "fty"))))))) (EApp (EVar "declEnvKindEntries") (EVar "rest"))))
 (DFunDef false "declEnvKindEntries" ((PCons PWild (PVar "rest"))) (EApp (EVar "declEnvKindEntries") (EVar "rest")))
-(DTypeSig false "declEnvSeedChain" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))))))))
-(DFunDef false "declEnvSeedChain" ((PList) PWild PWild (PVar "km") (PVar "om")) (ETuple (EVar "km") (EVar "om")))
-(DFunDef false "declEnvSeedChain" ((PCons (PVar "m") (PVar "rest")) (PVar "kacc") (PVar "oacc") (PVar "km") (PVar "om")) (EApp (EApp (EApp (EApp (EApp (EVar "declEnvSeedChain") (EVar "rest")) (EBinOp "++" (EApp (EApp (EVar "declEnvRowKindEntries") (EBinOp "+" (EFieldAccess (EVar "m") "demOrd") (ELit (LInt 1)))) (EVar "m")) (EVar "kacc"))) (EApp (EApp (EVar "declEnvDeclFieldOwners") (EApp (EApp (EVar "declEnvRowVisible") (EBinOp "+" (EFieldAccess (EVar "m") "demOrd") (ELit (LInt 1)))) (EVar "m"))) (EVar "oacc"))) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EVar "kacc")) (EVar "km"))) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EVar "oacc")) (EVar "om"))))
+(DTypeSig false "declEnvSeedChain" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))))))))
+(DFunDef false "declEnvSeedChain" ((PList) PWild PWild PWild (PVar "km") (PVar "om") (PVar "nm")) (ETuple (EVar "km") (EVar "om") (EVar "nm")))
+(DFunDef false "declEnvSeedChain" ((PCons (PVar "m") (PVar "rest")) (PVar "kacc") (PVar "oacc") (PVar "nacc") (PVar "km") (PVar "om") (PVar "nm")) (EBlock (DoLet false false (PVar "kents") (EApp (EApp (EVar "declEnvRowKindEntries") (EBinOp "+" (EFieldAccess (EVar "m") "demOrd") (ELit (LInt 1)))) (EVar "m"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "declEnvSeedChain") (EVar "rest")) (EBinOp "++" (EVar "kents") (EVar "kacc"))) (EApp (EApp (EVar "declEnvDeclFieldOwners") (EApp (EApp (EVar "declEnvRowVisible") (EBinOp "+" (EFieldAccess (EVar "m") "demOrd") (ELit (LInt 1)))) (EVar "m"))) (EVar "oacc"))) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "tabKeyName") (EApp (EVar "fst") (EVar "p"))))) (EVar "kents"))) (EVar "nacc"))) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EVar "kacc")) (EVar "km"))) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EVar "oacc")) (EVar "om"))) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EVar "nacc")) (EVar "nm"))))))
 (DTypeSig false "declEnvPolarityChain" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity"))))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))))))))
 (DFunDef false "declEnvPolarityChain" ((PList) PWild (PVar "pm")) (EVar "pm"))
 (DFunDef false "declEnvPolarityChain" ((PCons (PVar "m") (PVar "rest")) (PVar "pacc") (PVar "pm")) (EApp (EApp (EApp (EVar "declEnvPolarityChain") (EVar "rest")) (EBinOp "++" (EApp (EApp (EApp (EVar "declEnvRowPolarityEntries") (EBinOp "+" (EFieldAccess (EVar "m") "demOrd") (ELit (LInt 1)))) (EVar "m")) (EVar "pacc")) (EVar "pacc"))) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "m") "demId")) (EVar "pacc")) (EVar "pm"))))
@@ -43736,7 +44076,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "declEnvDirectImports" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "declEnvDirectImports" ((PVar "edges") (PVar "mid")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "edges"))))
 (DTypeSig false "declEnvSeedDataUniverse" (TyFun (TyCon "String") (TyFun (TyCon "DeclEnvs") (TyCon "Unit"))))
-(DFunDef false "declEnvSeedDataUniverse" ((PVar "mid") (PVar "envs")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deKindsBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamNameIndexRef")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "tabKeyName") (EApp (EVar "fst") (EVar "p"))))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef") "value"))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "dePolaritiesBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamRowAtomsRef")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deAtomsBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef")) (EApp (EApp (EVar "fromOption") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deOwnersBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerModulesRef")) (EFieldAccess (EVar "envs") "deOwnerModules"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerReachRef")) (EApp (EApp (EVar "fromOption") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deReach")))))))
+(DFunDef false "declEnvSeedDataUniverse" ((PVar "mid") (PVar "envs")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamKindsRef")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deKindsBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamNameIndexRef")) (EApp (EApp (EVar "fromOption") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deNameIndexBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamPolarityRef")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "dePolaritiesBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "dataParamRowAtomsRef")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deAtomsBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnersRef")) (EApp (EApp (EVar "fromOption") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deOwnersBefore"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerModulesRef")) (EFieldAccess (EVar "envs") "deOwnerModules"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "fieldOwnerReachRef")) (EApp (EApp (EVar "fromOption") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EFieldAccess (EVar "envs") "deReach")))))))
 (DTypeSig false "deKindAbstractFixture" (TyCon "Decl"))
 (DFunDef false "deKindAbstractFixture" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisAbstract")) (fa "dataName" (ELit (LString "Opq"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkOpq"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))))))
 (DTypeSig false "deKindPrivateFixture" (TyCon "Decl"))
@@ -43751,8 +44091,38 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "deKindRow1" () (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 1))) (ELit (LString "m"))) (EVar "deKindFixtureDecls")))
 (DTypeSig false "deSeedRowN" (TyCon "DeclEnvModule"))
 (DFunDef false "deSeedRowN" () (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 1))) (ELit (LString "n"))) (EVar "deKindFixtureDecls")))
-(DTypeSig false "deSeedChainProbe" (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "deSeedChainProbe" () (EApp (EApp (EApp (EApp (EApp (EVar "declEnvSeedChain") (EListLit (EVar "deKindRow0") (EVar "deSeedRowN"))) (EListLit)) (EVar "omEmpty")) (EVar "omEmpty")) (EVar "omEmpty")))
+(DTypeSig false "deSeedChainProbe" (TyTuple (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
+(DFunDef false "deSeedChainProbe" () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "declEnvSeedChain") (EListLit (EVar "deKindRow0") (EVar "deSeedRowN"))) (EListLit)) (EVar "omEmpty")) (EVar "omEmpty")) (EVar "omEmpty")) (EVar "omEmpty")) (EVar "omEmpty")))
+(DTypeSig false "deSeedChainKinds" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Kind"))))))
+(DFunDef false "deSeedChainKinds" () (EBlock (DoLet false false (PTuple (PVar "km") PWild PWild) (EVar "deSeedChainProbe")) (DoExpr (EVar "km"))))
+(DTypeSig false "deSeedChainOwners" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "deSeedChainOwners" () (EBlock (DoLet false false (PTuple PWild (PVar "om") PWild) (EVar "deSeedChainProbe")) (DoExpr (EVar "om"))))
+(DTypeSig false "deSeedChainNames" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
+(DFunDef false "deSeedChainNames" () (EBlock (DoLet false false (PTuple PWild PWild (PVar "nm")) (EVar "deSeedChainProbe")) (DoExpr (EVar "nm"))))
+(DTypeSig false "deSeedNameParity" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "deSeedNameParity" ((PVar "mid")) (EBlock (DoLet false false (PVar "accumulated") (EApp (EVar "omKeys") (EApp (EApp (EVar "fromOption") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "deSeedChainNames"))))) (DoLet false false (PVar "rebuilt") (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "tabKeyName") (EApp (EVar "fst") (EVar "p"))))) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "deSeedChainKinds"))))) (EVar "omEmpty")))) (DoExpr (EBinOp "==" (EVar "accumulated") (EVar "rebuilt")))))
+(DTypeSig false "deNameIdxAlpha" (TyCon "Decl"))
+(DFunDef false "deNameIdxAlpha" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Alpha"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkAlpha"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modA")))))))
+(DTypeSig false "deNameIdxSharedA" (TyCon "Decl"))
+(DFunDef false "deNameIdxSharedA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Shared"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkSharedA"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modA")))))))
+(DTypeSig false "deNameIdxBeta" (TyCon "Decl"))
+(DFunDef false "deNameIdxBeta" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Beta"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkBeta"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modB")))))))
+(DTypeSig false "deNameIdxSharedB" (TyCon "Decl"))
+(DFunDef false "deNameIdxSharedB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "Shared"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "MkSharedB"))) (EApp (EVar "ConPos") (EListLit (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "modB")))))))
+(DTypeSig false "deNameIdxModA" (TyCon "DeclEnvModule"))
+(DFunDef false "deNameIdxModA" () (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "modA"))) (EListLit (EVar "deNameIdxAlpha") (EVar "deNameIdxSharedA"))))
+(DTypeSig false "deNameIdxModB" (TyCon "DeclEnvModule"))
+(DFunDef false "deNameIdxModB" () (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 1))) (ELit (LString "modB"))) (EListLit (EVar "deNameIdxBeta") (EVar "deNameIdxSharedB"))))
+(DTypeSig false "deNameIdxModC" (TyCon "DeclEnvModule"))
+(DFunDef false "deNameIdxModC" () (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 2))) (ELit (LString "modC"))) (EListLit (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "True")) (ELit (LString "modCHelper"))) (EListLit)) (EApp (EVar "ELit") (EApp (EVar "LInt") (ELit (LInt 1))))))))
+(DTypeSig false "deNameIdxModD" (TyCon "DeclEnvModule"))
+(DFunDef false "deNameIdxModD" () (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 3))) (ELit (LString "modD"))) (EListLit (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "True")) (ELit (LString "modDHelper"))) (EListLit)) (EApp (EVar "ELit") (EApp (EVar "LInt") (ELit (LInt 2))))))))
+(DTypeSig false "deNameIdxChain" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
+(DFunDef false "deNameIdxChain" () (EBlock (DoLet false false (PTuple PWild PWild (PVar "nm")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "declEnvSeedChain") (EListLit (EVar "deNameIdxModA") (EVar "deNameIdxModB") (EVar "deNameIdxModC") (EVar "deNameIdxModD"))) (EListLit)) (EVar "omEmpty")) (EVar "omEmpty")) (EVar "omEmpty")) (EVar "omEmpty")) (EVar "omEmpty"))) (DoExpr (EVar "nm"))))
+(DTypeSig false "deNameIdxChainNoUnrelated" (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
+(DFunDef false "deNameIdxChainNoUnrelated" () (EBlock (DoLet false false (PTuple PWild PWild (PVar "nm")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "declEnvSeedChain") (EListLit (EVar "deNameIdxModA") (EVar "deNameIdxModB"))) (EListLit)) (EVar "omEmpty")) (EVar "omEmpty")) (EVar "omEmpty")) (EVar "omEmpty")) (EVar "omEmpty"))) (DoExpr (EVar "nm"))))
+(DTypeSig false "deNameIdxAt" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "deNameIdxAt" ((PVar "nm") (PVar "mid")) (EApp (EVar "omKeys") (EApp (EApp (EVar "fromOption") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "nm")))))
 (DData Private "DataTypeDecl" () ((variant "DataTypeDecl" (ConNamed (field "dtKey" (TyCon "TabKey")) (field "dtName" (TyCon "String")) (field "dtOrigin" (TyCon "TyConOrigin")) (field "dtParams" (TyApp (TyCon "List") (TyCon "String"))) (field "dtVariants" (TyApp (TyCon "List") (TyCon "Variant")))))) ())
 (DData Private "AliasDecl" () ((variant "AliasDecl" (ConNamed (field "adKey" (TyCon "TabKey")) (field "adName" (TyCon "String")) (field "adParams" (TyApp (TyCon "List") (TyCon "String"))) (field "adRhs" (TyCon "Ty")) (field "adOrd" (TyCon "Int")) (field "adPub" (TyCon "Bool")) (field "adAttrib" (TyCon "Bool"))))) ())
 (DData Private "DataEnv" () ((variant "DataEnv" (ConNamed (field "deTypes" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "DataTypeDecl")))) (field "deCtorIdents" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyCon "Variant"))))) (field "deRecordIdents" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyApp (TyCon "List") (TyCon "Field")))))) (field "deFieldOwnerIdents" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String"))))) (field "deAliases" (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl"))))))) ())
@@ -43818,6 +44188,15 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "distinctIdentsIn2" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String"))) (TyCon "Bool")))
 (DFunDef false "distinctIdentsIn2" ((PList (PTuple (PVar "i1") PWild) (PTuple (PVar "i2") PWild))) (EBinOp "/=" (EVar "i1") (EVar "i2")))
 (DFunDef false "distinctIdentsIn2" (PWild) (EVar "False"))
+(DTypeSig false "deRecordOrderFixtureA" (TyCon "Decl"))
+(DFunDef false "deRecordOrderFixtureA" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "P1"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "x"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))))))
+(DTypeSig false "deRecordOrderFixtureB" (TyCon "Decl"))
+(DFunDef false "deRecordOrderFixtureB" () (ERecordCreate "DData" ((fa "dataVis" (EVar "VisPublic")) (fa "dataName" (ELit (LString "P2"))) (fa "dataParams" (EListLit)) (fa "dataCtors" (EListLit (EApp (EApp (EVar "Variant") (ELit (LString "Pt"))) (EApp (EApp (EVar "ConNamed") (EListLit (EApp (EApp (EVar "Field") (ELit (LString "y"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None"))))) (EVar "False"))))) (fa "dataDerives" (EListLit)) (fa "dataOrigin" (EApp (EVar "OriginModule") (ELit (LString "n")))))))
+(DTypeSig false "deRecordOrderEnv" (TyCon "DataEnv"))
+(DFunDef false "deRecordOrderEnv" () (EApp (EVar "buildDataEnv") (EListLit (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString "m"))) (EListLit (EVar "deRecordOrderFixtureA"))) (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 1))) (ELit (LString "n"))) (EListLit (EVar "deRecordOrderFixtureB"))))))
+(DTypeSig false "deRecordIdentTyNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Ident") (TyCon "String") (TyApp (TyCon "List") (TyCon "Field")))) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "deRecordIdentTyNames" ((PList)) (EListLit))
+(DFunDef false "deRecordIdentTyNames" ((PCons (PTuple PWild (PVar "tyName") PWild) (PVar "rest"))) (EBinOp "::" (EVar "tyName") (EApp (EVar "deRecordIdentTyNames") (EVar "rest"))))
 (DData Private "InstRef" () ((variant "InstRef" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int")))) ())
 (DTypeSig false "instRefMid" (TyFun (TyCon "InstRef") (TyCon "String")))
 (DFunDef false "instRefMid" ((PCon "InstRef" (PVar "m") PWild PWild)) (EVar "m"))
