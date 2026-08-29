@@ -826,6 +826,16 @@ for f in $changed; do
     # else — a loose file under test/ that someone edits ALONE when adding a
     # gate to a shard.
     test/gate_shards/*)            add 'diff_compiler_ci_gen_drift' ;;
+    # #2178 (S-1-S-cost-record): the per-gate cost transport. Two loose files
+    # under test/ that `_fixture_dir_for` cannot see — the ingest TOOL (in
+    # CI-COVERAGE-TOOLS.txt, so it is not a gate candidate and derives nothing
+    # by itself) and the committed baseline .json it writes. Both are exactly
+    # what someone edits ALONE when re-ingesting timings, and an UNMAPPED
+    # non-prose path widens the whole PR run to the FULL suite
+    # ([W-THIRD-CONSUMER]) — the most expensive possible answer for a file whose
+    # only consumer is one millisecond-cost gate.
+    test/gate_cost_ingest.sh|test/gate_cost_baseline.json)
+                                   add 'diff_compiler_gate_cost' ;;
     # S2-5 (end-of-sprint review, #2177): the generated file itself had no arm
     # at all, so a change here fell through to the catch-all — the two gates
     # that actually police its generated content are the ones that read it.

@@ -937,7 +937,43 @@ jobs:
             export MEDAKA_REQUIRE_WASM=1
             echo "${{ matrix.name }} shard: MEDAKA_REQUIRE_WASM=1 — the wasm arm is mandatory here"
           fi
+          # ── PER-GATE COST TRANSPORT (#2178) ────────────────────────────────
+          # run_gates.sh ALSO writes a machine-readable per-gate timing report
+          # here, uploaded by the step below and folded into the committed
+          # baseline (test/gate_cost_baseline.json) by test/gate_cost_ingest.sh.
+          # Written to $RUNNER_TEMP, deliberately NOT into the tree: the "tree
+          # must not have drifted" step below is the whole reason gates may not
+          # write into the checkout.
+          #
+          # ⚠️ THE GUARD IS IN run_gates.sh, NOT IN THIS `env:`. On a
+          # `pull_request` — the ONE event `detect` narrows — run_gates.sh
+          # refuses to write the file at all, however this step is configured,
+          # and gate_cost_ingest.sh independently refuses any report tagged with
+          # that event. Setting GATE_TIMING_JSON here unconditionally is
+          # deliberate: it keeps the guard structural (in the producer and the
+          # consumer, both tested by test/diff_compiler_gate_cost.sh) instead of
+          # resting on this expression staying correct.
+          export GATE_TIMING_JSON="$RUNNER_TEMP/gate-timings-${{ matrix.name }}.json"
+          export GATE_TIMING_SHARD="${{ matrix.name }}"
           sh test/run_gates.sh ${{ steps.plan.outputs.pats }}
+
+      # Uploaded even when the shard went red — a red run's PASSING gates were
+      # still really measured, and the ingest tool drops the failing ones.
+      #
+      # ⚠️ NOT guarded with `hashFiles(...)`: that function resolves paths
+      # relative to GITHUB_WORKSPACE and matches nothing outside it, so an
+      # absolute $RUNNER_TEMP path makes it return '' on EVERY run — the guard
+      # would read as "no timings here" always, and the step would never fire.
+      # `if-no-files-found: ignore` is the correct guard for a file that legitimately
+      # does not exist on a pull_request run (where run_gates.sh refuses to write one).
+      - name: Upload this shard's per-gate timings
+        if: ${{ always() && steps.plan.outputs.has_work == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-timings-${{ matrix.name }}
+          path: ${{ runner.temp }}/gate-timings-${{ matrix.name }}.json
+          retention-days: 30
+          if-no-files-found: ignore
 
       # THE REVIEW GATE — must be in THIS job, on the tree the gates just ran over.
       # Roc's model: regeneration is the default action and `git diff --exit-code`
@@ -1369,3 +1405,21 @@ jobs:
 
       - name: Generated gates-matrix region must not drift or be hand-edited
         run: sh test/diff_compiler_ci_gen_drift.sh
+
+  # ── The per-gate cost transport (#2178, S-1-S-cost-record) ───────────────────
+  # Its own job rather than a `gates` matrix row: the gate is binary-free,
+  # oracle-free and costs milliseconds (it builds a scratch tree with one fake
+  # gate), and adding a row would have meant regenerating the matrix, which
+  # belongs to a later slice. UNGUARDED — no `docs_only` / `narrow` condition and
+  # no `needs:` — because what it grades is the POISONING GUARD on the cost
+  # baseline, and the run it must never stop policing is precisely a narrowed
+  # `pull_request` one.
+  gate-cost:
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Per-gate cost transport — producer + ingest admission guard
+        run: sh test/diff_compiler_gate_cost.sh

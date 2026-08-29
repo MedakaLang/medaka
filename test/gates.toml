@@ -3361,6 +3361,29 @@ sources = ["compiler/tools/gate_cmd.mdk", "test/diff_compiler_ci_gen_drift.sh", 
 corpus = []
 toolchain = []
 
+# The per-gate COST TRANSPORT's own gate (#2178, S-1-S-cost-record). Grades the
+# poisoning guard on both halves — that `test/run_gates.sh` refuses to PRODUCE a
+# timing report on a `pull_request` run (the one event ci.yml narrows) and that
+# `test/gate_cost_ingest.sh` refuses to ADMIT a report tagged with one — plus the
+# median arithmetic and the committed baseline's internal agreement. Binary-free
+# and oracle-free: it builds a scratch tree with one fake gate rather than
+# running any real one, so it costs milliseconds. shard="other-job" because it
+# has its own CI job (`gate-cost`), not a `gates` matrix row — placing it in a
+# row would have meant regenerating the matrix, which is a separate slice's work.
+[[gate]]
+name = "diff_compiler_gate_cost"
+area = "infra"
+shard = "other-job"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_gate_cost.sh"
+oracles = []
+sources = ["test/run_gates.sh", "test/gate_cost_ingest.sh", "test/diff_compiler_gate_cost.sh", "test/gate_cost_baseline.json"]
+corpus = []
+toolchain = []
+
 
 
 # ── the `gates` matrix rows (S-1, #2177) ─────────────────────────────────────

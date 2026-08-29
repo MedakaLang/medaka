@@ -1,0 +1,10 @@
+{
+  "schema": "gate-cost-baseline/1",
+  "note": "Per-gate wall-clock cost, measured by test/run_gates.sh on UNNARROWED CI runs and folded in by test/gate_cost_ingest.sh. medianMs is the LOWER median of the retained raw ms samples; a balancer packs shards from it. GENERATED — do not hand-edit; re-derive from the artifacts instead.",
+  "generated": "1970-01-01T00:00:00Z",
+  "maxSamples": 9,
+  "runs": [
+  ],
+  "gates": [
+  ]
+}

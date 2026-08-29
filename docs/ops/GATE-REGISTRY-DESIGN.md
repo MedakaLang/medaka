@@ -329,10 +329,52 @@ own place in the bootstrap, for no gain — §5's circularity is unchanged eithe
   `name:` glob, not a shard query. Deliberately out of S-1's scope; add it with
   the consumer that needs it.
 
-- Per-gate timing transport: committed file updated by a bot/nightly (GHC pushes git
-  notes from CI) vs. fetched from the Actions API at balance time (no tree writes,
-  but a network dependency in the balancer). Leaning committed-file for
-  reviewability.
+- ~~Per-gate timing transport: committed file updated by a bot/nightly vs. fetched from
+  the Actions API at balance time.~~ **CLOSED (S-1-S-cost-record, #2178)** — committed
+  file, as the leaning said, and here is what was built:
+
+  * **Producer: `test/run_gates.sh`, not `medaka gate run`.** `GATE_TIMING_JSON=<path>`
+    makes a run also write a per-gate report; unset (every local invocation) it writes
+    nothing and changes nothing. ⚠️ **This is a deliberate deviation from
+    CI-ARCHITECTURE.md §3.3's "recorded by the driver".** The driver is not what CI
+    executes — ci.yml's `Gate shard — …` step runs `sh test/run_gates.sh ${{
+    steps.plan.outputs.pats }}` — and `medaka gate run` still does not reproduce
+    `run_gates.sh`'s exit-code classification (the bullet below). A cost baseline has to
+    be measured on the path CI actually takes, so the producer is that path. Adding
+    timing there is behaviour-neutral to the classification: two `date` calls around an
+    invocation that is otherwise untouched.
+  * **Schema: `runReportJson`/`resultJson`'s (`compiler/tools/gate_cmd.mdk`), minus
+    `stdout`/`stderr`.** A cost record has no use for a gate's output, and dropping it
+    also removes the only place arbitrary gate text could sit inside the document the
+    consumer scans. Envelope gains `schema` (`"gate-cost/1"`) and a `provenance` object
+    (event, shard, runId, runAttempt, repo, ref, sha, date); `parallel` is `true` here,
+    where the driver hardcodes `false`, because this runner really is parallel. Because
+    the per-gate record is otherwise field-for-field the driver's, the day `gate run`
+    becomes CI's executor the transport is unchanged.
+  * **Transport: `test/gate_cost_baseline.json`, committed**, folded from N run reports
+    by `test/gate_cost_ingest.sh`. Reviewability was the deciding argument and it holds:
+    a rebalance diff can be read next to the numbers that caused it, the numbers are
+    pinned at review time rather than re-fetched into a different answer, and the
+    balancer needs no network and no token. Raw samples are retained beside each median
+    so any reader can re-derive it — and so an outlier is visible in review rather than
+    averaged into invisibility.
+  * **Median, not mean, and the LOWER median for an even count.** One runner hiccup — a
+    cold cache, a noisy neighbour, a retried step — is a single wild sample, and a mean
+    lets it move a gate's placement; the median ignores it unless it is the majority
+    behaviour, which is the question a balancer is actually asking. The lower median
+    keeps the value integral and deterministic, so no float rounding churns the diff.
+  * **Poisoning resistance is STRUCTURAL, on both sides.** `pull_request` is the one
+    event ci.yml narrows (`detect`'s `plan` step), so its per-gate times are measured
+    over a gate SUBSET and are not a baseline sample. `run_gates.sh` refuses to *produce*
+    a report on that event at all, whatever ci.yml passes it; `gate_cost_ingest.sh`
+    independently refuses to *admit* one whose recorded event is off its allowlist
+    (`workflow_dispatch merge_group push schedule`), which is what stops a hand-carried,
+    downloaded, or replayed artifact — or a future ci.yml edit — reaching the committed
+    file. Both halves are graded by `test/diff_compiler_gate_cost.sh`, which also pins
+    the median arithmetic, ingest idempotence, the "a failing gate contributes no
+    sample" rule, and the committed baseline's agreement with its own samples.
+  * **Nothing consumes the baseline yet** — the balancer is #2178's later slice. This
+    bullet closes the transport question only.
 - Whether preflight survives as a thin `medaka gate`-calling shim (agents' muscle
   memory, `make preflight`) — probably yes, indefinitely.
 - `medaka gate run`'s worker pool: today it is sequential by construction (no
