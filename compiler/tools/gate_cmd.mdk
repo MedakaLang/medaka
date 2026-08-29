@@ -433,7 +433,7 @@ gateHelpText = stringConcat
     "                      [--timeout <secs>] [--jobs <n>] [--no-stale-check]\n",
     "                      [--registry <path>]\n",
     "  medaka gate verify  [--registry <path>]\n",
-    "  medaka gate explain <path> [--registry <path>]\n",
+    "  medaka gate explain <path> [--prose] [--registry <path>]\n",
     "  medaka gate ci      [--registry <path>] [--workflow <path>]\n",
     "\n",
     "Selectors (conjunction — a gate must match all of them):\n",
@@ -486,6 +486,11 @@ gateHelpText = stringConcat
     "an unmatched non-prose path; UNMAPPED alone on prose), then per-entry\n",
     "`sources` globs and `corpus` directories on GATE lines. A bare token that\n",
     "is also a field value (name/area/project/tier/run) gets TOKEN lines.\n",
+    "\n",
+    "`gate explain --prose <path>` prints ONLY layer 1b's verdict, `PROSE` or\n",
+    "`NONDOC`, and reads no registry. It exists so that\n",
+    "test/diff_compiler_prose_classifier.sh can diff this classifier against\n",
+    "the one .github/workflows/ci.yml's `detect` job runs (#2200).\n",
   ]
 
 -- Parsed `gate list` argv.
@@ -1616,6 +1621,28 @@ isProsePath p
   | endsWith ".md" p = True
   | otherwise = False
 
+{- | `medaka gate explain --prose <path>`: layer 1b's verdict ALONE, on one
+   line, reading no registry at all.
+
+   This is not a convenience.  `explainOutput` prints the prose note only when
+   NO entry claims the path, so a `docs/` path some entry's `sources` happened
+   to match would print GATE lines and never reveal its prose verdict — which
+   makes the full `explain` output unusable as a classifier probe.  This
+   surface is what test/diff_compiler_prose_classifier.sh (#2200) diffs,
+   path by path, against the `case` block ci.yml's `detect` job actually runs
+   (extracted from ci.yml between its `PROSE-ALLOWLIST:BEGIN`/`:END` markers
+   and executed, not re-implemented) — the two hand-written copies of one
+   allowlist now have a check tying them together.
+
+   > proseVerdict "docs/ops/CI-ARCHITECTURE.md"
+   "PROSE\n"
+
+   > proseVerdict "test/gates.toml"
+   "NONDOC\n" -}
+export
+proseVerdict : String -> String
+proseVerdict p = if isProsePath p then "PROSE\n" else "NONDOC\n"
+
 -- Layer 2: per-entry matching.
 
 wholeTreeGlob : String -> Bool
@@ -1740,7 +1767,7 @@ explainOutput path gates =
         renderGateLines hits ++ wt ++ tok
 
 data ExplainArgs =
-  | ExplainArgs { registry : Option String, path : Option String }
+  | ExplainArgs { registry : Option String, path : Option String, prose : Bool }
 
 parseExplainArgs : List String -> ExplainArgs -> Result String ExplainArgs
 parseExplainArgs [] acc = Ok acc
@@ -1748,6 +1775,8 @@ parseExplainArgs ("--registry"::p::rest) acc =
   parseExplainArgs rest ExplainArgs { acc | registry = Some p }
 parseExplainArgs ("--registry"::[]) _ =
   Err "medaka gate explain: --registry needs a path"
+parseExplainArgs ("--prose"::rest) acc =
+  parseExplainArgs rest ExplainArgs { acc | prose = True }
 parseExplainArgs (a::rest) acc
   | stringLength a > 0 && stringSlice 0 1 a == "-" =
     Err "medaka gate explain: unknown flag: \{a}"
@@ -1756,11 +1785,12 @@ parseExplainArgs (a::rest) acc
     None => parseExplainArgs rest ExplainArgs { acc | path = Some a }
 
 explainCmdBody : List String -> <IO> Unit
-explainCmdBody argv = match parseExplainArgs argv ExplainArgs { registry = None, path = None }
+explainCmdBody argv = match parseExplainArgs argv ExplainArgs { registry = None, path = None, prose = False }
   Err m => emit (Err m)
   Ok a => match a.path
-    None => emit (Err "usage: medaka gate explain <path> [--registry <path>]")
-    Some tok =>
+    None => emit (Err "usage: medaka gate explain <path> [--prose] [--registry <path>]")
+    Some tok => if a.prose then putStr (proseVerdict tok)
+    else
       let path = registryPath a.registry
       match readFile path
         Err m => emit (Err "medaka gate explain: cannot read registry: \{m}")

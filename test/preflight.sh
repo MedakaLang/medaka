@@ -703,6 +703,12 @@ for f in $changed; do
     compiler/tools/gate_cmd.mdk)
       add 'diff_compiler_gate_registry'
       add 'diff_compiler_ci_gen_drift'
+      # #2177 (S-4-coverage-authority): the coverage gate now reads
+      # `medaka gate list --json` for shard membership instead of parsing
+      # ci.yml's matrix, and `medaka gate explain --prose` is what the prose
+      # drift gate diffs ci.yml against — both are this file's behavior now.
+      add 'diff_compiler_ci_shard_coverage'
+      add 'diff_compiler_prose_classifier'
       add 'diff_compiler_check*' ;;
     compiler/tools/*)              add 'diff_compiler_check*' ;;
 
@@ -812,7 +818,9 @@ for f in $changed; do
     # #2191 (S-4-gate-verify): the registry itself. A loose file under test/
     # that `_fixture_dir_for` cannot see (no *fixtures*/*goldens* ancestor),
     # and exactly what someone edits ALONE when enrolling or fixing a gate.
-    test/gates.toml)               add 'diff_compiler_gate_registry'; add 'diff_compiler_ci_gen_drift' ;;
+    # (S-4-coverage-authority adds the coverage gate: a `shard` field edited
+    # here is now the ONLY thing that decides shard membership.)
+    test/gates.toml)               add 'diff_compiler_gate_registry'; add 'diff_compiler_ci_gen_drift'; add 'diff_compiler_ci_shard_coverage' ;;
     # #2177 (S-3-generation-drift-gate): the per-shard rationale files that feed
     # `medaka gate ci`'s generated gates-matrix region. Not read by anything
     # else — a loose file under test/ that someone edits ALONE when adding a

@@ -64,7 +64,7 @@ gate) the **single source of truth** for every gate in the repo. Every current c
 |---|---|---|
 | ci.yml shard matrix | hand-written `pattern:` globs | generated from registry (#2177) |
 | test/preflight.sh | hand-written path→gate case arms | registry `sources`/`corpus` fields |
-| test/diff_compiler_ci_shard_coverage.sh | ci.yml + test/CI-COVERAGE-EXCEPTIONS.txt | subsumed by the registry drift gate (or retired — decided in #2177) |
+| test/diff_compiler_ci_shard_coverage.sh | ci.yml + test/CI-COVERAGE-EXCEPTIONS.txt | **DECIDED (#2177, S-4): repointed, not retired** — reads `medaka gate list --json`'s `shard` field for shard membership and no longer parses ci.yml's matrix; keeps the workflow `run:`-step scan, which nothing else does. See §8. |
 | test/build_oracles.sh `--for` | greps gate scripts for `test/bin/*` | registry `oracles` field |
 | test/diff_compiler_project_enrolment.sh | derives 3 legs independently | registry `project` field + drift gate |
 | `sh test/run_gates.sh '<pat>'` | filesystem globs | `medaka gate run <selector>` (run_gates becomes a shim, then retires) |
@@ -318,11 +318,13 @@ own place in the bootstrap, for no gain — §5's circularity is unchanged eithe
   gate enforces the row-membership set-equality yet, it was proved once by
   measurement in S-1's report. Both close when S-2's generated ci.yml makes the
   registry the only copy.
-- `medaka gate verify` does NOT check that a `shard` value is one of the eight row
-  names or `other-job` (S-1 added only the duplicate-`name` class #2199 asked
-  for). A typo'd row name is a generation hazard of the same family and is cheap
-  to catch; S-2 or #2178 should add it once the generator fixes what the legal set
-  is.
+- ~~`medaka gate verify` does NOT check that a `shard` value is one of the eight row
+  names or `other-job`.~~ **CLOSED (S-4, #2177)** — but in the coverage gate, not in
+  `verify`: `test/diff_compiler_ci_shard_coverage.sh` reds on a `shard` that is
+  neither a `[[shard]]` row name nor `other-job`. It lives there because that gate
+  already asks the neighbouring question (is `other-job` actually reachable?), and
+  splitting the two would put half a verdict in each of two mechanisms — the defect
+  §8 exists to remove.
 - The `shard` axis is not a selector field: `medaka gate list shard:eval` is a
   `name:` glob, not a shard query. Deliberately out of S-1's scope; add it with
   the consumer that needs it.
@@ -361,3 +363,95 @@ own place in the bootstrap, for no gain — §5's circularity is unchanged eithe
   shadowing drops the `diff_compiler_check*` family for several
   `compiler/tools/*.mdk` files) and #2197 (an unquoted `$changed` expansion splits
   a space-bearing path into two fictional paths; no blast radius today).
+
+## 8. The coverage authority (#2177 S-4, DECIDED)
+
+`test/diff_compiler_ci_shard_coverage.sh` is **repointed, not retired**. It is the
+**one** authority on CI reachability; `medaka gate verify` is the one authority on
+enrolment; ci.yml's matrix has **no** readers left that re-derive shard membership
+from it.
+
+**What changed.** The script used to walk every workflow's
+`strategy.matrix.include` for `{name, pattern}` rows and re-resolve each pattern
+glob against `$ROOT/test/` and `$ROOT/` to work out which shard ran a gate. That
+was a second answer to a question the registry now answers directly: the `shard`
+field is on every entry (S-1), `medaka gate ci` generates the matrix from it (S-2),
+and `test/diff_compiler_ci_gen_drift.sh` proves the on-disk region still equals what
+the registry generates (S-3). The script now reads `medaka gate list --json`'s
+`shard` field and `medaka gate list --shards --json`'s row names, and reads **no**
+matrix. Two mechanisms was the defect; two *files* was never the defect, which is
+why the script survives.
+
+**Why not retire it into `verify`.** The half nothing else in the tree can do is the
+workflow scan: every `.github/workflows/*.yml` plus every
+`.github/actions/*/action.yml` composite action (#1961), parsed to `run:`-step
+bodies only (#1969), with `case`-arm mentions excluded. `verify` is text-over-the-
+registry and reads no YAML; folding this in would make `gate_cmd.mdk` a workflow-YAML
+parser — a genuinely new capability, for no gain over a `run:`-step scan that already
+works.
+
+**The division of labour.**
+
+| Question | Authority |
+|---|---|
+| Is every `.sh` in the tree enrolled, or listed as a non-gate tool? | `medaka gate verify` (`test/diff_compiler_gate_registry.sh`) |
+| Which shard runs a gate? | `test/gates.toml`'s `shard` field |
+| Does ci.yml's matrix still equal what the registry generates? | `test/diff_compiler_ci_gen_drift.sh` |
+| Is every registry entry actually reachable in CI? | `test/diff_compiler_ci_shard_coverage.sh` |
+| Does a workflow `run:` step name a script no one enrolled? | `test/diff_compiler_ci_shard_coverage.sh` |
+| Do ci.yml's and `gate_cmd.mdk`'s prose allowlists agree? | `test/diff_compiler_prose_classifier.sh` (#2200) |
+
+**The four states are still all distinguished**, and are now *mutually exclusive*,
+which they were not before. Precedence is: a `shard` naming a matrix row → in that
+shard; else `other-job` and on the EXCEPTIONS ledger → EXCEPTED; else `other-job` and
+named by a real `run:` step → NAMED; else UNREACHABLE (red). TOOLS entries are not
+registry entries at all. The ledger now takes precedence over the `run:` scan on
+purpose: `test/registry_keying_ratchet` is on the ledger *and* was being counted as
+NAMED, because ci.yml mentions its path in a comment inside a `run:` body (the #1932
+caveat the ledger entry itself documents) — so before S-4 the EXCEPTED state had
+zero live members and nothing exercised it. Two new contradiction classes red as
+well: an entry in a matrix row that is *also* on the EXCEPTIONS ledger, and a script
+that is both a registry entry and a CI-COVERAGE-TOOLS.txt entry.
+
+**Ledger formats are untouched** — same two files, same keys (repo-relative path
+minus `.sh`, first whitespace token), same semantics, same staleness rule (an
+EXCEPTIONS entry naming a script that no longer exists reds).
+
+**Pattern resolution, counted (contract §4.17).** Six places re-derive run_gates'
+two-glob rule (`$ROOT/test/<pat>.sh` + `$ROOT/<pat>.sh`): `test/run_gates.sh:173`,
+`test/build_oracles.sh:388`, `test/preflight.sh:1134` and `:1338` (two, not one),
+`test/diff_compiler_ci_shard_coverage.sh` — **removed by S-4** — and, inversely,
+`gate_cmd.mdk`'s `ciCmdBody`, which emits the literal per-gate names the other five
+resolve. Separately, three places re-extract `strategy.matrix.include` from workflow
+YAML: this script (**removed by S-4**), `test/diff_compiler_project_enrolment.sh`'s
+own inline reader, and `ciCmdBody` (which writes it). S-4 collapses one of each,
+leaving five resolvers and two matrix readers; the rest belong to
+`test/preflight.sh`'s and `test/build_oracles.sh`'s own switch-over, explicitly out
+of this slice's scope.
+
+## 9. The prose allowlist (#2200, ci.yml half)
+
+`gate_cmd.mdk`'s `isProsePath` (layer 1b of `medaka gate explain`) is a hand-written
+copy of the `case` block ci.yml's `detect` job runs to decide `docs_only`. Nothing
+tied them together, so a `docs/` arm added to one and not the other would change what
+CI skips with every gate green.
+
+Closed with a **drift check**, not a derivation. Generating one from the other was
+rejected: the shell arms live inside a `while read` loop in a hand-written job, and
+`isProsePath` must stay a pure Medaka predicate the binary can answer offline — a
+generator would have to own a fragment of a hand-written job and could still only be
+checked by regenerating and diffing, which is what a drift check already is, at a
+fraction of the machinery.
+
+`test/diff_compiler_prose_classifier.sh` **extracts ci.yml's own `case` block**
+between the whole-line markers `PROSE-ALLOWLIST:BEGIN`/`:END`, **runs it** with a stub
+`nondoc`, and diffs its verdict against `medaka gate explain --prose <path>` over a
+26-path probe corpus. So the left arm is ci.yml's real code, never a third copy of the
+allowlist. The corpus straddles every arm boundary (`test/README.md` vs
+`testfile.md`; `LICENSE.md` / `LICENSED.md` / `LICENSEE`; `docs/spec/SYNTAX.md` vs
+`docs/spec/SYNTAX.md.bak`), and lives in the script rather than a fixture directory
+because several probes are paths that deliberately do not exist. A missing marker is
+exit 2, never a pass.
+
+#2200's `test/preflight.sh` half — preflight's own path classification — is **not**
+addressed here and stays open.

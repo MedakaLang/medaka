@@ -155,7 +155,10 @@ sources = ["test/diff_compiler_must_fail.sh"]
 corpus = ["test/must_fail_fixtures"]
 toolchain = []
 
-# An infra/ratchet gate that reads no oracle and builds nothing.
+# An infra/ratchet gate that reads no oracle and builds nothing. Since S-4
+# (#2177) it reads the REGISTRY for shard membership instead of parsing
+# ci.yml's matrix, so `test/gates.toml` and `gate_cmd.mdk` are now sources of
+# its verdict — matching the two `add` lines S-4 gave preflight's arms.
 [[gate]]
 name = "diff_compiler_ci_shard_coverage"
 area = "infra"
@@ -166,7 +169,24 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_ci_shard_coverage.sh"
 oracles = []
-sources = ["test/diff_compiler_ci_shard_coverage.sh"]
+sources = ["compiler/tools/gate_cmd.mdk", "test/diff_compiler_ci_shard_coverage.sh", "test/gates.toml"]
+corpus = []
+toolchain = []
+
+# #2200: the drift check between ci.yml's `detect`-job prose allowlist and
+# `gate_cmd.mdk`'s `isProsePath`. Reads no oracle; runs ci.yml's own extracted
+# `case` block against `medaka gate explain --prose`.
+[[gate]]
+name = "diff_compiler_prose_classifier"
+area = "infra"
+shard = "tools"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_prose_classifier.sh"
+oracles = []
+sources = ["compiler/tools/gate_cmd.mdk", "test/diff_compiler_prose_classifier.sh"]
 corpus = []
 toolchain = []
 

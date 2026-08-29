@@ -218,6 +218,15 @@ jobs:
             if [ -z "$f" ]; then
               continue
             fi
+            # PROSE-ALLOWLIST:BEGIN — the ONLY copy of this classifier that runs in
+            # CI. `compiler/tools/gate_cmd.mdk`'s `isProsePath` is a second,
+            # hand-written copy of the SAME allowlist (it is what `medaka gate
+            # explain` answers layer 1b with, and preflight-side callers read).
+            # `test/diff_compiler_prose_classifier.sh` (#2200) extracts the block
+            # between these two markers, RUNS it over a probe corpus, and diffs the
+            # verdicts against `medaka gate explain --prose` — so the two copies can
+            # no longer drift silently. Keep the arms, the order, and the markers
+            # whole-line; edit either copy and that gate reds until both agree.
             case "$f" in
               # test/ is NEVER docs — this arm must stay first. See the job header.
               test/*) nondoc "$f" ;;
@@ -234,6 +243,7 @@ jobs:
 
               *) nondoc "$f" ;;
             esac
+            # PROSE-ALLOWLIST:END
 
             # #1931. A SECOND, INDEPENDENT question about the SAME file, in the same
             # single pass. It is its own `case` on purpose: `case` fires only its first
@@ -709,7 +719,7 @@ jobs:
             # meta-gate policing a map, not compiler output), and `tools` is
             # that family's established home. Text-only, no build beyond the
             # already-built `./medaka`; measured sub-second locally.
-            pattern: "'diff_compiler_ci_shard_coverage' 'lsp_harness' 'byteparser/test/check' 'mq/test/check' 'parsec/test/check' 'pds/test/constant_time_parity' 'pds/test/constant_time_public_key' 'pds/test/constant_time_reductions' 'pds/test/constant_time_signing' 'pds/test/did_key_all_engines' 'check_build_oracles_for_consistency' 'check_syntax_examples' 'cross_project_deps' 'cross_project_twonames' 'diff_compiler_capability_matrix' 'diff_compiler_ci_guard_failsafe' 'diff_compiler_codemod' 'diff_compiler_doc' 'diff_compiler_effect_hole' 'diff_compiler_effect_param' 'diff_compiler_effect_polarity' 'diff_compiler_entry_exit_codes' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_fmt_write_safety' 'diff_compiler_index' 'diff_compiler_internal_extern' 'diff_compiler_lint_cache' 'diff_compiler_lint_crossfile' 'diff_compiler_lint_fix' 'diff_compiler_lint_multi_dir' 'diff_compiler_lint_multi' 'diff_compiler_lint' 'diff_compiler_lsp_b3' 'diff_compiler_lsp_b4' 'diff_compiler_lsp' 'diff_compiler_mcp' 'diff_compiler_new' 'diff_compiler_os_entropy' 'diff_compiler_perf_stage_census' 'diff_compiler_ported' 'diff_compiler_prelude_shadow_census' 'diff_compiler_project_enrolment' 'diff_compiler_references_correctness' 'diff_compiler_references_scaling' 'diff_compiler_references_tool' 'diff_compiler_repl' 'diff_compiler_run_check_agreement' 'diff_compiler_run_entry_subdir' 'diff_compiler_run_stdout_flush' 'diff_compiler_source_bytes' 'diff_compiler_test' 'diff_compiler_test_typecheck' 'diff_net' 'manifest_emit' 'pr_helper_test' 'diff_compiler_gate_registry'"
+            pattern: "'diff_compiler_ci_shard_coverage' 'diff_compiler_prose_classifier' 'lsp_harness' 'byteparser/test/check' 'mq/test/check' 'parsec/test/check' 'pds/test/constant_time_parity' 'pds/test/constant_time_public_key' 'pds/test/constant_time_reductions' 'pds/test/constant_time_signing' 'pds/test/did_key_all_engines' 'check_build_oracles_for_consistency' 'check_syntax_examples' 'cross_project_deps' 'cross_project_twonames' 'diff_compiler_capability_matrix' 'diff_compiler_ci_guard_failsafe' 'diff_compiler_codemod' 'diff_compiler_doc' 'diff_compiler_effect_hole' 'diff_compiler_effect_param' 'diff_compiler_effect_polarity' 'diff_compiler_entry_exit_codes' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_fmt_write_safety' 'diff_compiler_index' 'diff_compiler_internal_extern' 'diff_compiler_lint_cache' 'diff_compiler_lint_crossfile' 'diff_compiler_lint_fix' 'diff_compiler_lint_multi_dir' 'diff_compiler_lint_multi' 'diff_compiler_lint' 'diff_compiler_lsp_b3' 'diff_compiler_lsp_b4' 'diff_compiler_lsp' 'diff_compiler_mcp' 'diff_compiler_new' 'diff_compiler_os_entropy' 'diff_compiler_perf_stage_census' 'diff_compiler_ported' 'diff_compiler_prelude_shadow_census' 'diff_compiler_project_enrolment' 'diff_compiler_references_correctness' 'diff_compiler_references_scaling' 'diff_compiler_references_tool' 'diff_compiler_repl' 'diff_compiler_run_check_agreement' 'diff_compiler_run_entry_subdir' 'diff_compiler_run_stdout_flush' 'diff_compiler_source_bytes' 'diff_compiler_test' 'diff_compiler_test_typecheck' 'diff_net' 'manifest_emit' 'pr_helper_test' 'diff_compiler_gate_registry'"
             wasm_arm: "1"
           # GENERATED:END gates-matrix
     name: gates (${{ matrix.name }})

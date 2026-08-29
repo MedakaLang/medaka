@@ -45,7 +45,11 @@ Stated by Val; measured in the audit that preceded this doc (research session
    the test surface, with the same "which gates exist and who runs them" fact
    hand-maintained in three consumers (ci.yml patterns, test/preflight.sh's path map,
    test/diff_compiler_ci_shard_coverage.sh + test/CI-COVERAGE-EXCEPTIONS.txt) — the
-   [W-THIRD-CONSUMER] bookkeeping.
+   [W-THIRD-CONSUMER] bookkeeping. **Two of the three are closed as of #2177:** the
+   ci.yml matrix is generated from `test/gates.toml` (S-2) and drift-gated (S-3), and
+   the coverage gate reads the registry's `shard` field instead of re-parsing that
+   matrix (S-4, `docs/ops/GATE-REGISTRY-DESIGN.md` §8). `test/preflight.sh`'s path map
+   is the remaining hand-maintained copy.
 
 ## 2. Patterns adopted from other language projects
 
@@ -125,6 +129,12 @@ ci.yml without moving it into the registry. Their coverage is a reachability que
 (`diff_compiler_ci_shard_coverage.sh` counts a literal name in a step as covering that
 gate) and belongs to #2191's gate-registry verification, not here. Modelling job
 placement per entry would be a registry schema change, not a generator change.
+
+S-4 (#2177) sharpened that reachability question rather than answering it with a new
+field: an `other-job` entry must now be named by a real `run:` step **or** be on
+`test/CI-COVERAGE-EXCEPTIONS.txt`, and one that is neither reds. The registry still
+does not record *which* job — that stays a workflow fact, scanned, not declared. See
+`docs/ops/GATE-REGISTRY-DESIGN.md` §8 for the full division of labour.
 
 **Byte-determinism** follows `test/gen_docs_index.sh`: every list is a fold over file
 order — no sort, no locale-sensitive comparison, nothing read from the environment —
