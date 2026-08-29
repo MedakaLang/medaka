@@ -955,7 +955,50 @@ jobs:
           # resting on this expression staying correct.
           export GATE_TIMING_JSON="$RUNNER_TEMP/gate-timings-${{ matrix.name }}.json"
           export GATE_TIMING_SHARD="${{ matrix.name }}"
-          sh test/run_gates.sh ${{ steps.plan.outputs.pats }}
+
+          # ── AREA-SURFACING (#2178, S-2) ──────────────────────────────────
+          # A failing gate must name its semantic AREA and its own name
+          # everywhere a human/agent reads a failure — today a reader sees
+          # only "gates (${{ matrix.name }}) failed". run_gates.sh's own
+          # PASS/FAIL/exit-code semantics are UNTOUCHED below: its output is
+          # captured to a file (never piped — a pipe would mask the exit
+          # code, [D-BUILD-PIPE]) purely so the failing gate NAMES can be
+          # read back and their registry `area` looked up, in addition to
+          # (never instead of) run_gates.sh's own console output, replayed
+          # verbatim right after via `cat`. `run_gates.sh` already prints one
+          # `FAILED:<names>` or `PHANTOM-SKIPPED:<names>` summary line on a
+          # red run — that is the machine-readable source read here, not a
+          # second parallel classification.
+          log="$RUNNER_TEMP/gate-run-${{ matrix.name }}.log"
+          set +e
+          sh test/run_gates.sh ${{ steps.plan.outputs.pats }} > "$log" 2>&1
+          rc=$?
+          set -e
+          cat "$log"
+
+          if [ "$rc" -ne 0 ]; then
+            # Source of truth: the registry's `area` field, read ONCE via
+            # `medaka gate list --json` — never a second hand-maintained
+            # name->area map (§3 of the packet).
+            gates_json="$(./medaka gate list --json)"
+            failed="$(grep -E '^(FAILED|PHANTOM-SKIPPED):' "$log" | sed -E 's/^(FAILED|PHANTOM-SKIPPED)://' || true)"
+            if [ -n "$failed" ]; then
+              {
+                echo "### gates (${{ matrix.name }}) — failing gates by area"
+                echo
+                echo "| gate | area |"
+                echo "|---|---|"
+              } >> "$GITHUB_STEP_SUMMARY"
+              for g in $failed; do
+                area="$(printf '%s' "$gates_json" | jq -r --arg n "$g" '.[] | select(.name==$n) | .area')"
+                [ -n "$area" ] || area="(unknown — not in registry)"
+                echo "::error title=${{ matrix.name }} shard — $g::${{ matrix.name }} shard — $area: $g failed"
+                echo "| \`$g\` | $area |" >> "$GITHUB_STEP_SUMMARY"
+              done
+            fi
+          fi
+
+          exit "$rc"
 
       # Uploaded even when the shard went red — a red run's PASSING gates were
       # still really measured, and the ingest tool drops the failing ones.
@@ -1298,7 +1341,7 @@ jobs:
   # History: dossier `ci.md`.
   #
   # ONE job, not six more gate shards: only these gates need the wasm toolchain,
-  # and adding it to every `gates` shard would tax all seven for a tool one job
+  # and adding it to every `gates` shard would tax all eight for a tool one job
   # needs. These seven gates are NOT sharded (no matrix `pattern:`) — each is
   # invoked by its LITERAL repo-relative path below, the coverage gate's "named
   # gate" mechanism (same as `soundness`'s fixpoint + typecheck gates).
