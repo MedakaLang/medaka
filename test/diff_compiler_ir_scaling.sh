@@ -109,11 +109,21 @@
 #
 # ── THE THRESHOLD ────────────────────────────────────────────────────────────
 #
-# IR_THRESH = 3.0 per doubling, and a shape FAILS only when BOTH doublings clear
-# it (a sustained signal, never one reading). Same number and same rule as
-# diff_compiler_perf_scaling.sh, deliberately — the two gates grade the same
-# question on different metrics and a reader should not have to hold two
-# thresholds in their head.
+# IR_THRESH = 3.0 per doubling, and a shape FAILS when r2 — the SECOND doubling,
+# the one that carries the asymptote — clears it. Same NUMBER and, since #2173,
+# the same RULE as every DETERMINISTIC arm of diff_compiler_perf_scaling.sh and
+# both drivers of diff_compiler_stage_ir_scaling.sh. The one arm anywhere that
+# still demands both doublings is perf_scaling's WALL-CLOCK `grade_time_stage`,
+# and that is deliberate: two noisy samples make a sustained signal worth
+# demanding, whereas on a deterministic instrument r1 < t < r2 is the signature
+# of the superlinear term rather than of noise (#2063, #2100, #2173). See THE
+# VERDICT RULE in grade_shape. Derive the exception rather than trusting this
+# line:  grep -n "^[^#]*r1 > th && r2 > th" test/diff_compiler_perf_scaling.sh
+#
+# ⚠️ THIS PARAGRAPH SAID "BOTH DOUBLINGS" UNTIL 2026-08-28 (#2160 phase 2), i.e.
+# for the whole life of the r2-alone rule PR #2171 shipped: the header described
+# the rule the code no longer ran, and it was the paragraph a reader was pointed
+# at as "this gate's public contract". Found by phase 2's sweep of this file.
 #
 #     linear 2.0  |  n log n ~2.1  |  n^1.5 2.83  |  QUADRATIC 4.0
 #
@@ -127,8 +137,10 @@
 # see the floor block) reads r1 3.261 r2 3.603 at 400/800/1600. Roughly 32% below
 # the line and 9% above it. NB the ERR arm's ratios CLIMB with N (2.920/3.261 at
 # 200/400/800, 3.261/3.603 at 400/800/1600) — that climb is the signature that
-# separates a quadratic from a one-off step, and it is why the rule below wants
-# BOTH doublings rather than the larger of the two.
+# separates a quadratic from a one-off step, and it is exactly why the rule below
+# grades r2 alone: on a climbing shape r1 is the reading that has not caught up
+# yet, so requiring it too would excuse the shape at the very N where the term
+# first becomes visible.
 #
 # 🚨 THE THRESHOLD AND THE NETTING METHOD ABOVE ARE THIS GATE'S PUBLIC CONTRACT.
 # Cite them; do not invent a second set. If a future shape needs a different
@@ -263,6 +275,22 @@ fi
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 printf 'main = println 1\n' > "$WORK/freshness.mdk"
+# OBSERVED RED (#2160 phase 2, this box, 2026-08-29). A fake MEDAKA_ROOT makes
+# the baked-in source fingerprint unmatchable, which is exactly the state
+# [B-STALENESS] describes — and note what it takes to SEE it: without
+# MEDAKA_STRICT the same binary exits 0 with a right-looking answer and only a
+# stderr warning ([B-STDERR]).
+#
+#   $ mkdir -p /tmp/fakeroot/compiler && printf 'x = 1\n' > /tmp/fakeroot/compiler/bogus.mdk
+#   $ ln -s "$PWD/stdlib" /tmp/fakeroot/stdlib
+#   $ MEDAKA_ROOT=/tmp/fakeroot sh test/diff_compiler_ir_scaling.sh
+#   FAIL: ./medaka is stale or broken — refusing to publish instruction counts for it.
+#     ... compiler source may be stale; rebuild ...
+#     make medaka
+#   exit=1
+#
+# The point of the arm is that the numbers would otherwise be REAL instruction
+# counts of the WRONG compiler, and nothing downstream could tell.
 if ! MEDAKA_STRICT=1 "$MEDAKA" check "$WORK/freshness.mdk" >/dev/null 2>"$WORK/fresh.err"; then
   echo "FAIL: ./medaka is stale or broken — refusing to publish instruction counts for it."
   sed 's/^/  /' "$WORK/fresh.err"
@@ -309,9 +337,23 @@ KNOWN_SUPERLINEAR="scoperefs"
 # the fourth ratio at 3.467 vs 3.438 measured (0.8% error); the n*log n model is
 # off by ~60% on the same data. On that fit the N^2 term is already ~72% of net
 # Ir at this gate's own N=12000. The residual is NOT the OrdMap probe — a
-# quadratic term dominates the band. Tracked as #2172, which also carries the
-# first discriminator to run (the shape emits its tail as ONE source line of
-# ~7*N chars, i.e. it may be the #2044 line-rescan family and not #1031 at all).
+# quadratic term dominates the band. Tracked as #2172.
+#
+# ── #2172's FIRST DISCRIMINATOR HAS BEEN RUN, AND IT IS NEGATIVE (#2160 phase 2,
+# 2026-08-28, this box; posted to #2172). The suspicion was that this shape emits
+# its tail as ONE source line of ~7*N chars, making it the #2044 line-rescan
+# family rather than #1031's scope scan. Re-generating the identical program with
+# the tail SPLIT across many short lines (same tokens, same bindings, ~N extra
+# lines) moves nothing:
+#
+#   gen_scoperefs        floor=1816309817  N=3000 net=12011775893  N=6000 net=34873473287  r=2.903
+#   gen_scoperefs_split  floor=1817035195  N=3000 net=12041588253  N=6000 net=34915351133  r=2.900
+#
+# 0.25% apart on net Ir and 0.1% on the ratio. Line length is NOT the variable,
+# so BOTH line-shaped explanations die at once and the residual is unlocalised.
+# Do not re-run this discriminator; the next step is per-stage attribution, which
+# needs a `scoperefs` shape in test/diff_compiler_stage_ir_scaling.sh (there is
+# none today).
 #
 # ⚠️ CEIL IS A PER-BAND NUMBER, valid only at this gate's SCOPEREFS_N=3000. At
 # IR_SCOPEREFS_N=6000 the SAME tree reads r2=3.438 and this row correctly
@@ -754,6 +796,26 @@ ir_of() {
 # GREEN while crashing. `MIN_NET_FRAC` catches a fully-erroring regime; it does
 # not catch a partial one. Both shipped shapes are 0-diagnostic by design, so
 # this is a pure tightening with nothing to opt out.
+# ── OBSERVED RED: both regime asserts (#2160 phase 2, this box, 2026-08-29) ──
+#
+# These two say "the generated fixture is still in the regime this shape claims".
+# They are reachable through the band knobs alone — a degenerate N is a legal
+# value of an add-only knob, and it makes each generator emit a program in the
+# OTHER regime:
+#
+#   $ IR_ONLY=xref IR_XREF_N=0 sh test/diff_compiler_ir_scaling.sh
+#   FAIL: generated fixture does not typecheck — the shape has drifted:
+#   FAIL: no shape was graded — this gate proved nothing.
+#   exit=1
+#
+#   $ IR_ONLY=errs IR_ERRS_N=0 sh test/diff_compiler_ir_scaling.sh
+#   FAIL: generated fixture typechecks CLEANLY — an N-diagnostic shape has drifted:
+#   FAIL: no shape was graded — this gate proved nothing.
+#   exit=1
+#
+# Note the SECOND line in both: the zero-graded backstop fires too, and that is
+# the correct pair — an aborted shape must not leave the gate reporting success
+# on the strength of the shapes that did run.
 assert_clean() {
   if ! "$MEDAKA" check "$1" >"$WORK/chk.out" 2>&1; then
     echo "FAIL: generated fixture does not typecheck — the shape has drifted:"
@@ -779,6 +841,24 @@ assert_diags() {
     return 1
   fi
   got="$(grep -c '^error: ' "$WORK/chk.out")"
+  # ── HOLE, reported not papered over (#2160 phase 2) — the COUNT-MISMATCH branch.
+  # It is distinct from the two regime asserts above: it fires when the fixture
+  # still typechecks in the right REGIME but stops producing the expected NUMBER of
+  # diagnostics. `an` is the shape's own N (see the assert_regime call sites), and
+  # the `errs` generator emits exactly one error per binding, so `got` tracks `an`
+  # identically for every value IR_ERRS_N can take — there is no add-only knob that
+  # separates them.
+  #
+  # The one route that could have separated them was a diagnostic CAP in the
+  # compiler (emit N errors, print the first K). TESTED, 2026-08-29, and there is
+  # no cap — so this branch stays undriven:
+  #
+  #   $ ./medaka check /tmp/cap.mdk        # 5000 bindings, one type error each
+  #   $ grep -c '^error: ' out             # 5000
+  #
+  # It is left in place: it costs one comparison and it is correct the day the
+  # generator, the compiler's error dedup, or a cap changes underneath the shape —
+  # which is precisely the drift the assert exists for.
   if [ "$got" -ne "$an" ]; then
     echo "FAIL: fixture produced $got diagnostics, expected exactly $an —"
     echo "  the shape has drifted out of its diagnostic regime and its floor no"
@@ -794,6 +874,13 @@ assert_regime() {
   case "$1" in
     clean) assert_clean "$2" ;;
     diags) assert_diags "$2" "$3" ;;
+    # ⚠️ HOLE, reported not papered over (#2160 phase 2). This arm fires only on a
+    # regime string that no call site passes — `grade_shape`'s 3rd argument is
+    # written at six literal call sites and defaults to `clean`. There is no
+    # add-only knob that reaches it, and adding one would mean a way to feed this
+    # gate an unknown regime, which is a capability, not a test. It stays as a
+    # structural assertion: cheap, and correct the day a seventh call site
+    # mistypes its regime.
     *) echo "FAIL: unknown regime '$1' — expected 'clean' or 'diags'."; return 1 ;;
   esac
 }
@@ -810,6 +897,15 @@ grade_shape() {
   "gen_$shape" "$FLOOR_N" "$WORK/${shape}_floor.mdk" || return 1
   assert_regime "$regime" "$WORK/${shape}_floor.mdk" "$FLOOR_N" || { fail=1; return 1; }
   floor="$(ir_of "$WORK/${shape}_floor.mdk")" || { fail=1; return 1; }
+  # OBSERVED RED (#2160 phase 2). The netting guard refuses to grade a ratio
+  # whose numerator is mostly floor — the reading would be noise wearing a
+  # verdict's clothes. Driven by raising the FRACTION rather than shrinking the
+  # band, so the guard moves and the measurement does not:
+  #
+  #   $ IR_ONLY=xref IR_XREF_N=8 IR_MIN_NET_FRAC=50 sh test/diff_compiler_ir_scaling.sh
+  #   FAIL xref: net Ir at N=8 (25577470) is under the netting-noise guard (90799355800).
+  #   FAIL: no shape was graded — this gate proved nothing.
+  #   exit=1
   min_net="$(awk -v f="$floor" -v p="$MIN_NET_FRAC" 'BEGIN{printf "%d", f*p}')"
   printf '%s: floor(N=%s) = %s Ir  (net must exceed %s)\n' \
     "$shape" "$FLOOR_N" "$floor" "$min_net"
@@ -926,6 +1022,13 @@ grade_shape noimpl "$NOIMPL_N" diags
 echo
 # A gate that grades nothing must never report success — the invariant
 # run_gates.sh states for itself, asserted here for its own shapes too.
+# OBSERVED RED (#2160 phase 2) on its own, with no other arm involved — naming a
+# shape that does not exist is the cheapest way in, and it also proves IR_ONLY
+# cannot silently narrow a run to nothing:
+#
+#   $ IR_ONLY=nosuchshape sh test/diff_compiler_ir_scaling.sh
+#   FAIL: no shape was graded — this gate proved nothing.
+#   exit=1
 if [ "$graded" -eq 0 ]; then
   echo "FAIL: no shape was graded — this gate proved nothing."
   exit 1
