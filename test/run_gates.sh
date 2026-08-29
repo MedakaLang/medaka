@@ -385,13 +385,63 @@ if [ -z "${NO_STALE_CHECK:-}" ] && [ -z "${CI:-}" ] && [ -d "$ROOT/test/bin" ]; 
 fi
 
 export INNER_JOBS
+
+# ── FEED THE POOL COST-DESCENDING (#2207) ─────────────────────────────────────
+#
+# `xargs -P $JOBS` consumes this list IN ORDER, so the order IS the schedule.
+# Fed in glob order — which is what happened until now — a row's wall clock
+# depends on where alphabetically its expensive gates happen to fall: start a
+# 480s gate last and every other worker idles behind it while it finishes alone.
+#
+# Longest-processing-time first is the standard list-scheduling heuristic, and
+# it is the one `medaka gate balance` MODELS this pool with when it scores a
+# row's makespan (`balAdd`/`balBucketAdd`, compiler/tools/gate_cmd.mdk). That
+# is the real reason this is not merely a speed-up: until execution order here
+# is deterministic AND matches the model, no makespan prediction is falsifiable
+# — the same assignment would produce a different wall clock run to run, and a
+# residual against the prediction would be measuring the glob.
+#
+# ⚠️ AN UNCOSTED GATE RUNS FIRST, NOT LAST. A gate with no baseline row is new,
+# renamed, or moved, and its cost is UNKNOWN — not zero. The balancer refuses to
+# pack on exactly that distinction (`balUncosted`: "a missing cost is not a cheap
+# gate, it is an unknown one"), and the scheduling consequence points the same
+# way: LPT's failure mode is a long job started late, so an unknown belongs at
+# the front, where guessing wrong costs nothing if it turns out cheap. Ties
+# break on the gate label, so the order is a function of the inputs rather than
+# of the glob's — `candBefore`'s rule, for `candBefore`'s reason.
+#
+# A missing or unreadable baseline degrades to "every gate uncosted", i.e. a
+# deterministic label order: no worse than the glob it replaces, and never an
+# error — this is a scheduling hint, and a gate must still RUN without one.
+_order="$RESULTDIR/.order"
+for g in $gates; do
+  printf '%s %s\n' "$(gate_name "$g")" "$g"
+done | awk -v base="$ROOT/test/gate_cost_baseline.json" '
+  # Field extraction by SUB, not by substr() arithmetic. The arithmetic form
+  # was written first and was wrong by one character: it chopped the leading
+  # digit off every cost (395575 -> 95575), which still sorted, still looked
+  # like a plausible descending order, and still produced a schedule — just not
+  # the one it claimed. There is no offset to get wrong here.
+  BEGIN {
+    while ((getline line < base) > 0) {
+      if (line !~ /"medianMs":/) continue
+      if (!match(line, /"name": "[^"]+"/)) continue
+      n = substr(line, RSTART, RLENGTH); sub(/^"name": "/, "", n); sub(/"$/, "", n)
+      if (!match(line, /"medianMs": [0-9]+/)) continue
+      v = substr(line, RSTART, RLENGTH); sub(/^"medianMs": /, "", v)
+      cost[n] = v + 0
+    }
+  }
+  { if ($1 in cost) printf "1 %d %s %s\n", cost[$1], $1, $2
+    else            printf "0 0 %s %s\n", $1, $2 }
+' | sort -k1,1n -k2,2nr -k3,3 | cut -d' ' -f4 >"$_order"
+
 # Wall clock spanning the whole fan-out (#2208): "from before the xargs -P
 # $JOBS pool starts to after it drains" — the row's own total elapsed time,
 # distinct from any single gate's `ms`. Nothing computed this before; it is a
 # new measurement, not an existing one exposed.
 _row_t0=$(_now_ms)
-printf '%s\n' $gates \
-  | xargs -P "$JOBS" -I{} sh "$0" --run-one {} "$RESULTDIR"
+xargs -P "$JOBS" -I{} sh "$0" --run-one {} "$RESULTDIR" <"$_order"
 _row_elapsed_ms=$(( $(_now_ms) - _row_t0 ))
 
 # ── Summary ───────────────────────────────────────────────────────────────────
