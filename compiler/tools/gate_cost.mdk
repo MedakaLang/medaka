@@ -137,13 +137,17 @@ parseCostBaseline src = match parse src
 -- run), not per gate, keyed `"<runId>:<runAttempt>:<shard>"`.  Since S-1 it
 -- also carries the row's own `jobs` (outer worker count), `parallel`
 -- (whether the fan-out ran concurrently), and `rowElapsedMs` (the row's own
--- wall clock, spanning its whole `xargs -P $JOBS` fan-out) — all three
+-- wall clock, spanning its whole `xargs -P $JOBS` fan-out) — all four
 -- OPTIONAL, since a run ingested before this field existed has none of them
--- and must read as "unknown", never as a false 0/zero-cost.
+-- and must read as "unknown", never as a false 0/zero-cost.  `gates` (F-2,
+-- #2178 review S2-1) is the fourth: the number of gates that shard's
+-- registry had AT INGEST TIME, which lets a reader tell whether a later
+-- rebalance moved gates on or off the row since — see `balCalibLine`.
 --
--- This is a READ ONLY.  `balCompute`/`balCands` (the shard packer) do not
--- consume it — wiring these facts into the score is a later slice's job, not
--- this one's.  See `test/gate_cost_baseline.json`'s own header note and the
+-- `jobs` (via `balJobsFor`/`balJobsIsFallback`) and `rowElapsedMs` (via
+-- `balCalibLine`) ARE consumed by the balancer today; `parallel` and `gates`
+-- are read but only for the calibration/staleness report, never the score
+-- itself.  See `test/gate_cost_baseline.json`'s own header note and the
 -- module's own doc-comment above for why the file exists at all.
 
 {- | One `runs[]` provenance row. -}
@@ -155,6 +159,7 @@ public export data RunRecord =
       jobs : Option Int,
       parallel : Option Bool,
       rowElapsedMs : Option Int,
+      gates : Option Int,
     }
 
 runEntry : Int -> Json -> Result String RunRecord
@@ -171,6 +176,7 @@ runEntry i e = match asString (orNull (lookup "key" e))
         jobs = asInt (orNull (lookup "jobs" e)),
         parallel = asBool (orNull (lookup "parallel" e)),
         rowElapsedMs = asInt (orNull (lookup "rowElapsedMs" e)),
+        gates = asInt (orNull (lookup "gates" e)),
       }
 
 runEntries : Array Json -> Int -> Int -> List RunRecord -> Result String (List RunRecord)

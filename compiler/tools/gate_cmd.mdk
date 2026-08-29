@@ -2547,12 +2547,23 @@ balRows runs (s::ss) =
    A hard refusal was considered and rejected: a brand-new `[[shard]]` row has
    no recorded run BY CONSTRUCTION, and refusing to balance until it has one
    would deadlock — its first run cannot happen until `ci.yml` schedules gates
-   onto it, and nothing is scheduled onto it until the balancer runs. -}
+   onto it, and nothing is scheduled onto it until the balancer runs.
+
+   ⚠️ `parallel == Some False` OVERRIDES `jobs` entirely (F-2, #2178 review
+   S3-3).  `run_gates.sh` hardcodes `parallel: true` today, so this is
+   currently vacuous, but a future producer that ran a row's gates serially
+   would have `jobs` describe a worker count the row never actually used —
+   modelling it at that `jobs` would UNDER-state its makespan by roughly
+   `jobs`×, the same fail-open direction fallback 2 above exists to avoid. A
+   row recorded as non-parallel is modelled at 1 worker regardless of what
+   `jobs` says. -}
 balJobsFor : String -> List RunRecord -> Int
 balJobsFor n runs = match latestRunForShard n runs
-  Some r => match r.jobs
-    Some j if j >= 1 => j
-    _ => balAnyJobs runs 1
+  Some r => match r.parallel
+    Some False => 1
+    _ => match r.jobs
+      Some j if j >= 1 => j
+      _ => balAnyJobs runs 1
   None => balAnyJobs runs 1
 
 -- The latest `jobs` recorded on any row, in file order (the ingester appends,
@@ -2976,17 +2987,49 @@ balRowLines (r::rs) runs =
    set — that is true right after an ingest and false the moment a rebalance
    lands, because the next run has not happened yet.  So this block is
    calibration evidence at ingest time, not a live invariant, and it is
-   reported rather than enforced for exactly that reason.
+   reported rather than enforced for exactly that reason.  The line CANNOT
+   detect that on its own — a residual reads identically whether the gate set
+   moved or not — so `balCalibStaleness` compares the run's recorded `gates`
+   count (F-2, #2178 review S2-1) against the row's current `rcount` and
+   annotates the line when they disagree, rather than leaving a reader to
+   infer staleness from context.
 
    The residual is expected to be POSITIVE and not zero.  A row's recorded
-   elapsed spans things no per-gate median contains: the pool's own spawn
-   overhead, each gate's shebang syntax pre-check, and the gates that FAILED —
-   which contribute wall clock to the row but, by the ingester's rule, no
-   sample to the baseline.  A residual near zero or negative is the surprising
-   one. -}
+   elapsed spans things no per-gate median contains:
+
+     * the pool's own spawn overhead (still real);
+     * `medianMs` is the LOWER MEDIAN of only 1-2 raw samples per gate
+       (`test/run_gates.sh`'s retention, effectively `min` at n=2), which
+       systematically underestimates each gate's real distribution and so
+       underestimates the row's summed/packed load too; and
+     * gates that FAILED, which contribute wall clock to the row but, by the
+       ingester's rule, no sample to the baseline — CURRENTLY VACUOUS for
+       every ingested run (every gate in the baseline is at `samples: 2`
+       across both ingested runIds, meaning none has ever failed), but a real
+       mechanism that would start contributing again the moment a gate does
+       fail, so it stays listed as a possible cause rather than a certain one.
+
+   The gate's own shebang syntax pre-check is NOT a cause: `test/run_gates.sh`
+   starts the clock BEFORE that check runs (search "clock starts BEFORE the
+   syntax pre-check"), so its cost is already inside each gate's own `ms` and
+   cannot also be part of the residual.
+
+   A residual near zero or negative is the surprising one. -}
 balCalibLines : List Row -> List RunRecord -> List String
 balCalibLines [] _ = []
 balCalibLines (r::rs) runs = balCalibLine r runs :: balCalibLines rs runs
+
+-- The recorded run and the committed assignment describe the same gate set
+-- only as long as `rcount` (now) matches the run's own recorded `gates`
+-- (at ingest); when they diverge a rebalance has landed since, and the
+-- residual above is calibration against a gate set that no longer exists.
+-- `None` (a run ingested before the `gates` field existed) is silently
+-- unannotated — "unknown" is not "stale".
+balCalibStaleness : Int -> Option Int -> String
+balCalibStaleness _ None = ""
+balCalibStaleness cur (Some recorded)
+  | cur == recorded = ""
+  | otherwise = " [STALE: \{intToString cur} gates now, \{intToString recorded} when recorded]"
 
 balCalibLine : Row -> List RunRecord -> String
 balCalibLine r runs = match latestRunForShard r.rname runs
@@ -3000,7 +3043,8 @@ balCalibLine r runs = match latestRunForShard r.rname runs
         " (\{intToString (d * 100 / r.rload)}%)"
       else
         ""
-      "    \{balPadR 10 r.rname} recorded \{balPadL 9 (balSecs e)}   predicted \{balPadL 9 (balSecs r.rload)}   residual \{balPadL 9 (balDelta d)}\{pct}"
+      let stale = balCalibStaleness r.rcount rr.gates
+      "    \{balPadR 10 r.rname} recorded \{balPadL 9 (balSecs e)}   predicted \{balPadL 9 (balSecs r.rload)}   residual \{balPadL 9 (balDelta d)}\{pct}\{stale}"
 
 balMoved : List Place -> Int
 balMoved [] = 0

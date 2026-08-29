@@ -111,7 +111,7 @@ _bal() {
 
 for stem in wasm_only_row dominating_gate uncosted_gate \
             pin_intruder pin_deserter pin_on_open_row makespan_vs_sum \
-            thin_evidence; do
+            thin_evidence calib_staleness; do
   cp "$FIX/$stem.toml" "$TMP/$stem.toml"
 done
 
@@ -346,6 +346,32 @@ if _bal thin_evidence "$TMP/t.txt"; then
 else
   bad "the balancer failed on the thin_evidence fixture"
   sed -e 's/^/        /' "$TMP/t.txt"
+fi
+
+# ── 9. calibration lines carry a staleness signal, and only when it's true ────
+#
+# S2-1 (#2178 review): a residual is only comparable to the committed
+# assignment while the recorded run and that assignment describe the SAME
+# gate set (see `balCalibLine`'s own caveat). `calib_staleness` pins row `a`
+# recorded with fewer gates than are committed to it now, and row `b`
+# recorded with the same count it has now — so the annotation must fire on
+# `a` and must NOT fire on `b`, proving the count is a real comparison.
+if _bal calib_staleness "$TMP/s.txt"; then
+  if grep -q '^    a  *recorded.*\[STALE: 2 gates now, 1 when recorded\]$' "$TMP/s.txt"; then
+    ok "a row whose recorded gate count differs from committed is annotated STALE"
+  else
+    bad "row 'a' calibration line missing the staleness annotation"
+    sed -e 's/^/        /' "$TMP/s.txt"
+  fi
+  if grep -q '^    b  *recorded' "$TMP/s.txt" && ! grep -q '^    b  *recorded.*\[STALE' "$TMP/s.txt"; then
+    ok "a row whose recorded gate count matches committed is NOT annotated"
+  else
+    bad "row 'b' calibration line was annotated STALE when it should not be"
+    sed -e 's/^/        /' "$TMP/s.txt"
+  fi
+else
+  bad "the balancer failed on the calib_staleness fixture"
+  sed -e 's/^/        /' "$TMP/s.txt"
 fi
 
 # The real registry's own closed row, asserted by NAME and not by count: the
