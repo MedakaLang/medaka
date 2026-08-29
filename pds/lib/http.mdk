@@ -7,9 +7,11 @@
 
 import bytebuilder.{Builder, buildArray, emitU8, newBuilder}
 import byteparser.{BResult(..), runBP, takeSlice}
+import json.{Json, parse}
 import list.{reverse}
 import string.{fromUtf8, toUtf8}
 import lib.resource_limits.{
+  checkJsonBodyBytes,
   checkHttpBodyBytes,
   checkHttpChunks,
   checkHttpHeaderBytes,
@@ -17,6 +19,8 @@ import lib.resource_limits.{
   checkHttpRequestBytes,
   checkHttpRequestLineBytes,
   checkHttpTrailerFields,
+  checkRawBodyBytes,
+  checkTextBodyBytes,
   maxHttpBodyBytes,
   maxHttpHeaderBytes,
   maxHttpRequestLineBytes,
@@ -505,3 +509,341 @@ parseRequest input = do
     keepAlive <- keepAliveFromHeaders headers
     (ParsedBody body trailers _) <- parseBody mode input bodyPos headerBytes
     Ok (Request method target headers trailers body keepAlive)
+
+-- | A buffered HTTP response. The constructor is private: responses can only
+-- be obtained through `makeResponse`, after their status line and fields have
+-- been checked for response splitting and reserved framing fields.
+export data Response = Response Int String (List Header) (Array Int)
+
+-- | A parsed, canonical media type. Parameters are validated by
+-- `parseMediaType` but are not retained because Phase 2 routing only depends
+-- on the lowercased type and subtype.
+export data MediaType = MediaType String String
+
+public export data DecodedBody =
+  | JsonBody MediaType Json
+  | TextBody MediaType String
+  | RawBody MediaType (Array Int)
+
+public export data QueryParam = QueryParam String String
+
+validResponseValue : Array Int -> Int -> Bool
+validResponseValue value i =
+  if i >= arrayLength value then True
+  else
+    let byte = value[i]
+    byte >= 32 && byte <= 126 && validResponseValue value (i + 1)
+
+-- | Construct a safe response field. Names are canonicalized to lowercase;
+-- values must be printable ASCII and therefore cannot contain CR, LF, or any
+-- other control byte.
+export
+makeHeader : String -> Array Int -> Result String Header
+makeHeader name value =
+  let nameBytes = toUtf8 name
+  if arrayLength nameBytes == 0 || not (allToken nameBytes 0 (arrayLength nameBytes)) then
+    Err "http: invalid response header field name"
+  else if not (validBytes value 0) || not (validResponseValue value 0) then
+    Err "http: control or non-ASCII byte in response header field value"
+  else
+    Ok (Header (lowerAscii nameBytes 0 (arrayLength nameBytes)) (arrayCopy value))
+
+validReason : String -> Bool
+validReason reason = validResponseValue (toUtf8 reason) 0
+
+hasReservedResponseField : List Header -> Bool
+hasReservedResponseField [] = False
+hasReservedResponseField ((Header name _)::rest) = name == "content-length"
+  || name == "transfer-encoding"
+  || hasReservedResponseField rest
+
+-- | Construct a deterministic buffered response. The serializer owns all
+-- framing, so callers cannot supply Content-Length or Transfer-Encoding.
+export
+makeResponse : Int -> String -> List Header -> Array Int -> Result String Response
+makeResponse status reason headers body =
+  if status < 100 || status > 599 then
+    Err "http: response status must be between 100 and 599"
+  else if not (validReason reason) then
+    Err "http: invalid control or non-ASCII byte in response reason phrase"
+  else if hasReservedResponseField headers then
+    Err "http: response framing fields are reserved"
+  else if not (validBytes body 0) then
+    Err "http: response body element outside byte range 0..255"
+  else
+    Ok (Response status reason (copyHeaders headers) (arrayCopy body))
+
+export
+responseStatus : Response -> Int
+responseStatus (Response status _ _ _) = status
+
+export
+responseHeaders : Response -> List Header
+responseHeaders (Response _ _ headers _) = copyHeaders headers
+
+export
+responseBody : Response -> Array Int
+responseBody (Response _ _ _ body) = arrayCopy body
+
+emitAscii : String -> Builder -> Unit
+emitAscii text out = emitArray (toUtf8 text) 0 out
+
+emitResponseHeaders : List Header -> Builder -> Unit
+emitResponseHeaders [] _ = ()
+emitResponseHeaders ((Header name value)::rest) out =
+  emitAscii name out
+  emitAscii ": " out
+  emitArray value 0 out
+  emitAscii "\r\n" out
+  emitResponseHeaders rest out
+
+-- | Serialize a complete HTTP/1.1 response. Caller fields remain in their
+-- original order and exactly one computed Content-Length follows them.
+export
+serializeResponse : Response -> Array Int
+serializeResponse (Response status reason headers body) =
+  let out = newBuilder ()
+  emitAscii "HTTP/1.1 " out
+  emitAscii (intToString status) out
+  emitAscii " " out
+  emitAscii reason out
+  emitAscii "\r\n" out
+  emitResponseHeaders headers out
+  emitAscii "content-length: " out
+  emitAscii (intToString (arrayLength body)) out
+  emitAscii "\r\n\r\n" out
+  emitArray body 0 out
+  buildArray out
+
+percentNibble : Int -> Option Int
+percentNibble byte = hexDigit byte
+
+decodeQueryBytes : Array Int -> Int -> Int -> Builder -> Result String Unit
+decodeQueryBytes input pos end out =
+  if pos >= end then Ok ()
+  else
+    if input[pos] /= 37 then
+      let () = emitU8 input[pos] out
+      decodeQueryBytes input (pos + 1) end out
+    else
+      if pos + 2 >= end then Err "http: malformed percent escape in query"
+      else match (percentNibble input[pos + 1], percentNibble input[pos + 2])
+        (Some high, Some low) =>
+          let () = emitU8 (high * 16 + low) out
+          decodeQueryBytes input (pos + 3) end out
+        _ => Err "http: malformed percent escape in query"
+
+continuation : Int -> Bool
+continuation byte = byte >= 128 && byte <= 191
+
+utf8Step : Array Int -> Int -> Option (Int, Int)
+utf8Step bytes i =
+  let size = arrayLength bytes
+  let b0 = bytes[i]
+  if b0 <= 127 then
+    Some (b0, i + 1)
+  else if b0 >= 194 && b0 <= 223 && i + 1 < size && continuation bytes[i + 1] then
+    Some ((b0 - 192) * 64 + bytes[i + 1] - 128, i + 2)
+  else if b0 == 224 && i + 2 < size && bytes[i + 1] >= 160 && bytes[i + 1] <= 191 && continuation bytes[i + 2] then
+    Some ((b0 - 224) * 4096 + (bytes[i + 1] - 128) * 64 + bytes[i + 2] - 128, i + 3)
+  else if b0 >= 225 && b0 <= 236 && i + 2 < size && continuation bytes[i + 1] && continuation bytes[i + 2] then
+    Some ((b0 - 224) * 4096 + (bytes[i + 1] - 128) * 64 + bytes[i + 2] - 128, i + 3)
+  else if b0 >= 238 && b0 <= 239 && i + 2 < size && continuation bytes[i + 1] && continuation bytes[i + 2] then
+    Some ((b0 - 224) * 4096 + (bytes[i + 1] - 128) * 64 + bytes[i + 2] - 128, i + 3)
+  else if b0 == 237 && i + 2 < size && bytes[i + 1] >= 128 && bytes[i + 1] <= 159 && continuation bytes[i + 2] then
+    Some ((b0 - 224) * 4096 + (bytes[i + 1] - 128) * 64 + bytes[i + 2] - 128, i + 3)
+  else if b0 == 240 && i + 3 < size && bytes[i + 1] >= 144 && bytes[i + 1] <= 191 && continuation bytes[i + 2] && continuation bytes[i + 3] then
+    Some (
+      (b0 - 240) * 262144 + (bytes[i + 1] - 128) * 4096 + (bytes[i + 2] - 128) * 64 + bytes[i + 3] - 128,
+      i + 4,
+    )
+  else if b0 >= 241 && b0 <= 243 && i + 3 < size && continuation bytes[i + 1] && continuation bytes[i + 2] && continuation bytes[i + 3] then
+    Some (
+      (b0 - 240) * 262144 + (bytes[i + 1] - 128) * 4096 + (bytes[i + 2] - 128) * 64 + bytes[i + 3] - 128,
+      i + 4,
+    )
+  else if b0 == 244 && i + 3 < size && bytes[i + 1] >= 128 && bytes[i + 1] <= 143 && continuation bytes[i + 2] && continuation bytes[i + 3] then
+    Some (
+      (b0 - 240) * 262144 + (bytes[i + 1] - 128) * 4096 + (bytes[i + 2] - 128) * 64 + bytes[i + 3] - 128,
+      i + 4,
+    )
+  else
+    None
+
+validUtf8From : Array Int -> Int -> Bool
+validUtf8From bytes i =
+  if i >= arrayLength bytes then True
+  else match utf8Step bytes i
+    None => False
+    Some (_, next) => validUtf8From bytes next
+
+validQueryTextFrom : Array Int -> Int -> Bool
+validQueryTextFrom bytes i =
+  if i >= arrayLength bytes then True
+  else match utf8Step bytes i
+    None => False
+    Some (code, next) => code > 31
+      && not (code >= 127 && code <= 159)
+      && validQueryTextFrom bytes next
+
+decodeQueryPart : Array Int -> Int -> Int -> Result String String
+decodeQueryPart input start end = do
+  let out = newBuilder ()
+  () <- decodeQueryBytes input start end out
+  let decoded = buildArray out
+  if not (validQueryTextFrom decoded 0) then
+    Err "http: query component is invalid UTF-8 or contains a control character"
+  else
+    Ok (fromUtf8 decoded)
+
+parseQueryFields : Array Int -> Int -> List QueryParam -> Result String (List QueryParam)
+parseQueryFields input start acc =
+  let end = arrayLength input
+  if start >= end then Ok (reverse acc)
+  else
+    let amp = match findByte input start end 38
+      None => end
+      Some pos => pos
+    let equals = match findByte input start amp 61
+      None => amp
+      Some pos => pos
+    if equals == start then Err "http: empty query parameter name"
+    else do
+      name <- decodeQueryPart input start equals
+      if name == "" then Err "http: empty query parameter name"
+      else do
+        value <- if equals == amp then Ok "" else decodeQueryPart input (equals + 1) amp
+        let next = if amp == end then end else amp + 1
+        if next == end && amp < end then
+          Err "http: empty query parameter name"
+        else
+          parseQueryFields input next (QueryParam name value :: acc)
+
+-- | Split and decode the validated origin target. Ordered duplicates and
+-- empty values are retained; `+` is ordinary URI data and remains literal.
+export
+parseTargetQuery : Request -> Result String (String, List QueryParam)
+parseTargetQuery (Request _ target _ _ _ _) =
+  let bytes = toUtf8 target
+  match findByte bytes 0 (arrayLength bytes) 35
+    Some _ => Err "http: fragment is forbidden in request target"
+    None => match findByte bytes 0 (arrayLength bytes) 63
+      None => Ok (target, [])
+      Some queryAt => do
+        let path = fromUtf8 (slice bytes 0 queryAt)
+        if queryAt + 1 == arrayLength bytes then Ok (path, [])
+        else do
+          params <- parseQueryFields bytes (queryAt + 1) []
+          Ok (path, params)
+
+export
+mediaTypeType : MediaType -> String
+mediaTypeType (MediaType kind _) = kind
+
+export
+mediaTypeSubtype : MediaType -> String
+mediaTypeSubtype (MediaType _ subtype) = subtype
+
+validMediaBytes : Array Int -> Int -> Bool
+validMediaBytes bytes i =
+  if i >= arrayLength bytes then True
+  else
+    let byte = bytes[i]
+    (byte == 9 || byte >= 32 && byte <= 126) && validMediaBytes bytes (i + 1)
+
+scanMediaQuoted : Array Int -> Int -> Int -> Result String Int
+scanMediaQuoted value pos end =
+  if pos >= end then
+    Err "http: unterminated quoted media-type parameter"
+  else if value[pos] == 34 then
+    Ok (pos + 1)
+  else if value[pos] == 92 then
+    if pos + 1 >= end || value[pos + 1] < 32 || value[pos + 1] > 126 then Err "http: invalid quoted media-type parameter" else scanMediaQuoted value (pos + 2) end
+  else if value[pos] < 32 || value[pos] == 127 then
+    Err "http: control byte in media-type parameter"
+  else
+    scanMediaQuoted value (pos + 1) end
+
+parseMediaParameters : Array Int -> Int -> Int -> Int -> Result String Unit
+parseMediaParameters value pos end count =
+  let start = skipOws value pos end
+  if start == end then Ok ()
+  else
+    if count >= 32 then Err "http: media type has too many parameters"
+    else
+      if value[start] /= 59 then Err "http: invalid media-type parameter separator"
+      else
+        let nameStart = skipOws value (start + 1) end
+        let nameEnd = scanTokenEnd value nameStart end
+        if nameEnd == nameStart then Err "http: empty media-type parameter name"
+        else
+          let afterName = skipOws value nameEnd end
+          if afterName >= end || value[afterName] /= 61 then Err "http: media-type parameter requires a value"
+          else
+            let valueStart = skipOws value (afterName + 1) end
+            if valueStart >= end then Err "http: media-type parameter requires a value"
+            else do
+              valueEnd <- if value[valueStart] == 34 then scanMediaQuoted value (valueStart + 1) end
+              else
+                let tokenEnd = scanTokenEnd value valueStart end
+                if tokenEnd == valueStart then
+                  Err "http: invalid media-type parameter value"
+                else
+                  Ok tokenEnd
+              parseMediaParameters value valueEnd end (count + 1)
+
+-- | Parse a bounded ASCII media type. Type and subtype matching is
+-- case-insensitive and returned in canonical lowercase form.
+export
+parseMediaType : Array Int -> Result String MediaType
+parseMediaType value =
+  let end = arrayLength value
+  if end == 0 || end > 4096 then Err "http: media type exceeds its 4096-byte resource limit"
+  else
+    if not (validBytes value 0) || not (validMediaBytes value 0) then Err "http: media type must be bounded ASCII"
+    else
+      let typeEnd = scanTokenEnd value 0 end
+      if typeEnd == 0 || typeEnd >= end || value[typeEnd] /= 47 then Err "http: invalid media type"
+      else
+        let subtypeStart = typeEnd + 1
+        let subtypeEnd = scanTokenEnd value subtypeStart end
+        if subtypeEnd == subtypeStart then Err "http: invalid media subtype"
+        else do
+          () <- parseMediaParameters value subtypeEnd end 0
+          Ok (MediaType
+            (lowerAscii value 0 typeEnd)
+            (lowerAscii value subtypeStart subtypeEnd))
+
+contentType : List Header -> Result String MediaType
+contentType headers =
+  let count = countNamed "content-type" headers
+  if count == 0 then Err "http: request body requires Content-Type"
+  else
+    if count > 1 then Err "http: duplicate Content-Type"
+    else match findNamed "content-type" headers
+      None => Err "http: request body requires Content-Type"
+      Some value => parseMediaType value
+
+-- | Decode a framed request body according to its supplied media type. JSON
+-- and text are strictly UTF-8 and have narrower endpoint limits; all other
+-- valid media types retain their raw bytes.
+export
+decodeRequestBody : Request -> Result String DecodedBody
+decodeRequestBody (Request _ _ headers _ body _) = do
+  mediaType <- contentType headers
+  match mediaType
+    MediaType "application" "json" => do
+      () <- checkJsonBodyBytes (arrayLength body)
+      if not (validUtf8From body 0) then Err "http: JSON body is not valid UTF-8"
+      else match parse (fromUtf8 body)
+        Err message => Err "http: invalid JSON body: \{message}"
+        Ok value => Ok (JsonBody mediaType value)
+    MediaType "text" _ => do
+      () <- checkTextBodyBytes (arrayLength body)
+      if not (validUtf8From body 0) then
+        Err "http: text body is not valid UTF-8"
+      else
+        Ok (TextBody mediaType (fromUtf8 body))
+    _ => do
+      () <- checkRawBodyBytes (arrayLength body)
+      Ok (RawBody mediaType (arrayCopy body))
