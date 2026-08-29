@@ -1,0 +1,1609 @@
+{- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
+
+   Four commands: `medaka gate list [<selector>...] [--json]` (the read path —
+   the registry schema `test/gates.toml`, a reader for it, and the selector
+   language), `medaka gate run [<selector>...]`, which EXECUTES the selected
+   gates, `medaka gate verify` (the drift gate: TEXT-ONLY, no build — every
+   gate candidate enrolled-or-ledgered, every entry's `run`/`oracles`/`corpus`
+   targets exist, every entry reachable by a selector) and `medaka gate
+   explain <path>` (the reverse lookup: which entries does a CHANGED PATH
+   select, via which `sources` glob or `corpus` directory, and what the
+   registry-level fail-open policy says about it —
+   `docs/ops/GATE-REGISTRY-DESIGN.md` §2/§3).
+
+   ⚠️ `gate run` is a NEW WAY TO INVOKE a gate script, not a new way for a gate
+   to behave.  Every gate script, every assertion in it, and the meaning of
+   every exit code it returns are untouched, and `sh test/run_gates.sh` remains
+   authoritative.  What `gate run` adds is the SERVICES around the script —
+   scratch-dir lifecycle, the stale-oracle refusal, a timeout, separated
+   stdout/stderr capture, and a machine-readable timing report — provided once,
+   natively, instead of re-hand-rolled per gate.  See the `gate run` section
+   below.
+
+   **Selector language** (design doc §3, "keep it boring"): a selector is a
+   `field:pattern` token, where `field` is one of `name`/`area`/`project`/
+   `tier` and `pattern` is a glob (`*`, `?`).  A bare token with no `field:`
+   prefix is sugar for `name:<token>`.  Several selectors on one command line
+   are a CONJUNCTION — a gate must match all of them.
+
+   ⚠️ A selector that matches ZERO gates is a HARD ERROR, never a green empty
+   list.  That mirrors `test/run_gates.sh:181` ("no gates match: …", exit 1)
+   deliberately: a mistyped pattern that silently selects nothing is how a
+   shard certifies coverage of a gate that never ran. -}
+
+import toml.{Toml, parse, getString, getArray, tableCount, tableEntry}
+import json.{Json, JString, JInt, JFloat, JBool, jArray, jObject, stringify}
+import driver.build_cmd.{envOr, defaultMedakaRoot}
+import support.path.{joinPath}
+import support.util.{
+  contains,
+  endsWith,
+  filterList,
+  joinNl,
+  joinWith,
+  listLen,
+  parseDecChecked,
+  reverseL,
+  sortUniqS,
+  splitNl,
+  splitOnChar,
+  startsWith,
+  stringTrim,
+}
+
+-- ── The entry schema ────────────────────────────────────────────────────────
+-- One `[[gate]]` table in `test/gates.toml` per gate.  Every field below is
+-- REQUIRED to be present in the file, list fields included: an absent list is
+-- an error, not an empty list.  `sources`/`corpus` are populated in a later
+-- slice, so today they are present-and-empty on every entry — which is a
+-- different fact from "this gate has no sources", and the reader must not
+-- blur the two by defaulting.
+
+public export data Gate =
+  | Gate {
+      name : String,
+      area : String,
+      project : String,
+      tier : String,
+      cost : String,
+      kind : String,
+      run : String,
+      oracles : List String,
+      sources : List String,
+      corpus : List String,
+      toolchain : List String,
+    }
+
+-- ── Registry reading ────────────────────────────────────────────────────────
+
+-- Pull one required string field out of a `[[gate]]` sub-document.
+reqStr : Int -> String -> Toml -> Result String String
+reqStr i field entry = match getString field entry
+  Some s => Ok s
+  None => Err "gates.toml: [[gate]] #\{intToString i}: missing required string field '\{field}'"
+
+-- Pull one required string-array field.  Present-but-empty is fine; absent is
+-- not (see the schema note above).
+reqArr : Int -> String -> Toml -> Result String (List String)
+reqArr i field entry = match getArray field entry
+  Some xs => Ok xs
+  None => Err "gates.toml: [[gate]] #\{intToString i}: missing required array field '\{field}'"
+
+readGate : Toml -> Int -> Result String Gate
+readGate doc i =
+  let e = tableEntry "gate" i doc
+  do
+    name <- reqStr i "name" e
+    area <- reqStr i "area" e
+    project <- reqStr i "project" e
+    tier <- reqStr i "tier" e
+    cost <- reqStr i "cost" e
+    kind <- reqStr i "kind" e
+    run <- reqStr i "run" e
+    oracles <- reqArr i "oracles" e
+    sources <- reqArr i "sources" e
+    corpus <- reqArr i "corpus" e
+    toolchain <- reqArr i "toolchain" e
+    Ok
+      Gate {
+        name = name,
+        area = area,
+        project = project,
+        tier = tier,
+        cost = cost,
+        kind = kind,
+        run = run,
+        oracles = oracles,
+        sources = sources,
+        corpus = corpus,
+        toolchain = toolchain,
+      }
+
+readGatesFrom : Toml -> Int -> Int -> List Gate -> Result String (List Gate)
+readGatesFrom doc i n acc
+  | i >= n = Ok (reverseGates acc [])
+  | otherwise = match readGate doc i
+    Err m => Err m
+    Ok g => readGatesFrom doc (i + 1) n (g::acc)
+
+reverseGates : List Gate -> List Gate -> List Gate
+reverseGates [] acc = acc
+reverseGates (g::gs) acc = reverseGates gs (g::acc)
+
+{- | Parse a registry's TOML source into its gate entries, in file order.
+   An empty registry is an error: an unreadable or empty `gates.toml` must not
+   present as "the repo has no gates". -}
+export
+parseRegistry : String -> Result String (List Gate)
+parseRegistry src = match parse src
+  Err m => Err "gates.toml: \{m}"
+  Ok doc =>
+    let n = tableCount "gate" doc
+    if n == 0 then
+      Err "gates.toml: no [[gate]] entries found"
+    else
+      readGatesFrom doc 0 n []
+
+-- ── Glob matching ───────────────────────────────────────────────────────────
+-- `*` matches any run of characters (path separators included — the registry's
+-- names are opaque strings, not paths), `?` matches exactly one.  Everything
+-- else is literal.  This is the same shape `run_gates.sh` gets from the shell.
+
+globMatchAt : Array Char -> Int -> Int -> Array Char -> Int -> Int -> Bool
+globMatchAt pat pi pn s si sn
+  | pi >= pn = si >= sn
+  | arrayGetUnsafe pi pat == '*' = globStar pat pi pn s si sn
+  | si >= sn = False
+  | arrayGetUnsafe pi pat == '?' = globMatchAt pat (pi + 1) pn s (si + 1) sn
+  | arrayGetUnsafe pi pat == arrayGetUnsafe si s =
+    globMatchAt pat (pi + 1) pn s (si + 1) sn
+  | otherwise = False
+
+-- `*` at `pi`: try consuming 0, 1, 2, … characters of the subject.
+globStar : Array Char -> Int -> Int -> Array Char -> Int -> Int -> Bool
+globStar pat pi pn s si sn
+  | globMatchAt pat (pi + 1) pn s si sn = True
+  | si >= sn = False
+  | otherwise = globStar pat pi pn s (si + 1) sn
+
+{- | Glob match, `*`/`?` only.
+
+   > globMatch "diff_compiler_*" "diff_compiler_parse_result"
+   True
+
+   > globMatch "diff_compiler_*" "build_cmd"
+   False
+
+   A pattern with no metacharacter is an exact match:
+
+   > globMatch "backend" "backend"
+   True
+
+   > globMatch "backend" "backends"
+   False
+
+   `*` crosses `/` — registry names are opaque strings, not paths:
+
+   > globMatch "sqlite/*" "sqlite/test/select_oracle"
+   True -}
+export
+globMatch : String -> String -> Bool
+globMatch pat s =
+  let p = stringToChars pat
+  let subj = stringToChars s
+  globMatchAt p 0 (arrayLength p) subj 0 (arrayLength subj)
+
+-- ── Selectors ───────────────────────────────────────────────────────────────
+
+public export data Selector =
+  | SelName String
+  | SelArea String
+  | SelProject String
+  | SelTier String
+deriving (Eq, Debug)
+
+-- The `field:` prefixes, checked longest-first is unnecessary here (no prefix
+-- is a prefix of another).
+selPrefix : String -> String -> Option String
+selPrefix pre tok =
+  let pn = stringLength pre
+  if stringLength tok >= pn && stringSlice 0 pn tok == pre then
+    Some (stringSlice pn (stringLength tok) tok)
+  else
+    None
+
+hasColon : String -> Bool
+hasColon tok = colonAt (stringToChars tok) 0
+
+colonAt : Array Char -> Int -> Bool
+colonAt arr i
+  | i >= arrayLength arr = False
+  | arrayGetUnsafe i arr == ':' = True
+  | otherwise = colonAt arr (i + 1)
+
+{- | Parse one selector token.  An unrecognized `field:` prefix is an ERROR,
+   not a fall-through to `name:` — `aria:backend` selecting every gate whose
+   *name* is `aria:backend` (i.e. none) would report "matched no gates" and
+   send the reader hunting for a missing gate instead of a typo'd field.
+
+   > parseSelector "name:diff_compiler_*" == Ok (SelName "diff_compiler_*")
+   True
+
+   > parseSelector "area:backend" == Ok (SelArea "backend")
+   True
+
+   A bare token is `name:` sugar:
+
+   > parseSelector "build_cmd" == Ok (SelName "build_cmd")
+   True
+
+   An unknown field is rejected:
+
+   > parseSelector "aria:backend"
+   Err "unknown selector field in 'aria:backend' (expected name:, area:, project: or tier:)" -}
+export
+parseSelector : String -> Result String Selector
+parseSelector tok = match selPrefix "name:" tok
+  Some v => Ok (SelName v)
+  None => match selPrefix "area:" tok
+    Some v => Ok (SelArea v)
+    None => match selPrefix "project:" tok
+      Some v => Ok (SelProject v)
+      None => match selPrefix "tier:" tok
+        Some v => Ok (SelTier v)
+        None =>
+          if hasColon tok then
+            Err "unknown selector field in '\{tok}' (expected name:, area:, project: or tier:)"
+          else
+            Ok (SelName tok)
+
+{- | Does a gate satisfy one selector?  Every field is glob-matched, so a
+   literal value is an exact match and `area:back*` also works. -}
+export
+matchesSelector : Selector -> Gate -> Bool
+matchesSelector (SelName p) g = globMatch p g.name
+matchesSelector (SelArea p) g = globMatch p g.area
+matchesSelector (SelProject p) g = globMatch p g.project
+matchesSelector (SelTier p) g = globMatch p g.tier
+
+-- Conjunction: a gate must satisfy EVERY selector given.
+matchesAll : List Selector -> Gate -> Bool
+matchesAll [] _ = True
+matchesAll (s::ss) g = matchesSelector s g && matchesAll ss g
+
+{- | Select the gates matching every selector, preserving registry order. -}
+export
+selectGates : List Selector -> List Gate -> List Gate
+selectGates _ [] = []
+selectGates sels (g::gs)
+  | matchesAll sels g = g :: selectGates sels gs
+  | otherwise = selectGates sels gs
+
+-- ── Rendering ───────────────────────────────────────────────────────────────
+
+renderNames : List Gate -> String
+renderNames [] = ""
+renderNames (g::gs) = "\{g.name}\n" ++ renderNames gs
+
+gateJson : Gate -> Json
+gateJson g = jObject
+  [
+    ("name", JString g.name),
+    ("area", JString g.area),
+    ("project", JString g.project),
+    ("tier", JString g.tier),
+    ("cost", JString g.cost),
+    ("kind", JString g.kind),
+    ("run", JString g.run),
+    ("oracles", jArray (map JString g.oracles)),
+    ("sources", jArray (map JString g.sources)),
+    ("corpus", jArray (map JString g.corpus)),
+    ("toolchain", jArray (map JString g.toolchain)),
+  ]
+
+{- | The `--json` rendering: a JSON array of entry objects, in registry order,
+   every schema field present. -}
+export
+renderJson : List Gate -> String
+renderJson gs = stringify (jArray (map gateJson gs))
+
+-- ── CLI ─────────────────────────────────────────────────────────────────────
+
+export
+gateHelpText : String
+gateHelpText = stringConcat
+  [
+    "medaka gate — Query the gate registry (test/gates.toml)\n",
+    "\n",
+    "Usage:\n",
+    "  medaka gate list    [<selector>...] [--json] [--registry <path>]\n",
+    "  medaka gate run     [<selector>...] [--dry-run] [--json] [--report <path>]\n",
+    "                      [--timeout <secs>] [--jobs <n>] [--no-stale-check]\n",
+    "                      [--registry <path>]\n",
+    "  medaka gate verify  [--registry <path>]\n",
+    "  medaka gate explain <path> [--registry <path>]\n",
+    "\n",
+    "Selectors (conjunction — a gate must match all of them):\n",
+    "  name:<glob>      gate name, e.g. name:diff_compiler_*\n",
+    "  area:<glob>      semantic area, e.g. area:backend\n",
+    "  project:<glob>   owning project, e.g. project:sqlite\n",
+    "  tier:<glob>      merge | nightly | ondemand\n",
+    "  <glob>           sugar for name:<glob>\n",
+    "\n",
+    "A selector matching zero gates is an error, not an empty list.\n",
+    "\n",
+    "  --json             list: the registry entries as JSON.\n",
+    "                     run: the machine-readable run report as JSON.\n",
+    "  --registry <path>  read this registry instead of <MEDAKA_ROOT>/test/gates.toml\n",
+    "\n",
+    "`gate run` only:\n",
+    "  --dry-run          print the resolved invocation plan; execute nothing\n",
+    "  --report <path>    write the per-gate timing report (JSON) to <path>\n",
+    "  --timeout <secs>   override the per-gate fuse (default by `cost`:\n",
+    "                     cheap 300s, medium 900s, heavy 3600s)\n",
+    "  --jobs <n>         ACCEPTED BUT IGNORED — this runner is sequential; the\n",
+    "                     value is recorded in the report.  Medaka has no\n",
+    "                     concurrency primitive (stdlib/runtime.mdk has no\n",
+    "                     fork/waitpid) and runCommand blocks.\n",
+    "  --no-stale-check   skip the stale-oracle refusal (as NO_STALE_CHECK=1 does;\n",
+    "                     it is also skipped whenever CI is set, on purpose)\n",
+    "\n",
+    "`gate run` reports each gate's RAW exit code and never normalizes polarity:\n",
+    "diff_compiler_must_fail is healthy when RED ([G-MUST-FAIL]).\n",
+    "\n",
+    "`gate verify` is the drift gate: text-only, no build. Checks every gate\n",
+    "candidate (test/preflight.sh's own candidate universe) is enrolled or\n",
+    "explicitly listed as a non-gate tool, every entry's run/oracles/corpus\n",
+    "targets exist, and every entry is reachable by a selector. Exits nonzero\n",
+    "on any violation.\n",
+    "\n",
+    "`gate explain <path>` is the reverse lookup: which entries select a\n",
+    "changed path, and why. Two layers, printed with preflight's own prefixes:\n",
+    "the registry-level POLICY (FULL on a blast-radius path; UNMAPPED + FULL on\n",
+    "an unmatched non-prose path; UNMAPPED alone on prose), then per-entry\n",
+    "`sources` globs and `corpus` directories on GATE lines. A bare token that\n",
+    "is also a field value (name/area/project/tier/run) gets TOKEN lines.\n",
+  ]
+
+-- Parsed `gate list` argv.
+data ListArgs =
+  | ListArgs { json : Bool, registry : Option String, selectors : List String }
+
+parseListArgs : List String -> ListArgs -> Result String ListArgs
+parseListArgs [] acc =
+  Ok ListArgs { acc | selectors = reverseStrs acc.selectors [] }
+parseListArgs ("--json"::rest) acc =
+  parseListArgs rest ListArgs { acc | json = True }
+parseListArgs ("--registry"::p::rest) acc =
+  parseListArgs rest ListArgs { acc | registry = Some p }
+parseListArgs ("--registry"::[]) _ =
+  Err "medaka gate list: --registry needs a path"
+parseListArgs (a::rest) acc
+  | stringLength a > 0 && stringSlice 0 1 a == "-" =
+    Err "medaka gate list: unknown flag: \{a}"
+  | otherwise =
+    parseListArgs rest ListArgs { acc | selectors = a::acc.selectors }
+
+reverseStrs : List String -> List String -> List String
+reverseStrs [] acc = acc
+reverseStrs (x::xs) acc = reverseStrs xs (x::acc)
+
+parseSelectors : List String -> List Selector -> Result String (List Selector)
+parseSelectors [] acc = Ok (reverseSels acc [])
+parseSelectors (t::ts) acc = match parseSelector t
+  Err m => Err m
+  Ok s => parseSelectors ts (s::acc)
+
+reverseSels : List Selector -> List Selector -> List Selector
+reverseSels [] acc = acc
+reverseSels (s::ss) acc = reverseSels ss (s::acc)
+
+-- `<MEDAKA_ROOT>/test/gates.toml` unless --registry overrides it.  MEDAKA_ROOT
+-- resolves exe-relative like every other asset (build_cmd.defaultMedakaRoot),
+-- so a relocated binary finds its own tree, not the cwd.
+registryPath : Option String -> <IO> String
+registryPath (Some p) = p
+registryPath None =
+  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  joinPath (joinPath root "test") "gates.toml"
+
+-- Every way `list` can end, as one value: the text to print, or the message to
+-- die with.  Keeping this a `Result` rather than sprinkling `exit 1` gives the
+-- command a SINGLE exit site (`emit`), so no error path can grow a
+-- print-without-exit or an exit-without-print.
+listOutput : List String -> <IO> Result String String
+listOutput argv = match parseListArgs argv ListArgs { json = False, registry = None, selectors = [] }
+  Err m => Err m
+  Ok a => match parseSelectors a.selectors []
+    Err m => Err "medaka gate list: \{m}"
+    Ok sels =>
+      let path = registryPath a.registry
+      match readFile path
+        Err m => Err "medaka gate list: cannot read registry: \{m}"
+        Ok src => match parseRegistry src
+          Err m => Err "medaka gate list: \{m}"
+          Ok gates =>
+            selectionOutput a.json a.selectors (selectGates sels gates) path
+
+-- A selector that selects nothing is a HARD ERROR (see the module header).
+selectionOutput : Bool -> List String -> List Gate -> String -> Result String String
+selectionOutput _ tokens [] path
+  | isEmptyStrs tokens = Err "medaka gate list: \{path} contains no gates"
+  | otherwise = Err "medaka gate list: no gates match: \{joinSpace tokens}"
+selectionOutput isJson _ (g::gs) _ =
+  if isJson then
+    Ok (renderJson (g::gs) ++ "\n")
+  else
+    Ok (renderNames (g::gs))
+
+-- The command's only exit site.
+emit : Result String String -> <IO> Unit
+emit (Err msg) =
+  let _ = ePutStrLn msg
+  exit 1
+emit (Ok out) = putStr out
+
+isEmptyStrs : List String -> Bool
+isEmptyStrs [] = True
+isEmptyStrs _ = False
+
+joinSpace : List String -> String
+joinSpace [] = ""
+joinSpace (x::[]) = x
+joinSpace (x::xs) = "\{x} \{joinSpace xs}"
+
+{- | `medaka gate <sub> …`. -}
+export
+runGateCmd : List String -> <IO> Unit
+runGateCmd [] =
+  emit (Err
+    "usage: medaka gate <list|run|verify|explain> [<selector>...] [--json]")
+runGateCmd ("list"::rest) = emit (listOutput rest)
+runGateCmd ("run"::rest) = runRunCmdBody rest
+runGateCmd ("verify"::rest) = verifyCmdBody rest
+runGateCmd ("explain"::rest) = explainCmdBody rest
+runGateCmd (sub::_) =
+  emit (Err
+    "medaka gate: unknown subcommand '\{sub}' (expected: list, run, verify, explain)")
+
+-- ── `gate run` ──────────────────────────────────────────────────────────────
+--
+-- `medaka gate run <selector>...` executes the selected gates and provides,
+-- once and natively, the services every individual gate script (and
+-- `test/run_gates.sh` around them) reimplements ad hoc:
+--
+--   * a PER-GATE SCRATCH DIR, handed to the gate as `TMPDIR` so its own
+--     `mktemp -d` lands inside it, and removed after the gate returns — on
+--     failure and on timeout alike.  Routed through
+--     `${MEDAKA_SCRATCH:-/var/tmp/medaka-scratch}`, never bare `/tmp`, because
+--     `/tmp` is a RAM-BACKED tmpfs here and leaked scratch there is a MEMORY
+--     leak with no guilty process (test/lib_scratch.sh).
+--   * the [G-STALE-ORACLE] REFUSAL, including its deliberate disabled-in-CI arm.
+--   * a TIMEOUT per gate — a fuse against a hang, which no gate has today.
+--   * STDERR-PRESERVING capture: stdout and stderr are captured separately and
+--     both surfaced on failure, so a stderr-only staleness warning ([B-STDERR])
+--     can never be silently dropped.
+--   * the `N ok, M failing` summary, and a machine-readable per-gate timing
+--     report (`--json` / `--report <path>`) — #2180's future input.  This slice
+--     ENFORCES NOTHING with those timings.
+--
+-- BEHAVIOR-NEUTRAL FOR EVERY EXISTING GATE.  This is a new alternate way to
+-- INVOKE a gate script; the script, its assertions, and the meaning of its exit
+-- code are untouched, and `sh test/run_gates.sh` remains authoritative.
+--
+-- ⚠️ NO OK/FAILING NORMALIZATION.  The raw exit code is reported as-is.
+-- `diff_compiler_must_fail` has INVERTED polarity ([G-MUST-FAIL]) — RED is its
+-- healthy state — and the registry carries no per-entry ok/failing semantic, so
+-- nothing here may assume exit 0 means "good".  Interpreting polarity stays with
+-- the human (or the shard) above this command, exactly as with `run_gates.sh`.
+
+-- One gate's outcome.  `spawnError` is "" unless the process could not be
+-- started at all (a missing script, a failed `mktemp`, an ENOENT on `env`) —
+-- which is a DIFFERENT fact from "the gate ran and exited non-zero", and the
+-- two must not be blurred into one failure count without saying which.
+public export data GateResult =
+  | GateResult {
+      name : String,
+      script : String,
+      shell : String,
+      exitCode : Int,
+      timedOut : Bool,
+      spawnError : String,
+      seconds : Float,
+      out : String,
+      err : String,
+    }
+
+-- Everything a gate invocation needs that is the same for every gate in a run.
+data RunEnv =
+  | RunEnv {
+      root : String,
+      medaka : String,
+      emitter : String,
+      scratchRoot : String,
+      timeoutOverride : Int,
+    }
+
+-- ── timeout policy ──────────────────────────────────────────────────────────
+--
+-- A FUSE, NOT A BUDGET.  The bound exists so a hung gate cannot hold this
+-- command (or a CI runner) forever; it is deliberately far above any gate's
+-- real runtime, because a bound tight enough to be a perf budget would make
+-- `medaka gate run` behavior-CHANGING for the slowest gates — and per-gate cost
+-- budgets are #2180's job, fed by the timing report this command emits, not
+-- something to smuggle in as a kill signal.  `diff_compiler_perf_scaling` and
+-- `diff_compiler_engines` can already exceed the 10-minute foreground ceiling
+-- ([L-FOREGROUND-CEILING]), which is why `heavy` is an hour and not ten minutes.
+--
+-- The registry's `cost` today takes exactly three values (cheap/medium/heavy);
+-- an unrecognized one gets the middle bound rather than an error, so a future
+-- tier added to the schema degrades to "still fused" instead of "won't run".
+timeoutFor : Int -> String -> Int
+timeoutFor override cost
+  | override > 0 = override
+  | cost == "cheap" = 300
+  | cost == "medium" = 900
+  | cost == "heavy" = 3600
+  | otherwise = 900
+
+-- ── scratch ─────────────────────────────────────────────────────────────────
+
+-- The scratch ROOT, mirroring test/lib_scratch.sh's rule exactly: an explicit
+-- TMPDIR wins unless it is the RAM-backed `/tmp`, in which case MEDAKA_SCRATCH
+-- (default /var/tmp/medaka-scratch) takes over.
+scratchRootOf : Unit -> <IO> String
+scratchRootOf _ =
+  let t = envOr "TMPDIR" ""
+  if t /= "" && stripSlash t /= "/tmp" then
+    t
+  else
+    envOr "MEDAKA_SCRATCH" "/var/tmp/medaka-scratch"
+
+stripSlash : String -> String
+stripSlash s =
+  let n = stringLength s
+  if n > 1 && stringSlice (n - 1) n s == "/" then stringSlice 0 (n - 1) s else s
+
+-- `mktemp -d` under the scratch root.  The 6-X template is accepted by both GNU
+-- and BSD mktemp; `mkdir -p` first because the root may not exist yet.
+makeGateScratch : String -> <IO> Result String String
+makeGateScratch root = match runCommand "mkdir" ["-p", root]
+  Err e => Err e
+  Ok _ => match runCommand "mktemp" ["-d", "\{root}/medaka_gate_XXXXXX"]
+    Err e => Err e
+    Ok (0, out, _) =>
+      let d = stringTrim out
+      if d == "" then Err "mktemp -d printed no path" else Ok d
+    Ok (_, _, mtErr) =>
+      let msg = stringTrim mtErr
+      Err (if msg == "" then "mktemp -d failed" else msg)
+
+-- Best-effort recursive removal.  A gate writes an arbitrary TREE under its
+-- scratch dir (fixtures, oracle output, its own nested mktemp dirs), so the
+-- flat removeFile walk `medaka build` uses is not enough here.
+cleanupScratch : String -> <IO> Unit
+cleanupScratch dir =
+  let _ = runCommand "rm" ["-rf", dir]
+  ()
+
+-- ── [G-STALE-ORACLE] ────────────────────────────────────────────────────────
+--
+-- A stale oracle does not fail — it LIES, and its ordinary-looking FAIL is
+-- indistinguishable from a real regression (test/run_gates.sh:183-298 tells the
+-- three incidents).  So: refuse, name the probes, print the NARROW per-probe
+-- rebuild command.
+--
+-- ⚠️ DISABLED WHEN `CI` IS SET, ON PURPOSE — this reproduces run_gates.sh:215
+-- (`[ -z "${CI:-}" ]`) rather than dropping it.  CI restores test/bin from a
+-- cache keyed on a CONTENT HASH of compiler/stdlib/runtime, which is strictly
+-- stronger than an mtime comparison, while `actions/checkout` stamps fresh
+-- mtimes on the sources — so mtime says "stale" about oracles proven current
+-- and would red-light every shard.  Keep the weak local heuristic for local
+-- trees; defer to the strong signal where it exists.
+--
+-- Like run_gates.sh, this ALSO scrapes `test/bin/<name>` out of each selected
+-- gate's own script text, unioned with the registry's `oracles` field (S-2).
+-- The registry field alone is not enough: it is deliberately FILTERED to
+-- names build_oracles.sh's ENTRIES can build (S-2's `oracles = scrape ∩
+-- ENTRIES`) — correct for driving builds, but a `test/bin/<name>` the filter
+-- dropped (the wasm probes, mostly) is still a real binary a gate's script
+-- can open, and staleness is about "is this specific binary current", not
+-- "who builds it".  That second question belongs to `verify`'s EXISTENCE
+-- check (`knownOracles`/`foreignOracles`, S-4) — which stays filtered on
+-- purpose; do not conflate the two.
+
+hasSourceExt : String -> Bool
+hasSourceExt p = endsWith ".mdk" p || endsWith ".c" p || endsWith ".h" p
+
+newestMtimeIn : String -> Float -> <IO> Float
+newestMtimeIn path acc = match statFile path
+  Err _ => acc
+  Ok (_, isDir, _, mt) => if isDir then match listDir path
+    Err _ => acc
+    Ok names => newestMtimeEntries path names acc
+  else if hasSourceExt path && mt > acc then mt else acc
+
+newestMtimeEntries : String -> List String -> Float -> <IO> Float
+newestMtimeEntries _ [] acc = acc
+newestMtimeEntries dir (n::rest) acc =
+  newestMtimeEntries dir rest (newestMtimeIn "\{dir}/\{n}" acc)
+
+-- The same source set run_gates.sh scans: compiler/ and stdlib/ *.mdk, plus
+-- runtime/ *.c and *.h.
+newestSourceMtime : String -> <IO> Float
+newestSourceMtime root =
+  let a = newestMtimeIn "\{root}/compiler" 0.0
+  let b = newestMtimeIn "\{root}/stdlib" a
+  newestMtimeIn "\{root}/runtime" b
+
+-- Every oracle the SELECTED gates read, deduped — never all of test/bin.  The
+-- wasm probes are built by a different script and are routinely older than
+-- source; complaining about one a run never opens is how this check gets
+-- switched off wholesale.
+selectedOracles : List Gate -> List String
+selectedOracles [] = []
+selectedOracles (g::gs) = g.oracles ++ selectedOracles gs
+
+-- The unfiltered scrape, mirroring run_gates.sh's own
+-- `grep -ohE 'test/bin/[a-z_0-9]+' "$g" | sed 's|test/bin/||'` over one gate
+-- script's text.
+binTokenPrefix : String
+binTokenPrefix = "test/bin/"
+
+stripBinPrefix : String -> String
+stripBinPrefix s =
+  if startsWith binTokenPrefix s then
+    stringSlice (stringLength binTokenPrefix) (stringLength s) s
+  else
+    s
+
+scrapedOraclesIn : String -> <IO> List String
+scrapedOraclesIn scriptPath = match runCommand "grep" ["-ohE", "test/bin/[a-z_0-9]+", scriptPath]
+  Err _ => []
+  Ok (_, out, _) => map stripBinPrefix (filterList nonBlankLine (splitNl out))
+
+nonBlankLine : String -> Bool
+nonBlankLine s = stringTrim s /= ""
+
+scrapedOracles : String -> List Gate -> <IO> List String
+scrapedOracles _ [] = []
+scrapedOracles root (g::gs) = scrapedOraclesIn "\{root}/\{g.run}"
+  ++ scrapedOracles root gs
+
+-- MISSING is not stale — the gate's own "oracle not built" exit-2 owns that
+-- case and says so in its own words.
+staleOf : String -> Float -> List String -> <IO> List String
+staleOf _ _ [] = []
+staleOf root newest (o::os) =
+  let rest = staleOf root newest os
+  match statFile "\{root}/test/bin/\{o}"
+    Err _ => rest
+    Ok (_, _, _, mt) => if mt < newest then o::rest else rest
+
+indentedNames : List String -> List String
+indentedNames [] = []
+indentedNames (o::os) = "  \{o}" :: indentedNames os
+
+staleBannerLines : List String -> List String
+staleBannerLines [] = []
+staleBannerLines (o::os) =
+  "    FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one \{o}" ::
+    staleBannerLines os
+
+staleBanner : List String -> String
+staleBanner stale =
+  joinNl
+    ([
+      "════════════════════════════════════════════════════════════════════",
+      "STALE ORACLES (\{intToString (listLen stale)}) — REFUSING TO RUN.",
+      "",
+      joinNl (indentedNames stale),
+      "",
+      "These probe binaries are OLDER than compiler/ stdlib/ runtime/ source.",
+      "A gate reading one is testing a compiler that no longer exists — and it",
+      "reports an ordinary-looking FAIL that is INDISTINGUISHABLE from a real",
+      "regression.",
+      "",
+      "Rebuild ONLY what is stale — one probe per command:",
+    ] ++ staleBannerLines stale ++ [
+      "",
+      "(Override with NO_STALE_CHECK=1, --no-stale-check, or CI=1 only if you",
+      " know exactly why.  This check is skipped in CI on purpose — see the",
+      " comment above staleOf.)",
+      "════════════════════════════════════════════════════════════════════",
+      "",
+    ])
+
+-- run_gates.sh's `[ -z "${VAR:-}" ]`: SET-BUT-EMPTY counts as unset.
+envSet : String -> <IO> Bool
+envSet name = envOr name "" /= ""
+
+staleRefusal : Bool -> String -> List Gate -> <IO> Option String
+staleRefusal True _ _ = None
+staleRefusal False root gs =
+  if envSet "CI" || envSet "NO_STALE_CHECK" then None
+  else
+    let names = sortUniqS (selectedOracles gs ++ scrapedOracles root gs)
+    let newest = newestSourceMtime root
+    match staleOf root newest names
+      [] => None
+      stale => Some (staleBanner stale)
+
+-- ── running one gate ────────────────────────────────────────────────────────
+
+-- HONOR THE SHEBANG, do not hardcode `sh`.  Six gates under test/ and all 22
+-- sqlite oracles are `#!/usr/bin/env bash` and use bashisms; under dash all 22
+-- sqlite gates FAIL while passing perfectly when invoked directly, and "the
+-- gate ran under an interpreter it wasn't written for" is the purest form of a
+-- harness bug wearing a compiler bug's clothes (test/run_gates.sh:105-115).
+shellFor : String -> <IO> String
+shellFor script = match readFile script
+  Err _ => "sh"
+  Ok src => if substrIn "bash" (firstLineOf src) then "bash" else "sh"
+
+firstLineOf : String -> String
+firstLineOf s = match splitNl s
+  [] => ""
+  l::_ => l
+
+substrIn : String -> String -> Bool
+substrIn needle hay =
+  substrAt needle hay 0 (stringLength hay - stringLength needle)
+
+substrAt : String -> String -> Int -> Int -> Bool
+substrAt needle hay i last
+  | i > last = False
+  | stringSlice i (i + stringLength needle) hay == needle = True
+  | otherwise = substrAt needle hay (i + 1) last
+
+-- The invocation.  `runCommand` takes no environment and Medaka has no setEnv,
+-- so the environment goes through POSIX `env` — the same device
+-- build_cmd.withEmitHalf uses.  The variables mirror run_gates.sh's exports
+-- (defaults only: an explicit value in this process's environment already won,
+-- via envOr, before it got here).  `JOBS=1` because this runner is sequential
+-- (see the note on --jobs).
+--
+-- `timeout -k 5s <N>s` is GNU coreutils' (present on this box and on every CI
+-- runner — CI is 100% ubuntu-latest, [B-CI-UBUNTU-ONLY]).  It exits 124 on the
+-- SIGTERM path and 137 when the -k grace period had to escalate to SIGKILL;
+-- both are reported as a timeout, with the raw code still printed so a genuine
+-- 137 from elsewhere (an OOM kill, say) is not hidden by the label.
+gateArgs : RunEnv -> String -> Int -> String -> String -> List String
+gateArgs env scratch secs sh script = [
+  "MEDAKA_ROOT=\{env.root}",
+  "MEDAKA=\{env.medaka}",
+  "MEDAKA_EMITTER=\{env.emitter}",
+  "TMPDIR=\{scratch}",
+  "MEDAKA_SCRATCH=\{scratch}",
+  "JOBS=1",
+  "timeout",
+  "-k",
+  "5s",
+  "\{intToString secs}s",
+  sh,
+  script,
+]
+
+spawnFailure : Gate -> String -> String -> Float -> GateResult
+spawnFailure g script msg dt = GateResult {
+  name = g.name,
+  script = script,
+  shell = "sh",
+  exitCode = 127,
+  timedOut = False,
+  spawnError = msg,
+  seconds = dt,
+  out = "",
+  err = "",
+}
+
+runOneGate : RunEnv -> Gate -> <IO> GateResult
+runOneGate env g =
+  let script = "\{env.root}/\{g.run}"
+  if not (fileExists script) then spawnFailure g script "gate script not found (registry `run` field): \{g.run}" 0.0
+  else
+    let sh = shellFor script
+    let secs = timeoutFor env.timeoutOverride g.cost
+    match makeGateScratch env.scratchRoot
+      Err e => spawnFailure g script "could not create a scratch dir: \{e}" 0.0
+      Ok scratch =>
+        let t0 = monotonicSec ()
+        let res = runCommand "env" (gateArgs env scratch secs sh script)
+        let dt = monotonicSec () - t0
+        let _ = cleanupScratch scratch
+        match res
+          Err e => spawnFailure g script "could not spawn the gate: \{e}" dt
+          Ok (code, out, errOut) => GateResult {
+            name = g.name,
+            script = script,
+            shell = sh,
+            exitCode = code,
+            timedOut = code == 124 || code == 137,
+            spawnError = "",
+            seconds = dt,
+            out = out,
+            err = errOut,
+          }
+
+gateOk : GateResult -> Bool
+gateOk r = r.spawnError == "" && r.exitCode == 0
+
+msOf : GateResult -> Int
+msOf r = floatToInt (r.seconds * 1000.0)
+
+resultLine : GateResult -> String
+resultLine r
+  | r.spawnError /= "" = "ERROR \{r.name}  (\{r.spawnError})\n"
+  | r.timedOut = "TIMEOUT \{r.name}  (exit \{intToString r.exitCode} after \{intToString (msOf r)}ms)\n"
+  | r.exitCode == 0 = "PASS  \{r.name}  (\{intToString (msOf r)}ms)\n"
+  | otherwise = "FAIL  \{r.name}  (exit \{intToString r.exitCode}, \{intToString (msOf r)}ms)\n"
+
+-- ── the sequential loop ─────────────────────────────────────────────────────
+--
+-- ⚠️ SEQUENTIAL, and `--jobs` IS ACCEPTED BUT IGNORED.  Medaka has no
+-- concurrency primitive to build a job pool out of: `runCommand` is a single
+-- BLOCKING call and stdlib/runtime.mdk has no fork/waitpid/spawn extern (derive:
+-- `grep -n 'fork\|waitPid\|spawn' stdlib/runtime.mdk` — nothing).
+-- `run_gates.sh` gets its pool from `xargs -P`, which needs either a new extern
+-- or a generated shell script that would have to re-own the scratch, timeout and
+-- capture services this command exists to provide natively.  Rather than fake
+-- it, `--jobs` is parsed, honoured in the report as the requested value, and
+-- reported in the summary as `sequential` — see the report's Notes.
+runGatesLoop : RunEnv -> List Gate -> List GateResult -> <IO> List GateResult
+runGatesLoop _ [] acc = reverseL acc
+runGatesLoop env (g::gs) acc =
+  let r = runOneGate env g
+  let _ = putStr (resultLine r)
+  let _ = flushStdout ()
+  runGatesLoop env gs (r::acc)
+
+-- ── failure output ──────────────────────────────────────────────────────────
+--
+-- Print the failing gate's output.  run_gates.sh discarded it for a long time,
+-- which made a red CI shard undiagnosable (its mktemp dir dies with the runner);
+-- the fix there was to tail the log, and the bound is 200 lines because
+-- `diff_compiler_must_fail` alone prints 77 on a single drained row.
+--
+-- STDOUT AND STDERR ARE PRINTED SEPARATELY AND BOTH ARE PRINTED ([B-STDERR]):
+-- the stale-binary warning is stderr-only, and a gate that fails BECAUSE its
+-- binary is stale says so nowhere else.
+
+-- The offset just PAST the `want`-th newline — i.e. where the last
+-- `total - want` lines begin.  Sliced out of the original string rather than
+-- dropped off the head of `splitNl`'s list and rejoined, because a generic
+-- list drop here would be a byte-identical twin of `typecheck.dropN` (which is
+-- private, so it cannot be shared) and `rule-duplicate-body` is a CROSS-FILE
+-- rule — it would fire on typecheck.mdk too, and silencing it there would move
+-- a LEG A golden for a 200-line output bound.
+afterNewlines : Array Char -> Int -> Int -> Int -> Int
+afterNewlines cs i len want
+  | i >= len = len
+  | want <= 0 = i
+  | arrayGetUnsafe i cs == '\n' = afterNewlines cs (i + 1) len (want - 1)
+  | otherwise = afterNewlines cs (i + 1) len want
+
+tailLines : Int -> String -> String
+tailLines n s =
+  let k = listLen (splitNl s)
+  if k <= n then s
+  else
+    let cs = stringToChars s
+    stringSlice (afterNewlines cs 0 (arrayLength cs) (k - n)) (stringLength s) s
+
+failureDetail : GateResult -> String
+failureDetail r =
+  let hdr = "\n───── \{r.name} — \{r.shell} \{r.script} (exit \{intToString r.exitCode}) ─────\n"
+  let o = if stringTrim r.out == "" then
+    "  (stdout: empty)\n"
+  else
+    "  ── stdout ──\n\{tailLines 200 r.out}\n"
+  let e = if stringTrim r.err == "" then
+    "  (stderr: empty)\n"
+  else
+    "  ── stderr ──\n\{tailLines 200 r.err}\n"
+  "\{hdr}\{o}\{e}"
+
+failureDetails : List GateResult -> String
+failureDetails [] = ""
+failureDetails (r::rs)
+  | gateOk r = failureDetails rs
+  | otherwise = failureDetail r ++ failureDetails rs
+
+-- ── summary + report ────────────────────────────────────────────────────────
+
+countOk : List GateResult -> Int
+countOk [] = 0
+countOk (r::rs) = (if gateOk r then 1 else 0) + countOk rs
+
+failingNames : List GateResult -> List String
+failingNames [] = []
+failingNames (r::rs)
+  | gateOk r = failingNames rs
+  | otherwise = r.name :: failingNames rs
+
+resultJson : GateResult -> Json
+resultJson r = jObject
+  [
+    ("name", JString r.name),
+    ("script", JString r.script),
+    ("shell", JString r.shell),
+    ("exit", JInt r.exitCode),
+    ("timedOut", JBool r.timedOut),
+    ("ms", JInt (msOf r)),
+    ("seconds", JFloat r.seconds),
+    ("ok", JBool (gateOk r)),
+    ("spawnError", JString r.spawnError),
+    ("stdout", JString r.out),
+    ("stderr", JString r.err),
+  ]
+
+{- | The machine-readable run report: per-gate timings plus the ok/failing
+   tallies.  #2180 (the CI cost ratchet) is the intended consumer; NOTHING in
+   this slice enforces a budget from it. -}
+export
+runReportJson : Int -> List GateResult -> String
+runReportJson jobs rs = stringify (jObject
+  [
+    ("jobs", JInt jobs),
+    ("parallel", JBool False),
+    ("ok", JInt (countOk rs)),
+    ("failing", JInt (listLen rs - countOk rs)),
+    ("gates", jArray (map resultJson rs)),
+  ])
+
+-- ── the dry run ─────────────────────────────────────────────────────────────
+--
+-- The resolved INVOCATION PLAN, executing nothing.  One line per gate, in
+-- registry order, carrying exactly what `run` would do: the interpreter, the
+-- absolute script path, the fuse, and the oracles the stale check will consult.
+-- The script path is the field a parity diff against `run_gates.sh`'s own
+-- resolved gate list compares.
+dryLine : RunEnv -> Gate -> <IO> String
+dryLine env g =
+  let script = "\{env.root}/\{g.run}"
+  let sh = if fileExists script then shellFor script else "sh"
+  let orc = if isEmptyStrs g.oracles then "-" else joinWith "," g.oracles
+  "\{g.name}\t\{sh}\t\{script}\ttimeout=\{intToString (timeoutFor env.timeoutOverride g.cost)}s\toracles=\{orc}\n"
+
+dryLines : RunEnv -> List Gate -> <IO> String
+dryLines _ [] = ""
+dryLines env (g::gs) = dryLine env g ++ dryLines env gs
+
+-- ── the `run` subcommand ────────────────────────────────────────────────────
+
+data RunArgs =
+  | RunArgs {
+      registry : Option String,
+      selectors : List String,
+      dryRun : Bool,
+      json : Bool,
+      report : Option String,
+      timeoutSecs : Int,
+      jobs : Int,
+      noStaleCheck : Bool,
+    }
+
+parseRunArgs : List String -> RunArgs -> Result String RunArgs
+parseRunArgs [] acc =
+  Ok RunArgs { acc | selectors = reverseStrs acc.selectors [] }
+parseRunArgs ("--dry-run"::rest) acc =
+  parseRunArgs rest RunArgs { acc | dryRun = True }
+parseRunArgs ("--json"::rest) acc =
+  parseRunArgs rest RunArgs { acc | json = True }
+parseRunArgs ("--no-stale-check"::rest) acc =
+  parseRunArgs rest RunArgs { acc | noStaleCheck = True }
+parseRunArgs ("--registry"::p::rest) acc =
+  parseRunArgs rest RunArgs { acc | registry = Some p }
+parseRunArgs ("--registry"::[]) _ =
+  Err "medaka gate run: --registry needs a path"
+parseRunArgs ("--report"::p::rest) acc =
+  parseRunArgs rest RunArgs { acc | report = Some p }
+parseRunArgs ("--report"::[]) _ = Err "medaka gate run: --report needs a path"
+parseRunArgs ("--timeout"::v::rest) acc = match parseDecChecked v
+  None => Err "medaka gate run: --timeout needs a whole number of seconds, got '\{v}'"
+  Some n => parseRunArgs rest RunArgs { acc | timeoutSecs = n }
+parseRunArgs ("--timeout"::[]) _ =
+  Err "medaka gate run: --timeout needs a number of seconds"
+parseRunArgs ("--jobs"::v::rest) acc = match parseDecChecked v
+  None => Err "medaka gate run: --jobs needs a whole number, got '\{v}'"
+  Some n => parseRunArgs rest RunArgs { acc | jobs = n }
+parseRunArgs ("--jobs"::[]) _ = Err "medaka gate run: --jobs needs a number"
+parseRunArgs (a::rest) acc
+  | stringLength a > 0 && stringSlice 0 1 a == "-" =
+    Err "medaka gate run: unknown flag: \{a}"
+  | otherwise = parseRunArgs rest RunArgs { acc | selectors = a::acc.selectors }
+
+emptyRunArgs : RunArgs
+emptyRunArgs = RunArgs {
+  registry = None,
+  selectors = [],
+  dryRun = False,
+  json = False,
+  report = None,
+  timeoutSecs = 0,
+  jobs = 1,
+  noStaleCheck = False,
+}
+
+-- The selection half, shared with `list`: read the registry, apply the
+-- selectors, and treat a zero-gate selection as a HARD ERROR.  A mistyped
+-- pattern that silently selects nothing is how a shard certifies coverage of a
+-- gate that never ran (test/run_gates.sh:181).
+selectFor : String -> List String -> List Selector -> String -> Result String (List Gate)
+selectFor path tokens sels src = match parseRegistry src
+  Err m => Err "medaka gate run: \{m}"
+  Ok gates => match selectGates sels gates
+    [] =>
+      if isEmptyStrs tokens then
+        Err "medaka gate run: \{path} contains no gates"
+      else
+        Err "medaka gate run: no gates match: \{joinSpace tokens}"
+    sel => Ok sel
+
+runEnvFor : RunArgs -> <IO> RunEnv
+runEnvFor a =
+  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  RunEnv {
+    root = root,
+    medaka = envOr "MEDAKA" "\{root}/medaka",
+    emitter = envOr "MEDAKA_EMITTER" "\{root}/medaka_emitter",
+    scratchRoot = scratchRootOf (),
+    timeoutOverride = a.timeoutSecs,
+  }
+
+-- Write the timing report, if one was asked for.  A failed write is LOUD: a
+-- silently-absent report is exactly the shape of hole this registry exists to
+-- close.
+writeReport : Option String -> String -> <IO> Bool
+writeReport None _ = True
+writeReport (Some p) body = match writeFile p body
+  Err m =>
+    let _ = ePutStrLn "medaka gate run: could not write --report \{p}: \{m}"
+    False
+  Ok _ => True
+
+summaryLine : Int -> List GateResult -> String
+summaryLine jobs rs =
+  let ok = countOk rs
+  let bad = listLen rs - ok
+  "\n=== gate run: \{intToString ok} ok, \{intToString bad} failing (\{intToString (listLen rs)} gates, --jobs \{intToString jobs} requested, run SEQUENTIALLY) ===\n"
+
+-- Everything after the gates have run: details, summary, report, exit code.
+finishRun : RunArgs -> List GateResult -> <IO> Unit
+finishRun a rs =
+  let wrote = writeReport a.report (runReportJson a.jobs rs ++ "\n")
+  let _ = if a.json then putStr (runReportJson a.jobs rs ++ "\n") else ()
+  let _ = if a.json then () else putStr (failureDetails rs)
+  let _ = if a.json then () else putStr (summaryLine a.jobs rs)
+  let bad = failingNames rs
+  let _ = if a.json || isEmptyStrs bad then
+    ()
+  else
+    putStr "FAILING: \{joinSpace bad}\n"
+  if isEmptyStrs bad && wrote then exit 0 else exit 1
+
+runSelected : RunArgs -> List Gate -> <IO> Unit
+runSelected a gs =
+  let env = runEnvFor a
+  if a.dryRun then putStr (dryLines env gs)
+  else match staleRefusal a.noStaleCheck env.root gs
+    Some banner =>
+      let _ = ePutStr banner
+      exit 1
+    None => finishRun a (runGatesLoop env gs [])
+
+runRunCmdBody : List String -> <IO> Unit
+runRunCmdBody argv = match parseRunArgs argv emptyRunArgs
+  Err m => emit (Err m)
+  Ok a => match parseSelectors a.selectors []
+    Err m => emit (Err "medaka gate run: \{m}")
+    Ok sels =>
+      let path = registryPath a.registry
+      match readFile path
+        Err m => emit (Err "medaka gate run: cannot read registry: \{m}")
+        Ok src => match selectFor path a.selectors sels src
+          Err m => emit (Err m)
+          Ok gs => runSelected a gs
+
+-- ── `gate verify` ───────────────────────────────────────────────────────────
+--
+-- The drift gate (#2176 S-4, docs/ops/GATE-REGISTRY-DESIGN.md §3).  TEXT-ONLY,
+-- no build — runs everywhere, cheap.  Four checks, each its own violation
+-- class:
+--
+--   1. every gate CANDIDATE — test/preflight.sh's own `_gate_candidates`
+--      (tracked-or-untracked `*.sh`, MINUS every name in
+--      test/CI-COVERAGE-TOOLS.txt) — is ENROLLED (some entry's `run` equals
+--      its path) or excluded there.  No third state.  This mirrors
+--      preflight's own two `git ls-files` calls exactly rather than
+--      re-deriving the universe — see the packet's own warning: any drift
+--      here would make `verify` green over a corpus S-2 already reconciled,
+--      proving nothing.
+--   2. every entry's `run` target exists on disk.
+--   3. every entry's non-empty `oracles` names a real
+--      `test/build_oracles.sh --list` entry.
+--   4. every entry is reachable by at least one selector.  Under today's
+--      schema this is TRIVIALLY true for every well-formed entry (a literal
+--      glob always matches itself) — the one shape that can fail is an entry
+--      whose `name` itself contains a `:`, which the BARE-sugar CLI form
+--      misparses as an unknown `field:` prefix (`parseSelector`) even though
+--      the explicit `name:<name>` form still finds it.  Both are checked
+--      here.
+--   5. every `corpus` entry is a DIRECTORY that exists on disk (S-5).  A
+--      corpus value is a literal path, never a glob, so this is a real check
+--      and it is the one that catches bulk data rot: a fixture directory
+--      renamed out from under the registry silently stops selecting its
+--      consumers, which is a QUIETER failure than a red gate.
+--
+-- `sources` is deliberately NOT checked the same way, and that is not an
+-- oversight: a `sources` value is a GLOB (`compiler/*/*.mdk`, `stdlib/*`),
+-- every `*`/`?` string is syntactically valid by construction, and a glob that
+-- matches nothing TODAY can be exactly right (it names where a file will land).
+-- "Exists on disk" is a question `corpus` can answer and `sources` cannot.
+
+nonBlank : String -> Bool
+nonBlank s = stringTrim s /= ""
+
+-- The exact two invocations test/preflight.sh's `_gate_candidates` makes,
+-- scoped to THIS worktree (never a bare filesystem walk — this box keeps many
+-- agent worktrees, and `git ls-files` stays scoped to the working tree it is
+-- run in).
+--
+-- FAILS LOUD, not `[]` — a spawn failure or a nonzero `git` exit (the classic
+-- "detected dubious ownership" exit 128 a container/shared runner produces)
+-- must not read as "zero candidates," which `verifyClasses`' check 1 cannot
+-- tell apart from a genuinely clean tree.  `toolNames`/`knownOracles` below
+-- stay `Err _ => []` on purpose — that failure direction is SAFE for them
+-- (every ledgered tool/oracle reports as *missing*, which reds loud) — but an
+-- empty candidate list can't itself say "verify couldn't check anything," so
+-- this one needs an explicit top-level error instead.
+gitExitMsg : Int -> String -> String
+gitExitMsg code msg =
+  if msg == "" then
+    "git ls-files exited \{intToString code}"
+  else
+    "git ls-files exited \{intToString code}: \{msg}"
+
+gitLsFilesSh : String -> List String -> <IO> Result String (List String)
+gitLsFilesSh root args = match runCommand "git" (["-C", root] ++ args ++ ["*.sh"])
+  Err e => Err "git ls-files failed to run: \{e}"
+  Ok (0, out, _) => Ok (filterList nonBlank (splitNl out))
+  Ok (code, _, err) => Err (gitExitMsg code (stringTrim err))
+
+gateCandidates : String -> <IO> Result String (List String)
+gateCandidates root = match gitLsFilesSh root ["ls-files"]
+  Err m => Err m
+  Ok tracked => map (untracked => sortUniqS (tracked ++ untracked)) (gitLsFilesSh root ["ls-files", "-o", "--exclude-standard"])
+
+-- test/CI-COVERAGE-TOOLS.txt: one non-comment, non-blank line per excluded
+-- tool, keyed by its FIRST whitespace-separated token (repo-relative path,
+-- no `.sh`) — the same `awk 'NF { print $1 }'` preflight.sh runs.
+liveLine : String -> Bool
+liveLine l = nonBlank l && not (startsWith "#" (stringTrim l))
+
+firstToken : String -> String
+firstToken l = firstNonBlankTok (splitOnChar ' ' l)
+
+firstNonBlankTok : List String -> String
+firstNonBlankTok [] = ""
+firstNonBlankTok (x::xs) = if nonBlank x then x else firstNonBlankTok xs
+
+toolNames : String -> <IO> List String
+toolNames root = match readFile (joinPath root "test/CI-COVERAGE-TOOLS.txt")
+  Err _ => []
+  Ok src =>
+    filterList nonBlank (map firstToken (filterList liveLine (splitNl src)))
+
+stripSh : String -> String
+stripSh p = if endsWith ".sh" p then stringSlice 0 (stringLength p - 3) p else p
+
+allRuns : List Gate -> List String
+allRuns [] = []
+allRuns (g::gs) = g.run :: allRuns gs
+
+-- Check 1: every candidate is enrolled (its path is some entry's `run`) or
+-- excluded (its path minus `.sh` is in test/CI-COVERAGE-TOOLS.txt).
+unenrolledViolations : List String -> List String -> List String -> List String
+unenrolledViolations _ _ [] = []
+unenrolledViolations tools runs (c::cs)
+  | contains (stripSh c) tools = unenrolledViolations tools runs cs
+  | contains c runs = unenrolledViolations tools runs cs
+  | otherwise = "unenrolled: \{c}  (not a `run` in test/gates.toml, not listed in test/CI-COVERAGE-TOOLS.txt)" :: unenrolledViolations tools runs cs
+
+-- Check 2: every entry's `run` target exists on disk (S-1/S-2's decision:
+-- `run` is already the resolved relative path — a plain file-exists check,
+-- not a re-glob against run_gates.sh's two-glob rule).
+runTargetViolations : String -> List Gate -> <IO> List String
+runTargetViolations _ [] = []
+runTargetViolations root (g::gs) =
+  let rest = runTargetViolations root gs
+  if fileExists "\{root}/\{g.run}" then
+    rest
+  else
+    "\{g.name}: run target does not exist: \{g.run}"::rest
+
+-- Check 3: every non-empty oracle name is one of build_oracles.sh's own
+-- ENTRIES (via its `--list` mode — no clang/libgc needed, builds nothing).
+knownOracles : String -> <IO> List String
+knownOracles root = match runCommand "sh" ["\{root}/test/build_oracles.sh", "--list"]
+  Err _ => []
+  Ok (_, out, _) => filterList nonBlank (splitNl out)
+
+-- Two probe names build_oracles.sh deliberately does NOT list in ENTRIES,
+-- because a DIFFERENT script builds them (test/wasm/build_wasm_oracle.sh) —
+-- build_oracles.sh's own `_foreign` comment names exactly these two ("the
+-- emit probes ... are not in ENTRIES at all; they are built by
+-- test/wasm/build_wasm_oracle.sh"). Named here rather than re-derived, the
+-- same "named exception" shape test/diff_compiler_project_enrolment.sh's
+-- UNIVERSAL_GATES uses — treating them as unknown would red `verify` on the
+-- clean tree over a probe that is real and does get built, just not by this
+-- script.
+foreignOracles : List String
+foreignOracles = ["wasm_emit_main", "wasm_emit_modules_main"]
+
+oracleNamesMissing : List String -> String -> List String -> List String
+oracleNamesMissing _ _ [] = []
+oracleNamesMissing known gname (o::os)
+  | contains o known || contains o foreignOracles =
+    oracleNamesMissing known gname os
+  | otherwise = "\{gname}: oracle not known to `test/build_oracles.sh --list` (nor the wasm-foreign set): \{o}" :: oracleNamesMissing known gname os
+
+oracleTargetViolations : List String -> List Gate -> List String
+oracleTargetViolations _ [] = []
+oracleTargetViolations known (g::gs) = oracleNamesMissing known g.name g.oracles
+  ++ oracleTargetViolations known gs
+
+-- Check 4: every entry is reachable by at least one selector.  See the block
+-- comment above for why this is near-vacuous under today's schema, and the
+-- one shape (a `:` in `name`) that is not.
+anyNamed : String -> List Gate -> Bool
+anyNamed _ [] = False
+anyNamed n (g::gs) = g.name == n || anyNamed n gs
+
+reachabilityFor : List Gate -> Gate -> List String
+reachabilityFor all g = match parseSelector g.name
+  Err m => [
+    "\{g.name}: its own name is not a valid bare selector (\{m}) — reachable only via an explicit `name:\{g.name}`, not the bare CLI form"
+  ]
+  Ok sel =>
+    if anyNamed g.name (selectGates [sel] all) then
+      []
+    else
+      [
+        "\{g.name}: `name:\{g.name}` does not select this entry (registry/selector bug)"
+      ]
+
+reachabilityViolations : List Gate -> List Gate -> List String
+reachabilityViolations _ [] = []
+reachabilityViolations all (g::gs) = reachabilityFor all g
+  ++ reachabilityViolations all gs
+
+-- Check 5 (S-5): every `corpus` entry is a real DIRECTORY.  `listDir` is the
+-- discriminator — `fileExists` is true for a plain file too, and a corpus
+-- value that has decayed from a directory into a file is exactly the drift
+-- worth naming.
+dirExists : String -> <IO> Bool
+dirExists p = match listDir p
+  Err _ => False
+  Ok _ => True
+
+corpusDirsMissing : String -> String -> List String -> <IO> List String
+corpusDirsMissing _ _ [] = []
+corpusDirsMissing root gname (c::cs) =
+  let rest = corpusDirsMissing root gname cs
+  if dirExists (joinPath root c) then
+    rest
+  else
+    "\{gname}: corpus directory does not exist: \{c}"::rest
+
+corpusTargetViolations : String -> List Gate -> <IO> List String
+corpusTargetViolations _ [] = []
+corpusTargetViolations root (g::gs) = corpusDirsMissing root g.name g.corpus
+  ++ corpusTargetViolations root gs
+
+-- ── assembling and rendering the five classes ───────────────────────────────
+
+verifyClasses : String -> List Gate -> <IO> Result String (List (String, List String))
+verifyClasses root gates = match gateCandidates root
+  Err m => Err "could not enumerate gate candidates: \{m}"
+  Ok cands =>
+    let tools = toolNames root
+    let runs = allRuns gates
+    let known = knownOracles root
+    Ok
+      [
+        ("unenrolled gate scripts", unenrolledViolations tools runs cands),
+        ("missing run targets", runTargetViolations root gates),
+        ("missing oracle targets", oracleTargetViolations known gates),
+        ("missing corpus targets", corpusTargetViolations root gates),
+        ("unreachable entries", reachabilityViolations gates gates),
+      ]
+
+renderClass : (String, List String) -> String
+renderClass (title, []) = "OK    \{title}: 0\n"
+renderClass (title, vs) =
+  let names = joinNl (indentedNames vs)
+  "FAIL  \{title}: \{intToString (listLen vs)}\n\{names}\n"
+
+renderClasses : List (String, List String) -> String
+renderClasses [] = ""
+renderClasses (c::cs) = renderClass c ++ renderClasses cs
+
+totalViolations : List (String, List String) -> Int
+totalViolations [] = 0
+totalViolations ((_, vs)::cs) = listLen vs + totalViolations cs
+
+verifyOutput : String -> List Gate -> <IO> Result String String
+verifyOutput root gates = match verifyClasses root gates
+  Err m => Err "medaka gate verify: \{m}\n"
+  Ok classes =>
+    let n = totalViolations classes
+    let body = renderClasses classes
+    if n == 0 then
+      Ok (body ++ "medaka gate verify: OK — \{intToString (listLen gates)} entries, 0 violations.\n")
+    else
+      Err (body ++ "medaka gate verify: FAIL — \{intToString n} violation(s) across \{intToString (listLen gates)} entries.\n")
+
+-- `verify` prints its body even on failure — the message-carrying `Err`
+-- string above IS the violation report, not a one-liner, so `emit`'s ordinary
+-- "print to stderr and exit 1" path is exactly what we want here too.
+data VerifyArgs = VerifyArgs { registry : Option String }
+
+parseVerifyArgs : List String -> VerifyArgs -> Result String VerifyArgs
+parseVerifyArgs [] acc = Ok acc
+parseVerifyArgs ("--registry"::p::rest) acc =
+  parseVerifyArgs rest VerifyArgs { acc | registry = Some p }
+parseVerifyArgs ("--registry"::[]) _ =
+  Err "medaka gate verify: --registry needs a path"
+parseVerifyArgs (a::_) _ = Err "medaka gate verify: unknown flag: \{a}"
+
+verifyCmdBody : List String -> <IO> Unit
+verifyCmdBody argv = match parseVerifyArgs argv VerifyArgs { registry = None }
+  Err m => emit (Err m)
+  Ok a =>
+    let path = registryPath a.registry
+    match readFile path
+      Err m => emit (Err "medaka gate verify: cannot read registry: \{m}")
+      Ok src => match parseRegistry src
+        Err m => emit (Err "medaka gate verify: \{m}")
+        Ok gates =>
+          let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+          emit (verifyOutput root gates)
+
+-- ── `gate explain <path>` ────────────────────────────────────────────────────
+--
+-- The reverse lookup: given a CHANGED PATH, which registry entries select it,
+-- and via which field?  Two layers, and they are deliberately SEPARATE code
+-- paths rather than two flavours of the same match:
+--
+--   1. REGISTRY-LEVEL POLICY (design doc §2) — the transfer of
+--      test/preflight.sh's `mark_full` and of its UNMAPPED fail-open.  A
+--      blast-radius path selects the WHOLE suite whatever any entry says, and
+--      a non-prose path no entry claims fails OPEN to the whole suite rather
+--      than selecting nothing.  Neither is per-gate data: encoding them as
+--      per-entry `sources` globs — giving every one of the entries a
+--      `stdlib/*` source so it always matches — would make every entry's data
+--      a lie about what that gate actually reads, and would leave nothing able
+--      to answer "is this path mapped at all?".  preflight draws the same
+--      line: `mark_full` is its own function, not another `add` case arm.
+--   2. PER-ENTRY MATCHING against `sources` (globs, matched against the whole
+--      path; `*` crosses `/`) and `corpus` (fixture/project DIRECTORIES — a
+--      path matches when it IS the dir or lives under it).
+--
+-- ⚠️ A `sources` glob of exactly `*` is a WHOLE-TREE source (today only
+-- diff_compiler_source_bytes, which re-scans every tracked file whatever
+-- changed).  It matches every path by construction, so it must never
+-- establish that a path is MAPPED — otherwise layer 1's fail-open could never
+-- fire again and an unmapped path would silently select one whole-tree gate
+-- instead of the suite.  preflight draws exactly this line too: its
+-- unconditional `add 'diff_compiler_source_bytes'` sits OUTSIDE the case table
+-- whose misses it reports as UNMAPPED.
+--
+-- Output uses preflight's own machine-readable prefixes (GATE / FULL /
+-- UNMAPPED), so the two derivations can be diffed line-for-line.
+
+-- Layer 1a: the blast-radius prefixes.  These are exactly the paths
+-- test/preflight.sh answers with `mark_full` (`compiler/support/*`,
+-- `compiler/entries/*`, `stdlib/*|runtime/*`), and they are policy, not data.
+export
+blastRadiusPrefixes : List String
+blastRadiusPrefixes =
+  ["compiler/support/*", "compiler/entries/*", "stdlib/*", "runtime/*"]
+
+blastHit : List String -> String -> Option String
+blastHit [] _ = None
+blastHit (p::ps) path = if globMatch p path then Some p else blastHit ps path
+
+{- | Layer 1b: is this path PROSE?  The same allowlist
+   `.github/workflows/ci.yml`'s `detect` job applies (its `nondoc` case), kept
+   in the same order for the same reason its own comment gives: `test/**` is
+   NEVER prose (it holds functional goldens), and `docs/spec/SYNTAX.md` is an
+   executable spec.
+
+   > isProsePath "docs/ops/CI-ARCHITECTURE.md"
+   True
+
+   > isProsePath "docs/spec/SYNTAX.md"
+   False
+
+   > isProsePath "test/gates.toml"
+   False
+
+   > isProsePath "compiler/tools/gate_cmd.mdk"
+   False -}
+export
+isProsePath : String -> Bool
+isProsePath p
+  | startsWith "test/" p = False
+  | p == "docs/spec/SYNTAX.md" = False
+  | startsWith "docs/" p = True
+  | p == "LICENSE" = True
+  | startsWith "LICENSE." p = True
+  | endsWith ".md" p = True
+  | otherwise = False
+
+-- Layer 2: per-entry matching.
+
+wholeTreeGlob : String -> Bool
+wholeTreeGlob g = g == "*"
+
+sourceMatches : String -> List String -> List String
+sourceMatches _ [] = []
+sourceMatches path (s::ss)
+  | wholeTreeGlob s = sourceMatches path ss
+  | globMatch s path = "sources:\{s}" :: sourceMatches path ss
+  | otherwise = sourceMatches path ss
+
+{- | A `corpus` entry is a DIRECTORY, not a glob: a changed path is in it when
+   the path is that directory or lives under it.
+
+   > underDir "test/llvm_fixtures" "test/llvm_fixtures/a.mdk"
+   True
+
+   > underDir "test/llvm_fixtures" "test/llvm_fixtures_typed/a.mdk"
+   False -}
+export
+underDir : String -> String -> Bool
+underDir d path = path == d || startsWith "\{d}/" path
+
+corpusMatches : String -> List String -> List String
+corpusMatches _ [] = []
+corpusMatches path (c::cs)
+  | underDir c path = "corpus:\{c}" :: corpusMatches path cs
+  | otherwise = corpusMatches path cs
+
+targetedReasons : String -> Gate -> List String
+targetedReasons path g = sourceMatches path g.sources
+  ++ corpusMatches path g.corpus
+
+explainPathHits : String -> List Gate -> List (Gate, List String)
+explainPathHits _ [] = []
+explainPathHits path (g::gs) =
+  let rs = targetedReasons path g
+  let rest = explainPathHits path gs
+  if isEmptyStrs rs then rest else (g, rs)::rest
+
+hasWholeTree : List String -> Bool
+hasWholeTree [] = False
+hasWholeTree (s::ss) = wholeTreeGlob s || hasWholeTree ss
+
+wholeTreeGates : List Gate -> List Gate
+wholeTreeGates [] = []
+wholeTreeGates (g::gs)
+  | hasWholeTree g.sources = g :: wholeTreeGates gs
+  | otherwise = wholeTreeGates gs
+
+-- ── the selector-token half (S-4): a bare token that IS a field value ───────
+
+fieldHit : String -> Bool -> List String
+fieldHit _ False = []
+fieldHit field True = [field]
+
+matchedFields : String -> Gate -> List String
+matchedFields tok g = fieldHit "run" (tok == g.run)
+  ++ fieldHit "name" (tok == g.name)
+  ++ fieldHit "area" (tok == g.area)
+  ++ fieldHit "project" (tok == g.project)
+  ++ fieldHit "tier" (tok == g.tier)
+
+explainMatches : String -> List Gate -> List (Gate, List String)
+explainMatches _ [] = []
+explainMatches tok (g::gs) =
+  let fs = matchedFields tok g
+  let rest = explainMatches tok gs
+  if isEmptyStrs fs then rest else (g, fs)::rest
+
+isEmptyHits : List (Gate, List String) -> Bool
+isEmptyHits [] = True
+isEmptyHits _ = False
+
+renderGateLines : List (Gate, List String) -> String
+renderGateLines [] = ""
+renderGateLines ((g, rs)::hs) = "  GATE      \{g.name}  (\{joinWith ", " rs})\n"
+  ++ renderGateLines hs
+
+renderWholeTree : List Gate -> String
+renderWholeTree [] = ""
+renderWholeTree (g::gs) = "  GATE      \{g.name}  (sources:*, whole-tree)\n"
+  ++ renderWholeTree gs
+
+renderTokenLines : List (Gate, List String) -> String
+renderTokenLines [] = ""
+renderTokenLines ((g, fs)::hs) = "  TOKEN     \{g.name}  (selector field: \{joinWith ", " fs})\n"
+  ++ renderTokenLines hs
+
+tokenSection : String -> List Gate -> String
+tokenSection tok gates =
+  let hits = explainMatches tok gates
+  if isEmptyHits hits then "" else renderTokenLines hits
+
+blastNote : String
+blastNote = "  (registry-level policy, not per-entry data: a blast-radius path runs the\n"
+  ++ "   WHOLE suite whatever any entry's sources say — design doc §2.)\n"
+
+failOpenNote : String
+failOpenNote = "  (no entry's sources/corpus claims this path and it is not prose, so the\n"
+  ++ "   selection FAILS OPEN to the whole suite — never a silent empty set.)\n"
+
+proseNote : String
+proseNote = "  (prose: no entry claims it and it cannot widen the suite — ci.yml's own\n"
+  ++ "   docs allowlist, `detect` job.)\n"
+
+{- | `medaka gate explain <path>`: the policy verdict, then the entries that
+   select the path and why. -}
+export
+explainOutput : String -> List Gate -> String
+explainOutput path gates =
+  let wt = renderWholeTree (wholeTreeGates gates)
+  let tok = tokenSection path gates
+  let hits = explainPathHits path gates
+  match blastHit blastRadiusPrefixes path
+    Some p => "  FULL      blast-radius:\{p}\n" ++ blastNote ++ wt ++ tok
+    None =>
+      if isEmptyHits hits then
+        (if isProsePath path then "  UNMAPPED  \{path}\n" ++ proseNote else "  UNMAPPED  \{path}\n  FULL      unmatched-non-prose:\{path}\n" ++ failOpenNote) ++ wt ++ tok
+      else
+        renderGateLines hits ++ wt ++ tok
+
+data ExplainArgs =
+  | ExplainArgs { registry : Option String, path : Option String }
+
+parseExplainArgs : List String -> ExplainArgs -> Result String ExplainArgs
+parseExplainArgs [] acc = Ok acc
+parseExplainArgs ("--registry"::p::rest) acc =
+  parseExplainArgs rest ExplainArgs { acc | registry = Some p }
+parseExplainArgs ("--registry"::[]) _ =
+  Err "medaka gate explain: --registry needs a path"
+parseExplainArgs (a::rest) acc
+  | stringLength a > 0 && stringSlice 0 1 a == "-" =
+    Err "medaka gate explain: unknown flag: \{a}"
+  | otherwise = match acc.path
+    Some _ => Err "medaka gate explain: expected exactly one <path> argument"
+    None => parseExplainArgs rest ExplainArgs { acc | path = Some a }
+
+explainCmdBody : List String -> <IO> Unit
+explainCmdBody argv = match parseExplainArgs argv ExplainArgs { registry = None, path = None }
+  Err m => emit (Err m)
+  Ok a => match a.path
+    None => emit (Err "usage: medaka gate explain <path> [--registry <path>]")
+    Some tok =>
+      let path = registryPath a.registry
+      match readFile path
+        Err m => emit (Err "medaka gate explain: cannot read registry: \{m}")
+        Ok src => match parseRegistry src
+          Err m => emit (Err "medaka gate explain: \{m}")
+          Ok gates => putStr (explainOutput tok gates)
+
+-- ── Properties ──────────────────────────────────────────────────────────────
+
+prop "a bare selector token is name: sugar" (n : Int) =
+  parseSelector (intToString n) == Ok (SelName (intToString n))
+
+prop "an explicit name: selector agrees with the bare form" (n : Int) =
+  parseSelector ("name:" ++ intToString n) == parseSelector (intToString n)
+
+prop "a literal glob matches itself and nothing longer" (n : Int) = globMatch (intToString n) (intToString n)
+  && not (globMatch (intToString n) (intToString n ++ "x"))
+
+prop "a trailing * matches any suffix" (n : Int) =
+  globMatch "g*" ("g" ++ intToString n)

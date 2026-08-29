@@ -11,7 +11,7 @@
 -- Stdlib paths (runtime.mdk / core.mdk) resolve from MEDAKA_ROOT, mirroring
 -- compiler/build_cmd.mdk's envOr — compiler has no getcwd/executable_name
 -- extern.  The implemented subcommands are exactly the dispatch arms below
--- (check/fmt/new/build/run/test/repl/lsp/doc/check-policy/manifest); any other
+-- (check/fmt/new/build/run/test/repl/lsp/doc/check-policy/manifest/gate); any other
 -- subcommand falls through to the catch-all, which prints "not yet in native
 -- CLI" and exits 1.
 
@@ -23,6 +23,7 @@ import tools.snapshot.{
   SnapMode(..),
 }
 import tools.fmt.{formatSource}
+import tools.gate_cmd.{gateHelpText, runGateCmd}
 import tools.new_cmd.{newProject}
 import driver.build_cmd.{
   BuildResult,
@@ -307,6 +308,7 @@ runCli _ = match args ()
   "codemod"::rest => dispatchSub codemodHelpText runCodemodCmd rest
   "check-policy"::rest => dispatchSub checkPolicyHelpText runCheckPolicyCmd rest
   "manifest"::rest => dispatchSub manifestHelpText runManifestCmd rest
+  "gate"::rest => dispatchSub gateHelpText runGateCmd rest
   "repl"::rest => runReplCmd rest
   "lsp"::rest => runLspCmd rest
   "mcp"::rest => runMcpCmd rest
@@ -357,6 +359,8 @@ usage _ = putStrLn (stringConcat
     "  medaka mcp                Run the MCP server over stdio (JSON-RPC for agents)\n",
     "  medaka check-policy <file.mdk> [--allow L1,L2,...] [--fn name]  Check a plugin's inferred effects against an allow-list\n",
     "  medaka manifest <file.mdk> [--fn name]  Emit the verified capability manifest as TOML\n",
+    "  medaka gate list [<selector>...] [--json]  Query the gate registry (test/gates.toml)\n",
+    "  medaka gate run [<selector>...] [--dry-run]  Run the selected gates\n",
     "  medaka help               Show this message\n",
     "  medaka --version          Show the compiler version\n",
   ])
