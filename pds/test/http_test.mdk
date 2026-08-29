@@ -3,19 +3,31 @@
 import test.{expectEqual, expectTrue}
 import string.{contains, toUtf8}
 import lib.http.{
+  DecodedBody(..),
   Header,
+  QueryParam(..),
   Request,
+  Response,
+  decodeRequestBody,
   headerName,
   headerValue,
+  makeHeader,
+  makeResponse,
+  mediaTypeSubtype,
+  mediaTypeType,
+  parseMediaType,
   parseRequest,
+  parseTargetQuery,
   requestBody,
   requestHeaders,
   requestKeepAlive,
   requestMethod,
   requestTarget,
   requestTrailers,
+  serializeResponse,
 }
 import lib.resource_limits.{
+  checkJsonBodyBytes,
   checkHttpBodyBytes,
   checkHttpChunks,
   checkHttpHeaderBytes,
@@ -23,6 +35,9 @@ import lib.resource_limits.{
   checkHttpRequestBytes,
   checkHttpRequestLineBytes,
   checkHttpTrailerFields,
+  checkRawBodyBytes,
+  checkTextBodyBytes,
+  maxJsonBodyBytes,
   maxHttpBodyBytes,
   maxHttpChunks,
   maxHttpHeaderBytes,
@@ -30,6 +45,8 @@ import lib.resource_limits.{
   maxHttpRequestBytes,
   maxHttpRequestLineBytes,
   maxHttpTrailerFields,
+  maxRawBodyBytes,
+  maxTextBodyBytes,
 }
 
 isErr : Result e a -> Bool
@@ -59,6 +76,28 @@ appendBytes left right =
 
 names : List Header -> List String
 names = map headerName
+
+mustHeader : String -> Array Int -> Header
+mustHeader name value = match makeHeader name value
+  Ok header => header
+  Err message => panic message
+
+mustResponse : Int -> String -> List Header -> Array Int -> Response
+mustResponse status reason headers body = match makeResponse status reason headers body
+  Ok response => response
+  Err message => panic message
+
+requestWithBody : String -> Array Int -> Request
+requestWithBody contentType body =
+  mustRequest (appendBytes
+    (toUtf8
+      "POST /xrpc/example HTTP/1.1\r\nHost: pds.example\r\nContent-Type: \{contentType}\r\nContent-Length: \{intToString (arrayLength body)}\r\n\r\n")
+    body)
+
+bodyRejects : String -> Request -> Bool
+bodyRejects expected request = match decodeRequestBody request
+  Err message => contains expected message
+  Ok _ => False
 
 simpleGet : Array Int
 simpleGet =
@@ -291,3 +330,132 @@ test "trailer-field ceiling accepts at and rejects over" =
 test "chunk-count ceiling accepts at and rejects over" =
   expectTrue
     (isOk (checkHttpChunks maxHttpChunks) && isErr (checkHttpChunks (maxHttpChunks + 1)))
+
+test "zero-length response serialization is exact and computes one length" =
+  expectEqual
+    (serializeResponse (mustResponse 204 "No Content" [] [||]))
+    (toUtf8 "HTTP/1.1 204 No Content\r\ncontent-length: 0\r\n\r\n")
+
+test "binary response serialization preserves header order and bytes" =
+  let response = mustResponse 200 "OK" [
+    mustHeader "X-First" (toUtf8 "one"),
+    mustHeader "Content-Type" (toUtf8 "application/octet-stream"),
+  ] [|0, 255|]
+  expectEqual
+    (serializeResponse response)
+    (appendBytes
+      (toUtf8
+        "HTTP/1.1 200 OK\r\nx-first: one\r\ncontent-type: application/octet-stream\r\ncontent-length: 2\r\n\r\n")
+      [|0, 255|])
+
+test "response status outside the three-digit supported range is rejected" =
+  expectTrue
+    (isErr (makeResponse 99 "Continue" [] [||]) && isErr (makeResponse 600 "Nope" [] [||]))
+
+test "response reason phrase injection is rejected" =
+  expectTrue (isErr (makeResponse 200 "OK\r\nInjected: yes" [] [||]))
+
+test "safe header constructor canonicalizes names" =
+  expectEqual (headerName (mustHeader "X-Trace-ID" (toUtf8 "abc"))) "x-trace-id"
+
+test "invalid response header name and value injection are rejected" =
+  expectTrue
+    (isErr (makeHeader "Bad Name" (toUtf8 "value")) && isErr (makeHeader "X-Test" (toUtf8 "ok\r\nInjected: yes")))
+
+test "caller response framing fields are rejected" =
+  let reserved = mustHeader "Content-Length" (toUtf8 "7")
+  expectTrue (isErr (makeResponse 200 "OK" [reserved] (toUtf8 "payload")))
+
+test "response body elements must be bytes" =
+  expectTrue (isErr (makeResponse 200 "OK" [] [|256|]))
+
+test "query decoding preserves repeated names, empty values, and order" =
+  let request = mustRequest (toUtf8 "GET /x?a=1&a=&flag HTTP/1.1\r\nHost: pds.example\r\n\r\n")
+  match parseTargetQuery request
+    Ok (path, [QueryParam a1 v1, QueryParam a2 v2, QueryParam flag v3]) => expectTrue (path == "/x" && a1 == "a" && v1 == "1" && a2 == "a" && v2 == "" && flag == "flag" && v3 == "")
+    _ => expectTrue False
+
+test "empty query component after question mark is accepted" =
+  let request = mustRequest (toUtf8 "GET /x? HTTP/1.1\r\nHost: pds.example\r\n\r\n")
+  match parseTargetQuery request
+    Ok (path, []) => expectEqual path "/x"
+    _ => expectTrue False
+
+test "query percent decoding is exact and plus stays literal" =
+  let request = mustRequest (toUtf8 "GET /x?q=a+b%20c&snow=%E2%98%83 HTTP/1.1\r\nHost: pds.example\r\n\r\n")
+  match parseTargetQuery request
+    Ok (_, [QueryParam "q" first, QueryParam "snow" second]) =>
+      expectTrue (first == "a+b c" && second == "☃")
+    _ => expectTrue False
+
+test "malformed query percent escape is rejected" =
+  let request = mustRequest (toUtf8 "GET /x?q=%2G HTTP/1.1\r\nHost: pds.example\r\n\r\n")
+  expectTrue (isErr (parseTargetQuery request))
+
+test "overlong UTF-8 in query is rejected" =
+  let request = mustRequest (toUtf8 "GET /x?q=%C0%AF HTTP/1.1\r\nHost: pds.example\r\n\r\n")
+  expectTrue (isErr (parseTargetQuery request))
+
+test "decoded query controls and NUL are rejected" =
+  let nul = mustRequest (toUtf8 "GET /x?q=%00 HTTP/1.1\r\nHost: pds.example\r\n\r\n")
+  let del = mustRequest (toUtf8 "GET /x?q=%7f HTTP/1.1\r\nHost: pds.example\r\n\r\n")
+  expectTrue (isErr (parseTargetQuery nul) && isErr (parseTargetQuery del))
+
+test "empty query names are rejected" =
+  let first = mustRequest (toUtf8 "GET /x?=value HTTP/1.1\r\nHost: pds.example\r\n\r\n")
+  let later = mustRequest (toUtf8 "GET /x?a=1&&b=2 HTTP/1.1\r\nHost: pds.example\r\n\r\n")
+  expectTrue (isErr (parseTargetQuery first) && isErr (parseTargetQuery later))
+
+test "media type and subtype are case-insensitive with bounded parameters" = match parseMediaType (toUtf8 "Application/JSON; Charset=\"utf-8\"; profile=atproto")
+  Ok mediaType => expectTrue (mediaTypeType mediaType == "application" && mediaTypeSubtype mediaType == "json")
+  Err _ => expectTrue False
+
+test "malformed and non-ASCII media types are rejected" =
+  expectTrue
+    (isErr (parseMediaType (toUtf8 "application")) && isErr (parseMediaType (toUtf8 "text/plain; charset=\"unterminated")) && isErr (parseMediaType [|97, 112, 112, 47, 255|]))
+
+test "JSON request body is syntax-checked after strict UTF-8 decoding" = match decodeRequestBody (requestWithBody "Application/JSON; charset=utf-8" (toUtf8 "{\"ok\":true}"))
+  Ok (JsonBody _ _) => expectTrue True
+  _ => expectTrue False
+
+test "invalid JSON syntax is rejected" =
+  expectTrue (bodyRejects
+    "invalid JSON"
+    (requestWithBody "application/json" (toUtf8 "{nope}")))
+
+test "invalid JSON UTF-8 is rejected before syntax parsing" = expectTrue (bodyRejects
+  "not valid UTF-8"
+  (requestWithBody "application/json" [|0xc0, 0xaf|]))
+
+test "duplicate Content-Type is rejected" =
+  let request = mustRequest (toUtf8 "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Type: application/json\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}")
+  expectTrue (bodyRejects "duplicate Content-Type" request)
+
+test "missing Content-Type is rejected" =
+  let request = mustRequest (toUtf8 "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 2\r\n\r\n{}")
+  expectTrue (bodyRejects "requires Content-Type" request)
+
+test "text media types decode strict UTF-8" = match decodeRequestBody (requestWithBody "Text/Plain; charset=utf-8" (toUtf8 "héllo"))
+  Ok (TextBody mediaType text) =>
+    expectTrue (mediaTypeType mediaType == "text" && text == "héllo")
+  _ => expectTrue False
+
+test "invalid text UTF-8 is rejected" = expectTrue (bodyRejects
+  "not valid UTF-8"
+  (requestWithBody "text/plain" [|0xed, 0xa0, 0x80|]))
+
+test "raw media types preserve binary bytes" = match decodeRequestBody (requestWithBody "image/png" [|0, 128, 255|])
+  Ok (RawBody mediaType bytes) => expectTrue (mediaTypeType mediaType == "image" && mediaTypeSubtype mediaType == "png" && bytes == [|0, 128, 255|])
+  _ => expectTrue False
+
+test "JSON body ceiling accepts at and rejects over" =
+  expectTrue
+    (isOk (checkJsonBodyBytes maxJsonBodyBytes) && isErr (checkJsonBodyBytes (maxJsonBodyBytes + 1)))
+
+test "text body ceiling accepts at and rejects over" =
+  expectTrue
+    (isOk (checkTextBodyBytes maxTextBodyBytes) && isErr (checkTextBodyBytes (maxTextBodyBytes + 1)))
+
+test "raw body ceiling accepts at and rejects over" =
+  expectTrue
+    (isOk (checkRawBodyBytes maxRawBodyBytes) && isErr (checkRawBodyBytes (maxRawBodyBytes + 1)))

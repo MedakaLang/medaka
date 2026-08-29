@@ -35,6 +35,21 @@ export
 maxHttpChunks : Int
 maxHttpChunks = 65536
 
+-- Pinned PDS endpoint body policy. These limits are deliberately separate
+-- from HTTP framing: callers can test endpoint policy without allocating a
+-- maximum-sized request body.
+export
+maxJsonBodyBytes : Int
+maxJsonBodyBytes = 153600
+
+export
+maxTextBodyBytes : Int
+maxTextBodyBytes = 102400
+
+export
+maxRawBodyBytes : Int
+maxRawBodyBytes = 5242880
+
 export
 checkHttpRequestBytes : Int -> Result String Unit
 checkHttpRequestBytes size =
@@ -88,6 +103,30 @@ checkHttpChunks : Int -> Result String Unit
 checkHttpChunks count =
   if count > maxHttpChunks then
     Err "http: chunk count exceeds 65536 resource limit"
+  else
+    Ok ()
+
+export
+checkJsonBodyBytes : Int -> Result String Unit
+checkJsonBodyBytes size =
+  if size > maxJsonBodyBytes then
+    Err "http: JSON body exceeds 153600-byte resource limit"
+  else
+    Ok ()
+
+export
+checkTextBodyBytes : Int -> Result String Unit
+checkTextBodyBytes size =
+  if size > maxTextBodyBytes then
+    Err "http: text body exceeds 102400-byte resource limit"
+  else
+    Ok ()
+
+export
+checkRawBodyBytes : Int -> Result String Unit
+checkRawBodyBytes size =
+  if size > maxRawBodyBytes then
+    Err "http: raw body exceeds 5242880-byte resource limit"
   else
     Ok ()
 
