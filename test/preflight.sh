@@ -695,7 +695,14 @@ for f in $changed; do
       add 'diff_compiler_test_native' ;;
     # #2191 (S-4-gate-verify): gate_cmd.mdk implements `medaka gate verify`/
     # `explain` — a change here moves the registry drift gate's OWN behavior.
-    compiler/tools/gate_cmd.mdk)  add 'diff_compiler_gate_registry' ;;
+    # It is ALSO an ordinary compiler/tools/*.mdk file, so it must keep the
+    # catch-all's `diff_compiler_check*` line too — a bare single-`add` arm
+    # here would silently shadow the catch-all below (`case` is first-match-
+    # wins) and reintroduce the exact under-selection class this gate exists
+    # to catch (found by end-of-sprint review, gate-registry sprint #2176).
+    compiler/tools/gate_cmd.mdk)
+      add 'diff_compiler_gate_registry'
+      add 'diff_compiler_check*' ;;
     compiler/tools/*)              add 'diff_compiler_check*' ;;
 
     # ── the compiler's private mini-stdlib: used by every stage. ──
