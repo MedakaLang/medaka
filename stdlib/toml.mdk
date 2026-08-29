@@ -35,7 +35,7 @@
    shape; `tableEntry` hands back a sub-document whose keys are bare, so the
    ordinary accessors work on it unchanged. -}
 
-import string.{trim, lines, toInt, startsWith, drop, indexOf}
+import string.{trim, lines, toInt, startsWith, drop, indexOf, contains}
 
 -- ── Value type ──────────────────────────────────────────────────────────────
 
@@ -105,21 +105,40 @@ parseArrayValue arr i
   | arrayGetUnsafe i arr == '[' = parseArrayItems arr (i + 1) []
   | otherwise = Err "expected '['"
 
--- Skip spaces/commas and parse string items until `]`.
+-- Skip spaces and parse a string item, or close on `]`.  Called at the start
+-- of the array and again after each comma — i.e. wherever an item (or the
+-- close) is expected next.
 parseArrayItems : Array Char -> Int -> List String -> Result String (List String, Int)
 parseArrayItems arr i acc
   | i >= arrayLength arr = Err "unterminated array"
   | arrayGetUnsafe i arr == ']' = Ok (listReverse acc, i + 1)
   | arrayGetUnsafe i arr == ' ' = parseArrayItems arr (i + 1) acc
   | arrayGetUnsafe i arr == '\t' = parseArrayItems arr (i + 1) acc
-  | arrayGetUnsafe i arr == ',' = parseArrayItems arr (i + 1) acc
   | arrayGetUnsafe i arr == '"' = parseArrayItemStr arr i acc
   | otherwise = Err (stringConcat ["unexpected char in array: '", charToStr (arrayGetUnsafe i arr), "'"])
 
 parseArrayItemStr : Array Char -> Int -> List String -> Result String (List String, Int)
 parseArrayItemStr arr i acc = match parseQuotedStr arr i
   Err e => Err e
-  Ok (s, j) => parseArrayItems arr j (s::acc)
+  Ok (s, j) => parseArraySep arr j (s::acc)
+
+-- After a parsed item: only a `,` (another item may follow, a trailing comma
+-- before `]` is fine) or `]` (close) is valid next.  Anything else — most
+-- commonly another quoted item with no comma between, `["x" "y"]` — is a
+-- malformed array and must be rejected loudly rather than silently accepted
+-- as two adjacent items.
+parseArraySep : Array Char -> Int -> List String -> Result String (List String, Int)
+parseArraySep arr i acc
+  | i >= arrayLength arr = Err "unterminated array"
+  | arrayGetUnsafe i arr == ' ' = parseArraySep arr (i + 1) acc
+  | arrayGetUnsafe i arr == '\t' = parseArraySep arr (i + 1) acc
+  | arrayGetUnsafe i arr == ',' = parseArrayItems arr (i + 1) acc
+  | arrayGetUnsafe i arr == ']' = Ok (listReverse acc, i + 1)
+  | otherwise = Err (stringConcat [
+    "expected ',' or ']' in array, found: '",
+    charToStr (arrayGetUnsafe i arr),
+    "'",
+  ])
 
 -- ── Key-value line parser ────────────────────────────────────────────────────
 
@@ -147,8 +166,14 @@ parseKvAfterEq : Array Char -> Int -> Int -> Result String (String, TomlValue)
 parseKvAfterEq arr n eq =
   let keyRaw = stringFromChars (arrayMakeWith eq (k => arrayGetUnsafe k arr))
   let key = trim keyRaw
-  let valStart = skipSpaces arr (eq + 1) n
-  parseKvValue arr n valStart key
+  -- Dotted keys (`foo.bar = "zzz"`) are unsupported — the module's header says
+  -- so explicitly ("use table headers instead"); reject loudly rather than
+  -- silently accepting a dot as an ordinary key character.
+  if contains "." key then
+    Err (stringConcat ["dotted key '", key, "' is not supported: use table headers instead"])
+  else
+    let valStart = skipSpaces arr (eq + 1) n
+    parseKvValue arr n valStart key
 
 parseKvValue : Array Char -> Int -> Int -> String -> Result String (String, TomlValue)
 parseKvValue arr n i key
@@ -157,11 +182,30 @@ parseKvValue arr n i key
   | arrayGetUnsafe i arr == '[' = parseKvArr arr i key
   | otherwise = parseKvScalar (restOfLine arr n i) key
 
+-- After a value parser hands back `nextIndex`, the rest of the line must be
+-- empty (once trimmed) — comments are already stripped upstream
+-- (`stripComment`, called in `parseLinesAcc` before `parseKv` ever runs).
+-- Anything left over is trailing garbage: `name = "abc" this is garbage`, a
+-- missing comma between array items (`["x" "y"]`), or — the same root cause —
+-- a triple-quoted string, whose second `"` of the opening `"""` reads as the
+-- closing quote and leaves `"x"""` unconsumed.
+checkLineConsumed : Array Char -> Int -> String -> Result String Unit
+checkLineConsumed arr j key =
+  let trailing = restOfLine arr (arrayLength arr) j
+  if trailing == "" then
+    Ok ()
+  else
+    Err (stringConcat ["trailing content after value for key '", key, "': ", trailing])
+
 parseKvStr : Array Char -> Int -> String -> Result String (String, TomlValue)
-parseKvStr arr i key = map ((s, _) => (key, TStr s)) (parseQuotedStr arr i)
+parseKvStr arr i key = match parseQuotedStr arr i
+  Err e => Err e
+  Ok (s, j) => map (_ => (key, TStr s)) (checkLineConsumed arr j key)
 
 parseKvArr : Array Char -> Int -> String -> Result String (String, TomlValue)
-parseKvArr arr i key = map ((xs, _) => (key, TArr xs)) (parseArrayValue arr i)
+parseKvArr arr i key = match parseArrayValue arr i
+  Err e => Err e
+  Ok (xs, j) => map (_ => (key, TArr xs)) (checkLineConsumed arr j key)
 
 -- The remaining characters of the line from `i`, trimmed.  Used for the
 -- unquoted scalar forms (integer / boolean), which run to end-of-line.
@@ -295,7 +339,56 @@ parse s = map Toml (parseLinesAcc (lines s) "" [] [])
    An inline table is rejected loudly rather than dropped:
 
    > parse "[server]\naddr = {host = \"h\", port = 1}"
-   Err "unsupported value for key 'addr': {host = \"h\", port = 1} (expected a quoted string, a string array, an integer, or true/false)" -}
+   Err "unsupported value for key 'addr': {host = \"h\", port = 1} (expected a quoted string, a string array, an integer, or true/false)"
+
+   Trailing garbage after a closed string value is rejected loudly, not
+   silently dropped:
+
+   > parse "name = \"abc\" this is garbage"
+   Err "trailing content after value for key 'name': this is garbage"
+
+   A well-formed string on its own line still parses correctly (no
+   regression):
+
+   > parse "name = \"abc\""
+   Ok Toml [("name", TStr "abc")]
+
+   Trailing garbage after a closed array value is rejected loudly:
+
+   > parse "oracles = [\"x\"] junk"
+   Err "trailing content after value for key 'oracles': junk"
+
+   A missing comma between array items is rejected loudly, not silently
+   accepted as two adjacent strings:
+
+   > parse "oracles = [\"x\" \"y\"]"
+   Err "expected ',' or ']' in array, found: '\"'"
+
+   A well-formed array on its own line still parses correctly (no
+   regression):
+
+   > parse "oracles = [\"x\", \"y\"]"
+   Ok Toml [("oracles", TArr ["x", "y"])]
+
+   A triple-quoted (multiline) string is rejected loudly rather than
+   mis-parsing to a wrong value — the header lists multiline strings as
+   unsupported, and this is the same "line fully consumed" check as the two
+   trailing-garbage cases above:
+
+   > parse "name = \"\"\"x\"\"\""
+   Err "trailing content after value for key 'name': \"x\"\"\""
+
+   A dotted key is rejected loudly — the header says to use table headers
+   instead:
+
+   > parse "foo.bar = \"zzz\""
+   Err "dotted key 'foo.bar' is not supported: use table headers instead"
+
+   A well-formed key under a table header still parses correctly (no
+   regression):
+
+   > parse "[foo]\nbar = \"zzz\""
+   Ok Toml [("foo.bar", TStr "zzz")] -}
 
 -- ── Accessors ────────────────────────────────────────────────────────────────
 
