@@ -1,34 +1,49 @@
-{- toml.mdk — a minimal TOML subset sufficient to parse `medaka.toml`.
+{- toml.mdk — a minimal TOML subset sufficient to parse `medaka.toml` and
+   `test/gates.toml` (the gate registry, #2176).
 
-   **Supported subset** (mirrors `lib/project_config.ml`):
+   **Supported subset:**
    - Top-level `[section]` headers (not nested tables or inline tables)
+   - Array-of-tables headers `[[section]]` (repeated; each occurrence opens a
+     new indexed entry — see *Value model* below)
    - `key = "string"` values (double-quoted; backslash is passed through as-is)
    - `key = ["array", "of", "strings"]` values
+   - `key = 42` / `key = -7` integer values
+   - `key = true` / `key = false` boolean values
    - `#` line comments (stripped before parsing, respecting quoted strings)
    - Blank lines ignored
 
-   **Not supported** (not needed by `medaka.toml`):
-   - Integer, float, bool, datetime values
+   **Not supported** — and rejected LOUDLY with an `Err`, never silently
+   dropped:
+   - Float and datetime values
    - Multiline strings (`"""…"""` / `'''…'''`)
    - Inline tables (`{k = v}`)
    - Dotted keys (`a.b = v`) — use table headers instead
-   - Array of tables (`[[t]]`)
    - String escape sequences (backslash is literal)
 
    **Value model.**
    ```
-   data TomlValue = TStr String | TArr (List String)
+   data TomlValue = TStr String | TArr (List String) | TInt Int | TBool Bool
    ```
-   The parsed document is a flat association list of `(qualifiedKey, value)` pairs.
-   Keys under `[package]` are stored bare (e.g. `"name"`); keys under any other
-   section `[s]` are stored as `"s.key"` (e.g. `"workspace.members"`).
-   This exactly mirrors the qualification logic in `lib/project_config.ml`. -}
+   The parsed document is a flat association list of `(qualifiedKey, value)`
+   pairs.  EVERY key is qualified by its section: a key `k` under `[s]` is
+   stored as `"s.k"` (so `[package] name` is `"package.name"`, and
+   `[workspace] members` is `"workspace.members"`).  Keys before any header
+   stay bare.
 
-import string.{trim, lines}
+   A key `k` under the *i*-th (0-based) `[[t]]` header is stored as
+   `"t.<i>.k"`.  `tableCount` and `tableEntry` are the accessors for that
+   shape; `tableEntry` hands back a sub-document whose keys are bare, so the
+   ordinary accessors work on it unchanged. -}
+
+import string.{trim, lines, toInt, startsWith, drop, indexOf, contains}
 
 -- ── Value type ──────────────────────────────────────────────────────────────
 
-public export data TomlValue = TStr String | TArr (List String)
+public export data TomlValue =
+  | TStr String
+  | TArr (List String)
+  | TInt Int
+  | TBool Bool
 
 -- | A parsed TOML document: a flat list of (qualifiedKey, value) pairs.
 public export data Toml = Toml (List (String, TomlValue))
@@ -90,21 +105,40 @@ parseArrayValue arr i
   | arrayGetUnsafe i arr == '[' = parseArrayItems arr (i + 1) []
   | otherwise = Err "expected '['"
 
--- Skip spaces/commas and parse string items until `]`.
+-- Skip spaces and parse a string item, or close on `]`.  Called at the start
+-- of the array and again after each comma — i.e. wherever an item (or the
+-- close) is expected next.
 parseArrayItems : Array Char -> Int -> List String -> Result String (List String, Int)
 parseArrayItems arr i acc
   | i >= arrayLength arr = Err "unterminated array"
   | arrayGetUnsafe i arr == ']' = Ok (listReverse acc, i + 1)
   | arrayGetUnsafe i arr == ' ' = parseArrayItems arr (i + 1) acc
   | arrayGetUnsafe i arr == '\t' = parseArrayItems arr (i + 1) acc
-  | arrayGetUnsafe i arr == ',' = parseArrayItems arr (i + 1) acc
   | arrayGetUnsafe i arr == '"' = parseArrayItemStr arr i acc
   | otherwise = Err (stringConcat ["unexpected char in array: '", charToStr (arrayGetUnsafe i arr), "'"])
 
 parseArrayItemStr : Array Char -> Int -> List String -> Result String (List String, Int)
 parseArrayItemStr arr i acc = match parseQuotedStr arr i
   Err e => Err e
-  Ok (s, j) => parseArrayItems arr j (s::acc)
+  Ok (s, j) => parseArraySep arr j (s::acc)
+
+-- After a parsed item: only a `,` (another item may follow, a trailing comma
+-- before `]` is fine) or `]` (close) is valid next.  Anything else — most
+-- commonly another quoted item with no comma between, `["x" "y"]` — is a
+-- malformed array and must be rejected loudly rather than silently accepted
+-- as two adjacent items.
+parseArraySep : Array Char -> Int -> List String -> Result String (List String, Int)
+parseArraySep arr i acc
+  | i >= arrayLength arr = Err "unterminated array"
+  | arrayGetUnsafe i arr == ' ' = parseArraySep arr (i + 1) acc
+  | arrayGetUnsafe i arr == '\t' = parseArraySep arr (i + 1) acc
+  | arrayGetUnsafe i arr == ',' = parseArrayItems arr (i + 1) acc
+  | arrayGetUnsafe i arr == ']' = Ok (listReverse acc, i + 1)
+  | otherwise = Err (stringConcat [
+    "expected ',' or ']' in array, found: '",
+    charToStr (arrayGetUnsafe i arr),
+    "'",
+  ])
 
 -- ── Key-value line parser ────────────────────────────────────────────────────
 
@@ -132,63 +166,152 @@ parseKvAfterEq : Array Char -> Int -> Int -> Result String (String, TomlValue)
 parseKvAfterEq arr n eq =
   let keyRaw = stringFromChars (arrayMakeWith eq (k => arrayGetUnsafe k arr))
   let key = trim keyRaw
-  let valStart = skipSpaces arr (eq + 1) n
-  parseKvValue arr n valStart key
+  -- Dotted keys (`foo.bar = "zzz"`) are unsupported — the module's header says
+  -- so explicitly ("use table headers instead"); reject loudly rather than
+  -- silently accepting a dot as an ordinary key character.
+  if contains "." key then
+    Err (stringConcat ["dotted key '", key, "' is not supported: use table headers instead"])
+  else
+    let valStart = skipSpaces arr (eq + 1) n
+    parseKvValue arr n valStart key
 
 parseKvValue : Array Char -> Int -> Int -> String -> Result String (String, TomlValue)
 parseKvValue arr n i key
   | i >= n = Err (stringConcat ["missing value for key: ", key])
   | arrayGetUnsafe i arr == '"' = parseKvStr arr i key
   | arrayGetUnsafe i arr == '[' = parseKvArr arr i key
-  | otherwise = Err (stringConcat ["expected '\"' or '[' for key: ", key])
+  | otherwise = parseKvScalar (restOfLine arr n i) key
+
+-- After a value parser hands back `nextIndex`, the rest of the line must be
+-- empty (once trimmed) — comments are already stripped upstream
+-- (`stripComment`, called in `parseLinesAcc` before `parseKv` ever runs).
+-- Anything left over is trailing garbage: `name = "abc" this is garbage`, a
+-- missing comma between array items (`["x" "y"]`), or — the same root cause —
+-- a triple-quoted string, whose second `"` of the opening `"""` reads as the
+-- closing quote and leaves `"x"""` unconsumed.
+checkLineConsumed : Array Char -> Int -> String -> Result String Unit
+checkLineConsumed arr j key =
+  let trailing = restOfLine arr (arrayLength arr) j
+  if trailing == "" then
+    Ok ()
+  else
+    Err (stringConcat ["trailing content after value for key '", key, "': ", trailing])
 
 parseKvStr : Array Char -> Int -> String -> Result String (String, TomlValue)
-parseKvStr arr i key = map ((s, _) => (key, TStr s)) (parseQuotedStr arr i)
+parseKvStr arr i key = match parseQuotedStr arr i
+  Err e => Err e
+  Ok (s, j) => map (_ => (key, TStr s)) (checkLineConsumed arr j key)
 
 parseKvArr : Array Char -> Int -> String -> Result String (String, TomlValue)
-parseKvArr arr i key = map ((xs, _) => (key, TArr xs)) (parseArrayValue arr i)
+parseKvArr arr i key = match parseArrayValue arr i
+  Err e => Err e
+  Ok (xs, j) => map (_ => (key, TArr xs)) (checkLineConsumed arr j key)
+
+-- The remaining characters of the line from `i`, trimmed.  Used for the
+-- unquoted scalar forms (integer / boolean), which run to end-of-line.
+restOfLine : Array Char -> Int -> Int -> String
+restOfLine arr n i = trim (stringFromChars (arrayMakeWith
+  (n - i)
+  (j => arrayGetUnsafe (i + j) arr)))
+
+-- Unquoted scalar: `true`/`false`, or an integer.  ANYTHING else — an inline
+-- table `{k = v}`, a float, a datetime, a bare word — is an ERROR, never a
+-- silent drop: the whole point of this reader is that an unmodelled construct
+-- is loud.
+parseKvScalar : String -> String -> Result String (String, TomlValue)
+parseKvScalar tok key
+  | tok == "true" = Ok (key, TBool True)
+  | tok == "false" = Ok (key, TBool False)
+  | otherwise = match toInt tok
+    Some n => Ok (key, TInt n)
+    None => Err (stringConcat [
+      "unsupported value for key '",
+      key,
+      "': ",
+      tok,
+      " (expected a quoted string, a string array, an integer, or true/false)",
+    ])
 
 -- ── Document parser ──────────────────────────────────────────────────────────
 
--- Detect a section header `[name]` and extract the name, or return None.
-parseHeader : String -> Option String
+-- A header line: `[name]` opens a plain table, `[[name]]` opens the next
+-- element of an array of tables.
+data Header = HTable String | HArrayTable String
+
+-- Detect a section header and classify it, or return None.
+-- `[[t]]` is checked first: it also satisfies the `[t]` shape.
+parseHeader : String -> Option Header
 parseHeader s =
   let n = stringLength s
-  if n >= 2 && stringSlice 0 1 s == "[" && stringSlice (n - 1) n s == "]" then
-    Some (trim (stringSlice 1 (n - 1) s))
+  if n >= 4 && stringSlice 0 2 s == "[[" && stringSlice (n - 2) n s == "]]" then
+    Some (HArrayTable (trim (stringSlice 2 (n - 2) s)))
+  else if n >= 2 && stringSlice 0 1 s == "[" && stringSlice (n - 1) n s == "]" then
+    Some (HTable (trim (stringSlice 1 (n - 1) s)))
   else
     None
 
--- Qualify a key relative to the current section.
--- Keys in [package] stay bare; keys in any other section get "section." prefix.
+-- Qualify a key relative to the current section.  Every section qualifies —
+-- `[package]` is not special (it used to be, mirroring the removed
+-- `lib/project_config.ml`; that asymmetry made `package` the one table whose
+-- keys could collide with a pre-header bare key).
 qualifyKey : String -> String -> String
 qualifyKey section key
   | section == "" = key
-  | section == "package" = key
   | otherwise = stringConcat [section, ".", key]
 
-parseLinesAcc : List String -> String -> List (String, TomlValue) -> Result String (List (String, TomlValue))
-parseLinesAcc [] _ acc = Ok (listReverse acc)
-parseLinesAcc (l::ls) section acc =
+-- How many `[[name]]` elements have been opened so far, per table name.
+seenCount : String -> List (String, Int) -> Int
+seenCount _ [] = 0
+seenCount name ((k, c)::rest)
+  | k == name = c
+  | otherwise = seenCount name rest
+
+bumpCount : String -> List (String, Int) -> List (String, Int)
+bumpCount name [] = [(name, 1)]
+bumpCount name ((k, c)::rest)
+  | k == name = (k, c + 1)::rest
+  | otherwise = (k, c) :: bumpCount name rest
+
+parseLinesAcc : List String -> String -> List (String, Int) -> List (String, TomlValue) -> Result String (List (String, TomlValue))
+parseLinesAcc [] _ _ acc = Ok (listReverse acc)
+parseLinesAcc (l::ls) section counts acc =
   let trimmed = trim (stripComment l)
-  if trimmed == "" then parseLinesAcc ls section acc
+  if trimmed == "" then parseLinesAcc ls section counts acc
   else match parseHeader trimmed
-    Some hdr => parseLinesAcc ls hdr acc
+    Some (HTable hdr) => parseLinesAcc ls hdr counts acc
+    Some (HArrayTable hdr) =>
+      let idx = seenCount hdr counts
+      parseLinesAcc
+        ls
+        (stringConcat [hdr, ".", intToString idx])
+        (bumpCount hdr counts)
+        acc
     None => match parseKv trimmed
       Err e => Err e
-      Ok (k, v) => parseLinesAcc ls section ((qualifyKey section k, v)::acc)
+      Ok (k, v) =>
+        parseLinesAcc ls section counts ((qualifyKey section k, v)::acc)
 
 {- | Parse a TOML string (supported subset) into a `Toml` document, or an
    error message describing the first parse failure.
 
-   A `[package]` section:
+   A `[package]` section — note every key is qualified by its section:
 
-   > parse "[package]\nname = \"hello\"\nversion = \"0.1.0\"\nentry = \"main.mdk\"" == Ok (Toml [("name", TStr "hello"), ("version", TStr "0.1.0"), ("entry", TStr "main.mdk")])
+   > parse "[package]\nname = \"hello\"\nversion = \"0.1.0\"" == Ok (Toml [("package.name", TStr "hello"), ("package.version", TStr "0.1.0")])
    True
 
    A `[workspace]` section with a string array:
 
    > parse "[workspace]\nmembers = [\"pkg-a\", \"pkg-b\"]" == Ok (Toml [("workspace.members", TArr ["pkg-a", "pkg-b"])])
+   True
+
+   Integer and boolean values:
+
+   > parse "[limits]\nretries = 3\nverbose = true\noffset = -7" == Ok (Toml [("limits.retries", TInt 3), ("limits.verbose", TBool True), ("limits.offset", TInt (0 - 7))])
+   True
+
+   Repeated `[[gate]]` headers open successive indexed entries:
+
+   > parse "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\"" == Ok (Toml [("gate.0.name", TStr "a"), ("gate.1.name", TStr "b")])
    True
 
    Comments and blank lines are ignored:
@@ -202,15 +325,70 @@ parseLinesAcc (l::ls) section acc =
    True -}
 export
 parse : String -> Result String Toml
-parse s = map Toml (parseLinesAcc (lines s) "" [])
+parse s = map Toml (parseLinesAcc (lines s) "" [] [])
 
--- Parse-error cases: a line with no `=` and a missing value both produce Err.
+-- Parse-error cases.  An unmodelled construct is an `Err`, NOT a silent drop:
+-- a line with no `=`, a bare unquoted word, and an inline table each fail.
 
 {- > parse "bad line no equals"
    Err "expected '=' in: bad line no equals"
 
    > parse "[package]\nname = unterminated"
-   Err "expected '\"' or '[' for key: name" -}
+   Err "unsupported value for key 'name': unterminated (expected a quoted string, a string array, an integer, or true/false)"
+
+   An inline table is rejected loudly rather than dropped:
+
+   > parse "[server]\naddr = {host = \"h\", port = 1}"
+   Err "unsupported value for key 'addr': {host = \"h\", port = 1} (expected a quoted string, a string array, an integer, or true/false)"
+
+   Trailing garbage after a closed string value is rejected loudly, not
+   silently dropped:
+
+   > parse "name = \"abc\" this is garbage"
+   Err "trailing content after value for key 'name': this is garbage"
+
+   A well-formed string on its own line still parses correctly (no
+   regression):
+
+   > parse "name = \"abc\""
+   Ok Toml [("name", TStr "abc")]
+
+   Trailing garbage after a closed array value is rejected loudly:
+
+   > parse "oracles = [\"x\"] junk"
+   Err "trailing content after value for key 'oracles': junk"
+
+   A missing comma between array items is rejected loudly, not silently
+   accepted as two adjacent strings:
+
+   > parse "oracles = [\"x\" \"y\"]"
+   Err "expected ',' or ']' in array, found: '\"'"
+
+   A well-formed array on its own line still parses correctly (no
+   regression):
+
+   > parse "oracles = [\"x\", \"y\"]"
+   Ok Toml [("oracles", TArr ["x", "y"])]
+
+   A triple-quoted (multiline) string is rejected loudly rather than
+   mis-parsing to a wrong value — the header lists multiline strings as
+   unsupported, and this is the same "line fully consumed" check as the two
+   trailing-garbage cases above:
+
+   > parse "name = \"\"\"x\"\"\""
+   Err "trailing content after value for key 'name': \"x\"\"\""
+
+   A dotted key is rejected loudly — the header says to use table headers
+   instead:
+
+   > parse "foo.bar = \"zzz\""
+   Err "dotted key 'foo.bar' is not supported: use table headers instead"
+
+   A well-formed key under a table header still parses correctly (no
+   regression):
+
+   > parse "[foo]\nbar = \"zzz\""
+   Ok Toml [("foo.bar", TStr "zzz")] -}
 
 -- ── Accessors ────────────────────────────────────────────────────────────────
 
@@ -230,6 +408,26 @@ parseGetArr : String -> String -> Option (List String)
 parseGetArr field src = match parse src
   Err _ => None
   Ok doc => getArray field doc
+
+parseGetInt : String -> String -> Option Int
+parseGetInt field src = match parse src
+  Err _ => None
+  Ok doc => getInt field doc
+
+parseGetBool : String -> String -> Option Bool
+parseGetBool field src = match parse src
+  Err _ => None
+  Ok doc => getBool field doc
+
+parseTableCount : String -> String -> Int
+parseTableCount name src = match parse src
+  Err _ => 0
+  Ok doc => tableCount name doc
+
+parseTableEntryStr : String -> Int -> String -> String -> Option String
+parseTableEntryStr name i field src = match parse src
+  Err _ => None
+  Ok doc => getString field (tableEntry name i doc)
 
 -- Private helpers: parse a TOML string and apply one exported convenience
 -- accessor, so the accessors themselves are exercised by doctests/props.
@@ -256,7 +454,7 @@ parseWorkspaceMembers src = match parse src
 {- | Look up a string value by (qualified) key.  Returns `None` if the key is
    absent or holds an array.
 
-   > parseGetStr "name" "[package]\nname = \"medaka\"\nversion = \"1.0.0\"\nentry = \"main.mdk\""
+   > parseGetStr "package.name" "[package]\nname = \"medaka\"\nversion = \"1.0.0\"\nentry = \"main.mdk\""
    Some "medaka"
 
    Returns `None` for an array-valued key:
@@ -276,9 +474,8 @@ parseWorkspaceMembers src = match parse src
 export
 getString : String -> Toml -> Option String
 getString key (Toml kvs) = match lookupKvs key kvs
-  None => None
   Some (TStr s) => Some s
-  Some (TArr _) => None
+  _ => None
 
 {- | Look up an array-of-strings value by (qualified) key.  Returns `None` if
    the key is absent or holds a string.
@@ -288,7 +485,7 @@ getString key (Toml kvs) = match lookupKvs key kvs
 
    Returns `None` for a string-valued key:
 
-   > parseGetArr "name" "[package]\nname = \"x\"\nversion = \"0.1.0\"\nentry = \"main.mdk\""
+   > parseGetArr "package.name" "[package]\nname = \"x\"\nversion = \"0.1.0\"\nentry = \"main.mdk\""
    None
 
    Returns `None` for an absent key:
@@ -303,9 +500,101 @@ getString key (Toml kvs) = match lookupKvs key kvs
 export
 getArray : String -> Toml -> Option (List String)
 getArray key (Toml kvs) = match lookupKvs key kvs
-  None => None
   Some (TArr xs) => Some xs
-  Some (TStr _) => None
+  _ => None
+
+{- | Look up an integer value by (qualified) key.  `None` if the key is absent
+   or holds another type.
+
+   > parseGetInt "limits.retries" "[limits]\nretries = 3"
+   Some 3
+
+   Negative integers parse:
+
+   > parseGetInt "limits.offset" "[limits]\noffset = -7" == Some (0 - 7)
+   True
+
+   `None` for a string-valued key:
+
+   > parseGetInt "package.name" "[package]\nname = \"x\""
+   None -}
+export
+getInt : String -> Toml -> Option Int
+getInt key (Toml kvs) = match lookupKvs key kvs
+  Some (TInt n) => Some n
+  _ => None
+
+{- | Look up a boolean value by (qualified) key.  `None` if the key is absent
+   or holds another type.
+
+   > parseGetBool "limits.verbose" "[limits]\nverbose = true"
+   Some True
+
+   > parseGetBool "limits.verbose" "[limits]\nverbose = false"
+   Some False
+
+   `None` for an integer-valued key:
+
+   > parseGetBool "limits.retries" "[limits]\nretries = 3"
+   None -}
+export
+getBool : String -> Toml -> Option Bool
+getBool key (Toml kvs) = match lookupKvs key kvs
+  Some (TBool b) => Some b
+  _ => None
+
+-- ── Array-of-tables accessors ───────────────────────────────────────────────
+
+-- The 0-based index in a key of the shape `<name>.<idx>.<field>`, or None.
+tableIdxOf : String -> String -> Option Int
+tableIdxOf prefix key =
+  if not (startsWith prefix key) then None
+  else
+    let rest = drop (stringLength prefix) key
+    match indexOf "." rest
+      None => None
+      Some d => toInt (stringSlice 0 d rest)
+
+tableCountGo : String -> List (String, TomlValue) -> Int -> Int
+tableCountGo _ [] best = best
+tableCountGo prefix ((k, _)::rest) best = match tableIdxOf prefix k
+  None => tableCountGo prefix rest best
+  Some i => tableCountGo prefix rest (max (i + 1) best)
+
+{- | How many `[[name]]` entries the document contains.
+
+   > parseTableCount "gate" "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
+   2
+
+   Zero when the table is absent:
+
+   > parseTableCount "gate" "[package]\nname = \"x\""
+   0 -}
+export
+tableCount : String -> Toml -> Int
+tableCount name (Toml kvs) = tableCountGo (stringConcat [name, "."]) kvs 0
+
+stripTablePrefix : String -> List (String, TomlValue) -> List (String, TomlValue)
+stripTablePrefix _ [] = []
+stripTablePrefix prefix ((k, v)::rest)
+  | startsWith prefix k =
+    (drop (stringLength prefix) k, v) :: stripTablePrefix prefix rest
+  | otherwise = stripTablePrefix prefix rest
+
+{- | The `i`-th (0-based) `[[name]]` entry, as a sub-document whose keys are
+   bare — so `getString`/`getArray`/`getInt`/`getBool` apply unchanged.
+
+   > parseTableEntryStr "gate" 1 "name" "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
+   Some "b"
+
+   An out-of-range index yields an empty document, so lookups are `None`:
+
+   > parseTableEntryStr "gate" 9 "name" "[[gate]]\nname = \"a\""
+   None -}
+export
+tableEntry : String -> Int -> Toml -> Toml
+tableEntry name i (Toml kvs) =
+  Toml (stripTablePrefix (stringConcat [name, ".", intToString i, "."]) kvs)
 
 -- ── Convenience accessors for `medaka.toml` fields ──────────────────────────
 
@@ -320,7 +609,7 @@ getArray key (Toml kvs) = match lookupKvs key kvs
    None -}
 export
 packageName : Toml -> Option String
-packageName doc = getString "name" doc
+packageName doc = getString "package.name" doc
 
 {- | Extract `version` from a parsed `[package]` section.
 
@@ -333,7 +622,7 @@ packageName doc = getString "name" doc
    None -}
 export
 packageVersion : Toml -> Option String
-packageVersion doc = getString "version" doc
+packageVersion doc = getString "package.version" doc
 
 {- | Extract `entry` from a parsed `[package]` section.
 
@@ -346,7 +635,7 @@ packageVersion doc = getString "version" doc
    None -}
 export
 packageEntry : Toml -> Option String
-packageEntry doc = getString "entry" doc
+packageEntry doc = getString "package.entry" doc
 
 {- | Extract `members` from a parsed `[workspace]` section.
 
@@ -378,6 +667,8 @@ workspaceMembers doc = getArray "workspace.members" doc
 eqTomlValue : TomlValue -> TomlValue -> Bool
 eqTomlValue (TStr a) (TStr b) = a == b
 eqTomlValue (TArr a) (TArr b) = eqStrLists a b
+eqTomlValue (TInt a) (TInt b) = a == b
+eqTomlValue (TBool a) (TBool b) = a == b
 eqTomlValue _ _ = False
 
 eqStrLists : List String -> List String -> Bool
@@ -404,10 +695,19 @@ export impl Eq Toml where
    "TStr \"hi\""
 
    > debugTomlValue (TArr ["a", "b"])
-   "TArr [\"a\", \"b\"]" -}
+   "TArr [\"a\", \"b\"]"
+
+   > debugTomlValue (TInt 42)
+   "TInt 42"
+
+   > debugTomlValue (TBool True)
+   "TBool True" -}
 debugTomlValue : TomlValue -> String
 debugTomlValue (TStr s) = stringConcat ["TStr ", debug s]
 debugTomlValue (TArr xs) = stringConcat ["TArr ", debugStrList xs]
+debugTomlValue (TInt n) = stringConcat ["TInt ", intToString n]
+debugTomlValue (TBool b) =
+  stringConcat ["TBool ", if b then "True" else "False"]
 
 debugStrList : List String -> String
 debugStrList xs = stringConcat ["[", joinDebugStrs xs, "]"]
@@ -449,7 +749,30 @@ prop "packageName is stable regardless of the version value" (n : Int) =
 
 prop "packageVersion agrees with getString version" (n : Int) =
   parsePackageVersion (mkPackage (intToString n)) ==
-    parseGetStr "version" (mkPackage (intToString n))
+    parseGetStr "package.version" (mkPackage (intToString n))
 
 prop "parse is deterministic" (n : Int) =
   parse (mkPackage (intToString n)) == parse (mkPackage (intToString n))
+
+-- An unquoted integer round-trips through `TInt` for any Int, sign included.
+mkInt : Int -> String
+mkInt n = stringConcat ["[limits]\nretries = ", intToString n]
+
+prop "an unquoted integer round-trips as TInt" (n : Int) =
+  parseGetInt "limits.retries" (mkInt n) == Some n
+
+-- `[[gate]]` indexing: the i-th entry's `name` is the i-th generated name, so
+-- entries never blend into one another however many are present.
+mkGates : Int -> String
+mkGates k = stringConcat
+  [
+    "[[gate]]\nname = \"g",
+    intToString k,
+    "\"\n[[gate]]\nname = \"h",
+    intToString k,
+    "\"\n",
+  ]
+
+prop "array-of-tables entries stay separate" (k : Int) = parseTableCount "gate" (mkGates k) == 2
+  && parseTableEntryStr "gate" 0 "name" (mkGates k) == Some ("g" ++ intToString k)
+  && parseTableEntryStr "gate" 1 "name" (mkGates k) == Some ("h" ++ intToString k)
