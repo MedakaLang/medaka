@@ -601,9 +601,16 @@ cleanupScratch dir =
 -- and would red-light every shard.  Keep the weak local heuristic for local
 -- trees; defer to the strong signal where it exists.
 --
--- Unlike run_gates.sh this does NOT scrape `test/bin/<name>` out of the gate
--- script: the registry's `oracles` field already carries that list (S-2), and
--- the registry is the point.
+-- Like run_gates.sh, this ALSO scrapes `test/bin/<name>` out of each selected
+-- gate's own script text, unioned with the registry's `oracles` field (S-2).
+-- The registry field alone is not enough: it is deliberately FILTERED to
+-- names build_oracles.sh's ENTRIES can build (S-2's `oracles = scrape ∩
+-- ENTRIES`) — correct for driving builds, but a `test/bin/<name>` the filter
+-- dropped (the wasm probes, mostly) is still a real binary a gate's script
+-- can open, and staleness is about "is this specific binary current", not
+-- "who builds it".  That second question belongs to `verify`'s EXISTENCE
+-- check (`knownOracles`/`foreignOracles`, S-4) — which stays filtered on
+-- purpose; do not conflate the two.
 
 hasSourceExt : String -> Bool
 hasSourceExt p = endsWith ".mdk" p || endsWith ".c" p || endsWith ".h" p
@@ -636,6 +643,32 @@ newestSourceMtime root =
 selectedOracles : List Gate -> List String
 selectedOracles [] = []
 selectedOracles (g::gs) = g.oracles ++ selectedOracles gs
+
+-- The unfiltered scrape, mirroring run_gates.sh's own
+-- `grep -ohE 'test/bin/[a-z_0-9]+' "$g" | sed 's|test/bin/||'` over one gate
+-- script's text.
+binTokenPrefix : String
+binTokenPrefix = "test/bin/"
+
+stripBinPrefix : String -> String
+stripBinPrefix s =
+  if startsWith binTokenPrefix s then
+    stringSlice (stringLength binTokenPrefix) (stringLength s) s
+  else
+    s
+
+scrapedOraclesIn : String -> <IO> List String
+scrapedOraclesIn scriptPath = match runCommand "grep" ["-ohE", "test/bin/[a-z_0-9]+", scriptPath]
+  Err _ => []
+  Ok (_, out, _) => map stripBinPrefix (filterList nonBlankLine (splitNl out))
+
+nonBlankLine : String -> Bool
+nonBlankLine s = stringTrim s /= ""
+
+scrapedOracles : String -> List Gate -> <IO> List String
+scrapedOracles _ [] = []
+scrapedOracles root (g::gs) = scrapedOraclesIn "\{root}/\{g.run}"
+  ++ scrapedOracles root gs
 
 -- MISSING is not stale — the gate's own "oracle not built" exit-2 owns that
 -- case and says so in its own words.
@@ -690,7 +723,7 @@ staleRefusal True _ _ = None
 staleRefusal False root gs =
   if envSet "CI" || envSet "NO_STALE_CHECK" then None
   else
-    let names = sortUniqS (selectedOracles gs)
+    let names = sortUniqS (selectedOracles gs ++ scrapedOracles root gs)
     let newest = newestSourceMtime root
     match staleOf root newest names
       [] => None
@@ -1115,16 +1148,32 @@ nonBlank s = stringTrim s /= ""
 -- scoped to THIS worktree (never a bare filesystem walk — this box keeps many
 -- agent worktrees, and `git ls-files` stays scoped to the working tree it is
 -- run in).
-gitLsFilesSh : String -> List String -> <IO> List String
-gitLsFilesSh root args = match runCommand "git" (["-C", root] ++ args ++ ["*.sh"])
-  Err _ => []
-  Ok (_, out, _) => filterList nonBlank (splitNl out)
+--
+-- FAILS LOUD, not `[]` — a spawn failure or a nonzero `git` exit (the classic
+-- "detected dubious ownership" exit 128 a container/shared runner produces)
+-- must not read as "zero candidates," which `verifyClasses`' check 1 cannot
+-- tell apart from a genuinely clean tree.  `toolNames`/`knownOracles` below
+-- stay `Err _ => []` on purpose — that failure direction is SAFE for them
+-- (every ledgered tool/oracle reports as *missing*, which reds loud) — but an
+-- empty candidate list can't itself say "verify couldn't check anything," so
+-- this one needs an explicit top-level error instead.
+gitExitMsg : Int -> String -> String
+gitExitMsg code msg =
+  if msg == "" then
+    "git ls-files exited \{intToString code}"
+  else
+    "git ls-files exited \{intToString code}: \{msg}"
 
-gateCandidates : String -> <IO> List String
-gateCandidates root =
-  let tracked = gitLsFilesSh root ["ls-files"]
-  let untracked = gitLsFilesSh root ["ls-files", "-o", "--exclude-standard"]
-  sortUniqS (tracked ++ untracked)
+gitLsFilesSh : String -> List String -> <IO> Result String (List String)
+gitLsFilesSh root args = match runCommand "git" (["-C", root] ++ args ++ ["*.sh"])
+  Err e => Err "git ls-files failed to run: \{e}"
+  Ok (0, out, _) => Ok (filterList nonBlank (splitNl out))
+  Ok (code, _, err) => Err (gitExitMsg code (stringTrim err))
+
+gateCandidates : String -> <IO> Result String (List String)
+gateCandidates root = match gitLsFilesSh root ["ls-files"]
+  Err m => Err m
+  Ok tracked => map (untracked => sortUniqS (tracked ++ untracked)) (gitLsFilesSh root ["ls-files", "-o", "--exclude-standard"])
 
 -- test/CI-COVERAGE-TOOLS.txt: one non-comment, non-blank line per excluded
 -- tool, keyed by its FIRST whitespace-separated token (repo-relative path,
@@ -1254,19 +1303,21 @@ corpusTargetViolations root (g::gs) = corpusDirsMissing root g.name g.corpus
 
 -- ── assembling and rendering the five classes ───────────────────────────────
 
-verifyClasses : String -> List Gate -> <IO> List (String, List String)
-verifyClasses root gates =
-  let cands = gateCandidates root
-  let tools = toolNames root
-  let runs = allRuns gates
-  let known = knownOracles root
-  [
-    ("unenrolled gate scripts", unenrolledViolations tools runs cands),
-    ("missing run targets", runTargetViolations root gates),
-    ("missing oracle targets", oracleTargetViolations known gates),
-    ("missing corpus targets", corpusTargetViolations root gates),
-    ("unreachable entries", reachabilityViolations gates gates),
-  ]
+verifyClasses : String -> List Gate -> <IO> Result String (List (String, List String))
+verifyClasses root gates = match gateCandidates root
+  Err m => Err "could not enumerate gate candidates: \{m}"
+  Ok cands =>
+    let tools = toolNames root
+    let runs = allRuns gates
+    let known = knownOracles root
+    Ok
+      [
+        ("unenrolled gate scripts", unenrolledViolations tools runs cands),
+        ("missing run targets", runTargetViolations root gates),
+        ("missing oracle targets", oracleTargetViolations known gates),
+        ("missing corpus targets", corpusTargetViolations root gates),
+        ("unreachable entries", reachabilityViolations gates gates),
+      ]
 
 renderClass : (String, List String) -> String
 renderClass (title, []) = "OK    \{title}: 0\n"
@@ -1283,14 +1334,15 @@ totalViolations [] = 0
 totalViolations ((_, vs)::cs) = listLen vs + totalViolations cs
 
 verifyOutput : String -> List Gate -> <IO> Result String String
-verifyOutput root gates =
-  let classes = verifyClasses root gates
-  let n = totalViolations classes
-  let body = renderClasses classes
-  if n == 0 then
-    Ok (body ++ "medaka gate verify: OK — \{intToString (listLen gates)} entries, 0 violations.\n")
-  else
-    Err (body ++ "medaka gate verify: FAIL — \{intToString n} violation(s) across \{intToString (listLen gates)} entries.\n")
+verifyOutput root gates = match verifyClasses root gates
+  Err m => Err "medaka gate verify: \{m}\n"
+  Ok classes =>
+    let n = totalViolations classes
+    let body = renderClasses classes
+    if n == 0 then
+      Ok (body ++ "medaka gate verify: OK — \{intToString (listLen gates)} entries, 0 violations.\n")
+    else
+      Err (body ++ "medaka gate verify: FAIL — \{intToString n} violation(s) across \{intToString (listLen gates)} entries.\n")
 
 -- `verify` prints its body even on failure — the message-carrying `Err`
 -- string above IS the violation report, not a one-liner, so `emit`'s ordinary

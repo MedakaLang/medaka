@@ -1,5 +1,5 @@
 # META
-source_lines=1557
+source_lines=1609
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -605,9 +605,16 @@ cleanupScratch dir =
 -- and would red-light every shard.  Keep the weak local heuristic for local
 -- trees; defer to the strong signal where it exists.
 --
--- Unlike run_gates.sh this does NOT scrape `test/bin/<name>` out of the gate
--- script: the registry's `oracles` field already carries that list (S-2), and
--- the registry is the point.
+-- Like run_gates.sh, this ALSO scrapes `test/bin/<name>` out of each selected
+-- gate's own script text, unioned with the registry's `oracles` field (S-2).
+-- The registry field alone is not enough: it is deliberately FILTERED to
+-- names build_oracles.sh's ENTRIES can build (S-2's `oracles = scrape ∩
+-- ENTRIES`) — correct for driving builds, but a `test/bin/<name>` the filter
+-- dropped (the wasm probes, mostly) is still a real binary a gate's script
+-- can open, and staleness is about "is this specific binary current", not
+-- "who builds it".  That second question belongs to `verify`'s EXISTENCE
+-- check (`knownOracles`/`foreignOracles`, S-4) — which stays filtered on
+-- purpose; do not conflate the two.
 
 hasSourceExt : String -> Bool
 hasSourceExt p = endsWith ".mdk" p || endsWith ".c" p || endsWith ".h" p
@@ -640,6 +647,32 @@ newestSourceMtime root =
 selectedOracles : List Gate -> List String
 selectedOracles [] = []
 selectedOracles (g::gs) = g.oracles ++ selectedOracles gs
+
+-- The unfiltered scrape, mirroring run_gates.sh's own
+-- `grep -ohE 'test/bin/[a-z_0-9]+' "$g" | sed 's|test/bin/||'` over one gate
+-- script's text.
+binTokenPrefix : String
+binTokenPrefix = "test/bin/"
+
+stripBinPrefix : String -> String
+stripBinPrefix s =
+  if startsWith binTokenPrefix s then
+    stringSlice (stringLength binTokenPrefix) (stringLength s) s
+  else
+    s
+
+scrapedOraclesIn : String -> <IO> List String
+scrapedOraclesIn scriptPath = match runCommand "grep" ["-ohE", "test/bin/[a-z_0-9]+", scriptPath]
+  Err _ => []
+  Ok (_, out, _) => map stripBinPrefix (filterList nonBlankLine (splitNl out))
+
+nonBlankLine : String -> Bool
+nonBlankLine s = stringTrim s /= ""
+
+scrapedOracles : String -> List Gate -> <IO> List String
+scrapedOracles _ [] = []
+scrapedOracles root (g::gs) = scrapedOraclesIn "\{root}/\{g.run}"
+  ++ scrapedOracles root gs
 
 -- MISSING is not stale — the gate's own "oracle not built" exit-2 owns that
 -- case and says so in its own words.
@@ -694,7 +727,7 @@ staleRefusal True _ _ = None
 staleRefusal False root gs =
   if envSet "CI" || envSet "NO_STALE_CHECK" then None
   else
-    let names = sortUniqS (selectedOracles gs)
+    let names = sortUniqS (selectedOracles gs ++ scrapedOracles root gs)
     let newest = newestSourceMtime root
     match staleOf root newest names
       [] => None
@@ -1119,16 +1152,32 @@ nonBlank s = stringTrim s /= ""
 -- scoped to THIS worktree (never a bare filesystem walk — this box keeps many
 -- agent worktrees, and `git ls-files` stays scoped to the working tree it is
 -- run in).
-gitLsFilesSh : String -> List String -> <IO> List String
-gitLsFilesSh root args = match runCommand "git" (["-C", root] ++ args ++ ["*.sh"])
-  Err _ => []
-  Ok (_, out, _) => filterList nonBlank (splitNl out)
+--
+-- FAILS LOUD, not `[]` — a spawn failure or a nonzero `git` exit (the classic
+-- "detected dubious ownership" exit 128 a container/shared runner produces)
+-- must not read as "zero candidates," which `verifyClasses`' check 1 cannot
+-- tell apart from a genuinely clean tree.  `toolNames`/`knownOracles` below
+-- stay `Err _ => []` on purpose — that failure direction is SAFE for them
+-- (every ledgered tool/oracle reports as *missing*, which reds loud) — but an
+-- empty candidate list can't itself say "verify couldn't check anything," so
+-- this one needs an explicit top-level error instead.
+gitExitMsg : Int -> String -> String
+gitExitMsg code msg =
+  if msg == "" then
+    "git ls-files exited \{intToString code}"
+  else
+    "git ls-files exited \{intToString code}: \{msg}"
 
-gateCandidates : String -> <IO> List String
-gateCandidates root =
-  let tracked = gitLsFilesSh root ["ls-files"]
-  let untracked = gitLsFilesSh root ["ls-files", "-o", "--exclude-standard"]
-  sortUniqS (tracked ++ untracked)
+gitLsFilesSh : String -> List String -> <IO> Result String (List String)
+gitLsFilesSh root args = match runCommand "git" (["-C", root] ++ args ++ ["*.sh"])
+  Err e => Err "git ls-files failed to run: \{e}"
+  Ok (0, out, _) => Ok (filterList nonBlank (splitNl out))
+  Ok (code, _, err) => Err (gitExitMsg code (stringTrim err))
+
+gateCandidates : String -> <IO> Result String (List String)
+gateCandidates root = match gitLsFilesSh root ["ls-files"]
+  Err m => Err m
+  Ok tracked => map (untracked => sortUniqS (tracked ++ untracked)) (gitLsFilesSh root ["ls-files", "-o", "--exclude-standard"])
 
 -- test/CI-COVERAGE-TOOLS.txt: one non-comment, non-blank line per excluded
 -- tool, keyed by its FIRST whitespace-separated token (repo-relative path,
@@ -1258,19 +1307,21 @@ corpusTargetViolations root (g::gs) = corpusDirsMissing root g.name g.corpus
 
 -- ── assembling and rendering the five classes ───────────────────────────────
 
-verifyClasses : String -> List Gate -> <IO> List (String, List String)
-verifyClasses root gates =
-  let cands = gateCandidates root
-  let tools = toolNames root
-  let runs = allRuns gates
-  let known = knownOracles root
-  [
-    ("unenrolled gate scripts", unenrolledViolations tools runs cands),
-    ("missing run targets", runTargetViolations root gates),
-    ("missing oracle targets", oracleTargetViolations known gates),
-    ("missing corpus targets", corpusTargetViolations root gates),
-    ("unreachable entries", reachabilityViolations gates gates),
-  ]
+verifyClasses : String -> List Gate -> <IO> Result String (List (String, List String))
+verifyClasses root gates = match gateCandidates root
+  Err m => Err "could not enumerate gate candidates: \{m}"
+  Ok cands =>
+    let tools = toolNames root
+    let runs = allRuns gates
+    let known = knownOracles root
+    Ok
+      [
+        ("unenrolled gate scripts", unenrolledViolations tools runs cands),
+        ("missing run targets", runTargetViolations root gates),
+        ("missing oracle targets", oracleTargetViolations known gates),
+        ("missing corpus targets", corpusTargetViolations root gates),
+        ("unreachable entries", reachabilityViolations gates gates),
+      ]
 
 renderClass : (String, List String) -> String
 renderClass (title, []) = "OK    \{title}: 0\n"
@@ -1287,14 +1338,15 @@ totalViolations [] = 0
 totalViolations ((_, vs)::cs) = listLen vs + totalViolations cs
 
 verifyOutput : String -> List Gate -> <IO> Result String String
-verifyOutput root gates =
-  let classes = verifyClasses root gates
-  let n = totalViolations classes
-  let body = renderClasses classes
-  if n == 0 then
-    Ok (body ++ "medaka gate verify: OK — \{intToString (listLen gates)} entries, 0 violations.\n")
-  else
-    Err (body ++ "medaka gate verify: FAIL — \{intToString n} violation(s) across \{intToString (listLen gates)} entries.\n")
+verifyOutput root gates = match verifyClasses root gates
+  Err m => Err "medaka gate verify: \{m}\n"
+  Ok classes =>
+    let n = totalViolations classes
+    let body = renderClasses classes
+    if n == 0 then
+      Ok (body ++ "medaka gate verify: OK — \{intToString (listLen gates)} entries, 0 violations.\n")
+    else
+      Err (body ++ "medaka gate verify: FAIL — \{intToString n} violation(s) across \{intToString (listLen gates)} entries.\n")
 
 -- `verify` prints its body even on failure — the message-carrying `Err`
 -- string above IS the violation report, not a one-liner, so `emit`'s ordinary
@@ -1681,6 +1733,17 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DTypeSig false "selectedOracles" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "selectedOracles" ((PList)) (EListLit))
 (DFunDef false "selectedOracles" ((PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EFieldAccess (EVar "g") "oracles") (EApp (EVar "selectedOracles") (EVar "gs"))))
+(DTypeSig false "binTokenPrefix" (TyCon "String"))
+(DFunDef false "binTokenPrefix" () (ELit (LString "test/bin/")))
+(DTypeSig false "stripBinPrefix" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "stripBinPrefix" ((PVar "s")) (EIf (EApp (EApp (EVar "startsWith") (EVar "binTokenPrefix")) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "binTokenPrefix"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (EVar "s")))
+(DTypeSig false "scrapedOraclesIn" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "scrapedOraclesIn" ((PVar "scriptPath")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "grep"))) (EListLit (ELit (LString "-ohE")) (ELit (LString "test/bin/[a-z_0-9]+")) (EVar "scriptPath"))) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PTuple PWild (PVar "out") PWild)) () (EApp (EApp (EVar "map") (EVar "stripBinPrefix")) (EApp (EApp (EVar "filterList") (EVar "nonBlankLine")) (EApp (EVar "splitNl") (EVar "out")))))))
+(DTypeSig false "nonBlankLine" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "nonBlankLine" ((PVar "s")) (EBinOp "/=" (EApp (EVar "stringTrim") (EVar "s")) (ELit (LString ""))))
+(DTypeSig false "scrapedOracles" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "scrapedOracles" (PWild (PList)) (EListLit))
+(DFunDef false "scrapedOracles" ((PVar "root") (PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EVar "scrapedOraclesIn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "root"))) (ELit (LString "/"))) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (EApp (EApp (EVar "scrapedOracles") (EVar "root")) (EVar "gs"))))
 (DTypeSig false "staleOf" (TyFun (TyCon "String") (TyFun (TyCon "Float") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "staleOf" (PWild PWild (PList)) (EListLit))
 (DFunDef false "staleOf" ((PVar "root") (PVar "newest") (PCons (PVar "o") (PVar "os"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EApp (EVar "staleOf") (EVar "root")) (EVar "newest")) (EVar "os"))) (DoExpr (EMatch (EApp (EVar "statFile") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "root"))) (ELit (LString "/test/bin/"))) (EApp (EVar "display") (EVar "o"))) (ELit (LString "")))) (arm (PCon "Err" PWild) () (EVar "rest")) (arm (PCon "Ok" (PTuple PWild PWild PWild (PVar "mt"))) () (EIf (EBinOp "<" (EVar "mt") (EVar "newest")) (EBinOp "::" (EVar "o") (EVar "rest")) (EVar "rest")))))))
@@ -1696,7 +1759,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "envSet" ((PVar "name")) (EBinOp "/=" (EApp (EApp (EVar "envOr") (EVar "name")) (ELit (LString ""))) (ELit (LString ""))))
 (DTypeSig false "staleRefusal" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))
 (DFunDef false "staleRefusal" ((PCon "True") PWild PWild) (EVar "None"))
-(DFunDef false "staleRefusal" ((PCon "False") (PVar "root") (PVar "gs")) (EIf (EBinOp "||" (EApp (EVar "envSet") (ELit (LString "CI"))) (EApp (EVar "envSet") (ELit (LString "NO_STALE_CHECK")))) (EVar "None") (EBlock (DoLet false false (PVar "names") (EApp (EVar "sortUniqS") (EApp (EVar "selectedOracles") (EVar "gs")))) (DoLet false false (PVar "newest") (EApp (EVar "newestSourceMtime") (EVar "root"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "staleOf") (EVar "root")) (EVar "newest")) (EVar "names")) (arm (PList) () (EVar "None")) (arm (PVar "stale") () (EApp (EVar "Some") (EApp (EVar "staleBanner") (EVar "stale")))))))))
+(DFunDef false "staleRefusal" ((PCon "False") (PVar "root") (PVar "gs")) (EIf (EBinOp "||" (EApp (EVar "envSet") (ELit (LString "CI"))) (EApp (EVar "envSet") (ELit (LString "NO_STALE_CHECK")))) (EVar "None") (EBlock (DoLet false false (PVar "names") (EApp (EVar "sortUniqS") (EBinOp "++" (EApp (EVar "selectedOracles") (EVar "gs")) (EApp (EApp (EVar "scrapedOracles") (EVar "root")) (EVar "gs"))))) (DoLet false false (PVar "newest") (EApp (EVar "newestSourceMtime") (EVar "root"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "staleOf") (EVar "root")) (EVar "newest")) (EVar "names")) (arm (PList) () (EVar "None")) (arm (PVar "stale") () (EApp (EVar "Some") (EApp (EVar "staleBanner") (EVar "stale")))))))))
 (DTypeSig false "shellFor" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "shellFor" ((PVar "script")) (EMatch (EApp (EVar "readFile") (EVar "script")) (arm (PCon "Err" PWild) () (ELit (LString "sh"))) (arm (PCon "Ok" (PVar "src")) () (EIf (EApp (EApp (EVar "substrIn") (ELit (LString "bash"))) (EApp (EVar "firstLineOf") (EVar "src"))) (ELit (LString "bash")) (ELit (LString "sh"))))))
 (DTypeSig false "firstLineOf" (TyFun (TyCon "String") (TyCon "String")))
@@ -1778,10 +1841,12 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "runRunCmdBody" ((PVar "argv")) (EMatch (EApp (EApp (EVar "parseRunArgs") (EVar "argv")) (EVar "emptyRunArgs")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "a")) () (EMatch (EApp (EApp (EVar "parseSelectors") (EFieldAccess (EVar "a") "selectors")) (EListLit)) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate run: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "sels")) () (EBlock (DoLet false false (PVar "path") (EApp (EVar "registryPath") (EFieldAccess (EVar "a") "registry"))) (DoExpr (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate run: cannot read registry: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EApp (EApp (EApp (EVar "selectFor") (EVar "path")) (EFieldAccess (EVar "a") "selectors")) (EVar "sels")) (EVar "src")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "gs")) () (EApp (EApp (EVar "runSelected") (EVar "a")) (EVar "gs")))))))))))))
 (DTypeSig false "nonBlank" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "nonBlank" ((PVar "s")) (EBinOp "/=" (EApp (EVar "stringTrim") (EVar "s")) (ELit (LString ""))))
-(DTypeSig false "gitLsFilesSh" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "gitLsFilesSh" ((PVar "root") (PVar "args")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "git"))) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "-C")) (EVar "root")) (EVar "args")) (EListLit (ELit (LString "*.sh"))))) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PTuple PWild (PVar "out") PWild)) () (EApp (EApp (EVar "filterList") (EVar "nonBlank")) (EApp (EVar "splitNl") (EVar "out"))))))
-(DTypeSig false "gateCandidates" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "gateCandidates" ((PVar "root")) (EBlock (DoLet false false (PVar "tracked") (EApp (EApp (EVar "gitLsFilesSh") (EVar "root")) (EListLit (ELit (LString "ls-files"))))) (DoLet false false (PVar "untracked") (EApp (EApp (EVar "gitLsFilesSh") (EVar "root")) (EListLit (ELit (LString "ls-files")) (ELit (LString "-o")) (ELit (LString "--exclude-standard"))))) (DoExpr (EApp (EVar "sortUniqS") (EBinOp "++" (EVar "tracked") (EVar "untracked"))))))
+(DTypeSig false "gitExitMsg" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "gitExitMsg" ((PVar "code") (PVar "msg")) (EIf (EBinOp "==" (EVar "msg") (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "git ls-files exited ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "git ls-files exited ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString "")))))
+(DTypeSig false "gitLsFilesSh" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "gitLsFilesSh" ((PVar "root") (PVar "args")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "git"))) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "-C")) (EVar "root")) (EVar "args")) (EListLit (ELit (LString "*.sh"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "git ls-files failed to run: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EApp (EVar "Ok") (EApp (EApp (EVar "filterList") (EVar "nonBlank")) (EApp (EVar "splitNl") (EVar "out"))))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EApp (EApp (EVar "gitExitMsg") (EVar "code")) (EApp (EVar "stringTrim") (EVar "err")))))))
+(DTypeSig false "gateCandidates" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "gateCandidates" ((PVar "root")) (EMatch (EApp (EApp (EVar "gitLsFilesSh") (EVar "root")) (EListLit (ELit (LString "ls-files")))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PVar "tracked")) () (EApp (EApp (EVar "map") (ELam ((PVar "untracked")) (EApp (EVar "sortUniqS") (EBinOp "++" (EVar "tracked") (EVar "untracked"))))) (EApp (EApp (EVar "gitLsFilesSh") (EVar "root")) (EListLit (ELit (LString "ls-files")) (ELit (LString "-o")) (ELit (LString "--exclude-standard"))))))))
 (DTypeSig false "liveLine" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "liveLine" ((PVar "l")) (EBinOp "&&" (EApp (EVar "nonBlank") (EVar "l")) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "#"))) (EApp (EVar "stringTrim") (EVar "l"))))))
 (DTypeSig false "firstToken" (TyFun (TyCon "String") (TyCon "String")))
@@ -1828,8 +1893,8 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DTypeSig false "corpusTargetViolations" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "corpusTargetViolations" (PWild (PList)) (EListLit))
 (DFunDef false "corpusTargetViolations" ((PVar "root") (PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EApp (EApp (EVar "corpusDirsMissing") (EVar "root")) (EFieldAccess (EVar "g") "name")) (EFieldAccess (EVar "g") "corpus")) (EApp (EApp (EVar "corpusTargetViolations") (EVar "root")) (EVar "gs"))))
-(DTypeSig false "verifyClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "verifyClasses" ((PVar "root") (PVar "gates")) (EBlock (DoLet false false (PVar "cands") (EApp (EVar "gateCandidates") (EVar "root"))) (DoLet false false (PVar "tools") (EApp (EVar "toolNames") (EVar "root"))) (DoLet false false (PVar "runs") (EApp (EVar "allRuns") (EVar "gates"))) (DoLet false false (PVar "known") (EApp (EVar "knownOracles") (EVar "root"))) (DoExpr (EListLit (ETuple (ELit (LString "unenrolled gate scripts")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cands"))) (ETuple (ELit (LString "missing run targets")) (EApp (EApp (EVar "runTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "missing oracle targets")) (EApp (EApp (EVar "oracleTargetViolations") (EVar "known")) (EVar "gates"))) (ETuple (ELit (LString "missing corpus targets")) (EApp (EApp (EVar "corpusTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unreachable entries")) (EApp (EApp (EVar "reachabilityViolations") (EVar "gates")) (EVar "gates")))))))
+(DTypeSig false "verifyClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))))
+(DFunDef false "verifyClasses" ((PVar "root") (PVar "gates")) (EMatch (EApp (EVar "gateCandidates") (EVar "root")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "could not enumerate gate candidates: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "cands")) () (EBlock (DoLet false false (PVar "tools") (EApp (EVar "toolNames") (EVar "root"))) (DoLet false false (PVar "runs") (EApp (EVar "allRuns") (EVar "gates"))) (DoLet false false (PVar "known") (EApp (EVar "knownOracles") (EVar "root"))) (DoExpr (EApp (EVar "Ok") (EListLit (ETuple (ELit (LString "unenrolled gate scripts")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cands"))) (ETuple (ELit (LString "missing run targets")) (EApp (EApp (EVar "runTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "missing oracle targets")) (EApp (EApp (EVar "oracleTargetViolations") (EVar "known")) (EVar "gates"))) (ETuple (ELit (LString "missing corpus targets")) (EApp (EApp (EVar "corpusTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unreachable entries")) (EApp (EApp (EVar "reachabilityViolations") (EVar "gates")) (EVar "gates"))))))))))
 (DTypeSig false "renderClass" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "String")))
 (DFunDef false "renderClass" ((PTuple (PVar "title") (PList))) (EBinOp "++" (EBinOp "++" (ELit (LString "OK    ")) (EApp (EVar "display") (EVar "title"))) (ELit (LString ": 0\n"))))
 (DFunDef false "renderClass" ((PTuple (PVar "title") (PVar "vs"))) (EBlock (DoLet false false (PVar "names") (EApp (EVar "joinNl") (EApp (EVar "indentedNames") (EVar "vs")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FAIL  ")) (EApp (EVar "display") (EVar "title"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "vs"))))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "names"))) (ELit (LString "\n"))))))
@@ -1840,7 +1905,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "totalViolations" ((PList)) (ELit (LInt 0)))
 (DFunDef false "totalViolations" ((PCons (PTuple PWild (PVar "vs")) (PVar "cs"))) (EBinOp "+" (EApp (EVar "listLen") (EVar "vs")) (EApp (EVar "totalViolations") (EVar "cs"))))
 (DTypeSig false "verifyOutput" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))
-(DFunDef false "verifyOutput" ((PVar "root") (PVar "gates")) (EBlock (DoLet false false (PVar "classes") (EApp (EApp (EVar "verifyClasses") (EVar "root")) (EVar "gates"))) (DoLet false false (PVar "n") (EApp (EVar "totalViolations") (EVar "classes"))) (DoLet false false (PVar "body") (EApp (EVar "renderClasses") (EVar "classes"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Ok") (EBinOp "++" (EVar "body") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: OK — ")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "gates"))))) (ELit (LString " entries, 0 violations.\n"))))) (EApp (EVar "Err") (EBinOp "++" (EVar "body") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: FAIL — ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " violation(s) across "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "gates"))))) (ELit (LString " entries.\n")))))))))
+(DFunDef false "verifyOutput" ((PVar "root") (PVar "gates")) (EMatch (EApp (EApp (EVar "verifyClasses") (EVar "root")) (EVar "gates")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "\n"))))) (arm (PCon "Ok" (PVar "classes")) () (EBlock (DoLet false false (PVar "n") (EApp (EVar "totalViolations") (EVar "classes"))) (DoLet false false (PVar "body") (EApp (EVar "renderClasses") (EVar "classes"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Ok") (EBinOp "++" (EVar "body") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: OK — ")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "gates"))))) (ELit (LString " entries, 0 violations.\n"))))) (EApp (EVar "Err") (EBinOp "++" (EVar "body") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: FAIL — ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " violation(s) across "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "gates"))))) (ELit (LString " entries.\n")))))))))))
 (DData Private "VerifyArgs" () ((variant "VerifyArgs" (ConNamed (field "registry" (TyApp (TyCon "Option") (TyCon "String")))))) ())
 (DTypeSig false "parseVerifyArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "VerifyArgs") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "VerifyArgs")))))
 (DFunDef false "parseVerifyArgs" ((PList) (PVar "acc")) (EApp (EVar "Ok") (EVar "acc")))
@@ -2041,6 +2106,17 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DTypeSig false "selectedOracles" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "selectedOracles" ((PList)) (EListLit))
 (DFunDef false "selectedOracles" ((PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EFieldAccess (EVar "g") "oracles") (EApp (EVar "selectedOracles") (EVar "gs"))))
+(DTypeSig false "binTokenPrefix" (TyCon "String"))
+(DFunDef false "binTokenPrefix" () (ELit (LString "test/bin/")))
+(DTypeSig false "stripBinPrefix" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "stripBinPrefix" ((PVar "s")) (EIf (EApp (EApp (EVar "startsWith") (EVar "binTokenPrefix")) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "binTokenPrefix"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (EVar "s")))
+(DTypeSig false "scrapedOraclesIn" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "scrapedOraclesIn" ((PVar "scriptPath")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "grep"))) (EListLit (ELit (LString "-ohE")) (ELit (LString "test/bin/[a-z_0-9]+")) (EVar "scriptPath"))) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PTuple PWild (PVar "out") PWild)) () (EApp (EApp (EMethodRef "map") (EVar "stripBinPrefix")) (EApp (EApp (EVar "filterList") (EVar "nonBlankLine")) (EApp (EVar "splitNl") (EVar "out")))))))
+(DTypeSig false "nonBlankLine" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "nonBlankLine" ((PVar "s")) (EBinOp "/=" (EApp (EVar "stringTrim") (EVar "s")) (ELit (LString ""))))
+(DTypeSig false "scrapedOracles" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "scrapedOracles" (PWild (PList)) (EListLit))
+(DFunDef false "scrapedOracles" ((PVar "root") (PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EVar "scrapedOraclesIn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "root"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (EApp (EApp (EVar "scrapedOracles") (EVar "root")) (EVar "gs"))))
 (DTypeSig false "staleOf" (TyFun (TyCon "String") (TyFun (TyCon "Float") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "staleOf" (PWild PWild (PList)) (EListLit))
 (DFunDef false "staleOf" ((PVar "root") (PVar "newest") (PCons (PVar "o") (PVar "os"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EApp (EVar "staleOf") (EVar "root")) (EVar "newest")) (EVar "os"))) (DoExpr (EMatch (EApp (EVar "statFile") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "root"))) (ELit (LString "/test/bin/"))) (EApp (EMethodRef "display") (EVar "o"))) (ELit (LString "")))) (arm (PCon "Err" PWild) () (EVar "rest")) (arm (PCon "Ok" (PTuple PWild PWild PWild (PVar "mt"))) () (EIf (EBinOp "<" (EVar "mt") (EVar "newest")) (EBinOp "::" (EVar "o") (EVar "rest")) (EVar "rest")))))))
@@ -2056,7 +2132,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "envSet" ((PVar "name")) (EBinOp "/=" (EApp (EApp (EVar "envOr") (EVar "name")) (ELit (LString ""))) (ELit (LString ""))))
 (DTypeSig false "staleRefusal" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))))
 (DFunDef false "staleRefusal" ((PCon "True") PWild PWild) (EVar "None"))
-(DFunDef false "staleRefusal" ((PCon "False") (PVar "root") (PVar "gs")) (EIf (EBinOp "||" (EApp (EVar "envSet") (ELit (LString "CI"))) (EApp (EVar "envSet") (ELit (LString "NO_STALE_CHECK")))) (EVar "None") (EBlock (DoLet false false (PVar "names") (EApp (EVar "sortUniqS") (EApp (EVar "selectedOracles") (EVar "gs")))) (DoLet false false (PVar "newest") (EApp (EVar "newestSourceMtime") (EVar "root"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "staleOf") (EVar "root")) (EVar "newest")) (EVar "names")) (arm (PList) () (EVar "None")) (arm (PVar "stale") () (EApp (EVar "Some") (EApp (EVar "staleBanner") (EVar "stale")))))))))
+(DFunDef false "staleRefusal" ((PCon "False") (PVar "root") (PVar "gs")) (EIf (EBinOp "||" (EApp (EVar "envSet") (ELit (LString "CI"))) (EApp (EVar "envSet") (ELit (LString "NO_STALE_CHECK")))) (EVar "None") (EBlock (DoLet false false (PVar "names") (EApp (EVar "sortUniqS") (EBinOp "++" (EApp (EVar "selectedOracles") (EVar "gs")) (EApp (EApp (EVar "scrapedOracles") (EVar "root")) (EVar "gs"))))) (DoLet false false (PVar "newest") (EApp (EVar "newestSourceMtime") (EVar "root"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "staleOf") (EVar "root")) (EVar "newest")) (EVar "names")) (arm (PList) () (EVar "None")) (arm (PVar "stale") () (EApp (EVar "Some") (EApp (EVar "staleBanner") (EVar "stale")))))))))
 (DTypeSig false "shellFor" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "shellFor" ((PVar "script")) (EMatch (EApp (EVar "readFile") (EVar "script")) (arm (PCon "Err" PWild) () (ELit (LString "sh"))) (arm (PCon "Ok" (PVar "src")) () (EIf (EApp (EApp (EVar "substrIn") (ELit (LString "bash"))) (EApp (EVar "firstLineOf") (EVar "src"))) (ELit (LString "bash")) (ELit (LString "sh"))))))
 (DTypeSig false "firstLineOf" (TyFun (TyCon "String") (TyCon "String")))
@@ -2138,10 +2214,12 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "runRunCmdBody" ((PVar "argv")) (EMatch (EApp (EApp (EVar "parseRunArgs") (EVar "argv")) (EVar "emptyRunArgs")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "a")) () (EMatch (EApp (EApp (EVar "parseSelectors") (EFieldAccess (EVar "a") "selectors")) (EListLit)) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate run: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "sels")) () (EBlock (DoLet false false (PVar "path") (EApp (EVar "registryPath") (EFieldAccess (EVar "a") "registry"))) (DoExpr (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate run: cannot read registry: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EApp (EApp (EApp (EVar "selectFor") (EVar "path")) (EFieldAccess (EVar "a") "selectors")) (EVar "sels")) (EVar "src")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "gs")) () (EApp (EApp (EVar "runSelected") (EVar "a")) (EVar "gs")))))))))))))
 (DTypeSig false "nonBlank" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "nonBlank" ((PVar "s")) (EBinOp "/=" (EApp (EVar "stringTrim") (EVar "s")) (ELit (LString ""))))
-(DTypeSig false "gitLsFilesSh" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "gitLsFilesSh" ((PVar "root") (PVar "args")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "git"))) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "-C")) (EVar "root")) (EVar "args")) (EListLit (ELit (LString "*.sh"))))) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PTuple PWild (PVar "out") PWild)) () (EApp (EApp (EVar "filterList") (EVar "nonBlank")) (EApp (EVar "splitNl") (EVar "out"))))))
-(DTypeSig false "gateCandidates" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "gateCandidates" ((PVar "root")) (EBlock (DoLet false false (PVar "tracked") (EApp (EApp (EVar "gitLsFilesSh") (EVar "root")) (EListLit (ELit (LString "ls-files"))))) (DoLet false false (PVar "untracked") (EApp (EApp (EVar "gitLsFilesSh") (EVar "root")) (EListLit (ELit (LString "ls-files")) (ELit (LString "-o")) (ELit (LString "--exclude-standard"))))) (DoExpr (EApp (EVar "sortUniqS") (EBinOp "++" (EVar "tracked") (EVar "untracked"))))))
+(DTypeSig false "gitExitMsg" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "gitExitMsg" ((PVar "code") (PVar "msg")) (EIf (EBinOp "==" (EVar "msg") (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (ELit (LString "git ls-files exited ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "git ls-files exited ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString "")))))
+(DTypeSig false "gitLsFilesSh" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "gitLsFilesSh" ((PVar "root") (PVar "args")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "git"))) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "-C")) (EVar "root")) (EVar "args")) (EListLit (ELit (LString "*.sh"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "git ls-files failed to run: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EApp (EVar "Ok") (EApp (EApp (EVar "filterList") (EVar "nonBlank")) (EApp (EVar "splitNl") (EVar "out"))))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EApp (EApp (EVar "gitExitMsg") (EVar "code")) (EApp (EVar "stringTrim") (EVar "err")))))))
+(DTypeSig false "gateCandidates" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "gateCandidates" ((PVar "root")) (EMatch (EApp (EApp (EVar "gitLsFilesSh") (EVar "root")) (EListLit (ELit (LString "ls-files")))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PVar "tracked")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "untracked")) (EApp (EVar "sortUniqS") (EBinOp "++" (EVar "tracked") (EVar "untracked"))))) (EApp (EApp (EVar "gitLsFilesSh") (EVar "root")) (EListLit (ELit (LString "ls-files")) (ELit (LString "-o")) (ELit (LString "--exclude-standard"))))))))
 (DTypeSig false "liveLine" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "liveLine" ((PVar "l")) (EBinOp "&&" (EApp (EVar "nonBlank") (EVar "l")) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "#"))) (EApp (EVar "stringTrim") (EVar "l"))))))
 (DTypeSig false "firstToken" (TyFun (TyCon "String") (TyCon "String")))
@@ -2188,8 +2266,8 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DTypeSig false "corpusTargetViolations" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "corpusTargetViolations" (PWild (PList)) (EListLit))
 (DFunDef false "corpusTargetViolations" ((PVar "root") (PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EApp (EApp (EVar "corpusDirsMissing") (EVar "root")) (EFieldAccess (EVar "g") "name")) (EFieldAccess (EVar "g") "corpus")) (EApp (EApp (EVar "corpusTargetViolations") (EVar "root")) (EVar "gs"))))
-(DTypeSig false "verifyClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "verifyClasses" ((PVar "root") (PVar "gates")) (EBlock (DoLet false false (PVar "cands") (EApp (EVar "gateCandidates") (EVar "root"))) (DoLet false false (PVar "tools") (EApp (EVar "toolNames") (EVar "root"))) (DoLet false false (PVar "runs") (EApp (EVar "allRuns") (EVar "gates"))) (DoLet false false (PVar "known") (EApp (EVar "knownOracles") (EVar "root"))) (DoExpr (EListLit (ETuple (ELit (LString "unenrolled gate scripts")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cands"))) (ETuple (ELit (LString "missing run targets")) (EApp (EApp (EVar "runTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "missing oracle targets")) (EApp (EApp (EVar "oracleTargetViolations") (EVar "known")) (EVar "gates"))) (ETuple (ELit (LString "missing corpus targets")) (EApp (EApp (EVar "corpusTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unreachable entries")) (EApp (EApp (EVar "reachabilityViolations") (EVar "gates")) (EVar "gates")))))))
+(DTypeSig false "verifyClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))))
+(DFunDef false "verifyClasses" ((PVar "root") (PVar "gates")) (EMatch (EApp (EVar "gateCandidates") (EVar "root")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "could not enumerate gate candidates: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "cands")) () (EBlock (DoLet false false (PVar "tools") (EApp (EVar "toolNames") (EVar "root"))) (DoLet false false (PVar "runs") (EApp (EVar "allRuns") (EVar "gates"))) (DoLet false false (PVar "known") (EApp (EVar "knownOracles") (EVar "root"))) (DoExpr (EApp (EVar "Ok") (EListLit (ETuple (ELit (LString "unenrolled gate scripts")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cands"))) (ETuple (ELit (LString "missing run targets")) (EApp (EApp (EVar "runTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "missing oracle targets")) (EApp (EApp (EVar "oracleTargetViolations") (EVar "known")) (EVar "gates"))) (ETuple (ELit (LString "missing corpus targets")) (EApp (EApp (EVar "corpusTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unreachable entries")) (EApp (EApp (EVar "reachabilityViolations") (EVar "gates")) (EVar "gates"))))))))))
 (DTypeSig false "renderClass" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "String")))
 (DFunDef false "renderClass" ((PTuple (PVar "title") (PList))) (EBinOp "++" (EBinOp "++" (ELit (LString "OK    ")) (EApp (EMethodRef "display") (EVar "title"))) (ELit (LString ": 0\n"))))
 (DFunDef false "renderClass" ((PTuple (PVar "title") (PVar "vs"))) (EBlock (DoLet false false (PVar "names") (EApp (EVar "joinNl") (EApp (EVar "indentedNames") (EVar "vs")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FAIL  ")) (EApp (EMethodRef "display") (EVar "title"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "vs"))))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "names"))) (ELit (LString "\n"))))))
@@ -2200,7 +2278,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "totalViolations" ((PList)) (ELit (LInt 0)))
 (DFunDef false "totalViolations" ((PCons (PTuple PWild (PVar "vs")) (PVar "cs"))) (EBinOp "+" (EApp (EVar "listLen") (EVar "vs")) (EApp (EVar "totalViolations") (EVar "cs"))))
 (DTypeSig false "verifyOutput" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))
-(DFunDef false "verifyOutput" ((PVar "root") (PVar "gates")) (EBlock (DoLet false false (PVar "classes") (EApp (EApp (EVar "verifyClasses") (EVar "root")) (EVar "gates"))) (DoLet false false (PVar "n") (EApp (EVar "totalViolations") (EVar "classes"))) (DoLet false false (PVar "body") (EApp (EVar "renderClasses") (EVar "classes"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Ok") (EBinOp "++" (EVar "body") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: OK — ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "gates"))))) (ELit (LString " entries, 0 violations.\n"))))) (EApp (EVar "Err") (EBinOp "++" (EVar "body") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: FAIL — ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " violation(s) across "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "gates"))))) (ELit (LString " entries.\n")))))))))
+(DFunDef false "verifyOutput" ((PVar "root") (PVar "gates")) (EMatch (EApp (EApp (EVar "verifyClasses") (EVar "root")) (EVar "gates")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "\n"))))) (arm (PCon "Ok" (PVar "classes")) () (EBlock (DoLet false false (PVar "n") (EApp (EVar "totalViolations") (EVar "classes"))) (DoLet false false (PVar "body") (EApp (EVar "renderClasses") (EVar "classes"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Ok") (EBinOp "++" (EVar "body") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: OK — ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "gates"))))) (ELit (LString " entries, 0 violations.\n"))))) (EApp (EVar "Err") (EBinOp "++" (EVar "body") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: FAIL — ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " violation(s) across "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "gates"))))) (ELit (LString " entries.\n")))))))))))
 (DData Private "VerifyArgs" () ((variant "VerifyArgs" (ConNamed (field "registry" (TyApp (TyCon "Option") (TyCon "String")))))) ())
 (DTypeSig false "parseVerifyArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "VerifyArgs") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "VerifyArgs")))))
 (DFunDef false "parseVerifyArgs" ((PList) (PVar "acc")) (EApp (EVar "Ok") (EVar "acc")))
