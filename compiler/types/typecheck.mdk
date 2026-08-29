@@ -4246,7 +4246,9 @@ emptyDataEnv = DataEnv {
 -- the declaring module's ORDINAL, and the flattened list has no ordinal in it —
 -- the same reason `buildImplEnv` has always read rows (see `buildDeclEnvs`).
 buildDataEnv : List DeclEnvModule -> DataEnv
-buildDataEnv rows = dataEnvFromRowsGo rows emptyDataEnv
+buildDataEnv rows =
+  let env = dataEnvFromRowsGo rows emptyDataEnv
+  DataEnv { env | deRecordIdents = omMapValues reverseL env.deRecordIdents, deFieldOwnerIdents = omMapValues reverseL env.deFieldOwnerIdents }
 
 dataEnvFromRowsGo : List DeclEnvModule -> DataEnv -> DataEnv
 dataEnvFromRowsGo [] acc = acc
@@ -4337,9 +4339,16 @@ addCtorIdentRaw tyName o cn payload env = match mkIdent NsCtor o cn
       ConNamed fields _ => addRecordIdentRaw tyName cn ident fields env2
       ConPos _ => env2
 
+-- ✅ FIXED (#2147): both `deRecordIdents` and `deFieldOwnerIdents` buckets used
+-- to be `++ [x]` per insert — O(bucket²) over the build. Now conses onto each
+-- key's bucket (reversing that bucket's visible order immediately, since these
+-- are keyed `OrdMap (List ...)` buckets read-modify-written throughout the
+-- whole fold, not one flat list reversed once at the end); `buildDataEnv`
+-- restores order with one `omMapValues reverseL` pass over each map, once,
+-- when the fold finishes. Values are byte-identical, only the fold is linear.
 addRecordIdentRaw : String -> String -> Ident -> List Field -> DataEnv -> DataEnv
 addRecordIdentRaw tyName cn ident fields env =
-  let next = fromOption [] (omLookup cn env.deRecordIdents) ++ [(ident, tyName, fields)]
+  let next = (ident, tyName, fields) :: fromOption [] (omLookup cn env.deRecordIdents)
   addFieldOwnerIdents
     ident
     cn
@@ -4349,7 +4358,7 @@ addRecordIdentRaw tyName cn ident fields env =
 addFieldOwnerIdents : Ident -> String -> List Field -> DataEnv -> DataEnv
 addFieldOwnerIdents _ _ [] env = env
 addFieldOwnerIdents ident cn ((Field fn _)::rest) env =
-  let next = fromOption [] (omLookup fn env.deFieldOwnerIdents) ++ [(ident, cn)]
+  let next = (ident, cn) :: fromOption [] (omLookup fn env.deFieldOwnerIdents)
   addFieldOwnerIdents
     ident
     cn
@@ -4857,7 +4866,8 @@ emptyImplEnv = ImplEnv {
 buildImplEnv : List DeclEnvModule -> ImplEnv
 buildImplEnv mods =
   let env = buildImplEnvGo mods 0 emptyImplEnv
-  ImplEnv { env | ieUnivSnaps = ieBuildSnaps env.ieRows }
+  let env2 = ImplEnv { env | ieRows = reverseL env.ieRows }
+  ImplEnv { env2 | ieUnivSnaps = ieBuildSnaps env2.ieRows }
 
 buildImplEnvGo : List DeclEnvModule -> Int -> ImplEnv -> ImplEnv
 buildImplEnvGo [] _ env = env
@@ -5026,19 +5036,16 @@ ieAddRows (r::rest) env = ieAddRows rest (ieInsertRow r env)
 -- interface.  ONLY interface-keyed indexes belong here; anything else DOUBLE-FILES.
 -- The once-per-row seam is `ieFileRow` — read its header before adding a bucket.
 --
--- ⚠️ OWED, RECORDED RATHER THAN FIXED UNDER REVIEW: `env.ieRows ++ [r]` is an
--- append PER ROW, i.e. O(rows²) over the build.  It is small today — a tree-wide
--- `impl` count in the low hundreds — but it is precisely the shape
--- `compiler/AGENTS.md` forbids ("thirteen quadratics, all the same shape"), and
--- §9.8 item 8's timing A/B is still OWED, so nothing has actually measured its
--- cost.  The fix is one line: cons and `reverseL` once in `buildImplEnv`, which
--- preserves build order.  Deliberately not done in a review round that is
--- otherwise comment-only, so that the byte-identical claim keeps its evidence.
+-- ✅ FIXED (#2146): `env.ieRows` used to be `++ [r]`, an append PER ROW —
+-- O(rows²) over the build, exactly the shape `compiler/AGENTS.md` forbids
+-- ("thirteen quadratics, all the same shape"). Now conses (`r :: env.ieRows`);
+-- `buildImplEnv` does the one `reverseL` at the end, once, which restores build
+-- order — the values are byte-identical, only the fold is linear now.
 -- 🚨 DOES NOT MAINTAIN `ieUnivSnaps` — the table `ieUniverseAt` actually reads.  Only
 -- `buildImplEnv` derives that, after all inserts are done.  Full hazard, and what to do
 -- if you need to insert into a built `ImplEnv`, at `ieAddRows` above.
 ieInsertRow : ImplRow -> ImplEnv -> ImplEnv
-ieInsertRow r env = ieFileRow r { env | ieRows = env.ieRows ++ [r] }
+ieInsertRow r env = ieFileRow r { env | ieRows = r::env.ieRows }
 
 -- ── ARCH B-2.1-a3 (Stage B sprint): THE ONE ONCE-PER-ROW FILING SEAM ──────────
 -- 🚨 EVERY PER-ROW INDEX GOES HERE, AND THE REASON IS A CORRECTNESS CONSTRAINT,

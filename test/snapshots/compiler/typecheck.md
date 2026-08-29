@@ -1,5 +1,5 @@
 # META
-source_lines=37123
+source_lines=37130
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -4250,7 +4250,9 @@ emptyDataEnv = DataEnv {
 -- the declaring module's ORDINAL, and the flattened list has no ordinal in it —
 -- the same reason `buildImplEnv` has always read rows (see `buildDeclEnvs`).
 buildDataEnv : List DeclEnvModule -> DataEnv
-buildDataEnv rows = dataEnvFromRowsGo rows emptyDataEnv
+buildDataEnv rows =
+  let env = dataEnvFromRowsGo rows emptyDataEnv
+  DataEnv { env | deRecordIdents = omMapValues reverseL env.deRecordIdents, deFieldOwnerIdents = omMapValues reverseL env.deFieldOwnerIdents }
 
 dataEnvFromRowsGo : List DeclEnvModule -> DataEnv -> DataEnv
 dataEnvFromRowsGo [] acc = acc
@@ -4341,9 +4343,16 @@ addCtorIdentRaw tyName o cn payload env = match mkIdent NsCtor o cn
       ConNamed fields _ => addRecordIdentRaw tyName cn ident fields env2
       ConPos _ => env2
 
+-- ✅ FIXED (#2147): both `deRecordIdents` and `deFieldOwnerIdents` buckets used
+-- to be `++ [x]` per insert — O(bucket²) over the build. Now conses onto each
+-- key's bucket (reversing that bucket's visible order immediately, since these
+-- are keyed `OrdMap (List ...)` buckets read-modify-written throughout the
+-- whole fold, not one flat list reversed once at the end); `buildDataEnv`
+-- restores order with one `omMapValues reverseL` pass over each map, once,
+-- when the fold finishes. Values are byte-identical, only the fold is linear.
 addRecordIdentRaw : String -> String -> Ident -> List Field -> DataEnv -> DataEnv
 addRecordIdentRaw tyName cn ident fields env =
-  let next = fromOption [] (omLookup cn env.deRecordIdents) ++ [(ident, tyName, fields)]
+  let next = (ident, tyName, fields) :: fromOption [] (omLookup cn env.deRecordIdents)
   addFieldOwnerIdents
     ident
     cn
@@ -4353,7 +4362,7 @@ addRecordIdentRaw tyName cn ident fields env =
 addFieldOwnerIdents : Ident -> String -> List Field -> DataEnv -> DataEnv
 addFieldOwnerIdents _ _ [] env = env
 addFieldOwnerIdents ident cn ((Field fn _)::rest) env =
-  let next = fromOption [] (omLookup fn env.deFieldOwnerIdents) ++ [(ident, cn)]
+  let next = (ident, cn) :: fromOption [] (omLookup fn env.deFieldOwnerIdents)
   addFieldOwnerIdents
     ident
     cn
@@ -4861,7 +4870,8 @@ emptyImplEnv = ImplEnv {
 buildImplEnv : List DeclEnvModule -> ImplEnv
 buildImplEnv mods =
   let env = buildImplEnvGo mods 0 emptyImplEnv
-  ImplEnv { env | ieUnivSnaps = ieBuildSnaps env.ieRows }
+  let env2 = ImplEnv { env | ieRows = reverseL env.ieRows }
+  ImplEnv { env2 | ieUnivSnaps = ieBuildSnaps env2.ieRows }
 
 buildImplEnvGo : List DeclEnvModule -> Int -> ImplEnv -> ImplEnv
 buildImplEnvGo [] _ env = env
@@ -5030,19 +5040,16 @@ ieAddRows (r::rest) env = ieAddRows rest (ieInsertRow r env)
 -- interface.  ONLY interface-keyed indexes belong here; anything else DOUBLE-FILES.
 -- The once-per-row seam is `ieFileRow` — read its header before adding a bucket.
 --
--- ⚠️ OWED, RECORDED RATHER THAN FIXED UNDER REVIEW: `env.ieRows ++ [r]` is an
--- append PER ROW, i.e. O(rows²) over the build.  It is small today — a tree-wide
--- `impl` count in the low hundreds — but it is precisely the shape
--- `compiler/AGENTS.md` forbids ("thirteen quadratics, all the same shape"), and
--- §9.8 item 8's timing A/B is still OWED, so nothing has actually measured its
--- cost.  The fix is one line: cons and `reverseL` once in `buildImplEnv`, which
--- preserves build order.  Deliberately not done in a review round that is
--- otherwise comment-only, so that the byte-identical claim keeps its evidence.
+-- ✅ FIXED (#2146): `env.ieRows` used to be `++ [r]`, an append PER ROW —
+-- O(rows²) over the build, exactly the shape `compiler/AGENTS.md` forbids
+-- ("thirteen quadratics, all the same shape"). Now conses (`r :: env.ieRows`);
+-- `buildImplEnv` does the one `reverseL` at the end, once, which restores build
+-- order — the values are byte-identical, only the fold is linear now.
 -- 🚨 DOES NOT MAINTAIN `ieUnivSnaps` — the table `ieUniverseAt` actually reads.  Only
 -- `buildImplEnv` derives that, after all inserts are done.  Full hazard, and what to do
 -- if you need to insert into a built `ImplEnv`, at `ieAddRows` above.
 ieInsertRow : ImplRow -> ImplEnv -> ImplEnv
-ieInsertRow r env = ieFileRow r { env | ieRows = env.ieRows ++ [r] }
+ieInsertRow r env = ieFileRow r { env | ieRows = r::env.ieRows }
 
 -- ── ARCH B-2.1-a3 (Stage B sprint): THE ONE ONCE-PER-ROW FILING SEAM ──────────
 -- 🚨 EVERY PER-ROW INDEX GOES HERE, AND THE REASON IS A CORRECTNESS CONSTRAINT,
@@ -37780,7 +37787,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "emptyDataEnv" (TyCon "DataEnv"))
 (DFunDef false "emptyDataEnv" () (ERecordCreate "DataEnv" ((fa "deTypes" (EListLit)) (fa "deCtorIdents" (EVar "omEmpty")) (fa "deRecordIdents" (EVar "omEmpty")) (fa "deFieldOwnerIdents" (EVar "omEmpty")) (fa "deAliases" (EListLit)))))
 (DTypeSig false "buildDataEnv" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyCon "DataEnv")))
-(DFunDef false "buildDataEnv" ((PVar "rows")) (EApp (EApp (EVar "dataEnvFromRowsGo") (EVar "rows")) (EVar "emptyDataEnv")))
+(DFunDef false "buildDataEnv" ((PVar "rows")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EVar "dataEnvFromRowsGo") (EVar "rows")) (EVar "emptyDataEnv"))) (DoExpr (EVariantUpdate "DataEnv" (EVar "env") ((fa "deRecordIdents" (EApp (EApp (EVar "omMapValues") (EVar "reverseL")) (EFieldAccess (EVar "env") "deRecordIdents"))) (fa "deFieldOwnerIdents" (EApp (EApp (EVar "omMapValues") (EVar "reverseL")) (EFieldAccess (EVar "env") "deFieldOwnerIdents"))))))))
 (DTypeSig false "dataEnvFromRowsGo" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv"))))
 (DFunDef false "dataEnvFromRowsGo" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "dataEnvFromRowsGo" ((PCons (PVar "m") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "dataEnvFromRowsGo") (EVar "rest")) (EApp (EApp (EApp (EVar "dataEnvFromDeclsGo") (EFieldAccess (EVar "m") "demOrd")) (EFieldAccess (EVar "m") "demDecls")) (EVar "acc"))))
@@ -37801,10 +37808,10 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "addCtorIdentRaw" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "ConPayload") (TyFun (TyCon "DataEnv") (TyCon "DataEnv")))))))
 (DFunDef false "addCtorIdentRaw" ((PVar "tyName") (PVar "o") (PVar "cn") (PVar "payload") (PVar "env")) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsCtor")) (EVar "o")) (EVar "cn")) (arm (PCon "None") () (EVar "env")) (arm (PCon "Some" (PVar "ident")) () (EBlock (DoLet false false (PVar "next") (EBinOp "++" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "cn")) (EFieldAccess (EVar "env") "deCtorIdents"))) (EListLit (ETuple (EVar "ident") (EVar "tyName") (EApp (EApp (EVar "Variant") (EVar "cn")) (EVar "payload")))))) (DoLet false false (PVar "env2") (EVariantUpdate "DataEnv" (EVar "env") ((fa "deCtorIdents" (EApp (EApp (EApp (EVar "omInsert") (EVar "cn")) (EVar "next")) (EFieldAccess (EVar "env") "deCtorIdents")))))) (DoExpr (EMatch (EVar "payload") (arm (PCon "ConNamed" (PVar "fields") PWild) () (EApp (EApp (EApp (EApp (EApp (EVar "addRecordIdentRaw") (EVar "tyName")) (EVar "cn")) (EVar "ident")) (EVar "fields")) (EVar "env2"))) (arm (PCon "ConPos" PWild) () (EVar "env2"))))))))
 (DTypeSig false "addRecordIdentRaw" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyCon "Field")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv")))))))
-(DFunDef false "addRecordIdentRaw" ((PVar "tyName") (PVar "cn") (PVar "ident") (PVar "fields") (PVar "env")) (EBlock (DoLet false false (PVar "next") (EBinOp "++" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "cn")) (EFieldAccess (EVar "env") "deRecordIdents"))) (EListLit (ETuple (EVar "ident") (EVar "tyName") (EVar "fields"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "addFieldOwnerIdents") (EVar "ident")) (EVar "cn")) (EVar "fields")) (EVariantUpdate "DataEnv" (EVar "env") ((fa "deRecordIdents" (EApp (EApp (EApp (EVar "omInsert") (EVar "cn")) (EVar "next")) (EFieldAccess (EVar "env") "deRecordIdents")))))))))
+(DFunDef false "addRecordIdentRaw" ((PVar "tyName") (PVar "cn") (PVar "ident") (PVar "fields") (PVar "env")) (EBlock (DoLet false false (PVar "next") (EBinOp "::" (ETuple (EVar "ident") (EVar "tyName") (EVar "fields")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "cn")) (EFieldAccess (EVar "env") "deRecordIdents"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "addFieldOwnerIdents") (EVar "ident")) (EVar "cn")) (EVar "fields")) (EVariantUpdate "DataEnv" (EVar "env") ((fa "deRecordIdents" (EApp (EApp (EApp (EVar "omInsert") (EVar "cn")) (EVar "next")) (EFieldAccess (EVar "env") "deRecordIdents")))))))))
 (DTypeSig false "addFieldOwnerIdents" (TyFun (TyCon "Ident") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Field")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv"))))))
 (DFunDef false "addFieldOwnerIdents" (PWild PWild (PList) (PVar "env")) (EVar "env"))
-(DFunDef false "addFieldOwnerIdents" ((PVar "ident") (PVar "cn") (PCons (PCon "Field" (PVar "fn") PWild) (PVar "rest")) (PVar "env")) (EBlock (DoLet false false (PVar "next") (EBinOp "++" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fn")) (EFieldAccess (EVar "env") "deFieldOwnerIdents"))) (EListLit (ETuple (EVar "ident") (EVar "cn"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "addFieldOwnerIdents") (EVar "ident")) (EVar "cn")) (EVar "rest")) (EVariantUpdate "DataEnv" (EVar "env") ((fa "deFieldOwnerIdents" (EApp (EApp (EApp (EVar "omInsert") (EVar "fn")) (EVar "next")) (EFieldAccess (EVar "env") "deFieldOwnerIdents")))))))))
+(DFunDef false "addFieldOwnerIdents" ((PVar "ident") (PVar "cn") (PCons (PCon "Field" (PVar "fn") PWild) (PVar "rest")) (PVar "env")) (EBlock (DoLet false false (PVar "next") (EBinOp "::" (ETuple (EVar "ident") (EVar "cn")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fn")) (EFieldAccess (EVar "env") "deFieldOwnerIdents"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "addFieldOwnerIdents") (EVar "ident")) (EVar "cn")) (EVar "rest")) (EVariantUpdate "DataEnv" (EVar "env") ((fa "deFieldOwnerIdents" (EApp (EApp (EApp (EVar "omInsert") (EVar "fn")) (EVar "next")) (EFieldAccess (EVar "env") "deFieldOwnerIdents")))))))))
 (DTypeSig false "addAliasDecl" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "DataEnv") (TyCon "DataEnv"))))))))))
 (DFunDef false "addAliasDecl" ((PVar "name") (PVar "o") (PVar "params") (PVar "rhs") (PVar "ord") (PVar "pub") (PVar "att") (PVar "env")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "name"))) (DoLet false false (PVar "ad") (ERecordCreate "AliasDecl" ((fa "adKey" (EVar "key")) (fa "adName" (EVar "name")) (fa "adParams" (EVar "params")) (fa "adRhs" (EVar "rhs")) (fa "adOrd" (EVar "ord")) (fa "adPub" (EVar "pub")) (fa "adAttrib" (EVar "att"))))) (DoExpr (EVariantUpdate "DataEnv" (EVar "env") ((fa "deAliases" (EBinOp "::" (ETuple (EVar "key") (EVar "ad")) (EFieldAccess (EVar "env") "deAliases"))))))))
 (DTypeSig false "aliasUniverseAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl"))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))))
@@ -37855,7 +37862,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "emptyImplEnv" (TyCon "ImplEnv"))
 (DFunDef false "emptyImplEnv" () (ERecordCreate "ImplEnv" ((fa "ieRows" (EListLit)) (fa "ieConcrete" (EVar "mregEmpty")) (fa "ieHeadless" (EVar "mregEmpty")) (fa "ieByHead" (EVar "mregEmpty")) (fa "ieIfaceTags" (EVar "regEmpty")) (fa "ieUnivSnaps" (EListLit)))))
 (DTypeSig false "buildImplEnv" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyCon "ImplEnv")))
-(DFunDef false "buildImplEnv" ((PVar "mods")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EApp (EVar "buildImplEnvGo") (EVar "mods")) (ELit (LInt 0))) (EVar "emptyImplEnv"))) (DoExpr (EVariantUpdate "ImplEnv" (EVar "env") ((fa "ieUnivSnaps" (EApp (EVar "ieBuildSnaps") (EFieldAccess (EVar "env") "ieRows"))))))))
+(DFunDef false "buildImplEnv" ((PVar "mods")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EApp (EVar "buildImplEnvGo") (EVar "mods")) (ELit (LInt 0))) (EVar "emptyImplEnv"))) (DoLet false false (PVar "env2") (EVariantUpdate "ImplEnv" (EVar "env") ((fa "ieRows" (EApp (EVar "reverseL") (EFieldAccess (EVar "env") "ieRows")))))) (DoExpr (EVariantUpdate "ImplEnv" (EVar "env2") ((fa "ieUnivSnaps" (EApp (EVar "ieBuildSnaps") (EFieldAccess (EVar "env2") "ieRows"))))))))
 (DTypeSig false "buildImplEnvGo" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "Int") (TyFun (TyCon "ImplEnv") (TyCon "ImplEnv")))))
 (DFunDef false "buildImplEnvGo" ((PList) PWild (PVar "env")) (EVar "env"))
 (DFunDef false "buildImplEnvGo" ((PCons (PVar "m") (PVar "rest")) (PVar "seq") (PVar "env")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EApp (EApp (EVar "implRowsOf") (EFieldAccess (EVar "m") "demId")) (EFieldAccess (EVar "m") "demOrd")) (EVar "seq")) (EApp (EVar "implDeclFacts") (EFieldAccess (EVar "m") "demDecls")))) (DoExpr (EApp (EApp (EApp (EVar "buildImplEnvGo") (EVar "rest")) (EBinOp "+" (EVar "seq") (EApp (EVar "listLen") (EVar "rows")))) (EApp (EApp (EVar "ieAddRows") (EVar "rows")) (EVar "env"))))))
@@ -37885,7 +37892,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ieAddRows" ((PList) (PVar "env")) (EVar "env"))
 (DFunDef false "ieAddRows" ((PCons (PVar "r") (PVar "rest")) (PVar "env")) (EApp (EApp (EVar "ieAddRows") (EVar "rest")) (EApp (EApp (EVar "ieInsertRow") (EVar "r")) (EVar "env"))))
 (DTypeSig false "ieInsertRow" (TyFun (TyCon "ImplRow") (TyFun (TyCon "ImplEnv") (TyCon "ImplEnv"))))
-(DFunDef false "ieInsertRow" ((PVar "r") (PVar "env")) (EApp (EApp (EVar "ieFileRow") (EVar "r")) (ERecordUpdate (EVar "env") ((fa "ieRows" (EBinOp "++" (EFieldAccess (EVar "env") "ieRows") (EListLit (EVar "r"))))))))
+(DFunDef false "ieInsertRow" ((PVar "r") (PVar "env")) (EApp (EApp (EVar "ieFileRow") (EVar "r")) (ERecordUpdate (EVar "env") ((fa "ieRows" (EBinOp "::" (EVar "r") (EFieldAccess (EVar "env") "ieRows")))))))
 (DTypeSig false "ieFileRow" (TyFun (TyCon "ImplRow") (TyFun (TyCon "ImplEnv") (TyCon "ImplEnv"))))
 (DFunDef false "ieFileRow" ((PAs "r" (PCon "ImplRow" PWild PWild (PVar "ir") PWild PWild PWild)) (PVar "env")) (EApp (EApp (EApp (EVar "ieInsertRowKeys") (EApp (EVar "oblIfaceKeys") (EVar "ir"))) (EVar "r")) (EApp (EApp (EVar "ieFileRowByHead") (EVar "r")) (EVar "env"))))
 (DTypeSig false "ieFileRowByHead" (TyFun (TyCon "ImplRow") (TyFun (TyCon "ImplEnv") (TyCon "ImplEnv"))))
@@ -43701,7 +43708,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "emptyDataEnv" (TyCon "DataEnv"))
 (DFunDef false "emptyDataEnv" () (ERecordCreate "DataEnv" ((fa "deTypes" (EListLit)) (fa "deCtorIdents" (EVar "omEmpty")) (fa "deRecordIdents" (EVar "omEmpty")) (fa "deFieldOwnerIdents" (EVar "omEmpty")) (fa "deAliases" (EListLit)))))
 (DTypeSig false "buildDataEnv" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyCon "DataEnv")))
-(DFunDef false "buildDataEnv" ((PVar "rows")) (EApp (EApp (EVar "dataEnvFromRowsGo") (EVar "rows")) (EVar "emptyDataEnv")))
+(DFunDef false "buildDataEnv" ((PVar "rows")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EVar "dataEnvFromRowsGo") (EVar "rows")) (EVar "emptyDataEnv"))) (DoExpr (EVariantUpdate "DataEnv" (EVar "env") ((fa "deRecordIdents" (EApp (EApp (EVar "omMapValues") (EVar "reverseL")) (EFieldAccess (EVar "env") "deRecordIdents"))) (fa "deFieldOwnerIdents" (EApp (EApp (EVar "omMapValues") (EVar "reverseL")) (EFieldAccess (EVar "env") "deFieldOwnerIdents"))))))))
 (DTypeSig false "dataEnvFromRowsGo" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv"))))
 (DFunDef false "dataEnvFromRowsGo" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "dataEnvFromRowsGo" ((PCons (PVar "m") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "dataEnvFromRowsGo") (EVar "rest")) (EApp (EApp (EApp (EVar "dataEnvFromDeclsGo") (EFieldAccess (EVar "m") "demOrd")) (EFieldAccess (EVar "m") "demDecls")) (EVar "acc"))))
@@ -43722,10 +43729,10 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "addCtorIdentRaw" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyFun (TyCon "ConPayload") (TyFun (TyCon "DataEnv") (TyCon "DataEnv")))))))
 (DFunDef false "addCtorIdentRaw" ((PVar "tyName") (PVar "o") (PVar "cn") (PVar "payload") (PVar "env")) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsCtor")) (EVar "o")) (EVar "cn")) (arm (PCon "None") () (EVar "env")) (arm (PCon "Some" (PVar "ident")) () (EBlock (DoLet false false (PVar "next") (EBinOp "++" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "cn")) (EFieldAccess (EVar "env") "deCtorIdents"))) (EListLit (ETuple (EVar "ident") (EVar "tyName") (EApp (EApp (EVar "Variant") (EVar "cn")) (EVar "payload")))))) (DoLet false false (PVar "env2") (EVariantUpdate "DataEnv" (EVar "env") ((fa "deCtorIdents" (EApp (EApp (EApp (EVar "omInsert") (EVar "cn")) (EVar "next")) (EFieldAccess (EVar "env") "deCtorIdents")))))) (DoExpr (EMatch (EVar "payload") (arm (PCon "ConNamed" (PVar "fields") PWild) () (EApp (EApp (EApp (EApp (EApp (EVar "addRecordIdentRaw") (EVar "tyName")) (EVar "cn")) (EVar "ident")) (EVar "fields")) (EVar "env2"))) (arm (PCon "ConPos" PWild) () (EVar "env2"))))))))
 (DTypeSig false "addRecordIdentRaw" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Ident") (TyFun (TyApp (TyCon "List") (TyCon "Field")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv")))))))
-(DFunDef false "addRecordIdentRaw" ((PVar "tyName") (PVar "cn") (PVar "ident") (PVar "fields") (PVar "env")) (EBlock (DoLet false false (PVar "next") (EBinOp "++" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "cn")) (EFieldAccess (EVar "env") "deRecordIdents"))) (EListLit (ETuple (EVar "ident") (EVar "tyName") (EVar "fields"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "addFieldOwnerIdents") (EVar "ident")) (EVar "cn")) (EVar "fields")) (EVariantUpdate "DataEnv" (EVar "env") ((fa "deRecordIdents" (EApp (EApp (EApp (EVar "omInsert") (EVar "cn")) (EVar "next")) (EFieldAccess (EVar "env") "deRecordIdents")))))))))
+(DFunDef false "addRecordIdentRaw" ((PVar "tyName") (PVar "cn") (PVar "ident") (PVar "fields") (PVar "env")) (EBlock (DoLet false false (PVar "next") (EBinOp "::" (ETuple (EVar "ident") (EVar "tyName") (EVar "fields")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "cn")) (EFieldAccess (EVar "env") "deRecordIdents"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "addFieldOwnerIdents") (EVar "ident")) (EVar "cn")) (EVar "fields")) (EVariantUpdate "DataEnv" (EVar "env") ((fa "deRecordIdents" (EApp (EApp (EApp (EVar "omInsert") (EVar "cn")) (EVar "next")) (EFieldAccess (EVar "env") "deRecordIdents")))))))))
 (DTypeSig false "addFieldOwnerIdents" (TyFun (TyCon "Ident") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Field")) (TyFun (TyCon "DataEnv") (TyCon "DataEnv"))))))
 (DFunDef false "addFieldOwnerIdents" (PWild PWild (PList) (PVar "env")) (EVar "env"))
-(DFunDef false "addFieldOwnerIdents" ((PVar "ident") (PVar "cn") (PCons (PCon "Field" (PVar "fn") PWild) (PVar "rest")) (PVar "env")) (EBlock (DoLet false false (PVar "next") (EBinOp "++" (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fn")) (EFieldAccess (EVar "env") "deFieldOwnerIdents"))) (EListLit (ETuple (EVar "ident") (EVar "cn"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "addFieldOwnerIdents") (EVar "ident")) (EVar "cn")) (EVar "rest")) (EVariantUpdate "DataEnv" (EVar "env") ((fa "deFieldOwnerIdents" (EApp (EApp (EApp (EVar "omInsert") (EVar "fn")) (EVar "next")) (EFieldAccess (EVar "env") "deFieldOwnerIdents")))))))))
+(DFunDef false "addFieldOwnerIdents" ((PVar "ident") (PVar "cn") (PCons (PCon "Field" (PVar "fn") PWild) (PVar "rest")) (PVar "env")) (EBlock (DoLet false false (PVar "next") (EBinOp "::" (ETuple (EVar "ident") (EVar "cn")) (EApp (EApp (EVar "fromOption") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "fn")) (EFieldAccess (EVar "env") "deFieldOwnerIdents"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "addFieldOwnerIdents") (EVar "ident")) (EVar "cn")) (EVar "rest")) (EVariantUpdate "DataEnv" (EVar "env") ((fa "deFieldOwnerIdents" (EApp (EApp (EApp (EVar "omInsert") (EVar "fn")) (EVar "next")) (EFieldAccess (EVar "env") "deFieldOwnerIdents")))))))))
 (DTypeSig false "addAliasDecl" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "DataEnv") (TyCon "DataEnv"))))))))))
 (DFunDef false "addAliasDecl" ((PVar "name") (PVar "o") (PVar "params") (PVar "rhs") (PVar "ord") (PVar "pub") (PVar "att") (PVar "env")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "name"))) (DoLet false false (PVar "ad") (ERecordCreate "AliasDecl" ((fa "adKey" (EVar "key")) (fa "adName" (EVar "name")) (fa "adParams" (EVar "params")) (fa "adRhs" (EVar "rhs")) (fa "adOrd" (EVar "ord")) (fa "adPub" (EVar "pub")) (fa "adAttrib" (EVar "att"))))) (DoExpr (EVariantUpdate "DataEnv" (EVar "env") ((fa "deAliases" (EBinOp "::" (ETuple (EVar "key") (EVar "ad")) (EFieldAccess (EVar "env") "deAliases"))))))))
 (DTypeSig false "aliasUniverseAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl"))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))))
@@ -43776,7 +43783,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "emptyImplEnv" (TyCon "ImplEnv"))
 (DFunDef false "emptyImplEnv" () (ERecordCreate "ImplEnv" ((fa "ieRows" (EListLit)) (fa "ieConcrete" (EVar "mregEmpty")) (fa "ieHeadless" (EVar "mregEmpty")) (fa "ieByHead" (EVar "mregEmpty")) (fa "ieIfaceTags" (EVar "regEmpty")) (fa "ieUnivSnaps" (EListLit)))))
 (DTypeSig false "buildImplEnv" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyCon "ImplEnv")))
-(DFunDef false "buildImplEnv" ((PVar "mods")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EApp (EVar "buildImplEnvGo") (EVar "mods")) (ELit (LInt 0))) (EVar "emptyImplEnv"))) (DoExpr (EVariantUpdate "ImplEnv" (EVar "env") ((fa "ieUnivSnaps" (EApp (EVar "ieBuildSnaps") (EFieldAccess (EVar "env") "ieRows"))))))))
+(DFunDef false "buildImplEnv" ((PVar "mods")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EApp (EVar "buildImplEnvGo") (EVar "mods")) (ELit (LInt 0))) (EVar "emptyImplEnv"))) (DoLet false false (PVar "env2") (EVariantUpdate "ImplEnv" (EVar "env") ((fa "ieRows" (EApp (EVar "reverseL") (EFieldAccess (EVar "env") "ieRows")))))) (DoExpr (EVariantUpdate "ImplEnv" (EVar "env2") ((fa "ieUnivSnaps" (EApp (EVar "ieBuildSnaps") (EFieldAccess (EVar "env2") "ieRows"))))))))
 (DTypeSig false "buildImplEnvGo" (TyFun (TyApp (TyCon "List") (TyCon "DeclEnvModule")) (TyFun (TyCon "Int") (TyFun (TyCon "ImplEnv") (TyCon "ImplEnv")))))
 (DFunDef false "buildImplEnvGo" ((PList) PWild (PVar "env")) (EVar "env"))
 (DFunDef false "buildImplEnvGo" ((PCons (PVar "m") (PVar "rest")) (PVar "seq") (PVar "env")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EApp (EApp (EVar "implRowsOf") (EFieldAccess (EVar "m") "demId")) (EFieldAccess (EVar "m") "demOrd")) (EVar "seq")) (EApp (EVar "implDeclFacts") (EFieldAccess (EVar "m") "demDecls")))) (DoExpr (EApp (EApp (EApp (EVar "buildImplEnvGo") (EVar "rest")) (EBinOp "+" (EVar "seq") (EApp (EVar "listLen") (EVar "rows")))) (EApp (EApp (EVar "ieAddRows") (EVar "rows")) (EVar "env"))))))
@@ -43806,7 +43813,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ieAddRows" ((PList) (PVar "env")) (EVar "env"))
 (DFunDef false "ieAddRows" ((PCons (PVar "r") (PVar "rest")) (PVar "env")) (EApp (EApp (EVar "ieAddRows") (EVar "rest")) (EApp (EApp (EVar "ieInsertRow") (EVar "r")) (EVar "env"))))
 (DTypeSig false "ieInsertRow" (TyFun (TyCon "ImplRow") (TyFun (TyCon "ImplEnv") (TyCon "ImplEnv"))))
-(DFunDef false "ieInsertRow" ((PVar "r") (PVar "env")) (EApp (EApp (EVar "ieFileRow") (EVar "r")) (ERecordUpdate (EVar "env") ((fa "ieRows" (EBinOp "++" (EFieldAccess (EVar "env") "ieRows") (EListLit (EVar "r"))))))))
+(DFunDef false "ieInsertRow" ((PVar "r") (PVar "env")) (EApp (EApp (EVar "ieFileRow") (EVar "r")) (ERecordUpdate (EVar "env") ((fa "ieRows" (EBinOp "::" (EVar "r") (EFieldAccess (EVar "env") "ieRows")))))))
 (DTypeSig false "ieFileRow" (TyFun (TyCon "ImplRow") (TyFun (TyCon "ImplEnv") (TyCon "ImplEnv"))))
 (DFunDef false "ieFileRow" ((PAs "r" (PCon "ImplRow" PWild PWild (PVar "ir") PWild PWild PWild)) (PVar "env")) (EApp (EApp (EApp (EVar "ieInsertRowKeys") (EApp (EVar "oblIfaceKeys") (EVar "ir"))) (EVar "r")) (EApp (EApp (EVar "ieFileRowByHead") (EVar "r")) (EVar "env"))))
 (DTypeSig false "ieFileRowByHead" (TyFun (TyCon "ImplRow") (TyFun (TyCon "ImplEnv") (TyCon "ImplEnv"))))
