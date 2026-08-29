@@ -632,7 +632,10 @@ MIN_NET_FRAC="${IR_MIN_NET_FRAC:-0.05}"
 # gen_xref / gen_manyifaces are SHARED with test/diff_compiler_perf_scaling.sh, and
 # gen_scoperefs is additionally SHARED with test/diff_compiler_stage_ir_scaling.sh
 # (per-stage #2172 attribution, S-5-scoperefs-attribution) — all sourced from
-# test/perf_shapes.sh. They used to be TRANSCRIBED here (#2066): two byte-different
+# test/perf_shapes.sh. (test/diff_compiler_perf_scaling.sh also sources this library, but
+# does NOT consume its `gen_scoperefs` — it shadows the name with its own, textually
+# different local `gen_scoperefs_resolve` for the unrelated #78 P-1 resolve detector; see
+# perf_shapes.sh's header on that generator.) They used to be TRANSCRIBED here (#2066): two byte-different
 # copies of the same two programs, with nothing comparing them, so the two gates could
 # have drifted into measuring different shapes while both stayed green and their ratios
 # went on being quoted side by side. Read the header of perf_shapes.sh before editing a

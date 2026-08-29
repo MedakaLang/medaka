@@ -111,6 +111,14 @@ gen_manyifaces() {
 # test/diff_compiler_stage_ir_scaling.sh (per-stage Ir attribution for the same #2172
 # quadratic) — both must grade the IDENTICAL program, so this generator is the single
 # source for it.
+#
+# ⚠️ NAME COLLISION, not a third consumer: test/diff_compiler_perf_scaling.sh also sources
+# this file (for gen_xref/gen_manyifaces) but defines its OWN, textually different function
+# also named `gen_scoperefs` for the #78 P-1 resolve SCOPE-scan detector — a shell function
+# defined after a `.`-sourced one of the same name SHADOWS it, so that file's local
+# definition wins today by luck of definition order, not by design. Do not "de-duplicate"
+# by deleting the local one in that file; see its own header comment
+# (`gen_scoperefs_resolve`) before touching either.
 gen_scoperefs() {
   gn=$1; gf=$2; : > "$gf"
   {

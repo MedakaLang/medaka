@@ -831,7 +831,7 @@ gen_comments() {
 # drift hazard neither gate can see. Its full rationale — the #78 lookupValue scan, and
 # why `main` must call the head of the chain — moved there with it.
 
-# gen_scoperefs — THE #78 P-1 resolve SCOPE-scan detector. `xref` above no longer
+# gen_scoperefs_resolve — THE #78 P-1 resolve SCOPE-scan detector. `xref` above no longer
 # catches #78: its quadratic was the env.values LIST scan, and env.values became an
 # OrdMap set (#954/#973), so `xref:resolve` is now linear. The *residual* #78 quadratic
 # is the LOCAL scope: resolve membership-tests `scope` on EVERY variable reference, and a
@@ -852,7 +852,7 @@ gen_comments() {
 # of the same List-as-set class — which is exactly why it is graded resolve-ONLY (its own
 # typecheck op serves only as the profiler-liveness witness), NOT through the per-stage
 # OP_STAGES loop that would fail on those unrelated rows.
-gen_scoperefs() {
+gen_scoperefs_resolve() {
   n=$1; f=$2; : > "$f"
   printf 'base : Int\nbase = 1\n' >> "$f"
   printf 'big : Int\nbig =\n' >> "$f"
@@ -2083,7 +2083,7 @@ OP_FLOOR="${PERF_OP_FLOOR:-1000}"
 #         this one is not" — a live instruction to DELETE the row a few lines below,
 #         which would have turned a real quadratic silent again.
 #         #2189's SITE was then localised by sub-bracketing `elaborateDict`'s op
-#         counter (S-3): 86% of the count was the AST prepass
+#         counter (S-3): 83% of the count was the AST prepass
 #         (`prePassDict`/`prePassDictArg` -> `rewriteRPDict`/`rewriteArgScoped`)
 #         probing `rpNames`/`argNames`/`dictNames` with `util.contains` at every
 #         `EVar`, with `dictNames` = the N `=>`-constrained top-level names this
@@ -4058,7 +4058,7 @@ if want scoperefs; then   # PERF_ONLY unit: scoperefs
 # resolve ops at ANY N. A reintroduced List-as-set scope makes each of the N `base` refs
 # scan the N-deep scope: ~4*N^2 counted ops (640002 at N=400). So this is an ABSOLUTE
 # assertion — resolve op MUST stay under OP_FLOOR — NOT a ratio (the fixed value is a flat
-# constant, unratioable). Graded resolve-ONLY (gen_scoperefs drives coupled but SEPARATE
+# constant, unratioable). Graded resolve-ONLY (gen_scoperefs_resolve drives coupled but SEPARATE
 # typecheck/mangle quadratics; running it through the OP_STAGES loop would fail on those).
 #
 # Profiler-liveness: a dead profiler emits op=0 for every stage, which would FALSE-PASS an
@@ -4069,8 +4069,8 @@ if want scoperefs; then   # PERF_ONLY unit: scoperefs
 SCOPEREFS_N="${PERF_SCOPEREFS_N:-300}"
 scn1="$SCOPEREFS_N"; scn2=$((SCOPEREFS_N * 2))
 scd1="$WORK/scoperefs_$scn1.mdk"; scd2="$WORK/scoperefs_$scn2.mdk"
-gen_scoperefs "$scn1" "$scd1"
-gen_scoperefs "$scn2" "$scd2"
+gen_scoperefs_resolve "$scn1" "$scd1"
+gen_scoperefs_resolve "$scn2" "$scd2"
 SCR1="$WORK/scoperefs_r1"; SCR2="$WORK/scoperefs_r2"
 MEDAKA_PERF=1 "$PROFILE" "$RUNTIME" "$CORE" "$scd1" > "$SCR1" 2>&1
 MEDAKA_PERF=1 "$PROFILE" "$RUNTIME" "$CORE" "$scd2" > "$SCR2" 2>&1
@@ -4108,7 +4108,7 @@ fi
 # `emit_support.eagerVars`' bound-name accumulator, was never converted. This row is that
 # stage's missing arm. A stage nobody grades is a stage whose fix nobody can check.
 #
-# The shape is the one already generated above (gen_scoperefs: an N-deep local scope, then
+# The shape is the one already generated above (gen_scoperefs_resolve: an N-deep local scope, then
 # N references to the NON-local `base`). It drives `eagerVars` exactly the way it drives
 # resolve's scope test: every one of the N `base` refs misses in the local scope and so
 # scans it to completion. Pre-fix that is O(N^2) counted `contains` steps inside the
@@ -4137,7 +4137,7 @@ fi
 # resolve row above already made.
 scn3=$((SCOPEREFS_N * 4))
 scd3="$WORK/scoperefs_$scn3.mdk"
-gen_scoperefs "$scn3" "$scd3"
+gen_scoperefs_resolve "$scn3" "$scd3"
 SCR3="$WORK/scoperefs_r3"; SCRB="$WORK/scoperefs_rb"
 profile_run "$scd3" > "$SCR3"
 profile_run "$BASE_FIX" > "$SCRB"

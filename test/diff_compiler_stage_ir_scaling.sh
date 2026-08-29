@@ -323,6 +323,12 @@ WIDEIFACE_N="${STAGE_IR_WIDEIFACE_N:-125}"
 # this band, confirmed genuinely quadratic (not band noise) by a spot-check at
 # 250/500/1000 where both cross 3.0 (dce r2=3.632, trmc r2=3.526). See
 # S-5-scoperefs-attribution's report for the full derivation table.
+#
+# PLACEMENT DECISION (per [W-SHARD-DERIVED]/contract §7.3): this shape rides the gate's
+# existing per-PR cadence — test/gates.toml's `diff_compiler_stage_ir_scaling` entry is
+# `tier = "merge"` (every PR/merge-queue run, same as its five sibling shapes in this
+# file), not `nightly` or `ondemand`. No special-case override was needed or added; the
+# ~1 min/shape callgrind cost at this band was accepted as part of that existing tier.
 SCOPEREFS_N="${STAGE_IR_SCOPEREFS_N:-35}"
 
 # ── the multi-module band ────────────────────────────────────────────────────
@@ -745,6 +751,9 @@ want() {
 # in lockstep, which is exactly that case). Same missing-library guard as
 # ir_scaling.sh: `.` is a POSIX special builtin, so a moved/renamed library would
 # otherwise die silently inside the `.` with no line of ours on stdout.
+# (perf_scaling.sh ALSO sources this library, for gen_xref/gen_manyifaces, but is not a
+# third consumer of this shape — it shadows the bare name `gen_scoperefs` with its own,
+# unrelated local `gen_scoperefs_resolve`; see perf_shapes.sh's header on that generator.)
 [ -r "$ROOT/test/perf_shapes.sh" ] || {
   echo "FAIL: cannot read $ROOT/test/perf_shapes.sh — the shared shape library (#2066) is missing."
   echo "  Both scoperefs consumers source it; without it neither can generate the shape."
