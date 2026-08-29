@@ -520,12 +520,11 @@ validHostAuthority value =
     if value[0] == 91 then match findByte value 1 end 93
       None => False
       Some close => validIpLiteral value 1 close
-        && (close + 1 == end || close + 2 < end && value[close + 1] == 58 && allDigits value (close + 2) end)
+        && (close + 1 == end || close + 1 < end && value[close + 1] == 58 && allDigits value (close + 2) end)
     else match findByte value 0 end 58
       None => validRegName value 0 end
       Some colon => colon > 0
         && validRegName value 0 colon
-        && colon + 1 < end
         && allDigits value (colon + 1) end
 
 validateHost : List Header -> Result HttpParseFailure Unit

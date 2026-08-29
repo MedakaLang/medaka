@@ -170,6 +170,15 @@ uppercaseAuthorityRequest =
   toUtf8
     "GET /xrpc/com.example.query.caseFixed HTTP/1.1\r\nHost: pds.example\r\n\r\n"
 
+emptyRegPortRequest : Array Int
+emptyRegPortRequest =
+  toUtf8
+    "GET /xrpc/com.example.query.fixed HTTP/1.1\r\nHost: example.com:\r\n\r\n"
+
+emptyIpPortRequest : Array Int
+emptyIpPortRequest =
+  toUtf8 "GET /xrpc/com.example.query.fixed HTTP/1.1\r\nHost: [::1]:\r\n\r\n"
+
 unknownRequest : Array Int
 unknownRequest =
   toUtf8
@@ -282,6 +291,22 @@ checkAuthorityDuplicateIdentity =
     (Err _, Ok _) => println "CELL authority-duplicate-identity PASS folded-authority=true method-case=distinct"
     _ => panic "protocol_all_engines: NSID duplicate identity mismatch"
 
+checkEmptyRegPort : <IO> Unit
+checkEmptyRegPort =
+  let (next, response) = handleBytes server seededStore emptyRegPortRequest
+  if response == expectedTextResponse 200 "OK" "fixed" && storeSize next == 1 && seedPreserved next then
+    println "CELL host-empty-reg-port PASS status=200 state=unchanged"
+  else
+    panic "protocol_all_engines: empty reg-name port mismatch"
+
+checkEmptyIpPort : <IO> Unit
+checkEmptyIpPort =
+  let (next, response) = handleBytes server seededStore emptyIpPortRequest
+  if seedPreserved next && response == expectedTextResponse 200 "OK" "fixed" && storeSize next == 1 then
+    println "CELL host-empty-ip-port PASS status=200 state=unchanged"
+  else
+    panic "protocol_all_engines: empty IP-literal port mismatch"
+
 checkUnknown : <IO> Unit
 checkUnknown =
   let (next, response) = handleBytes server seededStore unknownRequest
@@ -312,6 +337,8 @@ main =
   let () = checkProcedureParams
   let () = checkUppercaseAuthority
   let () = checkAuthorityDuplicateIdentity
+  let () = checkEmptyRegPort
+  let () = checkEmptyIpPort
   let () = checkUnknown
   let () = checkResource
   println "TOTAL: PASS"
