@@ -42,7 +42,9 @@
 #   `other-job`  This gate is not scheduled by the `gates` matrix at all.
 #                It runs, but some OTHER workflow job runs it (`soundness`,
 #                `seed-health`, `wasm`, the docs jobs, `nightly`, the
-#                playground job). 26 entries today. It does NOT mean
+#                playground job). 27 entries today (derive: `grep -c '^shard =
+#                "other-job"$' test/gates.toml` — this count rots on every
+#                enrolment/removal, so re-derive rather than trust it). It does NOT mean
 #                "unscheduled" — which job is a fact this slice deliberately
 #                did not invent; see docs/ops/GATE-REGISTRY-DESIGN.md §7.
 #

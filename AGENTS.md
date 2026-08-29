@@ -139,8 +139,10 @@ done
 ```
 🚨 **Adding ANY `.sh` anywhere in the tree — not just under `test/` — can redden a shard**
 (`diff_compiler_ci_shard_coverage.sh`; a repro harness under `.claude/` has done it). A gate
-not enrolled in `test/gates.toml` (with a `shard` field) SILENTLY NEVER RUNS — enrol it there
-and run `make gen-ci` to regenerate `ci.yml`'s shard matrix. Registration rules, the
+not enrolled in `test/gates.toml` (with a `shard` field) SILENTLY NEVER RUNS — caught by
+`medaka gate verify` (via `test/diff_compiler_gate_registry.sh`), which owns ENROLMENT;
+`diff_compiler_ci_shard_coverage.sh` owns CI REACHABILITY of what is already enrolled. Enrol
+it in `test/gates.toml` and run `make gen-ci` to regenerate `ci.yml`'s shard matrix. Registration rules, the
 `test/CI-COVERAGE-EXCEPTIONS.txt` escape hatch, and `[W-SHARD-COST]` (shards are scheduled by
 cost, not theme): the `gates` skill.
 

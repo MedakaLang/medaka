@@ -826,6 +826,10 @@ for f in $changed; do
     # else — a loose file under test/ that someone edits ALONE when adding a
     # gate to a shard.
     test/gate_shards/*)            add 'diff_compiler_ci_gen_drift' ;;
+    # S2-5 (end-of-sprint review, #2177): the generated file itself had no arm
+    # at all, so a change here fell through to the catch-all — the two gates
+    # that actually police its generated content are the ones that read it.
+    .github/workflows/ci.yml)      add 'diff_compiler_ci_gen_drift'; add 'diff_compiler_ci_shard_coverage' ;;
     # Third ledger, same structural blind spot (#1608). Its rows pin a WRONG VALUE
     # rather than a divergence — see its own header — but the masking path is
     # identical: a loose file under test/ that someone edits ALONE when the gate reds.
