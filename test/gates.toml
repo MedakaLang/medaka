@@ -73,6 +73,21 @@
 #   full_cores  the row's `full_cores: "1"` matrix key (absent in ci.yml when
 #               false — a bool here, emitted as the key only when true)
 #   wasm_arm    likewise the row's `wasm_arm: "1"` key
+#   pinned_gates
+#               the row's DECLARED membership. On a `full_cores` row this is
+#               exactly the gates that must name it, and `medaka gate balance`
+#               refuses when the registry disagrees in EITHER direction — a
+#               gate hand-moved onto the row, or a pinned one hand-moved off.
+#               On an open row it is `[]`: that row's membership is the
+#               balancer's output, so declaring it would be prose the tool
+#               ignores (and is itself refused).
+#               ⚠️ This is the one membership fact no cost measurement can
+#               derive. `engines` exists because `diff_compiler_engines` needs
+#               a whole runner; its two row-mates ride along for the same wasm
+#               toolchain. Widening or narrowing that list is a deliberate,
+#               reviewable decision about CI capacity — never a side effect of
+#               a re-ingest, and never something the balancer adopts because
+#               it found it committed.
 #   rationale   PATH to a plain-text file describing that ROW — what
 #               `full_cores`/`wasm_arm` mean for it and which gates it can
 #               legally take: test/gate_shards/<name>.txt. Emitted verbatim as
@@ -3458,45 +3473,53 @@ name = "engines"
 full_cores = true
 wasm_arm = true
 rationale = "test/gate_shards/engines.txt"
+pinned_gates = ["pds/test/protocol_all_engines", "diff_compiler_engines", "diff_compiler_rejection_parity"]
 
 [[shard]]
 name = "sqlite"
 full_cores = false
 wasm_arm = false
 rationale = "test/gate_shards/sqlite.txt"
+pinned_gates = []
 
 [[shard]]
 name = "pds"
 full_cores = false
 wasm_arm = true
 rationale = "test/gate_shards/pds.txt"
+pinned_gates = []
 
 [[shard]]
 name = "frontend"
 full_cores = false
 wasm_arm = false
 rationale = "test/gate_shards/frontend.txt"
+pinned_gates = []
 
 [[shard]]
 name = "types"
 full_cores = false
 wasm_arm = false
 rationale = "test/gate_shards/types.txt"
+pinned_gates = []
 
 [[shard]]
 name = "eval"
 full_cores = false
 wasm_arm = false
 rationale = "test/gate_shards/eval.txt"
+pinned_gates = []
 
 [[shard]]
 name = "backend"
 full_cores = false
 wasm_arm = false
 rationale = "test/gate_shards/backend.txt"
+pinned_gates = []
 
 [[shard]]
 name = "tools"
 full_cores = false
 wasm_arm = true
 rationale = "test/gate_shards/tools.txt"
+pinned_gates = []

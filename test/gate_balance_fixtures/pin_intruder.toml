@@ -1,0 +1,114 @@
+# test/gate_balance_fixtures/pin_intruder.toml — SYNTHETIC, hand-written.
+#
+# REVIEW FINDING F3(a), #2205: a gate hand-moved ONTO a closed row.
+#
+# `intruder` names the `full_cores` row `pin`, which declares only `pinned1`.
+# Every other property this fixture has is DELIBERATELY healthy, because that
+# is what made the real injection invisible: the packing is legal, every gate
+# is costed, the open rows come out at 200ms each and the projected pole/median
+# is 1.000 — comfortably inside the enforced 1.25 — and the derived assignment
+# for the open rows is byte-identical to the committed one.
+#
+# So before the `pinned_gates` check existed, `medaka gate balance` on this
+# registry SUCCEEDED: it seeded the closed row from whatever named it, adopted
+# `intruder` permanently, and `--check` reported "already balanced". The only
+# thing wrong here is a membership no cost measurement can derive, which is
+# precisely why it has to be declared and checked rather than observed.
+
+[[gate]]
+name = "pinned1"
+area = "fixture"
+shard = "pin"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/pinned1.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "intruder"
+area = "fixture"
+shard = "pin"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/intruder.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "a1"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/a1.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "b1"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/b1.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "c1"
+area = "fixture"
+shard = "c"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/c1.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "pin"
+full_cores = true
+wasm_arm = false
+rationale = "test/gate_shards/pin.txt"
+pinned_gates = ["pinned1"]
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+pinned_gates = []
+
+[[shard]]
+name = "b"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/b.txt"
+pinned_gates = []
+
+[[shard]]
+name = "c"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/c.txt"
+pinned_gates = []

@@ -86,21 +86,25 @@ name = "pin"
 full_cores = true
 wasm_arm = false
 rationale = "test/gate_shards/pin.txt"
+pinned_gates = ["pinned1"]
 
 [[shard]]
 name = "a"
 full_cores = false
 wasm_arm = false
 rationale = "test/gate_shards/a.txt"
+pinned_gates = []
 
 [[shard]]
 name = "b"
 full_cores = false
 wasm_arm = false
 rationale = "test/gate_shards/b.txt"
+pinned_gates = []
 
 [[shard]]
 name = "c"
 full_cores = false
 wasm_arm = false
 rationale = "test/gate_shards/c.txt"
+pinned_gates = []

@@ -161,6 +161,11 @@ parseRegistry src = match parse src
 -- field names one of these; the row carries what the MATRIX needs and the gate
 -- does not — the runner options, and the placement rationale.
 --
+-- `pinned_gates` is the row's DECLARED membership, checked by the balancer
+-- (`balPinErrors`).  A closed (`full_cores`) row lists exactly the gates that
+-- must name it; an open row lists nothing, because its membership is the
+-- packer's output.
+--
 -- `rationale` is a PATH (`test/gate_shards/<name>.txt`), not the prose itself:
 -- the TOML subset this reader is built on has no multi-line string, and 180
 -- lines of English on one line would be worse than no home at all.  Nothing
@@ -174,6 +179,7 @@ public export data Shard =
       fullCores : Bool,
       wasmArm : Bool,
       rationale : String,
+      pinned : List String,
     }
 
 shardStr : Int -> String -> Toml -> Result String String
@@ -191,6 +197,15 @@ shardBool i field entry = match getBool field entry
   Some b => Ok b
   None => Err "gates.toml: [[shard]] #\{intToString i}: missing required boolean field '\{field}'"
 
+-- Likewise for the row's declared closed-row membership.  Present-but-empty is
+-- the normal reading on an OPEN row; ABSENT is an error, because an absent
+-- `pinned_gates` read as `[]` would make a closed row's membership check
+-- vacuously true — the exact hole this field exists to close.
+shardArr : Int -> String -> Toml -> Result String (List String)
+shardArr i field entry = match getArray field entry
+  Some xs => Ok xs
+  None => Err "gates.toml: [[shard]] #\{intToString i}: missing required array field '\{field}'"
+
 readShard : Toml -> Int -> Result String Shard
 readShard doc i =
   let e = tableEntry "shard" i doc
@@ -199,12 +214,14 @@ readShard doc i =
     fullCores <- shardBool i "full_cores" e
     wasmArm <- shardBool i "wasm_arm" e
     rationale <- shardStr i "rationale" e
+    pinned <- shardArr i "pinned_gates" e
     Ok
       Shard {
         name = name,
         fullCores = fullCores,
         wasmArm = wasmArm,
         rationale = rationale,
+        pinned = pinned,
       }
 
 readShardsFrom : Toml -> Int -> Int -> List Shard -> Result String (List Shard)
@@ -403,6 +420,7 @@ shardJson sh = jObject
     ("full_cores", JBool sh.fullCores),
     ("wasm_arm", JBool sh.wasmArm),
     ("rationale", JString sh.rationale),
+    ("pinned_gates", jArray (map JString sh.pinned)),
   ]
 
 {- | `--shards --json`: the matrix rows as a JSON array, in registry order. -}
@@ -418,7 +436,7 @@ boolWord b = if b then "true" else "false"
 export
 renderShards : List Shard -> String
 renderShards [] = ""
-renderShards (sh::shs) = "\{sh.name}: full_cores=\{boolWord sh.fullCores} wasm_arm=\{boolWord sh.wasmArm} rationale=\{sh.rationale}\n"
+renderShards (sh::shs) = "\{sh.name}: full_cores=\{boolWord sh.fullCores} wasm_arm=\{boolWord sh.wasmArm} rationale=\{sh.rationale} pinned_gates=[\{joinSpace sh.pinned}]\n"
   ++ renderShards shs
 
 -- ── CLI ─────────────────────────────────────────────────────────────────────
@@ -462,8 +480,10 @@ gateHelpText = stringConcat
     "\n",
     "`gate balance` CHOOSES each gate's `shard` row from the registry's own\n",
     "constraints plus the measured cost baseline, and rewrites the `shard = \"...\"`\n",
-    "lines in test/gates.toml in place. A full_cores row is CLOSED (its members\n",
-    "are an input, not a choice); a gate needing wasm-tools/node only lands on a\n",
+    "lines in test/gates.toml in place. A full_cores row is CLOSED: its members\n",
+    "are declared by that [[shard]] row's `pinned_gates` and checked in both\n",
+    "directions, so they are neither packed nor hand-assignable. A gate needing\n",
+    "wasm-tools/node only lands on a\n",
     "row with wasm_arm = true. It refuses rather than pack from a missing cost,\n",
     "and fails when the assignment it would emit misses its pole/median target.\n",
     "\n",
@@ -2448,6 +2468,11 @@ balWasmRowNames (r::rs)
 -- The closed rows keep exactly the gates that already name them.  A pinned
 -- gate whose row cannot run it is a registry defect, not something to repack
 -- around: the row is closed, so there is nowhere for it to go.
+--
+-- ⚠️ Reading `c.curRow` here is only sound because `balPinErrors` has already
+-- refused any registry whose closed rows do not match their declared
+-- `pinned_gates`.  Without that check this seed is the one place a `shard`
+-- value is still hand-assignable, and the hand edit is adopted as the new pin.
 balSeedClosed : List Cand -> List Row -> List Place -> Result String (List Place, List Row)
 balSeedClosed [] rs acc = Ok (reverseL acc, rs)
 balSeedClosed (c::cs) rs acc
@@ -2470,6 +2495,87 @@ balRowIsWasm _ [] = False
 balRowIsWasm n (r::rs)
   | r.rname == n = r.rwasm
   | otherwise = balRowIsWasm n rs
+
+-- ── The closed rows' declared membership ────────────────────────
+
+{- | 🚨 A CLOSED ROW'S MEMBERSHIP IS A DECLARED INVARIANT, NOT AN OBSERVATION.
+
+   `balSeedClosed` seeds a `full_cores` row from whatever gates CURRENTLY name
+   it.  As a packing rule that is right — the packer must move nothing onto a
+   whole-runner row and nothing off it.  On its own, though, it leaves that row
+   as the one place a `shard` value is still hand-assignable, which is exactly
+   what #2178 exists to remove.  Two hand edits were accepted in review (F3),
+   both adopted permanently by one `medaka gate balance` run, after which
+   `--check` reported "already balanced":
+
+     (a) move an unrelated gate ONTO `engines`.  The seed takes it, the packer
+         repacks the other seven rows around the extra load, and the result is
+         a fixed point of itself.
+     (b) move `diff_compiler_engines` OFF `engines`.  Same adoption — and the
+         projection printed is BETTER (pole/median 1.005 against 1.073),
+         because idling a whole runner and stacking the suite's heaviest gate
+         onto a shared one is what a cost objective blind to the pin prefers.
+
+   Neither is a cost fact, so neither can be derived.  It is DECLARED per row,
+   in `[[shard]]`'s `pinned_gates`, and checked here against what the registry
+   actually says — in BOTH directions.  Checking both is what makes this an
+   invariant a wrong committed state can FAIL, rather than a fiat under which
+   whatever is committed defines itself as correct.
+
+   An OPEN row must declare `pinned_gates = []`: its membership IS the packer's
+   output, and a non-empty list there would be prose the tool silently ignores.
+   Every violation is reported, not just the first — a membership repair is one
+   edit, and finding out about the second half of it on the next run is not. -}
+balPinErrors : List Gate -> List Shard -> List String
+balPinErrors _ [] = []
+balPinErrors gs (s::ss)
+  | not s.fullCores && not (isEmptyStrs s.pinned) = "row '\{s.name}': pinned_gates is non-empty (\{joinSpace s.pinned}) on an OPEN row (full_cores = false); only a closed row's membership is declared, an open row's is the packer's output" :: balPinErrors gs ss
+  | not s.fullCores = balPinErrors gs ss
+  | otherwise =
+    let members = balRowMembers s.name gs
+    balPinMissing s.name gs s.pinned members
+      ++ balPinExtra s.name s.pinned members
+      ++ balPinErrors gs ss
+
+-- The gates whose committed `shard` names this row, in registry order.
+balRowMembers : String -> List Gate -> List String
+balRowMembers _ [] = []
+balRowMembers n (g::gs)
+  | g.shard == n = g.name :: balRowMembers n gs
+  | otherwise = balRowMembers n gs
+
+-- Declared, but not there: the pinned gate has been moved off the closed row
+-- (F3(b)).  Naming where it went instead is the whole diagnosis.
+balPinMissing : String -> List Gate -> List String -> List String -> List String
+balPinMissing _ _ [] _ = []
+balPinMissing n gs (p::ps) members
+  | balElemStr p members = balPinMissing n gs ps members
+  | otherwise = balPinPlace n gs p :: balPinMissing n gs ps members
+
+balPinPlace : String -> List Gate -> String -> String
+balPinPlace n gs p = match balShardOfGate p gs
+  None => "row '\{n}': pinned gate '\{p}' is not in the registry at all"
+  Some other =>
+    "row '\{n}': pinned gate '\{p}' is committed on row '\{other}' instead"
+
+balShardOfGate : String -> List Gate -> Option String
+balShardOfGate _ [] = None
+balShardOfGate n (g::gs)
+  | g.name == n = Some g.shard
+  | otherwise = balShardOfGate n gs
+
+-- There, but not declared: a gate has been moved onto the closed row (F3(a)).
+balPinExtra : String -> List String -> List String -> List String
+balPinExtra _ _ [] = []
+balPinExtra n pinned (m::ms)
+  | balElemStr m pinned = balPinExtra n pinned ms
+  | otherwise = "row '\{n}': '\{m}' is committed on this closed row but is not in its pinned_gates" :: balPinExtra n pinned ms
+
+balElemStr : String -> List String -> Bool
+balElemStr _ [] = False
+balElemStr x (y::ys)
+  | x == y = True
+  | otherwise = balElemStr x ys
 
 balOpenCands : List Cand -> List Row -> List Cand
 balOpenCands [] _ = []
@@ -2804,7 +2910,20 @@ balNewText regPath regSrc baseSrc = match parseRegistry regSrc
             "  unknown one, and treating it as 0 would pile it onto the lightest row.\n",
             "  Re-ingest the baseline (test/gate_cost_ingest.sh) or fix the gate's `run`.\n",
           ])
-          [] => balCompute regPath gates shs base regSrc
+          [] => match balPinErrors gates shs
+            e::es => Err (stringConcat [
+              "medaka gate balance: \{regPath}: a closed row's membership does not match its declared `pinned_gates`:\n",
+              joinNl (balIndent (e::es)),
+              "\n  A `full_cores` row is CLOSED: the packer moves nothing onto it and\n",
+              "  nothing off it, so its members are the one `shard` value no cost\n",
+              "  measurement derives.  They are DECLARED in that [[shard]] row's\n",
+              "  `pinned_gates` and checked against the registry in both directions,\n",
+              "  so a hand-moved `shard` cannot be adopted as the new pin.\n",
+              "  Repair the gate's `shard`; change `pinned_gates` only when the row's\n",
+              "  membership is genuinely meant to differ, and say why in its rationale\n",
+              "  file (docs/ops/GATE-REGISTRY-DESIGN.md §2).\n",
+            ])
+            [] => balCompute regPath gates shs base regSrc
 
 balIndent : List String -> List String
 balIndent [] = []

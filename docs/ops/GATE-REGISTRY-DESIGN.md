@@ -177,16 +177,40 @@ hold without 227 chances to disagree with itself:
 
 ```toml
 [[shard]]
-name        = "engines"
-full_cores  = true                              # ci.yml's `full_cores: "1"` matrix key
-wasm_arm    = true                              # ci.yml's `wasm_arm: "1"` matrix key
-rationale   = "test/gate_shards/engines.txt"    # PATH to the row's placement prose
+name         = "engines"
+full_cores   = true                              # ci.yml's `full_cores: "1"` matrix key
+wasm_arm     = true                              # ci.yml's `wasm_arm: "1"` matrix key
+rationale    = "test/gate_shards/engines.txt"    # PATH to the row's placement prose
+pinned_gates = ["pds/test/protocol_all_engines", "diff_compiler_engines", "diff_compiler_rejection_parity"]
 ```
 
 - **Booleans, not `"1"`.** ci.yml OMITS the key when the option is off; that
   absence is the generator's encoding of `false`, not the registry's. Both keys
   are required on every row — a row that merely forgot `wasm_arm` would otherwise
   lose its Wasm toolchain and take its gates' Wasm arms down without a word.
+- 🚨 **`pinned_gates` is a CLOSED ROW'S MEMBERSHIP, DECLARED — the one scheduling
+  fact no cost measurement can derive.** A `full_cores` row is closed to the
+  packer, which never moves a gate onto it or off it. That is right as a packing
+  rule and was, on its own, a hole: the balancer seeded the row from whatever
+  gates happened to name it, so the row was the last place a `shard` value was
+  still hand-assignable, and a hand edit in either direction was ADOPTED by the
+  next `medaka gate balance` run and reported "already balanced" ever after
+  (review finding F3 of #2178, tracked as #2205). The worse half was moving the
+  pinned gate OFF: a cost objective blind to the pin PREFERS that, because
+  idling a whole runner and stacking the suite's heaviest gate onto a shared one
+  improves pole/median (measured: 1.005 against 1.073).
+
+  So it is declared per row and checked against the registry in BOTH directions
+  — a member not declared, and a declaration not a member — which is what makes
+  it an invariant a wrong committed state can FAIL rather than a fiat under
+  which whatever is committed defines itself as correct. An OPEN row declares
+  `pinned_gates = []`, and a non-empty list on one is a hard error: its
+  membership is the packer's output, so a declaration there is prose the tool
+  would ignore, and a reader would take it for a constraint. Widening or
+  narrowing a closed row is a deliberate CI-capacity decision, made in the same
+  commit as the row's `test/gate_shards/<name>.txt` rationale — never a side
+  effect of a baseline re-ingest. Pinned by `test/diff_compiler_gate_balance.sh`
+  (the `pin_intruder`, `pin_deserter` and `pin_on_open_row` fixtures).
 - **`rationale` is a path, not the prose.** Two reasons, and the first is
   decisive: the reader's TOML subset has no multi-line string (a `"""` is a hard
   parse error by design, `stdlib/toml.mdk`), so 180 lines of English would have to
@@ -331,6 +355,11 @@ own place in the bootstrap, for no gain — §5's circularity is unchanged eithe
   hysteresis band no longer decides what is written (a band that keeps a
   divergent-but-close assignment makes "the derived assignment" a set, and a
   check can only police a value).
+
+  ⚠️ ONE RESIDUAL, closed separately (#2205): closure alone left the closed row's
+  membership seeded from `c.curRow`, so `engines` remained hand-assignable while
+  the other seven rows were derived. It is now DECLARED in `pinned_gates` and
+  checked in both directions (§2a).
 
   A new `[[gate]]` still needs SOME `shard` value — the schema requires the field.
   Write the row you would guess, or `other-job`; the balancer decides the real

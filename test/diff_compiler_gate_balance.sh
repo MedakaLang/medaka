@@ -4,7 +4,7 @@
 #
 # `medaka gate balance` CHOOSES every schedulable gate's ci.yml matrix row from
 # the registry's constraints plus the measured cost baseline, and rewrites the
-# `shard = "…"` lines of test/gates.toml in place. This gate grades the four
+# `shard = "…"` lines of test/gates.toml in place. This gate grades the five
 # properties that make that safe to run unattended. Every one of them fails
 # SILENTLY if it regresses — a wrong packing still produces a well-formed
 # registry, a green build, and eight green `gates (<row>)` checks.
@@ -37,13 +37,30 @@
 #      so — pointing a reader at "repack harder" when the answer is "this gate
 #      must get faster" costs them the whole investigation.
 #
+#   5. A CLOSED ROW'S MEMBERSHIP IS DECLARED AND CHECKED, NOT OBSERVED (#2205,
+#      review finding F3). The packer never moves a gate onto a `full_cores`
+#      row or off it, which left that row as the ONE place a `shard` value was
+#      still hand-assignable: the balancer seeded it from whatever named it, so
+#      a hand edit in either direction was ADOPTED by the next run and reported
+#      "already balanced" for ever after. The `pin_intruder` and `pin_deserter`
+#      fixtures are those two edits, in registries that are otherwise perfectly
+#      healthy — legal, fully costed, pole/median 1.000, and with the derived
+#      open-row assignment equal to the committed one — because that is what
+#      made the real injections invisible. `pin_on_open_row` pins the schema's
+#      other half: a `pinned_gates` list on a row the packer owns is a
+#      declaration the tool would ignore, so it is refused rather than quietly
+#      believed.
+#
 # Plus: the committed test/gates.toml IS the balancer's own output
 # (`--check`), so a hand-edited `shard` field cannot ride in unnoticed.
 #
 # ⚠️ The fixtures under test/gate_balance_fixtures/ are SYNTHETIC and
 # hand-written — never the real baseline. Degenerate cases are the point (one
 # gate dominating a row, a constraint set admitting exactly one candidate row),
-# and the real numbers move every time the baseline is re-ingested.
+# and the real numbers move every time the baseline is re-ingested. The three
+# `pin_*` fixtures are the exception that proves the rule: they are deliberately
+# NON-degenerate, because a closed-row injection is only interesting in a
+# registry that is healthy in every other respect.
 #
 # Every mutating run below goes against a COPY under `mktemp -d`. This gate
 # never writes to the tree.
@@ -80,7 +97,8 @@ _bal() {
     "$@" >"$_out" 2>&1
 }
 
-for stem in wasm_only_row dominating_gate uncosted_gate; do
+for stem in wasm_only_row dominating_gate uncosted_gate \
+            pin_intruder pin_deserter pin_on_open_row; do
   cp "$FIX/$stem.toml" "$TMP/$stem.toml"
 done
 
@@ -196,6 +214,57 @@ else
     bad "refused, but not for the missing-cost reason"
     sed -e 's/^/        /' "$TMP/u.txt"
   fi
+fi
+
+# ── 6. a closed row's membership is an invariant, failing in BOTH directions ──
+#
+# Graded on the MESSAGE and not merely on the exit code: a refusal that does not
+# name the gate and the row sends a reader to `git diff` on a 3500-line
+# registry. And graded on the MUTATING form as well as `--check` — the F3
+# injections were not dangerous because `--check` missed them, they were
+# dangerous because one ordinary `medaka gate balance` run swallowed them into
+# the committed pin and every run after that agreed.
+_pin_case() {
+  _stem="$1"; _needle="$2"; _what="$3"
+  if _bal "$_stem" "$TMP/$_stem.txt" --check; then
+    bad "$_what was accepted by --check"
+    sed -e 's/^/        /' "$TMP/$_stem.txt"
+  elif grep -q "$_needle" "$TMP/$_stem.txt"; then
+    ok "$_what is refused by --check, and the message names it"
+  else
+    bad "$_what was refused, but not for the pinned_gates reason"
+    sed -e 's/^/        /' "$TMP/$_stem.txt"
+  fi
+  if _bal "$_stem" "$TMP/$_stem.mut.txt"; then
+    bad "$_what was ADOPTED by the mutating form"
+  elif cmp -s "$FIX/$_stem.toml" "$TMP/$_stem.toml"; then
+    ok "the mutating form refuses it too, and wrote nothing"
+  else
+    bad "the mutating form refused $_what but rewrote the registry anyway"
+  fi
+}
+
+_pin_case pin_intruder \
+  "'intruder' is committed on this closed row but is not in its pinned_gates" \
+  "a gate hand-moved ONTO a closed row"
+
+_pin_case pin_deserter \
+  "pinned gate 'pinned1' is committed on row 'a' instead" \
+  "the pinned gate hand-moved OFF its closed row"
+
+_pin_case pin_on_open_row \
+  "pinned_gates is non-empty" \
+  "a pinned_gates list on an OPEN row"
+
+# The real registry's own closed row, asserted by NAME and not by count: the
+# whole point of `engines` is WHICH gates are on it (diff_compiler_engines needs
+# a whole runner; the other two ride along for the same wasm toolchain), and a
+# check that counted three members would pass a swap.
+if grep -q '^pinned_gates = \["pds/test/protocol_all_engines", "diff_compiler_engines", "diff_compiler_rejection_parity"\]$' "$TMP/real_before.toml"; then
+  ok "the real engines row declares its three pinned gates, by name"
+else
+  bad "test/gates.toml's engines row does not declare the expected three pinned gates"
+  grep -n 'pinned_gates' "$TMP/real_before.toml" | sed -e 's/^/        /'
 fi
 
 if [ "$fail" -eq 0 ]; then
