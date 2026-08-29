@@ -3357,7 +3357,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_ci_gen_drift.sh"
 oracles = []
-sources = ["compiler/tools/gate_cmd.mdk", "test/diff_compiler_ci_gen_drift.sh", "test/gates.toml", ".github/workflows/ci.yml"]
+sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_cost.mdk", "test/diff_compiler_ci_gen_drift.sh", "test/gates.toml", "test/gate_cost_baseline.json", ".github/workflows/ci.yml"]
 corpus = []
 toolchain = []
 

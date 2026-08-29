@@ -5,7 +5,8 @@
    language), `medaka gate run [<selector>...]`, which EXECUTES the selected
    gates, `medaka gate verify` (the drift gate: TEXT-ONLY, no build — every
    gate candidate enrolled-or-ledgered, every entry's `run`/`oracles`/`corpus`
-   targets exist, every entry reachable by a selector, every `name` unique)
+   targets exist, every entry reachable by a selector, every `name` unique and
+   inside a charset safe to interpolate into YAML and into a shell word)
    and `medaka gate
    explain <path>` (the reverse lookup: which entries does a CHANGED PATH
    select, via which `sources` glob or `corpus` directory, and what the
@@ -1506,10 +1507,88 @@ dupNameFrom gates (n::ns) =
 duplicateNameViolations : List Gate -> List String
 duplicateNameViolations gates = dupNameFrom gates (sortUniqS (gateNames gates))
 
--- ── assembling and rendering the six classes ────────────────────────────────
+-- Check 7 (#2204): every `name` — a gate's and a `[[shard]]` row's — is inside
+-- a CONSERVATIVE CHARSET.
+--
+-- ⚠️ A name is not just an identifier here, it is INTERPOLATED INTO TWO
+-- LANGUAGES it does not control.  `medaka gate ci` emits a gate name into
+-- ci.yml as a single-quoted word inside a double-quoted YAML scalar
+-- (`pattern: "'a' 'b'"`), which the job then hands to `sh test/run_gates.sh`
+-- as an UNQUOTED shell word; and a `[[shard]]` name is emitted as a bare YAML
+-- scalar (`- name: tools`) that also becomes the required status-check context
+-- `gates (<name>)`.  A `'`, `"`, `$`, backtick, `;`, `&`, `|`, `<`, `>`, `(`,
+-- `)`, `#`, `:`, a space or a newline in a name therefore does not produce a
+-- bad NAME — it produces a different WORKFLOW, or a different COMMAND, with no
+-- error anywhere in this tool.  Nothing else in `verify` looks at a name's
+-- spelling: check 4 (reachability) proves a name is selectable, and a name
+-- full of metacharacters is perfectly selectable.
+--
+-- The allowed set is `[A-Za-z0-9_./]`, first character alphanumeric or `_`.
+-- DERIVED, not chosen: it is exactly the set the whole committed registry
+-- already uses (`grep '^name = "' test/gates.toml | tr -d 'A-Za-z0-9_./'`
+-- yields nothing), so it forbids only spellings nothing has ever needed.  `/`
+-- is in because out-of-`test/` gates are named by path (`pds/test/repo_vectors`);
+-- `-` is out because a leading one reads as a flag to every consumer, and no
+-- name uses one.
+nameCharOk : String -> Bool
+nameCharOk c
+  | c >= "a" && c <= "z" = True
+  | c >= "A" && c <= "Z" = True
+  | c >= "0" && c <= "9" = True
+  | c == "_" = True
+  | c == "." = True
+  | c == "/" = True
+  | otherwise = False
 
-verifyClasses : String -> List Gate -> <IO> Result String (List (String, List String))
-verifyClasses root gates = match gateCandidates root
+nameLeadOk : String -> Bool
+nameLeadOk c
+  | c == "." = False
+  | c == "/" = False
+  | otherwise = nameCharOk c
+
+nameCharsOk : String -> Int -> Int -> Bool
+nameCharsOk s i n
+  | i >= n = True
+  | nameCharOk (stringSlice i (i + 1) s) = nameCharsOk s (i + 1) n
+  | otherwise = False
+
+-- The first character outside the set, as `<char>` at 1-based position — the
+-- message has to name WHICH byte, or the reader is left eyeballing a string
+-- whose whole problem is that it contains something invisible.
+firstBadChar : String -> Int -> Int -> String
+firstBadChar s i n
+  | i >= n = "(none)"
+  | not (nameCharOk (stringSlice i (i + 1) s)) =
+    "'\{stringSlice i (i + 1) s}' at position \{intToString (i + 1)}"
+  | otherwise = firstBadChar s (i + 1) n
+
+unsafeName : String -> String -> List String
+unsafeName kind n
+  | n == "" = [
+    "(empty): a \{kind} name is empty — it cannot be selected, quoted or generated"
+  ]
+  | not (nameLeadOk (stringSlice 0 1 n)) =
+    ["\{n}: \{kind} name must start with a letter, a digit or '_'"]
+  | not (nameCharsOk n 0 (stringLength n)) = [
+    "\{n}: \{kind} name contains \{firstBadChar n 0 (stringLength n)} — allowed characters are letters, digits, '_', '.' and '/' (a name is emitted into ci.yml and re-read as an unquoted shell word)"
+  ]
+  | otherwise = []
+
+unsafeGateNames : List Gate -> List String
+unsafeGateNames [] = []
+unsafeGateNames (g::gs) = unsafeName "gate" g.name ++ unsafeGateNames gs
+
+unsafeShardNames : List Shard -> List String
+unsafeShardNames [] = []
+unsafeShardNames (s::ss) = unsafeName "shard row" s.name ++ unsafeShardNames ss
+
+unsafeNameViolations : List Gate -> List Shard -> List String
+unsafeNameViolations gates shs = unsafeGateNames gates ++ unsafeShardNames shs
+
+-- ── assembling and rendering the seven classes ──────────────────────────────
+
+verifyClasses : String -> List Gate -> List Shard -> <IO> Result String (List (String, List String))
+verifyClasses root gates shs = match gateCandidates root
   Err m => Err "could not enumerate gate candidates: \{m}"
   Ok cands =>
     let tools = toolNames root
@@ -1523,6 +1602,7 @@ verifyClasses root gates = match gateCandidates root
         ("missing corpus targets", corpusTargetViolations root gates),
         ("unreachable entries", reachabilityViolations gates gates),
         ("duplicate entry names", duplicateNameViolations gates),
+        ("unsafe entry names", unsafeNameViolations gates shs),
       ]
 
 renderClass : (String, List String) -> String
@@ -1539,8 +1619,8 @@ totalViolations : List (String, List String) -> Int
 totalViolations [] = 0
 totalViolations ((_, vs)::cs) = listLen vs + totalViolations cs
 
-verifyOutput : String -> List Gate -> <IO> Result String String
-verifyOutput root gates = match verifyClasses root gates
+verifyOutput : String -> List Gate -> List Shard -> <IO> Result String String
+verifyOutput root gates shs = match verifyClasses root gates shs
   Err m => Err "medaka gate verify: \{m}\n"
   Ok classes =>
     let n = totalViolations classes
@@ -1572,9 +1652,11 @@ verifyCmdBody argv = match parseVerifyArgs argv VerifyArgs { registry = None }
       Err m => emit (Err "medaka gate verify: cannot read registry: \{m}")
       Ok src => match parseRegistry src
         Err m => emit (Err "medaka gate verify: \{m}")
-        Ok gates =>
-          let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-          emit (verifyOutput root gates)
+        Ok gates => match parseShards src
+          Err m => emit (Err "medaka gate verify: \{m}")
+          Ok shs =>
+            let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+            emit (verifyOutput root gates shs)
 
 -- ── `gate explain <path>` ────────────────────────────────────────────────────
 --
@@ -2560,28 +2642,59 @@ balCurrentLegal (c::cs) rs
   | c.needsWasm && not (balRowIsWasm c.curRow rs) = False
   | otherwise = balCurrentLegal cs rs
 
--- Take the target when it EARNS the churn.  Three ways it can:
---
---   * the current assignment is ILLEGAL (above) — repaired at any cost;
---   * it beats the current pole by more than `balMarginPct` — the hysteresis
---     band, which is what stops a millisecond of baseline noise from
---     re-shuffling the matrix; or
---   * the current assignment misses the enforced factor and the target meets
---     it — a violation is worth a move of any size.
---
--- ⚠️ IDEMPOTENT BY CONSTRUCTION, not by luck.  Once the target is on disk,
--- `current` and `target` are the same assignment (`balTarget` never reads an
--- open gate's `shard`), so the pole test compares the pole against itself
--- minus 5%, the factor test compares a factor against itself, and the legality
--- test runs on an assignment `balPlace` built out of legal rows only.  All
--- three are false, so the second run writes nothing — for ANY registry and ANY
--- baseline, not just the ones a test happens to cover.
-balTakeTarget : List Cand -> List Row -> List Row -> Bool
-balTakeTarget cs cur tgt
-  | not (balCurrentLegal cs cur) = True
-  | balPole tgt * 100 < balPole cur * (100 - balMarginPct) = True
-  | balFactorMilli cur > balTargetMilli && balFactorMilli tgt <= balTargetMilli = True
-  | otherwise = False
+{- | 🚨 THE BAND ANNOTATES; IT NO LONGER DECIDES (S-4, #2178).
+
+   S-3 gave the band a THIRD job beyond damping churn: when the committed
+   assignment differed from the target by less than `balMarginPct` of the pole,
+   the balancer kept the committed one and exited 0.  That made "the derived
+   assignment" a SET rather than a value, and a check can only ever police a
+   value.  Measured on the balanced registry, moving `diff_compiler_source_bytes`
+   from `tools` to `types` by hand shifted the pole by 0s, so
+   `medaka gate balance --check` reported *"already balanced"* and exited 0 —
+   the hand edit this slice exists to make red.
+
+   The argument is S-3's own, one step further.  Its comment above says a band
+   that damps a CORRECTNESS repair is a silent wrong answer, because "legality
+   is not a cost".  DERIVEDNESS is not a cost either: the whole point of
+   #2178 is that `shard` stops being data a human may choose, and a band that
+   silently ratifies a human's choice is that property's only hole.
+
+   So the emitted assignment is now always `balTarget` — a pure function of
+   (rows, costs, toolchains).  The band survives as the REPORT's account of how
+   much a move was worth, and `balMarginPct` is still what that account is
+   measured against.
+
+   Idempotence is unaffected and is now trivial rather than argued: the target
+   is a fixed point of itself, so a second run on an unchanged baseline emits
+   byte-identical text and `balWrite` writes nothing.
+
+   What the band cost, and what is paid for it: a baseline re-ingest whose
+   noise moves a gate now moves that gate in `test/gates.toml` too, so a
+   re-ingest commit carries a matrix reshuffle it used to be able to skip.
+   That is the price of the assignment being checkable at all, and the repair
+   is two mechanical commands (`medaka gate balance`, `make gen-ci`), not a
+   judgement call. -}
+balBandNote : Bool -> Bool -> Bool -> String
+balBandNote True _ _ = " — OVERRIDDEN (illegal assignment)"
+balBandNote _ True _ = " — TAKEN"
+balBandNote _ _ True =
+  " — OVERRIDDEN (the committed assignment is not the derived one)"
+balBandNote _ _ _ =
+  " — not reached (the committed assignment already IS the derived one)"
+
+-- The first gate whose committed row is not its derived row, for the check's
+-- message.  A `git diff` of 164 lines does not tell a reader WHICH gate the
+-- tool disagrees about, and that is the only fact they need.
+balFirstMove : List Place -> Option Place
+balFirstMove [] = None
+balFirstMove (p::ps)
+  | p.pfrom /= p.pto = Some p
+  | otherwise = balFirstMove ps
+
+balMoveLine : List Place -> String
+balMoveLine ps = match balFirstMove ps
+  None => ""
+  Some p => "  first divergence: '\{p.pname}' is committed on row '\{p.pfrom}' but derives to '\{p.pto}'.\n"
 
 -- The enforcement.  Distinguishes the two ways the target can be missed,
 -- because they need different repairs: a packing this command could fix, or
@@ -2700,26 +2813,27 @@ balIndent (x::xs) = "    \{x}" :: balIndent xs
 balCompute : String -> List Gate -> List Shard -> List GateCost -> String -> Result String (String, String)
 balCompute regPath gates shs base regSrc =
   let cs = balCands base gates
-  let (curPs, curRows) = balCurrent cs (balRows shs)
+  let (_, curRows) = balCurrent cs (balRows shs)
   match balTarget cs (balRows shs)
     Err m => Err m
-    Ok (tgtPs, tgtRows) =>
+    Ok (ps, rows) =>
       let illegal = not (balCurrentLegal cs curRows)
-      let take = balTakeTarget cs curRows tgtRows
-      let (ps, rows) = if take then (tgtPs, tgtRows) else (curPs, curRows)
+      let gains = balPole rows * 100 < balPole curRows * (100 - balMarginPct)
+      let moved = balMoved ps > 0
       let label = if illegal then
         "rebalanced (the committed assignment ran a gate on a row lacking its toolchain)"
-      else if take then
+      else if moved then
         "rebalanced"
       else
-        "unchanged (within the hysteresis band)"
+        "unchanged (the committed assignment is already the derived one)"
       let head = stringConcat [
         "medaka gate balance: \{regPath}\n",
         balReport label cs rows ps,
         "  hysteresis: a move needs a pole gain of more than \{intToString balMarginPct}%",
-        if illegal then " — OVERRIDDEN (illegal assignment)" else if take then " — TAKEN" else " — DECLINED",
+        balBandNote illegal gains moved,
         "\n  target pole/median \{balMilli balTargetMilli}",
         if balFactorMilli rows <= balTargetMilli then " — MET\n" else " — MISSED\n",
+        balMoveLine ps,
       ]
       match balEnforce cs rows
         Some m => Err "\{head}\{m}"
@@ -2750,9 +2864,12 @@ balCheckResult regPath regSrc out head
   | otherwise = Err (stringConcat [
     head,
     "medaka gate balance: \{regPath}: the committed shard assignment is not the\n",
-    "one the balancer derives from test/gate_cost_baseline.json.  First difference:\n",
+    "one the balancer derives from test/gate_cost_baseline.json.  A `shard` field\n",
+    "is DERIVED DATA (#2178): it is not hand-editable, and a hand edit that keeps\n",
+    "ci.yml self-consistent is exactly what this check exists to catch.  First\n",
+    "differing line:\n",
     ciDiffAt (splitNl regSrc) (splitNl out) 1,
-    "\nRun 'medaka gate balance' and commit the result.\n",
+    "\nRun 'medaka gate balance' then 'make gen-ci', and commit both.\n",
   ])
 
 balCmdBody : List String -> <IO> Unit

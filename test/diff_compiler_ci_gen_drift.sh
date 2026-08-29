@@ -34,14 +34,35 @@
 # .github/workflows/ci.yml), so this gate is NOT binary-free — same accepted
 # gap as diff_compiler_gate_registry.sh.
 #
-# ⚠️ This gate is ADVISORY-tier. The same `--check` call also runs inside the
-# REQUIRED test/diff_compiler_ci_shard_coverage.sh, so the required tier does
-# not depend on this gate for the drift half.
+# ⚠️ THIS GATE IS REQUIRED-TIER: the `ci-gen-drift` job that runs it is one of
+# the repo ruleset's required status-check contexts (derive it, never trust a
+# list — AGENTS.md [W-REQUIRED-CHECKS]). An earlier revision of this comment
+# called it advisory; it was wrong, and check 2 below is placed here BECAUSE
+# the tier is required.
+#
+# ── CHECK 2 (S-4, #2178): `shard` IS DERIVED, AND HAND EDITS MUST RED ────────
+#
+# Check 1 above proves ci.yml's matrix agrees with the `shard` values in
+# test/gates.toml. That is satisfied by a SELF-CONSISTENT HAND EDIT: change a
+# gate's `shard`, run `make gen-ci` so the matrix follows, and check 1 is
+# happy — the registry and the workflow agree with each other about a row
+# nothing derived.
+#
+# Check 2 closes it by asserting the other half: that the `shard` values are
+# themselves what `medaka gate balance` derives from test/gate_cost_baseline.json.
+# Together the two say ci.yml == f(registry) AND registry == g(baseline), which
+# is the whole claim of #2178 — `shard` is a generated output, not hand-edited
+# data.
+#
+# `medaka gate balance --check` writes nothing, for the same reason check 1
+# does not regenerate-then-diff: a mutating run would HEAL the hand edit before
+# anything could see it.
 #
 # Usage:  sh test/diff_compiler_ci_gen_drift.sh
-# Exit:   0 ci.yml's generated region already matches what test/gates.toml
-#         generates; 1 it drifted (the message names the first differing line
-#         and the fix); 2 no native medaka binary to run it with.
+# Exit:   0 ci.yml's generated region matches what test/gates.toml generates
+#         AND the committed shard assignment is the derived one; 1 either
+#         drifted (the message names the offending gate/line and the fix);
+#         2 no native medaka binary to run it with.
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -49,7 +70,16 @@ MEDAKA="${MEDAKA:-$ROOT/medaka}"
 
 [ -x "$MEDAKA" ] || { echo "build native first: make medaka (missing $MEDAKA)"; exit 2; }
 
+fail=0
+
 if ! MEDAKA_ROOT="$ROOT" LC_ALL=C "$MEDAKA" gate ci --check; then
   echo "::error::medaka gate ci --check failed (its message above says whether .github/workflows/ci.yml's generated gates-matrix region drifted, or test/gates.toml itself is bad). If it drifted, run 'make gen-ci' and commit the result."
-  exit 1
+  fail=1
 fi
+
+if ! MEDAKA_ROOT="$ROOT" LC_ALL=C "$MEDAKA" gate balance --check; then
+  echo "::error::medaka gate balance --check failed: test/gates.toml's shard assignment is not the one derived from test/gate_cost_baseline.json. \`shard\` is DERIVED DATA (#2178), not a field to edit by hand — run 'medaka gate balance' then 'make gen-ci' and commit both. (If the message above is a refusal rather than a divergence — an uncosted gate, or a dominating one — fix that first; it is not a drift.)"
+  fail=1
+fi
+
+[ "$fail" -eq 0 ] || exit 1
