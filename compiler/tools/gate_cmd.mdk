@@ -394,6 +394,7 @@ gateJson : Gate -> Json
 gateJson g = jObject
   [
     ("name", JString g.name),
+    ("baselineKey", JString (baselineKey g.run)),
     ("area", JString g.area),
     ("shard", JString g.shard),
     ("project", JString g.project),

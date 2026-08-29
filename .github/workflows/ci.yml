@@ -930,7 +930,7 @@ jobs:
                 echo "|---|---|"
               } >> "$GITHUB_STEP_SUMMARY"
               for g in $failed; do
-                area="$(printf '%s' "$gates_json" | jq -r --arg n "$g" '.[] | select(.name==$n) | .area')"
+                area="$(printf '%s' "$gates_json" | jq -r --arg n "$g" '.[] | select(.baselineKey==$n) | .area')"
                 [ -n "$area" ] || area="(unknown — not in registry)"
                 echo "::error title=${{ matrix.name }} shard — $g::${{ matrix.name }} shard — $area: $g failed"
                 echo "| \`$g\` | $area |" >> "$GITHUB_STEP_SUMMARY"

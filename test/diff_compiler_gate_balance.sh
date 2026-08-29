@@ -83,8 +83,8 @@ bad() { printf '  FAIL  %s\n' "$1"; fail=$((fail + 1)); }
 echo "── gate shard balancer (#2178) ─────────────────────────────────────────"
 
 if [ ! -x "$MEDAKA" ]; then
-  echo "  SKIP  no medaka binary at $MEDAKA (build with 'make medaka')"
-  exit 0
+  echo "build native first: make medaka (missing $MEDAKA)"
+  exit 2
 fi
 
 # Run the balancer against a fixture pair. $1 = fixture stem, $2 = output file,
@@ -119,10 +119,21 @@ done
 out="$TMP/real.txt"
 cp "$ROOT/test/gates.toml" "$TMP/real_before.toml"
 MEDAKA_ROOT="$ROOT" "$MEDAKA" gate balance --check >"$out" 2>&1
+check_rc=$?
 if cmp -s "$TMP/real_before.toml" "$ROOT/test/gates.toml"; then
   ok "--check left test/gates.toml byte-identical"
 else
   bad "--check WROTE to test/gates.toml"
+fi
+
+# The committed registry is already balanced, so `--check` must exit 0 here.
+# A perturbed baseline whose derived assignment diverges from the committed
+# one makes `--check` exit non-zero (F-1's fix, and S-4's own check) — a gate
+# that never reads $? would still report every other assertion passing.
+if [ "$check_rc" -eq 0 ]; then
+  ok "--check exits 0 on the already-balanced committed tree"
+else
+  bad "--check exited $check_rc on the already-balanced committed tree (expected 0)"
 fi
 
 # The projection is the number a reader acts on; assert it is present and that

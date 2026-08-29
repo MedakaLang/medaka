@@ -851,7 +851,8 @@ for f in $changed; do
     # gate has to run on a baseline change, not just the transport's.)
     test/gate_cost_ingest.sh|test/gate_cost_baseline.json)
                                    add 'diff_compiler_gate_cost'
-                                   add 'diff_compiler_gate_balance' ;;
+                                   add 'diff_compiler_gate_balance'
+                                   add 'diff_compiler_ci_gen_drift' ;;
     # S2-5 (end-of-sprint review, #2177): the generated file itself had no arm
     # at all, so a change here fell through to the catch-all — the two gates
     # that actually police its generated content are the ones that read it.
