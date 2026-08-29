@@ -29,7 +29,7 @@
    non-`other-job` entries' `run` fields is a bijection onto the baseline's 202
    gate names — 0 missing, 0 duplicate keys, 0 unused baseline rows. -}
 
-import json.{JNull, Json, asArray, asInt, asString, lookup, parse}
+import json.{JNull, Json, asArray, asBool, asInt, asString, lookup, parse}
 import support.util.{joinWith, splitOnChar, startsWith}
 
 {- | One gate's measured cost.  `medianMs` is the baseline's `medianMs` —
@@ -121,6 +121,85 @@ parseCostBaseline src = match parse src
       Some arr if arrayLength arr == 0 =>
         Err "gate cost baseline: 'gates' is empty"
       Some arr => costEntries arr 0 (arrayLength arr) []
+
+-- ── Reading the `runs[]` provenance rows (#2208) ────────────────────────────
+--
+-- `runs[]` is a DIFFERENT axis from `gates[]`: one entry per CI row (shard
+-- run), not per gate, keyed `"<runId>:<runAttempt>:<shard>"`.  Since S-1 it
+-- also carries the row's own `jobs` (outer worker count), `parallel`
+-- (whether the fan-out ran concurrently), and `rowElapsedMs` (the row's own
+-- wall clock, spanning its whole `xargs -P $JOBS` fan-out) — all three
+-- OPTIONAL, since a run ingested before this field existed has none of them
+-- and must read as "unknown", never as a false 0/zero-cost.
+--
+-- This is a READ ONLY.  `balCompute`/`balCands` (the shard packer) do not
+-- consume it — wiring these facts into the score is a later slice's job, not
+-- this one's.  See `test/gate_cost_baseline.json`'s own header note and the
+-- module's own doc-comment above for why the file exists at all.
+
+{- | One `runs[]` provenance row. -}
+public export data RunRecord =
+  | RunRecord {
+      key : String,
+      runId : String,
+      shard : String,
+      jobs : Option Int,
+      parallel : Option Bool,
+      rowElapsedMs : Option Int,
+    }
+
+runEntry : Int -> Json -> Result String RunRecord
+runEntry i e = match asString (orNull (lookup "key" e))
+  None => Err "gate cost baseline: runs[\{intToString i}]: missing string field 'key'"
+  Some k => match asString (orNull (lookup "runId" e))
+    None => Err "gate cost baseline: runs[\{intToString i}] '\{k}': missing string field 'runId'"
+    Some rid => match asString (orNull (lookup "shard" e))
+      None => Err "gate cost baseline: runs[\{intToString i}] '\{k}': missing string field 'shard'"
+      Some sh => Ok RunRecord {
+        key = k,
+        runId = rid,
+        shard = sh,
+        jobs = asInt (orNull (lookup "jobs" e)),
+        parallel = asBool (orNull (lookup "parallel" e)),
+        rowElapsedMs = asInt (orNull (lookup "rowElapsedMs" e)),
+      }
+
+runEntries : Array Json -> Int -> Int -> List RunRecord -> Result String (List RunRecord)
+runEntries arr i n acc
+  | i >= n = Ok (reverseRuns acc [])
+  | otherwise = match runEntry i (arrayGetUnsafe i arr)
+    Err m => Err m
+    Ok r => runEntries arr (i + 1) n (r::acc)
+
+reverseRuns : List RunRecord -> List RunRecord -> List RunRecord
+reverseRuns [] acc = acc
+reverseRuns (r::rs) acc = reverseRuns rs (r::acc)
+
+{- | Parse a cost baseline's `runs[]` provenance rows, in file order (oldest
+   first — the ingester appends new runs after old ones, dropping only past
+   `--max-runs`).  A missing top-level `runs` array is an error, same as a
+   missing `gates` one; an EMPTY `runs` array is not — a freshly-created
+   baseline before its first ingest legitimately has none. -}
+export
+parseCostRuns : String -> Result String (List RunRecord)
+parseCostRuns src = match parse src
+  Err m => Err "gate cost baseline: \{m}"
+  Ok doc => match asArray (orNull (lookup "runs" doc))
+    None => Err "gate cost baseline: missing top-level array field 'runs'"
+    Some arr => runEntries arr 0 (arrayLength arr) []
+
+{- | The most recently ingested `runs[]` row for a given shard, or `None` if
+   the shard has never been recorded.  "Most recent" is file order: the
+   ingester only ever appends. -}
+export
+latestRunForShard : String -> List RunRecord -> Option RunRecord
+latestRunForShard sh rs = latestRunGo sh rs None
+
+latestRunGo : String -> List RunRecord -> Option RunRecord -> Option RunRecord
+latestRunGo _ [] acc = acc
+latestRunGo sh (r::rs) acc
+  | r.shard == sh = latestRunGo sh rs (Some r)
+  | otherwise = latestRunGo sh rs acc
 
 {- | The measured cost of the gate whose script path is `run`, or `None` when
    the baseline has no row for it.  Linear — the caller does this once per

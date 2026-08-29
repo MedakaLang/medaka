@@ -1,5 +1,5 @@
 # META
-source_lines=150
+source_lines=229
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cost.mdk — the per-gate cost baseline reader (#2178, epic #2182).
@@ -33,7 +33,7 @@ stages=DESUGAR,MARK
    non-`other-job` entries' `run` fields is a bijection onto the baseline's 202
    gate names — 0 missing, 0 duplicate keys, 0 unused baseline rows. -}
 
-import json.{JNull, Json, asArray, asInt, asString, lookup, parse}
+import json.{JNull, Json, asArray, asBool, asInt, asString, lookup, parse}
 import support.util.{joinWith, splitOnChar, startsWith}
 
 {- | One gate's measured cost.  `medianMs` is the baseline's `medianMs` —
@@ -126,6 +126,85 @@ parseCostBaseline src = match parse src
         Err "gate cost baseline: 'gates' is empty"
       Some arr => costEntries arr 0 (arrayLength arr) []
 
+-- ── Reading the `runs[]` provenance rows (#2208) ────────────────────────────
+--
+-- `runs[]` is a DIFFERENT axis from `gates[]`: one entry per CI row (shard
+-- run), not per gate, keyed `"<runId>:<runAttempt>:<shard>"`.  Since S-1 it
+-- also carries the row's own `jobs` (outer worker count), `parallel`
+-- (whether the fan-out ran concurrently), and `rowElapsedMs` (the row's own
+-- wall clock, spanning its whole `xargs -P $JOBS` fan-out) — all three
+-- OPTIONAL, since a run ingested before this field existed has none of them
+-- and must read as "unknown", never as a false 0/zero-cost.
+--
+-- This is a READ ONLY.  `balCompute`/`balCands` (the shard packer) do not
+-- consume it — wiring these facts into the score is a later slice's job, not
+-- this one's.  See `test/gate_cost_baseline.json`'s own header note and the
+-- module's own doc-comment above for why the file exists at all.
+
+{- | One `runs[]` provenance row. -}
+public export data RunRecord =
+  | RunRecord {
+      key : String,
+      runId : String,
+      shard : String,
+      jobs : Option Int,
+      parallel : Option Bool,
+      rowElapsedMs : Option Int,
+    }
+
+runEntry : Int -> Json -> Result String RunRecord
+runEntry i e = match asString (orNull (lookup "key" e))
+  None => Err "gate cost baseline: runs[\{intToString i}]: missing string field 'key'"
+  Some k => match asString (orNull (lookup "runId" e))
+    None => Err "gate cost baseline: runs[\{intToString i}] '\{k}': missing string field 'runId'"
+    Some rid => match asString (orNull (lookup "shard" e))
+      None => Err "gate cost baseline: runs[\{intToString i}] '\{k}': missing string field 'shard'"
+      Some sh => Ok RunRecord {
+        key = k,
+        runId = rid,
+        shard = sh,
+        jobs = asInt (orNull (lookup "jobs" e)),
+        parallel = asBool (orNull (lookup "parallel" e)),
+        rowElapsedMs = asInt (orNull (lookup "rowElapsedMs" e)),
+      }
+
+runEntries : Array Json -> Int -> Int -> List RunRecord -> Result String (List RunRecord)
+runEntries arr i n acc
+  | i >= n = Ok (reverseRuns acc [])
+  | otherwise = match runEntry i (arrayGetUnsafe i arr)
+    Err m => Err m
+    Ok r => runEntries arr (i + 1) n (r::acc)
+
+reverseRuns : List RunRecord -> List RunRecord -> List RunRecord
+reverseRuns [] acc = acc
+reverseRuns (r::rs) acc = reverseRuns rs (r::acc)
+
+{- | Parse a cost baseline's `runs[]` provenance rows, in file order (oldest
+   first — the ingester appends new runs after old ones, dropping only past
+   `--max-runs`).  A missing top-level `runs` array is an error, same as a
+   missing `gates` one; an EMPTY `runs` array is not — a freshly-created
+   baseline before its first ingest legitimately has none. -}
+export
+parseCostRuns : String -> Result String (List RunRecord)
+parseCostRuns src = match parse src
+  Err m => Err "gate cost baseline: \{m}"
+  Ok doc => match asArray (orNull (lookup "runs" doc))
+    None => Err "gate cost baseline: missing top-level array field 'runs'"
+    Some arr => runEntries arr 0 (arrayLength arr) []
+
+{- | The most recently ingested `runs[]` row for a given shard, or `None` if
+   the shard has never been recorded.  "Most recent" is file order: the
+   ingester only ever appends. -}
+export
+latestRunForShard : String -> List RunRecord -> Option RunRecord
+latestRunForShard sh rs = latestRunGo sh rs None
+
+latestRunGo : String -> List RunRecord -> Option RunRecord -> Option RunRecord
+latestRunGo _ [] acc = acc
+latestRunGo sh (r::rs) acc
+  | r.shard == sh = latestRunGo sh rs (Some r)
+  | otherwise = latestRunGo sh rs acc
+
 {- | The measured cost of the gate whose script path is `run`, or `None` when
    the baseline has no row for it.  Linear — the caller does this once per
    gate over a ~200-row baseline, and a scan beats standing a map up for it. -}
@@ -153,7 +232,7 @@ prop "baselineKey is idempotent on an already-flat key" (n : Int) =
   baselineKey (baselineKey "test/g\{intToString n}.sh") ==
     baselineKey "test/g\{intToString n}.sh"
 # DESUGAR
-(DUse false (UseGroup ("json") ((mem "JNull" false) (mem "Json" false) (mem "asArray" false) (mem "asInt" false) (mem "asString" false) (mem "lookup" false) (mem "parse" false))))
+(DUse false (UseGroup ("json") ((mem "JNull" false) (mem "Json" false) (mem "asArray" false) (mem "asBool" false) (mem "asInt" false) (mem "asString" false) (mem "lookup" false) (mem "parse" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "splitOnChar" false) (mem "startsWith" false))))
 (DData Public "GateCost" () ((variant "GateCost" (ConNamed (field "name" (TyCon "String")) (field "medianMs" (TyCon "Int"))))) ())
 (DTypeSig true "baselineKey" (TyFun (TyCon "String") (TyCon "String")))
@@ -176,6 +255,21 @@ prop "baselineKey is idempotent on an already-flat key" (n : Int) =
 (DFunDef false "reverseCosts" ((PCons (PVar "c") (PVar "cs")) (PVar "acc")) (EApp (EApp (EVar "reverseCosts") (EVar "cs")) (EBinOp "::" (EVar "c") (EVar "acc"))))
 (DTypeSig true "parseCostBaseline" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "GateCost")))))
 (DFunDef false "parseCostBaseline" ((PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "doc")) () (EMatch (EApp (EVar "asString") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "schema"))) (EVar "doc")))) (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "gate cost baseline: missing top-level string field 'schema'")))) (arm (PCon "Some" (PVar "sc")) ((GBool (EBinOp "/=" (EVar "sc") (EVar "costSchema")))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: unsupported schema '")) (EApp (EVar "display") (EVar "sc"))) (ELit (LString "' (this reader understands '"))) (EApp (EVar "display") (EVar "costSchema"))) (ELit (LString "')"))))) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "asArray") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "gates"))) (EVar "doc")))) (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "gate cost baseline: missing top-level array field 'gates'")))) (arm (PCon "Some" (PVar "arr")) ((GBool (EBinOp "==" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 0))))) (EApp (EVar "Err") (ELit (LString "gate cost baseline: 'gates' is empty")))) (arm (PCon "Some" (PVar "arr")) () (EApp (EApp (EApp (EApp (EVar "costEntries") (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))) (EListLit)))))))))
+(DData Public "RunRecord" () ((variant "RunRecord" (ConNamed (field "key" (TyCon "String")) (field "runId" (TyCon "String")) (field "shard" (TyCon "String")) (field "jobs" (TyApp (TyCon "Option") (TyCon "Int"))) (field "parallel" (TyApp (TyCon "Option") (TyCon "Bool"))) (field "rowElapsedMs" (TyApp (TyCon "Option") (TyCon "Int")))))) ())
+(DTypeSig false "runEntry" (TyFun (TyCon "Int") (TyFun (TyCon "Json") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "RunRecord")))))
+(DFunDef false "runEntry" ((PVar "i") (PVar "e")) (EMatch (EApp (EVar "asString") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "key"))) (EVar "e")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: runs[")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "]: missing string field 'key'"))))) (arm (PCon "Some" (PVar "k")) () (EMatch (EApp (EVar "asString") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "runId"))) (EVar "e")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: runs[")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "] '"))) (EApp (EVar "display") (EVar "k"))) (ELit (LString "': missing string field 'runId'"))))) (arm (PCon "Some" (PVar "rid")) () (EMatch (EApp (EVar "asString") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "shard"))) (EVar "e")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: runs[")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "] '"))) (EApp (EVar "display") (EVar "k"))) (ELit (LString "': missing string field 'shard'"))))) (arm (PCon "Some" (PVar "sh")) () (EApp (EVar "Ok") (ERecordCreate "RunRecord" ((fa "key" (EVar "k")) (fa "runId" (EVar "rid")) (fa "shard" (EVar "sh")) (fa "jobs" (EApp (EVar "asInt") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "jobs"))) (EVar "e"))))) (fa "parallel" (EApp (EVar "asBool") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "parallel"))) (EVar "e"))))) (fa "rowElapsedMs" (EApp (EVar "asInt") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "rowElapsedMs"))) (EVar "e")))))))))))))))
+(DTypeSig false "runEntries" (TyFun (TyApp (TyCon "Array") (TyCon "Json")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "RunRecord")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "RunRecord"))))))))
+(DFunDef false "runEntries" ((PVar "arr") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Ok") (EApp (EApp (EVar "reverseRuns") (EVar "acc")) (EListLit))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "runEntry") (EVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PVar "r")) () (EApp (EApp (EApp (EApp (EVar "runEntries") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "::" (EVar "r") (EVar "acc"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "reverseRuns" (TyFun (TyApp (TyCon "List") (TyCon "RunRecord")) (TyFun (TyApp (TyCon "List") (TyCon "RunRecord")) (TyApp (TyCon "List") (TyCon "RunRecord")))))
+(DFunDef false "reverseRuns" ((PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "reverseRuns" ((PCons (PVar "r") (PVar "rs")) (PVar "acc")) (EApp (EApp (EVar "reverseRuns") (EVar "rs")) (EBinOp "::" (EVar "r") (EVar "acc"))))
+(DTypeSig true "parseCostRuns" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "RunRecord")))))
+(DFunDef false "parseCostRuns" ((PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "doc")) () (EMatch (EApp (EVar "asArray") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "runs"))) (EVar "doc")))) (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "gate cost baseline: missing top-level array field 'runs'")))) (arm (PCon "Some" (PVar "arr")) () (EApp (EApp (EApp (EApp (EVar "runEntries") (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))) (EListLit)))))))
+(DTypeSig true "latestRunForShard" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "RunRecord")) (TyApp (TyCon "Option") (TyCon "RunRecord")))))
+(DFunDef false "latestRunForShard" ((PVar "sh") (PVar "rs")) (EApp (EApp (EApp (EVar "latestRunGo") (EVar "sh")) (EVar "rs")) (EVar "None")))
+(DTypeSig false "latestRunGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "RunRecord")) (TyFun (TyApp (TyCon "Option") (TyCon "RunRecord")) (TyApp (TyCon "Option") (TyCon "RunRecord"))))))
+(DFunDef false "latestRunGo" (PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "latestRunGo" ((PVar "sh") (PCons (PVar "r") (PVar "rs")) (PVar "acc")) (EIf (EBinOp "==" (EFieldAccess (EVar "r") "shard") (EVar "sh")) (EApp (EApp (EApp (EVar "latestRunGo") (EVar "sh")) (EVar "rs")) (EApp (EVar "Some") (EVar "r"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "latestRunGo") (EVar "sh")) (EVar "rs")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "costOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "costOf" ((PVar "run") (PVar "cs")) (EApp (EApp (EVar "costOfKey") (EApp (EVar "baselineKey") (EVar "run"))) (EVar "cs")))
 (DTypeSig false "costOfKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyApp (TyCon "Option") (TyCon "Int")))))
@@ -185,7 +279,7 @@ prop "baselineKey is idempotent on an already-flat key" (n : Int) =
 (DProp false "baselineKey flattens every separator" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "a/b/c")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ".sh")))) (EBinOp "++" (EBinOp "++" (ELit (LString "a_b_c")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString "")))))
 (DProp false "baselineKey is idempotent on an already-flat key" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "baselineKey") (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "test/g")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ".sh"))))) (EApp (EVar "baselineKey") (EBinOp "++" (EBinOp "++" (ELit (LString "test/g")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ".sh"))))))
 # MARK
-(DUse false (UseGroup ("json") ((mem "JNull" false) (mem "Json" false) (mem "asArray" false) (mem "asInt" false) (mem "asString" false) (mem "lookup" false) (mem "parse" false))))
+(DUse false (UseGroup ("json") ((mem "JNull" false) (mem "Json" false) (mem "asArray" false) (mem "asBool" false) (mem "asInt" false) (mem "asString" false) (mem "lookup" false) (mem "parse" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "splitOnChar" false) (mem "startsWith" false))))
 (DData Public "GateCost" () ((variant "GateCost" (ConNamed (field "name" (TyCon "String")) (field "medianMs" (TyCon "Int"))))) ())
 (DTypeSig true "baselineKey" (TyFun (TyCon "String") (TyCon "String")))
@@ -208,6 +302,21 @@ prop "baselineKey is idempotent on an already-flat key" (n : Int) =
 (DFunDef false "reverseCosts" ((PCons (PVar "c") (PVar "cs")) (PVar "acc")) (EApp (EApp (EVar "reverseCosts") (EVar "cs")) (EBinOp "::" (EVar "c") (EVar "acc"))))
 (DTypeSig true "parseCostBaseline" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "GateCost")))))
 (DFunDef false "parseCostBaseline" ((PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "doc")) () (EMatch (EApp (EVar "asString") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "schema"))) (EVar "doc")))) (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "gate cost baseline: missing top-level string field 'schema'")))) (arm (PCon "Some" (PVar "sc")) ((GBool (EBinOp "/=" (EVar "sc") (EVar "costSchema")))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: unsupported schema '")) (EApp (EMethodRef "display") (EVar "sc"))) (ELit (LString "' (this reader understands '"))) (EApp (EMethodRef "display") (EVar "costSchema"))) (ELit (LString "')"))))) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "asArray") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "gates"))) (EVar "doc")))) (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "gate cost baseline: missing top-level array field 'gates'")))) (arm (PCon "Some" (PVar "arr")) ((GBool (EBinOp "==" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 0))))) (EApp (EVar "Err") (ELit (LString "gate cost baseline: 'gates' is empty")))) (arm (PCon "Some" (PVar "arr")) () (EApp (EApp (EApp (EApp (EVar "costEntries") (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))) (EListLit)))))))))
+(DData Public "RunRecord" () ((variant "RunRecord" (ConNamed (field "key" (TyCon "String")) (field "runId" (TyCon "String")) (field "shard" (TyCon "String")) (field "jobs" (TyApp (TyCon "Option") (TyCon "Int"))) (field "parallel" (TyApp (TyCon "Option") (TyCon "Bool"))) (field "rowElapsedMs" (TyApp (TyCon "Option") (TyCon "Int")))))) ())
+(DTypeSig false "runEntry" (TyFun (TyCon "Int") (TyFun (TyCon "Json") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "RunRecord")))))
+(DFunDef false "runEntry" ((PVar "i") (PVar "e")) (EMatch (EApp (EVar "asString") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "key"))) (EVar "e")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: runs[")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "]: missing string field 'key'"))))) (arm (PCon "Some" (PVar "k")) () (EMatch (EApp (EVar "asString") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "runId"))) (EVar "e")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: runs[")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "] '"))) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString "': missing string field 'runId'"))))) (arm (PCon "Some" (PVar "rid")) () (EMatch (EApp (EVar "asString") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "shard"))) (EVar "e")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: runs[")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "] '"))) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString "': missing string field 'shard'"))))) (arm (PCon "Some" (PVar "sh")) () (EApp (EVar "Ok") (ERecordCreate "RunRecord" ((fa "key" (EVar "k")) (fa "runId" (EVar "rid")) (fa "shard" (EVar "sh")) (fa "jobs" (EApp (EVar "asInt") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "jobs"))) (EVar "e"))))) (fa "parallel" (EApp (EVar "asBool") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "parallel"))) (EVar "e"))))) (fa "rowElapsedMs" (EApp (EVar "asInt") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "rowElapsedMs"))) (EVar "e")))))))))))))))
+(DTypeSig false "runEntries" (TyFun (TyApp (TyCon "Array") (TyCon "Json")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "RunRecord")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "RunRecord"))))))))
+(DFunDef false "runEntries" ((PVar "arr") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Ok") (EApp (EApp (EVar "reverseRuns") (EVar "acc")) (EListLit))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "runEntry") (EVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PVar "r")) () (EApp (EApp (EApp (EApp (EVar "runEntries") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "::" (EVar "r") (EVar "acc"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "reverseRuns" (TyFun (TyApp (TyCon "List") (TyCon "RunRecord")) (TyFun (TyApp (TyCon "List") (TyCon "RunRecord")) (TyApp (TyCon "List") (TyCon "RunRecord")))))
+(DFunDef false "reverseRuns" ((PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "reverseRuns" ((PCons (PVar "r") (PVar "rs")) (PVar "acc")) (EApp (EApp (EVar "reverseRuns") (EVar "rs")) (EBinOp "::" (EVar "r") (EVar "acc"))))
+(DTypeSig true "parseCostRuns" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "RunRecord")))))
+(DFunDef false "parseCostRuns" ((PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "doc")) () (EMatch (EApp (EVar "asArray") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "runs"))) (EVar "doc")))) (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "gate cost baseline: missing top-level array field 'runs'")))) (arm (PCon "Some" (PVar "arr")) () (EApp (EApp (EApp (EApp (EVar "runEntries") (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))) (EListLit)))))))
+(DTypeSig true "latestRunForShard" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "RunRecord")) (TyApp (TyCon "Option") (TyCon "RunRecord")))))
+(DFunDef false "latestRunForShard" ((PVar "sh") (PVar "rs")) (EApp (EApp (EApp (EVar "latestRunGo") (EVar "sh")) (EVar "rs")) (EVar "None")))
+(DTypeSig false "latestRunGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "RunRecord")) (TyFun (TyApp (TyCon "Option") (TyCon "RunRecord")) (TyApp (TyCon "Option") (TyCon "RunRecord"))))))
+(DFunDef false "latestRunGo" (PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "latestRunGo" ((PVar "sh") (PCons (PVar "r") (PVar "rs")) (PVar "acc")) (EIf (EBinOp "==" (EFieldAccess (EVar "r") "shard") (EVar "sh")) (EApp (EApp (EApp (EVar "latestRunGo") (EVar "sh")) (EVar "rs")) (EApp (EVar "Some") (EVar "r"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "latestRunGo") (EVar "sh")) (EVar "rs")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "costOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "costOf" ((PVar "run") (PVar "cs")) (EApp (EApp (EVar "costOfKey") (EApp (EVar "baselineKey") (EVar "run"))) (EVar "cs")))
 (DTypeSig false "costOfKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyApp (TyCon "Option") (TyCon "Int")))))

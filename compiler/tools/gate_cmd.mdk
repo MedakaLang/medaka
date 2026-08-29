@@ -37,7 +37,14 @@ import toml.{Toml, parse, getString, getArray, getBool, tableCount, tableEntry}
 import json.{Json, JString, JInt, JFloat, JBool, jArray, jObject, stringify}
 import driver.build_cmd.{envOr, defaultMedakaRoot}
 import support.path.{joinPath}
-import tools.gate_cost.{GateCost, baselineKey, costOf, parseCostBaseline}
+import tools.gate_cost.{
+  GateCost,
+  RunRecord,
+  baselineKey,
+  costOf,
+  parseCostBaseline,
+  parseCostRuns,
+}
 import support.util.{
   contains,
   endsWith,
@@ -2909,30 +2916,47 @@ balNewText regPath regSrc baseSrc = match parseRegistry regSrc
     Err m => Err "medaka gate balance: \{m}"
     Ok shs => match parseCostBaseline baseSrc
       Err m => Err "medaka gate balance: \{m}"
-      Ok base => match balUnknownRows shs gates
-        b::bs => Err "medaka gate balance: \{regPath}: gate(s) name a shard with no [[shard]] row: \{joinSpace (b::bs)}"
-        [] => match balUncosted base gates
-          u::us => Err (stringConcat [
-            "medaka gate balance: \{intToString (listLen (u::us))} schedulable gate(s) have no row in the cost baseline:\n",
-            joinNl (balIndent (u::us)),
-            "\n  Refusing to pack: a missing cost is not a cheap gate, it is an\n",
-            "  unknown one, and treating it as 0 would pile it onto the lightest row.\n",
-            "  Re-ingest the baseline (test/gate_cost_ingest.sh) or fix the gate's `run`.\n",
-          ])
-          [] => match balPinErrors gates shs
-            e::es => Err (stringConcat [
-              "medaka gate balance: \{regPath}: a closed row's membership does not match its declared `pinned_gates`:\n",
-              joinNl (balIndent (e::es)),
-              "\n  A `full_cores` row is CLOSED: the packer moves nothing onto it and\n",
-              "  nothing off it, so its members are the one `shard` value no cost\n",
-              "  measurement derives.  They are DECLARED in that [[shard]] row's\n",
-              "  `pinned_gates` and checked against the registry in both directions,\n",
-              "  so a hand-moved `shard` cannot be adopted as the new pin.\n",
-              "  Repair the gate's `shard`; change `pinned_gates` only when the row's\n",
-              "  membership is genuinely meant to differ, and say why in its rationale\n",
-              "  file (docs/ops/GATE-REGISTRY-DESIGN.md §2).\n",
+      -- `runs[]` (#2208: jobs/parallel/rowElapsedMs, read-only here) is
+      -- parsed and validated alongside `gates[]` so a malformed baseline is
+      -- caught the same way either array would be — but `runsRead` is NOT
+      -- threaded into `balCompute`: the packer's score is unchanged by this
+      -- slice (parity — see S-1-recorded-workers §3).
+      Ok base => match parseCostRuns baseSrc
+        Err m => Err "medaka gate balance: \{m}"
+        Ok runsRead => match balUnknownRows shs gates
+          b::bs => Err "medaka gate balance: \{regPath}: gate(s) name a shard with no [[shard]] row: \{joinSpace (b::bs)}"
+          [] => match balUncosted base gates
+            u::us => Err (stringConcat [
+              "medaka gate balance: \{intToString (listLen (u::us))} schedulable gate(s) have no row in the cost baseline:\n",
+              joinNl (balIndent (u::us)),
+              "\n  Refusing to pack: a missing cost is not a cheap gate, it is an\n",
+              "  unknown one, and treating it as 0 would pile it onto the lightest row.\n",
+              "  Re-ingest the baseline (test/gate_cost_ingest.sh) or fix the gate's `run`.\n",
             ])
-            [] => balCompute regPath gates shs base regSrc
+            [] => match balPinErrors gates shs
+              e::es => Err (stringConcat [
+                "medaka gate balance: \{regPath}: a closed row's membership does not match its declared `pinned_gates`:\n",
+                joinNl (balIndent (e::es)),
+                "\n  A `full_cores` row is CLOSED: the packer moves nothing onto it and\n",
+                "  nothing off it, so its members are the one `shard` value no cost\n",
+                "  measurement derives.  They are DECLARED in that [[shard]] row's\n",
+                "  `pinned_gates` and checked against the registry in both directions,\n",
+                "  so a hand-moved `shard` cannot be adopted as the new pin.\n",
+                "  Repair the gate's `shard`; change `pinned_gates` only when the row's\n",
+                "  membership is genuinely meant to differ, and say why in its rationale\n",
+                "  file (docs/ops/GATE-REGISTRY-DESIGN.md §2).\n",
+              ])
+              [] => balUnusedRunsRead runsRead (balCompute regPath gates shs base regSrc)
+
+-- The `runs[]` read (#2208) is parsed and validated in `balNewText` above,
+-- but must not move the packer's score — this slice plumbs jobs/parallel/
+-- rowElapsedMs through to a reader, it does not decide what they mean to a
+-- balancer.  `listLen` forces the parsed value enough to prove it is a real
+-- result rather than an unevaluated thunk hiding a parse bug, without
+-- otherwise touching what gets returned.
+balUnusedRunsRead : List RunRecord -> Result String (String, String) -> Result String (String, String)
+balUnusedRunsRead runsRead result
+  | listLen runsRead >= 0 = result
 
 balIndent : List String -> List String
 balIndent [] = []

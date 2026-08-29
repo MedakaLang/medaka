@@ -385,8 +385,14 @@ if [ -z "${NO_STALE_CHECK:-}" ] && [ -z "${CI:-}" ] && [ -d "$ROOT/test/bin" ]; 
 fi
 
 export INNER_JOBS
+# Wall clock spanning the whole fan-out (#2208): "from before the xargs -P
+# $JOBS pool starts to after it drains" — the row's own total elapsed time,
+# distinct from any single gate's `ms`. Nothing computed this before; it is a
+# new measurement, not an existing one exposed.
+_row_t0=$(_now_ms)
 printf '%s\n' $gates \
   | xargs -P "$JOBS" -I{} sh "$0" --run-one {} "$RESULTDIR"
+_row_elapsed_ms=$(( $(_now_ms) - _row_t0 ))
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 # status 9 = "phantom skip": the gate exited 2 because its oracle/binary was never
@@ -431,6 +437,7 @@ if [ -n "$GATE_TIMING_JSON" ]; then
     printf '  "schema": "gate-cost/1",\n'
     printf '  "jobs": %s,\n' "$JOBS"
     printf '  "parallel": true,\n'
+    printf '  "rowElapsedMs": %s,\n' "$_row_elapsed_ms"
     printf '  "ok": %s,\n' "$pass"
     printf '  "failing": %s,\n' "$fail"
     printf '  "provenance": {\n'
