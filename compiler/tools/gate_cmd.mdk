@@ -1,14 +1,20 @@
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
 
-   This slice lands the FORMAT and the read path only: the registry schema
-   (`test/gates.toml`), a reader for it, the selector language, and
-   `medaka gate list [<selector>...] [--json]`.  `run`, `verify`, and
-   `explain` (docs/ops/GATE-REGISTRY-DESIGN.md §3) are later slices; they are
-   rejected here with a message that says so rather than silently doing
-   nothing.
+   Two commands so far: `medaka gate list [<selector>...] [--json]` (the read
+   path — the registry schema `test/gates.toml`, a reader for it, and the
+   selector language) and `medaka gate run [<selector>...]`, which EXECUTES the
+   selected gates.  `verify` and `explain`
+   (docs/ops/GATE-REGISTRY-DESIGN.md §3) are later slices; they are rejected
+   here with a message that says so rather than silently doing nothing.
 
-   Nothing about how any existing gate runs changes: `test/run_gates.sh` is
-   still the only thing that executes a gate.  This command only *reads*.
+   ⚠️ `gate run` is a NEW WAY TO INVOKE a gate script, not a new way for a gate
+   to behave.  Every gate script, every assertion in it, and the meaning of
+   every exit code it returns are untouched, and `sh test/run_gates.sh` remains
+   authoritative.  What `gate run` adds is the SERVICES around the script —
+   scratch-dir lifecycle, the stale-oracle refusal, a timeout, separated
+   stdout/stderr capture, and a machine-readable timing report — provided once,
+   natively, instead of re-hand-rolled per gate.  See the `gate run` section
+   below.
 
    **Selector language** (design doc §3, "keep it boring"): a selector is a
    `field:pattern` token, where `field` is one of `name`/`area`/`project`/
@@ -22,9 +28,20 @@
    shard certifies coverage of a gate that never ran. -}
 
 import toml.{Toml, parse, getString, getArray, tableCount, tableEntry}
-import json.{Json, JString, jArray, jObject, stringify}
+import json.{Json, JString, JInt, JFloat, JBool, jArray, jObject, stringify}
 import driver.build_cmd.{envOr, defaultMedakaRoot}
 import support.path.{joinPath}
+import support.util.{
+  endsWith,
+  joinNl,
+  joinWith,
+  listLen,
+  parseDecChecked,
+  reverseL,
+  sortUniqS,
+  splitNl,
+  stringTrim,
+}
 
 -- ── The entry schema ────────────────────────────────────────────────────────
 -- One `[[gate]]` table in `test/gates.toml` per gate.  Every field below is
@@ -292,6 +309,9 @@ gateHelpText = stringConcat
     "\n",
     "Usage:\n",
     "  medaka gate list [<selector>...] [--json] [--registry <path>]\n",
+    "  medaka gate run  [<selector>...] [--dry-run] [--json] [--report <path>]\n",
+    "                   [--timeout <secs>] [--jobs <n>] [--no-stale-check]\n",
+    "                   [--registry <path>]\n",
     "\n",
     "Selectors (conjunction — a gate must match all of them):\n",
     "  name:<glob>      gate name, e.g. name:diff_compiler_*\n",
@@ -302,10 +322,26 @@ gateHelpText = stringConcat
     "\n",
     "A selector matching zero gates is an error, not an empty list.\n",
     "\n",
-    "  --json             emit the registry entries as JSON\n",
+    "  --json             list: the registry entries as JSON.\n",
+    "                     run: the machine-readable run report as JSON.\n",
     "  --registry <path>  read this registry instead of <MEDAKA_ROOT>/test/gates.toml\n",
     "\n",
-    "`gate run`, `gate verify` and `gate explain` are not implemented yet\n",
+    "`gate run` only:\n",
+    "  --dry-run          print the resolved invocation plan; execute nothing\n",
+    "  --report <path>    write the per-gate timing report (JSON) to <path>\n",
+    "  --timeout <secs>   override the per-gate fuse (default by `cost`:\n",
+    "                     cheap 300s, medium 900s, heavy 3600s)\n",
+    "  --jobs <n>         ACCEPTED BUT IGNORED — this runner is sequential; the\n",
+    "                     value is recorded in the report.  Medaka has no\n",
+    "                     concurrency primitive (stdlib/runtime.mdk has no\n",
+    "                     fork/waitpid) and runCommand blocks.\n",
+    "  --no-stale-check   skip the stale-oracle refusal (as NO_STALE_CHECK=1 does;\n",
+    "                     it is also skipped whenever CI is set, on purpose)\n",
+    "\n",
+    "`gate run` reports each gate's RAW exit code and never normalizes polarity:\n",
+    "diff_compiler_must_fail is healthy when RED ([G-MUST-FAIL]).\n",
+    "\n",
+    "`gate verify` and `gate explain` are not implemented yet\n",
     "(see docs/ops/GATE-REGISTRY-DESIGN.md §3).\n",
   ]
 
@@ -401,11 +437,10 @@ joinSpace (x::xs) = "\{x} \{joinSpace xs}"
    are not here yet rather than a generic "unknown subcommand". -}
 export
 runGateCmd : List String -> <IO> Unit
-runGateCmd [] = emit (Err "usage: medaka gate list [<selector>...] [--json]")
+runGateCmd [] =
+  emit (Err "usage: medaka gate <list|run> [<selector>...] [--json]")
 runGateCmd ("list"::rest) = emit (listOutput rest)
-runGateCmd ("run"::_) =
-  emit (Err
-    "medaka gate run: not implemented yet (see docs/ops/GATE-REGISTRY-DESIGN.md §3)")
+runGateCmd ("run"::rest) = runRunCmdBody rest
 runGateCmd ("verify"::_) =
   emit (Err
     "medaka gate verify: not implemented yet (see docs/ops/GATE-REGISTRY-DESIGN.md §3)")
@@ -413,8 +448,613 @@ runGateCmd ("explain"::_) =
   emit (Err
     "medaka gate explain: not implemented yet (see docs/ops/GATE-REGISTRY-DESIGN.md §3)")
 runGateCmd (sub::_) =
-  emit (Err "medaka gate: unknown subcommand '\{sub}' (expected: list)")
+  emit (Err "medaka gate: unknown subcommand '\{sub}' (expected: list, run)")
 
+-- ── `gate run` ──────────────────────────────────────────────────────────────
+--
+-- `medaka gate run <selector>...` executes the selected gates and provides,
+-- once and natively, the services every individual gate script (and
+-- `test/run_gates.sh` around them) reimplements ad hoc:
+--
+--   * a PER-GATE SCRATCH DIR, handed to the gate as `TMPDIR` so its own
+--     `mktemp -d` lands inside it, and removed after the gate returns — on
+--     failure and on timeout alike.  Routed through
+--     `${MEDAKA_SCRATCH:-/var/tmp/medaka-scratch}`, never bare `/tmp`, because
+--     `/tmp` is a RAM-BACKED tmpfs here and leaked scratch there is a MEMORY
+--     leak with no guilty process (test/lib_scratch.sh).
+--   * the [G-STALE-ORACLE] REFUSAL, including its deliberate disabled-in-CI arm.
+--   * a TIMEOUT per gate — a fuse against a hang, which no gate has today.
+--   * STDERR-PRESERVING capture: stdout and stderr are captured separately and
+--     both surfaced on failure, so a stderr-only staleness warning ([B-STDERR])
+--     can never be silently dropped.
+--   * the `N ok, M failing` summary, and a machine-readable per-gate timing
+--     report (`--json` / `--report <path>`) — #2180's future input.  This slice
+--     ENFORCES NOTHING with those timings.
+--
+-- BEHAVIOR-NEUTRAL FOR EVERY EXISTING GATE.  This is a new alternate way to
+-- INVOKE a gate script; the script, its assertions, and the meaning of its exit
+-- code are untouched, and `sh test/run_gates.sh` remains authoritative.
+--
+-- ⚠️ NO OK/FAILING NORMALIZATION.  The raw exit code is reported as-is.
+-- `diff_compiler_must_fail` has INVERTED polarity ([G-MUST-FAIL]) — RED is its
+-- healthy state — and the registry carries no per-entry ok/failing semantic, so
+-- nothing here may assume exit 0 means "good".  Interpreting polarity stays with
+-- the human (or the shard) above this command, exactly as with `run_gates.sh`.
+
+-- One gate's outcome.  `spawnError` is "" unless the process could not be
+-- started at all (a missing script, a failed `mktemp`, an ENOENT on `env`) —
+-- which is a DIFFERENT fact from "the gate ran and exited non-zero", and the
+-- two must not be blurred into one failure count without saying which.
+public export data GateResult =
+  | GateResult {
+      name : String,
+      script : String,
+      shell : String,
+      exitCode : Int,
+      timedOut : Bool,
+      spawnError : String,
+      seconds : Float,
+      out : String,
+      err : String,
+    }
+
+-- Everything a gate invocation needs that is the same for every gate in a run.
+data RunEnv =
+  | RunEnv {
+      root : String,
+      medaka : String,
+      emitter : String,
+      scratchRoot : String,
+      timeoutOverride : Int,
+    }
+
+-- ── timeout policy ──────────────────────────────────────────────────────────
+--
+-- A FUSE, NOT A BUDGET.  The bound exists so a hung gate cannot hold this
+-- command (or a CI runner) forever; it is deliberately far above any gate's
+-- real runtime, because a bound tight enough to be a perf budget would make
+-- `medaka gate run` behavior-CHANGING for the slowest gates — and per-gate cost
+-- budgets are #2180's job, fed by the timing report this command emits, not
+-- something to smuggle in as a kill signal.  `diff_compiler_perf_scaling` and
+-- `diff_compiler_engines` can already exceed the 10-minute foreground ceiling
+-- ([L-FOREGROUND-CEILING]), which is why `heavy` is an hour and not ten minutes.
+--
+-- The registry's `cost` today takes exactly three values (cheap/medium/heavy);
+-- an unrecognized one gets the middle bound rather than an error, so a future
+-- tier added to the schema degrades to "still fused" instead of "won't run".
+timeoutFor : Int -> String -> Int
+timeoutFor override cost
+  | override > 0 = override
+  | cost == "cheap" = 300
+  | cost == "medium" = 900
+  | cost == "heavy" = 3600
+  | otherwise = 900
+
+-- ── scratch ─────────────────────────────────────────────────────────────────
+
+-- The scratch ROOT, mirroring test/lib_scratch.sh's rule exactly: an explicit
+-- TMPDIR wins unless it is the RAM-backed `/tmp`, in which case MEDAKA_SCRATCH
+-- (default /var/tmp/medaka-scratch) takes over.
+scratchRootOf : Unit -> <IO> String
+scratchRootOf _ =
+  let t = envOr "TMPDIR" ""
+  if t /= "" && stripSlash t /= "/tmp" then
+    t
+  else
+    envOr "MEDAKA_SCRATCH" "/var/tmp/medaka-scratch"
+
+stripSlash : String -> String
+stripSlash s =
+  let n = stringLength s
+  if n > 1 && stringSlice (n - 1) n s == "/" then stringSlice 0 (n - 1) s else s
+
+-- `mktemp -d` under the scratch root.  The 6-X template is accepted by both GNU
+-- and BSD mktemp; `mkdir -p` first because the root may not exist yet.
+makeGateScratch : String -> <IO> Result String String
+makeGateScratch root = match runCommand "mkdir" ["-p", root]
+  Err e => Err e
+  Ok _ => match runCommand "mktemp" ["-d", "\{root}/medaka_gate_XXXXXX"]
+    Err e => Err e
+    Ok (0, out, _) =>
+      let d = stringTrim out
+      if d == "" then Err "mktemp -d printed no path" else Ok d
+    Ok (_, _, mtErr) =>
+      let msg = stringTrim mtErr
+      Err (if msg == "" then "mktemp -d failed" else msg)
+
+-- Best-effort recursive removal.  A gate writes an arbitrary TREE under its
+-- scratch dir (fixtures, oracle output, its own nested mktemp dirs), so the
+-- flat removeFile walk `medaka build` uses is not enough here.
+cleanupScratch : String -> <IO> Unit
+cleanupScratch dir =
+  let _ = runCommand "rm" ["-rf", dir]
+  ()
+
+-- ── [G-STALE-ORACLE] ────────────────────────────────────────────────────────
+--
+-- A stale oracle does not fail — it LIES, and its ordinary-looking FAIL is
+-- indistinguishable from a real regression (test/run_gates.sh:183-298 tells the
+-- three incidents).  So: refuse, name the probes, print the NARROW per-probe
+-- rebuild command.
+--
+-- ⚠️ DISABLED WHEN `CI` IS SET, ON PURPOSE — this reproduces run_gates.sh:215
+-- (`[ -z "${CI:-}" ]`) rather than dropping it.  CI restores test/bin from a
+-- cache keyed on a CONTENT HASH of compiler/stdlib/runtime, which is strictly
+-- stronger than an mtime comparison, while `actions/checkout` stamps fresh
+-- mtimes on the sources — so mtime says "stale" about oracles proven current
+-- and would red-light every shard.  Keep the weak local heuristic for local
+-- trees; defer to the strong signal where it exists.
+--
+-- Unlike run_gates.sh this does NOT scrape `test/bin/<name>` out of the gate
+-- script: the registry's `oracles` field already carries that list (S-2), and
+-- the registry is the point.
+
+hasSourceExt : String -> Bool
+hasSourceExt p = endsWith ".mdk" p || endsWith ".c" p || endsWith ".h" p
+
+newestMtimeIn : String -> Float -> <IO> Float
+newestMtimeIn path acc = match statFile path
+  Err _ => acc
+  Ok (_, isDir, _, mt) => if isDir then match listDir path
+    Err _ => acc
+    Ok names => newestMtimeEntries path names acc
+  else if hasSourceExt path && mt > acc then mt else acc
+
+newestMtimeEntries : String -> List String -> Float -> <IO> Float
+newestMtimeEntries _ [] acc = acc
+newestMtimeEntries dir (n::rest) acc =
+  newestMtimeEntries dir rest (newestMtimeIn "\{dir}/\{n}" acc)
+
+-- The same source set run_gates.sh scans: compiler/ and stdlib/ *.mdk, plus
+-- runtime/ *.c and *.h.
+newestSourceMtime : String -> <IO> Float
+newestSourceMtime root =
+  let a = newestMtimeIn "\{root}/compiler" 0.0
+  let b = newestMtimeIn "\{root}/stdlib" a
+  newestMtimeIn "\{root}/runtime" b
+
+-- Every oracle the SELECTED gates read, deduped — never all of test/bin.  The
+-- wasm probes are built by a different script and are routinely older than
+-- source; complaining about one a run never opens is how this check gets
+-- switched off wholesale.
+selectedOracles : List Gate -> List String
+selectedOracles [] = []
+selectedOracles (g::gs) = g.oracles ++ selectedOracles gs
+
+-- MISSING is not stale — the gate's own "oracle not built" exit-2 owns that
+-- case and says so in its own words.
+staleOf : String -> Float -> List String -> <IO> List String
+staleOf _ _ [] = []
+staleOf root newest (o::os) =
+  let rest = staleOf root newest os
+  match statFile "\{root}/test/bin/\{o}"
+    Err _ => rest
+    Ok (_, _, _, mt) => if mt < newest then o::rest else rest
+
+indentedNames : List String -> List String
+indentedNames [] = []
+indentedNames (o::os) = "  \{o}" :: indentedNames os
+
+staleBannerLines : List String -> List String
+staleBannerLines [] = []
+staleBannerLines (o::os) =
+  "    FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one \{o}" ::
+    staleBannerLines os
+
+staleBanner : List String -> String
+staleBanner stale =
+  joinNl
+    ([
+      "════════════════════════════════════════════════════════════════════",
+      "STALE ORACLES (\{intToString (listLen stale)}) — REFUSING TO RUN.",
+      "",
+      joinNl (indentedNames stale),
+      "",
+      "These probe binaries are OLDER than compiler/ stdlib/ runtime/ source.",
+      "A gate reading one is testing a compiler that no longer exists — and it",
+      "reports an ordinary-looking FAIL that is INDISTINGUISHABLE from a real",
+      "regression.",
+      "",
+      "Rebuild ONLY what is stale — one probe per command:",
+    ] ++ staleBannerLines stale ++ [
+      "",
+      "(Override with NO_STALE_CHECK=1, --no-stale-check, or CI=1 only if you",
+      " know exactly why.  This check is skipped in CI on purpose — see the",
+      " comment above staleOf.)",
+      "════════════════════════════════════════════════════════════════════",
+      "",
+    ])
+
+-- run_gates.sh's `[ -z "${VAR:-}" ]`: SET-BUT-EMPTY counts as unset.
+envSet : String -> <IO> Bool
+envSet name = envOr name "" /= ""
+
+staleRefusal : Bool -> String -> List Gate -> <IO> Option String
+staleRefusal True _ _ = None
+staleRefusal False root gs =
+  if envSet "CI" || envSet "NO_STALE_CHECK" then None
+  else
+    let names = sortUniqS (selectedOracles gs)
+    let newest = newestSourceMtime root
+    match staleOf root newest names
+      [] => None
+      stale => Some (staleBanner stale)
+
+-- ── running one gate ────────────────────────────────────────────────────────
+
+-- HONOR THE SHEBANG, do not hardcode `sh`.  Six gates under test/ and all 22
+-- sqlite oracles are `#!/usr/bin/env bash` and use bashisms; under dash all 22
+-- sqlite gates FAIL while passing perfectly when invoked directly, and "the
+-- gate ran under an interpreter it wasn't written for" is the purest form of a
+-- harness bug wearing a compiler bug's clothes (test/run_gates.sh:105-115).
+shellFor : String -> <IO> String
+shellFor script = match readFile script
+  Err _ => "sh"
+  Ok src => if substrIn "bash" (firstLineOf src) then "bash" else "sh"
+
+firstLineOf : String -> String
+firstLineOf s = match splitNl s
+  [] => ""
+  l::_ => l
+
+substrIn : String -> String -> Bool
+substrIn needle hay =
+  substrAt needle hay 0 (stringLength hay - stringLength needle)
+
+substrAt : String -> String -> Int -> Int -> Bool
+substrAt needle hay i last
+  | i > last = False
+  | stringSlice i (i + stringLength needle) hay == needle = True
+  | otherwise = substrAt needle hay (i + 1) last
+
+-- The invocation.  `runCommand` takes no environment and Medaka has no setEnv,
+-- so the environment goes through POSIX `env` — the same device
+-- build_cmd.withEmitHalf uses.  The variables mirror run_gates.sh's exports
+-- (defaults only: an explicit value in this process's environment already won,
+-- via envOr, before it got here).  `JOBS=1` because this runner is sequential
+-- (see the note on --jobs).
+--
+-- `timeout -k 5s <N>s` is GNU coreutils' (present on this box and on every CI
+-- runner — CI is 100% ubuntu-latest, [B-CI-UBUNTU-ONLY]).  It exits 124 on the
+-- SIGTERM path and 137 when the -k grace period had to escalate to SIGKILL;
+-- both are reported as a timeout, with the raw code still printed so a genuine
+-- 137 from elsewhere (an OOM kill, say) is not hidden by the label.
+gateArgs : RunEnv -> String -> Int -> String -> String -> List String
+gateArgs env scratch secs sh script = [
+  "MEDAKA_ROOT=\{env.root}",
+  "MEDAKA=\{env.medaka}",
+  "MEDAKA_EMITTER=\{env.emitter}",
+  "TMPDIR=\{scratch}",
+  "MEDAKA_SCRATCH=\{scratch}",
+  "JOBS=1",
+  "timeout",
+  "-k",
+  "5s",
+  "\{intToString secs}s",
+  sh,
+  script,
+]
+
+spawnFailure : Gate -> String -> String -> Float -> GateResult
+spawnFailure g script msg dt = GateResult {
+  name = g.name,
+  script = script,
+  shell = "sh",
+  exitCode = 127,
+  timedOut = False,
+  spawnError = msg,
+  seconds = dt,
+  out = "",
+  err = "",
+}
+
+runOneGate : RunEnv -> Gate -> <IO> GateResult
+runOneGate env g =
+  let script = "\{env.root}/\{g.run}"
+  if not (fileExists script) then spawnFailure g script "gate script not found (registry `run` field): \{g.run}" 0.0
+  else
+    let sh = shellFor script
+    let secs = timeoutFor env.timeoutOverride g.cost
+    match makeGateScratch env.scratchRoot
+      Err e => spawnFailure g script "could not create a scratch dir: \{e}" 0.0
+      Ok scratch =>
+        let t0 = monotonicSec ()
+        let res = runCommand "env" (gateArgs env scratch secs sh script)
+        let dt = monotonicSec () - t0
+        let _ = cleanupScratch scratch
+        match res
+          Err e => spawnFailure g script "could not spawn the gate: \{e}" dt
+          Ok (code, out, errOut) => GateResult {
+            name = g.name,
+            script = script,
+            shell = sh,
+            exitCode = code,
+            timedOut = code == 124 || code == 137,
+            spawnError = "",
+            seconds = dt,
+            out = out,
+            err = errOut,
+          }
+
+gateOk : GateResult -> Bool
+gateOk r = r.spawnError == "" && r.exitCode == 0
+
+msOf : GateResult -> Int
+msOf r = floatToInt (r.seconds * 1000.0)
+
+resultLine : GateResult -> String
+resultLine r
+  | r.spawnError /= "" = "ERROR \{r.name}  (\{r.spawnError})\n"
+  | r.timedOut = "TIMEOUT \{r.name}  (exit \{intToString r.exitCode} after \{intToString (msOf r)}ms)\n"
+  | r.exitCode == 0 = "PASS  \{r.name}  (\{intToString (msOf r)}ms)\n"
+  | otherwise = "FAIL  \{r.name}  (exit \{intToString r.exitCode}, \{intToString (msOf r)}ms)\n"
+
+-- ── the sequential loop ─────────────────────────────────────────────────────
+--
+-- ⚠️ SEQUENTIAL, and `--jobs` IS ACCEPTED BUT IGNORED.  Medaka has no
+-- concurrency primitive to build a job pool out of: `runCommand` is a single
+-- BLOCKING call and stdlib/runtime.mdk has no fork/waitpid/spawn extern (derive:
+-- `grep -n 'fork\|waitPid\|spawn' stdlib/runtime.mdk` — nothing).
+-- `run_gates.sh` gets its pool from `xargs -P`, which needs either a new extern
+-- or a generated shell script that would have to re-own the scratch, timeout and
+-- capture services this command exists to provide natively.  Rather than fake
+-- it, `--jobs` is parsed, honoured in the report as the requested value, and
+-- reported in the summary as `sequential` — see the report's Notes.
+runGatesLoop : RunEnv -> List Gate -> List GateResult -> <IO> List GateResult
+runGatesLoop _ [] acc = reverseL acc
+runGatesLoop env (g::gs) acc =
+  let r = runOneGate env g
+  let _ = putStr (resultLine r)
+  let _ = flushStdout ()
+  runGatesLoop env gs (r::acc)
+
+-- ── failure output ──────────────────────────────────────────────────────────
+--
+-- Print the failing gate's output.  run_gates.sh discarded it for a long time,
+-- which made a red CI shard undiagnosable (its mktemp dir dies with the runner);
+-- the fix there was to tail the log, and the bound is 200 lines because
+-- `diff_compiler_must_fail` alone prints 77 on a single drained row.
+--
+-- STDOUT AND STDERR ARE PRINTED SEPARATELY AND BOTH ARE PRINTED ([B-STDERR]):
+-- the stale-binary warning is stderr-only, and a gate that fails BECAUSE its
+-- binary is stale says so nowhere else.
+
+-- The offset just PAST the `want`-th newline — i.e. where the last
+-- `total - want` lines begin.  Sliced out of the original string rather than
+-- dropped off the head of `splitNl`'s list and rejoined, because a generic
+-- list drop here would be a byte-identical twin of `typecheck.dropN` (which is
+-- private, so it cannot be shared) and `rule-duplicate-body` is a CROSS-FILE
+-- rule — it would fire on typecheck.mdk too, and silencing it there would move
+-- a LEG A golden for a 200-line output bound.
+afterNewlines : Array Char -> Int -> Int -> Int -> Int
+afterNewlines cs i len want
+  | i >= len = len
+  | want <= 0 = i
+  | arrayGetUnsafe i cs == '\n' = afterNewlines cs (i + 1) len (want - 1)
+  | otherwise = afterNewlines cs (i + 1) len want
+
+tailLines : Int -> String -> String
+tailLines n s =
+  let k = listLen (splitNl s)
+  if k <= n then s
+  else
+    let cs = stringToChars s
+    stringSlice (afterNewlines cs 0 (arrayLength cs) (k - n)) (stringLength s) s
+
+failureDetail : GateResult -> String
+failureDetail r =
+  let hdr = "\n───── \{r.name} — \{r.shell} \{r.script} (exit \{intToString r.exitCode}) ─────\n"
+  let o = if stringTrim r.out == "" then
+    "  (stdout: empty)\n"
+  else
+    "  ── stdout ──\n\{tailLines 200 r.out}\n"
+  let e = if stringTrim r.err == "" then
+    "  (stderr: empty)\n"
+  else
+    "  ── stderr ──\n\{tailLines 200 r.err}\n"
+  "\{hdr}\{o}\{e}"
+
+failureDetails : List GateResult -> String
+failureDetails [] = ""
+failureDetails (r::rs)
+  | gateOk r = failureDetails rs
+  | otherwise = failureDetail r ++ failureDetails rs
+
+-- ── summary + report ────────────────────────────────────────────────────────
+
+countOk : List GateResult -> Int
+countOk [] = 0
+countOk (r::rs) = (if gateOk r then 1 else 0) + countOk rs
+
+failingNames : List GateResult -> List String
+failingNames [] = []
+failingNames (r::rs)
+  | gateOk r = failingNames rs
+  | otherwise = r.name :: failingNames rs
+
+resultJson : GateResult -> Json
+resultJson r = jObject
+  [
+    ("name", JString r.name),
+    ("script", JString r.script),
+    ("shell", JString r.shell),
+    ("exit", JInt r.exitCode),
+    ("timedOut", JBool r.timedOut),
+    ("ms", JInt (msOf r)),
+    ("seconds", JFloat r.seconds),
+    ("ok", JBool (gateOk r)),
+    ("spawnError", JString r.spawnError),
+    ("stdout", JString r.out),
+    ("stderr", JString r.err),
+  ]
+
+{- | The machine-readable run report: per-gate timings plus the ok/failing
+   tallies.  #2180 (the CI cost ratchet) is the intended consumer; NOTHING in
+   this slice enforces a budget from it. -}
+export
+runReportJson : Int -> List GateResult -> String
+runReportJson jobs rs = stringify (jObject
+  [
+    ("jobs", JInt jobs),
+    ("parallel", JBool False),
+    ("ok", JInt (countOk rs)),
+    ("failing", JInt (listLen rs - countOk rs)),
+    ("gates", jArray (map resultJson rs)),
+  ])
+
+-- ── the dry run ─────────────────────────────────────────────────────────────
+--
+-- The resolved INVOCATION PLAN, executing nothing.  One line per gate, in
+-- registry order, carrying exactly what `run` would do: the interpreter, the
+-- absolute script path, the fuse, and the oracles the stale check will consult.
+-- The script path is the field a parity diff against `run_gates.sh`'s own
+-- resolved gate list compares.
+dryLine : RunEnv -> Gate -> <IO> String
+dryLine env g =
+  let script = "\{env.root}/\{g.run}"
+  let sh = if fileExists script then shellFor script else "sh"
+  let orc = if isEmptyStrs g.oracles then "-" else joinWith "," g.oracles
+  "\{g.name}\t\{sh}\t\{script}\ttimeout=\{intToString (timeoutFor env.timeoutOverride g.cost)}s\toracles=\{orc}\n"
+
+dryLines : RunEnv -> List Gate -> <IO> String
+dryLines _ [] = ""
+dryLines env (g::gs) = dryLine env g ++ dryLines env gs
+
+-- ── the `run` subcommand ────────────────────────────────────────────────────
+
+data RunArgs =
+  | RunArgs {
+      registry : Option String,
+      selectors : List String,
+      dryRun : Bool,
+      json : Bool,
+      report : Option String,
+      timeoutSecs : Int,
+      jobs : Int,
+      noStaleCheck : Bool,
+    }
+
+parseRunArgs : List String -> RunArgs -> Result String RunArgs
+parseRunArgs [] acc =
+  Ok RunArgs { acc | selectors = reverseStrs acc.selectors [] }
+parseRunArgs ("--dry-run"::rest) acc =
+  parseRunArgs rest RunArgs { acc | dryRun = True }
+parseRunArgs ("--json"::rest) acc =
+  parseRunArgs rest RunArgs { acc | json = True }
+parseRunArgs ("--no-stale-check"::rest) acc =
+  parseRunArgs rest RunArgs { acc | noStaleCheck = True }
+parseRunArgs ("--registry"::p::rest) acc =
+  parseRunArgs rest RunArgs { acc | registry = Some p }
+parseRunArgs ("--registry"::[]) _ =
+  Err "medaka gate run: --registry needs a path"
+parseRunArgs ("--report"::p::rest) acc =
+  parseRunArgs rest RunArgs { acc | report = Some p }
+parseRunArgs ("--report"::[]) _ = Err "medaka gate run: --report needs a path"
+parseRunArgs ("--timeout"::v::rest) acc = match parseDecChecked v
+  None => Err "medaka gate run: --timeout needs a whole number of seconds, got '\{v}'"
+  Some n => parseRunArgs rest RunArgs { acc | timeoutSecs = n }
+parseRunArgs ("--timeout"::[]) _ =
+  Err "medaka gate run: --timeout needs a number of seconds"
+parseRunArgs ("--jobs"::v::rest) acc = match parseDecChecked v
+  None => Err "medaka gate run: --jobs needs a whole number, got '\{v}'"
+  Some n => parseRunArgs rest RunArgs { acc | jobs = n }
+parseRunArgs ("--jobs"::[]) _ = Err "medaka gate run: --jobs needs a number"
+parseRunArgs (a::rest) acc
+  | stringLength a > 0 && stringSlice 0 1 a == "-" =
+    Err "medaka gate run: unknown flag: \{a}"
+  | otherwise = parseRunArgs rest RunArgs { acc | selectors = a::acc.selectors }
+
+emptyRunArgs : RunArgs
+emptyRunArgs = RunArgs {
+  registry = None,
+  selectors = [],
+  dryRun = False,
+  json = False,
+  report = None,
+  timeoutSecs = 0,
+  jobs = 1,
+  noStaleCheck = False,
+}
+
+-- The selection half, shared with `list`: read the registry, apply the
+-- selectors, and treat a zero-gate selection as a HARD ERROR.  A mistyped
+-- pattern that silently selects nothing is how a shard certifies coverage of a
+-- gate that never ran (test/run_gates.sh:181).
+selectFor : String -> List String -> List Selector -> String -> Result String (List Gate)
+selectFor path tokens sels src = match parseRegistry src
+  Err m => Err "medaka gate run: \{m}"
+  Ok gates => match selectGates sels gates
+    [] =>
+      if isEmptyStrs tokens then
+        Err "medaka gate run: \{path} contains no gates"
+      else
+        Err "medaka gate run: no gates match: \{joinSpace tokens}"
+    sel => Ok sel
+
+runEnvFor : RunArgs -> <IO> RunEnv
+runEnvFor a =
+  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  RunEnv {
+    root = root,
+    medaka = envOr "MEDAKA" "\{root}/medaka",
+    emitter = envOr "MEDAKA_EMITTER" "\{root}/medaka_emitter",
+    scratchRoot = scratchRootOf (),
+    timeoutOverride = a.timeoutSecs,
+  }
+
+-- Write the timing report, if one was asked for.  A failed write is LOUD: a
+-- silently-absent report is exactly the shape of hole this registry exists to
+-- close.
+writeReport : Option String -> String -> <IO> Bool
+writeReport None _ = True
+writeReport (Some p) body = match writeFile p body
+  Err m =>
+    let _ = ePutStrLn "medaka gate run: could not write --report \{p}: \{m}"
+    False
+  Ok _ => True
+
+summaryLine : Int -> List GateResult -> String
+summaryLine jobs rs =
+  let ok = countOk rs
+  let bad = listLen rs - ok
+  "\n=== gate run: \{intToString ok} ok, \{intToString bad} failing (\{intToString (listLen rs)} gates, --jobs \{intToString jobs} requested, run SEQUENTIALLY) ===\n"
+
+-- Everything after the gates have run: details, summary, report, exit code.
+finishRun : RunArgs -> List GateResult -> <IO> Unit
+finishRun a rs =
+  let wrote = writeReport a.report (runReportJson a.jobs rs ++ "\n")
+  let _ = if a.json then putStr (runReportJson a.jobs rs ++ "\n") else ()
+  let _ = if a.json then () else putStr (failureDetails rs)
+  let _ = if a.json then () else putStr (summaryLine a.jobs rs)
+  let bad = failingNames rs
+  let _ = if a.json || isEmptyStrs bad then
+    ()
+  else
+    putStr "FAILING: \{joinSpace bad}\n"
+  if isEmptyStrs bad && wrote then exit 0 else exit 1
+
+runSelected : RunArgs -> List Gate -> <IO> Unit
+runSelected a gs =
+  let env = runEnvFor a
+  if a.dryRun then putStr (dryLines env gs)
+  else match staleRefusal a.noStaleCheck env.root gs
+    Some banner =>
+      let _ = ePutStr banner
+      exit 1
+    None => finishRun a (runGatesLoop env gs [])
+
+runRunCmdBody : List String -> <IO> Unit
+runRunCmdBody argv = match parseRunArgs argv emptyRunArgs
+  Err m => emit (Err m)
+  Ok a => match parseSelectors a.selectors []
+    Err m => emit (Err "medaka gate run: \{m}")
+    Ok sels =>
+      let path = registryPath a.registry
+      match readFile path
+        Err m => emit (Err "medaka gate run: cannot read registry: \{m}")
+        Ok src => match selectFor path a.selectors sels src
+          Err m => emit (Err m)
+          Ok gs => runSelected a gs
 -- ── Properties ──────────────────────────────────────────────────────────────
 
 prop "a bare selector token is name: sugar" (n : Int) =

@@ -360,6 +360,7 @@ usage _ = putStrLn (stringConcat
     "  medaka check-policy <file.mdk> [--allow L1,L2,...] [--fn name]  Check a plugin's inferred effects against an allow-list\n",
     "  medaka manifest <file.mdk> [--fn name]  Emit the verified capability manifest as TOML\n",
     "  medaka gate list [<selector>...] [--json]  Query the gate registry (test/gates.toml)\n",
+    "  medaka gate run [<selector>...] [--dry-run]  Run the selected gates\n",
     "  medaka help               Show this message\n",
     "  medaka --version          Show the compiler version\n",
   ])
