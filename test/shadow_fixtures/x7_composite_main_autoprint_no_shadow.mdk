@@ -1,0 +1,16 @@
+-- X7 — the CONTROL for x6, and the half a one-directional fix would break.  No
+-- interface, no shadow, a bare non-Unit VALUE main: this is the cell the
+-- composite-main auto-print wrap exists FOR (COMPOSITE-MAIN-AUTOPRINT-DESIGN §10),
+-- so the wrap must still fire here and the built binary must still print the tuple.
+--
+-- x6 stops the wrap firing on a Unit main.  Narrowing that gate one step too far —
+-- disabling the wrap on the check/LSP path, or reading main's type from a ref that
+-- is still empty — silently turns THIS row's `(1, abc)` into an empty stdout at
+-- exit 0, which no ACCEPT/REJECT column can see.  That is why the row is pinned by
+-- VALUE and lives beside x6 rather than being left to some other corpus.
+--
+-- `run` REJECTs by design, not by defect: #1681 made `medaka run` exit 1 whenever
+-- the W-MAIN-SHAPE warning fires, because `run` never applies or prints a non-Unit
+-- main and an exit-0 there was indistinguishable from a clean run.  Hence
+-- BUILD_EXACT, not ALL_EXACT.
+main = (1, "abc")

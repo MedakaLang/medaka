@@ -1,2 +1,0 @@
-export mth : String -> Int -> Int
-mth s n = 99

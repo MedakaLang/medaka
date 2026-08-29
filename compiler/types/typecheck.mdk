@@ -7953,6 +7953,7 @@ data PerRun = PerRun {
     shadowStandaloneSchemesRef : Ref (List (String, Scheme)),
     ifaceMethodSchemesByIdRef : Ref (List ((IfaceRef, String), Scheme)),  -- #1351 L1 EXPAND: the Module arm's interface-method schemes under an identity key — the substrate leaf L2 migrates `pickSchemes` onto.  No reader yet.
     numLitFromIntSchemeRef : Ref (Option Scheme),  -- #259 / DICT §8 I7 (literals): the PRELUDE `Num`'s own `fromInt` scheme, selected ONCE per pass by interface IDENTITY — see seedNumLitFromIntScheme.  `inferNumLit`'s anchor; it reads NO term scope.
+    numLitFromIntParamsRef : Ref (Option (IfaceRef, List String, Ty, List (String, List Kind))),  -- #2157: the IDENTITY-selected companion of the line above — the PRELUDE `Num`'s own `fromInt` obligation row (iface, typarams, declared Ty, graded scope), seeded from the SAME decl list by the SAME `sameIfaceDecl` test.  `inferNumLitMethod`'s obligation anchor; it never consults the bare-name `methodIfaceParamsRef`.
     definerShadowNamesRef : Ref (List String),
     definerShadowSigsRef : Ref (List (String, Ty)),
     bodyImplEnvRef : Ref ImplEnv,
@@ -8068,6 +8069,7 @@ freshPerRun _ = PerRun {
   shadowStandaloneSchemesRef = Ref [],
   ifaceMethodSchemesByIdRef = Ref [],
   numLitFromIntSchemeRef = Ref None,
+  numLitFromIntParamsRef = Ref None,
   definerShadowNamesRef = Ref [],
   definerShadowSigsRef = Ref [],
   bodyImplEnvRef = Ref emptyImplEnv,
@@ -12695,16 +12697,22 @@ inferNumLit env n fref dref
 --   • `argDispatchOf` — `fromInt` is return-position (no dispatch argument), so this answered
 --     `None` and fell to `recordSite` on every path already.
 --
--- KEPT as-is: `recordMethodObligationGuarded`.  ⚠️ Its `lookupLocalFlag env name` half is a
--- term-scope read that survives here — a residual, reported with #259 rather than changed
--- under this fix, because its effect is to SUPPRESS a `Num` obligation (a missed reject),
--- never to re-type the literal, and touching it would move behaviour on programs that have
--- no shadow at all.
+-- KEPT, in substance: the obligation-recording guard.  ⚠️ Its `lookupLocalFlag env name`
+-- half is a term-scope read that survives here — a residual, reported with #259 rather
+-- than changed under this fix, because its effect is to SUPPRESS a `Num` obligation (a
+-- missed reject), never to re-type the literal, and touching it would move behaviour on
+-- programs that have no shadow at all.
+--
+-- #2157 REPLACED the callee, not the guard: `recordMethodObligationGuarded` →
+-- `recordNumLitObligationGuarded`, which applies the SAME two suppressions (term-scope
+-- local, mono scheme) and the SAME two standalone-shadow suppressions, then records the
+-- obligation against the PRELUDE `Num`'s identity-selected row instead of re-deriving the
+-- interface from the spelling `"fromInt"` in the bare-name `methodIfaceParamsRef`.
 inferNumLitMethod : TcEnv -> Scheme -> Ref Route -> Mono
 inferNumLitMethod env s tagRef =
   let inst = instantiateTracked s
   let _ = recordMethodDicts "fromInt" (Ref []) (snd inst)
-  let _ = recordMethodObligationGuarded env "fromInt" s (fst inst)
+  let _ = recordNumLitObligationGuarded env s (fst inst)
   recordSite "fromInt" tagRef (Ref []) (fst inst)
 
 -- no-prelude fallback: a fresh var, no route (dref untouched ⇒ stays RNone ⇒ Int).
@@ -13432,6 +13440,38 @@ recordMethodObligationGuarded env name s mono =
   else
     recordImplObligation name mono
 
+-- #2157: the numeric literal's own obligation recorder — `recordMethodObligationGuarded`
+-- + `recordImplObligation` with the bare-name `omLookup` REPLACED by the identity-selected
+-- `Num` row `seedNumLitFromIntParams` put in `numLitFromIntParamsRef`.  Every other arm is
+-- preserved verbatim so a program without a same-named user interface behaves identically:
+--   • `lookupLocalFlag` / `isMonoScheme` — the #816/#818 local-shadow guard;
+--   • `definerShadowNamesRef` / `standaloneValuesRef` — the P0-18 standalone-shadow guard
+--     (a top-level `fromInt` binding legitimately has no impl obligation);
+--   • `pushPendingObl … PMethodOcc` + `recordMethodLevelObls` — the two writes.
+-- The ONLY behavioural difference is WHICH interface the goal names, and only on a program
+-- where the bare-name table holds a non-`Num` row under `"fromInt"` — i.e. exactly #2157.
+--
+-- A literal is not an identifier occurrence, so unlike `recordImplObligation`'s other
+-- caller (`inferVarPlainId`, where the bare name genuinely DENOTES whichever interface
+-- declares it) there is no sense in which a literal could mean the user's interface.
+-- `recordImplObligation` itself is UNCHANGED and keeps its bare-name path for that caller.
+recordNumLitObligationGuarded : TcEnv -> Scheme -> Mono -> Mono
+recordNumLitObligationGuarded env s mono =
+  if lookupLocalFlag env "fromInt" || isMonoScheme s then
+    mono
+  else
+    recordNumLitImplObligation mono
+
+recordNumLitImplObligation : Mono -> Mono
+recordNumLitImplObligation mono
+  | contains "fromInt" perRun.value.definerShadowNamesRef.value || contains "fromInt" driverState.value.standaloneValuesRef.value = mono
+  | otherwise = match perRun.value.numLitFromIntParamsRef.value
+    None => mono
+    Some (iface, typarams, mty, _) =>
+      let _ = pushPendingObl iface typarams mty mono PMethodOcc !currentLoc
+      let _ = recordMethodLevelObls typarams mty mono
+      mono
+
 -- #818 (#838 I3): record one PMethodLevel obligation per method-level `=>` constraint
 -- slot of a method occurrence.  [mty] is the method's DECLARED type (with its `=>`);
 -- [occMono] is THIS occurrence's instantiated (constraint-free) type.  Align the
@@ -13568,36 +13608,44 @@ inferAppExpr env f x = match lamUnderLoc x
       let lamExpected = funDomain (normalize ft)
       let xt = inferLamChecked env (expectedParamTypes lamExpected (listLen pats)) pats body
       inferApp (envAlphaLets env) (EApp f x) ft xt
-    None => match shadowStandaloneHead env f
-      Some (mname, tagRefs) => inferShadowApp env mname tagRefs f x
-      -- #1815: the SPINE arms come FIRST, and they are the same two definer-shadow arms
-      -- one node further out.  A definer shadow whose interface dispatches on argument
-      -- k > 0 (`mth : Int -> b -> Int`) reaches its dispatch argument at the OUTER node
-      -- of `EApp (EApp mth n) x` — the inner node supplies argument 0, which is not the
-      -- receiver at all.  Without these arms the inner node fired the index-0 arms, asked
-      -- the dispatch question about argument 0, and imposed the standalone's whole
-      -- declared type on the enclosing annotated function.  They decline at k == 0 (a
-      -- bare head has no applied nodes), so the index-0 path below is byte-unchanged.
-      None => match definerShadowSpineArgAt f
-       Some (dname, dtagRef, dimplRef, dhd, dnodes) => inferDefinerShadowAppAt env dname dtagRef dimplRef dhd dnodes f x
-       None => match definerShadowSpineVarAt f
-        Some (dname, dhd, dnodes) => inferDefinerShadowVarAppAt env dname dhd dnodes f x
-        None => match definerShadowArgHead f
-         Some (dname, dtagRef, dimplRef) => inferDefinerShadowApp env dname dtagRef dimplRef f x
-         None => match definerShadowVarHead f
-          Some dname => inferDefinerShadowVarApp env dname f x
-          None =>
-           let ft = infer env f
-           let xt = infer env x
-           -- P0-16: detect `f(1, 2)` on the PRISTINE ft (before inferApp unifies
-           -- its domain with the tuple), then record the residual result so a
-           -- downstream no-impl / mismatch can surface the tailored hint.
-           let pend = tupleCallShapeHint f x ft
-           let res = inferApp (envAlphaLets env) (EApp f x) ft xt
-           let _ = match pend
-             Some (help, fix) => (perRun.value.tupleCallCandidates := ((res, help, fix)::perRun.value.tupleCallCandidates.value))
-             None => ()
-           res
+    None => match shadowStandaloneSpineHeadAt env f
+      -- #2154: the IMPORTER-side spine arm, mirroring #1815's definer spine arms — it
+      -- must run BEFORE the bare-head shadowStandaloneHead/inferShadowApp arm below for
+      -- the same reason: an importer shadow whose interface dispatches at index k > 0
+      -- has its receiver at the OUTER spine node, not the inner node the bare-head arm
+      -- would otherwise ask about.  Declines (None) at k == 0, so the bare-head arm
+      -- stays byte-identical.
+      Some (mname, tagRefs, hd, nodes) => inferShadowAppAt env mname tagRefs hd nodes f x
+      None => match shadowStandaloneHead env f
+       Some (mname, tagRefs) => inferShadowApp env mname tagRefs f x
+       -- #1815: the SPINE arms come FIRST, and they are the same two definer-shadow arms
+       -- one node further out.  A definer shadow whose interface dispatches on argument
+       -- k > 0 (`mth : Int -> b -> Int`) reaches its dispatch argument at the OUTER node
+       -- of `EApp (EApp mth n) x` — the inner node supplies argument 0, which is not the
+       -- receiver at all.  Without these arms the inner node fired the index-0 arms, asked
+       -- the dispatch question about argument 0, and imposed the standalone's whole
+       -- declared type on the enclosing annotated function.  They decline at k == 0 (a
+       -- bare head has no applied nodes), so the index-0 path below is byte-unchanged.
+       None => match definerShadowSpineArgAt f
+        Some (dname, dtagRef, dimplRef, dhd, dnodes) => inferDefinerShadowAppAt env dname dtagRef dimplRef dhd dnodes f x
+        None => match definerShadowSpineVarAt f
+         Some (dname, dhd, dnodes) => inferDefinerShadowVarAppAt env dname dhd dnodes f x
+         None => match definerShadowArgHead f
+          Some (dname, dtagRef, dimplRef) => inferDefinerShadowApp env dname dtagRef dimplRef f x
+          None => match definerShadowVarHead f
+           Some dname => inferDefinerShadowVarApp env dname f x
+           None =>
+            let ft = infer env f
+            let xt = infer env x
+            -- P0-16: detect `f(1, 2)` on the PRISTINE ft (before inferApp unifies
+            -- its domain with the tuple), then record the residual result so a
+            -- downstream no-impl / mismatch can surface the tailored hint.
+            let pend = tupleCallShapeHint f x ft
+            let res = inferApp (envAlphaLets env) (EApp f x) ft xt
+            let _ = match pend
+              Some (help, fix) => (perRun.value.tupleCallCandidates := ((res, help, fix)::perRun.value.tupleCallCandidates.value))
+              None => ()
+            res
 
 -- @Impl: if [x] is an `@Name` disambiguation hint (a bare `EVar "@Name"`, possibly
 -- under an ELoc wrapper), return the name with the leading `@` stripped.  Mirrors
@@ -13624,6 +13672,19 @@ shadowStandaloneHead env (EVarId name _)
   | isShadowStandalone name = Some (name, [])
   | otherwise = None
 shadowStandaloneHead _ _ = None
+
+-- #2154: the IMPORTER-side spine arm — the peer of definerShadowSpineArgAt /
+-- definerShadowSpineVarAt for an imported standalone shadowing a method whose
+-- interface dispatches at argument k > 0.  Peels the spine's ultimate head with the
+-- SAME test shadowStandaloneHead already applies to a bare head (so a marked
+-- EMethodAt receiver and an unmarked EVar/EVarId receiver both fire, exactly as
+-- shadowStandaloneHead's own two arms do), then gates on `shadowSpineNodesAt`, which
+-- declines (`None`) for a bare head (k == 0, nodes == []) — the existing
+-- shadowStandaloneHead / inferShadowApp path stays byte-identical.
+shadowStandaloneSpineHeadAt : TcEnv -> Expr -> Option (String, List (Ref Route), Expr, List Expr)
+shadowStandaloneSpineHeadAt env f = match shadowStandaloneHead env (appSpineHead f)
+  None => None
+  Some (name, tagRefs) => map (nodes => (name, tagRefs, appSpineHead f, nodes)) (shadowSpineNodesAt name f)
 
 -- a name that is BOTH a registered importer shadow (standaloneValuesRef), has a
 -- stashed standalone scheme, and names a single-TYPARAM interface's method.
@@ -13752,6 +13813,33 @@ inferShadowAppHead env f =
   toggles.value.shadowHeadCtxRef := saved
   ft
 
+-- #2154: the spine-generalized twin of inferShadowApp — the peer of
+-- inferDefinerShadowAppAt for the IMPORTER path.  [hd] is the spine's ultimate head
+-- ([f] itself at index 0, unreachable here since shadowStandaloneSpineHeadAt declines
+-- at k == 0) and [nodes] the application nodes already applied to it; [pre] is those
+-- nodes' inferred (node, mono) pairs in source order, exactly as inferDefinerShadowAppAt
+-- computes them.  Performs the SAME S2 impl-exists-vs-standalone-scheme branch
+-- inferShadowApp does, at the outer node, folding inferApp/unification over the whole
+-- applied prefix via inferSpineArgs/inferAppNodes/unifySpineResult.
+inferShadowAppAt : TcEnv -> String -> List (Ref Route) -> Expr -> List Expr -> Expr -> Expr -> Mono
+inferShadowAppAt env mname tagRefs hd nodes f x =
+  let dloc = !currentLoc
+  let pre = inferSpineArgs env nodes
+  let k = listLen pre
+  let tx = infer env x
+  let _ = groundShadowReceiver (importerShadowDomainAt mname k) tx (definerReceiverIsDictVar mname tx) dloc
+  match headTyconMono tx
+    Some head => if ieImplExistsForHead perRun.value.bodyImplEnvRef.value mname head then inferAppNodes (envAlphaLets env) (inferShadowAppHead env hd) (pre ++ [(EApp f x, tx)])
+    else match lookupAssoc mname perRun.value.shadowStandaloneSchemesRef.value
+      Some sscheme =>
+        let smono = instantiate sscheme
+        let r = unifySpineResult smono (map snd pre ++ [tx])
+        let _ = stampRoutes tagRefs
+        let _ = recordImporterShadowDictsAt env mname tagRefs (map snd pre ++ [tx]) tx
+        r
+      None => inferAppNodes (envAlphaLets env) (inferShadowAppHead env hd) (pre ++ [(EApp f x, tx)])
+    None => inferAppNodes (envAlphaLets env) (inferShadowAppHead env hd) (pre ++ [(EApp f x, tx)])
+
 -- S1-RESIDUAL-B: the IMPORTED standalone's declared domain — the first arrow domain of the
 -- scheme stashed in shadowStandaloneSchemesRef (the concrete-head pick made per module by
 -- checkModuleFullImpl).  The importer peer of shadowDomainFor's mangled arm, and it must NOT
@@ -13768,6 +13856,15 @@ importerShadowDomain mname = match lookupAssoc mname perRun.value.shadowStandalo
   Some s => match normalize (instantiate s)
     TFun a _ _ => Some a
     _ => None
+
+-- #2154: as importerShadowDomain, but the standalone's k-th declared parameter — the
+-- one the receiver occupies when the interface dispatches at argument k > 0.  Peer of
+-- shadowDomainForAt / standaloneShadowDomainAt (#1815).  `k = 0` is importerShadowDomain
+-- verbatim (nthFunDomain 0 on a TFun matches its first arm exactly).
+importerShadowDomainAt : String -> Int -> Option Mono
+importerShadowDomainAt mname k = match lookupAssoc mname perRun.value.shadowStandaloneSchemesRef.value
+  None => None
+  Some s => nthFunDomain k (instantiate s)
 
 -- S-1 (importer half): re-record each of the importer shadow's route refs as an
 -- RLocalSite carrying the imported standalone's own constraint dicts, so
@@ -13790,6 +13887,20 @@ recordImporterShadowDicts env mname (r::rest) tx =
     (PendingEntry mname r tx "" (SKRLocal (routeLocalSym !r) True dicts.sdMonos dicts.sdIfaces dicts.sdArgVecs) !currentLoc
       ::perRun.value.pendingRLocalSites.value)
   recordImporterShadowDicts env mname rest tx
+
+-- #2154: as recordImporterShadowDicts, but at dispatch index k > 0 — [ats] is the
+-- applied prefix up to and including the receiver (mirrors shadowStandaloneDictsSp /
+-- recordStandaloneSigObligationsSp's #1815 [ats] parameter), while [tx] stays the
+-- receiver's own mono for the PendingEntry (the site's TYPE, same as inferShadowApp's
+-- k == 0 arm records).
+recordImporterShadowDictsAt : TcEnv -> String -> List (Ref Route) -> List Mono -> Mono -> Unit
+recordImporterShadowDictsAt _ _ [] _ _ = ()
+-- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
+-- lint-disable-next-line rule-prefer-assign-op
+recordImporterShadowDictsAt env mname (r::rest) ats tx =
+  let dicts = shadowStandaloneDictsWithSp (lookupAssoc mname perRun.value.shadowStandaloneSchemesRef.value) mname (routeLocalSym !r) ats
+  let _ = setRef perRun.value.pendingRLocalSites (PendingEntry mname r tx "" (SKRLocal (routeLocalSym !r) True dicts.sdMonos dicts.sdIfaces dicts.sdArgVecs) !currentLoc :: perRun.value.pendingRLocalSites.value)
+  recordImporterShadowDictsAt env mname rest ats tx
 
 -- P0-18: peel a single-argument application's head to a DEFINER-shadow interface-
 -- method occurrence (the user's OWN top-level fn reuses a single-param interface
@@ -25498,6 +25609,8 @@ checkBodyImpl seed mode prog0 =
       -- appends come after, and `zipIfaceMethodSchemeIds` truncates at the key list), so
       -- this reuses the schemes already minted above rather than eliciting new ids.
       let _ = seedNumLitFromIntScheme (ifaceMethodSchemeIds prog) globalS
+      -- #2157: the obligation half of the same anchor, off the SAME decl list.
+      let _ = seedNumLitFromIntParams prog
       []
     Module _ _ implDecls =>
       -- #1351 L1 EXPAND.  `ifaceMethodSchemes implDecls` is hoisted into a binding so it
@@ -25509,6 +25622,7 @@ checkBodyImpl seed mode prog0 =
       perRun.value.ifaceMethodSchemesByIdRef := (zipIfaceMethodSchemeIds (ifaceMethodSchemeIds implDecls) ifaceSchemes)
       -- #259: same anchor on the Module arm, off the same already-minted list.
       let _ = seedNumLitFromIntScheme (ifaceMethodSchemeIds implDecls) ifaceSchemes
+      let _ = seedNumLitFromIntParams implDecls
       -- #1351 L2 MIGRATE.  The importer-shadow layer now binds each shadowed method
       -- name to the scheme of the declaration THIS module's import scope admits
       -- (`applyMethodScopeOverrides`), not to `lookupAssoc`'s decl-walk first match.
@@ -29682,6 +29796,60 @@ pickIfaceMethodSchemeById _ _ [] = None
 pickIfaceMethodSchemeById iface mname (((ifn, n), s)::rest)
   | n == mname && sameIfaceDecl ifn iface = Some s
   | otherwise = pickIfaceMethodSchemeById iface mname rest
+
+-- ── #2157: the OBLIGATION half of the same anchor ───────────────────────────────
+--
+-- #259 (above) fixed WHICH SCHEME a numeric literal instantiates — by interface
+-- identity, out of the prelude `Num` declaration.  It did not fix which INTERFACE the
+-- literal's impl-coverage obligation is recorded against: `inferNumLitMethod` routed
+-- that through `recordImplObligation`, whose `omLookup x methodIfaceParamsRef` is a
+-- bare method-NAME lookup with no interface-identity input at all.  A user module
+-- declaring `interface Buildable c where fromInt : Int -> c` registers a SECOND row
+-- under the key `"fromInt"`, last-write-wins, and every numeric literal in that module
+-- then demanded `Buildable` instead of `Num` — `No impl of Buildable for Int` on
+-- `println (1 + 2)`, on a program with no shadow of any kind (#2157).
+--
+-- ⚠️ The defect's true scope is the whole MODULE, not the same-named method's own impl
+-- body: the table is per-module and the literal path reads it at every literal, so the
+-- misfire needs only the `interface` DECLARATION, no `impl` and no occurrence of the
+-- user's own method.  See `test/shadow_fixtures/x9_*` / `x10_*`.
+--
+-- The remedy mirrors #259's exactly: select the row by the SAME `sameIfaceDecl` test
+-- against `builtinIfaceRef BNum`, out of the SAME decl list, seeded at the SAME point.
+-- Because both seeds read one list, `inferNumLitMethod` (reached only when the scheme
+-- seed hit) can never find this one empty — a miss here would be a MISSED reject, the
+-- quiet direction, and the lockstep seeding is what rules it out.
+seedNumLitFromIntParams : List Decl -> Unit
+seedNumLitFromIntParams prog =
+  perRun.value.numLitFromIntParamsRef := numLitFromIntParamsOf prog
+
+numLitFromIntParamsOf : List Decl -> Option (IfaceRef, List String, Ty, List (String, List Kind))
+numLitFromIntParamsOf [] = None
+numLitFromIntParamsOf (d::rest) = match numLitFromIntParamsDecl d
+  Some e => Some e
+  None => numLitFromIntParamsOf rest
+
+-- DAttrib-unwrapping arm-for-arm with `registerMethodIfaceParamsDecl`, so the row this
+-- produces is the very row that table would have held for the prelude `Num` — same
+-- `IfaceRef`, same typarams, same declared `Ty`, same `declGradedScope`.
+numLitFromIntParamsDecl : Decl -> Option (IfaceRef, List String, Ty, List (String, List Kind))
+numLitFromIntParamsDecl (DAttrib _ d) = numLitFromIntParamsDecl d
+numLitFromIntParamsDecl (DInterface { name, typarams, methods, ifaceOrigin, ... })
+  | sameIfaceDecl IfaceRef {
+    irName = name,
+    irOrigin = ifaceOrigin,
+  } (builtinIfaceRef BNum) = pickIfaceMethodParams IfaceRef {
+    irName = name,
+    irOrigin = ifaceOrigin,
+  } typarams (declGradedScope typarams methods) "fromInt" methods
+  | otherwise = None
+numLitFromIntParamsDecl _ = None
+
+pickIfaceMethodParams : IfaceRef -> List String -> List (String, List Kind) -> String -> List IfaceMethod -> Option (IfaceRef, List String, Ty, List (String, List Kind))
+pickIfaceMethodParams _ _ _ _ [] = None
+pickIfaceMethodParams iface typarams scope want ((IfaceMethod mname mty _ _)::rest)
+  | mname == want = Some (iface, typarams, mty, scope)
+  | otherwise = pickIfaceMethodParams iface typarams scope want rest
 
 -- Error-path B4: register each interface method → (iface, typarams, declared Ty)
 -- so checkImplObligations can recover its dispatch (iface-param) types at a call
@@ -35671,6 +35839,29 @@ checkModulesEntryFullSplit runtimeDecls coreDecls0 modules0 =
     (publicDataDecls coreDecls)
     coreDecls
     modules
+  -- #2155: RECORD THE ENTRY MODULE'S `main` SCHEME, exactly as the emit driver's
+  -- `elabWorker` does for `elaborateModules`.  `mainSchemeRef` is the ONLY input to
+  -- `mainTypeIsUnit`/`mainTypeIsAsync`/`mainTypeIsFloat`, and until now
+  -- `elaborateModules` was its only producer — so a caller that reaches inference
+  -- through THIS driver alone read a ref that no run had ever filled.  That is
+  -- `analyzeFrom` (driver/diagnostics.mdk — the shared body behind `check`, the LSP
+  -- and the playground): its auto-print obligation re-check is gated on
+  -- `shouldAutoPrintMain`, whose own comment says it "needs the elaborate above to
+  -- have set main's type" — but the elaborate above is `checkOneDiags`, i.e. this
+  -- function, which never set it.  `mainTypeIsUnit ()` therefore answered False for
+  -- EVERY main, firing the `main = <e>` → `main = println <e>` wrap on the Unit and
+  -- Async mains it must never touch.  Invisible while `println` denotes the prelude's
+  -- (`Display Unit` exists, so the synthetic obligation is discharged and nothing is
+  -- reported), it surfaces the instant that name means something else in the module:
+  -- #2155's `interface Ifc c where println : c -> Int` made plain `medaka check` of
+  -- `main = putStr "hi"` report `No impl of Ifc for Unit` at no location, and a
+  -- top-level `println : Int -> Int` redefinition reported `Type mismatch: Int vs
+  -- Unit` — both on programs that never write `println` at all.
+  -- SET-OR-CLEAR in one write (never leave a previous run's `main` behind, the reset
+  -- `elaborateModules` spends a separate statement on), from `schemes` — the entry
+  -- module's OWN bindings, which is the same last-wins entry-module rule `elabWorker`
+  -- applies module-by-module.
+  driverState.value.mainSchemeRef := lookupAssoc "main" schemes
   -- D3 / WS-2 part-2: cross-module coherence over the USER modules only (prelude
   -- excluded — it is checked separately and a user impl may override a prelude one).
   -- Prepend any conflict (dependency-first, ahead of the entry's own errors).
@@ -36015,12 +36206,16 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
   -- the separate `medaka_emitter` process share, so an extern head stamped here
   -- and not there would be a fresh check≠build divergence.
   let runtimeSeed = externSchemes (externTyOriginScope coreDecls) runtimeDecls
+  -- #2153: core's own prepass takes the shadow map filtered to what is nameable IN CORE —
+  -- the prelude unit's copy of the per-module filter `prePassModulePairArg` applies to
+  -- every other unit.  See `coreShadowMapFor`.
+  let coreShadowMap = coreShadowMapFor coreDecls driverState.value.mangledShadowMapRef.value
   -- FIRST SWEEP (bare-dict): the real per-module elaboration, harvesting each module's
   -- direct promotions (registerInferredConstraints → promotedRef, unioned per module by
   -- elabHarvestWorker).  On a program that promotes NOTHING — every compiler self-compile
   -- and any promotion-free program — the harvest is empty and this sweep's stamped trees
   -- are already correct, saving the whole discovery typecheck (the ~20% front-end win).
-  let core2a = prePassDictArg markRpNames dictNames0 argNames driverState.value.mangledShadowMapRef.value coreDecls
+  let core2a = prePassDictArg markRpNames dictNames0 argNames coreShadowMap coreDecls
   let modules2a = map (prePassModulePairArg markSharedNames graphShadowNames dictNames0 argNames driverState.value.mangledShadowMapRef.value) modules
   driverState.value.promotionHarvestRef := []
   let coreSchemesA = elabModuleStamp "" runtimeSeed [] core2a core2a
@@ -36068,7 +36263,7 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
       -- `run` dies downstream with a type-confused value (the Phase-134 shape).
       let dictNames = dedup (bareDictNames
         ++ aliasDictNames bareDictNames (("core", coreDecls)::modules) modules)
-      let core2 = prePassDictArg markRpNames dictNames argNames driverState.value.mangledShadowMapRef.value coreDecls
+      let core2 = prePassDictArg markRpNames dictNames argNames coreShadowMap coreDecls
       let modules2 = map (prePassModulePairArg markSharedNames graphShadowNames dictNames argNames driverState.value.mangledShadowMapRef.value) modules
       let coreSchemes = elabModuleStamp "" runtimeSeed [] core2 core2
       -- #154 PR-C: same as the bare sweep above — elabWorker reads accAll (impl universe,
@@ -36690,6 +36885,38 @@ prePassModulePairArg rpNames shadowNames dictNames argNames shadowMap (mid, prog
           shadowMap)
         prog,
     )
+
+-- ── #2153: S1's `nameable in M` for the PRELUDE unit ─────────────────────────
+-- `prePassModulePairArg` (above) filters the definer-shadow map at the CONSUMING module.
+-- `core` is the one unit that never goes through it: `elaborateModules` prepasses
+-- `coreDecls` with `prePassDictArg` directly, handing it the RAW graph-wide map.  That is
+-- fine for `rpNames`/`argNames` — they are BARE method names, and core's references to its
+-- own standalones are all mangled `core__<n>` by the time this runs, so neither set can
+-- match one (the P0-21 argument `elaborateModules` states at `markRpNames`).  It is NOT
+-- fine for the shadow map, which is keyed by exactly those mangled symbols.
+--
+-- 🚨 MEASURED (#2153): `computeMangledShadowMap` walks `("core", coreDecls)` against the
+-- GRAPH-WIDE method-name list, so a USER module declaring `interface Ifc c where not : …`
+-- mints `core__not ↦ not`.  `rewriteArgScoped`'s `sm` arm then rewrote CORE's OWN
+-- `core__not` occurrence (in `neq`, `notElem`, a core prop, …) to `EMethodAt "not"`, and
+-- core's env has no `not` — so `medaka build` died `E-PANIC: unbound method: not` on a
+-- program `check` and `run` both accept, and even on one that never mentions the method.
+-- That is the whole 22-name FAIL_BUILD class in `test/prelude_shadow_census.ledger`: a
+-- prelude standalone reaches this arm only when ANOTHER prelude decl references it, which
+-- is the very split `frontend/marker.mdk`'s `droppablePreludeFns` names (`clamp` yes,
+-- `count`/`find` no) — and it is why the fix `backend/private_mangle.mdk` landed for the
+-- module's OWN occurrences could not reach these: the surviving occurrence is core's.
+--
+-- The rule applied is S1's own: an interface method declared in a USER module is not
+-- nameable in `core`, so no `core.mdk` occurrence can be its shadow.  Same predicate and
+-- same fail-OPEN guard as the per-module filter above — sited beside it so the two stay
+-- auditable as a SET rather than as two independent answers to one question.
+coreShadowMapFor : List Decl -> List (String, String) -> List (String, String)
+coreShadowMapFor coreProg shadowMap
+  | omSize driverState.value.graphIfaceMethodsRef.value == 0 = shadowMap
+  | otherwise =
+    let nameable = nameableIfaceMethodSet coreProg
+    filterList (e => omHasKey (snd e) nameable) shadowMap
 
 -- ── #1684: S1's STANDALONE operand, at the OCCURRENCE spelling ───────────────
 -- The two filters above answer S1's INTERFACE operand (`nameable in M`) and nothing

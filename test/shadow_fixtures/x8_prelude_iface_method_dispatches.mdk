@@ -1,0 +1,24 @@
+-- X8 (S1-PRELUDE (a), #2155) — x6's ACCEPTING-BY-DISPATCH half: `println` is
+-- declared as an interface method AND actually CALLED, on a receiver whose head
+-- has a live `impl Ifc Box`.  S1-PRELUDE (a) says the method wins the bare name
+-- outright (the implicit prelude is not an S1 left operand — RULED 2026-08-10,
+-- #1499), so `println (Box 41)` must reach THIS module's method body and yield
+-- 42, not the prelude's `Display a => a -> <IO> Unit`.
+--
+-- Not a duplicate of x6: x6 pins that a DECLARED-but-uncalled shadow costs
+-- nothing, this pins that a CALLED one still denotes what the ruling says it
+-- denotes.  A fix for x6 that reached for the wrap's synthesized occurrence
+-- instead of its gate — "make the compiler's own `println` mean the prelude's
+-- unconditionally" — is the shape that would move this row, because the
+-- rewrite has no way to tell its own synthesized `EVar "println"` from the one
+-- written on the last line here.  Value hand-derived from the impl body
+-- (`n + 1` at 41), not captured.
+data Box = Box Int
+
+interface Ifc c where
+  println : c -> Int
+
+impl Ifc Box where
+  println (Box n) = n + 1
+
+main = putStrLn (intToString (println (Box 41)))
