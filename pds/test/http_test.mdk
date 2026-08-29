@@ -1,0 +1,293 @@
+{- | Focused structural tests for strict bounded HTTP/1.1 request framing. -}
+
+import test.{expectEqual, expectTrue}
+import string.{contains, toUtf8}
+import lib.http.{
+  Header,
+  Request,
+  headerName,
+  headerValue,
+  parseRequest,
+  requestBody,
+  requestHeaders,
+  requestKeepAlive,
+  requestMethod,
+  requestTarget,
+  requestTrailers,
+}
+import lib.resource_limits.{
+  checkHttpBodyBytes,
+  checkHttpChunks,
+  checkHttpHeaderBytes,
+  checkHttpHeaderFields,
+  checkHttpRequestBytes,
+  checkHttpRequestLineBytes,
+  checkHttpTrailerFields,
+  maxHttpBodyBytes,
+  maxHttpChunks,
+  maxHttpHeaderBytes,
+  maxHttpHeaderFields,
+  maxHttpRequestBytes,
+  maxHttpRequestLineBytes,
+  maxHttpTrailerFields,
+}
+
+isErr : Result e a -> Bool
+isErr (Err _) = True
+isErr (Ok _) = False
+
+isOk : Result e a -> Bool
+isOk (Ok _) = True
+isOk (Err _) = False
+
+rejects : String -> Array Int -> Bool
+rejects expected input = match parseRequest input
+  Err message => contains expected message
+  Ok _ => False
+
+mustRequest : Array Int -> Request
+mustRequest input = match parseRequest input
+  Ok request => request
+  Err message => panic message
+
+appendBytes : Array Int -> Array Int -> Array Int
+appendBytes left right =
+  let leftSize = arrayLength left
+  arrayMakeWith
+    (leftSize + arrayLength right)
+    (i => if i < leftSize then left[i] else right[i - leftSize])
+
+names : List Header -> List String
+names = map headerName
+
+simpleGet : Array Int
+simpleGet =
+  toUtf8
+    "GET /xrpc/com.atproto.server.describeServer?detail=true HTTP/1.1\r\nHost: pds.example\r\n\r\n"
+
+fixedBinary : Array Int
+fixedBinary = appendBytes
+  (toUtf8
+    "POST /xrpc/com.atproto.repo.uploadBlob HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 3\r\nConnection: keep-alive, CLOSE\r\nX-Repeat: one\r\nX-Repeat: two\r\n\r\n")
+  [|0, 128, 255|]
+
+chunked : Array Int
+chunked =
+  toUtf8
+    "POST /xrpc/com.atproto.repo.applyWrites HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: Chunked\r\nX-Repeat: one\r\nX-Repeat: two\r\n\r\n4;foo=bar\r\nWiki\r\n5;quoted=\"yes\"\r\npedia\r\n0;done\r\nX-Checksum: ok\r\n\r\n"
+
+test "origin-form HTTP/1.1 request parses without a body" =
+  let request = mustRequest simpleGet
+  expectTrue
+    (requestMethod request == "GET" && requestTarget request == "/xrpc/com.atproto.server.describeServer?detail=true" && requestBody request == [||] && requestKeepAlive request)
+
+test "fixed-length framing preserves raw binary body and ordered duplicates" =
+  let request = mustRequest fixedBinary
+  expectTrue
+    (requestBody request == [|0, 128, 255|] && names (requestHeaders request) == ["host", "content-length", "connection", "x-repeat", "x-repeat"] && not (requestKeepAlive request))
+
+test "header accessors return trimmed field bytes" =
+  let request = mustRequest (toUtf8 "GET / HTTP/1.1\r\nHost: pds.example\r\nX-Test:\t value \t\r\n\r\n")
+  match requestHeaders request
+    [_host, value] => expectEqual (headerValue value) (toUtf8 "value")
+    _ => expectTrue False
+
+test "chunked framing accepts extensions and ordered trailers" =
+  let request = mustRequest chunked
+  expectTrue
+    (requestBody request == toUtf8 "Wikipedia" && names (requestTrailers request) == ["x-checksum"] && requestKeepAlive request)
+
+test "Connection close token matching is case-insensitive and comma aware" =
+  let request = mustRequest (toUtf8 "GET / HTTP/1.1\r\nHost: pds.example\r\nConnection: upgrade, ClOsE\r\n\r\n")
+  expectTrue (not (requestKeepAlive request))
+
+test "duplicate Content-Length is rejected even when values agree" =
+  expectTrue (rejects
+    "duplicate Content-Length"
+    (toUtf8
+      "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n"))
+
+test "Transfer-Encoding plus Content-Length is rejected" =
+  expectTrue (rejects
+    "ambiguous"
+    (toUtf8
+      "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\nContent-Length: 0\r\n\r\n0\r\n\r\n"))
+
+test "unsupported transfer coding is rejected" =
+  expectTrue (rejects
+    "unsupported transfer coding"
+    (toUtf8
+      "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: gzip, chunked\r\n\r\n"))
+
+test "repeated Transfer-Encoding is rejected" =
+  expectTrue (isErr (parseRequest (toUtf8
+    "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n")))
+
+test "close-delimited request bodies are rejected as trailing bytes" =
+  expectTrue (rejects
+    "unframed or trailing"
+    (toUtf8 "POST / HTTP/1.1\r\nHost: pds.example\r\n\r\npayload"))
+
+test "truncated fixed-length body is rejected" =
+  expectTrue (rejects
+    "truncated body"
+    (toUtf8
+      "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 4\r\n\r\nabc"))
+
+test "bytes after fixed-length framing are rejected" =
+  expectTrue (rejects
+    "bytes after framed"
+    (toUtf8
+      "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 1\r\n\r\nab"))
+
+test "overflowing Content-Length is rejected before allocation" =
+  expectTrue (rejects
+    "overflows Int"
+    (toUtf8
+      "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 99999999999999999999\r\n\r\n"))
+
+test "decoded-body limit is enforced before fixed allocation" =
+  expectTrue (rejects
+    "decoded body exceeds"
+    (toUtf8
+      "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 5242881\r\n\r\n"))
+
+test "invalid chunk size is rejected" =
+  expectTrue (rejects
+    "invalid chunk size"
+    (toUtf8
+      "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\nZ\r\n"))
+
+test "oversized chunk is rejected before allocation" =
+  expectTrue (rejects
+    "chunk size exceeds"
+    (toUtf8
+      "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n500001\r\n"))
+
+test "truncated chunk data is rejected" =
+  expectTrue (rejects
+    "truncated body"
+    (toUtf8
+      "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nab"))
+
+test "missing CRLF after chunk data is rejected" =
+  expectTrue (rejects
+    "missing CRLF"
+    (toUtf8
+      "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n1\r\naXX"))
+
+test "malformed chunk extension is rejected" =
+  expectTrue (rejects
+    "unterminated quoted"
+    (toUtf8
+      "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n1;x=\"no\r\na\r\n0\r\n\r\n"))
+
+test "forbidden framing trailer is rejected" =
+  expectTrue (rejects
+    "forbidden framing"
+    (toUtf8
+      "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nContent-Length: 0\r\n\r\n"))
+
+test "bytes after chunked trailers are rejected" =
+  expectTrue (rejects
+    "bytes after framed"
+    (toUtf8
+      "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nx"))
+
+test "bare LF is rejected" =
+  expectTrue (rejects
+    "bare LF"
+    (toUtf8 "GET / HTTP/1.1\nHost: pds.example\n\n"))
+
+test "bare CR is rejected" =
+  expectTrue (rejects "bare CR" (toUtf8 "GET / HTTP/1.1\rX"))
+
+test "obsolete folded header line is rejected" =
+  expectTrue (rejects
+    "folded"
+    (toUtf8 "GET / HTTP/1.1\r\nHost: pds.example\r\n continuation\r\n\r\n"))
+
+test "invalid method token is rejected" =
+  expectTrue (rejects
+    "method token"
+    (toUtf8 "GE(T / HTTP/1.1\r\nHost: pds.example\r\n\r\n"))
+
+test "invalid header-name token is rejected" =
+  expectTrue (rejects
+    "header field name"
+    (toUtf8 "GET / HTTP/1.1\r\nHost: pds.example\r\nBad Name: value\r\n\r\n"))
+
+test "control byte in header value is rejected" = expectTrue (rejects
+  "control byte"
+  (appendBytes
+    (appendBytes
+      (toUtf8 "GET / HTTP/1.1\r\nHost: pds.example\r\nX-Test: ")
+      [|1|])
+    (toUtf8 "\r\n\r\n")))
+
+test "CRLF injection in request target is rejected" =
+  expectTrue (isErr (parseRequest (toUtf8
+    "GET /ok\r\nInjected: yes HTTP/1.1\r\nHost: pds.example\r\n\r\n")))
+
+test "non-byte input element is rejected before interpretation" = expectTrue (rejects
+  "outside byte range"
+  (appendBytes
+    [|71, 256|]
+    (toUtf8 "T / HTTP/1.1\r\nHost: pds.example\r\n\r\n")))
+
+test "absolute-form request target is rejected" =
+  expectTrue (rejects
+    "origin-form"
+    (toUtf8 "GET http://pds.example/x HTTP/1.1\r\nHost: pds.example\r\n\r\n"))
+
+test "fragment in request target is rejected" =
+  expectTrue (rejects
+    "origin-form"
+    (toUtf8 "GET /x#fragment HTTP/1.1\r\nHost: pds.example\r\n\r\n"))
+
+test "HTTP/1.0 is rejected" =
+  expectTrue (rejects
+    "only HTTP/1.1"
+    (toUtf8 "GET / HTTP/1.0\r\nHost: pds.example\r\n\r\n"))
+
+test "missing Host is rejected" =
+  expectTrue (rejects "exactly one Host" (toUtf8 "GET / HTTP/1.1\r\n\r\n"))
+
+test "duplicate Host is rejected" =
+  expectTrue (rejects
+    "exactly one Host"
+    (toUtf8 "GET / HTTP/1.1\r\nHost: one\r\nHost: two\r\n\r\n"))
+
+test "malformed Connection token list is rejected" =
+  expectTrue (rejects
+    "Connection"
+    (toUtf8
+      "GET / HTTP/1.1\r\nHost: pds.example\r\nConnection: close,\r\n\r\n"))
+
+test "raw request ceiling accepts at and rejects over" =
+  expectTrue
+    (isOk (checkHttpRequestBytes maxHttpRequestBytes) && isErr (checkHttpRequestBytes (maxHttpRequestBytes + 1)))
+
+test "combined header ceiling accepts at and rejects over" =
+  expectTrue
+    (isOk (checkHttpHeaderBytes maxHttpHeaderBytes) && isErr (checkHttpHeaderBytes (maxHttpHeaderBytes + 1)))
+
+test "decoded body ceiling accepts at and rejects over" =
+  expectTrue
+    (isOk (checkHttpBodyBytes maxHttpBodyBytes) && isErr (checkHttpBodyBytes (maxHttpBodyBytes + 1)))
+
+test "request-line ceiling accepts at and rejects over" =
+  expectTrue
+    (isOk (checkHttpRequestLineBytes maxHttpRequestLineBytes) && isErr (checkHttpRequestLineBytes (maxHttpRequestLineBytes + 1)))
+
+test "header-field ceiling accepts at and rejects over" =
+  expectTrue
+    (isOk (checkHttpHeaderFields maxHttpHeaderFields) && isErr (checkHttpHeaderFields (maxHttpHeaderFields + 1)))
+
+test "trailer-field ceiling accepts at and rejects over" =
+  expectTrue
+    (isOk (checkHttpTrailerFields maxHttpTrailerFields) && isErr (checkHttpTrailerFields (maxHttpTrailerFields + 1)))
+
+test "chunk-count ceiling accepts at and rejects over" =
+  expectTrue
+    (isOk (checkHttpChunks maxHttpChunks) && isErr (checkHttpChunks (maxHttpChunks + 1)))

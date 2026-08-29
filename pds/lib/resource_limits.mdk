@@ -1,9 +1,95 @@
-{- | Central resource ceilings for untrusted Phase 1 repository data.
+{- | Central resource ceilings for untrusted repository and protocol data.
 
    The pure in-memory Phase 1 implementation deliberately rejects containers
    beyond these bounds instead of allowing attacker-controlled allocation or
    traversal. The exported checks make both sides of every boundary directly
    testable without constructing a maximum-sized valid repository. -}
+
+-- HTTP/1.1 framing policy. The raw ceiling includes the request line,
+-- header/trailer framing, chunk metadata, and decoded body bytes.
+export
+maxHttpRequestBytes : Int
+maxHttpRequestBytes = 6291456
+
+export
+maxHttpHeaderBytes : Int
+maxHttpHeaderBytes = 65536
+
+export
+maxHttpBodyBytes : Int
+maxHttpBodyBytes = 5242880
+
+export
+maxHttpRequestLineBytes : Int
+maxHttpRequestLineBytes = 8192
+
+export
+maxHttpHeaderFields : Int
+maxHttpHeaderFields = 100
+
+export
+maxHttpTrailerFields : Int
+maxHttpTrailerFields = 32
+
+export
+maxHttpChunks : Int
+maxHttpChunks = 65536
+
+export
+checkHttpRequestBytes : Int -> Result String Unit
+checkHttpRequestBytes size =
+  if size > maxHttpRequestBytes then
+    Err "http: request exceeds 6291456-byte resource limit"
+  else
+    Ok ()
+
+export
+checkHttpHeaderBytes : Int -> Result String Unit
+checkHttpHeaderBytes size =
+  if size > maxHttpHeaderBytes then
+    Err "http: combined header and trailer section exceeds 65536-byte resource limit"
+  else
+    Ok ()
+
+export
+checkHttpBodyBytes : Int -> Result String Unit
+checkHttpBodyBytes size =
+  if size > maxHttpBodyBytes then
+    Err "http: decoded body exceeds 5242880-byte resource limit"
+  else
+    Ok ()
+
+export
+checkHttpRequestLineBytes : Int -> Result String Unit
+checkHttpRequestLineBytes size =
+  if size > maxHttpRequestLineBytes then
+    Err "http: request line exceeds 8192-byte resource limit"
+  else
+    Ok ()
+
+export
+checkHttpHeaderFields : Int -> Result String Unit
+checkHttpHeaderFields count =
+  if count > maxHttpHeaderFields then
+    Err "http: header field count exceeds 100 resource limit"
+  else
+    Ok ()
+
+export
+checkHttpTrailerFields : Int -> Result String Unit
+checkHttpTrailerFields count =
+  if count > maxHttpTrailerFields then
+    Err "http: trailer field count exceeds 32 resource limit"
+  else
+    Ok ()
+
+export
+checkHttpChunks : Int -> Result String Unit
+checkHttpChunks count =
+  if count > maxHttpChunks then
+    Err "http: chunk count exceeds 65536 resource limit"
+  else
+    Ok ()
 
 export
 maxCarBytes : Int
