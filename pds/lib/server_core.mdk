@@ -1,0 +1,65 @@
+{- | Pure configured PDS protocol composition.
+
+   A Server joins a validated XRPC registry to an injected handler. Raw bytes
+   flow through strict HTTP framing, structural routing, an explicit immutable
+   Store transition, and deterministic response serialization. No filesystem,
+   socket, clock, async, or other effect is available in this module. -}
+
+import lib.http.{
+  HttpParseFailure(..),
+  Request,
+  Response,
+  parseRequestClassified,
+  serializeResponse,
+}
+import lib.store.{Store}
+import lib.xrpc.{
+  Registry,
+  RouteResult(..),
+  XrpcCall,
+  routeRequest,
+  xrpcErrorResponse,
+  xrpcFailureResponse,
+}
+
+-- | An endpoint-agnostic pure handler with an explicit successor Store.
+export type Handler = Store -> XrpcCall -> (Store, Response)
+
+-- | A validated registry paired with its injected pure handler.
+export data Server = Server Registry Handler
+
+export
+makeServer : Registry -> Handler -> Server
+makeServer registry handler = Server registry handler
+
+-- | Route an already framed request. Route failures never invoke the handler
+-- and return the identical input Store.
+export
+handle : Server -> Store -> Request -> (Store, Response)
+handle (Server registry handler) store request = match routeRequest registry request
+  RouteFailure failed => (store, xrpcFailureResponse failed)
+  RouteCall call => handler store call
+
+malformedHttpResponse : Response
+malformedHttpResponse =
+  xrpcErrorResponse 400 "Bad Request" "InvalidRequest" "Malformed HTTP request"
+
+resourceExcessResponse : Response
+resourceExcessResponse =
+  xrpcErrorResponse
+    413
+    "Payload Too Large"
+    "PayloadTooLarge"
+    "HTTP request exceeds resource limits"
+
+-- | Handle one complete buffered request. Both HTTP failure classes preserve
+-- the exact input Store; successful calls expose the handler's successor.
+export
+handleBytes : Server -> Store -> Array Int -> (Store, Array Int)
+handleBytes server store bytes = match parseRequestClassified bytes
+  Err (HttpMalformed _) => (store, serializeResponse malformedHttpResponse)
+  Err (HttpResourceExcess _) =>
+    (store, serializeResponse resourceExcessResponse)
+  Ok request =>
+    let (next, response) = handle server store request
+    (next, serializeResponse response)

@@ -1,0 +1,37 @@
+{- | Opaque immutable storage carrier for the pure PDS protocol core.
+
+   Phase 2 deliberately wraps only the verified content-addressed block store.
+   Filesystem adapters, multiple repositories, and blob persistence belong to
+   later phases and cannot leak effects through this interface. -}
+
+import lib.blockstore.{
+  BlockStore,
+  blockStoreEmpty,
+  blockStoreGet,
+  blockStorePut,
+  blockStoreSize,
+}
+import lib.cid.{Cid}
+
+-- | Immutable verified protocol state. Its representation is private.
+export data Store = Store BlockStore
+
+-- | The empty protocol store.
+export
+storeEmpty : Store
+storeEmpty = Store blockStoreEmpty
+
+-- | Number of distinct verified blocks in the store.
+export
+storeSize : Store -> Int
+storeSize (Store blocks) = blockStoreSize blocks
+
+-- | Look up a block, returning a defensive copy.
+export
+storeGet : Cid -> Store -> Option (Array Int)
+storeGet cid (Store blocks) = blockStoreGet cid blocks
+
+-- | Verify and immutably insert a block, returning the successor store.
+export
+storePut : Cid -> Array Int -> Store -> Result String Store
+storePut cid bytes (Store blocks) = map Store (blockStorePut cid bytes blocks)
