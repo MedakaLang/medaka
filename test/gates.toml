@@ -384,6 +384,25 @@ corpus = []
 toolchain = []
 
 [[gate]]
+name = "pds/nightly/repo_vectors_eval_engine"
+area = "engines"
+shard = "other-job"
+project = "pds"
+tier = "nightly"
+# 1091.56s measured (the eval interpreter over the representative repo
+# transcript) — over the 900s "medium" bound, so "heavy". Reachability is the
+# `repo-vectors-eval-engine` job in .github/workflows/nightly.yml, named by
+# literal path, which is what clause (a) of diff_compiler_ci_shard_coverage.sh
+# checks for an `other-job` entry.
+cost = "heavy"
+kind = "exec"
+run = "pds/nightly/repo_vectors_eval_engine.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
 name = "pds/nightly/signing_parity"
 area = "engines"
 shard = "other-job"
@@ -599,7 +618,13 @@ area = "engines"
 shard = "pds"
 project = "pds"
 tier = "merge"
-cost = "medium"
+# Was "medium" while this gate was the 948.9s pole of the whole suite — i.e. the
+# one gate in the tree whose declared class was furthest from its measured cost,
+# and `cost` is what `medaka gate run` turns into a timeout (medium = 900s), so
+# the declaration was also 49s under the gate's own median. S-2-pds-pole moved
+# the 1091.56s eval arm to pds/nightly/repo_vectors_eval_engine; what remains
+# measures 14.9s. See that script's header for the profile.
+cost = "cheap"
 kind = "exec"
 run = "pds/test/repo_vectors.sh"
 oracles = []

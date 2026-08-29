@@ -365,6 +365,39 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  pds-repo-vectors-eval-engine:
+    name: "pds/nightly/repo_vectors_eval_engine.sh (eval interpreter == native on the repo transcript — #2208)"
+    runs-on: ubuntu-latest
+    # ~18 min of interpreter, plus checkout/toolchain/build. 40 matches the
+    # signing-parity job below; this one has no wasm arm to install for.
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      # No `wasm: true` — this arm is `medaka run` vs. `medaka build` native.
+      # The Wasm half of the repo transcript stayed in the merge queue.
+      - name: Setup medaka (toolchain + build)
+        uses: ./.github/actions/setup-medaka
+        with:
+          binary: build
+
+      # MOVED HERE FROM pds/test/repo_vectors.sh in the `pds` CI shard
+      # (2026-08-29, #2208 S-2-pds-pole): profiled arm-by-arm, this ONE
+      # `medaka run` was 1091.56s of that gate's 1105.3s — 98.76% — making it
+      # the 948.9s pole of the entire suite and an indivisible floor under
+      # `gates (pds)` for every rebalance. The routes it checked did not need
+      # the interpreter and now run on native AND Wasm in the queue for ~1.6s;
+      # what is left here is the third engine's own agreement, a BREADTH arm
+      # under #2181's charter clause. Same demotion shape as the
+      # signing-parity job below (#1962), invoked by its literal repo-relative
+      # path so diff_compiler_ci_shard_coverage.sh's "named" mechanism counts
+      # it covered. PLAIN pass/fail: a deterministic engine differential, so a
+      # red run here is a genuine regression, not a finding to file.
+      - name: Eval interpreter vs native on the representative repo transcript
+        env:
+          MEDAKA_ROOT: ${{ github.workspace }}
+        run: sh pds/nightly/repo_vectors_eval_engine.sh
+
   pds-signing-parity:
     name: "pds/nightly/signing_parity.sh (full ECDSA corpus parity, native+Wasm — #1962)"
     runs-on: ubuntu-latest
