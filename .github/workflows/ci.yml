@@ -1336,3 +1336,26 @@ jobs:
           bash test/wasm/diff_gzip.sh          || rc=1
           bash test/build_wasm_cmd.sh          || rc=1
           exit $rc
+
+  # The gates-matrix GENERATED region's own drift gate (#2177, S-3). ADVISORY
+  # ONLY (not yet in the required-checks ruleset — adding a required context
+  # needs a separate, non-atomic `gh api` ruleset edit; see
+  # docs/ops/CI-ARCHITECTURE.md §3.2 and this slice's report for the exact
+  # command). Own job, not folded into `soundness`, because unlike that job's
+  # doc gates this one needs the built binary (`medaka gate ci` is in-binary)
+  # — `needs`/`if:` shape copied from `compiler-soundness`/`wasm` above.
+  ci-gen-drift:
+    needs: [detect, build]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup medaka (toolchain + downloaded binary)
+        uses: ./.github/actions/setup-medaka
+        with:
+          binary: artifact
+
+      - name: Generated gates-matrix region must not drift or be hand-edited
+        run: sh test/diff_compiler_ci_gen_drift.sh

@@ -130,8 +130,27 @@ placement per entry would be a registry schema change, not a generator change.
 order — no sort, no locale-sensitive comparison, nothing read from the environment —
 and `make gen-ci` pins `LC_ALL=C` anyway so the two generators keep one story.
 Regeneration is idempotent and writes only on a real change, so
-`make gen-ci && git diff --exit-code` is the drift check (wired as a CI step by the
-next slice).
+`make gen-ci && git diff --exit-code` is the drift check.
+
+**Drift gate — AS LANDED (S-3, #2177).** `test/diff_compiler_ci_gen_drift.sh` wraps
+exactly that: `LC_ALL=C medaka gate ci` then `git diff --exit-code -- .github/workflows/ci.yml`,
+mirroring the pre-existing "Docs index must be regenerated, not hand-edited" step
+byte-for-byte in shape. The contract's §3.2 named two ways to resolve the tension
+between "cheap/always-running/required" and "the generator is in-binary": (a) a CI job
+that downloads the already-built binary artifact (`setup-medaka`, `binary: artifact`,
+same as `gates`/`compiler-soundness`/`wasm`), or (b) a text-only reimplementation
+outside the binary. **This slice takes (a)** — (b) would be a second TOML/generator
+implementation to keep in sync with the one in `compiler/tools/gate_cmd.mdk`, which
+contract §4.4/§4.6 rule out. The job (`ci-gen-drift` in `ci.yml`) is **ADVISORY ONLY**:
+it is not in the required-status-checks ruleset, because adding a required context is a
+`gh api` ruleset edit that is not atomic with a commit ([W-GH-WRITE-VERIFY]) — see this
+slice's report for the exact command to promote it once Val is ready.
+
+Enrolled as `diff_compiler_ci_gen_drift` in `test/gates.toml` (`shard = "other-job"`,
+its own job, not a `gates` matrix row) and in `test/preflight.sh` (the `test/gates.toml)`
+and `compiler/tools/gate_cmd.mdk)` arms, plus a new `test/gate_shards/*)` arm — not
+`.github/workflows/ci.yml` itself, which stays unmatched (falls through to the FULL
+suite) to avoid narrowing an unrelated ci.yml hand-edit's coverage.
 
 ### 3.3 Semantic identity ⊥ scheduling (#2178) — decision: option B
 

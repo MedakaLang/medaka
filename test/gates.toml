@@ -3313,6 +3313,24 @@ sources = ["compiler/tools/gate_cmd.mdk", "test/diff_compiler_gate_registry.sh",
 corpus = []
 toolchain = []
 
+# The generated gates-matrix region's own drift gate (#2177, S-3): regenerate
+# `.github/workflows/ci.yml` via `medaka gate ci` and diff. Not binary-free
+# (same accepted gap as diff_compiler_gate_registry above); shard="other-job"
+# because it has its own CI job (ci-gen-drift), not a `gates` matrix row.
+[[gate]]
+name = "diff_compiler_ci_gen_drift"
+area = "infra"
+shard = "other-job"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_ci_gen_drift.sh"
+oracles = []
+sources = ["compiler/tools/gate_cmd.mdk", "test/diff_compiler_ci_gen_drift.sh", "test/gates.toml", ".github/workflows/ci.yml"]
+corpus = []
+toolchain = []
+
 
 
 # ── the `gates` matrix rows (S-1, #2177) ─────────────────────────────────────
