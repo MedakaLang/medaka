@@ -1,0 +1,14 @@
+{
+  "schema": "gate-cost-baseline/1",
+  "note": "SYNTHETIC fixture baseline for test/diff_compiler_gate_balance.sh. Hand-written, not ingested.",
+  "generated": "2026-08-29T00:00:00Z",
+  "maxSamples": 9,
+  "runs": [],
+  "gates": [
+    {"name": "bigA", "medianMs": 300, "samples": 1, "ms": [300]},
+    {"name": "bigB", "medianMs": 300, "samples": 1, "ms": [300]},
+    {"name": "bigC", "medianMs": 300, "samples": 1, "ms": [300]},
+    {"name": "gw", "medianMs": 10, "samples": 1, "ms": [10]},
+    {"name": "pinned1", "medianMs": 280, "samples": 1, "ms": [280]}
+  ]
+}

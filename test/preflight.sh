@@ -709,6 +709,16 @@ for f in $changed; do
       # drift gate diffs ci.yml against — both are this file's behavior now.
       add 'diff_compiler_ci_shard_coverage'
       add 'diff_compiler_prose_classifier'
+      # #2178 (S-3-S-balancer): `medaka gate balance` lives here too, so a
+      # change to this file moves the balancer's own gate.
+      add 'diff_compiler_gate_balance'
+      add 'diff_compiler_check*' ;;
+    # #2178 (S-3-S-balancer): the cost-baseline READER the balancer joins on.
+    # Same shadowing rule as gate_cmd.mdk above — it is also an ordinary
+    # compiler/tools/*.mdk file, so it must keep the catch-all's
+    # `diff_compiler_check*` line or this arm silently narrows it away.
+    compiler/tools/gate_cost.mdk)
+      add 'diff_compiler_gate_balance'
       add 'diff_compiler_check*' ;;
     compiler/tools/*)              add 'diff_compiler_check*' ;;
 
@@ -820,7 +830,9 @@ for f in $changed; do
     # and exactly what someone edits ALONE when enrolling or fixing a gate.
     # (S-4-coverage-authority adds the coverage gate: a `shard` field edited
     # here is now the ONLY thing that decides shard membership.)
-    test/gates.toml)               add 'diff_compiler_gate_registry'; add 'diff_compiler_ci_gen_drift'; add 'diff_compiler_ci_shard_coverage' ;;
+    # (#2178, S-3-S-balancer adds the balancer: `shard` is the field it derives,
+    # so the registry is both its input and the file it rewrites.)
+    test/gates.toml)               add 'diff_compiler_gate_registry'; add 'diff_compiler_ci_gen_drift'; add 'diff_compiler_ci_shard_coverage'; add 'diff_compiler_gate_balance' ;;
     # #2177 (S-3-generation-drift-gate): the per-shard rationale files that feed
     # `medaka gate ci`'s generated gates-matrix region. Not read by anything
     # else — a loose file under test/ that someone edits ALONE when adding a
@@ -834,8 +846,12 @@ for f in $changed; do
     # non-prose path widens the whole PR run to the FULL suite
     # ([W-THIRD-CONSUMER]) — the most expensive possible answer for a file whose
     # only consumer is one millisecond-cost gate.
+    # (#2178, S-3-S-balancer: the baseline is ALSO the balancer's cost input —
+    # re-ingesting timings can move every shard assignment, so the balancer's
+    # gate has to run on a baseline change, not just the transport's.)
     test/gate_cost_ingest.sh|test/gate_cost_baseline.json)
-                                   add 'diff_compiler_gate_cost' ;;
+                                   add 'diff_compiler_gate_cost'
+                                   add 'diff_compiler_gate_balance' ;;
     # S2-5 (end-of-sprint review, #2177): the generated file itself had no arm
     # at all, so a change here fell through to the catch-all — the two gates
     # that actually police its generated content are the ones that read it.

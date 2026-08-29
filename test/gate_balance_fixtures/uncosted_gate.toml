@@ -1,0 +1,87 @@
+# test/gate_balance_fixtures/uncosted_gate.toml — SYNTHETIC, hand-written.
+#
+# THE SILENT-ZERO GUARD. `orphan` is enrolled and schedulable, but its `run`
+# script has no row in the paired baseline.
+#
+# This is the shape the real registry very nearly shipped: the baseline is keyed
+# by run_gates.sh's own gate label (script path, `/`->`_`, leading `test_`
+# dropped), NOT by the registry's `name`, and the two agree on every gate under
+# test/ — so a join on `name` looks perfect on 149 of 202 real entries while
+# silently costing the other 53 at zero. A zero is not a cheap gate, it is an
+# unknown one, and the packer would pile it onto whichever row was lightest.
+#
+# The balancer must refuse, and name the baseline key it looked for.
+
+[[gate]]
+name = "orphan"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/orphan.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "known1"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/known1.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "known2"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/known2.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "pinned1"
+area = "fixture"
+shard = "pin"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/pinned1.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "pin"
+full_cores = true
+wasm_arm = false
+rationale = "test/gate_shards/pin.txt"
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+
+[[shard]]
+name = "b"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/b.txt"

@@ -1,0 +1,110 @@
+# test/gate_balance_fixtures/wasm_only_row.toml — SYNTHETIC, hand-written.
+#
+# DEGENERATE CASE 1: a constraint set that admits exactly one candidate row.
+#
+# Rows in registry order: pin (full_cores, so CLOSED to the packer), a, b, w.
+# Only `pin` and `w` carry wasm_arm = true, and `pin` is closed, so `w` is the
+# ONLY row that can run a gate needing wasm-tools/node.
+#
+# The case is built so the constraint is DISCRIMINATING rather than incidental.
+# `gw` costs 10ms and is placed LAST by longest-processing-time order, by which
+# point a, b and w all sit at 300ms. An unconstrained packer breaks that tie in
+# registry order and puts `gw` on `a`; only a packer that reads `wasm_arm` puts
+# it on `w`. So "gw lands on w" is evidence about the constraint and not about
+# the tie-break.
+#
+# Expected: gw -> w, and w becomes the pole at 310ms.
+
+[[gate]]
+name = "bigA"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/bigA.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "bigB"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/bigB.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "bigC"
+area = "fixture"
+shard = "w"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/bigC.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "gw"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/gw.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = ["wasm-tools", "node>=24"]
+
+[[gate]]
+name = "pinned1"
+area = "fixture"
+shard = "pin"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/pinned1.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "pin"
+full_cores = true
+wasm_arm = true
+rationale = "test/gate_shards/pin.txt"
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+
+[[shard]]
+name = "b"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/b.txt"
+
+[[shard]]
+name = "w"
+full_cores = false
+wasm_arm = true
+rationale = "test/gate_shards/w.txt"

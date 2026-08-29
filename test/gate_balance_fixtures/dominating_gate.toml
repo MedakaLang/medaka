@@ -1,0 +1,106 @@
+# test/gate_balance_fixtures/dominating_gate.toml — SYNTHETIC, hand-written.
+#
+# DEGENERATE CASE 2: one gate so expensive no packing can hide it.
+#
+# `monolith` costs 1000ms against four small gates. Gates are indivisible, so
+# the pole is at least 1000ms whatever the packer does, while the median row
+# stays near 150ms — a pole/median of ~6.7, far outside the enforced 1.25.
+#
+# The balancer must FAIL here, and its message must say the reason is one gate
+# that has to get faster rather than a packing it could have found. A balancer
+# that silently emitted this assignment would be certifying a matrix in which
+# three of four runners idle for 85% of the job.
+
+[[gate]]
+name = "monolith"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/monolith.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "small1"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/small1.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "small2"
+area = "fixture"
+shard = "c"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/small2.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "small3"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/small3.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "pinned1"
+area = "fixture"
+shard = "pin"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/pinned1.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "pin"
+full_cores = true
+wasm_arm = false
+rationale = "test/gate_shards/pin.txt"
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+
+[[shard]]
+name = "b"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/b.txt"
+
+[[shard]]
+name = "c"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/c.txt"

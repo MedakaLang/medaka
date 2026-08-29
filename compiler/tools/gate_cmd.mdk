@@ -36,6 +36,7 @@ import toml.{Toml, parse, getString, getArray, getBool, tableCount, tableEntry}
 import json.{Json, JString, JInt, JFloat, JBool, jArray, jObject, stringify}
 import driver.build_cmd.{envOr, defaultMedakaRoot}
 import support.path.{joinPath}
+import tools.gate_cost.{GateCost, baselineKey, costOf, parseCostBaseline}
 import support.util.{
   contains,
   endsWith,
@@ -43,6 +44,7 @@ import support.util.{
   joinNl,
   joinWith,
   listLen,
+  maxI,
   parseDecChecked,
   reverseL,
   sortUniqS,
@@ -435,6 +437,7 @@ gateHelpText = stringConcat
     "  medaka gate verify  [--registry <path>]\n",
     "  medaka gate explain <path> [--prose] [--registry <path>]\n",
     "  medaka gate ci      [--check] [--registry <path>] [--workflow <path>]\n",
+    "  medaka gate balance [--check] [--registry <path>] [--baseline <path>]\n",
     "\n",
     "Selectors (conjunction — a gate must match all of them):\n",
     "  name:<glob>      gate name, e.g. name:diff_compiler_*\n",
@@ -449,6 +452,19 @@ gateHelpText = stringConcat
     "  --shards           list: the ci.yml `gates` matrix rows, not the gates.\n",
     "                     run: the machine-readable run report as JSON.\n",
     "  --registry <path>  read this registry instead of <MEDAKA_ROOT>/test/gates.toml\n",
+    "\n",
+    "`gate balance` only:\n",
+    "  --check            derive the assignment in memory and report whether the\n",
+    "                     committed one matches it; write nothing\n",
+    "  --baseline <path>  read this cost baseline instead of\n",
+    "                     <MEDAKA_ROOT>/test/gate_cost_baseline.json\n",
+    "\n",
+    "`gate balance` CHOOSES each gate's `shard` row from the registry's own\n",
+    "constraints plus the measured cost baseline, and rewrites the `shard = \"...\"`\n",
+    "lines in test/gates.toml in place. A full_cores row is CLOSED (its members\n",
+    "are an input, not a choice); a gate needing wasm-tools/node only lands on a\n",
+    "row with wasm_arm = true. It refuses rather than pack from a missing cost,\n",
+    "and fails when the assignment it would emit misses its pole/median target.\n",
     "\n",
     "`gate run` only:\n",
     "  --dry-run          print the resolved invocation plan; execute nothing\n",
@@ -617,15 +633,16 @@ export
 runGateCmd : List String -> <IO> Unit
 runGateCmd [] =
   emit (Err
-    "usage: medaka gate <list|run|verify|explain|ci> [<selector>...] [--json]")
+    "usage: medaka gate <list|run|verify|explain|ci|balance> [<selector>...] [--json]")
 runGateCmd ("list"::rest) = emit (listOutput rest)
 runGateCmd ("run"::rest) = runRunCmdBody rest
 runGateCmd ("verify"::rest) = verifyCmdBody rest
 runGateCmd ("explain"::rest) = explainCmdBody rest
 runGateCmd ("ci"::rest) = ciCmdBody rest
+runGateCmd ("balance"::rest) = balCmdBody rest
 runGateCmd (sub::_) =
   emit (Err
-    "medaka gate: unknown subcommand '\{sub}' (expected: list, run, verify, explain, ci)")
+    "medaka gate: unknown subcommand '\{sub}' (expected: list, run, verify, explain, ci, balance)")
 
 -- ── `gate run` ──────────────────────────────────────────────────────────────
 --
@@ -2078,6 +2095,684 @@ ciCmdBody argv = match parseCiArgs argv CiArgs { registry = None, workflow = Non
               emit (ciCheckResult wfPath wfSrc out)
             else
               ciWrite wfPath wfSrc out
+
+-- ── `gate balance` (#2178) ──────────────────────────────────────────────────
+--
+-- `medaka gate balance` CHOOSES each gate's `shard` row, from the registry's
+-- own constraints plus S-1's measured cost baseline
+-- (`test/gate_cost_baseline.json`), instead of the hand-assignment the header
+-- of `test/gates.toml` describes as "HAND-ASSIGNED DATA, NOT A DERIVED
+-- OUTPUT".  After this command the eight row NAMES are still fixed (they are
+-- required status-check contexts, `gates (<name>)`, so they are not free to
+-- change) — only which gates land in each is computed.
+--
+-- ⚠️ THE ASSIGNMENT LIVES IN `test/gates.toml`, by TARGETED LINE REPLACEMENT.
+-- The alternative — a second, generated file that overrides the registry's
+-- `shard` — was rejected: `gate ci`, `gate list`, `gate verify`,
+-- `diff_compiler_ci_shard_coverage.sh` and `test/preflight.sh` all read
+-- `shard` from this file today, and a second source of truth is only safe if
+-- EVERY one of them learns the override rule.  Any that does not schedules
+-- from stale data silently, which is [W-THIRD-CONSUMER] with extra steps; and
+-- a `shard` field left present-but-vestigial is a lie that greps true.  So
+-- there stays exactly one place a row assignment is written, and this command
+-- rewrites it.
+--
+-- Only the `shard = "…"` lines move.  `stdlib/toml.mdk` is a PARSER with no
+-- serializer, so round-tripping 230 hand-written entries through it is not
+-- available and would be a formatting-drift trap if it were (`balSplice`).
+--
+-- ── The objective ───────────────────────────────────────────────────────────
+--
+-- The `gates` job's wall-clock is its SLOWEST row (the pole); its billed
+-- runner-time is `rows × pole`.  So the waste a balancer can actually remove
+-- is the gap between the pole and the typical row, and the objective is the
+-- POLE, reported as the `pole / median` factor.
+--
+-- The enforced target is `pole / median <= 1.25` (`balTargetMilli`): at most a
+-- fifth of the gates job's billed time is a runner idling because its row
+-- finished early.  It is a target and not a wish — `balance` and `balance
+-- --check` both FAIL when the assignment they would emit misses it.
+--
+-- ⚠️ The pole has a floor no packing can go under: the single most expensive
+-- gate.  Gates are indivisible, so `pole >= max(cost)`, and when one gate
+-- alone exceeds the target the refusal says so in those words rather than
+-- blaming the packing — a "rebalance harder" message pointed at a gate that
+-- needs to get FASTER would send the next reader looking in the wrong place.
+--
+-- ── Costs are RELATIVE, not predicted wall-clock ────────────────────────────
+--
+-- S-1's `ms` samples were measured under the shard concurrency CI actually
+-- uses (`JOBS=7` inside each shard), so a row's projected total here is a sum
+-- of per-gate medians that were themselves measured while sharing a runner.
+-- That sum is NOT what CI will print for the row.  It is the right RELATIVE
+-- signal for packing — which is all the objective needs — and every number
+-- this command prints is labelled "projected" for that reason.
+
+-- One schedulable gate, joined with its measured cost.
+data Cand =
+  | Cand {
+      cname : String,
+      crun : String,
+      curRow : String,
+      cms : Int,
+      needsWasm : Bool,
+    }
+
+-- One matrix row, with the load accumulated onto it so far.
+data Row =
+  | Row {
+      rname : String,
+      rwasm : Bool,
+      rclosed : Bool,
+      rload : Int,
+      rcount : Int,
+    }
+
+-- One gate's outcome: where it goes, and where it came from.
+data Place = Place { pname : String, pfrom : String, pto : String }
+
+{- | The sentinel `shard` value for a gate some other workflow job schedules.
+   These never enter the packing: 28 entries carry it, they never go through
+   `test/run_gates.sh`, and so they structurally cannot appear in the cost
+   baseline either.  `diff_compiler_must_fail` is one of them — its INVERTED
+   polarity ([G-MUST-FAIL]) is `compiler-soundness`'s business, and a matrix
+   balancer must never so much as see it. -}
+export
+balOtherJob : String
+balOtherJob = "other-job"
+
+-- The enforced `pole / median` ceiling, in thousandths.  See "The objective".
+balTargetMilli : Int
+balTargetMilli = 1250
+
+-- Hysteresis: the projected pole must improve by MORE than this percentage
+-- before any gate moves.  Without it, a one-millisecond drift in one gate's
+-- median re-shuffles the matrix and every downstream `gates (<row>)` check
+-- churns for nothing.
+balMarginPct : Int
+balMarginPct = 5
+
+-- A gate needs the Wasm arm when its toolchain names `wasm-tools` or a `node`
+-- version.  Per the sprint contract §4.4, `sqlite3` and `valgrind` are
+-- installed on EVERY row by ci.yml's "Setup medaka" step, so they constrain
+-- nothing; `wasm-tools`/`node` is the only row-conditional toolchain, and
+-- which rows offer it is read from `[[shard]]`'s `wasm_arm`, never assumed.
+balNeedsWasm : List String -> Bool
+balNeedsWasm [] = False
+balNeedsWasm (t::ts)
+  | t == "wasm-tools" = True
+  | startsWith "node" t = True
+  | otherwise = balNeedsWasm ts
+
+-- ── Building the candidate set ──────────────────────────────────────────────
+
+-- Gates with no row for their `shard` value, as names.  A gate naming a row
+-- that does not exist cannot be scheduled at all, and must not be silently
+-- dropped from the packing (which would quietly REMOVE it from CI).
+balUnknownRows : List Shard -> List Gate -> List String
+balUnknownRows _ [] = []
+balUnknownRows shs (g::gs)
+  | g.shard == balOtherJob = balUnknownRows shs gs
+  | balHasRow g.shard shs = balUnknownRows shs gs
+  | otherwise = g.name :: balUnknownRows shs gs
+
+balHasRow : String -> List Shard -> Bool
+balHasRow _ [] = False
+balHasRow n (s::ss)
+  | s.name == n = True
+  | otherwise = balHasRow n ss
+
+-- Schedulable gates whose `run` script has no row in the cost baseline.
+--
+-- ⚠️ HARD ERROR, NEVER A ZERO.  A missing cost read as 0 does not make the
+-- packing a little worse — it makes the gate free, so the packer piles it onto
+-- whatever row is already lightest and the projection it prints is confidently
+-- wrong.  `gate_cost.baselineKey` is the join key precisely because the
+-- obvious join (on `name`) misses 53 of the 202 schedulable entries in
+-- silence; this check is what makes any future drift in that key loud.
+balUncosted : List GateCost -> List Gate -> List String
+balUncosted _ [] = []
+balUncosted base (g::gs)
+  | g.shard == balOtherJob = balUncosted base gs
+  | otherwise = match costOf g.run base
+    Some _ => balUncosted base gs
+    None =>
+      "\{g.name} (baseline key '\{baselineKey g.run}')" :: balUncosted base gs
+
+balCands : List GateCost -> List Gate -> List Cand
+balCands _ [] = []
+balCands base (g::gs)
+  | g.shard == balOtherJob = balCands base gs
+  | otherwise = match costOf g.run base
+    None => balCands base gs
+    Some ms => Cand {
+      cname = g.name,
+      crun = g.run,
+      curRow = g.shard,
+      cms = ms,
+      needsWasm = balNeedsWasm g.toolchain,
+    } :: balCands base gs
+
+-- ⚠️ A `full_cores` row is CLOSED, not merely preferred.
+--
+-- `engines` exists because `diff_compiler_engines` needs a whole runner to
+-- itself; its row-mates are there because they share that need, and none of
+-- that is a cost fact the packer can see.  So the packer neither moves a gate
+-- OFF a full-cores row nor moves one ON — the row's membership is an input,
+-- and the remaining rows are what it packs.
+--
+-- This is also what makes the target assignment a pure function of (registry
+-- constraints, costs) and therefore a FIXED POINT: closing the row on the
+-- `full_cores` flag rather than on "whatever is there now" means re-running
+-- the balancer on its own output derives the same pin set, hence the same
+-- target.  See `balDecide`.
+balRows : List Shard -> List Row
+balRows [] = []
+balRows (s::ss) =
+  Row {
+      rname = s.name,
+      rwasm = s.wasmArm,
+      rclosed = s.fullCores,
+      rload = 0,
+      rcount = 0,
+    } ::
+    balRows ss
+
+-- ── The packing ─────────────────────────────────────────────────────────────
+
+-- Longest-processing-time first: the classic list-scheduling heuristic, and
+-- the reason the pole lands on its floor here rather than merely near it —
+-- the biggest gate is placed first, onto an empty row, so nothing can be
+-- stacked on top of it afterwards except by a row that is still lighter.
+--
+-- Ties break on the gate NAME, so the output is a function of the inputs and
+-- not of `gates.toml`'s line order.
+candBefore : Cand -> Cand -> Bool
+candBefore a b
+  | a.cms /= b.cms = a.cms > b.cms
+  | otherwise = a.cname < b.cname
+
+balSortCands : List Cand -> List Cand
+balSortCands [] = []
+balSortCands (x::[]) = x::[]
+balSortCands xs =
+  let (l, r) = balHalve xs [] []
+  balMergeCands (balSortCands l) (balSortCands r)
+
+balHalve : List Cand -> List Cand -> List Cand -> (List Cand, List Cand)
+balHalve [] a b = (a, b)
+balHalve (x::xs) a b = balHalve xs b (x::a)
+
+balMergeCands : List Cand -> List Cand -> List Cand
+balMergeCands [] ys = ys
+balMergeCands xs [] = xs
+balMergeCands (x::xs) (y::ys)
+  | candBefore x y = x :: balMergeCands xs (y::ys)
+  | otherwise = y :: balMergeCands (x::xs) ys
+
+-- The open row a gate should go on: the lightest row that can legally run it.
+-- Scanning with a STRICT `<` keeps the first minimum, so an all-equal set of
+-- rows resolves in `[[shard]]` order — deterministic, and stable as loads grow.
+balPick : Cand -> List Row -> Option String
+balPick c rs = balPickGo c rs None
+
+balPickGo : Cand -> List Row -> Option Row -> Option String
+balPickGo _ [] None = None
+balPickGo _ [] (Some b) = Some b.rname
+balPickGo c (r::rs) best
+  | r.rclosed = balPickGo c rs best
+  | c.needsWasm && not r.rwasm = balPickGo c rs best
+  | otherwise = match best
+    None => balPickGo c rs (Some r)
+    Some b =>
+      if r.rload < b.rload then
+        balPickGo c rs (Some r)
+      else
+        balPickGo c rs best
+
+balAdd : String -> Int -> List Row -> List Row
+balAdd _ _ [] = []
+balAdd n ms (r::rs)
+  | r.rname == n = Row { r | rload = r.rload + ms, rcount = r.rcount + 1 }::rs
+  | otherwise = r :: balAdd n ms rs
+
+-- Place the sorted candidates one at a time.  A gate with no legal row is the
+-- constraint refusal: it names the gate, what it needs, and which rows offer
+-- it, rather than quietly landing somewhere the toolchain is absent (where it
+-- would fail in CI as a mysterious missing-binary error, on a row whose
+-- coverage check reports the gate as scheduled).
+balPlace : List Cand -> List Row -> List Place -> Result String (List Place, List Row)
+balPlace [] rs acc = Ok (reverseL acc, rs)
+balPlace (c::cs) rs acc = match balPick c rs
+  None => Err (stringConcat [
+    "medaka gate balance: no row can run '\{c.cname}'.\n",
+    "  It needs the Wasm toolchain (wasm-tools / node), and every row with\n",
+    "  wasm_arm = true is closed to the packer (full_cores).  Wasm rows: ",
+    joinSpace (balWasmRowNames rs),
+    "\n",
+  ])
+  Some rn => balPlace cs (balAdd rn c.cms rs) (Place {
+    pname = c.cname,
+    pfrom = c.curRow,
+    pto = rn,
+  }::acc)
+
+balWasmRowNames : List Row -> List String
+balWasmRowNames [] = []
+balWasmRowNames (r::rs)
+  | r.rwasm = r.rname :: balWasmRowNames rs
+  | otherwise = balWasmRowNames rs
+
+-- The closed rows keep exactly the gates that already name them.  A pinned
+-- gate whose row cannot run it is a registry defect, not something to repack
+-- around: the row is closed, so there is nowhere for it to go.
+balSeedClosed : List Cand -> List Row -> List Place -> Result String (List Place, List Row)
+balSeedClosed [] rs acc = Ok (reverseL acc, rs)
+balSeedClosed (c::cs) rs acc
+  | not (balIsClosed c.curRow rs) = balSeedClosed cs rs acc
+  | c.needsWasm && not (balRowIsWasm c.curRow rs) = Err "medaka gate balance: '\{c.cname}' needs the Wasm toolchain but is pinned to row '\{c.curRow}', which has wasm_arm = false"
+  | otherwise = balSeedClosed cs (balAdd c.curRow c.cms rs) (Place {
+    pname = c.cname,
+    pfrom = c.curRow,
+    pto = c.curRow,
+  }::acc)
+
+balIsClosed : String -> List Row -> Bool
+balIsClosed _ [] = False
+balIsClosed n (r::rs)
+  | r.rname == n = r.rclosed
+  | otherwise = balIsClosed n rs
+
+balRowIsWasm : String -> List Row -> Bool
+balRowIsWasm _ [] = False
+balRowIsWasm n (r::rs)
+  | r.rname == n = r.rwasm
+  | otherwise = balRowIsWasm n rs
+
+balOpenCands : List Cand -> List Row -> List Cand
+balOpenCands [] _ = []
+balOpenCands (c::cs) rs
+  | balIsClosed c.curRow rs = balOpenCands cs rs
+  | otherwise = c :: balOpenCands cs rs
+
+{- | The target assignment: seed the closed rows from their current members,
+   then LPT the rest onto the open rows.
+
+   ⚠️ A PURE FUNCTION OF (rows, costs, toolchains) — it does not read the
+   `shard` of any gate on an OPEN row.  That is what makes re-running the
+   balancer on its own output produce the identical target, which is the
+   hysteresis proof's real backing (`balDecide`). -}
+balTarget : List Cand -> List Row -> Result String (List Place, List Row)
+balTarget cs rows0 = match balSeedClosed cs rows0 []
+  Err m => Err m
+  Ok (pinned, rows1) => map ((placed, rows2) => (pinned ++ placed, rows2)) (balPlace (balSortCands (balOpenCands cs rows0)) rows1 [])
+
+-- The assignment already on disk, as the same shape, so the two can be scored
+-- by identical code rather than by two functions that could drift apart.
+balCurrent : List Cand -> List Row -> (List Place, List Row)
+balCurrent [] rs = ([], rs)
+balCurrent (c::cs) rs =
+  let (ps, rs2) = balCurrent cs (balAdd c.curRow c.cms rs)
+  (Place { pname = c.cname, pfrom = c.curRow, pto = c.curRow }::ps, rs2)
+
+-- ── Scoring ─────────────────────────────────────────────────────────────────
+
+balPole : List Row -> Int
+balPole [] = 0
+balPole (r::rs) = maxI r.rload (balPole rs)
+
+balPoleRow : List Row -> String
+balPoleRow rs = balPoleRowGo rs "" (-1)
+
+balPoleRowGo : List Row -> String -> Int -> String
+balPoleRowGo [] n _ = n
+balPoleRowGo (r::rs) n best
+  | r.rload > best = balPoleRowGo rs r.rname r.rload
+  | otherwise = balPoleRowGo rs n best
+
+balLoads : List Row -> List Int
+balLoads [] = []
+balLoads (r::rs) = r.rload :: balLoads rs
+
+balSortInts : List Int -> List Int
+balSortInts [] = []
+balSortInts (x::[]) = x::[]
+balSortInts xs =
+  let (l, r) = balHalveI xs [] []
+  balMergeInts (balSortInts l) (balSortInts r)
+
+balHalveI : List Int -> List Int -> List Int -> (List Int, List Int)
+balHalveI [] a b = (a, b)
+balHalveI (x::xs) a b = balHalveI xs b (x::a)
+
+balMergeInts : List Int -> List Int -> List Int
+balMergeInts [] ys = ys
+balMergeInts xs [] = xs
+balMergeInts (x::xs) (y::ys)
+  | x <= y = x :: balMergeInts xs (y::ys)
+  | otherwise = y :: balMergeInts (x::xs) ys
+
+-- The median row load: the mean of the two middle values for an even row
+-- count, the middle value for an odd one.  Median rather than mean because
+-- the mean is dragged by the pole it is being compared against, which would
+-- flatter every packing that has one.
+balMedian : List Row -> Int
+balMedian rs =
+  let v = balSortInts (balLoads rs)
+  let n = listLen v
+  if n == 0 then
+    0
+  else if n % 2 == 1 then
+    balNth (n / 2) v
+  else
+    (balNth (n / 2 - 1) v + balNth (n / 2) v) / 2
+
+balNth : Int -> List Int -> Int
+balNth _ [] = 0
+balNth i (x::xs)
+  | i <= 0 = x
+  | otherwise = balNth (i - 1) xs
+
+-- `pole / median` in thousandths.  Integer arithmetic throughout: the factor
+-- is compared against a threshold and printed, and a float would make both
+-- the comparison and the printed digits platform-sensitive for no gain.
+balFactorMilli : List Row -> Int
+balFactorMilli rs =
+  let m = balMedian rs
+  if m <= 0 then 0 else balPole rs * 1000 / m
+
+balMaxCand : List Cand -> Cand
+balMaxCand [] =
+  Cand { cname = "(none)", crun = "", curRow = "", cms = 0, needsWasm = False }
+balMaxCand (c::[]) = c
+balMaxCand (c::cs) =
+  let r = balMaxCand cs
+  if c.cms >= r.cms then c else r
+
+-- ── Rendering ───────────────────────────────────────────────────────────────
+
+-- Milliseconds as `948.9s` — one decimal, which is all the precision a median
+-- of nine noisy CI samples supports.
+balSecs : Int -> String
+balSecs ms = "\{intToString (ms / 1000)}.\{intToString (ms % 1000 / 100)}s"
+
+-- Thousandths as `1.074`.
+balMilli : Int -> String
+balMilli m = "\{intToString (m / 1000)}.\{balPad3 (m % 1000)}"
+
+balPad3 : Int -> String
+balPad3 n
+  | n < 10 = "00\{intToString n}"
+  | n < 100 = "0\{intToString n}"
+  | otherwise = intToString n
+
+balPadR : Int -> String -> String
+balPadR w s
+  | stringLength s >= w = s
+  | otherwise = balPadR w (s ++ " ")
+
+balPadL : Int -> String -> String
+balPadL w s
+  | stringLength s >= w = s
+  | otherwise = balPadL w (" " ++ s)
+
+balRowLines : List Row -> List String
+balRowLines [] = []
+balRowLines (r::rs) =
+  let tag = if r.rclosed then "  [closed: full_cores]" else ""
+  "    \{balPadR 10 r.rname} \{balPadL 4 (intToString r.rcount)} gates \{balPadL 9 (balSecs r.rload)}\{tag}" :: balRowLines rs
+
+balMoved : List Place -> Int
+balMoved [] = 0
+balMoved (p::ps)
+  | p.pfrom /= p.pto = 1 + balMoved ps
+  | otherwise = balMoved ps
+
+-- The projection block both `--check` and the mutating form print, verbatim.
+-- One renderer, so the two can never describe different packings.
+balReport : String -> List Cand -> List Row -> List Place -> String
+balReport label cs rs ps = stringConcat
+  [
+    "  \{label}: \{intToString (listLen cs)} schedulable gates over \{intToString (listLen rs)} rows\n",
+    "  projected row totals (sum of per-gate baseline medians, JOBS=7):\n",
+    joinNl (balRowLines rs),
+    "\n  pole \{balSecs (balPole rs)} (\{balPoleRow rs})   median \{balSecs (balMedian rs)}   pole/median \{balMilli (balFactorMilli rs)}\n",
+    "  gates whose row changes: \{intToString (balMoved ps)}\n",
+  ]
+
+-- ── The decision ────────────────────────────────────────────────────────────
+
+-- ⚠️ HYSTERESIS MUST NEVER PRESERVE AN ILLEGAL ASSIGNMENT.
+--
+-- This is the first test for a reason, and it was not in the first draft: the
+-- `wasm_only_row` fixture caught it.  There, a gate needing wasm-tools sat on
+-- a row with `wasm_arm = false`, and moving it to the one legal row changed
+-- the pole by 10ms out of 310 — far inside the 5% band.  So the balancer
+-- reported "unchanged (within the hysteresis band)", exited 0, and left the
+-- gate scheduled on a row where its toolchain is absent.
+--
+-- A band that damps churn is correct; a band that damps a CORRECTNESS repair
+-- is a silent wrong answer.  Cost is what the margin is allowed to weigh, and
+-- legality is not a cost.
+balCurrentLegal : List Cand -> List Row -> Bool
+balCurrentLegal [] _ = True
+balCurrentLegal (c::cs) rs
+  | c.needsWasm && not (balRowIsWasm c.curRow rs) = False
+  | otherwise = balCurrentLegal cs rs
+
+-- Take the target when it EARNS the churn.  Three ways it can:
+--
+--   * the current assignment is ILLEGAL (above) — repaired at any cost;
+--   * it beats the current pole by more than `balMarginPct` — the hysteresis
+--     band, which is what stops a millisecond of baseline noise from
+--     re-shuffling the matrix; or
+--   * the current assignment misses the enforced factor and the target meets
+--     it — a violation is worth a move of any size.
+--
+-- ⚠️ IDEMPOTENT BY CONSTRUCTION, not by luck.  Once the target is on disk,
+-- `current` and `target` are the same assignment (`balTarget` never reads an
+-- open gate's `shard`), so the pole test compares the pole against itself
+-- minus 5%, the factor test compares a factor against itself, and the legality
+-- test runs on an assignment `balPlace` built out of legal rows only.  All
+-- three are false, so the second run writes nothing — for ANY registry and ANY
+-- baseline, not just the ones a test happens to cover.
+balTakeTarget : List Cand -> List Row -> List Row -> Bool
+balTakeTarget cs cur tgt
+  | not (balCurrentLegal cs cur) = True
+  | balPole tgt * 100 < balPole cur * (100 - balMarginPct) = True
+  | balFactorMilli cur > balTargetMilli && balFactorMilli tgt <= balTargetMilli = True
+  | otherwise = False
+
+-- The enforcement.  Distinguishes the two ways the target can be missed,
+-- because they need different repairs: a packing this command could fix, or
+-- one gate that has to get faster before any packing can.
+balEnforce : List Cand -> List Row -> Option String
+balEnforce cs rs
+  | balFactorMilli rs <= balTargetMilli = None
+  | balMedian rs > 0 && (balMaxCand cs).cms * 1000 / balMedian rs > balTargetMilli = Some (stringConcat ["medaka gate balance: no packing can meet the pole/median target of ", balMilli balTargetMilli, " (best reachable here: ", balMilli (balFactorMilli rs), ").\n", "  '\{(balMaxCand cs).cname}' alone costs \{balSecs (balMaxCand cs).cms}, against a median row of \{balSecs (balMedian rs)}.\n", "  Gates are indivisible, so the pole can never go below the most expensive\n", "  gate.  This is a gate that has to get FASTER (or be split); repacking\n", "  cannot reach the target while it stands.\n"])
+  | otherwise = Some (stringConcat [
+    "medaka gate balance: the emitted assignment misses the pole/median target of ",
+    balMilli balTargetMilli,
+    " (it is ",
+    balMilli (balFactorMilli rs),
+    ").\n",
+    "  No single gate explains it, so this is the packing: the target rows are\n",
+    "  reachable in principle and the heuristic did not find them.\n",
+  ])
+
+-- ── Writing the assignment back ─────────────────────────────────────────────
+
+-- The new `shard` value for every entry, in FILE ORDER — `other-job` entries
+-- included, carrying their sentinel through unchanged, so the list lines up
+-- one-for-one with the file's `[[gate]]` blocks and `balSplice` never has to
+-- decide which entries it is allowed to skip.
+balShardValues : List Gate -> List Place -> List String
+balShardValues [] _ = []
+balShardValues (g::gs) ps
+  | g.shard == balOtherJob = balOtherJob :: balShardValues gs ps
+  | otherwise = balPlaceOf g.name ps :: balShardValues gs ps
+
+balPlaceOf : String -> List Place -> String
+balPlaceOf n [] = n
+balPlaceOf n (p::ps)
+  | p.pname == n = p.pto
+  | otherwise = balPlaceOf n ps
+
+-- Targeted line replacement: every `shard = "…"` line inside a `[[gate]]`
+-- block becomes that gate's new value, and every other byte of the file is
+-- copied verbatim.  Not a TOML round-trip — `stdlib/toml.mdk` has no
+-- serializer, and re-emitting 230 hand-written entries (with their comment
+-- blocks) from a parse tree would rewrite far more than the field that
+-- changed.
+--
+-- The `[[shard]]` tables at the foot of the file carry no `shard =` key, and
+-- `inGate` goes false at the first of them, so the row definitions are out of
+-- reach by construction as well as by key name.
+balSplice : List String -> List String -> Result String (List String)
+balSplice vals src = balSpliceGo vals src False []
+
+balSpliceGo : List String -> List String -> Bool -> List String -> Result String (List String)
+balSpliceGo [] [] _ acc = Ok (reverseL acc)
+balSpliceGo vs [] _ _ =
+  Err
+    "medaka gate balance: test/gates.toml has fewer [[gate]] shard lines than entries (\{intToString (listLen vs)} unplaced)"
+balSpliceGo vs (l::ls) inGate acc
+  | l == "[[gate]]" = balSpliceGo vs ls True (l::acc)
+  | l == "[[shard]]" = balSpliceGo vs ls False (l::acc)
+  | inGate && startsWith "shard = \"" l = match vs
+    [] => Err "medaka gate balance: test/gates.toml has more [[gate]] shard lines than entries"
+    v::rest => balSpliceGo rest ls inGate ("shard = \"\{v}\""::acc)
+  | otherwise = balSpliceGo vs ls inGate (l::acc)
+
+-- ── The command ─────────────────────────────────────────────────────────────
+
+data BalArgs =
+  | BalArgs { registry : Option String, baseline : Option String, check : Bool }
+
+parseBalArgs : List String -> BalArgs -> Result String BalArgs
+parseBalArgs [] acc = Ok acc
+parseBalArgs ("--registry"::p::rest) acc =
+  parseBalArgs rest BalArgs { acc | registry = Some p }
+parseBalArgs ("--registry"::[]) _ =
+  Err "medaka gate balance: --registry needs a path"
+parseBalArgs ("--baseline"::p::rest) acc =
+  parseBalArgs rest BalArgs { acc | baseline = Some p }
+parseBalArgs ("--baseline"::[]) _ =
+  Err "medaka gate balance: --baseline needs a path"
+parseBalArgs ("--check"::rest) acc =
+  parseBalArgs rest BalArgs { acc | check = True }
+parseBalArgs (a::_) _ = Err "medaka gate balance: unexpected argument: \{a}"
+
+-- `<MEDAKA_ROOT>/test/gate_cost_baseline.json` unless --baseline overrides it,
+-- the same exe-relative resolution `registryPath` uses.
+balBaselinePath : Option String -> String -> String
+balBaselinePath (Some p) _ = p
+balBaselinePath None root =
+  joinPath (joinPath root "test") "gate_cost_baseline.json"
+
+-- Everything that can go wrong before a byte is written, as one `Result`: the
+-- projection to print, and the registry text to write.  `ciNewText`'s shape,
+-- for `ciCmdBody`'s reason — the mutating form and `--check` must compute the
+-- SAME answer and differ only in what they do with it.
+balNewText : String -> String -> String -> Result String (String, String)
+balNewText regPath regSrc baseSrc = match parseRegistry regSrc
+  Err m => Err "medaka gate balance: \{m}"
+  Ok gates => match parseShards regSrc
+    Err m => Err "medaka gate balance: \{m}"
+    Ok shs => match parseCostBaseline baseSrc
+      Err m => Err "medaka gate balance: \{m}"
+      Ok base => match balUnknownRows shs gates
+        b::bs => Err "medaka gate balance: \{regPath}: gate(s) name a shard with no [[shard]] row: \{joinSpace (b::bs)}"
+        [] => match balUncosted base gates
+          u::us => Err (stringConcat [
+            "medaka gate balance: \{intToString (listLen (u::us))} schedulable gate(s) have no row in the cost baseline:\n",
+            joinNl (balIndent (u::us)),
+            "\n  Refusing to pack: a missing cost is not a cheap gate, it is an\n",
+            "  unknown one, and treating it as 0 would pile it onto the lightest row.\n",
+            "  Re-ingest the baseline (test/gate_cost_ingest.sh) or fix the gate's `run`.\n",
+          ])
+          [] => balCompute regPath gates shs base regSrc
+
+balIndent : List String -> List String
+balIndent [] = []
+balIndent (x::xs) = "    \{x}" :: balIndent xs
+
+balCompute : String -> List Gate -> List Shard -> List GateCost -> String -> Result String (String, String)
+balCompute regPath gates shs base regSrc =
+  let cs = balCands base gates
+  let (curPs, curRows) = balCurrent cs (balRows shs)
+  match balTarget cs (balRows shs)
+    Err m => Err m
+    Ok (tgtPs, tgtRows) =>
+      let illegal = not (balCurrentLegal cs curRows)
+      let take = balTakeTarget cs curRows tgtRows
+      let (ps, rows) = if take then (tgtPs, tgtRows) else (curPs, curRows)
+      let label = if illegal then
+        "rebalanced (the committed assignment ran a gate on a row lacking its toolchain)"
+      else if take then
+        "rebalanced"
+      else
+        "unchanged (within the hysteresis band)"
+      let head = stringConcat [
+        "medaka gate balance: \{regPath}\n",
+        balReport label cs rows ps,
+        "  hysteresis: a move needs a pole gain of more than \{intToString balMarginPct}%",
+        if illegal then " — OVERRIDDEN (illegal assignment)" else if take then " — TAKEN" else " — DECLINED",
+        "\n  target pole/median \{balMilli balTargetMilli}",
+        if balFactorMilli rows <= balTargetMilli then " — MET\n" else " — MISSED\n",
+      ]
+      match balEnforce cs rows
+        Some m => Err "\{head}\{m}"
+        None => match balSplice (balShardValues gates ps) (splitNl regSrc)
+          Err m => Err "\{head}\{m}"
+          Ok outLines => Ok (head, joinNl outLines)
+
+-- Write only on a real change, like `ciWrite`: an unconditional write touches
+-- the file's mtime on every no-op run, and a no-op run is the NORMAL case once
+-- the matrix is balanced.
+balWrite : String -> String -> String -> String -> <IO> Unit
+balWrite regPath regSrc out head
+  | out == regSrc = putStr "\{head}medaka gate balance: \{regPath} already balanced — no shard assignment changed\n"
+  | otherwise = match writeFile regPath out
+    Err m =>
+      emit (Err "\{head}medaka gate balance: cannot write \{regPath}: \{m}")
+    Ok _ => putStr "\{head}medaka gate balance: rewrote the shard assignments in \{regPath}\n"
+
+-- `--check`: the SAME comparison `balWrite` makes, in memory, with no write —
+-- `ciCheckResult`'s shape, and for its reason.  Regenerating first and then
+-- shelling out to `git diff` would HEAL an uncommitted hand-edit before the
+-- check could see it, and would also fire on an uncommitted edit to a field
+-- this command never touches.
+balCheckResult : String -> String -> String -> String -> Result String String
+balCheckResult regPath regSrc out head
+  | out == regSrc =
+    Ok "\{head}medaka gate balance: \{regPath} already balanced\n"
+  | otherwise = Err (stringConcat [
+    head,
+    "medaka gate balance: \{regPath}: the committed shard assignment is not the\n",
+    "one the balancer derives from test/gate_cost_baseline.json.  First difference:\n",
+    ciDiffAt (splitNl regSrc) (splitNl out) 1,
+    "\nRun 'medaka gate balance' and commit the result.\n",
+  ])
+
+balCmdBody : List String -> <IO> Unit
+balCmdBody argv = match parseBalArgs argv BalArgs { registry = None, baseline = None, check = False }
+  Err m => emit (Err m)
+  Ok a =>
+    let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+    let regPath = registryPath a.registry
+    let basePath = balBaselinePath a.baseline root
+    match readFile regPath
+      Err m => emit (Err "medaka gate balance: cannot read registry: \{m}")
+      Ok regSrc => match readFile basePath
+        Err m => emit (Err "medaka gate balance: cannot read cost baseline \{basePath}: \{m}")
+        Ok baseSrc => match balNewText regPath regSrc baseSrc
+          Err m => emit (Err m)
+          Ok (head, out) =>
+            if a.check then
+              emit (balCheckResult regPath regSrc out head)
+            else
+              balWrite regPath regSrc out head
 
 -- ── Properties ──────────────────────────────────────────────────────────────
 

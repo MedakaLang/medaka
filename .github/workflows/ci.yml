@@ -1466,3 +1466,33 @@ jobs:
 
       - name: Per-gate cost transport — producer + ingest admission guard
         run: sh test/diff_compiler_gate_cost.sh
+
+  # ── The shard balancer (#2178, S-3-S-balancer) ───────────────────────────────
+  # Its own job, mirroring `ci-gen-drift` above: it needs ./medaka (it drives
+  # `medaka gate balance`) but nothing else, and it costs seconds.
+  #
+  # ⚠️ A JOB AND NOT A `gates` MATRIX ROW, deliberately. This gate grades the
+  # thing that CHOOSES matrix rows, so a balancer bug that mis-packed the matrix
+  # would move this gate too — a check cannot be a member of the set it
+  # certifies. That is also why its registry entry is `shard = "other-job"`.
+  #
+  # Added in S-3 rather than S-4 only because it has to be: enrolling a gate as
+  # `other-job` with no workflow step naming it is exactly what
+  # `diff_compiler_ci_shard_coverage.sh` refuses ("SILENTLY NEVER RUN"), so the
+  # enrolment and the job are one change. It touches nothing inside the
+  # GENERATED gates-matrix region.
+  gate-balance:
+    needs: [detect, build]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup medaka (toolchain + downloaded binary)
+        uses: ./.github/actions/setup-medaka
+        with:
+          binary: artifact
+
+      - name: Shard balancer — idempotence, constraints, cost refusals
+        run: sh test/diff_compiler_gate_balance.sh

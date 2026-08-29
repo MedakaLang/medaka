@@ -3384,6 +3384,44 @@ sources = ["test/run_gates.sh", "test/gate_cost_ingest.sh", "test/diff_compiler_
 corpus = []
 toolchain = []
 
+# The SHARD BALANCER's own gate (#2178, S-3-S-balancer). Grades the four
+# properties that make `medaka gate balance` safe to run unattended, each of
+# which fails SILENTLY if it regresses — a wrong packing still yields a
+# well-formed registry and eight green `gates (<row>)` checks. (1) Running it
+# twice on an unchanged baseline is a byte-identical no-op, proved by diff
+# rather than by the tool's own verdict. (2) The hysteresis band never
+# preserves an ILLEGAL assignment: a gate needing wasm-tools on a row without
+# it is repaired even when the legal move is worth 10ms of a 310ms pole — the
+# first draft damped exactly that and exited 0. (3) A schedulable gate with no
+# row in the cost baseline is a REFUSAL, never a zero (the baseline is keyed by
+# run_gates.sh's gate label, not the registry's `name`, and the two agree only
+# for gates under test/). (4) When one indivisible gate alone blows the
+# pole/median target the refusal names that gate rather than blaming the
+# packing. Plus a `--check` that the committed shard assignment IS the
+# balancer's output. Oracle-free; needs only ./medaka.
+#
+# shard="other-job" because it tests SCHEDULING and so must not be scheduled by
+# the thing it grades: a balancer bug that mis-packs the matrix would move this
+# gate too, and a check cannot be a member of the set it certifies.
+#
+# ⚠️ NOT YET RUN BY ANY CI JOB. S-1's sibling (diff_compiler_gate_cost) has a
+# `gate-cost:` job in ci.yml; this one has none, because S-3's packet puts every
+# ci.yml edit in S-4. Enrolled now so the registry is honest about it and
+# `medaka gate verify` can see it; S-4 owes it a job (or a matrix row).
+[[gate]]
+name = "diff_compiler_gate_balance"
+area = "infra"
+shard = "other-job"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_gate_balance.sh"
+oracles = []
+sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_cost.mdk", "test/diff_compiler_gate_balance.sh", "test/gate_cost_baseline.json", "test/gates.toml"]
+corpus = ["test/gate_balance_fixtures"]
+toolchain = []
+
 
 
 # ── the `gates` matrix rows (S-1, #2177) ─────────────────────────────────────
