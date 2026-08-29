@@ -1,0 +1,15 @@
+-- X11 (fix round, prelude-shadow-build-agreement) — `println` redefined as an
+-- ORDINARY top-level standalone (NOT an interface method) and a plain non-Unit
+-- IO main, with NO interface anywhere in the file at all.  This isolates the
+-- `mainSchemeRef` fix (slice 3, `S-flat-mainschemeref-fix`) from the shadow-
+-- collision family entirely: x6/x7/x8 all put the collision behind an
+-- interface method, so none of them exercises a plain redefinition alone.
+-- Per the packet (base-behavior REJECT `Type mismatch: Int vs Unit` at all
+-- three verbs, an empty `mainSchemeRef` making the composite-main auto-print
+-- wrap answer `mainTypeIsUnit` False and misfire) — not re-derived here.
+-- MEASURED in this worktree at sprint head (33af90fe): all three verbs
+-- ACCEPT and print `hi`.
+println : Int -> Int
+println n = n + 1
+
+main = putStr "hi\n"

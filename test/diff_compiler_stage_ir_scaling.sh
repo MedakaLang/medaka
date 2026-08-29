@@ -93,8 +93,21 @@
 #
 # ── THE THRESHOLD ────────────────────────────────────────────────────────────
 #
-# 3.0 per doubling, BOTH doublings, exactly as diff_compiler_ir_scaling.sh and
-# diff_compiler_perf_scaling.sh. Three gates, one number; do not invent a fourth.
+# 3.0 per doubling, graded on r2 ALONE, exactly as diff_compiler_ir_scaling.sh
+# and (since #2173) diff_compiler_perf_scaling.sh's DETERMINISTIC arms. Three
+# gates, one number and one rule; do not invent a fourth.
+#
+# ⚠️ THIS PARAGRAPH USED TO SAY "BOTH doublings, exactly as" those two gates —
+# and by 2026-08-29 that sentence was false on BOTH halves: this gate did require
+# both, and neither of the other two did any more. It is corrected here rather
+# than footnoted, because a stale statement of the rule in the file that DEFINES
+# the rule is worse than none. The conjunct is wrong on a deterministic
+# instrument for the reason spelled out at the `over=` expression in grade_shape,
+# and the enumeration that made the change safe is recorded there too.
+#
+# ⚠️ perf_scaling's WALL-CLOCK arm still requires both doublings, legitimately —
+# that arm is noisy and the second doubling is its confirmation. Do not "unify"
+# it with this rule.
 #     linear 2.0 | n log n ~2.1 | n^1.5 2.83 | QUADRATIC 4.0
 # MEASURED margins at the shipped bands, this box, on this tree:
 #     xref:lower   r1 2.095  r2 2.106      xref:emit   r1 2.128  r2 2.152
@@ -620,15 +633,40 @@ KNOWN_CEIL_modules_typecheck="2.45";  KNOWN_FIXED_modules_typecheck="2.10"
 #   emit  SKIP — net at N=125 (56368320) under the netting guard (…)
 # and contributed nothing to the exit code.
 #
-# ⚠️ HONEST LIMIT OF THAT RECORD: it exercises grade_shape. The grade_modules
-# twin was NOT observed red — at STAGE_IR_MIN_NET_FRAC=0.99 the only ledgered
-# modules row (modules:typecheck, net 392697537 at N=25) still cleared its own
-# guard and graded normally (`known-slow r1=2.192 r2=2.219`), so the branch was
-# never entered. The two functions carry byte-identical guard logic and the
-# header above requires they be changed together, but "identical to an arm that
-# was observed" is weaker evidence than an observation. Reaching it needs a frac
-# above ~1.0 against that row's own floor; left for phase 2's sweep rather than
-# spent on another ~615 s run here.
+# ⚠️ THE LIMIT OF THAT RECORD WAS: it exercises grade_shape, and the grade_modules
+# twin had never been observed red. That is now DISCHARGED — #2160 phase 2, this
+# box, 2026-08-28. The reason 0.99 did not reach it was arithmetic, not structure:
+# the guard compares the row's net against a fraction of its OWN floor, and
+# modules:typecheck's floor Ir is 331 664 118, so 0.99 of it (328 347 476) sits
+# just BELOW that row's net of 392 703 519. The frac has to clear net/floor = 1.18.
+# At 5:
+#
+#   $ STAGE_IR_ONLY=modules STAGE_IR_MIN_NET_FRAC=5 sh test/diff_compiler_stage_ir_scaling.sh
+#   ## STAGE_IR_ONLY=[modules] — NARROWED RUN, NOT a grading result.   ##
+#   ── modules (N=2 floor, 25/50/100 modules, K=8 impls each) ──
+#     parse     ok   r1=2.088 r2=2.042 (threshold 3.0)
+#     load      ok   r1=2.089 r2=2.044 (threshold 3.0)
+#     desugar   SKIP — net at N=25 (6165041) under the netting guard (67291660 of floor 13458332)
+#     resolve   ok   r1=2.089 r2=2.043 (threshold 3.0)
+#     mark      SKIP — net at N=25 (1893351) under the netting guard (26032070 of floor 5206414)
+#     typecheck ** PROMOTE: ledgered, but now under the netting guard ** net 392703519 \
+#               at N=25 (<= 1658320590 of floor 331664118)
+#             Remove "modules:typecheck" from KNOWN_SLOW — the quadratic is FIXED — or raise the band.
+#             It may NOT stay ledgered AND ungraded.
+#   FAIL: 3 stage-ratio(s) graded, 1 over the line.
+#   exit=1
+#
+# Note what the SAME run shows about the unledgered rows: `desugar` and `mark`
+# fell under the identical guard and printed a plain SKIP contributing nothing to
+# the exit code, which is the correct behaviour for a row that asserts nothing —
+# and it is exactly the shape the ledgered row used to have. The two verdicts
+# side by side in one transcript are the #2150 fix stated as a difference rather
+# than as a claim.
+#
+# ⚠️ WHY THE FRAC AND NOT A SMALLER BAND: STAGE_IR_MOD_N is the honest lever for
+# cost, but shrinking the band moves the very net the guard is comparing, so a
+# red obtained that way would not be evidence about THIS row. The frac moves only
+# the guard.
 
 # STAGE_IR_LEDGER_EXTRA: the add-only DELIBERATE-RED SEAM (#2150), the mirror of the
 # existing STAGE_IR_NO_LEDGER. The netting-guard PROMOTE branches below only run when a
@@ -648,6 +686,41 @@ fi
 is_known() {
   [ -n "${STAGE_IR_NO_LEDGER:-}" ] && return 1
   for _k in $KNOWN_SLOW $STAGE_IR_LEDGER_EXTRA; do [ "$_k" = "$1" ] && return 0; done
+  return 1
+}
+
+# ── STAGE_IR_ONLY: run ONE shape of this gate (#2160 phase 2) ────────────────
+#
+# This gate is the most expensive of the three scaling gates — every shape costs
+# 4 Callgrind profiles, and a whole run is ~10 min. Driving a single arm red
+# should not cost a whole run, and until this knob it did. Same shape as
+# ir_scaling's IR_ONLY and perf_scaling's PERF_ONLY.
+#
+# Values are the shape names passed to grade_shape below, plus `modules` for the
+# multi-module twin. Derive the set, do not trust this comment:
+#
+#   grep -n '^grade_shape \|^grade_modules$' test/diff_compiler_stage_ir_scaling.sh
+#
+# Space-separated list. Empty (the default, and the only value in CI — derive
+# with `grep -rn STAGE_IR_ONLY .github test Makefile`) runs everything and behaves
+# exactly as before, so this knob cannot make a real run quieter ([W-QUIETER]).
+# 🚨 A narrowed run is NOT a verdict: the `graded == 0` guard below asserts SCOPE,
+# not health, so under STAGE_IR_ONLY it is skipped and the skip is printed.
+# ⚠️ ONE EXCEPTION, and it is not a scope question: a narrowing that grades NOTHING
+# AT ALL is a typo or a dead unit name, and it FAILS. See the guard at the foot of
+# this file for why that changed.
+STAGE_IR_ONLY="${STAGE_IR_ONLY:-}"
+if [ -n "$STAGE_IR_ONLY" ]; then
+  echo "############################################################################"
+  echo "## STAGE_IR_ONLY=[$STAGE_IR_ONLY] — NARROWED RUN, NOT a grading result.   ##"
+  echo "## Unnamed shapes did not run; the zero-graded coverage guard is off.     ##"
+  echo "############################################################################"
+fi
+
+# want <shape> — the ONLY reader of STAGE_IR_ONLY.
+want() {
+  [ -z "$STAGE_IR_ONLY" ] && return 0
+  for _w in $STAGE_IR_ONLY; do [ "$_w" = "$1" ] && return 0; done
   return 1
 }
 
@@ -706,6 +779,8 @@ gen_vchain() {
 # DELIBERATE RED, observed pre-fix (S-frontend-list-as-set report §6.1, this
 # generator, this band): `mark` at N=300/600/1200 read
 # `** SUPERLINEAR (stage Ir) ** r1=3.337 r2=3.558 (threshold 3.0, both doublings)` —
+# (verbatim from the run that produced it; the gate prints "r2 alone" since
+# the #2173 flip, and BOTH ratios in this reading are over 3.0 either way) —
 # i.e. this shape genuinely failed the gate before the fix. Fixed by commit
 # `6df20241` (S-frontend-list-as-set: converted marker's `constrained` from a
 # List-as-set scan to an `OrdMap Unit` membership set), after which the row reads
@@ -736,6 +811,8 @@ gen_constrained() {
 # DELIBERATE RED, observed pre-fix (S-frontend-list-as-set report §6.1, this
 # generator, this band): `desugar` at N=125/250/500 read
 # `** SUPERLINEAR (stage Ir) ** r1=3.680 r2=3.973 (threshold 3.0, both doublings)` —
+# (verbatim from the run that produced it; the gate prints "r2 alone" since
+# the #2173 flip, and BOTH ratios in this reading are over 3.0 either way) —
 # this shape genuinely failed the gate before the fix. Fixed by commit `6df20241`
 # (S-frontend-list-as-set: converted `mergeIfaceDefaults`/`mergeIfaceMethods`'s
 # `insertMethod`/`containsMethod` linear scan off List-as-set), after which the
@@ -920,8 +997,50 @@ fail=0
 known=0
 graded=0
 
+# ── OBSERVED RED: every verdict branch of grade_shape (#2160 phase 2, rule 1) ──
+#
+# All five recorded on this box, 2026-08-28/29, with the add-only knobs only —
+# the function below was NOT edited to force any of them. Band `xref` at
+# STAGE_IR_XREF_N=20 (20/40/80) throughout: these are BRANCH observations, and a
+# small band keeps the Callgrind cost bounded. The ratios in them are therefore
+# NOT evidence about xref's real scaling; the shipped band is XREF_N=125.
+#
+# 1. SUPERLINEAR (the threshold arm, line ~1047)
+#    $ STAGE_IR_ONLY=xref STAGE_IR_XREF_N=20 STAGE_IR_THRESH=1.5 sh test/diff_compiler_stage_ir_scaling.sh
+#      parse     ** SUPERLINEAR (stage Ir) ** r1=2.053 r2=2.028 (threshold 1.5, r2 alone)
+#      ... (9 of 9 graded stages, exhaust/desugar/resolve/mark/typecheck/mangle/dce/trmc alike)
+#    FAIL: 9 stage-ratio(s) graded, 9 over the line.        exit=1
+#
+# 2. MALFORMED LEDGER ROW (a ledger entry with no CEIL/FIXED pair, line ~1029)
+#    $ STAGE_IR_ONLY=xref STAGE_IR_XREF_N=20 STAGE_IR_LEDGER_EXTRA=xref:parse sh ...
+#      parse     ** MALFORMED LEDGER ROW ** "xref:parse" has no KNOWN_CEIL/KNOWN_FIXED pair.
+#              A ledger row without both halves cannot drain itself — that is a skip-list, not a pin.
+#    FAIL: 9 stage-ratio(s) graded, 1 over the line.        exit=1
+#
+# 3. KNOWN-SLOW, AND GOT WORSE (the ceiling half, line ~1036)
+#    $ ... STAGE_IR_LEDGER_EXTRA=xref:parse KNOWN_CEIL_xref_parse=1.20 KNOWN_FIXED_xref_parse=1.00 sh ...
+#      parse     ** KNOWN-SLOW, AND GOT WORSE ** r1=2.053 r2=2.028 (ceiling 1.20)
+#    FAIL: 9 stage-ratio(s) graded, 1 over the line.        exit=1
+#
+# 4. PROMOTE: now scales LINEARLY (the self-draining half, line ~1039)
+#    $ ... STAGE_IR_LEDGER_EXTRA=xref:parse KNOWN_CEIL_xref_parse=9.00 KNOWN_FIXED_xref_parse=3.00 sh ...
+#      parse     ** PROMOTE: now scales LINEARLY ** r2=2.028 (< 3.00)
+#              Remove "xref:parse" from KNOWN_SLOW — the quadratic is FIXED.
+#    FAIL: 9 stage-ratio(s) graded, 1 over the line.        exit=1
+#    ⇒ the ledger drains itself. A row kept past its fix FAILS; it cannot go quiet.
+#
+# 5. graded ZERO stages (the band-is-mis-sized guard, line ~1058)
+#    $ STAGE_IR_ONLY=xref STAGE_IR_XREF_N=20 STAGE_IR_MIN_NET_FRAC=50 sh ...
+#      (every stage SKIPs under the netting guard)
+#      FAIL xref: graded ZERO stages — the band is mis-sized and this shape proved nothing.
+#    FAIL: 0 stage-ratio(s) graded, 1 over the line.        exit=1
+#    ⇒ note this is the PER-SHAPE guard, which stays live under STAGE_IR_ONLY; the
+#      whole-gate `graded == 0` guard is the one the narrowing deliberately skips,
+#      and the same transcript prints that NOTE two lines further down.
+#
 grade_shape() {
   shape="$1"; base_n="$2"
+  want "$shape" || return 0
   n1="$base_n"; n2=$((base_n * 2)); n4=$((base_n * 4))
   shape_graded=0
 
@@ -961,7 +1080,35 @@ grade_shape() {
     shape_graded=$((shape_graded + 1)); graded=$((graded + 1))
     r1="$(awk -v a="$d1" -v b="$d2" 'BEGIN{printf "%.3f", b/a}')"
     r2="$(awk -v a="$d2" -v b="$d3" 'BEGIN{printf "%.3f", b/a}')"
-    over="$(awk -v x="$r1" -v y="$r2" -v t="$THRESH" 'BEGIN{print (x>t && y>t) ? "yes" : "no"}')"
+    # ── THE DETERMINISTIC-ARM VERDICT RULE (#2173, applied here by #2160 phase 2) ──
+    #
+    # r2 ALONE, not `r1 && r2`. Callgrind `Ir` is a deterministic instrument: the
+    # count is a pure function of the input program, so there is no run-to-run
+    # noise for a second confirming doubling to filter out. The conjunct was
+    # borrowed from the WALL-CLOCK arm of perf_scaling, where it earns its keep,
+    # and #2100 removed it from ir_scaling for exactly this reason. It survived
+    # here because the header claimed parity with two gates that had already
+    # stopped doing it.
+    #
+    # ⚠️ It is also WRONG in a specific, reachable way, not merely redundant: a
+    # quadratic whose linear term still dominates at the first doubling produces
+    # r1 < 3.0 < r2 and is dropped on the floor. That is not hypothetical — it is
+    # how #2189 (`elaborate`, two shapes, ratios climbing 2.52 -> 3.04 -> 3.44)
+    # hid inside perf_scaling's op arm until the same flip was applied there.
+    #
+    # ENUMERATED BEFORE FLIPPING (#2173's own instruction, and #2160 rule 2 —
+    # a flip must not be shipped on the argument alone). One full run of this
+    # gate at the SHIPPED bands, this box, 2026-08-29, before the change:
+    #
+    #   60 stage-ratios graded across match / xref / vchain / constrained /
+    #   wideiface / modules. The LARGEST r2 anywhere is 2.755
+    #   (constrained:typecheck, r1=2.545), and the only ledgered row reads
+    #   modules:typecheck r1=2.192 r2=2.219 against its 2.45 ceiling.
+    #
+    # So NO row sits between the threshold and the conjunct: the flip turns
+    # nothing red today, and the nearest row has 8.9% of headroom to 3.0. This
+    # tightens the gate for free. It is not a band change and no threshold moved.
+    over="$(awk -v y="$r2" -v t="$THRESH" 'BEGIN{print (y>t) ? "yes" : "no"}')"
     printf '  %-9s net %s -> %s -> %s\n' "$st" "$d1" "$d2" "$d3"
     if is_known "${shape}:${st}"; then
       lk="$(printf '%s_%s' "$shape" "$st" | tr -c 'a-zA-Z0-9_' '_')"
@@ -986,7 +1133,7 @@ grade_shape() {
         known=$((known + 1))
       fi
     elif [ "$over" = "yes" ]; then
-      printf '  %-9s ** SUPERLINEAR (stage Ir) ** r1=%s r2=%s (threshold %s, both doublings)\n' \
+      printf '  %-9s ** SUPERLINEAR (stage Ir) ** r1=%s r2=%s (threshold %s, r2 alone)\n' \
         "$st" "$r1" "$r2" "$THRESH"
       fail=$((fail + 1))
     else
@@ -1004,6 +1151,50 @@ grade_shape() {
   return 0
 }
 
+# ── OBSERVED RED: every verdict branch of grade_modules (#2160 phase 2, rule 1) ──
+#
+# The twin's branches, all five, same day, same rules. Band STAGE_IR_MOD_N=3
+# STAGE_IR_MOD_K=2 (3/6/12 modules) — again a BRANCH observation, not a
+# measurement. ⚠️ At that band the fixed per-module cost dominates and r1 reads
+# ~4.0 on every stage; that is the tiny band, NOT a finding about the multi-module
+# driver. The shipped band is MOD_N=25/K=8, where the same rows read r1≈2.09.
+#
+# 1. SUPERLINEAR (line ~1135)
+#    $ STAGE_IR_ONLY=modules STAGE_IR_MOD_N=3 STAGE_IR_MOD_K=2 STAGE_IR_THRESH=1.5 sh ...
+#      parse     ** SUPERLINEAR (stage Ir) ** r1=4.007 r2=2.502 (threshold 1.5, r2 alone)
+#      load      ** SUPERLINEAR (stage Ir) ** r1=4.006 r2=2.502 (threshold 1.5, r2 alone)
+#      resolve   ** SUPERLINEAR (stage Ir) ** r1=4.003 r2=2.502 (threshold 1.5, r2 alone)
+#      typecheck ** KNOWN-SLOW, AND GOT WORSE ** r1=4.068 r2=2.537 (ceiling 2.45)
+#    FAIL: 4 stage-ratio(s) graded, 4 over the line.        exit=1
+#
+# 2. MALFORMED LEDGER ROW (line ~1117)
+#    $ ... STAGE_IR_LEDGER_EXTRA=modules:parse sh ...
+#      parse     ** MALFORMED LEDGER ROW ** "modules:parse" has no KNOWN_CEIL/KNOWN_FIXED pair.
+#    FAIL: 4 stage-ratio(s) graded, 2 over the line.        exit=1
+#
+# 3. KNOWN-SLOW, AND GOT WORSE (line ~1124)
+#    $ ... STAGE_IR_LEDGER_EXTRA=modules:parse KNOWN_CEIL_modules_parse=1.20 \
+#          KNOWN_FIXED_modules_parse=1.00 sh ...
+#      parse     ** KNOWN-SLOW, AND GOT WORSE ** r1=4.007 r2=2.502 (ceiling 1.20)
+#    FAIL: 4 stage-ratio(s) graded, 2 over the line.        exit=1
+#
+# 4. PROMOTE: now scales LINEARLY (line ~1127)
+#    $ ... STAGE_IR_LEDGER_EXTRA=modules:parse KNOWN_CEIL_modules_parse=9.00 \
+#          KNOWN_FIXED_modules_parse=3.00 sh ...
+#      parse     ** PROMOTE: now scales LINEARLY ** r2=2.502 (< 3.00)
+#              Remove "modules:parse" from KNOWN_SLOW — the quadratic is FIXED.
+#    FAIL: 4 stage-ratio(s) graded, 2 over the line.        exit=1
+#
+# 5. graded ZERO stages (line ~1144)
+#    $ ... STAGE_IR_MIN_NET_FRAC=50 sh ...
+#      FAIL modules: graded ZERO stages — the band is mis-sized and this shape proved nothing.
+#    FAIL: 0 stage-ratio(s) graded, 2 over the line.        exit=1
+#
+# The fifth branch of the netting guard — PROMOTE: ledgered, but now under the
+# netting guard (line ~1096) — is recorded separately above, at STAGE_IR_MIN_NET_FRAC=5
+# on the SHIPPED band; see the block by KNOWN_SLOW. That is the one the phase-1
+# header called never-observed, and it is the reason this whole set was run.
+#
 # grade_modules — grade_shape's multi-module twin. Same netting rule, same
 # MIN_NET_FRAC guard, same 3.0 threshold, same ledger, same `graded`/`fail`
 # counters, same zero-graded hard FAIL. It is a separate function rather than a
@@ -1011,6 +1202,7 @@ grade_shape() {
 # run_profile_modules) — NOT because the grading differs. If you change the
 # grading rule in one, change it in the other; they are a lockstep pair.
 grade_modules() {
+  want modules || return 0
   mdn1="$MOD_N"; mdn2=$((MOD_N * 2)); mdn4=$((MOD_N * 4))
   mod_graded=0
 
@@ -1048,7 +1240,9 @@ grade_modules() {
     mod_graded=$((mod_graded + 1)); graded=$((graded + 1))
     mdr1="$(awk -v a="$mdd1" -v b="$mdd2" 'BEGIN{printf "%.3f", b/a}')"
     mdr2="$(awk -v a="$mdd2" -v b="$mdd3" 'BEGIN{printf "%.3f", b/a}')"
-    mdover="$(awk -v x="$mdr1" -v y="$mdr2" -v t="$THRESH" 'BEGIN{print (x>t && y>t) ? "yes" : "no"}')"
+    # r2 ALONE — see the note in grade_shape above. These two functions are a
+    # lockstep pair and the rule must be identical in both.
+    mdover="$(awk -v y="$mdr2" -v t="$THRESH" 'BEGIN{print (y>t) ? "yes" : "no"}')"
     printf '  %-9s net %s -> %s -> %s\n' "$mdst" "$mdd1" "$mdd2" "$mdd3"
     if is_known "modules:${mdst}"; then
       mdlk="$(printf 'modules_%s' "$mdst" | tr -c 'a-zA-Z0-9_' '_')"
@@ -1073,7 +1267,7 @@ grade_modules() {
         known=$((known + 1))
       fi
     elif [ "$mdover" = "yes" ]; then
-      printf '  %-9s ** SUPERLINEAR (stage Ir) ** r1=%s r2=%s (threshold %s, both doublings)\n' \
+      printf '  %-9s ** SUPERLINEAR (stage Ir) ** r1=%s r2=%s (threshold %s, r2 alone)\n' \
         "$mdst" "$mdr1" "$mdr2" "$THRESH"
       fail=$((fail + 1))
     else
@@ -1102,7 +1296,26 @@ grade_shape constrained "$CONSTR_N"
 grade_shape wideiface "$WIDEIFACE_N"
 grade_modules
 
-if [ "$graded" -eq 0 ]; then
+# ⚠️ ZERO GRADED IS A FAILURE UNDER NARROWING TOO. This guard USED TO be SKIPPED
+# when STAGE_IR_ONLY was set, on the reasoning that grading nothing is "scope, not
+# health" when the narrowing was deliberate. That was wrong in the one direction
+# this gate cannot afford: it let `STAGE_IR_ONLY=<typo>` print the word PASS and
+# exit 0 having measured nothing at all. A green that proved nothing is exactly the
+# failure mode #2160 exists to remove, and the sibling knob in
+# test/diff_compiler_ir_scaling.sh (IR_ONLY) had it right all along — it fails.
+# There is no legitimate use for a narrowed run that matches no unit: the name is
+# either a typo or a unit that no longer exists, and both deserve a red.
+#
+# OBSERVED RED (#2160 phase 2, this box):
+#   $ STAGE_IR_ONLY=bogus sh test/diff_compiler_stage_ir_scaling.sh
+#   FAIL: STAGE_IR_ONLY=[bogus] matched no unit — this run graded nothing.
+#   exit=1
+if [ "$graded" -eq 0 ] && [ -n "$STAGE_IR_ONLY" ]; then
+  echo "FAIL: STAGE_IR_ONLY=[$STAGE_IR_ONLY] matched no unit — this run graded nothing."
+  echo "      Valid units: match xref vchain constrained wideiface modules"
+  echo "      (derive:  grep -n '^grade_shape \\|^grade_modules$' $0 )"
+  exit 1
+elif [ "$graded" -eq 0 ]; then
   echo "FAIL: no stage was graded — this gate proved nothing."
   exit 1
 fi
@@ -1112,5 +1325,9 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
-echo "PASS: $graded stage-ratio(s) graded ($known ledgered), all sub-quadratic in stage Ir (threshold $THRESH)."
+if [ -n "$STAGE_IR_ONLY" ]; then
+  echo "NARROWED OK (NOT a gate result): $graded stage-ratio(s) graded ($known ledgered) under STAGE_IR_ONLY=[$STAGE_IR_ONLY]."
+else
+  echo "PASS: $graded stage-ratio(s) graded ($known ledgered), all sub-quadratic in stage Ir (threshold $THRESH)."
+fi
 exit 0

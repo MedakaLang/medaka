@@ -1,0 +1,117 @@
+# Ledger for test/diff_compiler_prelude_shadow_census.sh (#2153, S-shadow-census-gate).
+#
+# One row per top-level standalone function exported from stdlib/core.mdk,
+# `name|verdict`, where verdict is the CURRENT MEASURED outcome of the probe:
+#
+#   interface Ifc c where
+#     <name> : c -> Int
+#   impl Ifc Int where
+#     <name> v = v
+#   main = println (<name> 1)
+#
+# driven through `check`, `run`, and `build` (+ executing the built binary).
+#
+#   PASS                -- check/run/build all ACCEPT and both run's stdout
+#                          and the built binary's stdout print exactly `1`
+#                          (S1-PRELUDE (a): the interface method wins and the
+#                          program builds, docs/spec/SHADOW-SEMANTICS.md).
+#   FAIL_BUILD           -- check and run ACCEPT (run prints `1`), but build
+#                          exits 1: `runtime error [E-PANIC]: unbound method:
+#                          <name>` -- #2153's class, the gate this slice ships
+#                          to make objectively measurable.
+#   SPECIAL_RUN_REJECT   -- `println` only: shadowing `println` changes what
+#                          type `main` infers to, and `run` rejects with the
+#                          ORDINARY non-Unit-main W-MAIN-SHAPE exit (byte-
+#                          identical to `main = 7` with no interface anywhere)
+#                          -- not a shadow-resolution artifact. `build` still
+#                          accepts and prints `1`, but that `1` is itself a
+#                          live, filed bug (#2185: the compiler's own
+#                          auto-print wrap resolving to the user's shadowing
+#                          method), not a benign or expected accept. Not part
+#                          of the #2153 family; kept as its own bucket rather
+#                          than folded into either of the other two, per the
+#                          packet's own note that `println` is special-cased.
+#
+# THIS LEDGER IS THE RATCHET: a PASS row that regresses to anything else is a
+# gate failure, full stop -- see the gate's own header for how a name moving
+# the OTHER direction (e.g. a slice 2-5 fix flipping FAIL_BUILD -> PASS) is
+# handled (re-pin this row, on purpose, in that slice's own diff).
+#
+# Names are derived from stdlib/core.mdk at gate-run time (never hand-copied
+# from #2153's issue body) -- the gate's own coverage self-audit fails loudly
+# if a name here has vanished from core.mdk, or a core.mdk standalone is
+# missing from this ledger (a NEW prelude function ships with no ledger row).
+#
+# Measured 2026-08-28 at the census gate's landing commit, cold-built binary:
+# 57 standalone names, 34 PASS / 22 FAIL_BUILD / 1 SPECIAL_RUN_REJECT.  (#2153's
+# issue body claimed "33 pass / 23 fail / println special" -- the ledger's
+# numbers were the derived truth, one name off in each direction from the
+# issue's prose count.)
+#
+# RE-PINNED 2026-08-28 by S-mangle-unclaim-residual (slice 2): all 22 FAIL_BUILD
+# rows flipped to PASS, ON PURPOSE and in that slice's own diff, per this file's
+# ratchet rule above.  The FAIL_BUILD class had ONE root cause -- the graph-wide
+# definer-shadow map (`computeMangledShadowMap`) minted `core__<n> |-> <n>` for a
+# USER module's interface method and CORE's own prepass consumed it unfiltered, so
+# core's own `core__<n>` occurrence was marked `EMethodAt "<n>"` in a unit whose env
+# has no `<n>`.  A name reached that arm only if ANOTHER prelude decl referenced it,
+# which is exactly why the split was 22/34 (`marker.droppablePreludeFns`' own
+# `clamp` yes / `count`,`find` no split).  Fix: `typecheck.coreShadowMapFor`.
+# Current measured split: 56 PASS / 1 SPECIAL_RUN_REJECT (`println`, slice 3's).
+all|PASS
+and|PASS
+any|PASS
+apply|PASS
+arbitraryList|PASS
+arbitraryString|PASS
+clamp|PASS
+compose|PASS
+const|PASS
+count|PASS
+curry|PASS
+discard|PASS
+elem|PASS
+filterThen|PASS
+find|PASS
+flatMap|PASS
+flat|PASS
+flip|PASS
+foldThen|PASS
+forEach|PASS
+fromOption|PASS
+fromResult|PASS
+fromResultOr|PASS
+fst|PASS
+guard|PASS
+identity|PASS
+isErr|PASS
+isEven|PASS
+isNone|PASS
+isOdd|PASS
+isOk|PASS
+isSome|PASS
+map2|PASS
+map3|PASS
+mapErr|PASS
+maximum|PASS
+minimum|PASS
+neq|PASS
+notElem|PASS
+not|PASS
+on|PASS
+or|PASS
+otherwise|PASS
+pipe|PASS
+println|SPECIAL_RUN_REJECT
+print|PASS
+product|PASS
+repeatThen|PASS
+replaceWith|PASS
+runEach|PASS
+snd|PASS
+sum|PASS
+toResult|PASS
+uncurry|PASS
+unless|PASS
+when|PASS
+xor|PASS
