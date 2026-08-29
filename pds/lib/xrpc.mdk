@@ -141,6 +141,12 @@ errorResponse status reason code message =
     Ok response => response
     Err detail => panic "xrpc: internal response construction error: \{detail}"
 
+-- | Build the canonical XRPC JSON error envelope for protocol layers that
+-- fail before a route exists, such as HTTP framing.
+export
+xrpcErrorResponse : Int -> String -> String -> String -> Response
+xrpcErrorResponse = errorResponse
+
 failureValue : Int -> String -> String -> String -> XrpcFailure
 failureValue status reason code message =
   XrpcFailure status code message (errorResponse status reason code message)
