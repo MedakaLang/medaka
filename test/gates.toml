@@ -9,8 +9,9 @@
 # unchanged; the rest were appended in S-2. This is now the registry of
 # record: `medaka gate list`/`verify`/`explain` read it directly, and
 # `ci.yml`'s `gates` job-matrix is GENERATED from it by `make gen-ci` (S-2) —
-# hand-editing that matrix is stale practice a drift gate now catches
-# (`diff_compiler_ci_gen_drift.sh`). test/preflight.sh and
+# hand-editing that matrix is stale practice a drift check now catches
+# (`medaka gate ci --check`, run by the advisory `diff_compiler_ci_gen_drift.sh`
+# and by the required `diff_compiler_ci_shard_coverage.sh`). test/preflight.sh and
 # test/build_oracles.sh do not read this file yet; that migration is ordered
 # and tracked as separate, later changes (GATE-REGISTRY-DESIGN.md §6).
 #
@@ -172,7 +173,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_ci_shard_coverage.sh"
 oracles = []
-sources = ["compiler/tools/gate_cmd.mdk", "test/diff_compiler_ci_shard_coverage.sh", "test/gates.toml"]
+sources = ["compiler/tools/gate_cmd.mdk", "test/diff_compiler_ci_shard_coverage.sh", "test/gates.toml", ".github/workflows/ci.yml"]
 corpus = []
 toolchain = []
 
@@ -3336,10 +3337,14 @@ sources = ["compiler/tools/gate_cmd.mdk", "test/diff_compiler_gate_registry.sh",
 corpus = []
 toolchain = []
 
-# The generated gates-matrix region's own drift gate (#2177, S-3): regenerate
-# `.github/workflows/ci.yml` via `medaka gate ci` and diff. Not binary-free
-# (same accepted gap as diff_compiler_gate_registry above); shard="other-job"
-# because it has its own CI job (ci-gen-drift), not a `gates` matrix row.
+# The generated gates-matrix region's own drift gate (#2177, S-3): compare
+# `.github/workflows/ci.yml` against what the registry generates, via the
+# non-mutating `medaka gate ci --check` (F-1 — regenerating first would heal an
+# uncommitted hand-edit inside the region before a diff could see it). Not
+# binary-free (same accepted gap as diff_compiler_gate_registry above);
+# shard="other-job" because it has its own CI job (ci-gen-drift), not a `gates`
+# matrix row. This gate is ADVISORY; the same `--check` call also runs inside
+# the REQUIRED diff_compiler_ci_shard_coverage.
 [[gate]]
 name = "diff_compiler_ci_gen_drift"
 area = "infra"

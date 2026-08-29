@@ -24,8 +24,9 @@
 #
 #   * `test/gates.toml` carries a `shard` field on every entry (S-1);
 #   * `medaka gate ci` GENERATES ci.yml's matrix from those fields (S-2);
-#   * `test/diff_compiler_ci_gen_drift.sh` proves the generated region on disk
-#     still equals what the registry generates (S-3).
+#   * the generated region on disk still equals what the registry generates —
+#     asserted by `medaka gate ci --check`, which THIS SCRIPT runs itself (see
+#     (c) below).
 #
 # So "which shard does this gate run in" is true BY CONSTRUCTION from the
 # registry, and re-deriving it here could only ever disagree with it — a second
@@ -37,7 +38,7 @@
 #
 # ── WHAT THIS GATE STILL UNIQUELY PROVES ─────────────────────────────────────
 #
-# Two things nothing else in the tree does:
+# Three things, two of which nothing else in the tree does:
 #
 #   (a) REACHABILITY of an `other-job` entry. `shard = "other-job"` says only
 #       "not scheduled by the gates matrix"; it does NOT say which job runs it,
@@ -53,6 +54,15 @@
 # The workflow scan that answers both has no equivalent anywhere in the tree,
 # which is why this script survives rather than folding into `medaka gate
 # verify`: `verify` is text-over-the-registry and reads no workflow YAML.
+#
+#   (c) MATRIX AGREEMENT, at the REQUIRED tier (F-1). (a) and (b) read shard
+#       membership from the registry, which is only sound if ci.yml's matrix
+#       still says what the registry generates. `diff_compiler_ci_gen_drift`
+#       asserts exactly that, but it is ADVISORY — so a hand-edit dropping
+#       gates from a matrix row passed every REQUIRED gate. This script
+#       therefore makes the same assertion itself, with the same
+#       `medaka gate ci --check` call, before it certifies anything. It is a
+#       deliberate second caller of one mechanism, not a second mechanism.
 #
 # ── THE DIVISION OF LABOUR, EXPLICITLY ───────────────────────────────────────
 #
@@ -94,9 +104,10 @@
 #               A classification nobody can interrogate is a classification
 #               nobody can check; the gate answers for one script as readily as
 #               it certifies all of them.
-# Exit:   0 every registry entry is reachable in CI and no workflow names an
-#         unenrolled script; 1 a violation (each one named); 2 no native medaka
-#         binary, or no python3.
+# Exit:   0 ci.yml's generated matrix agrees with the registry, every registry
+#         entry is reachable in CI, and no workflow names an unenrolled script;
+#         1 a violation (each one named); 2 no native medaka binary, or no
+#         python3.
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -106,6 +117,22 @@ MEDAKA="${MEDAKA:-$ROOT/medaka}"
 [ -d "$WFDIR" ] || { echo "no workflow dir at $WFDIR — nothing to check"; exit 1; }
 [ -x "$MEDAKA" ] || { echo "build native first: make medaka (missing $MEDAKA)"; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 not found (needed to parse the workflow YAML)"; exit 2; }
+
+# (c) MATRIX AGREEMENT, at the required tier. Everything below reads shard
+# membership from the registry; that is only a statement about CI if ci.yml's
+# matrix still equals what the registry generates. Non-mutating by
+# construction — `--check` never writes ci.yml. Skipped in single-script query
+# mode, whose contract is to classify and exit 0.
+if [ "$#" -eq 0 ]; then
+  if ! MEDAKA_ROOT="$ROOT" LC_ALL=C "$MEDAKA" gate ci --check; then
+    echo
+    echo "FAIL: .github/workflows/ci.yml's generated gates-matrix region does not agree with"
+    echo "      test/gates.toml (message above). Shard membership below is read from the"
+    echo "      registry, so a drifted matrix means this gate's answer is not what CI runs."
+    echo "      Run 'make gen-ci' and commit the result."
+    exit 1
+  fi
+fi
 
 python3 - "$ROOT" "$WFDIR" "$MEDAKA" "$@" <<'PY'
 import sys, json, pathlib, re, subprocess

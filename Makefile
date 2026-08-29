@@ -153,8 +153,11 @@ docs-index:
 ##           block — never hand-edit between its markers; run this after
 ##           changing a gate's `shard`, a `[[shard]]` row, or a row's
 ##           test/gate_shards/*.txt prose. Idempotent (same input ->
-##           byte-identical output), so `git diff --exit-code` after a run is
-##           the drift check. Needs ./medaka (the registry reader is in-binary).
+##           byte-identical output). The drift check is the NON-MUTATING
+##           `medaka gate ci --check`, not this target followed by `git diff`:
+##           regenerating first heals an uncommitted hand-edit inside the
+##           region before any diff can see it. Needs ./medaka (the registry
+##           reader is in-binary).
 ##           LC_ALL=C is pinned for the same reason docs-index pins it: a
 ##           generator whose output depends on the runner's locale is not
 ##           reproducible, and "generated" then means nothing. This one has no

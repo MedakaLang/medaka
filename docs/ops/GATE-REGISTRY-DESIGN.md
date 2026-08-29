@@ -376,11 +376,19 @@ from it.
 glob against `$ROOT/test/` and `$ROOT/` to work out which shard ran a gate. That
 was a second answer to a question the registry now answers directly: the `shard`
 field is on every entry (S-1), `medaka gate ci` generates the matrix from it (S-2),
-and `test/diff_compiler_ci_gen_drift.sh` proves the on-disk region still equals what
+and `medaka gate ci --check` proves the on-disk region still equals what
 the registry generates (S-3). The script now reads `medaka gate list --json`'s
 `shard` field and `medaka gate list --shards --json`'s row names, and reads **no**
 matrix. Two mechanisms was the defect; two *files* was never the defect, which is
 why the script survives.
+
+**The registry-read is only sound if the matrix agrees (F-1).** Reading shard
+membership from the registry says nothing about what CI runs unless ci.yml's matrix
+still equals what the registry generates. `test/diff_compiler_ci_gen_drift.sh` asserts
+that, but is ADVISORY — so a hand-edit dropping gates from a matrix row passed every
+REQUIRED gate. This script therefore runs `medaka gate ci --check` itself, as a plain
+shell step ahead of its `python3` block, before it certifies anything. One mechanism
+(`gate ci --check`), two callers — not a second mechanism.
 
 **Why not retire it into `verify`.** The half nothing else in the tree can do is the
 workflow scan: every `.github/workflows/*.yml` plus every
@@ -396,7 +404,7 @@ works.
 |---|---|
 | Is every `.sh` in the tree enrolled, or listed as a non-gate tool? | `medaka gate verify` (`test/diff_compiler_gate_registry.sh`) |
 | Which shard runs a gate? | `test/gates.toml`'s `shard` field |
-| Does ci.yml's matrix still equal what the registry generates? | `test/diff_compiler_ci_gen_drift.sh` |
+| Does ci.yml's matrix still equal what the registry generates? | `medaka gate ci --check` — called by `test/diff_compiler_ci_gen_drift.sh` (advisory) AND by `test/diff_compiler_ci_shard_coverage.sh` (required) |
 | Is every registry entry actually reachable in CI? | `test/diff_compiler_ci_shard_coverage.sh` |
 | Does a workflow `run:` step name a script no one enrolled? | `test/diff_compiler_ci_shard_coverage.sh` |
 | Do ci.yml's and `gate_cmd.mdk`'s prose allowlists agree? | `test/diff_compiler_prose_classifier.sh` (#2200) |

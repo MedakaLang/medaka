@@ -139,13 +139,25 @@ does not record *which* job — that stays a workflow fact, scanned, not declare
 **Byte-determinism** follows `test/gen_docs_index.sh`: every list is a fold over file
 order — no sort, no locale-sensitive comparison, nothing read from the environment —
 and `make gen-ci` pins `LC_ALL=C` anyway so the two generators keep one story.
-Regeneration is idempotent and writes only on a real change, so
-`make gen-ci && git diff --exit-code` is the drift check.
+Regeneration is idempotent and writes only on a real change.
 
-**Drift gate — AS LANDED (S-3, #2177).** `test/diff_compiler_ci_gen_drift.sh` wraps
-exactly that: `LC_ALL=C medaka gate ci` then `git diff --exit-code -- .github/workflows/ci.yml`,
-mirroring the pre-existing "Docs index must be regenerated, not hand-edited" step
-byte-for-byte in shape. The contract's §3.2 named two ways to resolve the tension
+**Drift gate — AS LANDED (S-3, #2177), REWORKED (F-1).** The drift check is
+`LC_ALL=C medaka gate ci --check`: it computes the generated text and compares it
+IN MEMORY to the file on disk, writing nothing and shelling to no `git`.
+
+S-3 originally shipped the `docs/README.md` shape — regenerate, then
+`git diff --exit-code -- .github/workflows/ci.yml` — and the end-of-sprint review
+found that shape has two defects sharing one root cause. It **heals what it checks**:
+an uncommitted hand-edit inside the region is overwritten by the write step before the
+diff runs, so the gate passes having silently destroyed the edit (S0). And it
+**misattributes**: `git diff` on the whole file also fires on an uncommitted edit
+entirely OUTSIDE the generated region, then blames the region. `--check` has neither
+property, and its scoping is by construction rather than by convention: `ciNewText`
+copies every line before the BEGIN marker and every line from the END marker onward
+verbatim, so an edit outside the region appears identically on both sides of the
+compare and can never make the check fire.
+
+The contract's §3.2 named two ways to resolve the tension
 between "cheap/always-running/required" and "the generator is in-binary": (a) a CI job
 that downloads the already-built binary artifact (`setup-medaka`, `binary: artifact`,
 same as `gates`/`compiler-soundness`/`wasm`), or (b) a text-only reimplementation
@@ -155,6 +167,15 @@ contract §4.4/§4.6 rule out. The job (`ci-gen-drift` in `ci.yml`) is **ADVISOR
 it is not in the required-status-checks ruleset, because adding a required context is a
 `gh api` ruleset edit that is not atomic with a commit ([W-GH-WRITE-VERIFY]) — see this
 slice's report for the exact command to promote it once Val is ready.
+
+**Required-tier backstop (F-1).** Because that job is advisory, the review found a
+hand-edit dropping gates from a matrix row passed every REQUIRED check: after S-4's
+repoint, `test/diff_compiler_ci_shard_coverage.sh` reads shard membership from the
+registry and no longer looks at ci.yml's matrix at all. That gate — which IS required —
+now makes the same `medaka gate ci --check` assertion itself, as a plain shell step
+before its `python3` block, so matrix-vs-registry agreement is proven at the required
+tier without a ruleset edit. One mechanism, two callers; the advisory job stays for the
+faster, standalone signal.
 
 Enrolled as `diff_compiler_ci_gen_drift` in `test/gates.toml` (`shard = "other-job"`,
 its own job, not a `gates` matrix row) and in `test/preflight.sh` (the `test/gates.toml)`
