@@ -1,20 +1,20 @@
 # GATE-REGISTRY-DESIGN.md — the gate registry format and `medaka gate` driver
 
-**Status:** PARTLY LANDED — 2026-08-29, companion to
-[CI-ARCHITECTURE.md](CI-ARCHITECTURE.md) (epic #2182, working spec for #2176).
+**Status:** LANDED — 2026-08-29, companion to
+[CI-ARCHITECTURE.md](CI-ARCHITECTURE.md) (epic #2182, this doc's working spec for
+#2176, now the as-built record).
 
-§2's schema and §7's first two questions are no longer proposals: `test/gates.toml`
-exists and `medaka gate list` reads it. What has landed is the FORMAT and the read
-path over a **hand-written pilot of eight entries** — everything else in this doc is
-still design. The remaining work is the rest of the same sprint, not separate
-projects:
+All five slices of the `gate-registry` sprint (#2176) are landed: `test/gates.toml`
+holds the full 226-entry corpus, and `medaka gate list`/`run`/`verify`/`explain` are
+all implemented and read it.
 
-| Slice | What it adds | Sections still design until then |
-|---|---|---|
-| S-2 | full enrolment: every gate in the repo | §1's "single source of truth" claim |
-| S-3 | `medaka gate run` + the driver-provided services | §3 `run`, §4, §6 rules 1–2 |
-| S-4 | `medaka gate verify` + `medaka gate explain` | §3 `verify`/`explain`, §6 rule 4 |
-| S-5 | `sources`/`corpus` populated | — LANDED |
+| Slice | What it added |
+|---|---|
+| S-1 | schema, reader (`stdlib/toml.mdk`), selector language, `medaka gate list` over an 8-entry pilot |
+| S-2 | full enrolment: every gate in the repo (226 entries) |
+| S-3 | `medaka gate run` + the driver-provided services |
+| S-4 | `medaka gate verify` + `medaka gate explain` |
+| S-5 | `sources`/`corpus` populated, proven equivalent to preflight's own derivation |
 
 ⚠️ **Nothing reads `test/gates.toml` except `medaka gate list`/`run`/`verify`/
 `explain`.** `ci.yml`, `test/preflight.sh`, `test/build_oracles.sh` and
@@ -158,23 +158,24 @@ In the `medaka` binary, dispatched beside `"test"`/`"snapshot"` (§7 Q2), implem
 in `compiler/tools/gate_cmd.mdk` beside `compiler/tools/test_cmd.mdk`:
 
 - ✅ `medaka gate list [<selector>...] [--json] [--registry <path>]` — enumerate;
-  machine-readable (`--json`) for the generator and preflight. LANDED.
-- `medaka gate run <selector>` (S-3) — run the selection with a worker pool; per-gate
-  timing recorded to a machine-readable report (the ratchet's and balancer's input).
-- `medaka gate verify` (S-4) — the drift gate: every tracked `*.sh` under the gate
-  roots is enrolled or explicitly listed as a non-gate tool; every entry's
+  machine-readable (`--json`) for the generator and preflight. LANDED (S-1).
+- ✅ `medaka gate run <selector>` — runs the selection with per-gate scratch dirs,
+  [G-STALE-ORACLE] refusal (with its CI-disabled arm), stderr-preserving capture, a
+  cost-tier timeout, raw unnormalized exit codes, and a `--report` JSON timing
+  artifact (#2180's future input). LANDED (S-3). **Sequential, not parallel** —
+  `--jobs` is accepted but ignored; no fork/wait primitive exists in
+  `stdlib/runtime.mdk` today, so a worker pool is future work, not this sprint's.
+- ✅ `medaka gate verify` — the drift gate: every tracked `*.sh` under the gate roots
+  is enrolled or explicitly listed as a non-gate tool; every entry's
   `run`/`oracles`/`corpus` targets exist; selectors resolve to ≥1 gate. Red on any
-  divergence. Text-only, no build — runs everywhere, cheap.
-- `medaka gate explain <path>` (S-4, completed S-5) — the reverse lookup that doesn't
-  exist today: which gates does a changed path select, and why. Output uses
+  divergence. Text-only, no build — runs everywhere, cheap. LANDED (S-4), wrapped in
+  `test/diff_compiler_gate_registry.sh`.
+- ✅ `medaka gate explain <path>` — the reverse lookup that didn't exist before this
+  sprint: which gates does a changed path select, and why. Output uses
   `test/preflight.sh`'s own machine-readable prefixes so the two derivations diff
   line-for-line: `GATE <name> (sources:<glob> | corpus:<dir>)`, `FULL
-  blast-radius:<prefix>`, `FULL unmatched-non-prose:<path>`, `UNMAPPED <path>`. A bare
-  token that is also a field value gets `TOKEN` lines (the S-4 behaviour, kept).
-
-The three unimplemented subcommands are named explicitly in the dispatcher and exit
-nonzero saying they are not here yet, rather than falling into a generic "unknown
-subcommand".
+  blast-radius:<prefix>`, `FULL unmatched-non-prose:<path>`, `UNMAPPED <path>`. LANDED
+  (S-4, `sources`/`corpus` matching completed S-5).
 
 **Selector language (LANDED).** Boring, as designed: a selector is `field:pattern`
 where `field` ∈ `name`/`area`/`project`/`tier` and `pattern` is a glob (`*`, `?`); a
@@ -258,3 +259,31 @@ own place in the bootstrap, for no gain — §5's circularity is unchanged eithe
   reviewability.
 - Whether preflight survives as a thin `medaka gate`-calling shim (agents' muscle
   memory, `make preflight`) — probably yes, indefinitely.
+- `medaka gate run`'s worker pool: today it is sequential by construction (no
+  fork/wait primitive in `stdlib/runtime.mdk`). #2177/#2178's generator can still
+  read the registry for shard *composition*; a parallel `gate run` is separate
+  future work, not blocking any consumer switch-over.
+- `gate run` does not yet reproduce `run_gates.sh`'s exit-code CLASSIFICATION (the
+  `sh -n` syntax pre-check, `LEGIT_SKIP_RE`, and the phantom-skip reclassification of
+  an exit-2 whose message says an oracle was never built). It reports raw exit codes
+  faithfully, which is correct for parity today, but whoever makes `gate run`
+  authoritative over `run_gates.sh` must port that classifier's INTENT (not its
+  regex verbatim — `run_gates.sh`'s own comment calls `LEGIT_SKIP_RE` a launderer,
+  #2065).
+- S-5's equivalence sweep found `sources`/`corpus` cannot be a literal
+  transcription of preflight's ORDERED `case` table: case-arm precedence has no
+  registry representation (the registry answers the union of all matching globs,
+  which is documented to be the safe/wider direction — the one live consequence is
+  #2196, a genuine preflight under-selection this sweep surfaced), and preflight's
+  nearest-fixture-dir dispatch differs from `corpus`'s plain prefix containment for
+  a fixture directory nested inside another one (today only
+  `test/cross_project_fixtures/{goldens,twonames/goldens}`). Both gaps make the
+  registry answer the SAME OR MORE than preflight, never less, over a 693-path
+  swept corpus with zero narrower divergences — but a future consumer switch-over
+  (#2177/#2179) inherits this shape difference and should re-check it, not assume
+  it stays zero as the case table grows.
+- Two real preflight bugs surfaced by the equivalence sweep, filed rather than
+  fixed here (out of this sprint's behaviour-neutrality spine): #2196 (case-arm
+  shadowing drops the `diff_compiler_check*` family for several
+  `compiler/tools/*.mdk` files) and #2197 (an unquoted `$changed` expansion splits
+  a space-bearing path into two fictional paths; no blast radius today).
