@@ -5,7 +5,8 @@
    language), `medaka gate run [<selector>...]`, which EXECUTES the selected
    gates, `medaka gate verify` (the drift gate: TEXT-ONLY, no build — every
    gate candidate enrolled-or-ledgered, every entry's `run`/`oracles`/`corpus`
-   targets exist, every entry reachable by a selector) and `medaka gate
+   targets exist, every entry reachable by a selector, every `name` unique)
+   and `medaka gate
    explain <path>` (the reverse lookup: which entries does a CHANGED PATH
    select, via which `sources` glob or `corpus` directory, and what the
    registry-level fail-open policy says about it —
@@ -31,7 +32,7 @@
    deliberately: a mistyped pattern that silently selects nothing is how a
    shard certifies coverage of a gate that never ran. -}
 
-import toml.{Toml, parse, getString, getArray, tableCount, tableEntry}
+import toml.{Toml, parse, getString, getArray, getBool, tableCount, tableEntry}
 import json.{Json, JString, JInt, JFloat, JBool, jArray, jObject, stringify}
 import driver.build_cmd.{envOr, defaultMedakaRoot}
 import support.path.{joinPath}
@@ -54,15 +55,21 @@ import support.util.{
 -- ── The entry schema ────────────────────────────────────────────────────────
 -- One `[[gate]]` table in `test/gates.toml` per gate.  Every field below is
 -- REQUIRED to be present in the file, list fields included: an absent list is
--- an error, not an empty list.  `sources`/`corpus` are populated in a later
--- slice, so today they are present-and-empty on every entry — which is a
--- different fact from "this gate has no sources", and the reader must not
--- blur the two by defaulting.
+-- an error, not an empty list — a present-and-empty `sources` is a different
+-- fact from "this gate has no sources", and the reader must not blur the two
+-- by defaulting.
+--
+-- `shard` (S-1, #2177) is the ci.yml `gates` matrix ROW this gate runs in, or
+-- the sentinel `other-job` for a gate some other workflow job schedules.  The
+-- row's own options and placement prose live in the sibling `[[shard]]` table
+-- (`Shard`, below), not on the entry — they are per-ROW facts, and putting
+-- them on 227 entries would be 227 chances for a row to disagree with itself.
 
 public export data Gate =
   | Gate {
       name : String,
       area : String,
+      shard : String,
       project : String,
       tier : String,
       cost : String,
@@ -95,6 +102,7 @@ readGate doc i =
   do
     name <- reqStr i "name" e
     area <- reqStr i "area" e
+    shard <- reqStr i "shard" e
     project <- reqStr i "project" e
     tier <- reqStr i "tier" e
     cost <- reqStr i "cost" e
@@ -108,6 +116,7 @@ readGate doc i =
       Gate {
         name = name,
         area = area,
+        shard = shard,
         project = project,
         tier = tier,
         cost = cost,
@@ -143,6 +152,82 @@ parseRegistry src = match parse src
       Err "gates.toml: no [[gate]] entries found"
     else
       readGatesFrom doc 0 n []
+
+-- ── The `gates` matrix rows ─────────────────────────────────────────────────
+-- One `[[shard]]` per row of ci.yml's `gates` job matrix.  A gate's `shard`
+-- field names one of these; the row carries what the MATRIX needs and the gate
+-- does not — the runner options, and the placement rationale.
+--
+-- `rationale` is a PATH (`test/gate_shards/<name>.txt`), not the prose itself:
+-- the TOML subset this reader is built on has no multi-line string, and 180
+-- lines of English on one line would be worse than no home at all.  Nothing
+-- here reads that file — `medaka gate list --shards` prints the path, and the
+-- ci.yml generator (S-2) is what will read it and emit it verbatim as the
+-- row's comment block.
+
+public export data Shard =
+  | Shard {
+      name : String,
+      fullCores : Bool,
+      wasmArm : Bool,
+      rationale : String,
+    }
+
+shardStr : Int -> String -> Toml -> Result String String
+shardStr i field entry = match getString field entry
+  Some s => Ok s
+  None => Err "gates.toml: [[shard]] #\{intToString i}: missing required string field '\{field}'"
+
+-- Present-or-error, like every other field: an ABSENT `wasm_arm` must not
+-- silently read as `false`.  In ci.yml the key IS absent when the option is
+-- off, but that is the GENERATOR's encoding of `false`, not the registry's —
+-- a row that simply forgot the key would otherwise lose its Wasm toolchain
+-- and take its gates' Wasm arms down quietly with it.
+shardBool : Int -> String -> Toml -> Result String Bool
+shardBool i field entry = match getBool field entry
+  Some b => Ok b
+  None => Err "gates.toml: [[shard]] #\{intToString i}: missing required boolean field '\{field}'"
+
+readShard : Toml -> Int -> Result String Shard
+readShard doc i =
+  let e = tableEntry "shard" i doc
+  do
+    name <- shardStr i "name" e
+    fullCores <- shardBool i "full_cores" e
+    wasmArm <- shardBool i "wasm_arm" e
+    rationale <- shardStr i "rationale" e
+    Ok
+      Shard {
+        name = name,
+        fullCores = fullCores,
+        wasmArm = wasmArm,
+        rationale = rationale,
+      }
+
+readShardsFrom : Toml -> Int -> Int -> List Shard -> Result String (List Shard)
+readShardsFrom doc i n acc
+  | i >= n = Ok (reverseShards acc [])
+  | otherwise = match readShard doc i
+    Err m => Err m
+    Ok sh => readShardsFrom doc (i + 1) n (sh::acc)
+
+reverseShards : List Shard -> List Shard -> List Shard
+reverseShards [] acc = acc
+reverseShards (s::ss) acc = reverseShards ss (s::acc)
+
+{- | Parse a registry's `[[shard]]` rows, in file order.  A registry with no
+   rows is an error for the same reason one with no gates is: "the repo
+   schedules nothing" must not be a quiet, well-formed answer. -}
+export
+parseShards : String -> Result String (List Shard)
+parseShards src = match parse src
+  Err m => Err "gates.toml: \{m}"
+  Ok doc =>
+    let n = tableCount "shard" doc
+    if n == 0 then
+      Err "gates.toml: no [[shard]] entries found"
+    else
+      readShardsFrom doc 0 n []
 
 -- ── Glob matching ───────────────────────────────────────────────────────────
 -- `*` matches any run of characters (path separators included — the registry's
@@ -290,6 +375,7 @@ gateJson g = jObject
   [
     ("name", JString g.name),
     ("area", JString g.area),
+    ("shard", JString g.shard),
     ("project", JString g.project),
     ("tier", JString g.tier),
     ("cost", JString g.cost),
@@ -307,6 +393,31 @@ export
 renderJson : List Gate -> String
 renderJson gs = stringify (jArray (map gateJson gs))
 
+shardJson : Shard -> Json
+shardJson sh = jObject
+  [
+    ("name", JString sh.name),
+    ("full_cores", JBool sh.fullCores),
+    ("wasm_arm", JBool sh.wasmArm),
+    ("rationale", JString sh.rationale),
+  ]
+
+{- | `--shards --json`: the matrix rows as a JSON array, in registry order. -}
+export
+renderShardsJson : List Shard -> String
+renderShardsJson shs = stringify (jArray (map shardJson shs))
+
+boolWord : Bool -> String
+boolWord b = if b then "true" else "false"
+
+{- | `--shards`: one line per matrix row.  Deliberately not a table — this is
+   read by people checking a row against ci.yml, and by `grep`. -}
+export
+renderShards : List Shard -> String
+renderShards [] = ""
+renderShards (sh::shs) = "\{sh.name}: full_cores=\{boolWord sh.fullCores} wasm_arm=\{boolWord sh.wasmArm} rationale=\{sh.rationale}\n"
+  ++ renderShards shs
+
 -- ── CLI ─────────────────────────────────────────────────────────────────────
 
 export
@@ -317,6 +428,7 @@ gateHelpText = stringConcat
     "\n",
     "Usage:\n",
     "  medaka gate list    [<selector>...] [--json] [--registry <path>]\n",
+    "  medaka gate list    --shards [--json] [--registry <path>]\n",
     "  medaka gate run     [<selector>...] [--dry-run] [--json] [--report <path>]\n",
     "                      [--timeout <secs>] [--jobs <n>] [--no-stale-check]\n",
     "                      [--registry <path>]\n",
@@ -333,6 +445,7 @@ gateHelpText = stringConcat
     "A selector matching zero gates is an error, not an empty list.\n",
     "\n",
     "  --json             list: the registry entries as JSON.\n",
+    "  --shards           list: the ci.yml `gates` matrix rows, not the gates.\n",
     "                     run: the machine-readable run report as JSON.\n",
     "  --registry <path>  read this registry instead of <MEDAKA_ROOT>/test/gates.toml\n",
     "\n",
@@ -354,7 +467,8 @@ gateHelpText = stringConcat
     "`gate verify` is the drift gate: text-only, no build. Checks every gate\n",
     "candidate (test/preflight.sh's own candidate universe) is enrolled or\n",
     "explicitly listed as a non-gate tool, every entry's run/oracles/corpus\n",
-    "targets exist, and every entry is reachable by a selector. Exits nonzero\n",
+    "targets exist, every entry is reachable by a selector, and no two entries\n",
+    "share a `name`. Exits nonzero\n",
     "on any violation.\n",
     "\n",
     "`gate explain <path>` is the reverse lookup: which entries select a\n",
@@ -367,13 +481,20 @@ gateHelpText = stringConcat
 
 -- Parsed `gate list` argv.
 data ListArgs =
-  | ListArgs { json : Bool, registry : Option String, selectors : List String }
+  | ListArgs {
+      json : Bool,
+      shards : Bool,
+      registry : Option String,
+      selectors : List String,
+    }
 
 parseListArgs : List String -> ListArgs -> Result String ListArgs
 parseListArgs [] acc =
   Ok ListArgs { acc | selectors = reverseStrs acc.selectors [] }
 parseListArgs ("--json"::rest) acc =
   parseListArgs rest ListArgs { acc | json = True }
+parseListArgs ("--shards"::rest) acc =
+  parseListArgs rest ListArgs { acc | shards = True }
 parseListArgs ("--registry"::p::rest) acc =
   parseListArgs rest ListArgs { acc | registry = Some p }
 parseListArgs ("--registry"::[]) _ =
@@ -412,7 +533,7 @@ registryPath None =
 -- command a SINGLE exit site (`emit`), so no error path can grow a
 -- print-without-exit or an exit-without-print.
 listOutput : List String -> <IO> Result String String
-listOutput argv = match parseListArgs argv ListArgs { json = False, registry = None, selectors = [] }
+listOutput argv = match parseListArgs argv ListArgs { json = False, shards = False, registry = None, selectors = [] }
   Err m => Err m
   Ok a => match parseSelectors a.selectors []
     Err m => Err "medaka gate list: \{m}"
@@ -420,10 +541,25 @@ listOutput argv = match parseListArgs argv ListArgs { json = False, registry = N
       let path = registryPath a.registry
       match readFile path
         Err m => Err "medaka gate list: cannot read registry: \{m}"
-        Ok src => match parseRegistry src
+        Ok src => if a.shards then shardsOutput a.json a.selectors src
+        else match parseRegistry src
           Err m => Err "medaka gate list: \{m}"
           Ok gates =>
             selectionOutput a.json a.selectors (selectGates sels gates) path
+
+-- `--shards` lists the MATRIX ROWS, which selectors do not range over — a
+-- selector is a per-gate predicate, and silently ignoring one here would let
+-- `list --shards area:eval` look like it had filtered something.
+shardsOutput : Bool -> List String -> String -> Result String String
+shardsOutput isJson tokens src
+  | not (isEmptyStrs tokens) = Err "medaka gate list: --shards takes no selectors (got: \{joinSpace tokens})"
+  | otherwise = match parseShards src
+    Err m => Err "medaka gate list: \{m}"
+    Ok shs =>
+      if isJson then
+        Ok (renderShardsJson shs ++ "\n")
+      else
+        Ok (renderShards shs)
 
 -- A selector that selects nothing is a HARD ERROR (see the module header).
 selectionOutput : Bool -> List String -> List Gate -> String -> Result String String
@@ -1301,7 +1437,34 @@ corpusTargetViolations _ [] = []
 corpusTargetViolations root (g::gs) = corpusDirsMissing root g.name g.corpus
   ++ corpusTargetViolations root gs
 
--- ── assembling and rendering the five classes ───────────────────────────────
+-- Check 6 (#2199): entry `name`s are UNIQUE.  Two entries sharing a name were
+-- merely redundant while the registry only described gates; with `shard` on
+-- the entry they are a GENERATION HAZARD — "which matrix row does `foo` go
+-- in" stops having one answer, and the generator would have to pick, silently.
+-- Nothing else catches it: `run` targets, oracles and corpora would all still
+-- exist, and check 4's reachability is satisfied by EITHER twin.
+gateNames : List Gate -> List String
+gateNames [] = []
+gateNames (g::gs) = g.name :: gateNames gs
+
+countName : String -> List Gate -> Int
+countName _ [] = 0
+countName n (g::gs) = (if g.name == n then 1 else 0) + countName n gs
+
+dupNameFrom : List Gate -> List String -> List String
+dupNameFrom _ [] = []
+dupNameFrom gates (n::ns) =
+  let k = countName n gates
+  let rest = dupNameFrom gates ns
+  if k > 1 then
+    "\{n}: \{intToString k} entries share this name — a gate's shard row must not be ambiguous"::rest
+  else
+    rest
+
+duplicateNameViolations : List Gate -> List String
+duplicateNameViolations gates = dupNameFrom gates (sortUniqS (gateNames gates))
+
+-- ── assembling and rendering the six classes ────────────────────────────────
 
 verifyClasses : String -> List Gate -> <IO> Result String (List (String, List String))
 verifyClasses root gates = match gateCandidates root
@@ -1317,6 +1480,7 @@ verifyClasses root gates = match gateCandidates root
         ("missing oracle targets", oracleTargetViolations known gates),
         ("missing corpus targets", corpusTargetViolations root gates),
         ("unreachable entries", reachabilityViolations gates gates),
+        ("duplicate entry names", duplicateNameViolations gates),
       ]
 
 renderClass : (String, List String) -> String

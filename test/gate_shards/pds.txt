@@ -1,0 +1,4 @@
+Phase 1 data-model gates are isolated here because each has a
+required Wasm arm and the repo gate carries a bounded interpreter
+discriminator. Keep this list explicit: later PDS phases must be
+placed from measured cost, not inherited through a broad glob.

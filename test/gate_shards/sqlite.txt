@@ -1,0 +1,28 @@
+#1929: this row used to carry ALL 43 sqlite/gzip/pds oracle+vector gates
+and was the CI pole, well above `wasm`, the next-slowest job — see the
+spike report for `S-sqlite-rebalance`. That whole family is now
+SPLIT across the other five non-`engines` `gates` rows, each placed by
+measured per-gate cost (local `time`, not a per-gate CI breakdown — see
+`S-sqlite-rebalance`'s report for the full table and the packing math),
+never by theme — same principle as every other row in this matrix.
+REPURPOSED (F-5: the job NAME must not vanish) to carry just the single
+heaviest gate of the lot: `pds/test/inlang_test_oracle.sh`, dwarfing
+every other individual sqlite/gzip/pds gate. No thematic tie to SQLite
+any more; kept here rather than renamed because a lone gate this heavy
+needs its own row headroom and this row already had none of its own.
+`wasm_arm` dropped — this gate doesn't read the Wasm oracle.
+
+#2045 (S-ir-metric): `diff_compiler_ir_scaling` — the Cachegrind
+instruction-count superlinearity gate for `medaka check` — lands
+HERE, not next to its thematic sibling `diff_compiler_perf_scaling`
+in `types`. Placed by measured cost, as this matrix requires:
+`sh scripts/ci_shard_cost.sh` over 5 green merge_group runs at the
+base of that slice read
+  backend 527s (pole) | frontend 512s | tools 468s | eval 468s
+  | engines 446s | types 426s | sqlite 381s (cheapest)
+and the gate costs ~90 s locally (8 sequential cachegrind runs at
+~20x native; single-threaded by design, no fan-out knob). Putting it
+in `types` would make that shard ~516s and put it within noise of the
+pole; here it lands ~470s, still comfortably under `backend`. It
+reads NO oracle (`build_oracles.sh --for` reports "needs no
+oracles"), so the shard's oracle build is unaffected.

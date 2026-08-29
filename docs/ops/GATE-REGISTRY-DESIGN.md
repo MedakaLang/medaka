@@ -77,8 +77,12 @@ reads. Field names are final; the pilot's eight entries all conform.
 ```toml
 [[gate]]
 name        = "diff_compiler_parse_result"      # unique; the name run_gates.sh resolves
+                               #   — enforced: `gate verify` fails on a duplicate (#2199)
 area        = "frontend"       # semantic identity: frontend|types|eval|backend|tools|
                                #   engines|wasm|soundness|infra|docs
+shard       = "frontend"       # ci.yml `gates` matrix ROW: engines|sqlite|pds|frontend|
+                               #   types|eval|backend|tools, or `other-job` for a gate
+                               #   some OTHER workflow job schedules (#2177)
 project     = "compiler"       # compiler | sqlite | gzip | pds | mq | parsec | byteparser
 tier        = "merge"          # merge | nightly | ondemand
 cost        = "cheap"          # cheap(<10s) | medium(<60s) | heavy(<300s) | budgeted(explicit)
@@ -115,10 +119,23 @@ Three rules the reader enforces, each because the alternative fails quietly:
 
 Notes on the load-bearing fields:
 
-- **`area` vs. shard**: area is identity (what failure reporting names); the executor
-  shard a gate runs in is NOT in the registry — it is the balancer's derived,
-  committed output (#2178), a separate generated file. Nothing in an entry says
-  "where"; that is the whole point.
+- **`area` vs. `shard`** (REVISED by S-1 of #2177 — this bullet used to say the
+  shard is NOT in the registry at all): `area` is still identity (what failure
+  reporting names). `shard` is now also in the entry, because #2177's generator has
+  to emit a matrix and the eight row memberships lived nowhere but ci.yml's
+  hand-written `pattern:` globs. What has NOT changed is that the shard is not a
+  DERIVED field: today's values are hand-assigned data, transcribed from the
+  current matrix and proved set-equal to it row by row, and nothing computes them.
+  When the balancer (#2178) lands it becomes the writer of this field — see §7.
+  `area` and `shard` are independent on purpose and already disagree for ~30
+  entries (a gate is placed by measured cost, not by theme — ci.yml's own matrix
+  comment says so at length).
+
+  ⚠️ `shard = "other-job"` means "not scheduled by the `gates` matrix", NOT
+  "unscheduled": 26 entries today run in `soundness`, `seed-health`, `wasm`, the
+  docs jobs, `nightly` or the playground job. WHICH job is deliberately not
+  modelled yet — #2177's generator only owns the `gates` matrix, and inventing a
+  second, unverified job axis would have put unchecked data in the registry.
 - **`cost`**: a *declaration* checked against queue-measured reality by the ratchet
   (#2180). `budgeted` carries an explicit seconds figure for the rare
   deliberately-heavy merge-tier gate.
@@ -151,6 +168,42 @@ Notes on the load-bearing fields:
   run that compiler gate. Before S-5 those edges lived in nobody's head but the
   audit's; they are now the ONE thing in the registry `test/preflight.sh` has no
   equivalent for at all.
+
+### 2a. The matrix rows: `[[shard]]` (S-1 of #2177)
+
+The eight `gates` matrix rows are their own table at the bottom of
+`test/gates.toml`, in matrix order — the per-ROW facts a per-GATE entry cannot
+hold without 227 chances to disagree with itself:
+
+```toml
+[[shard]]
+name        = "engines"
+full_cores  = true                              # ci.yml's `full_cores: "1"` matrix key
+wasm_arm    = true                              # ci.yml's `wasm_arm: "1"` matrix key
+rationale   = "test/gate_shards/engines.txt"    # PATH to the row's placement prose
+```
+
+- **Booleans, not `"1"`.** ci.yml OMITS the key when the option is off; that
+  absence is the generator's encoding of `false`, not the registry's. Both keys
+  are required on every row — a row that merely forgot `wasm_arm` would otherwise
+  lose its Wasm toolchain and take its gates' Wasm arms down without a word.
+- **`rationale` is a path, not the prose.** Two reasons, and the first is
+  decisive: the reader's TOML subset has no multi-line string (a `"""` is a hard
+  parse error by design, `stdlib/toml.mdk`), so 180 lines of English would have to
+  become one 8000-character line. The second is that the alternative shape —
+  leaving the prose in ci.yml as hand-edited islands the generator preserves
+  between markers — makes ci.yml simultaneously generated and hand-written, and
+  makes generation depend on the previous ci.yml rather than on the registry
+  alone. **This decision is settled; S-2 inherits it and must not re-open it.**
+- **The files are `test/gate_shards/<name>.txt`**, holding the row's ci.yml
+  comment block VERBATIM, one line per line, `#` and indentation stripped. The
+  generator's encoding is exactly `("            # " + line).rstrip()`, which
+  round-trips today's ci.yml byte-for-byte on all eight rows (blank prose lines
+  come back as a bare `            #`). `.txt` and not `.md` keeps a verbatim copy
+  of shell/YAML commentary out of the markdown link and symbol gates.
+- **Only per-ROW prose lives here.** The matrix-level preamble above the first row
+  (the "SHARDS ARE SCHEDULED BY COST" block and the quoting notes) is fixed
+  template text, not per-row data: it belongs in the generator, not the registry.
 
 ## 3. The driver: `medaka gate`
 
@@ -252,6 +305,27 @@ entry point would need its own build, its own staleness check ([B-STALENESS]) an
 own place in the bootstrap, for no gain — §5's circularity is unchanged either way.
 
 ### Still open
+
+- **`shard` is HAND-ASSIGNED DATA AWAITING THE BALANCER, not a derived output.**
+  S-1 of #2177 transcribed the eight row memberships and their `full_cores`/
+  `wasm_arm` options out of ci.yml's hand-written matrix and proved them set-equal
+  to it, row by row, with no sampling; it did not choose a single placement.
+  #2178 is what will CHOOSE these values, and when it does it becomes this field's
+  writer — until then the field must be hand-edited in step with ci.yml, and
+  nothing may read it as if a balancer had produced it. Two consequences worth
+  naming: (a) until S-2 generates ci.yml, the per-row prose exists TWICE — in
+  `test/gate_shards/*.txt` and still as comments in ci.yml — and can drift; (b) no
+  gate enforces the row-membership set-equality yet, it was proved once by
+  measurement in S-1's report. Both close when S-2's generated ci.yml makes the
+  registry the only copy.
+- `medaka gate verify` does NOT check that a `shard` value is one of the eight row
+  names or `other-job` (S-1 added only the duplicate-`name` class #2199 asked
+  for). A typo'd row name is a generation hazard of the same family and is cheap
+  to catch; S-2 or #2178 should add it once the generator fixes what the legal set
+  is.
+- The `shard` axis is not a selector field: `medaka gate list shard:eval` is a
+  `name:` glob, not a shard query. Deliberately out of S-1's scope; add it with
+  the consumer that needs it.
 
 - Per-gate timing transport: committed file updated by a bot/nightly (GHC pushes git
   notes from CI) vs. fetched from the Actions API at balance time (no tree writes,
