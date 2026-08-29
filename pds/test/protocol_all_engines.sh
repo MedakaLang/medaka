@@ -25,6 +25,15 @@ cat > "$WORK/expected.out" <<'EOF'
 CELL fixed-query PASS status=200 state=unchanged
 CELL chunked-update PASS status=201 state=1->2 body=abc
 CELL malformed-unchanged PASS status=400 state=unchanged
+CELL malformed-lowercase-version PASS status=400 state=unchanged no-dispatch
+CELL malformed-host PASS status=400 state=unchanged no-dispatch
+CELL malformed-target PASS status=400 state=unchanged no-dispatch
+CELL raw-text PASS media=text/plain bytes=exact state=unchanged
+CELL raw-json PASS media=application/json bytes=exact state=unchanged
+CELL raw-opaque PASS media=application/octet-stream bytes=exact state=unchanged
+CELL procedure-params PASS repeated=true empty=true order=preserved state=unchanged
+CELL uppercase-authority-lookup PASS returned=Com.Example.query.caseFixed state=unchanged
+CELL authority-duplicate-identity PASS folded-authority=true method-case=distinct
 CELL unknown-unchanged PASS status=404 state=unchanged
 CELL resource-unchanged PASS status=413 state=unchanged
 TOTAL: PASS
@@ -36,6 +45,15 @@ check_cells() {
   grep -F -q 'CELL fixed-query PASS status=200 state=unchanged' "$output" || fail "$label missed fixed-query cell"
   grep -F -q 'CELL chunked-update PASS status=201 state=1->2 body=abc' "$output" || fail "$label missed chunked-update cell"
   grep -F -q 'CELL malformed-unchanged PASS status=400 state=unchanged' "$output" || fail "$label missed malformed cell"
+  grep -F -q 'CELL malformed-lowercase-version PASS status=400 state=unchanged no-dispatch' "$output" || fail "$label missed lowercase-version cell"
+  grep -F -q 'CELL malformed-host PASS status=400 state=unchanged no-dispatch' "$output" || fail "$label missed invalid-Host cell"
+  grep -F -q 'CELL malformed-target PASS status=400 state=unchanged no-dispatch' "$output" || fail "$label missed invalid-target cell"
+  grep -F -q 'CELL raw-text PASS media=text/plain bytes=exact state=unchanged' "$output" || fail "$label missed raw-text cell"
+  grep -F -q 'CELL raw-json PASS media=application/json bytes=exact state=unchanged' "$output" || fail "$label missed raw-JSON cell"
+  grep -F -q 'CELL raw-opaque PASS media=application/octet-stream bytes=exact state=unchanged' "$output" || fail "$label missed opaque-raw cell"
+  grep -F -q 'CELL procedure-params PASS repeated=true empty=true order=preserved state=unchanged' "$output" || fail "$label missed procedure-params cell"
+  grep -F -q 'CELL uppercase-authority-lookup PASS returned=Com.Example.query.caseFixed state=unchanged' "$output" || fail "$label missed uppercase-authority lookup cell"
+  grep -F -q 'CELL authority-duplicate-identity PASS folded-authority=true method-case=distinct' "$output" || fail "$label missed authority identity cell"
   grep -F -q 'CELL unknown-unchanged PASS status=404 state=unchanged' "$output" || fail "$label missed unknown-route cell"
   grep -F -q 'CELL resource-unchanged PASS status=413 state=unchanged' "$output" || fail "$label missed resource cell"
   cmp "$WORK/expected.out" "$output" || fail "$label output differs from hand-authored cells"
@@ -71,8 +89,8 @@ import pathlib
 import sys
 
 path = pathlib.Path(sys.argv[1])
-old = 'if storeSize next == 2 && seedPreserved'
-new = 'if storeSize next == 1 && seedPreserved'
+old = 'response == expectedTextResponse 200 "OK" "raw-text"'
+new = 'response == expectedTextResponse 200 "OK" "raw-text-mutated"'
 text = path.read_text()
 if text.count(old) != 1:
     raise SystemExit(f'mutation anchor count is {text.count(old)}, expected 1')
@@ -84,15 +102,15 @@ MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/mutation-tree/pds/tes
   fail 'state-update mutation failed to build'
 }
 if "$WORK/mutated-native" > "$WORK/mutated.out" 2>&1; then
-  fail 'state-update mutation unexpectedly passed'
+  fail 'repaired raw-input mutation unexpectedly passed'
 fi
-grep -F -q 'protocol_all_engines: chunked-update state mismatch' "$WORK/mutated.out" || {
+grep -F -q 'protocol_all_engines: raw-text mismatch' "$WORK/mutated.out" || {
   cat "$WORK/mutated.out" >&2
-  fail 'state-update mutation failed for an unrelated reason'
+  fail 'repaired raw-input mutation failed for an unrelated reason'
 }
 
 cp "$ROOT/pds/test/protocol_all_engines_main.mdk" "$WORK/mutation-tree/pds/test/protocol_all_engines_main.mdk"
 cmp "$ROOT/pds/test/protocol_all_engines_main.mdk" "$WORK/mutation-tree/pds/test/protocol_all_engines_main.mdk"
 
-echo 'MUTATION state-update-assertion PASS direct-red'
-echo 'PASS: PDS protocol core — 5/5 named cells; eval == native == Wasm; direct-red mutation; bytes restored'
+echo 'MUTATION repaired-raw-assertion PASS direct-red'
+echo 'PASS: PDS protocol core — 14/14 named cells; eval == native == Wasm; direct-red mutation; bytes restored'

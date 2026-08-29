@@ -6,7 +6,15 @@
 
 import string.{repeat, toUtf8}
 import lib.cid.{cidForRaw}
-import lib.http.{Header, Response, makeHeader, makeResponse}
+import lib.http.{
+  Header,
+  QueryParam(..),
+  Response,
+  makeHeader,
+  makeResponse,
+  mediaTypeSubtype,
+  mediaTypeType,
+}
 import lib.resource_limits.{maxHttpRequestLineBytes}
 import lib.server_core.{Handler, Server, handleBytes, makeServer}
 import lib.store.{Store, storeEmpty, storeGet, storePut, storeSize}
@@ -44,13 +52,30 @@ registry : Registry
 registry = mustRegistry (makeRegistry
   [
     mustEndpoint (queryEndpoint "com.example.query.fixed"),
+    mustEndpoint (queryEndpoint "Com.Example.query.caseFixed"),
+    mustEndpoint (procedureEndpoint "com.example.params.check" NoInput),
+    mustEndpoint (procedureEndpoint "com.example.raw.echo" RawInput),
     mustEndpoint (procedureEndpoint "com.example.block.put" RawInput),
   ])
 
 handler : Handler
 handler store (QueryCall "com.example.query.fixed" _) =
   (store, mustResponse 200 "OK" "fixed")
-handler store (ProcedureRawCall "com.example.block.put" _ bytes) = match storePut (cidForRaw bytes) bytes store
+handler store (QueryCall "Com.Example.query.caseFixed" _) =
+  (store, mustResponse 200 "OK" "authority-case")
+handler store (ProcedureNoInputCall "com.example.params.check" [QueryParam firstName firstValue, QueryParam secondName secondValue, QueryParam flag flagValue]) = if firstName == "dryRun" && firstValue == "true" && secondName == "dryRun" && secondValue == "" && flag == "flag" && flagValue == "" then (store, mustResponse 200 "OK" "params-ordered") else panic "protocol_all_engines: procedure parameter order mismatch"
+handler store (ProcedureRawCall "com.example.raw.echo" [] media bytes) =
+  let mediaType = mediaTypeType media
+  let mediaSubtype = mediaTypeSubtype media
+  if mediaType == "text" && mediaSubtype == "plain" && bytes == toUtf8 "hello" then
+    (store, mustResponse 200 "OK" "raw-text")
+  else if mediaType == "application" && mediaSubtype == "json" && bytes == toUtf8 "{nope}" then
+    (store, mustResponse 200 "OK" "raw-json")
+  else if mediaType == "application" && mediaSubtype == "octet-stream" && bytes == [|0, 128, 255|] then
+    (store, mustResponse 200 "OK" "raw-opaque")
+  else
+    panic "protocol_all_engines: raw media/body preservation mismatch"
+handler store (ProcedureRawCall "com.example.block.put" [] _ bytes) = match storePut (cidForRaw bytes) bytes store
   Err message =>
     panic "protocol_all_engines: verified store update failed: \{message}"
   Ok next => (next, mustResponse 201 "Created" "stored")
@@ -82,6 +107,13 @@ expectedError status reason code message =
   toUtf8
     "HTTP/1.1 \{intToString status} \{reason}\r\ncontent-type: application/json\r\ncontent-length: \{intToString (arrayLength (toUtf8 body))}\r\n\r\n\{body}"
 
+appendBytes : Array Int -> Array Int -> Array Int
+appendBytes left right =
+  let leftSize = arrayLength left
+  arrayMakeWith
+    (leftSize + arrayLength right)
+    (i => if i < leftSize then left[i] else right[i - leftSize])
+
 fixedQuery : Array Int
 fixedQuery =
   toUtf8
@@ -96,6 +128,47 @@ malformedRequest : Array Int
 malformedRequest =
   toUtf8
     "POST /xrpc/com.example.block.put HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
+
+lowercaseVersionRequest : Array Int
+lowercaseVersionRequest =
+  toUtf8
+    "POST /xrpc/com.example.block.put http/1.1\r\nHost: pds.example\r\nContent-Type: application/octet-stream\r\nContent-Length: 1\r\n\r\nx"
+
+invalidHostRequest : Array Int
+invalidHostRequest =
+  toUtf8
+    "POST /xrpc/com.example.block.put HTTP/1.1\r\nHost: bad host\r\nContent-Type: application/octet-stream\r\nContent-Length: 1\r\n\r\nx"
+
+invalidTargetRequest : Array Int
+invalidTargetRequest =
+  toUtf8
+    "GET /xrpc/com.example.query.fixed?value={bad} HTTP/1.1\r\nHost: pds.example\r\n\r\n"
+
+rawTextRequest : Array Int
+rawTextRequest =
+  toUtf8
+    "POST /xrpc/com.example.raw.echo HTTP/1.1\r\nHost: pds.example\r\nContent-Type: text/plain\r\nContent-Length: 5\r\n\r\nhello"
+
+rawJsonRequest : Array Int
+rawJsonRequest =
+  toUtf8
+    "POST /xrpc/com.example.raw.echo HTTP/1.1\r\nHost: pds.example\r\nContent-Type: application/json\r\nContent-Length: 6\r\n\r\n{nope}"
+
+rawOpaqueRequest : Array Int
+rawOpaqueRequest = appendBytes
+  (toUtf8
+    "POST /xrpc/com.example.raw.echo HTTP/1.1\r\nHost: pds.example\r\nContent-Type: application/octet-stream\r\nContent-Length: 3\r\n\r\n")
+  [|0, 128, 255|]
+
+procedureParamsRequest : Array Int
+procedureParamsRequest =
+  toUtf8
+    "POST /xrpc/com.example.params.check?dryRun=true&dryRun=&flag HTTP/1.1\r\nHost: pds.example\r\n\r\n"
+
+uppercaseAuthorityRequest : Array Int
+uppercaseAuthorityRequest =
+  toUtf8
+    "GET /xrpc/com.example.query.caseFixed HTTP/1.1\r\nHost: pds.example\r\n\r\n"
 
 unknownRequest : Array Int
 unknownRequest =
@@ -132,6 +205,83 @@ checkMalformed =
   else
     panic "protocol_all_engines: malformed framing mismatch"
 
+malformedIsUnchanged : Array Int -> Bool
+malformedIsUnchanged request =
+  let (next, response) = handleBytes server seededStore request
+  storeSize next == 1
+    && seedPreserved next
+    && response == expectedError 400 "Bad Request" "InvalidRequest" "Malformed HTTP request"
+
+checkLowercaseVersion : <IO> Unit
+checkLowercaseVersion =
+  if malformedIsUnchanged lowercaseVersionRequest then
+    println "CELL malformed-lowercase-version PASS status=400 state=unchanged no-dispatch"
+  else
+    panic "protocol_all_engines: lowercase HTTP version reached dispatch"
+
+checkInvalidHost : <IO> Unit
+checkInvalidHost =
+  if malformedIsUnchanged invalidHostRequest then
+    println "CELL malformed-host PASS status=400 state=unchanged no-dispatch"
+  else
+    panic "protocol_all_engines: invalid Host reached dispatch"
+
+checkInvalidTarget : <IO> Unit
+checkInvalidTarget =
+  if malformedIsUnchanged invalidTargetRequest then
+    println "CELL malformed-target PASS status=400 state=unchanged no-dispatch"
+  else
+    panic "protocol_all_engines: invalid request target reached dispatch"
+
+checkRawText : <IO> Unit
+checkRawText =
+  let (next, response) = handleBytes server seededStore rawTextRequest
+  if storeSize next == 1 && seedPreserved next && response == expectedTextResponse 200 "OK" "raw-text" then
+    println "CELL raw-text PASS media=text/plain bytes=exact state=unchanged"
+  else
+    panic "protocol_all_engines: raw-text mismatch"
+
+checkRawJson : <IO> Unit
+checkRawJson =
+  let (next, response) = handleBytes server seededStore rawJsonRequest
+  if storeSize next == 1 && seedPreserved next && response == expectedTextResponse 200 "OK" "raw-json" then
+    println "CELL raw-json PASS media=application/json bytes=exact state=unchanged"
+  else
+    panic "protocol_all_engines: raw-json mismatch"
+
+checkRawOpaque : <IO> Unit
+checkRawOpaque =
+  let (next, response) = handleBytes server seededStore rawOpaqueRequest
+  if storeSize next == 1 && seedPreserved next && response == expectedTextResponse 200 "OK" "raw-opaque" then
+    println "CELL raw-opaque PASS media=application/octet-stream bytes=exact state=unchanged"
+  else
+    panic "protocol_all_engines: raw-opaque mismatch"
+
+checkProcedureParams : <IO> Unit
+checkProcedureParams =
+  let (next, response) = handleBytes server seededStore procedureParamsRequest
+  if storeSize next == 1 && seedPreserved next && response == expectedTextResponse 200 "OK" "params-ordered" then
+    println "CELL procedure-params PASS repeated=true empty=true order=preserved state=unchanged"
+  else
+    panic "protocol_all_engines: procedure parameter mismatch"
+
+checkUppercaseAuthority : <IO> Unit
+checkUppercaseAuthority =
+  let (next, response) = handleBytes server seededStore uppercaseAuthorityRequest
+  if storeSize next == 1 && seedPreserved next && response == expectedTextResponse 200 "OK" "authority-case" then
+    println "CELL uppercase-authority-lookup PASS returned=Com.Example.query.caseFixed state=unchanged"
+  else
+    panic "protocol_all_engines: uppercase-authority lookup mismatch"
+
+checkAuthorityDuplicateIdentity : <IO> Unit
+checkAuthorityDuplicateIdentity =
+  let lower = mustEndpoint (queryEndpoint "com.example.identity.echo")
+  let upperAuthority = mustEndpoint (queryEndpoint "Com.Example.identity.echo")
+  let upperMethod = mustEndpoint (queryEndpoint "com.example.identity.Echo")
+  match (makeRegistry [lower, upperAuthority], makeRegistry [lower, upperMethod])
+    (Err _, Ok _) => println "CELL authority-duplicate-identity PASS folded-authority=true method-case=distinct"
+    _ => panic "protocol_all_engines: NSID duplicate identity mismatch"
+
 checkUnknown : <IO> Unit
 checkUnknown =
   let (next, response) = handleBytes server seededStore unknownRequest
@@ -153,6 +303,15 @@ main =
   let () = checkFixedQuery
   let () = checkChunkedUpdate
   let () = checkMalformed
+  let () = checkLowercaseVersion
+  let () = checkInvalidHost
+  let () = checkInvalidTarget
+  let () = checkRawText
+  let () = checkRawJson
+  let () = checkRawOpaque
+  let () = checkProcedureParams
+  let () = checkUppercaseAuthority
+  let () = checkAuthorityDuplicateIdentity
   let () = checkUnknown
   let () = checkResource
   println "TOTAL: PASS"

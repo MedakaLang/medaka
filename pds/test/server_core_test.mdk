@@ -57,7 +57,7 @@ registry = mustRegistry (makeRegistry
 handler : Handler
 handler store (QueryCall "com.example.query.fixed" _) =
   (store, mustResponse 200 "OK" "fixed")
-handler store (ProcedureRawCall "com.example.block.put" _ bytes) = match storePut (cidForRaw bytes) bytes store
+handler store (ProcedureRawCall "com.example.block.put" [] _ bytes) = match storePut (cidForRaw bytes) bytes store
   Err message =>
     panic "server_core_test: verified store update failed: \{message}"
   Ok next => (next, mustResponse 201 "Created" "stored")

@@ -145,12 +145,53 @@ allToken input pos end =
   else
     isTokenByte input[pos] && allToken input (pos + 1) end
 
-validTarget : Array Int -> Int -> Int -> Bool
-validTarget input pos end =
+isHexByte : Int -> Bool
+isHexByte byte = byte >= 48 && byte <= 57
+  || byte >= 65 && byte <= 70
+  || byte >= 97 && byte <= 102
+
+isUnreservedByte : Int -> Bool
+isUnreservedByte byte = byte >= 48 && byte <= 57
+  || byte >= 65 && byte <= 90
+  || byte >= 97 && byte <= 122
+  || byte == 45
+  || byte == 46
+  || byte == 95
+  || byte == 126
+
+isSubDelimiterByte : Int -> Bool
+isSubDelimiterByte byte = byte == 33
+  || byte == 36
+  || byte == 38
+  || byte == 39
+  || byte == 40
+  || byte == 41
+  || byte == 42
+  || byte == 43
+  || byte == 44
+  || byte == 59
+  || byte == 61
+
+validTarget : Array Int -> Int -> Int -> Bool -> Bool
+validTarget input pos end query =
   if pos >= end then True
   else
     let byte = input[pos]
-    byte >= 33 && byte <= 126 && byte /= 35 && validTarget input (pos + 1) end
+    if byte == 37 then pos + 2 < end && isHexByte input[pos + 1] && isHexByte input[pos + 2] && validTarget input (pos + 3) end query
+    else
+      let pchar = isUnreservedByte byte || isSubDelimiterByte byte || byte == 58 || byte == 64
+      if pchar || byte == 47 || query && byte == 63 then
+        validTarget input (pos + 1) end query
+      else if not query && byte == 63 then
+        validTarget input (pos + 1) end True
+      else
+        False
+
+exactAsciiAt : Array Int -> Int -> String -> Bool
+exactAsciiAt input start expected =
+  let bytes = toUtf8 expected
+  let size = arrayLength bytes
+  start + size <= arrayLength input && slice input start size == bytes
 
 validFieldValue : Array Int -> Int -> Int -> Bool
 validFieldValue input pos end =
@@ -196,9 +237,9 @@ parseRequestLine input = do
     malformed "http: invalid method token"
   else if secondSpace == firstSpace + 1 then
     malformed "http: empty request target"
-  else if input[firstSpace + 1] /= 47 || not (validTarget input (firstSpace + 1) secondSpace) then
+  else if input[firstSpace + 1] /= 47 || not (validTarget input (firstSpace + 1) secondSpace False) then
     malformed "http: request target must be an origin-form ASCII target without a fragment"
-  else if secondSpace + 9 /= end || lowerAscii input (secondSpace + 1) end /= "http/1.1" then
+  else if secondSpace + 9 /= end || not (exactAsciiAt input (secondSpace + 1) "HTTP/1.1") then
     malformed "http: only HTTP/1.1 requests are supported"
   else
     Ok (RequestLine (fromUtf8 (slice input 0 firstSpace)) (fromUtf8 (slice input (firstSpace + 1) (secondSpace - firstSpace - 1))) (end + 2))
@@ -362,13 +403,138 @@ keepAliveFromHeaders ((Header name value)::rest) = do
     closes <- parseConnectionValue value 0 False
     Ok (restKeepAlive && not closes)
 
+validRegName : Array Int -> Int -> Int -> Bool
+validRegName value pos end =
+  if pos >= end then True
+  else
+    let byte = value[pos]
+    if byte == 37 then
+      pos + 2 < end && isHexByte value[pos + 1] && isHexByte value[pos + 2] && validRegName value (pos + 3) end
+    else
+      (isUnreservedByte byte || isSubDelimiterByte byte) && validRegName value (pos + 1) end
+
+allDigits : Array Int -> Int -> Int -> Bool
+allDigits value pos end =
+  if pos >= end then
+    True
+  else
+    value[pos] >= 48 && value[pos] <= 57 && allDigits value (pos + 1) end
+
+decimalValue : Array Int -> Int -> Int -> Int -> Int
+decimalValue value pos end acc =
+  if pos >= end then
+    acc
+  else
+    decimalValue value (pos + 1) end (acc * 10 + value[pos] - 48)
+
+validIpv4 : Array Int -> Int -> Int -> Int -> Bool
+validIpv4 value start end parts =
+  if parts >= 4 || start >= end then False
+  else
+    let dot = match findByte value start end 46
+      None => end
+      Some pos => pos
+    let size = dot - start
+    let validPart = size >= 1 && size <= 3 && allDigits value start dot && decimalValue value start dot 0 <= 255 && (size == 1 || value[start] /= 48)
+    if not validPart then
+      False
+    else if dot == end then
+      parts == 3
+    else
+      validIpv4 value (dot + 1) end (parts + 1)
+
+allHex : Array Int -> Int -> Int -> Bool
+allHex value pos end =
+  if pos >= end then
+    True
+  else
+    isHexByte value[pos] && allHex value (pos + 1) end
+
+validIpv6Go : Array Int -> Int -> Int -> Int -> Bool -> Bool
+validIpv6Go value pos end groups compressed =
+  if pos >= end then if compressed then groups < 8 else groups == 8
+  else
+    let colon = match findByte value pos end 58
+      None => end
+      Some at => at
+    if colon == pos then False
+    else
+      let dot = findByte value pos colon 46
+      let componentGroups = match dot
+        None => if colon - pos <= 4 && allHex value pos colon then 1 else 9
+        Some _ => if colon == end && validIpv4 value pos colon 0 then 2 else 9
+      let nextGroups = groups + componentGroups
+      if nextGroups > 8 then
+        False
+      else if colon == end then
+        if compressed then nextGroups < 8 else nextGroups == 8
+      else if colon + 1 < end && value[colon + 1] == 58 then
+        not compressed && validIpv6Go value (colon + 2) end nextGroups True
+      else
+        validIpv6Go value (colon + 1) end nextGroups compressed
+
+validIpv6 : Array Int -> Int -> Int -> Bool
+validIpv6 value start end =
+  if start >= end then
+    False
+  else if value[start] == 58 then
+    start + 1 < end && value[start + 1] == 58 && validIpv6Go value (start + 2) end 0 True
+  else
+    validIpv6Go value start end 0 False
+
+scanHex : Array Int -> Int -> Int -> Int
+scanHex value pos end =
+  if pos < end && isHexByte value[pos] then
+    scanHex value (pos + 1) end
+  else
+    pos
+
+validIpvFutureTail : Array Int -> Int -> Int -> Bool
+validIpvFutureTail value pos end =
+  if pos >= end then True
+  else
+    let byte = value[pos]
+    (isUnreservedByte byte || isSubDelimiterByte byte || byte == 58)
+      && validIpvFutureTail value (pos + 1) end
+
+validIpvFuture : Array Int -> Int -> Int -> Bool
+validIpvFuture value start end =
+  if start >= end || value[start] /= 118 && value[start] /= 86 then False
+  else
+    let versionEnd = scanHex value (start + 1) end
+    versionEnd > start + 1
+      && versionEnd < end
+      && value[versionEnd] == 46
+      && versionEnd + 1 < end
+      && validIpvFutureTail value (versionEnd + 1) end
+
+validIpLiteral : Array Int -> Int -> Int -> Bool
+validIpLiteral value start end = validIpv6 value start end
+  || validIpvFuture value start end
+
+validHostAuthority : Array Int -> Bool
+validHostAuthority value =
+  let end = arrayLength value
+  if end == 0 then False
+  else
+    if value[0] == 91 then match findByte value 1 end 93
+      None => False
+      Some close => validIpLiteral value 1 close
+        && (close + 1 == end || close + 2 < end && value[close + 1] == 58 && allDigits value (close + 2) end)
+    else match findByte value 0 end 58
+      None => validRegName value 0 end
+      Some colon => colon > 0
+        && validRegName value 0 colon
+        && colon + 1 < end
+        && allDigits value (colon + 1) end
+
 validateHost : List Header -> Result HttpParseFailure Unit
 validateHost headers =
   if countNamed "host" headers /= 1 then malformed "http: HTTP/1.1 requires exactly one Host field"
   else match findNamed "host" headers
     Some value =>
-      if arrayLength value == 0 then
-        malformed "http: Host field must not be empty"
+      if not (validHostAuthority value) then
+        malformed "http: Host field must contain a valid authority"
       else
         Ok ()
     None => malformed "http: missing Host field"

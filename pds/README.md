@@ -253,8 +253,10 @@ row requires its Wasm prerequisites, so a missing third engine is a failure.
 duplicate-aware framing and exposes typed malformed versus resource-excess
 failure classes without diagnostic-string inspection. Responses serialize
 deterministically. `pds/lib/xrpc.mdk` turns framed requests into typed query or
-procedure calls and owns the canonical JSON error envelope. `uploadBlob`-shape
-input is a raw MIME body, not multipart.
+procedure calls, preserving ordered parameters on both, and owns the canonical
+JSON error envelope. `uploadBlob`-shape input is a wildcard raw MIME body, not
+multipart, so its media type never selects JSON or text decoding. NSID authority
+identity is case-insensitive while method names remain case-sensitive.
 
 `pds/lib/store.mdk` is an opaque immutable wrapper around the verified
 `BlockStore`. `pds/lib/server_core.mdk` configures a registry plus injected pure
@@ -266,8 +268,8 @@ socket, runtime-I/O, or async code.
 The buffered policy caps combined headers at 64 KiB, JSON at 150 KiB, text at
 100 KiB, and raw/blob bodies at 5 MiB, with separate bounded line, field,
 trailer, and chunk counts. `pds/test/protocol_all_engines.sh` requires exact
-eval/native/Wasm agreement on five hand-authored protocol cells and runs a
-native direct-red mutation of the state-update assertion.
+eval/native/Wasm agreement on fourteen hand-authored protocol cells and runs a
+native direct-red mutation of a repaired raw-input assertion.
 
 ## secp256k1 scalar arithmetic (S-scalar, #1700)
 

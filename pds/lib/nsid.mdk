@@ -1,4 +1,4 @@
-{- | Shared normalized NSID validation for repository collections and XRPC.
+{- | Shared NSID validation and identity for repository collections and XRPC.
 
    Validation reports a typed cause. Callers own their diagnostic prefix and
    may deliberately collapse details at a protocol boundary. -}
@@ -35,7 +35,7 @@ validAuthorityBytes bytes i end =
   if i >= end then
     True
   else
-    (lowerByte bytes[i] || digitByte bytes[i] || bytes[i] == 45) && validAuthorityBytes bytes (i + 1) end
+    (alphaByte bytes[i] || digitByte bytes[i] || bytes[i] == 45) && validAuthorityBytes bytes (i + 1) end
 
 validateAuthoritySegment : Array Int -> Int -> Int -> Bool -> Result NsidError Unit
 validateAuthoritySegment bytes start end first =
@@ -90,7 +90,7 @@ validateName bytes start end =
   else
     Ok ()
 
--- | Validate the first `end` bytes as one normalized NSID. The prefix form
+-- | Validate the first `end` bytes as one NSID. The prefix form
 -- lets repository paths validate their collection without copying the rkey.
 export
 validateNsidPrefix : Array Int -> Int -> Result NsidError Unit
@@ -110,12 +110,43 @@ validateNsidPrefix bytes end =
           else
             validateName bytes (lastDot + 1) end
 
--- | Validate a complete normalized NSID string.
+-- | Validate a complete NSID string.
 export
 validateNsid : String -> Result NsidError Unit
 validateNsid nsid =
   let bytes = toUtf8 nsid
   validateNsidPrefix bytes (arrayLength bytes)
+
+foldAuthorityByte : Int -> Int
+foldAuthorityByte byte = if byte >= 65 && byte <= 90 then byte + 32 else byte
+
+sameIdentityBytes : Array Int -> Array Int -> Int -> Int -> Bool
+sameIdentityBytes left right authorityEnd i =
+  if i >= arrayLength left then True
+  else
+    let leftByte = left[i]
+    let rightByte = right[i]
+    let same = if i < authorityEnd then
+      foldAuthorityByte leftByte == foldAuthorityByte rightByte
+    else
+      leftByte == rightByte
+    same && sameIdentityBytes left right authorityEnd (i + 1)
+
+-- | Compare NSID identity using a case-insensitive authority and a
+-- case-sensitive method name. Callers retain the original spelling.
+export
+sameNsidIdentity : String -> String -> Bool
+sameNsidIdentity left right =
+  let leftBytes = toUtf8 left
+  let rightBytes = toUtf8 right
+  let leftSize = arrayLength leftBytes
+  let rightSize = arrayLength rightBytes
+  let leftDot = lastDotBefore leftBytes 0 leftSize (-1)
+  let rightDot = lastDotBefore rightBytes 0 rightSize (-1)
+  leftSize == rightSize
+    && leftDot == rightDot
+    && leftDot >= 0
+    && sameIdentityBytes leftBytes rightBytes leftDot 0
 
 -- | Stable repository-facing wording retained while the validation authority
 -- moves into this shared module.
@@ -134,7 +165,7 @@ nsidErrorMessage NsidAuthoritySegmentHyphen =
 nsidErrorMessage NsidTopLevelStartsWithDigit =
   "invalid collection NSID top-level segment"
 nsidErrorMessage NsidAuthorityNotNormalized =
-  "collection NSID authority must be normalized lowercase ASCII"
+  "collection NSID authority contains invalid characters"
 nsidErrorMessage NsidNameLength = "invalid collection NSID name length"
 nsidErrorMessage NsidNameStart = "invalid collection NSID name start"
 nsidErrorMessage NsidNameCharacters = "invalid collection NSID name characters"
