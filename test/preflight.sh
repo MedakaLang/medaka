@@ -693,6 +693,9 @@ for f in $changed; do
       # without this line a change to test_cmd.mdk derives a gate set that omits
       # the one gate that would catch it regressing native doctest execution.
       add 'diff_compiler_test_native' ;;
+    # #2191 (S-4-gate-verify): gate_cmd.mdk implements `medaka gate verify`/
+    # `explain` — a change here moves the registry drift gate's OWN behavior.
+    compiler/tools/gate_cmd.mdk)  add 'diff_compiler_gate_registry' ;;
     compiler/tools/*)              add 'diff_compiler_check*' ;;
 
     # ── the compiler's private mini-stdlib: used by every stage. ──
@@ -798,6 +801,10 @@ for f in $changed; do
     # under test/ that `_fixture_dir_for` cannot see, and both are exactly what
     # someone edits ALONE when their gate goes red.
     test/IFACE-ORDER-LEDGER.txt)   add 'diff_compiler_iface_order' ;;
+    # #2191 (S-4-gate-verify): the registry itself. A loose file under test/
+    # that `_fixture_dir_for` cannot see (no *fixtures*/*goldens* ancestor),
+    # and exactly what someone edits ALONE when enrolling or fixing a gate.
+    test/gates.toml)               add 'diff_compiler_gate_registry' ;;
     # Third ledger, same structural blind spot (#1608). Its rows pin a WRONG VALUE
     # rather than a divergence — see its own header — but the masking path is
     # identical: a loose file under test/ that someone edits ALONE when the gate reds.

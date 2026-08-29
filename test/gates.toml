@@ -2971,3 +2971,21 @@ sources = []
 corpus = []
 toolchain = ["wasm-tools", "node>=24", "clang"]
 
+# The gate registry's own drift gate (#2176 S-4) — `area = "infra"` alongside
+# diff_compiler_ci_shard_coverage, its closest sibling: both police the map
+# between what exists on disk and what a consumer believes exists, rather
+# than checking compiler output (which would argue for "soundness", the area
+# diff_compiler_project_enrolment/diff_compiler_ci_guard_failsafe use).
+[[gate]]
+name = "diff_compiler_gate_registry"
+area = "infra"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_gate_registry.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+

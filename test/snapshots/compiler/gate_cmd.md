@@ -1,15 +1,17 @@
 # META
-source_lines=1070
+source_lines=1377
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
 
-   Two commands so far: `medaka gate list [<selector>...] [--json]` (the read
-   path — the registry schema `test/gates.toml`, a reader for it, and the
-   selector language) and `medaka gate run [<selector>...]`, which EXECUTES the
-   selected gates.  `verify` and `explain`
-   (docs/ops/GATE-REGISTRY-DESIGN.md §3) are later slices; they are rejected
-   here with a message that says so rather than silently doing nothing.
+   Four commands: `medaka gate list [<selector>...] [--json]` (the read path —
+   the registry schema `test/gates.toml`, a reader for it, and the selector
+   language), `medaka gate run [<selector>...]`, which EXECUTES the selected
+   gates, `medaka gate verify` (the drift gate: TEXT-ONLY, no build — every
+   gate candidate enrolled-or-ledgered, every entry's `run`/`oracles` targets
+   exist, every entry reachable by a selector) and `medaka gate explain
+   <path>` (the reverse lookup: which entries does a bare token select, and
+   via which field — `docs/ops/GATE-REGISTRY-DESIGN.md` §3).
 
    ⚠️ `gate run` is a NEW WAY TO INVOKE a gate script, not a new way for a gate
    to behave.  Every gate script, every assertion in it, and the meaning of
@@ -36,7 +38,9 @@ import json.{Json, JString, JInt, JFloat, JBool, jArray, jObject, stringify}
 import driver.build_cmd.{envOr, defaultMedakaRoot}
 import support.path.{joinPath}
 import support.util.{
+  contains,
   endsWith,
+  filterList,
   joinNl,
   joinWith,
   listLen,
@@ -44,6 +48,8 @@ import support.util.{
   reverseL,
   sortUniqS,
   splitNl,
+  splitOnChar,
+  startsWith,
   stringTrim,
 }
 
@@ -312,10 +318,12 @@ gateHelpText = stringConcat
     "medaka gate — Query the gate registry (test/gates.toml)\n",
     "\n",
     "Usage:\n",
-    "  medaka gate list [<selector>...] [--json] [--registry <path>]\n",
-    "  medaka gate run  [<selector>...] [--dry-run] [--json] [--report <path>]\n",
-    "                   [--timeout <secs>] [--jobs <n>] [--no-stale-check]\n",
-    "                   [--registry <path>]\n",
+    "  medaka gate list    [<selector>...] [--json] [--registry <path>]\n",
+    "  medaka gate run     [<selector>...] [--dry-run] [--json] [--report <path>]\n",
+    "                      [--timeout <secs>] [--jobs <n>] [--no-stale-check]\n",
+    "                      [--registry <path>]\n",
+    "  medaka gate verify  [--registry <path>]\n",
+    "  medaka gate explain <path> [--registry <path>]\n",
     "\n",
     "Selectors (conjunction — a gate must match all of them):\n",
     "  name:<glob>      gate name, e.g. name:diff_compiler_*\n",
@@ -345,8 +353,15 @@ gateHelpText = stringConcat
     "`gate run` reports each gate's RAW exit code and never normalizes polarity:\n",
     "diff_compiler_must_fail is healthy when RED ([G-MUST-FAIL]).\n",
     "\n",
-    "`gate verify` and `gate explain` are not implemented yet\n",
-    "(see docs/ops/GATE-REGISTRY-DESIGN.md §3).\n",
+    "`gate verify` is the drift gate: text-only, no build. Checks every gate\n",
+    "candidate (test/preflight.sh's own candidate universe) is enrolled or\n",
+    "explicitly listed as a non-gate tool, every entry's run/oracles targets\n",
+    "exist, and every entry is reachable by a selector. Exits nonzero on any\n",
+    "violation.\n",
+    "\n",
+    "`gate explain <path>` prints which entries a bare token matches and via\n",
+    "which field (name/area/project/tier/run). `sources`/`corpus`-based\n",
+    "matching is not live yet (S-5).\n",
   ]
 
 -- Parsed `gate list` argv.
@@ -436,23 +451,19 @@ joinSpace [] = ""
 joinSpace (x::[]) = x
 joinSpace (x::xs) = "\{x} \{joinSpace xs}"
 
-{- | `medaka gate <sub> …`.  Only `list` exists in this slice; `run`/`verify`/
-   `explain` are named explicitly so an agent reaching for one gets told they
-   are not here yet rather than a generic "unknown subcommand". -}
+{- | `medaka gate <sub> …`. -}
 export
 runGateCmd : List String -> <IO> Unit
 runGateCmd [] =
-  emit (Err "usage: medaka gate <list|run> [<selector>...] [--json]")
+  emit (Err
+    "usage: medaka gate <list|run|verify|explain> [<selector>...] [--json]")
 runGateCmd ("list"::rest) = emit (listOutput rest)
 runGateCmd ("run"::rest) = runRunCmdBody rest
-runGateCmd ("verify"::_) =
-  emit (Err
-    "medaka gate verify: not implemented yet (see docs/ops/GATE-REGISTRY-DESIGN.md §3)")
-runGateCmd ("explain"::_) =
-  emit (Err
-    "medaka gate explain: not implemented yet (see docs/ops/GATE-REGISTRY-DESIGN.md §3)")
+runGateCmd ("verify"::rest) = verifyCmdBody rest
+runGateCmd ("explain"::rest) = explainCmdBody rest
 runGateCmd (sub::_) =
-  emit (Err "medaka gate: unknown subcommand '\{sub}' (expected: list, run)")
+  emit (Err
+    "medaka gate: unknown subcommand '\{sub}' (expected: list, run, verify, explain)")
 
 -- ── `gate run` ──────────────────────────────────────────────────────────────
 --
@@ -1059,6 +1070,302 @@ runRunCmdBody argv = match parseRunArgs argv emptyRunArgs
         Ok src => match selectFor path a.selectors sels src
           Err m => emit (Err m)
           Ok gs => runSelected a gs
+
+-- ── `gate verify` ───────────────────────────────────────────────────────────
+--
+-- The drift gate (#2176 S-4, docs/ops/GATE-REGISTRY-DESIGN.md §3).  TEXT-ONLY,
+-- no build — runs everywhere, cheap.  Four checks, each its own violation
+-- class:
+--
+--   1. every gate CANDIDATE — test/preflight.sh's own `_gate_candidates`
+--      (tracked-or-untracked `*.sh`, MINUS every name in
+--      test/CI-COVERAGE-TOOLS.txt) — is ENROLLED (some entry's `run` equals
+--      its path) or excluded there.  No third state.  This mirrors
+--      preflight's own two `git ls-files` calls exactly rather than
+--      re-deriving the universe — see the packet's own warning: any drift
+--      here would make `verify` green over a corpus S-2 already reconciled,
+--      proving nothing.
+--   2. every entry's `run` target exists on disk.
+--   3. every entry's non-empty `oracles` names a real
+--      `test/build_oracles.sh --list` entry.
+--   4. every entry is reachable by at least one selector.  Under today's
+--      schema this is TRIVIALLY true for every well-formed entry (a literal
+--      glob always matches itself) — the one shape that can fail is an entry
+--      whose `name` itself contains a `:`, which the BARE-sugar CLI form
+--      misparses as an unknown `field:` prefix (`parseSelector`) even though
+--      the explicit `name:<name>` form still finds it.  Both are checked
+--      here.
+--
+-- `sources`/`corpus` are still empty on every entry (S-5's job): "target
+-- exists" for them degrades to "field present", already enforced by `reqArr`
+-- at parse time (an absent list is a read error) — nothing further to check.
+
+nonBlank : String -> Bool
+nonBlank s = stringTrim s /= ""
+
+-- The exact two invocations test/preflight.sh's `_gate_candidates` makes,
+-- scoped to THIS worktree (never a bare filesystem walk — this box keeps many
+-- agent worktrees, and `git ls-files` stays scoped to the working tree it is
+-- run in).
+gitLsFilesSh : String -> List String -> <IO> List String
+gitLsFilesSh root args = match runCommand "git" (["-C", root] ++ args ++ ["*.sh"])
+  Err _ => []
+  Ok (_, out, _) => filterList nonBlank (splitNl out)
+
+gateCandidates : String -> <IO> List String
+gateCandidates root =
+  let tracked = gitLsFilesSh root ["ls-files"]
+  let untracked = gitLsFilesSh root ["ls-files", "-o", "--exclude-standard"]
+  sortUniqS (tracked ++ untracked)
+
+-- test/CI-COVERAGE-TOOLS.txt: one non-comment, non-blank line per excluded
+-- tool, keyed by its FIRST whitespace-separated token (repo-relative path,
+-- no `.sh`) — the same `awk 'NF { print $1 }'` preflight.sh runs.
+liveLine : String -> Bool
+liveLine l = nonBlank l && not (startsWith "#" (stringTrim l))
+
+firstToken : String -> String
+firstToken l = firstNonBlankTok (splitOnChar ' ' l)
+
+firstNonBlankTok : List String -> String
+firstNonBlankTok [] = ""
+firstNonBlankTok (x::xs) = if nonBlank x then x else firstNonBlankTok xs
+
+toolNames : String -> <IO> List String
+toolNames root = match readFile (joinPath root "test/CI-COVERAGE-TOOLS.txt")
+  Err _ => []
+  Ok src =>
+    filterList nonBlank (map firstToken (filterList liveLine (splitNl src)))
+
+stripSh : String -> String
+stripSh p = if endsWith ".sh" p then stringSlice 0 (stringLength p - 3) p else p
+
+allRuns : List Gate -> List String
+allRuns [] = []
+allRuns (g::gs) = g.run :: allRuns gs
+
+-- Check 1: every candidate is enrolled (its path is some entry's `run`) or
+-- excluded (its path minus `.sh` is in test/CI-COVERAGE-TOOLS.txt).
+unenrolledViolations : List String -> List String -> List String -> List String
+unenrolledViolations _ _ [] = []
+unenrolledViolations tools runs (c::cs)
+  | contains (stripSh c) tools = unenrolledViolations tools runs cs
+  | contains c runs = unenrolledViolations tools runs cs
+  | otherwise = "unenrolled: \{c}  (not a `run` in test/gates.toml, not listed in test/CI-COVERAGE-TOOLS.txt)" :: unenrolledViolations tools runs cs
+
+-- Check 2: every entry's `run` target exists on disk (S-1/S-2's decision:
+-- `run` is already the resolved relative path — a plain file-exists check,
+-- not a re-glob against run_gates.sh's two-glob rule).
+runTargetViolations : String -> List Gate -> <IO> List String
+runTargetViolations _ [] = []
+runTargetViolations root (g::gs) =
+  let rest = runTargetViolations root gs
+  if fileExists "\{root}/\{g.run}" then
+    rest
+  else
+    "\{g.name}: run target does not exist: \{g.run}"::rest
+
+-- Check 3: every non-empty oracle name is one of build_oracles.sh's own
+-- ENTRIES (via its `--list` mode — no clang/libgc needed, builds nothing).
+knownOracles : String -> <IO> List String
+knownOracles root = match runCommand "sh" ["\{root}/test/build_oracles.sh", "--list"]
+  Err _ => []
+  Ok (_, out, _) => filterList nonBlank (splitNl out)
+
+-- Two probe names build_oracles.sh deliberately does NOT list in ENTRIES,
+-- because a DIFFERENT script builds them (test/wasm/build_wasm_oracle.sh) —
+-- build_oracles.sh's own `_foreign` comment names exactly these two ("the
+-- emit probes ... are not in ENTRIES at all; they are built by
+-- test/wasm/build_wasm_oracle.sh"). Named here rather than re-derived, the
+-- same "named exception" shape test/diff_compiler_project_enrolment.sh's
+-- UNIVERSAL_GATES uses — treating them as unknown would red `verify` on the
+-- clean tree over a probe that is real and does get built, just not by this
+-- script.
+foreignOracles : List String
+foreignOracles = ["wasm_emit_main", "wasm_emit_modules_main"]
+
+oracleNamesMissing : List String -> String -> List String -> List String
+oracleNamesMissing _ _ [] = []
+oracleNamesMissing known gname (o::os)
+  | contains o known || contains o foreignOracles =
+    oracleNamesMissing known gname os
+  | otherwise = "\{gname}: oracle not known to `test/build_oracles.sh --list` (nor the wasm-foreign set): \{o}" :: oracleNamesMissing known gname os
+
+oracleTargetViolations : List String -> List Gate -> List String
+oracleTargetViolations _ [] = []
+oracleTargetViolations known (g::gs) = oracleNamesMissing known g.name g.oracles
+  ++ oracleTargetViolations known gs
+
+-- Check 4: every entry is reachable by at least one selector.  See the block
+-- comment above for why this is near-vacuous under today's schema, and the
+-- one shape (a `:` in `name`) that is not.
+anyNamed : String -> List Gate -> Bool
+anyNamed _ [] = False
+anyNamed n (g::gs) = g.name == n || anyNamed n gs
+
+reachabilityFor : List Gate -> Gate -> List String
+reachabilityFor all g = match parseSelector g.name
+  Err m => [
+    "\{g.name}: its own name is not a valid bare selector (\{m}) — reachable only via an explicit `name:\{g.name}`, not the bare CLI form"
+  ]
+  Ok sel =>
+    if anyNamed g.name (selectGates [sel] all) then
+      []
+    else
+      [
+        "\{g.name}: `name:\{g.name}` does not select this entry (registry/selector bug)"
+      ]
+
+reachabilityViolations : List Gate -> List Gate -> List String
+reachabilityViolations _ [] = []
+reachabilityViolations all (g::gs) = reachabilityFor all g
+  ++ reachabilityViolations all gs
+
+-- ── assembling and rendering the four classes ───────────────────────────────
+
+verifyClasses : String -> List Gate -> <IO> List (String, List String)
+verifyClasses root gates =
+  let cands = gateCandidates root
+  let tools = toolNames root
+  let runs = allRuns gates
+  let known = knownOracles root
+  [
+    ("unenrolled gate scripts", unenrolledViolations tools runs cands),
+    ("missing run targets", runTargetViolations root gates),
+    ("missing oracle targets", oracleTargetViolations known gates),
+    ("unreachable entries", reachabilityViolations gates gates),
+  ]
+
+renderClass : (String, List String) -> String
+renderClass (title, []) = "OK    \{title}: 0\n"
+renderClass (title, vs) =
+  let names = joinNl (indentedNames vs)
+  "FAIL  \{title}: \{intToString (listLen vs)}\n\{names}\n"
+
+renderClasses : List (String, List String) -> String
+renderClasses [] = ""
+renderClasses (c::cs) = renderClass c ++ renderClasses cs
+
+totalViolations : List (String, List String) -> Int
+totalViolations [] = 0
+totalViolations ((_, vs)::cs) = listLen vs + totalViolations cs
+
+verifyOutput : String -> List Gate -> <IO> Result String String
+verifyOutput root gates =
+  let classes = verifyClasses root gates
+  let n = totalViolations classes
+  let body = renderClasses classes
+  if n == 0 then
+    Ok (body ++ "medaka gate verify: OK — \{intToString (listLen gates)} entries, 0 violations.\n")
+  else
+    Err (body ++ "medaka gate verify: FAIL — \{intToString n} violation(s) across \{intToString (listLen gates)} entries.\n")
+
+-- `verify` prints its body even on failure — the message-carrying `Err`
+-- string above IS the violation report, not a one-liner, so `emit`'s ordinary
+-- "print to stderr and exit 1" path is exactly what we want here too.
+data VerifyArgs = VerifyArgs { registry : Option String }
+
+parseVerifyArgs : List String -> VerifyArgs -> Result String VerifyArgs
+parseVerifyArgs [] acc = Ok acc
+parseVerifyArgs ("--registry"::p::rest) acc =
+  parseVerifyArgs rest VerifyArgs { acc | registry = Some p }
+parseVerifyArgs ("--registry"::[]) _ =
+  Err "medaka gate verify: --registry needs a path"
+parseVerifyArgs (a::_) _ = Err "medaka gate verify: unknown flag: \{a}"
+
+verifyCmdBody : List String -> <IO> Unit
+verifyCmdBody argv = match parseVerifyArgs argv VerifyArgs { registry = None }
+  Err m => emit (Err m)
+  Ok a =>
+    let path = registryPath a.registry
+    match readFile path
+      Err m => emit (Err "medaka gate verify: cannot read registry: \{m}")
+      Ok src => match parseRegistry src
+        Err m => emit (Err "medaka gate verify: \{m}")
+        Ok gates =>
+          let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+          emit (verifyOutput root gates)
+
+-- ── `gate explain <path>` ────────────────────────────────────────────────────
+--
+-- The reverse lookup: given one bare token, which registry entries would it
+-- select and via which field?  Pre-S-5 `sources`/`corpus` are empty, so a
+-- genuine SOURCE FILE (e.g. compiler/tools/gate_cmd.mdk) matches nothing yet
+-- — say so explicitly rather than printing a bare "no matches", which would
+-- read as "this file is untested" instead of "this feature isn't built yet".
+
+fieldHit : String -> Bool -> List String
+fieldHit _ False = []
+fieldHit field True = [field]
+
+matchedFields : String -> Gate -> List String
+matchedFields tok g = fieldHit "run" (tok == g.run)
+  ++ fieldHit "name" (tok == g.name)
+  ++ fieldHit "area" (tok == g.area)
+  ++ fieldHit "project" (tok == g.project)
+  ++ fieldHit "tier" (tok == g.tier)
+
+explainMatches : String -> List Gate -> List (Gate, List String)
+explainMatches _ [] = []
+explainMatches tok (g::gs) =
+  let fs = matchedFields tok g
+  let rest = explainMatches tok gs
+  if isEmptyStrs fs then rest else (g, fs)::rest
+
+isEmptyHits : List (Gate, List String) -> Bool
+isEmptyHits [] = True
+isEmptyHits _ = False
+
+renderExplainHit : (Gate, List String) -> String
+renderExplainHit (g, fs) =
+  let joined = joinWith ", " fs
+  "\{g.name}  (matched: \{joined})\n"
+
+renderExplainHits : List (Gate, List String) -> String
+renderExplainHits [] = ""
+renderExplainHits (h::hs) = renderExplainHit h ++ renderExplainHits hs
+
+explainNote : String
+explainNote = "note: `sources`/`corpus`-based matching is not live yet (S-5) — only\n"
+  ++ "name/area/project/tier/run EQUALITY is checked above.\n"
+
+explainOutput : String -> List Gate -> String
+explainOutput tok gates =
+  let hits = explainMatches tok gates
+  if isEmptyHits hits then
+    "no entry matches '\{tok}' via name/area/project/tier/run.\n" ++ explainNote
+  else
+    renderExplainHits hits ++ explainNote
+
+data ExplainArgs =
+  | ExplainArgs { registry : Option String, path : Option String }
+
+parseExplainArgs : List String -> ExplainArgs -> Result String ExplainArgs
+parseExplainArgs [] acc = Ok acc
+parseExplainArgs ("--registry"::p::rest) acc =
+  parseExplainArgs rest ExplainArgs { acc | registry = Some p }
+parseExplainArgs ("--registry"::[]) _ =
+  Err "medaka gate explain: --registry needs a path"
+parseExplainArgs (a::rest) acc
+  | stringLength a > 0 && stringSlice 0 1 a == "-" =
+    Err "medaka gate explain: unknown flag: \{a}"
+  | otherwise = match acc.path
+    Some _ => Err "medaka gate explain: expected exactly one <path> argument"
+    None => parseExplainArgs rest ExplainArgs { acc | path = Some a }
+
+explainCmdBody : List String -> <IO> Unit
+explainCmdBody argv = match parseExplainArgs argv ExplainArgs { registry = None, path = None }
+  Err m => emit (Err m)
+  Ok a => match a.path
+    None => emit (Err "usage: medaka gate explain <path> [--registry <path>]")
+    Some tok =>
+      let path = registryPath a.registry
+      match readFile path
+        Err m => emit (Err "medaka gate explain: cannot read registry: \{m}")
+        Ok src => match parseRegistry src
+          Err m => emit (Err "medaka gate explain: \{m}")
+          Ok gates => putStr (explainOutput tok gates)
+
 -- ── Properties ──────────────────────────────────────────────────────────────
 
 prop "a bare selector token is name: sugar" (n : Int) =
@@ -1077,7 +1384,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false) (mem "JInt" false) (mem "JFloat" false) (mem "JBool" false) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false))))
-(DUse false (UseGroup ("support" "util") ((mem "endsWith" false) (mem "joinNl" false) (mem "joinWith" false) (mem "listLen" false) (mem "parseDecChecked" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitNl" false) (mem "stringTrim" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "endsWith" false) (mem "filterList" false) (mem "joinNl" false) (mem "joinWith" false) (mem "listLen" false) (mem "parseDecChecked" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "stringTrim" false))))
 (DData Public "Gate" () ((variant "Gate" (ConNamed (field "name" (TyCon "String")) (field "area" (TyCon "String")) (field "project" (TyCon "String")) (field "tier" (TyCon "String")) (field "cost" (TyCon "String")) (field "kind" (TyCon "String")) (field "run" (TyCon "String")) (field "oracles" (TyApp (TyCon "List") (TyCon "String"))) (field "sources" (TyApp (TyCon "List") (TyCon "String"))) (field "corpus" (TyApp (TyCon "List") (TyCon "String"))) (field "toolchain" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig false "reqStr" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))
 (DFunDef false "reqStr" ((PVar "i") (PVar "field") (PVar "entry")) (EMatch (EApp (EApp (EVar "getString") (EVar "field")) (EVar "entry")) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "Ok") (EVar "s"))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "gates.toml: [[gate]] #")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ": missing required string field '"))) (EApp (EVar "display") (EVar "field"))) (ELit (LString "'")))))))
@@ -1128,7 +1435,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DTypeSig true "renderJson" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyCon "String")))
 (DFunDef false "renderJson" ((PVar "gs")) (EApp (EVar "stringify") (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "gateJson")) (EVar "gs")))))
 (DTypeSig true "gateHelpText" (TyCon "String"))
-(DFunDef false "gateHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka gate — Query the gate registry (test/gates.toml)\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka gate list [<selector>...] [--json] [--registry <path>]\n")) (ELit (LString "  medaka gate run  [<selector>...] [--dry-run] [--json] [--report <path>]\n")) (ELit (LString "                   [--timeout <secs>] [--jobs <n>] [--no-stale-check]\n")) (ELit (LString "                   [--registry <path>]\n")) (ELit (LString "\n")) (ELit (LString "Selectors (conjunction — a gate must match all of them):\n")) (ELit (LString "  name:<glob>      gate name, e.g. name:diff_compiler_*\n")) (ELit (LString "  area:<glob>      semantic area, e.g. area:backend\n")) (ELit (LString "  project:<glob>   owning project, e.g. project:sqlite\n")) (ELit (LString "  tier:<glob>      merge | nightly | ondemand\n")) (ELit (LString "  <glob>           sugar for name:<glob>\n")) (ELit (LString "\n")) (ELit (LString "A selector matching zero gates is an error, not an empty list.\n")) (ELit (LString "\n")) (ELit (LString "  --json             list: the registry entries as JSON.\n")) (ELit (LString "                     run: the machine-readable run report as JSON.\n")) (ELit (LString "  --registry <path>  read this registry instead of <MEDAKA_ROOT>/test/gates.toml\n")) (ELit (LString "\n")) (ELit (LString "`gate run` only:\n")) (ELit (LString "  --dry-run          print the resolved invocation plan; execute nothing\n")) (ELit (LString "  --report <path>    write the per-gate timing report (JSON) to <path>\n")) (ELit (LString "  --timeout <secs>   override the per-gate fuse (default by `cost`:\n")) (ELit (LString "                     cheap 300s, medium 900s, heavy 3600s)\n")) (ELit (LString "  --jobs <n>         ACCEPTED BUT IGNORED — this runner is sequential; the\n")) (ELit (LString "                     value is recorded in the report.  Medaka has no\n")) (ELit (LString "                     concurrency primitive (stdlib/runtime.mdk has no\n")) (ELit (LString "                     fork/waitpid) and runCommand blocks.\n")) (ELit (LString "  --no-stale-check   skip the stale-oracle refusal (as NO_STALE_CHECK=1 does;\n")) (ELit (LString "                     it is also skipped whenever CI is set, on purpose)\n")) (ELit (LString "\n")) (ELit (LString "`gate run` reports each gate's RAW exit code and never normalizes polarity:\n")) (ELit (LString "diff_compiler_must_fail is healthy when RED ([G-MUST-FAIL]).\n")) (ELit (LString "\n")) (ELit (LString "`gate verify` and `gate explain` are not implemented yet\n")) (ELit (LString "(see docs/ops/GATE-REGISTRY-DESIGN.md §3).\n")))))
+(DFunDef false "gateHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka gate — Query the gate registry (test/gates.toml)\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka gate list    [<selector>...] [--json] [--registry <path>]\n")) (ELit (LString "  medaka gate run     [<selector>...] [--dry-run] [--json] [--report <path>]\n")) (ELit (LString "                      [--timeout <secs>] [--jobs <n>] [--no-stale-check]\n")) (ELit (LString "                      [--registry <path>]\n")) (ELit (LString "  medaka gate verify  [--registry <path>]\n")) (ELit (LString "  medaka gate explain <path> [--registry <path>]\n")) (ELit (LString "\n")) (ELit (LString "Selectors (conjunction — a gate must match all of them):\n")) (ELit (LString "  name:<glob>      gate name, e.g. name:diff_compiler_*\n")) (ELit (LString "  area:<glob>      semantic area, e.g. area:backend\n")) (ELit (LString "  project:<glob>   owning project, e.g. project:sqlite\n")) (ELit (LString "  tier:<glob>      merge | nightly | ondemand\n")) (ELit (LString "  <glob>           sugar for name:<glob>\n")) (ELit (LString "\n")) (ELit (LString "A selector matching zero gates is an error, not an empty list.\n")) (ELit (LString "\n")) (ELit (LString "  --json             list: the registry entries as JSON.\n")) (ELit (LString "                     run: the machine-readable run report as JSON.\n")) (ELit (LString "  --registry <path>  read this registry instead of <MEDAKA_ROOT>/test/gates.toml\n")) (ELit (LString "\n")) (ELit (LString "`gate run` only:\n")) (ELit (LString "  --dry-run          print the resolved invocation plan; execute nothing\n")) (ELit (LString "  --report <path>    write the per-gate timing report (JSON) to <path>\n")) (ELit (LString "  --timeout <secs>   override the per-gate fuse (default by `cost`:\n")) (ELit (LString "                     cheap 300s, medium 900s, heavy 3600s)\n")) (ELit (LString "  --jobs <n>         ACCEPTED BUT IGNORED — this runner is sequential; the\n")) (ELit (LString "                     value is recorded in the report.  Medaka has no\n")) (ELit (LString "                     concurrency primitive (stdlib/runtime.mdk has no\n")) (ELit (LString "                     fork/waitpid) and runCommand blocks.\n")) (ELit (LString "  --no-stale-check   skip the stale-oracle refusal (as NO_STALE_CHECK=1 does;\n")) (ELit (LString "                     it is also skipped whenever CI is set, on purpose)\n")) (ELit (LString "\n")) (ELit (LString "`gate run` reports each gate's RAW exit code and never normalizes polarity:\n")) (ELit (LString "diff_compiler_must_fail is healthy when RED ([G-MUST-FAIL]).\n")) (ELit (LString "\n")) (ELit (LString "`gate verify` is the drift gate: text-only, no build. Checks every gate\n")) (ELit (LString "candidate (test/preflight.sh's own candidate universe) is enrolled or\n")) (ELit (LString "explicitly listed as a non-gate tool, every entry's run/oracles targets\n")) (ELit (LString "exist, and every entry is reachable by a selector. Exits nonzero on any\n")) (ELit (LString "violation.\n")) (ELit (LString "\n")) (ELit (LString "`gate explain <path>` prints which entries a bare token matches and via\n")) (ELit (LString "which field (name/area/project/tier/run). `sources`/`corpus`-based\n")) (ELit (LString "matching is not live yet (S-5).\n")))))
 (DData Private "ListArgs" () ((variant "ListArgs" (ConNamed (field "json" (TyCon "Bool")) (field "registry" (TyApp (TyCon "Option") (TyCon "String"))) (field "selectors" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig false "parseListArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "ListArgs") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "ListArgs")))))
 (DFunDef false "parseListArgs" ((PList) (PVar "acc")) (EApp (EVar "Ok") (EVariantUpdate "ListArgs" (EVar "acc") ((fa "selectors" (EApp (EApp (EVar "reverseStrs") (EFieldAccess (EVar "acc") "selectors")) (EListLit)))))))
@@ -1164,12 +1471,12 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "joinSpace" ((PCons (PVar "x") (PList))) (EVar "x"))
 (DFunDef false "joinSpace" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "x"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "joinSpace") (EVar "xs")))) (ELit (LString ""))))
 (DTypeSig true "runGateCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runGateCmd" ((PList)) (EApp (EVar "emit") (EApp (EVar "Err") (ELit (LString "usage: medaka gate <list|run> [<selector>...] [--json]")))))
+(DFunDef false "runGateCmd" ((PList)) (EApp (EVar "emit") (EApp (EVar "Err") (ELit (LString "usage: medaka gate <list|run|verify|explain> [<selector>...] [--json]")))))
 (DFunDef false "runGateCmd" ((PCons (PLit (LString "list")) (PVar "rest"))) (EApp (EVar "emit") (EApp (EVar "listOutput") (EVar "rest"))))
 (DFunDef false "runGateCmd" ((PCons (PLit (LString "run")) (PVar "rest"))) (EApp (EVar "runRunCmdBody") (EVar "rest")))
-(DFunDef false "runGateCmd" ((PCons (PLit (LString "verify")) PWild)) (EApp (EVar "emit") (EApp (EVar "Err") (ELit (LString "medaka gate verify: not implemented yet (see docs/ops/GATE-REGISTRY-DESIGN.md §3)")))))
-(DFunDef false "runGateCmd" ((PCons (PLit (LString "explain")) PWild)) (EApp (EVar "emit") (EApp (EVar "Err") (ELit (LString "medaka gate explain: not implemented yet (see docs/ops/GATE-REGISTRY-DESIGN.md §3)")))))
-(DFunDef false "runGateCmd" ((PCons (PVar "sub") PWild)) (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate: unknown subcommand '")) (EApp (EVar "display") (EVar "sub"))) (ELit (LString "' (expected: list, run)"))))))
+(DFunDef false "runGateCmd" ((PCons (PLit (LString "verify")) (PVar "rest"))) (EApp (EVar "verifyCmdBody") (EVar "rest")))
+(DFunDef false "runGateCmd" ((PCons (PLit (LString "explain")) (PVar "rest"))) (EApp (EVar "explainCmdBody") (EVar "rest")))
+(DFunDef false "runGateCmd" ((PCons (PVar "sub") PWild)) (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate: unknown subcommand '")) (EApp (EVar "display") (EVar "sub"))) (ELit (LString "' (expected: list, run, verify, explain)"))))))
 (DData Public "GateResult" () ((variant "GateResult" (ConNamed (field "name" (TyCon "String")) (field "script" (TyCon "String")) (field "shell" (TyCon "String")) (field "exitCode" (TyCon "Int")) (field "timedOut" (TyCon "Bool")) (field "spawnError" (TyCon "String")) (field "seconds" (TyCon "Float")) (field "out" (TyCon "String")) (field "err" (TyCon "String"))))) ())
 (DData Private "RunEnv" () ((variant "RunEnv" (ConNamed (field "root" (TyCon "String")) (field "medaka" (TyCon "String")) (field "emitter" (TyCon "String")) (field "scratchRoot" (TyCon "String")) (field "timeoutOverride" (TyCon "Int"))))) ())
 (DTypeSig false "timeoutFor" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Int"))))
@@ -1289,6 +1596,99 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "runSelected" ((PVar "a") (PVar "gs")) (EBlock (DoLet false false (PVar "env") (EApp (EVar "runEnvFor") (EVar "a"))) (DoExpr (EIf (EFieldAccess (EVar "a") "dryRun") (EApp (EVar "putStr") (EApp (EApp (EVar "dryLines") (EVar "env")) (EVar "gs"))) (EMatch (EApp (EApp (EApp (EVar "staleRefusal") (EFieldAccess (EVar "a") "noStaleCheck")) (EFieldAccess (EVar "env") "root")) (EVar "gs")) (arm (PCon "Some" (PVar "banner")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStr") (EVar "banner"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "None") () (EApp (EApp (EVar "finishRun") (EVar "a")) (EApp (EApp (EApp (EVar "runGatesLoop") (EVar "env")) (EVar "gs")) (EListLit)))))))))
 (DTypeSig false "runRunCmdBody" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runRunCmdBody" ((PVar "argv")) (EMatch (EApp (EApp (EVar "parseRunArgs") (EVar "argv")) (EVar "emptyRunArgs")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "a")) () (EMatch (EApp (EApp (EVar "parseSelectors") (EFieldAccess (EVar "a") "selectors")) (EListLit)) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate run: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "sels")) () (EBlock (DoLet false false (PVar "path") (EApp (EVar "registryPath") (EFieldAccess (EVar "a") "registry"))) (DoExpr (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate run: cannot read registry: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EApp (EApp (EApp (EVar "selectFor") (EVar "path")) (EFieldAccess (EVar "a") "selectors")) (EVar "sels")) (EVar "src")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "gs")) () (EApp (EApp (EVar "runSelected") (EVar "a")) (EVar "gs")))))))))))))
+(DTypeSig false "nonBlank" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "nonBlank" ((PVar "s")) (EBinOp "/=" (EApp (EVar "stringTrim") (EVar "s")) (ELit (LString ""))))
+(DTypeSig false "gitLsFilesSh" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "gitLsFilesSh" ((PVar "root") (PVar "args")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "git"))) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "-C")) (EVar "root")) (EVar "args")) (EListLit (ELit (LString "*.sh"))))) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PTuple PWild (PVar "out") PWild)) () (EApp (EApp (EVar "filterList") (EVar "nonBlank")) (EApp (EVar "splitNl") (EVar "out"))))))
+(DTypeSig false "gateCandidates" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "gateCandidates" ((PVar "root")) (EBlock (DoLet false false (PVar "tracked") (EApp (EApp (EVar "gitLsFilesSh") (EVar "root")) (EListLit (ELit (LString "ls-files"))))) (DoLet false false (PVar "untracked") (EApp (EApp (EVar "gitLsFilesSh") (EVar "root")) (EListLit (ELit (LString "ls-files")) (ELit (LString "-o")) (ELit (LString "--exclude-standard"))))) (DoExpr (EApp (EVar "sortUniqS") (EBinOp "++" (EVar "tracked") (EVar "untracked"))))))
+(DTypeSig false "liveLine" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "liveLine" ((PVar "l")) (EBinOp "&&" (EApp (EVar "nonBlank") (EVar "l")) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "#"))) (EApp (EVar "stringTrim") (EVar "l"))))))
+(DTypeSig false "firstToken" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "firstToken" ((PVar "l")) (EApp (EVar "firstNonBlankTok") (EApp (EApp (EVar "splitOnChar") (ELit (LChar " "))) (EVar "l"))))
+(DTypeSig false "firstNonBlankTok" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
+(DFunDef false "firstNonBlankTok" ((PList)) (ELit (LString "")))
+(DFunDef false "firstNonBlankTok" ((PCons (PVar "x") (PVar "xs"))) (EIf (EApp (EVar "nonBlank") (EVar "x")) (EVar "x") (EApp (EVar "firstNonBlankTok") (EVar "xs"))))
+(DTypeSig false "toolNames" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "toolNames" ((PVar "root")) (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "test/CI-COVERAGE-TOOLS.txt")))) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "filterList") (EVar "nonBlank")) (EApp (EApp (EVar "map") (EVar "firstToken")) (EApp (EApp (EVar "filterList") (EVar "liveLine")) (EApp (EVar "splitNl") (EVar "src"))))))))
+(DTypeSig false "stripSh" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "stripSh" ((PVar "p")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString ".sh"))) (EVar "p")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "p")) (ELit (LInt 3)))) (EVar "p")) (EVar "p")))
+(DTypeSig false "allRuns" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "allRuns" ((PList)) (EListLit))
+(DFunDef false "allRuns" ((PCons (PVar "g") (PVar "gs"))) (EBinOp "::" (EFieldAccess (EVar "g") "run") (EApp (EVar "allRuns") (EVar "gs"))))
+(DTypeSig false "unenrolledViolations" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "unenrolledViolations" (PWild PWild (PList)) (EListLit))
+(DFunDef false "unenrolledViolations" ((PVar "tools") (PVar "runs") (PCons (PVar "c") (PVar "cs"))) (EIf (EApp (EApp (EVar "contains") (EApp (EVar "stripSh") (EVar "c"))) (EVar "tools")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cs")) (EIf (EApp (EApp (EVar "contains") (EVar "c")) (EVar "runs")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cs")) (EIf (EVar "otherwise") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "unenrolled: ")) (EApp (EVar "display") (EVar "c"))) (ELit (LString "  (not a `run` in test/gates.toml, not listed in test/CI-COVERAGE-TOOLS.txt)"))) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cs"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "runTargetViolations" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "runTargetViolations" (PWild (PList)) (EListLit))
+(DFunDef false "runTargetViolations" ((PVar "root") (PCons (PVar "g") (PVar "gs"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EVar "runTargetViolations") (EVar "root")) (EVar "gs"))) (DoExpr (EIf (EApp (EVar "fileExists") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "root"))) (ELit (LString "/"))) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (EVar "rest") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": run target does not exist: "))) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString ""))) (EVar "rest"))))))
+(DTypeSig false "knownOracles" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "knownOracles" ((PVar "root")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "sh"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "root"))) (ELit (LString "/test/build_oracles.sh"))) (ELit (LString "--list")))) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PTuple PWild (PVar "out") PWild)) () (EApp (EApp (EVar "filterList") (EVar "nonBlank")) (EApp (EVar "splitNl") (EVar "out"))))))
+(DTypeSig false "foreignOracles" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "foreignOracles" () (EListLit (ELit (LString "wasm_emit_main")) (ELit (LString "wasm_emit_modules_main"))))
+(DTypeSig false "oracleNamesMissing" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "oracleNamesMissing" (PWild PWild (PList)) (EListLit))
+(DFunDef false "oracleNamesMissing" ((PVar "known") (PVar "gname") (PCons (PVar "o") (PVar "os"))) (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "o")) (EVar "known")) (EApp (EApp (EVar "contains") (EVar "o")) (EVar "foreignOracles"))) (EApp (EApp (EApp (EVar "oracleNamesMissing") (EVar "known")) (EVar "gname")) (EVar "os")) (EIf (EVar "otherwise") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "gname"))) (ELit (LString ": oracle not known to `test/build_oracles.sh --list` (nor the wasm-foreign set): "))) (EApp (EVar "display") (EVar "o"))) (ELit (LString ""))) (EApp (EApp (EApp (EVar "oracleNamesMissing") (EVar "known")) (EVar "gname")) (EVar "os"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "oracleTargetViolations" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "oracleTargetViolations" (PWild (PList)) (EListLit))
+(DFunDef false "oracleTargetViolations" ((PVar "known") (PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EApp (EApp (EVar "oracleNamesMissing") (EVar "known")) (EFieldAccess (EVar "g") "name")) (EFieldAccess (EVar "g") "oracles")) (EApp (EApp (EVar "oracleTargetViolations") (EVar "known")) (EVar "gs"))))
+(DTypeSig false "anyNamed" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyCon "Bool"))))
+(DFunDef false "anyNamed" (PWild (PList)) (EVar "False"))
+(DFunDef false "anyNamed" ((PVar "n") (PCons (PVar "g") (PVar "gs"))) (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "g") "name") (EVar "n")) (EApp (EApp (EVar "anyNamed") (EVar "n")) (EVar "gs"))))
+(DTypeSig false "reachabilityFor" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "reachabilityFor" ((PVar "all") (PVar "g")) (EMatch (EApp (EVar "parseSelector") (EFieldAccess (EVar "g") "name")) (arm (PCon "Err" (PVar "m")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": its own name is not a valid bare selector ("))) (EApp (EVar "display") (EVar "m"))) (ELit (LString ") — reachable only via an explicit `name:"))) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString "`, not the bare CLI form"))))) (arm (PCon "Ok" (PVar "sel")) () (EIf (EApp (EApp (EVar "anyNamed") (EFieldAccess (EVar "g") "name")) (EApp (EApp (EVar "selectGates") (EListLit (EVar "sel"))) (EVar "all"))) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": `name:"))) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString "` does not select this entry (registry/selector bug)"))))))))
+(DTypeSig false "reachabilityViolations" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "reachabilityViolations" (PWild (PList)) (EListLit))
+(DFunDef false "reachabilityViolations" ((PVar "all") (PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EApp (EVar "reachabilityFor") (EVar "all")) (EVar "g")) (EApp (EApp (EVar "reachabilityViolations") (EVar "all")) (EVar "gs"))))
+(DTypeSig false "verifyClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "verifyClasses" ((PVar "root") (PVar "gates")) (EBlock (DoLet false false (PVar "cands") (EApp (EVar "gateCandidates") (EVar "root"))) (DoLet false false (PVar "tools") (EApp (EVar "toolNames") (EVar "root"))) (DoLet false false (PVar "runs") (EApp (EVar "allRuns") (EVar "gates"))) (DoLet false false (PVar "known") (EApp (EVar "knownOracles") (EVar "root"))) (DoExpr (EListLit (ETuple (ELit (LString "unenrolled gate scripts")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cands"))) (ETuple (ELit (LString "missing run targets")) (EApp (EApp (EVar "runTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "missing oracle targets")) (EApp (EApp (EVar "oracleTargetViolations") (EVar "known")) (EVar "gates"))) (ETuple (ELit (LString "unreachable entries")) (EApp (EApp (EVar "reachabilityViolations") (EVar "gates")) (EVar "gates")))))))
+(DTypeSig false "renderClass" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "String")))
+(DFunDef false "renderClass" ((PTuple (PVar "title") (PList))) (EBinOp "++" (EBinOp "++" (ELit (LString "OK    ")) (EApp (EVar "display") (EVar "title"))) (ELit (LString ": 0\n"))))
+(DFunDef false "renderClass" ((PTuple (PVar "title") (PVar "vs"))) (EBlock (DoLet false false (PVar "names") (EApp (EVar "joinNl") (EApp (EVar "indentedNames") (EVar "vs")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FAIL  ")) (EApp (EVar "display") (EVar "title"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "vs"))))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "names"))) (ELit (LString "\n"))))))
+(DTypeSig false "renderClasses" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "String")))
+(DFunDef false "renderClasses" ((PList)) (ELit (LString "")))
+(DFunDef false "renderClasses" ((PCons (PVar "c") (PVar "cs"))) (EBinOp "++" (EApp (EVar "renderClass") (EVar "c")) (EApp (EVar "renderClasses") (EVar "cs"))))
+(DTypeSig false "totalViolations" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "Int")))
+(DFunDef false "totalViolations" ((PList)) (ELit (LInt 0)))
+(DFunDef false "totalViolations" ((PCons (PTuple PWild (PVar "vs")) (PVar "cs"))) (EBinOp "+" (EApp (EVar "listLen") (EVar "vs")) (EApp (EVar "totalViolations") (EVar "cs"))))
+(DTypeSig false "verifyOutput" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))
+(DFunDef false "verifyOutput" ((PVar "root") (PVar "gates")) (EBlock (DoLet false false (PVar "classes") (EApp (EApp (EVar "verifyClasses") (EVar "root")) (EVar "gates"))) (DoLet false false (PVar "n") (EApp (EVar "totalViolations") (EVar "classes"))) (DoLet false false (PVar "body") (EApp (EVar "renderClasses") (EVar "classes"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Ok") (EBinOp "++" (EVar "body") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: OK — ")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "gates"))))) (ELit (LString " entries, 0 violations.\n"))))) (EApp (EVar "Err") (EBinOp "++" (EVar "body") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: FAIL — ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " violation(s) across "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "gates"))))) (ELit (LString " entries.\n")))))))))
+(DData Private "VerifyArgs" () ((variant "VerifyArgs" (ConNamed (field "registry" (TyApp (TyCon "Option") (TyCon "String")))))) ())
+(DTypeSig false "parseVerifyArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "VerifyArgs") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "VerifyArgs")))))
+(DFunDef false "parseVerifyArgs" ((PList) (PVar "acc")) (EApp (EVar "Ok") (EVar "acc")))
+(DFunDef false "parseVerifyArgs" ((PCons (PLit (LString "--registry")) (PCons (PVar "p") (PVar "rest"))) (PVar "acc")) (EApp (EApp (EVar "parseVerifyArgs") (EVar "rest")) (EVariantUpdate "VerifyArgs" (EVar "acc") ((fa "registry" (EApp (EVar "Some") (EVar "p")))))))
+(DFunDef false "parseVerifyArgs" ((PCons (PLit (LString "--registry")) (PList)) PWild) (EApp (EVar "Err") (ELit (LString "medaka gate verify: --registry needs a path"))))
+(DFunDef false "parseVerifyArgs" ((PCons (PVar "a") PWild) PWild) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: unknown flag: ")) (EApp (EVar "display") (EVar "a"))) (ELit (LString "")))))
+(DTypeSig false "verifyCmdBody" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "verifyCmdBody" ((PVar "argv")) (EMatch (EApp (EApp (EVar "parseVerifyArgs") (EVar "argv")) (ERecordCreate "VerifyArgs" ((fa "registry" (EVar "None"))))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "a")) () (EBlock (DoLet false false (PVar "path") (EApp (EVar "registryPath") (EFieldAccess (EVar "a") "registry"))) (DoExpr (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: cannot read registry: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EVar "parseRegistry") (EVar "src")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "gates")) () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoExpr (EApp (EVar "emit") (EApp (EApp (EVar "verifyOutput") (EVar "root")) (EVar "gates"))))))))))))))
+(DTypeSig false "fieldHit" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "fieldHit" (PWild (PCon "False")) (EListLit))
+(DFunDef false "fieldHit" ((PVar "field") (PCon "True")) (EListLit (EVar "field")))
+(DTypeSig false "matchedFields" (TyFun (TyCon "String") (TyFun (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "matchedFields" ((PVar "tok") (PVar "g")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "fieldHit") (ELit (LString "run"))) (EBinOp "==" (EVar "tok") (EFieldAccess (EVar "g") "run"))) (EApp (EApp (EVar "fieldHit") (ELit (LString "name"))) (EBinOp "==" (EVar "tok") (EFieldAccess (EVar "g") "name")))) (EApp (EApp (EVar "fieldHit") (ELit (LString "area"))) (EBinOp "==" (EVar "tok") (EFieldAccess (EVar "g") "area")))) (EApp (EApp (EVar "fieldHit") (ELit (LString "project"))) (EBinOp "==" (EVar "tok") (EFieldAccess (EVar "g") "project")))) (EApp (EApp (EVar "fieldHit") (ELit (LString "tier"))) (EBinOp "==" (EVar "tok") (EFieldAccess (EVar "g") "tier")))))
+(DTypeSig false "explainMatches" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyTuple (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "explainMatches" (PWild (PList)) (EListLit))
+(DFunDef false "explainMatches" ((PVar "tok") (PCons (PVar "g") (PVar "gs"))) (EBlock (DoLet false false (PVar "fs") (EApp (EApp (EVar "matchedFields") (EVar "tok")) (EVar "g"))) (DoLet false false (PVar "rest") (EApp (EApp (EVar "explainMatches") (EVar "tok")) (EVar "gs"))) (DoExpr (EIf (EApp (EVar "isEmptyStrs") (EVar "fs")) (EVar "rest") (EBinOp "::" (ETuple (EVar "g") (EVar "fs")) (EVar "rest"))))))
+(DTypeSig false "isEmptyHits" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "Bool")))
+(DFunDef false "isEmptyHits" ((PList)) (EVar "True"))
+(DFunDef false "isEmptyHits" (PWild) (EVar "False"))
+(DTypeSig false "renderExplainHit" (TyFun (TyTuple (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "String")))
+(DFunDef false "renderExplainHit" ((PTuple (PVar "g") (PVar "fs"))) (EBlock (DoLet false false (PVar "joined") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "fs"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString "  (matched: "))) (EApp (EVar "display") (EVar "joined"))) (ELit (LString ")\n"))))))
+(DTypeSig false "renderExplainHits" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "String")))
+(DFunDef false "renderExplainHits" ((PList)) (ELit (LString "")))
+(DFunDef false "renderExplainHits" ((PCons (PVar "h") (PVar "hs"))) (EBinOp "++" (EApp (EVar "renderExplainHit") (EVar "h")) (EApp (EVar "renderExplainHits") (EVar "hs"))))
+(DTypeSig false "explainNote" (TyCon "String"))
+(DFunDef false "explainNote" () (EBinOp "++" (ELit (LString "note: `sources`/`corpus`-based matching is not live yet (S-5) — only\n")) (ELit (LString "name/area/project/tier/run EQUALITY is checked above.\n"))))
+(DTypeSig false "explainOutput" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyCon "String"))))
+(DFunDef false "explainOutput" ((PVar "tok") (PVar "gates")) (EBlock (DoLet false false (PVar "hits") (EApp (EApp (EVar "explainMatches") (EVar "tok")) (EVar "gates"))) (DoExpr (EIf (EApp (EVar "isEmptyHits") (EVar "hits")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "no entry matches '")) (EApp (EVar "display") (EVar "tok"))) (ELit (LString "' via name/area/project/tier/run.\n"))) (EVar "explainNote")) (EBinOp "++" (EApp (EVar "renderExplainHits") (EVar "hits")) (EVar "explainNote"))))))
+(DData Private "ExplainArgs" () ((variant "ExplainArgs" (ConNamed (field "registry" (TyApp (TyCon "Option") (TyCon "String"))) (field "path" (TyApp (TyCon "Option") (TyCon "String")))))) ())
+(DTypeSig false "parseExplainArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "ExplainArgs") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "ExplainArgs")))))
+(DFunDef false "parseExplainArgs" ((PList) (PVar "acc")) (EApp (EVar "Ok") (EVar "acc")))
+(DFunDef false "parseExplainArgs" ((PCons (PLit (LString "--registry")) (PCons (PVar "p") (PVar "rest"))) (PVar "acc")) (EApp (EApp (EVar "parseExplainArgs") (EVar "rest")) (EVariantUpdate "ExplainArgs" (EVar "acc") ((fa "registry" (EApp (EVar "Some") (EVar "p")))))))
+(DFunDef false "parseExplainArgs" ((PCons (PLit (LString "--registry")) (PList)) PWild) (EApp (EVar "Err") (ELit (LString "medaka gate explain: --registry needs a path"))))
+(DFunDef false "parseExplainArgs" ((PCons (PVar "a") (PVar "rest")) (PVar "acc")) (EIf (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "a")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "a")) (ELit (LString "-")))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate explain: unknown flag: ")) (EApp (EVar "display") (EVar "a"))) (ELit (LString "")))) (EIf (EVar "otherwise") (EMatch (EFieldAccess (EVar "acc") "path") (arm (PCon "Some" PWild) () (EApp (EVar "Err") (ELit (LString "medaka gate explain: expected exactly one <path> argument")))) (arm (PCon "None") () (EApp (EApp (EVar "parseExplainArgs") (EVar "rest")) (EVariantUpdate "ExplainArgs" (EVar "acc") ((fa "path" (EApp (EVar "Some") (EVar "a")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "explainCmdBody" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "explainCmdBody" ((PVar "argv")) (EMatch (EApp (EApp (EVar "parseExplainArgs") (EVar "argv")) (ERecordCreate "ExplainArgs" ((fa "registry" (EVar "None")) (fa "path" (EVar "None"))))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "a")) () (EMatch (EFieldAccess (EVar "a") "path") (arm (PCon "None") () (EApp (EVar "emit") (EApp (EVar "Err") (ELit (LString "usage: medaka gate explain <path> [--registry <path>]"))))) (arm (PCon "Some" (PVar "tok")) () (EBlock (DoLet false false (PVar "path") (EApp (EVar "registryPath") (EFieldAccess (EVar "a") "registry"))) (DoExpr (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate explain: cannot read registry: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EVar "parseRegistry") (EVar "src")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate explain: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "gates")) () (EApp (EVar "putStr") (EApp (EApp (EVar "explainOutput") (EVar "tok")) (EVar "gates"))))))))))))))
 (DProp false "a bare selector token is name: sugar" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "parseSelector") (EApp (EVar "intToString") (EVar "n"))) (EApp (EVar "Ok") (EApp (EVar "SelName") (EApp (EVar "intToString") (EVar "n"))))))
 (DProp false "an explicit name: selector agrees with the bare form" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "parseSelector") (EBinOp "++" (ELit (LString "name:")) (EApp (EVar "intToString") (EVar "n")))) (EApp (EVar "parseSelector") (EApp (EVar "intToString") (EVar "n")))))
 (DProp false "a literal glob matches itself and nothing longer" ((pp "n" (TyCon "Int"))) (EBinOp "&&" (EApp (EApp (EVar "globMatch") (EApp (EVar "intToString") (EVar "n"))) (EApp (EVar "intToString") (EVar "n"))) (EApp (EVar "not") (EApp (EApp (EVar "globMatch") (EApp (EVar "intToString") (EVar "n"))) (EBinOp "++" (EApp (EVar "intToString") (EVar "n")) (ELit (LString "x")))))))
@@ -1298,7 +1698,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false) (mem "JInt" false) (mem "JFloat" false) (mem "JBool" false) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false))))
-(DUse false (UseGroup ("support" "util") ((mem "endsWith" false) (mem "joinNl" false) (mem "joinWith" false) (mem "listLen" false) (mem "parseDecChecked" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitNl" false) (mem "stringTrim" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "endsWith" false) (mem "filterList" false) (mem "joinNl" false) (mem "joinWith" false) (mem "listLen" false) (mem "parseDecChecked" false) (mem "reverseL" false) (mem "sortUniqS" false) (mem "splitNl" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "stringTrim" false))))
 (DData Public "Gate" () ((variant "Gate" (ConNamed (field "name" (TyCon "String")) (field "area" (TyCon "String")) (field "project" (TyCon "String")) (field "tier" (TyCon "String")) (field "cost" (TyCon "String")) (field "kind" (TyCon "String")) (field "run" (TyCon "String")) (field "oracles" (TyApp (TyCon "List") (TyCon "String"))) (field "sources" (TyApp (TyCon "List") (TyCon "String"))) (field "corpus" (TyApp (TyCon "List") (TyCon "String"))) (field "toolchain" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig false "reqStr" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))
 (DFunDef false "reqStr" ((PVar "i") (PVar "field") (PVar "entry")) (EMatch (EApp (EApp (EVar "getString") (EVar "field")) (EVar "entry")) (arm (PCon "Some" (PVar "s")) () (EApp (EVar "Ok") (EVar "s"))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "gates.toml: [[gate]] #")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ": missing required string field '"))) (EApp (EMethodRef "display") (EVar "field"))) (ELit (LString "'")))))))
@@ -1349,7 +1749,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DTypeSig true "renderJson" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyCon "String")))
 (DFunDef false "renderJson" ((PVar "gs")) (EApp (EVar "stringify") (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "gateJson")) (EVar "gs")))))
 (DTypeSig true "gateHelpText" (TyCon "String"))
-(DFunDef false "gateHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka gate — Query the gate registry (test/gates.toml)\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka gate list [<selector>...] [--json] [--registry <path>]\n")) (ELit (LString "  medaka gate run  [<selector>...] [--dry-run] [--json] [--report <path>]\n")) (ELit (LString "                   [--timeout <secs>] [--jobs <n>] [--no-stale-check]\n")) (ELit (LString "                   [--registry <path>]\n")) (ELit (LString "\n")) (ELit (LString "Selectors (conjunction — a gate must match all of them):\n")) (ELit (LString "  name:<glob>      gate name, e.g. name:diff_compiler_*\n")) (ELit (LString "  area:<glob>      semantic area, e.g. area:backend\n")) (ELit (LString "  project:<glob>   owning project, e.g. project:sqlite\n")) (ELit (LString "  tier:<glob>      merge | nightly | ondemand\n")) (ELit (LString "  <glob>           sugar for name:<glob>\n")) (ELit (LString "\n")) (ELit (LString "A selector matching zero gates is an error, not an empty list.\n")) (ELit (LString "\n")) (ELit (LString "  --json             list: the registry entries as JSON.\n")) (ELit (LString "                     run: the machine-readable run report as JSON.\n")) (ELit (LString "  --registry <path>  read this registry instead of <MEDAKA_ROOT>/test/gates.toml\n")) (ELit (LString "\n")) (ELit (LString "`gate run` only:\n")) (ELit (LString "  --dry-run          print the resolved invocation plan; execute nothing\n")) (ELit (LString "  --report <path>    write the per-gate timing report (JSON) to <path>\n")) (ELit (LString "  --timeout <secs>   override the per-gate fuse (default by `cost`:\n")) (ELit (LString "                     cheap 300s, medium 900s, heavy 3600s)\n")) (ELit (LString "  --jobs <n>         ACCEPTED BUT IGNORED — this runner is sequential; the\n")) (ELit (LString "                     value is recorded in the report.  Medaka has no\n")) (ELit (LString "                     concurrency primitive (stdlib/runtime.mdk has no\n")) (ELit (LString "                     fork/waitpid) and runCommand blocks.\n")) (ELit (LString "  --no-stale-check   skip the stale-oracle refusal (as NO_STALE_CHECK=1 does;\n")) (ELit (LString "                     it is also skipped whenever CI is set, on purpose)\n")) (ELit (LString "\n")) (ELit (LString "`gate run` reports each gate's RAW exit code and never normalizes polarity:\n")) (ELit (LString "diff_compiler_must_fail is healthy when RED ([G-MUST-FAIL]).\n")) (ELit (LString "\n")) (ELit (LString "`gate verify` and `gate explain` are not implemented yet\n")) (ELit (LString "(see docs/ops/GATE-REGISTRY-DESIGN.md §3).\n")))))
+(DFunDef false "gateHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka gate — Query the gate registry (test/gates.toml)\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka gate list    [<selector>...] [--json] [--registry <path>]\n")) (ELit (LString "  medaka gate run     [<selector>...] [--dry-run] [--json] [--report <path>]\n")) (ELit (LString "                      [--timeout <secs>] [--jobs <n>] [--no-stale-check]\n")) (ELit (LString "                      [--registry <path>]\n")) (ELit (LString "  medaka gate verify  [--registry <path>]\n")) (ELit (LString "  medaka gate explain <path> [--registry <path>]\n")) (ELit (LString "\n")) (ELit (LString "Selectors (conjunction — a gate must match all of them):\n")) (ELit (LString "  name:<glob>      gate name, e.g. name:diff_compiler_*\n")) (ELit (LString "  area:<glob>      semantic area, e.g. area:backend\n")) (ELit (LString "  project:<glob>   owning project, e.g. project:sqlite\n")) (ELit (LString "  tier:<glob>      merge | nightly | ondemand\n")) (ELit (LString "  <glob>           sugar for name:<glob>\n")) (ELit (LString "\n")) (ELit (LString "A selector matching zero gates is an error, not an empty list.\n")) (ELit (LString "\n")) (ELit (LString "  --json             list: the registry entries as JSON.\n")) (ELit (LString "                     run: the machine-readable run report as JSON.\n")) (ELit (LString "  --registry <path>  read this registry instead of <MEDAKA_ROOT>/test/gates.toml\n")) (ELit (LString "\n")) (ELit (LString "`gate run` only:\n")) (ELit (LString "  --dry-run          print the resolved invocation plan; execute nothing\n")) (ELit (LString "  --report <path>    write the per-gate timing report (JSON) to <path>\n")) (ELit (LString "  --timeout <secs>   override the per-gate fuse (default by `cost`:\n")) (ELit (LString "                     cheap 300s, medium 900s, heavy 3600s)\n")) (ELit (LString "  --jobs <n>         ACCEPTED BUT IGNORED — this runner is sequential; the\n")) (ELit (LString "                     value is recorded in the report.  Medaka has no\n")) (ELit (LString "                     concurrency primitive (stdlib/runtime.mdk has no\n")) (ELit (LString "                     fork/waitpid) and runCommand blocks.\n")) (ELit (LString "  --no-stale-check   skip the stale-oracle refusal (as NO_STALE_CHECK=1 does;\n")) (ELit (LString "                     it is also skipped whenever CI is set, on purpose)\n")) (ELit (LString "\n")) (ELit (LString "`gate run` reports each gate's RAW exit code and never normalizes polarity:\n")) (ELit (LString "diff_compiler_must_fail is healthy when RED ([G-MUST-FAIL]).\n")) (ELit (LString "\n")) (ELit (LString "`gate verify` is the drift gate: text-only, no build. Checks every gate\n")) (ELit (LString "candidate (test/preflight.sh's own candidate universe) is enrolled or\n")) (ELit (LString "explicitly listed as a non-gate tool, every entry's run/oracles targets\n")) (ELit (LString "exist, and every entry is reachable by a selector. Exits nonzero on any\n")) (ELit (LString "violation.\n")) (ELit (LString "\n")) (ELit (LString "`gate explain <path>` prints which entries a bare token matches and via\n")) (ELit (LString "which field (name/area/project/tier/run). `sources`/`corpus`-based\n")) (ELit (LString "matching is not live yet (S-5).\n")))))
 (DData Private "ListArgs" () ((variant "ListArgs" (ConNamed (field "json" (TyCon "Bool")) (field "registry" (TyApp (TyCon "Option") (TyCon "String"))) (field "selectors" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig false "parseListArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "ListArgs") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "ListArgs")))))
 (DFunDef false "parseListArgs" ((PList) (PVar "acc")) (EApp (EVar "Ok") (EVariantUpdate "ListArgs" (EVar "acc") ((fa "selectors" (EApp (EApp (EVar "reverseStrs") (EFieldAccess (EVar "acc") "selectors")) (EListLit)))))))
@@ -1385,12 +1785,12 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "joinSpace" ((PCons (PVar "x") (PList))) (EVar "x"))
 (DFunDef false "joinSpace" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "joinSpace") (EVar "xs")))) (ELit (LString ""))))
 (DTypeSig true "runGateCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runGateCmd" ((PList)) (EApp (EVar "emit") (EApp (EVar "Err") (ELit (LString "usage: medaka gate <list|run> [<selector>...] [--json]")))))
+(DFunDef false "runGateCmd" ((PList)) (EApp (EVar "emit") (EApp (EVar "Err") (ELit (LString "usage: medaka gate <list|run|verify|explain> [<selector>...] [--json]")))))
 (DFunDef false "runGateCmd" ((PCons (PLit (LString "list")) (PVar "rest"))) (EApp (EVar "emit") (EApp (EVar "listOutput") (EVar "rest"))))
 (DFunDef false "runGateCmd" ((PCons (PLit (LString "run")) (PVar "rest"))) (EApp (EVar "runRunCmdBody") (EVar "rest")))
-(DFunDef false "runGateCmd" ((PCons (PLit (LString "verify")) PWild)) (EApp (EVar "emit") (EApp (EVar "Err") (ELit (LString "medaka gate verify: not implemented yet (see docs/ops/GATE-REGISTRY-DESIGN.md §3)")))))
-(DFunDef false "runGateCmd" ((PCons (PLit (LString "explain")) PWild)) (EApp (EVar "emit") (EApp (EVar "Err") (ELit (LString "medaka gate explain: not implemented yet (see docs/ops/GATE-REGISTRY-DESIGN.md §3)")))))
-(DFunDef false "runGateCmd" ((PCons (PVar "sub") PWild)) (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate: unknown subcommand '")) (EApp (EMethodRef "display") (EMethodRef "sub"))) (ELit (LString "' (expected: list, run)"))))))
+(DFunDef false "runGateCmd" ((PCons (PLit (LString "verify")) (PVar "rest"))) (EApp (EVar "verifyCmdBody") (EVar "rest")))
+(DFunDef false "runGateCmd" ((PCons (PLit (LString "explain")) (PVar "rest"))) (EApp (EVar "explainCmdBody") (EVar "rest")))
+(DFunDef false "runGateCmd" ((PCons (PVar "sub") PWild)) (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate: unknown subcommand '")) (EApp (EMethodRef "display") (EMethodRef "sub"))) (ELit (LString "' (expected: list, run, verify, explain)"))))))
 (DData Public "GateResult" () ((variant "GateResult" (ConNamed (field "name" (TyCon "String")) (field "script" (TyCon "String")) (field "shell" (TyCon "String")) (field "exitCode" (TyCon "Int")) (field "timedOut" (TyCon "Bool")) (field "spawnError" (TyCon "String")) (field "seconds" (TyCon "Float")) (field "out" (TyCon "String")) (field "err" (TyCon "String"))))) ())
 (DData Private "RunEnv" () ((variant "RunEnv" (ConNamed (field "root" (TyCon "String")) (field "medaka" (TyCon "String")) (field "emitter" (TyCon "String")) (field "scratchRoot" (TyCon "String")) (field "timeoutOverride" (TyCon "Int"))))) ())
 (DTypeSig false "timeoutFor" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Int"))))
@@ -1510,6 +1910,99 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "runSelected" ((PVar "a") (PVar "gs")) (EBlock (DoLet false false (PVar "env") (EApp (EVar "runEnvFor") (EVar "a"))) (DoExpr (EIf (EFieldAccess (EVar "a") "dryRun") (EApp (EVar "putStr") (EApp (EApp (EVar "dryLines") (EVar "env")) (EVar "gs"))) (EMatch (EApp (EApp (EApp (EVar "staleRefusal") (EFieldAccess (EVar "a") "noStaleCheck")) (EFieldAccess (EVar "env") "root")) (EVar "gs")) (arm (PCon "Some" (PVar "banner")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStr") (EVar "banner"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "None") () (EApp (EApp (EVar "finishRun") (EVar "a")) (EApp (EApp (EApp (EVar "runGatesLoop") (EVar "env")) (EVar "gs")) (EListLit)))))))))
 (DTypeSig false "runRunCmdBody" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runRunCmdBody" ((PVar "argv")) (EMatch (EApp (EApp (EVar "parseRunArgs") (EVar "argv")) (EVar "emptyRunArgs")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "a")) () (EMatch (EApp (EApp (EVar "parseSelectors") (EFieldAccess (EVar "a") "selectors")) (EListLit)) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate run: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "sels")) () (EBlock (DoLet false false (PVar "path") (EApp (EVar "registryPath") (EFieldAccess (EVar "a") "registry"))) (DoExpr (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate run: cannot read registry: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EApp (EApp (EApp (EVar "selectFor") (EVar "path")) (EFieldAccess (EVar "a") "selectors")) (EVar "sels")) (EVar "src")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "gs")) () (EApp (EApp (EVar "runSelected") (EVar "a")) (EVar "gs")))))))))))))
+(DTypeSig false "nonBlank" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "nonBlank" ((PVar "s")) (EBinOp "/=" (EApp (EVar "stringTrim") (EVar "s")) (ELit (LString ""))))
+(DTypeSig false "gitLsFilesSh" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "gitLsFilesSh" ((PVar "root") (PVar "args")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "git"))) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "-C")) (EVar "root")) (EVar "args")) (EListLit (ELit (LString "*.sh"))))) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PTuple PWild (PVar "out") PWild)) () (EApp (EApp (EVar "filterList") (EVar "nonBlank")) (EApp (EVar "splitNl") (EVar "out"))))))
+(DTypeSig false "gateCandidates" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "gateCandidates" ((PVar "root")) (EBlock (DoLet false false (PVar "tracked") (EApp (EApp (EVar "gitLsFilesSh") (EVar "root")) (EListLit (ELit (LString "ls-files"))))) (DoLet false false (PVar "untracked") (EApp (EApp (EVar "gitLsFilesSh") (EVar "root")) (EListLit (ELit (LString "ls-files")) (ELit (LString "-o")) (ELit (LString "--exclude-standard"))))) (DoExpr (EApp (EVar "sortUniqS") (EBinOp "++" (EVar "tracked") (EVar "untracked"))))))
+(DTypeSig false "liveLine" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "liveLine" ((PVar "l")) (EBinOp "&&" (EApp (EVar "nonBlank") (EVar "l")) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "#"))) (EApp (EVar "stringTrim") (EVar "l"))))))
+(DTypeSig false "firstToken" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "firstToken" ((PVar "l")) (EApp (EVar "firstNonBlankTok") (EApp (EApp (EVar "splitOnChar") (ELit (LChar " "))) (EVar "l"))))
+(DTypeSig false "firstNonBlankTok" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
+(DFunDef false "firstNonBlankTok" ((PList)) (ELit (LString "")))
+(DFunDef false "firstNonBlankTok" ((PCons (PVar "x") (PVar "xs"))) (EIf (EApp (EVar "nonBlank") (EVar "x")) (EVar "x") (EApp (EVar "firstNonBlankTok") (EVar "xs"))))
+(DTypeSig false "toolNames" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "toolNames" ((PVar "root")) (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "test/CI-COVERAGE-TOOLS.txt")))) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "filterList") (EVar "nonBlank")) (EApp (EApp (EMethodRef "map") (EVar "firstToken")) (EApp (EApp (EVar "filterList") (EVar "liveLine")) (EApp (EVar "splitNl") (EVar "src"))))))))
+(DTypeSig false "stripSh" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "stripSh" ((PVar "p")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString ".sh"))) (EVar "p")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "p")) (ELit (LInt 3)))) (EVar "p")) (EVar "p")))
+(DTypeSig false "allRuns" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "allRuns" ((PList)) (EListLit))
+(DFunDef false "allRuns" ((PCons (PVar "g") (PVar "gs"))) (EBinOp "::" (EFieldAccess (EVar "g") "run") (EApp (EVar "allRuns") (EVar "gs"))))
+(DTypeSig false "unenrolledViolations" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "unenrolledViolations" (PWild PWild (PList)) (EListLit))
+(DFunDef false "unenrolledViolations" ((PVar "tools") (PVar "runs") (PCons (PVar "c") (PVar "cs"))) (EIf (EApp (EApp (EVar "contains") (EApp (EVar "stripSh") (EVar "c"))) (EVar "tools")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cs")) (EIf (EApp (EApp (EVar "contains") (EVar "c")) (EVar "runs")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cs")) (EIf (EVar "otherwise") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "unenrolled: ")) (EApp (EMethodRef "display") (EVar "c"))) (ELit (LString "  (not a `run` in test/gates.toml, not listed in test/CI-COVERAGE-TOOLS.txt)"))) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cs"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "runTargetViolations" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "runTargetViolations" (PWild (PList)) (EListLit))
+(DFunDef false "runTargetViolations" ((PVar "root") (PCons (PVar "g") (PVar "gs"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EVar "runTargetViolations") (EVar "root")) (EVar "gs"))) (DoExpr (EIf (EApp (EVar "fileExists") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "root"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))) (EVar "rest") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": run target does not exist: "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString ""))) (EVar "rest"))))))
+(DTypeSig false "knownOracles" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "knownOracles" ((PVar "root")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "sh"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "root"))) (ELit (LString "/test/build_oracles.sh"))) (ELit (LString "--list")))) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PTuple PWild (PVar "out") PWild)) () (EApp (EApp (EVar "filterList") (EVar "nonBlank")) (EApp (EVar "splitNl") (EVar "out"))))))
+(DTypeSig false "foreignOracles" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "foreignOracles" () (EListLit (ELit (LString "wasm_emit_main")) (ELit (LString "wasm_emit_modules_main"))))
+(DTypeSig false "oracleNamesMissing" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "oracleNamesMissing" (PWild PWild (PList)) (EListLit))
+(DFunDef false "oracleNamesMissing" ((PVar "known") (PVar "gname") (PCons (PVar "o") (PVar "os"))) (EIf (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "o")) (EVar "known")) (EApp (EApp (EVar "contains") (EVar "o")) (EVar "foreignOracles"))) (EApp (EApp (EApp (EVar "oracleNamesMissing") (EVar "known")) (EVar "gname")) (EVar "os")) (EIf (EVar "otherwise") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "gname"))) (ELit (LString ": oracle not known to `test/build_oracles.sh --list` (nor the wasm-foreign set): "))) (EApp (EMethodRef "display") (EVar "o"))) (ELit (LString ""))) (EApp (EApp (EApp (EVar "oracleNamesMissing") (EVar "known")) (EVar "gname")) (EVar "os"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "oracleTargetViolations" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "oracleTargetViolations" (PWild (PList)) (EListLit))
+(DFunDef false "oracleTargetViolations" ((PVar "known") (PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EApp (EApp (EVar "oracleNamesMissing") (EVar "known")) (EFieldAccess (EVar "g") "name")) (EFieldAccess (EVar "g") "oracles")) (EApp (EApp (EVar "oracleTargetViolations") (EVar "known")) (EVar "gs"))))
+(DTypeSig false "anyNamed" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyCon "Bool"))))
+(DFunDef false "anyNamed" (PWild (PList)) (EVar "False"))
+(DFunDef false "anyNamed" ((PVar "n") (PCons (PVar "g") (PVar "gs"))) (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "g") "name") (EVar "n")) (EApp (EApp (EVar "anyNamed") (EVar "n")) (EVar "gs"))))
+(DTypeSig false "reachabilityFor" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "reachabilityFor" ((PVar "all") (PVar "g")) (EMatch (EApp (EVar "parseSelector") (EFieldAccess (EVar "g") "name")) (arm (PCon "Err" (PVar "m")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": its own name is not a valid bare selector ("))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ") — reachable only via an explicit `name:"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString "`, not the bare CLI form"))))) (arm (PCon "Ok" (PVar "sel")) () (EIf (EApp (EApp (EVar "anyNamed") (EFieldAccess (EVar "g") "name")) (EApp (EApp (EVar "selectGates") (EListLit (EVar "sel"))) (EDictApp "all"))) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": `name:"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString "` does not select this entry (registry/selector bug)"))))))))
+(DTypeSig false "reachabilityViolations" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "reachabilityViolations" (PWild (PList)) (EListLit))
+(DFunDef false "reachabilityViolations" ((PVar "all") (PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EApp (EVar "reachabilityFor") (EDictApp "all")) (EVar "g")) (EApp (EApp (EVar "reachabilityViolations") (EDictApp "all")) (EVar "gs"))))
+(DTypeSig false "verifyClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "verifyClasses" ((PVar "root") (PVar "gates")) (EBlock (DoLet false false (PVar "cands") (EApp (EVar "gateCandidates") (EVar "root"))) (DoLet false false (PVar "tools") (EApp (EVar "toolNames") (EVar "root"))) (DoLet false false (PVar "runs") (EApp (EVar "allRuns") (EVar "gates"))) (DoLet false false (PVar "known") (EApp (EVar "knownOracles") (EVar "root"))) (DoExpr (EListLit (ETuple (ELit (LString "unenrolled gate scripts")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cands"))) (ETuple (ELit (LString "missing run targets")) (EApp (EApp (EVar "runTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "missing oracle targets")) (EApp (EApp (EVar "oracleTargetViolations") (EVar "known")) (EVar "gates"))) (ETuple (ELit (LString "unreachable entries")) (EApp (EApp (EVar "reachabilityViolations") (EVar "gates")) (EVar "gates")))))))
+(DTypeSig false "renderClass" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "String")))
+(DFunDef false "renderClass" ((PTuple (PVar "title") (PList))) (EBinOp "++" (EBinOp "++" (ELit (LString "OK    ")) (EApp (EMethodRef "display") (EVar "title"))) (ELit (LString ": 0\n"))))
+(DFunDef false "renderClass" ((PTuple (PVar "title") (PVar "vs"))) (EBlock (DoLet false false (PVar "names") (EApp (EVar "joinNl") (EApp (EVar "indentedNames") (EVar "vs")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FAIL  ")) (EApp (EMethodRef "display") (EVar "title"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "vs"))))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "names"))) (ELit (LString "\n"))))))
+(DTypeSig false "renderClasses" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "String")))
+(DFunDef false "renderClasses" ((PList)) (ELit (LString "")))
+(DFunDef false "renderClasses" ((PCons (PVar "c") (PVar "cs"))) (EBinOp "++" (EApp (EVar "renderClass") (EVar "c")) (EApp (EVar "renderClasses") (EVar "cs"))))
+(DTypeSig false "totalViolations" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "Int")))
+(DFunDef false "totalViolations" ((PList)) (ELit (LInt 0)))
+(DFunDef false "totalViolations" ((PCons (PTuple PWild (PVar "vs")) (PVar "cs"))) (EBinOp "+" (EApp (EVar "listLen") (EVar "vs")) (EApp (EVar "totalViolations") (EVar "cs"))))
+(DTypeSig false "verifyOutput" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))
+(DFunDef false "verifyOutput" ((PVar "root") (PVar "gates")) (EBlock (DoLet false false (PVar "classes") (EApp (EApp (EVar "verifyClasses") (EVar "root")) (EVar "gates"))) (DoLet false false (PVar "n") (EApp (EVar "totalViolations") (EVar "classes"))) (DoLet false false (PVar "body") (EApp (EVar "renderClasses") (EVar "classes"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Ok") (EBinOp "++" (EVar "body") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: OK — ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "gates"))))) (ELit (LString " entries, 0 violations.\n"))))) (EApp (EVar "Err") (EBinOp "++" (EVar "body") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: FAIL — ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " violation(s) across "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "gates"))))) (ELit (LString " entries.\n")))))))))
+(DData Private "VerifyArgs" () ((variant "VerifyArgs" (ConNamed (field "registry" (TyApp (TyCon "Option") (TyCon "String")))))) ())
+(DTypeSig false "parseVerifyArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "VerifyArgs") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "VerifyArgs")))))
+(DFunDef false "parseVerifyArgs" ((PList) (PVar "acc")) (EApp (EVar "Ok") (EVar "acc")))
+(DFunDef false "parseVerifyArgs" ((PCons (PLit (LString "--registry")) (PCons (PVar "p") (PVar "rest"))) (PVar "acc")) (EApp (EApp (EVar "parseVerifyArgs") (EVar "rest")) (EVariantUpdate "VerifyArgs" (EVar "acc") ((fa "registry" (EApp (EVar "Some") (EVar "p")))))))
+(DFunDef false "parseVerifyArgs" ((PCons (PLit (LString "--registry")) (PList)) PWild) (EApp (EVar "Err") (ELit (LString "medaka gate verify: --registry needs a path"))))
+(DFunDef false "parseVerifyArgs" ((PCons (PVar "a") PWild) PWild) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: unknown flag: ")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString "")))))
+(DTypeSig false "verifyCmdBody" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "verifyCmdBody" ((PVar "argv")) (EMatch (EApp (EApp (EVar "parseVerifyArgs") (EVar "argv")) (ERecordCreate "VerifyArgs" ((fa "registry" (EVar "None"))))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "a")) () (EBlock (DoLet false false (PVar "path") (EApp (EVar "registryPath") (EFieldAccess (EVar "a") "registry"))) (DoExpr (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: cannot read registry: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EVar "parseRegistry") (EVar "src")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate verify: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "gates")) () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoExpr (EApp (EVar "emit") (EApp (EApp (EVar "verifyOutput") (EVar "root")) (EVar "gates"))))))))))))))
+(DTypeSig false "fieldHit" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "fieldHit" (PWild (PCon "False")) (EListLit))
+(DFunDef false "fieldHit" ((PVar "field") (PCon "True")) (EListLit (EVar "field")))
+(DTypeSig false "matchedFields" (TyFun (TyCon "String") (TyFun (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "matchedFields" ((PVar "tok") (PVar "g")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "fieldHit") (ELit (LString "run"))) (EBinOp "==" (EVar "tok") (EFieldAccess (EVar "g") "run"))) (EApp (EApp (EVar "fieldHit") (ELit (LString "name"))) (EBinOp "==" (EVar "tok") (EFieldAccess (EVar "g") "name")))) (EApp (EApp (EVar "fieldHit") (ELit (LString "area"))) (EBinOp "==" (EVar "tok") (EFieldAccess (EVar "g") "area")))) (EApp (EApp (EVar "fieldHit") (ELit (LString "project"))) (EBinOp "==" (EVar "tok") (EFieldAccess (EVar "g") "project")))) (EApp (EApp (EVar "fieldHit") (ELit (LString "tier"))) (EBinOp "==" (EVar "tok") (EFieldAccess (EVar "g") "tier")))))
+(DTypeSig false "explainMatches" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyTuple (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "explainMatches" (PWild (PList)) (EListLit))
+(DFunDef false "explainMatches" ((PVar "tok") (PCons (PVar "g") (PVar "gs"))) (EBlock (DoLet false false (PVar "fs") (EApp (EApp (EVar "matchedFields") (EVar "tok")) (EVar "g"))) (DoLet false false (PVar "rest") (EApp (EApp (EVar "explainMatches") (EVar "tok")) (EVar "gs"))) (DoExpr (EIf (EApp (EVar "isEmptyStrs") (EVar "fs")) (EVar "rest") (EBinOp "::" (ETuple (EVar "g") (EVar "fs")) (EVar "rest"))))))
+(DTypeSig false "isEmptyHits" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "Bool")))
+(DFunDef false "isEmptyHits" ((PList)) (EVar "True"))
+(DFunDef false "isEmptyHits" (PWild) (EVar "False"))
+(DTypeSig false "renderExplainHit" (TyFun (TyTuple (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "String")))
+(DFunDef false "renderExplainHit" ((PTuple (PVar "g") (PVar "fs"))) (EBlock (DoLet false false (PVar "joined") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "fs"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString "  (matched: "))) (EApp (EMethodRef "display") (EVar "joined"))) (ELit (LString ")\n"))))))
+(DTypeSig false "renderExplainHits" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Gate") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "String")))
+(DFunDef false "renderExplainHits" ((PList)) (ELit (LString "")))
+(DFunDef false "renderExplainHits" ((PCons (PVar "h") (PVar "hs"))) (EBinOp "++" (EApp (EVar "renderExplainHit") (EVar "h")) (EApp (EVar "renderExplainHits") (EVar "hs"))))
+(DTypeSig false "explainNote" (TyCon "String"))
+(DFunDef false "explainNote" () (EBinOp "++" (ELit (LString "note: `sources`/`corpus`-based matching is not live yet (S-5) — only\n")) (ELit (LString "name/area/project/tier/run EQUALITY is checked above.\n"))))
+(DTypeSig false "explainOutput" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyCon "String"))))
+(DFunDef false "explainOutput" ((PVar "tok") (PVar "gates")) (EBlock (DoLet false false (PVar "hits") (EApp (EApp (EVar "explainMatches") (EVar "tok")) (EVar "gates"))) (DoExpr (EIf (EApp (EVar "isEmptyHits") (EVar "hits")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "no entry matches '")) (EApp (EMethodRef "display") (EVar "tok"))) (ELit (LString "' via name/area/project/tier/run.\n"))) (EVar "explainNote")) (EBinOp "++" (EApp (EVar "renderExplainHits") (EVar "hits")) (EVar "explainNote"))))))
+(DData Private "ExplainArgs" () ((variant "ExplainArgs" (ConNamed (field "registry" (TyApp (TyCon "Option") (TyCon "String"))) (field "path" (TyApp (TyCon "Option") (TyCon "String")))))) ())
+(DTypeSig false "parseExplainArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "ExplainArgs") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "ExplainArgs")))))
+(DFunDef false "parseExplainArgs" ((PList) (PVar "acc")) (EApp (EVar "Ok") (EVar "acc")))
+(DFunDef false "parseExplainArgs" ((PCons (PLit (LString "--registry")) (PCons (PVar "p") (PVar "rest"))) (PVar "acc")) (EApp (EApp (EVar "parseExplainArgs") (EVar "rest")) (EVariantUpdate "ExplainArgs" (EVar "acc") ((fa "registry" (EApp (EVar "Some") (EVar "p")))))))
+(DFunDef false "parseExplainArgs" ((PCons (PLit (LString "--registry")) (PList)) PWild) (EApp (EVar "Err") (ELit (LString "medaka gate explain: --registry needs a path"))))
+(DFunDef false "parseExplainArgs" ((PCons (PVar "a") (PVar "rest")) (PVar "acc")) (EIf (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "a")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "a")) (ELit (LString "-")))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate explain: unknown flag: ")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString "")))) (EIf (EVar "otherwise") (EMatch (EFieldAccess (EVar "acc") "path") (arm (PCon "Some" PWild) () (EApp (EVar "Err") (ELit (LString "medaka gate explain: expected exactly one <path> argument")))) (arm (PCon "None") () (EApp (EApp (EVar "parseExplainArgs") (EVar "rest")) (EVariantUpdate "ExplainArgs" (EVar "acc") ((fa "path" (EApp (EVar "Some") (EVar "a")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "explainCmdBody" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "explainCmdBody" ((PVar "argv")) (EMatch (EApp (EApp (EVar "parseExplainArgs") (EVar "argv")) (ERecordCreate "ExplainArgs" ((fa "registry" (EVar "None")) (fa "path" (EVar "None"))))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "a")) () (EMatch (EFieldAccess (EVar "a") "path") (arm (PCon "None") () (EApp (EVar "emit") (EApp (EVar "Err") (ELit (LString "usage: medaka gate explain <path> [--registry <path>]"))))) (arm (PCon "Some" (PVar "tok")) () (EBlock (DoLet false false (PVar "path") (EApp (EVar "registryPath") (EFieldAccess (EVar "a") "registry"))) (DoExpr (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate explain: cannot read registry: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EVar "parseRegistry") (EVar "src")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate explain: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "gates")) () (EApp (EVar "putStr") (EApp (EApp (EVar "explainOutput") (EVar "tok")) (EVar "gates"))))))))))))))
 (DProp false "a bare selector token is name: sugar" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "parseSelector") (EApp (EVar "intToString") (EVar "n"))) (EApp (EVar "Ok") (EApp (EVar "SelName") (EApp (EVar "intToString") (EVar "n"))))))
 (DProp false "an explicit name: selector agrees with the bare form" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "parseSelector") (EBinOp "++" (ELit (LString "name:")) (EApp (EVar "intToString") (EVar "n")))) (EApp (EVar "parseSelector") (EApp (EVar "intToString") (EVar "n")))))
 (DProp false "a literal glob matches itself and nothing longer" ((pp "n" (TyCon "Int"))) (EBinOp "&&" (EApp (EApp (EVar "globMatch") (EApp (EVar "intToString") (EVar "n"))) (EApp (EVar "intToString") (EVar "n"))) (EApp (EVar "not") (EApp (EApp (EVar "globMatch") (EApp (EVar "intToString") (EVar "n"))) (EBinOp "++" (EApp (EVar "intToString") (EVar "n")) (ELit (LString "x")))))))
