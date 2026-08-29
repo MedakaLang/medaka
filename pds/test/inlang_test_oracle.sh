@@ -4,12 +4,9 @@
 # Runs the pure-Medaka `test "…"` / `prop "…"` suites under `pds/test/*_test.mdk`
 # and asserts they are DISCOVERED and PASS.
 #
-# It lives in pds/test/ and is enrolled by the `sqlite` CI shard's glob
-# ('pds/test/*') — deliberately ONE directory level deep, unlike the sibling
-# `sqlite`/`gzip` gates' `*oracle` convention: any .sh landing DIRECTLY under
-# pds/test/ is auto-enrolled as a CI gate by that glob, so no future pds/
-# in-language gate needs a ci.yml edit. See pds/README.md's "CI classification
-# policy" section for the full rule (RUN-PDS0-001 A4 / RUN-PDS0-003(a)).
+# CI enrollment is explicit and cost-based: this gate is named directly in a
+# shard pattern. A future pds/test/*.sh gate therefore needs its own measured
+# shard placement; directory location alone does not enroll it.
 #
 # THE ANTI-ROT GUARD (docs/ops/TESTING-DESIGN.md §0: "this didn't run" is
 # indistinguishable from "this passed"): a `medaka test` file with ZERO
@@ -32,7 +29,7 @@ export MEDAKA_ROOT
 # file:floor — floor = the assertion count committed today. Adding tests only
 # raises the real count (>= floor still passes); removing them, or a discovery
 # regression, drops below the floor and fails. Raise a floor when you add tests.
-SUITES="skeleton_test:2 encodings_test:29 dagcbor_cid_test:12 mst_test:12 car_store_test:14 repo_tid_test:8 field_test:30 scalar_test:38 sign_key_test:11 secp256k1_point_test:8 rfc6979_test:4 ecdsa_test:2"
+SUITES="skeleton_test:2 http_test:42 encodings_test:29 dagcbor_cid_test:12 mst_test:12 car_store_test:14 repo_tid_test:8 field_test:30 scalar_test:38 sign_key_test:11 secp256k1_point_test:8 rfc6979_test:4 ecdsa_test:2"
 
 rc=0
 total_ran=0
