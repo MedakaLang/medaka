@@ -1,5 +1,5 @@
 # META
-source_lines=1773
+source_lines=2011
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -438,6 +438,7 @@ gateHelpText = stringConcat
     "                      [--registry <path>]\n",
     "  medaka gate verify  [--registry <path>]\n",
     "  medaka gate explain <path> [--registry <path>]\n",
+    "  medaka gate ci      [--registry <path>] [--workflow <path>]\n",
     "\n",
     "Selectors (conjunction — a gate must match all of them):\n",
     "  name:<glob>      gate name, e.g. name:diff_compiler_*\n",
@@ -474,6 +475,14 @@ gateHelpText = stringConcat
     "targets exist, every entry is reachable by a selector, and no two entries\n",
     "share a `name`. Exits nonzero\n",
     "on any violation.\n",
+    "\n",
+    "`gate ci` regenerates the marked GENERATED region in\n",
+    ".github/workflows/ci.yml — the `gates` job's eight-row matrix — from\n",
+    "the registry's [[shard]] rows and every entry's `shard` field. Run it\n",
+    "via `make gen-ci`; it is idempotent, so `git diff --exit-code` after a\n",
+    "run is the drift check. The named-gate steps in soundness/wasm are NOT\n",
+    "generated — the registry cannot say which job runs which (see the\n",
+    "`gate ci` section of compiler/tools/gate_cmd.mdk).\n",
     "\n",
     "`gate explain <path>` is the reverse lookup: which entries select a\n",
     "changed path, and why. Two layers, printed with preflight's own prefixes:\n",
@@ -597,14 +606,15 @@ export
 runGateCmd : List String -> <IO> Unit
 runGateCmd [] =
   emit (Err
-    "usage: medaka gate <list|run|verify|explain> [<selector>...] [--json]")
+    "usage: medaka gate <list|run|verify|explain|ci> [<selector>...] [--json]")
 runGateCmd ("list"::rest) = emit (listOutput rest)
 runGateCmd ("run"::rest) = runRunCmdBody rest
 runGateCmd ("verify"::rest) = verifyCmdBody rest
 runGateCmd ("explain"::rest) = explainCmdBody rest
+runGateCmd ("ci"::rest) = ciCmdBody rest
 runGateCmd (sub::_) =
   emit (Err
-    "medaka gate: unknown subcommand '\{sub}' (expected: list, run, verify, explain)")
+    "medaka gate: unknown subcommand '\{sub}' (expected: list, run, verify, explain, ci)")
 
 -- ── `gate run` ──────────────────────────────────────────────────────────────
 --
@@ -1762,6 +1772,234 @@ explainCmdBody argv = match parseExplainArgs argv ExplainArgs { registry = None,
           Err m => emit (Err "medaka gate explain: \{m}")
           Ok gates => putStr (explainOutput tok gates)
 
+-- ── `gate ci` — regenerate ci.yml's generated regions ───────────────────────
+--
+-- `medaka gate ci` (via `make gen-ci`) rewrites the ONE marked region in
+-- `.github/workflows/ci.yml`: the `gates` job's `matrix.include:` block.  Each
+-- of the eight rows is a pure function of the registry — the `[[shard]]` row
+-- (its runner options and the path to its placement prose) plus every
+-- `[[gate]]` whose `shard` names it — so the matrix can no longer disagree
+-- with the data `medaka gate list` answers from.
+--
+-- Marker convention, following `docs/README.md`'s (`test/gen_docs_index.sh`):
+-- a GENERATED region is delimited by two YAML comment lines at the region's
+-- own indent, the file is otherwise hand-written, and regeneration is
+-- idempotent so `make gen-ci && git diff --exit-code` is the drift check.
+--
+-- ⚠️ PATTERN BYTE-ORDER IS NOT PRESERVED, ON PURPOSE.  ci.yml's rows were
+-- hand-written as GLOBS (`'diff_compiler_lex*'`); the registry stores one
+-- `shard` per gate and no globs, so the only thing derivable from it is the
+-- resolved gate-NAME list.  The generated `pattern:` therefore names every
+-- gate in the row literally, in registry declaration order.  What is preserved
+-- is what run_gates.sh actually consumes: the SET of gates each row resolves
+-- to (contract §7.2(b)).  Quoting is reproduced exactly and is load-bearing on
+-- both layers — outer double quotes make one YAML scalar, inner single quotes
+-- survive into `sh` unexpanded (run_gates.sh runs under dash).
+--
+-- ⚠️ THE NAMED-GATE STEPS ARE NOT GENERATED, AND THAT IS A MEASUREMENT, NOT AN
+-- OMISSION.  `soundness`/`compiler-soundness`/`wasm` invoke gates by literal
+-- name rather than through a shard pattern, and the registry cannot say which
+-- job runs which: `shard = "other-job"` is one sentinel covering seven
+-- different jobs (S-1's report §7).  The counterexample is exact —
+-- `check_fingerprint_parity` and `check_keyword_sync` carry IDENTICAL values
+-- in every scheduling field (`area = "types"`, `shard = "other-job"`,
+-- `project = "compiler"`, `tier = "merge"`, `cost = "cheap"`,
+-- `kind = "exec"`), yet the first is a step of `compiler-soundness` under that
+-- job's `needs.detect` guard and the second is a step of `soundness`, which
+-- ci.yml documents as DELIBERATELY UNGUARDED ("guarding a doc gate on
+-- docs_only would skip it on precisely the PRs it exists to police").
+-- Generating those steps would mean hard-coding a job -> gate-name table HERE,
+-- which relocates the authority from ci.yml into this file without making the
+-- registry the source of truth — strictly worse than the hand-written steps it
+-- would replace.  Their coverage is a reachability question
+-- (`diff_compiler_ci_shard_coverage.sh` already counts a literal name in a
+-- step as covering that gate), not a placement one, and it belongs to S-4.
+--
+-- Byte-determinism: every list below is a fold over FILE ORDER (the registry's
+-- own `[[shard]]` and `[[gate]]` order) — no sort, no locale-sensitive
+-- comparison, nothing read from the environment.  `make gen-ci` still exports
+-- `LC_ALL=C` as `test/gen_docs_index.sh` does, so the two generators keep one
+-- story about reproducibility even though this one has no `sort` to pin.
+
+-- The workflow file, and the region markers inside it.  Both markers are
+-- matched as WHOLE LINES at the matrix's own indent, so a mention of either
+-- string in prose elsewhere in the file cannot be mistaken for the region.
+ciWorkflowRel : String
+ciWorkflowRel = ".github/workflows/ci.yml"
+
+ciMatrixBegin : String
+ciMatrixBegin = "          # GENERATED:BEGIN gates-matrix — `make gen-ci` (medaka gate ci) from test/gates.toml. DO NOT EDIT BY HAND."
+
+ciMatrixEnd : String
+ciMatrixEnd = "          # GENERATED:END gates-matrix"
+
+-- One line of a row's placement prose, as a YAML comment at the field indent.
+-- A blank prose line becomes a bare `#`, never `# ` — a trailing space is
+-- invisible in review and would make the output differ from a hand-edit.
+ciProseLine : String -> String
+ciProseLine "" = "            #"
+ciProseLine l = "            # \{l}"
+
+-- Drop the single empty segment `splitNl` leaves for a file's trailing
+-- newline.  A prose file with a genuine blank LAST line would lose it; that is
+-- the same normalization every other consumer of these files applies, and a
+-- trailing blank comment line carries nothing.
+dropTrailBlank : List String -> List String
+dropTrailBlank [] = []
+dropTrailBlank (x::[])
+  | x == "" = []
+  | otherwise = [x]
+dropTrailBlank (x::xs) = x :: dropTrailBlank xs
+
+-- `'a' 'b' 'c'` — the inner single-quoted token list of a row's pattern.
+ciQuotedNames : List Gate -> String
+ciQuotedNames [] = ""
+ciQuotedNames (g::[]) = "'\{g.name}'"
+ciQuotedNames (g::gs) = "'\{g.name}' \{ciQuotedNames gs}"
+
+-- The gates of one row, in registry order.
+ciShardGates : String -> List Gate -> List Gate
+ciShardGates nm gs = filterList (g => g.shard == nm) gs
+
+-- A `"1"` matrix key is emitted ONLY when the option is on — ci.yml omits the
+-- key entirely when off, and that asymmetry is the file's convention, not the
+-- registry's (`shardBool` insists the boolean is present in the registry for
+-- exactly this reason).
+ciOptLine : String -> Bool -> List String
+ciOptLine _ False = []
+ciOptLine key True = ["            \{key}: \"1\""]
+
+ciRowLines : List Gate -> List String -> Shard -> List String
+ciRowLines rowGates prose sh = ["          - name: \{sh.name}"]
+  ++ map ciProseLine prose
+  ++ ["            pattern: \"\{ciQuotedNames rowGates}\""]
+  ++ ciOptLine "full_cores" sh.fullCores
+  ++ ciOptLine "wasm_arm" sh.wasmArm
+
+-- Build one row, reading its prose file.  A row with NO gates is a hard error:
+-- ci.yml's own `plan` step fails such a shard with `::error::pattern matched NO
+-- gates`, and emitting the empty pattern that produces it would be generating
+-- a known-broken file.
+ciOneRow : String -> List Gate -> Shard -> <IO> Result String (List String)
+ciOneRow root gates sh = match ciShardGates sh.name gates
+  [] => Err "medaka gate ci: shard '\{sh.name}' has no gates in the registry — a row with an empty pattern fails its own shard in CI"
+  rowGates => match readFile (joinPath root sh.rationale)
+    Err m => Err "medaka gate ci: shard '\{sh.name}': cannot read rationale \{sh.rationale}: \{m}"
+    Ok src => Ok (ciRowLines rowGates (dropTrailBlank (splitNl src)) sh)
+
+ciRowsLoop : String -> List Gate -> List Shard -> List String -> <IO> Result String (List String)
+ciRowsLoop _ _ [] acc = Ok (reverseL acc)
+ciRowsLoop root gates (sh::shs) acc = match ciOneRow root gates sh
+  Err m => Err m
+  Ok ls => ciRowsLoop root gates shs (reverseL ls ++ acc)
+
+-- Is every gate's `shard` either a declared row or the `other-job` sentinel?
+-- A typo'd shard name would otherwise drop that gate from the matrix SILENTLY
+-- — the gate stays in the registry, answers `gate list`, and runs nowhere.
+ciKnownShard : List Shard -> String -> Bool
+ciKnownShard _ "other-job" = True
+ciKnownShard [] _ = False
+ciKnownShard (sh::shs) nm = sh.name == nm || ciKnownShard shs nm
+
+ciUnknownShards : List Shard -> List Gate -> List String
+ciUnknownShards _ [] = []
+ciUnknownShards shs (g::gs)
+  | ciKnownShard shs g.shard = ciUnknownShards shs gs
+  | otherwise = "\{g.name} (shard '\{g.shard}')" :: ciUnknownShards shs gs
+
+-- ── Splicing the region ─────────────────────────────────────────────────────
+
+ciCountLine : String -> List String -> Int
+ciCountLine _ [] = 0
+ciCountLine want (l::ls)
+  | l == want = 1 + ciCountLine want ls
+  | otherwise = ciCountLine want ls
+
+ciIndexOf : String -> List String -> Int -> Int
+ciIndexOf _ [] _ = -1
+ciIndexOf want (l::ls) i
+  | l == want = i
+  | otherwise = ciIndexOf want ls (i + 1)
+
+-- Copy from the END marker onward, verbatim.
+ciAfterEnd : List String -> List String
+ciAfterEnd [] = []
+ciAfterEnd (l::ls)
+  | l == ciMatrixEnd = l::ls
+  | otherwise = ciAfterEnd ls
+
+ciSpliceGo : List String -> List String -> List String
+ciSpliceGo _ [] = []
+ciSpliceGo gen (l::ls)
+  | l == ciMatrixBegin = l :: gen ++ ciAfterEnd ls
+  | otherwise = l :: ciSpliceGo gen ls
+
+-- The markers must appear EXACTLY once each, in order.  Anything else is a
+-- malformed file, and splicing it would quietly drop or duplicate the region.
+ciSplice : List String -> List String -> Result String (List String)
+ciSplice gen src
+  | ciCountLine ciMatrixBegin src /= 1 = Err "medaka gate ci: \{ciWorkflowRel} must contain exactly one BEGIN marker line (found \{intToString (ciCountLine ciMatrixBegin src)}):\n\{ciMatrixBegin}"
+  | ciCountLine ciMatrixEnd src /= 1 = Err "medaka gate ci: \{ciWorkflowRel} must contain exactly one END marker line (found \{intToString (ciCountLine ciMatrixEnd src)}):\n\{ciMatrixEnd}"
+  | ciIndexOf ciMatrixEnd src 0 < ciIndexOf ciMatrixBegin src 0 = Err "medaka gate ci: \{ciWorkflowRel}: the END marker precedes the BEGIN marker"
+  | otherwise = Ok (ciSpliceGo gen src)
+
+-- ── The command ─────────────────────────────────────────────────────────────
+
+data CiArgs = CiArgs { registry : Option String, workflow : Option String }
+
+parseCiArgs : List String -> CiArgs -> Result String CiArgs
+parseCiArgs [] acc = Ok acc
+parseCiArgs ("--registry"::p::rest) acc =
+  parseCiArgs rest CiArgs { acc | registry = Some p }
+parseCiArgs ("--registry"::[]) _ = Err "medaka gate ci: --registry needs a path"
+parseCiArgs ("--workflow"::p::rest) acc =
+  parseCiArgs rest CiArgs { acc | workflow = Some p }
+parseCiArgs ("--workflow"::[]) _ = Err "medaka gate ci: --workflow needs a path"
+parseCiArgs (a::_) _ = Err "medaka gate ci: unexpected argument: \{a}"
+
+-- `<MEDAKA_ROOT>/.github/workflows/ci.yml` unless --workflow overrides it —
+-- the same exe-relative resolution `registryPath` uses, for the same reason.
+ciWorkflowPath : Option String -> String -> String
+ciWorkflowPath (Some p) _ = p
+ciWorkflowPath None root = joinPath root ciWorkflowRel
+
+-- Everything that can go wrong before a byte is written, as one `Result`, so
+-- the command keeps `emit`'s single exit site.
+ciNewText : String -> String -> String -> String -> <IO> Result String String
+ciNewText root regPath regSrc wfSrc = match parseRegistry regSrc
+  Err m => Err "medaka gate ci: \{m}"
+  Ok gates => match parseShards regSrc
+    Err m => Err "medaka gate ci: \{m}"
+    Ok shs => match ciUnknownShards shs gates
+      [] => match ciRowsLoop root gates shs []
+        Err m => Err m
+        Ok gen => map joinNl (ciSplice gen (splitNl wfSrc))
+      bad => Err "medaka gate ci: \{regPath}: gate(s) name a shard with no [[shard]] row: \{joinSpace bad}"
+
+-- Write only on a real change: an unconditional write would touch the file's
+-- mtime on every no-op run, and `make gen-ci` is meant to be free to re-run.
+ciWrite : String -> String -> String -> <IO> Unit
+ciWrite wfPath wfSrc out
+  | out == wfSrc = putStr "medaka gate ci: \{wfPath} already up to date\n"
+  | otherwise = match writeFile wfPath out
+    Err m => emit (Err "medaka gate ci: cannot write \{wfPath}: \{m}")
+    Ok _ => putStr "medaka gate ci: regenerated the gates matrix in \{wfPath}\n"
+
+ciCmdBody : List String -> <IO> Unit
+ciCmdBody argv = match parseCiArgs argv CiArgs { registry = None, workflow = None }
+  Err m => emit (Err m)
+  Ok a =>
+    let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+    let regPath = registryPath a.registry
+    let wfPath = ciWorkflowPath a.workflow root
+    match readFile regPath
+      Err m => emit (Err "medaka gate ci: cannot read registry: \{m}")
+      Ok regSrc => match readFile wfPath
+        Err m => emit (Err "medaka gate ci: cannot read \{wfPath}: \{m}")
+        Ok wfSrc => match ciNewText root regPath regSrc wfSrc
+          Err m => emit (Err m)
+          Ok out => ciWrite wfPath wfSrc out
+
 -- ── Properties ──────────────────────────────────────────────────────────────
 
 prop "a bare selector token is name: sugar" (n : Int) =
@@ -1854,7 +2092,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "renderShards" ((PList)) (ELit (LString "")))
 (DFunDef false "renderShards" ((PCons (PVar "sh") (PVar "shs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "sh") "name"))) (ELit (LString ": full_cores="))) (EApp (EVar "display") (EApp (EVar "boolWord") (EFieldAccess (EVar "sh") "fullCores")))) (ELit (LString " wasm_arm="))) (EApp (EVar "display") (EApp (EVar "boolWord") (EFieldAccess (EVar "sh") "wasmArm")))) (ELit (LString " rationale="))) (EApp (EVar "display") (EFieldAccess (EVar "sh") "rationale"))) (ELit (LString "\n"))) (EApp (EVar "renderShards") (EVar "shs"))))
 (DTypeSig true "gateHelpText" (TyCon "String"))
-(DFunDef false "gateHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka gate — Query the gate registry (test/gates.toml)\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka gate list    [<selector>...] [--json] [--registry <path>]\n")) (ELit (LString "  medaka gate list    --shards [--json] [--registry <path>]\n")) (ELit (LString "  medaka gate run     [<selector>...] [--dry-run] [--json] [--report <path>]\n")) (ELit (LString "                      [--timeout <secs>] [--jobs <n>] [--no-stale-check]\n")) (ELit (LString "                      [--registry <path>]\n")) (ELit (LString "  medaka gate verify  [--registry <path>]\n")) (ELit (LString "  medaka gate explain <path> [--registry <path>]\n")) (ELit (LString "\n")) (ELit (LString "Selectors (conjunction — a gate must match all of them):\n")) (ELit (LString "  name:<glob>      gate name, e.g. name:diff_compiler_*\n")) (ELit (LString "  area:<glob>      semantic area, e.g. area:backend\n")) (ELit (LString "  project:<glob>   owning project, e.g. project:sqlite\n")) (ELit (LString "  tier:<glob>      merge | nightly | ondemand\n")) (ELit (LString "  <glob>           sugar for name:<glob>\n")) (ELit (LString "\n")) (ELit (LString "A selector matching zero gates is an error, not an empty list.\n")) (ELit (LString "\n")) (ELit (LString "  --json             list: the registry entries as JSON.\n")) (ELit (LString "  --shards           list: the ci.yml `gates` matrix rows, not the gates.\n")) (ELit (LString "                     run: the machine-readable run report as JSON.\n")) (ELit (LString "  --registry <path>  read this registry instead of <MEDAKA_ROOT>/test/gates.toml\n")) (ELit (LString "\n")) (ELit (LString "`gate run` only:\n")) (ELit (LString "  --dry-run          print the resolved invocation plan; execute nothing\n")) (ELit (LString "  --report <path>    write the per-gate timing report (JSON) to <path>\n")) (ELit (LString "  --timeout <secs>   override the per-gate fuse (default by `cost`:\n")) (ELit (LString "                     cheap 300s, medium 900s, heavy 3600s)\n")) (ELit (LString "  --jobs <n>         ACCEPTED BUT IGNORED — this runner is sequential; the\n")) (ELit (LString "                     value is recorded in the report.  Medaka has no\n")) (ELit (LString "                     concurrency primitive (stdlib/runtime.mdk has no\n")) (ELit (LString "                     fork/waitpid) and runCommand blocks.\n")) (ELit (LString "  --no-stale-check   skip the stale-oracle refusal (as NO_STALE_CHECK=1 does;\n")) (ELit (LString "                     it is also skipped whenever CI is set, on purpose)\n")) (ELit (LString "\n")) (ELit (LString "`gate run` reports each gate's RAW exit code and never normalizes polarity:\n")) (ELit (LString "diff_compiler_must_fail is healthy when RED ([G-MUST-FAIL]).\n")) (ELit (LString "\n")) (ELit (LString "`gate verify` is the drift gate: text-only, no build. Checks every gate\n")) (ELit (LString "candidate (test/preflight.sh's own candidate universe) is enrolled or\n")) (ELit (LString "explicitly listed as a non-gate tool, every entry's run/oracles/corpus\n")) (ELit (LString "targets exist, every entry is reachable by a selector, and no two entries\n")) (ELit (LString "share a `name`. Exits nonzero\n")) (ELit (LString "on any violation.\n")) (ELit (LString "\n")) (ELit (LString "`gate explain <path>` is the reverse lookup: which entries select a\n")) (ELit (LString "changed path, and why. Two layers, printed with preflight's own prefixes:\n")) (ELit (LString "the registry-level POLICY (FULL on a blast-radius path; UNMAPPED + FULL on\n")) (ELit (LString "an unmatched non-prose path; UNMAPPED alone on prose), then per-entry\n")) (ELit (LString "`sources` globs and `corpus` directories on GATE lines. A bare token that\n")) (ELit (LString "is also a field value (name/area/project/tier/run) gets TOKEN lines.\n")))))
+(DFunDef false "gateHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka gate — Query the gate registry (test/gates.toml)\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka gate list    [<selector>...] [--json] [--registry <path>]\n")) (ELit (LString "  medaka gate list    --shards [--json] [--registry <path>]\n")) (ELit (LString "  medaka gate run     [<selector>...] [--dry-run] [--json] [--report <path>]\n")) (ELit (LString "                      [--timeout <secs>] [--jobs <n>] [--no-stale-check]\n")) (ELit (LString "                      [--registry <path>]\n")) (ELit (LString "  medaka gate verify  [--registry <path>]\n")) (ELit (LString "  medaka gate explain <path> [--registry <path>]\n")) (ELit (LString "  medaka gate ci      [--registry <path>] [--workflow <path>]\n")) (ELit (LString "\n")) (ELit (LString "Selectors (conjunction — a gate must match all of them):\n")) (ELit (LString "  name:<glob>      gate name, e.g. name:diff_compiler_*\n")) (ELit (LString "  area:<glob>      semantic area, e.g. area:backend\n")) (ELit (LString "  project:<glob>   owning project, e.g. project:sqlite\n")) (ELit (LString "  tier:<glob>      merge | nightly | ondemand\n")) (ELit (LString "  <glob>           sugar for name:<glob>\n")) (ELit (LString "\n")) (ELit (LString "A selector matching zero gates is an error, not an empty list.\n")) (ELit (LString "\n")) (ELit (LString "  --json             list: the registry entries as JSON.\n")) (ELit (LString "  --shards           list: the ci.yml `gates` matrix rows, not the gates.\n")) (ELit (LString "                     run: the machine-readable run report as JSON.\n")) (ELit (LString "  --registry <path>  read this registry instead of <MEDAKA_ROOT>/test/gates.toml\n")) (ELit (LString "\n")) (ELit (LString "`gate run` only:\n")) (ELit (LString "  --dry-run          print the resolved invocation plan; execute nothing\n")) (ELit (LString "  --report <path>    write the per-gate timing report (JSON) to <path>\n")) (ELit (LString "  --timeout <secs>   override the per-gate fuse (default by `cost`:\n")) (ELit (LString "                     cheap 300s, medium 900s, heavy 3600s)\n")) (ELit (LString "  --jobs <n>         ACCEPTED BUT IGNORED — this runner is sequential; the\n")) (ELit (LString "                     value is recorded in the report.  Medaka has no\n")) (ELit (LString "                     concurrency primitive (stdlib/runtime.mdk has no\n")) (ELit (LString "                     fork/waitpid) and runCommand blocks.\n")) (ELit (LString "  --no-stale-check   skip the stale-oracle refusal (as NO_STALE_CHECK=1 does;\n")) (ELit (LString "                     it is also skipped whenever CI is set, on purpose)\n")) (ELit (LString "\n")) (ELit (LString "`gate run` reports each gate's RAW exit code and never normalizes polarity:\n")) (ELit (LString "diff_compiler_must_fail is healthy when RED ([G-MUST-FAIL]).\n")) (ELit (LString "\n")) (ELit (LString "`gate verify` is the drift gate: text-only, no build. Checks every gate\n")) (ELit (LString "candidate (test/preflight.sh's own candidate universe) is enrolled or\n")) (ELit (LString "explicitly listed as a non-gate tool, every entry's run/oracles/corpus\n")) (ELit (LString "targets exist, every entry is reachable by a selector, and no two entries\n")) (ELit (LString "share a `name`. Exits nonzero\n")) (ELit (LString "on any violation.\n")) (ELit (LString "\n")) (ELit (LString "`gate ci` regenerates the marked GENERATED region in\n")) (ELit (LString ".github/workflows/ci.yml — the `gates` job's eight-row matrix — from\n")) (ELit (LString "the registry's [[shard]] rows and every entry's `shard` field. Run it\n")) (ELit (LString "via `make gen-ci`; it is idempotent, so `git diff --exit-code` after a\n")) (ELit (LString "run is the drift check. The named-gate steps in soundness/wasm are NOT\n")) (ELit (LString "generated — the registry cannot say which job runs which (see the\n")) (ELit (LString "`gate ci` section of compiler/tools/gate_cmd.mdk).\n")) (ELit (LString "\n")) (ELit (LString "`gate explain <path>` is the reverse lookup: which entries select a\n")) (ELit (LString "changed path, and why. Two layers, printed with preflight's own prefixes:\n")) (ELit (LString "the registry-level POLICY (FULL on a blast-radius path; UNMAPPED + FULL on\n")) (ELit (LString "an unmatched non-prose path; UNMAPPED alone on prose), then per-entry\n")) (ELit (LString "`sources` globs and `corpus` directories on GATE lines. A bare token that\n")) (ELit (LString "is also a field value (name/area/project/tier/run) gets TOKEN lines.\n")))))
 (DData Private "ListArgs" () ((variant "ListArgs" (ConNamed (field "json" (TyCon "Bool")) (field "shards" (TyCon "Bool")) (field "registry" (TyApp (TyCon "Option") (TyCon "String"))) (field "selectors" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig false "parseListArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "ListArgs") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "ListArgs")))))
 (DFunDef false "parseListArgs" ((PList) (PVar "acc")) (EApp (EVar "Ok") (EVariantUpdate "ListArgs" (EVar "acc") ((fa "selectors" (EApp (EApp (EVar "reverseStrs") (EFieldAccess (EVar "acc") "selectors")) (EListLit)))))))
@@ -1893,12 +2131,13 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "joinSpace" ((PCons (PVar "x") (PList))) (EVar "x"))
 (DFunDef false "joinSpace" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "x"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "joinSpace") (EVar "xs")))) (ELit (LString ""))))
 (DTypeSig true "runGateCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runGateCmd" ((PList)) (EApp (EVar "emit") (EApp (EVar "Err") (ELit (LString "usage: medaka gate <list|run|verify|explain> [<selector>...] [--json]")))))
+(DFunDef false "runGateCmd" ((PList)) (EApp (EVar "emit") (EApp (EVar "Err") (ELit (LString "usage: medaka gate <list|run|verify|explain|ci> [<selector>...] [--json]")))))
 (DFunDef false "runGateCmd" ((PCons (PLit (LString "list")) (PVar "rest"))) (EApp (EVar "emit") (EApp (EVar "listOutput") (EVar "rest"))))
 (DFunDef false "runGateCmd" ((PCons (PLit (LString "run")) (PVar "rest"))) (EApp (EVar "runRunCmdBody") (EVar "rest")))
 (DFunDef false "runGateCmd" ((PCons (PLit (LString "verify")) (PVar "rest"))) (EApp (EVar "verifyCmdBody") (EVar "rest")))
 (DFunDef false "runGateCmd" ((PCons (PLit (LString "explain")) (PVar "rest"))) (EApp (EVar "explainCmdBody") (EVar "rest")))
-(DFunDef false "runGateCmd" ((PCons (PVar "sub") PWild)) (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate: unknown subcommand '")) (EApp (EVar "display") (EVar "sub"))) (ELit (LString "' (expected: list, run, verify, explain)"))))))
+(DFunDef false "runGateCmd" ((PCons (PLit (LString "ci")) (PVar "rest"))) (EApp (EVar "ciCmdBody") (EVar "rest")))
+(DFunDef false "runGateCmd" ((PCons (PVar "sub") PWild)) (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate: unknown subcommand '")) (EApp (EVar "display") (EVar "sub"))) (ELit (LString "' (expected: list, run, verify, explain, ci)"))))))
 (DData Public "GateResult" () ((variant "GateResult" (ConNamed (field "name" (TyCon "String")) (field "script" (TyCon "String")) (field "shell" (TyCon "String")) (field "exitCode" (TyCon "Int")) (field "timedOut" (TyCon "Bool")) (field "spawnError" (TyCon "String")) (field "seconds" (TyCon "Float")) (field "out" (TyCon "String")) (field "err" (TyCon "String"))))) ())
 (DData Private "RunEnv" () ((variant "RunEnv" (ConNamed (field "root" (TyCon "String")) (field "medaka" (TyCon "String")) (field "emitter" (TyCon "String")) (field "scratchRoot" (TyCon "String")) (field "timeoutOverride" (TyCon "Int"))))) ())
 (DTypeSig false "timeoutFor" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Int"))))
@@ -2181,6 +2420,73 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "parseExplainArgs" ((PCons (PVar "a") (PVar "rest")) (PVar "acc")) (EIf (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "a")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "a")) (ELit (LString "-")))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate explain: unknown flag: ")) (EApp (EVar "display") (EVar "a"))) (ELit (LString "")))) (EIf (EVar "otherwise") (EMatch (EFieldAccess (EVar "acc") "path") (arm (PCon "Some" PWild) () (EApp (EVar "Err") (ELit (LString "medaka gate explain: expected exactly one <path> argument")))) (arm (PCon "None") () (EApp (EApp (EVar "parseExplainArgs") (EVar "rest")) (EVariantUpdate "ExplainArgs" (EVar "acc") ((fa "path" (EApp (EVar "Some") (EVar "a")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "explainCmdBody" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "explainCmdBody" ((PVar "argv")) (EMatch (EApp (EApp (EVar "parseExplainArgs") (EVar "argv")) (ERecordCreate "ExplainArgs" ((fa "registry" (EVar "None")) (fa "path" (EVar "None"))))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "a")) () (EMatch (EFieldAccess (EVar "a") "path") (arm (PCon "None") () (EApp (EVar "emit") (EApp (EVar "Err") (ELit (LString "usage: medaka gate explain <path> [--registry <path>]"))))) (arm (PCon "Some" (PVar "tok")) () (EBlock (DoLet false false (PVar "path") (EApp (EVar "registryPath") (EFieldAccess (EVar "a") "registry"))) (DoExpr (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate explain: cannot read registry: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EVar "parseRegistry") (EVar "src")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate explain: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "gates")) () (EApp (EVar "putStr") (EApp (EApp (EVar "explainOutput") (EVar "tok")) (EVar "gates"))))))))))))))
+(DTypeSig false "ciWorkflowRel" (TyCon "String"))
+(DFunDef false "ciWorkflowRel" () (ELit (LString ".github/workflows/ci.yml")))
+(DTypeSig false "ciMatrixBegin" (TyCon "String"))
+(DFunDef false "ciMatrixBegin" () (ELit (LString "          # GENERATED:BEGIN gates-matrix — `make gen-ci` (medaka gate ci) from test/gates.toml. DO NOT EDIT BY HAND.")))
+(DTypeSig false "ciMatrixEnd" (TyCon "String"))
+(DFunDef false "ciMatrixEnd" () (ELit (LString "          # GENERATED:END gates-matrix")))
+(DTypeSig false "ciProseLine" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "ciProseLine" ((PLit (LString ""))) (ELit (LString "            #")))
+(DFunDef false "ciProseLine" ((PVar "l")) (EBinOp "++" (EBinOp "++" (ELit (LString "            # ")) (EApp (EVar "display") (EVar "l"))) (ELit (LString ""))))
+(DTypeSig false "dropTrailBlank" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "dropTrailBlank" ((PList)) (EListLit))
+(DFunDef false "dropTrailBlank" ((PCons (PVar "x") (PList))) (EIf (EBinOp "==" (EVar "x") (ELit (LString ""))) (EListLit) (EIf (EVar "otherwise") (EListLit (EVar "x")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "dropTrailBlank" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "x") (EApp (EVar "dropTrailBlank") (EVar "xs"))))
+(DTypeSig false "ciQuotedNames" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyCon "String")))
+(DFunDef false "ciQuotedNames" ((PList)) (ELit (LString "")))
+(DFunDef false "ciQuotedNames" ((PCons (PVar "g") (PList))) (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString "'"))))
+(DFunDef false "ciQuotedNames" ((PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString "' "))) (EApp (EVar "display") (EApp (EVar "ciQuotedNames") (EVar "gs")))) (ELit (LString ""))))
+(DTypeSig false "ciShardGates" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "Gate")))))
+(DFunDef false "ciShardGates" ((PVar "nm") (PVar "gs")) (EApp (EApp (EVar "filterList") (ELam ((PVar "g")) (EBinOp "==" (EFieldAccess (EVar "g") "shard") (EVar "nm")))) (EVar "gs")))
+(DTypeSig false "ciOptLine" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "ciOptLine" (PWild (PCon "False")) (EListLit))
+(DFunDef false "ciOptLine" ((PVar "key") (PCon "True")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "            ")) (EApp (EVar "display") (EVar "key"))) (ELit (LString ": \"1\"")))))
+(DTypeSig false "ciRowLines" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Shard") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "ciRowLines" ((PVar "rowGates") (PVar "prose") (PVar "sh")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "          - name: ")) (EApp (EVar "display") (EFieldAccess (EVar "sh") "name"))) (ELit (LString "")))) (EApp (EApp (EVar "map") (EVar "ciProseLine")) (EVar "prose"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "            pattern: \"")) (EApp (EVar "display") (EApp (EVar "ciQuotedNames") (EVar "rowGates")))) (ELit (LString "\""))))) (EApp (EApp (EVar "ciOptLine") (ELit (LString "full_cores"))) (EFieldAccess (EVar "sh") "fullCores"))) (EApp (EApp (EVar "ciOptLine") (ELit (LString "wasm_arm"))) (EFieldAccess (EVar "sh") "wasmArm"))))
+(DTypeSig false "ciOneRow" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyCon "Shard") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "ciOneRow" ((PVar "root") (PVar "gates") (PVar "sh")) (EMatch (EApp (EApp (EVar "ciShardGates") (EFieldAccess (EVar "sh") "name")) (EVar "gates")) (arm (PList) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: shard '")) (EApp (EVar "display") (EFieldAccess (EVar "sh") "name"))) (ELit (LString "' has no gates in the registry — a row with an empty pattern fails its own shard in CI"))))) (arm (PVar "rowGates") () (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (EFieldAccess (EVar "sh") "rationale"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: shard '")) (EApp (EVar "display") (EFieldAccess (EVar "sh") "name"))) (ELit (LString "': cannot read rationale "))) (EApp (EVar "display") (EFieldAccess (EVar "sh") "rationale"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "src")) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "ciRowLines") (EVar "rowGates")) (EApp (EVar "dropTrailBlank") (EApp (EVar "splitNl") (EVar "src")))) (EVar "sh"))))))))
+(DTypeSig false "ciRowsLoop" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Shard")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))))
+(DFunDef false "ciRowsLoop" (PWild PWild (PList) (PVar "acc")) (EApp (EVar "Ok") (EApp (EVar "reverseL") (EVar "acc"))))
+(DFunDef false "ciRowsLoop" ((PVar "root") (PVar "gates") (PCons (PVar "sh") (PVar "shs")) (PVar "acc")) (EMatch (EApp (EApp (EApp (EVar "ciOneRow") (EVar "root")) (EVar "gates")) (EVar "sh")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PVar "ls")) () (EApp (EApp (EApp (EApp (EVar "ciRowsLoop") (EVar "root")) (EVar "gates")) (EVar "shs")) (EBinOp "++" (EApp (EVar "reverseL") (EVar "ls")) (EVar "acc"))))))
+(DTypeSig false "ciKnownShard" (TyFun (TyApp (TyCon "List") (TyCon "Shard")) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "ciKnownShard" (PWild (PLit (LString "other-job"))) (EVar "True"))
+(DFunDef false "ciKnownShard" ((PList) PWild) (EVar "False"))
+(DFunDef false "ciKnownShard" ((PCons (PVar "sh") (PVar "shs")) (PVar "nm")) (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "sh") "name") (EVar "nm")) (EApp (EApp (EVar "ciKnownShard") (EVar "shs")) (EVar "nm"))))
+(DTypeSig false "ciUnknownShards" (TyFun (TyApp (TyCon "List") (TyCon "Shard")) (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "ciUnknownShards" (PWild (PList)) (EListLit))
+(DFunDef false "ciUnknownShards" ((PVar "shs") (PCons (PVar "g") (PVar "gs"))) (EIf (EApp (EApp (EVar "ciKnownShard") (EVar "shs")) (EFieldAccess (EVar "g") "shard")) (EApp (EApp (EVar "ciUnknownShards") (EVar "shs")) (EVar "gs")) (EIf (EVar "otherwise") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString " (shard '"))) (EApp (EVar "display") (EFieldAccess (EVar "g") "shard"))) (ELit (LString "')"))) (EApp (EApp (EVar "ciUnknownShards") (EVar "shs")) (EVar "gs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ciCountLine" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int"))))
+(DFunDef false "ciCountLine" (PWild (PList)) (ELit (LInt 0)))
+(DFunDef false "ciCountLine" ((PVar "want") (PCons (PVar "l") (PVar "ls"))) (EIf (EBinOp "==" (EVar "l") (EVar "want")) (EBinOp "+" (ELit (LInt 1)) (EApp (EApp (EVar "ciCountLine") (EVar "want")) (EVar "ls"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ciCountLine") (EVar "want")) (EVar "ls")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ciIndexOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "ciIndexOf" (PWild (PList) PWild) (EUnOp "-" (ELit (LInt 1))))
+(DFunDef false "ciIndexOf" ((PVar "want") (PCons (PVar "l") (PVar "ls")) (PVar "i")) (EIf (EBinOp "==" (EVar "l") (EVar "want")) (EVar "i") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ciIndexOf") (EVar "want")) (EVar "ls")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ciAfterEnd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "ciAfterEnd" ((PList)) (EListLit))
+(DFunDef false "ciAfterEnd" ((PCons (PVar "l") (PVar "ls"))) (EIf (EBinOp "==" (EVar "l") (EVar "ciMatrixEnd")) (EBinOp "::" (EVar "l") (EVar "ls")) (EIf (EVar "otherwise") (EApp (EVar "ciAfterEnd") (EVar "ls")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ciSpliceGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "ciSpliceGo" (PWild (PList)) (EListLit))
+(DFunDef false "ciSpliceGo" ((PVar "gen") (PCons (PVar "l") (PVar "ls"))) (EIf (EBinOp "==" (EVar "l") (EVar "ciMatrixBegin")) (EBinOp "::" (EVar "l") (EBinOp "++" (EVar "gen") (EApp (EVar "ciAfterEnd") (EVar "ls")))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "l") (EApp (EApp (EVar "ciSpliceGo") (EVar "gen")) (EVar "ls"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ciSplice" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "ciSplice" ((PVar "gen") (PVar "src")) (EIf (EBinOp "/=" (EApp (EApp (EVar "ciCountLine") (EVar "ciMatrixBegin")) (EVar "src")) (ELit (LInt 1))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: ")) (EApp (EVar "display") (EVar "ciWorkflowRel"))) (ELit (LString " must contain exactly one BEGIN marker line (found "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EApp (EVar "ciCountLine") (EVar "ciMatrixBegin")) (EVar "src"))))) (ELit (LString "):\n"))) (EApp (EVar "display") (EVar "ciMatrixBegin"))) (ELit (LString "")))) (EIf (EBinOp "/=" (EApp (EApp (EVar "ciCountLine") (EVar "ciMatrixEnd")) (EVar "src")) (ELit (LInt 1))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: ")) (EApp (EVar "display") (EVar "ciWorkflowRel"))) (ELit (LString " must contain exactly one END marker line (found "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EApp (EVar "ciCountLine") (EVar "ciMatrixEnd")) (EVar "src"))))) (ELit (LString "):\n"))) (EApp (EVar "display") (EVar "ciMatrixEnd"))) (ELit (LString "")))) (EIf (EBinOp "<" (EApp (EApp (EApp (EVar "ciIndexOf") (EVar "ciMatrixEnd")) (EVar "src")) (ELit (LInt 0))) (EApp (EApp (EApp (EVar "ciIndexOf") (EVar "ciMatrixBegin")) (EVar "src")) (ELit (LInt 0)))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: ")) (EApp (EVar "display") (EVar "ciWorkflowRel"))) (ELit (LString ": the END marker precedes the BEGIN marker")))) (EIf (EVar "otherwise") (EApp (EVar "Ok") (EApp (EApp (EVar "ciSpliceGo") (EVar "gen")) (EVar "src"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DData Private "CiArgs" () ((variant "CiArgs" (ConNamed (field "registry" (TyApp (TyCon "Option") (TyCon "String"))) (field "workflow" (TyApp (TyCon "Option") (TyCon "String")))))) ())
+(DTypeSig false "parseCiArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CiArgs") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "CiArgs")))))
+(DFunDef false "parseCiArgs" ((PList) (PVar "acc")) (EApp (EVar "Ok") (EVar "acc")))
+(DFunDef false "parseCiArgs" ((PCons (PLit (LString "--registry")) (PCons (PVar "p") (PVar "rest"))) (PVar "acc")) (EApp (EApp (EVar "parseCiArgs") (EVar "rest")) (EVariantUpdate "CiArgs" (EVar "acc") ((fa "registry" (EApp (EVar "Some") (EVar "p")))))))
+(DFunDef false "parseCiArgs" ((PCons (PLit (LString "--registry")) (PList)) PWild) (EApp (EVar "Err") (ELit (LString "medaka gate ci: --registry needs a path"))))
+(DFunDef false "parseCiArgs" ((PCons (PLit (LString "--workflow")) (PCons (PVar "p") (PVar "rest"))) (PVar "acc")) (EApp (EApp (EVar "parseCiArgs") (EVar "rest")) (EVariantUpdate "CiArgs" (EVar "acc") ((fa "workflow" (EApp (EVar "Some") (EVar "p")))))))
+(DFunDef false "parseCiArgs" ((PCons (PLit (LString "--workflow")) (PList)) PWild) (EApp (EVar "Err") (ELit (LString "medaka gate ci: --workflow needs a path"))))
+(DFunDef false "parseCiArgs" ((PCons (PVar "a") PWild) PWild) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: unexpected argument: ")) (EApp (EVar "display") (EVar "a"))) (ELit (LString "")))))
+(DTypeSig false "ciWorkflowPath" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "ciWorkflowPath" ((PCon "Some" (PVar "p")) PWild) (EVar "p"))
+(DFunDef false "ciWorkflowPath" ((PCon "None") (PVar "root")) (EApp (EApp (EVar "joinPath") (EVar "root")) (EVar "ciWorkflowRel")))
+(DTypeSig false "ciNewText" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))))
+(DFunDef false "ciNewText" ((PVar "root") (PVar "regPath") (PVar "regSrc") (PVar "wfSrc")) (EMatch (EApp (EVar "parseRegistry") (EVar "regSrc")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "gates")) () (EMatch (EApp (EVar "parseShards") (EVar "regSrc")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "shs")) () (EMatch (EApp (EApp (EVar "ciUnknownShards") (EVar "shs")) (EVar "gates")) (arm (PList) () (EMatch (EApp (EApp (EApp (EApp (EVar "ciRowsLoop") (EVar "root")) (EVar "gates")) (EVar "shs")) (EListLit)) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PVar "gen")) () (EApp (EApp (EVar "map") (EVar "joinNl")) (EApp (EApp (EVar "ciSplice") (EVar "gen")) (EApp (EVar "splitNl") (EVar "wfSrc"))))))) (arm (PVar "bad") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: ")) (EApp (EVar "display") (EVar "regPath"))) (ELit (LString ": gate(s) name a shard with no [[shard]] row: "))) (EApp (EVar "display") (EApp (EVar "joinSpace") (EVar "bad")))) (ELit (LString "")))))))))))
+(DTypeSig false "ciWrite" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
+(DFunDef false "ciWrite" ((PVar "wfPath") (PVar "wfSrc") (PVar "out")) (EIf (EBinOp "==" (EVar "out") (EVar "wfSrc")) (EApp (EVar "putStr") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: ")) (EApp (EVar "display") (EVar "wfPath"))) (ELit (LString " already up to date\n")))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "writeFile") (EVar "wfPath")) (EVar "out")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: cannot write ")) (EApp (EVar "display") (EVar "wfPath"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" PWild) () (EApp (EVar "putStr") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: regenerated the gates matrix in ")) (EApp (EVar "display") (EVar "wfPath"))) (ELit (LString "\n")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ciCmdBody" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "ciCmdBody" ((PVar "argv")) (EMatch (EApp (EApp (EVar "parseCiArgs") (EVar "argv")) (ERecordCreate "CiArgs" ((fa "registry" (EVar "None")) (fa "workflow" (EVar "None"))))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "a")) () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "regPath") (EApp (EVar "registryPath") (EFieldAccess (EVar "a") "registry"))) (DoLet false false (PVar "wfPath") (EApp (EApp (EVar "ciWorkflowPath") (EFieldAccess (EVar "a") "workflow")) (EVar "root"))) (DoExpr (EMatch (EApp (EVar "readFile") (EVar "regPath")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: cannot read registry: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "regSrc")) () (EMatch (EApp (EVar "readFile") (EVar "wfPath")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: cannot read ")) (EApp (EVar "display") (EVar "wfPath"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "wfSrc")) () (EMatch (EApp (EApp (EApp (EApp (EVar "ciNewText") (EVar "root")) (EVar "regPath")) (EVar "regSrc")) (EVar "wfSrc")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "out")) () (EApp (EApp (EApp (EVar "ciWrite") (EVar "wfPath")) (EVar "wfSrc")) (EVar "out")))))))))))))
 (DProp false "a bare selector token is name: sugar" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "parseSelector") (EApp (EVar "intToString") (EVar "n"))) (EApp (EVar "Ok") (EApp (EVar "SelName") (EApp (EVar "intToString") (EVar "n"))))))
 (DProp false "an explicit name: selector agrees with the bare form" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "parseSelector") (EBinOp "++" (ELit (LString "name:")) (EApp (EVar "intToString") (EVar "n")))) (EApp (EVar "parseSelector") (EApp (EVar "intToString") (EVar "n")))))
 (DProp false "a literal glob matches itself and nothing longer" ((pp "n" (TyCon "Int"))) (EBinOp "&&" (EApp (EApp (EVar "globMatch") (EApp (EVar "intToString") (EVar "n"))) (EApp (EVar "intToString") (EVar "n"))) (EApp (EVar "not") (EApp (EApp (EVar "globMatch") (EApp (EVar "intToString") (EVar "n"))) (EBinOp "++" (EApp (EVar "intToString") (EVar "n")) (ELit (LString "x")))))))
@@ -2264,7 +2570,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "renderShards" ((PList)) (ELit (LString "")))
 (DFunDef false "renderShards" ((PCons (PVar "sh") (PVar "shs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "sh") "name"))) (ELit (LString ": full_cores="))) (EApp (EMethodRef "display") (EApp (EVar "boolWord") (EFieldAccess (EVar "sh") "fullCores")))) (ELit (LString " wasm_arm="))) (EApp (EMethodRef "display") (EApp (EVar "boolWord") (EFieldAccess (EVar "sh") "wasmArm")))) (ELit (LString " rationale="))) (EApp (EMethodRef "display") (EFieldAccess (EVar "sh") "rationale"))) (ELit (LString "\n"))) (EApp (EVar "renderShards") (EVar "shs"))))
 (DTypeSig true "gateHelpText" (TyCon "String"))
-(DFunDef false "gateHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka gate — Query the gate registry (test/gates.toml)\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka gate list    [<selector>...] [--json] [--registry <path>]\n")) (ELit (LString "  medaka gate list    --shards [--json] [--registry <path>]\n")) (ELit (LString "  medaka gate run     [<selector>...] [--dry-run] [--json] [--report <path>]\n")) (ELit (LString "                      [--timeout <secs>] [--jobs <n>] [--no-stale-check]\n")) (ELit (LString "                      [--registry <path>]\n")) (ELit (LString "  medaka gate verify  [--registry <path>]\n")) (ELit (LString "  medaka gate explain <path> [--registry <path>]\n")) (ELit (LString "\n")) (ELit (LString "Selectors (conjunction — a gate must match all of them):\n")) (ELit (LString "  name:<glob>      gate name, e.g. name:diff_compiler_*\n")) (ELit (LString "  area:<glob>      semantic area, e.g. area:backend\n")) (ELit (LString "  project:<glob>   owning project, e.g. project:sqlite\n")) (ELit (LString "  tier:<glob>      merge | nightly | ondemand\n")) (ELit (LString "  <glob>           sugar for name:<glob>\n")) (ELit (LString "\n")) (ELit (LString "A selector matching zero gates is an error, not an empty list.\n")) (ELit (LString "\n")) (ELit (LString "  --json             list: the registry entries as JSON.\n")) (ELit (LString "  --shards           list: the ci.yml `gates` matrix rows, not the gates.\n")) (ELit (LString "                     run: the machine-readable run report as JSON.\n")) (ELit (LString "  --registry <path>  read this registry instead of <MEDAKA_ROOT>/test/gates.toml\n")) (ELit (LString "\n")) (ELit (LString "`gate run` only:\n")) (ELit (LString "  --dry-run          print the resolved invocation plan; execute nothing\n")) (ELit (LString "  --report <path>    write the per-gate timing report (JSON) to <path>\n")) (ELit (LString "  --timeout <secs>   override the per-gate fuse (default by `cost`:\n")) (ELit (LString "                     cheap 300s, medium 900s, heavy 3600s)\n")) (ELit (LString "  --jobs <n>         ACCEPTED BUT IGNORED — this runner is sequential; the\n")) (ELit (LString "                     value is recorded in the report.  Medaka has no\n")) (ELit (LString "                     concurrency primitive (stdlib/runtime.mdk has no\n")) (ELit (LString "                     fork/waitpid) and runCommand blocks.\n")) (ELit (LString "  --no-stale-check   skip the stale-oracle refusal (as NO_STALE_CHECK=1 does;\n")) (ELit (LString "                     it is also skipped whenever CI is set, on purpose)\n")) (ELit (LString "\n")) (ELit (LString "`gate run` reports each gate's RAW exit code and never normalizes polarity:\n")) (ELit (LString "diff_compiler_must_fail is healthy when RED ([G-MUST-FAIL]).\n")) (ELit (LString "\n")) (ELit (LString "`gate verify` is the drift gate: text-only, no build. Checks every gate\n")) (ELit (LString "candidate (test/preflight.sh's own candidate universe) is enrolled or\n")) (ELit (LString "explicitly listed as a non-gate tool, every entry's run/oracles/corpus\n")) (ELit (LString "targets exist, every entry is reachable by a selector, and no two entries\n")) (ELit (LString "share a `name`. Exits nonzero\n")) (ELit (LString "on any violation.\n")) (ELit (LString "\n")) (ELit (LString "`gate explain <path>` is the reverse lookup: which entries select a\n")) (ELit (LString "changed path, and why. Two layers, printed with preflight's own prefixes:\n")) (ELit (LString "the registry-level POLICY (FULL on a blast-radius path; UNMAPPED + FULL on\n")) (ELit (LString "an unmatched non-prose path; UNMAPPED alone on prose), then per-entry\n")) (ELit (LString "`sources` globs and `corpus` directories on GATE lines. A bare token that\n")) (ELit (LString "is also a field value (name/area/project/tier/run) gets TOKEN lines.\n")))))
+(DFunDef false "gateHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka gate — Query the gate registry (test/gates.toml)\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka gate list    [<selector>...] [--json] [--registry <path>]\n")) (ELit (LString "  medaka gate list    --shards [--json] [--registry <path>]\n")) (ELit (LString "  medaka gate run     [<selector>...] [--dry-run] [--json] [--report <path>]\n")) (ELit (LString "                      [--timeout <secs>] [--jobs <n>] [--no-stale-check]\n")) (ELit (LString "                      [--registry <path>]\n")) (ELit (LString "  medaka gate verify  [--registry <path>]\n")) (ELit (LString "  medaka gate explain <path> [--registry <path>]\n")) (ELit (LString "  medaka gate ci      [--registry <path>] [--workflow <path>]\n")) (ELit (LString "\n")) (ELit (LString "Selectors (conjunction — a gate must match all of them):\n")) (ELit (LString "  name:<glob>      gate name, e.g. name:diff_compiler_*\n")) (ELit (LString "  area:<glob>      semantic area, e.g. area:backend\n")) (ELit (LString "  project:<glob>   owning project, e.g. project:sqlite\n")) (ELit (LString "  tier:<glob>      merge | nightly | ondemand\n")) (ELit (LString "  <glob>           sugar for name:<glob>\n")) (ELit (LString "\n")) (ELit (LString "A selector matching zero gates is an error, not an empty list.\n")) (ELit (LString "\n")) (ELit (LString "  --json             list: the registry entries as JSON.\n")) (ELit (LString "  --shards           list: the ci.yml `gates` matrix rows, not the gates.\n")) (ELit (LString "                     run: the machine-readable run report as JSON.\n")) (ELit (LString "  --registry <path>  read this registry instead of <MEDAKA_ROOT>/test/gates.toml\n")) (ELit (LString "\n")) (ELit (LString "`gate run` only:\n")) (ELit (LString "  --dry-run          print the resolved invocation plan; execute nothing\n")) (ELit (LString "  --report <path>    write the per-gate timing report (JSON) to <path>\n")) (ELit (LString "  --timeout <secs>   override the per-gate fuse (default by `cost`:\n")) (ELit (LString "                     cheap 300s, medium 900s, heavy 3600s)\n")) (ELit (LString "  --jobs <n>         ACCEPTED BUT IGNORED — this runner is sequential; the\n")) (ELit (LString "                     value is recorded in the report.  Medaka has no\n")) (ELit (LString "                     concurrency primitive (stdlib/runtime.mdk has no\n")) (ELit (LString "                     fork/waitpid) and runCommand blocks.\n")) (ELit (LString "  --no-stale-check   skip the stale-oracle refusal (as NO_STALE_CHECK=1 does;\n")) (ELit (LString "                     it is also skipped whenever CI is set, on purpose)\n")) (ELit (LString "\n")) (ELit (LString "`gate run` reports each gate's RAW exit code and never normalizes polarity:\n")) (ELit (LString "diff_compiler_must_fail is healthy when RED ([G-MUST-FAIL]).\n")) (ELit (LString "\n")) (ELit (LString "`gate verify` is the drift gate: text-only, no build. Checks every gate\n")) (ELit (LString "candidate (test/preflight.sh's own candidate universe) is enrolled or\n")) (ELit (LString "explicitly listed as a non-gate tool, every entry's run/oracles/corpus\n")) (ELit (LString "targets exist, every entry is reachable by a selector, and no two entries\n")) (ELit (LString "share a `name`. Exits nonzero\n")) (ELit (LString "on any violation.\n")) (ELit (LString "\n")) (ELit (LString "`gate ci` regenerates the marked GENERATED region in\n")) (ELit (LString ".github/workflows/ci.yml — the `gates` job's eight-row matrix — from\n")) (ELit (LString "the registry's [[shard]] rows and every entry's `shard` field. Run it\n")) (ELit (LString "via `make gen-ci`; it is idempotent, so `git diff --exit-code` after a\n")) (ELit (LString "run is the drift check. The named-gate steps in soundness/wasm are NOT\n")) (ELit (LString "generated — the registry cannot say which job runs which (see the\n")) (ELit (LString "`gate ci` section of compiler/tools/gate_cmd.mdk).\n")) (ELit (LString "\n")) (ELit (LString "`gate explain <path>` is the reverse lookup: which entries select a\n")) (ELit (LString "changed path, and why. Two layers, printed with preflight's own prefixes:\n")) (ELit (LString "the registry-level POLICY (FULL on a blast-radius path; UNMAPPED + FULL on\n")) (ELit (LString "an unmatched non-prose path; UNMAPPED alone on prose), then per-entry\n")) (ELit (LString "`sources` globs and `corpus` directories on GATE lines. A bare token that\n")) (ELit (LString "is also a field value (name/area/project/tier/run) gets TOKEN lines.\n")))))
 (DData Private "ListArgs" () ((variant "ListArgs" (ConNamed (field "json" (TyCon "Bool")) (field "shards" (TyCon "Bool")) (field "registry" (TyApp (TyCon "Option") (TyCon "String"))) (field "selectors" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig false "parseListArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "ListArgs") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "ListArgs")))))
 (DFunDef false "parseListArgs" ((PList) (PVar "acc")) (EApp (EVar "Ok") (EVariantUpdate "ListArgs" (EVar "acc") ((fa "selectors" (EApp (EApp (EVar "reverseStrs") (EFieldAccess (EVar "acc") "selectors")) (EListLit)))))))
@@ -2303,12 +2609,13 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "joinSpace" ((PCons (PVar "x") (PList))) (EVar "x"))
 (DFunDef false "joinSpace" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "joinSpace") (EVar "xs")))) (ELit (LString ""))))
 (DTypeSig true "runGateCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runGateCmd" ((PList)) (EApp (EVar "emit") (EApp (EVar "Err") (ELit (LString "usage: medaka gate <list|run|verify|explain> [<selector>...] [--json]")))))
+(DFunDef false "runGateCmd" ((PList)) (EApp (EVar "emit") (EApp (EVar "Err") (ELit (LString "usage: medaka gate <list|run|verify|explain|ci> [<selector>...] [--json]")))))
 (DFunDef false "runGateCmd" ((PCons (PLit (LString "list")) (PVar "rest"))) (EApp (EVar "emit") (EApp (EVar "listOutput") (EVar "rest"))))
 (DFunDef false "runGateCmd" ((PCons (PLit (LString "run")) (PVar "rest"))) (EApp (EVar "runRunCmdBody") (EVar "rest")))
 (DFunDef false "runGateCmd" ((PCons (PLit (LString "verify")) (PVar "rest"))) (EApp (EVar "verifyCmdBody") (EVar "rest")))
 (DFunDef false "runGateCmd" ((PCons (PLit (LString "explain")) (PVar "rest"))) (EApp (EVar "explainCmdBody") (EVar "rest")))
-(DFunDef false "runGateCmd" ((PCons (PVar "sub") PWild)) (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate: unknown subcommand '")) (EApp (EMethodRef "display") (EMethodRef "sub"))) (ELit (LString "' (expected: list, run, verify, explain)"))))))
+(DFunDef false "runGateCmd" ((PCons (PLit (LString "ci")) (PVar "rest"))) (EApp (EVar "ciCmdBody") (EVar "rest")))
+(DFunDef false "runGateCmd" ((PCons (PVar "sub") PWild)) (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate: unknown subcommand '")) (EApp (EMethodRef "display") (EMethodRef "sub"))) (ELit (LString "' (expected: list, run, verify, explain, ci)"))))))
 (DData Public "GateResult" () ((variant "GateResult" (ConNamed (field "name" (TyCon "String")) (field "script" (TyCon "String")) (field "shell" (TyCon "String")) (field "exitCode" (TyCon "Int")) (field "timedOut" (TyCon "Bool")) (field "spawnError" (TyCon "String")) (field "seconds" (TyCon "Float")) (field "out" (TyCon "String")) (field "err" (TyCon "String"))))) ())
 (DData Private "RunEnv" () ((variant "RunEnv" (ConNamed (field "root" (TyCon "String")) (field "medaka" (TyCon "String")) (field "emitter" (TyCon "String")) (field "scratchRoot" (TyCon "String")) (field "timeoutOverride" (TyCon "Int"))))) ())
 (DTypeSig false "timeoutFor" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Int"))))
@@ -2591,6 +2898,73 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "parseExplainArgs" ((PCons (PVar "a") (PVar "rest")) (PVar "acc")) (EIf (EBinOp "&&" (EBinOp ">" (EApp (EVar "stringLength") (EVar "a")) (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "a")) (ELit (LString "-")))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate explain: unknown flag: ")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString "")))) (EIf (EVar "otherwise") (EMatch (EFieldAccess (EVar "acc") "path") (arm (PCon "Some" PWild) () (EApp (EVar "Err") (ELit (LString "medaka gate explain: expected exactly one <path> argument")))) (arm (PCon "None") () (EApp (EApp (EVar "parseExplainArgs") (EVar "rest")) (EVariantUpdate "ExplainArgs" (EVar "acc") ((fa "path" (EApp (EVar "Some") (EVar "a")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "explainCmdBody" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "explainCmdBody" ((PVar "argv")) (EMatch (EApp (EApp (EVar "parseExplainArgs") (EVar "argv")) (ERecordCreate "ExplainArgs" ((fa "registry" (EVar "None")) (fa "path" (EVar "None"))))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "a")) () (EMatch (EFieldAccess (EVar "a") "path") (arm (PCon "None") () (EApp (EVar "emit") (EApp (EVar "Err") (ELit (LString "usage: medaka gate explain <path> [--registry <path>]"))))) (arm (PCon "Some" (PVar "tok")) () (EBlock (DoLet false false (PVar "path") (EApp (EVar "registryPath") (EFieldAccess (EVar "a") "registry"))) (DoExpr (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate explain: cannot read registry: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "src")) () (EMatch (EApp (EVar "parseRegistry") (EVar "src")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate explain: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "gates")) () (EApp (EVar "putStr") (EApp (EApp (EVar "explainOutput") (EVar "tok")) (EVar "gates"))))))))))))))
+(DTypeSig false "ciWorkflowRel" (TyCon "String"))
+(DFunDef false "ciWorkflowRel" () (ELit (LString ".github/workflows/ci.yml")))
+(DTypeSig false "ciMatrixBegin" (TyCon "String"))
+(DFunDef false "ciMatrixBegin" () (ELit (LString "          # GENERATED:BEGIN gates-matrix — `make gen-ci` (medaka gate ci) from test/gates.toml. DO NOT EDIT BY HAND.")))
+(DTypeSig false "ciMatrixEnd" (TyCon "String"))
+(DFunDef false "ciMatrixEnd" () (ELit (LString "          # GENERATED:END gates-matrix")))
+(DTypeSig false "ciProseLine" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "ciProseLine" ((PLit (LString ""))) (ELit (LString "            #")))
+(DFunDef false "ciProseLine" ((PVar "l")) (EBinOp "++" (EBinOp "++" (ELit (LString "            # ")) (EApp (EMethodRef "display") (EVar "l"))) (ELit (LString ""))))
+(DTypeSig false "dropTrailBlank" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "dropTrailBlank" ((PList)) (EListLit))
+(DFunDef false "dropTrailBlank" ((PCons (PVar "x") (PList))) (EIf (EBinOp "==" (EVar "x") (ELit (LString ""))) (EListLit) (EIf (EVar "otherwise") (EListLit (EVar "x")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "dropTrailBlank" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "x") (EApp (EVar "dropTrailBlank") (EVar "xs"))))
+(DTypeSig false "ciQuotedNames" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyCon "String")))
+(DFunDef false "ciQuotedNames" ((PList)) (ELit (LString "")))
+(DFunDef false "ciQuotedNames" ((PCons (PVar "g") (PList))) (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString "'"))))
+(DFunDef false "ciQuotedNames" ((PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString "' "))) (EApp (EMethodRef "display") (EApp (EVar "ciQuotedNames") (EVar "gs")))) (ELit (LString ""))))
+(DTypeSig false "ciShardGates" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "Gate")))))
+(DFunDef false "ciShardGates" ((PVar "nm") (PVar "gs")) (EApp (EApp (EVar "filterList") (ELam ((PVar "g")) (EBinOp "==" (EFieldAccess (EVar "g") "shard") (EVar "nm")))) (EVar "gs")))
+(DTypeSig false "ciOptLine" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "ciOptLine" (PWild (PCon "False")) (EListLit))
+(DFunDef false "ciOptLine" ((PVar "key") (PCon "True")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "            ")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString ": \"1\"")))))
+(DTypeSig false "ciRowLines" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Shard") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "ciRowLines" ((PVar "rowGates") (PVar "prose") (PVar "sh")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "          - name: ")) (EApp (EMethodRef "display") (EFieldAccess (EVar "sh") "name"))) (ELit (LString "")))) (EApp (EApp (EMethodRef "map") (EVar "ciProseLine")) (EVar "prose"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "            pattern: \"")) (EApp (EMethodRef "display") (EApp (EVar "ciQuotedNames") (EVar "rowGates")))) (ELit (LString "\""))))) (EApp (EApp (EVar "ciOptLine") (ELit (LString "full_cores"))) (EFieldAccess (EVar "sh") "fullCores"))) (EApp (EApp (EVar "ciOptLine") (ELit (LString "wasm_arm"))) (EFieldAccess (EVar "sh") "wasmArm"))))
+(DTypeSig false "ciOneRow" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyCon "Shard") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "ciOneRow" ((PVar "root") (PVar "gates") (PVar "sh")) (EMatch (EApp (EApp (EVar "ciShardGates") (EFieldAccess (EVar "sh") "name")) (EVar "gates")) (arm (PList) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: shard '")) (EApp (EMethodRef "display") (EFieldAccess (EVar "sh") "name"))) (ELit (LString "' has no gates in the registry — a row with an empty pattern fails its own shard in CI"))))) (arm (PVar "rowGates") () (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (EFieldAccess (EVar "sh") "rationale"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: shard '")) (EApp (EMethodRef "display") (EFieldAccess (EVar "sh") "name"))) (ELit (LString "': cannot read rationale "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "sh") "rationale"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "src")) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "ciRowLines") (EVar "rowGates")) (EApp (EVar "dropTrailBlank") (EApp (EVar "splitNl") (EVar "src")))) (EVar "sh"))))))))
+(DTypeSig false "ciRowsLoop" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Shard")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))))
+(DFunDef false "ciRowsLoop" (PWild PWild (PList) (PVar "acc")) (EApp (EVar "Ok") (EApp (EVar "reverseL") (EVar "acc"))))
+(DFunDef false "ciRowsLoop" ((PVar "root") (PVar "gates") (PCons (PVar "sh") (PVar "shs")) (PVar "acc")) (EMatch (EApp (EApp (EApp (EVar "ciOneRow") (EVar "root")) (EVar "gates")) (EVar "sh")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PVar "ls")) () (EApp (EApp (EApp (EApp (EVar "ciRowsLoop") (EVar "root")) (EVar "gates")) (EVar "shs")) (EBinOp "++" (EApp (EVar "reverseL") (EVar "ls")) (EVar "acc"))))))
+(DTypeSig false "ciKnownShard" (TyFun (TyApp (TyCon "List") (TyCon "Shard")) (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "ciKnownShard" (PWild (PLit (LString "other-job"))) (EVar "True"))
+(DFunDef false "ciKnownShard" ((PList) PWild) (EVar "False"))
+(DFunDef false "ciKnownShard" ((PCons (PVar "sh") (PVar "shs")) (PVar "nm")) (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "sh") "name") (EVar "nm")) (EApp (EApp (EVar "ciKnownShard") (EVar "shs")) (EVar "nm"))))
+(DTypeSig false "ciUnknownShards" (TyFun (TyApp (TyCon "List") (TyCon "Shard")) (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "ciUnknownShards" (PWild (PList)) (EListLit))
+(DFunDef false "ciUnknownShards" ((PVar "shs") (PCons (PVar "g") (PVar "gs"))) (EIf (EApp (EApp (EVar "ciKnownShard") (EVar "shs")) (EFieldAccess (EVar "g") "shard")) (EApp (EApp (EVar "ciUnknownShards") (EVar "shs")) (EVar "gs")) (EIf (EVar "otherwise") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString " (shard '"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "shard"))) (ELit (LString "')"))) (EApp (EApp (EVar "ciUnknownShards") (EVar "shs")) (EVar "gs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ciCountLine" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int"))))
+(DFunDef false "ciCountLine" (PWild (PList)) (ELit (LInt 0)))
+(DFunDef false "ciCountLine" ((PVar "want") (PCons (PVar "l") (PVar "ls"))) (EIf (EBinOp "==" (EVar "l") (EVar "want")) (EBinOp "+" (ELit (LInt 1)) (EApp (EApp (EVar "ciCountLine") (EVar "want")) (EVar "ls"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ciCountLine") (EVar "want")) (EVar "ls")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ciIndexOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "ciIndexOf" (PWild (PList) PWild) (EUnOp "-" (ELit (LInt 1))))
+(DFunDef false "ciIndexOf" ((PVar "want") (PCons (PVar "l") (PVar "ls")) (PVar "i")) (EIf (EBinOp "==" (EVar "l") (EVar "want")) (EVar "i") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "ciIndexOf") (EVar "want")) (EVar "ls")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ciAfterEnd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "ciAfterEnd" ((PList)) (EListLit))
+(DFunDef false "ciAfterEnd" ((PCons (PVar "l") (PVar "ls"))) (EIf (EBinOp "==" (EVar "l") (EVar "ciMatrixEnd")) (EBinOp "::" (EVar "l") (EVar "ls")) (EIf (EVar "otherwise") (EApp (EVar "ciAfterEnd") (EVar "ls")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ciSpliceGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "ciSpliceGo" (PWild (PList)) (EListLit))
+(DFunDef false "ciSpliceGo" ((PVar "gen") (PCons (PVar "l") (PVar "ls"))) (EIf (EBinOp "==" (EVar "l") (EVar "ciMatrixBegin")) (EBinOp "::" (EVar "l") (EBinOp "++" (EVar "gen") (EApp (EVar "ciAfterEnd") (EVar "ls")))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "l") (EApp (EApp (EVar "ciSpliceGo") (EVar "gen")) (EVar "ls"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ciSplice" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "ciSplice" ((PVar "gen") (PVar "src")) (EIf (EBinOp "/=" (EApp (EApp (EVar "ciCountLine") (EVar "ciMatrixBegin")) (EVar "src")) (ELit (LInt 1))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: ")) (EApp (EMethodRef "display") (EVar "ciWorkflowRel"))) (ELit (LString " must contain exactly one BEGIN marker line (found "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EApp (EVar "ciCountLine") (EVar "ciMatrixBegin")) (EVar "src"))))) (ELit (LString "):\n"))) (EApp (EMethodRef "display") (EVar "ciMatrixBegin"))) (ELit (LString "")))) (EIf (EBinOp "/=" (EApp (EApp (EVar "ciCountLine") (EVar "ciMatrixEnd")) (EVar "src")) (ELit (LInt 1))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: ")) (EApp (EMethodRef "display") (EVar "ciWorkflowRel"))) (ELit (LString " must contain exactly one END marker line (found "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EApp (EVar "ciCountLine") (EVar "ciMatrixEnd")) (EVar "src"))))) (ELit (LString "):\n"))) (EApp (EMethodRef "display") (EVar "ciMatrixEnd"))) (ELit (LString "")))) (EIf (EBinOp "<" (EApp (EApp (EApp (EVar "ciIndexOf") (EVar "ciMatrixEnd")) (EVar "src")) (ELit (LInt 0))) (EApp (EApp (EApp (EVar "ciIndexOf") (EVar "ciMatrixBegin")) (EVar "src")) (ELit (LInt 0)))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: ")) (EApp (EMethodRef "display") (EVar "ciWorkflowRel"))) (ELit (LString ": the END marker precedes the BEGIN marker")))) (EIf (EVar "otherwise") (EApp (EVar "Ok") (EApp (EApp (EVar "ciSpliceGo") (EVar "gen")) (EVar "src"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DData Private "CiArgs" () ((variant "CiArgs" (ConNamed (field "registry" (TyApp (TyCon "Option") (TyCon "String"))) (field "workflow" (TyApp (TyCon "Option") (TyCon "String")))))) ())
+(DTypeSig false "parseCiArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CiArgs") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "CiArgs")))))
+(DFunDef false "parseCiArgs" ((PList) (PVar "acc")) (EApp (EVar "Ok") (EVar "acc")))
+(DFunDef false "parseCiArgs" ((PCons (PLit (LString "--registry")) (PCons (PVar "p") (PVar "rest"))) (PVar "acc")) (EApp (EApp (EVar "parseCiArgs") (EVar "rest")) (EVariantUpdate "CiArgs" (EVar "acc") ((fa "registry" (EApp (EVar "Some") (EVar "p")))))))
+(DFunDef false "parseCiArgs" ((PCons (PLit (LString "--registry")) (PList)) PWild) (EApp (EVar "Err") (ELit (LString "medaka gate ci: --registry needs a path"))))
+(DFunDef false "parseCiArgs" ((PCons (PLit (LString "--workflow")) (PCons (PVar "p") (PVar "rest"))) (PVar "acc")) (EApp (EApp (EVar "parseCiArgs") (EVar "rest")) (EVariantUpdate "CiArgs" (EVar "acc") ((fa "workflow" (EApp (EVar "Some") (EVar "p")))))))
+(DFunDef false "parseCiArgs" ((PCons (PLit (LString "--workflow")) (PList)) PWild) (EApp (EVar "Err") (ELit (LString "medaka gate ci: --workflow needs a path"))))
+(DFunDef false "parseCiArgs" ((PCons (PVar "a") PWild) PWild) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: unexpected argument: ")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString "")))))
+(DTypeSig false "ciWorkflowPath" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "ciWorkflowPath" ((PCon "Some" (PVar "p")) PWild) (EVar "p"))
+(DFunDef false "ciWorkflowPath" ((PCon "None") (PVar "root")) (EApp (EApp (EVar "joinPath") (EVar "root")) (EVar "ciWorkflowRel")))
+(DTypeSig false "ciNewText" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))))))
+(DFunDef false "ciNewText" ((PVar "root") (PVar "regPath") (PVar "regSrc") (PVar "wfSrc")) (EMatch (EApp (EVar "parseRegistry") (EVar "regSrc")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "gates")) () (EMatch (EApp (EVar "parseShards") (EVar "regSrc")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "shs")) () (EMatch (EApp (EApp (EVar "ciUnknownShards") (EVar "shs")) (EVar "gates")) (arm (PList) () (EMatch (EApp (EApp (EApp (EApp (EVar "ciRowsLoop") (EVar "root")) (EVar "gates")) (EVar "shs")) (EListLit)) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PVar "gen")) () (EApp (EApp (EMethodRef "map") (EVar "joinNl")) (EApp (EApp (EVar "ciSplice") (EVar "gen")) (EApp (EVar "splitNl") (EVar "wfSrc"))))))) (arm (PVar "bad") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: ")) (EApp (EMethodRef "display") (EVar "regPath"))) (ELit (LString ": gate(s) name a shard with no [[shard]] row: "))) (EApp (EMethodRef "display") (EApp (EVar "joinSpace") (EVar "bad")))) (ELit (LString "")))))))))))
+(DTypeSig false "ciWrite" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
+(DFunDef false "ciWrite" ((PVar "wfPath") (PVar "wfSrc") (PVar "out")) (EIf (EBinOp "==" (EVar "out") (EVar "wfSrc")) (EApp (EVar "putStr") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: ")) (EApp (EMethodRef "display") (EVar "wfPath"))) (ELit (LString " already up to date\n")))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "writeFile") (EVar "wfPath")) (EVar "out")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: cannot write ")) (EApp (EMethodRef "display") (EVar "wfPath"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" PWild) () (EApp (EVar "putStr") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: regenerated the gates matrix in ")) (EApp (EMethodRef "display") (EVar "wfPath"))) (ELit (LString "\n")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ciCmdBody" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
+(DFunDef false "ciCmdBody" ((PVar "argv")) (EMatch (EApp (EApp (EVar "parseCiArgs") (EVar "argv")) (ERecordCreate "CiArgs" ((fa "registry" (EVar "None")) (fa "workflow" (EVar "None"))))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "a")) () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "regPath") (EApp (EVar "registryPath") (EFieldAccess (EVar "a") "registry"))) (DoLet false false (PVar "wfPath") (EApp (EApp (EVar "ciWorkflowPath") (EFieldAccess (EVar "a") "workflow")) (EVar "root"))) (DoExpr (EMatch (EApp (EVar "readFile") (EVar "regPath")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: cannot read registry: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "regSrc")) () (EMatch (EApp (EVar "readFile") (EVar "wfPath")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate ci: cannot read ")) (EApp (EMethodRef "display") (EVar "wfPath"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "wfSrc")) () (EMatch (EApp (EApp (EApp (EApp (EVar "ciNewText") (EVar "root")) (EVar "regPath")) (EVar "regSrc")) (EVar "wfSrc")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "out")) () (EApp (EApp (EApp (EVar "ciWrite") (EVar "wfPath")) (EVar "wfSrc")) (EVar "out")))))))))))))
 (DProp false "a bare selector token is name: sugar" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "parseSelector") (EApp (EVar "intToString") (EVar "n"))) (EApp (EVar "Ok") (EApp (EVar "SelName") (EApp (EVar "intToString") (EVar "n"))))))
 (DProp false "an explicit name: selector agrees with the bare form" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "parseSelector") (EBinOp "++" (ELit (LString "name:")) (EApp (EVar "intToString") (EVar "n")))) (EApp (EVar "parseSelector") (EApp (EVar "intToString") (EVar "n")))))
 (DProp false "a literal glob matches itself and nothing longer" ((pp "n" (TyCon "Int"))) (EBinOp "&&" (EApp (EApp (EVar "globMatch") (EApp (EVar "intToString") (EVar "n"))) (EApp (EVar "intToString") (EVar "n"))) (EApp (EVar "not") (EApp (EApp (EVar "globMatch") (EApp (EVar "intToString") (EVar "n"))) (EBinOp "++" (EApp (EVar "intToString") (EVar "n")) (ELit (LString "x")))))))

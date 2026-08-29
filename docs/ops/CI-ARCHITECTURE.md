@@ -79,14 +79,59 @@ What this retires: the three-consumer bookkeeping becomes three *readers of one
 artifact*; "a gate exists but nothing runs it" becomes impossible by construction
 rather than caught after the fact.
 
-### 3.2 Generated ci.yml (#2177)
+### 3.2 Generated ci.yml (#2177) — AS LANDED
 
-The gate-shard matrix and named-gate steps are generated from the registry into marked
-regions of ci.yml; a required, cheap, always-running check regenerates and
-`git diff --exit-code`s. Hand scaffolding (triggers, detect, build-once, caching)
-stays hand-written. Byte-determinism rules follow test/gen_docs_index.sh (pin
-`LC_ALL=C`). This is the smallest registry consumer and lands before scheduling or
-scoping build on it.
+**Generated:** the `gates` job's eight-row `matrix.include:` block, and only that.
+`medaka gate ci` (`make gen-ci`) reads `test/gates.toml` in-process — the same
+`parseRegistry`/`parseShards` path `medaka gate list` answers from, never a re-parse
+of `--json` through a shell pipe — and rewrites everything between one marker pair in
+`.github/workflows/ci.yml`:
+
+```yaml
+          # GENERATED:BEGIN gates-matrix — `make gen-ci` (medaka gate ci) from test/gates.toml. DO NOT EDIT BY HAND.
+          ...
+          # GENERATED:END gates-matrix
+```
+
+Both markers are whole YAML comment lines at the block's own indent, and the generator
+refuses a file that does not carry exactly one of each in order. Per row: the order and
+`name` come from `[[shard]]`'s file order; `full_cores:`/`wasm_arm:` are emitted **only
+when true** (ci.yml's key-omitted-when-false convention is the generator's encoding of
+`false`, which is why the registry insists the boolean is *present*); the comment block
+is the row's `rationale` file (`test/gate_shards/<row>.txt`) verbatim, one `# ` prefix
+per line, a bare `#` for a blank one; and `pattern:` names every `[[gate]]` whose
+`shard` is that row.
+
+**`pattern:` is a literal name list, not the hand-written globs it replaced.** The
+registry records one `shard` per gate and no globs, so the resolved gate-name list is
+the only thing derivable from it; byte-identity with the old strings is unreachable and
+was not attempted. What is preserved — and what `run_gates.sh` actually consumes — is
+the SET each row resolves to under the two-glob rule (`test/<pat>.sh` and `<pat>.sh`
+from the repo root). Verified at landing for all eight rows, no sampling: identical
+sets, 201 gates, empty diff. Token order inside a row is registry declaration order.
+
+**Hand-written, and deliberately so:** everything else in ci.yml — triggers, `detect`,
+build-once, caching, the per-shard steps, and **all named-gate steps** in
+`soundness`/`compiler-soundness`/`wasm`. The named-gate steps are not generated because
+the registry cannot say which job runs which: `shard = "other-job"` is one sentinel
+covering seven jobs, and no other field discriminates them.
+`check_fingerprint_parity` and `check_keyword_sync` carry identical values in every
+scheduling field (`area = "types"`, `shard = "other-job"`, `project = "compiler"`,
+`tier = "merge"`, `cost = "cheap"`, `kind = "exec"`), yet the first is a step of
+`compiler-soundness` under that job's `needs.detect` guard and the second is a step of
+`soundness`, which ci.yml documents as deliberately *unguarded*. Generating them would
+mean hard-coding a job→gate-name table in the generator — moving the authority out of
+ci.yml without moving it into the registry. Their coverage is a reachability question
+(`diff_compiler_ci_shard_coverage.sh` counts a literal name in a step as covering that
+gate) and belongs to #2191's gate-registry verification, not here. Modelling job
+placement per entry would be a registry schema change, not a generator change.
+
+**Byte-determinism** follows `test/gen_docs_index.sh`: every list is a fold over file
+order — no sort, no locale-sensitive comparison, nothing read from the environment —
+and `make gen-ci` pins `LC_ALL=C` anyway so the two generators keep one story.
+Regeneration is idempotent and writes only on a real change, so
+`make gen-ci && git diff --exit-code` is the drift check (wired as a CI step by the
+next slice).
 
 ### 3.3 Semantic identity ⊥ scheduling (#2178) — decision: option B
 
