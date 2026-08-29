@@ -629,8 +629,10 @@ MIN_NET_FRAC="${IR_MIN_NET_FRAC:-0.05}"
 
 # ── the shapes ───────────────────────────────────────────────────────────────
 #
-# gen_xref / gen_manyifaces are SHARED with test/diff_compiler_perf_scaling.sh, sourced
-# from test/perf_shapes.sh. They used to be TRANSCRIBED here (#2066): two byte-different
+# gen_xref / gen_manyifaces are SHARED with test/diff_compiler_perf_scaling.sh, and
+# gen_scoperefs is additionally SHARED with test/diff_compiler_stage_ir_scaling.sh
+# (per-stage #2172 attribution, S-5-scoperefs-attribution) — all sourced from
+# test/perf_shapes.sh. They used to be TRANSCRIBED here (#2066): two byte-different
 # copies of the same two programs, with nothing comparing them, so the two gates could
 # have drifted into measuring different shapes while both stayed green and their ratios
 # went on being quoted side by side. Read the header of perf_shapes.sh before editing a
@@ -673,32 +675,6 @@ gen_errs() {
       gi=$((gi + 1))
     done
     printf 'main = println 1\n'
-  } >> "$gf"
-}
-
-# The #1031 regression pin (local, per F3 — NOT shared with perf_scaling's
-# generators). One `main` with N sequential `let` bindings (a deep local scope,
-# each new binding one frame deeper than the last), whose tail expression sums
-# EVERY bound name — so almost all of the N lookups are non-innermost, and each
-# must walk back through the frames between its binding site and the tail. That
-# is exactly the shape the four #1031 sites scan a List to resolve.
-gen_scoperefs() {
-  gn=$1; gf=$2; : > "$gf"
-  {
-    printf 'main =\n'
-    gi=0
-    while [ "$gi" -lt "$gn" ]; do
-      printf '  let x%s = %s\n' "$gi" "$gi"
-      gi=$((gi + 1))
-    done
-    printf '  println ('
-    gi=0
-    while [ "$gi" -lt "$gn" ]; do
-      if [ "$gi" -gt 0 ]; then printf ' + '; fi
-      printf 'x%s' "$gi"
-      gi=$((gi + 1))
-    done
-    printf ')\n'
   } >> "$gf"
 }
 
