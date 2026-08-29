@@ -1,0 +1,137 @@
+# test/gates.toml — the gate registry (#2176, epic #2182).
+#
+# ⚠️ PILOT. This is NOT yet the single source of truth: exactly eight gates are
+# enrolled, hand-written, chosen to exercise the schema shapes that will bite
+# during full enrolment (a later slice). Nothing reads this file except
+# `medaka gate list`; ci.yml, test/preflight.sh, test/build_oracles.sh and
+# test/run_gates.sh are all unchanged and still authoritative.
+#
+# Schema: docs/ops/GATE-REGISTRY-DESIGN.md §2. Every field is REQUIRED on every
+# entry, list fields included — an absent list is a read error, not an empty
+# list. `sources` and `corpus` are deliberately empty everywhere for now: that
+# is "not yet populated", a different fact from "this gate reads nothing", and
+# the reader refuses to blur them by defaulting.
+#
+# `name` is the name `test/run_gates.sh` resolves (it globs BOTH `test/<name>.sh`
+# and `<name>.sh` from the repo root — test/run_gates.sh:172-181), which is why
+# the sqlite entry's name carries its path and the wasm entry's does not.
+
+# A plain compiler differential that reads an oracle binary.
+[[gate]]
+name = "diff_compiler_parse_result"
+area = "frontend"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_parse_result.sh"
+oracles = ["parse_result_main"]
+sources = []
+corpus = []
+toolchain = []
+
+# A second oracle-reading differential, in a different area — the pair is what
+# proves `area:` discriminates rather than just echoing `project:`.
+[[gate]]
+name = "diff_compiler_eval_modules"
+area = "eval"
+project = "compiler"
+tier = "merge"
+cost = "medium"
+kind = "exec"
+run = "test/diff_compiler_eval_modules.sh"
+oracles = ["eval_modules_main"]
+sources = []
+corpus = []
+toolchain = []
+
+# ⚠️ INVERTED POLARITY ([G-MUST-FAIL]): every fixture under
+# test/must_fail_fixtures/ pins an OPEN bug, so RED is this gate's healthy
+# state. It is enrolled here precisely to prove the schema does NOT normalize
+# polarity — there is no ok/failing field, and nothing in an entry claims what
+# a passing run looks like. Whatever runs a gate keeps owning that.
+[[gate]]
+name = "diff_compiler_must_fail"
+area = "soundness"
+project = "compiler"
+tier = "merge"
+cost = "medium"
+kind = "exec"
+run = "test/diff_compiler_must_fail.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+# An infra/ratchet gate that reads no oracle and builds nothing.
+[[gate]]
+name = "diff_compiler_ci_shard_coverage"
+area = "infra"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_ci_shard_coverage.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+# Named in ci.yml's `backend` shard pattern as a bare `build_cmd`, not
+# `diff_compiler_*` — the registry must not assume the prefix.
+[[gate]]
+name = "build_cmd"
+area = "backend"
+project = "compiler"
+tier = "merge"
+cost = "heavy"
+kind = "exec"
+run = "test/build_cmd.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = ["clang"]
+
+# The other non-`diff_` name, from ci.yml's `tools` shard pattern.
+[[gate]]
+name = "lsp_harness"
+area = "tools"
+project = "compiler"
+tier = "merge"
+cost = "medium"
+kind = "exec"
+run = "test/lsp_harness.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+# A toolchain-constrained gate: lives in a subdirectory of test/, needs the
+# wasm toolchain and node.
+[[gate]]
+name = "wasm/diff_wasm"
+area = "wasm"
+project = "compiler"
+tier = "merge"
+cost = "medium"
+kind = "exec"
+run = "test/wasm/diff_wasm.sh"
+oracles = ["wasm_emit_main"]
+sources = []
+corpus = []
+toolchain = ["wasm-tools", "node>=24"]
+
+# A gate OUTSIDE test/ entirely, owned by another project, with its own
+# external oracle binary (the real sqlite3 CLI) as a toolchain requirement.
+[[gate]]
+name = "sqlite/test/select_oracle"
+area = "engines"
+project = "sqlite"
+tier = "merge"
+cost = "medium"
+kind = "exec"
+run = "sqlite/test/select_oracle.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = ["sqlite3"]
