@@ -46,6 +46,15 @@
 #                                              # DERIVE ONLY: print the oracle names
 #                                              # a pattern resolves to; build nothing,
 #                                              # touch no clang/libgc/medaka (#832)
+#
+# NOTE: gate REGISTRATION (which gates exist, their shard) now lives in
+# test/gates.toml, the registry of record — read/verify/explain it with
+# `medaka gate list`/`verify`/`explain`, and generate ci.yml's shard matrix
+# from it with `make gen-ci`. `--for '<gate-pattern>'` above still derives
+# which oracles a gate PATTERN needs by globbing test/diff_compiler_*.sh
+# directly — that is unchanged for now (the registry's rollout is ordered:
+# generator first, done; preflight and this script's own oracle derivation
+# follow in later, separate changes).
 # Exit:    0 built/up-to-date; 2 opt-in skip (no clang/libgc); 1 on a build error
 #          or an unrecognized flag.
 # ⚠️ An UNRECOGNIZED flag is a hard error (exit 1) — it does NOT fall through to

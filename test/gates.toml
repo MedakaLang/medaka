@@ -6,10 +6,13 @@
 # `_gate_candidates` (tracked-or-untracked `*.sh` MINUS every name in
 # test/CI-COVERAGE-TOOLS.txt), so the entry count and that candidate count
 # agree by construction, not by luck. The first eight entries are S-1's pilot,
-# unchanged; the rest were appended in S-2. Nothing reads this file except
-# `medaka gate list`/`verify`/`explain`; ci.yml, test/preflight.sh,
-# test/build_oracles.sh and test/run_gates.sh are all unchanged and still
-# authoritative.
+# unchanged; the rest were appended in S-2. This is now the registry of
+# record: `medaka gate list`/`verify`/`explain` read it directly, and
+# `ci.yml`'s `gates` job-matrix is GENERATED from it by `make gen-ci` (S-2) —
+# hand-editing that matrix is stale practice a drift gate now catches
+# (`diff_compiler_ci_gen_drift.sh`). test/preflight.sh and
+# test/build_oracles.sh do not read this file yet; that migration is ordered
+# and tracked as separate, later changes (GATE-REGISTRY-DESIGN.md §6).
 #
 # Schema: docs/ops/GATE-REGISTRY-DESIGN.md §2. Every field is REQUIRED on every
 # entry, list fields included — an absent list is a read error, not an empty

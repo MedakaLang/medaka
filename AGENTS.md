@@ -139,7 +139,8 @@ done
 ```
 🚨 **Adding ANY `.sh` anywhere in the tree — not just under `test/` — can redden a shard**
 (`diff_compiler_ci_shard_coverage.sh`; a repro harness under `.claude/` has done it). A gate
-with no shard pattern in `ci.yml` SILENTLY NEVER RUNS. Registration rules, the
+not enrolled in `test/gates.toml` (with a `shard` field) SILENTLY NEVER RUNS — enrol it there
+and run `make gen-ci` to regenerate `ci.yml`'s shard matrix. Registration rules, the
 `test/CI-COVERAGE-EXCEPTIONS.txt` escape hatch, and `[W-SHARD-COST]` (shards are scheduled by
 cost, not theme): the `gates` skill.
 
@@ -152,8 +153,9 @@ narrows scope with no error.
 ⚠️ **[W-PROJECT-BY-MANIFEST] A directory with a `medaka.toml` outside `compiler/` and
 `test/` IS a project, and CI knows it by that manifest — not by anyone remembering.** Such
 a project needs a floor gate under `<project>/test/` (a `pattern:` matching no gate is a
-hard `::error::`, so the gate must exist before the enrolment does), a `ci.yml` shard glob
-placed by measured cost, and nothing at all in `test/preflight.sh` — preflight's generic arm
+hard `::error::`, so the gate must exist before the enrolment does), a `shard` field in
+`test/gates.toml` placed by measured cost (then `make gen-ci` to regenerate `ci.yml`'s shard
+matrix), and nothing at all in `test/preflight.sh` — preflight's generic arm
 derives the project set from `git ls-files '*medaka.toml'` and maps any changed path under
 `<project>/` to `<project>/test/*` on its own. All three legs are re-derived and compared on
 every run by `test/diff_compiler_project_enrolment.sh`, so enrolment drift reds a gate rather
