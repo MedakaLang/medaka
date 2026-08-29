@@ -1,10 +1,11 @@
 # pds/
 
-The self-hosted atproto PDS (Personal Data Server) written in Medaka. Phases 0
-and 1 of the umbrella design (#1697) are complete in this tree: the pure core
-now covers strict secp256k1 signing and `did:key`, canonical DAG-CBOR/CIDs, the
-atproto MST, verified CAR/block storage, and signed repository transitions.
-Phase 2's pure protocol layer is next; see
+The self-hosted atproto PDS (Personal Data Server) written in Medaka. Phases
+0–2 of the umbrella design (#1697) are complete in this tree: the pure core
+covers strict secp256k1 signing and `did:key`, canonical DAG-CBOR/CIDs, the
+atproto MST, verified CAR/block storage, signed repository transitions, strict
+HTTP/1.1 framing, structural XRPC routing, and explicit immutable handler state.
+Phase 3's socket shell is next but remains dependency-gated; see
 `docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
 
 ## Layout
@@ -17,9 +18,15 @@ Phase 2's pure protocol layer is next; see
   exports any such identifier; `opaque_field_scalar.sh` derives and enforces
   that deployment boundary while observing the allowed test-only consumers
   under `pds/test/`.
+- `pds/lib/http.mdk` and `pds/lib/xrpc.mdk` — bounded HTTP/1.1 framing,
+  deterministic responses, body/query policy, and structural XRPC routing.
+- `pds/lib/store.mdk` and `pds/lib/server_core.mdk` — opaque immutable state
+  plus configured pure composition from request bytes to successor state and
+  response bytes.
 - `pds/test/` — in-language `medaka test` suites (`*_test.mdk`) plus gate
-  scripts that run them (`*.sh`). **Every `.sh` placed directly in `pds/test/`
-  is auto-enrolled as a CI gate** — see the classification policy below.
+  scripts that run them (`*.sh`). Every gate must be placed explicitly in
+  exactly one `ci.yml` shard by measured cost; directory location alone does
+  not enroll it.
 
 `pds/medaka.toml` intentionally has no `entry` key and there is no
 `pds/main.mdk`: the manifest reader (`compiler/driver/loader.mdk`) never
@@ -36,6 +43,13 @@ MEDAKA_ROOT="$(git rev-parse --show-toplevel)" MEDAKA="$MEDAKA_ROOT/medaka" \
 Requires a built native `medaka` binary. No oracle build needed — `medaka
 test` runs the interpreter directly.
 
+The focused Phase-2 parity gate additionally requires the local Wasm modules
+emitter, Node, and `wasm-tools` and refuses to degrade to two engines:
+
+```sh
+MEDAKA_REQUIRE_WASM=1 sh pds/test/protocol_all_engines.sh
+```
+
 ## CI classification policy
 
 **The policy itself is not restated here.** It lives in `AGENTS.md`
@@ -49,8 +63,8 @@ had already gone stale — it named the `sqlite` shard as pds's only home, while
 
 Three things are specific to `pds/` and are NOT in the general policy:
 
-* **Depth.** The shard glob is a filesystem glob and does not cross `/`, so a
-  script in a SUBDIRECTORY of `pds/test/` is enrolled by NOTHING and will red
+* **Depth.** Shard globs do not cross `/`, so a script in a SUBDIRECTORY of
+  `pds/test/` is enrolled by NOTHING unless explicitly named and will red
   `diff_compiler_ci_shard_coverage` until it gets a `test/CI-COVERAGE-TOOLS.txt`
   row. Do not put scripts in subdirectories of `pds/test/`. (Preflight's arm is a
   shell `case` pattern and DOES match at any depth — the pair reads as consistent
@@ -60,9 +74,8 @@ Three things are specific to `pds/` and are NOT in the general policy:
   (`pds/oracle/`, `pds/tools/`) and needs a `test/CI-COVERAGE-TOOLS.txt` row keyed
   by its REPO-RELATIVE PATH MINUS `.sh`, not its basename.
 * **Too expensive for the PR path** is not a TOOLS or EXCEPTIONS case — the gate
-  still asserts something and can fail. Move it OUT of `pds/test/` (it is the
-  directory-level auto-enroll that must stop applying, not the classification)
-  into `pds/nightly/`, and name it literally in a `.github/workflows/nightly.yml`
+  still asserts something and can fail. Move it OUT of `pds/test/` into
+  `pds/nightly/`, and name it literally in a `.github/workflows/nightly.yml`
   job. `pds/nightly/signing_parity.sh` (#1962) is the first instance: its full
   native+Wasm ECDSA corpus run alone added ~20 minutes to the `sqlite` shard.
 
@@ -233,6 +246,30 @@ grades an exact initialization plus first CREATE transition—including commit
 and CAR bytes—and all semantic boundary controls; native and Wasm grade the
 complete five-operation official-reference transcript. The dedicated `pds` CI
 row requires its Wasm prerequisites, so a missing third engine is a failure.
+
+## Phase 2 protocol core (#2192)
+
+`pds/lib/http.mdk` accepts one complete buffered HTTP/1.1 request with strict
+duplicate-aware framing and exposes typed malformed versus resource-excess
+failure classes without diagnostic-string inspection. Responses serialize
+deterministically. `pds/lib/xrpc.mdk` turns framed requests into typed query or
+procedure calls, preserving ordered parameters on both, and owns the canonical
+JSON error envelope. `uploadBlob`-shape input is a wildcard raw MIME body, not
+multipart, so its media type never selects JSON or text decoding. NSID authority
+identity is case-insensitive while method names remain case-sensitive.
+
+`pds/lib/store.mdk` is an opaque immutable wrapper around the verified
+`BlockStore`. `pds/lib/server_core.mdk` configures a registry plus injected pure
+handler and exposes `handle : Server -> Store -> Request -> (Store, Response)`
+and the raw-byte `handleBytes` composition. Protocol failures return the input
+store; successful writes return a successor. Neither module imports file,
+socket, runtime-I/O, or async code.
+
+The buffered policy caps combined headers at 64 KiB, JSON at 150 KiB, text at
+100 KiB, and raw/blob bodies at 5 MiB, with separate bounded line, field,
+trailer, and chunk counts. `pds/test/protocol_all_engines.sh` requires exact
+eval/native/Wasm agreement on fourteen hand-authored protocol cells and runs a
+native direct-red mutation of a repaired raw-input assertion.
 
 ## secp256k1 scalar arithmetic (S-scalar, #1700)
 

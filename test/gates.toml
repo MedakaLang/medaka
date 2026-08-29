@@ -438,6 +438,19 @@ corpus = []
 toolchain = []
 
 [[gate]]
+name = "pds/test/protocol_all_engines"
+area = "engines"
+project = "pds"
+tier = "merge"
+cost = "medium"
+kind = "exec"
+run = "pds/test/protocol_all_engines.sh"
+oracles = []
+sources = ["pds/*"]
+corpus = []
+toolchain = ["wasm-tools", "node>=24"]
+
+[[gate]]
 name = "pds/test/repo_vectors"
 area = "engines"
 project = "pds"

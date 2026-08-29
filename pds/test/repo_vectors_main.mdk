@@ -205,6 +205,37 @@ acceptLaterFailure label _ (Ok _) =
   let () = println "CONTROL \{label} FAIL missing-later-rejection"
   0
 
+uppercaseFirst : Array Int -> Array Int
+uppercaseFirst path =
+  let changed = arrayCopy path
+  let byte = changed[0]
+  let () = if byte >= 97 && byte <= 122 then A.set 0 (byte - 32) changed else ()
+  changed
+
+repoIdentityControl : Repo -> Array Int -> DagCbor -> <IO> Int
+repoIdentityControl repo lowerPath record =
+  let mixedPath = uppercaseFirst lowerPath
+  let next = futureTid (repoLatestCommit repo) 1
+  let before = repoLookup lowerPath repo
+  let mixedLookup = repoLookup mixedPath repo
+  let mixedCreate = repoCreate mixedPath record next repo
+  let after = repoLookup lowerPath repo
+  let normalized = error => contains "normalized lowercase" error
+  match (before, mixedLookup, mixedCreate, after)
+    (Ok (Some beforeRecord), Err lookupError, Err createError, Ok (Some afterRecord)) =>
+      let unchanged = match (dagCborEncode beforeRecord, dagCborEncode afterRecord)
+        (Ok beforeBytes, Ok afterBytes) => beforeBytes == afterBytes
+        _ => False
+      if unchanged && normalized lookupError && normalized createError then
+        let () = println "REPO-IDENTITY PASS mixed lookup/create rejected state=unchanged"
+        1
+      else
+        let () = println "REPO-IDENTITY FAIL wrong rejection or changed state"
+        0
+    _ =>
+      let () = println "REPO-IDENTITY FAIL mixed authority accepted or lower record missing"
+      0
+
 setField : String -> DagCbor -> List (String, DagCbor) -> List (String, DagCbor)
 setField _ _ [] = []
 setField name value ((key, old)::rest) =
@@ -396,7 +427,7 @@ runRepresentative did secret t0 t1 initLine op1 c1 createOrder createCar =
     rejectContains "did-bad-percent" "invalid DID" (repoInit "did:x:a%zz" secret initialTid),
     rejectContains "did-too-long" "maximum length" (repoInit ("did:x:" ++ repeat 2043 "a") secret initialTid),
     rejectContains "nsid-too-short" "collection" (repoLookup (toUtf8 "com.example/r") initial),
-    rejectContains "nsid-uppercase-authority" "normalized" (repoLookup (toUtf8 "Com.example.post/r") initial),
+    rejectContains "nsid-uppercase-authority" "normalized lowercase" (repoLookup (toUtf8 "Com.example.post/r") initial),
     rejectContains "nsid-empty-segment" "segment length" (repoLookup (toUtf8 "com..post/r") initial),
     rejectContains "nsid-leading-hyphen" "hyphen" (repoLookup (toUtf8 "com.-example.post/r") initial),
     rejectContains "nsid-numeric-tld" "top-level" (repoLookup (toUtf8 "1com.example.post/r") initial),
@@ -503,9 +534,11 @@ runTranscript ["META", did, secretHex] tidsRows initLine op1 c1 op2 c2 op3 c3 op
   let () = println "CAR \{carStatus} order=\{blockOrder finalRepo}"
   let external = tids + c0ok + o1 + c1ok + o2 + c2ok + o3 + c3ok + o4 + c4ok + (if carOk then 1 else 0)
   let hostile = runHostile did secret finalRepo (pathFromOp op3) (recordFromOp op3)
+  let identity = repoIdentityControl finalRepo (pathFromOp op3) (recordFromOp op3)
   let () = println "external: \{intToString external}/15 official-atproto transcript checks"
   let () = println "hostile: \{intToString hostile}/19 rejected on named routes"
-  if external == 15 && hostile == 19 then println "TOTAL: PASS"
+  let () = println "repository-identity: \{intToString identity}/1 normalized key control"
+  if external == 15 && hostile == 19 && identity == 1 then println "TOTAL: PASS"
   else
     let () = println "TOTAL: FAIL"
     exit 1

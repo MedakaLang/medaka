@@ -3,6 +3,7 @@
 
 import string.{contains}
 import test.{expectEqual, expectTrue}
+import lib.nsid.{validateNsid}
 import lib.repo.{repoInitFromKeyBytes}
 import lib.tid.{
   tidClockId,
@@ -67,3 +68,5 @@ test "repository rejects invalid signing key before commit construction" =
   expectTrue (errContains
     "bad signing key"
     (repoInitFromKeyBytes "did:plc:medaka" (arrayMake 32 0) (mustTid 1 0)))
+
+test "shared generic NSID authority accepts uppercase while retaining lowercase form" = expectTrue (not (isErr (validateNsid "Com.AtProto.test")) && not (isErr (validateNsid "com.atproto.test")))

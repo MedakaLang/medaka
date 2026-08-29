@@ -50,6 +50,8 @@ require_empty "$WORK/native.err" native
 
 grep -F -q 'external: 15/15 official-atproto transcript checks' "$WORK/native.out" || fail 'native transcript count is incomplete'
 grep -F -q 'hostile: 19/19 rejected on named routes' "$WORK/native.out" || fail 'native hostile count is incomplete'
+grep -F -q 'REPO-IDENTITY PASS mixed lookup/create rejected state=unchanged' "$WORK/native.out" || fail 'native missed normalized repository identity control'
+grep -F -q 'repository-identity: 1/1 normalized key control' "$WORK/native.out" || fail 'native repository identity count is incomplete'
 [ "$(tail -1 "$WORK/native.out")" = 'TOTAL: PASS' ] || fail 'native did not end in TOTAL: PASS'
 
 if [ ! -x "$WASM_EMITTER" ] || ! command -v node >/dev/null 2>&1 || ! command -v wasm-tools >/dev/null 2>&1; then

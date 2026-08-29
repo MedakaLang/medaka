@@ -1,0 +1,183 @@
+{- | Pure Store and end-to-end HTTP/XRPC composition tests. -}
+
+import array as A
+import string.{repeat, toUtf8}
+import test.{expectEqual, expectTrue}
+import lib.cid.{cidForRaw}
+import lib.http.{
+  HttpParseFailure(..),
+  Header,
+  Response,
+  makeHeader,
+  makeResponse,
+  parseRequest,
+  parseRequestClassified,
+  serializeResponse,
+}
+import lib.resource_limits.{maxHttpRequestLineBytes}
+import lib.server_core.{Handler, Server, handle, handleBytes, makeServer}
+import lib.store.{Store, storeEmpty, storeGet, storePut, storeSize}
+import lib.xrpc.{
+  Endpoint,
+  InputPolicy(..),
+  Registry,
+  XrpcCall(..),
+  makeRegistry,
+  procedureEndpoint,
+  queryEndpoint,
+}
+
+mustHeader : String -> String -> Header
+mustHeader name value = match makeHeader name (toUtf8 value)
+  Ok header => header
+  Err message => panic "server_core_test: header setup failed: \{message}"
+
+mustResponse : Int -> String -> String -> Response
+mustResponse status reason body = match makeResponse status reason [mustHeader "content-type" "text/plain"] (toUtf8 body)
+  Ok response => response
+  Err message => panic "server_core_test: response setup failed: \{message}"
+
+mustEndpoint : Result String Endpoint -> Endpoint
+mustEndpoint (Ok endpoint) = endpoint
+mustEndpoint (Err message) =
+  panic "server_core_test: endpoint setup failed: \{message}"
+
+mustRegistry : Result String Registry -> Registry
+mustRegistry (Ok registry) = registry
+mustRegistry (Err message) =
+  panic "server_core_test: registry setup failed: \{message}"
+
+registry : Registry
+registry = mustRegistry (makeRegistry
+  [
+    mustEndpoint (queryEndpoint "com.example.query.fixed"),
+    mustEndpoint (procedureEndpoint "com.example.block.put" RawInput),
+  ])
+
+handler : Handler
+handler store (QueryCall "com.example.query.fixed" _) =
+  (store, mustResponse 200 "OK" "fixed")
+handler store (ProcedureRawCall "com.example.block.put" [] _ bytes) = match storePut (cidForRaw bytes) bytes store
+  Err message =>
+    panic "server_core_test: verified store update failed: \{message}"
+  Ok next => (next, mustResponse 201 "Created" "stored")
+handler _ _ = panic "server_core_test: unexpected routed call"
+
+server : Server
+server = makeServer registry handler
+
+seedBytes : Array Int
+seedBytes = toUtf8 "seed"
+
+seededStore : Store
+seededStore = match storePut (cidForRaw seedBytes) seedBytes storeEmpty
+  Ok store => store
+  Err message => panic "server_core_test: seed store setup failed: \{message}"
+
+seedPreserved : Store -> Bool
+seedPreserved store = storeSize store == 1
+  && storeGet (cidForRaw seedBytes) store == Some seedBytes
+
+expectedTextResponse : Int -> String -> String -> Array Int
+expectedTextResponse status reason body =
+  toUtf8
+    "HTTP/1.1 \{intToString status} \{reason}\r\ncontent-type: text/plain\r\ncontent-length: \{intToString (arrayLength (toUtf8 body))}\r\n\r\n\{body}"
+
+expectedError : Int -> String -> String -> String -> Array Int
+expectedError status reason code message =
+  let body = "{\"error\":\"\{code}\",\"message\":\"\{message}\"}"
+  toUtf8
+    "HTTP/1.1 \{intToString status} \{reason}\r\ncontent-type: application/json\r\ncontent-length: \{intToString (arrayLength (toUtf8 body))}\r\n\r\n\{body}"
+
+fixedQuery : Array Int
+fixedQuery =
+  toUtf8
+    "GET /xrpc/com.example.query.fixed?one=1&one=2 HTTP/1.1\r\nHost: pds.example\r\n\r\n"
+
+fixedPut : Array Int
+fixedPut =
+  toUtf8
+    "POST /xrpc/com.example.block.put HTTP/1.1\r\nHost: pds.example\r\nContent-Type: application/octet-stream\r\nContent-Length: 3\r\n\r\nabc"
+
+chunkedPut : Array Int
+chunkedPut =
+  toUtf8
+    "POST /xrpc/com.example.block.put HTTP/1.1\r\nHost: pds.example\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\n\r\n1\r\na\r\n2\r\nbc\r\n0\r\n\r\n"
+
+malformedRequest : Array Int
+malformedRequest =
+  toUtf8
+    "POST /xrpc/com.example.block.put HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
+
+unknownRequest : Array Int
+unknownRequest =
+  toUtf8
+    "GET /xrpc/com.example.query.unknown HTTP/1.1\r\nHost: pds.example\r\n\r\n"
+
+resourceRequest : Array Int
+resourceRequest =
+  toUtf8
+    ("GET /" ++ repeat maxHttpRequestLineBytes "a" ++ " HTTP/1.1\r\nHost: pds.example\r\n\r\n")
+
+test "Store starts empty and delegates verified immutable insertion" =
+  let bytes = [|1, 2, 3|]
+  let cid = cidForRaw bytes
+  match storePut cid bytes storeEmpty
+    Err _ => expectTrue False
+    Ok next => expectTrue (storeSize storeEmpty == 0 && storeSize next == 1 && storeGet cid next == Some [|1, 2, 3|])
+
+test "Store insertion and lookup both retain defensive copies" =
+  let bytes = [|4, 5, 6|]
+  let cid = cidForRaw bytes
+  match storePut cid bytes storeEmpty
+    Err _ => expectTrue False
+    Ok next => match storeGet cid next
+      None => expectTrue False
+      Some viewed =>
+        let () = A.set 0 99 bytes
+        let () = A.set 1 98 viewed
+        expectEqual (storeGet cid next) (Some [|4, 5, 6|])
+
+test "classified parser exposes malformed framing without diagnostic matching" = match parseRequestClassified malformedRequest
+  Err (HttpMalformed _) => expectTrue True
+  _ => expectTrue False
+
+test "classified parser exposes resource excess without diagnostic matching" = match parseRequestClassified resourceRequest
+  Err (HttpResourceExcess _) => expectTrue True
+  _ => expectTrue False
+
+test "original parseRequest API retains its Result String contract" = match parseRequest fixedQuery
+  Ok _ => expectTrue True
+  Err _ => expectTrue False
+
+test "direct configured handle preserves Store for a fixed query" = match parseRequest fixedQuery
+  Err _ => expectTrue False
+  Ok request =>
+    let (next, response) = handle server seededStore request
+    expectTrue
+      (seedPreserved next && serializeResponse response == expectedTextResponse 200 "OK" "fixed")
+
+test "fixed raw request returns successor Store and exact response bytes" =
+  let (next, bytes) = handleBytes server storeEmpty fixedPut
+  expectTrue
+    (storeSize next == 1 && storeGet (cidForRaw (toUtf8 "abc")) next == Some (toUtf8 "abc") && bytes == expectedTextResponse 201 "Created" "stored")
+
+test "chunked raw request returns successor Store and exact response bytes" =
+  let (next, bytes) = handleBytes server storeEmpty chunkedPut
+  expectTrue
+    (storeSize next == 1 && storeGet (cidForRaw (toUtf8 "abc")) next == Some (toUtf8 "abc") && bytes == expectedTextResponse 201 "Created" "stored")
+
+test "malformed framing returns exact 400 and preserves Store" =
+  let (next, bytes) = handleBytes server seededStore malformedRequest
+  expectTrue
+    (seedPreserved next && bytes == expectedError 400 "Bad Request" "InvalidRequest" "Malformed HTTP request")
+
+test "unknown route returns exact 404 and preserves Store" =
+  let (next, bytes) = handleBytes server seededStore unknownRequest
+  expectTrue
+    (seedPreserved next && bytes == expectedError 404 "Not Found" "NotFound" "Unknown XRPC method: com.example.query.unknown")
+
+test "resource excess returns exact 413 and preserves Store" =
+  let (next, bytes) = handleBytes server seededStore resourceRequest
+  expectTrue
+    (seedPreserved next && bytes == expectedError 413 "Payload Too Large" "PayloadTooLarge" "HTTP request exceeds resource limits")

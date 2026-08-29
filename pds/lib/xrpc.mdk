@@ -1,0 +1,364 @@
+{- | Pure structural XRPC registration and routing.
+
+   The router consumes an already framed HTTP request. Successful requests
+   become typed calls; every failure owns a deterministic standard JSON HTTP
+   response and cannot carry a dispatchable call. -}
+
+import json.{Json, Json(..), jObject, stringify}
+import string.{fromUtf8, toUtf8}
+import lib.http.{
+  DecodedBody(..),
+  Header,
+  MediaType,
+  QueryParam,
+  Request,
+  Response,
+  decodeRequestBody,
+  headerName,
+  headerValue,
+  makeHeader,
+  makeResponse,
+  mediaTypeSubtype,
+  mediaTypeType,
+  parseMediaType,
+  parseTargetQuery,
+  requestBody,
+  requestBodyLength,
+  requestHeaders,
+  requestMethod,
+}
+import lib.nsid.{sameNsidIdentity, validateNsid}
+import lib.resource_limits.{
+  checkJsonBodyBytes,
+  checkRawBodyBytes,
+  checkTextBodyBytes,
+}
+
+public export data InputPolicy = NoInput | JsonInput | TextInput | RawInput
+
+data EndpointKind =
+  | QueryEndpoint
+  | ProcedureEndpoint InputPolicy
+  | SubscriptionEndpoint
+
+-- Constructors stay private so every entry has passed shared NSID admission.
+export data Endpoint = Endpoint String EndpointKind
+
+-- The registry is intentionally list-backed and capped at 128 entries. This
+-- bounds duplicate admission and lookup even though both preserve order.
+export data Registry = Registry (List Endpoint)
+
+public export data XrpcCall =
+  | QueryCall String (List QueryParam)
+  | ProcedureNoInputCall String (List QueryParam)
+  | ProcedureJsonCall String (List QueryParam) Json
+  | ProcedureTextCall String (List QueryParam) MediaType String
+  | ProcedureRawCall String (List QueryParam) MediaType (Array Int)
+
+export data XrpcFailure = XrpcFailure Int String String Response
+
+public export data RouteResult = RouteCall XrpcCall | RouteFailure XrpcFailure
+
+maxRegistryEntries : Int
+maxRegistryEntries = 128
+
+makeEndpoint : String -> EndpointKind -> Result String Endpoint
+makeEndpoint nsid kind = match validateNsid nsid
+  Ok () => Ok (Endpoint nsid kind)
+  Err _ => Err "xrpc: invalid endpoint NSID"
+
+-- | Register a GET query endpoint.
+export
+queryEndpoint : String -> Result String Endpoint
+queryEndpoint nsid = makeEndpoint nsid QueryEndpoint
+
+-- | Register a POST procedure endpoint with an explicit body policy.
+export
+procedureEndpoint : String -> InputPolicy -> Result String Endpoint
+procedureEndpoint nsid policy = makeEndpoint nsid (ProcedureEndpoint policy)
+
+-- | Register a known subscription route. Phase 2 reports it as unimplemented.
+export
+subscriptionEndpoint : String -> Result String Endpoint
+subscriptionEndpoint nsid = makeEndpoint nsid SubscriptionEndpoint
+
+endpointNsid : Endpoint -> String
+endpointNsid (Endpoint nsid _) = nsid
+
+nameMember : String -> List String -> Bool
+nameMember _ [] = False
+nameMember wanted (name::rest) = sameNsidIdentity wanted name
+  || nameMember wanted rest
+
+validateEntries : List Endpoint -> List String -> Int -> Result String Unit
+validateEntries [] _ _ = Ok ()
+validateEntries ((Endpoint nsid _)::rest) seen count =
+  if count >= maxRegistryEntries then
+    Err "xrpc: registry exceeds 128-entry resource limit"
+  else if nameMember nsid seen then
+    Err "xrpc: duplicate endpoint NSID: \{nsid}"
+  else
+    validateEntries rest (nsid::seen) (count + 1)
+
+-- | Build an ordered, duplicate-free, explicitly bounded endpoint registry.
+export
+makeRegistry : List Endpoint -> Result String Registry
+makeRegistry endpoints = do
+  () <- validateEntries endpoints [] 0
+  Ok (Registry endpoints)
+
+findEndpoint : String -> List Endpoint -> Option Endpoint
+findEndpoint _ [] = None
+findEndpoint wanted (endpoint::rest) =
+  if sameNsidIdentity (endpointNsid endpoint) wanted then
+    Some endpoint
+  else
+    findEndpoint wanted rest
+
+export
+xrpcFailureStatus : XrpcFailure -> Int
+xrpcFailureStatus (XrpcFailure status _ _ _) = status
+
+export
+xrpcFailureError : XrpcFailure -> String
+xrpcFailureError (XrpcFailure _ code _ _) = code
+
+export
+xrpcFailureMessage : XrpcFailure -> String
+xrpcFailureMessage (XrpcFailure _ _ message _) = message
+
+export
+xrpcFailureResponse : XrpcFailure -> Response
+xrpcFailureResponse (XrpcFailure _ _ _ response) = response
+
+mustJsonHeader : Header
+mustJsonHeader = match makeHeader "content-type" (toUtf8 "application/json")
+  Ok header => header
+  Err message => panic "xrpc: internal response header error: \{message}"
+
+errorResponse : Int -> String -> String -> String -> Response
+errorResponse status reason code message =
+  let body = toUtf8 (stringify (jObject [("error", JString code), ("message", JString message)]))
+  match makeResponse status reason [mustJsonHeader] body
+    Ok response => response
+    Err detail => panic "xrpc: internal response construction error: \{detail}"
+
+-- | Build the canonical XRPC JSON error envelope for protocol layers that
+-- fail before a route exists, such as HTTP framing.
+export
+xrpcErrorResponse : Int -> String -> String -> String -> Response
+xrpcErrorResponse = errorResponse
+
+failureValue : Int -> String -> String -> String -> XrpcFailure
+failureValue status reason code message =
+  XrpcFailure status code message (errorResponse status reason code message)
+
+failure : Int -> String -> String -> String -> RouteResult
+failure status reason code message =
+  RouteFailure (failureValue status reason code message)
+
+invalidRequest : String -> RouteResult
+invalidRequest = failure 400 "Bad Request" "InvalidRequest"
+
+notFound : String -> RouteResult
+notFound = failure 404 "Not Found" "NotFound"
+
+methodNotAllowed : String -> RouteResult
+methodNotAllowed = failure 405 "Method Not Allowed" "MethodNotAllowed"
+
+unsupportedMedia : String -> RouteResult
+unsupportedMedia = failure 415 "Unsupported Media Type" "UnsupportedMediaType"
+
+notImplemented : String -> RouteResult
+notImplemented = failure 501 "Not Implemented" "NotImplemented"
+
+hasPrefix : Array Int -> Array Int -> Int -> Bool
+hasPrefix input prefix i =
+  if i >= arrayLength prefix then
+    True
+  else
+    i < arrayLength input && input[i] == prefix[i] && hasPrefix input prefix (i + 1)
+
+slice : Array Int -> Int -> Int -> Array Int
+slice input start size = arrayMakeWith size (i => input[start + i])
+
+data XrpcPath = NonXrpcPath | InvalidXrpcPath | XrpcPath String
+
+xrpcPath : String -> XrpcPath
+xrpcPath path =
+  let bytes = toUtf8 path
+  let prefix = toUtf8 "/xrpc/"
+  if not (hasPrefix bytes prefix 0) then
+    NonXrpcPath
+  else if arrayLength bytes == arrayLength prefix then
+    InvalidXrpcPath
+  else
+    XrpcPath (fromUtf8 (slice bytes (arrayLength prefix) (arrayLength bytes - arrayLength prefix)))
+
+hasBodyFraming : List Header -> Bool
+hasBodyFraming [] = False
+hasBodyFraming (header::rest) =
+  let name = headerName header
+  name == "content-length"
+    || name == "transfer-encoding"
+    || name == "content-type"
+    || hasBodyFraming rest
+
+data MediaSelection =
+  | MissingMedia
+  | DuplicateMedia
+  | InvalidMedia
+  | SelectedMedia MediaType
+
+collectContentType : List Header -> Int -> Option (Array Int) -> (Int, Option (Array Int))
+collectContentType [] count value = (count, value)
+collectContentType (header::rest) count value =
+  if headerName header == "content-type" then
+    collectContentType rest (count + 1) (Some (headerValue header))
+  else
+    collectContentType rest count value
+
+selectMedia : Request -> MediaSelection
+selectMedia request =
+  let (count, value) = collectContentType (requestHeaders request) 0 None
+  if count == 0 then MissingMedia
+  else
+    if count > 1 then DuplicateMedia
+    else match value
+      None => MissingMedia
+      Some bytes => match parseMediaType bytes
+        Err _ => InvalidMedia
+        Ok media => SelectedMedia media
+
+isWithin : Result String Unit -> Bool
+isWithin (Ok ()) = True
+isWithin (Err _) = False
+
+-- | Direct endpoint-size classifier used by routing and boundary tests.
+export
+inputSizeWithinLimit : InputPolicy -> Int -> Bool
+inputSizeWithinLimit NoInput size = size == 0
+inputSizeWithinLimit JsonInput size = isWithin (checkJsonBodyBytes size)
+inputSizeWithinLimit TextInput size = isWithin (checkTextBodyBytes size)
+inputSizeWithinLimit RawInput size = isWithin (checkRawBodyBytes size)
+
+tooLargeFailure : InputPolicy -> XrpcFailure
+tooLargeFailure JsonInput =
+  failureValue
+    413
+    "Payload Too Large"
+    "PayloadTooLarge"
+    "JSON request body exceeds 153600 bytes"
+tooLargeFailure TextInput =
+  failureValue
+    413
+    "Payload Too Large"
+    "PayloadTooLarge"
+    "Text request body exceeds 102400 bytes"
+tooLargeFailure RawInput =
+  failureValue
+    413
+    "Payload Too Large"
+    "PayloadTooLarge"
+    "Raw request body exceeds 5242880 bytes"
+tooLargeFailure NoInput =
+  failureValue
+    400
+    "Bad Request"
+    "InvalidRequest"
+    "This procedure does not accept request body framing"
+
+-- | Return the exact typed rejection for an over-limit endpoint input. This
+-- is also the allocation-free boundary probe for raw input, whose ceiling is
+-- equal to the outer HTTP body ceiling.
+export
+inputSizeFailure : InputPolicy -> Int -> Option XrpcFailure
+inputSizeFailure policy size =
+  if inputSizeWithinLimit policy size then
+    None
+  else
+    Some (tooLargeFailure policy)
+
+mediaFailure : MediaSelection -> RouteResult
+mediaFailure MissingMedia =
+  unsupportedMedia "Request body requires one Content-Type header"
+mediaFailure DuplicateMedia =
+  unsupportedMedia "Request body requires one Content-Type header"
+mediaFailure InvalidMedia =
+  unsupportedMedia "Request body has an invalid Content-Type header"
+mediaFailure (SelectedMedia _) =
+  unsupportedMedia "Request body has an unsupported media type"
+
+mediaMatches : InputPolicy -> MediaType -> Bool
+mediaMatches JsonInput media = mediaTypeType media == "application"
+  && mediaTypeSubtype media == "json"
+mediaMatches TextInput media = mediaTypeType media == "text"
+mediaMatches RawInput _ = True
+mediaMatches NoInput _ = False
+
+decodeProcedure : String -> InputPolicy -> List QueryParam -> Request -> RouteResult
+decodeProcedure nsid NoInput params request =
+  if requestBodyLength request > 0 || hasBodyFraming (requestHeaders request) then
+    invalidRequest "This procedure does not accept request body framing"
+  else
+    RouteCall (ProcedureNoInputCall nsid params)
+decodeProcedure nsid RawInput params request =
+  let size = requestBodyLength request
+  match inputSizeFailure RawInput size
+    Some failed => RouteFailure failed
+    None => match selectMedia request
+      MissingMedia => mediaFailure MissingMedia
+      DuplicateMedia => mediaFailure DuplicateMedia
+      InvalidMedia => mediaFailure InvalidMedia
+      SelectedMedia media =>
+        RouteCall (ProcedureRawCall nsid params media (requestBody request))
+decodeProcedure nsid policy params request =
+  let size = requestBodyLength request
+  match inputSizeFailure policy size
+    Some failed => RouteFailure failed
+    None => match selectMedia request
+      MissingMedia => mediaFailure MissingMedia
+      DuplicateMedia => mediaFailure DuplicateMedia
+      InvalidMedia => mediaFailure InvalidMedia
+      SelectedMedia media => if not (mediaMatches policy media) then unsupportedMedia "Request body media type does not match endpoint input"
+      else match decodeRequestBody request
+        Err _ => invalidRequest "Request body is invalid for endpoint input"
+        Ok decoded => match (policy, decoded)
+          (JsonInput, JsonBody _ value) =>
+            RouteCall (ProcedureJsonCall nsid params value)
+          (TextInput, TextBody decodedMedia text) =>
+            RouteCall (ProcedureTextCall nsid params decodedMedia text)
+          _ => unsupportedMedia "Request body media type does not match endpoint input"
+
+routeEndpoint : Endpoint -> Request -> List QueryParam -> RouteResult
+routeEndpoint (Endpoint nsid QueryEndpoint) request params =
+  if requestMethod request /= "GET" then
+    methodNotAllowed "XRPC query endpoints require GET"
+  else if requestBodyLength request > 0 || hasBodyFraming (requestHeaders request) then
+    invalidRequest "XRPC query endpoints do not accept request body framing"
+  else
+    RouteCall (QueryCall nsid params)
+routeEndpoint (Endpoint nsid (ProcedureEndpoint policy)) request params =
+  if requestMethod request /= "POST" then
+    methodNotAllowed "XRPC procedure endpoints require POST"
+  else
+    decodeProcedure nsid policy params request
+routeEndpoint (Endpoint nsid SubscriptionEndpoint) request _ =
+  if requestMethod request /= "GET" then
+    methodNotAllowed "XRPC subscription endpoints require GET"
+  else
+    notImplemented "XRPC subscription is not implemented: \{nsid}"
+
+-- | Route one fully framed request through the immutable structural registry.
+export
+routeRequest : Registry -> Request -> RouteResult
+routeRequest (Registry endpoints) request = match parseTargetQuery request
+  Err _ => invalidRequest "Invalid XRPC query parameters"
+  Ok (path, params) => match xrpcPath path
+    NonXrpcPath => notFound "XRPC route not found"
+    InvalidXrpcPath => invalidRequest "Invalid XRPC method path"
+    XrpcPath nsid => match validateNsid nsid
+      Err _ => invalidRequest "Invalid XRPC method NSID"
+      Ok () => match findEndpoint nsid endpoints
+        None => notFound "Unknown XRPC method: \{nsid}"
+        Some endpoint => routeEndpoint endpoint request params

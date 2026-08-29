@@ -1,8 +1,8 @@
 # A self-hosted atproto PDS in Medaka
 
-**Status:** ACTIVE (2026-08-28) — Phases 0 and 1 are complete in the current
-tree and Phase 2 is next. Phase 3 onward is gated on the
-Async v2 runtime arc (#500) and the graded-interfaces arc (#820).
+**Status:** ACTIVE (2026-08-29) — Phases 0–2 are complete in the current tree.
+Phase 3 is next, but remains gated on the Async v2 runtime arc (#500) and the
+graded-interface implementation work (#823/#824).
 
 A Personal Data Server for the AT Protocol, written in Medaka, hosted on the
 dev box behind Caddy. This is simultaneously the most demanding Medaka program
@@ -25,7 +25,7 @@ a real social identity, so the correctness bar is higher than the compiler's.
 | **P7** | **Block store is flat sharded files on disk**, CID → bytes, not `sqlite/`. | A block store is a pure key/value map with content-addressed immutable keys — the one workload where a filesystem is already the right database. Pressing the in-tree SQLite engine into service would add a large dependency, a write-path risk, and a schema, in exchange for nothing. |
 | **P8** | **Pinned official atproto/PDS code is the oracle; library reproduction and live-service evidence are distinct.** Every CID, CAR byte, and signature is diffed against exact official repo/crypto libraries. | Phase 1 pins the complete npm graph and independently reproduces the corpora with libraries installed in the digest-pinned official image. That applies the repo's differential methodology without starting a service. A live XRPC transcript is a separate manual tier: account creation stays disabled unless an isolated PLC endpoint is chosen, because the public default makes an irreversible identity write (§5). |
 | **P9** | **The running server is native-only**; the pure core stays all-engine **by design, not by luck**. | The interpreter implements zero net externs (the T7 family in `test/CAPABILITY-EXCEPTIONS.txt`) and wasm rejects net as PERMANENT. ⚠️ **The same is true of every file extern** — `stdlib/fs.mdk` says so in its own header: *"Scope: NATIVE/LLVM … not the tree-walking interpreter."* So effectful storage code is native-bound exactly like sockets, and a core that *performed* its own I/O would not be portable or doctestable at all. P14 is the structural response; without it, this row's "costs less than it sounds" would be unsupported. |
-| **P14** | **The pure core performs NO I/O. Storage is injected, never called.** `handle` takes a `Store` of plain functions and returns a response; `blockstore` is a pure `CID -> Bytes` map. | This is what makes P9's claim true rather than aspirational. Both file and net externs are native-only, so any module that touches storage directly is native-bound and undoctestable. Threading storage in as values keeps every byte of protocol logic — DAG-CBOR, MST, CAR, commits, HTTP parsing, routing — genuinely effect-free, all-engine, and gradeable without a filesystem. The shell above supplies the real reader/writer; a test supplies an in-memory map. The seam is `handle : Store -> Request -> Response`, with **no effect row at all**. |
+| **P14** | **The pure core performs NO I/O. State transitions are explicit immutable values.** Phase 2's opaque `Store` wraps the verified immutable `BlockStore`; a configured `Server` owns the XRPC registry and injected pure handler. | This is what makes P9's claim true rather than aspirational. Both file and net externs are native-only, so any core module that touches storage directly is native-bound and undoctestable. The seam is `handle : Server -> Store -> Request -> (Store, Response)`, or `Store -> Request -> (Store, Response)` after configuring the server, with **no effect row at all**. Reads and protocol failures return the input store; successful writes return a successor. Phase 3 owns persistence adapters; Phase 4 owns multi-repository and blob-storage policy. |
 | **P10** | **Field arithmetic uses `libsecp256k1`'s 32-bit field layout: 10 limbs in base 2^26, limbs 0–8 holding 26 bits and limb 9 holding 22.** | Resolved from §7 Q2. Decided on *cross-checkability against an audited implementation of the same representation*, not on speed. ⚠️ Note the limit of that: the reference's **overflow proof does not transfer** — `fe_mul_inner` assumes magnitude ≤ 8 and its accumulator reaches a full 64 bits, which does not fit Medaka's 62-bit non-negative range. Eager normalization (§4) is what makes it fit, and the magnitude-1 bounds must be derived by us. What the reference buys is a diffable oracle for element-level outputs and the shape of the reduction — not a transplantable safety argument. ~2.5× fewer partial products than a 16-bit layout, ~6 bits of headroom under 2^62. |
 | **P11** | **The crypto modules graduate to `stdlib/` once proven, not before.** | Val's call. SHA-256 and base58 are plainly general-purpose. The reason to wait is **API churn against a compatibility promise**, not seed re-mints: placing a module in `stdlib/` does not by itself make the compiler import it, and only a change to a module the compiler *does* import, *and* which perturbs emitted IR, forces a re-mint (see P1). Graduation criteria, so "proven" is not a vibe: the full G1 vector suites pass, the API has been stable across a release, and a deliberate decision has been taken about which of `field`/`scalar` stay private to `pds/`. |
 | **P12** | **Firehose events are persisted to a bounded append-only log, initially sized to the ~72-hour window relays currently default to** (Phase 5). | Resolved from §7 Q3 by looking at what the ecosystem does rather than deciding a priori — but the number is softer than it looks: 72 hours is the **configurable default of the relay generation introduced in January 2026**, not a spec requirement and not a historical invariant (`atproto.com/specs/sync` states no retention window at all). Operators tune it down. The design is deliberately robust to it moving: the log is bounded and `getRepo` covers full resynchronization independently. On-disk rather than in-memory specifically so a process restart does not invalidate a connected relay's cursor. Re-derive the number at Phase 5. |
@@ -89,22 +89,26 @@ The organising principle, and the reason P9 costs little:
                     └──────────────────┬──────────────────────┘
                      Array Int ⇄ Array Int │ Store (injected)
                     ┌──────────────────┴──────────────────────┐
-                    │  handle : Store -> Request -> Response  │
+                    │  handle : Server -> Store -> Request    │
+                    │           -> (Store, Response)           │
    pure, portable,  │  XRPC routing · repo · MST · DAG-CBOR   │  Phases 0-2
-   all-engine,      │  CID · CAR · SHA-256 · secp256k1        │  UNBLOCKED
+   all-engine,      │  CID · CAR · SHA-256 · secp256k1        │  COMPLETE
    doctestable      │  HTTP/1.1 parse + serialize             │
                     └─────────────────────────────────────────┘
 ```
 
 The HTTP layer is a **function from bytes to bytes**, not a server. `parseRequest :
-Array Int -> Result String Request` and `serializeResponse : Response -> Array Int`
-are pure; so is the router beneath them.
+Array Int -> Result String Request` remains the diagnostic-facing parser;
+`parseRequestClassified` adds a typed malformed/resource-excess split for the
+composition layer, and `serializeResponse : Response -> Array Int` is deterministic.
+The router and configured server beneath them are pure too.
 
-**Storage is injected, not performed** (P14). `Store` is a record of plain functions —
-`getBlock : CID -> Option Bytes`, `putBlock : CID -> Bytes -> Store`, and the blob
-equivalents — so `handle` carries **no effect row at all**. The shell supplies a `Store`
-backed by `readFileBytes`/`writeFileBytes`; a test supplies one backed by an in-memory
-map. Requests needing a clock take the timestamp as an argument for the same reason.
+**Storage is threaded, not performed** (P14). Phase 2's opaque immutable `Store`
+delegates `empty`/`get`/`put`/`size` to the verified `BlockStore`. A configured
+`Server` holds a registry and injected handler; applying it yields the seam
+`Store -> Request -> (Store, Response)`. The Phase 3 shell will own persistence
+of successor values. Requests needing a clock take the timestamp as an argument
+for the same reason.
 
 This is not stylistic. **Every file extern is native-only, exactly like every net
 extern** (`stdlib/fs.mdk`: *"Scope: NATIVE/LLVM … not the tree-walking interpreter"*),
@@ -114,15 +118,14 @@ true.
 
 What it buys: the correctness-critical code is gradeable by golden diff with no sockets
 and no filesystem; it runs under `medaka run` and wasm, so doctests reach it; and Phase
-3 shrinks to wiring — an accept loop, a request lifecycle, and the one `Store` that
-closes over the real externs.
+3 shrinks to wiring — an accept loop, a request lifecycle, and persistence of the
+explicit successor `Store`.
 
-⚠️ Doctests reach this code because it is pure, but **`test/diff_compiler_engines.sh`
-does not** — its corpora are all under `test/` (`llvm_fixtures*`, `wasm/fixtures*`,
-`engine_fixtures`), so nothing in `pds/` is enrolled. Getting three-engine coverage
-means adding fixtures to those shared corpora, which is unscoped work and carries
-AGENTS.md's shared-corpus trap (enumerate every consumer first). Portability here is a
-property we can *test*, not one an existing gate already checks.
+The dedicated `pds/test/protocol_all_engines.sh` gate grades fixed query routing,
+chunked state update, malformed framing, unknown routing, and resource rejection on
+eval, native, and real Wasm. Its expected cells are hand-authored rather than captured
+from an engine, and its native mutation control proves the state-update assertion can
+fail.
 
 ---
 
@@ -337,9 +340,15 @@ native/Wasm, keeping the pure core all-engine while bounding required-CI time.
 
 **Phase 2 — protocol logic, still pure.** HTTP/1.1 request parse and response
 serialize (request line, headers, chunked transfer, keep-alive semantics as data,
-multipart bodies for `uploadBlob`); the XRPC router; `handle : Store -> Request -> Response`
-with storage injected and no effect row (P14).
-*Unblocked today. All-engine, doctestable, golden-diffable with no sockets.*
+strict query decoding, and wildcard raw MIME bodies for `uploadBlob`); the XRPC
+router preserves ordered query parameters on queries and procedures and treats
+NSID authority identity case-insensitively without folding method-name case;
+an opaque immutable `Store`; and configured
+`handle : Server -> Store -> Request -> (Store, Response)` / `handleBytes` seams
+with no effect row (P14). Whole requests are buffered with independent caps:
+64 KiB combined header section, 150 KiB JSON, 100 KiB text, and 5 MiB raw/blob
+body, plus bounded line, field, trailer, and chunk counts. *Complete in the
+current tree. All-engine and doctestable with no sockets or files.*
 
 **Phase 3 — the socket shell.** ⛔ **GATED on #500 (A1 #496 + A2 #497)** for real I/O
 overlap, and on **#823/#824** for the `do` surface every handler is written in. An
@@ -427,13 +436,15 @@ Phase 5 against a real relay — this is empirical, and the number could move.
 
 **Q4 — A read-only web view? RESOLVED → P13.** In, at Phase 4.5.
 
+**Q5 — Streaming request bodies? RESOLVED → bounded buffering.** Phase 2 keeps
+whole requests buffered so the pure synchronous seam stays all-engine. It caps
+the combined header section at 64 KiB, JSON bodies at 150 KiB, text at 100 KiB,
+and raw/blob bodies at 5 MiB; the outer request ceiling additionally bounds
+framing overhead. `uploadBlob` is raw MIME input, not multipart. Revisit
+streaming only from measured deployment pressure, at the Phase 3 socket boundary.
+
 ### Still open
 
-- **Q5 — Does Phase 2's HTTP layer need streaming request bodies?** `uploadBlob` can
-  carry several megabytes. Buffering whole requests keeps the Phase 2 core pure and
-  synchronous, which is the property §3 is built on; streaming would push chunk
-  handling across the socket boundary and complicate the seam. Probably: buffer, with
-  a size cap, and revisit only if real blob sizes justify it. Wants a number.
 - **Q6 — Where does the signing key live at rest?** Encrypted with a passphrase
   supplied at startup, or plaintext on a locked-down filesystem? The first needs a KDF
   and a symmetric cipher — more pure-Medaka crypto, none of which has a protocol-level
