@@ -396,7 +396,6 @@ runRepresentative did secret t0 t1 initLine op1 c1 createOrder createCar =
     rejectContains "did-bad-percent" "invalid DID" (repoInit "did:x:a%zz" secret initialTid),
     rejectContains "did-too-long" "maximum length" (repoInit ("did:x:" ++ repeat 2043 "a") secret initialTid),
     rejectContains "nsid-too-short" "collection" (repoLookup (toUtf8 "com.example/r") initial),
-    rejectContains "nsid-uppercase-authority" "normalized" (repoLookup (toUtf8 "Com.example.post/r") initial),
     rejectContains "nsid-empty-segment" "segment length" (repoLookup (toUtf8 "com..post/r") initial),
     rejectContains "nsid-leading-hyphen" "hyphen" (repoLookup (toUtf8 "com.-example.post/r") initial),
     rejectContains "nsid-numeric-tld" "top-level" (repoLookup (toUtf8 "1com.example.post/r") initial),
@@ -417,6 +416,7 @@ runRepresentative did secret t0 t1 initLine op1 c1 createOrder createCar =
     acceptLaterFailure "did-method-digit" "data mismatch" (repoValidateCommit "did:x1:a" mismatchData (repoCommitTid oldCommit) (repoCommitSignedBytes oldCommit)),
     acceptLaterFailure "did-colon-segments" "data mismatch" (repoValidateCommit "did:method:val:two" mismatchData (repoCommitTid oldCommit) (repoCommitSignedBytes oldCommit)),
     acceptLaterFailure "did-percent" "data mismatch" (repoValidateCommit "did:x:a%20b" mismatchData (repoCommitTid oldCommit) (repoCommitSignedBytes oldCommit)),
+    acceptResult "nsid-uppercase-authority" (repoLookup (toUtf8 "Com.example.post/r") initial),
     acceptResult "rkey-min" (repoLookup (pathPrefix ++ toUtf8 "a") initial),
     acceptResult "rkey-max" (repoLookup (pathPrefix ++ arrayMake 512 97) initial),
     acceptResult "rkey-punctuation" (repoLookup (pathPrefix ++ toUtf8 "~1.2-3_") initial),
@@ -424,10 +424,10 @@ runRepresentative did secret t0 t1 initLine op1 c1 createOrder createCar =
     acceptResult "commit-data-root" (repoExportGraph (repoCommitCid newCommit) (repoCommitSignedBytes newCommit) (repoRootCid changed) (repoStore changed)),
   ]
   let malformed = rejectContains "malformed-bound-mst" "empty key" malformedBoundExport
-  let () = println "focused-rejected: \{intToString rejected}/27 named routes"
-  let () = println "focused-controls: \{intToString controls}/8 valid routes"
+  let () = println "focused-rejected: \{intToString rejected}/26 named routes"
+  let () = println "focused-controls: \{intToString controls}/9 valid routes"
   let () = println "focused-export-boundary: \{intToString malformed}/1 malformed bound MST route"
-  if external == 6 && rejected == 27 && controls == 8 && malformed == 1 then println "REPRESENTATIVE: PASS"
+  if external == 6 && rejected == 26 && controls == 9 && malformed == 1 then println "REPRESENTATIVE: PASS"
   else
     let () = println "REPRESENTATIVE: FAIL"
     exit 1

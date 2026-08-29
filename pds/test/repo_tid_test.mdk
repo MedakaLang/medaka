@@ -3,7 +3,7 @@
 
 import string.{contains}
 import test.{expectEqual, expectTrue}
-import lib.nsid.{nsidErrorMessage, validateNsid}
+import lib.nsid.{validateNsid}
 import lib.repo.{repoInitFromKeyBytes}
 import lib.tid.{
   tidClockId,
@@ -69,6 +69,6 @@ test "repository rejects invalid signing key before commit construction" =
     "bad signing key"
     (repoInitFromKeyBytes "did:plc:medaka" (arrayMake 32 0) (mustTid 1 0)))
 
-test "shared NSID authority retains repository collection admission grammar" = match validateNsid "Com.atproto.test"
-  Ok () => expectTrue False
-  Err cause => expectTrue (not (isErr (validateNsid "com.atproto.test")) && nsidErrorMessage cause == "collection NSID authority must be normalized lowercase ASCII")
+test "shared NSID authority accepts uppercase repository authority segments" =
+  expectTrue
+    (not (isErr (validateNsid "Com.AtProto.test")) && not (isErr (validateNsid "com.atproto.test")))

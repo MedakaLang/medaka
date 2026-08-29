@@ -118,15 +118,22 @@ sizeBoundaryMatches policy limit message = inputSizeWithinLimit policy limit
       failureValueMatches 413 "PayloadTooLarge" message failed
     _ => False)
 
-test "shared normalized NSID authority accepts and rejects structural boundaries" = expectTrue (not (isErr (validateNsid "com.atproto.repo.applyWrites")) && isErr (validateNsid "Com.atproto.repo.applyWrites") && isErr (validateNsid "com.applyWrites") && isErr (validateNsid "1com.atproto.applyWrites") && isErr (validateNsid "com.-atproto.applyWrites") && isErr (validateNsid "com.atproto.apply-Writes"))
+test "shared NSID authority accepts ASCII case and rejects structural boundaries" = expectTrue (not (isErr (validateNsid "com.atproto.repo.applyWrites")) && not (isErr (validateNsid "Com.AtProto.repo.applyWrites")) && isErr (validateNsid "com.applyWrites") && isErr (validateNsid "1com.atproto.applyWrites") && isErr (validateNsid "com.-atproto.applyWrites") && isErr (validateNsid "com.atproto.apply-Writes"))
 
 test "endpoint smart constructors reject invalid NSIDs" =
   expectTrue
-    (isErr (queryEndpoint "com.atproto.bad-name") && isErr (procedureEndpoint "not-an-nsid" JsonInput) && isErr (subscriptionEndpoint "Com.atproto.sync.subscribeRepos"))
+    (isErr (queryEndpoint "com.atproto.bad-name") && isErr (procedureEndpoint "not-an-nsid" JsonInput) && isErr (subscriptionEndpoint "com.atproto.sync.subscribe-Repos"))
 
 test "registry admission rejects duplicate endpoint NSIDs" =
   let endpoint = mustEndpoint (queryEndpoint "com.example.test.echo")
   expectTrue (isErr (makeRegistry [endpoint, endpoint]))
+
+test "registry identity folds authority case but preserves method-name case" =
+  let lower = mustEndpoint (queryEndpoint "com.example.test.echo")
+  let upperAuthority = mustEndpoint (queryEndpoint "Com.Example.test.echo")
+  let upperMethod = mustEndpoint (queryEndpoint "com.example.test.Echo")
+  expectTrue
+    (isErr (makeRegistry [lower, upperAuthority]) && not (isErr (makeRegistry [lower, upperMethod])))
 
 test "GET query routing preserves repeated decoded values and order" =
   let request = noBodyRequest "GET" "/xrpc/com.atproto.server.describeServer?detail=one&detail=&flag"
@@ -136,7 +143,12 @@ test "GET query routing preserves repeated decoded values and order" =
 
 test "encoded and otherwise invalid XRPC method identities are rejected" =
   expectTrue
-    (failureMatches 400 "InvalidRequest" "Invalid XRPC method NSID" (noBodyRequest "GET" "/xrpc/com%2eatproto.server.describeServer") && failureMatches 400 "InvalidRequest" "Invalid XRPC method NSID" (noBodyRequest "GET" "/xrpc/Com.atproto.server.describeServer") && failureMatches 400 "InvalidRequest" "Invalid XRPC method NSID" (noBodyRequest "GET" "/xrpc/com.atproto.server.describeServer/"))
+    (failureMatches 400 "InvalidRequest" "Invalid XRPC method NSID" (noBodyRequest "GET" "/xrpc/com%2eatproto.server.describeServer") && failureMatches 400 "InvalidRequest" "Invalid XRPC method NSID" (noBodyRequest "GET" "/xrpc/com.atproto.server.describeServer/"))
+
+test "routing matches authority case-insensitively and returns registered spelling" = match routeRequest registry (noBodyRequest "GET" "/xrpc/Com.AtProto.server.describeServer")
+  RouteCall (QueryCall "com.atproto.server.describeServer" []) =>
+    expectTrue True
+  _ => expectTrue False
 
 test "empty XRPC method path is rejected without producing a call" =
   expectTrue (failureMatches
@@ -150,7 +162,7 @@ test "malformed query encoding is a canonical invalid-request failure" =
     400
     "InvalidRequest"
     "Invalid XRPC query parameters"
-    (noBodyRequest "GET" "/xrpc/com.atproto.server.describeServer?q=%2G"))
+    (noBodyRequest "GET" "/xrpc/com.atproto.server.describeServer?q=%00"))
 
 test "unknown registered-shape method is a canonical not-found failure" =
   expectTrue (failureMatches
@@ -203,7 +215,8 @@ test "query rejects zero-length framing and Content-Type" =
       [||]))
 
 test "no-input procedure produces a typed call" = match routeRequest registry (noBodyRequest "POST" "/xrpc/com.example.nobody.ping")
-  RouteCall (ProcedureNoInputCall "com.example.nobody.ping") => expectTrue True
+  RouteCall (ProcedureNoInputCall "com.example.nobody.ping" []) =>
+    expectTrue True
   _ => expectTrue False
 
 test "no-input procedure rejects body framing" =
@@ -216,39 +229,36 @@ test "no-input procedure rejects body framing" =
 test "JSON procedure produces a typed parsed call" =
   let request = bodyRequest "POST" "/xrpc/com.atproto.repo.applyWrites" "Content-Type: application/json; charset=utf-8\r\n" (toUtf8 "{\"ok\":true}")
   match routeRequest registry request
-    RouteCall (ProcedureJsonCall nsid value) => expectTrue (nsid == "com.atproto.repo.applyWrites" && stringify value == "{\"ok\":true}")
+    RouteCall (ProcedureJsonCall nsid [] value) => expectTrue (nsid == "com.atproto.repo.applyWrites" && stringify value == "{\"ok\":true}")
     _ => expectTrue False
 
 test "text procedure produces a typed UTF-8 call" =
   let request = bodyRequest "POST" "/xrpc/com.example.text.echo" "Content-Type: text/plain; charset=utf-8\r\n" (toUtf8 "héllo")
   match routeRequest registry request
-    RouteCall (ProcedureTextCall nsid media text) => expectTrue (nsid == "com.example.text.echo" && mediaTypeType media == "text" && mediaTypeSubtype media == "plain" && text == "héllo")
+    RouteCall (ProcedureTextCall nsid [] media text) => expectTrue (nsid == "com.example.text.echo" && mediaTypeType media == "text" && mediaTypeSubtype media == "plain" && text == "héllo")
     _ => expectTrue False
 
-test "raw procedure preserves media type and binary bytes" =
-  let request = bodyRequest "POST" "/xrpc/com.atproto.repo.uploadBlob" "Content-Type: image/png\r\n" [|0, 128, 255|]
+test "wildcard raw procedure preserves text JSON and opaque media with exact bytes" =
+  let textRequest = bodyRequest "POST" "/xrpc/com.atproto.repo.uploadBlob" "Content-Type: text/plain\r\n" (toUtf8 "hello")
+  let jsonRequest = bodyRequest "POST" "/xrpc/com.atproto.repo.uploadBlob" "Content-Type: application/json\r\n" (toUtf8 "{nope}")
+  let opaqueRequest = bodyRequest "POST" "/xrpc/com.atproto.repo.uploadBlob" "Content-Type: image/png\r\n" [|0, 128, 255|]
+  match (routeRequest registry textRequest, routeRequest registry jsonRequest, routeRequest registry opaqueRequest)
+    (RouteCall (ProcedureRawCall textNsid [] textMedia textBytes), RouteCall (ProcedureRawCall jsonNsid [] jsonMedia jsonBytes), RouteCall (ProcedureRawCall opaqueNsid [] opaqueMedia opaqueBytes)) => expectTrue (textNsid == "com.atproto.repo.uploadBlob" && mediaTypeType textMedia == "text" && mediaTypeSubtype textMedia == "plain" && textBytes == toUtf8 "hello" && jsonNsid == "com.atproto.repo.uploadBlob" && mediaTypeType jsonMedia == "application" && mediaTypeSubtype jsonMedia == "json" && jsonBytes == toUtf8 "{nope}" && opaqueNsid == "com.atproto.repo.uploadBlob" && mediaTypeType opaqueMedia == "image" && mediaTypeSubtype opaqueMedia == "png" && opaqueBytes == [|0, 128, 255|])
+    _ => expectTrue False
+
+test "procedure query parameters preserve repeated names empty values and order" =
+  let request = bodyRequest "POST" "/xrpc/com.atproto.repo.applyWrites?dryRun=true&dryRun=&flag" "Content-Type: application/json\r\n" (toUtf8 "{}")
   match routeRequest registry request
-    RouteCall (ProcedureRawCall nsid media bytes) => expectTrue (nsid == "com.atproto.repo.uploadBlob" && mediaTypeType media == "image" && mediaTypeSubtype media == "png" && bytes == [|0, 128, 255|])
+    RouteCall (ProcedureJsonCall nsid [QueryParam firstName firstValue, QueryParam secondName secondValue, QueryParam flag flagValue] _) => expectTrue (nsid == "com.atproto.repo.applyWrites" && firstName == "dryRun" && firstValue == "true" && secondName == "dryRun" && secondValue == "" && flag == "flag" && flagValue == "")
     _ => expectTrue False
-
-test "procedure query parameters are structurally rejected" =
-  expectTrue (failureMatches
-    400
-    "InvalidRequest"
-    "XRPC procedure endpoints do not accept query parameters"
-    (bodyRequest
-      "POST"
-      "/xrpc/com.atproto.repo.applyWrites?dryRun=true"
-      "Content-Type: application/json\r\n"
-      (toUtf8 "{}")))
 
 test "missing duplicate and malformed body media classify as 415" =
   expectTrue
     (failureMatches 415 "UnsupportedMediaType" "Request body requires one Content-Type header" (bodyRequest "POST" "/xrpc/com.atproto.repo.applyWrites" "" (toUtf8 "{}")) && failureMatches 415 "UnsupportedMediaType" "Request body requires one Content-Type header" (bodyRequest "POST" "/xrpc/com.atproto.repo.applyWrites" "Content-Type: application/json\r\nContent-Type: application/json\r\n" (toUtf8 "{}")) && failureMatches 415 "UnsupportedMediaType" "Request body has an invalid Content-Type header" (bodyRequest "POST" "/xrpc/com.atproto.repo.applyWrites" "Content-Type: application\r\n" (toUtf8 "{}")))
 
-test "wrong JSON text and raw media classify as 415" =
+test "wrong JSON and text media classify as 415" =
   expectTrue
-    (failureMatches 415 "UnsupportedMediaType" "Request body media type does not match endpoint input" (bodyRequest "POST" "/xrpc/com.atproto.repo.applyWrites" "Content-Type: text/plain\r\n" (toUtf8 "{}")) && failureMatches 415 "UnsupportedMediaType" "Request body media type does not match endpoint input" (bodyRequest "POST" "/xrpc/com.example.text.echo" "Content-Type: application/json\r\n" (toUtf8 "{}")) && failureMatches 415 "UnsupportedMediaType" "Request body media type does not match endpoint input" (bodyRequest "POST" "/xrpc/com.atproto.repo.uploadBlob" "Content-Type: application/json\r\n" (toUtf8 "{}")))
+    (failureMatches 415 "UnsupportedMediaType" "Request body media type does not match endpoint input" (bodyRequest "POST" "/xrpc/com.atproto.repo.applyWrites" "Content-Type: text/plain\r\n" (toUtf8 "{}")) && failureMatches 415 "UnsupportedMediaType" "Request body media type does not match endpoint input" (bodyRequest "POST" "/xrpc/com.example.text.echo" "Content-Type: application/json\r\n" (toUtf8 "{}")))
 
 test "invalid JSON syntax and UTF-8 classify as 400" =
   expectTrue

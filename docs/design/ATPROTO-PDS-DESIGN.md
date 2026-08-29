@@ -340,7 +340,9 @@ native/Wasm, keeping the pure core all-engine while bounding required-CI time.
 
 **Phase 2 — protocol logic, still pure.** HTTP/1.1 request parse and response
 serialize (request line, headers, chunked transfer, keep-alive semantics as data,
-strict query decoding, and raw MIME bodies for `uploadBlob`); the XRPC router;
+strict query decoding, and wildcard raw MIME bodies for `uploadBlob`); the XRPC
+router preserves ordered query parameters on queries and procedures and treats
+NSID authority identity case-insensitively without folding method-name case;
 an opaque immutable `Store`; and configured
 `handle : Server -> Store -> Request -> (Store, Response)` / `handleBytes` seams
 with no effect row (P14). Whole requests are buffered with independent caps:

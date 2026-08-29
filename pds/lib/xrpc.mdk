@@ -22,11 +22,12 @@ import lib.http.{
   mediaTypeType,
   parseMediaType,
   parseTargetQuery,
+  requestBody,
   requestBodyLength,
   requestHeaders,
   requestMethod,
 }
-import lib.nsid.{validateNsid}
+import lib.nsid.{sameNsidIdentity, validateNsid}
 import lib.resource_limits.{
   checkJsonBodyBytes,
   checkRawBodyBytes,
@@ -49,10 +50,10 @@ export data Registry = Registry (List Endpoint)
 
 public export data XrpcCall =
   | QueryCall String (List QueryParam)
-  | ProcedureNoInputCall String
-  | ProcedureJsonCall String Json
-  | ProcedureTextCall String MediaType String
-  | ProcedureRawCall String MediaType (Array Int)
+  | ProcedureNoInputCall String (List QueryParam)
+  | ProcedureJsonCall String (List QueryParam) Json
+  | ProcedureTextCall String (List QueryParam) MediaType String
+  | ProcedureRawCall String (List QueryParam) MediaType (Array Int)
 
 export data XrpcFailure = XrpcFailure Int String String Response
 
@@ -86,7 +87,8 @@ endpointNsid (Endpoint nsid _) = nsid
 
 nameMember : String -> List String -> Bool
 nameMember _ [] = False
-nameMember wanted (name::rest) = wanted == name || nameMember wanted rest
+nameMember wanted (name::rest) = sameNsidIdentity wanted name
+  || nameMember wanted rest
 
 validateEntries : List Endpoint -> List String -> Int -> Result String Unit
 validateEntries [] _ _ = Ok ()
@@ -108,7 +110,7 @@ makeRegistry endpoints = do
 findEndpoint : String -> List Endpoint -> Option Endpoint
 findEndpoint _ [] = None
 findEndpoint wanted (endpoint::rest) =
-  if endpointNsid endpoint == wanted then
+  if sameNsidIdentity (endpointNsid endpoint) wanted then
     Some endpoint
   else
     findEndpoint wanted rest
@@ -202,10 +204,6 @@ hasBodyFraming (header::rest) =
     || name == "content-type"
     || hasBodyFraming rest
 
-hasParams : List QueryParam -> Bool
-hasParams [] = False
-hasParams _ = True
-
 data MediaSelection =
   | MissingMedia
   | DuplicateMedia
@@ -295,17 +293,26 @@ mediaMatches : InputPolicy -> MediaType -> Bool
 mediaMatches JsonInput media = mediaTypeType media == "application"
   && mediaTypeSubtype media == "json"
 mediaMatches TextInput media = mediaTypeType media == "text"
-mediaMatches RawInput media = not (mediaTypeType media == "application" && mediaTypeSubtype media == "json")
-  && mediaTypeType media /= "text"
+mediaMatches RawInput _ = True
 mediaMatches NoInput _ = False
 
-decodeProcedure : String -> InputPolicy -> Request -> RouteResult
-decodeProcedure nsid NoInput request =
+decodeProcedure : String -> InputPolicy -> List QueryParam -> Request -> RouteResult
+decodeProcedure nsid NoInput params request =
   if requestBodyLength request > 0 || hasBodyFraming (requestHeaders request) then
     invalidRequest "This procedure does not accept request body framing"
   else
-    RouteCall (ProcedureNoInputCall nsid)
-decodeProcedure nsid policy request =
+    RouteCall (ProcedureNoInputCall nsid params)
+decodeProcedure nsid RawInput params request =
+  let size = requestBodyLength request
+  match inputSizeFailure RawInput size
+    Some failed => RouteFailure failed
+    None => match selectMedia request
+      MissingMedia => mediaFailure MissingMedia
+      DuplicateMedia => mediaFailure DuplicateMedia
+      InvalidMedia => mediaFailure InvalidMedia
+      SelectedMedia media =>
+        RouteCall (ProcedureRawCall nsid params media (requestBody request))
+decodeProcedure nsid policy params request =
   let size = requestBodyLength request
   match inputSizeFailure policy size
     Some failed => RouteFailure failed
@@ -318,11 +325,9 @@ decodeProcedure nsid policy request =
         Err _ => invalidRequest "Request body is invalid for endpoint input"
         Ok decoded => match (policy, decoded)
           (JsonInput, JsonBody _ value) =>
-            RouteCall (ProcedureJsonCall nsid value)
+            RouteCall (ProcedureJsonCall nsid params value)
           (TextInput, TextBody decodedMedia text) =>
-            RouteCall (ProcedureTextCall nsid decodedMedia text)
-          (RawInput, RawBody decodedMedia bytes) =>
-            RouteCall (ProcedureRawCall nsid decodedMedia bytes)
+            RouteCall (ProcedureTextCall nsid params decodedMedia text)
           _ => unsupportedMedia "Request body media type does not match endpoint input"
 
 routeEndpoint : Endpoint -> Request -> List QueryParam -> RouteResult
@@ -336,10 +341,8 @@ routeEndpoint (Endpoint nsid QueryEndpoint) request params =
 routeEndpoint (Endpoint nsid (ProcedureEndpoint policy)) request params =
   if requestMethod request /= "POST" then
     methodNotAllowed "XRPC procedure endpoints require POST"
-  else if hasParams params then
-    invalidRequest "XRPC procedure endpoints do not accept query parameters"
   else
-    decodeProcedure nsid policy request
+    decodeProcedure nsid policy params request
 routeEndpoint (Endpoint nsid SubscriptionEndpoint) request _ =
   if requestMethod request /= "GET" then
     methodNotAllowed "XRPC subscription endpoints require GET"

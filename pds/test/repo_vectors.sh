@@ -35,8 +35,8 @@ fi
 require_empty "$WORK/eval.err" eval
 
 grep -F -q 'representative-external: 6/6 official-atproto initialization/create/CAR checks' "$WORK/eval.out" || fail 'eval representative external count is incomplete'
-grep -F -q 'focused-rejected: 27/27 named routes' "$WORK/eval.out" || fail 'eval F1 rejection count is incomplete'
-grep -F -q 'focused-controls: 8/8 valid routes' "$WORK/eval.out" || fail 'eval F1 boundary controls are incomplete'
+grep -F -q 'focused-rejected: 26/26 named routes' "$WORK/eval.out" || fail 'eval F1 rejection count is incomplete'
+grep -F -q 'focused-controls: 9/9 valid routes' "$WORK/eval.out" || fail 'eval F1 boundary controls are incomplete'
 grep -F -q 'OP CREATE PASS' "$WORK/eval.out" || fail 'eval missed the representative CREATE'
 grep -F -q 'CREATE CAR PASS order=' "$WORK/eval.out" || fail 'eval missed representative exact CAR bytes/order'
 [ "$(tail -1 "$WORK/eval.out")" = 'REPRESENTATIVE: PASS' ] || fail 'eval did not end in REPRESENTATIVE: PASS'

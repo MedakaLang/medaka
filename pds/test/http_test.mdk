@@ -284,10 +284,18 @@ test "fragment in request target is rejected" =
     "origin-form"
     (toUtf8 "GET /x#fragment HTTP/1.1\r\nHost: pds.example\r\n\r\n"))
 
+test "request target rejects raw braces and preserves percent-encoded braces" =
+  expectTrue
+    (rejects "origin-form" (toUtf8 "GET /x?value={bad} HTTP/1.1\r\nHost: pds.example\r\n\r\n") && isOk (parseRequest (toUtf8 "GET /x?value=%7Bgood%7D HTTP/1.1\r\nHost: pds.example\r\n\r\n")))
+
 test "HTTP/1.0 is rejected" =
   expectTrue (rejects
     "only HTTP/1.1"
     (toUtf8 "GET / HTTP/1.0\r\nHost: pds.example\r\n\r\n"))
+
+test "HTTP protocol name is case-sensitive" =
+  expectTrue
+    (rejects "only HTTP/1.1" (toUtf8 "GET / http/1.1\r\nHost: pds.example\r\n\r\n") && rejects "only HTTP/1.1" (toUtf8 "GET / Http/1.1\r\nHost: pds.example\r\n\r\n"))
 
 test "missing Host is rejected" =
   expectTrue (rejects "exactly one Host" (toUtf8 "GET / HTTP/1.1\r\n\r\n"))
@@ -296,6 +304,10 @@ test "duplicate Host is rejected" =
   expectTrue (rejects
     "exactly one Host"
     (toUtf8 "GET / HTTP/1.1\r\nHost: one\r\nHost: two\r\n\r\n"))
+
+test "Host requires a syntactically valid authority" =
+  expectTrue
+    (rejects "valid authority" (toUtf8 "GET / HTTP/1.1\r\nHost: bad host\r\n\r\n") && rejects "valid authority" (toUtf8 "GET / HTTP/1.1\r\nHost: pds.example:not-a-port\r\n\r\n") && isOk (parseRequest (toUtf8 "GET / HTTP/1.1\r\nHost: [2001:db8::1]:2583\r\n\r\n")))
 
 test "malformed Connection token list is rejected" =
   expectTrue (rejects
@@ -389,8 +401,9 @@ test "query percent decoding is exact and plus stays literal" =
     _ => expectTrue False
 
 test "malformed query percent escape is rejected" =
-  let request = mustRequest (toUtf8 "GET /x?q=%2G HTTP/1.1\r\nHost: pds.example\r\n\r\n")
-  expectTrue (isErr (parseTargetQuery request))
+  expectTrue (rejects
+    "origin-form"
+    (toUtf8 "GET /x?q=%2G HTTP/1.1\r\nHost: pds.example\r\n\r\n"))
 
 test "overlong UTF-8 in query is rejected" =
   let request = mustRequest (toUtf8 "GET /x?q=%C0%AF HTTP/1.1\r\nHost: pds.example\r\n\r\n")
