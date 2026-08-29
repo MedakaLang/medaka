@@ -942,9 +942,16 @@ gen_marksweep() {
 #     stampBindingIds op-quadratic (typecheck's checkBodyImpl) DILUTED it; fixing #907 removed that
 #     masking term and surfaced the true ratio, exactly the "future source change lifting r1 over 3
 #     forces a ledger decision" this note predicted — then #973 drained it.
-# elaborate (op r1=2.71 r2=3.21) still CLIMBs but stays r1<3, so it reads `ok` and is NOT
-# ledgered (WATCH: a future source change lifting r1 over 3 will correctly fail and force a
-# ledger decision then, exactly as the comments:typecheck note warns).
+#   * elaborate — FIXED (#2189). Was `manyifaces:elaborate` (op r1=2.52 r2=3.04 at
+#     250/500/1000). A THIRD instance of the same class, in `elaborateDict`'s AST
+#     prepass rather than in interface registration: `rewriteRPDictArg` /
+#     `rewriteArgScoped` (typecheck.mdk) probed `rpNames`/`argNames`/`dictNames` with
+#     `util.contains` at EVERY `EVar` node, and this shape's `argNames` IS the
+#     O(N) arg-dispatch method pool — so the R*N non-method `base` refs each walked
+#     it in full, exactly the O(sites x pool) read #975 drained out of the marker.
+#     Indexing the three sets to OrdMaps (plus the same treatment for `dictPass`'s
+#     `names`) drops it to op r1=1.49 r2=1.66 (109378 -> 162628 -> 269128) — LINEAR.
+#     De-ledgered.
 # gen_manyifaces lives in test/perf_shapes.sh, SHARED with
 # test/diff_compiler_ir_scaling.sh — same #2066 reasoning as gen_xref above.
 
@@ -2029,11 +2036,12 @@ OP_FLOOR="${PERF_OP_FLOOR:-1000}"
 #         N=250/500/1000: 37126 -> 136751 -> 523501, r1=3.68 r2=3.83 (climbing toward
 #         the pure-quadratic 4.0). `findDups` keyed into an OrdMap (same fix as
 #         match:resolve, one function, both rows drained together). De-ledgered.
-#         (typecheck r1=2.65 r2=3.09 and elaborate r1=2.52 r2=3.04 also climb on this
-#         shape — the #907/#882 decl-count classes. Both were read `ok` by the
+#         (typecheck r1=2.65 r2=3.09 and elaborate r1=2.52 r2=3.04 also climbed on
+#         this shape — the #907/#882 decl-count classes. Both were read `ok` by the
 #         both-doublings rule because r1 < 3; since #2173 flipped this arm to r2
-#         alone, `manyifaces:elaborate` is over the line and IS now ledgered —
-#         KNOWN_SLOW_OPS below, issue #2189. This is what the flip was for.)
+#         alone, `manyifaces:elaborate` went over the line and WAS ledgered as
+#         #2189. This is what the flip was for — and #2189 has since been localised
+#         and FIXED, so the row is drained; see the elaborate bullet above.)
 #   conlocal:typecheck — issue #2030, and the MECHANISM IS KNOWN: `localPinPairs`
 #         (compiler/types/typecheck.mdk) is O(constrained top-level bindings x locals),
 #         so a program of N constrained fns each holding one local walks it O(N^2)
@@ -2065,17 +2073,30 @@ OP_FLOOR="${PERF_OP_FLOOR:-1000}"
 #         this row's promotion) 164 961 -> 205 361 -> 286 161, r1=1.245 r2=1.393 —
 #         linear. De-ledgered.
 #
-#   conlocal:elaborate — issue #2189, and it is LEDGERED, in KNOWN_SLOW_OPS below.
-#         ⚠️ THIS NOTE USED TO SAY THE OPPOSITE — "NOT LEDGERED, but WATCH … a ledger
-#         entry asserts a row is ALREADY over threshold on both doublings, and this
-#         one is not" — which was a live instruction to DELETE the row that now sits
-#         a few lines below, and would have turned a real quadratic silent again.
-#         The reading is unchanged (3 162 359 -> 8 788 559 -> 28 200 959, r1=2.78
-#         r2=3.21); what changed is the rule. Since #2173 this arm grades r2 alone,
-#         r2=3.21 is over the 3.0 threshold, and the row is ledgered on that basis.
-#         elaborate re-checks the program through checkProgramSeeded, so it
-#         plausibly rides the SAME localPinPairs term as conlocal:typecheck and may
-#         drain with it. Total ALLOC on this
+#   conlocal:elaborate — issue #2189, and it is STILL LEDGERED, in KNOWN_SLOW_OPS
+#         below — but for a DIFFERENT reason than when it was first written, and the
+#         residual is now LOCALISED. History: the row was first ledgered at
+#         3 162 359 -> 8 788 559 -> 28 200 959 (r1=2.78 r2=3.21) when #2173 flipped
+#         this arm to grade r2 alone.
+#         ⚠️ THIS NOTE ALSO USED TO SAY THE OPPOSITE — "NOT LEDGERED, but WATCH … a
+#         ledger entry asserts a row is ALREADY over threshold on both doublings, and
+#         this one is not" — a live instruction to DELETE the row a few lines below,
+#         which would have turned a real quadratic silent again.
+#         #2189's SITE was then localised by sub-bracketing `elaborateDict`'s op
+#         counter (S-3): 86% of the count was the AST prepass
+#         (`prePassDict`/`prePassDictArg` -> `rewriteRPDict`/`rewriteArgScoped`)
+#         probing `rpNames`/`argNames`/`dictNames` with `util.contains` at every
+#         `EVar`, with `dictNames` = the N `=>`-constrained top-level names this
+#         shape generates. That term is FIXED (OrdMap sets) and is gone: the row now
+#         reads 373 231 -> 1 010 431 -> 3 244 831, r1=2.71 r2=3.21.
+#         ⚠️ THE RATIO BARELY MOVED (3.209 -> 3.212) BECAUSE THE FIX REMOVED A
+#         QUADRATIC TERM, NOT A LINEAR ONE — the row is 88% smaller in absolute ops
+#         but the same shape. What is left is 94% the TWO `checkProgramSeeded` calls
+#         inside `elaborateDict` (1 531 210 + 1 530 741 of 3 244 831 at N=1600), i.e.
+#         `localPinPairs` — the SAME term as conlocal:typecheck, issue #2030. So the
+#         old "plausibly rides the same localPinPairs term" guess is now MEASURED and
+#         TRUE OF THE RESIDUAL (it was false of the bulk). This row drains with
+#         #2030, not before it. Total ALLOC on this
 # shape is the other near-miss: r1 2.57 r2 2.89 against a 3.0 ceiling (and against the
 # `climbing` heuristic's 2.96 trip point), which is why the shape is not additionally
 # ledgered on the alloc arm — it is under, deterministically, at this band.
@@ -2083,7 +2104,6 @@ OP_FLOOR="${PERF_OP_FLOOR:-1000}"
 # (see #880 follow-up; the var is word-split by `for k in $VAR`, newlines are IFS).
 KNOWN_SLOW_OPS="
 conlocal:typecheck
-manyifaces:elaborate
 conlocal:elaborate
 "
 # Ceilings follow this file's op-arm convention (the drained manyifaces:mark /
@@ -2096,12 +2116,12 @@ conlocal:elaborate
 # noise. Tied to CONLOCAL_N=400 — see that knob before moving the band.
 KNOWN_OCEIL_conlocal_typecheck="4.3"; KNOWN_OFIXED_conlocal_typecheck="2.60"
 #
-# ── #2189: elaborate is quadratic, on two independent shapes ─────────────────
+# ── #2189: elaborate was quadratic on two independent shapes; ONE ROW LEFT ────
 #
-# These two rows are what the #2173 verdict flip (r2 alone, not r1 && r2) newly
-# turned red, and they are REAL superlinearity, not bands chosen under the old
-# rule. Established by extending each shape's ladder past the gate's own band —
-# the direction of the ratio, not one number:
+# HISTORY. Both rows are what the #2173 verdict flip (r2 alone, not r1 && r2)
+# newly turned red, and they were REAL superlinearity, not bands chosen under the
+# old rule. Established by extending each shape's ladder past the gate's own band
+# — the direction of the ratio, not one number:
 #
 #   gen_conlocal   elaborate  400 ->  3162359    800 ->  8788559   r=2.779
 #                             1600 -> 28200959   3200 -> 99665759  r=3.209 / 3.534
@@ -2111,65 +2131,90 @@ KNOWN_OCEIL_conlocal_typecheck="4.3"; KNOWN_OFIXED_conlocal_typecheck="2.60"
 #
 # A linear stage holds 2.0. A ratio climbing monotonically toward 4.0 is a
 # quadratic term that has not yet swamped the linear one. Two shapes with no
-# shared generator code do it, so the property is elaborate's, not a fixture's.
-# The measurement is filed as #2189; the SITE is not localised and this ledger
-# does not claim one.
+# shared generator code did it, so the property was elaborate's, not a fixture's.
+#
+# THE SITE, LOCALISED (S-3). The op counter was sub-bracketed inside
+# `elaborateDict` (types/typecheck.mdk) with a throw-away per-region counter, so
+# each of its steps was priced separately. One family carried the bulk on BOTH
+# shapes: the EVar prepass — `prePassDict`/`prePassDictArg` ->
+# `rewriteRPDict`/`rewriteRPDictArg`/`rewriteArgScoped` — probed the three name
+# sets (`rpNames`, `argNames`, `dictNames`) with `util.contains`, a List-as-set,
+# once per `EVar` node, plus `dictPass`'s `contains n names` once per decl. Each
+# set grows with the program, so both reads are O(nodes x names). The thirteenth
+# and fourteenth instances of this file's one recurring shape. (It is NOT in
+# `ir/core_ir_lower.mdk`, which #2189's body guessed, and it is NOT the
+# `:527` wildcard-row residual from #2125 — a different pass and a different
+# mechanism.) Measured share of the pre-fix count, at each row's own top rung:
+#   conlocal N=1600:   prepass 23 532 136 of 28 200 959  = 83%
+#   manyifaces N=1000: prepass 10 165 053 of 10 912 288  = 93%
+# FIX: index all four sets to OrdMaps (`omFromNames` / `omHasKey`), exactly the
+# treatment `bound` in the same function already had from #1031. Membership
+# semantics are unchanged, so the rewrite is parity (verified run == native build
+# on a fixture exercising the rp / arg / dict / method-shadowing-local arms).
+#
+#   manyifaces:elaborate  109378 -> 162628 -> 269128   r1=1.487 r2=1.655  LINEAR
+#                         => PROMOTEs, DRAINED, row and ceilings deleted.
+#   conlocal:elaborate    373231 -> 1010431 -> 3244831 r1=2.707 r2=3.212  STAYS.
+#
+# ⚠️ WHY conlocal's RATIO DID NOT MOVE (3.209 -> 3.212) THOUGH THE ROW SHRANK 88%.
+# The prepass term was itself quadratic, so removing it removed numerator and
+# denominator together. What remains is a SECOND quadratic, and it is now fully
+# attributed: 3 061 951 of the residual 3 244 831 at N=1600 (94%) is the two
+# `checkProgramSeeded` calls inside `elaborateDict` — i.e. `localPinPairs`, the
+# SAME term as conlocal:typecheck, issue #2030. The pre-existing "elaborate
+# re-checks the program through checkProgramSeeded, so it plausibly rides the
+# same localPinPairs term" note was therefore FALSE OF THE BULK and TRUE OF THE
+# RESIDUAL. This row drains WITH #2030 and cannot drain before it.
 #
 # ⚠️ THE CEILING ARITHMETIC (#2160 rule 3: derive the margin, do not fit it to
 # the number it bounds, and show the work).
 #
 # Step 1 — what is the variance? ZERO. These are the deterministic op counts of
 # `MEDAKA_PERF=1` (field 5), a pure function of the input program: two
-# independent recordings of conlocal:elaborate, weeks apart, agree to the byte
-# (this file's own pre-existing WATCH note above records 3162359 / 8788559 /
-# 28200959 — identical to the ladder measured for #2189). Measured drift 0.00%.
-# So the margin CANNOT be derived from noise, and any margin here is a stated
-# policy about how much coefficient growth is tolerated before the gate shouts.
+# independent recordings of the pre-fix conlocal:elaborate, weeks apart, agreed
+# to the byte (3162359 / 8788559 / 28200959). Measured drift 0.00%. So the margin
+# CANNOT be derived from noise, and any margin here is a stated policy about how
+# much coefficient growth is tolerated before the gate shouts.
 #
 # Step 2 — state the policy in the units that matter. Fit net = a*N + b*N^2 at
-# each row's own band and ask what multiplier k on the quadratic coefficient b
-# pushes r2 over a candidate ceiling:
+# the row's own band and ask what multiplier k on the quadratic coefficient b
+# pushes r2 over a candidate ceiling. POST-FIX conlocal, from N=800/1600
+# (1010431, 3244831): a=498.058125, b=0.95622578125.
 #
-#   manyifaces (a=3424, b=7.488, from N=500/1000):
-#       k=0.50 -> r2=2.707   k=1.00 -> 3.045   k=1.25 -> 3.155
-#       k=1.50 -> 3.242      k=2.00 -> 3.372
-#   conlocal   (a=4345.8, b=8.2999, from N=800/1600):
-#       k=0.50 -> r2=2.866   k=1.00 -> 3.209   k=1.25 -> 3.313
-#       k=1.50 -> 3.392      k=2.00 -> 3.507
+#       k=0.50 -> r2=2.8688   k=1.00 -> 3.2113   k=1.25 -> 3.3150
+#       k=1.50 -> 3.3947      k=2.00 -> 3.5088
 #
 # Recompute rather than trusting the table (the k=0.5 and conlocal k=2 cells were
-# WRONG in the first version of this block — 2.82/2.95/3.489 against a true
-# 2.707/2.866/3.507 — and an independent review of the PR caught it; the adopted
-# k=1.25 cells were correct, so the ceilings below never moved):
+# WRONG in the first version of this block, and an independent review of the PR
+# caught it):
 #
 #   python3 -c 'f=lambda a,b,k,N: a*N+k*b*N*N; \
-#     print(f(3424,7.488,1.25,1000)/f(3424,7.488,1.25,500))'
+#     print(f(498.058125,0.95622578125,1.25,1600)/f(498.058125,0.95622578125,1.25,800))'
 #
-# The policy adopted: FAIL once the quadratic coefficient grows by a quarter.
-# That gives OCEIL 3.15 (manyifaces, trips at k >= ~1.24) and OCEIL 3.31
-# (conlocal, trips at k >= ~1.245). Note how flat r2 is in k — this is exactly
-# why a ceiling on an ALREADY-quadratic row has to sit close: the file's usual
-# 4.3 convention is ABOVE the pure-quadratic asymptote of 4.0 and therefore
-# could never catch an already-quadratic row getting worse at all. 4.3 is right
-# for a row whose measured r2 is 3.78 and whose failure mode is CUBIC; it is
-# the wrong instrument here.
+# The policy adopted, unchanged: FAIL once the quadratic coefficient grows by a
+# quarter. k=1.25 gives 3.3150, so the file's 2-dp convention keeps OCEIL 3.31 —
+# it now trips at k >= ~1.236 (was ~1.245 against the pre-fix coefficients: a
+# slightly TIGHTER gate, from rounding down, which is the safe direction). THE
+# CEILING IS THEREFORE UNCHANGED AT 3.31 — re-derived, not carried over, and not
+# fitted to the 3.212 it bounds. Note how flat r2 is in k: this is exactly why a
+# ceiling on an ALREADY-quadratic row has to sit close. The file's usual 4.3
+# convention is ABOVE the pure-quadratic asymptote of 4.0 and therefore could
+# never catch an already-quadratic row getting worse at all; 4.3 is right for a
+# row whose measured r2 is 3.78 and whose failure mode is CUBIC, and is the wrong
+# instrument here.
 #
-# OFIXED 2.60 on both, the file-wide promote mark. Check it discriminates: a
-# real fix drives r2 -> 2.0 and PROMOTEs (correct); merely halving b gives
-# k=0.5 -> r2=2.707 (manyifaces) / 2.866 (conlocal), which stays ledgered
-# (correct — a half-fix is not a fix). ⚠️ Note how THIN that is on manyifaces:
-# 0.107 above the 2.60 promote mark, not the ~0.22 the earlier miscomputed 2.82
-# suggested. A fix worth about 55% of b would trip PROMOTE and demand a drain on
-# a row that is still quadratic. That is the discrimination this mark actually
-# buys — state it, rather than implying a comfort margin that is not there.
+# OFIXED 2.60, the file-wide promote mark. Check it discriminates: draining #2030
+# drives r2 -> ~2.0 and PROMOTEs (correct); merely halving what is left gives
+# k=0.5 -> r2=2.8688, which stays ledgered (correct — a half-fix is not a fix).
+# The margin above the promote mark is 0.27, so no source drift can false-PROMOTE
+# this row, and a genuine #2030 fix cannot fail to.
 #
-# 🚨 BOTH CEILINGS ARE PER-BAND. They are derived at MANYIFACES_N=250 and
-# CONLOCAL_N=400 and are meaningless at any other N — r2 itself is a function of
-# the band on a quadratic row (manyifaces reads 3.044 at 250 and 3.443 at 1000).
-# Moving either knob invalidates its ceiling: RE-DERIVE from a fresh ladder, do
-# not scale. This is the #2172 lesson (KNOWN_CEIL_scoperefs=3.26 is a 3000-only
-# number; at 6000 the same tree reads 3.438) written down before it bites again.
-KNOWN_OCEIL_manyifaces_elaborate="3.15"; KNOWN_OFIXED_manyifaces_elaborate="2.60"
+# 🚨 THE CEILING IS PER-BAND. It is derived at CONLOCAL_N=400 and is meaningless
+# at any other N — r2 itself is a function of the band on a quadratic row (the
+# pre-fix manyifaces row read 3.044 at 250 and 3.443 at 1000). Moving the knob
+# invalidates the ceiling: RE-DERIVE from a fresh ladder, do not scale. This is
+# the #2172 lesson (KNOWN_CEIL_scoperefs=3.26 is a 3000-only number; at 6000 the
+# same tree reads 3.438) written down before it bites again.
 KNOWN_OCEIL_conlocal_elaborate="3.31";   KNOWN_OFIXED_conlocal_elaborate="2.60"
 # reexports:resolve was HERE (op ceiling 8.9) — the cubic (r2=7.92) counted `util.contains`
 # scans over a re-export export list that grows with depth. #925/#926 FIXED it: the three
@@ -2501,8 +2546,13 @@ grade_op_stage() {
   # conlocal:elaborate     r1=2.78  r2=3.21   (N=400->800->1600)
   #
   # Every other graded op row in the file reads r2 <= 2.20 except the already
-  # ledgered conlocal:typecheck (r1=3.44 r2=3.78, #2030). Both new rows are ledgered
+  # ledgered conlocal:typecheck (r1=3.44 r2=3.78, #2030). Both new rows were ledgered
   # below against measured ceilings — see KNOWN_SLOW_OPS.
+  #
+  # ⚠️ THAT IS A 2026-08-28 SNAPSHOT, NOT THE CURRENT LEDGER. #2189 has since been
+  # localised and half-drained: `manyifaces:elaborate` is FIXED and its row is gone
+  # (r2=1.66), `conlocal:elaborate` remains, now attributed to #2030's localPinPairs.
+  # Derive the live set from KNOWN_SLOW_OPS below, never from this paragraph.
   bad="$(awk -v r2="$or2" -v th="$THRESH" 'BEGIN{print (r2 > th) ? 1 : 0}')"
 
   if is_known_ops "${shape}:${st}"; then

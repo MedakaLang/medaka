@@ -1,5 +1,5 @@
 # META
-source_lines=37146
+source_lines=37181
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -17697,17 +17697,30 @@ anyMember (x::xs) ys = contains x ys || anyMember xs ys
 -- constrained-fn occurrence (a name in [dictNames]) to EDictAt — both carry a
 -- fresh ref the typechecker fills.  The two name sets are disjoint (interface
 -- methods vs top-level functions).
+--
+-- ⚠️ #2189: THE THREE NAME SETS ARE INDEXED, NOT SCANNED.  [rpNames]/[dictNames]
+-- grow with the program (one entry per interface method / per `=>`-constrained
+-- top-level fn), and the rewrite visits EVERY `EVar` node — so a `contains n
+-- rpNames` List-as-set walk here is O(occurrences x names) = O(N^2), the same
+-- shape #975 drained out of the marker and #1031 drained out of `bound` in
+-- `rewriteArgScoped` below.  Build each set ONCE per prepass (`omFromNames`) and
+-- probe it with `omHasKey`.  Membership semantics are identical, so the rewrite is
+-- byte-for-byte parity.
 prePassDict : List String -> List String -> List Decl -> List Decl
 prePassDict rpNames dictNames prog =
-  mapProg (rewriteRPDict rpNames dictNames) prog
+  mapProg
+    (rewriteRPDict
+      (omFromNames rpNames omEmpty)
+      (omFromNames dictNames omEmpty))
+    prog
 
 -- [rpNames] here is the union of return-position methods AND method-level-
 -- constrained methods (foldMap): both must become EMethodAt so eval can narrow by
 -- the t-route and/or fold on the method-level dicts.
-rewriteRPDict : List String -> List String -> Expr -> Expr
+rewriteRPDict : OrdMap Unit -> OrdMap Unit -> Expr -> Expr
 rewriteRPDict rpNames dictNames (EVar n)
-  | contains n rpNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | contains n dictNames = EDictAt n (Ref [])
+  | omHasKey n rpNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
+  | omHasKey n dictNames = EDictAt n (Ref [])
   | otherwise = EVar n
 rewriteRPDict _ _ e = e
 
@@ -17740,17 +17753,32 @@ rewriteRPDict _ _ e = e
 -- [shadowMap] (P0-18) is the mangle definer-shadow map — non-empty only on the emit
 -- path (argNames non-empty).  The scope-blind `mapProg` path (argNames == []) never
 -- has mangled shadows, so it ignores it and stays byte-identical.
+--
+-- ⚠️ #2189: the three name sets are INDEXED here for the same reason they are in
+-- `prePassDict` above — see that comment.  The `argNames == []` dispatch stays on
+-- the LIST, so the scope-blind/scope-aware arm choice is unchanged.
 prePassDictArg : List String -> List String -> List String -> List (String, String) -> List Decl -> List Decl
 prePassDictArg rpNames dictNames [] _ prog =
-  mapProg (rewriteRPDictArg rpNames dictNames []) prog
+  mapProg
+    (rewriteRPDictArg
+      (omFromNames rpNames omEmpty)
+      (omFromNames dictNames omEmpty)
+      omEmpty)
+    prog
 prePassDictArg rpNames dictNames argNames shadowMap prog =
-  map (prePassDeclScoped (ArgRw rpNames dictNames argNames shadowMap)) prog
+  map
+    (prePassDeclScoped (ArgRw
+      (omFromNames rpNames omEmpty)
+      (omFromNames dictNames omEmpty)
+      (omFromNames argNames omEmpty)
+      shadowMap))
+    prog
 
-rewriteRPDictArg : List String -> List String -> List String -> Expr -> Expr
+rewriteRPDictArg : OrdMap Unit -> OrdMap Unit -> OrdMap Unit -> Expr -> Expr
 rewriteRPDictArg rpNames dictNames argNames (EVar n)
-  | contains n rpNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | contains n argNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | contains n dictNames = EDictAt n (Ref [])
+  | omHasKey n rpNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
+  | omHasKey n argNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
+  | omHasKey n dictNames = EDictAt n (Ref [])
   | otherwise = EVar n
 rewriteRPDictArg _ _ _ e = e
 
@@ -17759,8 +17787,11 @@ rewriteRPDictArg _ _ _ e = e
 -- position methods, dn = constrained-fn dict names, an = arg-position methods).
 -- rp = return-position methods, dn = constrained-fn dict names, an = arg-position
 -- methods, sm = the P0-18 mangle definer-shadow map (mangledSymbol ↦ bareMethod).
+-- ⚠️ #2189: rp/dn/an are OrdMap-backed SETS, not `List String` scanned by
+-- `contains` — the same treatment `bound` already gets below, and for the same
+-- reason: they grow with the program while the rewrite visits every EVar.
 data ArgRw =
-  | ArgRw (List String) (List String) (List String) (List (String, String))
+  | ArgRw (OrdMap Unit) (OrdMap Unit) (OrdMap Unit) (List (String, String))
 
 -- rewrite a decl body with its own parameters seeded into the bound set.  Mirrors
 -- desugar's mapDecl coverage exactly (DFunDef / DInterface / DImpl / DProp /
@@ -17846,11 +17877,11 @@ rewriteArgScoped (ArgRw rp dn an sm) bound (EVar n)
     match lookupAssoc n sm
       Some bare => EMethodAt bare (Ref (RLocal n [])) (Ref []) (Ref [])
       None => EVar n
-  | contains n rp && not (omHasKey n bound) =
+  | omHasKey n rp && not (omHasKey n bound) =
     EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | contains n an && not (omHasKey n bound) =
+  | omHasKey n an && not (omHasKey n bound) =
     EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | contains n dn && not (omHasKey n bound) = EDictAt n (Ref [])
+  | omHasKey n dn && not (omHasKey n bound) = EDictAt n (Ref [])
   | otherwise = EVar n
 -- binders
 rewriteArgScoped rw bound (ELam ps body) =
@@ -24430,10 +24461,14 @@ firstTvar a b id = match findTvarInMono a id
 -- parameter per constraint (arity from funConstraintsRef, populated during
 -- inference), matching the dicts EDictAt applies at call sites.  Multi-clause
 -- functions are several DFunDef decls; each clause gets the same leading params.
+-- ⚠️ #2189: [names] is the dict-passed set, which grows with the program, and this
+-- maps over EVERY decl — so `contains n names` inside `dictPassDecl` was
+-- O(decls x names).  Index it ONCE here; `dictPassDecl`/`dictPassLetBind` probe
+-- with `omHasKey`.  Membership semantics unchanged.
 dictPass : List String -> List Decl -> List Decl
 dictPass names prog =
   map
-    (dictPassDecl names (returnPosMethodNames prog))
+    (dictPassDecl (omFromNames names omEmpty) (returnPosMethodNames prog))
     (mapProg rewriteBinopExpr prog)
 
 -- Phase 151 / Gap G: rewrite each *stamped* comparison/equality EBinOp into its
@@ -24525,9 +24560,9 @@ unopMethodApp op e routeRef =
   let split = binopRouteSplit !routeRef
   EApp (EMethodAt method (Ref (fst split)) (Ref (snd split)) (Ref [])) e
 
-dictPassDecl : List String -> List String -> Decl -> Decl
+dictPassDecl : OrdMap Unit -> List String -> Decl -> Decl
 dictPassDecl names _ (DFunDef pub n pats body)
-  | contains n names = DFunDef pub n (dictParams n (dictArityOf n) ++ pats) body
+  | omHasKey n names = DFunDef pub n (dictParams n (dictArityOf n) ++ pats) body
   | otherwise = DFunDef pub n pats body
 -- Top-level `let rec … with …` (DLetGroup): each binding is dict-passed exactly
 -- like a DFunDef — a constrained member gets `dictParams n (dictArityOf n)`
@@ -24561,9 +24596,9 @@ dictPassDecl _ _ d = d
 -- `dictArityOf n` is 0 for an unconstrained member (no change), matching the
 -- oracle's `if k = 0 then (n, clauses)` guard.  Gated on `names` (the constrained
 -- set) so an unconstrained member with a coincidental arity entry is untouched.
-dictPassLetBind : List String -> LetBind -> LetBind
+dictPassLetBind : OrdMap Unit -> LetBind -> LetBind
 dictPassLetBind names (LetBind n clauses)
-  | contains n names =
+  | omHasKey n names =
     LetBind n (map (prependDictClause n (dictArityOf n)) clauses)
   | otherwise = LetBind n clauses
 
@@ -40134,17 +40169,17 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "anyMember" ((PList) PWild) (EVar "False"))
 (DFunDef false "anyMember" ((PCons (PVar "x") (PVar "xs")) (PVar "ys")) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "x")) (EVar "ys")) (EApp (EApp (EVar "anyMember") (EVar "xs")) (EVar "ys"))))
 (DTypeSig false "prePassDict" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "prePassDict" ((PVar "rpNames") (PVar "dictNames") (PVar "prog")) (EApp (EApp (EVar "mapProg") (EApp (EApp (EVar "rewriteRPDict") (EVar "rpNames")) (EVar "dictNames"))) (EVar "prog")))
-(DTypeSig false "rewriteRPDict" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "rewriteRPDict" ((PVar "rpNames") (PVar "dictNames") (PCon "EVar" (PVar "n"))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "rpNames")) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "dictNames")) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EApp (EVar "Ref") (EListLit))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "prePassDict" ((PVar "rpNames") (PVar "dictNames") (PVar "prog")) (EApp (EApp (EVar "mapProg") (EApp (EApp (EVar "rewriteRPDict") (EApp (EApp (EVar "omFromNames") (EVar "rpNames")) (EVar "omEmpty"))) (EApp (EApp (EVar "omFromNames") (EVar "dictNames")) (EVar "omEmpty")))) (EVar "prog")))
+(DTypeSig false "rewriteRPDict" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "rewriteRPDict" ((PVar "rpNames") (PVar "dictNames") (PCon "EVar" (PVar "n"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "rpNames")) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "dictNames")) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EApp (EVar "Ref") (EListLit))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DFunDef false "rewriteRPDict" (PWild PWild (PVar "e")) (EVar "e"))
 (DTypeSig false "prePassDictArg" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))))))
-(DFunDef false "prePassDictArg" ((PVar "rpNames") (PVar "dictNames") (PList) PWild (PVar "prog")) (EApp (EApp (EVar "mapProg") (EApp (EApp (EApp (EVar "rewriteRPDictArg") (EVar "rpNames")) (EVar "dictNames")) (EListLit))) (EVar "prog")))
-(DFunDef false "prePassDictArg" ((PVar "rpNames") (PVar "dictNames") (PVar "argNames") (PVar "shadowMap") (PVar "prog")) (EApp (EApp (EVar "map") (EApp (EVar "prePassDeclScoped") (EApp (EApp (EApp (EApp (EVar "ArgRw") (EVar "rpNames")) (EVar "dictNames")) (EVar "argNames")) (EVar "shadowMap")))) (EVar "prog")))
-(DTypeSig false "rewriteRPDictArg" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr"))))))
-(DFunDef false "rewriteRPDictArg" ((PVar "rpNames") (PVar "dictNames") (PVar "argNames") (PCon "EVar" (PVar "n"))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "rpNames")) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "argNames")) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "dictNames")) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EApp (EVar "Ref") (EListLit))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "prePassDictArg" ((PVar "rpNames") (PVar "dictNames") (PList) PWild (PVar "prog")) (EApp (EApp (EVar "mapProg") (EApp (EApp (EApp (EVar "rewriteRPDictArg") (EApp (EApp (EVar "omFromNames") (EVar "rpNames")) (EVar "omEmpty"))) (EApp (EApp (EVar "omFromNames") (EVar "dictNames")) (EVar "omEmpty"))) (EVar "omEmpty"))) (EVar "prog")))
+(DFunDef false "prePassDictArg" ((PVar "rpNames") (PVar "dictNames") (PVar "argNames") (PVar "shadowMap") (PVar "prog")) (EApp (EApp (EVar "map") (EApp (EVar "prePassDeclScoped") (EApp (EApp (EApp (EApp (EVar "ArgRw") (EApp (EApp (EVar "omFromNames") (EVar "rpNames")) (EVar "omEmpty"))) (EApp (EApp (EVar "omFromNames") (EVar "dictNames")) (EVar "omEmpty"))) (EApp (EApp (EVar "omFromNames") (EVar "argNames")) (EVar "omEmpty"))) (EVar "shadowMap")))) (EVar "prog")))
+(DTypeSig false "rewriteRPDictArg" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Expr") (TyCon "Expr"))))))
+(DFunDef false "rewriteRPDictArg" ((PVar "rpNames") (PVar "dictNames") (PVar "argNames") (PCon "EVar" (PVar "n"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "rpNames")) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "argNames")) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "dictNames")) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EApp (EVar "Ref") (EListLit))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DFunDef false "rewriteRPDictArg" (PWild PWild PWild (PVar "e")) (EVar "e"))
-(DData Private "ArgRw" () ((variant "ArgRw" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))) ())
+(DData Private "ArgRw" () ((variant "ArgRw" (ConPos (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))) ())
 (DTypeSig false "prePassDeclScoped" (TyFun (TyCon "ArgRw") (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "patVarsListTc") (EVar "ps")))) (EVar "e"))))
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EVar "prePassIfaceMethodScoped") (EVar "rw"))) (EVar "methods"))))))
@@ -40174,7 +40209,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "boundOfList" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
 (DFunDef false "boundOfList" ((PVar "ns")) (EApp (EApp (EVar "boundInsert") (EVar "ns")) (EVar "omEmpty")))
 (DTypeSig false "rewriteArgScoped" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "rewriteArgScoped" ((PCon "ArgRw" (PVar "rp") (PVar "dn") (PVar "an") (PVar "sm")) (PVar "bound") (PCon "EVar" (PVar "n"))) (EIf (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound"))) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "bare")) (EApp (EVar "Ref") (EApp (EApp (EVar "RLocal") (EVar "n")) (EListLit)))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit)))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "rp")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "an")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "dn")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EApp (EVar "Ref") (EListLit))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
+(DFunDef false "rewriteArgScoped" ((PCon "ArgRw" (PVar "rp") (PVar "dn") (PVar "an") (PVar "sm")) (PVar "bound") (PCon "EVar" (PVar "n"))) (EIf (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound"))) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "bare")) (EApp (EVar "Ref") (EApp (EApp (EVar "RLocal") (EVar "n")) (EListLit)))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit)))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "rp")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "an")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "dn")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EApp (EVar "Ref") (EListLit))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "ELam") (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EApp (EVar "boundInsert") (EApp (EVar "patVarsListTc") (EVar "ps"))) (EVar "bound"))) (EVar "body"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELet" (PVar "m") (PVar "r") (PVar "p") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "pv") (EApp (EVar "patVarsTc") (EVar "p"))) (DoLet false false (PVar "b1") (EIf (EVar "r") (EApp (EApp (EVar "boundInsert") (EVar "pv")) (EVar "bound")) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EVar "p")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "b1")) (EVar "e1"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EApp (EVar "boundInsert") (EVar "pv")) (EVar "bound"))) (EVar "e2"))))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELetGroup" (PVar "binds") (PVar "e2"))) (EBlock (DoLet false false (PVar "bnd") (EApp (EApp (EVar "boundInsert") (EApp (EVar "letBindNamesTc") (EVar "binds"))) (EVar "bound"))) (DoExpr (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EVar "map") (EApp (EApp (EVar "rewriteArgLetBind") (EVar "rw")) (EVar "bnd"))) (EVar "binds"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bnd")) (EVar "e2"))))))
@@ -41140,7 +41175,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "firstTvar" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Mono"))))))
 (DFunDef false "firstTvar" ((PVar "a") (PVar "b") (PVar "id")) (EMatch (EApp (EApp (EVar "findTvarInMono") (EVar "a")) (EVar "id")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "Some") (EVar "m"))) (arm (PCon "None") () (EApp (EApp (EVar "findTvarInMono") (EVar "b")) (EVar "id")))))
 (DTypeSig false "dictPass" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "dictPass" ((PVar "names") (PVar "prog")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "dictPassDecl") (EVar "names")) (EApp (EVar "returnPosMethodNames") (EVar "prog")))) (EApp (EApp (EVar "mapProg") (EVar "rewriteBinopExpr")) (EVar "prog"))))
+(DFunDef false "dictPass" ((PVar "names") (PVar "prog")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "dictPassDecl") (EApp (EApp (EVar "omFromNames") (EVar "names")) (EVar "omEmpty"))) (EApp (EVar "returnPosMethodNames") (EVar "prog")))) (EApp (EApp (EVar "mapProg") (EVar "rewriteBinopExpr")) (EVar "prog"))))
 (DTypeSig false "rewriteBinopExpr" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "rewriteBinopExpr" ((PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "routeRef"))) (EMatch (EUnOp "!" (EVar "routeRef")) (arm (PCon "RNone") () (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "routeRef"))) (arm (PCon "RScalar" (PVar "tag")) () (EApp (EApp (EVar "EAnnot") (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "routeRef"))) (EApp (EApp (EVar "tyConBuiltin") (EVar "tag")) (EVar "None")))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "binopMethodApp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "routeRef")))))
 (DFunDef false "rewriteBinopExpr" ((PCon "ENumLit" (PVar "n") (PVar "fref") (PVar "dref") PWild)) (EMatch (EUnOp "!" (EVar "fref")) (arm (PCon "Some" (PVar "f")) () (EApp (EVar "ELit") (EApp (EVar "LFloat") (EVar "f")))) (arm (PCon "None") () (EMatch (EUnOp "!" (EVar "dref")) (arm (PCon "RNone") () (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))) (arm (PVar "route") () (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EApp (EVar "EMethodAt") (ELit (LString "fromInt"))) (EApp (EVar "Ref") (EVar "route"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit)))) (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))))))))
@@ -41153,15 +41188,15 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "binopMethodApp" ((PVar "op") (PVar "l") (PVar "r") (PVar "routeRef")) (EBlock (DoLet false false (PVar "method") (EApp (EApp (EVar "fromOption") (ELit (LString "eq"))) (EApp (EVar "binopMethod") (EVar "op")))) (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EUnOp "!" (EVar "routeRef")))) (DoLet false false (PVar "call") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "method")) (EApp (EVar "Ref") (EApp (EVar "fst") (EVar "split")))) (EApp (EVar "Ref") (EApp (EVar "snd") (EVar "split")))) (EApp (EVar "Ref") (EListLit)))) (EVar "l"))) (EVar "r"))) (DoExpr (EIf (EBinOp "==" (EVar "op") (ELit (LString "/="))) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "not")))) (EVar "call")) (EVar "call")))))
 (DTypeSig false "unopMethodApp" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Expr")))))
 (DFunDef false "unopMethodApp" ((PVar "op") (PVar "e") (PVar "routeRef")) (EBlock (DoLet false false (PVar "method") (EApp (EApp (EVar "fromOption") (ELit (LString "negate"))) (EApp (EVar "unopMethod") (EVar "op")))) (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EUnOp "!" (EVar "routeRef")))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "method")) (EApp (EVar "Ref") (EApp (EVar "fst") (EVar "split")))) (EApp (EVar "Ref") (EApp (EVar "snd") (EVar "split")))) (EApp (EVar "Ref") (EListLit)))) (EVar "e")))))
-(DTypeSig false "dictPassDecl" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl")))))
-(DFunDef false "dictPassDecl" ((PVar "names") PWild (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "pats") (PVar "body"))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "names")) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "dictParams") (EVar "n")) (EApp (EVar "dictArityOf") (EVar "n"))) (EVar "pats"))) (EVar "body")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "pats")) (EVar "body")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "dictPassDecl" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl")))))
+(DFunDef false "dictPassDecl" ((PVar "names") PWild (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "pats") (PVar "body"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "names")) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "dictParams") (EVar "n")) (EApp (EVar "dictArityOf") (EVar "n"))) (EVar "pats"))) (EVar "body")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "pats")) (EVar "body")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "dictPassDecl" ((PVar "names") PWild (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EVar "map") (EApp (EVar "dictPassLetBind") (EVar "names"))) (EVar "binds"))))
 (DFunDef false "dictPassDecl" (PWild PWild (PAs "d" (PRec "DImpl" ((rf "reqs" None) (rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EVar "implDictPassMethods") (EApp (EVar "listLen") (EVar "reqs"))) (EVar "methods"))))))
 (DFunDef false "dictPassDecl" (PWild PWild (PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EVar "ifaceDictPassMethod")) (EVar "methods"))))))
 (DFunDef false "dictPassDecl" ((PVar "names") (PVar "ret") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EVar "dictPassDecl") (EVar "names")) (EVar "ret")) (EVar "d"))))
 (DFunDef false "dictPassDecl" (PWild PWild (PVar "d")) (EVar "d"))
-(DTypeSig false "dictPassLetBind" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "LetBind") (TyCon "LetBind"))))
-(DFunDef false "dictPassLetBind" ((PVar "names") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "names")) (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "prependDictClause") (EVar "n")) (EApp (EVar "dictArityOf") (EVar "n")))) (EVar "clauses"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "LetBind") (EVar "n")) (EVar "clauses")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "dictPassLetBind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "LetBind") (TyCon "LetBind"))))
+(DFunDef false "dictPassLetBind" ((PVar "names") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "names")) (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "prependDictClause") (EVar "n")) (EApp (EVar "dictArityOf") (EVar "n")))) (EVar "clauses"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "LetBind") (EVar "n")) (EVar "clauses")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "prependDictClause" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "FunClause") (TyCon "FunClause")))))
 (DFunDef false "prependDictClause" ((PVar "n") (PVar "k") (PCon "FunClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "FunClause") (EBinOp "++" (EApp (EApp (EVar "dictParams") (EVar "n")) (EVar "k")) (EVar "pats"))) (EVar "body")))
 (DTypeSig false "ifaceDictPassMethod" (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod")))
@@ -46055,17 +46090,17 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "anyMember" ((PList) PWild) (EVar "False"))
 (DFunDef false "anyMember" ((PCons (PVar "x") (PVar "xs")) (PVar "ys")) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "x")) (EVar "ys")) (EApp (EApp (EVar "anyMember") (EVar "xs")) (EVar "ys"))))
 (DTypeSig false "prePassDict" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "prePassDict" ((PVar "rpNames") (PVar "dictNames") (PVar "prog")) (EApp (EApp (EVar "mapProg") (EApp (EApp (EVar "rewriteRPDict") (EVar "rpNames")) (EVar "dictNames"))) (EVar "prog")))
-(DTypeSig false "rewriteRPDict" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "rewriteRPDict" ((PVar "rpNames") (PVar "dictNames") (PCon "EVar" (PVar "n"))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "rpNames")) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "dictNames")) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EApp (EVar "Ref") (EListLit))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "prePassDict" ((PVar "rpNames") (PVar "dictNames") (PVar "prog")) (EApp (EApp (EVar "mapProg") (EApp (EApp (EVar "rewriteRPDict") (EApp (EApp (EVar "omFromNames") (EVar "rpNames")) (EVar "omEmpty"))) (EApp (EApp (EVar "omFromNames") (EVar "dictNames")) (EVar "omEmpty")))) (EVar "prog")))
+(DTypeSig false "rewriteRPDict" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "rewriteRPDict" ((PVar "rpNames") (PVar "dictNames") (PCon "EVar" (PVar "n"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "rpNames")) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "dictNames")) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EApp (EVar "Ref") (EListLit))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DFunDef false "rewriteRPDict" (PWild PWild (PVar "e")) (EVar "e"))
 (DTypeSig false "prePassDictArg" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))))))
-(DFunDef false "prePassDictArg" ((PVar "rpNames") (PVar "dictNames") (PList) PWild (PVar "prog")) (EApp (EApp (EVar "mapProg") (EApp (EApp (EApp (EVar "rewriteRPDictArg") (EVar "rpNames")) (EVar "dictNames")) (EListLit))) (EVar "prog")))
-(DFunDef false "prePassDictArg" ((PVar "rpNames") (PVar "dictNames") (PVar "argNames") (PVar "shadowMap") (PVar "prog")) (EApp (EApp (EMethodRef "map") (EApp (EVar "prePassDeclScoped") (EApp (EApp (EApp (EApp (EVar "ArgRw") (EVar "rpNames")) (EVar "dictNames")) (EVar "argNames")) (EVar "shadowMap")))) (EVar "prog")))
-(DTypeSig false "rewriteRPDictArg" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr"))))))
-(DFunDef false "rewriteRPDictArg" ((PVar "rpNames") (PVar "dictNames") (PVar "argNames") (PCon "EVar" (PVar "n"))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "rpNames")) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "argNames")) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "dictNames")) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EApp (EVar "Ref") (EListLit))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "prePassDictArg" ((PVar "rpNames") (PVar "dictNames") (PList) PWild (PVar "prog")) (EApp (EApp (EVar "mapProg") (EApp (EApp (EApp (EVar "rewriteRPDictArg") (EApp (EApp (EVar "omFromNames") (EVar "rpNames")) (EVar "omEmpty"))) (EApp (EApp (EVar "omFromNames") (EVar "dictNames")) (EVar "omEmpty"))) (EVar "omEmpty"))) (EVar "prog")))
+(DFunDef false "prePassDictArg" ((PVar "rpNames") (PVar "dictNames") (PVar "argNames") (PVar "shadowMap") (PVar "prog")) (EApp (EApp (EMethodRef "map") (EApp (EVar "prePassDeclScoped") (EApp (EApp (EApp (EApp (EVar "ArgRw") (EApp (EApp (EVar "omFromNames") (EVar "rpNames")) (EVar "omEmpty"))) (EApp (EApp (EVar "omFromNames") (EVar "dictNames")) (EVar "omEmpty"))) (EApp (EApp (EVar "omFromNames") (EVar "argNames")) (EVar "omEmpty"))) (EVar "shadowMap")))) (EVar "prog")))
+(DTypeSig false "rewriteRPDictArg" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Expr") (TyCon "Expr"))))))
+(DFunDef false "rewriteRPDictArg" ((PVar "rpNames") (PVar "dictNames") (PVar "argNames") (PCon "EVar" (PVar "n"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "rpNames")) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "argNames")) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "dictNames")) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EApp (EVar "Ref") (EListLit))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DFunDef false "rewriteRPDictArg" (PWild PWild PWild (PVar "e")) (EVar "e"))
-(DData Private "ArgRw" () ((variant "ArgRw" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))) ())
+(DData Private "ArgRw" () ((variant "ArgRw" (ConPos (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))) ())
 (DTypeSig false "prePassDeclScoped" (TyFun (TyCon "ArgRw") (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "patVarsListTc") (EVar "ps")))) (EVar "e"))))
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EVar "prePassIfaceMethodScoped") (EVar "rw"))) (EVar "methods"))))))
@@ -46095,7 +46130,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "boundOfList" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
 (DFunDef false "boundOfList" ((PVar "ns")) (EApp (EApp (EVar "boundInsert") (EVar "ns")) (EVar "omEmpty")))
 (DTypeSig false "rewriteArgScoped" (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "rewriteArgScoped" ((PCon "ArgRw" (PVar "rp") (PVar "dn") (PVar "an") (PVar "sm")) (PVar "bound") (PCon "EVar" (PVar "n"))) (EIf (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound"))) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "bare")) (EApp (EVar "Ref") (EApp (EApp (EVar "RLocal") (EVar "n")) (EListLit)))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit)))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "rp")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "an")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EBinOp "&&" (EApp (EApp (EVar "contains") (EVar "n")) (EVar "dn")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EApp (EVar "Ref") (EListLit))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
+(DFunDef false "rewriteArgScoped" ((PCon "ArgRw" (PVar "rp") (PVar "dn") (PVar "an") (PVar "sm")) (PVar "bound") (PCon "EVar" (PVar "n"))) (EIf (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound"))) (EApp (EVar "isSome") (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "bare")) (EApp (EVar "Ref") (EApp (EApp (EVar "RLocal") (EVar "n")) (EListLit)))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit)))) (arm (PCon "None") () (EApp (EVar "EVar") (EVar "n")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "rp")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "an")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (EApp (EVar "Ref") (EVar "RNone"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit))) (EIf (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "dn")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")))) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EApp (EVar "Ref") (EListLit))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELam" (PVar "ps") (PVar "body"))) (EApp (EApp (EVar "ELam") (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EApp (EVar "boundInsert") (EApp (EVar "patVarsListTc") (EVar "ps"))) (EVar "bound"))) (EVar "body"))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELet" (PVar "m") (PVar "r") (PVar "p") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "pv") (EApp (EVar "patVarsTc") (EVar "p"))) (DoLet false false (PVar "b1") (EIf (EVar "r") (EApp (EApp (EVar "boundInsert") (EVar "pv")) (EVar "bound")) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "r")) (EVar "p")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "b1")) (EVar "e1"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EApp (EVar "boundInsert") (EVar "pv")) (EVar "bound"))) (EVar "e2"))))))
 (DFunDef false "rewriteArgScoped" ((PVar "rw") (PVar "bound") (PCon "ELetGroup" (PVar "binds") (PVar "e2"))) (EBlock (DoLet false false (PVar "bnd") (EApp (EApp (EVar "boundInsert") (EApp (EVar "letBindNamesTc") (EVar "binds"))) (EVar "bound"))) (DoExpr (EApp (EApp (EVar "ELetGroup") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "rewriteArgLetBind") (EVar "rw")) (EVar "bnd"))) (EVar "binds"))) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EVar "bnd")) (EVar "e2"))))))
@@ -47061,7 +47096,7 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "firstTvar" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Mono"))))))
 (DFunDef false "firstTvar" ((PVar "a") (PVar "b") (PVar "id")) (EMatch (EApp (EApp (EVar "findTvarInMono") (EVar "a")) (EVar "id")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "Some") (EVar "m"))) (arm (PCon "None") () (EApp (EApp (EVar "findTvarInMono") (EVar "b")) (EVar "id")))))
 (DTypeSig false "dictPass" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "dictPass" ((PVar "names") (PVar "prog")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "dictPassDecl") (EVar "names")) (EApp (EVar "returnPosMethodNames") (EVar "prog")))) (EApp (EApp (EVar "mapProg") (EVar "rewriteBinopExpr")) (EVar "prog"))))
+(DFunDef false "dictPass" ((PVar "names") (PVar "prog")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "dictPassDecl") (EApp (EApp (EVar "omFromNames") (EVar "names")) (EVar "omEmpty"))) (EApp (EVar "returnPosMethodNames") (EVar "prog")))) (EApp (EApp (EVar "mapProg") (EVar "rewriteBinopExpr")) (EVar "prog"))))
 (DTypeSig false "rewriteBinopExpr" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "rewriteBinopExpr" ((PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "routeRef"))) (EMatch (EUnOp "!" (EVar "routeRef")) (arm (PCon "RNone") () (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "routeRef"))) (arm (PCon "RScalar" (PVar "tag")) () (EApp (EApp (EVar "EAnnot") (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "routeRef"))) (EApp (EApp (EVar "tyConBuiltin") (EVar "tag")) (EVar "None")))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "binopMethodApp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "routeRef")))))
 (DFunDef false "rewriteBinopExpr" ((PCon "ENumLit" (PVar "n") (PVar "fref") (PVar "dref") PWild)) (EMatch (EUnOp "!" (EVar "fref")) (arm (PCon "Some" (PVar "f")) () (EApp (EVar "ELit") (EApp (EVar "LFloat") (EVar "f")))) (arm (PCon "None") () (EMatch (EUnOp "!" (EVar "dref")) (arm (PCon "RNone") () (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))) (arm (PVar "route") () (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EApp (EVar "EMethodAt") (ELit (LString "fromInt"))) (EApp (EVar "Ref") (EVar "route"))) (EApp (EVar "Ref") (EListLit))) (EApp (EVar "Ref") (EListLit)))) (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))))))))
@@ -47074,15 +47109,15 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "binopMethodApp" ((PVar "op") (PVar "l") (PVar "r") (PVar "routeRef")) (EBlock (DoLet false false (PVar "method") (EApp (EApp (EVar "fromOption") (ELit (LString "eq"))) (EApp (EVar "binopMethod") (EVar "op")))) (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EUnOp "!" (EVar "routeRef")))) (DoLet false false (PVar "call") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "method")) (EApp (EVar "Ref") (EApp (EVar "fst") (EVar "split")))) (EApp (EVar "Ref") (EApp (EVar "snd") (EVar "split")))) (EApp (EVar "Ref") (EListLit)))) (EVar "l"))) (EVar "r"))) (DoExpr (EIf (EBinOp "==" (EVar "op") (ELit (LString "/="))) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "not")))) (EVar "call")) (EVar "call")))))
 (DTypeSig false "unopMethodApp" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Expr")))))
 (DFunDef false "unopMethodApp" ((PVar "op") (PVar "e") (PVar "routeRef")) (EBlock (DoLet false false (PVar "method") (EApp (EApp (EVar "fromOption") (ELit (LString "negate"))) (EApp (EVar "unopMethod") (EVar "op")))) (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EUnOp "!" (EVar "routeRef")))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EApp (EVar "EMethodAt") (EVar "method")) (EApp (EVar "Ref") (EApp (EVar "fst") (EVar "split")))) (EApp (EVar "Ref") (EApp (EVar "snd") (EVar "split")))) (EApp (EVar "Ref") (EListLit)))) (EVar "e")))))
-(DTypeSig false "dictPassDecl" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl")))))
-(DFunDef false "dictPassDecl" ((PVar "names") PWild (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "pats") (PVar "body"))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "names")) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "dictParams") (EVar "n")) (EApp (EVar "dictArityOf") (EVar "n"))) (EVar "pats"))) (EVar "body")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "pats")) (EVar "body")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "dictPassDecl" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl")))))
+(DFunDef false "dictPassDecl" ((PVar "names") PWild (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "pats") (PVar "body"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "names")) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "dictParams") (EVar "n")) (EApp (EVar "dictArityOf") (EVar "n"))) (EVar "pats"))) (EVar "body")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "pats")) (EVar "body")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "dictPassDecl" ((PVar "names") PWild (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EMethodRef "map") (EApp (EVar "dictPassLetBind") (EVar "names"))) (EVar "binds"))))
 (DFunDef false "dictPassDecl" (PWild PWild (PAs "d" (PRec "DImpl" ((rf "reqs" None) (rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EVar "implDictPassMethods") (EApp (EVar "listLen") (EVar "reqs"))) (EVar "methods"))))))
 (DFunDef false "dictPassDecl" (PWild PWild (PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EVar "ifaceDictPassMethod")) (EVar "methods"))))))
 (DFunDef false "dictPassDecl" ((PVar "names") (PVar "ret") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EVar "dictPassDecl") (EVar "names")) (EVar "ret")) (EVar "d"))))
 (DFunDef false "dictPassDecl" (PWild PWild (PVar "d")) (EVar "d"))
-(DTypeSig false "dictPassLetBind" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "LetBind") (TyCon "LetBind"))))
-(DFunDef false "dictPassLetBind" ((PVar "names") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "names")) (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "prependDictClause") (EVar "n")) (EApp (EVar "dictArityOf") (EVar "n")))) (EVar "clauses"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "LetBind") (EVar "n")) (EVar "clauses")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "dictPassLetBind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "LetBind") (TyCon "LetBind"))))
+(DFunDef false "dictPassLetBind" ((PVar "names") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "names")) (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "prependDictClause") (EVar "n")) (EApp (EVar "dictArityOf") (EVar "n")))) (EVar "clauses"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "LetBind") (EVar "n")) (EVar "clauses")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "prependDictClause" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "FunClause") (TyCon "FunClause")))))
 (DFunDef false "prependDictClause" ((PVar "n") (PVar "k") (PCon "FunClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "FunClause") (EBinOp "++" (EApp (EApp (EVar "dictParams") (EVar "n")) (EVar "k")) (EVar "pats"))) (EVar "body")))
 (DTypeSig false "ifaceDictPassMethod" (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod")))

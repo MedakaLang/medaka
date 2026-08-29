@@ -17693,17 +17693,30 @@ anyMember (x::xs) ys = contains x ys || anyMember xs ys
 -- constrained-fn occurrence (a name in [dictNames]) to EDictAt — both carry a
 -- fresh ref the typechecker fills.  The two name sets are disjoint (interface
 -- methods vs top-level functions).
+--
+-- ⚠️ #2189: THE THREE NAME SETS ARE INDEXED, NOT SCANNED.  [rpNames]/[dictNames]
+-- grow with the program (one entry per interface method / per `=>`-constrained
+-- top-level fn), and the rewrite visits EVERY `EVar` node — so a `contains n
+-- rpNames` List-as-set walk here is O(occurrences x names) = O(N^2), the same
+-- shape #975 drained out of the marker and #1031 drained out of `bound` in
+-- `rewriteArgScoped` below.  Build each set ONCE per prepass (`omFromNames`) and
+-- probe it with `omHasKey`.  Membership semantics are identical, so the rewrite is
+-- byte-for-byte parity.
 prePassDict : List String -> List String -> List Decl -> List Decl
 prePassDict rpNames dictNames prog =
-  mapProg (rewriteRPDict rpNames dictNames) prog
+  mapProg
+    (rewriteRPDict
+      (omFromNames rpNames omEmpty)
+      (omFromNames dictNames omEmpty))
+    prog
 
 -- [rpNames] here is the union of return-position methods AND method-level-
 -- constrained methods (foldMap): both must become EMethodAt so eval can narrow by
 -- the t-route and/or fold on the method-level dicts.
-rewriteRPDict : List String -> List String -> Expr -> Expr
+rewriteRPDict : OrdMap Unit -> OrdMap Unit -> Expr -> Expr
 rewriteRPDict rpNames dictNames (EVar n)
-  | contains n rpNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | contains n dictNames = EDictAt n (Ref [])
+  | omHasKey n rpNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
+  | omHasKey n dictNames = EDictAt n (Ref [])
   | otherwise = EVar n
 rewriteRPDict _ _ e = e
 
@@ -17736,17 +17749,32 @@ rewriteRPDict _ _ e = e
 -- [shadowMap] (P0-18) is the mangle definer-shadow map — non-empty only on the emit
 -- path (argNames non-empty).  The scope-blind `mapProg` path (argNames == []) never
 -- has mangled shadows, so it ignores it and stays byte-identical.
+--
+-- ⚠️ #2189: the three name sets are INDEXED here for the same reason they are in
+-- `prePassDict` above — see that comment.  The `argNames == []` dispatch stays on
+-- the LIST, so the scope-blind/scope-aware arm choice is unchanged.
 prePassDictArg : List String -> List String -> List String -> List (String, String) -> List Decl -> List Decl
 prePassDictArg rpNames dictNames [] _ prog =
-  mapProg (rewriteRPDictArg rpNames dictNames []) prog
+  mapProg
+    (rewriteRPDictArg
+      (omFromNames rpNames omEmpty)
+      (omFromNames dictNames omEmpty)
+      omEmpty)
+    prog
 prePassDictArg rpNames dictNames argNames shadowMap prog =
-  map (prePassDeclScoped (ArgRw rpNames dictNames argNames shadowMap)) prog
+  map
+    (prePassDeclScoped (ArgRw
+      (omFromNames rpNames omEmpty)
+      (omFromNames dictNames omEmpty)
+      (omFromNames argNames omEmpty)
+      shadowMap))
+    prog
 
-rewriteRPDictArg : List String -> List String -> List String -> Expr -> Expr
+rewriteRPDictArg : OrdMap Unit -> OrdMap Unit -> OrdMap Unit -> Expr -> Expr
 rewriteRPDictArg rpNames dictNames argNames (EVar n)
-  | contains n rpNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | contains n argNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | contains n dictNames = EDictAt n (Ref [])
+  | omHasKey n rpNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
+  | omHasKey n argNames = EMethodAt n (Ref RNone) (Ref []) (Ref [])
+  | omHasKey n dictNames = EDictAt n (Ref [])
   | otherwise = EVar n
 rewriteRPDictArg _ _ _ e = e
 
@@ -17755,8 +17783,11 @@ rewriteRPDictArg _ _ _ e = e
 -- position methods, dn = constrained-fn dict names, an = arg-position methods).
 -- rp = return-position methods, dn = constrained-fn dict names, an = arg-position
 -- methods, sm = the P0-18 mangle definer-shadow map (mangledSymbol ↦ bareMethod).
+-- ⚠️ #2189: rp/dn/an are OrdMap-backed SETS, not `List String` scanned by
+-- `contains` — the same treatment `bound` already gets below, and for the same
+-- reason: they grow with the program while the rewrite visits every EVar.
 data ArgRw =
-  | ArgRw (List String) (List String) (List String) (List (String, String))
+  | ArgRw (OrdMap Unit) (OrdMap Unit) (OrdMap Unit) (List (String, String))
 
 -- rewrite a decl body with its own parameters seeded into the bound set.  Mirrors
 -- desugar's mapDecl coverage exactly (DFunDef / DInterface / DImpl / DProp /
@@ -17842,11 +17873,11 @@ rewriteArgScoped (ArgRw rp dn an sm) bound (EVar n)
     match lookupAssoc n sm
       Some bare => EMethodAt bare (Ref (RLocal n [])) (Ref []) (Ref [])
       None => EVar n
-  | contains n rp && not (omHasKey n bound) =
+  | omHasKey n rp && not (omHasKey n bound) =
     EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | contains n an && not (omHasKey n bound) =
+  | omHasKey n an && not (omHasKey n bound) =
     EMethodAt n (Ref RNone) (Ref []) (Ref [])
-  | contains n dn && not (omHasKey n bound) = EDictAt n (Ref [])
+  | omHasKey n dn && not (omHasKey n bound) = EDictAt n (Ref [])
   | otherwise = EVar n
 -- binders
 rewriteArgScoped rw bound (ELam ps body) =
@@ -24426,10 +24457,14 @@ firstTvar a b id = match findTvarInMono a id
 -- parameter per constraint (arity from funConstraintsRef, populated during
 -- inference), matching the dicts EDictAt applies at call sites.  Multi-clause
 -- functions are several DFunDef decls; each clause gets the same leading params.
+-- ⚠️ #2189: [names] is the dict-passed set, which grows with the program, and this
+-- maps over EVERY decl — so `contains n names` inside `dictPassDecl` was
+-- O(decls x names).  Index it ONCE here; `dictPassDecl`/`dictPassLetBind` probe
+-- with `omHasKey`.  Membership semantics unchanged.
 dictPass : List String -> List Decl -> List Decl
 dictPass names prog =
   map
-    (dictPassDecl names (returnPosMethodNames prog))
+    (dictPassDecl (omFromNames names omEmpty) (returnPosMethodNames prog))
     (mapProg rewriteBinopExpr prog)
 
 -- Phase 151 / Gap G: rewrite each *stamped* comparison/equality EBinOp into its
@@ -24521,9 +24556,9 @@ unopMethodApp op e routeRef =
   let split = binopRouteSplit !routeRef
   EApp (EMethodAt method (Ref (fst split)) (Ref (snd split)) (Ref [])) e
 
-dictPassDecl : List String -> List String -> Decl -> Decl
+dictPassDecl : OrdMap Unit -> List String -> Decl -> Decl
 dictPassDecl names _ (DFunDef pub n pats body)
-  | contains n names = DFunDef pub n (dictParams n (dictArityOf n) ++ pats) body
+  | omHasKey n names = DFunDef pub n (dictParams n (dictArityOf n) ++ pats) body
   | otherwise = DFunDef pub n pats body
 -- Top-level `let rec … with …` (DLetGroup): each binding is dict-passed exactly
 -- like a DFunDef — a constrained member gets `dictParams n (dictArityOf n)`
@@ -24557,9 +24592,9 @@ dictPassDecl _ _ d = d
 -- `dictArityOf n` is 0 for an unconstrained member (no change), matching the
 -- oracle's `if k = 0 then (n, clauses)` guard.  Gated on `names` (the constrained
 -- set) so an unconstrained member with a coincidental arity entry is untouched.
-dictPassLetBind : List String -> LetBind -> LetBind
+dictPassLetBind : OrdMap Unit -> LetBind -> LetBind
 dictPassLetBind names (LetBind n clauses)
-  | contains n names =
+  | omHasKey n names =
     LetBind n (map (prependDictClause n (dictArityOf n)) clauses)
   | otherwise = LetBind n clauses
 

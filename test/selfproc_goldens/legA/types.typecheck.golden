@@ -622,8 +622,8 @@ dictParams : String -> Int -> List Pat
 dictParamsFrom : String -> Int -> Int -> List Pat
 dictParamsGo : String -> Int -> Int -> List Pat
 dictPass : List String -> List Decl -> List Decl
-dictPassDecl : List String -> List String -> Decl -> Decl
-dictPassLetBind : List String -> LetBind -> LetBind
+dictPassDecl : Map String Unit -> List String -> Decl -> Decl
+dictPassLetBind : Map String Unit -> LetBind -> LetBind
 dictPassModulesIfEnabled : List String -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 dictPassModulesScoped : List String -> List ((String, String), List Int) -> List Decl -> List (String, List Decl) -> List (String, List Decl) -> List (String, List Decl)
 dictVarSatisfiesIface : String -> Int -> List (String, Mono) -> Bool
@@ -1814,8 +1814,8 @@ rewriteArgLetBind : ArgRw -> Map String Unit -> LetBind -> LetBind
 rewriteArgScoped : ArgRw -> Map String Unit -> Expr -> Expr
 rewriteArgStmts : ArgRw -> Map String Unit -> List DoStmt -> List DoStmt
 rewriteBinopExpr : Expr -> Expr
-rewriteRPDict : List String -> List String -> Expr -> Expr
-rewriteRPDictArg : List String -> List String -> List String -> Expr -> Expr
+rewriteRPDict : Map String Unit -> Map String Unit -> Expr -> Expr
+rewriteRPDictArg : Map String Unit -> Map String Unit -> Map String Unit -> Expr -> Expr
 rootIdOf : Mono -> Int
 rootVarId : Mono -> Int
 routeLocalSym : Route -> String
