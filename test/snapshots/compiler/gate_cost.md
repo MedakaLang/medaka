@@ -1,5 +1,5 @@
 # META
-source_lines=229
+source_lines=238
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cost.mdk — the per-gate cost baseline reader (#2178, epic #2182).
@@ -37,8 +37,14 @@ import json.{JNull, Json, asArray, asBool, asInt, asString, lookup, parse}
 import support.util.{joinWith, splitOnChar, startsWith}
 
 {- | One gate's measured cost.  `medianMs` is the baseline's `medianMs` —
-   the LOWER median of the retained raw samples, in milliseconds. -}
-public export data GateCost = GateCost { name : String, medianMs : Int }
+   the LOWER median of the retained raw samples, in milliseconds.  `samples`
+   is the baseline's own `"samples": N` count (S-4, #2178/#2207) — how many
+   raw measurements that median was taken over, so a reader (and, via
+   `balReport`, `medaka gate balance`'s own output) can see when a gate's
+   placement rests on thin evidence rather than having to go find the
+   baseline file and count. -}
+public export data GateCost =
+  | GateCost { name : String, medianMs : Int, samples : Int }
 
 {- | The baseline's key for a gate, from that gate's `run` script path.
 
@@ -92,7 +98,10 @@ costEntry i e = match asString (orNull (lookup "name" e))
   Some n => match asInt (orNull (lookup "medianMs" e))
     None => Err "gate cost baseline: gates[\{intToString i}] '\{n}': missing integer field 'medianMs'"
     Some ms if ms < 0 => Err "gate cost baseline: gates[\{intToString i}] '\{n}': negative medianMs \{intToString ms}"
-    Some ms => Ok GateCost { name = n, medianMs = ms }
+    Some ms => match asInt (orNull (lookup "samples" e))
+      None => Err "gate cost baseline: gates[\{intToString i}] '\{n}': missing integer field 'samples'"
+      Some sc if sc < 1 => Err "gate cost baseline: gates[\{intToString i}] '\{n}': samples must be >= 1, got \{intToString sc}"
+      Some sc => Ok GateCost { name = n, medianMs = ms, samples = sc }
 
 orNull : Option Json -> Json
 orNull None = JNull
@@ -234,7 +243,7 @@ prop "baselineKey is idempotent on an already-flat key" (n : Int) =
 # DESUGAR
 (DUse false (UseGroup ("json") ((mem "JNull" false) (mem "Json" false) (mem "asArray" false) (mem "asBool" false) (mem "asInt" false) (mem "asString" false) (mem "lookup" false) (mem "parse" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "splitOnChar" false) (mem "startsWith" false))))
-(DData Public "GateCost" () ((variant "GateCost" (ConNamed (field "name" (TyCon "String")) (field "medianMs" (TyCon "Int"))))) ())
+(DData Public "GateCost" () ((variant "GateCost" (ConNamed (field "name" (TyCon "String")) (field "medianMs" (TyCon "Int")) (field "samples" (TyCon "Int"))))) ())
 (DTypeSig true "baselineKey" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "baselineKey" ((PVar "run")) (EBlock (DoLet false false (PVar "noExt") (EApp (EVar "dropDotSh") (EVar "run"))) (DoLet false false (PVar "flat") (EApp (EApp (EVar "joinWith") (ELit (LString "_"))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "noExt")))) (DoExpr (EApp (EVar "dropTestPrefix") (EVar "flat")))))
 (DTypeSig false "dropDotSh" (TyFun (TyCon "String") (TyCon "String")))
@@ -244,7 +253,7 @@ prop "baselineKey is idempotent on an already-flat key" (n : Int) =
 (DTypeSig true "costSchema" (TyCon "String"))
 (DFunDef false "costSchema" () (ELit (LString "gate-cost-baseline/1")))
 (DTypeSig false "costEntry" (TyFun (TyCon "Int") (TyFun (TyCon "Json") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "GateCost")))))
-(DFunDef false "costEntry" ((PVar "i") (PVar "e")) (EMatch (EApp (EVar "asString") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "name"))) (EVar "e")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: gates[")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "]: missing string field 'name'"))))) (arm (PCon "Some" (PVar "n")) () (EMatch (EApp (EVar "asInt") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "medianMs"))) (EVar "e")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: gates[")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "] '"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "': missing integer field 'medianMs'"))))) (arm (PCon "Some" (PVar "ms")) ((GBool (EBinOp "<" (EVar "ms") (ELit (LInt 0))))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: gates[")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "] '"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "': negative medianMs "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "ms")))) (ELit (LString ""))))) (arm (PCon "Some" (PVar "ms")) () (EApp (EVar "Ok") (ERecordCreate "GateCost" ((fa "name" (EVar "n")) (fa "medianMs" (EVar "ms"))))))))))
+(DFunDef false "costEntry" ((PVar "i") (PVar "e")) (EMatch (EApp (EVar "asString") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "name"))) (EVar "e")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: gates[")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "]: missing string field 'name'"))))) (arm (PCon "Some" (PVar "n")) () (EMatch (EApp (EVar "asInt") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "medianMs"))) (EVar "e")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: gates[")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "] '"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "': missing integer field 'medianMs'"))))) (arm (PCon "Some" (PVar "ms")) ((GBool (EBinOp "<" (EVar "ms") (ELit (LInt 0))))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: gates[")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "] '"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "': negative medianMs "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "ms")))) (ELit (LString ""))))) (arm (PCon "Some" (PVar "ms")) () (EMatch (EApp (EVar "asInt") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "samples"))) (EVar "e")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: gates[")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "] '"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "': missing integer field 'samples'"))))) (arm (PCon "Some" (PVar "sc")) ((GBool (EBinOp "<" (EVar "sc") (ELit (LInt 1))))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: gates[")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "] '"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "': samples must be >= 1, got "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ""))))) (arm (PCon "Some" (PVar "sc")) () (EApp (EVar "Ok") (ERecordCreate "GateCost" ((fa "name" (EVar "n")) (fa "medianMs" (EVar "ms")) (fa "samples" (EVar "sc"))))))))))))
 (DTypeSig false "orNull" (TyFun (TyApp (TyCon "Option") (TyCon "Json")) (TyCon "Json")))
 (DFunDef false "orNull" ((PCon "None")) (EVar "JNull"))
 (DFunDef false "orNull" ((PCon "Some" (PVar "j"))) (EVar "j"))
@@ -281,7 +290,7 @@ prop "baselineKey is idempotent on an already-flat key" (n : Int) =
 # MARK
 (DUse false (UseGroup ("json") ((mem "JNull" false) (mem "Json" false) (mem "asArray" false) (mem "asBool" false) (mem "asInt" false) (mem "asString" false) (mem "lookup" false) (mem "parse" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "splitOnChar" false) (mem "startsWith" false))))
-(DData Public "GateCost" () ((variant "GateCost" (ConNamed (field "name" (TyCon "String")) (field "medianMs" (TyCon "Int"))))) ())
+(DData Public "GateCost" () ((variant "GateCost" (ConNamed (field "name" (TyCon "String")) (field "medianMs" (TyCon "Int")) (field "samples" (TyCon "Int"))))) ())
 (DTypeSig true "baselineKey" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "baselineKey" ((PVar "run")) (EBlock (DoLet false false (PVar "noExt") (EApp (EVar "dropDotSh") (EVar "run"))) (DoLet false false (PVar "flat") (EApp (EApp (EVar "joinWith") (ELit (LString "_"))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "/"))) (EVar "noExt")))) (DoExpr (EApp (EVar "dropTestPrefix") (EDictApp "flat")))))
 (DTypeSig false "dropDotSh" (TyFun (TyCon "String") (TyCon "String")))
@@ -291,7 +300,7 @@ prop "baselineKey is idempotent on an already-flat key" (n : Int) =
 (DTypeSig true "costSchema" (TyCon "String"))
 (DFunDef false "costSchema" () (ELit (LString "gate-cost-baseline/1")))
 (DTypeSig false "costEntry" (TyFun (TyCon "Int") (TyFun (TyCon "Json") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "GateCost")))))
-(DFunDef false "costEntry" ((PVar "i") (PVar "e")) (EMatch (EApp (EVar "asString") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "name"))) (EVar "e")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: gates[")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "]: missing string field 'name'"))))) (arm (PCon "Some" (PVar "n")) () (EMatch (EApp (EVar "asInt") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "medianMs"))) (EVar "e")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: gates[")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "] '"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "': missing integer field 'medianMs'"))))) (arm (PCon "Some" (PVar "ms")) ((GBool (EBinOp "<" (EVar "ms") (ELit (LInt 0))))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: gates[")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "] '"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "': negative medianMs "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "ms")))) (ELit (LString ""))))) (arm (PCon "Some" (PVar "ms")) () (EApp (EVar "Ok") (ERecordCreate "GateCost" ((fa "name" (EVar "n")) (fa "medianMs" (EVar "ms"))))))))))
+(DFunDef false "costEntry" ((PVar "i") (PVar "e")) (EMatch (EApp (EVar "asString") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "name"))) (EVar "e")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: gates[")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "]: missing string field 'name'"))))) (arm (PCon "Some" (PVar "n")) () (EMatch (EApp (EVar "asInt") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "medianMs"))) (EVar "e")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: gates[")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "] '"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "': missing integer field 'medianMs'"))))) (arm (PCon "Some" (PVar "ms")) ((GBool (EBinOp "<" (EVar "ms") (ELit (LInt 0))))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: gates[")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "] '"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "': negative medianMs "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "ms")))) (ELit (LString ""))))) (arm (PCon "Some" (PVar "ms")) () (EMatch (EApp (EVar "asInt") (EApp (EVar "orNull") (EApp (EApp (EVar "lookup") (ELit (LString "samples"))) (EVar "e")))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: gates[")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "] '"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "': missing integer field 'samples'"))))) (arm (PCon "Some" (PVar "sc")) ((GBool (EBinOp "<" (EVar "sc") (ELit (LInt 1))))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "gate cost baseline: gates[")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "] '"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "': samples must be >= 1, got "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "sc")))) (ELit (LString ""))))) (arm (PCon "Some" (PVar "sc")) () (EApp (EVar "Ok") (ERecordCreate "GateCost" ((fa "name" (EVar "n")) (fa "medianMs" (EVar "ms")) (fa "samples" (EVar "sc"))))))))))))
 (DTypeSig false "orNull" (TyFun (TyApp (TyCon "Option") (TyCon "Json")) (TyCon "Json")))
 (DFunDef false "orNull" ((PCon "None")) (EVar "JNull"))
 (DFunDef false "orNull" ((PCon "Some" (PVar "j"))) (EVar "j"))

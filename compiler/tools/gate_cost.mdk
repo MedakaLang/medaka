@@ -33,8 +33,14 @@ import json.{JNull, Json, asArray, asBool, asInt, asString, lookup, parse}
 import support.util.{joinWith, splitOnChar, startsWith}
 
 {- | One gate's measured cost.  `medianMs` is the baseline's `medianMs` —
-   the LOWER median of the retained raw samples, in milliseconds. -}
-public export data GateCost = GateCost { name : String, medianMs : Int }
+   the LOWER median of the retained raw samples, in milliseconds.  `samples`
+   is the baseline's own `"samples": N` count (S-4, #2178/#2207) — how many
+   raw measurements that median was taken over, so a reader (and, via
+   `balReport`, `medaka gate balance`'s own output) can see when a gate's
+   placement rests on thin evidence rather than having to go find the
+   baseline file and count. -}
+public export data GateCost =
+  | GateCost { name : String, medianMs : Int, samples : Int }
 
 {- | The baseline's key for a gate, from that gate's `run` script path.
 
@@ -88,7 +94,10 @@ costEntry i e = match asString (orNull (lookup "name" e))
   Some n => match asInt (orNull (lookup "medianMs" e))
     None => Err "gate cost baseline: gates[\{intToString i}] '\{n}': missing integer field 'medianMs'"
     Some ms if ms < 0 => Err "gate cost baseline: gates[\{intToString i}] '\{n}': negative medianMs \{intToString ms}"
-    Some ms => Ok GateCost { name = n, medianMs = ms }
+    Some ms => match asInt (orNull (lookup "samples" e))
+      None => Err "gate cost baseline: gates[\{intToString i}] '\{n}': missing integer field 'samples'"
+      Some sc if sc < 1 => Err "gate cost baseline: gates[\{intToString i}] '\{n}': samples must be >= 1, got \{intToString sc}"
+      Some sc => Ok GateCost { name = n, medianMs = ms, samples = sc }
 
 orNull : Option Json -> Json
 orNull None = JNull

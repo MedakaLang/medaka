@@ -110,7 +110,8 @@ _bal() {
 }
 
 for stem in wasm_only_row dominating_gate uncosted_gate \
-            pin_intruder pin_deserter pin_on_open_row makespan_vs_sum; do
+            pin_intruder pin_deserter pin_on_open_row makespan_vs_sum \
+            thin_evidence; do
   cp "$FIX/$stem.toml" "$TMP/$stem.toml"
 done
 
@@ -324,6 +325,27 @@ if _bal makespan_vs_sum "$TMP/m.txt"; then
 else
   bad "the balancer failed on the makespan_vs_sum fixture"
   sed -e 's/^/        /' "$TMP/m.txt"
+fi
+
+# ── 8. thin evidence is a stated COUNT, not a flag (#2207) ────────────────────
+#
+# "A gate balanced off a single sample is a fact the tool states, not one a
+# reader has to go find." Every other fixture here happens to have every gate
+# at `samples = 1`, so a report line that always says "N of N" would pass all
+# of them without proving anything is actually being counted. `thin_evidence`
+# is deliberately mixed: two gates at `samples = 1` and two above the
+# threshold, in ordinary (non-`--check`) output, which is where this must be
+# visible — not buried behind a flag.
+if _bal thin_evidence "$TMP/t.txt"; then
+  if grep -q '2 of 4 gates are scheduled off a single sample' "$TMP/t.txt"; then
+    ok "thin-evidence count is a real count, not every-gate-or-none"
+  else
+    bad "thin-evidence line missing or wrong count"
+    sed -e 's/^/        /' "$TMP/t.txt"
+  fi
+else
+  bad "the balancer failed on the thin_evidence fixture"
+  sed -e 's/^/        /' "$TMP/t.txt"
 fi
 
 # The real registry's own closed row, asserted by NAME and not by count: the

@@ -1,0 +1,88 @@
+# test/gate_balance_fixtures/thin_evidence.toml — SYNTHETIC, hand-written.
+#
+# THE THIN-EVIDENCE COUNT IS A REAL COUNT, NOT A FLAG (S-4, #2178/#2207).
+#
+# Every other fixture in this directory happens to have every gate at
+# `samples = 1` (they were hand-written before `GateCost.samples` existed to
+# read), so a report line that always says "N of N" would pass them all
+# without proving the count is counting anything. This fixture is deliberately
+# MIXED: two gates at `samples = 1` (`small1`, `small2`) and two above the
+# threshold (`pinned1` at 2, `big` at 3) — so "2 of 4 gates are scheduled off a
+# single sample" is only right if the count is real.
+
+[[gate]]
+name = "big"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/big.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "small1"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/small1.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "small2"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/small2.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "pinned1"
+area = "fixture"
+shard = "pin"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/pinned1.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "pin"
+full_cores = true
+wasm_arm = false
+rationale = "test/gate_shards/pin.txt"
+pinned_gates = ["pinned1"]
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+pinned_gates = []
+
+[[shard]]
+name = "b"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/b.txt"
+pinned_gates = []
