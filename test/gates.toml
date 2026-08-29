@@ -6,16 +6,56 @@
 # `_gate_candidates` (tracked-or-untracked `*.sh` MINUS every name in
 # test/CI-COVERAGE-TOOLS.txt), so the entry count and that candidate count
 # agree by construction, not by luck. The first eight entries are S-1's pilot,
-# unchanged; the rest were appended in this slice. `sources`/`corpus` stay `[]`
-# for every entry (S-5's job). Nothing reads this file except `medaka gate
-# list`; ci.yml, test/preflight.sh, test/build_oracles.sh and
-# test/run_gates.sh are all unchanged and still authoritative.
+# unchanged; the rest were appended in S-2. Nothing reads this file except
+# `medaka gate list`/`verify`/`explain`; ci.yml, test/preflight.sh,
+# test/build_oracles.sh and test/run_gates.sh are all unchanged and still
+# authoritative.
 #
 # Schema: docs/ops/GATE-REGISTRY-DESIGN.md §2. Every field is REQUIRED on every
 # entry, list fields included — an absent list is a read error, not an empty
-# list. `sources` and `corpus` are deliberately empty everywhere for now: that
-# is "not yet populated", a different fact from "this gate reads nothing", and
-# the reader refuses to blur them by defaulting.
+# list.
+#
+# ── `sources` / `corpus` (S-5, #2191) ────────────────────────────────────────
+#
+# `sources` are GLOBS (`*` crosses `/`, `?` is one char) matched against a
+# changed path; `corpus` values are literal DIRECTORIES, and a changed path is
+# in one when it IS that directory or lives under it. `medaka gate explain
+# <path>` unions the two. Both were DERIVED from test/preflight.sh, not
+# hand-listed:
+#
+#   * `sources`  — each `case` arm's path pattern(s), attached to every gate
+#     the arm's `add '<pattern>'` calls resolve to (run_gates.sh's two-glob
+#     rule); plus the self-run arm (a changed gate script runs itself), the
+#     manifest-derived `<project>/*` arm, the second-pass snapshot/selfproc
+#     loop, and `need_fixpoint` (compiler/backend/* -> selfcompile_fixpoint).
+#   * `corpus`   — preflight's own fixture-consumer derivation (`_consumes`:
+#     a live, non-comment, word-bounded reference to the directory in the gate
+#     script or in one script it invokes) run over the same candidate universe.
+#
+# ⚠️ TWO THINGS ARE NOT IN HERE ON PURPOSE, because they are REGISTRY-LEVEL
+# POLICY and not per-gate facts (design doc §2):
+#
+#   1. BLAST RADIUS. `compiler/support/*`, `compiler/entries/*`, `stdlib/*` and
+#      `runtime/*` select the WHOLE suite. Writing that as a `sources` glob on
+#      every entry — so every gate "matches" stdlib — would make every entry's
+#      data a lie about what that gate reads. preflight keeps the same split:
+#      `mark_full` is its own function, not another `add` arm.
+#   2. FAIL-OPEN. A non-prose path no entry claims widens to the whole suite
+#      ([W-THIRD-CONSUMER]); it is never a silent "selects nothing".
+#
+# ⚠️ `sources = ["*"]` (diff_compiler_source_bytes only) is a WHOLE-TREE source:
+# that gate re-scans every tracked file whatever changed. It matches every path
+# by construction, so `explain` deliberately does NOT let it establish that a
+# path is mapped — otherwise the fail-open rule could never fire again.
+# preflight draws the same line: its unconditional
+# `add 'diff_compiler_source_bytes'` sits outside the case table whose misses
+# it reports as UNMAPPED.
+#
+# An entry with `sources = []` AND `corpus = []` is a gate NOTHING in
+# preflight's path->gate map selects today — it runs because a ci.yml shard
+# pattern names it, not because a changed path derived it. That is recorded,
+# not invented around: see the S-5 report's Notes for the list and why each is
+# empty.
 #
 # `name` is the name `test/run_gates.sh` resolves (it globs BOTH `test/<name>.sh`
 # and `<name>.sh` from the repo root — test/run_gates.sh:172-181), which is why
@@ -31,8 +71,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_parse_result.sh"
 oracles = ["parse_result_main"]
-sources = []
-corpus = []
+sources = ["compiler/frontend/ast.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/parser.mdk", "test/diff_compiler_parse_result.sh"]
+corpus = ["test/parse_error_fixtures"]
 toolchain = []
 
 # A second oracle-reading differential, in a different area — the pair is what
@@ -46,8 +86,8 @@ cost = "medium"
 kind = "exec"
 run = "test/diff_compiler_eval_modules.sh"
 oracles = ["eval_modules_main"]
-sources = []
-corpus = []
+sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_modules.sh"]
+corpus = ["test/eval_modules_fixtures"]
 toolchain = []
 
 # ⚠️ INVERTED POLARITY ([G-MUST-FAIL]): every fixture under
@@ -64,8 +104,8 @@ cost = "medium"
 kind = "exec"
 run = "test/diff_compiler_must_fail.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["test/diff_compiler_must_fail.sh"]
+corpus = ["test/must_fail_fixtures"]
 toolchain = []
 
 # An infra/ratchet gate that reads no oracle and builds nothing.
@@ -78,7 +118,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_ci_shard_coverage.sh"
 oracles = []
-sources = []
+sources = ["test/diff_compiler_ci_shard_coverage.sh"]
 corpus = []
 toolchain = []
 
@@ -93,8 +133,8 @@ cost = "heavy"
 kind = "exec"
 run = "test/build_cmd.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["test/build_cmd.sh"]
+corpus = ["test/build_cmd_fixtures"]
 toolchain = ["clang"]
 
 # The other non-`diff_` name, from ci.yml's `tools` shard pattern.
@@ -123,7 +163,7 @@ kind = "exec"
 run = "test/wasm/diff_wasm.sh"
 oracles = ["wasm_emit_main"]
 sources = []
-corpus = []
+corpus = ["test/wasm/fixtures"]
 toolchain = ["wasm-tools", "node>=24"]
 
 # A gate OUTSIDE test/ entirely, owned by another project, with its own
@@ -137,7 +177,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/select_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -159,7 +199,7 @@ cost = "cheap"
 kind = "exec"
 run = "byteparser/test/check.sh"
 oracles = []
-sources = []
+sources = ["byteparser/*"]
 corpus = []
 toolchain = []
 
@@ -172,7 +212,7 @@ cost = "cheap"
 kind = "exec"
 run = "gzip/test/deflate_oracle.sh"
 oracles = []
-sources = []
+sources = ["gzip/*"]
 corpus = []
 toolchain = []
 
@@ -185,7 +225,7 @@ cost = "cheap"
 kind = "exec"
 run = "gzip/test/inflate_oracle.sh"
 oracles = []
-sources = []
+sources = ["gzip/*"]
 corpus = []
 toolchain = []
 
@@ -198,7 +238,7 @@ cost = "cheap"
 kind = "exec"
 run = "mq/test/check.sh"
 oracles = []
-sources = []
+sources = ["mq/*"]
 corpus = []
 toolchain = []
 
@@ -211,7 +251,7 @@ cost = "cheap"
 kind = "exec"
 run = "parsec/test/check.sh"
 oracles = []
-sources = []
+sources = ["parsec/*"]
 corpus = []
 toolchain = []
 
@@ -237,7 +277,7 @@ cost = "medium"
 kind = "exec"
 run = "pds/test/car_vectors.sh"
 oracles = []
-sources = []
+sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
@@ -250,7 +290,7 @@ cost = "medium"
 kind = "exec"
 run = "pds/test/constant_time_parity.sh"
 oracles = []
-sources = []
+sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
@@ -263,7 +303,7 @@ cost = "medium"
 kind = "exec"
 run = "pds/test/constant_time_public_key.sh"
 oracles = []
-sources = []
+sources = ["pds/*"]
 corpus = []
 toolchain = ["clang"]
 
@@ -276,7 +316,7 @@ cost = "medium"
 kind = "exec"
 run = "pds/test/constant_time_reductions.sh"
 oracles = []
-sources = []
+sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24", "clang"]
 
@@ -289,7 +329,7 @@ cost = "medium"
 kind = "exec"
 run = "pds/test/constant_time_signing.sh"
 oracles = []
-sources = []
+sources = ["pds/*"]
 corpus = []
 toolchain = ["clang"]
 
@@ -302,7 +342,7 @@ cost = "medium"
 kind = "exec"
 run = "pds/test/dagcbor_cid_vectors.sh"
 oracles = []
-sources = []
+sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
@@ -315,7 +355,7 @@ cost = "medium"
 kind = "exec"
 run = "pds/test/did_key_all_engines.sh"
 oracles = []
-sources = []
+sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
@@ -328,7 +368,7 @@ cost = "medium"
 kind = "exec"
 run = "pds/test/ecdsa_vectors.sh"
 oracles = []
-sources = []
+sources = ["pds/*"]
 corpus = []
 toolchain = []
 
@@ -341,7 +381,7 @@ cost = "medium"
 kind = "exec"
 run = "pds/test/encodings_vectors.sh"
 oracles = []
-sources = []
+sources = ["pds/*"]
 corpus = []
 toolchain = []
 
@@ -354,7 +394,7 @@ cost = "medium"
 kind = "exec"
 run = "pds/test/field_vectors.sh"
 oracles = []
-sources = []
+sources = ["pds/*"]
 corpus = []
 toolchain = []
 
@@ -367,7 +407,7 @@ cost = "medium"
 kind = "exec"
 run = "pds/test/inlang_test_oracle.sh"
 oracles = []
-sources = []
+sources = ["pds/*"]
 corpus = []
 toolchain = []
 
@@ -380,7 +420,7 @@ cost = "medium"
 kind = "exec"
 run = "pds/test/mst_vectors.sh"
 oracles = []
-sources = []
+sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
@@ -393,7 +433,7 @@ cost = "medium"
 kind = "exec"
 run = "pds/test/opaque_field_scalar.sh"
 oracles = []
-sources = []
+sources = ["pds/*"]
 corpus = []
 toolchain = []
 
@@ -406,7 +446,7 @@ cost = "medium"
 kind = "exec"
 run = "pds/test/repo_vectors.sh"
 oracles = []
-sources = []
+sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
@@ -419,7 +459,7 @@ cost = "medium"
 kind = "exec"
 run = "pds/test/rfc6979_vectors.sh"
 oracles = []
-sources = []
+sources = ["pds/*"]
 corpus = []
 toolchain = []
 
@@ -432,7 +472,7 @@ cost = "medium"
 kind = "exec"
 run = "pds/test/scalar_vectors.sh"
 oracles = []
-sources = []
+sources = ["pds/*"]
 corpus = []
 toolchain = []
 
@@ -445,7 +485,7 @@ cost = "medium"
 kind = "exec"
 run = "pds/test/secp256k1_point_vectors.sh"
 oracles = []
-sources = []
+sources = ["pds/*"]
 corpus = []
 toolchain = []
 
@@ -458,7 +498,7 @@ cost = "medium"
 kind = "exec"
 run = "pds/test/secp256k1_public_key.sh"
 oracles = []
-sources = []
+sources = ["pds/*"]
 corpus = []
 toolchain = []
 
@@ -471,7 +511,7 @@ cost = "medium"
 kind = "exec"
 run = "pds/test/sha256_vectors.sh"
 oracles = []
-sources = []
+sources = ["pds/*"]
 corpus = []
 toolchain = []
 
@@ -484,7 +524,7 @@ cost = "medium"
 kind = "exec"
 run = "pds/test/signing_corpus.sh"
 oracles = []
-sources = []
+sources = ["pds/*"]
 corpus = []
 toolchain = []
 
@@ -497,7 +537,7 @@ cost = "medium"
 kind = "exec"
 run = "pds/test/trust_boundary_guards.sh"
 oracles = []
-sources = []
+sources = ["pds/*"]
 corpus = []
 toolchain = []
 
@@ -510,7 +550,7 @@ cost = "medium"
 kind = "exec"
 run = "pds/test/vector_provenance.sh"
 oracles = []
-sources = []
+sources = ["pds/*"]
 corpus = []
 toolchain = []
 
@@ -523,7 +563,7 @@ cost = "cheap"
 kind = "exec"
 run = "playground/e2e/run.sh"
 oracles = []
-sources = []
+sources = ["playground", "playground/*"]
 corpus = []
 toolchain = ["node>=24"]
 
@@ -536,7 +576,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/aggregate_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -549,7 +589,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/delete_negative_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -562,7 +602,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/delete_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -575,7 +615,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/distinct_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -588,7 +628,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/dml_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -601,7 +641,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/groupby_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -614,7 +654,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/index_write_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -627,7 +667,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/inlang_test_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -640,7 +680,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/join_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -653,7 +693,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/left_join_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -666,7 +706,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/multipage_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -679,7 +719,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/multipage_write_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -692,7 +732,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/multitable_write_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -705,7 +745,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -718,7 +758,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/overflow_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -731,7 +771,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/projection_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -744,7 +784,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/rowid_roundtrip_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -757,7 +797,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/sql_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -770,7 +810,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/typed_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -783,7 +823,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/update_expr_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -796,7 +836,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/update_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -809,7 +849,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/writer_api_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -822,7 +862,7 @@ cost = "medium"
 kind = "exec"
 run = "sqlite/test/writer_oracle.sh"
 oracles = []
-sources = []
+sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
@@ -836,7 +876,7 @@ kind = "exec"
 run = "test/bootstrap_eval.sh"
 oracles = ["eval_main"]
 sources = []
-corpus = []
+corpus = ["test/eval_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -849,7 +889,7 @@ kind = "exec"
 run = "test/bootstrap_lex.sh"
 oracles = ["lex_main"]
 sources = []
-corpus = []
+corpus = ["test/diff_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -862,7 +902,7 @@ kind = "exec"
 run = "test/bootstrap_resolve.sh"
 oracles = ["resolve_main"]
 sources = []
-corpus = []
+corpus = ["test/resolve_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -875,7 +915,7 @@ kind = "exec"
 run = "test/bootstrap_typecheck.sh"
 oracles = ["typecheck_main"]
 sources = []
-corpus = []
+corpus = ["test/typecheck_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -888,7 +928,7 @@ kind = "exec"
 run = "test/build_construct_coverage.sh"
 oracles = []
 sources = []
-corpus = []
+corpus = ["test/construct_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -901,7 +941,7 @@ kind = "exec"
 run = "test/build_wasm_cmd.sh"
 oracles = []
 sources = []
-corpus = []
+corpus = ["test/wasm/fixtures_modules"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
 
 [[gate]]
@@ -939,7 +979,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/check_doc_links.sh"
 oracles = []
-sources = []
+sources = ["playground", "playground/*"]
 corpus = []
 toolchain = []
 
@@ -965,7 +1005,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/check_keyword_sync.sh"
 oracles = []
-sources = []
+sources = ["playground", "playground/*"]
 corpus = []
 toolchain = []
 
@@ -1057,7 +1097,7 @@ kind = "exec"
 run = "test/cross_project_deps.sh"
 oracles = []
 sources = []
-corpus = []
+corpus = ["test/cross_project_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1070,7 +1110,7 @@ kind = "exec"
 run = "test/cross_project_twonames.sh"
 oracles = []
 sources = []
-corpus = []
+corpus = ["test/cross_project_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1082,8 +1122,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_analyze_project.sh"
 oracles = ["diagnostics_project_main"]
-sources = []
-corpus = []
+sources = ["compiler/driver/*", "compiler/types/*", "test/diff_compiler_analyze_project.sh"]
+corpus = ["test/analyze_project_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1095,7 +1135,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_anf_identity.sh"
 oracles = ["anf_identity_main"]
-sources = []
+sources = ["compiler/ir/*", "test/diff_compiler_anf_identity.sh"]
 corpus = []
 toolchain = []
 
@@ -1108,8 +1148,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_build.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/backend/*", "compiler/driver/*", "test/diff_compiler_build.sh"]
+corpus = ["test/build_diff_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -1121,8 +1161,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_call_arity.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/backend/*", "compiler/ir/*", "compiler/types/*", "test/diff_compiler_call_arity.sh"]
+corpus = ["test/build_diff_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -1134,8 +1174,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_capability_matrix.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_capability_matrix.sh"]
+corpus = ["test/llvm_fixtures", "test/llvm_fixtures_typed", "test/wasm/fixtures", "test/wasm/fixtures_typed"]
 toolchain = []
 
 [[gate]]
@@ -1147,8 +1187,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_check_batch.sh"
 oracles = ["check_batch"]
-sources = []
-corpus = []
+sources = ["compiler/driver/*", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*", "compiler/types/*", "test/diff_compiler_check_batch.sh"]
+corpus = ["test/diff_fixtures", "test/resolve_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1160,7 +1200,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_check_cli_modules.sh"
 oracles = []
-sources = []
+sources = ["compiler/driver/*", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*", "compiler/types/*", "test/diff_compiler_check_cli_modules.sh"]
 corpus = []
 toolchain = []
 
@@ -1173,8 +1213,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_check_json.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/driver/*", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*", "compiler/types/*", "test/diff_compiler_check_json.sh"]
+corpus = ["test/check_json_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -1186,8 +1226,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_check_match.sh"
 oracles = ["check_match_main"]
-sources = []
-corpus = []
+sources = ["compiler/driver/*", "compiler/frontend/exhaust.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*", "compiler/types/*", "test/diff_compiler_check_match.sh"]
+corpus = ["test/check_match_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1199,8 +1239,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_check_modules.sh"
 oracles = ["check_modules_main"]
-sources = []
-corpus = []
+sources = ["compiler/driver/*", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*", "compiler/types/*", "test/diff_compiler_check_modules.sh"]
+corpus = ["test/check_module_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1212,8 +1252,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_check_policy.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/driver/*", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*", "compiler/types/*", "demo", "demo/*", "test/diff_compiler_check_policy.sh"]
+corpus = ["test/check_policy_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1225,8 +1265,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_check.sh"
 oracles = ["check_main"]
-sources = []
-corpus = []
+sources = ["compiler/driver/*", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*", "compiler/types/*", "test/diff_compiler_check.sh"]
+corpus = ["test/diff_fixtures", "test/import_error_fixtures", "test/resolve_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1238,7 +1278,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_check_wrapper_callers.sh"
 oracles = []
-sources = []
+sources = ["compiler/driver/*", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*", "compiler/types/*", "test/CHECK-WRAPPER-CALLERS.txt", "test/diff_compiler_check_wrapper_callers.sh"]
 corpus = []
 toolchain = []
 
@@ -1251,7 +1291,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_ci_guard_failsafe.sh"
 oracles = []
-sources = []
+sources = ["test/diff_compiler_ci_guard_failsafe.sh"]
 corpus = []
 toolchain = []
 
@@ -1264,8 +1304,8 @@ cost = "medium"
 kind = "exec"
 run = "test/diff_compiler_codemod.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["test/diff_compiler_codemod.sh"]
+corpus = ["test/codemod_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1277,8 +1317,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_core_ir_list.sh"
 oracles = ["core_ir_prelude_main"]
-sources = []
-corpus = []
+sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_core_ir_list.sh"]
+corpus = ["test/eval_list_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1290,8 +1330,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_core_ir_modules.sh"
 oracles = ["core_ir_modules_main"]
-sources = []
-corpus = []
+sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_core_ir_modules.sh"]
+corpus = ["test/eval_modules_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1303,8 +1343,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_core_ir_prelude.sh"
 oracles = ["core_ir_prelude_main"]
-sources = []
-corpus = []
+sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_core_ir_prelude.sh"]
+corpus = ["test/eval_prelude_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1316,8 +1356,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_core_ir_roundtrip.sh"
 oracles = ["core_ir_roundtrip_main"]
-sources = []
-corpus = []
+sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_core_ir_roundtrip.sh"]
+corpus = ["test/eval_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1329,8 +1369,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_core_ir_run.sh"
 oracles = ["core_ir_run_main"]
-sources = []
-corpus = []
+sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_core_ir_run.sh"]
+corpus = ["test/diff_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1342,8 +1382,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_core_ir.sh"
 oracles = ["core_ir_main"]
-sources = []
-corpus = []
+sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_core_ir.sh"]
+corpus = ["test/eval_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1355,8 +1395,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_core_ir_typed_modules.sh"
 oracles = ["core_ir_modules_main", "core_ir_typed_modules_main", "eval_modules_main"]
-sources = []
-corpus = []
+sources = ["compiler/backend/*", "compiler/eval/*", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/CORE-IR-TYPED-LEDGER.txt", "test/diff_compiler_core_ir_typed_modules.sh"]
+corpus = ["test/core_ir_typed_modules_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1368,8 +1408,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_core_ir_typed.sh"
 oracles = ["core_ir_typed_main"]
-sources = []
-corpus = []
+sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_core_ir_typed.sh"]
+corpus = ["test/eval_typed_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1381,8 +1421,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_diagnostics.sh"
 oracles = ["diagnostics_main"]
-sources = []
-corpus = []
+sources = ["compiler/driver/*", "compiler/types/*", "test/diff_compiler_diagnostics.sh"]
+corpus = ["test/check_match_fixtures", "test/diff_fixtures", "test/exhaust_fixtures", "test/resolve_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1394,8 +1434,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_dict_semantics.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/backend/*", "compiler/driver/*", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "compiler/types/*", "test/diff_compiler_dict_semantics.sh"]
+corpus = ["test/dict_fixtures", "test/must_fail_fixtures", "test/typecheck_error_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -1407,7 +1447,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_dispatch_shape.sh"
 oracles = []
-sources = []
+sources = ["test/diff_compiler_dispatch_shape.sh"]
 corpus = []
 toolchain = []
 
@@ -1420,8 +1460,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_doc.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["test/diff_compiler_doc.sh"]
+corpus = ["test/doc_fixtures", "test/doc_goldens"]
 toolchain = []
 
 [[gate]]
@@ -1433,8 +1473,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_draft_semantic.sh"
 oracles = ["draft_semantic_main"]
-sources = []
-corpus = []
+sources = ["compiler/ir/*", "test/diff_compiler_draft_semantic.sh"]
+corpus = ["test/draft_semantic_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1446,8 +1486,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_effect_hole.sh"
 oracles = ["check_main"]
-sources = []
-corpus = []
+sources = ["test/diff_compiler_effect_hole.sh"]
+corpus = ["test/diff_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1459,8 +1499,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_effect_param.sh"
 oracles = ["check_main"]
-sources = []
-corpus = []
+sources = ["test/diff_compiler_effect_param.sh"]
+corpus = ["test/diff_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1472,8 +1512,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_effect_polarity.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["test/diff_compiler_effect_polarity.sh"]
+corpus = ["test/effect_polarity_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1485,8 +1525,8 @@ cost = "medium"
 kind = "exec"
 run = "test/diff_compiler_engines.sh"
 oracles = ["eval_autoprint_main"]
-sources = []
-corpus = []
+sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/diff_compiler_engines.sh", "test/engine_value_pins/*"]
+corpus = ["test/engine_fixtures", "test/llvm_fixtures", "test/llvm_fixtures_modules", "test/llvm_fixtures_typed", "test/wasm/fixtures", "test/wasm/fixtures_typed"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
 
 [[gate]]
@@ -1498,7 +1538,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_entry_exit_codes.sh"
 oracles = ["llvm_emit_modules_main"]
-sources = []
+sources = ["test/diff_compiler_entry_exit_codes.sh"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
@@ -1511,8 +1551,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_eval_dict_batch.sh"
 oracles = ["eval_dict_batch"]
-sources = []
-corpus = []
+sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_dict_batch.sh"]
+corpus = ["test/eval_dict_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1524,8 +1564,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_eval_json.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_json.sh"]
+corpus = ["test/error_quality_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1537,8 +1577,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_eval_list_batch.sh"
 oracles = ["eval_list_batch"]
-sources = []
-corpus = []
+sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_list_batch.sh"]
+corpus = ["test/eval_list_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1550,8 +1590,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_eval_list.sh"
 oracles = ["eval_prelude_main"]
-sources = []
-corpus = []
+sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_list.sh"]
+corpus = ["test/eval_list_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1563,8 +1603,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_eval_prelude_batch.sh"
 oracles = ["eval_prelude_batch"]
-sources = []
-corpus = []
+sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_prelude_batch.sh"]
+corpus = ["test/eval_prelude_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1576,8 +1616,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_eval_prelude.sh"
 oracles = ["eval_prelude_main"]
-sources = []
-corpus = []
+sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_prelude.sh"]
+corpus = ["test/eval_prelude_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1589,8 +1629,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_eval_run_batch.sh"
 oracles = ["eval_run_batch"]
-sources = []
-corpus = []
+sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_run_batch.sh"]
+corpus = ["test/diff_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1602,8 +1642,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_eval_run.sh"
 oracles = ["eval_run_main"]
-sources = []
-corpus = []
+sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_run.sh"]
+corpus = ["test/diff_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1615,7 +1655,7 @@ cost = "heavy"
 kind = "exec"
 run = "test/diff_compiler_eval_scaling.sh"
 oracles = ["profile_eval_main"]
-sources = []
+sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_scaling.sh"]
 corpus = []
 toolchain = []
 
@@ -1628,8 +1668,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_eval.sh"
 oracles = ["eval_main"]
-sources = []
-corpus = []
+sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval.sh"]
+corpus = ["test/eval_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1641,8 +1681,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_eval_typed_batch.sh"
 oracles = ["eval_typed_batch"]
-sources = []
-corpus = []
+sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/diff_compiler_eval_typed_batch.sh"]
+corpus = ["test/eval_typed_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1654,8 +1694,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_eval_typed_modules.sh"
 oracles = ["eval_typed_modules_main"]
-sources = []
-corpus = []
+sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/diff_compiler_eval_typed_modules.sh"]
+corpus = ["test/eval_typed_modules_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1667,8 +1707,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_exhaust.sh"
 oracles = ["exhaust_main"]
-sources = []
-corpus = []
+sources = ["compiler/frontend/exhaust.mdk", "compiler/types/*", "test/diff_compiler_exhaust.sh"]
+corpus = ["test/exhaust_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1680,7 +1720,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_fixture_corpus_coverage.sh"
 oracles = []
-sources = []
+sources = ["test/diff_compiler_fixture_corpus_coverage.sh"]
 corpus = []
 toolchain = []
 
@@ -1693,7 +1733,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_flat_vs_onemodule.sh"
 oracles = ["check_flat_diags_main", "check_one_diags_main", "llvm_emit_typed_main"]
-sources = []
+sources = ["test/diff_compiler_flat_vs_onemodule.sh"]
 corpus = []
 toolchain = ["clang"]
 
@@ -1706,8 +1746,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_fmt_roundtrip.sh"
 oracles = ["fmt_main", "parse_main"]
-sources = []
-corpus = []
+sources = ["test/diff_compiler_fmt_roundtrip.sh"]
+corpus = ["test/fmt_fixtures", "test/parse_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1719,8 +1759,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_fmt.sh"
 oracles = ["fmt_main"]
-sources = []
-corpus = []
+sources = ["compiler/frontend/ast.mdk", "compiler/frontend/parser.mdk", "compiler/tools/fmt.mdk", "compiler/tools/printer.mdk", "test/diff_compiler_fmt.sh"]
+corpus = ["test/fmt_fixtures", "test/parse_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1732,7 +1772,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_fmt_write_safety.sh"
 oracles = []
-sources = []
+sources = ["compiler/driver/*", "test/diff_compiler_fmt_write_safety.sh"]
 corpus = []
 toolchain = []
 
@@ -1745,8 +1785,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_iface_order.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/driver/*", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/types/*", "test/IFACE-ORDER-LEDGER.txt", "test/diff_compiler_iface_order.sh"]
+corpus = ["test/iface_order_fixtures", "test/must_fail_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -1758,8 +1798,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_import_order.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/backend/*", "compiler/driver/*", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/types/*", "test/EMITTER-VERDICT-LEDGER.txt", "test/IMPORT-ORDER-LEDGER.txt", "test/diff_compiler_import_order.sh"]
+corpus = ["test/import_order_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -1771,8 +1811,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_index_oob.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["test/diff_compiler_index_oob.sh"]
+corpus = ["test/index_oob_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -1784,8 +1824,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_index.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["test/diff_compiler_index.sh"]
+corpus = ["test/index_fixtures", "test/index_goldens"]
 toolchain = []
 
 [[gate]]
@@ -1797,7 +1837,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_internal_extern.sh"
 oracles = []
-sources = []
+sources = ["test/diff_compiler_internal_extern.sh"]
 corpus = []
 toolchain = []
 
@@ -1810,7 +1850,7 @@ cost = "heavy"
 kind = "exec"
 run = "test/diff_compiler_ir_scaling.sh"
 oracles = []
-sources = []
+sources = ["test/diff_compiler_ir_scaling.sh", "test/perf_shapes.sh"]
 corpus = []
 toolchain = ["clang", "valgrind"]
 
@@ -1823,7 +1863,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_ir_size.sh"
 oracles = []
-sources = []
+sources = ["test/diff_compiler_ir_size.sh"]
 corpus = []
 toolchain = ["clang"]
 
@@ -1836,8 +1876,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_let_refute.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["test/diff_compiler_let_refute.sh"]
+corpus = ["test/let_refute_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -1849,7 +1889,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_lex_files.sh"
 oracles = ["lex_main"]
-sources = []
+sources = ["compiler/frontend/lexer.mdk", "test/diff_compiler_lex_files.sh"]
 corpus = []
 toolchain = []
 
@@ -1862,8 +1902,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_lint_cache.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/tools/lint*.mdk", "test/diff_compiler_lint_cache.sh"]
+corpus = ["test/lint_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1875,8 +1915,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_lint_crossfile.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/tools/lint*.mdk", "test/diff_compiler_lint_crossfile.sh"]
+corpus = ["test/lint_crossfile_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1888,8 +1928,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_lint_fix.sh"
 oracles = ["lint_fix_main"]
-sources = []
-corpus = []
+sources = ["compiler/tools/lint*.mdk", "test/diff_compiler_lint_fix.sh"]
+corpus = ["test/lint_fix_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1901,8 +1941,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_lint_multi_dir.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/tools/lint*.mdk", "test/diff_compiler_lint_multi_dir.sh"]
+corpus = ["test/lint_multi_dir_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1914,8 +1954,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_lint_multi.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/tools/lint*.mdk", "test/diff_compiler_lint_multi.sh"]
+corpus = ["test/lint_multi_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1927,8 +1967,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_lint.sh"
 oracles = ["lint_main"]
-sources = []
-corpus = []
+sources = ["compiler/tools/lint*.mdk", "test/diff_compiler_lint.sh"]
+corpus = ["test/lint_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1940,8 +1980,8 @@ cost = "medium"
 kind = "exec"
 run = "test/diff_compiler_llvm_ffi.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/backend/*", "compiler/ir/*", "test/diff_compiler_llvm_ffi.sh"]
+corpus = ["test/ffi_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -1953,8 +1993,8 @@ cost = "medium"
 kind = "exec"
 run = "test/diff_compiler_llvm_modules.sh"
 oracles = ["llvm_emit_modules_main"]
-sources = []
-corpus = []
+sources = ["compiler/backend/*", "compiler/ir/*", "test/diff_compiler_llvm_modules.sh"]
+corpus = ["test/llvm_fixtures_modules"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -1966,8 +2006,8 @@ cost = "medium"
 kind = "exec"
 run = "test/diff_compiler_llvm.sh"
 oracles = ["llvm_emit_main"]
-sources = []
-corpus = []
+sources = ["compiler/backend/*", "compiler/ir/*", "test/diff_compiler_llvm.sh"]
+corpus = ["test/llvm_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -1979,8 +2019,8 @@ cost = "medium"
 kind = "exec"
 run = "test/diff_compiler_llvm_symbol_collision.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/backend/*", "compiler/ir/*", "test/diff_compiler_llvm_symbol_collision.sh"]
+corpus = ["test/symbol_collision_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -1992,8 +2032,8 @@ cost = "medium"
 kind = "exec"
 run = "test/diff_compiler_llvm_typed_ir.sh"
 oracles = ["llvm_emit_typed_main"]
-sources = []
-corpus = []
+sources = ["compiler/backend/*", "compiler/ir/*", "test/diff_compiler_llvm_typed_ir.sh"]
+corpus = ["test/llvm_fixtures_typed"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -2005,8 +2045,8 @@ cost = "medium"
 kind = "exec"
 run = "test/diff_compiler_llvm_typed.sh"
 oracles = ["core_ir_dict_pp_main", "llvm_emit_typed_main"]
-sources = []
-corpus = []
+sources = ["compiler/backend/*", "compiler/ir/*", "test/diff_compiler_llvm_typed.sh"]
+corpus = ["test/llvm_fixtures_typed"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -2018,8 +2058,8 @@ cost = "medium"
 kind = "exec"
 run = "test/diff_compiler_lsp_b3.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/tools/lsp.mdk", "test/diff_compiler_lsp_b3.sh"]
+corpus = ["test/lsp_goldens"]
 toolchain = []
 
 [[gate]]
@@ -2031,8 +2071,8 @@ cost = "medium"
 kind = "exec"
 run = "test/diff_compiler_lsp_b4.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/tools/lsp.mdk", "test/diff_compiler_lsp_b4.sh"]
+corpus = ["test/lsp_goldens"]
 toolchain = []
 
 [[gate]]
@@ -2044,8 +2084,8 @@ cost = "medium"
 kind = "exec"
 run = "test/diff_compiler_lsp.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/tools/lsp.mdk", "test/diff_compiler_lsp.sh"]
+corpus = ["test/lsp_goldens"]
 toolchain = []
 
 [[gate]]
@@ -2057,8 +2097,8 @@ cost = "medium"
 kind = "exec"
 run = "test/diff_compiler_mcp.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["test/diff_compiler_mcp.sh"]
+corpus = ["test/mcp_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2070,7 +2110,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_new.sh"
 oracles = ["new_main"]
-sources = []
+sources = ["test/diff_compiler_new.sh"]
 corpus = []
 toolchain = []
 
@@ -2083,8 +2123,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_origin_agreement.sh"
 oracles = ["origin_agreement_main"]
-sources = []
-corpus = []
+sources = ["compiler/frontend/ast.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "compiler/types/*", "test/diff_compiler_origin_agreement.sh"]
+corpus = ["test/origin_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -2096,8 +2136,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_os_entropy.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["test/diff_compiler_os_entropy.sh"]
+corpus = ["test/os_entropy_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2109,8 +2149,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_parse_error_loc.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/frontend/ast.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/parser.mdk", "test/diff_compiler_parse_error_loc.sh"]
+corpus = ["test/parse_error_loc_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2122,8 +2162,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_parse_errors.sh"
 oracles = ["parse_main"]
-sources = []
-corpus = []
+sources = ["compiler/frontend/ast.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/parser.mdk", "test/diff_compiler_parse_errors.sh"]
+corpus = ["test/parse_error_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2135,7 +2175,7 @@ cost = "heavy"
 kind = "exec"
 run = "test/diff_compiler_perf_scaling.sh"
 oracles = ["profile_main", "profile_modules_main"]
-sources = []
+sources = ["test/diff_compiler_perf_scaling.sh", "test/perf_shapes.sh"]
 corpus = []
 toolchain = []
 
@@ -2148,7 +2188,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_perf_stage_census.sh"
 oracles = []
-sources = []
+sources = ["test/diff_compiler_perf_stage_census.sh"]
 corpus = []
 toolchain = []
 
@@ -2161,7 +2201,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_ported.sh"
 oracles = []
-sources = []
+sources = ["compiler/eval/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "test/diff_compiler_ported.sh"]
 corpus = []
 toolchain = []
 
@@ -2174,7 +2214,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_preflight_base.sh"
 oracles = []
-sources = []
+sources = ["test/diff_compiler_preflight_base.sh"]
 corpus = []
 toolchain = ["clang"]
 
@@ -2187,8 +2227,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_prelude_obj.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["test/diff_compiler_prelude_obj.sh"]
+corpus = ["test/construct_fixtures", "test/llvm_fixtures", "test/wasm/fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -2200,7 +2240,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_prelude_shadow_census.sh"
 oracles = []
-sources = []
+sources = ["compiler/backend/*", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/parser.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/diff_compiler_prelude_shadow_census.sh"]
 corpus = []
 toolchain = []
 
@@ -2213,8 +2253,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_project_enrolment.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["demo", "demo/*", "playground", "playground/*", "test/diff_compiler_project_enrolment.sh"]
+corpus = ["test/native_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2226,8 +2266,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_references_correctness.sh"
 oracles = ["refindex_main"]
-sources = []
-corpus = []
+sources = ["test/diff_compiler_references_correctness.sh"]
+corpus = ["test/references_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2239,7 +2279,7 @@ cost = "heavy"
 kind = "exec"
 run = "test/diff_compiler_references_scaling.sh"
 oracles = ["refindex_main"]
-sources = []
+sources = ["test/diff_compiler_references_scaling.sh"]
 corpus = []
 toolchain = []
 
@@ -2252,8 +2292,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_references_tool.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["test/diff_compiler_references_tool.sh"]
+corpus = ["test/references_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2265,8 +2305,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_rejection_parity.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["test/diff_compiler_rejection_parity.sh"]
+corpus = ["test/llvm_fixtures", "test/llvm_fixtures_typed", "test/wasm/fixtures", "test/wasm/fixtures_typed"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
 
 [[gate]]
@@ -2278,8 +2318,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_repl.sh"
 oracles = ["repl_main"]
-sources = []
-corpus = []
+sources = ["compiler/tools/repl.mdk", "test/diff_compiler_repl.sh"]
+corpus = ["test/repl_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2291,8 +2331,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_resolve_batch.sh"
 oracles = ["resolve_batch"]
-sources = []
-corpus = []
+sources = ["compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "test/diff_compiler_resolve_batch.sh"]
+corpus = ["test/resolve_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2304,8 +2344,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_resolve_modules.sh"
 oracles = ["resolve_modules_main"]
-sources = []
-corpus = []
+sources = ["compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "test/diff_compiler_resolve_modules.sh"]
+corpus = ["test/resolve_module_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2317,8 +2357,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_resolve.sh"
 oracles = ["resolve_main"]
-sources = []
-corpus = []
+sources = ["compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "test/diff_compiler_resolve.sh"]
+corpus = ["test/resolve_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2330,8 +2370,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_rt_obj.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["test/diff_compiler_rt_obj.sh"]
+corpus = ["test/construct_fixtures", "test/llvm_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -2343,8 +2383,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_run_check_agreement.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["test/diff_compiler_run_check_agreement.sh"]
+corpus = ["test/run_check_agreement_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2356,7 +2396,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_run_entry_subdir.sh"
 oracles = []
-sources = []
+sources = ["test/diff_compiler_run_entry_subdir.sh"]
 corpus = []
 toolchain = []
 
@@ -2369,8 +2409,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_run_stdout_flush.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["test/diff_compiler_run_stdout_flush.sh"]
+corpus = ["test/run_stdout_flush_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2382,8 +2422,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_selfproc.sh"
 oracles = ["check_all_main", "eval_modules_main", "eval_typed_modules_main"]
-sources = []
-corpus = []
+sources = ["compiler/*.mdk", "compiler/*/*.mdk", "stdlib/core.mdk", "stdlib/runtime.mdk", "test/diff_compiler_selfproc.sh"]
+corpus = ["test/selfproc_goldens"]
 toolchain = []
 
 [[gate]]
@@ -2395,8 +2435,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_shadow_semantics.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/backend/*", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/parser.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "playground", "playground/*", "test/diff_compiler_shadow_semantics.sh"]
+corpus = ["test/import_order_fixtures", "test/must_fail_fixtures", "test/shadow_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2408,8 +2448,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_slice_oob.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["test/diff_compiler_slice_oob.sh"]
+corpus = ["test/slice_oob_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -2421,7 +2461,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_snapshot_bless.sh"
 oracles = []
-sources = []
+sources = ["compiler/*.mdk", "compiler/*/*.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/fmt.mdk", "compiler/tools/printer.mdk", "compiler/tools/snapshot.mdk", "compiler/types/*", "stdlib/*.mdk", "test/diff_compiler_snapshot_bless.sh", "test/snapshots/*"]
 corpus = []
 toolchain = []
 
@@ -2434,8 +2474,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_snapshot_core_ir.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/*.mdk", "compiler/*/*.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/fmt.mdk", "compiler/tools/printer.mdk", "compiler/tools/snapshot.mdk", "compiler/types/*", "stdlib/*.mdk", "test/diff_compiler_snapshot_core_ir.sh", "test/snapshots/*"]
+corpus = ["test/eval_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2447,8 +2487,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_snapshot_eval_errors.sh"
 oracles = ["eval_prelude_main"]
-sources = []
-corpus = []
+sources = ["compiler/*.mdk", "compiler/*/*.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/fmt.mdk", "compiler/tools/printer.mdk", "compiler/tools/snapshot.mdk", "compiler/types/*", "stdlib/*.mdk", "test/diff_compiler_snapshot_eval_errors.sh", "test/snapshots/*"]
+corpus = ["test/eval_error_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2460,8 +2500,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_snapshot_eval.sh"
 oracles = ["eval_dict_main", "eval_typed_main"]
-sources = []
-corpus = []
+sources = ["compiler/*.mdk", "compiler/*/*.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/fmt.mdk", "compiler/tools/printer.mdk", "compiler/tools/snapshot.mdk", "compiler/types/*", "stdlib/*.mdk", "test/diff_compiler_snapshot_eval.sh", "test/snapshots/*"]
+corpus = ["test/eval_dict_fixtures", "test/eval_typed_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2473,8 +2513,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_snapshot_frontend.sh"
 oracles = ["parse_main"]
-sources = []
-corpus = []
+sources = ["compiler/*.mdk", "compiler/*/*.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/fmt.mdk", "compiler/tools/printer.mdk", "compiler/tools/snapshot.mdk", "compiler/types/*", "stdlib/*.mdk", "test/diff_compiler_snapshot_frontend.sh", "test/snapshots/*"]
+corpus = ["test/comment_fixtures", "test/diff_fixtures", "test/parse_fixtures", "test/parse_only_fixtures", "test/positions_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2486,7 +2526,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_snapshot_prelude.sh"
 oracles = []
-sources = []
+sources = ["compiler/*.mdk", "compiler/*/*.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/fmt.mdk", "compiler/tools/printer.mdk", "compiler/tools/snapshot.mdk", "compiler/types/*", "stdlib/*.mdk", "test/diff_compiler_snapshot_prelude.sh", "test/snapshots/*"]
 corpus = []
 toolchain = []
 
@@ -2499,8 +2539,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_snapshot_types.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/*.mdk", "compiler/*/*.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/fmt.mdk", "compiler/tools/printer.mdk", "compiler/tools/snapshot.mdk", "compiler/types/*", "stdlib/*.mdk", "test/diff_compiler_snapshot_types.sh", "test/snapshots/*"]
+corpus = ["test/typecheck_fixtures", "test/typecheck_panic_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2512,8 +2552,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_snapshot_types_user.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/*.mdk", "compiler/*/*.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/fmt.mdk", "compiler/tools/printer.mdk", "compiler/tools/snapshot.mdk", "compiler/types/*", "stdlib/*.mdk", "test/diff_compiler_snapshot_types_user.sh", "test/snapshots/*"]
+corpus = ["test/diff_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2525,7 +2565,7 @@ cost = "medium"
 kind = "exec"
 run = "test/diff_compiler_snapshot_wasm_input.sh"
 oracles = []
-sources = []
+sources = ["compiler/*.mdk", "compiler/*/*.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/fmt.mdk", "compiler/tools/printer.mdk", "compiler/tools/snapshot.mdk", "compiler/types/*", "stdlib/*.mdk", "test/diff_compiler_snapshot_wasm_input.sh", "test/snapshots/*"]
 corpus = []
 toolchain = []
 
@@ -2538,7 +2578,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_source_bytes.sh"
 oracles = []
-sources = []
+sources = ["*"]
 corpus = []
 toolchain = []
 
@@ -2551,8 +2591,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_stack_overflow.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["test/diff_compiler_stack_overflow.sh"]
+corpus = ["test/stack_overflow_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -2564,7 +2604,7 @@ cost = "heavy"
 kind = "exec"
 run = "test/diff_compiler_stage_ir_scaling.sh"
 oracles = ["profile_main", "profile_modules_main"]
-sources = []
+sources = ["test/diff_compiler_stage_ir_scaling.sh"]
 corpus = []
 toolchain = ["clang", "valgrind"]
 
@@ -2577,7 +2617,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_test_native.sh"
 oracles = []
-sources = []
+sources = ["compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "test/diff_compiler_test_native.sh"]
 corpus = []
 toolchain = ["clang"]
 
@@ -2590,8 +2630,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_test.sh"
 oracles = ["test_main"]
-sources = []
-corpus = []
+sources = ["compiler/eval/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "test/diff_compiler_test.sh"]
+corpus = ["test/compiler_test_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2603,7 +2643,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_test_typecheck.sh"
 oracles = []
-sources = []
+sources = ["compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "test/diff_compiler_test_typecheck.sh"]
 corpus = []
 toolchain = []
 
@@ -2616,8 +2656,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_tmc_parity.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["compiler/backend/*", "test/diff_compiler_tmc_parity.sh"]
+corpus = ["test/stack_fixtures", "test/wasm/fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2629,8 +2669,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_typecheck_errors.sh"
 oracles = ["check_main", "typecheck_main"]
-sources = []
-corpus = []
+sources = ["compiler/types/*", "test/diff_compiler_typecheck_errors.sh"]
+corpus = ["test/typecheck_error_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2642,7 +2682,7 @@ cost = "medium"
 kind = "exec"
 run = "test/diff_compiler_wasm_shim_parity.sh"
 oracles = []
-sources = []
+sources = ["playground", "playground/*", "test/diff_compiler_wasm_shim_parity.sh"]
 corpus = []
 toolchain = []
 
@@ -2656,7 +2696,7 @@ kind = "exec"
 run = "test/diff_native_cli.sh"
 oracles = []
 sources = []
-corpus = []
+corpus = ["test/diff_fixtures", "test/fmt_fixtures", "test/native_cli_fixtures", "test/native_cli_goldens", "test/repl_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -2669,7 +2709,7 @@ kind = "exec"
 run = "test/diff_native_stack.sh"
 oracles = ["llvm_emit_main", "llvm_emit_typed_main"]
 sources = []
-corpus = []
+corpus = ["test/stack_fixtures", "test/stack_fixtures_typed"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -2682,7 +2722,7 @@ kind = "exec"
 run = "test/diff_net.sh"
 oracles = []
 sources = []
-corpus = []
+corpus = ["test/net_fixtures"]
 toolchain = ["wasm-tools", "node>=24"]
 
 [[gate]]
@@ -2695,7 +2735,7 @@ kind = "exec"
 run = "test/effect_builtin_param_domain.sh"
 oracles = []
 sources = []
-corpus = []
+corpus = ["test/effect_builtin_param_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -2708,7 +2748,7 @@ kind = "exec"
 run = "test/effect_param_domain.sh"
 oracles = []
 sources = []
-corpus = []
+corpus = ["test/effect_param_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2721,7 +2761,7 @@ kind = "exec"
 run = "test/effect_product_domain.sh"
 oracles = []
 sources = []
-corpus = []
+corpus = ["test/effect_product_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2734,7 +2774,7 @@ kind = "exec"
 run = "test/effect_set_domain.sh"
 oracles = []
 sources = []
-corpus = []
+corpus = ["test/effect_set_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2773,7 +2813,7 @@ kind = "exec"
 run = "test/manifest_emit.sh"
 oracles = []
 sources = []
-corpus = []
+corpus = ["test/check_policy_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2786,7 +2826,7 @@ kind = "exec"
 run = "test/must_fail_census.sh"
 oracles = []
 sources = []
-corpus = []
+corpus = ["test/must_fail_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2798,8 +2838,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/native_fixtures/run.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["test/native_fixtures/run.sh"]
+corpus = ["test/native_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2812,7 +2852,7 @@ kind = "exec"
 run = "test/pr_helper_test.sh"
 oracles = []
 sources = []
-corpus = []
+corpus = ["test/fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2825,7 +2865,7 @@ kind = "exec"
 run = "test/registry_keying_ratchet.sh"
 oracles = []
 sources = []
-corpus = []
+corpus = ["test/check_module_fixtures", "test/shadow_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2851,7 +2891,7 @@ kind = "exec"
 run = "test/selfcompile_emit.sh"
 oracles = ["llvm_bootstrap_lex_main", "llvm_emit_modules_main"]
 sources = []
-corpus = []
+corpus = ["test/llvm_fixtures_modules"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -2863,7 +2903,7 @@ cost = "heavy"
 kind = "exec"
 run = "test/selfcompile_fixpoint.sh"
 oracles = []
-sources = []
+sources = ["compiler/backend/*"]
 corpus = []
 toolchain = ["clang"]
 
@@ -2877,7 +2917,7 @@ kind = "exec"
 run = "test/selfcompile_lex.sh"
 oracles = ["lex_main", "llvm_bootstrap_lex_main"]
 sources = []
-corpus = []
+corpus = ["test/diff_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -2890,7 +2930,7 @@ kind = "exec"
 run = "test/typecheck_compiler_source.sh"
 oracles = ["diagnostics_project_main"]
 sources = []
-corpus = []
+corpus = ["test/check_module_fixtures", "test/shadow_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -2903,7 +2943,7 @@ kind = "exec"
 run = "test/wasm/diff_gzip.sh"
 oracles = []
 sources = []
-corpus = []
+corpus = ["gzip"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
 
 [[gate]]
@@ -2915,8 +2955,8 @@ cost = "cheap"
 kind = "exec"
 run = "test/wasm/diff_playground_input.sh"
 oracles = []
-sources = []
-corpus = []
+sources = ["playground", "playground/*"]
+corpus = ["test/engine_fixtures"]
 toolchain = ["wasm-tools", "node>=24"]
 
 [[gate]]
@@ -2929,7 +2969,7 @@ kind = "exec"
 run = "test/wasm/diff_sqlite.sh"
 oracles = []
 sources = []
-corpus = []
+corpus = ["sqlite"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
 
 [[gate]]
@@ -2955,7 +2995,7 @@ kind = "exec"
 run = "test/wasm/diff_wasm_modules.sh"
 oracles = []
 sources = []
-corpus = []
+corpus = ["test/wasm/fixtures_modules"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
 
 [[gate]]
@@ -2968,7 +3008,7 @@ kind = "exec"
 run = "test/wasm/diff_wasm_typed.sh"
 oracles = []
 sources = []
-corpus = []
+corpus = ["test/llvm_fixtures", "test/wasm/fixtures_typed"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
 
 # The gate registry's own drift gate (#2176 S-4) — `area = "infra"` alongside
@@ -2985,7 +3025,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_gate_registry.sh"
 oracles = []
-sources = []
+sources = ["compiler/tools/gate_cmd.mdk", "test/diff_compiler_gate_registry.sh", "test/gates.toml"]
 corpus = []
 toolchain = []
 
