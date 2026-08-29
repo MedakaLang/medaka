@@ -103,13 +103,16 @@ macOS-only break.
 
 ## Registering a new gate in CI
 
-A gate matching `test/diff_compiler_*.sh` but with no shard pattern in `ci.yml` SILENTLY NEVER
-RUNS — `diff_compiler_ci_shard_coverage.sh` catches it. 🚨 That check's input is the TREE, not
-`test/`, so a `.sh` you add ANYWHERE trips it. If a script isn't a gate, add a
-`test/CI-COVERAGE-EXCEPTIONS.txt` row with a reason, not a rename.
+A gate matching `test/diff_compiler_*.sh` but not enrolled in `test/gates.toml` (with a
+`shard` field) SILENTLY NEVER RUNS — `medaka gate verify` (via
+`test/diff_compiler_gate_registry.sh`) catches it; it owns ENROLMENT, while
+`diff_compiler_ci_shard_coverage.sh` owns CI REACHABILITY of what is already enrolled. Enrol
+it in `test/gates.toml`, then run `make gen-ci` to regenerate `ci.yml`'s shard matrix. 🚨 That
+check's input is the TREE, not `test/`, so a `.sh` you add ANYWHERE trips it. If a script
+isn't a gate, add a `test/CI-COVERAGE-EXCEPTIONS.txt` row with a reason, not a rename.
 
-**[W-SHARD-COST]** Shards are scheduled by cost, not theme — put a new gate where there is room.
-🚨 Never trust a shard-cost ranking; derive it, every time:
+**[W-SHARD-COST]** Shards are scheduled by cost, not theme — put a new gate's `shard` field
+where there is room. 🚨 Never trust a shard-cost ranking; derive it, every time:
 ```sh
 gh run view <id> --json jobs --jq '.jobs[]|select(.name|startswith("gates"))|{name,s:((.completedAt|fromdate)-(.startedAt|fromdate))}'
 ```

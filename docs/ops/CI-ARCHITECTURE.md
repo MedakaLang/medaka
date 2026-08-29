@@ -45,7 +45,11 @@ Stated by Val; measured in the audit that preceded this doc (research session
    the test surface, with the same "which gates exist and who runs them" fact
    hand-maintained in three consumers (ci.yml patterns, test/preflight.sh's path map,
    test/diff_compiler_ci_shard_coverage.sh + test/CI-COVERAGE-EXCEPTIONS.txt) — the
-   [W-THIRD-CONSUMER] bookkeeping.
+   [W-THIRD-CONSUMER] bookkeeping. **Two of the three are closed as of #2177:** the
+   ci.yml matrix is generated from `test/gates.toml` (S-2) and drift-gated (S-3), and
+   the coverage gate reads the registry's `shard` field instead of re-parsing that
+   matrix (S-4, `docs/ops/GATE-REGISTRY-DESIGN.md` §8). `test/preflight.sh`'s path map
+   is the remaining hand-maintained copy.
 
 ## 2. Patterns adopted from other language projects
 
@@ -79,14 +83,105 @@ What this retires: the three-consumer bookkeeping becomes three *readers of one
 artifact*; "a gate exists but nothing runs it" becomes impossible by construction
 rather than caught after the fact.
 
-### 3.2 Generated ci.yml (#2177)
+### 3.2 Generated ci.yml (#2177) — AS LANDED
 
-The gate-shard matrix and named-gate steps are generated from the registry into marked
-regions of ci.yml; a required, cheap, always-running check regenerates and
-`git diff --exit-code`s. Hand scaffolding (triggers, detect, build-once, caching)
-stays hand-written. Byte-determinism rules follow test/gen_docs_index.sh (pin
-`LC_ALL=C`). This is the smallest registry consumer and lands before scheduling or
-scoping build on it.
+**Generated:** the `gates` job's eight-row `matrix.include:` block, and only that.
+`medaka gate ci` (`make gen-ci`) reads `test/gates.toml` in-process — the same
+`parseRegistry`/`parseShards` path `medaka gate list` answers from, never a re-parse
+of `--json` through a shell pipe — and rewrites everything between one marker pair in
+`.github/workflows/ci.yml`:
+
+```yaml
+          # GENERATED:BEGIN gates-matrix — `make gen-ci` (medaka gate ci) from test/gates.toml. DO NOT EDIT BY HAND.
+          ...
+          # GENERATED:END gates-matrix
+```
+
+Both markers are whole YAML comment lines at the block's own indent, and the generator
+refuses a file that does not carry exactly one of each in order. Per row: the order and
+`name` come from `[[shard]]`'s file order; `full_cores:`/`wasm_arm:` are emitted **only
+when true** (ci.yml's key-omitted-when-false convention is the generator's encoding of
+`false`, which is why the registry insists the boolean is *present*); the comment block
+is the row's `rationale` file (`test/gate_shards/<row>.txt`) verbatim, one `# ` prefix
+per line, a bare `#` for a blank one; and `pattern:` names every `[[gate]]` whose
+`shard` is that row.
+
+**`pattern:` is a literal name list, not the hand-written globs it replaced.** The
+registry records one `shard` per gate and no globs, so the resolved gate-name list is
+the only thing derivable from it; byte-identity with the old strings is unreachable and
+was not attempted. What is preserved — and what `run_gates.sh` actually consumes — is
+the SET each row resolves to under the two-glob rule (`test/<pat>.sh` and `<pat>.sh`
+from the repo root). Verified at landing for all eight rows, no sampling: identical
+sets, 201 gates, empty diff. Token order inside a row is registry declaration order.
+
+**Hand-written, and deliberately so:** everything else in ci.yml — triggers, `detect`,
+build-once, caching, the per-shard steps, and **all named-gate steps** in
+`soundness`/`compiler-soundness`/`wasm`. The named-gate steps are not generated because
+the registry cannot say which job runs which: `shard = "other-job"` is one sentinel
+covering seven jobs, and no other field discriminates them.
+`check_fingerprint_parity` and `check_keyword_sync` carry identical values in every
+scheduling field (`area = "types"`, `shard = "other-job"`, `project = "compiler"`,
+`tier = "merge"`, `cost = "cheap"`, `kind = "exec"`), yet the first is a step of
+`compiler-soundness` under that job's `needs.detect` guard and the second is a step of
+`soundness`, which ci.yml documents as deliberately *unguarded*. Generating them would
+mean hard-coding a job→gate-name table in the generator — moving the authority out of
+ci.yml without moving it into the registry. Their coverage is a reachability question
+(`diff_compiler_ci_shard_coverage.sh` counts a literal name in a step as covering that
+gate) and belongs to #2191's gate-registry verification, not here. Modelling job
+placement per entry would be a registry schema change, not a generator change.
+
+S-4 (#2177) sharpened that reachability question rather than answering it with a new
+field: an `other-job` entry must now be named by a real `run:` step **or** be on
+`test/CI-COVERAGE-EXCEPTIONS.txt`, and one that is neither reds. The registry still
+does not record *which* job — that stays a workflow fact, scanned, not declared. See
+`docs/ops/GATE-REGISTRY-DESIGN.md` §8 for the full division of labour.
+
+**Byte-determinism** follows `test/gen_docs_index.sh`: every list is a fold over file
+order — no sort, no locale-sensitive comparison, nothing read from the environment —
+and `make gen-ci` pins `LC_ALL=C` anyway so the two generators keep one story.
+Regeneration is idempotent and writes only on a real change.
+
+**Drift gate — AS LANDED (S-3, #2177), REWORKED (F-1).** The drift check is
+`LC_ALL=C medaka gate ci --check`: it computes the generated text and compares it
+IN MEMORY to the file on disk, writing nothing and shelling to no `git`.
+
+S-3 originally shipped the `docs/README.md` shape — regenerate, then
+`git diff --exit-code -- .github/workflows/ci.yml` — and the end-of-sprint review
+found that shape has two defects sharing one root cause. It **heals what it checks**:
+an uncommitted hand-edit inside the region is overwritten by the write step before the
+diff runs, so the gate passes having silently destroyed the edit (S0). And it
+**misattributes**: `git diff` on the whole file also fires on an uncommitted edit
+entirely OUTSIDE the generated region, then blames the region. `--check` has neither
+property, and its scoping is by construction rather than by convention: `ciNewText`
+copies every line before the BEGIN marker and every line from the END marker onward
+verbatim, so an edit outside the region appears identically on both sides of the
+compare and can never make the check fire.
+
+The contract's §3.2 named two ways to resolve the tension
+between "cheap/always-running/required" and "the generator is in-binary": (a) a CI job
+that downloads the already-built binary artifact (`setup-medaka`, `binary: artifact`,
+same as `gates`/`compiler-soundness`/`wasm`), or (b) a text-only reimplementation
+outside the binary. **This slice takes (a)** — (b) would be a second TOML/generator
+implementation to keep in sync with the one in `compiler/tools/gate_cmd.mdk`, which
+contract §4.4/§4.6 rule out. The job (`ci-gen-drift` in `ci.yml`) is **ADVISORY ONLY**:
+it is not in the required-status-checks ruleset, because adding a required context is a
+`gh api` ruleset edit that is not atomic with a commit ([W-GH-WRITE-VERIFY]) — see this
+slice's report for the exact command to promote it once Val is ready.
+
+**Required-tier backstop (F-1).** Because that job is advisory, the review found a
+hand-edit dropping gates from a matrix row passed every REQUIRED check: after S-4's
+repoint, `test/diff_compiler_ci_shard_coverage.sh` reads shard membership from the
+registry and no longer looks at ci.yml's matrix at all. That gate — which IS required —
+now makes the same `medaka gate ci --check` assertion itself, as a plain shell step
+before its `python3` block, so matrix-vs-registry agreement is proven at the required
+tier without a ruleset edit. One mechanism, two callers; the advisory job stays for the
+faster, standalone signal.
+
+Enrolled as `diff_compiler_ci_gen_drift` in `test/gates.toml` (`shard = "other-job"`,
+its own job, not a `gates` matrix row) and in `test/preflight.sh` (the `test/gates.toml)`
+and `compiler/tools/gate_cmd.mdk)` arms, plus a new `test/gate_shards/*)` arm — not
+`.github/workflows/ci.yml` itself, which stays unmatched (falls through to the FULL
+suite) to avoid narrowing an unrelated ci.yml hand-edit's coverage.
 
 ### 3.3 Semantic identity ⊥ scheduling (#2178) — decision: option B
 

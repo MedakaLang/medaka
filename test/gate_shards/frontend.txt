@@ -1,0 +1,9 @@
+`native_fixtures/run` (T8) sits one directory below `test/`, so even
+the coverage gate's `test/*.sh` glob could not see it — it ran
+nowhere. `build_construct_coverage` (T-3, a BACKEND gate) and
+`diff_compiler_wasm_shim_parity` (#370, a WASM gate) and
+`diff_compiler_preflight_base` (#560, pure git) and
+`diff_compiler_dict_semantics` (#616, a TYPES gate) are all parked
+here by cost, not theme — each noted at length in dossier `ci.md`;
+the short version is this shard has the room and each of them is
+free-to-cheap wherever it lands.

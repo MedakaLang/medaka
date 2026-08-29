@@ -1,0 +1,57 @@
+`diff_compiler_mcp` (#253) and `diff_compiler_entry_exit_codes`
+(#440) are parked here by cost — both read no oracle and are a
+handful of cheap invocations, while `engines`/`backend` (the two
+heaviest shards) have no room to spare.
+`diff_compiler_test_typecheck` (#1229) is named EXPLICITLY, not
+globbed: its neighbour `diff_compiler_test` is an exact name, not a
+glob, so a new sibling would silently never run — the exact hazard
+`diff_compiler_ci_shard_coverage` exists to catch.
+
+#1929: `pds/test/constant_time_*` (the 4 constant-time gates) moved
+here by cost — see `S-sqlite-rebalance`'s report.
+`wasm_arm` added: `constant_time_parity.sh`/`constant_time_reductions.sh`
+read the Wasm oracle (`MEDAKA_REQUIRE_WASM`), previously covered by the
+old `sqlite` row's arm. This also pulls in a wasm-oracle-build step
+(`sh test/wasm/build_wasm_oracle.sh --modules-only`) this row did not
+need before — cheap next to the marginal `setup-medaka` toolchain
+cost of a second `wasm_arm` row, but not free; it's headroom this row
+has, not headroom this row lacked before.
+⚠️ Every shard-cost figure below is a HISTORICAL SNAPSHOT and has
+since rotted — do not plan against any of it. For the CURRENT
+per-shard cost, run `sh scripts/ci_shard_cost.sh`.
+
+#1933 (S-project-floor): `mq/test/check`, `parsec/test/check`,
+`byteparser/test/check` added here — `tools` was measured cheapest
+among `gates (*)` shards at the time this arm was placed. Each is a
+floor `./medaka check <project>/main.mdk` for a manifest-bearing
+project that previously ran in NO CI job.
+#1934 (S-derived-enrolment): `diff_compiler_project_enrolment` added
+here — `tools` was measured cheapest among `gates (*)` shards at the
+time this arm was placed, and the gate itself was sub-second. It
+belongs next to `diff_compiler_ci_shard_coverage`: both police the map
+between what exists in the tree and what CI actually runs.
+#1971 (S-guard-failsafe-gate): `diff_compiler_ci_guard_failsafe` added
+here — `tools` is the established home for this whole family of
+cheap, single-YAML-file-parsing meta-gates (it already holds
+`diff_compiler_ci_shard_coverage` and `diff_compiler_project_enrolment`,
+both added to this exact shard for the same reason), and this gate
+is the same shape: one `python3` pass over `ci.yml`, no build, no
+corpus, sub-second locally. Not independently re-measured via
+`scripts/ci_shard_cost.sh` — the marginal cost was judged negligible
+next to this shard's pole and its two nearest cousins already
+justified residence here on identical reasoning.
+S-shadow-census-gate (#2153): diff_compiler_prelude_shadow_census
+added here by measured cost -- `tools` was the cheapest `gates (*)`
+shard by the placement notes above at the time this arm was
+placed (the established home for this cheap-meta-gate family
+already includes ci_shard_coverage/project_enrolment/
+ci_guard_failsafe). Measured locally: ~90s, single-threaded, no
+fan-out knob (full 57-name check+run+build census). Not `types`:
+that shard is already documented as "decisively the new pole"
+at ~1018s (ci.yml's own `types` row comment).
+S-4-gate-verify (#2176/#2191): diff_compiler_gate_registry added
+here — same family as ci_shard_coverage/project_enrolment/
+ci_guard_failsafe/prelude_shadow_census (a cheap, single-pass
+meta-gate policing a map, not compiler output), and `tools` is
+that family's established home. Text-only, no build beyond the
+already-built `./medaka`; measured sub-second locally.

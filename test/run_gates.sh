@@ -27,6 +27,14 @@
 #       as benign. A gate that fails its own syntax check is reported as a
 #       distinct "SYNTAX ERROR"/BROKEN status (st=3), never folded into the
 #       phantom-skip path.
+#
+# NOTE: gate REGISTRATION (which gates exist, their shard) now lives in
+# test/gates.toml, the registry of record — read/verify/explain it with
+# `medaka gate list`/`verify`/`explain`, and generate ci.yml's shard matrix
+# from it with `make gen-ci`. This script still discovers and RUNS gates by
+# globbing test/diff_compiler_*.sh directly — that is unchanged for now (the
+# registry's rollout is ordered: generator first, done; preflight and this
+# runner's own oracle/gate derivation follow in later, separate changes).
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

@@ -1,0 +1,16 @@
+`build_cmd` (T8) is the end-to-end gate for the SHIPPING `medaka
+build` CLI — 14 real programs, stdout diffed against a committed
+golden. It was once misfiled as a "build helper" in
+CI-COVERAGE-TOOLS.txt (a false claim that running it proves nothing
+about the compiler), which made the coverage gate subtract it from
+its own scope and certify full coverage while nothing invoked it —
+see dossier `ci.md` for the incident it would have caught.
+`diff_compiler_index_oob` (#1787) is parked here by cost, its nearest
+sibling by shape (`diff_compiler_slice_oob`) sitting in `eval`
+instead because the cost ranking has inverted more than once —
+re-derive with `scripts/ci_shard_cost.sh` before moving either.
+
+Legacy PDS vector gates remain here by cost. They are named
+explicitly so Phase 1's required-Wasm gates belong only to the
+dedicated `pds` row above; coverage classification fails closed
+when a future gate has no deliberate placement.

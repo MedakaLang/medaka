@@ -5,7 +5,8 @@
    language), `medaka gate run [<selector>...]`, which EXECUTES the selected
    gates, `medaka gate verify` (the drift gate: TEXT-ONLY, no build — every
    gate candidate enrolled-or-ledgered, every entry's `run`/`oracles`/`corpus`
-   targets exist, every entry reachable by a selector) and `medaka gate
+   targets exist, every entry reachable by a selector, every `name` unique)
+   and `medaka gate
    explain <path>` (the reverse lookup: which entries does a CHANGED PATH
    select, via which `sources` glob or `corpus` directory, and what the
    registry-level fail-open policy says about it —
@@ -31,7 +32,7 @@
    deliberately: a mistyped pattern that silently selects nothing is how a
    shard certifies coverage of a gate that never ran. -}
 
-import toml.{Toml, parse, getString, getArray, tableCount, tableEntry}
+import toml.{Toml, parse, getString, getArray, getBool, tableCount, tableEntry}
 import json.{Json, JString, JInt, JFloat, JBool, jArray, jObject, stringify}
 import driver.build_cmd.{envOr, defaultMedakaRoot}
 import support.path.{joinPath}
@@ -54,15 +55,21 @@ import support.util.{
 -- ── The entry schema ────────────────────────────────────────────────────────
 -- One `[[gate]]` table in `test/gates.toml` per gate.  Every field below is
 -- REQUIRED to be present in the file, list fields included: an absent list is
--- an error, not an empty list.  `sources`/`corpus` are populated in a later
--- slice, so today they are present-and-empty on every entry — which is a
--- different fact from "this gate has no sources", and the reader must not
--- blur the two by defaulting.
+-- an error, not an empty list — a present-and-empty `sources` is a different
+-- fact from "this gate has no sources", and the reader must not blur the two
+-- by defaulting.
+--
+-- `shard` (S-1, #2177) is the ci.yml `gates` matrix ROW this gate runs in, or
+-- the sentinel `other-job` for a gate some other workflow job schedules.  The
+-- row's own options and placement prose live in the sibling `[[shard]]` table
+-- (`Shard`, below), not on the entry — they are per-ROW facts, and putting
+-- them on 227 entries would be 227 chances for a row to disagree with itself.
 
 public export data Gate =
   | Gate {
       name : String,
       area : String,
+      shard : String,
       project : String,
       tier : String,
       cost : String,
@@ -95,6 +102,7 @@ readGate doc i =
   do
     name <- reqStr i "name" e
     area <- reqStr i "area" e
+    shard <- reqStr i "shard" e
     project <- reqStr i "project" e
     tier <- reqStr i "tier" e
     cost <- reqStr i "cost" e
@@ -108,6 +116,7 @@ readGate doc i =
       Gate {
         name = name,
         area = area,
+        shard = shard,
         project = project,
         tier = tier,
         cost = cost,
@@ -143,6 +152,82 @@ parseRegistry src = match parse src
       Err "gates.toml: no [[gate]] entries found"
     else
       readGatesFrom doc 0 n []
+
+-- ── The `gates` matrix rows ─────────────────────────────────────────────────
+-- One `[[shard]]` per row of ci.yml's `gates` job matrix.  A gate's `shard`
+-- field names one of these; the row carries what the MATRIX needs and the gate
+-- does not — the runner options, and the placement rationale.
+--
+-- `rationale` is a PATH (`test/gate_shards/<name>.txt`), not the prose itself:
+-- the TOML subset this reader is built on has no multi-line string, and 180
+-- lines of English on one line would be worse than no home at all.  Nothing
+-- here reads that file — `medaka gate list --shards` prints the path, and the
+-- ci.yml generator (S-2) is what will read it and emit it verbatim as the
+-- row's comment block.
+
+public export data Shard =
+  | Shard {
+      name : String,
+      fullCores : Bool,
+      wasmArm : Bool,
+      rationale : String,
+    }
+
+shardStr : Int -> String -> Toml -> Result String String
+shardStr i field entry = match getString field entry
+  Some s => Ok s
+  None => Err "gates.toml: [[shard]] #\{intToString i}: missing required string field '\{field}'"
+
+-- Present-or-error, like every other field: an ABSENT `wasm_arm` must not
+-- silently read as `false`.  In ci.yml the key IS absent when the option is
+-- off, but that is the GENERATOR's encoding of `false`, not the registry's —
+-- a row that simply forgot the key would otherwise lose its Wasm toolchain
+-- and take its gates' Wasm arms down quietly with it.
+shardBool : Int -> String -> Toml -> Result String Bool
+shardBool i field entry = match getBool field entry
+  Some b => Ok b
+  None => Err "gates.toml: [[shard]] #\{intToString i}: missing required boolean field '\{field}'"
+
+readShard : Toml -> Int -> Result String Shard
+readShard doc i =
+  let e = tableEntry "shard" i doc
+  do
+    name <- shardStr i "name" e
+    fullCores <- shardBool i "full_cores" e
+    wasmArm <- shardBool i "wasm_arm" e
+    rationale <- shardStr i "rationale" e
+    Ok
+      Shard {
+        name = name,
+        fullCores = fullCores,
+        wasmArm = wasmArm,
+        rationale = rationale,
+      }
+
+readShardsFrom : Toml -> Int -> Int -> List Shard -> Result String (List Shard)
+readShardsFrom doc i n acc
+  | i >= n = Ok (reverseShards acc [])
+  | otherwise = match readShard doc i
+    Err m => Err m
+    Ok sh => readShardsFrom doc (i + 1) n (sh::acc)
+
+reverseShards : List Shard -> List Shard -> List Shard
+reverseShards [] acc = acc
+reverseShards (s::ss) acc = reverseShards ss (s::acc)
+
+{- | Parse a registry's `[[shard]]` rows, in file order.  A registry with no
+   rows is an error for the same reason one with no gates is: "the repo
+   schedules nothing" must not be a quiet, well-formed answer. -}
+export
+parseShards : String -> Result String (List Shard)
+parseShards src = match parse src
+  Err m => Err "gates.toml: \{m}"
+  Ok doc =>
+    let n = tableCount "shard" doc
+    if n == 0 then
+      Err "gates.toml: no [[shard]] entries found"
+    else
+      readShardsFrom doc 0 n []
 
 -- ── Glob matching ───────────────────────────────────────────────────────────
 -- `*` matches any run of characters (path separators included — the registry's
@@ -290,6 +375,7 @@ gateJson g = jObject
   [
     ("name", JString g.name),
     ("area", JString g.area),
+    ("shard", JString g.shard),
     ("project", JString g.project),
     ("tier", JString g.tier),
     ("cost", JString g.cost),
@@ -307,6 +393,31 @@ export
 renderJson : List Gate -> String
 renderJson gs = stringify (jArray (map gateJson gs))
 
+shardJson : Shard -> Json
+shardJson sh = jObject
+  [
+    ("name", JString sh.name),
+    ("full_cores", JBool sh.fullCores),
+    ("wasm_arm", JBool sh.wasmArm),
+    ("rationale", JString sh.rationale),
+  ]
+
+{- | `--shards --json`: the matrix rows as a JSON array, in registry order. -}
+export
+renderShardsJson : List Shard -> String
+renderShardsJson shs = stringify (jArray (map shardJson shs))
+
+boolWord : Bool -> String
+boolWord b = if b then "true" else "false"
+
+{- | `--shards`: one line per matrix row.  Deliberately not a table — this is
+   read by people checking a row against ci.yml, and by `grep`. -}
+export
+renderShards : List Shard -> String
+renderShards [] = ""
+renderShards (sh::shs) = "\{sh.name}: full_cores=\{boolWord sh.fullCores} wasm_arm=\{boolWord sh.wasmArm} rationale=\{sh.rationale}\n"
+  ++ renderShards shs
+
 -- ── CLI ─────────────────────────────────────────────────────────────────────
 
 export
@@ -317,11 +428,13 @@ gateHelpText = stringConcat
     "\n",
     "Usage:\n",
     "  medaka gate list    [<selector>...] [--json] [--registry <path>]\n",
+    "  medaka gate list    --shards [--json] [--registry <path>]\n",
     "  medaka gate run     [<selector>...] [--dry-run] [--json] [--report <path>]\n",
     "                      [--timeout <secs>] [--jobs <n>] [--no-stale-check]\n",
     "                      [--registry <path>]\n",
     "  medaka gate verify  [--registry <path>]\n",
-    "  medaka gate explain <path> [--registry <path>]\n",
+    "  medaka gate explain <path> [--prose] [--registry <path>]\n",
+    "  medaka gate ci      [--check] [--registry <path>] [--workflow <path>]\n",
     "\n",
     "Selectors (conjunction — a gate must match all of them):\n",
     "  name:<glob>      gate name, e.g. name:diff_compiler_*\n",
@@ -333,6 +446,7 @@ gateHelpText = stringConcat
     "A selector matching zero gates is an error, not an empty list.\n",
     "\n",
     "  --json             list: the registry entries as JSON.\n",
+    "  --shards           list: the ci.yml `gates` matrix rows, not the gates.\n",
     "                     run: the machine-readable run report as JSON.\n",
     "  --registry <path>  read this registry instead of <MEDAKA_ROOT>/test/gates.toml\n",
     "\n",
@@ -354,8 +468,27 @@ gateHelpText = stringConcat
     "`gate verify` is the drift gate: text-only, no build. Checks every gate\n",
     "candidate (test/preflight.sh's own candidate universe) is enrolled or\n",
     "explicitly listed as a non-gate tool, every entry's run/oracles/corpus\n",
-    "targets exist, and every entry is reachable by a selector. Exits nonzero\n",
+    "targets exist, every entry is reachable by a selector, and no two entries\n",
+    "share a `name`. Exits nonzero\n",
     "on any violation.\n",
+    "\n",
+    "`gate ci` regenerates the marked GENERATED region in\n",
+    ".github/workflows/ci.yml — the `gates` job's eight-row matrix — from\n",
+    "the registry's [[shard]] rows and every entry's `shard` field. Run it\n",
+    "via `make gen-ci`.\n",
+    "\n",
+    "  --check            ci: compare only — compute the generated text and\n",
+    "                     compare it IN MEMORY to the file on disk, writing\n",
+    "                     nothing. Exit 0 when they agree, 1 with the first\n",
+    "                     differing line when they do not. This is the drift\n",
+    "                     check; regenerating first would heal an uncommitted\n",
+    "                     hand-edit before any diff could see it, and diffing\n",
+    "                     the whole file would also fire on an edit OUTSIDE\n",
+    "                     the generated region.\n",
+    "\n",
+    "The named-gate steps in soundness/wasm are NOT\n",
+    "generated — the registry cannot say which job runs which (see the\n",
+    "`gate ci` section of compiler/tools/gate_cmd.mdk).\n",
     "\n",
     "`gate explain <path>` is the reverse lookup: which entries select a\n",
     "changed path, and why. Two layers, printed with preflight's own prefixes:\n",
@@ -363,17 +496,29 @@ gateHelpText = stringConcat
     "an unmatched non-prose path; UNMAPPED alone on prose), then per-entry\n",
     "`sources` globs and `corpus` directories on GATE lines. A bare token that\n",
     "is also a field value (name/area/project/tier/run) gets TOKEN lines.\n",
+    "\n",
+    "`gate explain --prose <path>` prints ONLY layer 1b's verdict, `PROSE` or\n",
+    "`NONDOC`, and reads no registry. It exists so that\n",
+    "test/diff_compiler_prose_classifier.sh can diff this classifier against\n",
+    "the one .github/workflows/ci.yml's `detect` job runs (#2200).\n",
   ]
 
 -- Parsed `gate list` argv.
 data ListArgs =
-  | ListArgs { json : Bool, registry : Option String, selectors : List String }
+  | ListArgs {
+      json : Bool,
+      shards : Bool,
+      registry : Option String,
+      selectors : List String,
+    }
 
 parseListArgs : List String -> ListArgs -> Result String ListArgs
 parseListArgs [] acc =
   Ok ListArgs { acc | selectors = reverseStrs acc.selectors [] }
 parseListArgs ("--json"::rest) acc =
   parseListArgs rest ListArgs { acc | json = True }
+parseListArgs ("--shards"::rest) acc =
+  parseListArgs rest ListArgs { acc | shards = True }
 parseListArgs ("--registry"::p::rest) acc =
   parseListArgs rest ListArgs { acc | registry = Some p }
 parseListArgs ("--registry"::[]) _ =
@@ -412,7 +557,7 @@ registryPath None =
 -- command a SINGLE exit site (`emit`), so no error path can grow a
 -- print-without-exit or an exit-without-print.
 listOutput : List String -> <IO> Result String String
-listOutput argv = match parseListArgs argv ListArgs { json = False, registry = None, selectors = [] }
+listOutput argv = match parseListArgs argv ListArgs { json = False, shards = False, registry = None, selectors = [] }
   Err m => Err m
   Ok a => match parseSelectors a.selectors []
     Err m => Err "medaka gate list: \{m}"
@@ -420,10 +565,25 @@ listOutput argv = match parseListArgs argv ListArgs { json = False, registry = N
       let path = registryPath a.registry
       match readFile path
         Err m => Err "medaka gate list: cannot read registry: \{m}"
-        Ok src => match parseRegistry src
+        Ok src => if a.shards then shardsOutput a.json a.selectors src
+        else match parseRegistry src
           Err m => Err "medaka gate list: \{m}"
           Ok gates =>
             selectionOutput a.json a.selectors (selectGates sels gates) path
+
+-- `--shards` lists the MATRIX ROWS, which selectors do not range over — a
+-- selector is a per-gate predicate, and silently ignoring one here would let
+-- `list --shards area:eval` look like it had filtered something.
+shardsOutput : Bool -> List String -> String -> Result String String
+shardsOutput isJson tokens src
+  | not (isEmptyStrs tokens) = Err "medaka gate list: --shards takes no selectors (got: \{joinSpace tokens})"
+  | otherwise = match parseShards src
+    Err m => Err "medaka gate list: \{m}"
+    Ok shs =>
+      if isJson then
+        Ok (renderShardsJson shs ++ "\n")
+      else
+        Ok (renderShards shs)
 
 -- A selector that selects nothing is a HARD ERROR (see the module header).
 selectionOutput : Bool -> List String -> List Gate -> String -> Result String String
@@ -457,14 +617,15 @@ export
 runGateCmd : List String -> <IO> Unit
 runGateCmd [] =
   emit (Err
-    "usage: medaka gate <list|run|verify|explain> [<selector>...] [--json]")
+    "usage: medaka gate <list|run|verify|explain|ci> [<selector>...] [--json]")
 runGateCmd ("list"::rest) = emit (listOutput rest)
 runGateCmd ("run"::rest) = runRunCmdBody rest
 runGateCmd ("verify"::rest) = verifyCmdBody rest
 runGateCmd ("explain"::rest) = explainCmdBody rest
+runGateCmd ("ci"::rest) = ciCmdBody rest
 runGateCmd (sub::_) =
   emit (Err
-    "medaka gate: unknown subcommand '\{sub}' (expected: list, run, verify, explain)")
+    "medaka gate: unknown subcommand '\{sub}' (expected: list, run, verify, explain, ci)")
 
 -- ── `gate run` ──────────────────────────────────────────────────────────────
 --
@@ -1301,7 +1462,34 @@ corpusTargetViolations _ [] = []
 corpusTargetViolations root (g::gs) = corpusDirsMissing root g.name g.corpus
   ++ corpusTargetViolations root gs
 
--- ── assembling and rendering the five classes ───────────────────────────────
+-- Check 6 (#2199): entry `name`s are UNIQUE.  Two entries sharing a name were
+-- merely redundant while the registry only described gates; with `shard` on
+-- the entry they are a GENERATION HAZARD — "which matrix row does `foo` go
+-- in" stops having one answer, and the generator would have to pick, silently.
+-- Nothing else catches it: `run` targets, oracles and corpora would all still
+-- exist, and check 4's reachability is satisfied by EITHER twin.
+gateNames : List Gate -> List String
+gateNames [] = []
+gateNames (g::gs) = g.name :: gateNames gs
+
+countName : String -> List Gate -> Int
+countName _ [] = 0
+countName n (g::gs) = (if g.name == n then 1 else 0) + countName n gs
+
+dupNameFrom : List Gate -> List String -> List String
+dupNameFrom _ [] = []
+dupNameFrom gates (n::ns) =
+  let k = countName n gates
+  let rest = dupNameFrom gates ns
+  if k > 1 then
+    "\{n}: \{intToString k} entries share this name — a gate's shard row must not be ambiguous"::rest
+  else
+    rest
+
+duplicateNameViolations : List Gate -> List String
+duplicateNameViolations gates = dupNameFrom gates (sortUniqS (gateNames gates))
+
+-- ── assembling and rendering the six classes ────────────────────────────────
 
 verifyClasses : String -> List Gate -> <IO> Result String (List (String, List String))
 verifyClasses root gates = match gateCandidates root
@@ -1317,6 +1505,7 @@ verifyClasses root gates = match gateCandidates root
         ("missing oracle targets", oracleTargetViolations known gates),
         ("missing corpus targets", corpusTargetViolations root gates),
         ("unreachable entries", reachabilityViolations gates gates),
+        ("duplicate entry names", duplicateNameViolations gates),
       ]
 
 renderClass : (String, List String) -> String
@@ -1442,6 +1631,28 @@ isProsePath p
   | endsWith ".md" p = True
   | otherwise = False
 
+{- | `medaka gate explain --prose <path>`: layer 1b's verdict ALONE, on one
+   line, reading no registry at all.
+
+   This is not a convenience.  `explainOutput` prints the prose note only when
+   NO entry claims the path, so a `docs/` path some entry's `sources` happened
+   to match would print GATE lines and never reveal its prose verdict — which
+   makes the full `explain` output unusable as a classifier probe.  This
+   surface is what test/diff_compiler_prose_classifier.sh (#2200) diffs,
+   path by path, against the `case` block ci.yml's `detect` job actually runs
+   (extracted from ci.yml between its `PROSE-ALLOWLIST:BEGIN`/`:END` markers
+   and executed, not re-implemented) — the two hand-written copies of one
+   allowlist now have a check tying them together.
+
+   > proseVerdict "docs/ops/CI-ARCHITECTURE.md"
+   "PROSE\n"
+
+   > proseVerdict "test/gates.toml"
+   "NONDOC\n" -}
+export
+proseVerdict : String -> String
+proseVerdict p = if isProsePath p then "PROSE\n" else "NONDOC\n"
+
 -- Layer 2: per-entry matching.
 
 wholeTreeGlob : String -> Bool
@@ -1566,7 +1777,7 @@ explainOutput path gates =
         renderGateLines hits ++ wt ++ tok
 
 data ExplainArgs =
-  | ExplainArgs { registry : Option String, path : Option String }
+  | ExplainArgs { registry : Option String, path : Option String, prose : Bool }
 
 parseExplainArgs : List String -> ExplainArgs -> Result String ExplainArgs
 parseExplainArgs [] acc = Ok acc
@@ -1574,6 +1785,8 @@ parseExplainArgs ("--registry"::p::rest) acc =
   parseExplainArgs rest ExplainArgs { acc | registry = Some p }
 parseExplainArgs ("--registry"::[]) _ =
   Err "medaka gate explain: --registry needs a path"
+parseExplainArgs ("--prose"::rest) acc =
+  parseExplainArgs rest ExplainArgs { acc | prose = True }
 parseExplainArgs (a::rest) acc
   | stringLength a > 0 && stringSlice 0 1 a == "-" =
     Err "medaka gate explain: unknown flag: \{a}"
@@ -1582,17 +1795,289 @@ parseExplainArgs (a::rest) acc
     None => parseExplainArgs rest ExplainArgs { acc | path = Some a }
 
 explainCmdBody : List String -> <IO> Unit
-explainCmdBody argv = match parseExplainArgs argv ExplainArgs { registry = None, path = None }
+explainCmdBody argv = match parseExplainArgs argv ExplainArgs { registry = None, path = None, prose = False }
   Err m => emit (Err m)
   Ok a => match a.path
-    None => emit (Err "usage: medaka gate explain <path> [--registry <path>]")
-    Some tok =>
+    None => emit (Err "usage: medaka gate explain <path> [--prose] [--registry <path>]")
+    Some tok => if a.prose then putStr (proseVerdict tok)
+    else
       let path = registryPath a.registry
       match readFile path
         Err m => emit (Err "medaka gate explain: cannot read registry: \{m}")
         Ok src => match parseRegistry src
           Err m => emit (Err "medaka gate explain: \{m}")
           Ok gates => putStr (explainOutput tok gates)
+
+-- ── `gate ci` — regenerate ci.yml's generated regions ───────────────────────
+--
+-- `medaka gate ci` (via `make gen-ci`) rewrites the ONE marked region in
+-- `.github/workflows/ci.yml`: the `gates` job's `matrix.include:` block.  Each
+-- of the eight rows is a pure function of the registry — the `[[shard]]` row
+-- (its runner options and the path to its placement prose) plus every
+-- `[[gate]]` whose `shard` names it — so the matrix can no longer disagree
+-- with the data `medaka gate list` answers from.
+--
+-- Marker convention, following `docs/README.md`'s (`test/gen_docs_index.sh`):
+-- a GENERATED region is delimited by two YAML comment lines at the region's
+-- own indent, the file is otherwise hand-written, and regeneration is
+-- idempotent.  The drift check is `medaka gate ci --check`, which compares in
+-- memory and writes nothing — NOT `make gen-ci && git diff --exit-code`, which
+-- heals an uncommitted hand-edit inside the region before the diff can see it
+-- and also fires on an edit outside the region.
+--
+-- ⚠️ PATTERN BYTE-ORDER IS NOT PRESERVED, ON PURPOSE.  ci.yml's rows were
+-- hand-written as GLOBS (`'diff_compiler_lex*'`); the registry stores one
+-- `shard` per gate and no globs, so the only thing derivable from it is the
+-- resolved gate-NAME list.  The generated `pattern:` therefore names every
+-- gate in the row literally, in registry declaration order.  What is preserved
+-- is what run_gates.sh actually consumes: the SET of gates each row resolves
+-- to (contract §7.2(b)).  Quoting is reproduced exactly and is load-bearing on
+-- both layers — outer double quotes make one YAML scalar, inner single quotes
+-- survive into `sh` unexpanded (run_gates.sh runs under dash).
+--
+-- ⚠️ THE NAMED-GATE STEPS ARE NOT GENERATED, AND THAT IS A MEASUREMENT, NOT AN
+-- OMISSION.  `soundness`/`compiler-soundness`/`wasm` invoke gates by literal
+-- name rather than through a shard pattern, and the registry cannot say which
+-- job runs which: `shard = "other-job"` is one sentinel covering seven
+-- different jobs (S-1's report §7).  The counterexample is exact —
+-- `check_fingerprint_parity` and `check_keyword_sync` carry IDENTICAL values
+-- in every scheduling field (`area = "types"`, `shard = "other-job"`,
+-- `project = "compiler"`, `tier = "merge"`, `cost = "cheap"`,
+-- `kind = "exec"`), yet the first is a step of `compiler-soundness` under that
+-- job's `needs.detect` guard and the second is a step of `soundness`, which
+-- ci.yml documents as DELIBERATELY UNGUARDED ("guarding a doc gate on
+-- docs_only would skip it on precisely the PRs it exists to police").
+-- Generating those steps would mean hard-coding a job -> gate-name table HERE,
+-- which relocates the authority from ci.yml into this file without making the
+-- registry the source of truth — strictly worse than the hand-written steps it
+-- would replace.  Their coverage is a reachability question
+-- (`diff_compiler_ci_shard_coverage.sh` already counts a literal name in a
+-- step as covering that gate), not a placement one, and it belongs to S-4.
+--
+-- Byte-determinism: every list below is a fold over FILE ORDER (the registry's
+-- own `[[shard]]` and `[[gate]]` order) — no sort, no locale-sensitive
+-- comparison, nothing read from the environment.  `make gen-ci` still exports
+-- `LC_ALL=C` as `test/gen_docs_index.sh` does, so the two generators keep one
+-- story about reproducibility even though this one has no `sort` to pin.
+
+-- The workflow file, and the region markers inside it.  Both markers are
+-- matched as WHOLE LINES at the matrix's own indent, so a mention of either
+-- string in prose elsewhere in the file cannot be mistaken for the region.
+ciWorkflowRel : String
+ciWorkflowRel = ".github/workflows/ci.yml"
+
+ciMatrixBegin : String
+ciMatrixBegin = "          # GENERATED:BEGIN gates-matrix — `make gen-ci` (medaka gate ci) from test/gates.toml. DO NOT EDIT BY HAND."
+
+ciMatrixEnd : String
+ciMatrixEnd = "          # GENERATED:END gates-matrix"
+
+-- One line of a row's placement prose, as a YAML comment at the field indent.
+-- A blank prose line becomes a bare `#`, never `# ` — a trailing space is
+-- invisible in review and would make the output differ from a hand-edit.
+ciProseLine : String -> String
+ciProseLine "" = "            #"
+ciProseLine l = "            # \{l}"
+
+-- Drop the single empty segment `splitNl` leaves for a file's trailing
+-- newline.  A prose file with a genuine blank LAST line would lose it; that is
+-- the same normalization every other consumer of these files applies, and a
+-- trailing blank comment line carries nothing.
+dropTrailBlank : List String -> List String
+dropTrailBlank [] = []
+dropTrailBlank (x::[])
+  | x == "" = []
+  | otherwise = [x]
+dropTrailBlank (x::xs) = x :: dropTrailBlank xs
+
+-- `'a' 'b' 'c'` — the inner single-quoted token list of a row's pattern.
+ciQuotedNames : List Gate -> String
+ciQuotedNames [] = ""
+ciQuotedNames (g::[]) = "'\{g.name}'"
+ciQuotedNames (g::gs) = "'\{g.name}' \{ciQuotedNames gs}"
+
+-- The gates of one row, in registry order.
+ciShardGates : String -> List Gate -> List Gate
+ciShardGates nm gs = filterList (g => g.shard == nm) gs
+
+-- A `"1"` matrix key is emitted ONLY when the option is on — ci.yml omits the
+-- key entirely when off, and that asymmetry is the file's convention, not the
+-- registry's (`shardBool` insists the boolean is present in the registry for
+-- exactly this reason).
+ciOptLine : String -> Bool -> List String
+ciOptLine _ False = []
+ciOptLine key True = ["            \{key}: \"1\""]
+
+ciRowLines : List Gate -> List String -> Shard -> List String
+ciRowLines rowGates prose sh = ["          - name: \{sh.name}"]
+  ++ map ciProseLine prose
+  ++ ["            pattern: \"\{ciQuotedNames rowGates}\""]
+  ++ ciOptLine "full_cores" sh.fullCores
+  ++ ciOptLine "wasm_arm" sh.wasmArm
+
+-- Build one row, reading its prose file.  A row with NO gates is a hard error:
+-- ci.yml's own `plan` step fails such a shard with `::error::pattern matched NO
+-- gates`, and emitting the empty pattern that produces it would be generating
+-- a known-broken file.
+ciOneRow : String -> List Gate -> Shard -> <IO> Result String (List String)
+ciOneRow root gates sh = match ciShardGates sh.name gates
+  [] => Err "medaka gate ci: shard '\{sh.name}' has no gates in the registry — a row with an empty pattern fails its own shard in CI"
+  rowGates => match readFile (joinPath root sh.rationale)
+    Err m => Err "medaka gate ci: shard '\{sh.name}': cannot read rationale \{sh.rationale}: \{m}"
+    Ok src => Ok (ciRowLines rowGates (dropTrailBlank (splitNl src)) sh)
+
+ciRowsLoop : String -> List Gate -> List Shard -> List String -> <IO> Result String (List String)
+ciRowsLoop _ _ [] acc = Ok (reverseL acc)
+ciRowsLoop root gates (sh::shs) acc = match ciOneRow root gates sh
+  Err m => Err m
+  Ok ls => ciRowsLoop root gates shs (reverseL ls ++ acc)
+
+-- Is every gate's `shard` either a declared row or the `other-job` sentinel?
+-- A typo'd shard name would otherwise drop that gate from the matrix SILENTLY
+-- — the gate stays in the registry, answers `gate list`, and runs nowhere.
+ciKnownShard : List Shard -> String -> Bool
+ciKnownShard _ "other-job" = True
+ciKnownShard [] _ = False
+ciKnownShard (sh::shs) nm = sh.name == nm || ciKnownShard shs nm
+
+ciUnknownShards : List Shard -> List Gate -> List String
+ciUnknownShards _ [] = []
+ciUnknownShards shs (g::gs)
+  | ciKnownShard shs g.shard = ciUnknownShards shs gs
+  | otherwise = "\{g.name} (shard '\{g.shard}')" :: ciUnknownShards shs gs
+
+-- ── Splicing the region ─────────────────────────────────────────────────────
+
+ciCountLine : String -> List String -> Int
+ciCountLine _ [] = 0
+ciCountLine want (l::ls)
+  | l == want = 1 + ciCountLine want ls
+  | otherwise = ciCountLine want ls
+
+ciIndexOf : String -> List String -> Int -> Int
+ciIndexOf _ [] _ = -1
+ciIndexOf want (l::ls) i
+  | l == want = i
+  | otherwise = ciIndexOf want ls (i + 1)
+
+-- Copy from the END marker onward, verbatim.
+ciAfterEnd : List String -> List String
+ciAfterEnd [] = []
+ciAfterEnd (l::ls)
+  | l == ciMatrixEnd = l::ls
+  | otherwise = ciAfterEnd ls
+
+ciSpliceGo : List String -> List String -> List String
+ciSpliceGo _ [] = []
+ciSpliceGo gen (l::ls)
+  | l == ciMatrixBegin = l :: gen ++ ciAfterEnd ls
+  | otherwise = l :: ciSpliceGo gen ls
+
+-- The markers must appear EXACTLY once each, in order.  Anything else is a
+-- malformed file, and splicing it would quietly drop or duplicate the region.
+ciSplice : List String -> List String -> Result String (List String)
+ciSplice gen src
+  | ciCountLine ciMatrixBegin src /= 1 = Err "medaka gate ci: \{ciWorkflowRel} must contain exactly one BEGIN marker line (found \{intToString (ciCountLine ciMatrixBegin src)}):\n\{ciMatrixBegin}"
+  | ciCountLine ciMatrixEnd src /= 1 = Err "medaka gate ci: \{ciWorkflowRel} must contain exactly one END marker line (found \{intToString (ciCountLine ciMatrixEnd src)}):\n\{ciMatrixEnd}"
+  | ciIndexOf ciMatrixEnd src 0 < ciIndexOf ciMatrixBegin src 0 = Err "medaka gate ci: \{ciWorkflowRel}: the END marker precedes the BEGIN marker"
+  | otherwise = Ok (ciSpliceGo gen src)
+
+-- ── The command ─────────────────────────────────────────────────────────────
+
+data CiArgs =
+  | CiArgs { registry : Option String, workflow : Option String, check : Bool }
+
+parseCiArgs : List String -> CiArgs -> Result String CiArgs
+parseCiArgs [] acc = Ok acc
+parseCiArgs ("--registry"::p::rest) acc =
+  parseCiArgs rest CiArgs { acc | registry = Some p }
+parseCiArgs ("--registry"::[]) _ = Err "medaka gate ci: --registry needs a path"
+parseCiArgs ("--workflow"::p::rest) acc =
+  parseCiArgs rest CiArgs { acc | workflow = Some p }
+parseCiArgs ("--workflow"::[]) _ = Err "medaka gate ci: --workflow needs a path"
+parseCiArgs ("--check"::rest) acc =
+  parseCiArgs rest CiArgs { acc | check = True }
+parseCiArgs (a::_) _ = Err "medaka gate ci: unexpected argument: \{a}"
+
+-- `<MEDAKA_ROOT>/.github/workflows/ci.yml` unless --workflow overrides it —
+-- the same exe-relative resolution `registryPath` uses, for the same reason.
+ciWorkflowPath : Option String -> String -> String
+ciWorkflowPath (Some p) _ = p
+ciWorkflowPath None root = joinPath root ciWorkflowRel
+
+-- Everything that can go wrong before a byte is written, as one `Result`, so
+-- the command keeps `emit`'s single exit site.
+ciNewText : String -> String -> String -> String -> <IO> Result String String
+ciNewText root regPath regSrc wfSrc = match parseRegistry regSrc
+  Err m => Err "medaka gate ci: \{m}"
+  Ok gates => match parseShards regSrc
+    Err m => Err "medaka gate ci: \{m}"
+    Ok shs => match ciUnknownShards shs gates
+      [] => match ciRowsLoop root gates shs []
+        Err m => Err m
+        Ok gen => map joinNl (ciSplice gen (splitNl wfSrc))
+      bad => Err "medaka gate ci: \{regPath}: gate(s) name a shard with no [[shard]] row: \{joinSpace bad}"
+
+-- Write only on a real change: an unconditional write would touch the file's
+-- mtime on every no-op run, and `make gen-ci` is meant to be free to re-run.
+ciWrite : String -> String -> String -> <IO> Unit
+ciWrite wfPath wfSrc out
+  | out == wfSrc = putStr "medaka gate ci: \{wfPath} already up to date\n"
+  | otherwise = match writeFile wfPath out
+    Err m => emit (Err "medaka gate ci: cannot write \{wfPath}: \{m}")
+    Ok _ => putStr "medaka gate ci: regenerated the gates matrix in \{wfPath}\n"
+
+-- The first line at which the on-disk file and the regenerated text part
+-- company, rendered for a human.  `ciNewText` copies everything before the
+-- BEGIN marker and everything from the END marker onward VERBATIM
+-- (`ciSpliceGo`/`ciAfterEnd`), so any line this reports is necessarily inside
+-- the generated region: an edit outside it appears identically on both sides
+-- and can never be the first difference.
+ciDiffAt : List String -> List String -> Int -> String
+ciDiffAt [] [] _ = "  (the two texts differ only in trailing newline)"
+ciDiffAt [] (g::_) n =
+  "  line \{intToString n}:\n    on disk:   <end of file>\n    generated: \{g}"
+ciDiffAt (d::_) [] n =
+  "  line \{intToString n}:\n    on disk:   \{d}\n    generated: <end of file>"
+ciDiffAt (d::ds) (g::gs) n
+  | d == g = ciDiffAt ds gs (n + 1)
+  | otherwise =
+    "  line \{intToString n}:\n    on disk:   \{d}\n    generated: \{g}"
+
+-- `--check`: the SAME comparison `ciWrite` makes, with no write and no shell
+-- out to `git diff`.  Two reasons it is not "regenerate, then `git diff`":
+-- writing first HEALS an uncommitted hand-edit inside the region before the
+-- diff can see it (the check then passes having destroyed the edit), and
+-- `git diff` on the whole file also fires on an uncommitted edit OUTSIDE the
+-- region, which this check by construction does not (see `ciDiffAt`).
+ciCheckResult : String -> String -> String -> Result String String
+ciCheckResult wfPath wfSrc out
+  | out == wfSrc = Ok "medaka gate ci: \{wfPath} already up to date\n"
+  | otherwise = Err (stringConcat [
+    "medaka gate ci: \{wfPath}: the generated gates-matrix region does not\n",
+    "match what test/gates.toml generates.  First difference:\n",
+    ciDiffAt (splitNl wfSrc) (splitNl out) 1,
+    "\nRun 'make gen-ci' and commit the result.\n",
+  ])
+
+ciCmdBody : List String -> <IO> Unit
+ciCmdBody argv = match parseCiArgs argv CiArgs { registry = None, workflow = None, check = False }
+  Err m => emit (Err m)
+  Ok a =>
+    let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+    let regPath = registryPath a.registry
+    let wfPath = ciWorkflowPath a.workflow root
+    match readFile regPath
+      Err m => emit (Err "medaka gate ci: cannot read registry: \{m}")
+      Ok regSrc => match readFile wfPath
+        Err m => emit (Err "medaka gate ci: cannot read \{wfPath}: \{m}")
+        Ok wfSrc => match ciNewText root regPath regSrc wfSrc
+          Err m => emit (Err m)
+          Ok out =>
+            if a.check then
+              emit (ciCheckResult wfPath wfSrc out)
+            else
+              ciWrite wfPath wfSrc out
 
 -- ── Properties ──────────────────────────────────────────────────────────────
 

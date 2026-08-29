@@ -13,7 +13,7 @@
 MEDAKA_SCRATCH ?= /var/tmp/medaka-scratch
 export TMPDIR := $(shell mkdir -p $(MEDAKA_SCRATCH) 2>/dev/null && echo $(MEDAKA_SCRATCH) || echo /tmp)
 
-.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index agent-doc-symbols pr-helper-test fmt-clean-census
+.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census
 
 ## medaka  — build the native OCaml-free `medaka` CLI (CANONICAL).
 ##           WARM (./medaka_emitter present): 2-stage rebuild from current source,
@@ -147,6 +147,23 @@ pr-helper-test:
 ##           -> byte-identical output), pure text analysis, no build.
 docs-index:
 	sh test/gen_docs_index.sh
+
+## gen-ci — regenerate the GENERATED region of .github/workflows/ci.yml (the
+##           `gates` job's eight-row matrix) from test/gates.toml. GENERATED
+##           block — never hand-edit between its markers; run this after
+##           changing a gate's `shard`, a `[[shard]]` row, or a row's
+##           test/gate_shards/*.txt prose. Idempotent (same input ->
+##           byte-identical output). The drift check is the NON-MUTATING
+##           `medaka gate ci --check`, not this target followed by `git diff`:
+##           regenerating first heals an uncommitted hand-edit inside the
+##           region before any diff can see it. Needs ./medaka (the registry
+##           reader is in-binary).
+##           LC_ALL=C is pinned for the same reason docs-index pins it: a
+##           generator whose output depends on the runner's locale is not
+##           reproducible, and "generated" then means nothing. This one has no
+##           `sort` today; the pin keeps that true if it ever grows one.
+gen-ci: medaka
+	LC_ALL=C ./medaka gate ci
 
 ## agent-doc-symbols — agent-facing doc SYMBOL-claim rot gate. Pure text
 ##           analysis (no build, no toolchain, safe to run anywhere): checks

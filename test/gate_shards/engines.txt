@@ -1,0 +1,13 @@
+`diff_compiler_engines` is the single most expensive gate in the
+suite and irreducible — every fixture pays a full `medaka build` +
+clang, on THREE engines. `full_cores` gives it the whole box rather than the
+gate's own ENGINE_JOBS=NCPU/2 hedge (right when sharing a runner,
+wasteful when not — it doesn't, here). `wasm_arm` (#597) installs
+wasm-tools + Node and builds the Wasm oracle so this gate's T2/T3
+tiers actually run; MEDAKA_REQUIRE_WASM=1 makes a degraded run a hard
+fail so the wiring cannot silently rot back. diff_compiler_rejection_parity
+(#709) and Phase 2's focused PDS protocol gate ride along here,
+needing the same toolchain. The protocol gate was placed after
+re-deriving the available `wasm_arm` rows with the cost tool; its
+local timing is recorded in the sprint report.
+Re-derive current cost/critical-path: `sh scripts/ci_shard_cost.sh`.
