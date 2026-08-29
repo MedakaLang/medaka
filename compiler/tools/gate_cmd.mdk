@@ -2027,7 +2027,7 @@ ciQuotedNames (g::gs) = "'\{g.name}' \{ciQuotedNames gs}"
 
 -- The gates of one row, in registry order.
 ciShardGates : String -> List Gate -> List Gate
-ciShardGates nm gs = filterList (g => g.shard == nm) gs
+ciShardGates nm gs = filterList (g => (g : Gate).shard == nm) gs
 
 -- A `"1"` matrix key is emitted ONLY when the option is on — ci.yml omits the
 -- key entirely when off, and that asymmetry is the file's convention, not the

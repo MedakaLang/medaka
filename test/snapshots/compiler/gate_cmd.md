@@ -2031,7 +2031,7 @@ ciQuotedNames (g::gs) = "'\{g.name}' \{ciQuotedNames gs}"
 
 -- The gates of one row, in registry order.
 ciShardGates : String -> List Gate -> List Gate
-ciShardGates nm gs = filterList (g => g.shard == nm) gs
+ciShardGates nm gs = filterList (g => (g : Gate).shard == nm) gs
 
 -- A `"1"` matrix key is emitted ONLY when the option is on — ci.yml omits the
 -- key entirely when off, and that asymmetry is the file's convention, not the
@@ -3805,7 +3805,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "ciQuotedNames" ((PCons (PVar "g") (PList))) (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString "'"))))
 (DFunDef false "ciQuotedNames" ((PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString "' "))) (EApp (EVar "display") (EApp (EVar "ciQuotedNames") (EVar "gs")))) (ELit (LString ""))))
 (DTypeSig false "ciShardGates" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "Gate")))))
-(DFunDef false "ciShardGates" ((PVar "nm") (PVar "gs")) (EApp (EApp (EVar "filterList") (ELam ((PVar "g")) (EBinOp "==" (EFieldAccess (EVar "g") "shard") (EVar "nm")))) (EVar "gs")))
+(DFunDef false "ciShardGates" ((PVar "nm") (PVar "gs")) (EApp (EApp (EVar "filterList") (ELam ((PVar "g")) (EBinOp "==" (EFieldAccess (EAnnot (EVar "g") (TyCon "Gate")) "shard") (EVar "nm")))) (EVar "gs")))
 (DTypeSig false "ciOptLine" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ciOptLine" (PWild (PCon "False")) (EListLit))
 (DFunDef false "ciOptLine" ((PVar "key") (PCon "True")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "            ")) (EApp (EVar "display") (EVar "key"))) (ELit (LString ": \"1\"")))))
@@ -4547,7 +4547,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "ciQuotedNames" ((PCons (PVar "g") (PList))) (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString "'"))))
 (DFunDef false "ciQuotedNames" ((PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString "' "))) (EApp (EMethodRef "display") (EApp (EVar "ciQuotedNames") (EVar "gs")))) (ELit (LString ""))))
 (DTypeSig false "ciShardGates" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "Gate")))))
-(DFunDef false "ciShardGates" ((PVar "nm") (PVar "gs")) (EApp (EApp (EVar "filterList") (ELam ((PVar "g")) (EBinOp "==" (EFieldAccess (EVar "g") "shard") (EVar "nm")))) (EVar "gs")))
+(DFunDef false "ciShardGates" ((PVar "nm") (PVar "gs")) (EApp (EApp (EVar "filterList") (ELam ((PVar "g")) (EBinOp "==" (EFieldAccess (EAnnot (EVar "g") (TyCon "Gate")) "shard") (EVar "nm")))) (EVar "gs")))
 (DTypeSig false "ciOptLine" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "ciOptLine" (PWild (PCon "False")) (EListLit))
 (DFunDef false "ciOptLine" ((PVar "key") (PCon "True")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "            ")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString ": \"1\"")))))
