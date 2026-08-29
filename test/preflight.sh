@@ -478,7 +478,7 @@ for f in $changed; do
       # traversal BOTH the stamper and the agreement probe walk; parser.mdk mints the
       # OriginBuiltin tuple heads (DICT-SEMANTICS §8 I6.2).
       add 'diff_compiler_origin_agreement'
-      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics' ;;
+      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census' ;;
     # #1131: desugar.mdk is a cited DICT-SEMANTICS site.
     compiler/frontend/desugar.mdk)
       add 'diff_compiler_snapshot*'; add 'diff_compiler_eval*'
@@ -531,7 +531,7 @@ for f in $changed; do
       add 'diff_compiler_check*'; add 'diff_compiler_exhaust'
       add 'diff_compiler_diagnostics'; add 'diff_compiler_eval_typed*'
       add 'diff_compiler_engines'
-      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'
+      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census'
       # #1110: typecheck.mdk hosts BOTH ends of the resolve->typecheck channel
       # (checkProgramSeededSplit on the flat path, elaborateModules on the graph
       # path) — i.e. two of the three arms the agreement table compares.
@@ -611,7 +611,7 @@ for f in $changed; do
       add 'diff_compiler_eval*'; add 'diff_compiler_snapshot*'; add 'diff_compiler_core_ir*'
       add 'diff_compiler_ported'; add 'diff_compiler_test'; add 'diff_compiler_capability_matrix'
       add 'diff_compiler_engines'
-      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics' ;;
+      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census' ;;
 
     # #1131: ir/core_ir_lower.mdk (SHADOW) and ir/core_ir.mdk (DICT) are both
     # cited sites under compiler/ir/*.
@@ -620,7 +620,7 @@ for f in $changed; do
       add 'diff_compiler_draft_semantic'
       add 'diff_compiler_anf_identity'
       add 'diff_compiler_engines'
-      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'
+      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census'
       # S-arity-census: derives call/define arity skew from emitted LLVM IR —
       # core_ir_lower.mdk's methodArgTys decides declared arity for the #1034 half,
       # so an ir/* change can move it without touching backend/*.
@@ -638,7 +638,7 @@ for f in $changed; do
       add 'diff_compiler_llvm*'; add 'diff_compiler_build'; add 'diff_compiler_core_ir*'
       add 'diff_compiler_capability_matrix'
       add 'diff_compiler_engines'; add 'diff_compiler_tmc_parity'
-      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'
+      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census'
       # #1319 unit 0: private_mangle.mdk keeps its OWN ctor-import index — a
       # separate order-observable structure from typecheck's, and #674's root cause
       # was the two disagreeing. The permutation gate grades the `build` arm, so it

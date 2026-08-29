@@ -1,8 +1,0 @@
--- #1351's control: main.mdk with ONE variable removed -- the `import zmodI.{IZ, zf}` line
--- (and the then-unreachable `zf 0` use). Only IA is in the module graph, so there is
--- nothing bare-name `mth` can collide with at a different dispatch index, and the
--- imported standalone answers correctly: 99.
-import fmodI.{mth}
-import amodI.{af}
-
-main = println (mth "abc" 5 + af 0)

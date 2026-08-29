@@ -1,0 +1,5 @@
+-- I26 (#2154) provider: the standalone that shadows main's IZ.mth, imported (not
+-- defined) by the module that reaches the dispatch site -- the IMPORTER-position
+-- mirror of D26's definer shape.
+export mth : Int -> Int -> Int
+mth n m = n * m

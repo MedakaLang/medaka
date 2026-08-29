@@ -1,0 +1,13 @@
+-- X10 (#2157) the WIDER-SCOPE half of x9, and the row that proves the defect is
+-- not about impl bodies at all: the interface method spelled `fromInt` is only
+-- DECLARED — no impl, no occurrence of it anywhere — and the module's arithmetic
+-- is an ordinary `1 + 2` in `main`.  Merely registering the declaration must cost
+-- this module nothing, exactly as naming the method `mkFrom` would.
+--
+-- The zero-impl shape is deliberate (the d1b/d19 move): with no `impl Buildable`
+-- to find, an implementation that decided the literal's interface correctly for
+-- the wrong reason — by consulting the impl universe — cannot pass this row.
+interface Buildable c where
+  fromInt : Int -> c
+
+main = println (1 + 2)
