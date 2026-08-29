@@ -53,6 +53,68 @@ NCPU="$(sysctl -n hw.logicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4)"
 JOBS="${JOBS:-$(( (NCPU * 3 + 2) / 5 ))}"
 [ "${JOBS:-0}" -ge 2 ] 2>/dev/null || JOBS=2
 INNER_JOBS="${INNER_JOBS:-3}"
+
+# ── PER-GATE COST TRANSPORT (#2178, S-1-S-cost-record) ────────────────────────
+#
+# `GATE_TIMING_JSON=<path>` makes this run ALSO write a machine-readable per-gate
+# timing report to <path>. Unset (the default, and every local invocation) it
+# writes nothing and changes nothing — the timing capture below is two `date`
+# calls per gate and never touches the exit-code classification.
+#
+# WHY HERE AND NOT IN `medaka gate run`. CI-ARCHITECTURE.md §3.3 says timings are
+# "recorded by the driver". The driver is not what CI executes: ci.yml's
+# "Gate shard — …" step runs `sh test/run_gates.sh ${{ steps.plan.outputs.pats }}`,
+# and `medaka gate run` is not yet CI's executor (it does not reproduce this
+# script's exit-code CLASSIFICATION — see GATE-REGISTRY-DESIGN.md §7). A cost
+# baseline must be measured on the code path CI actually takes, so the producer
+# is this script. The SCHEMA is `medaka gate run --report`'s
+# (`runReportJson`/`resultJson`, compiler/tools/gate_cmd.mdk) minus the two
+# fields a cost record has no use for, so the day the driver does become the
+# executor the transport is unchanged. See docs/ops/GATE-REGISTRY-DESIGN.md §7.
+#
+# ⚠️ POISONING GUARD — STRUCTURAL, NOT POLICY. A `pull_request` run is the ONE
+# narrowable event (ci.yml's `detect` narrows `pats` for that event alone), so
+# its per-gate times are measured over a gate subset and its shard wall-clocks
+# mean nothing for balancing. This script therefore REFUSES TO PRODUCE a report
+# at all when the event is a pull_request — not "CI happens not to ask for one",
+# and not a filter in the consumer that a future edit could drop. The consumer
+# (test/gate_cost_ingest.sh) independently refuses any report whose recorded
+# event is not on its allowlist; both halves are load-bearing on purpose, and
+# the consumer's half is the one under test (test/diff_compiler_gate_cost.sh).
+GATE_TIMING_JSON="${GATE_TIMING_JSON:-}"
+GATE_TIMING_SHARD="${GATE_TIMING_SHARD:-local}"
+_ev="${GITHUB_EVENT_NAME:-local}"
+case "$_ev" in
+  pull_request|pull_request_target)
+    if [ -n "$GATE_TIMING_JSON" ]; then
+      echo "run_gates: REFUSING to write a timing report on a '$_ev' run —"
+      echo "           that event is narrowable, so its per-gate times are not a"
+      echo "           baseline sample. (GATE_TIMING_JSON=$GATE_TIMING_JSON ignored.)"
+    fi
+    GATE_TIMING_JSON=""
+    ;;
+esac
+export GATE_TIMING_JSON
+
+# Milliseconds since the epoch. GNU `date +%s%N` on Linux (every CI runner is
+# ubuntu-latest, so every baseline sample comes from this arm); BSD/macOS `date`
+# has no %N and prints a literal `N`, where this degrades to whole seconds
+# rather than lying — [B-DUAL-PLATFORM]. Division is done in the shell, not awk:
+# a 19-digit nanosecond count does not survive a double.
+_now_ms() {
+  _n=$(date +%s%N 2>/dev/null)
+  case "$_n" in
+    ''|*[!0-9]*) date +%s | awk '{ printf "%d\n", $1 * 1000 }' ;;
+    *)           echo $(( _n / 1000000 )) ;;
+  esac
+}
+
+# JSON string escaping for the few values that are not [a-z0-9_/.-] by
+# construction (a ref name, a shard name from the matrix).
+_jstr() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/	/\\t/g'
+}
+
 RESULTDIR="$(mktemp -d)"
 trap 'rm -rf "$RESULTDIR"' EXIT
 
@@ -131,9 +193,18 @@ if [ "${1:-}" = "--run-one" ]; then
   # Honor the gate's own shebang, not a hardcoded `sh -n`: 6 gates under test/
   # are `#!/usr/bin/env bash` and use bashisms `sh -n` would reject as false
   # positives — reuse the same shebang dispatch just above.
+  # The clock starts BEFORE the syntax pre-check and stops after the gate exits,
+  # so a recorded ms is the whole cost this runner pays for that gate — which is
+  # the quantity a shard balancer packs. It is written unconditionally; whether a
+  # sample is USABLE is the consumer's call (test/gate_cost_ingest.sh drops any
+  # gate whose `ok` is false), never a silent omission here.
+  _t0=$(_now_ms)
   if ! "$_shell" -n "$g" >"$rd/$name.log" 2>&1; then
     st=3   # syntax error: the gate script itself is malformed, not "unbuilt"
+    raw=$st
     echo "$st" >"$rd/$name.status"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$(( $(_now_ms) - _t0 ))" "$raw" "$st" "$_shell" \
+      "${g#"$ROOT"/}" >"$rd/$name.timing"
     printf 'BROKEN %s  (SYNTAX ERROR: %s -n rejected this gate — see log)\n' "$name" "$_shell"
     exit 0
   fi
@@ -142,10 +213,14 @@ if [ "${1:-}" = "--run-one" ]; then
   else
     st=$?
   fi
+  _ms=$(( $(_now_ms) - _t0 ))
+  raw=$st                # the gate's OWN exit code, before reclassification
   if [ "$st" = 2 ] && ! grep -qE "$LEGIT_SKIP_RE" "$rd/$name.log"; then
     st=9   # phantom skip: oracle/binary never built — a bug, not an opt-in skip
   fi
   echo "$st" >"$rd/$name.status"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$_ms" "$raw" "$st" "$_shell" "${g#"$ROOT"/}" \
+    >"$rd/$name.timing"
   case "$st" in
     0) printf 'PASS  %s\n' "$name" ;;
     2) printf 'SKIP  %s\n' "$name" ;;
@@ -339,6 +414,52 @@ for s in "$RESULTDIR"/*.status; do
 done
 
 printf '\n=== gates: %d passed, %d failed, %d skipped (JOBS=%s) ===\n' "$pass" "$fail" "$skip" "$JOBS"
+
+# ── the per-gate cost report (#2178) ─────────────────────────────────────────
+#
+# Emitted BEFORE the failure branches below, because a red run's per-gate times
+# are still real measurements of the gates that DID pass — the consumer decides
+# what to admit, this script only reports. One gate per LINE, deliberately: the
+# consumer is a shell tool, and a line-oriented record is one it can read
+# without a JSON parser it does not have. Fields are `resultJson`'s
+# (compiler/tools/gate_cmd.mdk), minus `stdout`/`stderr` — a cost record has no
+# use for a gate's output, and omitting it also removes the one place arbitrary
+# gate text could sit inside the document the consumer scans.
+if [ -n "$GATE_TIMING_JSON" ]; then
+  {
+    echo '{'
+    printf '  "schema": "gate-cost/1",\n'
+    printf '  "jobs": %s,\n' "$JOBS"
+    printf '  "parallel": true,\n'
+    printf '  "ok": %s,\n' "$pass"
+    printf '  "failing": %s,\n' "$fail"
+    printf '  "provenance": {\n'
+    printf '    "event": "%s",\n'      "$(_jstr "$_ev")"
+    printf '    "shard": "%s",\n'      "$(_jstr "$GATE_TIMING_SHARD")"
+    printf '    "runId": "%s",\n'      "$(_jstr "${GITHUB_RUN_ID:-}")"
+    printf '    "runAttempt": "%s",\n' "$(_jstr "${GITHUB_RUN_ATTEMPT:-}")"
+    printf '    "repo": "%s",\n'       "$(_jstr "${GITHUB_REPOSITORY:-}")"
+    printf '    "ref": "%s",\n'        "$(_jstr "${GITHUB_REF:-}")"
+    printf '    "sha": "%s",\n'        "$(_jstr "${GITHUB_SHA:-}")"
+    printf '    "date": "%s"\n'        "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '  },\n'
+    printf '  "gates": [\n'
+    _sep=''
+    for t in "$RESULTDIR"/*.timing; do
+      [ -f "$t" ] || continue
+      _n="$(basename "$t" .timing)"
+      IFS='	' read -r _ms _raw _st _sh _script <"$t"
+      _okj=false; [ "$_st" = 0 ] && _okj=true
+      printf '%s    {"name": "%s", "script": "%s", "shell": "%s", "exit": %s, "timedOut": false, "ms": %s, "seconds": %s, "ok": %s, "spawnError": ""}' \
+        "$_sep" "$_n" "$_script" "$_sh" "$_raw" "$_ms" \
+        "$(echo "$_ms" | awk '{ printf "%.3f", $1 / 1000 }')" "$_okj"
+      _sep=',
+'
+    done
+    printf '\n  ]\n}\n'
+  } >"$GATE_TIMING_JSON"
+  echo "run_gates: per-gate cost report -> $GATE_TIMING_JSON (event=$_ev, shard=$GATE_TIMING_SHARD)"
+fi
 if [ "$fail" -gt 0 ]; then
   # If EVERY failure is a phantom skip, the compiler is fine — you just have no
   # oracles. Say that, instead of printing a bare failure count that reads like a

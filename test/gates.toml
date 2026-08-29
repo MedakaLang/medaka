@@ -10,7 +10,7 @@
 # record: `medaka gate list`/`verify`/`explain` read it directly, and
 # `ci.yml`'s `gates` job-matrix is GENERATED from it by `make gen-ci` (S-2) —
 # hand-editing that matrix is stale practice a drift check now catches
-# (`medaka gate ci --check`, run by the advisory `diff_compiler_ci_gen_drift.sh`
+# (`medaka gate ci --check`, run by the required `diff_compiler_ci_gen_drift.sh`
 # and by the required `diff_compiler_ci_shard_coverage.sh`). test/preflight.sh and
 # test/build_oracles.sh do not read this file yet; that migration is ordered
 # and tracked as separate, later changes (GATE-REGISTRY-DESIGN.md §6).
@@ -23,16 +23,41 @@
 #
 # `shard` is the ci.yml `gates` job-matrix ROW this gate runs in, and
 # `[[shard]]` (at the bottom of this file) is that row's runner options and
-# placement rationale. Together they are the scheduling facts the hand-written
-# matrix at `.github/workflows/ci.yml:471-696` holds today and this registry
-# did not: which row, with what options, and why.
+# provenance. Together they are the scheduling facts the hand-written matrix in
+# `.github/workflows/ci.yml` used to hold and this registry did not: which row,
+# with what options, and why.
 #
-# ⚠️ HAND-ASSIGNED DATA, NOT A DERIVED OUTPUT. Every value here was DERIVED
-# FROM the current matrix (each row's `pattern:` list resolved through
-# run_gates.sh's own two-glob rule) and is set-equal to it, row by row — it
-# reproduces today's placement, it does not choose one. The balancer (#2178)
-# is what will eventually CHOOSE these values; until then nothing computes
-# them and they must be edited by hand alongside ci.yml.
+# ⚠️ DERIVED OUTPUT, NOT HAND-ASSIGNED DATA (S-4, #2178). DO NOT EDIT A
+# `shard` VALUE BY HAND. Every one of them is chosen by
+#
+#     medaka gate balance          # packs gates onto rows from measured cost
+#     make gen-ci                  # regenerates ci.yml's matrix to match
+#
+# from the per-gate costs in test/gate_cost_baseline.json, subject to each
+# row's toolchain (`wasm_arm`) and closure (`full_cores`) flags, and to an
+# enforced pole/median budget. Run those two commands, in that order, and
+# commit both files together — committing one without the other reds the
+# required test/diff_compiler_ci_shard_coverage.sh by construction.
+#
+# A hand edit REDS A REQUIRED CHECK. `test/diff_compiler_ci_gen_drift.sh` (the
+# required `ci-gen-drift` context) runs BOTH halves: `medaka gate ci --check`
+# proves ci.yml agrees with this file, and `medaka gate balance --check` proves
+# this file agrees with the cost baseline. The first alone is satisfied by a
+# self-consistent hand edit — edit `shard`, run `make gen-ci`, and the registry
+# and the workflow agree with each other about a row nothing derived. The
+# second is what closes that.
+#
+# A NEW `[[gate]]` still needs SOME `shard` value — the schema requires the
+# field and it cannot be omitted pending the next balancer run. Write the row
+# you would guess (or `other-job` if some job outside the matrix runs it).
+# 🚨 `medaka gate balance` HARD-REFUSES on a gate with no row in the cost
+# baseline — which every brand-new gate is, by construction, until an
+# unnarrowed CI run measures it. So this commit CANNOT also run the balancer.
+# Expect `ci-gen-drift` to red on this PR until the next baseline re-ingest
+# (workflow_dispatch/merge_group/push/schedule) folds the new gate in, then
+# run `medaka gate balance && make gen-ci` as a small follow-up commit — or,
+# to get a real placement before merging, `gh workflow run ci.yml --ref
+# <branch>` on this gate's own branch first.
 #
 # `shard` is REQUIRED on every entry and is one of the eight row names —
 # `engines sqlite pds frontend types eval backend tools` (these are also
@@ -42,7 +67,7 @@
 #   `other-job`  This gate is not scheduled by the `gates` matrix at all.
 #                It runs, but some OTHER workflow job runs it (`soundness`,
 #                `seed-health`, `wasm`, the docs jobs, `nightly`, the
-#                playground job). 27 entries today (derive: `grep -c '^shard =
+#                playground job). 29 entries today (derive: `grep -c '^shard =
 #                "other-job"$' test/gates.toml` — this count rots on every
 #                enrolment/removal, so re-derive rather than trust it). It does NOT mean
 #                "unscheduled" — which job is a fact this slice deliberately
@@ -54,14 +79,34 @@
 #   full_cores  the row's `full_cores: "1"` matrix key (absent in ci.yml when
 #               false — a bool here, emitted as the key only when true)
 #   wasm_arm    likewise the row's `wasm_arm: "1"` key
-#   rationale   PATH to a plain-text file holding that row's placement prose,
-#               verbatim, one line per line: test/gate_shards/<name>.txt
+#   pinned_gates
+#               the row's DECLARED membership. On a `full_cores` row this is
+#               exactly the gates that must name it, and `medaka gate balance`
+#               refuses when the registry disagrees in EITHER direction — a
+#               gate hand-moved onto the row, or a pinned one hand-moved off.
+#               On an open row it is `[]`: that row's membership is the
+#               balancer's output, so declaring it would be prose the tool
+#               ignores (and is itself refused).
+#               ⚠️ This is the one membership fact no cost measurement can
+#               derive. `engines` exists because `diff_compiler_engines` needs
+#               a whole runner; its two row-mates ride along for the same wasm
+#               toolchain. Widening or narrowing that list is a deliberate,
+#               reviewable decision about CI capacity — never a side effect of
+#               a re-ingest, and never something the balancer adopts because
+#               it found it committed.
+#   rationale   PATH to a plain-text file describing that ROW — what
+#               `full_cores`/`wasm_arm` mean for it and which gates it can
+#               legally take: test/gate_shards/<name>.txt. Emitted verbatim as
+#               the row's comment block in ci.yml, one line per line.
+#               ⚠️ It describes the ROW, never a gate's placement — placement
+#               is the balancer's output and changes whenever the baseline
+#               does, so prose narrating it would rot on every re-ingest.
 #
 # The prose lives in a file rather than in this TOML because the reader's TOML
 # subset has no multi-line string (a `"""` is a hard parse error, by design),
-# and rather than staying a hand-edited region of ci.yml because ci.yml is
-# about to become a GENERATED file — a generated artifact with hand-edited
-# islands is the hybrid this epic exists to remove. `.txt`, not `.md`, keeps
+# and rather than staying a hand-edited region of ci.yml because ci.yml is now
+# a GENERATED file — a generated artifact with hand-edited islands is the
+# hybrid this epic exists to remove. `.txt`, not `.md`, keeps
 # it out of the markdown link/symbol gates, which would police prose that is
 # deliberately a verbatim copy of shell/YAML commentary.
 #
@@ -115,7 +160,7 @@
 [[gate]]
 name = "diff_compiler_parse_result"
 area = "frontend"
-shard = "frontend"
+shard = "eval"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -131,7 +176,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_eval_modules"
 area = "eval"
-shard = "eval"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "medium"
@@ -168,7 +213,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_ci_shard_coverage"
 area = "infra"
-shard = "tools"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -185,7 +230,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_prose_classifier"
 area = "infra"
-shard = "tools"
+shard = "eval"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -201,7 +246,7 @@ toolchain = []
 [[gate]]
 name = "build_cmd"
 area = "backend"
-shard = "backend"
+shard = "frontend"
 project = "compiler"
 tier = "merge"
 cost = "heavy"
@@ -216,7 +261,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "lsp_harness"
 area = "tools"
-shard = "tools"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "medium"
@@ -248,7 +293,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "sqlite/test/select_oracle"
 area = "engines"
-shard = "eval"
+shard = "types"
 project = "sqlite"
 tier = "merge"
 cost = "medium"
@@ -271,7 +316,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "byteparser/test/check"
 area = "engines"
-shard = "tools"
+shard = "frontend"
 project = "byteparser"
 tier = "merge"
 cost = "cheap"
@@ -299,7 +344,7 @@ toolchain = []
 [[gate]]
 name = "gzip/test/inflate_oracle"
 area = "engines"
-shard = "types"
+shard = "tools"
 project = "gzip"
 tier = "merge"
 cost = "cheap"
@@ -313,7 +358,7 @@ toolchain = []
 [[gate]]
 name = "mq/test/check"
 area = "engines"
-shard = "tools"
+shard = "backend"
 project = "mq"
 tier = "merge"
 cost = "cheap"
@@ -355,7 +400,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "pds/test/car_vectors"
 area = "engines"
-shard = "pds"
+shard = "tools"
 project = "pds"
 tier = "merge"
 cost = "medium"
@@ -383,7 +428,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "pds/test/constant_time_public_key"
 area = "engines"
-shard = "tools"
+shard = "frontend"
 project = "pds"
 tier = "merge"
 cost = "medium"
@@ -411,7 +456,7 @@ toolchain = ["wasm-tools", "node>=24", "clang"]
 [[gate]]
 name = "pds/test/constant_time_signing"
 area = "engines"
-shard = "tools"
+shard = "frontend"
 project = "pds"
 tier = "merge"
 cost = "medium"
@@ -425,7 +470,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "pds/test/dagcbor_cid_vectors"
 area = "engines"
-shard = "pds"
+shard = "tools"
 project = "pds"
 tier = "merge"
 cost = "medium"
@@ -453,7 +498,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "pds/test/ecdsa_vectors"
 area = "engines"
-shard = "backend"
+shard = "sqlite"
 project = "pds"
 tier = "merge"
 cost = "medium"
@@ -495,7 +540,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/inlang_test_oracle"
 area = "engines"
-shard = "sqlite"
+shard = "types"
 project = "pds"
 tier = "merge"
 cost = "medium"
@@ -509,7 +554,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/mst_vectors"
 area = "engines"
-shard = "pds"
+shard = "tools"
 project = "pds"
 tier = "merge"
 cost = "medium"
@@ -523,7 +568,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "pds/test/opaque_field_scalar"
 area = "engines"
-shard = "types"
+shard = "backend"
 project = "pds"
 tier = "merge"
 cost = "medium"
@@ -565,7 +610,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "pds/test/rfc6979_vectors"
 area = "engines"
-shard = "backend"
+shard = "frontend"
 project = "pds"
 tier = "merge"
 cost = "medium"
@@ -579,7 +624,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/scalar_vectors"
 area = "engines"
-shard = "backend"
+shard = "eval"
 project = "pds"
 tier = "merge"
 cost = "medium"
@@ -607,7 +652,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/secp256k1_public_key"
 area = "engines"
-shard = "types"
+shard = "backend"
 project = "pds"
 tier = "merge"
 cost = "medium"
@@ -621,7 +666,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/sha256_vectors"
 area = "engines"
-shard = "backend"
+shard = "frontend"
 project = "pds"
 tier = "merge"
 cost = "medium"
@@ -635,7 +680,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/signing_corpus"
 area = "engines"
-shard = "types"
+shard = "frontend"
 project = "pds"
 tier = "merge"
 cost = "medium"
@@ -649,7 +694,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/trust_boundary_guards"
 area = "engines"
-shard = "types"
+shard = "sqlite"
 project = "pds"
 tier = "merge"
 cost = "medium"
@@ -663,7 +708,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/vector_provenance"
 area = "engines"
-shard = "types"
+shard = "eval"
 project = "pds"
 tier = "merge"
 cost = "medium"
@@ -691,7 +736,7 @@ toolchain = ["node>=24"]
 [[gate]]
 name = "sqlite/test/aggregate_oracle"
 area = "engines"
-shard = "eval"
+shard = "types"
 project = "sqlite"
 tier = "merge"
 cost = "medium"
@@ -705,7 +750,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/delete_negative_oracle"
 area = "engines"
-shard = "eval"
+shard = "backend"
 project = "sqlite"
 tier = "merge"
 cost = "medium"
@@ -719,7 +764,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/delete_oracle"
 area = "engines"
-shard = "eval"
+shard = "types"
 project = "sqlite"
 tier = "merge"
 cost = "medium"
@@ -747,7 +792,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/dml_oracle"
 area = "engines"
-shard = "eval"
+shard = "sqlite"
 project = "sqlite"
 tier = "merge"
 cost = "medium"
@@ -761,7 +806,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/groupby_oracle"
 area = "engines"
-shard = "eval"
+shard = "frontend"
 project = "sqlite"
 tier = "merge"
 cost = "medium"
@@ -775,7 +820,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/index_write_oracle"
 area = "engines"
-shard = "eval"
+shard = "sqlite"
 project = "sqlite"
 tier = "merge"
 cost = "medium"
@@ -789,7 +834,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/inlang_test_oracle"
 area = "engines"
-shard = "eval"
+shard = "backend"
 project = "sqlite"
 tier = "merge"
 cost = "medium"
@@ -803,7 +848,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/join_oracle"
 area = "engines"
-shard = "eval"
+shard = "backend"
 project = "sqlite"
 tier = "merge"
 cost = "medium"
@@ -831,7 +876,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/multipage_oracle"
 area = "engines"
-shard = "eval"
+shard = "backend"
 project = "sqlite"
 tier = "merge"
 cost = "medium"
@@ -845,7 +890,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/multipage_write_oracle"
 area = "engines"
-shard = "eval"
+shard = "types"
 project = "sqlite"
 tier = "merge"
 cost = "medium"
@@ -859,7 +904,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/multitable_write_oracle"
 area = "engines"
-shard = "eval"
+shard = "frontend"
 project = "sqlite"
 tier = "merge"
 cost = "medium"
@@ -887,7 +932,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/overflow_oracle"
 area = "engines"
-shard = "eval"
+shard = "backend"
 project = "sqlite"
 tier = "merge"
 cost = "medium"
@@ -901,7 +946,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/projection_oracle"
 area = "engines"
-shard = "eval"
+shard = "frontend"
 project = "sqlite"
 tier = "merge"
 cost = "medium"
@@ -929,7 +974,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/sql_oracle"
 area = "engines"
-shard = "eval"
+shard = "frontend"
 project = "sqlite"
 tier = "merge"
 cost = "medium"
@@ -957,7 +1002,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/update_expr_oracle"
 area = "engines"
-shard = "eval"
+shard = "types"
 project = "sqlite"
 tier = "merge"
 cost = "medium"
@@ -999,7 +1044,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/writer_oracle"
 area = "engines"
-shard = "eval"
+shard = "sqlite"
 project = "sqlite"
 tier = "merge"
 cost = "medium"
@@ -1013,7 +1058,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "bootstrap_eval"
 area = "eval"
-shard = "eval"
+shard = "frontend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1027,7 +1072,7 @@ toolchain = []
 [[gate]]
 name = "bootstrap_lex"
 area = "frontend"
-shard = "eval"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1041,7 +1086,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "bootstrap_resolve"
 area = "frontend"
-shard = "eval"
+shard = "frontend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1055,7 +1100,7 @@ toolchain = []
 [[gate]]
 name = "bootstrap_typecheck"
 area = "types"
-shard = "eval"
+shard = "backend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1069,7 +1114,7 @@ toolchain = []
 [[gate]]
 name = "build_construct_coverage"
 area = "backend"
-shard = "frontend"
+shard = "backend"
 project = "compiler"
 tier = "merge"
 cost = "heavy"
@@ -1111,7 +1156,7 @@ toolchain = []
 [[gate]]
 name = "check_build_oracles_for_consistency"
 area = "types"
-shard = "tools"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1237,7 +1282,7 @@ toolchain = []
 [[gate]]
 name = "check_syntax_examples"
 area = "docs"
-shard = "tools"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1251,7 +1296,7 @@ toolchain = []
 [[gate]]
 name = "cross_project_deps"
 area = "infra"
-shard = "tools"
+shard = "eval"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1265,7 +1310,7 @@ toolchain = []
 [[gate]]
 name = "cross_project_twonames"
 area = "infra"
-shard = "tools"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1293,7 +1338,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_anf_identity"
 area = "backend"
-shard = "eval"
+shard = "frontend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1307,7 +1352,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_build"
 area = "backend"
-shard = "backend"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1321,7 +1366,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_call_arity"
 area = "infra"
-shard = "backend"
+shard = "tools"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1335,7 +1380,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_capability_matrix"
 area = "infra"
-shard = "tools"
+shard = "eval"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1349,7 +1394,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_check_batch"
 area = "types"
-shard = "types"
+shard = "tools"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1363,7 +1408,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_check_cli_modules"
 area = "types"
-shard = "types"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1377,7 +1422,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_check_json"
 area = "types"
-shard = "types"
+shard = "tools"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1391,7 +1436,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_check_match"
 area = "types"
-shard = "types"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1419,7 +1464,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_check_policy"
 area = "types"
-shard = "types"
+shard = "frontend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1433,7 +1478,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_check"
 area = "types"
-shard = "types"
+shard = "tools"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1447,7 +1492,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_check_wrapper_callers"
 area = "types"
-shard = "types"
+shard = "tools"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1461,7 +1506,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_ci_guard_failsafe"
 area = "soundness"
-shard = "tools"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1489,7 +1534,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_core_ir_list"
 area = "eval"
-shard = "eval"
+shard = "tools"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1503,7 +1548,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_core_ir_modules"
 area = "eval"
-shard = "eval"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1517,7 +1562,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_core_ir_prelude"
 area = "eval"
-shard = "eval"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1531,7 +1576,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_core_ir_roundtrip"
 area = "eval"
-shard = "eval"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1545,7 +1590,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_core_ir_run"
 area = "eval"
-shard = "eval"
+shard = "frontend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1559,7 +1604,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_core_ir"
 area = "eval"
-shard = "eval"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1573,7 +1618,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_core_ir_typed_modules"
 area = "eval"
-shard = "eval"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1587,7 +1632,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_core_ir_typed"
 area = "eval"
-shard = "eval"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1615,7 +1660,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_dict_semantics"
 area = "infra"
-shard = "frontend"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1629,7 +1674,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_dispatch_shape"
 area = "eval"
-shard = "eval"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1643,7 +1688,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_doc"
 area = "tools"
-shard = "tools"
+shard = "frontend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1657,7 +1702,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_draft_semantic"
 area = "infra"
-shard = "eval"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1685,7 +1730,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_effect_param"
 area = "infra"
-shard = "tools"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1699,7 +1744,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_effect_polarity"
 area = "infra"
-shard = "tools"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1769,7 +1814,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_eval_list_batch"
 area = "eval"
-shard = "eval"
+shard = "tools"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1783,7 +1828,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_eval_list"
 area = "eval"
-shard = "eval"
+shard = "frontend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1797,7 +1842,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_eval_prelude_batch"
 area = "eval"
-shard = "eval"
+shard = "backend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1811,7 +1856,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_eval_prelude"
 area = "eval"
-shard = "eval"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1839,7 +1884,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_eval_run"
 area = "eval"
-shard = "eval"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1853,7 +1898,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_eval_scaling"
 area = "eval"
-shard = "eval"
+shard = "frontend"
 project = "compiler"
 tier = "merge"
 cost = "heavy"
@@ -1867,7 +1912,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_eval"
 area = "eval"
-shard = "eval"
+shard = "backend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1881,7 +1926,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_eval_typed_batch"
 area = "eval"
-shard = "eval"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1895,7 +1940,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_eval_typed_modules"
 area = "eval"
-shard = "eval"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1923,7 +1968,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_fixture_corpus_coverage"
 area = "infra"
-shard = "tools"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1937,7 +1982,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_flat_vs_onemodule"
 area = "infra"
-shard = "eval"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1951,7 +1996,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_fmt_roundtrip"
 area = "frontend"
-shard = "frontend"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1965,7 +2010,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_fmt"
 area = "frontend"
-shard = "frontend"
+shard = "eval"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1979,7 +2024,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_fmt_write_safety"
 area = "frontend"
-shard = "tools"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -1993,7 +2038,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_iface_order"
 area = "infra"
-shard = "eval"
+shard = "frontend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2007,7 +2052,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_import_order"
 area = "infra"
-shard = "eval"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2021,7 +2066,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_index_oob"
 area = "infra"
-shard = "backend"
+shard = "eval"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2035,7 +2080,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_index"
 area = "infra"
-shard = "tools"
+shard = "backend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2049,7 +2094,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_internal_extern"
 area = "infra"
-shard = "tools"
+shard = "backend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2063,7 +2108,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_ir_scaling"
 area = "infra"
-shard = "sqlite"
+shard = "frontend"
 project = "compiler"
 tier = "merge"
 cost = "heavy"
@@ -2077,7 +2122,7 @@ toolchain = ["clang", "valgrind"]
 [[gate]]
 name = "diff_compiler_ir_size"
 area = "infra"
-shard = "eval"
+shard = "backend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2105,7 +2150,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_lex_files"
 area = "frontend"
-shard = "frontend"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2119,7 +2164,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_lint_cache"
 area = "tools"
-shard = "tools"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2133,7 +2178,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_lint_crossfile"
 area = "tools"
-shard = "tools"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2147,7 +2192,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_lint_fix"
 area = "tools"
-shard = "tools"
+shard = "frontend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2161,7 +2206,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_lint_multi_dir"
 area = "tools"
-shard = "tools"
+shard = "eval"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2175,7 +2220,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_lint_multi"
 area = "tools"
-shard = "tools"
+shard = "frontend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2189,7 +2234,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_lint"
 area = "tools"
-shard = "tools"
+shard = "frontend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2203,7 +2248,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_llvm_ffi"
 area = "backend"
-shard = "backend"
+shard = "eval"
 project = "compiler"
 tier = "merge"
 cost = "medium"
@@ -2231,7 +2276,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_llvm"
 area = "backend"
-shard = "backend"
+shard = "frontend"
 project = "compiler"
 tier = "merge"
 cost = "medium"
@@ -2245,7 +2290,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_llvm_symbol_collision"
 area = "backend"
-shard = "backend"
+shard = "tools"
 project = "compiler"
 tier = "merge"
 cost = "medium"
@@ -2259,7 +2304,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_llvm_typed_ir"
 area = "backend"
-shard = "backend"
+shard = "tools"
 project = "compiler"
 tier = "merge"
 cost = "medium"
@@ -2273,7 +2318,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_llvm_typed"
 area = "backend"
-shard = "backend"
+shard = "frontend"
 project = "compiler"
 tier = "merge"
 cost = "medium"
@@ -2287,7 +2332,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_lsp_b3"
 area = "tools"
-shard = "tools"
+shard = "backend"
 project = "compiler"
 tier = "merge"
 cost = "medium"
@@ -2301,7 +2346,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_lsp_b4"
 area = "tools"
-shard = "tools"
+shard = "backend"
 project = "compiler"
 tier = "merge"
 cost = "medium"
@@ -2315,7 +2360,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_lsp"
 area = "tools"
-shard = "tools"
+shard = "frontend"
 project = "compiler"
 tier = "merge"
 cost = "medium"
@@ -2329,7 +2374,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_mcp"
 area = "tools"
-shard = "tools"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "medium"
@@ -2343,7 +2388,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_new"
 area = "tools"
-shard = "tools"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2357,7 +2402,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_origin_agreement"
 area = "infra"
-shard = "eval"
+shard = "backend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2371,7 +2416,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_os_entropy"
 area = "infra"
-shard = "tools"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2399,7 +2444,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_parse_errors"
 area = "frontend"
-shard = "frontend"
+shard = "eval"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2413,7 +2458,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_perf_scaling"
 area = "infra"
-shard = "types"
+shard = "backend"
 project = "compiler"
 tier = "merge"
 cost = "heavy"
@@ -2427,7 +2472,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_perf_stage_census"
 area = "infra"
-shard = "tools"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2441,7 +2486,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_ported"
 area = "infra"
-shard = "tools"
+shard = "eval"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2455,7 +2500,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_preflight_base"
 area = "infra"
-shard = "frontend"
+shard = "eval"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2469,7 +2514,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_prelude_obj"
 area = "infra"
-shard = "eval"
+shard = "frontend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2483,7 +2528,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_prelude_shadow_census"
 area = "infra"
-shard = "tools"
+shard = "backend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2497,7 +2542,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_project_enrolment"
 area = "soundness"
-shard = "tools"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2511,7 +2556,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_references_correctness"
 area = "infra"
-shard = "tools"
+shard = "backend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2525,7 +2570,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_references_scaling"
 area = "infra"
-shard = "tools"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "heavy"
@@ -2539,7 +2584,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_references_tool"
 area = "infra"
-shard = "tools"
+shard = "eval"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2567,7 +2612,7 @@ toolchain = ["wasm-tools", "node>=24", "clang"]
 [[gate]]
 name = "diff_compiler_repl"
 area = "tools"
-shard = "tools"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2581,7 +2626,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_resolve_batch"
 area = "frontend"
-shard = "frontend"
+shard = "tools"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2595,7 +2640,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_resolve_modules"
 area = "frontend"
-shard = "frontend"
+shard = "tools"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2609,7 +2654,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_resolve"
 area = "frontend"
-shard = "frontend"
+shard = "backend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2623,7 +2668,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_rt_obj"
 area = "infra"
-shard = "backend"
+shard = "eval"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2637,7 +2682,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_run_check_agreement"
 area = "infra"
-shard = "tools"
+shard = "eval"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2651,7 +2696,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_run_entry_subdir"
 area = "infra"
-shard = "tools"
+shard = "frontend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2665,7 +2710,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_run_stdout_flush"
 area = "infra"
-shard = "tools"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2693,7 +2738,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_shadow_semantics"
 area = "infra"
-shard = "types"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2707,7 +2752,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_slice_oob"
 area = "infra"
-shard = "eval"
+shard = "backend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2735,7 +2780,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_snapshot_core_ir"
 area = "frontend"
-shard = "frontend"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2749,7 +2794,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_snapshot_eval_errors"
 area = "frontend"
-shard = "frontend"
+shard = "backend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2763,7 +2808,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_snapshot_eval"
 area = "frontend"
-shard = "frontend"
+shard = "tools"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2777,7 +2822,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_snapshot_frontend"
 area = "frontend"
-shard = "frontend"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2791,7 +2836,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_snapshot_prelude"
 area = "frontend"
-shard = "frontend"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2805,7 +2850,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_snapshot_types"
 area = "frontend"
-shard = "frontend"
+shard = "eval"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2819,7 +2864,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_snapshot_types_user"
 area = "frontend"
-shard = "frontend"
+shard = "backend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2833,7 +2878,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_snapshot_wasm_input"
 area = "frontend"
-shard = "frontend"
+shard = "tools"
 project = "compiler"
 tier = "merge"
 cost = "medium"
@@ -2861,7 +2906,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_stack_overflow"
 area = "infra"
-shard = "backend"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2875,7 +2920,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_stage_ir_scaling"
 area = "infra"
-shard = "types"
+shard = "eval"
 project = "compiler"
 tier = "merge"
 cost = "heavy"
@@ -2889,7 +2934,7 @@ toolchain = ["clang", "valgrind"]
 [[gate]]
 name = "diff_compiler_test_native"
 area = "infra"
-shard = "eval"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2903,7 +2948,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_test"
 area = "infra"
-shard = "tools"
+shard = "eval"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2917,7 +2962,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_test_typecheck"
 area = "infra"
-shard = "tools"
+shard = "types"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2931,7 +2976,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_tmc_parity"
 area = "backend"
-shard = "backend"
+shard = "frontend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2945,7 +2990,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_typecheck_errors"
 area = "types"
-shard = "types"
+shard = "eval"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2959,7 +3004,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_wasm_shim_parity"
 area = "wasm"
-shard = "frontend"
+shard = "backend"
 project = "compiler"
 tier = "merge"
 cost = "medium"
@@ -2973,7 +3018,7 @@ toolchain = []
 [[gate]]
 name = "diff_native_cli"
 area = "infra"
-shard = "backend"
+shard = "eval"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -2987,7 +3032,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_native_stack"
 area = "infra"
-shard = "backend"
+shard = "tools"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -3015,7 +3060,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "effect_builtin_param_domain"
 area = "infra"
-shard = "types"
+shard = "frontend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -3029,7 +3074,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "effect_param_domain"
 area = "infra"
-shard = "types"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -3043,7 +3088,7 @@ toolchain = []
 [[gate]]
 name = "effect_product_domain"
 area = "infra"
-shard = "types"
+shard = "eval"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -3057,7 +3102,7 @@ toolchain = []
 [[gate]]
 name = "effect_set_domain"
 area = "infra"
-shard = "types"
+shard = "tools"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -3099,7 +3144,7 @@ toolchain = []
 [[gate]]
 name = "manifest_emit"
 area = "infra"
-shard = "tools"
+shard = "backend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -3127,7 +3172,7 @@ toolchain = []
 [[gate]]
 name = "native_fixtures/run"
 area = "infra"
-shard = "frontend"
+shard = "eval"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -3169,7 +3214,7 @@ toolchain = []
 [[gate]]
 name = "selfcompile_build_fixpoint"
 area = "backend"
-shard = "backend"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "heavy"
@@ -3183,7 +3228,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "selfcompile_emit"
 area = "backend"
-shard = "backend"
+shard = "sqlite"
 project = "compiler"
 tier = "merge"
 cost = "heavy"
@@ -3328,7 +3373,7 @@ toolchain = ["wasm-tools", "node>=24", "clang"]
 [[gate]]
 name = "diff_compiler_gate_registry"
 area = "infra"
-shard = "tools"
+shard = "frontend"
 project = "compiler"
 tier = "merge"
 cost = "cheap"
@@ -3345,8 +3390,11 @@ toolchain = []
 # uncommitted hand-edit inside the region before a diff could see it). Not
 # binary-free (same accepted gap as diff_compiler_gate_registry above);
 # shard="other-job" because it has its own CI job (ci-gen-drift), not a `gates`
-# matrix row. This gate is ADVISORY; the same `--check` call also runs inside
-# the REQUIRED diff_compiler_ci_shard_coverage.
+# matrix row. This gate is itself REQUIRED (`ci-gen-drift` is one of the
+# ruleset's required contexts — derive, don't trust this comment,
+# AGENTS.md [W-REQUIRED-CHECKS]); the same `--check` call also runs inside
+# the REQUIRED diff_compiler_ci_shard_coverage, as an independent proof that
+# does not depend on this gate's own tier.
 [[gate]]
 name = "diff_compiler_ci_gen_drift"
 area = "infra"
@@ -3357,8 +3405,67 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_ci_gen_drift.sh"
 oracles = []
-sources = ["compiler/tools/gate_cmd.mdk", "test/diff_compiler_ci_gen_drift.sh", "test/gates.toml", ".github/workflows/ci.yml"]
+sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_cost.mdk", "test/diff_compiler_ci_gen_drift.sh", "test/gates.toml", "test/gate_cost_baseline.json", ".github/workflows/ci.yml"]
 corpus = []
+toolchain = []
+
+# The per-gate COST TRANSPORT's own gate (#2178, S-1-S-cost-record). Grades the
+# poisoning guard on both halves — that `test/run_gates.sh` refuses to PRODUCE a
+# timing report on a `pull_request` run (the one event ci.yml narrows) and that
+# `test/gate_cost_ingest.sh` refuses to ADMIT a report tagged with one — plus the
+# median arithmetic and the committed baseline's internal agreement. Binary-free
+# and oracle-free: it builds a scratch tree with one fake gate rather than
+# running any real one, so it costs milliseconds. shard="other-job" because it
+# has its own CI job (`gate-cost`), not a `gates` matrix row — placing it in a
+# row would have meant regenerating the matrix, which is a separate slice's work.
+[[gate]]
+name = "diff_compiler_gate_cost"
+area = "infra"
+shard = "other-job"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_gate_cost.sh"
+oracles = []
+sources = ["test/run_gates.sh", "test/gate_cost_ingest.sh", "test/diff_compiler_gate_cost.sh", "test/gate_cost_baseline.json"]
+corpus = []
+toolchain = []
+
+# The SHARD BALANCER's own gate (#2178, S-3-S-balancer). Grades the four
+# properties that make `medaka gate balance` safe to run unattended, each of
+# which fails SILENTLY if it regresses — a wrong packing still yields a
+# well-formed registry and eight green `gates (<row>)` checks. (1) Running it
+# twice on an unchanged baseline is a byte-identical no-op, proved by diff
+# rather than by the tool's own verdict. (2) The hysteresis band never
+# preserves an ILLEGAL assignment: a gate needing wasm-tools on a row without
+# it is repaired even when the legal move is worth 10ms of a 310ms pole — the
+# first draft damped exactly that and exited 0. (3) A schedulable gate with no
+# row in the cost baseline is a REFUSAL, never a zero (the baseline is keyed by
+# run_gates.sh's gate label, not the registry's `name`, and the two agree only
+# for gates under test/). (4) When one indivisible gate alone blows the
+# pole/median target the refusal names that gate rather than blaming the
+# packing. Plus a `--check` that the committed shard assignment IS the
+# balancer's output. Oracle-free; needs only ./medaka.
+#
+# shard="other-job" because it tests SCHEDULING and so must not be scheduled by
+# the thing it grades: a balancer bug that mis-packs the matrix would move this
+# gate too, and a check cannot be a member of the set it certifies.
+#
+# Runs as the `gate-balance:` job in ci.yml (added by S-4, alongside
+# `diff_compiler_gate_cost`'s `gate-cost:` job).
+[[gate]]
+name = "diff_compiler_gate_balance"
+area = "infra"
+shard = "other-job"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_gate_balance.sh"
+oracles = []
+sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_cost.mdk", "test/diff_compiler_gate_balance.sh", "test/gate_cost_baseline.json", "test/gates.toml"]
+corpus = ["test/gate_balance_fixtures"]
 toolchain = []
 
 
@@ -3373,45 +3480,53 @@ name = "engines"
 full_cores = true
 wasm_arm = true
 rationale = "test/gate_shards/engines.txt"
+pinned_gates = ["pds/test/protocol_all_engines", "diff_compiler_engines", "diff_compiler_rejection_parity"]
 
 [[shard]]
 name = "sqlite"
 full_cores = false
 wasm_arm = false
 rationale = "test/gate_shards/sqlite.txt"
+pinned_gates = []
 
 [[shard]]
 name = "pds"
 full_cores = false
 wasm_arm = true
 rationale = "test/gate_shards/pds.txt"
+pinned_gates = []
 
 [[shard]]
 name = "frontend"
 full_cores = false
 wasm_arm = false
 rationale = "test/gate_shards/frontend.txt"
+pinned_gates = []
 
 [[shard]]
 name = "types"
 full_cores = false
 wasm_arm = false
 rationale = "test/gate_shards/types.txt"
+pinned_gates = []
 
 [[shard]]
 name = "eval"
 full_cores = false
 wasm_arm = false
 rationale = "test/gate_shards/eval.txt"
+pinned_gates = []
 
 [[shard]]
 name = "backend"
 full_cores = false
 wasm_arm = false
 rationale = "test/gate_shards/backend.txt"
+pinned_gates = []
 
 [[shard]]
 name = "tools"
 full_cores = false
 wasm_arm = true
 rationale = "test/gate_shards/tools.txt"
+pinned_gates = []

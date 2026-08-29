@@ -1,4 +1,20 @@
-Phase 1 data-model gates are isolated here because each has a
-required Wasm arm and the repo gate carries a bounded interpreter
-discriminator. Keep this list explicit: later PDS phases must be
-placed from measured cost, not inherited through a broad glob.
+ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
+(`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
+regenerated into this matrix by `make gen-ci`; it changes whenever the
+baseline does, so nothing below names a gate. What this row is:
+
+wasm_arm = true  -> installs wasm-tools + Node and builds the Wasm
+oracle. This is one of only two OPEN rows that carry it (the other is
+`tools`), so it is one of only two rows a wasm-constrained gate can
+legally land on — the balancer treats that as a hard constraint, never
+as a cost, and refuses to pack rather than schedule such a gate where
+its toolchain is absent.
+
+full_cores = false, so the row shares a runner and the balancer may put
+any number of gates here. In practice it often holds very few: the
+single most expensive gate in the suite has to sit somewhere, and a row
+already at the pole cannot take another gate without raising it.
+
+The row NAME is a required status-check context (`gates (pds)`), so
+renaming it is a ruleset change, not an edit here — and it no longer
+implies a thematic tie to the PDS project.

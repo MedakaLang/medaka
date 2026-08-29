@@ -177,16 +177,40 @@ hold without 227 chances to disagree with itself:
 
 ```toml
 [[shard]]
-name        = "engines"
-full_cores  = true                              # ci.yml's `full_cores: "1"` matrix key
-wasm_arm    = true                              # ci.yml's `wasm_arm: "1"` matrix key
-rationale   = "test/gate_shards/engines.txt"    # PATH to the row's placement prose
+name         = "engines"
+full_cores   = true                              # ci.yml's `full_cores: "1"` matrix key
+wasm_arm     = true                              # ci.yml's `wasm_arm: "1"` matrix key
+rationale    = "test/gate_shards/engines.txt"    # PATH to the row's placement prose
+pinned_gates = ["pds/test/protocol_all_engines", "diff_compiler_engines", "diff_compiler_rejection_parity"]
 ```
 
 - **Booleans, not `"1"`.** ci.yml OMITS the key when the option is off; that
   absence is the generator's encoding of `false`, not the registry's. Both keys
   are required on every row — a row that merely forgot `wasm_arm` would otherwise
   lose its Wasm toolchain and take its gates' Wasm arms down without a word.
+- 🚨 **`pinned_gates` is a CLOSED ROW'S MEMBERSHIP, DECLARED — the one scheduling
+  fact no cost measurement can derive.** A `full_cores` row is closed to the
+  packer, which never moves a gate onto it or off it. That is right as a packing
+  rule and was, on its own, a hole: the balancer seeded the row from whatever
+  gates happened to name it, so the row was the last place a `shard` value was
+  still hand-assignable, and a hand edit in either direction was ADOPTED by the
+  next `medaka gate balance` run and reported "already balanced" ever after
+  (review finding F3 of #2178, tracked as #2205). The worse half was moving the
+  pinned gate OFF: a cost objective blind to the pin PREFERS that, because
+  idling a whole runner and stacking the suite's heaviest gate onto a shared one
+  improves pole/median (measured: 1.005 against 1.073).
+
+  So it is declared per row and checked against the registry in BOTH directions
+  — a member not declared, and a declaration not a member — which is what makes
+  it an invariant a wrong committed state can FAIL rather than a fiat under
+  which whatever is committed defines itself as correct. An OPEN row declares
+  `pinned_gates = []`, and a non-empty list on one is a hard error: its
+  membership is the packer's output, so a declaration there is prose the tool
+  would ignore, and a reader would take it for a constraint. Widening or
+  narrowing a closed row is a deliberate CI-capacity decision, made in the same
+  commit as the row's `test/gate_shards/<name>.txt` rationale — never a side
+  effect of a baseline re-ingest. Pinned by `test/diff_compiler_gate_balance.sh`
+  (the `pin_intruder`, `pin_deserter` and `pin_on_open_row` fixtures).
 - **`rationale` is a path, not the prose.** Two reasons, and the first is
   decisive: the reader's TOML subset has no multi-line string (a `"""` is a hard
   parse error by design, `stdlib/toml.mdk`), so 180 lines of English would have to
@@ -306,18 +330,40 @@ own place in the bootstrap, for no gain — §5's circularity is unchanged eithe
 
 ### Still open
 
-- **`shard` is HAND-ASSIGNED DATA AWAITING THE BALANCER, not a derived output.**
-  S-1 of #2177 transcribed the eight row memberships and their `full_cores`/
-  `wasm_arm` options out of ci.yml's hand-written matrix and proved them set-equal
-  to it, row by row, with no sampling; it did not choose a single placement.
-  #2178 is what will CHOOSE these values, and when it does it becomes this field's
-  writer — until then the field must be hand-edited in step with ci.yml, and
-  nothing may read it as if a balancer had produced it. Two consequences worth
-  naming: (a) until S-2 generates ci.yml, the per-row prose exists TWICE — in
-  `test/gate_shards/*.txt` and still as comments in ci.yml — and can drift; (b) no
-  gate enforces the row-membership set-equality yet, it was proved once by
-  measurement in S-1's report. Both close when S-2's generated ci.yml makes the
-  registry the only copy.
+- ~~**`shard` is HAND-ASSIGNED DATA AWAITING THE BALANCER, not a derived output.**~~
+  **CLOSED (S-4-S-derived-assignment, #2178)** — `shard` is now a DERIVED OUTPUT.
+  `medaka gate balance` (`compiler/tools/gate_cmd.mdk`) packs every schedulable
+  gate onto the open rows from the per-gate costs in
+  `test/gate_cost_baseline.json`, subject to each row's `wasm_arm` toolchain
+  constraint and `full_cores` closure and to an enforced pole/median budget, and
+  writes the `shard` values back; `make gen-ci` (`medaka gate ci`) then
+  regenerates ci.yml's matrix from them. The landed rebalance moved 164 of 202
+  gates and took the pole from 1143.6s to 948.9s (pole/median 1.26 -> 1.073);
+  948.9s is the pole FLOOR, since gates are indivisible and one gate alone costs
+  that.
+
+  The three loose ends named here all close with it. (a) The per-row prose exists
+  ONCE, in `test/gate_shards/*.txt`, emitted verbatim into the generated region —
+  and it now describes the ROW (its options, its constraint) rather than any
+  gate's placement, because placement is an output that moves whenever the
+  baseline does. (b) Row membership is enforced, not proved once: the required
+  `ci-gen-drift` context runs `medaka gate ci --check` (ci.yml == f(registry))
+  AND `medaka gate balance --check` (registry == g(baseline)). (c) A hand edit
+  reds. ⚠️ The first check ALONE does not catch one — edit `shard`, run
+  `make gen-ci`, and the registry and the workflow agree with each other about a
+  row nothing derived; the second is what closes that, and it is why S-3's
+  hysteresis band no longer decides what is written (a band that keeps a
+  divergent-but-close assignment makes "the derived assignment" a set, and a
+  check can only police a value).
+
+  ⚠️ ONE RESIDUAL, closed separately (#2205): closure alone left the closed row's
+  membership seeded from `c.curRow`, so `engines` remained hand-assignable while
+  the other seven rows were derived. It is now DECLARED in `pinned_gates` and
+  checked in both directions (§2a).
+
+  A new `[[gate]]` still needs SOME `shard` value — the schema requires the field.
+  Write the row you would guess, or `other-job`; the balancer decides the real
+  placement on its next run, and the required check says so before CI does.
 - ~~`medaka gate verify` does NOT check that a `shard` value is one of the eight row
   names or `other-job`.~~ **CLOSED (S-4, #2177)** — but in the coverage gate, not in
   `verify`: `test/diff_compiler_ci_shard_coverage.sh` reds on a `shard` that is
@@ -329,10 +375,62 @@ own place in the bootstrap, for no gain — §5's circularity is unchanged eithe
   `name:` glob, not a shard query. Deliberately out of S-1's scope; add it with
   the consumer that needs it.
 
-- Per-gate timing transport: committed file updated by a bot/nightly (GHC pushes git
-  notes from CI) vs. fetched from the Actions API at balance time (no tree writes,
-  but a network dependency in the balancer). Leaning committed-file for
-  reviewability.
+- ~~Per-gate timing transport: committed file updated by a bot/nightly vs. fetched from
+  the Actions API at balance time.~~ **CLOSED (S-1-S-cost-record, #2178)** — committed
+  file, as the leaning said, and here is what was built:
+
+  * **Producer: `test/run_gates.sh`, not `medaka gate run`.** `GATE_TIMING_JSON=<path>`
+    makes a run also write a per-gate report; unset (every local invocation) it writes
+    nothing and changes nothing. ⚠️ **This is a deliberate deviation from
+    CI-ARCHITECTURE.md §3.3's "recorded by the driver".** The driver is not what CI
+    executes — ci.yml's `Gate shard — …` step runs `sh test/run_gates.sh ${{
+    steps.plan.outputs.pats }}` — and `medaka gate run` still does not reproduce
+    `run_gates.sh`'s exit-code classification (the bullet below). A cost baseline has to
+    be measured on the path CI actually takes, so the producer is that path. Adding
+    timing there is behaviour-neutral to the classification: two `date` calls around an
+    invocation that is otherwise untouched.
+  * **Schema: `runReportJson`/`resultJson`'s (`compiler/tools/gate_cmd.mdk`), minus
+    `stdout`/`stderr`.** A cost record has no use for a gate's output, and dropping it
+    also removes the only place arbitrary gate text could sit inside the document the
+    consumer scans. Envelope gains `schema` (`"gate-cost/1"`) and a `provenance` object
+    (event, shard, runId, runAttempt, repo, ref, sha, date); `parallel` is `true` here,
+    where the driver hardcodes `false`, because this runner really is parallel. Because
+    the per-gate record is otherwise field-for-field the driver's, the day `gate run`
+    becomes CI's executor the transport is unchanged.
+  * **Transport: `test/gate_cost_baseline.json`, committed**, folded from N run reports
+    by `test/gate_cost_ingest.sh`. Reviewability was the deciding argument and it holds:
+    a rebalance diff can be read next to the numbers that caused it, the numbers are
+    pinned at review time rather than re-fetched into a different answer, and the
+    balancer needs no network and no token. Raw samples are retained beside each median
+    so any reader can re-derive it — and so an outlier is visible in review rather than
+    averaged into invisibility.
+  * **Median, not mean, and the LOWER median for an even count.** One runner hiccup — a
+    cold cache, a noisy neighbour, a retried step — is a single wild sample, and a mean
+    lets it move a gate's placement; the median ignores it unless it is the majority
+    behaviour, which is the question a balancer is actually asking. The lower median
+    keeps the value integral and deterministic, so no float rounding churns the diff.
+  * **Poisoning resistance is STRUCTURAL, on both sides.** `pull_request` is the one
+    event ci.yml narrows (`detect`'s `plan` step), so its per-gate times are measured
+    over a gate SUBSET and are not a baseline sample. `run_gates.sh` refuses to *produce*
+    a report on that event at all, whatever ci.yml passes it; `gate_cost_ingest.sh`
+    independently refuses to *admit* one whose recorded event is off its allowlist
+    (`workflow_dispatch merge_group push schedule`) OR whose `runId`/`runAttempt`/
+    `sha`/`ref` provenance fields are empty — both conditions must hold. The event
+    allowlist alone stops a report tagged with a narrowed or unrecognized event string;
+    it does not, by itself, stop a locally-produced report that merely CLAIMS an
+    admissible event (e.g. hand-setting `GITHUB_EVENT_NAME=push` for a local run). The
+    non-empty provenance check closes that gap: a real CI run of an admissible event
+    always has `github.run_id`/`run_attempt`/`sha`/`ref` set by Actions, and nothing
+    outside Actions sets them, so a locally-produced or replayed artifact is empty here
+    by construction. Together the two checks are what stop a hand-carried, downloaded,
+    or replayed artifact — or a future ci.yml edit — reaching the committed file. Both
+    halves are graded by `test/diff_compiler_gate_cost.sh`, which also pins the median
+    arithmetic, ingest idempotence, the "a failing gate contributes no sample" rule, and
+    the committed baseline's agreement with its own samples.
+  * **The balancer (S-4) now consumes this baseline** — `medaka gate balance` packs every
+    schedulable gate onto its derived row from these per-gate costs. This bullet closes
+    the transport question only; the consumer is described in the `shard` DERIVED OUTPUT
+    section above.
 - Whether preflight survives as a thin `medaka gate`-calling shim (agents' muscle
   memory, `make preflight`) — probably yes, indefinitely.
 - `medaka gate run`'s worker pool: today it is sequential by construction (no
@@ -385,9 +483,11 @@ why the script survives.
 **The registry-read is only sound if the matrix agrees (F-1).** Reading shard
 membership from the registry says nothing about what CI runs unless ci.yml's matrix
 still equals what the registry generates. `test/diff_compiler_ci_gen_drift.sh` asserts
-that, but is ADVISORY — so a hand-edit dropping gates from a matrix row passed every
-REQUIRED gate. This script therefore runs `medaka gate ci --check` itself, as a plain
-shell step ahead of its `python3` block, before it certifies anything. One mechanism
+that, and is itself REQUIRED (`ci-gen-drift` is one of the ruleset's required contexts —
+derive, don't trust a list, AGENTS.md [W-REQUIRED-CHECKS]); at F-1 time it was still
+advisory, so this script also runs `medaka gate ci --check` itself, as a plain
+shell step ahead of its `python3` block, before it certifies anything — independent
+proof at the required tier that does not depend on `ci-gen-drift`'s own tier. One mechanism
 (`gate ci --check`), two callers — not a second mechanism.
 
 **Why not retire it into `verify`.** The half nothing else in the tree can do is the
@@ -404,7 +504,7 @@ works.
 |---|---|
 | Is every `.sh` in the tree enrolled, or listed as a non-gate tool? | `medaka gate verify` (`test/diff_compiler_gate_registry.sh`) |
 | Which shard runs a gate? | `test/gates.toml`'s `shard` field |
-| Does ci.yml's matrix still equal what the registry generates? | `medaka gate ci --check` — called by `test/diff_compiler_ci_gen_drift.sh` (advisory) AND by `test/diff_compiler_ci_shard_coverage.sh` (required) |
+| Does ci.yml's matrix still equal what the registry generates? | `medaka gate ci --check` — called by `test/diff_compiler_ci_gen_drift.sh` (required) AND by `test/diff_compiler_ci_shard_coverage.sh` (required) |
 | Is every registry entry actually reachable in CI? | `test/diff_compiler_ci_shard_coverage.sh` |
 | Does a workflow `run:` step name a script no one enrolled? | `test/diff_compiler_ci_shard_coverage.sh` |
 | Do ci.yml's and `gate_cmd.mdk`'s prose allowlists agree? | `test/diff_compiler_prose_classifier.sh` (#2200) |

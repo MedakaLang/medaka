@@ -1,9 +1,13 @@
-`native_fixtures/run` (T8) sits one directory below `test/`, so even
-the coverage gate's `test/*.sh` glob could not see it — it ran
-nowhere. `build_construct_coverage` (T-3, a BACKEND gate) and
-`diff_compiler_wasm_shim_parity` (#370, a WASM gate) and
-`diff_compiler_preflight_base` (#560, pure git) and
-`diff_compiler_dict_semantics` (#616, a TYPES gate) are all parked
-here by cost, not theme — each noted at length in dossier `ci.md`;
-the short version is this shard has the room and each of them is
-free-to-cheap wherever it lands.
+ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
+(`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
+regenerated into this matrix by `make gen-ci`; it changes whenever the
+baseline does, so nothing below names a gate. What this row is:
+
+full_cores = false, wasm_arm = false -> an ordinary shared runner with
+no extra toolchain, fully open to the packer. It can take any gate that
+does not require the Wasm toolchain, and the balancer fills it to the
+same target load as every other open row.
+
+The row NAME is a required status-check context (`gates (frontend)`), so
+renaming it is a ruleset change, not an edit here — and it carries no
+thematic meaning: rows are filled by measured cost, never by theme.

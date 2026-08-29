@@ -142,9 +142,18 @@ done
 not enrolled in `test/gates.toml` (with a `shard` field) SILENTLY NEVER RUNS — caught by
 `medaka gate verify` (via `test/diff_compiler_gate_registry.sh`), which owns ENROLMENT;
 `diff_compiler_ci_shard_coverage.sh` owns CI REACHABILITY of what is already enrolled. Enrol
-it in `test/gates.toml` and run `make gen-ci` to regenerate `ci.yml`'s shard matrix. Registration rules, the
-`test/CI-COVERAGE-EXCEPTIONS.txt` escape hatch, and `[W-SHARD-COST]` (shards are scheduled by
-cost, not theme): the `gates` skill.
+it in `test/gates.toml`. ⚠️ **[W-SHARD-DERIVED] `shard` is a DERIVED OUTPUT, not a value you
+choose** (#2178): the new entry needs SOME `shard` string because the schema requires one,
+but `medaka gate balance` — not you — decides where it lands, from the measured costs in
+`test/gate_cost_baseline.json`. A hand-edited `shard` reds the REQUIRED `ci-gen-drift`
+context, and it reds even if you also ran `make gen-ci` to keep `ci.yml` consistent with it.
+🚨 A brand-new gate has NO row yet in the cost baseline, so `medaka gate balance` HARD-
+REFUSES to run in the same commit that adds it — enrol with a guessed `shard`, accept that
+`ci-gen-drift` reds until the next baseline re-ingest, then run `medaka gate balance && make
+gen-ci` as a follow-up commit (or trigger `gh workflow run ci.yml --ref <branch>` first to
+get a real sample before merging). Registration rules, the `test/CI-COVERAGE-EXCEPTIONS.txt`
+escape hatch, and `[W-SHARD-COST]` (shards are filled by cost, never by theme): the `gates`
+skill.
 
 ⚠️ **[W-THIRD-CONSUMER] `ci.yml` shard patterns are TWO classifications, not the whole
 list.** `test/preflight.sh` independently derives its own gate set from the diff (its
@@ -156,8 +165,8 @@ narrows scope with no error.
 `test/` IS a project, and CI knows it by that manifest — not by anyone remembering.** Such
 a project needs a floor gate under `<project>/test/` (a `pattern:` matching no gate is a
 hard `::error::`, so the gate must exist before the enrolment does), a `shard` field in
-`test/gates.toml` placed by measured cost (then `make gen-ci` to regenerate `ci.yml`'s shard
-matrix), and nothing at all in `test/preflight.sh` — preflight's generic arm
+`test/gates.toml` (any row name — `medaka gate balance` then `make gen-ci` derive the real
+placement and the matrix; see `[W-SHARD-DERIVED]`), and nothing at all in `test/preflight.sh` — preflight's generic arm
 derives the project set from `git ls-files '*medaka.toml'` and maps any changed path under
 `<project>/` to `<project>/test/*` on its own. All three legs are re-derived and compared on
 every run by `test/diff_compiler_project_enrolment.sh`, so enrolment drift reds a gate rather

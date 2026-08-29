@@ -1,0 +1,76 @@
+# test/gate_balance_fixtures/pin_on_open_row.toml — SYNTHETIC, hand-written.
+#
+# THE OTHER HALF OF THE SCHEMA (#2205): `pinned_gates` on an OPEN row.
+#
+# Row `a` is `full_cores = false` — the packer owns it — yet declares
+# `pinned_gates = ["z1"]`. Here that declaration even happens to be TRUE of the
+# committed file, which is what makes it worth pinning: a reader would take it
+# for a working constraint, and the balancer would move `z1` off `a` on the
+# next re-ingest without a word, because nothing on an open row is a pin.
+#
+# A declaration the tool ignores is worse than no declaration, so it is a hard
+# error rather than a warning. Everything else about this registry is healthy;
+# the open-row `pinned_gates` is the only thing the balancer may complain about.
+
+[[gate]]
+name = "pinned1"
+area = "fixture"
+shard = "pin"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/pinned1.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "z1"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/z1.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "z2"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/z2.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "pin"
+full_cores = true
+wasm_arm = false
+rationale = "test/gate_shards/pin.txt"
+pinned_gates = ["pinned1"]
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+pinned_gates = ["z1"]
+
+[[shard]]
+name = "b"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/b.txt"
+pinned_gates = []
