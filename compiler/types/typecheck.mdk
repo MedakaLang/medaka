@@ -93,7 +93,6 @@ import frontend.ast.{
   tabKeyEq,
   tabKeyName,
   lookupTab,
-  tabHasName,
 }
 -- #1111 Stage A-2 unit A-2.3: the TYPE-namespace re-key.  `aliasTableRef` /
 -- `dataParamKindsRef` (and their `universe*` cross-run halves) are keyed by
@@ -153,6 +152,7 @@ import support.ordmap.{
   omHasKey,
   omKeys,
   omFromPairs,
+  omFromNames,
   omMapValues,
   omSize,
 }
@@ -3923,6 +3923,11 @@ declEnvDirectImports edges mid = fromOption [] (omLookup mid edges)
 declEnvSeedDataUniverse : String -> DeclEnvs -> Unit
 declEnvSeedDataUniverse mid envs =
   perRun.value.dataParamKindsRef := fromOption [] (omLookup mid envs.deKindsBefore)
+  -- #2158: rebuild the name-only index in lockstep with the table it mirrors —
+  -- this is a whole-list REPLACE (like the line above), not a prepend, so the
+  -- index is rebuilt from scratch here rather than incrementally updated.
+  perRun.value.dataParamNameIndexRef :=
+    omFromNames (map (p => tabKeyName (fst p)) perRun.value.dataParamKindsRef.value) omEmpty
   -- #1119 D-2: the VARIANCE half of the same seed, read under the same key.  A
   -- MISS here is fail-SILENT in the same direction the kind half is (an absent
   -- row makes `unifyN`'s variance gate abstain, i.e. today's leniency) — it can
@@ -7952,6 +7957,7 @@ data PerRun = PerRun {
     recordByNameRef : Ref (OrdMap RecordInfo),  -- (local `let`/`where` helpers), reset at each body start: an occurrence resolving
     fieldOwnersRef : Ref (OrdMap (List String)),  -- to one is a LOCAL shadow, never a method occurrence, so no method obligation is recorded for it (round-2 adversarial break 3).
     dataParamKindsRef : Ref (List (TabKey, List Kind)),  -- A tyvar-id watermark was tried first and is UNSAFE: freshness-skipping
+    dataParamNameIndexRef : Ref (OrdMap Unit),  -- #2158: `tabKeyName`-only index over dataParamKindsRef's keys, kept in lockstep at every write site (freshPerRun / declEnvSeedDataUniverse / recordParamKinds) so `noImplHintFor`'s bare-name membership test is O(1)-ish instead of an O(n) `tabHasName` scan. Same bare-name semantics as `tabHasName` — collapses TkIdent/TkBare and module identity by design (#1111 A-2.3), not a stricter key.
     dataParamPolarityRef : Ref (List (TabKey, List Polarity)),  -- #1119 D-2: `dataParamKindsRef`'s VARIANCE twin — same key, same prepend/first-match discipline.  Read ONLY through `paramPolaritiesOf` (which seeds the two write channels).
     dataParamRowAtomsRef : Ref (List (TabKey, List (List Atom))),  -- #2110: the ATOM-GUARANTEE twin of the two above — per KRow parameter, the atoms this declaration charges at EVERY occurrence of that parameter.  Read ONLY through `paramRowAtomsOf`.
     aliasTableRef : Ref (List (TabKey, (List String, Ty))),  -- broke a top-level literal's fromInt obligation and surfaced a phantom
@@ -8068,6 +8074,7 @@ freshPerRun _ = PerRun {
   recordByNameRef = Ref omEmpty,
   fieldOwnersRef = Ref omEmpty,
   dataParamKindsRef = Ref [],
+  dataParamNameIndexRef = Ref omEmpty,
   dataParamPolarityRef = Ref [],
   dataParamRowAtomsRef = Ref [],
   aliasTableRef = Ref [],
@@ -15845,6 +15852,10 @@ recordParamKinds : TyConOrigin -> String -> List Kind -> Unit
 recordParamKinds o name kinds =
   let entry = (tyTabKey o name, kinds)
   perRun.value.dataParamKindsRef := entry::perRun.value.dataParamKindsRef.value
+  -- #2158: keep the name-only index in lockstep — an incremental insert here
+  -- (unlike declEnvSeedDataUniverse's rebuild) because this call only ADDS one
+  -- key; a duplicate name insert is a harmless no-op (Set/Map semantics).
+  perRun.value.dataParamNameIndexRef := omInsert name () perRun.value.dataParamNameIndexRef.value
 
 -- A data param is KRow iff its name appears in a field's effect-tail position
 -- (`<e>`); else KType (the common case).  Inferred from usage — no syntax.
@@ -27671,7 +27682,12 @@ noImplHint _ _ = None
 
 noImplHintFor : String -> String -> Option String
 noImplHintFor iface n
-  | tabHasName n perRun.value.dataParamKindsRef.value =
+  -- #2158: was `tabHasName n perRun.value.dataParamKindsRef.value`, an O(n)
+  -- linear scan re-run per no-impl diagnostic. `dataParamNameIndexRef` is the
+  -- same bare-name membership question (built from `tabKeyName` over exactly
+  -- the same keys, kept in lockstep at every dataParamKindsRef write site —
+  -- see the field's comment on `PerRun`), answered via `omHasKey` instead.
+  | omHasKey n perRun.value.dataParamNameIndexRef.value =
     Some (noImplAdvice iface n)
   | otherwise = None
 

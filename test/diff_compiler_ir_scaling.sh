@@ -591,13 +591,25 @@ DIAGBUCKET_N="${IR_DIAGBUCKET_N:-300}"
 # untouched (the OrdMap index costs nothing measurable) and 74 Ir per message pair
 # — one String comparison — is gone.
 #
-# ⚠️ THE RESIDUAL b = 165 IS A SECOND, DIFFERENT QUADRATIC, NOT #2068 LEFTOVER.
-# `noImplHintFor` calls `tabHasName` (compiler/frontend/ast.mdk:464), a linear
-# List scan over `dataParamKindsRef`, once per no-impl DETECTION — O(data-types x
-# no-impl-errors), and THIS shape scales both axes together. Discriminated by
-# measurement: the same route with ONE data type and N interfaces (so
-# `dataParamKindsRef` stays size 1) fits b = 79 instead of 165. Filed separately.
-# If that one is fixed, the numbers above move; re-derive rather than trusting them.
+# ⚠️ THE RESIDUAL b = 165 WAS A SECOND, DIFFERENT QUADRATIC, NOT #2068 LEFTOVER —
+# now FIXED (#2158). `noImplHintFor` used to call `tabHasName`
+# (compiler/frontend/ast.mdk:464), a linear List scan over `dataParamKindsRef`,
+# once per no-impl DETECTION — O(data-types x no-impl-errors), and THIS shape
+# scaled both axes together. Discriminated by measurement: the same route with
+# ONE data type and N interfaces (so `dataParamKindsRef` stayed size 1) fit
+# b = 79 instead of 165.
+#
+# #2158 replaced the scan with `dataParamNameIndexRef`, a name-keyed `OrdMap`
+# built and kept in lockstep with `dataParamKindsRef` at each of its three write
+# sites (freshPerRun / declEnvSeedDataUniverse / recordParamKinds), so
+# `noImplHintFor` is an `omHasKey` lookup instead of a re-scan. Re-measured
+# post-fix on this box: net Ir at N = 400/800/1600 was 871409915 / 1774831855 /
+# 3621459149, fitting net(N) = a*N + b*N^2 over 400->1600 gives a = 2.15e6,
+# b ~= 71 — down from 165 (lineage: 239 [pre-#2068] -> 165 [pre-#2158] -> ~71
+# [post-#2158]). The residual b is NOT zero: this shape still walks `perRun`
+# state proportional to N somewhere else (e.g. diagnostic accumulation shared
+# with the `errs`/`diagbucket` bands above), so a further quadratic may remain;
+# re-derive rather than trusting this number if the surrounding code moves.
 #
 # What this band IS for: keeping a deterministic ladder on the plain
 # `pushTypeErrorOnceAt` route (the route #2068's first, invalid measurement never
