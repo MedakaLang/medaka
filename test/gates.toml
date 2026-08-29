@@ -2192,6 +2192,19 @@ corpus = []
 toolchain = ["clang"]
 
 [[gate]]
+name = "diff_compiler_prelude_shadow_census"
+area = "infra"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_prelude_shadow_census.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
 name = "diff_compiler_project_enrolment"
 area = "soundness"
 project = "compiler"
