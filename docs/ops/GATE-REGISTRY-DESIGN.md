@@ -338,9 +338,48 @@ own place in the bootstrap, for no gain — §5's circularity is unchanged eithe
   constraint and `full_cores` closure and to an enforced pole/median budget, and
   writes the `shard` values back; `make gen-ci` (`medaka gate ci`) then
   regenerates ci.yml's matrix from them. The landed rebalance moved 164 of 202
-  gates and took the pole from 1143.6s to 948.9s (pole/median 1.26 -> 1.073);
-  948.9s is the pole FLOOR, since gates are indivisible and one gate alone costs
-  that.
+  gates and, under the SUM-of-medians model in use at the time, took the pole
+  from 1143.6s to 948.9s (pole/median 1.26 -> 1.073); that model was itself
+  superseded soon after (#2207, "real-wall-shards"): CI does not run a row's
+  gates one after another, `test/run_gates.sh` fans them out through an
+  `xargs -P $JOBS` pool, so what CI actually pays for a row is the MAKESPAN
+  over `$JOBS` workers, not their sum. `medaka gate balance` now scores each
+  row by simulating that pool — an LPT bin-packing of the row's gates onto
+  `$JOBS` worker buckets, the row's load being the fullest bucket — so the
+  pole is whichever row's simulated makespan is largest under the CURRENT
+  baseline and CURRENT assignment, and it moves with re-ingests and
+  rebalances rather than sitting at a number this doc can pin. Read it live
+  with `medaka gate balance --check`, which prints every row's makespan, the
+  pole, the median and the enforced pole/median target; a gate is still
+  indivisible, so a row holding one dominating gate still floors the pole at
+  that gate's own cost.
+
+  Since S-1 (#2208) each `runs[]` provenance row (`RunRecord`,
+  `compiler/tools/gate_cost.mdk`) also carries the row's own `jobs` (workers
+  CI actually used, consulted by `balJobsFor` to pick the worker count the
+  row is modelled with — never a literal, since `$JOBS` is derived from the
+  runner's core count), `parallel` (whether the fan-out actually ran
+  concurrently; `jobs == 1` when it did not, regardless of the recorded
+  worker count), and `rowElapsedMs` (the row's own real CI wall clock,
+  spanning the whole fan-out) — the number `medaka gate balance`'s
+  calibration lines report each row's makespan prediction against, so the
+  model is checkable against something other than its own arithmetic. A
+  fourth field, `gates` (F-2, #2178 review S2-1: the row's committed gate
+  count at ingest time), lets that calibration line tell a reader whether the
+  recorded run and the row's CURRENT assignment still describe the same gate
+  set — a residual is only comparable while they do, which stops being true
+  the moment a rebalance lands and stays false until the next ingest.
+
+  The tier axis (`merge` | `nightly` | `ondemand`) is the other lever on the
+  pole besides re-ingesting: a gate whose failure is a breadth check rather
+  than a soundness one can be moved to `nightly` and stop costing the queue
+  anything at all, rather than merely being packed onto a lighter row.
+  `pds/nightly/repo_vectors_eval_engine.sh` (#2208, "S-2-pds-pole") is that
+  mechanism in use: the interpreter's agreement with the compiled engines on
+  the representative corpus used to be `pds/test/repo_vectors.sh`'s own pole
+  gate at 948.9s (98.76% of that gate's own wall clock, under the SUM model
+  above), so the assertion moved to nightly while native/Wasm parity on the
+  same corpus — the soundness-bearing half — stayed in the queue.
 
   The three loose ends named here all close with it. (a) The per-row prose exists
   ONCE, in `test/gate_shards/*.txt`, emitted verbatim into the generated region —

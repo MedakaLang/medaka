@@ -1,0 +1,65 @@
+# test/gate_balance_fixtures/calib_staleness.toml — SYNTHETIC, hand-written.
+#
+# Discriminating fixture for the calibration staleness annotation (F-2,
+# #2178 review S2-1). Row `a` carries TWO committed gates but its recorded
+# run remembers only ONE (`calib_staleness.json`'s `runs[0].gates`) — a
+# rebalance landed since that run, so the recorded residual describes a gate
+# set that no longer exists. Row `b` carries ONE committed gate and its
+# recorded run also remembers ONE, so it must print with no annotation —
+# proving the mechanism is a real comparison, not a flag that always fires.
+
+[[gate]]
+name = "small1"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/small1.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "small2"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/small2.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "match1"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/match1.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+pinned_gates = []
+
+[[shard]]
+name = "b"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/b.txt"
+pinned_gates = []

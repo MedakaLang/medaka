@@ -115,6 +115,15 @@ else
     bad "per-gate ms is absent or non-numeric"
     cat "$TMP/wd.json"
   fi
+  # rowElapsedMs (#2208): the whole fan-out's own wall clock, a NEW top-level
+  # field distinct from any single gate's ms — must be present and numeric.
+  _row="$(sed -n 's/^  "rowElapsedMs": \([0-9][0-9]*\),\{0,1\}$/\1/p' "$TMP/wd.json")"
+  if [ -n "$_row" ] && [ "$_row" -ge 0 ] 2>/dev/null; then
+    ok "rowElapsedMs is present and numeric (fake row: ${_row}ms)"
+  else
+    bad "rowElapsedMs is absent or non-numeric"
+    cat "$TMP/wd.json"
+  fi
 fi
 
 # ── 3. the consumer refuses a narrowed-event report ───────────────────────────
@@ -181,6 +190,7 @@ _synth() { # $1 = out, $2 = runId, $3.. = "name:ms" pairs
     echo '  "schema": "gate-cost/1",'
     echo '  "jobs": 2,'
     echo '  "parallel": true,'
+    echo '  "rowElapsedMs": 999,'
     echo '  "ok": 1,'
     echo '  "failing": 0,'
     echo '  "provenance": {'
@@ -222,6 +232,16 @@ _med="$(sed -n 's/^    {"name": "gate_a", "medianMs": \([0-9]*\),.*$/\1/p' "$B")
 _smp="$(sed -n 's/^    {"name": "gate_a".*"samples": \([0-9]*\),.*$/\1/p' "$B")"
 [ "$_smp" = "5" ] && ok "all five samples retained raw in the file" \
                   || bad "samples was '$_smp', expected 5"
+
+# jobs/parallel/rowElapsedMs (#2208) round-trip into the runs[] entry for the
+# run they came from, recorded per-run (not merged/averaged across runs).
+_run5001="$(grep '"runId": "5001"' "$B")"
+case "$_run5001" in
+  *'"jobs": 2'*'"parallel": true'*'"rowElapsedMs": 999'*)
+    ok "runs[] entry carries jobs/parallel/rowElapsedMs from its own report" ;;
+  *)
+    bad "runs[] entry for runId 5001 is missing jobs/parallel/rowElapsedMs: $_run5001" ;;
+esac
 
 # even count -> LOWER median. 100 200 300 400 -> 200
 B2="$TMP/base2.json"

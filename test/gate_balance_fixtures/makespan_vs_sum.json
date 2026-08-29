@@ -1,0 +1,17 @@
+{
+  "schema": "gate-cost-baseline/1",
+  "note": "SYNTHETIC fixture baseline for test/diff_compiler_gate_balance.sh. Hand-written, not ingested. The numbers are chosen so a SUM-scored row and a MAKESPAN-scored row disagree about where 'small4' belongs — see makespan_vs_sum.toml for the arithmetic.",
+  "generated": "2026-08-29T00:00:00Z",
+  "maxSamples": 9,
+  "runs": [
+    {"key": "1:1:a", "runId": "1", "runAttempt": "1", "shard": "a", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-29T00:00:00Z", "jobs": 2, "parallel": true, "rowElapsedMs": 110, "gates": 2},
+    {"key": "1:1:b", "runId": "1", "runAttempt": "1", "shard": "b", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-29T00:00:00Z", "jobs": 2, "parallel": true, "rowElapsedMs": 95, "gates": 3}
+  ],
+  "gates": [
+    {"name": "big", "medianMs": 100, "samples": 1, "ms": [100]},
+    {"name": "small1", "medianMs": 40, "samples": 1, "ms": [40]},
+    {"name": "small2", "medianMs": 40, "samples": 1, "ms": [40]},
+    {"name": "small3", "medianMs": 40, "samples": 1, "ms": [40]},
+    {"name": "small4", "medianMs": 40, "samples": 1, "ms": [40]}
+  ]
+}

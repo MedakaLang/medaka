@@ -1,0 +1,118 @@
+# test/gate_balance_fixtures/makespan_vs_sum.toml — SYNTHETIC, hand-written.
+#
+# THE DISCRIMINATING CASE (#2207): a registry where scoring a row by the SUM of
+# its gates and scoring it by its MAKESPAN over the row's recorded workers pick
+# DIFFERENT assignments. Every other fixture here is scored identically by both
+# models, so none of them can tell whether the balancer regressed to the sum.
+#
+# Two open rows, each recorded at `jobs = 2` in makespan_vs_sum.json. Five
+# gates: `big` at 100ms and `small1..4` at 40ms each. LPT places them
+# cost-descending, `big` first.
+#
+#   SUM model            row load = total of its gates
+#     big  -> a (a=100).  small1 -> b (40).  small2 -> b (80).
+#     small3 -> b (120)?  no: b=80 < a=100, so small3 -> b (b=120).
+#     small4: a=100 < b=120, so SMALL4 -> A.        final  a=140  b=120
+#
+#   MAKESPAN model       row load = fullest of its 2 worker buckets
+#     big  -> a, buckets [100,0], load 100.
+#     small1 -> b [40,0] load 40.  small2 -> b [40,40] load 40.
+#     small3 -> b [80,40] load 80. small4: b=80 < a=100, so SMALL4 -> B.
+#                                                  final  a=100  b=80
+#
+# So the two models disagree about `small4`, and about nothing else. The
+# committed assignment below IS THE SUM MODEL'S ANSWER (small4 on `a`), so a
+# balancer scoring by makespan must move exactly one gate — and a balancer that
+# regressed to the sum would report "already balanced" and exit 0.
+#
+# pole/median under the makespan model is 100 / ((100+80)/2) = 1.111, inside the
+# enforced 1.250, so the target is MET and the run reaches the assignment rather
+# than short-circuiting into `balEnforce`'s refusal.
+#
+# Both rows also record a `rowElapsedMs`, so this fixture exercises the
+# calibration block's real arm (`balCalibLine`) rather than its "no recorded
+# run" fallback — every other fixture has an empty `runs`.
+
+[[gate]]
+name = "big"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/big.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "small1"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/small1.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "small2"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/small2.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "small3"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/small3.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "small4"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/small4.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+pinned_gates = []
+
+[[shard]]
+name = "b"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/b.txt"
+pinned_gates = []
