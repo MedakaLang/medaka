@@ -4,7 +4,7 @@
 #
 # `medaka gate balance` CHOOSES every schedulable gate's ci.yml matrix row from
 # the registry's constraints plus the measured cost baseline, and rewrites the
-# `shard = "…"` lines of test/gates.toml in place. This gate grades the five
+# `shard = "…"` lines of test/gates.toml in place. This gate grades the six
 # properties that make that safe to run unattended. Every one of them fails
 # SILENTLY if it regresses — a wrong packing still produces a well-formed
 # registry, a green build, and eight green `gates (<row>)` checks.
@@ -50,6 +50,18 @@
 #      other half: a `pinned_gates` list on a row the packer owns is a
 #      declaration the tool would ignore, so it is refused rather than quietly
 #      believed.
+#
+#   6. A ROW IS SCORED BY ITS MAKESPAN, NOT BY THE SUM OF ITS GATES (#2207).
+#      CI fans a row's gates out through `run_gates.sh`'s `xargs -P $JOBS` pool,
+#      so what CI prints for a row is a makespan over $JOBS workers. The
+#      balancer scored a serial SUM until this landed, which over-states every
+#      row by a per-row-VARYING factor — a row of one indivisible gate does not
+#      shrink under a pool, a row of many small ones nearly halves — so the two
+#      models pick different assignments, not merely different numbers. Every
+#      other fixture above is scored identically by both, so none of them could
+#      catch a regression to the sum; `makespan_vs_sum` is built so they
+#      disagree about exactly one gate, and is committed with the SUM's answer
+#      so a regression reports "already balanced" and exits 0.
 #
 # Plus: the committed test/gates.toml IS the balancer's own output
 # (`--check`), so a hand-edited `shard` field cannot ride in unnoticed.
@@ -98,7 +110,8 @@ _bal() {
 }
 
 for stem in wasm_only_row dominating_gate uncosted_gate \
-            pin_intruder pin_deserter pin_on_open_row; do
+            pin_intruder pin_deserter pin_on_open_row makespan_vs_sum \
+            thin_evidence calib_staleness; do
   cp "$FIX/$stem.toml" "$TMP/$stem.toml"
 done
 
@@ -266,6 +279,100 @@ _pin_case pin_deserter \
 _pin_case pin_on_open_row \
   "pinned_gates is non-empty" \
   "a pinned_gates list on an OPEN row"
+
+# ── 7. a row is scored by its MAKESPAN, not by the sum of its gates (#2207) ───
+#
+# CI runs a row's gates through `run_gates.sh`'s `xargs -P $JOBS` pool, so the
+# row's wall clock is the makespan over $JOBS workers. Scoring it as a serial
+# sum over-states every row, unevenly — a row of one indivisible gate does not
+# shrink under a pool and a row of many small ones nearly halves — so the two
+# models do not merely differ in scale, they pick DIFFERENT assignments.
+#
+# Every other fixture here is scored identically by both models, which is why
+# none of them can catch a regression to the sum. `makespan_vs_sum` is built so
+# they disagree about exactly one gate: at jobs = 2, `small4` belongs on `b`
+# under the makespan and on `a` under the sum (the arithmetic is spelled out in
+# the fixture's own header). It is committed with the SUM's answer, so a
+# balancer that regressed would report "already balanced" and exit 0 — which is
+# the silent failure this property exists to make loud.
+if _bal makespan_vs_sum "$TMP/m.txt"; then
+  got="$(awk '/^name = "small4"$/{f=1} f && /^shard = /{print; exit}' "$TMP/makespan_vs_sum.toml")"
+  if [ "$got" = 'shard = "b"' ]; then
+    ok "a row is scored by its makespan over the recorded workers, not by the sum"
+  else
+    bad "small4 landed on the SUM model's row, not the makespan model's: $got"
+    sed -e 's/^/        /' "$TMP/m.txt"
+  fi
+  # The worker count must come from the baseline's recorded `jobs`, never from
+  # a literal: a balancer reading a hardcoded 1 would print `jobs*1` here (the
+  # borrowed/defaulted marker) while still passing the placement check above on
+  # some other fixture's numbers.
+  if grep -q 'jobs 2' "$TMP/m.txt" && ! grep -q 'jobs\*' "$TMP/m.txt"; then
+    ok "the modelled worker count is the run's recorded jobs, not a fallback"
+  else
+    bad "the row was not modelled at the recorded jobs = 2"
+    sed -e 's/^/        /' "$TMP/m.txt"
+  fi
+  # The model is reported against something other than itself: the recorded CI
+  # wall clock for the same row. A prediction with no calibration line is
+  # unfalsifiable by a reader, which is how the sum survived as long as it did.
+  if grep -q 'recorded .* predicted .* residual' "$TMP/m.txt"; then
+    ok "the report calibrates its prediction against the recorded row wall clock"
+  else
+    bad "no calibration line: the prediction is reported with nothing to check it against"
+    sed -e 's/^/        /' "$TMP/m.txt"
+  fi
+else
+  bad "the balancer failed on the makespan_vs_sum fixture"
+  sed -e 's/^/        /' "$TMP/m.txt"
+fi
+
+# ── 8. thin evidence is a stated COUNT, not a flag (#2207) ────────────────────
+#
+# "A gate balanced off a single sample is a fact the tool states, not one a
+# reader has to go find." Every other fixture here happens to have every gate
+# at `samples = 1`, so a report line that always says "N of N" would pass all
+# of them without proving anything is actually being counted. `thin_evidence`
+# is deliberately mixed: two gates at `samples = 1` and two above the
+# threshold, in ordinary (non-`--check`) output, which is where this must be
+# visible — not buried behind a flag.
+if _bal thin_evidence "$TMP/t.txt"; then
+  if grep -q '2 of 4 gates are scheduled off a single sample' "$TMP/t.txt"; then
+    ok "thin-evidence count is a real count, not every-gate-or-none"
+  else
+    bad "thin-evidence line missing or wrong count"
+    sed -e 's/^/        /' "$TMP/t.txt"
+  fi
+else
+  bad "the balancer failed on the thin_evidence fixture"
+  sed -e 's/^/        /' "$TMP/t.txt"
+fi
+
+# ── 9. calibration lines carry a staleness signal, and only when it's true ────
+#
+# S2-1 (#2178 review): a residual is only comparable to the committed
+# assignment while the recorded run and that assignment describe the SAME
+# gate set (see `balCalibLine`'s own caveat). `calib_staleness` pins row `a`
+# recorded with fewer gates than are committed to it now, and row `b`
+# recorded with the same count it has now — so the annotation must fire on
+# `a` and must NOT fire on `b`, proving the count is a real comparison.
+if _bal calib_staleness "$TMP/s.txt"; then
+  if grep -q '^    a  *recorded.*\[STALE: 2 gates now, 1 when recorded\]$' "$TMP/s.txt"; then
+    ok "a row whose recorded gate count differs from committed is annotated STALE"
+  else
+    bad "row 'a' calibration line missing the staleness annotation"
+    sed -e 's/^/        /' "$TMP/s.txt"
+  fi
+  if grep -q '^    b  *recorded' "$TMP/s.txt" && ! grep -q '^    b  *recorded.*\[STALE' "$TMP/s.txt"; then
+    ok "a row whose recorded gate count matches committed is NOT annotated"
+  else
+    bad "row 'b' calibration line was annotated STALE when it should not be"
+    sed -e 's/^/        /' "$TMP/s.txt"
+  fi
+else
+  bad "the balancer failed on the calib_staleness fixture"
+  sed -e 's/^/        /' "$TMP/s.txt"
+fi
 
 # The real registry's own closed row, asserted by NAME and not by count: the
 # whole point of `engines` is WHICH gates are on it (diff_compiler_engines needs

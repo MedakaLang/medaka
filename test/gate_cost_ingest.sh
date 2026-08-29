@@ -91,6 +91,12 @@ trap 'rm -rf "$TMP"' EXIT
 # field per line by run_gates.sh, deliberately, so this needs no JSON parser.
 _prov() { sed -n "s/^    \"$2\": \"\\(.*\\)\",\\{0,1\\}\$/\\1/p" "$1" | head -n 1; }
 
+# One TOP-LEVEL field (sibling of "gates"/"provenance", 2-space indent) —
+# `jobs`/`parallel`/`rowElapsedMs` are unquoted (bare number/bool), so `_prov`'s
+# quoted-string regex does not match them. Value is everything up to the first
+# comma, since there is no closing quote to anchor on (#2208).
+_top() { sed -n "s/^  \"$2\": \\([^,]*\\),\\{0,1\\}\$/\\1/p" "$1" | head -n 1; }
+
 for r in $reports; do
   if [ ! -f "$r" ]; then
     echo "gate_cost_ingest: REFUSED — no such report: $r"
@@ -148,8 +154,16 @@ for r in $reports; do
   fi
   key="$rid:$att:$shd"
   ngates="$(grep -c '^    {"name": ' "$r" || true)"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$key" "$rid" "$att" "$shd" "$ev" "$sha" "$ref" "$dat" "$ngates" >>"$TMP/runs.tsv"
+  # jobs / parallel / rowElapsedMs (#2208): recorded per-run (this line IS one
+  # runs[] entry), never merged or averaged across runs — see the module
+  # header. Not part of admission: a report missing them (an older producer)
+  # still ingests, just with these three columns empty -> "null" in the baseline.
+  jobs="$(_top "$r" jobs)"
+  parallel="$(_top "$r" parallel)"
+  rowms="$(_top "$r" rowElapsedMs)"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$key" "$rid" "$att" "$shd" "$ev" "$sha" "$ref" "$dat" "$ngates" \
+    "$jobs" "$parallel" "$rowms" >>"$TMP/runs.tsv"
   # name / ms, for the gates that actually PASSED.
   sed -n 's/^    {"name": "\([^"]*\)".*"ms": \([0-9][0-9]*\),.*"ok": true.*$/\1\t\2/p' \
     "$r" | while IFS='	' read -r gn gms; do
@@ -208,8 +222,14 @@ BEGIN {
     k = f[1]
     if (k in runseen) { skipped[k] = 1; continue }
     runseen[k] = 1; nrun++; runorder[nrun] = k
-    runjson[k] = sprintf("    {\"key\": \"%s\", \"runId\": \"%s\", \"runAttempt\": \"%s\", \"shard\": \"%s\", \"event\": \"%s\", \"sha\": \"%s\", \"ref\": \"%s\", \"date\": \"%s\", \"gates\": %s}",
-                         jesc(f[1]), jesc(f[2]), jesc(f[3]), jesc(f[4]), jesc(f[5]), jesc(f[6]), jesc(f[7]), jesc(f[8]), f[9] + 0)
+    # jobs (bare int) / parallel (bare bool) / rowElapsedMs (bare int) are
+    # recorded per-run, unaveraged (#2208); a missing value (older producer)
+    # is written as JSON null, never coerced to 0/false.
+    jobsv = (f[10] == "" ? "null" : f[10] + 0)
+    parv  = (f[11] == "" ? "null" : f[11])
+    remv  = (f[12] == "" ? "null" : f[12] + 0)
+    runjson[k] = sprintf("    {\"key\": \"%s\", \"runId\": \"%s\", \"runAttempt\": \"%s\", \"shard\": \"%s\", \"event\": \"%s\", \"sha\": \"%s\", \"ref\": \"%s\", \"date\": \"%s\", \"jobs\": %s, \"parallel\": %s, \"rowElapsedMs\": %s, \"gates\": %s}",
+                         jesc(f[1]), jesc(f[2]), jesc(f[3]), jesc(f[4]), jesc(f[5]), jesc(f[6]), jesc(f[7]), jesc(f[8]), jobsv, parv, remv, f[9] + 0)
     accepted[k] = 1
   }
   close(runsf)
