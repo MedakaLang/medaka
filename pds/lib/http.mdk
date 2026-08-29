@@ -73,6 +73,11 @@ export
 requestBody : Request -> Array Int
 requestBody (Request _ _ _ _ body _) = arrayCopy body
 
+-- | Length of the framed body without copying its attacker-controlled bytes.
+export
+requestBodyLength : Request -> Int
+requestBodyLength (Request _ _ _ _ body _) = arrayLength body
+
 export
 requestKeepAlive : Request -> Bool
 requestKeepAlive (Request _ _ _ _ _ keepAlive) = keepAlive
