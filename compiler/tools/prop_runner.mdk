@@ -108,44 +108,49 @@ tySpineGo _ _ = None
 
 -- ── value generation ─────────────────────────────────────────────────────────
 
-genForType : List (String, TyDef) -> List (String, Ty) -> Ty -> <e> Value e
-genForType tydefs subst (TyVar v) = match lookupAssoc v subst
-  Some t => genForType tydefs subst t
+-- `depth` is the USER-ADT NESTING depth of the value being generated: it is
+-- incremented only when descending into a user constructor's payload
+-- (`genVariant`), never by `List`/`Array`/tuple/`Option`/`Result`, which carry
+-- their own fixed bounds already.  Only `genUser`'s constructor choice reads
+-- it (see `pickVariant`); every other arm ignores it, so the draw sequence for
+-- a type with no user ADT in it is unchanged from before #2294.
+genForType : List (String, TyDef) -> List (String, Ty) -> Int -> Ty -> <e> Value e
+genForType tydefs subst depth (TyVar v) = match lookupAssoc v subst
+  Some t => genForType tydefs subst depth t
   None => panic ("prop_runner: cannot generate values for unbound type variable '" ++ v ++ "'")
-genForType tydefs subst (TyCon { tyConName = "Int" }) =
+genForType tydefs subst depth (TyCon { tyConName = "Int" }) =
   VInt (randIntRange (-1000) 1000)
-genForType tydefs subst (TyCon { tyConName = "Bool" }) = VBool (randBoolL ())
-genForType tydefs subst (TyCon { tyConName = "Float" }) = genFloat ()
-genForType tydefs subst (TyCon { tyConName = "Char" }) = VChar (genCharStr ())
-genForType tydefs subst (TyCon { tyConName = "String" }) =
+genForType tydefs subst depth (TyCon { tyConName = "Bool" }) =
+  VBool (randBoolL ())
+genForType tydefs subst depth (TyCon { tyConName = "Float" }) = genFloat ()
+genForType tydefs subst depth (TyCon { tyConName = "Char" }) =
+  VChar (genCharStr ())
+genForType tydefs subst depth (TyCon { tyConName = "String" }) =
   VString (genString ())
-genForType tydefs subst (TyCon { tyConName = "Unit" }) = VUnit
-genForType tydefs subst (TyApp (TyCon { tyConName = "List" }) t) =
-  VList (genList tydefs subst t (randIntRange 0 7))
-genForType tydefs subst (TyApp (TyCon { tyConName = "Array" }) t) =
-  VArray (arrayFromList (genList tydefs subst t (randIntRange 0 7)))
-genForType tydefs subst (TyApp (TyCon { tyConName = "Option" }) t) =
+genForType tydefs subst depth (TyCon { tyConName = "Unit" }) = VUnit
+genForType tydefs subst depth (TyApp (TyCon { tyConName = "List" }) t) =
+  VList (genList tydefs subst depth t (randIntRange 0 7))
+genForType tydefs subst depth (TyApp (TyCon { tyConName = "Array" }) t) =
+  VArray (arrayFromList (genList tydefs subst depth t (randIntRange 0 7)))
+genForType tydefs subst depth (TyApp (TyCon { tyConName = "Option" }) t) =
   if randBoolL () then
     VCon "None" []
   else
-    VCon "Some" [genForType tydefs subst t]
-genForType tydefs subst (TyApp (TyApp (TyCon { tyConName = "Result" }) e) a) =
-  if randBoolL () then
-    VCon "Ok" [genForType tydefs subst a]
-  else
-    VCon "Err" [genForType tydefs subst e]
-genForType tydefs subst (TyTuple ts) = VTuple (genTuple tydefs subst ts)
-genForType tydefs subst ty = genUserOrFail tydefs subst ty
+    VCon "Some" [genForType tydefs subst depth t]
+genForType tydefs subst depth (TyApp (TyApp (TyCon { tyConName = "Result" }) e) a) = if randBoolL () then VCon "Ok" [genForType tydefs subst depth a] else VCon "Err" [genForType tydefs subst depth e]
+genForType tydefs subst depth (TyTuple ts) =
+  VTuple (genTuple tydefs subst depth ts)
+genForType tydefs subst depth ty = genUserOrFail tydefs subst depth ty
 
-genTuple : List (String, TyDef) -> List (String, Ty) -> List Ty -> <e> List (Value e)
-genTuple _ _ [] = []
-genTuple tydefs subst (t::rest) =
-  genForType tydefs subst t :: genTuple tydefs subst rest
+genTuple : List (String, TyDef) -> List (String, Ty) -> Int -> List Ty -> <e> List (Value e)
+genTuple _ _ _ [] = []
+genTuple tydefs subst depth (t::rest) =
+  genForType tydefs subst depth t :: genTuple tydefs subst depth rest
 
-genList : List (String, TyDef) -> List (String, Ty) -> Ty -> Int -> <e> List (Value e)
-genList _ _ _ 0 = []
-genList tydefs subst t n =
-  genForType tydefs subst t :: genList tydefs subst t (n - 1)
+genList : List (String, TyDef) -> List (String, Ty) -> Int -> Ty -> Int -> <e> List (Value e)
+genList _ _ _ _ 0 = []
+genList tydefs subst depth t n =
+  genForType tydefs subst depth t :: genList tydefs subst depth t (n - 1)
 
 genFloat : Unit -> <e> Value e
 genFloat _ =
@@ -170,15 +175,15 @@ genStringGo : Int -> List String
 genStringGo 0 = []
 genStringGo n = genCharStr () :: genStringGo (n - 1)
 
-genUserOrFail : List (String, TyDef) -> List (String, Ty) -> Ty -> <e> Value e
-genUserOrFail tydefs subst ty = match tySpine ty
+genUserOrFail : List (String, TyDef) -> List (String, Ty) -> Int -> Ty -> <e> Value e
+genUserOrFail tydefs subst depth ty = match tySpine ty
   Some (name, args) => match lookupAssoc name tydefs
-    Some tydef => genUser tydefs subst name tydef args
+    Some tydef => genUser tydefs subst depth name tydef args
     None => panic ("prop_runner: no generator for type '" ++ name ++ "'. Define an explicit generator (there is no 'Arbitrary' deriver).")
   None => panic "prop_runner: cannot generate values for type"
 
-genUser : List (String, TyDef) -> List (String, Ty) -> String -> TyDef -> List Ty -> <e> Value e
-genUser tydefs subst name tydef args =
+genUser : List (String, TyDef) -> List (String, Ty) -> Int -> String -> TyDef -> List Ty -> <e> Value e
+genUser tydefs subst depth name tydef args =
   let args2 = map (substTy subst) args
   match tydef
     TDData params variants =>
@@ -186,16 +191,139 @@ genUser tydefs subst name tydef args =
         zipL params args2
       else
         []
-      let v = nthList variants (randIntRange 0 (listLen variants - 1))
-      genVariant tydefs subst2 v
+      let v = pickVariant tydefs depth variants
+      genVariant tydefs subst2 depth v
 
-genVariant : List (String, TyDef) -> List (String, Ty) -> Variant -> <e> Value e
-genVariant tydefs subst (Variant cname payload) = match payload
-  ConPos tys => VCon cname (map (genForType tydefs subst) tys)
-  ConNamed fields _ => VRecord cname (map (genField tydefs subst) fields)
+genVariant : List (String, TyDef) -> List (String, Ty) -> Int -> Variant -> <e> Value e
+genVariant tydefs subst depth (Variant cname payload) = match payload
+  ConPos tys => VCon cname (map (genForType tydefs subst (depth + 1)) tys)
+  ConNamed fields _ =>
+    VRecord cname (map (genField tydefs subst (depth + 1)) fields)
 
-genField : List (String, TyDef) -> List (String, Ty) -> Field -> <e> (String, Value e)
-genField tydefs subst (Field fname fty) = (fname, genForType tydefs subst fty)
+genField : List (String, TyDef) -> List (String, Ty) -> Int -> Field -> <e> (String, Value e)
+genField tydefs subst depth (Field fname fty) =
+  (fname, genForType tydefs subst depth fty)
+
+-- ── size-aware constructor choice (#2294) ───────────────────────────────────
+-- Before this, `genUser` picked a constructor uniformly at random with no size
+-- parameter.  For any ADT whose expected count of self-referential fields per
+-- uniformly-chosen constructor exceeds 1 — `data T = Leaf | Node T T T`, mean
+-- (0 + 3)/2 = 1.5 — that is a SUPERCRITICAL branching process: generation
+-- diverges with positive probability on every draw, and the runner dies with
+-- `E-STACK-OVERFLOW` rather than reporting anything.  (`End | One R | Two R R`
+-- is mean 1.0 — critical: finite almost surely but with infinite expected
+-- size, so it degrades rather than aborts.)
+--
+-- The fix biases the choice toward constructors that cannot recurse, more
+-- strongly the deeper we already are, which drives the process subcritical
+-- (mean < 1) and so back to finite expected size:
+--
+--   weight(v, depth) = if v can recurse then max 1 (recWeight0 - depth)
+--                      else recWeight0
+--
+-- 🚨 At depth 0 — and at ANY depth for a type with no recursive constructor —
+-- every weight is `recWeight0`, i.e. the choice is still UNIFORM.  That is the
+-- property that keeps this from silently narrowing the value space every
+-- existing prop samples: an ADT that cannot recurse (`test/
+-- compiler_test_fixtures/record_prop.mdk`'s `Pos`/`Plain`, the only user-ADT
+-- props in the tree) takes the `allEqualInts` fast path below and draws the
+-- SAME `randIntRange 0 (n - 1)` it always did, so its value stream is
+-- byte-identical.  Only a genuinely recursive ADT, at depth ≥ 1, sees a
+-- different distribution — and it still reaches every shape it used to at the
+-- shallow depths, just not depth 1000.
+recWeight0 : Int
+recWeight0 = 6
+
+-- Hard floor under the soft weighting: past this much user-ADT nesting, drop
+-- recursive constructors entirely IF a non-recursive one exists.  Deliberately
+-- far beyond anything the weighting above realistically reaches (at depth ≥ 5
+-- a `Node T T T` is picked with probability 1/7, so the expected child count
+-- is 3/7 < 1 and the tail decays geometrically) — it exists so the bound is a
+-- guarantee rather than a probability, not to shape the distribution.
+maxGenDepth : Int
+maxGenDepth = 24
+
+-- Can generating this type re-enter the user-ADT layer (and so recurse)?
+-- Deliberately conservative: ANY mention of a declared ADT counts, not just a
+-- mention of the type currently being generated, so MUTUAL recursion
+-- (`data A = A0 | A1 B` / `data B = B1 A`) is covered too.  `TyVar` is treated
+-- as non-mentioning rather than resolved through `subst`: a parameter bound to
+-- its own name (`Tree a` generated with `a` free) would make resolution loop,
+-- and a recursive occurrence always shows up as the ADT's own `TyCon` head
+-- anyway.
+tyMentionsUser : List (String, TyDef) -> Ty -> Bool
+tyMentionsUser tydefs (TyCon { tyConName = n }) = isSome (lookupAssoc n tydefs)
+tyMentionsUser tydefs (TyApp a b) = tyMentionsUser tydefs a
+  || tyMentionsUser tydefs b
+tyMentionsUser tydefs (TyFun a b) = tyMentionsUser tydefs a
+  || tyMentionsUser tydefs b
+tyMentionsUser tydefs (TyTuple ts) = anyTyMentionsUser tydefs ts
+tyMentionsUser tydefs (TyEffect _ _ t) = tyMentionsUser tydefs t
+tyMentionsUser tydefs (TyConstrained _ t) = tyMentionsUser tydefs t
+tyMentionsUser _ _ = False
+
+anyTyMentionsUser : List (String, TyDef) -> List Ty -> Bool
+anyTyMentionsUser _ [] = False
+anyTyMentionsUser tydefs (t::rest) = tyMentionsUser tydefs t
+  || anyTyMentionsUser tydefs rest
+
+variantRecursive : List (String, TyDef) -> Variant -> Bool
+variantRecursive tydefs (Variant _ payload) = match payload
+  ConPos tys => anyTyMentionsUser tydefs tys
+  ConNamed fields _ => anyFieldMentionsUser tydefs fields
+
+anyFieldMentionsUser : List (String, TyDef) -> List Field -> Bool
+anyFieldMentionsUser _ [] = False
+anyFieldMentionsUser tydefs ((Field _ fty)::rest) = tyMentionsUser tydefs fty
+  || anyFieldMentionsUser tydefs rest
+
+variantWeights : List (String, TyDef) -> Int -> List Variant -> List Int
+variantWeights _ _ [] = []
+variantWeights tydefs depth (v::rest) =
+  let w = if variantRecursive tydefs v then
+    if depth >= maxGenDepth then 0 else max 1 (recWeight0 - depth)
+  else
+    recWeight0
+  w :: variantWeights tydefs depth rest
+
+sumL : List Int -> Int
+sumL [] = 0
+sumL (x::rest) = x + sumL rest
+
+allEqualInts : List Int -> Bool
+allEqualInts [] = True
+allEqualInts (x::rest) = allEqualGo x rest
+
+allEqualGo : Int -> List Int -> Bool
+allEqualGo _ [] = True
+allEqualGo x (y::rest) = x == y && allEqualGo x rest
+
+-- Walk the cumulative weights: `r` is a draw in `[0, total)`.
+pickWeighted : List Variant -> List Int -> Int -> Variant
+pickWeighted (v::rest) (w::ws) r =
+  if r < w then
+    v
+  else
+    pickWeighted rest ws (r - w)
+pickWeighted (v::_) [] _ = v
+pickWeighted [] _ _ = panic "prop_runner: data type with no constructors"
+
+pickVariant : List (String, TyDef) -> Int -> List Variant -> <e> Variant
+pickVariant tydefs depth variants =
+  let ws = variantWeights tydefs depth variants
+  -- Uniform fast path — depth 0, or an ADT with no recursive constructor.
+  -- Draws exactly the value the pre-#2294 runner drew, from the same range.
+  if allEqualInts ws then
+    nthList variants (randIntRange 0 (listLen variants - 1))
+  else
+    let total = sumL ws
+    if total <= 0 then
+      -- Every constructor recurses (`data S = S S`): there is no finite value
+      -- to generate, so fall back to the uniform pick and let the existing
+      -- overflow report the fact rather than inventing a different failure.
+      nthList variants (randIntRange 0 (listLen variants - 1))
+    else
+      pickWeighted variants ws (randIntRange 0 (total - 1))
 
 nthList : List a -> Int -> a
 nthList (x::_) 0 = x
@@ -320,7 +448,7 @@ findFailureStep _ evalEnv params body _ run inputs False =
 genInputs : List (String, TyDef) -> List PropParam -> <e> List (String, Value e)
 genInputs _ [] = []
 genInputs tydefs ((PropParam x _ ty)::rest) =
-  (x, genForType tydefs [] ty) :: genInputs tydefs rest
+  (x, genForType tydefs [] 0 ty) :: genInputs tydefs rest
 
 printCounterexample : List (String, Value e) -> <IO> Unit
 printCounterexample [] = ()
