@@ -36,7 +36,11 @@
 #                          both `[package]` and `[project]` work, and a trailing
 #                          comment is inert. Quoted true, false, malformed text,
 #                          dependency-name collisions, and comment text reject.
-#  21. compiler-self-check: `medaka check compiler/support/util.mdk` (11 real
+#  21. test-exemption: `medaka test` executes the existing internal-primitive
+#                      regression corpus without an enforcement flag.
+#  22. doc-exemption: `medaka doc` extracts a scheme for a declaration that
+#                      references an internal primitive; it executes no code.
+#  23. compiler-self-check: `medaka check compiler/support/util.mdk` (11 real
 #                          arrayGetUnsafe call sites) with no flag → clean.
 #                          #42's cell, bought by `compiler/medaka.toml`'s key.
 #
@@ -300,7 +304,39 @@ manifest_case comment-not-optin reject '[package]
 name = "probe"
 # allow-internal = true'
 
-# 21. compiler-self-check: #42's cell.  `medaka check` on a compiler-project file
+# 21. test-exemption: `medaka test` is an execution/regression surface, not the
+#     internal-extern enforcement surface.  This existing corpus really reaches
+#     arrayGetUnsafe and must run without an `--allow-internal` flag.
+out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" test "$ROOT/test/ported/test_eval_internal_prims_ported.mdk" 2>&1)"
+code=$?
+clean="$(mdk_strip_stale "$out")"
+case "$clean" in
+  *"10/10 passed"*) if [ "$code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   test-exemption (internal primitives executed, 10/10 passed)\n'
+                    else fail=$((fail+1)); printf 'FAIL test-exemption (passed but exit %d)%s\n' "$code" "$(mdk_stale_suffix "$out")"; fi ;;
+  *) fail=$((fail+1)); printf 'FAIL test-exemption ([%s])%s\n' "$out" "$(mdk_stale_suffix "$out")" ;;
+esac
+
+# 22. doc-exemption: doc only parses and infers schemes; it never executes user
+#     code and therefore must not grow a runtime trust flag.  The declaration's
+#     body references an internal primitive while the extracted signature stays
+#     available without an internal-only diagnostic.
+cat > "$TMP/doc_internal.mdk" <<'EOF'
+-- | Read the first cell without bounds checking.
+export
+peek : Array Int -> Int
+peek xs = arrayGetUnsafe 0 xs
+EOF
+out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" doc "$TMP/doc_internal.mdk" 2>&1)"
+code=$?
+clean="$(mdk_strip_stale "$out")"
+case "$clean" in
+  *"internal-only primitive"*) fail=$((fail+1)); printf 'FAIL doc-exemption (spuriously enforced: [%s])%s\n' "$out" "$(mdk_stale_suffix "$out")" ;;
+  *"peek : Array Int -> Int"*) if [ "$code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   doc-exemption (scheme extracted, no execution wall)\n'
+                          else fail=$((fail+1)); printf 'FAIL doc-exemption (signature but exit %d)%s\n' "$code" "$(mdk_stale_suffix "$out")"; fi ;;
+  *) fail=$((fail+1)); printf 'FAIL doc-exemption ([%s])%s\n' "$out" "$(mdk_stale_suffix "$out")" ;;
+esac
+
+# 23. compiler-self-check: #42's cell.  `medaka check` on a compiler-project file
 #     that really does call the kernels (compiler/support/util.mdk has 11
 #     arrayGetUnsafe call sites) must stay clean with NO flag — that is what
 #     `compiler/medaka.toml`'s own `allow-internal = true` buys, and it is the
