@@ -107,4 +107,22 @@ else
   verify_rc=1
 fi
 
+# ── check 9's own regression (#2181): invalid_tiers.toml must red, and
+#    valid_cost.toml is its control too — the two fixtures differ in exactly
+#    one line, so a green control proves the red is about `tiers` and nothing
+#    else. ─────────────────────────────────────────────────────────────────
+if MEDAKA_ROOT="$FIXTMP" "$MEDAKA" gate verify \
+    --registry "$ROOT/test/gate_registry_fixtures/invalid_tiers.toml" \
+    >"$FIXTMP/invalid_tiers.out" 2>&1; then
+  echo "diff_compiler_gate_registry: FAIL — invalid_tiers.toml did not red:"
+  cat "$FIXTMP/invalid_tiers.out"
+  verify_rc=1
+elif ! grep -q "mixes 'ondemand' with a real run" "$FIXTMP/invalid_tiers.out"; then
+  echo "diff_compiler_gate_registry: FAIL — invalid_tiers.toml reds for the wrong reason:"
+  cat "$FIXTMP/invalid_tiers.out"
+  verify_rc=1
+else
+  echo "OK    check 9 regression: invalid_tiers.toml reds with the tiers message"
+fi
+
 exit "$verify_rc"

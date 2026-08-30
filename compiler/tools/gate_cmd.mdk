@@ -79,6 +79,35 @@ import support.util.{
 -- row's own options and placement prose live in the sibling `[[shard]]` table
 -- (`Shard`, below), not on the entry — they are per-ROW facts, and putting
 -- them on 227 entries would be 227 chances for a row to disagree with itself.
+--
+-- ── `tiers` (S-tier-is-data, #2181) ─────────────────────────────────────────
+--
+-- `tiers` is the SET OF RUNS this gate has: not one string, because "when does
+-- this gate run" has never had one answer.  Two gates in the committed tree run
+-- at two tiers at once (`diff_compiler_eval_scaling` on the merge path AND in
+-- nightly's `eval-scaling` job; `diff_compiler_perf_scaling` on the merge path
+-- AND in nightly's `perf-scaling-deep` job with `PERF_DEEP=1`), and the old
+-- single `tier : String` could record neither — it recorded `merge` for both
+-- and the nightly half of each was invisible to every consumer.
+--
+-- Each element is a RUN TOKEN, `<tier>` or `<tier>/<mode>`:
+--
+--   <tier>  `merge` (the PR/merge-queue path), `nightly` (the scheduled
+--           workflow), or `ondemand` (nothing invokes it automatically).
+--   <mode>  the INVOCATION DELTA: the comma-joined, sorted `KEY=VALUE`
+--           environment assignments the invoking step sets that change what the
+--           gate does.  It is DATA, not a label — `nightly/PERF_DEEP=1` says
+--           exactly what makes that run different, which is what lets
+--           `test/diff_compiler_tier_drift.sh` CHECK it against the workflow
+--           instead of taking a prose word for it.  A bare `nightly` next to a
+--           bare `merge` is therefore a positive claim of DUPLICATION: the two
+--           runs are the identical invocation.
+--
+-- INVARIANTS (checked by `gate verify`, check 9): non-empty; every token's tier
+-- part is one of the three; no duplicate tokens; `ondemand` appears only alone
+-- and never carries a mode (a gate nothing invokes has no invocation to differ
+-- from).  The list is kept in sorted order so a diff of the registry reads as a
+-- change of fact, not a reordering.
 
 public export data Gate =
   | Gate {
@@ -86,7 +115,7 @@ public export data Gate =
       area : String,
       shard : String,
       project : String,
-      tier : String,
+      tiers : List String,
       cost : String,
       kind : String,
       run : String,
@@ -119,7 +148,7 @@ readGate doc i =
     area <- reqStr i "area" e
     shard <- reqStr i "shard" e
     project <- reqStr i "project" e
-    tier <- reqStr i "tier" e
+    tiers <- reqArr i "tiers" e
     cost <- reqStr i "cost" e
     kind <- reqStr i "kind" e
     run <- reqStr i "run" e
@@ -133,7 +162,7 @@ readGate doc i =
         area = area,
         shard = shard,
         project = project,
-        tier = tier,
+        tiers = tiers,
         cost = cost,
         kind = kind,
         run = run,
@@ -381,7 +410,53 @@ matchesSelector : Selector -> Gate -> Bool
 matchesSelector (SelName p) g = globMatch p g.name
 matchesSelector (SelArea p) g = globMatch p g.area
 matchesSelector (SelProject p) g = globMatch p g.project
-matchesSelector (SelTier p) g = globMatch p g.tier
+matchesSelector (SelTier p) g = anyTierMatch p g.tiers
+
+{- | `tier:` is the one selector over a LIST, so it needs a rule the other three
+   do not: which of a gate's run tokens does the glob have to match?
+
+   BOTH the whole token and its tier part, either one.  `tier:nightly` therefore
+   selects every gate that runs nightly IN ANY MODE — including one declared
+   `nightly/PERF_DEEP=1` — and `tier:nightly/PERF_DEEP=1` selects only that mode.
+   Matching the whole token alone would have made `tier:nightly` silently NARROW
+   the day a mode was declared, and a narrowing selector still matches gates, so
+   the "a selector matching zero gates is an error" rule could never catch it. -}
+export
+anyTierMatch : String -> List String -> Bool
+anyTierMatch _ [] = False
+anyTierMatch p (t::ts)
+  | globMatch p t = True
+  | globMatch p (tierPartOf t) = True
+  | otherwise = anyTierMatch p ts
+
+{- | A run token's tier part: everything before the first `/`.
+
+   > tierPartOf "nightly/PERF_DEEP=1" == "nightly"
+   True
+
+   > tierPartOf "merge" == "merge"
+   True -}
+export
+tierPartOf : String -> String
+tierPartOf tok = match splitOnChar '/' tok
+  [] => tok
+  t::_ => t
+
+{- | A run token's mode part: everything after the first `/`, or `""`.
+
+   > modePartOf "nightly/PERF_DEEP=1" == "PERF_DEEP=1"
+   True
+
+   > modePartOf "merge" == ""
+   True -}
+export
+modePartOf : String -> String
+modePartOf tok =
+  let n = stringLength (tierPartOf tok)
+  if n >= stringLength tok then
+    ""
+  else
+    stringSlice (n + 1) (stringLength tok) tok
 
 -- Conjunction: a gate must satisfy EVERY selector given.
 matchesAll : List Selector -> Gate -> Bool
@@ -410,7 +485,7 @@ gateJson g = jObject
     ("area", JString g.area),
     ("shard", JString g.shard),
     ("project", JString g.project),
-    ("tier", JString g.tier),
+    ("tiers", jArray (map JString g.tiers)),
     ("cost", JString g.cost),
     ("kind", JString g.kind),
     ("run", JString g.run),
@@ -477,7 +552,10 @@ gateHelpText = stringConcat
     "  name:<glob>      gate name, e.g. name:diff_compiler_*\n",
     "  area:<glob>      semantic area, e.g. area:backend\n",
     "  project:<glob>   owning project, e.g. project:sqlite\n",
-    "  tier:<glob>      merge | nightly | ondemand\n",
+    "  tier:<glob>      a RUN of this gate: merge | nightly | ondemand, optionally\n",
+    "                   /<mode> (the invocation delta, e.g. nightly/PERF_DEEP=1).\n",
+    "                   A gate can have several; the glob matches a whole token or\n",
+    "                   its tier part, so tier:nightly selects every mode.\n",
     "  <glob>           sugar for name:<glob>\n",
     "\n",
     "A selector matching zero gates is an error, not an empty list.\n",
@@ -520,9 +598,11 @@ gateHelpText = stringConcat
     "`gate verify` is the drift gate: text-only, no build. Checks every gate\n",
     "candidate (test/preflight.sh's own candidate universe) is enrolled or\n",
     "explicitly listed as a non-gate tool, every entry's run/oracles/corpus\n",
-    "targets exist, every entry is reachable by a selector, and no two entries\n",
-    "share a `name`. Exits nonzero\n",
-    "on any violation.\n",
+    "targets exist, every entry is reachable by a selector, no two entries\n",
+    "share a `name`, and every entry's `cost` and `tiers` are well formed.\n",
+    "Exits nonzero on any violation. It checks the SHAPE of `tiers`, not\n",
+    "whether it agrees with the workflows — that is\n",
+    "test/diff_compiler_tier_drift.sh, which reads the workflow YAML.\n",
     "\n",
     "`gate ci` regenerates the marked GENERATED region in\n",
     ".github/workflows/ci.yml — the `gates` job's eight-row matrix — from\n",
@@ -1649,7 +1729,63 @@ invalidCostViolations (g::gs)
   | costClassOk g.cost = invalidCostViolations gs
   | otherwise = "\{g.name}: cost '\{g.cost}' is not one of cheap/medium/heavy" :: invalidCostViolations gs
 
--- ── assembling and rendering the eight classes ──────────────────────────────
+-- Check 9 (S-tier-is-data, #2181): every entry's `tiers` is a well-formed set of
+-- RUN TOKENS.  The old `tier : String` had no enum check either, but a bad
+-- value there could only mis-answer a `tier:` selector; a bad value HERE also
+-- mis-answers `test/diff_compiler_tier_drift.sh`, which compares these tokens
+-- against the workflows.  A drift gate whose declared side can be arbitrary
+-- text is a drift gate that reports on typos rather than on drift.
+tierNameOk : String -> Bool
+tierNameOk t = t == "merge" || t == "nightly" || t == "ondemand"
+
+-- `ondemand` means "nothing invokes this automatically".  It cannot carry a
+-- mode (there is no invocation for a mode to differ from) and cannot sit beside
+-- another tier (a gate that runs somewhere is not on demand) — both would be
+-- claims the drift gate must then reconcile with an empty derivation.
+tierTokenErrors : String -> String -> List String
+tierTokenErrors gname tok
+  | not (tierNameOk (tierPartOf tok)) = [
+    "\{gname}: run token '\{tok}' — tier '\{tierPartOf tok}' is not one of merge/nightly/ondemand"
+  ]
+  | tierPartOf tok == "ondemand" && modePartOf tok /= "" = [
+    "\{gname}: run token '\{tok}' — 'ondemand' cannot carry a mode; nothing invokes the gate, so there is no invocation for a mode to differ from"
+  ]
+  | otherwise = []
+
+tierTokensErrors : String -> List String -> List String
+tierTokensErrors _ [] = []
+tierTokensErrors gname (t::ts) = tierTokenErrors gname t
+  ++ tierTokensErrors gname ts
+
+hasOndemand : List String -> Bool
+hasOndemand [] = False
+hasOndemand (t::ts) = tierPartOf t == "ondemand" || hasOndemand ts
+
+-- Sorted-and-unique in one predicate: strictly ascending.  Sorted keeps a
+-- registry diff readable as a change of fact; unique stops one run being
+-- declared twice, which would let a duplicate stand in for a missing tier.
+strictlyAscending : List String -> Bool
+strictlyAscending [] = True
+strictlyAscending (_::[]) = True
+strictlyAscending (a::b::rest) = a < b && strictlyAscending (b::rest)
+
+invalidTiersViolations : List Gate -> List String
+invalidTiersViolations [] = []
+invalidTiersViolations (g::gs) = gateTiersErrors g ++ invalidTiersViolations gs
+
+gateTiersErrors : Gate -> List String
+gateTiersErrors g
+  | isEmptyStrs g.tiers = [
+    "\{g.name}: tiers is empty — every gate has at least one run; a gate nothing invokes is tiers = [\"ondemand\"]"
+  ]
+  | not (strictlyAscending g.tiers) =
+    ["\{g.name}: tiers \{joinWith " " g.tiers} is not sorted and unique"]
+  | hasOndemand g.tiers && listLen g.tiers > 1 = [
+    "\{g.name}: tiers \{joinWith " " g.tiers} mixes 'ondemand' with a real run — 'ondemand' means nothing invokes this gate, so it appears alone or not at all"
+  ]
+  | otherwise = tierTokensErrors g.name g.tiers
+
+-- ── assembling and rendering the nine classes ───────────────────────────────
 
 verifyClasses : String -> List Gate -> List Shard -> <IO> Result String (List (String, List String))
 verifyClasses root gates shs = match gateCandidates root
@@ -1668,6 +1804,7 @@ verifyClasses root gates shs = match gateCandidates root
         ("duplicate entry names", duplicateNameViolations gates),
         ("unsafe entry names", unsafeNameViolations gates shs),
         ("invalid cost class", invalidCostViolations gates),
+        ("invalid tiers", invalidTiersViolations gates),
       ]
 
 renderClass : (String, List String) -> String
@@ -1880,7 +2017,14 @@ matchedFields tok g = fieldHit "run" (tok == g.run)
   ++ fieldHit "name" (tok == g.name)
   ++ fieldHit "area" (tok == g.area)
   ++ fieldHit "project" (tok == g.project)
-  ++ fieldHit "tier" (tok == g.tier)
+  ++ fieldHit "tiers" (anyEqStr tok g.tiers)
+
+-- `tiers` is a list, so a bare token hits it when it IS one of the run tokens —
+-- exact, not glob: `explain` is answering "is this word also a field value?",
+-- and a glob answer there would claim a hit the user did not ask for.
+anyEqStr : String -> List String -> Bool
+anyEqStr _ [] = False
+anyEqStr tok (x::xs) = tok == x || anyEqStr tok xs
 
 explainMatches : String -> List Gate -> List (Gate, List String)
 explainMatches _ [] = []
@@ -2007,7 +2151,7 @@ explainCmdBody argv = match parseExplainArgs argv ExplainArgs { registry = None,
 -- different jobs (S-1's report §7).  The counterexample is exact —
 -- `check_fingerprint_parity` and `check_keyword_sync` carry IDENTICAL values
 -- in every scheduling field (`area = "types"`, `shard = "other-job"`,
--- `project = "compiler"`, `tier = "merge"`, `cost = "cheap"`,
+-- `project = "compiler"`, `tiers = ["merge"]`, `cost = "cheap"`,
 -- `kind = "exec"`), yet the first is a step of `compiler-soundness` under that
 -- job's `needs.detect` guard and the second is a step of `soundness`, which
 -- ci.yml documents as DELIBERATELY UNGUARDED ("guarding a doc gate on
@@ -4292,7 +4436,7 @@ budgetOverClassLines base commitMessage (g::gs) =
     "\{g.name} (\{g.cost}, measured \{balSecs ms}, tolerance-adjusted ceiling ",
     balSecs (budgetToleratedMs g.cost), " of a \{intToString (timeoutFor 0 g.cost)}s timeout)", ack,
     " — remedy: declare a higher `cost` class, split the gate into cheaper",
-    " pieces, or demote it with `tier = \"nightly\"` so it leaves the",
+    " pieces, or demote it with `tiers = [\"nightly\"]` so it leaves the",
     " merge-required path. ", budgetTimeoutRemedy,
     " To accept the current cost on purpose, paste:\n    Gate-Budget-Override: ", tok, "\n",
   ] :: budgetOverClassLines base commitMessage gs
@@ -4321,7 +4465,7 @@ budgetPoleFloorLines commitMessage (Some factor) =
     ack,
     " — remedy: run `medaka gate balance` to see which row or gate needs to",
     " shrink, split the pole gate, or demote a heavy gate to",
-    " `tier = \"nightly\"`. To accept the current pole/floor on purpose, paste:\n    Gate-Budget-Override: ",
+    " `tiers = [\"nightly\"]`. To accept the current pole/floor on purpose, paste:\n    Gate-Budget-Override: ",
     tok,
     "\n",
   ] :: []
