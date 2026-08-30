@@ -303,6 +303,50 @@ else
   fi
 fi
 
+# ── 6. the gate-SET digest is a mirror pair, and it is order-independent ──────
+#
+# `_digest` here and `gate_cost.gateSetDigest` on the Medaka side are two
+# implementations of one rule (S-2, #2223). A drift between them shows up in
+# production as a permanent, unexplained [STALE] annotation on every
+# calibration line — loud, but loud in the way that trains a reader to ignore
+# the annotation. The constant below is the one
+# test/gate_balance_fixtures/calib_staleness.json records for row `c`, and
+# test/diff_compiler_gate_balance.sh asserts the Medaka side against that same
+# fixture, so the two gates pin the two halves against one number.
+_rep() { printf '%s\n' '{' '  "schema": "gate-cost/1",' '  "gates": [' "$@" '  ]' '}'; }
+_rep '    {"name": "swapped_out", "ms": 10, "ok": true}' >"$TMP/dg1.json"
+_d1="$(sh "$ROOT/test/gate_cost_ingest.sh" --digest "$TMP/dg1.json")"
+if [ "$_d1" = "1926625894" ]; then
+  ok "the ingester's gate-set digest matches the value calib_staleness pins"
+else
+  bad "gate-set digest drifted: got '$_d1', calib_staleness.json records 1926625894"
+fi
+
+# A sum, so the report's pattern-resolution order and the registry's enrolment
+# order must produce the same digest — they are not the same order, and a
+# digest that depended on it would fire STALE on every row forever.
+_rep '    {"name": "alpha", "ms": 1, "ok": true}' \
+     '    {"name": "beta", "ms": 1, "ok": true}' >"$TMP/dg2.json"
+_rep '    {"name": "beta", "ms": 1, "ok": true}' \
+     '    {"name": "alpha", "ms": 1, "ok": true}' >"$TMP/dg3.json"
+_d2="$(sh "$ROOT/test/gate_cost_ingest.sh" --digest "$TMP/dg2.json")"
+_d3="$(sh "$ROOT/test/gate_cost_ingest.sh" --digest "$TMP/dg3.json")"
+if [ "$_d2" = "$_d3" ] && [ -n "$_d2" ]; then
+  ok "the gate-set digest ignores the order gates are reported in"
+else
+  bad "the gate-set digest depends on report order ($_d2 vs $_d3)"
+fi
+
+# ...and it must still SEPARATE a same-size swap, which is the whole point.
+_rep '    {"name": "alpha", "ms": 1, "ok": true}' \
+     '    {"name": "gamma", "ms": 1, "ok": true}' >"$TMP/dg4.json"
+_d4="$(sh "$ROOT/test/gate_cost_ingest.sh" --digest "$TMP/dg4.json")"
+if [ "$_d2" != "$_d4" ]; then
+  ok "the gate-set digest separates a same-size swap"
+else
+  bad "swapping one gate for another left the digest unchanged ($_d2)"
+fi
+
 echo
 if [ "$fail" -eq 0 ]; then
   echo "gate cost transport: all checks pass"

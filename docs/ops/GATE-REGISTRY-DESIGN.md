@@ -602,3 +602,146 @@ exit 2, never a pass.
 
 #2200's `test/preflight.sh` half — preflight's own path classification — is **not**
 addressed here and stays open.
+
+## 10. The packing statistic, and what its estimates are worth (#2222, S-2)
+
+`medaka gate balance` packs shards from ONE number per gate: `medianMs` in
+`test/gate_cost_baseline.json`, the **lower median** of that gate's retained raw
+samples. Until S-2 that number was scheduled on **with no stated error** — every
+figure the balancer printed was a point estimate presented as if exact, and the only
+account of its accuracy was a prose claim in `balCalibLines` that the median
+"systematically underestimates". Two neighbouring prose claims about the baseline's
+sample state had already gone stale within two ingests.
+
+**The statistic is RETAINED, and it is retained on a measurement.** All four families
+#2222 named were compared, and the median won the axis a packer schedules on.
+
+### The protocol, and why it is out-of-sample
+
+An estimate scored against the samples that defined it is an in-sample residual and
+is worth nothing: the median of three numbers is trivially close to those three
+numbers. So: **leave one RUN out.** Each recorded run is held out in turn, every
+gate's statistic is recomputed from the OTHER runs' samples only, and the sum of
+those estimates is scored against the held-out run's actual total. No estimate is
+ever graded against a sample that helped produce it.
+
+Leaving out a *sample* is leaving out a *run* because of a coverage argument, not an
+assumption. A gate receives **at most one sample per run** (one report per
+runId+shard; a gate sits on one shard within a run), so a gate whose `samples` equals
+the number of distinct `runId`s in `runs[]` received **exactly one from each**, and
+`ms[i]` is run `i` in the ingester's append order. `balOosBlock` tests that condition
+per gate and excludes — and counts — any gate failing it, rather than folding it in.
+
+### The one command
+
+```sh
+medaka gate balance --check          # the block is printed in ORDINARY output
+```
+
+Reproduced by any reader from committed data, and re-derived on every run so it
+cannot rot. As of the three runs in the committed baseline:
+
+```
+  out-of-sample error of the packing statistic (leave-one-run-out over the 3 runs in runs[],
+  across the 202 of 202 schedulable gates carrying one sample per run):
+    run 33257658611   predicted   5269.6s   actual   6682.5s    -21.1%
+    run 33271853727   predicted   5365.1s   actual   5717.5s     -6.1%
+    run 33277615482   predicted   5379.1s   actual   5917.6s     -9.0%
+    mean |error| 12.0%   systematic bias -12.5%
+```
+
+⚠️ **This is an UPPER BOUND on the production error, not an estimate of it.** Holding
+out one of N samples trains the statistic at N-1, one below what the committed file
+schedules from, and fewer samples is strictly worse. Read it as "no worse than this".
+
+### Why the median won — the table
+
+Per **row** (each row's predicted total against the held-out run's actual for that
+same row), 8 rows × 3 held-out runs = 24 folds:
+
+| candidate | median APE | p90 APE | folds >25% | bias |
+|---|---|---|---|---|
+| **median (lower, retained)** | 14.6% | **27.2%** | 5/24 | **−12.6%** |
+| median (proper / even-avg) | 10.5% | 42.2% | 4/24 | −0.0% |
+| upper quantile (upper median, max) | 12.8% | 48.2% | 5/24 | +12.6% |
+| spread-widened (+0.25 / +0.50 / +1.00 × spread) | 11.9 / 10.5 / 12.8% | 26.4 / 42.2 / 48.2% | 4/4/5 | −6.3 / +0.0 / +12.6% |
+
+Read that table honestly and it splits by axis. **On central tendency every
+alternative beats the median** — it is systematically low, and −12.6% is the size of
+that. **On the tail the median wins**, and the tail is the axis a packer schedules
+on: a row's makespan is set by what it got wrong, not by what it got right on
+average.
+
+### What the whole result rests on — one gate, stated plainly
+
+Removing a single gate inverts the table:
+
+| candidate | median APE | p90 APE | bias | *(all 202 gates → 201, excluding `pds_test_repo_vectors`)* |
+|---|---|---|---|---|
+| median (lower) | 12.4% | 26.6% | −7.9% | now the WORST on every column |
+| median (proper) | 9.0% | 16.3% | −0.0% | |
+| upper quantile | 8.6% | 19.8% | +7.9% | |
+
+`pds_test_repo_vectors` carries `ms = [948919, 14082, 18725]` — one sample **50.7×**
+its own median, one runner hiccup among 606 committed samples (0.17%, or roughly one
+per three CI runs at 202 gates a run). At the baseline's own sample count each
+candidate prices that gate as:
+
+| statistic | price | |
+|---|---|---|
+| **median** | **18725 ms** | the only one that is right |
+| mean | 327242 ms | 17× |
+| median + 0.25 × spread | 252434 ms | 13× |
+| max | 948919 ms | 50× |
+
+A 949-second misprice on one gate is enough to dominate an entire row. So the
+robustness is not a nicety and the −12.6% is **the price of it**, reported rather
+than corrected: any uplift factor that cancelled the bias would be a function of the
+sample count it was fitted at and would over-correct at every other one.
+
+Pinned by `test/gate_balance_fixtures/outlier_immunity.{json,toml}`, which is built
+so the median and the alternatives disagree about an **assignment** and not merely a
+printed value, with the mean-priced arm run as the red half.
+
+### Consumers
+
+`gate_cost.packStat` is the statistic as a named function; `median()` in
+`test/gate_cost_ingest.sh` is its awk mirror, and the two are kept honest by
+`balOosBlock` counting the committed rows where they disagree (expected 0, printed
+only when not). **S-4's cost budget should cite the `systematic bias` figure the tool
+prints, and cite it as a lower bound on a row's real cost** — the model predicts low,
+by construction and by measurement.
+
+## 11. Calibration staleness is a SET question, not a count (#2223, S-2)
+
+`balCalibLine` prints each row's recorded CI wall clock against this model's
+prediction. That residual only means anything while the recorded run and the
+committed assignment describe **the same gate set**, and the line cannot tell on its
+own: a residual reads identically whether the gate set moved or not.
+
+F-2 closed half of it by comparing the run's recorded `gates` **count** against the
+row's current count. **A count is not a set.** The commonest rebalance is a *swap* —
+one gate leaves a row, another arrives — and a swap does not move a count, so the
+annotation stayed silent on exactly the case it existed for (observed: a −96%
+residual printing entirely clean, which reads as "the model is calibrated" when it
+means "the model is being graded against a gate set that has not existed since the
+rebalance").
+
+Closed by recording a **gate-set digest** per `runs[]` row: `gatesDigest`, the sum of
+a `h = h*131 + c` polynomial hash over that row's baseline keys, mod 2^31−1. A sum,
+so it is order-independent — a report lists gates in pattern-resolution order and the
+registry in enrolment order, and those differ. Its only consumer is an annotation, so
+a collision costs a missing annotation and never a wrong assignment.
+
+Two implementations, deliberately: `gate_cost.gateSetDigest` reads the committed side
+and `_digest` in `test/gate_cost_ingest.sh` wrote the recorded side. They are pinned
+against one shared constant from opposite directions —
+`test/diff_compiler_gate_cost.sh` checks the awk (via `--digest`) and
+`test/diff_compiler_gate_balance.sh` checks the Medaka (via `calib_staleness`'s row
+`d`, which is unannotated only if the two agree).
+
+`gatesDigest` is **optional**, like `jobs`/`parallel`/`gates` before it: a run
+ingested before the field existed reads as unknown, and unknown is not stale. So the
+24 rows already in the committed baseline keep exactly the count-only behaviour they
+had and gain the set check at their next ingest — the fix is live for everything
+ingested from here, and no digest was back-filled into a GENERATED file by inference.

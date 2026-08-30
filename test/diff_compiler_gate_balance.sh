@@ -111,7 +111,7 @@ _bal() {
 
 for stem in wasm_only_row dominating_gate uncosted_gate \
             pin_intruder pin_deserter pin_on_open_row makespan_vs_sum \
-            thin_evidence calib_staleness; do
+            thin_evidence calib_staleness outlier_immunity; do
   cp "$FIX/$stem.toml" "$TMP/$stem.toml"
 done
 
@@ -369,9 +369,115 @@ if _bal calib_staleness "$TMP/s.txt"; then
     bad "row 'b' calibration line was annotated STALE when it should not be"
     sed -e 's/^/        /' "$TMP/s.txt"
   fi
+
+  # ── 9b. ...and a COUNT is not a SET (S-2, #2223) ───────────────────────────
+  #
+  # The commonest rebalance is a SWAP, and a swap does not move a count — so
+  # rows `c` and `d` are BOTH recorded at exactly the count they carry now and
+  # the check above cannot tell them apart. Only the recorded `gatesDigest`
+  # separates them: `c` had its one gate swapped out for another, `d` still has
+  # the gate it was recorded with. The observed bug was a -96% residual
+  # printing entirely clean, which reads as "the model is calibrated" when it
+  # means "the model is being graded against a gate set that no longer exists".
+  #
+  # Row `d` is also the mirror check on the digest itself: it is unannotated
+  # only if `gate_cost.gateSetDigest` and `_digest` in test/gate_cost_ingest.sh
+  # (which produced the recorded number) agree exactly. A drift between those
+  # two turns every calibration line permanently STALE in production.
+  if grep -q '^    c  *recorded.*\[STALE: the same 1 gates by COUNT but a DIFFERENT SET' "$TMP/s.txt"; then
+    ok "a row whose recorded gate SET differs at EQUAL count is annotated STALE"
+  else
+    bad "row 'c' calibration line missing the same-count-different-set annotation"
+    sed -e 's/^/        /' "$TMP/s.txt"
+  fi
+  if grep -q '^    d  *recorded' "$TMP/s.txt" && ! grep -q '^    d  *recorded.*\[STALE' "$TMP/s.txt"; then
+    ok "a row whose recorded gate set matches committed is NOT annotated"
+  else
+    bad "row 'd' was annotated STALE — the set digest always fires, or the awk and Medaka digests have drifted"
+    sed -e 's/^/        /' "$TMP/s.txt"
+  fi
 else
   bad "the balancer failed on the calib_staleness fixture"
   sed -e 's/^/        /' "$TMP/s.txt"
+fi
+
+# ── 10. the PACKING STATISTIC is the median, and that is load-bearing ─────────
+#
+# Retained on a measurement, not by default (S-2, #2222): four candidate
+# families were compared leave-one-run-out and the median lost on central
+# tendency (it is low by a measured -12.6%) and won on the tail, which is the
+# axis a packer schedules on. `outlier_immunity` is that trade as a fixture.
+#
+# `wild` carries one hiccup sample 90x its own median — the shape
+# `pds_test_repo_vectors` carries for real in the committed baseline at 50.7x.
+# The median prices it at 10 and every unbiased alternative near 306, and the
+# two disagree about the ASSIGNMENT: under the median `wild` shares a row with
+# `heavy`, and under any statistic one hiccup can move it takes a row alone.
+# The assertion is that sharing, which is tie-break-independent.
+#
+# The second arm is the red half, and it is why this is a divergence pin rather
+# than a bare value: the SAME registry against a baseline whose `wild` is
+# priced at the mean must MOVE a gate. Without it, a fixture that merely
+# passes proves nothing about which statistic produced it.
+if _bal outlier_immunity "$TMP/o.txt"; then
+  got="$(awk '/^name = "wild"$/{f=1} f && /^shard = /{print; exit}' "$TMP/outlier_immunity.toml")"
+  heavy="$(awk '/^name = "heavy"$/{f=1} f && /^shard = /{print; exit}' "$TMP/outlier_immunity.toml")"
+  if [ -n "$got" ] && [ "$got" = "$heavy" ]; then
+    ok "one hiccup sample does not move a gate's placement ('wild' shares $got with 'heavy')"
+  else
+    bad "'wild' was placed apart from 'heavy' (wild: $got, heavy: $heavy) — the packing statistic is letting an outlier through"
+    sed -e 's/^/        /' "$TMP/o.txt"
+  fi
+
+  # Same registry, `wild` re-priced at the MEAN of its own samples (306): the
+  # assignment must now change, proving the fixture above discriminates.
+  sed 's/"name": "wild", "medianMs": 10/"name": "wild", "medianMs": 306/' \
+    "$FIX/outlier_immunity.json" >"$TMP/outlier_mean.json"
+  cp "$FIX/outlier_immunity.toml" "$TMP/outlier_mean.toml"
+  MEDAKA_ROOT="$ROOT" "$MEDAKA" gate balance \
+    --registry "$TMP/outlier_mean.toml" \
+    --baseline "$TMP/outlier_mean.json" --check >"$TMP/om.txt" 2>&1
+  if grep -q '^  rebalanced' "$TMP/om.txt"; then
+    ok "pricing that gate at the mean instead moves it — the fixture discriminates"
+  else
+    bad "the mean-priced arm did not rebalance; outlier_immunity is not pinning a divergence"
+    sed -e 's/^/        /' "$TMP/om.txt"
+  fi
+else
+  bad "the balancer failed on the outlier_immunity fixture"
+  sed -e 's/^/        /' "$TMP/o.txt"
+fi
+
+# ── 11. the out-of-sample error is STATED, in ordinary output ─────────────────
+#
+# Before S-2 the balancer scheduled on `medianMs` with no stated error: every
+# number in its report was a point estimate presented as exact. The figure is
+# derived on every run precisely so it cannot rot the way the two prose claims
+# about the baseline's sample state did, both of which were stale within two
+# ingests. Asserted against the REAL baseline, not a fixture, because the
+# claim is about the committed data; and asserted as a SHAPE (a signed
+# percentage), never a pinned number, since a re-ingest legitimately moves it.
+if grep -q '^  out-of-sample error of the packing statistic (leave-one-run-out over the [0-9]* runs' "$out"; then
+  ok "the balancer states its packing statistic's out-of-sample error"
+else
+  bad "no out-of-sample error block in ordinary balancer output"
+  sed -e 's/^/        /' "$out"
+fi
+if grep -q '^    mean |error| [0-9]*\.[0-9]%   systematic bias [-+][0-9]*\.[0-9]%' "$out"; then
+  ok "the out-of-sample summary carries both a magnitude and a signed bias"
+else
+  bad "the out-of-sample summary line is missing its mean |error| / systematic bias"
+  grep -n 'out-of-sample' -A 5 "$out" | sed -e 's/^/        /'
+fi
+# A drift between the ingester's awk `median()` and `gate_cost.packStat` would
+# mean the tool scores by a rule the committed file was not written with. The
+# balancer counts the rows where they disagree; on a healthy tree it says
+# nothing, so the WARNING's ABSENCE is the assertion.
+if grep -q 'the ingester and gate_cost.packStat have drifted' "$out"; then
+  bad "the committed baseline's medianMs values are not what gate_cost.packStat derives"
+  grep -n 'drifted' "$out" | sed -e 's/^/        /'
+else
+  ok "every committed medianMs is reproduced by gate_cost.packStat"
 fi
 
 # The real registry's own closed row, asserted by NAME and not by count: the

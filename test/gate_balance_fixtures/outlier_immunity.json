@@ -1,0 +1,20 @@
+{
+  "schema": "gate-cost-baseline/1",
+  "note": "SYNTHETIC fixture baseline for test/diff_compiler_gate_balance.sh. Hand-written, not ingested. Pins the PACKING STATISTIC (S-2, #2222): 'wild' carries one hiccup sample 90x its own median, so the median prices it at 10 and every unbiased alternative prices it near 306 — and the two disagree about the ASSIGNMENT, not merely about a printed number. jobs=1 so a row's makespan is its sum and the arithmetic is readable; see outlier_immunity.toml for it.",
+  "generated": "2026-08-30T00:00:00Z",
+  "maxSamples": 9,
+  "runs": [
+    {"key": "1:1:a", "runId": "1", "runAttempt": "1", "shard": "a", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-30T00:00:00Z", "jobs": 1, "parallel": true, "rowElapsedMs": 105, "gates": 2},
+    {"key": "1:1:b", "runId": "1", "runAttempt": "1", "shard": "b", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-30T00:00:00Z", "jobs": 1, "parallel": true, "rowElapsedMs": 95, "gates": 2},
+    {"key": "2:1:a", "runId": "2", "runAttempt": "1", "shard": "a", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-30T00:01:00Z", "jobs": 1, "parallel": true, "rowElapsedMs": 105, "gates": 2},
+    {"key": "2:1:b", "runId": "2", "runAttempt": "1", "shard": "b", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-30T00:01:00Z", "jobs": 1, "parallel": true, "rowElapsedMs": 95, "gates": 2},
+    {"key": "3:1:a", "runId": "3", "runAttempt": "1", "shard": "a", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-30T00:02:00Z", "jobs": 1, "parallel": true, "rowElapsedMs": 105, "gates": 2},
+    {"key": "3:1:b", "runId": "3", "runAttempt": "1", "shard": "b", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-30T00:02:00Z", "jobs": 1, "parallel": true, "rowElapsedMs": 95, "gates": 2}
+  ],
+  "gates": [
+    {"name": "heavy", "medianMs": 90, "samples": 3, "ms": [90, 90, 90]},
+    {"name": "light", "medianMs": 30, "samples": 3, "ms": [30, 30, 30]},
+    {"name": "mid", "medianMs": 60, "samples": 3, "ms": [60, 60, 60]},
+    {"name": "wild", "medianMs": 10, "samples": 3, "ms": [900, 10, 10]}
+  ]
+}
