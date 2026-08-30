@@ -1,0 +1,21 @@
+-- FLAT: helper is a top-level function; the invariant `lim` is threaded explicitly.
+goFlat : Int -> Int -> Int -> Int
+goFlat lim i acc
+  | i >= lim = acc
+  | otherwise = goFlat lim (i + 1) (acc + i)
+
+workFlat : Int -> Int
+workFlat lim = goFlat lim 0 0
+
+loopFlat : Int -> Int -> Int -> Int -> Int
+loopFlat n k lim acc
+  | k >= n = acc
+  | lim >= 10 = loopFlat n (k + 1) 1 (acc + workFlat lim)
+  | otherwise = loopFlat n (k + 1) (lim + 1) (acc + workFlat lim)
+
+main =
+  let a0 = allocBytes ()
+  let r = loopFlat 2000000 0 1 0
+  let a1 = allocBytes ()
+  println "flat result=\{debug r}"
+  println "flat allocBytes=\{debug (a1 - a0)}"

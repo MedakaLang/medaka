@@ -3527,7 +3527,24 @@ sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_cost.mdk", "test/
 corpus = []
 toolchain = []
 
-
+# #2237: regression pin for capture-free closure allocation (S-1 static-cell
+# hoisting + S-2 eta-closure sweep) — builds three probes and asserts
+# allocBytes() for the capture-free/eta cases stays near a one-time constant
+# instead of scaling with call count. No oracle: this reads the built
+# `medaka` binary directly, not a captured golden.
+[[gate]]
+name = "diff_compiler_closure_alloc"
+area = "backend"
+shard = "types"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_closure_alloc.sh"
+oracles = []
+sources = ["compiler/backend/llvm_emit.mdk", "test/diff_compiler_closure_alloc.sh"]
+corpus = ["test/closure_alloc_fixtures"]
+toolchain = []
 
 # ── the `gates` matrix rows (S-1, #2177) ─────────────────────────────────────
 #
