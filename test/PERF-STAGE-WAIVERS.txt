@@ -23,4 +23,4 @@
 
 parse-prelude  fixed one-time cost: parses runtime.mdk+core.mdk (the prelude), constant in program size N; not an N-scaling stage.
 wasm-emit  graded by grade_wasm_row on the TIME signal — a separate wasm arm in diff_compiler_perf_scaling.sh (XREF_WASM_N band, self-draining ledger row xref:wasm-emit), deliberately NOT in TIME_STAGES/OP_STAGES.
-load  multi-module loader (topo-sort + disk read, IO-bound). Multi-module perf coverage is tracked under #881 (the resolve arm); this stage is not alloc/N-scaling-graded.
+load  multi-module loader (topo-sort + disk read, IO-bound). Graded on a DIFFERENT axis: test/diff_compiler_stage_ir_scaling.sh covers it as load=mdk_driver_loader__loadProgram (IR-scaling, not time/op-scaling) — deliberately not in TIME_STAGES/OP_STAGES here.

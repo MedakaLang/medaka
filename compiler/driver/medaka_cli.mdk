@@ -1617,6 +1617,18 @@ buildUsage _ = putStrLn (stringConcat
     "                    same flags a normal link uses) and exit; point MEDAKA_PRELUDE_OBJ at\n",
     "                    it to skip re-optimising the prelude on every subsequent build.\n",
     "                    Opt-in: separate objects cannot inline the prelude into user code\n",
+    "\n",
+    "runtime object cache (ON by default):\n",
+    "  Every native build links a compiled runtime/medaka_rt.c. Rather than recompile\n",
+    "  it each time (~0.76s), build caches the object, keyed on a hash of the .c\n",
+    "  source, the C compiler and its version, and the exact compile flags, so a\n",
+    "  changed runtime or compiler never reuses a stale object.\n",
+    "  Location (first that applies): $MEDAKA_CACHE_DIR, else\n",
+    "  $XDG_CACHE_HOME/medaka, else $HOME/.cache/medaka.\n",
+    "  MEDAKA_NO_OBJ_CACHE=1  disable the cache; compile medaka_rt.c inline every build\n",
+    "  MEDAKA_CACHE_DIR=<d>   put the cache somewhere else (e.g. a per-CI-job scratch dir)\n",
+    "  An explicit MEDAKA_RT_OBJ still wins over the cache. Every cache failure is\n",
+    "  fail-open: build falls back to the inline compile, never to an error.\n",
   ])
 
 -- Default output path per target: native drops the extension (a bare exe name);
