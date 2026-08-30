@@ -260,11 +260,18 @@ GHC's perf-notes model applied to CI cost:
 **AS LANDED (S-5, epic #2182, `docs/ops/GATE-REGISTRY-DESIGN.md` §14):**
 `medaka gate budget`, run by `test/diff_compiler_gate_budget.sh` as its own `gate-budget:`
 job (`shard = "other-job"`, same "cannot certify a number it can move" reason as
-`gate-balance`). The override is a `Gate-Budget-Override: <token>` trailer on the commit
-message — the one thing a `merge_group` run can always see, since it has no PR body — read
-via `git log -1 --pretty=%B` by the `.sh` wrapper (`gate_cmd.mdk` itself touches no git
-state). Not yet in the required-checks ruleset, the same state `gate-cost`/`gate-balance`
-are still in — a separate, non-atomic `gh api` edit.
+`gate-balance`). The override is a `Gate-Budget-Override: <token>` trailer on an AUTHORED
+commit message in the change under test — the one thing a `merge_group` run can always see,
+since it has no PR body. Not yet in the required-checks ruleset, the same state
+`gate-cost`/`gate-balance` are still in — a separate, non-atomic `gh api` edit.
+
+⚠️ **The trailer is NOT read with `git log -1` on HEAD** (that was S-5's bug; review finding
+S1-2, fixed by FR-2). `actions/checkout@v4` with no `ref:` checks out a SYNTHETIC merge
+commit on `pull_request` and on `merge_group` — GitHub-authored boilerplate, never the
+author's text — so the `gate-budget:` job resolves the authored range from the event
+payload's own base/head SHAs, exports it as `GATE_BUDGET_COMMIT_MSG`, and the `.sh` wrapper
+prefers that whenever it is set (`gate_cmd.mdk` still touches no git state). Mechanism and
+the measured evidence: `docs/ops/GATE-REGISTRY-DESIGN.md` §14.
 
 ### 3.6 Tiers (#2181)
 

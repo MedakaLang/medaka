@@ -3501,9 +3501,12 @@ toolchain = []
 # tolerance-adjusted timeout its declared `cost` class implies, or (c) the
 # projected pole/floor (the same number `gate balance --check` derives)
 # exceeds S-4's budget. Any violation is acceptable on purpose via a
-# `Gate-Budget-Override: <token>` trailer on the commit message (read by the
-# `.sh` wrapper via `git log -1 --pretty=%B`, since a `merge_group` run has no
-# PR body). Text-only, no build beyond ./medaka existing; needs no oracle.
+# `Gate-Budget-Override: <token>` trailer on an AUTHORED commit message in the
+# change under test (a `merge_group` run has no PR body). NOT `git log -1` on
+# HEAD — checkout hands both merge-gating events a SYNTHETIC merge commit; the
+# `gate-budget:` job resolves the authored range from the event payload and
+# exports GATE_BUDGET_COMMIT_MSG (FR-2, review S1-2). Text-only, no build
+# beyond ./medaka existing; needs no oracle.
 #
 # shard="other-job", mirroring diff_compiler_gate_balance immediately above:
 # `other-job` gates never enter packing and structurally cannot appear in the

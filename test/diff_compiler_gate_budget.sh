@@ -16,10 +16,29 @@
 #       (`balTargetMilli`, 1.125).
 #
 # Any violation may be accepted on purpose with a structured, greppable
-# acknowledgment: a `Gate-Budget-Override: <token>` trailer on the commit
-# message being checked. There is no PR body in a `merge_group` run, so the
-# checked-out commit's own message is the one thing the queue can always see
-# (`git log -1 --pretty=%B` on the checked-out SHA — ordinary git behaviour).
+# acknowledgment: a `Gate-Budget-Override: <token>` trailer on an AUTHORED
+# commit message in the change under test. There is no PR body in a
+# `merge_group` run, so an authored commit message is the one thing the queue
+# can always see.
+#
+# ⚠️ "AUTHORED" is load-bearing and was got WRONG when this gate landed (S-5;
+# fixed by FR-2, review finding S1-2). `git log -1 --pretty=%B` on the
+# CHECKED-OUT HEAD is correct locally and on `push`/`workflow_dispatch`, and
+# is PROVABLY WRONG on both CI events that actually gate a merge:
+# `actions/checkout@v4` with no `ref:` checks out a SYNTHETIC MERGE COMMIT on
+# `pull_request` (`refs/pull/N/merge`) and on `merge_group`, and that commit's
+# message is GitHub-authored boilerplate ("Merge pull request #N from ...")
+# — never the text a human or agent pasted the trailer into. Measured on this
+# repo's own history: PR #2212's queue commit 93a40382 reads "Merge pull
+# request #2212 from ..."; its SECOND PARENT 1c1b48f3 carries the real
+# authored message.
+#
+# So on CI the workflow resolves the authored message(s) itself — from the
+# event payload's real base/head SHAs — and hands them over in
+# GATE_BUDGET_COMMIT_MSG (`.github/workflows/ci.yml`, the `gate-budget:` job).
+# This script prefers that variable whenever it is SET, and only falls back to
+# HEAD's own message when it is entirely ABSENT, i.e. a local or manual run
+# where HEAD really is the authored commit.
 #
 # TEXT-ONLY, NO BUILD beyond `./medaka` itself already existing — no clang, no
 # oracle probe. `gate budget` reads test/gates.toml and
@@ -48,11 +67,21 @@ MEDAKA="${MEDAKA:-$ROOT/medaka}"
 
 [ -x "$MEDAKA" ] || { echo "build native first: make medaka (missing $MEDAKA)"; exit 2; }
 
-# The commit message of the checked-out HEAD is the override channel — see
-# the header. `git log` failing (a shallow clone with no history, or no repo
-# at all) degrades to "no message", which is the fail-CLOSED direction: a
-# violation that exists still reds, it just cannot be silenced by an
-# override this run cannot see.
-MSG="$(cd "$ROOT" && git log -1 --pretty=%B 2>/dev/null || true)"
+# The override channel — see the header for why the CI arm cannot be
+# `git log -1` on HEAD.
+#
+# The test is `+set`, NOT `-n`: a SET-BUT-EMPTY GATE_BUDGET_COMMIT_MSG means
+# "CI resolved the authored message and there was no override text in it",
+# and must NOT silently fall back to the synthetic merge commit — that
+# fallback is the very bug FR-2 fixes. Falling through with an empty message
+# is the fail-CLOSED direction anyway: a violation that exists still reds, it
+# just cannot be silenced by an override this run cannot see. The same is
+# true of the fallback's `git log` failing (shallow clone with no history, or
+# no repo at all), which degrades to "no message".
+if [ -n "${GATE_BUDGET_COMMIT_MSG+set}" ]; then
+  MSG="$GATE_BUDGET_COMMIT_MSG"
+else
+  MSG="$(cd "$ROOT" && git log -1 --pretty=%B 2>/dev/null || true)"
+fi
 
 MEDAKA_ROOT="$ROOT" "$MEDAKA" gate budget --commit-message "$MSG"

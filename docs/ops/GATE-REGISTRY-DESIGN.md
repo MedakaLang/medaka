@@ -1033,9 +1033,8 @@ reason). Reds when:
 ### The override: a commit-message trailer, not a PR-body field
 
 A `merge_group` run has no PR body — the queue tests a synthetic merge commit, not the
-PR. The one thing it can always see is the checked-out commit's own message
-(`git log -1 --pretty=%B`, ordinary git behaviour, no GitHub-specific API). So any
-clause may be accepted on purpose with a trailer:
+PR. The one thing it can always see is an **authored commit message** in the change
+under test. So any clause may be accepted on purpose with a trailer:
 
 ```
 Gate-Budget-Override: <token>  [free-text reason, never machine-checked]
@@ -1043,11 +1042,48 @@ Gate-Budget-Override: <token>  [free-text reason, never machine-checked]
 
 where `<token>` is `uncosted:<gate-name>`, `over-class:<gate-name>`, or the literal
 `pole-floor` — one line per violation accepted. `gate_cmd.mdk` never touches git itself
-(it stays testable on plain strings via `--commit-message`); `test/diff_compiler_gate_budget.sh`
-is the one place that runs `git log -1 --pretty=%B` and hands the result through. The
-failing gate prints the exact trailer to paste for each unacknowledged violation, so the
-remedy is inline for a reader with no other context, and every acceptance is a `grep`-able
-line in `git log` forever — an auditable artifact, not silent creep.
+(it stays testable on plain strings via `--commit-message`). The failing gate prints the
+exact trailer to paste for each unacknowledged violation, so the remedy is inline for a
+reader with no other context, and every acceptance is a `grep`-able line in `git log`
+forever — an auditable artifact, not silent creep.
+
+#### 🚨 Where the trailer is read from — `git log -1` on HEAD is WRONG on CI
+
+As landed, S-5 read the trailer with `git log -1 --pretty=%B` on the checked-out HEAD and
+justified it as "ordinary git behaviour, no GitHub-specific API, so it needs no separate
+verification against GitHub policy". **That reasoning was the bug** (review finding S1-2,
+fixed by FR-2): it is not a GitHub *policy* question at all, it is a question about the
+git state `actions/checkout@v4` actually produces. With no explicit `ref:`, checkout
+resolves a **synthetic merge commit** on both events that gate a merge — `refs/pull/N/merge`
+on `pull_request`, the queue's auto-merge commit on `merge_group` — and that commit's
+message is GitHub-authored boilerplate, never the author's. Measured on this repo's own
+history: PR #2212's queue commit `93a40382` reads `Merge pull request #2212 from ...`,
+while its **second parent** `1c1b48f3` (the PR branch tip an agent wrote) carries the real
+message. So the override was readable locally and via `--commit-message`, and unreadable on
+every event that could ever need it — an un-overridable required governor, i.e. a deadlock.
+
+The mechanism now has two halves:
+
+- **`.github/workflows/ci.yml`, the `gate-budget:` job's *Resolve the authored commit
+  message(s)* step** re-derives the authored range from the **event payload's** SHAs —
+  `pull_request.base.sha..pull_request.head.sha`, or `merge_group.base_sha..head_sha` —
+  makes those objects reachable with the same targeted `git fetch --no-tags --depth=…`
+  pattern the `detect` job uses, reads `git log --pretty=%B <base>..<head>`, and exports the
+  result as `GATE_BUDGET_COMMIT_MSG`. A RANGE, not one commit, so the trailer counts on any
+  authored commit in the PR and on any PR batched into a multi-PR merge group — a `^2`-only
+  read would miss every PR but the newest in the batch. If the range cannot be resolved it
+  falls back to the head commit, or on `merge_group` to `<head>^2`. On
+  `push`/`workflow_dispatch`/`schedule` — which check out the author's real commit — it
+  exports nothing and behaviour is unchanged.
+- **`test/diff_compiler_gate_budget.sh`** prefers `GATE_BUDGET_COMMIT_MSG` whenever it is
+  **set**, and falls back to `git log -1 --pretty=%B` on HEAD only when it is entirely
+  **absent** — a local or manual run, where HEAD really is the authored commit. The test is
+  `+set`, not `-n`, deliberately: set-but-empty means "CI resolved the range and found no
+  override text", which must stay fail-CLOSED rather than silently re-reading the synthetic
+  merge commit.
+
+The generalisable lesson: *"ordinary git behaviour" is not a reason to skip verification when
+something else chose the checkout.*
 
 ### Why a job and not a `gates` matrix row
 

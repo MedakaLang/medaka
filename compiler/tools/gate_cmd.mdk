@@ -4133,13 +4133,24 @@ balCmdBody argv = match parseBalArgs argv BalArgs { registry = None, baseline = 
 --       contributes here either.
 --
 -- Any clause may be accepted on purpose with a structured, greppable
--- acknowledgment: a trailer line on the commit message. There is no PR body
--- in a `merge_group` run, so the checked-out commit's OWN message is the one
--- thing the queue can always see (`git log -1 --pretty=%B` on the checked-out
--- SHA — ordinary git behaviour, not a GitHub-specific API, so it needs no
--- separate verification against GitHub policy). The `.sh` gate script reads
--- it and passes it via `--commit-message`; this module touches no git state
--- itself, so every clause stays testable on plain strings.
+-- acknowledgment: a trailer line on an AUTHORED commit message in the change
+-- under test. There is no PR body in a `merge_group` run, so an authored
+-- commit message is the one thing the queue can always see. The `.sh` gate
+-- script obtains that text and passes it via `--commit-message`; this module
+-- touches no git state itself, so every clause stays testable on plain
+-- strings.
+--
+-- ⚠️ This comment used to say the CHECKED-OUT commit's own message was that
+-- text, read with `git log -1 --pretty=%B`, and that being "ordinary git
+-- behaviour, not a GitHub-specific API" meant it "needs no separate
+-- verification against GitHub policy". That was wrong and is the bug FR-2
+-- fixed (review S1-2): it was never a policy question, it was a question
+-- about the git state `actions/checkout@v4` produces, and with no `ref:` that
+-- is a SYNTHETIC merge commit on both `pull_request` and `merge_group` —
+-- GitHub boilerplate, never the author's text. Nothing in THIS module changed
+-- (`--commit-message` parsing was always correct); the fix is entirely in how
+-- `.github/workflows/ci.yml` and test/diff_compiler_gate_budget.sh obtain the
+-- text. See docs/ops/GATE-REGISTRY-DESIGN.md §14 for the measured evidence.
 
 -- The exact trailer a reader pastes: `Gate-Budget-Override: <token>`, one per
 -- violation accepted, free text after the token (a human reason) never
