@@ -2371,6 +2371,41 @@ balTargetMilli = 1250
 balMarginPct : Int
 balMarginPct = 5
 
+{- | The incumbent row's slack, as a percentage of the LPT pick's current row
+   load.  See `balPickStable` for the mechanism, `balStays` for why the
+   comparison is made before the gate is added rather than after, and
+   `balTarget` for why reading the incumbent at all is sound.
+
+   🚨 NOT `balMarginPct`, DELIBERATELY, AND THE TWO MUST NOT BE MERGED.  They
+   are numbers in different units answering different questions:
+
+     * `balMarginPct` is 5% OF THE POLE, and it grades the WHOLE assignment
+       after the fact — "was this rebalance worth its churn?" — for the report.
+     * this is a percentage OF ONE ROW'S LOAD at ONE placement step, and it
+       decides a single gate's row.
+
+   Folding them into one constant would mean one edit silently retunes both a
+   scheduling decision and a report's wording, and it would make the report's
+   "a move needs a pole gain of more than 5%" line read as if it described the
+   packer, which is exactly the confusion S-4 of #2178 removed.
+
+   HELD AT 5 ON A MEASUREMENT, NOT A GUESS.  Measured against the committed
+   202-gate registry under three independent ±2% perturbation shapes (index
+   parity, its opposite, and a name-hashed sign), counting gates whose derived
+   `shard` moved: 89 / 128 / 127 without the preference, 0 / 4 / 0 with it, at
+   an achieved pole identical to three significant figures in all three (the
+   pole/median factor moved by at most 0.005).  Table and method:
+   `docs/ops/GATE-REGISTRY-DESIGN.md` §12.
+
+   The pole is not free in general: a slack of p% lets a placement land on a row
+   up to p% heavier than the lightest legal one.  It is exactly free on an
+   UNPERTURBED input — the committed assignment IS the packer's output, so every
+   incumbent already equals the pick and the preference never fires — which is
+   why the cost only ever shows up on a re-ingest, and why `balStabLine` states
+   the realised figure on every run rather than leaving it to this comment. -}
+balStabPct : Int
+balStabPct = 5
+
 -- ── Quantizing noisy costs — TRIED AND MEASURED AWAY (S-4, #2178/#2207) ─────
 --
 -- 🚨 EVERY GATE IN THE COMMITTED BASELINE IS SCORED OFF AS FEW AS ONE OR TWO
@@ -2644,6 +2679,106 @@ balPickGo c (r::rs) best
       else
         balPickGo c rs best
 
+{- | The row a gate should go on, with the INCUMBENT row given a bounded
+   preference over the LPT pick (S-3, #2218).
+
+   🚨 READ `balBandNote` FIRST.  A near-identical-LOOKING mechanism shipped in
+   #2178 and was REVERTED, and the difference between that one and this one is
+   the whole reason this one is allowed to exist.  The reverted mechanism let
+   the COMMITTED ASSIGNMENT stand whenever it was within `balMarginPct` of the
+   target's pole.  That made "the derived assignment" a SET rather than a
+   value, so `--check` could not tell a hysteresis-preserved incumbent from a
+   stale hand edit: moving `diff_compiler_source_bytes` from `tools` to `types`
+   by hand shifted the pole by 0s, and `--check` reported "already balanced".
+
+   This is not that.  The incumbent is an EXPLICIT INPUT to a placement
+   decision, consulted at a defined point in a defined order, and the result is
+   still a single value that `--check` re-derives from committed data alone.
+   `balTarget` is a pure function of a WIDER argument list — (rows, costs,
+   toolchains, incumbent shards) — not a function with an escape hatch.  The
+   discriminator is mechanical: under the reverted mechanism a hand edit was
+   ACCEPTED because it was never re-derived; here a hand edit is re-derived like
+   everything else, and survives only if the derivation independently produces
+   it, which is what "derived" means.
+
+   The rule.  Take the LPT pick (`balPick`) as the baseline, then keep the
+   incumbent instead when all three hold:
+
+     1. the incumbent row is OPEN (a closed row's members never reach here —
+        `balOpenCands` filtered them — but the predicate is total anyway), and
+     2. the incumbent row is LEGAL for this gate (`wasm_arm`), and
+     3. the incumbent row is currently no more than `balStabPct` percent
+        heavier than the LPT pick (`balStays`, which argues for BEFORE-adding
+        rather than after).
+
+   (2) is `balCurrentLegal`'s argument one layer down and is NOT negotiable:
+   cost is what a preference may weigh, and legality is not a cost.  An illegal
+   incumbent fails the predicate and is moved, which is what keeps the
+   `wasm_only_row` fixture red-on-regression.
+
+   ⚠️ WHY THIS IS STILL A FIXED POINT, which is the property #2178 paid for.
+   Run the balancer on its own output and every candidate's incumbent IS the row
+   the previous run placed it on.  By induction over the (identical) candidate
+   order: if the previous run took the LPT pick, the incumbent equals the pick
+   and clause (3) holds trivially with slack 0, so the pick is taken again; if
+   the previous run kept the incumbent, the row states at that step are
+   identical and the same three clauses hold, so it is kept again.  Either way
+   the second run emits the first run's assignment, byte for byte —
+   `diff_compiler_gate_balance.sh`'s `_bal_real`-twice assertion. -}
+balPickStable : Cand -> List Row -> Option String
+balPickStable c rs = match balPick c rs
+  None => None
+  Some best => if balStays c best rs then Some c.curRow else Some best
+
+{- | Clause (1)+(2)+(3) of `balPickStable`, in that order.  Kept separate so the
+   legality clause is a readable line rather than a term inside an arithmetic
+   comparison.
+
+   ⚠️ CLAUSE (3) COMPARES THE ROWS' LOADS BEFORE THIS GATE IS ADDED, NOT AFTER,
+   AND THE TWO ARE NOT THE SAME RULE.  Both were implemented and measured; the
+   before-form is kept, on both counts:
+
+     * The bound it gives is the one worth having.  A hold puts this gate on a
+       row already carrying `Lcur` instead of the lightest legal `Lbest`, and
+       the excess it can add to the pole is exactly `Lcur - Lbest`, which this
+       form caps at `balStabPct`% of `Lbest`.  The after-form caps the same
+       excess at `balStabPct`% of `Lbest + cms`, so the slack GROWS with the
+       gate's own cost — an expensive gate would earn more licence to sit on a
+       heavy row, which is backwards for an objective that is the pole.
+     * It measured no worse.  Same three ±2% perturbation shapes, churn out of
+       202 gates: before-form 0 / 4 / 0, after-form 0 / 7 / 5.
+
+   A consequence worth naming rather than discovering: early in the pack every
+   row is near-empty, so `Lbest` is near 0, the slack is near 0, and the
+   biggest gates — the ones that set the pole's floor — are placed by bare LPT
+   with no preference at all.  The preference only reaches the tail of small
+   gates, which is exactly where the churn is (`balBandNote`). -}
+balStays : Cand -> String -> List Row -> Bool
+balStays c best rs
+  | c.curRow == best = True
+  | not (balRowTakes c rs) = False
+  | otherwise =
+    balRowLoad c.curRow rs * 100 <= balRowLoad best rs * (100 + balStabPct)
+
+-- Whether this gate's incumbent row exists, is open, and can run it.  An
+-- unknown row name answers False — `balUnknownRows` has already refused that
+-- registry, but a placement rule that read a missing row as "fine" would be one
+-- refusal away from silently pinning a gate to nothing.
+balRowTakes : Cand -> List Row -> Bool
+balRowTakes _ [] = False
+balRowTakes c (r::rs)
+  | r.rname == c.curRow = not r.rclosed && (not c.needsWasm || r.rwasm)
+  | otherwise = balRowTakes c rs
+
+-- One row's accumulated makespan, by name.  A row that does not exist reads as
+-- 0, which `balStays` only ever reaches through `balRowTakes` having already
+-- answered False for the same name.
+balRowLoad : String -> List Row -> Int
+balRowLoad _ [] = 0
+balRowLoad n (r::rs)
+  | r.rname == n = r.rload
+  | otherwise = balRowLoad n rs
+
 -- Put one gate on a row, and re-derive that row's makespan.
 --
 -- ⚠️ THE CALLER OWES THIS FUNCTION COST-DESCENDING ORDER.  The within-row
@@ -2689,9 +2824,15 @@ balMaxL (x::xs) = maxI x (balMaxL xs)
 -- it, rather than quietly landing somewhere the toolchain is absent (where it
 -- would fail in CI as a mysterious missing-binary error, on a row whose
 -- coverage check reports the gate as scheduled).
-balPlace : List Cand -> List Row -> List Place -> Result String (List Place, List Row)
-balPlace [] rs acc = Ok (reverseL acc, rs)
-balPlace (c::cs) rs acc = match balPick c rs
+--
+-- `stab` selects the placement rule: `balPickStable` (the shipped one) or the
+-- bare LPT `balPick`.  Both are needed on every run, because the report states
+-- what the stability preference COSTS by packing the same candidates twice and
+-- comparing the two poles (`balCompute`) — a claim about a trade-off that
+-- printed only one side of it would be unfalsifiable by a reader.
+balPlace : Bool -> List Cand -> List Row -> List Place -> Result String (List Place, List Row)
+balPlace _ [] rs acc = Ok (reverseL acc, rs)
+balPlace stab (c::cs) rs acc = match if stab then balPickStable c rs else balPick c rs
   None => Err (stringConcat [
     "medaka gate balance: no row can run '\{c.cname}'.\n",
     "  It needs the Wasm toolchain (wasm-tools / node), and every row with\n",
@@ -2699,7 +2840,7 @@ balPlace (c::cs) rs acc = match balPick c rs
     joinSpace (balWasmRowNames rs),
     "\n",
   ])
-  Some rn => balPlace cs (balAdd rn c.cms rs) (Place {
+  Some rn => balPlace stab cs (balAdd rn c.cms rs) (Place {
     pname = c.cname,
     pfrom = c.curRow,
     pto = rn,
@@ -2830,15 +2971,38 @@ balOpenCands (c::cs) rs
   | otherwise = c :: balOpenCands cs rs
 
 {- | The target assignment: seed the closed rows from their current members,
-   then LPT the rest onto the open rows.
+   then pack the rest onto the open rows.
 
-   ⚠️ A PURE FUNCTION OF (rows, costs, toolchains) — it does not read the
-   `shard` of any gate on an OPEN row.  That is what makes re-running the
-   balancer on its own output produce the identical target, which is the
-   hysteresis proof's real backing — the property `balMarginPct`/`balBandNote`
-   report on, now that the band only annotates and never decides. -}
-balTarget : List Cand -> List Row -> Result String (List Place, List Row)
-balTarget cs rows0 =
+   ⚠️ A PURE FUNCTION OF (rows, costs, toolchains, INCUMBENT SHARDS).  That
+   fourth input arrived with S-3/#2218's stability preference, and the wording
+   of this paragraph used to be its own load-bearing claim, so read the change
+   carefully rather than as a widening of scope:
+
+   IT USED TO SAY "it does not read the `shard` of any gate on an OPEN row",
+   and that was the right rule for the mechanism it described.  #2178's reverted
+   hysteresis band did not take the incumbent as an argument — it took the
+   derived target and then DECLINED TO EMIT IT if what happened to be committed
+   scored close enough.  A function that can decline to emit its own output has
+   no single value for `--check` to police, and a hand edit inside the band
+   passed as "already balanced" (`balBandNote`).
+
+   Reading `Cand.curRow` here is the opposite move, not a softening of it.
+   `curRow` is populated from the COMMITTED registry (`balCands`), so it is
+   ordinary committed input, exactly like `cms` and `needsWasm`; the function
+   consumes it and returns ONE assignment, which `--check` re-derives from the
+   same committed bytes and compares. Purity is a property of the argument
+   list, not a property of arguments being few.
+
+   Idempotence — the reason any of this care is spent — is unchanged and argued
+   in `balPickStable`: on the balancer's own output every incumbent is the row
+   the previous run chose, so every placement repeats and the second run is
+   byte-identical.
+
+   `stab` is False for the pure-LPT comparison run that `balCompute` scores the
+   preference's pole cost against; the emitted assignment is always the True
+   one. -}
+balTarget : Bool -> List Cand -> List Row -> Result String (List Place, List Row)
+balTarget stab cs rows0 =
   -- Cost-descending for BOTH halves, not just the packed one: `balAdd` now runs
   -- an LPT schedule inside each row, and a closed row seeded in registry order
   -- would be scored under a schedule CI never runs (`balAdd`'s note).  The
@@ -2847,7 +3011,7 @@ balTarget cs rows0 =
   let sorted = balSortCands cs
   match balSeedClosed sorted rows0 []
     Err m => Err m
-    Ok (pinned, rows1) => map ((placed, rows2) => (pinned ++ placed, rows2)) (balPlace (balSortCands (balOpenCands sorted rows0)) rows1 [])
+    Ok (pinned, rows1) => map ((placed, rows2) => (pinned ++ placed, rows2)) (balPlace stab (balSortCands (balOpenCands sorted rows0)) rows1 [])
 
 -- The assignment already on disk, as the same shape, so the two can be scored
 -- by identical code rather than by two functions that could drift apart.
@@ -3108,6 +3272,54 @@ balCalibLine cands r runs = match latestRunForShard r.rname runs
       let stale = balCalibStaleness r.rcount rr.gates (balRowDigest r.rname cands) rr.gatesDigest
       "    \{balPadR 10 r.rname} recorded \{balPadL 9 (balSecs e)}   predicted \{balPadL 9 (balSecs r.rload)}   residual \{balPadL 9 (balDelta d)}\{pct}\{stale}"
 
+{- | What the incumbent preference bought, and what it cost — on EVERY run, in
+   ordinary output, derived rather than asserted.
+
+   The trade `balStabPct` makes is churn against pole, and a tool that made it
+   silently would be asking a reader to take both halves on faith.  So the same
+   candidates are packed a SECOND time with the preference off (`balTarget
+   False`) and the two results are compared directly: how many gates the
+   preference held where bare LPT would have moved them, and what the achieved
+   pole is under each.
+
+   ⚠️ ON AN UNPERTURBED, ALREADY-BALANCED REGISTRY BOTH NUMBERS ARE ZERO, AND
+   THAT IS THE HEALTHY READING, NOT A BROKEN COMPARISON.  The committed
+   assignment IS the LPT output, so every incumbent already equals the LPT pick
+   and the preference never fires.  It fires when the baseline moves under it —
+   which is the only situation it exists for.  A reader seeing "0 held, +0.0s"
+   after a re-ingest that moved nothing is being told the truth.
+
+   The comparison arm cannot fail where the emitted arm succeeded
+   (`balPickStable` returns `None` exactly when `balPick` does, and the closed-row
+   seed is identical), but a `Result` is still a `Result`: rather than paper over
+   an impossible case with a zero, say the comparison is unavailable. -}
+balStabLine : List Cand -> List Row -> List Place -> List Row -> String
+balStabLine cs rows0 ps rows = match balTarget False cs rows0
+  Err _ =>
+    "  stability: the unstabilized comparison packing could not be derived\n"
+  Ok (lps, lrows) => stringConcat [
+    "  stability: \{intToString (balHeldCount ps lps)} of \{intToString (listLen ps)} gates held on their committed row",
+    " (incumbent slack \{intToString balStabPct}% of a row's load)",
+    "; pole \{balSecs (balPole rows)} against \{balSecs (balPole lrows)} unstabilized",
+    " (\{balDelta (balPole rows - balPole lrows)}),",
+    " pole/median \{balMilli (balFactorMilli rows)} against \{balMilli (balFactorMilli lrows)}\n",
+  ]
+
+-- Gates the preference actually HELD: still on the row they were committed to,
+-- where the bare-LPT packing would have moved them.
+--
+-- ⚠️ NOT "gates the two packings disagree about", which is the larger and
+-- misleading number.  Holding one gate shifts the row loads every LATER
+-- placement is measured against, so bare LPT and the stabilized packing can
+-- also disagree about gates that were themselves MOVED — `stability_preference`
+-- has exactly one of each, and reporting 2 there under the word "held" would be
+-- a count that does not mean what the sentence around it says.
+balHeldCount : List Place -> List Place -> Int
+balHeldCount [] _ = 0
+balHeldCount (p::ps) qs
+  | p.pto == p.pfrom && balPlaceOf p.pname qs /= p.pto = 1 + balHeldCount ps qs
+  | otherwise = balHeldCount ps qs
+
 balMoved : List Place -> Int
 balMoved [] = 0
 balMoved (p::ps)
@@ -3363,7 +3575,20 @@ balCurrentLegal (c::cs) rs
    re-ingest commit carries a matrix reshuffle it used to be able to skip.
    That is the price of the assignment being checkable at all, and the repair
    is two mechanical commands (`medaka gate balance`, `make gen-ci`), not a
-   judgement call. -}
+   judgement call.
+
+   🚨 THAT PRICE IS NOW PARTLY PAID BACK, AND NOT BY REINSTATING THIS BAND
+   (S-3, #2218).  Re-ingests became scheduled (S-1), so "a reshuffle per
+   re-ingest" stopped being occasional: measured on this registry, an ordinary
+   ±2% perturbation moved 89–128 of 202 gates.  The response is
+   `balPickStable` — an incumbent preference INSIDE the packing, taking the
+   committed `shard` as an explicit argument — and the distinction from what
+   this comment describes is the entire point.  The band declined to emit a
+   derived value; the preference derives a different value, from a wider input
+   list, and `--check` re-derives it from committed bytes exactly as before.
+   The four annotations below are unchanged and still describe the WHOLE
+   assignment's pole gain; `balStabLine` is where the preference's own
+   arithmetic is reported. -}
 balBandNote : Bool -> Bool -> Bool -> String
 balBandNote True _ _ = " — OVERRIDDEN (illegal assignment)"
 balBandNote _ True _ = " — TAKEN"
@@ -3524,7 +3749,7 @@ balCompute regPath gates shs base runs regSrc =
   let cs = balCands base gates
   -- Cost-descending into BOTH scorings — `balAdd`'s and `balCurrent`'s notes.
   let (_, curRows) = balCurrent (balSortCands cs) (balRows runs shs)
-  match balTarget cs (balRows runs shs)
+  match balTarget True cs (balRows runs shs)
     Err m => Err m
     Ok (ps, rows) =>
       let illegal = not (balCurrentLegal cs curRows)
@@ -3541,6 +3766,7 @@ balCompute regPath gates shs base runs regSrc =
         balReport label cs rows ps runs,
         balThinLine base,
         balOosBlock base cs runs,
+        balStabLine cs (balRows runs shs) ps rows,
         "  hysteresis: a move needs a pole gain of more than \{intToString balMarginPct}%",
         balBandNote illegal gains moved,
         "\n  target pole/median \{balMilli balTargetMilli}",

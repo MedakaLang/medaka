@@ -63,6 +63,20 @@
 #      disagree about exactly one gate, and is committed with the SUM's answer
 #      so a regression reports "already balanced" and exits 0.
 #
+#   7. THE INCUMBENT PREFERENCE HOLDS, AND IS BOUNDED (#2218). Scheduled
+#      re-ingests made re-derivation routine, and an ordinary +/-2% perturbation
+#      of the baseline moved 89-128 of the 202 committed gates. `balPickStable`
+#      lets a gate stay where it is committed when its row is legal, open and
+#      within `balStabPct` of the lightest legal row. Both halves fail silently
+#      and each hides the other: an unbounded preference freezes the matrix
+#      against real cost change and still reports a healthy pole, and an absent
+#      one just goes back to churning. `stability_preference` carries one gate
+#      of each kind, differing only in how heavy their incumbent row had become.
+#      This is NOT the hysteresis band #2178 reverted — that one declined to
+#      emit the derived value, leaving `--check` nothing to police; this one
+#      derives a different value from a wider input, so the fixed-point
+#      assertions in 1 and 12 are what keep them distinguishable.
+#
 # Plus: the committed test/gates.toml IS the balancer's own output
 # (`--check`), so a hand-edited `shard` field cannot ride in unnoticed.
 #
@@ -111,7 +125,8 @@ _bal() {
 
 for stem in wasm_only_row dominating_gate uncosted_gate \
             pin_intruder pin_deserter pin_on_open_row makespan_vs_sum \
-            thin_evidence calib_staleness outlier_immunity; do
+            thin_evidence calib_staleness outlier_immunity \
+            stability_preference; do
   cp "$FIX/$stem.toml" "$TMP/$stem.toml"
 done
 
@@ -489,6 +504,72 @@ if grep -q '^pinned_gates = \["pds/test/protocol_all_engines", "diff_compiler_en
 else
   bad "test/gates.toml's engines row does not declare the expected three pinned gates"
   grep -n 'pinned_gates' "$TMP/real_before.toml" | sed -e 's/^/        /'
+fi
+
+# ── 12. the incumbent preference HOLDS, and is BOUNDED (S-3, #2218) ───────────
+#
+# `balPickStable` lets a gate stay on its committed row when that row is legal,
+# open, and no more than `balStabPct` (5%) heavier than the lightest legal row.
+# Both halves of that are load-bearing and each hides the other's failure: a
+# preference that always held would freeze the matrix against real cost change,
+# and one that never held would leave an ordinary +/-2% re-ingest moving 89-128
+# of the 202 committed gates (the measurement in `balStabPct`'s own comment).
+#
+# `stability_preference` puts one of each in one registry, differing in exactly
+# one respect — how heavy their incumbent row had become by the time LPT reached
+# them. `held` is placed while row `a` is 2.6% heavier than `b` and stays; `mover`
+# is placed once `a` is 7.7% heavier and moves. So this section fails if the
+# preference is absent, absolute, or retuned by more than a couple of points.
+#
+# ⚠️ The mirror case is section 3's, and it must keep passing alongside this one:
+# there the incumbent is ILLEGAL and is overridden however cheap the repair.
+# Cost is what a preference may weigh; legality is not a cost.
+if _bal stability_preference "$TMP/sp.txt"; then
+  held="$(awk '/^name = "held"$/{f=1} f && /^shard = /{print; exit}' "$TMP/stability_preference.toml")"
+  mover="$(awk '/^name = "mover"$/{f=1} f && /^shard = /{print; exit}' "$TMP/stability_preference.toml")"
+  if [ "$held" = 'shard = "a"' ]; then
+    ok "a legal incumbent inside the slack is held where bare LPT would move it"
+  else
+    bad "'held' did not stay on its committed row: $held"
+    sed -e 's/^/        /' "$TMP/sp.txt"
+  fi
+  if [ "$mover" = 'shard = "b"' ]; then
+    ok "an incumbent row outside the slack loses the preference and the gate moves"
+  else
+    bad "'mover' stayed on its committed row — the preference is unbounded: $mover"
+    sed -e 's/^/        /' "$TMP/sp.txt"
+  fi
+
+  # The trade is stated, not implied. Graded on both numbers: the count of gates
+  # actually held (1, not the 2 gates the two packings disagree about — holding
+  # `held` is what pushed `mover` off `a`), and the pole the hold cost.
+  if grep -q '^  stability: 1 of 4 gates held on their committed row' "$TMP/sp.txt"; then
+    ok "the report states how many gates the preference held"
+  else
+    bad "the stability count is missing or wrong"
+    grep -n 'stability' "$TMP/sp.txt" | sed -e 's/^/        /'
+  fi
+  if grep -q 'pole 210.0s against 208.0s unstabilized (+2.0s)' "$TMP/sp.txt"; then
+    ok "the report prices the hold against the bare-LPT pole it gave up"
+  else
+    bad "the stability line does not state the pole it traded away"
+    grep -n 'stability' "$TMP/sp.txt" | sed -e 's/^/        /'
+  fi
+
+  # Re-running on the preference's own output must settle. This is the property
+  # the REVERTED #2178 band failed differently — it never emitted a single value
+  # to settle on — and the one that keeps `--check` policing something.
+  cp "$TMP/stability_preference.toml" "$TMP/sp_prev.toml"
+  if _bal stability_preference "$TMP/sp2.txt" \
+     && cmp -s "$TMP/sp_prev.toml" "$TMP/stability_preference.toml"; then
+    ok "the stabilized assignment is a fixed point of itself"
+  else
+    bad "the stabilized assignment moved again on a second run"
+    diff "$TMP/sp_prev.toml" "$TMP/stability_preference.toml" | sed -e 's/^/        /' | head -20
+  fi
+else
+  bad "the balancer failed on the stability_preference fixture"
+  sed -e 's/^/        /' "$TMP/sp.txt"
 fi
 
 if [ "$fail" -eq 0 ]; then

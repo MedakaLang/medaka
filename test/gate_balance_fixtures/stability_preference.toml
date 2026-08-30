@@ -1,0 +1,112 @@
+# test/gate_balance_fixtures/stability_preference.toml — SYNTHETIC, hand-written.
+#
+# THE INCUMBENT PREFERENCE, AND ITS BOUND (S-3, #2218).
+#
+# `balPickStable` lets a gate STAY on the row it is committed to when that row
+# is legal, open, and currently no more than `balStabPct` (5%) heavier than the
+# lightest legal row.  This fixture is that rule and its LIMIT in one registry,
+# because a preference that always held would pass a fixture that only proved
+# holding, and a preference that never held would pass a fixture that only
+# proved moving.
+#
+# Two open rows, `a` then `b`, one worker each (the baseline records no runs, so
+# `balJobsFor` models both serially).  Costs, in the order longest-processing-
+# time places them:
+#
+#   anchor_a  200.0s   committed a   -> a (empty rows; the preference cannot
+#                                        fire, `Lbest` is 0)
+#   anchor_b  195.0s   committed b   -> b (same)
+#   held       10.0s   committed a   -> a: bare LPT picks `b` (195.0 < 200.0),
+#                                        but a is 200.0 against b's 195.0, i.e.
+#                                        2.6% heavier, inside the 5% slack.
+#                                        HELD.  a becomes 210.0s.
+#   mover       8.0s   committed a   -> b: a is now 210.0 against b's 195.0,
+#                                        7.7% heavier, OUTSIDE the slack.  MOVES.
+#
+# So the two gates differ in exactly one respect — how heavy their incumbent row
+# had become by the time they were placed — and the fixture fails if the
+# preference is absolute (mover would stay), if it is absent (held would move),
+# or if its threshold drifts by more than a couple of points in either
+# direction.
+#
+# THE TRADE IS VISIBLE HERE, WHICH IS THE POINT.  Bare LPT would finish at
+# a = 208.0s, b = 205.0s (pole 208.0s); the preference finishes at a = 210.0s,
+# b = 203.0s (pole 210.0s).  Stability costs exactly 2.0s of pole, and the
+# balancer's own `stability:` line must say so — a mechanism that traded pole
+# for churn without printing the price would be asking its reader to take both
+# halves on faith.
+#
+# ⚠️ CONTRAST WITH `wasm_only_row`, deliberately: there the incumbent is
+# ILLEGAL (its row lacks the toolchain) and must be overridden however cheap
+# the repair is.  Here every placement is legal, so cost is the only thing being
+# weighed.  Legality is not a cost.
+
+[[gate]]
+name = "anchor_a"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/anchor_a.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "anchor_b"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/anchor_b.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "held"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/held.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "mover"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/mover.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+pinned_gates = []
+
+[[shard]]
+name = "b"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/b.txt"
+pinned_gates = []

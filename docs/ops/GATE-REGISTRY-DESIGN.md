@@ -745,3 +745,112 @@ ingested before the field existed reads as unknown, and unknown is not stale. So
 24 rows already in the committed baseline keep exactly the count-only behaviour they
 had and gain the set check at their next ingest — the fix is live for everything
 ingested from here, and no digest was back-filled into a GENERATED file by inference.
+
+## 12. Assignment stability: the incumbent is an INPUT, not a carve-out (#2218, S-3)
+
+S-1 made cost re-ingests scheduled, so re-deriving the whole matrix went from
+occasional to routine. That turned a known property of the packer into a standing
+cost: the assignment is a function of noisy medians, and ordinary measurement noise
+moves it. **Measured on the committed 202-gate registry**, perturbing every gate's
+`medianMs` (and each of its `ms` samples) by ±2% and re-deriving:
+
+| perturbation shape | churn before | churn after | pole before → after | pole/median before → after |
+|---|---|---|---|---|
+| index parity (even `+2%`, odd `−2%`) | 89 / 202 | **0** | 491.9s → 491.9s | 1.077 → 1.077 |
+| opposite parity | 128 / 202 | **4** | 472.6s → 472.6s | 1.036 → 1.041 |
+| name-hashed sign | 127 / 202 | **0** | 491.9s → 491.9s | 1.074 → 1.077 |
+
+Method, reproducible: copy `test/gates.toml` and `test/gate_cost_baseline.json`,
+scale every gate's `medianMs` and `ms` entries by `1 ± 0.02` with the sign chosen by
+the shape, run `medaka gate balance --registry <copy> --baseline <perturbed>`, and
+count `shard = "…"` lines that differ from the committed file. The "before" column is
+the same run with the preference off, which the balancer computes on every run
+anyway (see *What it costs*, below).
+
+### The mechanism
+
+`balPickStable` (`compiler/tools/gate_cmd.mdk`) takes the LPT pick as its baseline
+and keeps the gate's **committed** row instead when all three of these hold:
+
+1. the incumbent row is open, and
+2. the incumbent row is **legal** for that gate (`wasm_arm`), and
+3. the incumbent row is currently no more than `balStabPct` (5%) heavier than the
+   lightest legal row.
+
+Clause (3) compares the rows **before** the gate is added, not after. Both forms were
+implemented and measured; the before-form caps the pole excess a hold can cause at 5%
+of the lighter row's load, while the after-form's cap grows with the gate's own cost —
+an expensive gate would earn *more* licence to sit on a heavy row, which is backwards
+for an objective that is the pole. It also measured no worse (churn 0 / 4 / 0 against
+the after-form's 0 / 7 / 5).
+
+A consequence worth stating: early in the pack every row is near-empty, so the slack
+is near zero and the biggest gates — the ones that set the pole's floor — are placed
+by bare LPT with no preference at all. The preference only reaches the tail of small
+gates, which is where the churn lives.
+
+### Why this is not the hysteresis band that was reverted
+
+**#2178 shipped a near-identical-looking mechanism and removed it, and the difference
+is the whole reason this one is allowed to exist.** Read `balBandNote`'s doc-comment
+before touching any of this.
+
+The reverted band let the **committed assignment stand** whenever it scored within
+`balMarginPct` of the derived target's pole. That made "the derived assignment" a
+*set* rather than a value, and a check can only police a value: moving
+`diff_compiler_source_bytes` from `tools` to `types` by hand shifted the pole by 0s,
+so `medaka gate balance --check` reported *"already balanced"* and exited 0 — the
+hand edit the whole `shard`-is-derived-data property exists to catch.
+
+This is the opposite move. The incumbent is an **explicit argument** to the placement
+decision, read from the committed registry (`Cand.curRow`, populated by `balCands`)
+exactly like `cms` and `needsWasm`. `balTarget` is still a pure function — of
+`(rows, costs, toolchains, incumbent shards)` — and still returns **one** assignment,
+which `--check` re-derives from the same committed bytes and compares. Purity is a
+property of the argument list, not of arguments being few. A hand edit here is
+re-derived like everything else and survives only if the derivation independently
+produces it, which is what "derived" means.
+
+**Idempotence** — the property #2178 paid for — is preserved and argued in
+`balPickStable`: on the balancer's own output every incumbent *is* the row the
+previous run chose, so every placement repeats and the second run is byte-identical.
+`test/diff_compiler_gate_balance.sh` asserts it three ways (§1's `--check` on the
+committed tree, §2's `_bal_real`-twice on a scratch copy, §12's fixture run twice),
+and all three perturbed registries above were verified byte-identical on a second
+run.
+
+**Legality is never traded.** Clause (2) is `balCurrentLegal`'s argument one layer
+down: an illegal incumbent fails the predicate and is moved however cheap the repair
+is. The `wasm_only_row` fixture is exactly that case and still passes.
+
+### What it costs, stated on every run
+
+The trade is churn against pole, so the balancer packs the same candidates a second
+time with the preference **off** and prints both sides:
+
+```
+  stability: 89 of 202 gates held on their committed row (incumbent slack 5% of a
+  row's load); pole 491.9s against 491.9s unstabilized (+0.0s), pole/median 1.077
+  against 1.077
+```
+
+On an unperturbed, already-balanced registry both numbers are **zero**, and that is
+the healthy reading rather than a broken comparison: the committed assignment *is*
+the packer's output, so every incumbent already equals the pick and the preference
+never fires. It fires when the baseline moves under it, which is the only situation
+it exists for.
+
+The count is *gates held*, not *gates the two packings disagree about* — holding one
+gate shifts the loads every later placement is measured against, so the two packings
+can also disagree about gates that were themselves moved. `stability_preference` has
+exactly one of each.
+
+### The fixture
+
+`test/gate_balance_fixtures/stability_preference.{toml,json}` carries the rule and its
+limit in one registry, because a preference that always held would pass a fixture that
+only proved holding. Two gates differ in exactly one respect — how heavy their
+incumbent row had become by the time LPT reached them: `held` is placed while its row
+is 2.6% heavier than the lightest and stays; `mover` is placed once its row is 7.7%
+heavier and moves. The hold costs exactly 2.0s of pole (210.0s against bare LPT's
+208.0s), and the gate asserts that number, so the trade cannot silently grow.

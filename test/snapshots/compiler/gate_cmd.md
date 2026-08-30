@@ -1,5 +1,5 @@
 # META
-source_lines=3624
+source_lines=3850
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -2375,6 +2375,41 @@ balTargetMilli = 1250
 balMarginPct : Int
 balMarginPct = 5
 
+{- | The incumbent row's slack, as a percentage of the LPT pick's current row
+   load.  See `balPickStable` for the mechanism, `balStays` for why the
+   comparison is made before the gate is added rather than after, and
+   `balTarget` for why reading the incumbent at all is sound.
+
+   🚨 NOT `balMarginPct`, DELIBERATELY, AND THE TWO MUST NOT BE MERGED.  They
+   are numbers in different units answering different questions:
+
+     * `balMarginPct` is 5% OF THE POLE, and it grades the WHOLE assignment
+       after the fact — "was this rebalance worth its churn?" — for the report.
+     * this is a percentage OF ONE ROW'S LOAD at ONE placement step, and it
+       decides a single gate's row.
+
+   Folding them into one constant would mean one edit silently retunes both a
+   scheduling decision and a report's wording, and it would make the report's
+   "a move needs a pole gain of more than 5%" line read as if it described the
+   packer, which is exactly the confusion S-4 of #2178 removed.
+
+   HELD AT 5 ON A MEASUREMENT, NOT A GUESS.  Measured against the committed
+   202-gate registry under three independent ±2% perturbation shapes (index
+   parity, its opposite, and a name-hashed sign), counting gates whose derived
+   `shard` moved: 89 / 128 / 127 without the preference, 0 / 4 / 0 with it, at
+   an achieved pole identical to three significant figures in all three (the
+   pole/median factor moved by at most 0.005).  Table and method:
+   `docs/ops/GATE-REGISTRY-DESIGN.md` §12.
+
+   The pole is not free in general: a slack of p% lets a placement land on a row
+   up to p% heavier than the lightest legal one.  It is exactly free on an
+   UNPERTURBED input — the committed assignment IS the packer's output, so every
+   incumbent already equals the pick and the preference never fires — which is
+   why the cost only ever shows up on a re-ingest, and why `balStabLine` states
+   the realised figure on every run rather than leaving it to this comment. -}
+balStabPct : Int
+balStabPct = 5
+
 -- ── Quantizing noisy costs — TRIED AND MEASURED AWAY (S-4, #2178/#2207) ─────
 --
 -- 🚨 EVERY GATE IN THE COMMITTED BASELINE IS SCORED OFF AS FEW AS ONE OR TWO
@@ -2648,6 +2683,106 @@ balPickGo c (r::rs) best
       else
         balPickGo c rs best
 
+{- | The row a gate should go on, with the INCUMBENT row given a bounded
+   preference over the LPT pick (S-3, #2218).
+
+   🚨 READ `balBandNote` FIRST.  A near-identical-LOOKING mechanism shipped in
+   #2178 and was REVERTED, and the difference between that one and this one is
+   the whole reason this one is allowed to exist.  The reverted mechanism let
+   the COMMITTED ASSIGNMENT stand whenever it was within `balMarginPct` of the
+   target's pole.  That made "the derived assignment" a SET rather than a
+   value, so `--check` could not tell a hysteresis-preserved incumbent from a
+   stale hand edit: moving `diff_compiler_source_bytes` from `tools` to `types`
+   by hand shifted the pole by 0s, and `--check` reported "already balanced".
+
+   This is not that.  The incumbent is an EXPLICIT INPUT to a placement
+   decision, consulted at a defined point in a defined order, and the result is
+   still a single value that `--check` re-derives from committed data alone.
+   `balTarget` is a pure function of a WIDER argument list — (rows, costs,
+   toolchains, incumbent shards) — not a function with an escape hatch.  The
+   discriminator is mechanical: under the reverted mechanism a hand edit was
+   ACCEPTED because it was never re-derived; here a hand edit is re-derived like
+   everything else, and survives only if the derivation independently produces
+   it, which is what "derived" means.
+
+   The rule.  Take the LPT pick (`balPick`) as the baseline, then keep the
+   incumbent instead when all three hold:
+
+     1. the incumbent row is OPEN (a closed row's members never reach here —
+        `balOpenCands` filtered them — but the predicate is total anyway), and
+     2. the incumbent row is LEGAL for this gate (`wasm_arm`), and
+     3. the incumbent row is currently no more than `balStabPct` percent
+        heavier than the LPT pick (`balStays`, which argues for BEFORE-adding
+        rather than after).
+
+   (2) is `balCurrentLegal`'s argument one layer down and is NOT negotiable:
+   cost is what a preference may weigh, and legality is not a cost.  An illegal
+   incumbent fails the predicate and is moved, which is what keeps the
+   `wasm_only_row` fixture red-on-regression.
+
+   ⚠️ WHY THIS IS STILL A FIXED POINT, which is the property #2178 paid for.
+   Run the balancer on its own output and every candidate's incumbent IS the row
+   the previous run placed it on.  By induction over the (identical) candidate
+   order: if the previous run took the LPT pick, the incumbent equals the pick
+   and clause (3) holds trivially with slack 0, so the pick is taken again; if
+   the previous run kept the incumbent, the row states at that step are
+   identical and the same three clauses hold, so it is kept again.  Either way
+   the second run emits the first run's assignment, byte for byte —
+   `diff_compiler_gate_balance.sh`'s `_bal_real`-twice assertion. -}
+balPickStable : Cand -> List Row -> Option String
+balPickStable c rs = match balPick c rs
+  None => None
+  Some best => if balStays c best rs then Some c.curRow else Some best
+
+{- | Clause (1)+(2)+(3) of `balPickStable`, in that order.  Kept separate so the
+   legality clause is a readable line rather than a term inside an arithmetic
+   comparison.
+
+   ⚠️ CLAUSE (3) COMPARES THE ROWS' LOADS BEFORE THIS GATE IS ADDED, NOT AFTER,
+   AND THE TWO ARE NOT THE SAME RULE.  Both were implemented and measured; the
+   before-form is kept, on both counts:
+
+     * The bound it gives is the one worth having.  A hold puts this gate on a
+       row already carrying `Lcur` instead of the lightest legal `Lbest`, and
+       the excess it can add to the pole is exactly `Lcur - Lbest`, which this
+       form caps at `balStabPct`% of `Lbest`.  The after-form caps the same
+       excess at `balStabPct`% of `Lbest + cms`, so the slack GROWS with the
+       gate's own cost — an expensive gate would earn more licence to sit on a
+       heavy row, which is backwards for an objective that is the pole.
+     * It measured no worse.  Same three ±2% perturbation shapes, churn out of
+       202 gates: before-form 0 / 4 / 0, after-form 0 / 7 / 5.
+
+   A consequence worth naming rather than discovering: early in the pack every
+   row is near-empty, so `Lbest` is near 0, the slack is near 0, and the
+   biggest gates — the ones that set the pole's floor — are placed by bare LPT
+   with no preference at all.  The preference only reaches the tail of small
+   gates, which is exactly where the churn is (`balBandNote`). -}
+balStays : Cand -> String -> List Row -> Bool
+balStays c best rs
+  | c.curRow == best = True
+  | not (balRowTakes c rs) = False
+  | otherwise =
+    balRowLoad c.curRow rs * 100 <= balRowLoad best rs * (100 + balStabPct)
+
+-- Whether this gate's incumbent row exists, is open, and can run it.  An
+-- unknown row name answers False — `balUnknownRows` has already refused that
+-- registry, but a placement rule that read a missing row as "fine" would be one
+-- refusal away from silently pinning a gate to nothing.
+balRowTakes : Cand -> List Row -> Bool
+balRowTakes _ [] = False
+balRowTakes c (r::rs)
+  | r.rname == c.curRow = not r.rclosed && (not c.needsWasm || r.rwasm)
+  | otherwise = balRowTakes c rs
+
+-- One row's accumulated makespan, by name.  A row that does not exist reads as
+-- 0, which `balStays` only ever reaches through `balRowTakes` having already
+-- answered False for the same name.
+balRowLoad : String -> List Row -> Int
+balRowLoad _ [] = 0
+balRowLoad n (r::rs)
+  | r.rname == n = r.rload
+  | otherwise = balRowLoad n rs
+
 -- Put one gate on a row, and re-derive that row's makespan.
 --
 -- ⚠️ THE CALLER OWES THIS FUNCTION COST-DESCENDING ORDER.  The within-row
@@ -2693,9 +2828,15 @@ balMaxL (x::xs) = maxI x (balMaxL xs)
 -- it, rather than quietly landing somewhere the toolchain is absent (where it
 -- would fail in CI as a mysterious missing-binary error, on a row whose
 -- coverage check reports the gate as scheduled).
-balPlace : List Cand -> List Row -> List Place -> Result String (List Place, List Row)
-balPlace [] rs acc = Ok (reverseL acc, rs)
-balPlace (c::cs) rs acc = match balPick c rs
+--
+-- `stab` selects the placement rule: `balPickStable` (the shipped one) or the
+-- bare LPT `balPick`.  Both are needed on every run, because the report states
+-- what the stability preference COSTS by packing the same candidates twice and
+-- comparing the two poles (`balCompute`) — a claim about a trade-off that
+-- printed only one side of it would be unfalsifiable by a reader.
+balPlace : Bool -> List Cand -> List Row -> List Place -> Result String (List Place, List Row)
+balPlace _ [] rs acc = Ok (reverseL acc, rs)
+balPlace stab (c::cs) rs acc = match if stab then balPickStable c rs else balPick c rs
   None => Err (stringConcat [
     "medaka gate balance: no row can run '\{c.cname}'.\n",
     "  It needs the Wasm toolchain (wasm-tools / node), and every row with\n",
@@ -2703,7 +2844,7 @@ balPlace (c::cs) rs acc = match balPick c rs
     joinSpace (balWasmRowNames rs),
     "\n",
   ])
-  Some rn => balPlace cs (balAdd rn c.cms rs) (Place {
+  Some rn => balPlace stab cs (balAdd rn c.cms rs) (Place {
     pname = c.cname,
     pfrom = c.curRow,
     pto = rn,
@@ -2834,15 +2975,38 @@ balOpenCands (c::cs) rs
   | otherwise = c :: balOpenCands cs rs
 
 {- | The target assignment: seed the closed rows from their current members,
-   then LPT the rest onto the open rows.
+   then pack the rest onto the open rows.
 
-   ⚠️ A PURE FUNCTION OF (rows, costs, toolchains) — it does not read the
-   `shard` of any gate on an OPEN row.  That is what makes re-running the
-   balancer on its own output produce the identical target, which is the
-   hysteresis proof's real backing — the property `balMarginPct`/`balBandNote`
-   report on, now that the band only annotates and never decides. -}
-balTarget : List Cand -> List Row -> Result String (List Place, List Row)
-balTarget cs rows0 =
+   ⚠️ A PURE FUNCTION OF (rows, costs, toolchains, INCUMBENT SHARDS).  That
+   fourth input arrived with S-3/#2218's stability preference, and the wording
+   of this paragraph used to be its own load-bearing claim, so read the change
+   carefully rather than as a widening of scope:
+
+   IT USED TO SAY "it does not read the `shard` of any gate on an OPEN row",
+   and that was the right rule for the mechanism it described.  #2178's reverted
+   hysteresis band did not take the incumbent as an argument — it took the
+   derived target and then DECLINED TO EMIT IT if what happened to be committed
+   scored close enough.  A function that can decline to emit its own output has
+   no single value for `--check` to police, and a hand edit inside the band
+   passed as "already balanced" (`balBandNote`).
+
+   Reading `Cand.curRow` here is the opposite move, not a softening of it.
+   `curRow` is populated from the COMMITTED registry (`balCands`), so it is
+   ordinary committed input, exactly like `cms` and `needsWasm`; the function
+   consumes it and returns ONE assignment, which `--check` re-derives from the
+   same committed bytes and compares. Purity is a property of the argument
+   list, not a property of arguments being few.
+
+   Idempotence — the reason any of this care is spent — is unchanged and argued
+   in `balPickStable`: on the balancer's own output every incumbent is the row
+   the previous run chose, so every placement repeats and the second run is
+   byte-identical.
+
+   `stab` is False for the pure-LPT comparison run that `balCompute` scores the
+   preference's pole cost against; the emitted assignment is always the True
+   one. -}
+balTarget : Bool -> List Cand -> List Row -> Result String (List Place, List Row)
+balTarget stab cs rows0 =
   -- Cost-descending for BOTH halves, not just the packed one: `balAdd` now runs
   -- an LPT schedule inside each row, and a closed row seeded in registry order
   -- would be scored under a schedule CI never runs (`balAdd`'s note).  The
@@ -2851,7 +3015,7 @@ balTarget cs rows0 =
   let sorted = balSortCands cs
   match balSeedClosed sorted rows0 []
     Err m => Err m
-    Ok (pinned, rows1) => map ((placed, rows2) => (pinned ++ placed, rows2)) (balPlace (balSortCands (balOpenCands sorted rows0)) rows1 [])
+    Ok (pinned, rows1) => map ((placed, rows2) => (pinned ++ placed, rows2)) (balPlace stab (balSortCands (balOpenCands sorted rows0)) rows1 [])
 
 -- The assignment already on disk, as the same shape, so the two can be scored
 -- by identical code rather than by two functions that could drift apart.
@@ -3112,6 +3276,54 @@ balCalibLine cands r runs = match latestRunForShard r.rname runs
       let stale = balCalibStaleness r.rcount rr.gates (balRowDigest r.rname cands) rr.gatesDigest
       "    \{balPadR 10 r.rname} recorded \{balPadL 9 (balSecs e)}   predicted \{balPadL 9 (balSecs r.rload)}   residual \{balPadL 9 (balDelta d)}\{pct}\{stale}"
 
+{- | What the incumbent preference bought, and what it cost — on EVERY run, in
+   ordinary output, derived rather than asserted.
+
+   The trade `balStabPct` makes is churn against pole, and a tool that made it
+   silently would be asking a reader to take both halves on faith.  So the same
+   candidates are packed a SECOND time with the preference off (`balTarget
+   False`) and the two results are compared directly: how many gates the
+   preference held where bare LPT would have moved them, and what the achieved
+   pole is under each.
+
+   ⚠️ ON AN UNPERTURBED, ALREADY-BALANCED REGISTRY BOTH NUMBERS ARE ZERO, AND
+   THAT IS THE HEALTHY READING, NOT A BROKEN COMPARISON.  The committed
+   assignment IS the LPT output, so every incumbent already equals the LPT pick
+   and the preference never fires.  It fires when the baseline moves under it —
+   which is the only situation it exists for.  A reader seeing "0 held, +0.0s"
+   after a re-ingest that moved nothing is being told the truth.
+
+   The comparison arm cannot fail where the emitted arm succeeded
+   (`balPickStable` returns `None` exactly when `balPick` does, and the closed-row
+   seed is identical), but a `Result` is still a `Result`: rather than paper over
+   an impossible case with a zero, say the comparison is unavailable. -}
+balStabLine : List Cand -> List Row -> List Place -> List Row -> String
+balStabLine cs rows0 ps rows = match balTarget False cs rows0
+  Err _ =>
+    "  stability: the unstabilized comparison packing could not be derived\n"
+  Ok (lps, lrows) => stringConcat [
+    "  stability: \{intToString (balHeldCount ps lps)} of \{intToString (listLen ps)} gates held on their committed row",
+    " (incumbent slack \{intToString balStabPct}% of a row's load)",
+    "; pole \{balSecs (balPole rows)} against \{balSecs (balPole lrows)} unstabilized",
+    " (\{balDelta (balPole rows - balPole lrows)}),",
+    " pole/median \{balMilli (balFactorMilli rows)} against \{balMilli (balFactorMilli lrows)}\n",
+  ]
+
+-- Gates the preference actually HELD: still on the row they were committed to,
+-- where the bare-LPT packing would have moved them.
+--
+-- ⚠️ NOT "gates the two packings disagree about", which is the larger and
+-- misleading number.  Holding one gate shifts the row loads every LATER
+-- placement is measured against, so bare LPT and the stabilized packing can
+-- also disagree about gates that were themselves MOVED — `stability_preference`
+-- has exactly one of each, and reporting 2 there under the word "held" would be
+-- a count that does not mean what the sentence around it says.
+balHeldCount : List Place -> List Place -> Int
+balHeldCount [] _ = 0
+balHeldCount (p::ps) qs
+  | p.pto == p.pfrom && balPlaceOf p.pname qs /= p.pto = 1 + balHeldCount ps qs
+  | otherwise = balHeldCount ps qs
+
 balMoved : List Place -> Int
 balMoved [] = 0
 balMoved (p::ps)
@@ -3367,7 +3579,20 @@ balCurrentLegal (c::cs) rs
    re-ingest commit carries a matrix reshuffle it used to be able to skip.
    That is the price of the assignment being checkable at all, and the repair
    is two mechanical commands (`medaka gate balance`, `make gen-ci`), not a
-   judgement call. -}
+   judgement call.
+
+   🚨 THAT PRICE IS NOW PARTLY PAID BACK, AND NOT BY REINSTATING THIS BAND
+   (S-3, #2218).  Re-ingests became scheduled (S-1), so "a reshuffle per
+   re-ingest" stopped being occasional: measured on this registry, an ordinary
+   ±2% perturbation moved 89–128 of 202 gates.  The response is
+   `balPickStable` — an incumbent preference INSIDE the packing, taking the
+   committed `shard` as an explicit argument — and the distinction from what
+   this comment describes is the entire point.  The band declined to emit a
+   derived value; the preference derives a different value, from a wider input
+   list, and `--check` re-derives it from committed bytes exactly as before.
+   The four annotations below are unchanged and still describe the WHOLE
+   assignment's pole gain; `balStabLine` is where the preference's own
+   arithmetic is reported. -}
 balBandNote : Bool -> Bool -> Bool -> String
 balBandNote True _ _ = " — OVERRIDDEN (illegal assignment)"
 balBandNote _ True _ = " — TAKEN"
@@ -3528,7 +3753,7 @@ balCompute regPath gates shs base runs regSrc =
   let cs = balCands base gates
   -- Cost-descending into BOTH scorings — `balAdd`'s and `balCurrent`'s notes.
   let (_, curRows) = balCurrent (balSortCands cs) (balRows runs shs)
-  match balTarget cs (balRows runs shs)
+  match balTarget True cs (balRows runs shs)
     Err m => Err m
     Ok (ps, rows) =>
       let illegal = not (balCurrentLegal cs curRows)
@@ -3545,6 +3770,7 @@ balCompute regPath gates shs base runs regSrc =
         balReport label cs rows ps runs,
         balThinLine base,
         balOosBlock base cs runs,
+        balStabLine cs (balRows runs shs) ps rows,
         "  hysteresis: a move needs a pole gain of more than \{intToString balMarginPct}%",
         balBandNote illegal gains moved,
         "\n  target pole/median \{balMilli balTargetMilli}",
@@ -4142,6 +4368,8 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "balTargetMilli" () (ELit (LInt 1250)))
 (DTypeSig false "balMarginPct" (TyCon "Int"))
 (DFunDef false "balMarginPct" () (ELit (LInt 5)))
+(DTypeSig false "balStabPct" (TyCon "Int"))
+(DFunDef false "balStabPct" () (ELit (LInt 5)))
 (DTypeSig false "balNeedsWasm" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
 (DFunDef false "balNeedsWasm" ((PList)) (EVar "False"))
 (DFunDef false "balNeedsWasm" ((PCons (PVar "t") (PVar "ts"))) (EIf (EBinOp "==" (EVar "t") (ELit (LString "wasm-tools"))) (EVar "True") (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "node"))) (EVar "t")) (EVar "True") (EIf (EVar "otherwise") (EApp (EVar "balNeedsWasm") (EVar "ts")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
@@ -4188,6 +4416,16 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "balPickGo" (PWild (PList) (PCon "None")) (EVar "None"))
 (DFunDef false "balPickGo" (PWild (PList) (PCon "Some" (PVar "b"))) (EApp (EVar "Some") (EFieldAccess (EVar "b") "rname")))
 (DFunDef false "balPickGo" ((PVar "c") (PCons (PVar "r") (PVar "rs")) (PVar "best")) (EIf (EFieldAccess (EVar "r") "rclosed") (EApp (EApp (EApp (EVar "balPickGo") (EVar "c")) (EVar "rs")) (EVar "best")) (EIf (EBinOp "&&" (EFieldAccess (EVar "c") "needsWasm") (EApp (EVar "not") (EFieldAccess (EVar "r") "rwasm"))) (EApp (EApp (EApp (EVar "balPickGo") (EVar "c")) (EVar "rs")) (EVar "best")) (EIf (EVar "otherwise") (EMatch (EVar "best") (arm (PCon "None") () (EApp (EApp (EApp (EVar "balPickGo") (EVar "c")) (EVar "rs")) (EApp (EVar "Some") (EVar "r")))) (arm (PCon "Some" (PVar "b")) () (EIf (EBinOp "<" (EFieldAccess (EVar "r") "rload") (EFieldAccess (EVar "b") "rload")) (EApp (EApp (EApp (EVar "balPickGo") (EVar "c")) (EVar "rs")) (EApp (EVar "Some") (EVar "r"))) (EApp (EApp (EApp (EVar "balPickGo") (EVar "c")) (EVar "rs")) (EVar "best"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "balPickStable" (TyFun (TyCon "Cand") (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "balPickStable" ((PVar "c") (PVar "rs")) (EMatch (EApp (EApp (EVar "balPick") (EVar "c")) (EVar "rs")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "best")) () (EIf (EApp (EApp (EApp (EVar "balStays") (EVar "c")) (EVar "best")) (EVar "rs")) (EApp (EVar "Some") (EFieldAccess (EVar "c") "curRow")) (EApp (EVar "Some") (EVar "best"))))))
+(DTypeSig false "balStays" (TyFun (TyCon "Cand") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyCon "Bool")))))
+(DFunDef false "balStays" ((PVar "c") (PVar "best") (PVar "rs")) (EIf (EBinOp "==" (EFieldAccess (EVar "c") "curRow") (EVar "best")) (EVar "True") (EIf (EApp (EVar "not") (EApp (EApp (EVar "balRowTakes") (EVar "c")) (EVar "rs"))) (EVar "False") (EIf (EVar "otherwise") (EBinOp "<=" (EBinOp "*" (EApp (EApp (EVar "balRowLoad") (EFieldAccess (EVar "c") "curRow")) (EVar "rs")) (ELit (LInt 100))) (EBinOp "*" (EApp (EApp (EVar "balRowLoad") (EVar "best")) (EVar "rs")) (EBinOp "+" (ELit (LInt 100)) (EVar "balStabPct")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "balRowTakes" (TyFun (TyCon "Cand") (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyCon "Bool"))))
+(DFunDef false "balRowTakes" (PWild (PList)) (EVar "False"))
+(DFunDef false "balRowTakes" ((PVar "c") (PCons (PVar "r") (PVar "rs"))) (EIf (EBinOp "==" (EFieldAccess (EVar "r") "rname") (EFieldAccess (EVar "c") "curRow")) (EBinOp "&&" (EApp (EVar "not") (EFieldAccess (EVar "r") "rclosed")) (EBinOp "||" (EApp (EVar "not") (EFieldAccess (EVar "c") "needsWasm")) (EFieldAccess (EVar "r") "rwasm"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "balRowTakes") (EVar "c")) (EVar "rs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "balRowLoad" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyCon "Int"))))
+(DFunDef false "balRowLoad" (PWild (PList)) (ELit (LInt 0)))
+(DFunDef false "balRowLoad" ((PVar "n") (PCons (PVar "r") (PVar "rs"))) (EIf (EBinOp "==" (EFieldAccess (EVar "r") "rname") (EVar "n")) (EFieldAccess (EVar "r") "rload") (EIf (EVar "otherwise") (EApp (EApp (EVar "balRowLoad") (EVar "n")) (EVar "rs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "balAdd" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyApp (TyCon "List") (TyCon "Row"))))))
 (DFunDef false "balAdd" (PWild PWild (PList)) (EListLit))
 (DFunDef false "balAdd" ((PVar "n") (PVar "ms") (PCons (PVar "r") (PVar "rs"))) (EIf (EBinOp "==" (EFieldAccess (EVar "r") "rname") (EVar "n")) (EBlock (DoLet false false (PVar "bs") (EApp (EApp (EVar "balBucketAdd") (EVar "ms")) (EFieldAccess (EVar "r") "rbuckets"))) (DoExpr (EBinOp "::" (EVariantUpdate "Row" (EVar "r") ((fa "rbuckets" (EVar "bs")) (fa "rload" (EApp (EVar "balMaxL") (EVar "bs"))) (fa "rcount" (EBinOp "+" (EFieldAccess (EVar "r") "rcount") (ELit (LInt 1)))))) (EVar "rs")))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "r") (EApp (EApp (EApp (EVar "balAdd") (EVar "n")) (EVar "ms")) (EVar "rs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -4204,9 +4442,9 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DTypeSig false "balMaxL" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
 (DFunDef false "balMaxL" ((PList)) (ELit (LInt 0)))
 (DFunDef false "balMaxL" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "maxI") (EVar "x")) (EApp (EVar "balMaxL") (EVar "xs"))))
-(DTypeSig false "balPlace" (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyFun (TyApp (TyCon "List") (TyCon "Place")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Place")) (TyApp (TyCon "List") (TyCon "Row"))))))))
-(DFunDef false "balPlace" ((PList) (PVar "rs") (PVar "acc")) (EApp (EVar "Ok") (ETuple (EApp (EVar "reverseL") (EVar "acc")) (EVar "rs"))))
-(DFunDef false "balPlace" ((PCons (PVar "c") (PVar "cs")) (PVar "rs") (PVar "acc")) (EMatch (EApp (EApp (EVar "balPick") (EVar "c")) (EVar "rs")) (arm (PCon "None") () (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate balance: no row can run '")) (EApp (EVar "display") (EFieldAccess (EVar "c") "cname"))) (ELit (LString "'.\n"))) (ELit (LString "  It needs the Wasm toolchain (wasm-tools / node), and every row with\n")) (ELit (LString "  wasm_arm = true is closed to the packer (full_cores).  Wasm rows: ")) (EApp (EVar "joinSpace") (EApp (EVar "balWasmRowNames") (EVar "rs"))) (ELit (LString "\n")))))) (arm (PCon "Some" (PVar "rn")) () (EApp (EApp (EApp (EVar "balPlace") (EVar "cs")) (EApp (EApp (EApp (EVar "balAdd") (EVar "rn")) (EFieldAccess (EVar "c") "cms")) (EVar "rs"))) (EBinOp "::" (ERecordCreate "Place" ((fa "pname" (EFieldAccess (EVar "c") "cname")) (fa "pfrom" (EFieldAccess (EVar "c") "curRow")) (fa "pto" (EVar "rn")))) (EVar "acc"))))))
+(DTypeSig false "balPlace" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyFun (TyApp (TyCon "List") (TyCon "Place")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Place")) (TyApp (TyCon "List") (TyCon "Row")))))))))
+(DFunDef false "balPlace" (PWild (PList) (PVar "rs") (PVar "acc")) (EApp (EVar "Ok") (ETuple (EApp (EVar "reverseL") (EVar "acc")) (EVar "rs"))))
+(DFunDef false "balPlace" ((PVar "stab") (PCons (PVar "c") (PVar "cs")) (PVar "rs") (PVar "acc")) (EMatch (EIf (EVar "stab") (EApp (EApp (EVar "balPickStable") (EVar "c")) (EVar "rs")) (EApp (EApp (EVar "balPick") (EVar "c")) (EVar "rs"))) (arm (PCon "None") () (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate balance: no row can run '")) (EApp (EVar "display") (EFieldAccess (EVar "c") "cname"))) (ELit (LString "'.\n"))) (ELit (LString "  It needs the Wasm toolchain (wasm-tools / node), and every row with\n")) (ELit (LString "  wasm_arm = true is closed to the packer (full_cores).  Wasm rows: ")) (EApp (EVar "joinSpace") (EApp (EVar "balWasmRowNames") (EVar "rs"))) (ELit (LString "\n")))))) (arm (PCon "Some" (PVar "rn")) () (EApp (EApp (EApp (EApp (EVar "balPlace") (EVar "stab")) (EVar "cs")) (EApp (EApp (EApp (EVar "balAdd") (EVar "rn")) (EFieldAccess (EVar "c") "cms")) (EVar "rs"))) (EBinOp "::" (ERecordCreate "Place" ((fa "pname" (EFieldAccess (EVar "c") "cname")) (fa "pfrom" (EFieldAccess (EVar "c") "curRow")) (fa "pto" (EVar "rn")))) (EVar "acc"))))))
 (DTypeSig false "balWasmRowNames" (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "balWasmRowNames" ((PList)) (EListLit))
 (DFunDef false "balWasmRowNames" ((PCons (PVar "r") (PVar "rs"))) (EIf (EFieldAccess (EVar "r") "rwasm") (EBinOp "::" (EFieldAccess (EVar "r") "rname") (EApp (EVar "balWasmRowNames") (EVar "rs"))) (EIf (EVar "otherwise") (EApp (EVar "balWasmRowNames") (EVar "rs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -4242,8 +4480,8 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DTypeSig false "balOpenCands" (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyApp (TyCon "List") (TyCon "Cand")))))
 (DFunDef false "balOpenCands" ((PList) PWild) (EListLit))
 (DFunDef false "balOpenCands" ((PCons (PVar "c") (PVar "cs")) (PVar "rs")) (EIf (EApp (EApp (EVar "balIsClosed") (EFieldAccess (EVar "c") "curRow")) (EVar "rs")) (EApp (EApp (EVar "balOpenCands") (EVar "cs")) (EVar "rs")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "c") (EApp (EApp (EVar "balOpenCands") (EVar "cs")) (EVar "rs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "balTarget" (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Place")) (TyApp (TyCon "List") (TyCon "Row")))))))
-(DFunDef false "balTarget" ((PVar "cs") (PVar "rows0")) (EBlock (DoLet false false (PVar "sorted") (EApp (EVar "balSortCands") (EVar "cs"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "balSeedClosed") (EVar "sorted")) (EVar "rows0")) (EListLit)) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PTuple (PVar "pinned") (PVar "rows1"))) () (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "placed") (PVar "rows2"))) (ETuple (EBinOp "++" (EVar "pinned") (EVar "placed")) (EVar "rows2")))) (EApp (EApp (EApp (EVar "balPlace") (EApp (EVar "balSortCands") (EApp (EApp (EVar "balOpenCands") (EVar "sorted")) (EVar "rows0")))) (EVar "rows1")) (EListLit))))))))
+(DTypeSig false "balTarget" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Place")) (TyApp (TyCon "List") (TyCon "Row"))))))))
+(DFunDef false "balTarget" ((PVar "stab") (PVar "cs") (PVar "rows0")) (EBlock (DoLet false false (PVar "sorted") (EApp (EVar "balSortCands") (EVar "cs"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "balSeedClosed") (EVar "sorted")) (EVar "rows0")) (EListLit)) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PTuple (PVar "pinned") (PVar "rows1"))) () (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "placed") (PVar "rows2"))) (ETuple (EBinOp "++" (EVar "pinned") (EVar "placed")) (EVar "rows2")))) (EApp (EApp (EApp (EApp (EVar "balPlace") (EVar "stab")) (EApp (EVar "balSortCands") (EApp (EApp (EVar "balOpenCands") (EVar "sorted")) (EVar "rows0")))) (EVar "rows1")) (EListLit))))))))
 (DTypeSig false "balCurrent" (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyTuple (TyApp (TyCon "List") (TyCon "Place")) (TyApp (TyCon "List") (TyCon "Row"))))))
 (DFunDef false "balCurrent" ((PList) (PVar "rs")) (ETuple (EListLit) (EVar "rs")))
 (DFunDef false "balCurrent" ((PCons (PVar "c") (PVar "cs")) (PVar "rs")) (EBlock (DoLet false false (PTuple (PVar "ps") (PVar "rs2")) (EApp (EApp (EVar "balCurrent") (EVar "cs")) (EApp (EApp (EApp (EVar "balAdd") (EFieldAccess (EVar "c") "curRow")) (EFieldAccess (EVar "c") "cms")) (EVar "rs")))) (DoExpr (ETuple (EBinOp "::" (ERecordCreate "Place" ((fa "pname" (EFieldAccess (EVar "c") "cname")) (fa "pfrom" (EFieldAccess (EVar "c") "curRow")) (fa "pto" (EFieldAccess (EVar "c") "curRow")))) (EVar "ps")) (EVar "rs2")))))
@@ -4315,6 +4553,11 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "balRowKeys" ((PVar "rn") (PCons (PVar "c") (PVar "cs"))) (EIf (EBinOp "==" (EFieldAccess (EVar "c") "curRow") (EVar "rn")) (EBinOp "::" (EApp (EVar "baselineKey") (EFieldAccess (EVar "c") "crun")) (EApp (EApp (EVar "balRowKeys") (EVar "rn")) (EVar "cs"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "balRowKeys") (EVar "rn")) (EVar "cs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "balCalibLine" (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyCon "Row") (TyFun (TyApp (TyCon "List") (TyCon "RunRecord")) (TyCon "String")))))
 (DFunDef false "balCalibLine" ((PVar "cands") (PVar "r") (PVar "runs")) (EMatch (EApp (EApp (EVar "latestRunForShard") (EFieldAccess (EVar "r") "rname")) (EVar "runs")) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "    ")) (EApp (EVar "display") (EApp (EApp (EVar "balPadR") (ELit (LInt 10))) (EFieldAccess (EVar "r") "rname")))) (ELit (LString " (no recorded run)")))) (arm (PCon "Some" (PVar "rr")) () (EMatch (EFieldAccess (EVar "rr") "rowElapsedMs") (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "    ")) (EApp (EVar "display") (EApp (EApp (EVar "balPadR") (ELit (LInt 10))) (EFieldAccess (EVar "r") "rname")))) (ELit (LString " (run "))) (EApp (EVar "display") (EFieldAccess (EVar "rr") "runId"))) (ELit (LString " recorded no rowElapsedMs)")))) (arm (PCon "Some" (PVar "e")) () (EBlock (DoLet false false (PVar "d") (EBinOp "-" (EVar "e") (EFieldAccess (EVar "r") "rload"))) (DoLet false false (PVar "pct") (EIf (EBinOp ">" (EFieldAccess (EVar "r") "rload") (ELit (LInt 0))) (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "/" (EBinOp "*" (EVar "d") (ELit (LInt 100))) (EFieldAccess (EVar "r") "rload"))))) (ELit (LString "%)"))) (ELit (LString "")))) (DoLet false false (PVar "stale") (EApp (EApp (EApp (EApp (EVar "balCalibStaleness") (EFieldAccess (EVar "r") "rcount")) (EFieldAccess (EVar "rr") "gates")) (EApp (EApp (EVar "balRowDigest") (EFieldAccess (EVar "r") "rname")) (EVar "cands"))) (EFieldAccess (EVar "rr") "gatesDigest"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "    ")) (EApp (EVar "display") (EApp (EApp (EVar "balPadR") (ELit (LInt 10))) (EFieldAccess (EVar "r") "rname")))) (ELit (LString " recorded "))) (EApp (EVar "display") (EApp (EApp (EVar "balPadL") (ELit (LInt 9))) (EApp (EVar "balSecs") (EVar "e"))))) (ELit (LString "   predicted "))) (EApp (EVar "display") (EApp (EApp (EVar "balPadL") (ELit (LInt 9))) (EApp (EVar "balSecs") (EFieldAccess (EVar "r") "rload"))))) (ELit (LString "   residual "))) (EApp (EVar "display") (EApp (EApp (EVar "balPadL") (ELit (LInt 9))) (EApp (EVar "balDelta") (EVar "d"))))) (ELit (LString ""))) (EApp (EVar "display") (EVar "pct"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "stale"))) (ELit (LString ""))))))))))
+(DTypeSig false "balStabLine" (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyFun (TyApp (TyCon "List") (TyCon "Place")) (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyCon "String"))))))
+(DFunDef false "balStabLine" ((PVar "cs") (PVar "rows0") (PVar "ps") (PVar "rows")) (EMatch (EApp (EApp (EApp (EVar "balTarget") (EVar "False")) (EVar "cs")) (EVar "rows0")) (arm (PCon "Err" PWild) () (ELit (LString "  stability: the unstabilized comparison packing could not be derived\n"))) (arm (PCon "Ok" (PTuple (PVar "lps") (PVar "lrows"))) () (EApp (EVar "stringConcat") (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  stability: ")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EApp (EVar "balHeldCount") (EVar "ps")) (EVar "lps"))))) (ELit (LString " of "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "ps"))))) (ELit (LString " gates held on their committed row"))) (EBinOp "++" (EBinOp "++" (ELit (LString " (incumbent slack ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "balStabPct")))) (ELit (LString "% of a row's load)"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "; pole ")) (EApp (EVar "display") (EApp (EVar "balSecs") (EApp (EVar "balPole") (EVar "rows"))))) (ELit (LString " against "))) (EApp (EVar "display") (EApp (EVar "balSecs") (EApp (EVar "balPole") (EVar "lrows"))))) (ELit (LString " unstabilized"))) (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EVar "display") (EApp (EVar "balDelta") (EBinOp "-" (EApp (EVar "balPole") (EVar "rows")) (EApp (EVar "balPole") (EVar "lrows")))))) (ELit (LString "),"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString " pole/median ")) (EApp (EVar "display") (EApp (EVar "balMilli") (EApp (EVar "balFactorMilli") (EVar "rows"))))) (ELit (LString " against "))) (EApp (EVar "display") (EApp (EVar "balMilli") (EApp (EVar "balFactorMilli") (EVar "lrows"))))) (ELit (LString "\n"))))))))
+(DTypeSig false "balHeldCount" (TyFun (TyApp (TyCon "List") (TyCon "Place")) (TyFun (TyApp (TyCon "List") (TyCon "Place")) (TyCon "Int"))))
+(DFunDef false "balHeldCount" ((PList) PWild) (ELit (LInt 0)))
+(DFunDef false "balHeldCount" ((PCons (PVar "p") (PVar "ps")) (PVar "qs")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "p") "pto") (EFieldAccess (EVar "p") "pfrom")) (EBinOp "/=" (EApp (EApp (EVar "balPlaceOf") (EFieldAccess (EVar "p") "pname")) (EVar "qs")) (EFieldAccess (EVar "p") "pto"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EApp (EVar "balHeldCount") (EVar "ps")) (EVar "qs"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "balHeldCount") (EVar "ps")) (EVar "qs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "balMoved" (TyFun (TyApp (TyCon "List") (TyCon "Place")) (TyCon "Int")))
 (DFunDef false "balMoved" ((PList)) (ELit (LInt 0)))
 (DFunDef false "balMoved" ((PCons (PVar "p") (PVar "ps"))) (EIf (EBinOp "/=" (EFieldAccess (EVar "p") "pfrom") (EFieldAccess (EVar "p") "pto")) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "balMoved") (EVar "ps"))) (EIf (EVar "otherwise") (EApp (EVar "balMoved") (EVar "ps")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -4413,7 +4656,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "balIndent" ((PList)) (EListLit))
 (DFunDef false "balIndent" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "    ")) (EApp (EVar "display") (EVar "x"))) (ELit (LString ""))) (EApp (EVar "balIndent") (EVar "xs"))))
 (DTypeSig false "balCompute" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Shard")) (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyFun (TyApp (TyCon "List") (TyCon "RunRecord")) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "String"))))))))))
-(DFunDef false "balCompute" ((PVar "regPath") (PVar "gates") (PVar "shs") (PVar "base") (PVar "runs") (PVar "regSrc")) (EBlock (DoLet false false (PVar "cs") (EApp (EApp (EVar "balCands") (EVar "base")) (EVar "gates"))) (DoLet false false (PTuple PWild (PVar "curRows")) (EApp (EApp (EVar "balCurrent") (EApp (EVar "balSortCands") (EVar "cs"))) (EApp (EApp (EVar "balRows") (EVar "runs")) (EVar "shs")))) (DoExpr (EMatch (EApp (EApp (EVar "balTarget") (EVar "cs")) (EApp (EApp (EVar "balRows") (EVar "runs")) (EVar "shs"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PTuple (PVar "ps") (PVar "rows"))) () (EBlock (DoLet false false (PVar "illegal") (EApp (EVar "not") (EApp (EApp (EVar "balCurrentLegal") (EVar "cs")) (EVar "curRows")))) (DoLet false false (PVar "gains") (EBinOp "<" (EBinOp "*" (EApp (EVar "balPole") (EVar "rows")) (ELit (LInt 100))) (EBinOp "*" (EApp (EVar "balPole") (EVar "curRows")) (EBinOp "-" (ELit (LInt 100)) (EVar "balMarginPct"))))) (DoLet false false (PVar "moved") (EBinOp ">" (EApp (EVar "balMoved") (EVar "ps")) (ELit (LInt 0)))) (DoLet false false (PVar "label") (EIf (EVar "illegal") (ELit (LString "rebalanced (the committed assignment ran a gate on a row lacking its toolchain)")) (EIf (EVar "moved") (ELit (LString "rebalanced")) (ELit (LString "unchanged (the committed assignment is already the derived one)"))))) (DoLet false false (PVar "head") (EApp (EVar "stringConcat") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate balance: ")) (EApp (EVar "display") (EVar "regPath"))) (ELit (LString "\n"))) (EApp (EApp (EApp (EApp (EApp (EVar "balReport") (EVar "label")) (EVar "cs")) (EVar "rows")) (EVar "ps")) (EVar "runs")) (EApp (EVar "balThinLine") (EVar "base")) (EApp (EApp (EApp (EVar "balOosBlock") (EVar "base")) (EVar "cs")) (EVar "runs")) (EBinOp "++" (EBinOp "++" (ELit (LString "  hysteresis: a move needs a pole gain of more than ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "balMarginPct")))) (ELit (LString "%"))) (EApp (EApp (EApp (EVar "balBandNote") (EVar "illegal")) (EVar "gains")) (EVar "moved")) (EBinOp "++" (EBinOp "++" (ELit (LString "\n  target pole/median ")) (EApp (EVar "display") (EApp (EVar "balMilli") (EVar "balTargetMilli")))) (ELit (LString ""))) (EIf (EBinOp "<=" (EApp (EVar "balFactorMilli") (EVar "rows")) (EVar "balTargetMilli")) (ELit (LString " — MET\n")) (ELit (LString " — MISSED\n"))) (EApp (EVar "balMoveLine") (EVar "ps")) (ELit (LString "  calibration — last recorded CI wall clock vs this model's prediction for the COMMITTED assignment:\n")) (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "balCalibLines") (EVar "cs")) (EVar "curRows")) (EVar "runs"))) (ELit (LString "\n"))))) (DoExpr (EMatch (EApp (EApp (EVar "balEnforce") (EVar "cs")) (EVar "rows")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "head"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "balSplice") (EApp (EApp (EVar "balShardValues") (EVar "gates")) (EVar "ps"))) (EApp (EVar "splitNl") (EVar "regSrc"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "head"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "outLines")) () (EApp (EVar "Ok") (ETuple (EVar "head") (EApp (EVar "joinNl") (EVar "outLines")))))))))))))))
+(DFunDef false "balCompute" ((PVar "regPath") (PVar "gates") (PVar "shs") (PVar "base") (PVar "runs") (PVar "regSrc")) (EBlock (DoLet false false (PVar "cs") (EApp (EApp (EVar "balCands") (EVar "base")) (EVar "gates"))) (DoLet false false (PTuple PWild (PVar "curRows")) (EApp (EApp (EVar "balCurrent") (EApp (EVar "balSortCands") (EVar "cs"))) (EApp (EApp (EVar "balRows") (EVar "runs")) (EVar "shs")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "balTarget") (EVar "True")) (EVar "cs")) (EApp (EApp (EVar "balRows") (EVar "runs")) (EVar "shs"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PTuple (PVar "ps") (PVar "rows"))) () (EBlock (DoLet false false (PVar "illegal") (EApp (EVar "not") (EApp (EApp (EVar "balCurrentLegal") (EVar "cs")) (EVar "curRows")))) (DoLet false false (PVar "gains") (EBinOp "<" (EBinOp "*" (EApp (EVar "balPole") (EVar "rows")) (ELit (LInt 100))) (EBinOp "*" (EApp (EVar "balPole") (EVar "curRows")) (EBinOp "-" (ELit (LInt 100)) (EVar "balMarginPct"))))) (DoLet false false (PVar "moved") (EBinOp ">" (EApp (EVar "balMoved") (EVar "ps")) (ELit (LInt 0)))) (DoLet false false (PVar "label") (EIf (EVar "illegal") (ELit (LString "rebalanced (the committed assignment ran a gate on a row lacking its toolchain)")) (EIf (EVar "moved") (ELit (LString "rebalanced")) (ELit (LString "unchanged (the committed assignment is already the derived one)"))))) (DoLet false false (PVar "head") (EApp (EVar "stringConcat") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate balance: ")) (EApp (EVar "display") (EVar "regPath"))) (ELit (LString "\n"))) (EApp (EApp (EApp (EApp (EApp (EVar "balReport") (EVar "label")) (EVar "cs")) (EVar "rows")) (EVar "ps")) (EVar "runs")) (EApp (EVar "balThinLine") (EVar "base")) (EApp (EApp (EApp (EVar "balOosBlock") (EVar "base")) (EVar "cs")) (EVar "runs")) (EApp (EApp (EApp (EApp (EVar "balStabLine") (EVar "cs")) (EApp (EApp (EVar "balRows") (EVar "runs")) (EVar "shs"))) (EVar "ps")) (EVar "rows")) (EBinOp "++" (EBinOp "++" (ELit (LString "  hysteresis: a move needs a pole gain of more than ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "balMarginPct")))) (ELit (LString "%"))) (EApp (EApp (EApp (EVar "balBandNote") (EVar "illegal")) (EVar "gains")) (EVar "moved")) (EBinOp "++" (EBinOp "++" (ELit (LString "\n  target pole/median ")) (EApp (EVar "display") (EApp (EVar "balMilli") (EVar "balTargetMilli")))) (ELit (LString ""))) (EIf (EBinOp "<=" (EApp (EVar "balFactorMilli") (EVar "rows")) (EVar "balTargetMilli")) (ELit (LString " — MET\n")) (ELit (LString " — MISSED\n"))) (EApp (EVar "balMoveLine") (EVar "ps")) (ELit (LString "  calibration — last recorded CI wall clock vs this model's prediction for the COMMITTED assignment:\n")) (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "balCalibLines") (EVar "cs")) (EVar "curRows")) (EVar "runs"))) (ELit (LString "\n"))))) (DoExpr (EMatch (EApp (EApp (EVar "balEnforce") (EVar "cs")) (EVar "rows")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "head"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "balSplice") (EApp (EApp (EVar "balShardValues") (EVar "gates")) (EVar "ps"))) (EApp (EVar "splitNl") (EVar "regSrc"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "head"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "outLines")) () (EApp (EVar "Ok") (ETuple (EVar "head") (EApp (EVar "joinNl") (EVar "outLines")))))))))))))))
 (DTypeSig false "balWrite" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))))
 (DFunDef false "balWrite" ((PVar "regPath") (PVar "regSrc") (PVar "out") (PVar "head")) (EIf (EBinOp "==" (EVar "out") (EVar "regSrc")) (EApp (EVar "putStr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "head"))) (ELit (LString "medaka gate balance: "))) (EApp (EVar "display") (EVar "regPath"))) (ELit (LString " already balanced — no shard assignment changed\n")))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "writeFile") (EVar "regPath")) (EVar "out")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "head"))) (ELit (LString "medaka gate balance: cannot write "))) (EApp (EVar "display") (EVar "regPath"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" PWild) () (EApp (EVar "putStr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "head"))) (ELit (LString "medaka gate balance: rewrote the shard assignments in "))) (EApp (EVar "display") (EVar "regPath"))) (ELit (LString "\n")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "balCheckResult" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))
@@ -4940,6 +5183,8 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "balTargetMilli" () (ELit (LInt 1250)))
 (DTypeSig false "balMarginPct" (TyCon "Int"))
 (DFunDef false "balMarginPct" () (ELit (LInt 5)))
+(DTypeSig false "balStabPct" (TyCon "Int"))
+(DFunDef false "balStabPct" () (ELit (LInt 5)))
 (DTypeSig false "balNeedsWasm" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
 (DFunDef false "balNeedsWasm" ((PList)) (EVar "False"))
 (DFunDef false "balNeedsWasm" ((PCons (PVar "t") (PVar "ts"))) (EIf (EBinOp "==" (EVar "t") (ELit (LString "wasm-tools"))) (EVar "True") (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "node"))) (EVar "t")) (EVar "True") (EIf (EVar "otherwise") (EApp (EVar "balNeedsWasm") (EVar "ts")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
@@ -4986,6 +5231,16 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "balPickGo" (PWild (PList) (PCon "None")) (EVar "None"))
 (DFunDef false "balPickGo" (PWild (PList) (PCon "Some" (PVar "b"))) (EApp (EVar "Some") (EFieldAccess (EVar "b") "rname")))
 (DFunDef false "balPickGo" ((PVar "c") (PCons (PVar "r") (PVar "rs")) (PVar "best")) (EIf (EFieldAccess (EVar "r") "rclosed") (EApp (EApp (EApp (EVar "balPickGo") (EVar "c")) (EVar "rs")) (EVar "best")) (EIf (EBinOp "&&" (EFieldAccess (EVar "c") "needsWasm") (EApp (EVar "not") (EFieldAccess (EVar "r") "rwasm"))) (EApp (EApp (EApp (EVar "balPickGo") (EVar "c")) (EVar "rs")) (EVar "best")) (EIf (EVar "otherwise") (EMatch (EVar "best") (arm (PCon "None") () (EApp (EApp (EApp (EVar "balPickGo") (EVar "c")) (EVar "rs")) (EApp (EVar "Some") (EVar "r")))) (arm (PCon "Some" (PVar "b")) () (EIf (EBinOp "<" (EFieldAccess (EVar "r") "rload") (EFieldAccess (EVar "b") "rload")) (EApp (EApp (EApp (EVar "balPickGo") (EVar "c")) (EVar "rs")) (EApp (EVar "Some") (EVar "r"))) (EApp (EApp (EApp (EVar "balPickGo") (EVar "c")) (EVar "rs")) (EVar "best"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "balPickStable" (TyFun (TyCon "Cand") (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyApp (TyCon "Option") (TyCon "String")))))
+(DFunDef false "balPickStable" ((PVar "c") (PVar "rs")) (EMatch (EApp (EApp (EVar "balPick") (EVar "c")) (EVar "rs")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "best")) () (EIf (EApp (EApp (EApp (EVar "balStays") (EVar "c")) (EVar "best")) (EVar "rs")) (EApp (EVar "Some") (EFieldAccess (EVar "c") "curRow")) (EApp (EVar "Some") (EVar "best"))))))
+(DTypeSig false "balStays" (TyFun (TyCon "Cand") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyCon "Bool")))))
+(DFunDef false "balStays" ((PVar "c") (PVar "best") (PVar "rs")) (EIf (EBinOp "==" (EFieldAccess (EVar "c") "curRow") (EVar "best")) (EVar "True") (EIf (EApp (EVar "not") (EApp (EApp (EVar "balRowTakes") (EVar "c")) (EVar "rs"))) (EVar "False") (EIf (EVar "otherwise") (EBinOp "<=" (EBinOp "*" (EApp (EApp (EVar "balRowLoad") (EFieldAccess (EVar "c") "curRow")) (EVar "rs")) (ELit (LInt 100))) (EBinOp "*" (EApp (EApp (EVar "balRowLoad") (EVar "best")) (EVar "rs")) (EBinOp "+" (ELit (LInt 100)) (EVar "balStabPct")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "balRowTakes" (TyFun (TyCon "Cand") (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyCon "Bool"))))
+(DFunDef false "balRowTakes" (PWild (PList)) (EVar "False"))
+(DFunDef false "balRowTakes" ((PVar "c") (PCons (PVar "r") (PVar "rs"))) (EIf (EBinOp "==" (EFieldAccess (EVar "r") "rname") (EFieldAccess (EVar "c") "curRow")) (EBinOp "&&" (EApp (EVar "not") (EFieldAccess (EVar "r") "rclosed")) (EBinOp "||" (EApp (EVar "not") (EFieldAccess (EVar "c") "needsWasm")) (EFieldAccess (EVar "r") "rwasm"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "balRowTakes") (EVar "c")) (EVar "rs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "balRowLoad" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyCon "Int"))))
+(DFunDef false "balRowLoad" (PWild (PList)) (ELit (LInt 0)))
+(DFunDef false "balRowLoad" ((PVar "n") (PCons (PVar "r") (PVar "rs"))) (EIf (EBinOp "==" (EFieldAccess (EVar "r") "rname") (EVar "n")) (EFieldAccess (EVar "r") "rload") (EIf (EVar "otherwise") (EApp (EApp (EVar "balRowLoad") (EVar "n")) (EVar "rs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "balAdd" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyApp (TyCon "List") (TyCon "Row"))))))
 (DFunDef false "balAdd" (PWild PWild (PList)) (EListLit))
 (DFunDef false "balAdd" ((PVar "n") (PVar "ms") (PCons (PVar "r") (PVar "rs"))) (EIf (EBinOp "==" (EFieldAccess (EVar "r") "rname") (EVar "n")) (EBlock (DoLet false false (PVar "bs") (EApp (EApp (EVar "balBucketAdd") (EVar "ms")) (EFieldAccess (EVar "r") "rbuckets"))) (DoExpr (EBinOp "::" (EVariantUpdate "Row" (EVar "r") ((fa "rbuckets" (EVar "bs")) (fa "rload" (EApp (EVar "balMaxL") (EVar "bs"))) (fa "rcount" (EBinOp "+" (EFieldAccess (EVar "r") "rcount") (ELit (LInt 1)))))) (EVar "rs")))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "r") (EApp (EApp (EApp (EVar "balAdd") (EVar "n")) (EVar "ms")) (EVar "rs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -5002,9 +5257,9 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DTypeSig false "balMaxL" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int")))
 (DFunDef false "balMaxL" ((PList)) (ELit (LInt 0)))
 (DFunDef false "balMaxL" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "maxI") (EVar "x")) (EApp (EVar "balMaxL") (EVar "xs"))))
-(DTypeSig false "balPlace" (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyFun (TyApp (TyCon "List") (TyCon "Place")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Place")) (TyApp (TyCon "List") (TyCon "Row"))))))))
-(DFunDef false "balPlace" ((PList) (PVar "rs") (PVar "acc")) (EApp (EVar "Ok") (ETuple (EApp (EVar "reverseL") (EVar "acc")) (EVar "rs"))))
-(DFunDef false "balPlace" ((PCons (PVar "c") (PVar "cs")) (PVar "rs") (PVar "acc")) (EMatch (EApp (EApp (EVar "balPick") (EVar "c")) (EVar "rs")) (arm (PCon "None") () (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate balance: no row can run '")) (EApp (EMethodRef "display") (EFieldAccess (EVar "c") "cname"))) (ELit (LString "'.\n"))) (ELit (LString "  It needs the Wasm toolchain (wasm-tools / node), and every row with\n")) (ELit (LString "  wasm_arm = true is closed to the packer (full_cores).  Wasm rows: ")) (EApp (EVar "joinSpace") (EApp (EVar "balWasmRowNames") (EVar "rs"))) (ELit (LString "\n")))))) (arm (PCon "Some" (PVar "rn")) () (EApp (EApp (EApp (EVar "balPlace") (EVar "cs")) (EApp (EApp (EApp (EVar "balAdd") (EVar "rn")) (EFieldAccess (EVar "c") "cms")) (EVar "rs"))) (EBinOp "::" (ERecordCreate "Place" ((fa "pname" (EFieldAccess (EVar "c") "cname")) (fa "pfrom" (EFieldAccess (EVar "c") "curRow")) (fa "pto" (EVar "rn")))) (EVar "acc"))))))
+(DTypeSig false "balPlace" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyFun (TyApp (TyCon "List") (TyCon "Place")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Place")) (TyApp (TyCon "List") (TyCon "Row")))))))))
+(DFunDef false "balPlace" (PWild (PList) (PVar "rs") (PVar "acc")) (EApp (EVar "Ok") (ETuple (EApp (EVar "reverseL") (EVar "acc")) (EVar "rs"))))
+(DFunDef false "balPlace" ((PVar "stab") (PCons (PVar "c") (PVar "cs")) (PVar "rs") (PVar "acc")) (EMatch (EIf (EVar "stab") (EApp (EApp (EVar "balPickStable") (EVar "c")) (EVar "rs")) (EApp (EApp (EVar "balPick") (EVar "c")) (EVar "rs"))) (arm (PCon "None") () (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate balance: no row can run '")) (EApp (EMethodRef "display") (EFieldAccess (EVar "c") "cname"))) (ELit (LString "'.\n"))) (ELit (LString "  It needs the Wasm toolchain (wasm-tools / node), and every row with\n")) (ELit (LString "  wasm_arm = true is closed to the packer (full_cores).  Wasm rows: ")) (EApp (EVar "joinSpace") (EApp (EVar "balWasmRowNames") (EVar "rs"))) (ELit (LString "\n")))))) (arm (PCon "Some" (PVar "rn")) () (EApp (EApp (EApp (EApp (EVar "balPlace") (EVar "stab")) (EVar "cs")) (EApp (EApp (EApp (EVar "balAdd") (EVar "rn")) (EFieldAccess (EVar "c") "cms")) (EVar "rs"))) (EBinOp "::" (ERecordCreate "Place" ((fa "pname" (EFieldAccess (EVar "c") "cname")) (fa "pfrom" (EFieldAccess (EVar "c") "curRow")) (fa "pto" (EVar "rn")))) (EVar "acc"))))))
 (DTypeSig false "balWasmRowNames" (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "balWasmRowNames" ((PList)) (EListLit))
 (DFunDef false "balWasmRowNames" ((PCons (PVar "r") (PVar "rs"))) (EIf (EFieldAccess (EVar "r") "rwasm") (EBinOp "::" (EFieldAccess (EVar "r") "rname") (EApp (EVar "balWasmRowNames") (EVar "rs"))) (EIf (EVar "otherwise") (EApp (EVar "balWasmRowNames") (EVar "rs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -5040,8 +5295,8 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DTypeSig false "balOpenCands" (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyApp (TyCon "List") (TyCon "Cand")))))
 (DFunDef false "balOpenCands" ((PList) PWild) (EListLit))
 (DFunDef false "balOpenCands" ((PCons (PVar "c") (PVar "cs")) (PVar "rs")) (EIf (EApp (EApp (EVar "balIsClosed") (EFieldAccess (EVar "c") "curRow")) (EVar "rs")) (EApp (EApp (EVar "balOpenCands") (EVar "cs")) (EVar "rs")) (EIf (EVar "otherwise") (EBinOp "::" (EVar "c") (EApp (EApp (EVar "balOpenCands") (EVar "cs")) (EVar "rs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "balTarget" (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Place")) (TyApp (TyCon "List") (TyCon "Row")))))))
-(DFunDef false "balTarget" ((PVar "cs") (PVar "rows0")) (EBlock (DoLet false false (PVar "sorted") (EApp (EVar "balSortCands") (EVar "cs"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "balSeedClosed") (EVar "sorted")) (EVar "rows0")) (EListLit)) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PTuple (PVar "pinned") (PVar "rows1"))) () (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "placed") (PVar "rows2"))) (ETuple (EBinOp "++" (EVar "pinned") (EVar "placed")) (EVar "rows2")))) (EApp (EApp (EApp (EVar "balPlace") (EApp (EVar "balSortCands") (EApp (EApp (EVar "balOpenCands") (EVar "sorted")) (EVar "rows0")))) (EVar "rows1")) (EListLit))))))))
+(DTypeSig false "balTarget" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Place")) (TyApp (TyCon "List") (TyCon "Row"))))))))
+(DFunDef false "balTarget" ((PVar "stab") (PVar "cs") (PVar "rows0")) (EBlock (DoLet false false (PVar "sorted") (EApp (EVar "balSortCands") (EVar "cs"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "balSeedClosed") (EVar "sorted")) (EVar "rows0")) (EListLit)) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PTuple (PVar "pinned") (PVar "rows1"))) () (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "placed") (PVar "rows2"))) (ETuple (EBinOp "++" (EVar "pinned") (EVar "placed")) (EVar "rows2")))) (EApp (EApp (EApp (EApp (EVar "balPlace") (EVar "stab")) (EApp (EVar "balSortCands") (EApp (EApp (EVar "balOpenCands") (EVar "sorted")) (EVar "rows0")))) (EVar "rows1")) (EListLit))))))))
 (DTypeSig false "balCurrent" (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyTuple (TyApp (TyCon "List") (TyCon "Place")) (TyApp (TyCon "List") (TyCon "Row"))))))
 (DFunDef false "balCurrent" ((PList) (PVar "rs")) (ETuple (EListLit) (EVar "rs")))
 (DFunDef false "balCurrent" ((PCons (PVar "c") (PVar "cs")) (PVar "rs")) (EBlock (DoLet false false (PTuple (PVar "ps") (PVar "rs2")) (EApp (EApp (EVar "balCurrent") (EVar "cs")) (EApp (EApp (EApp (EVar "balAdd") (EFieldAccess (EVar "c") "curRow")) (EFieldAccess (EVar "c") "cms")) (EVar "rs")))) (DoExpr (ETuple (EBinOp "::" (ERecordCreate "Place" ((fa "pname" (EFieldAccess (EVar "c") "cname")) (fa "pfrom" (EFieldAccess (EVar "c") "curRow")) (fa "pto" (EFieldAccess (EVar "c") "curRow")))) (EVar "ps")) (EVar "rs2")))))
@@ -5113,6 +5368,11 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "balRowKeys" ((PVar "rn") (PCons (PVar "c") (PVar "cs"))) (EIf (EBinOp "==" (EFieldAccess (EVar "c") "curRow") (EVar "rn")) (EBinOp "::" (EApp (EVar "baselineKey") (EFieldAccess (EVar "c") "crun")) (EApp (EApp (EVar "balRowKeys") (EVar "rn")) (EVar "cs"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "balRowKeys") (EVar "rn")) (EVar "cs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "balCalibLine" (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyCon "Row") (TyFun (TyApp (TyCon "List") (TyCon "RunRecord")) (TyCon "String")))))
 (DFunDef false "balCalibLine" ((PVar "cands") (PVar "r") (PVar "runs")) (EMatch (EApp (EApp (EVar "latestRunForShard") (EFieldAccess (EVar "r") "rname")) (EVar "runs")) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "    ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "balPadR") (ELit (LInt 10))) (EFieldAccess (EVar "r") "rname")))) (ELit (LString " (no recorded run)")))) (arm (PCon "Some" (PVar "rr")) () (EMatch (EFieldAccess (EVar "rr") "rowElapsedMs") (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "    ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "balPadR") (ELit (LInt 10))) (EFieldAccess (EVar "r") "rname")))) (ELit (LString " (run "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "rr") "runId"))) (ELit (LString " recorded no rowElapsedMs)")))) (arm (PCon "Some" (PVar "e")) () (EBlock (DoLet false false (PVar "d") (EBinOp "-" (EVar "e") (EFieldAccess (EVar "r") "rload"))) (DoLet false false (PVar "pct") (EIf (EBinOp ">" (EFieldAccess (EVar "r") "rload") (ELit (LInt 0))) (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "/" (EBinOp "*" (EVar "d") (ELit (LInt 100))) (EFieldAccess (EVar "r") "rload"))))) (ELit (LString "%)"))) (ELit (LString "")))) (DoLet false false (PVar "stale") (EApp (EApp (EApp (EApp (EVar "balCalibStaleness") (EFieldAccess (EVar "r") "rcount")) (EFieldAccess (EVar "rr") "gates")) (EApp (EApp (EVar "balRowDigest") (EFieldAccess (EVar "r") "rname")) (EVar "cands"))) (EFieldAccess (EVar "rr") "gatesDigest"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "    ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "balPadR") (ELit (LInt 10))) (EFieldAccess (EVar "r") "rname")))) (ELit (LString " recorded "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "balPadL") (ELit (LInt 9))) (EApp (EVar "balSecs") (EVar "e"))))) (ELit (LString "   predicted "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "balPadL") (ELit (LInt 9))) (EApp (EVar "balSecs") (EFieldAccess (EVar "r") "rload"))))) (ELit (LString "   residual "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "balPadL") (ELit (LInt 9))) (EApp (EVar "balDelta") (EVar "d"))))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "pct"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "stale"))) (ELit (LString ""))))))))))
+(DTypeSig false "balStabLine" (TyFun (TyApp (TyCon "List") (TyCon "Cand")) (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyFun (TyApp (TyCon "List") (TyCon "Place")) (TyFun (TyApp (TyCon "List") (TyCon "Row")) (TyCon "String"))))))
+(DFunDef false "balStabLine" ((PVar "cs") (PVar "rows0") (PVar "ps") (PVar "rows")) (EMatch (EApp (EApp (EApp (EVar "balTarget") (EVar "False")) (EVar "cs")) (EVar "rows0")) (arm (PCon "Err" PWild) () (ELit (LString "  stability: the unstabilized comparison packing could not be derived\n"))) (arm (PCon "Ok" (PTuple (PVar "lps") (PVar "lrows"))) () (EApp (EVar "stringConcat") (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  stability: ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EApp (EVar "balHeldCount") (EVar "ps")) (EVar "lps"))))) (ELit (LString " of "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "ps"))))) (ELit (LString " gates held on their committed row"))) (EBinOp "++" (EBinOp "++" (ELit (LString " (incumbent slack ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "balStabPct")))) (ELit (LString "% of a row's load)"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "; pole ")) (EApp (EMethodRef "display") (EApp (EVar "balSecs") (EApp (EVar "balPole") (EVar "rows"))))) (ELit (LString " against "))) (EApp (EMethodRef "display") (EApp (EVar "balSecs") (EApp (EVar "balPole") (EVar "lrows"))))) (ELit (LString " unstabilized"))) (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EMethodRef "display") (EApp (EVar "balDelta") (EBinOp "-" (EApp (EVar "balPole") (EVar "rows")) (EApp (EVar "balPole") (EVar "lrows")))))) (ELit (LString "),"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString " pole/median ")) (EApp (EMethodRef "display") (EApp (EVar "balMilli") (EApp (EVar "balFactorMilli") (EVar "rows"))))) (ELit (LString " against "))) (EApp (EMethodRef "display") (EApp (EVar "balMilli") (EApp (EVar "balFactorMilli") (EVar "lrows"))))) (ELit (LString "\n"))))))))
+(DTypeSig false "balHeldCount" (TyFun (TyApp (TyCon "List") (TyCon "Place")) (TyFun (TyApp (TyCon "List") (TyCon "Place")) (TyCon "Int"))))
+(DFunDef false "balHeldCount" ((PList) PWild) (ELit (LInt 0)))
+(DFunDef false "balHeldCount" ((PCons (PVar "p") (PVar "ps")) (PVar "qs")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "p") "pto") (EFieldAccess (EVar "p") "pfrom")) (EBinOp "/=" (EApp (EApp (EVar "balPlaceOf") (EFieldAccess (EVar "p") "pname")) (EVar "qs")) (EFieldAccess (EVar "p") "pto"))) (EBinOp "+" (ELit (LInt 1)) (EApp (EApp (EVar "balHeldCount") (EVar "ps")) (EVar "qs"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "balHeldCount") (EVar "ps")) (EVar "qs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "balMoved" (TyFun (TyApp (TyCon "List") (TyCon "Place")) (TyCon "Int")))
 (DFunDef false "balMoved" ((PList)) (ELit (LInt 0)))
 (DFunDef false "balMoved" ((PCons (PVar "p") (PVar "ps"))) (EIf (EBinOp "/=" (EFieldAccess (EVar "p") "pfrom") (EFieldAccess (EVar "p") "pto")) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "balMoved") (EVar "ps"))) (EIf (EVar "otherwise") (EApp (EVar "balMoved") (EVar "ps")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -5211,7 +5471,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "balIndent" ((PList)) (EListLit))
 (DFunDef false "balIndent" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "    ")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString ""))) (EApp (EVar "balIndent") (EVar "xs"))))
 (DTypeSig false "balCompute" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Shard")) (TyFun (TyApp (TyCon "List") (TyCon "GateCost")) (TyFun (TyApp (TyCon "List") (TyCon "RunRecord")) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "String"))))))))))
-(DFunDef false "balCompute" ((PVar "regPath") (PVar "gates") (PVar "shs") (PVar "base") (PVar "runs") (PVar "regSrc")) (EBlock (DoLet false false (PVar "cs") (EApp (EApp (EVar "balCands") (EVar "base")) (EVar "gates"))) (DoLet false false (PTuple PWild (PVar "curRows")) (EApp (EApp (EVar "balCurrent") (EApp (EVar "balSortCands") (EVar "cs"))) (EApp (EApp (EVar "balRows") (EVar "runs")) (EVar "shs")))) (DoExpr (EMatch (EApp (EApp (EVar "balTarget") (EVar "cs")) (EApp (EApp (EVar "balRows") (EVar "runs")) (EVar "shs"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PTuple (PVar "ps") (PVar "rows"))) () (EBlock (DoLet false false (PVar "illegal") (EApp (EVar "not") (EApp (EApp (EVar "balCurrentLegal") (EVar "cs")) (EVar "curRows")))) (DoLet false false (PVar "gains") (EBinOp "<" (EBinOp "*" (EApp (EVar "balPole") (EVar "rows")) (ELit (LInt 100))) (EBinOp "*" (EApp (EVar "balPole") (EVar "curRows")) (EBinOp "-" (ELit (LInt 100)) (EVar "balMarginPct"))))) (DoLet false false (PVar "moved") (EBinOp ">" (EApp (EVar "balMoved") (EVar "ps")) (ELit (LInt 0)))) (DoLet false false (PVar "label") (EIf (EVar "illegal") (ELit (LString "rebalanced (the committed assignment ran a gate on a row lacking its toolchain)")) (EIf (EVar "moved") (ELit (LString "rebalanced")) (ELit (LString "unchanged (the committed assignment is already the derived one)"))))) (DoLet false false (PVar "head") (EApp (EVar "stringConcat") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate balance: ")) (EApp (EMethodRef "display") (EVar "regPath"))) (ELit (LString "\n"))) (EApp (EApp (EApp (EApp (EApp (EVar "balReport") (EVar "label")) (EVar "cs")) (EVar "rows")) (EVar "ps")) (EVar "runs")) (EApp (EVar "balThinLine") (EVar "base")) (EApp (EApp (EApp (EVar "balOosBlock") (EVar "base")) (EVar "cs")) (EVar "runs")) (EBinOp "++" (EBinOp "++" (ELit (LString "  hysteresis: a move needs a pole gain of more than ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "balMarginPct")))) (ELit (LString "%"))) (EApp (EApp (EApp (EVar "balBandNote") (EVar "illegal")) (EVar "gains")) (EVar "moved")) (EBinOp "++" (EBinOp "++" (ELit (LString "\n  target pole/median ")) (EApp (EMethodRef "display") (EApp (EVar "balMilli") (EVar "balTargetMilli")))) (ELit (LString ""))) (EIf (EBinOp "<=" (EApp (EVar "balFactorMilli") (EVar "rows")) (EVar "balTargetMilli")) (ELit (LString " — MET\n")) (ELit (LString " — MISSED\n"))) (EApp (EVar "balMoveLine") (EVar "ps")) (ELit (LString "  calibration — last recorded CI wall clock vs this model's prediction for the COMMITTED assignment:\n")) (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "balCalibLines") (EVar "cs")) (EVar "curRows")) (EVar "runs"))) (ELit (LString "\n"))))) (DoExpr (EMatch (EApp (EApp (EVar "balEnforce") (EVar "cs")) (EVar "rows")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "head"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "balSplice") (EApp (EApp (EVar "balShardValues") (EVar "gates")) (EVar "ps"))) (EApp (EVar "splitNl") (EVar "regSrc"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "head"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "outLines")) () (EApp (EVar "Ok") (ETuple (EVar "head") (EApp (EVar "joinNl") (EVar "outLines")))))))))))))))
+(DFunDef false "balCompute" ((PVar "regPath") (PVar "gates") (PVar "shs") (PVar "base") (PVar "runs") (PVar "regSrc")) (EBlock (DoLet false false (PVar "cs") (EApp (EApp (EVar "balCands") (EVar "base")) (EVar "gates"))) (DoLet false false (PTuple PWild (PVar "curRows")) (EApp (EApp (EVar "balCurrent") (EApp (EVar "balSortCands") (EVar "cs"))) (EApp (EApp (EVar "balRows") (EVar "runs")) (EVar "shs")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "balTarget") (EVar "True")) (EVar "cs")) (EApp (EApp (EVar "balRows") (EVar "runs")) (EVar "shs"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PTuple (PVar "ps") (PVar "rows"))) () (EBlock (DoLet false false (PVar "illegal") (EApp (EVar "not") (EApp (EApp (EVar "balCurrentLegal") (EVar "cs")) (EVar "curRows")))) (DoLet false false (PVar "gains") (EBinOp "<" (EBinOp "*" (EApp (EVar "balPole") (EVar "rows")) (ELit (LInt 100))) (EBinOp "*" (EApp (EVar "balPole") (EVar "curRows")) (EBinOp "-" (ELit (LInt 100)) (EVar "balMarginPct"))))) (DoLet false false (PVar "moved") (EBinOp ">" (EApp (EVar "balMoved") (EVar "ps")) (ELit (LInt 0)))) (DoLet false false (PVar "label") (EIf (EVar "illegal") (ELit (LString "rebalanced (the committed assignment ran a gate on a row lacking its toolchain)")) (EIf (EVar "moved") (ELit (LString "rebalanced")) (ELit (LString "unchanged (the committed assignment is already the derived one)"))))) (DoLet false false (PVar "head") (EApp (EVar "stringConcat") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate balance: ")) (EApp (EMethodRef "display") (EVar "regPath"))) (ELit (LString "\n"))) (EApp (EApp (EApp (EApp (EApp (EVar "balReport") (EVar "label")) (EVar "cs")) (EVar "rows")) (EVar "ps")) (EVar "runs")) (EApp (EVar "balThinLine") (EVar "base")) (EApp (EApp (EApp (EVar "balOosBlock") (EVar "base")) (EVar "cs")) (EVar "runs")) (EApp (EApp (EApp (EApp (EVar "balStabLine") (EVar "cs")) (EApp (EApp (EVar "balRows") (EVar "runs")) (EVar "shs"))) (EVar "ps")) (EVar "rows")) (EBinOp "++" (EBinOp "++" (ELit (LString "  hysteresis: a move needs a pole gain of more than ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "balMarginPct")))) (ELit (LString "%"))) (EApp (EApp (EApp (EVar "balBandNote") (EVar "illegal")) (EVar "gains")) (EVar "moved")) (EBinOp "++" (EBinOp "++" (ELit (LString "\n  target pole/median ")) (EApp (EMethodRef "display") (EApp (EVar "balMilli") (EVar "balTargetMilli")))) (ELit (LString ""))) (EIf (EBinOp "<=" (EApp (EVar "balFactorMilli") (EVar "rows")) (EVar "balTargetMilli")) (ELit (LString " — MET\n")) (ELit (LString " — MISSED\n"))) (EApp (EVar "balMoveLine") (EVar "ps")) (ELit (LString "  calibration — last recorded CI wall clock vs this model's prediction for the COMMITTED assignment:\n")) (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "balCalibLines") (EVar "cs")) (EVar "curRows")) (EVar "runs"))) (ELit (LString "\n"))))) (DoExpr (EMatch (EApp (EApp (EVar "balEnforce") (EVar "cs")) (EVar "rows")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "head"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "balSplice") (EApp (EApp (EVar "balShardValues") (EVar "gates")) (EVar "ps"))) (EApp (EVar "splitNl") (EVar "regSrc"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "head"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "outLines")) () (EApp (EVar "Ok") (ETuple (EVar "head") (EApp (EVar "joinNl") (EVar "outLines")))))))))))))))
 (DTypeSig false "balWrite" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))))
 (DFunDef false "balWrite" ((PVar "regPath") (PVar "regSrc") (PVar "out") (PVar "head")) (EIf (EBinOp "==" (EVar "out") (EVar "regSrc")) (EApp (EVar "putStr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "head"))) (ELit (LString "medaka gate balance: "))) (EApp (EMethodRef "display") (EVar "regPath"))) (ELit (LString " already balanced — no shard assignment changed\n")))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "writeFile") (EVar "regPath")) (EVar "out")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "head"))) (ELit (LString "medaka gate balance: cannot write "))) (EApp (EMethodRef "display") (EVar "regPath"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" PWild) () (EApp (EVar "putStr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "head"))) (ELit (LString "medaka gate balance: rewrote the shard assignments in "))) (EApp (EMethodRef "display") (EVar "regPath"))) (ELit (LString "\n")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "balCheckResult" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))
