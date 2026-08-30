@@ -7409,6 +7409,17 @@ emitConstClosureA e lamName arity =
   e.closureArity := (w, arity) :: !e.closureArity
   (w, LTClosure)
 
+-- emitConstClosureCell WITHOUT the `e.closureArity` registration — the drop-in
+-- replacement for `emitClosureAlloc e lam arity []` (S-2, EMITTER-GAPS #10
+-- allocation half, the five eta-closure call sites below).  Strict parity with
+-- those sites' current non-`A` `emitClosureAlloc` call: they do not register
+-- `closureArity` today, and this wrapper must not start doing so — that would
+-- newly enable a static over/under-application split at these call sites,
+-- a separate behavior addition out of this slice's scope.
+emitConstClosure : Emit -> String -> Int -> (String, LTy)
+emitConstClosure e lamName arity =
+  (emitConstClosureCell e lamName arity, LTClosure)
+
 -- emit a CLam: compute its captured set, lift its body to a top-level define, and
 -- allocate the closure cell capturing the live operand words.
 -- E2b — a CLam whose params are NOT all plain `PVar` (a tuple/constructor
@@ -7547,7 +7558,7 @@ emitEtaClosure e fname =
   let arity = fnArity e fname
   let lamName = "mdk_eta_\{fname}_\{intToString (freshId e)}"
   let _ = emitEtaDefine e lamName fname arity
-  emitClosureAlloc e lamName arity []
+  emitConstClosure e lamName arity
 
 -- the inferred arity of a known top-level function (its signature's param count).
 fnArity : Emit -> String -> Int
@@ -7638,7 +7649,7 @@ emitCtorEtaClosure e name =
   let arity = ctorArity e name
   let lamName = "mdk_etac_\{name}_\{intToString (freshId e)}"
   let _ = emitCtorEtaDefine e lamName name arity
-  emitClosureAlloc e lamName arity []
+  emitConstClosure e lamName arity
 
 -- emit the captureless ctor-eta forwarder `@mdk_etacN(i64 %clos, %arg…) { <alloc
 -- cell from %arg0..%argN-1>; ret }` into the side buffer (same swap discipline as
@@ -7717,7 +7728,7 @@ emitExternEtaClosure : Emit -> String -> (String, LTy)
 emitExternEtaClosure e name =
   let lamName = "mdk_eta_\{name}_\{intToString (freshId e)}"
   let _ = emitExternEtaDefine e lamName name (externArity e name)
-  emitClosureAlloc e lamName (externArity e name) []
+  emitConstClosure e lamName (externArity e name)
 
 -- Gap #50 (value position) — an interface METHOD name reaching emitVar as a bare
 -- first-class value (passed to a HOF, e.g. `apply2 max 3 8`).  At a value site the
@@ -7732,7 +7743,7 @@ emitMethodEtaClosure : Emit -> String -> (String, LTy)
 emitMethodEtaClosure e name =
   let lamName = "mdk_eta_\{name}_\{intToString (freshId e)}"
   let _ = emitMethodEtaDefine e lamName name (methodArityOfInput e name)
-  emitClosureAlloc e lamName (methodArityOfInput e name) []
+  emitConstClosure e lamName (methodArityOfInput e name)
 
 -- the captureless method-eta forwarder `@mdk_etaN(i64 %clos, %arg…) { <inline
 -- arg-tag dispatch over %arg0..%arg(N-1)>; ret }` (mirror of emitExternEtaDefine).
@@ -7797,7 +7808,7 @@ emitFfiEtaClosure : Emit -> String -> (String, LTy)
 emitFfiEtaClosure e name =
   let lamName = "mdk_eta_\{name}_\{intToString (freshId e)}"
   let _ = emitFfiEtaDefine e lamName name (ffiExternArity e name)
-  emitClosureAlloc e lamName (ffiExternArity e name) []
+  emitConstClosure e lamName (ffiExternArity e name)
 
 emitFfiEtaDefine : Emit -> String -> String -> Int -> Unit
 emitFfiEtaDefine e lamName name arity =
