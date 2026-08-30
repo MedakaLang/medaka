@@ -1,0 +1,81 @@
+issue: 1075
+what: A method-less impl at a PRIMITIVE head, reached through a generalized local
+what: lambda (the ARG-TAG path, not the dict path), does not dispatch.  `Int` owns
+what: no runtime constructors, so it carries no cell tag; `emitTagMatch` has no
+what: constructor to compare against and the head cannot be given an arm in the
+what: emitted arg-tag chain.  Since sprint unmask-arg-tag-dispatch S-3
+what: (`4b14d3fa`, compiler/backend/llvm_emit.mdk `argTagUncoveredRaw` /
+what: `emitArgTagRoute`) that receiver falls off the end of the chain into the loud
+what: terminal `@mdk_dispatch_no_impl()` instead of into the pre-#1046 single-group
+what: shortcut's unconditional direct call.  So the observable is now exit 1 with
+what: `runtime error [E-DISPATCH-NO-IMPL]: dispatch found no implementation
+what: matching the dict key` on stderr, at -O0 through -O3 -- LOUD, where before
+what: S-3 it was a SILENT `meow|meow` at exit 0.
+what: THE CORRECT ANSWER IS `woof|meow`: `impl Speak Int` defines no `speak`, so it
+what: inherits the interface default "woof", exactly as the data-head control does.
+what: `medaka check` (exit 0) and `medaka run` (exit 0, `woof|meow`) both already
+what: produce it -- the interpreter agrees with the semantics.  ONLY the native
+what: binary aborts, so this is an engine divergence, not a typing question.
+what: WHY THIS ROW COULD NOT BE WRITTEN BEFORE NOW: the program did not survive
+what: `medaka check` at S-3's base.  The `T-LOCAL-CONSTRAINED-MONO` local pin
+what: rejected the generalized local outright, so `build` never reached the
+what: emitter and any verb here would have graded MALFORMED.  #2032 (this sprint's
+what: S-4) narrowed that pin to the case it is licensed for, which is what makes
+what: this shape user-reachable and therefore pinnable.  S-3's report Notes 2
+what: records the row as owed by S-4; this is that row.
+cmd: build-run main.mdk
+exit: 1
+control: build-run control.mdk
+why-verb: `build-run` builds main.mdk to a per-process temp binary and grades THAT
+why-verb: binary's exit code.  It is the only verb that observes this defect:
+why-verb: `check` exits 0 and `run` exits 0 printing the CORRECT `woof|meow`, so a
+why-verb: check- or run-based pin would be green today and green forever without
+why-verb: ever touching the cell where #1075 lives.  `build` alone exits 0 too (a
+why-verb: binary IS produced) -- the toolchain says fine three times and only the
+why-verb: EXECUTED artifact reveals the defect.
+why-verb: No `stdout` is pinned: the abort happens before `println` is reached, so
+why-verb: stdout is empty, and the `E-DISPATCH-NO-IMPL` text lands on stderr, which
+why-verb: build-run's stdout-only grading does not see (measured by hand,
+why-verb: separating the streams).  Exit 1 is the whole observable signature this
+why-verb: row can grade.  It is distinct from a BUILD failure, which `run_verb`
+why-verb: would report as exit 126 and grade MALFORMED for this verb -- see the
+why-verb: #1394 trap in this suite's own header, and see why-note below, where a
+why-verb: neighbouring primitive-head shape does exactly that.
+why-control: control.mdk is byte-identical to main.mdk except the method-less impl
+why-control: sits at a DATA head (`Dog`) instead of the PRIMITIVE head `Int`.  That
+why-control: is the one flipped dimension and it is exactly the dimension the abort
+why-control: keys on: a data head owns constructors, carries a cell tag, gets an arm
+why-control: in the emitted chain, and reaches the inherited default.  A green
+why-control: control proves the abort is about primitive heads and NOT about
+why-control: method-less impls, generalized locals, cross-module defaults, or
+why-control: arg-tag dispatch in general.  MEASURED: build exit 0, binary exit 0,
+why-control: stdout `woof|meow` (the harness asserts the exit only).  The control is
+why-control: also #1046's own repro, so it stands as that fix's regression guard now
+why-control: that the #1046 row has drained and been deleted.
+why-drains: Drains when primitive-typed arg-tag discrimination lands (#1075) -- a
+why-drains: runtime discriminator for receivers that carry no cell tag, which
+why-drains: `emitDefaultArgTag`'s E19 comment already scopes (the prelude's `Ord`
+why-drains: `max`/`min` reduce to `compare`, whose impls are at Int/Float/String/
+why-drains: Char/Bool/Ordering, none distinguishable from the boxed word alone).
+why-drains: THE DRAINER MUST: reconstruct the `woof|meow` expectation FROM THE
+why-drains: SEMANTICS (Int inherits the interface default -- do not read it off
+why-drains: whatever the binary happens to print), confirm the built binary now
+why-drains: prints it at -O0 through -O3, then delete this row and close #1075.
+why-note: TWO NEIGHBOURING PRIMITIVE-HEAD SHAPES BEHAVE DIFFERENTLY and are
+why-note: deliberately NOT pinned here, because each fails at BUILD time (exit 1,
+why-note: `E-PANIC: arg-tag dispatch on impl type that owns no constructors
+why-note: (primitive receiver carries no cell tag)`, emitTagMatch's [] gap) which
+why-note: this verb grades MALFORMED rather than as an observation.  Both measured
+why-note: by hand in sprint unmask-arg-tag-dispatch S-4:
+why-note:   (a) the SINGLE-FILE spelling of main.mdk -- same program with
+why-note:       `interface Speak` declared in the same module instead of imported.
+why-note:   (b) the same cross-module program with `impl Speak Int` DEFINING
+why-note:       `speak _ = "int"` rather than inheriting the default.
+why-note: A THIRD neighbour is fully CORRECT and shows the emitter is not
+why-note: uniformly blind to primitive heads: replacing the local lambda with a
+why-note: top-level unsigned HOF (`apply2 g x = g x`; `apply2 speak 5`) build-runs
+why-note: to exit 0 printing `int|meow`.  So the gap is specific to the arg-tag
+why-note: chain the local route emits, not to primitive receivers as such.
+why-note: All three are loud, none is a silent wrong answer, and all three are the
+why-note: same #1075 residual at different call shapes -- recorded here so the
+why-note: drainer widens the check beyond this row's one spelling.

@@ -1,0 +1,44 @@
+-- #1958 / #2032 — THE DISPATCHER-TRAP CONTROL, i.e. the shape the local pin used to
+-- over-reject.
+--
+-- `main` has NO signature, so there is no enclosing rigid scope: `f`'s parameter var
+-- cannot collapse anything, because there is nothing declared for it to collapse.
+-- Every use is at a distinct GROUND type, which is exactly what the emitter's arg-tag
+-- dispatch chain exists to discriminate. Rejecting this was the over-reject #2032
+-- narrows away; `enclosingRigidScopeInPlay` is False here, so only the DICT channel
+-- is consulted at the four genRestricted sites and `f` generalizes.
+--
+-- The sibling accept_1052_pinned_local_single_type and the reject_* pins guard the
+-- other side of the boundary: with a declared `Sized a => …` signature in play, the
+-- group's constraint monos ARE published, the gate opens, and the multi-type use is
+-- still rejected with a located T-LOCAL-CONSTRAINED-MONO.
+--
+-- Ground truth, derived from the source, NOT captured: `speak` has a DEFAULT ("woof");
+-- `Dog`'s impl overrides it with "woof", `Cat`'s with "meow", `Bell`'s with "ring".
+-- Each `f` call must reach its own receiver's impl, so the three values in source
+-- order are woof, meow, ring. A single collapsed route would print one of them three
+-- times.
+--
+-- Verdict: ACCEPT.
+interface Speak a where
+  speak : a -> String
+  speak _ = "woof"
+
+data Dog = Dog
+
+data Cat = Cat
+
+data Bell = Bell
+
+impl Speak Dog where
+  speak _ = "woof"
+
+impl Speak Cat where
+  speak _ = "meow"
+
+impl Speak Bell where
+  speak _ = "ring"
+
+main =
+  let f = v => speak v
+  println (f Dog ++ "|" ++ f Cat ++ "|" ++ f Bell)

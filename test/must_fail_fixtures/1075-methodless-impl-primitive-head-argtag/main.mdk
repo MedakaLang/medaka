@@ -1,0 +1,20 @@
+-- issue #1075: a cross-module interface with a DEFAULT method, where the impl at the
+-- PRIMITIVE head `Int` is METHOD-LESS (inherits the default) and `Cat`'s impl OVERRIDES
+-- it, reached through a generalized LOCAL LAMBDA (the arg-tag path, not the dict path).
+-- `Int` owns no runtime constructors, so it carries no cell tag and the emitted arg-tag
+-- chain cannot test for it; the receiver falls off the end of the chain into the loud
+-- terminal `@mdk_dispatch_no_impl()`.  Correct behaviour is `woof|meow` (Int inherits
+-- the interface default).  `medaka check` and `medaka run` both already produce it; only
+-- the native binary aborts.
+import iface.{Speak(..), speak}
+
+data Cat = Cat
+
+impl Speak Int where              -- METHOD-LESS at a PRIMITIVE head
+
+impl Speak Cat where
+  speak _ = "meow"
+
+main =
+  let f = v => speak v
+  println (f 5 ++ "|" ++ f Cat)
