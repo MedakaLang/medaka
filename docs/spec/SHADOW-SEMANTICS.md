@@ -1104,6 +1104,47 @@ Given an occurrence of bare name `N` in module `M`:
   > standalone while the built binary still dispatches. Any candidate must be graded
   > on the **executed binary**, not on `run`.
   >
+  > **✅ (d)'s DISAGREEING arm — CONFORMANT 2026-08-30**
+  > ([#2188](https://github.com/MedakaLang/medaka/issues/2188), sprint
+  > `bare-name-is-not-a-key`, slice `S-admitted-iface-all-candidates`). Two or more
+  > admitted declarations that disagree are now a **located reject at the occurrence**,
+  > diagnostic code **`T-AMBIGUOUS-SHADOW-DECL`**, span = the **application node** whose
+  > argument is the outermost admitted declaration's receiver (i.e. the call site, not
+  > the argument) — pinned as `test/shadow_fixtures/i27_importer_two_admitted_disagree/`
+  > on `check`, `run` and `build`, with its `order-swapped.mdk` companion pinning (e).
+  > Its agreeing twin, `i28_importer_two_admitted_agree/`, pins (d) bullet 2 at the same
+  > graph minus one `impl` and must stay `99` on all three verbs.
+  >
+  > **What the implementation had to grow, stated because "widen the read" is the wrong
+  > mental model and cost a refused slice.** `admittedIfaceFor` (`types/typecheck.mdk`)
+  > is a **cardinality-1 projection** of `methodIfaceParamsRef`, which holds ONE payload
+  > per bare name — its single-winner-ness is a property of the TABLE, not of the read —
+  > and its "declined" fallback is a last-write-wins **floor**, i.e. exactly the
+  > outside-the-program tie-break (d) bullet 3 forbids. MEASURED at `7e5ec5e7`: this
+  > clause's own corpus printed **99** with `import amodI…` first and **55** with
+  > `import zmodI…` first, on `run` and on the shipped binary — a live (e) violation the
+  > 2026-08-09 conformance note above does not record. The fix therefore adds a genuine
+  > per-module **admitted-SET** table, built at `overrideScopedMethods` by that
+  > function's own ladder and holding an entry ONLY for names with ≥2 admitted
+  > declarations, so every name with 0 or 1 keeps the single-winner projection
+  > byte-identically. **Because two distinct interfaces can never yield the same impl,
+  > "they agree" reduces at cardinality ≥2 to "they all fall to the standalone"** — the
+  > verdict is `reject` iff at least one admitted declaration's own impl query hits.
+  > The joint evaluation (b) requires happens at the **outermost** admitted dispatch
+  > index, the only spine node at which every declaration's receiver argument has been
+  > inferred; an unanswerable receiver (under-application, no recorded index, still
+  > ungrounded) **defers to the pre-existing behaviour and never rejects**.
+  >
+  > **Not reached by that fix, and deliberately so.** The reject fires from the
+  > importer-shadow application arms, so it is scoped to an **applied** occurrence of a
+  > name that is a shadow under S1 — an under-applied occurrence (`mth n` where the
+  > outermost admitted receiver is argument 1) still takes the old path. The
+  > single-winner `admittedIfaceFor` remains what the other readers consume; that is
+  > sound for the cells this arm decides (a rejected program has no denotation to route,
+  > and an all-miss agreeing set makes every winner miss too) but it is not a general
+  > widening, and a future cell that needs per-declaration *routing* rather than a
+  > per-declaration *verdict* will need more.
+  >
   > **⟲ Overturn condition.** (b) is overturned by a program, correct under the
   > language's other rules, whose intended meaning requires the receiver argument of
   > one declaration together with the impl query of another. (d)'s reject arm is
@@ -1144,18 +1185,32 @@ Given an occurrence of bare name `N` in module `M`:
   > | [#1182](https://github.com/MedakaLang/medaka/issues/1182) / [#1620](https://github.com/MedakaLang/medaka/issues/1620) | **NOT GOVERNED.** S1's shadow-hood conjunct requires `N ∈ funDef-names(standalones defined in M or imported into M)` (S1, above; SHADOW-SEMANTICS.md:249-253) — a plain top-level `DFunDef` of the colliding name. #1182/#1620's repro has no such standalone: `m` exists **only** as two interface methods (`interface A1 … m`, `interface A2 … m`), never a top-level function. S1's conjunct is vacuously false, so S2-DECL never fires — the same pattern this document already names for #1302 (⚠️ under S1) and the wildcard-reexport case (row 44 / `msmth`, above): *"a different mechanism."* The actual mechanism, per #1182's own filed text: `matchingEntries` selects candidates by **method-name membership**, not by interface, so impls of different interfaces sharing a method name land in one candidate set and are ranked against each other by `pickMostSpecificEntry` — DICT-SEMANTICS §6 C1 coherence, a same-class-selector question, not an occurrence-granularity or import-order scoping question S2-DECL could ever reach |
   > | [#1265](https://github.com/MedakaLang/medaka/issues/1265) | **NOT GOVERNED.** Same vacuous-conjunct reasoning as the #1182/#1620 row: #1265's colliding name `speak` exists **only** as two interface methods (`ifa::Speak.speak`, `ifb::Greet.speak`), never a standalone top-level `DFunDef` — S1's shadow-hood conjunct is vacuously false, so S2-DECL never fires. The actual mechanism, per #1265's own filed text: `ifaceIdsAtTag tag` returns the identity of **every** interface implementing at that tag, and `defaultOwnedBy`'s filter yields **two** survivors when one type implements two interfaces sharing a method name, so the `_ => Some fallback` arm returns first-match — a cross-module DEFAULT-candidate registry leak (DICT-SEMANTICS §5 / §8 I4: the emitted symbol `mdk_default_<method>_<tag>` has no room for two interfaces' distinct default bodies), not an occurrence-granularity or intra-module problem |
   >
-  > **What this note deliberately does NOT do, and why.** It does **not** commission
-  > implementation of (d)'s **≥2-admitted-and-disagreeing** reject arm, and it does not
-  > create a diagnostic code for it. S2-DECL's own ⟲ overturn condition names an
-  > **occurrence-level carrier recording which interface the author named** as the
-  > standing candidate to convert *"many of today's reject cells into the one-admitted
-  > case"*. That carrier is live work. Implementing the reject before the carrier lands
-  > would narrow acceptance across a cell set the carrier is expected to shrink — a
-  > false-reject widening taken twice, against a shape that today has **no fixture in
-  > either corpus** (derive, do not trust: no entry under `test/shadow_fixtures/` or
-  > `test/import_order_fixtures/` names two distinct interfaces declaring one method
-  > name). **Sequencing rule: the carrier first, then (d)'s reject arm over whatever
-  > cells remain.**
+  > **⚠️ SUPERSEDED 2026-08-30 — this note's sequencing rule was OVERTAKEN, and the
+  > paragraph is corrected rather than deleted so the next reader sees which half stood.**
+  > What follows in strikethrough spirit is what this note said on 2026-08-16; the
+  > **carrier-first** ordering it prescribed is no longer in force. Val adjudicated the
+  > re-cut of #2188 on 2026-08-30 and commissioned (d)'s reject arm directly, and the
+  > premise the ordering rested on had by then MOVED: the note argued the reject would be
+  > *"a false-reject widening taken twice"* against cells the carrier is expected to
+  > shrink, but the cell actually narrowed — two admitted declarations that DISAGREE —
+  > was measured at `7e5ec5e7` to be **order-dependent on `run` and on the shipped
+  > binary** (99 one clause order, 55 the other), i.e. already non-conformant with (e)
+  > *whatever value it produced*. Narrowing a cell that has no order-invariant value to
+  > preserve is not a false-reject risk of the shape the ordering was protecting against.
+  > What the note said, kept for the record: *it does not commission implementation of
+  > (d)'s ≥2-admitted-and-disagreeing reject arm, and it does not create a diagnostic
+  > code for it; S2-DECL's own ⟲ overturn condition names an occurrence-level carrier
+  > recording which interface the author named as the standing candidate to convert
+  > "many of today's reject cells into the one-admitted case"; sequencing rule: the
+  > carrier first, then (d)'s reject arm over whatever cells remain.*
+  >
+  > **What still stands from it.** The **carrier** remains the standing candidate to
+  > convert reject cells back into one-admitted cells, and its ⟲ overturn condition on
+  > (d) is untouched — landing it later is a widening of acceptance, not a conflict.
+  > And the note's derivation that the disagreeing shape had **no fixture in either
+  > corpus** was correct as of 2026-08-16; it is no longer true — see
+  > `test/shadow_fixtures/i27_importer_two_admitted_disagree/` and its agreeing twin
+  > `i28_importer_two_admitted_agree/`.
   >
   > A pin existed for a neighbouring shape at
   > `test/must_fail_fixtures/1664-decl-agreeing-both-admitted/` (closed and deleted
@@ -1164,6 +1219,13 @@ Given an occurrence of bare name `N` in module `M`:
   > convergence evidence); its measured causal variable was the graph presence of a
   > non-admitted declaration's impl, i.e. an S2-DECL **(c)** conformance question,
   > not the (d) disagreeing arm — which still has no fixture anywhere.
+  >
+  > **Diagnostic code — ✅ CREATED 2026-08-30 as `T-AMBIGUOUS-SHADOW-DECL`** (#2188).
+  > The reservation below said what the code had to be and why no existing family could
+  > host it; that reasoning was followed exactly, and the code is now emitted by the
+  > binary, so its row IS added to `compiler/DIAGNOSTIC-CODES-DESIGN.md` — the catalog
+  > rule the last sentence states is satisfied in the direction that makes the row
+  > truthful, not violated. The original reservation, unchanged:
   >
   > **Diagnostic code — RESERVED, NOT CREATED.** When (d)'s disagreeing arm is
   > implemented it needs a **new `T-` code**, and neither existing family will host it:

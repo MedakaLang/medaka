@@ -1,0 +1,10 @@
+-- I27-swapped (#2188): byte-identical to `main.mdk` except the two interface-module
+-- import clauses are swapped, graded as its own row. S2-DECL (e): a resolution rule whose
+-- answer moves when two `import` clauses are swapped is non-conformant WHATEVER value it
+-- produces -- "including when the two orders differ only in accepting versus rejecting".
+-- At base this ordering printed 55 where `main.mdk` printed 99; both must now REJECT.
+import fmodI.{mth}
+import zmodI.{IZ, zf}
+import amodI.{IA, af}
+
+main = println (mth "abc" 5 + af 0 + zf 0)

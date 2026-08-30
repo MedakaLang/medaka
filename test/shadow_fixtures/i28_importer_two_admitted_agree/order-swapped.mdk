@@ -1,0 +1,8 @@
+-- I28-swapped (#2188): byte-identical to `main.mdk` except the two interface-module
+-- import clauses are swapped, graded as its own row. S2-DECL (e): the choice in (d) may
+-- never be a function of import-clause order, so both rows must read 99.
+import fmodI.{mth}
+import zmodI.{IZ, zf}
+import amodI.{IA, af}
+
+main = println (mth "abc" 5 + af 0 + zf 0)

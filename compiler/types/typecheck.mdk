@@ -44,6 +44,12 @@ import frontend.ast.{
   -- absent origin makes no claim here while `ifaceIdMatches`/`tabKeyEq` refuse
   -- absence outright — do not copy either shape to the other site.
   sameTyConHead,
+  -- #2188: `ifaceSortKey`'s renderer only — the CANONICAL ORDER of an admitted set is
+  -- §8 I4's `(originModule, name)` pair, and this is the one place that pair is
+  -- rendered.  ⚠️ Used to SORT, never to COMPARE FOR IDENTITY: absence renders `""`
+  -- here, so `ifaceSortKey` pairs it with the bare name and `sortInsertIfaceRef` never
+  -- treats two equal keys as the same declaration.
+  ifaceIdentity,
   tyConBuiltin,
   firstTyLoc,
   firstTyLocList,
@@ -173,6 +179,7 @@ import support.util.{
   isEmptyL,
   isNonEmptyL,
   minI,
+  maxI,
   isSome,
   orElseOpt,
   zipL,
@@ -8271,6 +8278,7 @@ data PerRun = PerRun {
     pendingUnopSites : Ref (List PendingEntry),
     pendingArithSites : Ref (List (Ref Route, Mono)),
     methodIfaceParamsRef : Ref (OrdMap (IfaceRef, List String, Ty, List (String, List Kind))),
+    methodAdmittedIfacesRef : Ref (OrdMap (List IfaceRef)),
     -- ⚠️ `registeredIfacesRef` was HERE and is RETIRED by #1569 — see the sibling
     -- `CrossRun.universeRegisteredIfacesRef`'s retirement note for the history.
     implObls : Windowed UObligation,  -- #841: pendingImplObligations/N, ported onto Windowed; #991: onto UObligation
@@ -8388,6 +8396,7 @@ freshPerRun _ = PerRun {
   pendingUnopSites = Ref [],
   pendingArithSites = Ref [],
   methodIfaceParamsRef = Ref omEmpty,
+  methodAdmittedIfacesRef = Ref omEmpty,
   implObls = wNew (),
   numlitRefs = Ref [],
   poisonedVars = Ref [],
@@ -13995,7 +14004,7 @@ shadowStandaloneHead _ _ = None
 shadowStandaloneSpineHeadAt : TcEnv -> Expr -> Option (String, List (Ref Route), Expr, List Expr)
 shadowStandaloneSpineHeadAt env f = match shadowStandaloneHead env (appSpineHead f)
   None => None
-  Some (name, tagRefs) => map (nodes => (name, tagRefs, appSpineHead f, nodes)) (shadowSpineNodesAt name f)
+  Some (name, tagRefs) => map (nodes => (name, tagRefs, appSpineHead f, nodes)) (shadowSpineNodesAtImporter name f)
 
 -- a name that is BOTH a registered importer shadow (standaloneValuesRef), has a
 -- stashed standalone scheme, and names a single-TYPARAM interface's method.
@@ -14082,31 +14091,49 @@ inferShadowApp env mname tagRefs f x =
   -- groundShadowReceiver is also inert on an already-grounded receiver, so i1/i3/i4 (all
   -- concrete receivers) are byte-identical.
   let _ = groundShadowReceiver (importerShadowDomain mname) tx (definerReceiverIsDictVar mname tx) dloc
-  match headTyconMono tx
+  -- #2188 / S2-DECL (d): the cardinality decision, asked BEFORE the single-winner impl
+  -- question below.  Inert (`AdDefer`, and `groundAdmittedReceivers` a no-op) for every
+  -- name with fewer than two admitted declarations — see `importerAdmittedVerdict`.
+  let _ = groundAdmittedReceivers mname [tx] dloc
+  match importerAdmittedVerdict perRun.value.bodyImplEnvRef.value mname [tx]
+   AdReject ifs =>
+     let _ = pushAmbiguousShadowDecl mname ifs dloc
+     -- T-ERRORS-ACCUM: the diagnostic is the verdict; inference still has to produce a
+     -- type for the occurrence, and the standalone is the only denotation this call has
+     -- that no admitted declaration disputes the SHAPE of.
+     inferShadowStandaloneArm env mname tagRefs f x tx
+   AdStandalone => inferShadowStandaloneArm env mname tagRefs f x tx
+   AdDefer => match headTyconMono tx
     -- ARCH B-2.1-g: the S2 impl question, off the GRAPH-GLOBAL substrate — see
     -- `ieImplExistsForHead`.  It used to read the cumulative topological PREFIX
     -- (`shadowKeyTableRef`), which made this answer depend on where in the module order
     -- the receiver's impl happened to sit.
     Some head => if ieImplExistsForHead perRun.value.bodyImplEnvRef.value mname head then inferApp (envAlphaLets env) (EApp f x) (inferShadowAppHead env f) tx
-    else match lookupAssoc mname perRun.value.shadowStandaloneSchemesRef.value
-      Some sscheme =>
-        let smono = instantiate sscheme
-        let r = freshVar ()
-        let eff = openRow ()
-        let _ = unify smono (TFun tx eff r)
-        let _ = performEffect perRun.value.curEffect eff
-        let _ = stampRoutes tagRefs
-        -- S-1 (Fork D — the importer half): an IMPORTED constrained standalone shadowing
-        -- a method breaks identically to a local one (its def is dict-passed in its own
-        -- module; this call must supply the dicts).  Compute them off the head type we
-        -- just unified, and defer the ROUTE stamp to resolveRLocalSites — stampRoutes
-        -- above ran mid-inference, when the receiver is not yet solved, so it could only
-        -- write `RLocal sym []`.  forceLocal=True: this arm has already committed the
-        -- site's TYPE to the standalone, so its route is not open to re-derivation.
-        let _ = recordImporterShadowDicts env mname tagRefs tx
-        r
-      None => inferApp (envAlphaLets env) (EApp f x) (inferShadowAppHead env f) tx
+    else inferShadowStandaloneArm env mname tagRefs f x tx
     None => inferApp (envAlphaLets env) (EApp f x) (inferShadowAppHead env f) tx
+
+-- The STANDALONE arm of `inferShadowApp`, factored out verbatim so S2-DECL (d)'s
+-- `AdStandalone` and `AdReject` verdicts reach exactly the arm the impl-query miss
+-- already reached — one arm, three callers, no second copy to drift.
+inferShadowStandaloneArm : TcEnv -> String -> List (Ref Route) -> Expr -> Expr -> Mono -> Mono
+inferShadowStandaloneArm env mname tagRefs f x tx = match lookupAssoc mname perRun.value.shadowStandaloneSchemesRef.value
+  Some sscheme =>
+    let smono = instantiate sscheme
+    let r = freshVar ()
+    let eff = openRow ()
+    let _ = unify smono (TFun tx eff r)
+    let _ = performEffect perRun.value.curEffect eff
+    let _ = stampRoutes tagRefs
+    -- S-1 (Fork D — the importer half): an IMPORTED constrained standalone shadowing
+    -- a method breaks identically to a local one (its def is dict-passed in its own
+    -- module; this call must supply the dicts).  Compute them off the head type we
+    -- just unified, and defer the ROUTE stamp to resolveRLocalSites — stampRoutes
+    -- above ran mid-inference, when the receiver is not yet solved, so it could only
+    -- write `RLocal sym []`.  forceLocal=True: this arm has already committed the
+    -- site's TYPE to the standalone, so its route is not open to re-derivation.
+    let _ = recordImporterShadowDicts env mname tagRefs tx
+    r
+  None => inferApp (envAlphaLets env) (EApp f x) (inferShadowAppHead env f) tx
 
 -- #411: infer an IMPORTER-shadow application's head with shadowHeadCtxRef flagged, so
 -- maybeStandaloneValueMono's new importer arm does not pin an APPLIED occurrence to the
@@ -14139,17 +14166,34 @@ inferShadowAppAt env mname tagRefs hd nodes f x =
   let k = listLen pre
   let tx = infer env x
   let _ = groundShadowReceiver (importerShadowDomainAt mname k) tx (definerReceiverIsDictVar mname tx) dloc
-  match headTyconMono tx
+  -- #2188 / S2-DECL (d): [ats] is every argument up to and including THIS node's, so at
+  -- the OUTERMOST admitted dispatch index (`importerDispatchIdxOuter`, the index this arm
+  -- is gated on) every admitted declaration's own receiver argument is in it — which is
+  -- what makes (b)'s per-declaration pairs jointly evaluable here and nowhere else.
+  let ats = map snd pre ++ [tx]
+  let _ = groundAdmittedReceivers mname ats dloc
+  match importerAdmittedVerdict perRun.value.bodyImplEnvRef.value mname ats
+   AdReject ifs =>
+     let _ = pushAmbiguousShadowDecl mname ifs dloc
+     inferShadowStandaloneArmAt env mname tagRefs hd pre f x tx
+   AdStandalone => inferShadowStandaloneArmAt env mname tagRefs hd pre f x tx
+   AdDefer => match headTyconMono tx
     Some head => if ieImplExistsForHead perRun.value.bodyImplEnvRef.value mname head then inferAppNodes (envAlphaLets env) (inferShadowAppHead env hd) (pre ++ [(EApp f x, tx)])
-    else match lookupAssoc mname perRun.value.shadowStandaloneSchemesRef.value
-      Some sscheme =>
-        let smono = instantiate sscheme
-        let r = unifySpineResult smono (map snd pre ++ [tx])
-        let _ = stampRoutes tagRefs
-        let _ = recordImporterShadowDictsAt env mname tagRefs (map snd pre ++ [tx]) tx
-        r
-      None => inferAppNodes (envAlphaLets env) (inferShadowAppHead env hd) (pre ++ [(EApp f x, tx)])
+    else inferShadowStandaloneArmAt env mname tagRefs hd pre f x tx
     None => inferAppNodes (envAlphaLets env) (inferShadowAppHead env hd) (pre ++ [(EApp f x, tx)])
+
+-- The STANDALONE arm of `inferShadowAppAt`, factored out verbatim — the peer of
+-- `inferShadowStandaloneArm` at dispatch index k > 0, and reached from the same three
+-- verdicts.
+inferShadowStandaloneArmAt : TcEnv -> String -> List (Ref Route) -> Expr -> List (Expr, Mono) -> Expr -> Expr -> Mono -> Mono
+inferShadowStandaloneArmAt env mname tagRefs hd pre f x tx = match lookupAssoc mname perRun.value.shadowStandaloneSchemesRef.value
+  Some sscheme =>
+    let smono = instantiate sscheme
+    let r = unifySpineResult smono (map snd pre ++ [tx])
+    let _ = stampRoutes tagRefs
+    let _ = recordImporterShadowDictsAt env mname tagRefs (map snd pre ++ [tx]) tx
+    r
+  None => inferAppNodes (envAlphaLets env) (inferShadowAppHead env hd) (pre ++ [(EApp f x, tx)])
 
 -- S1-RESIDUAL-B: the IMPORTED standalone's declared domain — the first arrow domain of the
 -- scheme stashed in shadowStandaloneSchemesRef (the concrete-head pick made per module by
@@ -14834,6 +14878,26 @@ shadowSpineNodesAt name f =
   let nodes = appSpineNodes f
   if isEmptyL nodes then None
   else match methodDispatchIdx name
+    Some k => if k == listLen nodes then Some nodes else None
+    None => None
+
+-- #2188: the IMPORTER-path twin, differing in ONE respect — the index it gates on is
+-- `importerDispatchIdxOuter`, the OUTERMOST index over the admitted SET, rather than the
+-- single admitted winner's.  With two admitted declarations dispatching at different
+-- argument positions there are two candidate dispatch NODES, and S2-DECL (b)'s
+-- per-declaration (receiver, impl-query) pairs can only be evaluated jointly at the
+-- outer one — the inner node has not inferred the outer argument yet.
+--
+-- ⚠️ The DEFINER arms keep `shadowSpineNodesAt`, deliberately: under the S2 inversion a
+-- definer shadow never consults the impl universe, so it has no per-declaration query to
+-- evaluate and no reason to move its node.  `importerDispatchIdxOuter` falls back to
+-- `methodDispatchIdx` for every name with fewer than two admitted declarations, so this
+-- function is `shadowSpineNodesAt` verbatim on every program that exists today.
+shadowSpineNodesAtImporter : String -> Expr -> Option (List Expr)
+shadowSpineNodesAtImporter name f =
+  let nodes = appSpineNodes f
+  if isEmptyL nodes then None
+  else match importerDispatchIdxOuter name
     Some k => if k == listLen nodes then Some nodes else None
     None => None
 
@@ -18600,7 +18664,22 @@ ieImplExistsForHead env name hk =
   -- same reason ([T-PERF-HUNT]: Medaka is strict, so an in-loop projection is rebuilt
   -- once per row).  The scan itself stays the same single linear walk of `ieHeadRows`
   -- with one more conjunct per row — no rescan, no new bucket.
-  ieImplExistsForHeadGo (ieHeadRows (Some hk) env) name (dispHeadTab hk) (admittedIfaceFor name)
+  ieImplExistsForHeadOf env name hk (admittedIfaceFor name)
+
+-- #2188: the SAME query with the admitted declaration supplied by the CALLER rather than
+-- projected from the single-winner table.  The one caller that supplies it is S2-DECL
+-- (d)'s cardinality decision (`importerAdmittedVerdict`), which must ask the query once
+-- PER admitted declaration — `admittedIfaceFor` cannot express that, because it is a
+-- cardinality-1 projection by construction.  The body is `ieImplExistsForHead`'s former
+-- body verbatim; the three existence READS above are unchanged and still route through
+-- the single-argument spelling, so no read has been split off from the set.
+ieImplExistsForHeadOf : ImplEnv -> String -> HeadKey -> Option IfaceRef -> Bool
+ieImplExistsForHeadOf env name hk admitted =
+  ieImplExistsForHeadGo
+    (ieHeadRows (Some hk) env)
+    name
+    (dispHeadTab hk)
+    admitted
 
 -- The declaration THIS module's import scope admits for [name] — `methodIfaceParamsRef`
 -- is `applyMethodScopeOverrides`' output, so this is L2's ALREADY-RESOLVED answer, re-read
@@ -18611,6 +18690,139 @@ admittedIfaceFor : String -> Option IfaceRef
 admittedIfaceFor name = map
   ((iface, _, _, _) => iface)
   (omLookup name perRun.value.methodIfaceParamsRef.value)
+
+-- ══ S2-DECL (d): THE CHOICE, BY CARDINALITY OF THE ADMITTED SET (#2188) ═══════
+--
+-- `admittedIfaceFor` above is a CARDINALITY-1 projection: one `Option`, one entry per
+-- bare name in `methodIfaceParamsRef`.  When two declarations are admitted it cannot
+-- report that fact, so the "declined" case fell through to a last-write-wins floor —
+-- and the floor moves with import-clause order, which S2-DECL (e) forbids outright
+-- ("A resolution rule whose answer moves when two `import` clauses are swapped is
+-- non-conformant WHATEVER value it produces").  MEASURED at base `7e5ec5e7`: #2188's
+-- graph prints 99 with `import amodI…` first and 55 with `import zmodI…` first, on
+-- `run` and on the built binary.
+--
+-- This is the decision the projection could not express, and it is asked ONCE, at the
+-- importer-shadow application arms, over the whole admitted set:
+--
+--   * fewer than two admitted → `AdDefer`.  Every existing program lands here and the
+--     old code runs byte-identically; (d)'s "exactly one" and "none" arms are already
+--     what `admittedIfaceFor` + `ieImplExistsForHead` implement between them.
+--   * two or more, and NONE of their own impl queries hits → `AdStandalone`.  (d)'s
+--     bullet 2: they agree, and what they agree on is the standalone.
+--   * two or more, and at least one hits → `AdReject`.  (d)'s bullet 3.
+--
+-- ⚠️ WHY "AT LEAST ONE HIT" IS THE WHOLE OF THE DISAGREEMENT TEST, not a shortcut.
+-- (d) bullet 2 admits "two or more that yield the SAME denotation (all the standalone,
+-- or all the same impl)".  Two DISTINCT interfaces can never yield the same impl — an
+-- `impl IA String` and an `impl IZ String` are different bodies — and the admitted set
+-- is a set of distinct declarations (`addMethodIdentCand` upserts by identity).  So for
+-- a set of size ≥ 2 the "same impl" half of bullet 2 is uninhabited, and "they agree"
+-- reduces to "they all fall to the standalone", i.e. zero hits.  One hit alongside a
+-- miss is bullet 3; two hits is two different impls, also bullet 3.
+--
+-- ⚠️ AN UNANSWERABLE RECEIVER DEFERS, IT NEVER REJECTS.  If any admitted declaration's
+-- own receiver argument is missing from the applied prefix (under-application), has no
+-- recorded dispatch index, or is still ungrounded after `groundAdmittedReceivers`, the
+-- verdict is `AdDefer`: this clause narrows acceptance, and narrowing it on a receiver
+-- whose head is not yet known would reject programs (d) says nothing about.
+data AdmittedVerdict = AdDefer | AdStandalone | AdReject (List IfaceRef)
+
+-- The admitted SET for [name] — non-empty ONLY for a name with two or more admitted
+-- declarations (see `admittedIfaceSets`), so an empty answer means "the single-winner
+-- projection is correct here", not "nothing is admitted".
+admittedIfacesFor : String -> List IfaceRef
+admittedIfacesFor name =
+  fromOption [] (omLookup name perRun.value.methodAdmittedIfacesRef.value)
+
+importerAdmittedVerdict : ImplEnv -> String -> List Mono -> AdmittedVerdict
+importerAdmittedVerdict env name ats = match admittedIfacesFor name
+  [] => AdDefer
+  ifs => if listLen ifs < 2 then AdDefer
+  else match admittedDeclHitters env name ifs ats
+    None => AdDefer
+    Some hits => if isEmptyL hits then AdStandalone else AdReject ifs
+
+-- The admitted declarations whose OWN (receiver argument, impl query) pair — S2-DECL
+-- (b), both halves from the same declaration — HITS.  `None` if any declaration's pair
+-- cannot be evaluated at all; see the ⚠️ on `AdmittedVerdict`.
+admittedDeclHitters : ImplEnv -> String -> List IfaceRef -> List Mono -> Option (List IfaceRef)
+admittedDeclHitters _ _ [] _ = Some []
+admittedDeclHitters env name (ir::rest) ats = match admittedDeclHits env name ir ats
+  None => None
+  Some hit => map (hs => if hit then ir::hs else hs) (admittedDeclHitters env name rest ats)
+
+-- S2-DECL (a)+(b) for ONE declaration: its receiver argument is the applied argument at
+-- ITS OWN dispatch index (not the occurrence's first argument), and the impl query asks
+-- about an impl of THAT interface at that receiver's head — over the unchanged
+-- graph-global row set (`ieImplExistsForHeadOf` is `ieImplExistsForHead`'s own body).
+admittedDeclHits : ImplEnv -> String -> IfaceRef -> List Mono -> Option Bool
+admittedDeclHits env name ir ats = do
+  k <- lookupIdxById ir name driverState.value.methodDispatchIdxByIdRef.value
+  at <- nthMono k ats
+  hk <- headTyconMono at
+  Some (ieImplExistsForHeadOf env name hk (Some ir))
+
+nthMono : Int -> List Mono -> Option Mono
+nthMono _ [] = None
+nthMono k (x::rest) = if k <= 0 then Some x else nthMono (k - 1) rest
+
+-- The OUTERMOST dispatch index over the admitted set — the spine node at which every
+-- admitted declaration's receiver argument is already inferred, and therefore the only
+-- node at which (b)'s per-declaration pairs can be evaluated JOINTLY.  Falls back to
+-- `methodDispatchIdx` (the single-winner index) for every name with fewer than two
+-- admitted declarations, i.e. for every program that exists today.
+importerDispatchIdxOuter : String -> Option Int
+importerDispatchIdxOuter name = match admittedIdxMax name (admittedIfacesFor name)
+  Some k => Some k
+  None => methodDispatchIdx name
+
+admittedIdxMax : String -> List IfaceRef -> Option Int
+admittedIdxMax _ [] = None
+admittedIdxMax name (ir::rest) =
+  let here = lookupIdxById ir name driverState.value.methodDispatchIdxByIdRef.value
+  match admittedIdxMax name rest
+    None => here
+    Some k => match here
+      None => Some k
+      Some j => Some (maxI j k)
+
+-- Ground each admitted declaration's OWN receiver argument to the standalone's declared
+-- domain at that index, before the impl queries are asked — the P0-20 symmetry rule
+-- ("ask the impl question about the SAME head the route resolver will") applied once per
+-- declaration instead of once per occurrence.  A no-op for every name with fewer than
+-- two admitted declarations, since `admittedIfacesFor` answers `[]` there.
+groundAdmittedReceivers : String -> List Mono -> Option Loc -> Unit
+groundAdmittedReceivers mname ats dloc =
+  groundAdmittedGo mname (admittedIfacesFor mname) ats dloc
+
+groundAdmittedGo : String -> List IfaceRef -> List Mono -> Option Loc -> Unit
+groundAdmittedGo _ [] _ _ = ()
+groundAdmittedGo mname (ir::rest) ats dloc =
+  let _ = match lookupIdxById ir mname driverState.value.methodDispatchIdxByIdRef.value
+    None => ()
+    Some k => match nthMono k ats
+      None => ()
+      Some at => groundShadowReceiver (importerShadowDomainAt mname k) at (definerReceiverIsDictVar mname at) dloc
+  groundAdmittedGo mname rest ats dloc
+
+-- ERROR-QUALITY: name the two things that collide, say what the collision costs, then
+-- name the fixes.  Phrased after `aliasAmbiguityMsg`, the nearest neighbour in this file.
+-- The interface list is the SORTED admitted set, so the prose does not encode import
+-- order any more than the verdict does (S2-DECL (e)).
+pushAmbiguousShadowDecl : String -> List IfaceRef -> Option Loc -> Unit
+pushAmbiguousShadowDecl name ifs dloc =
+  pushTypeErrorHelpFixAt
+    "T-AMBIGUOUS-SHADOW-DECL"
+    dloc
+    "'\{name}' is ambiguous here: \{joinWith " and " (map shadowIfaceLabel ifs)} each declare a method '\{name}' and are both in scope, and they do not agree on what '\{name}' denotes at this call."
+    "Bring only one of those interfaces into scope — import the other module without naming its interface — or rename one of the methods. With two interfaces admitted and no discriminator written in the source, any choice here would be the compiler's rather than yours."
+    None
+
+shadowIfaceLabel : IfaceRef -> String
+shadowIfaceLabel ir = match ir.irOrigin
+  OriginModule m => "'\{ir.irName}' (from '\{m}')"
+  _ => "'\{ir.irName}'"
 
 -- 🚨 STILL SPELLING-KEYED, THROUGH `dispHeadTab`/`headTabIs` — the retest keeps the
 -- projection strength of the bucket it scans and NOT a stronger one.  The BUCKET moved
@@ -20590,6 +20802,92 @@ overrideScopedMethods prog cands (n::rest) floor =
       None => floor
       Some payload => omInsert n payload floor
   overrideScopedMethods prog cands rest floor2
+
+-- ── S2-DECL (c)+(d): THE ADMITTED **SET**, not the admitted WINNER (#2188) ──────
+-- `overrideScopedMethods` above answers "which ONE declaration does this module mean",
+-- and its `None` rungs fall back to a last-write-wins floor.  That is a CARDINALITY-1
+-- projection of a question S2-DECL (d) asks by cardinality: with TWO admitted
+-- declarations the floor's answer is "supplied from outside the program the author can
+-- write down" (`docs/spec/SHADOW-SEMANTICS.md`, (d) bullet 3), and MEASURED it moves
+-- with import-clause order — the two orderings of #2188's own graph print 99 and 55.
+--
+-- This companion table records the WHOLE admitted set, by the SAME ladder, for the ONLY
+-- names where the distinction can matter: those with two or more admitted declarations.
+-- A name with 0 or 1 is ABSENT from the table, and every reader of `admittedIfaceFor`
+-- is then byte-identical to before — the single-winner projection stays correct exactly
+-- where S2-DECL says a single declaration decides.
+--
+-- ⚠️ THIS IS NOT A SECOND RESOLVER.  It runs `ownMethodIdent` / `methodCandImported` /
+-- `methodCandAdmitted` — `importedMethodEntry`'s own rungs, in `importedMethodEntry`'s
+-- own precedence order — and differs from it in exactly one respect: where that function
+-- collapses a non-singleton rung to `preludeMethodEntry`, this one keeps the rung.
+--
+-- ⚠️ SORTED, and that is load-bearing, not tidiness.  [cs] arrives in module-processing
+-- order; S2-DECL (e) forbids the choice in (d) from being a function of that order, so
+-- the set is canonicalised here, once, at the one place it is built.
+applyMethodAdmittedSets : List Decl -> OrdMap (List IfaceRef)
+applyMethodAdmittedSets prog =
+  admittedIfaceSets
+    prog
+    crossRun.value.universeMethodIdentsRef.value
+    crossRun.value.universeMethodCollidedRef.value
+    omEmpty
+
+-- Iterates the COLLIDED list, exactly as `overrideScopedMethods` does: a name with one
+-- declaration cannot have two admitted, so it is not a candidate and pays nothing.
+admittedIfaceSets : List Decl -> OrdMap (List (Ident, (IfaceRef, List String, Ty, List (String, List Kind)))) -> List String -> OrdMap (List IfaceRef) -> OrdMap (List IfaceRef)
+admittedIfaceSets _ _ [] acc = acc
+admittedIfaceSets prog cands (n::rest) acc =
+  let acc2 = match omLookup n cands
+    None => acc
+    Some cs =>
+      let ifs = admittedCandIfaces prog n cs
+      if listLen ifs >= 2 then omInsert n ifs acc else acc
+  admittedIfaceSets prog cands rest acc2
+
+-- `scopedMethodEntry`'s ladder, returning the DECIDING rung's survivors rather than its
+-- singleton.  An own declaration still wins outright (nearest scope), so the set is a
+-- singleton there and the name never reaches the table.
+admittedCandIfaces : List Decl -> String -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> List IfaceRef
+admittedCandIfaces prog n cs = match ownMethodIdent prog n
+  Some ident => match lookupMethodCand ident cs
+    Some (iface, _, _, _) => [iface]
+    None => importedCandIfaces prog n cs
+  None => importedCandIfaces prog n cs
+
+-- `importedMethodEntry`'s two rungs, in its order: a method-name import decides when it
+-- says anything (rung 1); only when it says nothing does an interface-name import speak
+-- (rung 2).  See that function's F23 header for why the precedence is what it is.
+importedCandIfaces : List Decl -> String -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> List IfaceRef
+importedCandIfaces prog n cs = match filterList (c => methodCandImported prog n c) cs
+  [] => sortIfaceRefs (map candIfaceOf (filterList (c => methodCandAdmitted prog n c) cs))
+  rung1 => sortIfaceRefs (map candIfaceOf rung1)
+
+candIfaceOf : (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> IfaceRef
+candIfaceOf (_, (iface, _, _, _)) = iface
+
+-- Canonical order for an admitted set: `(originModule, name)` — §8 I4's own identity
+-- pair, rendered through `ifaceIdentity` so an unstamped declaration sorts by its bare
+-- name rather than colliding with every other unstamped one.
+ifaceSortKey : IfaceRef -> String
+ifaceSortKey ir = "\{ifaceIdentity ir.irOrigin ir.irName}|\{ir.irName}"
+
+sortIfaceRefs : List IfaceRef -> List IfaceRef
+sortIfaceRefs xs = sortIfaceRefsGo xs []
+
+sortIfaceRefsGo : List IfaceRef -> List IfaceRef -> List IfaceRef
+sortIfaceRefsGo [] acc = acc
+sortIfaceRefsGo (x::xs) acc = sortIfaceRefsGo xs (sortInsertIfaceRef x acc)
+
+sortInsertIfaceRef : IfaceRef -> List IfaceRef -> List IfaceRef
+sortInsertIfaceRef x [] = [x]
+-- ⚠️ NO DEDUP ARM.  Two declarations with an ABSENT origin render the same sort key
+-- (`ifaceIdentity` maps absence to `""`), and dropping one would silently shrink the
+-- admitted set — S2-DECL (d) decides BY CARDINALITY, so a merge here is a verdict
+-- change.  Sorting is all this does.
+sortInsertIfaceRef x (y::ys)
+  | ifaceSortKey x < ifaceSortKey y = x :: y::ys
+  | otherwise = y :: sortInsertIfaceRef x ys
 
 -- Which declaration of method [n] does THIS module mean?  Same precedence ladder
 -- `tyOriginScope` (`frontend/resolve.mdk`) argues for the TYPE namespace, for the same
@@ -25771,6 +26069,13 @@ checkBodyImpl seed mode prog0 =
     Flat _ => registerMethodIfaceParamsAll fullUniverse
     Module _ _ _ =>
       perRun.value.methodIfaceParamsRef := (aliasQualifiedMethodEntries prog (applyMethodScopeOverrides prog crossRun.value.universeMethodIfaceParamsRef.value))
+      -- #2188 / S2-DECL (d): the SAME ladder's whole admitted set, for the names where
+      -- the winner above is a floor rather than a decision.  Written HERE, beside the
+      -- projection it accompanies, so the two can never be derived from different
+      -- module scopes.  Empty on the Flat arm (a single file has no import graph, so
+      -- no name can have two admitted declarations) — `resetState` mints a fresh
+      -- `PerRun`, whose default for this field is `omEmpty`.
+      perRun.value.methodAdmittedIfacesRef := (applyMethodAdmittedSets prog)
   -- #154 PR-A: the dominant remaining O(N²) in the multi-module typecheck.  The Module arm
   -- used to `registerAllData initialEnv (accData ++ prog0)` — re-registering (and re-minting
   -- the tyvars of) EVERY earlier module's public data ONCE PER MODULE.  Now: COPY the seven
