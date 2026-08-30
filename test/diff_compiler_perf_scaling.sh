@@ -355,6 +355,15 @@ CONSFAM_N="${PERF_CONSFAM_N:-200}"
 # KNOWN_OCEIL_conlocal_mark and both must be re-derived, not scaled.
 CONLOCAL_N="${PERF_CONLOCAL_N:-400}"
 
+# `nestedparens` (#164, S-4) samples at 4000/8000/16000 — S-3's own per-stage
+# isolation band (`profile_main`, no CLI redundancy). Sized to match the exact
+# depths S-3 measured the substrate at, not the default 250/500/1000: `parse`
+# only shows its superlinear signature once single calls run into multiple
+# seconds (0.31s -> 1.03s -> 4.8s here), and a smaller band dilutes into the
+# fixed-prelude/startup constant the way `xref`'s note above warns about.
+# DEEP-only (nightly) — see the SHAPES/PERF_DEEP gate below and its cost note.
+NESTEDPARENS_N="${PERF_NESTEDPARENS_N:-4000}"
+
 # `xref` samples the WASM arm at its OWN, SMALLER band — 2000/4000/8000 rather than
 # the shape's 4000/8000/16000. This is a COST fix and it is the reason this gate is
 # not the CI critical path. The band is deliberate — a ratio measured here does not
@@ -780,6 +789,20 @@ gen_nesting() {
   # binding" without one, which aborted the WHOLE profiler (issue #359 wiring).
   # It matches the _baseline.mdk fixture, so it subtracts straight back out.
   printf 'main = println 1\n' >> "$f"
+}
+
+gen_nestedparens() {
+  n=$1; f=$2; : > "$f"
+  # N-deep PAREN nesting: #164's exact repro shape, `main = ((...N...1...))` —
+  # NOT `gen_nesting`'s flat let-chain (S-3 confirmed: that shape stresses
+  # resolve/typecheck environment depth, this one stresses the parser's
+  # atom/expr precedence-cascade combinators; every downstream tree-walking
+  # pass is negligible on THIS shape, per S-3's per-stage isolation).
+  printf 'main = ' >> "$f"
+  i=0; while [ "$i" -lt "$n" ]; do printf '(' >> "$f"; i=$((i+1)); done
+  printf '1' >> "$f"
+  i=0; while [ "$i" -lt "$n" ]; do printf ')' >> "$f"; i=$((i+1)); done
+  printf '\n' >> "$f"
 }
 
 gen_manydefs() {
@@ -1893,6 +1916,38 @@ TIME_STAGES="parse exhaust-guards desugar resolve mark typecheck elaborate dce m
 # #956 (the TIME-arm fragility issue); self-drains when the lint cost is made linear.
 # One entry per line so draining a single row is a conflict-free one-line deletion
 # (see #880 follow-up; the vars are word-split by `for k in $VAR`, newlines are IFS).
+#
+# nestedparens:parse / nestedparens:fmt / nestedparens:lint (TIME) — #164, S-4. The
+# deep-paren-nesting shape (`main = ((...N...1...))`, NOT `gen_nesting`'s flat
+# let-chain — S-3 confirmed the two shapes hit different substrates) is
+# `Ir`/alloc-INVISIBLE the same way `modules:typecheck` (#1879) is: allocation
+# grows exactly linearly (2.0x/doubling, S-3 per-stage isolation) while wall time
+# does not. Three stages share this AST's deep-`ELoc` walk and are ALL
+# superlinear on it, per S-3's per-stage isolation table and confirmed here
+# (min-of-2, unpinned heap, this box, N=4000->8000->16000):
+#     parse   0.311s -> 1.025s -> 4.802s   r1=3.30  r2=4.69
+#     fmt     0.250s -> 1.132s -> 5.401s   r1=4.53  r2=4.77
+#     lint    0.193s -> 1.400s -> 9.070s   r1=7.25  r2=6.48
+# `desugar`/`resolve`/`mark`/`typecheck`/`elaborate`/`lower`/`emit` stay
+# negligible at this band (S-3: every downstream tree-walking pass is
+# constant-time on this shape even at depth 16,000) — only the three rows above
+# are ledgered; every other stage grades normally (`ok` or SKIP-below-floor).
+# `parse` is the row this slice exists for (#164's own substrate, un-pinned no
+# further than S-3 already pinned it — see its report for the undischarged
+# root-symbol lead); `fmt`/`lint` are the SAME walk over the SAME AST shape, not
+# independent findings, so they are ledgered together rather than as a surprise
+# later. None of these three is anywhere near the 3.0 threshold the way
+# `modules:typecheck` straddles it — every r2 above clears 3.0 by 55%+ — so
+# there is no flap here to special-case; TFIXED uses the file's 2.60 convention.
+# Ceilings: `parse` 7.0 clears the observed top (5.61, this box's first,
+# noisier single-sample run — see the commit that added this row) by ~25%;
+# `fmt` 6.5 clears 4.95 by ~31% (matching `xref:emit`'s ~35%-over-top margin
+# convention); `lint` 9.5 clears 7.25 by ~31%. DEEP-only/nightly placement
+# ([G14]): a single N=16000 run alone costs ~26s and K=5 timing runs at three
+# sizes cost roughly 3 more minutes total, the same order as `xref`'s DEEP band
+# — a flappy-cost arm like this does not belong gating a PR merge.
+# One entry per line so draining a single row is a conflict-free one-line deletion
+# (see #880 follow-up; the vars are word-split by `for k in $VAR`, newlines are IFS).
 # modules:typecheck (TIME) — the multi-module typecheck stage is SUPERLINEAR in TIME on
 # the `modules` shape, in BOTH environments. It is #1879 (OPEN, `verified`), it is NOT
 # fixed by this entry, and the DETERMINISTIC pin of record is and stays
@@ -1942,6 +1997,9 @@ TIME_STAGES="parse exhaust-guards desugar resolve mark typecheck elaborate dce m
 KNOWN_SLOW_TIME="
 manydefs:lint
 modules:typecheck
+nestedparens:parse
+nestedparens:fmt
+nestedparens:lint
 "
 KNOWN_TCEIL_match_typecheck="4.6";    KNOWN_TFIXED_match_typecheck="2.60"
 KNOWN_TCEIL_listlit_typecheck="4.8";  KNOWN_TFIXED_listlit_typecheck="2.60"
@@ -2006,6 +2064,13 @@ KNOWN_TCEIL_xref_emit="5.6";          KNOWN_TFIXED_xref_emit="2.60"
 # ⚠️ That second run is also where the 2.22 floor came from — the arm that proved the
 # PROMOTE branch works is the same one that proved 2.60 would have fired it spuriously.
 KNOWN_TCEIL_modules_typecheck="4.2";  KNOWN_TFIXED_modules_typecheck="2.00"
+# nestedparens:{parse,fmt,lint} (TIME) — see the block above KNOWN_SLOW_TIME for the
+# sample band and the margin/placement rationale. TFIXED uses the file's 2.60
+# convention on all three (none straddles the 3.0 threshold the way
+# modules:typecheck does).
+KNOWN_TCEIL_nestedparens_parse="7.0"; KNOWN_TFIXED_nestedparens_parse="2.60"
+KNOWN_TCEIL_nestedparens_fmt="6.5";   KNOWN_TFIXED_nestedparens_fmt="2.60"
+KNOWN_TCEIL_nestedparens_lint="9.5";  KNOWN_TFIXED_nestedparens_lint="2.60"
 
 is_known_time() {
   # PERF_LEDGER_EXTRA_TIME: add-only deliberate-red seam — see PERF_LEDGER_EXTRA.
@@ -2955,10 +3020,12 @@ unset _cc_t _cc_c
 # callgrind Ir gate, which needs 415 s for the same verdict.
 SHAPES="bindings match listlit nesting xref comments marksweep manyifaces widerecords typos consfam conlocal"
 if [ "$PERF_DEEP" = "1" ]; then
-  SHAPES="$SHAPES manydefs"
+  SHAPES="$SHAPES manydefs nestedparens"
 else
   echo "NOTE: QUICK mode (PERF_DEEP=0). Reduced scope, on purpose:"
   echo "  * manydefs SKIPPED entirely — the per-file lint tier's O(defs^2) detector."
+  echo "  * nestedparens SKIPPED entirely — #164's parse-superlinearity detector, ~3 min"
+  echo "      of K=5 runs at N=16000 (see NESTEDPARENS_N); DEEP/nightly only, [G14]."
   echo "  * xref at N=${XREF_N} (-> $((XREF_N * 4))) instead of 4000 (-> 16000):"
   echo "      emit + wasm-emit still graded and ledgered (both >> the floor at 4N);"
   echo "      resolve drops under the 200ms floor and SKIPs — the #78 detector."
@@ -2975,6 +3042,7 @@ for shape in $SHAPES; do
     widerecords) base_n="$WIDERECORDS_N" ;;
     consfam)    base_n="$CONSFAM_N" ;;
     conlocal)   base_n="$CONLOCAL_N" ;;
+    nestedparens) base_n="$NESTEDPARENS_N" ;;
     *)          base_n="$N" ;;
   esac
   n1="$base_n"; n2=$((base_n * 2)); n3=$((base_n * 4))
