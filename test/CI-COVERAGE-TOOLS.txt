@@ -56,6 +56,15 @@ test/gate_cost_ingest          folds run_gates.sh per-gate timing reports into t
                                report from a narrowable `pull_request` run — IS graded, by
                                test/diff_compiler_gate_cost.sh, which is a registry entry with
                                its own CI job.
+test/gate_cost_collect         the AUTOMATED half of #2180's baseline auto-advance
+                               (S-1-baseline-autoadvance): downloads recent successful runs'
+                               gate-timings artifacts, hands them to the real
+                               test/gate_cost_ingest.sh, re-derives shards, and pushes a fresh
+                               branch for human review. Invoked by name in
+                               .github/workflows/nightly.yml's `gate-cost-autoadvance:` job. A
+                               data-maintenance/orchestration action, like gate_cost_ingest: it
+                               writes files and pushes a branch, and grades nothing about the
+                               compiler itself; it has no pass/fail assertion of its own.
 
 # ── golden capture ──
 # CHECK=1 turns this one into a comparison, but its DEFAULT action is to WRITE the goldens

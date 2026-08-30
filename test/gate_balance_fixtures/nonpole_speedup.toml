@@ -1,0 +1,145 @@
+# test/gate_balance_fixtures/nonpole_speedup.toml — SYNTHETIC, hand-written.
+#
+# THE PERVERSE DIRECTION: the suite got FASTER and `pole / median` got WORSE.
+#
+# One indivisible gate costs 1000ms; six others cost 100ms each, having been
+# made four times faster than they used to be. Nothing about the packing is
+# wrong — LPT puts the big gate on a row of its own and splits the six evenly,
+# which is the best assignment that exists — and yet:
+#
+#   loads       a = 1000   b = 300   c = 300
+#   pole/median 1000 / 300 = 3.333   -> the OLD target of 1.250, MISSED
+#   pole/floor  1000 / max(1000, 1600/3) = 1000 / 1000 = 1.000  -> MET
+#
+# `pole / median` is a ratio against a moving denominator, so speeding up the
+# non-pole gates DRIVES IT UP: the same registry with the six gates at their
+# pre-speedup 400ms scores 1000 / 1200 = 0.833. A metric that reds because the
+# suite improved cannot be enforced, and `ci-gen-drift` is where it would red,
+# with no repair a rebalance can make.
+#
+# `pole / floor` measures the PACKING against the best pole any assignment of
+# this gate set onto these rows could reach, so it is 1.000 here and stays
+# 1.000 as the non-pole gates move. Compare `lpt_packing_gap.toml`, which is
+# the same statement's other half: a packing that really is bad.
+#
+# Committed `shard` values ARE the derived assignment, so this fixture is also
+# a fixed point and `--check` exits 0 on it.
+
+[[gate]]
+name = "pole_gate"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/pole_gate.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "quick1"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/quick1.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "quick2"
+area = "fixture"
+shard = "c"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/quick2.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "quick3"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/quick3.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "quick4"
+area = "fixture"
+shard = "c"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/quick4.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "quick5"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/quick5.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "quick6"
+area = "fixture"
+shard = "c"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/quick6.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+pinned_gates = []
+
+[[shard]]
+name = "b"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/b.txt"
+pinned_gates = []
+
+[[shard]]
+name = "c"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/c.txt"
+pinned_gates = []

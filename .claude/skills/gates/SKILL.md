@@ -116,7 +116,8 @@ reason, not a rename.
 reds a REQUIRED check** (#2178). Rows are filled by measured cost, never by theme, and the
 thing doing the filling is `medaka gate balance`: it packs every schedulable gate onto the
 open rows from the per-gate costs in `test/gate_cost_baseline.json`, honouring each row's
-`wasm_arm` toolchain constraint and `full_cores` closure and an enforced pole/median budget.
+`wasm_arm` toolchain constraint and `full_cores` closure and an enforced pole/floor budget
+(the pole against the best pole any assignment could reach — #2216, `GATE-REGISTRY-DESIGN.md` §13).
 
 A new `[[gate]]` still needs SOME `shard` string — the schema requires the field and it
 cannot be left pending. Write any row name you like (or `other-job` if a job outside the

@@ -5,8 +5,8 @@
 # `intruder` names the `full_cores` row `pin`, which declares only `pinned1`.
 # Every other property this fixture has is DELIBERATELY healthy, because that
 # is what made the real injection invisible: the packing is legal, every gate
-# is costed, the open rows come out at 200ms each and the projected pole/median
-# is 1.000 — comfortably inside the enforced 1.25 — and the derived assignment
+# is costed, the open rows come out at 200ms each — an even packing, well
+# inside the enforced pole/floor budget — and the derived assignment
 # for the open rows is byte-identical to the committed one.
 #
 # So before the `pinned_gates` check existed, `medaka gate balance` on this
