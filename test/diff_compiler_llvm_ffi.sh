@@ -58,6 +58,12 @@
 # exit 0.  Its read-only lines are the regression floor for the copy-back being
 # unconditional: it now also runs after every array call C never wrote to.
 #
+# CELL 13 is the INBOUND-STRING validity slice (#2175).  It crosses real C
+# pointers through `mdk_ffi_str_in`: canonical 1/2/3/4-byte UTF-8 and NULL stay
+# accepted, while every malformed class traps before a malformed Medaka String
+# can enter the runtime representation.  The error text is asserted as well as
+# the nonzero exit so a signal crash cannot satisfy the gate.
+#
 # Usage:  sh test/diff_compiler_llvm_ffi.sh
 # Exit:   0 every cell produces its expected output;
 #         1 a build failed or the output differs;
@@ -630,6 +636,80 @@ else
     echo "ok   ffi_catalog_authority  one catalog fact routed bitAnd; value 240, no user-FFI declaration"
   fi
 fi
+
+# ── cell 13: INBOUND String is valid Unicode-scalar UTF-8 (#2175) ────────────
+# The valid half is an exact byte round-trip from the C arrays in
+# ffi_abi_probe.c, including the NULL-as-empty convention.  The hostile half
+# enumerates the independent rejection rules rather than using one generic bad
+# byte: stray continuation, bad continuation, truncation, overlong encoding,
+# surrogate encoding, and a codepoint above U+10FFFF.  Before the fix every row
+# was copied into a String cell and the program exited 0.
+cat > "$W/ffi_string_valid.mdk" <<'CELL13V'
+extern ffiStringNull : Unit -> <FFI> String
+extern ffiStringAscii : Unit -> <FFI> String
+extern ffiStringTwo : Unit -> <FFI> String
+extern ffiStringThree : Unit -> <FFI> String
+extern ffiStringFour : Unit -> <FFI> String
+
+main : <IO, FFI> Unit
+main =
+  let _ = println ("null:" ++ ffiStringNull ())
+  let _ = println (ffiStringAscii ())
+  let _ = println (ffiStringTwo ())
+  let _ = println (ffiStringThree ())
+  println (ffiStringFour ())
+CELL13V
+
+EXPECT_STRING_VALID='null:
+ASCII
+¢
+€
+😀'
+
+if ! MEDAKA_RT_OBJ="$W/combined.o" "$MEDAKA" build "$W/ffi_string_valid.mdk" \
+     -o "$W/string_valid.bin" >"$W/build13_valid.log" 2>&1; then
+  echo "FAIL: valid inbound-String program did not build"; cat "$W/build13_valid.log"; fail=$((fail+1))
+else
+  checked=$((checked+1))
+  got13v="$("$W/string_valid.bin" 2>&1)"
+  if [ "$got13v" = "$EXPECT_STRING_VALID" ]; then
+    echo "ok   ffi_inbound_string     NULL and canonical 1/2/3/4-byte UTF-8 round-trip exactly"
+  else
+    fail=$((fail+1))
+    echo "FAIL ffi_inbound_string     valid output differs"
+    printf 'expected:\n%s\ngot:\n%s\n' "$EXPECT_STRING_VALID" "$got13v"
+  fi
+fi
+
+for sfn in ffiStringStray ffiStringBadCont ffiStringTruncated ffiStringOverlong ffiStringSurrogate ffiStringTooHigh; do
+  cat > "$W/ffi_string_bad_$sfn.mdk" <<CELL13B
+extern $sfn : Unit -> <FFI> String
+
+main : <IO, FFI> Unit
+main = println ($sfn ())
+CELL13B
+  if ! MEDAKA_RT_OBJ="$W/combined.o" "$MEDAKA" build "$W/ffi_string_bad_$sfn.mdk" \
+       -o "$W/string_bad_$sfn.bin" >"$W/build13_$sfn.log" 2>&1; then
+    echo "FAIL: malformed inbound-String program ($sfn) did not build"; cat "$W/build13_$sfn.log"; fail=$((fail+1))
+    continue
+  fi
+  checked=$((checked+1))
+  "$W/string_bad_$sfn.bin" >"$W/string_bad_$sfn.out" 2>"$W/string_bad_$sfn.err"
+  rc13=$?
+  if [ "$rc13" -eq 0 ]; then
+    printf 'FAIL ffi_inbound_string_bad %s: malformed UTF-8 exited 0\n' "$sfn"
+    fail=$((fail+1))
+  elif grep -q "runtime error" "$W/string_bad_$sfn.err" \
+    && grep -q "String that is not valid UTF-8" "$W/string_bad_$sfn.err" \
+    && grep -q "Unicode scalar values" "$W/string_bad_$sfn.err" \
+    && grep -q "FFI-ABI.md section 2.3" "$W/string_bad_$sfn.err" \
+    && [ ! -s "$W/string_bad_$sfn.out" ]; then
+    printf 'ok   ffi_inbound_string_bad %s: trapped loudly (exit %d) with the UTF-8 validity diagnostic\n' "$sfn" "$rc13"
+  else
+    printf 'FAIL ffi_inbound_string_bad %s: exit %d, wrong failure:\n' "$sfn" "$rc13"; fail=$((fail+1))
+    cat "$W/string_bad_$sfn.out" "$W/string_bad_$sfn.err"
+  fi
+done
 
 # ZERO-COMPARISON guard (docs/ops/TESTING-DESIGN.md §2.3): a gate that compared
 # nothing has proven nothing.
