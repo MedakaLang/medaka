@@ -1,5 +1,5 @@
 # META
-source_lines=164
+source_lines=191
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/main_autoprint.mdk — shared composite-`main` auto-print wrap.
@@ -8,11 +8,14 @@ stages=DESUGAR,MARK
 -- `deriving Display` ADT, …) used to CRASH the emitter (`emitPrint` panics on a
 -- non-scalar `main`).  This module implements the uniform fix from
 -- compiler/COMPOSITE-MAIN-AUTOPRINT-DESIGN.md §10: rewrite the entry decl
---   main = <e>   ⟶   main = println <e>
--- (`println` renders via `display` → raw strings, `(a, b)` tuples, `[1, 2, 3]`
--- lists, derived ctors) so the value flows through the ordinary polymorphic print
--- path every backend already compiles.  The wrapped `main : <IO> Unit` suppresses
--- the emitter's own scalar auto-print (installMainIsUnitHint True), so a value is
+--   main = <e>   ⟶   main = putStrLn (display <e>)
+-- (semantically identical to `println <e>`, prelude `println`'s own
+-- definition — `display` renders → raw strings, `(a, b)` tuples, `[1, 2, 3]`
+-- lists, derived ctors — see wrapPrintln's own comment below for WHY this
+-- spells `putStrLn`/`display` rather than calling `println` by name, #2185)
+-- so the value flows through the ordinary polymorphic print path every
+-- backend already compiles.  The wrapped `main : <IO> Unit` suppresses the
+-- emitter's own scalar auto-print (installMainIsUnitHint True), so a value is
 -- printed exactly ONCE.
 --
 -- SCOPE / re-mint safety: the wrap fires ONLY on a bare zero-arg non-Unit/non-Async
@@ -109,14 +112,38 @@ wrapMainDecl (DFunDef vis "main" [] body) =
 wrapMainDecl (DAttrib a d) = DAttrib a (wrapMainDecl d)
 wrapMainDecl d = d
 
--- `main = <e>` → `main = println <e>`, re-attaching the body's own source span
--- (its outer `ELoc`, from `parseLocated`) around the synthetic application so the
--- auto-print Display obligation reports AT the main body — not at `{0,0}` — on the
--- check/LSP path (underivedMainDiags).  `ELoc` is transparent to every backend, so
--- the emitted IR is unchanged.  An un-located body (plain `parse`) wraps bare.
+-- `main = <e>` → `main = putStrLn (display <e>)`, re-attaching the body's own
+-- source span (its outer `ELoc`, from `parseLocated`) around the synthetic
+-- application so the auto-print Display obligation reports AT the main body —
+-- not at `{0,0}` — on the check/LSP path (underivedMainDiags).  `ELoc` is
+-- transparent to every backend, so the emitted IR is unchanged.  An un-located
+-- body (plain `parse`) wraps bare.
+--
+-- #2185 (S0): this used to wrap with `EVar "println"` — the OUTER name. A bare
+-- `EVar` flows through ORDINARY marker.mdk name resolution (`markVar`), which —
+-- per Phase 78/#1375's shadow rules — converts ANY bare `println` occurrence to
+-- `EMethodRef "println"` (dict-dispatched by the ARGUMENT's runtime type) the
+-- instant a user declares ANY interface with a method literally named
+-- `println` (impl or no impl; `markVar`'s `methods` OrdMap unions prelude +
+-- program interface-method names with no regard for occurrence provenance —
+-- and `typecheck.mdk`'s `rewriteRPDict`/`rewriteRPDictArg` mirror the identical
+-- rpNames-first rule for the elaborated build/run path), so the compiler's own
+-- auto-print wrap silently dispatched through the USER's `Ifc` interface instead
+-- of denoting the prelude's `println : Display a => a -> <IO> Unit`.
+--
+-- Fix: stop referencing the name `println` at all — inline exactly what
+-- `println`'s own prelude definition does (`println x = putStrLn (display x)`,
+-- stdlib/core.mdk).  `putStrLn` is a plain top-level `extern` (never an
+-- interface method, so it is never in ANY `methods`/`rpNames` set — nothing to
+-- shadow), and `display` is the `Display` interface's OWN method — dispatching
+-- it by the argument's runtime type is not a capturable shadow, it is the
+-- entire POINT of auto-print (render via whichever `Display` instance the
+-- value's type has). No interface named literally `println` can intercept a
+-- reference that never spells that name.
 wrapPrintln : Expr -> Expr
-wrapPrintln (ELoc l inner) = ELoc l (EApp (EVar "println") (ELoc l inner))
-wrapPrintln body = EApp (EVar "println") body
+wrapPrintln (ELoc l inner) =
+  ELoc l (EApp (EVar "putStrLn") (EApp (EVar "display") (ELoc l inner)))
+wrapPrintln body = EApp (EVar "putStrLn") (EApp (EVar "display") body)
 
 -- Re-run the CHECK gate on the wrapped program to surface an underived-ADT main
 -- as the clean `No impl of Display …` type error.  Gated to a SINGLE loaded
@@ -198,8 +225,8 @@ underivedMainDiags _ _ _ = []
 (DFunDef false "wrapMainDecl" ((PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EVar "wrapMainDecl") (EVar "d"))))
 (DFunDef false "wrapMainDecl" ((PVar "d")) (EVar "d"))
 (DTypeSig false "wrapPrintln" (TyFun (TyCon "Expr") (TyCon "Expr")))
-(DFunDef false "wrapPrintln" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "println")))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner")))))
-(DFunDef false "wrapPrintln" ((PVar "body")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "println")))) (EVar "body")))
+(DFunDef false "wrapPrintln" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "putStrLn")))) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "display")))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner"))))))
+(DFunDef false "wrapPrintln" ((PVar "body")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "putStrLn")))) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "display")))) (EVar "body"))))
 (DTypeSig true "underivedMainDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "TcDiag"))))))
 (DFunDef false "underivedMainDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PList (PTuple (PVar "mid") (PVar "entryDecls")))) (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "entryDecls"))) (DoLet false false (PTuple (PVar "tcErrs") PWild) (EApp (EApp (EApp (EVar "checkOneDiags") (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (EVar "mid") (EVar "entryDecls")))) (DoExpr (EVar "tcErrs"))))
 (DFunDef false "underivedMainDiags" (PWild PWild PWild) (EListLit))
@@ -235,8 +262,8 @@ underivedMainDiags _ _ _ = []
 (DFunDef false "wrapMainDecl" ((PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EVar "wrapMainDecl") (EVar "d"))))
 (DFunDef false "wrapMainDecl" ((PVar "d")) (EVar "d"))
 (DTypeSig false "wrapPrintln" (TyFun (TyCon "Expr") (TyCon "Expr")))
-(DFunDef false "wrapPrintln" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "println")))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner")))))
-(DFunDef false "wrapPrintln" ((PVar "body")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "println")))) (EVar "body")))
+(DFunDef false "wrapPrintln" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "putStrLn")))) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "display")))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner"))))))
+(DFunDef false "wrapPrintln" ((PVar "body")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "putStrLn")))) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "display")))) (EVar "body"))))
 (DTypeSig true "underivedMainDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "TcDiag"))))))
 (DFunDef false "underivedMainDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PList (PTuple (PVar "mid") (PVar "entryDecls")))) (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "entryDecls"))) (DoLet false false (PTuple (PVar "tcErrs") PWild) (EApp (EApp (EApp (EVar "checkOneDiags") (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (EVar "mid") (EVar "entryDecls")))) (DoExpr (EVar "tcErrs"))))
 (DFunDef false "underivedMainDiags" (PWild PWild PWild) (EListLit))
