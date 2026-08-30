@@ -177,17 +177,20 @@ fi
 # project's own manifest:
 #
 #     [foreign-libraries]
+#     # commented_out = "missing"
 #     ffiprobe = "vendor"
 #
 # The search directory is deliberately RELATIVE, so this also pins that
 # readForeignLibs resolves it against the PROJECT ROOT (the dir holding
-# medaka.toml) and not the cwd or the medaka install root.  Identical expected
-# output to cell 1 on purpose: the values prove the marshalling, the absence of
+# medaka.toml) and not the cwd or the medaka install root.  The blank and comment
+# lines pin that inert manifest text never becomes a `-l` argument; the named
+# commented-out library deliberately does not exist.  Identical expected output
+# to cell 1 on purpose: the values prove the marshalling, the absence of
 # MEDAKA_RT_OBJ proves the linkage.
 P="$W/proj"
 mkdir -p "$P/vendor"
 cp "$FIXDIR/ffi_abi_probe.mdk" "$P/main.mdk"
-printf '[package]\nname = "ffi_link_probe"\n\n[foreign-libraries]\nffiprobe = "vendor"\n' > "$P/medaka.toml"
+printf '[package]\nname = "ffi_link_probe"\n\n[foreign-libraries]\n\n# nonexistent_ffi_commented_out = "missing"\n  # another_commented_out = ""\nffiprobe = "vendor"\n' > "$P/medaka.toml"
 if ! "$CC" -O2 -c "$FIXDIR/ffi_abi_probe.c" -o "$W/probe_lib.o" >"$W/cc3.log" 2>&1 \
    || ! ar rcs "$P/vendor/libffiprobe.a" "$W/probe_lib.o" >>"$W/cc3.log" 2>&1; then
   echo "could not build libffiprobe.a on this toolchain — skipping cell 3"; cat "$W/cc3.log"
@@ -197,7 +200,7 @@ else
   checked=$((checked+1))
   got3="$("$W/link.bin" 2>&1)"
   if [ "$got3" = "$EXPECT_PROBE" ]; then
-    echo "ok   ffi_manifest_linkage   9/9 values via [foreign-libraries] -L/-l (no MEDAKA_RT_OBJ)"
+    echo "ok   ffi_manifest_linkage   comments inert; real library linked 9/9 values (no MEDAKA_RT_OBJ)"
   else
     fail=$((fail+1))
     echo "FAIL ffi_manifest_linkage   output differs"

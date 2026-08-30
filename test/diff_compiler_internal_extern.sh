@@ -32,12 +32,11 @@
 #                          the privilege, silently, exit 0.
 #  12. project-allow-flag: the same project with `--allow-internal` → clean.
 #                          Proves the flag is not a no-op on the project route.
-#  13. project-optin:      the same project whose manifest declares
-#                          `allow-internal = true`, no flag → clean.  The
-#                          load-bearing leg: the discriminator is the KEY.
-#  14. dep-name-not-optin: a `[dependencies]` entry named `allow-internal` is a
-#                          dep, not the opt-in → still REJECTED.
-#  15. compiler-self-check: `medaka check compiler/support/util.mdk` (11 real
+#  13–20. manifest-matrix: only canonical unquoted `true` grants the privilege;
+#                          both `[package]` and `[project]` work, and a trailing
+#                          comment is inert. Quoted true, false, malformed text,
+#                          dependency-name collisions, and comment text reject.
+#  21. compiler-self-check: `medaka check compiler/support/util.mdk` (11 real
 #                          arrayGetUnsafe call sites) with no flag → clean.
 #                          #42's cell, bought by `compiler/medaka.toml`'s key.
 #
@@ -231,31 +230,77 @@ case "$clean" in
      else fail=$((fail+1)); printf 'FAIL project-allow-flag (exit %d: [%s])%s\n' "$code" "$out" "$(mdk_stale_suffix "$out")"; fi ;;
 esac
 
-# 13. project-optin: the SAME project whose manifest declares the privilege, NO
-#     flag → accepted.  The discriminator is the KEY, not anything incidental.
-printf 'name = "probe"\nversion = "0.0.1"\nallow-internal = true\n' > "$TMP/proj/medaka.toml"
-out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/proj/main.mdk" 2>&1)"
-code=$?
-clean="$(mdk_strip_stale "$out")"
-case "$clean" in
-  *"internal-only primitive"*) fail=$((fail+1)); printf 'FAIL project-optin (opt-in ignored: [%s])%s\n' "$out" "$(mdk_stale_suffix "$out")" ;;
-  *) if [ "$code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   project-optin (allow-internal = true grants it, exit 0)\n'
-     else fail=$((fail+1)); printf 'FAIL project-optin (exit %d: [%s])%s\n' "$code" "$out" "$(mdk_stale_suffix "$out")"; fi ;;
-esac
+# 13–20. Manifest trust matrix.  Each row runs the same real project and differs
+# only in its manifest text, so an acceptance/rejection split is attributable to
+# the scanner rather than module shape or path ownership.
+manifest_case() {
+  mc_name="$1"
+  mc_want="$2"
+  mc_src="$3"
+  printf '%s\n' "$mc_src" > "$TMP/proj/medaka.toml"
+  out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/proj/main.mdk" 2>&1)"
+  code=$?
+  clean="$(mdk_strip_stale "$out")"
+  if [ "$mc_want" = "allow" ]; then
+    case "$clean" in
+      *"internal-only primitive"*)
+        fail=$((fail+1)); printf 'FAIL %-23s opt-in ignored: [%s]%s\n' "$mc_name" "$out" "$(mdk_stale_suffix "$out")" ;;
+      *)
+        if [ "$code" -eq 0 ]; then
+          pass=$((pass+1)); printf 'ok   %-23s accepted canonical manifest opt-in\n' "$mc_name"
+        else
+          fail=$((fail+1)); printf 'FAIL %-23s exit %d: [%s]%s\n' "$mc_name" "$code" "$out" "$(mdk_stale_suffix "$out")"
+        fi ;;
+    esac
+  else
+    case "$clean" in
+      *"internal-only primitive"*)
+        if [ "$code" -eq 1 ]; then
+          pass=$((pass+1)); printf 'ok   %-23s granted no privilege\n' "$mc_name"
+        else
+          fail=$((fail+1)); printf 'FAIL %-23s flagged but exit %d%s\n' "$mc_name" "$code" "$(mdk_stale_suffix "$out")"
+        fi ;;
+      *)
+        fail=$((fail+1)); printf 'FAIL %-23s unexpectedly accepted: exit %d [%s]%s\n' "$mc_name" "$code" "$out" "$(mdk_stale_suffix "$out")" ;;
+    esac
+  fi
+}
 
-# 14. dep-name-not-optin: a DEPENDENCY literally named `allow-internal` is a
-#     `name = "path"` line, not the opt-in.  Pins the scanner's [dependencies]
-#     skip; without it the key check would fire on any dep of that name.
-printf 'name = "probe"\nversion = "0.0.1"\n\n[dependencies]\nallow-internal = "true"\n' > "$TMP/proj/medaka.toml"
-out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/proj/main.mdk" 2>&1)"
-code=$?
-clean="$(mdk_strip_stale "$out")"
-case "$clean" in
-  *"internal-only primitive"*) pass=$((pass+1)); printf 'ok   dep-name-not-optin (a dep named allow-internal grants nothing)\n' ;;
-  *) fail=$((fail+1)); printf 'FAIL dep-name-not-optin (a [dependencies] entry read as the opt-in: exit %d [%s])%s\n' "$code" "$out" "$(mdk_stale_suffix "$out")" ;;
-esac
+manifest_case project-optin allow '[project]
+name = "probe"
+allow-internal = true'
 
-# 15. compiler-self-check: #42's cell.  `medaka check` on a compiler-project file
+manifest_case package-optin allow '[package]
+name = "probe"
+allow-internal = true'
+
+manifest_case trailing-comment-optin allow '[package]
+name = "probe"
+allow-internal = true # trusted test project'
+
+manifest_case quoted-true-reject reject '[package]
+name = "probe"
+allow-internal = "true"'
+
+manifest_case false-reject reject '[package]
+name = "probe"
+allow-internal = false'
+
+manifest_case malformed-reject reject '[package]
+name = "probe"
+allow-internal = true-ish'
+
+manifest_case dep-name-not-optin reject '[package]
+name = "probe"
+
+[dependencies]
+allow-internal = "true"'
+
+manifest_case comment-not-optin reject '[package]
+name = "probe"
+# allow-internal = true'
+
+# 21. compiler-self-check: #42's cell.  `medaka check` on a compiler-project file
 #     that really does call the kernels (compiler/support/util.mdk has 11
 #     arrayGetUnsafe call sites) must stay clean with NO flag — that is what
 #     `compiler/medaka.toml`'s own `allow-internal = true` buys, and it is the

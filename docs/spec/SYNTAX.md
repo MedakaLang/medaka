@@ -787,14 +787,16 @@ value to use the linker's default search path):
 ```toml
 [foreign-libraries]
 mylib = "vendor/lib"
+# System libraries need no search directory.
 curl = ""
 ```
 
 `mylib = "vendor/lib"` becomes `-Lvendor/lib -lmylib`. Directories are resolved
-relative to the project root. A declared library that does not resolve is a
-`B-FFI-LIB-NOT-FOUND` diagnostic naming the library, the manifest key, and the
-manifest path — not a raw linker wall. A project with no `[foreign-libraries]`
-section links exactly as before.
+relative to the project root. Blank lines and lines whose first non-whitespace
+character is `#` are comments and declare no library. A declared library that
+does not resolve is a `B-FFI-LIB-NOT-FOUND` diagnostic naming the library, the
+manifest key, and the manifest path — not a raw linker wall. A project with no
+`[foreign-libraries]` section links exactly as before.
 
 FFI is **native-build only**. `medaka run` (the tree-walking interpreter) and
 `build --target wasm` both reject a program with a user FFI extern, with a
