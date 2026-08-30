@@ -2171,6 +2171,14 @@ declSigTypeEntries _ = []
 -- same two decl lists the emit drivers already hold, and carried to the emitter
 -- as `EmitInput.ffiExternIndex`.
 --
+-- #2174/#2135: this raw-AST producer now remains only for the snapshot tool's
+-- intentionally untyped emitter stage.  Every typed LLVM/Wasm driver obtains its
+-- rows from `types.typecheck.checkedFfiExternTypeNames{,Modules}`, which expands
+-- through the typechecker's canonical alias carrier and subtracts builtins through
+-- the catalog map seeded by `noteBuiltinExternNames`.  It then calls
+-- `validateFfiExternTypeNames` below for this table's whole-program injectivity
+-- guard.  Do not route a typed emitter back through this syntactic head walk.
+--
 -- 🚨 THE BUILTIN-NAME EXEMPTION, emitter side.  A local `extern` whose name is a
 -- `stdlib/runtime.mdk` catalog name is emitted through the BUILTIN's codegen
 -- (`isAnyExtern` in `emitApp`'s ladder dispatches by exact NAME), regardless of
@@ -2184,7 +2192,18 @@ declSigTypeEntries _ = []
 export
 ffiExternTypeNames : List Decl -> List Decl -> List (String, (List String, String))
 ffiExternTypeNames runtimeDecls userDecls =
-  let rows = ffiExternRows (externDeclNamesOf runtimeDecls) userDecls
+  validateFfiExternTypeNames (ffiExternRows
+    (externDeclNamesOf runtimeDecls)
+    userDecls)
+
+-- The canonical typed producer lives in `types.typecheck`, but this guard is a
+-- property of the FINISHED bare-name-keyed emitter table rather than of one
+-- module's typecheck.  Keeping the validator here lets both the typed carrier and
+-- the untyped snapshot fallback share the existing one-symbol/one-signature
+-- refusal without asking typecheck to import lowering (which would be a cycle).
+export
+validateFfiExternTypeNames : List (String, (List String, String)) -> List (String, (List String, String))
+validateFfiExternTypeNames rows =
   -- 🚨 THE INDEX IS BARE-NAME KEYED ACROSS THE WHOLE PROGRAM, so a name declared
   -- twice with two different signatures is a contradiction the index cannot hold
   -- ([T-GLOBAL-TABLE]).  Guard it HERE, in the wrapper, and not inside

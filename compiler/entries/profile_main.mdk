@@ -46,6 +46,7 @@ import types.typecheck.{
   preludeArgPosDictNames,
   mainTypeIsUnit,
   mainTypeIsFloat,
+  checkedFfiExternTypeNames,
 }
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{
@@ -57,7 +58,7 @@ import ir.core_ir_lower.{
   methodConstraintIfaces,
   ctorFieldTypeNames,
   declSigTypeNames,
-  ffiExternTypeNames,
+  validateFfiExternTypeNames,
 }
 import ir.dce.{dceFilter}
 import backend.private_mangle.{mangleUnits}
@@ -223,14 +224,16 @@ runStaged on targetPath rsrc csrc tsrc =
   let dictNames = preludeReturnPosDictNames livePrelude combined
         ++ preludeArgPosDictNames livePrelude combined
         ++ constrainedSigNames desugared
-  -- Input indexing is elaboration work; keep it outside the emit timer.
+  let elaborated = elaborateDict rDecls dictNames userNames combined
+  -- Input indexing is elaboration work; keep it outside the emit timer.  The FFI
+  -- projection is post-elaboration so it consumes the same canonical alias shape
+  -- the declaration guards accepted.
   let input = makeEmitInput
     (returnsSelfTable combined) (selfFnParamTable combined) (methodIfaceTable combined)
     (methodConstraintIfaces combined) (ctorFieldTypeNames combined)
     (declSigTypeNames rDecls ++ declSigTypeNames combined)
     (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] targetPath (declaredRecordFieldOrders combined)
-    (ffiExternTypeNames rDecls combined)
-  let elaborated = elaborateDict rDecls dictNames userNames combined
+    (validateFfiExternTypeNames (checkedFfiExternTypeNames combined))
   let tEl1 = now ()
   let _ = emitPhaseAO on "elaborate" (tEl1 - tEl0) (allocSnap () - aEl0) declsOp (opSnap () - oEl0)
   -- dce: source DCE, as the real build driver does it in default (whole-module) mode.
