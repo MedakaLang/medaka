@@ -41,6 +41,7 @@ Tutorial-style onboarding, not a spec. Not yet cross-linked into this index's st
 | [`0. Introduction.md`](guide/0. Introduction.md) | Introduction | — |
 | [`1. Quick Start.md`](guide/1. Quick Start.md) | Quick Start | — |
 | [`2. Expressions.md`](guide/2. Expressions.md) | Expressions | — |
+| [`Haskell and OCaml Delta.md`](guide/Haskell and OCaml Delta.md) | Medaka for Haskell and OCaml Readers | — |
 | [`OUTLINE.md`](guide/OUTLINE.md) | Medaka Guide — Outline | — |
 
 ### design — open/partial work

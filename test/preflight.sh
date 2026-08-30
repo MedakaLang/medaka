@@ -52,6 +52,15 @@ mdk_warn_if_tmp_full
 BASE_ARG="${1:-}"
 cd "$ROOT" || exit 1
 
+# Normalize the changed-path set once, then feed every derivation pass from the
+# same newline-delimited file. A path can therefore never become shell syntax or
+# collide with a here-document delimiter. The trap owns the only scratch path.
+CHANGED_PATHS="$(mktemp "${TMPDIR:-/tmp}/medaka-preflight-changed.XXXXXX")" || {
+  echo "preflight: mktemp failed while preparing changed paths" >&2
+  exit 1
+}
+trap 'rm -f "$CHANGED_PATHS"' EXIT HUP INT TERM
+
 # ── Where the changed-file list comes from ───────────────────────────────────
 #
 # Normally: git, relative to $BASE. But CI cannot use that. On a `pull_request`
@@ -69,7 +78,7 @@ if [ -n "${PREFLIGHT_CHANGED_FILE:-}" ]; then
     echo "preflight: PREFLIGHT_CHANGED_FILE='$PREFLIGHT_CHANGED_FILE' does not exist."
     exit 1
   }
-  changed="$(cat "$PREFLIGHT_CHANGED_FILE")"
+  LC_ALL=C sort -u "$PREFLIGHT_CHANGED_FILE" | grep -v '^$' > "$CHANGED_PATHS"
   BASE="(PREFLIGHT_CHANGED_FILE)"
 else
   # ── Which base ref? NOT `main`. ────────────────────────────────────────────
@@ -159,17 +168,21 @@ else
   # nothing is committed yet), so `preflight` printed "no changes vs main — nothing to do"
   # and exited 0 over a staged rewrite of the compiler. That is the same silent-green
   # failure as the gate-existence check below, one step earlier in the pipe.
-  changed="$(git diff --name-only "$BASE"...HEAD 2>/dev/null; git diff --name-only 2>/dev/null; git diff --name-only --cached 2>/dev/null; git ls-files -o --exclude-standard 2>/dev/null)"
+  {
+    git diff --name-only "$BASE"...HEAD 2>/dev/null
+    git diff --name-only 2>/dev/null
+    git diff --name-only --cached 2>/dev/null
+    git ls-files -o --exclude-standard 2>/dev/null
+  } | LC_ALL=C sort -u | grep -v '^$' > "$CHANGED_PATHS"
 fi
-changed="$(printf '%s\n' "$changed" | sort -u | grep -v '^$')"
 
-if [ -z "$changed" ]; then
+if [ ! -s "$CHANGED_PATHS" ]; then
   echo "preflight: no changes vs $BASE — nothing to do."
   exit 0
 fi
 
 echo "── changed vs $BASE ──────────────────────────────────────────"
-printf '%s\n' "$changed" | sed 's/^/  /'
+sed 's/^/  /' "$CHANGED_PATHS"
 echo
 
 # ── changed path → gate patterns ─────────────────────────────────────────────
@@ -461,7 +474,7 @@ mark_full() {
 }
 
 need_fixpoint=0
-for f in $changed; do
+while IFS= read -r f; do
   case "$f" in
     # ── front-end: everything downstream of it is suspect ──
     compiler/frontend/lexer.mdk)
@@ -878,6 +891,7 @@ for f in $changed; do
     # at all, so a change here fell through to the catch-all — the two gates
     # that actually police its generated content are the ones that read it.
     .github/workflows/ci.yml)      add 'diff_compiler_ci_gen_drift'; add 'diff_compiler_ci_shard_coverage' ;;
+    docs/guide/*.md)               add 'check_syntax_examples' ;;
     # Third ledger, same structural blind spot (#1608). Its rows pin a WRONG VALUE
     # rather than a divergence — see its own header — but the masking path is
     # identical: a loose file under test/ that someone edits ALONE when the gate reds.
@@ -1043,7 +1057,7 @@ for f in $changed; do
         esac
       fi ;;
   esac
-done
+done < "$CHANGED_PATHS"
 
 # ── the snapshot corpus is not a fixture dir; it is the SOURCE TREE ──────────
 # Every compiler/**.mdk and stdlib/*.mdk is IN the snapshot corpus (each one carries its
@@ -1079,14 +1093,14 @@ done
 # name. A LEAF stdlib module (map, set, …) is not passed into the closure by name, so it
 # gets no entry here; a change to one still reaches selfproc via the blast-radius
 # `stdlib/*|runtime/*` arm above (which does `add 'diff_compiler_*'`, matching selfproc).
-for f in $changed; do
+while IFS= read -r f; do
   case "$f" in
     compiler/*.mdk|compiler/*/*.mdk|stdlib/*.mdk) add 'diff_compiler_snapshot*' ;;
   esac
   case "$f" in
     compiler/*.mdk|compiler/*/*.mdk|stdlib/core.mdk|stdlib/runtime.mdk) add 'diff_compiler_selfproc' ;;
   esac
-done
+done < "$CHANGED_PATHS"
 
 # ── the control-byte ratchet applies to EVERY tracked source file (#1987 F4) ──
 # diff_compiler_source_bytes.sh scans the whole tree (`git ls-files`, filtered by
@@ -1103,13 +1117,13 @@ done
 #
 # Unconditional by design, and cheap by construction: the gate re-scans the whole
 # tree regardless of what changed, so there is nothing to narrow — the only honest
-# derivation is "any change at all". Guarded on $changed being non-empty so an
-# empty diff still derives an empty gate set.
+# derivation is "any change at all". Guarded by `-s "$CHANGED_PATHS"` so an
+# empty changed-path file still derives an empty gate set.
 #
 # ⚠️ This makes source_bytes the one gate a `<project>/` change derives from OUTSIDE
 # `<project>/test/`. test/diff_compiler_project_enrolment.sh's PREFLIGHT leg knows
 # about it BY NAME (see its UNIVERSAL_GATES) — any OTHER stray gate still fails there.
-if [ -n "$changed" ]; then
+if [ -s "$CHANGED_PATHS" ]; then
   add 'diff_compiler_source_bytes'
 fi
 
@@ -1141,7 +1155,7 @@ fi
 inlang_files=$(awk '/^test: medaka$/{f=1;next} f&&/^\t/{print} f&&!/^\t/{exit}' "$ROOT/Makefile" \
   | sed -n 's|^	\./medaka test ||p')
 inlang_run=""
-for f in $changed; do
+while IFS= read -r f; do
   for _if in $inlang_files; do
     [ "$f" = "$_if" ] || continue
     # Only if it still exists — a DELETED module cannot be doctested, and `changed`
@@ -1149,7 +1163,7 @@ for f in $changed; do
     [ -f "$ROOT/$f" ] || continue
     case " $inlang_run " in *" $f "*) ;; *) inlang_run="$inlang_run $f" ;; esac
   done
-done
+done < "$CHANGED_PATHS"
 
 # ── resolve gates → the ORACLES they actually need ───────────────────────────
 #
@@ -1315,8 +1329,8 @@ fi
 # exit directly above, which said so loudly.
 #
 # It no longer does. The coverage floor adds an unconditional
-# `add 'diff_compiler_source_bytes'` for ANY non-empty $changed, so $pats is never
-# empty when there IS a diff and that exit is unreachable for a real change. Without
+# `add 'diff_compiler_source_bytes'` for any non-empty CHANGED_PATHS file, so $pats
+# is never empty when there IS a diff and that exit is unreachable for a real change. Without
 # this block a Makefile-only diff runs one whole-tree safety-net gate, prints a clean
 # green, and says NOTHING about the fact that not one per-file-targeted gate was
 # derived for it — the same "green while testing nothing" shape the header warns
