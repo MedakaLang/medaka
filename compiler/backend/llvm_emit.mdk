@@ -900,6 +900,7 @@ data Emit =
       typeIdMap : Ref (Option (OrdMap Int)),
       dispCache : Ref (List String),
       dictConstCache : Ref (List (String, String)),
+      closConstCache : Ref (List (String, String)),
       floatFwSet : Ref (List (String, (Int, List Int))),
       floatClosureFns : Ref (List String),
     }
@@ -4327,7 +4328,14 @@ emitGroupBind e env (CBind name clauses) =
   let captured = keepInEnv env (removeStr name (dedupS (clausesFreeVars name clauses)))
   let captureWords = capWords e env captured
   let _ = emitGroupBindDefine e env lamName name arity clauses captured
-  emitClosureAllocA e lamName arity captureWords
+  match captureWords
+    -- S-1: capture-free ⇒ every cell field is a compile-time constant, so hoist the
+    -- cell to an `internal constant` module global instead of allocating a fresh one
+    -- on every entry to the enclosing function (emitConstClosureA).  This is the
+    -- non-mutual path only — `emitLetGroup` routes forward/mutual runs to
+    -- `emitLetGroupKnot`, whose cells are back-patched and must stay heap cells (F9).
+    [] => emitConstClosureA e lamName arity
+    _ => emitClosureAllocA e lamName arity captureWords
 
 -- emit the lifted multi-clause `define` for a let-group local function into the
 -- SIDE buffer (same swap discipline as emitPatLamDefine).  Captures load from
@@ -7359,6 +7367,47 @@ emitClosureAllocA e lamName arity captureWords =
   let (w, lty) = emitClosureAlloc e lamName arity captureWords
   e.closureArity := (w, arity) :: !e.closureArity
   (w, lty)
+
+-- ── capture-free closure hoisting (S-1, EMITTER-GAPS #10 allocation half) ───
+-- THE SPRINT'S MECHANISM.  A closure cell whose capture set is EMPTY has fields
+-- that are ALL compile-time constants: the header is the literal arity and field 0
+-- is `ptrtoint (ptr @mdk_lamN to i64)`, already a constant-expression.  Such a cell
+-- is immutable and identical at every entry to the enclosing function, so it does
+-- NOT need a per-entry `@mdk_alloc`: emit it ONCE as an `internal constant` module
+-- global and use `ptrtoint (ptr @g to i64)` as the closure word.  Exactly the
+-- transform `emitConstDictCell` already performs for constant dict witnesses, and
+-- byte-identical in LAYOUT to `emitClosureCell`'s heap cell (header at offset 0,
+-- field i at 8*(i+1)) so every consumer — `loadField` code-ptr load, `__mdk_apply`,
+-- a capture-word store into a sibling cell — reads it unchanged.
+--
+-- SOUND because a closure cell is READ-ONLY after construction on this path: the
+-- only writer is the knot-tying back-patch (`knotPatch`), and mutual/forward groups
+-- are routed to `emitLetGroupKnot` BEFORE reaching here (F9 — an immutable global
+-- cannot be back-patched, so that path keeps its per-entry alloc by design).
+-- `__mdk_apply` only reads the cell; a PAP is a separate freshly-allocated cell.
+--
+-- Deduped by initializer content in its own cache (NOT `dictConstCache` — different
+-- value domain, and sharing it would let a dict and a closure alias one global).
+emitConstClosureCell : Emit -> String -> Int -> String
+emitConstClosureCell e lamName arity =
+  let codePtr = "ptrtoint (ptr @" ++ lamName ++ " to i64)"
+  let initBody = "[2 x i64] [i64 \{intToString arity}, i64 \{codePtr}]"
+  match lookupAssoc initBody !e.closConstCache
+    Some gname => "ptrtoint (ptr @" ++ gname ++ " to i64)"
+    None =>
+      let gname = "mdk_cc_" ++ intToString (freshId e)
+      let _ = emitGlobal e "@\{gname} = internal constant \{initBody}"
+      e.closConstCache := (initBody, gname) :: !e.closConstCache
+      "ptrtoint (ptr @" ++ gname ++ " to i64)"
+
+-- emitConstClosureCell + the same `e.closureArity` bookkeeping `emitClosureAllocA`
+-- does, so an indirect over/under-application of this closure value still splits
+-- statically.  The drop-in replacement for `emitClosureAllocA e lam arity []`.
+emitConstClosureA : Emit -> String -> Int -> (String, LTy)
+emitConstClosureA e lamName arity =
+  let w = emitConstClosureCell e lamName arity
+  e.closureArity := (w, arity) :: !e.closureArity
+  (w, LTClosure)
 
 -- emit a CLam: compute its captured set, lift its body to a top-level define, and
 -- allocate the closure cell capturing the live operand words.
@@ -11805,10 +11854,12 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
     typeIdMap = Ref None,
     dispCache = Ref [],
     dictConstCache = Ref [],
+    closConstCache = Ref [],
     floatFwSet = Ref [],
     floatClosureFns = Ref [],
   }
   e.dictConstCache := []
+  e.closConstCache := []
   e.dispCache := []
   let _ = installKnownFnMap e (collectFns groups)
   -- #561 PR-A: classify LAZY value globals (dispatch-reaching / cyclic) once per
