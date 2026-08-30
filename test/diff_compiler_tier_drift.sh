@@ -128,22 +128,48 @@ if not entries:
     print("FAIL: the registry produced no entries (harness bug)")
     sys.exit(1)
 
-by_stem = {e['run'][:-3]: e for e in entries if e['run'].endswith('.sh')}
+by_stem = {}
+non_sh = []
+dup_stem = []
+for e in entries:
+    if not e['run'].endswith('.sh'):
+        non_sh.append(e['name'])
+        continue
+    stem = e['run'][:-3]
+    if stem in by_stem:
+        dup_stem.append((stem, by_stem[stem]['name'], e['name']))
+    by_stem[stem] = e
+if non_sh or dup_stem:
+    print("FAIL: the registry has entries this gate's stem index would silently drop or clobber.")
+    for name in non_sh:
+        print(f"       {name}: `run` is not a `.sh` path — excluded from by_stem with no diagnostic")
+    for stem, first, second in dup_stem:
+        print(f"       {first!r} and {second!r} share stem {stem!r} — {second!r} silently clobbers {first!r}")
+    print("      Refusing to certify tiers from a partial view.")
+    sys.exit(1)
 if not by_stem:
     print("FAIL: no registry entry has a `.sh` run target (harness bug)")
     sys.exit(1)
 
 # Environment keys that do not change WHAT a gate checks — pure plumbing: where
-# the tree is, which binary to use, byte-ordering, and the API credentials a
-# filing step needs. Anything else counts as a mode.
+# the tree is, which binary to use, byte-ordering, the API credentials a
+# filing step needs, and a worker-count cap (JOBS — a fan-out pool size, not
+# a scope change; surfaced only once F2's inline-env folding started seeing
+# `JOBS=3 bash test/typecheck_compiler_source.sh` in ci.yml). Anything else
+# counts as a mode.
 NEUTRAL = {'MEDAKA_ROOT', 'MEDAKA', 'MEDAKA_EMITTER', 'LC_ALL',
-           'GH_REPO', 'GH_TOKEN', 'GITHUB_TOKEN'}
+           'GH_REPO', 'GH_TOKEN', 'GITHUB_TOKEN', 'JOBS'}
 
 # Command-position prefixes: what may sit between a command separator and the
 # `sh`/`bash`/`dash` that runs a gate.
+# The VAR=value and timeout branches use [ \t]+ (not \s+) for their trailing
+# separator so a prefix can never absorb a newline — "rc=1" ending one
+# statement must not fuse with "bash foo.sh" starting the next just because
+# \s+ is willing to eat the line break between them (that fusion would also
+# misattribute rc=1 as an inline env assignment for F2's env folding, below).
 PRE = (r'(?:(?:if|then|else|elif|do|while|until|!|not)\s+'
-       r'|[A-Za-z_][A-Za-z0-9_]*=[^\s]*\s+'
-       r'|timeout\s+[^\s]+\s+'
+       r'|[A-Za-z_][A-Za-z0-9_]*=[^\s]*[ \t]+'
+       r'|timeout[ \t]+[^\s]+[ \t]+'
        r'|env\s+|exec\s+|nice\s+(?:-n\s+[^\s]+\s+)?)*')
 
 
@@ -164,7 +190,7 @@ def strip_comments(text):
 
 def invocation_re(stem):
     return re.compile(
-        r'(?:^|[\n;&|(`])\s*' + PRE +
+        r'(?:^|[\n;&|(`])\s*(?P<pre>' + PRE + r')'
         r'(?:sh|bash|dash)\s+(?:-[^\s]+\s+)*'
         r'["\']?(?:\$\{?ROOT\}?/|\$\{\{[^}]*\}\}/|\./)?'
         + re.escape(stem) + r'\.sh["\']?(?P<args>[^\n;&|]*)')
@@ -172,15 +198,32 @@ def invocation_re(stem):
 
 RES = {s: invocation_re(s) for s in by_stem}
 
+# An inline `VAR=value` command prefix (the same shape `PRE` already
+# recognizes and steps past to find the `sh`/`bash`/`dash`) is an env
+# assignment the identical `env:` YAML spelling would also produce — fold it
+# into the invocation's env the same way, so the two spellings derive the
+# same mode (F2, #2181 review finding).
+INLINE_ENV_RE = re.compile(r'\b([A-Za-z_][A-Za-z0-9_]*)=([^\s]*)')
+
+
+def inline_env(pre_text):
+    return dict(INLINE_ENV_RE.findall(pre_text))
+
 
 def runs_in(text):
-    """The gate stems this text actually RUNS (see the two ⚠️ notes above)."""
-    found = set()
+    """{stem: inline-env} for every gate this text actually RUNS (see the two
+    ⚠️ notes above), `inline-env` being any `VAR=value` prefix(es) on that
+    invocation's own command line."""
+    found = {}
     for stem, rx in RES.items():
         for m in rx.finditer(text):
             if any(t.startswith('-') for t in m.group('args').split()):
                 continue        # a tool call, not a run
-            found.add(stem)
+            extra = inline_env(m.group('pre'))
+            if stem in found:
+                found[stem].update(extra)
+            else:
+                found[stem] = extra
     return found
 
 
@@ -237,9 +280,17 @@ for wf, tier in WORKFLOWS:
         mode = ','.join(f'{k}={v}' for k, v in sorted(env.items())
                         if k not in NEUTRAL)
         token = f'{tier}/{mode}' if mode else tier
-        for stem in runs_in(body):
-            derived[stem].add(token)
-            why.setdefault((stem, token), f'{wf} {label}')
+        for stem, extra in runs_in(body).items():
+            if extra:
+                full_env = dict(env)
+                full_env.update(extra)
+                full_mode = ','.join(f'{k}={v}' for k, v in sorted(full_env.items())
+                                      if k not in NEUTRAL)
+                tok = f'{tier}/{full_mode}' if full_mode else tier
+            else:
+                tok = token
+            derived[stem].add(tok)
+            why.setdefault((stem, tok), f'{wf} {label}')
 
 # (3) one closure step, iterated to a fixpoint, through the gate scripts.
 for _, tier in WORKFLOWS:
@@ -250,7 +301,10 @@ for _, tier in WORKFLOWS:
         stem = frontier.pop()
         p = pathlib.Path(root) / f'{stem}.sh'
         if not p.exists():
-            continue
+            print(f"FAIL: {by_stem[stem]['name']}'s `run` ({stem}.sh) does not exist on disk.")
+            print("      Refusing to certify tiers from a partial closure — a registry entry")
+            print("      whose script is missing cannot be walked for its own invocations.")
+            sys.exit(1)
         for callee in runs_in(strip_comments(p.read_text())):
             if callee == stem:
                 continue

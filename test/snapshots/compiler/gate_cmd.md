@@ -1,5 +1,5 @@
 # META
-source_lines=4579
+source_lines=4588
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -1742,6 +1742,15 @@ invalidCostViolations (g::gs)
 tierNameOk : String -> Bool
 tierNameOk t = t == "merge" || t == "nightly" || t == "ondemand"
 
+-- Whether a run token carries a `/` at all — the presence of a mode
+-- separator, not the mode text itself. `modePartOf` alone cannot answer this:
+-- it returns `""` both for "no `/`" (`"merge"`) and for "`/` present, empty
+-- suffix" (`"ondemand/"`), so a caller that only tests `modePartOf tok /= ""`
+-- cannot tell the two apart (F10, #2181 review finding). A token is longer
+-- than its own tier part exactly when a `/` follows the tier.
+hasModeSep : String -> Bool
+hasModeSep tok = stringLength tok > stringLength (tierPartOf tok)
+
 -- `ondemand` means "nothing invokes this automatically".  It cannot carry a
 -- mode (there is no invocation for a mode to differ from) and cannot sit beside
 -- another tier (a gate that runs somewhere is not on demand) — both would be
@@ -1751,7 +1760,7 @@ tierTokenErrors gname tok
   | not (tierNameOk (tierPartOf tok)) = [
     "\{gname}: run token '\{tok}' — tier '\{tierPartOf tok}' is not one of merge/nightly/ondemand"
   ]
-  | tierPartOf tok == "ondemand" && modePartOf tok /= "" = [
+  | tierPartOf tok == "ondemand" && hasModeSep tok = [
     "\{gname}: run token '\{tok}' — 'ondemand' cannot carry a mode; nothing invokes the gate, so there is no invocation for a mode to differ from"
   ]
   | otherwise = []
@@ -4938,8 +4947,10 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "invalidCostViolations" ((PCons (PVar "g") (PVar "gs"))) (EIf (EApp (EVar "costClassOk") (EFieldAccess (EVar "g") "cost")) (EApp (EVar "invalidCostViolations") (EVar "gs")) (EIf (EVar "otherwise") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": cost '"))) (EApp (EVar "display") (EFieldAccess (EVar "g") "cost"))) (ELit (LString "' is not one of cheap/medium/heavy"))) (EApp (EVar "invalidCostViolations") (EVar "gs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "tierNameOk" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "tierNameOk" ((PVar "t")) (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "t") (ELit (LString "merge"))) (EBinOp "==" (EVar "t") (ELit (LString "nightly")))) (EBinOp "==" (EVar "t") (ELit (LString "ondemand")))))
+(DTypeSig false "hasModeSep" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "hasModeSep" ((PVar "tok")) (EBinOp ">" (EApp (EVar "stringLength") (EVar "tok")) (EApp (EVar "stringLength") (EApp (EVar "tierPartOf") (EVar "tok")))))
 (DTypeSig false "tierTokenErrors" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "tierTokenErrors" ((PVar "gname") (PVar "tok")) (EIf (EApp (EVar "not") (EApp (EVar "tierNameOk") (EApp (EVar "tierPartOf") (EVar "tok")))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "gname"))) (ELit (LString ": run token '"))) (EApp (EVar "display") (EVar "tok"))) (ELit (LString "' — tier '"))) (EApp (EVar "display") (EApp (EVar "tierPartOf") (EVar "tok")))) (ELit (LString "' is not one of merge/nightly/ondemand")))) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "tierPartOf") (EVar "tok")) (ELit (LString "ondemand"))) (EBinOp "/=" (EApp (EVar "modePartOf") (EVar "tok")) (ELit (LString "")))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "gname"))) (ELit (LString ": run token '"))) (EApp (EVar "display") (EVar "tok"))) (ELit (LString "' — 'ondemand' cannot carry a mode; nothing invokes the gate, so there is no invocation for a mode to differ from")))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "tierTokenErrors" ((PVar "gname") (PVar "tok")) (EIf (EApp (EVar "not") (EApp (EVar "tierNameOk") (EApp (EVar "tierPartOf") (EVar "tok")))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "gname"))) (ELit (LString ": run token '"))) (EApp (EVar "display") (EVar "tok"))) (ELit (LString "' — tier '"))) (EApp (EVar "display") (EApp (EVar "tierPartOf") (EVar "tok")))) (ELit (LString "' is not one of merge/nightly/ondemand")))) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "tierPartOf") (EVar "tok")) (ELit (LString "ondemand"))) (EApp (EVar "hasModeSep") (EVar "tok"))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "gname"))) (ELit (LString ": run token '"))) (EApp (EVar "display") (EVar "tok"))) (ELit (LString "' — 'ondemand' cannot carry a mode; nothing invokes the gate, so there is no invocation for a mode to differ from")))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "tierTokensErrors" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "tierTokensErrors" (PWild (PList)) (EListLit))
 (DFunDef false "tierTokensErrors" ((PVar "gname") (PCons (PVar "t") (PVar "ts"))) (EBinOp "++" (EApp (EApp (EVar "tierTokenErrors") (EVar "gname")) (EVar "t")) (EApp (EApp (EVar "tierTokensErrors") (EVar "gname")) (EVar "ts"))))
@@ -5895,8 +5906,10 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "invalidCostViolations" ((PCons (PVar "g") (PVar "gs"))) (EIf (EApp (EVar "costClassOk") (EFieldAccess (EVar "g") "cost")) (EApp (EVar "invalidCostViolations") (EVar "gs")) (EIf (EVar "otherwise") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": cost '"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "cost"))) (ELit (LString "' is not one of cheap/medium/heavy"))) (EApp (EVar "invalidCostViolations") (EVar "gs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "tierNameOk" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "tierNameOk" ((PVar "t")) (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "t") (ELit (LString "merge"))) (EBinOp "==" (EVar "t") (ELit (LString "nightly")))) (EBinOp "==" (EVar "t") (ELit (LString "ondemand")))))
+(DTypeSig false "hasModeSep" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "hasModeSep" ((PVar "tok")) (EBinOp ">" (EApp (EVar "stringLength") (EVar "tok")) (EApp (EVar "stringLength") (EApp (EVar "tierPartOf") (EVar "tok")))))
 (DTypeSig false "tierTokenErrors" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "tierTokenErrors" ((PVar "gname") (PVar "tok")) (EIf (EApp (EVar "not") (EApp (EVar "tierNameOk") (EApp (EVar "tierPartOf") (EVar "tok")))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "gname"))) (ELit (LString ": run token '"))) (EApp (EMethodRef "display") (EVar "tok"))) (ELit (LString "' — tier '"))) (EApp (EMethodRef "display") (EApp (EVar "tierPartOf") (EVar "tok")))) (ELit (LString "' is not one of merge/nightly/ondemand")))) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "tierPartOf") (EVar "tok")) (ELit (LString "ondemand"))) (EBinOp "/=" (EApp (EVar "modePartOf") (EVar "tok")) (ELit (LString "")))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "gname"))) (ELit (LString ": run token '"))) (EApp (EMethodRef "display") (EVar "tok"))) (ELit (LString "' — 'ondemand' cannot carry a mode; nothing invokes the gate, so there is no invocation for a mode to differ from")))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "tierTokenErrors" ((PVar "gname") (PVar "tok")) (EIf (EApp (EVar "not") (EApp (EVar "tierNameOk") (EApp (EVar "tierPartOf") (EVar "tok")))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "gname"))) (ELit (LString ": run token '"))) (EApp (EMethodRef "display") (EVar "tok"))) (ELit (LString "' — tier '"))) (EApp (EMethodRef "display") (EApp (EVar "tierPartOf") (EVar "tok")))) (ELit (LString "' is not one of merge/nightly/ondemand")))) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "tierPartOf") (EVar "tok")) (ELit (LString "ondemand"))) (EApp (EVar "hasModeSep") (EVar "tok"))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "gname"))) (ELit (LString ": run token '"))) (EApp (EMethodRef "display") (EVar "tok"))) (ELit (LString "' — 'ondemand' cannot carry a mode; nothing invokes the gate, so there is no invocation for a mode to differ from")))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "tierTokensErrors" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "tierTokensErrors" (PWild (PList)) (EListLit))
 (DFunDef false "tierTokensErrors" ((PVar "gname") (PCons (PVar "t") (PVar "ts"))) (EBinOp "++" (EApp (EApp (EVar "tierTokenErrors") (EVar "gname")) (EVar "t")) (EApp (EApp (EVar "tierTokensErrors") (EVar "gname")) (EVar "ts"))))

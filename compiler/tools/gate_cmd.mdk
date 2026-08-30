@@ -1738,6 +1738,15 @@ invalidCostViolations (g::gs)
 tierNameOk : String -> Bool
 tierNameOk t = t == "merge" || t == "nightly" || t == "ondemand"
 
+-- Whether a run token carries a `/` at all — the presence of a mode
+-- separator, not the mode text itself. `modePartOf` alone cannot answer this:
+-- it returns `""` both for "no `/`" (`"merge"`) and for "`/` present, empty
+-- suffix" (`"ondemand/"`), so a caller that only tests `modePartOf tok /= ""`
+-- cannot tell the two apart (F10, #2181 review finding). A token is longer
+-- than its own tier part exactly when a `/` follows the tier.
+hasModeSep : String -> Bool
+hasModeSep tok = stringLength tok > stringLength (tierPartOf tok)
+
 -- `ondemand` means "nothing invokes this automatically".  It cannot carry a
 -- mode (there is no invocation for a mode to differ from) and cannot sit beside
 -- another tier (a gate that runs somewhere is not on demand) — both would be
@@ -1747,7 +1756,7 @@ tierTokenErrors gname tok
   | not (tierNameOk (tierPartOf tok)) = [
     "\{gname}: run token '\{tok}' — tier '\{tierPartOf tok}' is not one of merge/nightly/ondemand"
   ]
-  | tierPartOf tok == "ondemand" && modePartOf tok /= "" = [
+  | tierPartOf tok == "ondemand" && hasModeSep tok = [
     "\{gname}: run token '\{tok}' — 'ondemand' cannot carry a mode; nothing invokes the gate, so there is no invocation for a mode to differ from"
   ]
   | otherwise = []
