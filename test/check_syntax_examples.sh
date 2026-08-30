@@ -5,7 +5,7 @@
 # This gate extracts every tagged Medaka example and runs it through `medaka
 # check`, so a stale/wrong example fails CI instead of silently rotting.
 #
-# Fence-tagging convention (the info string right after the opening ```):
+# Fence-tagging convention (the info string after a CommonMark fence opener):
 #   ```medaka             a COMPLETE, self-contained, checkable file. Checked
 #                          verbatim with `medaka check`.
 #   ```medaka-project     a multi-file example. Content is split on lines of
@@ -26,8 +26,10 @@
 #                          Medaka example and is ignored.
 #
 # Fence info strings are parsed as a whole. Any other `medaka*` or `mdk*`
-# spelling is rejected, and EOF before the exact closing ``` fence is a
-# failure, so a typo or truncated example cannot silently leave the corpus.
+# spelling is rejected. Backtick and tilde fences of three or more characters
+# are tracked through a same-character closer at least as long as the opener;
+# EOF in a Medaka-looking block fails so a typo or truncated example cannot
+# silently leave the corpus.
 #
 # MUST NOT SILENTLY NO-OP: if any selected document checks zero examples, that
 # is a FAILURE (exit 1), not a quiet pass.
@@ -51,15 +53,88 @@ fi
 WORK="$(mktemp -d)" || { echo "check_syntax_examples: mktemp -d failed" >&2; exit 1; }
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
-FENCE='```'
-NOCHECK_PREFIX="${FENCE}medaka-nocheck: "
-
 checked=0
 failed=0
 skipped=0
 zero_docs=0
 fail_report=""
 doc_index=0
+
+# Parse a CommonMark fence opener. On success, OPEN_CHAR, OPEN_COUNT, and
+# OPEN_INFO describe it. At most three literal leading spaces are accepted.
+parse_fence_opener() {
+  open_text="$1"
+  open_indent=0
+  while [ "$open_indent" -lt 3 ]; do
+    case "$open_text" in
+      " "*) open_text=${open_text# }; open_indent=$((open_indent + 1)) ;;
+      *) break ;;
+    esac
+  done
+
+  case "$open_text" in
+    \`*) OPEN_CHAR='`' ;;
+    ~*) OPEN_CHAR='~' ;;
+    *) return 1 ;;
+  esac
+
+  OPEN_COUNT=0
+  while :; do
+    case "$open_text" in
+      "$OPEN_CHAR"*)
+        OPEN_COUNT=$((OPEN_COUNT + 1))
+        open_text=${open_text#"$OPEN_CHAR"}
+        ;;
+      *) break ;;
+    esac
+  done
+  [ "$OPEN_COUNT" -ge 3 ] || return 1
+
+  # CommonMark forbids backticks in a backtick fence's info string.
+  if [ "$OPEN_CHAR" = '`' ]; then
+    case "$open_text" in *\`*) return 1 ;; esac
+  fi
+
+  # Fence/info separation is optional; when present it is whitespace.
+  while :; do
+    case "$open_text" in
+      " "*) open_text=${open_text# } ;;
+      "	"*) open_text=${open_text#"	"} ;;
+      *) break ;;
+    esac
+  done
+  OPEN_INFO=$open_text
+  return 0
+}
+
+# A closer uses the opener's character, is at least as long, permits at most
+# three leading spaces, and has only trailing whitespace after the run.
+is_matching_fence_closer() {
+  close_text="$1"
+  close_indent=0
+  while [ "$close_indent" -lt 3 ]; do
+    case "$close_text" in
+      " "*) close_text=${close_text# }; close_indent=$((close_indent + 1)) ;;
+      *) break ;;
+    esac
+  done
+
+  close_count=0
+  while :; do
+    case "$close_text" in
+      "$block_fence_char"*)
+        close_count=$((close_count + 1))
+        close_text=${close_text#"$block_fence_char"}
+        ;;
+      *) break ;;
+    esac
+  done
+  [ "$close_count" -ge "$block_fence_count" ] || return 1
+  case "$close_text" in
+    *[![:space:]]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
 
 # ── check one self-contained ```medaka block ────────────────────────────────
 check_medaka_block() {
@@ -146,58 +221,58 @@ check_document() {
   in_block=0
   tag=""
   block_start=0
+  block_fence_char=""
+  block_fence_count=0
   lineno=0
 
   while IFS= read -r line || [ -n "$line" ]; do
     lineno=$((lineno + 1))
     if [ "$in_block" -eq 0 ]; then
-      case "$line" in
-        "$FENCE"medaka)
-          in_block=1
+      if parse_fence_opener "$line"; then
+        in_block=1
+        block_start=$lineno
+        block_fence_char=$OPEN_CHAR
+        block_fence_count=$OPEN_COUNT
+        case "$OPEN_INFO" in
+        medaka)
           tag="medaka"
-          block_start=$lineno
           : > "$blockfile"
           ;;
-        "$FENCE"medaka-project)
-          in_block=1
+        medaka-project)
           tag="project"
-          block_start=$lineno
           : > "$blockfile"
           ;;
-        "$NOCHECK_PREFIX"[![:space:]]*)
-          reason="${line#"$NOCHECK_PREFIX"}"
+        "medaka-nocheck: "[![:space:]]*)
+          reason=${OPEN_INFO#"medaka-nocheck: "}
           echo "SKIPPED (nocheck) $doc_label:$lineno: $reason"
           skipped=$((skipped + 1))
           doc_skipped=$((doc_skipped + 1))
-          in_block=1
           tag="nocheck"
-          block_start=$lineno
           ;;
-        ${FENCE}medaka*|${FENCE}mdk*)
-          info="${line#"$FENCE"}"
+        medaka*|mdk*)
           failed=$((failed + 1))
           doc_failed=$((doc_failed + 1))
           fail_report="$fail_report
-=== FAIL: $doc_label:$lineno (invalid Medaka fence info string '$info'; expected medaka, medaka-project, or medaka-nocheck: reason) ==="
-          in_block=1
+=== FAIL: $doc_label:$lineno (invalid Medaka fence info string '$OPEN_INFO'; expected medaka, medaka-project, or medaka-nocheck: reason) ==="
           tag="invalid"
-          block_start=$lineno
           ;;
         *)
+          tag="other"
           ;;
-      esac
+        esac
+      fi
     else
-      if [ "$line" = "$FENCE" ]; then
+      if is_matching_fence_closer "$line"; then
         in_block=0
         case "$tag" in
           medaka) check_medaka_block "$blockfile" "$block_start" ;;
           project) check_project_block "$blockfile" "$block_start" ;;
-          nocheck|invalid) ;;
+          nocheck|invalid|other) ;;
         esac
         tag=""
       else
         case "$tag" in
-          nocheck|invalid) ;;
+          nocheck|invalid|other) ;;
           *) printf '%s\n' "$line" >> "$blockfile" ;;
         esac
       fi
@@ -205,10 +280,15 @@ check_document() {
   done < "$doc"
 
   if [ "$in_block" -eq 1 ]; then
-    failed=$((failed + 1))
-    doc_failed=$((doc_failed + 1))
-    fail_report="$fail_report
-=== FAIL: $doc_label:$block_start (unterminated $tag fence; expected exact closing fence) ==="
+    case "$tag" in
+      medaka|project|nocheck|invalid)
+        failed=$((failed + 1))
+        doc_failed=$((doc_failed + 1))
+        fail_report="$fail_report
+=== FAIL: $doc_label:$block_start (unterminated $tag fence; expected matching '$block_fence_char' fence of at least $block_fence_count characters) ==="
+        ;;
+      other) ;;
+    esac
   fi
 
   echo "$doc_label: checked $doc_checked examples ($doc_skipped skipped, $doc_failed failed)"
