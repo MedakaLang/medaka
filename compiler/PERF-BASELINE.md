@@ -54,9 +54,9 @@ percent. A larger drift is a finding, not something to smooth over.
 ## Table
 
 host: Linux 6.12.95+deb13-amd64 x86_64
-sha: 98f4815325960b5ef6279cfb1bd75bf9e89962d3
+sha: ce504eee58f0f9848c1abf40792d9b6750b192da
 timer: gnu (/usr/bin/time -v)
-load:  05:16:45 up 48 days,  7:47,  5 users,  load average: 3.38, 2.77, 2.27
+load:  08:37:28 up 48 days, 11:08,  7 users,  load average: 1.35, 4.11, 3.47
 N=3 warm runs (min-of-N, 1 discarded warm-up); cold = first invocation, no warm-up
 Ir runs: cachegrind --cache-sim=no --branch-sim=no, GC_INITIAL_HEAP_SIZE=1073741824 pinned
 
@@ -64,14 +64,14 @@ Ir runs: cachegrind --cache-sim=no --branch-sim=no, GC_INITIAL_HEAP_SIZE=1073741
 |-------|----------|-------|-------|-------------|-----|
 | new   | hello   | 0.01s | 0.01s | bytes=20480 | 7MB |
 | new   | project | 0.01s | 0.01s | bytes=20480 | 7MB |
-| check | hello   | 0.22s | 0.33s | Ir=1383205823 | 27MB |
-| check | project | 0.7s | 0.71s | Ir=3962842015 | 43MB |
-| build | hello   | 0.93s | 0.9s | Ir=1026016138 | 92MB |
-| build | project | 1.87s | 1.69s | Ir=3374986796 | 96MB |
-| run   | hello   | 0.17s | 0.17s | Ir=1021223209 | 27MB |
-| run   | project | 0.64s | 0.69s | Ir=3671967914 | 43MB |
-| test  | hello   | 0.17s | 0.14s | Ir=782773226 | 19MB |
-| test  | project | 0.32s | 0.35s | Ir=1982480596 | 35MB |
+| check | hello   | 0.12s | 0.1s | Ir=625431278 | 18MB |
+| check | project | 0.5s | 0.47s | Ir=3044719683 | 43MB |
+| build | hello   | 0.73s | 0.83s | Ir=621128808 | 92MB |
+| build | project | 1.64s | 1.73s | Ir=3375080908 | 96MB |
+| run   | hello   | 0.14s | 0.13s | Ir=844785956 | 27MB |
+| run   | project | 0.57s | 0.56s | Ir=3672111497 | 43MB |
+| test  | hello   | 0.1s | 0.1s | Ir=606358888 | 18MB |
+| test  | project | 0.28s | 0.33s | Ir=1982497117 | 34MB |
 
 **Note on `build`'s `cold` column:** this run does not empty S-2's
 persistent rt-object-cache ($MEDAKA_CACHE_DIR / $XDG_CACHE_HOME/medaka /
@@ -211,6 +211,112 @@ pipeline runs for that verb, expected and confirmed: identical both runs).
   both), and general run-to-run wall-clock noise this harness does not
   isolate (single 3-run min, not a `perf stat -r 15` band).
 
+## Before/after the `prelude-floor` sprint (S-1..S-4)
+
+Pre-sprint = `b6d029cd` (this sprint's merge-base and the base F1 was measured against;
+this row is a fresh re-run on that commit, not a re-derivation of an old number — see S-4's
+report for the full command trace). Post-sprint = the current `## Table` run above, sha
+`ce504eee` (S-1 prelude-parse-once + S-2 editor-loop + S-3 prelude-typecheck-once, plus a
+resync merge of `origin/main` that landed two unrelated sprints, cost-enforcement #2225 and
+ffi-residual-closeout #2230 — neither touches the prelude parse/typecheck path). Same box,
+same script (`sh test/perf_baseline.sh`), both rerun for this comparison rather than
+re-derived from prose.
+
+| verb  | workload | warm (pre, `b6d029cd`) | warm (post, `ce504eee`) | Δwarm | Ir (pre) | Ir (post) | ΔIr |
+|-------|----------|-----------:|------------:|--------:|-----------------:|------------------:|-----------:|
+| new   | hello   | 0.01s | 0.01s |   0.0% | bytes=20480 | bytes=20480 |   0.0% |
+| new   | project | 0.01s | 0.01s |   0.0% | bytes=20480 | bytes=20480 |   0.0% |
+| check | hello   | 0.21s | 0.10s | -52.4% | 1,383,199,470 | 625,431,278 | -54.8% |
+| check | project | 0.64s | 0.47s | -26.6% | 3,962,837,854 | 3,044,719,683 | -23.2% |
+| build | hello   | 0.89s | 0.83s |  -6.7% | 1,026,010,501 | 621,128,808 | -39.5% |
+| build | project | 1.75s | 1.73s |  -1.1% | 3,374,981,052 | 3,375,080,908 |   0.0% |
+| run   | hello   | 0.17s | 0.13s | -23.5% | 1,021,216,777 | 844,785,956 | -17.3% |
+| run   | project | 0.56s | 0.56s |   0.0% | 3,671,959,406 | 3,672,111,497 |   0.0% |
+| test  | hello   | 0.12s | 0.10s | -16.7% | 782,766,737 | 606,358,888 | -22.5% |
+| test  | project | 0.29s | 0.33s | +13.8% | 1,982,474,164 | 1,982,497,117 |   0.0% |
+
+**Reading it — the sprint's win is `check`-shaped, not front-end-shaped.** `check`'s Ir drops
+substantially on BOTH workloads (-54.8% hello, -23.2% project) — the verb whose call sites
+(`checkRoute`, `analyzeFrom`, `checkJsonSingle`/`checkJsonFile`) S-1/S-3 actually converted
+to the memoized `parsePrelude`/reduced-typecheck path. `build`/`run`/`test` show **~0% Ir
+movement on the project workload** and only partial movement on hello (`build`/hello -39.5%
+Ir but only -6.7% warm, since clang dominates wall time there) — S-1's own report flagged
+this deliberately: "NOT converted: `run`/`build`/`test`(`test_cmd.mdk`) routes... each still
+parses the prelude an extra time or two." This before/after table is the first empirical
+confirmation of that scope note: **the redundant-prelude fix has not yet reached
+`run`/`build`/`test`**, only `check`. A follow-up slice converting those remaining call
+sites (S-1's Notes N3 lists the exact line numbers) is the obvious next win and is
+explicitly out of this sprint's contract (S-4 measures, does not fix).
+
+## `check gzip/` instruction attribution (S-4, #2235)
+
+Command (F1's method; `--separate-callers` omitted for this aggregate roll-up — see the
+report for why; a plain callgrind run's exclusive per-function cost sums to the program
+total exactly, which a `--separate-callers` breakdown does not due to recursion-cycle
+double-booking):
+
+```
+MEDAKA_STRICT=1 GC_INITIAL_HEAP_SIZE=1073741824 valgrind --tool=callgrind \
+  --callgrind-out-file=cg.out ./medaka check gzip/main.mdk
+I refs: 3,042,768,884
+```
+
+`callgrind_annotate --threshold=99.99`, function-name-prefix bucketed (rows sum to
+3,042,465,135, 99.99% of the program total):
+
+| bucket | Ir | share |
+|---|---:|---:|
+| GC (libgc + unnamed libgc addresses) | 1,504,970,983 | 49.5% |
+| other compiler internals (mostly anonymous closures compiled from parser/typecheck bodies) | 354,152,013 | 11.6% |
+| libc (memcpy/memcmp/printf/pthread/tls) | 348,691,661 | 11.5% |
+| stdlib data structures (map/set/list/string/hash_*) | 325,627,988 | 10.7% |
+| `frontend.parser` | 158,755,236 | 5.2% |
+| `types.typecheck` | 121,626,030 | 4.0% |
+| `frontend.lexer` | 80,583,056 | 2.6% |
+| dispatch glue | 55,180,835 | 1.8% |
+| `frontend.resolve` | 26,506,537 | 0.9% |
+| `frontend.desugar` | 21,442,884 | 0.7% |
+| `frontend.ast` | 19,030,700 | 0.6% |
+| `frontend.exhaust` | 2,349,373 | 0.1% |
+| `frontend.marker` | 1,925,955 | 0.1% |
+| `driver.loader` (the multi-module walk/topo-sort glue itself) | 253,211 | 0.01% |
+| `driver.diagnostics` | 14,301 | 0.00% |
+
+**Verdict on #2235:** `check gzip/` at this binary is **0.47s warm / 0.50s cold** — under
+the proposed <0.5s target on `warm`, exactly at the boundary on `cold` (see the updated
+targets table below). Same allocator-dominated shape as hello-world (S-3's finding):
+GC/allocator is ~50% of the cost at 9-file scale too, not a project-scale-specific
+bottleneck. `driver.loader`'s own glue (module walk, topo sort, cycle detection) is
+negligible (0.01%) — all real work is delegated to parser/resolve/typecheck per module, one
+call each, which is exactly what §6.3's per-module scaling result below explains
+mechanically.
+
+## #983 verdict: per-INVOCATION multiplier, not per-module (S-4)
+
+Three synthetic projects (1, 3, 9 trivial one-line modules imported by `main.mdk`, generated
+fresh — content held constant, only module COUNT varies), cachegrind Ir
+(`--cache-sim=no --branch-sim=no`, `GC_INITIAL_HEAP_SIZE` pinned, `MEDAKA_STRICT=1`):
+
+| modules | Ir | marginal Ir/module vs previous row |
+|---:|---:|---:|
+| 1 | 817,605,012 | — |
+| 3 | 861,138,345 | 21,766,667 |
+| 9 | 992,314,026 | 21,862,614 |
+
+Marginal Ir per additional module is constant to within 0.4% across a 3x range of module
+count. A linear fit `base + k*N` (`k = 21,766,667`, `base = 795,838,345`) predicts N=9 at
+991,764,398 against the measured 992,314,026 — 0.06% error.
+
+**Verdict: REFUTED.** #983's literal "3x PER MODULE" claim does not hold on this (post
+S-1..S-3) binary. The three-driver/prelude cost is a fixed per-INVOCATION constant
+(collapsed by S-1: 4 prelude parses → 1; by S-3: 3 prelude typechecks → 2), independent of
+module count. What scales with module count is the ordinary linear cost of parsing +
+resolving + typechecking each module's own (small) file — ~21.8M Ir/module here, three
+orders of magnitude below the ~180-220M Ir size of a single prelude parse or typecheck, so a
+per-module repeat of the prelude cost would be obvious in this data and is not present. The
+correct reading, per S-3's own edit to #983, is "3x per invocation" (confirmed, partially
+fixed — 2 of 3 typechecks remain per this sprint's contract scope), not "3x per module."
+
 ## Proposed per-verb targets — UNCONFIRMED, PENDING VAL
 
 No target for any verb has been agreed by Val as of this writing (see #2040's
@@ -221,26 +327,33 @@ per verb, derived from what a user visibly waits on, plus a verdict against
 the post-sprint numbers above so the shape of a miss is visible now rather
 than after confirmation.
 
+**Re-measured by S-4 on the post-S-1..S-3 (+ resync) binary, sha `ce504eee`** — the
+`post-sprint` column and verdicts below supersede the numbers an earlier slice recorded
+before the sprint branch was resynced onto `origin/main`; targets/rationale are unchanged.
+
 | verb | workload | proposed target (warm) | rationale | post-sprint | verdict |
 |---|---|---|---|---:|---|
 | `new` | either | < 0.1s | scaffolding a project must feel instantaneous; both workloads already 10x under this | 0.01s | **HIT** |
-| `check` | hello | < 0.25s | the inner edit-loop floor; S-3 found ~98% of this is prelude parse/typecheck redundancy, a fixed cost independent of program size — 0.25s leaves headroom above that floor without hiding it | 0.19s | **HIT** |
-| `check` | project | < 0.5s | "the one people compare against other languages" (#2040) on a 0.1.0-scale (3.6k line) project; chosen as roughly 2x the hello floor, since a 9-file project pays multi-module loader/resolve cost hello does not | 0.59s | **MISS** (18% over) |
-| `build` | hello | < 1.0s | clang-bound (#2040); post-cache this is now typecheck+emit+one clang invocation on a tiny .c+.ll pair | 0.85s | **HIT** |
-| `build` | project | < 2.0s | scaling the hello target by workload size the same way `check` does; `build` is clang-bound so this is more clang-time-dependent than compiler-controlled | 1.59s | **HIT** |
-| `run` | hello | < 0.2s | interpreter path, same order as `check` hello since both share the front end and `run` skips clang entirely | 0.14s | **HIT** |
-| `run` | project | < 0.7s | scaled the same way as `check project` | 0.54s | **HIT** |
-| `test` | hello | < 0.2s | doctests+props over a near-empty file; dominated by the same prelude floor as `check` | 0.12s | **HIT** |
-| `test` | project | < 0.4s | scaled the same way as `check project` | 0.30s | **HIT** |
+| `check` | hello | < 0.25s | the inner edit-loop floor; S-3 found ~98% of this is prelude parse/typecheck redundancy, a fixed cost independent of program size — 0.25s leaves headroom above that floor without hiding it | 0.10s | **HIT** |
+| `check` | project | < 0.5s | "the one people compare against other languages" (#2040) on a 0.1.0-scale (3.6k line) project; chosen as roughly 2x the hello floor, since a 9-file project pays multi-module loader/resolve cost hello does not | 0.47s warm / 0.50s cold | **HIT (warm); at boundary (cold)** |
+| `build` | hello | < 1.0s | clang-bound (#2040); post-cache this is now typecheck+emit+one clang invocation on a tiny .c+.ll pair | 0.83s | **HIT** |
+| `build` | project | < 2.0s | scaling the hello target by workload size the same way `check` does; `build` is clang-bound so this is more clang-time-dependent than compiler-controlled | 1.73s | **HIT** |
+| `run` | hello | < 0.2s | interpreter path, same order as `check` hello since both share the front end and `run` skips clang entirely | 0.13s | **HIT** |
+| `run` | project | < 0.7s | scaled the same way as `check project` | 0.56s | **HIT** |
+| `test` | hello | < 0.2s | doctests+props over a near-empty file; dominated by the same prelude floor as `check` | 0.10s | **HIT** |
+| `test` | project | < 0.4s | scaled the same way as `check project` | 0.33s | **HIT** |
 
-**One miss: `check`/`project` at 0.59s vs a proposed 0.5s target (18% over).**
-Filed as a named item (draft below, not `gh`-written per §5): the multi-module
-loader/resolve path on a 9-file project is the standing cost this harness's
-`check`/`build` split cannot separately attribute (S-3's decomposition was
-`check`-hello-only; `check`-project has not been profiled the same way). This
-is exactly the shape #2040 asks every miss to produce — a named Wave 2 item,
-not a shrug.
-
+**The one prior miss, `check`/`project`, is now resolved to a HIT on `warm` (0.47s vs a
+proposed 0.5s target) and sits exactly at the boundary on `cold` (0.50s).** This is S-1/S-3's
+memoization discharging #2235 in the ordinary case (warm cache/second+ invocation, the
+normal edit-loop shape); the `cold` column is the very first check of a session and is
+inherently noisier (this harness's own caveat: page-cache-cold-ish, not `drop_caches`-cold).
+**All nine measured cells now read HIT or at-boundary** against the proposed targets — no
+named miss remains to carry forward as a Wave 2 item from this table. This does NOT mean
+#2040 is discharged: the before/after table above shows `build`/`run`/`test` improved little
+or not at all on the `project` workload (the redundant-prelude fix reached only `check`'s
+call sites), so their current HITs reflect the *original* (pre-sprint) targets being
+comfortably loose, not a sprint win on those verbs specifically.
 ## LSP editor-loop latency (#2040 residual, #962)
 
 First committed numbers for the two editor-loop metrics #2040 names
