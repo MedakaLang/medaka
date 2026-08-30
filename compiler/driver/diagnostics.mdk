@@ -610,6 +610,12 @@ analyzeLocatedG modName allowInternal runtimeSrc coreSrc progSrc =
 -- `W-PRELUDE-METHOD-SHADOW`).  "" = the caller has no module id in hand (the
 -- LSP live buffer, the playground, an inline `source`), and the text falls back
 -- to "this module" — the flat path analyses exactly one module either way.
+-- S-3/#164: exported so `checkRoute`'s single-module clean arm
+-- (`compiler/driver/medaka_cli.mdk`) can call this directly with the loader's
+-- already-parsed, real-span `decls` instead of going through `analyzeLocatedG`
+-- (which would re-parse `tsrc` via `parseLocated` — the loader already ran the
+-- structurally-identical `parseLocatedResult` over the same source).
+export
 analyzeFrom : String -> String -> String -> List Decl -> List String -> List Diag
 analyzeFrom modName runtimeSrc coreSrc raw internalGuard =
   let desugared = desugar raw

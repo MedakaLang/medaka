@@ -15,7 +15,12 @@
 -- subcommand falls through to the catch-all, which prints "not yet in native
 -- CLI" and exits 1.
 
-import tools.check.{runCheck, checkHasErrors, runCheckModules}
+import tools.check.{
+  runCheck,
+  runCheckFromDecls,
+  checkHasErrors,
+  runCheckModules,
+}
 import tools.snapshot.{
   runSnapshotWorker,
   runSnapshotSupervisor,
@@ -71,7 +76,7 @@ import frontend.parser.{
 }
 import frontend.desugar_cache.{desugaredPrelude}
 import frontend.desugar.{desugar}
-import frontend.resolve.{resolveModulesToHumaneByPath}
+import frontend.resolve.{resolveModulesToHumaneByPath, internalGuardFor}
 import driver.loader.{
   LoadError,
   LoadMsg,
@@ -91,6 +96,7 @@ import driver.diagnostics.{
   analyzeProject,
   analyzeLocated,
   analyzeLocatedG,
+  analyzeFrom,
   ppDiagCli,
   ppDiagCliSrc,
   ppDiagCliLines,
@@ -671,7 +677,13 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decl
   -- arm) flagged its OWN legitimate internal-extern calls as errors unless
   -- the flag was passed every time, even with MEDAKA_ROOT correctly set.
   -- Honour `trusted` here too, matching the multi-module arm below.
-  let diags = analyzeLocatedG mid (allowInternal || contains mid trusted) rsrc csrc tsrc
+  -- S-3/#164: this arm already has the loader's parsed, real-span `decls` for
+  -- this single module (`loadProgramFilesLocatedE` parsed it via
+  -- `parseLocatedResult`, the same machinery `analyzeLocatedG`'s internal
+  -- `parseLocated tsrc` would redundantly repeat) — call `analyzeFrom`
+  -- directly with `decls` instead of going through `analyzeLocatedG`, to skip
+  -- that re-parse.  Every OTHER `analyzeLocatedG` caller is untouched.
+  let diags = analyzeFrom mid rsrc csrc decls (internalGuardFor (allowInternal || contains mid trusted))
   let errs = filter isDiagError diags
   match errs
     [] =>
@@ -682,7 +694,11 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decl
       -- lines and re-emit them from `diags` (which carries the real Loc the
       -- --json path already reports).  See ERROR-QUALITY.md (Located dimension).
       let warns = filter isDiagWarn diags
-      let dump = stripWarningLines (runCheck rsrc csrc tsrc)
+      -- S-3/#164: same rationale as `analyzeFrom` above — `decls` is already
+      -- the real-span parse of `tsrc` from the loader, so skip `runCheck`'s
+      -- internal placeholder-loc `parse tsrc` and feed `decls` straight into
+      -- the extracted decls-accepting body.
+      let dump = stripWarningLines (runCheckFromDecls rsrc csrc decls)
       let filtered = userSchemeLines decls dump
       let report = if typesMode then dump else filtered
       let _ = putStrLn report
