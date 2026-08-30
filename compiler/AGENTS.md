@@ -218,9 +218,11 @@ measured its own **2.2× win as a 2.5× SLOWDOWN** and nearly abandoned it.
 
 - **A gate matching `test/diff_compiler_*.sh` but no shard pattern in `.github/workflows/ci.yml`
   SILENTLY NEVER RUNS.** Green forever, checking nothing. `diff_compiler_ci_shard_coverage.sh`
-  catches it — and it has caught us. **Enrol your gate in a shard, and put it where there is
-  ROOM** (shards are scheduled by **cost**, not theme; `gates (engines)` at ~5.8 min is the
-  critical path — do not add to it).
+  catches it — and it has caught us. **Enrol your gate in `test/gates.toml`; you do NOT choose
+  its shard** — since #2178 the `shard` field is a DERIVED output of measured per-gate cost
+  (`medaka gate balance`), and the eight executor rows are named `gates_1`…`gates_8` precisely
+  so no name can imply a theme. Give the new entry any existing row name to satisfy the schema
+  and let the balancer place it ([W-SHARD-DERIVED]).
 - **Print `checked N`. `N == 0` MUST be a FAILURE.** A gate that can no-op, will. One of ours
   reported **24 real failures as "not run"**, because the break made every build fail, so
   nothing reached the comparison, so a zero-comparison guard fired first and it exited **2
