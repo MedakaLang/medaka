@@ -2159,6 +2159,20 @@ corpus = []
 toolchain = ["clang"]
 
 [[gate]]
+name = "diff_compiler_check_ir_floor"
+area = "infra"
+shard = "frontend"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/diff_compiler_check_ir_floor.sh"
+oracles = []
+sources = ["test/diff_compiler_check_ir_floor.sh"]
+corpus = []
+toolchain = ["clang", "valgrind"]
+
+[[gate]]
 name = "diff_compiler_let_refute"
 area = "infra"
 shard = "frontend"
