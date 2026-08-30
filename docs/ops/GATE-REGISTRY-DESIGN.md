@@ -85,7 +85,10 @@ shard       = "frontend"       # ci.yml `gates` matrix ROW: engines|sqlite|pds|f
                                #   some OTHER workflow job schedules (#2177)
 project     = "compiler"       # compiler | sqlite | gzip | pds | mq | parsec | byteparser
 tier        = "merge"          # merge | nightly | ondemand
-cost        = "cheap"          # cheap(<10s) | medium(<60s) | heavy(<300s) | budgeted(explicit)
+cost        = "cheap"          # cheap|medium|heavy — the CI kill timeout `timeoutFor`
+                               #   enforces: cheap 300s / medium 900s / heavy 3600s. No
+                               #   fourth class; this is also what `gate budget` clause
+                               #   (b) checks a gate's measured cost against (§14).
 kind        = "exec"           # exec (wrap a script) | native (a medaka gate module)
 run         = "test/diff_compiler_parse_result.sh"   # exec: the script; native: module path
 oracles     = ["parse_result_main"]   # test/bin/* names this gate reads (drives oracle builds)
@@ -137,8 +140,8 @@ Notes on the load-bearing fields:
   modelled yet — #2177's generator only owns the `gates` matrix, and inventing a
   second, unverified job axis would have put unchecked data in the registry.
 - **`cost`**: a *declaration* checked against queue-measured reality by the ratchet
-  (#2180). `budgeted` carries an explicit seconds figure for the rare
-  deliberately-heavy merge-tier gate.
+  (#2180). One of `cheap`/`medium`/`heavy` — no fourth class; a deliberately-heavy
+  merge-tier gate is declared `heavy`, not given its own explicit-seconds figure.
 - **`sources` + `corpus` replace preflight's case arms**: preflight's derivation
   ("changed path → gate set") becomes a registry query, `medaka gate explain <path>`.
   The existing fail-open rules transfer verbatim: unmatched non-prose path → FULL;
@@ -198,7 +201,8 @@ pinned_gates = ["pds/test/protocol_all_engines", "diff_compiler_engines", "diff_
   (review finding F3 of #2178, tracked as #2205). The worse half was moving the
   pinned gate OFF: a cost objective blind to the pin PREFERS that, because
   idling a whole runner and stacking the suite's heaviest gate onto a shared one
-  improves pole/median (measured: 1.005 against 1.073).
+  improved the printed factor (measured: pole/median 1.005 against 1.073, under
+  the metric §13 retired).
 
   So it is declared per row and checked against the registry in BOTH directions
   — a member not declared, and a declaration not a member — which is what makes
@@ -335,11 +339,11 @@ own place in the bootstrap, for no gain — §5's circularity is unchanged eithe
   `medaka gate balance` (`compiler/tools/gate_cmd.mdk`) packs every schedulable
   gate onto the open rows from the per-gate costs in
   `test/gate_cost_baseline.json`, subject to each row's `wasm_arm` toolchain
-  constraint and `full_cores` closure and to an enforced pole/median budget, and
+  constraint and `full_cores` closure and to an enforced pole/floor budget (§13), and
   writes the `shard` values back; `make gen-ci` (`medaka gate ci`) then
   regenerates ci.yml's matrix from them. The landed rebalance moved 164 of 202
   gates and, under the SUM-of-medians model in use at the time, took the pole
-  from 1143.6s to 948.9s (pole/median 1.26 -> 1.073); that model was itself
+  from 1143.6s to 948.9s (pole/median, then the enforced metric, 1.26 -> 1.073); that model was itself
   superseded soon after (#2207, "real-wall-shards"): CI does not run a row's
   gates one after another, `test/run_gates.sh` fans them out through an
   `xargs -P $JOBS` pool, so what CI actually pays for a row is the MAKESPAN
@@ -350,9 +354,10 @@ own place in the bootstrap, for no gain — §5's circularity is unchanged eithe
   baseline and CURRENT assignment, and it moves with re-ingests and
   rebalances rather than sitting at a number this doc can pin. Read it live
   with `medaka gate balance --check`, which prints every row's makespan, the
-  pole, the median and the enforced pole/median target; a gate is still
-  indivisible, so a row holding one dominating gate still floors the pole at
-  that gate's own cost.
+  pole, the median, the FLOOR and the enforced pole/floor budget (§13); a gate
+  is still indivisible, so a row holding one dominating gate still floors the
+  pole at that gate's own cost — which since #2216 is a term in the metric's
+  denominator rather than a red no one can repair.
 
   Since S-1 (#2208) each `runs[]` provenance row (`RunRecord`,
   `compiler/tools/gate_cost.mdk`) also carries the row's own `jobs` (workers
@@ -602,3 +607,498 @@ exit 2, never a pass.
 
 #2200's `test/preflight.sh` half — preflight's own path classification — is **not**
 addressed here and stays open.
+
+## 10. The packing statistic, and what its estimates are worth (#2222, S-2)
+
+`medaka gate balance` packs shards from ONE number per gate: `medianMs` in
+`test/gate_cost_baseline.json`, the **lower median** of that gate's retained raw
+samples. Until S-2 that number was scheduled on **with no stated error** — every
+figure the balancer printed was a point estimate presented as if exact, and the only
+account of its accuracy was a prose claim in `balCalibLines` that the median
+"systematically underestimates". Two neighbouring prose claims about the baseline's
+sample state had already gone stale within two ingests.
+
+**The statistic is RETAINED, and it is retained on a measurement.** All four families
+#2222 named were compared, and the median won the axis a packer schedules on.
+
+### The protocol, and why it is out-of-sample
+
+An estimate scored against the samples that defined it is an in-sample residual and
+is worth nothing: the median of three numbers is trivially close to those three
+numbers. So: **leave one RUN out.** Each recorded run is held out in turn, every
+gate's statistic is recomputed from the OTHER runs' samples only, and the sum of
+those estimates is scored against the held-out run's actual total. No estimate is
+ever graded against a sample that helped produce it.
+
+Leaving out a *sample* requires knowing **which run that sample came from**, and
+since FR-1 (#2222 review S0-1) that is **read, never inferred**. Each `gates[]` row
+carries `sampleRuns`: one `runId` per element of `ms`, same length and same order,
+empty where unknown. A gate is folded into the table below only if exactly one of its
+`sampleRuns` entries matches each recorded `runId`; zero matches, ambiguous matches,
+and unattributed samples all exclude it.
+
+> ⚠️ **S-2 inferred this from a count, and the inference is unsound.** The argument
+> was: a gate receives at most one sample per run, so a gate whose `samples` equals
+> the number of distinct `runId`s in `runs[]` received exactly one from each, and
+> `ms[i]` is run `i` in append order. The premise is true; the conclusion does not
+> follow. `test/gate_cost_ingest.sh` trims `runs[]` by **row** count (`--max-runs`,
+> one row per `runId:runAttempt:shard`) and each gate's `ms` by **sample** count
+> (`--max-samples`), independently, per gate — nothing ties the two counters
+> together. One more ingest in which a gate fails once puts that gate back at an
+> equal count with the alignment wrong, and every fold then grades one run's estimate
+> against a different run's measurement, at exit 0, with no warning. The pinned
+> repro is `test/gate_balance_fixtures/oos_misaligned.{toml,json}`, whose `ms` arrays
+> are byte-identical to `oos_attributed`'s precisely because the old computation
+> could not tell the two files apart.
+
+### The one command
+
+```sh
+medaka gate balance --check          # the block is printed in ORDINARY output
+```
+
+Reproduced by any reader from committed data, and re-derived on every run so it
+cannot rot. On a baseline whose samples are attributed, it reads:
+
+```
+  out-of-sample error of the packing statistic (leave-one-run-out over the 3 runs in runs[],
+  across the 2 of 3 schedulable gates carrying a run-attributed sample from every run):
+    run 1             predicted      0.2s   actual      0.1s   +100.0%
+    run 2             predicted      0.1s   actual      0.2s    -50.0%
+    run 3             predicted      0.1s   actual      0.3s    -66.6%
+    mean |error| 72.2%   systematic bias -33.3%
+```
+
+(that is `oos_attributed`, whose every fold is hand-derivable from the fixture; the
+live figure is whatever the committed baseline currently supports.)
+
+⚠️ **This is an UPPER BOUND on the production error, not an estimate of it.** Holding
+out one of N samples trains the statistic at N-1, one below what the committed file
+schedules from, and fewer samples is strictly worse. Read it as "no worse than this".
+
+🚨 **On the tree as of FR-1 the block prints `not derivable`, and that is correct.**
+`sampleRuns` did not exist when the committed baseline's samples were ingested, and
+their provenance was never written down, so there is nothing to recover — backfilling
+it by position would be the exact defect FR-1 removed. The line states the counts it
+refuses on:
+
+```
+  out-of-sample error of the packing statistic: not derivable — 0 of 606 retained samples
+  carry run attribution, and no schedulable gate carries an exactly attributed sample from
+  each of the 3 recorded runs
+```
+
+It becomes a number again once enough attributed ingests have landed.
+
+### Why the median won — the table
+
+Per **row** (each row's predicted total against the held-out run's actual for that
+same row), 8 rows × 3 held-out runs = 24 folds. ⚠️ Like §13's budget, this whole
+table — the −12.6% included — is the **S-2 measurement as it was taken**, under the
+positional attribution FR-1 retired. The choice of statistic it settled stands (the
+`pds_test_repo_vectors` outlier argument below does not depend on the fold
+alignment at all); the exact percentages are dated and want re-deriving from
+attributed samples.
+
+| candidate | median APE | p90 APE | folds >25% | bias |
+|---|---|---|---|---|
+| **median (lower, retained)** | 14.6% | **27.2%** | 5/24 | **−12.6%** |
+| median (proper / even-avg) | 10.5% | 42.2% | 4/24 | −0.0% |
+| upper quantile (upper median, max) | 12.8% | 48.2% | 5/24 | +12.6% |
+| spread-widened (+0.25 / +0.50 / +1.00 × spread) | 11.9 / 10.5 / 12.8% | 26.4 / 42.2 / 48.2% | 4/4/5 | −6.3 / +0.0 / +12.6% |
+
+Read that table honestly and it splits by axis. **On central tendency every
+alternative beats the median** — it is systematically low, and −12.6% is the size of
+that. **On the tail the median wins**, and the tail is the axis a packer schedules
+on: a row's makespan is set by what it got wrong, not by what it got right on
+average.
+
+### What the whole result rests on — one gate, stated plainly
+
+Removing a single gate inverts the table:
+
+| candidate | median APE | p90 APE | bias | *(all 202 gates → 201, excluding `pds_test_repo_vectors`)* |
+|---|---|---|---|---|
+| median (lower) | 12.4% | 26.6% | −7.9% | now the WORST on every column |
+| median (proper) | 9.0% | 16.3% | −0.0% | |
+| upper quantile | 8.6% | 19.8% | +7.9% | |
+
+`pds_test_repo_vectors` carries `ms = [948919, 14082, 18725]` — one sample **50.7×**
+its own median, one runner hiccup among 606 committed samples (0.17%, or roughly one
+per three CI runs at 202 gates a run). At the baseline's own sample count each
+candidate prices that gate as:
+
+| statistic | price | |
+|---|---|---|
+| **median** | **18725 ms** | the only one that is right |
+| mean | 327242 ms | 17× |
+| median + 0.25 × spread | 252434 ms | 13× |
+| max | 948919 ms | 50× |
+
+A 949-second misprice on one gate is enough to dominate an entire row. So the
+robustness is not a nicety and the −12.6% is **the price of it**, reported rather
+than corrected: any uplift factor that cancelled the bias would be a function of the
+sample count it was fitted at and would over-correct at every other one.
+
+Pinned by `test/gate_balance_fixtures/outlier_immunity.{json,toml}`, which is built
+so the median and the alternatives disagree about an **assignment** and not merely a
+printed value, with the mean-priced arm run as the red half.
+
+### Consumers
+
+`gate_cost.packStat` is the statistic as a named function; `median()` in
+`test/gate_cost_ingest.sh` is its awk mirror, and the two are kept honest by
+`balOosBlock` counting the committed rows where they disagree (expected 0, printed
+only when not). **S-4's cost budget should cite the `systematic bias` figure the tool
+prints, and cite it as a lower bound on a row's real cost** — the model predicts low,
+by construction and by measurement.
+
+## 11. Calibration staleness is a SET question, not a count (#2223, S-2)
+
+`balCalibLine` prints each row's recorded CI wall clock against this model's
+prediction. That residual only means anything while the recorded run and the
+committed assignment describe **the same gate set**, and the line cannot tell on its
+own: a residual reads identically whether the gate set moved or not.
+
+F-2 closed half of it by comparing the run's recorded `gates` **count** against the
+row's current count. **A count is not a set.** The commonest rebalance is a *swap* —
+one gate leaves a row, another arrives — and a swap does not move a count, so the
+annotation stayed silent on exactly the case it existed for (observed: a −96%
+residual printing entirely clean, which reads as "the model is calibrated" when it
+means "the model is being graded against a gate set that has not existed since the
+rebalance").
+
+Closed by recording a **gate-set digest** per `runs[]` row: `gatesDigest`, the sum of
+a `h = h*131 + c` polynomial hash over that row's baseline keys, mod 2^31−1. A sum,
+so it is order-independent — a report lists gates in pattern-resolution order and the
+registry in enrolment order, and those differ. Its only consumer is an annotation, so
+a collision costs a missing annotation and never a wrong assignment.
+
+Two implementations, deliberately: `gate_cost.gateSetDigest` reads the committed side
+and `_digest` in `test/gate_cost_ingest.sh` wrote the recorded side. They are pinned
+against one shared constant from opposite directions —
+`test/diff_compiler_gate_cost.sh` checks the awk (via `--digest`) and
+`test/diff_compiler_gate_balance.sh` checks the Medaka (via `calib_staleness`'s row
+`d`, which is unannotated only if the two agree).
+
+`gatesDigest` is **optional**, like `jobs`/`parallel`/`gates` before it: a run
+ingested before the field existed reads as unknown, and unknown is not stale. So the
+24 rows already in the committed baseline keep exactly the count-only behaviour they
+had and gain the set check at their next ingest — the fix is live for everything
+ingested from here, and no digest was back-filled into a GENERATED file by inference.
+
+## 12. Assignment stability: the incumbent is an INPUT, not a carve-out (#2218, S-3)
+
+S-1 made cost re-ingests scheduled, so re-deriving the whole matrix went from
+occasional to routine. That turned a known property of the packer into a standing
+cost: the assignment is a function of noisy medians, and ordinary measurement noise
+moves it. **Measured on the committed 202-gate registry**, perturbing every gate's
+`medianMs` (and each of its `ms` samples) by ±2% and re-deriving:
+
+| perturbation shape | churn before | churn after | pole before → after | pole/median before → after (§13 retired this metric; the figures are the S-3 measurement as taken) |
+|---|---|---|---|---|
+| index parity (even `+2%`, odd `−2%`) | 89 / 202 | **0** | 491.9s → 491.9s | 1.077 → 1.077 |
+| opposite parity | 128 / 202 | **4** | 472.6s → 472.6s | 1.036 → 1.041 |
+| name-hashed sign | 127 / 202 | **0** | 491.9s → 491.9s | 1.074 → 1.077 |
+
+Method, reproducible: copy `test/gates.toml` and `test/gate_cost_baseline.json`,
+scale every gate's `medianMs` and `ms` entries by `1 ± 0.02` with the sign chosen by
+the shape, run `medaka gate balance --registry <copy> --baseline <perturbed>`, and
+count `shard = "…"` lines that differ from the committed file. The "before" column is
+the same run with the preference off, which the balancer computes on every run
+anyway (see *What it costs*, below).
+
+### The mechanism
+
+`balPickStable` (`compiler/tools/gate_cmd.mdk`) takes the LPT pick as its baseline
+and keeps the gate's **committed** row instead when all three of these hold:
+
+1. the incumbent row is open, and
+2. the incumbent row is **legal** for that gate (`wasm_arm`), and
+3. the incumbent row is currently no more than `balStabPct` (5%) heavier than the
+   lightest legal row.
+
+Clause (3) compares the rows **before** the gate is added, not after. Both forms were
+implemented and measured; the before-form caps the pole excess a hold can cause at 5%
+of the lighter row's load, while the after-form's cap grows with the gate's own cost —
+an expensive gate would earn *more* licence to sit on a heavy row, which is backwards
+for an objective that is the pole. It also measured no worse (churn 0 / 4 / 0 against
+the after-form's 0 / 7 / 5).
+
+A consequence worth stating: early in the pack every row is near-empty, so the slack
+is near zero and the biggest gates — the ones that set the pole's floor — are placed
+by bare LPT with no preference at all. The preference only reaches the tail of small
+gates, which is where the churn lives.
+
+### Why this is not the hysteresis band that was reverted
+
+**#2178 shipped a near-identical-looking mechanism and removed it, and the difference
+is the whole reason this one is allowed to exist.** Read `balBandNote`'s doc-comment
+before touching any of this.
+
+The reverted band let the **committed assignment stand** whenever it scored within
+`balMarginPct` of the derived target's pole. That made "the derived assignment" a
+*set* rather than a value, and a check can only police a value: moving
+`diff_compiler_source_bytes` from `tools` to `types` by hand shifted the pole by 0s,
+so `medaka gate balance --check` reported *"already balanced"* and exited 0 — the
+hand edit the whole `shard`-is-derived-data property exists to catch.
+
+This is the opposite move. The incumbent is an **explicit argument** to the placement
+decision, read from the committed registry (`Cand.curRow`, populated by `balCands`)
+exactly like `cms` and `needsWasm`. `balTarget` is still a pure function — of
+`(rows, costs, toolchains, incumbent shards)` — and still returns **one** assignment,
+which `--check` re-derives from the same committed bytes and compares. Purity is a
+property of the argument list, not of arguments being few. A hand edit here is
+re-derived like everything else and survives only if the derivation independently
+produces it, which is what "derived" means.
+
+**Idempotence** — the property #2178 paid for — is preserved and argued in
+`balPickStable`: on the balancer's own output every incumbent *is* the row the
+previous run chose, so every placement repeats and the second run is byte-identical.
+`test/diff_compiler_gate_balance.sh` asserts it three ways (§1's `--check` on the
+committed tree, §2's `_bal_real`-twice on a scratch copy, §12's fixture run twice),
+and all three perturbed registries above were verified byte-identical on a second
+run.
+
+**Legality is never traded.** Clause (2) is `balCurrentLegal`'s argument one layer
+down: an illegal incumbent fails the predicate and is moved however cheap the repair
+is. The `wasm_only_row` fixture is exactly that case and still passes.
+
+### What it costs, stated on every run
+
+The trade is churn against pole, so the balancer packs the same candidates a second
+time with the preference **off** and prints both sides:
+
+```
+  stability: 89 of 202 gates held on their committed row (incumbent slack 5% of a
+  row's load); pole 491.9s against 491.9s unstabilized (+0.0s), pole/floor 1.077
+  against 1.077
+```
+
+(The trailing factor is `pole/floor` since §13; the numbers above are the S-3 run's,
+which measured `pole/median`. The pole columns are unaffected — the metric change
+moved the denominator, never the packing.)
+
+On an unperturbed, already-balanced registry both numbers are **zero**, and that is
+the healthy reading rather than a broken comparison: the committed assignment *is*
+the packer's output, so every incumbent already equals the pick and the preference
+never fires. It fires when the baseline moves under it, which is the only situation
+it exists for.
+
+The count is *gates held*, not *gates the two packings disagree about* — holding one
+gate shifts the loads every later placement is measured against, so the two packings
+can also disagree about gates that were themselves moved. `stability_preference` has
+exactly one of each.
+
+### The fixture
+
+`test/gate_balance_fixtures/stability_preference.{toml,json}` carries the rule and its
+limit in one registry, because a preference that always held would pass a fixture that
+only proved holding. Two gates differ in exactly one respect — how heavy their
+incumbent row had become by the time LPT reached them: `held` is placed while its row
+is 2.6% heavier than the lightest and stays; `mover` is placed once its row is 7.7%
+heavier and moves. The hold costs exactly 2.0s of pole (210.0s against bare LPT's
+208.0s), and the gate asserts that number, so the trade cannot silently grow.
+
+## 13. The enforced statement grades the PACKING, not the suite (#2216, S-4)
+
+`pole / median` was the enforced target from #2178 until this. Its numerator is a
+property of the packing; its **denominator is a property of the suite**, and that
+mismatch made it move for reasons the balancer neither caused nor could repair —
+in both directions.
+
+**The slowdown direction.** The pole is one indivisible gate
+(`diff_compiler_dict_semantics`, 482.2s). A 16–20% regression in that one gate raises
+the pole and leaves the median where it is, so `medaka gate balance --check` refuses,
+and `ci-gen-drift` — a REQUIRED context — goes red on every PR until someone who did
+not write that gate makes it faster. No rebalance can help; the tool said so itself,
+in the branch that printed *"this gate has to get FASTER"*.
+
+**The speedup direction, which is the perverse one.** Make every non-pole gate four
+times faster and `pole / median` **rises**, because the denominator falls and the
+numerator does not. `test/gate_balance_fixtures/nonpole_speedup.toml` is that measured
+against the pre-#2216 binary: an optimally packed seven-gate suite, refused at 3.333
+against a target of 1.250, with the indivisible-gate message. A metric that reds
+because the suite improved cannot be enforced; it can only be overridden.
+
+### The floor
+
+The replacement divides the pole by the **achievable pole** — the best pole any
+assignment of this gate set onto these rows could reach. `balFloor` takes the largest
+of three terms, each a bound the pole provably cannot go under:
+
+1. **the most expensive single gate.** Gates are indivisible, so whichever row holds
+   it has a makespan at least that big.
+2. **the heaviest CLOSED row's makespan.** A `full_cores` row's membership is declared
+   (`pinned_gates`, §7) and the packer moves nothing onto it or off it, so its load is
+   fixed input.
+3. **the open gates' total work over the open rows' worker SLOTS.** A row's capacity
+   per unit of wall clock is its recorded `rjobs` workers, not one (`balJobsFor`,
+   #2208), so `sum(rjobs) × pole >= total open work`. Counting rows instead of slots
+   would inflate this term by roughly `jobs`×.
+
+So `pole / floor >= 1.000` always, it is exactly 1.000 when the packing is optimal,
+and it moves **only when the packing does**. Both perverse cases above score 1.000.
+
+One valid term is deliberately omitted: the wasm-constrained gates' own work over the
+wasm rows' slots. Leaving a valid term out makes the floor smaller and the ratio
+larger — strictly stricter — so it cannot manufacture a false green.
+
+⚠️ **The floor is a lower bound, not always an achievable makespan.** 500 + three 300s
+over three rows floors at 500 and cannot finish before 600. So a miss can still be
+indivisibility rather than packing, and `balEnforce` keeps two messages: when the floor
+is gate-set it names that gate and says it has to get FASTER (or be split);
+otherwise it blames the packing. `dominating_gate.toml` pins the first (1.200,
+re-priced for this slice — a dominating gate *alone* is no longer a refusal) and
+`lpt_packing_gap.toml` the second (1.222, the classic LPT worst case at three rows).
+
+### The budget: 1.125, derived rather than chosen
+
+The metric's optimum is 1.000 by construction, so the whole budget is packing slack
+and there is no achieved-value term to leave room for. What it must absorb is
+re-ingest **noise**, and §10 measured that out-of-sample rather than guessing:
+leave-one-run-out over the 3 runs in `runs[]` across 202 of 202 schedulable gates,
+per-run errors −21.1% / −6.1% / −9.0%, **mean |error| 12.0%, systematic bias −12.5%**.
+
+> 🚨 **Those five numbers are one dated measurement, not a figure the tool
+> re-derives.** They were taken at S-2 on the baseline as it then stood, by a
+> `balOosBlock` that inferred each sample's run from its position in `ms`; FR-1
+> (#2222 review S0-1) showed that inference unsound and replaced it with recorded
+> per-sample attribution, so the block now reports `not derivable` for any baseline
+> whose samples predate `sampleRuns` — including the one these numbers came from.
+> The budget stands on the S-2 observation as history. **Re-derive it, and 1.125
+> with it, once `medaka gate balance` prints a figure from attributed samples
+> again** — and cite that run, not this paragraph.
+
+    budget = 1 + max(mean |error|, |bias|) = 1 + max(0.120, 0.125) = 1.125
+
+The larger of the two, because they are two ways of being wrong about the same
+prediction. That is knowingly conservative — much of the measured error is common
+mode, and a common-mode factor cancels in a ratio, so 12.5% is an upper bound on the
+noise this metric can inherit rather than an estimate of it. Erring high is deliberate:
+the failure mode of a too-tight budget is a red `ci-gen-drift` with no repair
+available, which is the defect this section exists to remove.
+
+It is still a real constraint. LPT's worst case is `4/3 − 1/(3m)`: 1.222 at three rows,
+1.292 at the registry's eight — so a genuinely worst-case packing misses 1.125 and is
+refused. Achieved on the committed registry when this landed: **1.000** (pole 482.2s =
+`diff_compiler_dict_semantics` alone, which is also the floor), so the full 12.5% is
+headroom.
+
+### What the report prints
+
+```
+  pole 482.2s (sqlite)   median 453.4s   floor 482.2s   pole/floor 1.000
+  floor: the achievable pole — set by 'diff_compiler_dict_semantics' alone (482.2s), which is indivisible.
+         Moving the FLOOR means that gate has to get FASTER (or be split).
+  ...
+  budget pole/floor 1.125 — MET
+```
+
+The median is still printed and no longer enforces anything: it is the one number that
+says at a glance how far the typical row sits from the pole. It is **not** a component
+of the floor — a median is a property of the suite, and mixing one back in would
+restore the perversity.
+
+## 14. The budget governor: `medaka gate budget` (#2180, S-5)
+
+A three-clause, cheap, text-only governor, intended to become required
+(`test/diff_compiler_gate_budget.sh`,
+enrolled `shard = "other-job"` for §13's own "cannot certify a number it can move"
+reason). Reds when:
+
+- **(a) uncosted.** A schedulable gate has no cost baseline entry (`balUncosted`'s
+  condition). The contract's literal clause (a) — "a registry entry lacks a cost
+  declaration" — cannot occur: `cost` is a REQUIRED TOML field, checked at parse time
+  (`reqStr i "cost" e`), so a registry missing it never reaches this gate. `balUncosted`
+  is the state that both occurs and matters: a declared class the packer still cannot
+  price.
+- **(b) over-class.** A gate's measured cost (`medianMs`) has eaten into the
+  tolerance-adjusted timeout its declared `cost` class implies (`timeoutFor`: cheap
+  300s / medium 900s / heavy 3600s). The tolerance is the SAME 1.125 as §13's budget
+  (1 + max(S-2's mean |error| 12.0%, bias 12.5%) — a dated measurement, see §13's
+  note) — one measured slack, used everywhere
+  a noisy `medianMs` is compared to a hard line, because `medianMs` can UNDERSTATE a
+  gate's true cost by that much. Concretely: a gate reds this clause once
+  `medianMs > timeoutMs / 1.125`. This is not aspirational metadata — `cost` is what
+  gets the gate KILLED, so "declared class no longer matches reality" is measurable
+  exactly here, and nowhere is it phrased as "cheap should mean under 10 seconds"; that
+  phrasing in §2's schema comment is aspirational and not what this clause enforces.
+  Landing this gate found one live instance: `diff_compiler_dict_semantics` measured
+  482.2s against a `cheap` (300s) declaration — re-classed to `medium` in the same
+  commit that added the gate, not overridden away.
+- **(c) pole/floor.** The projected `pole/floor` — the SAME number §13's
+  `gate balance --check` derives, from `balCands`/`balRows`/`balTarget` — exceeds
+  `balTargetMilli` (1.125). `balCands` already excludes `other-job` gates from packing
+  entirely, so an `other-job` gate's (nonexistent) cost cannot move this number, this
+  gate's own registry entry included — a governor able to inflate the number it grades
+  by existing would be certifying the wrong thing.
+
+### The override: a commit-message trailer, not a PR-body field
+
+A `merge_group` run has no PR body — the queue tests a synthetic merge commit, not the
+PR. The one thing it can always see is an **authored commit message** in the change
+under test. So any clause may be accepted on purpose with a trailer:
+
+```
+Gate-Budget-Override: <token>  [free-text reason, never machine-checked]
+```
+
+where `<token>` is `uncosted:<gate-name>`, `over-class:<gate-name>`, or the literal
+`pole-floor` — one line per violation accepted. `gate_cmd.mdk` never touches git itself
+(it stays testable on plain strings via `--commit-message`). The failing gate prints the
+exact trailer to paste for each unacknowledged violation, so the remedy is inline for a
+reader with no other context, and every acceptance is a `grep`-able line in `git log`
+forever — an auditable artifact, not silent creep.
+
+#### 🚨 Where the trailer is read from — `git log -1` on HEAD is WRONG on CI
+
+As landed, S-5 read the trailer with `git log -1 --pretty=%B` on the checked-out HEAD and
+justified it as "ordinary git behaviour, no GitHub-specific API, so it needs no separate
+verification against GitHub policy". **That reasoning was the bug** (review finding S1-2,
+fixed by FR-2): it is not a GitHub *policy* question at all, it is a question about the
+git state `actions/checkout@v4` actually produces. With no explicit `ref:`, checkout
+resolves a **synthetic merge commit** on both events that gate a merge — `refs/pull/N/merge`
+on `pull_request`, the queue's auto-merge commit on `merge_group` — and that commit's
+message is GitHub-authored boilerplate, never the author's. Measured on this repo's own
+history: PR #2212's queue commit `93a40382` reads `Merge pull request #2212 from ...`,
+while its **second parent** `1c1b48f3` (the PR branch tip an agent wrote) carries the real
+message. So the override was readable locally and via `--commit-message`, and unreadable on
+every event that could ever need it — an un-overridable required governor, i.e. a deadlock.
+
+The mechanism now has two halves:
+
+- **`.github/workflows/ci.yml`, the `gate-budget:` job's *Resolve the authored commit
+  message(s)* step** re-derives the authored range from the **event payload's** SHAs —
+  `pull_request.base.sha..pull_request.head.sha`, or `merge_group.base_sha..head_sha` —
+  makes those objects reachable with the same targeted `git fetch --no-tags --depth=…`
+  pattern the `detect` job uses, reads `git log --pretty=%B <base>..<head>`, and exports the
+  result as `GATE_BUDGET_COMMIT_MSG`. A RANGE, not one commit, so the trailer counts on any
+  authored commit in the PR and on any PR batched into a multi-PR merge group — a `^2`-only
+  read would miss every PR but the newest in the batch. If the range cannot be resolved it
+  falls back to the head commit, or on `merge_group` to `<head>^2`. On
+  `push`/`workflow_dispatch`/`schedule` — which check out the author's real commit — it
+  exports nothing and behaviour is unchanged.
+- **`test/diff_compiler_gate_budget.sh`** prefers `GATE_BUDGET_COMMIT_MSG` whenever it is
+  **set**, and falls back to `git log -1 --pretty=%B` on HEAD only when it is entirely
+  **absent** — a local or manual run, where HEAD really is the authored commit. The test is
+  `+set`, not `-n`, deliberately: set-but-empty means "CI resolved the range and found no
+  override text", which must stay fail-CLOSED rather than silently re-reading the synthetic
+  merge commit.
+
+The generalisable lesson: *"ordinary git behaviour" is not a reason to skip verification when
+something else chose the checkout.*
+
+### Why a job and not a `gates` matrix row
+
+Same shape and same reason as §13's `gate-balance` job: this gate grades a number
+(the projected pole/floor) that a packing bug could move if the gate itself were
+packed, so it cannot be a member of the set it certifies.
+
+### Not yet required
+
+`ci-gen-drift` is the one context of this family actually in the required-checks
+ruleset today; `gate-cost`, `gate-balance`, and this gate's `gate-budget` job are not.
+Adding a required context is a separate, non-atomic `gh api` ruleset edit
+(AGENTS.md [W-REQUIRED-CHECKS]) — out of scope for this slice; see its report for the
+exact command.

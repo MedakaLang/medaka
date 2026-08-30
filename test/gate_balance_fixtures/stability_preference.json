@@ -1,0 +1,13 @@
+{
+  "schema": "gate-cost-baseline/1",
+  "note": "SYNTHETIC fixture baseline for test/diff_compiler_gate_balance.sh. Hand-written, not ingested. The numbers are chosen so the incumbent preference HOLDS one gate and its 5% bound MOVES another — see stability_preference.toml for the arithmetic.",
+  "generated": "2026-08-30T00:00:00Z",
+  "maxSamples": 9,
+  "runs": [],
+  "gates": [
+    {"name": "anchor_a", "medianMs": 200000, "samples": 1, "ms": [200000]},
+    {"name": "anchor_b", "medianMs": 195000, "samples": 1, "ms": [195000]},
+    {"name": "held", "medianMs": 10000, "samples": 1, "ms": [10000]},
+    {"name": "mover", "medianMs": 8000, "samples": 1, "ms": [8000]}
+  ]
+}

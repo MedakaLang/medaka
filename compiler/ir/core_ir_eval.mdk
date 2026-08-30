@@ -98,6 +98,8 @@ import eval.eval.{
   defaultCellName,
   preludeShadowNames,
   globalFramesWith,
+  ffiExternNamesRef,
+  externDeclNamesOfDecls,
 }
 
 -- ── the evaluator ─────────────────────────────────────────────────────────
@@ -538,6 +540,7 @@ cevalModules preludeDecls modules =
   let allDecls = preludeDecls ++ moduleDecls
   ctorToTypeRef := buildCtorToType allDecls
   ctorFieldOrdersRef := buildCtorFieldOrders allDecls
+  ffiExternNamesRef := externDeclNamesOfDecls allDecls
   let disp = installDispatchTables allDecls
   let ctors = collectCtors allDecls
   let preludeGroups = lowerGroups preludeDecls

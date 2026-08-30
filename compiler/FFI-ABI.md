@@ -285,14 +285,23 @@ interop convenience, but the NUL is not the source of truth for length
   request the copying form explicitly (out of scope for the ABI-copy-or-not
   decision itself, but the rule is: retention without a copy is undefined,
   §2.5) — Boehm registers no root for a pointer C code merely stashes.
-- **C → Medaka:** a `const char*` (+ length, since Medaka strings are not
-  NUL-length-defined) returned/out-param'd from C is **copied** into a fresh
-  Medaka String cell via `mdk_alloc_atomic` + `memcpy`, mirroring exactly what
-  `mdk_str_lit` already does for string literals. Medaka never takes ownership
-  of a C-allocated buffer directly (no "adopt this `malloc` pointer as a
-  String cell" path exists or is planned) — the copy is mandatory, not an
-  optimization to skip later. If the C side `malloc`'d the source buffer, the
-  **C side remains responsible for freeing it**; Medaka's copy is independent.
+- **C → Medaka:** a returned `const char*` is a NUL-terminated byte sequence; a
+  null pointer represents the empty string. Before copying, the boundary
+  validates that every byte belongs to a canonical UTF-8 encoding of a Unicode
+  scalar value. It rejects stray or bad continuation bytes, truncated and
+  overlong encodings, UTF-16 surrogate encodings, and values above U+10FFFF.
+  Invalid input aborts with a coded runtime diagnostic rather than creating a
+  malformed Medaka `String`; lossy replacement would silently invent a value
+  that C did not return. Embedded NUL bytes therefore remain outside this v1
+  return convention because there is no separate length channel.
+
+  Valid input is **copied** into a fresh Medaka String cell via
+  `mdk_alloc_atomic` + `memcpy`, mirroring exactly what `mdk_str_lit` already
+  does for string literals. Medaka never takes ownership of a C-allocated
+  buffer directly (no "adopt this `malloc` pointer as a String cell" path exists
+  or is planned) — the copy is mandatory, not an optimization to skip later. If
+  the C side `malloc`'d the source buffer, the **C side remains responsible for
+  freeing it**; Medaka's copy is independent.
 
 ### 2.4 `Array Int`
 

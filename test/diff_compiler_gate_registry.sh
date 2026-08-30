@@ -22,21 +22,39 @@
 #      workflow or a different command, silently. Nothing else looks at a
 #      name's spelling — check 4 proves a name is SELECTABLE, and a name full
 #      of metacharacters selects perfectly well.
+#   8. every entry's `cost` is one of `cheap`/`medium`/`heavy` (FR-5, review
+#      finding S2-3) — an unrecognized string used to fall through
+#      `timeoutFor`'s `otherwise = 900` fallback silently.
 #
 # TEXT-ONLY, NO BUILD beyond `./medaka` itself already existing — this does not
 # invoke clang, an oracle probe, or any other compiler. `verify` shells out to
 # `git ls-files` (twice, mirroring test/preflight.sh exactly) and to
 # `test/build_oracles.sh --list` (which itself builds nothing).
 #
-# A fixture-driven self-test of the violation classes was considered and
-# rejected in favor of a one-off manual demonstration recorded in this slice's
-# report (`/var/tmp/medaka-sprints/gate-registry/reports/S-4-gate-verify.md`):
-# each class was reproduced by hand against a temp-copied, mutated registry
-# and confirmed to red with the right violation named, then the tree was
+# A fixture-driven self-test of checks 1-7 was considered and rejected in
+# favor of a one-off manual demonstration recorded in this slice's report
+# (`/var/tmp/medaka-sprints/gate-registry/reports/S-4-gate-verify.md`): each
+# class was reproduced by hand against a temp-copied, mutated registry and
+# confirmed to red with the right violation named, then the tree was
 # restored. Baking that into the gate would mean shipping a SECOND copy of
 # "how to construct a violating registry" that has to stay in sync with the
 # schema `gate_cmd.mdk` reads — the shipped gate instead simply runs `verify`
 # on the real tree, which is what CI actually needs protected.
+#
+# Check 8 is the one exception, deliberately: unlike 1-7 (which only re-check
+# invariants the real committed tree already satisfies), an unvalidated
+# `cost` string used to fall through SILENTLY — no gate anywhere pinned that
+# a typo like `cost = "banana"` gets caught — so this is a real NEW behavior
+# that needs its own red/green regression, not a restatement of something the
+# real tree already proves. `test/gate_registry_fixtures/{invalid_cost,
+# valid_cost}.toml` isolate exactly the `cost` field. Run against a THROWAWAY
+# `MEDAKA_ROOT` (a freshly `git init`'d dir holding only the fixture's own
+# `run` target) rather than the real repo root — pointing `--registry` at a
+# 1-entry fixture while `MEDAKA_ROOT` stays the real tree would flood check 1
+# (unenrolled gate scripts, which scans the WHOLE real tree via `git
+# ls-files`) with hundreds of irrelevant violations, which is exactly the
+# practical problem the "no fixture corpus for checks 1-7" decision above was
+# avoiding.
 #
 # Usage:  sh test/diff_compiler_gate_registry.sh
 # Exit:   0 medaka gate verify reports zero violations; 1 it reds; 2 no native
@@ -49,3 +67,44 @@ MEDAKA="${MEDAKA:-$ROOT/medaka}"
 [ -x "$MEDAKA" ] || { echo "build native first: make medaka (missing $MEDAKA)"; exit 2; }
 
 MEDAKA_ROOT="$ROOT" "$MEDAKA" gate verify
+verify_rc=$?
+
+# ── check 8's own regression: invalid_cost.toml must red, valid_cost.toml
+#    must stay green, against a throwaway root ────────────────────────────
+FIXTMP="$(mktemp -d)"
+trap 'rm -rf "$FIXTMP"' EXIT
+
+mkdir -p "$FIXTMP/test/gate_shards"
+printf '#!/bin/sh\ntrue\n' >"$FIXTMP/test/tidy.sh"
+chmod +x "$FIXTMP/test/tidy.sh"
+printf 'a\n' >"$FIXTMP/test/gate_shards/a.txt"
+( cd "$FIXTMP" && git init -q && git add -A && git -c user.name=test -c user.email=test@example.invalid commit -q -m init ) || {
+  echo "diff_compiler_gate_registry: could not init the throwaway fixture root"
+  exit 2
+}
+
+if MEDAKA_ROOT="$FIXTMP" "$MEDAKA" gate verify \
+    --registry "$ROOT/test/gate_registry_fixtures/invalid_cost.toml" \
+    >"$FIXTMP/invalid.out" 2>&1; then
+  echo "diff_compiler_gate_registry: FAIL — invalid_cost.toml did not red:"
+  cat "$FIXTMP/invalid.out"
+  verify_rc=1
+elif ! grep -q "cost 'banana' is not one of cheap/medium/heavy" "$FIXTMP/invalid.out"; then
+  echo "diff_compiler_gate_registry: FAIL — invalid_cost.toml reds for the wrong reason:"
+  cat "$FIXTMP/invalid.out"
+  verify_rc=1
+else
+  echo "OK    check 8 regression: invalid_cost.toml reds with the cost-class message"
+fi
+
+if MEDAKA_ROOT="$FIXTMP" "$MEDAKA" gate verify \
+    --registry "$ROOT/test/gate_registry_fixtures/valid_cost.toml" \
+    >"$FIXTMP/valid.out" 2>&1; then
+  echo "OK    check 8 regression: valid_cost.toml stays green"
+else
+  echo "diff_compiler_gate_registry: FAIL — valid_cost.toml (cost = \"cheap\") reds:"
+  cat "$FIXTMP/valid.out"
+  verify_rc=1
+fi
+
+exit "$verify_rc"

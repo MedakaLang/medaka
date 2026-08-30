@@ -1,0 +1,10 @@
+{
+  "schema": "gate-cost-baseline/1",
+  "note": "SYNTHETIC fixture baseline for test/diff_compiler_gate_budget.sh. Hand-written, not ingested. 'lonely' deliberately has no entry; 'unrelated' is only present because an empty 'gates' array is itself a parse error (parseCostBaseline) and is not read by anything in the paired registry.",
+  "generated": "2026-08-30T00:00:00Z",
+  "maxSamples": 9,
+  "runs": [],
+  "gates": [
+    {"name": "unrelated", "medianMs": 100, "samples": 1, "ms": [100]}
+  ]
+}

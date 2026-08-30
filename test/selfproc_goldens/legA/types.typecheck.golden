@@ -52,6 +52,7 @@ aliasMethodRenames : List (String, List String) -> List Decl -> List (String, St
 aliasMethodRenamesOf : List (String, List String) -> Decl -> List (String, String)
 aliasMethodRenamesOfPath : List String -> UsePath -> List (String, String)
 aliasNamesAt : Int -> List String
+aliasOwnAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
 aliasQualifiedMethodEntries : List Decl -> Map String (IfaceRef, List String, Ty, List (String, List Kind)) -> Map String (IfaceRef, List String, Ty, List (String, List Kind))
 aliasRowIdents : List (String, String, String, Ident, Loc) -> List Ident -> List Ident
 aliasRowKey : (String, String, String, Ident, Loc) -> String
@@ -372,6 +373,9 @@ checkUndeterminedObligation : ImplUniverse -> IfaceRef -> Mono -> Option Loc -> 
 checkUndeterminedObligations : ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> Unit
 checkUndeterminedRetEffVars : List Decl -> Unit
 checkUndeterminedRetEffVarsDecl : Decl -> Unit
+checkedFfiExternTypeNames : List Decl -> List (String, (List String, String))
+checkedFfiExternTypeNamesModule : DeclEnvs -> (String, List Decl) -> List (String, (List String, String))
+checkedFfiExternTypeNamesModules : List (String, List Decl) -> List (String, (List String, String))
 clampPrefix : List CSlot -> Option CDeclaredPrefix -> CDeclaredPrefix
 classEnvDeclFact : Decl -> List (String, List String, List IfaceMethod, List Super, TyConOrigin)
 classEnvDeclFacts : List Decl -> List (String, List String, List IfaceMethod, List Super, TyConOrigin)
@@ -768,6 +772,7 @@ erredDuring : (Unit -> a) -> (Bool, a)
 exemptInPlaceIndexMutHeads : List String
 exitLevel : Unit -> Unit
 expandAliasHeadTy : Ty -> Ty
+expandAliasHeadTyWith : List (TabKey, (List String, Ty)) -> Ty -> Ty
 expandIoInBound : List Atom -> List Atom
 expandSupersCross : List Decl -> List (String, List Int) -> List (String, List IfaceRef) -> List (String, List (List Mono)) -> (List (String, List Int), List (String, List IfaceRef))
 expandSupersEntry : List Decl -> List (String, List IfaceRef) -> List (String, List (List Mono)) -> (String, List Int) -> (String, List Int)
@@ -807,6 +812,7 @@ ffiCheckReservedGo : List Decl -> Unit
 ffiCheckShadowGo : List Decl -> Unit
 ffiCrossableConName : String -> Bool
 ffiCrossableTy : Ty -> Bool
+ffiExternTypeRowsWith : List (TabKey, (List String, Ty)) -> List Decl -> List (String, (List String, String))
 ffiHasAtom : List (String, Option String) -> Bool
 ffiIsBuiltinExternName : String -> Bool
 ffiNonCrossableMsg : String -> Ty -> String
@@ -816,11 +822,13 @@ ffiResultRowHasFFI : Ty -> Bool
 ffiRowHasFFITy : Ty -> Option Bool
 ffiShadowMsg : String -> String -> String -> String
 ffiSigArgHeads : Ty -> List String
+ffiSigArgHeadsWith : List (TabKey, (List String, Ty)) -> Ty -> List String
 ffiSigRetHead : Ty -> String
+ffiSigRetHeadWith : List (TabKey, (List String, Ty)) -> Ty -> String
 ffiSigShapeKey : Ty -> String
 ffiStampMode : CheckMode -> Bool
 ffiStampModeOwned : CheckMode -> Bool
-ffiTyHeadName : Ty -> String
+ffiTyHeadNameWith : List (TabKey, (List String, Ty)) -> Ty -> String
 ffiUnlabelledMsg : String -> String
 ffiWrittenRow : Ty -> List (String, Option String)
 fieldAssignDictSites : FieldAssign -> List (Ref (List Route))

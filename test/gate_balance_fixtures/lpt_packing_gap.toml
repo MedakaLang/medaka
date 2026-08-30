@@ -1,0 +1,147 @@
+# test/gate_balance_fixtures/lpt_packing_gap.toml — SYNTHETIC, hand-written.
+#
+# A PACKING THAT REALLY IS BAD, and no single gate explains it.
+#
+# Seven gates (500, 500, 400, 400, 300, 300, 300) over three serial rows. The
+# best assignment that exists finishes at 900 (500+400 | 500+400 | 300+300+300)
+# and every input to that bound is visible in the fixture:
+#
+#   floor = max(most expensive gate, total work / worker slots)
+#         = max(500, 2700 / 3) = 900
+#
+# LPT — which is what `balPick` is — cannot find it. It places 500, 500, 400,
+# then stacks the second 400 onto the row holding the first, and the three 300s
+# land on rows that are already full:
+#
+#   loads       a = 1100   b = 800   c = 800
+#   pole/floor  1100 / 900  = 1.222  -> MISSED (budget 1.125)
+#   pole/median 1100 / 800  = 1.375  -> also missed under the retired metric
+#
+# This is the half of the S-4 statement that `nonpole_speedup.toml` cannot
+# make: the new metric is not merely more forgiving than `pole / median`, it
+# still reds on the failure the target exists to catch. It is the classic LPT
+# worst case (4/3 - 1/(3m), here 11/9), so it is a bound on the heuristic and
+# not a quirk of these particular numbers.
+#
+# Committed `shard` values ARE what LPT derives, so nothing here is a hand-edit
+# artefact and the incumbent preference never fires: the refusal is about the
+# packing the tool itself produces.
+
+[[gate]]
+name = "big1"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/big1.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "big2"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/big2.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "mid1"
+area = "fixture"
+shard = "c"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/mid1.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "mid2"
+area = "fixture"
+shard = "c"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/mid2.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "small1"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/small1.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "small2"
+area = "fixture"
+shard = "b"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/small2.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "small3"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/small3.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+pinned_gates = []
+
+[[shard]]
+name = "b"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/b.txt"
+pinned_gates = []
+
+[[shard]]
+name = "c"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/c.txt"
+pinned_gates = []

@@ -20,9 +20,12 @@ import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
 import driver.loader.{loadProgram}
 import ir.core_ir_eval.{cevalModulesOutput}
+import eval.eval.{ffiExternNamesRef}
 import support.path.{dirOf}
+import support.util.{isEmptyL, isNonEmptyL}
 
 main = match args ()
+  coreP::"--ffi-reset-control"::externEntry::pureEntry::roots => runFfiResetControl coreP externEntry pureEntry (rootsOrDefault externEntry roots)
   coreP::entry::roots => run coreP entry (rootsOrDefault entry roots)
   _ => ePutStrLn "usage: medaka run compiler/entries/core_ir_modules_main.mdk <core.mdk> <entry.mdk> [root ...]"
 
@@ -43,3 +46,25 @@ run coreP entry roots = match readFile coreP
   Ok csrc => match loadProgram entry roots
     Err e => ePutStrLn e
     Ok mods => putStr (cevalModulesOutput (annotateProgram (desugar (parse csrc))) (map annotatePair mods))
+
+-- #2133 regression seam: run two module programs inside ONE native probe so the
+-- process-global FFI-name classifier is proven both seeded and reset.  The first
+-- program declares an unreachable user extern; the second is pure.  Reached-FFI
+-- behavior is graded separately because its deliberate panic ends the process.
+runFfiResetControl : String -> String -> String -> List String -> <IO> Unit
+runFfiResetControl coreP externEntry pureEntry roots = match readFile coreP
+  Err e => ePutStrLn e
+  Ok csrc => match loadProgram externEntry roots
+    Err e => ePutStrLn e
+    Ok externMods => match loadProgram pureEntry roots
+      Err e => ePutStrLn e
+      Ok pureMods =>
+        let coreDecls = annotateProgram (desugar (parse csrc))
+        let _ = cevalModulesOutput coreDecls (map annotatePair externMods)
+        let seeded = isNonEmptyL !ffiExternNamesRef
+        let pureOutput = cevalModulesOutput coreDecls (map annotatePair pureMods)
+        let reset = isEmptyL !ffiExternNamesRef
+        if seeded && reset then
+          putStr pureOutput
+        else
+          panic "core_ir modules: FFI extern-name state was not seeded and reset"

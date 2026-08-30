@@ -30,6 +30,7 @@ import types.typecheck.{
   preludeArgPosDictNames,
   mainTypeIsUnit,
   mainTypeIsFloat,
+  checkedFfiExternTypeNamesModules,
 }
 import ir.core_ir_lower.{
   declaredRecordFieldOrders,
@@ -40,7 +41,7 @@ import ir.core_ir_lower.{
   methodConstraintIfaces,
   ctorFieldTypeNames,
   declSigTypeNames,
-  ffiExternTypeNames,
+  validateFfiExternTypeNames,
 }
 import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
 import backend.private_mangle.{mangleUnits}
@@ -55,7 +56,7 @@ runEmit runtimeDecls coreDecls modules =
   let (coreD, modules2) = elaborateModules runtimeDecls coreMangled modulesMangled
   let allDecls = coreD ++ flatMap snd modules2
   let _ = preludeReturnPosDictNames coreD allDecls ++ preludeArgPosDictNames coreD allDecls ++ constrainedSigNames allDecls
-  let input = makeEmitInput (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls) (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] "" (declaredRecordFieldOrders allDecls) (ffiExternTypeNames runtimeDecls allDecls)
+  let input = makeEmitInput (returnsSelfTable allDecls) (selfFnParamTable allDecls) (methodIfaceTable allDecls) (methodConstraintIfaces allDecls) (ctorFieldTypeNames allDecls) (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls) (mainTypeIsUnit ()) (mainTypeIsFloat ()) 0 [] [] "" (declaredRecordFieldOrders allDecls) (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
   let (text, _) = emitProgramRecord input (lowerProgramEmit allDecls)
   putStr text
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides

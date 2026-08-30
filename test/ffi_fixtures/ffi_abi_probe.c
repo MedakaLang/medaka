@@ -49,6 +49,23 @@ const char *ffiEcho(const char *s) {
   return ffiEchoBuf;
 }
 
+/* §2.3 String, hostile C → Medaka returns.  These byte arrays exercise the
+ * complete inbound validity contract directly: the valid rows are canonical
+ * Unicode scalar UTF-8, while each invalid row violates one distinct rule.
+ * Octal escapes keep every byte unambiguous across C compilers. */
+const char *ffiStringNull(void) { return NULL; }
+const char *ffiStringAscii(void) { return "ASCII"; }
+const char *ffiStringTwo(void) { return "\302\242"; }       /* U+00A2 */
+const char *ffiStringThree(void) { return "\342\202\254"; } /* U+20AC */
+const char *ffiStringFour(void) { return "\360\237\230\200"; } /* U+1F600 */
+
+const char *ffiStringStray(void) { return "\200"; }
+const char *ffiStringBadCont(void) { return "\342(\241"; }
+const char *ffiStringTruncated(void) { return "\342\202"; }
+const char *ffiStringOverlong(void) { return "\300\257"; }
+const char *ffiStringSurrogate(void) { return "\355\240\200"; }
+const char *ffiStringTooHigh(void) { return "\364\220\200\200"; }
+
 /* §2.4 Array Int, Medaka → C: a flat, UNTAGGED int64_t buffer.  If the compiler
  * handed over the live cell instead, every element would read back as 2*v+1 and
  * the sum would be wrong rather than merely different — which is exactly the

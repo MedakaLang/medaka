@@ -5,7 +5,8 @@
 # `pin` declares `pinned1`; `pinned1` is committed on the open row `a`, leaving
 # the whole-runner row empty. This is the more dangerous half of F3, because a
 # cost objective blind to the pin actively PREFERS it: on the real registry the
-# same edit made the printed pole/median better (1.005 against 1.073), since
+# same edit made the printed factor better (pole/median 1.005 against 1.073,
+# under the metric #2216 retired), since
 # idling a whole runner and stacking the suite's heaviest gate onto a shared
 # one is what "balance the loads" means when nothing says the row is a pin.
 #
@@ -13,7 +14,7 @@
 # invisible, the way the real one was: `pinned1` is the heaviest, so LPT places
 # it first onto the first open row, which is exactly where the hand edit put
 # it. The derived assignment therefore EQUALS the committed one, the projected
-# pole/median is 1.000, and before the `pinned_gates` check `medaka gate
+# packing is well inside budget, and before the `pinned_gates` check `medaka gate
 # balance --check` exited 0 reporting "already balanced" — with the closed row
 # holding nothing at all.
 

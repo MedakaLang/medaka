@@ -1,0 +1,19 @@
+{
+  "schema": "gate-cost-baseline/1",
+  "note": "SYNTHETIC fixture baseline for test/diff_compiler_gate_balance.sh (FR-1, #2222 review S0-1). Hand-written, not ingested. Every sample carries its own runId, so every leave-one-run-out fold is hand-calculable: g1 = [100,200,300] and g2 = [10,20,30] over runs 1/2/3, giving predicted 220/110/110 against actual 110/220/330, mean |error| 72.2% and systematic bias -33.3%. g3 is attributed to runs 1 and 3 only and must be EXCLUDED, so the header reads 2 of 3 schedulable gates. The samples are far apart on purpose: a fixture whose samples cluster cannot tell a correct fold from a misaligned one.",
+  "generated": "2026-08-30T00:00:00Z",
+  "maxSamples": 9,
+  "runs": [
+    {"key": "1:1:a", "runId": "1", "runAttempt": "1", "shard": "a", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-30T00:00:00Z", "jobs": 2, "parallel": true, "rowElapsedMs": 120, "gates": 1},
+    {"key": "1:1:b", "runId": "1", "runAttempt": "1", "shard": "b", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-30T00:00:00Z", "jobs": 2, "parallel": true, "rowElapsedMs": 40, "gates": 2},
+    {"key": "2:1:a", "runId": "2", "runAttempt": "1", "shard": "a", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-30T01:00:00Z", "jobs": 2, "parallel": true, "rowElapsedMs": 220, "gates": 1},
+    {"key": "2:1:b", "runId": "2", "runAttempt": "1", "shard": "b", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-30T01:00:00Z", "jobs": 2, "parallel": true, "rowElapsedMs": 40, "gates": 2},
+    {"key": "3:1:a", "runId": "3", "runAttempt": "1", "shard": "a", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-30T02:00:00Z", "jobs": 2, "parallel": true, "rowElapsedMs": 320, "gates": 1},
+    {"key": "3:1:b", "runId": "3", "runAttempt": "1", "shard": "b", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-30T02:00:00Z", "jobs": 2, "parallel": true, "rowElapsedMs": 40, "gates": 2}
+  ],
+  "gates": [
+    {"name": "g1", "medianMs": 200, "samples": 3, "ms": [100, 200, 300], "sampleRuns": ["1", "2", "3"]},
+    {"name": "g2", "medianMs": 20, "samples": 3, "ms": [10, 20, 30], "sampleRuns": ["1", "2", "3"]},
+    {"name": "g3", "medianMs": 150, "samples": 2, "ms": [150, 250], "sampleRuns": ["1", "3"]}
+  ]
+}

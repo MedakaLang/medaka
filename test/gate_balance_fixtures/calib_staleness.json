@@ -1,15 +1,19 @@
 {
   "schema": "gate-cost-baseline/1",
-  "note": "SYNTHETIC fixture baseline for test/diff_compiler_gate_balance.sh. Hand-written, not ingested. Row 'a' is recorded with fewer gates than are committed to it now (a rebalance landed since the run) so the calibration line must carry the [STALE: ...] annotation (F-2, #2178 review S2-1); row 'b' is recorded with the SAME gate count it has now, so its line must NOT be annotated — proving the count is a real comparison, not a flag that always fires.",
+  "note": "SYNTHETIC fixture baseline for test/diff_compiler_gate_balance.sh. Hand-written, not ingested. Row 'a' is recorded with fewer gates than are committed to it now (a rebalance landed since the run) so the calibration line must carry the [STALE: ...] annotation (F-2, #2178 review S2-1); row 'b' is recorded with the SAME gate count it has now, so its line must NOT be annotated — proving the count is a real comparison, not a flag that always fires. Rows 'c' and 'd' are the same discipline one axis over (S-2, #2223): both are recorded at the SAME COUNT they carry now, so the count check reports clean for both, and only the recorded gatesDigest separates them — 'c' had its one gate SWAPPED (recorded digest is swapped_out's, committed is swapped_in's) and must be annotated; 'd' kept its gate and must not be.",
   "generated": "2026-08-29T00:00:00Z",
   "maxSamples": 9,
   "runs": [
     {"key": "1:1:a", "runId": "1", "runAttempt": "1", "shard": "a", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-29T00:00:00Z", "jobs": 2, "parallel": true, "rowElapsedMs": 100, "gates": 1},
-    {"key": "1:1:b", "runId": "1", "runAttempt": "1", "shard": "b", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-29T00:00:00Z", "jobs": 2, "parallel": true, "rowElapsedMs": 50, "gates": 1}
+    {"key": "1:1:b", "runId": "1", "runAttempt": "1", "shard": "b", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-29T00:00:00Z", "jobs": 2, "parallel": true, "rowElapsedMs": 50, "gates": 1},
+    {"key": "1:1:c", "runId": "1", "runAttempt": "1", "shard": "c", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-29T00:00:00Z", "jobs": 2, "parallel": true, "rowElapsedMs": 50, "gates": 1, "gatesDigest": 1926625894},
+    {"key": "1:1:d", "runId": "1", "runAttempt": "1", "shard": "d", "event": "workflow_dispatch", "sha": "0000000000000000000000000000000000000000", "ref": "refs/heads/main", "date": "2026-08-29T00:00:00Z", "jobs": 2, "parallel": true, "rowElapsedMs": 50, "gates": 1, "gatesDigest": 1856395222}
   ],
   "gates": [
+    {"name": "match1", "medianMs": 40, "samples": 1, "ms": [40]},
     {"name": "small1", "medianMs": 40, "samples": 1, "ms": [40]},
     {"name": "small2", "medianMs": 40, "samples": 1, "ms": [40]},
-    {"name": "match1", "medianMs": 40, "samples": 1, "ms": [40]}
+    {"name": "stayed", "medianMs": 40, "samples": 1, "ms": [40]},
+    {"name": "swapped_in", "medianMs": 40, "samples": 1, "ms": [40]}
   ]
 }

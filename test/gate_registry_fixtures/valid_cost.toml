@@ -1,0 +1,27 @@
+# test/gate_registry_fixtures/valid_cost.toml — SYNTHETIC, hand-written.
+#
+# The control for invalid_cost.toml: byte-identical except `cost = "cheap"`,
+# a valid class. `medaka gate verify` must report 0 violations against this
+# one — otherwise the new check in invalid_cost.toml would be proving nothing
+# (a check that reds everything is as useless as one that reds nothing).
+
+[[gate]]
+name = "tidy"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "cheap"
+kind = "exec"
+run = "test/tidy.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+pinned_gates = []
