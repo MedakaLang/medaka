@@ -88,7 +88,7 @@ jobs:
         run: bash test/check_removed_constructs.sh
 
       - name: File or update the known-red issue on failure
-        if: failure()
+        if: failure() || cancelled()
         uses: ./.github/actions/file-nightly-red
         with:
           job-name: "check_removed_constructs (tree-wide scan)"
@@ -134,7 +134,7 @@ jobs:
         run: sh test/diff_compiler_perf_scaling.sh
 
       - name: File or update the known-red issue on failure
-        if: failure()
+        if: failure() || cancelled()
         uses: ./.github/actions/file-nightly-red
         with:
           job-name: "perf_scaling DEEP (the N=16000 bands ci.yml cannot afford)"
@@ -179,7 +179,7 @@ jobs:
         run: sh test/diff_compiler_eval_scaling.sh
 
       - name: File or update the known-red issue on failure
-        if: failure()
+        if: failure() || cancelled()
         uses: ./.github/actions/file-nightly-red
         with:
           job-name: "eval_scaling (interpreter O(n^2) detector — #887, nightly)"
@@ -324,7 +324,7 @@ jobs:
       # was previously silent. A fuzz FINDING never reaches this step (that path
       # is `exit 0`).
       - name: File or update the known-red issue on job failure
-        if: failure()
+        if: failure() || cancelled()
         uses: ./.github/actions/file-nightly-red
         with:
           job-name: "fuzz_diff (bounded nightly sweep; findings are FILED, not failed)"
@@ -421,7 +421,7 @@ jobs:
           retention-days: 14
 
       - name: File or update the known-red issue on failure
-        if: failure()
+        if: failure() || cancelled()
         uses: ./.github/actions/file-nightly-red
         with:
           job-name: "playground_e2e (Playwright vs the built CM6 playground — #72 pt.4)"
@@ -429,7 +429,7 @@ jobs:
 
   # Charter clause: N2 (docs/ops/CI-ARCHITECTURE.md §3.6 — breadth beyond queue needs — a third axis of agreement the merge tier does not require).
   pds-repo-vectors-eval-engine:
-    name: "pds/nightly/repo_vectors_eval_engine.sh (eval interpreter == native on the repo transcript — #2208)"
+    name: "pds/nightly/repo_vectors_eval_engine.sh (eval interp == native on the repo transcript — #2208)"
     runs-on: ubuntu-latest
     # ~18 min of interpreter, plus checkout/toolchain/build. 40 matches the
     # signing-parity job below; this one has no wasm arm to install for.
@@ -466,10 +466,10 @@ jobs:
         run: sh pds/nightly/repo_vectors_eval_engine.sh
 
       - name: File or update the known-red issue on failure
-        if: failure()
+        if: failure() || cancelled()
         uses: ./.github/actions/file-nightly-red
         with:
-          job-name: "pds/nightly/repo_vectors_eval_engine.sh (eval interpreter == native on the repo transcript — #2208)"
+          job-name: "pds/nightly/repo_vectors_eval_engine.sh (eval interp == native on the repo transcript — #2208)"
           gate-label: "pds repo_vectors_eval_engine"
 
   # Charter clause: N1 (docs/ops/CI-ARCHITECTURE.md §3.6 — cost above threshold — irreducible wall-clock cost would pole a merge-tier shard).
@@ -512,7 +512,7 @@ jobs:
         run: sh pds/nightly/signing_parity.sh
 
       - name: File or update the known-red issue on failure
-        if: failure()
+        if: failure() || cancelled()
         uses: ./.github/actions/file-nightly-red
         with:
           job-name: "pds/nightly/signing_parity.sh (full ECDSA corpus parity, native+Wasm — #1962)"
@@ -644,7 +644,7 @@ jobs:
       # step failure) — previously silent. A census FINDING never reaches this
       # step (that path is `exit 0`, per #593).
       - name: File or update the known-red issue on job failure
-        if: failure()
+        if: failure() || cancelled()
         uses: ./.github/actions/file-nightly-red
         with:
           job-name: "must_fail_census (tracker vs corpus; findings are FILED, not failed — #569)"
@@ -804,7 +804,7 @@ jobs:
       # ITSELF failed (scripts/ci_shard_cost.sh's own infra-failure exit), which
       # was previously silent. A drift FINDING never reaches this step.
       - name: File or update the known-red issue on job failure
-        if: failure()
+        if: failure() || cancelled()
         uses: ./.github/actions/file-nightly-red
         with:
           job-name: "ci_shard_cost drift (pole shard / 1.5x median; findings are FILED, not failed — #1935)"
@@ -893,7 +893,7 @@ jobs:
       # — same pattern as every other nightly job's failure step — rather
       # than hand-rolling a second `gh issue create` path here.
       - name: File or update the known-red issue on failure
-        if: failure()
+        if: failure() || cancelled()
         uses: ./.github/actions/file-nightly-red
         with:
           job-name: "gate cost baseline auto-advance (#2180 baseline leg, S-1-baseline-autoadvance)"

@@ -99,7 +99,7 @@ runs:
           echo "See docs/ops/CI-ARCHITECTURE.md \"revert-to-green\" for what to do next."
         } > "$BODY_FILE"
 
-        existing="$(gh issue list --state open --limit 100 --json number,title \
+        existing="$(gh issue list --state open --label known-red --limit 100 --json number,title \
           --jq ".[] | select(.title == \"$TITLE\") | .number" | head -1)"
         if [ -n "$existing" ]; then
           gh issue comment "$existing" --body-file "$BODY_FILE"
