@@ -24,7 +24,8 @@
 -- unemittable construct → `panic: … gap …`) or empty IR aborts the build with
 -- the emitter's own diagnostic surfaced.
 
-import support.util.{reverseL, stringTrim}
+import support.util.{reverseL, stringTrim, joinWith}
+import support.timer.{perfEnabled, now, emitPhase}
 import driver.loader.{entrySearchRoots, findProjectRootOrSelf, readForeignLibs}
 import support.path.{dirOf, chopExt, joinPath}
 import frontend.parser.{parseResult}
@@ -438,7 +439,16 @@ runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots 
     (emitProg0, emitArgs0)
   else
     withEmitHalf "program" emitProg0 emitArgs0
-  match runCommand emitProg emitArgs
+  -- `[perf] emit-ir`: the emitter subprocess alone.  The CLI's single `emit` row
+  -- (medaka_cli.mdk) covers this WHOLE function and is deliberately kept as the
+  -- total; these sub-rows decompose it (emit-ir + rt-obj + clang) so a slow build
+  -- names its own culprit instead of reporting one opaque 1.4 s number.
+  let perfOn = perfEnabled ()
+  let tEmit0 = now ()
+  let emitRes = runCommand emitProg emitArgs
+  let tEmit1 = now ()
+  let _ = emitPhase perfOn "emit-ir" (tEmit1 - tEmit0) inputAbs
+  match emitRes
     Err e =>
       BuildErr "error: could not run emitter (\{emitProg}): \{e}"
     Ok (code, irRaw, emitErr) => if code /= 0 then BuildErr "error: emitter failed compiling \{inputAbs}\n\{emitErr}"
@@ -683,10 +693,200 @@ missingLibMsg projRoot name dir =
       " = \"vendor/lib\"",
     ]
 
+-- ---- the automatic C-runtime object cache (#133, epic #2036 G1) ------------
+-- MEASURED attribution of hello-world's ~1.5 s `medaka build` (this tree, this
+-- box; the `[perf]` sub-rows below report it live):
+--   typecheck            0.16 s
+--   emit-ir (subprocess) 0.12 s
+--   clang, of which:     1.33 s
+--       runtime/medaka_rt.c -> object   0.76 s   <-- THIS, 50% of the whole build
+--       program+prelude IR  -> object   0.51 s
+--       link                            0.04 s
+-- medaka_rt.c is a FIXED file: byte-for-byte the same object on every build of
+-- every program on the machine.  Recompiling it per build is pure waste, and
+-- because clang already treats the .c and the .ll as SEPARATE translation units
+-- (no LTO on this link line), substituting a prebuilt object changes nothing
+-- about the emitted program — proven byte-identical by
+-- test/diff_compiler_rt_obj.sh, and re-measured over test/bench_fixtures/*:
+-- 19/19 fixtures byte-identical binaries, runtime within noise.
+--
+-- ⚠️ WHY ONLY THE RUNTIME, AND NOT THE PRELUDE.  The sibling MEDAKA_PRELUDE_OBJ
+-- fast path is deliberately NOT auto-enabled here.  Splitting the prelude into
+-- its own object costs cross-module inlining, and that cost is real and large —
+-- measured over test/bench_fixtures/* with prelude.o linked instead of inlined:
+--   dispatch  23,568 -> 28,424 bytes (+20.6%), runtime 0.20 -> 0.34 s (+70%)
+--   fib       runtime 0.33 -> 0.50 s (+52%)
+--   intsum    runtime 0.03 -> 0.12 s (+300%)
+-- which reproduces (and understates) issue #133's relayed +20% binary / +8.4%
+-- runtime claim.  The prelude object stays opt-in, for build-throughput-bound
+-- CI gates that do not care about the binaries they produce.
+--
+-- ⚠️ CACHE KEY.  NOT the compiler-source fingerprint (`liveSourceFingerprint`,
+-- medaka_cli.mdk) — that hashes `compiler/*.mdk` ONLY, and the object here does
+-- not depend on a single one of those files while it DOES depend on things that
+-- fingerprint cannot see: medaka_rt.c's own contents, the clang binary and its
+-- version, MEDAKA_CLANG_OPT, and detectGC's discovered cflags.  Keying on the
+-- compiler fingerprint would be silently wrong the moment medaka_rt.c changed
+-- without a compiler-source edit alongside it.  What we hash, exactly and only:
+-- the cc name, `cc --version`, the full compile flag list (opt level + -pthread
+-- + gcSectionsCflags + detectGC's cflags), and the CONTENTS of medaka_rt.c.
+--
+-- ⚠️ KNOWN GAPS in that key — it is NOT a complete function of everything the
+-- object depends on, and this comment used to read as though it were.  Inputs
+-- that can change the emitted object WITHOUT changing the key:
+--   * the include search path from the environment (CPATH, C_INCLUDE_PATH) — a
+--     different gc.h found for the same cc/flags;
+--   * an IN-PLACE upgrade of a system header or of libgc that leaves the cc
+--     version string untouched (the .c source and flags are unchanged, so the
+--     key is too — headers are not hashed, only medaka_rt.c itself);
+--   * on macOS, SDKROOT / MACOSX_DEPLOYMENT_TARGET, which retarget the compile
+--     without appearing in the flag list we hash.
+-- Each is low-probability on a developer box and none is silent-wrongness in the
+-- usual sense (a stale object still links and runs; it is stale, not wrong-for-
+-- this-program).  Widening the key to cover them is real design work — hashing a
+-- preprocessed translation unit, or the resolved header set — and is tracked as
+-- a follow-up rather than bolted on here.  The escape hatch in the meantime is
+-- MEDAKA_NO_OBJ_CACHE=1, or deleting the cache directory.
+--
+-- ⚠️ CONCURRENCY [G-BUILD-RACE].  The cache is written the same way the rest of
+-- this driver writes shared paths: compile into an `mktemp`-allocated file
+-- INSIDE the cache directory (so the rename is same-filesystem and therefore
+-- atomic), then `mv` it into place.  A racing build either sees the old absence
+-- and does the same work, or sees the finished object — never a partial one.
+--
+-- ⚠️ FAIL-OPEN, ALWAYS.  Every failure path here returns "" and the caller
+-- compiles medaka_rt.c inline exactly as before.  No cache problem — unset HOME,
+-- unwritable cache dir, missing sha256sum, a failed mv — may ever fail a build
+-- that would otherwise succeed.
+--
+-- Escape hatches: MEDAKA_NO_OBJ_CACHE (any non-empty value) disables it;
+-- MEDAKA_CACHE_DIR relocates it; an explicit MEDAKA_RT_OBJ still wins outright,
+-- so every existing CI caller (test/build_oracles.sh, the engines gates) is
+-- byte-for-byte unaffected.
+
+-- Where the object cache lives.  "" = no cache (disabled, or no home to put it
+-- in).  Per-USER and shared across projects on purpose: the object is a pure
+-- function of medaka_rt.c and the clang flags, identical for every project on
+-- the machine, so a per-project `.medaka/` would store N identical copies and
+-- litter user repositories with build droppings for no benefit.
+export
+objCacheDir : Unit -> <IO> String
+objCacheDir _ =
+  if envOr "MEDAKA_NO_OBJ_CACHE" "" /= "" then ""
+  else
+    let explicit = envOr "MEDAKA_CACHE_DIR" ""
+    if explicit /= "" then explicit
+    else
+      let xdg = envOr "XDG_CACHE_HOME" ""
+      if xdg /= "" then joinPath xdg "medaka"
+      else
+        let home = envOr "HOME" ""
+        if home == "" then "" else joinPath home ".cache/medaka"
+
+-- The cache key: a hash over every input the object depends on.  Shelled out to
+-- sha256sum/shasum/cksum through the same three-way fallback chain
+-- `liveSourceFingerprint` uses, so a box with none of them degrades to cksum
+-- rather than to a wrong answer.  The flag list is written to a file in the
+-- build's OWN scratch dir and the cc/paths are passed as POSITIONAL ARGUMENTS
+-- to `sh -c` (hence the "sh" argv[0] filler) rather than interpolated into the
+-- script text — nothing here is exposed to shell word-splitting or quoting.
+-- "" on any failure (caller then skips the cache entirely).
+rtObjCacheKey : String -> String -> String -> List String -> String -> <IO> String
+rtObjCacheKey cc rtC optFlag gcCflags tmpDir =
+  let flagsPath = joinPath tmpDir "rtobj_flags"
+  let flagsText = joinWith " " ([optFlag, "-pthread"] ++ gcSectionsCflags ++ gcCflags) ++ "\n"
+  match writeFile flagsPath flagsText
+    Err _ => ""
+    Ok _ =>
+      let script = stringConcat [
+        "{ printf '%s\\n' \"$1\"; \"$1\" --version 2>/dev/null; cat \"$2\"; cat \"$3\"; } | ",
+        "{ if command -v sha256sum >/dev/null 2>&1; then sha256sum; ",
+        "elif command -v shasum >/dev/null 2>&1; then shasum -a 256; ",
+        "else cksum; fi; } | cut -d' ' -f1",
+      ]
+      match runCommand "sh" ["-c", script, "sh", cc, flagsPath, rtC]
+        Ok (0, out, _) => stringTrim out
+        _ => ""
+
+-- Resolve the cached runtime object, populating the cache on a miss.  Returns
+-- the object path, or "" meaning "no cached object — compile the .c inline".
+cachedRtObj : String -> String -> String -> List String -> String -> <IO> String
+cachedRtObj cc rtC optFlag gcCflags tmpDir =
+  let dir = objCacheDir ()
+  if dir == "" then ""
+  else
+    let key = rtObjCacheKey cc rtC optFlag gcCflags tmpDir
+    if key == "" then ""
+    else
+      let objPath = joinPath dir "rt-\{key}.o"
+      if fileExists objPath then
+        objPath
+      else
+        populateRtObj cc rtC optFlag gcCflags dir objPath
+
+-- Cache MISS: compile medaka_rt.c with EXACTLY the flags clangLinkGo would have
+-- applied to it inline (and exactly the flags emitRtObj uses — the same one
+-- reader for the opt level and the same detectGC cflags, so the three can never
+-- drift), into an mktemp file inside the cache dir, then atomically rename.
+populateRtObj : String -> String -> String -> List String -> String -> String -> <IO> String
+populateRtObj cc rtC optFlag gcCflags dir objPath = match runCommand "mkdir" ["-p", dir]
+  Ok (0, _, _) => match runCommand "mktemp" [joinPath dir "rtobj_XXXXXX"]
+    Ok (0, tOut, _) =>
+      let tmpObj = stringTrim tOut
+      if tmpObj == "" then ""
+      else
+        let ccArgs = [optFlag, "-pthread"] ++ gcSectionsCflags ++ gcCflags ++ ["-c", rtC, "-o", tmpObj]
+        match runCommand cc ccArgs
+          Ok (0, _, _) => match runCommand "mv" ["-f", tmpObj, objPath]
+            Ok (0, _, _) => objPath
+            _ =>
+              let _ = removeFile tmpObj
+              ""
+          _ =>
+            let _ = removeFile tmpObj
+            ""
+    _ => ""
+  _ => ""
+
+-- The `[perf] rt-obj` row's ops field: which of the three runtime-object paths
+-- this build actually took, so the row is self-explaining in a log.
+rtObjNote : String -> String -> String
+rtObjNote rtObjEnv rtCached =
+  if rtObjEnv /= "" && rtCached == rtObjEnv then
+    "MEDAKA_RT_OBJ (explicit)"
+  else if rtCached == "" then
+    "inline (no cache)"
+  else
+    "cache \{rtCached}"
+
+-- Timing wrapper: opens the clang-half stopwatch (and reads MEDAKA_PERF once)
+-- before `detectGC` runs, so the gc probe is inside the measured window rather
+-- than falling into an unattributed gap between the CLI's rows.  Split out only
+-- so the body below keeps its `= match detectGC …` head shape.
 clangLinkGo : String -> String -> String -> String -> String -> String -> List String -> <IO> BuildResult
-clangLinkGo cc rtC llPath outPath inputAbs tmpDir libFlags = match detectGC cc tmpDir
+clangLinkGo cc rtC llPath outPath inputAbs tmpDir libFlags =
+  clangLinkTimed
+    cc
+    rtC
+    llPath
+    outPath
+    inputAbs
+    tmpDir
+    libFlags
+    (perfEnabled ())
+    (now ())
+
+clangLinkTimed : String -> String -> String -> String -> String -> String -> List String -> Bool -> Float -> <IO> BuildResult
+clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags perfOn tLink0 = match detectGC cc tmpDir
   None => BuildErr "error: libgc (bdw-gc) not found — install bdw-gc (brew install bdw-gc) or set GC_PREFIX/pkg-config"
   Some (gcCflags, gcLibs) =>
+    -- `[perf] gc-probe` gets its OWN row rather than being folded into `rt-obj`:
+    -- detectGC shells out (pkg-config, then possibly brew, then a real clang
+    -- compile of a probe .c), so on a box where pkg-config misses it is not a
+    -- rounding error, and charging that to the object cache would misattribute
+    -- it to exactly the thing this slice is trying to measure.
+    let tGcProbe = now ()
+    let _ = emitPhase perfOn "gc-probe" (tGcProbe - tLink0) cc
     let optFlag = clangOptFlag
     -- CI FAST PATH (MEDAKA_RT_OBJ).  Every `medaka build` otherwise recompiles the
     -- identical runtime/medaka_rt.c from scratch (~0.6s of clang each).  A gate
@@ -699,8 +899,21 @@ clangLinkGo cc rtC llPath outPath inputAbs tmpDir libFlags = match detectGC cc t
     -- behavior, byte-for-byte, so an ordinary user build is unaffected.  The
     -- inline-vs-prebuilt binaries are proven byte-identical by
     -- test/diff_compiler_rt_obj.sh.
+    --
+    -- SINCE #133/G1 this is no longer the only way to get the prebuilt object:
+    -- an explicit MEDAKA_RT_OBJ still WINS outright (so every existing CI caller
+    -- keeps its exact behavior), but when it is unset we now consult the
+    -- automatic, self-managed, fingerprint-keyed object cache above — which is
+    -- what makes the ~0.76 s saving the DEFAULT for ordinary users instead of a
+    -- CI-only trick.  `cachedRtObj` fails open to "" (⇒ rtC, the inline compile).
     let rtObjEnv = envOr "MEDAKA_RT_OBJ" ""
-    let rtInput = if rtObjEnv /= "" && fileExists rtObjEnv then rtObjEnv else rtC
+    let rtCached = if rtObjEnv /= "" && fileExists rtObjEnv then
+      rtObjEnv
+    else
+      cachedRtObj cc rtC optFlag gcCflags tmpDir
+    let rtInput = if rtCached == "" then rtC else rtCached
+    let tRtObj = now ()
+    let _ = emitPhase perfOn "rt-obj" (tRtObj - tGcProbe) (rtObjNote rtObjEnv rtCached)
     -- CI FAST PATH (MEDAKA_PRELUDE_OBJ, issue #118) — the LINK half.  Exactly the
     -- MEDAKA_RT_OBJ trick one level up: the prelude is 88% of a small program's IR,
     -- and clang -O2 re-optimises all of it on every build.  Precompile it ONCE
@@ -724,7 +937,14 @@ clangLinkGo cc rtC llPath outPath inputAbs tmpDir libFlags = match detectGC cc t
     -- `-pthread` (thread runtime) and `-lm` (math externs) go on every link.
     let sectionsLink = gcSectionsLinkFlag ()
     let clangArgs = [optFlag, "-pthread"] ++ gcSectionsCflags ++ gcCflags ++ objInputs ++ libFlags ++ gcLibs ++ [sectionsLink, "-lm", "-o", outPath]
-    match runCommand cc clangArgs
+    -- Bound to a `let` (not matched directly) purely so the stopwatch can be read
+    -- ONCE, after the clang child exits, without duplicating the row across three
+    -- result arms.  Medaka is strict, so this runs clang exactly where the
+    -- `match` used to.
+    let ccRes = runCommand cc clangArgs
+    let tClang = now ()
+    let _ = emitPhase perfOn "clang" (tClang - tRtObj) inputAbs
+    match ccRes
       Err e => BuildErr "error: could not run clang (\{cc}): \{e}"
       Ok (0, _, _) => BuildOk "built \{inputAbs} -> \{outPath}"
       Ok (_, _, ccErr) =>

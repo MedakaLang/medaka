@@ -797,15 +797,51 @@ long long mdk_string_concat(long long list) {
 
 /* Append two String cells (++ on String, E2a).
    String cell: [i64 tag | i64 byte_len | i64 cp_count | bytes...].
-   Allocates one buffer, blits both byte spans, returns a new mdk_str_lit cell. */
+   Builds the result cell DIRECTLY - one allocation, two blits, no rescan.
+
+   This used to allocate a scratch buffer, blit both spans into it, and hand it to
+   mdk_str_lit, which allocated a SECOND cell, memcpy'd the whole thing again, and
+   re-counted the codepoints with mdk_utf8_cp_count.  That is 2 allocations, 2x the
+   bytes, 2 full copies and one full UTF-8 scan per `++`.  On a hello-world
+   `medaka check` mdk_string_append is called 902,342 times and was the #2 symbol in
+   the whole process at 9.62% of instructions (callgrind, S-3-check-floor), so the
+   redundancy was worth removing on attribution alone.
+
+   PARITY, not an approximation, on both fields the old path recomputed:
+     * byte_len is al + bl by construction, exactly as before.
+     * cp_count is ADDITIVE.  mdk_utf8_cp_count counts bytes whose top two bits are
+       not 0b10 - a per-BYTE predicate with no cross-byte state - so its count over
+       the concatenation of two byte spans is always the sum of its counts over each
+       span, for ill-formed UTF-8 as much as well-formed.  Each operand cell already
+       stores a cp_count at word 2, so the sum is exactly what a rescan would have
+       returned - PROVIDED every producer of a String cell stores a count that agrees
+       with mdk_utf8_cp_count's definition.  That, not "only one producer", is the
+       real invariant, and there are THREE producers, all of which satisfy it:
+         - mdk_str_lit (below), which calls mdk_utf8_cp_count outright;
+         - this function, whose result is a sum of two conforming counts (induction);
+         - the EMITTER, which mints a String-literal cell as a module-scope constant
+           (`@.strc.N`, llvm_emit.mdk `emitLit (LString s)`) with the count computed
+           at compile time as `arrayLength (stringToChars s)` - i.e. one per decoded
+           codepoint, which for the byte encoding of that same literal is exactly the
+           number of non-continuation bytes mdk_utf8_cp_count would count.
+       Adding a FOURTH producer that stores anything else (a UTF-16 unit count, a
+       grapheme count, a lazily-filled 0) silently breaks this function, without
+       touching it.
+   Atomic allocation is retained (the cell is a header plus raw bytes, never a
+   pointer), and every byte of it is written here, so GC_malloc_atomic not zeroing is
+   irrelevant - matching mdk_str_lit's own contract. */
 long long mdk_string_append(long long a, long long b) {
   long long al = ((const long long *)a)[1];
   long long bl = ((const long long *)b)[1];
   long long total = al + bl;
-  char *buf = (char *)mdk_alloc_atomic(total + 1);
-  memcpy(buf,      (const char *)a + 24, (size_t)al);
-  memcpy(buf + al, (const char *)b + 24, (size_t)bl);
-  return mdk_str_lit(buf, total);
+  char *cell = (char *)mdk_alloc_atomic(24 + total + 1);
+  ((long long *)cell)[0] = MDK_STR_TAG;
+  ((long long *)cell)[1] = total;
+  ((long long *)cell)[2] = ((const long long *)a)[2] + ((const long long *)b)[2];
+  memcpy(cell + 24,      (const char *)a + 24, (size_t)al);
+  memcpy(cell + 24 + al, (const char *)b + 24, (size_t)bl);
+  cell[24 + total] = '\0';
+  return (long long)cell;
 }
 
 /* Append two persistent lists (++ on List, E2a).
