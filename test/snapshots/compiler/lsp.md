@@ -1,5 +1,5 @@
 # META
-source_lines=2082
+source_lines=2087
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-duplicate-body
@@ -874,8 +874,13 @@ hoverSchemeAt name src line col env = match localSchemeAt name line col src
 -- bare prelude `count` used in a different one, and a binder BELOW the cursor
 -- must not answer for a use above it.  It is still an approximation upward — a
 -- binder in a sibling `match` arm of the same declaration is treated as
--- covering — which is the pre-existing precision of a span-less side channel,
--- not a new claim.
+-- covering.  This specific failure mode — a sibling arm's binder shadowing an
+-- unrelated prelude use in the SAME declaration — could not manifest before
+-- this local tier existed: the old `hoverScheme` had no position-aware local
+-- tier at all, so `env` (prelude-first) always won regardless of position,
+-- giving the correct prelude answer for this shape.  This local tier is what
+-- introduces the sibling-arm mis-attribution.  Tracked as #2254 (per-arm
+-- scoping); not fixed here.
 localSchemeAt : String -> Int -> Int -> String -> Option Scheme
 localSchemeAt name line col src = match parseWithPositionsOpt src
   None => None
