@@ -27,7 +27,7 @@ import frontend.parser.{
   parseErrorCol,
   parseErrorMessage,
 }
-import frontend.parse_cache.{parsePrelude}
+import frontend.desugar_cache.{desugaredPrelude}
 import frontend.desugar.{desugar, checkDerives}
 import frontend.resolve.{
   ResError,
@@ -613,8 +613,8 @@ analyzeLocatedG modName allowInternal runtimeSrc coreSrc progSrc =
 analyzeFrom : String -> String -> String -> List Decl -> List String -> List Diag
 analyzeFrom modName runtimeSrc coreSrc raw internalGuard =
   let desugared = desugar raw
-  let runtimeP = desugar (parsePrelude runtimeSrc)
-  let coreP = desugar (parsePrelude coreSrc)
+  let runtimeP = desugaredPrelude runtimeSrc
+  let coreP = desugaredPrelude coreSrc
   -- Oracle superset = target + prelude (runtime + core) so exhaustiveness of a
   -- multi-clause function over a prelude ADT (Result/Option/…) isn't false-flagged.
   let guardWarns = checkGuardExhaustivenessWith (raw ++ runtimeP ++ coreP) raw
@@ -1440,8 +1440,12 @@ mainNonUnitWarning decls = match findMainFunDef decls
 -- computing values nothing reads — `checkRoute`'s single-module arm and
 -- `typecheckGateRoute`'s single-module arm (both medaka_cli.mdk), where the
 -- `desugar (parsePrelude …)` / `desugar (parse …)` pair existed SOLELY to feed these
--- three.  The other three sites (below ×2, `checkRoute` multi-module) already have
--- `rtD`/`coreD`/`modsD` in hand for other purposes, so passing them costs nothing.
+-- three.  ⚠️ S-1/#2234: the below ×2 (`checkJsonSingle`/`checkJsonFile`'s
+-- `mainWarns` arms) were the SAME dead-arg shape, missed by #2246 — they now pass
+-- `[] []` for `rtD`/`coreD` too.  `checkRoute`'s multi-module arm (medaka_cli.mdk)
+-- and `analyzeFrom` (above) are the real consumers: they already have
+-- `rtD`/`coreD`/`modsD` in hand for other purposes (exhaustiveness oracle, resolve),
+-- so passing them there costs nothing.
 export
 mainShapeWarnings : List Decl -> List Decl -> List (String, List Decl) -> List Decl -> List Diag
 mainShapeWarnings _ _ _ entryDecls = match mainArityWarning entryDecls
@@ -1516,7 +1520,7 @@ checkJsonSingle modName allowInternal rsrc csrc target src = match parseResult s
     -- the `analyzeLocatedG` above already populated, rather than re-elaborating.)
     let mainWarns = if hasErr then [] else
       let entryRaw = parseLocated src
-      mainShapeWarnings (desugar (parsePrelude rsrc)) (desugar (parsePrelude csrc)) [(target, desugar entryRaw)] entryRaw
+      mainShapeWarnings [] [] [(target, desugar entryRaw)] entryRaw
     (cjAllToJson [(target, src, diags ++ mainWarns)], hasErr)
 
 -- File check → JSON.  Reads `target`, then routes exactly like runCheckJsonCmd:
@@ -1592,7 +1596,7 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
               Some decls => decls
               None => parseLocated src
             let modsDFull = map desugarModPair mods
-            mainShapeWarnings (desugar (parsePrelude rsrc)) (desugar (parsePrelude csrc)) modsDFull entryRaw
+            mainShapeWarnings [] [] modsDFull entryRaw
           let triples = map readDiagSrc results
           let root = dirOf stdlibDir
           let relTriples = map (relDiagTriple root) triples

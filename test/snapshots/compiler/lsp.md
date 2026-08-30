@@ -72,7 +72,7 @@ import frontend.parser.{
   declPosChildLocs,
 }
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
-import frontend.parse_cache.{parsePrelude}
+import frontend.desugar_cache.{desugaredPrelude}
 import support.char.{isIdentChar, isDigit}
 import support.util.{maxI, utf8Len, joinWith}
 import io.{stripCR}
@@ -713,8 +713,8 @@ defZipLocOr None p = jRange (declPosLine p - 1) 0 (declPosEndLine p - 1) 0
 -- the live loc-state at typecheck time is this buffer's.
 docSchemes : String -> String -> String -> Option (List (String, Scheme))
 docSchemes runtimeSrc coreSrc src =
-  let runtimeDecls = desugar (parsePrelude runtimeSrc)
-  let coreDecls = desugar (parsePrelude coreSrc)
+  let runtimeDecls = desugaredPrelude runtimeSrc
+  let coreDecls = desugaredPrelude coreSrc
   match parseLocatedResult src
     Err _ => None
     Ok userRaw =>
@@ -2096,7 +2096,7 @@ unit = ()
 (DUse false (UseGroup ("driver" "loader") ((mem "findProjectRootOrSelf" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false))))
-(DUse false (UseGroup ("frontend" "parse_cache") ((mem "parsePrelude" false))))
+(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false) (mem "isDigit" false))))
 (DUse false (UseGroup ("support" "util") ((mem "maxI" false) (mem "utf8Len" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("io") ((mem "stripCR" false))))
@@ -2250,7 +2250,7 @@ unit = ()
 (DFunDef false "defZipLocOr" ((PCon "Some" (PVar "l")) PWild) (EApp (EVar "jRangeOfLoc") (EVar "l")))
 (DFunDef false "defZipLocOr" ((PCon "None") (PVar "p")) (EApp (EApp (EApp (EApp (EVar "jRange") (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "declPosEndLine") (EVar "p")) (ELit (LInt 1)))) (ELit (LInt 0))))
 (DTypeSig false "docSchemes" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))
-(DFunDef false "docSchemes" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugar") (EApp (EVar "parsePrelude") (EVar "runtimeSrc")))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugar") (EApp (EVar "parsePrelude") (EVar "coreSrc")))) (DoExpr (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "userRaw")) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "userRaw"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (ELit (LString "__user__")) (EVar "userDecls")))) (DoExpr (EApp (EVar "Some") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))))))))))
+(DFunDef false "docSchemes" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "userRaw")) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "userRaw"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (ELit (LString "__user__")) (EVar "userDecls")))) (DoExpr (EApp (EVar "Some") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))))))))))
 (DTypeSig false "unwrapDecls" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "unwrapDecls" ((PCon "Ok" (PVar "ds"))) (EVar "ds"))
 (DFunDef false "unwrapDecls" ((PCon "Err" PWild)) (EListLit))
@@ -2567,7 +2567,7 @@ unit = ()
 (DUse false (UseGroup ("driver" "loader") ((mem "findProjectRootOrSelf" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false))))
-(DUse false (UseGroup ("frontend" "parse_cache") ((mem "parsePrelude" false))))
+(DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false) (mem "isDigit" false))))
 (DUse false (UseGroup ("support" "util") ((mem "maxI" false) (mem "utf8Len" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("io") ((mem "stripCR" false))))
@@ -2721,7 +2721,7 @@ unit = ()
 (DFunDef false "defZipLocOr" ((PCon "Some" (PVar "l")) PWild) (EApp (EVar "jRangeOfLoc") (EVar "l")))
 (DFunDef false "defZipLocOr" ((PCon "None") (PVar "p")) (EApp (EApp (EApp (EApp (EVar "jRange") (EBinOp "-" (EApp (EVar "declPosLine") (EVar "p")) (ELit (LInt 1)))) (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "declPosEndLine") (EVar "p")) (ELit (LInt 1)))) (ELit (LInt 0))))
 (DTypeSig false "docSchemes" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))
-(DFunDef false "docSchemes" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugar") (EApp (EVar "parsePrelude") (EVar "runtimeSrc")))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugar") (EApp (EVar "parsePrelude") (EVar "coreSrc")))) (DoExpr (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "userRaw")) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "userRaw"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (ELit (LString "__user__")) (EVar "userDecls")))) (DoExpr (EApp (EVar "Some") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))))))))))
+(DFunDef false "docSchemes" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src")) (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "runtimeSrc"))) (DoLet false false (PVar "coreDecls") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoExpr (EMatch (EApp (EVar "parseLocatedResult") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "userRaw")) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EVar "userRaw"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (ELit (LString "__user__")) (EVar "userDecls")))) (DoExpr (EApp (EVar "Some") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))))))))))
 (DTypeSig false "unwrapDecls" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "unwrapDecls" ((PCon "Ok" (PVar "ds"))) (EVar "ds"))
 (DFunDef false "unwrapDecls" ((PCon "Err" PWild)) (EListLit))

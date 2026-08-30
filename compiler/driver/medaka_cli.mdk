@@ -69,7 +69,7 @@ import frontend.parser.{
   parseErrorMessage,
   Positions,
 }
-import frontend.parse_cache.{parsePrelude}
+import frontend.desugar_cache.{desugaredPrelude}
 import frontend.desugar.{desugar}
 import frontend.resolve.{resolveModulesToHumaneByPath}
 import driver.loader.{
@@ -710,8 +710,8 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decl
       let _ = ePutStrLn (joinNl (map (ppDiagCliLines (srcLinesArr tsrc) target) errs))
       exit 1
 checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target mods =
-  let rtD = desugar (parsePrelude rsrc)
-  let coreD = desugar (parsePrelude csrc)
+  let rtD = desugaredPrelude rsrc
+  let coreD = desugaredPrelude csrc
   let modsD = map desugarPair mods
   -- RESOLVE-phase errors (e.g. importing a name a module does not export —
   -- PrivateNameAccess) go to STDERR + exit 1, mirroring the single-file arm's
