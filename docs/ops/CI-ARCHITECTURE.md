@@ -225,7 +225,10 @@ suite) to avoid narrowing an unrelated ci.yml hand-edit's coverage.
   context it stands in for. That makes the window between PR A and the ruleset swap
   safe in both directions: the old required contexts keep reporting, and nothing the
   old set would have caught can slip through. The ruleset then swaps to the eight
-  `gates_N` contexts, and PR B deletes the aliases. ⚠️ The rename blanks
+  `gates_N` contexts, and PR B deletes the aliases. **All three steps COMPLETED
+  2026-08-30**: PR #2260, the ruleset swap (`18885875`, verified by read-back — 14
+  required contexts, the eight `gates (…)` gone), PR #2269. The required set is now
+  `gates_1`…`gates_8`. ⚠️ The rename blanks
   `gate balance`'s calibration column (it keys the recorded run rows by shard name, and
   no run has reported under the new names yet) — fail-open by construction, self-heals
   on the first post-rename cost ingest. Oracle-cache keys keep the derive-from-pattern property or re-key
