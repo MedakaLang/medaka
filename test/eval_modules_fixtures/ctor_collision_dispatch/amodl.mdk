@@ -1,0 +1,11 @@
+-- One half of the #1292 collision: a type whose constructor is spelled `Box`.
+import labeliface.{Label, label}
+
+public export data TA = Box Int
+
+export impl Label TA where
+  label _ = "amod"
+
+-- built INSIDE this module, so the value is amod's `Box` and must tag `TA`.
+export mkA : Int -> TA
+mkA n = Box n

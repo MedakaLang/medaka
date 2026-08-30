@@ -64,6 +64,11 @@ import support.util.{
   dedup,
 }
 import support.opcount.{opBump}
+-- #1292: the ctor-collision rename the module drivers apply before seeding the
+-- program-global `ctorToTypeRef`.  `backend/private_mangle.mdk` imports only
+-- `frontend.ast` / `support.util` / `support.ordmap` and nothing in that closure
+-- imports eval.mdk (no cycle) — verified by grep before adding this import.
+import backend.private_mangle.{mangleCtorCollisions}
 -- Reused JSON diagnostic shaping for `medaka run --json` (RUNTIME-DIAGNOSTIC-
 -- CHANNEL-DESIGN.md Fork C). diagnostics.mdk sits above frontend/types in the
 -- pipeline and does not import eval.mdk (no cycle) — verified by grep before
@@ -156,9 +161,11 @@ ppValue VUnit = "()"
 ppValue (VTuple vs) = "(" ++ joinComma (map ppValue vs) ++ ")"
 ppValue (VList vs) = "[" ++ joinComma (map ppValue vs) ++ "]"
 ppValue (VArray vs) = "[|" ++ joinComma (map ppValue (arrayToListG vs)) ++ "|]"
-ppValue (VCon name []) = name
-ppValue (VCon name vs) = "\{name} \{joinSp (map ppValueAtom vs)}"
-ppValue (VRecord name fields) = "\{name} { \{joinComma (map ppField fields)} }"
+ppValue (VCon name []) = displayCtorName name
+ppValue (VCon name vs) =
+  "\{displayCtorName name} \{joinSp (map ppValueAtom vs)}"
+ppValue (VRecord name fields) =
+  "\{displayCtorName name} { \{joinComma (map ppField fields)} }"
 ppValue (VRef cell) = "Ref(" ++ ppValue !cell ++ ")"
 ppValue (VClosure _ _ _) = "<closure>"
 ppValue (VClosureF _ _ _) = "<closure>"
@@ -177,6 +184,40 @@ ppValueAtom : Value e -> String
 ppValueAtom (VCon name (x::xs)) = "(" ++ ppValue (VCon name (x::xs)) ++ ")"
 ppValueAtom (VTuple vs) = "(" ++ ppValue (VTuple vs) ++ ")"
 ppValueAtom v = ppValue v
+
+-- ── demangle-on-display for the #1292 ctor-collision rename ──────────────────
+-- `private_mangle.mangleCtorCollisions` renames a CROSS-UNIT-COLLIDING constructor
+-- to `<sanitizeId mid>__<Ctor>` before the module drivers seed `ctorToTypeRef`, so
+-- the runtime tag stops colliding.  That name is what a `VCon`/`VRecord` carries,
+-- and `ppValue` prints the constructor name AS the program's output — so the
+-- module prefix has to come back off at the display boundary, or the fix would
+-- change the output of every program that merely IMPORTS two modules sharing a
+-- constructor spelling (stdlib `map.mdk` and `set.mdk` both declare `Tip`/`Bin`).
+--
+-- The strip is a NO-OP on every name the rename did not produce, and that is a
+-- property, not a hope: a SOURCE constructor name always begins with an uppercase
+-- letter, while a mangled one begins with the module id.  So an uppercase initial
+-- means "not renamed here", full stop — a user constructor spelled `Foo__Bar`
+-- keeps its `__` and prints unchanged.
+--
+-- ⚠️ Known gap, recorded not inherited: a module id that itself starts with an
+-- uppercase letter (`Foo.mdk`) mangles to `Foo__Ctor` and is NOT demangled — it
+-- displays with the prefix.  Cosmetic, and confined to colliding-ctor programs.
+export
+displayCtorName : String -> String
+displayCtorName n
+  | upperInitialName n = n
+  | otherwise = stripModPrefix n 0 (stringLength n)
+
+upperInitialName : String -> Bool
+upperInitialName n = stringSlice 0 1 n >= "A" && stringSlice 0 1 n <= "Z"
+
+-- drop through the FIRST `__`; unchanged when the name has none.
+stripModPrefix : String -> Int -> Int -> String
+stripModPrefix n i len
+  | i + 2 > len = n
+  | stringSlice i (i + 2) n == "__" = stringSlice (i + 2) len n
+  | otherwise = stripModPrefix n (i + 1) len
 
 joinComma : List String -> String
 joinComma xs = joinWith ", " xs
@@ -540,7 +581,11 @@ runtimeTypeTag (VList _) = Some "List"
 runtimeTypeTag (VArray _) = Some "Array"
 runtimeTypeTag (VTuple vs) = Some (tupleHeadTag (listLen vs))
 runtimeTypeTag (VCon cname _) = lookupAssoc cname !ctorToTypeRef
-runtimeTypeTag (VRecord name _) = Some name
+-- #1292: a record value's head tag is its CONSTRUCTOR name, so the collision
+-- rename would spell it `<mid>__<Ctor>` and stop it matching an impl's bare target
+-- type name.  Demangling restores the pre-rename tag exactly — record head tags are
+-- the separate TYPE-name bareness residual of #1292, deliberately not changed here.
+runtimeTypeTag (VRecord name _) = Some (displayCtorName name)
 runtimeTypeTag (VTypedImpl t _ _ _ _) = Some t
 runtimeTypeTag _ = None
 
@@ -3491,7 +3536,17 @@ globalFramesWith privateCells globalCells = [privateCells, globalCells]
 -- drivers, so the oracle stays free of I/O regardless of what `e` is otherwise instantiated at.
 export
 evalModulesWith : List (String, Value e) -> List Decl -> List (String, List Decl) -> <e> List (String, Value e)
-evalModulesWith extraExterns preludeDecls modules =
+evalModulesWith extraExterns preludeDecls0 modules0 =
+  -- #1292: rename CROSS-UNIT-COLLIDING constructors to `<mid>__<Ctor>` before
+  -- anything below reads them, so the program-global `ctorToTypeRef` seeded on the
+  -- next lines stops folding two modules' same-named constructors into ONE entry
+  -- (which tagged every value of the loser's type with the winner's type, and
+  -- dispatched it to the wrong impl -- silently, at exit 0).  A no-op returning its
+  -- input BYTE-IDENTICAL when no constructor name is declared by two units, which
+  -- is every program without the bug.  Idempotent, so a caller that had to rename
+  -- earlier (tools/test_cmd.mdk, whose `test`/prop bodies come out of this same
+  -- module list) costs nothing here.
+  let (preludeDecls, modules) = mangleCtorCollisions preludeDecls0 modules0
   let externs = externBindings () ++ extraExterns
   let moduleDecls = flatMap snd modules
   let allDecls = preludeDecls ++ moduleDecls
@@ -3624,7 +3679,9 @@ evalModulesRootEnv preludeDecls modules =
 -- evalModulesWith — the two module drivers are deliberate parallel copies.
 export
 evalModulesRootEnvWith : List (String, Value e) -> List Decl -> List (String, List Decl) -> <e> List (String, Value e)
-evalModulesRootEnvWith extraExterns preludeDecls modules =
+evalModulesRootEnvWith extraExterns preludeDecls0 modules0 =
+  -- [T-EVAL-LOCKSTEP] third driver: same rename, same reason as evalModulesWith.
+  let (preludeDecls, modules) = mangleCtorCollisions preludeDecls0 modules0
   let externs = externBindings () ++ extraExterns
   let moduleDecls = flatMap snd modules
   let allDecls = preludeDecls ++ moduleDecls

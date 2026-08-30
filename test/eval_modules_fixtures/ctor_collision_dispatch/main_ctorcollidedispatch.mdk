@@ -1,0 +1,21 @@
+-- #1292 (S0) regression: `eval.runtimeTypeTag` tagged a `VCon` by its BARE
+-- constructor name through the PROGRAM-GLOBAL `ctorToTypeRef`, so two modules
+-- declaring a same-named constructor collapsed to one entry and every value of
+-- the loser's type was tagged with the winner's TYPE — dispatching to the wrong
+-- impl silently, at exit 0.
+--
+-- Both lines below construct a `Box`, but from DIFFERENT modules' `Box`:
+--   * `mkA 7`   is built inside amodl, so it is amodl's `Box` : TA -> "amod"
+--   * `Box 5`   is bmodl's `Box` (the only `Box` this module imports) : TB -> "bmod"
+-- Two lines, not one, so the fixture fails whichever way the table collapses:
+-- a first-wins table gets the second line wrong, a last-wins table the first.
+--
+-- 🚨 GOLDEN HAND-WRITTEN FROM THE SEMANTICS ABOVE, never captured — capturing at
+-- the buggy base would have enshrined `amod\namod` as "correct" forever.
+import labeliface.{Label, label}
+import amodl.{TA, mkA}
+import bmodl.{TB, Box}
+
+main =
+  println (label (mkA 7))
+  println (label (Box 5))

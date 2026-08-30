@@ -257,6 +257,40 @@ else
   fail=$((fail + 1)); printf 'FAIL hash_negative_hash.mdk report mismatch\n  --- expected ---\n%s\n  --- actual ---\n%s\n' "$nh_expected" "$nh_out"
 fi
 
+# Issue #1292 (S0): `eval.runtimeTypeTag` tagged a `VCon` by its BARE constructor
+# name through the PROGRAM-GLOBAL `ctorToTypeRef`, so two modules declaring a
+# same-named constructor collapsed to one entry and every value of the loser's type
+# dispatched to the winner's impl -- silently, at exit 0.  The eval-side fix renames
+# cross-unit-COLLIDING constructors (`private_mangle.mangleCtorCollisions`).
+#
+# THIS BLOCK GRADES THE THIRD DRIVER: `evalModulesRootEnvWith`, the one the
+# `test "..."` phase / prop runner / repl use (`evalModulesWith` serves doctests
+# only).  A fix wired into the other two module drivers alone passes every other
+# check in this tree.  It ALSO pins the `Pass`/`Fail` exemption: verdict.mdk
+# declares constructors so spelled, and `tools/test_runner.mdk` matches a test
+# body's result as a bare `VCon "Pass" []` / `VCon "Fail" [_]` -- renaming those
+# would report all three cases below as ERROR instead of ok.
+#
+# Expected report HAND-DERIVED from the fixture's semantics (see its header), held
+# inline rather than as a capturable golden: capturing at the buggy base would have
+# enshrined the wrong answer.  Multi-module + stdlib, so it needs two search roots
+# -- hence a bespoke block, like hash_negative_hash above.
+cc="$ROOT/test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk"
+cc_out="$(run_t "$TIMEOUT" "$RUN" "$RUNTIME" "$CORE" "$cc" "$ROOT/test/compiler_test_fixtures/ctor_collision_test_seam" "$ROOT/stdlib" 2>/dev/null | sed "s#$ROOT/##g")"
+cc_expected="running doctests in test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk
+  (no doctests found)
+running tests in test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk
+  ok   test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:25: amod's own Box tags TA
+  ok   test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:27: the imported bmod Box tags TB
+  ok   test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:29: a Pass/Fail collision does not break the test runner
+
+test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk: 3/3 passed"
+if [ "$cc_out" = "$cc_expected" ]; then
+  pass=$((pass + 1)); printf 'ok   ctor_collision_test_seam/main.mdk (#1292: cross-module ctor collision through the test-phase driver)\n'
+else
+  fail=$((fail + 1)); printf 'FAIL ctor_collision_test_seam/main.mdk report mismatch\n  --- expected ---\n%s\n  --- actual ---\n%s\n' "$cc_expected" "$cc_out"
+fi
+
 # Issue #892 (S2): a FILE-LEVEL parse error in the TARGET must surface as the SAME
 # located `file:L:C:` diagnostic `medaka check` prints, on STDERR, not the unlocated
 # `runtime error [E-PANIC]: parse error` panic `medaka test` used to raise (which

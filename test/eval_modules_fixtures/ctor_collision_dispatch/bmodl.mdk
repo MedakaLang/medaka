@@ -1,0 +1,7 @@
+-- The other half: a DIFFERENT type, same constructor spelling `Box`.
+import labeliface.{Label, label}
+
+public export data TB = Box Int
+
+export impl Label TB where
+  label _ = "bmod"

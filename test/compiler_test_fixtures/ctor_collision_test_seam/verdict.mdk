@@ -1,0 +1,6 @@
+-- Collides with stdlib test.mdk's `Expectation` constructors ON PURPOSE.
+public export data Verdict = Pass | Fail String
+
+export verdictLabel : Verdict -> String
+verdictLabel Pass = "pass"
+verdictLabel (Fail m) = "fail:\{m}"

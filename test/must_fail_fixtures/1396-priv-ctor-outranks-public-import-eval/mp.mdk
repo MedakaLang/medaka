@@ -1,2 +1,0 @@
-public export data Zz = Mk Int      -- Zz is a public TYPE
-data Hidden = Zz Int Int            -- ...and also a PRIVATE ctor, arity 2, never exported

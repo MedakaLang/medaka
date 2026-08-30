@@ -226,7 +226,7 @@ cost = "medium"
 kind = "exec"
 run = "test/diff_compiler_eval_modules.sh"
 oracles = ["eval_modules_main"]
-sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_eval_modules.sh"]
+sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "compiler/backend/private_mangle.mdk", "test/diff_compiler_eval_modules.sh"]
 corpus = ["test/eval_modules_fixtures"]
 toolchain = []
 
@@ -3026,7 +3026,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_test.sh"
 oracles = ["test_main"]
-sources = ["compiler/eval/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "test/diff_compiler_test.sh"]
+sources = ["compiler/eval/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "compiler/backend/private_mangle.mdk", "test/diff_compiler_test.sh"]
 corpus = ["test/compiler_test_fixtures"]
 toolchain = []
 
