@@ -1017,7 +1017,10 @@ scanAllowInternal : Bool -> List String -> Bool
 scanAllowInternal _ [] = False
 scanAllowInternal inDeps (line::rest) =
   let t = stringTrim line
-  if startsWith "[" t then scanAllowInternal (t == "[dependencies]") rest
+  let header = match splitOnChar "#" t
+    h::_ => stringTrim h
+    [] => t
+  if startsWith "[" header then scanAllowInternal (header == "[dependencies]") rest
   else
     if inDeps then scanAllowInternal inDeps rest
     else
