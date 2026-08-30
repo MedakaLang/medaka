@@ -14,7 +14,7 @@ Per-section status — derive the authoritative version from the issues
 | 3.2 generated `ci.yml` | #2177 | BUILT (`ci-gen-drift` is a required context) |
 | 3.3 identity ⊥ scheduling | #2178 | BUILT — derived assignment, area-reported failures, and the neutral executor names |
 | 3.4 graph-scoped project suites | #2179 | NOT STARTED |
-| 3.5 cost ratchet | #2180 | BUILT (`gate-budget` is a required context) |
+| 3.5 cost ratchet | #2180 | BUILT. ⚠️ Its `gate-budget` job is NOT in the required-check set (derived from ruleset 18885875, 2026-08-30) — a red budget does not block a merge. `ci-gen-drift` IS required, and it runs `medaka gate balance --check`, so a hand-edited assignment is blocked; an over-budget one is not. |
 | 3.6 tier-3 charter | #2181 | NOT STARTED |
 
 ---
