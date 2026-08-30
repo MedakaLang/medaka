@@ -70,7 +70,8 @@ check_medaka_block() {
   out="$("$MEDAKA" check "$check_file" --json 2>&1)"
   rc=$?
   errs=$(printf '%s\n' "$out" | grep -c '"severity":1')
-  if [ "$rc" -ne 0 ] || [ "$errs" -gt 0 ]; then
+  main_shape=$(printf '%s\n' "$out" | grep -c '"code":"W-MAIN-SHAPE"')
+  if [ "$rc" -ne 0 ] || [ "$errs" -gt 0 ] || [ "$main_shape" -gt 0 ]; then
     failed=$((failed + 1))
     doc_failed=$((doc_failed + 1))
     fail_report="$fail_report
@@ -111,7 +112,8 @@ check_project_block() {
     out="$("$MEDAKA" check "$mf" --json 2>&1)"
     rc=$?
     errs=$(printf '%s\n' "$out" | grep -c '"severity":1')
-    if [ "$rc" -ne 0 ] || [ "$errs" -gt 0 ]; then
+    main_shape=$(printf '%s\n' "$out" | grep -c '"code":"W-MAIN-SHAPE"')
+    if [ "$rc" -ne 0 ] || [ "$errs" -gt 0 ] || [ "$main_shape" -gt 0 ]; then
       failed=$((failed + 1))
       doc_failed=$((doc_failed + 1))
       fail_report="$fail_report

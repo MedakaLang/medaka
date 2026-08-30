@@ -19,7 +19,8 @@ map of the docs that follow.
 ## 1. Quickstart — "Your first program"
 Working program running in the playground in five minutes.
 - Introduce: `main = ...` entry point; **`main` must be a zero-arg value, not
-  `main () = ...`** (silent no-op); `println`; comments.
+  `main () = ...`** (a loud, located `W-MAIN-SHAPE` rejection; write
+  `main = ...`); `println`; comments.
 - Defer: modules, types, structure.
 
 ## 2. Values, Bindings & Types — "The shape of an expression"
