@@ -461,7 +461,7 @@ mark_full() {
 }
 
 need_fixpoint=0
-for f in $changed; do
+while IFS= read -r f; do
   case "$f" in
     # ── front-end: everything downstream of it is suspect ──
     compiler/frontend/lexer.mdk)
@@ -878,6 +878,7 @@ for f in $changed; do
     # at all, so a change here fell through to the catch-all — the two gates
     # that actually police its generated content are the ones that read it.
     .github/workflows/ci.yml)      add 'diff_compiler_ci_gen_drift'; add 'diff_compiler_ci_shard_coverage' ;;
+    docs/guide/*.md)               add 'check_syntax_examples' ;;
     # Third ledger, same structural blind spot (#1608). Its rows pin a WRONG VALUE
     # rather than a divergence — see its own header — but the masking path is
     # identical: a loose file under test/ that someone edits ALONE when the gate reds.
@@ -1043,7 +1044,9 @@ for f in $changed; do
         esac
       fi ;;
   esac
-done
+done <<PREFLIGHT_CHANGED_PATHS
+$changed
+PREFLIGHT_CHANGED_PATHS
 
 # ── the snapshot corpus is not a fixture dir; it is the SOURCE TREE ──────────
 # Every compiler/**.mdk and stdlib/*.mdk is IN the snapshot corpus (each one carries its
@@ -1079,14 +1082,16 @@ done
 # name. A LEAF stdlib module (map, set, …) is not passed into the closure by name, so it
 # gets no entry here; a change to one still reaches selfproc via the blast-radius
 # `stdlib/*|runtime/*` arm above (which does `add 'diff_compiler_*'`, matching selfproc).
-for f in $changed; do
+while IFS= read -r f; do
   case "$f" in
     compiler/*.mdk|compiler/*/*.mdk|stdlib/*.mdk) add 'diff_compiler_snapshot*' ;;
   esac
   case "$f" in
     compiler/*.mdk|compiler/*/*.mdk|stdlib/core.mdk|stdlib/runtime.mdk) add 'diff_compiler_selfproc' ;;
   esac
-done
+done <<PREFLIGHT_CHANGED_PATHS
+$changed
+PREFLIGHT_CHANGED_PATHS
 
 # ── the control-byte ratchet applies to EVERY tracked source file (#1987 F4) ──
 # diff_compiler_source_bytes.sh scans the whole tree (`git ls-files`, filtered by
@@ -1141,7 +1146,7 @@ fi
 inlang_files=$(awk '/^test: medaka$/{f=1;next} f&&/^\t/{print} f&&!/^\t/{exit}' "$ROOT/Makefile" \
   | sed -n 's|^	\./medaka test ||p')
 inlang_run=""
-for f in $changed; do
+while IFS= read -r f; do
   for _if in $inlang_files; do
     [ "$f" = "$_if" ] || continue
     # Only if it still exists — a DELETED module cannot be doctested, and `changed`
@@ -1149,7 +1154,9 @@ for f in $changed; do
     [ -f "$ROOT/$f" ] || continue
     case " $inlang_run " in *" $f "*) ;; *) inlang_run="$inlang_run $f" ;; esac
   done
-done
+done <<PREFLIGHT_CHANGED_PATHS
+$changed
+PREFLIGHT_CHANGED_PATHS
 
 # ── resolve gates → the ORACLES they actually need ───────────────────────────
 #
