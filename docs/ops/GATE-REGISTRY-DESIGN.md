@@ -85,7 +85,10 @@ shard       = "frontend"       # ci.yml `gates` matrix ROW: engines|sqlite|pds|f
                                #   some OTHER workflow job schedules (#2177)
 project     = "compiler"       # compiler | sqlite | gzip | pds | mq | parsec | byteparser
 tier        = "merge"          # merge | nightly | ondemand
-cost        = "cheap"          # cheap(<10s) | medium(<60s) | heavy(<300s) | budgeted(explicit)
+cost        = "cheap"          # cheap|medium|heavy — the CI kill timeout `timeoutFor`
+                               #   enforces: cheap 300s / medium 900s / heavy 3600s. No
+                               #   fourth class; this is also what `gate budget` clause
+                               #   (b) checks a gate's measured cost against (§14).
 kind        = "exec"           # exec (wrap a script) | native (a medaka gate module)
 run         = "test/diff_compiler_parse_result.sh"   # exec: the script; native: module path
 oracles     = ["parse_result_main"]   # test/bin/* names this gate reads (drives oracle builds)
@@ -137,8 +140,8 @@ Notes on the load-bearing fields:
   modelled yet — #2177's generator only owns the `gates` matrix, and inventing a
   second, unverified job axis would have put unchecked data in the registry.
 - **`cost`**: a *declaration* checked against queue-measured reality by the ratchet
-  (#2180). `budgeted` carries an explicit seconds figure for the rare
-  deliberately-heavy merge-tier gate.
+  (#2180). One of `cheap`/`medium`/`heavy` — no fourth class; a deliberately-heavy
+  merge-tier gate is declared `heavy`, not given its own explicit-seconds figure.
 - **`sources` + `corpus` replace preflight's case arms**: preflight's derivation
   ("changed path → gate set") becomes a registry query, `medaka gate explain <path>`.
   The existing fail-open rules transfer verbatim: unmatched non-prose path → FULL;
@@ -999,7 +1002,8 @@ restore the perversity.
 
 ## 14. The budget governor: `medaka gate budget` (#2180, S-5)
 
-Three-clause required, cheap, text-only gate (`test/diff_compiler_gate_budget.sh`,
+A three-clause, cheap, text-only governor, intended to become required
+(`test/diff_compiler_gate_budget.sh`,
 enrolled `shard = "other-job"` for §13's own "cannot certify a number it can move"
 reason). Reds when:
 

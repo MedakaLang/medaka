@@ -1,0 +1,36 @@
+# test/gate_registry_fixtures/invalid_cost.toml — SYNTHETIC, hand-written.
+#
+# A registry entry whose `cost` is not one of `cheap`/`medium`/`heavy` (FR-5,
+# review finding S2-3). Paired with valid_cost.toml, which is identical
+# except for the `cost` value, so the two isolate exactly one field.
+#
+# Run against a throwaway MEDAKA_ROOT (a freshly `git init`'d directory
+# containing only this fixture's own `run` target), never against the real
+# repo root: `medaka gate verify`'s check 1 (unenrolled gate scripts) scans
+# ALL `*.sh` under MEDAKA_ROOT via `git ls-files`, so pointing `--registry` at
+# this file while `MEDAKA_ROOT` stays the real tree would flood the output
+# with hundreds of unrelated "unenrolled" violations from every real gate
+# script this 1-entry registry doesn't claim — see
+# test/diff_compiler_gate_registry.sh for the harness that builds that
+# throwaway root.
+
+[[gate]]
+name = "tidy"
+area = "fixture"
+shard = "a"
+project = "compiler"
+tier = "merge"
+cost = "banana"
+kind = "exec"
+run = "test/tidy.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[shard]]
+name = "a"
+full_cores = false
+wasm_arm = false
+rationale = "test/gate_shards/a.txt"
+pinned_gates = []

@@ -93,11 +93,18 @@ trap 'rm -rf "$WORK"' EXIT
 # drift here only costs a skipped run, never a false admission).
 ALLOW_EVENTS="workflow_dispatch merge_group push schedule"
 
+# `--workflow` scopes the candidate set to THIS repo's CI workflow
+# (.github/workflows/ci.yml) specifically — without it, `gh run list` admits
+# runs of ANY workflow in the repo (e.g. nightly.yml), diluting the baseline
+# with timing data from a different schedule (FR-5, review finding S3-3).
+WORKFLOW_FILE="ci.yml"
+
 runs_json="$(gh run list --repo "$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")" \
+  --workflow "$WORKFLOW_FILE" \
   --limit "$LIMIT" --json databaseId,event,conclusion,headSha 2>/dev/null)"
 if [ -z "$runs_json" ] || [ "$runs_json" = "null" ]; then
   # Fall back to repo-inferred form (works from inside a checked-out clone).
-  runs_json="$(gh run list --limit "$LIMIT" --json databaseId,event,conclusion,headSha)"
+  runs_json="$(gh run list --workflow "$WORKFLOW_FILE" --limit "$LIMIT" --json databaseId,event,conclusion,headSha)"
 fi
 
 run_ids="$(printf '%s' "$runs_json" | python3 -c '
@@ -186,14 +193,49 @@ if [ "$gen_rc" != 0 ]; then
 fi
 
 # ── 5. land the result on a fresh branch, or report the clean no-op ────────
-changed="$(git -C "$ROOT" status --porcelain -- test/gate_cost_baseline.json test/gates.toml .github/workflows/ci.yml)"
-if [ -z "$changed" ]; then
-  echo "gate_cost_collect: baseline advanced but the derived assignment did not move — no gates.toml/ci.yml diff, nothing to land."
+#
+# By this point step 3 has already returned early on "zero new samples", so
+# test/gate_cost_baseline.json HAS changed — a status check on it here can
+# never come back empty, and the old single combined check (baseline +
+# schedule together) could therefore never take its "nothing moved" branch
+# (FR-5, review finding S3-4: dead/misleading branch). What genuinely varies
+# is whether the derived SCHEDULE (test/gates.toml / ci.yml) moved along with
+# it, so the two are checked independently:
+#
+#   baseline changed, schedule changed   -> land both (today's behavior)
+#   baseline changed, schedule unchanged -> land the baseline-only advance,
+#                                            so the sample isn't discarded on
+#                                            an ephemeral runner (previously
+#                                            silently dropped by this dead
+#                                            branch — the fix this item makes)
+#   baseline unchanged                   -> unreachable here (step 3 already
+#                                            exited); if it somehow occurs,
+#                                            fall through and land whatever
+#                                            did change, rather than assume it
+#                                            can't happen
+baseline_changed="$(git -C "$ROOT" status --porcelain -- test/gate_cost_baseline.json)"
+schedule_changed="$(git -C "$ROOT" status --porcelain -- test/gates.toml .github/workflows/ci.yml)"
+
+if [ -z "$baseline_changed" ] && [ -z "$schedule_changed" ]; then
+  echo "gate_cost_collect: nothing changed after ingest + re-derive — no-op, nothing to land."
   exit 0
 fi
 
+to_land=""
+[ -n "$baseline_changed" ] && to_land="$to_land test/gate_cost_baseline.json"
+[ -n "$schedule_changed" ] && to_land="$to_land test/gates.toml .github/workflows/ci.yml"
+
+if [ -n "$baseline_changed" ] && [ -z "$schedule_changed" ]; then
+  echo "gate_cost_collect: baseline advanced but the derived assignment did not move — landing the baseline-only advance."
+elif [ -n "$baseline_changed" ] && [ -n "$schedule_changed" ]; then
+  echo "gate_cost_collect: baseline advanced and the derived assignment moved — landing both."
+else
+  echo "gate_cost_collect: schedule changed with no baseline diff — landing the schedule change (unexpected shape; investigate)."
+fi
+
 echo "gate_cost_collect: changes to land:"
-git -C "$ROOT" diff --stat -- test/gate_cost_baseline.json test/gates.toml .github/workflows/ci.yml
+# shellcheck disable=SC2086
+git -C "$ROOT" diff --stat -- $to_land
 
 if [ "$DRY" = "1" ]; then
   echo "gate_cost_collect: --dry-run — not committing or pushing."
@@ -202,13 +244,15 @@ fi
 
 BRANCH="${BRANCH_PREFIX}-$(date -u +%Y%m%d%H%M%S)"
 git -C "$ROOT" checkout -b "$BRANCH"
-git -C "$ROOT" add test/gate_cost_baseline.json test/gates.toml .github/workflows/ci.yml
+# shellcheck disable=SC2086
+git -C "$ROOT" add $to_land
 git -C "$ROOT" commit -m "gate cost: auto-advance baseline from CI artifacts ($(date -u +%Y-%m-%d))
 
 Collected via test/gate_cost_collect.sh from admissible (workflow_dispatch/
 merge_group/push/schedule) successful CI runs, ingested with
 test/gate_cost_ingest.sh, and re-derived with 'medaka gate balance' +
-'make gen-ci' (same commit, per AGENTS.md [W-SHARD-DERIVED])."
+'make gen-ci' (same commit, per AGENTS.md [W-SHARD-DERIVED]) when the
+derived assignment moved."
 
 git -C "$ROOT" push "$REMOTE" "$BRANCH"
 push_rc=$?

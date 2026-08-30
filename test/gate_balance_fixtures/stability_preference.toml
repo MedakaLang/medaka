@@ -13,8 +13,13 @@
 # `balJobsFor` models both serially).  Costs, in the order longest-processing-
 # time places them:
 #
-#   anchor_a  200.0s   committed a   -> a (empty rows; the preference cannot
-#                                        fire, `Lbest` is 0)
+#   anchor_a  200.0s   committed a   -> a (empty rows; LPT's own strict-min
+#                                        pick already agrees with the
+#                                        incumbent, so clause (3) is never
+#                                        exercised here — NOT because the
+#                                        preference is inert at zero load; see
+#                                        `balStays`'s doc comment for the
+#                                        boundary case where it isn't)
 #   anchor_b  195.0s   committed b   -> b (same)
 #   held       10.0s   committed a   -> a: bare LPT picks `b` (195.0 < 200.0),
 #                                        but a is 200.0 against b's 195.0, i.e.

@@ -1633,7 +1633,23 @@ unsafeShardNames (s::ss) = unsafeName "shard row" s.name ++ unsafeShardNames ss
 unsafeNameViolations : List Gate -> List Shard -> List String
 unsafeNameViolations gates shs = unsafeGateNames gates ++ unsafeShardNames shs
 
--- ── assembling and rendering the seven classes ──────────────────────────────
+-- Check 8 (FR-5, review finding S2-3): every entry's `cost` is one of the
+-- THREE classes `timeoutFor` actually matches (`cheap`/`medium`/`heavy`).
+-- `cost` is a required TOML string with no enum check at parse time, so a
+-- typo (`cost = "banana"`) used to fall through `timeoutFor`'s `otherwise =
+-- 900` fallback silently — same kill timeout as `medium`, but with no
+-- registry-level signal that anything was wrong, and `gate budget` clause
+-- (b) grading it against `medium`'s ceiling without ever having declared it.
+costClassOk : String -> Bool
+costClassOk c = c == "cheap" || c == "medium" || c == "heavy"
+
+invalidCostViolations : List Gate -> List String
+invalidCostViolations [] = []
+invalidCostViolations (g::gs)
+  | costClassOk g.cost = invalidCostViolations gs
+  | otherwise = "\{g.name}: cost '\{g.cost}' is not one of cheap/medium/heavy" :: invalidCostViolations gs
+
+-- ── assembling and rendering the eight classes ──────────────────────────────
 
 verifyClasses : String -> List Gate -> List Shard -> <IO> Result String (List (String, List String))
 verifyClasses root gates shs = match gateCandidates root
@@ -1651,6 +1667,7 @@ verifyClasses root gates shs = match gateCandidates root
         ("unreachable entries", reachabilityViolations gates gates),
         ("duplicate entry names", duplicateNameViolations gates),
         ("unsafe entry names", unsafeNameViolations gates shs),
+        ("invalid cost class", invalidCostViolations gates),
       ]
 
 renderClass : (String, List String) -> String
@@ -2826,10 +2843,18 @@ balPickStable c rs = match balPick c rs
        202 gates: before-form 0 / 4 / 0, after-form 0 / 7 / 5.
 
    A consequence worth naming rather than discovering: early in the pack every
-   row is near-empty, so `Lbest` is near 0, the slack is near 0, and the
-   biggest gates — the ones that set the pole's floor — are placed by bare LPT
-   with no preference at all.  The preference only reaches the tail of small
-   gates, which is exactly where the churn is (`balBandNote`). -}
+   row is near-empty, so `Lbest` is near 0 and the ABSOLUTE slack the
+   preference tolerates is near 0 too — but the comparison is `Lcur * 100 <=
+   Lbest * (100 + balStabPct)`, and when BOTH sides are exactly 0 (curRow and
+   best both still-empty rows) that reduces to `0 <= 0`, which holds
+   UNCONDITIONALLY regardless of `balStabPct`.  So the preference does not
+   sit out the empty-row region — a gate committed to a still-empty row that
+   is not bare LPT's pick is HELD there too, at zero cost either way (a
+   fixed point, since every empty legal row is equally good).  What the
+   biggest gates actually get placed by bare LPT with no preference in
+   practice is the case where `curRow == best` already (ties broken in
+   `[[shard]]` order tend to agree with the incumbent early on), not a
+   genuine "preference disabled below some load" rule. -}
 balStays : Cand -> String -> List Row -> Bool
 balStays c best rs
   | c.curRow == best = True

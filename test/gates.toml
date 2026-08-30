@@ -3406,7 +3406,7 @@ kind = "exec"
 run = "test/diff_compiler_gate_registry.sh"
 oracles = []
 sources = ["compiler/tools/gate_cmd.mdk", "test/diff_compiler_gate_registry.sh", "test/gates.toml"]
-corpus = []
+corpus = ["test/gate_registry_fixtures"]
 toolchain = []
 
 # The generated gates-matrix region's own drift gate (#2177, S-3): compare
@@ -3523,7 +3523,7 @@ cost = "cheap"
 kind = "exec"
 run = "test/diff_compiler_gate_budget.sh"
 oracles = []
-sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_cost.mdk", "test/diff_compiler_gate_budget.sh", "test/gate_cost_baseline.json", "test/gates.toml"]
+sources = ["compiler/tools/gate_cmd.mdk", "compiler/tools/gate_cost.mdk", "test/diff_compiler_gate_budget.sh", "test/gate_cost_baseline.json", "test/gates.toml", ".github/workflows/ci.yml"]
 corpus = []
 toolchain = []
 

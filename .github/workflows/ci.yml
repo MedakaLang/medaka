@@ -1468,7 +1468,11 @@ jobs:
     needs: [detect, build]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # `cost = "cheap"` in test/gates.toml declares a 300s (`timeoutFor`) kill
+    # timeout; this job's own ceiling must not silently permit more than that
+    # (FR-5, review finding S3-6). 5 minutes (300s) matches; this gate is
+    # text-only with no build, so it's ample headroom over an actual run.
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
 

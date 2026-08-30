@@ -1,5 +1,5 @@
 # META
-source_lines=4409
+source_lines=4434
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -1637,7 +1637,23 @@ unsafeShardNames (s::ss) = unsafeName "shard row" s.name ++ unsafeShardNames ss
 unsafeNameViolations : List Gate -> List Shard -> List String
 unsafeNameViolations gates shs = unsafeGateNames gates ++ unsafeShardNames shs
 
--- ── assembling and rendering the seven classes ──────────────────────────────
+-- Check 8 (FR-5, review finding S2-3): every entry's `cost` is one of the
+-- THREE classes `timeoutFor` actually matches (`cheap`/`medium`/`heavy`).
+-- `cost` is a required TOML string with no enum check at parse time, so a
+-- typo (`cost = "banana"`) used to fall through `timeoutFor`'s `otherwise =
+-- 900` fallback silently — same kill timeout as `medium`, but with no
+-- registry-level signal that anything was wrong, and `gate budget` clause
+-- (b) grading it against `medium`'s ceiling without ever having declared it.
+costClassOk : String -> Bool
+costClassOk c = c == "cheap" || c == "medium" || c == "heavy"
+
+invalidCostViolations : List Gate -> List String
+invalidCostViolations [] = []
+invalidCostViolations (g::gs)
+  | costClassOk g.cost = invalidCostViolations gs
+  | otherwise = "\{g.name}: cost '\{g.cost}' is not one of cheap/medium/heavy" :: invalidCostViolations gs
+
+-- ── assembling and rendering the eight classes ──────────────────────────────
 
 verifyClasses : String -> List Gate -> List Shard -> <IO> Result String (List (String, List String))
 verifyClasses root gates shs = match gateCandidates root
@@ -1655,6 +1671,7 @@ verifyClasses root gates shs = match gateCandidates root
         ("unreachable entries", reachabilityViolations gates gates),
         ("duplicate entry names", duplicateNameViolations gates),
         ("unsafe entry names", unsafeNameViolations gates shs),
+        ("invalid cost class", invalidCostViolations gates),
       ]
 
 renderClass : (String, List String) -> String
@@ -2830,10 +2847,18 @@ balPickStable c rs = match balPick c rs
        202 gates: before-form 0 / 4 / 0, after-form 0 / 7 / 5.
 
    A consequence worth naming rather than discovering: early in the pack every
-   row is near-empty, so `Lbest` is near 0, the slack is near 0, and the
-   biggest gates — the ones that set the pole's floor — are placed by bare LPT
-   with no preference at all.  The preference only reaches the tail of small
-   gates, which is exactly where the churn is (`balBandNote`). -}
+   row is near-empty, so `Lbest` is near 0 and the ABSOLUTE slack the
+   preference tolerates is near 0 too — but the comparison is `Lcur * 100 <=
+   Lbest * (100 + balStabPct)`, and when BOTH sides are exactly 0 (curRow and
+   best both still-empty rows) that reduces to `0 <= 0`, which holds
+   UNCONDITIONALLY regardless of `balStabPct`.  So the preference does not
+   sit out the empty-row region — a gate committed to a still-empty row that
+   is not bare LPT's pick is HELD there too, at zero cost either way (a
+   fixed point, since every empty legal row is equally good).  What the
+   biggest gates actually get placed by bare LPT with no preference in
+   practice is the case where `curRow == best` already (ties broken in
+   `[[shard]]` order tend to agree with the incumbent early on), not a
+   genuine "preference disabled below some load" rule. -}
 balStays : Cand -> String -> List Row -> Bool
 balStays c best rs
   | c.curRow == best = True
@@ -4754,8 +4779,13 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "unsafeShardNames" ((PCons (PVar "s") (PVar "ss"))) (EBinOp "++" (EApp (EApp (EVar "unsafeName") (ELit (LString "shard row"))) (EFieldAccess (EVar "s") "name")) (EApp (EVar "unsafeShardNames") (EVar "ss"))))
 (DTypeSig false "unsafeNameViolations" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Shard")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "unsafeNameViolations" ((PVar "gates") (PVar "shs")) (EBinOp "++" (EApp (EVar "unsafeGateNames") (EVar "gates")) (EApp (EVar "unsafeShardNames") (EVar "shs"))))
+(DTypeSig false "costClassOk" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "costClassOk" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LString "cheap"))) (EBinOp "==" (EVar "c") (ELit (LString "medium")))) (EBinOp "==" (EVar "c") (ELit (LString "heavy")))))
+(DTypeSig false "invalidCostViolations" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "invalidCostViolations" ((PList)) (EListLit))
+(DFunDef false "invalidCostViolations" ((PCons (PVar "g") (PVar "gs"))) (EIf (EApp (EVar "costClassOk") (EFieldAccess (EVar "g") "cost")) (EApp (EVar "invalidCostViolations") (EVar "gs")) (EIf (EVar "otherwise") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": cost '"))) (EApp (EVar "display") (EFieldAccess (EVar "g") "cost"))) (ELit (LString "' is not one of cheap/medium/heavy"))) (EApp (EVar "invalidCostViolations") (EVar "gs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "verifyClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Shard")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))))
-(DFunDef false "verifyClasses" ((PVar "root") (PVar "gates") (PVar "shs")) (EMatch (EApp (EVar "gateCandidates") (EVar "root")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "could not enumerate gate candidates: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "cands")) () (EBlock (DoLet false false (PVar "tools") (EApp (EVar "toolNames") (EVar "root"))) (DoLet false false (PVar "runs") (EApp (EVar "allRuns") (EVar "gates"))) (DoLet false false (PVar "known") (EApp (EVar "knownOracles") (EVar "root"))) (DoExpr (EApp (EVar "Ok") (EListLit (ETuple (ELit (LString "unenrolled gate scripts")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cands"))) (ETuple (ELit (LString "missing run targets")) (EApp (EApp (EVar "runTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "missing oracle targets")) (EApp (EApp (EVar "oracleTargetViolations") (EVar "known")) (EVar "gates"))) (ETuple (ELit (LString "missing corpus targets")) (EApp (EApp (EVar "corpusTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unreachable entries")) (EApp (EApp (EVar "reachabilityViolations") (EVar "gates")) (EVar "gates"))) (ETuple (ELit (LString "duplicate entry names")) (EApp (EVar "duplicateNameViolations") (EVar "gates"))) (ETuple (ELit (LString "unsafe entry names")) (EApp (EApp (EVar "unsafeNameViolations") (EVar "gates")) (EVar "shs"))))))))))
+(DFunDef false "verifyClasses" ((PVar "root") (PVar "gates") (PVar "shs")) (EMatch (EApp (EVar "gateCandidates") (EVar "root")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "could not enumerate gate candidates: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "cands")) () (EBlock (DoLet false false (PVar "tools") (EApp (EVar "toolNames") (EVar "root"))) (DoLet false false (PVar "runs") (EApp (EVar "allRuns") (EVar "gates"))) (DoLet false false (PVar "known") (EApp (EVar "knownOracles") (EVar "root"))) (DoExpr (EApp (EVar "Ok") (EListLit (ETuple (ELit (LString "unenrolled gate scripts")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cands"))) (ETuple (ELit (LString "missing run targets")) (EApp (EApp (EVar "runTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "missing oracle targets")) (EApp (EApp (EVar "oracleTargetViolations") (EVar "known")) (EVar "gates"))) (ETuple (ELit (LString "missing corpus targets")) (EApp (EApp (EVar "corpusTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unreachable entries")) (EApp (EApp (EVar "reachabilityViolations") (EVar "gates")) (EVar "gates"))) (ETuple (ELit (LString "duplicate entry names")) (EApp (EVar "duplicateNameViolations") (EVar "gates"))) (ETuple (ELit (LString "unsafe entry names")) (EApp (EApp (EVar "unsafeNameViolations") (EVar "gates")) (EVar "shs"))) (ETuple (ELit (LString "invalid cost class")) (EApp (EVar "invalidCostViolations") (EVar "gates"))))))))))
 (DTypeSig false "renderClass" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "String")))
 (DFunDef false "renderClass" ((PTuple (PVar "title") (PList))) (EBinOp "++" (EBinOp "++" (ELit (LString "OK    ")) (EApp (EVar "display") (EVar "title"))) (ELit (LString ": 0\n"))))
 (DFunDef false "renderClass" ((PTuple (PVar "title") (PVar "vs"))) (EBlock (DoLet false false (PVar "names") (EApp (EVar "joinNl") (EApp (EVar "indentedNames") (EVar "vs")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FAIL  ")) (EApp (EVar "display") (EVar "title"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "vs"))))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "names"))) (ELit (LString "\n"))))))
@@ -5677,8 +5707,13 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DFunDef false "unsafeShardNames" ((PCons (PVar "s") (PVar "ss"))) (EBinOp "++" (EApp (EApp (EVar "unsafeName") (ELit (LString "shard row"))) (EFieldAccess (EVar "s") "name")) (EApp (EVar "unsafeShardNames") (EVar "ss"))))
 (DTypeSig false "unsafeNameViolations" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Shard")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "unsafeNameViolations" ((PVar "gates") (PVar "shs")) (EBinOp "++" (EApp (EVar "unsafeGateNames") (EVar "gates")) (EApp (EVar "unsafeShardNames") (EVar "shs"))))
+(DTypeSig false "costClassOk" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "costClassOk" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LString "cheap"))) (EBinOp "==" (EVar "c") (ELit (LString "medium")))) (EBinOp "==" (EVar "c") (ELit (LString "heavy")))))
+(DTypeSig false "invalidCostViolations" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "invalidCostViolations" ((PList)) (EListLit))
+(DFunDef false "invalidCostViolations" ((PCons (PVar "g") (PVar "gs"))) (EIf (EApp (EVar "costClassOk") (EFieldAccess (EVar "g") "cost")) (EApp (EVar "invalidCostViolations") (EVar "gs")) (EIf (EVar "otherwise") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": cost '"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "cost"))) (ELit (LString "' is not one of cheap/medium/heavy"))) (EApp (EVar "invalidCostViolations") (EVar "gs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "verifyClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyFun (TyApp (TyCon "List") (TyCon "Shard")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))))
-(DFunDef false "verifyClasses" ((PVar "root") (PVar "gates") (PVar "shs")) (EMatch (EApp (EVar "gateCandidates") (EVar "root")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "could not enumerate gate candidates: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "cands")) () (EBlock (DoLet false false (PVar "tools") (EApp (EVar "toolNames") (EVar "root"))) (DoLet false false (PVar "runs") (EApp (EVar "allRuns") (EVar "gates"))) (DoLet false false (PVar "known") (EApp (EVar "knownOracles") (EVar "root"))) (DoExpr (EApp (EVar "Ok") (EListLit (ETuple (ELit (LString "unenrolled gate scripts")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cands"))) (ETuple (ELit (LString "missing run targets")) (EApp (EApp (EVar "runTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "missing oracle targets")) (EApp (EApp (EVar "oracleTargetViolations") (EVar "known")) (EVar "gates"))) (ETuple (ELit (LString "missing corpus targets")) (EApp (EApp (EVar "corpusTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unreachable entries")) (EApp (EApp (EVar "reachabilityViolations") (EVar "gates")) (EVar "gates"))) (ETuple (ELit (LString "duplicate entry names")) (EApp (EVar "duplicateNameViolations") (EVar "gates"))) (ETuple (ELit (LString "unsafe entry names")) (EApp (EApp (EVar "unsafeNameViolations") (EVar "gates")) (EVar "shs"))))))))))
+(DFunDef false "verifyClasses" ((PVar "root") (PVar "gates") (PVar "shs")) (EMatch (EApp (EVar "gateCandidates") (EVar "root")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "could not enumerate gate candidates: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "cands")) () (EBlock (DoLet false false (PVar "tools") (EApp (EVar "toolNames") (EVar "root"))) (DoLet false false (PVar "runs") (EApp (EVar "allRuns") (EVar "gates"))) (DoLet false false (PVar "known") (EApp (EVar "knownOracles") (EVar "root"))) (DoExpr (EApp (EVar "Ok") (EListLit (ETuple (ELit (LString "unenrolled gate scripts")) (EApp (EApp (EApp (EVar "unenrolledViolations") (EVar "tools")) (EVar "runs")) (EVar "cands"))) (ETuple (ELit (LString "missing run targets")) (EApp (EApp (EVar "runTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "missing oracle targets")) (EApp (EApp (EVar "oracleTargetViolations") (EVar "known")) (EVar "gates"))) (ETuple (ELit (LString "missing corpus targets")) (EApp (EApp (EVar "corpusTargetViolations") (EVar "root")) (EVar "gates"))) (ETuple (ELit (LString "unreachable entries")) (EApp (EApp (EVar "reachabilityViolations") (EVar "gates")) (EVar "gates"))) (ETuple (ELit (LString "duplicate entry names")) (EApp (EVar "duplicateNameViolations") (EVar "gates"))) (ETuple (ELit (LString "unsafe entry names")) (EApp (EApp (EVar "unsafeNameViolations") (EVar "gates")) (EVar "shs"))) (ETuple (ELit (LString "invalid cost class")) (EApp (EVar "invalidCostViolations") (EVar "gates"))))))))))
 (DTypeSig false "renderClass" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "String")))
 (DFunDef false "renderClass" ((PTuple (PVar "title") (PList))) (EBinOp "++" (EBinOp "++" (ELit (LString "OK    ")) (EApp (EMethodRef "display") (EVar "title"))) (ELit (LString ": 0\n"))))
 (DFunDef false "renderClass" ((PTuple (PVar "title") (PVar "vs"))) (EBlock (DoLet false false (PVar "names") (EApp (EVar "joinNl") (EApp (EVar "indentedNames") (EVar "vs")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "FAIL  ")) (EApp (EMethodRef "display") (EVar "title"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "vs"))))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "names"))) (ELit (LString "\n"))))))
