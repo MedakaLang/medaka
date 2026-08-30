@@ -78,7 +78,7 @@ mkdir -p "$FIXTMP/test/gate_shards"
 printf '#!/bin/sh\ntrue\n' >"$FIXTMP/test/tidy.sh"
 chmod +x "$FIXTMP/test/tidy.sh"
 printf 'a\n' >"$FIXTMP/test/gate_shards/a.txt"
-( cd "$FIXTMP" && git init -q && git add -A && git commit -q -m init ) || {
+( cd "$FIXTMP" && git init -q && git add -A && git -c user.name=test -c user.email=test@example.invalid commit -q -m init ) || {
   echo "diff_compiler_gate_registry: could not init the throwaway fixture root"
   exit 2
 }
