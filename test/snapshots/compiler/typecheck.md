@@ -1,5 +1,5 @@
 # META
-source_lines=37482
+source_lines=37555
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -29498,16 +29498,26 @@ ffiStampModeOwned (Module mid _ _) =
 -- from `aliasTableRef` before `userExternSchemes` is ever reached, so the
 -- recursion terminates on the surviving table.
 expandAliasHeadTy : Ty -> Ty
-expandAliasHeadTy (t@(TyCon { tyConName = n, tyConOrigin = o })) = match lookupTab (tyTabKey o n) perRun.value.aliasTableRef.value
-  Some (params, rhs) if listLen params == 0 => expandAliasHeadTy rhs
+expandAliasHeadTy ty = expandAliasHeadTyWith perRun.value.aliasTableRef.value ty
+
+-- The explicit-table form is the carrier seam for post-typecheck consumers.  The
+-- live declaration checks above call `expandAliasHeadTy`, whose table is the
+-- current module's `perRun.aliasTableRef`; the emitter-side FFI index calls this
+-- same function body with stage K's module-scoped alias projection.  Keeping the
+-- table as an argument here means lowering does not grow a second alias expander
+-- (or a third alias registry) merely because it runs after the per-module Ref has
+-- been reset.
+expandAliasHeadTyWith : List (TabKey, (List String, Ty)) -> Ty -> Ty
+expandAliasHeadTyWith aliases (t@(TyCon { tyConName = n, tyConOrigin = o })) = match lookupTab (tyTabKey o n) aliases
+  Some (params, rhs) if listLen params == 0 => expandAliasHeadTyWith aliases rhs
   _ => t
-expandAliasHeadTy (t@(TyApp _ _)) = match tyAppSpine t
-  (TyCon { tyConName = n, tyConOrigin = o }, args) => match lookupTab (tyTabKey o n) perRun.value.aliasTableRef.value
+expandAliasHeadTyWith aliases (t@(TyApp _ _)) = match tyAppSpine t
+  (TyCon { tyConName = n, tyConOrigin = o }, args) => match lookupTab (tyTabKey o n) aliases
     Some (params, rhs) if listLen params == listLen args =>
-      expandAliasHeadTy (substTyVars (zipL params args) rhs)
+      expandAliasHeadTyWith aliases (substTyVars (zipL params args) rhs)
     _ => t
   _ => t
-expandAliasHeadTy t = t
+expandAliasHeadTyWith _ t = t
 
 -- Does a user extern's DECLARED signature already name `FFI` in its terminal
 -- result row?  `None` = there is no arrow in the signature, so the question cannot
@@ -29903,31 +29913,94 @@ ffiSigShapeKey : Ty -> String
 ffiSigShapeKey ty = "\{joinWith "," (ffiSigArgHeads ty)} -> \{ffiSigRetHead ty}"
 
 ffiSigArgHeads : Ty -> List String
-ffiSigArgHeads ty = match expandAliasHeadTy ty
-  TyConstrained _ inner => ffiSigArgHeads inner
-  TyEffect _ _ inner => ffiSigArgHeads inner
-  TyFun a r => ffiTyHeadName a :: ffiSigArgHeads r
+ffiSigArgHeads ty = ffiSigArgHeadsWith perRun.value.aliasTableRef.value ty
+
+ffiSigArgHeadsWith : List (TabKey, (List String, Ty)) -> Ty -> List String
+ffiSigArgHeadsWith aliases ty = match expandAliasHeadTyWith aliases ty
+  TyConstrained _ inner => ffiSigArgHeadsWith aliases inner
+  TyEffect _ _ inner => ffiSigArgHeadsWith aliases inner
+  TyFun a r => ffiTyHeadNameWith aliases a :: ffiSigArgHeadsWith aliases r
   _ => []
 
 ffiSigRetHead : Ty -> String
-ffiSigRetHead ty = match expandAliasHeadTy ty
-  TyConstrained _ inner => ffiSigRetHead inner
-  TyEffect _ _ inner => ffiSigRetHead inner
-  TyFun _ r => ffiSigRetHead r
-  t => ffiTyHeadName t
+ffiSigRetHead ty = ffiSigRetHeadWith perRun.value.aliasTableRef.value ty
 
-ffiTyHeadName : Ty -> String
-ffiTyHeadName ty = match expandAliasHeadTy ty
+ffiSigRetHeadWith : List (TabKey, (List String, Ty)) -> Ty -> String
+ffiSigRetHeadWith aliases ty = match expandAliasHeadTyWith aliases ty
+  TyConstrained _ inner => ffiSigRetHeadWith aliases inner
+  TyEffect _ _ inner => ffiSigRetHeadWith aliases inner
+  TyFun _ r => ffiSigRetHeadWith aliases r
+  t => ffiTyHeadNameWith aliases t
+
+ffiTyHeadNameWith : List (TabKey, (List String, Ty)) -> Ty -> String
+ffiTyHeadNameWith aliases ty = match expandAliasHeadTyWith aliases ty
   TyCon { tyConName = n } => n
-  TyApp a _ => ffiTyHeadName a
+  TyApp a _ => ffiTyHeadNameWith aliases a
   TyVar _ => "_"
-  TyConstrained _ t => ffiTyHeadName t
-  TyEffect _ _ t => ffiTyHeadName t
+  TyConstrained _ t => ffiTyHeadNameWith aliases t
+  TyEffect _ _ t => ffiTyHeadNameWith aliases t
   -- A parenthesised arrow in a VALUE position (a function-typed parameter).  It
   -- gets its own token rather than falling into the catch-all so that two
   -- unrelated exotic shapes do not compare equal and re-open the exemption.
   TyFun _ _ => "->"
   _ => "?"
+
+-- ── canonical checked FFI rows for backend input (#2174/#2135) ─────────────
+--
+-- A typed emitter must not reinterpret the written heads of `DExtern`: the five
+-- declaration guards above have already expanded aliases through the current
+-- module's alias table, and accepting one shape while lowering another is exactly
+-- #2174's check/build split.  These two exported producers reuse the SAME helper
+-- body (`expandAliasHeadTyWith`) against the alias carrier that survives the
+-- relevant typed path:
+--
+--   * flat typed probes derive one side-effect-free stage-K `DataEnv` from their
+--     already-stamped declaration list;
+--   * module emitters read `DeclEnvs.deData.deAliases`, projected at each module's
+--     own ordinal by the same visibility machinery the live typecheck used.
+--
+-- The builtin subtraction is `ffiIsBuiltinExternName`, i.e. a lookup in the map
+-- seeded by `noteBuiltinExternNames`.  Lowering therefore no longer independently
+-- scans `runtimeDecls` to decide whether a checked declaration routes as a builtin.
+-- The raw-AST `ir.core_ir_lower.ffiExternTypeNames` remains only for the snapshot
+-- tool's intentionally untyped emitter stage.
+export
+checkedFfiExternTypeNames : List Decl -> List (String, (List String, String))
+checkedFfiExternTypeNames decls =
+  let denv = dataEnvFromDeclsGo 0 decls emptyDataEnv
+  ffiExternTypeRowsWith (aliasOwnAt 0 denv.deAliases) decls
+
+export
+checkedFfiExternTypeNamesModules : List (String, List Decl) -> List (String, (List String, String))
+checkedFfiExternTypeNamesModules modules =
+  flatMap
+    (checkedFfiExternTypeNamesModule driverState.value.declEnvsRef.value)
+    modules
+
+checkedFfiExternTypeNamesModule : DeclEnvs -> (String, List Decl) -> List (String, (List String, String))
+checkedFfiExternTypeNamesModule envs (mid, decls) =
+  let cur = declEnvsOrdOf mid envs
+  let aliases = aliasOwnAt cur envs.deData.deAliases ++ aliasUniverseAt cur envs.deData.deAliases
+  ffiExternTypeRowsWith aliases decls
+
+-- The current module's aliases arrive in front of its imported alias universe in
+-- `checkBodyImpl`.  `DataEnv.deAliases` is already reverse declaration order, so
+-- this filter preserves the exact first-match lookup order without rebuilding a
+-- second registry.
+aliasOwnAt : Int -> List (TabKey, AliasDecl) -> List (TabKey, (List String, Ty))
+aliasOwnAt _ [] = []
+aliasOwnAt cur ((key, ad)::rest)
+  | ad.adOrd == cur = (key, (ad.adParams, ad.adRhs)) :: aliasOwnAt cur rest
+  | otherwise = aliasOwnAt cur rest
+
+ffiExternTypeRowsWith : List (TabKey, (List String, Ty)) -> List Decl -> List (String, (List String, String))
+ffiExternTypeRowsWith _ [] = []
+ffiExternTypeRowsWith aliases ((DExtern _ n ty)::rest)
+  | ffiIsBuiltinExternName n = ffiExternTypeRowsWith aliases rest
+  | otherwise = (n, (ffiSigArgHeadsWith aliases ty, ffiSigRetHeadWith aliases ty)) :: ffiExternTypeRowsWith aliases rest
+ffiExternTypeRowsWith aliases ((DAttrib _ inner)::rest) =
+  ffiExternTypeRowsWith aliases (inner::rest)
+ffiExternTypeRowsWith aliases (_::rest) = ffiExternTypeRowsWith aliases rest
 
 -- Walk the arrow spine.  Every PARAM position and the final RESULT position is
 -- a value that actually crosses; the row wrappers and the constraint prefix are
@@ -42175,9 +42248,11 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ffiStampModeOwned" ((PCon "Module" (PLit (LString "__user__")) PWild PWild)) (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "flatEntryIsStdlibRef") "value")))
 (DFunDef false "ffiStampModeOwned" ((PCon "Module" (PVar "mid") PWild PWild)) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "stdlibOwnedModsRef") "value"))))
 (DTypeSig false "expandAliasHeadTy" (TyFun (TyCon "Ty") (TyCon "Ty")))
-(DFunDef false "expandAliasHeadTy" ((PAs "t" (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false))) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")) (arm (PCon "Some" (PTuple (PVar "params") (PVar "rhs"))) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (ELit (LInt 0))))) (EApp (EVar "expandAliasHeadTy") (EVar "rhs"))) (arm PWild () (EVar "t"))))
-(DFunDef false "expandAliasHeadTy" ((PAs "t" (PCon "TyApp" PWild PWild))) (EMatch (EApp (EVar "tyAppSpine") (EVar "t")) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")) (arm (PCon "Some" (PTuple (PVar "params") (PVar "rhs"))) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EVar "expandAliasHeadTy") (EApp (EApp (EVar "substTyVars") (EApp (EApp (EVar "zipL") (EVar "params")) (EVar "args"))) (EVar "rhs")))) (arm PWild () (EVar "t")))) (arm PWild () (EVar "t"))))
-(DFunDef false "expandAliasHeadTy" ((PVar "t")) (EVar "t"))
+(DFunDef false "expandAliasHeadTy" ((PVar "ty")) (EApp (EApp (EVar "expandAliasHeadTyWith") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")) (EVar "ty")))
+(DTypeSig false "expandAliasHeadTyWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Ty") (TyCon "Ty"))))
+(DFunDef false "expandAliasHeadTyWith" ((PVar "aliases") (PAs "t" (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false))) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EVar "aliases")) (arm (PCon "Some" (PTuple (PVar "params") (PVar "rhs"))) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (ELit (LInt 0))))) (EApp (EApp (EVar "expandAliasHeadTyWith") (EVar "aliases")) (EVar "rhs"))) (arm PWild () (EVar "t"))))
+(DFunDef false "expandAliasHeadTyWith" ((PVar "aliases") (PAs "t" (PCon "TyApp" PWild PWild))) (EMatch (EApp (EVar "tyAppSpine") (EVar "t")) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EVar "aliases")) (arm (PCon "Some" (PTuple (PVar "params") (PVar "rhs"))) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EApp (EVar "expandAliasHeadTyWith") (EVar "aliases")) (EApp (EApp (EVar "substTyVars") (EApp (EApp (EVar "zipL") (EVar "params")) (EVar "args"))) (EVar "rhs")))) (arm PWild () (EVar "t")))) (arm PWild () (EVar "t"))))
+(DFunDef false "expandAliasHeadTyWith" (PWild (PVar "t")) (EVar "t"))
 (DTypeSig false "ffiRowHasFFITy" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "Bool"))))
 (DFunDef false "ffiRowHasFFITy" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "ffiRowHasFFITy") (EVar "t")))
 (DFunDef false "ffiRowHasFFITy" ((PCon "TyFun" PWild (PVar "r"))) (EApp (EVar "Some") (EApp (EVar "ffiResultRowHasFFI") (EVar "r"))))
@@ -42245,11 +42320,29 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "ffiSigShapeKey" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "ffiSigShapeKey" ((PVar "ty")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EVar "ffiSigArgHeads") (EVar "ty"))))) (ELit (LString " -> "))) (EApp (EVar "display") (EApp (EVar "ffiSigRetHead") (EVar "ty")))) (ELit (LString ""))))
 (DTypeSig false "ffiSigArgHeads" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "ffiSigArgHeads" ((PVar "ty")) (EMatch (EApp (EVar "expandAliasHeadTy") (EVar "ty")) (arm (PCon "TyConstrained" PWild (PVar "inner")) () (EApp (EVar "ffiSigArgHeads") (EVar "inner"))) (arm (PCon "TyEffect" PWild PWild (PVar "inner")) () (EApp (EVar "ffiSigArgHeads") (EVar "inner"))) (arm (PCon "TyFun" (PVar "a") (PVar "r")) () (EBinOp "::" (EApp (EVar "ffiTyHeadName") (EVar "a")) (EApp (EVar "ffiSigArgHeads") (EVar "r")))) (arm PWild () (EListLit))))
+(DFunDef false "ffiSigArgHeads" ((PVar "ty")) (EApp (EApp (EVar "ffiSigArgHeadsWith") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")) (EVar "ty")))
+(DTypeSig false "ffiSigArgHeadsWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "ffiSigArgHeadsWith" ((PVar "aliases") (PVar "ty")) (EMatch (EApp (EApp (EVar "expandAliasHeadTyWith") (EVar "aliases")) (EVar "ty")) (arm (PCon "TyConstrained" PWild (PVar "inner")) () (EApp (EApp (EVar "ffiSigArgHeadsWith") (EVar "aliases")) (EVar "inner"))) (arm (PCon "TyEffect" PWild PWild (PVar "inner")) () (EApp (EApp (EVar "ffiSigArgHeadsWith") (EVar "aliases")) (EVar "inner"))) (arm (PCon "TyFun" (PVar "a") (PVar "r")) () (EBinOp "::" (EApp (EApp (EVar "ffiTyHeadNameWith") (EVar "aliases")) (EVar "a")) (EApp (EApp (EVar "ffiSigArgHeadsWith") (EVar "aliases")) (EVar "r")))) (arm PWild () (EListLit))))
 (DTypeSig false "ffiSigRetHead" (TyFun (TyCon "Ty") (TyCon "String")))
-(DFunDef false "ffiSigRetHead" ((PVar "ty")) (EMatch (EApp (EVar "expandAliasHeadTy") (EVar "ty")) (arm (PCon "TyConstrained" PWild (PVar "inner")) () (EApp (EVar "ffiSigRetHead") (EVar "inner"))) (arm (PCon "TyEffect" PWild PWild (PVar "inner")) () (EApp (EVar "ffiSigRetHead") (EVar "inner"))) (arm (PCon "TyFun" PWild (PVar "r")) () (EApp (EVar "ffiSigRetHead") (EVar "r"))) (arm (PVar "t") () (EApp (EVar "ffiTyHeadName") (EVar "t")))))
-(DTypeSig false "ffiTyHeadName" (TyFun (TyCon "Ty") (TyCon "String")))
-(DFunDef false "ffiTyHeadName" ((PVar "ty")) (EMatch (EApp (EVar "expandAliasHeadTy") (EVar "ty")) (arm (PRec "TyCon" ((rf "tyConName" (PVar "n"))) false) () (EVar "n")) (arm (PCon "TyApp" (PVar "a") PWild) () (EApp (EVar "ffiTyHeadName") (EVar "a"))) (arm (PCon "TyVar" PWild) () (ELit (LString "_"))) (arm (PCon "TyConstrained" PWild (PVar "t")) () (EApp (EVar "ffiTyHeadName") (EVar "t"))) (arm (PCon "TyEffect" PWild PWild (PVar "t")) () (EApp (EVar "ffiTyHeadName") (EVar "t"))) (arm (PCon "TyFun" PWild PWild) () (ELit (LString "->"))) (arm PWild () (ELit (LString "?")))))
+(DFunDef false "ffiSigRetHead" ((PVar "ty")) (EApp (EApp (EVar "ffiSigRetHeadWith") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")) (EVar "ty")))
+(DTypeSig false "ffiSigRetHeadWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Ty") (TyCon "String"))))
+(DFunDef false "ffiSigRetHeadWith" ((PVar "aliases") (PVar "ty")) (EMatch (EApp (EApp (EVar "expandAliasHeadTyWith") (EVar "aliases")) (EVar "ty")) (arm (PCon "TyConstrained" PWild (PVar "inner")) () (EApp (EApp (EVar "ffiSigRetHeadWith") (EVar "aliases")) (EVar "inner"))) (arm (PCon "TyEffect" PWild PWild (PVar "inner")) () (EApp (EApp (EVar "ffiSigRetHeadWith") (EVar "aliases")) (EVar "inner"))) (arm (PCon "TyFun" PWild (PVar "r")) () (EApp (EApp (EVar "ffiSigRetHeadWith") (EVar "aliases")) (EVar "r"))) (arm (PVar "t") () (EApp (EApp (EVar "ffiTyHeadNameWith") (EVar "aliases")) (EVar "t")))))
+(DTypeSig false "ffiTyHeadNameWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Ty") (TyCon "String"))))
+(DFunDef false "ffiTyHeadNameWith" ((PVar "aliases") (PVar "ty")) (EMatch (EApp (EApp (EVar "expandAliasHeadTyWith") (EVar "aliases")) (EVar "ty")) (arm (PRec "TyCon" ((rf "tyConName" (PVar "n"))) false) () (EVar "n")) (arm (PCon "TyApp" (PVar "a") PWild) () (EApp (EApp (EVar "ffiTyHeadNameWith") (EVar "aliases")) (EVar "a"))) (arm (PCon "TyVar" PWild) () (ELit (LString "_"))) (arm (PCon "TyConstrained" PWild (PVar "t")) () (EApp (EApp (EVar "ffiTyHeadNameWith") (EVar "aliases")) (EVar "t"))) (arm (PCon "TyEffect" PWild PWild (PVar "t")) () (EApp (EApp (EVar "ffiTyHeadNameWith") (EVar "aliases")) (EVar "t"))) (arm (PCon "TyFun" PWild PWild) () (ELit (LString "->"))) (arm PWild () (ELit (LString "?")))))
+(DTypeSig true "checkedFfiExternTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))))
+(DFunDef false "checkedFfiExternTypeNames" ((PVar "decls")) (EBlock (DoLet false false (PVar "denv") (EApp (EApp (EApp (EVar "dataEnvFromDeclsGo") (ELit (LInt 0))) (EVar "decls")) (EVar "emptyDataEnv"))) (DoExpr (EApp (EApp (EVar "ffiExternTypeRowsWith") (EApp (EApp (EVar "aliasOwnAt") (ELit (LInt 0))) (EFieldAccess (EVar "denv") "deAliases"))) (EVar "decls")))))
+(DTypeSig true "checkedFfiExternTypeNamesModules" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))))
+(DFunDef false "checkedFfiExternTypeNamesModules" ((PVar "modules")) (EApp (EApp (EVar "flatMap") (EApp (EVar "checkedFfiExternTypeNamesModule") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value"))) (EVar "modules")))
+(DTypeSig false "checkedFfiExternTypeNamesModule" (TyFun (TyCon "DeclEnvs") (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))))
+(DFunDef false "checkedFfiExternTypeNamesModule" ((PVar "envs") (PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "cur") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (DoLet false false (PVar "aliases") (EBinOp "++" (EApp (EApp (EVar "aliasOwnAt") (EVar "cur")) (EFieldAccess (EFieldAccess (EVar "envs") "deData") "deAliases")) (EApp (EApp (EVar "aliasUniverseAt") (EVar "cur")) (EFieldAccess (EFieldAccess (EVar "envs") "deData") "deAliases")))) (DoExpr (EApp (EApp (EVar "ffiExternTypeRowsWith") (EVar "aliases")) (EVar "decls")))))
+(DTypeSig false "aliasOwnAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl"))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))))
+(DFunDef false "aliasOwnAt" (PWild (PList)) (EListLit))
+(DFunDef false "aliasOwnAt" ((PVar "cur") (PCons (PTuple (PVar "key") (PVar "ad")) (PVar "rest"))) (EIf (EBinOp "==" (EFieldAccess (EVar "ad") "adOrd") (EVar "cur")) (EBinOp "::" (ETuple (EVar "key") (ETuple (EFieldAccess (EVar "ad") "adParams") (EFieldAccess (EVar "ad") "adRhs"))) (EApp (EApp (EVar "aliasOwnAt") (EVar "cur")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "aliasOwnAt") (EVar "cur")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ffiExternTypeRowsWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))))
+(DFunDef false "ffiExternTypeRowsWith" (PWild (PList)) (EListLit))
+(DFunDef false "ffiExternTypeRowsWith" ((PVar "aliases") (PCons (PCon "DExtern" PWild (PVar "n") (PVar "ty")) (PVar "rest"))) (EIf (EApp (EVar "ffiIsBuiltinExternName") (EVar "n")) (EApp (EApp (EVar "ffiExternTypeRowsWith") (EVar "aliases")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "n") (ETuple (EApp (EApp (EVar "ffiSigArgHeadsWith") (EVar "aliases")) (EVar "ty")) (EApp (EApp (EVar "ffiSigRetHeadWith") (EVar "aliases")) (EVar "ty")))) (EApp (EApp (EVar "ffiExternTypeRowsWith") (EVar "aliases")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "ffiExternTypeRowsWith" ((PVar "aliases") (PCons (PCon "DAttrib" PWild (PVar "inner")) (PVar "rest"))) (EApp (EApp (EVar "ffiExternTypeRowsWith") (EVar "aliases")) (EBinOp "::" (EVar "inner") (EVar "rest"))))
+(DFunDef false "ffiExternTypeRowsWith" ((PVar "aliases") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "ffiExternTypeRowsWith") (EVar "aliases")) (EVar "rest")))
 (DTypeSig false "ffiCheckExternSig" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Ty") (TyCon "Unit")))))
 (DFunDef false "ffiCheckExternSig" ((PVar "n") (PVar "fb") (PVar "ty")) (EMatch (EApp (EVar "expandAliasHeadTy") (EVar "ty")) (arm (PCon "TyConstrained" PWild (PVar "inner")) () (EApp (EApp (EApp (EVar "ffiCheckExternSig") (EVar "n")) (EVar "fb")) (EVar "inner"))) (arm (PCon "TyFun" (PVar "a") (PVar "r")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "ffiCheckExternPos") (EVar "n")) (EVar "fb")) (EVar "a"))) (DoExpr (EApp (EApp (EApp (EVar "ffiCheckExternSig") (EVar "n")) (EVar "fb")) (EVar "r"))))) (arm (PCon "TyEffect" PWild PWild (PVar "inner")) () (EApp (EApp (EApp (EVar "ffiCheckExternSig") (EVar "n")) (EVar "fb")) (EVar "inner"))) (arm (PVar "t") () (EApp (EApp (EApp (EVar "ffiCheckExternPos") (EVar "n")) (EVar "fb")) (EVar "t")))))
 (DTypeSig false "ffiCheckExternPos" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Ty") (TyCon "Unit")))))
@@ -48135,9 +48228,11 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ffiStampModeOwned" ((PCon "Module" (PLit (LString "__user__")) PWild PWild)) (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "flatEntryIsStdlibRef") "value")))
 (DFunDef false "ffiStampModeOwned" ((PCon "Module" (PVar "mid") PWild PWild)) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "stdlibOwnedModsRef") "value"))))
 (DTypeSig false "expandAliasHeadTy" (TyFun (TyCon "Ty") (TyCon "Ty")))
-(DFunDef false "expandAliasHeadTy" ((PAs "t" (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false))) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")) (arm (PCon "Some" (PTuple (PVar "params") (PVar "rhs"))) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (ELit (LInt 0))))) (EApp (EVar "expandAliasHeadTy") (EVar "rhs"))) (arm PWild () (EVar "t"))))
-(DFunDef false "expandAliasHeadTy" ((PAs "t" (PCon "TyApp" PWild PWild))) (EMatch (EApp (EVar "tyAppSpine") (EVar "t")) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")) (arm (PCon "Some" (PTuple (PVar "params") (PVar "rhs"))) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EVar "expandAliasHeadTy") (EApp (EApp (EVar "substTyVars") (EApp (EApp (EVar "zipL") (EVar "params")) (EVar "args"))) (EVar "rhs")))) (arm PWild () (EVar "t")))) (arm PWild () (EVar "t"))))
-(DFunDef false "expandAliasHeadTy" ((PVar "t")) (EVar "t"))
+(DFunDef false "expandAliasHeadTy" ((PVar "ty")) (EApp (EApp (EVar "expandAliasHeadTyWith") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")) (EVar "ty")))
+(DTypeSig false "expandAliasHeadTyWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Ty") (TyCon "Ty"))))
+(DFunDef false "expandAliasHeadTyWith" ((PVar "aliases") (PAs "t" (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false))) (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EVar "aliases")) (arm (PCon "Some" (PTuple (PVar "params") (PVar "rhs"))) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (ELit (LInt 0))))) (EApp (EApp (EVar "expandAliasHeadTyWith") (EVar "aliases")) (EVar "rhs"))) (arm PWild () (EVar "t"))))
+(DFunDef false "expandAliasHeadTyWith" ((PVar "aliases") (PAs "t" (PCon "TyApp" PWild PWild))) (EMatch (EApp (EVar "tyAppSpine") (EVar "t")) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PVar "n")) (rf "tyConOrigin" (PVar "o"))) false) (PVar "args")) () (EMatch (EApp (EApp (EVar "lookupTab") (EApp (EApp (EVar "tyTabKey") (EVar "o")) (EVar "n"))) (EVar "aliases")) (arm (PCon "Some" (PTuple (PVar "params") (PVar "rhs"))) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EVar "params")) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EApp (EVar "expandAliasHeadTyWith") (EVar "aliases")) (EApp (EApp (EVar "substTyVars") (EApp (EApp (EVar "zipL") (EVar "params")) (EVar "args"))) (EVar "rhs")))) (arm PWild () (EVar "t")))) (arm PWild () (EVar "t"))))
+(DFunDef false "expandAliasHeadTyWith" (PWild (PVar "t")) (EVar "t"))
 (DTypeSig false "ffiRowHasFFITy" (TyFun (TyCon "Ty") (TyApp (TyCon "Option") (TyCon "Bool"))))
 (DFunDef false "ffiRowHasFFITy" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "ffiRowHasFFITy") (EVar "t")))
 (DFunDef false "ffiRowHasFFITy" ((PCon "TyFun" PWild (PVar "r"))) (EApp (EVar "Some") (EApp (EVar "ffiResultRowHasFFI") (EVar "r"))))
@@ -48205,11 +48300,29 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "ffiSigShapeKey" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "ffiSigShapeKey" ((PVar "ty")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EVar "ffiSigArgHeads") (EVar "ty"))))) (ELit (LString " -> "))) (EApp (EMethodRef "display") (EApp (EVar "ffiSigRetHead") (EVar "ty")))) (ELit (LString ""))))
 (DTypeSig false "ffiSigArgHeads" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "ffiSigArgHeads" ((PVar "ty")) (EMatch (EApp (EVar "expandAliasHeadTy") (EVar "ty")) (arm (PCon "TyConstrained" PWild (PVar "inner")) () (EApp (EVar "ffiSigArgHeads") (EVar "inner"))) (arm (PCon "TyEffect" PWild PWild (PVar "inner")) () (EApp (EVar "ffiSigArgHeads") (EVar "inner"))) (arm (PCon "TyFun" (PVar "a") (PVar "r")) () (EBinOp "::" (EApp (EVar "ffiTyHeadName") (EVar "a")) (EApp (EVar "ffiSigArgHeads") (EVar "r")))) (arm PWild () (EListLit))))
+(DFunDef false "ffiSigArgHeads" ((PVar "ty")) (EApp (EApp (EVar "ffiSigArgHeadsWith") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")) (EVar "ty")))
+(DTypeSig false "ffiSigArgHeadsWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "ffiSigArgHeadsWith" ((PVar "aliases") (PVar "ty")) (EMatch (EApp (EApp (EVar "expandAliasHeadTyWith") (EVar "aliases")) (EVar "ty")) (arm (PCon "TyConstrained" PWild (PVar "inner")) () (EApp (EApp (EVar "ffiSigArgHeadsWith") (EVar "aliases")) (EVar "inner"))) (arm (PCon "TyEffect" PWild PWild (PVar "inner")) () (EApp (EApp (EVar "ffiSigArgHeadsWith") (EVar "aliases")) (EVar "inner"))) (arm (PCon "TyFun" (PVar "a") (PVar "r")) () (EBinOp "::" (EApp (EApp (EVar "ffiTyHeadNameWith") (EVar "aliases")) (EVar "a")) (EApp (EApp (EVar "ffiSigArgHeadsWith") (EVar "aliases")) (EVar "r")))) (arm PWild () (EListLit))))
 (DTypeSig false "ffiSigRetHead" (TyFun (TyCon "Ty") (TyCon "String")))
-(DFunDef false "ffiSigRetHead" ((PVar "ty")) (EMatch (EApp (EVar "expandAliasHeadTy") (EVar "ty")) (arm (PCon "TyConstrained" PWild (PVar "inner")) () (EApp (EVar "ffiSigRetHead") (EVar "inner"))) (arm (PCon "TyEffect" PWild PWild (PVar "inner")) () (EApp (EVar "ffiSigRetHead") (EVar "inner"))) (arm (PCon "TyFun" PWild (PVar "r")) () (EApp (EVar "ffiSigRetHead") (EVar "r"))) (arm (PVar "t") () (EApp (EVar "ffiTyHeadName") (EVar "t")))))
-(DTypeSig false "ffiTyHeadName" (TyFun (TyCon "Ty") (TyCon "String")))
-(DFunDef false "ffiTyHeadName" ((PVar "ty")) (EMatch (EApp (EVar "expandAliasHeadTy") (EVar "ty")) (arm (PRec "TyCon" ((rf "tyConName" (PVar "n"))) false) () (EVar "n")) (arm (PCon "TyApp" (PVar "a") PWild) () (EApp (EVar "ffiTyHeadName") (EVar "a"))) (arm (PCon "TyVar" PWild) () (ELit (LString "_"))) (arm (PCon "TyConstrained" PWild (PVar "t")) () (EApp (EVar "ffiTyHeadName") (EVar "t"))) (arm (PCon "TyEffect" PWild PWild (PVar "t")) () (EApp (EVar "ffiTyHeadName") (EVar "t"))) (arm (PCon "TyFun" PWild PWild) () (ELit (LString "->"))) (arm PWild () (ELit (LString "?")))))
+(DFunDef false "ffiSigRetHead" ((PVar "ty")) (EApp (EApp (EVar "ffiSigRetHeadWith") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")) (EVar "ty")))
+(DTypeSig false "ffiSigRetHeadWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Ty") (TyCon "String"))))
+(DFunDef false "ffiSigRetHeadWith" ((PVar "aliases") (PVar "ty")) (EMatch (EApp (EApp (EVar "expandAliasHeadTyWith") (EVar "aliases")) (EVar "ty")) (arm (PCon "TyConstrained" PWild (PVar "inner")) () (EApp (EApp (EVar "ffiSigRetHeadWith") (EVar "aliases")) (EVar "inner"))) (arm (PCon "TyEffect" PWild PWild (PVar "inner")) () (EApp (EApp (EVar "ffiSigRetHeadWith") (EVar "aliases")) (EVar "inner"))) (arm (PCon "TyFun" PWild (PVar "r")) () (EApp (EApp (EVar "ffiSigRetHeadWith") (EVar "aliases")) (EVar "r"))) (arm (PVar "t") () (EApp (EApp (EVar "ffiTyHeadNameWith") (EVar "aliases")) (EVar "t")))))
+(DTypeSig false "ffiTyHeadNameWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Ty") (TyCon "String"))))
+(DFunDef false "ffiTyHeadNameWith" ((PVar "aliases") (PVar "ty")) (EMatch (EApp (EApp (EVar "expandAliasHeadTyWith") (EVar "aliases")) (EVar "ty")) (arm (PRec "TyCon" ((rf "tyConName" (PVar "n"))) false) () (EVar "n")) (arm (PCon "TyApp" (PVar "a") PWild) () (EApp (EApp (EVar "ffiTyHeadNameWith") (EVar "aliases")) (EVar "a"))) (arm (PCon "TyVar" PWild) () (ELit (LString "_"))) (arm (PCon "TyConstrained" PWild (PVar "t")) () (EApp (EApp (EVar "ffiTyHeadNameWith") (EVar "aliases")) (EVar "t"))) (arm (PCon "TyEffect" PWild PWild (PVar "t")) () (EApp (EApp (EVar "ffiTyHeadNameWith") (EVar "aliases")) (EVar "t"))) (arm (PCon "TyFun" PWild PWild) () (ELit (LString "->"))) (arm PWild () (ELit (LString "?")))))
+(DTypeSig true "checkedFfiExternTypeNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))))
+(DFunDef false "checkedFfiExternTypeNames" ((PVar "decls")) (EBlock (DoLet false false (PVar "denv") (EApp (EApp (EApp (EVar "dataEnvFromDeclsGo") (ELit (LInt 0))) (EVar "decls")) (EVar "emptyDataEnv"))) (DoExpr (EApp (EApp (EVar "ffiExternTypeRowsWith") (EApp (EApp (EVar "aliasOwnAt") (ELit (LInt 0))) (EFieldAccess (EVar "denv") "deAliases"))) (EVar "decls")))))
+(DTypeSig true "checkedFfiExternTypeNamesModules" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))))
+(DFunDef false "checkedFfiExternTypeNamesModules" ((PVar "modules")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "checkedFfiExternTypeNamesModule") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value"))) (EVar "modules")))
+(DTypeSig false "checkedFfiExternTypeNamesModule" (TyFun (TyCon "DeclEnvs") (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))))
+(DFunDef false "checkedFfiExternTypeNamesModule" ((PVar "envs") (PTuple (PVar "mid") (PVar "decls"))) (EBlock (DoLet false false (PVar "cur") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (DoLet false false (PVar "aliases") (EBinOp "++" (EApp (EApp (EVar "aliasOwnAt") (EVar "cur")) (EFieldAccess (EFieldAccess (EVar "envs") "deData") "deAliases")) (EApp (EApp (EVar "aliasUniverseAt") (EVar "cur")) (EFieldAccess (EFieldAccess (EVar "envs") "deData") "deAliases")))) (DoExpr (EApp (EApp (EVar "ffiExternTypeRowsWith") (EVar "aliases")) (EVar "decls")))))
+(DTypeSig false "aliasOwnAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyCon "AliasDecl"))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))))))
+(DFunDef false "aliasOwnAt" (PWild (PList)) (EListLit))
+(DFunDef false "aliasOwnAt" ((PVar "cur") (PCons (PTuple (PVar "key") (PVar "ad")) (PVar "rest"))) (EIf (EBinOp "==" (EFieldAccess (EVar "ad") "adOrd") (EVar "cur")) (EBinOp "::" (ETuple (EVar "key") (ETuple (EFieldAccess (EVar "ad") "adParams") (EFieldAccess (EVar "ad") "adRhs"))) (EApp (EApp (EVar "aliasOwnAt") (EVar "cur")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "aliasOwnAt") (EVar "cur")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "ffiExternTypeRowsWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))))
+(DFunDef false "ffiExternTypeRowsWith" (PWild (PList)) (EListLit))
+(DFunDef false "ffiExternTypeRowsWith" ((PVar "aliases") (PCons (PCon "DExtern" PWild (PVar "n") (PVar "ty")) (PVar "rest"))) (EIf (EApp (EVar "ffiIsBuiltinExternName") (EVar "n")) (EApp (EApp (EVar "ffiExternTypeRowsWith") (EVar "aliases")) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "n") (ETuple (EApp (EApp (EVar "ffiSigArgHeadsWith") (EVar "aliases")) (EVar "ty")) (EApp (EApp (EVar "ffiSigRetHeadWith") (EVar "aliases")) (EVar "ty")))) (EApp (EApp (EVar "ffiExternTypeRowsWith") (EVar "aliases")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "ffiExternTypeRowsWith" ((PVar "aliases") (PCons (PCon "DAttrib" PWild (PVar "inner")) (PVar "rest"))) (EApp (EApp (EVar "ffiExternTypeRowsWith") (EVar "aliases")) (EBinOp "::" (EVar "inner") (EVar "rest"))))
+(DFunDef false "ffiExternTypeRowsWith" ((PVar "aliases") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "ffiExternTypeRowsWith") (EVar "aliases")) (EVar "rest")))
 (DTypeSig false "ffiCheckExternSig" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Ty") (TyCon "Unit")))))
 (DFunDef false "ffiCheckExternSig" ((PVar "n") (PVar "fb") (PVar "ty")) (EMatch (EApp (EVar "expandAliasHeadTy") (EVar "ty")) (arm (PCon "TyConstrained" PWild (PVar "inner")) () (EApp (EApp (EApp (EVar "ffiCheckExternSig") (EVar "n")) (EVar "fb")) (EVar "inner"))) (arm (PCon "TyFun" (PVar "a") (PVar "r")) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "ffiCheckExternPos") (EVar "n")) (EVar "fb")) (EVar "a"))) (DoExpr (EApp (EApp (EApp (EVar "ffiCheckExternSig") (EVar "n")) (EVar "fb")) (EVar "r"))))) (arm (PCon "TyEffect" PWild PWild (PVar "inner")) () (EApp (EApp (EApp (EVar "ffiCheckExternSig") (EVar "n")) (EVar "fb")) (EVar "inner"))) (arm (PVar "t") () (EApp (EApp (EApp (EVar "ffiCheckExternPos") (EVar "n")) (EVar "fb")) (EVar "t")))))
 (DTypeSig false "ffiCheckExternPos" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Ty") (TyCon "Unit")))))

@@ -545,6 +545,92 @@ else
   fi
 fi
 
+# ── cell 11: accepted alias heads are the heads the emitter marshals (#2174) ─
+# The declaration guards expand all three spellings through the typechecker's
+# alias table.  Before #2174 lowering re-read the written AST with `tyHeadName`:
+# a parameter alias and return alias reached an unknown C type, while an alias
+# around the whole arrow looked nullary.  `medaka check` accepted every file and
+# `medaka build` rejected every one.  Each row below must therefore build AND run;
+# the value `b` is hand-derived from ffiCharNext('a') in ffi_abi_probe.c.
+cat > "$W/ffi_alias_param.mdk" <<'CELL11P'
+type FfiCharArg = Char
+
+extern ffiCharNext : FfiCharArg -> <FFI> Char
+
+main : <IO, FFI> Unit
+main = println (ffiCharNext 'a')
+CELL11P
+
+cat > "$W/ffi_alias_return.mdk" <<'CELL11R'
+type FfiCharRet = Char
+
+extern ffiCharNext : Char -> <FFI> FfiCharRet
+
+main : <IO, FFI> Unit
+main = println (ffiCharNext 'a')
+CELL11R
+
+cat > "$W/ffi_alias_whole.mdk" <<'CELL11W'
+type FfiCharCall = Char -> <FFI> Char
+
+extern ffiCharNext : FfiCharCall
+
+main : <IO, FFI> Unit
+main = println (ffiCharNext 'a')
+CELL11W
+
+for alias_kind in param return whole; do
+  if ! MEDAKA_RT_OBJ="$W/combined.o" "$MEDAKA" build "$W/ffi_alias_$alias_kind.mdk" \
+       -o "$W/alias_$alias_kind.bin" >"$W/build11_$alias_kind.log" 2>&1; then
+    printf 'FAIL ffi_alias_%-10s check accepted but build rejected:\n' "$alias_kind"
+    cat "$W/build11_$alias_kind.log"
+    fail=$((fail+1))
+  else
+    checked=$((checked+1))
+    got11="$("$W/alias_$alias_kind.bin" 2>&1)"
+    if [ "$got11" = "b" ]; then
+      printf 'ok   ffi_alias_%-10s alias-expanded signature built and returned b\n' "$alias_kind"
+    else
+      printf 'FAIL ffi_alias_%-10s expected b, got: %s\n' "$alias_kind" "$got11"
+      fail=$((fail+1))
+    fi
+  fi
+done
+
+# ── cell 12: builtin subtraction reads the typecheck catalog authority (#2135) ─
+# The row is alias-wrapped so both halves of this slice are exercised together.
+# A builtin redeclaration must run the real builtin AND must be absent from the
+# user-FFI declaration index.  The IR assertion is load-bearing: `emitApp` checks
+# builtin routing before FFI routing, so value 240 alone would still pass if a
+# second, unused `declare @bitAnd` had leaked from an independently-derived name
+# set.  Mutation proof: changing `ffiExternTypeRowsWith`'s builtin guard to
+# `False` makes this cell fail on that declaration while the value remains 240.
+cat > "$W/ffi_catalog_authority.mdk" <<'CELL12'
+type FfiWord = Int
+
+extern bitAnd : FfiWord -> FfiWord -> <> FfiWord
+
+main : <IO, FFI> Unit
+main = println (bitAnd 255 240)
+CELL12
+
+if ! MEDAKA_RT_OBJ="$W/combined.o" "$MEDAKA" build --keep-ir "$W/ffi_catalog_authority.mdk" \
+     -o "$W/catalog.bin" >"$W/build12.log" 2>&1; then
+  echo "FAIL: catalog-authority control did not build"; cat "$W/build12.log"; fail=$((fail+1))
+else
+  checked=$((checked+1))
+  got12="$("$W/catalog.bin" 2>&1)"
+  if [ "$got12" != "240" ]; then
+    printf 'FAIL ffi_catalog_authority  expected builtin value 240, got: %s\n' "$got12"
+    fail=$((fail+1))
+  elif grep -q 'declare .* @bitAnd(' "$W/catalog.bin.ll"; then
+    echo "FAIL ffi_catalog_authority  builtin leaked into the user-FFI declaration index"
+    fail=$((fail+1))
+  else
+    echo "ok   ffi_catalog_authority  one catalog fact routed bitAnd; value 240, no user-FFI declaration"
+  fi
+fi
+
 # ZERO-COMPARISON guard (docs/ops/TESTING-DESIGN.md §2.3): a gate that compared
 # nothing has proven nothing.
 [ "$checked" -gt 0 ] || { echo "no cell ran — the gate proved nothing"; exit 2; }
