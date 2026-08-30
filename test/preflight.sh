@@ -849,7 +849,7 @@ for f in $changed; do
     # (#2178, S-3-S-balancer: the baseline is ALSO the balancer's cost input —
     # re-ingesting timings can move every shard assignment, so the balancer's
     # gate has to run on a baseline change, not just the transport's.)
-    test/gate_cost_ingest.sh|test/gate_cost_baseline.json)
+    test/gate_cost_ingest.sh|test/gate_cost_baseline.json|test/gate_cost_collect.sh)
                                    add 'diff_compiler_gate_cost'
                                    add 'diff_compiler_gate_balance'
                                    add 'diff_compiler_ci_gen_drift' ;;

@@ -2427,8 +2427,9 @@ balMarginPct = 5
 -- (`balThinLine`), not a damped score. The alternative (i) the contract also
 -- named — widen the estimate for `samples < N` gates — was considered too,
 -- and is moot the same way bucketing's target was: the committed baseline is
--- at 2 samples per gate everywhere right now (see `GateCost.samples`), so
--- there is no under-sampled subset to widen.
+-- at a uniform sample count per gate right now (see `GateCost.samples`; as of
+-- S-1-baseline-autoadvance that count is 3, capped at `maxSamples` = 9 as
+-- fresh ingests land), so there is no under-sampled subset to widen.
 
 -- A gate needs the Wasm arm when its toolchain names `wasm-tools` or a `node`
 -- version.  Per the sprint contract §4.4, `sqlite3` and `valgrind` are

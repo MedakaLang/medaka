@@ -696,3 +696,66 @@ jobs:
             gh issue create --title "$TITLE" --label "ws:testing" --body-file "$BODY_FILE"
             echo "opened a new tracking issue"
           fi
+
+  gate-cost-autoadvance:
+    name: "gate cost baseline auto-advance (#2180 baseline leg, S-1-baseline-autoadvance)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # contents: write ONLY — no pull-requests: write. Spike measurement
+      # (S-1-baseline-autoadvance, Q2): a GITHUB_TOKEN-authored `gh pr create`
+      # fails outright here ("GitHub Actions is not permitted to create or
+      # approve pull requests"), a repo/org policy that a job-level
+      # `pull-requests: write` grant does not override. So this job's ceiling
+      # is landing a branch, never opening the PR itself.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup medaka (toolchain + build)
+        uses: ./.github/actions/setup-medaka
+        with:
+          binary: build
+
+      # test/gate_cost_collect.sh does the whole pipeline: list recent
+      # admissible (workflow_dispatch/merge_group/push/schedule) SUCCESSFUL
+      # runs -> download their gate-timings-<row> artifacts (skipping cleanly
+      # when a run has none) -> fold them into test/gate_cost_baseline.json
+      # via the real test/gate_cost_ingest.sh (which dedupes by
+      # runId:runAttempt:shard, so re-running this job over the same runs is a
+      # no-op) -> `medaka gate balance && make gen-ci`, ALWAYS both, same
+      # commit -> push a fresh `cost-baseline-autoadvance-<timestamp>` branch
+      # ONLY if something actually changed. A no-op day pushes nothing.
+      - name: Collect + ingest + rebalance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          git config user.name "medaka-bot"
+          git config user.email "medaka-bot@users.noreply.github.com"
+          sh test/gate_cost_collect.sh --base-branch main
+
+      # The human/agent step this job cannot take itself (see the permissions
+      # comment above): open the PR from whatever branch was just pushed, if
+      # any.
+      - name: Report the one remaining manual step (if a branch landed)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          branch="$(git for-each-ref --format='%(refname:short)' 'refs/heads/cost-baseline-autoadvance-*' | sort | tail -1)"
+          if [ -z "$branch" ]; then
+            echo "no landing branch this run (no-op or nothing admissible) — nothing further to do."
+            exit 0
+          fi
+          {
+            echo "## gate cost baseline auto-advance"
+            echo ""
+            echo "Pushed \`$branch\`. GitHub Actions cannot open the PR itself on this repo"
+            echo "(policy: Actions may not create or approve pull requests). One command lands it:"
+            echo ""
+            echo '```sh'
+            echo "gh pr create --repo ${GH_REPO} --head $branch --base main --fill"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
