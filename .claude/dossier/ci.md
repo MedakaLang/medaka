@@ -707,7 +707,7 @@ either order leaves a window where the required set names contexts nothing produ
 
 **COMPLETED 2026-08-30**, all three steps: PR #2260 (step 1, `b35268c0`), the ruleset swap
 (step 2, ruleset `18885875` — verified by read-back, 14 required contexts, `gates_1`…`gates_8`
-in and the eight `gates (…)` out, enforcement active), PR #2269 (step 3). ⚠️ **The required
+in and the eight `gates (…)` out, enforcement active), PR #2274 (step 3). ⚠️ **The required
 set is now `gates_1`…`gates_8`; `gates (<theme>)` no longer exists in either system.** A
 `gates (…)` job name surviving anywhere in tooling is reading HISTORICAL runs, not live ones —
 `scripts/ci_shard_cost.sh` still filters them out for exactly that reason, and that filter may
