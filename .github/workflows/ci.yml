@@ -24,7 +24,7 @@ name: CI
 # `restore-keys` fallback, which would turn stale oracles into plausible greens.
 #
 # ── The PR run is NARROWED. The merge_group run is NOT. (T-15) ─────────────────
-# `pull_request`: each `gates (…)` shard runs only the intersection of its pattern
+# `pull_request`: each `gates_N` shard runs only the intersection of its pattern
 # with the gate set `detect` derives from the diff. `merge_group` and `push`: every
 # shard runs its full pattern, unconditionally, always.
 #
@@ -521,14 +521,14 @@ jobs:
           # the resolved set is the only thing derivable from it. The SET each row
           # resolves to through run_gates.sh's two-glob rule is unchanged.
           # GENERATED:BEGIN gates-matrix — `make gen-ci` (medaka gate ci) from test/gates.toml. DO NOT EDIT BY HAND.
-          - name: engines
+          - name: gates_1
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
             # regenerated into this matrix by `make gen-ci`; it changes whenever the
             # baseline does, so nothing below names a gate. What this row is:
             #
             # full_cores = true  -> the whole runner, and CLOSED TO THE PACKER. Gates
-            # whose `shard` says `engines` stay here; the balancer never moves one in
+            # whose `shard` says `gates_1` stay here; the balancer never moves one in
             # or out. That is deliberate: `diff_compiler_engines` is irreducible (every
             # fixture pays a full `medaka build` + clang, on THREE engines) and wants
             # the box rather than its own ENGINE_JOBS=NCPU/2 hedge. The cost is that
@@ -539,12 +539,14 @@ jobs:
             # oracle, so this row's T2/T3 tiers actually run; MEDAKA_REQUIRE_WASM=1
             # makes a degraded run a hard fail rather than a quiet skip.
             #
-            # The row NAME is a required status-check context (`gates (engines)`), so
-            # renaming it is a ruleset change, not an edit here.
+            # The row NAME is a required status-check context (`gates_1`), so renaming it
+            # is a ruleset change, not an edit here. It is a bare executor number by
+            # construction (#2178): a name that cannot describe contents cannot lie
+            # about them. What failed is reported by AREA, from the registry.
             pattern: "'pds/test/protocol_all_engines' 'diff_compiler_engines' 'diff_compiler_rejection_parity'"
             full_cores: "1"
             wasm_arm: "1"
-          - name: sqlite
+          - name: gates_2
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
             # regenerated into this matrix by `make gen-ci`; it changes whenever the
@@ -555,11 +557,12 @@ jobs:
             # does not require the Wasm toolchain, and the balancer fills it to the
             # same target load as every other open row.
             #
-            # The row NAME is a required status-check context (`gates (sqlite)`), so
-            # renaming it is a ruleset change, not an edit here — and it carries no
-            # thematic meaning: rows are filled by measured cost, never by theme.
+            # The row NAME is a required status-check context (`gates_2`), so renaming it
+            # is a ruleset change, not an edit here. It is a bare executor number by
+            # construction (#2178): a name that cannot describe contents cannot lie
+            # about them. What failed is reported by AREA, from the registry.
             pattern: "'diff_compiler_parse_result' 'diff_compiler_prose_classifier' 'pds/test/constant_time_signing' 'pds/test/field_vectors' 'pds/test/scalar_vectors' 'pds/test/sha256_vectors' 'sqlite/test/delete_oracle' 'sqlite/test/dml_oracle' 'sqlite/test/multipage_write_oracle' 'bootstrap_lex' 'diff_compiler_check_cli_modules' 'diff_compiler_check_wrapper_callers' 'diff_compiler_ci_guard_failsafe' 'diff_compiler_core_ir_modules' 'diff_compiler_core_ir' 'diff_compiler_dict_semantics' 'diff_compiler_eval_scaling' 'diff_compiler_exhaust' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_fmt_write_safety' 'diff_compiler_index' 'diff_compiler_lint_crossfile' 'diff_compiler_lint_multi' 'diff_compiler_lint' 'diff_compiler_llvm_ffi' 'diff_compiler_preflight_base' 'diff_compiler_prelude_obj' 'diff_compiler_references_tool' 'diff_compiler_resolve_batch' 'diff_compiler_snapshot_types' 'diff_compiler_test' 'diff_compiler_typecheck_errors' 'diff_compiler_wasm_shim_parity' 'pr_helper_test' 'selfcompile_build_fixpoint'"
-          - name: pds
+          - name: gates_3
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
             # regenerated into this matrix by `make gen-ci`; it changes whenever the
@@ -567,7 +570,7 @@ jobs:
             #
             # wasm_arm = true  -> installs wasm-tools + Node and builds the Wasm
             # oracle. This is one of only two OPEN rows that carry it (the other is
-            # `tools`), so it is one of only two rows a wasm-constrained gate can
+            # `gates_8`), so it is one of only two rows a wasm-constrained gate can
             # legally land on — the balancer treats that as a hard constraint, never
             # as a cost, and refuses to pack rather than schedule such a gate where
             # its toolchain is absent.
@@ -577,12 +580,13 @@ jobs:
             # single most expensive gate in the suite has to sit somewhere, and a row
             # already at the pole cannot take another gate without raising it.
             #
-            # The row NAME is a required status-check context (`gates (pds)`), so
-            # renaming it is a ruleset change, not an edit here — and it no longer
-            # implies a thematic tie to the PDS project.
+            # The row NAME is a required status-check context (`gates_3`), so renaming it
+            # is a ruleset change, not an edit here. It is a bare executor number by
+            # construction (#2178): a name that cannot describe contents cannot lie
+            # about them. What failed is reported by AREA, from the registry.
             pattern: "'diff_compiler_ir_scaling'"
             wasm_arm: "1"
-          - name: frontend
+          - name: gates_4
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
             # regenerated into this matrix by `make gen-ci`; it changes whenever the
@@ -593,11 +597,12 @@ jobs:
             # does not require the Wasm toolchain, and the balancer fills it to the
             # same target load as every other open row.
             #
-            # The row NAME is a required status-check context (`gates (frontend)`), so
-            # renaming it is a ruleset change, not an edit here — and it carries no
-            # thematic meaning: rows are filled by measured cost, never by theme.
+            # The row NAME is a required status-check context (`gates_4`), so renaming it
+            # is a ruleset change, not an edit here. It is a bare executor number by
+            # construction (#2178): a name that cannot describe contents cannot lie
+            # about them. What failed is reported by AREA, from the registry.
             pattern: "'diff_compiler_eval_modules' 'diff_compiler_ci_shard_coverage' 'lsp_harness' 'sqlite/test/select_oracle' 'gzip/test/inflate_oracle' 'mq/test/check' 'parsec/test/check' 'pds/test/encodings_vectors' 'pds/test/inlang_test_oracle' 'pds/test/rfc6979_vectors' 'pds/test/secp256k1_public_key' 'pds/test/trust_boundary_guards' 'pds/test/vector_provenance' 'sqlite/test/aggregate_oracle' 'sqlite/test/delete_negative_oracle' 'sqlite/test/distinct_oracle' 'sqlite/test/groupby_oracle' 'sqlite/test/multipage_oracle' 'sqlite/test/oracle' 'sqlite/test/overflow_oracle' 'sqlite/test/typed_oracle' 'sqlite/test/update_expr_oracle' 'sqlite/test/update_oracle' 'bootstrap_resolve' 'bootstrap_typecheck' 'check_build_oracles_for_consistency' 'cross_project_deps' 'cross_project_twonames' 'diff_compiler_capability_matrix' 'diff_compiler_check_batch' 'diff_compiler_check_json' 'diff_compiler_check_modules' 'diff_compiler_check_policy' 'diff_compiler_check' 'diff_compiler_core_ir_run' 'diff_compiler_core_ir_typed' 'diff_compiler_diagnostics' 'diff_compiler_doc' 'diff_compiler_draft_semantic' 'diff_compiler_effect_hole' 'diff_compiler_effect_polarity' 'diff_compiler_eval_dict_batch' 'diff_compiler_eval_json' 'diff_compiler_eval_list_batch' 'diff_compiler_eval_prelude_batch' 'diff_compiler_eval_run' 'diff_compiler_eval_typed_batch' 'diff_compiler_index_oob' 'diff_compiler_let_refute' 'diff_compiler_lint_fix' 'diff_compiler_llvm' 'diff_compiler_llvm_symbol_collision' 'diff_compiler_llvm_typed' 'diff_compiler_lsp_b3' 'diff_compiler_lsp_b4' 'diff_compiler_lsp' 'diff_compiler_origin_agreement' 'diff_compiler_os_entropy' 'diff_compiler_parse_error_loc' 'diff_compiler_parse_errors' 'diff_compiler_references_scaling' 'diff_compiler_resolve_modules' 'diff_compiler_resolve' 'diff_compiler_run_stdout_flush' 'diff_compiler_snapshot_bless' 'diff_compiler_snapshot_eval_errors' 'diff_compiler_snapshot_eval' 'diff_compiler_snapshot_frontend' 'diff_compiler_snapshot_types_user' 'diff_compiler_source_bytes' 'diff_compiler_stack_overflow' 'diff_compiler_test_typecheck' 'effect_builtin_param_domain' 'effect_param_domain' 'effect_product_domain' 'effect_set_domain' 'manifest_emit' 'native_fixtures/run' 'diff_compiler_gate_registry' 'diff_compiler_closure_alloc' 'diff_compiler_check_ir_floor'"
-          - name: types
+          - name: gates_5
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
             # regenerated into this matrix by `make gen-ci`; it changes whenever the
@@ -608,11 +613,12 @@ jobs:
             # does not require the Wasm toolchain, and the balancer fills it to the
             # same target load as every other open row.
             #
-            # The row NAME is a required status-check context (`gates (types)`), so
-            # renaming it is a ruleset change, not an edit here — and it carries no
-            # thematic meaning: rows are filled by measured cost, never by theme.
+            # The row NAME is a required status-check context (`gates_5`), so renaming it
+            # is a ruleset change, not an edit here. It is a bare executor number by
+            # construction (#2178): a name that cannot describe contents cannot lie
+            # about them. What failed is reported by AREA, from the registry.
             pattern: "'diff_compiler_stage_ir_scaling'"
-          - name: eval
+          - name: gates_6
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
             # regenerated into this matrix by `make gen-ci`; it changes whenever the
@@ -623,11 +629,12 @@ jobs:
             # does not require the Wasm toolchain, and the balancer fills it to the
             # same target load as every other open row.
             #
-            # The row NAME is a required status-check context (`gates (eval)`), so
-            # renaming it is a ruleset change, not an edit here — and it carries no
-            # thematic meaning: rows are filled by measured cost, never by theme.
+            # The row NAME is a required status-check context (`gates_6`), so renaming it
+            # is a ruleset change, not an edit here. It is a bare executor number by
+            # construction (#2178): a name that cannot describe contents cannot lie
+            # about them. What failed is reported by AREA, from the registry.
             pattern: "'pds/test/signing_corpus' 'sqlite/test/index_write_oracle' 'sqlite/test/join_oracle' 'sqlite/test/left_join_oracle' 'sqlite/test/multitable_write_oracle' 'sqlite/test/sql_oracle' 'bootstrap_eval' 'diff_compiler_build' 'diff_compiler_codemod' 'diff_compiler_core_ir_roundtrip' 'diff_compiler_eval_list' 'diff_compiler_eval' 'diff_compiler_flat_vs_onemodule' 'diff_compiler_iface_order' 'diff_compiler_internal_extern' 'diff_compiler_ir_size' 'diff_compiler_llvm_modules' 'diff_compiler_llvm_typed_ir' 'diff_compiler_new' 'diff_compiler_perf_scaling' 'diff_compiler_prelude_shadow_census' 'diff_compiler_project_enrolment' 'diff_compiler_references_correctness' 'diff_compiler_shadow_semantics' 'diff_compiler_snapshot_core_ir' 'diff_compiler_snapshot_wasm_input' 'diff_compiler_test_native' 'diff_compiler_tmc_parity' 'diff_native_cli'"
-          - name: backend
+          - name: gates_7
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
             # regenerated into this matrix by `make gen-ci`; it changes whenever the
@@ -638,11 +645,12 @@ jobs:
             # does not require the Wasm toolchain, and the balancer fills it to the
             # same target load as every other open row.
             #
-            # The row NAME is a required status-check context (`gates (backend)`), so
-            # renaming it is a ruleset change, not an edit here — and it carries no
-            # thematic meaning: rows are filled by measured cost, never by theme.
+            # The row NAME is a required status-check context (`gates_7`), so renaming it
+            # is a ruleset change, not an edit here. It is a bare executor number by
+            # construction (#2178): a name that cannot describe contents cannot lie
+            # about them. What failed is reported by AREA, from the registry.
             pattern: "'build_cmd' 'byteparser/test/check' 'pds/test/secp256k1_point_vectors' 'sqlite/test/inlang_test_oracle' 'sqlite/test/projection_oracle' 'sqlite/test/writer_api_oracle' 'sqlite/test/writer_oracle' 'build_construct_coverage' 'check_syntax_examples' 'diff_compiler_analyze_project' 'diff_compiler_anf_identity' 'diff_compiler_call_arity' 'diff_compiler_check_match' 'diff_compiler_core_ir_list' 'diff_compiler_core_ir_prelude' 'diff_compiler_core_ir_typed_modules' 'diff_compiler_effect_param' 'diff_compiler_eval_prelude' 'diff_compiler_eval_run_batch' 'diff_compiler_fmt_roundtrip' 'diff_compiler_fmt' 'diff_compiler_import_order' 'diff_compiler_lex_files' 'diff_compiler_lint_multi_dir' 'diff_compiler_perf_stage_census' 'diff_compiler_repl' 'diff_compiler_rt_obj' 'diff_compiler_selfproc' 'diff_compiler_snapshot_prelude' 'diff_native_stack' 'selfcompile_emit' 'selfcompile_lex'"
-          - name: tools
+          - name: gates_8
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
             # regenerated into this matrix by `make gen-ci`; it changes whenever the
@@ -650,19 +658,29 @@ jobs:
             #
             # wasm_arm = true  -> installs wasm-tools + Node and builds the Wasm
             # oracle (`sh test/wasm/build_wasm_oracle.sh --modules-only`). This is one
-            # of only two OPEN rows that carry it (the other is `pds`), so it is one
+            # of only two OPEN rows that carry it (the other is `gates_3`), so it is one
             # of only two rows a wasm-constrained gate can legally land on — the
             # balancer treats that as a hard constraint, never as a cost.
             #
             # full_cores = false: an ordinary shared runner, open to the packer.
             #
-            # The row NAME is a required status-check context (`gates (tools)`), so
-            # renaming it is a ruleset change, not an edit here — and it no longer
-            # implies a thematic tie to the tooling gates.
+            # The row NAME is a required status-check context (`gates_8`), so renaming it
+            # is a ruleset change, not an edit here. It is a bare executor number by
+            # construction (#2178): a name that cannot describe contents cannot lie
+            # about them. What failed is reported by AREA, from the registry.
             pattern: "'gzip/test/deflate_oracle' 'pds/test/car_vectors' 'pds/test/constant_time_parity' 'pds/test/constant_time_public_key' 'pds/test/constant_time_reductions' 'pds/test/dagcbor_cid_vectors' 'pds/test/did_key_all_engines' 'pds/test/ecdsa_vectors' 'pds/test/mst_vectors' 'pds/test/opaque_field_scalar' 'pds/test/repo_vectors' 'sqlite/test/rowid_roundtrip_oracle' 'diff_compiler_dispatch_shape' 'diff_compiler_entry_exit_codes' 'diff_compiler_eval_typed_modules' 'diff_compiler_lint_cache' 'diff_compiler_mcp' 'diff_compiler_ported' 'diff_compiler_run_check_agreement' 'diff_compiler_run_entry_subdir' 'diff_compiler_slice_oob' 'diff_net'"
             wasm_arm: "1"
           # GENERATED:END gates-matrix
-    name: gates (${{ matrix.name }})
+    # The job name IS the required status-check context. It is a bare executor
+    # number (`gates_1`…`gates_8`), NOT a theme: which gates run here is derived
+    # from measured cost (`medaka gate balance`, #2178), so any descriptive name
+    # would be free to drift out of agreement with the contents and no gate could
+    # catch it — `gates (sqlite)` held zero sqlite gates for months. Semantic
+    # identity lives in the registry's `area` field, and the failure-reporting
+    # step below is what surfaces it. Renaming a row is a RULESET change (a
+    # required context no job produces deadlocks the queue), never an edit here
+    # alone — see the alias jobs at the bottom of this file.
+    name: ${{ matrix.name }}
     steps:
       - uses: actions/checkout@v4
 
@@ -746,18 +764,18 @@ jobs:
           if [ -z "$pats" ]; then
             echo "has_work=false" >> "$GITHUB_OUTPUT"
             echo
-            echo "▶ gates (${{ matrix.name }}) — no gates for this diff (runs FULL in merge_group). Reporting SUCCESS — the check still reports, which is what keeps the PR mergeable."
+            echo "▶ ${{ matrix.name }} — no gates for this diff (runs FULL in merge_group). Reporting SUCCESS — the check still reports, which is what keeps the PR mergeable."
 
             # Make the no-op VISIBLE where humans/agents actually look, not just in a
-            # log nobody opens for a green check: a "gates (X) — pass" check is, by
+            # log nobody opens for a green check: a "gates_N — pass" check is, by
             # text alone, indistinguishable from a shard that ran every gate and
             # passed, and that ambiguity has misled a reviewer before (#450, #570).
             # Conclusion and context stay untouched (changing either touches the
             # merge queue's required-status-check contract); what moves is the
             # WORDING at the annotation title and job summary. Incident: dossier `ci.md`.
-            echo "::warning title=gates (${{ matrix.name }}) — no gates for this diff (runs FULL in merge_group)::gates (${{ matrix.name }}) matched no gate for this diff and reported SUCCESS WITHOUT RUNNING. Real coverage for these gates runs in the merge queue (merge_group), not on this PR. 'green' here does NOT mean these gates ran."
+            echo "::warning title=${{ matrix.name }} — no gates for this diff (runs FULL in merge_group)::${{ matrix.name }} matched no gate for this diff and reported SUCCESS WITHOUT RUNNING. Real coverage for these gates runs in the merge queue (merge_group), not on this PR. 'green' here does NOT mean these gates ran."
             {
-              echo "### gates (${{ matrix.name }}) — no gates for this diff (runs FULL in merge_group)"
+              echo "### ${{ matrix.name }} — no gates for this diff (runs FULL in merge_group)"
               echo
               echo "This shard's pattern matched no gate touched by this diff, so it reported"
               echo "SUCCESS having run nothing (by design — see \`ci.yml\` around the \`plan\`"
@@ -899,7 +917,7 @@ jobs:
           # ── AREA-SURFACING (#2178, S-2) ──────────────────────────────────
           # A failing gate must name its semantic AREA and its own name
           # everywhere a human/agent reads a failure — today a reader sees
-          # only "gates (${{ matrix.name }}) failed". run_gates.sh's own
+          # only "${{ matrix.name }} failed". run_gates.sh's own
           # PASS/FAIL/exit-code semantics are UNTOUCHED below: its output is
           # captured to a file (never piped — a pipe would mask the exit
           # code, [D-BUILD-PIPE]) purely so the failing gate NAMES can be
@@ -924,7 +942,7 @@ jobs:
             failed="$(grep -E '^(FAILED|PHANTOM-SKIPPED):' "$log" | sed -E 's/^(FAILED|PHANTOM-SKIPPED)://' || true)"
             if [ -n "$failed" ]; then
               {
-                echo "### gates (${{ matrix.name }}) — failing gates by area"
+                echo "### ${{ matrix.name }} — failing gates by area"
                 echo
                 echo "| gate | area |"
                 echo "|---|---|"
@@ -1579,3 +1597,123 @@ jobs:
 
       - name: Budget governor — uncosted / over-class / pole-floor, with override
         run: sh test/diff_compiler_gate_budget.sh
+
+  # ── TRANSITIONAL: the eight retired `gates (<theme>)` required contexts ──────
+  # DELETE THESE EIGHT JOBS once the ruleset requires `gates_1`…`gates_8`
+  # instead. Tracking: #2178.
+  #
+  # WHY THEY EXIST. The `gates` matrix rows were renamed from thematic names to
+  # bare executor numbers, which renames the status-check CONTEXT each row
+  # posts. A ruleset edit is not atomic with a commit, and a required context
+  # that no job produces DEADLOCKS the merge queue permanently ("Expected —
+  # waiting for status to be reported", forever). So the rename lands as a
+  # three-step migration — add the new contexts, swap the ruleset, delete the
+  # old — and these aliases are what keeps the OLD, still-required contexts
+  # reporting during the window in between.
+  #
+  # WHY THEY ARE NOT A HOLE. Each one gates on `needs.gates.result`, which is
+  # the roll-up of ALL eight rows: an alias is green only when EVERY shard is
+  # green. That is strictly STRONGER than the per-row context it stands in for,
+  # so the window cannot merge anything the old required set would have caught.
+  # They run no gates and cost seconds.
+  #
+  # `if: !cancelled()` for the same reason the `gates` job carries it: a
+  # required context whose job SKIPS never posts a status, which deadlocks the
+  # queue exactly as a missing job does. `needs:` failing must still RUN this
+  # job (so it can report red), not skip it.
+  gates_alias_engines:
+    name: gates (engines)
+    needs: [gates]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Mirror the gates roll-up
+        run: |
+          echo "Retired context. Real coverage: gates_1 … gates_8 (#2178)."
+          echo "gates roll-up: ${{ needs.gates.result }}"
+          [ "${{ needs.gates.result }}" = "success" ]
+  gates_alias_sqlite:
+    name: gates (sqlite)
+    needs: [gates]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Mirror the gates roll-up
+        run: |
+          echo "Retired context. Real coverage: gates_1 … gates_8 (#2178)."
+          echo "gates roll-up: ${{ needs.gates.result }}"
+          [ "${{ needs.gates.result }}" = "success" ]
+  gates_alias_pds:
+    name: gates (pds)
+    needs: [gates]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Mirror the gates roll-up
+        run: |
+          echo "Retired context. Real coverage: gates_1 … gates_8 (#2178)."
+          echo "gates roll-up: ${{ needs.gates.result }}"
+          [ "${{ needs.gates.result }}" = "success" ]
+  gates_alias_frontend:
+    name: gates (frontend)
+    needs: [gates]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Mirror the gates roll-up
+        run: |
+          echo "Retired context. Real coverage: gates_1 … gates_8 (#2178)."
+          echo "gates roll-up: ${{ needs.gates.result }}"
+          [ "${{ needs.gates.result }}" = "success" ]
+  gates_alias_types:
+    name: gates (types)
+    needs: [gates]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Mirror the gates roll-up
+        run: |
+          echo "Retired context. Real coverage: gates_1 … gates_8 (#2178)."
+          echo "gates roll-up: ${{ needs.gates.result }}"
+          [ "${{ needs.gates.result }}" = "success" ]
+  gates_alias_eval:
+    name: gates (eval)
+    needs: [gates]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Mirror the gates roll-up
+        run: |
+          echo "Retired context. Real coverage: gates_1 … gates_8 (#2178)."
+          echo "gates roll-up: ${{ needs.gates.result }}"
+          [ "${{ needs.gates.result }}" = "success" ]
+  gates_alias_backend:
+    name: gates (backend)
+    needs: [gates]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Mirror the gates roll-up
+        run: |
+          echo "Retired context. Real coverage: gates_1 … gates_8 (#2178)."
+          echo "gates roll-up: ${{ needs.gates.result }}"
+          [ "${{ needs.gates.result }}" = "success" ]
+  gates_alias_tools:
+    name: gates (tools)
+    needs: [gates]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Mirror the gates roll-up
+        run: |
+          echo "Retired context. Real coverage: gates_1 … gates_8 (#2178)."
+          echo "gates roll-up: ${{ needs.gates.result }}"
+          [ "${{ needs.gates.result }}" = "success" ]

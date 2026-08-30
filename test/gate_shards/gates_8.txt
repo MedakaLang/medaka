@@ -5,12 +5,13 @@ baseline does, so nothing below names a gate. What this row is:
 
 wasm_arm = true  -> installs wasm-tools + Node and builds the Wasm
 oracle (`sh test/wasm/build_wasm_oracle.sh --modules-only`). This is one
-of only two OPEN rows that carry it (the other is `pds`), so it is one
+of only two OPEN rows that carry it (the other is `gates_3`), so it is one
 of only two rows a wasm-constrained gate can legally land on — the
 balancer treats that as a hard constraint, never as a cost.
 
 full_cores = false: an ordinary shared runner, open to the packer.
 
-The row NAME is a required status-check context (`gates (tools)`), so
-renaming it is a ruleset change, not an edit here — and it no longer
-implies a thematic tie to the tooling gates.
+The row NAME is a required status-check context (`gates_8`), so renaming it
+is a ruleset change, not an edit here. It is a bare executor number by
+construction (#2178): a name that cannot describe contents cannot lie
+about them. What failed is reported by AREA, from the registry.

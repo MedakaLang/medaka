@@ -153,7 +153,12 @@ REFUSES to run in the same commit that adds it — enrol with a guessed `shard`,
 gen-ci` as a follow-up commit (or trigger `gh workflow run ci.yml --ref <branch>` first to
 get a real sample before merging). Registration rules, the `test/CI-COVERAGE-EXCEPTIONS.txt`
 escape hatch, and `[W-SHARD-COST]` (shards are filled by cost, never by theme): the `gates`
-skill.
+skill. ⚠️ **[W-SHARD-NEUTRAL] The eight executor rows are named `gates_1`…`gates_8` and mean
+nothing** (#2178, 2026-08-30) — a row name cannot describe its contents, so it is not allowed
+to try. The thematic names (`gates (frontend)`, `gates (sqlite)`, …) are RETIRED; a doc or
+comment that still names one is describing the pre-rename tree. What a failure was ABOUT comes
+from the registry's `area` field, which the `gates` job surfaces in its annotations and job
+summary — read the area, not the row.
 
 ⚠️ **[W-THIRD-CONSUMER] `ci.yml` shard patterns are TWO classifications, not the whole
 list.** `test/preflight.sh` independently derives its own gate set from the diff (its
@@ -586,7 +591,10 @@ Each of these was paid for in an incident — pointers, not post-mortems.
   own golden. Land it same PR, or a terminal commit (`PRECOMMIT_SNAPSHOT_DEFER=1`, #1179). Bless
   via the **gate**, never the CLI: `sh test/diff_compiler_snapshot_<suite>.sh --bless <path>`.
 - ⚠️ **[T-LEGA-GOLDEN]** A top-level-binding change also moves
-  `test/selfproc_goldens/legA/<module>.golden` — red only in CI's `backend` shard. Re-capture:
+  `test/selfproc_goldens/legA/<module>.golden` — red only in the `gates` matrix, on whichever
+  executor row currently holds `diff_compiler_selfproc` ([W-SHARD-NEUTRAL] — derive it, don't
+  memorise it: `./medaka gate list --json | jq -r '.[]|select(.name=="diff_compiler_selfproc").shard'`).
+  Re-capture:
   `sh test/capture_goldens.sh --frozen selfproc_legA`; diff must be **additive-only**. LEG A:
   `frontend.{ast,desugar,exhaust,lexer,marker,parser,resolve}`, `types.{annotate,typecheck}`,
   `driver.loader`, `eval.eval`, `ir.sexp`, `tools.check` — not `ir.core_ir_lower`/`backend/*`.
