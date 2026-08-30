@@ -1,7 +1,0 @@
-import mp_safe.{Zz}
-import mq.{TQ, Zz, unQ}
-
-w : TQ
-w = Zz 7
-
-main = println (unQ w)
