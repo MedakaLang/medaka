@@ -1,5 +1,5 @@
 # META
-source_lines=37482
+source_lines=37512
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -36361,6 +36361,36 @@ checkOneDiags runtimeDecls coreDecls (rootId, prog) =
   let (_, errs, warns) = checkModulesEntryFull runtimeDecls coreDecls [(rootId, prog)]
   (errs, warns)
 
+-- `checkOneDiags` for a SYNTHETIC program — one this driver derived from the user's
+-- rather than one the user wrote — with `mainSchemeRef` SAVED AND RESTORED across it.
+--
+-- WHY THIS EXISTS.  `checkModulesEntryFullSplit` records the entry module's `main`
+-- scheme in `mainSchemeRef` (#2155, see the SET-OR-CLEAR comment there), which is the
+-- sole input to `mainTypeIsUnit`/`mainTypeIsAsync`/`mainTypeIsFloat`.  That is right
+-- for a check of the user's OWN program and wrong for a check of a program this
+-- compiler invented: `underivedMainDiags` (driver/main_autoprint.mdk) re-checks the
+-- auto-print WRAP (`main = 5` ⟶ `main = println 5`), whose `main` is `<IO> Unit` by
+-- construction.  Letting that write through means every later reader of
+-- `mainTypeIsUnit ()` is told the user's non-Unit `main` is Unit — the exact predicate
+-- `mainNonUnitWarning` consults to decide whether to warn.
+--
+-- The clobber was real but MASKED: `mainShapeWarnings` used to re-run a whole
+-- `elaborateModules` immediately afterwards purely for `mainSchemeRef`, which
+-- overwrote the residue before anything read it.  Removing that redundant third
+-- prelude typecheck (S-3, #2234) is what makes the residue observable, so the two
+-- changes must travel together — with the save/restore alone, deleting the elaborate
+-- silently DELETED the `W-MAIN-SHAPE` warning on `medaka build` and on
+-- `medaka check --json` (measured: 8 warning sites before, 6 after, both single-file;
+-- multi-module is unaffected because `underivedMainDiags` only matches a singleton
+-- module list and returns [] otherwise).
+export
+checkOneDiagsSynthetic : List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
+checkOneDiagsSynthetic runtimeDecls coreDecls prog =
+  let savedMain = driverState.value.mainSchemeRef.value
+  let res = checkOneDiags runtimeDecls coreDecls prog
+  driverState.value.mainSchemeRef := savedMain
+  res
+
 -- S-migrate-check-route (E-1 #1115): thin ONE-MODULE String/Bool wrappers, matching
 -- `checkToLinesWithRuntime`'s / `checkErrorsWithRuntime`'s (runtimeDecls, coreProg,
 -- userProg) shape exactly, so `compiler/tools/check.mdk`'s two rendering/bool call
@@ -43336,6 +43366,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkOneSchemeFull" ((PVar "runtimeDecls") (PVar "coreDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EBlock (DoLet false false (PTuple (PVar "coreSchemes") (PVar "schemes") PWild PWild) (EApp (EApp (EApp (EVar "checkModulesEntryFullSplit") (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog"))))) (DoExpr (ETuple (EVar "coreSchemes") (EVar "schemes")))))
 (DTypeSig true "checkOneDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))
 (DFunDef false "checkOneDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EBlock (DoLet false false (PTuple PWild (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog"))))) (DoExpr (ETuple (EVar "errs") (EVar "warns")))))
+(DTypeSig true "checkOneDiagsSynthetic" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))
+(DFunDef false "checkOneDiagsSynthetic" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "savedMain") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value")) (DoLet false false (PVar "res") (EApp (EApp (EApp (EVar "checkOneDiags") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef")) (EVar "savedMain"))) (DoExpr (EVar "res"))))
 (DTypeSig true "checkOneToLinesWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))))
 (DFunDef false "checkOneToLinesWithRuntime" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EApp (EApp (EApp (EVar "checkModulesEntryReport") (EVar "runtimeDecls")) (EVar "coreProg")) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userProg")))))
 (DTypeSig true "checkOneErrorsWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
@@ -49296,6 +49328,8 @@ schemeLines ((n, s)::rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkOneSchemeFull" ((PVar "runtimeDecls") (PVar "coreDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EBlock (DoLet false false (PTuple (PVar "coreSchemes") (PVar "schemes") PWild PWild) (EApp (EApp (EApp (EVar "checkModulesEntryFullSplit") (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog"))))) (DoExpr (ETuple (EVar "coreSchemes") (EVar "schemes")))))
 (DTypeSig true "checkOneDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))
 (DFunDef false "checkOneDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EBlock (DoLet false false (PTuple PWild (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EVar "checkModulesEntryFull") (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog"))))) (DoExpr (ETuple (EVar "errs") (EVar "warns")))))
+(DTypeSig true "checkOneDiagsSynthetic" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))
+(DFunDef false "checkOneDiagsSynthetic" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "savedMain") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value")) (DoLet false false (PVar "res") (EApp (EApp (EApp (EVar "checkOneDiags") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef")) (EVar "savedMain"))) (DoExpr (EVar "res"))))
 (DTypeSig true "checkOneToLinesWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))))
 (DFunDef false "checkOneToLinesWithRuntime" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EApp (EApp (EApp (EVar "checkModulesEntryReport") (EVar "runtimeDecls")) (EVar "coreProg")) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userProg")))))
 (DTypeSig true "checkOneErrorsWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))

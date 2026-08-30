@@ -1,5 +1,5 @@
 # META
-source_lines=1565
+source_lines=1587
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -62,7 +62,6 @@ import types.typecheck.{
   setStdlibOwnership,
   TcDiag(..),
   tcMsg,
-  elaborateModules,
   mainTypeIsUnit,
   mainTypeIsAsync,
 }
@@ -1064,8 +1063,8 @@ midToDesugaredPair (mid, _, prog) = (mid, desugar prog)
 
 -- (mid, rawDecls) → (mid, desugared decls) — the 2-tuple sibling of
 -- `midToDesugaredPair`, for module lists that have already dropped the file
--- path (`loadProgramE`'s result, e.g.), needed by `mainShapeWarnings`'s
--- `elaborateModules` call in `checkJsonFile`'s multi-module arm.
+-- path (`loadProgramE`'s result, e.g.), needed by the `mainShapeWarnings` call in
+-- `checkJsonFile`'s multi-module arm.
 desugarModPair : (String, List Decl) -> (String, List Decl)
 desugarModPair (mid, prog) = (mid, desugar prog)
 
@@ -1327,8 +1326,10 @@ mergeMainWarns path warns ((p, s, ds)::rest)
 --   (2) `main` is a zero-arg value whose inferred type is neither Unit nor
 --       `Async _` (e.g. `main = 5`) — reuses mainTypeIsUnit/mainTypeIsAsync,
 --       the same hooks `runProgramOutput`/the emitter already use to decide how
---       to force `main`; only meaningful once elaborateModules has stamped
---       typecheck.mdk's mainSchemeRef.
+--       to force `main`; only meaningful once a typecheck driver has stamped
+--       typecheck.mdk's mainSchemeRef (`checkModulesEntryFullSplit` or
+--       `elaborateModules` — every caller runs one of them first, see
+--       `mainShapeWarnings`).
 -- Both are ordinary LOCATED `W-MAIN-SHAPE` Diags now — the SAME `Diag` type
 -- every other diagnostic uses, so every caller (human CLI, `check --json`,
 -- `run --json`, `medaka mcp`) renders/serializes them uniformly instead of each
@@ -1389,9 +1390,11 @@ mainArityWarning decls = match findMainFunDef decls
     Some (mkDiag SevWarning "W-MAIN-SHAPE" mainArityMsg (mainBodyLoc body))
   _ => None
 
--- The non-Unit/non-Async VALUE shape (`main = 5`).  Only meaningful once
--- elaborateModules has run (mainSchemeRef populated) — callers must ensure
--- that happened first.
+-- The non-Unit/non-Async VALUE shape (`main = 5`).  Only meaningful once a typecheck
+-- driver has populated mainSchemeRef (`checkModulesEntryFullSplit` or
+-- `elaborateModules`) FOR THE USER'S OWN PROGRAM — callers must ensure that happened
+-- first, and that no synthetic re-check overwrote it since (see
+-- `checkOneDiagsSynthetic`, types/typecheck.mdk).
 export
 mainNonUnitWarning : List Decl -> Option Diag
 mainNonUnitWarning decls = match findMainFunDef decls
@@ -1402,21 +1405,39 @@ mainNonUnitWarning decls = match findMainFunDef decls
       Some (mkDiag SevWarning "W-MAIN-SHAPE" mainNonUnitMsg (mainBodyLoc body))
   _ => None
 
--- Shared driver: the arity check is free (no typecheck needed); only when it
--- finds nothing do we pay for an extra elaborateModules call (routes that
--- don't already run it for their own purposes) so mainSchemeRef is populated
--- for the non-Unit-value check.  `modsDFull` is the FULL desugared module list
--- (elaborateModules needs the whole graph, not just the entry) — the caller
--- already has it computed for its own typecheck pass.
+-- Shared driver: the arity check is free (no typecheck needed); the non-Unit-value
+-- check reads `mainSchemeRef`, which EVERY caller has already had populated by the
+-- typecheck it ran for its own purposes.
+--
+-- S-3 (#2234): this used to run a whole extra `elaborateModules` here, on the belief
+-- that the routes reaching it had no other producer of `mainSchemeRef`.  That stopped
+-- being true at #2155, which made `checkModulesEntryFullSplit` — the driver behind
+-- `checkOneDiags` (`analyzeFrom`) and `checkModulesEntryReport` (`runCheck`) alike —
+-- write the ref itself.  On the hello-world `medaka check` floor that third prelude
+-- typecheck was 228,670,823 Ir, 26.7% of the whole command, for a value the two
+-- typechecks before it had already computed twice.
+--
+-- ⚠️ The producer for each caller, verified rather than assumed (a reader adding a
+-- caller owes the same check — this function is silent, not loud, when nothing
+-- populated the ref: `mainTypeIsUnit ()` answers False on `None` and the warning
+-- FIRES, but a WRONG scheme makes it VANISH):
+--   * `checkRoute` single-module (medaka_cli) — `analyzeLocatedG`, then `runCheck`.
+--   * `checkRoute` multi-module (medaka_cli) — `runCheckModules`.
+--   * `typecheckGateRoute` single-module (medaka_cli, the build/run gate) —
+--     `analyzeLocatedG` alone.  This is the caller the deletion nearly broke: see
+--     `checkOneDiagsSynthetic` (types/typecheck.mdk) for the auto-print-wrap residue
+--     that used to be masked by the elaborate this comment replaces.
+--   * `checkJsonSingle` / `checkJsonFile` (below) — `analyzeFrom` / `analyzeProject`.
+-- `rtD`/`coreD`/`modsDFull` are retained in the signature: they are what a future
+-- caller with no prior typecheck of its own would need, and every call site already
+-- has them in hand.
 export
 mainShapeWarnings : List Decl -> List Decl -> List (String, List Decl) -> List Decl -> List Diag
-mainShapeWarnings rtD coreD modsDFull entryDecls = match mainArityWarning entryDecls
+mainShapeWarnings _ _ _ entryDecls = match mainArityWarning entryDecls
   Some d => [d]
-  None =>
-    let _ = elaborateModules rtD coreD modsDFull
-    match mainNonUnitWarning entryDecls
-      Some d => [d]
-      None => []
+  None => match mainNonUnitWarning entryDecls
+    Some d => [d]
+    None => []
 
 -- ── check → structured-diagnostics JSON ─────────────────────────────────────
 --
@@ -1478,9 +1499,10 @@ checkJsonSingle modName allowInternal rsrc csrc target src = match parseResult s
     -- #1236: fold the main-shape warning (`main () = …` / `main = 1 + 2`) into
     -- the SAME envelope `check --json` already builds, instead of leaving it
     -- entirely absent from this channel. Only on a clean program (no type
-    -- error already reported) — mirrors `checkRoute`'s human-CLI gating, and
-    -- avoids a second, possibly-inconsistent typecheck pass over an ill-typed
-    -- program (`elaborateModules` inside `mainShapeWarnings` is not free).
+    -- error already reported) — mirrors `checkRoute`'s human-CLI gating, and keeps
+    -- the warning from contradicting the errors already reported for an ill-typed
+    -- program.  (`mainShapeWarnings` itself is now free: it reads the `mainSchemeRef`
+    -- the `analyzeLocatedG` above already populated, rather than re-elaborating.)
     let mainWarns = if hasErr then [] else
       let entryRaw = parseLocated src
       mainShapeWarnings (desugar (parsePrelude rsrc)) (desugar (parsePrelude csrc)) [(target, desugar entryRaw)] entryRaw
@@ -1576,7 +1598,7 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "checkGuardExhaustivenessWith" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "preludeStandaloneShadows" false) (mem "preludeStandaloneSet" false) (mem "preludeStandaloneShadowsWith" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiags" false) (mem "checkModulesDiags" false) (mem "checkModules" false) (mem "entryOwnSchemes" false) (mem "Scheme" true) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "elaborateModules" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiags" false) (mem "checkModulesDiags" false) (mem "checkModules" false) (mem "entryOwnSchemes" false) (mem "Scheme" true) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadMsg" false) (mem "LoadParseFailed" false) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadProgramE" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAutoPrintMain" false) (mem "autoPrintWrapModules" false) (mem "underivedMainDiags" false))))
@@ -1801,7 +1823,7 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "mainNonUnitWarning" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Diag"))))
 (DFunDef false "mainNonUnitWarning" ((PVar "decls")) (EMatch (EApp (EVar "findMainFunDef") (EVar "decls")) (arm (PCon "Some" (PTuple (PList) (PVar "body"))) () (EIf (EBinOp "||" (EApp (EVar "mainTypeIsUnit") (ELit LUnit)) (EApp (EVar "mainTypeIsAsync") (ELit LUnit))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevWarning")) (ELit (LString "W-MAIN-SHAPE"))) (EVar "mainNonUnitMsg")) (EApp (EVar "mainBodyLoc") (EVar "body")))))) (arm PWild () (EVar "None"))))
 (DTypeSig true "mainShapeWarnings" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Diag")))))))
-(DFunDef false "mainShapeWarnings" ((PVar "rtD") (PVar "coreD") (PVar "modsDFull") (PVar "entryDecls")) (EMatch (EApp (EVar "mainArityWarning") (EVar "entryDecls")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "elaborateModules") (EVar "rtD")) (EVar "coreD")) (EVar "modsDFull"))) (DoExpr (EMatch (EApp (EVar "mainNonUnitWarning") (EVar "entryDecls")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EListLit))))))))
+(DFunDef false "mainShapeWarnings" (PWild PWild PWild (PVar "entryDecls")) (EMatch (EApp (EVar "mainArityWarning") (EVar "entryDecls")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EMatch (EApp (EVar "mainNonUnitWarning") (EVar "entryDecls")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EListLit))))))
 (DTypeSig true "diagIsError" (TyFun (TyCon "Diag") (TyCon "Bool")))
 (DFunDef false "diagIsError" ((PCon "Diag" (PCon "SevError") PWild PWild PWild PWild PWild)) (EVar "True"))
 (DFunDef false "diagIsError" (PWild) (EVar "False"))
@@ -1824,7 +1846,7 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "checkGuardExhaustivenessWith" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "preludeStandaloneShadows" false) (mem "preludeStandaloneSet" false) (mem "preludeStandaloneShadowsWith" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiags" false) (mem "checkModulesDiags" false) (mem "checkModules" false) (mem "entryOwnSchemes" false) (mem "Scheme" true) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "elaborateModules" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiags" false) (mem "checkModulesDiags" false) (mem "checkModules" false) (mem "entryOwnSchemes" false) (mem "Scheme" true) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadMsg" false) (mem "LoadParseFailed" false) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadProgramE" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAutoPrintMain" false) (mem "autoPrintWrapModules" false) (mem "underivedMainDiags" false))))
@@ -2049,7 +2071,7 @@ checkJsonFile allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "mainNonUnitWarning" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Diag"))))
 (DFunDef false "mainNonUnitWarning" ((PVar "decls")) (EMatch (EApp (EVar "findMainFunDef") (EVar "decls")) (arm (PCon "Some" (PTuple (PList) (PVar "body"))) () (EIf (EBinOp "||" (EApp (EVar "mainTypeIsUnit") (ELit LUnit)) (EApp (EVar "mainTypeIsAsync") (ELit LUnit))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevWarning")) (ELit (LString "W-MAIN-SHAPE"))) (EVar "mainNonUnitMsg")) (EApp (EVar "mainBodyLoc") (EVar "body")))))) (arm PWild () (EVar "None"))))
 (DTypeSig true "mainShapeWarnings" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Diag")))))))
-(DFunDef false "mainShapeWarnings" ((PVar "rtD") (PVar "coreD") (PVar "modsDFull") (PVar "entryDecls")) (EMatch (EApp (EVar "mainArityWarning") (EVar "entryDecls")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "elaborateModules") (EVar "rtD")) (EVar "coreD")) (EVar "modsDFull"))) (DoExpr (EMatch (EApp (EVar "mainNonUnitWarning") (EVar "entryDecls")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EListLit))))))))
+(DFunDef false "mainShapeWarnings" (PWild PWild PWild (PVar "entryDecls")) (EMatch (EApp (EVar "mainArityWarning") (EVar "entryDecls")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EMatch (EApp (EVar "mainNonUnitWarning") (EVar "entryDecls")) (arm (PCon "Some" (PVar "d")) () (EListLit (EVar "d"))) (arm (PCon "None") () (EListLit))))))
 (DTypeSig true "diagIsError" (TyFun (TyCon "Diag") (TyCon "Bool")))
 (DFunDef false "diagIsError" ((PCon "Diag" (PCon "SevError") PWild PWild PWild PWild PWild)) (EVar "True"))
 (DFunDef false "diagIsError" (PWild) (EVar "False"))

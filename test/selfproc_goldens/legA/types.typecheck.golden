@@ -331,6 +331,7 @@ checkOneAxis : String -> String -> Param -> Unit
 checkOneCallObligation : Bool -> ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> Unit
 checkOneCallObligationNoImpl : IfaceRef -> List Mono -> Option Loc -> Unit
 checkOneDiags : List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
+checkOneDiagsSynthetic : List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)
 checkOneEffectParam : String -> String -> Unit
 checkOneErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
 checkOneIfaceCycle : ClassEnv -> Int -> Ref (Map String Unit) -> CeRow -> Unit

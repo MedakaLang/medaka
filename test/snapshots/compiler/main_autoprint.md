@@ -1,5 +1,5 @@
 # META
-source_lines=164
+source_lines=169
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/main_autoprint.mdk — shared composite-`main` auto-print wrap.
@@ -35,7 +35,7 @@ import frontend.ast.{Decl(..), Expr(..), Pat, Loc}
 import types.typecheck.{
   mainTypeIsUnit,
   mainTypeIsAsync,
-  checkOneDiags,
+  checkOneDiagsSynthetic,
   setCoherenceUserDecls,
   TcDiag,
 }
@@ -163,12 +163,17 @@ export
 underivedMainDiags : List Decl -> List Decl -> List (String, List Decl) -> List TcDiag
 underivedMainDiags runtimeDecls coreDecls [(mid, entryDecls)] =
   let _ = setCoherenceUserDecls entryDecls
-  let (tcErrs, _) = checkOneDiags runtimeDecls coreDecls (mid, entryDecls)
+  -- `entryDecls` here is the WRAPPED program (`main = println <e>`), not the user's,
+  -- so this re-check must not be allowed to redefine the driver's record of the real
+  -- `main`'s type — `checkOneDiagsSynthetic` (types/typecheck.mdk) is `checkOneDiags`
+  -- with `mainSchemeRef` saved and restored around it, and its header states the
+  -- `W-MAIN-SHAPE` regression that reaching for the plain one reintroduces.
+  let (tcErrs, _) = checkOneDiagsSynthetic runtimeDecls coreDecls (mid, entryDecls)
   tcErrs
 underivedMainDiags _ _ _ = []
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" false) (mem "Loc" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "checkOneDiags" false) (mem "setCoherenceUserDecls" false) (mem "TcDiag" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "checkOneDiagsSynthetic" false) (mem "setCoherenceUserDecls" false) (mem "TcDiag" false))))
 (DTypeSig false "entryPair" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "entryPair" ((PList)) (EVar "None"))
 (DFunDef false "entryPair" ((PList (PVar "p"))) (EApp (EVar "Some") (EVar "p")))
@@ -201,11 +206,11 @@ underivedMainDiags _ _ _ = []
 (DFunDef false "wrapPrintln" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "println")))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner")))))
 (DFunDef false "wrapPrintln" ((PVar "body")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "println")))) (EVar "body")))
 (DTypeSig true "underivedMainDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "TcDiag"))))))
-(DFunDef false "underivedMainDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PList (PTuple (PVar "mid") (PVar "entryDecls")))) (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "entryDecls"))) (DoLet false false (PTuple (PVar "tcErrs") PWild) (EApp (EApp (EApp (EVar "checkOneDiags") (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (EVar "mid") (EVar "entryDecls")))) (DoExpr (EVar "tcErrs"))))
+(DFunDef false "underivedMainDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PList (PTuple (PVar "mid") (PVar "entryDecls")))) (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "entryDecls"))) (DoLet false false (PTuple (PVar "tcErrs") PWild) (EApp (EApp (EApp (EVar "checkOneDiagsSynthetic") (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (EVar "mid") (EVar "entryDecls")))) (DoExpr (EVar "tcErrs"))))
 (DFunDef false "underivedMainDiags" (PWild PWild PWild) (EListLit))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" false) (mem "Loc" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "checkOneDiags" false) (mem "setCoherenceUserDecls" false) (mem "TcDiag" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "checkOneDiagsSynthetic" false) (mem "setCoherenceUserDecls" false) (mem "TcDiag" false))))
 (DTypeSig false "entryPair" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "entryPair" ((PList)) (EVar "None"))
 (DFunDef false "entryPair" ((PList (PVar "p"))) (EApp (EVar "Some") (EVar "p")))
@@ -238,5 +243,5 @@ underivedMainDiags _ _ _ = []
 (DFunDef false "wrapPrintln" ((PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "println")))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner")))))
 (DFunDef false "wrapPrintln" ((PVar "body")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "println")))) (EVar "body")))
 (DTypeSig true "underivedMainDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "TcDiag"))))))
-(DFunDef false "underivedMainDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PList (PTuple (PVar "mid") (PVar "entryDecls")))) (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "entryDecls"))) (DoLet false false (PTuple (PVar "tcErrs") PWild) (EApp (EApp (EApp (EVar "checkOneDiags") (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (EVar "mid") (EVar "entryDecls")))) (DoExpr (EVar "tcErrs"))))
+(DFunDef false "underivedMainDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PList (PTuple (PVar "mid") (PVar "entryDecls")))) (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "entryDecls"))) (DoLet false false (PTuple (PVar "tcErrs") PWild) (EApp (EApp (EApp (EVar "checkOneDiagsSynthetic") (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (EVar "mid") (EVar "entryDecls")))) (DoExpr (EVar "tcErrs"))))
 (DFunDef false "underivedMainDiags" (PWild PWild PWild) (EListLit))
