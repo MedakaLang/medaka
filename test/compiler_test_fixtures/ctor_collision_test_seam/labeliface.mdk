@@ -1,0 +1,3 @@
+-- #1292: the interface whose impl choice the collision used to corrupt.
+export interface Label a where
+  label : a -> String

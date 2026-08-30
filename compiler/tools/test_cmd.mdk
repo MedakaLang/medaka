@@ -59,6 +59,7 @@ import driver.loader.{
 }
 import driver.build_cmd.{readPreludeFile}
 import types.typecheck.{elaborateOne, elaborateModules}
+import backend.private_mangle.{mangleCtorCollisionsPair}
 import frontend.lexer.{collectComments}
 import eval.eval.{
   Value,
@@ -436,7 +437,7 @@ runMulti runtimeDecls coreDecls target _userDecls roots examples synthDecls synt
   Err e => buildDetailsFrom (Err e) synthResults examples
   Ok mods =>
     let injected = injectIntoRoot target synthDecls (map desugarPair mods)
-    let elaborated = elaborateModules runtimeDecls coreDecls injected
+    let elaborated = elaborateModulesMangled runtimeDecls coreDecls injected
     let env = evalModulesWith (testCapableExterns ()) (fst elaborated) (snd elaborated)
     buildDetailsFrom (Ok (renderExamples env examples)) synthResults examples
 
@@ -489,6 +490,18 @@ reportDoctests target result =
 -- Only runs (and prints) if the file declares props — mirrors the OCaml short
 -- circuit (`Prop_runner.run_all` returns true with no output when none).
 
+-- ── #1292: elaborate, then rename cross-unit-colliding constructors ──────────
+-- `eval.evalModulesRootEnvWith` / `evalModulesWith` apply this rename themselves,
+-- but applying it only there is not enough for `medaka test`: the `test "…"` and
+-- prop phases pull their BODIES out of the SAME elaborated module list they hand
+-- the driver (`elaboratedRootProps`, `collectTests`) and evaluate them in the
+-- driver's env.  A body left with bare constructor references would look for a
+-- cell the rename has moved.  Applying it here renames env and bodies together;
+-- the driver's own call is then an idempotent no-op.
+elaborateModulesMangled : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
+elaborateModulesMangled runtimeDecls coreDecls modules =
+  mangleCtorCollisionsPair (elaborateModules runtimeDecls coreDecls modules)
+
 runProps : List Decl -> List Decl -> String -> List Decl -> List String -> <IO> Bool
 runProps runtimeDecls coreDecls target userDecls roots
   | not (hasProps userDecls) = True
@@ -514,7 +527,7 @@ runPropsSingle runtimeDecls coreDecls target userDecls roots =
   else
     dropShadowedExp userNames coreDecls
   let rootId = singleRootId roots target
-  let elaborated = elaborateModules runtimeDecls livePrelude [(rootId, userDecls)]
+  let elaborated = elaborateModulesMangled runtimeDecls livePrelude [(rootId, userDecls)]
   let env = evalModulesRootEnvWith (testCapableExterns ()) (fst elaborated) (snd elaborated)
   let rootProps = match lookupModuleDecls rootId (snd elaborated)
     Some decls => decls
@@ -527,7 +540,7 @@ runPropsMulti runtimeDecls coreDecls target userDecls roots = match loadProgram 
     let _ = ePutStrLn e
     False
   Ok mods =>
-    let elaborated = elaborateModules runtimeDecls coreDecls (map desugarPair mods)
+    let elaborated = elaborateModulesMangled runtimeDecls coreDecls (map desugarPair mods)
     let env = evalModulesRootEnvWith (testCapableExterns ()) (fst elaborated) (snd elaborated)
     let rootProps = elaboratedRootProps target (snd elaborated) userDecls
     runAllProps env rootProps
@@ -595,7 +608,7 @@ runTestDeclsSingle runtimeDecls coreDecls target tsrc userDecls roots =
   else
     dropShadowedExp userNames coreDecls
   let rootId = singleRootId roots target
-  let elaborated = elaborateModules runtimeDecls livePrelude [(rootId, userDecls)]
+  let elaborated = elaborateModulesMangled runtimeDecls livePrelude [(rootId, userDecls)]
   let env = evalModulesRootEnvWith (testCapableExterns ()) (fst elaborated) (snd elaborated)
   let rootTests = match lookupModuleDecls rootId (snd elaborated)
     Some decls => decls
@@ -611,7 +624,7 @@ runTestDeclsMulti runtimeDecls coreDecls target tsrc userDecls roots = match loa
     let _ = ePutStrLn e
     False
   Ok mods =>
-    let elaborated = elaborateModules runtimeDecls coreDecls (map desugarPair mods)
+    let elaborated = elaborateModulesMangled runtimeDecls coreDecls (map desugarPair mods)
     let env = evalModulesRootEnvWith (testCapableExterns ()) (fst elaborated) (snd elaborated)
     let rootTests = elaboratedRootProps target (snd elaborated) userDecls
     reportTests
@@ -749,7 +762,7 @@ propsReportSingle runtimeDecls coreDecls target userDecls roots =
   else
     dropShadowedExp userNames coreDecls
   let rootId = singleRootId roots target
-  let elaborated = elaborateModules runtimeDecls livePrelude [(rootId, userDecls)]
+  let elaborated = elaborateModulesMangled runtimeDecls livePrelude [(rootId, userDecls)]
   let env = evalModulesRootEnvWith (testCapableExterns ()) (fst elaborated) (snd elaborated)
   let rootProps = match lookupModuleDecls rootId (snd elaborated)
     Some decls => decls
@@ -760,7 +773,7 @@ propsReportMulti : List Decl -> List Decl -> String -> List Decl -> List String 
 propsReportMulti runtimeDecls coreDecls target userDecls roots = match loadProgram target roots
   Err _ => []
   Ok mods =>
-    let elaborated = elaborateModules runtimeDecls coreDecls (map desugarPair mods)
+    let elaborated = elaborateModulesMangled runtimeDecls coreDecls (map desugarPair mods)
     let env = evalModulesRootEnvWith (testCapableExterns ()) (fst elaborated) (snd elaborated)
     let rootProps = elaboratedRootProps target (snd elaborated) userDecls
     runAllPropsResults env rootProps

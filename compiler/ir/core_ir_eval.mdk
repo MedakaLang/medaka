@@ -43,6 +43,7 @@ import ir.core_ir.{
 }
 import ir.core_ir_lower.{lowerGroups, lowerImplsWith}
 import support.util.{isEmptyL, dedup, contains, filterList}
+import backend.private_mangle.{mangleCtorCollisions}
 import eval.eval.{
   Value(..),
   EvalEnv(..),
@@ -535,7 +536,12 @@ data CModInfo v =
 
 export
 cevalModules : List Decl -> List (String, List Decl) -> <e> List (String, Value e)
-cevalModules preludeDecls modules =
+cevalModules preludeDecls0 modules0 =
+  -- [T-EVAL-LOCKSTEP] #1292: the Core-IR half of the ctor-collision rename -- the
+  -- mechanism and the parity argument are written out once, on eval.mdk's
+  -- `evalModulesWith`.  Must move with it: this driver seeds the SAME
+  -- program-global `ctorToTypeRef`.
+  let (preludeDecls, modules) = mangleCtorCollisions preludeDecls0 modules0
   let moduleDecls = flatMap snd modules
   let allDecls = preludeDecls ++ moduleDecls
   ctorToTypeRef := buildCtorToType allDecls
